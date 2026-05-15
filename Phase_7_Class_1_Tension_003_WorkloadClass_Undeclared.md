@@ -16,7 +16,7 @@ once the operator authorizes a resolution.*
 | Detected at | Phase 7 sub-phase 7b, atomic unit **U-CP-22** (TopologyPattern enum + admissibility predicate) |
 | Detected | 2026-05-15 |
 | Halt point | U-CP-22 implementation — surfaced before code execution |
-| Status | **OPEN** — U-CP-22 halted; operator authorized landing unaffected siblings (U-OD-01, U-OD-04) first |
+| Status | **RESOLVED** 2026-05-15 — operator authorized declaring `WorkloadClass` in `harness-core` via new foundational unit U-CP-00; CP plan revised v2.4 → v2.5 |
 
 ## §2 Defect
 
@@ -49,8 +49,11 @@ This record does not apply a fix — the operator selects the resolution.
 
 | Field | Value |
 |---|---|
-| Decision | **OPEN.** U-CP-22 implementation halted. Operator authorized (2026-05-15) landing the unaffected operational-minimum siblings first. |
-| Unblocked siblings | U-OD-01 (C-OD-01) and U-OD-04 (C-OD-04) do not reference `WorkloadClass` — independently implementable. |
+| Decision | **RESOLVED 2026-05-15.** Operator selected: declare `WorkloadClass` as a closed 4-value enum in `harness-core` (cross-axis shared-type residence), carried by a new foundational CP-plan unit **U-CP-00**. Resolution mechanics per §5 confirmed. |
+| Resolution shape | Plan-coverage gap, not a design extension — C-CP-07 §7.3 already commits the 4 workload-class values; no unit was assigned to declare the enum. Closing the gap is in-CLI plan-revision work per the `design-substrate/`-canonical posture, not a design-phase route. |
+| Fix applied | (a) Tension record status → RESOLVED; (b) CP plan revised v2.4 → v2.5 — adds U-CP-00 (`Implements: C-CP-07 §7.3`; `Files affected: harness-core`), amends U-CP-22 `Depends on: (none)` → `[U-CP-00]`; the ~10 other `WorkloadClass`-consuming units gain the `[U-CP-00]` edge, recorded at the v2.5 dependency-graph delta and materialized at each unit's next full-revision; (c) U-CP-00 landed (harness-core `WorkloadClass` enum); (d) U-CP-22 landed against the v2.5 body. |
+| Unblocked siblings | U-OD-01 (C-OD-01) and U-OD-04 (C-OD-04) — landed. U-CP-22 — unblocked by U-CP-00, landed. |
+| Note | `extension-class` (C-CP-07 §7.3 binding-time option "per Persona §3.2") is the open-extension escape hatch beyond the 4 canonical classes; it is NOT an enum member of the closed `WorkloadClass` set (the §4 framing). Documented at U-CP-00, not materialized as a 5th value. |
 
 ## §7 Sibling assessment
 
