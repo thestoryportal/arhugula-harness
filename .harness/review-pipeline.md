@@ -128,8 +128,8 @@ carriers. Each produces a revised plan returned for per-pass operator ratificati
 | Pass | Scope | State |
 |---|---|---|
 | R1 | `harness-core` foundation — introduce U-CORE-01 | ✅ COMPLETE + APPLIED 2026-05-15 — operator ratified all 5 Q's; `Implementation_Plan_Harness_Core_v1_0.md` created (U-CORE-01, 12 types: `DeploymentSurface`, `PersonaTier`, 9-alias identity module, `WorkflowEvent`/`WorkflowEventClass`); `CLAUDE.md` §2.4 core row added |
-| R2 | IS plan revision — absorb `materializability_audit_is_plan.md` + carrier map | ✅ COMPLETE 2026-05-15 (`revision_R2_is_plan.md`) — 6 IS units revised, no Class-1 fork — **AWAITING OPERATOR on Q-R2-1** (R3 blocked) |
-| R3 | AS plan revision — absorb `verbatim_audit_as_plan.md` + carrier map | pending R2 |
+| R2 | IS plan revision — absorb `materializability_audit_is_plan.md` + carrier map | ✅ COMPLETE + APPLIED 2026-05-15 — `Implementation_Plan_Information_Substrate_v2_3.md` (6 units revised; git trio IS-internal per Q-R2-1; permanent auxiliary-type-audit section added). Action item AI-R2-1: U-IS-02 landed-source re-check deferred to coding-lane resume. |
+| R3 | AS plan revision — absorb `verbatim_audit_as_plan.md` + carrier map | 🟡 RUNNING (launched 2026-05-15) |
 | R4 | CP plan revision — absorb `materializability_audit_cp_plan.md` + carrier map | pending R3 |
 | R5 | OD plan revision — absorb `materializability_audit_od_plan.md` + carrier map | pending R4 |
 
