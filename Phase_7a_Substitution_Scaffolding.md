@@ -145,3 +145,39 @@ U-IS-09 (chain construct) / U-IS-10 (verify).
 The `Bash`+stdlib hash-chain is a substitution, not the C-IS-06 typed
 contract. "We have a Python script that does SHA-256 chaining" does
 NOT mean U-IS-08/09/10 are complete (IS-AL-4 anti-pattern, verbatim).
+
+---
+
+## §4 Surface 4 — MCP server  [substitutes H_T-AS-2; C-AS-03 §3.1]
+
+**Mechanism:** MCP-server. H_T tools are authored at a FastMCP server
+(`scaffolding/mcp/server.py`), registered in `.mcp.json` local scope.
+Strict Pydantic v2 schemas server-side; namespacing + description-as-
+prompt via FastMCP. The MCP server *process* is the X-AL-1 substrate
+boundary (H_E <-> H_T).
+**Retirement:** retires when U-AS-04 → U-AS-09 land (typed ToolContract).
+
+### §4.1 Server + registration
+
+- Server: `scaffolding/mcp/server.py` — `FastMCP("harness-7a-scaffold")`.
+- Registered in `.mcp.json` as a stdio server.
+- NOT in `src/harness_*/` (X-AL-3 — those trees are atomic-unit landings).
+- Tool inputs are flat typed parameters; tool outputs are Pydantic v2
+  models (FastMCP idiom — generates validated schemas by construction).
+
+### §4.2 Representative tools (≥3 per axis; ≥12 total — 7a exit-crit #3)
+
+Populated incrementally. Landed: `read_file` (AS axis).
+
+### §4.3 Bounded scope (H_T-AS-2; Meta-Architecture §5.3)
+
+Covers: tool-schema authoring + namespacing + description-as-prompt at
+the MCP boundary. Does NOT cover: strict-mode contract verification
+harness-side; `minimum_tier`/`blast_radius_tier` (H_T-AS-1); cross-tool
+dependency declaration.
+
+### §4.4 Anti-leakage (AS-AL-2, X-AL-1)
+
+AS-AL-2: H_E built-in tools ≠ user-extensible H_T tools — all H_T tool
+surface lives behind the MCP server boundary. X-AL-1: the boundary is
+the MCP server *process* (process isolation, not convention).

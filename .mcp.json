@@ -1,3 +1,9 @@
 {
-  "mcpServers": {}
+  "mcpServers": {
+    "harness-7a-scaffold": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "python", "scaffolding/mcp/server.py"]
+    }
+  }
 }
