@@ -10,6 +10,14 @@ from harness_is.artifact_tier_registry import (
     SubstrateResidence,
     SurvivalScope,
 )
+from harness_is.path_binding import (
+    DeploymentSurface,
+    PathBinding,
+    PathBindingDuplicateError,
+    PathBindingEntry,
+    WorkflowClass,
+    load_path_binding,
+)
 from harness_is.path_class_registry import (
     PATH_CLASS_REGISTRY,
     PathClass,
@@ -18,17 +26,26 @@ from harness_is.path_class_registry import (
     StabilityInvariant,
     VisibilitySurface,
 )
+from harness_is.path_resolver import PathBindingMissingError, PathResolver
 
 __all__ = [
     "ARTIFACT_TIER_REGISTRY",
     "PATH_CLASS_REGISTRY",
     "ArtifactTier",
     "ArtifactTierMetadata",
+    "DeploymentSurface",
+    "PathBinding",
+    "PathBindingDuplicateError",
+    "PathBindingEntry",
+    "PathBindingMissingError",
     "PathClass",
     "PathClassMetadata",
+    "PathResolver",
     "ResidenceContract",
     "StabilityInvariant",
     "SubstrateResidence",
     "SurvivalScope",
     "VisibilitySurface",
+    "WorkflowClass",
+    "load_path_binding",
 ]
