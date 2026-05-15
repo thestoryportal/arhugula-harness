@@ -55,11 +55,18 @@ only; **AS plan v1 was never verbatim-audited**. Evidence is now decisive:
   declared `ToolContext` against a silently-absorbed type — the Q1 audit
   should check whether the landed U-AS-02 needs revisiting.
 
-**Resolution: a single Phase-6 AS-plan revision-pass** (systemic AS-plan
-verbatim + undeclared-type audit → operator-ratified conformance, same as the
-CP/OD §4A treatment) — NOT per-unit fork fixes. Queued as review-ahead pass Q1
-(`review-pipeline.md` §8). Until the AS plan is conformed, **all near-term AS
-landing is blocked** — the coding lane has no clean AS unit.
+**Q1 systemic AS-plan audit COMPLETE** — `.harness/verbatim_audit_as_plan.md`
+is the canonical AS systemic-tension record (supersedes the per-unit framing of
+items 9–15; no further per-unit AS records filed). Verdict: 18 CLEARED · 3
+CONFORM · 12 FORK across all 33 units. Two systemic patterns — Pattern A
+(verbatim divergence) + Pattern B (undeclared auxiliary types, ≥11 types).
+**Resolution: one `implementation-planner` 2-sub-pass AS-plan revision**
+(Pattern A conformance + Pattern B carrier declaration / dep-graph completion)
+**plus a `spec-writer` C-AS-02 §2.2/§2.3/§11.1 reconciliation** for the genuine
+`sandbox_tier_floor` spec under-specification. Operator-ratified, same as §4A.
+**U-AS-02 (landed) carries a retrospective Class-3** — needs an operator-
+authorized check that its inline `ToolContext` is field-complete vs the carrier
+shape the revision will give it.
 
 **Pattern — the materializability axis spans all four plans (items 16–18).**
 The §4A audit checked **verbatim conformance** (does a plan signature transcribe
