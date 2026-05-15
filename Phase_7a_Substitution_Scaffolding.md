@@ -89,3 +89,59 @@ IS-AL-3: H_E conversation history `(role, content, tool_calls,
 tool_results)` ≠ the 6-field H_T entry shape. IS-AL-4: the `Bash`
 shell-out is a substitution, not the C-IS-05/C-IS-06 typed contract
 (that lands at U-IS-07/08/09/10).
+
+---
+
+## §3 Surface 3 — Hash-chain  [substitutes H_T-IS-6; C-IS-06 §6]
+
+**Mechanism:** Shell-out. State-ledger hash-chain integrity is
+constructed at write-time via `Bash` invocation of Python stdlib
+(`hashlib.sha256` + `json`). **Retirement:** retires when
+U-IS-08 + U-IS-09 + U-IS-10 land.
+
+### §3.1 The 4-step discipline (C-IS-06 §6.1–§6.4)
+
+1. canonicalize(entry) -> deterministic bytes
+2. response_hash = SHA-256(canonicalize(entry))
+3. chain construct: prior_event_hash links entry N to entry N-1
+4. verify_chain: re-canonicalize, re-hash, check linkage + inception
+
+### §3.2 7a canonicalization convention
+
+C-IS-06 §6.1 names RFC 8785 JSON Canonicalization Scheme (JCS) as the
+baseline candidate; the library binding is deferred to a downstream
+D-ADR. The 7a state-ledger entry (§2.1) has six all-string fields and
+no numeric values; JCS's only non-trivial divergence is numeric
+serialization. Therefore the 7a substitution uses Python stdlib:
+
+    json.dumps(entry, sort_keys=True, separators=(',', ':'),
+               ensure_ascii=False).encode('utf-8')
+
+— which is byte-faithful to RFC 8785 JCS for all-string entries. A
+true JCS library binding becomes mandatory when any numeric field is
+introduced; deferred per C-IS-06 §6.1 + §6 Deferred-to-implementation.
+
+### §3.3 Chain construction (C-IS-06 §6.3)
+
+- prior_event_hash stored as 64-hex-char string.
+- Inception (entry 1): prior_event_hash = "0"*64 (ALL_ZEROS_SENTINEL,
+  32 zero bytes).
+- Entry N>1: prior_event_hash = response_hash of entry N-1
+  = SHA-256(canonicalize(entry N-1)).
+
+### §3.4 Hash-input scoping  [PROVISIONAL — under-specified by C-IS-06]
+
+C-IS-06 §6.2 writes "response_hash = SHA-256(canonicalize(entry))",
+but response_hash is itself a field of entry — self-reference. C-IS-06
+does not state which fields are excluded from the canonicalization
+input. 7a-provisional resolution: response_hash is computed over the
+entry with the response_hash field omitted; prior_event_hash IS
+included (it is known before hashing). verify_chain re-canonicalizes
+identically. This scoping is reconciled at U-IS-08 (canonicalize) /
+U-IS-09 (chain construct) / U-IS-10 (verify).
+
+### §3.5 Anti-leakage (IS-AL-4)
+
+The `Bash`+stdlib hash-chain is a substitution, not the C-IS-06 typed
+contract. "We have a Python script that does SHA-256 chaining" does
+NOT mean U-IS-08/09/10 are complete (IS-AL-4 anti-pattern, verbatim).
