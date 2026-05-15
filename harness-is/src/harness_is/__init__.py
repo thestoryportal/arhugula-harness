@@ -10,6 +10,15 @@ from harness_is.artifact_tier_registry import (
     SubstrateResidence,
     SurvivalScope,
 )
+from harness_is.git_tier_sub_role_taxonomy import (
+    CO_RESIDENCE_ONE_REPO_HOSTS_ONE_HARNESS_STATE_LEDGER,
+    CROSS_REPOSITORY_LEDGER_COMPOSITION,
+    GIT_TIER_SUB_ROLE_REGISTRY,
+    ContractID,
+    GitTierSubRole,
+    GitTierSubRoleMetadata,
+    SubRolePosture,
+)
 from harness_is.path_binding import (
     DeploymentSurface,
     PathBinding,
@@ -30,10 +39,16 @@ from harness_is.path_resolver import PathBindingMissingError, PathResolver
 
 __all__ = [
     "ARTIFACT_TIER_REGISTRY",
+    "CO_RESIDENCE_ONE_REPO_HOSTS_ONE_HARNESS_STATE_LEDGER",
+    "CROSS_REPOSITORY_LEDGER_COMPOSITION",
+    "GIT_TIER_SUB_ROLE_REGISTRY",
     "PATH_CLASS_REGISTRY",
     "ArtifactTier",
     "ArtifactTierMetadata",
+    "ContractID",
     "DeploymentSurface",
+    "GitTierSubRole",
+    "GitTierSubRoleMetadata",
     "PathBinding",
     "PathBindingDuplicateError",
     "PathBindingEntry",
@@ -43,6 +58,7 @@ __all__ = [
     "PathResolver",
     "ResidenceContract",
     "StabilityInvariant",
+    "SubRolePosture",
     "SubstrateResidence",
     "SurvivalScope",
     "VisibilitySurface",
