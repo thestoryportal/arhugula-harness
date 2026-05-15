@@ -19,6 +19,12 @@ from harness_as.sandbox_fail_class import (
     fail_class_metadata,
     permanent_fail_skips_staircase,
 )
+from harness_as.sandbox_provider_class import (
+    ClassCardinality,
+    ProviderClassMetadata,
+    SandboxProviderClass,
+    provider_class_metadata,
+)
 from harness_as.sandbox_tier import (
     BlastRadiusTier,
     MechanismClass,
@@ -32,14 +38,17 @@ __all__ = [
     "BlastRadiusTier",
     "C5FailClass",
     "C9RetryPosture",
+    "ClassCardinality",
     "DeploymentSurface",
     "ForcedTierCause",
     "ForcedTierResult",
     "MCPTransport",
     "MechanismClass",
     "PersonaTier",
+    "ProviderClassMetadata",
     "SandboxFailClass",
     "SandboxFailClassMetadata",
+    "SandboxProviderClass",
     "SandboxTier",
     "SandboxTierMetadata",
     "ToolContext",
@@ -48,5 +57,6 @@ __all__ = [
     "forced_tier",
     "is_tier_at_or_above",
     "permanent_fail_skips_staircase",
+    "provider_class_metadata",
     "tier_metadata",
 ]
