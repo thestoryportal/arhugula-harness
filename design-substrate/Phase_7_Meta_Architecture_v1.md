@@ -71,7 +71,7 @@ Per-axis canonical primitives sourced from v2.2 / v1 / v2.3 / v2.4 plans + CXA v
 | H_T-IS-2 | Artifact-tier registry + cross-tier traceability invariant | C-IS-02 §2 | U-IS-03 |
 | H_T-IS-3 | Git-tier substrate (worktree-aware) | C-IS-03 §3 | U-IS-04 |
 | H_T-IS-4 | Atomic deploy primitive (commit-grain reversibility) | C-IS-04 §4 | U-IS-05, U-IS-06 |
-| H_T-IS-5 | State-ledger entry shape (8-field idempotency-key carrier) | C-IS-05 §5 | U-IS-07, U-IS-08, U-IS-09, U-IS-10 |
+| H_T-IS-5 | State-ledger entry shape (6-field idempotency-key carrier) | C-IS-05 §5 | U-IS-07, U-IS-08, U-IS-09, U-IS-10 |
 | H_T-IS-6 | Hash-chain integrity discipline | C-IS-06 §6 | U-IS-08, U-IS-09, U-IS-10 |
 | H_T-IS-7 | T-perm-2 F2-layer read/write contract pair (JSONL composition) | C-IS-07 §7 | U-IS-11, **U-IS-12** (canonical idempotency-key join carrier per F3-02 closure) |
 | H_T-IS-8 | Workload-class-opt-in shadow-Git checkpoint | C-IS-08 §8 | U-IS-13, U-IS-14, U-IS-15 |
@@ -247,7 +247,7 @@ Aggregate                     5          21          28         54
 | H_T-IS-2 | ✗ | No artifact-tier concept in H_E |
 | H_T-IS-3 | ✓ | `Bash(git *)` + `EnterWorktree` direct match |
 | H_T-IS-4 | ~ | Bash+git commit-grain available; harness-level deploy contract absent |
-| H_T-IS-5 | ✗ | H_E session history shape ≠ H_T 8-field ledger entry |
+| H_T-IS-5 | ✗ | H_E session history shape ≠ H_T 6-field ledger entry |
 | H_T-IS-6 | ✗ | No hash-chain primitive |
 | H_T-IS-7 | ~ | Filesystem I/O sufficient for substitute; no append-only/selective-read contract |
 | H_T-IS-8 | ~ | H_E Checkpointing on session-state grain ≠ H_T manifest-cadence on harness-state |
@@ -341,7 +341,7 @@ Per H_T primitive lacking H_E native support: substitution mechanism + bounded s
 | H_T-IS-1 | `CLAUDE.md` declares 4-class path convention; sub-agent `Read`/`Write` calls obey via prompt-discipline; `Glob` enumerates against declared roots | Covers: directory convention + sub-agent compliance. Does NOT cover: programmatic registry lookup at runtime; path-class-aware tool gating | U-IS-01 + U-IS-02 + U-IS-03 |
 | H_T-IS-2 | `CLAUDE.md`-declared tier-naming convention; manual cross-tier traceability in ledger entries | Covers: human-readable tier tagging. Does NOT cover: programmatic invariant enforcement | U-IS-03 |
 | H_T-IS-4 | `Bash(git *)` sequence — `git add --all` + `git commit -m=<canonical>` per deploy; rollback via `git revert` | Covers: commit-grain reversibility on git-tracked artifacts. Does NOT cover: pre-deploy verification gate; post-deploy invariant check; deploy-failure roll-forward | U-IS-05 + U-IS-06 |
-| H_T-IS-5 | JSONL at `.harness/state.jsonl`; `Bash` `python -c 'import json...'` produces canonical 8-field entries; `Bash(cat <<EOF >>)` appends; sub-agents `Read` to consume | Covers: schema-shape parity (8 fields). Does NOT cover: append-only invariant enforcement; concurrent-write coordination | U-IS-07 |
+| H_T-IS-5 | JSONL at `.harness/state.jsonl`; `Bash` `python -c 'import json...'` produces canonical 6-field entries; `Bash(cat <<EOF >>)` appends; sub-agents `Read` to consume | Covers: schema-shape parity (6 fields). Does NOT cover: append-only invariant enforcement; concurrent-write coordination | U-IS-07 |
 | H_T-IS-6 | `Bash` invocation of Python stdlib `hashlib.sha256` + JCS canonicalization; sub-agents construct entries with hash via prompt-discipline | Covers: 4-step canonicalize → SHA-256 → chain construct → verify at single-writer cadence. Does NOT cover: tamper-evidence audit at scale; runtime chain-break detection on read | U-IS-08 + U-IS-09 + U-IS-10 |
 | H_T-IS-7 | C3-pole: `Bash(cat <<EOF >> .harness/state.jsonl)` for append; C2-pole: `Bash(jq ...)` or `Read` + Python `json.loads` filtering | Covers: JSONL format; read/write distinction via prompt-discipline. Does NOT cover: idempotency on `(thread_id, step_id, idempotency_key)`; navigation-primitive contract | U-IS-11 + U-IS-12 |
 | H_T-IS-8 | H_E built-in Checkpointing on session-state grain; `Bash(git commit)` at H_E-decided cadence for harness-state; cadence via `CLAUDE.md` convention | Covers: filesystem-state checkpointing at coarse cadence. Does NOT cover: manifest-declared cadence enum (4 classes); per-workload-class opt-in selection; reversal-granularity contract | U-IS-13 + U-IS-14 + U-IS-15 |
@@ -511,7 +511,7 @@ Substitutions during 7a are *scaffolding*, NOT architectural commitments. Three 
 |---|---|---|
 | IS-AL-1 | `.claude/` hierarchy ≠ path-class registry. The 4 H_T path classes (artifact / cache / state / secret) are a typed registry with workflow-canonical resolution, not a filesystem-organization convention | Modeling H_T path classes after `.claude/` sub-directories |
 | IS-AL-2 | H_E Checkpointing ≠ shadow-Git workload-class-opt-in checkpoint. H_E operates on session state at H_E-decided cadence; H_T operates on harness state at manifest-declared cadence | Authoring U-IS-13 to delegate checkpoint construction to H_E Checkpointing |
-| IS-AL-3 | H_E conversation history ≠ state ledger entry shape. H_E retains `(role, content, tool_calls, tool_results)` tuples; H_T retains 8-field `(thread_id, step_id, idempotency_key, event_type, payload, prev_hash, current_hash, timestamp)` entries | Re-deriving the H_T state ledger entry shape from H_E session history records |
+| IS-AL-3 | H_E conversation history ≠ state ledger entry shape. H_E retains `(role, content, tool_calls, tool_results)` tuples; H_T retains 6-field `(action_id, idempotency_key, actor, response_hash, timestamp, prior_event_hash)` entries per C-IS-05 §5 (relationship to the C-IS-07 §7.1 keying tuple deferred per C-IS-07 §7.4) | Re-deriving the H_T state ledger entry shape from H_E session history records |
 | IS-AL-4 | `Bash` shell-outs are substitutions, not contracts. Hash-chain integrity via Python stdlib invoked through `Bash` is execution-time scaffolding; H_T contract at C-IS-06 is typed at U-IS-08/09/10 | Treating "we already have a Python script that does SHA-256 chain construction" as evidence that U-IS-08 is functionally complete |
 
 ### §7.3 AS-axis anti-leakage rules
@@ -718,7 +718,7 @@ EXPECTED BEHAVIOR:
  11. OTel Collector ingests all 4 spans into sqlite
 
 VERIFICATION GATES:
-  - State ledger entry parseable; idempotency_key + prev_hash + current_hash present
+  - State ledger entry parseable; idempotency_key + response_hash + prior_event_hash present
   - All 4 spans queryable from sqlite ring-buffer
   - Sub-agent returns summary matching README structure
   - No H_E built-in tool invoked outside MCP server boundary (per X-AL-1)

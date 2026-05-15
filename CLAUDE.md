@@ -14,7 +14,7 @@ The harness has four design axes plus a cross-axis composition surface:
 
 | Axis | Scope |
 |---|---|
-| **IS** — Information Substrate | State ledger (8-field hash-chained entries), content-addressed index, semantic cache, filesystem-path classification |
+| **IS** — Information Substrate | State ledger (6-field hash-chained entries per C-IS-05 §5), content-addressed index, semantic cache, filesystem-path classification |
 | **AS** — Action Surface | Tool contracts (typed I/O schemas), MCP integration (FastMCP host + client), sandbox (4-tier blast radius), skills filesystem |
 | **CP** — Control Plane | Routing (capability-aware multi-LLM), retry / breaker / idempotency, workflow lifecycle, topology (6-class enum), HITL placement |
 | **OD** — Operational Discipline | HITL primitives (4-response palette), audit ledger schema, cost attribution (5-step chain), observability (12-namespace OTel schema) |

@@ -333,7 +333,7 @@ EXPECTED BEHAVIOR:
   11. OTel Collector ingests all 4 spans into sqlite
 
 VERIFICATION GATES:
-  - State ledger entry parseable; idempotency_key + prev_hash + current_hash present
+  - State ledger entry parseable; idempotency_key + response_hash + prior_event_hash present
   - All 4 spans queryable from sqlite ring-buffer
   - Sub-agent returns summary matching README structure
   - No H_E built-in tool invoked outside MCP server boundary (per X-AL-1)
@@ -563,7 +563,7 @@ Class 3 informational items: logged at sub-phase close handoff; routed to applic
 |---|---|---|---|
 | Meta-Architecture §7.2 | IS-AL-1 | Path-class registry is canonical; H_E filesystem ≠ path-class semantics | IS axis |
 | Meta-Architecture §7.2 | IS-AL-2 | Artifact-tier registry is typed; H_E flat dir structure ≠ cross-tier traceability | IS axis |
-| Meta-Architecture §7.2 | IS-AL-3 | State ledger entry shape (8-field) ≠ H_E Bash-only writes | IS axis |
+| Meta-Architecture §7.2 | IS-AL-3 | State ledger entry shape (6-field) ≠ H_E Bash-only writes | IS axis |
 | Meta-Architecture §7.2 | IS-AL-4 | Bash shell-outs are substitutions, not contracts; retire at U-IS-08/09/10 | IS axis |
 | Meta-Architecture §7.3 | AS-AL-1 | Permission modes ≠ SandboxTier enum (gate vs. capability) | AS axis |
 | Meta-Architecture §7.3 | AS-AL-2 | H_E built-in tools ≠ user-extensible H_T tools; MCP server boundary canonical | AS axis |

@@ -15,7 +15,7 @@ SKILL §4.3 (capture halted state). Operator authorized routing option (A) on
 | Halt point | Surface 2 proposal stage — not instantiated |
 | Detected | 2026-05-15 |
 | Operator routing decision | (A) — authorize design-phase back-flow |
-| Status | **HALTED** — awaiting re-issued artifacts |
+| Status | **RESOLVED** — drift corrected in-workspace 2026-05-15 per operator authorization; see §7 |
 
 ## §2 Defect
 
@@ -103,3 +103,45 @@ Halt affects surface 2 (state ledger) onward. Surfaces 3–9 that do not depend 
 the state-ledger entry shape are not individually blocked, but 7a closure is
 blocked because 7a exit-criterion #2 (the §10.1.6 smoke test) cannot run until
 the gate text is corrected.
+
+## §7 Resolution
+
+Operator authorized in-session resolution 2026-05-15 (direction: align to
+canonical 6-field; accepting that `design-substrate/` edits diverge from the
+design-phase Claude.ai canonical source until reconciled). Resolution applied
+as **drift-correction** — the canonical authority chain (ADR-F2 → ADD §2.2 →
+C-IS-05 §5) was already consistent at the 6-field shape; the governance +
+workspace bootstrap artifacts had drifted to a non-canonical 8-field shape.
+
+**10 lines corrected across 4 files** to the canonical 6-field shape
+`(action_id, idempotency_key, actor, response_hash, timestamp, prior_event_hash)`
+per C-IS-05 §5, with a deferral note at the IS-AL-3 enumeration sites recording
+that the relationship to the C-IS-07 §7.1 keying tuple `(thread_id, step_id,
+idempotency_key)` is deferred per C-IS-07 §7.4 (NOT closed — the downstream
+D-ADR on ledger schema remains the resolution path; the correction does not
+pre-empt it):
+
+| File | Sites |
+|---|---|
+| `CLAUDE.md` (root) | §1.1 |
+| `harness-is/CLAUDE.md` | §1.3, §4.2 IS-AL-3 |
+| `design-substrate/Phase_7_Meta_Architecture_v1.md` | §5.2 (×2), §4.4, §7 IS-AL-3, §10.1.6 |
+| `Phase_7_Session_1_Entry_Directive_v1.md` | §5.5 smoke gate, §8.5 IS-AL-3 row |
+
+**NOT changed (different contract):** the OD audit-ledger "8-field" at
+`harness-od/CLAUDE.md §1.3` and `Phase_7_Kickoff_Prompt.md` — `C-OD-14 §14.5.1`,
+which inherits the state-ledger shape + `audit.*` additions. Whether its
+field count is correct relative to the resolved 6-field state-ledger base is a
+separate determination for the design-phase reviewer.
+
+**Reconciliation owed:** `design-substrate/` is a local copy. The corrected
+`Phase_7_Meta_Architecture_v1.md` must be pushed back to the design-phase
+Claude.ai project (or this workspace's copy formally designated canonical) so
+the canonical source and the workspace copy do not diverge.
+
+## §8 Adjacent observations (separate determinations — NOT acted on)
+
+| # | Observation | Disposition |
+|---|---|---|
+| 8.1 | `harness-is/CLAUDE.md §5.2` records CF-1/F2-12 as CLOSED (D1 replay-trace contract), but `Spec_Information_Substrate_v1.md §42` calls the ledger-schema D-ADR "F2-12 active engagement … open downstream resolution path." "F2-12" may be overloaded across two distinct items, or there is a further inconsistency. | Design-phase reviewer; out of scope for Fork 001 |
+| 8.2 | `Phase_7_Meta_Architecture_v1.md §7.2` IS-AL-3 — wait, IS-AL-1 — names the 4 H_T path classes "(artifact / cache / state / secret)"; `C-IS-01 §1` (canonical contract) and `harness-is/CLAUDE.md §4.2 IS-AL-1` name them "(Skills / Prompts / Routing manifest / State-ledger)". Different taxonomy. | Raised as **Class 1 Fork 002 candidate** — surfaced to operator separately |
