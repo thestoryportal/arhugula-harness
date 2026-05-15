@@ -509,7 +509,7 @@ Substitutions during 7a are *scaffolding*, NOT architectural commitments. Three 
 
 | Rule | Statement | Anti-pattern foreclosed |
 |---|---|---|
-| IS-AL-1 | `.claude/` hierarchy ≠ path-class registry. The 4 H_T path classes (artifact / cache / state / secret) are a typed registry with workflow-canonical resolution, not a filesystem-organization convention | Modeling H_T path classes after `.claude/` sub-directories |
+| IS-AL-1 | `.claude/` hierarchy ≠ path-class registry. The 4 H_T path classes (`SKILLS` / `PROMPTS` / `ROUTING_MANIFEST` / `STATE_LEDGER`) are a typed registry with workflow-canonical resolution, not a filesystem-organization convention | Modeling H_T path classes after `.claude/` sub-directories |
 | IS-AL-2 | H_E Checkpointing ≠ shadow-Git workload-class-opt-in checkpoint. H_E operates on session state at H_E-decided cadence; H_T operates on harness state at manifest-declared cadence | Authoring U-IS-13 to delegate checkpoint construction to H_E Checkpointing |
 | IS-AL-3 | H_E conversation history ≠ state ledger entry shape. H_E retains `(role, content, tool_calls, tool_results)` tuples; H_T retains 6-field `(action_id, idempotency_key, actor, response_hash, timestamp, prior_event_hash)` entries per C-IS-05 §5 (relationship to the C-IS-07 §7.1 keying tuple deferred per C-IS-07 §7.4) | Re-deriving the H_T state ledger entry shape from H_E session history records |
 | IS-AL-4 | `Bash` shell-outs are substitutions, not contracts. Hash-chain integrity via Python stdlib invoked through `Bash` is execution-time scaffolding; H_T contract at C-IS-06 is typed at U-IS-08/09/10 | Treating "we already have a Python script that does SHA-256 chain construction" as evidence that U-IS-08 is functionally complete |
