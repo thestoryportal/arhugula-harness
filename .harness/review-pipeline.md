@@ -112,10 +112,22 @@ empirically sizes the buffer before scaling the pipeline to the full
 | Q2 | **Systemic CP-plan materializability audit** — output `.harness/materializability_audit_cp_plan.md` | ✅ **COMPLETE** 2026-05-15 | All 56 CP units: 20 CLEARED · 12 CONFORM · 24 FORK. 3 systemic patterns — C (`AttributeValueType`/`Cardinality` no-carrier, 7 units), D (≥25 undeclared auxiliary types across ≥20 units + ≥5 hidden-coupling edges), E (`[U-CP-00]` edges recorded but not materialized — supersedes v2.5 §0.8 "not a fork"). U-CP-15 retrospective Class-3. Supersedes fork-queue items 16/17/18. |
 | Q3 | **Systemic OD-plan materializability audit** — output `.harness/materializability_audit_od_plan.md` | ✅ **COMPLETE** 2026-05-15 | All 34 OD units: 19 CLEARED · 1 CONFORM · 14 FORK. 3 patterns — M-1 (≥11 undeclared auxiliary types across ≥10 units; load-bearing `SpanRef`/`SpanAttributes`/`EventEmission`), M-2 (hidden coupling, 3 units), M-3 (U-OD-34 hardcodes stale 28/IS:6 edge count vs canonical 26/IS:4). U-OD-04 retrospective Class-3 (proposed M-1 carrier site). |
 
-**Post-audit step (operator-owed):** once Q2/Q3 land, the four plans get
-operator-ratified `implementation-planner` revision passes (AS: Q1 record ready
-now; CP/OD: pending Q2/Q3) — materializability conformance, same ratification
-shape as §4A. The coding lane is **PAUSED** until the conformed plans land.
+| Q4 | **Systemic IS-plan materializability audit** — output `.harness/materializability_audit_is_plan.md` | 🟡 **RUNNING** (launched 2026-05-15) | Operator extended conformance to all 4 plans. Audits all 17 IS units; also checks whether `AuditPayload`/`AuditLedger` (OD M-1 flagged as "likely IS-exported") are IS-declared. |
+
+**Conformance sequence (operator-ratified path, decided 2026-05-15):**
+
+1. Q4 IS audit completes → all 4 plans have a materializability record.
+2. **`systems-architect` shared-type triage** — one pass over every undeclared
+   auxiliary type across the 4 audits; classify each: `harness-core` resident /
+   per-axis-owned / cross-axis seam. Produces a carrier map. Operator ratifies.
+3. **Per-axis `implementation-planner` revision passes (×4)** — each absorbs its
+   audit + the ratified carrier map. Operator ratifies each. Plus a
+   `spec-writer` C-AS-02 §2.2/§2.3/§11.1 reconciliation (Q1's one genuine spec
+   under-spec).
+4. Review-ahead lane re-checks the conformed plans.
+5. Coding lane resumes from the genuinely-cleared queue.
+
+The coding lane is **PAUSED** until the conformed plans land.
 
 ## 9. Files
 
