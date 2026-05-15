@@ -106,3 +106,66 @@ Each divergent unit is a §4.1 **Class 3** review finding (discriminator (b) —
 ---
 
 *Phase-7 pre-implementation review, verbatim-claim systemic-attack scope. Read-only with respect to all design-substrate and plan artifacts — no repository file modified. Authored 2026-05-15 per `harness-adversarial-reviewer` SKILL.md Phase-7 pre-implementation review mode.*
+
+---
+
+# §4A Resolution Recommendation — CP-plan verbatim-divergence cluster
+
+*Appended 2026-05-15 per `systems-architect` SKILL.md §4A (Phase-7 tension-resolution mode). This audit report is the canonical systemic-tension record for the cluster (per the Phase-7 checkpoint decision: no per-unit Tension 005+ proliferation). The §4A recommendation is **a recommendation** — the operator holds decision authority (§4A.4).*
+
+## §4A.1 — Precise tension statement
+
+Seven Control Plane plan units carry an acceptance criterion asserting a signature is materialized "per §X **verbatim**" against a `Spec_Control_Plane` contract whose vocabulary the signature does not transcribe. The precise per-artifact divergence — plan text vs. cited spec text — is in the **Fork inventory table** above; it is not re-summarized here per §4A.2 ("do not summarize"). The seven: **U-CP-01, U-CP-10, U-CP-19, U-CP-22, U-CP-43, U-CP-46, U-CP-47**. One borderline 8th — **U-CP-11** — is held for an operator naming-vs-divergence call (Findings-rejected item 1).
+
+Four of the divergences were spot-verified directly against `design-substrate/` during this §4A pass: CP spec §1.4 (`routing.provider / routing.model / routing.layer / routing.binding_rationale`), §21.1 retry-exit taxonomy (`transient-retry / Reflexion-recoverable / HITL-recoverable / permanent-fail-exit / terminal-fail-exit`), §10.1 TopologyPattern, §19.1/§16.2 gate level. All four confirm the audit; the plan is the divergent artifact in each.
+
+## §4A.2 — Authority-chain placement
+
+`CLAUDE.md` §1.3 chain: ADR (F1–F5 + D1–D6) → ADD v1.3 → PRD v1.1 → **per-axis spec v1.x** → **per-axis plan v2.x**. The spec is canonical for the plan.
+
+For all seven units the divergent surface is a Phase-5 **`Spec_Control_Plane`** contract (v1.3 §3.5/§9.1 amendments + v1.2 §10–§24 preserved-verbatim sections) vs. a Phase-6 **`Implementation_Plan_Control_Plane_v2.x`** unit body. The spec sits strictly above the plan on the chain. **The plan is the artifact in error in every row.** No higher-chain artifact (ADR / ADD / PRD) re-commits the plan's divergent vocabulary — the spec v1.2→v1.3 change-notes touch only `retry.*` / `engine.*` (§3.5, §9.1), none of the seven divergent surfaces (verified against the spec change-note prose).
+
+## §4A.3 — §2-discipline analysis
+
+- **Five-axis (§2.1):** all seven are Control-Plane-axis surfaces (routing, lifecycle, resumption, topology, gate-level, audit/HITL namespaces, validator-fail). No cross-axis re-decomposition needed; this is a within-axis plan/spec conformance defect.
+- **Probabilistic–deterministic boundary (§2.2):** every divergent surface is a **deterministic-side** primitive — an enum, a namespace schema, a gate-level constant table. These are exactly the artifacts on which reliability rests. A divergent enum is not a cosmetic defect: a wrong value name propagates verbatim into every consumer and silently breaks cross-axis composition. This raises, not lowers, the cost of leaving the divergence unconformed.
+- **Decision ordering (§2.3):** the divergences are **D-level** (derivative). The foundational decision — *that* the CP axis commits these enums/namespaces — is already made and is not in question; the spec holds it. The defect is purely the plan's derivative *materialization* diverging from the committed vocabulary. No F-level commitment is reopened. This is `§4A.4`'s "an artifact simply diverged from the chain" case, **not** a re-decision.
+
+## §4A.4 — Recommended reading
+
+**Conform the seven divergent CP-plan units to the cited `Spec_Control_Plane` vocabulary**, in a single `implementation-planner` revision-pass, with cross-unit propagation handled in the same pass. This is the authority-chain-determinate reading per §1.3 — not a re-decision of which vocabulary is better. The reviewer/architect does not pick the conformance direction; the chain does.
+
+- **U-CP-22** is a special case: its conformance direction was **already decided** as Tension 002 (operator sign-off 2026-05-15; CP-AL-1 conformed at commit `45f104f`). TopologyPattern = spec §10.1 Set 2 (`single-threaded-linear / orchestrator-workers / decentralized-handoff / hierarchical-delegation / evaluator-optimizer / parallelization`); CascadePolicy = `pause / proceed / cascade-cancel` (spec §10.2 string-literal domain — note: spec declares a field domain, not a named enum). The U-CP-22 plan-file body still carries stale Set-1 text; conforming it is the **unfinished plan-side absorption of an already-settled decision**, not a new recommendation.
+- **U-CP-01, U-CP-10, U-CP-19, U-CP-43, U-CP-46, U-CP-47** — six newly-surfaced units of identical shape. Recommended reading: conform each unit's enum/namespace signature **and** its acceptance-criterion text to the cited spec section verbatim.
+- **Cross-unit propagation (mandatory, same pass):** conforming a foundational enum renames every downstream consumer. U-CP-22 `TopologyPattern` → U-CP-23 / 24 / 25 / 31 / 13 / 35 / 53. U-CP-10 `LifecycleEventClass`, U-CP-19 `ResumptionKind`, U-CP-43 `GateLevel`, U-CP-47 `ValidatorFailClass` → their consumers (U-CP-12, U-CP-20, U-CP-27/39/45/46, U-CP-48). The revision-pass that conforms a foundational enum **must** conform every consuming unit in the same pass, or cross-unit composition breaks at the rename.
+- **Downstream artifacts that absorb the resolution:** `Implementation_Plan_Control_Plane` (next version bump); no `CLAUDE.md` anti-leakage rule is implicated except CP-AL-1, which was already conformed under Tension 002. No ADR edit required.
+
+### Items NOT in the conform-to-spec scope — surfaced for separate operator disposition
+
+1. **U-CP-08 `FallThroughCause` — design gap, not a conformance tension (§4A.4 "chain genuinely silent").** Spec §3.2 (`on_layer_exceed_budget`) declares **no enum** — it is a procedure. The plan invents a 4-value enum. There is nothing to "conform to": the chain is silent. Per `CLAUDE.md` I-2 / X-AL-3, a plan unit declaring an H_T structure the spec does not commit is a **design extension**, which Phase 7 may not silently absorb. This routes as a **§2.7.6 Class 1 fork of a distinct shape** — either (a) `spec-writer` extends `Spec_Control_Plane` §3.2 to commit the enum, or (b) the operator confirms the plan-extension is sanctioned and records the rationale. Not resolvable inside the verbatim-conformance pass.
+2. **U-CP-11 `LEASE_NAMESPACE_SCHEMA` — operator naming-refinement call (§2.7.6 Class 2).** Cardinality 5 holds; `lease.id`/`lease.acquired_at`/`lease.duration_ms`/`lease.event_kind` vs spec §5.3 `lease.key`/`lease.ttl_ms`/`lease.mechanism`/`lease.release_cause`. On the strict verbatim calibration this is the same divergence shape as the seven; whether `lease.id ≈ lease.key` is a refinement or a divergence is a judgment the architect does not own. **If the operator applies the strict reading, U-CP-11 joins the conformance pass as the 8th unit.**
+3. **U-CP-13 / U-CP-52 — marginal citation/naming drift.** U-CP-13 "10 fields verbatim" overcommits a spec §6.1 count left open by an explicit extension clause (imprecise claim, not a contradiction). U-CP-52 cites §21.6 for content at §21.8 and re-expresses three spec modes under different names (cardinality holds). Recommend folding both **citation corrections** into the same plan revision-pass as low-cost cleanup; neither is a fork.
+4. **Tension 003 (`WorkloadClass` residence) is adjacent but distinct.** U-CP-23's `PER_WORKLOAD_CLASS_TOPOLOGY` consumes `WorkloadClass`, which Tension 003 records as undeclared. That is a **genuine design-residence choice** (which artifact declares `WorkloadClass`), not an authority-chain-determinate conformance — it is **not** folded into this cluster and remains for separate operator decision.
+
+## §4A.5 — Tiebreaker check
+
+The single verifiable fact that makes each conformance recommendation determinate: **no ADR / ADD / PRD revision postdates the cited `Spec_Control_Plane` section and re-commits the plan's divergent vocabulary.** Verified for this pass — the spec change-notes (v1→v1.1→v1.2→v1.3) record only `breaker.*`/`retry.*`/`engine.*` namespace and §24.1 export-table revisions, none touching the seven divergent surfaces; no D-ADR revision re-enumerates routing / lifecycle / resumption / gate-level / audit-namespace / validator-fail vocabulary post-spec. The recommendation is **determinate**: spec canonical, plan conforms.
+
+**Load-bearing-artifact flag:** the resolution touches no `CLAUDE.md` anti-leakage rule and no F-ADR. CP-AL-1 (the one anti-leakage rule in scope) was already conformed under Tension 002. The cluster therefore needs operator **ratification** of the conformance direction, not a load-bearing-artifact sign-off — except items 1 (U-CP-08, genuine design gap) and 2 (U-CP-11, naming call), which require an explicit operator decision before disposition.
+
+## §4A.6 — Fork classification
+
+Per `Project_Workflow_v1_8.md` §2.7.6: **Class 1 (halt-execution)** for all seven units — a design-phase artifact (the CP plan) requires revision before the affected units can land. Per the `design-substrate/`-is-canonical posture (back-flow deprecated 2026-05-15), Class 1 here means: halt landing of the seven units, run the `implementation-planner` revision-pass in-CLI, re-clear, then land. **U-CP-15 is unaffected** — it is on the audit clean-list (already landed; verified). U-CP-22 is the only cluster member inside the current operational-minimum set.
+
+## §4A.7 — Operator decision required
+
+**The operator decides.** This §4A section recommends; it does not decide and does not edit the plan (§4A.4 — plan edits are `implementation-planner` work, sequenced after sign-off). Operator actions:
+
+1. **Ratify** the conform-to-spec direction for the 7-unit cluster (authority-chain-determinate; recommended).
+2. **Decide U-CP-11** (item §4A.4.2): strict reading → 8-unit cluster, or naming-refinement → no action.
+3. **Disposition U-CP-08** (item §4A.4.1): spec-extension via `spec-writer`, or sanction the plan-extension with recorded rationale.
+4. Note **Tension 003** (`WorkloadClass`) remains separately open.
+
+On ratification, sequencing is: `implementation-planner` revision-pass on `Implementation_Plan_Control_Plane` (conform 7–8 units + propagate to consumers + fold citation fixes) → version bump → land U-CP-22 against the conformed plan.
+
+*§4A recommendation authored 2026-05-15 under `systems-architect` SKILL.md §4A. Read-only with respect to `design-substrate/` — no spec, plan, or ADR modified by this pass.*

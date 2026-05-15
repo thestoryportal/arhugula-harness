@@ -110,3 +110,73 @@ Additional attack-vector checks that did not surface a finding:
 ---
 
 *Phase-7 pre-implementation review, scoped to the "verbatim"-claim divergence pattern. Read-only with respect to all design-substrate and plan artifacts — no repository file modified. Authored 2026-05-15 per `harness-adversarial-reviewer` SKILL.md Phase-7 pre-implementation review mode.*
+
+---
+
+# §4A Resolution Recommendation — OD-plan verbatim-divergence cluster
+
+*Appended 2026-05-15 per `systems-architect` SKILL.md §4A (Phase-7 tension-resolution mode). This audit report is the canonical systemic-tension record for the cluster (per the Phase-7 checkpoint decision: no per-unit Tension 005+ proliferation). The §4A recommendation is **a recommendation** — the operator holds decision authority (§4A.4).*
+
+## §4A.1 — Precise tension statement
+
+Nine Operational Discipline plan units (plus **U-OD-04**, already filed as Tension 004) carry an acceptance criterion asserting a signature is materialized "per §X **verbatim**" / "exactly N per §X" against a `Spec_Operational_Discipline` contract whose value set, cardinality, or vocabulary the signature does not transcribe. The precise per-artifact divergence is in the **Fork inventory table** above; it is not re-summarized here per §4A.2 ("do not summarize"). The nine newly-surfaced: **U-OD-02, U-OD-09, U-OD-11, U-OD-12, U-OD-14, U-OD-28, U-OD-30, U-OD-32, U-OD-33**.
+
+A recurring sub-shape: **cardinality-matches, member-set-diverges** (U-OD-11, U-OD-12, U-OD-14, U-OD-32, U-OD-33). The "exactly N" count is correct; the N members are not the spec's N members. The conformance must fix the **set contents**, not just preserve the count.
+
+Two divergences were spot-verified directly against `design-substrate/` during this §4A pass: OD spec §7.1 (`harness.breaker.scope ∈ {per_model, per_provider}` = 2 values, reconfirmed at §11.2 line 642) and OD spec §2.1 ("Eight cells; seven distinct classes"; §1.2 enumerates the 7-class backend-class enum). Both confirm the audit; the plan is the divergent artifact.
+
+## §4A.2 — Authority-chain placement
+
+`CLAUDE.md` §1.3 chain: ADR → ADD v1.3 → PRD v1.1 → **per-axis spec v1.x** → **per-axis plan v2.x**. The spec is canonical for the plan.
+
+For all nine the divergent surface is a Phase-5 **`Spec_Operational_Discipline`** contract (v1.2 §1–§13 + §14.1–§14.4 preserved-verbatim into v1.3; v1.3 §14.5 amendment) vs. a Phase-6 **`Implementation_Plan_Operational_Discipline_v2.x`** unit body. The spec sits strictly above the plan. **The plan is the artifact in error in every row.**
+
+Two units cite an ADR rather than the spec in their acceptance criteria, but each unit's `Implements:` field names a Phase-5 spec contract — and the chain is checked against the unit's actual Phase-5 contract:
+- **U-OD-09** acc #3 cites "D6 v1.1 §1.2"; the unit Implements **C-OD-07 §7.1**, which declares `harness.breaker.scope ∈ {per_model, per_provider}` = 2. The spec governs.
+- **U-OD-30** acc #6 cites "ADR-D5 v1.3 §1.4.1 verbatim"; the unit Implements **C-OD-21 §21.2**, which declares `audit.signature.algorithm ∈ {ed25519, ecdsa-p256, rsa-pss-2048}`. **§4A.5 tiebreaker verified ADR-D5 directly** — see below — and the ADR *agrees with the spec*. The chain is unanimous; the plan's `HMAC_SHA256` is contradicted by its own cited authority.
+
+## §4A.3 — §2-discipline analysis
+
+- **Five-axis (§2.1):** all nine are Operational-Discipline-axis surfaces (backend class, breaker scope, sampling event classes, cardinality budgets, collector placement, signature algorithm, bridging-arc transitions, preservation dimensions). Within-axis plan/spec conformance defect; no cross-axis re-decomposition.
+- **Probabilistic–deterministic boundary (§2.2):** every divergent surface is a **deterministic-side** primitive — an enum, a sampled-event-class set, a cardinality-safe/-prohibited attribute set, a signature-algorithm enum, a transition table. OD is the axis where observability and audit reliability *live*; a divergent sampling set or a divergent signature-algorithm enum is a direct reliability defect, not cosmetic.
+- **Decision ordering (§2.3):** **D-level** (derivative). The foundational decision — that OD commits these enums/sets — is held by the spec and is not in question. The defect is the plan's derivative materialization diverging. `§4A.4` "an artifact simply diverged from the chain", not a re-decision.
+
+## §4A.4 — Recommended reading
+
+**Conform the nine divergent OD-plan units to the cited `Spec_Operational_Discipline` contract**, in a single `implementation-planner` revision-pass, with cross-unit propagation in the same pass. Authority-chain-determinate per §1.3.
+
+- For the **cardinality-matches / set-diverges** units (**U-OD-11, U-OD-12, U-OD-14, U-OD-32, U-OD-33**) the revision must conform the **member set** — the specific event-class names, attribute names, transitions, dimension rows — to the spec's set, not merely preserve the count. A pass that fixes only the count leaves the divergence intact and the "verbatim" claim still false. This is the single highest-risk instruction for the OD revision-pass.
+- For the **enum / cardinality-drift** units (**U-OD-02** 3→7 backend classes, **U-OD-09** `BreakerScope` 4→2, **U-OD-30** `SignatureAlgorithm` `HMAC_SHA256`→`rsa-pss-2048`) conform the enum's value set and cardinality to the cited spec section.
+- **Cross-unit propagation (mandatory, same pass):** U-OD-09 `BreakerScope` (2 vs 4) → U-OD-14's `harness.breaker.scope` cardinality reference and any breaker-consuming unit. U-OD-02 `BackendClass` (7 vs 3) → U-OD-28's per-cell placement matrix and U-OD-22's cell-class dashboard routing. The pass must conform consumers in the same revision.
+- **Downstream artifact that absorbs the resolution:** `Implementation_Plan_Operational_Discipline` (next version bump). No `CLAUDE.md` anti-leakage rule, no ADR edit implicated.
+
+### Items NOT in the conform-to-spec scope — surfaced for separate operator disposition
+
+1. **U-OD-09 acc #2 — the Required/Conditional tier split is a design gap, not a conformance tension.** The `BreakerScope` 4→2 divergence (acc #3) is clean conform-to-spec. But acc #2's "4 Required / 3 Conditional tier classification per §7.1" describes a split that **spec §7.1 does not declare at all** — the §7.1 seven-attribute schema table has no tier classification. There is nothing to conform to. Per `CLAUDE.md` I-2 / X-AL-3 this is a plan-introduced H_T structure with no spec basis: route as a **§2.7.6 Class 1 fork of a distinct shape** — either `spec-writer` extends §7.1 to commit the tier split, or the operator confirms the plan-extension is sanctioned with recorded rationale.
+2. **U-OD-28 — *proposing* (§2.7.6 Class 2 operator decision).** "Exactly 7 values per §20.1 verbatim" resolves to no 7-element verbatim surface in §20.1 (§20.1 is a per-cell placement matrix; the spec §1.2 collector-placement enum is 6-valued). The operator confirms **which §20.1 surface the "verbatim" claim intended** before the unit's conformance target is fixed. Both readings make the claim unsupportable, so U-OD-28 stays in the cluster — but its conformance target needs the operator's read.
+3. **U-OD-29 — *open*; not in the fork set; needs an ADR-D2 check.** `SandboxTier` `TIER_0..TIER_3` is asserted "per D2 v1.1 §1.2"; spec §20.3 itself uses `Tier-1..Tier-4` labels. The divergence target is an ADR, not a spec-§ verbatim claim of the audited shape. **Recommend the revision-pass (or the operator) verify `ADR-D2.md` §1.2 directly** to confirm whether `Tier-0..3` is ADR-sanctioned before classifying U-OD-29. This §4A pass did not read ADR-D2; flagging it as the one unverified item.
+
+## §4A.5 — Tiebreaker check
+
+The verifiable fact making each conformance recommendation determinate: **no higher-chain artifact re-commits the plan's divergent vocabulary.** Verified — and for **U-OD-30 the tiebreaker was checked directly against the ADR**, because the plan cited an ADR (higher on the chain than the spec) and an ADR that committed `HMAC_SHA256` would invert the recommendation. `design-substrate/ADR-D5.md` §1.4 + §1.4.1 + the v1.2 Change-note all enumerate `audit_signature_algorithm ∈ {ed25519 / ecdsa-p256 / rsa-pss-2048}` — **`rsa-pss-2048`, not `HMAC_SHA256`.** The ADR agrees with spec C-OD-21 §21.2. The chain is unanimous; U-OD-30's recommendation is **determinate** (and the plan's acc #6 "per ADR-D5 §1.4.1 verbatim" is self-contradicting — its cited authority does not contain `HMAC_SHA256`).
+
+For the other eight, the OD spec change-notes (v1.2→v1.3) record only the §14.5 cost-attribution amendment and the §0.1 preserve-attestation — none touching backend class, breaker scope, sampling sets, cardinality sets, collector placement, bridging-arc transitions, or preservation dimensions. **Determinate: spec canonical, plan conforms.**
+
+**Load-bearing-artifact flag:** the resolution touches no `CLAUDE.md` anti-leakage rule and no F-ADR. The cluster needs operator **ratification** of the conformance direction — except items 1 (U-OD-09 tier split, genuine design gap) and 2 (U-OD-28, *proposing*), which require an explicit operator decision, and item 3 (U-OD-29, *open*) which requires an ADR-D2 §1.2 verification.
+
+## §4A.6 — Fork classification
+
+Per `Project_Workflow_v1_8.md` §2.7.6: **Class 1 (halt-execution)** for all nine — a design-phase artifact (the OD plan) requires revision before the affected units land. Under the `design-substrate/`-is-canonical posture, Class 1 means: halt landing, run the `implementation-planner` revision-pass in-CLI, re-clear, land. **U-OD-01 is unaffected** — audit clean-list, already landed (verified). U-OD-04 is the other cluster member in the current operational-minimum set, already filed as Tension 004 — fold its resolution into the same OD revision-pass.
+
+## §4A.7 — Operator decision required
+
+**The operator decides.** This §4A section recommends; it does not decide and does not edit the plan (§4A.4 — plan edits are `implementation-planner` work, after sign-off). Operator actions:
+
+1. **Ratify** the conform-to-spec direction for the 9-unit cluster + U-OD-04 (authority-chain-determinate; recommended). Note explicitly: the revision-pass must conform **member sets**, not just counts, for U-OD-11/12/14/32/33.
+2. **Disposition U-OD-09 acc #2** (item §4A.4.1): spec-extension via `spec-writer`, or sanction the plan-introduced tier split with recorded rationale.
+3. **Confirm U-OD-28** (item §4A.4.2): which §20.1 surface the "verbatim" claim targeted.
+4. **Authorize an ADR-D2 §1.2 verification** for U-OD-29 (item §4A.4.3) before that unit is classified.
+
+On ratification, sequencing is: `implementation-planner` revision-pass on `Implementation_Plan_Operational_Discipline` (conform 9 units + U-OD-04 + propagate to consumers) → version bump → land U-OD-04 against the conformed plan.
+
+*§4A recommendation authored 2026-05-15 under `systems-architect` SKILL.md §4A. Read-only with respect to `design-substrate/` — no spec, plan, or ADR modified by this pass. ADR-D5.md was read for the §4A.5 tiebreaker; not modified.*
