@@ -149,6 +149,8 @@ For all seven units the divergent surface is a Phase-5 **`Spec_Control_Plane`** 
 
 ## §4A.5 — Tiebreaker check
 
+**Citation-pattern note.** Unlike the OD cluster — where U-OD-30's plan body cited `ADR-D5` directly and a load-bearing ADR read was required — **no CP cluster unit cites an ADR in its divergent acceptance criterion**; every divergent CP unit cites a `Spec_Control_Plane` C-CP-NN section. The ADR-direct tiebreaker read was therefore not required for CP. This is a citation-pattern asymmetry, not a skipped step.
+
 The single verifiable fact that makes each conformance recommendation determinate: **no ADR / ADD / PRD revision postdates the cited `Spec_Control_Plane` section and re-commits the plan's divergent vocabulary.** Verified for this pass — the spec change-notes (v1→v1.1→v1.2→v1.3) record only `breaker.*`/`retry.*`/`engine.*` namespace and §24.1 export-table revisions, none touching the seven divergent surfaces; no D-ADR revision re-enumerates routing / lifecycle / resumption / gate-level / audit-namespace / validator-fail vocabulary post-spec. The recommendation is **determinate**: spec canonical, plan conforms.
 
 **Load-bearing-artifact flag:** the resolution touches no `CLAUDE.md` anti-leakage rule and no F-ADR. CP-AL-1 (the one anti-leakage rule in scope) was already conformed under Tension 002. The cluster therefore needs operator **ratification** of the conformance direction, not a load-bearing-artifact sign-off — except items 1 (U-CP-08, genuine design gap) and 2 (U-CP-11, naming call), which require an explicit operator decision before disposition.
