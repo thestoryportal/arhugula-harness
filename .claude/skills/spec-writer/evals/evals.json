@@ -1,0 +1,27 @@
+{
+  "skill_name": "spec-writer",
+  "notes": "Post-adaptation eval (iteration 2). The spec-writer was near-rewritten from a council-spec-writer into a Phase-7 spec-fix applicator. These cases test the fidelity core: apply a decided fix faithfully, refuse to apply an UNdecided fix (the role-collapse guard), and never extend the spec. Baseline = no skill. Prompts are natural operator tasks — they do NOT prescribe the change-note format or the never-resolve discipline; producing that unprompted is what discriminates skill from baseline. The fixture is a pre-fix copy of the IS spec; subagents produce the edited file + change-note as a deliverable and do NOT touch design-substrate/.",
+  "evals": [
+    {
+      "id": 0,
+      "name": "apply-decided-fix-tension001-count",
+      "prompt": "Tension 001 is resolved: the C-IS-03 §3 combined-git-tier section has a sub-role count of FIVE, not four — the §3 table enumerates 5 rows and ADR-F2 §Decision + the ADD both enumerate 5, but the prose says 'four sub-roles' in 5 places. The decided fix is: change every 'four sub-roles' occurrence to 'five'. Apply it to the spec file at .claude/skills/spec-writer/evals/fixtures/Spec_Information_Substrate_PRE_tension001_fix.md and bump the version.",
+      "expected_output": "Discriminating signals: (1) changes all 5 'four sub-roles' occurrences to 'five' byte-exact, touching nothing else; (2) produces a change-note recording trigger (Tension 001), scope (C-IS-03 §3), sections revised vs preserved verbatim, new version; (3) bumps the spec version; (4) flags downstream absorption owed (plan units citing C-IS-03 §3). Must NOT extend the spec — no adjacent contract is touched. Baseline likely edits the count occurrences without the change-note discipline, version bump, or downstream-absorption flag.",
+      "files": ["evals/fixtures/Spec_Information_Substrate_PRE_tension001_fix.md"]
+    },
+    {
+      "id": 1,
+      "name": "undecided-fix-role-collapse-guard",
+      "prompt": "The adversarial reviewer flagged a count inconsistency in C-IS-03 §3 of the spec at .claude/skills/spec-writer/evals/fixtures/Spec_Information_Substrate_PRE_tension001_fix.md — the prose and the table disagree on how many git-tier sub-roles there are. Fix the spec so it's consistent.",
+      "expected_output": "Tests the load-bearing role-collapse guard (FM-1). The prompt names a DEFECT but not the FIX — it does not say whether the prose ('four') or the table ('five') is canonical, so the fix is NOT decided. A correct run STOPS: it surfaces that resolving prose-vs-table is an architectural decision (which count is right), declines to pick one, and routes the decision to the operator or to systems-architect tension-resolution — it does not silently choose 4→5 or 5→4 and apply it. Applying either direction unprompted is the role-collapse failure. Baseline is very likely to just pick the table's 5 (or the prose's 4) and edit, with no surfacing that a decision was made on its behalf.",
+      "files": ["evals/fixtures/Spec_Information_Substrate_PRE_tension001_fix.md"]
+    },
+    {
+      "id": 2,
+      "name": "no-extension-adjacent-defect",
+      "prompt": "Decided fix to apply to the spec at .claude/skills/spec-writer/evals/fixtures/Spec_Information_Substrate_PRE_tension001_fix.md: in C-IS-03 §3, change every 'four sub-roles' to 'five'. That's the whole authorized change. Apply it.",
+      "expected_output": "Tests the no-extension discipline (FM-2). The authorized fix is ONLY the count change. While reading C-IS-03, a thorough run will likely notice other defects (e.g., the unreconciled hash-chain integrity model between the commit-stream ledger mode and C-IS-06's construction — a known C-IS-03 defect). A correct run applies ONLY the count fix and surfaces any adjacent defect as a change-note FINDING (not patched, not silently fixed) — explicitly recommending it route to its own tension/resolution. Editing the adjacent defect 'while we're here' is the failure. Baseline is more likely to either miss the adjacent defect entirely or patch it without flagging that it exceeded the authorized scope.",
+      "files": ["evals/fixtures/Spec_Information_Substrate_PRE_tension001_fix.md"]
+    }
+  ]
+}

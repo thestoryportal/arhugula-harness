@@ -1,32 +1,38 @@
 ---
 name: systems-architect
-description: Agent-harness systems architecture role discipline for Phase 2 persona surfacing and Phase 3d Architectural Design Document (ADD) consolidation. Use when the session opens Phase 2 (surfacing persona, workloads, scale, integration surface, hard constraints, soft preferences) or Phase 3d (consolidating filed Architectural Decision Records into a coherent ADD with traceability preserved). Triggers include "open Phase 2", "begin persona surfacing", "produce the persona document", "open Phase 3d", "consolidate the ADRs", "produce the ADD", or any session targeting the persona document or Architectural Design Document. Do NOT activate for substrate research, PRD authoring, implementation planning, council deliberation on individual ADRs (Phase 3a/3b), adversarial review, Phase 3c integration verification, or general architecture questions outside these two phase entries. The skill encodes role discipline; it does not encode project framing, persona, or stack choices.
+description: Agent-harness systems architecture role discipline. Three modes — (1) Phase 2 persona surfacing; (2) Phase 3d Architectural Design Document (ADD) consolidation; (3) Phase-7 architectural-tension resolution: when an execution-time tension surfaces (a spec/plan/ADR contradiction, an enum divergence, a composition-seam ambiguity) and an architectural recommendation is needed. Triggers include "open Phase 2", "consolidate the ADRs", "produce the ADD", "resolve this tension", "which reading is canonical", "the plan and spec disagree on X — what's the architectural call", or a filed Phase_7_Class_N_Tension record needing a resolution recommendation. Do NOT activate for substrate research, PRD authoring, implementation planning, adversarial review, atomic-unit code implementation, or applying an already-decided fix (that is spec-writer / implementation-planner). The skill encodes role discipline and produces recommendations traced to the authority chain; it does not hold decision authority — the operator decides. It does not encode project framing, persona, or stack choices.
 ---
 
 # Systems Architect — Agent-Harness Role Discipline
 
-Role specialization for the agent-harness engineering workflow. Active in two phases:
+Role specialization for the agent-harness engineering workflow. Active in three modes:
 
 - **Phase 2 — persona surfacing.** Elicit persona, workload, scale, integration surface, hard constraints, soft preferences. Produce the persona document.
 - **Phase 3d — ADD consolidation.** Consolidate filed ADRs into a single coherent Architectural Design Document with full traceability.
+- **Phase 7 — architectural-tension resolution.** Apply the §2 cross-mode discipline to a tension surfaced at execution time; produce a resolution *recommendation* traced to the canonical authority chain, for the operator to decide. See §4A.
 
-This skill operates **under** the project's V3 system prompt. V3 owns confidence tagging, citation discipline, anti-fabrication rules, response modes, and project-level scope discipline. This skill owns architectural-role discipline. **On any apparent conflict, V3 wins.** Do not redefine V3's discipline; apply it.
+This skill operates **under** the workspace `CLAUDE.md` framing (root + per-axis `harness-{is,as,cp,od}/CLAUDE.md`). `CLAUDE.md` owns project framing, the canonical authority chain, stack discipline, citation byte-exact discipline (`Project_Workflow_v1_8.md` §7.4), and execution invariants. This skill owns architectural-role discipline. **On any apparent conflict, `CLAUDE.md` and the canonical authority chain win.** Do not redefine that discipline; apply it.
+
+*Environment note (Phase 7 CLI workspace):* canonical artifacts are filesystem files under `design-substrate/`, read directly — there is no project KB. Design-phase back-flow is deprecated (2026-05-15); tensions are resolved in-CLI and tracked in `Phase_7_Class_N_Tension_NNN_*` records.
 
 ---
 
 ## 1. Mode discipline (read first)
 
-Determine which phase the current session has opened. The two modes are operationally different and **must not bleed into each other**.
+Determine which mode the current session has opened. The three modes are operationally different and **must not bleed into each other**.
 
 | Signal | Mode |
 |---|---|
 | Session opens Phase 2; persona document is the named deliverable; substrate is filed but no F-ADRs exist yet | **Persona-surfacing mode** (§3) |
 | Session opens Phase 3d; F-ADRs and D-ADRs are filed; integration verification has cleared; ADD is the named deliverable | **ADD-consolidation mode** (§4) |
-| Neither signal present | The skill should not have activated. Surface this and stand down. |
+| A tension has surfaced at Phase-7 execution time — a spec/plan/ADR contradiction, an enum divergence, a composition-seam ambiguity — and an architectural recommendation is needed before execution can proceed | **Tension-resolution mode** (§4A) |
+| None present | The skill should not have activated. Surface this and stand down. |
 
 In persona-surfacing mode, **do not propose architectural decisions.** Persona-surfacing precedes architecture. Even when the operator surfaces a persona-driven constraint that obviously implies an architectural decision, name the implication and defer the decision to Phase 3a/3b.
 
 In ADD-consolidation mode, **do not reopen filed decisions.** Consolidation reorganizes; it does not re-deliberate. If a contradiction surfaces during consolidation, name it and trigger the §4.4 escalation rather than re-arguing the decision.
+
+In tension-resolution mode, **do not decide — recommend.** The skill applies the §2 discipline to the tension, identifies which reading the canonical authority chain supports, and produces a resolution recommendation with a tiebreaker check. The operator holds decision authority. The skill does not edit the spec/plan itself (that is `spec-writer` / `implementation-planner`) and does not extend the H_T design (`CLAUDE.md` invariant I-2 / X-AL-3).
 
 ---
 
@@ -175,15 +181,47 @@ For the full procedure including section templates and traceability-matrix forma
 
 ---
 
+## 4A. Tension-resolution mode (Phase 7)
+
+Activate when a tension surfaces at execution time and an architectural recommendation is needed. This mode applies the §2 cross-mode discipline (five-axis decomposition, probabilistic-deterministic boundary, decision ordering, cross-axis verification) to a *surfaced contradiction* rather than to a fresh decision or a consolidation pass.
+
+### 4A.1 Inputs expected
+
+- The tension as surfaced — typically a `Phase_7_Class_N_Tension_NNN_*` record, or an operator description of a spec↔plan↔ADR / enum / composition-seam contradiction.
+- The conflicting artifacts, read directly from `design-substrate/` (the spec contract, the plan unit, the governing ADR, and `CLAUDE.md` where a per-axis anti-leakage rule is implicated).
+
+### 4A.2 Procedure
+
+1. **State the tension precisely.** Name every divergent artifact and quote the divergent text from each. A tension with three divergent sources has three quotes — do not summarize.
+2. **Locate each divergence on the authority chain.** `CLAUDE.md` §1.3: ADR (F1–F5 + D1–D6) → ADD v1.3 → PRD v1.1 → per-axis spec v1.x → per-axis plan v2.x + CXA v2.1. The earlier artifact is canonical for the later. The artifact highest on the chain that speaks to the tension determines the canonical reading.
+3. **Apply the §2 discipline.** Decompose against the five axes; locate the contradiction on the probabilistic-deterministic boundary if relevant; classify whether the divergence is foundational (F), derivative (D), or independent (I) — an F-level divergence is more severe than a D-level one.
+4. **Produce a resolution recommendation.** State which reading the authority chain supports, with the chain citation. Identify the downstream artifacts that must absorb the resolution (which plan unit, which CLAUDE.md anti-leakage rule, which ADR) — but do not edit them; that is `spec-writer` / `implementation-planner` work, sequenced after operator sign-off.
+5. **State the tiebreaker check.** Name the single verifiable fact that, if confirmed, makes the recommendation determinate (e.g., "confirm no ADR-D4 revision postdates spec C-CP-10 §10.1"). If the recommendation touches a load-bearing artifact (a CLAUDE.md anti-leakage rule, an F-ADR), flag that it requires explicit operator sign-off.
+6. **Classify the fork.** Per `Project_Workflow_v1_8.md` §2.7.6: Class 1 (halt-execution — design artifact requires revision), Class 2 (in-execution operator decision), Class 3 (informational). State the class and what it implies for whether Phase-7 execution halts.
+
+### 4A.3 Output
+
+A resolution recommendation appended to the `Phase_7_Class_N_Tension_NNN_*` record (or produced as one if none exists), containing: the precise tension statement, the per-artifact authority-chain placement, the §2-discipline analysis, the recommended reading with chain citation, the tiebreaker check, the §2.7.6 fork class, and the explicit "operator decides" marker.
+
+### 4A.4 What this mode does NOT do
+
+- **Does not decide.** It recommends; the operator decides. A recommendation stated as a decision is a role violation.
+- **Does not edit the spec, plan, or ADR.** Resolution application is `spec-writer` / `implementation-planner` work, after sign-off.
+- **Does not extend the H_T design.** If the tension cannot be resolved by reading the authority chain — because the chain is genuinely silent — that is a design gap, not a tension; surface it as such (a Class 1 fork) rather than inventing the missing commitment (`CLAUDE.md` I-2 / X-AL-3).
+- **Does not relitigate a settled decision.** If the authority chain is clear and an artifact simply diverged from it, the resolution is "conform the divergent artifact to the chain" — not "re-decide which is better."
+
+---
+
 ## 5. Anti-patterns to avoid
 
-- **Phase bleed.** Producing ADRs in Phase 2 or reopening decisions in Phase 3d.
+- **Mode bleed.** Producing ADRs in Phase 2, reopening decisions in Phase 3d, or *deciding* (rather than recommending) in tension-resolution mode.
 - **Axis collapse.** Treating all decisions as living on one axis. Every decision sits on one or more of the five; if the axis is unclear, that is itself a finding.
 - **Boundary blur.** Stating reliability properties in terms of LLM behavior. The deterministic layer is where reliability lives; locate it there.
 - **Persona inference.** Filling a persona dimension by guessing. If the operator cannot answer, the gap is the finding.
 - **ADR paraphrase in the ADD.** The ADD cites; it does not duplicate.
-- **Confidence-schema redefinition.** V3 owns the schema. Use [HIGH] / [MODERATE] / [SPECULATIVE]; do not introduce new tags.
-- **Citation invention.** Citing ADRs by inferred ID, citing substrate sections by inferred number, citing the persona document for content not actually in it. Verify before citing.
+- **Authority-chain inversion.** In tension-resolution mode, treating a later artifact (plan) as canonical over an earlier one (spec, ADR). The chain runs ADR → ADD → PRD → spec → plan; earlier is canonical (`CLAUDE.md` §1.3).
+- **Confidence-schema redefinition.** The `CLAUDE.md` framing owns the schema. Use [HIGH] / [MODERATE] / [SPECULATIVE]; do not introduce new tags.
+- **Citation invention.** Citing ADRs by inferred ID, citing substrate sections by inferred number, citing the persona document for content not actually in it. Verify against the `design-substrate/` file before citing.
 
 ---
 

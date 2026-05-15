@@ -75,7 +75,7 @@ A decision's class is determined by its dependency structure, not by its perceiv
 For a candidate decision D:
 
 1. **What constrains D?** List the constraints. Sources:
-   - Project framing / V3 system prompt
+   - Project framing / workspace CLAUDE.md
    - Persona document
    - Other ADRs (cite by ID)
    - Substrate research (cite by deliverable + section)

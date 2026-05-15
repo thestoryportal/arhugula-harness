@@ -38,3 +38,6 @@ env/
 .coverage
 htmlcov/
 coverage.xml
+
+# Skill-eval run artifacts (regenerable; eval sets in .claude/skills/*/evals/ are version-controlled)
+.claude/skills/*-workspace/

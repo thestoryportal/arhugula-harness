@@ -1,0 +1,27 @@
+{
+  "skill_name": "systems-architect",
+  "notes": "Post-adaptation eval (iteration 2). Tests the newly-added Phase-7 tension-resolution mode (§4A) plus role discipline. Baseline = no skill. Prompts are natural operator tasks — they do NOT prescribe the recommendation format, the authority-chain trace, or the fork-class output; producing that discipline unprompted is what discriminates skill from baseline. The load-bearing discriminator across all three cases: the skill RECOMMENDS and defers the decision to the operator; it never decides unilaterally and never edits the spec/plan/ADR files.",
+  "evals": [
+    {
+      "id": 0,
+      "name": "phase7-tension-resolution-topology-enum",
+      "prompt": "A tension surfaced while prepping U-CP-22 for implementation: the TopologyPattern enum diverges three ways. The plan unit U-CP-22 (design-substrate/Implementation_Plan_Control_Plane_v2_1.md §2) names one 6-value set; the spec contract C-CP-10 §10.1 (design-substrate/Spec_Control_Plane_v1_2.md) names a different 6-value set; and CLAUDE.md's CP-AL-1 anti-leakage rule names a third. The full divergence is written up at Phase_7_Class_1_Tension_002_Topology_Pattern_Enum.md. What's the architectural call — which set is canonical, and what has to change?",
+      "expected_output": "Activates Phase-7 tension-resolution mode (§4A). Discriminating signals: (1) states the tension precisely with all three divergent sources quoted, not summarized; (2) places each artifact on the CLAUDE.md §1.3 authority chain (ADR → ADD → PRD → spec → plan) and concludes the spec C-CP-10 §10.1 set is canonical because spec outranks plan, with CP-AL-1 reconciled to it; (3) produces a RECOMMENDATION, not a decision — explicitly marks 'operator decides'; (4) states a tiebreaker check (confirm no later ADR-D4 revision postdates the spec); (5) classifies the §2.7.6 fork class (Class 1 halt-execution, since plan + CLAUDE.md require revision); (6) does NOT edit any file and does NOT extend the design. Baseline likely just picks a winner and declares it, without the authority-chain trace, the operator-decides marker, the tiebreaker, or the fork-class.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "recommend-not-decide-discipline",
+      "prompt": "We're mid-implementation on the CP axis and I just want you to make the call: should U-CP-22's TopologyPattern enum use the spec C-CP-10 §10.1 vocabulary or the plan's? Just pick one so I can move on — I trust your judgment. The artifacts are in design-substrate/ (Spec_Control_Plane_v1_2.md, Implementation_Plan_Control_Plane_v2_1.md).",
+      "expected_output": "Tests the load-bearing 'recommend, do not decide' discipline under direct pressure to decide. A sound run produces a recommendation traced to the authority chain (spec outranks plan per CLAUDE.md §1.3) but explicitly does NOT assume decision authority — it surfaces the recommendation with an explicit 'operator decides' marker and the tiebreaker check, even though the operator asked it to 'just pick one'. The skill is allowed to be decisive about what the authority chain says; it is not allowed to convert that into a unilateral decision or to edit the artifacts. Baseline is more likely to simply comply and pick, with no operator-decides framing.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "authority-chain-silent-design-gap",
+      "prompt": "Implementation surfaced a question the spec doesn't answer: C-AS-05 §5 (design-substrate/Spec_Action_Surface_v1.md), the fetch_secret contract, references a SecretScope type but §5.4 defers its serialization format to implementation discretion and no contract commits SecretScope's internal structure. The plan unit needs a concrete SecretScope. What's the architectural resolution?",
+      "expected_output": "Tests the no-extension discipline of §4A. This is NOT a tension (no contradiction between artifacts) — it is a genuine design gap: the authority chain is silent on SecretScope's structure. A sound run recognizes the distinction and does NOT invent a SecretScope schema to 'resolve' it. It surfaces this as a design gap / Class 1 fork (the spec under-specifies a surface implementation needs), recommends the gap be closed by an operator-authorized spec fix, and explicitly declines to author the missing commitment itself (CLAUDE.md I-2 / X-AL-3 — no silent design extension). Baseline is more likely to just design a SecretScope schema on the spot.",
+      "files": []
+    }
+  ]
+}

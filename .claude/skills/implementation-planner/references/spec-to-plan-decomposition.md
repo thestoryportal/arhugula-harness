@@ -124,6 +124,6 @@ If the executor needs the spec to commit, the path is:
 
 ## 6. Multi-version contract citation discipline
 
-When a contract has been revised (e.g., a contract v1.0 → v1.1 absorbed an adversarial-review finding), the unit cites the **latest filed version** per Workflow v1.5 §7 use-latest-version body-citation-alignment. Citing a prior version is a defect surfaced at coherence pass — it indicates the unit was authored against stale substrate. Resolution: re-read the latest version; update the citation; verify the unit's signature/surface still aligns with the latest contract content; revise the unit if not.
+When a contract has been revised (e.g., a contract v1.0 → v1.1 absorbed an adversarial-review finding), the unit cites the **latest filed version** per Project_Workflow_v1_8.md §7.4 use-latest-version body-citation-alignment. Citing a prior version is a defect surfaced at coherence pass — it indicates the unit was authored against stale substrate. Resolution: re-read the latest version; update the citation; verify the unit's signature/surface still aligns with the latest contract content; revise the unit if not.
 
 This is structurally analogous to the spec-writer Path A revision-pass discipline established at iter-1 and consolidated to Workflow §7 at iter-2.

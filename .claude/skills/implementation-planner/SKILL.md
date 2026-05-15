@@ -1,13 +1,15 @@
 ---
 name: implementation-planner
-description: Agent-harness Phase 6 implementation planning role discipline. Use when Phase 6 opens, the specification (axis specs + composition document) is filed and P5-CK-cleared, and the implementation plan is the deliverable. Triggers: "open Phase 6", "begin implementation planning", "author the implementation plan", "produce the plan from the specification", or any session targeting Implementation_Plan_v1.md as deliverable with a P5-CK-cleared spec as substrate. Also activates in revision-pass mode when a spec revision (v1.x → v1.y) or P6-CK finding requires plan absorption (per spec-writer Path A and prd-author revision-pass precedent). Do NOT activate for substrate research, persona surfacing, ADR authoring/revision, ADD consolidation, PRD authoring, specification authoring, P5-CK or P3-CK review, or post-plan execution. Encodes atomic-decomposition + spec-traceability + dependency-graph discipline; does not encode the project persona, stack, language, tooling, deployment surface, or specification content.
+description: Agent-harness implementation planning role discipline. Use when an axis implementation plan is the deliverable — either initial authoring (Phase 6, spec filed and P5-CK-cleared) or revision-pass absorption. Triggers: "author the implementation plan", "produce the plan from the specification", "update the plan for U-CP-NN", "absorb the spec fix into the plan", or any session targeting a per-axis Implementation_Plan_<Axis>_vN.md as deliverable. Revision-pass mode activates when a design-substrate/ spec revision OR a Phase-7 Class_N_Tension resolution requires plan absorption — this is the in-scope post-plan use. Do NOT activate for substrate research, persona surfacing, ADR authoring/revision, ADD consolidation, PRD authoring, specification authoring, adversarial review, or atomic-unit code implementation (that is the phase-7-implementation skill). Encodes atomic-decomposition + spec-traceability + dependency-graph discipline; does not encode the project persona, stack, language, tooling, deployment surface, or specification content.
 ---
 
 # Implementation Planner — Agent-Harness Role Discipline
 
 Role specialization for Phase 6 of the agent-harness engineering workflow. The skill encodes the **atomic-decomposition + spec-traceability + dependency-graph discipline**: in this workflow the P5-CK-cleared specification is the canonical input; the plan decomposes specification contracts into ordered, dependency-explicit, individually-shippable atomic units; the plan terminates the design chain — only execution remains downstream.
 
-This skill operates **under** the project's V3 system prompt. V3 owns confidence tagging, citation discipline, anti-fabrication rules, response modes, and project-level scope discipline. This skill owns implementation-planning role discipline. **On any apparent conflict, V3 wins.**
+This skill operates **under** the workspace `CLAUDE.md` framing (root + per-axis `harness-{is,as,cp,od}/CLAUDE.md`). `CLAUDE.md` owns project framing, stack discipline, the canonical authority chain, citation byte-exact discipline (`Project_Workflow_v1_8.md` §7.4), and execution invariants. This skill owns implementation-planning role discipline. **On any apparent conflict, `CLAUDE.md` and the canonical authority chain win.**
+
+*Environment note (Phase 7 CLI workspace):* canonical artifacts are filesystem files under `design-substrate/`, read directly — there is no project KB and no `project_knowledge_search`. Design-phase back-flow is deprecated (2026-05-15); spec-shaped gaps surfaced during planning are fixed in-CLI and tracked in a `Phase_7_Class_N_Tension_NNN_*` record (see §2).
 
 ---
 
@@ -17,9 +19,11 @@ Determine the sub-mode before authoring. Both sub-modes share the role disciplin
 
 | Signal | Sub-mode |
 |---|---|
-| Phase 6 entry; no prior plan filed; specification (post-P5-CK) is the substrate | **Initial authoring mode** (output: `Implementation_Plan_v1.0.md`) |
-| Phase 6 re-entry; plan vN filed; a specification revision (v1.x → v1.y) OR P6-CK findings require absorption | **Revision-pass mode** (output: `Implementation_Plan_vN+1.md`) |
+| Phase 6 entry; no prior plan filed; specification (post-P5-CK) is the substrate | **Initial authoring mode** (output: `Implementation_Plan_<Axis>_v1.0.md`) |
+| Plan vN filed; a specification revision OR P6-CK findings OR a Phase-7 `Class_N_Tension` resolution require absorption | **Revision-pass mode** (output: `Implementation_Plan_<Axis>_vN+1.md`) |
 | Neither signal present | The skill should not have activated. Surface this and stand down. |
+
+Plan filenames are **per-axis**, matching the canonical plans (`Implementation_Plan_Control_Plane_v2_3.md`, `Implementation_Plan_Information_Substrate_v2_2.md`, etc.) — not a generic `Implementation_Plan_v1.md`. In Phase 7, the most common entry is revision-pass mode: an operator-approved spec fix or a resolved `Phase_7_Class_N_Tension_NNN_*` record requires the affected plan unit(s) to absorb the change.
 
 In initial authoring mode, produce a freshly decomposed plan against the filed specification. In revision-pass mode, produce a versioned plan with a change-note declaring scope, sections-preserved-verbatim, sections-revised, coverage matrix delta, and dependency graph delta — the pattern modeled on spec-writer Path A revision passes and prd-author §2.7 revision-pass precedent.
 
@@ -33,7 +37,7 @@ This is the discipline the skill exists to enforce. Operate it at every authorin
 
 **Consequences.** Two follow directly:
 
-1. **The implementation planner never extends a specification commitment.** If authoring surfaces a specification-shaped gap (a deferred-to-implementation item the unit would need to commit to, a contradiction between two contracts at a composition site, a missing surface the contract does not commit), the gap is itself the finding — back-flow to Phase 5 per workflow §4 fork-handling. This is the analog of the prd-author skill's Phase 3 back-flow prohibition and the systems-architect skill's prohibition on reopening filed ADRs at consolidation.
+1. **The implementation planner never extends a specification commitment.** If authoring surfaces a specification-shaped gap (a deferred-to-implementation item the unit would need to commit to, a contradiction between two contracts at a composition site, a missing surface the contract does not commit), the gap is itself the finding. In the Phase 7 CLI workspace, design-phase back-flow is deprecated: the gap is surfaced to the operator, the spec fix is applied in-CLI to the `design-substrate/` spec, and the event is tracked in a `Phase_7_Class_N_Tension_NNN_*` record with the clearing decision recorded (per `CLAUDE.md` §4.3 and the `spec-tension-record-pattern`). The planner does not invent the missing commitment to close the gap itself.
 2. **Post-plan, only execution remains.** The planner does not produce further design decisions. The plan's job is to give the executor enough commitment to execute without designing.
 
 A plan that introduces architecture, refines a contract, or ships units without specification traceability has failed at the role level, not the surface level — re-author rather than patch.
@@ -135,15 +139,15 @@ Full revision-pass session shape including multi-contract composition handling a
 
 ---
 
-## 9. Cross-mode V3 deference
+## 9. Cross-mode citation + fidelity discipline
 
-V3 owns the project's confidence-tag schema (HIGH / MODERATE / SPECULATIVE), citation conventions, anti-fabrication rules, and response-mode discipline. **Do not redefine these.** This skill operates under Workflow v1.5 and inherits V3's discipline at every authoring step:
+The workspace `CLAUDE.md` and `Project_Workflow_v1_8.md` §7.4 (fidelity-grammar) own citation and fidelity discipline. **Do not redefine these.** This skill inherits that discipline at every authoring step:
 
 - Use `[HIGH]` / `[MODERATE]` / `[SPECULATIVE]` for confidence; do not introduce plan-specific tags.
 - Cite spec contracts by **verified IDs and section numbers**; do not infer citation targets.
-- Apply V3's anti-fabrication discipline at every step: a contract citation that cannot be verified by reading the spec is a fabrication and a Class-1 finding.
+- A contract citation that cannot be verified by reading the spec is a fabrication and a Class-1 finding (per the §4.1 review-severity scale; see anti-patterns §10).
 
-Workflow v1.5 §7 use-latest-version body-citation-alignment clause: when a unit cites a spec contract, the citation must point to the **latest filed version** of the cited spec — not a prior version. At revision pass, citations to revised contracts are bumped to the new version. Mirrors the spec-writer Path A discipline established at iter-1 and consolidated to Workflow §7 at iter-2.
+`Project_Workflow_v1_8.md` §7.4 use-latest-version body-citation-alignment clause: when a unit cites a spec contract, the citation must point to the **latest filed version** of the cited `design-substrate/` spec — not a prior version. At revision pass, citations to revised contracts are bumped to the new version. Byte-exact citation discipline per §7.4.2 (`CLAUDE.md` invariant I-1).
 
 Trace-back is a citation discipline, not an attribution gesture: a section number is required.
 
@@ -155,7 +159,7 @@ Trace-back is a citation discipline, not an attribution gesture: a section numbe
 |---|---|
 | **Under-decomposition.** Units too big — multi-day effort, multi-axis scope, "implement the entire control plane" as one unit. | Fails §3.1 (single coherent change), §3.2 (single focused session). Re-atomize. |
 | **Over-decomposition.** Units trivial — single-import additions, one-line edits, "create the directory" as a unit. | Fails §3.2 (over-fine). Coalesce into the consuming unit. |
-| **Spec extension.** Unit introduces a commitment not in the specification — names a library not in the spec, declares a schema field not specified, adds a behavior absent from the contract. | Fails §4.4 (no spec extension). Plan implements; it does not extend. Back-flow to Phase 5 if extension feels necessary. |
+| **Spec extension.** Unit introduces a commitment not in the specification — names a library not in the spec, declares a schema field not specified, adds a behavior absent from the contract. | Fails §4.4 (no spec extension). Plan implements; it does not extend. Surface the gap as a finding → operator-approved in-CLI spec fix tracked in a `Phase_7_Class_N_Tension` record (§2); do not invent the commitment. |
 | **Implementation-detail leakage in the wrong direction.** Omitting implementation-grade detail where the contract requires it — vague "implement the sandbox tier composition" with no signature, file, or acceptance criterion. | Fails §4.4 (implementation-grade-detail). Plan exists to give the executor enough to execute; vagueness defeats the purpose. |
 | **Cyclic dependencies.** Two or more units depend on each other directly or transitively. | Fails §4.3 (acyclic invariant). Cycle indicates an atomization defect — re-atomize. |
 | **Missing dependencies.** A unit's acceptance criterion silently requires another unit's product, but the dependency is undeclared. | Fails §7 coverage discipline. Surface at coherence pass. |
@@ -164,8 +168,8 @@ Trace-back is a citation discipline, not an attribution gesture: a section numbe
 | **Risk/estimate annotations.** Plan annotates per-unit risk or per-unit effort estimates. | Operator pre-decision: plan is for the executor; resourcing artifacts are separate and out of scope. |
 | **Trace-omission.** Authoring a unit without a spec contract citation. | Fails §4.2. The load-bearing trace-back failure — surface as a finding; do not ship. |
 | **PR/commit/file-granularity pre-commitment.** Plan describes units at specific PR / commit / filesystem-path granularity rather than logical "single coherent change" granularity. | Stack-dependent; deferred to execution per §3.4. |
-| **Confidence-schema redefinition.** V3 owns the schema. | Use `[HIGH]` / `[MODERATE]` / `[SPECULATIVE]`; do not introduce plan-specific tags. |
-| **Citation invention.** Citing spec contract IDs by inference; citing section numbers by inference. | V3 anti-fabrication discipline at plan granularity. Verify before citing. |
+| **Confidence-schema redefinition.** `CLAUDE.md` framing owns the schema. | Use `[HIGH]` / `[MODERATE]` / `[SPECULATIVE]`; do not introduce plan-specific tags. |
+| **Citation invention.** Citing spec contract IDs by inference; citing section numbers by inference. | Anti-fabrication discipline at plan granularity. Verify against the `design-substrate/` file before citing. |
 
 ---
 

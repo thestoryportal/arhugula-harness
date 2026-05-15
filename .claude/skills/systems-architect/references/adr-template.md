@@ -156,7 +156,7 @@ Accepted
 Date: 2026-XX-XX
 
 ## Context
-The project commits to multi-LLM support (V3 system prompt §project_context).
+The project commits to multi-LLM support (workspace CLAUDE.md framing + ADR-F1).
 Persona_Document_v1 §3 surfaces three providers as in-scope: Anthropic,
 OpenAI, and a configurable third. Pattern Reference Catalog v1.0 §10.4
 documents three provider-abstraction shapes observed in production
@@ -202,7 +202,7 @@ to call site.
 - Pattern Reference Catalog v1.0 §10.4
 - Cluster 5 V2 §3 F1 classification
 - Persona_Document_v1 §3
-- V3 system prompt §project_context
+- workspace CLAUDE.md framing (root + per-axis)
 ```
 
 This example is **illustrative only** — it does not represent a filed ADR and should not be cited as such. The systems architect skill operating in Phase 3d would consume real filed ADRs, not author new ones.
