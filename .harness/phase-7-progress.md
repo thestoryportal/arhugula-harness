@@ -22,6 +22,7 @@ updates happen at cluster close, not per unit.
 | U-CP-00 | WorkloadClass closed 4-value enum | C-CP-07 §7.3 | ✅ landed | `feat(core): land U-CP-00` | 2026-05-15 |
 | U-CP-22 | TopologyPattern enum + admissibility | C-CP-10 §10.1-§10.3 | ✅ landed | `feat(cp): land U-CP-22` | 2026-05-15 |
 | U-AS-05 | `blast_radius_floor` default mapping | C-AS-02 §2.4 | ✅ landed | `feat(as): land U-AS-05` | 2026-05-15 |
+| U-AS-11 | `SandboxProviderClass` enum + metadata | C-AS-09 §9.2 | ✅ landed | `feat(as): land U-AS-11` | 2026-05-15 |
 
 ## Operational-minimum set (7a exit-criterion #1 — 12 units)
 
