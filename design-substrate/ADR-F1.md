@@ -1,0 +1,87 @@
+# ADR-F1: Adopt a capability-aware multi-LLM provider abstraction with layered cheapest-deterministic-first routing
+
+## Status
+Accepted
+Date: 2026-05-09
+Revision: v1.2 — Adv-2 iter-3 revision pass per Path 4 session (F2-iter2-01 resolution)
+Revision date: 2026-05-10
+
+## Context
+
+The project commits to multi-LLM by design (V3 system prompt §project_context). Persona_Document_v1 §10.1 records the operator-confirmed F1 principle as locked: hosted majors (Anthropic, OpenAI, others enumerated downstream) plus a local / open-weight tier (Ollama, vLLM, llama.cpp) as routable (sourced from Persona_Document_v1 §5, §7, V3 framing). Persona_Document_v1 §10.3 leaves two F1 sub-aspects open for Phase 3a deliberation: F1-abstraction-shape (capability-aware vs LCD vs ad-hoc) and F1-routing-strategy (declarative / embedding / LLM-as-router specific layering). Persona_Document_v1 §8.5 surfaces the cross-axis coupling that constrains both sub-aspects: cost × reliability × capability — local/open-weight is cheap but variably capable, hosted frontier is expensive but reliable, per-class cost ceilings are real (§6), and the 99.9%+ completion SLO (§4) is non-negotiable.
+
+The decision is foundational: every downstream LLM-touching component depends on the abstraction's shape and the routing strategy's layer ordering. Pattern Reference Catalog v1.0 §10.2 documents two relevant production patterns: P-IS-10 (multi-LLM provider abstraction, observed across pi-mono, Cline, kilocode, openrig, OpenHarness, DeerFlow, Trellis, 12-Factor, with C-on-the-abstraction's-necessity, D-on-protocol-choice) and P-IS-7 (provider profiles / harness profiles as declarative override layer, observed across deepagents and OpenHarness). Cluster 1 V2 §2.2 documents the routing substrate at depth: Anthropic BEA's routing pattern, RouteLLM (Ong et al. arXiv:2406.18665, ICLR 2025), FrugalGPT cascade (Chen et al. arXiv:2305.05176), CARGO confidence-aware routing (Barrak et al. arXiv:2509.14899), xRouter RL-trained routing (Qian et al. arXiv:2510.08439), and the cache-locality-forced composition order that constrains layer placement.
+
+Persona_Document_v1 §7 records the operator's pragmatic-mixed ecosystem affinity — Anthropic primitives (prompt caching, batch API, extended-thinking budgets, MCP, structured outputs) preserved where they fit, vendor-neutral abstraction where they don't. This affinity makes feature-erasure on abstraction unacceptable as a design property.
+
+## Decision
+
+Adopt a capability-aware multi-LLM provider abstraction that exposes a thin core surface (generation, streaming, tool-use) plus a per-provider capability-introspection API at call sites, and resolve routing across providers by a layered cheapest-deterministic-first strategy — declarative manifest binding as default, embedding-classifier dispatch as second tier, LLM-as-router as opt-in last-resort with explicit per-layer time budget and deterministic-fallback-on-budget-exceeded.
+
+## Rationale
+
+**(a) Pattern this decision follows.** The capability-aware abstraction follows Pattern Reference Catalog v1.0 §10.2 P-IS-10 (multi-LLM provider abstraction) at the variation point where the corpus has divergent (D) protocol choice — pi-mono normalizes streaming events but preserves capability differences; Cline runs per-provider adapters; OpenHarness uses provider profiles as a declarative override layer. The capability-aware shape is the union: a thin normalized core (the streaming-events convergence) plus capability surfaces (the per-provider differences). The layered routing strategy follows Pattern Reference Catalog v1.0 §10.2 P-IS-7 (provider profiles as declarative override layer) for the declarative tier, and Cluster 1 V2 §2.2.2 (Anthropic BEA routing pattern, RouteLLM, FrugalGPT cascade, CARGO, xRouter) for the embedding and LLM-as-router tiers. The Brainstorm_Synthesis_For_Phase_2 §9 Q14 layered routing prior is reconciled against the catalog and confirmed [MODERATE — synthesis citation cap honored]. The layered shape itself — declarative-default + embedding-second + LLM-as-router-opt-in — is the F-layer commitment per Persona_Document_v1 §10.2 / §10.3 framing of F1-routing-strategy as persona-open at sub-aspect level but persona-constrained on shape; per-class implementation tuning of layer time-budget thresholds, embedding-classifier training corpus, and LLM-as-router prompt content is D-derivative downstream, not F-layer commitment. The manifest-layer model assignment named in Consequences §(a) is the declarative tier of this layered shape — the F1 manifest is the authoring substrate for the declarative-default layer, with embedding and LLM-as-router layers composing as fall-throughs when the manifest does not bind.
+
+**(b) Failure mode this decision prevents.** LCD abstraction (LiteLLM-style portable API normalizing per-provider features into the union) erases the persona's §7 explicit feature affinity at the cost of measured production penalties: Anthropic prompt-cache reads run at 0.1× base input cost (Cluster 1 V2 §2.2.2 Anthropic Prompt Caching docs [HIGH]) and Cluster 1 V2 §2.2.5 documents that "LiteLLM-mediated fallback typically *bypasses* provider-specific prompt caching" [MODERATE]. On cache-friendly workloads (software engineering with stable system prompts; pipeline automation with repeated stage prompts per §8.1, §8.3) the derived input-token cost ratio of cache-bypassed-vs-cache-hit access reaches 4–10× [MODERATE — derived inference] — incompatible with the per-class cost ceiling (§6). The derivation has four inputs: (1) Anthropic cache-read = 0.1× base input cost [HIGH, Anthropic Prompt Caching docs per Cluster 1 V2 §2.2.2]; (2) LiteLLM-mediated fallback bypasses provider-specific prompt caching [MODERATE, Cluster 1 V2 §2.2.5]; (3) cache-friendly workload assumption — high cache-hit rate (50–95%) on stable system prompts and repeated stage prompts per Persona §8.1 / §8.3; (4) input-token-dominant workload shape on the named classes (long-context system prompt + repeated tool definitions + modest generation). The lower bound (~4×) holds where output tokens are non-trivial or cache-hit rate is moderate; the upper bound (~10×) approaches the asymptote 1/0.1 where input dominates and hit rate approaches 100%. The 4–10× range is bounded inference; specific empirical validation per workload class is downstream measurement work, not F1-layer commitment. Single-strategy routing fails one of three axes by construction: pure-declarative cannot accommodate the §3.2 workload-class extensibility flag; pure-LLM-as-router inflates per-call latency by 50–200 ms and adds unconditional inference cost (Cluster 1 V2 §2.2.4 [HIGH]); pure-embedding lacks per-step manifest auditability for the §10.4 compliance-readiness posture. The layered strategy makes each routing decision auditable at the cheapest layer that resolves it, satisfying the §8.5 cost × reliability × capability coupling without sacrificing any axis. The explicit per-layer time budget (with deterministic-fallback-on-budget-exceeded) prevents LLM-as-router under load from compounding rate-limit pressure — Cluster 4 §2.2.7 [HIGH] documents the rate-limit-storm risk that this discipline mitigates.
+
+**(c) Condition under which this decision stops being worth the cost.** Two conditions, neither current. (i) When local/open-weight models reach hosted-frontier capability parity for the persona's workload classes such that capability-aware introspection no longer differentiates providers in any cost-relevant way, the capability-aware abstraction collapses to (effectively) LCD with no cost penalty and the abstraction can be simplified — as of May 2026 this condition is not met and is unlikely within the design horizon [SPECULATIVE]. (ii) When the §3.2 workload-class extensibility flag becomes vestigial (workload distribution stabilized to a closed set), the embedding and LLM-as-router layers can be retired and declarative-only would suffice; this is not current and the bridging-arc persona makes it unlikely.
+
+## Consequences
+
+**(a) What becomes possible.**
+- Per-provider feature use (Anthropic prompt caching, OpenAI structured outputs, extended-thinking budgets, batch API, MCP-as-server-tool) at every call site, exposed via capability introspection.
+- Manifest-layer model assignment per agent role, per workflow class, per step — declarative routing as the auditable default.
+- Capability-shortfall fallback triggering: C9's mechanism can observe a distinguishing signal *before* the error path (C9 spec §"capability-shortfall trigger"), which is the substrate the 99.9% SLO requires.
+- Cross-provider sticky-routing within fallback chains (provider-sticky session keys per Cluster 1 V2 §2.2.5 [HIGH]) — the abstraction's call-site parameter shape makes this expressible at the topology layer.
+
+**(b) What becomes harder.**
+- The portable-API illusion: callers cannot blindly swap providers without updating capability assumptions. This is a feature, not a bug — feature-erasure was the failure mode being prevented — but it shifts cost to call sites that must declare which capabilities they consume.
+- Provider catalog management: adding a new provider requires implementing the thin core surface *and* enumerating its capability surface. LCD's "implement the core, the rest is null" simplification is unavailable.
+- Routing observability has more layers to instrument (one routing event becomes potentially three: manifest lookup, embedding classifier dispatch, LLM-as-router) — span schema must accommodate per-layer attribution.
+
+**(c) Constrained downstream.**
+- **Information substrate:** D-ADR on prompt-cache discipline must be authored per provider (cache breakpoint placement, sticky-routing within fallback chains). Engages C2's within-turn ↔ C3's across-turn seam (T-perm-2) at the cache-pin discipline.
+- **Action surface:** D-ADR on tool/MCP exposure across providers must declare which providers expose which tool-calling shapes (server tools vs client tools vs MCP) — capability introspection extends to action surface.
+- **Operational discipline:** D-ADR on routing-strategy implementation must specify per-layer time budgets, breaker placement (per `{provider, model}` pair per Cluster 4 §2.2.7 [HIGH]), and chain-advancement coordination with C9 retry mechanics. Engages T-perm-3 directly.
+- **Observability:** D-ADR on span schema for model calls must include per-provider capability attributes, cost-attribution-per-span (persona-constrained per §10.2), routing-layer attribution (which layer resolved the call), and provider-sticky session keys.
+- **Cross-cutting:** D-ADR on local-model trust posture (C10 spec §4 trust gradient) applies once the abstraction surfaces capability and provenance flags; the abstraction-shape commitment makes per-call provenance labeling mechanically possible.
+
+**Permanent tensions engaged.** This decision engages **T-perm-3 (C1 ↔ C9 — control-flow vs reliability)** at the routing-strategy chain-advancement-vs-retry-mechanics seam: chain composition is C6's, chain advancement under failure is C9's, and the integration plugs into C1's topology. Status: *formally accepted as a permanent tension* — `topology_fault_handling` is the tunable parameter that operates at this seam at every D-decision touching routing. The explicit per-layer time budget is the resolution shape at the F1 layer; the parameter is set per workload class at downstream D-ADRs. T-perm-3 surfaced in this session's TENSION block per orchestrator discipline.
+
+This decision touches but does not resolve **T-perm-2 (C2 ↔ C3 — within-turn vs across-turn)** at the prompt-cache pin discipline, deferred to the D-ADR on prompt-cache.
+
+## Alternatives considered
+
+**Alternative 1: LCD (lowest-common-denominator) abstraction — LiteLLM-style portable API.**
+Candidate because it minimizes call-site complexity (every provider exposes the same API; callers do not need to declare capabilities) and because it is the dominant pattern in production gateways (LiteLLM, OpenRouter, kilo-gateway). Rejected because the failure mode is feature-erasure on abstraction (Cluster 1 V2 §2.2.5 [MODERATE] documents LiteLLM-mediated fallback bypassing provider-specific prompt caching), and the cost penalty on cache-friendly workloads is incompatible with the persona's per-class cost ceiling (§6) and pragmatic-mixed feature affinity (§7). The 0.1× cache-read cost on Anthropic (Cluster 1 V2 §2.2.2 [HIGH]) is the canonical example of the lever LCD erases.
+
+**Alternative 2: Ad-hoc abstraction — provider-specific call sites without a unifying core.**
+Candidate as the simplest implementation (no abstraction work upfront; each provider integrated where used). Rejected because it defeats the V3 §project_context multi-LLM-by-design commitment — provider switching requires touching every call site, producing unmanageable lock-in to the first-integrated provider. Pattern Reference Catalog v1.0 §10.2 P-IS-10 documents the corpus convergence on the *necessity* of an abstraction (C-on-the-abstraction's-necessity); ad-hoc is the absence of one.
+
+**Alternative 3: Pure-declarative routing — no embedding or LLM-as-router layer.**
+Candidate as the simplest routing strategy (manifest declares model per step; no inference-time routing decisions). Rejected because it cannot accommodate the §3.2 workload-class extensibility flag (operator-asserted: "potentially others not currently realized") nor the §3.1.4 research/analysis class's cross-class composite tasks. Embedding-classifier routing is the structural answer to heterogeneous workload-shape distribution (§3.3) and the §8.5 capability-aware coupling.
+
+**Alternative 4: Pure-LLM-as-router strategy — single-tier RL-trained or LLM-classifier router for every call.**
+Candidate as the most flexible (handles any workload class without manifest pre-binding; xRouter's reward-shaped policy demonstrates strong cost-quality frontier per Cluster 1 V2 §2.2.2 [HIGH]). Rejected because it inflates per-call latency by 50–200 ms (Cluster 1 V2 §2.2.4 [HIGH]) unconditionally, adds an inference cost per request before work begins, is observationally opaque (the routing decision is a model-internal call), and structurally compounds rate-limit pressure under load. The 99.9% SLO (§4) plus the per-class cost ceiling (§6) are jointly incompatible with unconditional LLM-as-router invocation.
+
+## References
+
+- Persona_Document_v1 §3 (workload classes), §3.2 (workload-class extensibility flag), §3.3 (work-unit shape distribution), §4 (scale, 99.9% SLO), §5 (integration surface), §6 (per-class cost ceiling), §7 (pragmatic-mixed ecosystem affinity), §8.1 (software engineering), §8.3 (pipeline automation), §8.5 (cost × reliability × capability cross-class pattern), §10.1 (F1 operator-confirmed principle), §10.2 (cost-attribution-per-span constraint), §10.3 (F1 persona-open sub-aspects), §10.4 (compliance-readiness posture).
+- Pattern Reference Catalog v1.0 §10.2 P-IS-7 (provider profiles / harness profiles as declarative override layer).
+- Pattern Reference Catalog v1.0 §10.2 P-IS-10 (multi-LLM provider abstraction).
+- Cluster 1 V2 §2.2.2 (Anthropic BEA routing pattern; RouteLLM; FrugalGPT cascade; CARGO; xRouter; Anthropic Prompt Caching docs).
+- Cluster 1 V2 §2.2.3 (routing + prompt caching + fallback composition order).
+- Cluster 1 V2 §2.2.4 (router-class tradeoff axes).
+- Cluster 1 V2 §2.2.5 (failure modes in the field — cross-provider fallback invalidates prompt cache; LiteLLM-mediated fallback bypasses provider-specific caching).
+- Cluster 4 §2.2.7 (per-`{provider, model}` circuit breakers; Stripe-style idempotency keys; full-jitter retries).
+- Brainstorm_Synthesis_For_Phase_2 §9 Q14 (layered routing prior — synthesis citation [MODERATE] per V3 cap).
+- Anthropic, "Building Effective Agents," Dec 2024, anthropic.com/engineering/building-effective-agents.
+- Ong, I. et al. "RouteLLM: Learning to Route LLMs with Preference Data." arXiv:2406.18665, ICLR 2025.
+- Chen, L., Zaharia, M., Zou, J. "FrugalGPT." arXiv:2305.05176.
+- Barrak, A. et al. "CARGO: A Framework for Confidence-Aware Routing of Large Language Models." arXiv:2509.14899, Sep 2025.
+- Qian, C. et al. "xRouter: Training Cost-Aware LLMs Orchestration System via Reinforcement Learning." arXiv:2510.08439, Oct 2025.
+- V3 system prompt §project_context (multi-LLM-by-design commitment).
+- Project_Workflow_v1_0 §2.3.1 (Phase 3a deliberation discipline).
+- Permanent tension ledger: T-perm-3 (C1 ↔ C9 control-flow vs reliability; tunable parameter `topology_fault_handling`).
+- Cluster 5 V2 §3 F1 (substrate-trace dependency declaration per Workflow §2.3.1 exit criteria).
+- Pattern Reference Catalog v1.0 §11.3.1 F1 (candidate set: earendil-works/pi (pi-mono) 10 protocol adapters with normalized streaming events + cross-provider context handoff; cline/cline 30+ provider matrix; HKUDS/OpenHarness Anthropic/OpenAI/Moonshot/MiniMax/Gemini/Ollama/OpenAI-compat gateways; bytedance/deer-flow Doubao-default + multi-provider support; humanlayer/12-factor-agents multi-provider env in `create-12fa-agent` template; mindfold-ai/Trellis 14 host platforms (host-agnostic implies model-agnostic); mvschwarz/openrig Claude Code + Codex pods in same rig; VoltAgent/voltagent Vercel AI SDK abstraction; disler/just-prompt MCP server unifying OpenAI/Anthropic/Gemini/Groq/DeepSeek/Ollama).

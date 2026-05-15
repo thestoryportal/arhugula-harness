@@ -1,0 +1,40 @@
+# .gitignore — H_T workspace. Authority: Bootstrap Runbook §4.4.4.
+# Excludes runtime-mutable state + build artifacts. Does NOT exclude source,
+# tests, pyproject.toml, *.md, or the Phase 7 directive (all version-controlled).
+
+# Runtime state — .harness/ is created at runtime by Bash append-write
+# (Meta-Architecture §10.1.3); state ledger + observability DB must not be committed.
+.harness/state.jsonl
+.harness/observability.db
+.harness/*.db
+.harness/*.db-journal
+
+# Python build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.pyright/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Coverage
+.coverage
+htmlcov/
+coverage.xml
