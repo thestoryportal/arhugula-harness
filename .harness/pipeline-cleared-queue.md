@@ -15,27 +15,33 @@ spec; 0 Class 3 / 0 Class 2 / 1 non-blocking Class 1 finding (F1-01, casing
 drift — fork-queue item 8). 19 of 21 revised units CLEARED; 2 BLOCKED
 (U-CP-43, U-OD-09 — see `pipeline-fork-queue.md`).
 
-**Cleared — landable once predecessors land (topo order per CP/OD plan DAG):**
+**⚠️ Warranty caveat (added 2026-05-15).** `CLEARED` here means "no §4A
+verbatim divergence" — it does NOT mean "materializable". The pilot's mandate
+was verbatim-conformance only. The coding lane's per-unit spec-read found 3
+materializability forks (U-CP-01/10/47) among 5 pilot-cleared CP units checked.
+**The coding lane MUST run its own spec-read on every unit below before
+landing** — do not treat this list as land-ready. A materializability re-sweep
+of all pilot-cleared units is recommended (fork-queue pattern note, items 16–18).
 
-| Unit | Axis | Notes |
+**Pilot-cleared (§4A verbatim) — landability per coding-lane spec-read:**
+
+| Unit | Axis | Coding-lane verdict |
 |---|---|---|
-| U-CP-01 | CP | conformed v2.4 |
-| U-CP-10 | CP | conformed v2.4 |
-| U-CP-12 | CP | conformed v2.4 |
-| U-CP-19 | CP | conformed v2.4 |
-| U-CP-23 | CP | cleared with non-blocking §2.7.6 Class-2 note (fork-queue item 4) |
-| U-CP-46 | CP | conforms cleanly; `composition_winner` orphan rides on U-CP-43 |
-| U-CP-47 | CP | conformed v2.4 |
-| U-CP-48 | CP | conformed v2.4 |
-| U-OD-02 | OD | conformed v2.5 |
-| U-OD-11 | OD | conformed v2.5 |
-| U-OD-12 | OD | conformed v2.5 |
-| U-OD-14 | OD | conformed v2.5 |
-| U-OD-30 | OD | conformed v2.5 (acc #6 only) |
-| U-OD-32 | OD | conformed v2.5 |
-| U-OD-33 | OD | conformed v2.5 |
-
-Cleared + already landed pre-pipeline: U-CP-00, U-CP-22, U-OD-04 (see below).
+| U-CP-01 | CP | 🔴 FORKED — `cardinality` field has no §1.4 spec basis (fork-queue item 17) |
+| U-CP-10 | CP | 🔴 FORKED — undeclared type `ParentRelation` (fork-queue item 16) |
+| U-CP-12 | CP | not yet checked; deep deps unlanded |
+| U-CP-19 | CP | ✅ LANDED 2026-05-15 — spec-read clean |
+| U-CP-23 | CP | non-blocking §2.7.6 Class-2 note (fork-queue item 4); deps need U-CP-22 only ✅ — recheck before landing |
+| U-CP-46 | CP | not yet checked; deep deps unlanded |
+| U-CP-47 | CP | 🔴 FORKED — `AttributeValueType`/`Cardinality` shared-type no carrier (fork-queue item 18) |
+| U-CP-48 | CP | not yet checked; deep deps unlanded |
+| U-OD-02 | OD | not yet checked; deps [U-OD-01 ✅] — candidate, spec-read owed |
+| U-OD-11 | OD | not yet checked; deep deps unlanded |
+| U-OD-12 | OD | not yet checked; deep deps unlanded |
+| U-OD-14 | OD | not yet checked; deep deps unlanded |
+| U-OD-30 | OD | not yet checked; deep deps unlanded |
+| U-OD-32 | OD | not yet checked; deep deps unlanded |
+| U-OD-33 | OD | not yet checked; deep deps unlanded |
 
 ## Landed
 

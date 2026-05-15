@@ -29,6 +29,9 @@ Item 9 surfaced by the coding lane's own spec-read.
 | 13 | **U-AS-10** — F2-01 + F2-04: materialization preconditions unmet | Class 2 / **Class 2** | U-AS-10 | covered by Q1 systemic AS-plan audit |
 | 14 | **U-AS-20** — F3-02: `fetch_secret` declares a 3rd param (`tier`) while AC1 claims §5.1 "verbatim"; spec §5.1 contract is 2-param — internally contradictory verbatim claim | Class 3 / **Class 1 halt** | U-AS-20 | covered by Q1 systemic AS-plan audit |
 | 15 | **U-AS-28** — F3-03: consumes undeclared `AnchorCitation`; + F2-02 | Class 3 / **Class 1 halt** | U-AS-28 | covered by Q1 systemic AS-plan audit |
+| 16 | **U-CP-10** — `LifecycleEventClassMetadata.parent_relation` is typed `ParentRelation`, a type declared by no CP-plan unit (v2.1 or v2.4), referenced by no acceptance criterion, with no spec §5.1 basis. Undeclared-type fork (Tension-003 / U-AS-07 shape). *Pilot-CLEARED — the pilot's §4A-verbatim mandate did not run a materializability sweep.* | Class 3 / **Class 1 halt** | U-CP-10 | operator decision on `ParentRelation` carrier + value set, or drop the plan-invented field; routes to CP plan revision |
+| 17 | **U-CP-01** — `RoutingAttributeSchema` carries `value_type` + `cardinality` fields, but cited spec §1.4 routing.* table has columns {Attribute, Type, Semantic, Source} — **no cardinality column** (sibling §9.1 engine.* table does have one). acc#1 claims "per §1.4 verbatim"; `cardinality` cannot be transcribed. *Pilot-CLEARED.* | Class 2 / **Class 2** *(proposing)* | U-CP-01 | operator picks: (A) `cardinality` is implementer-discretion (land with inferred OTel tokens) vs (B) needs §1.4 spec extension vs (C) drop the field from the schema |
+| 18 | **U-CP-47** — `ValidatorFailAttributeSchema` consumes `AttributeValueType` + `Cardinality`, shared CP-axis enums declared by U-CP-01 (and assumed by U-CP-11). U-CP-47 `Depends on: [U-AS-03]` only — no dep-graph edge to any carrier of those types. Shared-type-no-carrier defect (the WorkloadClass→U-CP-00 shape). *Pilot-CLEARED.* | Class 3 / **Class 1 halt** | U-CP-47 | operator decision on the `AttributeValueType`/`Cardinality` carrier unit (candidate: a foundational CP or harness-core unit, like U-CP-00 for `WorkloadClass`) + dep-edge additions at every consuming unit |
 
 **Note on items 1, 2, 3:** the pilot reviewer confirmed these are pre-existing
 spec-silence design gaps the plans themselves declared and carried — NOT
@@ -57,6 +60,21 @@ verbatim + undeclared-type audit → operator-ratified conformance, same as the
 CP/OD §4A treatment) — NOT per-unit fork fixes. Queued as review-ahead pass Q1
 (`review-pipeline.md` §8). Until the AS plan is conformed, **all near-term AS
 landing is blocked** — the coding lane has no clean AS unit.
+
+**Pattern — the materializability axis spans all four plans (items 16–18).**
+The §4A audit checked **verbatim conformance** (does a plan signature transcribe
+its cited spec section). It did NOT check **materializability** (is every type
+at a signature position declared by a reachable unit; does the unit's signature
+have a complete spec basis). The pilot's CLEARED verdicts inherited that narrow
+mandate — `CLEARED` meant "no §4A verbatim divergence", NOT "ready to land".
+The coding lane's own per-unit spec-read (defense-in-depth) caught 3
+materializability forks (U-CP-01/10/47) among 5 pilot-cleared CP units it
+checked. Combined with AS (items 9–15) and the in-flight Q1 audit, the
+materializability defect class is now confirmed in CP and AS and is plausible
+in OD. **Recommended: a materializability re-sweep of the 15 pilot-cleared
+CP/OD units** (enumerate every type consumed at signature positions; confirm a
+reachable carrier) before the cleared-queue is treated as durable —
+operator-scoped decision, see report.
 
 ## Resolved forks
 
