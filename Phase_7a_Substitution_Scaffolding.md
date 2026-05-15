@@ -267,3 +267,77 @@ design-phase back-flow (Class 1 fork) before implementation proceeds.
 `Sub_Agent_Boundary_Specification_v1.md` — §3 (5 sub-agents), §5
 (CP-AL-1 application), §6 (per-sub-agent scope boundaries against the
 4 axes).
+
+---
+
+## §6 Surface 6 — OTel emission  [substitutes H_T-OD-2 + H_T-OD-4; C-OD §5.5]
+
+**Mechanism:** MCP-server. OpenTelemetry SDK is wired into the
+scaffolding MCP server at `scaffolding/mcp/telemetry.py`; every tool
+invocation emits one span at the MCP server boundary; spans export via
+OTLP to a user-launched Collector. **Retirement:** H_T-OD-2 retires when
+U-OD-04 → U-OD-08 land (OTel SDK base); H_T-OD-4 retires when
+U-OD-13 → U-OD-16 land (SpanProcessor redaction).
+
+### §6.1 Module + wiring
+
+- `scaffolding/mcp/telemetry.py` — `_build_tracer()` configures a
+  `TracerProvider` with a service `Resource`; `traced(span_name)` is a
+  decorator applied between `@mcp.tool()` and each tool function
+  (`functools.wraps` preserves the signature, so FastMCP schema
+  generation is unaffected).
+- All 12 representative tools (§4.2) are span-instrumented. Span names:
+  `read_file` → `files.read.completed`, `write_file` →
+  `files.write.completed` (byte-exact to the §10.1.6 smoke-test span
+  names); the other 10 → `mcp.tool.{name}`.
+- NOT in `src/harness_*/` (X-AL-3 — atomic-unit landings only).
+
+### §6.2 Exporters
+
+| Exporter | Target | Gating |
+|----------|--------|--------|
+| `ConsoleSpanExporter` | **stderr** | always on |
+| OTLP gRPC | `OTEL_EXPORTER_OTLP_ENDPOINT` | on only when that env var is set |
+
+Console export targets **stderr**, NOT stdout — stdout is the stdio MCP
+JSON-RPC channel and must not be polluted. This satisfies 7a
+exit-criterion #5 ("OTel emission visible at MCP server boundary")
+directly. OTLP export to the user-launched Collector subprocess
+(H_T-OD-6) is gated on the endpoint env var so the default run stays
+clean when no Collector is up.
+
+### §6.3 Bounded scope (H_T-OD-2 + H_T-OD-4; Meta-Architecture §5.5)
+
+Covers: OTel SDK base at the MCP server boundary; per-tool span
+emission; the SpanProcessor injection seam. Does NOT cover: H_E-internal
+events (closed surface); cross-process OTel context propagation;
+multi-tenant redaction discipline; the OTel Collector + sqlite
+ring-buffer (that is H_T-OD-6, operator-launched per exit-criterion #5,
+NOT one of the 9 surfaces).
+
+### §6.4 7a-PROVISIONAL notes
+
+- **GenAI semconv 1.41.0** (cited at the H_T-OD-2 substitution row) is
+  deferred. The 12 representative tools are not LLM calls, so the
+  `Resource` carries service identity only (`service.name` +
+  `service.version`). Full GenAI semconv attributes land at
+  U-OD-04 → U-OD-08.
+- **`RedactingSpanProcessor` is a schema-faithful stub.** The OTel
+  `SpanProcessor` ABC delivers an *immutable* `ReadableSpan` to
+  `on_end`, so true structure-not-content redaction cannot mutate the
+  span at the processor — real OTel redaction is exporter-side. The
+  stub subclasses the `SpanProcessor` ABC and marks the H_T-OD-4
+  injection seam at `on_end` as a documented no-op (forwards spans
+  unchanged to the delegate). The `redact_span` tool (§4.2) demonstrates
+  the redaction *transform* separately. Real redaction-before-export
+  lands at U-OD-13 → U-OD-16. (Same provisional-flag discipline as
+  §3.4's hash-input-scoping under-specification.)
+
+### §6.5 Anti-leakage (OD-AL-1, OD-AL-3, X-AL-1)
+
+OD-AL-1: H_E telemetry (closed Claude Code analytics) ≠ harness
+observability substrate. OD-AL-3: all OTel emission during 7a happens
+at the MCP server boundary (H_T-authored code) — H_E does NOT
+participate in OTel emission. OD-AL-3 is the canonical concretization
+of X-AL-1: the substrate boundary is enforced at OD by "no H_E
+participation in OTel emission", not by convention.

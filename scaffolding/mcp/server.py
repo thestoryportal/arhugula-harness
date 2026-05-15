@@ -24,6 +24,14 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, ConfigDict, Field
 
+# Surface 6 — OTel emission. Dual import: `import telemetry` resolves when
+# server.py runs as the stdio script (its own dir on sys.path[0]); the
+# package form resolves when imported as `scaffolding.mcp.server` (tests).
+try:
+    from scaffolding.mcp.telemetry import traced
+except ImportError:  # pragma: no cover — script-execution path
+    from telemetry import traced
+
 mcp = FastMCP("harness-7a-scaffold")
 
 
@@ -41,6 +49,7 @@ class ReadFileOutput(BaseModel):
 
 
 @mcp.tool()
+@traced("files.read.completed")
 def read_file(path: str) -> ReadFileOutput:
     """Read a UTF-8 text file and return its content.
 
@@ -61,6 +70,7 @@ class WriteFileOutput(BaseModel):
 
 
 @mcp.tool()
+@traced("files.write.completed")
 def write_file(path: str, content: str) -> WriteFileOutput:
     """Write UTF-8 text content to a file, creating or overwriting it.
 
@@ -82,6 +92,7 @@ class RunBashOutput(BaseModel):
 
 
 @mcp.tool()
+@traced("mcp.tool.run_bash")
 def run_bash(command: str, timeout_s: int = 30) -> RunBashOutput:
     """Run a shell command and return its exit code and captured streams.
 
@@ -110,6 +121,7 @@ class LedgerAppendOutput(BaseModel):
 
 
 @mcp.tool()
+@traced("mcp.tool.append_state_ledger")
 def append_state_ledger(
     action_id: str,
     idempotency_key: str,
@@ -150,6 +162,7 @@ class LedgerReadOutput(BaseModel):
 
 
 @mcp.tool()
+@traced("mcp.tool.read_state_ledger")
 def read_state_ledger(limit: int = 10) -> LedgerReadOutput:
     """Read up to `limit` entries from the state ledger.
 
@@ -169,6 +182,7 @@ class HashChainVerifyOutput(BaseModel):
 
 
 @mcp.tool()
+@traced("mcp.tool.verify_hash_chain")
 def verify_hash_chain() -> HashChainVerifyOutput:
     """Verify the state-ledger hash-chain linkage (C-IS-06 §6).
 
@@ -191,6 +205,7 @@ class RouteOutput(BaseModel):
 
 
 @mcp.tool()
+@traced("mcp.tool.route_llm_call")
 def route_llm_call(role: str, path_class: str, step: str) -> RouteOutput:
     """Resolve a (role, path_class, step) tuple to a provider/model target.
 
@@ -215,6 +230,7 @@ class RetryOutput(BaseModel):
 
 
 @mcp.tool()
+@traced("mcp.tool.invoke_with_retry")
 def invoke_with_retry(operation_id: str, max_attempts: int = 3) -> RetryOutput:
     """Invoke an operation under retry + circuit-breaker discipline.
 
@@ -235,6 +251,7 @@ class HitlOutput(BaseModel):
 
 
 @mcp.tool()
+@traced("mcp.tool.hitl_prompt")
 def hitl_prompt(question: str, palette: list[str]) -> HitlOutput:
     """Surface a human-in-the-loop prompt and return the operator response.
 
@@ -257,6 +274,7 @@ class EmitSpanOutput(BaseModel):
 
 
 @mcp.tool()
+@traced("mcp.tool.emit_span")
 def emit_span(namespace: str, span_name: str, attributes: dict[str, str]) -> EmitSpanOutput:
     """Emit an OTel span into one of the 12 H_T namespaces.
 
@@ -278,6 +296,7 @@ class RedactSpanOutput(BaseModel):
 
 
 @mcp.tool()
+@traced("mcp.tool.redact_span")
 def redact_span(namespace: str, span_name: str, attributes: dict[str, str]) -> RedactSpanOutput:
     """Apply structure-not-content redaction to span attributes before export.
 
@@ -301,6 +320,7 @@ class RecordCostOutput(BaseModel):
 
 
 @mcp.tool()
+@traced("mcp.tool.record_cost")
 def record_cost(action_id: str, provider: str, tokens_in: int, tokens_out: int) -> RecordCostOutput:
     """Record per-attempt token cost attributed to an action.
 
