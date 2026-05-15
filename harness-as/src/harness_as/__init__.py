@@ -3,6 +3,7 @@
 Public API re-exports. Authority: harness-as/CLAUDE.md; AS plan v1.
 """
 
+from harness_as.blast_radius_floor import blast_radius_floor
 from harness_as.discriminators import DeploymentSurface, MCPTransport, PersonaTier
 from harness_as.forced_tier_resolution import (
     ForcedTierCause,
@@ -42,6 +43,7 @@ __all__ = [
     "SandboxTier",
     "SandboxTierMetadata",
     "ToolContext",
+    "blast_radius_floor",
     "fail_class_metadata",
     "forced_tier",
     "is_tier_at_or_above",
