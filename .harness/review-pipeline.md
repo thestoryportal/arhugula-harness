@@ -109,6 +109,13 @@ empirically sizes the buffer before scaling the pipeline to the full
 | # | Pass | Trigger | Rationale |
 |---|---|---|---|
 | Q1 | **Systemic AS-plan verbatim audit** — output `.harness/verbatim_audit_as_plan.md` | ✅ **COMPLETE** 2026-05-15 | All 33 AS units audited: 18 CLEARED · 3 CONFORM · 12 FORK. 2 systemic patterns — Pattern A (verbatim divergence, 7 units), Pattern B (undeclared auxiliary types, ≥7 units / ≥11 types). U-AS-02 retrospective Class-3. Resolution: one `implementation-planner` 2-sub-pass revision + a `spec-writer` C-AS-02 §2.2/§2.3/§11.1 reconciliation. The report is the canonical AS systemic-tension record. |
+| Q2 | **Systemic CP-plan materializability audit** — output `.harness/materializability_audit_cp_plan.md` | 🟡 **RUNNING** (launched 2026-05-15) | Operator commissioned full materializability conformance. Audits all 56 CP units for undeclared types, no-carrier shared types, signature-vs-spec completeness — the axis the §4A verbatim audit never checked. |
+| Q3 | **Systemic OD-plan materializability audit** — output `.harness/materializability_audit_od_plan.md` | 🟡 **RUNNING** (launched 2026-05-15) | Same as Q2 for all 34 OD units. |
+
+**Post-audit step (operator-owed):** once Q2/Q3 land, the four plans get
+operator-ratified `implementation-planner` revision passes (AS: Q1 record ready
+now; CP/OD: pending Q2/Q3) — materializability conformance, same ratification
+shape as §4A. The coding lane is **PAUSED** until the conformed plans land.
 
 ## 9. Files
 
