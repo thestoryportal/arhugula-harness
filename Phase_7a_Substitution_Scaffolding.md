@@ -167,7 +167,36 @@ boundary (H_E <-> H_T).
 
 ### §4.2 Representative tools (≥3 per axis; ≥12 total — 7a exit-crit #3)
 
-Populated incrementally. Landed: `read_file` (AS axis).
+12 tools landed at `scaffolding/mcp/server.py` — 3 per axis, 12 total.
+Per-tool `[substitutes H_T-…]` tags verified byte-exact against
+Meta-Architecture §5.
+
+| Tool                  | Axis | Substitutes | Body            |
+|-----------------------|------|-------------|-----------------|
+| `read_file`           | AS   | H_T-AS-2    | real H_E-equiv  |
+| `write_file`          | AS   | H_T-AS-2    | real H_E-equiv  |
+| `run_bash`            | AS   | H_T-AS-2    | real H_E-equiv  |
+| `append_state_ledger` | IS   | H_T-IS-5    | schema-faithful stub |
+| `read_state_ledger`   | IS   | H_T-IS-5    | schema-faithful stub |
+| `verify_hash_chain`   | IS   | H_T-IS-6    | schema-faithful stub |
+| `route_llm_call`      | CP   | H_T-CP-1    | schema-faithful stub |
+| `invoke_with_retry`   | CP   | H_T-CP-3    | schema-faithful stub |
+| `hitl_prompt`         | CP   | H_T-CP-20   | schema-faithful stub |
+| `emit_span`           | OD   | H_T-OD-2    | schema-faithful stub |
+| `redact_span`         | OD   | H_T-OD-4    | schema-faithful stub |
+| `record_cost`         | OD   | H_T-OD-5    | schema-faithful stub |
+
+**Tool-body fidelity (operator-approved, this session):** surface 4 is
+scoped to the tool-authoring surface per §4.3 — NOT axis logic. IS/CP/OD
+tool bodies are schema-faithful stubs returning deterministic representative
+values; the Pydantic v2 schema is the deliverable. `read_file` / `write_file`
+/ `run_bash` perform their real op (pure H_E-equivalent filesystem/shell, no
+axis logic). Axis logic lands at the atomic-unit consumptions.
+
+**Citation note:** the 7a candidate set named an `audit_append` tool; no
+distinct §5 OD substitution row exists for an audit-ledger primitive, so the
+third OD tool is `redact_span` substituting H_T-OD-4 (SpanProcessor
+pre-export redaction). OD spans OD-2 / OD-4 / OD-5.
 
 ### §4.3 Bounded scope (H_T-AS-2; Meta-Architecture §5.3)
 
