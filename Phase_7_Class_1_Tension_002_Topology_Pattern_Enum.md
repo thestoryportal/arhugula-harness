@@ -16,7 +16,7 @@ fix is applied in Claude Code CLI once the operator selects the resolution.*
 | Detected at | Phase 7 Session, sub-phase 7b, atomic unit **U-CP-22** (TopologyPattern enum + admissibility predicate) |
 | Detected | 2026-05-15 |
 | Halt point | U-CP-22 implementation — surfaced before code execution |
-| Status | **OPEN** — awaiting operator resolution decision |
+| Status | **RESOLVED** — operator signed off 2026-05-15; Set 2 adopted; fix applied in-CLI (see §5) |
 
 ## §2 Defect
 
@@ -92,8 +92,11 @@ This record does not apply any fix — the operator selects the resolution.
 
 | Field | Value |
 |---|---|
-| Decision | **PENDING** — U-CP-22 implementation is halted until the operator selects the canonical `TopologyPattern` enumeration and authorizes the artifact revisions. |
-| Unblocked siblings | U-CP-15, U-OD-01, U-OD-04 are NOT affected by this tension and are independently implementable (see §6). |
+| Decision | **RESOLVED 2026-05-15.** Operator signed off on the systems-architect §4A tension-resolution recommendation: **adopt Set 2** (spec C-CP-10 §10.1 — `single-threaded-linear`, `orchestrator-workers`, `decentralized-handoff`, `hierarchical-delegation`, `evaluator-optimizer`, `parallelization`) as the canonical `TopologyPattern` enumeration. Secondary: adopt `pause` / `proceed` / `cascade-cancel` (spec §10.2) as the canonical `CascadePolicy` set; U-CP-22 acceptance #2 citation corrected §10.3 → §10.2. |
+| Authority basis | ADR-D4 v1.1 §1.1 (Accepted, P3c-CK-cleared 2026-05-11) names Set 2; CP spec C-CP-10 §10.1 conforms. Tiebreaker discharged — no ADR-D4 version later than v1.1 exists in `design-substrate/`. Set 1 (plan) and Set 3 (CP-AL-1) drifted from the Accepted ADR; resolution = conform the divergent artifacts. |
+| Spec revision | **None.** C-CP-10 §10.1/§10.2/§10.3 + ADR-D4 v1.1 §1.1 already name Set 2 — they are the canonical reading. |
+| Artifacts revised in-CLI 2026-05-15 | (a) CP-AL-1 verbatim enum conformed to Set 2 at 4 loci — `design-substrate/Phase_7_Meta_Architecture_v1.md` §7.4, root `CLAUDE.md` §5, `harness-cp/CLAUDE.md` §4.2, `Sub_Agent_Boundary_Specification_v1.md` §5.1 (+ the §5.2.2 enum-value back-reference). Anti-leakage *semantics* unchanged. (b) CP plan U-CP-22 signature + acceptance #1/#2/#3 conformed to Set 2 / §10.2. |
+| Unblocked | U-CP-22 now implementable. U-CP-15, U-OD-01, U-OD-04 were never affected (see §6). |
 
 ## §6 Sibling assessment (this halt does not block these)
 

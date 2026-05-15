@@ -139,7 +139,7 @@ Per `Phase_6_5_Session_6_Kickoff.md` §5.2.4: "Sub-agent boundary specification 
 
 ### 5.1 CP-AL-1 verbatim (per Meta-Architecture §7.4)
 
-> **CP-AL-1.** H_E sub-agent topology (orchestrator-workers via `Agent` tool) ≠ H_T TopologyPattern 6-class enum (ORCHESTRATOR_WORKERS / DECENTRALIZED_HANDOFF / EVALUATOR_OPTIMIZER / PARALLELIZATION / ROUTING / SEQUENTIAL_PIPELINE)
+> **CP-AL-1.** H_E sub-agent topology (orchestrator-workers via `Agent` tool) ≠ H_T TopologyPattern 6-class enum (single-threaded-linear / orchestrator-workers / decentralized-handoff / hierarchical-delegation / evaluator-optimizer / parallelization)
 >
 > *Anti-pattern foreclosed:* Concluding "we already have orchestrator-workers" implies H_T-CP-10 is met
 
@@ -147,7 +147,7 @@ Per `Phase_6_5_Session_6_Kickoff.md` §5.2.4: "Sub-agent boundary specification 
 
 5.2.1 The 5 sub-agents declared at §3 are **H_E sub-agents** (orchestrator-workers via Claude Code's `Agent` tool primitive). They are NOT instantiations of H_T's TopologyPattern 6-class enum.
 
-5.2.2 The H_E sub-agent orchestrator-workers pattern at this workspace coincidentally maps to the ORCHESTRATOR_WORKERS value of H_T's TopologyPattern enum. **This coincidence does not satisfy H_T-CP-10.** H_T-CP-10 requires the full 6-class enum + admissibility predicate + CascadePolicy per C-CP-10 §10, all of which are H_T contracts implemented at U-CP-22 (CP plan v2.3 Cluster 4).
+5.2.2 The H_E sub-agent orchestrator-workers pattern at this workspace coincidentally maps to the `orchestrator-workers` value of H_T's TopologyPattern enum. **This coincidence does not satisfy H_T-CP-10.** H_T-CP-10 requires the full 6-class enum + admissibility predicate + CascadePolicy per C-CP-10 §10, all of which are H_T contracts implemented at U-CP-22 (CP plan v2.3 Cluster 4).
 
 5.2.3 The 5 sub-agents declared at §3 do NOT substitute for any H_T TopologyPattern primitive. Substitution retirement at U-CP-22 landing applies to H_T-CP-10 only; the H_E sub-agents at this workspace remain active as H_E execution-time scaffolding regardless of H_T-CP-10 status (the H_E sub-agents are not subject to retirement criterion at §6 — they exist for the duration of Phase 7 workspace lifetime).
 

@@ -227,7 +227,7 @@ Per X-AL-3 (Meta-Architecture §7.7): no silent H_T design extension at Phase 7 
 
 **CRITICAL.** Claude Code sub-agents (H_E orchestration primitive) are NOT the H_T Control Plane axis topology. Per `Phase_7_Meta_Architecture_v1.md` §7.4 anti-leakage rule **CP-AL-1**:
 
-> H_E sub-agent topology (orchestrator-workers via `Agent` tool) ≠ H_T TopologyPattern 6-class enum (ORCHESTRATOR_WORKERS / DECENTRALIZED_HANDOFF / EVALUATOR_OPTIMIZER / PARALLELIZATION / ROUTING / SEQUENTIAL_PIPELINE)
+> H_E sub-agent topology (orchestrator-workers via `Agent` tool) ≠ H_T TopologyPattern 6-class enum (single-threaded-linear / orchestrator-workers / decentralized-handoff / hierarchical-delegation / evaluator-optimizer / parallelization)
 >
 > *Anti-pattern foreclosed:* Concluding "we already have orchestrator-workers" implies H_T-CP-10 is met
 
