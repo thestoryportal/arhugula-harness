@@ -24,10 +24,11 @@ updates happen at cluster close, not per unit.
 U-IS-01 ✅ · U-IS-02 ✅ · U-IS-03 ✅ · U-IS-04 ✅ · U-AS-01 ✅ · U-AS-02 ✅ ·
 U-AS-03 ✅ · U-AS-04 ✅ · U-CP-15 ✅ · U-CP-22 🛑 · U-OD-01 ✅ · U-OD-04 🛑
 
-**10 of 12 operational-minimum units landed.** Remaining 2 both halted on
-Class 1 plan-defect forks: U-CP-22 (Tension 003 — `WorkloadClass` undeclared);
-U-OD-04 (Tension 004 — plan signature diverges from spec C-OD-04 at 4 points).
-Both surfaced cleanly per X-AL-3; neither silently absorbed.
+**10 of 12 operational-minimum units landed.** Remaining 2 (U-CP-22, U-OD-04)
+are now **conformed in the revised plans (CP v2.4 / OD v2.5) — awaiting
+pre-implementation re-clearance + land decision** (see §"§4A conformance" below).
+Both originally halted on Class 1 plan-defect forks; both surfaced cleanly per
+X-AL-3, neither silently absorbed.
 
 ## Spec tensions
 
@@ -57,3 +58,21 @@ determinate (spec canonical per CLAUDE.md §1.3 — conform the plan) **except**
 Tension 003 (`WorkloadClass` residence — genuinely non-determinate, needs operator).
 Meta-finding: the Phase-6 plans were P6-CK-cleared yet carry 17 plan-vs-spec
 divergences → P6-CK process gap (verbatim-claim check was not run at checkpoint).
+Filed: `.harness/finding_p6ck_verbatim_check_gap.md`.
+
+## §4A conformance — systems-architect recommendations + implementation-planner revision-pass (2026-05-15)
+
+- `systems-architect` §4A: two per-axis resolution recommendations appended to
+  the audit reports (conform plan to spec — authority-chain-determinate).
+  **Operator-accepted.**
+- `implementation-planner` revision-pass: **CP v2.4** + **OD v2.5** authored
+  (commit after `3209254`). Determinate cluster conformed — 7 CP units + 3
+  consumers, 9 OD units. U-CP-22 + U-OD-04 cleanly conformed (verified vs spec).
+- **New findings surfaced during conformance** (not in the original audit;
+  carried, not absorbed): U-CP-43 input-set divergence + `MCP_TRUST` under-spec
+  (extends carry list to 4); U-CP-46 coverage shrink (plan-invented `audit.gate.*`
+  dissolved — orphans `composition_winner`); U-CP-23 pre-existing structural
+  mismatch; OD compound-spec-row rendering judgment call.
+- **Owed:** pre-implementation re-clearance of v2.4/v2.5 before U-CP-22 + U-OD-04
+  land; disposition of the new findings + the 5 original flagged items
+  (U-CP-08, U-CP-11, U-OD-09 acc#2, U-OD-28, U-OD-29).
