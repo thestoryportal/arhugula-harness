@@ -24,6 +24,11 @@ Item 9 surfaced by the coding lane's own spec-read.
 | 8 | **F1-01** — U-CP-22 v2.5 acc #3 silently SCREAMING_SNAKE_CASE-renders §10.3 workload identifiers without declaring the edit in §0.3 (stem-match preserved) | Class 1 / **Class 3** (informational) | — | inline doc-hygiene fix to CP plan v2.5 §0.3 change-note |
 | 9 | **U-AS-07** — §3.1 signature types `ToolContract.required_secrets` as final `List<SecretAllowlistEntry>`, but `SecretAllowlistEntry` is declared by U-AS-22 (which depends on U-AS-07); U-AS-22 line 1125 says it "populates the previously-empty-shape field at U-AS-07" — the plan never specifies U-AS-07's interim materialization shape | — / **Class 2** *(provisional — coding-lane classification; AS not yet under review-ahead)* | U-AS-07 | operator picks U-AS-07's interim `required_secrets` element-type shape (empty-only / placeholder / U-AS-22 redefines model); routes to AS plan clarification |
 | 10 | **U-AS-12** — acc #2 says `SOLO_DEVELOPER → PERMITTED_APPEND_ONLY at any cell` and claims "matches spec §9.4 verbatim"; AS spec §9.4 + §12.2 say solo-developer override is permitted "at **non-compliance cells**" — and "compliance cell" is not a function of `(DeploymentSurface, BlastRadiusTier)`, so `override_scope` cannot evaluate it from its declared inputs | — / **Class 2** *(provisional, proposing — two readings)* | U-AS-12 | operator picks the reading: (A) "non-compliance cells" = "any cell" for the solo-developer persona (plan correct, only the "verbatim" claim is loose) vs (B) plan over-permits and the function needs a compliance-status input; routes to AS plan/spec clarification |
+| 11 | **U-AS-06** — F3-01: `sandbox_tier_floor` adds a 5th param (`mcp_trust_level`) absent from spec §2.2/§2.3 contract; F3-03: consumes undeclared `ToolMetadata` | Class 3 / **Class 1 halt** | U-AS-06 | covered by Q1 systemic AS-plan audit; conform-or-extend operator decision |
+| 12 | **U-AS-08** — F3-03: `CallSiteContext` field types consume undeclared `TaintState`, `MCPServer` | Class 3 / **Class 1 halt** | U-AS-08 | covered by Q1 systemic AS-plan audit |
+| 13 | **U-AS-10** — F2-01 + F2-04: materialization preconditions unmet | Class 2 / **Class 2** | U-AS-10 | covered by Q1 systemic AS-plan audit |
+| 14 | **U-AS-20** — F3-02: `fetch_secret` declares a 3rd param (`tier`) while AC1 claims §5.1 "verbatim"; spec §5.1 contract is 2-param — internally contradictory verbatim claim | Class 3 / **Class 1 halt** | U-AS-20 | covered by Q1 systemic AS-plan audit |
+| 15 | **U-AS-28** — F3-03: consumes undeclared `AnchorCitation`; + F2-02 | Class 3 / **Class 1 halt** | U-AS-28 | covered by Q1 systemic AS-plan audit |
 
 **Note on items 1, 2, 3:** the pilot reviewer confirmed these are pre-existing
 spec-silence design gaps the plans themselves declared and carried — NOT
@@ -31,15 +36,27 @@ defects introduced by the §4A conformance pass. The conformance pass correctly
 conformed everything authority-chain-determinate and correctly refused to
 silently absorb the spec-silence items (X-AL-3 honoured).
 
-**Pattern — AS plan carries the verbatim-divergence disease too (items 9, 10).**
-The §4A systemic verbatim audit covered the **CP + OD** plans only; **AS plan v1
-was never verbatim-audited**. The coding lane has now hit a plan-vs-spec
-verbatim-claim divergence or undeclared-type fork on 2 of the 3 AS units it
-attempted past the operational-minimum (U-AS-07, U-AS-12; U-AS-05 + U-AS-11
-landed clean). This is the same defect class the CP/OD §4A audit found. A
-**systemic AS-plan verbatim audit** (one `harness-adversarial-reviewer`
-plan-wide pass, like `.harness/verbatim_audit_cp_plan.md`) is likely owed
-before deep AS-axis landing — surface to operator.
+**Pattern — AS plan v1 carries the verbatim-divergence disease systemically
+(items 9–15).** The §4A systemic verbatim audit covered the **CP + OD** plans
+only; **AS plan v1 was never verbatim-audited**. Evidence is now decisive:
+
+- Coding lane: 2 of 4 attempted AS units forked (U-AS-07, U-AS-12).
+- Review-ahead AS buffer-1 (`adversarial_review_as_buffer_1.md`): **0 of 5
+  units cleared** — 3 Class 3, 4 Class 2, 2 Class 1 findings. The reviewer
+  surfaced a **systemic pattern** (F3-03 + F2-04): the plan references
+  auxiliary record/enum types (`ToolMetadata`, `TaintState`, `MCPServer`,
+  `AnchorCitation`, `ToolContext`) at signature positions with **no carrier
+  unit and no dependency-graph edge** — the Tension-003 / U-AS-07 shape,
+  recurring across ≥4 units.
+- Retrospective concern: U-AS-02 (landed, operational-minimum) may have
+  declared `ToolContext` against a silently-absorbed type — the Q1 audit
+  should check whether the landed U-AS-02 needs revisiting.
+
+**Resolution: a single Phase-6 AS-plan revision-pass** (systemic AS-plan
+verbatim + undeclared-type audit → operator-ratified conformance, same as the
+CP/OD §4A treatment) — NOT per-unit fork fixes. Queued as review-ahead pass Q1
+(`review-pipeline.md` §8). Until the AS plan is conformed, **all near-term AS
+landing is blocked** — the coding lane has no clean AS unit.
 
 ## Resolved forks
 
