@@ -18,17 +18,21 @@ updates happen at cluster close, not per unit.
 | U-AS-04 | Foundational discriminator enums | C-AS-02 §2.3 | ✅ landed | `feat(as): land U-AS-04` | 2026-05-15 |
 | U-CP-15 | EngineClass enum + capability floors | C-CP-07 §7.1+§7.4 | ✅ landed | `feat(cp): land U-CP-15` | 2026-05-15 |
 | U-OD-01 | 9-cell observability matrix | C-OD-01 §1.1+§1.3-1.5 | ✅ landed | `feat(od): land U-OD-01` | 2026-05-15 |
+| U-OD-04 | OTel GenAI semconv 1.41.0 base layer | C-OD-04 §4.1-§4.5 | ✅ landed | `feat(od): land U-OD-04` | 2026-05-15 |
 
 ## Operational-minimum set (7a exit-criterion #1 — 12 units)
 
 U-IS-01 ✅ · U-IS-02 ✅ · U-IS-03 ✅ · U-IS-04 ✅ · U-AS-01 ✅ · U-AS-02 ✅ ·
-U-AS-03 ✅ · U-AS-04 ✅ · U-CP-15 ✅ · U-CP-22 🛑 · U-OD-01 ✅ · U-OD-04 🛑
+U-AS-03 ✅ · U-AS-04 ✅ · U-CP-15 ✅ · U-CP-22 🛑 · U-OD-01 ✅ · U-OD-04 ✅
 
-**10 of 12 operational-minimum units landed.** Remaining 2 (U-CP-22, U-OD-04)
-are now **conformed in the revised plans (CP v2.4 / OD v2.5) — awaiting
-pre-implementation re-clearance + land decision** (see §"§4A conformance" below).
-Both originally halted on Class 1 plan-defect forks; both surfaced cleanly per
-X-AL-3, neither silently absorbed.
+**11 of 12 operational-minimum units landed.** U-OD-04 landed 2026-05-15
+against conformed OD plan v2.5 (operator authorized land-now without
+re-clearance). Remaining 1: **U-CP-22 — still halted on Tension 003**
+(`WorkloadClass` undeclared). The §4A pass cleared Tension 002 (TopologyPattern
+vocabulary, conformed in CP v2.4); Tension 003 is a separate open fork —
+U-CP-22's `is_admissible(pattern, workload: WorkloadClass)` signature cannot be
+materialized until `WorkloadClass` is declared. Class 1 §6 halt; surfaced per
+X-AL-3, not absorbed.
 
 ## Spec tensions
 
