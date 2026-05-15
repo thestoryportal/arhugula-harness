@@ -341,3 +341,95 @@ at the MCP server boundary (H_T-authored code) — H_E does NOT
 participate in OTel emission. OD-AL-3 is the canonical concretization
 of X-AL-1: the substrate boundary is enforced at OD by "no H_E
 participation in OTel emission", not by convention.
+
+---
+
+## §7 Surface 7 — HITL primitive  [substitutes H_T-CP-20 partial; C-CP-20 §20]
+
+**Mechanism:** H_E-direct. Human-in-the-loop is the H_E `AskUserQuestion`
+tool + permission-prompt approval — no artifact lands at 7a.
+**Retirement:** retires when U-CP-46 lands (the typed HITL primitive +
+4-response palette supersedes the bare `AskUserQuestion` mechanism).
+
+### §7.1 Scope boundary (H_T-CP-20 partial; Meta-Architecture §5.4)
+
+Covers: the HITL *invocation* surface. Does NOT cover: the 4-response
+palette (APPROVE / APPROVE_WITH_NOTE / DEFER / REJECT), or `hitl.*` /
+`audit.*` namespace emission — C-CP-20 §20 contracts landing at U-CP-46.
+
+### §7.2 Anti-leakage
+
+No dedicated CP-AL letter rule binds HITL; the Meta-Architecture §5
+H_E-classification disposition governs:
+
+> H_T-CP-20: `AskUserQuestion` mechanism present; 4-response palette +
+> namespaces absent.
+
+X-AL-3 binds — the 4-response palette is a design contract, not an
+execution-time extension. Note: the `hitl_prompt` MCP tool (§4.2)
+returns a representative `response_class` drawn from the palette
+vocabulary, but that is a schema-faithful stub — it does NOT constitute
+the H_T-CP-20 palette primitive.
+
+---
+
+## §8 Surface 8 — Sandbox-tier dispatch  [substitutes H_T-CP-12 partial; C-CP-12 §12]
+
+**Mechanism:** H_E-direct. `--permission-mode` set at session open, plus
+per-tool allow/deny by convention — no artifact lands at 7a.
+**Retirement:** retires when U-CP-26 + U-CP-27 land.
+
+### §8.1 Scope boundary (H_T-CP-12 partial; Meta-Architecture §5.4)
+
+Covers: coarse default-downgrade via permission mode. Does NOT cover:
+the monotonic-descent invariant, override-with-audit, cross-deployment
+monotonicity, or dispatch-audit composition — C-CP-12 §12 contracts
+landing at U-CP-26 + U-CP-27.
+
+### §8.2 Related primitive (H_T-AS-1)
+
+The same H_E `--permission-mode` mechanism ALSO substitutes H_T-AS-1
+(4-tier blast-radius gating: Tier-1 `plan` / Tier-2 default + `deny` /
+Tier-3 `acceptEdits` / Tier-4 `bypassPermissions`; retires at
+U-AS-01 + U-AS-02). Surface 8's primary substitution authority per
+§6.2 of the Entry Directive is H_T-CP-12; the H_T-AS-1 overlap is
+recorded so retirement at U-CP-26/27 is NOT mistaken for retiring the
+H_T-AS-1 substitution (the two retire on independent unit landings).
+
+### §8.3 Anti-leakage
+
+Meta-Architecture §5 disposition:
+
+> H_T-CP-12: permission-mode gradient ≠ sandbox-tier dispatch.
+
+The 4 permission modes are not the H_T sandbox-tier dispatch primitive.
+X-AL-3 binds.
+
+---
+
+## §9 Surface 9 — Workflow conventions  [substitutes H_T-CP-6 partial; C-CP-06 §6]
+
+**Mechanism:** Convention. `CLAUDE.md` carries workflow conventions as
+prose; per-step override via operator-edited prompt.
+**Retirement:** retires when U-CP-13 + U-CP-14 land (the typed
+`WorkflowManifestEntry` schema supersedes the prose convention).
+
+### §9.1 Scope boundary (H_T-CP-6 partial; Meta-Architecture §5.4)
+
+Covers: human-readable workflow declaration. Does NOT cover: the typed
+`WorkflowManifestEntry` schema, the programmatic per-step override
+evaluator, or audit composition — C-CP-06 §6 contracts landing at
+U-CP-13 + U-CP-14.
+
+### §9.2 Anti-leakage — CP-AL-5
+
+CP-AL-5 verbatim per the Meta-Architecture §7.4 citation grammar:
+
+> **CP-AL-5.** H_E `CLAUDE.md` (prose convention loaded into system
+> prompt) ≠ typed `WorkflowManifestEntry` schema with per-step override
+> evaluator + audit
+>
+> *Anti-pattern foreclosed:* Treating `CLAUDE.md` declarations as
+> functional substitute for typed workflow manifest entries
+
+X-AL-3 also binds — the typed manifest schema is a design contract.
