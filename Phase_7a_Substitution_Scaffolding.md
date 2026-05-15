@@ -210,3 +210,60 @@ dependency declaration.
 AS-AL-2: H_E built-in tools ≠ user-extensible H_T tools — all H_T tool
 surface lives behind the MCP server boundary. X-AL-1: the boundary is
 the MCP server *process* (process isolation, not convention).
+
+---
+
+## §5 Surface 5 — Sub-agent spawning  [substitutes H_T-CP-10 partial; C-CP-10 §10]
+
+**Mechanism:** H_E-direct. Sub-agents are spawned via the H_E `Agent`
+tool with a free-text prompt supplied inline at spawn time — no artifact
+file lands at 7a. The 5 named sub-agents (sa-is / sa-as / sa-cp / sa-od /
+sa-cxa) are specified at `Sub_Agent_Boundary_Specification_v1.md` §3 and
+activate at the 7a → 7b boundary (sa-is activation window).
+**Retirement:** this surface does NOT retire the way §1–§4 do. Per
+`Sub_Agent_Boundary_Specification_v1.md` §5.2.3, what retires at U-CP-22
+landing is the *substitution claim* — that H_E orchestrator-workers
+stands in for H_T-CP-10. The H_E sub-agents themselves carry NO retirement
+criterion; they remain active H_E execution-time scaffolding for the full
+Phase 7 workspace lifetime. This §5 ledger entry retires (substitution
+claim discharged) at U-CP-22; the `Agent` tool keeps being used after.
+
+### §5.1 Scope boundary (H_T-CP-10 partial; Meta-Architecture §5.4)
+
+Covers: a single implicit orchestrator-workers pattern. Does NOT cover:
+the TopologyPattern 6-class enum, the admissibility predicate, or
+`CascadePolicy` — those are C-CP-10 §10 contracts landing at U-CP-22
+(CP plan v2.3 Cluster 4).
+
+### §5.2 Anti-leakage — CP-AL-1 (the load-bearing rule)
+
+CP-AL-1 verbatim per the Meta-Architecture §7.4 citation grammar:
+
+> **CP-AL-1.** H_E sub-agent topology (orchestrator-workers via `Agent`
+> tool) ≠ H_T TopologyPattern 6-class enum (ORCHESTRATOR_WORKERS /
+> DECENTRALIZED_HANDOFF / EVALUATOR_OPTIMIZER / PARALLELIZATION /
+> ROUTING / SEQUENTIAL_PIPELINE)
+>
+> *Anti-pattern foreclosed:* Concluding "we already have
+> orchestrator-workers" implies H_T-CP-10 is met
+
+Clarifier per `Sub_Agent_Boundary_Specification_v1.md` §5.2.2 + §5.2.4:
+the H_E orchestrator-workers pattern *coincidentally* maps to the
+`ORCHESTRATOR_WORKERS` enum value — this coincidence does NOT satisfy
+H_T-CP-10. The 6-class enum operates at H_T *runtime*; Phase 7
+build-time sub-agent spawning is an H_E orchestration decision, not an
+H_T topology decision.
+
+### §5.3 Related anti-leakage (X-AL-1, X-AL-3)
+
+X-AL-1: sub-agents operate H_E-side; they do NOT cross the MCP server
+boundary (the H_E ↔ H_T substrate boundary). X-AL-3: sub-agents
+implementing per-axis atomic units MUST NOT silently extend H_T design
+— new H_T primitives surfaced at sub-agent execution-time route to
+design-phase back-flow (Class 1 fork) before implementation proceeds.
+
+### §5.4 Cross-reference
+
+`Sub_Agent_Boundary_Specification_v1.md` — §3 (5 sub-agents), §5
+(CP-AL-1 application), §6 (per-sub-agent scope boundaries against the
+4 axes).
