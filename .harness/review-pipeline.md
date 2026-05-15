@@ -104,7 +104,13 @@ If the reviewer surfaces forks faster than the operator can resolve them, that
 empirically sizes the buffer before scaling the pipeline to the full
 ~140-unit runway.
 
-## 8. Files
+## 8. Queued review-ahead passes
+
+| # | Pass | Trigger | Rationale |
+|---|---|---|---|
+| Q1 | **Systemic AS-plan verbatim audit** — one plan-wide `harness-adversarial-reviewer` pass over `Implementation_Plan_Action_Surface_v1.md` vs `Spec_Action_Surface_v1.md` (all 33 units), output `.harness/verbatim_audit_as_plan.md` | Launch when the in-flight AS buffer review (`adversarial_review_as_buffer_1.md`) completes | AS plan v1 never received the §4A verbatim audit that CP/OD got; coding lane forked 2 of 4 attempted AS units (U-AS-07, U-AS-12) on the same plan-vs-spec divergence class. A plan-wide audit + one conformance pass beats unit-by-unit fork discovery. |
+
+## 9. Files
 
 | File | Role |
 |---|---|
