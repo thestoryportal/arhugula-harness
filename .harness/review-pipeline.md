@@ -115,10 +115,12 @@ empirically sizes the buffer before scaling the pipeline to the full
 | Q4 | **Systemic IS-plan materializability audit** — output `.harness/materializability_audit_is_plan.md` | ✅ **COMPLETE** 2026-05-15 | All 17 IS units: 11 CLEARED · 1 CONFORM · 5 FORK. 1 pattern — M-1-IS (`WorkflowClass`/`DeploymentSurface`/`WorkflowEvent`/`WorkloadClass` no carrier, 5 units). IS is the cleanest plan — no verbatim disease, dependency graph complete. U-IS-02 retrospective concern. **Correction:** `AuditPayload`/`AuditLedger` are NOT IS-exported (OD M-1 hypothesis wrong) — they are OD-local; the U-OD-30 cross-axis IS edge is to the entry shape + hash-chain discipline only. |
 | T1 | **`systems-architect` shared-type triage** — output `.harness/shared_type_carrier_map.md` | ✅ **COMPLETE** 2026-05-15 — **AWAITING OPERATOR RATIFICATION** | ~62 types triaged: ~9 `harness-core` · ~27 per-axis · 2 CXA seam · ~24 X-AL-3 design-extension candidates (2 are Class-1 halts). New carriers: U-CORE-01, U-CP-00b, 1–2 OD carriers. Recommended revision order: harness-core → IS → AS → CP → OD. |
 
-**⛔ RATIFICATION GATE.** Per-axis revision passes do NOT start until the
-operator ratifies `.harness/shared_type_carrier_map.md` (at minimum the
-disposition-1 `harness-core` rows + U-CORE-01) AND the 2 Class-1 X-AL-3 halts
-are resolved (design-substrate revision — they gate the IS and CP passes).
+| T2 | **`systems-architect` X-AL-3 tension resolution** — output `.harness/xal3_resolution_recommendations.md` | 🟡 **RUNNING** (launched 2026-05-15) | Operator chose "resolve X-AL-3 first". Per X-AL-3 candidate: FACTOR-OUT (re-route to carrier map) vs GENUINE EXTENSION (design-substrate revision — names target artifact). Resolves the 2 Class-1 halts. |
+
+**⛔ RATIFICATION GATE.** Per-axis revision passes do NOT start until: (1) the
+operator ratifies `.harness/shared_type_carrier_map.md`, and (2) the T2 X-AL-3
+resolutions are ratified — any GENUINE-EXTENSION verdicts route to `spec-writer`
+design-substrate revisions first.
 
 **Conformance sequence (operator-ratified path, decided 2026-05-15):**
 
