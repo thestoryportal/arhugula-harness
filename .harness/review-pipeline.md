@@ -117,11 +117,23 @@ empirically sizes the buffer before scaling the pipeline to the full
 
 | T2 | **`systems-architect` X-AL-3 tension resolution** — output `.harness/xal3_resolution_recommendations.md` | ✅ **COMPLETE** 2026-05-15 | **27 of 27 X-AL-3 candidates = FACTOR-OUT; 0 genuine design extensions.** Both Class-1 halts dissolve (`WorkflowEvent`/`WorkflowClass`/`DeploymentSurface` → `harness-core`, IS imports core ≠ cross-axis edge; `AuditLedgerEntry` is CP-spec-owned per CP §16.2, not an OD seam). **NO design-substrate revision owed; `spec-writer` not engaged.** All 27 re-route into the 4 per-axis revision passes. |
 
-**⛔ RATIFICATION GATE.** The X-AL-3 blocker is cleared (T2: no design
-extensions). Per-axis revision passes start once the operator ratifies
-`.harness/shared_type_carrier_map.md` (as amended by T2 — all 27 X-AL-3 rows
-become disposition-1/2). No design-phase back-flow; the conformance is purely
-`implementation-planner` work.
+**✅ CARRIER MAP RATIFIED** by operator 2026-05-15 (`shared_type_carrier_map.md`
++ T2 factor-outs). Per-axis `implementation-planner` revision passes authorized.
+
+### Revision passes (R-series) — `implementation-planner` revision-pass mode
+
+Sequential, CXA topological order — each pass cites already-revised upstream
+carriers. Each produces a revised plan returned for per-pass operator ratification.
+
+| Pass | Scope | State |
+|---|---|---|
+| R1 | `harness-core` foundation — introduce U-CORE-01 (cross-cutting enums + identity-alias module) per the carrier map | 🟡 RUNNING (launched 2026-05-15) |
+| R2 | IS plan revision — absorb `materializability_audit_is_plan.md` + carrier map | pending R1 |
+| R3 | AS plan revision — absorb `verbatim_audit_as_plan.md` + carrier map | pending R2 |
+| R4 | CP plan revision — absorb `materializability_audit_cp_plan.md` + carrier map | pending R3 |
+| R5 | OD plan revision — absorb `materializability_audit_od_plan.md` + carrier map | pending R4 |
+
+Then: review-ahead re-check of the conformed plans → coding lane resumes.
 
 **Conformance sequence (operator-ratified path, decided 2026-05-15):**
 
