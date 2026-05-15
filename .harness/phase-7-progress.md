@@ -12,14 +12,18 @@ updates happen at cluster close, not per unit.
 | U-IS-03 | Artifact-tier registry schema | C-IS-02 §2 | ✅ landed | `feat(is): land U-IS-03` | 2026-05-15 |
 | U-IS-02 | Path-resolver primitive | C-IS-01 §1 | ✅ landed | `feat(is): land U-IS-02` | 2026-05-15 |
 | U-IS-04 | Git tier sub-role taxonomy | C-IS-03 §3 | ✅ landed | `feat(is): land U-IS-04` | 2026-05-15 |
+| U-AS-01 | Sandbox-tier type declaration | C-AS-01 §1.1-1.2 | ✅ landed | `feat(as): land U-AS-01` | 2026-05-15 |
+| U-AS-02 | Forced-tier resolution | C-AS-01 §1.3 | ✅ landed | `feat(as): land U-AS-02` | 2026-05-15 |
+| U-AS-03 | Sandbox-fail-class taxonomy | C-AS-04 §4 | ✅ landed | `feat(as): land U-AS-03` | 2026-05-15 |
+| U-AS-04 | Foundational discriminator enums | C-AS-02 §2.3 | ✅ landed | `feat(as): land U-AS-04` | 2026-05-15 |
 
 ## Operational-minimum set (7a exit-criterion #1 — 12 units)
 
-U-IS-01 ✅ · U-IS-02 ✅ · U-IS-03 ✅ · U-IS-04 ✅ · U-AS-01 · U-AS-02 · U-AS-03 ·
-U-AS-04 · U-CP-15 · U-CP-22 · U-OD-01 · U-OD-04
+U-IS-01 ✅ · U-IS-02 ✅ · U-IS-03 ✅ · U-IS-04 ✅ · U-AS-01 ✅ · U-AS-02 ✅ ·
+U-AS-03 ✅ · U-AS-04 ✅ · U-CP-15 · U-CP-22 · U-OD-01 · U-OD-04
 
-**4 of 12 operational-minimum units landed.** All 4 IS units in the set done.
-C-IS-01 surface complete (U-IS-01 + U-IS-02). U-IS-04 opens Cluster 2.
+**8 of 12 operational-minimum units landed.** All IS + all AS units in the set
+done. Remaining: U-CP-15, U-CP-22, U-OD-01, U-OD-04.
 
 ## Spec tensions
 
