@@ -36,4 +36,24 @@ Both surfaced cleanly per X-AL-3; neither silently absorbed.
 | `Phase_7_Class_3_Tension_001_Git_Tier_Sub_Role_Count.md` | C-IS-03 §3 "four" vs 5 rows | ✅ resolved — spec fixed in-CLI; block cleared |
 | `Phase_7_Class_1_Tension_002_Topology_Pattern_Enum.md` | TopologyPattern enum 3-way divergence | ✅ resolved 2026-05-15 — operator signed off Set 2 (spec C-CP-10 §10.1); CP-AL-1 conformed at 4 loci; commit `45f104f` |
 | `Phase_7_Class_1_Tension_003_WorkloadClass_Undeclared.md` | `WorkloadClass` type used by ~10 CP units, declared by none | 🛑 OPEN 2026-05-15 — U-CP-22 halted; plan-gap (missing declaring unit) |
-| `Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` | U-OD-04 plan signature diverges from spec C-OD-04 at 4 points | 🛑 OPEN 2026-05-15 — U-OD-04 halted; plan-vs-spec divergence (Tension-002 shape); recommended resolution = spec canonical |
+| `Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` | U-OD-04 plan signature diverges from spec C-OD-04 at 4 points | 🛑 OPEN 2026-05-15 — U-OD-04 halted; subsumed into the OD-plan systemic audit below |
+
+## Systemic finding — Phase-6 plan "verbatim"-claim divergence (2026-05-15)
+
+Plan-wide adversarial audit (`harness-adversarial-reviewer` Phase-7 mode) found
+the Tension-002/004 shape — plan units claiming "per §X verbatim" against
+signatures that diverge from the cited spec — is **systemic across the CP + OD
+plans**. The two audit reports are the canonical systemic-tension records
+(supersede the per-unit Tension 002/004 framing; no further per-unit records filed).
+
+| Audit report | Divergent units | Resolution |
+|---|---|---|
+| `.harness/verbatim_audit_cp_plan.md` | 7: U-CP-01, U-CP-10, U-CP-19, U-CP-22, U-CP-43, U-CP-46, U-CP-47 (+ borderline U-CP-11) | one CP-plan revision-pass — conform to spec |
+| `.harness/verbatim_audit_od_plan.md` | 10: U-OD-02, U-OD-04, U-OD-09, U-OD-11, U-OD-12, U-OD-14, U-OD-28, U-OD-30, U-OD-32, U-OD-33 | one OD-plan revision-pass — conform to spec |
+| `.harness/adversarial_review_phase7_cp_od_preimpl.md` | U-CP-22 + U-OD-04 pre-impl review (F3-01, F1-02 CLAUDE.md §2.2 mislabel) | feeds the two passes above |
+
+**17 units total**, all §4.1 Class 3 / §2.7.6 Class 1. All authority-chain-
+determinate (spec canonical per CLAUDE.md §1.3 — conform the plan) **except**
+Tension 003 (`WorkloadClass` residence — genuinely non-determinate, needs operator).
+Meta-finding: the Phase-6 plans were P6-CK-cleared yet carry 17 plan-vs-spec
+divergences → P6-CK process gap (verbatim-claim check was not run at checkpoint).
