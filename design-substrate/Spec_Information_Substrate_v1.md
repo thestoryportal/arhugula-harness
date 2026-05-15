@@ -175,17 +175,17 @@ The five-tier artifact layering schema commits the following layer enumeration:
 
 ## §3 C-IS-03 — Combined git tier role decomposition
 
-**Contract surface.** Four-sub-role git tier composition with foundational-vs-opt-in posture per sub-role.
+**Contract surface.** Five-sub-role git tier composition with foundational-vs-opt-in posture per sub-role.
 
 **PRD requirement(s) satisfied.** R-IS-02 (git as combined-tier state record).
 
-**ADR commitment(s) honored.** ADR-F2 v1.2 §Decision (combined git tier serving four-sub-role composition); ADD §2.2 Synthesis ("Git serves a combined role: code/spec/prompt/manifest/Skill versioning (foundational) + append-only state-ledger via commit stream + JSONL event ledger (foundational) + on-demand shadow-Git checkpointing (workload-class-opt-in) + worktree-isolation for concurrent sub-agent reads (workload-class-opt-in)").
+**ADR commitment(s) honored.** ADR-F2 v1.2 §Decision (combined git tier serving five-sub-role composition); ADD §2.2 Synthesis ("Git serves a combined role: code/spec/prompt/manifest/Skill versioning (foundational) + append-only state-ledger via commit stream + JSONL event ledger (foundational) + on-demand shadow-Git checkpointing (workload-class-opt-in) + worktree-isolation for concurrent sub-agent reads (workload-class-opt-in)").
 
 **Persona linkage.** Persona §10.4 (compliance-readiness — hash-chained audit ledger as foundational primitive); §5.1 (remote git of GitHub/GitLab class); §10.2 (cost-attribution-per-span composes against the JSONL event ledger).
 
 **Specification content.**
 
-The combined git tier serves four sub-roles within a single git repository; each sub-role carries a posture commitment:
+The combined git tier serves five sub-roles within a single git repository; each sub-role carries a posture commitment:
 
 | Sub-role | Function | Posture | Composition contract |
 |---|---|---|---|
@@ -195,7 +195,7 @@ The combined git tier serves four sub-roles within a single git repository; each
 | **Shadow-Git checkpointing** | On-demand checkpoint snapshots via shadow-repository pattern (Cline / kilocode / Roo Code precedent per ADR-F2 §Rationale (a)) | **Workload-class-opt-in** (per workflow manifest declaration per C-IS-08) | Composes with C-IS-08 contract; opt-out workloads do not produce shadow-Git artifacts |
 | **Worktree-isolation for concurrent sub-agent reads** | Per-sub-agent worktree directories via `git worktree` primitives; isolates concurrent reads from sibling sub-agents | **Workload-class-opt-in** (per workflow manifest declaration per C-IS-09) | Composes with C-IS-09 contract; opt-out workloads do not allocate worktree directories |
 
-**Sub-role co-residence contract.** All four sub-roles share the same git repository identity without interference:
+**Sub-role co-residence contract.** All five sub-roles share the same git repository identity without interference:
 
 - Versioning operates on the main repository's branch heads.
 - State-ledger via commit stream operates on the main branch's commit history; commit messages MAY encode state-ledger-relevant metadata.
@@ -203,7 +203,7 @@ The combined git tier serves four sub-roles within a single git repository; each
 - Shadow-Git checkpointing operates via separate shadow refs/branches; does not pollute the main branch commit history.
 - Worktree-isolation creates per-sub-agent working directories pointing at the same `.git` storage backend; reads do not contest with one another.
 
-**Cross-sub-role consistency invariant.** A given git repository hosts at most one harness state-ledger; the four sub-roles share that ledger. Cross-repository state-ledger composition is out of scope at F2 substrate layer; per-tenant repository isolation at multi-tenant binding is the F2-compatible scaling shape per ADR-F2 §Consequences (a).
+**Cross-sub-role consistency invariant.** A given git repository hosts at most one harness state-ledger; the five sub-roles share that ledger. Cross-repository state-ledger composition is out of scope at F2 substrate layer; per-tenant repository isolation at multi-tenant binding is the F2-compatible scaling shape per ADR-F2 §Consequences (a).
 
 **Deferred to implementation discretion.** Specific commit cadence policy per workflow class; specific commit message conventions for state-ledger-relevant metadata; specific shadow-ref / shadow-branch naming conventions; specific worktree directory naming conventions; specific git hosting backend (GitHub / GitLab / Gitea / self-hosted) per deployment-surface cell.
 
