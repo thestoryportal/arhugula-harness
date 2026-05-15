@@ -127,7 +127,7 @@ carriers. Each produces a revised plan returned for per-pass operator ratificati
 
 | Pass | Scope | State |
 |---|---|---|
-| R1 | `harness-core` foundation — introduce U-CORE-01 (cross-cutting enums + identity-alias module) per the carrier map | 🟡 RUNNING (launched 2026-05-15) |
+| R1 | `harness-core` foundation — introduce U-CORE-01 (cross-cutting enums + identity-alias module) per the carrier map | ✅ COMPLETE 2026-05-15 (`revision_R1_harness_core.md`) — **AWAITING OPERATOR on Q-R1-1/2/5** (R2 blocked) |
 | R2 | IS plan revision — absorb `materializability_audit_is_plan.md` + carrier map | pending R1 |
 | R3 | AS plan revision — absorb `verbatim_audit_as_plan.md` + carrier map | pending R2 |
 | R4 | CP plan revision — absorb `materializability_audit_cp_plan.md` + carrier map | pending R3 |
