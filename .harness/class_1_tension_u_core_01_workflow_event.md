@@ -107,6 +107,7 @@ preserved verbatim into v1.3 per the v1.3 change-note).
 |---|---|---|
 | F-1 | C-CP-05 §5.2 per-class minimum attribute *schema* — coverage reverts to the CP plan. Verify §5.2 is covered at CP lifecycle-event span-emission units when they land. Not owed by `harness-core`. | CP emission-unit landings |
 | F-2 | `Implementation_Plan_Control_Plane_v2_6.md` §0 spec-inventory line references "`WorkflowEventClass`/`WorkflowEvent`" as U-CORE-01-declared. The `WorkflowEvent` reference is now stale (mechanical back-reference fix). | Next CP plan touch |
+| F-3 | **U-IS-14 `on_workflow_event` hook deferred (added 2026-05-16).** IS plan v2.3 §2.2 U-IS-14 declares `on_workflow_event(event: WorkflowEvent) -> Optional[CheckpointResult]`; its `WorkflowEvent` payload type was struck here (carrier-thin). Operator ruled 2026-05-16: defer the hook with the payload model — U-IS-14 landed without `on_workflow_event` (its checkpoint primitive + cadence-driver + all 9 tests landed). The hook lands when the `WorkflowEvent` payload is defined (the same deferred item as F-1). U-CP-10 is the other event-surface consumer; it is not yet landed. | When the `WorkflowEvent` payload model is defined (CP emission-site work) |
 
 ## 8. Filing footer
 
