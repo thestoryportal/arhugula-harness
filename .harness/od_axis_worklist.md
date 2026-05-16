@@ -67,5 +67,20 @@ flag if a unit reaches past primitive into "start the process".
   (on 02), U-OD-30 (on 02). Corpus-hygiene note: F3 lifecycle event taxonomy
   appears in 3 divergent forms (plan / spec §6.1 / OD CLAUDE.md §1.1) —
   unpinned; flag for the revision pass.
-- **OD landed: 15/35** (00,01,04,05,06,07,13,14,15,16,18,19,20,23,26).
-  Remaining 20 — 13 buildable + 7 deferred.
+- **L4/L5 batch 2026-05-16.** U-OD-11/17/27 landed (pyright strict 0, 302 tests
+  green). U-OD-27 partial-land — library surface only; live collector/TUI/sqlite
+  Class 3 for Phase 2 per operator standing directive. U-OD-11's U-OD-09 dep is
+  event-class-string-only (not blocked by the U-OD-09 halt). U-OD-21 HALTED
+  Class 1 (`.harness/class_1_tension_u_od_21_span_cost_record_missing_rollup_keys.md`
+  — `SpanCostRecord` carrier lacks provider/model/family-tag fields acc #3
+  requires; v2.6 M-2 fixed the edge, not the carrier shape). U-OD-12 HALTED
+  Class 1 (`.harness/class_1_tension_u_od_12_disjoint_set_string_collision.md`
+  — acc #2 set-disjointness contradicted by the `files.operation` /
+  `memory.operation` bare-string collision; regime is keyed on `(event_class,
+  kind)`, signature on `event_class`). U-OD-10 not attempted (BLOCKED on halted
+  U-OD-08/09).
+- **Deferred cluster now 9 units** pending an OD-plan implementation-planner
+  revision pass: U-OD-02, U-OD-03, U-OD-08, U-OD-09, U-OD-10, U-OD-12, U-OD-21,
+  U-OD-28, U-OD-30.
+- **OD landed: 18/35** (00,01,04,05,06,07,11,13,14,15,16,17,18,19,20,23,26,27).
+  Remaining 17 — 8 buildable + 9 deferred.
