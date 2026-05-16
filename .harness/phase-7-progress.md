@@ -45,6 +45,7 @@ updates happen at cluster close, not per unit.
 | U-AS-28 | Eleven-primitive `AnthropicPrimitive` enum + 44-cell adoption-depth matrix + cross-axis IS path-contract binding | C-AS-13 §13.1-§13.2 | ✅ landed | `feat(as): land U-AS-28` | 2026-05-16 |
 | U-AS-07 | `ToolContract` schema + `RawContractInput` + `SecretAllowlistEntry` carrier + registration validator | C-AS-03 §3.1-§3.3 | ✅ landed | `feat(as): land U-AS-07` | 2026-05-16 |
 | U-AS-06 | `sandbox_tier_floor` 10-row 5-arg lookup + `ToolMetadata` + `MCPServer` carriers + REFUSE sentinel | C-AS-02 §2.3 | ✅ landed | `feat(as): land U-AS-06` | 2026-05-16 |
+| U-AS-10 | 12-cell `DEPLOYMENT_MATRIX` + `lookup_cell` / `lookup_cell_with_forcing` | C-AS-09 §9.1,§9.3,§9.5 | ✅ landed | `feat(as): land U-AS-10` | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
