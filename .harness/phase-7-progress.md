@@ -75,6 +75,7 @@ updates happen at cluster close, not per unit.
 | U-CP-28 | `SubAgentBrief` schema (`SubAgentBrief`, `OutputSchema`, `OutputSchemaKind`, `ClearTaskBoundaries`, `canonicalize_brief`, `compute_brief_summary_hash`) | C-CP-13 §13.2 | ✅ landed | `feat(cp): land U-CP-28` | 2026-05-16 |
 | U-CP-10 | Lifecycle-event span-name map + `ParentRelation` enum (`LifecycleEventClassMetadata`, `LIFECYCLE_EVENT_CLASS_METADATA`) — cross-axis core: U-CORE-01 | C-CP-05 §5.1 | ✅ landed | `feat(cp): land U-CP-10` | 2026-05-16 |
 | U-CP-07 | `fallback.*`/`harness.breaker.*`/`retry.*` namespace schemas + `RetryCause` + `RETRY_ATTEMPT_EVENT_SCHEMA` — **partial land** (acc #7 dual-emission discipline struck → Class 1) | C-CP-03 §3.5 | ⚠️ partial-landed | `feat(cp): land U-CP-07` | 2026-05-16 |
+| U-CP-11 | `lease.*` namespace + 5-attribute schema — **SKIPPED** (Class 1: plan acc #1 5-tuple contradicts cited spec C-CP-05 §5.3) | C-CP-05 §5.3 | 🛑 skipped | — | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
