@@ -48,6 +48,7 @@ updates happen at cluster close, not per unit.
 | U-AS-10 | 12-cell `DEPLOYMENT_MATRIX` + `lookup_cell` / `lookup_cell_with_forcing` | C-AS-09 §9.1,§9.3,§9.5 | ✅ landed | `feat(as): land U-AS-10` | 2026-05-16 |
 | U-AS-22 | `AllowlistDecision` + `check_secret_allowlist` intersection (consumes `SecretAllowlistEntry` from U-AS-07) | C-AS-06 §6.1-§6.2 | ✅ landed | `feat(as): land U-AS-22` | 2026-05-16 |
 | U-AS-24 | `SecretFailClass` 5-value taxonomy + C5/C9 metadata + per-backend breaker key | C-AS-07 §7.1-§7.3 | ✅ landed | `feat(as): land U-AS-24` | 2026-05-16 |
+| U-AS-25 | Secret-fetch `outputs_hash` structure-not-content fingerprint (GUARDRAIL — C-IS-06 §6.1 scheme) | C-AS-08 §8.1 | ✅ landed | `feat(as): land U-AS-25` | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
