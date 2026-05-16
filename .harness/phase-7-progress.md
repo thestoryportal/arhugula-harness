@@ -94,7 +94,7 @@ updates happen at cluster close, not per unit.
 | U-CP-09 | Cross-family fallback chain — **SKIPPED** (Class 1: deps U-CP-05/U-CP-08 blocked) | C-CP-04 §4.1-§4.3 | 🛑 skipped | — | 2026-05-16 |
 | U-CP-13 | `WorkflowManifestEntry` schema — **SKIPPED** (Class 1: `HITLPlacement` from blocked U-CP-38; deps U-CP-04/09/30/38 blocked) | C-CP-06 §6.1 | 🛑 skipped | — | 2026-05-16 |
 | U-CP-14 | Per-step override evaluator — **SKIPPED** (Class 1: dep U-CP-13 blocked; `LedgerEntryRef` from blocked U-CP-30) | C-CP-06 §6.2 | 🛑 skipped | — | 2026-05-16 |
-| U-CP-30 | `HandoffContext`/`StateSummary`/`LedgerEntryRef` — **SKIPPED** (Class 1: Pattern-D undeclared `ProposedAction`/`FailedAttempt`/`Alternative`/`RetryHistory`) | C-CP-13 §13.1+§13.4+§13.5 | 🛑 skipped | — | 2026-05-16 |
+| U-CP-30 | `HandoffContext` family (`ActionKind` 3-value, `ActionPayload` opaque alias, `ProposedAction`, `FailedAttempt`, `Alternative`, `RetryHistory`, `LedgerEntryRef`, `ExternalReference`, `ReferenceClass` 4-value, `StateSummary`, `HandoffContext` 7-field) — v2.9 factor-out delta; Pattern-D tail types specified | C-CP-13 §13.1+§13.4+§13.5 | ✅ landed | `feat(cp): land U-CP-30` | 2026-05-16 |
 | U-CP-33 | Concurrent-prompt-cache warm-up — **SKIPPED** (Class 1: dep U-CP-32 out of scope, not landed) | C-CP-14 §14.4 | 🛑 skipped | — | 2026-05-16 |
 | U-CP-39 | HITL-as-tool-call rewriting — **SKIPPED** (Class 1: `ProposedAction` Pattern-D; dep U-CP-38 blocked) | C-CP-17 §17.2 | 🛑 skipped | — | 2026-05-16 |
 | U-CP-44 | F5 signing-key resolution — **SKIPPED** (Class 1: Pattern-D undeclared `AuditLedgerEntry`/`SignedAuditLedgerEntry`; `SecretRef` from forked U-AS-20) | C-CP-20 §20.3.1 | 🛑 skipped | — | 2026-05-16 |
