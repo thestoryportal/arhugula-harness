@@ -64,6 +64,16 @@ from harness_as.sandbox_tier_floor import (
     sandbox_tier_floor,
 )
 from harness_as.secret_allowlist import AllowlistDecision, check_secret_allowlist
+from harness_as.secret_fail_class import (
+    SECRET_FAIL_CLASS_METADATA,
+    SecretBackendBreakerKey,
+    SecretC5FailClass,
+    SecretC9RetryPosture,
+    SecretFailClass,
+    SecretFailClassMetadata,
+    construct_breaker_key,
+    secret_fail_class_metadata,
+)
 from harness_as.secret_fetch import (
     TIER_RESOLUTION_TABLE,
     SecretRef,
@@ -91,6 +101,7 @@ __all__ = [
     "DEPLOYMENT_MATRIX",
     "RECOMMENDED_CONTRACT_DEFAULT_TIER",
     "REFUSE",
+    "SECRET_FAIL_CLASS_METADATA",
     "TIER_RESOLUTION_TABLE",
     "AdoptionDepth",
     "AdoptionDepthBinding",
@@ -125,6 +136,11 @@ __all__ = [
     "SandboxTierFloorResult",
     "SandboxTierMetadata",
     "SecretAllowlistEntry",
+    "SecretBackendBreakerKey",
+    "SecretC5FailClass",
+    "SecretC9RetryPosture",
+    "SecretFailClass",
+    "SecretFailClassMetadata",
     "SecretRef",
     "SecretResolutionMechanism",
     "SecretScope",
@@ -136,6 +152,7 @@ __all__ = [
     "adoption_depth",
     "blast_radius_floor",
     "check_secret_allowlist",
+    "construct_breaker_key",
     "fail_class_metadata",
     "fetch_secret",
     "forced_tier",
@@ -146,6 +163,7 @@ __all__ = [
     "permanent_fail_skips_staircase",
     "provider_class_metadata",
     "sandbox_tier_floor",
+    "secret_fail_class_metadata",
     "skills_loads_from_filesystem_path",
     "tier_metadata",
     "tier_resolution_mechanism",
