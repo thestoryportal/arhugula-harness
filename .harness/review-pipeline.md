@@ -131,9 +131,10 @@ carriers. Each produces a revised plan returned for per-pass operator ratificati
 | R2 | IS plan revision — absorb `materializability_audit_is_plan.md` + carrier map | ✅ COMPLETE + APPLIED 2026-05-15 — `Implementation_Plan_Information_Substrate_v2_3.md` (6 units revised; git trio IS-internal per Q-R2-1; permanent auxiliary-type-audit section added). Action item AI-R2-1: U-IS-02 landed-source re-check deferred to coding-lane resume. |
 | R3 | AS plan revision — absorb `verbatim_audit_as_plan.md` + carrier map | ✅ COMPLETE + APPLIED 2026-05-15 — `Implementation_Plan_Action_Surface_v1_1.md` (9 units revised, 20 preserved, U-AS-06/09/12/20 deferred to R3.1). Action items A-1..A-4 flagged. |
 | S1 | `systems-architect` C-AS-02 spec-gap reconciliation analysis | ✅ COMPLETE 2026-05-15 — escalated: contradiction originates at ADR-D2. Operator AUTHORIZED the ADR-D2 + spec fix 2026-05-15. |
-| S2 | `spec-writer` apply C-AS-02 + ADR-D2 fix per S1 — edits `ADR-D2.md` (v1.1→v1.2), `Spec_Action_Surface_v1.md` (v1.1→v1.2), conditional ADD touch | 🟡 RUNNING (launched 2026-05-15) |
-| R3.1 | AS micro-pass — finalize U-AS-06/09 (post C-AS-02 fix) + U-AS-12/20 (direction decisions) | pending S2 |
-| R4 | CP plan revision — absorb `materializability_audit_cp_plan.md` + carrier map (56 units, 24 forks — largest pass) | 🟡 RUNNING (launched 2026-05-15) |
+| S2 | `spec-writer` apply C-AS-02 + ADR-D2 fix per S1 | ✅ COMPLETE 2026-05-15 — `ADR-D2.md` v1.1→v1.2, `Spec_Action_Surface_v1.md` v1.1→v1.2 (5-arg `sandbox_tier_floor`). ADD verified — no ripple. `CLAUDE.md` §2.2/§2.3 version tokens bumped. |
+| R3.1 | AS micro-pass — finalize U-AS-06/09 (post C-AS-02 fix, now unblocked) + U-AS-12/20 (direction decisions Q-R3-2/4 owed) | pending operator on Q-R3-2/4 |
+| R4 | CP plan revision — absorb `materializability_audit_cp_plan.md` + carrier map | ✅ COMPLETE 2026-05-15 (`revision_R4_cp_plan.md`) — CP plan v2.5→v2.6; 56→57 units (new U-CP-00b carrier); Patterns C/D/E absorbed. 7 operator questions Q-R4-1..7. |
+| R5 | OD plan revision — absorb `materializability_audit_od_plan.md` + carrier map | pending R4-apply |
 | R5 | OD plan revision — absorb `materializability_audit_od_plan.md` + carrier map | pending R4 |
 
 Then: review-ahead re-check of the conformed plans → coding lane resumes.

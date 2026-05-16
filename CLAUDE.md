@@ -62,7 +62,7 @@ All canonical artifacts reside at the **design-phase workspace** (separate Claud
 | ADR-F4 | v1.1 | Workflow lifecycle primitive |
 | ADR-F5 | v1.1 | Observability substrate primitive |
 | ADR-D1 | v1.2 | HITL primitive |
-| ADR-D2 | v1.1 | Sandbox tier |
+| ADR-D2 | v1.2 | Sandbox tier |
 | ADR-D3 | v1.2 | Validation contract |
 | ADR-D4 | v1.1 | Cost attribution |
 | ADR-D5 | v1.3 | Topology pattern |
@@ -75,7 +75,7 @@ All canonical artifacts reside at the **design-phase workspace** (separate Claud
 | Axis | Spec |
 |---|---|
 | IS | `Spec_Information_Substrate_v1.md` (v1.2 per ADD v1.3 attestation) |
-| AS | `Spec_Action_Surface_v1.md` (v1.1) |
+| AS | `Spec_Action_Surface_v1.md` (v1.2 — C-AS-02/§11.1 `sandbox_tier_floor` reconciliation per S2, 2026-05-15) |
 | CP | `Spec_Control_Plane_v1_3.md` (v1.3) |
 | OD | `Spec_Operational_Discipline_v1_3.md` (v1.3) |
 

@@ -10,12 +10,34 @@
 | Phase | 5 — specification authoring (session 2 of 4–6) per `Project_Workflow_v1_2.md` §2.5 |
 | Skill | `spec-writer` SKILL.md in Stage-3 final-specification mode per skill description |
 | Axis | Action Surface (per `Phase_5_Entry_Handoff.md` §3.1 axis sequencing) |
-| Source-set | `PRD_v1.0.md` §3 (R-AS-01 through R-AS-07); `Architectural_Design_Document_v1.md` v1.2 §2.4 + §2.5 + §3.3.1 + §3.3.2 + §5.1 + §5.2.1 + §5.3.2; `ADR-F4.md` v1.1 (§Decision + §Rationale + §Consequences); `ADR-F5.md` v1.1 (§Decision + §Rationale + §Consequences + §"Permanent tensions engaged"); `ADR-D2.md` v1.1 (§1.1 + §1.2 + §1.3 + §1.4 + §1.5 + §1.5.1 + §1.5.2 + §1.6 + §1.7 + §1.7.1 + §1.8 + §1.9 + §1.10); `ADR-D3.md` v1.2 (§1.1 + §1.2 + §1.3 + §1.4 + §1.5 + §1.6 + §1.7 + §1.8 + §1.8.1 + §1.9); `Persona_Document_v1.md` §X.y anchors inherited from PRD requirements; `Spec_Information_Substrate_v1.md` (cross-axis citation substrate at C-IS-05 + C-IS-06 + C-IS-07 + C-IS-10) |
+| Source-set | `PRD_v1.0.md` §3 (R-AS-01 through R-AS-07); `Architectural_Design_Document_v1.md` v1.2 §2.4 + §2.5 + §3.3.1 + §3.3.2 + §5.1 + §5.2.1 + §5.3.2; `ADR-F4.md` v1.1 (§Decision + §Rationale + §Consequences); `ADR-F5.md` v1.1 (§Decision + §Rationale + §Consequences + §"Permanent tensions engaged"); `ADR-D2.md` v1.2 (§1.1 + §1.2 + §1.3 + §1.4 + §1.5 + §1.5.1 + §1.5.2 + §1.6 + §1.7 + §1.7.1 + §1.8 + §1.9 + §1.10); `ADR-D3.md` v1.2 (§1.1 + §1.2 + §1.3 + §1.4 + §1.5 + §1.6 + §1.7 + §1.8 + §1.8.1 + §1.9); `Persona_Document_v1.md` §X.y anchors inherited from PRD requirements; `Spec_Information_Substrate_v1.md` (cross-axis citation substrate at C-IS-05 + C-IS-06 + C-IS-07 + C-IS-10) |
 | Entry authorization | `Phase_5_Session_2_Session_Prompt.md` §4 entry-gate verified 7/7; session-1 spec filed and coherence-pass-passed |
 | ODs applied | OD-5-1.A (per-axis multi-document) + OD-5-2.A (Action Surface confirmed per handoff §3.1; no divergence) + OD-5-3.A (as-needed council consultant; no escalation invoked at session 2) + OD-5-4.A (aggregate P5-CK at full close) |
 | Exit gate | This spec filed at `/mnt/user-data/outputs/`; §[coherence pass] returns ✅ PASS at all five audit dimensions; `Phase_5_Session_3_Session_Prompt.md` authored at session close |
 | Revision | v1 → v1.1 (P5-CK iter-1 close mechanical revision per modified `Project_Workflow_v1_2.md` §4.1.2 path — Source-set ADR-D3 token bump v1.1 → v1.2 per Stage 1 ADR-D3 revision; comprehensive body-citation alignment v1.1 → v1.2 at 27 sites under use-latest-version discipline (Stage 4 precedent) applied to lines 1–1281; §[coherence pass] section lines 1282–1361 preserved verbatim as v1 point-in-time audit; line 28 Axis-grounding note bare-form D3 v1.1 → D3 v1.2; line 936 + 937 historical parentheticals "(v1.1 — F2-11 Reading 2 closure)" preserved as accurate ADR-D3 v1.1 namespace-introduction event references; no substantive content amendment per handoff §3.1 verification-only scope) |
 | Revision date | 2026-05-13 |
+| Revision | v1.1 → v1.2 (Phase 7 C-AS-02 `sandbox_tier_floor` signature reconciliation per `spec-writer` application of the operator-ratified `.harness/s1_c_as_02_reconciliation.md` recommendation — 2026-05-15; §2.2 + §2.3 + §10.2 + §11.1 + §12.1 reconciled to the canonical 5-argument `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport, mcp_server) -> SandboxTier | REFUSE` signature; ADR-D2 source-set token bump v1.1 → v1.2 with comprehensive body-citation alignment at 40 sites under use-latest-version discipline reflecting the parallel ADR-D2 v1.1 → v1.2 reconciliation; §[coherence pass] section preserved verbatim as v1 point-in-time audit) |
+| Revision date | 2026-05-15 |
+
+---
+
+## Change-note (v1.1 → v1.2)
+
+**Trigger.** Phase 7 C-AS-02 `sandbox_tier_floor` contract self-contradiction surfaced by the AS-plan verbatim audit (`verbatim_audit_as_plan.md` F3-01 / Pattern A2) and re-stated by the R3 implementation-planner pass. The `systems-architect` S1 reconciliation recommendation (`.harness/s1_c_as_02_reconciliation.md`, authored 2026-05-15) was operator-ratified 2026-05-15; this revision applies it. `sandbox_tier_floor` was called at five spec sites (§2.2, §2.3, §10.2, §11.1, §12.1) with three different signatures — §2.2/§10.2/§12.1 with a 4-arg `(tool, deployment_surface, blast_radius_tier, mcp_transport)` form, §11.1 with a 3-arg `(blast_radius, deployment_surface, mcp_transport)` form omitting `tool`, and the §2.3 lookup table requiring an MCP-server trust-level input no call site threaded.
+
+**Scope of revision.** Reconcile all `sandbox_tier_floor` call sites to one canonical 5-argument signature: `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport, mcp_server) -> SandboxTier | REFUSE`. The `tool` argument is retained (§2.3 rows 1–2 — computer-use / LLM-generated-code-execution — are tool-keyed; the 3-arg §11.1 form could not evaluate them). The MCP-server trust-level input the §2.3 lookup table requires (rows 4–6) is threaded as the explicit `mcp_server` argument (G-1, explicit-argument resolution — the same `call_site_context.mcp_server` the sibling `mcp_server_trust_tier_floor` already consumes at §2.2; not carrier-borne, for parity with the four sibling `max()` floors and the `assigned_tier_reason` audit surface). No §2.3 lookup-table rows are changed; the row→argument keying is made explicit.
+
+**Sub-decisions.** None — the fix is fully decided by the operator-ratified S1 recommendation; this pass applies the 5-arg signature and the row→argument keying note verbatim per `s1_c_as_02_reconciliation.md` §3.3 + §4.
+
+**Sections revised (substantive).** §2.2 composition formula — the `sandbox_tier_floor(...)` call gains `call_site_context.mcp_server` as the fifth argument. §2.3 `sandbox_tier_floor` lookup table — no row changes; a row→argument keying contract note added beneath the table tying each row band to its keying argument, closing the "table requires an input the signature lacks" gap. §10.2 — the prose `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport)` reference in the "Floor input" row updated to the 5-arg form. §11.1 sub-agent tier-resolution signature — the `sandbox_tier_floor(blast_radius, deployment_surface, mcp_transport)` body call reconciled to the canonical 5-arg form, and `sub_agent_sandbox_tier`'s outer signature gains `tool` and `mcp_server` parameters so it has them to thread through. §12.1 — the `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport)` call in the `gate_level` body gains the `mcp_server` argument (`gate_level`'s outer signature already carries `mcp_server`).
+
+**Body-citation alignment (token-level, non-substantive).** ADR-D2 source-set token bump v1.1 → v1.2 applied under use-latest-version discipline (the named discipline this spec applied at the v1 → v1.1 pass for the ADR-D3 bump). Comprehensive `ADR-D2 v1.1` → `ADR-D2 v1.2` citation alignment at 40 sites — the Source-set field (`ADR-D2.md` v1.1 → v1.2), the §"ADR scope" note ("D2 v1.1" → "D2 v1.2"), and 38 body-citation sites across §[requirement-trace], §[carry-forwards], the C-AS-02 / C-AS-04 / C-AS-09 / C-AS-10 / C-AS-11 / C-AS-12 / C-AS-15 / C-AS-16 contracts (`Per ADR-D2 v1.x §...` and `ADR commitment(s) honored` lines). Token-level only; the cited ADR-D2 content at §1.1–§1.10 is materially unchanged except §1.4 / §1.5.1 (the reconciled `sandbox_tier_floor` signature) — those two citations' targets changed substantively and are reconciled here per spec-writer SKILL §5 intra-file back-reference discipline. The §[coherence pass] section (lines 1295 / 1348 / 1350 `ADR-D2 v1.1` occurrences) and this Change-note's own §"Downstream absorption owed" historical reference to `ADR-D2 v1.1` are preserved verbatim as point-in-time records.
+
+**Sections preserved verbatim.** §Front-matter except the new Revision / Revision date line pair + the Source-set `ADR-D2.md` token + the §"ADR scope" "D2" token; §1 C-AS-01 (citation tokens aligned only); §2 C-AS-02 except §2.2 + §2.3 substantive edits (§2.1 + §2.4 + §2.5 unchanged; citation tokens aligned); §3–§9 (citation tokens aligned only); §10 C-AS-10 except the §10.2 "Floor input" row (§10.1 + §10.3 unchanged; citation tokens aligned); §11 C-AS-11 except the §11.1 signature (§11.2 + §11.3 unchanged; citation tokens aligned); §12 C-AS-12 except the §12.1 `gate_level` body (§12.2 + §12.3 unchanged; citation tokens aligned); §13–§16 (citation tokens aligned only); §[traceability] matrix; §[carry-forwards] (citation tokens aligned); §[coherence pass] section (preserved verbatim as the v1 point-in-time historical audit — its `ADR-D2 v1.1` references left as accurate v1-audit record).
+
+**Surfaced findings (not patched).** None — all five `sandbox_tier_floor` sites are reconciled in this pass; no adjacent defect surfaced.
+
+**Downstream absorption owed (`implementation-planner` revision-pass).** AS plan units U-AS-06 (`sandbox_tier_floor` carrier — its Signatures block already declared the 5-arg form) and U-AS-09 (`sub_agent_sandbox_tier` carrier) require an R3.1 micro-pass to finalize bodies against the reconciled signature. U-AS-05 / U-AS-10 / U-AS-13 are re-verify-only. Workspace root `CLAUDE.md` §2.2 ADR-version table lists `ADR-D2 v1.1`; a follow-up token bump to `v1.2` is owed (out of spec-writer remit; flagged). ADR-D2 itself was revised v1.1 → v1.2 in the same reconciliation (the contradiction originated at the ADR layer).
 
 ---
 
@@ -55,7 +77,7 @@ Per OD-5-2.A spec-writer judgment with handoff §3.1 recommendation followed: **
 
 ### Axis-grounding note
 
-The Action Surface axis hosts **two foundational ADRs** (F4 v1.1 graduated-isolation four-tier sandbox; F5 v1.1 tier-aware secret-fetch abstraction) and **two derivative ADRs** (D2 v1.1 specific sandbox provider per cell; D3 v1.2 Anthropic-primitive adoption depth) per ADD §2.4 + §2.5 + §3.3.1 + §3.3.2. Cross-axis composition with:
+The Action Surface axis hosts **two foundational ADRs** (F4 v1.1 graduated-isolation four-tier sandbox; F5 v1.1 tier-aware secret-fetch abstraction) and **two derivative ADRs** (D2 v1.2 specific sandbox provider per cell; D3 v1.2 Anthropic-primitive adoption depth) per ADD §2.4 + §2.5 + §3.3.1 + §3.3.2. Cross-axis composition with:
 
 - **Information Substrate** (this spec consumes C-IS-05 entry shape + C-IS-06 hash-chain construction + C-IS-07 read/write contract pair + C-IS-10 substrate seam exports at session-1 spec citations)
 - **Control Plane** (this spec exports the sandbox-bounded span schema and Anthropic-primitive adoption-depth surfaces for D5 HITL composition, D4 sub-agent privilege, and D1 engine-class composition at session 3)
@@ -67,12 +89,12 @@ is captured at C-AS-16 (Action Surface substrate seam exports surface) for downs
 
 | PRD requirement | Observer role | Primary ADR section citation |
 |---|---|---|
-| R-AS-01 — Sandbox tier per tool invocation visible at run-event surface | Production-time operator | ADR-F4 v1.1 §Decision; ADR-D2 v1.1 §1.7 + §1.7.1; ADD §2.4 Synthesis |
-| R-AS-02 — Sandbox failure-class taxonomy at failure event | Production-time operator | ADR-F4 v1.1 §Consequences (a); ADR-D2 v1.1 §1.8; ADD §2.4 Synthesis |
+| R-AS-01 — Sandbox tier per tool invocation visible at run-event surface | Production-time operator | ADR-F4 v1.1 §Decision; ADR-D2 v1.2 §1.7 + §1.7.1; ADD §2.4 Synthesis |
+| R-AS-02 — Sandbox failure-class taxonomy at failure event | Production-time operator | ADR-F4 v1.1 §Consequences (a); ADR-D2 v1.2 §1.8; ADD §2.4 Synthesis |
 | R-AS-03 — Per-tool sandbox tier assignment declarable at authoring time | Design-time operator + Production-time operator | ADR-F4 v1.1 §Decision; ADD §2.4 Synthesis |
 | R-AS-04 — Secret content never present in stored prompts or logs | Production-time operator (negative observation) | ADR-F5 v1.1 §Decision; ADD §2.5 Synthesis |
 | R-AS-05 — Secret-fetch audit as structure-not-content event | Downstream maintainer | ADR-F5 v1.1 §Decision; ADD §2.5 Synthesis |
-| R-AS-06 — Specific sandbox provider per deployment-surface × blast-radius cell | Design-time operator | ADR-D2 v1.1 §Decision + §1.5; ADD §3.3.1 Synthesis |
+| R-AS-06 — Specific sandbox provider per deployment-surface × blast-radius cell | Design-time operator | ADR-D2 v1.2 §Decision + §1.5; ADD §3.3.1 Synthesis |
 | R-AS-07 — Anthropic-primitive adoption depth per workload-class cell | Design-time operator | ADR-D3 v1.2 §Decision + §1.7 + §1.8 + §1.8.1; ADD §3.3.2 Synthesis |
 
 ### ADR scope
@@ -116,7 +138,7 @@ is captured at C-AS-16 (Action Surface substrate seam exports surface) for downs
 | Citation-by-section to PRD requirements + ADR commitments + ADD synthesis paragraphs + Information Substrate spec contracts | ADR revision; ADD revision; PRD revision; Information Substrate spec revision |
 | Persona-linkage trace preservation from PRD requirements | Cross-axis spec coherence beyond Information Substrate seam consumption + Action Surface seam exports surface (deferred to session 5 composition document) |
 | Cross-axis citation discipline (C-IS-* references at section/contract granularity) | Control Plane / Operational Discipline contracts (sessions 3–4) |
-| Action Surface substrate seam exports surface (C-AS-16) for sessions 3–4 to consume by citation | Specific candidate-within-provider-class selection (deferred per ADR-D2 v1.1 §1.10 workload-binding-time × deployment-surface-time contract) |
+| Action Surface substrate seam exports surface (C-AS-16) for sessions 3–4 to consume by citation | Specific candidate-within-provider-class selection (deferred per ADR-D2 v1.2 §1.10 workload-binding-time × deployment-surface-time contract) |
 | §[carry-forwards] inheritance from PRD §[carry-forwards] + session-1 spec §[carry-forwards] | F2-12 closure (parallel `council-orchestrator` C7+C9 session territory; carry-forward only here) |
 | Deferred-to-implementation discretion notation per Workflow §2.5.1 exit criteria language | Implementation-grade choices beyond specification surface (specific keyring library bindings, specific vault provider candidates, specific OTLP collector implementations) |
 
@@ -159,10 +181,10 @@ Two rules force tier resolution regardless of declared per-tool minimum:
 
 | Forcing condition | Forced tier | Source |
 |---|---|---|
-| `code-execution-2025-08-25` beta invoked | `tier-4-full-vm` (microVM minimum) | ADR-D2 v1.1 §1.1 LLM-generated-code-execution cells |
-| Computer-use model bound | `tier-4-full-vm` (full-VM; ephemeral; network-egress-restricted) | ADR-D2 v1.1 §1.1 Computer-use cells |
+| `code-execution-2025-08-25` beta invoked | `tier-4-full-vm` (microVM minimum) | ADR-D2 v1.2 §1.1 LLM-generated-code-execution cells |
+| Computer-use model bound | `tier-4-full-vm` (full-VM; ephemeral; network-egress-restricted) | ADR-D2 v1.2 §1.1 Computer-use cells |
 
-**Deferred to implementation discretion.** Specific tier-mechanism candidate within class at microVM / full-VM tiers per deployment surface (per ADR-D2 v1.1 §1.10 contract); specific container-runtime selection within `tier-3-microvm` (Docker / Podman / containerd) per Pattern Reference Catalog v1.0 §11.3.2 derivative.
+**Deferred to implementation discretion.** Specific tier-mechanism candidate within class at microVM / full-VM tiers per deployment surface (per ADR-D2 v1.2 §1.10 contract); specific container-runtime selection within `tier-3-microvm` (Docker / Podman / containerd) per Pattern Reference Catalog v1.0 §11.3.2 derivative.
 
 ---
 
@@ -172,7 +194,7 @@ Two rules force tier resolution regardless of declared per-tool minimum:
 
 **PRD requirement(s) satisfied.** R-AS-01 (sandbox tier per tool invocation visible — composition half); R-AS-03 (per-tool sandbox tier assignment declarable at authoring time — runtime resolution half).
 
-**ADR commitment(s) honored.** ADR-F4 v1.1 §Decision (per-tool tier assignment computed as `max(contract.minimum_tier, blast_radius_floor, mcp_server_trust_tier_floor, operator_policy_floor)` per call site); ADR-D2 v1.1 §1.5.1 (composition rule extending F4 with `sandbox_tier_floor` axis); ADD §2.4 Synthesis; ADD §5.2.1 T-perm-1 D2-layer multiplicative tunable.
+**ADR commitment(s) honored.** ADR-F4 v1.1 §Decision (per-tool tier assignment computed as `max(contract.minimum_tier, blast_radius_floor, mcp_server_trust_tier_floor, operator_policy_floor)` per call site); ADR-D2 v1.2 §1.5.1 (composition rule extending F4 with `sandbox_tier_floor` axis); ADD §2.4 Synthesis; ADD §5.2.1 T-perm-1 D2-layer multiplicative tunable.
 
 **Persona linkage.** Persona §5.1 (broad action surface — code execution, computer-use, MCP, API/SaaS); §10.1 (graduated-isolation locked).
 
@@ -198,7 +220,8 @@ sandbox_tier(tool, call_site_context) =
             tool,
             call_site_context.deployment_surface,
             call_site_context.blast_radius_tier,
-            call_site_context.mcp_transport
+            call_site_context.mcp_transport,
+            call_site_context.mcp_server
         ),
         operator_policy_floor(call_site_context.persona_tier)                # F4 + D5 §1.5
     )
@@ -208,7 +231,7 @@ The composition is **monotonically rising `max()`** — every floor expresses it
 
 ### §2.3 `sandbox_tier_floor` lookup table
 
-Per ADR-D2 v1.1 §1.5.1:
+Per ADR-D2 v1.2 §1.5.1:
 
 | Condition | `sandbox_tier_floor` |
 |---|---|
@@ -223,9 +246,11 @@ Per ADR-D2 v1.1 §1.5.1:
 | External-reversible, any | `tier-3-microvm` |
 | External-irreversible, any | `tier-4-full-vm` |
 
+**Row→argument keying.** `sandbox_tier_floor` is a 5-argument function — `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport, mcp_server) -> SandboxTier | REFUSE` per ADR-D2 v1.2 §1.5.1. Each row band of the table above is keyed on a specific named argument: rows 1–2 (`Computer-use model bound` / `LLM-generated code execution`) are keyed on the **`tool`** argument — these are tool / call-site classifications, not properties of blast-radius or transport; row 3 (`STDIO MCP transport, any blast-radius`) is keyed on the **`mcp_transport`** argument; rows 4–6 (`Remote MCP, trust level 0` / `level 2 sandbox-all` / `level 1 OR level 3`) are keyed on the remote-MCP trust level read from the **`mcp_server`** argument — trust level is not derivable from `mcp_transport` (a Streamable-HTTP server may be any of Level 1/2/3 per §10.3), so the `mcp_server` argument supplies it; rows 7–10 (`Read-only` / `Local-mutation, any` / `External-reversible, any` / `External-irreversible, any`) are keyed on the **`blast_radius_tier`** argument. This keying makes explicit that every row band's discriminating input is a named argument of the 5-arg signature; no row requires an input the signature does not carry.
+
 ### §2.4 `blast_radius_floor` enum
 
-Per ADR-D2 v1.1 §1.1 four-tier blast-radius taxonomy:
+Per ADR-D2 v1.2 §1.1 four-tier blast-radius taxonomy:
 
 | Blast-radius tier | Semantic | Default `sandbox_tier_floor` (subject to forcing-condition overrides) |
 |---|---|---|
@@ -292,7 +317,7 @@ Per ADR-F4 v1.1 §Consequences (c) "contract-default-tier policy (proposed defau
 
 **PRD requirement(s) satisfied.** R-AS-02 (sandbox failure-class taxonomy at failure event).
 
-**ADR commitment(s) honored.** ADR-F4 v1.1 §Consequences (a) line 40 (six-value failure taxonomy seed); ADR-D2 v1.1 §1.8 (seven-value taxonomy with `policy_override` addition); ADR-D2 v1.1 §1.7.1 (canonical attribute declaration); ADD §2.4 Synthesis closing sentence.
+**ADR commitment(s) honored.** ADR-F4 v1.1 §Consequences (a) line 40 (six-value failure taxonomy seed); ADR-D2 v1.2 §1.8 (seven-value taxonomy with `policy_override` addition); ADR-D2 v1.2 §1.7.1 (canonical attribute declaration); ADD §2.4 Synthesis closing sentence.
 
 **Persona linkage.** Persona §4 (99.9% SLO — failure-class taxonomy is C9-routable substrate for retry policy); §10.4 (compliance-readiness — sandbox-violation events are tamper-evidence-relevant).
 
@@ -300,7 +325,7 @@ Per ADR-F4 v1.1 §Consequences (c) "contract-default-tier policy (proposed defau
 
 ### §4.1 `sandbox.fail.class` enum
 
-Seven values per ADR-D2 v1.1 §1.7.1 + §1.8 canonical declaration:
+Seven values per ADR-D2 v1.2 §1.7.1 + §1.8 canonical declaration:
 
 | `sandbox.fail.class` | Semantic | C5 fail-class | C9 retry posture |
 |---|---|---|---|
@@ -329,7 +354,7 @@ Permanent-fail violations (`escape_attempt`, `egress_denied`, `signal`) **skip t
 | Emission posture | Rule |
 |---|---|
 | **Always-sampled (head=1.0)** | `sandbox.violation` events carrying any `sandbox.fail.class` value; `sandbox.tier_escalation` events |
-| **Base-rate sampled** | None — sandbox-violation events are uniformly always-sampled per ADR-D2 v1.1 §1.7 sampling discipline |
+| **Base-rate sampled** | None — sandbox-violation events are uniformly always-sampled per ADR-D2 v1.2 §1.7 sampling discipline |
 
 The always-sampled posture is a **hard floor at the deployment-binding layer** — not operator-tunable at base-rate per ADR-D3 v1.2 §1.8 audit-floor commitments analog.
 
@@ -381,7 +406,7 @@ Tier choice picks pole; both poles expressed; closure is **structural compositio
 | Property | Contract |
 |---|---|
 | **Absence in stored prompts** | Secret values MUST NOT enter the static prompt cache prefix; cache-prefix integrity per ADR-F2 §Rationale (b)(ii) preserved |
-| **Absence in log surfaces** | Secret values MUST NOT enter span attributes, log records, or any observability content-attribute capture surface; sensitive-data default-off discipline per ADR-D2 v1.1 §1.7 sampling discipline + structure-not-content per ADR-D6 v1.1 |
+| **Absence in log surfaces** | Secret values MUST NOT enter span attributes, log records, or any observability content-attribute capture surface; sensitive-data default-off discipline per ADR-D2 v1.2 §1.7 sampling discipline + structure-not-content per ADR-D6 v1.1 |
 | **Absence in ledger** | Secret values MUST NOT enter audit-ledger entries; structure-not-content fingerprint per C-AS-08 is the audit-ledger composition |
 | **Sole resolution path** | `fetch_secret` is the **only** path through which secrets reach a sandbox; secret content arriving by any other path (manifest, prompt, log, ledger) is a contract violation |
 
@@ -559,7 +584,7 @@ Every secret fetch emits one ledger entry conforming to the C-IS-05 six-field sh
 
 **PRD requirement(s) satisfied.** R-AS-06 (specific sandbox provider per deployment-surface × blast-radius cell).
 
-**ADR commitment(s) honored.** ADR-D2 v1.1 §1.1 (12-cell matrix verbatim); ADR-D2 v1.1 §1.2 (sandbox provider-class enumeration); ADR-D2 v1.1 §1.10 (workload-binding-time × deployment-surface-time selection contract); ADD §3.3.1 Synthesis.
+**ADR commitment(s) honored.** ADR-D2 v1.2 §1.1 (12-cell matrix verbatim); ADR-D2 v1.2 §1.2 (sandbox provider-class enumeration); ADR-D2 v1.2 §1.10 (workload-binding-time × deployment-surface-time selection contract); ADD §3.3.1 Synthesis.
 
 **Persona linkage.** Persona §5.1 (computer-use at production-time with stronger sandbox tier); §9 (deployment-surface implications — microVM-class isolation required at production-time); §10.1 (graduated-isolation locked); §10.4 (compliance-readiness).
 
@@ -567,7 +592,7 @@ Every secret fetch emits one ledger entry conforming to the C-IS-05 six-field sh
 
 ### §9.1 12-cell matrix
 
-Per ADR-D2 v1.1 §1.1 verbatim. Cell schema: `sandbox tier (F4) | provider-class (per §9.2) | candidate witnesses`.
+Per ADR-D2 v1.2 §1.1 verbatim. Cell schema: `sandbox tier (F4) | provider-class (per §9.2) | candidate witnesses`.
 
 | deployment-surface ↓ \ blast-radius-tier → | read-only | local-mutation | external-reversible | external-irreversible |
 |---|---|---|---|---|
@@ -577,7 +602,7 @@ Per ADR-D2 v1.1 §1.1 verbatim. Cell schema: `sandbox tier (F4) | provider-class
 
 ### §9.2 Sandbox provider-class enumeration (closed six-class taxonomy)
 
-Per ADR-D2 v1.1 §1.2:
+Per ADR-D2 v1.2 §1.2:
 
 | # | Provider class | Mechanism | Tier mapping | Cardinality |
 |---|---|---|---|---|
@@ -592,7 +617,7 @@ Provider-class taxonomy is closed at six classes; new mechanism-class addition i
 
 ### §9.3 Forcing-condition cell resolution
 
-Per ADR-D2 v1.1 §1.1:
+Per ADR-D2 v1.2 §1.1:
 
 | Forcing condition | Cell resolution |
 |---|---|
@@ -601,17 +626,17 @@ Per ADR-D2 v1.1 §1.1:
 
 ### §9.4 Operator-policy override scope per persona tier
 
-Per ADR-D2 v1.1 §1.5.2 (full composition at C-AS-12 §12.2):
+Per ADR-D2 v1.2 §1.5.2 (full composition at C-AS-12 §12.2):
 
 | Persona tier | Cell-default override scope |
 |---|---|
 | `solo-developer` | Permitted at non-compliance cells; audit-ledger entry append-only per ADR-D5 v1.3 §1.4 |
 | `team-binding` | Permitted only at non-`external-irreversible` cells; audit-ledger entry hash-chained per C-IS-06 |
-| `multi-tenant-compliance` | **Structurally prohibited** at any cell per ADR-D5 v1.3 §1.5.2 cross-deployment monotonicity + ADR-D2 v1.1 §1.6 |
+| `multi-tenant-compliance` | **Structurally prohibited** at any cell per ADR-D5 v1.3 §1.5.2 cross-deployment monotonicity + ADR-D2 v1.2 §1.6 |
 
 ### §9.5 Cell selection contract
 
-Per ADR-D2 v1.1 §1.1 + §1.10:
+Per ADR-D2 v1.2 §1.1 + §1.10:
 
 | Stage | Commitment |
 |---|---|
@@ -629,7 +654,7 @@ Per ADR-D2 v1.1 §1.1 + §1.10:
 
 **PRD requirement(s) satisfied.** R-AS-06 (specific sandbox provider per cell — MCP-transport floor enforcement half).
 
-**ADR commitment(s) honored.** ADR-D2 v1.1 §1.3 (per-MCP-transport sandbox-tier floor table); ADD §3.3.1 Synthesis; substrate at Cluster 4 §2.3.3 [HIGH] MCP authorization spec 2025-06-18 STDIO-transport directive.
+**ADR commitment(s) honored.** ADR-D2 v1.2 §1.3 (per-MCP-transport sandbox-tier floor table); ADD §3.3.1 Synthesis; substrate at Cluster 4 §2.3.3 [HIGH] MCP authorization spec 2025-06-18 STDIO-transport directive.
 
 **Persona linkage.** Persona §5.1 (MCP first-class); §10.1 (graduated-isolation); §10.4 (compliance-readiness).
 
@@ -637,7 +662,7 @@ Per ADR-D2 v1.1 §1.1 + §1.10:
 
 ### §10.1 Per-MCP-transport floor lookup table
 
-Per ADR-D2 v1.1 §1.3 verbatim:
+Per ADR-D2 v1.2 §1.3 verbatim:
 
 | MCP transport | MCP trust level (per Cluster 4 §2.3.3 [HIGH]) | `sandbox_tier_floor` | Rationale |
 |---|---|---|---|
@@ -651,7 +676,7 @@ Per ADR-D2 v1.1 §1.3 verbatim:
 
 | Property | Contract |
 |---|---|
-| **Floor input to `sandbox_tier_floor()`** | The per-MCP-transport floor feeds the `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport)` argument at C-AS-02 §2.3 |
+| **Floor input to `sandbox_tier_floor()`** | The per-MCP-transport floor feeds the `mcp_transport` argument of `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport, mcp_server)` at C-AS-02 §2.3 (the 5-arg canonical signature; the remote-MCP trust level keying §2.3 rows 4–6 is read from the separate `mcp_server` argument) |
 | **REFUSE sentinel propagation** | When `sandbox_tier_floor` returns the `REFUSE` sentinel, the harness rejects the MCP server connection at the registration boundary; no `sandbox_tier` value is resolved; the action does not occur |
 | **`max()` precedence** | Per the C-AS-02 `max()` composition, the per-MCP-transport floor wins whenever it exceeds the other floors (blast-radius floor, operator-policy floor, per-tool minimum_tier) |
 
@@ -678,7 +703,7 @@ The per-MCP-server-trust-tier_floor enters the gate-level `max()` composition at
 
 **PRD requirement(s) satisfied.** R-AS-01 (sandbox tier at run-event surface — sub-agent boundary half); R-AS-06 (specific sandbox provider — cross-axis composition with Control Plane sub-agent boundary).
 
-**ADR commitment(s) honored.** ADR-D2 v1.1 §1.4 (sub-agent sandbox-tier monotonic-ascension as unconditional containment rule); ADD §5.3.2 sub-agent boundary as monotonic-only descent; ADD §5.2.1 T-perm-1 sub-agent-boundary preservation.
+**ADR commitment(s) honored.** ADR-D2 v1.2 §1.4 (sub-agent sandbox-tier monotonic-ascension as unconditional containment rule); ADD §5.3.2 sub-agent boundary as monotonic-only descent; ADD §5.2.1 T-perm-1 sub-agent-boundary preservation.
 
 **Cross-axis citation.** Sub-agent privilege inheritance contract at ADR-D4 v1.1 §1.5 (the D4-layer surface composes against this contract; full Control Plane composition at session 3 spec); cross-deployment monotonicity of gate-level at ADR-D5 v1.3 §1.5.2 (composed at session 3 spec).
 
@@ -691,18 +716,21 @@ The per-MCP-server-trust-tier_floor enters the gate-level `max()` composition at
 ```
 sub_agent_sandbox_tier(
     parent_sandbox_tier: SandboxTier,
+    tool: Tool,
     blast_radius: BlastRadiusTier,
     mcp_transport: MCPTransport,
-    deployment_surface: DeploymentSurface
+    deployment_surface: DeploymentSurface,
+    mcp_server: MCPServer
 ) -> SandboxTier
     =
     max(
         parent_sandbox_tier,                                            # monotonic ascending
-        sandbox_tier_floor(blast_radius, deployment_surface, mcp_transport)
+        sandbox_tier_floor(tool, deployment_surface, blast_radius,
+                           mcp_transport, mcp_server)
     )
 ```
 
-per ADR-D2 v1.1 §1.4.
+per ADR-D2 v1.2 §1.4.
 
 ### §11.2 Unconditional ascension rule
 
@@ -710,11 +738,11 @@ per ADR-D2 v1.1 §1.4.
 |---|---|
 | **Sub-agent tier ≥ parent tier** | A sub-agent's resolved sandbox tier is always greater than or equal to its parent's resolved sandbox tier |
 | **Tier downgrade structurally prohibited** | A sub-agent cannot run at a weaker isolation tier than its parent under any condition; tier downgrade at the sub-agent boundary is a contract violation |
-| **D4 override-clause does NOT extend to sandbox tier** | Per ADD §5.3.2 + ADR-D2 v1.1 §1.4: ADR-D4 v1.5 sub-agent privilege override-clause (where parent declares child agents own external-reversible authority) is registry-scoped only; **sandbox monotonicity is unconditional even when registry inheritance is overridden** |
+| **D4 override-clause does NOT extend to sandbox tier** | Per ADD §5.3.2 + ADR-D2 v1.2 §1.4: ADR-D4 v1.5 sub-agent privilege override-clause (where parent declares child agents own external-reversible authority) is registry-scoped only; **sandbox monotonicity is unconditional even when registry inheritance is overridden** |
 
 ### §11.3 Rationale anchor
 
-Per ADR-D2 v1.1 §1.4:
+Per ADR-D2 v1.2 §1.4:
 
 ```
 Sub-agent registry-downgrade per D4 §1.5     ⟶ REMOVES capability  (sub-agent
@@ -730,14 +758,14 @@ Principle-of-least-containment is the **wrong principle** at the sub-agent bound
 
 ### §11.4 Composition with cross-deployment monotonicity
 
-Per ADR-D2 v1.1 §1.6 + ADR-D5 v1.3 §1.5.2:
+Per ADR-D2 v1.2 §1.6 + ADR-D5 v1.3 §1.5.2:
 
 | Property | Contract |
 |---|---|
-| **Bridging-arc traversal** | Under persona-tier traversal (solo-developer → team-binding → multi-tenant-compliance), `sandbox_tier_floor` is monotonic ascending per ADR-D2 v1.1 §1.6 |
+| **Bridging-arc traversal** | Under persona-tier traversal (solo-developer → team-binding → multi-tenant-compliance), `sandbox_tier_floor` is monotonic ascending per ADR-D2 v1.2 §1.6 |
 | **In-flight effective tier raise** | Tier upgrade at bridging-arc traversal raises the effective sandbox tier for in-flight workflows immediately |
 | **Tier downgrade requires Class-2 D2 revision** | Cell-level tier downgrade requires explicit Workflow §4.1.2 Class-2 ADR-D2 revision; not operator-tunable at runtime |
-| **Composition with §11.2** | Sub-agent monotonicity (this contract) plus cross-deployment monotonicity (ADR-D2 v1.1 §1.6) jointly produce sub-agent tier ≥ parent tier ≥ persona-tier floor; all three axes ascend monotonically |
+| **Composition with §11.2** | Sub-agent monotonicity (this contract) plus cross-deployment monotonicity (ADR-D2 v1.2 §1.6) jointly produce sub-agent tier ≥ parent tier ≥ persona-tier floor; all three axes ascend monotonically |
 
 ### §11.5 Sub-agent boundary verification
 
@@ -747,7 +775,7 @@ Per ADR-D2 v1.1 §1.6 + ADR-D5 v1.3 §1.5.2:
 | Audit-ledger surface (downstream maintainer) | Sub-agent sandbox-tier transitions emit `sandbox.tier_escalation` events per C-AS-15 with `sandbox.policy.assigned_tier_reason = sub_agent_monotonic_ascension` |
 | Tamper-evidence | Sub-agent boundary violations (downgrade attempt) are deterministic policy hits; emit `sandbox.fail.class = policy_override` per C-AS-04 with audit-ledger entry per C-AS-08 |
 
-**Deferred to implementation discretion.** Specific sub-agent dispatch mechanism per topology pattern (orchestrator-workers / decentralized-handoff / hierarchical-delegation — D4-layer Control Plane spec at session 3); specific parent-child tier-resolution call-site instrumentation; specific sandbox-pool warm-up policy per fan-out cap (composed against ADR-D2 v1.1 §1.9 — session 3 cross-axis territory).
+**Deferred to implementation discretion.** Specific sub-agent dispatch mechanism per topology pattern (orchestrator-workers / decentralized-handoff / hierarchical-delegation — D4-layer Control Plane spec at session 3); specific parent-child tier-resolution call-site instrumentation; specific sandbox-pool warm-up policy per fan-out cap (composed against ADR-D2 v1.2 §1.9 — session 3 cross-axis territory).
 
 ---
 
@@ -757,7 +785,7 @@ Per ADR-D2 v1.1 §1.6 + ADR-D5 v1.3 §1.5.2:
 
 **PRD requirement(s) satisfied.** R-AS-01 (sandbox tier visible — gate-level composition surface); R-AS-06 (specific sandbox provider per cell — D2-layer tunable surface).
 
-**ADR commitment(s) honored.** ADR-D2 v1.1 §1.5 (T-perm-1 D2-layer multiplicative tunable parameter specialization); ADR-D2 v1.1 §1.5.1 (composition rule); ADR-D2 v1.1 §1.5.2 (composition with operator-policy override); ADR-D2 v1.1 §1.6 (cross-deployment sandbox-tier monotonicity); ADD §5.2.1 T-perm-1 multi-layer resolution.
+**ADR commitment(s) honored.** ADR-D2 v1.2 §1.5 (T-perm-1 D2-layer multiplicative tunable parameter specialization); ADR-D2 v1.2 §1.5.1 (composition rule); ADR-D2 v1.2 §1.5.2 (composition with operator-policy override); ADR-D2 v1.2 §1.6 (cross-deployment sandbox-tier monotonicity); ADD §5.2.1 T-perm-1 multi-layer resolution.
 
 **Persona linkage.** Persona §4 (99.9% SLO — multiplicative composition as deterministic outer harness); §10.1 (graduated-isolation locked); §10.4 (compliance-readiness — multi-tenant override prohibition).
 
@@ -765,7 +793,7 @@ Per ADR-D2 v1.1 §1.6 + ADR-D5 v1.3 §1.5.2:
 
 ### §12.1 5-axis multiplicative tunable parameter
 
-Per ADR-D2 v1.1 §1.5, the locked tunable parameter is:
+Per ADR-D2 v1.2 §1.5, the locked tunable parameter is:
 
 ```
 per_tool_gate_level × per_mcp_server_trust_tier × persona_tier × blast_radius_tier × sandbox_tier
@@ -782,19 +810,20 @@ gate_level(tool, mcp_server, persona_tier, deployment_surface,
         per_mcp_server_trust_floor(mcp_server),                 # C10 five-tier framework
         persona_tier_floor,                                      # D5 §1.5
         sandbox_tier_floor(tool, deployment_surface,             # D2 NEW
-                          blast_radius_tier, mcp_transport)
+                          blast_radius_tier, mcp_transport,
+                          mcp_server)
     )
 ```
 
 ### §12.2 Composition with operator-policy override per persona-tier
 
-Per ADR-D2 v1.1 §1.5.2 (full table at C-AS-09 §9.4):
+Per ADR-D2 v1.2 §1.5.2 (full table at C-AS-09 §9.4):
 
 | Persona-tier | Operator-policy override of `sandbox_tier_floor` |
 |---|---|
 | `solo-developer` | Permitted at non-compliance cells (e.g., `tier-4-full-vm` → gVisor at managed-cloud; `tier-3-microvm` → process at short-session × cache-friendly cells); audit-ledger entry append-only per ADR-D5 v1.3 §1.4 |
 | `team-binding` | Permitted only at non-`external-irreversible` cells; audit-ledger entry hash-chained with `prior_event_hash` per C-IS-06 |
-| `multi-tenant-compliance` | **Structurally prohibited** per ADR-D5 v1.3 §1.5.2 + ADR-D2 v1.1 §1.6; operator-policy override at multi-tenant-compliance produces an **audit-ledger violation event**, not a tier change |
+| `multi-tenant-compliance` | **Structurally prohibited** per ADR-D5 v1.3 §1.5.2 + ADR-D2 v1.2 §1.6; operator-policy override at multi-tenant-compliance produces an **audit-ledger violation event**, not a tier change |
 
 ### §12.3 Override-event audit composition
 
@@ -806,7 +835,7 @@ Per ADR-D2 v1.1 §1.5.2 (full table at C-AS-09 §9.4):
 
 ### §12.4 Cross-deployment monotonicity contract
 
-Per ADR-D2 v1.1 §1.6:
+Per ADR-D2 v1.2 §1.6:
 
 | Property | Contract |
 |---|---|
@@ -1077,7 +1106,7 @@ Per ADR-D3 v1.2 §1.8 F2-09 forward-reference: D6 §1.3 sampling discipline MUST
 
 **PRD requirement(s) satisfied.** R-AS-01 (sandbox tier at run-event surface — span emission half); R-AS-02 (sandbox failure-class taxonomy — span emission half); R-AS-06 (specific sandbox provider per cell — span emission half).
 
-**ADR commitment(s) honored.** ADR-D2 v1.1 §1.7 (sandbox-boundary span schema); ADR-D2 v1.1 §1.7.1 (canonical attribute names declared at D2 source under F4-authoritative-naming-honored-at-source-D-ADR rule); ADR-D2 v1.1 §1.8 (sandbox-violation fail-class taxonomy table); ADR-F4 v1.1 §Consequences (a) line 40 + line 57 (F4-canonical attribute names); ADD §2.4 Synthesis closing sentence (sandbox.tier / sandbox.tech / sandbox.fail.class three-attribute structural anchor).
+**ADR commitment(s) honored.** ADR-D2 v1.2 §1.7 (sandbox-boundary span schema); ADR-D2 v1.2 §1.7.1 (canonical attribute names declared at D2 source under F4-authoritative-naming-honored-at-source-D-ADR rule); ADR-D2 v1.2 §1.8 (sandbox-violation fail-class taxonomy table); ADR-F4 v1.1 §Consequences (a) line 40 + line 57 (F4-canonical attribute names); ADD §2.4 Synthesis closing sentence (sandbox.tier / sandbox.tech / sandbox.fail.class three-attribute structural anchor).
 
 **Cross-axis citation.** `Spec_Information_Substrate_v1.md` C-IS-10 §10.1 (state-ledger entry shape export — Action Surface row; sandbox-violation events join on `idempotency_key`).
 
@@ -1087,7 +1116,7 @@ Per ADR-D3 v1.2 §1.8 F2-09 forward-reference: D6 §1.3 sampling discipline MUST
 
 ### §15.1 Span hierarchy
 
-Per ADR-D2 v1.1 §1.7:
+Per ADR-D2 v1.2 §1.7:
 
 ```
 subagent.span[i]  (or root tool.call span)
@@ -1110,7 +1139,7 @@ subagent.span[i]  (or root tool.call span)
 
 ### §15.2 Seven `sandbox.*` attribute names (declared at this contract per D2 §1.7.1)
 
-Per ADR-D2 v1.1 §1.7.1 (canonical declaration site; six F4-canonical + one D2-introduced):
+Per ADR-D2 v1.2 §1.7.1 (canonical declaration site; six F4-canonical + one D2-introduced):
 
 | Attribute | Type | Cardinality | Always-emitted on | Discriminator role |
 |---|---|---|---|---|
@@ -1120,11 +1149,11 @@ Per ADR-D2 v1.1 §1.7.1 (canonical declaration site; six F4-canonical + one D2-i
 | `sandbox.policy.assigned_tier_reason` | enum string ∈ `{contract_minimum, blast_radius_floor, mcp_server_trust_floor, operator_policy_floor, sandbox_tier_floor, persona_tier_floor, sub_agent_monotonic_ascension}` | bounded (7) | `sandbox.enter` event | Audit surface for which `max()` floor won (F4 canonical) |
 | `sandbox.cost.tier_overhead_ms` | int (milliseconds) | unbounded (metric) | `sandbox.exit` event | Per-call latency overhead (F4 canonical) |
 | `sandbox.cost.tier_overhead_usd` | float (USD) | unbounded (metric) | `sandbox.exit` event | Per-call dollar overhead (F4 canonical) |
-| `sandbox.provider` | enum string ∈ 17-value enumeration per ADR-D2 v1.1 §1.7 join table | medium (17 at v1.1; phase-2 may add) | `sandbox.enter` event | Vendor+tech instance (D2-introduced; declare-both-with-join with `sandbox.tech`) |
+| `sandbox.provider` | enum string ∈ 17-value enumeration per ADR-D2 v1.2 §1.7 join table | medium (17 at v1.1; phase-2 may add) | `sandbox.enter` event | Vendor+tech instance (D2-introduced; declare-both-with-join with `sandbox.tech`) |
 
 ### §15.3 `sandbox.tech` ↔ `sandbox.provider` join contract
 
-Per ADR-D2 v1.1 §1.7. Each `sandbox.provider` value belongs to exactly one `sandbox.tech` class (provider belongs-to tech is **functional**):
+Per ADR-D2 v1.2 §1.7. Each `sandbox.provider` value belongs to exactly one `sandbox.tech` class (provider belongs-to tech is **functional**):
 
 | `sandbox.tech` | `sandbox.provider` values |
 |---|---|
@@ -1138,7 +1167,7 @@ The join mapping is **operator-tunable at workload-binding-time** (operators wit
 
 ### §15.4 Sampling discipline
 
-Per ADR-D2 v1.1 §1.7:
+Per ADR-D2 v1.2 §1.7:
 
 | Event | Sampling rate |
 |---|---|
@@ -1151,7 +1180,7 @@ The always-sampled posture for `sandbox.violation` and `sandbox.tier_escalation`
 
 ### §15.5 Sensitive-data discipline
 
-Per ADR-D2 v1.1 §1.7 sensitive-data default-off + structure-not-content discipline:
+Per ADR-D2 v1.2 §1.7 sensitive-data default-off + structure-not-content discipline:
 
 | Property | Contract |
 |---|---|
@@ -1161,7 +1190,7 @@ Per ADR-D2 v1.1 §1.7 sensitive-data default-off + structure-not-content discipl
 
 ### §15.6 Cross-axis composition reference
 
-Per `Spec_Information_Substrate_v1.md` C-IS-10 §10.1 (state-ledger entry shape export — Action Surface row "Sandbox-violation events join on `idempotency_key` per ADR-D2 v1.1 §1.8 fail-class taxonomy"):
+Per `Spec_Information_Substrate_v1.md` C-IS-10 §10.1 (state-ledger entry shape export — Action Surface row "Sandbox-violation events join on `idempotency_key` per ADR-D2 v1.2 §1.8 fail-class taxonomy"):
 
 | Property | Contract |
 |---|---|
@@ -1171,7 +1200,7 @@ Per `Spec_Information_Substrate_v1.md` C-IS-10 §10.1 (state-ledger entry shape 
 
 ### §15.7 Capability-floor (iv) traceability
 
-Per ADR-D2 v1.1 §1.7.1 + ADR-F3 v1.1 capability-floor (iv): F3 capability-floor (iv) requires observable lifecycle including sandbox-related events. This contract declares the attribute substrate at D2 source per F2-05 sandbox sub-finding closure. **ADR-D6 §1.2 row `sandbox.*` reads from this contract verbatim**; the F4-authoritative-naming honored at this source contract — D6 §1.2 ingests without re-declaration (cross-axis to Operational Discipline spec at session 4).
+Per ADR-D2 v1.2 §1.7.1 + ADR-F3 v1.1 capability-floor (iv): F3 capability-floor (iv) requires observable lifecycle including sandbox-related events. This contract declares the attribute substrate at D2 source per F2-05 sandbox sub-finding closure. **ADR-D6 §1.2 row `sandbox.*` reads from this contract verbatim**; the F4-authoritative-naming honored at this source contract — D6 §1.2 ingests without re-declaration (cross-axis to Operational Discipline spec at session 4).
 
 **Deferred to implementation discretion.** Specific OTel/OTLP span emission implementation; specific tail-keep-on-classification filter implementation; specific per-cell `sandbox.cost.tier_overhead_*` metric aggregation window; specific sub-agent `idempotency_key` extension algorithm (delegated to D4 §1.9 at session 3).
 
@@ -1183,7 +1212,7 @@ Per ADR-D2 v1.1 §1.7.1 + ADR-F3 v1.1 capability-floor (iv): F3 capability-floor
 
 **PRD requirement(s) satisfied.** All seven R-AS-* (cross-axis composition surface; this contract is the analog of C-IS-10 for the Action Surface axis).
 
-**ADR commitment(s) honored.** ADR-D2 v1.1 §1.7.1 (sandbox-bounded span schema source declaration); ADR-D3 v1.2 §1.8.1 (six attribute namespace source declarations); ADR-F4 v1.1 §Consequences (a) (F4-authoritative attribute naming); ADR-F5 v1.1 §Decision (structure-not-content audit composition).
+**ADR commitment(s) honored.** ADR-D2 v1.2 §1.7.1 (sandbox-bounded span schema source declaration); ADR-D3 v1.2 §1.8.1 (six attribute namespace source declarations); ADR-F4 v1.1 §Consequences (a) (F4-authoritative attribute naming); ADR-F5 v1.1 §Decision (structure-not-content audit composition).
 
 **Persona linkage.** Persona §10.2 (cost-attribution-per-span); §10.4 (compliance-readiness — cross-axis tamper-evidence composition).
 

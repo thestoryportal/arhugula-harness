@@ -9,6 +9,24 @@ Promotion path: Accepted at P3-CK clearance per Workflow v1.1 §3.1
 Revision: v1 → v1.1 (P3c-CK iter-1 close mechanical revision per Path A — F2-05 sandbox sub-finding resolution at §1.7 + §1.7.1 + §1.8 honoring F4 §Consequences (a) authoritative `sandbox.tech` / `sandbox.fail.class` / `sandbox.policy.assigned_tier_reason` names with declare-both-with-join semantic for `sandbox.tech` (technology class) ↔ `sandbox.provider` (vendor+tech instance); F1-01 §1.4 function signature parameter naming consistency; F1-02 §1.6 cross-deployment monotonicity prose disambiguation)
 Revision date: 2026-05-10
 Promotion: P3c-CK final clearance — 2026-05-11
+Revision: v1.1 → v1.2 (Phase 7 C-AS-02 `sandbox_tier_floor` signature reconciliation — operator-authorized 2026-05-15 — reconciling the §1.4 3-arg form and the §1.5.1 4-arg form to the canonical 5-arg signature `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport, mcp_server) -> SandboxTier | REFUSE`)
+Revision date: 2026-05-15
+
+## Change-note (v1.1 → v1.2)
+
+**Trigger.** Phase 7 C-AS-02 `sandbox_tier_floor` contract self-contradiction surfaced by the AS-plan verbatim audit (`verbatim_audit_as_plan.md` F3-01 / Pattern A2) and re-stated by the R3 implementation-planner pass. The `systems-architect` S1 reconciliation recommendation (`.harness/s1_c_as_02_reconciliation.md`, authored 2026-05-15) was operator-ratified 2026-05-15; this revision applies it. The S1 pass found the contradiction **originates at ADR-D2 itself** — §1.4 renders `sandbox_tier_floor` as a 3-arg form, §1.5.1 as a 4-arg form, and §1.5.1's `where:` block keys rows on `(remote MCP, level N)` while the §1.5.1 signature carries only `mcp_transport` (no trust-level input). The ADR-D2 edit is therefore part of the same reconciliation, not a downstream spec-only fix; it is operator-authorized because it touches a D-ADR.
+
+**Scope of revision.** Reconcile the ADR-D2 §1.4 and §1.5.1 `sandbox_tier_floor` renderings to one canonical 5-argument signature: `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport, mcp_server) -> SandboxTier | REFUSE`. The `tool` argument is retained (rows 1–2 of the §1.5.1 `where:` block — computer-use-bound / LLM-generated-code-execution — are tool-keyed; a 3-arg form cannot evaluate its own lookup table). The trust-level input rows 4–6 require is threaded as the explicit `mcp_server` argument (G-1, explicit-argument resolution — not carrier-borne; parity with the four sibling `max()` floors, all explicit-arg, and with the `assigned_tier_reason` audit surface). No `where:`-block rows are changed; the row→argument keying is made explicit.
+
+**Changes inline.** Status block (second Revision / Revision date line pair added for v1.1 → v1.2). This Change-note section. §1.3 closing prose line — `sandbox_tier_floor` input enumeration aligned to the 5-arg shape. §1.4 `sub_agent_sandbox_tier` body — the inner `sandbox_tier_floor(blast_radius, deployment_surface, mcp_transport)` call reconciled to the canonical 5-arg form `sandbox_tier_floor(tool, deployment_surface, blast_radius, mcp_transport, mcp_server)`; the `sub_agent_sandbox_tier` outer signature gains `tool` and `mcp_server` parameters so it has them to thread through (the sub-agent's own tool + call-site MCP server must reach rows 1–2 and 4–6 of the floor table). §1.5.1 `gate_level` body — the `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport)` call gains the `mcp_server` argument; `gate_level`'s outer signature already carries `mcp_server`. §1.5.1 `where:` block — rows preserved verbatim; a row→argument keying note added beneath the block (rows 1–2 tool-keyed; row 3 `mcp_transport`-keyed; rows 4–6 `mcp_server`-trust-level-keyed; remaining rows `blast_radius_tier`-keyed). §Consequences (b) — the "five inputs (tool, deployment_surface, blast_radius_tier, mcp_transport, plus implicit computer-use / LLM-generated-code binding ...)" enumeration corrected: the inputs are the five explicit arguments; computer-use / code-execution binding is a property of the explicit `tool` argument, not an implicit input. Permanent tension ledger entry (T-perm-1) — the verbatim `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport)` restatement aligned to the 5-arg form.
+
+**Sections preserved verbatim.** §1.1 deployment-surface × blast-radius-tier matrix; §1.2 sandbox provider-class enumeration; §1.3 per-MCP-transport floor table (only the closing input-enumeration prose line amended); §1.4 unconditional-rule + rationale prose (only the function signature/body amended); §1.5 tunable specialization prose; §1.5.1 `where:` block rows (all 10 rows verbatim; a keying note appended); §1.5.2; §1.6; §1.7 + §1.7.1 + §1.8 + §1.9 + §1.10; Rationale (all sub-sections except §Consequences (b) is a Consequences edit; Rationale untouched); Consequences (all sub-sections except (b)'s input enumeration); Alternatives considered; References (all shapes except the T-perm-1 permanent tension ledger entry's signature restatement).
+
+**Surfaced findings (not patched).** None — the §1.3 / §Consequences (b) / T-perm-1 ledger sites are mechanical restatements of the same signature and are reconciled here as intra-file back-references (spec-writer SKILL §5), not left stale.
+
+**Downstream absorption owed.** Workspace root `CLAUDE.md` §2.2 ADR-version table lists `ADR-D2 v1.1` — a follow-up token bump to `v1.2` is owed (not applied here; `CLAUDE.md` is out of spec-writer remit). AS plan units U-AS-06 (`sandbox_tier_floor` carrier) and U-AS-09 (`sub_agent_sandbox_tier` carrier) require an `implementation-planner` R3.1 micro-pass to finalize against the reconciled 5-arg signature.
+
+---
 
 ## Change-note (v1 → v1.1)
 
@@ -96,17 +114,19 @@ Per Cluster 4 §2.3.3 [HIGH] MCP authorization spec 2025-06-18 [HIGH] explicitly
 | **Streamable HTTP+SSE, Level 2 (sandbox-all)** | sandbox-mediated | **Tier 4 microVM minimum** with allow-listed upstream domains | F4-layer enabler of lethal-trifecta architectural cut per Cluster 4 §2.3.2 [HIGH]; egress allow-listing prevents exfil to attacker-controlled destinations |
 | **Streamable HTTP+SSE, Level 3 (allow-with-audit)** | trusted; auditable | per blast_radius_floor with audit ledger | Trust boundary established at OAuth + audit; sandbox-tier follows blast-radius; audit ledger entry per persona-tier cryptographic shape per D5 §1.4 |
 
-The per-MCP-transport floor composes with §1.5 multiplicative `max()` rule — `sandbox_tier_floor` evaluates against deployment-surface, blast-radius-tier, AND mcp_transport at call time.
+The per-MCP-transport floor composes with §1.5 multiplicative `max()` rule — `sandbox_tier_floor` evaluates against tool, deployment-surface, blast-radius-tier, mcp_transport, AND mcp_server (the remote-MCP trust-level input per §1.5.1 rows 4–6) at call time.
 
 ### 1.4 Sub-agent sandbox-tier monotonic-ascension
 
 Extending ADR-D4 §1.5 sub-agent privilege inheritance contract:
 
 ```
-sub_agent_sandbox_tier(parent_sandbox_tier, blast_radius, mcp_transport, deployment_surface) =
+sub_agent_sandbox_tier(parent_sandbox_tier, tool, blast_radius, mcp_transport,
+                       deployment_surface, mcp_server) =
     max(
         parent_sandbox_tier,                                            // monotonic ascending
-        sandbox_tier_floor(blast_radius, deployment_surface, mcp_transport)
+        sandbox_tier_floor(tool, deployment_surface, blast_radius,
+                           mcp_transport, mcp_server)
     )
 ```
 
@@ -137,7 +157,8 @@ gate_level(tool, mcp_server, persona_tier, deployment_surface,
         per_mcp_server_trust_floor(mcp_server),                 // C10 five-tier framework
         persona_tier_floor,                                     // D5 §1.5
         sandbox_tier_floor(tool, deployment_surface,            // D2 NEW
-                           blast_radius_tier, mcp_transport)
+                           blast_radius_tier, mcp_transport,
+                           mcp_server)
     )
 
 where:
@@ -158,6 +179,8 @@ where:
         (external-reversible, *)                  → Tier 3 (container)
         (external-irreversible, *)                → Tier 4 (microVM / full VM)
 ```
+
+**Row→argument keying.** `sandbox_tier_floor` is a 5-argument function — `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport, mcp_server) -> SandboxTier | REFUSE`. Each `where:`-block row band is keyed on a specific argument: rows 1–2 (`computer-use model bound` / `LLM-generated code execution`) are keyed on the **`tool`** argument — these are tool / call-site classifications; row 3 (`STDIO MCP transport`) is keyed on the **`mcp_transport`** argument; rows 4–6 (`remote MCP, level 0` / `level 2 sandbox-all` / `level 1` / `level 3`) are keyed on the remote-MCP trust level read from the **`mcp_server`** argument (the trust level is not derivable from `mcp_transport` — a Streamable-HTTP server may be any of Level 1/2/3); rows 7–10 (`read-only` / `local-mutation` / `external-reversible` / `external-irreversible`) are keyed on the **`blast_radius_tier`** argument. The 3-arg rendering carried at §1.4 prior to the v1.1 → v1.2 reconciliation could not evaluate rows 1–2 (no `tool`) or rows 4–6 (no `mcp_server`); the 5-arg form is the canonical signature at every call site.
 
 The composition is **multiplicative `max()`** — both axes (C4 capability via `per_tool_gate_level` and contract-attached `minimum_tier`; C10 gating via `blast_radius_floor`, `per_mcp_server_trust_floor`, `persona_tier_floor`, `sandbox_tier_floor`) express their concern; the higher tier always wins; neither voice is suppressed; capability and gating reconcile by composition rather than choice.
 
@@ -329,7 +352,7 @@ Per-cell sandbox provider-class is committed at D2; specific candidate-within-cl
 - Sub-agent monotonic-ascension per §1.4 is unconditional even when D4 §1.5 registry-downgrade is overridden; topology declarations at workload-binding-time must specify per-sub-agent-class sandbox-tier-floor as a topology-declaration field per ADR-D4 §1.11 contract.
 - Sandbox-pool warm-up per §1.9 at local-development surface is operator-hardware-bound; pool size > available host capacity produces resource exhaustion at workflow-start; operator-tunable bound required.
 - OTLP collector reachability per F4 v1.1 §Consequences (b)(iv) is non-trivial across the four sandbox tiers; D2 inherits the constraint without resolving it — D6 (observability backend) downstream must commit OTLP collector placement per cell.
-- The `sandbox_tier_floor` function is the most complex floor in the `max()` composition per §1.5.1 — it carries five inputs (tool, deployment_surface, blast_radius_tier, mcp_transport, plus implicit computer-use / LLM-generated-code binding per call-site context); meta-eval per C8 commitment requires per-input-permutation holdout coverage.
+- The `sandbox_tier_floor` function is the most complex floor in the `max()` composition per §1.5.1 — it carries five explicit arguments (`tool`, `deployment_surface`, `blast_radius_tier`, `mcp_transport`, `mcp_server`); computer-use / LLM-generated-code binding is a property of the explicit `tool` argument (the `where:`-block rows 1–2 are tool-keyed), and the remote-MCP trust level is read from the explicit `mcp_server` argument (rows 4–6); meta-eval per C8 commitment requires per-input-permutation holdout coverage.
 
 **(c) T-perm-1 D2-layer encoding.** Locked tunable becomes `per_tool_gate_level × per_mcp_server_trust_tier × persona_tier × blast_radius_tier × sandbox_tier`. Tunable parameter specialization is multiplicative (added axis composes via `max()` with the existing four axes). Permanent-tension ledger updates: T-perm-1 D2-layer resolution shape filed; carry-forward to D6 (observability backend) for sandbox-tier-aware sampling commitment.
 
@@ -461,7 +484,7 @@ Per-cell sandbox provider-class is committed at D2; specific candidate-within-cl
 
 ### Permanent tension ledger updates
 
-- T-perm-1 (C4 ↔ C10 — capability vs gating): D2-layer multiplicative tunable parameter specialization adding `sandbox_tier` axis. Locked tunable becomes `per_tool_gate_level × per_mcp_server_trust_tier × persona_tier × blast_radius_tier × sandbox_tier`. Composition rule extends D5 §1.5.1 with `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport)` term. Sub-agent monotonic-ascension extends D4 §1.5 to sandbox tier (unconditional). Cross-deployment monotonicity extends D5 §1.5.2 to `sandbox_tier_floor`. Status: promoted to Layer 3 (permanent tension) at D2-layer.
+- T-perm-1 (C4 ↔ C10 — capability vs gating): D2-layer multiplicative tunable parameter specialization adding `sandbox_tier` axis. Locked tunable becomes `per_tool_gate_level × per_mcp_server_trust_tier × persona_tier × blast_radius_tier × sandbox_tier`. Composition rule extends D5 §1.5.1 with `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport, mcp_server)` term (5-arg canonical signature per the v1.1 → v1.2 C-AS-02 reconciliation). Sub-agent monotonic-ascension extends D4 §1.5 to sandbox tier (unconditional). Cross-deployment monotonicity extends D5 §1.5.2 to `sandbox_tier_floor`. Status: promoted to Layer 3 (permanent tension) at D2-layer.
 - T-perm-3 (C1 ↔ C9 — control-flow vs reliability): D1-layer `topology_fault_handling` per-deployment-surface mapping + D4-layer `topology_fault_handling × workload_class × topology_pattern` resolutions stand. D2 surfaces adjacency at sandbox cold-start latency engaging cascade-policy timeout composition; ledger-reference-only carry-forward.
 - T-perm-2 (C2 ↔ C3 — within-vs-across-turn): F2-layer resolution stands per F3 v1.1 §References explicit framing. D2 surfaces adjacency at computer-use within sandbox crossing within-turn screenshot context (C2 stake) and across-turn sandbox state durability (C3 stake) seam; ledger-reference-only carry-forward.
 
