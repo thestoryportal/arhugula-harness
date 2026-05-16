@@ -51,6 +51,13 @@ updates happen at cluster close, not per unit.
 | U-AS-25 | Secret-fetch `outputs_hash` structure-not-content fingerprint (GUARDRAIL — C-IS-06 §6.1 scheme) | C-AS-08 §8.1 | ✅ landed | `feat(as): land U-AS-25` | 2026-05-16 |
 | U-AS-29 | Engine-class composition overlay + 20-cell model-binding matrix + pre-HITL escalation | C-AS-13 §13.3-§13.4 | ✅ landed | `feat(as): land U-AS-29` | 2026-05-16 |
 | U-AS-31 | Six Anthropic-primitive attribute namespaces (40 attrs) + skill-version dual-field enforcement | C-AS-14 §14.1-§14.7 | ✅ landed | `feat(as): land U-AS-31` | 2026-05-16 |
+| U-AS-08 | `sandbox_tier` 5-floor max() composition + `CallSiteContext` + `AssignedTierReason` | C-AS-02 §2.1-§2.2,§2.5 | ✅ landed | `feat(as): land U-AS-08` | 2026-05-16 |
+| U-AS-09 | `sub_agent_sandbox_tier` monotonic ascension + downgrade detector | C-AS-11 §11.1-§11.5 | ✅ landed | `feat(as): land U-AS-09` | 2026-05-16 |
+| U-AS-13 | Per-MCP-transport sandbox-tier floor lookup + `rejects_at_registration` | C-AS-10 §10.1-§10.3 | ✅ landed | `feat(as): land U-AS-13` | 2026-05-16 |
+| U-AS-14 | 5-axis gate-level multiplicative composition + `GateLevel` + `tier_to_gate_level_floor` | C-AS-12 §12.1,§12.5 | ✅ landed | `feat(as): land U-AS-14` | 2026-05-16 |
+| U-AS-15 | Cross-deployment sandbox-tier monotonicity + bridging-arc raise + governance-violation detector | C-AS-12 §12.4, C-AS-11 §11.4 | ✅ landed | `feat(as): land U-AS-15` | 2026-05-16 |
+| U-AS-26 | Secret-fetch audit-ledger entry composition (cross-axis IS: U-IS-07/09/10) | C-AS-08 §8.2-§8.3 | ✅ landed | `feat(as): land U-AS-26` | 2026-05-16 |
+| U-AS-30 | Anthropic-API graceful degradation policy + workload-binding-decision composition | C-AS-13 §13.5-§13.6 | ✅ landed | `feat(as): land U-AS-30` | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
