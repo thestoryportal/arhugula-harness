@@ -69,6 +69,7 @@ updates happen at cluster close, not per unit.
 | U-AS-33 | AS-axis substrate seam exports manifest (terminal exporter — 7 seams) | C-AS-16 §16.1-§16.7 | ✅ landed | `feat(as): land U-AS-33` | 2026-05-16 |
 | U-CP-02 | `ProviderCapabilities` reflection contract (10-field record + `ProviderCapability` enum) | C-CP-01 §1.2 | ✅ landed | `feat(cp): land U-CP-02` | 2026-05-16 |
 | U-CP-01 | `routing.*` namespace + 4-attribute schema (`RoutingAttributeSchema`, `ROUTING_NAMESPACE_SCHEMA`) | C-CP-01 §1.4 | ✅ landed | `feat(cp): land U-CP-01` | 2026-05-16 |
+| U-CP-21 | `engine.*` namespace + 4-attribute schema (`EngineAttributeSchema`, `ENGINE_NAMESPACE_SCHEMA`, `ReplayDisposition`, `REPLAY_DISPOSITION_MAPPING`) | C-CP-09 §9.1 | ✅ landed | `feat(cp): land U-CP-21` | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
