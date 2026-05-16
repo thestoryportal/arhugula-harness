@@ -4,10 +4,11 @@ Implements C-IS-01 §1 (canonical filesystem path contract). Resolves a
 `(path_class, workflow_class, deployment_surface)` triple to a canonical
 filesystem `Path`, consulting only the U-IS-02 path-binding configuration.
 
-Authority: Implementation_Plan_Information_Substrate_v2_1.md §2 U-IS-02
-(preserved verbatim at v2.2); Spec_Information_Substrate_v1.md §1 C-IS-01.
+Authority: Implementation_Plan_Information_Substrate_v2_3.md §2 U-IS-02
+(REVISED — R2); Spec_Information_Substrate_v1.md §1 C-IS-01.
 
-Depends on: U-IS-01 (`PathClass`).
+Depends on: U-IS-01 (`PathClass`); `harness-core` U-CP-00 (`WorkloadClass`),
+U-CORE-01 (`DeploymentSurface`) — the R2 carrier re-point.
 
 Acceptance #5 ("resolver does not produce paths violating the C-IS-02
 substrate-residence rule") holds by construction: the resolver performs no
@@ -22,7 +23,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harness_is.path_binding import DeploymentSurface, PathBinding, WorkflowClass
+from harness_core import DeploymentSurface, WorkloadClass
+
+from harness_is.path_binding import PathBinding
 from harness_is.path_class_registry import PathClass
 
 
@@ -38,14 +41,14 @@ class PathResolver:
     """Resolves path-class triples to canonical paths via a `PathBinding`."""
 
     def __init__(self, binding: PathBinding) -> None:
-        self._map: dict[tuple[PathClass, str, str], str] = {
+        self._map: dict[tuple[PathClass, WorkloadClass, DeploymentSurface], str] = {
             (e.path_class, e.workflow_class, e.deployment_surface): e.path for e in binding.entries
         }
 
     def resolve_path(
         self,
         path_class: PathClass,
-        workflow_class: WorkflowClass,
+        workflow_class: WorkloadClass,
         deployment_surface: DeploymentSurface,
     ) -> Path:
         """Resolve a triple to its canonical `Path`.

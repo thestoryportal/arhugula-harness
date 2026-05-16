@@ -20,11 +20,9 @@ from harness_is.git_tier_sub_role_taxonomy import (
     SubRolePosture,
 )
 from harness_is.path_binding import (
-    DeploymentSurface,
     PathBinding,
     PathBindingDuplicateError,
     PathBindingEntry,
-    WorkflowClass,
     load_path_binding,
 )
 from harness_is.path_class_registry import (
@@ -46,7 +44,6 @@ __all__ = [
     "ArtifactTier",
     "ArtifactTierMetadata",
     "ContractID",
-    "DeploymentSurface",
     "GitTierSubRole",
     "GitTierSubRoleMetadata",
     "PathBinding",
@@ -62,6 +59,5 @@ __all__ = [
     "SubstrateResidence",
     "SurvivalScope",
     "VisibilitySurface",
-    "WorkflowClass",
     "load_path_binding",
 ]

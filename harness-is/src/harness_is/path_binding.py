@@ -5,34 +5,29 @@ implementation-time path-binding configuration consumed by the path
 resolver: canonical path strings per `(path_class, workflow_class,
 deployment_surface)` cell.
 
-Authority: Implementation_Plan_Information_Substrate_v2_1.md §2 U-IS-02
-(preserved verbatim at v2.2); Spec_Information_Substrate_v1.md §1 C-IS-01
-("Deferred to implementation discretion: specific canonical path strings
-per workflow class per deployment-surface cell").
+Authority: Implementation_Plan_Information_Substrate_v2_3.md §2 U-IS-02
+(REVISED — R2); Spec_Information_Substrate_v1.md §1 C-IS-01 ("Deferred to
+implementation discretion: specific canonical path strings per workflow class
+per deployment-surface cell").
 
-Resolution of a U-IS-02 under-specification: the U-IS-02 signature names
-`WorkflowClass` and `DeploymentSurface` types without defining them. The
-U-IS-02 `Inputs` field describes them as a "workflow class identifier" and
-"deployment surface identifier" — keys into this configuration, not the
-CP-axis workflow-class taxonomy (H_T-CP-11, owned by CP). They are modelled
-here as opaque string identifiers; IS does not own the taxonomy, so U-IS-02
-declares no cross-axis dependency (X-AL-3 — no silent design extension).
+R2 carrier re-point: U-IS-02's `workflow_class` / `deployment_surface` signature
+positions consume the cross-axis carriers — `WorkloadClass` from `harness-core`
+(U-CP-00) and `DeploymentSurface` from `harness-core` (U-CORE-01). The v2.1/v2.2
+landed source modelled both as IS-local opaque `str` newtypes (no carrier
+existed); per the carrier-map T2 FACTOR-OUT verdict the concepts are
+spec-committed and the carriers are canonical, so the local declarations are
+deleted and the types re-pointed. `harness-core` is shared substrate — the
+import is not an outbound CXA edge (IS = 0 outbound edges holds).
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import NewType
 
+from harness_core import DeploymentSurface, WorkloadClass
 from pydantic import BaseModel, ConfigDict
 
 from harness_is.path_class_registry import PathClass
-
-WorkflowClass = NewType("WorkflowClass", str)
-"""Opaque workflow-class identifier — a path-binding lookup key."""
-
-DeploymentSurface = NewType("DeploymentSurface", str)
-"""Opaque deployment-surface identifier — a path-binding lookup key."""
 
 
 class PathBindingEntry(BaseModel):
@@ -41,7 +36,7 @@ class PathBindingEntry(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     path_class: PathClass
-    workflow_class: WorkflowClass
+    workflow_class: WorkloadClass
     deployment_surface: DeploymentSurface
     path: str
     """Canonical path string for this cell (implementation-time discretion)."""
@@ -68,7 +63,7 @@ def load_path_binding(raw_entries: Iterable[Mapping[str, object]]) -> PathBindin
     stability invariant (U-IS-02 acceptance #1/#2) to hold.
     """
     entries = tuple(PathBindingEntry.model_validate(record) for record in raw_entries)
-    seen: set[tuple[PathClass, str, str]] = set()
+    seen: set[tuple[PathClass, WorkloadClass, DeploymentSurface]] = set()
     for entry in entries:
         triple = (entry.path_class, entry.workflow_class, entry.deployment_surface)
         if triple in seen:
