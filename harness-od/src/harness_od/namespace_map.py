@@ -154,8 +154,12 @@ NAMESPACE_MAP: tuple[NamespaceMapRow, ...] = (
         source_contract_ref="C-CP-20 §20.6",
     ),
     NamespaceMapRow(
+        # OD spec §5.1 row 7 gives no integer ("included in C-CP-14 §14.2
+        # topology.* attribute set"); the count is sourced from the CP spec
+        # C-CP-24 export table (Spec_Control_Plane_v1_2.md line 2146 —
+        # `topology.*` C-CP-14 §14.2 = 10 attributes).
         namespace_prefix="topology.fanout.",
-        attribute_count=7,
+        attribute_count=10,
         source_axis=NamespaceSourceAxis.CP_SOURCE,
         source_contract_ref="C-CP-14 §14.2",
     ),
