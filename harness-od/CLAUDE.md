@@ -10,14 +10,14 @@
 
 The Operational Discipline (OD) axis owns **observability + cost + audit + HITL primitive**: HITL invocation primitive (4-response palette canonical schema), audit ledger schema (hash-chain integrity composition), cost attribution 5-step chain (per-attempt + idempotency-key join + hash-chain composition + replay-aware dedup + cause_attribution invariance), validator fail catalog (medium-cardinality cause_attribution + 5-class fail-class taxonomy), 15-namespace OTel observability ingestion map (`anthropic.*` / `mcp.*` / `skill.*` / `managed_agents.*` / `sandbox.*` / `hitl.*` / `topology.*` / `subagent.*` / `engine.*` / `audit.*` / `validator.fail.*` / `files.*` / `memory.*` / `harness.breaker.*` / `provider_discriminator.*`), F3 capability-floor lifecycle event mapping, in-process OTLP collector + sampling discipline.
 
-OD posture per `Cross_Axis_Composition_Document_v2_1.md` §2.1: **consumer-most-downstream axis** — 0 outbound cross-axis edges; 28 inbound consumer edges (6 → IS at CXA v2.1 baseline / 4 at OD plan v2.4 per C3-15; 10 → AS; 12 → CP). OD terminates the axis-level dependency graph.
+OD posture per `Cross_Axis_Composition_Document_v2_1.md` §2.1: **consumer-most-downstream axis** — 0 outbound cross-axis edges; 26 inbound consumer edges (6 → IS at CXA v2.1 baseline / 4 at OD plan v2.6 per C3-15; 10 → AS; 12 → CP). OD terminates the axis-level dependency graph.
 
 ### 1.2 Spec + plan authority
 
 | Artifact | Version | Role |
 |---|---|---|
 | `Spec_Operational_Discipline_v1_3.md` | v1.3 | Contract authority — 23 contracts C-OD-01 through C-OD-23 |
-| `Implementation_Plan_Operational_Discipline_v2_4.md` | v2.4 (F3-02 closure record over v2.3; C3-15 Path (i-refined) deletions absorbed at §4.5.1) | Execution authority — 34 atomic units across 8 clusters and 10 topological levels (L0–L9) |
+| `Implementation_Plan_Operational_Discipline_v2_6.md` | v2.6 (R5 materializability conformance over v2.4; U-OD-00 audit-ledger carrier added) | Execution authority — 35 atomic units across 8 clusters (+ U-OD-00 pre-cluster) and 10 topological levels (L0–L9) |
 
 ### 1.3 Scope inclusion
 
@@ -68,22 +68,22 @@ OD is consumer-most-downstream; all OD-direction edges are **outbound consumer e
 
 | Edge direction | Edges | Source artifact |
 |---|---|---|
-| OD → IS (outbound consumer) | 6 (CXA v2.1 baseline) / 4 (OD plan v2.4 §4.5.1 per C3-15 Path (i-refined) deletions) | `Cross_Axis_Composition_Document_v2_1.md` §2.3.5; `Implementation_Plan_Operational_Discipline_v2_4.md` §0.7 + §4.5.1 |
+| OD → IS (outbound consumer) | 6 (CXA v2.1 baseline) / 4 (OD plan v2.6 §4.5.1 per C3-15 Path (i-refined) deletions) | `Cross_Axis_Composition_Document_v2_1.md` §2.3.5; `Implementation_Plan_Operational_Discipline_v2_6.md` §0.7 + §4.5.1 |
 | OD → AS (outbound consumer) | 10 | `Cross_Axis_Composition_Document_v2_1.md` §2.3.6 |
 | OD → CP (outbound consumer) | 12 | `Cross_Axis_Composition_Document_v2_1.md` §2.3.3 |
 | **OD outbound (downstream)** | **0** | OD terminates the axis-level dependency graph |
 
-CXA-OD-IS-EDGE-DRIFT Class 3 informational item: CXA v2.1 §2.3.5 enumerates 6 edges (baseline at OD plan v2.3); OD plan v2.4 §4.5.1 enumerates 4 (rows 2 + 3 deleted as OD-internal mis-routed; rows 4 + 5 remapped to canonical IS contracts). Routing: future composition-document revision pass; non-blocking.
+CXA-OD-IS-EDGE-DRIFT Class 3 informational item: CXA v2.1 §2.3.5 enumerates 6 edges (baseline at OD plan v2.3); OD plan v2.6 §4.5.1 enumerates 4 (rows 2 + 3 deleted as OD-internal mis-routed; rows 4 + 5 remapped to canonical IS contracts). Routing: future composition-document revision pass; non-blocking.
 
 ### 2.3 OD-internal cross-cluster dependencies (NOT cross-axis)
 
-Per `Implementation_Plan_Operational_Discipline_v2_4.md` §0.7 + §0.9: sqlite substrate residence + ring-buffer eviction are OD-internal concerns (NOT cross-axis edges). C3-15 closure formalized this distinction via Path (i-refined) deletions at v2.4 §4.5.1. OD-internal cross-cluster compositions are within-axis dependencies; cross-axis enumeration at §4.5 covers cross-axis only.
+Per `Implementation_Plan_Operational_Discipline_v2_6.md` §0.7 + §0.9: sqlite substrate residence + ring-buffer eviction are OD-internal concerns (NOT cross-axis edges). C3-15 closure formalized this distinction via Path (i-refined) deletions at v2.6 §4.5.1. OD-internal cross-cluster compositions are within-axis dependencies; cross-axis enumeration at §4.5 covers cross-axis only.
 
 ---
 
 ## 3. Topological entry-points (Level 0)
 
-Per `Implementation_Plan_Operational_Discipline_v1.md` §0.2 plan-level invariants (preserved at v2.4):
+Per `Implementation_Plan_Operational_Discipline_v1.md` §0.2 plan-level invariants (preserved at v2.6):
 
 | L0 unit | Scope | Cluster |
 |---|---|---|
@@ -93,7 +93,7 @@ Per `Implementation_Plan_Operational_Discipline_v1.md` §0.2 plan-level invarian
 
 **3 L0 units; in-degree 0.** Phase 7 sub-phase 7b OD-axis-stream execution begins from these entry-points.
 
-### 3.1 OD plan-level invariants (preserved at v2.4)
+### 3.1 OD plan-level invariants (preserved at v2.6)
 
 | Invariant | Value |
 |---|---|
@@ -112,7 +112,7 @@ Per `Implementation_Plan_Operational_Discipline_v1.md` §0.2 plan-level invarian
 
 ### 3.2 Coverage matrix verification
 
-Per OD plan §4 (preserved at v2.4): 23 of 23 contracts covered by ≥1 unit; no coverage gaps. Coverage matrix per-axis-only per OD-S4-2.A.
+Per OD plan §4 (preserved at v2.6): 23 of 23 contracts covered by ≥1 unit; no coverage gaps. Coverage matrix per-axis-only per OD-S4-2.A.
 
 ---
 
@@ -154,7 +154,7 @@ Axis-specific design defects route per `Project_Workflow_v1_8.md` §2.7.6 + work
 
 | Defect locus | Class 1 routing |
 |---|---|
-| OD plan v2.4 atomic unit signature defect | Phase 6 plan revision-pass at design-phase workspace |
+| OD plan v2.6 atomic unit signature defect | Phase 6 plan revision-pass at design-phase workspace |
 | OD spec v1.3 contract defect (C-OD-NN under-specifies the surface; spec inconsistent with ADR) | Phase 5 spec revision-pass at design-phase workspace |
 | ADR-D1 v1.2 / D4 v1.1 / D5 v1.3 / D6 v1.2 / F2 v1.2 / F3 v1.1 anchor decision defect | Phase 3a/3b ADR revision via council convening |
 | ADD v1.3 attestation mismatch with OD spec v1.3 | Phase 3d ADD revision |
@@ -165,10 +165,10 @@ Axis-specific design defects route per `Project_Workflow_v1_8.md` §2.7.6 + work
 
 | Carry-forward | Status | Routing |
 |---|---|---|
-| F2-12 cascade Step 6b (OD plan layer) | CLOSED at v2.2; preserved at v2.3 + v2.4 per `F2-12_Closure_Declaration.md` | No action |
-| F3-02 IS-axis revision (U-OD-20 acceptance #11 `Depends on` placeholder `U-IS-NN` → canonical `U-IS-12`) | CLOSED at v2.4 §0.7 (Form A — citation precision) | No action |
-| C3-15 Path (i-refined) deletions at §4.5.1 (OD-internal mis-routed cross-axis edges) | CLOSED at v2.4 §0.7 | No action |
-| CXA-OD-IS-EDGE-DRIFT (Class 3 informational) | CXA v2.1 §2.3.5 enumerates 6 edges; OD plan v2.4 §4.5.1 enumerates 4 | Non-blocking; future composition-document revision pass |
+| F2-12 cascade Step 6b (OD plan layer) | CLOSED at v2.2; preserved through v2.6 per `F2-12_Closure_Declaration.md` | No action |
+| F3-02 IS-axis revision (U-OD-20 acceptance #11 `Depends on` placeholder `U-IS-NN` → canonical `U-IS-12`) | CLOSED at v2.4 §0.7 (Form A — citation precision); preserved at v2.6 | No action |
+| C3-15 Path (i-refined) deletions at §4.5.1 (OD-internal mis-routed cross-axis edges) | CLOSED at v2.4 §0.7; preserved at v2.6 | No action |
+| CXA-OD-IS-EDGE-DRIFT (Class 3 informational) | CXA v2.1 §2.3.5 enumerates 6 edges; OD plan v2.6 §4.5.1 enumerates 4 | Non-blocking; future composition-document revision pass |
 | OD-INTERNAL-FORMALIZATION (Class 3 informational) | OD plan lacks explicit "OD-internal cross-cluster dependency" section that canonicalizes sqlite substrate + ring-buffer eviction as within-axis (non-cross-axis) compositions | Non-blocking; future OD plan revision pass (formalization deferred) |
 
 ### 5.3 Filing footer
@@ -178,7 +178,7 @@ Axis-specific design defects route per `Project_Workflow_v1_8.md` §2.7.6 + work
 | Artifact | `harness-od/CLAUDE.md` |
 | Authored at | Phase 6.5 Session 6 (ε), 2026-05-15 |
 | Authoring authority | `Phase_6_5_Session_6_Kickoff.md` §2.1.2 |
-| Predecessor | Design-phase workspace OD spec v1.3 + OD plan v2.4 |
+| Predecessor | Design-phase workspace OD spec v1.3 + OD plan v2.6 |
 | Revision policy | This file is canonical for the `harness-od/` subdirectory; revisions route to design-phase back-flow per §5.1 |
 
 ---

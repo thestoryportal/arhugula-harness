@@ -17,9 +17,9 @@ IS is the **consumer-most-upstream axis** per `Cross_Axis_Composition_Document_v
 | Artifact | Version | Role |
 |---|---|---|
 | `Spec_Information_Substrate_v1.md` | v1.2 (per ADD v1.3 attestation) | Contract authority — 10 contracts C-IS-01 through C-IS-10 |
-| `Implementation_Plan_Information_Substrate_v2_2.md` | v2.2 (F3-02 closure record over v2.1) | Execution authority — 17 atomic units across 6 clusters and 6 topological levels (L0–L5) |
+| `Implementation_Plan_Information_Substrate_v2_3.md` | v2.3 (R2 materializability conformance over v2.2) | Execution authority — 17 atomic units across 6 clusters and 6 topological levels (L0–L5) |
 
-### 1.3 Scope inclusion (per IS plan v2.1 §4 coverage matrix; preserved verbatim at v2.2)
+### 1.3 Scope inclusion (per IS plan v2.1 §4 coverage matrix; preserved verbatim at v2.3)
 
 | Surface | Carrier units | Spec contract |
 |---|---|---|
@@ -79,16 +79,16 @@ IS is consumer-most-upstream; all IS-direction edges are **inbound**:
 
 | Source axis → IS | Edges | Source artifact |
 |---|---|---|
-| AS → IS | 13 | `Cross_Axis_Composition_Document_v2_1.md` §2.3.1; `Implementation_Plan_Action_Surface_v1.md` §3.4 |
+| AS → IS | 13 | `Cross_Axis_Composition_Document_v2_1.md` §2.3.1; `Implementation_Plan_Action_Surface_v1_2.md` §3.4 |
 | CP → IS | 36 | `Cross_Axis_Composition_Document_v2_1.md` §2.3.2 |
-| OD → IS | 6 (CXA v2.1 baseline) / 4 (OD plan v2.4 §4.5.1 per C3-15 Path (i-refined) deletions) | `Cross_Axis_Composition_Document_v2_1.md` §2.3.5; drift recorded at `Implementation_Plan_Information_Substrate_v2_2.md` §0.9 (CXA-OD-IS-EDGE-DRIFT, Class 3 informational) |
+| OD → IS | 6 (CXA v2.1 baseline) / 4 (OD plan v2.6 §4.5.1 per C3-15 Path (i-refined) deletions) | `Cross_Axis_Composition_Document_v2_1.md` §2.3.5; drift recorded at `Implementation_Plan_Information_Substrate_v2_3.md` §0.9 (CXA-OD-IS-EDGE-DRIFT, Class 3 informational) |
 | **IS outbound** | **0** | IS exports surface via U-IS-17 manifest; consumers declare `Depends on` at consumer-side plans |
 
 ---
 
 ## 3. Topological entry-points (Level 0)
 
-Per `Implementation_Plan_Information_Substrate_v2_1.md` §3.4 ASCII dependency graph (preserved verbatim at v2.2 §0.3):
+Per `Implementation_Plan_Information_Substrate_v2_1.md` §3.4 ASCII dependency graph (preserved verbatim at v2.3 §0.3):
 
 | L0 unit | Implements | Cluster |
 |---|---|---|
@@ -100,7 +100,7 @@ Per `Implementation_Plan_Information_Substrate_v2_1.md` §3.4 ASCII dependency g
 
 **5 L0 units; in-degree 0.** Phase 7 sub-phase 7b IS-axis-stream execution begins from these entry-points.
 
-### 3.1 Full DAG topology (canonical at v2.1; preserved at v2.2)
+### 3.1 Full DAG topology (canonical at v2.1; preserved at v2.3)
 
 ```
 LEVEL 0:   U-IS-01, U-IS-03, U-IS-04, U-IS-07, U-IS-13
@@ -115,7 +115,7 @@ DAG verified acyclic per IS plan v2.1 §3.4 Kahn execution: 17 units consumed; r
 
 ### 3.2 Coverage matrix verification
 
-Per IS plan v2.1 §4 (preserved at v2.2): 10 of 10 contracts covered by ≥1 unit; no coverage gaps. Coverage matrix per-axis-only per OD-S1-2.A; aggregate cross-axis matrix not composed.
+Per IS plan v2.1 §4 (preserved at v2.3): 10 of 10 contracts covered by ≥1 unit; no coverage gaps. Coverage matrix per-axis-only per OD-S1-2.A; aggregate cross-axis matrix not composed.
 
 ---
 
@@ -157,7 +157,7 @@ Axis-specific design defects route per `Project_Workflow_v1_8.md` §2.7.6 + work
 
 | Defect locus | Class 1 routing |
 |---|---|
-| IS plan v2.2 atomic unit signature defect (acceptance criteria unimplementable; cross-unit dependency wrong) | Phase 6 plan revision-pass at design-phase workspace |
+| IS plan v2.3 atomic unit signature defect (acceptance criteria unimplementable; cross-unit dependency wrong) | Phase 6 plan revision-pass at design-phase workspace |
 | IS spec v1.2 contract defect (C-IS-NN under-specifies the surface; spec inconsistent with ADR) | Phase 5 spec revision-pass at design-phase workspace |
 | ADR-F2 v1.2 / F3 v1.1 / D1 v1.2 / D3 v1.2 anchor decision defect | Phase 3a/3b ADR revision via council convening |
 | ADD v1.3 attestation mismatch with IS spec v1.2 | Phase 3d ADD revision |
@@ -169,7 +169,7 @@ Axis-specific design defects route per `Project_Workflow_v1_8.md` §2.7.6 + work
 | Carry-forward | Status | Routing |
 |---|---|---|
 | CF-1 (F2-12) — D1 v1.1 → v1.2 replay-trace-emission contract | CLOSED at Phase 6 close cascade per `F2-12_Closure_Declaration.md` | No action |
-| CXA-OD-IS-EDGE-DRIFT (Class 3) | CXA v2.1 §2.3.5 enumerates 6 OD→IS edges; OD plan v2.4 §4.5.1 enumerates 4 per C3-15 Path (i-refined) deletions. Cardinality drift surfaced at IS plan v2.2 §0.9 + OD plan v2.4 §0.9 | Non-blocking; future composition-document revision pass |
+| CXA-OD-IS-EDGE-DRIFT (Class 3) | CXA v2.1 §2.3.5 enumerates 6 OD→IS edges; OD plan v2.6 §4.5.1 enumerates 4 per C3-15 Path (i-refined) deletions. Cardinality drift surfaced at IS plan v2.3 §0.9 + OD plan v2.6 §0.9 | Non-blocking; future composition-document revision pass |
 
 ### 5.3 Filing footer
 
@@ -178,7 +178,7 @@ Axis-specific design defects route per `Project_Workflow_v1_8.md` §2.7.6 + work
 | Artifact | `harness-is/CLAUDE.md` |
 | Authored at | Phase 6.5 Session 6 (ε), 2026-05-15 |
 | Authoring authority | `Phase_6_5_Session_6_Kickoff.md` §2.1.2 |
-| Predecessor | Design-phase workspace IS spec v1.2 + IS plan v2.2 |
+| Predecessor | Design-phase workspace IS spec v1.2 + IS plan v2.3 |
 | Revision policy | This file is canonical for the `harness-is/` subdirectory; revisions route to design-phase back-flow per §5.1 |
 
 ---

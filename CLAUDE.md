@@ -84,10 +84,10 @@ All canonical artifacts reside at the **design-phase workspace** (separate Claud
 | Axis | Plan | Unit count |
 |---|---|---|
 | core | `Implementation_Plan_Harness_Core_v1_0.md` | 1 unit (U-CORE-01) — shared-type carrier; added 2026-05-15 per revision pass R1 |
-| IS | `Implementation_Plan_Information_Substrate_v2_2.md` | 17 units (U-IS-01 – U-IS-17) |
-| AS | `Implementation_Plan_Action_Surface_v1.md` | 33 units (U-AS-01 – U-AS-33) |
-| CP | `Implementation_Plan_Control_Plane_v2_3.md` | 55 units (U-CP-01 – U-CP-55) |
-| OD | `Implementation_Plan_Operational_Discipline_v2_4.md` | Per OD plan unit inventory |
+| IS | `Implementation_Plan_Information_Substrate_v2_3.md` | 17 units (U-IS-01 – U-IS-17) |
+| AS | `Implementation_Plan_Action_Surface_v1_2.md` | 33 units (U-AS-01 – U-AS-33) |
+| CP | `Implementation_Plan_Control_Plane_v2_6.md` | 57 units (U-CP-00b added; U-CP-01 – U-CP-55 + U-CP-00 + U-CP-00b) |
+| OD | `Implementation_Plan_Operational_Discipline_v2_6.md` | 35 units (U-OD-00 added; U-OD-00, U-OD-01 – U-OD-34) |
 | CXA | `Cross_Axis_Composition_Document_v2_1.md` | 101 cross-axis edges (6 composition buckets) |
 
 ### 2.5 Per-axis subdirectory `CLAUDE.md` pointers

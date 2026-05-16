@@ -155,13 +155,22 @@ survives in any conformed plan. The R-series introduced no new undeclared
 type, no dependency cycle, no unbased signature. **The coding lane is
 CLEARED TO RESUME** on the ~125 remaining units.
 
-**Pre-resume cleanup (mechanical, non-blocking):**
-- CLAUDE.md-family version-token refresh — root §2.4 plan pointers + per-axis
-  `CLAUDE.md` files lag the R-series; plan `Implements` citation tokens lag
-  (AS v1.2 cites spec v1.2, now v1.3 — content already matches).
-- Landed-unit source re-checks — U-IS-02, U-AS-02, U-AS-04, U-OD-01, U-OD-04,
-  U-CP-10, U-CP-15 (built before their carriers existed; re-point to carriers).
-- Carried verbatim items — U-CP-23, U-CP-43.
+**Pre-resume cleanup — ✅ DONE 2026-05-15:**
+- CLAUDE.md-family version-token refresh — root `CLAUDE.md` §2.2/§2.3/§2.4 +
+  all 4 per-axis `CLAUDE.md` files refreshed to current plan/spec/ADR versions.
+- Landed-unit re-check inventory — `.harness/landed_unit_recheck_inventory.md`.
+  **Correction:** the "7 landed units" assumption was wrong — **U-CP-10 was
+  never landed** (no source in `harness-cp/src/`); it is implemented fresh
+  against CP v2.6, not retrospectively re-pointed. Of the 6 genuinely-landed
+  units: 1 re-point doable now (U-IS-02 `WorkloadClass`→U-CP-00); 5 carrier-
+  gated on U-CORE-01 coding (U-IS-02/U-AS-04/U-OD-01 enums); U-AS-02/U-CP-15
+  need no re-point; U-OD-04 is carrier-grown (additive, not a re-point).
+
+**Coding-lane resume worklist (first move): land U-CORE-01**, then the
+carrier-gated re-point sweep across U-IS-02 / U-AS-04 / U-OD-01.
+
+**Still carried:** verbatim items U-CP-23, U-CP-43 (pre-date the R-series;
+verbatim-axis, not materializability).
 | RC-B | Re-check CP + OD conformed plans → `.harness/recheck_cp_od.md` | ✅ COMPLETE 2026-05-15 — **CP CLEARED · OD CLEARED.** Clean re-check; no blocking residual (only informational landed-source / version-token items, all already tracked). |
 
 After RC clears: coding lane **resumes** on the ~125 remaining units. Carried

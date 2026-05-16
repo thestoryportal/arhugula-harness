@@ -10,18 +10,18 @@
 
 The Control Plane (CP) axis owns **orchestration**: multi-LLM routing core + provider portability (ADR-F1 v1.2 anchor), per-layer time-budget + retry namespaces, fallback chain composition + cross-family fallback, workflow manifest schema + per-step override evaluator + audit-ledger composition, EngineClass + ResumptionKind taxonomies, TopologyPattern 6-class enum + admissibility + CascadePolicy, sub-agent handoff schemas, HITL placement + 4-response palette, sandbox-tier dispatch, Skills enabling discipline (CP-side), memory + files primitive consumption, MCP integration + per-server trust framework function, cross-deployment monotonicity.
 
-CP posture per `Cross_Axis_Composition_Document_v2_1.md` §2.1: **largest cross-axis consumer** (60 outbound edges; 36 → IS + 24 → AS); consumer of 12 OD→CP inbound edges (excluded from outbound; CP terminal manifests U-CP-54 + U-CP-55 surface CP exports for OD consumption). Largest axis by unit count (55) and contract count (24).
+CP posture per `Cross_Axis_Composition_Document_v2_1.md` §2.1: **largest cross-axis consumer** (60 outbound edges; 36 → IS + 24 → AS); consumer of 12 OD→CP inbound edges (excluded from outbound; CP terminal manifests U-CP-54 + U-CP-55 surface CP exports for OD consumption). Largest axis by unit count (57) and contract count (24).
 
 ### 1.2 Spec + plan authority
 
 | Artifact | Version | Role |
 |---|---|---|
 | `Spec_Control_Plane_v1_3.md` | v1.3 | Contract authority — 24 contracts C-CP-01 through C-CP-24 |
-| `Implementation_Plan_Control_Plane_v2_3.md` | v2.3 (P6-CK Iter 4 close; F2-01 + F2-02 + F2-03 absorbed) | Execution authority — 55 atomic units across 9 clusters and 9 topological levels (L0–L8) |
+| `Implementation_Plan_Control_Plane_v2_6.md` | v2.6 (R4 materializability conformance over v2.3; U-CP-00b foundational shared-type carrier added) | Execution authority — 57 atomic units across 9 clusters and 9 topological levels (L0–L8) |
 
 ### 1.3 Scope inclusion — 9 clusters
 
-Per `Implementation_Plan_Control_Plane_v1.md` §3.3 cluster table (preserved verbatim at v2.3 §3):
+Per `Implementation_Plan_Control_Plane_v1.md` §3.3 cluster table (preserved verbatim at v2.6 §3):
 
 | Cluster | Scope | Carrier units | Anchor contracts |
 |---|---|---|---|
@@ -34,6 +34,8 @@ Per `Implementation_Plan_Control_Plane_v1.md` §3.3 cluster table (preserved ver
 | 7 | D5 multiplicative gate + audit crypto | U-CP-42 → U-CP-46 (5) | C-CP-20 + C-CP-21 |
 | 8 | D5 escalation + revalidation | U-CP-47 → U-CP-52 (6) | C-CP-22 + C-CP-23 |
 | 9 | T-perm-3 + exports (terminal aggregate exporter manifests) | U-CP-53, U-CP-54, U-CP-55 (3) | C-CP-24 |
+
+The 9-cluster table enumerates the 55 in-cluster units. CP plan v2.6 additionally carries 2 pre-cluster L0 foundational units — U-CP-00 (`WorkloadClass` carrier; landed) and U-CP-00b (CP shared-type carrier: `AttributeValueType` / `Cardinality` + CP structured-type set; added at v2.6 per R4) — for 57 units total.
 
 ### 1.4 Scope exclusion
 
@@ -82,7 +84,7 @@ CP terminal aggregate exporters: U-CP-54 + U-CP-55 (per C-CP-24 §24). 12 OD→C
 | OD → CP (inbound) | 12 | `Cross_Axis_Composition_Document_v2_1.md` §2.3.3 |
 | CP → OD (outbound) | 0 | OD pulls from CP via U-CP-54 + U-CP-55 manifest |
 
-### 2.4 Per-cluster cross-axis edge profile (preserved at v2.3)
+### 2.4 Per-cluster cross-axis edge profile (preserved at v2.6)
 
 | Cluster | Units | Within-axis edges | → IS edges | → AS edges | Total edges |
 |---|---|---|---|---|---|
@@ -101,7 +103,7 @@ CP terminal aggregate exporters: U-CP-54 + U-CP-55 (per C-CP-24 §24). 12 OD→C
 
 ## 3. Topological entry-points (Level 0)
 
-Per `Implementation_Plan_Control_Plane_v1.md` §3.2 topological levels (preserved verbatim at v2.3):
+Per `Implementation_Plan_Control_Plane_v1.md` §3.2 topological levels (preserved verbatim at v2.6):
 
 | L0 unit | Scope | Cluster |
 |---|---|---|
@@ -119,9 +121,9 @@ Per `Implementation_Plan_Control_Plane_v1.md` §3.2 topological levels (preserve
 | U-CP-28 | `HandoffContext` schema | 5 |
 | U-CP-37 | HITL palette declaration (4-response) | 6 |
 
-**13 L0 units; in-degree 0 (or cross-axis-only deps).** Phase 7 sub-phase 7b CP-axis-stream execution begins from these entry-points.
+**13 cluster-bearing L0 units; in-degree 0 (or cross-axis-only deps).** Phase 7 sub-phase 7b CP-axis-stream execution begins from these entry-points. The 2 pre-cluster foundational carriers U-CP-00 + U-CP-00b are additional L0 source nodes (`Depends on: (none)`) outside this cluster-bearing enumeration — 15 L0 source nodes total.
 
-### 3.1 DAG topology (9 levels; 55 nodes; 124 within-axis edges)
+### 3.1 DAG topology (9 levels; 57 nodes incl. U-CP-00 + U-CP-00b L0 carriers; 124 within-axis edges)
 
 ```
 L0  (13 units; foundational + cross-axis-only deps)
@@ -135,11 +137,11 @@ L7  (3 units)   ← U-CP-51, U-CP-53, U-CP-54
 L8  (1 unit)    ← U-CP-55 (terminal aggregate exporter; F2-12 cascade Step 6a closure record carrier)
 ```
 
-DAG verified acyclic per CP plan §3.4 Kahn execution: 55 units consumed; remaining edge set ∅.
+DAG verified acyclic per CP plan §3.4 Kahn execution: 57 units consumed; remaining edge set ∅.
 
 ### 3.2 Coverage matrix verification
 
-Per CP plan §4 (preserved at v2.3 with v2.3 coverage deltas at U-CP-07 + U-CP-12): 24 of 24 contracts covered by ≥1 unit; no coverage gaps. Coverage matrix per-axis-only per OD-S3-2.A.
+Per CP plan §4 (preserved at v2.6 with coverage deltas at U-CP-07 + U-CP-12): 24 of 24 contracts covered by ≥1 unit; no coverage gaps. Coverage matrix per-axis-only per OD-S3-2.A.
 
 ---
 
@@ -185,9 +187,9 @@ Axis-specific design defects route per `Project_Workflow_v1_8.md` §2.7.6 + work
 
 | Defect locus | Class 1 routing |
 |---|---|
-| CP plan v2.3 atomic unit signature defect | Phase 6 plan revision-pass at design-phase workspace |
+| CP plan v2.6 atomic unit signature defect | Phase 6 plan revision-pass at design-phase workspace |
 | CP spec v1.3 contract defect (C-CP-NN under-specifies the surface; spec inconsistent with ADR) | Phase 5 spec revision-pass at design-phase workspace |
-| ADR-F1 v1.2 / F2 v1.2 / F3 v1.1 / F5 v1.1 / D1 v1.2 / D2 v1.1 / D3 v1.2 / D4 v1.1 / D5 v1.3 / D6 v1.2 anchor decision defect | Phase 3a/3b ADR revision via council convening |
+| ADR-F1 v1.2 / F2 v1.2 / F3 v1.1 / F5 v1.1 / D1 v1.2 / D2 v1.2 / D3 v1.2 / D4 v1.1 / D5 v1.3 / D6 v1.2 anchor decision defect | Phase 3a/3b ADR revision via council convening |
 | ADD v1.3 attestation mismatch with CP spec v1.3 | Phase 3d ADD revision |
 | CXA v2.1 §2.3.2 (CP→IS) / §2.3.3 (OD→CP) / §2.3.4 (CP→AS) edge defect | Phase 6 CXA revision-pass at design-phase workspace |
 | CP export seam (U-CP-54 / U-CP-55 manifest) defect; consumer-side OD plan re-cite required | Phase 6 CP plan revision-pass; cascade to OD plan if seam-export shape changes |
@@ -196,7 +198,7 @@ Axis-specific design defects route per `Project_Workflow_v1_8.md` §2.7.6 + work
 
 | Carry-forward | Status | Routing |
 |---|---|---|
-| F2-12 cascade Step 6a (CP plan layer) | CLOSED at v2.2; preserved at v2.3 per `F2-12_Closure_Declaration.md` | No action |
+| F2-12 cascade Step 6a (CP plan layer) | CLOSED at v2.2; preserved through v2.6 per `F2-12_Closure_Declaration.md` | No action |
 | H_T-CP-1 Class 2 substitution-risk surface (multi-LLM commitment unmet at 7a runtime) | CLOSED with operator visibility per `Project_Workflow_v1_8.md` §2.7.7 + `Phase_6_5_Session_4_Close_Handoff.md` §5.2 | Non-blocking; substitution retirement at U-CP-01 landing |
 | GUARDRAIL units (4 of 55; per `Plan_Executability_Audit_v1.md` §3.3) | Project-authored per framework-pull discipline | Phase 7 execution-time; non-blocking |
 
@@ -207,7 +209,7 @@ Axis-specific design defects route per `Project_Workflow_v1_8.md` §2.7.6 + work
 | Artifact | `harness-cp/CLAUDE.md` |
 | Authored at | Phase 6.5 Session 6 (ε), 2026-05-15 |
 | Authoring authority | `Phase_6_5_Session_6_Kickoff.md` §2.1.2 |
-| Predecessor | Design-phase workspace CP spec v1.3 + CP plan v2.3 |
+| Predecessor | Design-phase workspace CP spec v1.3 + CP plan v2.6 |
 | Revision policy | This file is canonical for the `harness-cp/` subdirectory; revisions route to design-phase back-flow per §5.1 |
 
 ---

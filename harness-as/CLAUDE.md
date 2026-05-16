@@ -16,8 +16,8 @@ AS posture per `Cross_Axis_Composition_Document_v2_1.md` §2.1: producer of 13 o
 
 | Artifact | Version | Role |
 |---|---|---|
-| `Spec_Action_Surface_v1.md` | v1.1 | Contract authority — 16 contracts C-AS-01 through C-AS-16 |
-| `Implementation_Plan_Action_Surface_v1.md` | v1 (canonical at Phase 6 close; preserved verbatim through Phase 6.5 arc) | Execution authority — 33 atomic units across 16 contracts and 9 topological levels (L0–L8) |
+| `Spec_Action_Surface_v1.md` | v1.3 (S2 + S3 reconciliation 2026-05-15) | Contract authority — 16 contracts C-AS-01 through C-AS-16 |
+| `Implementation_Plan_Action_Surface_v1_2.md` | v1.2 (R3 + R3.1 materializability conformance over v1) | Execution authority — 33 atomic units across 16 contracts and 9 topological levels (L0–L8) |
 
 ### 1.3 Scope inclusion
 
@@ -59,7 +59,7 @@ Per `Phase_7_Meta_Architecture_v1.md` §2.2 AS-axis primitives:
 |---|---|---|
 | ADR-F4 | v1.1 | Tool contract surface |
 | ADR-F5 | v1.1 | Skills |
-| ADR-D2 | v1.1 | Sandbox + blast radius |
+| ADR-D2 | v1.2 | Sandbox + blast radius |
 | ADR-D3 | v1.2 | Filesystem residence |
 
 ADD attestation: `Architectural_Design_Document_v1_3.md` v1.3.
@@ -72,14 +72,14 @@ Per U-AS-33 substrate seam exports manifest (C-AS-16). Cardinality: 24 edges CP�
 
 | Edge direction | Edges | Source artifact |
 |---|---|---|
-| AS → IS (outbound; 8 AS units → 8 IS carriers) | 13 | `Implementation_Plan_Action_Surface_v1.md` §3.4; `Cross_Axis_Composition_Document_v2_1.md` §2.3.1 |
+| AS → IS (outbound; 8 AS units → 8 IS carriers) | 13 | `Implementation_Plan_Action_Surface_v1_2.md` §3.4; `Cross_Axis_Composition_Document_v2_1.md` §2.3.1 |
 | CP → AS (inbound) | 24 | `Cross_Axis_Composition_Document_v2_1.md` §2.3.4 |
 | OD → AS (inbound) | 10 | `Cross_Axis_Composition_Document_v2_1.md` §2.3.6 |
 | AS → CP / AS → OD (outbound) | 0 | AS does not declare outbound edges to CP or OD; CP/OD pull from U-AS-33 |
 
 ### 2.4 AS → IS edge profile (13 edges across 8 AS units)
 
-Per `Implementation_Plan_Action_Surface_v1.md` §3.4:
+Per `Implementation_Plan_Action_Surface_v1_2.md` §3.4:
 
 | AS unit | IS carrier(s) | IS export seam |
 |---|---|---|
@@ -95,7 +95,7 @@ Edge cardinality verified at U-IS-17 substrate seam exports manifest per CXA v2.
 
 ## 3. Topological entry-points (Level 0)
 
-Per `Implementation_Plan_Action_Surface_v1.md` §3.5 ASCII dependency graph:
+Per `Implementation_Plan_Action_Surface_v1_2.md` §3.5 ASCII dependency graph:
 
 | L0 unit | Implements | Notes |
 |---|---|---|
@@ -164,7 +164,7 @@ Per `Phase_7_Meta_Architecture_v1.md` §7.3:
 
 | Rule | Statement | Anti-pattern foreclosed |
 |---|---|---|
-| AS-AL-1 | Permission modes ≠ SandboxTier enum. Permission modes gate tool-invocation approval; SandboxTier gates code-execution capability per blast-radius taxonomy (ADR-D2 v1.1) | Adopting H_E's 6-mode taxonomy as H_T's SandboxTier decomposition |
+| AS-AL-1 | Permission modes ≠ SandboxTier enum. Permission modes gate tool-invocation approval; SandboxTier gates code-execution capability per blast-radius taxonomy (ADR-D2 v1.2) | Adopting H_E's 6-mode taxonomy as H_T's SandboxTier decomposition |
 | AS-AL-2 | H_E built-in tools are NOT user-extensible H_T tools. All H_T tool surface lives behind MCP server boundary | Collapsing the MCP-server boundary at the H_T design site |
 | AS-AL-3 | H_E Skills loading mechanism is isomorphic; H_T Skills filesystem residence additionally carries cross-axis IS-dependencies (filesystem-path classification per C-IS-01) | Treating "Skills work natively" as license to skip authoring U-AS-25 → U-AS-27 cross-axis edge declarations |
 | AS-AL-4 | Workflow-shape-specific H_E surfaces (LSP / plan mode / Chrome / remote control / agent teams) are OUT OF H_T scope. H_T is workflow-shape-agnostic | Adding H_T primitives for LSP / plan mode / Chrome / remote control / agent teams under any pretext |
@@ -181,10 +181,10 @@ Axis-specific design defects route per `Project_Workflow_v1_8.md` §2.7.6 + work
 
 | Defect locus | Class 1 routing |
 |---|---|
-| AS plan v1 atomic unit signature defect (acceptance criteria unimplementable; cross-unit dependency wrong) | Phase 6 plan revision-pass at design-phase workspace |
-| AS spec v1.1 contract defect (C-AS-NN under-specifies the surface; spec inconsistent with ADR) | Phase 5 spec revision-pass at design-phase workspace |
-| ADR-F4 v1.1 / F5 v1.1 / D2 v1.1 / D3 v1.2 anchor decision defect | Phase 3a/3b ADR revision via council convening |
-| ADD v1.3 attestation mismatch with AS spec v1.1 | Phase 3d ADD revision |
+| AS plan v1.2 atomic unit signature defect (acceptance criteria unimplementable; cross-unit dependency wrong) | Phase 6 plan revision-pass at design-phase workspace |
+| AS spec v1.3 contract defect (C-AS-NN under-specifies the surface; spec inconsistent with ADR) | Phase 5 spec revision-pass at design-phase workspace |
+| ADR-F4 v1.1 / F5 v1.1 / D2 v1.2 / D3 v1.2 anchor decision defect | Phase 3a/3b ADR revision via council convening |
+| ADD v1.3 attestation mismatch with AS spec v1.3 | Phase 3d ADD revision |
 | CXA v2.1 §2.3.1 (AS→IS) / §2.3.4 (CP→AS) / §2.3.6 (OD→AS) edge defect | Phase 6 CXA revision-pass at design-phase workspace |
 | AS export seam (U-AS-33 manifest) defect; consumer-side CP / OD plan re-cite required | Phase 6 AS plan revision-pass; cascade to consumer-side plans if seam-export shape changes |
 
@@ -208,7 +208,7 @@ C7 consultation outcome at audit (preserved): `opentelemetry-instrumentation-gen
 | Artifact | `harness-as/CLAUDE.md` |
 | Authored at | Phase 6.5 Session 6 (ε), 2026-05-15 |
 | Authoring authority | `Phase_6_5_Session_6_Kickoff.md` §2.1.2 |
-| Predecessor | Design-phase workspace AS spec v1.1 + AS plan v1 |
+| Predecessor | Design-phase workspace AS spec v1.3 + AS plan v1.2 |
 | Revision policy | This file is canonical for the `harness-as/` subdirectory; revisions route to design-phase back-flow per §5.1 |
 
 ---
