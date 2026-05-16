@@ -131,13 +131,26 @@ updates happen at cluster close, not per unit.
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
-**CP axis stream — NOT COMPLETE. 44/57 units landed (2026-05-16).** Final-batch
-landed 4 of 9 brief units: U-CP-35, U-CP-43 (partial), U-CP-36, U-CP-53.
-5 brief units BLOCKED on unlanded dependency units (U-CP-46/32/33/50/55); a
-further 8 CP units (U-CP-03/27/39/41/45/49/51/52/54) were never in any batch.
-14 CP units remain unlanded — see `.harness/class_1_tension_cp_scope_discrepancy.md`
-for the residual list + dependency-unblock order. The "9 = final batch" brief
-under-counted the residual.
+**CP axis stream COMPLETE — 57/57 units landed (2026-05-16).** The final 14
+units (U-CP-03/27/39/41/45/46/32/33/49/50/51/52/54/55) landed sequentially in
+the closing batch against `Implementation_Plan_Control_Plane_v2_9.md` (+ the
+v2.4-conformed U-CP-46 body). U-CP-55 is the CP-axis terminal aggregate
+exporter (L8). pyright strict 0 errors; 463 tests green.
+
+**Documented partials / carries (not regressions):**
+- U-CP-06/07/17/29 — earlier-batch partials with struck ACs (span emitter /
+  7c seam pending) — unchanged.
+- U-CP-17 — `operator_preferences` step still struck (`EngineClassPreferences`
+  Class 1, OPEN — see `class_1_tension_u_cp_17_engine_class_preferences_homing.md`,
+  updated: does NOT clear at U-CP-27 landing). v2.9 `HITLInvocation` carrier
+  delta landed during U-CP-52.
+- U-CP-43 acc#5/#6 — spec-silent floors, Class 1 filed — unchanged.
+- `RoleRoutingBinding` / `WorkloadRoutingOverride` (U-CP-04) — stay Class 1
+  (opaque-placeholder land per v2.9 §0.5).
+- Class 3 observations (non-blocking) logged below: U-CP-39 7th-param,
+  U-CP-49↔U-CP-50 plan DAG mutual dep, U-CP-50 diff-set return shape,
+  `MaterialDiff` carrier home, U-CP-51 plan-invented span, U-CP-52 AC#6
+  plan-invented attr.
 
 ## Operational-minimum set (7a exit-criterion #1 — 12 units)
 
