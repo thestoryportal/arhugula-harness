@@ -16,9 +16,9 @@ Item 9 surfaced by the coding lane's own spec-read.
 |---|---|---|---|---|
 | 1 | **U-CP-43** — 4-axis `GateLevelInput` diverges from CP spec §19.1: `per_tool_gate_level` absent, `deployment_surface` plan-added, `MCP_TRUST`/`DEPLOYMENT_SURFACE` floors spec-silent | Class 3 / **Class 1 halt** | U-CP-43 | spec-silence design gap — operator decision on whether §19.1 extends or the plan conforms; routes to CP spec or CP plan revision |
 | 2 | **U-OD-09** — acc #2 Required/Conditional tier split has no OD spec §7.1 basis | Class — / **Class 1 halt** | U-OD-09 | spec-silence — operator decides spec basis or plan conforms |
-| 3 | **U-CP-08** — `FallThroughCause` design gap (silent H_T design extension if invented at the unit) | — / **Class 1** | U-CP-08 | back-flow: CP spec/ADR — needs the cause taxonomy committed upstream |
+| 3 | **U-CP-08** — `FallThroughCause` design gap (silent H_T design extension if invented at the unit) | — / **Class 1** | U-CP-08 | **RESOLVED 2026-05-16** — see Resolved forks; halt under-read §3.5, conformed in CP plan v2.8 |
 | 4 | **U-CP-23** — single-vs-dual `default_pattern` structural mismatch | Class 2 / **Class 2** (non-halting) | — (U-CP-23 clears) | operator picks the structural reading; non-blocking for landing |
-| 5 | **U-CP-11** — LEASE naming call | — / **Class 2** | U-CP-11 | operator naming decision |
+| 5 | **U-CP-11** — LEASE naming call | — / **Class 2** | U-CP-11 | **RESOLVED 2026-05-16** — see Resolved forks; conformed to spec §5.3 in CP plan v2.8 |
 | 6 | **U-OD-28** — `CollectorPlacement` / §20.1 surface — conformance target undetermined | — / **Class 2** *(proposing)* | U-OD-28 | operator resolves the §20.1 conformance target |
 | 7 | **U-OD-29** — plan `TIER_0..TIER_3` diverges from ADR-D2 §1.7.1 canonical `{tier-1..tier-4}`; the plan's §1.2 citation is also wrong (§1.2 is the provider-class enum) | — / **Class 1** (authority-chain-determinate) | U-OD-29 | conform plan to ADR-D2 §1.7.1 — determinate, like §4A; operator-accept → `implementation-planner` revision |
 | 8 | **F1-01** — U-CP-22 v2.5 acc #3 silently SCREAMING_SNAKE_CASE-renders §10.3 workload identifiers without declaring the edit in §0.3 (stem-match preserved) | Class 1 / **Class 3** (informational) | — | inline doc-hygiene fix to CP plan v2.5 §0.3 change-note |
@@ -100,6 +100,9 @@ operator-scoped decision, see report.
 | Tension 003 — `WorkloadClass` undeclared | declared in `harness-core` via new U-CP-00 | 2026-05-15 |
 | Tension 004 — U-OD-04 span schema divergence | subsumed into OD §4A audit; conformed in OD plan v2.5 | 2026-05-15 |
 | Class 1 — U-CORE-01 `WorkflowEvent` payload unmaterializable | operator ruled carrier-thin; payload struck; harness-core plan v1.0→v1.1; U-CORE-01 landed | 2026-05-15 |
+| Item 3 — U-CP-08 `FallThroughCause` design gap | NOT a design gap — original halt under-read C-CP-03 §3.5 (which enumerates the 4-value `fallback.cause` set). Conformed to §3.5 in CP plan v2.8 §2.1. | 2026-05-16 |
+| Item 5 — U-CP-11 LEASE naming/divergence | reading (1) — conform plan to spec C-CP-05 §5.3 — applied per §4A precedent in CP plan v2.8 §2.2; invented 5-tuple + `LeaseEventKind` struck. | 2026-05-16 |
+| U-CP-00b 9 deferred structured types | all 9 verdicted FACTOR-OUT (T2 X-AL-3 resolution); specified + homed at new L0 carrier U-CP-00c in CP plan v2.8 §2.0c. | 2026-05-16 |
 
 ## Open follow-ups
 

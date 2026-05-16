@@ -7,7 +7,7 @@
 | Fork class | Class 1 (halt-execution — spec/plan contradiction) |
 | Filed | 2026-05-16 |
 | Actor | phase-7-implementation |
-| Disposition | **SKIPPED** — unit not landed; routed to design-phase revision |
+| Disposition | **RESOLVED 2026-05-16 (conform-to-spec, reading 1)** — see Resolution update below |
 
 ## Defect
 
@@ -105,3 +105,23 @@ Downstream consumers of `LEASE_NAMESPACE_SCHEMA`:
 
 No unit in the current L0 batch depends on U-CP-11. SKIPPED; the remaining
 batch units proceed unaffected.
+
+## Resolution update — 2026-05-16 (CP plan v2.8 — conform-to-spec, reading 1)
+
+Reading (1) applied per the §4A conform-to-spec precedent (operator-ratified,
+produced CP plan v2.4/v2.5). Spec §5.3 is canonical; the plan's contradicted
+"verbatim" claim and invented 5-tuple are the defect.
+`Implementation_Plan_Control_Plane_v2_8.md` §2.2 conforms U-CP-11:
+
+- `LEASE_NAMESPACE_SCHEMA` 5-tuple conformed to C-CP-05 §5.3 verbatim:
+  `lease.key`, `lease.holder`, `lease.ttl_ms`, `lease.mechanism`,
+  `lease.release_cause`. The invented `lease.id` / `lease.acquired_at` /
+  `lease.duration_ms` / `lease.event_kind` are struck.
+- The invented `LeaseEventKind` enum is **struck** — it discriminated a
+  `lease.event_kind` attribute that does not exist in §5.3.
+- `LeaseMechanism` (6 values) + `LeaseReleaseCause` (4 values) enums added,
+  byte-exact factor-outs of the §5.3 `lease.mechanism` / `lease.release_cause`
+  enum-string domains; declared at U-CP-11 (lease-specific, not shared).
+
+No design extension; no spec edit (the plan conforms to the spec, the spec is
+unchanged). U-CP-11 is now landable against v2.8. Fork-queue item 5 → Resolved.

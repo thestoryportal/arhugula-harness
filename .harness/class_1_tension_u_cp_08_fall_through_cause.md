@@ -7,7 +7,7 @@
 | Fork class | Class 1 (halt-execution — silent H_T design extension) |
 | Filed | 2026-05-16 |
 | Actor | phase-7-implementation |
-| Disposition | **SKIPPED — HALT** — not landed; routed to design-phase back-flow |
+| Disposition | **RESOLVED 2026-05-16 (conform-to-spec)** — see Resolution update below |
 
 ## Defect
 
@@ -121,3 +121,25 @@ Until the operator decides, U-CP-08 stays unlanded. Downstream consumers:
 U-CP-09 (`Depends on: [U-CP-08]`) is itself fork-blocked on Pattern D
 (`AgentRole`) independently; U-CP-05 (`Depends on` includes U-CP-08) is not in
 the Level-1 landing set. No landed unit regresses from this skip.
+
+## Resolution update — 2026-05-16 (CP plan v2.8 — conform-to-spec)
+
+**The original HALT under-read the cited contract.** This record (and the v2.4
+§0.8 carried-finding) read C-CP-03 §3.2/§3.3 only — those sections are procedures
+naming string-literal causes. But the **same contract's §3.5** (the `fallback.*`
+namespace declaration) enumerates the cause taxonomy verbatim, line 401:
+
+> `fallback.cause` ∈ `{time_budget_exceeded, capability_shortfall, breaker_open,
+> rate_limit_storm}`
+
+This is a closed 4-value enumeration. There **is** a spec enumeration to conform
+to — the chain is not silent. `Implementation_Plan_Control_Plane_v2_8.md` §2.1
+conforms U-CP-08: `Implements` corrected `§3.2` → `§3.5, §3.2, §3.3`; the invented
+`{LAYER_NO_DECISION, LAYER_BUDGET_EXHAUSTED, PROVIDER_UNAVAILABLE,
+CAPABILITY_SHORTFALL}` enum is struck and replaced with the §3.5 4-value set
+`{TIME_BUDGET_EXCEEDED, CAPABILITY_SHORTFALL, BREAKER_OPEN, RATE_LIMIT_STORM}`.
+The "layer produced no decision" case is no longer an enum member — it is
+`cause = None` at the `fall_through` signature (a silent advance per §3.2 step 2,
+no `fallback.triggered` event). This is the §4A conform-to-spec resolution
+(operator-ratified, produced CP plan v2.4/v2.5) applied — no design extension, no
+Class 1. U-CP-08 is now landable against v2.8. Fork-queue item 3 → Resolved.

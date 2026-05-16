@@ -87,4 +87,37 @@ are deferred with the types; no landed code dangles (no consumer landed).
 | Artifact | `.harness/class_1_tension_u_cp_00b_structured_types.md` |
 | Authored | Phase 7 7b, 2026-05-15 |
 | Resolution authority | Operator ruling 2026-05-15 (split U-CP-00b) |
-| Status | RESOLVED (split) for the 2 enums; **OPEN** for the 9 structured types — future CP plan revision owed |
+| Status | RESOLVED (split) for the 2 enums; **RESOLVED 2026-05-16** for the 9 structured types (CP plan v2.8 — see §6) |
+
+---
+
+## §6 Resolution of the 9 structured types — 2026-05-16
+
+`Implementation_Plan_Control_Plane_v2_8.md` filed. The 9 structured shared types
+are specified, each as a faithful factor-out of its committing contract per the
+operator-ratified T2 X-AL-3 FACTOR-OUT resolution
+(`.harness/xal3_resolution_recommendations.md` — all 9 verdicted FACTOR-OUT, no
+design-substrate revision needed). They are declared in a **new L0 foundational
+carrier unit U-CP-00c** (`Depends on: (none)`, residence `harness-cp`):
+
+- `ActorIdentity` — `NewType('ActorIdentity', str)` — C-CP-13 §13.5 + carrier-map.
+- `AgentRole` — `NewType('AgentRole', str)` (kind DECIDED: newtype, not enum — CP
+  spec commits no closed agent-role set) — C-CP-01 §1.3 + C-CP-13 §13.
+- `ModelBinding` — record `{provider: str, model: str}` — ADR-F1 v1.2 / C-CP-01
+  §1.4 / C-CP-13 §13.3.
+- `TraceContext` — record `{trace_id, span_id, trace_flags, trace_state}` (W3C) —
+  C-CP-14 §14.1 + Target_Stack_Commitment C-STK-09 (stale "§8" citation corrected).
+- `ProviderAgnosticPayload` — record `{messages, tools, params}` (opaque mappings)
+  — ADR-F1 v1.2 / C-CP-01 §1.1.
+- `RoutingDecisionTrace` — record `{layer: str, candidate, decision_ms,
+  budget_exhausted}` — C-CP-01 §1.4 / C-CP-02 §2.1 / U-CP-05 body.
+- `MCPTrustTier` — enum 4 values — `Spec_Action_Surface_v1.md` C-AS-10 §10.3
+  (no Class 1 filed — AS §10.3 enumerates the framework concretely).
+- `Axis` — enum 5 values — C-CP-19 §19.1 + §19.3.
+- `TailKeepPredicate` — `Callable[[Any], bool]` alias — C-CP-21 §21.3.
+
+§11.1 registry rows updated DEFERRED → U-CP-00c. v2.7 §0.5 deferred-edge note
+superseded — the 15 direct Pattern-D consumer-unit edges are now live `[U-CP-00c]`.
+`CLAUDE.md` §2.4 CP plan pointer updated v2_7 → v2_8. **No type stays deferred;
+no new Class 1 record filed.** A Class 3 informational item logged at v2.8 §0.6
+(CP §19.1 "five-tier" narrative vs AS §10.3 4-level enumeration — non-blocking).
