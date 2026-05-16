@@ -1,41 +1,39 @@
 """Foundational discriminator enums — U-AS-04.
 
-Implements C-AS-02 §2.3 (and forward use at C-AS-09 §9.1 / C-AS-10 §10.1 /
-C-AS-12 §12.2). Declares the call-site discriminator enums consumed by
-downstream AS-axis composition units: deployment surface, persona tier,
-MCP transport.
+Implements C-AS-10 §10.1 (MCP transport-level set). Declares `MCPTransport`,
+the AS-owned transport / remote-trust discriminator, and re-exports the two
+cross-cutting discriminator enums (`DeploymentSurface`, `PersonaTier`) from
+`harness-core` so the AS-axis discriminator surface resolves from one module.
 
-Authority: Implementation_Plan_Action_Surface_v1.md §2 U-AS-04;
-Spec_Action_Surface_v1.md §2 C-AS-02; ADR-D2 v1.1.
+Authority: Implementation_Plan_Action_Surface_v1_2.md §2 U-AS-04 (R3-revised
+body canonical at v1.1 §5.3 — declaration-site conversion);
+Spec_Action_Surface_v1.md C-AS-10 §10.1; ADR-D2 v1.2.
 
-Pure data types — no associated functions, no metadata tables (acceptance
-#6). `PersonaTier` ordering for cross-deployment monotonicity is carried by
-declaration order (SOLO_DEVELOPER < TEAM_BINDING < MULTI_TENANT_COMPLIANCE).
+R3 declaration-site conversion (A-1): the landed source declared local
+`DeploymentSurface` / `PersonaTier` `StrEnum`s because no carrier existed.
+Their values matched U-CORE-01 byte-exact; per the carrier map they are
+cross-axis shared types, so the local declarations are deleted and the types
+imported from `harness-core` (U-CORE-01). `MCPTransport` stays AS-owned.
+Per Q-R3-6, downstream AS consumers carry their own explicit `[U-CORE-01]`
+edges; this module's re-export is a convenience surface, not the dependency
+path.
 """
 
 from __future__ import annotations
 
 from enum import StrEnum
 
+from harness_core import DeploymentSurface, PersonaTier
 
-class DeploymentSurface(StrEnum):
-    """Deployment surface of a harness binding (C-AS-09 §9.1 row axis)."""
-
-    LOCAL_DEVELOPMENT = "local-development"
-    SELF_HOSTED_SERVER = "self-hosted-server"
-    MANAGED_CLOUD = "managed-cloud"
-
-
-class PersonaTier(StrEnum):
-    """Persona tier — declaration order is the monotonic ordering."""
-
-    SOLO_DEVELOPER = "solo-developer"
-    TEAM_BINDING = "team-binding"
-    MULTI_TENANT_COMPLIANCE = "multi-tenant-compliance"
+__all__ = ["DeploymentSurface", "MCPTransport", "PersonaTier"]
 
 
 class MCPTransport(StrEnum):
-    """MCP transport / remote-trust level (C-AS-10 §10.1)."""
+    """MCP transport / remote-trust level (C-AS-10 §10.1).
+
+    Closed at cardinality 5 — adding a value requires a Workflow §4.1.2
+    Class-2 ADR-D2 revision. Identifier strings byte-exact spec-canonical.
+    """
 
     STDIO = "stdio"
     STREAMABLE_HTTP_L0_REFUSE = "streamable_http_l0"
