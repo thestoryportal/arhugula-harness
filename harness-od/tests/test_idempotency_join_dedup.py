@@ -193,6 +193,36 @@ def test_dedup_outcome_matrix_covers_all_five_dispositions() -> None:
         )
 
 
+@pytest.mark.parametrize("attempt", [1, 2])
+@pytest.mark.parametrize("disposition", list(ReplayDisposition))
+@pytest.mark.parametrize("ledger_present", [True, False])
+def test_dedup_outcome_matrix_section_14_5_2_cells(
+    attempt: int,
+    disposition: ReplayDisposition,
+    ledger_present: bool,
+) -> None:
+    """Acceptance #12 — the §14.5.2 dedup outcome matrix over attempt x disposition x ledger.
+
+    Per §14.5.2, ledger entries are per-attempt: attempt N joins via the
+    parent `idempotency_key` but is a DISTINCT entry. `dedupe_on_replay`
+    discriminates on the matched-entry presence + disposition; the
+    `retry.attempt_number` selects WHICH per-attempt entry is matched, not the
+    outcome branch — so the outcome is invariant in `attempt` for a fixed
+    (disposition, ledger_present) cell. This test pins all 5 x 2 x 2 cells.
+    """
+    view = _ingest_view(disposition=disposition, attempt=attempt)
+    ledger = _ledger() if ledger_present else None
+    outcome = dedupe_on_replay(view, ledger)
+    if not ledger_present:
+        assert outcome is DedupOutcome.RECORD_FIRST_INGESTION
+    elif disposition is ReplayDisposition.DETERMINISTIC_REPLAY:
+        assert outcome is DedupOutcome.DROP_DETERMINISTIC_REPLAY_RE_READ
+    elif disposition is ReplayDisposition.NO_REPLAY:
+        assert outcome is DedupOutcome.ERROR_UNEXPECTED_RE_INGESTION_FOR_NO_REPLAY
+    else:
+        assert outcome is DedupOutcome.RECORD_REPLAY_DERIVED
+
+
 # --- §14.5.3 cause_attribution invariance check -----------------------------
 
 
