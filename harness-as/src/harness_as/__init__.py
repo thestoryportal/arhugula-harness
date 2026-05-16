@@ -84,6 +84,10 @@ from harness_as.secret_fetch import (
     fetch_secret,
     tier_resolution_mechanism,
 )
+from harness_as.secret_outputs_hash import (
+    canonicalize_concat_secret_fingerprint,
+    compute_outputs_hash,
+)
 from harness_as.tool_contract import (
     RECOMMENDED_CONTRACT_DEFAULT_TIER,
     ContractValidationOutcome,
@@ -151,7 +155,9 @@ __all__ = [
     "ToolMetadata",
     "adoption_depth",
     "blast_radius_floor",
+    "canonicalize_concat_secret_fingerprint",
     "check_secret_allowlist",
+    "compute_outputs_hash",
     "construct_breaker_key",
     "fail_class_metadata",
     "fetch_secret",
