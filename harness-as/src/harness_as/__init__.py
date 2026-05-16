@@ -48,6 +48,12 @@ from harness_as.forced_tier_resolution import (
     ToolContext,
     forced_tier,
 )
+from harness_as.gate_level_composition import (
+    GateLevel,
+    GateLevelFloorInterfaces,
+    gate_level,
+    tier_to_gate_level_floor,
+)
 from harness_as.mcp_transport_floor import mcp_transport_floor, rejects_at_registration
 from harness_as.operator_policy_override_scope import (
     OverrideScopeResult,
@@ -171,6 +177,8 @@ __all__ = [
     "FloorInterfaces",
     "ForcedTierCause",
     "ForcedTierResult",
+    "GateLevel",
+    "GateLevelFloorInterfaces",
     "JSONSchema",
     "MCPServer",
     "MCPServerTrustLevel",
@@ -220,6 +228,7 @@ __all__ = [
     "fail_class_metadata",
     "fetch_secret",
     "forced_tier",
+    "gate_level",
     "is_tier_at_or_above",
     "lookup_cell",
     "lookup_cell_with_forcing",
@@ -237,6 +246,7 @@ __all__ = [
     "sub_agent_sandbox_tier",
     "tier_metadata",
     "tier_resolution_mechanism",
+    "tier_to_gate_level_floor",
     "validate_skill_attributes_carry_both_version_fields",
     "validate_tool_contract_at_registration",
 ]
