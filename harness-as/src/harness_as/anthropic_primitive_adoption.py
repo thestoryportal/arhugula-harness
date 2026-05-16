@@ -173,8 +173,7 @@ ANTHROPIC_PRIMITIVE_ANCHORS: Mapping[AnthropicPrimitive, AnchorCitation] = Mappi
         ),
         AnthropicPrimitive.CLAUDE_CODE_HOOKS: AnchorCitation(
             source_identifier=(
-                "disler/body-of-work hooks-mastery; "
-                "mindfold-ai/Trellis bracketed-hooks witness"
+                "disler/body-of-work hooks-mastery; mindfold-ai/Trellis bracketed-hooks witness"
             ),
             confidence_tag=ConfidenceTag.MODERATE,
         ),
@@ -187,9 +186,7 @@ ANTHROPIC_PRIMITIVE_ANCHORS: Mapping[AnthropicPrimitive, AnchorCitation] = Mappi
             confidence_tag=ConfidenceTag.HIGH,
         ),
         AnthropicPrimitive.MEMORY_TOOL: AnchorCitation(
-            source_identifier=(
-                "docs.claude.com/en/docs/agents-and-tools/tool-use/memory-tool"
-            ),
+            source_identifier=("docs.claude.com/en/docs/agents-and-tools/tool-use/memory-tool"),
             confidence_tag=ConfidenceTag.HIGH,
         ),
     }
@@ -317,47 +314,43 @@ _MATRIX_SPEC: dict[
     (AnthropicPrimitive.MEMORY_TOOL, _SE): (
         _o,
         None,
-        "per-workload selection; structurally available all surfaces "
-        "(storage backend per §13.6)",
+        "per-workload selection; structurally available all surfaces (storage backend per §13.6)",
     ),
     (AnthropicPrimitive.MEMORY_TOOL, _CC): (
         _o,
         None,
-        "per-workload selection; structurally available all surfaces "
-        "(storage backend per §13.6)",
+        "per-workload selection; structurally available all surfaces (storage backend per §13.6)",
     ),
     (AnthropicPrimitive.MEMORY_TOOL, _PA): (
         _o,
         None,
-        "per-workload selection; structurally available all surfaces "
-        "(storage backend per §13.6)",
+        "per-workload selection; structurally available all surfaces (storage backend per §13.6)",
     ),
     (AnthropicPrimitive.MEMORY_TOOL, _RE): (
         _o,
         None,
-        "per-workload selection; structurally available all surfaces "
-        "(storage backend per §13.6)",
+        "per-workload selection; structurally available all surfaces (storage backend per §13.6)",
     ),
 }
 
 #: The 44-cell per-primitive by workload-class adoption-depth matrix (§13.2).
-ADOPTION_DEPTH_MATRIX: Mapping[
-    tuple[AnthropicPrimitive, WorkloadClass], AdoptionDepthBinding
-] = MappingProxyType(
-    {
-        (primitive, workload): AdoptionDepthBinding(
-            primitive=primitive,
-            workload_class=workload,
-            depth=depth,
-            surface_qualifier=surface_qualifier,
-            notes=notes,
-        )
-        for (primitive, workload), (
-            depth,
-            surface_qualifier,
-            notes,
-        ) in _MATRIX_SPEC.items()
-    }
+ADOPTION_DEPTH_MATRIX: Mapping[tuple[AnthropicPrimitive, WorkloadClass], AdoptionDepthBinding] = (
+    MappingProxyType(
+        {
+            (primitive, workload): AdoptionDepthBinding(
+                primitive=primitive,
+                workload_class=workload,
+                depth=depth,
+                surface_qualifier=surface_qualifier,
+                notes=notes,
+            )
+            for (primitive, workload), (
+                depth,
+                surface_qualifier,
+                notes,
+            ) in _MATRIX_SPEC.items()
+        }
+    )
 )
 
 

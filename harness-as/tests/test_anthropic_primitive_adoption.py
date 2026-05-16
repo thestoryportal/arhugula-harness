@@ -167,9 +167,7 @@ def test_managed_agents_excluded_at_local_development() -> None:
 def test_per_role_model_binding_required_all_workloads() -> None:
     """Acceptance #6 — Per-role model binding is REQUIRED across all workload classes."""
     for workload in WorkloadClass:
-        binding = ADOPTION_DEPTH_MATRIX[
-            (AnthropicPrimitive.PER_ROLE_MODEL_BINDING, workload)
-        ]
+        binding = ADOPTION_DEPTH_MATRIX[(AnthropicPrimitive.PER_ROLE_MODEL_BINDING, workload)]
         assert binding.depth is AdoptionDepth.REQUIRED
 
 
