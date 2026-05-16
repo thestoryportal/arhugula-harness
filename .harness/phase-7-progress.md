@@ -79,6 +79,7 @@ updates happen at cluster close, not per unit.
 | U-CP-06 | `LayerBudget` data type + `RoutingLayer` carrier (`LayerBudget`, `DEFAULT_LAYER_BUDGETS`, `effective_budget`, `RoutingLayer`) — **partial land** (acc #4 span-emission struck → halt-route-split-AC); `RoutingLayer` carrier-homed here per U-CP-05↔U-CP-06 cycle | C-CP-03 §3.1 | ⚠️ partial-landed | `feat(cp): land U-CP-06` | 2026-05-16 |
 | U-CP-08 | Deterministic fall-through procedure — **SKIPPED** (Class 1: plan invents 4-value `FallThroughCause` enum; cited spec C-CP-03 §3.2 commits no enum — X-AL-3 silent design extension) | C-CP-03 §3.2, §3.3 | 🛑 skipped | — | 2026-05-16 |
 | U-CP-16 | Per-deployment-surface engine-class candidate mapping (`EngineClassCandidate`, `ENGINE_CLASS_CANDIDATES`) — `DeploymentSurface` imported from harness-core (U-CORE-01 carrier) | C-CP-07 §7.2 | ✅ landed | `feat(cp): land U-CP-16` | 2026-05-16 |
+| U-CP-23 | Per-workload-class topology commitment table (`PerWorkloadClassTopologyCommitment`, `PER_WORKLOAD_CLASS_TOPOLOGY`) — v2.4 body; carried Class-2: `software-engineering` single-vs-dual `default_pattern` mismatch (non-blocking, fork-queue item 4) | C-CP-11 §11.1 | ✅ landed | `feat(cp): land U-CP-23` | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
