@@ -58,6 +58,15 @@ updates happen at cluster close, not per unit.
 | U-AS-15 | Cross-deployment sandbox-tier monotonicity + bridging-arc raise + governance-violation detector | C-AS-12 §12.4, C-AS-11 §11.4 | ✅ landed | `feat(as): land U-AS-15` | 2026-05-16 |
 | U-AS-26 | Secret-fetch audit-ledger entry composition (cross-axis IS: U-IS-07/09/10) | C-AS-08 §8.2-§8.3 | ✅ landed | `feat(as): land U-AS-26` | 2026-05-16 |
 | U-AS-30 | Anthropic-API graceful degradation policy + workload-binding-decision composition | C-AS-13 §13.5-§13.6 | ✅ landed | `feat(as): land U-AS-30` | 2026-05-16 |
+| U-AS-16 | Seven `sandbox.*` attribute names + `sandbox.tech` ↔ `sandbox.provider` join | C-AS-15 §15.2-§15.3,§15.7 | ✅ landed | `feat(as): land U-AS-16` | 2026-05-16 |
+| U-AS-17 | Sandbox span hierarchy + 5 span event kinds + sensitive-data exclusions (GUARDRAIL) | C-AS-15 §15.1,§15.5 | ✅ landed | `feat(as): land U-AS-17` | 2026-05-16 |
+| U-AS-18 | Sandbox-event sampling discipline + audit-floor commitments (GUARDRAIL) | C-AS-15 §15.4 | ✅ landed | `feat(as): land U-AS-18` | 2026-05-16 |
+| U-AS-19 | Cross-axis idempotency-key composition + cost-attribution join (cross-axis IS: U-IS-07/12) | C-AS-15 §15.6 | ✅ landed | `feat(as): land U-AS-19` | 2026-05-16 |
+| U-AS-21 | Negative-observation invariant enforcement (secrets absent from prompts/logs/ledger) | C-AS-05 §5.3 | ✅ landed | `feat(as): land U-AS-21` | 2026-05-16 |
+| U-AS-23 | Secret-passthrough constraint enforcement (output/input redaction + MCP prohibition) | C-AS-06 §6.3 | ✅ landed | `feat(as): land U-AS-23` | 2026-05-16 |
+| U-AS-27 | Per-fetch secret-audit emission discipline + span emission (cross-axis IS: U-IS-11) | C-AS-08 §8.4-§8.5 | ✅ landed | `feat(as): land U-AS-27` | 2026-05-16 |
+| U-AS-32 | Anthropic-primitive sampling discipline + audit-floor commitments + D6 alignment | C-AS-14 §14.8-§14.9 | ✅ landed | `feat(as): land U-AS-32` | 2026-05-16 |
+| U-AS-33 | AS-axis substrate seam exports manifest (terminal exporter — 7 seams) | C-AS-16 §16.1-§16.7 | ✅ landed | `feat(as): land U-AS-33` | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
@@ -170,6 +179,31 @@ edges (CXA §2.3.4). Operator ruled re-home 2026-05-16: the two enums moved to
 CP-citation stability, the landed U-CP-00b test was re-pointed, carrier map
 line 100 updated (carrier = core; consumers = CP + AS). 4th carrier-home fork
 after U-CORE-01 / U-OD-00 / U-CP-00b.
+
+## §7 AS axis-stream — COMPLETE (2026-05-16)
+
+**All 33 AS units landed.** AS Levels 0-8 complete (L3 = U-AS-08/09/13/14/15/26/30;
+L4 = U-AS-16; L5-L8 = U-AS-17/18/19/21/23/27/32/33). U-AS-33 is the terminal
+aggregate exporter. 299/299 harness-as tests green; ruff + pyright clean.
+state.jsonl hash-chain length 59 (43 units across IS/AS/CP/OD + harness-core).
+
+**Class 3 observations (L3-L8, non-blocking — documented implementation discretion):**
+- **U-AS-08** — four v1-body / v1.2-propagation gaps resolved: `mcp_trust_level`
+  field dropped (completes the G-1 reconciliation); `blast_radius_floor(taint_state)`
+  → `blast_radius_floor(blast_radius_tier)` (U-AS-05 landed §2.4); `TaintState`
+  minimal 2-pole enum (§2 deferral); `tool_metadata` param threaded.
+- **U-AS-14** — `tier_to_gate_level_floor` SandboxTier→GateLevel mapping is not
+  spec-given; monotone mapping chosen (tier-1/2→AUTO, tier-3→ASK, tier-4→DENY).
+- **U-AS-15** — `bridging_arc_effective_tier_raise` takes the `persona_tier_floor`
+  as an injected interface (CP session-3 deferred per §12.5).
+- **U-AS-16** — `emitted_on` materialized as a span-name string (SpanEventKind is
+  declared downstream at U-AS-17 — carrier ordering).
+- **U-AS-21 / U-AS-23** — secret-detection mechanism is spec-deferred (§5.3/§6.3:
+  regex/fingerprint/taint); marker-substring detector is the unit-grade placeholder.
+- **U-AS-30** — 5 Pattern B carriers minimally resolved; `memory_tool_storage_backend`
+  self-hosted-server filled with the composable subset (AC5 gives only LOCAL+MANAGED).
+- GUARDRAIL units U-AS-17/18 — the OTel SpanProcessor / Sampler wiring is
+  project-authored downstream; the units declare the policy + predicates.
 
 **Class 3 observations (L2, non-blocking):**
 - **U-AS-10 surface-conditioned provider-class.** §9.1 labels the tier-2
