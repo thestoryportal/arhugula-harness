@@ -81,6 +81,7 @@ updates happen at cluster close, not per unit.
 | U-CP-16 | Per-deployment-surface engine-class candidate mapping (`EngineClassCandidate`, `ENGINE_CLASS_CANDIDATES`) — `DeploymentSurface` imported from harness-core (U-CORE-01 carrier) | C-CP-07 §7.2 | ✅ landed | `feat(cp): land U-CP-16` | 2026-05-16 |
 | U-CP-23 | Per-workload-class topology commitment table (`PerWorkloadClassTopologyCommitment`, `PER_WORKLOAD_CLASS_TOPOLOGY`) — v2.4 body; carried Class-2: `software-engineering` single-vs-dual `default_pattern` mismatch (non-blocking, fork-queue item 4) | C-CP-11 §11.1 | ✅ landed | `feat(cp): land U-CP-23` | 2026-05-16 |
 | U-CP-38 | 3-placement enum + `hitl_gate` signature + `HITLPlacement` schema — **SKIPPED** (Class 1: dep U-CP-30 `HandoffContext` not landed; Pattern D undeclared `ProposedAction`/`ToolName`/`SHA256`) | C-CP-17 §17.1, §17.1.1, §17.3 | 🛑 skipped | — | 2026-05-16 |
+| U-CP-47 | 5-class validator-fail taxonomy + `validator.fail.*` namespace (`ValidatorFailClass`, `ValidatorFailMetadata`, `VALIDATOR_FAIL_METADATA`, `ValidatorFailAttributeSchema`, `VALIDATOR_FAIL_NAMESPACE_SCHEMA`, `validator_fail_permanence`) — v2.4 §4A-conformed body; carrier (`AttributeValueType`/`Cardinality`) from harness-core | C-CP-21 §21.1, §21.5 | ✅ landed | `feat(cp): land U-CP-47` | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
