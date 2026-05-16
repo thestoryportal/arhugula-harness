@@ -1,8 +1,8 @@
 # Class 1 Tension — U-AS-31 cross-axis consumption of CP-homed schema enums
 
 *Phase 7 sub-phase 7b. Fork detected at U-AS-31 execution-time (AS Level-2
-cluster). Routed per `CLAUDE.md` §4.3 + `harness-as/CLAUDE.md` §5. **OPEN** —
-awaiting operator ruling.*
+cluster). Routed per `CLAUDE.md` §4.3 + `harness-as/CLAUDE.md` §5. **RESOLVED**
+2026-05-16 — operator ruled re-home; applied; U-AS-31 landed.*
 
 ---
 
@@ -15,7 +15,7 @@ awaiting operator ruling.*
 | Surfaced at | Landing U-AS-31 (AS-axis attribute-namespace declarations) |
 | Class | **1** — carrier-home defect; a cross-axis shared type homed in the wrong axis package; halt-execution |
 | Routing target | Phase 6 plan + carrier-map revision — re-home `AttributeValueType` / `Cardinality` to `harness-core`; cascade to the landed U-CP-00b and the CP consumer plan |
-| Status | **OPEN** 2026-05-16 — U-AS-31 HALTED; awaiting operator ruling |
+| Status | **RESOLVED** 2026-05-16 — operator ruled re-home; applied; U-AS-31 landed |
 
 ## 2. The defect
 
@@ -111,17 +111,44 @@ sibling `[[class_1_tension_u_cp_00b_structured_types]]` record.
 No CP consumer of `AttributeValueType` / `Cardinality` has landed — the re-home
 dangles no landed consumer code.
 
-## 6. AS Level-2 cluster status
+## 6. Resolution applied — 2026-05-16
 
-The other 6 AS L2 units landed clean: U-AS-06, U-AS-10, U-AS-22, U-AS-24,
-U-AS-25, U-AS-29. U-AS-31 is the **only** L2 unit blocked. The L2 cluster closes
-at 6/7; U-AS-31 lands after this tension resolves.
+Operator ruled **re-home now** (option A). Applied:
 
-## 7. Filing footer
+- `harness-core/src/harness_core/schema_attribute_enums.py` created — declares
+  `AttributeValueType` (5 values) + `Cardinality` (4 values), member sets
+  byte-exact with the U-CP-00b landing. `harness-core/__init__.py` re-exports.
+- `harness-cp/src/harness_cp/schema_attribute_enums.py` re-pointed — now imports
+  + re-exports the two enums from `harness-core` (CP-side
+  `harness_cp.schema_attribute_enums` citations stay stable). No CP consumer of
+  these enums has landed, so no consumer code dangled.
+- `harness-cp/tests/test_schema_attribute_enums.py` — the
+  `test_both_enums_reside_in_harness_cp` test (which asserted operator decision
+  D3) re-pointed to `test_both_enums_re_homed_to_harness_core`.
+- `.harness/shared_type_carrier_map.md` line 100 updated — carrier = `harness-core`;
+  consumers = CP + AS; the stale "all consumers in-axis" rationale corrected.
+- `harness-as` already depends on `harness-core`; U-AS-31 imports the two enums
+  from `harness-core` and **landed** (`feat(as): land U-AS-31`), 13 tests green.
+
+Commit: `refactor(core): re-home AttributeValueType/Cardinality to harness-core`.
+Operator decision D3 is superseded — the enums are cross-axis (CP + AS) and
+reside on `harness-core` per `CLAUDE.md` §3.3.
+
+**Owed (non-blocking mechanical):** the design-substrate CP plan v2.7 §2.0b
+U-CP-00b body + AS plan U-AS-31 `Depends on` still cite the CP-axis carrier
+home; a doc-reconciliation pass should re-cite them to the `harness-core`
+carrier. Flagged like AS plan A-3 — deferred mechanical re-cite, no code impact.
+
+## 7. AS Level-2 cluster status
+
+All 7 AS L2 units landed: U-AS-06, U-AS-10, U-AS-22, U-AS-24, U-AS-25, U-AS-29,
+U-AS-31. L2 cluster closed; AS L0+L1+L2 complete (17/33).
+
+## 8. Filing footer
 
 | Field | Value |
 |---|---|
 | Artifact | `.harness/class_1_tension_u_as_31_attribute_schema_enums.md` |
 | Authored | Phase 7 7b, 2026-05-16 |
-| Resolution authority | Operator ruling owed |
-| Status | **OPEN** — U-AS-31 HALTED; re-home `AttributeValueType` / `Cardinality` to `harness-core` proposed |
+| Resolution authority | Operator ruling 2026-05-16 (re-home to `harness-core`) |
+| Status | **RESOLVED** — enums re-homed; U-AS-31 landed; doc re-cite owed (mechanical) |

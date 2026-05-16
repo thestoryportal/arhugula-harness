@@ -50,7 +50,7 @@ updates happen at cluster close, not per unit.
 | U-AS-24 | `SecretFailClass` 5-value taxonomy + C5/C9 metadata + per-backend breaker key | C-AS-07 §7.1-§7.3 | ✅ landed | `feat(as): land U-AS-24` | 2026-05-16 |
 | U-AS-25 | Secret-fetch `outputs_hash` structure-not-content fingerprint (GUARDRAIL — C-IS-06 §6.1 scheme) | C-AS-08 §8.1 | ✅ landed | `feat(as): land U-AS-25` | 2026-05-16 |
 | U-AS-29 | Engine-class composition overlay + 20-cell model-binding matrix + pre-HITL escalation | C-AS-13 §13.3-§13.4 | ✅ landed | `feat(as): land U-AS-29` | 2026-05-16 |
-| U-AS-31 | Six Anthropic-primitive attribute namespaces | C-AS-14 | 🛑 HALTED — Class 1 fork (see §6) | — | 2026-05-16 |
+| U-AS-31 | Six Anthropic-primitive attribute namespaces (40 attrs) + skill-version dual-field enforcement | C-AS-14 §14.1-§14.7 | ✅ landed | `feat(as): land U-AS-31` | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
@@ -73,7 +73,7 @@ land-now without v2.4/v2.5 pre-implementation re-clearance.
 | `Phase_7_Class_3_Tension_001_Git_Tier_Sub_Role_Count.md` | C-IS-03 §3 "four" vs 5 rows | ✅ resolved — spec fixed in-CLI; block cleared |
 | `Phase_7_Class_1_Tension_002_Topology_Pattern_Enum.md` | TopologyPattern enum 3-way divergence | ✅ resolved 2026-05-15 — operator signed off Set 2 (spec C-CP-10 §10.1); CP-AL-1 conformed at 4 loci; commit `45f104f` |
 | `class_1_tension_u_core_01_workflow_event.md` | U-CORE-01 `WorkflowEvent` payload model unmaterializable as a `harness-core` carrier type | ✅ resolved 2026-05-15 — operator ruled carrier-thin; payload model struck; harness-core plan v1.0→v1.1; U-CORE-01 landed without it |
-| `class_1_tension_u_as_31_attribute_schema_enums.md` | U-AS-31 consumes `AttributeValueType`/`Cardinality` homed in `harness-cp`; AS→CP package edge would cycle against the 24 CP→AS edges | 🛑 OPEN 2026-05-16 — U-AS-31 HALTED; re-home the 2 enums to `harness-core` proposed; awaiting operator ruling |
+| `class_1_tension_u_as_31_attribute_schema_enums.md` | U-AS-31 consumes `AttributeValueType`/`Cardinality` homed in `harness-cp`; AS→CP package edge would cycle against the 24 CP→AS edges | ✅ resolved 2026-05-16 — operator ruled re-home; enums moved to `harness-core`, `harness-cp` re-exports, carrier map line 100 updated; U-AS-31 landed |
 | `class_1_tension_u_od_00_carrier_defects.md` | U-OD-00 §3.0 three carrier defects — SignatureAlgorithm cycle (D-1), missing CellID edge / false L0 (D-2), AuditSignatureAttributes un-spec'd field (D-3) | ✅ resolved 2026-05-15 — operator ruled micro-revise; OD plan v2.6→v2.7; U-OD-00 landed against v2.7 |
 | `class_1_tension_u_cp_00b_structured_types.md` | U-CP-00b bundled 9 structured shared types declared name-only (no shapes at plan grade) | ⚠️ resolved-split 2026-05-15 — operator ruled split; CP plan v2.6→v2.7; U-CP-00b landed as the 2-enum carrier. **OPEN:** the 9 structured types await a future CP plan revision specifying each shape |
 | `Phase_7_Class_1_Tension_003_WorkloadClass_Undeclared.md` | `WorkloadClass` type used by ~10 CP units, declared by none | 🛑 OPEN 2026-05-15 — U-CP-22 halted; plan-gap (missing declaring unit) |
@@ -150,19 +150,19 @@ block; no tension.
 
 ## §6 AS axis-stream — Cluster L2 close (2026-05-16)
 
-AS Level-2 cluster — **6 of 7 landed**: U-AS-06, U-AS-10, U-AS-22, U-AS-24,
-U-AS-25, U-AS-29. AS now 16/33. 135/135 harness-as tests green; ruff + pyright
-clean. state.jsonl hash-chain length 42. 5-dimension coherence pass clean for
-the 6 landed units.
+AS Level-2 cluster — **all 7 landed**: U-AS-06, U-AS-10, U-AS-22, U-AS-24,
+U-AS-25, U-AS-29, U-AS-31. **AS now 17/33; AS L0+L1+L2 complete.** 148/148
+harness-as tests green; ruff + pyright clean. state.jsonl hash-chain length 43.
 
-**U-AS-31 HALTED — Class 1 fork filed** (`class_1_tension_u_as_31_attribute_schema_enums.md`).
+**U-AS-31 Class 1 fork — RESOLVED** (`class_1_tension_u_as_31_attribute_schema_enums.md`).
 U-AS-31's `AttributeSchema` consumes `AttributeValueType` / `Cardinality`, which
-U-CP-00b landed in `harness-cp`. An AS→CP package edge would cycle against the
-24 declared CP→AS edges (CXA §2.3.4); type duplication breaks the C-AS-14 ↔
-C-OD-*/D6 ingestion seam. Proposed fix: re-home the two enums to `harness-core`
-(the U-CORE-01 cross-axis shared-type pattern). The carrier map line 100
-("all consumers in-axis → per-axis, not core") missed U-AS-31 as a cross-axis
-consumer. Awaiting operator ruling; U-AS-31 lands after resolution.
+U-CP-00b landed in `harness-cp` (operator decision D3, premise "no cross-axis
+sharing"). An AS→CP package edge would cycle against the 24 declared CP→AS
+edges (CXA §2.3.4). Operator ruled re-home 2026-05-16: the two enums moved to
+`harness-core` (`schema_attribute_enums.py`), `harness-cp` re-exports them for
+CP-citation stability, the landed U-CP-00b test was re-pointed, carrier map
+line 100 updated (carrier = core; consumers = CP + AS). 4th carrier-home fork
+after U-CORE-01 / U-OD-00 / U-CP-00b.
 
 **Class 3 observations (L2, non-blocking):**
 - **U-AS-10 surface-conditioned provider-class.** §9.1 labels the tier-2
