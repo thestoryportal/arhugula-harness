@@ -134,8 +134,9 @@ carriers. Each produces a revised plan returned for per-pass operator ratificati
 | S2 | `spec-writer` apply C-AS-02 + ADR-D2 fix per S1 | ✅ COMPLETE 2026-05-15 — `ADR-D2.md` v1.1→v1.2, `Spec_Action_Surface_v1.md` v1.1→v1.2 (5-arg `sandbox_tier_floor`). ADD verified — no ripple. `CLAUDE.md` §2.2/§2.3 version tokens bumped. |
 | R3.1 | AS micro-pass — finalize U-AS-06/09/12/20 | ✅ COMPLETE + APPLIED 2026-05-15 — `Implementation_Plan_Action_Surface_v1_2.md`. **NEW action item A-5:** D1 (3-param `fetch_secret`) needs a small C-AS-05 §5.1 spec touch — the spec still reads 2-param (it was outside S2's scope). Authorized by the D1 ratification; pending pass S3. |
 | S3 | `spec-writer` C-AS-05 §5.1 `fetch_secret` 2→3-param touch (per ratified D1) | pending — small; bundle with R5 launch |
-| R4 | CP plan revision — absorb `materializability_audit_cp_plan.md` + carrier map | ✅ RATIFIED 2026-05-15 (Q-R4-1..7 = decisions D3–D9, all approved). 🟡 APPLYING → `Implementation_Plan_Control_Plane_v2_6.md` |
-| R5 | OD plan revision — absorb `materializability_audit_od_plan.md` + carrier map | pending R4-apply |
+| R4 | CP plan revision — absorb `materializability_audit_cp_plan.md` + carrier map | ✅ COMPLETE + APPLIED 2026-05-15 — `Implementation_Plan_Control_Plane_v2_6.md` (57 units, U-CP-00b carrier, Patterns C/D/E, U-CP-10 reconciled). Deferred items D-1/D-2/D-3 flagged. |
+| S3 | `spec-writer` C-AS-05 §5.1 `fetch_secret` 2→3-param touch | 🟡 RUNNING (launched 2026-05-15) — Spec_Action_Surface v1.2→v1.3 |
+| R5 | OD plan revision — absorb `materializability_audit_od_plan.md` + carrier map (LAST R-series pass) | 🟡 RUNNING (launched 2026-05-15) |
 | R5 | OD plan revision — absorb `materializability_audit_od_plan.md` + carrier map | pending R4 |
 
 Then: review-ahead re-check of the conformed plans → coding lane resumes.
