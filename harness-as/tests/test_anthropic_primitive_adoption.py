@@ -119,13 +119,38 @@ def test_adoption_depth_cardinality_four() -> None:
 
 
 def test_anthropic_primitive_anchors_complete() -> None:
-    """Acceptance #4 — 11 anchor-citation entries, one per primitive."""
+    """Acceptance #4 — 11 anchor-citation entries, one per primitive.
+
+    Each entry is a primary-source citation carrying a §13.1 confidence tag.
+    The §13.1 anchor column [HIGH]-tags primary Anthropic / specification
+    sources; the one community-witness anchor (Claude Code hooks) is MODERATE.
+    AC4 does not require all-HIGH — `ConfidenceTag` is 3-valued by design.
+    """
     assert len(ANTHROPIC_PRIMITIVE_ANCHORS) == 11
     for primitive in AnthropicPrimitive:
         anchor = ANTHROPIC_PRIMITIVE_ANCHORS[primitive]
         assert isinstance(anchor, AnchorCitation)
         assert anchor.source_identifier
         assert anchor.confidence_tag in ConfidenceTag
+    # The §13.1 [HIGH]-marked primitives carry the HIGH confidence tag.
+    high_marked = {
+        AnthropicPrimitive.SKILLS_SYSTEM,
+        AnthropicPrimitive.MCP_AS_CODE,
+        AnthropicPrimitive.MANAGED_AGENTS,
+        AnthropicPrimitive.PER_ROLE_MODEL_BINDING,
+        AnthropicPrimitive.PROMPT_CACHE_BREAKPOINT_PLACEMENT,
+        AnthropicPrimitive.EXTENDED_THINKING_BUDGET,
+        AnthropicPrimitive.BATCH_API,
+        AnthropicPrimitive.FILES_API,
+        AnthropicPrimitive.MEMORY_TOOL,
+    }
+    for primitive in high_marked:
+        assert ANTHROPIC_PRIMITIVE_ANCHORS[primitive].confidence_tag is ConfidenceTag.HIGH
+    # The community-witness anchor (Claude Code hooks) is MODERATE, not HIGH.
+    assert (
+        ANTHROPIC_PRIMITIVE_ANCHORS[AnthropicPrimitive.CLAUDE_CODE_HOOKS].confidence_tag
+        is ConfidenceTag.MODERATE
+    )
 
 
 def test_adoption_depth_matrix_cardinality_44() -> None:
