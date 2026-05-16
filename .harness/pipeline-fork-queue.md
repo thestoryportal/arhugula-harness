@@ -99,3 +99,10 @@ operator-scoped decision, see report.
 | Tension 002 — TopologyPattern enum 3-way divergence | operator signed off Set 2 (spec C-CP-10 §10.1); conformed at 4 loci | 2026-05-15 |
 | Tension 003 — `WorkloadClass` undeclared | declared in `harness-core` via new U-CP-00 | 2026-05-15 |
 | Tension 004 — U-OD-04 span schema divergence | subsumed into OD §4A audit; conformed in OD plan v2.5 | 2026-05-15 |
+| Class 1 — U-CORE-01 `WorkflowEvent` payload unmaterializable | operator ruled carrier-thin; payload struck; harness-core plan v1.0→v1.1; U-CORE-01 landed | 2026-05-15 |
+
+## Open follow-ups
+
+| Item | Detail | Owed at |
+|---|---|---|
+| F-2 (from `class_1_tension_u_core_01_workflow_event.md`) | `Implementation_Plan_Control_Plane_v2_6.md` §0 spec-inventory line references "`WorkflowEventClass`/`WorkflowEvent`" as U-CORE-01-declared; the `WorkflowEvent` token is now stale (mechanical back-reference strike). | Next CP plan touch — likely when U-CP-10 lands fresh or the carrier-gated re-point sweep reaches CP-side recheck. |
