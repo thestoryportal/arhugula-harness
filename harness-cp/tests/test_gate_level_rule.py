@@ -20,9 +20,9 @@ from __future__ import annotations
 import pytest
 
 from harness_as import BlastRadiusTier
-from harness_core import PersonaTier
+from harness_core import DeploymentSurface, PersonaTier
 
-from harness_cp.cp_shared_types import Axis
+from harness_cp.cp_shared_types import Axis, MCPTrustTier
 from harness_cp.gate_level_rule import (
     BLAST_RADIUS_GATE_LEVEL_FLOOR,
     PERSONA_TIER_GATE_LEVEL_FLOOR,
@@ -41,8 +41,8 @@ def _input(
     return GateLevelInput(
         persona_tier=persona,
         blast_radius_tier=blast,
-        deployment_surface="self-hosted-server",
-        mcp_trust_tier="level-1-signed-pinned",
+        deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER,
+        mcp_trust_tier=MCPTrustTier.LEVEL_1_SIGNED_PINNED,
     )
 
 

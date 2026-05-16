@@ -37,10 +37,10 @@ from __future__ import annotations
 from enum import IntEnum, StrEnum
 
 from harness_as import BlastRadiusTier
-from harness_core import PersonaTier
+from harness_core import DeploymentSurface, PersonaTier
 from pydantic import BaseModel, ConfigDict
 
-from harness_cp.cp_shared_types import Axis
+from harness_cp.cp_shared_types import Axis, MCPTrustTier
 
 
 class GateLevel(StrEnum):
@@ -89,13 +89,17 @@ class GateLevelInput(BaseModel):
 
     persona_tier: PersonaTier
     blast_radius_tier: BlastRadiusTier
-    deployment_surface: str
-    """[carried per §0.8] No `DEPLOYMENT_SURFACE_GATE_LEVEL_FLOOR` is
-    materialized — §19.1 does not carry deployment-surface as a `max()` axis."""
+    deployment_surface: DeploymentSurface
+    """Plan-signature axis. [carried per §0.8] No
+    `DEPLOYMENT_SURFACE_GATE_LEVEL_FLOOR` is materialized — §19.1 does not
+    carry deployment-surface as a `max()` axis — so this field is unconsumed
+    by `gate_level()`. The field type is the landed `DeploymentSurface` enum."""
 
-    mcp_trust_tier: str
-    """[carried per §0.8] No `MCP_TRUST_GATE_LEVEL_FLOOR` is materialized —
-    §19.1 is silent on the per-trust-tier → gate-level mapping."""
+    mcp_trust_tier: MCPTrustTier
+    """Plan-signature axis. [carried per §0.8] No `MCP_TRUST_GATE_LEVEL_FLOOR`
+    is materialized — §19.1 is silent on the per-trust-tier → gate-level
+    mapping — so this field is unconsumed by `gate_level()`. The field type is
+    the landed U-CP-00c `MCPTrustTier` enum (no re-declaration, per v2.9 §0)."""
 
 
 class GateLevelComputation(BaseModel):
