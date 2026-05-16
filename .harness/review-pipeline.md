@@ -146,7 +146,8 @@ OD v2.6. Spec/ADR contradictions fixed (S1/S2/S3): ADR-D2 v1.2, AS spec v1.3.
 
 | Pass | Scope | State |
 |---|---|---|
-| RC | Review-ahead re-check of the 5 conformed plans — confirm the ~55 forks are closed + no new defect introduced by the R-series; pre-implementation re-clearance of the `Proposed`-status revised plans | ⬜ pending |
+| RC-A | Re-check harness-core + IS + AS conformed plans → `.harness/recheck_core_is_as.md` | 🟡 RUNNING (launched 2026-05-15) |
+| RC-B | Re-check CP + OD conformed plans → `.harness/recheck_cp_od.md` | 🟡 RUNNING (launched 2026-05-15) |
 
 After RC clears: coding lane **resumes** on the ~125 remaining units. Carried
 cleanup buckets: landed-unit re-checks (U-IS-02, U-AS-02, U-AS-04, U-OD-01,
