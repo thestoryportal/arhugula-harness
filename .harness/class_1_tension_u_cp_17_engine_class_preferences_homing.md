@@ -56,11 +56,24 @@ preferences") is the ONLY surface coupled to `EngineClassPreferences`. Per the
 
 ## Re-entry condition
 
-Step 4 (operator-preference filtering) is re-landed when U-CP-27 lands and
-declares `EngineClassPreferences`. At that point U-CP-17's
-`WorkloadBindingSelectionInput` regains the `operator_preferences` field and the
-struck AC + test are restored. Tracked as a U-CP-17 re-revision owed at the
-U-CP-27 landing.
+**UPDATE 2026-05-16 (U-CP-27 landing):** U-CP-27 has landed. Its v2.1/v2.9
+unit body does **NOT** declare or consume `EngineClassPreferences` — a literal
+grep of `Implementation_Plan_Control_Plane_v2_1.md` + `_v2_9.md` finds
+`EngineClassPreferences` only at U-CP-17 (L976 / L307). The v2.6 carrier-map's
+"`EngineClassPreferences` | U-CP-27 | U-CP-27 internal | CP §7.4" homing is
+spurious — spec §7.4 is the capability-floor table and commits no
+operator-preferences record; §7.3 step 4 reads "Operator selects specific
+engine candidate from the cell's recommended set" with no record. Declaring
+`EngineClassPreferences` unilaterally at U-CP-27 would be an X-AL-3 silent
+design extension (the plan v2.9 §0.4 carrier rule requires the unit body to
+already consume the type name-only; U-CP-27 does not). U-CP-27 therefore
+landed per its v2.1 body **without** `EngineClassPreferences`.
+
+**This tension does NOT clear at U-CP-27 landing.** It stays OPEN pending the
+operator decision under "Routing" — (a) U-CP-17 body amended to defer
+`operator_preferences` with a forward-pointer, or (b) `EngineClassPreferences`
+re-homed (e.g. to U-CP-00c) as a CP-owned shared type. Until that decision,
+U-CP-17 remains partial-landed (4 of 5 §7.3 steps; step 4 + 1 test struck).
 
 ## Routing
 
