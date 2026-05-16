@@ -117,6 +117,12 @@ from harness_as.secret_outputs_hash import (
     canonicalize_concat_secret_fingerprint,
     compute_outputs_hash,
 )
+from harness_as.sub_agent_sandbox_tier import (
+    SubAgentBoundaryViolation,
+    SubAgentBoundaryViolationKind,
+    detect_sub_agent_tier_downgrade,
+    sub_agent_sandbox_tier,
+)
 from harness_as.tool_contract import (
     RECOMMENDED_CONTRACT_DEFAULT_TIER,
     ContractValidationOutcome,
@@ -194,6 +200,8 @@ __all__ = [
     "SecretResolutionMechanism",
     "SecretScope",
     "SkillVersionValidationResult",
+    "SubAgentBoundaryViolation",
+    "SubAgentBoundaryViolationKind",
     "SubAgentRole",
     "TPerm2Pole",
     "TaintState",
@@ -207,6 +215,7 @@ __all__ = [
     "check_secret_allowlist",
     "compute_outputs_hash",
     "construct_breaker_key",
+    "detect_sub_agent_tier_downgrade",
     "fail_class_metadata",
     "fetch_secret",
     "forced_tier",
@@ -222,6 +231,7 @@ __all__ = [
     "sandbox_tier_floor",
     "secret_fail_class_metadata",
     "skills_loads_from_filesystem_path",
+    "sub_agent_sandbox_tier",
     "tier_metadata",
     "tier_resolution_mechanism",
     "validate_skill_attributes_carry_both_version_fields",
