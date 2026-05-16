@@ -48,6 +48,7 @@ from harness_as.forced_tier_resolution import (
     ToolContext,
     forced_tier,
 )
+from harness_as.mcp_transport_floor import mcp_transport_floor, rejects_at_registration
 from harness_as.operator_policy_override_scope import (
     OverrideScopeResult,
     override_scope,
@@ -222,11 +223,13 @@ __all__ = [
     "is_tier_at_or_above",
     "lookup_cell",
     "lookup_cell_with_forcing",
+    "mcp_transport_floor",
     "model_binding",
     "namespace_schema",
     "override_scope",
     "permanent_fail_skips_staircase",
     "provider_class_metadata",
+    "rejects_at_registration",
     "sandbox_tier",
     "sandbox_tier_floor",
     "secret_fail_class_metadata",
