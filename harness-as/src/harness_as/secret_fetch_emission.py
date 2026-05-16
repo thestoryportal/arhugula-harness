@@ -70,6 +70,13 @@ class SecretFetchSpanAttributes(BaseModel):
     policy_access_decision_reason: str
 
 
+def _outcome_well_formed(outcome: FetchOutcome) -> bool:
+    """True when a `FetchOutcome` carries the payload its kind requires."""
+    if outcome.kind is FetchOutcomeKind.SUCCESS:
+        return outcome.secret_ref is not None and outcome.fail_class is None
+    return outcome.fail_class is not None and outcome.secret_ref is None
+
+
 def emit_secret_fetch_audit(
     outcome: FetchOutcome,
     event_metadata: SecretFetchEvent,
@@ -78,13 +85,20 @@ def emit_secret_fetch_audit(
     """Emit the per-fetch audit-ledger entry (C-AS-08 §8.4).
 
     Per §8.4: a SUCCESS yields exactly one ledger entry; a FAILURE yields
-    exactly one entry carrying the `secret.fail.class` (U-AS-24). The entry is
-    the U-AS-26 six-field `StateLedgerEntry` — no secret value (acceptance #4).
-    The ledger write delegates to U-IS-11's append-only contract, idempotent on
-    the entry's `(thread_id, step_id)` key (acceptance #5) — that file append
-    is a runtime concern; this function composes the entry. Emission ordering
+    exactly one entry carrying the `secret.fail.class` (U-AS-24). A malformed
+    `outcome` (a SUCCESS without a `SecretRef`, or a FAILURE without a
+    `SecretFailClass`) is **not** emitted. The entry is the U-AS-26 six-field
+    `StateLedgerEntry` — no secret value (acceptance #4) — composed from
+    `event_metadata` (whose actor / thread / step the entry inherits);
+    `call_site_context` carries the deployment context for the sibling span.
+    The actual `.harness/state.jsonl` append delegates to U-IS-11's append-only
+    contract, idempotent on the entry's `(thread_id, step_id)` key
+    (acceptance #5) — that file append is a runtime concern. Emission ordering
     (acceptance #6): the ledger entry is composed before any span emission.
     """
+    if not _outcome_well_formed(outcome):
+        return EmissionResult(emitted=False, rejected_attributes=("malformed_outcome",))
+    _ = call_site_context  # deployment context carried for the sibling span
     compose_secret_fetch_audit_entry(event_metadata, None)
     return EmissionResult(emitted=True, rejected_attributes=())
 
@@ -97,7 +111,16 @@ def emit_secret_fetch_span(
     """Emit the secret-fetch span alongside the ledger entry (C-AS-08 §8.4 row 3).
 
     The six-attribute D-derivative span schema carries structure only — no
-    secret value (acceptance #4 / negative-observation per U-AS-21). `parent_span_id`
-    links the span under the call-site parent.
+    secret value (acceptance #4 / negative-observation per U-AS-21). The span
+    is **not** emitted when it is inconsistent with `outcome`: a FAILURE span
+    must carry the `secret.fail.class` and a SUCCESS span must not, and the
+    span must link to a non-empty `parent_span_id`.
     """
-    return EmissionResult(emitted=True, rejected_attributes=())
+    rejected: list[str] = []
+    if not parent_span_id:
+        rejected.append("missing_parent_span_id")
+    if outcome.kind is FetchOutcomeKind.FAILURE and span_attrs.fail_class is None:
+        rejected.append("missing_fail_class")
+    if outcome.kind is FetchOutcomeKind.SUCCESS and span_attrs.fail_class is not None:
+        rejected.append("unexpected_fail_class")
+    return EmissionResult(emitted=not rejected, rejected_attributes=tuple(rejected))
