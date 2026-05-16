@@ -75,7 +75,7 @@ All canonical artifacts reside at the **design-phase workspace** (separate Claud
 | Axis | Spec |
 |---|---|
 | IS | `Spec_Information_Substrate_v1.md` (v1.2 per ADD v1.3 attestation) |
-| AS | `Spec_Action_Surface_v1.md` (v1.2 — C-AS-02/§11.1 `sandbox_tier_floor` reconciliation per S2, 2026-05-15) |
+| AS | `Spec_Action_Surface_v1.md` (v1.3 — C-AS-02/§11.1 `sandbox_tier_floor` reconciliation per S2 + C-AS-05 §5.1 3-param `fetch_secret` per S3, 2026-05-15) |
 | CP | `Spec_Control_Plane_v1_3.md` (v1.3) |
 | OD | `Spec_Operational_Discipline_v1_3.md` (v1.3) |
 

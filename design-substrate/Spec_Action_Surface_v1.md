@@ -18,6 +18,26 @@
 | Revision date | 2026-05-13 |
 | Revision | v1.1 → v1.2 (Phase 7 C-AS-02 `sandbox_tier_floor` signature reconciliation per `spec-writer` application of the operator-ratified `.harness/s1_c_as_02_reconciliation.md` recommendation — 2026-05-15; §2.2 + §2.3 + §10.2 + §11.1 + §12.1 reconciled to the canonical 5-argument `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport, mcp_server) -> SandboxTier | REFUSE` signature; ADR-D2 source-set token bump v1.1 → v1.2 with comprehensive body-citation alignment at 40 sites under use-latest-version discipline reflecting the parallel ADR-D2 v1.1 → v1.2 reconciliation; §[coherence pass] section preserved verbatim as v1 point-in-time audit) |
 | Revision date | 2026-05-15 |
+| Revision | v1.2 → v1.3 (Phase 7 C-AS-05 `fetch_secret` signature reconciliation per `spec-writer` application of the operator-ratified Q-R3-2 / decision D1 R1-direction decision — 2026-05-15; C-AS-05 contract title + §5.1 signature + §5.1 parameter table + §6.2 + §8.4 reconciled from the 2-parameter `fetch_secret(name, scope) -> SecretRef` form to the 3-parameter `fetch_secret(name, scope, tier) -> SecretRef` form, where `tier` is the call site's resolved `SandboxTier` passed as a plain explicit argument — not a bundled context object; aligns C-AS-05 with AS plan U-AS-20's body per `Implementation_Plan_Action_Surface_v1_2.md`; no other section changed) |
+| Revision date | 2026-05-15 |
+
+---
+
+## Change-note (v1.2 → v1.3)
+
+**Trigger.** Phase 7 R3.1 AS micro-pass. The AS-plan verbatim audit surfaced a C-AS-05 internal contradiction (AS plan U-AS-20 declared a 3-parameter `fetch_secret(name, scope, tier)` while spec §5.1 + the C-AS-05 contract title read the 2-parameter `fetch_secret(name, scope)` form). The R3 implementation-planner pass carried U-AS-20 with a conditional body (`.harness/revision_R3_as_plan.md` §5 + Q-R3-2). The operator ratified decision D1 / Q-R3-2 (`.harness/decision_brief_R3-1_R4.md` D1 — "R1 direction — the spec adopts the 3-param form") on 2026-05-15. This revision applies that decision. It discharges action item A-5 flagged at `Implementation_Plan_Action_Surface_v1_2.md` §0.6.
+
+**Scope of revision.** C-AS-05's `fetch_secret` contract signature is reconciled from the 2-parameter `fetch_secret(name: string, scope: SecretScope) -> SecretRef` form to the 3-parameter `fetch_secret(name: string, scope: SecretScope, tier: SandboxTier) -> SecretRef` form. The `tier` argument is the resolved sandbox tier of the call site, passed as a plain explicit argument — **not** a bundled context object — for parity with the C-AS-02 `sandbox_tier_floor` G-1 explicit-argument resolution already landed at spec v1.2 and so the tier-aware resolution input is visible at the call surface. `tier` is resolved at the call site per C-AS-10 (consistent with AS plan U-AS-20, where U-AS-08 resolves it). The §5.2 tier-aware resolution table is unchanged — `tier` makes explicit the input that table was already keyed on.
+
+**Sub-decisions.** None — the fix is fully decided by the operator-ratified Q-R3-2 / D1 R1-direction decision; this pass applies the 3-parameter signature verbatim per AS plan U-AS-20's body.
+
+**Sections revised (substantive).** C-AS-05 contract title (`## §5` heading — `fetch_secret(name, scope)` → `fetch_secret(name, scope, tier)`). §5.1 function signature — the signature line gains the `tier: SandboxTier` parameter; the §5.1 parameter table gains a `tier` row. §6.2 "Allowlist intersection" row — the `fetch_secret(name, scope)` call reference updated to `fetch_secret(name, scope, tier)` (arity-asserting back-reference; the `(name, scope)` allowlist-tuple itself is unchanged — `tier` is not an allowlist-key dimension). §8.4 "One ledger entry per successful fetch" + "One ledger entry per failed fetch" rows — the `fetch_secret(name, scope)` call references updated to `fetch_secret(name, scope, tier)` (arity-asserting back-references; the rest of each row unchanged).
+
+**Sections preserved verbatim.** All of §1–§4; C-AS-05 §5.2 + §5.3 + §5.4 + §5's "Deferred to implementation discretion"; §6 C-AS-06 except the §6.2 "Allowlist intersection" row — including §6.1's `SecretAllowlistEntry` comments `matches fetch_secret(name, ...) parameter` / `matches fetch_secret(..., scope) parameter` (ellipsis-form parameter-name references, not arity assertions — the `...` already stands for unspecified parameters, so the comments remain true and are preserved verbatim); §6.3; §7; §8 C-AS-08 except the two §8.4 per-fetch-emission rows; §9–§16; §[traceability] matrix; §[carry-forwards]; §[coherence pass] section (v1 point-in-time historical audit). No citation tokens touched.
+
+**Surfaced findings (not patched).** None — all `fetch_secret` arity-asserting sites (C-AS-05 title, §5.1, §6.2, §8.4) are reconciled in this pass; no adjacent defect surfaced.
+
+**Downstream absorption owed (`implementation-planner` revision-pass / operator).** AS plan U-AS-20 already applies the 3-parameter `fetch_secret` body per the operator-ratified R1 direction (`Implementation_Plan_Action_Surface_v1_2.md`); its `Implements` C-AS-05 citation may be bumped to spec v1.3 at the next plan touch (the §0.6 A-5 caveat is now discharged at the spec layer). Workspace root `CLAUDE.md` §2.3 lists the AS spec at v1.2; a follow-up token bump to v1.3 is owed (out of spec-writer remit; flagged).
 
 ---
 
@@ -362,7 +382,7 @@ The always-sampled posture is a **hard floor at the deployment-binding layer** �
 
 ---
 
-## §5 C-AS-05 — `fetch_secret(name, scope) -> SecretRef` signature
+## §5 C-AS-05 — `fetch_secret(name, scope, tier) -> SecretRef` signature
 
 **Contract surface.** Function signature + tier-aware resolution discipline + `SecretRef` opaque type.
 
@@ -377,7 +397,7 @@ The always-sampled posture is a **hard floor at the deployment-binding layer** �
 ### §5.1 Function signature
 
 ```
-fetch_secret(name: string, scope: SecretScope) -> SecretRef
+fetch_secret(name: string, scope: SecretScope, tier: SandboxTier) -> SecretRef
 ```
 
 where:
@@ -386,6 +406,7 @@ where:
 |---|---|---|
 | `name` | `string` | Secret identifier within the scoped namespace; structure-not-content (the name is metadata; the value is fetched opaquely) |
 | `scope` | `SecretScope` | Credential-dimension session key per ADR-F5 v1.1 §Context; orthogonal to ADR-F1's routing-dimension session key |
+| `tier` | `SandboxTier` | The resolved sandbox tier of the call site, governing which tier-aware resolution mechanism per §5.2 applies; resolved at the call site (per C-AS-10) and passed as a plain explicit argument — **not** bundled in a context object — so the tier-aware resolution input is visible at the call surface |
 | `SecretRef` | Opaque handle type | An opaque reference to the resolved secret; **the value is not embedded in `SecretRef`**; tool-internal code accesses the value via tier-specific resolution per §5.2 |
 
 ### §5.2 Tier-aware resolution
@@ -447,7 +468,7 @@ SecretAllowlistEntry {
 
 | Property | Contract |
 |---|---|
-| **Allowlist intersection** | A tool's `fetch_secret(name, scope)` call succeeds only if `(name, scope)` ∈ `tool.contract.required_secrets` intersected with the operator-policy override |
+| **Allowlist intersection** | A tool's `fetch_secret(name, scope, tier)` call succeeds only if `(name, scope)` ∈ `tool.contract.required_secrets` intersected with the operator-policy override |
 | **Not a fifth `max()` floor** | `required_secrets` is an orthogonal access-control dimension alongside `assigned_tier`; secrets and sandbox tier are not tier-promoting per ADR-F5 v1.1 §"Permanent tensions engaged" — `required_secrets` does NOT enter the C-AS-02 `max()` composition |
 | **Authoring-time declarable** | `required_secrets` is declared at tool-contract authoring time per C-AS-03; empty list permitted (tool requires no secrets) |
 | **Audit composition** | Every successful `fetch_secret` call emits an audit-ledger entry per C-AS-08 |
@@ -562,8 +583,8 @@ Every secret fetch emits one ledger entry conforming to the C-IS-05 six-field sh
 
 | Property | Contract |
 |---|---|
-| **One ledger entry per successful fetch** | Every `fetch_secret(name, scope)` returning a `SecretRef` emits exactly one audit-ledger entry |
-| **One ledger entry per failed fetch** | Every `fetch_secret(name, scope)` returning a non-success result emits exactly one audit-ledger entry with `secret.fail.class` attribute per C-AS-07 |
+| **One ledger entry per successful fetch** | Every `fetch_secret(name, scope, tier)` returning a `SecretRef` emits exactly one audit-ledger entry |
+| **One ledger entry per failed fetch** | Every `fetch_secret(name, scope, tier)` returning a non-success result emits exactly one audit-ledger entry with `secret.fail.class` attribute per C-AS-07 |
 | **Span emission alongside ledger entry** | Per the C-AS-15 sandbox-bounded span schema and ADR-F5 v1.1 §Consequences (c) `secret.fetch` span attribute schema, a `secret.fetch` span is emitted alongside the ledger entry; span attributes carry `secret.name`, `secret.scope`, `secret.backend`, `secret.fail.class`, `secret.cache.tier_overhead_ms`, `secret.policy.access_decision_reason` (D-derivative span attribute schema deferred per ADR-F5 v1.1 §Consequences (c)) |
 | **Negative-observation invariant** | The audit-ledger entry contains the structure (`outputs_hash`) but NOT the secret value; the span attributes contain the structure but NOT the secret value (sensitive-data default-off discipline) |
 
