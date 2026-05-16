@@ -43,6 +43,7 @@ updates happen at cluster close, not per unit.
 | U-AS-12 | Operator-policy override scope per persona-tier (`override_scope`, `OverrideScopeResult`) | C-AS-09 §9.4 | ✅ landed | `feat(as): land U-AS-12` | 2026-05-16 |
 | U-AS-20 | `fetch_secret` 3-param + `SecretRef` opaque + `SecretScope` + 4-row tier-resolution table | C-AS-05 §5.1-§5.2,§5.4 | ✅ landed | `feat(as): land U-AS-20` | 2026-05-16 |
 | U-AS-28 | Eleven-primitive `AnthropicPrimitive` enum + 44-cell adoption-depth matrix + cross-axis IS path-contract binding | C-AS-13 §13.1-§13.2 | ✅ landed | `feat(as): land U-AS-28` | 2026-05-16 |
+| U-AS-07 | `ToolContract` schema + `RawContractInput` + `SecretAllowlistEntry` carrier + registration validator | C-AS-03 §3.1-§3.3 | ✅ landed | `feat(as): land U-AS-07` | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
