@@ -67,6 +67,7 @@ updates happen at cluster close, not per unit.
 | U-AS-27 | Per-fetch secret-audit emission discipline + span emission (cross-axis IS: U-IS-11) | C-AS-08 §8.4-§8.5 | ✅ landed | `feat(as): land U-AS-27` | 2026-05-16 |
 | U-AS-32 | Anthropic-primitive sampling discipline + audit-floor commitments + D6 alignment | C-AS-14 §14.8-§14.9 | ✅ landed | `feat(as): land U-AS-32` | 2026-05-16 |
 | U-AS-33 | AS-axis substrate seam exports manifest (terminal exporter — 7 seams) | C-AS-16 §16.1-§16.7 | ✅ landed | `feat(as): land U-AS-33` | 2026-05-16 |
+| U-CP-39 | HITL-as-tool-call rewriting algorithm + 3 semantic variants (`HITLSemanticVariant` 3-enum, `EngineBindingClass`, `HITL_SEMANTIC_VARIANTS` 3-entry, `RewrittenToolCall`, `select_variant`, `rewrite_tool_call_to_hitl`) — `ToolName`/`MCPServerID` typed `str` (AS-owned, no NewType landed); `rewrite_tool_call_to_hitl` takes a 7th `hitl_required: bool` param (Class 3 — plan v2.1 6-param signature carries no `GateLevelInput` to call U-CP-43's predicate; verdict injected by the caller) | C-CP-17 §17.2 | ✅ landed | `feat(cp): land U-CP-39` | 2026-05-16 |
 | U-CP-27 | Sub-agent gate-level monotonic descent + override audit (`SubAgentGateLevelDescent`, `GateOverride` opaque alias, `dispatch_sub_agent`, `assert_monotonic_descent`/`ascent`, `emit_sub_agent_dispatch_audit` → `CPAuditLedgerEntry`) — `GateOverride` opaque per §12.5 authoring-schema deferral (RoleRoutingBinding precedent); `EngineClassPreferences` NOT homed here (not in v2.1/v2.9 U-CP-27 body — U-CP-17 tension carry stays open) | C-CP-12 §12.2-§12.5 | ✅ landed | `feat(cp): land U-CP-27` | 2026-05-16 |
 | U-CP-03 | Thin routing core surface (`InferenceRequest` 6-field envelope, `InferenceResponse`, `infer` entry-point) — `infer` is the ADD §5.3.3 probabilistic core; orchestration body delegates to U-CP-05 + AS-plan SDK boundary | C-CP-01 §1.1 | ✅ landed | `feat(cp): land U-CP-03` | 2026-05-16 |
 | U-CP-02 | `ProviderCapabilities` reflection contract (10-field record + `ProviderCapability` enum) | C-CP-01 §1.2 | ✅ landed | `feat(cp): land U-CP-02` | 2026-05-16 |
@@ -285,3 +286,15 @@ state.jsonl hash-chain length 59 (43 units across IS/AS/CP/OD + harness-core).
   RESPOND}`. `{reject, respond}` is a subset of the spec's edit-free set — a
   within-allowed refinement, not a verbatim divergence — so U-CP-48 landed per
   the plan table. Non-blocking; flagged for a future CP spec/plan reconcile.
+- **U-CP-39 `rewrite_tool_call_to_hitl` predicate-input gap.** The plan v2.1
+  signature is 6-param `(tool, server, persona_tier, proposed_action,
+  cell_synchrony_class, cross_trust_boundary_state)` and AC #3 requires the
+  function to "evaluate `_hitl_required` via U-CP-43". But U-CP-43's
+  `hitl_required` predicate consumes a `GateLevelInput` (`persona_tier`,
+  `blast_radius_tier`, `deployment_surface`, `mcp_trust_tier`) — and the
+  6-param signature carries only `persona_tier`; `blast_radius_tier` /
+  `mcp_trust_tier` / `deployment_surface` are not in the argument set (AC #6
+  says per-tool tier is read from frontmatter "at runtime"). The function
+  therefore takes a 7th `hitl_required: bool` param — the caller (which holds
+  the gate context) evaluates U-CP-43 and injects the verdict. Non-blocking;
+  flagged for a CP plan signature reconcile.
