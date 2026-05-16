@@ -108,3 +108,34 @@ Filed: `.harness/finding_p6ck_verbatim_check_gap.md`.
 - **Owed:** pre-implementation re-clearance of v2.4/v2.5 before U-CP-22 + U-OD-04
   land; disposition of the new findings + the 5 original flagged items
   (U-CP-08, U-CP-11, U-OD-09 acc#2, U-OD-28, U-OD-29).
+
+## §5 AS axis-stream — Cluster L1 close (2026-05-16)
+
+AS Level-1 cluster complete — U-AS-07, U-AS-12, U-AS-20, U-AS-28 landed; the
+AS plan's entire L0+L1 is now covered (10/33 AS units). 5-dimension coherence
+pass clean (atomicity / spec-traceability / dependency-awareness / impl-grade
+detail / anti-pattern audit). 70/70 harness-as tests green; ruff + pyright
+clean. state.jsonl hash-chain length 36.
+
+**Class 3 informational observations (non-blocking, not filed as records):**
+- **U-AS-12 plan dependency-declaration gap.** Plan `Depends on [U-AS-04]`
+  omits `[U-AS-01]`, yet `BlastRadiusTier` (carried by U-AS-01) is the second
+  component of the `proposed_cell` tuple input. U-AS-01 is an L0 unit
+  transitively in-cone of every AS unit; the edge is trivially satisfied.
+  Documented in the `operator_policy_override_scope.py` docstring.
+- **U-AS-28 surface-conditioned-cell materialization discretion.** §13.2 has 8
+  surface-conditioned cells (Managed Agents + Files API rows) whose adoption
+  depth varies by deployment surface; `AdoptionDepthBinding` carries one
+  `depth`. Materialized as `depth` = managed-cloud reference-surface value,
+  `notes` = verbatim §13.2 cell text, `surface_qualifier` = divergent surface.
+  Full §13.2 content preserved in `notes`. Uses the binding's provided
+  `notes` / `surface_qualifier` fields as intended — not a fork.
+- **AS→IS package edge.** `harness-is` added to `harness-as` pyproject deps —
+  first AS→IS package dependency (materializes the U-AS-28 plan-declared
+  cross-axis IS edges; read-only consumption of the IS SKILLS path contract).
+
+**Spec divergence checked + cleared:** AS plan v1.2 §0.6 action items A-1
+(U-AS-04 re-point to harness-core) and A-5 (C-AS-05 §5.1 3-param `fetch_secret`
+spec revision) are both already discharged — A-1 in the landed
+`discriminators.py`, A-5 in AS spec v1.3 §5.1. The plan's stale caveats do not
+block; no tension.
