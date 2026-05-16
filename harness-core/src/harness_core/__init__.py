@@ -9,6 +9,8 @@ Members:
 - `WorkloadClass` — U-CP-00 (C-CP-07 §7.3 workload-class taxonomy).
 - `DeploymentSurface`, `PersonaTier`, `WorkflowEventClass` — U-CORE-01
   cross-cutting enums.
+- `AttributeValueType`, `Cardinality` — U-CP-00b schema-attribute enums,
+  re-homed here per the U-AS-31 Class 1 fork resolution (cross-axis: CP + AS).
 - The nine identity-alias `str`-newtypes — U-CORE-01 identity module.
 """
 
@@ -27,11 +29,14 @@ from harness_core.identity import (
     WorkflowID,
 )
 from harness_core.persona_tier import PersonaTier
+from harness_core.schema_attribute_enums import AttributeValueType, Cardinality
 from harness_core.workflow_event_class import WorkflowEventClass
 from harness_core.workload_class import WorkloadClass
 
 __all__ = [
     "ActionID",
+    "AttributeValueType",
+    "Cardinality",
     "ContractID",
     "DeploymentSurface",
     "EntryID",

@@ -35,10 +35,13 @@ def test_cardinality_values_byte_exact_with_relocated_enum() -> None:
     assert {m.name for m in Cardinality} == _RELOCATED_CARDINALITIES
 
 
-def test_both_enums_reside_in_harness_cp() -> None:
-    """Acceptance #3 — both enums reside in the `harness-cp` package."""
-    assert AttributeValueType.__module__ == "harness_cp.schema_attribute_enums"
-    assert Cardinality.__module__ == "harness_cp.schema_attribute_enums"
+def test_both_enums_re_homed_to_harness_core() -> None:
+    """The enums are re-homed to `harness-core` per the U-AS-31 Class 1 fork
+    resolution (`.harness/class_1_tension_u_as_31_attribute_schema_enums.md`).
+    They are cross-axis shared types (CP + AS); `harness_cp.schema_attribute_enums`
+    re-exports them so CP-side citations stay stable."""
+    assert AttributeValueType.__module__ == "harness_core.schema_attribute_enums"
+    assert Cardinality.__module__ == "harness_core.schema_attribute_enums"
 
 
 def test_attribute_schema_units_resolve_single_nominal_type() -> None:
