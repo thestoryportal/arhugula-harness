@@ -11,6 +11,10 @@ from harness_as.forced_tier_resolution import (
     ToolContext,
     forced_tier,
 )
+from harness_as.operator_policy_override_scope import (
+    OverrideScopeResult,
+    override_scope,
+)
 from harness_as.sandbox_fail_class import (
     C5FailClass,
     C9RetryPosture,
@@ -44,6 +48,7 @@ __all__ = [
     "ForcedTierResult",
     "MCPTransport",
     "MechanismClass",
+    "OverrideScopeResult",
     "PersonaTier",
     "ProviderClassMetadata",
     "SandboxFailClass",
@@ -56,6 +61,7 @@ __all__ = [
     "fail_class_metadata",
     "forced_tier",
     "is_tier_at_or_above",
+    "override_scope",
     "permanent_fail_skips_staircase",
     "provider_class_metadata",
     "tier_metadata",
