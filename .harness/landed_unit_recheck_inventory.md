@@ -192,6 +192,21 @@ should be folded into the same U-IS-02 source touch that later picks up
 
 ---
 
-*End of inventory. INSPECTION ONLY — no source, plan, spec, ADR, audit, or
-other `.harness/` file was modified. Authored 2026-05-15 as pre-resume
-coding-lane worklist.*
+## Re-point execution status (addendum — 2026-05-15)
+
+The carrier-gated re-point sweep was executed after U-CORE-01 landed.
+
+| Re-point | Unit | Status | Commit |
+|---|---|---|---|
+| `WorkloadClass` (U-CP-00) + `DeploymentSurface` (U-CORE-01) | U-IS-02 | ✅ done — AI-R2-1 cleared | `refactor(is): re-point U-IS-02 …` |
+| `DeploymentSurface` + `PersonaTier` (U-CORE-01) | U-AS-04 | ✅ done — A-1 cleared | `refactor(as): re-point U-AS-04 …` |
+| `DeploymentSurface` + `PersonaTier` (U-CORE-01) | U-OD-01 | ✅ done — R5 §3.1.1 conversion cleared | `refactor(od): re-point U-OD-01 …` |
+
+All 5 carrier-gated re-points + the 1 doable-now re-point (U-IS-02 `WorkloadClass`)
+are complete. Workspace pyright strict: 0 errors. Per-package pytest: all green.
+**U-IS-02 note:** the closed enums rejected the landed test fixtures' arbitrary
+`wf-alpha` / `local` strings — fixtures were rewritten to canonical enum values.
+**U-CP-10** remains not-landed (carry-forward — implement fresh against CP v2.6).
+
+*End of inventory. The original body above was INSPECTION ONLY; this addendum
+records the executed coding-lane re-points. Authored 2026-05-15.*
