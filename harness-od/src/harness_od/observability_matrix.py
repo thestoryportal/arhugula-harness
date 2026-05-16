@@ -92,10 +92,7 @@ ACTIVE_CELLS: frozenset[CellID] = frozenset(
     CellID(persona_tier=pt, deployment_surface=ds)
     for pt in PersonaTier
     for ds in DeploymentSurface
-    if not (
-        pt is PersonaTier.MULTI_TENANT_COMPLIANCE
-        and ds is DeploymentSurface.LOCAL_DEVELOPMENT
-    )
+    if not (pt is PersonaTier.MULTI_TENANT_COMPLIANCE and ds is DeploymentSurface.LOCAL_DEVELOPMENT)
 )
 
 #: EXCLUDED-cell rationale per C-OD-01 §1.4 (acceptance #7 verbatim).

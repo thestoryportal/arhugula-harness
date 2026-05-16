@@ -25,6 +25,7 @@ updates happen at cluster close, not per unit.
 | U-AS-11 | `SandboxProviderClass` enum + metadata | C-AS-09 §9.2 | ✅ landed | `feat(as): land U-AS-11` | 2026-05-15 |
 | U-CP-19 | `ResumptionKind` taxonomy + bindings | C-CP-08 §8.1 | ✅ landed | `feat(cp): land U-CP-19` | 2026-05-15 |
 | U-CORE-01 | Cross-cutting shared-type set (`DeploymentSurface`, `PersonaTier`, `WorkflowEventClass`, 9 identity aliases) — carrier-thin | C-AS-09 §9.1+§9.4, C-IS-05 §5, C-CP-05 §5.1-§5.2, C-CP-13 §13.4 | ✅ landed | `feat(core): land U-CORE-01` | 2026-05-15 |
+| U-OD-00 | OD-local audit-ledger composition types (`AuditPayload`, `AuditLedgerEntry`, `AuditLedger`, `AuditSignatureAttributes`, `SignatureAlgorithm`) | C-OD-14 §14.5, ADR-D5 §1.4/§1.4.1, C-OD-21 §21.2 | ✅ landed | `feat(od): land U-OD-00` | 2026-05-15 |
 
 ## Operational-minimum set (7a exit-criterion #1 — 12 units)
 
@@ -45,6 +46,7 @@ land-now without v2.4/v2.5 pre-implementation re-clearance.
 | `Phase_7_Class_3_Tension_001_Git_Tier_Sub_Role_Count.md` | C-IS-03 §3 "four" vs 5 rows | ✅ resolved — spec fixed in-CLI; block cleared |
 | `Phase_7_Class_1_Tension_002_Topology_Pattern_Enum.md` | TopologyPattern enum 3-way divergence | ✅ resolved 2026-05-15 — operator signed off Set 2 (spec C-CP-10 §10.1); CP-AL-1 conformed at 4 loci; commit `45f104f` |
 | `class_1_tension_u_core_01_workflow_event.md` | U-CORE-01 `WorkflowEvent` payload model unmaterializable as a `harness-core` carrier type | ✅ resolved 2026-05-15 — operator ruled carrier-thin; payload model struck; harness-core plan v1.0→v1.1; U-CORE-01 landed without it |
+| `class_1_tension_u_od_00_carrier_defects.md` | U-OD-00 §3.0 three carrier defects — SignatureAlgorithm cycle (D-1), missing CellID edge / false L0 (D-2), AuditSignatureAttributes un-spec'd field (D-3) | ✅ resolved 2026-05-15 — operator ruled micro-revise; OD plan v2.6→v2.7; U-OD-00 landed against v2.7 |
 | `Phase_7_Class_1_Tension_003_WorkloadClass_Undeclared.md` | `WorkloadClass` type used by ~10 CP units, declared by none | 🛑 OPEN 2026-05-15 — U-CP-22 halted; plan-gap (missing declaring unit) |
 | `Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` | U-OD-04 plan signature diverges from spec C-OD-04 at 4 points | 🛑 OPEN 2026-05-15 — U-OD-04 halted; subsumed into the OD-plan systemic audit below |
 
