@@ -7,7 +7,6 @@ against C-OD-13 §13.3.
 from __future__ import annotations
 
 import pytest
-
 from harness_od.cross_deployment_monotonic_tightening import (
     D2_CROSS_DEPLOYMENT_MONOTONICITY_COMPOSITION,
     D5_CROSS_DEPLOYMENT_MONOTONICITY_COMPOSITION,
