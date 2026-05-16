@@ -27,6 +27,7 @@ updates happen at cluster close, not per unit.
 | U-CORE-01 | Cross-cutting shared-type set (`DeploymentSurface`, `PersonaTier`, `WorkflowEventClass`, 9 identity aliases) — carrier-thin | C-AS-09 §9.1+§9.4, C-IS-05 §5, C-CP-05 §5.1-§5.2, C-CP-13 §13.4 | ✅ landed | `feat(core): land U-CORE-01` | 2026-05-15 |
 | U-OD-00 | OD-local audit-ledger composition types (`AuditPayload`, `AuditLedgerEntry`, `AuditLedger`, `AuditSignatureAttributes`, `SignatureAlgorithm`) | C-OD-14 §14.5, ADR-D5 §1.4/§1.4.1, C-OD-21 §21.2 | ✅ landed | `feat(od): land U-OD-00` | 2026-05-15 |
 | U-CP-00b | CP schema-attribute utility enums (`AttributeValueType`, `Cardinality`) — carrier-split (9 structured types deferred) | aggregate of 7 CP attribute-schema contracts | ✅ landed | `feat(cp): land U-CP-00b` | 2026-05-15 |
+| U-IS-07 | State-ledger entry shape schema (`StateLedgerEntry`, `Actor`, `ActorClass`, `Bytes32`, `ALL_ZEROS_SENTINEL`) | C-IS-05 §5 | ✅ landed | `feat(is): land U-IS-07` | 2026-05-15 |
 
 ## Operational-minimum set (7a exit-criterion #1 — 12 units)
 
