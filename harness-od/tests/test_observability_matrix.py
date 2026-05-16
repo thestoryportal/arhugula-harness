@@ -1,11 +1,19 @@
 """Tests for U-OD-01 — 9-cell observability matrix (C-OD-01).
 
-Test set per the U-OD-01 `Tests:` field — 12 tests covering acceptance #1-#12.
+Test set per the U-OD-01 `Tests:` field. v2.6 declaration-site conversion: the
+`test_persona_tier_*` / `test_deployment_surface_*` in-unit-declaration tests
+are removed (the enums moved to U-CORE-01 and are tested there); the five v2.6
+conversion tests are added.
 """
 
 from __future__ import annotations
 
+import inspect
+
+import harness_core
 import pytest
+from harness_core import DeploymentSurface, PersonaTier
+from harness_od import observability_matrix
 from harness_od.observability_matrix import (
     ACTIVE_CELLS,
     EXCLUDED_CELL,
@@ -13,15 +21,9 @@ from harness_od.observability_matrix import (
     CellBindingViolation,
     CellID,
     CellStatus,
-    DeploymentSurface,
-    PersonaTier,
     cell_status,
     reject_excluded_cell,
 )
-
-# Verbatim from C-OD-01 §1.1.
-_SPEC_PERSONA_TIERS = {"solo-developer", "team-binding", "multi-tenant-compliance"}
-_SPEC_DEPLOYMENT_SURFACES = {"local-development", "self-hosted-server", "managed-cloud"}
 
 # Acceptance #7 — EXCLUDED rationale per §1.4, byte-exact.
 _SPEC_RATIONALE = (
@@ -29,18 +31,6 @@ _SPEC_RATIONALE = (
     "encryption-at-rest with vendor-managed key custody, retention controls) "
     "are incompatible with single-developer-machine deployment"
 )
-
-
-def test_persona_tier_cardinality_three() -> None:
-    """Acceptance #1 — PersonaTier has 3 values matching §1.1 verbatim."""
-    assert len(PersonaTier) == 3
-    assert {t.value for t in PersonaTier} == _SPEC_PERSONA_TIERS
-
-
-def test_deployment_surface_cardinality_three() -> None:
-    """Acceptance #2 — DeploymentSurface has 3 values matching §1.1 verbatim."""
-    assert len(DeploymentSurface) == 3
-    assert {s.value for s in DeploymentSurface} == _SPEC_DEPLOYMENT_SURFACES
 
 
 def test_cell_id_product_nine() -> None:
@@ -117,3 +107,44 @@ def test_cell_id_serialization_round_trip() -> None:
         deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER,
     )
     assert CellID.model_validate_json(cell.model_dump_json()) == cell
+
+
+# --- v2.6 declaration-site-conversion tests ---------------------------------
+
+
+def test_deployment_surface_imported_from_harness_core() -> None:
+    """v2.6 conversion — `DeploymentSurface` resolves to the U-CORE-01 carrier."""
+    assert observability_matrix.DeploymentSurface is harness_core.DeploymentSurface
+    assert DeploymentSurface.__module__ == "harness_core.deployment_surface"
+
+
+def test_persona_tier_imported_from_harness_core() -> None:
+    """v2.6 conversion — `PersonaTier` resolves to the U-CORE-01 carrier."""
+    assert observability_matrix.PersonaTier is harness_core.PersonaTier
+    assert PersonaTier.__module__ == "harness_core.persona_tier"
+
+
+def test_cell_id_fields_resolve_to_harness_core_enums() -> None:
+    """v2.6 conversion — `CellID`'s fields resolve to the imported carriers."""
+    cell = CellID(
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+        deployment_surface=DeploymentSurface.MANAGED_CLOUD,
+    )
+    assert type(cell.persona_tier) is harness_core.PersonaTier
+    assert type(cell.deployment_surface) is harness_core.DeploymentSurface
+
+
+def test_depends_on_u_core_01_core_edge_declared() -> None:
+    """v2.6 conversion — U-OD-01 takes its `[U-CORE-01 (cross-axis: core)]`
+    edge: the observability-matrix module sources both enums from
+    `harness-core`, not from any OD-local declaration."""
+    assert observability_matrix.PersonaTier is harness_core.PersonaTier
+    assert observability_matrix.DeploymentSurface is harness_core.DeploymentSurface
+
+
+def test_no_local_deployment_surface_or_persona_tier_declaration() -> None:
+    """v2.6 conversion — U-OD-01 does NOT redeclare the cross-cutting enums;
+    a local `class PersonaTier`/`class DeploymentSurface` would be a defect."""
+    source = inspect.getsource(observability_matrix)
+    assert "class PersonaTier" not in source
+    assert "class DeploymentSurface" not in source

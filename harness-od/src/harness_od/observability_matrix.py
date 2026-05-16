@@ -9,33 +9,39 @@ cells, 8 ACTIVE and 1 structurally EXCLUDED
 (`multi-tenant-compliance x local-development`). `CellID` is the canonical key
 for all downstream per-cell bindings.
 
-Authority: Implementation_Plan_Operational_Discipline_v2_1.md §3.1.1 U-OD-01
-(Cluster 1 preserved verbatim through v2.2/v2.3/v2.4);
-Spec_Operational_Discipline_v1_2.md §1 C-OD-01 (preserved verbatim into v1.3);
-ADR-D6 v1.1 §1.1.
+Authority: Implementation_Plan_Operational_Discipline_v2_6.md §3.1.1 U-OD-01
+(v2.6 declaration-site conversion; Cluster 1 body preserved verbatim from v2.1
+through v2.5 otherwise); Spec_Operational_Discipline_v1_2.md §1 C-OD-01
+(preserved verbatim into v1.3); ADR-D6 v1.1 §1.1.
+
+v2.6 declaration-site conversion (R1 §3.4 hand-off): the in-unit `PersonaTier`
+and `DeploymentSurface` enum declarations are stripped and imported from
+`harness-core` U-CORE-01 via the `[U-CORE-01 (cross-axis: core)]` edge. The
+landed enum values matched U-CORE-01 byte-exact before deletion. `CellID` and
+the 9-cell matrix are unaffected as types — only the enums `CellID` composes
+move to `harness-core`. The `harness-core` import is shared-substrate, not an
+outbound CXA edge (OD→IS/AS/CP cross-axis edge count unchanged).
 """
 
 from __future__ import annotations
 
 from enum import StrEnum
 
+from harness_core import DeploymentSurface, PersonaTier
 from pydantic import BaseModel, ConfigDict
 
-
-class PersonaTier(StrEnum):
-    """The 3 persona tiers (C-OD-01 §1.1, verbatim)."""
-
-    SOLO_DEVELOPER = "solo-developer"
-    TEAM_BINDING = "team-binding"
-    MULTI_TENANT_COMPLIANCE = "multi-tenant-compliance"
-
-
-class DeploymentSurface(StrEnum):
-    """The 3 deployment surfaces (C-OD-01 §1.1, verbatim)."""
-
-    LOCAL_DEVELOPMENT = "local-development"
-    SELF_HOSTED_SERVER = "self-hosted-server"
-    MANAGED_CLOUD = "managed-cloud"
+__all__ = [
+    "ACTIVE_CELLS",
+    "EXCLUDED_CELL",
+    "EXCLUDED_CELL_RATIONALE",
+    "CellBindingViolation",
+    "CellID",
+    "CellStatus",
+    "DeploymentSurface",
+    "PersonaTier",
+    "cell_status",
+    "reject_excluded_cell",
+]
 
 
 class CellStatus(StrEnum):
