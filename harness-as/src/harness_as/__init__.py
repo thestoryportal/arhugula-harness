@@ -63,6 +63,7 @@ from harness_as.sandbox_tier_floor import (
     ToolMetadata,
     sandbox_tier_floor,
 )
+from harness_as.secret_allowlist import AllowlistDecision, check_secret_allowlist
 from harness_as.secret_fetch import (
     TIER_RESOLUTION_TABLE,
     SecretRef,
@@ -93,6 +94,7 @@ __all__ = [
     "TIER_RESOLUTION_TABLE",
     "AdoptionDepth",
     "AdoptionDepthBinding",
+    "AllowlistDecision",
     "AnchorCitation",
     "AnthropicPrimitive",
     "BlastRadiusTier",
@@ -133,6 +135,7 @@ __all__ = [
     "ToolMetadata",
     "adoption_depth",
     "blast_radius_floor",
+    "check_secret_allowlist",
     "fail_class_metadata",
     "fetch_secret",
     "forced_tier",
