@@ -7,14 +7,21 @@ identifier character); they are materialized here with `spec_4_3`-style names.
 
 from __future__ import annotations
 
+import typing
+
+import pytest
 from harness_od.otel_genai_base import (
     BASE_LAYER_ATTRIBUTES,
     BASE_METRIC_NAME,
     HIERARCHY_CORRELATION_KEY,
     SPAN_NAME_FORMAT,
     AttributeTier,
+    ChildSpanRef,
+    EventEmission,
     GenAiAttribute,
     GenAiOperation,
+    SpanAttributes,
+    SpanRef,
     attributes_in_tier,
     span_name,
 )
@@ -23,6 +30,9 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from opentelemetry.trace import Span as _OTelSpan
+from opentelemetry.util.types import Attributes as _OTelAttributes
+from pydantic import ValidationError
 
 # --- Spec §4 verbatim reference sets (transcribed from C-OD-04) -------------
 
@@ -217,3 +227,90 @@ def test_otel_semconv_validator_passes() -> None:
         assert attr.name == attr.name.lower()
         assert " " not in attr.name
         assert attr.name.startswith(("gen_ai.", "server."))
+
+
+# --- acceptance #9 (v2.6 carrier-growth) — OTel-handle alias family ---------
+
+
+def test_span_ref_aliases_otel_sdk_span_handle() -> None:
+    """v2.6 acc #9 — `SpanRef` is a type-alias of the OTel-SDK span handle.
+
+    `SpanRef` is declared via a `type` statement; its `__value__` resolves to
+    `opentelemetry.trace.Span`, the OTel-SDK span data model. The harness does
+    not redefine the OTel span — it aliases it.
+    """
+    assert isinstance(SpanRef, typing.TypeAliasType)
+    assert SpanRef.__value__ is _OTelSpan
+
+
+def test_child_span_ref_aliases_otel_sdk_span_handle() -> None:
+    """v2.6 acc #9 — `ChildSpanRef` aliases the same OTel-SDK span handle.
+
+    `ChildSpanRef` is a nominal child-span distinction over the identical
+    OTel-SDK substrate as `SpanRef` (eval child-span emission, C-OD-17 §17.2).
+    """
+    assert isinstance(ChildSpanRef, typing.TypeAliasType)
+    assert ChildSpanRef.__value__ is _OTelSpan
+    assert ChildSpanRef.__value__ is SpanRef.__value__
+
+
+def test_span_attributes_aliases_otel_sdk_attribute_map() -> None:
+    """v2.6 acc #9 — `SpanAttributes` aliases the OTel-SDK attribute map."""
+    assert isinstance(SpanAttributes, typing.TypeAliasType)
+    assert SpanAttributes.__value__ is _OTelAttributes
+
+
+def test_event_emission_four_fields() -> None:
+    """v2.6 acc #9 — `EventEmission` has exactly four fields with the spec
+    names and types (`emitted_at_span : SpanRef`, `event_name : str`,
+    `attribute_count : int`, `sampled : bool`)."""
+    fields = EventEmission.model_fields
+    assert set(fields) == {"emitted_at_span", "event_name", "attribute_count", "sampled"}
+    assert len(fields) == 4
+    tracer = TracerProvider().get_tracer("u-od-04-test")
+    with tracer.start_as_current_span("span") as span:
+        emission = EventEmission(
+            emitted_at_span=span,
+            event_name="hitl.gate.evaluated",
+            attribute_count=3,
+            sampled=True,
+        )
+    assert emission.emitted_at_span is span
+    assert emission.event_name == "hitl.gate.evaluated"
+    assert emission.attribute_count == 3
+    assert emission.sampled is True
+
+
+def test_event_emission_is_harness_record_not_otel_sdk_type() -> None:
+    """v2.6 acc #9 — `EventEmission` is a harness record (a frozen Pydantic
+    model), NOT an OTel-SDK type — the faithful factor-out return-record over
+    the OD emission contracts (C-OD-09 / C-OD-25)."""
+    from pydantic import BaseModel as _BaseModel
+
+    assert issubclass(EventEmission, _BaseModel)
+    assert EventEmission.__module__.startswith("harness_od.")
+    assert EventEmission.model_config.get("frozen") is True
+    # frozen → field assignment after construction is rejected.
+    tracer = TracerProvider().get_tracer("u-od-04-test")
+    with tracer.start_as_current_span("span") as span:
+        emission = EventEmission(
+            emitted_at_span=span, event_name="e", attribute_count=0, sampled=False
+        )
+    with pytest.raises(ValidationError):
+        emission.event_name = "mutated"
+
+
+def test_span_handle_family_single_declaration_site_at_u_od_04() -> None:
+    """v2.6 acc #9 — the `Span*` family is declared at exactly one site
+    (`harness_od.otel_genai_base`, the U-OD-04 module). The nine downstream
+    consumers (U-OD-09/10/19/20/23/25/26/30/31) import from here — no member
+    is re-declared at a consumer."""
+    import harness_od.otel_genai_base as u_od_04
+
+    for name in ("SpanRef", "ChildSpanRef", "SpanAttributes", "EventEmission"):
+        member = getattr(u_od_04, name)
+        assert member is not None
+    assert SpanRef is u_od_04.SpanRef
+    assert ChildSpanRef is u_od_04.ChildSpanRef
+    assert SpanAttributes is u_od_04.SpanAttributes
+    assert EventEmission is u_od_04.EventEmission

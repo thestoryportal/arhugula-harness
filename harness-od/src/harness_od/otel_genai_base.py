@@ -10,19 +10,49 @@ attribute name, operation value, tier name, the span-name format, and the base
 metric name is the OTel GenAI semantic conventions 1.41.0 surface, transcribed
 verbatim from the spec §4 tables.
 
-Authority: Implementation_Plan_Operational_Discipline_v2_5.md §3.2.1 U-OD-04
-(v2.5 conformance revision — absorbs Tension 004 / the §4A verbatim-divergence
-cluster: 3-component span name, 7-operation enum, 3-tier `AttributeTier`,
-`gen_ai.client.operation.duration` base metric); Spec_Operational_Discipline_v1_2.md
-§4 C-OD-04 (preserved verbatim into v1.3 per v1.3 §0.1); ADR-D6 v1.1 §1.2
-base-layer block (OTel GenAI semconv 1.41.0 [HIGH] cross-vendor floor).
+Authority: Implementation_Plan_Operational_Discipline_v2_6.md §3.2.1 U-OD-04
+(v2.6 carrier-growth revision — additive `Span*` OTel-handle alias family +
+acceptance #9; over the v2.5 conformance revision that absorbed Tension 004 /
+the §4A verbatim-divergence cluster: 3-component span name, 7-operation enum,
+3-tier `AttributeTier`, `gen_ai.client.operation.duration` base metric);
+Spec_Operational_Discipline_v1_2.md §4 C-OD-04 (preserved verbatim into v1.3
+per v1.3 §0.1); ADR-D6 v1.2 §1.2 base-layer block (OTel GenAI semconv 1.41.0
+[HIGH] cross-vendor floor); ADR-F5 (observability substrate primitive) — the
+`Span*` family authority trace (Q-R5-6).
 """
 
 from __future__ import annotations
 
 from enum import StrEnum
 
+from opentelemetry.trace import Span as _OTelSpan
+from opentelemetry.util.types import Attributes as _OTelAttributes
 from pydantic import BaseModel, ConfigDict
+
+# --- v2.6 addition: OTel-handle alias family (M-1 carrier) ------------------
+# Per T2 FACTOR-OUT verdict (acceptance #9): these are harness aliases for the
+# OTel-SDK span data model (Target_Stack_Commitment §5.2 OTel-libraries
+# adoption). ADR-F5 observability substrate + ADR-D6 v1.2 12-namespace OTel
+# schema commit the span/attribute handle concept. NOT a harness design
+# extension (X-AL-3 cleared by T2). This is the single declaration site for
+# the Span* family consumed at U-OD-09 / U-OD-10 / U-OD-19 / U-OD-20 /
+# U-OD-23 / U-OD-25 / U-OD-26 / U-OD-30 / U-OD-31.
+
+#: An opaque handle to an OTel span — the parent-span handle the harness
+#: threads through emission functions. Type-alias of the OTel-SDK span handle
+#: (`opentelemetry.trace.Span`); the harness does not redefine the OTel span
+#: data model.
+type SpanRef = _OTelSpan
+
+#: A `SpanRef` known to be a child span (eval child-span emission per
+#: C-OD-17 §17.2). Same OTel-SDK substrate as `SpanRef`; a nominal distinction
+#: marking child-span emission positions.
+type ChildSpanRef = _OTelSpan
+
+#: The OTel attribute bag — the typed attribute map a span carries. Type-alias
+#: of the OTel-SDK attribute model (`opentelemetry.util.types.Attributes`,
+#: i.e. `Mapping[str, AttributeValue]`).
+type SpanAttributes = _OTelAttributes
 
 
 class GenAiOperation(StrEnum):
@@ -127,3 +157,24 @@ def span_name(operation: GenAiOperation, provider: str, model: str) -> str:
 def attributes_in_tier(tier: AttributeTier) -> tuple[GenAiAttribute, ...]:
     """Return the base-layer attributes classified in `tier` (C-OD-04 §4.3)."""
     return tuple(attr for attr in BASE_LAYER_ATTRIBUTES if attr.tier is tier)
+
+
+class EventEmission(BaseModel):
+    """The harness return-record for a span-event emission (v2.6 acc #9).
+
+    Per the T2 FACTOR-OUT verdict, the OD emission contracts (C-OD-09
+    breaker-event, C-OD-25 drift-event) commit the event-emission concept;
+    `EventEmission` is the faithful factor-out return-record — a harness
+    record, NOT an OTel-SDK type. Frozen → `Eq` over its four fields.
+
+    `emitted_at_span` is a `SpanRef` (an OTel-SDK span handle), so the model
+    needs `arbitrary_types_allowed` — Pydantic cannot generate a schema for
+    the OTel span handle, and it is carried opaquely.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
+
+    emitted_at_span: SpanRef  #: the span the event was emitted at
+    event_name: str  #: the OTel event name
+    attribute_count: int  #: count of attributes on the emitted event
+    sampled: bool  #: whether the event was sampled (head=1.0 for always-sampled classes)
