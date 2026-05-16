@@ -34,6 +34,7 @@ updates happen at cluster close, not per unit.
 | U-IS-08 | Entry canonicalization + per-entry SHA-256 hash (`canonicalize`, `compute_response_hash`) | C-IS-06 §6.1-§6.2 | ✅ landed | `feat(is): land U-IS-08` | 2026-05-15 |
 | U-IS-14 | Shadow-Git checkpoint primitive (`create_shadow_git_checkpoint`, `should_checkpoint`) — `on_workflow_event` deferred (tension F-3) | C-IS-08 §8.2-§8.4 | ✅ landed | `feat(is): land U-IS-14` | 2026-05-16 |
 | U-IS-16 | Worktree-isolation primitive (`WorktreeIsolationManager`: allocate/reclaim, concurrency cap) | C-IS-09 §9.2-§9.3 | ✅ landed | `feat(is): land U-IS-16` | 2026-05-16 |
+| U-IS-09 | Chain-link construction primitive (`construct_prior_event_hash`) | C-IS-06 §6.3 | ✅ landed | `feat(is): land U-IS-09` | 2026-05-16 |
 
 ## Operational-minimum set (7a exit-criterion #1 — 12 units)
 
