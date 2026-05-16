@@ -83,7 +83,7 @@ All canonical artifacts reside at the **design-phase workspace** (separate Claud
 
 | Axis | Plan | Unit count |
 |---|---|---|
-| core | `Implementation_Plan_Harness_Core_v1_0.md` | 1 unit (U-CORE-01) — shared-type carrier; added 2026-05-15 per revision pass R1 |
+| core | `Implementation_Plan_Harness_Core_v1_1.md` | 1 unit (U-CORE-01) — shared-type carrier; added 2026-05-15 per revision pass R1; v1.1 carrier-thin Class 1 fork resolution (WorkflowEvent payload model struck) 2026-05-15 |
 | IS | `Implementation_Plan_Information_Substrate_v2_3.md` | 17 units (U-IS-01 – U-IS-17) |
 | AS | `Implementation_Plan_Action_Surface_v1_2.md` | 33 units (U-AS-01 – U-AS-33) |
 | CP | `Implementation_Plan_Control_Plane_v2_6.md` | 57 units (U-CP-00b added; U-CP-01 – U-CP-55 + U-CP-00 + U-CP-00b) |
