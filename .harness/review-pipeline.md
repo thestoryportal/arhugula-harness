@@ -132,7 +132,8 @@ carriers. Each produces a revised plan returned for per-pass operator ratificati
 | R3 | AS plan revision — absorb `verbatim_audit_as_plan.md` + carrier map | ✅ COMPLETE + APPLIED 2026-05-15 — `Implementation_Plan_Action_Surface_v1_1.md` (9 units revised, 20 preserved, U-AS-06/09/12/20 deferred to R3.1). Action items A-1..A-4 flagged. |
 | S1 | `systems-architect` C-AS-02 spec-gap reconciliation analysis | ✅ COMPLETE 2026-05-15 — escalated: contradiction originates at ADR-D2. Operator AUTHORIZED the ADR-D2 + spec fix 2026-05-15. |
 | S2 | `spec-writer` apply C-AS-02 + ADR-D2 fix per S1 | ✅ COMPLETE 2026-05-15 — `ADR-D2.md` v1.1→v1.2, `Spec_Action_Surface_v1.md` v1.1→v1.2 (5-arg `sandbox_tier_floor`). ADD verified — no ripple. `CLAUDE.md` §2.2/§2.3 version tokens bumped. |
-| R3.1 | AS micro-pass — finalize U-AS-06/09/12/20 | ✅ RATIFIED 2026-05-15 (D1/D2 + S2 spec fix). 🟡 APPLYING → `Implementation_Plan_Action_Surface_v1_2.md` |
+| R3.1 | AS micro-pass — finalize U-AS-06/09/12/20 | ✅ COMPLETE + APPLIED 2026-05-15 — `Implementation_Plan_Action_Surface_v1_2.md`. **NEW action item A-5:** D1 (3-param `fetch_secret`) needs a small C-AS-05 §5.1 spec touch — the spec still reads 2-param (it was outside S2's scope). Authorized by the D1 ratification; pending pass S3. |
+| S3 | `spec-writer` C-AS-05 §5.1 `fetch_secret` 2→3-param touch (per ratified D1) | pending — small; bundle with R5 launch |
 | R4 | CP plan revision — absorb `materializability_audit_cp_plan.md` + carrier map | ✅ RATIFIED 2026-05-15 (Q-R4-1..7 = decisions D3–D9, all approved). 🟡 APPLYING → `Implementation_Plan_Control_Plane_v2_6.md` |
 | R5 | OD plan revision — absorb `materializability_audit_od_plan.md` + carrier map | pending R4-apply |
 | R5 | OD plan revision — absorb `materializability_audit_od_plan.md` + carrier map | pending R4 |
