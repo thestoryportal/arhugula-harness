@@ -39,6 +39,9 @@ updates happen at cluster close, not per unit.
 | U-IS-12 | C2-pole selective bounded read (`NavigationPrimitive`, 4 concrete primitives) | C-IS-07 §7.2-§7.3 | ✅ landed | `feat(is): land U-IS-12` | 2026-05-16 |
 | U-IS-11 | C3-pole append-only write contract (`append_ledger_entry`, JSONL §7.3 format) | C-IS-07 §7.1-§7.3 | ✅ landed | `feat(is): land U-IS-11` | 2026-05-16 |
 | U-IS-15 | Shadow-Git rollback primitive (`rollback_to_checkpoint`) | C-IS-08 §8.3 | ✅ landed | `feat(is): land U-IS-15` | 2026-05-16 |
+| U-IS-17 | IS substrate seam exports manifest (terminal exporter — 6 seams) | C-IS-10 §10.1-§10.6 | ✅ landed | `feat(is): land U-IS-17` | 2026-05-16 |
+
+**IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
 ## Operational-minimum set (7a exit-criterion #1 — 12 units)
 
