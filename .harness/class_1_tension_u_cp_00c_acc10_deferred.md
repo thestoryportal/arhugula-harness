@@ -34,6 +34,18 @@ materializable part (the 9 type declarations + their isolated conformance
 tests) is landed; the full-enumeration assertion of acc #10 is struck and
 deferred until the Pattern-D structured-type consumer halts clear.
 
+## Known sub-issue — `MCPTrustTier` value-set divergence (surfaced 2026-05-16)
+
+The landed U-CP-00c `MCPTrustTier` enum carries the AS C-AS-10 §10.3 4-level
+trust-tier values (`LEVEL_0_REFUSE_REMOTE` / `LEVEL_1_SIGNED_PINNED` /
+`LEVEL_2_SANDBOX_ALL` / `LEVEL_3_ALLOW_WITH_AUDIT`), whereas the already-landed
+U-CP-43 `MCP_TRUST_GATE_LEVEL_FLOOR` keys on a different 4-value set
+(`TIER_1_FIRST_PARTY` / `TIER_2_VENDOR_VERIFIED` / `TIER_3_COMMUNITY_AUDITED` /
+`TIER_4_UNTRUSTED`) — both claiming byte-exact C-AS-10 §10.3. When U-CP-43's
+`[U-CP-00c]` consumer edge is wired (sub-phase 7c CXA pass), the two value sets
+must be reconciled — either a 7c seam mapping or a U-CP-43 micro-revision
+conforming its floor-table keys to the U-CP-00c `MCPTrustTier`.
+
 ## Routing
 
 Class 1 — informational/coverage. No design-substrate revision required: the 9
