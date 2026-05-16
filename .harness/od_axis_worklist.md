@@ -50,3 +50,22 @@ flag if a unit reaches past primitive into "start the process".
   review class as CP v2.8/v2.9.
 - **Deferred U-OD-02 cluster** (blocked on U-OD-02 resolution): U-OD-02, U-OD-03
   (L2), U-OD-28 (L6), U-OD-30 (L7). All other units proceed.
+- **L2 closed 2026-05-16.** U-OD-06/07/16 landed (first batch); U-OD-13/19/23
+  landed (second batch) + U-OD-04 v2.6 carrier-growth applied. pyright strict 0,
+  154 tests green. U-OD-13 stale-edge struck; U-OD-19/23 Span* carrier resolved.
+  Phase-2 flag: U-OD-23 `emit_eval_as_child_span` uses the global tracer
+  provider — real parent→child trace inheritance unverified until a Phase 2
+  composition root wires `set_tracer_provider`. Class 3 informational; AC met.
+- **L3 closed 2026-05-16.** U-OD-14/20/26 landed. pyright strict 0, 254 tests
+  green. U-OD-08 HALTED (`F2_LIFECYCLE_EVENT_MAPPINGS` 8-set disjoint 5/8 from
+  spec C-OD-06 §6.1 — plan-vs-spec divergence; conform-to-spec). U-OD-09 HALTED
+  (FF-1 — AC #2 tier classification has no C-OD-07 §7.1 spec basis + the
+  `AttributeTier` enum has no REQUIRED/CONDITIONAL members; strike AC #2).
+- **Deferred cluster now 7 units** pending an OD-plan implementation-planner
+  revision pass: U-OD-02 (widen signature), U-OD-03 (on 02), U-OD-08 (conform
+  event set to spec), U-OD-09 (strike AC #2), U-OD-10 (on 08/09), U-OD-28
+  (on 02), U-OD-30 (on 02). Corpus-hygiene note: F3 lifecycle event taxonomy
+  appears in 3 divergent forms (plan / spec §6.1 / OD CLAUDE.md §1.1) —
+  unpinned; flag for the revision pass.
+- **OD landed: 15/35** (00,01,04,05,06,07,13,14,15,16,18,19,20,23,26).
+  Remaining 20 — 13 buildable + 7 deferred.
