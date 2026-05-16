@@ -117,6 +117,14 @@ updates happen at cluster close, not per unit.
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
+**CP axis stream — NOT COMPLETE. 44/57 units landed (2026-05-16).** Final-batch
+landed 4 of 9 brief units: U-CP-35, U-CP-43 (partial), U-CP-36, U-CP-53.
+5 brief units BLOCKED on unlanded dependency units (U-CP-46/32/33/50/55); a
+further 8 CP units (U-CP-03/27/39/41/45/49/51/52/54) were never in any batch.
+14 CP units remain unlanded — see `.harness/class_1_tension_cp_scope_discrepancy.md`
+for the residual list + dependency-unblock order. The "9 = final batch" brief
+under-counted the residual.
+
 ## Operational-minimum set (7a exit-criterion #1 — 12 units)
 
 U-IS-01 ✅ · U-IS-02 ✅ · U-IS-03 ✅ · U-IS-04 ✅ · U-AS-01 ✅ · U-AS-02 ✅ ·
