@@ -37,8 +37,19 @@ from harness_as.sandbox_tier import (
     is_tier_at_or_above,
     tier_metadata,
 )
+from harness_as.secret_fetch import (
+    TIER_RESOLUTION_TABLE,
+    SecretRef,
+    SecretResolutionMechanism,
+    SecretScope,
+    TierResolutionMechanism,
+    TPerm2Pole,
+    fetch_secret,
+    tier_resolution_mechanism,
+)
 
 __all__ = [
+    "TIER_RESOLUTION_TABLE",
     "BlastRadiusTier",
     "C5FailClass",
     "C9RetryPosture",
@@ -56,13 +67,20 @@ __all__ = [
     "SandboxProviderClass",
     "SandboxTier",
     "SandboxTierMetadata",
+    "SecretRef",
+    "SecretResolutionMechanism",
+    "SecretScope",
+    "TPerm2Pole",
+    "TierResolutionMechanism",
     "ToolContext",
     "blast_radius_floor",
     "fail_class_metadata",
+    "fetch_secret",
     "forced_tier",
     "is_tier_at_or_above",
     "override_scope",
     "permanent_fail_skips_staircase",
     "provider_class_metadata",
     "tier_metadata",
+    "tier_resolution_mechanism",
 ]
