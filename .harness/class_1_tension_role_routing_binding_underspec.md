@@ -1,8 +1,34 @@
 # Class 1 Tension — `RoleRoutingBinding` / `WorkloadRoutingOverride` underspecified
 
-**Status:** 🛑 Class 1 — OPEN. Two `RoutingManifest` sub-records cannot be specified without inventing a field set.
+**Status:** ✅ RESOLVED 2026-05-16 — operator-ratified factor-out (path 2 below). Schemas R-2 / W-2 ruled by the operator; U-CP-04 `RoutingManifest` now full-lands.
 **Filed:** 2026-05-16 (Phase 7 7b, CP axis-stream — during the v2.9 plan revision pass).
 **Scope:** `RoleRoutingBinding`, `WorkloadRoutingOverride` — constituent value-types of U-CP-04's `RoutingManifest`.
+
+---
+
+## Resolution — operator ruling 2026-05-16
+
+The operator was presented the design space (candidate schemas minimal / moderate /
+full per type) and **approved schema R-2 for `RoleRoutingBinding` and W-2 for
+`WorkloadRoutingOverride`** — path 2 (operator-ratified factor-out). The operator
+ruling supplies the design-authority decision the plan/spec lacked; the two records
+are no longer an X-AL-3 risk because the field set is now operator-committed, not
+implementer-guessed.
+
+**R-2 — `RoleRoutingBinding`** (`harness_cp/routing_manifest_residence.py`):
+- `preferred_model_binding : ModelBinding` (U-CP-00c)
+- `layer_budget_overrides : Mapping[RoutingLayer, int]` (U-CP-06)
+- `fallback_chain_ref : str | None` (U-CP-09 chain name)
+
+**W-2 — `WorkloadRoutingOverride`** (same module):
+- `engine_class_override : EngineClass | None` (U-CP-15)
+- `sandbox_tier_override : SandboxTier | None` (AS-owned; sanctioned CP→AS edge)
+- `model_binding_override : ModelBinding | None` (U-CP-00c)
+
+Both are frozen `extra="forbid"` Pydantic records composing only landed types.
+U-CP-04 `RoutingManifest` upgraded from PARTIAL-LAND to FULL-LAND. pyright strict
+0 errors; CP suite 465 tests green. No new design surface introduced beyond the
+operator-approved field sets.
 
 ## Root cause
 

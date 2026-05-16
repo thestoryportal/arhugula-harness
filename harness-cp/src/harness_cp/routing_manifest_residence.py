@@ -5,15 +5,22 @@ and — per the Implementation Plan v2.9 factor-out delta — C-CP-03 §3.5 (the
 `RetryPolicy` record, a faithful factor-out of the `retry.*` namespace
 `retry.policy` full-jitter-default vocabulary).
 
-PARTIAL-LAND (v2.9 §0.5). `RetryPolicy`, `manifest_version`,
-`fallback_chains`, and `retry_policies` materialize. The two `RoutingManifest`
-`Map` fields `per_role_bindings` / `per_workload_overrides` have value-types
-(`RoleRoutingBinding` / `WorkloadRoutingOverride`) that are NOT T2-covered and
-genuinely uncommitted (C-CP-06 §6.1 does not decompose them; C-CP-01 §1.3
-gives prose grain only). They are a forward Class 1 carry per
-`.harness/class_1_tension_role_routing_binding_underspec.md` — landed here with
-their value-type as a deferred opaque placeholder. No `RoleRoutingBinding` /
-`WorkloadRoutingOverride` field set is invented.
+FULL-LAND. `RetryPolicy`, `manifest_version`, `fallback_chains`, and
+`retry_policies` materialize. The two `RoutingManifest` `Map` value-types
+`RoleRoutingBinding` / `WorkloadRoutingOverride` were a Class 1 carry — their
+field sets are not decomposed by any committing contract (C-CP-06 §6.1 does
+not decompose them; C-CP-01 §1.3 gives prose grain only). The operator ruled
+on the field schemas 2026-05-16 (`.harness/class_1_tension_role_routing_binding_
+underspec.md` — RESOLVED, operator-ratified factor-out, schema R-2 / W-2):
+
+- `RoleRoutingBinding` — `(preferred_model_binding, layer_budget_overrides,
+  fallback_chain_ref)`.
+- `WorkloadRoutingOverride` — `(engine_class_override, sandbox_tier_override,
+  model_binding_override)`.
+
+Each field composes only landed types (`ModelBinding` U-CP-00c; `RoutingLayer`
+U-CP-06; `EngineClass` U-CP-15; AS-owned `SandboxTier` via the sanctioned CP→AS
+edge). No field beyond the operator-approved set is added.
 
 `ToolName` (the `retry_policies` map key) is the AS-owned tool-name concept;
 no `ToolName` NewType is landed in `harness_as` — the spec treats tool names as
@@ -33,23 +40,59 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from harness_as import SandboxTier
 from harness_core import DeploymentSurface, WorkloadClass
 from harness_is.path_class_registry import PathClass
 from harness_is.path_resolver import PathResolver
 from pydantic import BaseModel, ConfigDict
 
-from harness_cp.cp_shared_types import AgentRole
+from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.cross_family_fallback_chain import FallbackChain
+from harness_cp.engine_class import EngineClass
+from harness_cp.routing_layer import RoutingLayer
 
-# --- Class 1 carry — opaque placeholders ------------------------------------
-# `RoleRoutingBinding` / `WorkloadRoutingOverride` field sets are genuinely
-# uncommitted (v2.9 §0.5; `.harness/class_1_tension_role_routing_binding_
-# underspec.md`). They are NOT T2 factor-out candidates. The two `Map` fields
-# land with their value-type as a deferred opaque placeholder — inventing a
-# field set would be an X-AL-3 design extension. Resolution awaits the Class 1
-# record's operator decision.
-type RoleRoutingBinding = Mapping[str, Any]
-type WorkloadRoutingOverride = Mapping[str, Any]
+
+class RoleRoutingBinding(BaseModel):
+    """Routing settings attached to one agent role (schema R-2).
+
+    Operator-ratified factor-out 2026-05-16 (`.harness/class_1_tension_role_
+    routing_binding_underspec.md` — RESOLVED). The CP routing surface lets a
+    role nominate a model, tune its per-layer time budgets, and point at a
+    named fallback chain — the three settings the surrounding routing units
+    (U-CP-02/03/05/09) visibly consume. No speculative field added."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    preferred_model_binding: ModelBinding
+    """The `(provider, model)` this role prefers (U-CP-00c `ModelBinding`)."""
+
+    layer_budget_overrides: Mapping[RoutingLayer, int]
+    """Per-routing-layer time-budget overrides (ms) for this role; an empty
+    mapping means "use the default per-layer budgets" (U-CP-03)."""
+
+    fallback_chain_ref: str | None = None
+    """Optional name of a fallback chain to apply for this role (U-CP-09)."""
+
+
+class WorkloadRoutingOverride(BaseModel):
+    """Override settings for one workload category (schema W-2).
+
+    Operator-ratified factor-out 2026-05-16 (same record). Sits "on top of"
+    role bindings / defaults: a workload category may force a durable-execution
+    engine class, a sandbox tier, or a model binding. Each field is optional —
+    an unset field means "no override for this dimension"."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    engine_class_override: EngineClass | None = None
+    """Force a durable-execution engine class for this workload (U-CP-15)."""
+
+    sandbox_tier_override: SandboxTier | None = None
+    """Force a blast-radius sandbox tier (AS-owned `SandboxTier`; sanctioned
+    CP→AS cross-axis edge per CXA v2.1 §2.3.4)."""
+
+    model_binding_override: ModelBinding | None = None
+    """Force a `(provider, model)` for this workload (U-CP-00c)."""
 
 
 class RetryPolicy(BaseModel):
@@ -77,17 +120,17 @@ class RoutingManifest(BaseModel):
 
     Exactly five top-level fields per C-CP-01 §1.3 + cross-references to
     C-CP-03 §3.5 + C-CP-04 §4.1. `per_role_bindings` / `per_workload_overrides`
-    value-types are a Class 1 carry (opaque placeholders — see module
+    value-types are the operator-ratified R-2 / W-2 records (see module
     docstring)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     manifest_version: int
     per_role_bindings: Mapping[AgentRole, RoleRoutingBinding]
-    """Class 1 carry — value-type is an opaque placeholder (v2.9 §0.5)."""
+    """Per-role routing settings; value-type R-2 (operator-ratified 2026-05-16)."""
 
     per_workload_overrides: Mapping[WorkloadClass, WorkloadRoutingOverride]
-    """Class 1 carry — value-type is an opaque placeholder (v2.9 §0.5)."""
+    """Per-workload override settings; value-type W-2 (operator-ratified)."""
 
     fallback_chains: tuple[FallbackChain, ...]
     """Populated per C-CP-04 (U-CP-09 `FallbackChain`)."""

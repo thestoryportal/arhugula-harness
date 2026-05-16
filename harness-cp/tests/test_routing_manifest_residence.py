@@ -5,8 +5,10 @@ Acceptance-criterion coverage:
   #2 residence via U-IS-02       -> test_load_via_u_is_02
   #3 validate rejects bad model  -> test_validate_rejects_unknown_model
   #4 manifest format deferred    -> test_format_deferred
-  #5 RetryPolicy 3 fields +      -> test_retry_policy_three_fields_byte_exact_cp_03_3_5,
-     RoutingManifest partial-land   test_role_routing_binding_value_type_deferred
+  #5 RetryPolicy 3 fields +      -> test_retry_policy_three_fields_byte_exact_cp_03_3_5
+  R-2/W-2 routing-binding schemas -> test_role_routing_binding_schema_r2,
+     (operator-ratified 2026-05-16)  test_workload_routing_override_schema_w2,
+                                     test_manifest_carries_typed_bindings
 """
 
 from __future__ import annotations
@@ -16,9 +18,16 @@ from harness_is.path_binding import PathBinding, PathBindingEntry
 from harness_is.path_class_registry import PathClass
 from harness_is.path_resolver import PathResolver
 
+from harness_as import SandboxTier
+
+from harness_cp.cp_shared_types import AgentRole, ModelBinding
+from harness_cp.engine_class import EngineClass
+from harness_cp.routing_layer import RoutingLayer
 from harness_cp.routing_manifest_residence import (
     RetryPolicy,
+    RoleRoutingBinding,
     RoutingManifest,
+    WorkloadRoutingOverride,
     load_routing_manifest,
     resolve_manifest_residence_path,
     validate_routing_manifest,
@@ -90,15 +99,74 @@ def test_retry_policy_three_fields_byte_exact_cp_03_3_5() -> None:
     assert rp.backoff == "full-jitter"
 
 
-def test_role_routing_binding_value_type_deferred() -> None:
-    # Regression — the two Class 1 Map fields land with opaque value-types;
-    # no invented field set. An arbitrary mapping is accepted as the value.
+def test_role_routing_binding_schema_r2() -> None:
+    # Operator-ratified schema R-2: exactly 3 fields.
+    assert set(RoleRoutingBinding.model_fields) == {
+        "preferred_model_binding",
+        "layer_budget_overrides",
+        "fallback_chain_ref",
+    }
+    rrb = RoleRoutingBinding(
+        preferred_model_binding=ModelBinding(provider="anthropic", model="opus"),
+        layer_budget_overrides={RoutingLayer.DECLARATIVE: 50},
+        fallback_chain_ref="default-chain",
+    )
+    assert rrb.preferred_model_binding.provider == "anthropic"
+    assert rrb.layer_budget_overrides[RoutingLayer.DECLARATIVE] == 50
+    # fallback_chain_ref is optional.
+    bare = RoleRoutingBinding(
+        preferred_model_binding=ModelBinding(provider="openai", model="gpt"),
+        layer_budget_overrides={},
+    )
+    assert bare.fallback_chain_ref is None
+
+
+def test_workload_routing_override_schema_w2() -> None:
+    # Operator-ratified schema W-2: exactly 3 fields, all optional.
+    assert set(WorkloadRoutingOverride.model_fields) == {
+        "engine_class_override",
+        "sandbox_tier_override",
+        "model_binding_override",
+    }
+    empty = WorkloadRoutingOverride()
+    assert empty.engine_class_override is None
+    full = WorkloadRoutingOverride(
+        engine_class_override=EngineClass.PURE_PATTERN_NO_ENGINE,
+        sandbox_tier_override=SandboxTier.TIER_2_CONTAINER,
+        model_binding_override=ModelBinding(provider="ollama", model="llama"),
+    )
+    assert full.sandbox_tier_override is SandboxTier.TIER_2_CONTAINER
+
+
+def test_manifest_carries_typed_bindings() -> None:
+    # The manifest's two Map fields now carry the typed R-2 / W-2 records.
     m = RoutingManifest(
         manifest_version=1,
-        per_role_bindings={},
-        per_workload_overrides={},
+        per_role_bindings={
+            AgentRole("researcher"): RoleRoutingBinding(
+                preferred_model_binding=ModelBinding(
+                    provider="anthropic", model="opus"
+                ),
+                layer_budget_overrides={RoutingLayer.LLM_AS_ROUTER: 200},
+            )
+        },
+        per_workload_overrides={
+            WorkloadClass.SOFTWARE_ENGINEERING: WorkloadRoutingOverride(
+                engine_class_override=EngineClass.EVENT_SOURCED_REPLAY,
+            )
+        },
         fallback_chains=(),
         retry_policies={},
     )
-    assert m.per_role_bindings == {}
-    assert m.per_workload_overrides == {}
+    assert (
+        m.per_role_bindings[AgentRole("researcher")].layer_budget_overrides[
+            RoutingLayer.LLM_AS_ROUTER
+        ]
+        == 200
+    )
+    assert (
+        m.per_workload_overrides[
+            WorkloadClass.SOFTWARE_ENGINEERING
+        ].engine_class_override
+        is EngineClass.EVENT_SOURCED_REPLAY
+    )
