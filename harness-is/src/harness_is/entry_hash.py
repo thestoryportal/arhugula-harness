@@ -1,0 +1,76 @@
+"""State-ledger entry canonicalization + per-entry SHA-256 hash — U-IS-08.
+
+Implements C-IS-06 §6.1 (per-entry canonicalization) + §6.2 (per-entry hash
+computation). Declares `canonicalize` and `compute_response_hash` — the
+write-time primitives the hash-chain (U-IS-09) and verification (U-IS-10) build
+on.
+
+**Canonicalization scope.** `canonicalize` produces the deterministic byte
+representation of the entry's *signable payload* — the five fields other than
+`response_hash`. `response_hash` is excluded because it is the field being
+computed: `compute_response_hash = SHA-256(canonicalize(entry))` would be
+circular otherwise. This is the operative state-ledger recipe already in use
+(the `.harness/state.jsonl` chain): an entry's `response_hash` is the SHA-256
+of its response-hash-excluded canonical form, and the next entry's
+`prior_event_hash` is the prior entry's `response_hash` (C-IS-06 §6.3).
+
+**Canonicalization scheme — implementation discretion (C-IS-06 §6.1).** §6.1
+marks the RFC 8785 JCS library binding `[MODERATE — to be confirmed at the
+D-ADR on canonicalization library]`; that D-ADR has not landed, and
+`CLAUDE.md` §3.2 framework-pull discipline (I-6) precludes pulling a JCS
+framework where the existing stack suffices. The scheme here is hand-rolled on
+the stdlib: NFC Unicode normalization of every string value + `json.dumps`
+with sorted keys and no whitespace. For the `StateLedgerEntry` data shape
+(strings, a `StrEnum`, a `datetime`, byte digests — **no float fields**) this
+is RFC 8785 JCS-conformant: the one RFC 8785 property the stdlib `json` does
+not guarantee is ECMAScript number serialization, which is vacuous here. The
+scheme is encapsulated behind the single `canonicalize` boundary (acceptance
+#5 — one swappable binding site).
+
+Authority: Implementation_Plan_Information_Substrate_v2_3.md §2.1 U-IS-08
+(preserved verbatim from v2.1 §2); Spec_Information_Substrate_v1.md C-IS-06
+§6.1 / §6.2; ADR-F2 v1.2 §Rationale (a.1).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import unicodedata
+
+from harness_is.state_ledger_entry_schema import Bytes32, StateLedgerEntry
+
+
+def _nfc(value: str) -> str:
+    """NFC-normalize a string (RFC 8785 JCS Unicode normalization)."""
+    return unicodedata.normalize("NFC", value)
+
+
+def canonicalize(entry: StateLedgerEntry) -> bytes:
+    """Canonicalize a state-ledger entry to deterministic bytes (C-IS-06 §6.1).
+
+    Operates on the entry's signable payload — every field except
+    `response_hash`. Deterministic: byte-identical output for logically-equal
+    entries across runs / machines (acceptance #1); field-order-insensitive
+    (sorted keys), Unicode-normalized (NFC), number-representation-canonical
+    (no float fields — vacuous) (acceptance #2).
+    """
+    payload: dict[str, object] = {
+        "action_id": _nfc(entry.action_id),
+        "idempotency_key": _nfc(entry.idempotency_key),
+        "actor": {
+            "actor_class": _nfc(entry.actor.actor_class.value),
+            "actor_id": _nfc(entry.actor.actor_id),
+        },
+        "timestamp": entry.timestamp.isoformat(),
+        "prior_event_hash": entry.prior_event_hash.hex(),
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+        "utf-8"
+    )
+
+
+def compute_response_hash(entry: StateLedgerEntry) -> Bytes32:
+    """Compute the entry's `response_hash` — `SHA-256(canonicalize(entry))`
+    (C-IS-06 §6.2). Output is exactly 32 bytes (acceptance #3/#4)."""
+    return hashlib.sha256(canonicalize(entry)).digest()

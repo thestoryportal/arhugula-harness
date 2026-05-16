@@ -31,6 +31,7 @@ updates happen at cluster close, not per unit.
 | U-IS-13 | Workload manifest opt-in schema (`WorkloadManifestOptIns`, `CheckpointCadence`) | C-IS-08 §8.1-§8.2, C-IS-09 §9.1 | ✅ landed | `feat(is): land U-IS-13` | 2026-05-15 |
 | U-IS-05 | JSONL event ledger file lifecycle (`initialize_jsonl_event_ledger`, `validate_jsonl_event_ledger_format`, `JsonlLedgerHandle`) | C-IS-03 §3 | ✅ landed | `feat(is): land U-IS-05` | 2026-05-15 |
 | U-IS-06 | Atomic deploy-event composition + `verify_deploy_atomicity` (git-shell-out split-deploy verification) | C-IS-04 §4 | ✅ landed | `feat(is): land U-IS-06` | 2026-05-15 |
+| U-IS-08 | Entry canonicalization + per-entry SHA-256 hash (`canonicalize`, `compute_response_hash`) | C-IS-06 §6.1-§6.2 | ✅ landed | `feat(is): land U-IS-08` | 2026-05-15 |
 
 ## Operational-minimum set (7a exit-criterion #1 — 12 units)
 
