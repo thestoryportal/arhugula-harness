@@ -74,6 +74,7 @@ updates happen at cluster close, not per unit.
 | U-CP-37 | 4-response HITL palette (`HITLResponse`, `HITL_RESPONSE_SEMANTICS`, `PER_RESPONSE_AUDIT_ENTRY_SHAPES`, `PALETTE_INVARIANTS`, `HITL_RESPONSE_CLASS_ATTRIBUTE`) | C-CP-16 §16.1-§16.4 | ✅ landed | `feat(cp): land U-CP-37` | 2026-05-16 |
 | U-CP-28 | `SubAgentBrief` schema (`SubAgentBrief`, `OutputSchema`, `OutputSchemaKind`, `ClearTaskBoundaries`, `canonicalize_brief`, `compute_brief_summary_hash`) | C-CP-13 §13.2 | ✅ landed | `feat(cp): land U-CP-28` | 2026-05-16 |
 | U-CP-10 | Lifecycle-event span-name map + `ParentRelation` enum (`LifecycleEventClassMetadata`, `LIFECYCLE_EVENT_CLASS_METADATA`) — cross-axis core: U-CORE-01 | C-CP-05 §5.1 | ✅ landed | `feat(cp): land U-CP-10` | 2026-05-16 |
+| U-CP-07 | `fallback.*`/`harness.breaker.*`/`retry.*` namespace schemas + `RetryCause` + `RETRY_ATTEMPT_EVENT_SCHEMA` — **partial land** (acc #7 dual-emission discipline struck → Class 1) | C-CP-03 §3.5 | ⚠️ partial-landed | `feat(cp): land U-CP-07` | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
@@ -101,6 +102,8 @@ land-now without v2.4/v2.5 pre-implementation re-clearance.
 | `class_1_tension_u_cp_00b_structured_types.md` | U-CP-00b bundled 9 structured shared types declared name-only (no shapes at plan grade) | ⚠️ resolved-split 2026-05-15 — operator ruled split; CP plan v2.6→v2.7; U-CP-00b landed as the 2-enum carrier. **OPEN:** the 9 structured types await a future CP plan revision specifying each shape |
 | `Phase_7_Class_1_Tension_003_WorkloadClass_Undeclared.md` | `WorkloadClass` type used by ~10 CP units, declared by none | 🛑 OPEN 2026-05-15 — U-CP-22 halted; plan-gap (missing declaring unit) |
 | `Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` | U-OD-04 plan signature diverges from spec C-OD-04 at 4 points | 🛑 OPEN 2026-05-15 — U-OD-04 halted; subsumed into the OD-plan systemic audit below |
+| `class_1_tension_u_cp_07_dual_emission.md` | U-CP-07 acc #7 bundles a runtime dual-emission discipline (OTel span emitter) into an L0 schema-declaration unit — no emitter exists at 7b L0 | ⚠️ resolved-split 2026-05-16 — halt-route-split-AC; U-CP-07 partial-landed (schemas, acc #1–#6); acc #7 + 5 emission tests struck, routed to a downstream emitter unit. **OPEN:** CP plan revision must re-home acc #7 |
+| `class_1_tension_u_cp_11_lease_namespace_schema.md` | U-CP-11 plan acc #1 names a 5-tuple `LEASE_NAMESPACE_SCHEMA` that contradicts the cited spec C-CP-05 §5.3 attribute table (only `lease.holder` overlaps) | 🛑 OPEN 2026-05-16 — U-CP-11 halted; SKIPPED; spec-vs-plan 5-tuple contradiction; CP plan or spec revision required |
 
 ## Systemic finding — Phase-6 plan "verbatim"-claim divergence (2026-05-15)
 
