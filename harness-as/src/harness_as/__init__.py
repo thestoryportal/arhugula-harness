@@ -15,6 +15,12 @@ from harness_as.anthropic_primitive_adoption import (
     skills_loads_from_filesystem_path,
 )
 from harness_as.blast_radius_floor import blast_radius_floor
+from harness_as.deployment_matrix import (
+    DEPLOYMENT_MATRIX,
+    DeploymentMatrixCell,
+    lookup_cell,
+    lookup_cell_with_forcing,
+)
 from harness_as.discriminators import DeploymentSurface, MCPTransport, PersonaTier
 from harness_as.forced_tier_resolution import (
     ForcedTierCause,
@@ -81,6 +87,7 @@ from harness_as.tool_contract import (
 __all__ = [
     "ADOPTION_DEPTH_MATRIX",
     "ANTHROPIC_PRIMITIVE_ANCHORS",
+    "DEPLOYMENT_MATRIX",
     "RECOMMENDED_CONTRACT_DEFAULT_TIER",
     "REFUSE",
     "TIER_RESOLUTION_TABLE",
@@ -95,6 +102,7 @@ __all__ = [
     "ConfidenceTag",
     "ContractValidationOutcome",
     "ContractValidationResult",
+    "DeploymentMatrixCell",
     "DeploymentSurface",
     "ForcedTierCause",
     "ForcedTierResult",
@@ -129,6 +137,8 @@ __all__ = [
     "fetch_secret",
     "forced_tier",
     "is_tier_at_or_above",
+    "lookup_cell",
+    "lookup_cell_with_forcing",
     "override_scope",
     "permanent_fail_skips_staircase",
     "provider_class_metadata",
