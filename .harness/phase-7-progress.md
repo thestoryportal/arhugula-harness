@@ -71,6 +71,7 @@ updates happen at cluster close, not per unit.
 | U-CP-01 | `routing.*` namespace + 4-attribute schema (`RoutingAttributeSchema`, `ROUTING_NAMESPACE_SCHEMA`) | C-CP-01 §1.4 | ✅ landed | `feat(cp): land U-CP-01` | 2026-05-16 |
 | U-CP-21 | `engine.*` namespace + 4-attribute schema (`EngineAttributeSchema`, `ENGINE_NAMESPACE_SCHEMA`, `ReplayDisposition`, `REPLAY_DISPOSITION_MAPPING`) | C-CP-09 §9.1 | ✅ landed | `feat(cp): land U-CP-21` | 2026-05-16 |
 | U-CP-26 | Sub-agent default-downgrade rule (`SubAgentDefaultDowngrade`, `DEFAULT_DOWNGRADE_RULE`, `compute_child_blast_radius_ceiling`) — cross-axis AS: U-AS-01 | C-CP-12 §12.1 | ✅ landed | `feat(cp): land U-CP-26` | 2026-05-16 |
+| U-CP-37 | 4-response HITL palette (`HITLResponse`, `HITL_RESPONSE_SEMANTICS`, `PER_RESPONSE_AUDIT_ENTRY_SHAPES`, `PALETTE_INVARIANTS`, `HITL_RESPONSE_CLASS_ATTRIBUTE`) | C-CP-16 §16.1-§16.4 | ✅ landed | `feat(cp): land U-CP-37` | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
