@@ -136,7 +136,7 @@ carriers. Each produces a revised plan returned for per-pass operator ratificati
 | S3 | `spec-writer` C-AS-05 §5.1 `fetch_secret` 2→3-param touch (per ratified D1) | pending — small; bundle with R5 launch |
 | R4 | CP plan revision — absorb `materializability_audit_cp_plan.md` + carrier map | ✅ COMPLETE + APPLIED 2026-05-15 — `Implementation_Plan_Control_Plane_v2_6.md` (57 units, U-CP-00b carrier, Patterns C/D/E, U-CP-10 reconciled). Deferred items D-1/D-2/D-3 flagged. |
 | S3 | `spec-writer` C-AS-05 §5.1 `fetch_secret` 2→3-param touch | ✅ COMPLETE 2026-05-15 — `Spec_Action_Surface_v1.md` v1.2→v1.3 (§5.1 3-param + 5 cross-refs reconciled). Action item A-5 discharged at the spec layer. `CLAUDE.md` §2.3 token bumped to v1.3. |
-| R5 | OD plan revision — absorb `materializability_audit_od_plan.md` + carrier map (LAST R-series pass) | 🟡 RUNNING (launched 2026-05-15) |
+| R5 | OD plan revision — absorb `materializability_audit_od_plan.md` + carrier map (LAST R-series pass) | ✅ COMPLETE 2026-05-15 (`revision_R5_od_plan.md`) — OD plan v2.5→v2.6; 34→35 units (new U-OD-00 carrier); M-1/M-2/M-3 absorbed. 6 operator questions Q-R5-1..6 — **AWAITING OPERATOR** |
 | R5 | OD plan revision — absorb `materializability_audit_od_plan.md` + carrier map | pending R4 |
 
 Then: review-ahead re-check of the conformed plans → coding lane resumes.
