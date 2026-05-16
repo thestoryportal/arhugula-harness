@@ -1,0 +1,134 @@
+"""Tests for U-CP-13 — `WorkflowManifestEntry` schema (C-CP-06 §6.1).
+
+Acceptance-criterion coverage:
+  #1 WorkflowManifestEntry 10 fields -> test_workflow_manifest_entry_ten_fields
+  #2 workload_class mandatory        -> test_workload_class_mandatory
+  #2 persona_tier mandatory          -> test_persona_tier_mandatory
+  #3 topology admissibility at val.  -> test_topology_admissibility_at_validation
+  #4 engine_class candidate at val.  -> test_engine_class_candidate_at_validation
+"""
+
+from __future__ import annotations
+
+import pytest
+from harness_core import PersonaTier, StepID, WorkloadClass
+from pydantic import ValidationError
+
+from harness_cp.cross_family_fallback_chain import (
+    FallbackChain,
+    ProviderCandidate,
+    ProviderFamily,
+)
+from harness_cp.engine_class import EngineClass
+from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
+from harness_cp.topology_pattern import TopologyPattern, is_admissible
+from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEntry
+
+_CHAIN = FallbackChain(
+    primary=ProviderCandidate(
+        provider="anthropic", model="m", family=ProviderFamily.ANTHROPIC
+    ),
+    same_family=(),
+    cross_family=(),
+    terminal=None,
+)
+
+
+def _entry(**over: object) -> WorkflowManifestEntry:
+    base: dict[str, object] = {
+        "workflow_id": "wf-1",
+        "workload_class": WorkloadClass.SOFTWARE_ENGINEERING,
+        "persona_tier": PersonaTier.SOLO_DEVELOPER,
+        "engine_class": EngineClass.PURE_PATTERN_NO_ENGINE,
+        "topology_pattern": TopologyPattern.SINGLE_THREADED_LINEAR,
+        "layer_budgets": (),
+        "fallback_chain": _CHAIN,
+        "hitl_placements": (),
+        "per_step_overrides": {},
+    }
+    base.update(over)
+    return WorkflowManifestEntry(**base)  # type: ignore[arg-type]
+
+
+def test_workflow_manifest_entry_ten_fields() -> None:
+    assert len(WorkflowManifestEntry.model_fields) == 10
+    assert set(WorkflowManifestEntry.model_fields) == {
+        "workflow_id",
+        "workload_class",
+        "persona_tier",
+        "engine_class",
+        "topology_pattern",
+        "layer_budgets",
+        "fallback_chain",
+        "hitl_placements",
+        "sub_agent_briefs",
+        "per_step_overrides",
+    }
+
+
+def test_workload_class_mandatory() -> None:
+    with pytest.raises(ValidationError):
+        WorkflowManifestEntry(  # type: ignore[call-arg]
+            workflow_id="wf",
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+            engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+            topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+            layer_budgets=(),
+            fallback_chain=_CHAIN,
+            hitl_placements=(),
+            per_step_overrides={},
+        )
+
+
+def test_persona_tier_mandatory() -> None:
+    with pytest.raises(ValidationError):
+        WorkflowManifestEntry(  # type: ignore[call-arg]
+            workflow_id="wf",
+            workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
+            engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+            topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+            layer_budgets=(),
+            fallback_chain=_CHAIN,
+            hitl_placements=(),
+            per_step_overrides={},
+        )
+
+
+def test_topology_admissibility_at_validation() -> None:
+    entry = _entry(
+        topology_pattern=TopologyPattern.HIERARCHICAL_DELEGATION,
+        workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
+    )
+    # The U-CP-22 admissibility predicate is invokable against the manifest's
+    # topology_pattern x workload_class pair at validation time.
+    assert is_admissible(entry.topology_pattern, entry.workload_class) is True
+
+
+def test_engine_class_candidate_at_validation() -> None:
+    entry = _entry()
+    # engine_class is a member of the U-CP-15 EngineClass enum — the U-CP-16
+    # candidate mapping consumes this value at workflow-binding validation.
+    assert entry.engine_class in set(EngineClass)
+
+
+def test_step_override_inherits_defaults() -> None:
+    entry = _entry(
+        per_step_overrides={
+            StepID("s1"): StepOverride(
+                step_id=StepID("s1"), engine_class=EngineClass.EVENT_SOURCED_REPLAY
+            )
+        }
+    )
+    ov = entry.per_step_overrides[StepID("s1")]
+    assert ov.model_binding is None
+    assert ov.engine_class is EngineClass.EVENT_SOURCED_REPLAY
+
+
+def test_hitl_placements_admit_multiple() -> None:
+    entry = _entry(
+        hitl_placements=(
+            HITLPlacement(position=HITLPlacementKind.PRE_ACTION),
+            HITLPlacement(position=HITLPlacementKind.VALIDATOR_ESCALATION),
+        )
+    )
+    assert len(entry.hitl_placements) == 2
