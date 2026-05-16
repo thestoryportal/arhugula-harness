@@ -82,6 +82,7 @@ updates happen at cluster close, not per unit.
 | U-CP-23 | Per-workload-class topology commitment table (`PerWorkloadClassTopologyCommitment`, `PER_WORKLOAD_CLASS_TOPOLOGY`) — v2.4 body; carried Class-2: `software-engineering` single-vs-dual `default_pattern` mismatch (non-blocking, fork-queue item 4) | C-CP-11 §11.1 | ✅ landed | `feat(cp): land U-CP-23` | 2026-05-16 |
 | U-CP-38 | 3-placement enum + `hitl_gate` signature + `HITLPlacement` schema — **SKIPPED** (Class 1: dep U-CP-30 `HandoffContext` not landed; Pattern D undeclared `ProposedAction`/`ToolName`/`SHA256`) | C-CP-17 §17.1, §17.1.1, §17.3 | 🛑 skipped | — | 2026-05-16 |
 | U-CP-47 | 5-class validator-fail taxonomy + `validator.fail.*` namespace (`ValidatorFailClass`, `ValidatorFailMetadata`, `VALIDATOR_FAIL_METADATA`, `ValidatorFailAttributeSchema`, `VALIDATOR_FAIL_NAMESPACE_SCHEMA`, `validator_fail_permanence`) — v2.4 §4A-conformed body; carrier (`AttributeValueType`/`Cardinality`) from harness-core | C-CP-21 §21.1, §21.5 | ✅ landed | `feat(cp): land U-CP-47` | 2026-05-16 |
+| U-CP-17 | Workload-binding engine-class selection (`WorkloadBindingSelectionInput`, `WorkloadBindingSelectionResult`, `select_engine_class`, `WorkloadBindingError`) — **PARTIAL**: §7.3 5-step procedure landed as 4 steps; step 4 (`operator_preferences`) + 1 test struck — `EngineClassPreferences` homed at blocked U-CP-27 | C-CP-07 §7.3 | ⚠️ partial-landed | `feat(cp): land U-CP-17` | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
@@ -111,6 +112,7 @@ land-now without v2.4/v2.5 pre-implementation re-clearance.
 | `Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` | U-OD-04 plan signature diverges from spec C-OD-04 at 4 points | 🛑 OPEN 2026-05-15 — U-OD-04 halted; subsumed into the OD-plan systemic audit below |
 | `class_1_tension_u_cp_07_dual_emission.md` | U-CP-07 acc #7 bundles a runtime dual-emission discipline (OTel span emitter) into an L0 schema-declaration unit — no emitter exists at 7b L0 | ⚠️ resolved-split 2026-05-16 — halt-route-split-AC; U-CP-07 partial-landed (schemas, acc #1–#6); acc #7 + 5 emission tests struck, routed to a downstream emitter unit. **OPEN:** CP plan revision must re-home acc #7 |
 | `class_1_tension_u_cp_11_lease_namespace_schema.md` | U-CP-11 plan acc #1 names a 5-tuple `LEASE_NAMESPACE_SCHEMA` that contradicts the cited spec C-CP-05 §5.3 attribute table (only `lease.holder` overlaps) | 🛑 OPEN 2026-05-16 — U-CP-11 halted; SKIPPED; spec-vs-plan 5-tuple contradiction; CP plan or spec revision required |
+| `class_1_tension_u_cp_17_engine_class_preferences_homing.md` | U-CP-17 `operator_preferences: Optional<EngineClassPreferences>` consumes a record homed at blocked U-CP-27 — hidden dep not in the `Depends on:` line | ⚠️ resolved-split 2026-05-16 — halt-route-split-AC; U-CP-17 partial-landed (§7.3 4 of 5 steps); `operator_preferences` field + step 4 + 1 test struck. **OPEN:** re-land step 4 at U-CP-27 landing; CP plan revision to re-home `EngineClassPreferences` or forward-defer |
 
 ## Systemic finding — Phase-6 plan "verbatim"-claim divergence (2026-05-15)
 
