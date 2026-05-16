@@ -73,6 +73,7 @@ updates happen at cluster close, not per unit.
 | U-CP-26 | Sub-agent default-downgrade rule (`SubAgentDefaultDowngrade`, `DEFAULT_DOWNGRADE_RULE`, `compute_child_blast_radius_ceiling`) — cross-axis AS: U-AS-01 | C-CP-12 §12.1 | ✅ landed | `feat(cp): land U-CP-26` | 2026-05-16 |
 | U-CP-37 | 4-response HITL palette (`HITLResponse`, `HITL_RESPONSE_SEMANTICS`, `PER_RESPONSE_AUDIT_ENTRY_SHAPES`, `PALETTE_INVARIANTS`, `HITL_RESPONSE_CLASS_ATTRIBUTE`) | C-CP-16 §16.1-§16.4 | ✅ landed | `feat(cp): land U-CP-37` | 2026-05-16 |
 | U-CP-28 | `SubAgentBrief` schema (`SubAgentBrief`, `OutputSchema`, `OutputSchemaKind`, `ClearTaskBoundaries`, `canonicalize_brief`, `compute_brief_summary_hash`) | C-CP-13 §13.2 | ✅ landed | `feat(cp): land U-CP-28` | 2026-05-16 |
+| U-CP-10 | Lifecycle-event span-name map + `ParentRelation` enum (`LifecycleEventClassMetadata`, `LIFECYCLE_EVENT_CLASS_METADATA`) — cross-axis core: U-CORE-01 | C-CP-05 §5.1 | ✅ landed | `feat(cp): land U-CP-10` | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
