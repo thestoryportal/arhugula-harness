@@ -86,7 +86,7 @@ All canonical artifacts reside at the **design-phase workspace** (separate Claud
 | core | `Implementation_Plan_Harness_Core_v1_1.md` | 1 unit (U-CORE-01) — shared-type carrier; added 2026-05-15 per revision pass R1; v1.1 carrier-thin Class 1 fork resolution (WorkflowEvent payload model struck) 2026-05-15 |
 | IS | `Implementation_Plan_Information_Substrate_v2_3.md` | 17 units (U-IS-01 – U-IS-17) |
 | AS | `Implementation_Plan_Action_Surface_v1_2.md` | 33 units (U-AS-01 – U-AS-33) |
-| CP | `Implementation_Plan_Control_Plane_v2_6.md` | 57 units (U-CP-00b added; U-CP-01 – U-CP-55 + U-CP-00 + U-CP-00b) |
+| CP | `Implementation_Plan_Control_Plane_v2_7.md` | 57 units (U-CP-00, U-CP-00b, U-CP-01 – U-CP-55); v2.7 U-CP-00b carrier split — 2 utility enums retained, 9 structured types deferred (Class 1) 2026-05-15 |
 | OD | `Implementation_Plan_Operational_Discipline_v2_7.md` | 35 units (U-OD-00, U-OD-01 – U-OD-34); v2.7 U-OD-00 carrier-defect micro-revision (SignatureAlgorithm move + CellID edge + AuditSignatureAttributes fix) 2026-05-15 |
 | CXA | `Cross_Axis_Composition_Document_v2_1.md` | 101 cross-axis edges (6 composition buckets) |
 
