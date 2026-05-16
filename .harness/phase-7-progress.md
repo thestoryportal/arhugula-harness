@@ -132,6 +132,12 @@ updates happen at cluster close, not per unit.
 | U-OD-05 | 15-row namespace ingestion map (`NamespaceSourceAxis` 4-value, `NamespaceMapRow`, `NAMESPACE_MAP` 15-row 1+7+6+1, `lookup_namespace`, `assert_source_authoritative_declarer` — Pattern P1 anchor) | C-OD-05 §5.1+§5.2 | ✅ landed | `feat(od): land U-OD-05` | 2026-05-16 |
 | U-OD-15 | Default-off content + default-on structure discipline (`AttributeClassification` 3-value, `DEFAULT_OFF_CONTENT_ATTRIBUTES`, `DEFAULT_ON_STRUCTURE_ATTRIBUTES` 15-namespace, `HASH_DIGEST_ATTRIBUTES`, `STRUCTURE_NOT_CONTENT_INVARIANT`, `classify_attribute`) | C-OD-12 §12.1-§12.3 | ✅ landed | `feat(od): land U-OD-15` | 2026-05-16 |
 | U-OD-18 | Per-span Anthropic-pricing cost formula (`PriceRateKey` 3-field, `PriceRateEntry`, `SpanCostInputs`, `compute_span_cost`/`compute_span_cost_with_rates`, `PRICE_TABLE_REF` opaque marker — rate table resolves at U-OD-21) | C-OD-14 §14.1 | ✅ landed | `feat(od): land U-OD-18` | 2026-05-16 |
+| U-OD-06 | AS-source namespace set verification (`AS_SOURCE_NAMESPACE_PREFIXES` 7-prefix, `verify_as_source_namespace_set`, `assert_namespace_attribute_count`, `NamespaceSetMismatch`/`AttributeCountMismatch` inline error types — Pattern P1 gate vs U-AS-33) | C-OD-05 §5.1 (AS rows) | ✅ landed | `feat(od): land U-OD-06` | 2026-05-16 |
+| U-OD-07 | CP-source namespace set verification (`CP_SOURCE_NAMESPACE_PREFIXES` 6-prefix incl. `topology.fanout.`, `verify_cp_source_namespace_set`, `assert_namespace_attribute_count`, `routing.*` excluded — Pattern P1 gate vs U-CP-54) | C-OD-05 §5.1 (CP rows) | ✅ landed | `feat(od): land U-OD-07` | 2026-05-16 |
+| U-OD-16 | Per-persona-tier content-capture override gradient (`ContentCapturePosture` 3-value, `PerPersonaTierRedactionPosture` record, `PER_PERSONA_TIER_REDACTION` 3-tier map — pre-collector redaction at multi-tenant) | C-OD-13 §13.1+§13.2 | ✅ landed | `feat(od): land U-OD-16` | 2026-05-16 |
+| U-OD-13 | — | C-OD-11 §11.1+§11.4 | ⛔ HALTED Class 1 | `.harness/class_1_tension_u_od_13_topological_misplacement.md` | 2026-05-16 |
+| U-OD-19 | — | C-OD-14 §14.2+§14.3 | ⛔ HALTED Class 1 | `.harness/class_1_tension_u_od_19_23_span_family_carrier_gap.md` | 2026-05-16 |
+| U-OD-23 | — | C-OD-17 §17.1+§17.2 | ⛔ HALTED Class 1 | `.harness/class_1_tension_u_od_19_23_span_family_carrier_gap.md` | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
