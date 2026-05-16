@@ -53,6 +53,14 @@ consumers (U-CP-07/11/21/31/37/46/47) and **missed U-AS-31** — an out-of-axis
 (AS) consumer. The "all consumers in-axis" premise is contradicted by direct
 evidence: U-AS-31's `AttributeSchema` is a cross-axis consumer.
 
+This is not only a carrier-map oversight. The landed
+`harness-cp/src/harness_cp/schema_attribute_enums.py` module docstring records
+an explicit **operator decision D3**: *"CP-axis-owned (operator decision D3 —
+all consumers are CP-axis units; no cross-axis sharing, so it resides in
+`harness-cp`, not `harness-core`)."* Operator decision D3 was made on the
+false premise "no cross-axis sharing". U-AS-31 is the counter-evidence. The
+resolution below is, in effect, a revisit of D3 on corrected information.
+
 The two enums are genuinely cross-axis: the OTel attribute value-type + cardinality
 vocabulary is shared by the CP attribute schemas (C-CP-*) **and** the AS
 namespace schemas (C-AS-14). A future OD consumer (C-OD-* attribute schemas) is
