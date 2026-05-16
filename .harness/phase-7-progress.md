@@ -67,6 +67,7 @@ updates happen at cluster close, not per unit.
 | U-AS-27 | Per-fetch secret-audit emission discipline + span emission (cross-axis IS: U-IS-11) | C-AS-08 §8.4-§8.5 | ✅ landed | `feat(as): land U-AS-27` | 2026-05-16 |
 | U-AS-32 | Anthropic-primitive sampling discipline + audit-floor commitments + D6 alignment | C-AS-14 §14.8-§14.9 | ✅ landed | `feat(as): land U-AS-32` | 2026-05-16 |
 | U-AS-33 | AS-axis substrate seam exports manifest (terminal exporter — 7 seams) | C-AS-16 §16.1-§16.7 | ✅ landed | `feat(as): land U-AS-33` | 2026-05-16 |
+| U-CP-03 | Thin routing core surface (`InferenceRequest` 6-field envelope, `InferenceResponse`, `infer` entry-point) — `infer` is the ADD §5.3.3 probabilistic core; orchestration body delegates to U-CP-05 + AS-plan SDK boundary | C-CP-01 §1.1 | ✅ landed | `feat(cp): land U-CP-03` | 2026-05-16 |
 | U-CP-02 | `ProviderCapabilities` reflection contract (10-field record + `ProviderCapability` enum) | C-CP-01 §1.2 | ✅ landed | `feat(cp): land U-CP-02` | 2026-05-16 |
 | U-CP-01 | `routing.*` namespace + 4-attribute schema (`RoutingAttributeSchema`, `ROUTING_NAMESPACE_SCHEMA`) | C-CP-01 §1.4 | ✅ landed | `feat(cp): land U-CP-01` | 2026-05-16 |
 | U-CP-21 | `engine.*` namespace + 4-attribute schema (`EngineAttributeSchema`, `ENGINE_NAMESPACE_SCHEMA`, `ReplayDisposition`, `REPLAY_DISPOSITION_MAPPING`) | C-CP-09 §9.1 | ✅ landed | `feat(cp): land U-CP-21` | 2026-05-16 |
