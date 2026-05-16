@@ -77,6 +77,7 @@ updates happen at cluster close, not per unit.
 | U-CP-07 | `fallback.*`/`harness.breaker.*`/`retry.*` namespace schemas + `RetryCause` + `RETRY_ATTEMPT_EVENT_SCHEMA` — **partial land** (acc #7 dual-emission discipline struck → Class 1) | C-CP-03 §3.5 | ⚠️ partial-landed | `feat(cp): land U-CP-07` | 2026-05-16 |
 | U-CP-11 | `lease.*` namespace + 5-attribute schema — **SKIPPED** (Class 1: plan acc #1 5-tuple contradicts cited spec C-CP-05 §5.3) | C-CP-05 §5.3 | 🛑 skipped | — | 2026-05-16 |
 | U-CP-06 | `LayerBudget` data type + `RoutingLayer` carrier (`LayerBudget`, `DEFAULT_LAYER_BUDGETS`, `effective_budget`, `RoutingLayer`) — **partial land** (acc #4 span-emission struck → halt-route-split-AC); `RoutingLayer` carrier-homed here per U-CP-05↔U-CP-06 cycle | C-CP-03 §3.1 | ⚠️ partial-landed | `feat(cp): land U-CP-06` | 2026-05-16 |
+| U-CP-08 | Deterministic fall-through procedure — **SKIPPED** (Class 1: plan invents 4-value `FallThroughCause` enum; cited spec C-CP-03 §3.2 commits no enum — X-AL-3 silent design extension) | C-CP-03 §3.2, §3.3 | 🛑 skipped | — | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
