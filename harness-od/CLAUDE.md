@@ -87,23 +87,24 @@ Per `Implementation_Plan_Operational_Discipline_v1.md` §0.2 plan-level invarian
 
 | L0 unit | Scope | Cluster |
 |---|---|---|
+| U-OD-00 | OD-local audit-ledger composition-type carrier (added at OD plan v2.6 per revision pass R5) | pre-cluster |
 | U-OD-01 | Foundational cost-attribution primitive | 1 |
 | U-OD-04 | Foundational telemetry primitive | 1 |
 
-**2 L0 units; in-degree 0.** Phase 7 sub-phase 7b OD-axis-stream execution begins from these entry-points.
+**3 L0 units; in-degree 0.** Phase 7 sub-phase 7b OD-axis-stream execution begins from these entry-points.
 
 ### 3.1 OD plan-level invariants (preserved at v2.4)
 
 | Invariant | Value |
 |---|---|
-| Atomic units | 34 (U-OD-01 through U-OD-34) |
-| Clusters | 8 |
+| Atomic units | 35 (U-OD-00, U-OD-01 through U-OD-34) — U-OD-00 added at v2.6 per R5 |
+| Clusters | 8 (+ U-OD-00 pre-cluster) |
 | Spec contracts covered | 23 of 23 (C-OD-01 through C-OD-23) |
 | PRD requirements satisfied | 8 of 8 (R-OD-01 through R-OD-08) plus cross-axis surface |
-| Within-axis directed edges | 100 |
-| Cross-axis directed edges | 28 (IS=6 baseline / 4 at v2.4; AS=10; CP=12) |
-| Cross-axis-touching units | 16 of 34 (47%) |
-| Foundational anchors (L0) | 2 (U-OD-01, U-OD-04) |
+| Within-axis directed edges | 102 (v2.6: +2 M-2 hidden-coupling edges) |
+| Cross-axis directed edges | 26 (IS=4; AS=10; CP=12) per OD plan v2.6 §4.5.1 |
+| Cross-axis-touching units | 16 of 35 |
+| Foundational anchors (L0) | 3 (U-OD-00, U-OD-01, U-OD-04) |
 | Terminal units (L9) | 2 (U-OD-31, U-OD-34) |
 | Level depth | 10 (L0–L9) |
 | F2-12 ACTIVE contract-bearing sites | 1 (U-OD-20) — CLOSED at v2.2 cascade |

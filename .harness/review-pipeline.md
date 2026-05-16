@@ -136,7 +136,22 @@ carriers. Each produces a revised plan returned for per-pass operator ratificati
 | S3 | `spec-writer` C-AS-05 §5.1 `fetch_secret` 2→3-param touch (per ratified D1) | pending — small; bundle with R5 launch |
 | R4 | CP plan revision — absorb `materializability_audit_cp_plan.md` + carrier map | ✅ COMPLETE + APPLIED 2026-05-15 — `Implementation_Plan_Control_Plane_v2_6.md` (57 units, U-CP-00b carrier, Patterns C/D/E, U-CP-10 reconciled). Deferred items D-1/D-2/D-3 flagged. |
 | S3 | `spec-writer` C-AS-05 §5.1 `fetch_secret` 2→3-param touch | ✅ COMPLETE 2026-05-15 — `Spec_Action_Surface_v1.md` v1.2→v1.3 (§5.1 3-param + 5 cross-refs reconciled). Action item A-5 discharged at the spec layer. `CLAUDE.md` §2.3 token bumped to v1.3. |
-| R5 | OD plan revision — absorb `materializability_audit_od_plan.md` + carrier map (LAST R-series pass) | ✅ RATIFIED 2026-05-15 (Q-R5-1..6 all approved). 🟡 APPLYING → `Implementation_Plan_Operational_Discipline_v2_6.md` |
+| R5 | OD plan revision — absorb `materializability_audit_od_plan.md` + carrier map (LAST R-series pass) | ✅ COMPLETE + APPLIED 2026-05-15 — `Implementation_Plan_Operational_Discipline_v2_6.md` (34→35 units, U-OD-00 carrier, M-1/M-2/M-3 absorbed). `harness-od/CLAUDE.md` invariants updated (Q-R5-4). |
+
+**✅ R-SERIES COMPLETE 2026-05-15.** All 5 plans materializability-conformed:
+`Implementation_Plan_Harness_Core_v1_0.md` (new) · IS v2.3 · AS v1.2 · CP v2.6 ·
+OD v2.6. Spec/ADR contradictions fixed (S1/S2/S3): ADR-D2 v1.2, AS spec v1.3.
+
+### Final gate — review-ahead re-check (RC)
+
+| Pass | Scope | State |
+|---|---|---|
+| RC | Review-ahead re-check of the 5 conformed plans — confirm the ~55 forks are closed + no new defect introduced by the R-series; pre-implementation re-clearance of the `Proposed`-status revised plans | ⬜ pending |
+
+After RC clears: coding lane **resumes** on the ~125 remaining units. Carried
+cleanup buckets: landed-unit re-checks (U-IS-02, U-AS-02, U-AS-04, U-OD-01,
+U-OD-04, U-CP-10, U-CP-15) + verbatim items (U-CP-23) + a CLAUDE.md-family
+version-token refresh (per-axis + root §2.4 plan pointers now lag the R-series).
 | R5 | OD plan revision — absorb `materializability_audit_od_plan.md` + carrier map | pending R4 |
 
 Then: review-ahead re-check of the conformed plans → coding lane resumes.
