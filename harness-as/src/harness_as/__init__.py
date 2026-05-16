@@ -129,6 +129,11 @@ from harness_as.secret_fetch import (
     fetch_secret,
     tier_resolution_mechanism,
 )
+from harness_as.secret_fetch_audit import (
+    SecretFetchEvent,
+    compose_secret_fetch_audit_entry,
+    verify_secret_fetch_entry_in_chain,
+)
 from harness_as.secret_outputs_hash import (
     canonicalize_concat_secret_fingerprint,
     compute_outputs_hash,
@@ -217,6 +222,7 @@ __all__ = [
     "SecretC9RetryPosture",
     "SecretFailClass",
     "SecretFailClassMetadata",
+    "SecretFetchEvent",
     "SecretRef",
     "SecretResolutionMechanism",
     "SecretScope",
@@ -236,6 +242,7 @@ __all__ = [
     "bridging_arc_effective_tier_raise",
     "canonicalize_concat_secret_fingerprint",
     "check_secret_allowlist",
+    "compose_secret_fetch_audit_entry",
     "compute_outputs_hash",
     "construct_breaker_key",
     "detect_sub_agent_tier_downgrade",
@@ -265,4 +272,5 @@ __all__ = [
     "tier_to_gate_level_floor",
     "validate_skill_attributes_carry_both_version_fields",
     "validate_tool_contract_at_registration",
+    "verify_secret_fetch_entry_in_chain",
 ]
