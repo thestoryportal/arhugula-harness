@@ -3,6 +3,13 @@
 Public API re-exports. Authority: harness-as/CLAUDE.md; AS plan v1.
 """
 
+from harness_as.anthropic_attribute_namespaces import (
+    AttributeNamespace,
+    AttributeSchema,
+    SkillVersionValidationResult,
+    namespace_schema,
+    validate_skill_attributes_carry_both_version_fields,
+)
 from harness_as.anthropic_primitive_adoption import (
     ADOPTION_DEPTH_MATRIX,
     ANTHROPIC_PRIMITIVE_ANCHORS,
@@ -130,6 +137,8 @@ __all__ = [
     "AnchorCitation",
     "AnthropicModel",
     "AnthropicPrimitive",
+    "AttributeNamespace",
+    "AttributeSchema",
     "BlastRadiusTier",
     "C5FailClass",
     "C9RetryPosture",
@@ -170,6 +179,7 @@ __all__ = [
     "SecretRef",
     "SecretResolutionMechanism",
     "SecretScope",
+    "SkillVersionValidationResult",
     "SubAgentRole",
     "TPerm2Pole",
     "TierResolutionMechanism",
@@ -189,6 +199,7 @@ __all__ = [
     "lookup_cell",
     "lookup_cell_with_forcing",
     "model_binding",
+    "namespace_schema",
     "override_scope",
     "permanent_fail_skips_staircase",
     "provider_class_metadata",
@@ -197,5 +208,6 @@ __all__ = [
     "skills_loads_from_filesystem_path",
     "tier_metadata",
     "tier_resolution_mechanism",
+    "validate_skill_attributes_carry_both_version_fields",
     "validate_tool_contract_at_registration",
 ]
