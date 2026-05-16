@@ -86,6 +86,7 @@ updates happen at cluster close, not per unit.
 | U-CP-31 | `topology.*` + `subagent.*` span attribute namespace schemas (`TopologyAttributeSchema`, `TOPOLOGY_NAMESPACE_SCHEMA` 10-attr, `SubAgentAttributeSchema`, `SUBAGENT_NAMESPACE_SCHEMA` 7-attr, `SubAgentResultStatus` 3-value) — pure declaration unit; carrier from harness-core re-export | C-CP-14 §14.2 | ✅ landed | `feat(cp): land U-CP-31` | 2026-05-16 |
 | U-CP-18 | F2 substrate join discipline (`F2JoinKind` 3-value, `EngineF2JoinContract`, `ENGINE_F2_JOIN_CONTRACTS` 5-entry, `f2_join_contract`) — R-CP-07-satisfying contract; IS read/write/chain/idempotency as string delegation pointers to U-IS-07/09/12 | C-CP-08 §8.2 | ✅ landed | `feat(cp): land U-CP-18` | 2026-05-16 |
 | U-CP-40 | Persona-tier × engine-class HITL matrix (`SynchronyClass` 4-value, `HITLPrimitiveShape` 12-value, `HITLMatrixCell`, `HITL_MATRIX` 15-entry, `matrix_cell_for`) — v2.6 decl-site conversion: `PersonaTier` from harness-core; 2 cells EXCLUDED inheriting C-CP-07 §7.2 | C-CP-18 §18.1+§18.2 | ✅ landed | `feat(cp): land U-CP-40` | 2026-05-16 |
+| U-CP-48 | Transient staircase + cause-attribution branching + palette restriction (`StaircaseStage` 5-value, `StaircaseTransition`, `TRANSIENT_STAIRCASE_TRANSITIONS`, `CrossTrustBoundaryState` 4-value, `PaletteRestriction`, `PALETTE_RESTRICTION_TABLE` 4-entry, `advance_staircase`, `compute_restricted_palette`) — v2.4-conformed body | C-CP-21 §21.2+§21.3 | ✅ landed | `feat(cp): land U-CP-48` | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
@@ -240,3 +241,10 @@ state.jsonl hash-chain length 59 (43 units across IS/AS/CP/OD + harness-core).
   deferred" framing. 7c may want to factor a shared canonicalization primitive.
 - **U-AS-24 accessor rename.** Plan names the accessor `fail_class_metadata`;
   renamed to `secret_fail_class_metadata` to avoid the U-AS-03 collision.
+- **U-CP-48 palette-set narrowing (spec vs plan).** CP spec C-CP-21 §21.3 says
+  the cross-trust-boundary palette is "restricted to `{approve, reject,
+  respond}` (no `edit`)". The U-CP-48 plan acceptance #5 (preserved at v2.4)
+  narrows the three cross-trust-state table entries further to `{REJECT,
+  RESPOND}`. `{reject, respond}` is a subset of the spec's edit-free set — a
+  within-allowed refinement, not a verbatim divergence — so U-CP-48 landed per
+  the plan table. Non-blocking; flagged for a future CP spec/plan reconcile.
