@@ -36,6 +36,7 @@ updates happen at cluster close, not per unit.
 | U-IS-16 | Worktree-isolation primitive (`WorktreeIsolationManager`: allocate/reclaim, concurrency cap) | C-IS-09 §9.2-§9.3 | ✅ landed | `feat(is): land U-IS-16` | 2026-05-16 |
 | U-IS-09 | Chain-link construction primitive (`construct_prior_event_hash`) | C-IS-06 §6.3 | ✅ landed | `feat(is): land U-IS-09` | 2026-05-16 |
 | U-IS-10 | Chain verification + tamper-evidence (`verify_chain`, `ChainVerificationResult`) | C-IS-06 §6.4-§6.5 | ✅ landed | `feat(is): land U-IS-10` | 2026-05-16 |
+| U-IS-12 | C2-pole selective bounded read (`NavigationPrimitive`, 4 concrete primitives) | C-IS-07 §7.2-§7.3 | ✅ landed | `feat(is): land U-IS-12` | 2026-05-16 |
 
 ## Operational-minimum set (7a exit-criterion #1 — 12 units)
 
