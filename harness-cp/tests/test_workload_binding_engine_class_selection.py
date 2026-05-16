@@ -20,6 +20,7 @@ from harness_core import DeploymentSurface, PersonaTier, WorkloadClass
 from harness_cp.engine_class import EngineClass
 from harness_cp.engine_class_candidate import ENGINE_CLASS_CANDIDATES
 from harness_cp.workload_binding_engine_class_selection import (
+    HITLInvocation,
     WorkloadBindingError,
     WorkloadBindingSelectionInput,
     WorkloadBindingSelectionResult,
@@ -171,3 +172,72 @@ def test_result_frozen() -> None:
     )
     with pytest.raises(Exception):  # noqa: B017 - pydantic frozen violation
         result.selected_class = EngineClass.WAL_SEGMENT  # type: ignore[misc]
+
+
+# --- v2.9 — HITLInvocation opener-side record (acceptance #4) ---------------
+
+
+def _handoff_context():
+    from harness_cp.handoff_context import (
+        HandoffContext,
+        LedgerEntryRef,
+        ProposedAction,
+        RetryHistory,
+        StateSummary,
+    )
+    from harness_cp.handoff_context import ActionKind
+    from harness_core import ActionID
+    from harness_cp.cp_shared_types import ActorIdentity
+    from harness_is.state_ledger_entry_schema import Identifier
+
+    return HandoffContext(
+        proposed_action=ProposedAction(
+            action_kind=ActionKind.INFERENCE_STEP, payload={}, brief=None
+        ),
+        agent_confidence=None,
+        failed_attempts=(),
+        alternatives_considered=(),
+        state_summary=StateSummary(
+            relevant_entries=(),
+            summary_text="s",
+            summary_hash="0" * 64,
+            idempotency_key=Identifier("k"),
+            external_references=(),
+        ),
+        audit_trail_link=LedgerEntryRef(
+            action_id=ActionID("a0"),
+            entry_hash="0" * 64,
+            actor=ActorIdentity("op"),
+        ),
+        retry_history=RetryHistory(attempts=(), retry_count=0),
+    )
+
+
+def test_hitl_invocation_seven_fields_cp_17_1_1() -> None:
+    """#4 (v2.9) — HITLInvocation declares exactly seven fields."""
+    assert set(HITLInvocation.model_fields) == {
+        "invocation_id",
+        "placement",
+        "handoff_context",
+        "response_palette",
+        "timeout",
+        "cascade_policy",
+        "opened_at",
+    }
+
+
+def test_hitl_invocation_constructs() -> None:
+    """#4 (v2.9) — HITLInvocation is the opener-side record (carries a context)."""
+    from harness_cp.hitl_response_palette import HITLResponse
+
+    inv = HITLInvocation(
+        invocation_id="inv-0",
+        placement="pre-action",
+        handoff_context=_handoff_context(),
+        response_palette=frozenset(HITLResponse),
+        timeout=None,
+        cascade_policy="pause",
+        opened_at="2026-05-16T00:00:00Z",
+    )
+    assert inv.invocation_id == "inv-0"
+    assert inv.timeout is None

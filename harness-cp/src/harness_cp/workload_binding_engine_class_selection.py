@@ -1,8 +1,17 @@
-"""Workload-binding-time engine-class selection — U-CP-17 (PARTIAL).
+"""Workload-binding-time engine-class selection + `HITLInvocation` — U-CP-17 (PARTIAL).
 
 Implements C-CP-07 §7.3 — the workload-binding-time engine-class selection
 contract. Declares `WorkloadBindingSelectionInput`,
-`WorkloadBindingSelectionResult`, and `select_engine_class`.
+`WorkloadBindingSelectionResult`, `select_engine_class`, and (per the v2.9
+revision) the `HITLInvocation` opener-side record.
+
+**v2.9 factor-out delta — `HITLInvocation`.** Plan v2.9 §2A U-CP-17 + §0.4
+home the `HITLInvocation` opener-side record at this unit (the HITL primitive
+unit per the T2 carrier assignment), cross-cluster-consumed by U-CP-52 via the
+`[U-CP-17]` edge. `HITLInvocation` is the *opener-side* record — distinct from
+the §17.1.1 `HITLResult` (the result-side record, landed at U-CP-38). Its
+field set is the C-CP-17 §17.1.1 `hitl_gate(...)` argument set + `invocation_id`
++ `opened_at`, a faithful factor-out of the §17.1.1 + §16.4 + §20.6 contract.
 
 **PARTIAL LAND — halt-route-split-AC.** The v2.1 U-CP-17 signature carries an
 `operator_preferences: Optional<EngineClassPreferences>` field, and acceptance
@@ -33,6 +42,8 @@ from pydantic import BaseModel, ConfigDict
 from harness_core import DeploymentSurface, PersonaTier, WorkloadClass
 from harness_cp.engine_class import EngineClass
 from harness_cp.engine_class_candidate import ENGINE_CLASS_CANDIDATES
+from harness_cp.handoff_context import HandoffContext
+from harness_cp.hitl_response_palette import HITLResponse
 
 
 class WorkloadBindingSelectionInput(BaseModel):
@@ -193,3 +204,40 @@ def select_engine_class(
             f"{selected.value} from the tier-admissible candidate set."
         ),
     )
+
+
+class HITLInvocation(BaseModel):
+    """The opener-side HITL-invocation record (C-CP-17 §17.1.1).
+
+    The `hitl.invocation.opened` event payload (C-CP-20 §20.6 + C-CP-22 §22.3
+    reference `hitl.invocation.opened` with `handoff_context_size_bytes`). The
+    field set is the C-CP-17 §17.1.1 `hitl_gate(...)` argument set
+    (`placement`, `handoff_context`, `response_palette`, `timeout`,
+    `cascade_policy`) plus `invocation_id` and `opened_at`.
+
+    DISTINCT from the §17.1.1 `HITLResult` (the result-side record, landed at
+    U-CP-38). Plan v2.9 §2A U-CP-17 — homed here, cross-cluster-consumed by
+    U-CP-52 via the `[U-CP-17]` edge. No field invented beyond the §17.1.1
+    argument set (acceptance #4).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    invocation_id: str
+    placement: str
+    """∈ {pre-action, sub-agent-boundary, validator-escalation} per C-CP-17 §17.1."""
+
+    handoff_context: HandoffContext
+    """Per the C-CP-13 §13.1 shape (U-CP-30)."""
+
+    response_palette: frozenset[HITLResponse]
+    """{approve, edit, reject, respond} per C-CP-16 §16.1."""
+
+    timeout: int | None
+    """`None` for sync-blocking; bounded (ms) for durable-async per C-CP-21 §21.3."""
+
+    cascade_policy: str
+    """∈ {pause, proceed, cascade-cancel} per C-CP-17 §17.1.1."""
+
+    opened_at: str
+    """ISO-8601 emission time of the `hitl.invocation.opened` event."""
