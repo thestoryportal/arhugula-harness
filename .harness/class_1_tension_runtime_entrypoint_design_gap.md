@@ -111,3 +111,33 @@ composition-root, or DevEx-plane concerns.
 
 **Status:** OPEN — deferred to Phase 2 scoping session (operator-owned).
 Phase 1 OD-7b proceeds in parallel.
+
+## Phase 1 → Phase 2 hand-off observations (collated 2026-05-16)
+
+OD-7b surfaced concrete Phase-1 surfaces that are *materializable as library
+code* but whose *runtime behavior* cannot be exercised or verified without the
+Phase 2 composition root. Inputs for the Phase 2 scoping session:
+
+- **U-OD-23 `emit_eval_as_child_span`** — creates the child span via the global
+  tracer provider (`get_tracer_provider()`). Real parent→child trace
+  inheritance is unverified until a composition root calls
+  `set_tracer_provider(...)`. The harness needs a defined tracer-provider
+  bootstrap site.
+- **U-OD-19 / U-OD-20** — `ReplaySemanticDivergenceError` and related are
+  structured return-records, not emitted at a live tracer provider; emission
+  wiring is Phase 2.
+- **U-OD-26 `validate_eval_span_routing`** — consumes a caller-supplied
+  `EvalSpanRouting` observation; the composition root that wires actual span →
+  routing observation is Phase 2.
+- **U-OD-27** — in-process OTLP collector + ring-buffer trace storage + TUI
+  trace browser, landed as a LIBRARY surface only (no running collector, no
+  live TUI, no sqlite connection, no daemon). The live collector process, the
+  TUI, the sqlite ring-buffer rotation, and the no-network-egress enforcement
+  are all Phase-2 runtime concerns. This unit is the closest OD surface to the
+  Phase 2 DevEx/runtime plane — the Phase 2 design should treat the in-process
+  collector + TUI as a runtime component it instantiates.
+- **F3 lifecycle event taxonomy is unpinned** — appears in 3 divergent forms
+  (OD plan `F2_LIFECYCLE_EVENT_MAPPINGS` / OD spec C-OD-06 §6.1 / OD
+  `CLAUDE.md` §1.1). Spec is authoritative per the §1.3 authority chain, but
+  the divergence should be reconciled (Class 3 corpus-hygiene; folds into the
+  OD-plan v2.8 revision pass, not Phase 2).
