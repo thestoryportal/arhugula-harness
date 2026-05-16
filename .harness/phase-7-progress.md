@@ -67,6 +67,8 @@ updates happen at cluster close, not per unit.
 | U-AS-27 | Per-fetch secret-audit emission discipline + span emission (cross-axis IS: U-IS-11) | C-AS-08 §8.4-§8.5 | ✅ landed | `feat(as): land U-AS-27` | 2026-05-16 |
 | U-AS-32 | Anthropic-primitive sampling discipline + audit-floor commitments + D6 alignment | C-AS-14 §14.8-§14.9 | ✅ landed | `feat(as): land U-AS-32` | 2026-05-16 |
 | U-AS-33 | AS-axis substrate seam exports manifest (terminal exporter — 7 seams) | C-AS-16 §16.1-§16.7 | ✅ landed | `feat(as): land U-AS-33` | 2026-05-16 |
+| U-CP-50 | Material-diff detection + revalidation + summarization fallback (`MaterialDiff` v2.9 §0.3 4-field shape, `DiffCategory` 5-enum, `DiffEntry`, `RevalidationOutcome`/`RevalidationOutcomeKind`, `SummarizationModelBinding` + `SUMMARIZATION_MODEL_TABLE` 3-entry, `detect_material_diff`/`revalidate_context`/`summarize_diff_for_operator`) — `MaterialDiff` homed here (the C-CP-22 unit; v2.9 §0.4's U-CP-22 homing mis-targets TopologyPattern); `detect_material_diff` returns a diff-set `tuple[MaterialDiff,...]` per §22.1 set semantics (Class 3 — v2.1 singular signature); landed atomically with U-CP-49 (plan-declared mutual dep, broken via `TYPE_CHECKING`) | C-CP-21 §21.4 + C-CP-22 §22.2/§22.3 | ✅ landed | `feat(cp): land U-CP-50 + U-CP-49` | 2026-05-16 |
+| U-CP-49 | Pause/resume protocol + state_summary snapshot capture (`PauseReason` 4-enum, `PauseEvent` 5-field, `ResumeAttempt`, `ResumeOutcomeKind` 4-enum, `ResumeOutcome`, `capture_pause_snapshot`/`attempt_resume`/`classify_resume`) — consumes U-CP-50 `MaterialDiff`; U-CP-49↔U-CP-50 plan-declared mutual dep resolved via `TYPE_CHECKING`-only reciprocal import (no Python cycle) | C-CP-22 §22.1 | ✅ landed | `feat(cp): land U-CP-50 + U-CP-49` | 2026-05-16 |
 | U-CP-33 | Concurrent-prompt-cache warm-up protocol + `LeadAgentPlan` (`LeadAgentPlan`/`SubAgent` opaque aliases, `CacheCompletionProxyKind`/`CacheCompletionProxy`, `CacheWarmupInput`/`CacheWarmupResult`, `persist_lead_agent_plan`/`await_cache_completion`/`on_fanout_dispatch`) — v2.9-revised body; `LeadAgentPlan` opaque per §0.5.2 (spec commits the concept, decomposes no record); `SubAgent` opaque (no spec record) | C-CP-14 §14.4 | ✅ landed | `feat(cp): land U-CP-33` | 2026-05-16 |
 | U-CP-32 | Multi-agent span hierarchy + per-span sampling discipline (`ParentRelationship` 3-enum, `SpanHierarchyNode` + `MULTI_AGENT_SPAN_HIERARCHY`, `SpanSamplingDecision` + `MULTI_AGENT_SPAN_SAMPLING`) — `ParentRelationship {ROOT,CHILD_OF,SIBLING_OF}` declared per §14.1 signature (distinct from U-CP-10 `ParentRelation {ROOT,CHILD_OF,DELEGATED_TO}`) | C-CP-14 §14.1/§14.3/§14.5 | ✅ landed | `feat(cp): land U-CP-32` | 2026-05-16 |
 | U-CP-46 | 7 `audit.*` attrs + per-persona-tier emission table + 4-span HITL-event schema (`AuditAttributeSchema` + `AUDIT_NAMESPACE_SCHEMA` 7-entry, `HITLSpanSchema` + `HITL_SPAN_NAMESPACE_SCHEMA` 4-entry, `PersonaTierEmissionRow` + `PERSONA_TIER_AUDIT_EMISSION` 3-entry) — landed against the **v2.4-conformed body** (the v2.1 plan-invented `audit.gate.*`/`audit.policy.*` namespace was dissolved at the v2.4 verbatim-divergence conformance pass; conformed to spec §20.4/§20.5/§20.6) | C-CP-20 §20.4/§20.5/§20.6 | ✅ landed | `feat(cp): land U-CP-46` | 2026-05-16 |
@@ -303,3 +305,21 @@ state.jsonl hash-chain length 59 (43 units across IS/AS/CP/OD + harness-core).
   therefore takes a 7th `hitl_required: bool` param — the caller (which holds
   the gate context) evaluates U-CP-43 and injects the verdict. Non-blocking;
   flagged for a CP plan signature reconcile.
+- **U-CP-49 ↔ U-CP-50 mutual dependency.** Both plan v2.1 bodies declare each
+  other in `Depends on:`. The CP plan asserts an acyclic DAG (§3.1); the pair
+  is genuinely type-co-dependent (U-CP-49's `ResumeOutcome` consumes U-CP-50's
+  `MaterialDiff`; U-CP-50's `detect_material_diff` consumes U-CP-49's
+  `PauseEvent`). Resolved without a Python import cycle: `MaterialDiff` is a
+  runtime import into U-CP-49; `PauseEvent` is a `TYPE_CHECKING`-only
+  annotation-level import into U-CP-50. Landed atomically. Non-blocking;
+  flagged for a CP plan DAG carrier-split / edge-direction reconcile.
+- **U-CP-50 `detect_material_diff` return shape.** Plan v2.1 returns a singular
+  `MaterialDiff` (3-field aggregate); v2.9 §0.3 re-specifies `MaterialDiff` as
+  a per-reference record and spec §22.1 commits `diff_set.add((...))` SET
+  semantics. `detect_material_diff` returns `tuple[MaterialDiff, ...]` (the
+  diff-set). Non-blocking; flagged for a CP plan signature reconcile.
+- **`MaterialDiff` carrier home.** Plan v2.9 §0.4 homes `MaterialDiff` at
+  U-CP-22 (the TopologyPattern unit). U-CP-22's surface is C-CP-10 topology —
+  not C-CP-22 context-revalidation. `MaterialDiff` is homed at U-CP-50 (the
+  unit implementing C-CP-22 §22.2 material-diff detection) per the operator
+  task directive. The landed U-CP-22 is not revised. Non-blocking.
