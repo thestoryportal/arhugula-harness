@@ -184,9 +184,25 @@ from harness_as.secret_fetch_audit import (
     compose_secret_fetch_audit_entry,
     verify_secret_fetch_entry_in_chain,
 )
+from harness_as.secret_negative_observation import (
+    NegativeObservationSurface,
+    NegativeObservationViolation,
+    validate_no_secret_in_audit_ledger_entry,
+    validate_no_secret_in_span_attributes,
+    validate_no_secret_in_static_prefix,
+    verify_sole_resolution_path,
+)
 from harness_as.secret_outputs_hash import (
     canonicalize_concat_secret_fingerprint,
     compute_outputs_hash,
+)
+from harness_as.secret_passthrough import (
+    REDACTION_SENTINEL,
+    PassthroughViolation,
+    PassthroughViolationKind,
+    detect_mcp_server_token_passthrough,
+    redact_secrets_in_input_span_attributes,
+    redact_secrets_in_output,
 )
 from harness_as.sub_agent_sandbox_tier import (
     SubAgentBoundaryViolation,
@@ -216,6 +232,7 @@ __all__ = [
     "MODEL_TIER_ESCALATION_CHAIN",
     "PRE_HITL_ESCALATION_ORDER",
     "RECOMMENDED_CONTRACT_DEFAULT_TIER",
+    "REDACTION_SENTINEL",
     "REFUSE",
     "SAMPLING_POLICY",
     "SANDBOX_ATTRIBUTE_SCHEMA",
@@ -267,8 +284,12 @@ __all__ = [
     "MemoryToolStorageBackend",
     "ModelBinding",
     "ModelClass",
+    "NegativeObservationSurface",
+    "NegativeObservationViolation",
     "OutageBehavior",
     "OverrideScopeResult",
+    "PassthroughViolation",
+    "PassthroughViolationKind",
     "PersonaTier",
     "PersonaTierFloor",
     "PreHITLEscalationStep",
@@ -327,6 +348,7 @@ __all__ = [
     "compute_outputs_hash",
     "construct_breaker_key",
     "derive_sub_agent_idempotency_key",
+    "detect_mcp_server_token_passthrough",
     "detect_sub_agent_tier_downgrade",
     "detect_tier_downgrade_governance_violation",
     "emit_sandbox_event",
@@ -348,6 +370,8 @@ __all__ = [
     "persona_tier_traversal_ascends",
     "provider_belongs_to",
     "provider_class_metadata",
+    "redact_secrets_in_input_span_attributes",
+    "redact_secrets_in_output",
     "rejects_at_registration",
     "sampling_posture",
     "sandbox_tier",
@@ -359,8 +383,12 @@ __all__ = [
     "tier_metadata",
     "tier_resolution_mechanism",
     "tier_to_gate_level_floor",
+    "validate_no_secret_in_audit_ledger_entry",
+    "validate_no_secret_in_span_attributes",
+    "validate_no_secret_in_static_prefix",
     "validate_skill_attributes_carry_both_version_fields",
     "validate_span_attributes_against_exclusions",
     "validate_tool_contract_at_registration",
     "verify_secret_fetch_entry_in_chain",
+    "verify_sole_resolution_path",
 ]
