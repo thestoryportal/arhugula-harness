@@ -109,9 +109,7 @@ def _resolved(tier: SandboxTier) -> SandboxTierFloorResult:
 
 
 #: The remote-MCP Level-0 REFUSE sentinel.
-REFUSE: SandboxTierFloorResult = SandboxTierFloorResult(
-    outcome=SandboxTierFloorOutcome.REFUSE
-)
+REFUSE: SandboxTierFloorResult = SandboxTierFloorResult(outcome=SandboxTierFloorOutcome.REFUSE)
 
 
 def sandbox_tier_floor(
@@ -150,10 +148,7 @@ def sandbox_tier_floor(
                 return REFUSE
             case MCPServerTrustLevel.L2_SANDBOX_ALL:
                 return _resolved(_tier_max(SandboxTier.TIER_4_FULL_VM, floor))
-            case (
-                MCPServerTrustLevel.L1_SIGNED_PINNED
-                | MCPServerTrustLevel.L3_ALLOW_WITH_AUDIT
-            ):
+            case MCPServerTrustLevel.L1_SIGNED_PINNED | MCPServerTrustLevel.L3_ALLOW_WITH_AUDIT:
                 return _resolved(floor)
 
     # Rows 7-10 — blast-radius default (keyed on `blast_radius_tier`).

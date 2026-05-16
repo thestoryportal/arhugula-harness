@@ -91,55 +91,51 @@ class PreHITLEscalationStep(StrEnum):
 
 # --- §13.3 per-engine-class composition overlay ----------------------------
 
-ENGINE_CLASS_COMPOSITION_OVERLAY: Mapping[D1EngineClass, EngineClassComposition] = (
-    MappingProxyType(
-        {
-            D1EngineClass.EVENT_SOURCED_REPLAY: EngineClassComposition(
-                engine_class=D1EngineClass.EVENT_SOURCED_REPLAY,
-                prompt_cache_scope="Activity-internal",
-                batch_api_integration="Submission as Activity; engine-native idempotency",
-                extended_thinking_placement="Activity-internal",
-                skills_filesystem_residence=(
-                    "Activity reads SKILL.md from project-root filesystem at call time"
-                ),
+ENGINE_CLASS_COMPOSITION_OVERLAY: Mapping[D1EngineClass, EngineClassComposition] = MappingProxyType(
+    {
+        D1EngineClass.EVENT_SOURCED_REPLAY: EngineClassComposition(
+            engine_class=D1EngineClass.EVENT_SOURCED_REPLAY,
+            prompt_cache_scope="Activity-internal",
+            batch_api_integration="Submission as Activity; engine-native idempotency",
+            extended_thinking_placement="Activity-internal",
+            skills_filesystem_residence=(
+                "Activity reads SKILL.md from project-root filesystem at call time"
             ),
-            D1EngineClass.SAVE_POINT_CHECKPOINT: EngineClassComposition(
-                engine_class=D1EngineClass.SAVE_POINT_CHECKPOINT,
-                prompt_cache_scope="Node-internal",
-                batch_api_integration="Submission at node boundary; interrupt() + Command resume",
-                extended_thinking_placement="Node-internal",
-                skills_filesystem_residence=(
-                    "Node reads SKILL.md; checkpoint state includes loaded-Skill "
-                    "manifest for replay determinism"
-                ),
+        ),
+        D1EngineClass.SAVE_POINT_CHECKPOINT: EngineClassComposition(
+            engine_class=D1EngineClass.SAVE_POINT_CHECKPOINT,
+            prompt_cache_scope="Node-internal",
+            batch_api_integration="Submission at node boundary; interrupt() + Command resume",
+            extended_thinking_placement="Node-internal",
+            skills_filesystem_residence=(
+                "Node reads SKILL.md; checkpoint state includes loaded-Skill "
+                "manifest for replay determinism"
             ),
-            D1EngineClass.PURE_PATTERN_NO_ENGINE: EngineClassComposition(
-                engine_class=D1EngineClass.PURE_PATTERN_NO_ENGINE,
-                prompt_cache_scope="Harness-managed",
-                batch_api_integration=(
-                    "Submission idempotency-keyed via F2 state-ledger entry per C-IS-05"
-                ),
-                extended_thinking_placement="Harness-managed",
-                skills_filesystem_residence="Harness reads SKILL.md from F2 filesystem",
+        ),
+        D1EngineClass.PURE_PATTERN_NO_ENGINE: EngineClassComposition(
+            engine_class=D1EngineClass.PURE_PATTERN_NO_ENGINE,
+            prompt_cache_scope="Harness-managed",
+            batch_api_integration=(
+                "Submission idempotency-keyed via F2 state-ledger entry per C-IS-05"
             ),
-            D1EngineClass.RECONCILER_LOOP: EngineClassComposition(
-                engine_class=D1EngineClass.RECONCILER_LOOP,
-                prompt_cache_scope="CR-cycle-scoped",
-                batch_api_integration=(
-                    "Submission represented as CR; idempotency on CR metadata.uid"
-                ),
-                extended_thinking_placement="CR-cycle-scoped",
-                skills_filesystem_residence="SKILL.md mounted as ConfigMap / PVC",
-            ),
-            D1EngineClass.WAL_SEGMENT: EngineClassComposition(
-                engine_class=D1EngineClass.WAL_SEGMENT,
-                prompt_cache_scope="Per-segment",
-                batch_api_integration="Submission as WAL entry; per-segment fail-fast",
-                extended_thinking_placement="Per-segment",
-                skills_filesystem_residence="SKILL.md per-segment metadata",
-            ),
-        }
-    )
+            extended_thinking_placement="Harness-managed",
+            skills_filesystem_residence="Harness reads SKILL.md from F2 filesystem",
+        ),
+        D1EngineClass.RECONCILER_LOOP: EngineClassComposition(
+            engine_class=D1EngineClass.RECONCILER_LOOP,
+            prompt_cache_scope="CR-cycle-scoped",
+            batch_api_integration=("Submission represented as CR; idempotency on CR metadata.uid"),
+            extended_thinking_placement="CR-cycle-scoped",
+            skills_filesystem_residence="SKILL.md mounted as ConfigMap / PVC",
+        ),
+        D1EngineClass.WAL_SEGMENT: EngineClassComposition(
+            engine_class=D1EngineClass.WAL_SEGMENT,
+            prompt_cache_scope="Per-segment",
+            batch_api_integration="Submission as WAL entry; per-segment fail-fast",
+            extended_thinking_placement="Per-segment",
+            skills_filesystem_residence="SKILL.md per-segment metadata",
+        ),
+    }
 )
 
 
@@ -161,59 +157,55 @@ _SONNET = AnthropicModel.SONNET_4_6
 
 #: The 20-cell per-(workload-class, sub-agent-role) model-binding matrix
 #: (C-AS-13 §13.4). `n/a` cells resolve to `None`.
-MODEL_BINDING_MATRIX: Mapping[
-    tuple[WorkloadClass, SubAgentRole], ModelBinding | None
-] = MappingProxyType(
-    {
-        # software-engineering
-        (_SE, _LEAD): ModelBinding(
-            primary_model=_SONNET,
-            qualifier="Sonnet 4.6 default; Opus 4.6 at multi-tenant-compliance",
-        ),
-        (_SE, _GEN): ModelBinding(primary_model=_SONNET),
-        (_SE, _EVAL): ModelBinding(primary_model=_SONNET, qualifier="x1-3", cap=3),
-        (_SE, _REV): ModelBinding(primary_model=_HAIKU, cap=3),
-        (_SE, _SUB): ModelBinding(primary_model=_HAIKU, qualifier="review/eval reads"),
-        # content-creation
-        (_CC, _LEAD): ModelBinding(primary_model=_SONNET),
-        (_CC, _GEN): ModelBinding(primary_model=_SONNET),
-        (_CC, _EVAL): ModelBinding(
-            primary_model=_HAIKU, qualifier="operator-as-reviewer dominant"
-        ),
-        (_CC, _REV): None,
-        (_CC, _SUB): None,
-        # pipeline-automation
-        (_PA, _LEAD): ModelBinding(
-            primary_model=_SONNET,
-            qualifier="Sonnet 4.6 per-stage default; Haiku 4.5 high-volume idempotent",
-        ),
-        (_PA, _GEN): ModelBinding(
-            primary_model=_SONNET,
-            qualifier="Sonnet 4.6 synthesis; Haiku 4.5 idempotent",
-        ),
-        (_PA, _EVAL): None,
-        (_PA, _REV): None,
-        (_PA, _SUB): ModelBinding(
-            primary_model=_HAIKU, qualifier="idempotent parallel", cap=3
-        ),
-        # research
-        (_RE, _LEAD): ModelBinding(
-            primary_model=_SONNET,
-            qualifier="Sonnet 4.6 default; Opus 4.6 multi-tenant-compliance high-fidelity",
-        ),
-        (_RE, _GEN): None,
-        (_RE, _EVAL): None,
-        (_RE, _REV): ModelBinding(primary_model=_HAIKU, qualifier="synthesis pre-pass"),
-        (_RE, _SUB): ModelBinding(
-            primary_model=_HAIKU, qualifier="breadth-search x 3-5", cap=5
-        ),
-    }
+MODEL_BINDING_MATRIX: Mapping[tuple[WorkloadClass, SubAgentRole], ModelBinding | None] = (
+    MappingProxyType(
+        {
+            # software-engineering
+            (_SE, _LEAD): ModelBinding(
+                primary_model=_SONNET,
+                qualifier="Sonnet 4.6 default; Opus 4.6 at multi-tenant-compliance",
+            ),
+            (_SE, _GEN): ModelBinding(primary_model=_SONNET),
+            (_SE, _EVAL): ModelBinding(primary_model=_SONNET, qualifier="x1-3", cap=3),
+            (_SE, _REV): ModelBinding(primary_model=_HAIKU, cap=3),
+            (_SE, _SUB): ModelBinding(primary_model=_HAIKU, qualifier="review/eval reads"),
+            # content-creation
+            (_CC, _LEAD): ModelBinding(primary_model=_SONNET),
+            (_CC, _GEN): ModelBinding(primary_model=_SONNET),
+            (_CC, _EVAL): ModelBinding(
+                primary_model=_HAIKU, qualifier="operator-as-reviewer dominant"
+            ),
+            (_CC, _REV): None,
+            (_CC, _SUB): None,
+            # pipeline-automation
+            (_PA, _LEAD): ModelBinding(
+                primary_model=_SONNET,
+                qualifier="Sonnet 4.6 per-stage default; Haiku 4.5 high-volume idempotent",
+            ),
+            (_PA, _GEN): ModelBinding(
+                primary_model=_SONNET,
+                qualifier="Sonnet 4.6 synthesis; Haiku 4.5 idempotent",
+            ),
+            (_PA, _EVAL): None,
+            (_PA, _REV): None,
+            (_PA, _SUB): ModelBinding(primary_model=_HAIKU, qualifier="idempotent parallel", cap=3),
+            # research
+            (_RE, _LEAD): ModelBinding(
+                primary_model=_SONNET,
+                qualifier="Sonnet 4.6 default; Opus 4.6 multi-tenant-compliance high-fidelity",
+            ),
+            (_RE, _GEN): None,
+            (_RE, _EVAL): None,
+            (_RE, _REV): ModelBinding(primary_model=_HAIKU, qualifier="synthesis pre-pass"),
+            (_RE, _SUB): ModelBinding(
+                primary_model=_HAIKU, qualifier="breadth-search x 3-5", cap=5
+            ),
+        }
+    )
 )
 
 
-def model_binding(
-    workload: WorkloadClass, role: SubAgentRole
-) -> ModelBinding | None:
+def model_binding(workload: WorkloadClass, role: SubAgentRole) -> ModelBinding | None:
     """Return the model binding for a (workload-class, sub-agent-role) cell.
 
     Total over `(WorkloadClass, SubAgentRole)` — all 20 cells populated; an

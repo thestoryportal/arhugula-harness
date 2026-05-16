@@ -130,25 +130,19 @@ def test_sandbox_tier_floor_read_only_deterministic_returns_tier_1() -> None:
 
 def test_sandbox_tier_floor_local_mutation_returns_tier_2() -> None:
     """§2.3 row 8 — local-mutation → tier-2-container."""
-    result = sandbox_tier_floor(
-        _PLAIN, _SURFACE, BlastRadiusTier.LOCAL_MUTATION, None, None
-    )
+    result = sandbox_tier_floor(_PLAIN, _SURFACE, BlastRadiusTier.LOCAL_MUTATION, None, None)
     assert result.tier is SandboxTier.TIER_2_CONTAINER
 
 
 def test_sandbox_tier_floor_external_reversible_returns_tier_3() -> None:
     """§2.3 row 9 — external-reversible → tier-3-microvm."""
-    result = sandbox_tier_floor(
-        _PLAIN, _SURFACE, BlastRadiusTier.EXTERNAL_REVERSIBLE, None, None
-    )
+    result = sandbox_tier_floor(_PLAIN, _SURFACE, BlastRadiusTier.EXTERNAL_REVERSIBLE, None, None)
     assert result.tier is SandboxTier.TIER_3_MICROVM
 
 
 def test_sandbox_tier_floor_external_irreversible_returns_tier_4() -> None:
     """§2.3 row 10 — external-irreversible → tier-4-full-vm."""
-    result = sandbox_tier_floor(
-        _PLAIN, _SURFACE, BlastRadiusTier.EXTERNAL_IRREVERSIBLE, None, None
-    )
+    result = sandbox_tier_floor(_PLAIN, _SURFACE, BlastRadiusTier.EXTERNAL_IRREVERSIBLE, None, None)
     assert result.tier is SandboxTier.TIER_4_FULL_VM
 
 
