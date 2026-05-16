@@ -88,7 +88,34 @@ materialization of the four OTel aliases.
 
 ## Disposition
 
-U-OD-19 and U-OD-23 **skipped** in the L2 batch. U-OD-06, U-OD-07, U-OD-16 of
-the same batch proceed (no `Span*` dependency). U-OD-13 separately halted for an
-unrelated topological-misplacement defect — see
-`class_1_tension_u_od_13_topological_misplacement.md`.
+U-OD-19 and U-OD-23 **skipped** in the first L2 batch; resolved below.
+
+## RESOLUTION (2026-05-16) — not a fork; ratified plan content not yet applied
+
+This is **not a Class 1 design decision** — it is ratified plan content that
+was never applied to source. The U-OD-04 carrier-growth (`Span*` family) is:
+
+- **Specified** — `Implementation_Plan_Operational_Discipline_v2_6.md` §3.2.1,
+  full-revised U-OD-04 body, acceptance criterion #9, purely additive ("all
+  v2.5 surfaces preserved verbatim").
+- **Operator-ratified** — R5 Q-R5-2 (Span* folds into U-OD-04 carrier-growth)
+  and Q-R5-6 (authority = ADR-F5 + ADR-D6 v1.2 + Target_Stack OTel adoption),
+  ratified in full 2026-05-15.
+- **X-AL-3-cleared** — T2 ruled the `Span*` family FACTOR-OUT (faithful
+  factor-out of the OTel-SDK substrate / OD emission contracts; 0 design
+  extensions). v2.6 §3.2.1 acc #9 states it explicitly.
+
+U-OD-04 landed against the *v2.5* body, before v2.6 added the carrier-growth.
+Applying the v2.6 §3.2.1 additive delta to `otel_genai_base.py` is routine
+implementation of ratified plan content — `type SpanRef = OTelSpanHandle`
+materializes as a type-alias of the OTel-SDK span; `EventEmission` as a 4-field
+frozen Pydantic record. No operator decision is owed; the concrete OTel-SDK
+binding is normal stack materialization (Target_Stack §5.2 OTel adoption).
+
+The original halt followed an over-conservative dispatch instruction. Correct
+disposition: **apply the v2.6 §3.2.1 carrier-growth to landed U-OD-04** (acc #9
++ its 6 new tests, additive), re-clear U-OD-04, then U-OD-19/23 (and
+U-OD-09/10/20/25/26/30/31) resolve their `[U-OD-04]` carrier edge and land.
+
+**Status:** RESOLVED — apply ratified U-OD-04 carrier-growth; U-OD-19/23 + the
+7 other `Span*` consumers cleared to land against it.

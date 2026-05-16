@@ -69,6 +69,31 @@ U-OD-11 consumption), but the determination is a plan-authority call.
 
 ## Disposition
 
-U-OD-13 **skipped** in the L2 batch. U-OD-06, U-OD-07, U-OD-16 of the same batch
-proceed (their dependencies are landed). U-OD-19 and U-OD-23 separately halted —
-see `class_1_tension_u_od_19_23_span_family_carrier_gap.md`.
+U-OD-13 **skipped** in the first L2 batch; resolved below.
+
+## RESOLUTION (2026-05-16, determinate plan conform-to-self)
+
+**Option B — strike the stale `U-OD-11` edge.** Verified against the canonical
+U-OD-13 body (`v2_1.md` §3.4.3, preserved verbatim through v2.6):
+
+- `Implements: [C-OD-11 §11.1, §11.4]` — cardinality budget + Pattern P1; no
+  sampling surface.
+- `Inputs:` cite only OD spec §11.1 + §11.4.
+- Signatures: `PerCellCardinalityBudget` / `PER_CELL_CARDINALITY_BUDGET` /
+  `PATTERN_P1_DISCIPLINE_ANCHOR` — reference only `CellID` (U-OD-01).
+- All 6 acceptance criteria + all 6 tests: AC #5 references U-OD-05/06/07,
+  AC #6 references U-OD-31. **None references U-OD-11.**
+- U-OD-11 exports `SamplingMode` / `PerDeploymentSurfaceSamplingMode` /
+  `PER_DEPLOYMENT_SURFACE_SAMPLING` / `ALWAYS_SAMPLED_EVENT_CLASSES` —
+  U-OD-13 consumes **none** of them.
+
+The `U-OD-11` entry in §3.4.3 `Depends on` and the §4.3 `U-OD-11 → … U-OD-13`
+row are a stale/over-broad edge. The §4.2 Kahn table (U-OD-13 at L2) is
+correct; the §4.3 edge enumeration carries the spurious edge. This is a plan
+self-contradiction with one provably-wrong statement — determinate, no design
+choice. U-OD-13's effective dependency set is `[U-OD-01, U-OD-05]`; it lands at
+L2. Plan-file correction (strike the edge in §3.4.3 + §4.3) tracked as OD-plan
+revision debt; build proceeds against the corrected dependency set.
+
+**Status:** RESOLVED — U-OD-13 cleared to land at L2 with `Depends on:
+[U-OD-01, U-OD-05]`.

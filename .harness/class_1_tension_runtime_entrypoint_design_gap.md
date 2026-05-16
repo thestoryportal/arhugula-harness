@@ -1,0 +1,113 @@
+# Class 1 Tension — harness runtime / entrypoint design gap
+
+**Filed:** 2026-05-16 — Phase 7 sub-phase 7b, pre-OD-axis kickoff investigation.
+**Defect class:** Class 1 — H_T design surface missing from the design corpus;
+surfaced at execution-time. Routes to operator for a new-design decision (design
+back-flow deprecated 2026-05-15 — see [[design-substrate-divergence]]).
+
+## Defect
+
+The design corpus does **not** specify a runnable runtime / composition-root /
+entrypoint for H_T. Everything built across IS (17/17), AS (33/33), CP (44/57)
+is a **library** — Pydantic schemas, contracts, primitives. Nothing in the
+corpus wires the axis libraries into a *startable process* a multi-LLM workflow
+can run on.
+
+## Evidence (exhaustive corpus search)
+
+Searched all `Implementation_Plan_*` (IS v2.3 / AS v1.2 / CP v2.9 / OD v2.7 /
+Harness_Core v1.1), `Cross_Axis_Composition_Document_v2_1.md`,
+`Phase_7_Meta_Architecture_v1.md` §6 self-hosting gradient, `PRD_v1_1.md`,
+`Architectural_Design_Document_v1_3.md`, all ADRs.
+
+- **No atomic unit** of the ~139 declares an entrypoint signature — no `main()`,
+  no `__main__`, no CLI handler, no `async def run_harness(...)`, no agent loop,
+  no daemon startup, no `HarnessBootstrap` composition root.
+- **U-OD-34** (terminal OD aggregate exporter) produces a metadata *manifest*
+  (`SubstrateSeamExportsManifest`), not a process.
+- **U-CP-55** (CP terminal aggregate exporter) — composition *manifest*, not a
+  process.
+- **CXA v2.1** wires 101 typed cross-axis *edges* between library types; it does
+  not produce a runnable artifact.
+- **Meta-Architecture §6** self-hosting gradient describes when H_E substitutions
+  *retire*, not a runnable H_T that would host them.
+- **PRD v1.1** specifies observable behavior at the operator surface (run-event,
+  cost-attribution, replay-resumption) — not how to *start* the harness.
+- **ADR-F4** workflow lifecycle specifies the lifecycle *contract*, not a process
+  that runs it.
+
+No spec section, ADR, or plan unit mentions "composition root", "entrypoint",
+"agent loop", "`__main__`", or a harness startup sequence.
+
+## What is missing
+
+No artifact specifies:
+1. A composition root that imports the axis seam exports (U-IS-17, U-AS-33,
+   U-CP-54/55, U-OD-34), instantiates the cross-axis edges, and wires them.
+2. A `main()` / CLI / agent-loop entrypoint — the runnable process surface.
+3. A bootstrap/initialization order (path-class registry → Skills + gate
+   policies → routing core + engine selection → OTel + cost attribution →
+   workflow loop).
+
+## Consequence
+
+"Deploy for production usage" is not reachable from the current corpus. Phase 7
+can complete every atomic unit and CXA edge and still have **no startable
+harness**. Standing one up is **new H_T design** — X-AL-3 forbids silent design
+extension at execution-time, so this cannot be autonomously built; it requires a
+design artifact authored first.
+
+Corpus scale (verified 2026-05-16): **144 atomic units** — core 1 / IS 17 /
+AS 33 / CP 58 / OD 35 (per `CLAUDE.md` §2.4; IS/AS confirmed by full-plan grep,
+CP/OD canonical because v2.7/v2.9 plan files are deltas) + 101 CXA edges. None
+declares a runtime. Built source confirms: zero `__main__`, zero `def main(`,
+zero `[project.scripts]` across all `harness-*` packages.
+
+## Tension with deferring runtime design past Phase 7 closure
+
+Deferring is **structurally blocked at 7d, not merely awkward.** X-AL-2:
+retirement = (units landed) ∧ (substituted H_E surface no longer invoked at
+substitution site). Without a runtime, nothing invokes H_T primitives — they are
+library code on disk; the H_E surface stays the only thing actually invoked. 7d
+closure would be forced to declare all 49 substitutions "bounded residual" — the
+sub-phase is gutted, not closed.
+
+Second-order: 7c wires 101 cross-axis edges between library *types*. A
+composition root routinely surfaces seam defects (a field/hook/cardinality the
+edge needs). If discovered after 7c closes, 7c reopens. Cleanest fence:
+**runtime design completes before 7c starts.** OD-axis 7b (32 units) does not
+depend on the runtime spec — it is the one safely-concurrent track.
+
+## Routing target
+
+Operator — decide whether to author a runtime/composition-root design artifact
+in-CLI (back-flow deprecated; design-substrate/ is canonical and edited here).
+Candidate: a new `Spec_Harness_Runtime_v1.md` + a runtime plan unit (e.g.
+`U-RUNTIME-01` or a `harness-runtime/` package), authored via the
+systems-architect → spec-writer → implementation-planner skill chain, then
+implemented as a 7b/7c follow-on.
+
+Recommendation: author the runtime design now, *before* the OD → 7c → 7d march.
+It is cheapest to surface a gap of this size before more units depend on
+assumptions about how the process starts. OD-axis work can proceed in parallel
+(it does not depend on the runtime spec), but the corpus should not be declared
+Phase-7-complete until the runtime surface exists.
+
+## Operator decision (2026-05-16)
+
+Operator ruled: this is **Phase 2** — not merely runtime integration but the
+DevEx agentic plane (the operating brain of the workflow, plus personalized
+operator features). It gets its own full-rigor design pipeline (research →
+brainstorm → ADD → PRD → spec → implementation plan, adversarial throughout),
+authored in-CLI, in a dedicated scoping session the operator will run within
+~1 day.
+
+Sequencing ruled: **finish Phase 1 OD-7b now** (land as much of the existing
+spec as possible); Phase 2 scoping starts from an integration baseline taken
+against the completed Phase 1 implementation. Standing discipline for the
+remainder of Phase 1: no Phase 1 implementation may create a tension for
+Phase 2, and vice versa — flag any OD/7c/7d unit that touches runtime,
+composition-root, or DevEx-plane concerns.
+
+**Status:** OPEN — deferred to Phase 2 scoping session (operator-owned).
+Phase 1 OD-7b proceeds in parallel.
