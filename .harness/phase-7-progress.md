@@ -41,6 +41,7 @@ updates happen at cluster close, not per unit.
 | U-IS-15 | Shadow-Git rollback primitive (`rollback_to_checkpoint`) | C-IS-08 §8.3 | ✅ landed | `feat(is): land U-IS-15` | 2026-05-16 |
 | U-IS-17 | IS substrate seam exports manifest (terminal exporter — 6 seams) | C-IS-10 §10.1-§10.6 | ✅ landed | `feat(is): land U-IS-17` | 2026-05-16 |
 | U-AS-12 | Operator-policy override scope per persona-tier (`override_scope`, `OverrideScopeResult`) | C-AS-09 §9.4 | ✅ landed | `feat(as): land U-AS-12` | 2026-05-16 |
+| U-AS-20 | `fetch_secret` 3-param + `SecretRef` opaque + `SecretScope` + 4-row tier-resolution table | C-AS-05 §5.1-§5.2,§5.4 | ✅ landed | `feat(as): land U-AS-20` | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
