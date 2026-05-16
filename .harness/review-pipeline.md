@@ -129,10 +129,11 @@ carriers. Each produces a revised plan returned for per-pass operator ratificati
 |---|---|---|
 | R1 | `harness-core` foundation — introduce U-CORE-01 | ✅ COMPLETE + APPLIED 2026-05-15 — operator ratified all 5 Q's; `Implementation_Plan_Harness_Core_v1_0.md` created (U-CORE-01, 12 types: `DeploymentSurface`, `PersonaTier`, 9-alias identity module, `WorkflowEvent`/`WorkflowEventClass`); `CLAUDE.md` §2.4 core row added |
 | R2 | IS plan revision — absorb `materializability_audit_is_plan.md` + carrier map | ✅ COMPLETE + APPLIED 2026-05-15 — `Implementation_Plan_Information_Substrate_v2_3.md` (6 units revised; git trio IS-internal per Q-R2-1; permanent auxiliary-type-audit section added). Action item AI-R2-1: U-IS-02 landed-source re-check deferred to coding-lane resume. |
-| R3 | AS plan revision — absorb `verbatim_audit_as_plan.md` + carrier map | ✅ RATIFIED 2026-05-15 — ship-now + defer-4; Q-R3-3/5/6/8 defaults. 🟡 APPLYING → `Implementation_Plan_Action_Surface_v1_1.md` (~7 units; U-AS-06/09/12/20 deferred to R3.1) |
-| S1 | `systems-architect` C-AS-02 spec-gap reconciliation analysis — output `.harness/s1_c_as_02_reconciliation.md` | ✅ COMPLETE 2026-05-15 — **ESCALATION: the contradiction originates at ADR-D2, not the spec.** Recommended canonical 5-arg `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport, mcp_server)`, G-1 (architecturally determined, not a fork). Fix requires editing **ADR-D2 §1.4/§1.5.1** + spec C-AS-02 §2.2/§2.3/§11.1/§12.1/§10.2. **AWAITING OPERATOR: authorize the ADR-D2 revision.** |
-| R3.1 | AS micro-pass — finalize U-AS-06/09 (post C-AS-02 fix) + U-AS-12/20 (direction decisions) | pending S1 + spec-writer |
-| R4 | CP plan revision — absorb `materializability_audit_cp_plan.md` + carrier map | pending R3-apply |
+| R3 | AS plan revision — absorb `verbatim_audit_as_plan.md` + carrier map | ✅ COMPLETE + APPLIED 2026-05-15 — `Implementation_Plan_Action_Surface_v1_1.md` (9 units revised, 20 preserved, U-AS-06/09/12/20 deferred to R3.1). Action items A-1..A-4 flagged. |
+| S1 | `systems-architect` C-AS-02 spec-gap reconciliation analysis | ✅ COMPLETE 2026-05-15 — escalated: contradiction originates at ADR-D2. Operator AUTHORIZED the ADR-D2 + spec fix 2026-05-15. |
+| S2 | `spec-writer` apply C-AS-02 + ADR-D2 fix per S1 — edits `ADR-D2.md` (v1.1→v1.2), `Spec_Action_Surface_v1.md` (v1.1→v1.2), conditional ADD touch | 🟡 RUNNING (launched 2026-05-15) |
+| R3.1 | AS micro-pass — finalize U-AS-06/09 (post C-AS-02 fix) + U-AS-12/20 (direction decisions) | pending S2 |
+| R4 | CP plan revision — absorb `materializability_audit_cp_plan.md` + carrier map (56 units, 24 forks — largest pass) | 🟡 RUNNING (launched 2026-05-15) |
 | R5 | OD plan revision — absorb `materializability_audit_od_plan.md` + carrier map | pending R4 |
 
 Then: review-ahead re-check of the conformed plans → coding lane resumes.
