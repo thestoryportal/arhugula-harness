@@ -46,6 +46,7 @@ updates happen at cluster close, not per unit.
 | U-AS-07 | `ToolContract` schema + `RawContractInput` + `SecretAllowlistEntry` carrier + registration validator | C-AS-03 §3.1-§3.3 | ✅ landed | `feat(as): land U-AS-07` | 2026-05-16 |
 | U-AS-06 | `sandbox_tier_floor` 10-row 5-arg lookup + `ToolMetadata` + `MCPServer` carriers + REFUSE sentinel | C-AS-02 §2.3 | ✅ landed | `feat(as): land U-AS-06` | 2026-05-16 |
 | U-AS-10 | 12-cell `DEPLOYMENT_MATRIX` + `lookup_cell` / `lookup_cell_with_forcing` | C-AS-09 §9.1,§9.3,§9.5 | ✅ landed | `feat(as): land U-AS-10` | 2026-05-16 |
+| U-AS-22 | `AllowlistDecision` + `check_secret_allowlist` intersection (consumes `SecretAllowlistEntry` from U-AS-07) | C-AS-06 §6.1-§6.2 | ✅ landed | `feat(as): land U-AS-22` | 2026-05-16 |
 
 **IS axis stream COMPLETE — 17/17 units landed 2026-05-16.** U-IS-17 is the terminal aggregate exporter.
 
