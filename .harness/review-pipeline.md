@@ -146,7 +146,22 @@ OD v2.6. Spec/ADR contradictions fixed (S1/S2/S3): ADR-D2 v1.2, AS spec v1.3.
 
 | Pass | Scope | State |
 |---|---|---|
-| RC-A | Re-check harness-core + IS + AS conformed plans → `.harness/recheck_core_is_as.md` | 🟡 RUNNING (launched 2026-05-15) |
+| RC-A | Re-check harness-core + IS + AS conformed plans → `.harness/recheck_core_is_as.md` | ✅ COMPLETE 2026-05-15 — **harness-core CLEARED · IS CLEARED · AS CLEARED.** Clean; only informational residuals (version-token lag, declared deferred items). |
+
+### ✅ CONFORMANCE COMPLETE + VERIFIED 2026-05-15
+
+All 5 plans materializability-conformed and re-cleared. No §2.7.6 Class-1 fork
+survives in any conformed plan. The R-series introduced no new undeclared
+type, no dependency cycle, no unbased signature. **The coding lane is
+CLEARED TO RESUME** on the ~125 remaining units.
+
+**Pre-resume cleanup (mechanical, non-blocking):**
+- CLAUDE.md-family version-token refresh — root §2.4 plan pointers + per-axis
+  `CLAUDE.md` files lag the R-series; plan `Implements` citation tokens lag
+  (AS v1.2 cites spec v1.2, now v1.3 — content already matches).
+- Landed-unit source re-checks — U-IS-02, U-AS-02, U-AS-04, U-OD-01, U-OD-04,
+  U-CP-10, U-CP-15 (built before their carriers existed; re-point to carriers).
+- Carried verbatim items — U-CP-23, U-CP-43.
 | RC-B | Re-check CP + OD conformed plans → `.harness/recheck_cp_od.md` | ✅ COMPLETE 2026-05-15 — **CP CLEARED · OD CLEARED.** Clean re-check; no blocking residual (only informational landed-source / version-token items, all already tracked). |
 
 After RC clears: coding lane **resumes** on the ~125 remaining units. Carried
