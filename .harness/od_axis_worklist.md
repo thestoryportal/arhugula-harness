@@ -83,4 +83,41 @@ flag if a unit reaches past primitive into "start the process".
   revision pass: U-OD-02, U-OD-03, U-OD-08, U-OD-09, U-OD-10, U-OD-12, U-OD-21,
   U-OD-28, U-OD-30.
 - **OD landed: 18/35** (00,01,04,05,06,07,11,13,14,15,16,17,18,19,20,23,26,27).
-  Remaining 17 — 8 buildable + 9 deferred.
+
+## OD-7b HARD STOP 2026-05-16 — 18/35 landed; remaining 17 all blocked
+
+Dependency analysis: the 9-unit deferred cluster transitively blocks **all 17**
+remaining units. U-OD-12 → blocks U-OD-32, U-OD-33. U-OD-12 + U-OD-21 → block
+U-OD-22 → U-OD-24 → U-OD-25 → U-OD-31. U-OD-28 → blocks U-OD-29. U-OD-34
+(terminal exporter) depends on six deferred units. **Nothing more lands without
+the revision pass.**
+
+### 5 root defects — all one defect class (signature-vs-AC / plan-vs-spec)
+
+Neither prior audit covered this axis: the verbatim audit checked cardinality,
+the materializability audit checked type-carrier reachability. Signature-vs-
+acceptance-criterion consistency was never audited — and it produced 5 halts.
+
+| Unit | Defect | Fix direction | Tension record |
+|---|---|---|---|
+| U-OD-02 | single-valued `backend_class` vs spec §2.1 cell-4/5 disjunction | widen signature to set/tuple (Option A) | `class_1_tension_u_od_02_cell_4_5_alternation.md` |
+| U-OD-08 | `F2_LIFECYCLE_EVENT_MAPPINGS` 8-set disjoint 5/8 from spec C-OD-06 §6.1 | conform plan event-set to spec | `class_1_tension_u_od_08_f3_lifecycle_event_set_divergence.md` |
+| U-OD-09 | FF-1 — AC #2 tier classification no spec basis; `AttributeTier` enum lacks REQUIRED/CONDITIONAL | strike AC #2 (halt-route-split) | `class_1_tension_u_od_09_tier_classification_design_gap.md` |
+| U-OD-12 | acc #2 set-disjointness vs `files.operation`/`memory.operation` collision; regime keyed `(event_class,kind)`, signature on `event_class` | re-key signature to `(event_class,kind)` | `class_1_tension_u_od_12_disjoint_set_string_collision.md` |
+| U-OD-21 | `SpanCostRecord` carrier lacks provider/model/family fields acc #3 needs | grow `SpanCostRecord` at U-OD-20 (re-opens a LANDED unit) | `class_1_tension_u_od_21_span_cost_record_missing_rollup_keys.md` |
+
+Plus corpus-hygiene: F3 lifecycle event taxonomy appears in 3 divergent forms
+(plan / spec C-OD-06 §6.1 / OD `CLAUDE.md` §1.1) — canonical set unpinned;
+needs an architectural call (spec is authoritative per the §1.3 chain).
+
+### Recommendation
+
+One `implementation-planner` OD-plan revision pass (→ v2.8) resolving the 5 root
+defects, same review class as CP v2.8/v2.9. Operator ratifies (esp. U-OD-02
+widening, U-OD-21 landed-unit re-open, the F3-taxonomy canonical call). On
+re-clear: the 17 blocked units land in 2-3 sub-agent batches (L4 leftover →
+L9 terminal).
+
+### Deferred cluster (17 units, all blocked on the revision pass)
+Root: U-OD-02, 08, 09, 12, 21. Cascade: U-OD-03, 10, 22, 24, 25, 28, 29, 30,
+31, 32, 33, 34.
