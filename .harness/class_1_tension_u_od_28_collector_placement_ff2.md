@@ -7,7 +7,7 @@
 | Fork class | Class 1 (halt-execution — plan signature un-materializable; acceptance criterion cites a non-existent verbatim surface; plan-vs-spec divergence) |
 | Filed | 2026-05-16 (surfaced at OD-7b batch-2 execution; this is the **FF-2 carried fork** — `Implementation_Plan_Operational_Discipline_v2_5.md` §0.6 FF-2, unresolved at v2.6/v2.7/v2.8) |
 | Actor | phase-7-implementation (OD-7b batch 2) |
-| Disposition | **OPEN** — U-OD-28 halted, not landed. Skipped; batch-2 landed the other 4 units. Transitively blocks U-OD-29, U-OD-30, U-OD-31, U-OD-34 (terminal exporter). |
+| Disposition | **✅ RESOLVED 2026-05-16** — operator ratified Option A; spec v1.4 + plan v2.9 filed (see resolution footer). U-OD-28 + dependents unblocked. |
 
 ## Defect
 
@@ -56,3 +56,18 @@ This is a genuine spec-internal defect, not a determinate plan conformance. It n
 - **Option C — re-scope acc #1 only.** Strike acc #1's "verbatim per §20.1" claim; keep the plan's 7-value enum as a plan-layer operationalization. **Not recommended** — it leaves the plan enum diverging from §1.2's committed 6-value enum, an unresolved X-AL-3 plan-vs-spec conflict.
 
 Option A is the faithful resolution: §1.2 is the senior surface (it commits the enum); §20.1 needs the enum declaration §1.2 already references; the cell-2/cell-4 gap is the one genuine design call. Until the operator decides, U-OD-28 and its 4 dependents stay unlanded.
+
+---
+
+## ✅ RESOLVED — spec v1.4 + plan v2.9 (2026-05-16)
+
+Operator ratified FF-2 Option A (fix spec, then plan). Resolution filed:
+- `design-substrate/Spec_Operational_Discipline_v1_4.md` — C-OD-01 §1.2 enum
+  grown 6→7 (`self-hosted-backend-collector` added); C-OD-20 §20.1 given an
+  explicit 7-value `CollectorPlacement` enum + a `Cell → Set<CollectorPlacement>`
+  per-cell mapping (set-valued at alt-route cells 2/4/7).
+- `design-substrate/Implementation_Plan_Operational_Discipline_v2_9.md` — §3.7.2
+  U-OD-28 conformed: `CollectorPlacement` byte-exact with v1.4 §20.1;
+  `placement_classes : Set<CollectorPlacement>`; acc #1/#3 conformed.
+
+U-OD-28 unblocked; lands against v2.9. Dependents U-OD-29/30/31/34 unblock.

@@ -16,8 +16,8 @@ OD posture per `Cross_Axis_Composition_Document_v2_1.md` §2.1: **consumer-most-
 
 | Artifact | Version | Role |
 |---|---|---|
-| `Spec_Operational_Discipline_v1_3.md` | v1.3 | Contract authority — 23 contracts C-OD-01 through C-OD-23 |
-| `Implementation_Plan_Operational_Discipline_v2_8.md` | v2.8 (delta over v2.7 over v2.6 R5; v2.8 resolves five Class 1 signature-vs-AC defects U-OD-02/08/09/12/21 + pins the F3 taxonomy to spec §6.1) | Execution authority — 35 atomic units across 8 clusters (+ U-OD-00 pre-cluster) and 10 topological levels (L0–L9) |
+| `Spec_Operational_Discipline_v1_4.md` | v1.4 (delta over v1.3; v1.4 formalizes the C-OD-20 §20.1 `CollectorPlacement` 7-value enum + grows the §1.2 enum 6→7 — FF-2 resolution) | Contract authority — 23 contracts C-OD-01 through C-OD-23 |
+| `Implementation_Plan_Operational_Discipline_v2_9.md` | v2.9 (delta chain over v2.8/v2.7/v2.6; v2.8 = five Class 1 defects U-OD-02/08/09/12/21 + F3 pinning; v2.9 = FF-2 U-OD-28 collector-placement conformance) | Execution authority — 35 atomic units across 8 clusters (+ U-OD-00 pre-cluster) and 10 topological levels (L0–L9) |
 
 ### 1.3 Scope inclusion
 

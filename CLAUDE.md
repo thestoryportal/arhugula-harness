@@ -77,7 +77,7 @@ All canonical artifacts reside at the **design-phase workspace** (separate Claud
 | IS | `Spec_Information_Substrate_v1.md` (v1.2 per ADD v1.3 attestation) |
 | AS | `Spec_Action_Surface_v1.md` (v1.3 — C-AS-02/§11.1 `sandbox_tier_floor` reconciliation per S2 + C-AS-05 §5.1 3-param `fetch_secret` per S3, 2026-05-15) |
 | CP | `Spec_Control_Plane_v1_3.md` (v1.3) |
-| OD | `Spec_Operational_Discipline_v1_3.md` (v1.3) |
+| OD | `Spec_Operational_Discipline_v1_4.md` (v1.4 — C-OD-20 §20.1 `CollectorPlacement` 7-value enum formalized + §1.2 enum grown 6→7, FF-2 resolution 2026-05-16) |
 
 ### 2.4 Per-axis plans (Phase 6 canonical — execution authority)
 
@@ -87,7 +87,7 @@ All canonical artifacts reside at the **design-phase workspace** (separate Claud
 | IS | `Implementation_Plan_Information_Substrate_v2_3.md` | 17 units (U-IS-01 – U-IS-17) |
 | AS | `Implementation_Plan_Action_Surface_v1_2.md` | 33 units (U-AS-01 – U-AS-33) |
 | CP | `Implementation_Plan_Control_Plane_v2_9.md` | 58 units (U-CP-00, U-CP-00b, U-CP-00c, U-CP-01 – U-CP-55); v2.8 — new L0 carrier U-CP-00c specifies the 9 deferred structured shared types (all FACTOR-OUT, traced byte-exact); v2.9 multi-body delta — Pattern-D tail structured types specified across 8 unit bodies (U-CP-04/14/17/22/30/33/41/52); `RoleRoutingBinding`/`WorkloadRoutingOverride` left Class 1 2026-05-16 |
-| OD | `Implementation_Plan_Operational_Discipline_v2_8.md` | 35 units (U-OD-00, U-OD-01 – U-OD-34); v2.7 U-OD-00 carrier-defect micro-revision 2026-05-15; v2.8 revision pass — five Class 1 defects resolved (U-OD-02 widen `Set<BackendClass>` / U-OD-08 conform F3 set to spec §6.1 / U-OD-09 strike tier-split acc #2 / U-OD-12 re-scope disjointness acc #2 / U-OD-21 grow `SpanCostRecord` carrier, re-opens landed U-OD-20) + F3 taxonomy pinned 2026-05-16 |
+| OD | `Implementation_Plan_Operational_Discipline_v2_9.md` | 35 units (U-OD-00, U-OD-01 – U-OD-34); v2.8 revision pass — five Class 1 defects (U-OD-02/08/09/12/21) + F3 taxonomy pinned; v2.9 — FF-2 resolution, U-OD-28 `CollectorPlacement` conformed to `Spec_Operational_Discipline_v1_4.md` §20.1 7-value enum 2026-05-16 |
 | CXA | `Cross_Axis_Composition_Document_v2_1.md` | 101 cross-axis edges (6 composition buckets) |
 
 ### 2.5 Per-axis subdirectory `CLAUDE.md` pointers
