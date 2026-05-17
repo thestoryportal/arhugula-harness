@@ -206,3 +206,13 @@ commit-per-unit on `main`.
   Note: U-OD-29 acc #6 egress-policy arm is structurally unreachable against
   the current `CollectorPlacement` enum (no public-ingestion value) — retained
   as a forward guard; documented in code. Non-blocking Class 3 observation.
+
+## ⚠️ CORRECTION 2026-05-17 — the "35/35" above was an arithmetic error
+
+At 7c, the cross-axis audit found **U-OD-33 was never landed** at 7b. The
+"34/35 → 35/35" close arithmetic double-miscounted: the landed set was 33
+units, +U-OD-29 = 34, not 35. U-OD-33 (`§3.8.2` per-dimension preservation
+invariants — a within-axis leaf, so no test caught its absence) was missed.
+**U-OD-33 landed 2026-05-17** (`per_dimension_preservation_invariants.py` +
+15 tests; harness-od now **599 tests green**, pyright 0, ruff clean). OD-7b is
+**now genuinely 35/35**. See `.harness/class_1_tension_u_od_33_not_landed.md`.

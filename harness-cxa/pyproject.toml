@@ -1,6 +1,7 @@
 # harness-cxa — Cross-Axis Composition (CXA) seam instantiation. uv workspace member.
 # Authority: CLAUDE.md §2.5 ("harness-cxa/ hosts CXA seam instantiation");
-#            Cross_Axis_Composition_Document_v2_2.md (99 typed cross-axis edges, 6 buckets).
+#            Cross_Axis_Composition_Document_v2_3.md (92 cross-axis relationships, 6 buckets;
+#            22 genuine typed seams, 49 convention-level, 24 phase-2-runtime).
 # Activated at sub-phase 7c against composed terminal exporter manifests of all 4 axes.
 
 [project]

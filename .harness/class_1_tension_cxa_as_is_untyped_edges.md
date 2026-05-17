@@ -1,6 +1,6 @@
 # Class 1 Tension — CXA §2.3.1 declares 6 AS→IS edges with no typed-seam realization
 
-**Status:** 🛑 OPEN — Class 1 fork. Bucket-1 (AS→IS) close HALTED. Operator decision required.
+**Status:** ✅ RESOLVED 2026-05-17 — operator authorized the per-edge reclassification. The 6 forked AS→IS edges are dispositioned in `Cross_Axis_Composition_Document_v2_3.md` §2.3.1: blocker A (U-AS-25→U-IS-08) → convention-level; blocker B (U-AS-27→U-IS-11) → phase-2-runtime; blocker C (U-AS-29→U-IS-01/02) → convention-level ×2; blocker D (U-AS-30→U-IS-01/02) → spurious, struck ×2. The audit generalized to all 6 buckets — see CXA v2.3 §0.
 **Filed:** 2026-05-17, Phase 7 sub-phase 7c, bucket-1 (AS→IS) wiring.
 **Detected by:** `phase-7-cross-axis-composition` §4.2/§7 at bucket-1 wiring; routed via `phase-7-back-flow-routing` §6.5.
 
