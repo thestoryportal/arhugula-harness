@@ -23,13 +23,22 @@ OD→IS edges that OD plan v2.4 §0.4.2 deleted from §4.5.1 — v2.4 revised th
 did not propagate the deletion into the unit body. OD plan v2.11 §0.5 strikes both terms
 (9 unit bodies revised, not 8).
 
-**Known carry (Class 3, non-blocking) — `harness-cp/CLAUDE.md` staleness.** The CP-axis
-subdirectory `CLAUDE.md` plan-pointer (line 20) cites `Implementation_Plan_Control_Plane_v2_6.md`
-(57 units) — four versions stale (CP is now at v2.10, 58 units) and pre-dating this prerequisite
-pass. Root `CLAUDE.md` §2.4 and `harness-od/CLAUDE.md` were updated to the current versions in
-this pass; `harness-cp/CLAUDE.md` was left as-is because a correct fix requires reconciling its
-v2.6-era cluster tables, not just the version token — out of scope for the 7c prerequisite pass.
-Filed here as a known carry for a dedicated `harness-cp/CLAUDE.md` reconciliation.
+**Known carry (Class 3, non-blocking) — `harness-cp/CLAUDE.md` staleness.** ✅ **RESOLVED
+2026-05-17.** The CP-axis subdirectory `CLAUDE.md` plan-pointer cited
+`Implementation_Plan_Control_Plane_v2_6.md` (57 units) — four versions stale. Reconciled to
+v2.10 (58 units): plan pointer + descriptor (§1.2), unit count 57→58 across §1.1/§1.3/§3/§3.1,
+U-CP-00c L0 carrier added to the pre-cluster-carrier enumeration (§1.3/§3 — now 3 carriers /
+16 L0 source nodes), `RoleRoutingBinding`/`WorkloadRoutingOverride` Class 1 RESOLVED status
+recorded, verbatim-preservation references and §5 routing/footer version tokens bumped, and a
+"Reconciled at" footer row added. DAG (124 within-axis edges) and coverage matrix unchanged
+per CP plan v2.10 §0.6.
+
+**Residual carry — CXA-citation staleness in `harness-cp/CLAUDE.md`.** §1.1/§2.2/§2.3/§2.4/§5.1
+still cite `Cross_Axis_Composition_Document_v2_1.md` and its raw edge counts (60 outbound; 36→IS
++ 24→AS). CXA is now v2.3 with the genuine-seam/convention/runtime reclassification that found
+the v2.1 counts ~4× over-declared. A correct fix re-derives CP's genuine-typed-seam counts from
+CXA v2.3, not a version-token bump — filed as a dedicated CXA-citation reconcile (workspace-wide;
+affects all 4 subdir `CLAUDE.md` files).
 
 *Original orientation report (the 4 gates as filed at 7c entry) preserved below for the record.*
 
