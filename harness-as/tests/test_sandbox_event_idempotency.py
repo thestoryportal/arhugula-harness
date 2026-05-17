@@ -13,6 +13,7 @@ from harness_as.sandbox_event_idempotency import (
     join_cost_attribution_by_idempotency_key,
 )
 from harness_as.sandbox_span_schema import SandboxSpanEvent, SpanEventKind
+from harness_is import Identifier
 
 _TS = datetime.datetime(2026, 5, 16, tzinfo=datetime.UTC)
 
@@ -21,7 +22,7 @@ class _Strategy:
     """A stub SubAgentKeyDerivationStrategy."""
 
     def derive(self, parent_key: IdempotencyKey, dispatch_id: SubAgentDispatchId) -> IdempotencyKey:
-        return f"{parent_key}::{dispatch_id}"
+        return Identifier(f"{parent_key}::{dispatch_id}")
 
 
 def _exit_event(key: str, ms: int, usd: float) -> SandboxSpanEvent:
@@ -45,7 +46,7 @@ def test_attach_idempotency_key_propagates_from_parent() -> None:
         attributes={"sandbox.tier": "tier-1-process"},
         timestamp=_TS,
     )
-    attached = attach_idempotency_key_to_sandbox_event(event, "idem-abc")
+    attached = attach_idempotency_key_to_sandbox_event(event, Identifier("idem-abc"))
     assert attached.attributes["idempotency_key"] == "idem-abc"
 
 
@@ -57,26 +58,26 @@ def test_idempotency_key_is_opaque_join_key() -> None:
         attributes={},
         timestamp=_TS,
     )
-    attached = attach_idempotency_key_to_sandbox_event(event, "opaque-xyz")
+    attached = attach_idempotency_key_to_sandbox_event(event, Identifier("opaque-xyz"))
     assert isinstance(attached.attributes["idempotency_key"], str)
 
 
 def test_derive_sub_agent_idempotency_key_uses_strategy_interface() -> None:
     """Acceptance #4 — derivation goes through the SubAgentKeyDerivationStrategy."""
-    derived = derive_sub_agent_idempotency_key("parent-1", "dispatch-9", _Strategy())
+    derived = derive_sub_agent_idempotency_key(Identifier("parent-1"), "dispatch-9", _Strategy())
     assert derived == "parent-1::dispatch-9"
 
 
 def test_sub_agent_idempotency_key_differs_from_parent() -> None:
     """Acceptance #4 — the derived sub-agent key differs from the parent key."""
-    derived = derive_sub_agent_idempotency_key("parent-1", "dispatch-9", _Strategy())
+    derived = derive_sub_agent_idempotency_key(Identifier("parent-1"), "dispatch-9", _Strategy())
     assert derived != "parent-1"
 
 
 def test_sub_agent_idempotency_key_deterministic_per_dispatch_id() -> None:
     """Acceptance #4 — derivation is deterministic per (parent, dispatch_id)."""
-    a = derive_sub_agent_idempotency_key("parent-1", "dispatch-9", _Strategy())
-    b = derive_sub_agent_idempotency_key("parent-1", "dispatch-9", _Strategy())
+    a = derive_sub_agent_idempotency_key(Identifier("parent-1"), "dispatch-9", _Strategy())
+    b = derive_sub_agent_idempotency_key(Identifier("parent-1"), "dispatch-9", _Strategy())
     assert a == b
 
 
@@ -85,7 +86,7 @@ def test_join_cost_attribution_aggregates_per_idempotency_key() -> None:
     joined = join_cost_attribution_by_idempotency_key(
         [_exit_event("k1", 100, 0.5), _exit_event("k1", 50, 0.25)]
     )
-    attribution = joined["k1"]
+    attribution = joined[Identifier("k1")]
     assert attribution.total_tier_overhead_ms == 150
     assert attribution.total_tier_overhead_usd == 0.75
     assert attribution.contributing_event_count == 2
@@ -96,16 +97,14 @@ def test_join_cost_attribution_separates_keys() -> None:
     joined = join_cost_attribution_by_idempotency_key(
         [_exit_event("k1", 100, 0.5), _exit_event("k2", 30, 0.1)]
     )
-    assert set(joined) == {"k1", "k2"}
-    assert joined["k2"].total_tier_overhead_ms == 30
+    assert set(joined) == {Identifier("k1"), Identifier("k2")}
+    assert joined[Identifier("k2")].total_tier_overhead_ms == 30
 
 
 def test_cross_axis_state_ledger_entry_shape_compatible() -> None:
     """Acceptance #2 — the idempotency key is shape-compatible with C-IS-05."""
-    from harness_is.state_ledger_entry_schema import Identifier
-
-    key: IdempotencyKey = "idem-1"
-    assert isinstance(Identifier(key), str)
+    key: IdempotencyKey = Identifier("idem-1")
+    assert isinstance(key, str)
     assert isinstance(CostAttribution.model_fields["idempotency_key"], object)
 
 

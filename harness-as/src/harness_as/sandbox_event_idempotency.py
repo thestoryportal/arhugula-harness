@@ -27,12 +27,15 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Protocol
 
+from harness_is import Identifier
 from pydantic import BaseModel, ConfigDict
 
 from harness_as.sandbox_span_schema import SandboxSpanEvent, SpanEventKind
 
-#: An opaque cross-axis idempotency join key (C-IS-10 §10.2).
-type IdempotencyKey = str
+#: An opaque cross-axis idempotency join key (C-IS-10 §10.2). Bound to the IS
+#: `StateLedgerEntry.idempotency_key` shape (U-IS-07) — the harness-canonical
+#: cross-axis join key per the IDEMPOTENCY_KEY_JOIN_EXPORT seam (C-IS-10 §10.2).
+type IdempotencyKey = Identifier
 #: A sub-agent dispatch identifier.
 type SubAgentDispatchId = str
 
@@ -106,24 +109,24 @@ def join_cost_attribution_by_idempotency_key(
     idempotency key or that are not `sandbox.exit` are skipped. Consumed at the
     D6 cost-attribution dashboarding (OD plan Session 4).
     """
-    totals: dict[IdempotencyKey, tuple[int, float, int]] = {}
+    totals: dict[str, tuple[int, float, int]] = {}
     for event in sandbox_exit_events:
         if event.kind is not SpanEventKind.SANDBOX_EXIT:
             continue
-        key = event.attributes.get(_IDEMPOTENCY_ATTR)
-        if not isinstance(key, str):
+        raw_key = event.attributes.get(_IDEMPOTENCY_ATTR)
+        if not isinstance(raw_key, str):
             continue
         ms = event.attributes.get(_OVERHEAD_MS_ATTR, 0)
         usd = event.attributes.get(_OVERHEAD_USD_ATTR, 0)
-        prev_ms, prev_usd, count = totals.get(key, (0, 0.0, 0))
-        totals[key] = (
+        prev_ms, prev_usd, count = totals.get(raw_key, (0, 0.0, 0))
+        totals[raw_key] = (
             prev_ms + int(ms if isinstance(ms, int) else 0),
             prev_usd + float(usd if isinstance(usd, (int, float)) else 0.0),
             count + 1,
         )
     return {
-        key: CostAttribution(
-            idempotency_key=key,
+        Identifier(key): CostAttribution(
+            idempotency_key=Identifier(key),
             total_tier_overhead_ms=ms,
             total_tier_overhead_usd=usd,
             contributing_event_count=count,
