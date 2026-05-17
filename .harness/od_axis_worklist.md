@@ -189,3 +189,20 @@ commit-per-unit on `main`.
   at 7b) vs Option B (defer U-OD-29 to 7c cross-axis composition).
 - **OD axis-stream 7b is functionally complete** — terminal exporter U-OD-34
   landed. Remaining: resolve FF-3 (1 leaf unit), then 7c cross-axis composition.
+
+## ✅ OD-7b COMPLETE 2026-05-16 — 35/35
+
+- **FF-3 resolved** — operator ratified "resolve now". OD plan v2.10 filed
+  (U-OD-29 §3.7.3 conformed: in-unit `SandboxTier` struck, consumed from the
+  AS-owned enum; reachability re-keyed to OD spec §20.3). FF-3 tension record
+  RESOLVED.
+- **U-OD-29 landed** (`per_sandbox_tier_otlp_reachability.py`). `harness-as`
+  added as a uv-workspace dependency of `harness-od` for the cross-axis
+  `SandboxTier` import (operator-authorized at 7b per v2.10).
+- **OD axis-stream 7b: 35/35 landed.** harness-od: pyright strict 0,
+  **584 tests green**, ruff clean. All four 7b axis-streams complete
+  (IS 17/17, AS 33/33, CP complete, OD 35/35).
+- **Next:** sub-phase 7c — cross-axis composition (CXA v2.1, 101 typed edges).
+  Note: U-OD-29 acc #6 egress-policy arm is structurally unreachable against
+  the current `CollectorPlacement` enum (no public-ingestion value) — retained
+  as a forward guard; documented in code. Non-blocking Class 3 observation.
