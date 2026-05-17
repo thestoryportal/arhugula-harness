@@ -153,3 +153,20 @@ Deferred cluster cleared. The 17 blocked units land in topological order
 (L4 leftover U-OD-10 → L9 terminal U-OD-34). **U-OD-20 re-lands first**
 (carrier growth) ahead of U-OD-21. Per-unit: pyright strict 0, pytest green,
 commit-per-unit on `main`.
+
+## OD-7b RESUME PROGRESS 2026-05-16 — 29/35 landed; U-OD-28 FF-2 halt
+
+- **U-OD-20 re-landed** — `SpanCostRecord` grown 9→12 fields (v2.8 D-5).
+- **Batch 1** — U-OD-02/08/09/12/21 landed (the 5 v2.8-revised units). 379 tests.
+- **Batch 2** — U-OD-03/10/22/32 landed; **U-OD-28 HALTED Class 1 (FF-2)**.
+  444 tests.
+- **Batch 3** — U-OD-24/25 landed. 477 tests, pyright strict 0.
+- **OD landed: 29/35** (prior 18 + U-OD-02/03/08/09/10/12/21/22/24/25/32).
+- **U-OD-28 FF-2 HALT** — `.harness/class_1_tension_u_od_28_collector_placement_ff2.md`.
+  Plan declares a 7-value deployment-topology `CollectorPlacement` enum; spec
+  §1.2 commits a 6-value architectural-class enum; spec §20.1 is an 8-row
+  prose matrix with no enum + a cell-2/cell-4 "backend's own collector" gap
+  §1.2's 6 values don't cover. Three-way mismatch; needs a spec fix +
+  plan-revision. **Operator decision owed.**
+- **FF-2 blocks 5 units:** U-OD-28 + dependents U-OD-29, U-OD-30, U-OD-31,
+  U-OD-34 (terminal exporter). OD-7b cannot fully close until FF-2 resolves.
