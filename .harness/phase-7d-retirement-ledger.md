@@ -99,3 +99,5 @@ Partial 7d is **complete as a partial pass**: the retirement ledger is explicit 
 ## §6 Operator ratification required (one consolidated Class 2)
 
 Per skill §5.3, each bounded-residual carry-forward requires operator authorization. The 45 share **one** rationale (Phase 2 runtime gap) under an **already-ruled** routing decision (`class_1_tension_runtime_entrypoint_design_gap.md` — operator ruled the runtime gap to Phase 2). This is therefore **one consolidated Class 2**, not 45: *ratify the 45 substitutions as bounded-residual carried to Phase 2 under the existing runtime-gap → Phase 2 routing decision.*
+
+**✅ RATIFIED 2026-05-17.** Operator ratified all 45 substitutions as bounded-residual carried to Phase 2 under the existing runtime-gap → Phase 2 routing decision. Partial 7d is closed. Full 7d closure (runtime-trace condition-B verification + §9 Class 2 multi-LLM surface close) is a Phase 2 deliverable.
