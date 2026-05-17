@@ -40,3 +40,9 @@ Option B is the lower-cost fix and consistent with the spec being the senior art
 🛑 OPEN — U-OD-09 HALTED. Not landed. Skipped in the L3 batch. Downstream U-OD-10 (consumes U-OD-09) inherits the block. No code written for U-OD-09.
 
 This is the same FF-1 the §4A verbatim audit and v2.5/v2.6 plan bodies have carried; this file records the Phase-7 execution-time surfacing and the additional signature-un-materializability finding (the `AttributeTier`-vs-`REQUIRED/CONDITIONAL` mismatch against the landed U-OD-04 carrier).
+
+---
+
+## ✅ RESOLVED — OD plan v2.8 (2026-05-16)
+
+Resolved by the `implementation-planner` OD-plan v2.8 revision pass (`design-substrate/Implementation_Plan_Operational_Discipline_v2_8.md`), operator-ratified 2026-05-16. See v2.8 §0.2 defect table. The unit is unblocked; lands when OD-7b resumes.

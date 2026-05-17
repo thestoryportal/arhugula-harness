@@ -51,3 +51,9 @@ Option A recommended (the spec/ADR are the senior artifacts in the authority cha
 ## Status
 
 🛑 OPEN — U-OD-08 HALTED. Not landed. Skipped in the L3 batch; downstream U-OD-10 (consumes `F3LifecycleEventClass`) inherits the block. No code written for U-OD-08.
+
+---
+
+## ✅ RESOLVED — OD plan v2.8 (2026-05-16)
+
+Resolved by the `implementation-planner` OD-plan v2.8 revision pass (`design-substrate/Implementation_Plan_Operational_Discipline_v2_8.md`), operator-ratified 2026-05-16. See v2.8 §0.2 defect table. The unit is unblocked; lands when OD-7b resumes.

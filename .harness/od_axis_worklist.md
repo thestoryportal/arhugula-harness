@@ -121,3 +121,35 @@ L9 terminal).
 ### Deferred cluster (17 units, all blocked on the revision pass)
 Root: U-OD-02, 08, 09, 12, 21. Cascade: U-OD-03, 10, 22, 24, 25, 28, 29, 30,
 31, 32, 33, 34.
+
+## ✅ REVISION PASS COMPLETE — OD plan v2.8 filed 2026-05-16
+
+`design-substrate/Implementation_Plan_Operational_Discipline_v2_8.md` —
+`implementation-planner` revision pass, operator-ratified 2026-05-16. All five
+root defects resolved:
+
+- **U-OD-02** — `backend_class` + `select_backend_class` return widened to
+  `Set<BackendClass>` (Option A, forced). acc #3/#7 materializable.
+- **U-OD-08** — `F3LifecycleEventClass` + `F3_LIFECYCLE_EVENT_MAPPINGS` conformed
+  to spec §6.1's eight-event table; `LifecycleEventMapping` grown with
+  span-placement + sampling-posture fields (Option A, forced).
+- **U-OD-09** — acc #2 (tier split, no spec basis) STRUCK; `HARNESS_BREAKER_ATTRIBUTES`
+  re-typed `List<GenAiAttribute>` → `List<string>`; acc #9 re-worded to the §7.2
+  all-seven-required invariant (Option B, forced).
+- **U-OD-12** — acc #2 re-scoped to honest disjointness over non-`kind`-discriminated
+  classes; `files.operation`/`memory.operation` documented dual-regime
+  (Option B — implementation-planner recommendation; no signature change,
+  **U-OD-11 NOT re-opened**).
+- **U-OD-21** — `SpanCostRecord` grown 9→12 fields at U-OD-20 (Option A;
+  **re-opens landed U-OD-20** — carrier-field growth only, additive). `rollup_costs_by_axis`
+  materializable. New `string`-typed fields avoid a U-OD-20↔U-OD-21 cycle.
+- **F3 taxonomy pinned** — `harness-od/CLAUDE.md` §1.1 corrected to spec §6.1
+  (the stale third form struck).
+
+No dependency-graph edge changed; unit count 35; coverage complete.
+
+### OD-7b resume plan
+Deferred cluster cleared. The 17 blocked units land in topological order
+(L4 leftover U-OD-10 → L9 terminal U-OD-34). **U-OD-20 re-lands first**
+(carrier growth) ahead of U-OD-21. Per-unit: pyright strict 0, pytest green,
+commit-per-unit on `main`.

@@ -17,7 +17,7 @@ OD posture per `Cross_Axis_Composition_Document_v2_1.md` §2.1: **consumer-most-
 | Artifact | Version | Role |
 |---|---|---|
 | `Spec_Operational_Discipline_v1_3.md` | v1.3 | Contract authority — 23 contracts C-OD-01 through C-OD-23 |
-| `Implementation_Plan_Operational_Discipline_v2_6.md` | v2.6 (R5 materializability conformance over v2.4; U-OD-00 audit-ledger carrier added) | Execution authority — 35 atomic units across 8 clusters (+ U-OD-00 pre-cluster) and 10 topological levels (L0–L9) |
+| `Implementation_Plan_Operational_Discipline_v2_8.md` | v2.8 (delta over v2.7 over v2.6 R5; v2.8 resolves five Class 1 signature-vs-AC defects U-OD-02/08/09/12/21 + pins the F3 taxonomy to spec §6.1) | Execution authority — 35 atomic units across 8 clusters (+ U-OD-00 pre-cluster) and 10 topological levels (L0–L9) |
 
 ### 1.3 Scope inclusion
 
@@ -26,7 +26,7 @@ OD posture per `Cross_Axis_Composition_Document_v2_1.md` §2.1: **consumer-most-
 | Foundational cost-attribution + telemetry primitives | U-OD-01, U-OD-04 (L0 anchors) | C-OD-01 + C-OD-04 |
 | HITL primitive — 4-response palette (4 canonical event names: `hitl.gate.evaluated` / `hitl.invocation.opened` / `hitl.invocation.responded` / `hitl.invocation.timed_out`) | U-OD-NN (Cluster 1) | C-OD-05 row 6 |
 | 15-namespace ingestion map | U-OD-NN (Cluster 2–3) | C-OD-05 §5.1 |
-| F3 capability-floor lifecycle event mapping (`fallback.triggered` / `fallback.exhausted` / `breaker.tripped` / `retry.attempt` / `lease.acquired` / `lease.released` / `topology.fanout.opened` / `topology.fanout.closed`) | U-OD-NN (Cluster 3) | C-OD-06 §6.1 |
+| F3 capability-floor lifecycle event mapping (`workflow.start` / `step.boundary` / `fallback.triggered` / `retry.attempt` / `breaker.tripped` / `lease.acquired` / `lease.released` / `workflow.resumed` — the eight event classes per spec C-OD-06 §6.1, canonical; pinned at OD plan v2.8 §0.5) | U-OD-08 (Cluster 2) | C-OD-06 §6.1 |
 | 7-attribute `harness.breaker.*` canonical schema | U-OD-NN (Cluster 3) | C-OD-07 §7.1 |
 | Cost attribution 5-step chain | U-OD-14 through U-OD-17 | C-OD-12 + C-OD-13 |
 | Audit-ledger schema + 8-field SHA-256 composition + field-ordering | U-OD-20 | C-OD-14 §14.5.1 |

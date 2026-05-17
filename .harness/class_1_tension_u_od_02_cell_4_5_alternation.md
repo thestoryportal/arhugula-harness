@@ -161,3 +161,9 @@ landing batch (U-OD-03 is L2; U-OD-28 is L6; U-OD-30 is L7). The U-OD-02 skip
 blocks U-OD-03's L2 landing until resolved; it does not regress any landed unit.
 The three other Level-1 units (U-OD-05, U-OD-15, U-OD-18) do not depend on
 U-OD-02 and land unaffected.
+
+---
+
+## ✅ RESOLVED — OD plan v2.8 (2026-05-16)
+
+Resolved by the `implementation-planner` OD-plan v2.8 revision pass (`design-substrate/Implementation_Plan_Operational_Discipline_v2_8.md`), operator-ratified 2026-05-16. See v2.8 §0.2 defect table. The unit is unblocked; lands when OD-7b resumes.

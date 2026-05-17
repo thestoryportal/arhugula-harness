@@ -129,3 +129,9 @@ U-OD-21's `rollup_costs_by_axis` (U-OD-22 at L6 cites it — not in this batch).
 
 🛑 HALTED. Skipped. Deferred cluster grows to 8 units (was 7):
 U-OD-02, U-OD-03, U-OD-08, U-OD-09, U-OD-10, U-OD-21, U-OD-28, U-OD-30.
+
+---
+
+## ✅ RESOLVED — OD plan v2.8 (2026-05-16)
+
+Resolved by the `implementation-planner` OD-plan v2.8 revision pass (`design-substrate/Implementation_Plan_Operational_Discipline_v2_8.md`), operator-ratified 2026-05-16. See v2.8 §0.2 defect table. The unit is unblocked; lands when OD-7b resumes.
