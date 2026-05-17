@@ -99,13 +99,10 @@ def test_emit_breaker_trip_missing_required_attr_reject() -> None:
     `trigger_count`) are required by Pydantic at construction; a model bypassing
     construction with one set to `None` is rejected by the emission guard.
     """
-    bad = _full_event().model_copy(update={"scope": None})
-    with pytest.raises(BreakerEmissionError):
-        emit_breaker_trip_span_event(_span(), bad)
-
-    bad_count = _full_event().model_copy(update={"trigger_count": None})
-    with pytest.raises(BreakerEmissionError):
-        emit_breaker_trip_span_event(_span(), bad_count)
+    for attribute_name in ("scope", "from_state", "to_state", "trigger_count"):
+        bad = _full_event().model_copy(update={attribute_name: None})
+        with pytest.raises(BreakerEmissionError):
+            emit_breaker_trip_span_event(_span(), bad)
 
 
 # --- acc #5 ----------------------------------------------------------------
