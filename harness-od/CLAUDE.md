@@ -17,7 +17,7 @@ OD posture per `Cross_Axis_Composition_Document_v2_1.md` §2.1: **consumer-most-
 | Artifact | Version | Role |
 |---|---|---|
 | `Spec_Operational_Discipline_v1_4.md` | v1.4 (delta over v1.3; v1.4 formalizes the C-OD-20 §20.1 `CollectorPlacement` 7-value enum + grows the §1.2 enum 6→7 — FF-2 resolution) | Contract authority — 23 contracts C-OD-01 through C-OD-23 |
-| `Implementation_Plan_Operational_Discipline_v2_10.md` | v2.10 (delta chain over v2.9/v2.8/v2.7/v2.6; v2.8 = five Class 1 defects + F3 pinning; v2.9 = FF-2 U-OD-28; v2.10 = FF-3 U-OD-29 `SandboxTier` conformance) | Execution authority — 35 atomic units across 8 clusters (+ U-OD-00 pre-cluster) and 10 topological levels (L0–L9) |
+| `Implementation_Plan_Operational_Discipline_v2_11.md` | v2.11 (delta chain over v2.10/v2.9/v2.8/v2.7/v2.6; v2.8 = five Class 1 defects + F3 pinning; v2.9 = FF-2 U-OD-28; v2.10 = FF-3 U-OD-29 `SandboxTier` conformance; v2.11 = 7c-prereq Form A — OD-outbound cross-axis placeholder carrier IDs resolved) | Execution authority — 35 atomic units across 8 clusters (+ U-OD-00 pre-cluster) and 10 topological levels (L0–L9) |
 
 ### 1.3 Scope inclusion
 

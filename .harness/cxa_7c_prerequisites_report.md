@@ -1,7 +1,39 @@
 # Sub-phase 7c — cross-axis composition: prerequisites report
 
 **Filed:** 2026-05-16, at 7c entry. **Author:** phase-7-cross-axis-composition (orientation pass).
-**Status:** 7c entry-gate orientation complete; **bucket wiring NOT started** — four prerequisites must clear first.
+**Status:** ✅ **ALL FOUR PREREQUISITES RESOLVED 2026-05-16** — see §"Resolution" below. 7c bucket wiring is now unblocked.
+
+---
+
+## Resolution (2026-05-16 — 7c prerequisite pass)
+
+All four prerequisites resolved in-CLI. Deliverables:
+
+| Prereq | Outcome | Artifact |
+|---|---|---|
+| 1 — placeholder carrier IDs | 20 OD-outbound placeholder rows resolved to canonical carriers by contract anchor against producer-plan coverage tables. No Class 1 (every anchor resolved to exactly one carrier). 3 Class 3 hint-imprecision items logged. | `Cross_Axis_Composition_Document_v2_2.md` §2.3.5/§2.3.6; `Implementation_Plan_Operational_Discipline_v2_11.md`; `.harness/cxa_7c_placeholder_resolution.md` |
+| 2 — CP `RoleRoutingBinding` Class 1 | **Stale plan text.** The Class 1 was operator-resolved 2026-05-16 (R-2/W-2 schemas; U-CP-04 full-landed; verified in `harness-cp/src/.../routing_manifest_residence.py`). CP plan v2.9 §0.5 never caught up. Reconciled — not a live blocker. | `Implementation_Plan_Control_Plane_v2_10.md` §0.2 |
+| 3 — CXA §3 staleness | Re-verified vs landed code. §3.3 breaker Tier column struck (OD v2.8 D-3); §3.4 `audit.signature.*` 4th attr `sha256`→`key_period` (OD v2.7 D-3). Cascade: P1-CXA-1 **resolved by convergence** — OD and IS `audit.signature.*` sets now byte-exact identical. | `Cross_Axis_Composition_Document_v2_2.md` §3.3–§3.7 |
+| 4 — CXA-OD-IS-EDGE-DRIFT | Operator decision 2026-05-16: **wire 4** (OD plan v2.4 canonical), not 6. Aggregate edge count 101 → **99**. | `Cross_Axis_Composition_Document_v2_2.md` §2.1/§2.3.4 |
+
+**Net effect:** aggregate cross-axis edges 101 → 99 (OD→IS 6→4). All 99 edges carry canonical carrier IDs. §3 Pattern P1 clear. 7c bucket wiring may open — 6 buckets in axis-topological order (AS→IS 13, CP→IS 36, CP→AS 24, OD→IS 4, OD→AS 10, OD→CP 12).
+
+**Prereq 1 scope catch (during resolution):** U-OD-27's unit body still declared the two
+OD→IS edges that OD plan v2.4 §0.4.2 deleted from §4.5.1 — v2.4 revised the enumeration but
+did not propagate the deletion into the unit body. OD plan v2.11 §0.5 strikes both terms
+(9 unit bodies revised, not 8).
+
+**Known carry (Class 3, non-blocking) — `harness-cp/CLAUDE.md` staleness.** The CP-axis
+subdirectory `CLAUDE.md` plan-pointer (line 20) cites `Implementation_Plan_Control_Plane_v2_6.md`
+(57 units) — four versions stale (CP is now at v2.10, 58 units) and pre-dating this prerequisite
+pass. Root `CLAUDE.md` §2.4 and `harness-od/CLAUDE.md` were updated to the current versions in
+this pass; `harness-cp/CLAUDE.md` was left as-is because a correct fix requires reconciling its
+v2.6-era cluster tables, not just the version token — out of scope for the 7c prerequisite pass.
+Filed here as a known carry for a dedicated `harness-cp/CLAUDE.md` reconciliation.
+
+*Original orientation report (the 4 gates as filed at 7c entry) preserved below for the record.*
+
+---
 
 ## Entry-gate (skill §1.3) — PASS
 
