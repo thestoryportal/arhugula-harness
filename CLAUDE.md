@@ -87,7 +87,7 @@ All canonical artifacts reside at the **design-phase workspace** (separate Claud
 | IS | `Implementation_Plan_Information_Substrate_v2_3.md` | 17 units (U-IS-01 – U-IS-17) |
 | AS | `Implementation_Plan_Action_Surface_v1_2.md` | 33 units (U-AS-01 – U-AS-33) |
 | CP | `Implementation_Plan_Control_Plane_v2_9.md` | 58 units (U-CP-00, U-CP-00b, U-CP-00c, U-CP-01 – U-CP-55); v2.8 — new L0 carrier U-CP-00c specifies the 9 deferred structured shared types (all FACTOR-OUT, traced byte-exact); v2.9 multi-body delta — Pattern-D tail structured types specified across 8 unit bodies (U-CP-04/14/17/22/30/33/41/52); `RoleRoutingBinding`/`WorkloadRoutingOverride` left Class 1 2026-05-16 |
-| OD | `Implementation_Plan_Operational_Discipline_v2_9.md` | 35 units (U-OD-00, U-OD-01 – U-OD-34); v2.8 revision pass — five Class 1 defects (U-OD-02/08/09/12/21) + F3 taxonomy pinned; v2.9 — FF-2 resolution, U-OD-28 `CollectorPlacement` conformed to `Spec_Operational_Discipline_v1_4.md` §20.1 7-value enum 2026-05-16 |
+| OD | `Implementation_Plan_Operational_Discipline_v2_10.md` | 35 units (U-OD-00, U-OD-01 – U-OD-34); v2.8 — five Class 1 defects + F3 pinning; v2.9 — FF-2 U-OD-28 collector-placement; v2.10 — FF-3 U-OD-29 `SandboxTier` conformed to the AS-owned enum + OD spec §20.3 2026-05-16 |
 | CXA | `Cross_Axis_Composition_Document_v2_1.md` | 101 cross-axis edges (6 composition buckets) |
 
 ### 2.5 Per-axis subdirectory `CLAUDE.md` pointers

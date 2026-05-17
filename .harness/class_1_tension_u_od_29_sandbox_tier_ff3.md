@@ -7,7 +7,7 @@
 | Fork class | Class 1 (halt-execution — plan-internal contradiction; plan-vs-AS-axis divergence) |
 | Filed | 2026-05-16 (surfaced at OD-7b final-batch sequencing; this is the **FF-3 carried fork** — `Implementation_Plan_Operational_Discipline_v2_5.md` §0.6 FF-3, "open; ADR-D2 §1.2 verification required", unresolved through v2.9) |
 | Actor | phase-7-implementation (OD-7b — pre-dispatch check) |
-| Disposition | **OPEN** — U-OD-29 not yet attempted; skipped from the final landing batch. U-OD-29 is a **leaf** (no OD unit depends on it — verified against U-OD-31/U-OD-34 dependency lists); skipping it blocks only U-OD-29 itself. OD-7b lands 34/35 with U-OD-29 pending. |
+| Disposition | **✅ RESOLVED 2026-05-16** — operator ratified "resolve now"; plan v2.10 filed (U-OD-29 §3.7.3 conformed: in-unit `SandboxTier` struck, consumed from the AS-owned enum, reachability re-keyed to OD spec §20.3). U-OD-29 lands against v2.10 → OD-7b 35/35. |
 
 ## Defect
 
@@ -51,3 +51,9 @@ Two resolution shapes for operator decision:
 - **Option B — defer U-OD-29 to 7c.** If `SandboxTier` is a strict cross-axis edge (resolved only via the AS terminal exporter manifest at 7c), U-OD-29's reachability verification lands at 7c alongside the cross-axis composition. OD-7b closes at 34/35 by design; U-OD-29 is a 7c unit.
 
 Option A is recommended if the AS `SandboxTier` enum is importable now (the AS axis is complete and its modules are in the `uv` workspace — `harness-od` units have already imported `harness-core` types cross-package this session). Until the operator decides, U-OD-29 stays unlanded.
+
+---
+
+## ✅ RESOLVED — plan v2.10 (2026-05-16)
+
+Operator ratified FF-3 "resolve now". `design-substrate/Implementation_Plan_Operational_Discipline_v2_10.md` §3.7.3: in-unit `enum SandboxTier {TIER_0..3}` struck; `SandboxTier` consumed cross-axis from the AS-owned enum (`TIER_1_PROCESS..TIER_4_FULL_VM`); `OtlpReachabilityClass` + per-tier reachability map re-keyed to OD spec C-OD-20 §20.3's 1-indexed tiers; acc #1 citation corrected (ADR-F4 four-tier set / C-AS-01 §1.1, not D2 §1.2). U-OD-29 lands against v2.10 at 7b — OD-7b closes 35/35.
