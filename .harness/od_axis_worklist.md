@@ -170,3 +170,22 @@ commit-per-unit on `main`.
   plan-revision. **Operator decision owed.**
 - **FF-2 blocks 5 units:** U-OD-28 + dependents U-OD-29, U-OD-30, U-OD-31,
   U-OD-34 (terminal exporter). OD-7b cannot fully close until FF-2 resolves.
+
+## OD-7b CLOSE 2026-05-16 — 34/35 landed; U-OD-29 FF-3 pending
+
+- **FF-2 resolved** — operator ratified Option A. OD spec v1.4 + plan v2.9
+  filed (`CollectorPlacement` 7-value enum formalized). See
+  `class_1_tension_u_od_28_collector_placement_ff2.md` (RESOLVED).
+- **Final batch** — U-OD-28 (against v2.9) / U-OD-30 / U-OD-31 / **U-OD-34
+  (terminal aggregate exporter)** landed. pyright strict 0, **563 tests green**,
+  ruff clean.
+- **OD landed: 34/35.** Only **U-OD-29** outstanding — halted Class 1 on the
+  **FF-3** carried fork (`class_1_tension_u_od_29_sandbox_tier_ff3.md`):
+  U-OD-29 declares an in-unit 0-indexed `SandboxTier {TIER_0..3}`; the AS axis
+  owns + landed `SandboxTier` 1-indexed (`TIER_1_PROCESS..TIER_4_FULL_VM`);
+  the v2.6 R5 audit reclassified it as a cross-axis AS edge. U-OD-29 is a
+  **leaf** — nothing depends on it; OD-7b closed at 34/35 without it.
+  **Operator decision owed** — FF-3 Option A (plan v2.10 micro-revision, land
+  at 7b) vs Option B (defer U-OD-29 to 7c cross-axis composition).
+- **OD axis-stream 7b is functionally complete** — terminal exporter U-OD-34
+  landed. Remaining: resolve FF-3 (1 leaf unit), then 7c cross-axis composition.
