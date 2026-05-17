@@ -18,7 +18,7 @@ The harness has four design axes plus a cross-axis composition surface:
 | **AS** — Action Surface | Tool contracts (typed I/O schemas), MCP integration (FastMCP host + client), sandbox (4-tier blast radius), skills filesystem |
 | **CP** — Control Plane | Routing (capability-aware multi-LLM), retry / breaker / idempotency, workflow lifecycle, topology (6-class enum), HITL placement |
 | **OD** — Operational Discipline | HITL primitives (4-response palette), audit ledger schema, cost attribution (5-step chain), observability (12-namespace OTel schema) |
-| **CXA** — Cross-Axis Composition | 92 canonical cross-axis relationships across 6 composition buckets per `Cross_Axis_Composition_Document_v2_3.md` §2.3 (22 genuine typed seams; 49 convention-level; 24 phase-2-runtime) |
+| **CXA** — Cross-Axis Composition | 92 canonical cross-axis relationships across 6 composition buckets per `Cross_Axis_Composition_Document_v2_3.md` §2.3 (22 genuine typed seams; 46 convention-level; 24 phase-2-runtime) |
 
 ### 1.2 What this workspace is NOT
 
@@ -88,7 +88,7 @@ All canonical artifacts reside at the **design-phase workspace** (separate Claud
 | AS | `Implementation_Plan_Action_Surface_v1_2.md` | 33 units (U-AS-01 – U-AS-33) |
 | CP | `Implementation_Plan_Control_Plane_v2_10.md` | 58 units (U-CP-00, U-CP-00b, U-CP-00c, U-CP-01 – U-CP-55); v2.8 — new L0 carrier U-CP-00c specifies the 9 deferred structured shared types (all FACTOR-OUT, traced byte-exact); v2.9 multi-body delta — Pattern-D tail structured types specified across 8 unit bodies (U-CP-04/14/17/22/30/33/41/52); v2.10 — 7c-prereq reconcile: `RoleRoutingBinding`/`WorkloadRoutingOverride` Class 1 RESOLVED (operator-ratified R-2/W-2 schemas; U-CP-04 `RoutingManifest` FULL-LAND) 2026-05-16 |
 | OD | `Implementation_Plan_Operational_Discipline_v2_11.md` | 35 units (U-OD-00, U-OD-01 – U-OD-34); v2.8 — five Class 1 defects + F3 pinning; v2.9 — FF-2 U-OD-28 collector-placement; v2.10 — FF-3 U-OD-29 `SandboxTier` conformed to the AS-owned enum + OD spec §20.3; v2.11 — 7c-prereq Form A: OD-outbound cross-axis placeholder carrier IDs resolved (§4.5.2/§4.5.3 + 8 unit bodies) 2026-05-16 |
-| CXA | `Cross_Axis_Composition_Document_v2_3.md` | 92 canonical cross-axis relationships (6 composition buckets); v2.3 — 7c reclassification: every edge re-tagged genuine-typed-seam (22) / convention-level (49) / phase-2-runtime (24) / spurious (10 struck); v2.1/v2.2 "101/99 typed edges" was a category error |
+| CXA | `Cross_Axis_Composition_Document_v2_3.md` | 92 canonical cross-axis relationships (6 composition buckets); v2.3 — 7c reclassification: every edge re-tagged genuine-typed-seam (22) / convention-level (46) / phase-2-runtime (24) / spurious (10 struck); v2.1/v2.2 "101/99 typed edges" was a category error |
 
 ### 2.5 Per-axis subdirectory `CLAUDE.md` pointers
 

@@ -33,6 +33,8 @@ Evidence base (per-edge, durable): `.harness/class_1_tension_cxa_as_is_untyped_e
 
 ### §0.4 Aggregate reclassification matrix
 
+**Snapshot 1 — raw audit classification (pre-correction; 101 declared cells as the audits found them, before the §0.5 / §0.6 corrections):**
+
 | Bucket | Declared (raw cells) | genuine | convention | phase-2-runtime | spurious |
 |---|---|---|---|---|---|
 | AS → IS (§2.3.1) | 13 | 7 | 3 | 1 | 2 |
@@ -45,7 +47,9 @@ Evidence base (per-edge, durable): `.harness/class_1_tension_cxa_as_is_untyped_e
 
 The OD→AS / OD→CP rows fold in U-OD-33's 4 edges (3 OD→AS + 1 OD→CP) as **convention-level**: U-OD-33's plan §3.8.2 body carries cross-axis dependencies as a `cross_axis_composition_target: str | None` field with verification explicitly deferred (acc #5) — confirmed at U-OD-33 landing (the unit was un-landed at 7b — §0.7).
 
-**Corrected aggregate.** Of 101 raw declared edges: **10 spurious are struck** (+1 genuine seam added per §0.5) → **92 canonical cross-axis relationships**. Of those 92 — **~18 genuine typed seams** (→ **22** after the §0.5 addition + §0.6 retarget corrections), **49 convention-level**, **24 phase-2-runtime**. The v2.1/v2.2 headline "101 / 99 typed cross-axis edges" overstated the typed-seam count by ~4-5×.
+**Snapshot 2 — post-correction (after §0.5 + §0.6).** §0.5 adds one genuine edge (U-CP-52→U-IS-12) → 101 → **102 cells**. §0.6 retargets 3 CP→AS edges from convention to genuine. Net: **genuine 18 → 22**, **convention 49 → 46** (−3 retargeted), **phase-2-runtime 24**, **spurious 10**. 22 + 46 + 24 + 10 = **102 cells**.
+
+**Corrected aggregate.** Of 102 post-correction cells: **10 spurious are struck** → **92 canonical cross-axis relationships** = **22 genuine typed seams** + **46 convention-level** + **24 phase-2-runtime** (22 + 46 + 24 = 92). The v2.1/v2.2 headline "101 / 99 typed cross-axis edges" overstated the typed-seam count by ~4×.
 
 ### §0.5 Count corrections
 
@@ -85,7 +89,7 @@ The OD audit found **U-OD-33 was never landed at 7b** — OD-7b is 34/35, not 35
 
 ### §0.9 §3 Pattern P1 — relationship to the convention-level set
 
-§3 (Pattern P1 byte-exact verification) is preserved verbatim from v2.2. v2.3 records its new significance: the **49 convention-level edges** are precisely the relationships §3 governs — their cross-axis "composition" *is* the Pattern-P1 byte-exact namespace/scheme alignment §3 verifies, not a Python import. §3's existing verification (re-confirmed clean at the v2.2 prerequisite pass) discharges the convention-level set. No convention-level edge is wired at 7c; none needs to be.
+§3 (Pattern P1 byte-exact verification) is preserved verbatim from v2.2. v2.3 records its new significance: the **46 convention-level edges** are precisely the relationships §3 governs — their cross-axis "composition" *is* the Pattern-P1 byte-exact namespace/scheme alignment §3 verifies, not a Python import. §3's existing verification (re-confirmed clean at the v2.2 prerequisite pass) discharges the convention-level set. No convention-level edge is wired at 7c; none needs to be.
 
 ### §0.10 Authoring discipline
 
@@ -108,7 +112,7 @@ Total cross-axis relationships per bucket (spurious struck):
 | **CP** | 37 | 18 | *(self)* | 0 |
 | **OD** | 4 | 10 | 12 | *(self)* |
 
-**92 canonical cross-axis relationships** (101 raw − 10 spurious + 1 added genuine seam). Genuine typed seams within that: **22** (§0.5 + §0.6). Convention-level: **49**. Phase-2-runtime: **24**. (22 + 49 + 24 = 95; the 3 retargeted edges are counted once each — net 92.)
+**92 canonical cross-axis relationships** (102 post-correction cells − 10 spurious). Genuine typed seams within that: **22**. Convention-level: **46** (49 raw − 3 retargeted to genuine by §0.6). Phase-2-runtime: **24**. 22 + 46 + 24 = 92.
 
 (AS→IS 13−2=11; CP→IS 38−2 spurious +1 U-CP-52→U-IS-12 = 37; CP→AS 24−6 spurious = 18; OD→IS 4; OD→AS 10; OD→CP 12. Total 92.)
 
@@ -199,8 +203,8 @@ spurious struck (6): ~~U-CP-32→U-AS-17~~, ~~U-CP-32→U-AS-31~~, ~~U-CP-39→(
 | Axis | Canonical outbound relationships | Genuine typed seams | Posture |
 |---|---|---|---|
 | IS | 0 | 0 | Pure foundational substrate |
-| AS | 11 | 6 | Consumes IS; the 5 non-genuine are scheme-inheritance / descriptors / 1 runtime |
-| CP | 55 | 13 | Largest consumer; convention + runtime dominate (F2 audit-ledger composition is runtime) |
+| AS | 11 | 7 | Consumes IS; the 4 non-genuine are scheme-inheritance / descriptors / 1 runtime |
+| CP | 55 | 14 | Largest consumer; convention + runtime dominate (F2 audit-ledger composition is runtime) |
 | OD | 26 | 1 | Consumer-most axis; built almost entirely as Pattern-P1 convention surfaces by design |
 | **Aggregate** | **92** | **22** | — |
 
@@ -221,5 +225,5 @@ Two convention-level edges could be promoted to genuine typed seams, but doing s
 | Predecessor | `Cross_Axis_Composition_Document_v2_2.md` (preserved verbatim except §0, §2.1–§2.4) |
 | Authored at | Phase 7 sub-phase 7c, 2026-05-17 (in-CLI) |
 | Evidence base | `.harness/class_1_tension_cxa_as_is_untyped_edges.md`; `.harness/cxa_7c_audit_cp_buckets.md`; `.harness/cxa_7c_audit_od_buckets.md`; `.harness/class_1_tension_u_od_33_not_landed.md` |
-| Net effect | 101 raw declared → 10 spurious struck, +1 added genuine seam → **92 canonical cross-axis relationships**: 22 genuine typed seams (7c-wired/-verified), 49 convention-level (discharged by §3 Pattern P1), 24 phase-2-runtime (deferred to Phase 2) |
+| Net effect | 101 raw declared, +1 added genuine seam (§0.5) = 102 cells → 10 spurious struck → **92 canonical cross-axis relationships**: 22 genuine typed seams (7c-wired/-verified), 46 convention-level (discharged by §3 Pattern P1), 24 phase-2-runtime (deferred to Phase 2) |
 | Next gate | Verify the ~22 genuine typed seams are wired (most already are at 7b); 7c convention + runtime sets need no import wiring |
