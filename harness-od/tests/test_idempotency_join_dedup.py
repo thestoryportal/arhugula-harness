@@ -39,6 +39,9 @@ def _cost_record(
     attempt: int | None = None,
     total_cost: float = 1.0,
     is_replay_derived: bool = False,
+    provider_discriminator: str = "frontier_managed",
+    gen_ai_provider_name: str = "anthropic",
+    gen_ai_request_model: str = "claude-opus-4-7",
 ) -> SpanCostRecord:
     return SpanCostRecord(
         span_id="span-1",
@@ -50,6 +53,9 @@ def _cost_record(
         retry_attempt_number=attempt,
         retry_cause_attribution=None,
         is_replay_derived=is_replay_derived,
+        provider_discriminator=provider_discriminator,
+        gen_ai_provider_name=gen_ai_provider_name,
+        gen_ai_request_model=gen_ai_request_model,
     )
 
 
@@ -83,9 +89,38 @@ def _ledger(cause: str | None = "rate_limit") -> F2StateLedgerEntry:
 # --- §14.4 idempotency-key join ---------------------------------------------
 
 
-def test_span_cost_record_nine_fields() -> None:
-    """Acceptance #1 — `SpanCostRecord` declares exactly 9 fields."""
-    assert len(SpanCostRecord.model_fields) == 9
+def test_span_cost_record_twelve_fields() -> None:
+    """Acceptance #1 (v2.8 D-5) — `SpanCostRecord` declares exactly 12 fields."""
+    assert len(SpanCostRecord.model_fields) == 12
+
+
+def test_span_cost_record_provider_discriminator_field() -> None:
+    """Acceptance #1 (v2.8 D-5) — `provider_discriminator` rollup-key field present."""
+    assert "provider_discriminator" in SpanCostRecord.model_fields
+
+
+def test_span_cost_record_gen_ai_provider_name_field() -> None:
+    """Acceptance #1 (v2.8 D-5) — `gen_ai_provider_name` rollup-key field present."""
+    assert "gen_ai_provider_name" in SpanCostRecord.model_fields
+
+
+def test_span_cost_record_gen_ai_request_model_field() -> None:
+    """Acceptance #1 (v2.8 D-5) — `gen_ai_request_model` rollup-key field present."""
+    assert "gen_ai_request_model" in SpanCostRecord.model_fields
+
+
+def test_span_cost_record_new_fields_string_typed_no_cross_unit_dependency() -> None:
+    """Acceptance #1 (v2.8 D-5 / §0.3) — the three rollup-key fields are `str`-typed.
+
+    String typing is deliberate: typing `provider_discriminator` as U-OD-21's
+    `CrossFamilyTag` enum would create a U-OD-20 → U-OD-21 carrier cycle.
+    """
+    for field in (
+        "provider_discriminator",
+        "gen_ai_provider_name",
+        "gen_ai_request_model",
+    ):
+        assert SpanCostRecord.model_fields[field].annotation is str
 
 
 def test_span_cost_record_replay_orthogonality_fields_present() -> None:

@@ -132,15 +132,26 @@ class SpanIngestionView(BaseModel):
 
 
 class SpanCostRecord(BaseModel):
-    """The per-span cost record — 9 fields at v2.2 (C-OD-14 §14.4 + §14.5.2/.3).
+    """The per-span cost record — 12 fields at v2.8 (C-OD-14 §14.4 + §14.5.2/.3).
 
     Carries the parent's `idempotency_key` per C-IS-05 (the §14.4 join key),
     `total_cost` / `total_latency_ms` from the U-OD-19 `SpanTotalCost`, the
     `derived_keys` for sub-agent inheritance per C-AS-15 §15.6, and the four
     v2.2 replay-orthogonality fields per OD spec v1.3 §14.5.2 / §14.5.3:
     `engine_replay_disposition`, `retry_attempt_number`,
-    `retry_cause_attribution`, `is_replay_derived`. Frozen → `Eq`; this is the
-    carrier U-OD-21 `rollup_costs_by_axis` consumes (acceptance #1).
+    `retry_cause_attribution`, `is_replay_derived`.
+
+    v2.8 (D-5): three rollup-key fields appended so the U-OD-21 cross-family
+    rollup (`rollup_costs_by_axis`, C-OD-15 §15.1) is materializable —
+    `provider_discriminator` (the C-OD-05 §5.1 row-15 family tag),
+    `gen_ai_provider_name` and `gen_ai_request_model` (C-OD-04 §4.3 base-layer
+    attributes). All three are `str`-typed deliberately: typing the family tag
+    as U-OD-21's `CrossFamilyTag` enum would create a U-OD-20 → U-OD-21 carrier
+    cycle. The cost record carries the provider identity of the span whose cost
+    it records — a faithful operationalization of §15.1.
+
+    Frozen → `Eq`; this is the carrier U-OD-21 `rollup_costs_by_axis` consumes
+    (acceptance #1).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -163,6 +174,14 @@ class SpanCostRecord(BaseModel):
     retry_cause_attribution: str | None
     #: set by the dedup algorithm — `True` for replay-derived spans (§14.5.1).
     is_replay_derived: bool
+    #: v2.8 — cross-family family tag (C-OD-05 §5.1 row 15); `str`-typed to
+    #: avoid a U-OD-20 → U-OD-21 cycle. U-OD-21's `CrossFamilyTag` is the
+    #: bounded vocabulary `rollup_costs_by_axis` validates this string against.
+    provider_discriminator: str
+    #: v2.8 — the span's `gen_ai.provider.name` (C-OD-04 §4.3).
+    gen_ai_provider_name: str
+    #: v2.8 — the span's `gen_ai.request.model` (C-OD-04 §4.3).
+    gen_ai_request_model: str
 
 
 def attach_idempotency_key_to_cost_record(
