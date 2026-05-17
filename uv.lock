@@ -453,6 +453,7 @@ name = "harness-od"
 version = "0.0.0"
 source = { editable = "harness-od" }
 dependencies = [
+    { name = "harness-as" },
     { name = "harness-core" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp" },
@@ -461,6 +462,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "harness-as", editable = "harness-as" },
     { name = "harness-core", editable = "harness-core" },
     { name = "opentelemetry-api", specifier = ">=1.30" },
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.30" },
