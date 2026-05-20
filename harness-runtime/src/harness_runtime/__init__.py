@@ -17,21 +17,31 @@ shape) and L9 (U-RT-43 — bootstrap orchestrator body).
 from __future__ import annotations
 
 from harness_runtime.api import (
-    BootstrapNotYetLandedError,
     ConcurrentRunNotSupported,
     FailureCause,
     InvalidWorkflowError,
     RunResult,
+    WorkflowExecutionNotYetLandedError,
     WorkflowObject,
     run,
 )
+from harness_runtime.bootstrap import (
+    BootstrapFailure,
+    BootstrapStageCompleteEvent,
+    IncompleteBootstrapError,
+    run_bootstrap,
+)
 
 __all__ = [
-    "BootstrapNotYetLandedError",
+    "BootstrapFailure",
+    "BootstrapStageCompleteEvent",
     "ConcurrentRunNotSupported",
     "FailureCause",
+    "IncompleteBootstrapError",
     "InvalidWorkflowError",
     "RunResult",
+    "WorkflowExecutionNotYetLandedError",
     "WorkflowObject",
     "run",
+    "run_bootstrap",
 ]

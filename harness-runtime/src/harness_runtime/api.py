@@ -1,4 +1,4 @@
-"""`harness_runtime.run` Python API + `RunResult` shape (U-RT-42, closes L8).
+"""`harness_runtime.run` Python API + `RunResult` shape (U-RT-42; U-RT-43 wires bootstrap).
 
 Per `Spec_Harness_Runtime_v1.md` v1.1 §8 (C-RT-08 — `run()` Python API
 contract; F-P2-2 absorption) + §9 (C-RT-09 — `RunResult` shape) + §14
@@ -41,13 +41,13 @@ rollup". Same shape as the U-RT-34 Class 3 spec-prose-plan-body
 drift; non-blocking; logged inline for future runtime-spec revision
 pass.
 
-**Bootstrap body deferred to U-RT-43.** The L8 / L9 split in the
-session-3 atomic decomposition places `run()` signature at U-RT-42 +
-bootstrap orchestrator at U-RT-43. U-RT-42's `run()` body raises a
-typed `BootstrapNotYetLandedError` at the bootstrap call site; tests
-verify the pre-bootstrap ingress paths (workflow validation +
-concurrency guard) without exercising bootstrap. U-RT-43 lands the
-orchestrator and removes the stub.
+**Bootstrap landed at U-RT-43; workflow execution deferred to U-RT-44+.**
+U-RT-43 wires `run()` → `run_bootstrap()` → ... → execute stub. The
+`BootstrapNotYetLandedError` surface is removed; the new stub-call
+surface is `WorkflowExecutionNotYetLandedError` (raised post-bootstrap
+because workflow execution + shutdown lands at U-RT-44+). The
+`WorkflowObject` Protocol grows with `workload_class` (authorized at
+the original L8 landing per the line 110-112 docstring note).
 
 **Concurrency guard via module-level `asyncio.Lock`.** Per C-RT-08
 v1.1 idempotency-and-concurrency invariant: "Concurrent invocations
@@ -65,6 +65,7 @@ import asyncio
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from harness_core.identity import WorkflowID
+from harness_core.workload_class import WorkloadClass
 from harness_od.cross_family_rollup import CrossFamilyCostRollup
 from pydantic import BaseModel, ConfigDict
 
@@ -83,14 +84,17 @@ class ConcurrentRunNotSupported(Exception):  # noqa: N818 — domain-anchored na
     """`RT-FAIL-CONCURRENT-RUN` — second concurrent `run()` detected (C-RT-08 v1.1)."""
 
 
-class BootstrapNotYetLandedError(NotImplementedError):
-    """Stub-call surface — bootstrap body lands at U-RT-43 (L9).
+class WorkflowExecutionNotYetLandedError(NotImplementedError):
+    """Stub-call surface — workflow execution + shutdown lands at U-RT-44+.
 
-    Raised when `run()`'s pre-bootstrap ingress succeeds and the call
-    reaches the bootstrap orchestrator stub. Subclasses
-    `NotImplementedError` so generic `NotImplementedError` handlers
-    still catch it; the dedicated type lets U-RT-43 cleanly remove
-    this surface without breaking caller-side narrow-catches.
+    Raised when `run()` has successfully bootstrapped a `HarnessContext`
+    (U-RT-43) and reaches the workflow-execution call site. Subclasses
+    `NotImplementedError` so generic handlers catch it; the dedicated
+    type lets U-RT-44+ remove this surface cleanly when workflow
+    execution + drain + shutdown sequence lands.
+
+    Predecessor: `BootstrapNotYetLandedError` (U-RT-42), removed at the
+    U-RT-43 landing — the bootstrap surface is no longer a stub.
     """
 
 
@@ -103,18 +107,25 @@ class BootstrapNotYetLandedError(NotImplementedError):
 class WorkflowObject(Protocol):
     """Structural workflow-object surface (C-RT-08 Option C resolution).
 
-    The minimum surface CP's lifecycle loop needs at HEAD: a stable
-    `workflow_id` identity. CP's executable workflow primitive lives at
-    `WorkflowManifestEntry` (C-CP-06 §6.1) which carries a
-    `workflow_id` field; structural conformance is satisfied. The
-    Protocol may grow as U-RT-43's bootstrap orchestrator surfaces
-    additional fields the lifecycle loop consumes; growth is
-    non-breaking when fields are optional or read-only.
+    Minimum surface CP's lifecycle loop needs at HEAD: a stable
+    `workflow_id` identity + a `workload_class` for bootstrap-time
+    routing/state-ledger composition. CP's executable workflow primitive
+    lives at `WorkflowManifestEntry` (C-CP-06 §6.1) which carries both
+    fields; structural conformance is satisfied. Per the original L8
+    docstring note: "growth is non-breaking when fields are optional or
+    read-only" — `workload_class` is read-only (`@property`), so this
+    growth at U-RT-43 is authorized inline.
     """
 
     @property
     def workflow_id(self) -> str:
         """Stable identity of the workflow being executed."""
+        ...
+
+    @property
+    def workload_class(self) -> WorkloadClass:
+        """The workflow's workload class — threaded into bootstrap stage 1
+        state-ledger composition + stage 3b routing-manifest residence."""
         ...
 
 
@@ -230,14 +241,18 @@ async def run(
         `RT-FAIL-CONCURRENT-RUN` — a second `run()` invocation detected
         the module-level lock held by an in-flight call. Caller
         serializes or moves to a cached-context entry point (Track B).
-    BootstrapNotYetLandedError
-        Stub-call surface — bootstrap body lands at U-RT-43. Removed at
-        U-RT-43 landing.
+    harness_runtime.bootstrap.BootstrapFailure
+        `RT-FAIL-BOOTSTRAP` — one of the 9 bootstrap stages raised;
+        stages 0..N-1 rolled back in reverse order. Original cause
+        attached.
+    WorkflowExecutionNotYetLandedError
+        Stub-call surface — workflow execution + shutdown lands at
+        U-RT-44+. Removed at U-RT-44 landing.
     """
     if not isinstance(workflow, WorkflowObject):
         raise InvalidWorkflowError(
-            f"`run()` requires a `WorkflowObject` (with a `workflow_id` "
-            f"property); got {type(workflow).__name__!r}"
+            f"`run()` requires a `WorkflowObject` (with `workflow_id` + "
+            f"`workload_class` properties); got {type(workflow).__name__!r}"
         )
     if _run_lock.locked():
         raise ConcurrentRunNotSupported(
@@ -245,11 +260,34 @@ async def run(
             "Track A is bootstrap-per-call (no cached context). Serialize "
             "calls or move to a cached-context entry point (Track B)."
         )
+    # Lazy import to keep the api.py → bootstrap edge one-way at type-check
+    # time (bootstrap imports from api.py is forbidden; this lazy import
+    # plus a TYPE_CHECKING-free api surface prevents the cycle).
+    from harness_runtime.bootstrap import run_bootstrap
+
     async with _run_lock:
-        _ = config  # bootstrap consumes; stubbed below
-        # Bootstrap body lands at U-RT-43; see Spec §16 #2 + plan §3.8.4.
-        raise BootstrapNotYetLandedError(
-            "the bootstrap orchestrator + workflow-execute + shutdown body "
-            "lands at U-RT-43 (L9). U-RT-42 lands the ingress signature, "
-            "result schema, and pre-bootstrap validation surfaces only."
+        resolved_config = config if config is not None else _default_config()
+        _ctx = await run_bootstrap(
+            resolved_config,
+            workload_class=workflow.workload_class,
         )
+        # Workflow execution + drain + shutdown lands at U-RT-44+.
+        raise WorkflowExecutionNotYetLandedError(
+            f"bootstrap succeeded (HarnessContext frozen at stage 7); "
+            f"workflow execution + drain + shutdown body lands at U-RT-44+. "
+            f"workflow_id={workflow.workflow_id!r}"
+        )
+
+
+def _default_config() -> RuntimeConfig:
+    """Fallback `RuntimeConfig` when caller passes `config=None`.
+
+    Per C-RT-08 §8 "config=None default behavior": materialize
+    `RuntimeConfig` from defaults + env vars per C-RT-03 precedence.
+    Full env-var ingestion lives at `harness_runtime.config.loader`;
+    this fallback is the minimal-defaults form used when no caller-side
+    config is supplied. Raises if required fields cannot be resolved.
+    """
+    from harness_runtime.config.loader import materialize_runtime_config
+
+    return materialize_runtime_config()

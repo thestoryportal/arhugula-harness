@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 
 from harness_core.workflow_event_class import WorkflowEventClass
 
-from harness_runtime.types import RuntimeConfig
+from harness_runtime.types import BootstrapStage, RuntimeConfig
 
 
 class LifecycleEmitterBindError(Exception):
@@ -69,6 +69,9 @@ class RuntimeLifecycleEventEmitter:
     _emitted_events: list[WorkflowEventClass] = field(
         default_factory=lambda: [],
     )
+    _emitted_bootstrap_stages: list[BootstrapStage] = field(
+        default_factory=lambda: [],
+    )
 
     def emit(self, event_class: WorkflowEventClass) -> None:
         """Emit a lifecycle event of the given canonical class.
@@ -79,14 +82,32 @@ class RuntimeLifecycleEventEmitter:
         """
         self._emitted_events.append(event_class)
 
+    def emit_bootstrap_stage_complete(self, stage: BootstrapStage) -> None:
+        """Emit one `BootstrapStageCompleteEvent`-grade record per C-RT-01.
+
+        Per `Spec_Harness_Runtime_v1.md` v1.1 §1 invariant + U-RT-43 AC #3
+        (each of the 9 bootstrap substages emits exactly one lifecycle
+        event). `WorkflowEventClass` is closed at cardinality 8 and
+        addresses workflow lifecycle, not bootstrap; this surface is
+        bounded to the bootstrap orchestrator (U-RT-43) and tests.
+        Records append to a separate ring for deterministic introspection.
+        """
+        self._emitted_bootstrap_stages.append(stage)
+
     @property
     def emitted_events(self) -> tuple[WorkflowEventClass, ...]:
         """Snapshot of every emit since construction (deterministic order)."""
         return tuple(self._emitted_events)
 
+    @property
+    def emitted_bootstrap_stages(self) -> tuple[BootstrapStage, ...]:
+        """Snapshot of every bootstrap-stage emit since construction (deterministic order)."""
+        return tuple(self._emitted_bootstrap_stages)
+
     def clear(self) -> None:
         """Reset the emit ring (test convenience; no production caller)."""
         self._emitted_events.clear()
+        self._emitted_bootstrap_stages.clear()
 
 
 @dataclass(frozen=True, slots=True)

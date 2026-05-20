@@ -8,8 +8,9 @@ ACs per Phase 2 Session 7 L8 stage 5 LOOP_INIT (U-RT-42 closes L8):
    (pre-bootstrap rejection).
 4. Concurrency guard: second concurrent `run()` → `ConcurrentRunNotSupported`
    (C-RT-08 v1.1 idempotency-and-concurrency).
-5. Bootstrap deferral: valid-shape `run()` reaches bootstrap stub →
-   `BootstrapNotYetLandedError` (U-RT-43 lands the body).
+5. U-RT-43 wired: valid-shape `run()` runs bootstrap → workflow-execution
+   stub → `WorkflowExecutionNotYetLandedError` (U-RT-44+ lands execution).
+   `BootstrapNotYetLandedError` is removed.
 6. Module-level lock is `asyncio.Lock`; re-export wiring at package root.
 
 Bootstrap body itself is U-RT-43 scope — tests here verify ingress paths
@@ -26,13 +27,14 @@ import harness_runtime
 import harness_runtime.api as _api
 import pytest
 from harness_core.identity import WorkflowID
+from harness_core.workload_class import WorkloadClass
 from harness_od.cross_family_rollup import CrossFamilyCostRollup, RollupAxis
 from harness_runtime.api import (
-    BootstrapNotYetLandedError,
     ConcurrentRunNotSupported,
     FailureCause,
     InvalidWorkflowError,
     RunResult,
+    WorkflowExecutionNotYetLandedError,
     WorkflowObject,
     run,
 )
@@ -46,12 +48,21 @@ from harness_runtime.types import RuntimeConfig
 class _Workflow:
     """Structural `WorkflowObject` for tests."""
 
-    def __init__(self, workflow_id: str = "wf-test-1") -> None:
+    def __init__(
+        self,
+        workflow_id: str = "wf-test-1",
+        workload_class: WorkloadClass = WorkloadClass.SOFTWARE_ENGINEERING,
+    ) -> None:
         self._wid = workflow_id
+        self._wc = workload_class
 
     @property
     def workflow_id(self) -> str:
         return self._wid
+
+    @property
+    def workload_class(self) -> WorkloadClass:
+        return self._wc
 
 
 def _rollup() -> CrossFamilyCostRollup:
@@ -212,24 +223,44 @@ async def test_run_raises_on_concurrent_invocation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_valid_run_reaches_bootstrap_stub() -> None:
-    with pytest.raises(BootstrapNotYetLandedError):
+async def test_valid_run_reaches_execution_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """U-RT-43 wires bootstrap; execution stub at U-RT-44+."""
+
+    async def _fake_bootstrap(config, *, workload_class):  # type: ignore[no-untyped-def]
+        return None
+
+    monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _fake_bootstrap)
+    monkeypatch.setattr(_api, "_default_config", lambda: None)
+    with pytest.raises(WorkflowExecutionNotYetLandedError):
         await run(_Workflow())
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_stub_releases_lock_after_raise() -> None:
-    """Failed bootstrap doesn't poison the lock — subsequent calls reach the stub."""
-    with pytest.raises(BootstrapNotYetLandedError):
+async def test_execution_stub_releases_lock_after_raise(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The execution stub doesn't poison the lock — subsequent calls reach the stub."""
+
+    async def _fake_bootstrap(config, *, workload_class):  # type: ignore[no-untyped-def]
+        return None
+
+    monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _fake_bootstrap)
+    monkeypatch.setattr(_api, "_default_config", lambda: None)
+    with pytest.raises(WorkflowExecutionNotYetLandedError):
         await run(_Workflow())
-    # Second call also reaches the stub (lock was released).
-    with pytest.raises(BootstrapNotYetLandedError):
+    with pytest.raises(WorkflowExecutionNotYetLandedError):
         await run(_Workflow())
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_stub_is_not_implemented_subclass() -> None:
-    """Generic NotImplementedError handlers still catch the bootstrap stub."""
+async def test_execution_stub_is_not_implemented_subclass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Generic NotImplementedError handlers still catch the execution stub."""
+
+    async def _fake_bootstrap(config, *, workload_class):  # type: ignore[no-untyped-def]
+        return None
+
+    monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _fake_bootstrap)
+    monkeypatch.setattr(_api, "_default_config", lambda: None)
     with pytest.raises(NotImplementedError):
         await run(_Workflow())
 
@@ -250,7 +281,10 @@ def test_package_root_re_exports_api() -> None:
     assert harness_runtime.WorkflowObject is WorkflowObject
     assert harness_runtime.InvalidWorkflowError is InvalidWorkflowError
     assert harness_runtime.ConcurrentRunNotSupported is ConcurrentRunNotSupported
-    assert harness_runtime.BootstrapNotYetLandedError is BootstrapNotYetLandedError
+    assert (
+        harness_runtime.WorkflowExecutionNotYetLandedError
+        is WorkflowExecutionNotYetLandedError
+    )
     assert harness_runtime.FailureCause is FailureCause
 
 

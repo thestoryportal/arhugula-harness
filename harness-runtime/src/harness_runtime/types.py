@@ -447,6 +447,16 @@ class LifecycleEventEmitter(Protocol):
         """Emit a lifecycle event of the given canonical class."""
         ...
 
+    def emit_bootstrap_stage_complete(self, stage: BootstrapStage) -> None:
+        """Emit one bootstrap-stage-complete lifecycle record (U-RT-43 AC #3).
+
+        Distinct surface from `emit()` because `WorkflowEventClass` is
+        closed at cardinality 8 (no `DRAINED` / no bootstrap entries) and
+        addresses workflow lifecycle, not bootstrap. The bootstrap
+        orchestrator emits one such record per stage post-bootstrap.
+        """
+        ...
+
 
 # ----------------------------------------------------------------------------
 # Protocol stubs - Class 2 unresolved axis-typed names (Tension 2026-05-19).
