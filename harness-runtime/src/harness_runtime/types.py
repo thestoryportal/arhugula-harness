@@ -690,12 +690,31 @@ class PerStepOverrideEvaluator(Protocol):
 
 @runtime_checkable
 class TopologyDispatcher(Protocol):
-    """Composed at U-RT-40 from landed CP topology-pattern primitives.
+    """Topology-pattern dispatcher runtime surface (U-RT-40).
 
-    Risk gate: Tension 002 (TopologyPattern enum) is re-verified at U-RT-40
-    landing per the open-question carry-forward in `Spec_Harness_Runtime_v1.md`
-    §16.
+    Concretized by
+    `harness_runtime.lifecycle.topology_dispatcher.RuntimeTopologyDispatcher`.
+    Narrowed at U-RT-40 to declare the dispatcher's reference-time surface
+    so consumer-side type checks (workflow-execution units U-RT-42+)
+    compose against a documented API. The dispatcher is stateless — it
+    composes the CP `TopologyPattern` enum + `is_admissible` predicate
+    (C-CP-10 §10.1, §10.3).
+
+    **Risk-gate clearance at U-RT-40 landing.** Tension 002 (TopologyPattern
+    3-way divergence between plan/spec/ADR) was RESOLVED 2026-05-15 per
+    operator decision (Set 2 — conformed to spec C-CP-10 §10.1 verbatim
+    at 4 loci). CP's landed `TopologyPattern` enum carries the canonical
+    6-value taxonomy. No carry-forward; U-RT-40 lands cleanly against
+    the spec-conformed CP enum.
     """
+
+    def dispatch(self, manifest_entry: WorkflowManifestEntry) -> TopologyPattern:
+        """Return the bound `TopologyPattern` for a workflow manifest entry."""
+        ...
+
+    def is_admissible(self, pattern: TopologyPattern, workload: WorkloadClass) -> bool:
+        """Cross-pattern admissibility per C-CP-10 §10.3 (delegates to CP)."""
+        ...
 
 
 @runtime_checkable
