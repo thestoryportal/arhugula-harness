@@ -35,6 +35,7 @@ What this module ships at L0:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
 from typing import NewType, Protocol, runtime_checkable
@@ -49,8 +50,9 @@ from harness_cp.cross_family_fallback_chain import FallbackChain
 from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_cp.topology_pattern import TopologyPattern
 from harness_is.path_resolver import PathResolver
+from harness_is.workload_manifest_opt_in_schema import WorkloadManifestOptIns
 from harness_is.worktree_isolation import WorktreeIsolationManager
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
     "AuditLedgerWriter",
@@ -170,9 +172,33 @@ ToolName = NewType("ToolName", str)
 # L1 units (U-RT-04..U-RT-08) enrich these with concrete fields + validators.
 # ----------------------------------------------------------------------------
 class PathBindingConfig(BaseModel):
-    """L0 placeholder — U-RT-05 enriches with concrete `PathBinding` fields."""
+    """Path-binding input — U-RT-05 (L1).
+
+    Holds the raw path-binding entry records the operator declares plus the
+    workload-manifest opt-in declaration that gates shadow-Git checkpoint
+    cadence and worktree-isolation concurrency. The runtime materializes a
+    validated `harness_is.PathBinding` via `config.path_bindings.build_path_binding`
+    at stage 1 IS bootstrap (U-RT-10).
+
+    Per C-IS-08 §8.1 the opt-ins default to all-off; downstream stage 1 units
+    fail-open on the (unset → off) interpretation rather than requiring an
+    explicit declaration at every site.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    raw_entries: tuple[Mapping[str, object], ...] = ()
+    """Raw `(path_class, workflow_class, deployment_surface, path)` records.
+
+    Validated into `PathBindingEntry` instances by `load_path_binding` at
+    `build_path_binding` time (U-RT-05).
+    """
+
+    opt_ins: WorkloadManifestOptIns = Field(default_factory=WorkloadManifestOptIns)
+    """Workload-class opt-in declaration (shadow-Git + worktree).
+
+    Defaults to all-off per C-IS-08 §8.1 / C-IS-09 §9.1.
+    """
 
 
 class ProviderSecretsConfig(BaseModel):
