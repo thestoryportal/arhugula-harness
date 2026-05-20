@@ -52,6 +52,11 @@ from harness_cp.topology_pattern import TopologyPattern
 from harness_is.path_resolver import PathResolver
 from harness_is.workload_manifest_opt_in_schema import WorkloadManifestOptIns
 from harness_is.worktree_isolation import WorktreeIsolationManager
+from harness_od.local_first_otlp_collector import (
+    BATCH_SPAN_PROCESSOR_BATCH_SIZE,
+    BATCH_SPAN_PROCESSOR_WINDOW_SECONDS,
+)
+from harness_od.per_cell_collector_placement_matrix import CollectorPlacement
 from harness_od.sampling_mode import SamplingMode
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -274,9 +279,52 @@ class OTelConfig(BaseModel):
 
 
 class CollectorConfig(BaseModel):
-    """L0 placeholder — U-RT-08 enriches with collector daemon fields."""
+    """In-process collector daemon config — U-RT-08 (L1).
+
+    Carries the placement selection (architectural class per C-OD-20 §20.1),
+    ring-buffer size, sqlite rotation thresholds, and BatchSpanProcessor
+    cadence inherited from C-OD-19 §19.1 defaults. The collector daemon
+    supervisor at U-RT-29 (F-P2-5) consumes these settings.
+
+    All numeric thresholds are validated as positive at construction time;
+    defaults match the OD-spec-committed BSP constants
+    (`BATCH_SPAN_PROCESSOR_WINDOW_SECONDS=5`, `BATCH_SPAN_PROCESSOR_BATCH_SIZE=512`).
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    placement: CollectorPlacement = CollectorPlacement.IN_PROCESS
+    """Architectural collector placement (C-OD-20 §20.1). Defaults to
+    `IN_PROCESS` per F-P2-5 (runtime owns the in-process collector daemon)."""
+
+    ring_buffer_size: int = 4096
+    """Span ring-buffer capacity for the collector daemon (bounded > 0)."""
+
+    sqlite_rotation_max_rows: int = 100_000
+    """Row-count rotation threshold for the collector sqlite store (> 0)."""
+
+    sqlite_rotation_max_bytes: int = 100_000_000
+    """Byte-size rotation threshold for the collector sqlite store (> 0)."""
+
+    batch_window_seconds: int = BATCH_SPAN_PROCESSOR_WINDOW_SECONDS
+    """BSP batching window in seconds (C-OD-19 §19.1 default = 5; > 0)."""
+
+    batch_size: int = BATCH_SPAN_PROCESSOR_BATCH_SIZE
+    """BSP batch size (C-OD-19 §19.1 default = 512; > 0)."""
+
+    @field_validator(
+        "ring_buffer_size",
+        "sqlite_rotation_max_rows",
+        "sqlite_rotation_max_bytes",
+        "batch_window_seconds",
+        "batch_size",
+    )
+    @classmethod
+    def _positive(cls, value: int) -> int:
+        """All collector thresholds must be strictly positive."""
+        if value <= 0:
+            raise ValueError(f"value must be > 0 (got {value})")
+        return value
 
 
 class MCPClientConfig(BaseModel):
