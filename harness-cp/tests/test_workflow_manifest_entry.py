@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import pytest
 from harness_core import PersonaTier, StepID, WorkloadClass
-from pydantic import ValidationError
-
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
     ProviderCandidate,
@@ -23,6 +21,7 @@ from harness_cp.engine_class import EngineClass
 from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.topology_pattern import TopologyPattern, is_admissible
 from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEntry
+from pydantic import ValidationError
 
 _CHAIN = FallbackChain(
     primary=ProviderCandidate(

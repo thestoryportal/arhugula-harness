@@ -32,9 +32,8 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
-
 from harness_core import AttributeValueType, Cardinality
+from pydantic import BaseModel, ConfigDict
 
 
 class ValidatorFailClass(StrEnum):

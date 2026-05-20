@@ -37,9 +37,9 @@ ADR-D1 v1.1 + ADR-D4 v1.1.
 
 from __future__ import annotations
 
+from harness_core import DeploymentSurface, PersonaTier, WorkloadClass
 from pydantic import BaseModel, ConfigDict
 
-from harness_core import DeploymentSurface, PersonaTier, WorkloadClass
 from harness_cp.engine_class import EngineClass
 from harness_cp.engine_class_candidate import ENGINE_CLASS_CANDIDATES
 from harness_cp.handoff_context import HandoffContext

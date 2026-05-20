@@ -16,8 +16,6 @@ from __future__ import annotations
 
 import pytest
 from harness_core import EntryID, WorkflowID
-from harness_is.state_ledger_entry_schema import Identifier
-
 from harness_cp.cp_shared_types import ActorIdentity
 from harness_cp.handoff_context import (
     ExternalReference,
@@ -34,6 +32,7 @@ from harness_cp.pause_resume_protocol import (
     capture_pause_snapshot,
     classify_resume,
 )
+from harness_is.state_ledger_entry_schema import Identifier
 
 
 def _ref() -> ExternalReference:

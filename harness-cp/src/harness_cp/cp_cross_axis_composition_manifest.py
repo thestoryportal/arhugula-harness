@@ -197,7 +197,7 @@ class RevisionStep(BaseModel):
     rationale: str
 
 
-class F2_12_CarryForward(BaseModel):
+class F2_12_CarryForward(BaseModel):  # noqa: N801 — class name encodes the F2-12 design-substrate citation ID
     """The F2-12 carry-forward declaration (C-CP-24 §24.4)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)

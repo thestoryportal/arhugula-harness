@@ -37,8 +37,8 @@ from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.handoff_context import ExternalReference
 
 if TYPE_CHECKING:  # pragma: no cover — annotation-only; avoids the U-CP-49 cycle
-    from harness_cp.pause_resume_protocol import PauseEvent
     from harness_cp.handoff_context import StateSummary
+    from harness_cp.pause_resume_protocol import PauseEvent
 
 
 class MaterialDiff(BaseModel):

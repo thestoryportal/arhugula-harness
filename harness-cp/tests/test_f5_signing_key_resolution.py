@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 from harness_as import GateLevel, SecretRef
-
+from harness_core import PersonaTier
 from harness_cp.f5_signing_key_resolution import (
     KeyRotationState,
     SecretScopeKind,
@@ -26,7 +26,6 @@ from harness_cp.f5_signing_key_resolution import (
     verify_audit_entry_signature,
 )
 from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry
-from harness_core import PersonaTier
 
 _SCOPE = SigningKeyScope(
     scope_kind=SecretScopeKind.TENANT_BOUND, scope_identifier="tenant-7"

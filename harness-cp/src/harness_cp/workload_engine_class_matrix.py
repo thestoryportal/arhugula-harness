@@ -104,7 +104,9 @@ def lookup_cell(workload: WorkloadClass, engine: EngineClass) -> WorkloadEngineM
     return _CELL_BY_PAIR[(workload, engine)]
 
 
-def d4_tunable(cell: WorkloadEngineMatrixCell, persona_tier: PersonaTier) -> D4MultiplicativeTunable:
+def d4_tunable(
+    cell: WorkloadEngineMatrixCell, persona_tier: PersonaTier
+) -> D4MultiplicativeTunable:
     """Return the §11.4 D4 multiplicative tunable for a cell + persona tier.
 
     Persona tier influences the `cascade_policy` default: more conservative

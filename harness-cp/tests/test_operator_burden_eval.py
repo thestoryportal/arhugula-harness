@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import pytest
 from harness_core import WorkflowID
-
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.operator_burden_eval import (
     HITL_TAIL_KEEP_RULES,

@@ -22,7 +22,6 @@ Acceptance-criterion coverage (C-CP-21 §21.2 + §21.3):
 from __future__ import annotations
 
 import pytest
-
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.validator_fail_taxonomy import ValidatorFailClass
 from harness_cp.validator_fail_transient_staircase import (

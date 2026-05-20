@@ -16,7 +16,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from harness_core import ActionID, ThreadID
-
 from harness_cp.parent_fanout_close_entry import (
     MERKLE_CONSTRUCTION_STEPS,
     CascadeDecisionAtFanoutClose,

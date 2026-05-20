@@ -19,7 +19,6 @@ from __future__ import annotations
 from harness_as import BlastRadiusTier
 from harness_as.sandbox_tier import SandboxTier
 from harness_core import DeploymentSurface, PersonaTier
-
 from harness_cp.cp_shared_types import MCPTrustTier
 from harness_cp.f5_signing_key_resolution import SecretScopeKind, SigningKeyScope
 from harness_cp.five_axis_composition import (

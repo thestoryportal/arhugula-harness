@@ -73,6 +73,10 @@ __all__ = [
     "PER_SANDBOX_TIER_REACHABILITY",
     "OtlpReachabilityClass",
     "ReachabilityViolation",
+    # v2.10 FF-3: SandboxTier is AS-axis-owned (C-AS-01 §1.1) and intentionally
+    # re-exported here as the canonical cross-axis citation surface; the acc #8
+    # test verifies the re-export linkage via ``mod.SandboxTier.__module__``.
+    "SandboxTier",
     "SandboxTierReachability",
     "assert_otlp_reachable_from_sandbox",
 ]

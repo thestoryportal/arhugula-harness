@@ -32,7 +32,7 @@ from harness_cp.hitl_response_palette import (
 _SPEC_RESPONSES = {"approve", "edit", "reject", "respond"}
 
 
-def _shape(response: HITLResponse):  # noqa: ANN202 - test helper
+def _shape(response: HITLResponse):
     return next(s for s in PER_RESPONSE_AUDIT_ENTRY_SHAPES if s.response == response)
 
 

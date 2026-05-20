@@ -15,9 +15,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from harness_core import PersonaTier
-from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
-
+from harness_core import ActionID, PersonaTier
 from harness_cp.cross_sibling_cryptographic_shape import (
     CROSS_SIBLING_CRYPTOGRAPHIC_COMPOSITION,
     CROSS_SIBLING_TRACE_INSPECTION,
@@ -34,7 +32,7 @@ from harness_cp.parent_fanout_close_entry import (
 from harness_cp.per_persona_tier_audit_cryptographic_shape import CryptographicShape
 from harness_cp.sibling_ledger_entry_composition import SiblingLedgerEntry
 from harness_cp.topology_pattern import TopologyPattern
-from harness_core import ActionID
+from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 
 
 def _sibling() -> SiblingLedgerEntry:

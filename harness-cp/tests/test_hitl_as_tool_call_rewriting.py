@@ -19,7 +19,6 @@ from collections.abc import Mapping
 from typing import Any
 
 from harness_core import PersonaTier
-
 from harness_cp.handoff_context import ActionKind, ProposedAction
 from harness_cp.hitl_as_tool_call_rewriting import (
     HITL_SEMANTIC_VARIANTS,

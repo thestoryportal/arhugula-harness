@@ -20,7 +20,6 @@ Acceptance-criterion coverage:
 from __future__ import annotations
 
 from harness_core import WorkloadClass
-
 from harness_cp.engine_class import EngineClass
 from harness_cp.f2_substrate_join_discipline import F2JoinKind
 from harness_cp.per_engine_class_topology_overlay import (

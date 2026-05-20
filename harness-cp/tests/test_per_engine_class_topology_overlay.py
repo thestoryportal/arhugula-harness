@@ -72,11 +72,17 @@ def test_cascade_enforcement_consistent_with_reading() -> None:
     """#3 — cascade enforcement delegates per the §11.2 reading."""
     for o in PER_ENGINE_CLASS_OVERLAYS:
         if o.t_perm_3_reading is TopologyFaultHandling.BELOW_ENGINE:
-            assert o.cascade_enforcement_mechanism is CascadeEnforcementMechanism.ENGINE_NATIVE_CANCELLATION
+            assert (
+                o.cascade_enforcement_mechanism
+                is CascadeEnforcementMechanism.ENGINE_NATIVE_CANCELLATION
+            )
         elif o.t_perm_3_reading is TopologyFaultHandling.ABOVE_ENGINE:
             assert (
                 o.cascade_enforcement_mechanism
                 is CascadeEnforcementMechanism.HARNESS_CANCELLATION_PROPAGATION
             )
         else:
-            assert o.cascade_enforcement_mechanism is CascadeEnforcementMechanism.CRD_RECONCILER_DRIVEN
+            assert (
+                o.cascade_enforcement_mechanism
+                is CascadeEnforcementMechanism.CRD_RECONCILER_DRIVEN
+            )

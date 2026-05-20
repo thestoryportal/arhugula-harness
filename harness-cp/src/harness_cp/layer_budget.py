@@ -35,9 +35,9 @@ verbatim into v1.3); ADR-F1 v1.2 §Decision.
 
 from __future__ import annotations
 
+from harness_core import PersonaTier, WorkloadClass
 from pydantic import BaseModel, ConfigDict
 
-from harness_core import PersonaTier, WorkloadClass
 from harness_cp.routing_layer import RoutingLayer
 
 

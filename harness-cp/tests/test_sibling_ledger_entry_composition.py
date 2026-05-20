@@ -15,9 +15,6 @@ import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 
-from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
-from harness_is.state_ledger_entry_schema import Identifier, StateLedgerEntry
-from harness_is.state_ledger_write import WriteKey, WriteResult
 from harness_cp.cp_shared_types import ActorIdentity
 from harness_cp.sibling_ledger_entry_composition import (
     F2_14_READING_1_RATIONALE,
@@ -25,6 +22,9 @@ from harness_cp.sibling_ledger_entry_composition import (
     append_sibling_ledger_entry,
     construct_sibling_ledger_entry,
 )
+from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
+from harness_is.state_ledger_entry_schema import Identifier, StateLedgerEntry
+from harness_is.state_ledger_write import WriteKey, WriteResult
 
 
 def test_sibling_ledger_entry_matches_f2_shape() -> None:

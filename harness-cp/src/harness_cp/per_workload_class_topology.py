@@ -43,9 +43,9 @@ C-CP-11 §11.1 (preserved verbatim into v1.3); ADR-D4 v1.1 §1.2.
 
 from __future__ import annotations
 
+from harness_core import WorkloadClass
 from pydantic import BaseModel, ConfigDict
 
-from harness_core import WorkloadClass
 from harness_cp.topology_pattern import TopologyPattern, is_admissible
 
 

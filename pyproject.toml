@@ -79,6 +79,18 @@ extend-exclude = [".harness", ".venv", "design-substrate"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "ASYNC", "RUF"]
+# Design-substrate notation uses Unicode `×` (multiplication sign) and `–` (en dash)
+# intentionally in docstrings, string literals, and comments (e.g., "persona × engine"
+# matrices, "5–7 attempts" ranges). Ruff's RUF001/002/003 flag these as ambiguous
+# against ASCII lookalikes; in this codebase they are domain notation, not typos.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+# CP test files carry docstring AC-coverage tables with hand-aligned columns where
+# wrapping would destroy the alignment. The lines exceed 100 cols by a few chars.
+"harness-cp/tests/test_gate_level_rule.py" = ["E501"]
+"harness-cp/tests/test_per_step_override_evaluator.py" = ["E501"]
+"harness-cp/tests/test_validator_fail_transient_staircase.py" = ["E501"]
 
 [tool.ruff.format]
 docstring-code-format = true

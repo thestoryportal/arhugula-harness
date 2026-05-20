@@ -33,9 +33,9 @@ C-CP-07 §7.2 (preserved verbatim into v1.3); ADR-D1 v1.1 §1.2.
 
 from __future__ import annotations
 
+from harness_core import DeploymentSurface
 from pydantic import BaseModel, ConfigDict
 
-from harness_core import DeploymentSurface
 from harness_cp.engine_class import EngineClass
 
 

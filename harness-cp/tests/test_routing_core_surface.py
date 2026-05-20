@@ -13,7 +13,6 @@ import inspect
 
 import pytest
 from harness_core import PersonaTier, WorkloadClass
-
 from harness_cp.cp_shared_types import (
     AgentRole,
     ProviderAgnosticPayload,

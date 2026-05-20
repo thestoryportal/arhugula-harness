@@ -27,9 +27,9 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from harness_core import PersonaTier
 from pydantic import BaseModel, ConfigDict
 
-from harness_core import PersonaTier
 from harness_cp.engine_class import EngineClass
 
 

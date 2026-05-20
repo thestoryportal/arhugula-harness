@@ -154,7 +154,7 @@ primitive (not an F2 entry). The construction never writes F2 (acceptance #5).
 
 def _merkle_parent(left: str, right: str) -> str:
     """Hash two child nodes into a parent node (SHA-256 over the concatenation)."""
-    return hashlib.sha256(f"{left}\x1f{right}".encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"{left}\x1f{right}".encode()).hexdigest()
 
 
 def construct_sibling_ledger_root(
@@ -171,7 +171,7 @@ def construct_sibling_ledger_root(
     payloads at step 1 via U-IS-12.
     """
     leaves: list[str] = [
-        hashlib.sha256(f"{parent_action_id}\x1f{tid}".encode("utf-8")).hexdigest()
+        hashlib.sha256(f"{parent_action_id}\x1f{tid}".encode()).hexdigest()
         for tid in sibling_thread_ids
     ]
     leaf_count = len(leaves)

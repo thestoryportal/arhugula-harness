@@ -18,8 +18,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from harness_as.sandbox_tier import BlastRadiusTier
-from harness_core import DeploymentSurface, PersonaTier
-
+from harness_core import DeploymentSurface, PersonaTier, WorkloadClass
 from harness_cp.both_by_tier_overlay import (
     BOTH_BY_TIER_OVERLAY,
     TWO_AGENT_OBSERVER,
@@ -38,7 +37,6 @@ from harness_cp.engine_class import EngineClass
 from harness_cp.handoff_context import ActionKind, ProposedAction
 from harness_cp.persona_engine_hitl_matrix import matrix_cell_for
 from harness_cp.validator_fail_taxonomy import ValidatorFailClass
-from harness_cp.workload_engine_class_matrix import WorkloadClass
 
 # The C-CP-21 §21.5 5-value validator.fail.class set.
 _CP_21_5_FAIL_CLASSES = {c.value for c in ValidatorFailClass}

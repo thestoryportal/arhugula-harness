@@ -18,10 +18,8 @@ Carried-item tests deliberately NOT authored (would bake an unverified mapping).
 from __future__ import annotations
 
 import pytest
-
 from harness_as import BlastRadiusTier
 from harness_core import DeploymentSurface, PersonaTier
-
 from harness_cp.cp_shared_types import Axis, MCPTrustTier
 from harness_cp.gate_level_rule import (
     BLAST_RADIUS_GATE_LEVEL_FLOOR,

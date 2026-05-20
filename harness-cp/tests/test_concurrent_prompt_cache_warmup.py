@@ -13,10 +13,6 @@ from __future__ import annotations
 
 import pytest
 from harness_core import DeploymentSurface, WorkloadClass
-from harness_is.path_binding import PathBinding, PathBindingEntry
-from harness_is.path_class_registry import PathClass
-from harness_is.path_resolver import PathResolver
-
 from harness_cp.concurrent_prompt_cache_warmup import (
     CacheCompletionProxy,
     CacheCompletionProxyKind,
@@ -27,6 +23,9 @@ from harness_cp.concurrent_prompt_cache_warmup import (
     on_fanout_dispatch,
     persist_lead_agent_plan,
 )
+from harness_is.path_binding import PathBinding, PathBindingEntry
+from harness_is.path_class_registry import PathClass
+from harness_is.path_resolver import PathResolver
 
 
 def _resolver() -> PathResolver:

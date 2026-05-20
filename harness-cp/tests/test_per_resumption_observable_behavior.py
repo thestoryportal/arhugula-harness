@@ -53,7 +53,9 @@ def test_f2_join_path_per_engine_class() -> None:
 
 def test_continuity_guarantee_per_kind() -> None:
     """#4 — ContinuityGuarantee discriminates across the five kinds 1:1."""
-    by_kind = {e.resumption_kind: e.observable_continuity for e in PER_RESUMPTION_OBSERVABLE_BEHAVIOR}
+    by_kind = {
+        e.resumption_kind: e.observable_continuity for e in PER_RESUMPTION_OBSERVABLE_BEHAVIOR
+    }
     assert by_kind[ResumptionKind.ENGINE_REPLAY] is ContinuityGuarantee.EXACT_REPLAY
     assert by_kind[ResumptionKind.SAVE_POINT_RESUME] is ContinuityGuarantee.CHECKPOINT_RESTORE
     assert by_kind[ResumptionKind.JOURNAL_RESUME] is ContinuityGuarantee.REPLAY_FROM_LEDGER

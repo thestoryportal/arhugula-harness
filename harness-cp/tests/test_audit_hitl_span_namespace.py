@@ -18,7 +18,6 @@ Lands the v2.4-conformed body. Acceptance-criterion coverage:
 from __future__ import annotations
 
 from harness_core import PersonaTier
-
 from harness_cp.audit_hitl_span_namespace import (
     AUDIT_NAMESPACE_SCHEMA,
     HITL_SPAN_NAMESPACE_SCHEMA,

@@ -25,11 +25,12 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from harness_core.identity import StepID
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver import StepDispatcher
-from harness_cp.workflow_driver_types import StepID, StepKind, WorkflowStep
+from harness_cp.workflow_driver_types import StepKind, WorkflowStep
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchBindError,
     LLMDispatchPayloadShapeError,

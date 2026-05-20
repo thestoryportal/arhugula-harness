@@ -97,13 +97,17 @@ def test_retry_surface_sampling_dispositions_cardinality_two() -> None:
 
 def _parent_event():
     return next(
-        d for d in RETRY_SURFACE_SAMPLING_DISPOSITIONS if d.entity_kind is RetrySurfaceKind.PARENT_EVENT
+        d
+        for d in RETRY_SURFACE_SAMPLING_DISPOSITIONS
+        if d.entity_kind is RetrySurfaceKind.PARENT_EVENT
     )
 
 
 def _child_span():
     return next(
-        d for d in RETRY_SURFACE_SAMPLING_DISPOSITIONS if d.entity_kind is RetrySurfaceKind.CHILD_SPAN
+        d
+        for d in RETRY_SURFACE_SAMPLING_DISPOSITIONS
+        if d.entity_kind is RetrySurfaceKind.CHILD_SPAN
     )
 
 

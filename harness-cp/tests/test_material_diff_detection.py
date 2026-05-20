@@ -15,7 +15,6 @@ Acceptance-criterion coverage:
 from __future__ import annotations
 
 from harness_core import PersonaTier
-
 from harness_cp.material_diff_detection import (
     SUMMARIZATION_MODEL_TABLE,
     DiffCategory,

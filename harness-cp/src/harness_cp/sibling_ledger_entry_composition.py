@@ -56,7 +56,7 @@ class SiblingLedgerEntry(StateLedgerEntry):
     `timestamp`, `prior_event_hash`) and adds no field (acceptance #1)."""
 
 
-class F2_14_Reading_1_Rationale(BaseModel):
+class F2_14_Reading_1_Rationale(BaseModel):  # noqa: N801 — class name encodes the F2-14 Reading 1 citation ID
     """One §15.3 missing-F2-field rationale row (F2-14 Reading 1 closure)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)

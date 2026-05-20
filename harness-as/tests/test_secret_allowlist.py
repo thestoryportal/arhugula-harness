@@ -52,14 +52,22 @@ def test_required_secrets_missing_field_treated_as_empty() -> None:
 def test_check_allowlist_permitted_when_in_both_sets() -> None:
     """Acceptance #3 — PERMITTED iff (name, scope) is in tool ∩ operator override."""
     decision = check_secret_allowlist(
-        _tool(_ENTRY), "ANTHROPIC_API_KEY", _SCOPE, frozenset({_ENTRY})
+        _tool(_ENTRY),
+        "ANTHROPIC_API_KEY",
+        _SCOPE,
+        frozenset({_ENTRY}),  # pyright: ignore[reportUnhashable]  # Pydantic frozen=True → hashable
     )
     assert decision is AllowlistDecision.PERMITTED
 
 
 def test_check_allowlist_denied_when_not_in_tool() -> None:
     """Acceptance #3 — denial identifies the tool allowlist when the request is absent there."""
-    decision = check_secret_allowlist(_tool(), "ANTHROPIC_API_KEY", _SCOPE, frozenset({_ENTRY}))
+    decision = check_secret_allowlist(
+        _tool(),
+        "ANTHROPIC_API_KEY",
+        _SCOPE,
+        frozenset({_ENTRY}),  # pyright: ignore[reportUnhashable]  # Pydantic frozen=True → hashable
+    )
     assert decision is AllowlistDecision.DENIED_NOT_IN_TOOL_ALLOWLIST
 
 
@@ -74,7 +82,10 @@ def test_required_secrets_orthogonal_to_sandbox_tier() -> None:
     params = list(inspect.signature(check_secret_allowlist).parameters)
     assert "tier" not in params
     decision = check_secret_allowlist(
-        _tool(_ENTRY), "ANTHROPIC_API_KEY", _SCOPE, frozenset({_ENTRY})
+        _tool(_ENTRY),
+        "ANTHROPIC_API_KEY",
+        _SCOPE,
+        frozenset({_ENTRY}),  # pyright: ignore[reportUnhashable]  # Pydantic frozen=True → hashable
     )
     assert isinstance(decision, AllowlistDecision)
     assert not isinstance(decision, SandboxTier)

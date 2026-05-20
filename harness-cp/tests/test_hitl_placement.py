@@ -17,7 +17,6 @@ import inspect
 
 import pytest
 from harness_core.identity import EntryID
-
 from harness_cp.handoff_context import (
     ActionKind,
     HandoffContext,

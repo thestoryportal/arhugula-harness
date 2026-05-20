@@ -15,7 +15,6 @@ U-CP-27): `test_step_4_operator_preference_filter`. Re-added at U-CP-27 landing.
 from __future__ import annotations
 
 import pytest
-
 from harness_core import DeploymentSurface, PersonaTier, WorkloadClass
 from harness_cp.engine_class import EngineClass
 from harness_cp.engine_class_candidate import ENGINE_CLASS_CANDIDATES
@@ -178,16 +177,16 @@ def test_result_frozen() -> None:
 
 
 def _handoff_context():
+    from harness_core import ActionID
+    from harness_cp.cp_shared_types import ActorIdentity
     from harness_cp.handoff_context import (
+        ActionKind,
         HandoffContext,
         LedgerEntryRef,
         ProposedAction,
         RetryHistory,
         StateSummary,
     )
-    from harness_cp.handoff_context import ActionKind
-    from harness_core import ActionID
-    from harness_cp.cp_shared_types import ActorIdentity
     from harness_is.state_ledger_entry_schema import Identifier
 
     return HandoffContext(

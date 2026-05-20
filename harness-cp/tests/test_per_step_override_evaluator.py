@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from harness_as import GateLevel
 from harness_core import PersonaTier, StepID, WorkloadClass
-
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,

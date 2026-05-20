@@ -19,8 +19,6 @@ Acceptance-criterion coverage:
 from __future__ import annotations
 
 from harness_core.identity import ActionID
-from harness_is.state_ledger_entry_schema import Identifier
-
 from harness_cp.cp_shared_types import ActorIdentity
 from harness_cp.handoff_context import (
     ActionKind,
@@ -34,6 +32,7 @@ from harness_cp.handoff_context import (
     RetryHistory,
     StateSummary,
 )
+from harness_is.state_ledger_entry_schema import Identifier
 
 
 def _ledger_ref() -> LedgerEntryRef:

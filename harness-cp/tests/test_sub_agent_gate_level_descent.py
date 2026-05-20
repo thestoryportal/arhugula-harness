@@ -16,7 +16,6 @@ from __future__ import annotations
 import pytest
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_core import ActionID
-
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry
 from harness_cp.sub_agent_brief import (

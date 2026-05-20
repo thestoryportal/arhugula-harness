@@ -14,9 +14,8 @@ Lands the v2.9-revised body. Acceptance-criterion coverage:
 from __future__ import annotations
 
 import pytest
-from harness_core import EntryID, PersonaTier
-from harness_is.state_ledger_entry_schema import Identifier
-
+from harness_core import ActionID, EntryID, PersonaTier
+from harness_cp.cp_shared_types import ActorIdentity
 from harness_cp.handoff_context import (
     ActionKind,
     HandoffContext,
@@ -25,8 +24,6 @@ from harness_cp.handoff_context import (
     RetryHistory,
     StateSummary,
 )
-from harness_cp.cp_shared_types import ActorIdentity
-from harness_core import ActionID
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.hitl_timeout_degradation import (
     TIMEOUT_DEGRADATION_TABLE,
@@ -38,6 +35,7 @@ from harness_cp.hitl_timeout_degradation import (
     on_hitl_timeout,
 )
 from harness_cp.workload_binding_engine_class_selection import HITLInvocation
+from harness_is.state_ledger_entry_schema import Identifier
 
 
 def _invocation() -> HITLInvocation:
