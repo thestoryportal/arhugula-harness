@@ -321,3 +321,152 @@ def test_d6_materialize_outside_async_context_raises() -> None:
             _RecordingAsyncDispatcher(output={}, invocations=[]),
             result_timeout_seconds=5.0,
         )
+
+
+# ===========================================================================
+# Wiring-arc integration tests (D7-D8) — exercise the real dispatcher chain
+# through the facade. Per the wiring-arc owed list at
+# `.harness/class_1_tension_u_rt_59_async_sync_step_dispatcher.md`.
+# ===========================================================================
+
+
+@dataclass
+class _LoopAffinityCapturingDispatcher:
+    """Async dispatcher that asserts loop-affinity at every ``dispatch`` call.
+
+    Captures ``asyncio.get_running_loop()`` at construction time and records
+    the loop observed at each ``dispatch`` call. Asserts equality. This
+    catches the cross-loop pathology *for the dispatcher chain we own*
+    without needing a live HTTP server — proxy for httpx's loop-bound
+    anyio.Semaphore but observable directly.
+
+    Mirrors what a real ``RuntimeLLMDispatcher`` + provider-client chain
+    would experience: construction at stage 5 on the outer loop; subsequent
+    ``dispatch`` calls must observe the SAME loop, regardless of which
+    thread invoked them.
+    """
+
+    construction_loop: asyncio.AbstractEventLoop
+    output: Mapping[str, Any]
+    dispatch_loop_observations: list[asyncio.AbstractEventLoop]
+
+    async def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
+    ) -> Mapping[str, Any]:
+        observed = asyncio.get_running_loop()
+        self.dispatch_loop_observations.append(observed)
+        assert observed is self.construction_loop, (
+            "dispatcher running on a different loop than its construction loop "
+            f"(observed={observed!r}, construction={self.construction_loop!r})"
+        )
+        # Exercise a real `asyncio.sleep` — the production wrapper's default
+        # sleep_fn uses asyncio.sleep; this verifies asyncio primitives run on
+        # the outer loop via run_coroutine_threadsafe end-to-end.
+        await asyncio.sleep(0)
+        return self.output
+
+
+@pytest.mark.asyncio
+async def test_d7_dispatcher_chain_loop_affinity_through_facade() -> None:
+    """D7 — full dispatcher chain through facade preserves loop affinity.
+
+    Constructs an inner dispatcher on the outer loop (capturing its loop
+    reference), wraps in ``SyncDispatcherFacade`` via the production
+    construction site (``materialize_sync_dispatcher_facade``), and drives
+    ``facade.dispatch`` from an ``asyncio.to_thread`` worker. Asserts:
+
+    1. The inner dispatcher observes the SAME loop at ``dispatch`` time as
+       at construction time (loop affinity preserved across the worker-
+       thread → outer-loop hop via ``run_coroutine_threadsafe``).
+    2. The inner's ``await asyncio.sleep(0)`` succeeds (asyncio primitives
+       driven by the outer loop via the scheduled future).
+    3. The facade returns the inner's output verbatim from the worker
+       thread.
+
+    This is the load-bearing integration assertion for the wiring-arc: any
+    loop-bound primitive in the production dispatcher chain
+    (``RuntimeLLMDispatcher`` -> ``ProviderClient`` -> httpx
+    ``ConnectionPool``) will preserve its loop affinity under the facade,
+    by the same mechanism this test verifies.
+    """
+    expected_output = {"result": "loop-affinity-preserved"}
+    outer_loop = asyncio.get_running_loop()
+    inner = _LoopAffinityCapturingDispatcher(
+        construction_loop=outer_loop,
+        output=expected_output,
+        dispatch_loop_observations=[],
+    )
+    facade = materialize_sync_dispatcher_facade(inner, result_timeout_seconds=5.0)
+
+    def _worker() -> Mapping[str, Any]:
+        # Worker thread has no running loop — assert that to lock in the
+        # invariant we are bridging away from.
+        with pytest.raises(RuntimeError):
+            asyncio.get_running_loop()
+        return facade.dispatch(_binding(), _step(), step_context=_step_context())
+
+    output = await asyncio.to_thread(_worker)
+    assert dict(output) == expected_output
+    assert len(inner.dispatch_loop_observations) == 1
+    assert inner.dispatch_loop_observations[0] is outer_loop
+
+
+@dataclass
+class _CancellingAsyncDispatcher:
+    """Async dispatcher that raises ``asyncio.CancelledError`` verbatim.
+
+    Models the path where the inner concurrent.futures.Future is cancelled
+    (or the inner coroutine itself raises CancelledError, e.g., during
+    shutdown when the outer loop's tasks are being torn down). Both paths
+    surface the same exception class at ``future.result()``.
+    """
+
+    async def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
+    ) -> Mapping[str, Any]:
+        raise asyncio.CancelledError("inner cancelled (shutdown / explicit cancel)")
+
+
+@pytest.mark.asyncio
+async def test_d8_cancelled_error_propagates_to_worker_thread() -> None:
+    """D8 — ``CancelledError`` raised on the outer loop surfaces verbatim
+    at the worker thread's ``facade.dispatch`` call.
+
+    Covers the drain-shutdown / explicit-cancel propagation contract: when
+    the inner coroutine raises (or is cancelled into raising)
+    ``asyncio.CancelledError`` on the outer loop, ``future.result()`` in
+    the worker re-raises the same exception class verbatim. The driver's
+    existing typed try/except per C-CP-25 §25.3.3.4 maps to fail-mode
+    taxonomy as before.
+
+    Documented limit (not tested here): cancellation of the outer
+    ``asyncio.to_thread`` future does NOT propagate through the facade to
+    the inner coroutine — the worker thread blocks on ``future.result()``
+    until either the inner completes naturally OR
+    ``result_timeout_seconds`` fires (covered by D4). This is the spec §11
+    invariant "in-flight step may be in inconsistent state" — applied to
+    the worker-thread layer, with ``result_timeout_seconds`` as the upper
+    bound on the leak window.
+    """
+    facade = materialize_sync_dispatcher_facade(
+        _CancellingAsyncDispatcher(), result_timeout_seconds=5.0
+    )
+
+    def _worker() -> Mapping[str, Any]:
+        return facade.dispatch(_binding(), _step(), step_context=_step_context())
+
+    # NOTE: ``concurrent.futures.Future.result()`` strips the message from a
+    # propagated ``CancelledError`` (futures layer treats cancellation as a
+    # bare class, not a message-carrying exception). Match the class identity
+    # only — the *contract* is "CancelledError propagates verbatim as a
+    # class", not "the exception message survives the wire".
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.to_thread(_worker)

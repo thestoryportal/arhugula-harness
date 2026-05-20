@@ -62,9 +62,12 @@ def test_registry_lookup_returns_bound_dispatcher() -> None:
 def test_registry_lookup_unbound_raises_step_kind_dispatcher_not_bound_error() -> None:
     """AC #1: lookup of an unbound kind raises StepKindDispatcherNotBoundError.
 
-    v1.6 MVP binds only SUB_AGENT_DISPATCH per the Class 1 fork on
-    INFERENCE_STEP wiring; lookup of INFERENCE_STEP / TOOL_STEP / HITL_STEP /
-    DECLARATIVE_STEP must raise.
+    Unit test of the registry primitive (independent of stage 5 wiring).
+    Constructs a registry with only SUB_AGENT_DISPATCH bound; verifies the
+    not-bound error path for the other 4 step kinds. Stage 5 at v1.7 binds
+    INFERENCE_STEP + SUB_AGENT_DISPATCH (per the U-RT-59 async/sync fork
+    Path B resolution); TOOL_STEP / HITL_STEP / DECLARATIVE_STEP remain
+    unbound at the production registry pending their composer arcs.
     """
     registry = StepKindDispatcherRegistry(
         dispatchers={StepKind.SUB_AGENT_DISPATCH: _stub()}

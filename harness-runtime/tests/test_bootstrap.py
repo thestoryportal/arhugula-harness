@@ -246,6 +246,54 @@ async def test_bootstrap_populates_every_required_harness_context_field(
     assert ctx.lifecycle_emitter is not None  # stage 5
 
 
+@pytest.mark.asyncio
+async def test_bootstrap_stage_5_binds_inference_and_sub_agent_dispatchers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """U-RT-59 AC #11 (v1.7 wiring): stage 5 binds both step kinds.
+
+    Verifies the post-Path-B-resolution stage 5 wiring per
+    ``.harness/class_1_tension_u_rt_59_async_sync_step_dispatcher.md``:
+
+    - ``ctx.step_dispatchers`` is a populated ``StepKindDispatcherRegistry``.
+    - ``INFERENCE_STEP`` resolves to a ``SyncDispatcherFacade`` wrapping the
+      async ``ctx.llm_dispatcher`` (the U-RT-58
+      ``RetryBreakerFallbackDispatcher`` wrapper).
+    - ``SUB_AGENT_DISPATCH`` resolves to a ``RuntimeSubAgentDispatcher``.
+    - The 3 unbound step kinds (TOOL / HITL / DECLARATIVE) raise
+      ``StepKindDispatcherNotBoundError`` on lookup per registry contract.
+    """
+    from harness_cp.workflow_driver_types import StepKind
+    from harness_runtime.lifecycle.step_dispatchers import (
+        StepKindDispatcherNotBoundError,
+    )
+    from harness_runtime.lifecycle.sub_agent_dispatch import (
+        RuntimeSubAgentDispatcher,
+    )
+    from harness_runtime.lifecycle.sync_dispatcher_facade import (
+        SyncDispatcherFacade,
+    )
+
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+    ctx = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
+
+    assert ctx.step_dispatchers is not None
+    inference_dispatcher = ctx.step_dispatchers.lookup(StepKind.INFERENCE_STEP)
+    assert isinstance(inference_dispatcher, SyncDispatcherFacade)
+    # The facade wraps ctx.llm_dispatcher and captures the bootstrap loop.
+    assert inference_dispatcher.inner is ctx.llm_dispatcher
+    assert inference_dispatcher.result_timeout_seconds == ctx.config.drain_timeout_seconds
+
+    sub_agent_dispatcher = ctx.step_dispatchers.lookup(StepKind.SUB_AGENT_DISPATCH)
+    assert isinstance(sub_agent_dispatcher, RuntimeSubAgentDispatcher)
+
+    for unbound in (StepKind.TOOL_STEP, StepKind.HITL_STEP, StepKind.DECLARATIVE_STEP):
+        with pytest.raises(StepKindDispatcherNotBoundError):
+            ctx.step_dispatchers.lookup(unbound)
+
+
 # ---------------------------------------------------------------------------
 # AC #3 — Each stage emits exactly one lifecycle event (9 total).
 # ---------------------------------------------------------------------------

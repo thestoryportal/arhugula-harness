@@ -39,6 +39,9 @@ from harness_runtime.lifecycle.retry_breaker_fallback import (
 )
 from harness_runtime.lifecycle.step_dispatchers import StepKindDispatcherRegistry
 from harness_runtime.lifecycle.sub_agent_dispatch import RuntimeSubAgentDispatcher
+from harness_runtime.lifecycle.sync_dispatcher_facade import (
+    materialize_sync_dispatcher_facade,
+)
 from harness_runtime.lifecycle.topology_dispatcher import materialize_topology_dispatcher_stage
 from harness_runtime.types import HarnessContext, RuntimeConfig
 
@@ -84,9 +87,7 @@ async def execute(
     # `ctx.tracer_provider` is typed ``object`` per C-RT-04 (the spec
     # defers OTel-SDK type adoption); cast at this site to the
     # composer's structural shape.
-    bare_dispatcher = materialize_llm_dispatcher_stage(
-        providers, cast(Any, tracer_provider)
-    )
+    bare_dispatcher = materialize_llm_dispatcher_stage(providers, cast(Any, tracer_provider))
 
     # U-RT-58 (C-RT-16 §14.6 D6): rebind ``ctx.llm_dispatcher`` from the
     # bare ``RuntimeLLMDispatcher`` to the ``RetryBreakerFallbackDispatcher``
@@ -120,12 +121,20 @@ async def execute(
     # new HarnessContext fields at v1.6 (`sub_agent_dispatcher`,
     # `step_dispatchers`); both bound here.
     #
-    # v1.6 MVP binds only `SUB_AGENT_DISPATCH` in the registry per the
-    # Class 1 fork on U-RT-58 wrapper async/sync mismatch (the async
-    # `llm_dispatcher.dispatch` does not compose with the sync driver
-    # call site as a registry binding). `INFERENCE_STEP` binding deferred
-    # to follow-on arc. Tool / HITL / validator step kinds remain unbound
-    # per spec §14.7 (follow-on composer arcs).
+    # v1.7 wiring lifts the v1.6 MVP INFERENCE_STEP carve-out per the Path B
+    # resolution of the U-RT-59 async/sync StepDispatcher Class 1 fork
+    # (`.harness/class_1_tension_u_rt_59_async_sync_step_dispatcher.md`):
+    # `ctx.llm_dispatcher` (the U-RT-58 `RetryBreakerFallbackDispatcher`
+    # wrapper) is async; the CP driver's `StepDispatcher` Protocol is sync;
+    # the registry binds the wrapper through a `SyncDispatcherFacade` that
+    # captures this loop and schedules coroutines back via
+    # `asyncio.run_coroutine_threadsafe(...).result(timeout=...)` from the
+    # worker thread that runs `execute_workflow` per api.py:399. Stage 5 runs
+    # in an `async def` awaited from `await run_bootstrap(...)` at
+    # api.py:349 — the running loop here IS the loop that hosts the
+    # subsequent `asyncio.to_thread`, so `materialize_sync_dispatcher_facade`
+    # captures the correct loop. Tool / HITL / validator step kinds remain
+    # unbound per spec §14.7 (follow-on composer arcs).
     #
     # Child workflow runner closes over `ctx` (the _MutableHarnessContext);
     # at runtime invocation it reads `ctx.step_dispatchers` (set below) +
@@ -142,6 +151,25 @@ async def execute(
     )
     ctx.sub_agent_dispatcher = sub_agent_dispatcher
 
+    # INFERENCE_STEP binding: wrap the async `ctx.llm_dispatcher` through
+    # `SyncDispatcherFacade` so it satisfies the sync `StepDispatcher`
+    # Protocol the CP driver consumes. Result timeout reuses
+    # `config.drain_timeout_seconds` as the worker-thread blocking bound;
+    # this conflates per-step bound with whole-workflow drain bound —
+    # tracked at Class 3 drift item 7 for the future
+    # `step_dispatch_timeout_seconds` config split. The facade is
+    # constructed here (stage 5, on the outer loop) so the captured loop
+    # is the api.py outer loop that hosts the eventual
+    # `asyncio.to_thread(execute_workflow, ...)` per the
+    # loop-capture-timing invariant documented at the facade module.
+    inference_step_dispatcher = materialize_sync_dispatcher_facade(
+        cast(Any, ctx.llm_dispatcher),
+        result_timeout_seconds=config.drain_timeout_seconds,
+    )
+
     ctx.step_dispatchers = StepKindDispatcherRegistry(
-        dispatchers={StepKind.SUB_AGENT_DISPATCH: sub_agent_dispatcher},
+        dispatchers={
+            StepKind.INFERENCE_STEP: inference_step_dispatcher,
+            StepKind.SUB_AGENT_DISPATCH: sub_agent_dispatcher,
+        },
     )
