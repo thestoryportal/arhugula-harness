@@ -475,23 +475,39 @@ name = "harness-runtime"
 version = "0.0.0"
 source = { editable = "harness-runtime" }
 dependencies = [
+    { name = "anthropic" },
     { name = "harness-as" },
     { name = "harness-core" },
     { name = "harness-cp" },
     { name = "harness-cxa" },
     { name = "harness-is" },
     { name = "harness-od" },
+    { name = "keyring" },
+    { name = "mcp" },
+    { name = "ollama" },
+    { name = "openai" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp" },
+    { name = "opentelemetry-sdk" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "anthropic", specifier = ">=0.45" },
     { name = "harness-as", editable = "harness-as" },
     { name = "harness-core", editable = "harness-core" },
     { name = "harness-cp", editable = "harness-cp" },
     { name = "harness-cxa", editable = "harness-cxa" },
     { name = "harness-is", editable = "harness-is" },
     { name = "harness-od", editable = "harness-od" },
+    { name = "keyring", specifier = ">=25.5" },
+    { name = "mcp", specifier = ">=1.2" },
+    { name = "ollama", specifier = ">=0.4" },
+    { name = "openai", specifier = ">=1.60" },
+    { name = "opentelemetry-api", specifier = ">=1.30" },
+    { name = "opentelemetry-exporter-otlp", specifier = ">=1.30" },
+    { name = "opentelemetry-sdk", specifier = ">=1.30" },
     { name = "pydantic", specifier = ">=2.10" },
 ]
 

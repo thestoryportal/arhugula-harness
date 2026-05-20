@@ -26,7 +26,10 @@ What this module ships at L0:
 - 13 `Protocol` stubs for the Class 2 unresolved axis types.
 - 5 `Protocol` stubs for the spec-acknowledged runtime-defined types.
 - 1 `ProviderClient` `Protocol` (C-RT-05; concretized at U-RT-17/18/19/20).
-- 3 NewType identity aliases (`SkillID`, `ToolName`, `ClientName`).
+- 1 local `ToolName` NewType. `SkillID` + `ClientName` were promoted to
+  `harness_core.identity` at Session 5; `ToolName` stays local pending a
+  cross-axis naming-convention pass (see CP precedent at
+  `harness_cp.hitl_as_tool_call_rewriting:38` `type ToolName = str`).
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ from typing import NewType, Protocol, runtime_checkable
 # Concrete axis-type imports (the 6 names that resolve at HEAD).
 # ----------------------------------------------------------------------------
 from harness_as.tool_contract import ToolContract
+from harness_core import ClientName, SkillID
 from harness_core.deployment_surface import DeploymentSurface
 from harness_cp.cross_family_fallback_chain import FallbackChain
 from harness_cp.routing_manifest_residence import RoutingManifest
@@ -150,11 +154,15 @@ class StageLifecycleHook(Protocol):
 
 
 # ----------------------------------------------------------------------------
-# Identity NewTypes (local; candidate sideband fix to harness_core.identity).
+# Identity NewTypes — local-only.
+#
+# `SkillID` and `ClientName` are promoted to `harness_core.identity` and
+# imported above. `ToolName` stays local: `harness_cp.hitl_as_tool_call_
+# rewriting` already carries `type ToolName = str` with documented "future
+# cross-axis decision" rationale; promoting here would force a concurrent CP
+# refactor + a cross-axis naming-convention pass. Deferred to that pass.
 # ----------------------------------------------------------------------------
-SkillID = NewType("SkillID", str)
 ToolName = NewType("ToolName", str)
-ClientName = NewType("ClientName", str)
 
 
 # ----------------------------------------------------------------------------

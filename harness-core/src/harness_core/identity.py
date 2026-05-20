@@ -61,3 +61,28 @@ ReferenceToUnit = NewType("ReferenceToUnit", str)
 
 Not traced to a spec/ADR section; a carrier-convenience newtype.
 """
+
+# --- runtime-axis aliases (Phase 2 Session 5 promotion, 2026-05-19) ----------
+#
+# Promoted from `harness_runtime.types` to keep the cross-cutting identity
+# surface in one module. Consumed at `HarnessContext.skills` and
+# `HarnessContext.mcp_clients` per C-RT-04. `ToolName` is NOT promoted:
+# `harness_cp` already carries a local `type ToolName = str` alias with
+# documented "future cross-axis decision" rationale at
+# `harness-cp/src/harness_cp/hitl_as_tool_call_rewriting.py:38`. Promoting
+# `ToolName` would require a concurrent CP refactor + a cross-axis
+# naming-convention pass; deferred to that pass.
+
+SkillID = NewType("SkillID", str)
+"""Runtime-axis — identifier for a loaded skill (C-RT-04 `skills` field).
+
+Not traced to a spec/ADR section; a carrier-convenience newtype consumed at
+`HarnessContext.skills: dict[SkillID, Skill]`.
+"""
+
+ClientName = NewType("ClientName", str)
+"""Runtime-axis — identifier for a connected MCP client (C-RT-04 `mcp_clients`).
+
+Not traced to a spec/ADR section; a carrier-convenience newtype consumed at
+`HarnessContext.mcp_clients: dict[ClientName, MCPClient]`.
+"""

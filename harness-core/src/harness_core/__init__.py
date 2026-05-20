@@ -12,6 +12,11 @@ Members:
 - `AttributeValueType`, `Cardinality` — U-CP-00b schema-attribute enums,
   re-homed here per the U-AS-31 Class 1 fork resolution (cross-axis: CP + AS).
 - The nine identity-alias `str`-newtypes — U-CORE-01 identity module.
+- `SkillID`, `ClientName` — runtime-axis identity newtypes promoted at
+  Phase 2 Session 5 (2026-05-19) from `harness_runtime.types`; consumed at
+  `HarnessContext.skills` / `HarnessContext.mcp_clients` (C-RT-04). The
+  parallel `ToolName` newtype is intentionally NOT promoted — see
+  `identity.py` for the CP-precedent rationale.
 """
 
 from __future__ import annotations
@@ -19,9 +24,11 @@ from __future__ import annotations
 from harness_core.deployment_surface import DeploymentSurface
 from harness_core.identity import (
     ActionID,
+    ClientName,
     ContractID,
     EntryID,
     ReferenceToUnit,
+    SkillID,
     StageID,
     StepID,
     ThreadID,
@@ -37,11 +44,13 @@ __all__ = [
     "ActionID",
     "AttributeValueType",
     "Cardinality",
+    "ClientName",
     "ContractID",
     "DeploymentSurface",
     "EntryID",
     "PersonaTier",
     "ReferenceToUnit",
+    "SkillID",
     "StageID",
     "StepID",
     "ThreadID",

@@ -85,6 +85,10 @@ docstring-code-format = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# `importlib` mode prevents the `ModuleNotFoundError: No module named 'tests.X'`
+# collision that arises when multiple workspace members each carry a `tests/`
+# package with `__init__.py`. Standard fix per the pytest-importmode docs.
+addopts = "--import-mode=importlib"
 testpaths = [
     "harness-core/tests",
     "harness-is/tests",

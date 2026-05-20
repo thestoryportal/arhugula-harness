@@ -17,17 +17,29 @@ version = "0.0.0"
 description = "H_T composition root — multi-LLM agent harness runtime"
 requires-python = ">=3.12"
 dependencies = [
+    # Workspace axis libraries.
     "harness-core",
     "harness-is",
     "harness-as",
     "harness-cp",
     "harness-od",
     "harness-cxa",
+    # Schema layer.
     "pydantic>=2.10",
-    # Provider SDKs + MCP + keyring + OTel are declared at the workspace root
-    # pyproject.toml and inherited via the shared .venv. Per-axis re-declaration
-    # is deferred to L1 (U-RT-04..U-RT-08) and L3–L4 (U-RT-13..U-RT-20) where
-    # the runtime modules actually import them.
+    # Multi-LLM provider SDKs (ADR-F1 v1.2; NOT LiteLLM). Construction lands
+    # at L4 (U-RT-17..U-RT-20); declared here per the workspace convention
+    # (root pyproject "owning axis packages re-declare; uv dedupes").
+    "anthropic>=0.45",
+    "openai>=1.60",
+    "ollama>=0.4",
+    # MCP host + client (FastMCP). Host startup lands at U-RT-15.
+    "mcp>=1.2",
+    # OS keyring (ADR-F5 v1.1). Resolver driver lands at U-RT-06.
+    "keyring>=25.5",
+    # OTel — TracerProvider + BSP + OTLP exporter lifecycle at L6 (U-RT-27/28/29).
+    "opentelemetry-api>=1.30",
+    "opentelemetry-sdk>=1.30",
+    "opentelemetry-exporter-otlp>=1.30",
 ]
 
 [project.scripts]
