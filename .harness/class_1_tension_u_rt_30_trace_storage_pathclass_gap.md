@@ -1,6 +1,15 @@
 # Class 1 Tension — U-RT-30 trace-storage `PathClass` gap
 
-**Status:** OPEN — operator-decision pending; partial-land applied at U-RT-30.
+**Status:** RESOLVED 2026-05-20 — Path B applied (runtime C-RT-07 amended to acknowledge sqlite trace-storage as OD-internal, not via IS PATH_CLASS_REGISTRY).
+
+**Resolution commit:** `<TBD>` on `main` — `Spec_Harness_Runtime_v1.md` §7 C-RT-07 invariants updated to remove the `PathResolver / PATH_CLASS_REGISTRY` claim. AC #2 of U-RT-30 (sqlite path resolves via IS registry) remains STRUCK per the partial-land; this is now the formalized closure rather than a pending decision.
+
+The Track A in-memory store satisfies the spec floor (`closure_invariant = FRESH_ON_RESTART_OPTIONAL_PERSISTENCE_BETWEEN_RESTARTS`). Future on-disk persistence resolves via OD-internal path semantics (NOT a new IS PathClass member). The X-AL-3 architectural-extension concern that motivated the fork is honored.
+
+---
+
+## Original tension (preserved for provenance)
+
 
 **Filed at:** 2026-05-19 (L6 stage 4 OD observability execution)
 

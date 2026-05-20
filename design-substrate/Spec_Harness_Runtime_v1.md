@@ -441,15 +441,15 @@ OD spec C-OD-20 §20.1 defines the collector placement matrix; landed `harness_o
 
 **Invariants.**
 
-- Daemon lifecycle is strictly contained within harness process lifecycle. No collector survives harness shutdown; no collector persists across runs (sqlite file persists; daemon does not).
+- Daemon lifecycle is strictly contained within harness process lifecycle. No collector survives harness shutdown; no collector persists across runs (sqlite file persists when on-disk persistence is configured; daemon does not).
 - Collector binding at `local_first_otlp_collector.bind_in_process_collector(...)` per OD spec is called once at stage 4.
-- sqlite file path resolves via `PathResolver` to a deployment-surface-appropriate location (per OD C-OD-20 §20.1 placement matrix + IS C-IS-01 §1 PATH_CLASS_REGISTRY).
+- sqlite trace-storage location is **OD-internal** per OD plan v2.6 §0.9 (`OD-internal` framing): the collector library owns the sqlite path semantics, not the IS `PATH_CLASS_REGISTRY`. The 4-value IS `PATH_CLASS_REGISTRY` (`SKILLS` / `PROMPTS` / `ROUTING_MANIFEST` / `STATE_LEDGER`) intentionally does NOT carry a trace-storage class; adding one would be an X-AL-3 architectural extension surfaced at Phase 7 execution. **At Track A** the collector store is in-memory (`closure_invariant = FRESH_ON_RESTART_OPTIONAL_PERSISTENCE_BETWEEN_RESTARTS` per OD C-OD-19 §19.2), which satisfies the spec floor without requiring a path resolver. Future on-disk persistence routes through an OD-internal path resolution (not the IS registry).
 
 **Failure-mode taxonomy.** Per C-RT-14:
 
 | Fail class | Trigger | Behavior |
 |---|---|---|
-| `RT-FAIL-COLLECTOR-PATH` (permanent) | sqlite path unwritable | Stage 4 fails; rollback stage 3a/3b/2/1/0 |
+| `RT-FAIL-COLLECTOR-PATH` (permanent) | sqlite path unwritable (when on-disk persistence configured; in-memory store at Track A bypasses) | Stage 4 fails; rollback stage 3a/3b/2/1/0 |
 | `RT-FAIL-TRANSIENT` (transient) | Daemon initial start fails (e.g., port-bind conflict if subprocess mode uses local port) | Bounded retry per supervisor policy |
 | `RT-FAIL-COLLECTOR-DEGRADED` (degraded) | Daemon crashes ≤3 times in 60s but recovers | Continue with logged degradation event |
 | `RT-FAIL-HARNESS-DEGRADED` (degraded; ongoing) | Daemon crashes >3 times in 60s | Harness continues in degraded mode; surface as ongoing degradation event in audit ledger |
