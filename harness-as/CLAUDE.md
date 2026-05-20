@@ -158,6 +158,19 @@ H_T-AS-6 (SkillFrontmatter schema) and H_T-AS-7 (Skills filesystem residence at 
 
 Full per-substitution bounded-scope + retirement criterion at Meta-Architecture §5.3. Retirement bindings: U-AS-NN landings per the criterion column.
 
+**Retirement status (post 7d second pass, 2026-05-20).** Per `.harness/phase-7d-retirement-events-batch-1.md` + v2 ledger `.harness/phase-7d-retirement-ledger-v2.md` §4 under operator-ratified runtime-only substitution-site reading:
+
+| Substitution | Status | Source |
+|---|---|---|
+| H_T-AS-1 (SandboxTier 4-tier + monotonicity) | **RETIRED** 2026-05-20 | `lifecycle/sandbox_dispatch.py` 6-provider×tier table; `handoff.py:174` monotonic-ascent; `--permission-mode` not reachable from runtime composers |
+| H_T-AS-2 (Tool contract schema) | PARTIAL | `ToolRegistry` typed surface met; `materialize_tool_registry` returns empty; `MCPHost.started=False` placeholder. Production deferred to tool-invocation runtime composer |
+| H_T-AS-4 (sandbox.* 7-attribute namespace) | STILL-BOUNDED | Library carriers exist; zero runtime references; no tool-invocation producer site |
+| H_T-AS-5 (sandbox-event idempotency-key composition) | STILL-BOUNDED | Carrier exists; zero runtime references; composes with AS-4 (retire together) |
+| H_T-AS-8 (Anthropic + MCP 7-namespace observability) | STILL-BOUNDED | Double-blocked: missing tool-invocation producer site AND `anthropic.*` slot blocked on H_T-CP-1 cascade per §6.3.1 |
+| H_T-AS-9 (substrate seam exports manifest) | RETIRED (authoring close, v1 §1) | Authoring-only |
+
+AS-axis post-batch: 2 / 6 retired (33%). 1 PARTIAL + 3 STILL-BOUNDED carried as bounded-residual gated on Phase-3+ tool-invocation runtime composer (per v2 §9.2.2).
+
 ### 4.2 AS-axis anti-leakage rules
 
 Per `Phase_7_Meta_Architecture_v1.md` §7.3:

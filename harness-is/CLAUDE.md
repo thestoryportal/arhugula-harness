@@ -134,6 +134,22 @@ Per `Phase_7_Meta_Architecture_v1.md` §5.2: **9 IS-axis substitution entries** 
 
 Full per-substitution bounded-scope + retirement criterion at Meta-Architecture §5.2. Retirement bindings: U-IS-NN landings per the criterion column.
 
+**Retirement status (post 7d second pass, 2026-05-20).** Per `.harness/phase-7d-retirement-events-batch-1.md` + v2 ledger `.harness/phase-7d-retirement-ledger-v2.md` §3 under operator-ratified runtime-only substitution-site reading:
+
+| Substitution | Status | Source |
+|---|---|---|
+| H_T-IS-1 (path-class registry) | **RETIRED** 2026-05-20 | `stage_1_is.py` step 1 `materialize_path_registry`; convention surface displaced |
+| H_T-IS-2 (artifact-tier registry) | STILL-BOUNDED | Typed library exists; no bootstrap composer invokes it |
+| H_T-IS-4 (atomic deploy primitive) | STILL-BOUNDED | H_T owns verification primitive only; deploy act still operator `Bash(git *)` |
+| H_T-IS-5 (state-ledger entry shape) | **RETIRED** 2026-05-20 | `lifecycle/state_ledger.py` driver-invoked at `workflow_driver.py:397-417` |
+| H_T-IS-6 (hash-chain integrity) | **RETIRED** 2026-05-20 | `entry_hash.py` in-process `hashlib`; chain-verify at stage_1_is reattach |
+| H_T-IS-7 (F2 read/write contract pair) | **RETIRED** 2026-05-20 | `state_ledger_write` + `state_ledger_read` both materialized at bootstrap |
+| H_T-IS-8 (shadow-Git checkpoint) | **RETIRED** 2026-05-20 | `shadow_git_checkpoint.py:91` manifest-driven cadence gate |
+| H_T-IS-9 (worktree isolation) | **RETIRED** 2026-05-20 | `worktree_isolation.py` manifest-driven opt-in + concurrency-cap |
+| H_T-IS-10 (substrate seam exports manifest) | RETIRED (authoring close, v1 §1) | Authoring-only |
+
+IS-axis post-batch: 7 / 9 retired (78%). Remaining 2 STILL-BOUNDED carried as bounded-residual per v2 §9.4.
+
 ### 4.2 IS-axis anti-leakage rules
 
 Per `Phase_7_Meta_Architecture_v1.md` §7.2:
