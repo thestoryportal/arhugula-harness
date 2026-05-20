@@ -50,13 +50,28 @@ __all__ = [
 ENV_PREFIX = "HARNESS_"
 
 
+def _parse_bool(raw: str) -> bool:
+    """Coerce an env-var string to bool.
+
+    `bool("False")` is `True` in Python; we need an explicit parser.
+    Accepts the common truthy spellings; everything else is False.
+    """
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 # Top-level scalar field map: field name -> (env var key, coercion callable).
 # Sub-config fields are not in this map at L1 entry; they come in via kwargs.
+#
+# When adding a new scalar field to RuntimeConfig, add it here too — the
+# loader does NOT auto-iterate model_fields. Without an entry, the env-var
+# precedence path silently ignores the field.
 _ENV_SCALAR_FIELDS: dict[str, tuple[str, Any]] = {
     "deployment_surface": (f"{ENV_PREFIX}DEPLOYMENT_SURFACE", DeploymentSurface),
     "repository_root": (f"{ENV_PREFIX}REPOSITORY_ROOT", Path),
     "default_topology": (f"{ENV_PREFIX}DEFAULT_TOPOLOGY", TopologyPattern),
     "tenant_id": (f"{ENV_PREFIX}TENANT_ID", str),
+    "ollama_host": (f"{ENV_PREFIX}OLLAMA_HOST", str),
+    "ollama_optional": (f"{ENV_PREFIX}OLLAMA_OPTIONAL", _parse_bool),
 }
 
 

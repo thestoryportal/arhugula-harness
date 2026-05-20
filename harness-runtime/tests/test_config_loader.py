@@ -129,6 +129,89 @@ def test_three_source_precedence_fixture() -> None:
     assert cfg.mcp_clients == []
 
 
+def test_env_supplies_ollama_fields() -> None:
+    """`HARNESS_OLLAMA_HOST` + `HARNESS_OLLAMA_OPTIONAL` reach RuntimeConfig.
+
+    Pinned because the loader uses an explicit `_ENV_SCALAR_FIELDS` map (not
+    iteration over `model_fields`); adding fields to `RuntimeConfig` without
+    updating the map silently drops the env-var precedence path.
+    """
+    env = {
+        f"{ENV_PREFIX}REPOSITORY_ROOT": "/tmp",
+        f"{ENV_PREFIX}DEPLOYMENT_SURFACE": "local-development",
+        f"{ENV_PREFIX}DEFAULT_TOPOLOGY": "single-threaded-linear",
+        f"{ENV_PREFIX}OLLAMA_HOST": "http://my-ollama:11434",
+        f"{ENV_PREFIX}OLLAMA_OPTIONAL": "true",
+    }
+    cfg = materialize_runtime_config(
+        env=env,
+        path_bindings=PathBindingConfig(),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+        collector=CollectorConfig(),
+    )
+    assert cfg.ollama_host == "http://my-ollama:11434"
+    assert cfg.ollama_optional is True
+
+
+def test_ollama_optional_bool_parsing() -> None:
+    """`_parse_bool` accepts the common truthy spellings; everything else is False."""
+    # The Python `bool("False") == True` trap necessitates explicit parsing.
+    for truthy in ("1", "true", "TRUE", "Yes", "on", "  true  "):
+        env = {
+            f"{ENV_PREFIX}REPOSITORY_ROOT": "/tmp",
+            f"{ENV_PREFIX}DEPLOYMENT_SURFACE": "local-development",
+            f"{ENV_PREFIX}DEFAULT_TOPOLOGY": "single-threaded-linear",
+            f"{ENV_PREFIX}OLLAMA_OPTIONAL": truthy,
+        }
+        cfg = materialize_runtime_config(
+            env=env,
+            path_bindings=PathBindingConfig(),
+            provider_secrets=ProviderSecretsConfig(),
+            otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+            collector=CollectorConfig(),
+        )
+        assert cfg.ollama_optional is True, f"truthy {truthy!r} should parse True"
+
+    for falsy in ("0", "false", "False", "no", "off", "", "anything-else"):
+        env = {
+            f"{ENV_PREFIX}REPOSITORY_ROOT": "/tmp",
+            f"{ENV_PREFIX}DEPLOYMENT_SURFACE": "local-development",
+            f"{ENV_PREFIX}DEFAULT_TOPOLOGY": "single-threaded-linear",
+            f"{ENV_PREFIX}OLLAMA_OPTIONAL": falsy,
+        }
+        cfg = materialize_runtime_config(
+            env=env,
+            path_bindings=PathBindingConfig(),
+            provider_secrets=ProviderSecretsConfig(),
+            otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+            collector=CollectorConfig(),
+        )
+        assert cfg.ollama_optional is False, f"falsy {falsy!r} should parse False"
+
+
+def test_kwargs_override_env_for_ollama_fields() -> None:
+    """`ollama_host` / `ollama_optional` kwargs win over env per the standard precedence."""
+    env = {
+        f"{ENV_PREFIX}REPOSITORY_ROOT": "/tmp",
+        f"{ENV_PREFIX}DEPLOYMENT_SURFACE": "local-development",
+        f"{ENV_PREFIX}DEFAULT_TOPOLOGY": "single-threaded-linear",
+        f"{ENV_PREFIX}OLLAMA_HOST": "http://env-ollama:1",
+        f"{ENV_PREFIX}OLLAMA_OPTIONAL": "true",
+    }
+    cfg = materialize_runtime_config(
+        env=env,
+        ollama_host="http://kwarg-ollama:2",
+        ollama_optional=False,
+        path_bindings=PathBindingConfig(),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+        collector=CollectorConfig(),
+    )
+    assert cfg.ollama_host == "http://kwarg-ollama:2"
+    assert cfg.ollama_optional is False
+
+
 def test_missing_required_raises_validation_error() -> None:
     """Required-field absence from all three precedence levels raises typed error.
 

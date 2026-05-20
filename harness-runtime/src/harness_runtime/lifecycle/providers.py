@@ -60,6 +60,7 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from anthropic import AsyncAnthropic
+from harness_cp.engine_class import EngineClass
 from harness_cp.engine_class_candidate import ENGINE_CLASS_CANDIDATES
 from ollama import AsyncClient as AsyncOllamaClient
 from openai import AsyncOpenAI
@@ -692,6 +693,9 @@ async def materialize_provider_clients_stage(
     except ProviderTransientError as transient_exc:
         if config.ollama_optional:
             # Surface degraded; continue with 2-provider context.
+            # Unwrap to `transient_exc.cause` (e.g., ConnectionError) so the
+            # warning identifies the underlying network failure, not the
+            # ProviderTransientError wrapper that's an internal carry.
             warnings.warn(
                 ProviderDegradedWarning("ollama", transient_exc.cause),
                 stacklevel=2,
@@ -775,11 +779,10 @@ class ProviderCapabilityBindings:
     """
 
     bindings: Mapping[str, ProviderCapabilityBinding]
-    engine_class_candidate_set: frozenset[object]
-    """The deployment-surface's admissible `EngineClass` values
-    (`frozenset[harness_cp.engine_class.EngineClass]`). Typed as
-    `frozenset[object]` here to dodge the import-cycle risk; downstream
-    L5 consumers cast back to `frozenset[EngineClass]` when needed."""
+    engine_class_candidate_set: frozenset[EngineClass]
+    """The deployment-surface's admissible `EngineClass` values per
+    `harness_cp.engine_class_candidate.ENGINE_CLASS_CANDIDATES`. L5 routing
+    consumers pull this directly — no cast needed."""
 
 
 def materialize_capability_bindings(
