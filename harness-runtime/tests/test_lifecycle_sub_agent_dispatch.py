@@ -76,7 +76,6 @@ from harness_runtime.lifecycle.sub_agent_dispatch import (
     SubAgentChildFailedError,
     SubAgentDispatchPayload,
     SubAgentDispatchPayloadShapeError,
-    SubAgentDispatchTopologyInadmissibleError,
 )
 from harness_runtime.lifecycle.topology_dispatcher import RuntimeTopologyDispatcher
 from opentelemetry.sdk.trace import TracerProvider
@@ -372,23 +371,39 @@ def test_dispatch_invokes_handoff_registry_with_step_context_seeds() -> None:
     assert descent.child_gate_level == GateLevel.AUTO
 
 
-def test_topology_inadmissible_raises_typed_error_pre_span() -> None:
-    """AC #5b: inadmissible (topology, workload_class) raises pre-span."""
-    # ORCHESTRATOR_WORKERS topology + DOCUMENT_TASK workload — not in
-    # C-CP-10 §10.3 admissible set; topology_dispatcher.is_admissible returns
-    # False; composer raises pre-span (no subagent.span emitted).
-    # SINGLE_THREADED_LINEAR is not in §10.3's cross-pattern admissible cells
-    # for any workload — composer raises pre-span per the spec-literal gate.
-    bad_payload = _payload(
+def test_topology_advisory_admissibility_does_not_gate_at_v1_6_mvp() -> None:
+    """AC #5b PARTIAL (v1.6 MVP per Class 1 fork on admissibility-predicate
+    semantic mismatch — see
+    `.harness/class_1_tension_u_rt_59_topology_admissibility_predicate.md`).
+
+    Spec §14.7.2 step 4 names `is_admissible(topology, workload_class)` as
+    the gate; that predicate answers cross-pattern non-primary admissibility,
+    not absolute admissibility — every workload's primary topology returns
+    False. Operator ratified 2026-05-20: drop the strict gate; call the
+    predicate advisorially. Composer no longer raises on False; instead it
+    proceeds to span emission. The `SubAgentDispatchTopologyInadmissibleError`
+    type is preserved in the module for the future arc that may add a real
+    admissibility gate (e.g., 'primary OR cross-pattern admissible' check
+    via C-CP-11 primary-topology lookup).
+    """
+    # SINGLE_THREADED_LINEAR is NOT in §10.3 cross-pattern admissible set for
+    # any workload (it's the implicit primary for every workload). Pre-fork,
+    # this would have raised; post-fork resolution, the composer proceeds.
+    payload = _payload(
         workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
         topology=TopologyPattern.SINGLE_THREADED_LINEAR,
     )
-    dispatcher, _, exporter = _dispatcher()
-    with pytest.raises(SubAgentDispatchTopologyInadmissibleError):
-        dispatcher.dispatch(_binding(), _step(bad_payload), step_context=_step_context())
-    # Pre-span: no subagent.span emitted on inadmissibility.
+    dispatcher, runner, exporter = _dispatcher()
+    # No exception expected.
+    dispatcher.dispatch(_binding(), _step(payload), step_context=_step_context())
+    # Span IS emitted (advisory gate, not strict).
     spans = [s for s in exporter.get_finished_spans() if s.name == "subagent.span"]
-    assert spans == []
+    assert len(spans) == 1
+    # topology.pattern attribute reflects the dispatched primary topology.
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["topology.pattern"] == TopologyPattern.SINGLE_THREADED_LINEAR.value
+    # Child runner was invoked (composer didn't short-circuit).
+    assert len(runner.calls) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -557,6 +572,49 @@ def test_audit_entry_not_written_via_ctx_audit_writer_v1_6_mvp() -> None:
         "the CP→OD audit-write composition is deferred per the Class 1 fork; "
         "compose-only AC #9 partial-landing means no write-side dependency."
     )
+
+
+# ---------------------------------------------------------------------------
+# AC #7 sub-coverage residual — compose_child_workflow_runner real factory
+# ---------------------------------------------------------------------------
+#
+# AC #7's recursive child-runner verification at integration scope (real
+# `compose_child_workflow_runner` invoking `execute_workflow` with the
+# parent's `ctx.step_dispatchers` registry, real OTel parent-span-id
+# linkage between subagent.span + child's workflow.start) is a known
+# coverage gap at U-RT-59 v1.6 MVP. The Protocol contract (composer →
+# runner kwargs) is covered above via `_MockChildWorkflowRunner`; the
+# implementation-side recursion is not exercised end-to-end.
+#
+# Closure target: jointly with the resolution of
+# `.harness/class_1_tension_u_rt_59_async_sync_step_dispatcher.md`. Real
+# child-runner integration requires either (a) operator workflows binding
+# INFERENCE_STEP via the WorkflowObject.step_dispatchers override, or (b)
+# the async/sync resolution arc landing so ctx.step_dispatchers binds
+# INFERENCE_STEP at bootstrap. Path (a) is achievable today without
+# blocking on the Class 1 fork; if/when authored, add an integration test
+# here that exercises the real compose_child_workflow_runner.
+
+
+def test_compose_child_workflow_runner_factory_is_constructible() -> None:
+    """Smoke check: real `compose_child_workflow_runner(ctx)` builds a callable.
+
+    Validates the factory shape without invoking the runner (which would
+    require a fully-bootstrapped HarnessContext + ctx.step_dispatchers
+    bound; deferred per the AC #7 sub-coverage residual above).
+    """
+    from harness_runtime.lifecycle.child_workflow_runner import (
+        compose_child_workflow_runner,
+    )
+
+    # The factory is signature-stable independent of ctx validity at
+    # construction; it closes over ctx for later use. Constructing with a
+    # placeholder ctx exercises the factory + Protocol satisfaction.
+    class _CtxStub:
+        step_dispatchers: Any = None
+
+    runner = compose_child_workflow_runner(cast(Any, _CtxStub()))
+    assert callable(runner)
 
 
 # ---------------------------------------------------------------------------

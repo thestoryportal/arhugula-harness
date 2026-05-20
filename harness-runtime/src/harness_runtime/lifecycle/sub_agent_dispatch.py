@@ -370,18 +370,25 @@ class RuntimeSubAgentDispatcher:
             operator_override=None,
         )
 
-        # --- Step 4: verify topology admissibility (AC #5b) ----------------
+        # --- Step 4: topology dispatch + advisory admissibility (AC #5b partial) ---
+        # v1.6 MVP per Class 1 fork
+        # (.harness/class_1_tension_u_rt_59_topology_admissibility_predicate.md):
+        # spec §14.7.2 step 4 names `is_admissible(topology, workload_class)` as
+        # the gate. The predicate at `harness_cp.topology_pattern.is_admissible`
+        # answers C-CP-10 §10.3's CROSS-PATTERN (non-primary) admissibility,
+        # not absolute admissibility — its own docstring says "A False result
+        # here means 'not annotated as cross-pattern admissible at §10.3', not
+        # 'inadmissible outright'." The admissible set is 5 cells; every
+        # workload's primary topology returns False, including the natural
+        # child-sub-agent default SINGLE_THREADED_LINEAR. Operator ratified
+        # 2026-05-20: drop the strict gate; call the predicate advisorially
+        # for span-attribute completeness but do not raise on False. Strict
+        # admissibility gating awaits a runtime C-CP-11 primary-topology
+        # lookup (separate follow-on arc).
         topology = self.topology_dispatcher.dispatch(payload.child_manifest_entry)
-        admissible = self.topology_dispatcher.is_admissible(
+        _ = self.topology_dispatcher.is_admissible(
             topology, payload.child_manifest_entry.workload_class
-        )
-        if not admissible:
-            raise SubAgentDispatchTopologyInadmissibleError(
-                f"child manifest topology {topology.value!r} is not admissible "
-                f"for workload_class "
-                f"{payload.child_manifest_entry.workload_class.value!r} per "
-                f"C-CP-10 §10.3"
-            )
+        )  # advisory call; result not gated at v1.6 MVP
 
         # --- Step 5: open subagent.span + set attributes (AC #6) -----------
         tracer = self.tracer_provider.get_tracer(
