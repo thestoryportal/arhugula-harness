@@ -359,13 +359,19 @@ class _FakeProvider:
 
 
 class _FakeAuditWriter:
+    """`response_hash` matches the real StateLedgerEntry schema (bytes per C-IS-05).
+
+    Earlier fixture used `chain_hash=` against the (now-fixed) defect in
+    `shutdown._read_audit_head_hash`; this aligns with the real schema.
+    """
+
     def __init__(self, head_hash: str | None = "deadbeef") -> None:
         self._head = head_hash
 
     def read_all(self) -> list[object]:
         if self._head is None:
             return []
-        return [SimpleNamespace(chain_hash=self._head)]
+        return [SimpleNamespace(response_hash=bytes.fromhex(self._head))]
 
 
 class _FakeCtx:
@@ -689,6 +695,53 @@ async def test_shutdown_audit_head_none_on_empty_ledger(tmp_path: Path) -> None:
     )
     report = await shutdown(ctx)
     assert report.audit_ledger_head_hash is None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_audit_head_from_real_state_ledger_entry(tmp_path: Path) -> None:
+    """Regression test for the 2026-05-20 U-RT-46 chain_hash fix.
+
+    Earlier `_read_audit_head_hash` read `entry.chain_hash` — an attribute
+    `StateLedgerEntry` doesn't expose. Real entries have `response_hash:
+    Bytes32` per C-IS-05 / C-IS-06. The fake fixture masked this. This
+    test builds an entry with the real schema and asserts the helper
+    returns the lowercase hex of `response_hash`.
+    """
+    from harness_is.entry_hash import compute_response_hash
+    from harness_is.state_ledger_entry_schema import (
+        Actor,
+        ActorClass,
+        Identifier,
+        StateLedgerEntry,
+    )
+
+    actor = Actor(actor_class=ActorClass.AGENT, actor_id="harness-runtime")
+    # Build a draft to compute response_hash, then a real entry.
+    draft = StateLedgerEntry(
+        action_id=Identifier("action-1"),
+        idempotency_key=Identifier("idem-1"),
+        actor=actor,
+        response_hash=b"\x00" * 32,  # placeholder; recomputed below
+        timestamp=0,
+        prior_event_hash=b"\x00" * 32,
+    )
+    entry = draft.model_copy(update={"response_hash": compute_response_hash(draft)})
+
+    class _RealishAudit:
+        def read_all(self) -> list[object]:
+            return [entry]
+
+    ctx = _shutdown_ctx(
+        tmp_path,
+        tracer=_FakeTracerWithShutdown(),
+        daemon=_FakeCollectorDaemon(),
+        providers={},
+        audit=_RealishAudit(),  # type: ignore[arg-type]
+    )
+    report = await shutdown(ctx)
+
+    assert report.audit_ledger_head_hash == entry.response_hash.hex()
+    assert len(report.audit_ledger_head_hash) == 64  # SHA-256 hex
 
 
 @pytest.mark.asyncio

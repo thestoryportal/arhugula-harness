@@ -314,12 +314,42 @@ async def _close_tracer_provider(ctx: HarnessContext) -> bool:
     return True
 
 
+def _entry_head_hash(entry: object) -> str | None:
+    """Return the chain-head hash from a `StateLedgerEntry` (lowercase hex).
+
+    Per C-IS-06: the chain head = `response_hash` of the most recent entry
+    (the SHA-256 of its canonical content; each next-entry's
+    `prior_event_hash` is `compute_response_hash(prior_entry)`). The
+    `StateLedgerEntry` schema exposes `response_hash: Bytes32`; lowercase
+    hex is the documented JSON-codec form per
+    `harness_is/state_ledger_write.py` line 11.
+
+    Returns `None` if the entry doesn't expose `response_hash` (defensive
+    against duck-typed inputs at non-IS-typed call sites).
+    """
+    response_hash = getattr(entry, "response_hash", None)
+    if response_hash is None:
+        return None
+    # Bytes -> lowercase hex; str -> assume already-hex (defensive).
+    if isinstance(response_hash, (bytes, bytearray)):
+        return response_hash.hex()
+    return str(response_hash)
+
+
 def _read_audit_head_hash(ctx: HarnessContext) -> str | None:
     """Step 6 — read the audit-ledger head hash from `ctx.audit_writer.read_all()`.
 
     Returns the hex hash of the last entry, or `None` if the ledger is at
     genesis or the read fails. Non-raising — verification surface, not
     a hard gate.
+
+    **Fix vs U-RT-46 (2026-05-20):** the prior version read `chain_hash`,
+    which `StateLedgerEntry` does NOT expose. The schema field is
+    `response_hash` per C-IS-05 §5 / C-IS-06; chain-head construction at
+    C-IS-06 uses `compute_response_hash(prior_entry)`. The U-RT-46 tests
+    passed because the fake `_FakeAuditWriter.read_all` returned namespaces
+    with `chain_hash=`. Real `StateLedgerEntry` instances always returned
+    `None`. Now delegates to `_entry_head_hash`.
     """
     try:
         read_all = cast(
@@ -329,10 +359,7 @@ def _read_audit_head_hash(ctx: HarnessContext) -> str | None:
         entries = read_all()
         if not entries:
             return None
-        last = entries[-1]
-        # StateLedgerEntry exposes `chain_hash` (hex string per C-IS-06).
-        chain_hash = getattr(last, "chain_hash", None)
-        return str(chain_hash) if chain_hash is not None else None
+        return _entry_head_hash(entries[-1])
     except Exception:
         return None
 
