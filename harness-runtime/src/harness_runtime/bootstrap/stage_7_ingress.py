@@ -1,27 +1,25 @@
-"""Stage 7 INGRESS_ACCEPT — freeze `_MutableHarnessContext` + install drain handlers.
+"""Stage 7 INGRESS_ACCEPT — freeze + install drain handlers + write pidfile.
 
 Per `Spec_Harness_Runtime_v1.md` v1.1 §2 stage 7 post-conditions:
 `ctx` frozen; `harness_runtime.run` accepts a `WorkflowObject` and dispatches.
 
-Per §11 C-RT-11 (U-RT-44 landing): signal handlers installed here so that
-SIGTERM/SIGINT set `ctx.drained_flag` + the process-level drain flag. The
-spec marks stage 7 as the suggested install site (§11 "Deferred to
-implementation discretion"); this landing commits to that suggestion.
+Per §11 C-RT-11 (U-RT-44): signal handlers installed here.
+Per §13 C-RT-13 (U-RT-48): pidfile written here ("The harness writes its
+pidfile at stage 7 INGRESS_ACCEPT"). Atomic write via tmp + os.replace.
 
-`freeze()` raises `IncompleteBootstrapError` if any required field is None
-— a guard against an orchestrator or stage-implementation defect. Freeze
-runs first; signal-handler install runs second. The handlers reference
-the same `asyncio.Event` carried by the frozen `HarnessContext` (the
-builder and the frozen value share the event by-reference), so the
-post-freeze drain pathway is intact.
+Order: freeze → install signal handlers → write pidfile. The pidfile
+write is the last act of stage 7; subsequent steps in the orchestrator
+record stage 7 as completed only if all three succeed.
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 
 from harness_core.workload_class import WorkloadClass
 
+from harness_runtime.admin.pidfile import resolve_pidfile_path, write_pidfile
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.drain import install_signal_handlers
 from harness_runtime.types import RuntimeConfig
@@ -34,7 +32,8 @@ async def execute(
     config: RuntimeConfig,
     workload_class: WorkloadClass,
 ) -> None:
-    """Freeze the mutable context; install drain signal handlers."""
-    _ = config, workload_class
+    """Freeze the mutable context; install drain signal handlers; write pidfile."""
+    _ = workload_class
     ctx.freeze()
     install_signal_handlers(ctx, asyncio.get_running_loop())
+    write_pidfile(resolve_pidfile_path(config), os.getpid())

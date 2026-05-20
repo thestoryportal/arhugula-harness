@@ -62,6 +62,7 @@ import os
 import time
 import weakref
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from weakref import WeakValueDictionary
 
@@ -70,7 +71,7 @@ from pydantic import BaseModel, ConfigDict
 from harness_runtime.lifecycle.state_ledger import LedgerWriter as _ConcreteLedgerWriter
 
 if TYPE_CHECKING:
-    from harness_runtime.types import HarnessContext
+    from harness_runtime.types import HarnessContext, RuntimeConfig
 
 __all__ = [
     "AlreadyShutDown",
@@ -336,6 +337,29 @@ def _entry_head_hash(entry: object) -> str | None:
     return str(response_hash)
 
 
+def _resolve_ctx_pidfile_path(ctx: HarnessContext) -> Path | None:
+    """Resolve the pidfile path from `ctx.config` (U-RT-48).
+
+    Returns `None` if config/repository_root isn't accessible at the schema
+    level (defensive — `HarnessContext.config` is required post-bootstrap,
+    so this should not return None in production paths; the guard is for
+    test fakes that may stub `config` away).
+    """
+    try:
+        config = ctx.config  # type: ignore[attr-defined]
+    except AttributeError:
+        return None
+    if config is None:
+        return None
+
+    from harness_runtime.admin.pidfile import resolve_pidfile_path
+
+    try:
+        return resolve_pidfile_path(cast("RuntimeConfig", config))
+    except Exception:
+        return None
+
+
 def _read_audit_head_hash(ctx: HarnessContext) -> str | None:
     """Step 6 — read the audit-ledger head hash from `ctx.audit_writer.read_all()`.
 
@@ -463,6 +487,20 @@ async def shutdown(
 
     # Step 6 — audit-ledger head hash verification.
     audit_head = _read_audit_head_hash(ctx)
+
+    # Per spec §13 pidfile lifecycle ("removes it at the end of shutdown()" —
+    # U-RT-48). Done after step 6 but before caching the report so a removal
+    # failure is recorded in the same report. Idempotent — second `shutdown()`
+    # call short-circuits via the cached-report return above; the pidfile is
+    # already gone.
+    try:
+        pidfile_path = _resolve_ctx_pidfile_path(ctx)
+        if pidfile_path is not None:
+            from harness_runtime.admin.pidfile import remove_pidfile
+
+            remove_pidfile(pidfile_path)
+    except Exception:
+        failures.append("pidfile")
 
     report = ShutdownReport(
         flush=flush_report,

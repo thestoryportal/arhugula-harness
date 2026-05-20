@@ -45,10 +45,9 @@ dependencies = [
 [project.scripts]
 # Track A: admin-only stubs. Operator-facing `run` is Track B.
 # Wired by U-RT-47 (inspect) and U-RT-48 (shutdown-cli).
-# U-RT-47 activated 2026-05-20 at commit landing.
-# U-RT-48 (shutdown-cli) wired alongside when it lands.
-harness-inspect    = "harness_runtime.admin.inspect:main"     # U-RT-47
-# harness-shutdown = "harness_runtime.admin.shutdown_cli:main" # U-RT-48
+# U-RT-47 activated 2026-05-20; U-RT-48 activated 2026-05-20 at commit landing.
+harness-inspect    = "harness_runtime.admin.inspect:main"        # U-RT-47
+harness-shutdown   = "harness_runtime.admin.shutdown_cli:main"   # U-RT-48
 
 [tool.uv.sources]
 harness-core = { workspace = true }

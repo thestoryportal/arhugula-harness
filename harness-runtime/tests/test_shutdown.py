@@ -744,6 +744,61 @@ async def test_shutdown_audit_head_from_real_state_ledger_entry(tmp_path: Path) 
     assert len(report.audit_ledger_head_hash) == 64  # SHA-256 hex
 
 
+# ---------------------------------------------------------------------------
+# U-RT-48 — pidfile removal at end of shutdown().
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_shutdown_removes_pidfile(tmp_path: Path) -> None:
+    """U-RT-48: shutdown() removes the pidfile written by stage 7 per spec §13."""
+    from harness_runtime.admin.pidfile import write_pidfile
+
+    pidfile = tmp_path / ".harness/runtime.pid"
+    write_pidfile(pidfile, 12345)
+    assert pidfile.exists()
+
+    class _ConfigStub:
+        repository_root = tmp_path
+        pidfile_path = None
+
+    ctx = _shutdown_ctx(
+        tmp_path,
+        tracer=_FakeTracerWithShutdown(),
+        daemon=_FakeCollectorDaemon(),
+        providers={},
+    )
+    ctx.config = _ConfigStub()  # type: ignore[attr-defined]
+
+    report = await shutdown(ctx)
+
+    assert not pidfile.exists()
+    assert "pidfile" not in report.failures
+
+
+@pytest.mark.asyncio
+async def test_shutdown_pidfile_removal_idempotent_on_missing(
+    tmp_path: Path,
+) -> None:
+    """Removing an already-gone pidfile is a clean no-op (no failure recorded)."""
+
+    class _ConfigStub:
+        repository_root = tmp_path
+        pidfile_path = None
+
+    ctx = _shutdown_ctx(
+        tmp_path,
+        tracer=_FakeTracerWithShutdown(),
+        daemon=_FakeCollectorDaemon(),
+        providers={},
+    )
+    ctx.config = _ConfigStub()  # type: ignore[attr-defined]
+
+    # No pidfile written; shutdown should still succeed.
+    report = await shutdown(ctx)
+    assert "pidfile" not in report.failures
+
+
 @pytest.mark.asyncio
 async def test_shutdown_timed_out_when_collector_slow(tmp_path: Path) -> None:
     """Collector exhausts budget — `timed_out=True` after deadline check."""

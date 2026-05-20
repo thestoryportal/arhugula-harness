@@ -17,6 +17,7 @@ Additional coverage:
 
 from __future__ import annotations
 
+import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -208,6 +209,23 @@ async def test_bootstrap_returns_frozen_harness_context(
     ctx = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
     assert isinstance(ctx, HarnessContext)
     assert ctx.model_config["frozen"] is True
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_writes_pidfile_at_stage_7(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """U-RT-48: stage 7 INGRESS_ACCEPT writes the pidfile per spec §13."""
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+    pidfile = tmp_path / ".harness/runtime.pid"
+    assert not pidfile.exists()
+
+    await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
+
+    assert pidfile.is_file()
+    assert pidfile.read_text().strip() == str(os.getpid())
 
 
 @pytest.mark.asyncio

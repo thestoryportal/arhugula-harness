@@ -904,6 +904,16 @@ class RuntimeConfig(BaseModel):
     tenant_id: str | None = None
     """Multi-tenant separation key per OD audit-ledger. `None` = single-tenant."""
 
+    pidfile_path: Path | None = None
+    """Override for the pidfile location (spec §13 deferred-to-discretion).
+
+    `None` → `repository_root / ".harness/runtime.pid"` per
+    `harness_runtime.admin.pidfile.default_pidfile_path`. The pidfile is
+    written at stage 7 INGRESS_ACCEPT and removed at the end of
+    `shutdown()` (both U-RT-48). Read by the `harness-shutdown` CLI to
+    locate the running harness.
+    """
+
     routing_manifest: RoutingManifest = Field(
         default_factory=lambda: RoutingManifest(
             manifest_version=1,
