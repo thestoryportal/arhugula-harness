@@ -1,0 +1,230 @@
+"""U-RT-28 — BatchSpanProcessor + OTLPSpanExporter attach tests.
+
+ACs per Phase 2 Session 3 Track A atomic decomposition §L6 U-RT-28:
+  #1 spans flush on demand.
+     -> test_flush_returns_true_with_no_buffered_spans
+     -> test_flush_drives_exporter_for_emitted_span
+     -> test_processor_uses_collector_config_batch_size_and_window
+  #2 reachability matrix enforced.
+     -> test_bootstrap_in_process_placement_passes_reachability
+     -> test_bootstrap_sidecar_placement_raises_reachability_error
+     -> test_bootstrap_vendor_pipeline_placement_raises_reachability_error
+     -> test_assert_otlp_reachable_table_covers_4_sandbox_tiers (canonical check)
+
+Plus composer plumbing + invariants:
+  -> test_materialize_returns_stage_with_processor_and_exporter
+  -> test_materialize_attaches_processor_to_provider
+  -> test_materialize_default_exporter_is_otlp_grpc
+  -> test_span_processor_stage_is_frozen
+"""
+
+from __future__ import annotations
+
+from dataclasses import FrozenInstanceError
+from pathlib import Path
+
+import pytest
+from harness_as.sandbox_tier import SandboxTier
+from harness_core import DeploymentSurface
+from harness_cp.topology_pattern import TopologyPattern
+from harness_od.per_cell_collector_placement_matrix import CollectorPlacement
+from harness_od.per_sandbox_tier_otlp_reachability import (
+    PER_SANDBOX_TIER_REACHABILITY,
+)
+from harness_runtime.lifecycle.span_processor import (
+    SpanProcessorReachabilityError,
+    SpanProcessorStage,
+    materialize_span_processor_stage,
+)
+from harness_runtime.types import (
+    CollectorConfig,
+    OTelConfig,
+    PathBindingConfig,
+    ProviderSecretsConfig,
+    RuntimeConfig,
+)
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+# ---------------------------------------------------------------------------
+# Fixtures.
+# ---------------------------------------------------------------------------
+
+
+def _config(
+    tmp_path: Path,
+    *,
+    placement: CollectorPlacement = CollectorPlacement.IN_PROCESS,
+    batch_size: int = 512,
+    batch_window_seconds: int = 5,
+) -> RuntimeConfig:
+    """Build a minimal `RuntimeConfig` for U-RT-28 tests."""
+    return RuntimeConfig(
+        deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
+        repository_root=tmp_path,
+        path_bindings=PathBindingConfig(),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4317"),
+        collector=CollectorConfig(
+            placement=placement,
+            batch_size=batch_size,
+            batch_window_seconds=batch_window_seconds,
+        ),
+        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+    )
+
+
+def _provider() -> TracerProvider:
+    """Build a bare `TracerProvider` for tests (does not register globally)."""
+    return TracerProvider()
+
+
+# ---------------------------------------------------------------------------
+# AC #1 — spans flush on demand.
+# ---------------------------------------------------------------------------
+
+
+def test_flush_returns_true_with_no_buffered_spans(tmp_path: Path) -> None:
+    """A no-op `flush()` (no spans emitted) returns True within timeout."""
+    stage = materialize_span_processor_stage(
+        _config(tmp_path), _provider(), exporter=InMemorySpanExporter()
+    )
+    assert stage.flush(timeout_millis=5000) is True
+
+
+def test_flush_drives_exporter_for_emitted_span(tmp_path: Path) -> None:
+    """After emitting a span and calling flush, the exporter has received it."""
+    in_memory = InMemorySpanExporter()
+    provider = _provider()
+    stage = materialize_span_processor_stage(
+        _config(tmp_path), provider, exporter=in_memory
+    )
+    tracer = provider.get_tracer("u-rt-28-test")
+    with tracer.start_as_current_span("test-span"):
+        pass
+    assert stage.flush(timeout_millis=5000) is True
+    finished = in_memory.get_finished_spans()
+    assert len(finished) == 1
+    assert finished[0].name == "test-span"
+
+
+def test_processor_uses_collector_config_batch_size_and_window(
+    tmp_path: Path,
+) -> None:
+    """The BSP's batch size + schedule delay come from `CollectorConfig`."""
+    stage = materialize_span_processor_stage(
+        _config(tmp_path, batch_size=64, batch_window_seconds=2),
+        _provider(),
+        exporter=InMemorySpanExporter(),
+    )
+    # The OTel SDK does not expose batch-size / schedule-delay publicly on
+    # `BatchSpanProcessor` directly; the values live on the inner
+    # `_batch_processor`. Accessing the private attribute is the only way to
+    # verify the composer wired the `CollectorConfig` values into the SDK.
+    inner = stage.processor._batch_processor  # type: ignore[attr-defined]  # pyright: ignore[reportPrivateUsage]
+    assert inner._max_export_batch_size == 64  # pyright: ignore[reportPrivateUsage]
+    assert inner._schedule_delay_millis == 2_000  # pyright: ignore[reportPrivateUsage]
+
+
+# ---------------------------------------------------------------------------
+# AC #2 — reachability matrix enforced.
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_in_process_placement_passes_reachability(tmp_path: Path) -> None:
+    """`CollectorPlacement.IN_PROCESS` is reachable from the bootstrap tier
+    (TIER_1_PROCESS) per C-OD-20 §20.3 — materialize completes."""
+    stage = materialize_span_processor_stage(
+        _config(tmp_path, placement=CollectorPlacement.IN_PROCESS),
+        _provider(),
+        exporter=InMemorySpanExporter(),
+    )
+    assert isinstance(stage, SpanProcessorStage)
+
+
+def test_bootstrap_sidecar_placement_raises_reachability_error(
+    tmp_path: Path,
+) -> None:
+    """`CollectorPlacement.SIDECAR` is not reachable from the bootstrap tier
+    (TIER_1_PROCESS expects localhost-socket reachability) — raises typed."""
+    with pytest.raises(SpanProcessorReachabilityError, match=r"C-OD-20 §20\.3"):
+        materialize_span_processor_stage(
+            _config(tmp_path, placement=CollectorPlacement.SIDECAR),
+            _provider(),
+            exporter=InMemorySpanExporter(),
+        )
+
+
+def test_bootstrap_vendor_pipeline_placement_raises_reachability_error(
+    tmp_path: Path,
+) -> None:
+    """`CollectorPlacement.VENDOR_PIPELINE` is not reachable from the bootstrap
+    tier per the §20.3 matrix — raises typed."""
+    with pytest.raises(SpanProcessorReachabilityError, match=r"C-OD-20 §20\.3"):
+        materialize_span_processor_stage(
+            _config(tmp_path, placement=CollectorPlacement.VENDOR_PIPELINE),
+            _provider(),
+            exporter=InMemorySpanExporter(),
+        )
+
+
+def test_assert_otlp_reachable_table_covers_4_sandbox_tiers() -> None:
+    """The OD `PER_SANDBOX_TIER_REACHABILITY` matrix covers all 4 AS sandbox
+    tiers — the canonical source U-RT-28 enforces against."""
+    assert set(PER_SANDBOX_TIER_REACHABILITY) == set(SandboxTier)
+    assert len(PER_SANDBOX_TIER_REACHABILITY) == 4
+
+
+# ---------------------------------------------------------------------------
+# Composer plumbing + invariants.
+# ---------------------------------------------------------------------------
+
+
+def test_materialize_returns_stage_with_processor_and_exporter(
+    tmp_path: Path,
+) -> None:
+    exporter = InMemorySpanExporter()
+    stage = materialize_span_processor_stage(
+        _config(tmp_path), _provider(), exporter=exporter
+    )
+    assert isinstance(stage, SpanProcessorStage)
+    assert isinstance(stage.processor, BatchSpanProcessor)
+    assert stage.exporter is exporter
+
+
+def test_materialize_attaches_processor_to_provider(tmp_path: Path) -> None:
+    """The composer wires the BSP into the provider via `add_span_processor`.
+
+    Verified by emitting a span post-materialize and observing flush delivers
+    it — equivalent to checking the processor is part of the provider's
+    pipeline."""
+    in_memory = InMemorySpanExporter()
+    provider = _provider()
+    stage = materialize_span_processor_stage(
+        _config(tmp_path), provider, exporter=in_memory
+    )
+    tracer = provider.get_tracer("attach-test")
+    with tracer.start_as_current_span("attached"):
+        pass
+    stage.flush(timeout_millis=5000)
+    assert len(in_memory.get_finished_spans()) == 1
+
+
+def test_materialize_default_exporter_is_otlp_grpc(tmp_path: Path) -> None:
+    """When `exporter=None`, the composer constructs an `OTLPSpanExporter`
+    (gRPC) — the exporter does NOT connect at construction time."""
+    stage = materialize_span_processor_stage(_config(tmp_path), _provider())
+    assert isinstance(stage.exporter, OTLPSpanExporter)
+    # Tear down: explicit shutdown to free the gRPC channel; not strictly
+    # needed in tests but keeps the test process clean.
+    stage.processor.shutdown()
+
+
+def test_span_processor_stage_is_frozen(tmp_path: Path) -> None:
+    stage = materialize_span_processor_stage(
+        _config(tmp_path), _provider(), exporter=InMemorySpanExporter()
+    )
+    with pytest.raises(FrozenInstanceError):
+        stage.processor = BatchSpanProcessor(InMemorySpanExporter())  # type: ignore[misc]
