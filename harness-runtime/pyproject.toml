@@ -45,10 +45,9 @@ dependencies = [
 [project.scripts]
 # Track A: admin-only stubs. Operator-facing `run` is Track B.
 # Wired by U-RT-47 (inspect) and U-RT-48 (shutdown-cli).
-# Listed here at L0 so `uv sync --all-packages` registers the script entry
-# points; the target modules don't exist yet — `uv` only resolves them at
-# invocation time, not at sync.
-# harness-inspect  = "harness_runtime.admin.inspect:main"     # U-RT-47
+# U-RT-47 activated 2026-05-20 at commit landing.
+# U-RT-48 (shutdown-cli) wired alongside when it lands.
+harness-inspect    = "harness_runtime.admin.inspect:main"     # U-RT-47
 # harness-shutdown = "harness_runtime.admin.shutdown_cli:main" # U-RT-48
 
 [tool.uv.sources]
