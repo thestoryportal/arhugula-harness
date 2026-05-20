@@ -85,16 +85,35 @@ class ConcurrentRunNotSupported(Exception):  # noqa: N818 — domain-anchored na
 
 
 class WorkflowExecutionNotYetLandedError(NotImplementedError):
-    """Stub-call surface — workflow execution + shutdown lands at U-RT-44+.
+    """Stub-call surface — workflow execution + shutdown lands at U-RT-45+.
 
     Raised when `run()` has successfully bootstrapped a `HarnessContext`
     (U-RT-43) and reaches the workflow-execution call site. Subclasses
     `NotImplementedError` so generic handlers catch it; the dedicated
-    type lets U-RT-44+ remove this surface cleanly when workflow
-    execution + drain + shutdown sequence lands.
+    type lets U-RT-45+ remove this surface cleanly when the CP workflow
+    loop primitive + shutdown sequence land.
 
     Predecessor: `BootstrapNotYetLandedError` (U-RT-42), removed at the
     U-RT-43 landing — the bootstrap surface is no longer a stub.
+
+    U-RT-44 lands drain primitives (signal handler + `HarnessDraining`
+    pre-bootstrap rejection) without removing this surface — workflow
+    execution body itself remains stubbed pending the CP loop.
+    """
+
+
+class HarnessDraining(Exception):  # noqa: N818 — domain-anchored name
+    """`RT-FAIL-HARNESS-DRAINING` — `run()` invoked after process-level drain set.
+
+    Per `Spec_Harness_Runtime_v1.md` v1.1 §11 C-RT-11: "After flag-set,
+    `harness_runtime.run(...)` rejects new invocations with typed
+    `HarnessDraining` error." The process-level drain flag at
+    `harness_runtime.drain._process_drained` is one-way; a new harness
+    invocation requires process restart.
+
+    Raised pre-bootstrap before the module-level `_run_lock` is acquired
+    so a drained process surfaces the typed error without constructing a
+    new `HarnessContext`.
     """
 
 
@@ -249,7 +268,20 @@ async def run(
         Stub-call surface — workflow execution + shutdown lands at
         U-RT-44+. Removed at U-RT-44 landing.
     """
-    if not isinstance(workflow, WorkflowObject):
+    # Pre-bootstrap drain check (C-RT-11 surface (3)). Checked before
+    # `_run_lock` acquisition so a drained process surfaces `HarnessDraining`
+    # without constructing a new `HarnessContext`. Import lazily so the
+    # api.py → drain.py edge stays at runtime (drain.py is a leaf module).
+    from harness_runtime.drain import is_process_drained
+
+    if is_process_drained():
+        raise HarnessDraining(
+            "process-level drain flag set (SIGTERM/SIGINT received in a "
+            "prior `run()` invocation); spec §11 invariant: the flag is "
+            "one-way for process lifetime — a new invocation requires "
+            "process restart."
+        )
+    if not isinstance(workflow, WorkflowObject):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise InvalidWorkflowError(
             f"`run()` requires a `WorkflowObject` (with `workflow_id` + "
             f"`workload_class` properties); got {type(workflow).__name__!r}"

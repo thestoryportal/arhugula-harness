@@ -182,9 +182,20 @@ async def _rollback_cxa_wiring(ctx: _MutableHarnessContext) -> None:
 
 
 async def _rollback_ingress(ctx: _MutableHarnessContext) -> None:
-    # Unreachable: freeze is the last act of stage 7. If freeze fails, all
-    # stages already completed and rollback returns through stages 0..6.
-    return None
+    # Per U-RT-44: stage 7 calls `freeze()` then `install_signal_handlers()`.
+    # If install raises (e.g., `DrainPlatformError` on Windows), stage 7 is
+    # recorded as failed and never appended to `completed_stages`, so this
+    # handler is unreachable in practice. Wired defensively as the
+    # rollback-symmetric site for handler removal.
+    import asyncio as _asyncio
+
+    from harness_runtime.drain import uninstall_signal_handlers
+
+    try:
+        loop = _asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    uninstall_signal_handlers(loop)
 
 
 _ROLLBACK_HANDLERS: dict[BootstrapStage, Callable[[_MutableHarnessContext], Awaitable[None]]] = {

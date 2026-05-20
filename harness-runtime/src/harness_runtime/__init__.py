@@ -19,6 +19,7 @@ from __future__ import annotations
 from harness_runtime.api import (
     ConcurrentRunNotSupported,
     FailureCause,
+    HarnessDraining,
     InvalidWorkflowError,
     RunResult,
     WorkflowExecutionNotYetLandedError,
@@ -31,12 +32,15 @@ from harness_runtime.bootstrap import (
     IncompleteBootstrapError,
     run_bootstrap,
 )
+from harness_runtime.drain import DrainPlatformError
 
 __all__ = [
     "BootstrapFailure",
     "BootstrapStageCompleteEvent",
     "ConcurrentRunNotSupported",
+    "DrainPlatformError",
     "FailureCause",
+    "HarnessDraining",
     "IncompleteBootstrapError",
     "InvalidWorkflowError",
     "RunResult",

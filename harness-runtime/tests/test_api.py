@@ -32,6 +32,7 @@ from harness_od.cross_family_rollup import CrossFamilyCostRollup, RollupAxis
 from harness_runtime.api import (
     ConcurrentRunNotSupported,
     FailureCause,
+    HarnessDraining,
     InvalidWorkflowError,
     RunResult,
     WorkflowExecutionNotYetLandedError,
@@ -286,6 +287,67 @@ def test_package_root_re_exports_api() -> None:
         is WorkflowExecutionNotYetLandedError
     )
     assert harness_runtime.FailureCause is FailureCause
+
+
+# ---------------------------------------------------------------------------
+# AC #7 (U-RT-44) — Pre-bootstrap drain rejection (C-RT-11 surface (3)).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_raises_harness_draining_when_process_drained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C-RT-11 surface (3) — drained process refuses new `run()` invocations.
+
+    `monkeypatch.setattr` restores the original module attribute at test
+    teardown, so the one-way `_process_drained` flag is reset between tests.
+    """
+    from harness_runtime import drain as drain_mod
+
+    monkeypatch.setattr(drain_mod, "_process_drained", True)
+    with pytest.raises(HarnessDraining):
+        await run(_Workflow())
+
+
+@pytest.mark.asyncio
+async def test_harness_draining_raised_before_workflow_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Drain check fires pre-validation — bad workflow + drained → `HarnessDraining`."""
+    from harness_runtime import drain as drain_mod
+
+    monkeypatch.setattr(drain_mod, "_process_drained", True)
+    with pytest.raises(HarnessDraining):
+        await run("not-a-workflow")  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_harness_draining_raised_before_lock_acquisition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Drained process surfaces `HarnessDraining` even with the lock held."""
+    from harness_runtime import drain as drain_mod
+
+    monkeypatch.setattr(drain_mod, "_process_drained", True)
+    await _api._run_lock.acquire()  # pyright: ignore[reportPrivateUsage]
+    try:
+        with pytest.raises(HarnessDraining):
+            await run(_Workflow())
+    finally:
+        _api._run_lock.release()  # pyright: ignore[reportPrivateUsage]
+
+
+def test_harness_draining_is_distinct_typed_error() -> None:
+    """`HarnessDraining` is `Exception`-rooted (not NotImplementedError-rooted)."""
+    assert issubclass(HarnessDraining, Exception)
+    assert not issubclass(HarnessDraining, NotImplementedError)
+    assert not issubclass(HarnessDraining, InvalidWorkflowError)
+    assert not issubclass(HarnessDraining, ConcurrentRunNotSupported)
+
+
+def test_harness_draining_re_exported_at_package_root() -> None:
+    assert harness_runtime.HarnessDraining is HarnessDraining
 
 
 def test_run_accepts_optional_config(tmp_path: object) -> None:
