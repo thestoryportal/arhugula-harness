@@ -166,10 +166,10 @@ Full per-substitution bounded-scope + retirement criterion at Meta-Architecture 
 | H_T-AS-2 (Tool contract schema) | PARTIAL | `ToolRegistry` typed surface met; `materialize_tool_registry` returns empty; `MCPHost.started=False` placeholder. Production deferred to tool-invocation runtime composer |
 | H_T-AS-4 (sandbox.* 7-attribute namespace) | STILL-BOUNDED | Library carriers exist; zero runtime references; no tool-invocation producer site |
 | H_T-AS-5 (sandbox-event idempotency-key composition) | STILL-BOUNDED | Carrier exists; zero runtime references; composes with AS-4 (retire together) |
-| H_T-AS-8 (Anthropic + MCP 7-namespace observability) | STILL-BOUNDED | Double-blocked: missing tool-invocation producer site AND `anthropic.*` slot blocked on H_T-CP-1 cascade per §6.3.1 |
+| H_T-AS-8 (Anthropic + MCP 7-namespace observability) | **PARTIAL** 2026-05-20 (batch 2, U-RT-52 close arc) | `anthropic.*` cache subset (4 of 10 attrs: `cache_creation_input_tokens` + `cache_read_input_tokens` + `cache_breakpoint_id` + `cache_ttl_seconds`) emitted at runtime conditional on `provider == anthropic` per `lifecycle/llm_dispatch.py:RuntimeLLMDispatcher.dispatch` + Spec_Harness_Runtime_v1.md v1.3 §14.5. §6.3.1 CP-1 → AS-8 cascade fully discharged for the cache subset. **Remaining 6 attrs** (`thinking_*` / `batch_id` / `tokenizer_version` / `inference_geo`) + MCP namespace still gated on tool-invocation producer site (Phase-3+ composer per v2 §9.2.2) |
 | H_T-AS-9 (substrate seam exports manifest) | RETIRED (authoring close, v1 §1) | Authoring-only |
 
-AS-axis post-batch: 2 / 6 retired (33%). 1 PARTIAL + 3 STILL-BOUNDED carried as bounded-residual gated on Phase-3+ tool-invocation runtime composer (per v2 §9.2.2).
+AS-axis post-batch-2 (U-RT-52 close arc, 2026-05-20): 2 / 6 retired (33%) + 1 newly PARTIAL (AS-8 cache subset live, broader namespace bounded). 2 PARTIAL + 2 STILL-BOUNDED carried as bounded-residual gated on Phase-3+ tool-invocation runtime composer (per v2 §9.2.2).
 
 ### 4.2 AS-axis anti-leakage rules
 

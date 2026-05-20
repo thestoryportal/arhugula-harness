@@ -38,7 +38,7 @@ import asyncio
 from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
-from typing import NewType, Protocol, runtime_checkable
+from typing import Any, NewType, Protocol, runtime_checkable
 
 # ----------------------------------------------------------------------------
 # Concrete axis-type imports (the 6 names that resolve at HEAD).
@@ -64,7 +64,7 @@ from harness_cp.hitl_as_tool_call_rewriting import (
 )
 from harness_cp.hitl_timeout_degradation import TimeoutDegradationKind
 from harness_cp.pause_resume_protocol import ResumeOutcomeKind
-from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry
+from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry, StepEffectiveBinding
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass
 from harness_cp.routing_manifest_residence import RetryPolicy, RoutingManifest
 from harness_cp.sub_agent_brief import SubAgentBrief
@@ -79,6 +79,7 @@ from harness_cp.validator_fail_transient_staircase import (
     StaircaseStage,
     StaircaseTransition,
 )
+from harness_cp.workflow_driver_types import WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_cp.workload_binding_engine_class_selection import HITLInvocation
 from harness_is.path_resolver import PathResolver
@@ -111,6 +112,7 @@ __all__ = [
     "HITLPlacementRegistry",
     "HandoffRegistry",
     "HarnessContext",
+    "LLMDispatcher",
     "LedgerReader",
     "LedgerWriter",
     "LifecycleEventEmitter",
@@ -766,6 +768,34 @@ class TopologyDispatcher(Protocol):
 
 
 @runtime_checkable
+class LLMDispatcher(Protocol):
+    """LLM-dispatch composer runtime surface (U-RT-52, C-RT-15).
+
+    Concretized by
+    `harness_runtime.lifecycle.llm_dispatch.RuntimeLLMDispatcher`.
+    Satisfies the CP-side `harness_cp.workflow_driver.StepDispatcher`
+    Protocol (declared at `workflow_driver.py:151`); narrowed at
+    U-RT-52 to declare the dispatcher's reference-time surface so
+    consumer-side type checks compose against a documented API.
+    The dispatcher is stateless — each `dispatch` invocation is
+    driven by its arguments + frozen provider/tracer substrate.
+
+    Per C-RT-15 §Specification content, the composer dispatches the
+    per-provider SDK call (anthropic / openai / ollama) under a
+    GenAI-semconv 1.41.0 span. ``binding.model_binding.provider``
+    selects the per-provider branch.
+    """
+
+    async def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+    ) -> Mapping[str, Any]:
+        """Dispatch the step under the effective binding; return step output."""
+        ...
+
+
+@runtime_checkable
 class CostAttributionChain(Protocol):
     """Cost-attribution 5-step chain runtime surface (U-RT-31).
 
@@ -1028,3 +1058,13 @@ class HarnessContext(BaseModel):
     override_evaluator: PerStepOverrideEvaluator
     topology_dispatcher: TopologyDispatcher
     lifecycle_emitter: LifecycleEventEmitter
+    llm_dispatcher: LLMDispatcher
+    """Per-step LLM-dispatch composer (C-RT-15 §14.5).
+
+    Materialized at stage 5 LOOP_INIT alongside the override evaluator,
+    topology dispatcher, and lifecycle emitter. Satisfies the
+    `harness_cp.workflow_driver.StepDispatcher` Protocol — run-loop
+    callers can pass `ctx.llm_dispatcher` to the CP `workflow_driver`
+    as the per-step dispatch site. Concretized by
+    `harness_runtime.lifecycle.llm_dispatch.RuntimeLLMDispatcher`.
+    """

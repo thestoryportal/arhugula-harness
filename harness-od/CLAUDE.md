@@ -137,7 +137,7 @@ Full per-substitution bounded-scope + retirement criterion at Meta-Architecture 
 | Substitution | Status | Source |
 |---|---|---|
 | H_T-OD-1 (deferral envelope) | STILL-BOUNDED | No `deferral_envelope` import in `harness-runtime/`; scope deferrals remain `CLAUDE.md`-prose convention at runtime |
-| H_T-OD-2 (OTel SDK base + GenAI semconv) | PARTIAL | OTel SDK base wired (`tracer_provider.py`); GenAI semconv binding ABSENT; zero CP-driver span emission. **Blocks CXA-5 F-CP-01 Stage 3b inversion** per §6.3.2 |
+| H_T-OD-2 (OTel SDK base + GenAI semconv) | **RETIRED** 2026-05-20 (batch 2, U-RT-52 close arc) | OTel SDK base wired (`tracer_provider.py`); GenAI semconv 1.41.0 binding LIVE at `lifecycle/llm_dispatch.py:RuntimeLLMDispatcher.dispatch` per Spec v1.3 §14.5 C-RT-15. Runtime emits `gen_ai.system` + `gen_ai.request.model` + `gen_ai.usage.{input,output}_tokens` + `gen_ai.response.id` per provider. Tests verify emission across all 3 providers. CXA-5 cascade partially closed — OD-2 precondition met; full closure still gated on CP-3 retry/breaker retirement (Q2a-deferred) |
 | H_T-OD-3 (Composite Sampler) | STILL-BOUNDED | Stock `ParentBased(ALWAYS_ON)`, not project-authored composite head/tail |
 | H_T-OD-4 (Pre-Collector redaction SpanProcessor) | STILL-BOUNDED | Stock `BatchSpanProcessor`; zero redaction references; doubly inactive (no spans to redact) |
 | H_T-OD-5 (Cost-attribution 5-step chain) | STILL-BOUNDED | `CostAttributionChain` wired into ctx; zero production callsites; `api.py:463` hard-codes `cost_attribution=()` per U-OD-21 HALT carry-forward. PRICE_TABLE_REF carry per `[[fork-price-table-ref-substitution-retirement]]`; audit-ledger wiring per `[[fork-cost-record-audit-ledger-wiring-residual]]` |
@@ -145,7 +145,7 @@ Full per-substitution bounded-scope + retirement criterion at Meta-Architecture 
 | H_T-OD-7 (Preservation invariants 5-dimension) | STILL-BOUNDED | Library carrier only; no runtime enforcement loop |
 | H_T-OD-8 (aggregate manifest + Stage 3b inversion) | RETIRED (authoring close, v1 §1) | Authoring-only |
 
-OD-axis post-batch: 1 / 8 retired (12.5%, authoring-only). 2 PARTIAL + 5 STILL-BOUNDED carried as bounded-residual gated on (a) GenAI semconv binding at `tracer_provider.py` + a runtime span-emission path (OD-2 → CXA-5 cascade), (b) LLM-dispatch composer enabling cost-attribution chain invocation (OD-5), (c) sqlite write site land (OD-6), (d) preservation invariant enforcement loop (OD-7).
+OD-axis post-batch-2 (U-RT-52 close arc, 2026-05-20): 2 / 8 retired (25%, includes OD-8 authoring-close + OD-2 GenAI binding live). 1 PARTIAL + 5 STILL-BOUNDED carried as bounded-residual gated on (a) LLM-dispatch composer enabling cost-attribution chain invocation (OD-5), (b) sqlite write site land (OD-6), (c) preservation invariant enforcement loop (OD-7).
 
 ### 4.2 OD-axis anti-leakage rules (3 entries)
 

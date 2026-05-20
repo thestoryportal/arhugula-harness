@@ -2,19 +2,28 @@
 
 Per `Spec_Harness_Runtime_v1.md` v1.2 §C-RT-15 (LLM-dispatch composer).
 Satisfies the `harness_cp.workflow_driver.StepDispatcher` Protocol
-(declared at `harness_cp/src/harness_cp/workflow_driver.py:151`,
+(declared at `harness-cp/src/harness_cp/workflow_driver.py:151`,
 `runtime_checkable`). Per-step async composer that:
 
-  1. Resolves `ProviderClient` from `ctx.provider_capabilities` via
-     `binding.provider_name`.
-  2. Starts a GenAI-semconv 1.41.0 span via
-     `ctx.tracer_provider.get_tracer("harness.runtime.llm_dispatch")`.
-  3. Dispatches to the provider's underlying SDK method per the
-     capability-aware abstraction at CP C-CP-01 §1.
+  1. Resolves the per-provider adapter from `ctx.providers` via
+     ``binding.model_binding.provider`` (CP `ModelBinding.provider: str`
+     per C-CP-01 §1.4).
+  2. Opens a GenAI-semconv 1.41.0 span via
+     ``ctx.tracer_provider.get_tracer("harness.runtime.llm_dispatch")``.
+  3. Dispatches to the provider's SDK message-construction method
+     (anthropic / openai / ollama) using the unpacked payload.
   4. Populates GenAI semconv attributes per OD C-OD-04..08 + (for the
-     anthropic provider) `anthropic.cache_*` attributes per AS
+     anthropic provider) ``anthropic.*`` cache attributes per AS spec
      C-AS-14 §14.2.
-  5. Returns `Mapping[str, Any]` per `StepDispatcher` Protocol contract.
+  5. Returns ``Mapping[str, Any]`` per `StepDispatcher` Protocol contract.
+
+**Payload-shape convention (Class 3 fork resolution 2026-05-20,
+`.harness/fork_u_rt_52_step_payload_shape.md`).** ``step.step_payload``
+is consumed as a `harness_cp.cp_shared_types.ProviderAgnosticPayload`
+mapping (``messages`` / ``tools`` / ``params``) per ADR-F1 v1.2 +
+C-CP-01 §1.1 the provider-neutral 3-tuple. Spec §14.5 was silent on
+``step_payload`` shape at v1.2; this module pins the convention at
+v1.3 (`Spec_Harness_Runtime_v1.md` §14.5 amendment 2026-05-20).
 
 **Q2a scope discipline (per `.harness/fork_llm_dispatch_composer_scope.md`
 operator ratification 2026-05-20).** Composer is the smallest-scope
@@ -28,28 +37,27 @@ unmodified to `workflow_driver.py:380-389` `try/except`. CP-3 (retry.*)
 RETIRE-READY upgrade in the same arc (OTel SDK substrate operative +
 GenAI binding present + spans flow).
 
+**OTel context-manager note.** Spec §14.5 invariants phrase ``async
+with tracer.start_as_current_span(...)``; OpenTelemetry's tracer
+context manager is synchronous (returns a regular ``ContextManager``,
+not an ``AsyncContextManager``). Inside this async function we use
+plain ``with`` per OTel API contract; spec phrasing is imprecise but
+the semantic — exactly one span per call, lifecycle bound by the
+``with`` block — is preserved.
+
 **Module convention.** One module per unit. Bound at bootstrap stage 5
 alongside override evaluator / topology dispatcher / lifecycle emitter.
 Typed `LLMDispatchBindError` for bootstrap-time failures. Mirrors the
 L5..L8 stage shape established at U-RT-21..U-RT-41.
-
-**SKELETON STATUS (U-RT-52 partial-land).** This module is the typed
-surface only — per-provider dispatch branches raise
-`NotImplementedError` pending follow-on landing (estimated 4-6 hours
-focused work: provider SDK invocations + GenAI span attribute
-emission + per-provider mock tests + bootstrap stage 5 wiring +
-retirement-event filing for batch 2). Acceptance criteria #2-#7 per
-plan §atomic-units U-RT-52 require the dispatch + telemetry + tests
-to land before U-RT-52 closes. AC #1 (Protocol satisfaction) +
-AC #8 retirement-event prerequisite framing land at this skeleton.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
+from harness_cp.cp_shared_types import ProviderAgnosticPayload
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver_types import WorkflowStep
 
@@ -59,12 +67,13 @@ class LLMDispatchBindError(Exception):
 
 
 class LLMDispatchProviderUnreachableError(Exception):
-    """Raised when `binding.provider_name` resolves to a provider absent
-    from `ctx.providers` (e.g., Ollama-degraded path skipped registration).
+    """Raised when ``binding.model_binding.provider`` resolves to a
+    provider absent from ``ctx.providers`` (e.g., Ollama-degraded path
+    skipped registration).
 
-    Maps to `RT-FAIL-PROVIDER-UNREACHABLE` per `Spec_Harness_Runtime_v1.md`
-    v1.2 §C-RT-14 failure-mode taxonomy. Carries the offending
-    provider name for operator-facing attribution.
+    Maps to ``RT-FAIL-PROVIDER-UNREACHABLE`` per
+    `Spec_Harness_Runtime_v1.md` v1.2 §C-RT-14 failure-mode taxonomy.
+    Carries the offending provider name for operator-facing attribution.
     """
 
     def __init__(self, provider_name: str) -> None:
@@ -75,30 +84,124 @@ class LLMDispatchProviderUnreachableError(Exception):
         )
 
 
-@runtime_checkable
-class _ProvidersLike(Protocol):
-    """Minimal `ctx.providers` substrate the composer consumes.
+class LLMDispatchPayloadShapeError(Exception):
+    """Raised when ``step.step_payload`` cannot be coerced to the
+    provider-neutral ``ProviderAgnosticPayload`` shape.
 
-    Structurally satisfied by `harness_runtime.lifecycle.providers.
-    ProviderClientsStage.providers` (a `dict[str, ProviderClient]`
-    mapping per C-RT-05). The Protocol decoupling avoids a
-    forward-import cycle with the providers stage module.
+    Per the Class 3 fork resolution (2026-05-20), ``step.step_payload``
+    is the `ProviderAgnosticPayload(messages, tools, params)` 3-tuple
+    per C-CP-01 §1.1. Mis-shaped payloads (e.g., missing ``messages``)
+    surface as this typed error rather than a generic ``KeyError`` /
+    ``ValidationError`` so the driver's ``except`` boundary can
+    attribute the failure to the dispatch site.
     """
 
-    def __contains__(self, key: object) -> bool: ...
-    def __getitem__(self, key: str) -> Any: ...
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"RT-FAIL-PAYLOAD-SHAPE: {reason}")
+
+
+@runtime_checkable
+class _ProvidersLike(Protocol):
+    """Minimal ``ctx.providers`` substrate the composer consumes.
+
+    Structurally satisfied by `harness_runtime.lifecycle.providers.
+    ProviderClientsStage.providers` (a ``dict[str, ProviderClient]``
+    mapping per C-RT-05). Position-only ``key`` parameters match
+    `dict.__getitem__` / `dict.__contains__` shape so Protocol
+    conformance carries through to the concrete dict at the stage-5
+    factory call site.
+    """
+
+    def __contains__(self, key: object, /) -> bool: ...
+    def __getitem__(self, key: str, /) -> Any: ...
     def __len__(self) -> int: ...
 
 
 @runtime_checkable
 class _TracerProviderLike(Protocol):
-    """Minimal `ctx.tracer_provider` substrate the composer consumes.
+    """Minimal ``ctx.tracer_provider`` substrate the composer consumes.
 
     Structurally satisfied by `opentelemetry.sdk.trace.TracerProvider`
     materialized at C-RT-06 stage 4 OD.
     """
 
-    def get_tracer(self, instrumenting_module_name: str) -> Any: ...
+    def get_tracer(self, instrumenting_module_name: str, /) -> Any: ...
+
+
+def _coerce_payload(payload: Mapping[str, Any]) -> ProviderAgnosticPayload:
+    """Coerce ``step.step_payload`` to `ProviderAgnosticPayload`.
+
+    Pydantic v2 ``model_validate`` accepts a mapping in the canonical
+    shape. Mis-shaped mappings raise `LLMDispatchPayloadShapeError`
+    wrapping the underlying `ValidationError` so the driver's
+    ``except`` block sees a typed failure attributable to the dispatch
+    site.
+    """
+    if isinstance(payload, ProviderAgnosticPayload):
+        return payload
+    try:
+        return ProviderAgnosticPayload.model_validate(payload)
+    except Exception as exc:
+        raise LLMDispatchPayloadShapeError(
+            f"step.step_payload not coercible to ProviderAgnosticPayload: {exc}"
+        ) from exc
+
+
+def _set_if_present(span: Any, key: str, value: Any) -> None:
+    """Set a span attribute only when the value is not ``None``.
+
+    OTel allows ``None`` as a value but the GenAI semconv discourages
+    emitting attributes whose value is unknown. This helper keeps the
+    per-provider attribute extraction code uncluttered.
+    """
+    if value is not None:
+        span.set_attribute(key, value)
+
+
+def _extract_anthropic_cache_request_attrs(
+    payload: ProviderAgnosticPayload,
+) -> tuple[str | None, int | None]:
+    """Extract ``anthropic.cache_breakpoint_id`` + ``anthropic.cache_ttl_seconds``
+    from the request payload's ``cache_control`` directives, if present.
+
+    Per Anthropic prompt-caching docs, ``cache_control`` lives on
+    individual content blocks within ``messages`` (and optionally on
+    ``system`` / ``tools``). The breakpoint_id is the ordinal of the
+    first cache_control-bearing block (≤4 per Anthropic limit); the
+    ttl is the ``cache_control.ttl`` field translated to seconds
+    (``"5m"`` → 300; ``"1h"`` → 3600). Returns ``(None, None)`` when
+    no cache_control directive is present.
+
+    The extraction is best-effort: payloads that don't follow the
+    cache-control convention return ``(None, None)`` rather than
+    raising. Per C-AS-14 §14.2 these attributes have low cardinality
+    (≤4 breakpoints; binary ttl).
+    """
+    for index, message in enumerate(payload.messages):
+        content = cast(Any, message.get("content"))
+        if not isinstance(content, list):
+            continue
+        blocks = cast(list[Any], content)
+        for block in blocks:
+            if not isinstance(block, Mapping):
+                continue
+            block_mapping = cast(Mapping[str, Any], block)
+            cache_control = cast(Any, block_mapping.get("cache_control"))
+            if not isinstance(cache_control, Mapping):
+                continue
+            cc_mapping = cast(Mapping[str, Any], cache_control)
+            ttl_label = cast(Any, cc_mapping.get("ttl"))
+            ttl_seconds: int | None
+            if ttl_label == "1h":
+                ttl_seconds = 3600
+            elif ttl_label == "5m":
+                ttl_seconds = 300
+            elif ttl_label is None:
+                ttl_seconds = 300  # Anthropic default
+            else:
+                ttl_seconds = None
+            return (f"msg-{index}", ttl_seconds)
+    return (None, None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,10 +218,10 @@ class RuntimeLLMDispatcher:
     Attributes
     ----------
     providers :
-        Frozen reference to the `ctx.providers` map (provider_name →
-        ProviderClient) materialized at stage 3a per C-RT-05.
+        Frozen reference to the ``ctx.providers`` map (provider_name →
+        ProviderClient adapter) materialized at stage 3a per C-RT-05.
     tracer_provider :
-        Frozen reference to the `ctx.tracer_provider` materialized at
+        Frozen reference to the ``ctx.tracer_provider`` materialized at
         stage 4 OD per C-RT-06.
     """
 
@@ -132,40 +235,255 @@ class RuntimeLLMDispatcher:
     ) -> Mapping[str, Any]:
         """Invoke the step body under the effective binding; return step output.
 
-        Per C-RT-15 §Specification content steps 1-5:
+        Per C-RT-15 §Specification content steps 1-5. Provider-specific
+        dispatch branches are exhaustive over the three providers
+        constructed at C-RT-05 stage 3a (anthropic / openai / ollama).
 
-          1. Resolve `ProviderClient` from `self.providers` via
-             `binding.provider_name`; raise
-             `LLMDispatchProviderUnreachableError` if absent.
-          2. Start a GenAI-semconv 1.41.0 span via the runtime's
-             TracerProvider.
-          3. Dispatch to the provider's underlying SDK method
-             (provider-specific branch).
-          4. Populate GenAI semconv attributes + `anthropic.*` if
-             anthropic provider.
-          5. Return step output mapping.
-
-        **SKELETON.** Implementation deferred to U-RT-52 close (per-
-        provider SDK invocations + GenAI span attribute emission +
-        tests). Raises `NotImplementedError` until landing.
+        Raises
+        ------
+        LLMDispatchProviderUnreachableError
+            ``binding.model_binding.provider`` not in ``self.providers``.
+            Maps to ``RT-FAIL-PROVIDER-UNREACHABLE`` per C-RT-14.
+        LLMDispatchPayloadShapeError
+            ``step.step_payload`` not coercible to `ProviderAgnosticPayload`.
+        Exception
+            Any provider-side SDK exception propagates unmodified per
+            Q2a scope discipline. The CP driver's ``except`` boundary
+            at `workflow_driver.py:380-389` fails the step with
+            ``step-failure: {type}: {exc}``.
         """
-        # Step 1 — Resolve provider per C-RT-15 §Specification step 1
-        # + Invariant 4 (`RT-FAIL-PROVIDER-UNREACHABLE` on absent provider).
-        # `StepEffectiveBinding` carries provider identity via
-        # `binding.model_binding.provider` per CP `ModelBinding` schema
-        # (C-CP-01 §1.4 routing-binding vocabulary).
+        # --- Step 1: provider resolution --------------------------------
         provider_name = binding.model_binding.provider
         if provider_name not in self.providers:
             raise LLMDispatchProviderUnreachableError(provider_name)
 
-        # Steps 2-5 — Span + dispatch + attributes + return. Skeleton.
-        # Implementation lands at U-RT-52 close per plan AC #2-#7.
-        raise NotImplementedError(
-            "RuntimeLLMDispatcher.dispatch SKELETON — U-RT-52 partial-land. "
-            "Per-provider SDK dispatch + GenAI semconv span emission + "
-            "anthropic.* attribute set lands at U-RT-52 close. See "
-            "Spec_Harness_Runtime_v1.md v1.2 §C-RT-15 Specification content."
-        )
+        adapter = self.providers[provider_name]
+        payload = _coerce_payload(step.step_payload)
+        model = binding.model_binding.model
+
+        # --- Step 2: open GenAI-semconv span ----------------------------
+        # Span name per OTel GenAI semconv guidance:
+        # `gen_ai.{system}.{operation}`.
+        tracer = self.tracer_provider.get_tracer("harness.runtime.llm_dispatch")
+        operation = _PROVIDER_OPERATIONS.get(provider_name)
+        if operation is None:
+            # Defensive — every key in self.providers is one of the
+            # three constructed at stage 3a per C-RT-05. Surfacing any
+            # other key as UNREACHABLE preserves the C-RT-14 taxonomy.
+            raise LLMDispatchProviderUnreachableError(provider_name)
+        span_name = f"gen_ai.{provider_name}.{operation}"
+
+        # OTel tracer CM is synchronous (returns ``ContextManager``, not
+        # ``AsyncContextManager``); spec §14.5 phrasing is imprecise.
+        with tracer.start_as_current_span(span_name) as span:
+            # Required GenAI semconv 1.41.0 attributes (request side).
+            span.set_attribute("gen_ai.system", provider_name)
+            span.set_attribute("gen_ai.request.model", model)
+
+            # --- Step 3: per-provider dispatch --------------------------
+            cache_attrs: _AnthropicCacheAttrs | None
+            if provider_name == "anthropic":
+                response, usage_attrs, cache_attrs = await _dispatch_anthropic(
+                    adapter, model, payload
+                )
+            elif provider_name == "openai":
+                response, usage_attrs = await _dispatch_openai(
+                    adapter, model, payload
+                )
+                cache_attrs = None
+            else:  # provider_name == "ollama" (only remaining branch)
+                response, usage_attrs = await _dispatch_ollama(
+                    adapter, model, payload
+                )
+                cache_attrs = None
+
+            # --- Step 4: populate response-side attributes --------------
+            _set_if_present(
+                span, "gen_ai.usage.input_tokens", usage_attrs.input_tokens
+            )
+            _set_if_present(
+                span, "gen_ai.usage.output_tokens", usage_attrs.output_tokens
+            )
+            _set_if_present(span, "gen_ai.response.id", usage_attrs.response_id)
+
+            # anthropic.* per C-AS-14 §14.2 — emitted ONLY when
+            # provider == "anthropic" per AS-AL-3 cross-axis scope.
+            if cache_attrs is not None:
+                _set_if_present(
+                    span,
+                    "anthropic.cache_creation_input_tokens",
+                    cache_attrs.cache_creation_input_tokens,
+                )
+                _set_if_present(
+                    span,
+                    "anthropic.cache_read_input_tokens",
+                    cache_attrs.cache_read_input_tokens,
+                )
+                _set_if_present(
+                    span,
+                    "anthropic.cache_breakpoint_id",
+                    cache_attrs.cache_breakpoint_id,
+                )
+                _set_if_present(
+                    span,
+                    "anthropic.cache_ttl_seconds",
+                    cache_attrs.cache_ttl_seconds,
+                )
+
+            # --- Step 5: return step output mapping ---------------------
+            return response
+
+
+# ---------------------------------------------------------------------------
+# Per-provider dispatch helpers.
+# ---------------------------------------------------------------------------
+
+
+_PROVIDER_OPERATIONS: dict[str, str] = {
+    "anthropic": "messages.create",
+    "openai": "chat.completions",
+    "ollama": "chat",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _UsageAttrs:
+    """Provider-neutral usage-attribute carrier."""
+
+    input_tokens: int | None
+    output_tokens: int | None
+    response_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _AnthropicCacheAttrs:
+    """Anthropic-specific cache-attribute carrier (per C-AS-14 §14.2)."""
+
+    cache_creation_input_tokens: int | None
+    cache_read_input_tokens: int | None
+    cache_breakpoint_id: str | None
+    cache_ttl_seconds: int | None
+
+
+def _payload_to_anthropic_kwargs(payload: ProviderAgnosticPayload) -> dict[str, Any]:
+    """Translate `ProviderAgnosticPayload` → ``messages.create`` kwargs.
+
+    Anthropic's ``messages.create`` requires ``max_tokens``; the
+    provider-neutral payload carries it in ``params``. Tools are passed
+    through when present; ``params`` keys merge into the call kwargs.
+    """
+    kwargs: dict[str, Any] = {"messages": list(payload.messages)}
+    if payload.tools is not None:
+        kwargs["tools"] = list(payload.tools)
+    kwargs.update(payload.params)
+    return kwargs
+
+
+def _payload_to_openai_kwargs(payload: ProviderAgnosticPayload) -> dict[str, Any]:
+    """Translate `ProviderAgnosticPayload` → ``chat.completions.create`` kwargs."""
+    kwargs: dict[str, Any] = {"messages": list(payload.messages)}
+    if payload.tools is not None:
+        kwargs["tools"] = list(payload.tools)
+    kwargs.update(payload.params)
+    return kwargs
+
+
+def _payload_to_ollama_kwargs(payload: ProviderAgnosticPayload) -> dict[str, Any]:
+    """Translate `ProviderAgnosticPayload` → ``ollama.chat`` kwargs."""
+    kwargs: dict[str, Any] = {"messages": list(payload.messages)}
+    if payload.tools is not None:
+        kwargs["tools"] = list(payload.tools)
+    kwargs.update(payload.params)
+    return kwargs
+
+
+async def _dispatch_anthropic(
+    adapter: Any,
+    model: str,
+    payload: ProviderAgnosticPayload,
+) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs]:
+    """Anthropic provider branch — ``client.messages.create(...)``."""
+    kwargs = _payload_to_anthropic_kwargs(payload)
+    response = await adapter.client.messages.create(model=model, **kwargs)
+
+    usage = getattr(response, "usage", None)
+    usage_attrs = _UsageAttrs(
+        input_tokens=getattr(usage, "input_tokens", None),
+        output_tokens=getattr(usage, "output_tokens", None),
+        response_id=getattr(response, "id", None),
+    )
+    cache_breakpoint_id, cache_ttl_seconds = (
+        _extract_anthropic_cache_request_attrs(payload)
+    )
+    cache_attrs = _AnthropicCacheAttrs(
+        cache_creation_input_tokens=getattr(
+            usage, "cache_creation_input_tokens", None
+        ),
+        cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", None),
+        cache_breakpoint_id=cache_breakpoint_id,
+        cache_ttl_seconds=cache_ttl_seconds,
+    )
+
+    return (_response_to_mapping(response), usage_attrs, cache_attrs)
+
+
+async def _dispatch_openai(
+    adapter: Any,
+    model: str,
+    payload: ProviderAgnosticPayload,
+) -> tuple[Mapping[str, Any], _UsageAttrs]:
+    """OpenAI provider branch — ``client.chat.completions.create(...)``."""
+    kwargs = _payload_to_openai_kwargs(payload)
+    response = await adapter.client.chat.completions.create(model=model, **kwargs)
+
+    usage = getattr(response, "usage", None)
+    usage_attrs = _UsageAttrs(
+        input_tokens=getattr(usage, "prompt_tokens", None),
+        output_tokens=getattr(usage, "completion_tokens", None),
+        response_id=getattr(response, "id", None),
+    )
+    return (_response_to_mapping(response), usage_attrs)
+
+
+async def _dispatch_ollama(
+    adapter: Any,
+    model: str,
+    payload: ProviderAgnosticPayload,
+) -> tuple[Mapping[str, Any], _UsageAttrs]:
+    """Ollama provider branch — ``client.chat(...)``.
+
+    Ollama's ``ChatResponse`` exposes ``prompt_eval_count`` / ``eval_count``
+    instead of a nested ``usage`` object; no ``response_id``.
+    """
+    kwargs = _payload_to_ollama_kwargs(payload)
+    response = await adapter.client.chat(model=model, **kwargs)
+
+    usage_attrs = _UsageAttrs(
+        input_tokens=getattr(response, "prompt_eval_count", None),
+        output_tokens=getattr(response, "eval_count", None),
+        response_id=None,
+    )
+    return (_response_to_mapping(response), usage_attrs)
+
+
+def _response_to_mapping(response: Any) -> Mapping[str, Any]:
+    """Coerce a provider response to ``Mapping[str, Any]``.
+
+    All three provider SDKs return pydantic v2 models from their
+    chat/messages methods, so ``model_dump()`` is uniformly available.
+    Falls back to passing through Mapping instances for hand-rolled
+    test stubs.
+    """
+    dump = getattr(response, "model_dump", None)
+    if callable(dump):
+        result = cast(Any, dump())
+        if isinstance(result, Mapping):
+            return cast(Mapping[str, Any], result)
+    if isinstance(response, Mapping):
+        return cast(Mapping[str, Any], response)
+    raise LLMDispatchPayloadShapeError(
+        f"provider response not coercible to Mapping[str, Any]: {type(response)!r}"
+    )
 
 
 def materialize_llm_dispatcher_stage(
@@ -173,29 +491,6 @@ def materialize_llm_dispatcher_stage(
     tracer_provider: _TracerProviderLike,
 ) -> RuntimeLLMDispatcher:
     """Stage 5 LOOP_INIT composer factory for the LLM dispatcher (U-RT-52).
-
-    Constructs a frozen `RuntimeLLMDispatcher` bound to the stage-3a
-    provider clients map + the stage-4 tracer provider. Bootstrap stage 5
-    invokes this factory alongside `materialize_override_evaluator_stage`,
-    `materialize_topology_dispatcher_stage`, and
-    `materialize_lifecycle_emitter_stage` per C-RT-02 stage 5 invariants;
-    result attached to `ctx.llm_dispatcher` per C-RT-15 §Integration with
-    C-RT-04.
-
-    Parameters
-    ----------
-    providers :
-        `ctx.providers` map from `materialize_provider_clients_stage`
-        (C-RT-05 stage 3a).
-    tracer_provider :
-        `ctx.tracer_provider` from `materialize_tracer_provider_stage`
-        (C-RT-06 stage 4 OD).
-
-    Returns
-    -------
-    RuntimeLLMDispatcher
-        Frozen composer instance satisfying the
-        `harness_cp.workflow_driver.StepDispatcher` Protocol.
 
     Raises
     ------
@@ -218,6 +513,7 @@ def materialize_llm_dispatcher_stage(
 
 __all__ = [
     "LLMDispatchBindError",
+    "LLMDispatchPayloadShapeError",
     "LLMDispatchProviderUnreachableError",
     "RuntimeLLMDispatcher",
     "materialize_llm_dispatcher_stage",

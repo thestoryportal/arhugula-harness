@@ -1,4 +1,25 @@
-# Specification — Harness Runtime v1.2
+# Specification — Harness Runtime v1.3
+
+## Change-note (v1.2 → v1.3)
+
+**Scope of revision.** Phase-7 sub-phase 7d U-RT-52 close arc absorption per `.harness/fork_u_rt_52_step_payload_shape.md` (filed + ratified 2026-05-20, Class 3 informational). Three §14.5 prose corrections folded in at composer landing:
+
+1. **`step.step_payload` shape pin (`§14.5 Specification content` + new `§14.5 Payload-shape contract`).** v1.2 narrative was silent on how the composer extracts `messages` / `tools` / `params` from `WorkflowStep.step_payload: Mapping[str, Any]`. v1.3 pins the convention: `step.step_payload` IS a `harness_cp.cp_shared_types.ProviderAgnosticPayload` mapping (the `(messages, tools, params)` 3-tuple per ADR-F1 v1.2 + C-CP-01 §1.1). Composer pydantic-validates `step.step_payload` → `ProviderAgnosticPayload`; per-provider helpers translate to SDK kwargs. Mis-shaped payloads surface as a typed `LLMDispatchPayloadShapeError` mapping to `RT-FAIL-PAYLOAD-SHAPE` (new fail class in §14.5 failure-mode taxonomy).
+2. **OTel context-manager phrasing (`§14.5 Invariants`).** v1.2 invariants phrased `async with tracer.start_as_current_span(...)`. OpenTelemetry's tracer context manager is synchronous (returns a regular `ContextManager`, not `AsyncContextManager`); inside an async function the composer uses plain `with`. v1.3 rewords the invariant to "exactly one span per call, lifecycle bound by a `with tracer.start_as_current_span(...)` block (synchronous CM, called from within the async `dispatch` body)".
+3. **`anthropic.*` cache attribute count (`§14.5 Integration with C-RT-06`).** v1.2 narrative cited "`anthropic.cache_*` attributes per C-AS-14 §14.2" without enumerating. v1.3 makes the full 4-attribute set explicit: `cache_creation_input_tokens` + `cache_read_input_tokens` (response-side, extracted from `response.usage`) + `cache_breakpoint_id` + `cache_ttl_seconds` (request-side, best-effort-extracted from `cache_control` directives on message content blocks; `None` when absent).
+
+**Sections revised (substantive).**
+- **§14.5 C-RT-15** — added Payload-shape contract sub-section; reworded async-CM invariant; expanded anthropic.* enumeration; added `RT-FAIL-PAYLOAD-SHAPE` to failure-mode taxonomy.
+- **§15** — no row change; U-RT-52 row already present from v1.2.
+- **§17** — no re-run at v1.3. The three v1.3 corrections are prose-precision on §14.5 only; no contract count, traceability, or coherence-axis change vs v1.2. The v1.2 §17 coherence pass carries forward unchanged.
+
+**Sections preserved verbatim from v1.2.** All v1.2 content outside §14.5 preserved unchanged. The v1.1 → v1.2 change-note + the v1 → v1.1 change-note + §§1–14 + §15 + §16 + §17 + §17.1 unchanged.
+
+**Status posture.** Proposed (v1.2) → **Proposed (v1.3)**. Adversarial-review pass scheduled at U-RT-52 close (this revision).
+
+**Downstream absorption owed.** None — v1.3 is a prose-precision pass on §14.5, no plan-body or atomic-unit changes. `harness_runtime.lifecycle.llm_dispatch` module docstring cross-references this revision + the Class 3 fork file.
+
+---
 
 ## Change-note (v1.1 → v1.2)
 
@@ -884,10 +905,30 @@ The two taxonomies are **orthogonal and composable**: a workflow execution that 
 The runtime contributes one production composer to the `harness_cp.workflow_driver.StepDispatcher` Protocol seam (declared at `harness-cp/src/harness_cp/workflow_driver.py:151`). The composer is a per-step function: given a resolved `StepEffectiveBinding` (which carries the selected provider identity + model name + sandbox-tier floor) and a `WorkflowStep` (which carries the step input payload), the composer:
 
 1. Resolves the `ProviderClient` adapter via `ctx.providers` (C-RT-04 `providers` field bound at C-RT-05) using `binding.model_binding.provider` (the CP `ModelBinding.provider: str` field per C-CP-01 §1.4 routing-binding vocabulary).
-2. Starts a span on the runtime's TracerProvider (C-RT-06 `ctx.tracer_provider`) under the GenAI semconv 1.41.0 attribute set per OD spec C-OD-04..08 (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, plus the per-provider sub-namespaces for Anthropic primitive observability per AS spec C-AS-13/14 — `anthropic.*` namespace activated for the anthropic provider per §6.3.1 cross-axis dependency cascade closure).
-3. Dispatches to the provider's underlying SDK message-construction method (provider-specific: `anthropic.AsyncAnthropic.messages.create` / `openai.AsyncOpenAI.chat.completions.create` / `ollama.AsyncClient.chat`). The capability-aware abstraction layer (CP C-CP-01 §1) determines which method to call; the composer is the runtime-side site that actually calls it.
-4. Captures provider response, populates span attributes (request/response/usage), and constructs the step-output mapping per the `StepDispatcher` Protocol return shape (`Mapping[str, Any]`).
-5. Returns the step output.
+2. Coerces `step.step_payload` to `harness_cp.cp_shared_types.ProviderAgnosticPayload` per the **Payload-shape contract** below (`(messages, tools, params)` 3-tuple per ADR-F1 v1.2 + C-CP-01 §1.1).
+3. Starts a span on the runtime's TracerProvider (C-RT-06 `ctx.tracer_provider`) under the GenAI semconv 1.41.0 attribute set per OD spec C-OD-04..08 (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, plus the per-provider sub-namespaces for Anthropic primitive observability per AS spec C-AS-13/14 — `anthropic.*` namespace activated for the anthropic provider per §6.3.1 cross-axis dependency cascade closure).
+4. Dispatches to the provider's underlying SDK message-construction method (provider-specific: `anthropic.AsyncAnthropic.messages.create` / `openai.AsyncOpenAI.chat.completions.create` / `ollama.AsyncClient.chat`). Per-provider helpers translate `ProviderAgnosticPayload` → SDK kwargs: `messages` + `tools` (when present) pass through unchanged; `params` keys merge into the call kwargs. The capability-aware abstraction layer (CP C-CP-01 §1) determines which method to call; the composer is the runtime-side site that actually calls it.
+5. Captures provider response, populates span attributes (request/response/usage), and constructs the step-output mapping per the `StepDispatcher` Protocol return shape (`Mapping[str, Any]`). Provider responses (all pydantic v2 models from the three SDKs) coerce via `response.model_dump()`.
+6. Returns the step output.
+
+**Payload-shape contract (new at v1.3, Class 3 fork resolution per `.harness/fork_u_rt_52_step_payload_shape.md`).**
+
+`step.step_payload: Mapping[str, Any]` (the opaque field at `harness_cp.workflow_driver_types.WorkflowStep`) is consumed as a `harness_cp.cp_shared_types.ProviderAgnosticPayload` mapping:
+
+```python
+class ProviderAgnosticPayload:
+    messages: tuple[Mapping[str, Any], ...]
+    tools: tuple[Mapping[str, Any], ...] | None
+    params: Mapping[str, Any]
+```
+
+Composer pydantic-validates the payload at dispatch entry. Mis-shaped payloads surface as `LLMDispatchPayloadShapeError` mapping to the new `RT-FAIL-PAYLOAD-SHAPE` fail class (see Failure-mode taxonomy below). The convention is anchored at:
+
+- ADR-F1 v1.2 §Decision — provider-neutral thin core commitment.
+- C-CP-01 §1.1 — `(messages, tools, params)` 3-tuple substrate.
+- `harness_cp.cp_shared_types.ProviderAgnosticPayload` — landed at U-CP-00c L0 carrier.
+
+`ProviderAgnosticPayload` is opaque to the driver and faithful FACTOR-OUT of C-CP-01 §1.1; the composer is the only runtime site that unpacks it.
 
 **Composer module residence.** `harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py` (new file at v1.2). Module exposes one production class — `RuntimeLLMDispatcher` — that satisfies `StepDispatcher` via duck-typing (the Protocol is `runtime_checkable` at `workflow_driver.py:151`). Construction site: bound at bootstrap stage 5 (LOOP_INIT) alongside the existing override evaluator + topology dispatcher + lifecycle emission hook (per C-RT-02 stage 5 invariants); attached to `ctx` for downstream `run()` consumption.
 
@@ -895,12 +936,21 @@ The runtime contributes one production composer to the `harness_cp.workflow_driv
 
 **Integration with C-RT-05 (ProviderClient).** No protocol change to `ProviderClient` at v1.2. The composer dispatches via per-provider adapter methods that are *not* part of `ProviderClient.aclose()`; the protocol remains lifecycle-only. The composer carries provider-specific dispatch code (one branch per provider) — this is the capability-aware abstraction layer per ADR-F1 v1.2 + CP C-CP-01.
 
-**Integration with C-RT-06 (TracerProvider).** GenAI semconv binding: composer obtains a `Tracer` via `ctx.tracer_provider.get_tracer("harness.runtime.llm_dispatch")` and emits one span per LLM call. Attributes follow OpenTelemetry GenAI semantic conventions 1.41.0 (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.response.id`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, etc.). For the anthropic provider, additionally emit `anthropic.cache_*` attributes per AS spec C-AS-14 §14.2 (the AS-axis-defined Anthropic-primitive observability surface).
+**Integration with C-RT-06 (TracerProvider).** GenAI semconv binding: composer obtains a `Tracer` via `ctx.tracer_provider.get_tracer("harness.runtime.llm_dispatch")` and emits one span per LLM call. Attributes follow OpenTelemetry GenAI semantic conventions 1.41.0 (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.response.id`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, etc.). For the anthropic provider, additionally emit the 4-attribute `anthropic.cache_*` subset of C-AS-14 §14.2 (per v1.3 enumeration):
+
+| Attribute | Source | Behavior |
+|---|---|---|
+| `anthropic.cache_creation_input_tokens` | `response.usage.cache_creation_input_tokens` | Response-side; emitted when SDK populates the field. |
+| `anthropic.cache_read_input_tokens` | `response.usage.cache_read_input_tokens` | Response-side; emitted when SDK populates the field. |
+| `anthropic.cache_breakpoint_id` | Request-side: ordinal of first `cache_control`-bearing content block (`msg-{index}`) | Best-effort extraction from request payload; `None` when no `cache_control` directive present. |
+| `anthropic.cache_ttl_seconds` | Request-side: `cache_control.ttl` translated to seconds (`"5m"` → 300; `"1h"` → 3600; default 300 when `cache_control` present without explicit ttl) | Best-effort extraction from request payload; `None` when no `cache_control` directive present. |
+
+The remaining 6 attributes in C-AS-14 §14.2 (`thinking_mode` / `thinking_budget_tokens` / `thinking_effort` / `batch_id` / `tokenizer_version` / `inference_geo`) are out of scope for v1.3 — they require either separate SDK-feature surface adoption (thinking modes) or operator-level configuration (geo / batch / tokenizer pinning) that does not exist at the v1.3 composer surface. Future revisions add them at the feature-surface landing event, not here.
 
 **Invariants.**
 
 - Composer is async (matches C-RT-08 async-only `run()` posture). No sync wrapper.
-- Exactly one span per LLM call. Span lifecycle (start / end / exception capture) bound by an `async with tracer.start_as_current_span(...)` block.
+- Exactly one span per LLM call. Span lifecycle (start / end / exception capture) bound by a `with tracer.start_as_current_span(...)` block (per v1.3 correction: OpenTelemetry's tracer context manager is synchronous — returns a regular `ContextManager`, not an `AsyncContextManager` — so the composer uses plain `with` inside the async `dispatch` body. v1.2 phrasing "`async with ...`" was imprecise; semantic unchanged).
 - Composer satisfies `isinstance(dispatcher, StepDispatcher)` via `@runtime_checkable` introspection (verified at bootstrap stage 5 binding).
 - Provider-specific dispatch branches are exhaustive: composer raises `RT-FAIL-PROVIDER-UNREACHABLE` (per C-RT-14) if `binding.model_binding.provider` resolves to a provider not in `ctx.providers` (e.g., Ollama-degraded path skipped a registration).
 - GenAI semconv attribute set is normative per OTel spec 1.41.0 — composer MUST set the required attributes; SHOULD set the recommended attributes; MAY set the opt-in attributes per OTel semconv stability discipline.
@@ -914,8 +964,9 @@ The runtime contributes one production composer to the `harness_cp.workflow_driv
 | `RT-FAIL-PROVIDER-UNREACHABLE` (permanent) | `binding.model_binding.provider` not in `ctx.providers` (e.g., Ollama-degraded path was taken) | Raise; propagates to driver `try / except` boundary; driver fails the step with `step-failure: RT-FAIL-PROVIDER-UNREACHABLE: ...` |
 | `RT-FAIL-TRANSIENT` (transient) | Provider SDK raises a documented transient error (network, rate limit, server 5xx) | Raise unmodified — composer does NOT retry per Q2a; driver fails step; CP-3 retry logic (separate future unit) wraps composer when it lands |
 | `RT-FAIL-PROVIDER-AUTH` (permanent) | Provider SDK raises auth error (401/403) | Raise unmodified |
+| `RT-FAIL-PAYLOAD-SHAPE` (permanent, new at v1.3) | `step.step_payload` not coercible to `ProviderAgnosticPayload` (missing `messages` / wrong shape / pydantic validation failure) | Raise; propagates to driver `try / except` boundary; driver fails the step with `step-failure: RT-FAIL-PAYLOAD-SHAPE: ...` |
 
-No new fail-classes introduced at v1.2; composer reuses C-RT-14's enumeration.
+v1.3 introduces one new fail class (`RT-FAIL-PAYLOAD-SHAPE`); the remaining three carry forward from C-RT-14 unchanged.
 
 **Deferred to implementation discretion.**
 

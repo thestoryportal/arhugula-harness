@@ -1,20 +1,33 @@
-"""Stage 5 LOOP_INIT — override evaluator, topology dispatcher, lifecycle emitter.
+"""Stage 5 LOOP_INIT — override evaluator, topology dispatcher, lifecycle
+emitter, LLM dispatcher.
 
-Per `Spec_Harness_Runtime_v1.md` v1.1 §2 stage 5 post-conditions:
-`ctx.override_evaluator`, `ctx.topology_dispatcher`, `ctx.lifecycle_emitter`
-all non-None.
+Per `Spec_Harness_Runtime_v1.md` v1.2 §2 stage 5 post-conditions +
+§14.5 C-RT-15 (LLM-dispatch composer). On success:
+``ctx.override_evaluator``, ``ctx.topology_dispatcher``,
+``ctx.lifecycle_emitter``, and ``ctx.llm_dispatcher`` are all non-None.
 
-Composer order is free (no intra-stage dependencies). On stage 5 success the
-orchestrator drains its buffered `BootstrapStageCompleteEvent` records for
-stages 0..5 through the freshly-materialized emitter.
+Composer order is free across the first three (no intra-stage
+dependencies). The LLM dispatcher depends on ``ctx.providers``
+(stage 3a) + ``ctx.tracer_provider`` (stage 4 OD); both are populated
+before stage 5 begins per the bootstrap traversal order at C-RT-01.
+
+On stage 5 success the orchestrator drains its buffered
+`BootstrapStageCompleteEvent` records for stages 0..5 through the
+freshly-materialized emitter.
 """
 
 from __future__ import annotations
+
+from typing import Any, cast
 
 from harness_core.workload_class import WorkloadClass
 
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.lifecycle.lifecycle_emitter import materialize_lifecycle_emitter_stage
+from harness_runtime.lifecycle.llm_dispatch import (
+    LLMDispatchBindError,
+    materialize_llm_dispatcher_stage,
+)
 from harness_runtime.lifecycle.override_evaluator import materialize_override_evaluator_stage
 from harness_runtime.lifecycle.topology_dispatcher import materialize_topology_dispatcher_stage
 from harness_runtime.types import RuntimeConfig
@@ -38,3 +51,29 @@ async def execute(
 
     emitter = materialize_lifecycle_emitter_stage(config)
     ctx.lifecycle_emitter = emitter.emitter
+
+    # LLM dispatcher (U-RT-52, C-RT-15) — depends on providers (stage 3a)
+    # + tracer_provider (stage 4 OD). Both are populated by their declared
+    # stages before stage 5 executes per C-RT-01 traversal order. The
+    # factory raises ``LLMDispatchBindError`` if providers is empty —
+    # surfaces as a stage-5 failure that the orchestrator's reverse-order
+    # rollback handles.
+    providers = ctx.providers
+    if providers is None:
+        raise LLMDispatchBindError(
+            "ctx.providers is None at stage 5 — stage 3a CP_CLIENTS "
+            "did not populate the providers map (bootstrap-orchestrator "
+            "defect or stage-3a failure not surfaced before stage 5)"
+        )
+    tracer_provider = ctx.tracer_provider
+    if tracer_provider is None:
+        raise LLMDispatchBindError(
+            "ctx.tracer_provider is None at stage 5 — stage 4 OD did "
+            "not populate the tracer provider"
+        )
+    # `ctx.tracer_provider` is typed ``object`` per C-RT-04 (the spec
+    # defers OTel-SDK type adoption); cast at this site to the
+    # composer's structural shape.
+    ctx.llm_dispatcher = materialize_llm_dispatcher_stage(
+        providers, cast(Any, tracer_provider)
+    )

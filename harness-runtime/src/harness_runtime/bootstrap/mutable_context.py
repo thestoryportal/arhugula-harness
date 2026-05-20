@@ -33,6 +33,7 @@ from harness_is.path_resolver import PathResolver
 from harness_is.worktree_isolation import WorktreeIsolationManager
 from pydantic import BaseModel, ConfigDict
 
+from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
 from harness_runtime.types import (
     AuditLedgerWriter,
     BootstrapStage,
@@ -131,6 +132,7 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "override_evaluator",
     "topology_dispatcher",
     "lifecycle_emitter",
+    "llm_dispatcher",
 )
 
 
@@ -181,6 +183,7 @@ class _MutableHarnessContext:
     override_evaluator: PerStepOverrideEvaluator | None = None
     topology_dispatcher: TopologyDispatcher | None = None
     lifecycle_emitter: LifecycleEventEmitter | None = None
+    llm_dispatcher: RuntimeLLMDispatcher | None = None
 
     # Orchestrator bookkeeping — not part of HarnessContext.
     completed_stages: list[BootstrapStage] = field(default_factory=list)
@@ -223,6 +226,7 @@ class _MutableHarnessContext:
             override_evaluator=self.override_evaluator,
             topology_dispatcher=self.topology_dispatcher,
             lifecycle_emitter=self.lifecycle_emitter,
+            llm_dispatcher=self.llm_dispatcher,
         )
         self.frozen = ctx
         return ctx

@@ -142,6 +142,7 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         "override_evaluator",
         "topology_dispatcher",
         "lifecycle_emitter",
+        "llm_dispatcher",  # U-RT-52 — C-RT-15 LLM-dispatch composer
     }
     actual = set(HarnessContext.model_fields.keys())
     assert actual == expected, f"missing: {expected - actual}; extra: {actual - expected}"

@@ -161,18 +161,19 @@ Per `Phase_7_Meta_Architecture_v1.md` §5.4 — **CP carries 21 of 49 substituti
 
 Full per-substitution bounded-scope + retirement criterion at Meta-Architecture §5.4.
 
-**Retirement status (post 7d second pass, 2026-05-20).** Per `.harness/phase-7d-retirement-events-batch-1.md` + v2 ledger `.harness/phase-7d-retirement-ledger-v2.md` §5 under operator-ratified runtime-only substitution-site reading. CP-axis is the largest substitution surface and the slowest to retire — only 1 of 21 runtime-active retired at batch 1:
+**Retirement status (post 7d batch 2, U-RT-52 close arc, 2026-05-20).** Per `.harness/phase-7d-retirement-events-batch-1.md` (8 events) + `.harness/phase-7d-retirement-events-batch-2.md` (5 events, this arc) + v2 ledger `.harness/phase-7d-retirement-ledger-v2.md` §5. Batch 2 retires the 3 CP-axis substitutions whose retirement criterion was multi-composer-gated on the LLM-dispatch composer landing (per v2 §9.2.3):
 
 | Status | Count | Substitutions |
 |---|---|---|
-| **RETIRED** 2026-05-20 | 1 | H_T-CP-6 (workflow manifest schema; `routing_manifest.py:143-145` + `workflow_driver.py:360-364` per-step invocation) |
+| **RETIRED** 2026-05-20 (batch 2) | 2 | H_T-CP-1 (multi-LLM routing core; `llm_dispatch.py:RuntimeLLMDispatcher.dispatch`); H_T-CP-2 (layered routing strategy at runtime; runtime invocation site present) |
+| RETIRED 2026-05-20 (batch 1) | 1 | H_T-CP-6 (workflow manifest schema; `routing_manifest.py:143-145` + `workflow_driver.py:360-364` per-step invocation) |
 | RETIRED (authoring close, v1 §1) | 1 | H_T-CP-24 (substrate seam exports + F2-12 closure manifest) |
-| PARTIAL | 3 | H_T-CP-8 (F2-substrate-join — `cp_is_wiring.py` 1 of 17 edges per `class_1_tension_u_rt_35_cp_is_wiring_gaps.md`); H_T-CP-9 (ResumptionKind 5-class — driver emits binary only); H_T-CP-11 (D4 multiplicative tunable not surfaced at runtime) |
-| STILL-BOUNDED | 17 | H_T-CP-1 / 2 / 3 / 4 / 5 / 10 / 12 / 13 / 14 / 16 / 17 / 18 / 19 / 20 / 21 / 22 / 23 — bounded on absent LLM-dispatch composer + absent HITL/validator/sub-agent composers |
+| PARTIAL | 4 | H_T-CP-5 (fallback chain — LLM-dispatch site present at U-RT-52, but chain orchestration / retry / breaker wrappers Q2a-deferred; STILL-BOUNDED → PARTIAL this batch); H_T-CP-8 (F2-substrate-join — `cp_is_wiring.py` 1 of 17 edges per `class_1_tension_u_rt_35_cp_is_wiring_gaps.md`); H_T-CP-9 (ResumptionKind 5-class — driver emits binary only); H_T-CP-11 (D4 multiplicative tunable not surfaced at runtime) |
+| STILL-BOUNDED | 13 | H_T-CP-3 / 4 / 10 / 12 / 13 / 14 / 16 / 17 / 18 / 19 / 20 / 21 / 22 / 23 (minus CP-5 transition) — bounded on absent retry/breaker wrappers (Q2a-deferred) + absent HITL/validator/sub-agent composers |
 
-**§9 Class 2 multi-LLM commitment surface OPEN (unchanged).** All 3 providers (anthropic + openai + ollama) constructed at `harness-runtime/.../lifecycle/providers.py:679-706`; zero LLM call sites exist anywhere in `harness-runtime/src/` (no `messages.create` / `chat.completions` invocations). `step_dispatcher.dispatch(binding, step)` at `harness-cp/src/harness_cp/workflow_driver.py:379` is an operator-injected architectural seam; no production multi-provider router landed. ADR-F1 v1.2 multi-LLM commitment met at design + library code; unmet at runtime. Retirement gated on LLM-dispatch runtime composer per v2 §9.2.3.
+**§9 Class 2 multi-LLM commitment surface CLOSED (U-RT-52 close arc, 2026-05-20).** All 3 providers (anthropic + openai + ollama) constructed at `harness-runtime/.../lifecycle/providers.py:679-706`; production LLM call site landed at `harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py:RuntimeLLMDispatcher.dispatch` (per `Spec_Harness_Runtime_v1.md` v1.3 §14.5 C-RT-15). `step_dispatcher.dispatch(binding, step)` at `harness-cp/src/harness_cp/workflow_driver.py:379` now has a typed runtime composer satisfying the Protocol; ADR-F1 v1.2 multi-LLM commitment met at design + library code + runtime. Per v2 §9.2.3 closure criterion satisfied.
 
-CP-axis post-batch: 2 / 22 retired (9.1%, including CP-24 authoring-retired). Per v2 §9.2.5, CP closure is multi-composer gated.
+CP-axis post-batch-2: 4 / 22 retired (18.2%, including CP-24 authoring-retired). 4 PARTIAL + 13 STILL-BOUNDED. Per v2 §9.2.5, the remaining STILL-BOUNDED retirements gate on retry/breaker (Q2a-deferred) + HITL/validator/sub-agent composers. CP-5 PARTIAL transitions full-retired at the CP-3/CP-4 retry/breaker landing.
 
 ### 4.2 CP-axis anti-leakage rules (5 — largest rule set)
 
@@ -212,7 +213,7 @@ Axis-specific design defects route per `Project_Workflow_v1_8.md` §2.7.6 + work
 | Carry-forward | Status | Routing |
 |---|---|---|
 | F2-12 cascade Step 6a (CP plan layer) | CLOSED at v2.2; preserved through v2.10 per `F2-12_Closure_Declaration.md` | No action |
-| H_T-CP-1 Class 2 substitution-risk surface (multi-LLM commitment unmet at 7a runtime) | CLOSED with operator visibility per `Project_Workflow_v1_8.md` §2.7.7 + `Phase_6_5_Session_4_Close_Handoff.md` §5.2 | Non-blocking; substitution retirement at U-CP-01 landing |
+| H_T-CP-1 Class 2 substitution-risk surface (multi-LLM commitment unmet at 7a runtime) | RETIRED at U-RT-52 close arc, 2026-05-20 — runtime LLM call site landed at `lifecycle/llm_dispatch.py` per Spec v1.3 §14.5 C-RT-15. Was: CLOSED-with-visibility | Closed |
 | GUARDRAIL units (4 of 55; per `Plan_Executability_Audit_v1.md` §3.3) | Project-authored per framework-pull discipline | Phase 7 execution-time; non-blocking |
 
 ### 5.3 Filing footer
