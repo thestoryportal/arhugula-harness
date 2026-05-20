@@ -1,5 +1,7 @@
 # Phase 2 Session 3 — Track A atomic-decomposition plan: `harness-runtime/`
 
+*v2.1 — minor revision (2026-05-19). Adds §9 pointing at `design-substrate/Spec_Harness_Runtime_v1.md` v1.1 §15 as the single source of truth for spec-to-plan traceability. Closes the v1.1 spec change-note "Downstream absorption owed" line by canonicalizing the trace in one place rather than duplicating it. No unit-set or topology changes.*
+
 *v2 — post-adversarial-review revision (2026-05-19). Absorbs `.harness/Adversarial_Review_phase_2_session_3_track_a_plan.md` findings F2-01..F2-08, F1-01..F1-03. Phase-7-style unit enumeration; topological levels L0–L11.*
 
 ---
@@ -574,6 +576,14 @@ Standing discipline: any of the above surfacing a *spec* gap triggers back-flow 
 
 ---
 
+## 9. Spec-to-plan traceability
+
+Canonical at `design-substrate/Spec_Harness_Runtime_v1.md` v1.1 §15 (Spec-to-plan traceability) — a 23-row coverage matrix mapping every U-RT-NN unit to ≥1 C-RT-NN contract, including per-bucket C-RT-12 §12.1–§12.6 rows and the C-RT-14 cross-cutting row.
+
+This plan does not duplicate the matrix. Spec §15 is the single source of truth; revisions to either the unit set (here) or the contract set (spec) require lockstep updates to spec §15.
+
+---
+
 ## Critical files
 
 **To create (Track A execution):**
@@ -631,3 +641,6 @@ Every unit landing emits a substitution-retirement check via `phase-7-substituti
   - **F2-07** — U-RT-00 added as hard-gate root: `Spec_Harness_Runtime_v1.md` authoring is a unit, not a soft recommendation. U-RT-01 depends on U-RT-00.
   - **F2-08** — ACs rewritten at U-RT-21 (byte-identical replay test), U-RT-24 (transient-staircase observability), U-RT-32 (named writer entry + round-trip test).
   - **F1-02** — Dropped unused `(strawman §N)` citation convention from §2 preamble.
+- **v2.1 (2026-05-19)** — minor revision; closes the v1.1 spec change-note "Downstream absorption owed" line.
+  - Added §9 as a one-paragraph pointer at `Spec_Harness_Runtime_v1.md` v1.1 §15. Spec §15 is the single source of truth for spec-to-plan traceability; the plan does not duplicate the matrix. (Earlier in-session iteration mirrored the full table; rejected as duplicate source of truth.)
+  - No unit-set, dependency-graph, AC, or topology changes. Pure trace-documentation pass.
