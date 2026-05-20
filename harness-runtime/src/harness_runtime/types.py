@@ -51,6 +51,7 @@ from harness_core import ClientName, SkillID
 from harness_core.deployment_surface import DeploymentSurface
 from harness_core.identity import ActionID
 from harness_core.persona_tier import PersonaTier
+from harness_core.workflow_event_class import WorkflowEventClass
 from harness_core.workload_class import WorkloadClass
 from harness_cp.brief_authoring_inheritance import BriefAuthoringInheritance
 from harness_cp.cp_shared_types import ModelBinding
@@ -419,7 +420,32 @@ class CollectorDaemonHandle(Protocol):
 
 @runtime_checkable
 class LifecycleEventEmitter(Protocol):
-    """Runtime-defined `workflow_event_class` emitter. Concretized at U-RT-41."""
+    """Runtime-defined `workflow_event_class` emitter (U-RT-41 PARTIAL-LAND).
+
+    Concretized by
+    `harness_runtime.lifecycle.lifecycle_emitter.RuntimeLifecycleEventEmitter`.
+    Narrowed at U-RT-41 to declare the emitter's reference-time surface.
+    The emitter emits any of the 8 canonical `WorkflowEventClass` values
+    (per `harness_core.workflow_event_class` — C-CP-05 §5.1 verbatim);
+    consumers (workflow execution at U-RT-42+) bind emit calls to the
+    lifecycle loop's hook surfaces. The emitter records every emit in
+    an in-memory ring (test-introspectable) so the L9 verification
+    suite can assert event ordering.
+
+    **PARTIAL-LAND scope.** C-RT-11 §11 step 2's
+    `WorkflowEventClass.DRAINED` emit is STRUCK at this landing
+    (`WorkflowEventClass` is closed at cardinality 8 per `harness_core`
+    — no `DRAINED` value). Spec §16 open question #9 explicitly
+    authorizes split. Class 1 record at
+    `.harness/class_1_tension_u_rt_41_drained_event_class_alignment.md`;
+    operator-decision pending. Drain observability remains via the two
+    other C-RT-11 surfaces — `ctx.drained_flag` (signal) +
+    `RunResult.status='drained'` (terminal return).
+    """
+
+    def emit(self, event_class: WorkflowEventClass) -> None:
+        """Emit a lifecycle event of the given canonical class."""
+        ...
 
 
 # ----------------------------------------------------------------------------
