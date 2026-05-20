@@ -2,7 +2,7 @@
 
 **Filed at:** U-RT-35 PARTIAL-LAND (2026-05-19)
 **Locus:** `Spec_Harness_Runtime_v1.md` §12.3 (CP → IS, 17 edges) vs CP-axis materialized surface
-**Status:** OPEN — operator decision pending
+**Status:** **DEFERRED 2026-05-20 — Path D applied.** Parked with `[[fork-u-rt-44-workflow-loop-drain]]` as a cross-axis future-phase concern. Resolution requires CP-axis composer authoring (7 modules need ledger composers; U-CP-14 needs shape revision) — that's Phase 6 CP plan revision work, NOT Phase 7 runtime work. Authoring composers at the runtime layer would be X-AL-3 silent H_T design extension. U-RT-35 PARTIAL-LAND (1 of 17 edges wired) is the honest Track-A close state.
 **Routing:** Phase 6 CP plan revision-pass OR phased per-CP-unit re-land OR scope re-classification of §12.3
 **Precedent:** U-RT-30 (trace-storage PathClass gap) — same halt-route-split-AC pattern
 
