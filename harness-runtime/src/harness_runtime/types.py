@@ -43,6 +43,9 @@ from typing import NewType, Protocol, runtime_checkable
 # ----------------------------------------------------------------------------
 # Concrete axis-type imports (the 6 names that resolve at HEAD).
 # ----------------------------------------------------------------------------
+from harness_as.discriminators import MCPTransport
+from harness_as.sandbox_tier import BlastRadiusTier
+from harness_as.sandbox_tier_floor import MCPServerTrustLevel
 from harness_as.tool_contract import SecretAllowlistEntry, ToolContract
 from harness_core import ClientName, SkillID
 from harness_core.deployment_surface import DeploymentSurface
@@ -328,9 +331,31 @@ class CollectorConfig(BaseModel):
 
 
 class MCPClientConfig(BaseModel):
-    """L0 placeholder — L3 AS bootstrap units enrich with MCP client fields."""
+    """MCP client connection config — U-RT-15 (L3).
+
+    Carries the per-client transport + trust-level surface that
+    `harness_as.mcp_transport_floor` validates at stage 2 AS bootstrap.
+    Real connection URL + auth-secret reference are operator-supplied;
+    the connection-URL schema (stdio: command line; remote: HTTP URL) is
+    runtime implementation-discretion at L3.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    client_name: ClientName
+    """Operator-supplied client identifier — key in `HarnessContext.mcp_clients`."""
+
+    transport: MCPTransport
+    """Transport class (C-AS-10 §10.1 — stdio / streamable_http / ssecached)."""
+
+    trust_level: MCPServerTrustLevel
+    """Trust-tier framework class (C-AS-10 §10.3) — gates remote registration."""
+
+    blast_radius: BlastRadiusTier
+    """Blast-radius capability of the tool surfaces this client proxies."""
+
+    connection_url: str
+    """Stdio command-line OR remote HTTP URL (per `transport`)."""
 
 
 # ----------------------------------------------------------------------------
