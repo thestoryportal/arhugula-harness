@@ -38,7 +38,7 @@ def _required_kwargs() -> dict[str, Any]:
         "repository_root": Path("/tmp"),
         "path_bindings": PathBindingConfig(),
         "provider_secrets": ProviderSecretsConfig(),
-        "otel": OTelConfig(),
+        "otel": OTelConfig(otlp_endpoint="http://localhost:4318"),
         "collector": CollectorConfig(),
         "default_topology": TopologyPattern.SINGLE_THREADED_LINEAR,
     }
@@ -64,7 +64,7 @@ def test_env_supplies_scalar_fields_when_kwargs_omit_them() -> None:
         env=env,
         path_bindings=PathBindingConfig(),
         provider_secrets=ProviderSecretsConfig(),
-        otel=OTelConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
         collector=CollectorConfig(),
     )
     assert cfg.deployment_surface is DeploymentSurface.MANAGED_CLOUD
@@ -88,7 +88,7 @@ def test_kwargs_override_env() -> None:
         repository_root=Path("/tmp"),
         path_bindings=PathBindingConfig(),
         provider_secrets=ProviderSecretsConfig(),
-        otel=OTelConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
         collector=CollectorConfig(),
     )
     assert cfg.deployment_surface is DeploymentSurface.LOCAL_DEVELOPMENT
@@ -117,7 +117,7 @@ def test_three_source_precedence_fixture() -> None:
         # Sub-configs required.
         path_bindings=PathBindingConfig(),
         provider_secrets=ProviderSecretsConfig(),
-        otel=OTelConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
         collector=CollectorConfig(),
     )
     # env-supplied (no kwarg):

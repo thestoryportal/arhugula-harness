@@ -34,7 +34,7 @@ def _make_runtime_config() -> RuntimeConfig:
         repository_root=Path("/tmp"),
         path_bindings=PathBindingConfig(),
         provider_secrets=ProviderSecretsConfig(),
-        otel=OTelConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
         collector=CollectorConfig(),
         default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
     )

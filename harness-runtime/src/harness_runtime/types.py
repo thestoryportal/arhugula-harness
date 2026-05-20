@@ -52,7 +52,8 @@ from harness_cp.topology_pattern import TopologyPattern
 from harness_is.path_resolver import PathResolver
 from harness_is.workload_manifest_opt_in_schema import WorkloadManifestOptIns
 from harness_is.worktree_isolation import WorktreeIsolationManager
-from pydantic import BaseModel, ConfigDict, Field
+from harness_od.sampling_mode import SamplingMode
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 __all__ = [
     "AuditLedgerWriter",
@@ -231,9 +232,45 @@ class ProviderSecretsConfig(BaseModel):
 
 
 class OTelConfig(BaseModel):
-    """L0 placeholder — U-RT-07 enriches with OTLP endpoint + sampler fields."""
+    """OTel runtime config — U-RT-07 (L1).
+
+    Carries the OTLP endpoint, an optional sampling-mode override, and
+    operator-supplied additional resource attributes. The sampler mode
+    defaults to the per-deployment-surface mapping at C-OD-09 §9.1
+    (`PER_DEPLOYMENT_SURFACE_SAMPLING` in `harness_od.sampling_mode`); a
+    non-None override here wins (operator-tunable for self-hosted-server
+    deployments running mixed regimes).
+
+    Endpoint validation runs at construction time per the field validator
+    (URL must include `://`); detailed schema validation (gRPC vs HTTP) is
+    deferred to U-RT-27 (TracerProvider construction).
+
+    Resource attributes for the 12 ADR-D6 v1.2 §1.2 namespaces are built at
+    `config.otel_config.build_resource_attributes()` from `deployment_surface`
+    + `additional_resource_attrs`; not stored on the config itself (derived).
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    otlp_endpoint: str
+    """OTLP exporter endpoint URL (e.g. `http://localhost:4318`)."""
+
+    sampling_mode: SamplingMode | None = None
+    """Optional override of the per-deployment-surface default (C-OD-09 §9.1)."""
+
+    additional_resource_attrs: tuple[tuple[str, str], ...] = ()
+    """Operator-supplied additional resource attrs; merged into the OTel
+    resource at TracerProvider construction (U-RT-27)."""
+
+    @field_validator("otlp_endpoint")
+    @classmethod
+    def _endpoint_has_scheme(cls, value: str) -> str:
+        """Reject endpoints without a `://` scheme separator at construction time."""
+        if "://" not in value:
+            raise ValueError(
+                f"otlp_endpoint must include a `://` scheme (got {value!r})",
+            )
+        return value
 
 
 class CollectorConfig(BaseModel):
