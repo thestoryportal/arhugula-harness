@@ -555,6 +555,25 @@ class RuntimeConfig(BaseModel):
     tenant_id: str | None = None
     """Multi-tenant separation key per OD audit-ledger. `None` = single-tenant."""
 
+    routing_manifest: RoutingManifest = Field(
+        default_factory=lambda: RoutingManifest(
+            manifest_version=1,
+            per_role_bindings={},
+            per_workload_overrides={},
+            fallback_chains=(),
+            retry_policies={},
+        ),
+    )
+    """Operator-supplied routing manifest (CP v2.10 R-2 read / W-2 write schemas).
+
+    Enriched at U-RT-21 (L5 stage 3b CP_ROUTING). Default is an empty manifest
+    (`manifest_version=1`, no role bindings, no workload overrides, no fallback
+    chains, no retry policies) — sufficient to drive the bootstrap path through
+    stage 3b in test scenarios that don't exercise routing dispatch. Operators
+    supply a populated manifest via kwarg at runtime construction; the manifest
+    is persisted to `PathClass.ROUTING_MANIFEST` at stage 3b per C-CP-01 §1.3.
+    """
+
 
 # ----------------------------------------------------------------------------
 # `HarnessContext` — C-RT-04 v1.1 schema.
