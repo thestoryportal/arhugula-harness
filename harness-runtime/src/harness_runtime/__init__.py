@@ -33,6 +33,7 @@ from harness_runtime.bootstrap import (
     run_bootstrap,
 )
 from harness_runtime.drain import DrainPlatformError
+from harness_runtime.shutdown import FlushReport, FlushTimeoutError, flush_observability
 
 __all__ = [
     "BootstrapFailure",
@@ -40,12 +41,15 @@ __all__ = [
     "ConcurrentRunNotSupported",
     "DrainPlatformError",
     "FailureCause",
+    "FlushReport",
+    "FlushTimeoutError",
     "HarnessDraining",
     "IncompleteBootstrapError",
     "InvalidWorkflowError",
     "RunResult",
     "WorkflowExecutionNotYetLandedError",
     "WorkflowObject",
+    "flush_observability",
     "run",
     "run_bootstrap",
 ]
