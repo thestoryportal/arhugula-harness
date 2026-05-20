@@ -678,7 +678,64 @@ class TopologyDispatcher(Protocol):
 
 @runtime_checkable
 class CostAttributionChain(Protocol):
-    """Composed at U-RT-31 from landed OD cost-attribution primitives."""
+    """Cost-attribution 5-step chain runtime surface (U-RT-31).
+
+    Concretized by `harness_runtime.lifecycle.cost_attribution.RuntimeCostAttributionChain`.
+    Narrowed at U-RT-31 to declare the chain's reference-time surface so
+    consumer-side type checks (L8 LOOP_INIT orchestrator + U-RT-32 audit
+    writer) compose against a documented API. The chain composes the 5 OD
+    cost-attribution primitives — `cost_formula`, `cost_attribution_sandbox_fanout`,
+    `idempotency_join_dedup`, `cost_attribution_dashboard_binding`,
+    `operator_burden_eval_primitives`.
+
+    Method signatures use `object` for OD-typed parameters where importing
+    the concrete OD types would add cross-axis import surface; consumers
+    narrow at concrete call sites or go through the concrete
+    `RuntimeCostAttributionChain` directly.
+    """
+
+    def compute_per_attempt_cost(
+        self,
+        inputs: object,
+        rates: object,
+    ) -> float:
+        """Step 1 — C-OD-14 §14.1 per-span cost formula."""
+        ...
+
+    def compose_total_cost(
+        self,
+        span_cost: float,
+        span_duration_ms: int,
+        sandbox_overhead: object,
+    ) -> object:
+        """Step 2 — C-OD-14 §14.2 sandbox-overhead composition."""
+        ...
+
+    def attach_idempotency_key(
+        self,
+        span: object,
+        parent_idempotency_key: str,
+        cost_record: object,
+    ) -> object:
+        """Step 3 — C-OD-14 §14.4 idempotency-key join."""
+        ...
+
+    def rollup_fanout(
+        self,
+        parent_span_ref: object,
+        sibling_costs: list[object],
+        pattern: object,
+    ) -> object:
+        """Step 4 — C-OD-14 §14.3 fan-out aggregation at close."""
+        ...
+
+    def dedupe_on_replay(
+        self,
+        span: object,
+        ledger_entry: object,
+    ) -> object:
+        """Step 5 — C-OD-14 §14.5.1 replay-aware dedup decision."""
+        ...
 
 
 # ----------------------------------------------------------------------------
