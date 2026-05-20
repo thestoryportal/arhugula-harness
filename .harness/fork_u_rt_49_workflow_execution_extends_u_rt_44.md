@@ -1,7 +1,7 @@
 # Fork extension — U-RT-49 workflow-execution ACs extend [[fork-u-rt-44-workflow-loop-drain]]
 
 **Class:** 1 (extension of existing OPEN fork)
-**Status:** **MOSTLY CLOSED at Lane 6 (2026-05-20).** Ledger-entry + lifecycle-span ACs un-struck via Lane 6 runtime un-strike. Cost-attribution AC carries forward on `[[fork_u_rt_49_cost_attribution_invocation_underspec]]` (sub-fork filed 2026-05-20; see correction below — the OD-side `[[fork-u-od-21-span-cost-record-missing-rollup-keys]]` is source-resolved at commits `600b902` + `e8fae9c`, so the residual is not OD but CP-driver + spec gap).
+**Status:** ✅ **FULLY CLOSED 2026-05-20.** All five U-RT-49 ACs un-struck. Ledger-entry + lifecycle-span ACs un-struck via Lane 6 runtime un-strike; cost-attribution AC un-struck at this arc via CP spec v1.5 §25.9 + smoke test step body extension per Q1e + Q3c. Predecessor sub-fork `[[fork_u_rt_49_cost_attribution_invocation_underspec]]` CLOSED at the same arc. `PRICE_TABLE_REF` substitution residual carries forward at `[[fork_price_table_ref_substitution_retirement]]` — NOT retired by this arc; documented as bounded X-AL-2 residual.
 **Filed:** 2026-05-20 at U-RT-49 partial-landing
 **Carrier:** `.harness/class_1_tension_u_rt_44_workflow_loop_drain.md`
 
@@ -32,7 +32,7 @@ runtime or a new Track A revision-pass unit).
 | Clean shutdown leaves no resources open | LAND | U-RT-49 initial land |
 | Workflow ledger entries | **LAND** | Lane 6 (2026-05-20) — driver writes to `ctx.ledger_writer` per C-CP-25 §25.3.3 |
 | Workflow spans | **LAND** | Lane 6 (2026-05-20) — lifecycle emitter records driver §25.5 events |
-| Cost-attribution entries | STRIKE | Carries on `[[fork_u_rt_49_cost_attribution_invocation_underspec]]` — sub-fork filed 2026-05-20 against the actual residual (CP-driver invocation site + spec gap + `PRICE_TABLE_REF` substitution). Previous attribution to `[[fork-u-od-21-span-cost-record-missing-rollup-keys]]` was inaccurate: that fork is source-resolved at U-OD-20 commit `600b902` (12-field carrier) + U-OD-21 commit `e8fae9c` (rollup function); OD landed its surfaces and the residual lives elsewhere. |
+| Cost-attribution entries | **LAND** | CP spec v1.5 §25.9 + plan v2.13 absorbed Q1e propagated-emission pattern (step body owns; driver propagates); `harness-runtime/tests/integration/test_run_smoke.py::test_e2e_run_step_body_fires_cost_attribution_chain` materializes the convention via mock-rate bypass (Q3c) and produces a 12-field `SpanCostRecord` with §14.4 idempotency-key join. Sub-fork `[[fork_u_rt_49_cost_attribution_invocation_underspec]]` CLOSED. `PRICE_TABLE_REF` substitution carry-forward at `[[fork_price_table_ref_substitution_retirement]]`. |
 
 ## Re-land plan
 

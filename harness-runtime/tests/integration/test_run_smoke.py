@@ -13,16 +13,24 @@ Acceptance per session-3 atomic decomposition L11 U-RT-49 + Lane 6
 - ✅ LAND (Lane 6): lifecycle-event spans — `RuntimeLifecycleEventEmitter`
   records `WorkflowEventClass.{WORKFLOW_START, ...}` per driver emission
   at §25.5.
-- ❌ STILL-STRIKE: cost-attribution chain entries — `[[fork-u-od-21-span-
-  cost-record-missing-rollup-keys]]` blocks the `SpanCostRecord` rollup-key
-  surface. Carry-forward; un-strikes when U-OD-21 fork resolves.
+- ✅ LAND (2026-05-20, CP spec v1.5 §25.9 + plan v2.13 absorbed):
+  cost-attribution chain entries — step body owns the chain invocation per
+  the §25.5 propagated pattern; smoke test step body fires the chain via
+  `compute_span_cost_with_rates` mock-rate bypass per Q3c. The
+  `PRICE_TABLE_REF` substitution remains a bounded H_E residual tracked at
+  `.harness/fork_price_table_ref_substitution_retirement.md` (NOT retired
+  by this AC closure). Materialization at
+  `test_e2e_run_step_body_fires_cost_attribution_chain` below.
 
-Three integration tests:
+Four integration tests:
 1. `test_e2e_bootstrap_shutdown_round_trip` — original bootstrap→shutdown
    path without execute (verifies the bootstrap-only lifecycle still works).
 2. `test_e2e_shutdown_idempotent` — second shutdown returns cached report.
 3. `test_e2e_run_executes_workflow_via_cp_driver` — Lane 6: full
    `await run(workflow)` cycle; asserts ledger writes + lifecycle emits.
+4. `test_e2e_run_step_body_fires_cost_attribution_chain` — Q1e + Q3c:
+   step body fires `ctx.cost_chain` per CP spec v1.5 §25.9 propagated
+   pattern; un-strikes U-RT-49 cost-attribution AC.
 
 Fake provider + collector + tracer fixtures mirror `test_bootstrap.py`
 (no network; in-process).
@@ -597,3 +605,231 @@ async def test_e2e_run_surfaces_drain_timeout_when_step_exceeds_budget(
     assert result.status == "drained"
     assert result.failure_cause is not None
     assert result.failure_cause.runtime_fail_class == "RT-FAIL-DRAIN-TIMEOUT"
+
+
+# ---------------------------------------------------------------------------
+# CP spec v1.5 §25.9 — step body owns cost-attribution chain invocation
+# (Q1e propagated pattern; Q3c mock-rate bypass; un-strikes U-RT-49 cost AC)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_e2e_run_step_body_fires_cost_attribution_chain(
+    tmp_path: Path,
+    _patched_runtime: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """U-RT-49 cost-attribution AC un-strike — CP spec v1.5 §25.9.
+
+    Per the §25.9 propagated-emission pattern (analogous to §25.5
+    retry.attempt / breaker.tripped / fallback.triggered rows: "Driver
+    does not synthesize; it propagates step body's emission"), the step
+    body — NOT the driver — owns the cost-attribution chain invocation.
+
+    This test:
+
+    1. Captures `ctx.cost_chain` post-bootstrap via the wrapped bootstrap.
+    2. The step body (the `_CostFiringDispatcher.dispatch` method)
+       composes a mock `SpanCostInputs` + mock `PriceRateEntry` from
+       its local provider-invocation closure (Q2-bounded: no shared
+       cross-axis carrier at v1.5).
+    3. Step body invokes `ctx.cost_chain.compute_per_attempt_cost(inputs,
+       mock_rates)` — bypasses the deferred `PRICE_TABLE_REF`
+       substitution via `compute_span_cost_with_rates` per OD
+       `cost_formula.py:175-188` documented intent (Q3c).
+    4. Step body composes a full 12-field `SpanCostRecord` and calls
+       `ctx.cost_chain.attach_idempotency_key` for the §14.4 join.
+    5. The resulting `SpanCostRecord` is captured in a test-local list;
+       the test asserts the chain produced ≥1 entry of the right shape.
+
+    AC text from `.harness/u-rt-49-implementation-plan.md`:
+    > Cost attribution chain produced an entry.
+
+    Materialized verbatim. `PRICE_TABLE_REF` substitution remains an
+    open bounded H_E residual per
+    `.harness/fork_price_table_ref_substitution_retirement.md`; this
+    test does NOT retire it (uses the mock-rate bypass, not a resident
+    rate table).
+    """
+    from collections.abc import Sequence
+    from typing import Any as _Any
+    from unittest.mock import MagicMock
+
+    from harness_core.identity import StepID
+    from harness_core.persona_tier import PersonaTier
+    from harness_cp.cp_shared_types import ModelBinding
+    from harness_cp.engine_class import EngineClass
+    from harness_cp.engine_namespace import ReplayDisposition
+    from harness_cp.workflow_driver import StepDispatcher as _CpStepDispatcher
+    from harness_cp.workflow_driver_types import StepKind, WorkflowStep
+    from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+    from harness_od.cost_formula import (
+        PriceRateEntry,
+        PriceRateKey,
+        SpanCostInputs,
+    )
+    from harness_od.idempotency_join_dedup import SpanCostRecord
+    from harness_runtime.api import run as _run
+
+    config = _config(tmp_path)
+    monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
+
+    # Captured surfaces: the ctx (for cost_chain access from the
+    # dispatcher) and the produced SpanCostRecord(s) for AC verification.
+    ctx_holder: dict[str, _Any] = {}
+    cost_records: list[SpanCostRecord] = []
+
+    real_run_bootstrap = run_bootstrap
+
+    async def _wrapped_bootstrap(
+        cfg: RuntimeConfig, *, workload_class: WorkloadClass
+    ) -> _Any:
+        ctx = await real_run_bootstrap(cfg, workload_class=workload_class)
+        ctx_holder["ctx"] = ctx
+        return ctx
+
+    monkeypatch.setattr(
+        "harness_runtime.bootstrap.run_bootstrap", _wrapped_bootstrap
+    )
+
+    # Mock rate snapshot per Q3c — bypasses the deferred PRICE_TABLE_REF
+    # substitution by supplying an explicit PriceRateEntry directly.
+    _mock_rate_key = PriceRateKey(
+        provider_name="anthropic",
+        model="claude-haiku-4-5",
+        tokenizer_version="anthropic-tokenizer-v1",
+    )
+    _mock_rates = PriceRateEntry(
+        key=_mock_rate_key,
+        base_input=3.0e-6,   # $3 / MTok input — mock value, not authoritative
+        base_output=15.0e-6,  # $15 / MTok output — mock value, not authoritative
+    )
+
+    class _CostFiringDispatcher:
+        """Step body that owns cost-attribution invocation per §25.9."""
+
+        def dispatch(
+            self, binding: _Any, step: WorkflowStep
+        ) -> dict[str, _Any]:
+            _ = binding
+
+            # Step body sources SpanCostInputs from its local provider-
+            # invocation closure (Q2-bounded; mock token counts here
+            # because the provider client is faked at the fixture layer).
+            inputs = SpanCostInputs(
+                input_tokens=100,
+                cache_creation=0,
+                cache_read=0,
+                output_tokens=42,
+                rate_key=_mock_rate_key,
+            )
+
+            ctx = ctx_holder["ctx"]
+
+            # Step 1: per-attempt cost (C-OD-14 §14.1) — invoked through
+            # compute_span_cost_with_rates (mock-rate bypass per Q3c).
+            cost_usd = ctx.cost_chain.compute_per_attempt_cost(
+                inputs, _mock_rates
+            )
+
+            # Step 2: sandbox-overhead composition (C-OD-14 §14.2) —
+            # non-sandboxed step → sandbox_overhead=None passes through.
+            total = ctx.cost_chain.compose_total_cost(
+                span_cost=cost_usd,
+                span_duration_ms=10,
+                sandbox_overhead=None,
+            )
+
+            # Step 3: compose the 12-field SpanCostRecord (the carrier
+            # consumed by U-OD-21 rollup_costs_by_axis + the audit
+            # ledger join site per §14.4).
+            cost_record = SpanCostRecord(
+                span_id=f"span-{step.step_id}",
+                idempotency_key="placeholder-pre-join",
+                total_cost=total.total_cost,
+                total_latency_ms=total.total_latency_ms,
+                derived_keys=(),
+                engine_replay_disposition=ReplayDisposition.NO_REPLAY,
+                retry_attempt_number=None,
+                retry_cause_attribution=None,
+                is_replay_derived=False,
+                provider_discriminator="anthropic",
+                gen_ai_provider_name="anthropic",
+                gen_ai_request_model="claude-haiku-4-5",
+            )
+
+            # Step 4: idempotency-key join (C-OD-14 §14.4) — attach the
+            # parent's idempotency_key per C-IS-05 (the join key).
+            joined_record = ctx.cost_chain.attach_idempotency_key(
+                span=cast(_Any, MagicMock()),
+                parent_idempotency_key=f"run-id::step::{step.step_id}",
+                cost_record=cost_record,
+            )
+
+            cost_records.append(joined_record)
+            return {"step_id": str(step.step_id), "ok": True}
+
+    class _Workflow:
+        @property
+        def workflow_id(self) -> str:
+            return "wf-cost-attribution-smoke"
+
+        @property
+        def workload_class(self) -> WorkloadClass:
+            return _WORKLOAD
+
+        @property
+        def manifest_entry(self) -> WorkflowManifestEntry:
+            return WorkflowManifestEntry(
+                workflow_id="wf-cost-attribution-smoke",
+                workload_class=_WORKLOAD,
+                persona_tier=PersonaTier.TEAM_BINDING,
+                engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+                topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+                layer_budgets=(),
+                fallback_chain=_CHAIN,
+                hitl_placements=(),
+                per_step_overrides={},
+            )
+
+        @property
+        def steps(self) -> Sequence[WorkflowStep]:
+            return (
+                WorkflowStep(
+                    step_id=StepID("step-0"),
+                    step_kind=StepKind.INFERENCE_STEP,
+                    step_payload={"index": 0},
+                ),
+            )
+
+        @property
+        def step_dispatcher(self) -> _CpStepDispatcher:
+            return cast(_CpStepDispatcher, _CostFiringDispatcher())
+
+        @property
+        def default_model_binding(self) -> ModelBinding:
+            return ModelBinding(provider="anthropic", model="claude-haiku-4-5")
+
+    result = await _run(_Workflow(), config=config)
+
+    # The driver completes the run (no failures).
+    assert result.status == "completed"
+
+    # AC un-strike: cost-attribution chain produced ≥1 entry.
+    assert len(cost_records) >= 1, (
+        "expected the step body to fire the cost-attribution chain at "
+        "least once per CP spec v1.5 §25.9"
+    )
+
+    # AC shape verification: the produced entry is a full 12-field
+    # SpanCostRecord with the U-OD-20 v2.8 D-5 rollup keys materialized.
+    record = cost_records[0]
+    assert isinstance(record, SpanCostRecord)
+    assert record.total_cost > 0  # non-trivial cost value emitted
+    assert record.total_latency_ms == 10
+    # idempotency_key was updated by §14.4 join — no longer the placeholder.
+    assert record.idempotency_key == "run-id::step::step-0"
+    # v2.8 D-5 rollup keys are populated.
+    assert record.provider_discriminator == "anthropic"
+    assert record.gen_ai_provider_name == "anthropic"
+    assert record.gen_ai_request_model == "claude-haiku-4-5"
