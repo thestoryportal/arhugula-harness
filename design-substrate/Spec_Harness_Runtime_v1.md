@@ -1,4 +1,24 @@
-# Specification — Harness Runtime v1.3
+# Specification — Harness Runtime v1.4
+
+## Change-note (v1.3 → v1.4)
+
+**Scope of revision.** Phase-7 sub-phase 7d Class 1 fork resolution per `.harness/class_1_tension_cp_3_retry_breaker_composer_underspec.md` (filed + Path A ratified 2026-05-20). Operator ratification D1–D6 (composer architectural shape) + Q1=a (nested retry-within-candidate then fallback) + Q2=c (registry key extension with reserved `"llm_dispatch"`): in-Phase-7 closure via new C-RT-16 contract; runtime axis owns the retry/breaker/fallback composition seam between the U-RT-24 registry and the C-RT-15 dispatch composer.
+
+**Single-finding addition.** §14.5 (C-RT-15) preserved verbatim from v1.3. NEW §14.6 contract **C-RT-16 — Retry/breaker/fallback composer (wrapping C-RT-15)** specifies the runtime composition seam that consumes `ctx.retry_breaker` (U-RT-24 registry) + `ctx.fallback_chain` (stage 3b binding) + the inner C-RT-15 `RuntimeLLMDispatcher`, owns the per-step candidate-iteration loop, emits the `retry.*` 6-attribute namespace per C-CP-03 §3.5 + `fallback.exhausted` per C-CP-04 §4.2, surfaces `harness.breaker.*` transitions via the existing `RuntimeRetryBreaker.emit_breaker_transition_event` site, and replaces the bare `RuntimeLLMDispatcher` as `ctx.llm_dispatcher` (preserving the `StepDispatcher` Protocol seam, no driver code change).
+
+**Sections revised (substantive).**
+- New **§14.6 C-RT-16** — Retry/breaker/fallback composer contract (between §14.5 and §15 to keep §15–§17 numbering stable; §-pin uses a `.6` decimal continuing the §14.5 pattern).
+- **§14** failure-mode taxonomy — new row `RT-FAIL-FALLBACK-EXHAUSTED` (permanent; raised when the fallback chain exhausts after per-candidate retry exhaustion).
+- **§15** Spec-to-plan traceability — new row for U-RT-58 (the new plan unit carrying C-RT-16).
+- **§17** Coherence pass — re-run for v1.4 deferred per same pattern as v1.2 (covered at U-RT-58 close).
+
+**Sections preserved verbatim from v1.3.** All v1.3 content outside the additions above preserved unchanged. §§1–14 (including the v1.3 §14.5 prose-precision pass), §15 except the new U-RT-58 row, §16, §17, §17.1 unchanged.
+
+**Status posture.** Proposed (v1.3) → **Proposed (v1.4)**. Adversarial-review pass scheduled at U-RT-58 close per Phase 7 sub-phase 7b discipline (in keeping with the U-RT-52 / v1.2-then-v1.3 pattern: implementation begins on the v1.4 surface; adversarial pass folded into the same arc as landing).
+
+**Downstream absorption owed.** `.harness/phase-2-session-3-track-a-atomic-decomposition.md` extended with new U-RT-58 (small body authored alongside this spec amendment; revision log entry added). Per-axis subdirectory `harness-runtime/CLAUDE.md` (if it exists) needs no update — C-RT-16 is runtime-internal. CP spec v1.5 unchanged (the registry-key extension lives in C-RT-16 runtime spec, not as a CP-side amendment — see §14.6 "Registry key extension (Q2=c clause)" sub-section for rationale). `.harness/phase-7d-retirement-ledger-v2.md` §5 CP rows superseded at U-RT-58 landing event (file ratification target H_T-CP-3 RETIRED + H_T-CP-4 RETIRED + H_T-CP-5 PARTIAL → RETIRED; §6.3.2 CXA-5 cascade re-evaluation triggered).
+
+---
 
 ## Change-note (v1.2 → v1.3)
 
@@ -859,6 +879,7 @@ The runtime axis introduces a fail-class enumeration distinct from CP's workflow
 | `RT-FAIL-SHUTDOWN-TIMEOUT` | permanent | C-RT-10 shutdown wait | Process force-exit upstream |
 | `RT-FAIL-INSPECT-PATH` | permanent | `harness-inspect` admin stub | None; operator fixes path |
 | `RT-FAIL-ADMIN-PIDFILE` | permanent | `harness-shutdown` admin stub | None; operator verifies running harness |
+| `RT-FAIL-FALLBACK-EXHAUSTED` (new at v1.4) | permanent | C-RT-16 wrapper exhausts the fallback chain after per-candidate retry exhaustion | Driver `try/except` maps to `step-failure: RT-FAIL-FALLBACK-EXHAUSTED: ...` per C-CP-25 §25.3.3.4 |
 
 **Relationship to CP `validator_fail_taxonomy`:**
 
@@ -979,6 +1000,94 @@ v1.3 introduces one new fail class (`RT-FAIL-PAYLOAD-SHAPE`); the remaining thre
 
 ---
 
+## §14.6 C-RT-16 — Retry/breaker/fallback composer wrapping C-RT-15 (new at v1.4; D1–D6 + Q1=a + Q2=c absorption of `class_1_tension_cp_3_retry_breaker_composer_underspec.md`)
+
+**Contract surface.** Wrapper module + Protocol-satisfying callable + integration obligations with C-RT-15 (inner LLM-dispatch composer), `ctx.retry_breaker` (U-RT-24 registry binding), `ctx.fallback_chain` (stage 3b binding), C-RT-06 (TracerProvider for nested span emission), C-CP-03 §3.5 (`retry.*` namespace + dual-emission), C-CP-04 §4.2 (`fallback.exhausted` event semantics), C-OD-07 §7.1 (`harness.breaker.*` 7-attribute schema, emitted by the existing `RuntimeRetryBreaker.emit_breaker_transition_event` site — no new OD emission code).
+
+**PRD enablement.** Completes the multi-LLM runtime composition surface: C-RT-15 enabled per-step single-attempt dispatch; C-RT-16 enables resilient multi-attempt + multi-candidate dispatch. R-CP-04 + R-CP-07 (CP retry/fallback observability at runtime). R-OD-05 (cost-attribution chain stability against retry-storm — exhaustion produces a single typed terminal fail-class rather than a flood of bare provider exceptions).
+
+**ADR commitment(s) honored.** ADR-F1 v1.2 §Decision (multi-LLM resilience operationalized at runtime, not just at design + spec + library code — closes the §6.3.2 cascade gate via H_T-CP-3 retirement); ADR-D3 v1.2 §Decision (validation-contract retry-staircase semantics composed at the dispatch site via `RuntimeRetryBreaker.advance_staircase`).
+
+**Fork-resolution provenance.** `.harness/class_1_tension_cp_3_retry_breaker_composer_underspec.md` (filed 2026-05-20 at `7fe2c95`). Operator ratification (recorded at fork "Operator decision (2026-05-20)" section):
+
+- **D1** — Composer owns the candidate-iteration loop (iterates `fallback_chain` candidates; per-candidate runs retry loop). Not a single-(provider, model) wrapper.
+- **D2** — Retry-eligible iff the provider exception matches CP §21.2 transient staircase (`REFLEXION` / `RETRY_WITH_BACKOFF` stages); fail-fast otherwise (AUTH, payload-shape, shutdown). Composer delegates to `RuntimeRetryBreaker.advance_staircase` per existing C-CP-21 contract.
+- **D3** — Nested span emission: one outer span per composer invocation (covers the full retry+fallback envelope); one inner span per attempt carrying the C-CP-03 §3.5 `retry.*` 6-attribute namespace. Matches the OD sampling gradient (head sampler picks outer; tail sampler picks inner).
+- **D4** — On fallback chain exhaustion: composer emits `fallback.exhausted` event on the outer span before raising; raises new typed `RT-FAIL-FALLBACK-EXHAUSTED` fail class. The existing `workflow_driver.py:380-389` `try/except` boundary catches and maps to `step-failure: RT-FAIL-FALLBACK-EXHAUSTED: ...` per C-CP-25 §25.3.3.4 contract.
+- **D5** — Breaker emission ownership stays with the registry: composer calls `breaker.record_failure()` / `record_success()` / `attempt_half_open()` per the existing `BreakerStateMachine` API; the registry's existing `RuntimeRetryBreaker.emit_breaker_transition_event` handles `harness.breaker.*` span emission per C-OD-07 §7.1. Composer code is thin against breaker concerns.
+- **D6** — Bootstrap wiring: stage 5 (LOOP_INIT) constructs `RetryBreakerFallbackDispatcher(inner=RuntimeLLMDispatcher(...), retry_breaker=ctx.retry_breaker, fallback_chain=ctx.fallback_chain, tracer=ctx.tracer_provider.get_tracer("harness.runtime.retry_breaker_fallback"))` and assigns to `ctx.llm_dispatcher`. The bare `RuntimeLLMDispatcher` becomes a private constructor arg of the wrapper (not removed; still constructed at stage 5, just not surfaced as the top-level `ctx.llm_dispatcher`). `workflow_driver` code at line 379 unchanged — invokes `ctx.llm_dispatcher.dispatch(binding, step)` and gets the wrapper.
+- **Q1=a** — Nested attempt budget: per-candidate retry up to `RetryPolicy.max_attempts` (full-jitter backoff per `compute_full_jitter_delay_seconds`); on exhaustion call `advance_or_raise(chain, failed_candidate)` to advance to next candidate; next candidate gets its own retry budget. `RetryPolicy.max_attempts` is the per-(provider, model) attempt budget; chain length is a separate per-step budget (operator-supplied via `RoutingManifest.fallback_chain` at C-CP-04).
+- **Q2=c** — Registry key extension: the `RuntimeRetryBreaker` registry exposes a reserved `"llm_dispatch"` policy key alongside per-tool keys (see "Registry key extension" sub-section below). The CP retry namespace declarations at C-CP-03 §3.5 are unchanged; the keying scheme is implementation discretion per `Spec_Harness_Runtime_v1.md` §3 — this contract documents the runtime-side extension.
+
+**Specification content.**
+
+The runtime contributes one production wrapper class — `RetryBreakerFallbackDispatcher` — that owns the per-step retry+breaker+fallback orchestration loop around the inner C-RT-15 `RuntimeLLMDispatcher.dispatch` invocation. The wrapper satisfies the same `StepDispatcher` Protocol that C-RT-15 satisfies (declared at `harness-cp/src/harness_cp/workflow_driver.py:151`); from the driver's perspective the wrapper IS the dispatcher.
+
+Per-step invocation discipline (the body of `RetryBreakerFallbackDispatcher.dispatch(binding, step)`):
+
+1. **Lookup `RetryPolicy` from the registry under the reserved `"llm_dispatch"` key** (see Registry key extension below). Resolves to `RetryPolicy(max_attempts, backoff, jitter)` per `harness_cp.routing_manifest_residence.RetryPolicy`.
+2. **Construct the candidate iterator from `ctx.fallback_chain`** for the step's `binding.model_binding` family. The chain is operator-supplied at workflow-binding time per C-CP-04 §4. The first candidate is `binding.model_binding` itself; subsequent candidates are cross-family-fallback per the chain.
+3. **Start the outer span** via `with tracer.start_as_current_span("harness.runtime.retry_breaker_fallback")` (synchronous CM per the v1.3 §14.5 phrasing correction). The outer span covers the full retry+fallback envelope and is the carrier for the eventual `fallback.exhausted` event on exhaustion.
+4. **Per-candidate loop:** for each candidate in the chain iterator:
+   - **Breaker pre-check.** `breaker = ctx.retry_breaker.get_breaker(candidate.provider, candidate.model)`. If `breaker.should_attempt() is False` (state is OPEN and cooldown unexpired), advance to next candidate via `advance_or_raise(chain, candidate)` — emit `retry.skipped` event on outer span; do NOT consume retry budget; loop continues.
+   - **Per-attempt loop** (bounded by `RetryPolicy.max_attempts` for this candidate):
+     - **Start inner span** via `with tracer.start_as_current_span("harness.runtime.retry_attempt")`. Inner span carries the C-CP-03 §3.5 `retry.*` 6-attribute namespace (`retry.attempt`, `retry.attempt_count`, `retry.policy_id`, `retry.backoff_ms`, `retry.cause_class`, `retry.terminal`).
+     - **Dispatch to inner.** `result = await self.inner.dispatch(rebound(binding, candidate), step)` — `rebound(...)` constructs a new `StepEffectiveBinding` whose `model_binding` field is overridden to `candidate` for this attempt. All other binding fields (sandbox_tier_floor, etc.) carry forward unchanged.
+     - **On success:** call `breaker.record_success()` (registry handles `harness.breaker.*` transition emission if state changes); annotate inner span with `retry.terminal = "success"`; return `result` (outer span closes via CM; breaker + retry state captured in span attrs).
+     - **On `LLMDispatchProviderUnreachableError` / `LLMDispatchPayloadShapeError`:** fail-fast for this candidate (these are not retry-eligible per D2). Annotate inner span with `retry.terminal = "fail-fast"` + `retry.cause_class = "{class_name}"`. Call `breaker.record_failure()` (registry emits transition if breaker trips). Break out of per-attempt loop; advance to next candidate via `advance_or_raise`.
+     - **On provider SDK transient (network / rate-limit / 5xx) per C-CP-21 §21.2 transient staircase:** advance the staircase via `ctx.retry_breaker.advance_staircase(policy, attempt_count, validator_fail_class)`. If staircase result is `RETRY_WITH_BACKOFF`: sleep `compute_full_jitter_delay_seconds(policy, attempt_count)`; annotate inner span with `retry.terminal = "retry"` + `retry.backoff_ms`; continue per-attempt loop. If staircase result escalates beyond `RETRY_WITH_BACKOFF` (e.g., `CROSS_FAMILY_FALLBACK` / `LOCAL_TERMINAL` / `HITL_ESCALATION`): annotate inner span with `retry.terminal = "escalate"`; call `breaker.record_failure()`; break out of per-attempt loop; advance to next candidate via `advance_or_raise`.
+     - **On `RetryPolicy.max_attempts` exhaustion:** annotate inner span with `retry.terminal = "max-attempts"`; call `breaker.record_failure()`; break out of per-attempt loop; advance to next candidate via `advance_or_raise`.
+5. **On `FallbackChainExhaustedError`** (raised by `advance_or_raise` when chain has no remaining candidate): emit `fallback.exhausted` span event on the outer span with attributes per C-CP-04 §4.2 (`fallback.chain_length`, `fallback.last_failure_class`, `fallback.exhaustion_cause`); raise `RetryBreakerFallbackExhaustedError` (typed runtime error) which maps to the new `RT-FAIL-FALLBACK-EXHAUSTED` fail class.
+
+**Registry key extension (Q2=c clause).** The `harness_runtime.lifecycle.retry_breaker.RuntimeRetryBreaker.get_policy(name)` method accepts the reserved string `"llm_dispatch"` in addition to per-tool names. The runtime composer reserves this key for LLM-dispatch retry policy lookup; tools may not declare a tool named `"llm_dispatch"` (enforced at manifest-validation time via a typed `ReservedToolNameError`). The reserved key's `RetryPolicy` is operator-supplied at `RuntimeConfig.routing_manifest.retry_policies["llm_dispatch"]`; if absent at runtime, the registry's `materialize_retry_breaker_stage` materializer binds a default `RetryPolicy(max_attempts=3, backoff="full_jitter", base_delay_seconds=0.2, delay_cap_seconds=10.0)` for the reserved key. Per `Spec_Harness_Runtime_v1.md` §3 ("Deferred to implementation discretion") + C-CP-03 §3.5 (CP namespace declarations are key-agnostic), this extension does NOT require a CP spec amendment — the keying scheme is implementation discretion. The CP-side observability contract is unchanged: `retry.*` spans emit per the §3.5 attribute set regardless of which registry key surfaced the policy.
+
+**Composer module residence.** `harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py` (new file at v1.4). Module exposes one production class — `RetryBreakerFallbackDispatcher` — that satisfies `StepDispatcher` via duck-typing. Construction site: bound at bootstrap stage 5 (LOOP_INIT) per the U-RT-52 stage 5 site, wrapping the existing `RuntimeLLMDispatcher` constructor invocation. `ctx.llm_dispatcher` post-condition shape becomes the wrapper, not the bare dispatcher.
+
+**Integration with C-RT-04 (HarnessContext).** No new field. The wrapper consumes `ctx.retry_breaker` (existing, U-RT-24) + `ctx.fallback_chain` (existing, stage 3b) + `ctx.tracer_provider` (existing, C-RT-06) + an internally-constructed `RuntimeLLMDispatcher` instance (private). `ctx.llm_dispatcher` retains the same Protocol shape; runtime users invoke it unchanged.
+
+**Integration with C-RT-15 (inner LLM dispatch composer).** No protocol change to `RuntimeLLMDispatcher.dispatch` at v1.4. The wrapper invokes the inner dispatcher exactly once per attempt with a rebound `binding` (candidate's provider+model overrides). The inner dispatcher's `retry.*`-naive exception propagation per v1.3 §14.5 invariants ("composer propagates the exception unmodified") is the boundary where the wrapper takes over.
+
+**Integration with C-RT-06 (TracerProvider).** Two nested spans per composer invocation: outer (`harness.runtime.retry_breaker_fallback`, covers full envelope) + inner per-attempt (`harness.runtime.retry_attempt`, carries `retry.*` namespace). The inner C-RT-15 `gen_ai.*` span nests inside the inner retry_attempt span — three levels of nesting (outer composer → per-attempt retry → per-call gen_ai). This is the canonical OTel pattern for retry-wrapper instrumentation.
+
+**Invariants.**
+
+- Wrapper is async (matches C-RT-08 async-only `run()` posture + C-RT-15 async dispatch).
+- Wrapper satisfies `isinstance(wrapper, StepDispatcher)` via the same `@runtime_checkable` introspection.
+- Outer span emitted exactly once per composer invocation; inner per-attempt span emitted exactly once per attempt.
+- `retry.*` namespace attributes per C-CP-03 §3.5 set on the inner per-attempt span only; outer span carries `fallback.*` attributes on exhaustion.
+- `harness.breaker.*` namespace emission is delegated to `RuntimeRetryBreaker.emit_breaker_transition_event` (no wrapper-side span code); per C-OD-07 §7.1 7-attribute schema.
+- Wrapper does NOT swallow exceptions: all paths terminate in either successful return OR raised typed fail-class.
+- Reserved registry key `"llm_dispatch"` is the ONLY runtime-emitted retry-policy lookup; per-tool keys are reserved for tool-invocation runtime composer (separate future arc per the v2 ledger §9.2.2 tool-invocation gap).
+
+**Failure-mode taxonomy.** Per C-RT-14, with one new fail class added at v1.4:
+
+| Fail class | Trigger | Behavior |
+|---|---|---|
+| `RT-FAIL-FALLBACK-EXHAUSTED` (permanent, new at v1.4) | Fallback chain exhausts after per-candidate retry exhaustion (every candidate either fails-fast or hits `max_attempts`) | Wrapper emits `fallback.exhausted` event on outer span; raises typed `RetryBreakerFallbackExhaustedError`; driver `try/except` maps to `step-failure: RT-FAIL-FALLBACK-EXHAUSTED: ...` per C-CP-25 §25.3.3.4 |
+
+The C-RT-15 fail classes (`RT-FAIL-PROVIDER-UNREACHABLE`, `RT-FAIL-TRANSIENT`, `RT-FAIL-PROVIDER-AUTH`, `RT-FAIL-PAYLOAD-SHAPE`) propagate through the wrapper unchanged for `PROVIDER-UNREACHABLE` + `PAYLOAD-SHAPE` (fail-fast per D2; wrapper advances to next candidate but if chain length is 1, propagates verbatim). `TRANSIENT` is consumed by the staircase loop (composer retries internally); `PROVIDER-AUTH` is fail-fast.
+
+**X-AL-2 retirement implications (v1.4 → retirement event prerequisites).**
+
+The C-RT-16 contract specifies the composition seam whose absence was the substitution-site B-condition blocker for H_T-CP-3 + H_T-CP-4 + H_T-CP-5 per `.harness/phase-7d-retirement-ledger-v2.md` §5 + `.harness/phase-7d-retirement-events-batch-2.md` §3. At U-RT-58 landing event:
+
+- **H_T-CP-3 RETIRE-READY.** `retry.*` 6-attribute namespace emitted at the inner per-attempt span per §14.6 step 4. Condition A: U-CP-03 + U-RT-58 landed. Condition B: `retry.*` namespace no longer requires `CLAUDE.md`-prose substitution; runtime emits at production execution path.
+- **H_T-CP-4 RETIRE-READY.** `fallback.exhausted` emitted on chain exhaustion per §14.6 step 5. Condition A: U-CP-04 + U-RT-58 landed. Condition B: fallback chain orchestration no longer requires operator-driven `Bash(retry-then-next)` shell-out; runtime owns the loop.
+- **H_T-CP-5 PARTIAL → RETIRE-READY.** `routing.*` attribute namespace (per C-CP-05 §5.1 inheritance composition from `llm.inference` parent span) inherits naturally through the inner C-RT-15 `gen_ai.*` span; the C-RT-16 retry-wrapper does not add new `routing.*` emission but does not break the inheritance. Per batch-2 §3 ("Follow-on CP-3 / CP-4 unit will full-retire CP-5 when retry/breaker wrappers land"), the wrapper landing closes the PARTIAL → RETIRED transition.
+
+**Cross-axis cascade closures at U-RT-58 landing.** Per Meta-Architecture §6.3.2 (F-CP-01 Stage 3b inversion ordering): H_T-OD-2 RETIRED (batch 2) + H_T-CP-3 RETIRED (this contract) jointly enable H_T-CXA-5 RETIRE-READY evaluation. The `harness.breaker.*` namespace producer-emission flow becomes fully runtime-grounded once the wrapper invokes `breaker.record_failure()` at production execution path; the existing `od_cp_wiring.py` Pattern-P1 verification (already firing at bootstrap per `od_cp_wiring.py:187-223`) plus runtime invocation closes both endpoints of the inversion seam.
+
+**Deferred to implementation discretion.**
+
+- Exact wrapper class name (suggest `RetryBreakerFallbackDispatcher` per the §14.6 narrative recommendation).
+- Per-candidate breaker key scheme: suggest `(provider, model)` 2-tuple (matches `RuntimeRetryBreaker.get_breaker(provider, model)` library API).
+- Whether `RetryPolicy.max_attempts` defaults are operator-overridable per-step (via `binding.retry_policy_override`) or per-runtime (via `RuntimeConfig.routing_manifest.retry_policies["llm_dispatch"]`) — MVP suggests per-runtime only; per-step override is a follow-on if operator needs surface.
+- Span name conventions for outer + inner: suggest `harness.runtime.retry_breaker_fallback` (outer) + `harness.runtime.retry_attempt` (inner); align with §14.5's `gen_ai.{provider}.{model_or_method}` for the innermost C-RT-15 span.
+- Test mock strategy: suggest a `MockRuntimeLLMDispatcher` fixture that records the sequence of `(binding, step)` calls + returns canned success/failure per call; verify wrapper's iteration + retry + breaker behavior against the recorded sequence. Pytest-asyncio for async surface.
+- Whether the wrapper emits a separate `retry.skipped` span event on breaker-open candidate skip, or just an outer-span attribute — defer to OTel telemetry-volume discretion at implementation; spec-MUST is just that the skip is observable.
+
+---
+
 ## §15 Spec-to-plan traceability
 
 Each Track A plan v2 unit cites at least one contract in this spec. Coverage matrix:
@@ -1009,6 +1118,7 @@ Each Track A plan v2 unit cites at least one contract in this spec. Coverage mat
 | U-RT-47..U-RT-48 | C-RT-13 | Admin stubs |
 | U-RT-49..U-RT-51 | C-RT-02 + C-RT-12 verification | E2E + Pattern P1 verification |
 | U-RT-52 (new at v1.2) | C-RT-15, C-RT-05, C-RT-06 | LLM-dispatch composer; satisfies `harness_cp.workflow_driver.StepDispatcher` Protocol; emits GenAI semconv 1.41.0 spans |
+| U-RT-58 (new at v1.4) | C-RT-16, C-RT-15, C-RT-06 + C-CP-03 §3.5, C-CP-04 §4.2, C-CP-21 §21.2 | Retry/breaker/fallback composer wrapping C-RT-15; owns per-step candidate-iteration loop + per-candidate retry loop; emits `retry.*` 6-attribute namespace on inner per-attempt span + `fallback.exhausted` on outer span on chain exhaustion; reserved registry key `"llm_dispatch"`; replaces bare C-RT-15 dispatcher at `ctx.llm_dispatcher` (preserving the `StepDispatcher` Protocol seam) |
 | (cross-cutting) | C-RT-14 | Every U-RT-NN that surfaces a failure emits via the runtime-local fail-class taxonomy |
 
 Every U-RT-NN unit traces to ≥1 spec contract. ✓

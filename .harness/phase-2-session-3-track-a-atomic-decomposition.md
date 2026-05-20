@@ -1,5 +1,7 @@
 # Phase 2 Session 3 — Track A atomic-decomposition plan: `harness-runtime/`
 
+*v2.3 — minor revision (2026-05-20). Adds U-RT-58 (retry/breaker/fallback composer wrapping C-RT-15) at a new L9-bis section, plus §3 topology graph edge, §6 7d retirement preview update, §9 traceability row. Absorbs the operator-ratified Path A resolution of `.harness/class_1_tension_cp_3_retry_breaker_composer_underspec.md` (filed 2026-05-20 at `7fe2c95`). Co-published with `Spec_Harness_Runtime_v1.md` v1.4 (which adds the C-RT-16 contract). Unit count grows by one (U-RT-58 fills the next slot after the existing v1.2-introduced U-RT-52).*
+
 *v2.1 — minor revision (2026-05-19). Adds §9 pointing at `design-substrate/Spec_Harness_Runtime_v1.md` v1.1 §15 as the single source of truth for spec-to-plan traceability. Closes the v1.1 spec change-note "Downstream absorption owed" line by canonicalizing the trace in one place rather than duplicating it. No unit-set or topology changes.*
 
 *v2 — post-adversarial-review revision (2026-05-19). Absorbs `.harness/Adversarial_Review_phase_2_session_3_track_a_plan.md` findings F2-01..F2-08, F1-01..F1-03. Phase-7-style unit enumeration; topological levels L0–L11.*
@@ -447,6 +449,25 @@ Each unit is sized to land in a single PR with a fixed acceptance test set. Ever
 
 ---
 
+### L9-bis — Retry/breaker/fallback composer (new at v1.4 / v2.3; Phase-7 sub-phase 7d Class 1 fork absorption)
+
+**U-RT-58 — Retry/breaker/fallback composer wrapping C-RT-15 (Spec_Harness_Runtime_v1.md §14.6 C-RT-16)**
+- Scope: implement `RetryBreakerFallbackDispatcher` at `harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py` satisfying the `harness_cp.workflow_driver.StepDispatcher` Protocol (same duck-typing pattern as U-RT-52). Per-step async wrapper that owns the candidate-iteration loop + per-candidate retry loop around the inner C-RT-15 `RuntimeLLMDispatcher.dispatch` invocation. (1) Looks up `RetryPolicy` from `ctx.retry_breaker.get_policy("llm_dispatch")` (reserved registry key per C-RT-16 §"Registry key extension"). (2) Iterates `ctx.fallback_chain` candidates (first candidate = `binding.model_binding`; subsequent = cross-family-fallback per C-CP-04 §4). (3) Per candidate: breaker pre-check via `breaker.should_attempt()`; if open-and-cooldown-unexpired, emit `retry.skipped` event and `advance_or_raise` to next candidate. (4) Per-attempt loop (bounded by `RetryPolicy.max_attempts`): start inner `harness.runtime.retry_attempt` span carrying `retry.*` 6-attribute namespace per C-CP-03 §3.5; dispatch via `self.inner.dispatch(rebound_binding, step)`; on success → `breaker.record_success()` + return; on `LLMDispatchProviderUnreachableError`/`LLMDispatchPayloadShapeError` → fail-fast for this candidate; on provider transient → `advance_staircase`; on `RetryPolicy.max_attempts` exhausted → advance candidate. (5) On `FallbackChainExhaustedError` → emit `fallback.exhausted` on outer span per C-CP-04 §4.2; raise `RetryBreakerFallbackExhaustedError` mapping to new `RT-FAIL-FALLBACK-EXHAUSTED` fail class. (6) Bootstrap stage 5 wraps the bare `RuntimeLLMDispatcher` and binds the wrapper to `ctx.llm_dispatcher` — `workflow_driver` invocation at `workflow_driver.py:379` unchanged.
+- Deps: U-RT-24 (retry/breaker registry); U-RT-25 (fallback chain); U-RT-27 (TracerProvider); U-RT-52 (inner C-RT-15 LLM-dispatch composer). Stage 5 wiring extension at the existing U-RT-52 binding site.
+- Cross-axis deps (Pattern P1 imports): `harness_cp.workflow_driver.StepDispatcher` Protocol (same as U-RT-52); CP C-CP-03 §3.5 (`retry.*` 6-attribute namespace + dual-emission); CP C-CP-04 §4.2 (`fallback.exhausted` event semantics + chain composition); CP C-CP-21 §21.2 (transient staircase advancement function `advance_staircase`); OD C-OD-07 §7.1 (`harness.breaker.*` 7-attribute schema, emitted by existing `RuntimeRetryBreaker.emit_breaker_transition_event` — wrapper does NOT add OD-side emission code).
+- AC #1: `harness-runtime/src/harness_runtime/lifecycle/retry_breaker_fallback.py` exists; defines async `RetryBreakerFallbackDispatcher` class; `isinstance(RetryBreakerFallbackDispatcher(...), StepDispatcher)` returns `True` via `runtime_checkable`.
+- AC #2: per-candidate iteration verified — mock fallback chain with 3 candidates; mock inner dispatcher that fails (transient) on candidate 0 + (transient) on candidate 1 + succeeds on candidate 2; assert wrapper iterates all three, calls `advance_or_raise` twice, returns candidate-2 result; verify outer span spans full envelope; verify three nested per-attempt span sequences.
+- AC #3: per-candidate retry-then-success verified — mock inner that fails (transient) twice then succeeds on attempt 3 under `RetryPolicy(max_attempts=3)`; assert wrapper sleeps via `compute_full_jitter_delay_seconds` between attempts (with a sleep-mock to keep tests fast); assert success on attempt 3; verify three per-attempt spans emitted, each carrying `retry.*` 6-attribute namespace; verify final `retry.terminal = "success"`.
+- AC #4: `retry.*` 6-attribute namespace emission verified — test asserts each per-attempt span carries `retry.attempt`, `retry.attempt_count`, `retry.policy_id`, `retry.backoff_ms`, `retry.cause_class`, `retry.terminal` attributes per C-CP-03 §3.5; verify attribute values agree with the staircase state.
+- AC #5: `fallback.exhausted` emission verified — mock chain with all candidates failing-fast (provider-unreachable); assert wrapper iterates all candidates; assert `fallback.exhausted` event emitted on outer span with attributes per C-CP-04 §4.2 (`fallback.chain_length`, `fallback.last_failure_class`, `fallback.exhaustion_cause`); assert `RetryBreakerFallbackExhaustedError` raised; assert `RT-FAIL-FALLBACK-EXHAUSTED` fail class set on the error.
+- AC #6: breaker integration verified — mock breaker that is OPEN with unexpired cooldown for candidate 0; assert wrapper skips candidate 0 (emits `retry.skipped` event; does NOT call inner dispatcher); assert wrapper proceeds to candidate 1. Separately: mock breaker transitions CLOSED → OPEN after 3 failures; assert `RuntimeRetryBreaker.emit_breaker_transition_event` invoked once at the transition; verify `harness.breaker.*` 7-attribute span event emitted with attributes per C-OD-07 §7.1.
+- AC #7: nested-span hierarchy verified — assert OTel span parent-child relationships: outer `harness.runtime.retry_breaker_fallback` is root; per-attempt `harness.runtime.retry_attempt` spans nest inside outer; inner `gen_ai.*` spans (from C-RT-15) nest inside per-attempt; three nesting levels verified via `InMemorySpanExporter` parent-span-id linkage.
+- AC #8: reserved registry key extension verified — assert `ctx.retry_breaker.get_policy("llm_dispatch")` returns a populated `RetryPolicy` after bootstrap (default applied when operator-config absent); assert `ReservedToolNameError` raised at manifest-validation time if a tool is named `"llm_dispatch"` in `RoutingManifest.retry_policies`.
+- AC #9: bootstrap stage 5 wrap verified — `ctx.llm_dispatcher` post-condition is `isinstance(..., RetryBreakerFallbackDispatcher)` (not bare `RuntimeLLMDispatcher`) after stage 5; verify by `test_bootstrap_stage.py` extension; verify the wrapper's `.inner` attribute is the `RuntimeLLMDispatcher` instance.
+- AC #10: Phase 7d retirement-event prerequisite — after U-RT-58 lands, file batch 3 retirement event records for **H_T-CP-3** RETIRED + **H_T-CP-4** RETIRED + **H_T-CP-5** PARTIAL → RETIRED per `.harness/phase-7d-retirement-events-batch-1.md` shape under v2 ledger §5 CP-row evidence framework (condition B verified end-to-end at the new composer site). Re-evaluate §6.3.2 cascade: H_T-CXA-5 (F-CP-01 Stage 3b inversion) candidate for RETIRE-READY once H_T-CP-3 RETIRED + production `harness.breaker.*` emission verified end-to-end (likely RETIRE-READY in same batch event; verify per the wrapper integration tests). Updates `harness-cp/CLAUDE.md` §4.1 substitution-table status entries.
+
+---
+
 ## 3. Topological dependency graph
 
 ```
@@ -490,6 +511,10 @@ L10 U-RT-43 → U-RT-44 → U-RT-45 → U-RT-46
 L11 U-RT-43 + U-RT-46 → U-RT-49
     U-RT-43 → U-RT-50
     U-RT-33 → U-RT-51 (Pattern P1 completeness)
+
+L9-bis (v2.3 addition; wraps U-RT-52 at stage 5):
+    U-RT-24 + U-RT-25 + U-RT-27 + U-RT-52 → U-RT-58
+    (stage 5 wiring rebinds ctx.llm_dispatcher from bare RuntimeLLMDispatcher to RetryBreakerFallbackDispatcher; driver call site unchanged)
 ```
 
 ---
@@ -548,6 +573,16 @@ Bounded residuals expected to carry forward past Track A: substitutes whose real
 
 Per X-AL-2, file a retirement event against `Phase_7_Meta_Architecture_v1.md §5` as each unit above lands. Use the `phase-7-substitution-retirement` skill.
 
+**v2.3 addendum (2026-05-20).** U-RT-58 lands the retry/breaker/fallback composer (per C-RT-16). At its landing, retirement-event prerequisites are satisfied for three CP-axis substitutions previously bounded by the "no production retry/fallback orchestration call site" gap surfaced at `.harness/phase-7d-retirement-ledger-v2.md` §5:
+
+| Substitution | Retired when | Driving unit |
+|---|---|---|
+| `H_T-CP-3` (per-layer time-budget + `retry.*` 6-attribute namespace + dual-emission) | Wrapper emits `retry.*` 6-attribute span per attempt at production execution path | U-RT-58 |
+| `H_T-CP-4` (fallback chain + cross-family fallback) | Wrapper owns the candidate-iteration loop + emits `fallback.exhausted` on chain exhaustion | U-RT-58 |
+| `H_T-CP-5` PARTIAL → RETIRED (routing attribute namespaces composition) | `routing.*` inheritance through the inner `gen_ai.*` span surfaces at the wrapper's per-attempt span hierarchy | U-RT-58 |
+
+Cross-axis cascade re-evaluation at U-RT-58 landing: §6.3.2 (F-CP-01 Stage 3b inversion) candidate for closure once H_T-CP-3 RETIRED + production `harness.breaker.*` emission verified end-to-end. Re-evaluate at the retirement-event filing step per the `phase-7-substitution-retirement` skill §4 cross-axis dependency tracking.
+
 ---
 
 ## 7. Verification strategy
@@ -593,7 +628,7 @@ Standing discipline: any of the above surfacing a *spec* gap triggers back-flow 
 
 ## 9. Spec-to-plan traceability
 
-Canonical at `design-substrate/Spec_Harness_Runtime_v1.md` v1.1 §15 (Spec-to-plan traceability) — a 23-row coverage matrix mapping every U-RT-NN unit to ≥1 C-RT-NN contract, including per-bucket C-RT-12 §12.1–§12.6 rows and the C-RT-14 cross-cutting row.
+Canonical at `design-substrate/Spec_Harness_Runtime_v1.md` v1.4 §15 (Spec-to-plan traceability) — coverage matrix mapping every U-RT-NN unit to ≥1 C-RT-NN contract, including per-bucket C-RT-12 §12.1–§12.6 rows, the C-RT-14 cross-cutting row, the v1.2-introduced U-RT-52 row (C-RT-15), and the v1.4-introduced U-RT-58 row (C-RT-16).
 
 This plan does not duplicate the matrix. Spec §15 is the single source of truth; revisions to either the unit set (here) or the contract set (spec) require lockstep updates to spec §15.
 
