@@ -1,6 +1,6 @@
 # Class 1 Tension — U-RT-44 in-flight step drain unmaterializable until CP workflow loop lands
 
-**Status:** **CLOSED-PARTIAL** (2026-05-20: Lane 6 runtime un-strike landed. U-RT-44 AC #2 + U-RT-49 state-ledger + lifecycle-event workflow-execution ACs un-struck. Residual: cost-attribution AC carries on `[[fork_u_rt_49_cost_attribution_invocation_underspec]]` — sub-fork filed 2026-05-20 after orientation revealed the OD-side `fork-u-od-21` is source-resolved at U-OD-20 commit `600b902` + U-OD-21 commit `e8fae9c`; the actual residual is CP-driver invocation site + spec gap + `PRICE_TABLE_REF` substitution. Independent open sub-fork; not blocking this parent's closure.)
+**Status:** ✅ **FULLY CLOSED 2026-05-20.** Lane 6 runtime un-strike landed U-RT-44 AC #2 + U-RT-49 state-ledger + lifecycle-event ACs. Cost-attribution residual (U-RT-49 AC #5) closed at this arc: CP spec v1.4 → v1.5 (§25.9 step-body-owned propagated cost-attribution emission per Q1e) + CP plan v2.12 → v2.13 (convention-level absorption) + `harness-runtime/tests/integration/test_run_smoke.py::test_e2e_run_step_body_fires_cost_attribution_chain` materializes the convention via Q3c mock-rate bypass and produces a 12-field `SpanCostRecord`. Sub-fork `[[fork_u_rt_49_cost_attribution_invocation_underspec]]` CLOSED. `PRICE_TABLE_REF` substitution residual carries forward at `[[fork_price_table_ref_substitution_retirement]]` — bounded X-AL-2 residual, NOT retired by this arc. 2204 tests on the resolution branch (+1 from 2203 on main HEAD `b7df032`).
 **Filed:** 2026-05-20 (Phase 2 Session 7, U-RT-44 landing)
 **Trigger unit:** U-RT-44 (`design-substrate/Spec_Harness_Runtime_v1.md` §11 C-RT-11)
 **Pattern:** `[[halt-route-split-AC-pattern]]`
@@ -173,17 +173,18 @@ them — per X-AL-3 (no silent design extension at Phase 7).
      step events per C-CP-25 §25.5.
 
    **STILL STRUCK** (carry-forward, not blocking this fork's closure):
-   - U-RT-49 "cost-attribution chain produced an entry" — blocked by
-     `[[fork_u_rt_49_cost_attribution_invocation_underspec]]` (sub-fork
-     filed 2026-05-20). The original attribution to
-     `[[fork-u-od-21-span-cost-record-missing-rollup-keys]]` was
-     inaccurate: U-OD-20 + U-OD-21 are source-resolved at commits
-     `600b902` + `e8fae9c` (12-field `SpanCostRecord` + landed
-     `rollup_costs_by_axis`). The actual residual is CP-driver
-     invocation site + spec gap + `PRICE_TABLE_REF` substitution; the
-     new sub-fork carries the four blocking design questions.
-     Runtime RunResult.cost_attribution carries empty tuple at v1.4
-     with Class 3 documented note. Un-strikes when sub-fork resolves.
+   - U-RT-49 "cost-attribution chain produced an entry" — **LAND**
+     2026-05-20 at this arc. Sub-fork
+     `[[fork_u_rt_49_cost_attribution_invocation_underspec]]` resolved
+     via Q1e + Q2-bounded + Q3c + Q4. CP spec v1.5 §25.9 establishes
+     the step-body-owned propagated cost-attribution emission contract;
+     `harness-runtime/tests/integration/test_run_smoke.py::test_e2e_run_step_body_fires_cost_attribution_chain`
+     materializes the convention and asserts a 12-field `SpanCostRecord`
+     is produced with §14.4 idempotency-key join. `PRICE_TABLE_REF`
+     substitution carries forward at
+     `[[fork_price_table_ref_substitution_retirement]]` (bounded X-AL-2
+     residual; rate-table authoring out of scope at this arc, deferred
+     to sub-phase 7d substitution-retirement events).
 
    **Tests landed:** 2 new integration tests at
    `harness-runtime/tests/integration/test_run_smoke.py`:

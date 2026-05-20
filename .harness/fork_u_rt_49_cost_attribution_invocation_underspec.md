@@ -1,7 +1,8 @@
 # Fork — U-RT-49 cost-attribution invocation underspec (sub-fork of [[fork_u_rt_44_workflow_loop_drain]])
 
 **Class:** 1 (halt-execution; spec gap blocks un-strike)
-**Status:** 🛑 OPEN — filed 2026-05-20 during U-RT-49 residual-closure orientation
+**Status:** ✅ **CLOSED** 2026-05-20 — Q1e + Q2-bounded + Q3c + Q4 resolution arc landed (see ## Resolution footer). `PRICE_TABLE_REF` substitution carries forward at `[[fork_price_table_ref_substitution_retirement]]` per X-AL-2 — NOT retired by this arc.
+**Originally filed:** 2026-05-20 during U-RT-49 residual-closure orientation
 **Parent fork:** `.harness/class_1_tension_u_rt_44_workflow_loop_drain.md` (CLOSED-PARTIAL); this sub-fork carries the sole cost-attribution residual that the parent's CLOSED-PARTIAL footer cites.
 **Predecessor reference:** `.harness/class_1_tension_u_od_21_span_cost_record_missing_rollup_keys.md` (RESOLVED 2026-05-16 at OD plan v2.8 D-5; U-OD-20 grew to 12 fields at commit `600b902`; U-OD-21 `rollup_costs_by_axis` landed at commit `e8fae9c`). **The OD-side residual the U-RT-49 fork-extension record cited as the blocker is source-resolved; the actual residual lives at the CP driver + spec layer, not at OD. This sub-fork relocates the residual to its correct home.**
 
@@ -90,3 +91,36 @@ If operator selects Q3a or Q3b (real-cost computation), add the rate-snapshot au
 - Resumption from checkpoint `20260520-060615-cp-56-resumption-fork-closed-v2-12-merged.md` (operator selection: option A — resolve `fork-u-od-21` to close U-RT-44 parent).
 - Orientation surfaced: OD-side already source-resolved (commits cited above); actual residual is CP-driver + spec gap. AskUserQuestion (operator response: file the sub-fork; gather questions; halt).
 - Pattern: same shape as `[[fork-u-cp-56-resumption-underspec]]` — landed unit chain reveals downstream spec gap; surface to operator before implementation.
+
+---
+
+## ✅ Resolution (2026-05-20)
+
+Operator ratified Q1e + Q2-bounded + Q3c + Q4 (resolve next session) at the same session as the fork filing. Resolution arc landed in a second worktree session (this commit chain).
+
+**Six-step arc closed:**
+
+1. **Worktree** `fork-u-rt-49-cost-attribution-resolution` opened.
+2. **CP spec v1.4 → v1.5** at `design-substrate/Spec_Control_Plane_v1_5.md` — new §25.9 Cost-attribution emission composition subsection. Step body owns; driver propagates; emission target is the OD audit-ledger substrate (separate from §5.1 closed-at-8 lifecycle event channel — no new event class introduced); `SpanCostInputs` sourced from step body's local provider-invocation closure (no shared cross-axis carrier at v1.5); composition with §25.6 replay-resumption skip semantics; `PRICE_TABLE_REF` substitution carry-forward at separate fork. §[traceability] C-CP-25 row extended with C-OD-14 substrate-consumed entry. §[coherence pass] extended with v1.5 verification line.
+3. **CP plan v2.12 → v2.13** at `design-substrate/Implementation_Plan_Control_Plane_v2_13.md` — convention-level absorption. No unit modified. §0.1 net-delta documents absorption; §0.2 fork-resolution traceability table.
+4. **Substitution carry-forward** `.harness/fork_price_table_ref_substitution_retirement.md` filed — bounded X-AL-2 residual; rate-table authoring out of scope at this arc.
+5. **Smoke test extension** at `harness-runtime/tests/integration/test_run_smoke.py::test_e2e_run_step_body_fires_cost_attribution_chain` — step body fires `ctx.cost_chain.compute_per_attempt_cost` via mock-rate bypass (Q3c) + composes 12-field `SpanCostRecord` + attaches idempotency key per §14.4. Test passes; AC un-strikes. 2204 tests total on the worktree branch (+1 from 2203 on main).
+6. **Fork records closed** — this file (Q1–Q4 resolution footer below); U-RT-49 fork-extension record STRIKE row → LAND; parent `class_1_tension_u_rt_44_workflow_loop_drain.md` CLOSED-PARTIAL → fully CLOSED.
+
+**Q1 — Lifecycle invocation site: Q1e (step-body owns; driver propagates).** Materialized at CP spec v1.5 §25.9 prose + `_CostFiringDispatcher.dispatch` in the new smoke test. The CP `DriverContext` Protocol is unchanged; the driver remains unaware of cost-attribution invocation. The §25.5 propagated pattern row vocabulary is reused at §25.9 verbatim.
+
+**Q2 — Input attribution: bounded; no shared carrier authored.** Step body sources `SpanCostInputs` from its local provider-invocation closure. The test's mock step body constructs inputs from local mock state (`input_tokens=100`, `output_tokens=42`, etc.). Future: when sub-agent-dispatch / orchestrator-workers / multi-attempt topologies land, surface a shared `StepExecutionResult` / `ProviderInvocationRecord` carrier as a Phase 7 7c CXA seam.
+
+**Q3 — Rate substitution: Q3c (mock-route via `compute_span_cost_with_rates`).** Test invokes `ctx.cost_chain.compute_per_attempt_cost(inputs, _mock_rates)` where `_mock_rates` is an explicit `PriceRateEntry`. The chain calls `compute_span_cost_with_rates` internally, bypassing `_lookup_rates` and `PRICE_TABLE_REF`. The substitution is NOT retired by this arc — `cost_formula.py:69` still carries `"od-price-table-ref::deferred-to-U-OD-21"`. Carry-forward at `[[fork_price_table_ref_substitution_retirement]]`.
+
+**Q4 — Scope/timing: resolve next session.** Done; this is the next session.
+
+**Open architectural questions carried forward (Class 3 informational):**
+
+1. **Cross-topology cost-attribution boundary.** At sub-agent-dispatch / orchestrator-workers the "step body" is itself a dispatched sub-agent with its own cost emissions; cost composition across the parent/child boundary needs a contract. Out of scope at v1.5 (§25.1 SINGLE_THREADED_LINEAR-only scope preserved); surface as Phase 7 sub-phase 7c CXA seam candidate when the first non-linear topology materializes; new CP spec revision-pass owed at that time.
+
+2. **`SpanCostRecord` → audit-ledger wiring residual.** Caught at v1.5 spec-writer audit (advisor-flagged Pattern P2 candidate in initial §25.9 draft — cited §14.4 as "emission target" when §14.4 is the JOIN contract). Filed as `.harness/fork_cost_record_audit_ledger_wiring_residual.md`. §25.9 specifies *carrier production* via the step-body-owned chain; the wiring path between the produced `SpanCostRecord` and the OD audit-ledger writer is NOT specified at v1.5 and is not materialized at HEAD. Bounded residual; carries forward.
+
+Both are documented at CP spec v1.5 Change-note "Adjacent-defect findings surfaced (not patched at v1.5)" and at the v1.5 verification line.
+
+**Test totals:** 2204 (+1 from 2203 main HEAD `b7df032`). All green. pyright + ruff: zero new warnings (pre-existing pyright errors in the Lane 6 monkeypatch surface unchanged).
