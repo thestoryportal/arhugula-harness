@@ -53,15 +53,27 @@ from harness_core.persona_tier import PersonaTier
 from harness_core.workload_class import WorkloadClass
 from harness_cp.cross_family_fallback_chain import FallbackChain
 from harness_cp.engine_class import EngineClass
-from harness_cp.routing_manifest_residence import RoutingManifest
+from harness_cp.routing_manifest_residence import RetryPolicy, RoutingManifest
 from harness_cp.topology_pattern import TopologyPattern
+from harness_cp.validator_fail_taxonomy import ValidatorFailClass
+from harness_cp.validator_fail_transient_staircase import (
+    StaircaseStage,
+    StaircaseTransition,
+)
 from harness_is.path_resolver import PathResolver
 from harness_is.workload_manifest_opt_in_schema import WorkloadManifestOptIns
 from harness_is.worktree_isolation import WorktreeIsolationManager
+from harness_od.harness_breaker_schema import BreakerScope
+from harness_od.idempotency_join_dedup import (
+    DedupOutcome,
+    F2StateLedgerEntry,
+    SpanIngestionView,
+)
 from harness_od.local_first_otlp_collector import (
     BATCH_SPAN_PROCESSOR_BATCH_SIZE,
     BATCH_SPAN_PROCESSOR_WINDOW_SECONDS,
 )
+from harness_od.otel_genai_base import EventEmission, SpanRef
 from harness_od.per_cell_collector_placement_matrix import CollectorPlacement
 from harness_od.sampling_mode import SamplingMode
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -452,11 +464,58 @@ class EngineSelector(Protocol):
 
 @runtime_checkable
 class RetryBreakerRegistry(Protocol):
-    """Composed at U-RT-24 from hand-rolled retry / breaker primitives.
+    """Retry / breaker / idempotency runtime registry surface (U-RT-24).
 
     Per `Plan_Executability_Audit_v1.md` framework-pull discipline: NO
-    `tenacity` / `pybreaker` / `circuitbreaker`.
+    `tenacity` / `pybreaker` / `circuitbreaker`. Concretized by
+    `harness_runtime.lifecycle.retry_breaker.RuntimeRetryBreaker`. Narrowed at
+    U-RT-24 to declare the registry's reference-time surface so consumer-side
+    type checks (L8 LOOP_INIT orchestrator) compose against a documented API.
+
+    `get_breaker` returns the runtime's `BreakerStateMachine` (a concrete
+    dataclass at `harness_runtime.lifecycle.retry_breaker`); the Protocol
+    types it as `object` to avoid a `types` → `lifecycle.retry_breaker` →
+    `types` import cycle. Callers narrow via `isinstance` or by going through
+    the concrete `RuntimeRetryBreaker` type.
     """
+
+    def get_policy(self, tool_name: str) -> RetryPolicy:
+        """Return the per-tool `RetryPolicy` or the registry's default policy."""
+        ...
+
+    def get_breaker(self, scope: BreakerScope, identifier: str) -> object:
+        """Return the per-(scope, identifier) breaker state machine (concrete
+        type at `harness_runtime.lifecycle.retry_breaker.BreakerStateMachine`)."""
+        ...
+
+    def compute_delay_seconds(self, attempt: int) -> float:
+        """Full-jitter delay for the given 0-indexed retry attempt."""
+        ...
+
+    def advance_staircase(
+        self,
+        current: StaircaseStage,
+        cause: ValidatorFailClass,
+        attempt: int,
+    ) -> StaircaseTransition:
+        """Wrap `harness_cp.validator_fail_transient_staircase.advance_staircase`."""
+        ...
+
+    def emit_breaker_transition_event(
+        self,
+        transition: object,
+        parent_span_ref: SpanRef,
+    ) -> EventEmission:
+        """Emit the C-OD-07 §7.1 `breaker.tripped` event for a state transition."""
+        ...
+
+    def dedupe_decision(
+        self,
+        span: SpanIngestionView,
+        ledger_entry: F2StateLedgerEntry | None,
+    ) -> DedupOutcome:
+        """C-OD-14 §14.5.1 idempotency-join dedup decision."""
+        ...
 
 
 @runtime_checkable
