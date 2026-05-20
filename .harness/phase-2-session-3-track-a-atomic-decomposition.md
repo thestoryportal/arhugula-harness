@@ -430,6 +430,21 @@ Each unit is sized to land in a single PR with a fixed acceptance test set. Ever
 - Deps: U-RT-33.
 - AC: 22 identity-equality assertions pass; missing seam fails with typed error naming the (producer, consumer) pair.
 
+### L9 — LLM-dispatch composer (new at v1.2; Phase-7 sub-phase 7d Class 2 fork absorption)
+
+**U-RT-52 — LLM-dispatch composer (Spec_Harness_Runtime_v1.md §14.5 C-RT-15)**
+- Scope: implement `RuntimeLLMDispatcher` at `harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py` satisfying the `harness_cp.workflow_driver.StepDispatcher` Protocol (`runtime_checkable`, declared at `workflow_driver.py:151`). Per-step async composer that (1) resolves `ProviderClient` from `ctx.provider_capabilities` via `binding.model_binding.provider`, (2) starts a GenAI-semconv 1.41.0 span via `ctx.tracer_provider.get_tracer("harness.runtime.llm_dispatch")`, (3) dispatches to the provider's underlying SDK method (anthropic.messages.create / openai.chat.completions.create / ollama.chat) via capability-aware abstraction per CP C-CP-01 §1, (4) populates GenAI semconv attributes (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.response.id`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`) + `anthropic.cache_*` attributes per C-AS-14 §14.2 when `binding.model_binding.provider == "anthropic"`, (5) returns `Mapping[str, Any]` per Protocol contract. Bound at bootstrap stage 5 (LOOP_INIT) alongside override evaluator / topology dispatcher / lifecycle emitter; attached to `ctx.llm_dispatcher`. Excludes fallback / retry / breaker per Q2a scope discipline — provider-side exceptions propagate unmodified to `workflow_driver.py:380-389` `try/except`.
+- Deps: U-RT-20 (provider capability bindings); U-RT-27 (TracerProvider); U-RT-39 (override evaluator bound at stage 5 — composer attaches alongside).
+- Cross-axis deps (Pattern P1 imports): `harness_cp.workflow_driver.StepDispatcher` Protocol; `harness_cp.engine_class_candidate` for provider selection; CP C-CP-01 §1 capability-aware dispatch semantics; AS C-AS-14 §14.2 (`anthropic.cache_*` attribute set); OD C-OD-04..08 (GenAI semconv binding semantics).
+- AC #1: `harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py` exists; defines async `RuntimeLLMDispatcher` class; `isinstance(RuntimeLLMDispatcher(...), StepDispatcher)` returns `True` via `runtime_checkable`.
+- AC #2: per-provider dispatch branch exists for each of 3 providers (anthropic / openai / ollama) with at-least-one mock-provider test exercising each path end-to-end (mock returns canned response; assert span emitted; assert step output mapping shape).
+- AC #3: GenAI semconv 1.41.0 attribute set verified — test asserts at minimum `gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` are present on the emitted span.
+- AC #4: `anthropic.cache_read_input_tokens` + `anthropic.cache_creation_input_tokens` attributes set when `binding.model_binding.provider == "anthropic"`; absent otherwise (per C-AS-14 §14.2 + AS-AL-3 cross-axis discipline).
+- AC #5: `RT-FAIL-PROVIDER-UNREACHABLE` raised when `binding.model_binding.provider` not in `ctx.providers` (e.g., Ollama-degraded path skipped registration); typed error with provider name attached.
+- AC #6: composer is async; sync wrapper test verifies `RuntimeError: cannot use sync run() with async dispatcher` if a sync `run()` ever lands (no such surface today; future-proof assertion).
+- AC #7: bootstrap stage 5 binding test — `ctx.llm_dispatcher` post-condition non-None after stage 5; verified by `test_bootstrap_stage.py`.
+- AC #8: Phase 7d retirement-event prerequisite — after U-RT-52 lands, file batch 2 retirement event records for **H_T-CP-1** + **H_T-CP-2** + **H_T-CP-5** + **H_T-OD-2** + **H_T-AS-8** per `.harness/phase-7d-retirement-events-batch-1.md` shape under v2 ledger §9.1 evidence framework (condition B verified end-to-end at the new composer site). Updates `harness-{cp,od,as}/CLAUDE.md` §4.1 substitution-table status entries.
+
 ---
 
 ## 3. Topological dependency graph
