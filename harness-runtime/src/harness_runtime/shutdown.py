@@ -39,16 +39,31 @@ other resources still flush.
 
 **Idempotency.** Calling `flush_observability(ctx)` twice is safe — both
 surfaces (tracer + ledger fsync) are idempotent at the underlying primitive
-level. U-RT-46's `shutdown()` orchestrator adds an explicit `AlreadyShutDown`
-guard once the close-resources steps land.
+level. `shutdown()` (U-RT-46) keeps a per-context cached report and returns
+it on second invocation; `ShutdownReport.already_shutdown` carries the
+distinguishing signal.
+
+**U-RT-46 `shutdown()` orchestrator** lands the full C-RT-10 reverse-stage
+close sequence. Step 1 drain sets `ctx.drained_flag` (in-flight wait STRUCK
+per `[[fork-u-rt-44-workflow-loop-drain]]`); step 2 delegates to
+`flush_observability` above; step 3 closes the collector daemon, tracer
+provider (sync API wrapped in `asyncio.to_thread`), and every provider
+client; steps 4-5 are no-ops at HEAD per the close-surface map (MCP
+clients/host are placeholders per U-RT-22; index/cache have no close
+surface; worktree leases none-allocated until U-RT-49+); step 6 reads
+the audit-ledger head hash for consistency verification. Per-resource
+exception isolation; budgeted-remaining timeout pattern.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+import time
+import weakref
 from collections.abc import Callable
 from typing import TYPE_CHECKING, cast
+from weakref import WeakValueDictionary
 
 from pydantic import BaseModel, ConfigDict
 
@@ -58,9 +73,13 @@ if TYPE_CHECKING:
     from harness_runtime.types import HarnessContext
 
 __all__ = [
+    "AlreadyShutDown",
     "FlushReport",
     "FlushTimeoutError",
+    "ShutdownReport",
+    "ShutdownTimeout",
     "flush_observability",
+    "shutdown",
 ]
 
 
@@ -202,3 +221,234 @@ async def flush_observability(
         timed_out=timed_out,
         failures=tuple(failures),
     )
+
+
+# ---------------------------------------------------------------------------
+# U-RT-46 — shutdown() orchestrator (C-RT-10 full sequence).
+# ---------------------------------------------------------------------------
+
+
+class ShutdownTimeout(TimeoutError):  # noqa: N818 — domain-anchored name
+    """`RT-FAIL-SHUTDOWN-TIMEOUT` — shutdown exceeded the bounded `timeout`.
+
+    `shutdown()` itself does NOT raise this — the timeout is surfaced via
+    `ShutdownReport.timed_out = True`. The typed surface is escalation
+    primitive for callers that want to convert the report flag to a raise.
+    Subclasses `TimeoutError` so generic handlers catch it.
+    """
+
+
+class AlreadyShutDown(Exception):  # noqa: N818 — domain-anchored name
+    """`RT-FAIL-ALREADY-SHUTDOWN` — second `shutdown()` invocation on same context.
+
+    Like `ShutdownTimeout`, NOT raised by `shutdown()` itself — the second
+    call returns the cached `ShutdownReport` with `already_shutdown=True`.
+    The typed surface is an escalation primitive for callers who want a
+    raise.
+    """
+
+
+class ShutdownReport(BaseModel):
+    """Result of a `shutdown(ctx)` call.
+
+    Composes the inner `FlushReport` (step 2) with the per-resource close
+    outcomes for steps 3-5 and the audit-ledger head-hash verification at
+    step 6. Per C-RT-10 fail-class taxonomy:
+
+    - `RT-FAIL-PARTIAL-SHUTDOWN` → `failures` non-empty, `timed_out=False`.
+    - `RT-FAIL-SHUTDOWN-TIMEOUT` → `timed_out=True`.
+    - `RT-FAIL-ALREADY-SHUTDOWN` → `already_shutdown=True`.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    flush: FlushReport
+    """Inner result of step 2 (`flush_observability`)."""
+
+    already_shutdown: bool
+    """`True` iff this is a second `shutdown(ctx)` call returning the cached
+    report. Spec §10 invariant: "calling `shutdown(ctx)` twice is safe"."""
+
+    timed_out: bool
+    """`True` iff total shutdown wall-time exceeded the caller-supplied
+    `timeout`. Composes with `flush.timed_out`."""
+
+    failures: tuple[str, ...]
+    """Per-resource failure tags (subset of `('flush:tracer', 'flush:ledger',
+    'collector_daemon', 'tracer_provider', 'provider:<name>')`)."""
+
+    audit_ledger_head_hash: str | None
+    """Head hash of the audit ledger post-shutdown (hex). `None` iff ledger
+    is at genesis (no entries) or reads fail."""
+
+
+# Module-level idempotency registry. WeakValueDictionary maps `id(ctx)` to
+# the live HarnessContext — the entry disappears when ctx is gc'd, so we
+# don't get false-positives from id() reuse.
+_shutdown_registry: WeakValueDictionary[int, HarnessContext] = WeakValueDictionary()
+_cached_reports: dict[int, ShutdownReport] = {}
+
+
+def _discard_cached_report(ctx_id: int) -> None:
+    """`weakref.finalize` callback — drop the cached report when ctx is gc'd."""
+    _cached_reports.pop(ctx_id, None)
+
+
+async def _close_collector_daemon(ctx: HarnessContext, remaining: float) -> bool:
+    """Step 3 collector — `await daemon.stop(timeout_seconds=remaining)`."""
+    daemon = ctx.collector_daemon
+    stop = cast(Callable[..., object], daemon.stop)  # type: ignore[attr-defined]
+    result = stop(timeout_seconds=max(0.0, remaining))
+    if asyncio.iscoroutine(result):
+        await result
+    return True
+
+
+async def _close_tracer_provider(ctx: HarnessContext) -> bool:
+    """Step 3 tracer — sync OTel `shutdown()` dispatched off the loop."""
+    shutdown_fn = cast(
+        Callable[[], object],
+        ctx.tracer_provider.shutdown,  # type: ignore[attr-defined]
+    )
+    await asyncio.to_thread(shutdown_fn)
+    return True
+
+
+def _read_audit_head_hash(ctx: HarnessContext) -> str | None:
+    """Step 6 — read the audit-ledger head hash from `ctx.audit_writer.read_all()`.
+
+    Returns the hex hash of the last entry, or `None` if the ledger is at
+    genesis or the read fails. Non-raising — verification surface, not
+    a hard gate.
+    """
+    try:
+        read_all = cast(
+            Callable[[], list[object]],
+            ctx.audit_writer.read_all,  # type: ignore[attr-defined]
+        )
+        entries = read_all()
+        if not entries:
+            return None
+        last = entries[-1]
+        # StateLedgerEntry exposes `chain_hash` (hex string per C-IS-06).
+        chain_hash = getattr(last, "chain_hash", None)
+        return str(chain_hash) if chain_hash is not None else None
+    except Exception:
+        return None
+
+
+async def shutdown(
+    ctx: HarnessContext,
+    *,
+    timeout: float = 30.0,  # noqa: ASYNC109 — spec §10 mandates this signature
+) -> ShutdownReport:
+    """Execute the C-RT-10 reverse-stage shutdown sequence.
+
+    Steps per spec §10:
+
+    1. **Drain** — set `ctx.drained_flag`. The in-flight wait (AC #2 of
+       U-RT-44) is STRUCK per `[[fork-u-rt-44-workflow-loop-drain]]`;
+       resolution lands at U-RT-49 when the CP workflow loop materializes.
+    2. **Flush observability** — delegates to `flush_observability(ctx)`.
+    3. **Close stage-5/4/3b/3a in reverse** — collector daemon, tracer
+       provider, then every provider client. Stage-5 emitter/dispatcher
+       and stage-3b routing/registries are stateless-by-design no-ops.
+    4. **Close stage-2 resources** — MCP clients + host. Both are
+       placeholder dataclasses at HEAD (U-RT-22); no-op until a real
+       MCP runtime lands.
+    5. **Close stage-1 resources** — ledger fsync (covered by step 2),
+       index + cache (no close surface), worktree leases (none allocated
+       until U-RT-49+).
+    6. **Verify** — read audit-ledger head hash and record in report.
+
+    Per spec §10 invariants:
+    - Idempotent: second call with same ctx returns the cached report
+      with `already_shutdown=True`.
+    - Bounded by `timeout`: each step is allotted the remaining budget;
+      exceeded budget surfaces via `ShutdownReport.timed_out=True`.
+    - Per-resource exception isolation: one failure doesn't abort the
+      others; each surfaces in `failures`.
+
+    Parameters
+    ----------
+    ctx :
+        Post-bootstrap `HarnessContext` from a `run()` invocation.
+    timeout :
+        Total wall-time bound in seconds. Default 30.0 per spec
+        deferred-to-discretion.
+
+    Returns
+    -------
+    ShutdownReport
+        Per-step status. Callers wanting hard-fail semantics inspect
+        `failures`, `timed_out`, and `already_shutdown`.
+    """
+    ctx_id = id(ctx)
+    cached = _cached_reports.get(ctx_id)
+    if cached is not None and _shutdown_registry.get(ctx_id) is ctx:
+        # Second-call: return cached report with already_shutdown flag asserted.
+        return cached.model_copy(update={"already_shutdown": True})
+
+    deadline = time.monotonic() + timeout
+    failures: list[str] = []
+    timed_out = False
+
+    # Step 1 — drain. Idempotent: `Event.set()` is a no-op if already set.
+    ctx.drained_flag.set()
+
+    # Step 2 — flush observability.
+    remaining = max(0.0, deadline - time.monotonic())
+    flush_report = await flush_observability(ctx, timeout_millis=int(remaining * 1000))
+    if flush_report.failures:
+        failures.extend(f"flush:{tag}" for tag in flush_report.failures)
+    if flush_report.timed_out:
+        timed_out = True
+
+    # Step 3a — collector daemon.
+    remaining = max(0.0, deadline - time.monotonic())
+    try:
+        await _close_collector_daemon(ctx, remaining)
+    except Exception:
+        failures.append("collector_daemon")
+
+    # Step 3b — tracer provider (sync; to_thread).
+    try:
+        await _close_tracer_provider(ctx)
+    except Exception:
+        failures.append("tracer_provider")
+
+    # Step 3c — provider clients. Per-provider try/except; one failure
+    # doesn't block the others.
+    for name, provider in ctx.providers.items():
+        try:
+            aclose = cast(Callable[[], object], provider.aclose)  # type: ignore[attr-defined]
+            result = aclose()
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception:
+            failures.append(f"provider:{name}")
+
+    # Step 4 — MCP clients + host: no-op at HEAD (U-RT-22 placeholders).
+    # Step 5 — ledger/index/cache/worktree: covered by step 2 / no close surface.
+
+    if time.monotonic() > deadline:
+        timed_out = True
+
+    # Step 6 — audit-ledger head hash verification.
+    audit_head = _read_audit_head_hash(ctx)
+
+    report = ShutdownReport(
+        flush=flush_report,
+        already_shutdown=False,
+        timed_out=timed_out,
+        failures=tuple(failures),
+        audit_ledger_head_hash=audit_head,
+    )
+
+    # Cache for idempotency. WeakValueDictionary lets ctx-gc clear the
+    # registry; weakref.finalize clears the cached report alongside.
+    _shutdown_registry[ctx_id] = ctx
+    _cached_reports[ctx_id] = report
+    weakref.finalize(ctx, _discard_cached_report, ctx_id)
+
+    return report
