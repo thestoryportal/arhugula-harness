@@ -1,4 +1,24 @@
-# Specification — Harness Runtime v1.1
+# Specification — Harness Runtime v1.2
+
+## Change-note (v1.1 → v1.2)
+
+**Scope of revision.** Phase-7 sub-phase 7d Class 2 fork resolution per `.harness/fork_llm_dispatch_composer_scope.md` (filed + ratified 2026-05-20). Operator ratification Q1a + Q2a + Q3a + Q4a: in-Phase-7 closure via new C-RT-15 contract; per-step composer (smallest scope — no fallback/retry/breaker wrappers); GenAI semconv 1.41.0 bound at the composer; resolve same-day.
+
+**Single-finding addition.** §14 (C-RT-14) preserved verbatim from v1.1. NEW §14.5 contract C-RT-15 — LLM-dispatch composer — specifies the per-step composer surface that consumes a resolved `StepEffectiveBinding` + `WorkflowStep`, dispatches against the selected `ProviderClient` from C-RT-05, attaches a GenAI-semconv-bound span via C-RT-06's TracerProvider, and returns step output. Satisfies the `StepDispatcher` Protocol declared at `harness_cp.workflow_driver:151`.
+
+**Sections revised (substantive).**
+- New **§14.5 C-RT-15** — LLM-dispatch composer contract (between §14 and §15 to keep §15–§17 numbering stable; §-pin uses a `.5` decimal to avoid renumbering downstream cites).
+- §15 Spec-to-plan traceability — new row for U-RT-52 (the new plan unit carrying C-RT-15).
+- §16 Open questions — no row added; v1.2 closes the LLM-dispatch composer scope question (which §16 did NOT enumerate but operator surfaced at the v2 retirement ledger second pass).
+- §17 Coherence pass — re-run for v1.2.
+
+**Sections preserved verbatim from v1.1.** All v1→v1.1 changes (lines below) preserved verbatim; no prior content modified. §§1–14, §15 except the new U-RT-52 row, §16 unchanged.
+
+**Status posture.** Proposed (v1.1) → **Proposed (v1.2)**. Adversarial-review second pass on v1.2 deferred per operator Q4a phasing — implementation begins on the v1.2 surface; adversarial pass scheduled at U-RT-52 landing per Phase 7 sub-phase 7b discipline.
+
+**Downstream absorption owed.** Phase 2 Session 3 Track A plan v2 §atomic-units list extended with new U-RT-52 (small body authored alongside this spec amendment). Per-axis subdirectory `harness-runtime/CLAUDE.md` (if it exists) needs no update — C-RT-15 is runtime-internal. CP plan v2.13 + spec v1.5 unchanged. `.harness/phase-7d-retirement-ledger-v2.md` §9.1 + §9.2 superseded at U-RT-52 landing event (file ratification target H_T-CP-1 + H_T-CP-2 + H_T-CP-5 + H_T-OD-2 + (likely) H_T-AS-8 RETIRED).
+
+---
 
 ## Change-note (v1 → v1.1)
 
@@ -844,6 +864,70 @@ The two taxonomies are **orthogonal and composable**: a workflow execution that 
 
 ---
 
+## §14.5 C-RT-15 — LLM-dispatch composer (new at v1.2; Q1a + Q2a + Q3a absorption of `fork_llm_dispatch_composer_scope.md`)
+
+**Contract surface.** Composer module + Protocol-satisfying callable + integration obligations with C-RT-04 (HarnessContext), C-RT-05 (ProviderClient), C-RT-06 (TracerProvider).
+
+**PRD enablement.** Enables R-CP-* multi-LLM routing requirements *at runtime* (C-RT-05 enabled construction; C-RT-15 enables invocation). Enables R-OD-* observability requirements *for GenAI spans* (C-RT-06 enabled TracerProvider; C-RT-15 enables span emission with GenAI semconv attributes).
+
+**ADR commitment(s) honored.** ADR-F1 v1.2 §Decision (multi-LLM routing operationalized at runtime, not just at design + spec + library code); ADR-F5 v1.1 §Decision (observability substrate carries GenAI-semconv attribution per OD spec C-OD-04..08).
+
+**Fork-resolution provenance.** `.harness/fork_llm_dispatch_composer_scope.md` (filed 2026-05-20). Operator ratification (recorded at fork §5):
+
+- **Q1a** — Option A: in-Phase-7 closure via new runtime contract (NOT Class 1 back-flow; NOT Phase-3 deferral).
+- **Q2a** — Per-step composer only (smallest scope); fallback / retry / breaker wrappers explicitly out of scope (CP-3 + CP-4 retirements deferred to follow-on units).
+- **Q3a** — GenAI semconv 1.41.0 binding included in the same arc (enables H_T-OD-2 PARTIAL → RETIRE-READY upgrade).
+- **Q4a** — Resolve same-day (file → ratify → resolve arc per `[[fork-u-rt-49-cost-attribution-invocation-underspec]]` + `[[fork-u-cp-56-resumption-underspec]]` precedent; phased per scope-honesty AskUserQuestion as: spec + plan + composer skeleton this session; implementation + tests + retirement events follow-on session).
+
+**Specification content.**
+
+The runtime contributes one production composer to the `harness_cp.workflow_driver.StepDispatcher` Protocol seam (declared at `harness-cp/src/harness_cp/workflow_driver.py:151`). The composer is a per-step function: given a resolved `StepEffectiveBinding` (which carries the selected provider identity + model name + sandbox-tier floor) and a `WorkflowStep` (which carries the step input payload), the composer:
+
+1. Resolves the `ProviderClient` adapter via `ctx.providers` (C-RT-04 `providers` field bound at C-RT-05) using `binding.model_binding.provider` (the CP `ModelBinding.provider: str` field per C-CP-01 §1.4 routing-binding vocabulary).
+2. Starts a span on the runtime's TracerProvider (C-RT-06 `ctx.tracer_provider`) under the GenAI semconv 1.41.0 attribute set per OD spec C-OD-04..08 (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, plus the per-provider sub-namespaces for Anthropic primitive observability per AS spec C-AS-13/14 — `anthropic.*` namespace activated for the anthropic provider per §6.3.1 cross-axis dependency cascade closure).
+3. Dispatches to the provider's underlying SDK message-construction method (provider-specific: `anthropic.AsyncAnthropic.messages.create` / `openai.AsyncOpenAI.chat.completions.create` / `ollama.AsyncClient.chat`). The capability-aware abstraction layer (CP C-CP-01 §1) determines which method to call; the composer is the runtime-side site that actually calls it.
+4. Captures provider response, populates span attributes (request/response/usage), and constructs the step-output mapping per the `StepDispatcher` Protocol return shape (`Mapping[str, Any]`).
+5. Returns the step output.
+
+**Composer module residence.** `harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py` (new file at v1.2). Module exposes one production class — `RuntimeLLMDispatcher` — that satisfies `StepDispatcher` via duck-typing (the Protocol is `runtime_checkable` at `workflow_driver.py:151`). Construction site: bound at bootstrap stage 5 (LOOP_INIT) alongside the existing override evaluator + topology dispatcher + lifecycle emission hook (per C-RT-02 stage 5 invariants); attached to `ctx` for downstream `run()` consumption.
+
+**Integration with C-RT-04 (HarnessContext).** No new field. The dispatcher consumes `ctx.providers` + `ctx.provider_capabilities` + `ctx.tracer_provider` (all existing); is itself stage-5-materialized into a new context field if and only if the operator chooses a top-of-context attachment shape vs a constructed-at-step-call shape. Defer to implementation discretion. The MVP shape attaches at `ctx.llm_dispatcher` for caller-explicit composition with `run()`.
+
+**Integration with C-RT-05 (ProviderClient).** No protocol change to `ProviderClient` at v1.2. The composer dispatches via per-provider adapter methods that are *not* part of `ProviderClient.aclose()`; the protocol remains lifecycle-only. The composer carries provider-specific dispatch code (one branch per provider) — this is the capability-aware abstraction layer per ADR-F1 v1.2 + CP C-CP-01.
+
+**Integration with C-RT-06 (TracerProvider).** GenAI semconv binding: composer obtains a `Tracer` via `ctx.tracer_provider.get_tracer("harness.runtime.llm_dispatch")` and emits one span per LLM call. Attributes follow OpenTelemetry GenAI semantic conventions 1.41.0 (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.response.id`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, etc.). For the anthropic provider, additionally emit `anthropic.cache_*` attributes per AS spec C-AS-14 §14.2 (the AS-axis-defined Anthropic-primitive observability surface).
+
+**Invariants.**
+
+- Composer is async (matches C-RT-08 async-only `run()` posture). No sync wrapper.
+- Exactly one span per LLM call. Span lifecycle (start / end / exception capture) bound by an `async with tracer.start_as_current_span(...)` block.
+- Composer satisfies `isinstance(dispatcher, StepDispatcher)` via `@runtime_checkable` introspection (verified at bootstrap stage 5 binding).
+- Provider-specific dispatch branches are exhaustive: composer raises `RT-FAIL-PROVIDER-UNREACHABLE` (per C-RT-14) if `binding.model_binding.provider` resolves to a provider not in `ctx.providers` (e.g., Ollama-degraded path skipped a registration).
+- GenAI semconv attribute set is normative per OTel spec 1.41.0 — composer MUST set the required attributes; SHOULD set the recommended attributes; MAY set the opt-in attributes per OTel semconv stability discipline.
+- `anthropic.*` namespace attributes per C-AS-14 §14.2 are emitted **only** when `binding.model_binding.provider == "anthropic"` (per AS-AL-3 cross-axis Skills isomorphism doesn't exempt the per-provider attribute scope).
+- Composer does NOT implement fallback / retry / breaker per Q2a scope discipline; on provider-side exception, composer propagates the exception unmodified to the `workflow_driver` `try / except` boundary at `workflow_driver.py:380-389` (which fails the step with `step-failure: {type}: {exc}` per existing C-CP-25 §25.3.3.4 contract).
+
+**Failure-mode taxonomy.** Per C-RT-14:
+
+| Fail class | Trigger | Behavior |
+|---|---|---|
+| `RT-FAIL-PROVIDER-UNREACHABLE` (permanent) | `binding.model_binding.provider` not in `ctx.providers` (e.g., Ollama-degraded path was taken) | Raise; propagates to driver `try / except` boundary; driver fails the step with `step-failure: RT-FAIL-PROVIDER-UNREACHABLE: ...` |
+| `RT-FAIL-TRANSIENT` (transient) | Provider SDK raises a documented transient error (network, rate limit, server 5xx) | Raise unmodified — composer does NOT retry per Q2a; driver fails step; CP-3 retry logic (separate future unit) wraps composer when it lands |
+| `RT-FAIL-PROVIDER-AUTH` (permanent) | Provider SDK raises auth error (401/403) | Raise unmodified |
+
+No new fail-classes introduced at v1.2; composer reuses C-RT-14's enumeration.
+
+**Deferred to implementation discretion.**
+
+- Exact composer class name (suggest `RuntimeLLMDispatcher` per v1.2 spec body recommendation).
+- Whether composer attaches at `ctx.llm_dispatcher` or is constructed per-step inside `run()`'s caller composition (MVP recommendation: attach at ctx for parallel construction with override evaluator / topology dispatcher / lifecycle emitter).
+- GenAI semconv attribute selection beyond the required set (which optional attributes to emit by default — request/response body, message content, finish reason — driven by OD redaction discipline at C-OD-13..16; composer emits the basic set, SpanProcessor handles redaction).
+- Span name convention (suggest `gen_ai.{provider}.{model_or_method}` per OTel GenAI semconv guidance, e.g., `gen_ai.anthropic.messages.create`).
+- Whether provider-specific dispatch branches live in `llm_dispatch.py` directly or in per-provider sub-modules (`llm_dispatch_anthropic.py` etc.) — defer to module-size discretion at implementation.
+- Test mock strategy: suggest a `MockProviderClient` fixture per provider that records dispatched calls + returns canned responses; pytest-asyncio for async surface.
+
+---
+
 ## §15 Spec-to-plan traceability
 
 Each Track A plan v2 unit cites at least one contract in this spec. Coverage matrix:
@@ -873,6 +957,7 @@ Each Track A plan v2 unit cites at least one contract in this spec. Coverage mat
 | U-RT-45..U-RT-46 | C-RT-10 | Shutdown sequence |
 | U-RT-47..U-RT-48 | C-RT-13 | Admin stubs |
 | U-RT-49..U-RT-51 | C-RT-02 + C-RT-12 verification | E2E + Pattern P1 verification |
+| U-RT-52 (new at v1.2) | C-RT-15, C-RT-05, C-RT-06 | LLM-dispatch composer; satisfies `harness_cp.workflow_driver.StepDispatcher` Protocol; emits GenAI semconv 1.41.0 spans |
 | (cross-cutting) | C-RT-14 | Every U-RT-NN that surfaces a failure emits via the runtime-local fail-class taxonomy |
 
 Every U-RT-NN unit traces to ≥1 spec contract. ✓
@@ -895,7 +980,24 @@ These are explicit open questions surfaced at authoring time. Each must either b
 
 ---
 
-## §17 Coherence pass — self-audit at v1.1 filing
+## §17 Coherence pass — self-audit at v1.2 filing
+
+| Dimension | Check | Result |
+|---|---|---|
+| v1.1 → v1.2 change-note completeness | Single-finding addition documented; scope discipline (Q1a + Q2a + Q3a + Q4a) recorded; preserved-verbatim list explicit | ✅ PASS |
+| C-RT-15 trace-discipline conformance | Contract surface + PRD enablement + ADR commitment + Fork-resolution provenance + Specification content + Invariants + Failure-mode taxonomy + Deferred-to-implementation discretion all present | ✅ PASS |
+| Q2a scope discipline (no silent extension) | Composer explicitly excludes fallback / retry / breaker per Q2a; CP-3 + CP-4 retirements explicitly deferred; X-AL-3 no-silent-H_T-design-extension holds | ✅ PASS |
+| Q3a GenAI semconv binding | `gen_ai.*` attribute set normative; `anthropic.*` namespace explicitly conditional on `binding.model_binding.provider == "anthropic"` per AS-AL-3 | ✅ PASS |
+| Cross-axis citation precision | C-AS-13 / C-AS-14 §14.2 (Anthropic primitive observability); C-OD-04..08 (OD GenAI semconv binding); C-CP-01 §1 (capability-aware abstraction); CP `StepDispatcher` Protocol at `harness_cp.workflow_driver:151` | ✅ PASS |
+| Fail-class reuse (no new RT-FAIL-*) | C-RT-15 reuses C-RT-14's `RT-FAIL-PROVIDER-UNREACHABLE` + `RT-FAIL-TRANSIENT` + `RT-FAIL-PROVIDER-AUTH`; no new fail-class introduced | ✅ PASS |
+| Plan traceability | §15 row added for U-RT-52 citing C-RT-15 + C-RT-05 + C-RT-06 | ✅ PASS |
+| Predecessor preservation | §§1–14, §15 (except U-RT-52 row), §16 unchanged verbatim from v1.1 | ✅ PASS |
+| Fork-record back-reference | C-RT-15 §Fork-resolution provenance cites `.harness/fork_llm_dispatch_composer_scope.md` + per-Q decision | ✅ PASS |
+| Cross-axis cascade documentation | §6.3.1 CP-1 → AS-8 anthropic.* slot closure explicitly noted at C-RT-15 step 2; §6.3.2 OD-2 + CP-24 → CXA-5 cascade not enabled by this contract alone (breaker invocation absent per Q2a) — consistent | ✅ PASS |
+
+---
+
+## §17.1 Coherence pass — self-audit at v1.1 filing (preserved verbatim from v1.1)
 
 | Dimension | Check | Result |
 |---|---|---|
@@ -921,10 +1023,10 @@ These are explicit open questions surfaced at authoring time. Each must either b
 | Field | Value |
 |---|---|
 | Artifact | `Spec_Harness_Runtime_v1.md` |
-| Status | Proposed (v1.1) — Phase 2 Session 4 runtime-spec authoring + adversarial-review absorption |
-| Predecessor | v1 (2026-05-19 initial authoring) |
+| Status | **Proposed (v1.2)** — Phase 7 sub-phase 7d Class 2 fork absorption (LLM-dispatch composer scope) |
+| Predecessor | v1 (2026-05-19 initial authoring) → v1.1 (2026-05-19 adversarial-review absorption) → v1.2 (2026-05-20 fork-LLM-dispatch-composer-scope absorption via operator Q1a+Q2a+Q3a+Q4a) |
 | Substrate consumed | F-P2-1..F-P2-5 fork resolution records; `.harness/phase-2-session-1-framing.md`; `.harness/phase-2-session-2-track-a-strawman.md`; `.harness/phase-2-session-3-track-a-atomic-decomposition.md` v2; `.harness/Adversarial_Review_phase_2_session_4_runtime_spec.md`; ADR-F1..F5; ADR-D1, D2, D6; ADD v1.3; `Cross_Axis_Composition_Document_v2_3.md` §2.3, §3; landed code across `harness-{core,is,as,cp,od,cxa}/`; per-axis spec contract enumerations verified at v1.1 |
 | Successor | `harness-runtime/` package landing per Track A plan v2 (Session 5 onward); per-axis spec amendments triggered by U-RT-NN unit landings that surface gaps (per `Project_Workflow_v1_8.md` §2.7.6 back-flow); plan v2 minor revision to add C-RT-14 row in §14 traceability |
 | Revision policy | In-CLI per workspace `CLAUDE.md` §4.3 (design-substrate/ canonical; back-flow deprecated 2026-05-15) |
-| Adversarial review | v1: P2-S4-CK 2026-05-19 (`.harness/Adversarial_Review_phase_2_session_4_runtime_spec.md`) — 0 Class 3 / 7 Class 2 / 3 Class 1; revision pass produces v1.1. v1.1: P2-S4-CK second pass pending operator request. |
+| Adversarial review | v1: P2-S4-CK 2026-05-19 (`.harness/Adversarial_Review_phase_2_session_4_runtime_spec.md`) — 0 Class 3 / 7 Class 2 / 3 Class 1; revision pass produces v1.1. v1.1: P2-S4-CK second pass pending operator request. v1.2: adversarial-review second pass deferred to U-RT-52 landing event per operator Q4a phasing — implementation begins on the v1.2 surface. |
 | Date | 2026-05-19 (v1.1) |
