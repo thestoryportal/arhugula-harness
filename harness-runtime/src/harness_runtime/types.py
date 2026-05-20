@@ -44,23 +44,32 @@ from typing import NewType, Protocol, runtime_checkable
 # Concrete axis-type imports (the 6 names that resolve at HEAD).
 # ----------------------------------------------------------------------------
 from harness_as.discriminators import MCPTransport
-from harness_as.sandbox_tier import BlastRadiusTier
+from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_as.sandbox_tier_floor import MCPServerTrustLevel
 from harness_as.tool_contract import SecretAllowlistEntry, ToolContract
 from harness_core import ClientName, SkillID
 from harness_core.deployment_surface import DeploymentSurface
+from harness_core.identity import ActionID
 from harness_core.persona_tier import PersonaTier
 from harness_core.workload_class import WorkloadClass
+from harness_cp.brief_authoring_inheritance import BriefAuthoringInheritance
 from harness_cp.cross_family_fallback_chain import FallbackChain
 from harness_cp.engine_class import EngineClass
+from harness_cp.gate_level_rule import GateLevel as CPGateLevel
 from harness_cp.hitl_as_tool_call_rewriting import (
     HITLSemanticVariant,
     RewrittenToolCall,
 )
 from harness_cp.hitl_timeout_degradation import TimeoutDegradationKind
 from harness_cp.pause_resume_protocol import ResumeOutcomeKind
+from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass
 from harness_cp.routing_manifest_residence import RetryPolicy, RoutingManifest
+from harness_cp.sub_agent_brief import SubAgentBrief
+from harness_cp.sub_agent_gate_level_descent import (
+    GateOverride,
+    SubAgentGateLevelDescent,
+)
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.validator_fail_taxonomy import ValidatorFailClass
 from harness_cp.validator_fail_transient_staircase import (
@@ -583,7 +592,73 @@ class HITLPlacementRegistry(Protocol):
 
 @runtime_checkable
 class HandoffRegistry(Protocol):
-    """Composed at U-RT-26 from landed CP sub-agent-handoff primitives."""
+    """Sub-agent handoff + brief runtime registry surface (U-RT-26).
+
+    Concretized by `harness_runtime.lifecycle.handoff.RuntimeHandoffRegistry`.
+    Narrowed at U-RT-26 to declare the registry's reference-time surface so
+    consumer-side type checks (L8 LOOP_INIT orchestrator) compose against a
+    documented API. The registry composes the 4 CP sub-agent-dispatch
+    primitives — `handoff_context`, `sub_agent_brief`,
+    `sub_agent_gate_level_descent`, `brief_authoring_inheritance`.
+
+    Brief-schema enforcement (AC #2) is delegated to Pydantic v2 — `SubAgentBrief`
+    is frozen + `extra="forbid"`; construction with extra or missing fields
+    raises `ValidationError`.
+    """
+
+    def dispatch(
+        self,
+        parent_action_id: ActionID,
+        parent_gate_level: CPGateLevel,
+        parent_sandbox_tier: SandboxTier,
+        sub_agent_brief: SubAgentBrief,
+        operator_override: GateOverride | None = ...,
+    ) -> SubAgentGateLevelDescent:
+        """Resolve the sub-agent gate-level descent at a dispatch site."""
+        ...
+
+    def assert_descent(
+        self,
+        parent_gate_level: CPGateLevel,
+        child_gate_level: CPGateLevel,
+    ) -> None:
+        """Enforce C-CP-12 §12.2 monotonic-descent (child <= parent gate level)."""
+        ...
+
+    def assert_ascent(
+        self,
+        parent_sandbox_tier: SandboxTier,
+        child_sandbox_tier: SandboxTier,
+    ) -> None:
+        """Enforce C-AS-11 monotonic-ascent (child >= parent sandbox tier)."""
+        ...
+
+    def inheritance_for(
+        self, workload_class: WorkloadClass
+    ) -> BriefAuthoringInheritance:
+        """Return the C-CP-13 §13.3 brief-authoring inheritance rule."""
+        ...
+
+    def compute_brief_summary_hash(self, brief: SubAgentBrief) -> str:
+        """`sha256(canonicalize_brief(brief))` per C-CP-13 §13.2."""
+        ...
+
+    def canonicalize_brief(self, brief: SubAgentBrief) -> bytes:
+        """Deterministically serialize a brief for hashing (C-CP-13 §13.2)."""
+        ...
+
+    def dispatch_response_hash(self, brief: SubAgentBrief) -> str:
+        """`response_hash = sha256(canonicalize(SubAgentBrief))` per C-CP-12 §12.5."""
+        ...
+
+    def compose_dispatch_audit(
+        self,
+        parent_action_id: ActionID,
+        descent: SubAgentGateLevelDescent,
+        brief_hash: str,
+    ) -> CPAuditLedgerEntry:
+        """Compose the C-CP-12 §12.5 sub-agent-dispatch audit-ledger entry."""
+        ...
 
 
 @runtime_checkable
