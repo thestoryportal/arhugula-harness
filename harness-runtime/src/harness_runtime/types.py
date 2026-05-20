@@ -32,6 +32,7 @@ What this module ships at L0:
 from __future__ import annotations
 
 import asyncio
+from enum import Enum
 from pathlib import Path
 from typing import NewType, Protocol, runtime_checkable
 
@@ -49,6 +50,7 @@ from pydantic import BaseModel, ConfigDict
 
 __all__ = [
     "AuditLedgerWriter",
+    "BootstrapStage",
     "ClientName",
     "CollectorConfig",
     "CollectorDaemonHandle",
@@ -75,9 +77,76 @@ __all__ = [
     "ShadowGitSupervisor",
     "Skill",
     "SkillID",
+    "StageLifecycleHook",
+    "StageResult",
     "ToolName",
     "TopologyDispatcher",
 ]
+
+
+# ----------------------------------------------------------------------------
+# `BootstrapStage` - C-RT-01 v1.1 9-value enum, fixed order.
+# Total enum cardinality = 9; file count = 9 (with stage_3a + stage_3b split).
+# ----------------------------------------------------------------------------
+class BootstrapStage(Enum):
+    """The 9 bootstrap stages of the runtime, in fixed traversal order.
+
+    Per `Spec_Harness_Runtime_v1.md` v1.1 §1 (C-RT-01) the order is normative:
+    `list(BootstrapStage)` MUST equal `[PREAMBLE, IS, AS, CP_CLIENTS,
+    CP_ROUTING, OD, LOOP_INIT, CXA_WIRING, INGRESS_ACCEPT]`. The two stage-3
+    members (`CP_CLIENTS`, `CP_ROUTING`) correspond to file-naming convention
+    `stage_3a_*.py` / `stage_3b_*.py`.
+
+    Invariants (C-RT-01):
+    - `len(BootstrapStage) == 9`.
+    - No stage runs before its strict predecessor completes (orchestrator
+      invariant; see C-RT-02).
+    - The enum is immutable across v1; adding a stage is a v2.0 event.
+    """
+
+    PREAMBLE = 0
+    IS = 1
+    AS = 2
+    CP_CLIENTS = 3  # stage 3a
+    CP_ROUTING = 4  # stage 3b
+    OD = 5
+    LOOP_INIT = 6
+    CXA_WIRING = 7
+    INGRESS_ACCEPT = 8
+
+
+# ----------------------------------------------------------------------------
+# `StageResult` - return shape of a single stage's `execute()` call.
+# Per C-RT-02 "implementation discretion": minimal shape at L0; per-stage
+# extensions (e.g., per-stage post-condition attestations) land with the
+# stage units (L1-L9).
+# ----------------------------------------------------------------------------
+class StageResult(BaseModel):
+    """Result of a single bootstrap stage's `execute()` call (C-RT-02).
+
+    On success, names the stage that produced the result. Failure modes
+    raise typed exceptions per the runtime-local fail-class taxonomy
+    (C-RT-14); stages do not return failure results - the orchestrator
+    treats a returned `StageResult` as success and an exception as the
+    `RT-FAIL-BOOTSTRAP` / `RT-FAIL-TRANSIENT` / `RT-FAIL-PARTIAL-ROLLBACK-
+    REQUIRED` taxonomy entry.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    stage: BootstrapStage
+    """The stage that produced this result."""
+
+
+# ----------------------------------------------------------------------------
+# `StageLifecycleHook` - per-stage entry + exit hook stub.
+# Per C-RT-01 invariant "Each stage emits exactly one workflow_event_class
+# lifecycle event on entry and exit". Concretized at U-RT-41 (lifecycle
+# event emission); at L0 this is a structural Protocol stub.
+# ----------------------------------------------------------------------------
+@runtime_checkable
+class StageLifecycleHook(Protocol):
+    """Per-stage entry/exit hook (C-RT-01 lifecycle invariant; U-RT-41)."""
 
 
 # ----------------------------------------------------------------------------
