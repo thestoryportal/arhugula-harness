@@ -161,6 +161,19 @@ Per `Phase_7_Meta_Architecture_v1.md` §5.4 — **CP carries 21 of 49 substituti
 
 Full per-substitution bounded-scope + retirement criterion at Meta-Architecture §5.4.
 
+**Retirement status (post 7d second pass, 2026-05-20).** Per `.harness/phase-7d-retirement-events-batch-1.md` + v2 ledger `.harness/phase-7d-retirement-ledger-v2.md` §5 under operator-ratified runtime-only substitution-site reading. CP-axis is the largest substitution surface and the slowest to retire — only 1 of 21 runtime-active retired at batch 1:
+
+| Status | Count | Substitutions |
+|---|---|---|
+| **RETIRED** 2026-05-20 | 1 | H_T-CP-6 (workflow manifest schema; `routing_manifest.py:143-145` + `workflow_driver.py:360-364` per-step invocation) |
+| RETIRED (authoring close, v1 §1) | 1 | H_T-CP-24 (substrate seam exports + F2-12 closure manifest) |
+| PARTIAL | 3 | H_T-CP-8 (F2-substrate-join — `cp_is_wiring.py` 1 of 17 edges per `class_1_tension_u_rt_35_cp_is_wiring_gaps.md`); H_T-CP-9 (ResumptionKind 5-class — driver emits binary only); H_T-CP-11 (D4 multiplicative tunable not surfaced at runtime) |
+| STILL-BOUNDED | 17 | H_T-CP-1 / 2 / 3 / 4 / 5 / 10 / 12 / 13 / 14 / 16 / 17 / 18 / 19 / 20 / 21 / 22 / 23 — bounded on absent LLM-dispatch composer + absent HITL/validator/sub-agent composers |
+
+**§9 Class 2 multi-LLM commitment surface OPEN (unchanged).** All 3 providers (anthropic + openai + ollama) constructed at `harness-runtime/.../lifecycle/providers.py:679-706`; zero LLM call sites exist anywhere in `harness-runtime/src/` (no `messages.create` / `chat.completions` invocations). `step_dispatcher.dispatch(binding, step)` at `harness-cp/src/harness_cp/workflow_driver.py:379` is an operator-injected architectural seam; no production multi-provider router landed. ADR-F1 v1.2 multi-LLM commitment met at design + library code; unmet at runtime. Retirement gated on LLM-dispatch runtime composer per v2 §9.2.3.
+
+CP-axis post-batch: 2 / 22 retired (9.1%, including CP-24 authoring-retired). Per v2 §9.2.5, CP closure is multi-composer gated.
+
 ### 4.2 CP-axis anti-leakage rules (5 — largest rule set)
 
 Per `Phase_7_Meta_Architecture_v1.md` §7.4 — CP carries 5 of 17 axis-bound rules (29.4%):

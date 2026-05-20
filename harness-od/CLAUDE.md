@@ -132,6 +132,21 @@ Per `Phase_7_Meta_Architecture_v1.md` §5.5. H_E classification per §4.4.4 — 
 
 Full per-substitution bounded-scope + retirement criterion at Meta-Architecture §5.5.
 
+**Retirement status (post 7d second pass, 2026-05-20).** Per v2 ledger `.harness/phase-7d-retirement-ledger-v2.md` §6 under operator-ratified runtime-only substitution-site reading. OD-axis had 0 RETIRE-READY at batch 1 — same compound-irrelevance pattern as CXA: even with composers materialized at bootstrap, the production execution path emits zero spans / makes zero `audit_writer.append` calls (only `read_all` at shutdown for head-hash), so the OD telemetry / cost / sampler / audit primitives are starved of input.
+
+| Substitution | Status | Source |
+|---|---|---|
+| H_T-OD-1 (deferral envelope) | STILL-BOUNDED | No `deferral_envelope` import in `harness-runtime/`; scope deferrals remain `CLAUDE.md`-prose convention at runtime |
+| H_T-OD-2 (OTel SDK base + GenAI semconv) | PARTIAL | OTel SDK base wired (`tracer_provider.py`); GenAI semconv binding ABSENT; zero CP-driver span emission. **Blocks CXA-5 F-CP-01 Stage 3b inversion** per §6.3.2 |
+| H_T-OD-3 (Composite Sampler) | STILL-BOUNDED | Stock `ParentBased(ALWAYS_ON)`, not project-authored composite head/tail |
+| H_T-OD-4 (Pre-Collector redaction SpanProcessor) | STILL-BOUNDED | Stock `BatchSpanProcessor`; zero redaction references; doubly inactive (no spans to redact) |
+| H_T-OD-5 (Cost-attribution 5-step chain) | STILL-BOUNDED | `CostAttributionChain` wired into ctx; zero production callsites; `api.py:463` hard-codes `cost_attribution=()` per U-OD-21 HALT carry-forward. PRICE_TABLE_REF carry per `[[fork-price-table-ref-substitution-retirement]]`; audit-ledger wiring per `[[fork-cost-record-audit-ledger-wiring-residual]]` |
+| H_T-OD-6 (Local-first OTLP ingestion) | PARTIAL | Collector daemon + ring buffer wired; sqlite write path deferred (U-RT-30 PARTIAL-LAND, AC #2 STRUCK); TUI absent. Compound-irrelevant: no spans → collector ingests nothing |
+| H_T-OD-7 (Preservation invariants 5-dimension) | STILL-BOUNDED | Library carrier only; no runtime enforcement loop |
+| H_T-OD-8 (aggregate manifest + Stage 3b inversion) | RETIRED (authoring close, v1 §1) | Authoring-only |
+
+OD-axis post-batch: 1 / 8 retired (12.5%, authoring-only). 2 PARTIAL + 5 STILL-BOUNDED carried as bounded-residual gated on (a) GenAI semconv binding at `tracer_provider.py` + a runtime span-emission path (OD-2 → CXA-5 cascade), (b) LLM-dispatch composer enabling cost-attribution chain invocation (OD-5), (c) sqlite write site land (OD-6), (d) preservation invariant enforcement loop (OD-7).
+
 ### 4.2 OD-axis anti-leakage rules (3 entries)
 
 Per `Phase_7_Meta_Architecture_v1.md` §7.5:
