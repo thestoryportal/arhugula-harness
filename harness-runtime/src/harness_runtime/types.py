@@ -53,13 +53,22 @@ from harness_core.persona_tier import PersonaTier
 from harness_core.workload_class import WorkloadClass
 from harness_cp.cross_family_fallback_chain import FallbackChain
 from harness_cp.engine_class import EngineClass
+from harness_cp.hitl_as_tool_call_rewriting import (
+    HITLSemanticVariant,
+    RewrittenToolCall,
+)
+from harness_cp.hitl_timeout_degradation import TimeoutDegradationKind
+from harness_cp.pause_resume_protocol import ResumeOutcomeKind
+from harness_cp.persona_engine_hitl_matrix import SynchronyClass
 from harness_cp.routing_manifest_residence import RetryPolicy, RoutingManifest
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.validator_fail_taxonomy import ValidatorFailClass
 from harness_cp.validator_fail_transient_staircase import (
+    CrossTrustBoundaryState,
     StaircaseStage,
     StaircaseTransition,
 )
+from harness_cp.workload_binding_engine_class_selection import HITLInvocation
 from harness_is.path_resolver import PathResolver
 from harness_is.workload_manifest_opt_in_schema import WorkloadManifestOptIns
 from harness_is.worktree_isolation import WorktreeIsolationManager
@@ -520,7 +529,56 @@ class RetryBreakerRegistry(Protocol):
 
 @runtime_checkable
 class HITLPlacementRegistry(Protocol):
-    """Composed at U-RT-25 from landed CP HITL-placement primitives."""
+    """HITL placement runtime registry surface (U-RT-25).
+
+    Concretized by `harness_runtime.lifecycle.hitl_placement.RuntimeHITLPlacementRegistry`.
+    Narrowed at U-RT-25 to declare the registry's reference-time surface so
+    consumer-side type checks (L8 LOOP_INIT orchestrator) compose against a
+    documented API. The registry composes the 5 CP HITL primitives —
+    `hitl_response_palette`, `hitl_placement`, `hitl_timeout_degradation`,
+    `hitl_as_tool_call_rewriting`, `pause_resume_protocol`.
+
+    Method `rewrite_tool_call` takes `ProposedAction` (from
+    `harness_cp.handoff_context`) and tool / server identifiers — typed here
+    as `object` to keep the L0 stub free of additional cross-axis imports.
+    Callers narrow at concrete call sites.
+    """
+
+    def on_timeout(
+        self,
+        invocation: HITLInvocation,
+        persona_tier: PersonaTier,
+    ) -> TimeoutDegradationKind:
+        """Typed timeout-degradation event for a timed-out HITL invocation."""
+        ...
+
+    def select_variant(
+        self,
+        cell_synchrony_class: SynchronyClass,
+    ) -> HITLSemanticVariant:
+        """Select the C-CP-17 §17.2 HITL semantic variant for a cell synchrony class."""
+        ...
+
+    def rewrite_tool_call(
+        self,
+        tool: str,
+        server: str,
+        persona_tier: PersonaTier,
+        proposed_action: object,
+        cell_synchrony_class: SynchronyClass,
+        cross_trust_boundary_state: CrossTrustBoundaryState,
+        hitl_required: bool,
+    ) -> RewrittenToolCall:
+        """Rewrite a tool call into a HITL semantic variant per C-CP-17 §17.2."""
+        ...
+
+    def classify_resume(
+        self,
+        diff: tuple[object, ...],
+        revalidation_succeeded: bool,
+    ) -> ResumeOutcomeKind:
+        """Classify a resume outcome from the material-diff set (C-CP-22 §22.1)."""
+        ...
 
 
 @runtime_checkable
