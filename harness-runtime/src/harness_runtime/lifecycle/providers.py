@@ -54,11 +54,13 @@ loop decide retry vs. escalation.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+import warnings
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Final
 
 from anthropic import AsyncAnthropic
+from ollama import AsyncClient as AsyncOllamaClient
 from openai import AsyncOpenAI
 
 from harness_runtime.config.provider_secrets import (
@@ -69,16 +71,31 @@ from harness_runtime.types import ProviderClient, RuntimeConfig
 
 __all__ = [
     "ANTHROPIC_KEYRING_NAME",
+    "DEFAULT_STAGE_3A_MAX_ATTEMPTS",
     "OPENAI_KEYRING_NAME",
     "AnthropicAdapter",
+    "OllamaAdapter",
     "OpenAIAdapter",
     "ProviderAuthError",
+    "ProviderClientsStage",
     "ProviderDegradedWarning",
     "ProviderSecretMissingError",
     "ProviderTransientError",
     "construct_anthropic_adapter",
+    "construct_ollama_adapter",
     "construct_openai_adapter",
+    "materialize_provider_clients_stage",
 ]
+
+DEFAULT_STAGE_3A_MAX_ATTEMPTS: Final[int] = 3
+"""Bounded-retry attempt count per spec §5 line 369 ('max 3 per stage policy').
+
+No backoff at U-RT-19 — the retry loop here just bounds the count. Real
+backoff + circuit-breaker policy lives at U-RT-24 (retry/breaker registry).
+Each transient failure is re-attempted up to (max_attempts - 1) times; the
+final attempt's exception propagates per the spec's "persistent → escalation"
+disposition.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -411,3 +428,272 @@ async def construct_openai_adapter(
 
 _OPENAI_PROTOCOL_CHECK: type[ProviderClient] = OpenAIAdapter
 del _OPENAI_PROTOCOL_CHECK
+
+
+# ---------------------------------------------------------------------------
+# OllamaAdapter — U-RT-19.
+# Ollama is local-tier and credential-less per spec §5 line 354. No keyring
+# resolution; construction uses `host=config.ollama_host or default`. The
+# fail-mode set differs from Anthropic / OpenAI: there is no auth class
+# (local daemon), so every ping failure is `ProviderTransientError` — which
+# the materialize stage further reclassifies to `ProviderDegradedWarning`
+# when `RuntimeConfig.ollama_optional == True` per spec §5 line 371.
+# ---------------------------------------------------------------------------
+
+
+def _default_ollama_ping(client: AsyncOllamaClient) -> AsyncPing:
+    """Default ping for an `ollama.AsyncClient` — `client.list()` per spec §5 line 373."""
+
+    async def ping() -> None:
+        await client.list()
+
+    return ping
+
+
+@dataclass
+class OllamaAdapter:
+    """Stage-3a Ollama adapter — U-RT-19.
+
+    Wraps `ollama.AsyncClient`. Same idempotent-close discipline as
+    `AnthropicAdapter` / `OpenAIAdapter`. Ollama's `close()` is exposed and
+    awaitable per the SDK contract.
+    """
+
+    client: AsyncOllamaClient
+    ping: AsyncPing
+    _closed: bool = field(default=False)
+
+    async def aclose(self) -> None:
+        """Idempotent close. Calls `client.close()` exactly once."""
+        if self._closed:
+            return
+        self._closed = True
+        await self.client.close()
+
+
+def _classify_ollama_ping_failure(exc: BaseException) -> Exception:
+    """Map an Ollama ping exception to `ProviderTransientError`.
+
+    Ollama leaks the underlying `builtins.ConnectionError` (daemon
+    unreachable) and exposes its own `ollama.RequestError` /
+    `ollama.ResponseError`. None of these are auth-class — Ollama is local
+    and credential-less. Everything is treated as transient at this layer;
+    the materialize stage decides whether to retry, escalate, or degrade.
+    """
+    return ProviderTransientError("ollama", exc)
+
+
+async def construct_ollama_adapter(
+    config: RuntimeConfig,
+    resolver: KeyringSecretResolver | None = None,
+    *,
+    ping_override: AsyncPing | None = None,
+    client_factory: Callable[[str | None], AsyncOllamaClient] | None = None,
+) -> OllamaAdapter:
+    """Construct + ping-verify an `OllamaAdapter` for stage 3a.
+
+    Unlike Anthropic / OpenAI, Ollama is credential-less; the `resolver`
+    parameter is accepted for cross-adapter signature symmetry but is unused
+    (defaults to None). The host URL comes from `config.ollama_host` (per
+    spec §5 line 354); `None` lets `ollama.AsyncClient` apply its built-in
+    default (`http://localhost:11434`).
+
+    Degraded-mode reclassification (`ProviderDegradedWarning`) is the
+    materialize stage's job, not this constructor's — this function always
+    raises `ProviderTransientError` on ping failure. The materialize loop
+    decides whether the operator opted into degraded mode.
+
+    Parameters
+    ----------
+    config :
+        Frozen `RuntimeConfig`. Reads `ollama_host`; `ollama_optional` is
+        consumed at the materialize layer, not here.
+    resolver :
+        Accepted for symmetry; unused.
+    ping_override :
+        Test-injection point. When `None`, uses `client.list()`.
+    client_factory :
+        Test-injection point for the SDK constructor. Signature is
+        `Callable[[str | None], AsyncOllamaClient]` to mirror the
+        `host=config.ollama_host` argument shape.
+
+    Raises
+    ------
+    ProviderTransientError
+        Ping raised any exception (network, daemon-down, response error).
+    """
+    _ = resolver  # accepted for signature symmetry; Ollama is credential-less.
+
+    if client_factory is None:
+        client = AsyncOllamaClient(host=config.ollama_host)
+    else:
+        client = client_factory(config.ollama_host)
+
+    ping = ping_override if ping_override is not None else _default_ollama_ping(client)
+    try:
+        await ping()
+    except (ProviderAuthError, ProviderTransientError):
+        raise
+    except BaseException as exc:
+        raise _classify_ollama_ping_failure(exc) from exc
+
+    return OllamaAdapter(client=client, ping=ping)
+
+
+_OLLAMA_PROTOCOL_CHECK: type[ProviderClient] = OllamaAdapter
+del _OLLAMA_PROTOCOL_CHECK
+
+
+# ---------------------------------------------------------------------------
+# materialize_provider_clients_stage — U-RT-19.
+# Aggregates the three adapters into the `dict[str, ProviderClient]` shape
+# `HarnessContext.providers` expects (C-RT-04 line 283). Per the advisor:
+# three explicit per-provider construction calls (not a loop) so the Ollama
+# degraded branch reads cleanly.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ProviderClientsStage:
+    """Result of `materialize_provider_clients_stage`.
+
+    `providers` maps provider key → ready adapter. Keys are `"anthropic"`,
+    `"openai"`, and `"ollama"` per spec C-RT-04 line 283. When
+    `ollama_optional=True` and Ollama is unreachable, the `"ollama"` key is
+    ABSENT from the dict and a `ProviderDegradedWarning` was surfaced via
+    `warnings.warn` per spec §5 line 371 (stage continues with 2-provider
+    context). When `ollama_optional=False`, an unreachable Ollama is a hard
+    stage-3a failure.
+    """
+
+    providers: Mapping[str, ProviderClient]
+
+
+async def _attempt_with_bounded_retry(
+    name: str,
+    construct: Callable[[], Awaitable[ProviderClient]],
+    max_attempts: int = DEFAULT_STAGE_3A_MAX_ATTEMPTS,
+) -> ProviderClient:
+    """Run `construct()` with bounded-retry on `ProviderTransientError`.
+
+    Per spec §5 line 369: transient failures retry up to `max_attempts`
+    times; the final attempt's exception propagates ("persistent →
+    escalation"). `ProviderAuthError` and `ProviderSecretMissingError` are
+    permanent — no retry; raised on the first attempt.
+
+    No backoff sleep at U-RT-19 — real backoff policy is wired at U-RT-24
+    (retry/breaker registry). The `name` argument is captured into the
+    propagated exception via the adapter's own `provider=` field, not here.
+    """
+    last_transient: ProviderTransientError | None = None
+    for attempt in range(max_attempts):
+        _ = attempt  # attempt index informational; retained for future logging.
+        try:
+            return await construct()
+        except ProviderTransientError as exc:
+            last_transient = exc
+            continue
+    # All `max_attempts` attempts raised transient — escalate.
+    assert last_transient is not None, f"unreachable: {name} retry loop exited without exc"
+    raise last_transient
+
+
+async def materialize_provider_clients_stage(
+    config: RuntimeConfig,
+    resolver: KeyringSecretResolver,
+    *,
+    anthropic_construct: Callable[[], Awaitable[ProviderClient]] | None = None,
+    openai_construct: Callable[[], Awaitable[ProviderClient]] | None = None,
+    ollama_construct: Callable[[], Awaitable[ProviderClient]] | None = None,
+    max_attempts: int = DEFAULT_STAGE_3A_MAX_ATTEMPTS,
+) -> ProviderClientsStage:
+    """Build the stage 3a CP_CLIENTS provider dict per C-RT-02 invariants.
+
+    Steps:
+    1. Construct anthropic adapter (bounded retry on transient).
+    2. Construct openai adapter (bounded retry on transient).
+    3. Construct ollama adapter:
+       - If `config.ollama_optional == False` and transient persists →
+         raise (hard stage-3a failure per multi-LLM commitment).
+       - If `config.ollama_optional == True` and transient persists →
+         surface `ProviderDegradedWarning` via `warnings.warn`; omit
+         `"ollama"` from the providers dict (2-provider context).
+
+    The per-provider `*_construct` overrides are test-injection points so the
+    materialize-stage loop can be exercised without re-exercising the
+    per-adapter SDK construction path (covered by U-RT-17 / U-RT-18 / U-RT-19
+    construct-function tests).
+
+    Parameters
+    ----------
+    config :
+        Frozen `RuntimeConfig`. Drives `ollama_host` + `ollama_optional`.
+    resolver :
+        Stage-0 `KeyringSecretResolver` (U-RT-06). Anthropic + OpenAI
+        adapters consume it for the bootstrap-value path.
+    anthropic_construct, openai_construct, ollama_construct :
+        Test injection. When `None`, default to the per-provider construct
+        functions (no overrides — production path).
+    max_attempts :
+        Bounded-retry attempt count. Default = `DEFAULT_STAGE_3A_MAX_ATTEMPTS`.
+
+    Returns
+    -------
+    ProviderClientsStage
+        Frozen handle carrying the `dict[str, ProviderClient]` mapping. The
+        dict has 2 entries when Ollama was degraded; 3 otherwise.
+    """
+    # Bind default per-provider constructors. The Awaitable[ProviderClient]
+    # return type is upcast from each adapter's concrete type.
+    if anthropic_construct is None:
+
+        async def anthropic_construct_default() -> ProviderClient:
+            return await construct_anthropic_adapter(config, resolver)
+
+        anthropic_construct = anthropic_construct_default
+
+    if openai_construct is None:
+
+        async def openai_construct_default() -> ProviderClient:
+            return await construct_openai_adapter(config, resolver)
+
+        openai_construct = openai_construct_default
+
+    if ollama_construct is None:
+
+        async def ollama_construct_default() -> ProviderClient:
+            return await construct_ollama_adapter(config, resolver)
+
+        ollama_construct = ollama_construct_default
+
+    providers: dict[str, ProviderClient] = {}
+
+    # Step 1: Anthropic. ProviderAuthError + SecretMissingError propagate
+    # (permanent); transient bounded-retries up to `max_attempts`.
+    providers["anthropic"] = await _attempt_with_bounded_retry(
+        "anthropic", anthropic_construct, max_attempts=max_attempts
+    )
+
+    # Step 2: OpenAI. Same posture as anthropic.
+    providers["openai"] = await _attempt_with_bounded_retry(
+        "openai", openai_construct, max_attempts=max_attempts
+    )
+
+    # Step 3: Ollama with degraded branch.
+    try:
+        providers["ollama"] = await _attempt_with_bounded_retry(
+            "ollama", ollama_construct, max_attempts=max_attempts
+        )
+    except ProviderTransientError as transient_exc:
+        if config.ollama_optional:
+            # Surface degraded; continue with 2-provider context.
+            warnings.warn(
+                ProviderDegradedWarning("ollama", transient_exc.cause),
+                stacklevel=2,
+            )
+            # `"ollama"` key intentionally absent from providers dict.
+        else:
+            # Hard stage-3a failure per multi-LLM commitment.
+            raise
+
+    return ProviderClientsStage(providers=providers)

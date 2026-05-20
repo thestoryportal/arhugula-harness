@@ -39,14 +39,20 @@ from harness_runtime.config.provider_secrets import (
 )
 from harness_runtime.lifecycle.providers import (
     ANTHROPIC_KEYRING_NAME,
+    DEFAULT_STAGE_3A_MAX_ATTEMPTS,
     OPENAI_KEYRING_NAME,
     AnthropicAdapter,
+    OllamaAdapter,
     OpenAIAdapter,
     ProviderAuthError,
+    ProviderClientsStage,
+    ProviderDegradedWarning,
     ProviderSecretMissingError,
     ProviderTransientError,
     construct_anthropic_adapter,
+    construct_ollama_adapter,
     construct_openai_adapter,
+    materialize_provider_clients_stage,
 )
 from harness_runtime.types import (
     CollectorConfig,
@@ -525,3 +531,374 @@ async def test_openai_ping_transient_failure_raises_provider_transient(
             client_factory=_openai_factory([]),
         )
     assert excinfo.value.provider == "openai"
+
+
+# ---------------------------------------------------------------------------
+# U-RT-19 — OllamaAdapter + materialize_provider_clients_stage tests.
+# ---------------------------------------------------------------------------
+
+
+class _FakeAsyncOllama:
+    """Fake `ollama.AsyncClient` for tests; records host + close-count."""
+
+    def __init__(self, host: str | None) -> None:
+        self.host = host
+        self.close_count = 0
+
+    async def close(self) -> None:
+        self.close_count += 1
+
+
+def _ollama_factory(
+    records: list[str | None],
+) -> Callable[[str | None], object]:
+    """Build a client_factory recording the `host` it receives.
+
+    Returns `object` rather than `ollama.AsyncClient` to dodge the strict
+    nominal-typing constraint at the construct callsite; the adapter only
+    uses `.close()`. Cast to `AsyncOllamaClient` happens via cast() at the
+    use site (cf. _openai_factory pattern).
+    """
+
+    def factory(host: str | None) -> object:
+        records.append(host)
+        return _FakeAsyncOllama(host=host)
+
+    return factory
+
+
+def _runtime_config_with_ollama(
+    tmp_path: Path,
+    *,
+    ollama_host: str | None = None,
+    ollama_optional: bool = False,
+) -> RuntimeConfig:
+    """`RuntimeConfig` with explicit Ollama config — for U-RT-19 tests."""
+    return RuntimeConfig(
+        deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
+        repository_root=tmp_path,
+        path_bindings=PathBindingConfig(),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4317"),
+        collector=CollectorConfig(),
+        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        ollama_host=ollama_host,
+        ollama_optional=ollama_optional,
+    )
+
+
+@pytest.mark.asyncio
+async def test_construct_ollama_adapter_happy_path(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """Happy path for Ollama: client constructs (no secret) → ping passes."""
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    config = _runtime_config_with_ollama(tmp_path, ollama_host="http://my-ollama:11434")
+    captured_hosts: list[str | None] = []
+    ping_call_count = 0
+
+    async def stub_ping() -> None:
+        nonlocal ping_call_count
+        ping_call_count += 1
+
+    adapter = await construct_ollama_adapter(
+        config,
+        resolver,
+        ping_override=stub_ping,
+        client_factory=_ollama_factory(captured_hosts),  # type: ignore[arg-type]
+    )
+
+    assert isinstance(adapter, OllamaAdapter)
+    assert captured_hosts == ["http://my-ollama:11434"]
+    assert ping_call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_ollama_adapter_default_host_is_none(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """`ollama_host=None` → adapter passes `None` to SDK (SDK applies its default)."""
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    config = _runtime_config_with_ollama(tmp_path)  # ollama_host=None default
+    captured: list[str | None] = []
+
+    async def stub_ping() -> None:
+        return None
+
+    await construct_ollama_adapter(
+        config,
+        resolver,
+        ping_override=stub_ping,
+        client_factory=_ollama_factory(captured),  # type: ignore[arg-type]
+    )
+    assert captured == [None]
+
+
+@pytest.mark.asyncio
+async def test_ollama_adapter_aclose_is_idempotent(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """`aclose()` calls SDK `close()` exactly once even on repeated invocation."""
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    config = _runtime_config_with_ollama(tmp_path)
+
+    async def stub_ping() -> None:
+        return None
+
+    adapter = await construct_ollama_adapter(
+        config,
+        resolver,
+        ping_override=stub_ping,
+        client_factory=_ollama_factory([]),  # type: ignore[arg-type]
+    )
+
+    fake_client = cast(_FakeAsyncOllama, adapter.client)
+    assert fake_client.close_count == 0
+    await adapter.aclose()
+    assert fake_client.close_count == 1
+    await adapter.aclose()
+    await adapter.aclose()
+    assert fake_client.close_count == 1
+
+
+def test_ollama_adapter_satisfies_provider_client_protocol(
+    fake_keyring: _FakeKeyring,
+) -> None:
+    """Structural conformance to `ProviderClient` for Ollama adapter."""
+
+    async def noop_ping() -> None:
+        return None
+
+    fake = cast("object", _FakeAsyncOllama(host=None))
+    # Adapter holds an opaque client; cast to the SDK type for typing.
+    from ollama import AsyncClient as AsyncOllamaClient  # local to mirror module pattern
+
+    adapter = OllamaAdapter(client=cast(AsyncOllamaClient, fake), ping=noop_ping)
+    assert isinstance(adapter, ProviderClient)
+
+
+@pytest.mark.asyncio
+async def test_ollama_ping_failure_raises_provider_transient(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """ConnectionError from ping → `ProviderTransientError` (no auth class for Ollama)."""
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    config = _runtime_config_with_ollama(tmp_path)
+
+    async def failing_ping() -> None:
+        raise ConnectionError("daemon unreachable")
+
+    with pytest.raises(ProviderTransientError) as excinfo:
+        await construct_ollama_adapter(
+            config,
+            resolver,
+            ping_override=failing_ping,
+            client_factory=_ollama_factory([]),  # type: ignore[arg-type]
+        )
+    assert excinfo.value.provider == "ollama"
+
+
+# ---------------------------------------------------------------------------
+# materialize_provider_clients_stage — happy + degraded + hard-fail paths.
+# ---------------------------------------------------------------------------
+
+
+def _ready_adapter(provider: str) -> ProviderClient:
+    """Build a minimal `ProviderClient` instance for stage-injection tests.
+
+    Uses `AnthropicAdapter` regardless of `provider` — it's the simplest
+    concrete shape and structurally satisfies `ProviderClient`. The provider
+    name is only used in the stage dict key.
+    """
+
+    async def noop_ping() -> None:
+        return None
+
+    fake = cast(AsyncAnthropic, _FakeAsyncAnthropic(api_key=f"sk-{provider}-stub"))
+    return AnthropicAdapter(client=fake, ping=noop_ping)
+
+
+@pytest.mark.asyncio
+async def test_materialize_stage_three_providers_happy_path(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """All three constructors succeed → 3-entry providers dict."""
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    config = _runtime_config_with_ollama(tmp_path)
+
+    async def anthropic_c() -> ProviderClient:
+        return _ready_adapter("anthropic")
+
+    async def openai_c() -> ProviderClient:
+        return _ready_adapter("openai")
+
+    async def ollama_c() -> ProviderClient:
+        return _ready_adapter("ollama")
+
+    stage = await materialize_provider_clients_stage(
+        config,
+        resolver,
+        anthropic_construct=anthropic_c,
+        openai_construct=openai_c,
+        ollama_construct=ollama_c,
+    )
+
+    assert isinstance(stage, ProviderClientsStage)
+    assert set(stage.providers.keys()) == {"anthropic", "openai", "ollama"}
+    for key in ("anthropic", "openai", "ollama"):
+        assert isinstance(stage.providers[key], ProviderClient)
+
+
+@pytest.mark.asyncio
+async def test_materialize_stage_bounded_retry_on_transient(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """Transient failure retries up to max_attempts; succeeds on the last attempt."""
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    config = _runtime_config_with_ollama(tmp_path)
+    attempt_count = 0
+
+    async def flaky_anthropic() -> ProviderClient:
+        nonlocal attempt_count
+        attempt_count += 1
+        if attempt_count < DEFAULT_STAGE_3A_MAX_ATTEMPTS:
+            raise ProviderTransientError("anthropic", RuntimeError(f"attempt {attempt_count}"))
+        return _ready_adapter("anthropic")
+
+    async def stable_openai() -> ProviderClient:
+        return _ready_adapter("openai")
+
+    async def stable_ollama() -> ProviderClient:
+        return _ready_adapter("ollama")
+
+    stage = await materialize_provider_clients_stage(
+        config,
+        resolver,
+        anthropic_construct=flaky_anthropic,
+        openai_construct=stable_openai,
+        ollama_construct=stable_ollama,
+    )
+    assert attempt_count == DEFAULT_STAGE_3A_MAX_ATTEMPTS
+    assert "anthropic" in stage.providers
+
+
+@pytest.mark.asyncio
+async def test_materialize_stage_persistent_transient_escalates(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """Persistent transient (all max_attempts fail) → ProviderTransientError raised."""
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    config = _runtime_config_with_ollama(tmp_path)
+    attempt_count = 0
+
+    async def always_transient() -> ProviderClient:
+        nonlocal attempt_count
+        attempt_count += 1
+        raise ProviderTransientError("anthropic", RuntimeError("network down"))
+
+    async def unreached() -> ProviderClient:  # pragma: no cover
+        raise AssertionError("subsequent providers should not be constructed")
+
+    with pytest.raises(ProviderTransientError):
+        await materialize_provider_clients_stage(
+            config,
+            resolver,
+            anthropic_construct=always_transient,
+            openai_construct=unreached,
+            ollama_construct=unreached,
+        )
+    assert attempt_count == DEFAULT_STAGE_3A_MAX_ATTEMPTS
+
+
+@pytest.mark.asyncio
+async def test_materialize_stage_auth_error_no_retry(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """`ProviderAuthError` is permanent — no retry, no further providers attempted."""
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    config = _runtime_config_with_ollama(tmp_path)
+    attempt_count = 0
+
+    async def auth_fail() -> ProviderClient:
+        nonlocal attempt_count
+        attempt_count += 1
+        raise ProviderAuthError("anthropic", RuntimeError("401"))
+
+    async def unreached() -> ProviderClient:  # pragma: no cover
+        raise AssertionError("subsequent providers should not be constructed")
+
+    with pytest.raises(ProviderAuthError):
+        await materialize_provider_clients_stage(
+            config,
+            resolver,
+            anthropic_construct=auth_fail,
+            openai_construct=unreached,
+            ollama_construct=unreached,
+        )
+    assert attempt_count == 1
+
+
+@pytest.mark.asyncio
+async def test_materialize_stage_ollama_optional_degraded(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """`ollama_optional=True` + Ollama transient → degraded warning + 2-provider dict.
+
+    Spec §5 line 371: 'Surface typed warning; stage continues with 2-provider
+    context'.
+    """
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    config = _runtime_config_with_ollama(tmp_path, ollama_optional=True)
+
+    async def stable_anthropic() -> ProviderClient:
+        return _ready_adapter("anthropic")
+
+    async def stable_openai() -> ProviderClient:
+        return _ready_adapter("openai")
+
+    async def ollama_down() -> ProviderClient:
+        raise ProviderTransientError("ollama", ConnectionError("daemon unreachable"))
+
+    with pytest.warns(ProviderDegradedWarning):
+        stage = await materialize_provider_clients_stage(
+            config,
+            resolver,
+            anthropic_construct=stable_anthropic,
+            openai_construct=stable_openai,
+            ollama_construct=ollama_down,
+        )
+
+    assert set(stage.providers.keys()) == {"anthropic", "openai"}
+    assert "ollama" not in stage.providers
+
+
+@pytest.mark.asyncio
+async def test_materialize_stage_ollama_not_optional_hard_fail(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """`ollama_optional=False` (default) + Ollama unreachable → hard stage-3a failure.
+
+    Multi-LLM commitment per ADR-F1 v1.2: Ollama unreachability is not silently
+    absorbed unless the operator explicitly opted into degraded mode.
+    """
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    config = _runtime_config_with_ollama(tmp_path)  # ollama_optional=False default
+
+    async def stable_anthropic() -> ProviderClient:
+        return _ready_adapter("anthropic")
+
+    async def stable_openai() -> ProviderClient:
+        return _ready_adapter("openai")
+
+    async def ollama_down() -> ProviderClient:
+        raise ProviderTransientError("ollama", ConnectionError("daemon unreachable"))
+
+    with pytest.raises(ProviderTransientError) as excinfo:
+        await materialize_provider_clients_stage(
+            config,
+            resolver,
+            anthropic_construct=stable_anthropic,
+            openai_construct=stable_openai,
+            ollama_construct=ollama_down,
+        )
+    assert excinfo.value.provider == "ollama"
