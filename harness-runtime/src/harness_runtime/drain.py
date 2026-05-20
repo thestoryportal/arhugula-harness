@@ -2,14 +2,19 @@
 
 Per `Spec_Harness_Runtime_v1.md` v1.1 §11 (C-RT-11 — Drain semantics).
 
-**Partial-land scope.** C-RT-11 commits 3 drain surfaces:
+**Full-land at Lane 6 (2026-05-20).** C-RT-11 commits 3 drain surfaces; all
+three are LANDED post-Lane-6:
 
 1. ✅ `drained_flag` set by signal handler — landed here.
-2. ❌ CP workflow lifecycle loop polls flag at boundaries — **STRUCK** at U-RT-44
-   pending CP workflow loop primitive (no CP loop landed; `api.run()` raises
-   `WorkflowExecutionNotYetLandedError` post-bootstrap). Class 1 fork filed at
-   `.harness/class_1_tension_u_rt_44_workflow_loop_drain.md`; Path A
-   (refactor when CP loop lands) recommended.
+2. ✅ CP workflow lifecycle loop polls flag at boundaries — landed via
+   delegation. `api.run()` delegates execution to `harness_cp.workflow_
+   driver.execute_workflow()` (C-CP-25 §25.4 + U-CP-57); the driver polls
+   `ctx.drained_flag.is_set()` at driver-entry / per-step-pre-entry /
+   per-step-post-step boundaries. In-flight step bounded-wait
+   (U-RT-44 AC #2) materializes via the runtime's `asyncio.to_thread`
+   composition: signal handler sets flag → driver returns DRAINED at
+   next boundary → thread future resolves. Closes
+   `[[fork-u-rt-44-workflow-loop-drain]]`.
 3. ✅ `harness_runtime.run()` rejects new invocations with `HarnessDraining`
    — landed at `harness_runtime.api`.
 

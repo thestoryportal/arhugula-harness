@@ -1,6 +1,6 @@
 # Class 1 Tension — U-RT-44 in-flight step drain unmaterializable until CP workflow loop lands
 
-**Status:** OPEN-RESOLVING — SPEC-SIDE + PLAN-SIDE ABSORBED (2026-05-20: `Spec_Control_Plane_v1_4.md` §25 C-CP-25 + `Implementation_Plan_Control_Plane_v2_11.md` U-CP-56 + U-CP-57 filed; implementation + runtime un-strike pending; see §Resolution status below)
+**Status:** **CLOSED-PARTIAL** (2026-05-20: Lane 6 runtime un-strike landed. U-RT-44 AC #2 + U-RT-49 state-ledger + lifecycle-event workflow-execution ACs un-struck. Residual: cost-attribution AC carries on `[[fork-u-od-21-span-cost-record-missing-rollup-keys]]` — independent open fork; not blocking this parent's closure.)
 **Filed:** 2026-05-20 (Phase 2 Session 7, U-RT-44 landing)
 **Trigger unit:** U-RT-44 (`design-substrate/Spec_Harness_Runtime_v1.md` §11 C-RT-11)
 **Pattern:** `[[halt-route-split-AC-pattern]]`
@@ -141,18 +141,60 @@ them — per X-AL-3 (no silent design extension at Phase 7).
      `entry_version` + add IS prefix-match read primitive. Tracked at
      `[[fork-u-cp-56-resumption-underspec]]`. This is the residual gap
      blocking full closure of this parent fork.
-6. **PENDING — Runtime un-strike (lane 6 entry).** Refactor U-RT-44 +
-   U-RT-49 in harness-runtime/ to delegate workflow execution to U-CP-56 +
-   U-CP-57 via the new `execute_workflow()` API (per
-   `Spec_Harness_Runtime_v1.md` §11 risk-surface guidance: "If CP later
-   surfaces a native drain primitive... refactor `harness-runtime/` to
-   delegate drain to CP. This contract becomes a thin adapter."). Un-strike
-   U-RT-44 AC #2 (in-flight step bounded-wait) + U-RT-49 workflow-execution
-   ACs (state-ledger workflow entries; collector spans per workflow step;
-   cost-attribution chain). At completion: mark THIS fork CLOSED. The
-   residual `[[fork-u-cp-56-resumption-underspec]]` (AC #6) remains an
-   independent open fork tracked separately — it does not block runtime
-   un-strike since runtime never depended on selective replay-resumption.
+6. ✅ **DONE — Runtime un-strike (lane 6).** Refactored
+   `harness_runtime.api.run()` to delegate workflow body execution to
+   `harness_cp.workflow_driver.execute_workflow()` (C-CP-25 §25). The
+   `WorkflowObject` runtime-local Protocol grew via 4 new read-only
+   properties (`manifest_entry`, `steps`, `step_dispatcher`,
+   `default_model_binding`) per the §8 risk-surface non-breaking-growth
+   authorization (Path A operator-ratified 2026-05-20). The synchronous
+   CP driver runs via `asyncio.to_thread` so the asyncio loop remains
+   responsive to signal handlers; in-flight step bounded-wait materializes
+   via this composition (signal → flag → next-boundary DRAINED). The
+   `WorkflowExecutionNotYetLandedError` stub surface is removed.
+
+   **Un-struck:**
+   - U-RT-44 AC #2 BOTH branches:
+     - bounded-wait branch — composed via drain-flag-poll-at-boundary in
+       the CP driver (signal sets flag → driver returns DRAINED at next
+       boundary).
+     - typed-timeout branch — `asyncio.wait_for(...,
+       timeout=config.drain_timeout_seconds)` wraps the driver call; on
+       `TimeoutError`, runtime surfaces `FailureCause(runtime_fail_class=
+       "RT-FAIL-DRAIN-TIMEOUT", ...)` on a DRAINED `RunResult` per
+       C-RT-14. Thread NOT cancelled — spec §11 invariant
+       ("exceeding the bound forces shutdown to proceed regardless").
+       New `RuntimeConfig.drain_timeout_seconds: float = 60.0` field;
+       authorized via spec §3 (C-RT-03) "Deferred to implementation
+       discretion" clause.
+   - U-RT-49 "state-ledger workflow entries" — CP driver writes step
+     entries to `ctx.ledger_writer.append` per C-CP-25 §25.3.3.
+   - U-RT-49 "lifecycle-event spans" — emitter records workflow.start +
+     step events per C-CP-25 §25.5.
+
+   **STILL STRUCK** (carry-forward, not blocking this fork's closure):
+   - U-RT-49 "cost-attribution chain produced an entry" — blocked by
+     `[[fork-u-od-21-span-cost-record-missing-rollup-keys]]` (U-OD-21
+     HALTED Class 1; `SpanCostRecord` rollup keys unmaterializable).
+     Runtime RunResult.cost_attribution carries empty tuple at v1.4 with
+     Class 3 documented note. Un-strikes when U-OD-21 fork resolves.
+
+   **Tests landed:** 2 new integration tests at
+   `harness-runtime/tests/integration/test_run_smoke.py`:
+   - `test_e2e_run_executes_workflow_via_cp_driver` — full `run()`
+     delegation; asserts ledger entries written via captured append.
+   - `test_e2e_run_returns_drained_when_flag_set_before_execute` —
+     drain-flag-pre-execute surfaces RunStatus.DRAINED through to runtime
+     `RunResult.status == "drained"`.
+
+   **Test totals on worktree:** Runtime 653 pass (was 651; +2 new). CP /
+   IS / AS / core unchanged at 498 / 125 / 302 / 18. pyright clean on
+   `harness-runtime/src/`; ruff clean.
+
+   **Independent open fork:** `[[fork-u-cp-56-resumption-underspec]]`
+   (U-CP-56 AC #6 — Path A: extend U-CP-13 manifest with `entry_version`
+   field + IS prefix-match read primitive). Not blocking THIS fork's
+   closure since runtime never depended on selective replay-resumption.
 
 **Estimated arc:** 3.5–4.5 sessions (single-pattern scoping vs 5–7+ for full
 6-pattern coverage).

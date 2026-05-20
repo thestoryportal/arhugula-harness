@@ -1,6 +1,7 @@
 # Fork extension — U-RT-49 workflow-execution ACs extend [[fork-u-rt-44-workflow-loop-drain]]
 
 **Class:** 1 (extension of existing OPEN fork)
+**Status:** **MOSTLY CLOSED at Lane 6 (2026-05-20).** Ledger-entry + lifecycle-span ACs un-struck via Lane 6 runtime un-strike. Cost-attribution AC carries forward on `[[fork-u-od-21-span-cost-record-missing-rollup-keys]]` (U-OD-21 HALTED Class 1).
 **Filed:** 2026-05-20 at U-RT-49 partial-landing
 **Carrier:** `.harness/class_1_tension_u_rt_44_workflow_loop_drain.md`
 
@@ -25,13 +26,13 @@ runtime or a new Track A revision-pass unit).
 
 ## What U-RT-49 lands
 
-| AC | LAND/STRIKE |
-|---|---|
-| Touches all 9 `BootstrapStage` members | LAND |
-| Clean shutdown leaves no resources open | LAND |
-| Workflow ledger entries | STRIKE |
-| Workflow spans | STRIKE |
-| Cost-attribution entries | STRIKE |
+| AC | LAND/STRIKE | Land event |
+|---|---|---|
+| Touches all 9 `BootstrapStage` members | LAND | U-RT-49 initial land |
+| Clean shutdown leaves no resources open | LAND | U-RT-49 initial land |
+| Workflow ledger entries | **LAND** | Lane 6 (2026-05-20) — driver writes to `ctx.ledger_writer` per C-CP-25 §25.3.3 |
+| Workflow spans | **LAND** | Lane 6 (2026-05-20) — lifecycle emitter records driver §25.5 events |
+| Cost-attribution entries | STRIKE | Carries on `[[fork-u-od-21-span-cost-record-missing-rollup-keys]]` (U-OD-21 HALTED) |
 
 ## Re-land plan
 

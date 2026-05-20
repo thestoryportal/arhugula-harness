@@ -22,7 +22,6 @@ from harness_runtime.api import (
     HarnessDraining,
     InvalidWorkflowError,
     RunResult,
-    WorkflowExecutionNotYetLandedError,
     WorkflowObject,
     run,
 )
@@ -58,7 +57,6 @@ __all__ = [
     "RunResult",
     "ShutdownReport",
     "ShutdownTimeout",
-    "WorkflowExecutionNotYetLandedError",
     "WorkflowObject",
     "flush_observability",
     "run",

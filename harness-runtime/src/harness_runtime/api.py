@@ -41,13 +41,26 @@ rollup". Same shape as the U-RT-34 Class 3 spec-prose-plan-body
 drift; non-blocking; logged inline for future runtime-spec revision
 pass.
 
-**Bootstrap landed at U-RT-43; workflow execution deferred to U-RT-44+.**
-U-RT-43 wires `run()` → `run_bootstrap()` → ... → execute stub. The
-`BootstrapNotYetLandedError` surface is removed; the new stub-call
-surface is `WorkflowExecutionNotYetLandedError` (raised post-bootstrap
-because workflow execution + shutdown lands at U-RT-44+). The
-`WorkflowObject` Protocol grows with `workload_class` (authorized at
-the original L8 landing per the line 110-112 docstring note).
+**Workflow execution landed at Lane 6 (2026-05-20).** `run()` now
+delegates workflow body execution to `harness_cp.workflow_driver.
+execute_workflow()` (C-CP-25 §25) per `Spec_Harness_Runtime_v1.md` §11
+risk-surface guidance ("If CP later surfaces a native drain primitive,
+refactor harness-runtime to delegate drain to CP — this contract
+becomes a thin adapter"). The `WorkflowExecutionNotYetLandedError`
+stub surface is removed at this landing. `run()` owns the full
+bootstrap → execute → shutdown lifecycle per C-RT-08 + C-RT-10. The
+synchronous CP driver is offloaded to a worker thread via
+`asyncio.to_thread` so the asyncio loop remains responsive to signal
+handlers — this composition is what materializes U-RT-44 AC #2's
+in-flight step bounded-wait (drain flag set by signal → driver returns
+DRAINED at next boundary → to_thread future resolves). The
+`WorkflowObject` Protocol grows with 4 new read-only properties
+(`manifest_entry`, `steps`, `step_dispatcher`, `default_model_binding`)
+per the §8 risk-surface "growth is non-breaking when fields are
+optional or read-only" authorization; Path A operator-ratified
+2026-05-20. Closes `[[fork-u-rt-44-workflow-loop-drain]]` for U-RT-44
+AC #2 + U-RT-49 state-ledger / lifecycle-event ACs. Residual:
+cost-attribution AC stays STRUCK pending U-OD-21 fork resolution.
 
 **Concurrency guard via module-level `asyncio.Lock`.** Per C-RT-08
 v1.1 idempotency-and-concurrency invariant: "Concurrent invocations
@@ -62,10 +75,26 @@ poison the lock.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Literal, Protocol, runtime_checkable
+import uuid
+from collections.abc import Sequence
+from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 from harness_core.identity import WorkflowID
 from harness_core.workload_class import WorkloadClass
+from harness_cp.cp_shared_types import ModelBinding
+from harness_cp.workflow_driver import (
+    DriverContext as _CpDriverContext,
+)
+from harness_cp.workflow_driver import (
+    StepDispatcher,
+    execute_workflow,
+)
+from harness_cp.workflow_driver_types import RunResult as _CpRunResult
+from harness_cp.workflow_driver_types import (
+    RunStatus as _CpRunStatus,
+)
+from harness_cp.workflow_driver_types import WorkflowStep
+from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_od.cross_family_rollup import CrossFamilyCostRollup
 from pydantic import BaseModel, ConfigDict
 
@@ -82,24 +111,6 @@ class InvalidWorkflowError(Exception):
 
 class ConcurrentRunNotSupported(Exception):  # noqa: N818 — domain-anchored name
     """`RT-FAIL-CONCURRENT-RUN` — second concurrent `run()` detected (C-RT-08 v1.1)."""
-
-
-class WorkflowExecutionNotYetLandedError(NotImplementedError):
-    """Stub-call surface — workflow execution + shutdown lands at U-RT-45+.
-
-    Raised when `run()` has successfully bootstrapped a `HarnessContext`
-    (U-RT-43) and reaches the workflow-execution call site. Subclasses
-    `NotImplementedError` so generic handlers catch it; the dedicated
-    type lets U-RT-45+ remove this surface cleanly when the CP workflow
-    loop primitive + shutdown sequence land.
-
-    Predecessor: `BootstrapNotYetLandedError` (U-RT-42), removed at the
-    U-RT-43 landing — the bootstrap surface is no longer a stub.
-
-    U-RT-44 lands drain primitives (signal handler + `HarnessDraining`
-    pre-bootstrap rejection) without removing this surface — workflow
-    execution body itself remains stubbed pending the CP loop.
-    """
 
 
 class HarnessDraining(Exception):  # noqa: N818 — domain-anchored name
@@ -126,14 +137,22 @@ class HarnessDraining(Exception):  # noqa: N818 — domain-anchored name
 class WorkflowObject(Protocol):
     """Structural workflow-object surface (C-RT-08 Option C resolution).
 
-    Minimum surface CP's lifecycle loop needs at HEAD: a stable
-    `workflow_id` identity + a `workload_class` for bootstrap-time
-    routing/state-ledger composition. CP's executable workflow primitive
-    lives at `WorkflowManifestEntry` (C-CP-06 §6.1) which carries both
-    fields; structural conformance is satisfied. Per the original L8
-    docstring note: "growth is non-breaking when fields are optional or
-    read-only" — `workload_class` is read-only (`@property`), so this
-    growth at U-RT-43 is authorized inline.
+    **Growth at Lane 6 (2026-05-20) — Path A (operator-ratified).** Per the
+    spec §8 risk surface's "growth is non-breaking when fields are optional
+    or read-only" authorization, this Protocol grows from the U-RT-43
+    minimum-viable shape (`workflow_id` + `workload_class`) to carry the
+    surface the CP workflow driver (`harness_cp.workflow_driver.execute_
+    workflow`, C-CP-25 §25) needs. Callers pre-Lane-6 still conform if
+    they implement the four new read-only properties; `run()` now
+    delegates execution to the CP driver rather than raising
+    `WorkflowExecutionNotYetLandedError`.
+
+    All six surfaces are `@property` (read-only), satisfying the
+    non-breaking-growth invariant. The driver consumes the substrate
+    via runtime-local Protocols on `HarnessContext` — those Protocols
+    are at `harness_cp.workflow_driver.{LedgerWriterLike,
+    LifecycleEventEmitterLike, DriverContext}` and are structurally
+    satisfied by the bootstrapped context.
     """
 
     @property
@@ -145,6 +164,47 @@ class WorkflowObject(Protocol):
     def workload_class(self) -> WorkloadClass:
         """The workflow's workload class — threaded into bootstrap stage 1
         state-ledger composition + stage 3b routing-manifest residence."""
+        ...
+
+    @property
+    def manifest_entry(self) -> WorkflowManifestEntry:
+        """CP workflow manifest entry per C-CP-06 §6.1.
+
+        Carries `engine_class`, `topology_pattern`, per-step overrides,
+        fallback chain, HITL placements, layer budgets. Consumed by the
+        CP driver at C-CP-25 §25.3.1 validation + §25.6 replay-resumption
+        composition + §25.5 lifecycle-event filtering.
+        """
+        ...
+
+    @property
+    def steps(self) -> Sequence[WorkflowStep]:
+        """Step sequence in declaration order (CP spec v1.4 §25 amendment §E).
+
+        Decoupled from `manifest_entry` per the operator-ratified Path A
+        decision at U-CP-56 land time: manifest carries config; steps
+        carry the declarative body. The CP driver iterates this sequence
+        under SINGLE_THREADED_LINEAR topology (no parallel branching at
+        v1.4).
+        """
+        ...
+
+    @property
+    def step_dispatcher(self) -> StepDispatcher:
+        """Step body dispatcher (C-CP-25 §25.3.3.4 opaque-step-body discipline).
+
+        The driver delegates per-step body invocation through this
+        Protocol. Caller-owned: the runtime does not synthesize a
+        dispatcher at v1.4. A future Lane may surface a runtime-composed
+        default dispatcher that wires the U-CP-01 capability-aware router
+        + sandbox dispatch + HITL gate.
+        """
+        ...
+
+    @property
+    def default_model_binding(self) -> ModelBinding:
+        """Default `(provider, model)` binding for steps without per-step
+        override (C-CP-06 §6.2 + C-CP-13 §13.3 lead-agent binding)."""
         ...
 
 
@@ -264,9 +324,6 @@ async def run(
         `RT-FAIL-BOOTSTRAP` — one of the 9 bootstrap stages raised;
         stages 0..N-1 rolled back in reverse order. Original cause
         attached.
-    WorkflowExecutionNotYetLandedError
-        Stub-call surface — workflow execution + shutdown lands at
-        U-RT-44+. Removed at U-RT-44 landing.
     """
     # Pre-bootstrap drain check (C-RT-11 surface (3)). Checked before
     # `_run_lock` acquisition so a drained process surfaces `HarnessDraining`
@@ -283,8 +340,10 @@ async def run(
         )
     if not isinstance(workflow, WorkflowObject):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise InvalidWorkflowError(
-            f"`run()` requires a `WorkflowObject` (with `workflow_id` + "
-            f"`workload_class` properties); got {type(workflow).__name__!r}"
+            f"`run()` requires a `WorkflowObject` (with `workflow_id`, "
+            f"`workload_class`, `manifest_entry`, `steps`, `step_dispatcher`, "
+            f"`default_model_binding` properties); got "
+            f"{type(workflow).__name__!r}"
         )
     if _run_lock.locked():
         raise ConcurrentRunNotSupported(
@@ -292,23 +351,169 @@ async def run(
             "Track A is bootstrap-per-call (no cached context). Serialize "
             "calls or move to a cached-context entry point (Track B)."
         )
-    # Lazy import to keep the api.py → bootstrap edge one-way at type-check
-    # time (bootstrap imports from api.py is forbidden; this lazy import
-    # plus a TYPE_CHECKING-free api surface prevents the cycle).
+    # Lazy imports to keep api.py → bootstrap / shutdown edges one-way at
+    # type-check time and to avoid bootstrap-time import cost when
+    # `InvalidWorkflowError` / `ConcurrentRunNotSupported` fire pre-bootstrap.
     from harness_runtime.bootstrap import run_bootstrap
+    from harness_runtime.shutdown import shutdown as _shutdown
 
     async with _run_lock:
         resolved_config = config if config is not None else _default_config()
-        _ctx = await run_bootstrap(
+        ctx = await run_bootstrap(
             resolved_config,
             workload_class=workflow.workload_class,
         )
-        # Workflow execution + drain + shutdown lands at U-RT-44+.
-        raise WorkflowExecutionNotYetLandedError(
-            f"bootstrap succeeded (HarnessContext frozen at stage 7); "
-            f"workflow execution + drain + shutdown body lands at U-RT-44+. "
-            f"workflow_id={workflow.workflow_id!r}"
+        run_id = uuid.uuid4().hex
+        # Offload the synchronous CP driver to a worker thread so the asyncio
+        # loop stays responsive to signal handlers (C-RT-11 drain dispatch
+        # via `loop.add_signal_handler` requires the loop be free to run).
+        # The driver itself polls `ctx.drained_flag.is_set()` at every
+        # lifecycle boundary per C-CP-25 §25.4; once the signal handler sets
+        # the flag, the next boundary returns `RunStatus.DRAINED`. In-flight
+        # step bounded-wait (U-RT-44 AC #2) materializes via this composition:
+        # the to_thread future resolves once the driver hits the next
+        # boundary (the current step is allowed to complete per
+        # `Spec_Harness_Runtime_v1.md` §11 "no mid-step interruption").
+        # Cast `ctx` to the CP driver's structural `DriverContext` Protocol.
+        # `HarnessContext` structurally satisfies it (drained_flag +
+        # ledger_writer + lifecycle_emitter) but pyright reports declared-
+        # Protocol-vs-declared-Protocol incompatibility due to invariance —
+        # the runtime's `LedgerWriter` / `LifecycleEventEmitter` Protocols
+        # are stub-declared in `types.py` and the driver's `LedgerWriterLike`
+        # / `LifecycleEventEmitterLike` are concrete; the *runtime* objects
+        # satisfy both at runtime. The cast asserts this at the type layer.
+        #
+        # `asyncio.wait_for(...)` enforces U-RT-44 AC #2's typed-timeout
+        # branch (`RT-FAIL-DRAIN-TIMEOUT` per C-RT-14). On `TimeoutError`,
+        # the underlying thread is NOT cancelled — Python threads cannot be
+        # cooperatively cancelled without driver support — so the spawned
+        # work may continue running until process exit. This is the
+        # spec §11 invariant: "exceeding the bound forces shutdown to
+        # proceed regardless; in-flight step may be in inconsistent state."
+        timed_out = False
+        try:
+            cp_result: _CpRunResult = await asyncio.wait_for(
+                asyncio.to_thread(
+                    execute_workflow,
+                    workflow.manifest_entry,
+                    workflow.steps,
+                    run_id,
+                    cast(_CpDriverContext, ctx),
+                    default_model_binding=workflow.default_model_binding,
+                    step_dispatcher=workflow.step_dispatcher,
+                ),
+                timeout=resolved_config.drain_timeout_seconds,
+            )
+        except TimeoutError:
+            timed_out = True
+            cp_result = _CpRunResult(
+                workflow_id=workflow.manifest_entry.workflow_id,
+                run_id=run_id,
+                status=_CpRunStatus.DRAINED,
+                terminal_step_index=None,
+                partial_state=None,
+                final_state=None,
+                fail_class="RT-FAIL-DRAIN-TIMEOUT",
+            )
+        # Per C-RT-08 + C-RT-10: run() owns the full bootstrap → execute →
+        # shutdown lifecycle. Shutdown after execute, regardless of CP
+        # status. ShutdownReport carries the audit-ledger head hash.
+        shutdown_report = await _shutdown(ctx)
+        return _build_run_result(cp_result, shutdown_report, timed_out=timed_out)
+
+
+# ---------------------------------------------------------------------------
+# CP RunResult → runtime RunResult conversion (C-RT-09 + C-CP-25 §25.2).
+# ---------------------------------------------------------------------------
+
+
+_CP_TO_RT_STATUS: dict[_CpRunStatus, Literal["completed", "drained", "failed"]] = {
+    _CpRunStatus.SUCCESS: "completed",
+    _CpRunStatus.DRAINED: "drained",
+    _CpRunStatus.FAILED: "failed",
+    # PARTIAL is reserved at C-CP-25 §25.2 for future multi-step error modes;
+    # at v1.4 the driver never returns PARTIAL. Map to "failed" defensively
+    # so the runtime-side Literal type narrows cleanly.
+    _CpRunStatus.PARTIAL: "failed",
+}
+
+
+def _build_run_result(
+    cp_result: _CpRunResult, shutdown_report: Any, *, timed_out: bool = False
+) -> RunResult:
+    """Project a CP driver `RunResult` + runtime `ShutdownReport` into the
+    runtime-facing `RunResult` per C-RT-09.
+
+    Field mapping:
+    - `status`: closed enum projection per `_CP_TO_RT_STATUS`.
+    - `workflow_id`: pass-through from CP result.
+    - `terminal_state`: `cp_result.final_state` if SUCCESS, else `partial_state`
+      (drained) or `{}` (failed without partial). C-RT-09 invariant: dict, never
+      None.
+    - `audit_ledger_head_hash`: from `shutdown_report.audit_ledger_head_hash`.
+      Spec C-RT-09 says "always present"; in practice may be empty string at
+      v1.4 if no audit-ledger entries were written (state-ledger entries from
+      the CP driver land on `ctx.ledger_writer`, a distinct writer from
+      `ctx.audit_writer`). Class 3 informational drift; non-blocking — the
+      U-RT-49 ledger-entry AC verifies via `read_ledger(handle)`, not via
+      this field.
+    - `trace_ids`: empty tuple at v1.4 (driver does not surface root span trace
+      IDs through `RunResult`; spec §25 deferred-to-discretion). Class 3
+      informational gap; queued for a future runtime + driver coherence pass.
+    - `cost_attribution`: empty tuple — `U-OD-21` (`SpanCostRecord` rollup keys)
+      is HALTED Class 1 per `.harness/class_1_tension_u_od_21_span_cost_record_
+      missing_rollup_keys.md`. Cost attribution AC of U-RT-49 stays STRUCK; the
+      empty tuple is the carry-forward shape.
+    - `failure_cause`: populated when status is "failed"; tags through
+      `cp_result.fail_class`.
+    """
+    status = _CP_TO_RT_STATUS[cp_result.status]
+
+    if cp_result.status is _CpRunStatus.SUCCESS:
+        terminal_state: dict[str, Any] = dict(cp_result.final_state or {})
+    elif cp_result.status is _CpRunStatus.DRAINED:
+        terminal_state = dict(cp_result.partial_state or {})
+    else:
+        terminal_state = dict(cp_result.partial_state or {})
+
+    failure_cause: FailureCause | None = None
+    if timed_out:
+        # U-RT-44 AC #2 typed-timeout branch — surface
+        # `RT-FAIL-DRAIN-TIMEOUT` per C-RT-14 even though status is
+        # `drained` (DRAINED-with-timeout-cause). Caller introspects
+        # `failure_cause.runtime_fail_class` to disambiguate
+        # graceful-drain from timeout-forced-drain.
+        failure_cause = FailureCause(
+            runtime_fail_class="RT-FAIL-DRAIN-TIMEOUT",
+            detail=(
+                "in-flight workflow step did not complete within "
+                "`RuntimeConfig.drain_timeout_seconds`; the driver thread "
+                "was not cancelled — spec §11 invariant ('in-flight step "
+                "may be in inconsistent state') applies"
+            ),
+            validator_fail_class=None,
         )
+    elif status == "failed":
+        failure_cause = FailureCause(
+            runtime_fail_class="RT-FAIL-WORKFLOW",
+            detail=(
+                f"workflow execution returned status={cp_result.status.value!r} "
+                f"with fail_class={cp_result.fail_class!r}"
+            ),
+            validator_fail_class=cp_result.fail_class,
+        )
+
+    head_hash: str = shutdown_report.audit_ledger_head_hash or ""
+
+    return RunResult(
+        status=status,
+        workflow_id=WorkflowID(cp_result.workflow_id),
+        terminal_state=terminal_state,
+        audit_ledger_head_hash=head_hash,
+        trace_ids=(),
+        cost_attribution=(),
+        failure_cause=failure_cause,
+    )
 
 
 def _default_config() -> RuntimeConfig:
