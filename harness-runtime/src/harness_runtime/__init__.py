@@ -10,9 +10,28 @@ this package owns runtime composition of the axis libraries:
 - Cross-axis seam wiring (C-RT-12; 24 phase-2-runtime edges).
 - `run()` Python API (F-P2-2; C-RT-08).
 
-Public API surface lands at L9 (U-RT-42). At L0 this module is intentionally
-empty; the types are surfaced via `harness_runtime.types` until U-RT-42 lands
-the `run()` entry point.
+Public API surface lands at L8 close (U-RT-42 — `run()` signature + `RunResult`
+shape) and L9 (U-RT-43 — bootstrap orchestrator body).
 """
 
 from __future__ import annotations
+
+from harness_runtime.api import (
+    BootstrapNotYetLandedError,
+    ConcurrentRunNotSupported,
+    FailureCause,
+    InvalidWorkflowError,
+    RunResult,
+    WorkflowObject,
+    run,
+)
+
+__all__ = [
+    "BootstrapNotYetLandedError",
+    "ConcurrentRunNotSupported",
+    "FailureCause",
+    "InvalidWorkflowError",
+    "RunResult",
+    "WorkflowObject",
+    "run",
+]
