@@ -621,8 +621,9 @@ CP spec does not currently expose a native drain primitive. Track A specifies dr
 - A signal handler (installed at stage 7 on the orchestrator's behalf, listening for `SIGTERM` / `SIGINT`) sets the flag.
 - The CP workflow lifecycle loop polls `ctx.drained_flag.is_set()` at each lifecycle boundary (per-step entry, per-step exit, per-topology-dispatch entry). On detecting the flag, the loop:
   1. Completes the current in-flight step (no mid-step interruption).
-  2. Emits a `WorkflowEventClass.DRAINED` event (note: this event-name may need landed-axis alignment per Pattern P1-PHASE-5 discipline at U-RT-41 landing).
-  3. Returns a `RunResult` with `status='drained'` and the partial terminal state.
+  2. Returns a `RunResult` with `status='drained'` and the partial terminal state.
+
+  *(v1.2 amendment, 2026-05-20):* an earlier draft committed step 2 to emit a `WorkflowEventClass.DRAINED` event. The canonical `harness_core.workflow_event_class` enum is closed at 8 per C-CP-05 §5.1 with no `DRAINED` value; alignment failed at U-RT-41 landing per spec §16 open question #9. The emit step is STRUCK from C-RT-11. Drain observability survives without it via the two remaining surfaces above: `ctx.drained_flag` (asyncio.Event signal-level observability) + `RunResult.status='drained'` (terminal-return observability). This resolves `[[fork-drained-event-class]]` Path B.
 - After flag-set, `harness_runtime.run(...)` rejects new invocations with typed `HarnessDraining` error.
 
 **Invariants.**

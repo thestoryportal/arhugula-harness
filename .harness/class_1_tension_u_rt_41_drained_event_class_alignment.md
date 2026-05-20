@@ -2,7 +2,7 @@
 
 **Filed at:** U-RT-41 PARTIAL-LAND (2026-05-19)
 **Locus:** `Spec_Harness_Runtime_v1.md` C-RT-11 §11 vs `harness_core.workflow_event_class.WorkflowEventClass`
-**Status:** OPEN — operator decision pending
+**Status:** RESOLVED 2026-05-20 — Path B applied (Spec_Harness_Runtime_v1.md §11 amended to strike the DRAINED emit step; drain observability survives via `ctx.drained_flag` + `RunResult.status='drained'`).
 **Routing:** Phase 5 spec revision (CP spec C-CP-05 §5.1 + harness_core schema) OR Phase 5 runtime spec revision (C-RT-11 §11 strike) OR defer
 **Spec authorization:** §16 open question #9 — "Surface as Class 1 fork at U-RT-41 landing if alignment fails"
 **Precedent:** U-RT-30 trace-storage PathClass gap (same halt-route-split-AC pattern)
