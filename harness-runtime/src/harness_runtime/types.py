@@ -53,6 +53,7 @@ from harness_core.identity import ActionID
 from harness_core.persona_tier import PersonaTier
 from harness_core.workload_class import WorkloadClass
 from harness_cp.brief_authoring_inheritance import BriefAuthoringInheritance
+from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import FallbackChain
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel as CPGateLevel
@@ -77,6 +78,7 @@ from harness_cp.validator_fail_transient_staircase import (
     StaircaseStage,
     StaircaseTransition,
 )
+from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_cp.workload_binding_engine_class_selection import HITLInvocation
 from harness_is.path_resolver import PathResolver
 from harness_is.workload_manifest_opt_in_schema import WorkloadManifestOptIns
@@ -633,9 +635,7 @@ class HandoffRegistry(Protocol):
         """Enforce C-AS-11 monotonic-ascent (child >= parent sandbox tier)."""
         ...
 
-    def inheritance_for(
-        self, workload_class: WorkloadClass
-    ) -> BriefAuthoringInheritance:
+    def inheritance_for(self, workload_class: WorkloadClass) -> BriefAuthoringInheritance:
         """Return the C-CP-13 §13.3 brief-authoring inheritance rule."""
         ...
 
@@ -663,7 +663,29 @@ class HandoffRegistry(Protocol):
 
 @runtime_checkable
 class PerStepOverrideEvaluator(Protocol):
-    """Composed at U-RT-39 from landed CP per-step-override primitives."""
+    """Per-step override evaluator runtime surface (U-RT-39).
+
+    Concretized by
+    `harness_runtime.lifecycle.override_evaluator.RuntimePerStepOverrideEvaluator`.
+    Narrowed at U-RT-39 to declare the evaluator's reference-time surface so
+    consumer-side type checks (L8 LOOP_INIT orchestrator) compose against a
+    documented API. The evaluator is stateless — it composes the CP
+    `resolve_step_binding` pure function (C-CP-06 §6.2). Returns an
+    `object` to keep the Protocol free of a runtime → CP concrete-type
+    dependency at the typing layer; callers narrow via the concrete
+    `RuntimePerStepOverrideEvaluator` type when they need the
+    `StepEffectiveBinding` shape.
+    """
+
+    def resolve_step_binding(
+        self,
+        manifest_entry: WorkflowManifestEntry,
+        step_id: str,
+        *,
+        default_model_binding: ModelBinding,
+    ) -> object:
+        """Resolve the effective per-step binding (delegates to CP C-CP-06 §6.2)."""
+        ...
 
 
 @runtime_checkable
