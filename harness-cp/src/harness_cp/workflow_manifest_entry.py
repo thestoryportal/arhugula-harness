@@ -1,8 +1,19 @@
 """`WorkflowManifestEntry` schema — U-CP-13.
 
 Implements C-CP-06 §6.1 (the workflow-manifest-entry shape). Declares the
-`WorkflowManifestEntry` record (10 top-level fields) and the constituent
-`StepOverride` record.
+`WorkflowManifestEntry` record (11 top-level fields at v2.12; was 10 at
+v2.11) and the constituent `StepOverride` record.
+
+**v2.12 re-open (2026-05-20).** `entry_version: int = 1` field added per
+`Implementation_Plan_Control_Plane_v2_12.md` §0.1 + §2.2 amendment.
+Resolves `[[fork-u-cp-56-resumption-underspec]]` by satisfying the
+`run_idempotency_key = sha256(run_id, workflow_id, entry_version)`
+composition required at CP spec v1.4 §25.6 line 270. CP spec v1.4 §6.1
+(preserved verbatim from v1.2) authorizes the carrier growth via the
+explicit "// ... additional per-workload fields" extension clause; no
+spec bump required at v2.12. Default value 1 means pre-versioning
+workflows compose deterministically without explicit caller-side
+annotation.
 
 `WorkflowManifestEntry` is the canonical per-workflow customization-persistence
 shape: it binds a workflow to its workload class, persona tier, engine class,
@@ -56,13 +67,19 @@ class StepOverride(BaseModel):
 class WorkflowManifestEntry(BaseModel):
     """The workflow-manifest-entry shape — canonical per-workflow customization.
 
-    Exactly ten top-level fields per C-CP-06 §6.1 verbatim. `workload_class`
-    and `persona_tier` are mandatory (no default) per ADR-F1 v1.2; the absence
-    of a default means Pydantic validation rejects a missing value.
-    `topology_pattern` admissibility is verified against the U-CP-22
-    `is_admissible` predicate at validation time; `engine_class` against the
-    U-CP-16 candidate mapping. `hitl_placements` is ordered by placement-kind
-    precedence per the U-CP-38 `HITLPlacement` schema.
+    Eleven top-level fields at v2.12 (was ten at v2.11; `entry_version`
+    appended per `Implementation_Plan_Control_Plane_v2_12.md` §2.2). CP spec
+    v1.4 §6.1 (verbatim from v1.2) authorizes the carrier growth via the
+    "// ... additional per-workload fields" extension clause.
+
+    `workload_class` and `persona_tier` are mandatory (no default) per
+    ADR-F1 v1.2; the absence of a default means Pydantic validation rejects
+    a missing value. `topology_pattern` admissibility is verified against
+    the U-CP-22 `is_admissible` predicate at validation time; `engine_class`
+    against the U-CP-16 candidate mapping. `hitl_placements` is ordered by
+    placement-kind precedence per the U-CP-38 `HITLPlacement` schema.
+    `entry_version` defaults to 1 so existing constructor sites continue to
+    validate without modification.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -90,3 +107,18 @@ class WorkflowManifestEntry(BaseModel):
 
     per_step_overrides: dict[StepID, StepOverride]
     """Populated for pipeline-automation per-stage customization."""
+
+    entry_version: int = 1
+    """v2.12 addition. Integer carried into the U-CP-56 §25.6
+    `run_idempotency_key = sha256(run_id, workflow_id, entry_version)`
+    hash composition for selective replay-resumption discrimination
+    (`[[fork-u-cp-56-resumption-underspec]]` resolution).
+
+    Default value 1 means pre-versioning workflows compose deterministically
+    without explicit caller-side annotation. Operators bump the value when
+    the workflow's contract changes in a way that should invalidate cached
+    step-resumption substrate — i.e., when a re-entry under the same
+    `run_id` + `workflow_id` should be treated as a fresh run rather than
+    a resumption. Orthogonal to the workflow's body steps' content
+    (semantic-version-of-the-workflow-declaration semantics).
+    """

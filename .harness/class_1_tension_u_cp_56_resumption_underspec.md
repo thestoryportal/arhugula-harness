@@ -1,10 +1,14 @@
 # Class 1 Tension — U-CP-56 AC #6 (save-point-checkpoint replay-resumption) under-implementable
 
-**Status:** OPEN
+**Status:** **CLOSED** 2026-05-20 — resolved via operator-ratified
+**Path A-modified** (extend `WorkflowManifestEntry` with `entry_version` field;
+N-lookup over existing IS `read_by_idempotency_key` primitive instead of new
+prefix-match primitive). CP plan v2.11 → v2.12. No spec bump required.
+Worktree branch `worktree-cp-56-resumption-fix`.
 **Filed:** 2026-05-20 (U-CP-56 PARTIAL-LAND)
 **Trigger unit:** U-CP-56 (`Implementation_Plan_Control_Plane_v2_11.md` AC #6)
 **Pattern:** `[[halt-route-split-AC-pattern]]`
-**Routing target:** CP spec v1.4 §25.6 + U-CP-13 manifest schema extension (likely CP spec v1.5 + plan v2.12)
+**Routing target:** CP plan v2.12 (`Implementation_Plan_Control_Plane_v2_12.md`); no CP spec bump (CP spec v1.4 §6.1 "// ... additional per-workload fields" extension clause + §25.6 already-cited `manifest_entry.entry_version` suffice).
 
 ---
 
@@ -116,4 +120,63 @@ time (this filing, 2026-05-20).
 - Predecessor session checkpoint: `~/.gstack/projects/arhugula-v2/checkpoints/
   20260520-035000-cp-workflow-driver-spec-gap-locked.md`
 - Related fork: `.harness/class_1_tension_u_rt_44_workflow_loop_drain.md`
-  (parent fork; U-CP-56 PARTIAL-LAND blocks full closure of the parent)
+  (parent fork CLOSED-PARTIAL at Lane 6; this sub-fork was the residual.
+  With this resolution, the parent's only remaining residual is
+  `[[fork-u-od-21-span-cost-record-missing-rollup-keys]]`.)
+
+---
+
+## Resolution (2026-05-20)
+
+**Path:** A-modified (operator-ratified at fork-u-cp-56-resumption-underspec
+session 2026-05-20). Operator deviation from the fork as-filed: skip the
+"add IS prefix-match primitive" second half; use N-lookup over the
+existing `read_by_idempotency_key` primitive instead.
+
+**Decisions ratified:**
+
+1. **IS primitive:** A — N-lookup via existing `read_by_idempotency_key`
+   (no new IS-axis surface).
+2. **Reader composition:** A — new `LedgerReaderLike` Protocol on
+   `DriverContext`, mirrors LedgerWriterLike/LifecycleEventEmitterLike
+   separation.
+
+**Landed:**
+
+- CP plan v2.11 → v2.12 at `design-substrate/Implementation_Plan_Control_Plane_v2_12.md`.
+- `WorkflowManifestEntry` grew 10 → 11 fields (`entry_version: int = 1`
+  default; backward-compatible).
+- `LedgerReaderLike` Protocol added to `harness_cp.workflow_driver`.
+- `DriverContext` extended with `ledger_reader` field.
+- Driver `_determine_resume_at()` helper added; AC #6 logic replaces the
+  weaker non-genesis emit with selective per-run N-lookup.
+- `LedgerReader` concrete added to `harness_runtime.lifecycle.state_ledger`
+  + wired into bootstrap stage 1 IS + `HarnessContext`.
+
+**Tests:**
+- Renamed `test_resumption_emit_shape_wired_for_save_point_checkpoint` →
+  `test_workflow_resumption_emitted_on_save_point_checkpoint_reentry`
+  with full selective-resumption assertion.
+- Added: `test_resumption_not_emitted_for_unrelated_prior_run`,
+  `test_resumption_skips_already_replayed_steps`,
+  `test_resume_at_advances_over_contiguous_prefix_only`,
+  `test_entry_version_changes_idempotency_key_basis`.
+- Added: 3 v2.12 manifest-entry tests.
+- Updated: `test_harness_context_declares_all_c_rt_04_fields` (added
+  `ledger_reader`), `test_freeze_raises_incomplete_when_required_field_none`
+  (28 fields, was 27).
+
+**Test totals at close:**
+- CP: 505 (was 498; +7 v2.12).
+- Runtime: 654 (unchanged from Lane 6).
+- IS / AS / OD / Core: 125 / 302 / 599 / 18 (unchanged).
+- pyright: zero regression on src (21 baseline preserved).
+- ruff: zero regression.
+
+**No spec bump rationale:** CP spec v1.4 §6.1 (verbatim from v1.2)
+authorizes manifest carrier extension via "// ... additional per-workload
+fields" clause. CP spec v1.4 §25.6 already cites
+`manifest_entry.entry_version` in the hash composition formula. IS spec
+v1.2 §7.4 enumerates `read_by_idempotency_key(key)` as an authorized
+read primitive (already materialized at `LedgerNavigationPrimitive`).
+Plan-only revision suffices.

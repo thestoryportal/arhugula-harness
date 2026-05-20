@@ -102,6 +102,38 @@ class LedgerWriterLike(Protocol):
 
 
 @runtime_checkable
+class LedgerReaderLike(Protocol):
+    """Read-side state-ledger substrate (C-IS-07 §7.4 implementation-discretion
+    primitive; `read_by_idempotency_key(key)` enumerated as authorized).
+
+    Introduced at CP plan v2.12 to materialize U-CP-56 AC #6 (full
+    selective replay-resumption per `[[fork-u-cp-56-resumption-underspec]]`
+    Path A-modified resolution). Mirrors the LedgerWriterLike read/write
+    separation pattern; concretized by a runtime adapter wrapping
+    `harness_is.state_ledger_read.LedgerNavigationPrimitive` over a
+    `harness_is.state_ledger_write.read_ledger` snapshot.
+
+    Method shape mirrors the IS NavigationPrimitive contract verbatim.
+    """
+
+    def read_by_idempotency_key(
+        self,
+        idempotency_key: Any,
+        bounded_window: Any,
+    ) -> Any:
+        """Read entries by `idempotency_key`.
+
+        The `Any` typing on `idempotency_key`, `bounded_window`, and the
+        return shape avoids a CP→IS Protocol-level type dependency. Runtime
+        concretization uses `harness_is.types.Identifier` (idempotency_key),
+        `harness_is.state_ledger_read.BoundedWindow` (bounded_window),
+        `harness_is.state_ledger_read.ReadResult` (return) — callers narrow
+        at concrete sites if they need the typed shape.
+        """
+        ...
+
+
+@runtime_checkable
 class LifecycleEventEmitterLike(Protocol):
     """Lifecycle-event emission surface (§5.1 8-class taxonomy via
     `harness_core.WorkflowEventClass`).
@@ -155,6 +187,7 @@ class DriverContext(Protocol):
     """
 
     ledger_writer: LedgerWriterLike
+    ledger_reader: LedgerReaderLike
     lifecycle_emitter: LifecycleEventEmitterLike
     drained_flag: asyncio.Event
 
@@ -270,28 +303,43 @@ def execute_workflow(
         raise EngineClassNotYetMaterializedError(manifest_entry.engine_class)
 
     # § 25.6 — Replay-resumption check at re-entry.
-    # Under save-point-checkpoint with prior ledger entries matching this
-    # run's prefix, emit RESUMPTION. Under pure-pattern-no-engine, no
-    # resumption-specific emission (state-ledger native dedup per §8.2 row 3).
-    run_idempotency_key = _compute_run_idempotency_key(run_id, manifest_entry.workflow_id)
-    if (
-        manifest_entry.engine_class is EngineClass.SAVE_POINT_CHECKPOINT
-        and not ctx.ledger_writer.is_genesis
-    ):
-        # NOTE: ledger-prefix-match check is deferred — for v1.4 minimum-viable
-        # scope, RESUMPTION is emitted whenever save-point-checkpoint binding
-        # re-enters a non-empty ledger. Refinement (per-run prefix match)
-        # routes to a follow-up CP plan revision when the first save-point-
-        # checkpoint workflow demands selective resumption.
-        ctx.lifecycle_emitter.emit(WorkflowEventClass.RESUMPTION)
+    # `run_idempotency_key = sha256(run_id, workflow_id, entry_version)`
+    # per CP spec v1.4 §25.6 line 270. `entry_version` was added to
+    # `WorkflowManifestEntry` at U-CP-13 carrier-growth (CP plan v2.12),
+    # resolving `[[fork-u-cp-56-resumption-underspec]]`.
+    run_idempotency_key = _compute_run_idempotency_key(
+        run_id,
+        manifest_entry.workflow_id,
+        extras=(str(manifest_entry.entry_version),),
+    )
+
+    # Selective per-run replay-resumption via N-lookup over the existing
+    # IS `read_by_idempotency_key` primitive (CP plan v2.12 §0.1 +
+    # §2.9 U-CP-56 AC #6 re-author; operator-ratified Path A-modified —
+    # no new IS prefix-match primitive). For each step index, compute the
+    # expected per-step idempotency_key and look it up; advance `resume_at`
+    # over the contiguous prefix of materialized steps.
+    resume_at = 0
+    if manifest_entry.engine_class is EngineClass.SAVE_POINT_CHECKPOINT:
+        resume_at = _determine_resume_at(
+            ctx=ctx,
+            run_idempotency_key=run_idempotency_key,
+            step_count=len(steps),
+            workload_class=manifest_entry.workload_class,
+        )
+        if resume_at > 0:
+            ctx.lifecycle_emitter.emit(WorkflowEventClass.RESUMPTION)
+    # Under pure-pattern-no-engine: no resumption-specific emission
+    # (state-ledger native dedup per §8.2 row 3 handles per-step dedup).
 
     # § 25.3.2 — Emit workflow.start.
     ctx.lifecycle_emitter.emit(WorkflowEventClass.WORKFLOW_START)
 
     # § 25.3.3 — Iterate steps in declaration order (SINGLE_THREADED_LINEAR
-    # has no parallel/fan-out branching).
+    # has no parallel/fan-out branching). Begin at `resume_at` to skip
+    # already-materialized steps from a prior crashed/drained run.
     accumulated: dict[str, Any] = {}
-    for step_index, step in enumerate(steps):
+    for step_index, step in enumerate(steps[resume_at:], start=resume_at):
         # § 25.4 row "Per-step pre-entry" — drain check before entering next
         # step (U-CP-57 AC #2; Path B operator-ratified — no `step.boundary`
         # emit at this site to preserve §5.2 step.kind 5-value enum). On
@@ -399,6 +447,54 @@ def execute_workflow(
         final_state=dict(accumulated),
         fail_class=None,
     )
+
+
+def _determine_resume_at(
+    *,
+    ctx: DriverContext,
+    run_idempotency_key: str,
+    step_count: int,
+    workload_class: Any,
+) -> int:
+    """Determine the resume-at index for selective replay-resumption (§25.6).
+
+    Per CP plan v2.12 §2.9 U-CP-56 AC #6: under save-point-checkpoint binding,
+    for each step index `i ∈ [0, step_count)`, compute the expected per-step
+    idempotency_key and query the IS state-ledger via
+    `ctx.ledger_reader.read_by_idempotency_key`. Advance over the contiguous
+    prefix of materialized steps; stop at the first step whose expected key
+    returns zero entries.
+
+    Returns the index of the first step that needs to execute (i.e., the
+    count of already-materialized contiguous-prefix steps). Returns 0 for a
+    genesis run (no prior entries match this run's expected keys).
+
+    Conservative semantic — gap behavior: if the ledger contains a gap
+    (e.g., step 0 + step 2 entries exist but step 1 missing), the
+    `resume_at` advances only over the contiguous prefix (returns 1 in
+    that case). Gap-fill resumption is out of scope at v2.12.
+    """
+    # Lazy import to keep the module's import surface narrow and to avoid
+    # pulling IS-read at module load. The `BoundedWindow` shape is the
+    # IS-side bounding contract per C-IS-07 §7.2.
+    from harness_is.state_ledger_entry_schema import Identifier
+    from harness_is.state_ledger_read import BoundedWindow
+
+    # The bounding window's `max_entries` must be ≥ 1 (positive). Use the
+    # ledger's current entry_count as an upper bound, falling back to a
+    # nonzero value for a genesis ledger (returns no entries — correct).
+    window_size = max(1, ctx.ledger_writer.entry_count)
+    window = BoundedWindow(max_entries=window_size, workload_class=workload_class)
+
+    for i in range(step_count):
+        expected_step_key = _compute_step_idempotency_key(run_idempotency_key, i)
+        result = ctx.ledger_reader.read_by_idempotency_key(
+            Identifier(expected_step_key),
+            window,
+        )
+        if not result.entries:
+            return i
+    return step_count
 
 
 def _append_step_ledger_entry(

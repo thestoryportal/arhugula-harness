@@ -111,6 +111,7 @@ __all__ = [
     "HITLPlacementRegistry",
     "HandoffRegistry",
     "HarnessContext",
+    "LedgerReader",
     "LedgerWriter",
     "LifecycleEventEmitter",
     "MCPClient",
@@ -406,6 +407,17 @@ class ShadowGitSupervisor(Protocol):
 @runtime_checkable
 class LedgerWriter(Protocol):
     """Runtime-defined wrapper around IS state-ledger. Concretized at U-RT-12."""
+
+
+@runtime_checkable
+class LedgerReader(Protocol):
+    """Runtime-defined read-side wrapper around IS state-ledger.
+
+    Concretized at `harness_runtime.lifecycle.state_ledger.LedgerReader`
+    (added at CP plan v2.12 to resolve `[[fork-u-cp-56-resumption-underspec]]`).
+    Structurally satisfies the CP-axis
+    `harness_cp.workflow_driver.LedgerReaderLike` Protocol.
+    """
 
 
 @runtime_checkable
@@ -980,6 +992,7 @@ class HarnessContext(BaseModel):
     worktree_manager: WorktreeIsolationManager
     shadow_git: ShadowGitSupervisor
     ledger_writer: LedgerWriter
+    ledger_reader: LedgerReader
     index: ContentAddressedIndex
     cache: SemanticCache
 

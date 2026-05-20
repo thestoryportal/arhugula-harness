@@ -50,8 +50,9 @@ def _entry(**over: object) -> WorkflowManifestEntry:
     return WorkflowManifestEntry(**base)  # type: ignore[arg-type]
 
 
-def test_workflow_manifest_entry_ten_fields() -> None:
-    assert len(WorkflowManifestEntry.model_fields) == 10
+def test_workflow_manifest_entry_eleven_fields() -> None:
+    """v2.12 — `entry_version` field added per CP plan v2.12 §2.2."""
+    assert len(WorkflowManifestEntry.model_fields) == 11
     assert set(WorkflowManifestEntry.model_fields) == {
         "workflow_id",
         "workload_class",
@@ -63,7 +64,27 @@ def test_workflow_manifest_entry_ten_fields() -> None:
         "hitl_placements",
         "sub_agent_briefs",
         "per_step_overrides",
+        "entry_version",
     }
+
+
+def test_workflow_manifest_entry_has_entry_version_field() -> None:
+    """v2.12 — `entry_version` materialized at U-CP-13 carrier (CP plan §2.2)."""
+    assert "entry_version" in WorkflowManifestEntry.model_fields
+    field_info = WorkflowManifestEntry.model_fields["entry_version"]
+    assert field_info.annotation is int
+
+
+def test_workflow_manifest_entry_default_entry_version_is_1() -> None:
+    """v2.12 — default value 1 means existing constructors validate unchanged."""
+    entry = _entry()
+    assert entry.entry_version == 1
+
+
+def test_workflow_manifest_entry_accepts_explicit_entry_version() -> None:
+    """v2.12 — operators bump entry_version when workflow contract changes."""
+    entry = _entry(entry_version=42)
+    assert entry.entry_version == 42
 
 
 def test_workload_class_mandatory() -> None:

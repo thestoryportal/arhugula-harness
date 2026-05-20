@@ -49,9 +49,11 @@ from harness_is.state_ledger_write import (
 )
 
 __all__ = [
+    "LedgerReader",
     "LedgerWriter",
     "TamperedChainError",
     "materialize_state_ledger",
+    "materialize_state_ledger_reader",
 ]
 
 
@@ -126,3 +128,59 @@ def materialize_state_ledger(
         if result.status is VerificationStatus.INVALID:
             raise TamperedChainError(result)
     return LedgerWriter(handle=handle, actor=actor)
+
+
+@dataclass(frozen=True)
+class LedgerReader:
+    """Runtime read-side wrapper around IS state-ledger primitives.
+
+    Concretizes the CP-axis `harness_cp.workflow_driver.LedgerReaderLike`
+    Protocol. Each `read_by_idempotency_key` call snapshots the ledger from
+    disk via `harness_is.state_ledger_write.read_ledger` and constructs a
+    `harness_is.state_ledger_read.LedgerNavigationPrimitive` over the
+    snapshot. For typical workflow-resumption N-lookup access patterns
+    (single-digit step count, small ledger), the snapshot-per-call cost is
+    microseconds and is not optimized at v2.12.
+
+    Introduced at CP plan v2.12 §0.5 to resolve
+    `[[fork-u-cp-56-resumption-underspec]]`. The reader's
+    `read_by_idempotency_key` surface is the only read primitive the U-CP-56
+    AC #6 selective resumption logic consumes; the IS-axis
+    `LedgerNavigationPrimitive` provides several other navigation primitives
+    (`read_recent`, `read_range`, etc.) which the runtime adapter does not
+    re-export at v2.12 — additional surfaces added on demand.
+    """
+
+    handle: JsonlLedgerHandle
+
+    def read_by_idempotency_key(
+        self,
+        idempotency_key: object,
+        bounded_window: object,
+    ) -> object:
+        """Read entries by `idempotency_key` per C-IS-07 §7.4.
+
+        Returns a `harness_is.state_ledger_read.ReadResult`. Typed as
+        `object` to match the CP-axis `LedgerReaderLike` Protocol's
+        IS-type-free shape; callers may narrow at concrete sites.
+        """
+        # Lazy import to keep the module load surface narrow.
+        from harness_is.state_ledger_read import LedgerNavigationPrimitive
+
+        entries = tuple(read_ledger(self.handle))
+        primitive = LedgerNavigationPrimitive(entries)
+        return primitive.read_by_idempotency_key(
+            idempotency_key,  # type: ignore[arg-type]
+            bounded_window,  # type: ignore[arg-type]
+        )
+
+
+def materialize_state_ledger_reader(writer: LedgerWriter) -> LedgerReader:
+    """Construct a `LedgerReader` that shares the writer's handle.
+
+    Reader and writer reference the same `JsonlLedgerHandle` so the reader
+    always sees the writer's latest appends (the writer's append path
+    extends the underlying JSONL file in place; the reader re-reads the
+    file on each call).
+    """
+    return LedgerReader(handle=writer.handle)

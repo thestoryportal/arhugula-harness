@@ -459,10 +459,11 @@ def test_freeze_raises_incomplete_when_required_field_none() -> None:
     ctx = _MutableHarnessContext()
     with pytest.raises(IncompleteBootstrapError) as excinfo:
         ctx.freeze()
-    # All 27 required fields are missing.
+    # All 28 required fields are missing (v2.12 +1 for `ledger_reader`).
     assert "config" in excinfo.value.missing_fields
     assert "lifecycle_emitter" in excinfo.value.missing_fields
-    assert len(excinfo.value.missing_fields) == 27
+    assert "ledger_reader" in excinfo.value.missing_fields
+    assert len(excinfo.value.missing_fields) == 28
 
 
 def test_bootstrap_stage_complete_event_is_frozen() -> None:

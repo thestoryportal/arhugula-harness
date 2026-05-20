@@ -149,6 +149,33 @@ class _FakeEmitter:
         self.emits.append(event_class)
 
 
+class _FakeLedgerReader:
+    """In-memory `LedgerReaderLike` substrate for tests (v2.12).
+
+    Holds a mapping `idempotency_key → entries_count` simulating ledger
+    contents. `read_by_idempotency_key` returns a stub `ReadResult`-shaped
+    object whose `entries` is a tuple of dummies sized to the count.
+    """
+
+    def __init__(self, materialized_keys: dict[str, int] | None = None) -> None:
+        self._keys = materialized_keys or {}
+
+    def read_by_idempotency_key(
+        self, idempotency_key: Any, bounded_window: Any
+    ) -> Any:
+        _ = bounded_window
+        # The driver passes Identifier(hex_string); compare on str form.
+        count = self._keys.get(str(idempotency_key), 0)
+
+        class _Result:
+            def __init__(self, n: int) -> None:
+                self.entries = tuple(object() for _ in range(n))
+                self.truncated = False
+                self.next_position = None
+
+        return _Result(count)
+
+
 class _FakeCtx:
     """Combined fake `DriverContext`.
 
@@ -163,10 +190,12 @@ class _FakeCtx:
         ledger: _FakeLedger,
         emitter: _FakeEmitter,
         drained_flag: asyncio.Event | None = None,
+        ledger_reader: _FakeLedgerReader | None = None,
     ) -> None:
         self.ledger_writer = ledger
         self.lifecycle_emitter = emitter
         self.drained_flag = drained_flag if drained_flag is not None else asyncio.Event()
+        self.ledger_reader = ledger_reader if ledger_reader is not None else _FakeLedgerReader()
 
 
 class _EchoDispatcher:
@@ -426,36 +455,193 @@ def test_no_terminal_lifecycle_event_at_success() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_resumption_emit_shape_wired_for_save_point_checkpoint() -> None:
-    """RESUMPTION emit *shape* is wired (not full AC #6 — see partial-land below).
+def _expected_step_key(run_id: str, workflow_id: str, entry_version: int, step_index: int) -> str:
+    """Compute the expected step idempotency_key per §25.6, for test setup."""
+    import hashlib
 
-    **PARTIAL-LAND scope.** This test verifies that a save-point-checkpoint
-    binding entering a non-genesis ledger emits RESUMPTION in the lifecycle
-    stream. It does NOT verify:
-    - Prefix match against `run_idempotency_key` (AC #6 step 2 — STRUCK at
-      partial land per `.harness/class_1_tension_u_cp_56_resumption_underspec.md`)
-    - Step skip + resume-at-first-unmaterialized (AC #6 step 4 — STRUCK)
-    - Selective RESUMPTION based on prior-run match (any prior entry triggers
-      RESUMPTION at the weaker shipped behavior)
+    run_h = hashlib.sha256()
+    run_h.update(run_id.encode("utf-8"))
+    run_h.update(b"\x00")
+    run_h.update(workflow_id.encode("utf-8"))
+    run_h.update(b"\x00")
+    run_h.update(str(entry_version).encode("utf-8"))
+    run_key = run_h.hexdigest()
 
-    The weaker behavior is intentional at U-CP-56 PARTIAL-LAND pending the
-    Class 1 fork resolution (`WorkflowManifestEntry` extension with
-    `entry_version` field + per-run prefix-match read primitive).
+    step_h = hashlib.sha256()
+    step_h.update(run_key.encode("utf-8"))
+    step_h.update(b"\x00")
+    step_h.update(str(step_index).encode("utf-8"))
+    return step_h.hexdigest()
+
+
+def test_workflow_resumption_emitted_on_save_point_checkpoint_reentry() -> None:
+    """v2.12 (un-strike of AC #6) — RESUMPTION emit is *selective* per run.
+
+    Materializes prior step entries matching `run-1`'s expected keys; driver
+    detects them, advances resume_at over the contiguous prefix, and emits
+    RESUMPTION.
     """
-    ctx, _, emitter = _ctx(prior_entries=3)  # non-genesis ledger
+    manifest = _manifest(engine_class=EngineClass.SAVE_POINT_CHECKPOINT)
+    # Materialize ledger entries for steps 0 and 1 of this run.
+    materialized = {
+        _expected_step_key("run-1", "wf-1", 1, 0): 1,
+        _expected_step_key("run-1", "wf-1", 1, 1): 1,
+    }
+    ledger = _FakeLedger(prior_entries=2)
+    emitter = _FakeEmitter()
+    ctx = _FakeCtx(
+        ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader(materialized)
+    )
+    dispatcher = _EchoDispatcher()
     execute_workflow(
-        manifest_entry=_manifest(engine_class=EngineClass.SAVE_POINT_CHECKPOINT),
+        manifest_entry=manifest,
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatcher=cast(StepDispatcher, dispatcher),
+    )
+    # RESUMPTION emitted before WORKFLOW_START.
+    assert WorkflowEventClass.RESUMPTION in emitter.emits
+    resumption_idx = emitter.emits.index(WorkflowEventClass.RESUMPTION)
+    start_idx = emitter.emits.index(WorkflowEventClass.WORKFLOW_START)
+    assert resumption_idx < start_idx
+    # Only step 2 dispatched (steps 0 + 1 already in ledger).
+    assert len(dispatcher.dispatched) == 1
+    assert str(dispatcher.dispatched[0][1].step_id) == "step-2"
+
+
+def test_resumption_not_emitted_for_unrelated_prior_run() -> None:
+    """v2.12 — prior ledger entries from a different run produce no RESUMPTION.
+
+    Even with non-genesis ledger, if the expected step keys for THIS run
+    return zero matches, the driver treats this as a genesis run for the
+    purpose of resumption.
+    """
+    manifest = _manifest(engine_class=EngineClass.SAVE_POINT_CHECKPOINT)
+    # Materialize ledger entries for an unrelated run (run-OTHER).
+    materialized = {
+        _expected_step_key("run-OTHER", "wf-1", 1, 0): 1,
+        _expected_step_key("run-OTHER", "wf-1", 1, 1): 1,
+    }
+    ledger = _FakeLedger(prior_entries=2)
+    emitter = _FakeEmitter()
+    ctx = _FakeCtx(
+        ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader(materialized)
+    )
+    dispatcher = _EchoDispatcher()
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0), _step(1)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatcher=cast(StepDispatcher, dispatcher),
+    )
+    assert WorkflowEventClass.RESUMPTION not in emitter.emits
+    # All steps dispatched; resume_at == 0.
+    assert len(dispatcher.dispatched) == 2
+
+
+def test_resumption_skips_already_replayed_steps() -> None:
+    """v2.12 — driver resumes at first unmaterialized step; prior dispatched skip."""
+    manifest = _manifest(engine_class=EngineClass.SAVE_POINT_CHECKPOINT)
+    materialized = {
+        _expected_step_key("run-1", "wf-1", 1, 0): 1,
+        _expected_step_key("run-1", "wf-1", 1, 1): 1,
+        _expected_step_key("run-1", "wf-1", 1, 2): 1,
+    }
+    ledger = _FakeLedger(prior_entries=3)
+    emitter = _FakeEmitter()
+    ctx = _FakeCtx(
+        ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader(materialized)
+    )
+    dispatcher = _EchoDispatcher()
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0), _step(1), _step(2), _step(3), _step(4)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatcher=cast(StepDispatcher, dispatcher),
+    )
+    # Only steps 3 + 4 dispatched.
+    assert len(dispatcher.dispatched) == 2
+    dispatched_ids = {str(d[1].step_id) for d in dispatcher.dispatched}
+    assert dispatched_ids == {"step-3", "step-4"}
+
+
+def test_resume_at_advances_over_contiguous_prefix_only() -> None:
+    """v2.12 — gap behavior: contiguous prefix only, gap-fill out of scope."""
+    manifest = _manifest(engine_class=EngineClass.SAVE_POINT_CHECKPOINT)
+    # Materialize step 0 + step 2, gap at step 1.
+    materialized = {
+        _expected_step_key("run-1", "wf-1", 1, 0): 1,
+        # step 1 intentionally missing
+        _expected_step_key("run-1", "wf-1", 1, 2): 1,
+    }
+    ledger = _FakeLedger(prior_entries=2)
+    emitter = _FakeEmitter()
+    ctx = _FakeCtx(
+        ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader(materialized)
+    )
+    dispatcher = _EchoDispatcher()
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatcher=cast(StepDispatcher, dispatcher),
+    )
+    # resume_at advances to 1 (only step 0 is contiguous-prefix-materialized);
+    # step 1 + step 2 dispatch.
+    assert len(dispatcher.dispatched) == 2
+    dispatched_ids = [str(d[1].step_id) for d in dispatcher.dispatched]
+    assert dispatched_ids == ["step-1", "step-2"]
+
+
+def test_entry_version_changes_idempotency_key_basis() -> None:
+    """v2.12 — bumping entry_version invalidates prior-run resumption substrate.
+
+    Prior run was at entry_version=1; this run is at entry_version=2 — the
+    computed expected step keys differ → zero matches → no RESUMPTION.
+    """
+    manifest_v2 = _manifest(engine_class=EngineClass.SAVE_POINT_CHECKPOINT)
+    # Construct a manifest with entry_version=2 by re-building from defaults.
+    manifest_v2 = WorkflowManifestEntry(
+        workflow_id=manifest_v2.workflow_id,
+        workload_class=manifest_v2.workload_class,
+        persona_tier=manifest_v2.persona_tier,
+        engine_class=manifest_v2.engine_class,
+        topology_pattern=manifest_v2.topology_pattern,
+        layer_budgets=manifest_v2.layer_budgets,
+        fallback_chain=manifest_v2.fallback_chain,
+        hitl_placements=manifest_v2.hitl_placements,
+        per_step_overrides=manifest_v2.per_step_overrides,
+        entry_version=2,
+    )
+    # Materialize prior-version (1) step keys.
+    materialized = {
+        _expected_step_key("run-1", "wf-1", 1, 0): 1,
+    }
+    ledger = _FakeLedger(prior_entries=1)
+    emitter = _FakeEmitter()
+    ctx = _FakeCtx(
+        ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader(materialized)
+    )
+    dispatcher = _EchoDispatcher()
+    execute_workflow(
+        manifest_entry=manifest_v2,
         steps=[_step(0)],
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, _EchoDispatcher()),
+        step_dispatcher=cast(StepDispatcher, dispatcher),
     )
-    assert WorkflowEventClass.RESUMPTION in emitter.emits
-    # RESUMPTION precedes WORKFLOW_START in emission order.
-    resumption_idx = emitter.emits.index(WorkflowEventClass.RESUMPTION)
-    start_idx = emitter.emits.index(WorkflowEventClass.WORKFLOW_START)
-    assert resumption_idx < start_idx
+    # v2-keyed expected key differs from v1-stored key → no match → no RESUMPTION.
+    assert WorkflowEventClass.RESUMPTION not in emitter.emits
+    assert len(dispatcher.dispatched) == 1
 
 
 def test_no_resumption_emission_under_pure_pattern_no_engine() -> None:
