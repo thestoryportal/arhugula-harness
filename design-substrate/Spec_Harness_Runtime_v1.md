@@ -1,4 +1,33 @@
-# Specification — Harness Runtime v1.5
+# Specification — Harness Runtime v1.6
+
+## Change-note (v1.5 → v1.6)
+
+**Scope of revision.** In-CLI spec growth per workspace `CLAUDE.md` §4.3 + memory `design-substrate-divergence` (design-phase back-flow deprecated 2026-05-15; workspace `design-substrate/` is canonical; spec edits in-CLI). New runtime composition contract for sub-agent dispatch — the runtime-side production callsite for `RuntimeHandoffRegistry` (U-RT-26 landed) + `RuntimeTopologyDispatcher` (U-RT-40 landed) + the `subagent.*` / `topology.*` span namespaces declared at CP spec C-CP-13 + C-CP-14. Same architectural shape as the v1.4 C-RT-16 amendment: contract pins the producer site for an upstream-CP-declared observability surface; runtime owns the composition seam.
+
+**Operator ratifications** (recorded 2026-05-20 in-session):
+
+- **Routing-layer architecture: StepKindDispatcherRegistry.** The driver currently binds one `StepDispatcher` (the C-RT-16 wrapper). Supporting a second step_kind (`SUB_AGENT_DISPATCH`) requires a routing layer. Operator ratified the registry shape: bootstrap binds `{StepKind → StepDispatcher}`; driver dispatches by `step.kind`. Each `StepDispatcher` impl handles one kind. The C-RT-16 wrapper becomes the `INFERENCE_STEP` dispatcher binding. Preserves the C-CP-25 §25.3.3.4 "step body opaque to driver" invariant — the driver still does not introspect `step.step_payload`, but does read `step.kind` to route to the correct dispatcher. Extensible to all 5 step_kinds for follow-on tool-invocation / HITL / validator composer arcs.
+- **Scope: single-sub-agent within linear parent.** C-CP-14 declares the full fan-out span hierarchy + concurrent-prompt-cache warm-up (§14.4) + cross-family fallback at fan-out (§14.5), but the parent workflow at C-CP-25 v1.4 is `SINGLE_THREADED_LINEAR` only. A SUB_AGENT_DISPATCH step within a linear parent dispatches one sub-agent. v1.6 pins single-sub-agent dispatch + the `subagent.*` namespace (full) + the `topology.*` namespace (narrow subset: `topology.pattern`, `topology.workload_class`, single-sibling result counts). Fan-out warm-up + cross-family fallback at fan-out are NOT in scope at v1.6 (gated on parent topology expansion at C-CP-25; separate arc).
+- **Invocation primitive: in-process recursive sub-workflow invocation.** The actual "run the sub-agent" primitive was missing pre-v1.6 (only descent + brief + audit composition existed). Operator ratified: `RuntimeSubAgentDispatcher` re-enters the workflow execution surface (per C-RT-08 `run()` discipline; recursive `execute_workflow()` invocation) with the child's bound HandoffContext + brief. Child runs as a full sub-workflow with its own steps + spans + ledger entries. The dispatcher reads child workflow identity from `step.step_payload` (opaque to driver per C-CP-25 §25.3.3.4; per-step-kind dispatcher knows the payload shape).
+
+**Single-finding addition.** New **§14.7 C-RT-17 — Sub-agent dispatch composer** specifies the runtime composition seam that:
+1. Adds `StepKindDispatcherRegistry` as a new runtime-internal type — a frozen mapping `{StepKind → StepDispatcher}` bound at bootstrap stage 5 (LOOP_INIT) alongside `ctx.llm_dispatcher`. Driver dispatches via `ctx.step_dispatchers.lookup(step.kind).dispatch(binding, step)` instead of the v1.5-shape direct `step_dispatcher.dispatch(binding, step)` parameter.
+2. Adds `RuntimeSubAgentDispatcher` as the second `StepDispatcher` impl — handles `SUB_AGENT_DISPATCH` steps. Composes `HandoffContext` per C-CP-13 §13.1 7-field payload; calls `ctx.handoff_registry.dispatch(...)` for gate-level descent per C-CP-12; calls `ctx.topology_dispatcher.dispatch(child_manifest_entry)` per C-CP-10 + `is_admissible(...)` per C-CP-10 §10.3; emits `subagent.*` (full namespace per C-CP-14 §14.2) + `topology.*` (narrow subset) span attributes; recursively invokes `execute_workflow()` for the child sub-workflow; composes audit entry via `ctx.handoff_registry.compose_dispatch_audit(...)`; returns child's terminal `RunResult` → step output.
+
+**Sections revised (substantive).**
+- New **§14.7 C-RT-17** — Sub-agent dispatch composer contract (after §14.6; §-pin `.7` decimal continuing the §14.5 / §14.6 pattern).
+- **§14** failure-mode taxonomy — new row `RT-FAIL-SUB-AGENT-CHILD-FAILED` (permanent; raised when the child sub-workflow's terminal `RunResult.status == FAILED`).
+- **§15** Spec-to-plan traceability — new row for U-RT-59 (the new plan unit carrying C-RT-17).
+
+**Sections preserved verbatim from v1.5.** All v1.5 content outside the additions above preserved unchanged. The §14.6 C-RT-16 contract surface stands. The §14.5 C-RT-15 contract surface stands. The v1.5 `retry.*`-canonical-attribute correction stands.
+
+**Status posture.** Proposed (v1.5) → **Proposed (v1.6, Class 1 HALT-marked)**. v1.6 spec authoring surfaced a structural gap at U-RT-59 implementation pre-survey: the `StepDispatcher` Protocol per C-CP-25 §25.3.3.4 lacks the per-step parent context surface (`parent_action_id` / `parent_gate_level` / `parent_sandbox_tier` / `parent_actor` / `parent_entry_hash` / `parent_idempotency_key`) that C-CP-12 gate-level descent + C-CP-13 §13.5 audit-trail-link composition require. Halt marker added at the head of §14.7; full marker text + 4-path resolution candidate set + fork record reference inside §14.7. **U-RT-59 implementation MUST NOT proceed against this contract until operator ratifies a resolution path** (per X-AL-3 "no silent H_T design extension at Phase 7"). Implementation re-entry gated on follow-up v1.7 amendment (or Class 1 fork resolution back into v1.6 if the resolution is small enough to apply additively).
+
+**Downstream absorption owed.** `Implementation_Plan_Harness_Runtime_v*.md` extended with new U-RT-59 (small body authored alongside this spec amendment). CP spec v1.5 unchanged (C-RT-17 emits CP-declared `subagent.*` / `topology.*` namespaces per the C-CP-13 + C-CP-14 schemas; no CP-side amendment). `.harness/phase-7d-retirement-ledger-v2.md` §5 CP rows superseded at U-RT-59 landing event (file ratification target H_T-CP-10 RETIRED + H_T-CP-13 RETIRED + H_T-CP-14 PARTIAL-or-RETIRED at retirement audit). `harness-cp/CLAUDE.md` §4.1 retirement table updated post-landing.
+
+**No fork-record back-reference.** Unlike C-RT-16 (Class 1 fork resolution), C-RT-17 is in-CLI spec growth — no upstream design-substrate defect surfaced; the contract addition is the planned next-arc step authorized at operator ratification this session. Architectural decisions recorded in this change-note rather than in a `.harness/class_N_tension_*.md` file.
+
+---
 
 ## Change-note (v1.4 → v1.5)
 
@@ -909,6 +938,9 @@ The runtime axis introduces a fail-class enumeration distinct from CP's workflow
 | `RT-FAIL-INSPECT-PATH` | permanent | `harness-inspect` admin stub | None; operator fixes path |
 | `RT-FAIL-ADMIN-PIDFILE` | permanent | `harness-shutdown` admin stub | None; operator verifies running harness |
 | `RT-FAIL-FALLBACK-EXHAUSTED` (new at v1.4) | permanent | C-RT-16 wrapper exhausts the fallback chain after per-candidate retry exhaustion | Driver `try/except` maps to `step-failure: RT-FAIL-FALLBACK-EXHAUSTED: ...` per C-CP-25 §25.3.3.4 |
+| `RT-FAIL-SUB-AGENT-CHILD-FAILED` (new at v1.6) | permanent | C-RT-17 child sub-workflow's terminal `RunResult.status == FAILED` after child-runner invocation | Composer raises typed `SubAgentChildFailedError`; driver `try/except` maps to `step-failure: RT-FAIL-SUB-AGENT-CHILD-FAILED: ...` per C-CP-25 §25.3.3.4 |
+| `RT-FAIL-SUB-AGENT-TOPOLOGY-INADMISSIBLE` (new at v1.6) | permanent | C-RT-17 `is_admissible(topology, workload_class)` returns False before sub-workflow invocation | Composer raises typed `SubAgentDispatchTopologyInadmissibleError`; driver `try/except` maps to `step-failure: RT-FAIL-SUB-AGENT-TOPOLOGY-INADMISSIBLE: ...` per C-CP-25 §25.3.3.4 |
+| `RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND` (new at v1.6) | permanent | Driver invokes `ctx.step_dispatchers.lookup(step.kind)` with an unbound step_kind (3 of 5 unbound at v1.6) | Registry raises `StepKindDispatcherNotBoundError`; driver `try/except` maps to `step-failure: RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND: ...` per C-CP-25 §25.3.3.4 |
 
 **Relationship to CP `validator_fail_taxonomy`:**
 
@@ -1117,6 +1149,186 @@ The C-RT-16 contract specifies the composition seam whose absence was the substi
 
 ---
 
+## §14.7 C-RT-17 — Sub-agent dispatch composer (new at v1.6; in-CLI spec growth)
+
+> **⚠️ HALT marker — Class 1 fork open.** v1.6 spec authoring pre-survey at U-RT-59 implementation entry surfaced a structural gap: the `StepDispatcher` Protocol per C-CP-25 §25.3.3.4 (`dispatch(binding: StepEffectiveBinding, step: WorkflowStep) -> Mapping[str, Any]`) lacks the per-step parent context surface (`parent_action_id`, `parent_gate_level`, `parent_sandbox_tier`, `parent_actor`, `parent_entry_hash`, `parent_idempotency_key`) that C-CP-12 gate-level descent + C-CP-13 §13.5 audit-trail-link composition require. `StepEffectiveBinding` per `harness-cp/src/harness_cp/per_step_override_evaluator.py` exposes only `step_id` + `model_binding` + `engine_class` + `hitl_placement` + `override_applied` + `override_audit_ref` — none of the parent context fields the v1.6 spec narrative below cites. The driver loop at `harness-cp/src/harness_cp/workflow_driver.py` tracks `step_index` + `run_id` + `manifest_entry` but does not surface them to the dispatcher.
+>
+> **U-RT-59 implementation MUST NOT proceed against this contract** until the gap is resolved. Class 1 fork filed at `.harness/class_1_tension_c_rt_17_step_dispatcher_parent_context_gap.md`. Four resolution paths under consideration: (A) extend `StepDispatcher` Protocol with a per-call `StepExecutionContext` param (CP-side amendment to C-CP-25 §25.3.3.4 + `workflow_driver.py` signature; runtime-side U-RT-58 wrapper accepts new param via pass-through); (B) implicit propagation via `ContextVar` set by driver pre-invocation; (C) OTel current-span introspection + ledger writer last-entry tracker; (D) operator authors parent context into `step.step_payload` (rejected: parent context is runtime-derived, not authoring-time-known).
+>
+> Operator architectural ratification owed before re-entry. Per X-AL-3 ("no silent H_T design extension at Phase 7"), absorbing the gap silently is foreclosed. The remainder of §14.7 below is **drafted-pending-resolution** — clauses citing `binding.field_X` for parent context (§14.7.2 step 2/3/8, §14.7.3 bounded-reductions table) are explicitly marked TBD per the fork resolution.
+
+**Contract surface.** New runtime-internal type `StepKindDispatcherRegistry` (frozen mapping `{StepKind → StepDispatcher}`; bound at bootstrap stage 5 as `ctx.step_dispatchers`) + new Protocol-satisfying composer `RuntimeSubAgentDispatcher` + driver routing-layer refactor at `harness-cp/src/harness_cp/workflow_driver.py` (dispatch via `ctx.step_dispatchers.lookup(step.kind)` instead of the single bound `step_dispatcher` parameter) + integration obligations with `ctx.handoff_registry` (U-RT-26), `ctx.topology_dispatcher` (U-RT-40), `ctx.tracer_provider` (C-RT-06), C-CP-13 §13.1 (HandoffContext schema), C-CP-13 §13.5 (audit-trail-link composition), C-CP-14 §14.1 (multi-agent span hierarchy — narrow-scope subset for single-sub-agent), C-CP-14 §14.2 (`subagent.*` + `topology.*` namespaces), and the existing `compose_dispatch_audit` site at `harness_runtime.lifecycle.handoff.RuntimeHandoffRegistry.compose_dispatch_audit`.
+
+**PRD enablement.** Operationalizes the sub-agent dispatch surface at runtime. R-CP-08 (multi-agent topology — sub-agent dispatch payload + observability surface, single-sub-agent slice). R-CP-09 (sub-agent privilege inheritance — HandoffContext audit composition at production callsite). R-OD-02 (audit-ledger compliance posture — sub-agent dispatch audit entries produced at production execution path, not synthesized post-hoc).
+
+**ADR commitment(s) honored.** ADR-D4 v1.1 §1.7 (HandoffContext serialization contract — runtime production callsite for the CP-declared schema); ADR-D4 v1.1 §1.9 (multi-agent span hierarchy — runtime production emission site for the narrow single-sub-agent slice); ADD §3.1.2 Synthesis (TopologyPattern enum + admissibility predicate operationalized at runtime).
+
+**Fork-resolution provenance.** None (in-CLI spec growth per workspace `CLAUDE.md` §4.3; no Class 1 / Class 2 / Class 3 fork filed). Operator architectural ratifications captured at the v1.5 → v1.6 change-note rather than a fork record.
+
+**Specification content.**
+
+### §14.7.1 Architectural surfaces introduced
+
+The runtime contributes two production surfaces at v1.6:
+
+1. **`StepKindDispatcherRegistry`** (new frozen dataclass at `harness-runtime/src/harness_runtime/lifecycle/step_dispatchers.py`):
+   - Frozen mapping `dispatchers: Mapping[StepKind, StepDispatcher]`.
+   - Public method `lookup(step_kind: StepKind) -> StepDispatcher` (raises `StepKindDispatcherNotBoundError` if no dispatcher bound for the kind).
+   - Bound at bootstrap stage 5 (LOOP_INIT) alongside `ctx.llm_dispatcher`. v1.6 binds two entries: `StepKind.INFERENCE_STEP → ctx.llm_dispatcher` (the C-RT-16 wrapper) + `StepKind.SUB_AGENT_DISPATCH → ctx.sub_agent_dispatcher` (the new composer).
+   - Other 3 step_kinds (`DECLARATIVE_STEP`, `TOOL_STEP`, `HITL_STEP`) are NOT bound at v1.6; the lookup raises the typed error if a workflow declares an unbound step_kind. Follow-on composer arcs (tool-invocation / HITL / validator) bind the remaining entries.
+
+2. **`RuntimeSubAgentDispatcher`** (new class at `harness-runtime/src/harness_runtime/lifecycle/sub_agent_dispatch.py`):
+   - Satisfies the `StepDispatcher` Protocol (declared at `harness-cp/src/harness_cp/workflow_driver.py:151`).
+   - Async `dispatch(binding, step) -> StepOutput`.
+   - Construction site: bootstrap stage 5; consumes `ctx.handoff_registry`, `ctx.topology_dispatcher`, `ctx.tracer_provider`, and an injected "child workflow runner" callable (see §14.7.4).
+
+### §14.7.2 Per-step invocation discipline (composer body)
+
+The body of `RuntimeSubAgentDispatcher.dispatch(binding, step)`:
+
+1. **Validate step payload shape.** `step.step_payload` is opaque to the driver per C-CP-25 §25.3.3.4 but typed at the dispatcher: v1.6 pins the convention that `SUB_AGENT_DISPATCH` step payloads are a `harness_runtime.lifecycle.sub_agent_dispatch.SubAgentDispatchPayload` mapping (4-field Pydantic v2 model — `child_workflow_id: WorkflowID`, `child_manifest_entry: WorkflowManifestEntry`, `child_steps: Sequence[WorkflowStep]`, `brief: SubAgentBrief`). Composer pydantic-validates `step.step_payload → SubAgentDispatchPayload`; mis-shaped payloads surface as a typed `SubAgentDispatchPayloadShapeError` mapping to `RT-FAIL-PAYLOAD-SHAPE` (existing fail class from §14.5).
+2. **Compose HandoffContext per C-CP-13 §13.1.** Build the 7-field `HandoffContext` from step inputs + parent context: `proposed_action` from `payload.brief.objective`; `agent_confidence` from `binding` (or `None` if not surfaced); `failed_attempts` from `binding.retry_history` if present (empty list at v1.6 MVP — no prior sub-agent failure tracking); `alternatives_considered` empty list at v1.6 MVP; `state_summary` composed via C-CP-13 §13.4 from `ctx.state_ledger` filtered by parent `action_id` (MVP shape: `StateSummary(relevant_entries=[parent_entry_ref], summary_text="", summary_hash=sha256(b""), idempotency_key=binding.idempotency_key)`); `audit_trail_link` per C-CP-13 §13.5 composed from parent ledger entry (`LedgerEntryRef(action_id=binding.action_id, entry_hash=binding.parent_entry_hash, actor=binding.actor)`); `retry_history` from `binding` (empty at v1.6 MVP).
+3. **Compute gate-level descent.** `descent = ctx.handoff_registry.dispatch(parent_action_id=binding.action_id, parent_gate_level=binding.gate_level, parent_sandbox_tier=binding.sandbox_tier, sub_agent_brief=payload.brief, operator_override=None)` — returns a `SubAgentGateLevelDescent` per C-CP-12.
+4. **Verify topology admissibility.** `topology = ctx.topology_dispatcher.dispatch(payload.child_manifest_entry)` (returns `TopologyPattern` enum value per C-CP-10 §10.1). `admissible = is_admissible(topology, payload.child_manifest_entry.workload_class)` (per C-CP-10 §10.3). If not admissible, raise typed `SubAgentDispatchTopologyInadmissibleError` mapping to a new fail class (see §14.7 failure-mode taxonomy below).
+5. **Start `subagent.span`.** `with tracer.start_as_current_span("subagent.span") as span:` (synchronous CM per the v1.3 §14.5 phrasing pattern). Set `subagent.*` attributes per C-CP-14 §14.2 at span open: `subagent.span.id` (16-hex span_id of this span), `subagent.parent_span_id` (16-hex parent span_id from current context), `subagent.tokens_in` / `subagent.tokens_out` / `subagent.cached_tokens_in` (set at span close from child's terminal cost rollup; v1.6 MVP sets all three to `0` if child does not surface them). Also set narrow-subset `topology.*` attributes at span open: `topology.pattern` (string-value of `topology` per §10.1 enum), `topology.workload_class` (string-value of `payload.child_manifest_entry.workload_class` per Persona §3.1 4-class set). Fan-out-specific `topology.*` attributes (`fan_out_cap`, `cascade_policy`, `results_collected`, `results_failed`, `cascade_applied`, `synthesis_token_budget`, `cascade_decision_audit_ledger_id`, `concurrent_token_budget_at_dispatch`) are NOT set at v1.6 (out of scope per change-note "Scope: single-sub-agent within linear parent").
+6. **Invoke the child sub-workflow.** `child_result = await self.child_workflow_runner(workflow_id=payload.child_workflow_id, manifest_entry=payload.child_manifest_entry, steps=payload.child_steps, handoff_context=handoff_context, descent=descent)` — invokes the in-process recursive runner per §14.7.4. The runner returns a `RunResult` per C-RT-09. The runner is responsible for running the child as a full sub-workflow (its own bootstrap-context-share, step-iteration, span hierarchy nested inside the current `subagent.span`).
+7. **Map child result to subagent span result_status.** If `child_result.status == SUCCESS`: set `subagent.result_status = "completed"`; set `subagent.request_blocked_by_budget = False`. If `child_result.status == DRAINED`: set `subagent.result_status = "completed"` + `subagent.request_blocked_by_budget = False` (drain is operator-initiated, not failure). If `child_result.status == FAILED`: set `subagent.result_status = "failed"`; do NOT raise (failure surfaces via step output + audit entry; outer composer / driver decides whether to halt). v1.6 MVP does NOT emit `"cascade-cancelled"` (that value is only produced under fan-out cascade semantics out of scope at v1.6).
+8. **Compose audit entry per C-CP-13 §13.5.** Call signature (verified against `harness_runtime.lifecycle.handoff.RuntimeHandoffRegistry.compose_dispatch_audit` at v1.6): `audit_entry = ctx.handoff_registry.compose_dispatch_audit(parent_action_id=<TBD per fork resolution>, descent=descent, brief_hash=ctx.handoff_registry.dispatch_response_hash(payload.brief))` — 3 parameters. The composer is a pure composition of `harness_cp.sub_agent_gate_level_descent.emit_sub_agent_dispatch_audit`; returned `CPAuditLedgerEntry` carries placeholder `timestamp` + `prior_event_hash` populated at write-time by the audit writer. The audit-ledger entry shape does NOT carry `child_result_status` (that value lives at the `subagent.result_status` span attribute per §14.7.2 step 7 + C-CP-14 §14.2); audit entries are dispatch-fact records keyed by `(parent_action_id, descent, brief_hash)` per C-CP-12 §12.5. v1.6 emits via `ctx.audit_ledger_writer.append(tenant_id=<TBD per fork resolution>, audit_entry=audit_entry) -> WriteResult` (real 2-param signature per `harness_runtime.lifecycle.audit_writer.RuntimeAuditLedgerWriter.append`; `tenant_id` parameter is `None` for single-tenant runtime composition or per-tenant string for multi-tenant; sourcing TBD per fork resolution since tenant_id correlates with parent context).
+9. **Return step output.** Construct the step output from `child_result.final_state` (or `child_result.partial_state` if DRAINED). v1.6 MVP shape: step output is the child's `final_state` mapping verbatim (the parent workflow's step body consumes this).
+10. **On any raised typed error** (`SubAgentDispatchPayloadShapeError`, `SubAgentDispatchTopologyInadmissibleError`, child-runner unhandled `RuntimeError`): annotate the `subagent.span` with `subagent.result_status = "failed"`; compose + emit a partial audit entry with `child_result_status="failed"`; re-raise. The `subagent.span` closes via CM; outer driver's `try/except` per C-CP-25 §25.3.3.4 maps to the typed fail class.
+
+### §14.7.3 HandoffContext payload composition discipline
+
+Per C-CP-13 §13.1, the `HandoffContext` is the 7-field payload serialized at sub-agent dispatch (across-turn boundary; T-perm-2 adjacency per ADR-D4 v1.1 §1.7). The runtime composer's role per §14.7.2 step 2 is to **compose this payload from parent context** — the schema lives at `harness_cp.handoff_context.HandoffContext` (existing); the composer constructs an instance.
+
+v1.6 MVP composition (per §14.7.2 step 2) makes the following bounded reductions for surfaces not yet operationalized:
+
+| Field | v1.6 MVP composition | Deferred (post-v1.6) |
+|---|---|---|
+| `proposed_action` | `ProposedAction(text=payload.brief.objective)` | Richer ProposedAction shape per future C-CP-NN |
+| `agent_confidence` | `None` | Operator-supplied at workflow-binding time; or computed from prior `RetryHistory` |
+| `failed_attempts` | empty list | Cascade re-attempt tracking (gated on cascade semantics; fan-out arc) |
+| `alternatives_considered` | empty list | Lead-agent deliberation context capture |
+| `state_summary.relevant_entries` | `[parent_entry_ref]` | Multi-entry filtering by sub-agent scope per C-CP-13 §13.4 |
+| `state_summary.summary_text` | empty string | Summarization model invocation per C-CP-21 §21.4 |
+| `state_summary.summary_hash` | `sha256(b"")` | Hash of non-empty summary |
+| `audit_trail_link` | from `binding` (parent_action_id, parent_entry_hash, actor) | — (v1.6 final shape) |
+| `retry_history` | empty `RetryHistory` (or carry-forward if `binding.retry_history` non-empty) | RetryHistory cardinality cap per HandoffContext payload boundary discretion |
+
+The bounded reductions are documented at this contract; they are NOT silent X-AL-3 design extensions because they instantiate existing C-CP-13 schema fields with empty / minimal values. Operators authoring a workflow with `SUB_AGENT_DISPATCH` steps may surface richer values via the step payload directly (v1.6 MVP: `SubAgentDispatchPayload` does not yet carry per-field overrides; this is a v1.7+ extension surface).
+
+### §14.7.4 In-process recursive sub-workflow invocation primitive
+
+The "child workflow runner" callable injected at `RuntimeSubAgentDispatcher` construction is a new runtime-internal type. v1.6 specifies its Protocol surface:
+
+```python
+class ChildWorkflowRunner(Protocol):
+    async def __call__(
+        self,
+        *,
+        workflow_id: WorkflowID,
+        manifest_entry: WorkflowManifestEntry,
+        steps: Sequence[WorkflowStep],
+        handoff_context: HandoffContext,
+        descent: SubAgentGateLevelDescent,
+    ) -> RunResult: ...
+```
+
+The v1.6 MVP implementation invokes `execute_workflow()` recursively (per C-RT-08 `run()` discipline) within the parent's `HarnessContext`. Specifically:
+
+- The child shares the parent's `HarnessContext` for substrate access (state ledger, tracer provider, audit ledger writer, retry/breaker registry, providers, sandbox tier dispatcher). This is the simplest in-process composition; full child-context isolation is a v1.7+ scope question.
+- The child's `binding` is constructed by descending from the parent's binding per `descent`: `child_binding.gate_level = descent.child_gate_level`; `child_binding.sandbox_tier = descent.child_sandbox_tier`; `child_binding.action_id = compose_child_action_id(parent_action_id, child_workflow_id)`; `child_binding.actor = descent.child_actor`; other fields carried forward per the workload class binding rules at C-CP-13 §13.3 (brief-authoring inheritance).
+- The child's spans nest inside the current `subagent.span` via the OTel context propagation (current span at runner entry is `subagent.span`; child's `workflow.start` becomes its child).
+- The child's audit ledger entries write to the same ledger via the same `ctx.audit_ledger_writer` (no separate ledger primitive at v1.6).
+- The child's `RunResult` is returned verbatim to the composer.
+
+**Composer module residence.** Runner implementation at `harness-runtime/src/harness_runtime/lifecycle/child_workflow_runner.py` (new file at v1.6). Module exposes one production function — `compose_child_workflow_runner(ctx) -> ChildWorkflowRunner` — that closes over the `HarnessContext` and returns the callable. Bootstrap stage 5 constructs the runner + injects it into `RuntimeSubAgentDispatcher` construction.
+
+### §14.7.5 Span emission per C-CP-14 §14.1 (narrow-scope subset)
+
+v1.6 emits a single-level `subagent.span` per dispatch (NOT the full fan-out hierarchy with `topology.fanout.opened` / `topology.fanout.closed` envelopes — those are only meaningful when there are siblings, which requires parent topology beyond `SINGLE_THREADED_LINEAR`). The narrow-scope emission:
+
+```
+parent step (workflow_driver step.boundary)
+└── subagent.span                          (attrs: subagent.span.id, subagent.parent_span_id,
+    │                                              topology.pattern, topology.workload_class)
+    └── (child sub-workflow spans)         (workflow.start → step.boundary[] → workflow.end
+                                            per C-RT-08 + C-CP-25; nested inside subagent.span
+                                            via OTel context propagation)
+```
+
+The narrow-scope shape preserves the C-CP-14 §14.1 invariant that child sub-agent activity nests inside a `subagent.span`. The full fan-out envelope (`topology.fanout.opened` → siblings → `topology.fanout.closed`) is a strict superset of this shape; the post-v1.6 fan-out arc wraps the existing `subagent.span` emission inside the fan-out envelope without rewriting the per-sibling emission.
+
+**Producer-side attribute carrier reference.** v1.6 composer imports the canonical `subagent.*` attribute name set from `harness_cp.handoff_context` (existing; per C-CP-14 §14.2 v1.3 schema). Hand-coded attribute strings are NOT permitted; the carrier import ties retirement criterion B verification ("references the canonical attribute carrier") directly to the canonical producer surface (analog of how C-RT-16 imports `RETRY_ATTEMPT_CHILD_SPAN_SCHEMA`).
+
+### §14.7.6 Audit-entry composition per C-CP-13 §13.5
+
+v1.6 composer calls `ctx.handoff_registry.compose_dispatch_audit(parent_action_id, descent, brief_hash)` per §14.7.2 step 8 (3-param signature verified at v1.6 against `harness_runtime.lifecycle.handoff.RuntimeHandoffRegistry.compose_dispatch_audit`; landed pre-v1.6 per U-RT-26). The composer returns a `CPAuditLedgerEntry` with placeholder `timestamp` + `prior_event_hash` (populated at write-time by the audit writer per its U-RT-32 contract). The composer writes the entry via `ctx.audit_ledger_writer.append(tenant_id, audit_entry) -> WriteResult` (2-param signature; verified at v1.6 against `harness_runtime.lifecycle.audit_writer.RuntimeAuditLedgerWriter.append`).
+
+The audit-ledger entry **does NOT carry `child_result_status`** — that value lives only as a `subagent.result_status` attribute on the `subagent.span` (per C-CP-14 §14.2). The audit entry is the **dispatch fact** (parent dispatched a sub-agent; the brief hash + descent + parent action identifies the dispatch), not the **result fact** (sub-agent completed / failed / cancelled). Result-fact observability flows via the span hierarchy + the child sub-workflow's own audit-ledger entries (which compose at the child's terminal `workflow.end` per C-RT-08), NOT via the parent's sub-agent-dispatch audit entry.
+
+### §14.7.7 Driver routing-layer refactor
+
+The v1.5 driver at `harness-cp/src/harness_cp/workflow_driver.py:240` takes a `step_dispatcher: StepDispatcher` parameter and calls `step_dispatcher.dispatch(binding, step)` at line 379. v1.6 amends this:
+
+- Parameter changes from `step_dispatcher: StepDispatcher` to `step_dispatchers: StepKindDispatcherRegistry`.
+- Call site at line 379 changes from `step_dispatcher.dispatch(binding, step)` to `step_dispatchers.lookup(step.kind).dispatch(binding, step)`.
+- Bootstrap stage 5 constructs the registry: `step_dispatchers = StepKindDispatcherRegistry(dispatchers={StepKind.INFERENCE_STEP: ctx.llm_dispatcher, StepKind.SUB_AGENT_DISPATCH: ctx.sub_agent_dispatcher})` and assigns to `ctx.step_dispatchers`. The driver is invoked with `ctx.step_dispatchers` instead of `ctx.llm_dispatcher`.
+- The `ctx.llm_dispatcher` binding is preserved (the C-RT-16 wrapper is still bound; it just becomes a value in the registry rather than the only dispatcher). Backwards-compat: any test or composition that invokes `ctx.llm_dispatcher` directly continues to work.
+- The driver is **still step-kind-agnostic in the C-CP-25 §25.3.3.4 sense** — it does not introspect `step.step_payload`; it only routes on `step.kind` (which is the documented enum field, not opaque body content). This is consistent with the "step body opaque to driver" invariant.
+
+**Integration with C-RT-04 (HarnessContext).** Two new fields at v1.6: `step_dispatchers: StepKindDispatcherRegistry` + `sub_agent_dispatcher: StepDispatcher`. Both bound at bootstrap stage 5. `ctx.llm_dispatcher` retained (no break). Per C-RT-04 frozen-post-bootstrap discipline.
+
+**Integration with C-RT-15 + C-RT-16 (inner dispatchers).** No protocol change to either. The C-RT-16 wrapper is reused verbatim as the `INFERENCE_STEP` dispatcher binding in the registry.
+
+**Integration with C-RT-06 (TracerProvider).** Two nested spans per composer invocation: outer `subagent.span` (covers the full sub-workflow envelope) + the child workflow's own spans (`workflow.start`, per-step `step.boundary`, etc.) which nest inside `subagent.span` via OTel context propagation. The narrow-scope shape preserves the C-CP-14 §14.1 nesting invariant.
+
+**Integration with C-RT-08 (`run()` Python API).** The child workflow runner per §14.7.4 invokes the same `execute_workflow()` surface that C-RT-08's `run()` invokes for the top-level workflow. v1.6 MVP shares the parent's `HarnessContext`; v1.7+ may introduce child-context isolation per future C-RT-NN.
+
+**Invariants.**
+
+- `RuntimeSubAgentDispatcher` is async (matches C-RT-08 async-only `run()` posture).
+- `RuntimeSubAgentDispatcher` satisfies `isinstance(dispatcher, StepDispatcher)` via the same `@runtime_checkable` introspection (per `harness-cp/src/harness_cp/workflow_driver.py:151`).
+- `subagent.span` emitted exactly once per composer invocation.
+- `subagent.*` and `topology.*` attributes set from the canonical CP-side carrier (no hand-coded attribute strings).
+- The child sub-workflow's `RunResult` is returned to the composer without modification; the composer maps to step output without re-interpreting child failure semantics.
+- The composer does NOT swallow exceptions from the child runner: typed errors (payload shape, topology inadmissibility, child runtime failure) propagate to the driver's `try/except` per C-CP-25 §25.3.3.4.
+- `StepKindDispatcherRegistry` is frozen post-construction; runtime mutation is foreclosed by Pydantic v2 `frozen=True` on the dataclass.
+- `StepKindDispatcherRegistry.lookup(unbound_kind)` raises `StepKindDispatcherNotBoundError` (no silent fallback to a default dispatcher).
+- v1.6 MVP fan-out emission is foreclosed: composer MUST NOT emit `topology.fanout.opened` / `topology.fanout.closed` events; MUST NOT set the 8 fan-out-specific `topology.*` attributes. Enforcement is by construction (composer body does not call the corresponding emission paths).
+
+**Failure-mode taxonomy.** Per C-RT-14, with one new fail class added at v1.6:
+
+| Fail class | Trigger | Behavior |
+|---|---|---|
+| `RT-FAIL-SUB-AGENT-CHILD-FAILED` (permanent, new at v1.6) | Child sub-workflow's terminal `RunResult.status == FAILED` after composer's child-runner invocation per §14.7.2 step 6 | Composer sets `subagent.result_status = "failed"` on the `subagent.span`; composes + emits audit entry with `child_result_status="failed"`; raises typed `RetryBreakerFallbackExhaustedError`-shape `SubAgentChildFailedError`; driver `try/except` maps to `step-failure: RT-FAIL-SUB-AGENT-CHILD-FAILED: ...` per C-CP-25 §25.3.3.4 |
+| `RT-FAIL-SUB-AGENT-TOPOLOGY-INADMISSIBLE` (permanent, new at v1.6) | `is_admissible(topology, workload_class)` returns False at §14.7.2 step 4 | Composer raises typed `SubAgentDispatchTopologyInadmissibleError`; driver `try/except` maps to `step-failure: RT-FAIL-SUB-AGENT-TOPOLOGY-INADMISSIBLE: ...` per C-CP-25 §25.3.3.4. No partial spans; the failure surfaces before `subagent.span` open. |
+| `RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND` (permanent, new at v1.6) | Driver invokes `ctx.step_dispatchers.lookup(step.kind)` with a `step.kind` not bound in the registry (3 of 5 step_kinds are unbound at v1.6: `DECLARATIVE_STEP`, `TOOL_STEP`, `HITL_STEP`) | Registry raises `StepKindDispatcherNotBoundError`; driver `try/except` maps to `step-failure: RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND: ...` per C-CP-25 §25.3.3.4. Documented expected behavior at v1.6; resolved as follow-on composer arcs land. |
+
+The existing `RT-FAIL-PAYLOAD-SHAPE` (from §14.5) is reused for `SubAgentDispatchPayloadShapeError` (the new typed error subclasses the existing payload-shape fail class semantics).
+
+**X-AL-2 retirement implications (v1.6 → retirement event prerequisites).**
+
+The C-RT-17 contract specifies the composition seam whose absence was the substitution-site B-condition blocker for H_T-CP-10 + H_T-CP-13 + H_T-CP-14 per `Phase_7_Meta_Architecture_v1.md` §5.4. At U-RT-59 landing event:
+
+- **H_T-CP-10 RETIRE-READY.** `TopologyPattern` dispatcher operational + `is_admissible` predicate callable at production execution path per §14.7.2 step 4. Condition A: U-CP-22 + U-RT-40 + U-RT-59 landed. Condition B: topology dispatcher no longer requires `CLAUDE.md`-prose substitution; runtime invokes at production execution path. Verified at retirement audit.
+- **H_T-CP-13 RETIRE-READY.** `RuntimeHandoffRegistry.dispatch(...)` operational + `HandoffContext` schema composed at production execution path per §14.7.2 step 2 + step 3. Condition A: U-CP-28 + U-CP-29 + U-CP-30 + U-RT-26 + U-RT-59 landed. Condition B: typed sub-agent dispatch schemas enforced at production callsite (Pydantic v2 validation at `SubAgentDispatchPayload` + at `HandoffContext` construction); no longer substituted by `Agent` free-text prompt + tool list.
+- **H_T-CP-14 PARTIAL → RETIRE-READY (single-sub-agent slice).** `subagent.*` 7-attribute namespace + narrow-subset `topology.*` (2 attributes: `pattern`, `workload_class`) emitted at production span hierarchy per §14.7.2 step 5. Condition A: U-CP-31 + U-CP-32 + U-RT-59 landed. Condition B: namespace emission at production execution path (vs `CLAUDE.md`-substituted). The fan-out-specific `topology.*` attributes (8 of 10 per §14.2) are NOT emitted at v1.6 (out of scope). Strict X-AL-2 reading: PARTIAL retirement is non-retirement. Operator may ratify the single-sub-agent slice as PARTIAL → RETIRED at retirement audit IF the bounded scope is documented as a follow-on parent-topology-expansion arc; otherwise PARTIAL stands until fan-out arc lands.
+
+**Cross-axis cascade considerations.** None directly enabled by this contract; the §6.3.2 F-CP-01 Stage 3b inversion cascade was FULLY DISCHARGED at U-RT-58 landing. C-RT-17 lands inside an already-discharged inversion-seam region.
+
+**Deferred to implementation discretion.**
+
+- Exact dispatcher class names (suggest `RuntimeSubAgentDispatcher`; `StepKindDispatcherRegistry` per the §14.7 narrative recommendation).
+- `SubAgentDispatchPayload` Pydantic model field overrides for the bounded-reduction HandoffContext fields per §14.7.3 (whether operator workflows author overrides for `agent_confidence`, `state_summary.summary_text`, etc. — MVP defers; v1.7+ extension surface).
+- `compose_child_action_id(parent_action_id, child_workflow_id)` construction shape (suggest `f"{parent_action_id}::child::{child_workflow_id}"` for traceability; alternatively a SHA-256 hash for stable length).
+- Whether child runner shares parent `HarnessContext` (v1.6 MVP) or composes a child context (v1.7+ scope question; relates to sandbox-tier child-descent isolation; CP-AL-1-adjacent boundary — child sub-agent reading from parent's ledger writer at sandbox-tier-descent is a cross-axis question owed to future arc review).
+- Test mock strategy: suggest a `MockChildWorkflowRunner` fixture that records the sequence of `(workflow_id, manifest_entry, steps, handoff_context, descent)` calls + returns canned `RunResult` per call; verify composer's HandoffContext composition + descent computation + span emission + audit composition against the recorded sequence. Pytest-asyncio for async surface.
+- Span name conventions: suggest `subagent.span` for the dispatch envelope (matches C-CP-14 §14.1 hierarchy element name); the C-RT-08 `workflow.start` is the child's own root span (nested inside).
+- Whether the composer emits a `subagent.span.closed` event distinct from `subagent.span` close (per C-CP-14 §14.1 — separately attributed) — v1.6 MVP folds both into the single `subagent.span` close event; if OTel telemetry-volume discretion at deployment surfaces a need, separate event emission is a v1.7+ extension.
+
+---
+
 ## §15 Spec-to-plan traceability
 
 Each Track A plan v2 unit cites at least one contract in this spec. Coverage matrix:
@@ -1148,6 +1360,7 @@ Each Track A plan v2 unit cites at least one contract in this spec. Coverage mat
 | U-RT-49..U-RT-51 | C-RT-02 + C-RT-12 verification | E2E + Pattern P1 verification |
 | U-RT-52 (new at v1.2) | C-RT-15, C-RT-05, C-RT-06 | LLM-dispatch composer; satisfies `harness_cp.workflow_driver.StepDispatcher` Protocol; emits GenAI semconv 1.41.0 spans |
 | U-RT-58 (new at v1.4) | C-RT-16, C-RT-15, C-RT-06 + C-CP-03 §3.5, C-CP-04 §4.2, C-CP-21 §21.2 | Retry/breaker/fallback composer wrapping C-RT-15; owns per-step candidate-iteration loop + per-candidate retry loop; emits `retry.*` 6-attribute namespace on inner per-attempt span + `fallback.exhausted` on outer span on chain exhaustion; reserved registry key `"llm_dispatch"`; replaces bare C-RT-15 dispatcher at `ctx.llm_dispatcher` (preserving the `StepDispatcher` Protocol seam) |
+| U-RT-59 (new at v1.6) | C-RT-17, C-RT-04, C-RT-06, C-RT-08 + C-CP-10, C-CP-12, C-CP-13, C-CP-14 §14.1/§14.2 (narrow-scope), C-CP-25 §25.2/§25.3.3.4 | Sub-agent dispatch composer + `StepKindDispatcherRegistry` driver routing layer + `ChildWorkflowRunner` in-process recursive invocation primitive; emits `subagent.*` 7-attribute namespace (full) + `topology.*` 2-attribute subset (`pattern` + `workload_class`); composes `HandoffContext` per C-CP-13 §13.1; invokes `ctx.handoff_registry.dispatch` for gate descent per C-CP-12 + `ctx.topology_dispatcher.dispatch` + `is_admissible` per C-CP-10 §10.3; composes audit entry via existing `compose_dispatch_audit`; refactors driver to dispatch via `ctx.step_dispatchers.lookup(step.kind)` (preserves `StepDispatcher` Protocol + C-CP-25 §25.3.3.4 "step body opaque to driver" invariant); fan-out + cache warm-up + cross-family-fallback-at-fan-out out of scope at v1.6 (parent-topology-expansion arc) |
 | (cross-cutting) | C-RT-14 | Every U-RT-NN that surfaces a failure emits via the runtime-local fail-class taxonomy |
 
 Every U-RT-NN unit traces to ≥1 spec contract. ✓
