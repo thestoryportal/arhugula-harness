@@ -147,6 +147,38 @@ class RoutingManifestValidationError(BaseModel):
     reason: str
 
 
+class ReservedToolNameError(Exception):
+    """Raised when the routing manifest declares a tool retry policy under a
+    name reserved by the runtime (U-RT-58, C-RT-16 §"Registry key extension").
+
+    Currently reserves ``"llm_dispatch"`` — the runtime's LLM-dispatch retry
+    policy key, injected by ``materialize_retry_breaker_stage`` post-
+    validation. Operator-supplied entries collide with the reservation and
+    raise this typed error at manifest validation time.
+
+    The reservation is owned by the runtime axis (per `Spec_Harness_Runtime_v1.md`
+    v1.4 §14.6); the error is homed at the CP-side validator because that is
+    where ``RoutingManifest`` validation lives. The CP-side definition is
+    operationally an inversion-of-control surface — the runtime extension is
+    referenced here by name only."""
+
+    def __init__(self, reserved_name: str) -> None:
+        self.reserved_name = reserved_name
+        super().__init__(
+            f"tool name {reserved_name!r} is reserved by the runtime "
+            f"(C-RT-16 §'Registry key extension'); operator manifests may "
+            f"not declare a retry policy under this key"
+        )
+
+
+_RESERVED_TOOL_NAMES: frozenset[str] = frozenset({"llm_dispatch"})
+"""Tool names reserved by runtime composers. Currently:
+
+- ``"llm_dispatch"`` — reserved by U-RT-58 ``RetryBreakerFallbackDispatcher``
+  for LLM-dispatch retry policy lookup (`Spec_Harness_Runtime_v1.md` v1.4
+  §14.6)."""
+
+
 def validate_routing_manifest(
     manifest: RoutingManifest,
 ) -> RoutingManifestValidationError | None:
@@ -154,9 +186,20 @@ def validate_routing_manifest(
 
     Structural validation: `manifest_version` must be positive. Per-role
     model-presence checks against the U-AS-29 model-binding catalog are a
-    cross-axis runtime check (acceptance #3, runtime-deferred). Deterministic."""
+    cross-axis runtime check (acceptance #3, runtime-deferred). Deterministic.
+
+    Raises
+    ------
+    ReservedToolNameError
+        If ``retry_policies`` declares a policy under a runtime-reserved
+        name (e.g., ``"llm_dispatch"``). Raised rather than returned because
+        reserved-name collisions indicate a manifest authoring error that
+        the operator must correct, not a recoverable validation failure."""
     if manifest.manifest_version < 1:
         return RoutingManifestValidationError(reason="manifest_version must be a positive integer")
+    for tool_name in manifest.retry_policies:
+        if tool_name in _RESERVED_TOOL_NAMES:
+            raise ReservedToolNameError(tool_name)
     return None
 
 

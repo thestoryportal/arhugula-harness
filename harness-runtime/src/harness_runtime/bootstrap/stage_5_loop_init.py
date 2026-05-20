@@ -29,6 +29,9 @@ from harness_runtime.lifecycle.llm_dispatch import (
     materialize_llm_dispatcher_stage,
 )
 from harness_runtime.lifecycle.override_evaluator import materialize_override_evaluator_stage
+from harness_runtime.lifecycle.retry_breaker_fallback import (
+    materialize_retry_breaker_fallback_dispatcher_stage,
+)
 from harness_runtime.lifecycle.topology_dispatcher import materialize_topology_dispatcher_stage
 from harness_runtime.types import RuntimeConfig
 
@@ -74,6 +77,32 @@ async def execute(
     # `ctx.tracer_provider` is typed ``object`` per C-RT-04 (the spec
     # defers OTel-SDK type adoption); cast at this site to the
     # composer's structural shape.
-    ctx.llm_dispatcher = materialize_llm_dispatcher_stage(
+    bare_dispatcher = materialize_llm_dispatcher_stage(
         providers, cast(Any, tracer_provider)
+    )
+
+    # U-RT-58 (C-RT-16 §14.6 D6): rebind ``ctx.llm_dispatcher`` from the
+    # bare ``RuntimeLLMDispatcher`` to the ``RetryBreakerFallbackDispatcher``
+    # wrapper. The driver call site at `workflow_driver.py:379` is unchanged
+    # — the wrapper satisfies the same ``StepDispatcher`` Protocol. The bare
+    # dispatcher becomes a private constructor arg of the wrapper.
+    retry_breaker = ctx.retry_breaker
+    if retry_breaker is None:
+        raise LLMDispatchBindError(
+            "ctx.retry_breaker is None at stage 5 — stage 3b CP_ROUTING "
+            "did not populate the retry/breaker registry (U-RT-58 wrapper "
+            "construction requires it per C-RT-16 §14.6 D6)"
+        )
+    fallback_chain = ctx.fallback_chain
+    if fallback_chain is None:
+        raise LLMDispatchBindError(
+            "ctx.fallback_chain is None at stage 5 — stage 3b CP_ROUTING "
+            "did not populate the fallback chain (U-RT-58 wrapper "
+            "construction requires it per C-RT-16 §14.6 D6)"
+        )
+    ctx.llm_dispatcher = materialize_retry_breaker_fallback_dispatcher_stage(
+        inner=bare_dispatcher,
+        retry_breaker=retry_breaker,
+        fallback_chain=fallback_chain,
+        tracer_provider=cast(Any, tracer_provider),
     )

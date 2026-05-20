@@ -501,6 +501,20 @@ def materialize_retry_breaker_stage(
                 f"{policy.max_attempts} (must be ≥ 1)"
             )
         retry_policies[tool_name] = policy
+    # Q2=c reserved registry key injection (U-RT-58, C-RT-16 §"Registry key
+    # extension"): the runtime's LLM-dispatch retry policy lives under the
+    # reserved ``"llm_dispatch"`` key. Operator manifests cannot supply this
+    # key — the validator at `harness_cp.routing_manifest_residence.
+    # validate_routing_manifest` raises ``ReservedToolNameError`` if they do.
+    # Imported lazily here to avoid a `harness-runtime/lifecycle/retry_breaker`
+    # → `harness-runtime/lifecycle/retry_breaker_fallback` → `harness-runtime/
+    # lifecycle/retry_breaker` import cycle at module load.
+    from harness_runtime.lifecycle.retry_breaker_fallback import (
+        DEFAULT_LLM_DISPATCH_RETRY_POLICY,
+        RESERVED_LLM_DISPATCH_KEY,
+    )
+
+    retry_policies[RESERVED_LLM_DISPATCH_KEY] = DEFAULT_LLM_DISPATCH_RETRY_POLICY
     registry = RuntimeRetryBreaker(
         retry_policies=retry_policies,
         default_policy=default_policy,

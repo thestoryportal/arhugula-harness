@@ -233,6 +233,18 @@ async def test_e2e_bootstrap_shutdown_round_trip(
     ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert isinstance(ctx, HarnessContext)
 
+    # U-RT-58 AC #9: stage 5 wraps the bare RuntimeLLMDispatcher with the
+    # RetryBreakerFallbackDispatcher (C-RT-16). Verify the post-condition
+    # at the full-bootstrap path — the wrapper is what `ctx.llm_dispatcher`
+    # exposes, and its `.inner` is the bare dispatcher.
+    from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
+    from harness_runtime.lifecycle.retry_breaker_fallback import (
+        RetryBreakerFallbackDispatcher,
+    )
+
+    assert isinstance(ctx.llm_dispatcher, RetryBreakerFallbackDispatcher)
+    assert isinstance(ctx.llm_dispatcher.inner, RuntimeLLMDispatcher)
+
     # AC #1: all 9 BootstrapStage enum members emitted via lifecycle events.
     # `lifecycle_emitter` is the LifecycleEventEmitter Protocol (no
     # `emitted_bootstrap_stages` attribute); concrete is

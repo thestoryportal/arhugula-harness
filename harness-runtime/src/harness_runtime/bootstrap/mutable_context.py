@@ -33,7 +33,9 @@ from harness_is.path_resolver import PathResolver
 from harness_is.worktree_isolation import WorktreeIsolationManager
 from pydantic import BaseModel, ConfigDict
 
-from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
+from harness_runtime.lifecycle.llm_dispatch import (
+    RuntimeLLMDispatcher,  # noqa: F401 — schema legacy carrier
+)
 from harness_runtime.types import (
     AuditLedgerWriter,
     BootstrapStage,
@@ -47,6 +49,7 @@ from harness_runtime.types import (
     LedgerReader,
     LedgerWriter,
     LifecycleEventEmitter,
+    LLMDispatcher,
     MCPClient,
     MCPHost,
     PerStepOverrideEvaluator,
@@ -183,7 +186,12 @@ class _MutableHarnessContext:
     override_evaluator: PerStepOverrideEvaluator | None = None
     topology_dispatcher: TopologyDispatcher | None = None
     lifecycle_emitter: LifecycleEventEmitter | None = None
-    llm_dispatcher: RuntimeLLMDispatcher | None = None
+    llm_dispatcher: LLMDispatcher | None = None
+    """Top-level dispatcher seam — bound at stage 5 to either the bare
+    ``RuntimeLLMDispatcher`` (U-RT-52, C-RT-15) or the
+    ``RetryBreakerFallbackDispatcher`` wrapper (U-RT-58, C-RT-16). Both
+    satisfy the ``LLMDispatcher`` Protocol; the field is typed against the
+    Protocol so the C-RT-16 wrap is type-transparent."""
 
     # Orchestrator bookkeeping — not part of HarnessContext.
     completed_stages: list[BootstrapStage] = field(default_factory=list)
