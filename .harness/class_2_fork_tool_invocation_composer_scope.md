@@ -2,7 +2,7 @@
 
 **Filed:** 2026-05-20 (post-U-RT-58 + batch-3 retirements arc; preparing for next arc).
 **Class:** 2 (in-execution operator decision; no defect — the spec is silent on this surface by design, and the operator owns silence-vs-extension).
-**Status:** OPEN — awaiting operator ratification of one of three sub-paths.
+**Status:** DEFERRED 2026-05-20 — Path W ratified for this session (defer; carry as bounded-residual; open sub-agent dispatch composer arc instead). Path X/Y/Z decision for tool-invocation remains owed at a follow-on session at operator timing.
 **Surfaced by:** `phase-7-substitution-retirement` skill activation against AS/CXA STILL-BOUNDED retirements + advisor cross-check against v2 ledger §9.2.2.
 
 ---
