@@ -71,7 +71,11 @@ def test_load_via_u_is_02() -> None:
         WorkloadClass.SOFTWARE_ENGINEERING,
         DeploymentSurface.LOCAL_DEVELOPMENT,
     )
-    assert str(path) == "/canonical/routing-manifest/se/local"
+    # Per IS spec v1.3 §1 amendment (2026-05-20 [[fork-state-ledger-path-
+    # dir-vs-file]] resolution): PathClass.ROUTING_MANIFEST resolves to the
+    # containing directory; the manifest file is `routing.manifest.json`
+    # inside.
+    assert str(path) == "/canonical/routing-manifest/se/local/routing.manifest.json"
 
 
 def test_validate_rejects_unknown_model() -> None:

@@ -49,6 +49,11 @@ class JsonlLedgerHandle(BaseModel):
     entry_count: int
 
 
+STATE_LEDGER_JSONL_FILENAME = "state.jsonl"
+"""Canonical filename for the JSONL event ledger within the STATE_LEDGER
+directory (IS spec v1.3 §1 amendment, 2026-05-20)."""
+
+
 def initialize_jsonl_event_ledger(
     resolver: PathResolver,
     workflow_class: WorkloadClass,
@@ -56,14 +61,19 @@ def initialize_jsonl_event_ledger(
 ) -> JsonlLedgerHandle:
     """Resolve and open the JSONL event ledger for a workflow (U-IS-05).
 
-    Resolves the canonical path via `resolve_path(PathClass.STATE_LEDGER,
-    workflow_class, deployment_surface)` (acceptance #1). A file absent at that
-    path is created empty (`entry_count=0`); a file present is line-counted and
-    returned unmodified (acceptance #2/#3/#5).
+    Resolves the canonical directory via `resolve_path(PathClass.STATE_LEDGER,
+    workflow_class, deployment_surface)` per IS spec v1.3 §1 amendment
+    (resolves to a directory; JSONL file at `<dir>/state.jsonl`). Creates the
+    directory if absent, then the file. A file absent at that path is created
+    empty (`entry_count=0`); a file present is line-counted and returned
+    unmodified (acceptance #2/#3/#5).
     """
-    path = resolver.resolve_path(PathClass.STATE_LEDGER, workflow_class, deployment_surface)
+    directory = resolver.resolve_path(
+        PathClass.STATE_LEDGER, workflow_class, deployment_surface
+    )
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / STATE_LEDGER_JSONL_FILENAME
     if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
         return JsonlLedgerHandle(canonical_path=path, exists=True, entry_count=0)
     entry_count = sum(1 for line in path.read_text().splitlines() if line.strip())

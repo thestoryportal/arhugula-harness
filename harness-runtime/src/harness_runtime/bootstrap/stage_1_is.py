@@ -38,7 +38,6 @@ resolution candidates:
 from __future__ import annotations
 
 from harness_core.workload_class import WorkloadClass
-from harness_is.path_class_registry import PathClass
 
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.lifecycle.index_cache import materialize_index_cache
@@ -67,20 +66,13 @@ async def execute(
     )
     ctx.path_resolver = registry.resolver
 
-    # Class 1 workaround: undo path_registry's mkdir on FILE-typed path
-    # classes (STATE_LEDGER + ROUTING_MANIFEST) so the downstream composer
-    # can create the file. SKILLS + PROMPTS remain as directories.
-    for fc in (PathClass.STATE_LEDGER, PathClass.ROUTING_MANIFEST):
-        p = registry.resolved_paths.get(fc)
-        if p is not None and p.is_dir():
-            try:
-                p.rmdir()  # only succeeds when empty (just-created)
-            except OSError:
-                # Non-empty directory — leave as-is; downstream composer
-                # will raise its own error and bootstrap surfaces it cleanly.
-                pass
-
     # 2. State ledger writer (depends on path resolver).
+    # Per IS spec v1.3 §1 amendment (2026-05-20): STATE_LEDGER + ROUTING_MANIFEST
+    # PathClass members resolve to DIRECTORIES; the JSONL ledger lives at
+    # `<dir>/state.jsonl`, manifest at `<dir>/routing.manifest.json`. The
+    # earlier rmdir workaround (resolving fork-state-ledger-path-dir-vs-file
+    # OPEN) is removed. path_registry's mkdir is now consistent with the
+    # composer expectations.
     ctx.ledger_writer = materialize_state_ledger(
         registry.resolver,
         workflow_class=workload_class,

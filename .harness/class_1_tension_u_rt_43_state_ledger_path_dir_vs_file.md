@@ -1,7 +1,7 @@
 # Class 1 Tension — U-RT-43 STATE_LEDGER path: directory vs file conflict
 
 **Filed:** 2026-05-20 at U-RT-43 (bootstrap orchestrator) landing.
-**Status:** OPEN; workaround in place; resolution pending operator decision.
+**Status:** RESOLVED 2026-05-20 — Path A applied. IS spec v1.3 §1 amended: `PathClass.STATE_LEDGER` + `PathClass.ROUTING_MANIFEST` resolve to DIRECTORIES; canonical filenames `state.jsonl` + `routing.manifest.json` appended at the consumer composer (`initialize_jsonl_event_ledger` in harness-is, `resolve_manifest_residence_path` in harness-cp). rmdir() workaround in `stage_1_is.py` removed. IS 125 / CP 465 / runtime 651 tests green.
 **Memory key:** `[[fork-state-ledger-path-dir-vs-file]]` (to author).
 
 ---

@@ -208,7 +208,12 @@ def test_persist_writes_at_routing_manifest_pathclass(tmp_path: Path) -> None:
     cfg = _config(tmp_path, manifest=_populated_manifest())
     manifest = build_routing_manifest(cfg)
     resolver = _resolver(tmp_path)
-    expected_path = tmp_path / "routing-manifest" / "se" / "local" / "manifest.json"
+    # Per IS spec v1.3 §1 amendment (2026-05-20 [[fork-state-ledger-path-
+    # dir-vs-file]] resolution): PathClass.ROUTING_MANIFEST resolves to the
+    # containing directory; the manifest file is `routing.manifest.json`
+    # inside.
+    expected_directory = tmp_path / "routing-manifest" / "se" / "local" / "manifest.json"
+    expected_path = expected_directory / "routing.manifest.json"
     residence = persist_routing_manifest(
         manifest,
         resolver,

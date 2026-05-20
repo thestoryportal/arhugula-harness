@@ -160,6 +160,12 @@ def validate_routing_manifest(
     return None
 
 
+ROUTING_MANIFEST_FILENAME = "routing.manifest.json"
+"""Canonical filename for the routing manifest within the
+`PathClass.ROUTING_MANIFEST` directory (IS spec v1.3 §1 amendment,
+2026-05-20 per `[[fork-state-ledger-path-dir-vs-file]]` Path A)."""
+
+
 def resolve_manifest_residence_path(
     resolver: PathResolver,
     workload_class: WorkloadClass,
@@ -169,15 +175,22 @@ def resolve_manifest_residence_path(
 
     Delegates to the U-IS-02 `PathResolver` against the U-IS-01 `PathClass`;
     per-deployment-surface residence is the resolver's `deployment_surface`
-    dimension (acceptance #2). The manifest resides under the
-    `ROUTING_MANIFEST` path-class — the dedicated typed class per C-IS-01 §1
-    citing `ADR-F1 v1.2 Consequences §(a)` ("manifest-layer model assignment
-    as auditable default at every call site"). C-CP-01 §1.3 routes residence
-    through `C-IS-10 §10.4` filesystem-path-contract export, which the IS
-    registry materializes at `PathClass.ROUTING_MANIFEST` (distinct from
-    `PathClass.PROMPTS`; IS-AL-1 names the four typed classes — SKILLS,
-    PROMPTS, ROUTING_MANIFEST, STATE_LEDGER — as distinct, not aliases)."""
-    return resolver.resolve_path(PathClass.ROUTING_MANIFEST, workload_class, deployment_surface)
+    dimension (acceptance #2). Per IS spec v1.3 §1 amendment,
+    `PathClass.ROUTING_MANIFEST` resolves to a *directory*; the manifest
+    file lives inside as `routing.manifest.json`.
+
+    The manifest resides under the `ROUTING_MANIFEST` path-class — the
+    dedicated typed class per C-IS-01 §1 citing `ADR-F1 v1.2 Consequences
+    §(a)` ("manifest-layer model assignment as auditable default at every
+    call site"). C-CP-01 §1.3 routes residence through `C-IS-10 §10.4`
+    filesystem-path-contract export, which the IS registry materializes at
+    `PathClass.ROUTING_MANIFEST` (distinct from `PathClass.PROMPTS`;
+    IS-AL-1 names the four typed classes — SKILLS, PROMPTS,
+    ROUTING_MANIFEST, STATE_LEDGER — as distinct, not aliases)."""
+    directory = resolver.resolve_path(
+        PathClass.ROUTING_MANIFEST, workload_class, deployment_surface
+    )
+    return directory / ROUTING_MANIFEST_FILENAME
 
 
 def load_routing_manifest(raw: Mapping[str, Any]) -> RoutingManifest:
