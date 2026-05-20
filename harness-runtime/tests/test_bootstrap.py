@@ -10,7 +10,7 @@ Additional coverage:
 - `_MutableHarnessContext.freeze()` raises `IncompleteBootstrapError` on missing field.
 - `WorkflowObject` Protocol structural check passes with `workflow_id` + `workload_class`.
 - `api.run` calls `run_bootstrap` with `workflow.workload_class`.
-- `WorkflowExecutionNotYetLandedError` replaces `BootstrapNotYetLandedError` post-bootstrap.
+- Post-Lane-6: `api.run()` delegates to the CP workflow driver and returns a `RunResult`.
 - Lifecycle event buffer drains in arrival order at stage 5.
 - Rollback handlers are best-effort (one handler's exception doesn't halt others).
 """
@@ -537,15 +537,48 @@ async def test_buffered_events_flush_in_arrival_order_at_stage_5(
 
 
 class _Workflow:
-    """Structural `WorkflowObject` carrying both required properties."""
+    """Structural `WorkflowObject` carrying the full Lane 6 property set."""
 
     def __init__(
         self,
         workflow_id: str = "wf-bootstrap-test",
         workload_class: WorkloadClass = _WORKLOAD,
     ) -> None:
+        from harness_core.identity import StepID
+        from harness_core.persona_tier import PersonaTier
+        from harness_cp.cp_shared_types import ModelBinding
+        from harness_cp.engine_class import EngineClass
+        from harness_cp.workflow_driver_types import StepKind, WorkflowStep
+        from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+
         self._wid = workflow_id
         self._wc = workload_class
+        self._manifest = WorkflowManifestEntry(
+            workflow_id=workflow_id,
+            workload_class=workload_class,
+            persona_tier=PersonaTier.TEAM_BINDING,
+            engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+            topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+            layer_budgets=(),
+            fallback_chain=_CHAIN,
+            hitl_placements=(),
+            per_step_overrides={},
+        )
+        self._steps = (
+            WorkflowStep(
+                step_id=StepID("step-0"),
+                step_kind=StepKind.INFERENCE_STEP,
+                step_payload={},
+            ),
+        )
+        self._binding = ModelBinding(provider="anthropic", model="claude-haiku-4-5")
+
+        class _Noop:
+            def dispatch(self, binding: object, step: object) -> dict[str, object]:
+                _ = binding, step
+                return {}
+
+        self._dispatcher = _Noop()
 
     @property
     def workflow_id(self) -> str:
@@ -554,6 +587,22 @@ class _Workflow:
     @property
     def workload_class(self) -> WorkloadClass:
         return self._wc
+
+    @property
+    def manifest_entry(self) -> Any:
+        return self._manifest
+
+    @property
+    def steps(self) -> Any:
+        return self._steps
+
+    @property
+    def step_dispatcher(self) -> Any:
+        return self._dispatcher
+
+    @property
+    def default_model_binding(self) -> Any:
+        return self._binding
 
 
 @pytest.mark.asyncio
@@ -573,10 +622,50 @@ async def test_api_run_passes_workload_class_into_bootstrap(
         "harness_runtime.api._default_config",
         lambda: _config(tmp_path),
     )
-    from harness_runtime.api import WorkflowExecutionNotYetLandedError, run
+    # Short-circuit the driver + shutdown — this test only verifies that
+    # `run()` threads `workflow.workload_class` into bootstrap. Real
+    # bootstrap-to-shutdown end-to-end is exercised in test_run_smoke.py.
+    import sys
+    _shutdown_mod = sys.modules["harness_runtime.shutdown"]
+    from harness_runtime.api import run
 
-    with pytest.raises(WorkflowExecutionNotYetLandedError):
-        await run(_Workflow(workload_class=WorkloadClass.RESEARCH))
+    async def _fake_to_thread(fn: Any, /, *args: Any, **kwargs: Any) -> Any:
+        _ = fn, args, kwargs
+        from harness_cp.workflow_driver_types import (
+            RunResult as _CpRR,
+        )
+        from harness_cp.workflow_driver_types import (
+            RunStatus as _CpRS,
+        )
+
+        return _CpRR(
+            workflow_id="wf-bootstrap-test",
+            run_id="run-fake",
+            status=_CpRS.SUCCESS,
+            final_state={},
+        )
+
+    async def _fake_shutdown(ctx: Any, *, timeout: float = 5.0) -> Any:  # noqa: ASYNC109 — mirrors real signature
+        _ = ctx, timeout
+        return _shutdown_mod.ShutdownReport(
+            already_shutdown=False,
+            timed_out=False,
+            flush=_shutdown_mod.FlushReport(
+                tracer_flushed=True,
+                ledger_fsynced=True,
+                cost_chain_noop=True,
+                timed_out=False,
+                failures=(),
+            ),
+            failures=(),
+            audit_ledger_head_hash=None,
+        )
+
+    monkeypatch.setattr("asyncio.to_thread", _fake_to_thread)
+    monkeypatch.setattr(_shutdown_mod, "shutdown", _fake_shutdown)
+
+    result = await run(_Workflow(workload_class=WorkloadClass.RESEARCH))
+    assert result.status == "completed"
     assert captured["workload_class"] is WorkloadClass.RESEARCH
 
 

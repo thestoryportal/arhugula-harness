@@ -1,6 +1,7 @@
-"""U-RT-42 — `harness_runtime.run` + `RunResult` shape tests (closes L8).
+"""`harness_runtime.run` + `RunResult` shape tests.
 
-ACs per Phase 2 Session 7 L8 stage 5 LOOP_INIT (U-RT-42 closes L8):
+ACs (U-RT-42 + Lane 6 2026-05-20 un-strike of U-RT-44 AC #2 + U-RT-49
+workflow-execution ACs):
 
 1. Signature pinned: `async def run(workflow, *, config=None) -> RunResult`.
 2. `RunResult` is frozen Pydantic v2 with C-RT-09 field set.
@@ -8,26 +9,40 @@ ACs per Phase 2 Session 7 L8 stage 5 LOOP_INIT (U-RT-42 closes L8):
    (pre-bootstrap rejection).
 4. Concurrency guard: second concurrent `run()` → `ConcurrentRunNotSupported`
    (C-RT-08 v1.1 idempotency-and-concurrency).
-5. U-RT-43 wired: valid-shape `run()` runs bootstrap → workflow-execution
-   stub → `WorkflowExecutionNotYetLandedError` (U-RT-44+ lands execution).
-   `BootstrapNotYetLandedError` is removed.
+5. Bootstrap-then-execute wiring: valid-shape `run()` runs bootstrap and
+   delegates to `harness_cp.workflow_driver.execute_workflow()`; the
+   former `WorkflowExecutionNotYetLandedError` stub is removed at Lane 6.
 6. Module-level lock is `asyncio.Lock`; re-export wiring at package root.
+7. Pre-bootstrap drain rejection (C-RT-11 surface (3)).
 
-Bootstrap body itself is U-RT-43 scope — tests here verify ingress paths
-without exercising bootstrap.
+End-to-end execution behavior is exercised at
+`tests/integration/test_run_smoke.py`; these tests focus on ingress paths.
 """
 
 from __future__ import annotations
 
 import asyncio
 import inspect
+from collections.abc import Sequence
 from typing import Literal
 
 import harness_runtime
 import harness_runtime.api as _api
 import pytest
-from harness_core.identity import WorkflowID
+from harness_core.identity import StepID, WorkflowID
+from harness_core.persona_tier import PersonaTier
 from harness_core.workload_class import WorkloadClass
+from harness_cp.cp_shared_types import ModelBinding
+from harness_cp.cross_family_fallback_chain import (
+    FallbackChain,
+    ProviderCandidate,
+    ProviderFamily,
+)
+from harness_cp.engine_class import EngineClass
+from harness_cp.topology_pattern import TopologyPattern
+from harness_cp.workflow_driver import StepDispatcher
+from harness_cp.workflow_driver_types import StepKind, WorkflowStep
+from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_od.cross_family_rollup import CrossFamilyCostRollup, RollupAxis
 from harness_runtime.api import (
     ConcurrentRunNotSupported,
@@ -35,7 +50,6 @@ from harness_runtime.api import (
     HarnessDraining,
     InvalidWorkflowError,
     RunResult,
-    WorkflowExecutionNotYetLandedError,
     WorkflowObject,
     run,
 )
@@ -46,8 +60,41 @@ from harness_runtime.types import RuntimeConfig
 # ---------------------------------------------------------------------------
 
 
+_TEST_BINDING = ModelBinding(provider="anthropic", model="claude-haiku-4-5")
+_TEST_CHAIN = FallbackChain(
+    primary=ProviderCandidate(
+        provider="anthropic",
+        model="claude-haiku-4-5",
+        family=ProviderFamily.ANTHROPIC,
+    ),
+    same_family=(),
+    cross_family=(),
+    terminal=None,
+)
+
+
+def _test_manifest_entry(workflow_id: str = "wf-test-1") -> WorkflowManifestEntry:
+    return WorkflowManifestEntry(
+        workflow_id=workflow_id,
+        workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+        layer_budgets=(),
+        fallback_chain=_TEST_CHAIN,
+        hitl_placements=(),
+        per_step_overrides={},
+    )
+
+
+class _NoopDispatcher:
+    def dispatch(self, binding: object, step: WorkflowStep) -> dict[str, object]:
+        _ = binding
+        return {"step_id": str(step.step_id)}
+
+
 class _Workflow:
-    """Structural `WorkflowObject` for tests."""
+    """Structural `WorkflowObject` for tests — full Lane 6 surface."""
 
     def __init__(
         self,
@@ -56,6 +103,15 @@ class _Workflow:
     ) -> None:
         self._wid = workflow_id
         self._wc = workload_class
+        self._manifest = _test_manifest_entry(workflow_id)
+        self._steps: tuple[WorkflowStep, ...] = (
+            WorkflowStep(
+                step_id=StepID("step-0"),
+                step_kind=StepKind.INFERENCE_STEP,
+                step_payload={"index": 0},
+            ),
+        )
+        self._dispatcher = _NoopDispatcher()
 
     @property
     def workflow_id(self) -> str:
@@ -64,6 +120,23 @@ class _Workflow:
     @property
     def workload_class(self) -> WorkloadClass:
         return self._wc
+
+    @property
+    def manifest_entry(self) -> WorkflowManifestEntry:
+        return self._manifest
+
+    @property
+    def steps(self) -> Sequence[WorkflowStep]:
+        return self._steps
+
+    @property
+    def step_dispatcher(self) -> StepDispatcher:
+        # Cast at the call site — _NoopDispatcher structurally satisfies StepDispatcher.
+        return self._dispatcher  # type: ignore[return-value]
+
+    @property
+    def default_model_binding(self) -> ModelBinding:
+        return _TEST_BINDING
 
 
 def _rollup() -> CrossFamilyCostRollup:
@@ -219,51 +292,144 @@ async def test_run_raises_on_concurrent_invocation() -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC #5 — Bootstrap deferral.
+# AC #5 — Bootstrap → execute → shutdown wiring (Lane 6).
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_valid_run_reaches_execution_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    """U-RT-43 wires bootstrap; execution stub at U-RT-44+."""
-
-    async def _fake_bootstrap(config, *, workload_class):  # type: ignore[no-untyped-def]
-        return None
-
-    monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _fake_bootstrap)
-    monkeypatch.setattr(_api, "_default_config", lambda: None)
-    with pytest.raises(WorkflowExecutionNotYetLandedError):
-        await run(_Workflow())
-
-
-@pytest.mark.asyncio
-async def test_execution_stub_releases_lock_after_raise(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The execution stub doesn't poison the lock — subsequent calls reach the stub."""
-
-    async def _fake_bootstrap(config, *, workload_class):  # type: ignore[no-untyped-def]
-        return None
-
-    monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _fake_bootstrap)
-    monkeypatch.setattr(_api, "_default_config", lambda: None)
-    with pytest.raises(WorkflowExecutionNotYetLandedError):
-        await run(_Workflow())
-    with pytest.raises(WorkflowExecutionNotYetLandedError):
-        await run(_Workflow())
+def _fake_run_result(workflow_id: str = "wf-test-1") -> RunResult:
+    """A pre-baked runtime RunResult used by the bootstrap-monkeypatch tests
+    below; the bootstrap-and-shutdown machinery is mocked at the run-body
+    boundary so this file stays an ingress-path test surface."""
+    return RunResult(
+        status="completed",
+        workflow_id=WorkflowID(workflow_id),
+        terminal_state={},
+        audit_ledger_head_hash="",
+        trace_ids=(),
+        cost_attribution=(),
+        failure_cause=None,
+    )
 
 
 @pytest.mark.asyncio
-async def test_execution_stub_is_not_implemented_subclass(
+async def test_valid_run_executes_via_driver_and_returns_run_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Generic NotImplementedError handlers still catch the execution stub."""
+    """Valid-shape `run()` reaches the driver delegation site.
+
+    The bootstrap path is faked via monkeypatch; the driver itself is
+    short-circuited at `asyncio.to_thread` via a stub that returns a
+    runtime RunResult directly. Real driver behavior is exercised at
+    `tests/integration/test_run_smoke.py`.
+    """
+    import sys
+    _shutdown_mod = sys.modules["harness_runtime.shutdown"]
 
     async def _fake_bootstrap(config, *, workload_class):  # type: ignore[no-untyped-def]
-        return None
+        _ = config
+        _ = workload_class
+        return object()  # opaque ctx — driver path is short-circuited below
+
+    async def _fake_to_thread(fn, /, *args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = fn, args, kwargs
+        from harness_cp.workflow_driver_types import (
+            RunResult as _CpRR,
+        )
+        from harness_cp.workflow_driver_types import (
+            RunStatus as _CpRS,
+        )
+
+        return _CpRR(
+            workflow_id="wf-test-1",
+            run_id="run-fake",
+            status=_CpRS.SUCCESS,
+            final_state={},
+        )
+
+    async def _fake_shutdown(ctx, *, timeout=5.0):  # type: ignore[no-untyped-def]  # noqa: ASYNC109 — mirrors real signature
+        _ = ctx, timeout
+        return _shutdown_mod.ShutdownReport(
+            already_shutdown=False,
+            timed_out=False,
+            flush=_shutdown_mod.FlushReport(
+                tracer_flushed=True,
+                ledger_fsynced=True,
+                cost_chain_noop=True,
+                timed_out=False,
+                failures=(),
+            ),
+            failures=(),
+            audit_ledger_head_hash=None,
+        )
 
     monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _fake_bootstrap)
-    monkeypatch.setattr(_api, "_default_config", lambda: None)
-    with pytest.raises(NotImplementedError):
-        await run(_Workflow())
+    from types import SimpleNamespace
+    monkeypatch.setattr(
+        _api, "_default_config", lambda: SimpleNamespace(drain_timeout_seconds=5.0)
+    )
+    monkeypatch.setattr("asyncio.to_thread", _fake_to_thread)
+    monkeypatch.setattr(_shutdown_mod, "shutdown", _fake_shutdown)
+
+    result = await run(_Workflow())
+    assert result.status == "completed"
+    assert result.workflow_id == "wf-test-1"
+
+
+@pytest.mark.asyncio
+async def test_run_releases_lock_after_completion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A successful `run()` releases the lock; subsequent calls work."""
+    import sys
+    _shutdown_mod = sys.modules["harness_runtime.shutdown"]
+
+    async def _fake_bootstrap(config, *, workload_class):  # type: ignore[no-untyped-def]
+        _ = config
+        _ = workload_class
+        return object()
+
+    async def _fake_to_thread(fn, /, *args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = fn, args, kwargs
+        from harness_cp.workflow_driver_types import (
+            RunResult as _CpRR,
+        )
+        from harness_cp.workflow_driver_types import (
+            RunStatus as _CpRS,
+        )
+
+        return _CpRR(
+            workflow_id="wf-test-1",
+            run_id="run-fake",
+            status=_CpRS.SUCCESS,
+            final_state={},
+        )
+
+    async def _fake_shutdown(ctx, *, timeout=5.0):  # type: ignore[no-untyped-def]  # noqa: ASYNC109 — mirrors real signature
+        _ = ctx, timeout
+        return _shutdown_mod.ShutdownReport(
+            already_shutdown=False,
+            timed_out=False,
+            flush=_shutdown_mod.FlushReport(
+                tracer_flushed=True,
+                ledger_fsynced=True,
+                cost_chain_noop=True,
+                timed_out=False,
+                failures=(),
+            ),
+            failures=(),
+            audit_ledger_head_hash=None,
+        )
+
+    monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _fake_bootstrap)
+    from types import SimpleNamespace
+    monkeypatch.setattr(
+        _api, "_default_config", lambda: SimpleNamespace(drain_timeout_seconds=5.0)
+    )
+    monkeypatch.setattr("asyncio.to_thread", _fake_to_thread)
+    monkeypatch.setattr(_shutdown_mod, "shutdown", _fake_shutdown)
+
+    _ = await run(_Workflow())
+    # Lock is released, so a second call also reaches the driver delegation.
+    _ = await run(_Workflow())
+    assert not _api._run_lock.locked()  # pyright: ignore[reportPrivateUsage]
 
 
 # ---------------------------------------------------------------------------
@@ -282,11 +448,18 @@ def test_package_root_re_exports_api() -> None:
     assert harness_runtime.WorkflowObject is WorkflowObject
     assert harness_runtime.InvalidWorkflowError is InvalidWorkflowError
     assert harness_runtime.ConcurrentRunNotSupported is ConcurrentRunNotSupported
-    assert (
-        harness_runtime.WorkflowExecutionNotYetLandedError
-        is WorkflowExecutionNotYetLandedError
-    )
     assert harness_runtime.FailureCause is FailureCause
+
+
+def test_workflow_execution_stub_error_removed_at_lane_6() -> None:
+    """`WorkflowExecutionNotYetLandedError` is removed at Lane 6 (2026-05-20).
+
+    The stub-call surface vanishes once `run()` delegates to the CP driver.
+    Anchor test: importing the removed symbol from `harness_runtime` raises
+    `AttributeError`.
+    """
+    with pytest.raises(AttributeError):
+        _ = harness_runtime.WorkflowExecutionNotYetLandedError  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------

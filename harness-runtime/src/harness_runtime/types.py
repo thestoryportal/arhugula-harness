@@ -904,6 +904,26 @@ class RuntimeConfig(BaseModel):
     tenant_id: str | None = None
     """Multi-tenant separation key per OD audit-ledger. `None` = single-tenant."""
 
+    drain_timeout_seconds: float = 60.0
+    """Bounded-wait timeout on workflow-execution drain (U-RT-44 AC #2 typed-
+    timeout branch; C-RT-11 + C-RT-14 RT-FAIL-DRAIN-TIMEOUT).
+
+    `harness_runtime.api.run()` wraps the CP workflow driver call in
+    `asyncio.wait_for(...)` with this bound. If the in-flight step does not
+    complete (and the driver does not reach a boundary) within this window,
+    `run()` surfaces `FailureCause(runtime_fail_class='RT-FAIL-DRAIN-TIMEOUT')`
+    on a DRAINED RunResult and proceeds to shutdown per `Spec_Harness_
+    Runtime_v1.md` §11 invariant ("exceeding the bound forces shutdown to
+    proceed regardless; in-flight step may be in inconsistent state"). The
+    spawned thread is not cancelled — Python threads cannot be cancelled
+    cooperatively without driver support; the inconsistent-state surface is
+    documented at C-RT-11.
+
+    Default 60.0 seconds is generous for the v1.4 PURE_PATTERN_NO_ENGINE
+    scope; production deployments override per workflow-class budget.
+    Lane 6 (2026-05-20) addition; spec §3 (C-RT-03) "Deferred to
+    implementation discretion" clause covers this configuration."""
+
     pidfile_path: Path | None = None
     """Override for the pidfile location (spec §13 deferred-to-discretion).
 
