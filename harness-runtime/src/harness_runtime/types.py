@@ -43,7 +43,7 @@ from typing import NewType, Protocol, runtime_checkable
 # ----------------------------------------------------------------------------
 # Concrete axis-type imports (the 6 names that resolve at HEAD).
 # ----------------------------------------------------------------------------
-from harness_as.tool_contract import ToolContract
+from harness_as.tool_contract import SecretAllowlistEntry, ToolContract
 from harness_core import ClientName, SkillID
 from harness_core.deployment_surface import DeploymentSurface
 from harness_cp.cross_family_fallback_chain import FallbackChain
@@ -202,9 +202,32 @@ class PathBindingConfig(BaseModel):
 
 
 class ProviderSecretsConfig(BaseModel):
-    """L0 placeholder — U-RT-06 enriches with keyring allowlist fields."""
+    """Provider-secret config — U-RT-06 (L1).
+
+    Holds the OS-keyring service identifier + the operator-policy allowlist
+    per C-AS-06 §6.2. Secret VALUES never live in this config; only ALLOWLIST
+    KEYS. Per ADR-F5 v1.1 + `Target_Stack_Commitment_v1.md` §5.1 the runtime
+    binds `python-keyring` as the keyring library (AS spec §5.4 defers this
+    binding to implementation discretion).
+
+    The driver is built at `config.provider_secrets.make_keyring_resolver`
+    and invoked at tool-fetch time (post-L3); audit-event composition
+    (SecretFetchEvent) is the CALLER's responsibility per U-AS-26 separation.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    keyring_service: str = "harness"
+    """OS-keyring service-name identifier (python-keyring `service` arg)."""
+
+    operator_allowlist: tuple[SecretAllowlistEntry, ...] = ()
+    """Operator-policy allowlist (C-AS-06 §6.2 override set).
+
+    `tuple[SecretAllowlistEntry, ...]` (Pydantic-friendly); converted to
+    `frozenset` at resolver-construction time for `check_secret_allowlist`.
+    Empty default means no operator-allowlisted secrets — every fetch is
+    DENIED_NOT_IN_OPERATOR_POLICY_OVERRIDE until populated.
+    """
 
 
 class OTelConfig(BaseModel):

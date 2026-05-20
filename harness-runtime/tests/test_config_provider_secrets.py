@@ -1,0 +1,241 @@
+"""U-RT-06 — `ProviderSecretsConfig` + `KeyringSecretResolver` tests.
+
+ACs per Phase 2 Session 3 plan v2.1 §2 L1:
+- Keyring miss raises typed `SecretFailClass`.
+- Allowlist enforced (operator + tool intersection).
+- Fetch audit event emitted via AS primitives — DEFERRED to L2+ (audit-writer
+  binding lands at U-RT-32); composition is the caller's responsibility per
+  U-AS-26 separation. At L1 we verify the resolver returns SecretRef in a
+  shape the caller can compose into a SecretFetchEvent.
+
+Class 1 risk-flag absorption: the plan flagged this unit as "Class 1 candidate
+if AS spec is silent on fetch *site*." Pre-flight reading of AS spec C-AS-05
+§5.4 confirmed the keyring-library binding is EXPLICITLY DEFERRED to
+implementation discretion. The runtime authored the binding under
+Target_Stack_Commitment_v1 §5.1 + ADR-F5 v1.1; not a silent extension; no
+back-flow required.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+
+import keyring
+import pytest
+from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
+from harness_as.secret_allowlist import AllowlistDecision
+from harness_as.secret_fail_class import SecretFailClass
+from harness_as.secret_fetch import SecretRef, SecretScope
+from harness_as.tool_contract import SecretAllowlistEntry, ToolContract
+from harness_runtime.config.provider_secrets import (
+    KeyringSecretResolver,
+    SecretAllowlistDeniedError,
+    SecretResolutionError,
+    make_keyring_resolver,
+)
+from harness_runtime.types import ProviderSecretsConfig
+from keyring.backend import KeyringBackend
+
+
+class _FakeKeyring(KeyringBackend):
+    """In-memory keyring backend for tests."""
+
+    priority = 1  # type: ignore[assignment]  # keyring API uses a property; classvar override is fine for tests
+
+    def __init__(self) -> None:
+        self.store: dict[tuple[str, str], str] = {}
+
+    def get_password(self, service: str, username: str) -> str | None:
+        return self.store.get((service, username))
+
+    def set_password(self, service: str, username: str, password: str) -> None:
+        self.store[(service, username)] = password
+
+    def delete_password(self, service: str, username: str) -> None:
+        self.store.pop((service, username), None)
+
+
+@pytest.fixture
+def fake_keyring() -> Iterator[_FakeKeyring]:
+    """Install an in-memory keyring for the duration of one test."""
+    backend = _FakeKeyring()
+    original = keyring.get_keyring()
+    keyring.set_keyring(backend)
+    try:
+        yield backend
+    finally:
+        keyring.set_keyring(original)
+
+
+def _scope(name: str = "default") -> SecretScope:
+    return SecretScope(name=name)
+
+
+def _tool_with_allowed_secrets(
+    *entries: SecretAllowlistEntry,
+) -> ToolContract:
+    """Minimal `ToolContract` for allowlist tests; only `required_secrets` matters here."""
+    return ToolContract(
+        name="test-tool",
+        description="test",
+        input_schema={},
+        output_schema={},
+        minimum_tier=SandboxTier.TIER_1_PROCESS,
+        blast_radius_tier=BlastRadiusTier.LOCAL_MUTATION,
+        required_secrets=entries,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Config invariants.
+# ---------------------------------------------------------------------------
+
+
+def test_provider_secrets_config_defaults() -> None:
+    """Empty config: default keyring_service='harness', empty operator allowlist."""
+    config = ProviderSecretsConfig()
+    assert config.keyring_service == "harness"
+    assert config.operator_allowlist == ()
+
+
+def test_provider_secrets_config_is_frozen() -> None:
+    """`ProviderSecretsConfig` is frozen per C-RT-03 invariant."""
+    assert ProviderSecretsConfig.model_config.get("frozen") is True
+
+
+def test_provider_secrets_config_no_secret_values() -> None:
+    """C-RT-03 invariant: no secret values in RuntimeConfig (allowlist keys only).
+
+    Pinned via field-name discipline: there is no `secret_values` /
+    `passwords` / `tokens` field. Any future addition is a back-flow event.
+    """
+    field_names = set(ProviderSecretsConfig.model_fields.keys())
+    forbidden = {"secret_values", "passwords", "tokens", "credentials"}
+    assert not (field_names & forbidden)
+
+
+# ---------------------------------------------------------------------------
+# Resolver construction.
+# ---------------------------------------------------------------------------
+
+
+def test_make_keyring_resolver_returns_resolver() -> None:
+    """`make_keyring_resolver` produces a `KeyringSecretResolver`."""
+    config = ProviderSecretsConfig(keyring_service="test-service")
+    resolver = make_keyring_resolver(config)
+    assert isinstance(resolver, KeyringSecretResolver)
+    assert resolver.keyring_service == "test-service"
+
+
+def test_keyring_resolver_is_frozen() -> None:
+    """Resolver is a frozen dataclass; mutation rejected."""
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    with pytest.raises((AttributeError, Exception)):
+        resolver.keyring_service = "mutated"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Keyring miss raises typed SecretResolutionError (plan AC).
+# ---------------------------------------------------------------------------
+
+
+def test_keyring_miss_raises_secret_resolution_error(fake_keyring: _FakeKeyring) -> None:
+    """Missing key → `SecretResolutionError` carrying `SECRET_UNKNOWN` (plan AC)."""
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    with pytest.raises(SecretResolutionError) as exc_info:
+        resolver.resolve("missing-key", _scope(), SandboxTier.TIER_1_PROCESS)
+    assert exc_info.value.fail_class is SecretFailClass.SECRET_UNKNOWN
+    assert exc_info.value.name == "missing-key"
+
+
+def test_keyring_hit_returns_secret_ref(fake_keyring: _FakeKeyring) -> None:
+    """Present key → `SecretRef` bound to `(name, scope, tier)`."""
+    keyring.set_password("harness", "anthropic-api-key", "sk-test-value")
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    ref = resolver.resolve("anthropic-api-key", _scope("prod"), SandboxTier.TIER_1_PROCESS)
+    assert isinstance(ref, SecretRef)
+    assert ref.name == "anthropic-api-key"
+    assert ref.scope.name == "prod"
+    assert ref.tier is SandboxTier.TIER_1_PROCESS
+
+
+def test_keyring_service_isolation(fake_keyring: _FakeKeyring) -> None:
+    """Resolver only sees keys under its configured `keyring_service`."""
+    keyring.set_password("other-service", "key", "value")
+    resolver = make_keyring_resolver(ProviderSecretsConfig(keyring_service="harness"))
+    with pytest.raises(SecretResolutionError):
+        resolver.resolve("key", _scope(), SandboxTier.TIER_1_PROCESS)
+
+
+# ---------------------------------------------------------------------------
+# Allowlist enforcement (plan AC).
+# ---------------------------------------------------------------------------
+
+
+def test_allowlist_intersection_permits_listed_entry(fake_keyring: _FakeKeyring) -> None:
+    """Tool ∩ operator allowlist both contain entry → resolution proceeds."""
+    keyring.set_password("harness", "shared-key", "value")
+    scope = _scope()
+    entry = SecretAllowlistEntry(name="shared-key", scope=scope)
+    config = ProviderSecretsConfig(operator_allowlist=(entry,))
+    resolver = make_keyring_resolver(config)
+    tool = _tool_with_allowed_secrets(entry)
+    ref = resolver.resolve("shared-key", scope, SandboxTier.TIER_1_PROCESS, tool=tool)
+    assert ref.name == "shared-key"
+
+
+def test_allowlist_denies_when_tool_disallows(fake_keyring: _FakeKeyring) -> None:
+    """Operator-allowed but tool-disallowed → `DENIED_NOT_IN_TOOL_ALLOWLIST`."""
+    keyring.set_password("harness", "k", "v")
+    scope = _scope()
+    entry = SecretAllowlistEntry(name="k", scope=scope)
+    config = ProviderSecretsConfig(operator_allowlist=(entry,))
+    resolver = make_keyring_resolver(config)
+    tool = _tool_with_allowed_secrets()  # empty required_secrets
+    with pytest.raises(SecretAllowlistDeniedError) as exc_info:
+        resolver.resolve("k", scope, SandboxTier.TIER_1_PROCESS, tool=tool)
+    assert exc_info.value.decision is AllowlistDecision.DENIED_NOT_IN_TOOL_ALLOWLIST
+
+
+def test_allowlist_denies_when_operator_policy_disallows(fake_keyring: _FakeKeyring) -> None:
+    """Tool-allowed but operator-disallowed → `DENIED_NOT_IN_OPERATOR_POLICY_OVERRIDE`."""
+    keyring.set_password("harness", "k", "v")
+    scope = _scope()
+    entry = SecretAllowlistEntry(name="k", scope=scope)
+    config = ProviderSecretsConfig(operator_allowlist=())  # empty operator allowlist
+    resolver = make_keyring_resolver(config)
+    tool = _tool_with_allowed_secrets(entry)
+    with pytest.raises(SecretAllowlistDeniedError) as exc_info:
+        resolver.resolve("k", scope, SandboxTier.TIER_1_PROCESS, tool=tool)
+    assert exc_info.value.decision is AllowlistDecision.DENIED_NOT_IN_OPERATOR_POLICY_OVERRIDE
+
+
+def test_no_tool_skips_allowlist_check(fake_keyring: _FakeKeyring) -> None:
+    """Without a tool reference, allowlist check is skipped (bootstrap-only fetch)."""
+    keyring.set_password("harness", "k", "v")
+    # No allowlist entries; tool=None.
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    ref = resolver.resolve("k", _scope(), SandboxTier.TIER_1_PROCESS, tool=None)
+    assert ref.name == "k"
+
+
+# ---------------------------------------------------------------------------
+# Audit-event composition surface (deferred, but shape verified).
+# ---------------------------------------------------------------------------
+
+
+def test_secret_ref_carries_audit_composition_fields(fake_keyring: _FakeKeyring) -> None:
+    """SecretRef carries the fields the caller needs to compose SecretFetchEvent.
+
+    Per U-AS-26: the caller composes `SecretFetchEvent(secret_name, secret_scope,
+    secret_last_rotated_at, actor, timestamp, thread_id, step_id)`. The
+    resolver supplies (secret_name → ref.name, secret_scope → ref.scope) and
+    the caller supplies the rest from its execution context. This test pins
+    the shape so a future SecretRef change surfaces here.
+    """
+    keyring.set_password("harness", "audit-shape-key", "v")
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    ref = resolver.resolve("audit-shape-key", _scope("audit"), SandboxTier.TIER_1_PROCESS)
+    # The two fields the caller needs from the resolver to compose SecretFetchEvent:
+    assert ref.name == "audit-shape-key"
+    assert ref.scope.name == "audit"
