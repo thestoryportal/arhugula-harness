@@ -71,3 +71,13 @@ Operator ratified FF-2 Option A (fix spec, then plan). Resolution filed:
   `placement_classes : Set<CollectorPlacement>`; acc #1/#3 conformed.
 
 U-OD-28 unblocked; lands against v2.9. Dependents U-OD-29/30/31/34 unblock.
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** Already labeled RESOLVED 2026-05-16 (OD spec v1.4 + OD plan v2.9 — CollectorPlacement grown 6→7 values). Audit confirms.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

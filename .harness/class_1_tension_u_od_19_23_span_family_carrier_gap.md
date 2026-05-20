@@ -119,3 +119,13 @@ U-OD-09/10/20/25/26/30/31) resolve their `[U-OD-04]` carrier edge and land.
 
 **Status:** RESOLVED — apply ratified U-OD-04 carrier-growth; U-OD-19/23 + the
 7 other `Span*` consumers cleared to land against it.
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** Already labeled RESOLVED 2026-05-16 (OD plan v2.6 carrier-growth applied to U-OD-04 — SpanRef family added; 7 consumers cleared). Audit confirms.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

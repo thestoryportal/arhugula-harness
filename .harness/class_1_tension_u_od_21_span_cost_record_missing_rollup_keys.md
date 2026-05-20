@@ -143,3 +143,13 @@ Resolved by the `implementation-planner` OD-plan v2.8 revision pass (`design-sub
 This fork's defect (carrier missing rollup keys → `rollup_costs_by_axis` un-materializable) is fully closed at HEAD `9f7556c`. No residual.
 
 **Note on the downstream U-RT-49 cost-attribution AC:** the U-RT-49 fork-extension record (`fork_u_rt_49_workflow_execution_extends_u_rt_44.md`) originally cited this fork as the blocker for U-RT-49's "cost-attribution chain produced an entry" AC. That attribution was inaccurate. U-RT-49's residual is **not** an OD-side gap; the actual gaps are CP-driver invocation site + spec authority for the invocation point + `PRICE_TABLE_REF` substitution. The corrected residual is filed at `[[fork_u_rt_49_cost_attribution_invocation_underspec]]` (2026-05-20).
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** OD plan v2.8 §0.2 defect table (U-OD-20 SpanCostRecord grown 9→12 fields — provider_discriminator + gen_ai_provider_name + gen_ai_request_model added; U-OD-21 lands 2026-05-20).
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

@@ -83,3 +83,13 @@ v2.5-canonical 4-attribute `audit.signature.*` set — `signed_at_unix_ns` struc
 | Authored | Phase 7 7b, 2026-05-15 |
 | Resolution authority | Operator ruling 2026-05-15 (micro-revise + land) |
 | Status | RESOLVED — cleared for U-OD-00 landing against OD plan v2.7 |
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** Already labeled RESOLVED 2026-05-15 (OD plan v2.7 — D-1/D-2/D-3 carrier defects addressed). Audit confirms.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

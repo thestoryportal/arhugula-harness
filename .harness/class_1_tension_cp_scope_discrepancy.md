@@ -93,3 +93,13 @@ batch are tracked separately:
 
 **Status:** OPEN — CP axis stream incomplete; 14 units deferred to a follow-on
 batch.
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** All 14 residual units verified landed in harness-cp/src/harness_cp/ at 2026-05-20 audit (U-CP-03 routing_core_surface.py / U-CP-27 sub_agent_gate_level_descent.py / U-CP-32 multi_agent_span_hierarchy.py / U-CP-33 concurrent_prompt_cache_warmup.py / U-CP-39 hitl_as_tool_call_rewriting.py / U-CP-41 both_by_tier_overlay.py / U-CP-45 five_axis_composition.py / U-CP-46 audit_hitl_span_namespace.py / U-CP-49 pause_resume_protocol.py / U-CP-50 material_diff_detection.py / U-CP-51 operator_burden_eval.py / U-CP-52 hitl_timeout_degradation.py / U-CP-54 cp_namespace_export_manifest.py / U-CP-55 cp_cross_axis_composition_manifest.py — explicitly TERMINAL per docstring). Plus U-CP-56 workflow_driver.py landed at v2.12. CP axis stream COMPLETE at 7b.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

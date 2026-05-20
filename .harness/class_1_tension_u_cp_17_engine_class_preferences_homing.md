@@ -82,3 +82,13 @@ either (a) U-CP-17 body amended to defer the `operator_preferences` field
 explicitly with a forward-pointer to U-CP-27, or (b) `EngineClassPreferences`
 re-homed to U-CP-00b as a CP-owned shared type so U-CP-17 can consume it
 ahead of U-CP-27. Operator decision owed.
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** DEFERRED-PARTITION
+
+**Resolving artifact / evidence:** U-CP-17 partial-lands at workload_binding_engine_class_selection.py (4/5 steps of §7.3 procedure; step 4 'apply operator preferences' struck). EngineClassPreferences re-homing is a deferred partition, not an open defect — resolves when a future CP plan revision designates the type's permanent home.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

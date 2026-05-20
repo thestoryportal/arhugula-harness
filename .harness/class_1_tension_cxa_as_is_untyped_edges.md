@@ -51,3 +51,13 @@ harness-is pyright: 0 errors introduced (3 pre-existing baseline — `test_secre
 | Routing target | CXA revision (Phase-6 CXA channel; in-CLI per design-substrate-canonical discipline) — possibly + AS/IS plan if Option 2/3 |
 | Resumption | Operator picks resolution option → CXA v2.3 (± AS/IS plan) → bucket-1 close → bucket 2 (CP→IS) opens |
 | Buckets 2–6 | NOT opened. If Option 1 + systemic audit: buckets 2–6 may carry the same defect. |
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** Already labeled RESOLVED 2026-05-17 (CXA v2.3 §0 + §2.3.1 — 6 declared typed edges reclassified). Audit confirms.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

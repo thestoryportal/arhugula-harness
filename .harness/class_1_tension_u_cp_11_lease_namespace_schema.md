@@ -125,3 +125,13 @@ produced CP plan v2.4/v2.5). Spec §5.3 is canonical; the plan's contradicted
 
 No design extension; no spec edit (the plan conforms to the spec, the spec is
 unchanged). U-CP-11 is now landable against v2.8. Fork-queue item 5 → Resolved.
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** Already labeled RESOLVED 2026-05-16 (CP plan v2.8 §2.2 — LEASE_NAMESPACE_SCHEMA conformed to spec §5.3). Audit confirms.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

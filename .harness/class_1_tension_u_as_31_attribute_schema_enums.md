@@ -152,3 +152,13 @@ U-AS-31. L2 cluster closed; AS L0+L1+L2 complete (17/33).
 | Authored | Phase 7 7b, 2026-05-16 |
 | Resolution authority | Operator ruling 2026-05-16 (re-home to `harness-core`) |
 | Status | **RESOLVED** — enums re-homed; U-AS-31 landed; doc re-cite owed (mechanical) |
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** Already labeled RESOLVED 2026-05-16 (operator-ratified re-home — AttributeValueType + Cardinality moved to harness-core v1.0; U-AS-31 lands). Audit confirms.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

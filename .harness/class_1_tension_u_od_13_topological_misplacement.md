@@ -97,3 +97,13 @@ revision debt; build proceeds against the corrected dependency set.
 
 **Status:** RESOLVED — U-OD-13 cleared to land at L2 with `Depends on:
 [U-OD-01, U-OD-05]`.
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** OD plan v2.8 §0.2 defect table (Option B applied — U-OD-11 edge struck from dependency set; U-OD-13 lands at L2).
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

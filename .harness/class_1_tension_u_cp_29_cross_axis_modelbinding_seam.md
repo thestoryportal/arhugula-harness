@@ -47,3 +47,13 @@ bucket): the 7c pass reconciles the CP `ModelBinding` (U-CP-00c) and AS
 `ModelBinding` (U-AS-29) shapes and instantiates `resolve_brief_authoring_model_binding`
 as a CXA seam. No design-substrate revision implied — the type-shape
 divergence is a known carrier-map item.
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** DEFERRED-PARTITION
+
+**Resolving artifact / evidence:** U-CP-29 inheritance table landed at brief_authoring_inheritance.py. AC #3 delegator struck (cross-axis CP ModelBinding vs AS ModelBinding shape collision) — routed to 7c CXA composition as bounded partition.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

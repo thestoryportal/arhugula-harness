@@ -121,3 +121,13 @@ superseded — the 15 direct Pattern-D consumer-unit edges are now live `[U-CP-0
 `CLAUDE.md` §2.4 CP plan pointer updated v2_7 → v2_8. **No type stays deferred;
 no new Class 1 record filed.** A Class 3 informational item logged at v2.8 §0.6
 (CP §19.1 "five-tier" narrative vs AS §10.3 4-level enumeration — non-blocking).
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** Already labeled RESOLVED 2026-05-16 (CP plan v2.7/v2.8 — U-CP-00b narrowed to 2 enums; 9 structured types moved to U-CP-00c). Audit confirms.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

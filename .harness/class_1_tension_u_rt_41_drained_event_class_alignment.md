@@ -122,3 +122,13 @@ a deferred sub-unit (U-RT-41.1) pending a future CP spec revision.
 - `[[halt-route-split-ac-pattern]]` (the workspace pattern)
 - `Phase_7_Meta_Architecture_v1.md` §7.7 X-AL-3 (no silent design extension)
 - `Spec_Harness_Runtime_v1.md` §16 #9 (explicit Class 1 authorization)
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** Path B applied 2026-05-20 (Spec_Harness_Runtime_v1.md §11 strike of DRAINED emit; drain observable via drained_flag + RunResult.status='drained').
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

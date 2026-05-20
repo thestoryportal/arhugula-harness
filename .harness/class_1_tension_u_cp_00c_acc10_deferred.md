@@ -52,3 +52,13 @@ Class 1 — informational/coverage. No design-substrate revision required: the 9
 types are correct; only the cross-unit composition test is non-materializable
 ahead of its consumers. Re-run the acc #10 composition check when the
 Pattern-D consumer units land.
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** U-CP-00c landed (9 structured types declared per CP plan v2.8 §2.0c). ACC #10 full-enumeration assertion is bookkeeping carry-forward, not architectural defect.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

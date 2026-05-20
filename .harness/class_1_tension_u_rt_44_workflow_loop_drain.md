@@ -223,3 +223,13 @@ Anti-finding summary:
 - §6.2 Anti-finding B (Class 3 informational): workspace root `CLAUDE.md` §2.2
   ADR table mislabels 4 of 5 F-ADR rows (F2/F3/F4/F5 titles all incorrect; F1
   correct). Non-blocking cleanup.
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** Already labeled FULLY CLOSED 2026-05-20 (CP spec v1.4 + plan v2.13 + runtime delegation to CP driver; 2204 tests green at closure). Audit confirms.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

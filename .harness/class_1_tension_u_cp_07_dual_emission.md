@@ -80,3 +80,13 @@ carry-forward; the U-CP-07 schemas it would consume are landed and stable.
 landed, unaffected. Only the runtime-emission behavioural contract is struck.
 The struck AC is non-blocking for every downstream consumer of the *schemas*
 (U-CP-12 retry-surface sampling consumes the schema shapes, not the emitter).
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** U-CP-07 partial-lands (schemas A/1–6 landed; AC #7 + 5 emission tests struck per halt-route-split-AC pattern). Dual-emission discipline routed to future OTel emitter unit — bounded residual, not open defect.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

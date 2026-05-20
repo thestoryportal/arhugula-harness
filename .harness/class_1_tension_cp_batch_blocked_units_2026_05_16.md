@@ -107,3 +107,13 @@ structured types except the two §0.5 sub-records. Root causes B and C clear
 automatically as their blocking deps land (transitive). 10 of 11 units fully
 unblocked; U-CP-04 partially unblocked.
 
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** CP plan v2.9 filed (T2 X-AL-3 FACTOR-OUT resolution applied — Pattern-D types specified; 10/11 batch units unblocked). U-CP-04 partial-land separately tracked at role_routing_binding_underspec record (also RESOLVED).
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

@@ -91,3 +91,13 @@ Class 1. Two resolution paths, operator decides:
 
 No silent absorption — no field set was invented. U-CP-04 may land partially
 (default) or stay halted, at operator discretion.
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** Already labeled RESOLVED 2026-05-16 (operator ruling — R-2/W-2 schemas ratified; U-CP-04 RoutingManifest full-lands). Audit confirms.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

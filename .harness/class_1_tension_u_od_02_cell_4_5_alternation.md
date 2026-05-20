@@ -167,3 +167,13 @@ U-OD-02 and land unaffected.
 ## ✅ RESOLVED — OD plan v2.8 (2026-05-16)
 
 Resolved by the `implementation-planner` OD-plan v2.8 revision pass (`design-substrate/Implementation_Plan_Operational_Discipline_v2_8.md`), operator-ratified 2026-05-16. See v2.8 §0.2 defect table. The unit is unblocked; lands when OD-7b resumes.
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** OD plan v2.8 §0.2 defect table (backend-class signature widened for cell-4/5 alternation; unit unblocked).
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

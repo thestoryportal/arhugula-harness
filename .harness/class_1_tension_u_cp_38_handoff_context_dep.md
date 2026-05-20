@@ -107,3 +107,13 @@ Until U-CP-30 lands and the Pattern D types are homed, U-CP-38 stays unlanded.
 Downstream consumers: U-CP-39 (`Depends on: [U-CP-37, U-CP-38, ...]`) is
 independently fork-blocked; U-CP-13 (`Depends on` includes U-CP-38) is not in
 the Level-1 set. No landed unit regresses from this skip.
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** U-CP-38 verified landed at harness-cp/src/harness_cp/hitl_placement.py (3-placement HITL enum + hitl_gate signature + HITLPlacement schema per C-CP-17 §17.1/§17.1.1/§17.3). U-CP-30 HandoffContext also landed at handoff_context.py. Dependency satisfied.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

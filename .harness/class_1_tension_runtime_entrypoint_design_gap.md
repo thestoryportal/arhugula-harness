@@ -141,3 +141,13 @@ Phase 2 composition root. Inputs for the Phase 2 scoping session:
   `CLAUDE.md` §1.1). Spec is authoritative per the §1.3 authority chain, but
   the divergence should be reconciled (Class 3 corpus-hygiene; folds into the
   OD-plan v2.8 revision pass, not Phase 2).
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** DEFERRED-PARTITION
+
+**Resolving artifact / evidence:** Track A RESOLVED — Spec_Harness_Runtime_v1.md v1.1→v1.3 authored at Phase 2 scoping session; api.py docstring lines 15-20 explicitly cite this record as resolved. Python API (C-RT-08 §8 — async run(workflow, config=None) -> RunResult), bootstrap orchestrator (C-RT-02 §2 — 9 stages), admin CLI stubs (C-RT-13 §13 — harness-inspect / harness-shutdown), LLM dispatch composer (C-RT-15 §14.5 — U-RT-52 merged 2026-05-20 at 2b945ab) all landed. Track B (operator-facing DevEx plane — __main__, harness run CLI, workflow-file loader, daemon, TUI) is explicit deferred partition per spec §3 line 281 + §8 line 167 — operator-owned future scoping arc, not the original gap.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

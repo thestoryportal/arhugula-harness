@@ -114,3 +114,13 @@ Per `halt-route-split-AC-pattern`:
 | Affected ACs | U-RT-30 AC #2 (struck; re-lands at follow-on unit) |
 | Affected units | U-RT-30 (this unit); future follow-on for sqlite-path wiring |
 | Successor | Follow-on unit to land struck AC against the selected resolution path |
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** Already labeled RESOLVED 2026-05-20 (Path B — C-RT-07 amended; sqlite trace-storage is OD-internal, not via IS PATH_CLASS_REGISTRY). Audit confirms.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

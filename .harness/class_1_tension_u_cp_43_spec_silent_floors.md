@@ -63,3 +63,13 @@ discrepancy record (`class_1_tension_cp_scope_discrepancy.md`).
 
 **Status:** OPEN — partial land complete; spec extension pending operator
 decision per CP plan v2.4 §0.8.
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** DEFERRED-PARTITION
+
+**Resolving artifact / evidence:** U-CP-43 partial-lands at gate_level_rule.py (BLAST_RADIUS + PERSONA_TIER floors materialized; MCP_TRUST + DEPLOYMENT_SURFACE floors struck due to spec §19.1 silence). 2/4 floors deferred pending spec amendment — operator decision owed but not architectural defect.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

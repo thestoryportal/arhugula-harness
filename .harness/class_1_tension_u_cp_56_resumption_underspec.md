@@ -180,3 +180,13 @@ fields" clause. CP spec v1.4 §25.6 already cites
 v1.2 §7.4 enumerates `read_by_idempotency_key(key)` as an authorized
 read primitive (already materialized at `LedgerNavigationPrimitive`).
 Plan-only revision suffices.
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** Already labeled CLOSED 2026-05-20 (Path A-modified — WorkflowManifestEntry entry_version extended 10→11; LedgerReader Protocol added; CP v2.12 filed). Audit confirms.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

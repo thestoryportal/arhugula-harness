@@ -75,3 +75,13 @@ Operator decision pending.
 | Workaround | `bootstrap/stage_1_is.py` `rmdir()` between path_registry and state_ledger |
 | Memory pattern | `[[carrier-home-defect-pattern]]` (analogous — two contracts disagree on a shared type's shape) |
 | Test coverage | `tests/test_bootstrap.py::test_bootstrap_returns_frozen_harness_context` exercises the integration; passing under workaround |
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** Already labeled RESOLVED 2026-05-20 (Path A — IS spec v1.3 §1 amendment: STATE_LEDGER resolves to directory). Audit confirms.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

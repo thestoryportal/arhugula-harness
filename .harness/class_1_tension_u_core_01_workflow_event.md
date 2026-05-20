@@ -117,3 +117,13 @@ preserved verbatim into v1.3 per the v1.3 change-note).
 | Authored | Phase 7 7b, 2026-05-15 |
 | Resolution authority | Operator ruling 2026-05-15 (carrier-thin) |
 | Status | RESOLVED — cleared for U-CORE-01 carrier-thin landing |
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** Already labeled RESOLVED 2026-05-15 (operator ruling — carrier-thin reading; U-CORE-01 lands 11 declarations; Core v1.1 filed). Audit confirms.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

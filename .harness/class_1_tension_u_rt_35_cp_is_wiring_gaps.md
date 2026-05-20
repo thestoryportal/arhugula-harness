@@ -150,3 +150,13 @@ follow-on commit records its closure-back-reference in this file.
 - `[[halt-route-split-ac-pattern]]` (the workspace pattern this applies)
 - `Phase_7_Meta_Architecture_v1.md` §7.7 X-AL-3 (no silent design extension)
 - `harness-cp/CLAUDE.md` §4.2 CP-AL-2 (typed taxonomy boundary)
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** DEFERRED-PARTITION
+
+**Resolving artifact / evidence:** Path D applied 2026-05-20 (U-RT-35 partial-lands 1/17 edges — U-CP-34; remaining 16 deferred to 7c per-CP-unit re-lands as composers materialize). Bounded operator-ratified partition, not open defect.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

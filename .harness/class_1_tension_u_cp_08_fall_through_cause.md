@@ -143,3 +143,13 @@ The "layer produced no decision" case is no longer an enum member — it is
 no `fallback.triggered` event). This is the §4A conform-to-spec resolution
 (operator-ratified, produced CP plan v2.4/v2.5) applied — no design extension, no
 Class 1. U-CP-08 is now landable against v2.8. Fork-queue item 3 → Resolved.
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** Already labeled RESOLVED 2026-05-16 (CP plan v2.8 §2.1 — FallThroughCause enum conformed to C-CP-03 §3.5 4-value set). Audit confirms.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

@@ -47,3 +47,13 @@ Not a design-artifact defect — OD plan §3.8.2 fully specifies U-OD-33 (signat
 | Halt point | 7c OD-bucket wiring — blocked until U-OD-33 lands |
 | Routing | `phase-7-implementation` — land U-OD-33 against OD plan §3.8.2 (no design revision) |
 | Also note | OD audit (`.harness/cxa_7c_audit_od_buckets.md`) classified U-OD-33's 4 edges NEEDS-REVIEW for exactly this reason |
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** Already labeled RESOLVED 2026-05-17 (U-OD-33 landed against OD plan §3.8.2; OD-7b genuinely 35/35). Audit confirms.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.

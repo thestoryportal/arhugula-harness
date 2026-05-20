@@ -57,3 +57,13 @@ Option A is recommended if the AS `SandboxTier` enum is importable now (the AS a
 ## ✅ RESOLVED — plan v2.10 (2026-05-16)
 
 Operator ratified FF-3 "resolve now". `design-substrate/Implementation_Plan_Operational_Discipline_v2_10.md` §3.7.3: in-unit `enum SandboxTier {TIER_0..3}` struck; `SandboxTier` consumed cross-axis from the AS-owned enum (`TIER_1_PROCESS..TIER_4_FULL_VM`); `OtlpReachabilityClass` + per-tier reachability map re-keyed to OD spec C-OD-20 §20.3's 1-indexed tiers; acc #1 citation corrected (ADR-F4 four-tier set / C-AS-01 §1.1, not D2 §1.2). U-OD-29 lands against v2.10 at 7b — OD-7b closes 35/35.
+
+---
+
+## Audit reconciliation (2026-05-20)
+
+**Verified status:** RESOLVED
+
+**Resolving artifact / evidence:** Already labeled RESOLVED 2026-05-16 (OD plan v2.10 — in-unit SandboxTier struck; AS enum imported). Audit confirms.
+
+**Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.
