@@ -42,9 +42,12 @@ from harness_runtime.lifecycle.providers import (
     DEFAULT_STAGE_3A_MAX_ATTEMPTS,
     OPENAI_KEYRING_NAME,
     AnthropicAdapter,
+    EmptyProviderCoverageError,
     OllamaAdapter,
     OpenAIAdapter,
     ProviderAuthError,
+    ProviderCapabilityBinding,
+    ProviderCapabilityBindings,
     ProviderClientsStage,
     ProviderDegradedWarning,
     ProviderSecretMissingError,
@@ -52,6 +55,7 @@ from harness_runtime.lifecycle.providers import (
     construct_anthropic_adapter,
     construct_ollama_adapter,
     construct_openai_adapter,
+    materialize_capability_bindings,
     materialize_provider_clients_stage,
 )
 from harness_runtime.types import (
@@ -902,3 +906,111 @@ async def test_materialize_stage_ollama_not_optional_hard_fail(
             ollama_construct=ollama_down,
         )
     assert excinfo.value.provider == "ollama"
+
+
+# ---------------------------------------------------------------------------
+# U-RT-20 — capability-aware binding tests.
+# ---------------------------------------------------------------------------
+
+
+def _ready_stage_three_providers() -> ProviderClientsStage:
+    """Build a 3-provider `ProviderClientsStage` directly (no async needed)."""
+    return ProviderClientsStage(
+        providers={
+            "anthropic": _ready_adapter("anthropic"),
+            "openai": _ready_adapter("openai"),
+            "ollama": _ready_adapter("ollama"),
+        }
+    )
+
+
+def _ready_stage_two_providers() -> ProviderClientsStage:
+    """2-provider stage (Ollama degraded path)."""
+    return ProviderClientsStage(
+        providers={
+            "anthropic": _ready_adapter("anthropic"),
+            "openai": _ready_adapter("openai"),
+        }
+    )
+
+
+def test_materialize_capability_bindings_three_providers(tmp_path: Path) -> None:
+    """Happy path: 3 providers → 3 bindings; non-empty candidate set."""
+    stage = _ready_stage_three_providers()
+    config = _runtime_config_with_ollama(tmp_path)
+
+    bindings = materialize_capability_bindings(stage, config)
+
+    assert isinstance(bindings, ProviderCapabilityBindings)
+    assert set(bindings.bindings.keys()) == {"anthropic", "openai", "ollama"}
+    for name, binding in bindings.bindings.items():
+        assert isinstance(binding, ProviderCapabilityBinding)
+        assert binding.provider_name == name
+        assert binding.adapter is stage.providers[name]
+    # Local-development surface: 4 admissible engine classes per CP §7.2.
+    assert len(bindings.engine_class_candidate_set) >= 1
+
+
+def test_materialize_capability_bindings_degraded_two_providers(tmp_path: Path) -> None:
+    """Degraded path (Ollama dropped): 2 bindings still satisfies coverage.
+
+    Confirms the AC's 'each EngineClass resolves to ≥1 capable provider'
+    holds under the 2-provider degraded context per spec §5 line 371.
+    """
+    stage = _ready_stage_two_providers()
+    config = _runtime_config_with_ollama(tmp_path, ollama_optional=True)
+
+    bindings = materialize_capability_bindings(stage, config)
+
+    assert set(bindings.bindings.keys()) == {"anthropic", "openai"}
+    assert len(bindings.bindings) == 2
+    assert "ollama" not in bindings.bindings
+
+
+def test_materialize_capability_bindings_empty_providers_raises(tmp_path: Path) -> None:
+    """No providers landed → typed `EmptyProviderCoverageError`."""
+    empty_stage = ProviderClientsStage(providers={})
+    config = _runtime_config_with_ollama(tmp_path)
+
+    with pytest.raises(EmptyProviderCoverageError) as excinfo:
+        materialize_capability_bindings(empty_stage, config)
+    assert "no providers landed" in excinfo.value.reason
+
+
+def test_materialize_capability_bindings_engine_class_candidate_set_typed(
+    tmp_path: Path,
+) -> None:
+    """Candidate set is a frozenset (typed; not list/tuple/dict).
+
+    Per the AC 'capability assertions exhaustively typed'.
+    """
+    stage = _ready_stage_three_providers()
+    config = _runtime_config_with_ollama(tmp_path)
+    bindings = materialize_capability_bindings(stage, config)
+    assert isinstance(bindings.engine_class_candidate_set, frozenset)
+
+
+def test_provider_capability_bindings_is_frozen(tmp_path: Path) -> None:
+    """`ProviderCapabilityBindings` is frozen (dataclass)."""
+    stage = _ready_stage_three_providers()
+    config = _runtime_config_with_ollama(tmp_path)
+    bindings = materialize_capability_bindings(stage, config)
+    # Frozen dataclasses raise FrozenInstanceError on assignment.
+    from dataclasses import FrozenInstanceError
+
+    with pytest.raises(FrozenInstanceError):
+        bindings.bindings = {}  # type: ignore[misc]
+
+
+def test_provider_capability_binding_carries_adapter_for_aclose(tmp_path: Path) -> None:
+    """`ProviderCapabilityBinding.adapter` is the same handle aclose() runs on.
+
+    Pins the invariant that the L5 routing layer can reach `binding.adapter`
+    and the L7+ shutdown can iterate stage.providers — both refer to the
+    same adapter instance.
+    """
+    stage = _ready_stage_three_providers()
+    config = _runtime_config_with_ollama(tmp_path)
+    bindings = materialize_capability_bindings(stage, config)
+    for name in ("anthropic", "openai", "ollama"):
+        assert bindings.bindings[name].adapter is stage.providers[name]

@@ -60,6 +60,7 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from anthropic import AsyncAnthropic
+from harness_cp.engine_class_candidate import ENGINE_CLASS_CANDIDATES
 from ollama import AsyncClient as AsyncOllamaClient
 from openai import AsyncOpenAI
 
@@ -74,9 +75,12 @@ __all__ = [
     "DEFAULT_STAGE_3A_MAX_ATTEMPTS",
     "OPENAI_KEYRING_NAME",
     "AnthropicAdapter",
+    "EmptyProviderCoverageError",
     "OllamaAdapter",
     "OpenAIAdapter",
     "ProviderAuthError",
+    "ProviderCapabilityBinding",
+    "ProviderCapabilityBindings",
     "ProviderClientsStage",
     "ProviderDegradedWarning",
     "ProviderSecretMissingError",
@@ -84,6 +88,7 @@ __all__ = [
     "construct_anthropic_adapter",
     "construct_ollama_adapter",
     "construct_openai_adapter",
+    "materialize_capability_bindings",
     "materialize_provider_clients_stage",
 ]
 
@@ -697,3 +702,153 @@ async def materialize_provider_clients_stage(
             raise
 
     return ProviderClientsStage(providers=providers)
+
+
+# ---------------------------------------------------------------------------
+# Capability-aware binding — U-RT-20.
+# Per Phase 2 Session 3 Track A plan v2.1 §L4 U-RT-20:
+#   "bind 3 async provider clients behind CP provider_capabilities;
+#    populate per-engine-class candidates per engine_class_candidate."
+#   AC: "each EngineClass resolves to at least one capable provider;
+#        capability assertions exhaustively typed."
+#
+# AC interpretation (per advisor consultation). `EngineClass` (durability
+# substrate: replay / checkpoint / reconciler-loop / etc.) and
+# `ProviderCapabilities` (LLM capability: TOOLS / CACHING / THINKING /
+# BATCH) are orthogonal in the landed CP surface — no per-EngineClass
+# capability-requirement function exists. "Each EngineClass resolves to at
+# least one capable provider" therefore reduces structurally to:
+#   ENGINE_CLASS_CANDIDATES[deployment_surface].candidate_set != ∅
+#   ∧ bindings != ∅
+# If a deeper coverage check is intended, that surface is a Class 2/3 CP
+# spec amendment, not a silent extension at U-RT-20 (X-AL-3).
+#
+# CP-AL-1 watch. U-RT-20 is *capability surface binding* — not EngineSelector,
+# not TopologyDispatcher, not RetryBreakerRegistry. Those land at L5
+# (stage 3b CP_ROUTING). Per-request reflection of capabilities via
+# `harness_cp.provider_capabilities.reflect_provider_capabilities(provider,
+# model)` happens at request time (model is a per-request concept); stage-3a
+# binding holds adapter + provider_name only.
+# ---------------------------------------------------------------------------
+
+
+class EmptyProviderCoverageError(Exception):
+    """Stage-3a `RT-FAIL-BOOTSTRAP` — no capable provider for any EngineClass.
+
+    Raised when either (a) the deployment surface's engine-class candidate
+    set is empty (would be a CP-side defect — every surface should ship a
+    non-empty set), or (b) the bindings map is empty (no providers landed).
+    The typed exception surfaces at the stage-3a fail-mode per spec §5.
+    """
+
+    def __init__(self, deployment_surface: str, reason: str) -> None:
+        super().__init__(
+            f"empty provider coverage at deployment_surface={deployment_surface!r}: {reason}"
+        )
+        self.deployment_surface = deployment_surface
+        self.reason = reason
+
+
+@dataclass(frozen=True)
+class ProviderCapabilityBinding:
+    """One provider's stage-3a capability binding handle.
+
+    Holds the adapter (for `aclose()` on shutdown) and the provider identity
+    (consumed by `harness_cp.provider_capabilities.reflect_provider_capabilities`
+    at request time, when the model is known). Model is intentionally NOT
+    bound here — model selection is a per-request concept owned by CP
+    routing (L5).
+    """
+
+    adapter: ProviderClient
+    provider_name: str
+
+
+@dataclass(frozen=True)
+class ProviderCapabilityBindings:
+    """Aggregate of per-provider capability bindings + coverage attestation.
+
+    `bindings` is keyed by provider name (`"anthropic"`, `"openai"`,
+    `"ollama"`). `engine_class_candidate_set` is the frozen candidate set
+    pulled from `ENGINE_CLASS_CANDIDATES` for `config.deployment_surface` —
+    pinned here so downstream consumers (L5 routing) get a typed handle.
+    """
+
+    bindings: Mapping[str, ProviderCapabilityBinding]
+    engine_class_candidate_set: frozenset[object]
+    """The deployment-surface's admissible `EngineClass` values
+    (`frozenset[harness_cp.engine_class.EngineClass]`). Typed as
+    `frozenset[object]` here to dodge the import-cycle risk; downstream
+    L5 consumers cast back to `frozenset[EngineClass]` when needed."""
+
+
+def materialize_capability_bindings(
+    stage: ProviderClientsStage,
+    config: RuntimeConfig,
+) -> ProviderCapabilityBindings:
+    """Bind the stage-3a providers to CP's capability surface — U-RT-20.
+
+    Steps:
+    1. Pull the deployment-surface's engine-class candidate set from
+       `ENGINE_CLASS_CANDIDATES`. Validate non-empty (CP-side invariant
+       re-asserted at the runtime boundary).
+    2. For each provider in the stage, build a `ProviderCapabilityBinding`
+       (adapter + provider_name).
+    3. Validate at least one binding exists. With Ollama-degraded the
+       count drops to 2, which still satisfies the coverage assertion.
+    4. Return the frozen `ProviderCapabilityBindings` handle.
+
+    Parameters
+    ----------
+    stage :
+        `ProviderClientsStage` returned by `materialize_provider_clients_stage`.
+    config :
+        Frozen `RuntimeConfig`. Drives the deployment-surface candidate-set
+        lookup.
+
+    Returns
+    -------
+    ProviderCapabilityBindings
+        Frozen aggregate with `bindings: Mapping[str, ProviderCapabilityBinding]`
+        + the deployment-surface's `engine_class_candidate_set`.
+
+    Raises
+    ------
+    EmptyProviderCoverageError
+        Either the engine-class candidate set is empty (CP-side defect) or
+        no providers landed (impossible from materialize_provider_clients_stage
+        which always raises if anthropic/openai fail; included for defense-
+        in-depth).
+    """
+    # Step 1: Pull candidate set for this deployment surface.
+    candidate = next(
+        (c for c in ENGINE_CLASS_CANDIDATES if c.deployment_surface == config.deployment_surface),
+        None,
+    )
+    if candidate is None or len(candidate.candidate_set) == 0:
+        raise EmptyProviderCoverageError(
+            str(config.deployment_surface),
+            "deployment surface has no admissible EngineClass values "
+            "(CP-side ENGINE_CLASS_CANDIDATES defect)",
+        )
+
+    # Step 2: Build per-provider bindings.
+    bindings: dict[str, ProviderCapabilityBinding] = {}
+    for provider_name, adapter in stage.providers.items():
+        bindings[provider_name] = ProviderCapabilityBinding(
+            adapter=adapter,
+            provider_name=provider_name,
+        )
+
+    # Step 3: Validate ≥1 binding (coverage assertion).
+    if not bindings:
+        raise EmptyProviderCoverageError(
+            str(config.deployment_surface),
+            "no providers landed at stage 3a (empty providers dict)",
+        )
+
+    # Step 4: Freeze + return.
+    return ProviderCapabilityBindings(
+        bindings=bindings,
+        engine_class_candidate_set=frozenset(candidate.candidate_set),
+    )
