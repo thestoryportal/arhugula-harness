@@ -57,6 +57,7 @@ from harness_cp.workflow_driver_types import (
     RunResult,
     RunStatus,
     StepExecutionContext,
+    StepKind,
     WorkflowStep,
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
@@ -194,6 +195,61 @@ class StepDispatcher(Protocol):
         ...
 
 
+class StepKindDispatcherNotBoundError(Exception):
+    """No dispatcher bound for a `StepKind` at registry lookup (U-RT-59 §14.7).
+
+    Raised by a `StepDispatcherRegistry.lookup(step_kind)` implementation when
+    `step_kind` is not bound. The driver's try/except per C-CP-25 §25.3.3.4
+    maps this to a `step-failure: RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND: ...`
+    per `Spec_Harness_Runtime_v1.md` v1.6 §14.7 failure-mode taxonomy.
+
+    Declared CP-side (vs runtime-side) so the driver's typed `try/except` can
+    catch a CP-owned error without inverting the CP→runtime dependency
+    direction. Runtime's `StepKindDispatcherRegistry.lookup` raises this same
+    type (imports from here).
+    """
+
+    def __init__(self, step_kind: StepKind) -> None:
+        super().__init__(
+            f"no StepDispatcher bound for step_kind {step_kind.value!r}"
+        )
+        self.step_kind = step_kind
+
+
+@runtime_checkable
+class StepDispatcherRegistry(Protocol):
+    """Routing-layer surface — frozen `{StepKind → StepDispatcher}` mapping.
+
+    Per `Spec_Harness_Runtime_v1.md` v1.6 §14.7.1 + §14.7.7 (C-RT-17). The
+    driver invokes `step_dispatchers.lookup(step.kind)` at every per-step
+    dispatch site; the returned `StepDispatcher` then dispatches the step
+    body via its sync `dispatch(binding, step, *, step_context)` method.
+
+    Structurally satisfied by
+    `harness_runtime.lifecycle.step_dispatchers.StepKindDispatcherRegistry`
+    (the production composition; bound at bootstrap stage 5 to
+    `HarnessContext.step_dispatchers`). The CP driver does not import the
+    runtime composition (which would invert the CP→runtime dependency
+    direction); it consumes via this Protocol.
+
+    **v1.6 amendment.** Replaces the v1.5 single `step_dispatcher:
+    StepDispatcher` parameter at `execute_workflow`. Per spec §14.7.7
+    "Driver routing-layer refactor": "Parameter changes from `step_dispatcher:
+    StepDispatcher` to `step_dispatchers: StepKindDispatcherRegistry`."
+    """
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        """Return the bound dispatcher for `step_kind`.
+
+        Raises
+        ------
+        StepKindDispatcherNotBoundError
+            `step_kind` is not bound in this registry; driver maps to
+            `RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND`.
+        """
+        ...
+
+
 @runtime_checkable
 class DriverContext(Protocol):
     """Minimal substrate the driver consumes (subset of HarnessContext).
@@ -261,7 +317,7 @@ def execute_workflow(
     ctx: DriverContext,
     *,
     default_model_binding: ModelBinding,
-    step_dispatcher: StepDispatcher,
+    step_dispatchers: StepDispatcherRegistry,
 ) -> RunResult:
     """Execute the workflow per C-CP-25 §25.3 happy-path discipline.
 
@@ -288,8 +344,13 @@ def execute_workflow(
     default_model_binding
         Default `(provider, model)` binding for steps without per-step
         override; per C-CP-06 §6.2's caller-supplied default discipline.
-    step_dispatcher
-        Step body dispatcher (per §25.3.3.4 opaque-step-body discipline).
+    step_dispatchers
+        Frozen `{StepKind → StepDispatcher}` routing registry. v1.6
+        amendment per C-RT-17 §14.7.7 — replaces the v1.5 single
+        `step_dispatcher: StepDispatcher` parameter. Driver routes via
+        `step_dispatchers.lookup(step.kind).dispatch(...)` (§25.3.3.4
+        opaque-step-body discipline preserved — driver routes on the
+        declared enum field, not on opaque payload content).
 
     Returns
     -------
@@ -423,9 +484,31 @@ def execute_workflow(
             tenant_id=None,
             step_index=step_index,
         )
+        # v1.6 routing-layer refactor per C-RT-17 §14.7.7: dispatch via
+        # registry.lookup(step.kind).dispatch(...) instead of single
+        # bound dispatcher. StepKindDispatcherNotBoundError maps to
+        # RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND per §14.7 failure-mode
+        # taxonomy (documented expected behavior at v1.6 for unbound
+        # step_kinds: DECLARATIVE_STEP, TOOL_STEP, HITL_STEP, INFERENCE_STEP
+        # — the last is a Class 1 carry-forward per the U-RT-59 landing
+        # arc; sub-agent dispatch composer arc bound SUB_AGENT_DISPATCH
+        # only at v1.6 MVP).
         try:
-            step_output = step_dispatcher.dispatch(
+            step_output = step_dispatchers.lookup(step.step_kind).dispatch(
                 binding, step, step_context=step_context
+            )
+        except StepKindDispatcherNotBoundError as exc:
+            return RunResult(
+                workflow_id=manifest_entry.workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=step_index,
+                partial_state=dict(accumulated),
+                final_state=None,
+                fail_class=(
+                    f"step-failure: RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND: "
+                    f"{exc}"
+                ),
             )
         except Exception as exc:
             return RunResult(

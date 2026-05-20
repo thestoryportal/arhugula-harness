@@ -459,12 +459,15 @@ def test_freeze_raises_incomplete_when_required_field_none() -> None:
     ctx = _MutableHarnessContext()
     with pytest.raises(IncompleteBootstrapError) as excinfo:
         ctx.freeze()
-    # All 29 required fields are missing (U-RT-52 +1 for `llm_dispatcher`).
+    # All 31 required fields are missing (U-RT-52 +1 for `llm_dispatcher`;
+    # U-RT-59 +2 for `sub_agent_dispatcher` + `step_dispatchers`).
     assert "config" in excinfo.value.missing_fields
     assert "lifecycle_emitter" in excinfo.value.missing_fields
     assert "ledger_reader" in excinfo.value.missing_fields
     assert "llm_dispatcher" in excinfo.value.missing_fields
-    assert len(excinfo.value.missing_fields) == 29
+    assert "sub_agent_dispatcher" in excinfo.value.missing_fields
+    assert "step_dispatchers" in excinfo.value.missing_fields
+    assert len(excinfo.value.missing_fields) == 31
 
 
 def test_bootstrap_stage_complete_event_is_frozen() -> None:
@@ -601,6 +604,24 @@ class _Workflow:
     @property
     def step_dispatcher(self) -> Any:
         return self._dispatcher
+
+    @property
+    def step_dispatchers(self) -> Any:
+        # U-RT-59 (C-RT-17 §14.7.7): workflow-supplied registry overrides
+        # ctx.step_dispatchers per the api.py override path. v1.6 MVP test
+        # registry binds INFERENCE_STEP → workflow's noop dispatcher so the
+        # test step routes through the driver.
+        from harness_cp.workflow_driver_types import StepKind
+
+        class _Reg:
+            def __init__(self, kind: Any, disp: Any) -> None:
+                self._kind = kind
+                self._disp = disp
+
+            def lookup(self, step_kind: Any) -> Any:
+                return self._disp
+
+        return _Reg(StepKind.INFERENCE_STEP, self._dispatcher)
 
     @property
     def default_model_binding(self) -> Any:

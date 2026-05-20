@@ -72,6 +72,21 @@ from harness_runtime.types import (
 # ---------------------------------------------------------------------------
 
 
+def _test_step_dispatchers(dispatcher: Any) -> Any:
+    """U-RT-59 (C-RT-17 §14.7.7): wrap a sync dispatcher in a single-kind
+    test registry bound to INFERENCE_STEP. Used by smoke-test WorkflowObject
+    fixtures to override the bootstrap-bound ctx.step_dispatchers (which only
+    binds SUB_AGENT_DISPATCH at v1.6 MVP per the async/sync Class 1 fork).
+    """
+
+    class _Reg:
+        def lookup(self, step_kind: Any) -> Any:
+            _ = step_kind
+            return dispatcher
+
+    return _Reg()
+
+
 _WORKLOAD = WorkloadClass.SOFTWARE_ENGINEERING
 _SURFACE = DeploymentSurface.LOCAL_DEVELOPMENT
 
@@ -419,6 +434,10 @@ async def test_e2e_run_executes_workflow_via_cp_driver(
             return cast(_CpStepDispatcher, _NoopDispatcher())
 
         @property
+        def step_dispatchers(self) -> Any:
+            return _test_step_dispatchers(_NoopDispatcher())
+
+        @property
         def default_model_binding(self) -> ModelBinding:
             return ModelBinding(provider="anthropic", model="claude-haiku-4-5")
 
@@ -534,6 +553,20 @@ async def test_e2e_run_returns_drained_when_flag_set_before_execute(
             return _D()
 
         @property
+        def step_dispatchers(self) -> Any:
+            class _D:
+                def dispatch(
+                    self,
+                    binding: Any,
+                    step: Any,
+                    *,
+                    step_context: Any = None,
+                ) -> dict[str, Any]:
+                    raise AssertionError("dispatcher must not run under drain-at-entry")
+
+            return _test_step_dispatchers(_D())
+
+        @property
         def default_model_binding(self) -> Any:
             return ModelBinding(provider="anthropic", model="claude-haiku-4-5")
 
@@ -613,6 +646,10 @@ async def test_e2e_run_surfaces_drain_timeout_when_step_exceeds_budget(
         @property
         def step_dispatcher(self) -> Any:
             return _SlowDispatcher()
+
+        @property
+        def step_dispatchers(self) -> Any:
+            return _test_step_dispatchers(_SlowDispatcher())
 
         @property
         def default_model_binding(self) -> Any:
@@ -821,6 +858,10 @@ async def test_e2e_run_step_body_fires_cost_attribution_chain(
         @property
         def step_dispatcher(self) -> _CpStepDispatcher:
             return cast(_CpStepDispatcher, _CostFiringDispatcher())
+
+        @property
+        def step_dispatchers(self) -> Any:
+            return _test_step_dispatchers(_CostFiringDispatcher())
 
         @property
         def default_model_binding(self) -> ModelBinding:

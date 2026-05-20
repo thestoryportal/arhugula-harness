@@ -53,6 +53,8 @@ from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
     DriverContext,
     StepDispatcher,
+    StepDispatcherRegistry,
+    StepKindDispatcherNotBoundError,
     execute_workflow,
 )
 from harness_cp.workflow_driver_errors import (
@@ -198,6 +200,37 @@ class _FakeCtx:
         self.ledger_reader = ledger_reader if ledger_reader is not None else _FakeLedgerReader()
 
 
+class _SingleKindRegistry:
+    """Minimal test `StepDispatcherRegistry` impl — binds one (kind, dispatcher).
+
+    Concrete impl for the v1.6 routing-layer refactor per C-RT-17 §14.7.7.
+    The production `StepKindDispatcherRegistry` lives in `harness_runtime`;
+    CP tests use this inline impl to avoid the CP→runtime dependency
+    direction. Lookup of an unbound kind raises
+    `StepKindDispatcherNotBoundError` (same shape as the production impl).
+    """
+
+    def __init__(self, kind: StepKind, dispatcher: StepDispatcher) -> None:
+        self._kind = kind
+        self._dispatcher = dispatcher
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind != self._kind:
+            raise StepKindDispatcherNotBoundError(step_kind)
+        return self._dispatcher
+
+
+def _registry(dispatcher: StepDispatcher) -> StepDispatcherRegistry:
+    """Compose a single-kind INFERENCE_STEP registry for legacy tests.
+
+    Pre-U-RT-59 tests passed a single dispatcher; post-refactor the driver
+    requires a `StepDispatcherRegistry`. This helper wraps a dispatcher
+    in a minimal one-entry registry bound to INFERENCE_STEP (the default
+    `_step(...)` fixture's step_kind).
+    """
+    return cast(StepDispatcherRegistry, _SingleKindRegistry(StepKind.INFERENCE_STEP, dispatcher))
+
+
 class _EchoDispatcher:
     """Step dispatcher that echoes the step payload back."""
 
@@ -291,7 +324,7 @@ def test_topology_pattern_not_yet_materialized_raised_at_non_single_threaded_lin
             run_id="run-1",
             ctx=cast(DriverContext, ctx),
             default_model_binding=_DEFAULT_BINDING,
-            step_dispatcher=cast(StepDispatcher, _EchoDispatcher()),
+            step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
         )
     assert emitter.emits == []
     assert ledger.appends == []
@@ -307,7 +340,7 @@ def test_engine_class_not_yet_materialized_raised_at_out_of_scope_engine_class()
             run_id="run-1",
             ctx=cast(DriverContext, ctx),
             default_model_binding=_DEFAULT_BINDING,
-            step_dispatcher=cast(StepDispatcher, _EchoDispatcher()),
+            step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
         )
     assert emitter.emits == []
     assert ledger.appends == []
@@ -323,7 +356,7 @@ def test_validation_failure_emits_no_workflow_start() -> None:
             run_id="run-1",
             ctx=cast(DriverContext, ctx),
             default_model_binding=_DEFAULT_BINDING,
-            step_dispatcher=cast(StepDispatcher, _EchoDispatcher()),
+            step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
         )
     assert WorkflowEventClass.WORKFLOW_START not in emitter.emits
 
@@ -341,7 +374,7 @@ def test_workflow_start_emitted_after_validation() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, _EchoDispatcher()),
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
     assert emitter.emits[0] is WorkflowEventClass.WORKFLOW_START
 
@@ -361,7 +394,7 @@ def test_step_iteration_declaration_order() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, dispatcher),
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
     )
     assert result.status is RunStatus.SUCCESS
     dispatched_step_ids = [str(s.step_id) for _, s in dispatcher.dispatched]
@@ -376,7 +409,7 @@ def test_per_step_step_boundary_emitted() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, _EchoDispatcher()),
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
     step_boundaries = [e for e in emitter.emits if e is WorkflowEventClass.STEP_BOUNDARY]
     assert len(step_boundaries) == 3
@@ -390,7 +423,7 @@ def test_state_ledger_append_per_step() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, _EchoDispatcher()),
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
     assert len(ledger.appends) == 3
 
@@ -407,7 +440,7 @@ def test_step_idempotency_key_deterministic() -> None:
             run_id="run-deterministic",
             ctx=cast(DriverContext, ctx),
             default_model_binding=_DEFAULT_BINDING,
-            step_dispatcher=cast(StepDispatcher, _EchoDispatcher()),
+            step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
         )
         for payload, _ in ledger.appends:
             accumulator.append(str(payload.idempotency_key))
@@ -429,7 +462,7 @@ def test_lifecycle_events_in_happy_path() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, _EchoDispatcher()),
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
     expected = [
         WorkflowEventClass.WORKFLOW_START,
@@ -450,7 +483,7 @@ def test_no_terminal_lifecycle_event_at_success() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, _EchoDispatcher()),
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
     # Last emit is the per-step step.boundary; no terminal sentinel.
     assert emitter.emits[-1] is WorkflowEventClass.STEP_BOUNDARY
@@ -505,7 +538,7 @@ def test_workflow_resumption_emitted_on_save_point_checkpoint_reentry() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, dispatcher),
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
     )
     # RESUMPTION emitted before WORKFLOW_START.
     assert WorkflowEventClass.RESUMPTION in emitter.emits
@@ -542,7 +575,7 @@ def test_resumption_not_emitted_for_unrelated_prior_run() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, dispatcher),
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
     )
     assert WorkflowEventClass.RESUMPTION not in emitter.emits
     # All steps dispatched; resume_at == 0.
@@ -569,7 +602,7 @@ def test_resumption_skips_already_replayed_steps() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, dispatcher),
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
     )
     # Only steps 3 + 4 dispatched.
     assert len(dispatcher.dispatched) == 2
@@ -598,7 +631,7 @@ def test_resume_at_advances_over_contiguous_prefix_only() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, dispatcher),
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
     )
     # resume_at advances to 1 (only step 0 is contiguous-prefix-materialized);
     # step 1 + step 2 dispatch.
@@ -643,7 +676,7 @@ def test_entry_version_changes_idempotency_key_basis() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, dispatcher),
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
     )
     # v2-keyed expected key differs from v1-stored key → no match → no RESUMPTION.
     assert WorkflowEventClass.RESUMPTION not in emitter.emits
@@ -662,7 +695,7 @@ def test_no_resumption_emission_under_pure_pattern_no_engine() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, _EchoDispatcher()),
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
     assert WorkflowEventClass.RESUMPTION not in emitter.emits
 
@@ -680,7 +713,7 @@ def test_terminal_success_return_shape() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, _EchoDispatcher()),
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
     assert result.status is RunStatus.SUCCESS
     assert result.terminal_step_index is None
@@ -704,7 +737,7 @@ def test_step_failure_returns_failed_status() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, _EchoDispatcher(fail_at_step=1)),
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher(fail_at_step=1))),
     )
     assert result.status is RunStatus.FAILED
     assert result.terminal_step_index == 1
@@ -725,7 +758,7 @@ def test_ledger_append_failure_returns_failed_status() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, _EchoDispatcher()),
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
     assert result.status is RunStatus.FAILED
     assert result.fail_class is not None
@@ -751,7 +784,7 @@ def test_driver_iteration_deterministic_given_inputs() -> None:
             run_id="run-deterministic",
             ctx=cast(DriverContext, ctx),
             default_model_binding=_DEFAULT_BINDING,
-            step_dispatcher=cast(StepDispatcher, dispatcher),
+            step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
         )
         runs.append(
             (

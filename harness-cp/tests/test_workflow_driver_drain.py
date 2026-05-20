@@ -40,6 +40,8 @@ from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
     DriverContext,
     StepDispatcher,
+    StepDispatcherRegistry,
+    StepKindDispatcherNotBoundError,
     execute_workflow,
 )
 from harness_cp.workflow_driver_types import (
@@ -49,6 +51,26 @@ from harness_cp.workflow_driver_types import (
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
+
+# U-RT-59 (C-RT-17 §14.7.7): drain tests use a single-kind registry per the
+# routing-layer refactor. Sibling pattern of test_workflow_driver.py's
+# `_SingleKindRegistry` + `_registry` helper — duplicated here to keep
+# drain tests self-contained (no cross-test-file dependency).
+
+
+class _SingleKindRegistry:
+    def __init__(self, kind: StepKind, dispatcher: StepDispatcher) -> None:
+        self._kind = kind
+        self._dispatcher = dispatcher
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind != self._kind:
+            raise StepKindDispatcherNotBoundError(step_kind)
+        return self._dispatcher
+
+
+def _registry(dispatcher: StepDispatcher) -> StepDispatcherRegistry:
+    return cast(StepDispatcherRegistry, _SingleKindRegistry(StepKind.INFERENCE_STEP, dispatcher))
 
 # ---------------------------------------------------------------------------
 # Fixtures + fakes
@@ -211,7 +233,7 @@ def test_drain_at_entry_returns_drained_no_workflow_start_emit() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, _EchoDispatcher()),
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
     assert result.status is RunStatus.DRAINED
     assert result.terminal_step_index is None
@@ -229,7 +251,7 @@ def test_drain_at_entry_no_ledger_append() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, _EchoDispatcher()),
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
     assert ledger.appends == []
     assert emitter.emits == []
@@ -260,7 +282,7 @@ def test_drain_at_entry_no_validation_error() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, _EchoDispatcher()),
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
     assert result.status is RunStatus.DRAINED
 
@@ -286,7 +308,7 @@ def test_drain_pre_step_no_step_boundary_emit_path_b() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, dispatcher),
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
     )
     # Exactly 1 step.boundary emitted (for completed step 0). Path B: no
     # step.boundary at the pre-entry drain site for step 1.
@@ -306,7 +328,7 @@ def test_drain_pre_step_returns_drained_with_prior_step_index() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, dispatcher),
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
     )
     assert result.status is RunStatus.DRAINED
     # Steps 0 and 1 completed (set_after=2 → flag set after step 1 dispatches).
@@ -356,7 +378,7 @@ def test_drain_pre_step_at_first_step_terminal_index_none() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx2),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, _EchoDispatcher()),
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
     assert result.status is RunStatus.DRAINED
     # Flag set right after workflow.start; pre-entry check before step 0 → fire.
@@ -382,7 +404,7 @@ def test_drain_post_step_after_ledger_append_persists() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, dispatcher),
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
     )
     # Step 0 ledger entry persisted.
     assert len(ledger.appends) == 1
@@ -402,7 +424,7 @@ def test_drain_post_step_terminal_index_is_completed_step() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, dispatcher),
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
     )
     assert result.status is RunStatus.DRAINED
     assert result.terminal_step_index == 0  # step 0 counted
@@ -448,7 +470,7 @@ def test_no_mid_step_drain_interruption_via_drained_flag() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, dispatcher),
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
     )
     # Step 0 dispatched (not interrupted); step 1 NOT dispatched (drain caught
     # at post-step or pre-step boundary).
@@ -504,7 +526,7 @@ def test_drained_flag_not_set_by_driver() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, _EchoDispatcher()),
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
     # Flag still not set after happy-path completion.
     assert not flag.is_set()
@@ -530,7 +552,7 @@ def test_drained_flag_not_set_on_step_failure() -> None:
         run_id="run-1",
         ctx=cast(DriverContext, ctx),
         default_model_binding=_DEFAULT_BINDING,
-        step_dispatcher=cast(StepDispatcher, _FailingDispatcher()),
+        step_dispatchers=_registry(cast(StepDispatcher, _FailingDispatcher())),
     )
     assert result.status is RunStatus.FAILED
     # drained_flag NOT auto-set on failure.

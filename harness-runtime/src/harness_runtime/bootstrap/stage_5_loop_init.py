@@ -1,10 +1,13 @@
 """Stage 5 LOOP_INIT — override evaluator, topology dispatcher, lifecycle
-emitter, LLM dispatcher.
+emitter, LLM dispatcher, sub-agent dispatcher, step-kind registry.
 
 Per `Spec_Harness_Runtime_v1.md` v1.2 §2 stage 5 post-conditions +
-§14.5 C-RT-15 (LLM-dispatch composer). On success:
+§14.5 C-RT-15 (LLM-dispatch composer) + v1.6 §14.7 C-RT-17 (sub-agent
+dispatch composer + step-kind routing registry per U-RT-59). On success:
 ``ctx.override_evaluator``, ``ctx.topology_dispatcher``,
-``ctx.lifecycle_emitter``, and ``ctx.llm_dispatcher`` are all non-None.
+``ctx.lifecycle_emitter``, ``ctx.llm_dispatcher``,
+``ctx.sub_agent_dispatcher``, and ``ctx.step_dispatchers`` are all
+non-None.
 
 Composer order is free across the first three (no intra-stage
 dependencies). The LLM dispatcher depends on ``ctx.providers``
@@ -21,8 +24,10 @@ from __future__ import annotations
 from typing import Any, cast
 
 from harness_core.workload_class import WorkloadClass
+from harness_cp.workflow_driver_types import StepKind
 
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
 from harness_runtime.lifecycle.lifecycle_emitter import materialize_lifecycle_emitter_stage
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchBindError,
@@ -32,8 +37,10 @@ from harness_runtime.lifecycle.override_evaluator import materialize_override_ev
 from harness_runtime.lifecycle.retry_breaker_fallback import (
     materialize_retry_breaker_fallback_dispatcher_stage,
 )
+from harness_runtime.lifecycle.step_dispatchers import StepKindDispatcherRegistry
+from harness_runtime.lifecycle.sub_agent_dispatch import RuntimeSubAgentDispatcher
 from harness_runtime.lifecycle.topology_dispatcher import materialize_topology_dispatcher_stage
-from harness_runtime.types import RuntimeConfig
+from harness_runtime.types import HarnessContext, RuntimeConfig
 
 __all__ = ["execute"]
 
@@ -105,4 +112,36 @@ async def execute(
         retry_breaker=retry_breaker,
         fallback_chain=fallback_chain,
         tracer_provider=cast(Any, tracer_provider),
+    )
+
+    # ---------------------------------------------------------------------
+    # U-RT-59 (C-RT-17 §14.7): sub-agent dispatch composer + step-kind
+    # routing registry. Per spec §14.7.7 "Integration with C-RT-04": two
+    # new HarnessContext fields at v1.6 (`sub_agent_dispatcher`,
+    # `step_dispatchers`); both bound here.
+    #
+    # v1.6 MVP binds only `SUB_AGENT_DISPATCH` in the registry per the
+    # Class 1 fork on U-RT-58 wrapper async/sync mismatch (the async
+    # `llm_dispatcher.dispatch` does not compose with the sync driver
+    # call site as a registry binding). `INFERENCE_STEP` binding deferred
+    # to follow-on arc. Tool / HITL / validator step kinds remain unbound
+    # per spec §14.7 (follow-on composer arcs).
+    #
+    # Child workflow runner closes over `ctx` (the _MutableHarnessContext);
+    # at runtime invocation it reads `ctx.step_dispatchers` (set below) +
+    # casts ctx to the CP driver's structural `DriverContext` Protocol.
+    # The mutable ctx satisfies the Protocol structurally — same pattern
+    # api.py uses on the frozen ctx.
+    child_runner = compose_child_workflow_runner(cast(HarnessContext, ctx))
+
+    sub_agent_dispatcher = RuntimeSubAgentDispatcher(
+        handoff_registry=ctx.handoff_registry,  # type: ignore[arg-type]  # narrowed at stage 3b
+        topology_dispatcher=topology.dispatcher,
+        tracer_provider=cast(Any, tracer_provider),
+        child_workflow_runner=child_runner,
+    )
+    ctx.sub_agent_dispatcher = sub_agent_dispatcher
+
+    ctx.step_dispatchers = StepKindDispatcherRegistry(
+        dispatchers={StepKind.SUB_AGENT_DISPATCH: sub_agent_dispatcher},
     )

@@ -79,6 +79,8 @@ from harness_cp.validator_fail_transient_staircase import (
     StaircaseStage,
     StaircaseTransition,
 )
+from harness_cp.workflow_driver import StepDispatcher as _CpStepDispatcher
+from harness_cp.workflow_driver import StepDispatcherRegistry as _CpStepDispatcherRegistry
 from harness_cp.workflow_driver_types import WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_cp.workload_binding_engine_class_selection import HITLInvocation
@@ -1067,4 +1069,31 @@ class HarnessContext(BaseModel):
     callers can pass `ctx.llm_dispatcher` to the CP `workflow_driver`
     as the per-step dispatch site. Concretized by
     `harness_runtime.lifecycle.llm_dispatch.RuntimeLLMDispatcher`.
+    """
+
+    sub_agent_dispatcher: _CpStepDispatcher
+    """Per-step sub-agent dispatch composer (U-RT-59; C-RT-17 §14.7).
+
+    Materialized at stage 5 LOOP_INIT. Concretized by
+    `harness_runtime.lifecycle.sub_agent_dispatch.RuntimeSubAgentDispatcher`.
+    Satisfies the `harness_cp.workflow_driver.StepDispatcher` Protocol;
+    bound as the registry's `SUB_AGENT_DISPATCH` entry at
+    `ctx.step_dispatchers`.
+    """
+
+    step_dispatchers: _CpStepDispatcherRegistry
+    """Step-kind routing registry (U-RT-59; C-RT-17 §14.7.1 + §14.7.7).
+
+    Materialized at stage 5 LOOP_INIT. Concretized by
+    `harness_runtime.lifecycle.step_dispatchers.StepKindDispatcherRegistry`.
+    The CP driver consumes via `step_dispatchers.lookup(step.kind).
+    dispatch(...)` at every per-step dispatch site.
+
+    v1.6 MVP binds 1 of 5 `StepKind` values: `SUB_AGENT_DISPATCH →
+    sub_agent_dispatcher`. The `INFERENCE_STEP` binding is deferred behind
+    a Class 1 fork on the U-RT-58 wrapper async/sync surface — the
+    async wrapper does not compose with the sync driver as a registry
+    binding. Tool / HITL / validator step kinds remain unbound at v1.6;
+    `lookup` raises `StepKindDispatcherNotBoundError` (driver maps to
+    `RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND`).
     """

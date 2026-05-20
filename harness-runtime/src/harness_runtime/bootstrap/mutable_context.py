@@ -136,6 +136,8 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "topology_dispatcher",
     "lifecycle_emitter",
     "llm_dispatcher",
+    "sub_agent_dispatcher",
+    "step_dispatchers",
 )
 
 
@@ -193,6 +195,23 @@ class _MutableHarnessContext:
     satisfy the ``LLMDispatcher`` Protocol; the field is typed against the
     Protocol so the C-RT-16 wrap is type-transparent."""
 
+    sub_agent_dispatcher: Any = None
+    """U-RT-59 (C-RT-17 §14.7) sub-agent dispatch composer; bound at stage
+    5 LOOP_INIT alongside ``llm_dispatcher``. Concretized by
+    ``harness_runtime.lifecycle.sub_agent_dispatch.RuntimeSubAgentDispatcher``.
+    Typed ``Any`` to avoid pulling the CP `StepDispatcher` Protocol into
+    the schema layer (mirrors the ``llm_dispatcher`` pattern)."""
+
+    step_dispatchers: Any = None
+    """U-RT-59 (C-RT-17 §14.7.1 + §14.7.7) step-kind routing registry;
+    bound at stage 5 LOOP_INIT after both dispatchers are constructed.
+    Concretized by
+    ``harness_runtime.lifecycle.step_dispatchers.StepKindDispatcherRegistry``.
+    v1.6 MVP binds 1 entry (``SUB_AGENT_DISPATCH``); ``INFERENCE_STEP``
+    binding deferred per Class 1 fork (U-RT-58 async wrapper / sync driver
+    mismatch). Typed ``Any`` to avoid pulling the CP
+    ``StepDispatcherRegistry`` Protocol into the schema layer."""
+
     # Orchestrator bookkeeping — not part of HarnessContext.
     completed_stages: list[BootstrapStage] = field(default_factory=list)
     emitted_bootstrap_events: list[BootstrapStageCompleteEvent] = field(default_factory=list)
@@ -235,6 +254,8 @@ class _MutableHarnessContext:
             topology_dispatcher=self.topology_dispatcher,
             lifecycle_emitter=self.lifecycle_emitter,
             llm_dispatcher=self.llm_dispatcher,
+            sub_agent_dispatcher=self.sub_agent_dispatcher,
+            step_dispatchers=self.step_dispatchers,
         )
         self.frozen = ctx
         return ctx

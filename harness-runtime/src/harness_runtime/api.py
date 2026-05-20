@@ -55,7 +55,7 @@ handlers — this composition is what materializes U-RT-44 AC #2's
 in-flight step bounded-wait (drain flag set by signal → driver returns
 DRAINED at next boundary → to_thread future resolves). The
 `WorkflowObject` Protocol grows with 4 new read-only properties
-(`manifest_entry`, `steps`, `step_dispatcher`, `default_model_binding`)
+(`manifest_entry`, `steps`, `default_model_binding`)
 per the §8 risk-surface "growth is non-breaking when fields are
 optional or read-only" authorization; Path A operator-ratified
 2026-05-20. Closes `[[fork-u-rt-44-workflow-loop-drain]]` for U-RT-44
@@ -86,7 +86,6 @@ from harness_cp.workflow_driver import (
     DriverContext as _CpDriverContext,
 )
 from harness_cp.workflow_driver import (
-    StepDispatcher,
     execute_workflow,
 )
 from harness_cp.workflow_driver_types import RunResult as _CpRunResult
@@ -186,18 +185,6 @@ class WorkflowObject(Protocol):
         carry the declarative body. The CP driver iterates this sequence
         under SINGLE_THREADED_LINEAR topology (no parallel branching at
         v1.4).
-        """
-        ...
-
-    @property
-    def step_dispatcher(self) -> StepDispatcher:
-        """Step body dispatcher (C-CP-25 §25.3.3.4 opaque-step-body discipline).
-
-        The driver delegates per-step body invocation through this
-        Protocol. Caller-owned: the runtime does not synthesize a
-        dispatcher at v1.4. A future Lane may surface a runtime-composed
-        default dispatcher that wires the U-CP-01 capability-aware router
-        + sandbox dispatch + HITL gate.
         """
         ...
 
@@ -341,7 +328,7 @@ async def run(
     if not isinstance(workflow, WorkflowObject):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise InvalidWorkflowError(
             f"`run()` requires a `WorkflowObject` (with `workflow_id`, "
-            f"`workload_class`, `manifest_entry`, `steps`, `step_dispatcher`, "
+            f"`workload_class`, `manifest_entry`, `steps`, "
             f"`default_model_binding` properties); got "
             f"{type(workflow).__name__!r}"
         )
@@ -390,6 +377,22 @@ async def run(
         # work may continue running until process exit. This is the
         # spec §11 invariant: "exceeding the bound forces shutdown to
         # proceed regardless; in-flight step may be in inconsistent state."
+        # U-RT-59 (C-RT-17 §14.7.7): driver consumes a StepDispatcherRegistry.
+        # Production routing comes from `ctx.step_dispatchers` (bound at
+        # bootstrap stage 5 — SUB_AGENT_DISPATCH-only at v1.6 MVP per the
+        # async/sync Class 1 fork deferring INFERENCE_STEP binding). Tests
+        # and specialized workflows may override by exposing a
+        # `step_dispatchers` attribute on the WorkflowObject — preserved
+        # as the lane-6 workflow-supplied dispatch path, modernized to the
+        # registry shape. `getattr` (vs Protocol field) keeps WorkflowObject
+        # additive — minimum-viable surface is workflow_id + workload_class
+        # + manifest_entry + steps + default_model_binding.
+        workflow_step_dispatchers = getattr(workflow, "step_dispatchers", None)
+        effective_step_dispatchers = (
+            workflow_step_dispatchers
+            if workflow_step_dispatchers is not None
+            else getattr(ctx, "step_dispatchers", None)
+        )
         timed_out = False
         try:
             cp_result: _CpRunResult = await asyncio.wait_for(
@@ -400,7 +403,7 @@ async def run(
                     run_id,
                     cast(_CpDriverContext, ctx),
                     default_model_binding=workflow.default_model_binding,
-                    step_dispatcher=workflow.step_dispatcher,
+                    step_dispatchers=cast(Any, effective_step_dispatchers),
                 ),
                 timeout=resolved_config.drain_timeout_seconds,
             )
