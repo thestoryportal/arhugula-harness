@@ -132,6 +132,14 @@ U-OD-02, U-OD-03, U-OD-08, U-OD-09, U-OD-10, U-OD-21, U-OD-28, U-OD-30.
 
 ---
 
-## ✅ RESOLVED — OD plan v2.8 (2026-05-16)
+## ✅ RESOLVED — OD plan v2.8 (2026-05-16); source-landed (2026-05-20)
 
-Resolved by the `implementation-planner` OD-plan v2.8 revision pass (`design-substrate/Implementation_Plan_Operational_Discipline_v2_8.md`), operator-ratified 2026-05-16. See v2.8 §0.2 defect table. The unit is unblocked; lands when OD-7b resumes.
+Resolved by the `implementation-planner` OD-plan v2.8 revision pass (`design-substrate/Implementation_Plan_Operational_Discipline_v2_8.md`), operator-ratified 2026-05-16. See v2.8 §0.2 defect table.
+
+**Source-landing event (2026-05-20):**
+- U-OD-20 carrier growth (`SpanCostRecord` 9 → 12 fields) landed at commit `600b902` (`feat(7b): re-land U-OD-20 — grow SpanCostRecord 9->12 fields (v2.8 D-5)`). The three new string fields — `provider_discriminator`, `gen_ai_provider_name`, `gen_ai_request_model` — are now present at `harness-od/src/harness_od/idempotency_join_dedup.py:180-184`.
+- U-OD-21 `rollup_costs_by_axis` landed at commit `e8fae9c` (`feat(7b): land U-OD-21 — cross-family rollup + tokenizer-version anchor`). All acc #1–#9 ACs materialized at `harness-od/src/harness_od/cross_family_rollup.py`.
+
+This fork's defect (carrier missing rollup keys → `rollup_costs_by_axis` un-materializable) is fully closed at HEAD `9f7556c`. No residual.
+
+**Note on the downstream U-RT-49 cost-attribution AC:** the U-RT-49 fork-extension record (`fork_u_rt_49_workflow_execution_extends_u_rt_44.md`) originally cited this fork as the blocker for U-RT-49's "cost-attribution chain produced an entry" AC. That attribution was inaccurate. U-RT-49's residual is **not** an OD-side gap; the actual gaps are CP-driver invocation site + spec authority for the invocation point + `PRICE_TABLE_REF` substitution. The corrected residual is filed at `[[fork_u_rt_49_cost_attribution_invocation_underspec]]` (2026-05-20).
