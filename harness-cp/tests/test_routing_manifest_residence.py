@@ -13,13 +13,8 @@ Acceptance-criterion coverage:
 
 from __future__ import annotations
 
-from harness_core import DeploymentSurface, WorkloadClass
-from harness_is.path_binding import PathBinding, PathBindingEntry
-from harness_is.path_class_registry import PathClass
-from harness_is.path_resolver import PathResolver
-
 from harness_as import SandboxTier
-
+from harness_core import DeploymentSurface, WorkloadClass
 from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.routing_layer import RoutingLayer
@@ -32,6 +27,9 @@ from harness_cp.routing_manifest_residence import (
     resolve_manifest_residence_path,
     validate_routing_manifest,
 )
+from harness_is.path_binding import PathBinding, PathBindingEntry
+from harness_is.path_class_registry import PathClass
+from harness_is.path_resolver import PathResolver
 
 
 def _manifest(version: int = 1) -> RoutingManifest:
@@ -41,9 +39,7 @@ def _manifest(version: int = 1) -> RoutingManifest:
         per_workload_overrides={},
         fallback_chains=(),
         retry_policies={
-            "fetch": RetryPolicy(
-                max_attempts=3, backoff="full-jitter", jitter="decorrelated"
-            )
+            "fetch": RetryPolicy(max_attempts=3, backoff="full-jitter", jitter="decorrelated")
         },
     )
 
@@ -62,10 +58,10 @@ def test_load_via_u_is_02() -> None:
     binding = PathBinding(
         entries=(
             PathBindingEntry(
-                path_class=PathClass.PROMPTS,
+                path_class=PathClass.ROUTING_MANIFEST,
                 workflow_class=WorkloadClass.SOFTWARE_ENGINEERING,
                 deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
-                path="/canonical/prompts/se/local",
+                path="/canonical/routing-manifest/se/local",
             ),
         )
     )
@@ -75,7 +71,7 @@ def test_load_via_u_is_02() -> None:
         WorkloadClass.SOFTWARE_ENGINEERING,
         DeploymentSurface.LOCAL_DEVELOPMENT,
     )
-    assert str(path) == "/canonical/prompts/se/local"
+    assert str(path) == "/canonical/routing-manifest/se/local"
 
 
 def test_validate_rejects_unknown_model() -> None:
@@ -144,9 +140,7 @@ def test_manifest_carries_typed_bindings() -> None:
         manifest_version=1,
         per_role_bindings={
             AgentRole("researcher"): RoleRoutingBinding(
-                preferred_model_binding=ModelBinding(
-                    provider="anthropic", model="opus"
-                ),
+                preferred_model_binding=ModelBinding(provider="anthropic", model="opus"),
                 layer_budget_overrides={RoutingLayer.LLM_AS_ROUTER: 200},
             )
         },
@@ -165,8 +159,6 @@ def test_manifest_carries_typed_bindings() -> None:
         == 200
     )
     assert (
-        m.per_workload_overrides[
-            WorkloadClass.SOFTWARE_ENGINEERING
-        ].engine_class_override
+        m.per_workload_overrides[WorkloadClass.SOFTWARE_ENGINEERING].engine_class_override
         is EngineClass.EVENT_SOURCED_REPLAY
     )
