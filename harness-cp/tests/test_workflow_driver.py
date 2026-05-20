@@ -35,6 +35,7 @@ Acceptance-criterion coverage (per Implementation_Plan_Control_Plane_v2_11.md):
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, cast
 
 import pytest
@@ -149,11 +150,23 @@ class _FakeEmitter:
 
 
 class _FakeCtx:
-    """Combined fake `DriverContext`."""
+    """Combined fake `DriverContext`.
 
-    def __init__(self, *, ledger: _FakeLedger, emitter: _FakeEmitter) -> None:
+    `drained_flag` defaults to a fresh never-set `asyncio.Event` so U-CP-56
+    happy-path tests don't trigger drain. U-CP-57 drain tests explicitly set
+    the flag at the relevant boundary site.
+    """
+
+    def __init__(
+        self,
+        *,
+        ledger: _FakeLedger,
+        emitter: _FakeEmitter,
+        drained_flag: asyncio.Event | None = None,
+    ) -> None:
         self.ledger_writer = ledger
         self.lifecycle_emitter = emitter
+        self.drained_flag = drained_flag if drained_flag is not None else asyncio.Event()
 
 
 class _EchoDispatcher:

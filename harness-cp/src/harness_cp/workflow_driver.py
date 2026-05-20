@@ -33,6 +33,7 @@ Authority:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
@@ -145,10 +146,17 @@ class DriverContext(Protocol):
     `harness_runtime.types.HarnessContext`. The CP driver does not import
     `HarnessContext` (which would invert the CP→runtime dependency direction);
     it consumes the substrate via this Protocol.
+
+    `drained_flag` is consumed at U-CP-57 drain composition at the 3 driver
+    boundary sites per `Spec_Control_Plane_v1_4.md` §25.4. U-CP-56 happy-path
+    iteration never sets this flag itself (per U-CP-57 AC #6 — "Driver never
+    calls `ctx.drained_flag.set()` itself"; flag ownership at U-RT-44 signal
+    handler per `Spec_Harness_Runtime_v1.md` §11 C-RT-11).
     """
 
     ledger_writer: LedgerWriterLike
     lifecycle_emitter: LifecycleEventEmitterLike
+    drained_flag: asyncio.Event
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +247,22 @@ def execute_workflow(
     EngineClassNotYetMaterializedError
         `manifest_entry.engine_class` is outside the v1.4 in-scope set.
     """
+    # § 25.4 row "Driver entry" — drain check at entry (U-CP-57 AC #1).
+    # If drained at entry, return DRAINED before any state mutation (no
+    # workflow.start emit; no ledger append; no validation). Per spec §25.4
+    # row 1 + plan v2.11 U-CP-57 AC #1: drain check precedes topology +
+    # engine-class validation.
+    if ctx.drained_flag.is_set():
+        return RunResult(
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+            status=RunStatus.DRAINED,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state=None,
+            fail_class=None,
+        )
+
     # § 25.3.1 — Validate topology + engine class.
     if manifest_entry.topology_pattern not in _IN_SCOPE_TOPOLOGY:
         raise TopologyPatternNotYetMaterializedError(manifest_entry.topology_pattern)
@@ -268,9 +292,21 @@ def execute_workflow(
     # has no parallel/fan-out branching).
     accumulated: dict[str, Any] = {}
     for step_index, step in enumerate(steps):
-        # NOTE: U-CP-56 does NOT perform drain checks. Drain composition is
-        # U-CP-57. Callers exercising U-CP-56 alone supply a never-set
-        # drained_flag.
+        # § 25.4 row "Per-step pre-entry" — drain check before entering next
+        # step (U-CP-57 AC #2; Path B operator-ratified — no `step.boundary`
+        # emit at this site to preserve §5.2 step.kind 5-value enum). On
+        # drain: return DRAINED with terminal_step_index = step_index - 1
+        # (the prior step is the last fully-completed one).
+        if ctx.drained_flag.is_set():
+            return RunResult(
+                workflow_id=manifest_entry.workflow_id,
+                run_id=run_id,
+                status=RunStatus.DRAINED,
+                terminal_step_index=step_index - 1 if step_index > 0 else None,
+                partial_state=dict(accumulated),
+                final_state=None,
+                fail_class=None,
+            )
 
         # § 25.3.3.2 — Resolve binding via U-CP-14.
         binding = resolve_step_binding(
@@ -334,6 +370,22 @@ def execute_workflow(
 
         # Accumulate step output under its step id for terminal state.
         accumulated[str(step.step_id)] = dict(step_output)
+
+        # § 25.4 row "Per-step post-exit" — drain check after step body
+        # completes + step.boundary emitted + ledger append persisted
+        # (U-CP-57 AC #3). On drain: return DRAINED with terminal_step_index
+        # = this step (it counted; its ledger entry has persisted per
+        # U-IS-11 append discipline).
+        if ctx.drained_flag.is_set():
+            return RunResult(
+                workflow_id=manifest_entry.workflow_id,
+                run_id=run_id,
+                status=RunStatus.DRAINED,
+                terminal_step_index=step_index,
+                partial_state=dict(accumulated),
+                final_state=None,
+                fail_class=None,
+            )
 
     # § 25.3.4 + § 25.3.5 — Terminal SUCCESS return. No new event class at
     # terminal exit; the absence of a further step.boundary plus the

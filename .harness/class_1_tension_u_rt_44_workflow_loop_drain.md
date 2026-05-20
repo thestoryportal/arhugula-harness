@@ -123,25 +123,36 @@ them — per X-AL-3 (no silent design extension at Phase 7).
    U-CP-57 (drain composition: §25.4/§25.7 mode 5). Dependency-graph delta:
    6 new edges (5 within-CP + 3 cross-axis IS + 1 cross-axis runtime);
    acyclic invariant preserved. Coverage matrix: C-CP-25 fully covered.
-5. **IN PROGRESS** — `phase-7-implementation` skill:
-   - ⚠️ U-CP-56 (driver core) **PARTIAL-LAND** 2026-05-20 at commit `999995a`:
-     8 of 9 ACs LAND (#1-#5, #7-#9); **AC #6 (save-point-checkpoint replay-
-     resumption) STRUCK** pending Class 1 fork resolution at
-     `.harness/class_1_tension_u_cp_56_resumption_underspec.md` (filed
-     2026-05-20). Substrate gaps: (a) `WorkflowManifestEntry` has no
-     `entry_version` field for the run-scope idempotency hash; (b) no IS
-     prefix-match read primitive. Weaker behavior shipped: RESUMPTION emits
-     on any non-genesis ledger (not selective per-run match). Test renamed
-     `test_resumption_emit_shape_wired_for_save_point_checkpoint` to reflect.
-     In-session spec/plan amendments at Spec v1.4 §E + Plan v2.11 U-CP-56 §6.
-   - PENDING — U-CP-57 (drain composition) — operator gating before opening.
+5. **DONE (with one carry-forward)** — `phase-7-implementation` skill:
+   - ⚠️ U-CP-56 (driver core) **PARTIAL-LAND** 2026-05-20 at commit `402a7ea`:
+     8 of 9 ACs LAND (#1-#5, #7-#9); AC #6 (save-point-checkpoint selective
+     replay-resumption) STRUCK pending Class 1 fork at
+     `.harness/class_1_tension_u_cp_56_resumption_underspec.md` (Path A —
+     extend U-CP-13 manifest + IS prefix-match read primitive). Weaker
+     behavior shipped: RESUMPTION emits on any non-genesis ledger.
+   - ✅ U-CP-57 (drain composition) LANDED 2026-05-20: all 6 ACs LAND
+     (driver-entry / pre-step / post-step drain checks + no-mid-step
+     interruption + bounded-wait composition + drained_flag-not-auto-set).
+     `DriverContext` Protocol extended with `drained_flag: asyncio.Event`
+     (structurally satisfied by HarnessContext from U-RT-44). 12 new tests
+     pass (test_workflow_driver_drain.py); full CP suite 498 pass (486 +
+     12 new); runtime suite 651 pass (no regression); pyright + ruff clean.
    - PENDING — U-CP-56 AC #6 finish — Path A: extend U-CP-13 manifest with
      `entry_version` + add IS prefix-match read primitive. Tracked at
-     `[[fork-u-cp-56-resumption-underspec]]`.
-6. **PENDING — Closure.** Refactor U-RT-44 to delegate drain to the new
-   driver (per `Spec_Harness_Runtime_v1.md` §11 risk-surface guidance);
-   un-strike U-RT-44 AC #2 + U-RT-49 workflow-execution ACs. Mark this fork
-   CLOSED.
+     `[[fork-u-cp-56-resumption-underspec]]`. This is the residual gap
+     blocking full closure of this parent fork.
+6. **PENDING — Runtime un-strike (lane 6 entry).** Refactor U-RT-44 +
+   U-RT-49 in harness-runtime/ to delegate workflow execution to U-CP-56 +
+   U-CP-57 via the new `execute_workflow()` API (per
+   `Spec_Harness_Runtime_v1.md` §11 risk-surface guidance: "If CP later
+   surfaces a native drain primitive... refactor `harness-runtime/` to
+   delegate drain to CP. This contract becomes a thin adapter."). Un-strike
+   U-RT-44 AC #2 (in-flight step bounded-wait) + U-RT-49 workflow-execution
+   ACs (state-ledger workflow entries; collector spans per workflow step;
+   cost-attribution chain). At completion: mark THIS fork CLOSED. The
+   residual `[[fork-u-cp-56-resumption-underspec]]` (AC #6) remains an
+   independent open fork tracked separately — it does not block runtime
+   un-strike since runtime never depended on selective replay-resumption.
 
 **Estimated arc:** 3.5–4.5 sessions (single-pattern scoping vs 5–7+ for full
 6-pattern coverage).
