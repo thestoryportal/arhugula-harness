@@ -115,6 +115,7 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         "worktree_manager",
         "shadow_git",
         "ledger_writer",
+        "ledger_reader",  # v2.12 — read-view counterpart of ledger_writer
         "index",
         "cache",
         # Stage 2 AS.

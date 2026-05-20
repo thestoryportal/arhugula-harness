@@ -43,7 +43,10 @@ from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.lifecycle.index_cache import materialize_index_cache
 from harness_runtime.lifecycle.path_registry import materialize_path_registry
 from harness_runtime.lifecycle.shadow_git import materialize_isolation_stage
-from harness_runtime.lifecycle.state_ledger import materialize_state_ledger
+from harness_runtime.lifecycle.state_ledger import (
+    materialize_state_ledger,
+    materialize_state_ledger_reader,
+)
 from harness_runtime.types import RuntimeConfig
 
 __all__ = ["execute"]
@@ -79,6 +82,11 @@ async def execute(
         deployment_surface=config.deployment_surface,
         actor=ctx.actor,
     )
+
+    # 2.5. Ledger reader (CP plan v2.12 §0.5 — resolves
+    # `[[fork-u-cp-56-resumption-underspec]]`). Reader shares the writer's
+    # handle so it always sees the writer's latest appends.
+    ctx.ledger_reader = materialize_state_ledger_reader(ctx.ledger_writer)
 
     # 3. Worktree isolation + shadow-Git supervisor.
     isolation = materialize_isolation_stage(

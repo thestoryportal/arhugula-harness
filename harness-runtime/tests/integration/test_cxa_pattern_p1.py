@@ -328,6 +328,11 @@ _ALLOWLISTED_CROSS_AXIS_SYMBOLS: frozenset[tuple[str, str]] = frozenset(
         # U-CP-34 → U-IS-11 picks `append_ledger_entry` as the canonical seam
         # symbol; the JsonlLedgerHandle import is the carrier type per C-IS-07.
         ("harness_is.jsonl_event_ledger_lifecycle", "JsonlLedgerHandle"),
+        # CP plan v2.12 — U-CP-56 selective replay-resumption consumes the
+        # IS BoundedWindow shape per C-IS-07 §7.2 in `_determine_resume_at`.
+        # Composes against the same U-CP-56 → U-IS-07 seam axis (state-ledger
+        # read substrate via the §7.4 implementation-discretion clause).
+        ("harness_is.state_ledger_read", "BoundedWindow"),
         # CLASS 3 DRIFT: U-OD-20 → CP `ReplayDisposition` is a genuine typed
         # seam that CXA v2.3 §2.3.6 missed (audit visited only 12 OD→CP
         # rows, all classified convention/runtime). Drift filed at

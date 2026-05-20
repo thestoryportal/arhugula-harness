@@ -43,6 +43,7 @@ from harness_runtime.types import (
     HandoffRegistry,
     HarnessContext,
     HITLPlacementRegistry,
+    LedgerReader,
     LedgerWriter,
     LifecycleEventEmitter,
     MCPClient,
@@ -108,6 +109,7 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "worktree_manager",
     "shadow_git",
     "ledger_writer",
+    "ledger_reader",
     "index",
     "cache",
     "skills",
@@ -147,6 +149,7 @@ class _MutableHarnessContext:
     worktree_manager: WorktreeIsolationManager | None = None
     shadow_git: ShadowGitSupervisor | None = None
     ledger_writer: LedgerWriter | None = None
+    ledger_reader: LedgerReader | None = None
     index: ContentAddressedIndex | None = None
     cache: SemanticCache | None = None
 
@@ -198,6 +201,7 @@ class _MutableHarnessContext:
             worktree_manager=self.worktree_manager,
             shadow_git=self.shadow_git,
             ledger_writer=self.ledger_writer,
+            ledger_reader=self.ledger_reader,
             index=self.index,
             cache=self.cache,
             skills=self.skills,
