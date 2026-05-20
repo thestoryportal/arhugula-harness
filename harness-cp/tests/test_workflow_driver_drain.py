@@ -137,8 +137,14 @@ class _EchoDispatcher:
         self.dispatched: list[tuple[StepEffectiveBinding, WorkflowStep]] = []
 
     def dispatch(
-        self, binding: StepEffectiveBinding, step: WorkflowStep
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
     ) -> dict[str, Any]:
+        # `step_context` accepted at v1.6 Path A per amended StepDispatcher
+        # Protocol (C-RT-17 resolution); drain echo dispatcher does not consume.
         self.dispatched.append((binding, step))
         return {"step_id": str(step.step_id), "echoed_payload": dict(step.step_payload)}
 
@@ -157,8 +163,14 @@ class _DrainAfterStepsDispatcher:
         self._set_after = set_after
 
     def dispatch(
-        self, binding: StepEffectiveBinding, step: WorkflowStep
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
     ) -> dict[str, Any]:
+        # `step_context` accepted at v1.6 Path A per amended StepDispatcher
+        # Protocol (C-RT-17 resolution); drain dispatcher does not consume.
         self.dispatched.append((binding, step))
         result = {"step_id": str(step.step_id)}
         if len(self.dispatched) == self._set_after:
@@ -417,8 +429,13 @@ def test_no_mid_step_drain_interruption_via_drained_flag() -> None:
             self._flag = flag
 
         def dispatch(
-            self, binding: StepEffectiveBinding, step: WorkflowStep
+            self,
+            binding: StepEffectiveBinding,
+            step: WorkflowStep,
+            *,
+            step_context: Any = None,
         ) -> dict[str, Any]:
+            # `step_context` accepted at v1.6 Path A; mock does not consume.
             self._flag.set()  # mid-dispatch drain
             # Step body continues to completion (returns its output normally).
             self.dispatched.append((binding, step))

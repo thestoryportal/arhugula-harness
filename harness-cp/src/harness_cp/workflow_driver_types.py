@@ -1,4 +1,4 @@
-"""Workflow execution driver types — U-CP-56.
+"""Workflow execution driver types — U-CP-56 + U-RT-59 (Path A).
 
 Implements C-CP-25 §25.2 verbatim:
 - `RunStatus` 4-value closed enum
@@ -7,9 +7,19 @@ Implements C-CP-25 §25.2 verbatim:
   named enum at C-CP-25 §25.2 in-session amendment §E 2026-05-20)
 - `WorkflowStep` record (in-session amendment §E — step-sequence source
   decoupled from `WorkflowManifestEntry` per operator Path A)
+- `StepExecutionContext` 8-field record (NEW at v1.6 Path A — per-step
+  parent context surface composed by the driver and passed to the
+  `StepDispatcher` Protocol per the U-RT-59 sub-agent dispatch composer
+  needs; resolves the Class 1 fork at
+  `.harness/class_1_tension_c_rt_17_step_dispatcher_parent_context_gap.md`)
 
 Authority:
 - `Spec_Control_Plane_v1_4.md` §25.2 (signatures) + §25 in-session amendment §E
+- `Spec_Control_Plane_v1_5.md` v1.5 → v1.6 amendment (Path A resolution of
+  C-RT-17 StepDispatcher parent-context gap; new §25.2.1 declaring
+  `StepExecutionContext` schema)
+- `Spec_Harness_Runtime_v1.md` v1.6 §14.7 C-RT-17 (sub-agent dispatch composer
+  consumer of `StepExecutionContext`)
 - `Implementation_Plan_Control_Plane_v2_11.md` U-CP-56 acceptance criterion #1
 """
 
@@ -19,8 +29,12 @@ from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any
 
+from harness_as.sandbox_tier import SandboxTier
 from harness_core.identity import StepID
+from harness_is.state_ledger_entry_schema import Actor
 from pydantic import BaseModel, ConfigDict
+
+from harness_cp.gate_level_rule import GateLevel
 
 
 class RunStatus(StrEnum):
@@ -102,9 +116,76 @@ class RunResult(BaseModel):
     fail_class: str | None = None
 
 
+class StepExecutionContext(BaseModel):
+    """Per-step parent context surface composed by the driver and passed to
+    the `StepDispatcher` Protocol (NEW at C-CP-25 v1.6 Path A — resolves the
+    C-RT-17 Class 1 fork on StepDispatcher Protocol parent-context gap).
+
+    The driver composes one `StepExecutionContext` per step from run-level
+    state + per-step-iteration state. The dispatcher consumes it as a
+    keyword-only `step_context` parameter. The `StepDispatcher` Protocol does
+    NOT introspect step-payload content via this surface — `step_context`
+    carries metadata about the step's execution environment, NOT step body
+    content. This preserves the C-CP-25 §25.3.3.4 "step body opaque to
+    driver" invariant.
+
+    Field semantics:
+
+    - ``parent_action_id``: composed by the driver per the existing pattern
+      ``ActionID(f"workflow:{workflow_id}:step:{step_index}")`` (per
+      ``workflow_driver.py:_append_step_ledger_entry``).
+    - ``parent_gate_level``: the seed input for the C-CP-12 §12.2 sub-agent
+      gate-level composition formula. v1.6 MVP default: ``GateLevel.AUTO``
+      (matches the harness solo-developer persona; operator surfaces this
+      via a future ``WorkflowManifestEntry.default_gate_level`` field per
+      v1.7+ extension). Per C-CP-12 §12.4 "deferred to implementation
+      discretion" — source of the seed is implementation-discretion-bounded.
+    - ``parent_sandbox_tier``: the seed input for the C-AS-11 monotonic-
+      ascension composition at sub-agent dispatch. v1.6 MVP default:
+      ``SandboxTier.TIER_1_PROCESS`` (lowest tier; consistent with existing
+      ``sandbox_tier_floor`` pattern's lowest tier). v1.7+ operator-surfaced
+      per manifest extension.
+    - ``parent_actor``: from ``ctx.ledger_writer.actor`` (LedgerWriter
+      construction-time identity per ``state_ledger.py:71``).
+    - ``parent_entry_hash``: the hash of the prior-step audit-ledger entry
+      per C-CP-13 §13.5 ``LedgerEntryRef.entry_hash``. v1.6 MVP: empty
+      string sentinel — the audit chain extends naturally via the parent
+      ``LedgerWriter`` sharing at C-RT-17 §14.7.4 v1.6 MVP child-context
+      sharing discipline; explicit entry-hash propagation deferred to v1.7+
+      arc that adds ``last_appended_entry_hash`` to the LedgerWriter API.
+    - ``parent_idempotency_key``: derived per the existing
+      ``_compute_step_idempotency_key(run_idempotency_key, step_index)``
+      helper at ``workflow_driver.py:222``.
+    - ``tenant_id``: ``None`` at v1.6 MVP (stack discipline does not commit
+      to multi-tenancy at v1.6 per ``Target_Stack_Commitment_v1.md``;
+      v1.7+ extension when multi-tenancy commits — tenant_id sourced from
+      future ``HarnessContext.tenant_id`` or ``RuntimeConfig.tenant_id``).
+    - ``step_index``: the per-iteration loop variable from the driver's
+      ``for step_index, step in enumerate(steps[resume_at:], start=resume_at)``.
+
+    The 4 deferred-to-MVP-default fields (``parent_gate_level``,
+    ``parent_sandbox_tier``, ``parent_entry_hash``, ``tenant_id``) are
+    documented as deferred at C-RT-17 §14.7 "Deferred to implementation
+    discretion". The remaining 4 fields are composed deterministically from
+    driver-tracked state per the existing patterns.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    parent_action_id: str
+    parent_gate_level: GateLevel
+    parent_sandbox_tier: SandboxTier
+    parent_actor: Actor
+    parent_entry_hash: str
+    parent_idempotency_key: str
+    tenant_id: str | None
+    step_index: int
+
+
 __all__ = [
     "RunResult",
     "RunStatus",
+    "StepExecutionContext",
     "StepKind",
     "WorkflowStep",
 ]

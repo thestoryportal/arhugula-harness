@@ -25,12 +25,19 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from harness_as.sandbox_tier import SandboxTier
 from harness_core.identity import StepID
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class import EngineClass
+from harness_cp.gate_level_rule import GateLevel
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver import StepDispatcher
-from harness_cp.workflow_driver_types import StepKind, WorkflowStep
+from harness_cp.workflow_driver_types import (
+    StepExecutionContext,
+    StepKind,
+    WorkflowStep,
+)
+from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchBindError,
     LLMDispatchPayloadShapeError,
@@ -197,6 +204,26 @@ def _tracer_provider_with_exporter() -> tuple[TracerProvider, InMemorySpanExport
     return tp, exporter
 
 
+def _step_context(step_index: int = 0) -> StepExecutionContext:
+    """Default step_context for v1.6 Path A test fixtures.
+
+    Composes the 8-field StepExecutionContext with MVP defaults per the
+    type's docstring. Tests that exercise step_context semantics override
+    individual fields; the C-RT-15 inner LLM dispatcher does not consume
+    step_context at v1.6, so this default is sufficient for dispatch tests.
+    """
+    return StepExecutionContext(
+        parent_action_id=f"workflow:test-wf:step:{step_index}",
+        parent_gate_level=GateLevel.AUTO,
+        parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        parent_actor=Actor(actor_class=ActorClass.AGENT, actor_id="test-runtime"),
+        parent_entry_hash="",
+        parent_idempotency_key="test-step-key",
+        tenant_id=None,
+        step_index=step_index,
+    )
+
+
 # ---------------------------------------------------------------------------
 # AC #1 — Protocol satisfaction.
 # ---------------------------------------------------------------------------
@@ -226,7 +253,7 @@ async def test_dispatch_anthropic_round_trip() -> None:
     tp, _ = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(providers={"anthropic": adapter}, tracer_provider=tp)
 
-    result = await dispatcher.dispatch(_binding("anthropic"), _step())
+    result = await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
 
     assert adapter.client.messages.last_kwargs is not None
     assert adapter.client.messages.last_kwargs["model"] == "test-model-1"
@@ -244,7 +271,7 @@ async def test_dispatch_openai_round_trip() -> None:
     tp, _ = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(providers={"openai": adapter}, tracer_provider=tp)
 
-    result = await dispatcher.dispatch(_binding("openai"), _step())
+    result = await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
 
     assert adapter.client.chat.completions.last_kwargs is not None
     assert adapter.client.chat.completions.last_kwargs["model"] == "test-model-1"
@@ -258,7 +285,7 @@ async def test_dispatch_ollama_round_trip() -> None:
     tp, _ = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(providers={"ollama": adapter}, tracer_provider=tp)
 
-    result = await dispatcher.dispatch(_binding("ollama"), _step())
+    result = await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
 
     assert adapter.client.last_kwargs is not None
     assert adapter.client.last_kwargs["model"] == "test-model-1"
@@ -277,7 +304,11 @@ async def test_genai_span_emits_required_attributes_for_openai() -> None:
     tp, exporter = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(providers={"openai": adapter}, tracer_provider=tp)
 
-    await dispatcher.dispatch(_binding("openai", model="gpt-4o-mini"), _step())
+    await dispatcher.dispatch(
+        _binding("openai", model="gpt-4o-mini"),
+        _step(),
+        step_context=_step_context(),
+    )
 
     finished = exporter.get_finished_spans()
     assert len(finished) == 1
@@ -298,7 +329,7 @@ async def test_genai_span_handles_ollama_usage_shape() -> None:
     tp, exporter = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(providers={"ollama": adapter}, tracer_provider=tp)
 
-    await dispatcher.dispatch(_binding("ollama"), _step())
+    await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
 
     finished = exporter.get_finished_spans()
     assert len(finished) == 1
@@ -323,7 +354,7 @@ async def test_anthropic_cache_attributes_emitted_only_for_anthropic_provider() 
         providers={"anthropic": _AnthropicFakeAdapter(_AnthropicClient())},
         tracer_provider=anth_tp,
     )
-    await anth.dispatch(_binding("anthropic"), _step())
+    await anth.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
     anth_attrs = (anth_exporter.get_finished_spans()[0].attributes) or {}
     assert anth_attrs["anthropic.cache_creation_input_tokens"] == 2
     assert anth_attrs["anthropic.cache_read_input_tokens"] == 3
@@ -334,7 +365,7 @@ async def test_anthropic_cache_attributes_emitted_only_for_anthropic_provider() 
         providers={"openai": _OpenAIFakeAdapter(_OpenAIClient())},
         tracer_provider=oa_tp,
     )
-    await oa.dispatch(_binding("openai"), _step())
+    await oa.dispatch(_binding("openai"), _step(), step_context=_step_context())
     oa_attrs = (oa_exporter.get_finished_spans()[0].attributes) or {}
     assert not any(k.startswith("anthropic.") for k in oa_attrs)
 
@@ -364,7 +395,7 @@ async def test_anthropic_cache_breakpoint_id_and_ttl_extracted_from_request() ->
         "tools": None,
         "params": {"max_tokens": 100},
     }
-    await dispatcher.dispatch(_binding("anthropic"), _step(payload))
+    await dispatcher.dispatch(_binding("anthropic"), _step(payload), step_context=_step_context())
 
     attrs = (exporter.get_finished_spans()[0].attributes) or {}
     assert attrs["anthropic.cache_breakpoint_id"] == "msg-0"
@@ -385,7 +416,7 @@ async def test_unknown_provider_raises_unreachable_error() -> None:
         tracer_provider=tp,
     )
     with pytest.raises(LLMDispatchProviderUnreachableError) as excinfo:
-        await dispatcher.dispatch(_binding("openai"), _step())
+        await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
     assert excinfo.value.provider_name == "openai"
     assert "RT-FAIL-PROVIDER-UNREACHABLE" in str(excinfo.value)
 
@@ -440,4 +471,4 @@ async def test_mis_shaped_payload_raises_payload_shape_error() -> None:
         step_payload={"not_messages": "oops"},
     )
     with pytest.raises(LLMDispatchPayloadShapeError):
-        await dispatcher.dispatch(_binding("anthropic"), bad_step)
+        await dispatcher.dispatch(_binding("anthropic"), bad_step, step_context=_step_context())

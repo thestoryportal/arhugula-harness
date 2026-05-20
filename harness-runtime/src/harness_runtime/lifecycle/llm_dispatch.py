@@ -59,7 +59,7 @@ from typing import Any, Protocol, cast, runtime_checkable
 
 from harness_cp.cp_shared_types import ProviderAgnosticPayload
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
-from harness_cp.workflow_driver_types import WorkflowStep
+from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 
 
 class LLMDispatchBindError(Exception):
@@ -232,8 +232,16 @@ class RuntimeLLMDispatcher:
         self,
         binding: StepEffectiveBinding,
         step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
     ) -> Mapping[str, Any]:
         """Invoke the step body under the effective binding; return step output.
+
+        ``step_context`` parameter accepted at v1.6 Path A per amended
+        ``StepDispatcher`` Protocol (C-RT-17 resolution). C-RT-15 does NOT
+        consume ``step_context`` at v1.6; reserved for v1.7+ surfaces that
+        may bind parent context to ``llm.inference`` span attributes per
+        future C-RT-NN amendments.
 
         Per C-RT-15 §Specification content steps 1-5. Provider-specific
         dispatch branches are exhaustive over the three providers

@@ -39,12 +39,14 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
+from harness_as.sandbox_tier import SandboxTier
 from harness_core.identity import ActionID
 from harness_core.workflow_event_class import WorkflowEventClass
 from harness_is.state_ledger_entry_schema import Actor
 
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class import EngineClass
+from harness_cp.gate_level_rule import GateLevel
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding, resolve_step_binding
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver_errors import (
@@ -54,6 +56,7 @@ from harness_cp.workflow_driver_errors import (
 from harness_cp.workflow_driver_types import (
     RunResult,
     RunStatus,
+    StepExecutionContext,
     WorkflowStep,
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
@@ -155,17 +158,38 @@ class StepDispatcher(Protocol):
     implementations live above the driver (typically in the runtime composition
     layer, which knows about the cap-aware router U-CP-01, the sandbox
     dispatch, the HITL gate, etc.).
+
+    **v1.6 Path A amendment.** `step_context: StepExecutionContext` is a
+    keyword-only parameter carrying per-step parent context composed by the
+    driver from run-level state. Required for sub-agent dispatch composer
+    (C-RT-17) per C-CP-12 §12.2 gate-level composition + C-CP-13 §13.5
+    audit-trail-link composition. Existing dispatchers (C-RT-15 inner LLM
+    dispatch, C-RT-16 retry/breaker/fallback wrapper) accept the parameter
+    but do not consume it at v1.6; the parameter is reserved for v1.7+
+    surfaces that may bind step context to llm.inference span attributes or
+    similar. See:
+    `.harness/class_1_tension_c_rt_17_step_dispatcher_parent_context_gap.md`
+    for the resolution rationale.
     """
 
     def dispatch(
         self,
         binding: StepEffectiveBinding,
         step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
     ) -> Mapping[str, Any]:
         """Invoke the step body under the effective binding; return step output.
 
         Step output is a mapping; the driver accumulates these into the
         terminal `partial_state` / `final_state` of the returned `RunResult`.
+
+        `step_context` carries per-step parent context composed by the driver
+        per `StepExecutionContext` per-field semantics (8 fields; 4 composed
+        deterministically + 4 MVP-default-bounded). Dispatchers may ignore
+        the parameter at v1.6 if they do not need parent context (the C-RT-15
+        LLM dispatcher does); dispatchers that need parent context (the
+        C-RT-17 sub-agent dispatcher) consume it.
         """
         ...
 
@@ -375,8 +399,34 @@ def execute_workflow(
         # No lease.acquired emit at v1.4 minimum-viable scope.
 
         # § 25.3.3.4 — Dispatch step body through injected dispatcher.
+        # v1.6 Path A — compose StepExecutionContext from driver-tracked
+        # state per the 8-field schema at workflow_driver_types.py. See
+        # the type's docstring for per-field semantics + MVP-default
+        # rationale. Resolves the C-RT-17 Class 1 fork on StepDispatcher
+        # parent-context gap (Path A ratified 2026-05-20).
+        step_idempotency_key_pre = _compute_step_idempotency_key(
+            run_idempotency_key, step_index
+        )
+        # MVP defaults per C-CP-12 §12.4 + Spec_Control_Plane_v1_6.md §25.2.1:
+        # parent_gate_level = AUTO; parent_sandbox_tier = TIER_1_PROCESS;
+        # parent_entry_hash = "" (child shares parent ledger writer per
+        # C-RT-17 §14.7.4); tenant_id = None (multi-tenancy not at v1.6 stack).
+        step_context = StepExecutionContext(
+            parent_action_id=(
+                f"workflow:{manifest_entry.workflow_id}:step:{step_index}"
+            ),
+            parent_gate_level=GateLevel.AUTO,
+            parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+            parent_actor=ctx.ledger_writer.actor,
+            parent_entry_hash="",
+            parent_idempotency_key=step_idempotency_key_pre,
+            tenant_id=None,
+            step_index=step_index,
+        )
         try:
-            step_output = step_dispatcher.dispatch(binding, step)
+            step_output = step_dispatcher.dispatch(
+                binding, step, step_context=step_context
+            )
         except Exception as exc:
             return RunResult(
                 workflow_id=manifest_entry.workflow_id,
@@ -394,9 +444,9 @@ def execute_workflow(
         # § 25.3.3.6 — Release lease (deferred per §25.3.3.3 above).
 
         # § 25.3.3.7 — State-ledger append via U-IS-11 composition.
-        step_idempotency_key = _compute_step_idempotency_key(
-            run_idempotency_key, step_index
-        )
+        # Reuse pre-dispatch step_idempotency_key composed at the
+        # StepExecutionContext site above (identical per-step value).
+        step_idempotency_key = step_idempotency_key_pre
         try:
             _append_step_ledger_entry(
                 ctx=ctx,

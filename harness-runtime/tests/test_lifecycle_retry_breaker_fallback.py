@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+from harness_as.sandbox_tier import SandboxTier
 from harness_core.identity import StepID
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import (
@@ -37,6 +38,7 @@ from harness_cp.cross_family_fallback_chain import (
     ProviderFamily,
 )
 from harness_cp.engine_class import EngineClass
+from harness_cp.gate_level_rule import GateLevel
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.routing_manifest_residence import (
     ReservedToolNameError,
@@ -45,7 +47,12 @@ from harness_cp.routing_manifest_residence import (
     validate_routing_manifest,
 )
 from harness_cp.workflow_driver import StepDispatcher
-from harness_cp.workflow_driver_types import StepKind, WorkflowStep
+from harness_cp.workflow_driver_types import (
+    StepExecutionContext,
+    StepKind,
+    WorkflowStep,
+)
+from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_od.harness_breaker_schema import BreakerScope
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchPayloadShapeError,
@@ -90,8 +97,14 @@ class _MockInnerDispatcher:
     _cursor: int = 0
 
     async def dispatch(
-        self, binding: StepEffectiveBinding, step: WorkflowStep
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
     ) -> Mapping[str, Any]:
+        # `step_context` accepted at v1.6 Path A per amended StepDispatcher
+        # Protocol (C-RT-17 resolution); mock inner does not consume.
         self.calls.append((binding, step))
         if self._cursor >= len(self.outcomes):
             raise IndexError(
@@ -164,6 +177,25 @@ def _tracer_provider_with_exporter() -> tuple[TracerProvider, InMemorySpanExport
     tp = TracerProvider()
     tp.add_span_processor(SimpleSpanProcessor(exporter))
     return tp, exporter
+
+
+def _step_context(step_index: int = 0) -> StepExecutionContext:
+    """Default step_context for v1.6 Path A test fixtures.
+
+    C-RT-16 wrapper accepts step_context but does not consume it at v1.6;
+    pass-through to the inner C-RT-15 dispatcher per the Protocol
+    conformance discipline.
+    """
+    return StepExecutionContext(
+        parent_action_id=f"workflow:test-wf:step:{step_index}",
+        parent_gate_level=GateLevel.AUTO,
+        parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        parent_actor=Actor(actor_class=ActorClass.AGENT, actor_id="test-runtime"),
+        parent_entry_hash="",
+        parent_idempotency_key="test-step-key",
+        tenant_id=None,
+        step_index=step_index,
+    )
 
 
 def _retry_breaker_with_llm_policy(
@@ -246,7 +278,7 @@ async def test_iterates_three_candidates_until_success() -> None:
         sleep_fn=_noop_sleep,
     )
 
-    result = await wrapper.dispatch(_binding(), _step())
+    result = await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
     assert result == {"result": "candidate-2-success"}
 
     # All three candidates exercised; rebound binding observable.
@@ -291,7 +323,7 @@ async def test_retries_twice_then_succeeds_on_attempt_3() -> None:
         sleep_fn=_recording_sleep,
     )
 
-    result = await wrapper.dispatch(_binding(), _step())
+    result = await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
     assert result == {"result": "success-on-attempt-3"}
     assert len(inner.calls) == 3
     # Two sleeps between three attempts.
@@ -353,7 +385,7 @@ async def test_retry_six_attribute_namespace_emitted_per_attempt() -> None:
         sleep_fn=_noop_sleep,
     )
 
-    await wrapper.dispatch(binding, _step())
+    await wrapper.dispatch(binding, _step(), step_context=_step_context())
     spans = exporter.get_finished_spans()
     outer = next(s for s in spans if s.name == "harness.runtime.retry_breaker_fallback")
     attempts = [s for s in spans if s.name == "harness.runtime.retry_attempt"]
@@ -415,7 +447,7 @@ async def test_fallback_exhausted_emits_and_raises_typed() -> None:
     )
 
     with pytest.raises(RetryBreakerFallbackExhaustedError) as exc_info:
-        await wrapper.dispatch(_binding(), _step())
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
 
     # Carries the last-failed candidate for attribution.
     assert exc_info.value.failed.provider == "anthropic"
@@ -456,7 +488,7 @@ async def test_payload_shape_error_treated_as_fail_fast() -> None:
         sleep_fn=_noop_sleep,
     )
 
-    result = await wrapper.dispatch(_binding(), _step())
+    result = await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
     assert result == {"result": "candidate-1-ok"}
     # Exactly 2 inner calls: one fail-fast on candidate 0; one success on candidate 1.
     # Even though max_attempts=5, fail-fast doesn't burn the budget.
@@ -493,7 +525,7 @@ async def test_breaker_open_skips_candidate_emits_retry_skipped() -> None:
         sleep_fn=_noop_sleep,
     )
 
-    result = await wrapper.dispatch(_binding(), _step())
+    result = await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
     assert result == {"result": "candidate-1-ok"}
     # Inner was called only for candidate 1 (candidate 0 was skipped).
     assert len(inner.calls) == 1
@@ -580,7 +612,7 @@ async def test_breaker_transition_emitted_via_registry() -> None:
         sleep_fn=_noop_sleep,
     )
 
-    await wrapper.dispatch(_binding(), _step())
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
     # One emission (candidate 0's breaker CLOSED → OPEN on first failure
     # because fail_threshold=1).
     assert len(emissions) == 1
@@ -614,7 +646,7 @@ async def test_nested_span_hierarchy_outer_parent_of_attempts() -> None:
         sleep_fn=_noop_sleep,
     )
 
-    await wrapper.dispatch(_binding(), _step())
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
     spans = exporter.get_finished_spans()
     outer = next(s for s in spans if s.name == "harness.runtime.retry_breaker_fallback")
     attempts = [s for s in spans if s.name == "harness.runtime.retry_attempt"]
@@ -731,7 +763,7 @@ async def test_single_candidate_chain_fail_fast_exhausts() -> None:
     )
 
     with pytest.raises(RetryBreakerFallbackExhaustedError):
-        await wrapper.dispatch(_binding(), _step())
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
 
 
 # ---------------------------------------------------------------------------

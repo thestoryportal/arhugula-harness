@@ -71,7 +71,7 @@ from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.routing_manifest_residence import RetryPolicy
 from harness_cp.validator_fail_taxonomy import ValidatorFailClass
 from harness_cp.validator_fail_transient_staircase import StaircaseStage
-from harness_cp.workflow_driver_types import WorkflowStep
+from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 from harness_od.harness_breaker_schema import BreakerScope
 
 from harness_runtime.lifecycle.fallback_chain import (
@@ -227,9 +227,18 @@ class RetryBreakerFallbackDispatcher:
         self,
         binding: StepEffectiveBinding,
         step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
     ) -> Mapping[str, Any]:
         """Invoke the step body under the effective binding with retry /
         breaker / fallback orchestration; return step output.
+
+        ``step_context`` accepted at v1.6 Path A per amended
+        ``StepDispatcher`` Protocol (C-RT-17 resolution). C-RT-16 wrapper
+        does NOT consume ``step_context`` at v1.6 directly but passes it
+        through to the inner C-RT-15 dispatcher per the Protocol
+        conformance discipline. Inner dispatcher likewise does not consume
+        at v1.6; reserved for v1.7+ surfaces.
 
         Raises
         ------
@@ -289,6 +298,7 @@ class RetryBreakerFallbackDispatcher:
                     breaker=breaker,
                     tracer=tracer,
                     outer_span=outer_span,
+                    step_context=step_context,
                 )
 
                 if attempt_terminal.result is not None:
@@ -337,6 +347,7 @@ class RetryBreakerFallbackDispatcher:
         breaker: Any,
         tracer: Any,
         outer_span: Any,
+        step_context: StepExecutionContext,
     ) -> _PerCandidateTerminal:
         """Run the per-attempt loop for a single candidate (Step 4).
 
@@ -379,7 +390,9 @@ class RetryBreakerFallbackDispatcher:
                 )
 
                 try:
-                    result = await self.inner.dispatch(rebound, step)
+                    result = await self.inner.dispatch(
+                        rebound, step, step_context=step_context
+                    )
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:

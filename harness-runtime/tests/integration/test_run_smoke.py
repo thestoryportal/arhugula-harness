@@ -376,9 +376,8 @@ async def test_e2e_run_executes_workflow_via_cp_driver(
 
     # Build a single-step WorkflowObject.
     class _NoopDispatcher:
-        def dispatch(
-            self, binding: _Any, step: WorkflowStep
-        ) -> dict[str, _Any]:
+        def dispatch(self, binding: _Any, step: WorkflowStep
+        , *, step_context: Any = None) -> dict[str, _Any]:
             _ = binding
             return {"step_id": str(step.step_id), "ok": True}
 
@@ -523,7 +522,13 @@ async def test_e2e_run_returns_drained_when_flag_set_before_execute(
         @property
         def step_dispatcher(self) -> Any:
             class _D:
-                def dispatch(self, binding: Any, step: Any) -> dict[str, Any]:
+                def dispatch(
+                    self,
+                    binding: Any,
+                    step: Any,
+                    *,
+                    step_context: Any = None,
+                ) -> dict[str, Any]:
                     raise AssertionError("dispatcher must not run under drain-at-entry")
 
             return _D()
@@ -567,7 +572,7 @@ async def test_e2e_run_surfaces_drain_timeout_when_step_exceeds_budget(
     monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
 
     class _SlowDispatcher:
-        def dispatch(self, binding: Any, step: Any) -> dict[str, Any]:
+        def dispatch(self, binding: Any, step: Any, *, step_context: Any = None) -> dict[str, Any]:
             _ = binding, step
             time.sleep(2.0)  # well past 0.2s budget
             return {}
@@ -720,9 +725,8 @@ async def test_e2e_run_step_body_fires_cost_attribution_chain(
     class _CostFiringDispatcher:
         """Step body that owns cost-attribution invocation per §25.9."""
 
-        def dispatch(
-            self, binding: _Any, step: WorkflowStep
-        ) -> dict[str, _Any]:
+        def dispatch(self, binding: _Any, step: WorkflowStep
+        , *, step_context: Any = None) -> dict[str, _Any]:
             _ = binding
 
             # Step body sources SpanCostInputs from its local provider-

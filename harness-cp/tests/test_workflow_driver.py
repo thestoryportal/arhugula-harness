@@ -206,8 +206,14 @@ class _EchoDispatcher:
         self._fail_at = fail_at_step
 
     def dispatch(
-        self, binding: StepEffectiveBinding, step: WorkflowStep
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
     ) -> dict[str, Any]:
+        # `step_context` accepted at v1.6 Path A per amended StepDispatcher
+        # Protocol (C-RT-17 resolution); echo dispatcher does not consume.
         if self._fail_at is not None and len(self.dispatched) == self._fail_at:
             raise RuntimeError(f"simulated step failure at index {self._fail_at}")
         self.dispatched.append((binding, step))

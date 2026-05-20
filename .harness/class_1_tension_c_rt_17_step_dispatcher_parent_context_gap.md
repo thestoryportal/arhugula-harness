@@ -2,7 +2,7 @@
 
 **Filed:** 2026-05-20 (during U-RT-59 spec authoring + implementation pre-survey arc)
 **Class:** 1 (halt-execution; design-phase artifact requires revision)
-**Status:** RESOLVING — operator ratified **Path A** 2026-05-20 (this session); resolution arc owed (CP spec v1.5 → v1.6 + Protocol extension + driver loop change + U-RT-58 wrapper signature pass-through + runtime spec §14.7 fix-up to drop TBD markers + U-RT-59 implementation entry)
+**Status:** RESOLVED-STAGE-1 — Protocol-surface gap closed; Stage 2 (U-RT-59 implementation per L9-ter ACs) owed next session. Stage 1 plumbing landed 2026-05-20 same arc. CP spec v1.6 §25.2.1 declares `StepDispatcher` Protocol + `StepExecutionContext` 8-field schema; runtime spec v1.6 §14.7 narrative cites `step_context.X` (HALT marker dropped); CP-side `StepExecutionContext` Pydantic v2 type at `harness-cp/src/harness_cp/workflow_driver_types.py`; `StepDispatcher` Protocol amended at `harness-cp/src/harness_cp/workflow_driver.py:151` with keyword-only `step_context` parameter; `execute_workflow` driver loop composes per step from 4 deterministic-source fields + 4 MVP-default-bounded fields; `RetryBreakerFallbackDispatcher` + `RuntimeLLMDispatcher` accept via Protocol conformance (neither consumes at v1.6). 2231 tests green at Stage 1 landing. Stage 2 (U-RT-59 implementation per L9-ter ACs) owed next session.
 **Surfaced by:** `phase-7-implementation` skill pre-implementation survey + advisor cross-check against code-side `StepEffectiveBinding` field surface
 
 ---
