@@ -1,7 +1,7 @@
 # Fork extension — U-RT-49 workflow-execution ACs extend [[fork-u-rt-44-workflow-loop-drain]]
 
 **Class:** 1 (extension of existing OPEN fork)
-**Status:** **MOSTLY CLOSED at Lane 6 (2026-05-20).** Ledger-entry + lifecycle-span ACs un-struck via Lane 6 runtime un-strike. Cost-attribution AC carries forward on `[[fork-u-od-21-span-cost-record-missing-rollup-keys]]` (U-OD-21 HALTED Class 1).
+**Status:** **MOSTLY CLOSED at Lane 6 (2026-05-20).** Ledger-entry + lifecycle-span ACs un-struck via Lane 6 runtime un-strike. Cost-attribution AC carries forward on `[[fork_u_rt_49_cost_attribution_invocation_underspec]]` (sub-fork filed 2026-05-20; see correction below — the OD-side `[[fork-u-od-21-span-cost-record-missing-rollup-keys]]` is source-resolved at commits `600b902` + `e8fae9c`, so the residual is not OD but CP-driver + spec gap).
 **Filed:** 2026-05-20 at U-RT-49 partial-landing
 **Carrier:** `.harness/class_1_tension_u_rt_44_workflow_loop_drain.md`
 
@@ -32,7 +32,7 @@ runtime or a new Track A revision-pass unit).
 | Clean shutdown leaves no resources open | LAND | U-RT-49 initial land |
 | Workflow ledger entries | **LAND** | Lane 6 (2026-05-20) — driver writes to `ctx.ledger_writer` per C-CP-25 §25.3.3 |
 | Workflow spans | **LAND** | Lane 6 (2026-05-20) — lifecycle emitter records driver §25.5 events |
-| Cost-attribution entries | STRIKE | Carries on `[[fork-u-od-21-span-cost-record-missing-rollup-keys]]` (U-OD-21 HALTED) |
+| Cost-attribution entries | STRIKE | Carries on `[[fork_u_rt_49_cost_attribution_invocation_underspec]]` — sub-fork filed 2026-05-20 against the actual residual (CP-driver invocation site + spec gap + `PRICE_TABLE_REF` substitution). Previous attribution to `[[fork-u-od-21-span-cost-record-missing-rollup-keys]]` was inaccurate: that fork is source-resolved at U-OD-20 commit `600b902` (12-field carrier) + U-OD-21 commit `e8fae9c` (rollup function); OD landed its surfaces and the residual lives elsewhere. |
 
 ## Re-land plan
 
@@ -42,8 +42,12 @@ When the CP workflow loop primitive lands:
    to actually invoke a `WorkflowObject` step.
 2. Assert workflow ledger entries appear in `audit_writer.read_all()`.
 3. Assert collector ring buffer / sqlite has ≥1 span for the workflow step.
-4. Assert cost-attribution chain produces a `SpanCostRecord` (requires
-   landed rate table, currently `U-OD-21` deferred — sub-fork).
+4. Assert cost-attribution chain produces a `SpanCostRecord`. **Updated 2026-05-20:**
+   blocked by `[[fork_u_rt_49_cost_attribution_invocation_underspec]]`, not by
+   U-OD-21 (which landed). The sub-fork lists the three residual gaps (CP
+   driver invocation site; spec authority for the invocation point;
+   `PRICE_TABLE_REF` substitution) and the four operator questions
+   (Q1–Q4) blocking un-strike.
 
 ## Provenance
 
