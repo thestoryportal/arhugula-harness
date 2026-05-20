@@ -49,7 +49,10 @@ from harness_as.sandbox_tier_floor import MCPServerTrustLevel
 from harness_as.tool_contract import SecretAllowlistEntry, ToolContract
 from harness_core import ClientName, SkillID
 from harness_core.deployment_surface import DeploymentSurface
+from harness_core.persona_tier import PersonaTier
+from harness_core.workload_class import WorkloadClass
 from harness_cp.cross_family_fallback_chain import FallbackChain
+from harness_cp.engine_class import EngineClass
 from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_cp.topology_pattern import TopologyPattern
 from harness_is.path_resolver import PathResolver
@@ -424,7 +427,27 @@ class SandboxDispatchTable(Protocol):
 
 @runtime_checkable
 class EngineSelector(Protocol):
-    """Composed at U-RT-22 from landed CP engine-class primitives."""
+    """Engine-class selection wired at U-RT-22 over CP's binding-time selection.
+
+    Concretized at `harness_runtime.lifecycle.engine_selector.RuntimeEngineSelector`
+    which composes U-CP-17's `select_engine_class` across all
+    `(WorkloadClass, PersonaTier)` combinations for the runtime's
+    `deployment_surface`, honoring per-workload `WorkloadRoutingOverride.
+    engine_class_override` from the operator-supplied routing manifest.
+    """
+
+    def select(
+        self,
+        workload_class: WorkloadClass,
+        persona_tier: PersonaTier,
+    ) -> EngineClass:
+        """Return the bound `EngineClass` for this workload/persona combination.
+
+        Total: every `(WorkloadClass, PersonaTier)` combination at the runtime's
+        `deployment_surface` is pre-resolved at bootstrap (U-RT-22 AC: missing
+        binding raises typed error at bootstrap, not at runtime).
+        """
+        ...
 
 
 @runtime_checkable
