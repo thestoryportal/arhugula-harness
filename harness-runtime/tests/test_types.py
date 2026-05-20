@@ -108,21 +108,39 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
     """
     expected = {
         # Stage 0.
-        "config", "drained_flag",
+        "config",
+        "drained_flag",
         # Stage 1 IS.
-        "path_resolver", "worktree_manager", "shadow_git",
-        "ledger_writer", "index", "cache",
+        "path_resolver",
+        "worktree_manager",
+        "shadow_git",
+        "ledger_writer",
+        "index",
+        "cache",
         # Stage 2 AS.
-        "skills", "tool_contracts", "mcp_host", "mcp_clients", "sandbox_dispatch",
+        "skills",
+        "tool_contracts",
+        "mcp_host",
+        "mcp_clients",
+        "sandbox_dispatch",
         # Stage 3a CP_CLIENTS.
         "providers",
         # Stage 3b CP_ROUTING.
-        "routing_manifest", "engine_selector", "fallback_chain",
-        "retry_breaker", "hitl_registry", "handoff_registry",
+        "routing_manifest",
+        "engine_selector",
+        "fallback_chain",
+        "retry_breaker",
+        "hitl_registry",
+        "handoff_registry",
         # Stage 4 OD.
-        "tracer_provider", "collector_daemon", "cost_chain", "audit_writer",
+        "tracer_provider",
+        "collector_daemon",
+        "cost_chain",
+        "audit_writer",
         # Stage 5 LOOP_INIT.
-        "override_evaluator", "topology_dispatcher", "lifecycle_emitter",
+        "override_evaluator",
+        "topology_dispatcher",
+        "lifecycle_emitter",
     }
     actual = set(HarnessContext.model_fields.keys())
     assert actual == expected, f"missing: {expected - actual}; extra: {actual - expected}"

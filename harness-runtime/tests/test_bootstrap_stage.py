@@ -91,6 +91,7 @@ def test_stage_result_round_trips() -> None:
 
 def test_stage_lifecycle_hook_is_protocol() -> None:
     """`StageLifecycleHook` is a structural Protocol; concretized at U-RT-41."""
+
     # Any object structurally satisfies the empty Protocol at L0.
     class _Stub:
         pass

@@ -61,7 +61,9 @@ class ShadowGitSupervisor:
     ) -> CheckpointResult:
         """Snapshot working state into a shadow-Git ref (C-IS-08 §8.4 pass-through)."""
         return create_shadow_git_checkpoint(
-            self.repository_root, workflow_run_id, trigger_context,
+            self.repository_root,
+            workflow_run_id,
+            trigger_context,
         )
 
     def rollback(
@@ -71,7 +73,10 @@ class ShadowGitSupervisor:
     ) -> RollbackResult:
         """Restore working tree to a shadow-Git checkpoint (C-IS-08 §8.3 pass-through)."""
         return rollback_to_checkpoint(
-            self.repository_root, self.ledger_handle, checkpoint_id, workflow_run_id,
+            self.repository_root,
+            self.ledger_handle,
+            checkpoint_id,
+            workflow_run_id,
         )
 
 
