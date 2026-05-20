@@ -1,0 +1,183 @@
+"""U-RT-04 — `materialize_runtime_config()` tests.
+
+ACs per Phase 2 Session 3 plan v2.1 §2 L1:
+- Precedence tested via three-source fixture (default vs env vs kwargs).
+- Missing-required raises typed error.
+- Unknown keys rejected.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+from harness_core.deployment_surface import DeploymentSurface
+from harness_cp.topology_pattern import TopologyPattern
+from harness_runtime.config.loader import (
+    ENV_PREFIX,
+    materialize_runtime_config,
+)
+from harness_runtime.types import (
+    CollectorConfig,
+    OTelConfig,
+    PathBindingConfig,
+    ProviderSecretsConfig,
+    RuntimeConfig,
+)
+from pydantic import ValidationError
+
+
+def _required_kwargs() -> dict[str, Any]:
+    """The minimum required-field kwargs for `RuntimeConfig` at L1.
+
+    Sub-configs are empty placeholders until U-RT-05..U-RT-08 enrich them.
+    """
+    return {
+        "deployment_surface": DeploymentSurface.LOCAL_DEVELOPMENT,
+        "repository_root": Path("/tmp"),
+        "path_bindings": PathBindingConfig(),
+        "provider_secrets": ProviderSecretsConfig(),
+        "otel": OTelConfig(),
+        "collector": CollectorConfig(),
+        "default_topology": TopologyPattern.SINGLE_THREADED_LINEAR,
+    }
+
+
+def test_kwargs_only_materializes() -> None:
+    """No env, full kwargs — produces a `RuntimeConfig` byte-equal to direct ctor."""
+    cfg = materialize_runtime_config(env={}, **_required_kwargs())
+    direct = RuntimeConfig(**_required_kwargs())
+    assert cfg == direct
+
+
+def test_env_supplies_scalar_fields_when_kwargs_omit_them() -> None:
+    """Env supplies the 4 scalar top-level fields when kwargs don't override."""
+    env = {
+        f"{ENV_PREFIX}DEPLOYMENT_SURFACE": "managed-cloud",
+        f"{ENV_PREFIX}REPOSITORY_ROOT": "/tmp",
+        f"{ENV_PREFIX}DEFAULT_TOPOLOGY": "orchestrator-workers",
+        f"{ENV_PREFIX}TENANT_ID": "tenant-a",
+    }
+    # Sub-configs still required via kwargs (they're not env-keyed at L1).
+    cfg = materialize_runtime_config(
+        env=env,
+        path_bindings=PathBindingConfig(),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(),
+        collector=CollectorConfig(),
+    )
+    assert cfg.deployment_surface is DeploymentSurface.MANAGED_CLOUD
+    assert cfg.repository_root == Path("/tmp")
+    assert cfg.default_topology is TopologyPattern.ORCHESTRATOR_WORKERS
+    assert cfg.tenant_id == "tenant-a"
+
+
+def test_kwargs_override_env() -> None:
+    """When both env and kwargs supply a field, kwargs wins (spec precedence)."""
+    env = {
+        f"{ENV_PREFIX}DEPLOYMENT_SURFACE": "managed-cloud",
+        f"{ENV_PREFIX}DEFAULT_TOPOLOGY": "orchestrator-workers",
+    }
+    cfg = materialize_runtime_config(
+        env=env,
+        # kwargs override these two:
+        deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
+        default_topology=TopologyPattern.PARALLELIZATION,
+        # remaining required fields:
+        repository_root=Path("/tmp"),
+        path_bindings=PathBindingConfig(),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(),
+        collector=CollectorConfig(),
+    )
+    assert cfg.deployment_surface is DeploymentSurface.LOCAL_DEVELOPMENT
+    assert cfg.default_topology is TopologyPattern.PARALLELIZATION
+
+
+def test_three_source_precedence_fixture() -> None:
+    """Default vs env vs kwargs — kwargs wins, env wins over default, default fills the rest.
+
+    Plan §2 L1 AC: 'precedence tested via three-source fixture'.
+    """
+    env = {
+        # env supplies deployment_surface; kwargs leaves it alone.
+        f"{ENV_PREFIX}DEPLOYMENT_SURFACE": "self-hosted-server",
+        # env AND kwargs supply default_topology; kwargs wins.
+        f"{ENV_PREFIX}DEFAULT_TOPOLOGY": "orchestrator-workers",
+        # env supplies tenant_id; kwargs leaves it alone.
+        f"{ENV_PREFIX}TENANT_ID": "tenant-from-env",
+    }
+    cfg = materialize_runtime_config(
+        env=env,
+        # kwargs override default_topology.
+        default_topology=TopologyPattern.HIERARCHICAL_DELEGATION,
+        # repository_root is required and has no default → must come from kwargs (or env).
+        repository_root=Path("/tmp"),
+        # Sub-configs required.
+        path_bindings=PathBindingConfig(),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(),
+        collector=CollectorConfig(),
+    )
+    # env-supplied (no kwarg):
+    assert cfg.deployment_surface is DeploymentSurface.SELF_HOSTED_SERVER
+    assert cfg.tenant_id == "tenant-from-env"
+    # kwargs-overridden (env had a different value):
+    assert cfg.default_topology is TopologyPattern.HIERARCHICAL_DELEGATION
+    # default-supplied (neither env nor kwargs):
+    assert cfg.mcp_clients == []
+
+
+def test_missing_required_raises_validation_error() -> None:
+    """Required-field absence from all three precedence levels raises typed error.
+
+    Per C-RT-03 RT-FAIL-CONFIG (permanent).
+    """
+    with pytest.raises(ValidationError) as exc_info:
+        # Missing `repository_root`, `path_bindings`, etc.
+        materialize_runtime_config(
+            env={},
+            deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
+            default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        )
+    missing_fields = {err["loc"][0] for err in exc_info.value.errors()}
+    assert "repository_root" in missing_fields
+    assert "path_bindings" in missing_fields
+
+
+def test_unknown_kwarg_rejected() -> None:
+    """Unknown keys rejected via `RuntimeConfig.extra='forbid'` (C-RT-03)."""
+    with pytest.raises(ValidationError):
+        materialize_runtime_config(env={}, unknown_field="x", **_required_kwargs())
+
+
+def test_env_defaults_to_os_environ_when_none() -> None:
+    """`env=None` falls back to `os.environ`; passing `{}` asserts env-independence."""
+    # If os.environ doesn't have a HARNESS_* clash, this behaves like env={}.
+    import os
+
+    assert not any(k.startswith(ENV_PREFIX) for k in os.environ), (
+        "test env contamination: clear HARNESS_* env vars before running this test"
+    )
+    cfg = materialize_runtime_config(**_required_kwargs())
+    assert cfg.deployment_surface is DeploymentSurface.LOCAL_DEVELOPMENT
+
+
+def test_no_file_loading_per_spec() -> None:
+    """C-RT-03: 'No file-loading; that is Track B.' Verified by signature surface.
+
+    The `materialize_runtime_config` signature has no path-to-config-file
+    parameter. This test pins the surface: any future addition of a file-path
+    parameter is a back-flow event requiring C-RT-03 amendment.
+    """
+    import inspect
+
+    sig = inspect.signature(materialize_runtime_config)
+    param_names = set(sig.parameters.keys())
+    # The only fixed parameters are `env` and `**kwargs`. No `config_file`,
+    # `path`, `from_file`, or equivalent.
+    forbidden = {"config_file", "config_path", "from_file", "path", "file"}
+    assert not (param_names & forbidden), (
+        f"file-loading parameter detected: {param_names & forbidden}"
+    )
