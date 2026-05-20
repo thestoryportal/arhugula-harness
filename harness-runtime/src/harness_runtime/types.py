@@ -468,18 +468,33 @@ class CostAttributionChain(Protocol):
 
 # ----------------------------------------------------------------------------
 # Protocol — provider SDK structural shape (C-RT-05).
-# Concrete async clients (anthropic / openai / ollama) duck-type to this.
-# Method shape lands at U-RT-17/18/19/20 when the runtime first calls them.
+# Concrete adapters (Anthropic / OpenAI / Ollama) wrap each async SDK client
+# behind this Protocol uniformly. Concretized at U-RT-17.
+#
+# Per spec §5 (C-RT-05 v1.1 lines 326-344): the Protocol is intentionally
+# minimal — only the lifecycle obligation the runtime owns. The capability-
+# aware abstraction layer (CP `provider_capabilities`) is what dispatches to
+# provider-specific completion methods, not this Protocol (per advisor +
+# spec docstring at line 335-339).
 # ----------------------------------------------------------------------------
 @runtime_checkable
 class ProviderClient(Protocol):
-    """Structural protocol every async provider client satisfies (C-RT-05 v1.1).
+    """Structural protocol every async provider adapter satisfies (C-RT-05 v1.1).
 
-    Concrete clients: `AsyncAnthropic`, `AsyncOpenAI`, `ollama.AsyncClient`.
-    The method shape (e.g., `aclose()` per C-RT-10 reverse-shutdown contract,
-    a capability-aware completion entry point per ADR-F1 v1.2) is filled in
-    at U-RT-17..U-RT-20 when the runtime first calls each.
+    Concrete adapters at `harness_runtime.lifecycle.providers`:
+    `AnthropicAdapter` (U-RT-17), `OpenAIAdapter` (U-RT-18), `OllamaAdapter`
+    (U-RT-19). Each adapter wraps its SDK's async client so the runtime can
+    `aclose()` all three uniformly at C-RT-10 reverse-shutdown.
     """
+
+    async def aclose(self) -> None:
+        """Close the underlying SDK client + connections. Idempotent.
+
+        Per C-RT-05 §5 + C-RT-10 reverse-shutdown: called at runtime shutdown
+        for every entry in `HarnessContext.providers`. Adapters MUST tolerate
+        repeated invocation without raising (idempotent post-condition).
+        """
+        ...
 
 
 # ----------------------------------------------------------------------------
@@ -519,6 +534,23 @@ class RuntimeConfig(BaseModel):
 
     mcp_clients: list[MCPClientConfig] = []
     """MCP client connection configs; empty list permitted."""
+
+    ollama_host: str | None = None
+    """Ollama daemon host URL (per spec §5 line 354 `AsyncClient(host=...)`).
+
+    `None` → `ollama.AsyncClient()` falls back to its built-in default
+    (`http://localhost:11434`). Top-level placement (vs. nested under
+    `ProviderSecretsConfig`) per spec §5 deferred-discretion note line 373:
+    Ollama is local-tier and credential-less, so this is a *behavior* knob,
+    not a key-allowlist concern. U-RT-17 amendment per advisor.
+    """
+
+    ollama_optional: bool = False
+    """If True, Ollama unreachability at stage 3a → `RT-FAIL-PROVIDER-DEGRADED`
+    (typed warning; stage continues with 2-provider context). Default False:
+    Ollama unreachability is a hard stage 3a failure per the multi-LLM
+    commitment (ADR-F1 v1.2). U-RT-19 wires the degraded branch; field is
+    declared here at U-RT-17 to keep schema additions in one commit."""
 
     tenant_id: str | None = None
     """Multi-tenant separation key per OD audit-ledger. `None` = single-tenant."""

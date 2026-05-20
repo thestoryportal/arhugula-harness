@@ -239,3 +239,47 @@ def test_secret_ref_carries_audit_composition_fields(fake_keyring: _FakeKeyring)
     # The two fields the caller needs from the resolver to compose SecretFetchEvent:
     assert ref.name == "audit-shape-key"
     assert ref.scope.name == "audit"
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap-value resolution path (U-RT-17 amendment).
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_bootstrap_value_returns_literal_value(fake_keyring: _FakeKeyring) -> None:
+    """`resolve_bootstrap_value` returns the literal keyring value as a str.
+
+    This is the stage-3a CP_CLIENTS path: provider SDKs require `api_key=str`
+    at `AsyncAnthropic(...)` / `AsyncOpenAI(...)` construction time, distinct
+    from the `SecretRef` handle returned by `.resolve()` for tool call sites.
+    """
+    keyring.set_password("harness", "anthropic_key", "sk-ant-test-value")
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    value = resolver.resolve_bootstrap_value("anthropic_key")
+    assert value == "sk-ant-test-value"
+
+
+def test_resolve_bootstrap_value_missing_raises_secret_unknown(
+    fake_keyring: _FakeKeyring,
+) -> None:
+    """Missing key → `SecretResolutionError(SECRET_UNKNOWN)` (spec §5 line 368)."""
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    with pytest.raises(SecretResolutionError) as excinfo:
+        resolver.resolve_bootstrap_value("absent-bootstrap-key")
+    assert excinfo.value.fail_class is SecretFailClass.SECRET_UNKNOWN
+    assert excinfo.value.name == "absent-bootstrap-key"
+
+
+def test_resolve_bootstrap_value_skips_allowlist_check(fake_keyring: _FakeKeyring) -> None:
+    """Bootstrap path is pre-tool-registration; allowlist is not consulted.
+
+    Verified indirectly: the resolver has an empty operator allowlist (which
+    would deny every `.resolve()` call), yet `resolve_bootstrap_value` still
+    returns the value because it has no tool/allowlist branch.
+    """
+    keyring.set_password("harness", "openai_key", "sk-test-no-allowlist-needed")
+    # Empty operator_allowlist → .resolve(tool=ToolContract(...)) would deny.
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    # Bootstrap path bypasses allowlist entirely.
+    value = resolver.resolve_bootstrap_value("openai_key")
+    assert value == "sk-test-no-allowlist-needed"

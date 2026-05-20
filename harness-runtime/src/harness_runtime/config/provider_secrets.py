@@ -144,6 +144,44 @@ class KeyringSecretResolver:
 
         return SecretRef(name=name, scope=scope, tier=tier)
 
+    def resolve_bootstrap_value(self, name: str) -> str:
+        """Resolve a secret to its literal value for stage-3a SDK construction.
+
+        Bootstrap-only path used at U-RT-17/18 to pass `api_key=...` into
+        `AsyncAnthropic(...)` / `AsyncOpenAI(...)` per spec §5 line 352-353.
+        Distinct from `resolve()` (which returns an opaque `SecretRef` handle
+        for tool call sites) because the provider SDKs require the literal
+        string at construction time.
+
+        Bypasses the AS allowlist intersection (`check_secret_allowlist`)
+        because tool contracts are not registered yet at stage 3a CP_CLIENTS
+        (it precedes stage 5 LOOP_INIT). This mirrors the `tool=None` branch
+        in `.resolve()` and is documented at AS spec C-AS-05 §5.4 as the
+        bootstrap-only secret resolution path.
+
+        Parameters
+        ----------
+        name :
+            The keyring entry name (e.g., `"anthropic_key"`, `"openai_key"`).
+
+        Returns
+        -------
+        str
+            The literal secret value from the OS keyring.
+
+        Raises
+        ------
+        SecretResolutionError
+            Keyring returned `None` for `(keyring_service, name)` —
+            `SecretFailClass.SECRET_UNKNOWN` per C-AS-07 §7.1 row 1. Surfaces
+            at the stage-3a fail-mode `RT-FAIL-SECRET-MISSING` per
+            `Spec_Harness_Runtime_v1.md` §5 line 368.
+        """
+        value = keyring.get_password(self.keyring_service, name)
+        if value is None:
+            raise SecretResolutionError(SecretFailClass.SECRET_UNKNOWN, name)
+        return value
+
 
 def make_keyring_resolver(config: ProviderSecretsConfig) -> KeyringSecretResolver:
     """Build a `KeyringSecretResolver` from a `ProviderSecretsConfig`."""
