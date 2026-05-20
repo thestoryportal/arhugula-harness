@@ -55,18 +55,20 @@ members = [
     "harness-cp",
     "harness-od",
     "harness-cxa",
+    "harness-runtime",
 ]
 
 [tool.pyright]
 typeCheckingMode = "strict"
 pythonVersion = "3.12"
 include = [
-    "harness-core/src", "harness-core/tests",
-    "harness-is/src",   "harness-is/tests",
-    "harness-as/src",   "harness-as/tests",
-    "harness-cp/src",   "harness-cp/tests",
-    "harness-od/src",   "harness-od/tests",
-    "harness-cxa/src",  "harness-cxa/tests",
+    "harness-core/src",    "harness-core/tests",
+    "harness-is/src",      "harness-is/tests",
+    "harness-as/src",      "harness-as/tests",
+    "harness-cp/src",      "harness-cp/tests",
+    "harness-od/src",      "harness-od/tests",
+    "harness-cxa/src",     "harness-cxa/tests",
+    "harness-runtime/src", "harness-runtime/tests",
 ]
 exclude = ["**/__pycache__", ".venv", ".harness"]
 
@@ -90,4 +92,5 @@ testpaths = [
     "harness-cp/tests",
     "harness-od/tests",
     "harness-cxa/tests",
+    "harness-runtime/tests",
 ]

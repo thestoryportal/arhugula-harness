@@ -15,6 +15,7 @@ members = [
     "harness-cxa",
     "harness-is",
     "harness-od",
+    "harness-runtime",
     "harness-workspace",
 ]
 
@@ -467,6 +468,31 @@ requires-dist = [
     { name = "opentelemetry-api", specifier = ">=1.30" },
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.30" },
     { name = "opentelemetry-sdk", specifier = ">=1.30" },
+]
+
+[[package]]
+name = "harness-runtime"
+version = "0.0.0"
+source = { editable = "harness-runtime" }
+dependencies = [
+    { name = "harness-as" },
+    { name = "harness-core" },
+    { name = "harness-cp" },
+    { name = "harness-cxa" },
+    { name = "harness-is" },
+    { name = "harness-od" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "harness-as", editable = "harness-as" },
+    { name = "harness-core", editable = "harness-core" },
+    { name = "harness-cp", editable = "harness-cp" },
+    { name = "harness-cxa", editable = "harness-cxa" },
+    { name = "harness-is", editable = "harness-is" },
+    { name = "harness-od", editable = "harness-od" },
+    { name = "pydantic", specifier = ">=2.10" },
 ]
 
 [[package]]

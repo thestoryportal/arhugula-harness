@@ -1,0 +1,55 @@
+# harness-runtime — composition root for H_T. uv workspace member.
+#
+# Authority:
+#   - CLAUDE.md §3.3 (Repo layout); Phase 2 Session 3 plan v2.1 §1 (Package layout)
+#   - design-substrate/Spec_Harness_Runtime_v1.md v1.1 (14 contracts C-RT-01..C-RT-14)
+#   - F-P2-1..F-P2-5 resolutions (.harness/phase_2_fork_F-P2-*.md)
+#
+# Scope: instantiates and wires the axis libraries into a startable Python process.
+# Owns: bootstrap orchestration (9 stages), provider SDK lifecycle, TracerProvider
+# lifecycle, in-process OTLP collector daemon supervision, runtime composition
+# primitives (Protocol stubs at L0 per Class 2 Tension 2026-05-19; concretized
+# at L2–L6).
+
+[project]
+name = "harness-runtime"
+version = "0.0.0"
+description = "H_T composition root — multi-LLM agent harness runtime"
+requires-python = ">=3.12"
+dependencies = [
+    "harness-core",
+    "harness-is",
+    "harness-as",
+    "harness-cp",
+    "harness-od",
+    "harness-cxa",
+    "pydantic>=2.10",
+    # Provider SDKs + MCP + keyring + OTel are declared at the workspace root
+    # pyproject.toml and inherited via the shared .venv. Per-axis re-declaration
+    # is deferred to L1 (U-RT-04..U-RT-08) and L3–L4 (U-RT-13..U-RT-20) where
+    # the runtime modules actually import them.
+]
+
+[project.scripts]
+# Track A: admin-only stubs. Operator-facing `run` is Track B.
+# Wired by U-RT-47 (inspect) and U-RT-48 (shutdown-cli).
+# Listed here at L0 so `uv sync --all-packages` registers the script entry
+# points; the target modules don't exist yet — `uv` only resolves them at
+# invocation time, not at sync.
+# harness-inspect  = "harness_runtime.admin.inspect:main"     # U-RT-47
+# harness-shutdown = "harness_runtime.admin.shutdown_cli:main" # U-RT-48
+
+[tool.uv.sources]
+harness-core = { workspace = true }
+harness-is   = { workspace = true }
+harness-as   = { workspace = true }
+harness-cp   = { workspace = true }
+harness-od   = { workspace = true }
+harness-cxa  = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/harness_runtime"]
