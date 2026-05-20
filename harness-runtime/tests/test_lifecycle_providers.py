@@ -39,11 +39,14 @@ from harness_runtime.config.provider_secrets import (
 )
 from harness_runtime.lifecycle.providers import (
     ANTHROPIC_KEYRING_NAME,
+    OPENAI_KEYRING_NAME,
     AnthropicAdapter,
+    OpenAIAdapter,
     ProviderAuthError,
     ProviderSecretMissingError,
     ProviderTransientError,
     construct_anthropic_adapter,
+    construct_openai_adapter,
 )
 from harness_runtime.types import (
     CollectorConfig,
@@ -54,6 +57,9 @@ from harness_runtime.types import (
     RuntimeConfig,
 )
 from keyring.backend import KeyringBackend
+from openai import APIConnectionError as OpenAIConnectionError
+from openai import AsyncOpenAI
+from openai import AuthenticationError as OpenAIAuthError
 
 # ---------------------------------------------------------------------------
 # Lightweight subclasses that satisfy `isinstance(exc, AuthenticationError)`
@@ -69,6 +75,16 @@ class _FakeAuthError(AuthenticationError):
 
 
 class _FakeConnectionError(APIConnectionError):
+    def __init__(self, message: str = "fake connection refused") -> None:
+        Exception.__init__(self, message)
+
+
+class _FakeOpenAIAuthError(OpenAIAuthError):
+    def __init__(self, message: str = "fake 401") -> None:
+        Exception.__init__(self, message)
+
+
+class _FakeOpenAIConnectionError(OpenAIConnectionError):
     def __init__(self, message: str = "fake connection refused") -> None:
         Exception.__init__(self, message)
 
@@ -171,6 +187,30 @@ def _factory(records: list[str]) -> Callable[[str], AsyncAnthropic]:
         return cast(AsyncAnthropic, _FakeAsyncAnthropic(api_key=api_key))
 
     return factory
+
+
+class _FakeAsyncOpenAI:
+    """Fake `AsyncOpenAI` (U-RT-18). Same surface shape as `_FakeAsyncAnthropic`."""
+
+    def __init__(self, api_key: str) -> None:
+        self.api_key = api_key
+        self.close_count = 0
+
+    async def close(self) -> None:
+        self.close_count += 1
+
+
+def _openai_factory(records: list[str]) -> Callable[[str], AsyncOpenAI]:
+    def factory(api_key: str) -> AsyncOpenAI:
+        records.append(api_key)
+        return cast(AsyncOpenAI, _FakeAsyncOpenAI(api_key=api_key))
+
+    return factory
+
+
+def _seed_openai_key(value: str = "sk-openai-fake-test") -> KeyringSecretResolver:
+    keyring.set_password("harness", OPENAI_KEYRING_NAME, value)
+    return make_keyring_resolver(ProviderSecretsConfig())
 
 
 # ---------------------------------------------------------------------------
@@ -350,3 +390,138 @@ async def test_ping_typed_error_propagates_unwrapped(
             client_factory=_factory([]),  # type: ignore[arg-type]
         )
     assert excinfo.value is original
+
+
+# ---------------------------------------------------------------------------
+# U-RT-18 — OpenAIAdapter parity tests.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_construct_openai_adapter_happy_path(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """Happy path for OpenAI: secret resolves → client constructs → ping passes."""
+    resolver = _seed_openai_key("sk-openai-happy")
+    config = _runtime_config(tmp_path)
+    captured_keys: list[str] = []
+    ping_call_count = 0
+
+    async def stub_ping() -> None:
+        nonlocal ping_call_count
+        ping_call_count += 1
+
+    adapter = await construct_openai_adapter(
+        config,
+        resolver,
+        ping_override=stub_ping,
+        client_factory=_openai_factory(captured_keys),
+    )
+
+    assert isinstance(adapter, OpenAIAdapter)
+    assert captured_keys == ["sk-openai-happy"]
+    assert ping_call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_aclose_is_idempotent(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """`aclose()` calls SDK `close()` exactly once even on repeated invocation."""
+    resolver = _seed_openai_key()
+    config = _runtime_config(tmp_path)
+
+    async def stub_ping() -> None:
+        return None
+
+    adapter = await construct_openai_adapter(
+        config,
+        resolver,
+        ping_override=stub_ping,
+        client_factory=_openai_factory([]),
+    )
+
+    fake_client = cast(_FakeAsyncOpenAI, adapter.client)
+    assert fake_client.close_count == 0
+    await adapter.aclose()
+    assert fake_client.close_count == 1
+    await adapter.aclose()
+    await adapter.aclose()
+    assert fake_client.close_count == 1
+
+
+def test_openai_adapter_satisfies_provider_client_protocol(
+    fake_keyring: _FakeKeyring,
+) -> None:
+    """Structural conformance to `ProviderClient` for OpenAI adapter."""
+
+    async def noop_ping() -> None:
+        return None
+
+    fake = cast(AsyncOpenAI, _FakeAsyncOpenAI(api_key="x"))
+    adapter = OpenAIAdapter(client=fake, ping=noop_ping)
+    assert isinstance(adapter, ProviderClient)
+
+
+@pytest.mark.asyncio
+async def test_openai_missing_secret_raises_provider_secret_missing(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """No `openai_key` in keyring → `ProviderSecretMissingError`."""
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    config = _runtime_config(tmp_path)
+
+    async def unreached_ping() -> None:  # pragma: no cover
+        raise AssertionError("ping should not run when secret is missing")
+
+    with pytest.raises(ProviderSecretMissingError) as excinfo:
+        await construct_openai_adapter(
+            config,
+            resolver,
+            ping_override=unreached_ping,
+            client_factory=_openai_factory([]),
+        )
+    assert excinfo.value.provider == "openai"
+    assert excinfo.value.keyring_name == OPENAI_KEYRING_NAME
+
+
+@pytest.mark.asyncio
+async def test_openai_ping_auth_failure_raises_provider_auth_error(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """OpenAI `AuthenticationError` from ping → `ProviderAuthError`."""
+    resolver = _seed_openai_key()
+    config = _runtime_config(tmp_path)
+
+    async def failing_ping() -> None:
+        raise _FakeOpenAIAuthError()
+
+    with pytest.raises(ProviderAuthError) as excinfo:
+        await construct_openai_adapter(
+            config,
+            resolver,
+            ping_override=failing_ping,
+            client_factory=_openai_factory([]),
+        )
+    assert excinfo.value.provider == "openai"
+
+
+@pytest.mark.asyncio
+async def test_openai_ping_transient_failure_raises_provider_transient(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """OpenAI `APIConnectionError` from ping → `ProviderTransientError`."""
+    resolver = _seed_openai_key()
+    config = _runtime_config(tmp_path)
+
+    async def failing_ping() -> None:
+        raise _FakeOpenAIConnectionError()
+
+    with pytest.raises(ProviderTransientError) as excinfo:
+        await construct_openai_adapter(
+            config,
+            resolver,
+            ping_override=failing_ping,
+            client_factory=_openai_factory([]),
+        )
+    assert excinfo.value.provider == "openai"

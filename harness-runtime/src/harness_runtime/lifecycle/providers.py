@@ -59,6 +59,7 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 
 from harness_runtime.config.provider_secrets import (
     KeyringSecretResolver,
@@ -68,12 +69,15 @@ from harness_runtime.types import ProviderClient, RuntimeConfig
 
 __all__ = [
     "ANTHROPIC_KEYRING_NAME",
+    "OPENAI_KEYRING_NAME",
     "AnthropicAdapter",
+    "OpenAIAdapter",
     "ProviderAuthError",
     "ProviderDegradedWarning",
     "ProviderSecretMissingError",
     "ProviderTransientError",
     "construct_anthropic_adapter",
+    "construct_openai_adapter",
 ]
 
 
@@ -83,6 +87,10 @@ __all__ = [
 ANTHROPIC_KEYRING_NAME: Final[str] = "anthropic_key"
 """Keyring entry name for the Anthropic API key per spec §5 line 352
 (`AsyncAnthropic(api_key=keyring_resolve('anthropic_key'), ...)`)."""
+
+OPENAI_KEYRING_NAME: Final[str] = "openai_key"
+"""Keyring entry name for the OpenAI API key per spec §5 line 353
+(`AsyncOpenAI(api_key=keyring_resolve('openai_key'), ...)`)."""
 
 
 # ---------------------------------------------------------------------------
@@ -298,3 +306,108 @@ async def construct_anthropic_adapter(
 # pyright will flag the assignment line below.
 _ANTHROPIC_PROTOCOL_CHECK: type[ProviderClient] = AnthropicAdapter
 del _ANTHROPIC_PROTOCOL_CHECK
+
+
+# ---------------------------------------------------------------------------
+# OpenAIAdapter — U-RT-18.
+# Same shape as AnthropicAdapter. Per-SDK error-class import is local to the
+# classifier so the import cost is paid once per construction call. OpenAI's
+# AuthenticationError + PermissionDeniedError share the same APIStatusError
+# parent as Anthropic's; the classification logic is symmetric.
+# ---------------------------------------------------------------------------
+
+
+def _default_openai_ping(client: AsyncOpenAI) -> AsyncPing:
+    """Build the default ping callable for an `AsyncOpenAI` client.
+
+    Uses `client.models.list()` per spec §5 line 373 suggestion. Symmetric
+    with `_default_anthropic_ping`.
+    """
+
+    async def ping() -> None:
+        await client.models.list()
+
+    return ping
+
+
+@dataclass
+class OpenAIAdapter:
+    """Stage-3a OpenAI adapter — U-RT-18.
+
+    Wraps an `openai.AsyncOpenAI` client behind the `ProviderClient` Protocol.
+    Same idempotent-close discipline as `AnthropicAdapter`.
+    """
+
+    client: AsyncOpenAI
+    ping: AsyncPing
+    _closed: bool = field(default=False)
+
+    async def aclose(self) -> None:
+        """Idempotent close. Calls `client.close()` exactly once."""
+        if self._closed:
+            return
+        self._closed = True
+        await self.client.close()
+
+
+def _classify_openai_ping_failure(exc: BaseException) -> Exception:
+    """Map an OpenAI ping exception to the typed fail class.
+
+    OpenAI SDK raises `openai.AuthenticationError` (401) and
+    `openai.PermissionDeniedError` (403) for auth failures. Network errors
+    raise `openai.APIConnectionError`. Symmetric with Anthropic classifier.
+    """
+    from openai import AuthenticationError, PermissionDeniedError
+
+    if isinstance(exc, AuthenticationError | PermissionDeniedError):
+        return ProviderAuthError("openai", exc)
+    return ProviderTransientError("openai", exc)
+
+
+async def construct_openai_adapter(
+    config: RuntimeConfig,
+    resolver: KeyringSecretResolver,
+    *,
+    ping_override: AsyncPing | None = None,
+    client_factory: Callable[[str], AsyncOpenAI] | None = None,
+) -> OpenAIAdapter:
+    """Construct + ping-verify an `OpenAIAdapter` for stage 3a.
+
+    Steps + parameters + fail-mode contract mirror `construct_anthropic_adapter`
+    — see that function's docstring for the canonical narrative. The only
+    per-provider variance is the keyring name (`openai_key`), the SDK class
+    (`AsyncOpenAI`), and the error-class set the classifier checks.
+
+    Raises
+    ------
+    ProviderSecretMissingError
+        Keyring lookup for `openai_key` returned `None`.
+    ProviderAuthError
+        Ping raised an OpenAI auth-class error.
+    ProviderTransientError
+        Ping raised any other exception.
+    """
+    _ = config
+    try:
+        api_key = resolver.resolve_bootstrap_value(OPENAI_KEYRING_NAME)
+    except SecretResolutionError as exc:
+        raise ProviderSecretMissingError("openai", OPENAI_KEYRING_NAME) from exc
+
+    if client_factory is None:
+        client = AsyncOpenAI(api_key=api_key)
+    else:
+        client = client_factory(api_key)
+
+    ping = ping_override if ping_override is not None else _default_openai_ping(client)
+    try:
+        await ping()
+    except (ProviderAuthError, ProviderTransientError):
+        raise
+    except BaseException as exc:
+        raise _classify_openai_ping_failure(exc) from exc
+
+    return OpenAIAdapter(client=client, ping=ping)
+
+
+_OPENAI_PROTOCOL_CHECK: type[ProviderClient] = OpenAIAdapter
+del _OPENAI_PROTOCOL_CHECK
