@@ -1,4 +1,33 @@
-# Specification — Harness Runtime v1.4
+# Specification — Harness Runtime v1.5
+
+## Change-note (v1.4 → v1.5)
+
+**Scope of revision.** In-Phase-7 spec-to-spec drift resolution per `.harness/class_1_tension_c_rt_16_retry_attribute_drift.md` (filed + Path A ratified 2026-05-20 during U-RT-58 implementation). Class 1 halt surfaced at AC #4 verification: §14.6 step 4 attribute list named a 6-tuple that did NOT match the canonical CP §3.5 `retry.*` schema (zero overlap; runtime spec author appears to have worked from the pre-v1.3 CP attribute set and improvised). Per workspace `CLAUDE.md` §1.3 authority chain, CP per-axis spec is canonical for CP-owned namespaces; runtime spec cannot rename CP's attributes silently.
+
+**Single-finding correction.** §14.6 step 4 (inner per-attempt span attribute set) re-stated to cite the canonical CP §3.5 6-attribute namespace verbatim. The composer remains the runtime emission site; the attribute schema is CP-canonical:
+
+| Position | Canonical attribute name (CP §3.5) | Source |
+|---|---|---|
+| 1 | `retry.attempt_number` (integer; 1-indexed) | CP §3.5 v1.3 |
+| 2 | `retry.original_span_id` (string; 16-hex W3C trace-context format) | CP §3.5 v1.3 |
+| 3 | `retry.delay_ms` (integer; jittered delay per full-jitter backoff) | CP §3.5 v1.3 |
+| 4 | `retry.cause_attribution` (string; open-set enum from C5 cause_attribution catalog per C-CP-21) | CP §3.5 v1.3 |
+| 5 | `retry.fail_class` (enum: `{transient-retry, Reflexion-recoverable, HITL-recoverable, permanent-fail-exit, terminal-fail-exit}`) | CP §3.5 v1.3 |
+| 6 | `engine.replay_disposition` (composition with engine namespace per D1 v1.2 §1.1.1; derived from `binding.engine_class` via `harness_cp.engine_namespace.REPLAY_DISPOSITION_MAPPING`) | CP §3.5 v1.3 + CP §9.1 + D1 v1.2 |
+
+**Producer-side reference.** Wrapper imports the canonical attribute carrier at `harness_cp.retry_fallback_namespace.RETRY_ATTEMPT_CHILD_SPAN_SCHEMA` (landed) rather than hand-coding strings. Ties retirement criterion B verification ("references the canonical attribute carrier") directly to the canonical producer surface.
+
+**Sections revised (substantive).**
+- **§14.6** step 4 narrative — attribute list restated canonically (was drifted names; now CP-§3.5 names with byte-exact citation).
+- **§14.6** "Invariants" — `retry.*` invariant restated to cite producer carrier.
+
+**Sections preserved verbatim from v1.4.** All v1.4 content outside the §14.6-step-4 corrections preserved unchanged. The §14.6 D1–D6 + Q1=a + Q2=c architectural commitments stand. The C-RT-16 contract surface stands. The composer body discipline (candidate-iteration loop + per-candidate retry loop + breaker pre-check + nested span emission + fail-class taxonomy + reserved registry key extension) stands.
+
+**Downstream absorption owed.** `.harness/phase-2-session-3-track-a-atomic-decomposition.md` v2.3 → v2.4: U-RT-58 AC #4 revised to canonical attribute names. Wrapper implementation at `harness_runtime/lifecycle/retry_breaker_fallback.py` swaps the drifted attribute strings + adds value-derivation for `retry.original_span_id` (outer-wrapper-span `span_id` as the 16-hex original-operation reference) and `engine.replay_disposition` (lookup via `REPLAY_DISPOSITION_MAPPING[binding.engine_class]`). Test assertions at `test_lifecycle_retry_breaker_fallback.py` update to canonical names. `.harness/class_1_tension_c_rt_16_retry_attribute_drift.md` audit-resolved at the same arc.
+
+**Status posture.** Proposed (v1.4) → **Proposed (v1.5)**. Adversarial-review pass at U-RT-58 close (same arc as v1.4).
+
+---
 
 ## Change-note (v1.3 → v1.4)
 
@@ -1031,7 +1060,7 @@ Per-step invocation discipline (the body of `RetryBreakerFallbackDispatcher.disp
 4. **Per-candidate loop:** for each candidate in the chain iterator:
    - **Breaker pre-check.** `breaker = ctx.retry_breaker.get_breaker(candidate.provider, candidate.model)`. If `breaker.should_attempt() is False` (state is OPEN and cooldown unexpired), advance to next candidate via `advance_or_raise(chain, candidate)` — emit `retry.skipped` event on outer span; do NOT consume retry budget; loop continues.
    - **Per-attempt loop** (bounded by `RetryPolicy.max_attempts` for this candidate):
-     - **Start inner span** via `with tracer.start_as_current_span("harness.runtime.retry_attempt")`. Inner span carries the C-CP-03 §3.5 `retry.*` 6-attribute namespace (`retry.attempt`, `retry.attempt_count`, `retry.policy_id`, `retry.backoff_ms`, `retry.cause_class`, `retry.terminal`).
+     - **Start inner span** via `with tracer.start_as_current_span("harness.runtime.retry_attempt")`. Inner span carries the canonical C-CP-03 §3.5 `retry.*` 6-attribute namespace per CP spec v1.3 (NOT renamed at the runtime spec; canonical attribute set imported from the landed producer carrier at `harness_cp.retry_fallback_namespace.RETRY_ATTEMPT_CHILD_SPAN_SCHEMA`): `retry.attempt_number` (integer; 1-indexed), `retry.original_span_id` (string; 16-hex W3C trace-context format; carries the outer wrapper span's `span_id` as the original-operation reference), `retry.delay_ms` (integer; jittered delay per full-jitter backoff), `retry.cause_attribution` (string; open-set enum from C5 cause_attribution catalog per C-CP-21), `retry.fail_class` (5-class enum: `transient-retry` / `Reflexion-recoverable` / `HITL-recoverable` / `permanent-fail-exit` / `terminal-fail-exit`; from `harness_cp.validator_fail_taxonomy.ValidatorFailClass`), and `engine.replay_disposition` (composition with engine namespace per D1 v1.2 §1.1.1; derived from `binding.engine_class` via `harness_cp.engine_namespace.REPLAY_DISPOSITION_MAPPING`).
      - **Dispatch to inner.** `result = await self.inner.dispatch(rebound(binding, candidate), step)` — `rebound(...)` constructs a new `StepEffectiveBinding` whose `model_binding` field is overridden to `candidate` for this attempt. All other binding fields (sandbox_tier_floor, etc.) carry forward unchanged.
      - **On success:** call `breaker.record_success()` (registry handles `harness.breaker.*` transition emission if state changes); annotate inner span with `retry.terminal = "success"`; return `result` (outer span closes via CM; breaker + retry state captured in span attrs).
      - **On `LLMDispatchProviderUnreachableError` / `LLMDispatchPayloadShapeError`:** fail-fast for this candidate (these are not retry-eligible per D2). Annotate inner span with `retry.terminal = "fail-fast"` + `retry.cause_class = "{class_name}"`. Call `breaker.record_failure()` (registry emits transition if breaker trips). Break out of per-attempt loop; advance to next candidate via `advance_or_raise`.
@@ -1054,7 +1083,7 @@ Per-step invocation discipline (the body of `RetryBreakerFallbackDispatcher.disp
 - Wrapper is async (matches C-RT-08 async-only `run()` posture + C-RT-15 async dispatch).
 - Wrapper satisfies `isinstance(wrapper, StepDispatcher)` via the same `@runtime_checkable` introspection.
 - Outer span emitted exactly once per composer invocation; inner per-attempt span emitted exactly once per attempt.
-- `retry.*` namespace attributes per C-CP-03 §3.5 set on the inner per-attempt span only; outer span carries `fallback.*` attributes on exhaustion.
+- `retry.*` namespace attributes per the CP-canonical 6-attribute set (per C-CP-03 §3.5 v1.3; carrier at `harness_cp.retry_fallback_namespace.RETRY_ATTEMPT_CHILD_SPAN_SCHEMA`) set on the inner per-attempt span only; outer span carries `fallback.*` attributes on exhaustion.
 - `harness.breaker.*` namespace emission is delegated to `RuntimeRetryBreaker.emit_breaker_transition_event` (no wrapper-side span code); per C-OD-07 §7.1 7-attribute schema.
 - Wrapper does NOT swallow exceptions: all paths terminate in either successful return OR raised typed fail-class.
 - Reserved registry key `"llm_dispatch"` is the ONLY runtime-emitted retry-policy lookup; per-tool keys are reserved for tool-invocation runtime composer (separate future arc per the v2 ledger §9.2.2 tool-invocation gap).

@@ -306,10 +306,11 @@ async def test_retries_twice_then_succeeds_on_attempt_3() -> None:
     ]
     assert len(outer_spans) == 1
 
-    # Final attempt terminal = "success".
+    # Final attempt is the success path — canonical CP §3.5 sampling discipline
+    # omits `retry.fail_class` on success (presence is the tail-keep fail signal).
     last_attempt = attempt_spans[-1]
     assert last_attempt.attributes is not None
-    assert last_attempt.attributes["retry.terminal"] == "success"
+    assert "retry.fail_class" not in last_attempt.attributes
 
 
 # ---------------------------------------------------------------------------
@@ -319,9 +320,20 @@ async def test_retries_twice_then_succeeds_on_attempt_3() -> None:
 
 @pytest.mark.asyncio
 async def test_retry_six_attribute_namespace_emitted_per_attempt() -> None:
-    """Each per-attempt span carries ``retry.*`` 6 attributes: ``retry.attempt``,
-    ``retry.attempt_count``, ``retry.policy_id``, ``retry.backoff_ms``,
-    ``retry.cause_class``, ``retry.terminal``."""
+    """Each per-attempt span carries the canonical CP §3.5 6-attribute namespace
+    (per Spec_Control_Plane_v1_3.md §3.5 + ADR-D1 v1.2 §1.1.1): ``retry.attempt_number``
+    (1-indexed), ``retry.original_span_id`` (16-hex outer-span-id),
+    ``retry.delay_ms``, ``retry.cause_attribution``, ``retry.fail_class``
+    (`ValidatorFailClass` enum), ``engine.replay_disposition`` (via
+    `REPLAY_DISPOSITION_MAPPING[binding.engine_class]`).
+
+    Path A resolution of `.harness/class_1_tension_c_rt_16_retry_attribute_drift.md`
+    landed at runtime spec v1.5 + plan v2.4 (2026-05-20); previously named
+    `retry.attempt` / `retry.attempt_count` / `retry.policy_id` / `retry.backoff_ms`
+    / `retry.cause_class` / `retry.terminal` — drifted names per the runtime
+    spec v1.4 step 4 phrasing, NOT canonical."""
+    from harness_cp.engine_namespace import REPLAY_DISPOSITION_MAPPING
+
     primary = _candidate("anthropic", "claude-test-1")
     chain = _chain(primary)
     breaker = _retry_breaker_with_llm_policy(max_attempts=3)
@@ -332,6 +344,7 @@ async def test_retry_six_attribute_namespace_emitted_per_attempt() -> None:
         ]
     )
     tp, exporter = _tracer_provider_with_exporter()
+    binding = _binding()
     wrapper = RetryBreakerFallbackDispatcher(
         inner=inner,
         retry_breaker=breaker,
@@ -340,29 +353,35 @@ async def test_retry_six_attribute_namespace_emitted_per_attempt() -> None:
         sleep_fn=_noop_sleep,
     )
 
-    await wrapper.dispatch(_binding(), _step())
+    await wrapper.dispatch(binding, _step())
     spans = exporter.get_finished_spans()
+    outer = next(s for s in spans if s.name == "harness.runtime.retry_breaker_fallback")
     attempts = [s for s in spans if s.name == "harness.runtime.retry_attempt"]
     assert len(attempts) == 2
+
+    expected_replay = REPLAY_DISPOSITION_MAPPING[binding.engine_class].value
+    expected_original_span_id = format(outer.context.span_id, "016x")
 
     # First attempt (transient → retry).
     first = attempts[0].attributes
     assert first is not None
-    assert first["retry.attempt"] == 0
-    assert first["retry.attempt_count"] == 3
-    assert first["retry.policy_id"] == RESERVED_LLM_DISPATCH_KEY
-    assert first["retry.terminal"] == "retry"
-    assert first["retry.cause_class"] == "transient-retry"
-    assert "retry.backoff_ms" in first
+    assert first["retry.attempt_number"] == 1  # 1-indexed per CP §3.5
+    assert first["retry.original_span_id"] == expected_original_span_id
+    assert first["engine.replay_disposition"] == expected_replay
+    assert first["retry.cause_attribution"] == "transient-retry"
+    assert first["retry.fail_class"] == "transient-retry"
+    assert "retry.delay_ms" in first
 
-    # Second attempt (success).
+    # Second attempt (success — fail_class omitted by canonical sampling
+    # discipline; presence of `retry.fail_class` is tail-keep signal).
     second = attempts[1].attributes
     assert second is not None
-    assert second["retry.attempt"] == 1
-    assert second["retry.attempt_count"] == 3
-    assert second["retry.policy_id"] == RESERVED_LLM_DISPATCH_KEY
-    assert second["retry.terminal"] == "success"
-    assert second["retry.backoff_ms"] == 0
+    assert second["retry.attempt_number"] == 2
+    assert second["retry.original_span_id"] == expected_original_span_id
+    assert second["engine.replay_disposition"] == expected_replay
+    assert second["retry.delay_ms"] == 0
+    # On success path canonical sampling discipline says fail_class omitted.
+    assert "retry.fail_class" not in second
 
 
 # ---------------------------------------------------------------------------

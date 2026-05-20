@@ -66,6 +66,7 @@ from typing import Any
 
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import FallbackChain, ProviderCandidate
+from harness_cp.engine_namespace import REPLAY_DISPOSITION_MAPPING
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.routing_manifest_residence import RetryPolicy
 from harness_cp.validator_fail_taxonomy import ValidatorFailClass
@@ -354,17 +355,28 @@ class RetryBreakerFallbackDispatcher:
         staircase-escalate branch and the max-attempts-exhaustion branch are
         reachable under this reading.
         """
-        _ = outer_span  # outer-span event emission is handled at advance site
         rebound = _rebind_to_candidate(binding, candidate)
         last_failure_class: str | None = None
+
+        # Derive the canonical attribute values that don't depend on per-attempt state.
+        original_span_id_hex = _format_span_id_hex(outer_span)
+        replay_disposition = REPLAY_DISPOSITION_MAPPING[binding.engine_class]
 
         for attempt in range(policy.max_attempts):
             with tracer.start_as_current_span(
                 "harness.runtime.retry_attempt"
             ) as inner_span:
-                inner_span.set_attribute("retry.attempt", attempt)
-                inner_span.set_attribute("retry.attempt_count", policy.max_attempts)
-                inner_span.set_attribute("retry.policy_id", RESERVED_LLM_DISPATCH_KEY)
+                # CP-canonical retry.* 6-attribute namespace per Spec_Control_Plane_v1_3.md
+                # §3.5 + ADR-D1 v1.2 §1.1.1 + landed carrier at
+                # `harness_cp.retry_fallback_namespace.RETRY_ATTEMPT_CHILD_SPAN_SCHEMA`.
+                # `retry.attempt_number` is 1-indexed (canonical); `retry.original_span_id`
+                # carries the outer wrapper span's 16-hex W3C trace-context span_id as
+                # the original-operation reference per spec §14.6 v1.5 amendment.
+                inner_span.set_attribute("retry.attempt_number", attempt + 1)
+                inner_span.set_attribute("retry.original_span_id", original_span_id_hex)
+                inner_span.set_attribute(
+                    "engine.replay_disposition", replay_disposition.value
+                )
 
                 try:
                     result = await self.inner.dispatch(rebound, step)
@@ -373,12 +385,18 @@ class RetryBreakerFallbackDispatcher:
                 except Exception as exc:
                     cause = _classify_provider_exception(exc)
                     if cause is None:
-                        # Fail-fast: AUTH / payload-shape.
-                        inner_span.set_attribute("retry.terminal", "fail-fast")
+                        # Fail-fast: AUTH / payload-shape. Per CP §3.5 canonical
+                        # 5-class taxonomy, fail-fast maps to PERMANENT_FAIL_EXIT.
+                        # `retry.cause_attribution` carries the broader
+                        # open-set string (Python exception class name MVP).
+                        inner_span.set_attribute("retry.delay_ms", 0)
                         inner_span.set_attribute(
-                            "retry.cause_class", type(exc).__name__
+                            "retry.cause_attribution", type(exc).__name__
                         )
-                        inner_span.set_attribute("retry.backoff_ms", 0)
+                        inner_span.set_attribute(
+                            "retry.fail_class",
+                            ValidatorFailClass.PERMANENT_FAIL_EXIT.value,
+                        )
                         transition = breaker.record_failure()
                         if transition is not None:
                             self._emit_breaker_transition(transition, outer_span)
@@ -403,13 +421,13 @@ class RetryBreakerFallbackDispatcher:
                         backoff_seconds = self.retry_breaker.compute_delay_seconds(
                             attempt
                         )
-                        inner_span.set_attribute("retry.terminal", "retry")
                         inner_span.set_attribute(
-                            "retry.cause_class", cause.value
+                            "retry.delay_ms", int(backoff_seconds * 1000)
                         )
                         inner_span.set_attribute(
-                            "retry.backoff_ms", int(backoff_seconds * 1000)
+                            "retry.cause_attribution", cause.value
                         )
+                        inner_span.set_attribute("retry.fail_class", cause.value)
                         last_failure_class = cause.value
                         # Sleep outside the span CM is fine; OTel ends the span
                         # at the with-exit. We sleep after recording the
@@ -420,11 +438,16 @@ class RetryBreakerFallbackDispatcher:
                         and is_last_attempt
                     ):
                         # Staircase would retry, but max_attempts exhausted.
-                        inner_span.set_attribute("retry.terminal", "max-attempts")
+                        # Per CP §3.5: `retry.fail_class = terminal-fail-exit`
+                        # for the last-attempt exhaustion (canonical 5-class entry).
+                        inner_span.set_attribute("retry.delay_ms", 0)
                         inner_span.set_attribute(
-                            "retry.cause_class", cause.value
+                            "retry.cause_attribution", cause.value
                         )
-                        inner_span.set_attribute("retry.backoff_ms", 0)
+                        inner_span.set_attribute(
+                            "retry.fail_class",
+                            ValidatorFailClass.TERMINAL_FAIL_EXIT.value,
+                        )
                         transition = breaker.record_failure()
                         if transition is not None:
                             self._emit_breaker_transition(transition, outer_span)
@@ -434,12 +457,16 @@ class RetryBreakerFallbackDispatcher:
                         )
                     else:
                         # Escalation: cross-family-fallback / local-terminal /
-                        # HITL-escalation — abandon this candidate.
-                        inner_span.set_attribute("retry.terminal", "escalate")
+                        # HITL-escalation — abandon this candidate. The staircase
+                        # returned STAGE_5_HITL_ESCALATION for a skip-class cause;
+                        # canonical `retry.fail_class` for this path is the cause
+                        # class itself (HITL_RECOVERABLE / PERMANENT_FAIL_EXIT /
+                        # TERMINAL_FAIL_EXIT per the staircase skip-class set).
+                        inner_span.set_attribute("retry.delay_ms", 0)
                         inner_span.set_attribute(
-                            "retry.cause_class", cause.value
+                            "retry.cause_attribution", cause.value
                         )
-                        inner_span.set_attribute("retry.backoff_ms", 0)
+                        inner_span.set_attribute("retry.fail_class", cause.value)
                         transition = breaker.record_failure()
                         if transition is not None:
                             self._emit_breaker_transition(transition, outer_span)
@@ -448,9 +475,12 @@ class RetryBreakerFallbackDispatcher:
                             result=None, last_failure_class=last_failure_class
                         )
                 else:
-                    # Success.
-                    inner_span.set_attribute("retry.terminal", "success")
-                    inner_span.set_attribute("retry.backoff_ms", 0)
+                    # Success. `retry.fail_class` is canonically only set on
+                    # failure paths; on success it's omitted (a span tail-keep
+                    # sampler reads `retry.fail_class` presence as a fail signal
+                    # per C-CP-03 §3.5 sampling discipline). `retry.delay_ms = 0`
+                    # makes the success span numerically distinct from retries.
+                    inner_span.set_attribute("retry.delay_ms", 0)
                     transition = breaker.record_success()
                     if transition is not None:
                         self._emit_breaker_transition(transition, outer_span)
@@ -489,6 +519,22 @@ class _PerCandidateTerminal:
 
     result: Mapping[str, Any] | None
     last_failure_class: str | None
+
+
+def _format_span_id_hex(span: Any) -> str:
+    """Format an OTel span's ``span_id`` as 16-hex W3C trace-context (canonical
+    `retry.original_span_id` format per CP §3.5 v1.3).
+
+    OTel SDK exposes ``span.get_span_context().span_id`` as a 64-bit integer;
+    the W3C Trace Context spec formats it as 16 lowercase hex characters,
+    zero-padded. Returns the empty string if the span isn't recording (no
+    span context available).
+    """
+    span_context = span.get_span_context() if hasattr(span, "get_span_context") else None
+    if span_context is None or not getattr(span_context, "is_valid", True):
+        return ""
+    span_id_int = span_context.span_id
+    return format(span_id_int, "016x")
 
 
 def _chain_length(chain: FallbackChain) -> int:

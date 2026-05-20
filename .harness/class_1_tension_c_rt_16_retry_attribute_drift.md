@@ -2,7 +2,7 @@
 
 **Filed:** 2026-05-20 (during U-RT-58 implementation arc)
 **Class:** 1 (halt-execution; design-phase artifact requires revision)
-**Status:** OPEN — execution halted at U-RT-58 AC #4 verification pending operator ratification
+**Status:** RESOLVED 2026-05-20 — Path A ratified + applied same-day (spec v1.4 → v1.5 + plan v2.3 → v2.4 + impl swap + tests green)
 **Surfaced by:** `phase-7-implementation` skill §6 halt-condition + advisor cross-check against CP §3.5 canonical schema
 
 ---
@@ -117,3 +117,4 @@ Operator decision needed:
 | Cross-references | `.harness/class_3_tension_c_rt_16_spec_internal_drift.md` (related but distinct — internal §14.6 inconsistency about operator-supplied reserved key); `.harness/phase-7d-retirement-ledger-v2.md` §5 (retirement criterion B for H_T-CP-3) |
 | Resolution target | Operator ratification of Path A → `spec-writer` skill applies runtime spec v1.5 amendment → resume U-RT-58 implementation with canonical names |
 | Blocking | U-RT-58 commit; H_T-CP-3 retirement (AC #10); §6.3.2 CXA-5 cascade re-evaluation |
+| Resolved at | 2026-05-20 same-day, in-session — Path A applied: (i) `Spec_Harness_Runtime_v1.md` v1.4 → v1.5 §14.6 step 4 attribute list restated canonically; (ii) `.harness/phase-2-session-3-track-a-atomic-decomposition.md` v2.3 → v2.4 U-RT-58 AC #4 revised; (iii) `harness_runtime/lifecycle/retry_breaker_fallback.py` swapped to canonical names + added value-derivation for `retry.original_span_id` (via `_format_span_id_hex(outer_span)`) + `engine.replay_disposition` (via `REPLAY_DISPOSITION_MAPPING[binding.engine_class]`); (iv) `test_lifecycle_retry_breaker_fallback.py` AC #4 assertions updated; (v) 14 U-RT-58 tests green; 2231 workspace tests green; ruff clean; pyright +1 test-file `reportOptionalMemberAccess` consistent with existing workspace pattern. H_T-CP-3 retirement now properly canon-gated. |
