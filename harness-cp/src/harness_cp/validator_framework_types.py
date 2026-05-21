@@ -28,7 +28,14 @@ U-CP-58 (CP plan v2.16 §1).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
+from typing import Any, Protocol, runtime_checkable
+
+from pydantic import BaseModel, ConfigDict
+
+from harness_cp.hitl_response_palette import HITLResponse
+from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 
 
 class ValidatorOutcome(StrEnum):
@@ -106,3 +113,115 @@ class ValidatorNextAction(StrEnum):
 
     ABORT = "abort"
     """ValidatorOutcome=PERMANENT_FAIL → workflow aborts."""
+
+
+# ============================================================================
+# U-CP-59 — Validator Protocol + ValidatorResult + ValidatorEvaluation +
+#            HITLEscalationBrief schemas (CP spec v1.10 §25.1 + §25.2)
+# ============================================================================
+
+
+_DEFAULT_HITL_PALETTE: frozenset[HITLResponse] = frozenset(HITLResponse)
+"""C-CP-16 §16.1 full 4-response palette: APPROVE / EDIT / REJECT / RESPOND.
+
+Default `HITLEscalationBrief.proposed_response_palette` per CP spec v1.10
+§25.2. Validator-escalation arcs MAY narrow the palette per cross-trust-
+boundary discipline (C-CP-21 §21.3); the default is the full palette.
+"""
+
+
+class HITLEscalationBrief(BaseModel):
+    """Typed payload passed to a HITL gate when a Validator escalates
+    (CP spec v1.10 §25.2).
+
+    Constructed by `ValidatorFramework.evaluate()` when the outcome is
+    `ESCALATE` (and bridged to `ValidatorNextAction.ESCALATE_HITL`).
+    The HITL gate composer (C-RT-18 §14.8) consumes this brief at
+    proposal-window open.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    parent_step_id: str
+    parent_action_id: str
+    fail_class: ValidatorFailClass
+    fail_detail_hash: str
+    escalation_reason: str
+    proposed_response_palette: frozenset[HITLResponse] = _DEFAULT_HITL_PALETTE
+
+
+class ValidatorResult(BaseModel):
+    """Operator-supplied Validator return shape (CP spec v1.10 §25.2).
+
+    Field cardinality per §25.2:
+      - `outcome` REQUIRED
+      - `fail_class` None iff outcome=PASS
+      - `revalidation_payload` populated on REVALIDATE
+      - `escalation_brief` populated on ESCALATE
+      - `fail_detail_hash` sha256 of fail-reason text (§25.8 deferred-to-discretion shape)
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    outcome: ValidatorOutcome
+    fail_class: ValidatorFailClass | None = None
+    revalidation_payload: Mapping[str, Any] | None = None
+    escalation_brief: HITLEscalationBrief | None = None
+    fail_detail_hash: str | None = None
+
+
+class ValidatorEvaluation(BaseModel):
+    """ValidatorFramework output (CP spec v1.10 §25.2).
+
+    Wraps the operator-supplied `ValidatorResult` with framework-derived
+    fields: span attributes for `validator.*` namespace emission (per §25.5),
+    the next_action derived per the §25.2 mapping table, and a cumulative
+    burden_count tracked on `ctx.operator_burden_counter` per §25.7
+    invariant 5.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    result: ValidatorResult
+    span_attributes: Mapping[str, Any]
+    next_action: ValidatorNextAction
+    burden_count: int
+
+
+@runtime_checkable
+class Validator(Protocol):
+    """Operator-supplied Validator Protocol (CP spec v1.10 §25.1).
+
+    Validators run post-dispatch + pre-ledger-append per §25.7 invariant 2.
+    `step_result` is the dispatch-time output Mapping (matches the
+    `StepDispatcher.dispatch()` return type at
+    `harness_runtime.types.StepDispatcher`).
+    """
+
+    async def validate(
+        self,
+        step: WorkflowStep,
+        step_result: Mapping[str, Any],
+        *,
+        step_context: StepExecutionContext,
+    ) -> ValidatorResult: ...
+
+
+@runtime_checkable
+class ValidatorFramework(Protocol):
+    """Runtime-side Validator composer Protocol (CP spec v1.10 §25.1).
+
+    Materialized at stage 5 LOOP_INIT per §25.3; bound to
+    `ctx.validator_framework`. The composer body (U-CP-60) consumes a
+    per-step Validator from `ctx.validator_registry`, runs `.validate()`,
+    maps the outcome to `next_action`, populates span attributes for
+    §25.5 emission, and increments `burden_count` per §25.7 invariant 5.
+    """
+
+    async def evaluate(
+        self,
+        step: WorkflowStep,
+        step_result: Mapping[str, Any],
+        *,
+        step_context: StepExecutionContext,
+    ) -> ValidatorEvaluation: ...

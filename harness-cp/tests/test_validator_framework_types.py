@@ -123,3 +123,165 @@ def test_enums_frozen_at_attribute_level() -> None:
 
     with pytest.raises(AttributeError):
         ValidatorOutcome.PASS.value = "mutated"  # type: ignore[misc]
+
+
+# ============================================================================
+# U-CP-59 — Validator Protocol + 3 dataclasses
+# ============================================================================
+
+
+from collections.abc import Mapping
+from typing import Any
+
+import pytest
+from pydantic import ValidationError
+
+from harness_cp.hitl_response_palette import HITLResponse
+from harness_cp.validator_framework_types import (
+    HITLEscalationBrief,
+    Validator,
+    ValidatorEvaluation,
+    ValidatorFramework,
+    ValidatorResult,
+)
+from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
+
+
+# --- AC #1 — Validator Protocol signature matches §25.1 -------------------
+
+
+def test_validator_protocol_signature_matches_spec() -> None:
+    """AC #1 — Validator Protocol has the documented validate() signature."""
+
+    class _ConcreteValidator:
+        async def validate(
+            self,
+            step: WorkflowStep,
+            step_result: Mapping[str, Any],
+            *,
+            step_context: StepExecutionContext,
+        ) -> ValidatorResult:
+            return ValidatorResult(outcome=ValidatorOutcome.PASS)
+
+    instance = _ConcreteValidator()
+    assert isinstance(instance, Validator)
+
+
+def test_validator_framework_protocol_signature_matches_spec() -> None:
+    """AC #1 — ValidatorFramework Protocol has the documented evaluate() signature."""
+
+    class _ConcreteFramework:
+        async def evaluate(
+            self,
+            step: WorkflowStep,
+            step_result: Mapping[str, Any],
+            *,
+            step_context: StepExecutionContext,
+        ) -> ValidatorEvaluation:
+            raise NotImplementedError
+
+    assert isinstance(_ConcreteFramework(), ValidatorFramework)
+
+
+# --- AC #2 — ValidatorResult 5-field shape --------------------------------
+
+
+def test_validator_result_pass_minimal_construction() -> None:
+    """AC #2 — outcome required; others optional."""
+    result = ValidatorResult(outcome=ValidatorOutcome.PASS)
+    assert result.outcome == ValidatorOutcome.PASS
+    assert result.fail_class is None
+    assert result.revalidation_payload is None
+    assert result.escalation_brief is None
+    assert result.fail_detail_hash is None
+
+
+def test_validator_result_full_construction() -> None:
+    """AC #2 — all 5 fields populatable; frozen."""
+    brief = HITLEscalationBrief(
+        parent_step_id="step-1",
+        parent_action_id="action-1",
+        fail_class=ValidatorFailClass.SCHEMA_VIOLATION,
+        fail_detail_hash="a" * 64,
+        escalation_reason="reason",
+    )
+    result = ValidatorResult(
+        outcome=ValidatorOutcome.ESCALATE,
+        fail_class=ValidatorFailClass.SCHEMA_VIOLATION,
+        revalidation_payload={"key": "value"},
+        escalation_brief=brief,
+        fail_detail_hash="a" * 64,
+    )
+    assert result.outcome == ValidatorOutcome.ESCALATE
+    assert result.fail_class == ValidatorFailClass.SCHEMA_VIOLATION
+    assert result.escalation_brief is brief
+
+
+def test_validator_result_frozen() -> None:
+    """AC #5 — Pydantic v2 frozen=True rejects mutation."""
+    result = ValidatorResult(outcome=ValidatorOutcome.PASS)
+    with pytest.raises(ValidationError):
+        result.outcome = ValidatorOutcome.PERMANENT_FAIL  # type: ignore[misc]
+
+
+# --- AC #3 — ValidatorEvaluation burden_count -----------------------------
+
+
+def test_validator_evaluation_includes_burden_count() -> None:
+    """AC #3 — burden_count cumulative integer present + populates."""
+    inner = ValidatorResult(outcome=ValidatorOutcome.PASS)
+    evaluation = ValidatorEvaluation(
+        result=inner,
+        span_attributes={"validator.outcome": "pass"},
+        next_action=ValidatorNextAction.PROCEED,
+        burden_count=3,
+    )
+    assert evaluation.burden_count == 3
+    assert evaluation.result is inner
+    assert evaluation.next_action == ValidatorNextAction.PROCEED
+
+
+# --- AC #4 — HITLEscalationBrief default palette --------------------------
+
+
+def test_hitl_escalation_brief_default_palette_full() -> None:
+    """AC #4 — proposed_response_palette defaults to C-CP-16 §16.1 full palette."""
+    brief = HITLEscalationBrief(
+        parent_step_id="step-x",
+        parent_action_id="action-x",
+        fail_class=ValidatorFailClass.SAFETY_POLICY,
+        fail_detail_hash="b" * 64,
+        escalation_reason="r",
+    )
+    assert brief.proposed_response_palette == frozenset(HITLResponse)
+    assert len(brief.proposed_response_palette) == 4
+
+
+def test_hitl_escalation_brief_explicit_palette_narrowed() -> None:
+    """AC #4 — narrowed palette honored at construction."""
+    narrowed: frozenset[HITLResponse] = frozenset(
+        {HITLResponse.APPROVE, HITLResponse.REJECT, HITLResponse.RESPOND}
+    )
+    brief = HITLEscalationBrief(
+        parent_step_id="step-y",
+        parent_action_id="action-y",
+        fail_class=ValidatorFailClass.EXTERNAL_REJECTION,
+        fail_detail_hash="c" * 64,
+        escalation_reason="r",
+        proposed_response_palette=narrowed,
+    )
+    assert brief.proposed_response_palette == narrowed
+    assert HITLResponse.EDIT not in brief.proposed_response_palette
+
+
+def test_hitl_escalation_brief_frozen() -> None:
+    """AC #5 — Pydantic v2 frozen=True on HITLEscalationBrief."""
+    brief = HITLEscalationBrief(
+        parent_step_id="s",
+        parent_action_id="a",
+        fail_class=ValidatorFailClass.SCHEMA_VIOLATION,
+        fail_detail_hash="d" * 64,
+        escalation_reason="r",
+    )
+    with pytest.raises(ValidationError):
+        brief.escalation_reason = "mutated"  # type: ignore[misc]
