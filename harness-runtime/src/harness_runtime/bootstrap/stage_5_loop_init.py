@@ -148,8 +148,18 @@ async def execute(
     # `harness_runtime.lifecycle.mcp_host.MCPHost` is what stage 2 bound
     # (same C-RT-04 Protocol-vs-concrete pattern as `tracer_provider` +
     # `ledger_writer` / `audit_writer`).
+    # U-RT-62 AC #4: stage 5 default binding rebinds the surface's
+    # callback from `_PlaceholderMCPCallback` to `ServerCtxElicitCallback`
+    # when `ctx.mcp_server` is materialized (post-stage-2 per U-RT-62
+    # AC #2). The callback reads the in-flight `run_workflow` tool ctx
+    # from `ctx.mcp_server._state['_current_tool_ctx']` + invokes
+    # `await ctx.elicit(...)` outbound per spec v1.12 §14.8.3 topology
+    # pin (Reading α CC-initiates). Test substrates that do not exercise
+    # the MCP server path may leave `ctx.mcp_server = None` — the
+    # surface then falls back to the placeholder for defensive failure.
     ask_surface = materialize_mcp_backed_ask_user_question_surface_stage(
-        cast(Any, ctx.mcp_host)
+        cast(Any, ctx.mcp_host),
+        harness_mcp_server=ctx.mcp_server,
     )
     ctx.ask_user_question_surface = ask_surface
 

@@ -56,8 +56,10 @@ from __future__ import annotations
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from harness_cp.hitl_response_palette import HITLResponse
+from pydantic import BaseModel, ConfigDict
 
 from harness_runtime.lifecycle.ask_user_question_surface import (
     AskUserQuestionResult,
@@ -65,10 +67,15 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
 )
 from harness_runtime.lifecycle.mcp_host import MCPHost
 
+if TYPE_CHECKING:
+    from harness_runtime.lifecycle.mcp_server import HarnessMCPServer
+
 __all__ = [
+    "AskUserQuestionElicitationSchema",
     "MCPAskCallback",
     "MCPBackedAskUserQuestionSurface",
     "MCPSurfaceCallbackNotBoundError",
+    "ServerCtxElicitCallback",
     "materialize_mcp_backed_ask_user_question_surface_stage",
 ]
 
@@ -124,6 +131,161 @@ class _PlaceholderMCPCallback:
             "spec §14.8.3 v1.11 binding pin; the FastMCP host wiring lands "
             "at a follow-on arc per H_T-CP-20 retirement event (Phase 7d "
             "batch 8 record)."
+        )
+
+
+class AskUserQuestionElicitationSchema(BaseModel):
+    """MCP elicitation request schema for the 4-response palette.
+
+    Per U-RT-62 AC #4 + spec v1.12 §14.8.3 v1.12 workflow-initiation
+    topology pin: `ServerCtxElicitCallback.__call__` passes this schema
+    to `ctx.elicit(message, schema)`; the MCP client (Claude Code per
+    Reading α CC-initiates topology) renders the dialog + returns an
+    `ElicitResult` with `data` conforming to this schema when the
+    operator selects accept.
+
+    MCP elicitation schema discipline (per `modelcontextprotocol` spec
+    2025-06-18): "Servers requesting structured data from users MUST
+    provide a JSON schema that describes the expected response
+    structure. The schema MUST be restricted to flat objects with
+    primitive properties only." This model uses string-typed primitive
+    fields only; the 3 optional content fields are populated by the
+    client per the operator's selected response class.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    response: str
+    """Operator-selected response class — one of the 4-response palette
+    values per `HITLResponse` StrEnum (`approve` / `edit` / `reject` /
+    `respond`)."""
+
+    edited_proposal: str | None = None
+    """Populated when `response == 'edit'` — operator-authored replacement
+    payload."""
+
+    response_text: str | None = None
+    """Populated when `response == 'respond'` — operator-authored response
+    text for non-action-commitment continuation."""
+
+    rejection_reason: str | None = None
+    """Populated when `response == 'reject'` — operator-authored cancellation
+    reason."""
+
+
+@dataclass(frozen=True)
+class ServerCtxElicitCallback:
+    """MCP-server-ctx-bound `AskUserQuestion` delivery (U-RT-62 AC #4).
+
+    Per `Spec_Harness_Runtime_v1.md` v1.12 §14.8.3 v1.12 workflow-initiation
+    topology pin (Reading α CC-initiates): H_T runtime hosts a FastMCP
+    server; Claude Code is the registered MCP client; when a HITL gate
+    fires inside the workflow body executing within a `run_workflow` MCP
+    tool handler's `ctx`, this callback invokes `await ctx.elicit(...)`
+    outbound on the active server session back to Claude Code.
+
+    Replaces `_PlaceholderMCPCallback` at v1.12 stage 5 default binding.
+    The placeholder is retained for test substrates that explicitly inject
+    it; production binding goes through this callback.
+
+    Binding mechanism
+    -----------------
+
+    The in-flight tool handler's `ctx` lives in
+    `harness_mcp_server._state['_current_tool_ctx']`. The `run_workflow`
+    tool handler body writes this key on entry + clears it in `finally`
+    per `lifecycle/mcp_server.py:materialize_mcp_server_stage()`. Both
+    the write site (tool handler frame) and the read site (this
+    callback) execute on the main event loop — the worker-thread
+    bridge via `SyncDispatcherFacade.run_coroutine_threadsafe` submits
+    the composer coroutine back to the main loop before reaching this
+    callback. Contextvar propagation was considered + rejected (the
+    `run_coroutine_threadsafe` submission copies the context from the
+    worker thread, not the awaiting tool handler frame); the mutable-
+    holder pattern is loop-thread-safe.
+
+    Response mapping
+    ----------------
+
+    - `ElicitResult.action == "accept"` with `data` → unpack the schema
+      fields into `AskUserQuestionResult`. Response class string is
+      validated against the `HITLResponse` 4-response palette.
+    - `ElicitResult.action == "decline"` → `AskUserQuestionResult`
+      with `response=HITLResponse.REJECT` and rejection_reason
+      synthesized as "operator declined elicitation".
+    - `ElicitResult.action == "cancel"` → raise
+      `AskUserQuestionTimeoutError` (composer step 4f maps to
+      `RT-FAIL-HITL-GATE-TIMEOUT` per spec §14.8 failure-mode taxonomy).
+    """
+
+    mcp_server: "HarnessMCPServer"
+    """The `HarnessMCPServer` whose `_state['_current_tool_ctx']` holder
+    carries the active tool handler `ctx`. Bound at bootstrap stage 5
+    (post stage 2 MCP-server materialization)."""
+
+    async def __call__(
+        self,
+        prompt: str,
+        options: Sequence[HITLResponse],
+        timeout: float | None,
+    ) -> AskUserQuestionResult:
+        """Deliver the HITL prompt via `ctx.elicit(...)`."""
+        _ = (options, timeout)  # options + timeout are placement-level
+        # concerns; the MCP elicit primitive carries them implicitly via
+        # the active server session lifetime. timeout enforcement at
+        # the surface adapter happens at the wrapping
+        # MCPBackedAskUserQuestionSurface.ask() body (via asyncio.wait_for
+        # on the callback if needed; v1.12 MVP relies on the MCP client's
+        # native elicitation UI to honor operator deadlines).
+
+        ctx = self.mcp_server._state.get("_current_tool_ctx")
+        if ctx is None:
+            raise MCPSurfaceCallbackNotBoundError(
+                "ServerCtxElicitCallback invoked but no in-flight "
+                "`run_workflow` tool ctx bound at "
+                "`HarnessMCPServer._state['_current_tool_ctx']`. The "
+                "callback is intended for HITL gate invocation inside "
+                "a `run_workflow` tool body per spec v1.12 §14.8.3 "
+                "topology pin (Reading α)."
+            )
+
+        elicit_result = await ctx.elicit(
+            message=prompt,
+            schema=AskUserQuestionElicitationSchema,
+        )
+
+        action = elicit_result.action
+        if action == "accept":
+            data = elicit_result.data
+            if data is None:
+                raise MCPSurfaceCallbackNotBoundError(
+                    "ctx.elicit returned action='accept' but data is None — "
+                    "MCP client did not populate the elicitation schema"
+                )
+            try:
+                response_class = HITLResponse(data.response)
+            except ValueError as exc:
+                raise MCPSurfaceCallbackNotBoundError(
+                    f"ctx.elicit returned response={data.response!r} not in "
+                    f"4-response palette per C-CP-16 §16.1"
+                ) from exc
+            return AskUserQuestionResult(
+                response=response_class,
+                latency_ms=0.0,  # filled by surface adapter via monotonic
+                edited_proposal=data.edited_proposal,
+                response_text=data.response_text,
+                rejection_reason=data.rejection_reason,
+            )
+        if action == "decline":
+            return AskUserQuestionResult(
+                response=HITLResponse.REJECT,
+                latency_ms=0.0,
+                rejection_reason="operator declined elicitation",
+            )
+        # action == "cancel"
+        raise AskUserQuestionTimeoutError(
+            "MCP elicitation cancelled by operator (ElicitResult.action == 'cancel'); "
+            "composer step 4f maps to RT-FAIL-HITL-GATE-TIMEOUT per spec §14.8."
         )
 
 
@@ -194,13 +356,31 @@ def materialize_mcp_backed_ask_user_question_surface_stage(
     mcp_host: MCPHost,
     *,
     mcp_callback: MCPAskCallback | None = None,
+    harness_mcp_server: "HarnessMCPServer | None" = None,
 ) -> MCPBackedAskUserQuestionSurface:
     """Construct the MCP-backed surface at bootstrap stage 5 LOOP_INIT.
 
-    Operator override path: pass `mcp_callback=` to bind a FastMCP-host-
-    bound delivery primitive. Defaults to the sentinel placeholder per
-    H_T-CP-20 substitution carry-forward.
+    Default-binding precedence (highest to lowest):
+
+    1. Explicit `mcp_callback=` override — operator-supplied delivery
+       primitive (test fixture or operator-bound production deployment).
+    2. `harness_mcp_server=` provided (U-RT-62 default at v1.12) →
+       `ServerCtxElicitCallback(harness_mcp_server)` per spec §14.8.3
+       v1.12 workflow-initiation topology pin (Reading α CC-initiates).
+    3. Neither provided → `_PlaceholderMCPCallback()` sentinel that
+       raises `MCPSurfaceCallbackNotBoundError` on invocation. Retained
+       for test substrates that don't materialize the FastMCP server +
+       for transitional bootstrap-builder shapes that don't yet write
+       `ctx.mcp_server`.
+
+    Per `Spec_Harness_Runtime_v1.md` v1.12 §14.8.3 v1.12 workflow-
+    initiation topology pin: production stage 5 wiring passes
+    `harness_mcp_server=ctx.mcp_server` so the surface routes through
+    `ServerCtxElicitCallback` → `ctx.elicit(...)` outbound on the
+    active server session per Reading α.
     """
+    if mcp_callback is None and harness_mcp_server is not None:
+        mcp_callback = ServerCtxElicitCallback(mcp_server=harness_mcp_server)
     if mcp_callback is None:
         return MCPBackedAskUserQuestionSurface(mcp_host=mcp_host)
     return MCPBackedAskUserQuestionSurface(
