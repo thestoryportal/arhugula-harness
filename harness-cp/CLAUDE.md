@@ -181,8 +181,8 @@ CP-axis post-batch-5: **9 / 22 retired (40.9%, including CP-24 authoring-retired
 
 **U-RT-59 sibling-fork status (post batch 5, 2026-05-20):**
 - `[[class_1_tension_u_rt_59_async_sync_step_dispatcher]]` — **RESOLVED** at Path B wiring landing `d64d8cf` (INFERENCE_STEP bound via `SyncDispatcherFacade(ctx.llm_dispatcher)` at stage 5; spec text unchanged at v1.6 §14.7.7; facade documentation owed to Class 3 drift item 6). End-to-end LLM-dispatch execution path re-affirmed at strict X-AL-2 reading for CP-1/CP-3/CP-4/CP-5 per `.harness/phase-7d-retirement-events-batch-5.md`.
-- `[[class_1_tension_u_rt_59_cp_to_od_audit_write_gap]]` — OPEN (AC #9 write half STRUCK; CP→OD audit-write composition owed to Phase 6 CP-composer-authoring arc; joins `[[fork-cp-is-wiring-gaps]]` family).
-- `[[class_1_tension_u_rt_59_topology_admissibility_predicate]]` — OPEN (strict admissibility gate dropped per predicate-semantic-mismatch; primary-or-cross-pattern helper owed at follow-on arc).
+- `[[class_1_tension_u_rt_59_topology_admissibility_predicate]]` — **RESOLVED** at Path A landing `e52c2da` (strict gate restored via `is_topology_permitted(topology, workload)` union predicate — C-CP-11 §11.1 primary topologies ∪ C-CP-10 §10.3 cross-pattern admissibility, membership in workload's `permitted_patterns`; composer step 4 raises `SubAgentDispatchTopologyInadmissibleError` before `subagent.span` opens; spec §14.7.2 step 4 predicate-name correction owed to Class 3 drift item 8). Batch 5 §2 advisory-gate carry-forward pointer-closed.
+- `[[class_1_tension_u_rt_59_cp_to_od_audit_write_gap]]` — OPEN (AC #9 write half STRUCK; CP→OD audit-write composition owed to Phase 6 CP-composer-authoring arc; joins `[[fork-cp-is-wiring-gaps]]` family). **Last of three U-RT-59 sibling Class 1 forks remaining OPEN.**
 
 ### 4.2 CP-axis anti-leakage rules (5 — largest rule set)
 
