@@ -215,6 +215,12 @@ class RuntimeLLMDispatcher:
     `dispatch` invocation is driven entirely by its arguments + the
     frozen provider/tracer substrate.
 
+    U-OD-38 extension (2026-05-21): cost-attribution substrate added per
+    C-OD-26.1 + C-OD-26.2. Post-provider-call, every dispatch invokes
+    `attribute_llm_dispatch_cost(...)` to compute + persist the per-attempt
+    cost-record + audit-ledger entry. Substrate (cost_chain / audit_writer /
+    rate_table) is REQUIRED — cost-attribution is not optional per AC #1.
+
     Attributes
     ----------
     providers :
@@ -223,10 +229,30 @@ class RuntimeLLMDispatcher:
     tracer_provider :
         Frozen reference to the ``ctx.tracer_provider`` materialized at
         stage 4 OD per C-RT-06.
+    cost_chain :
+        Cost-attribution chain (`ctx.cost_chain`) materialized at stage 4 OD
+        per C-RT-31. Consumed at every dispatch for the §C-OD-26.1
+        per-attempt cost computation. U-OD-38 — required.
+    audit_writer :
+        Audit-ledger writer (`ctx.audit_writer`) materialized at stage 4 OD
+        per C-RT-32. Receives the cost-attribution audit entry per
+        §C-OD-26.3. U-OD-38 — required.
+    rate_table :
+        Resolved PRICE_TABLE_REF (`ctx.rate_table`) per §C-OD-28.2 —
+        immutable for the workflow's lifetime. Resolves to ProviderRates per
+        (provider, model) for compute_per_attempt_cost. U-OD-38 — required.
     """
 
     providers: _ProvidersLike
     tracer_provider: _TracerProviderLike
+    # U-OD-38 cost-attribution substrate. Required at production
+    # construction (enforced at bootstrap stage 5); defaulted to None to
+    # preserve construction ergonomics for unit-tests that only exercise
+    # the LLM-dispatch surface and don't need cost-attribution. When any
+    # is None, _attribute_cost_best_effort early-returns (no-op).
+    cost_chain: Any = None
+    audit_writer: Any = None
+    rate_table: Any = None
 
     async def dispatch(
         self,
@@ -337,6 +363,37 @@ class RuntimeLLMDispatcher:
                     "anthropic.cache_ttl_seconds",
                     cache_attrs.cache_ttl_seconds,
                 )
+
+            # --- Step 4.5: cost-attribution (U-OD-38) -------------------
+            # Per §C-OD-26.1 + §C-OD-26.2 row "llm_dispatch": every LLM
+            # dispatch invokes the 5-substep cost-attribution chain post-
+            # provider-call. Persists the cost-record + audit-ledger entry
+            # + emits cost.attributed_decimal OTel attribute via U-OD-49
+            # string-form preserving Decimal precision at the OTel boundary.
+            # Wrapped in best-effort try/except: cost-attribution failure
+            # MUST NOT fail the dispatch (cost is observability not contract).
+            _attribute_cost_best_effort(
+                span=span,
+                cost_chain=self.cost_chain,
+                audit_writer=self.audit_writer,
+                rate_table=self.rate_table,
+                provider_name=provider_name,
+                model=model,
+                parent_idempotency_key=step_context.parent_idempotency_key,
+                input_tokens=usage_attrs.input_tokens,
+                output_tokens=usage_attrs.output_tokens,
+                cache_creation=(
+                    cache_attrs.cache_creation_input_tokens
+                    if cache_attrs is not None
+                    else None
+                ),
+                cache_read=(
+                    cache_attrs.cache_read_input_tokens
+                    if cache_attrs is not None
+                    else None
+                ),
+                tenant_id=step_context.tenant_id,
+            )
 
             # --- Step 5: return step output mapping ---------------------
             return response
@@ -494,11 +551,99 @@ def _response_to_mapping(response: Any) -> Mapping[str, Any]:
     )
 
 
+def _attribute_cost_best_effort(
+    *,
+    span: Any,
+    cost_chain: Any,
+    audit_writer: Any,
+    rate_table: Any,
+    provider_name: str,
+    model: str,
+    parent_idempotency_key: str,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    cache_creation: int | None,
+    cache_read: int | None,
+    tenant_id: str | None,
+) -> None:
+    """Best-effort cost-attribution invocation per §C-OD-26.1 (U-OD-38).
+
+    Calls `attribute_llm_dispatch_cost`. On success, emits the
+    cost.attributed_decimal OTel attribute on the current dispatch span via
+    U-OD-49 string-form. On failure (rate-table missing OR upstream cost
+    chain failure), swallows the exception — cost-attribution is observability,
+    not contract, and MUST NOT fail the dispatch (AC #1: invoked on every
+    dispatch, success + failure paths). Future hardening: per-provider
+    "raise" config flag per §C-OD-28.2 fail-closed default; not at v1 MVP
+    scope for the dispatch-side wrapper.
+    """
+    # Defer imports to module-load time at call-site to keep llm_dispatch.py's
+    # cold import surface narrow (cost-attribution path pulls OD + CXA types
+    # transitively).
+    from decimal import Decimal
+
+    from harness_od.cost_record_otel_serializer import (
+        COST_ATTRIBUTED_DECIMAL_ATTR,
+        serialize_decimal_for_otel,
+    )
+
+    from harness_runtime.lifecycle.cost_attribution_llm_dispatch import (
+        attribute_llm_dispatch_cost,
+    )
+
+    if cost_chain is None or audit_writer is None or rate_table is None:
+        # Cost-attribution substrate not bound — unit-test path (production
+        # bootstrap stage 5 enforces all 3 substrates are present).
+        return
+    if input_tokens is None or output_tokens is None:
+        # No usage attrs from provider — cost is undefined. Skip silently.
+        return
+
+    span_context = span.get_span_context()
+    span_id_hex = format(span_context.span_id, "016x")
+
+    try:
+        attached = attribute_llm_dispatch_cost(
+            rate_table=rate_table,
+            cost_chain=cost_chain,
+            audit_writer=audit_writer,
+            provider_name=provider_name,
+            model=model,
+            span_id=span_id_hex,
+            parent_idempotency_key=parent_idempotency_key,
+            input_tokens=int(input_tokens),
+            output_tokens=int(output_tokens),
+            cache_creation=int(cache_creation) if cache_creation is not None else 0,
+            cache_read=int(cache_read) if cache_read is not None else 0,
+            tenant_id=tenant_id,
+        )
+    except Exception:
+        # Cost-attribution is observability, not contract. Swallow.
+        return
+
+    # Emit cost.attributed_decimal OTel attribute via U-OD-49 string-form
+    # preserving the float→Decimal serialization at the OTel boundary.
+    span.set_attribute(
+        COST_ATTRIBUTED_DECIMAL_ATTR,
+        serialize_decimal_for_otel(Decimal(str(attached.total_cost))),
+    )
+
+
 def materialize_llm_dispatcher_stage(
     providers: _ProvidersLike,
     tracer_provider: _TracerProviderLike,
+    *,
+    cost_chain: Any = None,
+    audit_writer: Any = None,
+    rate_table: Any = None,
 ) -> RuntimeLLMDispatcher:
     """Stage 5 LOOP_INIT composer factory for the LLM dispatcher (U-RT-52).
+
+    U-OD-38 extension: cost-attribution substrate (cost_chain + audit_writer +
+    rate_table) is required at composer construction. The stage caller
+    (bootstrap stage 5) sources from `ctx.cost_chain` (stage 4 OD) +
+    `ctx.audit_writer` (stage 4 OD) + `ctx.rate_table` (stage 4 OD or
+    bootstrap config).
 
     Raises
     ------
@@ -516,6 +661,9 @@ def materialize_llm_dispatcher_stage(
     return RuntimeLLMDispatcher(
         providers=providers,
         tracer_provider=tracer_provider,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        rate_table=rate_table,
     )
 
 

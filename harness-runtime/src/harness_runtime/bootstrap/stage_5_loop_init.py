@@ -95,7 +95,25 @@ async def execute(
     # `ctx.tracer_provider` is typed ``object`` per C-RT-04 (the spec
     # defers OTel-SDK type adoption); cast at this site to the
     # composer's structural shape.
-    bare_dispatcher = materialize_llm_dispatcher_stage(providers, cast(Any, tracer_provider))
+    # U-OD-38: cost-attribution substrate is required at composer
+    # construction per AC #1. Stage 4 OD populates ctx.cost_chain +
+    # ctx.audit_writer; PRICE_TABLE_REF is sourced from RATE_TABLE_V1
+    # default per §C-OD-28.3 (operator override via bootstrap config is a
+    # future arc — ctx.rate_table extension on HarnessContext).
+    from harness_od.rate_table_v1 import RATE_TABLE_V1
+    if ctx.cost_chain is None or ctx.audit_writer is None:
+        raise LLMDispatchBindError(
+            "ctx.cost_chain / ctx.audit_writer is None at stage 5 — stage 4 "
+            "OD did not populate the cost-attribution substrate required by "
+            "U-OD-38 (C-OD-26.1 + C-OD-26.2 row 'llm_dispatch')."
+        )
+    bare_dispatcher = materialize_llm_dispatcher_stage(
+        providers,
+        cast(Any, tracer_provider),
+        cost_chain=cast(Any, ctx.cost_chain),
+        audit_writer=cast(Any, ctx.audit_writer),
+        rate_table=RATE_TABLE_V1,
+    )
 
     # U-RT-58 (C-RT-16 §14.6 D6): rebind ``ctx.llm_dispatcher`` from the
     # bare ``RuntimeLLMDispatcher`` to the ``RetryBreakerFallbackDispatcher``
