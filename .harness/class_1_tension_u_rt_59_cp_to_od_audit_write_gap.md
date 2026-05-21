@@ -4,6 +4,8 @@
 **Filed:** 2026-05-20, Phase 7 sub-phase 7b, U-RT-59 landing arc.
 **Status:** OPEN — partial-landing absorbed at U-RT-59 (AC #9 write half STRUCK); root-cause resolution owed to Phase 6 CP-composer-authoring arc.
 
+**Discovery filed 2026-05-20:** scoping report + prototype converter + round-trip-through-OD-signing test at `.harness/u_rt_59_fork_2_cp_to_od_audit_discovery.md` (+ `harness-runtime/src/harness_runtime/lifecycle/cp_audit_conversion.py` + `harness-runtime/tests/test_cp_audit_conversion.py`). DISCOVERY-GRADE; not wired. 5 open spec-level sub-questions (Q1–Q5) surfaced for operator ratification before spec amendments / runtime wiring proceed.
+
 ---
 
 ## Surfacing event
