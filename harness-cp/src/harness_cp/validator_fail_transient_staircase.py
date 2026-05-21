@@ -22,7 +22,7 @@ Class 3 observation at `.harness/phase-7-progress.md`.
 
 Authority: Implementation_Plan_Control_Plane_v2_4.md §2.8 U-CP-48 (v2.4
 amendment — `TRANSIENT_STAIRCASE_TRANSITIONS` `on_cause` conformed to the
-U-CP-47 v2.4-conformed `ValidatorFailClass`); Spec_Control_Plane_v1_2.md §21
+U-CP-47 v2.4-conformed `ValidatorRetryExitClass`); Spec_Control_Plane_v1_2.md §21
 C-CP-21 §21.2 + §21.3 (preserved verbatim into v1.3); ADR-D5 v1.3 §1.10.
 """
 
@@ -33,7 +33,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict
 
 from harness_cp.hitl_response_palette import HITLResponse
-from harness_cp.validator_fail_taxonomy import ValidatorFailClass
+from harness_cp.validator_fail_taxonomy import ValidatorRetryExitClass
 
 
 class StaircaseStage(StrEnum):
@@ -61,9 +61,9 @@ class StaircaseTransition(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     from_stage: StaircaseStage
-    on_cause: ValidatorFailClass
+    on_cause: ValidatorRetryExitClass
     """The retry-exit class keying the transition — the U-CP-47 v2.4-conformed
-    `ValidatorFailClass` (not a fail-cause token)."""
+    `ValidatorRetryExitClass` (not a fail-cause token)."""
 
     to_stage: StaircaseStage
     preserves_cache_state: bool
@@ -88,16 +88,16 @@ class PaletteRestriction(BaseModel):
 # 1st fail -> stage 1/2 (retry with backoff); 2nd fail -> cause-attribution
 # branch; 3rd fail -> permanent-fail-exit -> stage 5. Stage 3 (cross-family
 # fallback) transitions emit the fallback events and lose cache state.
-_STAIRCASE_CLASSES: frozenset[ValidatorFailClass] = frozenset(
-    {ValidatorFailClass.TRANSIENT_RETRY, ValidatorFailClass.REFLEXION_RECOVERABLE}
+_STAIRCASE_CLASSES: frozenset[ValidatorRetryExitClass] = frozenset(
+    {ValidatorRetryExitClass.TRANSIENT_RETRY, ValidatorRetryExitClass.REFLEXION_RECOVERABLE}
 )
 """The §21.2 classes that run the transient staircase."""
 
-_SKIP_STAIRCASE_CLASSES: frozenset[ValidatorFailClass] = frozenset(
+_SKIP_STAIRCASE_CLASSES: frozenset[ValidatorRetryExitClass] = frozenset(
     {
-        ValidatorFailClass.PERMANENT_FAIL_EXIT,
-        ValidatorFailClass.TERMINAL_FAIL_EXIT,
-        ValidatorFailClass.HITL_RECOVERABLE,
+        ValidatorRetryExitClass.PERMANENT_FAIL_EXIT,
+        ValidatorRetryExitClass.TERMINAL_FAIL_EXIT,
+        ValidatorRetryExitClass.HITL_RECOVERABLE,
     }
 )
 """Classes that skip the staircase and route directly to C11 HITL (§21.1)."""
@@ -106,14 +106,14 @@ TRANSIENT_STAIRCASE_TRANSITIONS: tuple[StaircaseTransition, ...] = (
     # 1st validator fail -> stage 1 reflexion -> stage 2 retry (cache kept).
     StaircaseTransition(
         from_stage=StaircaseStage.STAGE_1_REFLEXION,
-        on_cause=ValidatorFailClass.REFLEXION_RECOVERABLE,
+        on_cause=ValidatorRetryExitClass.REFLEXION_RECOVERABLE,
         to_stage=StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF,
         preserves_cache_state=True,
         emits_fallback_event=False,
     ),
     StaircaseTransition(
         from_stage=StaircaseStage.STAGE_1_REFLEXION,
-        on_cause=ValidatorFailClass.TRANSIENT_RETRY,
+        on_cause=ValidatorRetryExitClass.TRANSIENT_RETRY,
         to_stage=StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF,
         preserves_cache_state=True,
         emits_fallback_event=False,
@@ -121,14 +121,14 @@ TRANSIENT_STAIRCASE_TRANSITIONS: tuple[StaircaseTransition, ...] = (
     # 2nd validator fail -> stage 3 cross-family fallback (cache state lost).
     StaircaseTransition(
         from_stage=StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF,
-        on_cause=ValidatorFailClass.TRANSIENT_RETRY,
+        on_cause=ValidatorRetryExitClass.TRANSIENT_RETRY,
         to_stage=StaircaseStage.STAGE_3_CROSS_FAMILY_FALLBACK,
         preserves_cache_state=False,
         emits_fallback_event=True,
     ),
     StaircaseTransition(
         from_stage=StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF,
-        on_cause=ValidatorFailClass.REFLEXION_RECOVERABLE,
+        on_cause=ValidatorRetryExitClass.REFLEXION_RECOVERABLE,
         to_stage=StaircaseStage.STAGE_3_CROSS_FAMILY_FALLBACK,
         preserves_cache_state=False,
         emits_fallback_event=True,
@@ -136,14 +136,14 @@ TRANSIENT_STAIRCASE_TRANSITIONS: tuple[StaircaseTransition, ...] = (
     # Stage 3 -> stage 4 local-terminal (family exhausted).
     StaircaseTransition(
         from_stage=StaircaseStage.STAGE_3_CROSS_FAMILY_FALLBACK,
-        on_cause=ValidatorFailClass.TRANSIENT_RETRY,
+        on_cause=ValidatorRetryExitClass.TRANSIENT_RETRY,
         to_stage=StaircaseStage.STAGE_4_LOCAL_TERMINAL,
         preserves_cache_state=False,
         emits_fallback_event=True,
     ),
     StaircaseTransition(
         from_stage=StaircaseStage.STAGE_3_CROSS_FAMILY_FALLBACK,
-        on_cause=ValidatorFailClass.REFLEXION_RECOVERABLE,
+        on_cause=ValidatorRetryExitClass.REFLEXION_RECOVERABLE,
         to_stage=StaircaseStage.STAGE_4_LOCAL_TERMINAL,
         preserves_cache_state=False,
         emits_fallback_event=True,
@@ -151,24 +151,24 @@ TRANSIENT_STAIRCASE_TRANSITIONS: tuple[StaircaseTransition, ...] = (
     # Stage 4 -> stage 5 HITL escalation (3rd fail -> permanent-fail-exit).
     StaircaseTransition(
         from_stage=StaircaseStage.STAGE_4_LOCAL_TERMINAL,
-        on_cause=ValidatorFailClass.TRANSIENT_RETRY,
+        on_cause=ValidatorRetryExitClass.TRANSIENT_RETRY,
         to_stage=StaircaseStage.STAGE_5_HITL_ESCALATION,
         preserves_cache_state=False,
         emits_fallback_event=False,
     ),
     StaircaseTransition(
         from_stage=StaircaseStage.STAGE_4_LOCAL_TERMINAL,
-        on_cause=ValidatorFailClass.REFLEXION_RECOVERABLE,
+        on_cause=ValidatorRetryExitClass.REFLEXION_RECOVERABLE,
         to_stage=StaircaseStage.STAGE_5_HITL_ESCALATION,
         preserves_cache_state=False,
         emits_fallback_event=False,
     ),
 )
 """The §21.2 transient-staircase transition table, keyed on the §21.1
-retry-exit `ValidatorFailClass`."""
+retry-exit `ValidatorRetryExitClass`."""
 
 _TRANSITION_INDEX: dict[
-    tuple[StaircaseStage, ValidatorFailClass], StaircaseTransition
+    tuple[StaircaseStage, ValidatorRetryExitClass], StaircaseTransition
 ] = {(t.from_stage, t.on_cause): t for t in TRANSIENT_STAIRCASE_TRANSITIONS}
 
 
@@ -237,7 +237,7 @@ class StaircaseError(ValueError):
 
 def advance_staircase(
     current: StaircaseStage,
-    cause: ValidatorFailClass,
+    cause: ValidatorRetryExitClass,
     attempt: int,
 ) -> StaircaseTransition:
     """Advance the transient staircase one step (C-CP-21 §21.2).

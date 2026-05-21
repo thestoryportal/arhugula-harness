@@ -73,7 +73,7 @@ from harness_cp.sub_agent_gate_level_descent import (
     SubAgentGateLevelDescent,
 )
 from harness_cp.topology_pattern import TopologyPattern
-from harness_cp.validator_fail_taxonomy import ValidatorFailClass
+from harness_cp.validator_fail_taxonomy import ValidatorRetryExitClass
 from harness_cp.validator_fail_transient_staircase import (
     CrossTrustBoundaryState,
     StaircaseStage,
@@ -581,7 +581,7 @@ class RetryBreakerRegistry(Protocol):
     def advance_staircase(
         self,
         current: StaircaseStage,
-        cause: ValidatorFailClass,
+        cause: ValidatorRetryExitClass,
         attempt: int,
     ) -> StaircaseTransition:
         """Wrap `harness_cp.validator_fail_transient_staircase.advance_staircase`."""

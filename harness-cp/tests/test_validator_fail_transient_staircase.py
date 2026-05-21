@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pytest
 from harness_cp.hitl_response_palette import HITLResponse
-from harness_cp.validator_fail_taxonomy import ValidatorFailClass
+from harness_cp.validator_fail_taxonomy import ValidatorRetryExitClass
 from harness_cp.validator_fail_transient_staircase import (
     PALETTE_RESTRICTION_TABLE,
     TRANSIENT_STAIRCASE_TRANSITIONS,
@@ -42,8 +42,8 @@ def test_staircase_stage_cardinality_five() -> None:
 def test_staircase_runs_for_transient_and_reflexion_recoverable() -> None:
     """Acceptance #2 — staircase advances for the two staircase classes."""
     for cause in (
-        ValidatorFailClass.TRANSIENT_RETRY,
-        ValidatorFailClass.REFLEXION_RECOVERABLE,
+        ValidatorRetryExitClass.TRANSIENT_RETRY,
+        ValidatorRetryExitClass.REFLEXION_RECOVERABLE,
     ):
         t = advance_staircase(StaircaseStage.STAGE_1_REFLEXION, cause, attempt=1)
         assert t.to_stage == StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF
@@ -53,7 +53,7 @@ def test_permanent_fail_exit_skips_staircase() -> None:
     """Acceptance #2 — `PERMANENT_FAIL_EXIT` skips to stage 5."""
     t = advance_staircase(
         StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF,
-        ValidatorFailClass.PERMANENT_FAIL_EXIT,
+        ValidatorRetryExitClass.PERMANENT_FAIL_EXIT,
         attempt=3,
     )
     assert t.to_stage == StaircaseStage.STAGE_5_HITL_ESCALATION
@@ -63,7 +63,7 @@ def test_terminal_fail_exit_halts() -> None:
     """Acceptance #2 — `TERMINAL_FAIL_EXIT` skips to stage 5 (halt + HITL)."""
     t = advance_staircase(
         StaircaseStage.STAGE_1_REFLEXION,
-        ValidatorFailClass.TERMINAL_FAIL_EXIT,
+        ValidatorRetryExitClass.TERMINAL_FAIL_EXIT,
         attempt=1,
     )
     assert t.to_stage == StaircaseStage.STAGE_5_HITL_ESCALATION
@@ -73,7 +73,7 @@ def test_hitl_recoverable_skips_staircase() -> None:
     """Acceptance #2 — `HITL_RECOVERABLE` routes directly to C11 HITL (§21.1)."""
     t = advance_staircase(
         StaircaseStage.STAGE_1_REFLEXION,
-        ValidatorFailClass.HITL_RECOVERABLE,
+        ValidatorRetryExitClass.HITL_RECOVERABLE,
         attempt=1,
     )
     assert t.to_stage == StaircaseStage.STAGE_5_HITL_ESCALATION
@@ -83,7 +83,7 @@ def test_budget_exhausted_advances_to_stage_3() -> None:
     """Acceptance #2 — 2nd fail at stage 2 advances to cross-family fallback."""
     t = advance_staircase(
         StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF,
-        ValidatorFailClass.TRANSIENT_RETRY,
+        ValidatorRetryExitClass.TRANSIENT_RETRY,
         attempt=2,
     )
     assert t.to_stage == StaircaseStage.STAGE_3_CROSS_FAMILY_FALLBACK
@@ -93,7 +93,7 @@ def test_family_exhausted_advances_to_stage_4() -> None:
     """Acceptance #2 — stage 3 advances to local-terminal on family exhaust."""
     t = advance_staircase(
         StaircaseStage.STAGE_3_CROSS_FAMILY_FALLBACK,
-        ValidatorFailClass.TRANSIENT_RETRY,
+        ValidatorRetryExitClass.TRANSIENT_RETRY,
         attempt=3,
     )
     assert t.to_stage == StaircaseStage.STAGE_4_LOCAL_TERMINAL
@@ -103,7 +103,7 @@ def test_local_fail_advances_to_stage_5() -> None:
     """Acceptance #2 — stage 4 advances to HITL escalation on local fail."""
     t = advance_staircase(
         StaircaseStage.STAGE_4_LOCAL_TERMINAL,
-        ValidatorFailClass.REFLEXION_RECOVERABLE,
+        ValidatorRetryExitClass.REFLEXION_RECOVERABLE,
         attempt=3,
     )
     assert t.to_stage == StaircaseStage.STAGE_5_HITL_ESCALATION
@@ -188,13 +188,13 @@ def test_advance_staircase_deterministic() -> None:
     """Acceptance #7 — `advance_staircase` is deterministic given inputs."""
     first = advance_staircase(
         StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF,
-        ValidatorFailClass.TRANSIENT_RETRY,
+        ValidatorRetryExitClass.TRANSIENT_RETRY,
         attempt=2,
     )
     for _ in range(8):
         again = advance_staircase(
             StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF,
-            ValidatorFailClass.TRANSIENT_RETRY,
+            ValidatorRetryExitClass.TRANSIENT_RETRY,
             attempt=2,
         )
         assert again == first
@@ -204,14 +204,14 @@ def test_attempt_does_not_alter_transition() -> None:
     """Acceptance #7 — `attempt` is bookkeeping; transition is stage-keyed."""
     base = advance_staircase(
         StaircaseStage.STAGE_1_REFLEXION,
-        ValidatorFailClass.TRANSIENT_RETRY,
+        ValidatorRetryExitClass.TRANSIENT_RETRY,
         attempt=1,
     )
     for n in (2, 5, 99):
         assert (
             advance_staircase(
                 StaircaseStage.STAGE_1_REFLEXION,
-                ValidatorFailClass.TRANSIENT_RETRY,
+                ValidatorRetryExitClass.TRANSIENT_RETRY,
                 attempt=n,
             )
             == base

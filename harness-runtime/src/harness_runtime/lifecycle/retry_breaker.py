@@ -38,7 +38,7 @@ bootstrap-vs-runtime distinction at C-RT-02 §5).
 
 **Staircase reading.** Per C-CP-21 §21.2, the transient staircase governs
 class-to-class transitions (REFLEXION → RETRY_WITH_BACKOFF → CROSS_FAMILY_FALLBACK
-→ LOCAL_TERMINAL → HITL_ESCALATION) keyed on `ValidatorFailClass`. The
+→ LOCAL_TERMINAL → HITL_ESCALATION) keyed on `ValidatorRetryExitClass`. The
 full-jitter sleep at stage 2 (RETRY_WITH_BACKOFF) is the per-attempt delay
 schedule that this registry computes via `compute_full_jitter_delay_seconds`.
 The staircase is the escalation envelope; the jitter schedule is the
@@ -76,7 +76,7 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from harness_cp.routing_manifest_residence import RetryPolicy
-from harness_cp.validator_fail_taxonomy import ValidatorFailClass
+from harness_cp.validator_fail_taxonomy import ValidatorRetryExitClass
 from harness_cp.validator_fail_transient_staircase import (
     StaircaseStage,
     StaircaseTransition,
@@ -390,7 +390,7 @@ class RuntimeRetryBreaker:
     def advance_staircase(
         self,
         current: StaircaseStage,
-        cause: ValidatorFailClass,
+        cause: ValidatorRetryExitClass,
         attempt: int,
     ) -> StaircaseTransition:
         """Re-export of `harness_cp.validator_fail_transient_staircase.advance_staircase`.

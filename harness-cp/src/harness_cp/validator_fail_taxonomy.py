@@ -2,13 +2,13 @@
 
 Implements C-CP-21 §21.1 (discriminated five-class fail taxonomy) and §21.5
 (three `validator.fail.*` attribute declarations). Declares the closed 5-value
-`ValidatorFailClass` enum, the `ValidatorFailMetadata` record + 5-entry
+`ValidatorRetryExitClass` enum, the `ValidatorFailMetadata` record + 5-entry
 `VALIDATOR_FAIL_METADATA`, the `ValidatorFailAttributeSchema` record + 3-entry
 `VALIDATOR_FAIL_NAMESPACE_SCHEMA`, and `validator_fail_permanence` — the
 class → permanence derivation.
 
 **Canonical body.** CP plan v2.4 U-CP-47 — the v2.4 amendment conformed
-`ValidatorFailClass`, `VALIDATOR_FAIL_METADATA`, and
+`ValidatorRetryExitClass`, `VALIDATOR_FAIL_METADATA`, and
 `VALIDATOR_FAIL_NAMESPACE_SCHEMA` to CP spec §21.1 / §21.5 verbatim per the §4A
 verbatim-divergence cluster resolution. The v2.1/v2.3 divergent values
 (`SCHEMA_MISMATCH` / `TIMEOUT` / `RATE_LIMIT` / `PERMANENT_REJECTION` /
@@ -36,7 +36,7 @@ from harness_core import AttributeValueType, Cardinality
 from pydantic import BaseModel, ConfigDict
 
 
-class ValidatorFailClass(StrEnum):
+class ValidatorRetryExitClass(StrEnum):
     """The 5 validator-fail retry-exit classes (C-CP-21 §21.1, verbatim).
 
     Member string values are the §21.1 `validator.fail.class` taxonomy
@@ -67,7 +67,7 @@ class ValidatorFailMetadata(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    fail_class: ValidatorFailClass
+    fail_class: ValidatorRetryExitClass
     """The validator-fail class this metadata row describes."""
 
     routing: str
@@ -79,7 +79,7 @@ class ValidatorFailMetadata(BaseModel):
 
 VALIDATOR_FAIL_METADATA: tuple[ValidatorFailMetadata, ...] = (
     ValidatorFailMetadata(
-        fail_class=ValidatorFailClass.TRANSIENT_RETRY,
+        fail_class=ValidatorRetryExitClass.TRANSIENT_RETRY,
         routing="Transient staircase (§21.2)",
         recovery_path=(
             "C9 backoff + retry (full-jitter); cause-attribution-conditioned "
@@ -87,7 +87,7 @@ VALIDATOR_FAIL_METADATA: tuple[ValidatorFailMetadata, ...] = (
         ),
     ),
     ValidatorFailMetadata(
-        fail_class=ValidatorFailClass.REFLEXION_RECOVERABLE,
+        fail_class=ValidatorRetryExitClass.REFLEXION_RECOVERABLE,
         routing="Transient staircase (§21.2)",
         recovery_path=(
             "C5 reflect-step verbal feedback + C1 retry-loop; C2 stitches "
@@ -95,7 +95,7 @@ VALIDATOR_FAIL_METADATA: tuple[ValidatorFailMetadata, ...] = (
         ),
     ),
     ValidatorFailMetadata(
-        fail_class=ValidatorFailClass.HITL_RECOVERABLE,
+        fail_class=ValidatorRetryExitClass.HITL_RECOVERABLE,
         routing=(
             "C11 HITL primitive (validator-HITL placement per §17.1 "
             "validator-escalation); palette {approve, request-changes, "
@@ -104,7 +104,7 @@ VALIDATOR_FAIL_METADATA: tuple[ValidatorFailMetadata, ...] = (
         recovery_path="HITL invocation",
     ),
     ValidatorFailMetadata(
-        fail_class=ValidatorFailClass.PERMANENT_FAIL_EXIT,
+        fail_class=ValidatorRetryExitClass.PERMANENT_FAIL_EXIT,
         routing=(
             "SKIP STAIRCASE; route directly to C11 HITL (validator-escalation "
             "per §17.1); palette {approve, edit, reject, respond}, restricted "
@@ -113,7 +113,7 @@ VALIDATOR_FAIL_METADATA: tuple[ValidatorFailMetadata, ...] = (
         recovery_path="Direct HITL",
     ),
     ValidatorFailMetadata(
-        fail_class=ValidatorFailClass.TERMINAL_FAIL_EXIT,
+        fail_class=ValidatorRetryExitClass.TERMINAL_FAIL_EXIT,
         routing=(
             "SKIP STAIRCASE; workflow halts; HITL escalation per "
             "c11-operator-local SKILL.md with no recovery path"
@@ -121,7 +121,7 @@ VALIDATOR_FAIL_METADATA: tuple[ValidatorFailMetadata, ...] = (
         recovery_path="Halt + HITL notification",
     ),
 )
-"""The 5 §21.1 fail-class metadata rows — one per `ValidatorFailClass`."""
+"""The 5 §21.1 fail-class metadata rows — one per `ValidatorRetryExitClass`."""
 
 
 class ValidatorFailAttributeSchema(BaseModel):
@@ -158,15 +158,15 @@ is the §21.5 "medium (open set)" → `MEDIUM`; `validator.fail.permanence` is
 bounded(2) → `LOW`."""
 
 
-_PERMANENT_CLASSES: frozenset[ValidatorFailClass] = frozenset(
+_PERMANENT_CLASSES: frozenset[ValidatorRetryExitClass] = frozenset(
     {
-        ValidatorFailClass.PERMANENT_FAIL_EXIT,
-        ValidatorFailClass.TERMINAL_FAIL_EXIT,
+        ValidatorRetryExitClass.PERMANENT_FAIL_EXIT,
+        ValidatorRetryExitClass.TERMINAL_FAIL_EXIT,
     }
 )
 
 
-def validator_fail_permanence(fail_class: ValidatorFailClass) -> str:
+def validator_fail_permanence(fail_class: ValidatorRetryExitClass) -> str:
     """Derive `validator.fail.permanence` from `validator.fail.class`.
 
     Per C-CP-21 §21.5: `permanent` if class ∈ {permanent-fail-exit,

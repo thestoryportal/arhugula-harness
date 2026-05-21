@@ -69,7 +69,7 @@ from harness_cp.cross_family_fallback_chain import FallbackChain, ProviderCandid
 from harness_cp.engine_namespace import REPLAY_DISPOSITION_MAPPING
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.routing_manifest_residence import RetryPolicy
-from harness_cp.validator_fail_taxonomy import ValidatorFailClass
+from harness_cp.validator_fail_taxonomy import ValidatorRetryExitClass
 from harness_cp.validator_fail_transient_staircase import StaircaseStage
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 from harness_od.harness_breaker_schema import BreakerScope
@@ -155,8 +155,8 @@ def _rebind_to_candidate(
     )
 
 
-def _classify_provider_exception(exc: BaseException) -> ValidatorFailClass | None:
-    """Map a provider-side exception to a ``ValidatorFailClass`` for the
+def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass | None:
+    """Map a provider-side exception to a ``ValidatorRetryExitClass`` for the
     staircase, or ``None`` for fail-fast / propagate.
 
     Per spec §14.6 D2: AUTH / payload-shape / shutdown are fail-fast;
@@ -176,7 +176,7 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorFailClass | Non
     """
     if isinstance(exc, (LLMDispatchProviderUnreachableError, LLMDispatchPayloadShapeError)):
         return None
-    return ValidatorFailClass.TRANSIENT_RETRY
+    return ValidatorRetryExitClass.TRANSIENT_RETRY
 
 
 @dataclass(slots=True)
@@ -408,7 +408,7 @@ class RetryBreakerFallbackDispatcher:
                         )
                         inner_span.set_attribute(
                             "retry.fail_class",
-                            ValidatorFailClass.PERMANENT_FAIL_EXIT.value,
+                            ValidatorRetryExitClass.PERMANENT_FAIL_EXIT.value,
                         )
                         transition = breaker.record_failure()
                         if transition is not None:
@@ -459,7 +459,7 @@ class RetryBreakerFallbackDispatcher:
                         )
                         inner_span.set_attribute(
                             "retry.fail_class",
-                            ValidatorFailClass.TERMINAL_FAIL_EXIT.value,
+                            ValidatorRetryExitClass.TERMINAL_FAIL_EXIT.value,
                         )
                         transition = breaker.record_failure()
                         if transition is not None:

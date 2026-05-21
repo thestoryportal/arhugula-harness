@@ -1,7 +1,7 @@
 """Tests for U-CP-47 — 5-class validator-fail taxonomy + namespace.
 
 Acceptance-criterion coverage (CP plan v2.4 U-CP-47, C-CP-21 §21.1/§21.5):
-  #1 ValidatorFailClass 5 values verbatim -> test_validator_fail_class_cardinality_five,
+  #1 ValidatorRetryExitClass 5 values verbatim -> test_validator_fail_class_cardinality_five,
                                             test_validator_fail_class_values_match_spec_21_1_verbatim
   #2 VALIDATOR_FAIL_METADATA per §21.1     -> test_validator_fail_metadata_match_spec_21_1
   #3 namespace 3 attrs per §21.5           -> test_validator_fail_namespace_cardinality_three,
@@ -16,19 +16,19 @@ from harness_core import AttributeValueType, Cardinality
 from harness_cp.validator_fail_taxonomy import (
     VALIDATOR_FAIL_METADATA,
     VALIDATOR_FAIL_NAMESPACE_SCHEMA,
-    ValidatorFailClass,
+    ValidatorRetryExitClass,
     validator_fail_permanence,
 )
 
 
 def test_validator_fail_class_cardinality_five() -> None:
-    """#1 — `ValidatorFailClass` declares exactly five values."""
-    assert len(ValidatorFailClass) == 5
+    """#1 — `ValidatorRetryExitClass` declares exactly five values."""
+    assert len(ValidatorRetryExitClass) == 5
 
 
 def test_validator_fail_class_values_match_spec_21_1_verbatim() -> None:
     """#1 — the five §21.1 retry-exit taxonomy values, byte-exact."""
-    assert {c.value for c in ValidatorFailClass} == {
+    assert {c.value for c in ValidatorRetryExitClass} == {
         "transient-retry",
         "Reflexion-recoverable",
         "HITL-recoverable",
@@ -42,19 +42,19 @@ def test_validator_fail_metadata_match_spec_21_1() -> None:
     each carrying Routing + Recovery-path columns."""
     assert len(VALIDATOR_FAIL_METADATA) == 5
     assert {m.fail_class for m in VALIDATOR_FAIL_METADATA} == set(
-        ValidatorFailClass
+        ValidatorRetryExitClass
     )
     by_class = {m.fail_class: m for m in VALIDATOR_FAIL_METADATA}
     # SKIP-STAIRCASE classes name the skip in the Routing column.
     assert "SKIP STAIRCASE" in by_class[
-        ValidatorFailClass.PERMANENT_FAIL_EXIT
+        ValidatorRetryExitClass.PERMANENT_FAIL_EXIT
     ].routing
     assert "SKIP STAIRCASE" in by_class[
-        ValidatorFailClass.TERMINAL_FAIL_EXIT
+        ValidatorRetryExitClass.TERMINAL_FAIL_EXIT
     ].routing
     # Staircase classes route to the transient staircase.
     assert "Transient staircase" in by_class[
-        ValidatorFailClass.TRANSIENT_RETRY
+        ValidatorRetryExitClass.TRANSIENT_RETRY
     ].routing
     assert all(m.routing and m.recovery_path for m in VALIDATOR_FAIL_METADATA)
 
@@ -88,17 +88,17 @@ def test_validator_fail_permanence_derived_from_class() -> None:
     """#4 — `permanence` is `permanent` for the two exit classes,
     `transient` otherwise."""
     assert (
-        validator_fail_permanence(ValidatorFailClass.PERMANENT_FAIL_EXIT)
+        validator_fail_permanence(ValidatorRetryExitClass.PERMANENT_FAIL_EXIT)
         == "permanent"
     )
     assert (
-        validator_fail_permanence(ValidatorFailClass.TERMINAL_FAIL_EXIT)
+        validator_fail_permanence(ValidatorRetryExitClass.TERMINAL_FAIL_EXIT)
         == "permanent"
     )
     for transient in (
-        ValidatorFailClass.TRANSIENT_RETRY,
-        ValidatorFailClass.REFLEXION_RECOVERABLE,
-        ValidatorFailClass.HITL_RECOVERABLE,
+        ValidatorRetryExitClass.TRANSIENT_RETRY,
+        ValidatorRetryExitClass.REFLEXION_RECOVERABLE,
+        ValidatorRetryExitClass.HITL_RECOVERABLE,
     ):
         assert validator_fail_permanence(transient) == "transient"
 

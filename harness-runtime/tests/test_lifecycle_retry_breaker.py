@@ -41,7 +41,7 @@ from harness_cp.routing_manifest_residence import (
     RoutingManifest,
 )
 from harness_cp.topology_pattern import TopologyPattern
-from harness_cp.validator_fail_taxonomy import ValidatorFailClass
+from harness_cp.validator_fail_taxonomy import ValidatorRetryExitClass
 from harness_cp.validator_fail_transient_staircase import StaircaseStage
 from harness_od.harness_breaker_schema import (
     BreakerScope,
@@ -211,7 +211,7 @@ def test_retry_breaker_stage_is_frozen(tmp_path: Path) -> None:
 
 
 def test_staircase_advances_through_5_stages_on_transient_retry(tmp_path: Path) -> None:
-    """Threading `ValidatorFailClass.TRANSIENT_RETRY` through the registry's
+    """Threading `ValidatorRetryExitClass.TRANSIENT_RETRY` through the registry's
     `advance_staircase` walks the 5-stage envelope per C-CP-21 §21.2.
 
     Stage 1 → Stage 2 (cache kept) → Stage 3 (cache lost; cross-family) →
@@ -220,7 +220,7 @@ def test_staircase_advances_through_5_stages_on_transient_retry(tmp_path: Path) 
     stage = materialize_retry_breaker_stage(
         _config(tmp_path, manifest=_manifest())
     ).registry
-    cause = ValidatorFailClass.TRANSIENT_RETRY
+    cause = ValidatorRetryExitClass.TRANSIENT_RETRY
 
     t1 = stage.advance_staircase(StaircaseStage.STAGE_1_REFLEXION, cause, 1)
     assert t1.to_stage is StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF
@@ -250,7 +250,7 @@ def test_staircase_emits_n_intervals_for_n_transient_faults(tmp_path: Path) -> N
     registry = materialize_retry_breaker_stage(
         _config(tmp_path, manifest=_manifest())
     ).registry
-    cause = ValidatorFailClass.TRANSIENT_RETRY
+    cause = ValidatorRetryExitClass.TRANSIENT_RETRY
     current = StaircaseStage.STAGE_1_REFLEXION
 
     transitions: list[StaircaseStage] = []

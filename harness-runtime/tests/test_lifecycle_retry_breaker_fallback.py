@@ -356,7 +356,7 @@ async def test_retry_six_attribute_namespace_emitted_per_attempt() -> None:
     (per Spec_Control_Plane_v1_3.md §3.5 + ADR-D1 v1.2 §1.1.1): ``retry.attempt_number``
     (1-indexed), ``retry.original_span_id`` (16-hex outer-span-id),
     ``retry.delay_ms``, ``retry.cause_attribution``, ``retry.fail_class``
-    (`ValidatorFailClass` enum), ``engine.replay_disposition`` (via
+    (`ValidatorRetryExitClass` enum), ``engine.replay_disposition`` (via
     `REPLAY_DISPOSITION_MAPPING[binding.engine_class]`).
 
     Path A resolution of `.harness/class_1_tension_c_rt_16_retry_attribute_drift.md`
