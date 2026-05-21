@@ -6,7 +6,11 @@
 
 **Discovery filed 2026-05-20:** scoping report + prototype converter + round-trip-through-OD-signing test at `.harness/u_rt_59_fork_2_cp_to_od_audit_discovery.md` (+ `harness-runtime/src/harness_runtime/lifecycle/cp_audit_conversion.py` + `harness-runtime/tests/test_cp_audit_conversion.py`). DISCOVERY-GRADE; not wired. 5 open spec-level sub-questions (Q1–Q5) surfaced for operator ratification before spec amendments / runtime wiring proceed.
 
-**Path D landed 2026-05-20** — CP-side spec-anchored surfaces only: `Cross_Axis_Composition_Document_v2_4.md` (new §2.3.7 CP→OD bucket; U-CP-28 → U-OD-00 typed-seam edge) + `Spec_Control_Plane_v1_7.md` (new §13.5.1 `cp_audit_to_od_audit` converter contract). OD-side drift dependency (ADR-D5 §1.4 vs code) surfaced at discovery report §10; resolution arc pending operator selection (Path B-revised-a / Path B-revised-b / Path A-revised). Runtime spec amendment + composer wiring + AC #9 un-strike + converter code-move to `harness-cxa/` owed to implementation arc.
+**Path D landed 2026-05-20** — CP-side spec-anchored surfaces only: `Cross_Axis_Composition_Document_v2_4.md` (new §2.3.7 CP→OD bucket; U-CP-28 → U-OD-00 typed-seam edge) + `Spec_Control_Plane_v1_7.md` (new §13.5.1 `cp_audit_to_od_audit` converter contract).
+
+**Path B-revised-a (OD-side drift resolution) landed 2026-05-20** — co-published `ADR-D5.md` v1.4 (§1.4 storage-form prose retargeted from SQLite to JSONL via IS composition + §1.4.1 entry_hash recipe tightened to SHA-256 over AuditPayload.model_dump_json) + `Spec_Operational_Discipline_v1_5.md` (new C-OD-24 contract lifting code-canonical AuditPayload + AuditLedgerEntry + AuditLedger + StateLedgerEntryRef + compute_entry_hash + §24.6 CP-source recognition). Pre-existing X-AL-3 drift surfaced at discovery report §9 + §10 RETIRED at v1.5 §24. Citation chain finding (c11-operator-local SKILL.md missing) flagged as Class 3 at ADR-D5 v1.4 change-note.
+
+**Still owed (implementation arc):** runtime spec amendment (un-strike U-RT-59 AC #9 write half + specify composer step 8 F2-write + audit-write composition); CP plan v2.13 → v2.14 absorption at U-CP-28; OD plan v2.11 → v2.12 absorption at U-OD-00 (C-OD-24); workspace CLAUDE.md §2.3 contract count update (OD 23 → 24); CP spec v1.8 follow-on Form A patch updating v1.7 §13.5.1 NOTE 1 + NOTE 2 references; converter code-move from `harness-runtime/lifecycle/cp_audit_conversion.py` → `harness-cxa/src/harness_cxa/cp_audit_conversion.py` per Q5.
 
 ---
 
