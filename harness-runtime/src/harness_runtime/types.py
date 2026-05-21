@@ -120,6 +120,7 @@ __all__ = [
     "MCPClient",
     "MCPClientConfig",
     "MCPHost",
+    "HarnessMCPServer",
     "OTelConfig",
     "PathBindingConfig",
     "PerStepOverrideEvaluator",
@@ -501,6 +502,20 @@ class MCPHost(Protocol):
 @runtime_checkable
 class MCPClient(Protocol):
     """Composed at U-RT-15 wrapping `mcp` client runtime."""
+
+
+@runtime_checkable
+class HarnessMCPServer(Protocol):
+    """Composed at U-RT-62 wrapping a `mcp.server.fastmcp.FastMCP` instance
+    that hosts the `run_workflow` MCP tool (H_T-as-MCP-server topology per
+    spec v1.12 §14.8.3 v1.12 workflow-initiation topology pin).
+
+    Distinct from `MCPHost` (H_T-as-MCP-client surface, U-RT-15). The two
+    MCP roles coexist on `HarnessContext` post-bootstrap per Q4 sibling-
+    primitive ratification at the C-RT-18 v1.12 fork.
+
+    Concretized by `harness_runtime.lifecycle.mcp_server.HarnessMCPServer`.
+    """
 
 
 @runtime_checkable
@@ -1045,6 +1060,22 @@ class HarnessContext(BaseModel):
     tool_contracts: dict[ToolName, ToolContract]
     mcp_host: MCPHost
     mcp_clients: dict[ClientName, MCPClient]
+    mcp_server: HarnessMCPServer | None = None
+    """H_T-as-MCP-server hosting (U-RT-62; C-RT-18 §14.8.3 v1.12
+    workflow-initiation topology pin).
+
+    Materialized at bootstrap stage 2 alongside `mcp_host` (the
+    H_T-as-MCP-client surface per U-RT-15). Sibling primitive per Q4
+    ratification at the C-RT-18 v1.12 fork — the two MCP roles are
+    orthogonal (server hosts the `run_workflow` tool; host/client
+    consumes other MCP servers like filesystem / GitHub / sandbox).
+
+    Defaulted to `None` for transitional bootstrap-builder shapes that
+    don't materialize the server (carrier-preservation for prior-arc
+    test substrates); post-stage-2 bootstrap completion writes a
+    `HarnessMCPServer` instance.
+    """
+
     sandbox_dispatch: SandboxDispatchTable
 
     # Stage 3a CP_CLIENTS.

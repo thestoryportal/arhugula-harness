@@ -123,6 +123,7 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         "tool_contracts",
         "mcp_host",
         "mcp_clients",
+        "mcp_server",  # U-RT-62 — C-RT-18 §14.8.3 v1.12 H_T-as-MCP-server hosting
         "sandbox_dispatch",
         # Stage 3a CP_CLIENTS.
         "providers",
