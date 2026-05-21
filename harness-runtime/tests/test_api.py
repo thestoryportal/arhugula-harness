@@ -325,13 +325,29 @@ async def test_valid_run_executes_via_driver_and_returns_run_result(
     import sys
     _shutdown_mod = sys.modules["harness_runtime.shutdown"]
 
+    from types import SimpleNamespace
+
+    # U-RT-62 AC #5 — `api.run()` now delegates execution via the in-process
+    # MCP tool path. The fake bootstrap returns a minimal context carrying
+    # a `mcp_server` namespace (the api.run body writes `_state[
+    # '_harness_ctx']` + `workflow_registry[workflow_id]` on it before
+    # the tool invocation); the in-process tool invocation is stubbed at
+    # the helper level rather than at `asyncio.to_thread` per the v1.12
+    # internal layout.
+    fake_mcp_server = SimpleNamespace(
+        server=object(),
+        _state={},
+        workflow_registry={},
+    )
+    fake_ctx = SimpleNamespace(mcp_server=fake_mcp_server)
+
     async def _fake_bootstrap(config, *, workload_class):  # type: ignore[no-untyped-def]
         _ = config
         _ = workload_class
-        return object()  # opaque ctx — driver path is short-circuited below
+        return fake_ctx
 
-    async def _fake_to_thread(fn, /, *args, **kwargs):  # type: ignore[no-untyped-def]
-        _ = fn, args, kwargs
+    async def _fake_invoke(fastmcp_server, workflow_id):  # type: ignore[no-untyped-def]
+        _ = fastmcp_server, workflow_id
         from harness_cp.workflow_driver_types import (
             RunResult as _CpRR,
         )
@@ -363,11 +379,12 @@ async def test_valid_run_executes_via_driver_and_returns_run_result(
         )
 
     monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _fake_bootstrap)
-    from types import SimpleNamespace
     monkeypatch.setattr(
         _api, "_default_config", lambda: SimpleNamespace(drain_timeout_seconds=5.0)
     )
-    monkeypatch.setattr("asyncio.to_thread", _fake_to_thread)
+    monkeypatch.setattr(
+        _api, "_invoke_run_workflow_via_in_process_mcp", _fake_invoke
+    )
     monkeypatch.setattr(_shutdown_mod, "shutdown", _fake_shutdown)
 
     result = await run(_Workflow())
@@ -381,13 +398,27 @@ async def test_run_releases_lock_after_completion(monkeypatch: pytest.MonkeyPatc
     import sys
     _shutdown_mod = sys.modules["harness_runtime.shutdown"]
 
+    from types import SimpleNamespace
+
+    # U-RT-62 AC #5 — stub at the MCP tool invocation layer (see prior test
+    # body for explanation). Each call yields a fresh fake ctx so the
+    # mutable holders don't carry state across the second invocation.
+    def _make_fake_ctx() -> Any:
+        return SimpleNamespace(
+            mcp_server=SimpleNamespace(
+                server=object(),
+                _state={},
+                workflow_registry={},
+            )
+        )
+
     async def _fake_bootstrap(config, *, workload_class):  # type: ignore[no-untyped-def]
         _ = config
         _ = workload_class
-        return object()
+        return _make_fake_ctx()
 
-    async def _fake_to_thread(fn, /, *args, **kwargs):  # type: ignore[no-untyped-def]
-        _ = fn, args, kwargs
+    async def _fake_invoke(fastmcp_server, workflow_id):  # type: ignore[no-untyped-def]
+        _ = fastmcp_server, workflow_id
         from harness_cp.workflow_driver_types import (
             RunResult as _CpRR,
         )
@@ -419,11 +450,12 @@ async def test_run_releases_lock_after_completion(monkeypatch: pytest.MonkeyPatc
         )
 
     monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _fake_bootstrap)
-    from types import SimpleNamespace
     monkeypatch.setattr(
         _api, "_default_config", lambda: SimpleNamespace(drain_timeout_seconds=5.0)
     )
-    monkeypatch.setattr("asyncio.to_thread", _fake_to_thread)
+    monkeypatch.setattr(
+        _api, "_invoke_run_workflow_via_in_process_mcp", _fake_invoke
+    )
     monkeypatch.setattr(_shutdown_mod, "shutdown", _fake_shutdown)
 
     _ = await run(_Workflow())

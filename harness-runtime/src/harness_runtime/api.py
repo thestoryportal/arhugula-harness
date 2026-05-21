@@ -282,6 +282,109 @@ _run_lock: asyncio.Lock = asyncio.Lock()
 
 
 # ---------------------------------------------------------------------------
+# U-RT-62 AC #5 — in-process MCP tool invocation helper.
+# ---------------------------------------------------------------------------
+
+
+async def _refuse_elicitation_in_api_run(
+    context: Any, params: Any
+) -> Any:
+    """Elicitation callback for `api.run()`'s in-process ClientSession.
+
+    Per the operator-ratified Q2+Q3 reading at the C-RT-18 v1.12 fork:
+    `api.run()` is the carrier-preservation surface for the 4 existing
+    test callsites importing `from harness_runtime.api import run`.
+    Production HITL routes via Claude Code as the registered MCP client
+    per Reading α; `api.run()` is NOT structurally an HITL-bearing
+    entry point at v1.12 MVP.
+
+    If a workflow invoked via `api.run()` fires a HITL gate, this callback
+    runs on the in-process ClientSession side. We respond with `decline`
+    + a clear rejection reason — the composer at step 4i REJECT branch
+    maps this to a controlled workflow termination (rather than a hang
+    or silent absorption). Future arcs may bind a richer test-fixture
+    callback to exercise the elicitation surface from api.run-driven
+    integration tests.
+    """
+    _ = (context, params)
+    from mcp.shared.context import RequestContext  # noqa: F401 — type-pin
+    from mcp.types import ElicitResult
+
+    return ElicitResult(
+        action="decline",
+        content=None,
+    )
+
+
+async def _invoke_run_workflow_via_in_process_mcp(
+    fastmcp_server: Any,
+    workflow_id: str,
+) -> _CpRunResult:
+    """Open an in-memory MCP client session against `fastmcp_server` +
+    call the `run_workflow` tool with `workflow_id`.
+
+    Per U-RT-62 AC #5 + the MCP SDK 1.27.1 `create_connected_server_and_
+    client_session` in-memory transport helper. Returns the unmarshalled
+    CP `RunResult`; raises `MCPToolError` (passes through) on any
+    non-result tool-side exception.
+
+    The tool body returns a JSON-serializable dict via
+    `cp_result.model_dump(mode="json")`; FastMCP 1.27.1 places the
+    serialization at `CallToolResult.content[0].text` (TextContent, JSON
+    string). `structuredContent` is None at this transport — we parse
+    the text payload directly via `_CpRunResult.model_validate_json`.
+    """
+    import json
+
+    from mcp.shared.memory import create_connected_server_and_client_session
+
+    async with create_connected_server_and_client_session(
+        fastmcp_server,
+        elicitation_callback=_refuse_elicitation_in_api_run,
+        raise_exceptions=True,
+    ) as session:
+        tool_result = await session.call_tool(
+            "run_workflow", {"workflow_id": workflow_id}
+        )
+
+    if tool_result.isError:
+        # Tool body raised. FastMCP serializes the error text into
+        # `content[0].text`; surface as a runtime error (the existing
+        # api.run semantics propagate driver-side exceptions).
+        error_text = (
+            tool_result.content[0].text  # type: ignore[union-attr]
+            if tool_result.content
+            else "unknown tool error"
+        )
+        raise RuntimeError(
+            f"run_workflow MCP tool raised inside in-process invocation: "
+            f"{error_text}"
+        )
+
+    if not tool_result.content:
+        raise RuntimeError(
+            "run_workflow MCP tool returned empty content; expected "
+            "TextContent with JSON-serialized RunResult dict"
+        )
+
+    text_block = tool_result.content[0]
+    payload_text = getattr(text_block, "text", None)
+    if payload_text is None:
+        raise RuntimeError(
+            f"run_workflow MCP tool returned non-text content: "
+            f"{type(text_block).__name__}"
+        )
+
+    # FastMCP wraps dict returns in a top-level JSON object; verify the
+    # shape matches the CP RunResult schema rather than the dict wrapper.
+    parsed = json.loads(payload_text)
+    # FastMCP 1.27.1 returns the dict as-is (not wrapped in {"result": ...});
+    # the v1.11 baseline test substrate validates this assumption via
+    # _CpRunResult.model_validate which raises on schema mismatch.
+    return _CpRunResult.model_validate(parsed)
+
+
+# ---------------------------------------------------------------------------
 # `run()` entry point (C-RT-08).
 # ---------------------------------------------------------------------------
 
@@ -350,78 +453,58 @@ async def run(
             resolved_config,
             workload_class=workflow.workload_class,
         )
-        run_id = uuid.uuid4().hex
-        # Offload the synchronous CP driver to a worker thread so the asyncio
-        # loop stays responsive to signal handlers (C-RT-11 drain dispatch
-        # via `loop.add_signal_handler` requires the loop be free to run).
-        # The driver itself polls `ctx.drained_flag.is_set()` at every
-        # lifecycle boundary per C-CP-25 §25.4; once the signal handler sets
-        # the flag, the next boundary returns `RunStatus.DRAINED`. In-flight
-        # step bounded-wait (U-RT-44 AC #2) materializes via this composition:
-        # the to_thread future resolves once the driver hits the next
-        # boundary (the current step is allowed to complete per
-        # `Spec_Harness_Runtime_v1.md` §11 "no mid-step interruption").
-        # Cast `ctx` to the CP driver's structural `DriverContext` Protocol.
-        # `HarnessContext` structurally satisfies it (drained_flag +
-        # ledger_writer + lifecycle_emitter) but pyright reports declared-
-        # Protocol-vs-declared-Protocol incompatibility due to invariance —
-        # the runtime's `LedgerWriter` / `LifecycleEventEmitter` Protocols
-        # are stub-declared in `types.py` and the driver's `LedgerWriterLike`
-        # / `LifecycleEventEmitterLike` are concrete; the *runtime* objects
-        # satisfy both at runtime. The cast asserts this at the type layer.
-        #
-        # `asyncio.wait_for(...)` enforces U-RT-44 AC #2's typed-timeout
-        # branch (`RT-FAIL-DRAIN-TIMEOUT` per C-RT-14). On `TimeoutError`,
-        # the underlying thread is NOT cancelled — Python threads cannot be
-        # cooperatively cancelled without driver support — so the spawned
-        # work may continue running until process exit. This is the
-        # spec §11 invariant: "exceeding the bound forces shutdown to
-        # proceed regardless; in-flight step may be in inconsistent state."
-        # U-RT-59 (C-RT-17 §14.7.7): driver consumes a StepDispatcherRegistry.
-        # Production routing comes from `ctx.step_dispatchers` (bound at
-        # bootstrap stage 5 — SUB_AGENT_DISPATCH-only at v1.6 MVP per the
-        # async/sync Class 1 fork deferring INFERENCE_STEP binding). Tests
-        # and specialized workflows may override by exposing a
-        # `step_dispatchers` attribute on the WorkflowObject — preserved
-        # as the lane-6 workflow-supplied dispatch path, modernized to the
-        # registry shape. `getattr` (vs Protocol field) keeps WorkflowObject
-        # additive — minimum-viable surface is workflow_id + workload_class
-        # + manifest_entry + steps + default_model_binding.
-        workflow_step_dispatchers = getattr(workflow, "step_dispatchers", None)
-        effective_step_dispatchers = (
-            workflow_step_dispatchers
-            if workflow_step_dispatchers is not None
-            else getattr(ctx, "step_dispatchers", None)
-        )
-        timed_out = False
         try:
-            cp_result: _CpRunResult = await asyncio.wait_for(
-                asyncio.to_thread(
-                    execute_workflow,
-                    workflow.manifest_entry,
-                    workflow.steps,
-                    run_id,
-                    cast(_CpDriverContext, ctx),
-                    default_model_binding=workflow.default_model_binding,
-                    step_dispatchers=cast(Any, effective_step_dispatchers),
-                ),
-                timeout=resolved_config.drain_timeout_seconds,
+            # U-RT-62 AC #5 — thin-wrapper reframe per spec v1.12 §14.8.3
+            # workflow-initiation topology pin (Reading α CC-initiates). The
+            # operator-facing `api.run()` symbol is preserved as carrier-
+            # preservation per Q2 ratification at the C-RT-18 v1.12 fork;
+            # the body now invokes the MCP-tool path via an in-process
+            # `ClientSession` against `ctx.mcp_server.server` (the FastMCP
+            # server materialized at bootstrap stage 2 per AC #2). This
+            # exercises the same H_T-as-MCP-server hosting topology that
+            # production CC→`run_workflow` invocation uses, so the e2e
+            # contract is unified at criterion B verification per spec
+            # v1.12 §14.8.3 v1.12 RETIRE-READY → RETIRED gate (AC #6).
+            #
+            # The tool body internalizes the asyncio.to_thread → wait_for
+            # composition + the workflow.step_dispatchers override fallback;
+            # api.run's role here is bootstrap → workflow registration →
+            # in-process tool call → CP result parse → shutdown.
+            assert ctx.mcp_server is not None, (
+                "ctx.mcp_server is None post-bootstrap — stage 2 AS did not "
+                "materialize the FastMCP server per U-RT-62 AC #2"
             )
-        except TimeoutError:
-            timed_out = True
-            cp_result = _CpRunResult(
-                workflow_id=workflow.manifest_entry.workflow_id,
-                run_id=run_id,
-                status=_CpRunStatus.DRAINED,
-                terminal_step_index=None,
-                partial_state=None,
-                final_state=None,
-                fail_class="RT-FAIL-DRAIN-TIMEOUT",
+            # Bind the post-bootstrap context on the mutable holder so the
+            # `run_workflow` tool body can reach `ctx.step_dispatchers` etc.
+            ctx.mcp_server._state["_harness_ctx"] = ctx
+            # Register the workflow keyed by workflow_id so the tool body
+            # can look it up. WorkflowObject is a runtime-local structural
+            # Protocol; not MCP-serializable. The serializable wire is the
+            # `workflow_id` string only.
+            ctx.mcp_server.workflow_registry[workflow.workflow_id] = workflow
+            try:
+                cp_result = await _invoke_run_workflow_via_in_process_mcp(
+                    ctx.mcp_server.server, workflow.workflow_id
+                )
+            finally:
+                # Defensive cleanup — `_run_lock` serializes invocations but
+                # the registry + state holders MUST NOT carry stale entries
+                # across calls (Track B future cached-context entry point;
+                # pytest-asyncio loop reuse).
+                ctx.mcp_server.workflow_registry.pop(workflow.workflow_id, None)
+                ctx.mcp_server._state.pop("_harness_ctx", None)
+            # Per AC #5 advisor reconcile pin — `timed_out` derived from the
+            # CP result (the tool body absorbed the TimeoutError and emitted
+            # a DRAINED CP result with `RT-FAIL-DRAIN-TIMEOUT` fail_class).
+            timed_out = (
+                cp_result.status == _CpRunStatus.DRAINED
+                and cp_result.fail_class == "RT-FAIL-DRAIN-TIMEOUT"
             )
-        # Per C-RT-08 + C-RT-10: run() owns the full bootstrap → execute →
-        # shutdown lifecycle. Shutdown after execute, regardless of CP
-        # status. ShutdownReport carries the audit-ledger head hash.
-        shutdown_report = await _shutdown(ctx)
+        finally:
+            # Per C-RT-08 + C-RT-10: run() owns the full bootstrap → execute
+            # → shutdown lifecycle. Shutdown after execute, regardless of CP
+            # status. ShutdownReport carries the audit-ledger head hash.
+            shutdown_report = await _shutdown(ctx)
         return _build_run_result(cp_result, shutdown_report, timed_out=timed_out)
 
 

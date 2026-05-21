@@ -748,12 +748,38 @@ async def test_api_run_passes_workload_class_into_bootstrap(
     # Short-circuit the driver + shutdown — this test only verifies that
     # `run()` threads `workflow.workload_class` into bootstrap. Real
     # bootstrap-to-shutdown end-to-end is exercised in test_run_smoke.py.
+    # U-RT-62 AC #5 — `api.run()` now delegates execution via the in-
+    # process MCP tool path; the fake bootstrap must carry a `mcp_server`
+    # namespace + the stub site moves from `asyncio.to_thread` to
+    # `_invoke_run_workflow_via_in_process_mcp` per the v1.12 internal
+    # layout.
     import sys
+    from types import SimpleNamespace
     _shutdown_mod = sys.modules["harness_runtime.shutdown"]
+    from harness_runtime import api as _api_mod
     from harness_runtime.api import run
 
-    async def _fake_to_thread(fn: Any, /, *args: Any, **kwargs: Any) -> Any:
-        _ = fn, args, kwargs
+    # Wrap the existing `_fake_bootstrap` to return a ctx carrying
+    # `mcp_server` (the original captured the workload_class via closure;
+    # we preserve that behavior by re-using the same captured dict).
+    _original_fake_bootstrap = _fake_bootstrap
+
+    async def _wrapped_fake_bootstrap(config: Any, *, workload_class: Any) -> Any:
+        await _original_fake_bootstrap(config, workload_class=workload_class)
+        return SimpleNamespace(
+            mcp_server=SimpleNamespace(
+                server=object(),
+                _state={},
+                workflow_registry={},
+            )
+        )
+
+    monkeypatch.setattr(
+        "harness_runtime.bootstrap.run_bootstrap", _wrapped_fake_bootstrap
+    )
+
+    async def _fake_invoke(fastmcp_server: Any, workflow_id: str) -> Any:
+        _ = fastmcp_server, workflow_id
         from harness_cp.workflow_driver_types import (
             RunResult as _CpRR,
         )
@@ -784,7 +810,9 @@ async def test_api_run_passes_workload_class_into_bootstrap(
             audit_ledger_head_hash=None,
         )
 
-    monkeypatch.setattr("asyncio.to_thread", _fake_to_thread)
+    monkeypatch.setattr(
+        _api_mod, "_invoke_run_workflow_via_in_process_mcp", _fake_invoke
+    )
     monkeypatch.setattr(_shutdown_mod, "shutdown", _fake_shutdown)
 
     result = await run(_Workflow(workload_class=WorkloadClass.RESEARCH))
