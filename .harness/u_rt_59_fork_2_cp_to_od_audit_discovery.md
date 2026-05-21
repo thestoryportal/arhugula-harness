@@ -193,3 +193,45 @@ Spec-writer does not recommend; this is a design-substrate decision. The discove
 ---
 
 *§9 closes the application loop. Resume Fork 2 spec-writer arc after operator selects A/B/C/D and ratifies the OD audit-ledger schema target.*
+
+---
+
+## §10 Second-order halt — ADR-D5 §1.4 deviates from code (added 2026-05-20 after Path B ratification)
+
+**Context.** Operator ratified Path B at §9 ("treat current code as canonical; lift verbatim into OD spec"). Spec-writer arc opened against OD spec v1.4 → v1.5 to author new C-OD-24 lifting `AuditPayload` + `AuditLedgerEntry` shapes. **Halted again before authoring** after reading ADR-D5 §1.4 + §1.4.1.
+
+**Finding.** ADR-D5 §1.4 (canonical authority) commits a **structurally different** audit-ledger entry shape than the code:
+
+| Surface | ADR-D5 §1.4 canonical commitment | Code at `audit_ledger_types.py` |
+|---|---|---|
+| Audit-ledger entry payload | F2 state-ledger entry shape: `(action_id, idempotency_key, actor, response_hash, timestamp, prior_event_hash)` — **6 typed fields per C-IS-05** | `AuditPayload` = 3 fields: `entry_core: StateLedgerEntryRef` (opaque str) + `audit_namespace_attrs: dict[str, str]` (untyped bag) + `prior_entry_hash` |
+| Storage | Single sqlite `ledger_entries` table extended with 4 signature columns at team-binding+ tiers (`signature_value` / `signature_key_id` / `signature_key_period` / `rotation_correlation_id`) | Pydantic models only; no sqlite schema; OD `RuntimeAuditLedgerWriter.append` wraps into IS JSONL ledger via `EntryPayload` (different shape) |
+| `entry_hash` recipe | `audit.signature.sha256` = "per-event SHA-256 hash over the ledger entry payload" — SHA-256 over the 6-field F2 shape (canonical, ADR-committed) | None at HEAD; discovery prototype uses interim `sha256(payload.model_dump_json())` over the 3-field `AuditPayload` |
+| Signature attributes | 7 `audit.*` attributes per §1.4.1 (4 `audit.signature.*` + 3 v1.1 attributes) | `AuditSignatureAttributes` carries 4 of the 7 (the `audit.signature.*` subset) |
+| Shape relationship | Audit-ledger entry IS the F2 entry (extended at team-binding+ with crypto columns) | Audit-ledger entry REFERENCES a separate F2 entry via opaque `entry_core` marker; carries its own dict of audit metadata |
+
+**Net.** Code's audit-ledger types are not a faithful materialization of ADR-D5 §1.4. The deviation predates Fork 2 (authored at U-OD-00, OD plan v2.6 R5 §0.3, 2026-05-15; R5 Q-R5-3 ratified placement of `AuditSignatureAttributes` at U-OD-00 but did NOT ratify the `AuditPayload` 3-field shape — it's an undeclared authoring choice).
+
+**Path B as ratified is incompatible with ADR-D5 §1.4.** "Lift code verbatim" would either:
+(a) Codify a NEW deviation in OD spec v1.5, requiring an ADR-D5 amendment (Phase 3a/3b ADR revision back-flow per §4.3) to permit the deviation; OR
+(b) Document the deviation as deliberate Class 3 in OD spec v1.5 — but Class 3 is for non-architectural drift, and divergence from a foundational ADR §1.4 commitment is architectural.
+
+Either way, Path B's scope is materially larger than the §9 routing assumed. Spec-writer cannot pick between (a) and (b) — both are architectural decisions.
+
+**Revised options for operator (supersedes §9 path enumeration):**
+
+| Path | Description | Cost |
+|---|---|---|
+| **B-revised-a** | Lift code shapes to OD spec v1.5 as authored (3-field `AuditPayload` + dict bag); **amend ADR-D5 §1.4** to permit the deviation (or open council convening for the ADR amendment). Documents the deviation as the new canonical commitment. | Large — ADR revision is foundational (F1–F5 anchors); council convening per Project_Workflow §2.7.6 Class 1 ADR revision back-flow |
+| **B-revised-b** | Lift code shapes to OD spec v1.5 with explicit "deliberate deviation from ADR-D5 §1.4" rationale; file Class 1 (not Class 3 — architectural) for ADR-D5 amendment in a follow-on arc. | Medium — defers the ADR revision but commits the spec to the deviation. The Class 1 is the architectural decision deferred |
+| **A-revised** | Author OD spec v1.5 to align with ADR-D5 §1.4 (6-field F2-shape audit-ledger entry, sqlite-extended-table model); **REWRITE code** at `audit_ledger_types.py` + `audit_writer.py` + downstream callsites to match. | Large — spec authoring + code rewrite + test rewrite. The "honest" Path A: spec is the authority; code conforms. |
+| **C** | Defer Fork 2 entirely until the broader OD audit-ledger drift resolution arc (`B-revised-a` OR `B-revised-b` OR `A-revised`) lands. Fork 2 stays at discovery-only. | Zero today; preserves operator decision authority |
+| **D** | Reduced-scope Path A landing: CXA v2.4 + CP spec v1.7 §13.5 converter contract only (these surfaces depend on CP-side §16.2 which IS spec-anchored). Defer ALL OD-side spec work to the drift resolution arc. | Medium-small — closes the spec-anchored 2 of 6 Path A artifacts |
+
+**Recommendation discipline.** Spec-writer does not recommend among B-revised-a / B-revised-b / A-revised / C / D. The choice between "ADR is authority; code must conform" vs "code is canonical; ADR must accommodate" is a load-bearing architectural call the operator owns. The discovery prototype + tests at `70e58f2` remain durable; they encode the code-canonical shapes and are unaffected by whichever resolution path lands.
+
+**Action this turn.** Halt (second time). No spec edits. Append §10 + commit + re-surface.
+
+---
+
+*§10 closes the second-order application loop. The Fork 2 amendment cannot proceed against ANY spec target until the operator resolves the ADR-D5 deviation question. This is the foundational architectural choice; downstream Fork 2 work flows from it.*
