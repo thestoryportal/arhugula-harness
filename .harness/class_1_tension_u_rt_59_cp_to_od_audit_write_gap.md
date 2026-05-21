@@ -6,6 +6,8 @@
 
 **Discovery filed 2026-05-20:** scoping report + prototype converter + round-trip-through-OD-signing test at `.harness/u_rt_59_fork_2_cp_to_od_audit_discovery.md` (+ `harness-runtime/src/harness_runtime/lifecycle/cp_audit_conversion.py` + `harness-runtime/tests/test_cp_audit_conversion.py`). DISCOVERY-GRADE; not wired. 5 open spec-level sub-questions (Q1–Q5) surfaced for operator ratification before spec amendments / runtime wiring proceed.
 
+**Path D landed 2026-05-20** — CP-side spec-anchored surfaces only: `Cross_Axis_Composition_Document_v2_4.md` (new §2.3.7 CP→OD bucket; U-CP-28 → U-OD-00 typed-seam edge) + `Spec_Control_Plane_v1_7.md` (new §13.5.1 `cp_audit_to_od_audit` converter contract). OD-side drift dependency (ADR-D5 §1.4 vs code) surfaced at discovery report §10; resolution arc pending operator selection (Path B-revised-a / Path B-revised-b / Path A-revised). Runtime spec amendment + composer wiring + AC #9 un-strike + converter code-move to `harness-cxa/` owed to implementation arc.
+
 ---
 
 ## Surfacing event
