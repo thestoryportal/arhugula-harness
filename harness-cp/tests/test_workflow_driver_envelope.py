@@ -627,6 +627,167 @@ def test_envelope_step_count_zero_when_no_steps_complete_before_drain(
 
 
 # ---------------------------------------------------------------------------
+# U-OD-37 — Exception handling + resumption fresh-envelope
+# ---------------------------------------------------------------------------
+
+
+def test_envelope_records_exception_on_validation_failure(
+    exporter_and_provider: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    """AC #1 — Exception inside envelope (here: out-of-scope topology raises
+    TopologyPatternNotYetMaterializedError) records the exception event and
+    sets span status to ERROR. OTel auto-discipline + the C-RT-17 validation
+    error class combined."""
+    exporter, provider = exporter_and_provider
+    ctx = _FakeCtx(tracer_provider=provider)
+    manifest = WorkflowManifestEntry(
+        workflow_id="wf-exc",
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        topology_pattern=TopologyPattern.ORCHESTRATOR_WORKERS,  # out-of-scope
+        layer_budgets=(),
+        fallback_chain=_CHAIN,
+        hitl_placements=(),
+        per_step_overrides={},
+    )
+    with pytest.raises(Exception):
+        execute_workflow(
+            manifest_entry=manifest,
+            steps=[_step(0)],
+            run_id="run-exc",
+            ctx=cast(DriverContext, ctx),
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+        )
+    envelope = _single_envelope(exporter)
+    # OTel default discipline closes span with ERROR + exception event.
+    assert envelope.status.status_code is StatusCode.ERROR
+    # Exception event recorded with the typed error class name.
+    exc_events = [e for e in envelope.events if e.name == "exception"]
+    assert len(exc_events) == 1
+    attrs = dict(exc_events[0].attributes or {})
+    assert attrs.get("exception.type") in {
+        "TopologyPatternNotYetMaterializedError",
+        "harness_cp.workflow_driver_errors.TopologyPatternNotYetMaterializedError",
+    }
+
+
+def test_envelope_resumption_opens_fresh_envelope(
+    exporter_and_provider: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    """AC #2 — Resumption (per U-CP-56) opens a FRESH envelope per §C-OD-25.4
+    invariant 1. Two sequential execute_workflow calls with the same workflow
+    identity produce two distinct envelope spans (distinct span_ids)."""
+    exporter, provider = exporter_and_provider
+    ctx1 = _FakeCtx(tracer_provider=provider)
+    ctx2 = _FakeCtx(tracer_provider=provider)
+    manifest = _manifest(workflow_id="wf-resume")
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0)],
+        run_id="run-resume",
+        ctx=cast(DriverContext, ctx1),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+    )
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0)],
+        run_id="run-resume",
+        ctx=cast(DriverContext, ctx2),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+    )
+    envelopes = [s for s in exporter.get_finished_spans() if s.name == "workflow.envelope"]
+    assert len(envelopes) == 2
+    assert envelopes[0].context.span_id != envelopes[1].context.span_id
+    # Both envelopes carry the same workflow.id but distinct identity per-run.
+    attrs1 = dict(envelopes[0].attributes or {})
+    attrs2 = dict(envelopes[1].attributes or {})
+    assert attrs1["workflow.id"] == attrs2["workflow.id"] == "wf-resume"
+
+
+def test_envelope_end_time_reflects_workflow_termination(
+    exporter_and_provider: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    """AC #4 — Span.end_time_ns reflects actual workflow termination time
+    (envelope closes after body returns, not at start)."""
+    import time
+
+    exporter, provider = exporter_and_provider
+    ctx = _FakeCtx(tracer_provider=provider)
+
+    class _SleepDispatcher:
+        def dispatch(
+            self,
+            binding: StepEffectiveBinding,
+            step: WorkflowStep,
+            *,
+            step_context: Any = None,
+        ) -> dict[str, Any]:
+            time.sleep(0.01)  # 10ms; observable above timing noise
+            return {"step_id": str(step.step_id), "echoed_payload": {}}
+
+    execute_workflow(
+        manifest_entry=_manifest(),
+        steps=[_step(0)],
+        run_id="run-time",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _SleepDispatcher())),
+    )
+    envelope = _single_envelope(exporter)
+    # Envelope duration must exceed the dispatcher sleep (>= 10ms = 10_000_000ns).
+    duration_ns = envelope.end_time - envelope.start_time
+    assert duration_ns >= 10_000_000, (
+        f"envelope duration {duration_ns}ns should reflect dispatcher work"
+    )
+
+
+def test_envelope_child_span_nests_under_envelope_for_each_step(
+    exporter_and_provider: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    """AC #3 — Span context propagation: child spans opened by dispatchers
+    across multiple steps all nest under the SAME envelope (single envelope
+    per workflow per §25.4 invariant 1)."""
+    exporter, provider = exporter_and_provider
+    tracer = provider.get_tracer("test.envelope.multi-child")
+
+    class _MultiChildDispatcher:
+        def dispatch(
+            self,
+            binding: StepEffectiveBinding,
+            step: WorkflowStep,
+            *,
+            step_context: Any = None,
+        ) -> dict[str, Any]:
+            with tracer.start_as_current_span(f"step.{step.step_id}.body"):
+                pass
+            return {"step_id": str(step.step_id), "echoed_payload": {}}
+
+    ctx = _FakeCtx(tracer_provider=provider)
+    execute_workflow(
+        manifest_entry=_manifest(),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-multi",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _MultiChildDispatcher())),
+    )
+    envelope = _single_envelope(exporter)
+    children = [
+        s
+        for s in exporter.get_finished_spans()
+        if s.name.startswith("step.") and s.name.endswith(".body")
+    ]
+    assert len(children) == 3
+    for child in children:
+        assert child.parent is not None
+        assert child.parent.span_id == envelope.context.span_id
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

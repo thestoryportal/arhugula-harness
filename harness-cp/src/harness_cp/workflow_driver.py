@@ -395,11 +395,25 @@ def execute_workflow(
     # ctx.tracer_provider.get_tracer(...).start_as_current_span(...). Every
     # downstream child span (LLM dispatch / tool dispatch / HITL gate /
     # validator / pause-resume / per-server-trust) nests under this envelope
-    # via OTel parent-context propagation. The envelope ALWAYS closes
-    # deterministically — SUCCESS / FAILED / DRAINED set the span status per
-    # RunResult.status; unhandled exceptions inside the body close the span
-    # via OTel's default exception-status discipline (U-OD-37 will extend
-    # this with explicit Span.record_exception + Span.set_status(ERROR)).
+    # via OTel parent-context propagation per §25.4 invariant 3 (U-OD-37 AC #3).
+    #
+    # Envelope close discipline (U-OD-37 AC #1 + AC #4):
+    # - Normal SUCCESS / DRAINED returns leave status UNSET (§25.5 default
+    #   — DRAINED is not a fail).
+    # - FAILED returns set StatusCode.ERROR with fail_class as description.
+    # - Unhandled exceptions inside the body trigger OTel's default discipline
+    #   (record_exception=True + set_status_on_exception=True defaults on
+    #   start_as_current_span) — exception event recorded with
+    #   "exception.type" + status set to ERROR. No explicit try/except wrap
+    #   needed; verified at test_envelope_records_exception_on_validation_failure.
+    # - Span.end_time_ns reflects actual workflow termination time (context
+    #   manager closes on body return; verified at
+    #   test_envelope_end_time_reflects_workflow_termination).
+    #
+    # Resumption (U-OD-37 AC #2): each call to execute_workflow opens a FRESH
+    # envelope per §25.4 invariant 1. The prior envelope was closed at
+    # pause-snapshot capture per C-CP-26 §26. State-ledger anchoring across
+    # envelopes via workflow.run_id + workflow.idempotency_key attributes.
     tracer = ctx.tracer_provider.get_tracer(  # type: ignore[attr-defined]
         "harness.cp.workflow_driver"
     )
