@@ -76,8 +76,8 @@ All canonical artifacts reside at the **design-phase workspace** (separate Claud
 |---|---|
 | IS | `Spec_Information_Substrate_v1.md` (v1.2 per ADD v1.3 attestation) |
 | AS | `Spec_Action_Surface_v1.md` (v1.3 — C-AS-02/§11.1 `sandbox_tier_floor` reconciliation per S2 + C-AS-05 §5.1 3-param `fetch_secret` per S3, 2026-05-15) |
-| CP | `Spec_Control_Plane_v1_8.md` (v1.8 — Form A NOTE-reference reconciliation over v1.7 §13.5.1 `cp_audit_to_od_audit` converter contract per U-RT-59 Fork 2 Path D, 2026-05-20) |
-| OD | `Spec_Operational_Discipline_v1_5.md` (v1.5 — new **C-OD-24** audit-ledger payload + entry composition contract + `compute_entry_hash` canonical helper + CP-sourced audit-entry recognition at §24.6 per U-RT-59 Fork 2 Path B-revised-a; OD contract count grows 23 → 24; preserves v1.4 FF-2 collector-placement, 2026-05-20) |
+| CP | `Spec_Control_Plane_v1_9.md` (v1.9 — Form A NOTE-absorption over v1.8 §13.5.1 — NEW NOTE 4 sibling distinguishability via entry_core + NEW NOTE 5 dispatch repurposing of HITL palette via response="approve" + NEW NOTE 6 brief_hash projection-table absence per adversarial-review path (i) absorption, 2026-05-20; v1.8 Form A NOTE-reference reconciliation over v1.7 §13.5.1 converter contract preserved) |
+| OD | `Spec_Operational_Discipline_v1_6.md` (v1.6 — Form A NOTE-absorption over v1.5 — §24.4 example action_id format corrected to canonical `dispatch:<parent_action_id>:<child_index>` + §24.5 NEW NOTE on `compute_entry_hash` helper materialization deferral per adversarial-review path (i) absorption, 2026-05-20; v1.5 C-OD-24 audit-ledger payload + entry composition contract preserved; OD contract count unchanged at 24) |
 
 ### 2.4 Per-axis plans (Phase 6 canonical — execution authority)
 
