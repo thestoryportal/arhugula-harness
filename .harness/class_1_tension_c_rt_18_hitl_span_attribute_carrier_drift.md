@@ -2,7 +2,7 @@
 
 **Filed:** 2026-05-21 — Phase 7 sub-phase 7b U-RT-60 implementation arc OPEN (executed under `phase-7-implementation` skill from HEAD `e3b193f`). Surfaced at Step 2 of the unit consumption shape (read spec contract) when cross-checking AC #7 + AC #13 against the canonical CP carrier at `harness-cp/src/harness_cp/audit_hitl_span_namespace.py`.
 **Surfaced by:** `phase-7-implementation` skill §6 halt condition (cited spec contract section under-specifies / self-contradicts the surface). Routed here via `phase-7-back-flow-routing` skill §4.1 Step 1 classification.
-**Status:** **AUTHORING → PROPOSING** (pending systems-architect mode 3 recommendation + operator ratification).
+**Status:** **AUTHORING → PROPOSING → RATIFIED** 2026-05-21 (operator ratified all 6 Qs as recommended at AskUserQuestion turn this session; no counter-proposal raised; chain reading accepted as authoritative). Next: `spec-writer` arc for runtime spec v1.10 → v1.11; co-publication with plan v2.8 → v2.9 via `implementation-planner`. U-RT-60 implementation arc resumes against the re-clearance state.
 **Substitutions at stake:** **H_T-CP-20** (HITL primitive + 4-response palette + `hitl.*` / `audit.*` namespaces; X-AL-2 retirement criterion B reading at spec §14.8.3 — "namespace emission at production execution path" cannot be verified if the composer emits attribute names that the canonical CP carrier does not declare).
 **Defect class:** Class 1 — spec contract self-contradicts at the attribute-name layer; design-phase artifact requires revision per workspace `CLAUDE.md` §4.3 + X-AL-3 (no silent H_T design extension) + X-AL-1 (carrier-canonical discipline).
 
@@ -327,6 +327,17 @@ The recommendation touches LEAF artifacts only (runtime spec + plan); no F-ADR /
 
 ## Operator ratification
 
-*To be appended at operator AskUserQuestion turn after systems-architect recommendation lands.*
+**Ratified 2026-05-21 by operator at AskUserQuestion turn (this session).** Selection: "Ratify all 6 Qs as recommended." No counter-proposal raised. Chain reading accepted as authoritative.
 
-(awaiting operator decision)
+**Ratified disposition (per `systems-architect` mode 3 recommendation above):**
+
+| Q | Ratified resolution |
+|---|---|
+| Q1 | (a) Runtime spec narrative correction — conform to canonical `hitl.response.{class,latency_ms,summary_hash}` per ADR-D5 v1.3 §1.8 row 3 |
+| Q2 | (b) Restore canonical 4-span shape + audit-entry-anchored fact carriers — open `hitl.invocation.opened` (placement attr lives there per row 2); open `hitl.invocation.timed_out` for timeout (dedicated span per row 4); use OTel `Span.set_status(StatusCode.ERROR)` + `Span.record_exception(...)` for audit-compose failure (semconv-canonical, drops custom `.outcome` attribute) |
+| Q3 | (a) CP-owner reading via D6 ingestion — OD spec authoritative for `hitl.*` schema per `harness-cp/CLAUDE.md` §1.4; CP carrier emits per |
+| Q4 | Confirmed retroactive X-AL-3 surfacing — v1.9 authoring at HEAD `2685774` was authoring drift (not design extension) since §14.8.5 declared carrier canonical; honor X-AL-3 by conforming leaf to chain, not extending carrier. No silent-absorption-violation finding filed against v1.9 authoring. |
+| Q5 | Single-arc co-publication — runtime spec v1.10 → v1.11 + plan v2.8 → v2.9 in one operator-ratification turn (cascade scope contained to leaves; CP carrier + ADR-D5/D6 untouched) |
+| Q6 | Systemic-pattern threshold confirmed crossed — 4 adversarial-review-missed defects at U-RT-58/59/60 all at CP↔runtime cross-axis attribute/binding surface. Surfaced as follow-on arc for `harness-adversarial-reviewer` / `phase-7-implementation` / `spec-writer` skill body extension; operator schedules independently of U-RT-60 resumption. File Class 3 informational record at fork-resolution landing time. |
+
+**Status transition.** PROPOSING → **RATIFIED**. Next: `spec-writer` skill opens runtime spec v1.10 → v1.11 Form A NOTE-form absorption arc; `implementation-planner` co-publishes plan v2.8 → v2.9 absorbing AC #7 + AC #8 (+ AC #11 if multi-span coverage assertion shape changes). U-RT-60 implementation arc HALTED state preserved at HEAD `1e4c59d` (fork-filed) → `3d5a370` (recommendation) → this commit (RATIFIED) → spec-writer arc → plan-writer arc → `phase-7-implementation` resumes against the re-clearance state. The implementation-arc resumption is APPLIED status; full retirement at U-RT-60 landing event per Phase 7d batch 8.
