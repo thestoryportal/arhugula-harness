@@ -2,7 +2,15 @@
 
 **Class:** 3 — informational; non-blocking; documented.
 **Filed:** 2026-05-20 during `[[class_3_tension_cxa_v2_4_axis_back_edge]]` absorption arc.
-**Status:** OPEN-FLAGGED — surfaced for operator visibility; absorbed at next CP/OD plan revision pass that touches edge counts.
+**Status:** **RESOLVED 2026-05-20** — pulled forward as front (f) of post-U-RT-59 menu (same day as filing). All 5 enumerated amendment sites + 1 internal-consistency site absorbed at `harness-cp/CLAUDE.md`:
+- §1.1 axis-identity statement: "60 outbound (36→IS + 24→AS)" → "56 outbound (37 → IS + 18 → AS + 1 → OD)" with citation to CXA v2.4 §2.4
+- §2.2 line 76 OD→CP enumeration: `_v2_1.md` §2.3.3 → `_v2_4.md` §2.3.6 (internal-consistency fix paired with §2.3 OD→CP row update)
+- §2.3 table title: "Cross-axis edge inventory (CXA v2.1)" → "(CXA v2.4)"
+- §2.3 CP→IS row: 36 → 37; cite `_v2_4.md` §2.3.2
+- §2.3 CP→AS row: 24 → 18; cite `_v2_4.md` §2.3.3 (bucket renumbered from v2.1 §2.3.4)
+- §2.3 OD→CP inbound row: 12 unchanged; cite `_v2_4.md` §2.3.6 (bucket renumbered from v2.1 §2.3.3)
+
+OD side already bounded by C3-15 self-flag (OD→IS 6 vs 4 drift; OD→AS 10 + OD→CP 12 match v2.4 verbatim — no new OD-side drift surfaced at front (a) inspection).
 
 ---
 

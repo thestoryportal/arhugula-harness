@@ -10,7 +10,7 @@
 
 The Control Plane (CP) axis owns **orchestration**: multi-LLM routing core + provider portability (ADR-F1 v1.2 anchor), per-layer time-budget + retry namespaces, fallback chain composition + cross-family fallback, workflow manifest schema + per-step override evaluator + audit-ledger composition, EngineClass + ResumptionKind taxonomies, TopologyPattern 6-class enum + admissibility + CascadePolicy, sub-agent handoff schemas, HITL placement + 4-response palette, sandbox-tier dispatch, Skills enabling discipline (CP-side), memory + files primitive consumption, MCP integration + per-server trust framework function, cross-deployment monotonicity.
 
-CP posture per `Cross_Axis_Composition_Document_v2_1.md` §2.1: **largest cross-axis consumer** (60 outbound edges; 36 → IS + 24 → AS); consumer of 12 OD→CP inbound edges (excluded from outbound; CP terminal manifests U-CP-54 + U-CP-55 surface CP exports for OD consumption). Largest axis by unit count (58) and contract count (24).
+CP posture per `Cross_Axis_Composition_Document_v2_4.md` §2.4: **largest cross-axis consumer** (56 outbound edges; 37 → IS + 18 → AS + 1 → OD per v2.4 §2.3.7 NEW CP→OD bucket); consumer of 12 OD→CP inbound edges (excluded from outbound; CP terminal manifests U-CP-54 + U-CP-55 surface CP exports for OD consumption). Largest axis by unit count (58) and contract count (24). Counts updated v2.1 baseline → v2.4 per `[[class_3_tension_per_axis_claude_md_v2_1_to_v2_4_count_drift]]` absorption.
 
 ### 1.2 Spec + plan authority
 
@@ -73,15 +73,15 @@ ADD attestation: `Architectural_Design_Document_v1_3.md` v1.3.
 
 ### 2.2 CP export seams (consumed by OD)
 
-CP terminal aggregate exporters: U-CP-54 + U-CP-55 (per C-CP-24 §24). 12 OD→CP edges consume CP export surfaces. Per-edge enumeration at `Cross_Axis_Composition_Document_v2_1.md` §2.3.3.
+CP terminal aggregate exporters: U-CP-54 + U-CP-55 (per C-CP-24 §24). 12 OD→CP edges consume CP export surfaces. Per-edge enumeration at `Cross_Axis_Composition_Document_v2_4.md` §2.3.6.
 
-### 2.3 Cross-axis edge inventory (CXA v2.1)
+### 2.3 Cross-axis edge inventory (CXA v2.4)
 
 | Edge direction | Edges | Source artifact |
 |---|---|---|
-| CP → IS (outbound) | 36 | `Cross_Axis_Composition_Document_v2_1.md` §2.3.2; `Implementation_Plan_Control_Plane_v1.md` §3.3 |
-| CP → AS (outbound) | 24 | `Cross_Axis_Composition_Document_v2_1.md` §2.3.4; CP plan §3.3 |
-| OD → CP (inbound) | 12 | `Cross_Axis_Composition_Document_v2_1.md` §2.3.3 |
+| CP → IS (outbound) | 37 | `Cross_Axis_Composition_Document_v2_4.md` §2.3.2; `Implementation_Plan_Control_Plane_v1.md` §3.3 |
+| CP → AS (outbound) | 18 | `Cross_Axis_Composition_Document_v2_4.md` §2.3.3 (was v2.1 §2.3.4 — bucket renumbered at v2.3 reclassification); CP plan §3.3 |
+| OD → CP (inbound) | 12 | `Cross_Axis_Composition_Document_v2_4.md` §2.3.6 (was v2.1 §2.3.3 — bucket renumbered at v2.3 reclassification) |
 | CP → OD (outbound) | 1 | `Cross_Axis_Composition_Document_v2_4.md` §2.3.7 — genuine-typed-seam at U-CP-28 → U-OD-00 (C-CP-13 §13.5.1 converter contract); physical import homed at `harness-cxa/src/harness_cxa/cp_audit_conversion.py` per Q5 ratification. First cross-axis back-edge per U-RT-59 Fork 2 Path D landing. `[[class_3_tension_cxa_v2_4_axis_back_edge]]`. NOTE: U-CP-54 + U-CP-55 manifest is the OD→CP **inbound** terminal-aggregate-exporter surface (12 edges row above), not a CP→OD outbound. |
 
 ### 2.4 Per-cluster cross-axis edge profile (preserved at v2.10)
