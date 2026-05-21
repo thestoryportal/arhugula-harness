@@ -1,7 +1,9 @@
 # Class 1 Tension — CP v2.8 batch blocked units (shared-cause cluster record)
 
-**Status:** 🛑 HALT — 11 CP units in the v2.8 L1–L3 batch cannot be landed.
+**Status:** ✅ RESOLVED 2026-05-16 — see "RESOLUTION — CP plan v2.9" section below + "Audit reconciliation (2026-05-20)" footer + Phase A.1 confirmation (`.harness/Phase_A_1_Tension_Resolution_v1.md`, 2026-05-21). 10/11 batch units fully unblocked at CP plan v2.9 T2 X-AL-3 FACTOR-OUT; U-CP-04 upgraded PARTIAL-LAND → FULL-LAND at v2.10 R-2/W-2 ratification. Original HALT framing below preserved for historical traceability.
+**Original Status (HALT — preserved for traceability):** 🛑 HALT — 11 CP units in the v2.8 L1–L3 batch cannot be landed.
 **Filed:** 2026-05-16 (Phase 7 7b, CP axis-stream).
+**Resolved:** 2026-05-16 (same-day; CP plan v2.9 + v2.10 absorption).
 **Scope:** the v2.8-batch units U-CP-04, 05, 08, 09, 13, 14, 30, 33, 38, 39, 44.
 
 This is the canonical shared-cause record for the 11 blocked units. Per-unit
