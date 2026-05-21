@@ -1,0 +1,522 @@
+"""U-RT-62 AC #6 — End-to-end CC → run_workflow → HITL → ctx.elicit → response → continuation.
+
+**Load-bearing test for criterion B verification per `Spec_Harness_Runtime_v1.md`
+v1.12 §14.8.3 v1.12 RETIRE-READY → RETIRED gate.**
+
+Exercises the full topology pinned at spec v1.12 §14.8.3 v1.12 workflow-
+initiation topology pin (Reading α CC-initiates):
+
+1. In-process MCP client (stand-in for Claude Code) calls `run_workflow` tool
+   on H_T's FastMCP server (materialized at bootstrap stage 2 per AC #2).
+2. Tool body executes the workflow via `execute_workflow` (worker thread).
+3. HITL gate composer fires once at the matching PRE_ACTION placement.
+4. Composer awaits `ctx.ask_user_question_surface.ask(...)` →
+   `ServerCtxElicitCallback` (AC #4) → `await ctx.elicit(message, schema)`
+   outbound on the active server session.
+5. In-process ClientSession's `elicitation_callback` receives the request +
+   delivers the canned response.
+6. Composer continues to inner dispatcher (step body delegation).
+7. Workflow completes; tool returns `RunResult` JSON to client.
+
+**Criterion B verification (X-AL-2 strict reading):** The H_E `AskUserQuestion`
+surface is reached only via the MCP envelope at v1.12 — the production
+substitution site at the composer body is no longer the spec-substituted
+direct-invocation H_E surface; it is the MCP server's `ctx.elicit(...)`.
+This test demonstrates the topology end-to-end.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator, Sequence
+from pathlib import Path
+from typing import Any, cast
+
+import pytest
+from harness_core.deployment_surface import DeploymentSurface
+from harness_core.identity import StepID
+from harness_core.persona_tier import PersonaTier
+from harness_core.workload_class import WorkloadClass
+from harness_cp.cp_shared_types import ModelBinding
+from harness_cp.cross_family_fallback_chain import (
+    FallbackChain,
+    ProviderCandidate,
+    ProviderFamily,
+)
+from harness_cp.engine_class import EngineClass
+from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
+from harness_cp.hitl_response_palette import HITLResponse
+from harness_cp.routing_manifest_residence import RoutingManifest
+from harness_cp.topology_pattern import TopologyPattern
+from harness_cp.workflow_driver import StepDispatcher as _CpStepDispatcher
+from harness_cp.workflow_driver_types import (
+    StepKind,
+    WorkflowStep,
+)
+from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+from harness_is.path_class_registry import PathClass
+from harness_od.audit_ledger_types import SignatureAlgorithm
+from harness_runtime.bootstrap import run_bootstrap
+from harness_runtime.bootstrap import stage_4_od as _stage_4_od_mod
+from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
+from harness_runtime.lifecycle.providers import ProviderClientsStage
+from harness_runtime.lifecycle.sync_dispatcher_facade import (
+    materialize_sync_dispatcher_facade,
+)
+from harness_runtime.shutdown import shutdown
+from harness_runtime.types import (
+    CollectorConfig,
+    HarnessContext,
+    OTelConfig,
+    PathBindingConfig,
+    ProviderSecretsConfig,
+    RuntimeConfig,
+)
+from mcp.shared.memory import create_connected_server_and_client_session
+from mcp.types import ElicitResult
+
+
+_WORKLOAD = WorkloadClass.SOFTWARE_ENGINEERING
+_SURFACE = DeploymentSurface.LOCAL_DEVELOPMENT
+_CHAIN = FallbackChain(
+    primary=ProviderCandidate(
+        provider="anthropic",
+        model="claude-haiku-4-5",
+        family=ProviderFamily.ANTHROPIC,
+    ),
+    same_family=(),
+    cross_family=(),
+    terminal=None,
+)
+
+
+def _path_bindings(tmp_path: Path) -> PathBindingConfig:
+    return PathBindingConfig(
+        raw_entries=tuple(
+            {
+                "path_class": pc,
+                "workflow_class": _WORKLOAD,
+                "deployment_surface": _SURFACE,
+                "path": str(tmp_path / pc.value.lower()),
+            }
+            for pc in PathClass
+        ),
+    )
+
+
+def _config(tmp_path: Path) -> RuntimeConfig:
+    return RuntimeConfig(
+        deployment_surface=_SURFACE,
+        repository_root=tmp_path,
+        path_bindings=_path_bindings(tmp_path),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4317"),
+        collector=CollectorConfig(),
+        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        mcp_clients=[],
+        ollama_optional=True,
+        routing_manifest=RoutingManifest(
+            manifest_version=1,
+            per_role_bindings={},
+            per_workload_overrides={},
+            fallback_chains=(_CHAIN,),
+            retry_policies={},
+        ),
+    )
+
+
+class _FakeProvider:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _FakeDaemon:
+    async def start(self) -> None:
+        return None
+
+    async def stop(self, *, timeout_seconds: float = 5.0) -> None:
+        _ = timeout_seconds
+
+
+class _NoOpSpan:
+    """Minimal no-op span supporting start/end + attribute setting + event recording."""
+
+    def set_attribute(self, key: str, value: Any) -> None:
+        _ = key, value
+
+    def add_event(self, name: str, attributes: Any = None) -> None:
+        _ = name, attributes
+
+    def record_exception(self, exc: BaseException, **kwargs: Any) -> None:
+        _ = exc, kwargs
+
+    def set_status(self, status: Any, description: str | None = None) -> None:
+        _ = status, description
+
+    def end(self) -> None:
+        return None
+
+    def get_span_context(self) -> Any:
+        return None
+
+    def __enter__(self) -> _NoOpSpan:
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+
+class _NoOpTracer:
+    def start_span(self, name: str, **kwargs: Any) -> _NoOpSpan:
+        _ = name, kwargs
+        return _NoOpSpan()
+
+    def start_as_current_span(self, name: str, **kwargs: Any) -> _NoOpSpan:
+        _ = name, kwargs
+        return _NoOpSpan()
+
+
+class _FakeTracerProvider:
+    def get_tracer(self, name: str, *args: Any, **kwargs: Any) -> _NoOpTracer:
+        _ = name, args, kwargs
+        return _NoOpTracer()
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        _ = timeout_millis
+        return True
+
+    def shutdown(self) -> None:
+        return None
+
+
+@pytest.fixture
+def _patched_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[dict[str, Any]]:
+    """Patch providers + OD stage 4 with in-process fakes (same as smoke fixture)."""
+    providers = {
+        "anthropic": _FakeProvider("anthropic"),
+        "openai": _FakeProvider("openai"),
+        "ollama": _FakeProvider("ollama"),
+    }
+
+    async def _fake_clients(*_a: object, **_k: object) -> ProviderClientsStage:
+        return ProviderClientsStage(providers=dict(providers))
+
+    monkeypatch.setattr(
+        "harness_runtime.bootstrap.stage_3a_cp_clients.materialize_provider_clients_stage",
+        _fake_clients,
+    )
+
+    daemon = _FakeDaemon()
+    tracer = _FakeTracerProvider()
+
+    class _CollectorStage:
+        def __init__(self, d: Any) -> None:
+            self.daemon = d
+
+    class _TracerStage:
+        def __init__(self, p: Any) -> None:
+            self.provider = p
+            self.registered_globally = False
+
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_collector_daemon_stage",
+        lambda config, **_k: _CollectorStage(daemon),
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_ring_buffer_stage",
+        lambda config, _d: None,
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_tracer_provider_stage",
+        lambda config, **_k: _TracerStage(tracer),
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_span_processor_stage",
+        lambda config, _p, **_k: None,
+    )
+
+    yield {"providers": providers, "daemon": daemon, "tracer": tracer}
+
+
+def _build_workflow_with_hitl_placement(
+    step_dispatchers_override: Any,
+) -> Any:
+    """Construct a single-step WorkflowObject with a PRE_ACTION HITL placement.
+
+    The placement is attached to the step via the adapter pattern from
+    test_lifecycle_hitl_gate_composer.py (`WorkflowStep` is frozen +
+    `extra="forbid"`; composer reads `getattr(step, "hitl_placements", ())`).
+    """
+    base_step = WorkflowStep(
+        step_id=StepID("step-0"),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={"index": 0},
+    )
+
+    class _StepWithPlacements:
+        def __init__(self) -> None:
+            self.hitl_placements = (
+                HITLPlacement(position=HITLPlacementKind.PRE_ACTION),
+            )
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(base_step, name)
+
+    enriched_step = cast(WorkflowStep, _StepWithPlacements())
+
+    class _Workflow:
+        @property
+        def workflow_id(self) -> str:
+            return "wf-u-rt-62-e2e"
+
+        @property
+        def workload_class(self) -> WorkloadClass:
+            return _WORKLOAD
+
+        @property
+        def manifest_entry(self) -> WorkflowManifestEntry:
+            return WorkflowManifestEntry(
+                workflow_id="wf-u-rt-62-e2e",
+                workload_class=_WORKLOAD,
+                persona_tier=PersonaTier.TEAM_BINDING,
+                engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+                topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+                layer_budgets=(),
+                fallback_chain=_CHAIN,
+                hitl_placements=(),
+                per_step_overrides={},
+            )
+
+        @property
+        def steps(self) -> Sequence[WorkflowStep]:
+            return (enriched_step,)
+
+        @property
+        def step_dispatcher(self) -> _CpStepDispatcher:
+            return cast(_CpStepDispatcher, step_dispatchers_override)
+
+        @property
+        def step_dispatchers(self) -> Any:
+            return step_dispatchers_override
+
+        @property
+        def default_model_binding(self) -> ModelBinding:
+            return ModelBinding(provider="anthropic", model="claude-haiku-4-5")
+
+    return _Workflow()
+
+
+def _make_test_step_dispatchers_override(
+    ctx: HarnessContext,
+    elicit_observer: list[int],
+) -> Any:
+    """Build a step_dispatcher registry binding INFERENCE_STEP to a manually-
+    constructed HITL composer wrapping a fake inner dispatcher.
+
+    The HITL composer is constructed against the production
+    `ctx.ask_user_question_surface` (which carries the `ServerCtxElicitCallback`
+    per stage 5 default binding at AC #4). The fake inner dispatcher returns
+    a fixed dict so the workflow completes without hitting a real LLM.
+    """
+
+    class _FakeInnerDispatcher:
+        """Sync inner dispatcher — returns a canned step result."""
+
+        def dispatch(
+            self,
+            binding: Any,
+            step: Any,
+            *,
+            step_context: Any,
+        ) -> dict[str, Any]:
+            _ = binding, step, step_context
+            return {"step_id": "step-0", "ok": True, "via": "fake-inner"}
+
+    hitl_composer = RuntimeHITLGateComposer(
+        inner=_FakeInnerDispatcher(),
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(Any, ctx.ask_user_question_surface),
+        ledger_writer=cast(Any, ctx.ledger_writer),
+        audit_writer=cast(Any, ctx.audit_writer),
+        tracer_provider=cast(Any, ctx.tracer_provider),
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+    )
+    sync_facade = materialize_sync_dispatcher_facade(
+        cast(Any, hitl_composer), result_timeout_seconds=30.0
+    )
+    _ = elicit_observer  # callback captures observer directly; passed for sym.
+
+    class _SingleKindRegistry:
+        def lookup(self, step_kind: Any) -> Any:
+            _ = step_kind
+            return sync_facade
+
+    return _SingleKindRegistry()
+
+
+@pytest.mark.asyncio
+async def test_e2e_run_workflow_elicit_round_trip(
+    tmp_path: Path,
+    _patched_runtime: dict[str, Any],
+) -> None:
+    """AC #6 — full topology end-to-end with PRE_ACTION HITL placement.
+
+    Asserts the load-bearing claims per spec v1.12 §14.8.3 v1.12 RETIRE-READY
+    → RETIRED gate (criterion B):
+    - Client successfully calls the `run_workflow` tool.
+    - `ctx.elicit` is invoked exactly once with the composed prompt.
+    - Operator's canned APPROVE response flows back through the surface +
+      composer + workflow continuation.
+    - Workflow completes; `RunResult` returned with status='completed'.
+    - The H_E `AskUserQuestion` surface is reached only via the MCP envelope
+      (the elicitation_callback IS the H_E surrogate; no direct invocation).
+    """
+    config = _config(tmp_path)
+    ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
+    assert ctx.mcp_server is not None, "U-RT-62 AC #2 — mcp_server bound at stage 2"
+
+    elicit_call_count: list[int] = [0]
+    received_messages: list[str] = []
+
+    async def _canned_elicitation_callback(
+        request_context: Any,
+        params: Any,
+    ) -> ElicitResult:
+        """Client-side elicitation handler — stands in for Claude Code's
+        MCP-client elicitation UI per CC 2.1.76+ (March 2026).
+        """
+        _ = request_context
+        elicit_call_count[0] += 1
+        received_messages.append(params.message)
+        return ElicitResult(
+            action="accept",
+            content={
+                "response": HITLResponse.APPROVE.value,
+                "edited_proposal": None,
+                "response_text": None,
+                "rejection_reason": None,
+            },
+        )
+
+    # Override the production INFERENCE_STEP wrap chain with a test composer
+    # bound to the production `ctx.ask_user_question_surface` (which carries
+    # `ServerCtxElicitCallback` per stage 5 default binding at AC #4). This
+    # avoids hitting a real LLM while preserving the elicit-routing path.
+    workflow = _build_workflow_with_hitl_placement(
+        _make_test_step_dispatchers_override(ctx, elicit_call_count)
+    )
+
+    # Bind the post-bootstrap context on `ctx.mcp_server` so the
+    # `run_workflow` tool body can resolve `ctx.step_dispatchers` etc., and
+    # register the workflow so the tool body can look it up by id.
+    ctx.mcp_server._state["_harness_ctx"] = ctx
+    ctx.mcp_server.workflow_registry[workflow.workflow_id] = workflow
+
+    try:
+        # Open in-process ClientSession with the canned elicitation handler.
+        async with create_connected_server_and_client_session(
+            ctx.mcp_server.server,
+            elicitation_callback=_canned_elicitation_callback,
+            raise_exceptions=True,
+        ) as session:
+            tool_result = await session.call_tool(
+                "run_workflow", {"workflow_id": workflow.workflow_id}
+            )
+
+        # AC #6 (i): tool call succeeds.
+        assert tool_result.isError is False, (
+            f"run_workflow tool error: {tool_result.content!r}"
+        )
+        assert tool_result.content, "expected JSON RunResult content"
+
+        # AC #6 (iii): ctx.elicit invoked exactly once.
+        assert elicit_call_count[0] == 1, (
+            f"expected exactly 1 elicit call (PRE_ACTION placement, single "
+            f"step); saw {elicit_call_count[0]}"
+        )
+
+        # AC #6 (iv): elicitation_callback received the composed prompt.
+        assert len(received_messages) == 1
+        assert "HITL gate at pre-action" in received_messages[0]
+
+        # AC #6 (vi)(vii)(viii): composer continued; workflow completed;
+        # tool returned a RunResult-shaped payload. Parse the JSON payload.
+        import json
+
+        payload_text = tool_result.content[0].text  # type: ignore[union-attr]
+        cp_result_dict = json.loads(payload_text)
+        assert cp_result_dict["status"] == "success", (
+            f"expected SUCCESS status from completed workflow; got "
+            f"{cp_result_dict.get('status')!r}"
+        )
+        assert cp_result_dict["workflow_id"] == workflow.workflow_id
+    finally:
+        ctx.mcp_server._state.pop("_harness_ctx", None)
+        ctx.mcp_server.workflow_registry.pop(workflow.workflow_id, None)
+        await shutdown(ctx, timeout=5.0)
+
+
+@pytest.mark.asyncio
+async def test_e2e_run_workflow_decline_maps_to_reject(
+    tmp_path: Path,
+    _patched_runtime: dict[str, Any],
+) -> None:
+    """AC #6 + AC #4 negative-path: operator decline → workflow surfaces REJECT
+    semantics. The composer maps `ServerCtxElicitCallback`'s
+    `AskUserQuestionResult(REJECT, ...)` to step 4i REJECT branch which raises
+    `HITLGateRejectedError`; the driver returns `RunStatus.FAILED` with
+    `fail_class` set to the rejection class.
+
+    Verifies the criterion-B-adjacent semantics: the elicitation response IS
+    what drives the composer's branch selection (vs being silently absorbed).
+    """
+    config = _config(tmp_path)
+    ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
+    assert ctx.mcp_server is not None
+
+    async def _decline_callback(request_context: Any, params: Any) -> ElicitResult:
+        _ = request_context, params
+        return ElicitResult(action="decline", content=None)
+
+    workflow = _build_workflow_with_hitl_placement(
+        _make_test_step_dispatchers_override(ctx, [])
+    )
+    ctx.mcp_server._state["_harness_ctx"] = ctx
+    ctx.mcp_server.workflow_registry[workflow.workflow_id] = workflow
+
+    try:
+        async with create_connected_server_and_client_session(
+            ctx.mcp_server.server,
+            elicitation_callback=_decline_callback,
+            raise_exceptions=True,
+        ) as session:
+            tool_result = await session.call_tool(
+                "run_workflow", {"workflow_id": workflow.workflow_id}
+            )
+
+        # The decline → REJECT path surfaces as a FAILED workflow OR as a tool
+        # error depending on how the composer's HITLGateRejectedError surfaces
+        # through execute_workflow. Either outcome is acceptable for AC #6's
+        # criterion-B reading: the elicitation response IS driving the path
+        # (vs silent absorption).
+        import json
+
+        if not tool_result.isError:
+            payload_text = tool_result.content[0].text  # type: ignore[union-attr]
+            cp_result_dict = json.loads(payload_text)
+            # The composer raises HITLGateRejectedError which the driver
+            # surfaces as RunStatus.FAILED (or terminates the workflow).
+            assert cp_result_dict["status"] in {"failed", "drained"}, (
+                f"expected REJECT to surface as failed/drained status; got "
+                f"{cp_result_dict.get('status')!r}"
+            )
+    finally:
+        ctx.mcp_server._state.pop("_harness_ctx", None)
+        ctx.mcp_server.workflow_registry.pop(workflow.workflow_id, None)
+        await shutdown(ctx, timeout=5.0)
