@@ -147,9 +147,16 @@ class _FakeCtx:
         emitter: _FakeEmitter,
         drained_flag: asyncio.Event,
     ) -> None:
+        from opentelemetry.trace import NoOpTracerProvider
+
         self.ledger_writer = ledger
         self.lifecycle_emitter = emitter
         self.drained_flag = drained_flag
+        # U-OD-35 — DriverContext requires tracer_provider per C-OD-25 §25.2.
+        # Drain tests don't observe spans; NoOpTracerProvider keeps the surface
+        # quiescent. Envelope behavior on DRAINED close is exercised in
+        # test_workflow_driver_envelope.py.
+        self.tracer_provider = NoOpTracerProvider()
 
 
 class _EchoDispatcher:

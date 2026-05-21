@@ -406,6 +406,7 @@ dependencies = [
     { name = "harness-core" },
     { name = "ollama" },
     { name = "openai" },
+    { name = "opentelemetry-api" },
 ]
 
 [package.metadata]
@@ -415,6 +416,7 @@ requires-dist = [
     { name = "harness-core", editable = "harness-core" },
     { name = "ollama", specifier = ">=0.4" },
     { name = "openai", specifier = ">=1.60" },
+    { name = "opentelemetry-api", specifier = ">=1.30" },
 ]
 
 [[package]]

@@ -193,11 +193,18 @@ class _FakeCtx:
         emitter: _FakeEmitter,
         drained_flag: asyncio.Event | None = None,
         ledger_reader: _FakeLedgerReader | None = None,
+        tracer_provider: object | None = None,
     ) -> None:
+        from opentelemetry.trace import NoOpTracerProvider
+
         self.ledger_writer = ledger
         self.lifecycle_emitter = emitter
         self.drained_flag = drained_flag if drained_flag is not None else asyncio.Event()
         self.ledger_reader = ledger_reader if ledger_reader is not None else _FakeLedgerReader()
+        # U-OD-35 — DriverContext requires tracer_provider per C-OD-25 §25.2.
+        # Default to NoOpTracerProvider so happy-path tests don't assert span
+        # observables; envelope-specific tests live in test_workflow_driver_envelope.py.
+        self.tracer_provider = tracer_provider if tracer_provider is not None else NoOpTracerProvider()
 
 
 class _SingleKindRegistry:

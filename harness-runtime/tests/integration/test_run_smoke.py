@@ -171,6 +171,15 @@ class _FakeTracerProvider:
     def shutdown(self) -> None:
         self.shut_down = True
 
+    def get_tracer(self, instrumenting_module_name: str, /) -> object:
+        # U-OD-35 — CP workflow_driver opens workflow.envelope via
+        # ctx.tracer_provider.get_tracer(...). e2e tests don't observe
+        # span output; return a NoOp tracer.
+        from opentelemetry.trace import NoOpTracer
+
+        _ = instrumenting_module_name
+        return NoOpTracer()
+
 
 @pytest.fixture
 def _patched_runtime(

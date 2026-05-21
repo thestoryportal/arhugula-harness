@@ -43,6 +43,7 @@ from harness_as.sandbox_tier import SandboxTier
 from harness_core.identity import ActionID
 from harness_core.workflow_event_class import WorkflowEventClass
 from harness_is.state_ledger_entry_schema import Actor
+from opentelemetry.trace import Status, StatusCode
 
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class import EngineClass
@@ -270,6 +271,13 @@ class DriverContext(Protocol):
     ledger_reader: LedgerReaderLike
     lifecycle_emitter: LifecycleEventEmitterLike
     drained_flag: asyncio.Event
+    # OTel `TracerProvider` substrate per C-OD-25 §25.2 (OD spec v1.8).
+    # Driver opens the `workflow.envelope` outer span via
+    # `tracer_provider.get_tracer("harness.cp.workflow_driver")`. Typed as
+    # `object` to avoid pulling the OTel SDK into the CP protocol surface
+    # (HarnessContext exposes the materialized provider with the same
+    # `object`-typed field per harness-runtime/types.py).
+    tracer_provider: object
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +377,9 @@ def execute_workflow(
     # If drained at entry, return DRAINED before any state mutation (no
     # workflow.start emit; no ledger append; no validation). Per spec §25.4
     # row 1 + plan v2.11 U-CP-57 AC #1: drain check precedes topology +
-    # engine-class validation.
+    # engine-class validation. Per C-OD-25 §25.1 AC #1 (U-OD-35): the
+    # workflow.envelope span opens AFTER this check — drain-at-entry returns
+    # before any envelope opens (no observable workflow execution occurred).
     if ctx.drained_flag.is_set():
         return RunResult(
             workflow_id=manifest_entry.workflow_id,
@@ -381,6 +391,57 @@ def execute_workflow(
             fail_class=None,
         )
 
+    # § C-OD-25 §25.1 — Open the workflow.envelope outer OTel span via
+    # ctx.tracer_provider.get_tracer(...).start_as_current_span(...). Every
+    # downstream child span (LLM dispatch / tool dispatch / HITL gate /
+    # validator / pause-resume / per-server-trust) nests under this envelope
+    # via OTel parent-context propagation. The envelope ALWAYS closes
+    # deterministically — SUCCESS / FAILED / DRAINED set the span status per
+    # RunResult.status; unhandled exceptions inside the body close the span
+    # via OTel's default exception-status discipline (U-OD-37 will extend
+    # this with explicit Span.record_exception + Span.set_status(ERROR)).
+    tracer = ctx.tracer_provider.get_tracer(  # type: ignore[attr-defined]
+        "harness.cp.workflow_driver"
+    )
+    with tracer.start_as_current_span("workflow.envelope") as span:
+        result = _execute_workflow_body(
+            manifest_entry=manifest_entry,
+            steps=steps,
+            run_id=run_id,
+            ctx=ctx,
+            default_model_binding=default_model_binding,
+            step_dispatchers=step_dispatchers,
+            span=span,
+        )
+        # C-OD-25 §25.4 invariant 2 — deterministic close. Set span status
+        # from RunResult.status. FAILED → StatusCode.ERROR with fail_class
+        # description; SUCCESS / DRAINED leave default UNSET (envelope
+        # observable; outcome attribute populated at U-OD-36).
+        if result.status is RunStatus.FAILED:
+            span.set_status(
+                Status(StatusCode.ERROR, result.fail_class or "FAILED")
+            )
+        return result
+
+
+def _execute_workflow_body(
+    manifest_entry: WorkflowManifestEntry,
+    steps: Sequence[WorkflowStep],
+    run_id: str,
+    ctx: DriverContext,
+    *,
+    default_model_binding: ModelBinding,
+    step_dispatchers: StepDispatcherRegistry,
+    span: Any,
+) -> RunResult:
+    """Execute the workflow body within the workflow.envelope OTel span.
+
+    Per C-OD-25 §25.1–§25.5 (OD spec v1.8): this helper executes inside the
+    envelope opened by execute_workflow above. The span parameter is consumed
+    by U-OD-36 (12-attribute population) and U-OD-37 (explicit exception
+    handling). U-OD-35 baseline: helper consumes span for the envelope-context
+    binding only (attribute population deferred).
+    """
     # § 25.3.1 — Validate topology + engine class.
     if manifest_entry.topology_pattern not in _IN_SCOPE_TOPOLOGY:
         raise TopologyPatternNotYetMaterializedError(manifest_entry.topology_pattern)
