@@ -57,6 +57,7 @@ Cumulative retirement count: **21 / 49 (42.9%)** — unchanged from batch 4 cumu
 | Prior retirement | RETIRED batch 4 §1 (advisory-gate narrowing per `[[class_1_tension_u_rt_59_topology_admissibility_predicate]]`) |
 | Batch 5 effect | NO change. CP-10 retirement criterion B was narrowed at batch 4 to "dispatcher operational + predicate callable advisorially". The narrowing was independent of INFERENCE_STEP wiring (the sub-agent dispatch composer at `sub_agent_dispatch.py` is the substitution-site carrier, NOT the INFERENCE_STEP path). The strict-gate retirement criterion remains owed per `[[class_1_tension_u_rt_59_topology_admissibility_predicate]]` Path A (compose `is_primary_or_cross_pattern(topology, workload)` helper using C-CP-11 §11.1 primary-topology lookup) |
 | Re-evaluation trigger | When `[[class_1_tension_u_rt_59_topology_admissibility_predicate]]` is resolved at the topology-admissibility fork follow-on arc |
+| **2026-05-20 closure pointer** | The advisory-gate carry-forward from batch 4 §1 / this §2 fully closes at the U-RT-59 topology-admissibility fork Path A resolution, commit `e52c2da`. CP-10 retirement remains in place at the same status (still RETIRED); the strict gate strengthens condition B evidence from "predicate callable advisorially" to "primary-OR-cross-pattern strict gate at production callsite". No new retirement event opened (batch 6 not warranted); this pointer-close suffices per advisor cross-check |
 
 ---
 

@@ -2,7 +2,7 @@
 
 **Class:** 1 — load-bearing semantic defect at the composer's topology gate.
 **Filed:** 2026-05-20, Phase 7 sub-phase 7b, U-RT-59 landing arc (post-merge follow-up).
-**Status:** OPEN — partial-landing absorbed at U-RT-59 follow-up (gate dropped to advisory at v1.6 MVP); strict admissibility gating owed to follow-on arc.
+**Status:** **RESOLVED 2026-05-20** at Path A landing `e52c2da`. Strict gate restored with the correct union semantic — `is_topology_permitted(topology, workload)` (primary topologies per C-CP-11 §11.1 ∪ cross-pattern admissible per C-CP-10 §10.3). Common case (workload primary topology) now passes the gate. Spec §14.7.2 step 4 predicate-name correction owed to Class 3 drift batch item 8 (next runtime spec revision pass to v1.7+). Batch 5 §0 advisory-gate carry-forward pointer-closed at this resolution.
 
 ---
 
@@ -95,4 +95,57 @@ Three forks (this one + the two prior) form the U-RT-59 follow-on backlog.
 | Filed by | Advisor cross-check post-landing on `2f27244` |
 | Operator ratification | 2026-05-20 (Path "Drop the gate; file Class 1 + follow-up commit" per AskUserQuestion: "admissibility gate") |
 | Resolution target | Follow-on arc; recommended Path A (primary-or-cross-pattern check with C-CP-11 lookup) |
-| Re-evaluation trigger | When the C-CP-11 primary-topology lookup is composed at runtime OR when a sub-agent dispatch with a strict admissibility constraint is operator-authored |
+| Re-evaluation trigger | RESOLVED — re-evaluation closed at landing `e52c2da` |
+
+---
+
+## Resolution landing (2026-05-20, commit `e52c2da`)
+
+Path A as recommended. Strict gate restored with the correct union semantic.
+
+### Implementation
+
+- **CP helper** at `harness-cp/src/harness_cp/per_workload_class_topology.py`:
+  - `is_topology_permitted_for_workload(topology, workload) → bool` — membership in the workload's `permitted_patterns` set (constructed by the existing `_permitted` factory as primary topologies ∪ admissibility-closed cross-patterns). The exact union Path A names; no new data table needed because `permitted_patterns` already encodes it.
+  - `_commitment_for(workload)` — linear lookup over the 4-row commitment table.
+  - `WorkloadClassMissingFromTopologyCommitmentTableError` — typed error for workspace defect (enum entry without §11.1 row).
+
+- **Runtime dispatcher delegate** at `harness-runtime/src/harness_runtime/lifecycle/topology_dispatcher.py`:
+  - `RuntimeTopologyDispatcher.is_topology_permitted(pattern, workload)` — delegates to the CP helper. Same delegation pattern as the existing `is_admissible` method (preserves the composer-uses-dispatcher abstraction; no new dependency edge introduced into the composer).
+  - `TopologyDispatcher` Protocol at `harness-runtime/src/harness_runtime/types.py` extended with the new method.
+
+- **Composer step 4** at `harness-runtime/src/harness_runtime/lifecycle/sub_agent_dispatch.py`:
+  - Advisory call replaced with strict gate via `is_topology_permitted(...)`. Raises `SubAgentDispatchTopologyInadmissibleError` with a workload-specific message if not permitted.
+  - Gate fires before `subagent.span` opens — no partial span emissions on failure.
+  - `SubAgentDispatchTopologyInadmissibleError` docstring updated to describe the new union-predicate semantic (replaces the old §10.3-only reading).
+
+### Tests
+
+Delete + recreate per advisor (don't rename + edit):
+- **Deleted:** `test_topology_advisory_admissibility_does_not_gate_at_v1_6_mvp` (advisory gate from the partial-landing absorbed at `ff25165`).
+- **Added 3:**
+  - `test_topology_primary_passes_strict_gate` — SINGLE_THREADED_LINEAR + PIPELINE_AUTOMATION (workload's primary topology) passes the gate.
+  - `test_topology_cross_pattern_admissible_passes_strict_gate` — HIERARCHICAL_DELEGATION + SOFTWARE_ENGINEERING (§10.3 cross-pattern admissible cell) passes the gate.
+  - `test_topology_neither_primary_nor_admissible_raises` — SINGLE_THREADED_LINEAR + SOFTWARE_ENGINEERING (the fork-surfacing case from `2f27244`) raises; span not emitted; child runner not invoked.
+
+### Spec text status
+
+§14.7.2 step 4 still names `is_admissible(...)` — documented Class 3 drift batch **item 8** (`.harness/class_3_tension_u_rt_59_spec_prose_drift.md`); spec prose absorbs the rename at next runtime spec revision pass to v1.7+.
+
+### Carry-forward closures
+
+- **Batch 4 §1 condition B subbullet** (CP-10 advisory-gate narrowing): pointer-closed at this resolution. The narrowing language ("dispatcher operational + predicate callable advisorially") was a partial-landing artifact; the strict gate is now restored at production callsite.
+- **Batch 5 §0 + §2** (CP-10 retirement preserved unchanged): unchanged — CP-10 retirement remains in place; this arc strengthens the criterion B evidence (advisory → strict).
+
+### Verification
+
+- Pre-implementation data check confirmed SE permitted = `{EVALUATOR_OPTIMIZER, HIERARCHICAL_DELEGATION, ORCHESTRATOR_WORKERS}` — SINGLE_THREADED_LINEAR absent (test case (c) valid). PA permitted includes SINGLE_THREADED_LINEAR (test case (a) valid).
+- 717 harness-runtime tests green (was 715 at fork-1 close; +3 strict-gate tests − 1 deleted advisory = +2 net).
+- 505 harness-cp tests green (unchanged from baseline).
+- Ruff clean. Pyright clean on the modified source files.
+
+### Sibling forks remaining OPEN
+
+- `[[class_1_tension_u_rt_59_cp_to_od_audit_write_gap]]` — AC #9 write half STRUCK at v1.6 MVP; CPAuditLedgerEntry → AuditLedgerEntry converter owed to Phase 6 CP-composer-authoring arc.
+
+This was the **third** of three U-RT-59 sibling Class 1 forks. Two now RESOLVED (`[[class_1_tension_u_rt_59_async_sync_step_dispatcher]]` at `d64d8cf` + this one at `e52c2da`); one remains OPEN.

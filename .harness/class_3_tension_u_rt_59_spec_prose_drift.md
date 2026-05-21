@@ -1,4 +1,4 @@
-# Class 3 Tension: U-RT-59 spec-prose-plan-body drift (7 items rolled into one record)
+# Class 3 Tension: U-RT-59 spec-prose-plan-body drift (8 items rolled into one record)
 
 **Class:** 3 — informational; non-blocking.
 **Filed:** 2026-05-20, Phase 7 sub-phase 7b, U-RT-59 landing arc.
@@ -11,6 +11,8 @@
 U-RT-59 implementation surfaced 5 small drifts between `Spec_Harness_Runtime_v1.md` v1.6 §14.7 prose and the actual landed library code surfaces. Each is mechanical (no decision required); landed against the real names per `[[spec-prose-plan-body-drift-pattern]]`. Rolled into one Class 3 record so the next spec revision pass can absorb all five together.
 
 **2026-05-20 update (U-RT-59 async/sync fork Path B wiring arc):** items 6 + 7 added per the Path B wiring landing (`d64d8cf`). Item 6 documents the `SyncDispatcherFacade` adapter at the INFERENCE_STEP binding site (transport-adapter detail invisible at the §14.7.7 contract level but worth documenting in a new subsection). Item 7 records the per-step-vs-whole-workflow timeout-budget conflation taken at v1.7 wiring to avoid spec-touching configuration change.
+
+**2026-05-20 update (U-RT-59 topology-admissibility fork Path A arc):** item 8 added per the Path A strict-gate landing (`e52c2da`). Spec §14.7.2 step 4 names `is_admissible(topology, workload_class)` but the composer lands against the union predicate `is_topology_permitted(topology, workload)` (primary ∪ cross-pattern admissible) — the only semantic that accepts the common case of a workload's primary topology. Spec prose absorbs the rename at next revision pass.
 
 ---
 
@@ -136,6 +138,33 @@ Companion retirement-event reference: `.harness/phase-7d-retirement-events-batch
 
 ---
 
+## §8 Predicate name correction at composer step 4 (added 2026-05-20)
+
+**Spec prose** (§14.7.2 step 4):
+
+> "Verify topology admissibility. `topology = ctx.topology_dispatcher.dispatch(payload.child_manifest_entry)` (returns `TopologyPattern` enum value per C-CP-10 §10.1). `admissible = is_admissible(topology, payload.child_manifest_entry.workload_class)` (per C-CP-10 §10.3). If not admissible, raise typed `SubAgentDispatchTopologyInadmissibleError` mapping to a new fail class."
+
+**Real code (post-fork-3 resolution, commit `e52c2da`):**
+
+```python
+topology = self.topology_dispatcher.dispatch(payload.child_manifest_entry)
+workload = payload.child_manifest_entry.workload_class
+if not self.topology_dispatcher.is_topology_permitted(topology, workload):
+    raise SubAgentDispatchTopologyInadmissibleError(...)
+```
+
+**Predicate change:** `is_admissible(...)` → `is_topology_permitted(...)`.
+
+**Rationale.** `is_admissible(pattern, workload)` per C-CP-10 §10.3 answers "is `pattern` an admissible *non-primary* cross-pattern alternative for `workload`?" — the §10.3 table annotates non-primary alternatives only. Naive use as the composer gate rejects every workload's primary topology (per `[[class_1_tension_u_rt_59_topology_admissibility_predicate]]`). The composer's intent at step 4 is "is `pattern` admissible at all for `workload`?" — primary OR cross-pattern. Path A resolution: add `is_topology_permitted_for_workload(pattern, workload)` at `harness_cp.per_workload_class_topology` (membership in the workload's `permitted_patterns` set, constructed as primary topologies ∪ admissibility-closed cross-patterns); add `is_topology_permitted(...)` delegate method to `RuntimeTopologyDispatcher` + `TopologyDispatcher` Protocol; composer step 4 gates on this predicate.
+
+**Spec revision owed (v1.7+):** Update §14.7.2 step 4 to name `is_topology_permitted(topology, workload_class)` (or its CP-side equivalent `is_topology_permitted_for_workload(topology, workload_class)`) instead of `is_admissible(...)`. Update narrative: "Verify topology admissibility. `topology = ctx.topology_dispatcher.dispatch(payload.child_manifest_entry)`. `permitted = is_topology_permitted(topology, payload.child_manifest_entry.workload_class)` (per C-CP-11 §11.1 primary topologies ∪ C-CP-10 §10.3 cross-pattern admissibility union). If not permitted, raise typed `SubAgentDispatchTopologyInadmissibleError`." Reference the C-CP-11 §11.1 commitment row + the C-CP-10 §10.3 cross-pattern set as the union sources.
+
+Optionally also amend the spec §14.7 narrative or add a §14.7.x subsection clarifying the union-predicate semantic so future composer authoring does not repeat the §10.3-only-reading defect.
+
+Discovery + landing reference: `.harness/class_1_tension_u_rt_59_topology_admissibility_predicate.md` Path A resolution at commit `e52c2da`.
+
+---
+
 ## Cross-fork pairing
 
 - `[[class_1_tension_u_rt_59_async_sync_step_dispatcher]]` — pairs with §5 above. The Class 1 fork covers the **production INFERENCE_STEP binding** async/sync mismatch (load-bearing, partial-land surfaced); this Class 3 §5 covers the **composer-side prose drift** (resolved by ratification — land sync).
@@ -148,6 +177,6 @@ Companion retirement-event reference: `.harness/phase-7d-retirement-events-batch
 | Field | Value |
 |---|---|
 | Filed by | sub-agent dispatch composer landing arc (U-RT-59 implementation session) |
-| Spec revision target | `Spec_Harness_Runtime_v1.md` v1.7 (next runtime spec revision pass) — absorb all 7 items |
+| Spec revision target | `Spec_Harness_Runtime_v1.md` v1.7 (next runtime spec revision pass) — absorb all 8 items |
 | Resolution mode | In-CLI spec edit at next revision per `[[design-substrate-divergence]]` (workspace design-substrate/ is canonical; spec edits in-CLI) |
 | Re-evaluation trigger | Next runtime spec revision pass OR when a downstream consumer needs to cite §14.7 byte-exact |
