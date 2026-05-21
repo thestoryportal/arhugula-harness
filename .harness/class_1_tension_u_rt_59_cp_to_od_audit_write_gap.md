@@ -2,7 +2,7 @@
 
 **Class:** 1 — halt-route-split (partial-landing per `[[halt-route-split-AC-pattern]]`).
 **Filed:** 2026-05-20, Phase 7 sub-phase 7b, U-RT-59 landing arc.
-**Status:** OPEN — partial-landing absorbed at U-RT-59 (AC #9 write half STRUCK); root-cause resolution owed to Phase 6 CP-composer-authoring arc.
+**Status:** OPEN-PARTIAL (updated 2026-05-20) — partial-landing absorbed at U-RT-59 (AC #9 write half STRUCK); Path D CP-side spec landed at `ee5ae21` (CXA v2.4 + CP spec v1.7 §13.5.1 converter contract); OD-side drift resolution arc owed (Path B-revised-a / Path B-revised-b / Path A-revised — operator selection pending); runtime spec amendment + composer wiring + AC #9 un-strike + converter code-move to `harness-cxa/` owed to implementation arc.
 
 **Discovery filed 2026-05-20:** scoping report + prototype converter + round-trip-through-OD-signing test at `.harness/u_rt_59_fork_2_cp_to_od_audit_discovery.md` (+ `harness-runtime/src/harness_runtime/lifecycle/cp_audit_conversion.py` + `harness-runtime/tests/test_cp_audit_conversion.py`). DISCOVERY-GRADE; not wired. 5 open spec-level sub-questions (Q1–Q5) surfaced for operator ratification before spec amendments / runtime wiring proceed.
 
