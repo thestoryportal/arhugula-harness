@@ -16,7 +16,7 @@ U-RT-59 implementation surfaced 5 small drifts between `Spec_Harness_Runtime_v1.
 
 ---
 
-## §1 `ctx.audit_writer` (not `ctx.audit_ledger_writer`)
+## §1 `ctx.audit_writer` (not `ctx.audit_ledger_writer`) — **RESOLVED 2026-05-20 at runtime spec v1.7 §14.7.2 step 8d rewrite (partial)**
 
 **Spec prose:** §14.7.2 step 8 + §14.7.6 reference `ctx.audit_ledger_writer.append(...)` (5 occurrences across §14.7).
 
@@ -25,6 +25,8 @@ U-RT-59 implementation surfaced 5 small drifts between `Spec_Harness_Runtime_v1.
 **Landing decision:** Land against `ctx.audit_writer` (real name). The class is `RuntimeAuditLedgerWriter` (per the file path) but the HarnessContext attribute is `audit_writer`. Spec prose used the class-name-derived attribute name; reality uses the shorter form.
 
 **Spec revision owed:** s/`ctx.audit_ledger_writer`/`ctx.audit_writer`/g across §14.7.2 step 8 + §14.7.6 (5 occurrences).
+
+**Resolution status (2026-05-20).** Runtime spec v1.6 → v1.7 amendment (this session, Fork 2 implementation arc) replaced the §14.7.2 step 8 prose entirely with the Path D + B-revised-a 4-substep sequence (8a–8d). The new step 8d uses `ctx.audit_writer.append(tenant_id, od_entry)` per C-RT-04 canonical field name; the drifted §14.7.2 step 8 occurrences are removed. Remaining occurrences at §14.7.6 (estimated 3-4 of the original 5) are carried as residual; owed to a follow-on Form A patch when §14.7.6 next gets touched. Item 1 marked **RESOLVED for step 8; residual at §14.7.6 carried**.
 
 ---
 

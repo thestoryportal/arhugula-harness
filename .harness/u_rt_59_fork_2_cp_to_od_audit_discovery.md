@@ -235,3 +235,66 @@ Either way, Path B's scope is materially larger than the §9 routing assumed. Sp
 ---
 
 *§10 closes the second-order application loop. The Fork 2 amendment cannot proceed against ANY spec target until the operator resolves the ADR-D5 deviation question. This is the foundational architectural choice; downstream Fork 2 work flows from it.*
+
+---
+
+## §11 Full Fork 2 spec arc CLOSED (added 2026-05-20)
+
+All Fork 2 design-substrate work landed on main across 5 substantive commits + 2 closure-discipline commits this session. Implementation arc (composer wiring + tests + AC #9 un-strike + converter code move per Q5) is the only remaining work — distinct from spec authoring; handled at next session per phase-7-implementation skill discipline.
+
+### §11.1 Resolution arcs landed
+
+| Arc | Commit | Artifacts |
+|---|---|---|
+| Discovery + prototype | `70e58f2` | This report (§§1–8) + `harness-runtime/src/harness_runtime/lifecycle/cp_audit_conversion.py` + 12 round-trip tests |
+| §9 first-order halt finding | `2a9f305` | §9 appended — OD audit-ledger schema in code only |
+| §10 second-order halt finding | `99982de` | §10 appended — ADR-D5 §1.4 deviates from code (5 routing paths surfaced) |
+| **Path D landing** | `ee5ae21` | `Cross_Axis_Composition_Document_v2_4.md` + `Spec_Control_Plane_v1_7.md` §13.5.1 converter contract |
+| Path D closure | `7a2b39a` | Fork status OPEN-PARTIAL + Class 3 axis back-edge record |
+| **Path B-revised-a landing** | `b3d9368` | `ADR-D5.md` v1.4 (§1.4 storage-form + §1.4.1 entry_hash recipe) + `Spec_Operational_Discipline_v1_5.md` C-OD-24 |
+| ADR-D5 v1.4 close-out clarifications | `fd73ba1` | Status + canonical-scope clarifications |
+| **Runtime spec v1.7 + CP spec v1.8 Form A** | (this turn) | `Spec_Harness_Runtime_v1.md` v1.7 §14.7.2 step 8 4-substep sequence + `Spec_Control_Plane_v1_8.md` (NOTE references resolved) |
+
+### §11.2 Operator-ratified decision chain (Q1–Q5 + 3 routing decisions)
+
+| Decision | Choice | Routing |
+|---|---|---|
+| Discovery deliverable | (B) Proposal + prototype converter | Initial scoping |
+| Variant | Full Path A | 6-artifact spec amendments target |
+| Q1 (chain equivalence) | Direct re-use (prototype default) | CP spec v1.7 §13.5.1 |
+| Q2 (entry_core source) | (a) Composer writes F2 entry first | Runtime spec v1.7 §14.7.2 step 8b |
+| Q3 (entry_hash canonicalization) | Author canonical helper (scope expansion) | OD spec v1.5 C-OD-24.5 |
+| Q4 (namespace prefix) | `audit.cp.*` (prototype default) | OD spec v1.5 C-OD-24.6 |
+| Q5 (converter home) | `harness-cxa/` | Code-move owed at implementation arc |
+| §9 routing | Path B (lift code into spec) | Triggered §10 halt |
+| §10 routing | Path D (land what's spec-anchored) | CXA v2.4 + CP spec v1.7 §13.5.1 |
+| Post-§10 drift resolution | Path B-revised-a (lift code + amend ADR-D5) | ADR-D5 v1.4 + OD spec v1.5 |
+| Implementation chunk | Spec amendments first (runtime v1.7 + CP spec v1.8) | This turn |
+
+### §11.3 Pre-existing drift findings surfaced this arc
+
+| Finding | Routing | Status |
+|---|---|---|
+| `c11-operator-local` SKILL.md missing (broken citation chain at ADR-D5 §1.4 row 1) | Class 3 — flagged in ADR-D5 v1.4 change-note | OPEN-FLAGGED (Class 3) |
+| First CXA axis-level back-edge in project history (CP→OD per Fork 2) | Class 3 — `.harness/class_3_tension_cxa_v2_4_axis_back_edge.md` | OPEN-FLAGGED (Class 3 — owed Form A deltas at next CP/OD plan + workspace CLAUDE.md revisions) |
+| `ctx.audit_ledger_writer` vs C-RT-04 `ctx.audit_writer` field name drift (item 1 of `.harness/class_3_tension_u_rt_59_spec_prose_drift.md`) | Resolved at runtime spec v1.7 §14.7.2 step 8d rewrite | RESOLVED |
+
+### §11.4 Implementation arc — owed at next session
+
+| Work item | Substrate authority |
+|---|---|
+| Composer wiring at `RuntimeSubAgentDispatcher` (constructor extension + step 8 4-substep sequence) | Runtime spec v1.7 §14.7.2 step 8a–8d |
+| F2-write at step 8b (new code) | IS C-IS-10 + C-IS-11 + runtime spec v1.7 §14.7.2 step 8b |
+| Converter call at step 8c (existing prototype invoked) | CP spec v1.7 §13.5.1 + v1.8 NOTE 2 resolution |
+| `ctx.audit_writer.append` at step 8d (existing audit_writer.py append surface) | C-RT-04 + OD spec v1.5 C-OD-24 |
+| AC #9 un-strike at U-RT-59 plan L9-ter | `.harness/phase-2-session-3-track-a-atomic-decomposition.md` v2.5 → v2.6 |
+| New fail class `RT-FAIL-SUB-AGENT-AUDIT-COMPOSE` at runtime spec §14 | Runtime spec v1.7 §14.7.2 step 8 failure-semantics paragraph (followup) |
+| Integration test (parent + 3-step child + audit-chain verification via `verify_hash_chain_integrity`) | Runtime spec v1.7 §14.7.2 step 8 + OD spec v1.5 C-OD-24.3 invariant |
+| Converter code move `harness-runtime/lifecycle/cp_audit_conversion.py` → `harness-cxa/src/harness_cxa/cp_audit_conversion.py` | CP spec v1.7 §13.5.1 Q5 ratification |
+| CP plan v2.13 → v2.14 absorption at U-CP-28 (cite C-CP-13 §13.5.1 v1.7 + v1.8) | Implementation-planner discipline |
+| OD plan v2.11 → v2.12 absorption at U-OD-00 (cite C-OD-24) | Implementation-planner discipline |
+| Workspace `CLAUDE.md` §2.3 contract count update (OD 23 → 24) | Workspace housekeeping |
+
+---
+
+*§11 closes the Fork 2 spec arc. Discovery → halt → re-routing → Path D + B-revised-a + runtime spec v1.7 + CP spec v1.8 all landed across 7 commits in one session. Implementation arc remains as the only outstanding work; spec substrate is now coherent end-to-end. Re-enter at next session per phase-7-implementation skill discipline against the v1.7 §14.7.2 step 8 4-substep contract.*
