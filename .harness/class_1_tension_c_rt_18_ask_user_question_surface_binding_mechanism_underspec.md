@@ -231,12 +231,33 @@ Per skill §4A.4: **the operator holds decision authority.** The above recommend
 
 ## Operator ratification
 
-*(To be appended after operator ratifies the systems-architect mode 3 recommendation. Pattern matches the prior fork records' ratification sections.)*
+**Ratified 2026-05-21** at follow-on AskUserQuestion turn post systems-architect mode 3 recommendation append (HEAD `cfc25cc`). **Operator selected "Ratify all 5 as recommended"** — all 5 chain-grounded recommendations adopted without counter-proposal.
+
+| Q | Ratified resolution | Source |
+|---|---|---|
+| Q1 | **(i) MCP-server-backed** — substitution-mechanism category per Meta-Architecture §5.7 MCP-server (12-entry) category | Recommendation grounded against workspace `CLAUDE.md` invariant I-4 + Meta-Architecture §7 X-AL-1 + AS-AL-2 line 522 |
+| Q2 | Spec v1.10 §14.8.3 retirement reading simplified `"analogous to MCP-server"` → `"via MCP-server"` | Recommendation grounded against spec §14.8.3 line 1506 anticipated reading + Meta-Architecture §5.7 in-class category framing |
+| Q3 | `MockAskUserQuestionSurface` left at implementation discretion; spec v1.10 deferred-list entry upgraded to MUST-language at Protocol-level mock + impl-discretion at integration-test harness | Recommendation grounded against spec §14.8 deferred-list line 1606 + Protocol-abstraction discipline |
+| Q4 | (i) MCP-server-backed v1.10 MVP leaves the C-RT-19 / U-RT-61 future-arc durable-async swap surface cleanest (in-MCP-envelope swap) | Recommendation grounded against spec §14.8.3 line 1508 + future-arc anticipation |
+| Q5 | **Single-arc co-publication** — spec v1.9 → v1.10 + plan v2.7 → v2.8 in one arc; Meta-Architecture §5.4 per-row mechanism-category column NOT amended at this arc (optional Class 3 follow-on hardening pass) | Recommendation grounded against verified §5.4 table layout (no per-row column) + scope-minimality discipline |
+
+### Downstream absorption sequence (post-ratification)
+
+Per `phase-7-back-flow-routing` skill §4.5 + §4.6:
+
+1. **spec-writer** skill applies spec `Spec_Harness_Runtime_v1.md` v1.9 → v1.10 amendment — pins §14.8.3 binding mechanism category to (i) MCP-server-backed; applies Q2 retirement-reading simplification; applies Q3 deferred-list MUST-language upgrade; cascade NOTE-update at §14.8.1 item 2.
+2. **implementation-planner** skill applies plan `.harness/phase-2-session-3-track-a-atomic-decomposition.md` v2.7 → v2.8 absorption — AC #2 pins MCP-server binding citation; AC #14 retirement-criterion B reading updated to "via MCP-server" not "analogous"; co-absorbs F2-01 + F2-02 + F2-03 + F1-01 + F1-02 + F1-03 secondary findings from `.harness/adversarial_review_u_rt_60_pre_impl.md`.
+3. **workspace `CLAUDE.md`** §2.3 runtime spec version row bump v1.9 → v1.10 (if contract count tracks version) + plan version row bump v2.7 → v2.8.
+4. **`phase-7-implementation` skill** re-opens U-RT-60 against the v1.10 §14.8.3 mechanism pin; implementation arc resumes.
+
+### Counter-proposal surface preserved
+
+Operator counter-proposal surface for Q1 (X-AL-1 amendment route) was offered at the AskUserQuestion turn; operator declined — chain-grounded recommendation reading of X-AL-1 ("process isolation, not convention") accepted as authoritative without amendment.
 
 ## Status
 
 - **AUTHORING** — fork record filed at HEAD `c8f63dc` 2026-05-21.
-- **PROPOSING** (this state) — systems-architect mode 3 recommendation appended 2026-05-21. Recommendation: Q1 = (i) MCP-server-backed; Q2 = simplify retirement reading "analogous to" → "via"; Q3 = leave at impl discretion + upgrade spec language; Q4 = (i) leaves swap surface cleanest; Q5 = single-arc co-publication (spec v1.10 + plan v2.8; Meta-Architecture §5 amendment optional Class 3 follow-on). All 5 recommendations chain-grounded against workspace `CLAUDE.md` invariant I-4 + Meta-Architecture §7 X-AL-1 + §5 6-category catalogue + spec §14.8.3 retirement reading. Tiebreaker checks pass.
-- Next state: **RATIFIED** at operator ratification append.
+- **PROPOSING** — systems-architect mode 3 recommendation appended 2026-05-21 (HEAD `cfc25cc`). All 5 recommendations chain-grounded against workspace `CLAUDE.md` invariant I-4 + Meta-Architecture §7 X-AL-1 + §5 6-category catalogue + spec §14.8.3 retirement reading. Tiebreaker checks pass.
+- **RATIFIED** (this state) — operator ratified all 5 recommendations 2026-05-21 at follow-on AskUserQuestion turn ("Ratify all 5 as recommended" option). No counter-proposals raised. Downstream absorption sequence authorized.
 - Next state: **APPLIED** at spec v1.10 + plan v2.8 co-publication landing.
 - Next state: **RESOLVED** at U-RT-60 implementation arc landing against the v1.10 §14.8.3 mechanism pin.
