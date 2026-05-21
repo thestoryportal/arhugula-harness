@@ -149,3 +149,47 @@ Trade-off: gets H_T-CP-14 closer to RETIRED (audit-write end-to-end criterion) w
 ---
 
 *End of Fork 2 discovery report. See companion prototype + test for materializability evidence.*
+
+---
+
+## §9 Halt-on-application finding (added 2026-05-20 — pre-existing audit-ledger spec-vs-code drift)
+
+**Context.** Operator ratified Full Path A + Q1–Q5 + chunk = CXA v2.4 + OD spec v1.5. Spec-writer arc opened against `Cross_Axis_Composition_Document_v2_3.md` (→ v2.4) + `Spec_Operational_Discipline_v1_4.md` (→ v1.5). **Halt** invoked per spec-writer FM-1 (`Phase-7 Spec-Writer SKILL.md` §"Failure modes") before any edit applied.
+
+**Finding.** The OD-side audit-ledger Pydantic types declared at `harness-od/src/harness_od/audit_ledger_types.py` (`AuditPayload`, `AuditLedgerEntry`, `AuditSignatureAttributes`) are **specified in code only** — no design-substrate OD spec contract defines their shape. Specifically:
+
+| Surface | Code authority | Spec authority | Status |
+|---|---|---|---|
+| `AuditSignatureAttributes` (4 `audit.signature.*` fields) | `audit_ledger_types.py:87-107` | C-OD-21 §21.2 (OD spec v1.2 preserved verbatim through v1.4) | **SPEC'd** — algorithm enum + 4 attributes match |
+| `AuditPayload` (3 fields: `entry_core` / `audit_namespace_attrs` / `prior_entry_hash`) | `audit_ledger_types.py:67-85` | None canonical | **DRIFT** — payload shape not in spec |
+| `AuditLedgerEntry` (3 fields: `payload` / `signature_attrs` / `entry_hash`) | `audit_ledger_types.py:110-118` | None canonical | **DRIFT** — wrapper not in spec |
+| 8-field SHA-256 composition for `entry_hash` | `audit_ledger_types.py:117` docstring claims "C-OD-14 §14.5.1" | OD spec §14.5.1 is cost-attribution F2-state-ledger-extension, NOT audit-ledger | **DRIFT** — code docstring cites wrong section; canonical recipe missing |
+| `StateLedgerEntryRef` opaque marker | `audit_ledger_types.py:44` | None | **DRIFT** — implicit resolution at U-OD-30 IS edge per code docstring; no spec contract pins the meaning |
+
+**CP-side verified clean.** C-CP-16 §16.2 (CP spec v1.2 preserved through v1.6) IS the canonical per-response audit-ledger entry shape (4-row response-conditional table). `CPAuditLedgerEntry` (8 fields: `action_id` / `gate_level` / `response` / 3 conditional hash fields / `timestamp` / `prior_event_hash`) is a faithful factor-out — not drifted.
+
+**The "8-field ordering" in Q3's ratification description was inherited from the audit_ledger_types.py docstring, which itself cites a wrong section.** The 8 fields in question are CP-side (C-CP-16 §16.2), not OD-side. OD `AuditPayload` has 3 fields; there is no canonical 8-field ordering at any OD spec section.
+
+**What this blocks.**
+
+- **OD spec v1.5 §14.5 amendment** (Q1 chain equivalence + Q4 namespace + Q2 entry_core resolution) cannot land cleanly: §14.5 doesn't contain audit-ledger schema; amendment site is undecided.
+- **OD spec v1.5 §14.5.1 amendment** (Q3 canonical compute_entry_hash helper "per 8-field ordering") cannot land: no canonical 8-field ordering exists at OD spec; helper would land against an undefined surface.
+- **CXA v2.4 new edge declaration** (CP §13.5 → OD `audit_writer.append`) — the producer-side contract cite IS valid (CP §13.5 = audit-trail-link composition contract; appropriate site for the converter contract amendment). The consumer-side cite "OD audit_writer.append" needs a contract reference — `RuntimeAuditLedgerWriter.append` is defined in `harness-runtime/.../audit_writer.py` per `Spec_Harness_Runtime_v1.md` v1.6 §6 (C-RT-04 `audit_writer` field), so the consumer contract is C-RT-04, NOT an OD spec contract.
+- **CP spec v1.7 §13.5 converter contract** can land — §13.5 (audit-trail-link composition) is the right site per C-CP-13 §13.5. But the OD-side reciprocal (recognize CP-sourced audit entries) cannot land cleanly without resolving the OD-side payload schema drift first.
+
+**Routing.** Pre-existing X-AL-3 drift surfaced at Fork 2 application; **not caused by Fork 2**. Resolution is a separate architectural arc against the entire OD audit-ledger payload schema (not Fork 2's scope). Operator decides:
+
+| Path | Description | Cost |
+|---|---|---|
+| **A** | Author the missing OD audit-ledger schema contract first (new C-OD-NN at OD spec v1.5 OR §14.5 amendment lifting `audit_ledger_types.py` shapes verbatim into spec). Resume Fork 2 amendments against the new contract. | Large — full schema authoring + ADR back-reference reconciliation |
+| **B** | Treat current code as canonical: lift `AuditPayload` + `AuditLedgerEntry` shapes into OD spec verbatim at an appropriate section (e.g., new §14.5.1 sub-section under C-OD-14, OR new C-OD-24 contract). Document as "code-first authoring lifted to spec" Class 3 drift retirement. Smaller scope than full re-authoring; codifies existing X-AL-3 drift. | Medium — spec authoring without re-deciding shapes |
+| **C** | Defer Fork 2 entirely until the broader OD audit-ledger spec authoring lands as its own arc. | Zero today; Fork 2 stays at discovery-only |
+| **D** | Land CXA v2.4 + CP spec v1.7 §13.5 converter contract only (the surfaces that ARE spec-anchored), defer OD spec v1.5 to a follow-on arc resolving the schema drift. **Reduced-scope landing** that closes 2 of 6 Path A artifacts. | Medium-small — partial Path A landing |
+
+Spec-writer does not recommend; this is a design-substrate decision. The discovery prototype + tests at `70e58f2` are durable and unaffected (they encode the CODE-canonical shapes, which the drift resolution arc may then ratify into spec).
+
+**Action this turn.** Halt. No spec edits. Append this §9 to discovery report + commit + surface to operator.
+
+---
+
+*§9 closes the application loop. Resume Fork 2 spec-writer arc after operator selects A/B/C/D and ratifies the OD audit-ledger schema target.*
