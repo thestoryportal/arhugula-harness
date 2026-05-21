@@ -359,4 +359,40 @@ PROPOSING → **ready-for-operator-ratification** at this commit. Next session o
 
 ---
 
-*End of fork record. Status: PROPOSING → ready-for-operator-ratification. systems-architect mode 3 recommendation appended; operator decides at AskUserQuestion turn.*
+## 8. Operator ratification (2026-05-21)
+
+Per AskUserQuestion turn at the systems-architect mode 3 recommendation append. Operator selected:
+
+| Q | Operator selection | Disposition |
+|---|---|---|
+| Q1 | **(c) async HITL composer + SyncDispatcherFacade for registry** | RATIFIED — wrap chain materializes per §7.2 Q1 code block; partial-impl sync deviation conformed to spec-canonical async per §14.8.1 item 1 line 1539 |
+| Q2 | Single-instance-per-step_kind preserved (no operator question) | RATIFIED implicitly with Q1 |
+| Q3 | SUB_AGENT_DISPATCH row 2 wrap-chain coherent (no operator question) | RATIFIED implicitly with Q1 |
+| Q4 | AC #12 semantic preserved verbatim (no operator question) | RATIFIED implicitly with Q1 |
+| Q5 | Cascade bounded; ZERO cross-axis (no operator question) | RATIFIED implicitly with Q1 |
+| Q6 | **File Class 3 informational addendum now** | RATIFIED — `class_3_tension_q6_scope_widening_contract_shape_composability.md` filed same-session at fork closure landing |
+
+**Status transition.** PROPOSING → **RATIFIED** at this commit. Status target for follow-on landing: RATIFIED → APPLIED at the `phase-7-implementation` follow-on arc landing (composer async refactor + stage 5 wiring + MCP-backed surface + AC #12 + AC #13 wrap-chain-half + AC #14 retirement event).
+
+**No spec amendment required** (per §7.4 resolution path under (c)). Existing runtime spec v1.11 + plan v2.9 stand verbatim. The wrap chain shown at §7.2 Q1 IS the spec-canonical wrap chain plus a `SyncDispatcherFacade` at the registry boundary per U-RT-59 Path B precedent — the facade is implementation-mechanism, not contract-surface.
+
+### 8.1 Next-session implementation arc shape
+
+`phase-7-implementation` follow-on session opens at fork RATIFIED state. Expected commit-chronological:
+
+1. **Composer async refactor.** `harness-runtime/src/harness_runtime/lifecycle/hitl_gate_composer.py`: `RuntimeHITLGateComposer.dispatch` → `async def dispatch`; drop `loop` + `result_timeout_seconds` constructor fields; drop `_ask_via_surface` helper (becomes `await self.ask_user_question_surface.ask(...)` directly); `_compose_and_persist_audit` stays sync (4-substep chain is all sync). ~50-80 LOC delta.
+2. **Test fixture re-shape.** `harness-runtime/tests/test_lifecycle_hitl_gate_composer.py`: replace `asyncio.to_thread(composer.dispatch, ...)` with `await composer.dispatch(...)` directly across 32 tests (21 existing + 11 added at HEAD `9b8a36c`). Drop `loop` ceremony from `_make_composer` factory. ~80-120 LOC mechanical re-shape.
+3. **AC #12 retry-of-gate test.** New test: mock 3-attempt retry sequence through `RetryBreakerFallbackDispatcher(inner=hitl_async)` → assert 3× canonical 4-span hierarchy + 3× audit entries + 3× surface.ask invocations.
+4. **Stage 5 wiring.** `harness-runtime/src/harness_runtime/bootstrap/stage_5_loop_init.py`: materialize the §7.2 Q1 wrap chain on both rows; add `ctx.ask_user_question_surface` binding; 2 new `SyncDispatcherFacade` wraps at registry boundary. ~40 LOC delta.
+5. **HarnessContext field extension.** `harness-runtime/src/harness_runtime/bootstrap/mutable_context.py` + `harness-runtime/src/harness_runtime/types.py`: add `ask_user_question_surface: AskUserQuestionSurface | None` field; `sub_agent_dispatcher` field type widening (or `cast(Any, ...)` at binding site per existing precedent at `tracer_provider` + `ledger_writer` / `audit_writer`).
+6. **MCP-server-backed `AskUserQuestionSurface` impl.** New module wrapping MCP host per spec §14.8.3 v1.11 binding pin. Mechanism: extend `harness-runtime/lifecycle/mcp_host.py` with AskUserQuestion-routing handler OR new harness-side MCP server module exposing AskUserQuestion as a tool the runtime calls. ~80-150 LOC depending on chosen sub-mechanism.
+7. **AC #13 stage-5 post-condition half.** New test asserting `isinstance(ctx.llm_dispatcher.inner, RuntimeHITLGateComposer)` + `ctx.sub_agent_dispatcher` is `RuntimeHITLGateComposer` with `applicable_placements={SUB_AGENT_BOUNDARY}` + `ctx.step_dispatchers[INFERENCE_STEP]` is `SyncDispatcherFacade` wrapping the retry chain.
+8. **AC #14 Phase 7d batch 8 retirement event.** File `.harness/phase-7d-retirement-events-batch-8.md` for H_T-CP-20 STILL-BOUNDED → RETIRE-READY (or RETIRED per operator audit). Update `harness-cp/CLAUDE.md` §4.1 substitution-table; update Meta-Architecture §5 retirement count 21/49 → 22/49.
+9. **Workspace `CLAUDE.md` absorption.** §2.3 + §2.4 runtime spec v1.11 reference (already at v1.11 per HEAD `904a4ec`; this arc adds plan v2.9 traceability completion + bumps the retirement count).
+10. **Fork status transition.** RATIFIED → **APPLIED** at the final commit of the follow-on impl arc.
+
+**Expected arc shape.** ~5-7 commits. Comparable to the back half of U-RT-59 implementation arc per session-checkpoint memory.
+
+---
+
+*End of fork record. Status: **RATIFIED** at HEAD ≈ this commit. systems-architect mode 3 recommendation appended at §7; operator ratification appended at §8. Next: `phase-7-implementation` follow-on arc lands the §8.1 implementation steps; final commit transitions RATIFIED → APPLIED.*
