@@ -16,6 +16,7 @@ from harness_od.audit_ledger_types import (
     AuditSignatureAttributes,
     SignatureAlgorithm,
     StateLedgerEntryRef,
+    compute_entry_hash,
 )
 from harness_od.observability_matrix import CellID
 
@@ -186,3 +187,77 @@ def test_audit_ledger_cell_id_resolves_to_u_od_01() -> None:
     assert type(ledger.cell_id) is CellID
     # CellID composes the harness-core carriers (re-point sweep already landed).
     assert type(ledger.cell_id.persona_tier) is harness_core.PersonaTier
+
+
+# ---------------------------------------------------------------------------
+# C-OD-24.5 — `compute_entry_hash` canonical helper (F2-04 absorption, v1.7)
+# ---------------------------------------------------------------------------
+
+
+def test_compute_entry_hash_byte_equivalent_to_canonical_recipe() -> None:
+    """C-OD-24.5 canonical helper byte-equivalence anchor.
+
+    Recipe per ADR-D5 v1.4 §1.4.1 + OD spec v1.7 C-OD-24.5: SHA-256 over
+    `payload.model_dump_json()`. This test crystallizes the recipe with a
+    literal expected hex string so any future canonicalization drift
+    (Pydantic dump change, model field reorder, ConfigDict mutation) breaks
+    this test BEFORE the cxa converter round-trip tests; the literal IS the
+    spec contract at HEAD.
+
+    Pre-computed at 2026-05-20 (Pydantic v2; Python 3.12 stdlib `hashlib`):
+        compute_entry_hash(AuditPayload(
+            entry_core="dispatch:abc:0",
+            audit_namespace_attrs={
+                "audit.cp.action_id": "abc",
+                "audit.cp.gate_level": "workflow",
+            },
+            prior_entry_hash="0" * 64,
+        )) == "3567132e039dd0e6e47c9a3258ebddcdf56626ba5c0e06ef29256e6d25998490"
+    """
+    payload = AuditPayload(
+        entry_core=StateLedgerEntryRef("dispatch:abc:0"),
+        audit_namespace_attrs={
+            "audit.cp.action_id": "abc",
+            "audit.cp.gate_level": "workflow",
+        },
+        prior_entry_hash="0" * 64,
+    )
+    expected = "3567132e039dd0e6e47c9a3258ebddcdf56626ba5c0e06ef29256e6d25998490"
+    assert compute_entry_hash(payload) == expected
+
+
+def test_compute_entry_hash_deterministic_across_invocations() -> None:
+    """C-OD-24.5 determinism — same input → same output (no nonce, no time)."""
+    payload = AuditPayload(
+        entry_core=StateLedgerEntryRef("dispatch:x:7"),
+        audit_namespace_attrs={"audit.cp.action_id": "x"},
+        prior_entry_hash="a" * 64,
+    )
+    assert compute_entry_hash(payload) == compute_entry_hash(payload)
+
+
+def test_compute_entry_hash_returns_64_char_hex() -> None:
+    """C-OD-24.5 output shape — hex-encoded SHA-256 (64 chars, lowercase hex)."""
+    payload = AuditPayload(
+        entry_core=StateLedgerEntryRef("dispatch:y:0"),
+        audit_namespace_attrs={},
+        prior_entry_hash="0" * 64,
+    )
+    h = compute_entry_hash(payload)
+    assert len(h) == 64
+    assert all(c in "0123456789abcdef" for c in h)
+
+
+def test_compute_entry_hash_distinguishes_distinct_payloads() -> None:
+    """C-OD-24.5 collision-resistance smoke — different payload → different hash."""
+    p1 = AuditPayload(
+        entry_core=StateLedgerEntryRef("dispatch:p1:0"),
+        audit_namespace_attrs={"audit.cp.action_id": "p1"},
+        prior_entry_hash="0" * 64,
+    )
+    p2 = AuditPayload(
+        entry_core=StateLedgerEntryRef("dispatch:p2:0"),
+        audit_namespace_attrs={"audit.cp.action_id": "p2"},
+        prior_entry_hash="0" * 64,
+    )
+    assert compute_entry_hash(p1) != compute_entry_hash(p2)

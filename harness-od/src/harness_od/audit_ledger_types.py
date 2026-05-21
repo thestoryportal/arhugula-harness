@@ -25,6 +25,7 @@ verbatim into v1.3); ADR-D5 v1.3 §1.4 / §1.4.1.
 
 from __future__ import annotations
 
+import hashlib
 from enum import StrEnum
 from typing import NewType
 
@@ -39,6 +40,7 @@ __all__ = [
     "AuditSignatureAttributes",
     "SignatureAlgorithm",
     "StateLedgerEntryRef",
+    "compute_entry_hash",
 ]
 
 StateLedgerEntryRef = NewType("StateLedgerEntryRef", str)
@@ -132,3 +134,27 @@ class AuditLedger(BaseModel):
     entries: tuple[AuditLedgerEntry, ...]
     cell_id: CellID
     """U-OD-01 cell key — multi-tenant cells only (cell-7, cell-8)."""
+
+
+def compute_entry_hash(payload: AuditPayload) -> str:
+    """Compute the SHA-256 entry_hash over an AuditPayload.
+
+    Canonical recipe per ADR-D5 v1.4 §1.4.1 + C-OD-24.5:
+        SHA-256 over the Pydantic v2 canonical JSON serialization of payload.
+    Returns the hex-encoded 64-character string.
+
+    Under the §24.1 `ConfigDict(extra="forbid", frozen=True)` discipline,
+    `model_dump_json()` produces a deterministic byte sequence for a given
+    `AuditPayload` instance (field ordering = model declaration order; no
+    extra fields; no mutation). Deterministic across implementations
+    conforming to Pydantic v2 + Python `hashlib.sha256`.
+
+    Authority: ADR-D5 v1.4 §1.4.1 ("`audit.signature.sha256` = SHA-256 over
+    the OD `AuditPayload` Pydantic JSON serialization"); OD spec v1.7
+    C-OD-24.5 (canonical helper at the OD axis package); F2-04 absorption
+    arc closure (materialization of the spec-anchored helper at HEAD,
+    2026-05-20). Replaces the byte-equivalent inline duplicate previously
+    at `harness-cxa/src/harness_cxa/cp_audit_conversion.py:_compute_entry_hash`.
+    """
+    canonical = payload.model_dump_json()
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

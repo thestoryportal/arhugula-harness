@@ -25,6 +25,9 @@ implementation arc landing.
   audit's `entry_core` therefore preserves the IS-anchor invariant.
 - **Q3 (entry_hash canonicalization)** — SHA-256 over `payload.model_dump_json()`
   per ADR-D5 v1.4 §1.4.1 + OD spec v1.5 C-OD-24.5 canonical helper recipe.
+  F2-04 absorption (OD spec v1.7, 2026-05-20): the recipe is now materialized
+  at `harness_od.audit_ledger_types.compute_entry_hash`; this converter
+  imports it (no local inline duplicate).
 - **Q4 (namespace prefix)** — CP-sourced fields land under `audit.cp.*`
   within OD `audit_namespace_attrs` per C-OD-24.6 + the 15-namespace
   ingestion map at C-OD-05.
@@ -35,14 +38,13 @@ implementation arc landing.
 
 from __future__ import annotations
 
-import hashlib
-
 from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry
 from harness_od.audit_ledger_types import (
     AuditLedgerEntry,
     AuditPayload,
     SignatureAlgorithm,
     StateLedgerEntryRef,
+    compute_entry_hash,
 )
 from harness_od.multi_tenant_trace_separation_and_audit_ledger import sign_audit_entry
 
@@ -50,19 +52,6 @@ from harness_od.multi_tenant_trace_separation_and_audit_ledger import sign_audit
 #: Ratified at OD spec v1.5 C-OD-24.6 (Q4 — `audit.cp.*` sub-namespace
 #: extends OD-canonical `audit.*` per C-OD-05 §5.1).
 CP_AUDIT_NAMESPACE_PREFIX = "audit.cp"
-
-
-def _compute_entry_hash(payload: AuditPayload) -> str:
-    """Compute `AuditLedgerEntry.entry_hash` per the canonical OD recipe.
-
-    Canonical recipe per ADR-D5 v1.4 §1.4.1 + OD spec v1.5 C-OD-24.5:
-    SHA-256 over the Pydantic v2 canonical JSON serialization of `payload`.
-    Under the §24.1 `ConfigDict(extra="forbid", frozen=True)` discipline,
-    `model_dump_json()` produces a deterministic byte sequence for a given
-    `AuditPayload` instance (field ordering = model declaration order).
-    """
-    canonical = payload.model_dump_json()
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _project_namespace_attrs(cp_entry: CPAuditLedgerEntry) -> dict[str, str]:
@@ -147,7 +136,7 @@ def cp_audit_to_od_audit(
     )
 
     signature_attrs = sign_audit_entry(payload, key_id=key_id, algo=algo)
-    entry_hash = _compute_entry_hash(payload)
+    entry_hash = compute_entry_hash(payload)
 
     return AuditLedgerEntry(
         payload=payload,
