@@ -42,16 +42,19 @@ on the main event loop.
 
 from __future__ import annotations
 
+import asyncio
+import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+
+from mcp.server.fastmcp import Context, FastMCP
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
-
     from harness_runtime.api import WorkflowObject
 
 __all__ = [
     "HarnessMCPServer",
+    "materialize_mcp_server_stage",
 ]
 
 
@@ -114,3 +117,156 @@ class HarnessMCPServer:
     (`SyncDispatcherFacade.run_coroutine_threadsafe`) submits the
     composer coroutine back to the main loop before the read fires.
     """
+
+
+def materialize_mcp_server_stage(
+    *,
+    drain_timeout_seconds: float,
+) -> HarnessMCPServer:
+    """Bootstrap stage 2 AS — construct FastMCP server + register `run_workflow`.
+
+    Per `Spec_Harness_Runtime_v1.md` v1.12 §14.8.3 v1.12 workflow-initiation
+    topology pin + Phase 2 Session 3 plan v2.10 §2 L9-quinquies U-RT-62 AC #2.
+
+    Steps
+    -----
+    1. Construct `mcp.server.fastmcp.FastMCP(name="harness-runtime")`.
+    2. Allocate mutable `workflow_registry` + `_state` dicts (captured by
+       the tool handler's closure; the same instances are placed on the
+       returned `HarnessMCPServer` dataclass so post-bootstrap `api.run()`
+       can write to them by reference).
+    3. Register the `run_workflow` MCP tool via `@fastmcp.tool()` decorator.
+       The handler body dispatches `execute_workflow` from the CP axis on
+       a worker thread (via `asyncio.to_thread`); the HITL gate composer
+       inside `execute_workflow` bridges back to the main loop via
+       `SyncDispatcherFacade.run_coroutine_threadsafe` and awaits
+       `ctx.ask_user_question_surface.ask(...)` — which routes through
+       `ServerCtxElicitCallback` (per AC #4) to call `await ctx.elicit(...)`
+       outbound on the active server session per the v1.12 topology pin.
+    4. Return `HarnessMCPServer(started=True, ...)` after registration
+       completes. Bootstrap stage 2 rollback discipline preserved: on
+       FastMCP constructor failure OR tool registration failure, this
+       function raises and the partial state is discarded.
+
+    Returns
+    -------
+    HarnessMCPServer
+        Frozen dataclass with `started=True` after tool registration.
+    """
+    # Lazy import to keep the `lifecycle/mcp_server.py` → `harness_cp` edge
+    # at runtime invocation (the CP driver does not need to load at module
+    # import time when the FastMCP server is constructed at stage 2 but
+    # not yet exercised; the import resolves on first tool invocation via
+    # the closure lookup).
+    from harness_cp.workflow_driver import execute_workflow as _execute_workflow
+
+    fastmcp = FastMCP(name="harness-runtime")
+    workflow_registry: dict[str, Any] = {}
+    state: dict[str, Any] = {}
+
+    @fastmcp.tool()
+    async def run_workflow(workflow_id: str, ctx: Context[Any, Any]) -> dict[str, Any]:
+        """Execute one workflow per the v1.12 H_T-as-MCP-server topology.
+
+        The workflow body executes inside this tool handler's `ctx` per the
+        topology pin. The HITL gate composer (per U-RT-60) bridges back to
+        the main loop via `SyncDispatcherFacade.run_coroutine_threadsafe`
+        and reaches `await ctx.elicit(...)` through
+        `ServerCtxElicitCallback` (per AC #4) which reads this `ctx` from
+        the `_state['_current_tool_ctx']` holder written below.
+
+        Parameters
+        ----------
+        workflow_id
+            Key into `workflow_registry`; the operator-supplied
+            `WorkflowObject` was pre-registered by `api.run()` per AC #5.
+        ctx
+            In-flight FastMCP tool handler context; carries the active
+            server session for outbound `ctx.elicit(...)` calls.
+
+        Returns
+        -------
+        dict[str, Any]
+            JSON-serializable form of the CP driver's `RunResult`. The
+            `api.run()` caller per AC #5 re-parses into the CP model and
+            projects to the runtime-facing `RunResult` per C-RT-09.
+        """
+        harness_ctx = state.get("_harness_ctx")
+        if harness_ctx is None:
+            raise RuntimeError(
+                "`run_workflow` invoked before `api.run()` bound the post-bootstrap "
+                "`HarnessContext` on `HarnessMCPServer._state['_harness_ctx']`. "
+                "The tool is intended for in-process invocation from `api.run()` "
+                "per spec v1.12 §14.8.3 topology pin (Reading α)."
+            )
+        workflow = workflow_registry.get(workflow_id)
+        if workflow is None:
+            raise RuntimeError(
+                f"workflow {workflow_id!r} not registered in "
+                f"`HarnessMCPServer.workflow_registry`; `api.run()` writes the "
+                f"`WorkflowObject` keyed by `workflow.workflow_id` before "
+                f"invoking the `run_workflow` tool per AC #5."
+            )
+
+        run_id = uuid.uuid4().hex
+        # Bind the in-flight tool ctx for the duration of the workflow
+        # execution. `ServerCtxElicitCallback` (per AC #4) reads this key
+        # to reach `await ctx.elicit(...)` from the HITL gate composer.
+        state["_current_tool_ctx"] = ctx
+
+        # Workflow-supplied dispatcher override (test-fixture surface);
+        # falls back to `ctx.step_dispatchers` from stage 5 LOOP_INIT.
+        workflow_step_dispatchers = getattr(workflow, "step_dispatchers", None)
+        effective_step_dispatchers = (
+            workflow_step_dispatchers
+            if workflow_step_dispatchers is not None
+            else getattr(harness_ctx, "step_dispatchers", None)
+        )
+
+        try:
+            # Same composition pattern as the v1.11 `api.run()` baseline
+            # (asyncio.to_thread for the sync CP driver; asyncio.wait_for
+            # to enforce `RT-FAIL-DRAIN-TIMEOUT` per C-RT-14 + U-RT-44 AC #2).
+            cp_result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _execute_workflow,
+                    workflow.manifest_entry,
+                    workflow.steps,
+                    run_id,
+                    cast(Any, harness_ctx),
+                    default_model_binding=workflow.default_model_binding,
+                    step_dispatchers=cast(Any, effective_step_dispatchers),
+                ),
+                timeout=drain_timeout_seconds,
+            )
+            return cast(dict[str, Any], cp_result.model_dump(mode="json"))
+        except TimeoutError:
+            # `RT-FAIL-DRAIN-TIMEOUT` projection per U-RT-44 AC #2;
+            # the api.run caller per AC #5 unmarshals and re-builds the
+            # runtime RunResult with status='drained'.
+            from harness_cp.workflow_driver_types import (
+                RunResult as _CpRunResult,
+            )
+            from harness_cp.workflow_driver_types import (
+                RunStatus as _CpRunStatus,
+            )
+
+            drained = _CpRunResult(
+                workflow_id=workflow.manifest_entry.workflow_id,
+                run_id=run_id,
+                status=_CpRunStatus.DRAINED,
+                terminal_step_index=None,
+                partial_state=None,
+                final_state=None,
+                fail_class="RT-FAIL-DRAIN-TIMEOUT",
+            )
+            return cast(dict[str, Any], drained.model_dump(mode="json"))
+        finally:
+            state.pop("_current_tool_ctx", None)
+
+    return HarnessMCPServer(
+        server=fastmcp,
+        started=True,
+        workflow_registry=workflow_registry,
+        _state=state,
+    )

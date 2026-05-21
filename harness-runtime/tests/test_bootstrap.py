@@ -240,6 +240,9 @@ async def test_bootstrap_populates_every_required_harness_context_field(
     assert ctx.config is not None  # stage 0
     assert ctx.path_resolver is not None  # stage 1
     assert ctx.sandbox_dispatch is not None  # stage 2
+    assert ctx.mcp_host is not None  # stage 2 (U-RT-15)
+    assert ctx.mcp_server is not None  # stage 2 (U-RT-62 — H_T-as-MCP-server)
+    assert ctx.mcp_server.started is True  # U-RT-62 AC #2
     assert "anthropic" in ctx.providers  # stage 3a
     assert ctx.routing_manifest is not None  # stage 3b
     assert ctx.audit_writer is not None  # stage 4

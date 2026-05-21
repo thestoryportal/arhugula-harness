@@ -45,6 +45,7 @@ from harness_runtime.types import (
     EngineSelector,
     HandoffRegistry,
     HarnessContext,
+    HarnessMCPServer,
     HITLPlacementRegistry,
     LedgerReader,
     LedgerWriter,
@@ -166,6 +167,11 @@ class _MutableHarnessContext:
     tool_contracts: dict[ToolName, ToolContract] | None = None
     mcp_host: MCPHost | None = None
     mcp_clients: dict[ClientName, MCPClient] | None = None
+    mcp_server: HarnessMCPServer | None = None
+    """U-RT-62 — H_T-as-MCP-server hosting surface. Populated at stage 2 AS
+    sibling to `mcp_host` (U-RT-15 H_T-as-MCP-client). Optional on the
+    frozen `HarnessContext` (defaults to `None` per AC #1 transitional
+    bootstrap-builder shape; not in `_REQUIRED_FIELDS`)."""
     sandbox_dispatch: SandboxDispatchTable | None = None
 
     # Stage 3a CP_CLIENTS.
@@ -251,6 +257,7 @@ class _MutableHarnessContext:
             tool_contracts=self.tool_contracts,
             mcp_host=self.mcp_host,
             mcp_clients=self.mcp_clients,
+            mcp_server=self.mcp_server,
             sandbox_dispatch=self.sandbox_dispatch,
             providers=self.providers,
             routing_manifest=self.routing_manifest,

@@ -77,6 +77,92 @@ def test_harness_mcp_server_distinct_from_mcp_host() -> None:
     assert not isinstance(host, HarnessMCPServer)
 
 
+def test_materialize_mcp_server_stage_returns_started_server() -> None:
+    """AC #2: `materialize_mcp_server_stage()` constructs FastMCP server +
+    registers `run_workflow` tool; returns `HarnessMCPServer(started=True)`.
+    """
+    from harness_runtime.lifecycle.mcp_server import materialize_mcp_server_stage
+
+    server = materialize_mcp_server_stage(drain_timeout_seconds=30.0)
+    assert server.started is True
+    assert server.server is not None
+    # FastMCP instance check (loose — server.server is typed `Any`; we
+    # verify the duck-typed attribute used at AC #3 — `.tool()` decorator).
+    assert hasattr(server.server, "tool")
+    # Mutable holders empty at materialization time.
+    assert server.workflow_registry == {}
+    assert server._state == {}
+
+
+def test_materialize_mcp_server_stage_registers_run_workflow_tool() -> None:
+    """AC #3: the `run_workflow` MCP tool is discoverable on the FastMCP
+    server after `materialize_mcp_server_stage()` completes.
+    """
+    import asyncio
+
+    from harness_runtime.lifecycle.mcp_server import materialize_mcp_server_stage
+
+    server = materialize_mcp_server_stage(drain_timeout_seconds=30.0)
+
+    # FastMCP exposes `list_tools()` as an async method on the underlying
+    # server. We verify discoverability via the tool manager surface.
+    async def _list() -> list[str]:
+        tools = await server.server.list_tools()
+        return [tool.name for tool in tools]
+
+    tool_names = asyncio.run(_list())
+    assert "run_workflow" in tool_names
+
+
+def test_run_workflow_tool_rejects_unknown_workflow_id() -> None:
+    """AC #3 failure semantics: tool body raises `RuntimeError` when
+    `workflow_id` is not in the registry. `api.run()` per AC #5 pre-
+    registers before invoking; an unknown id indicates a usage defect.
+    """
+    import asyncio
+
+    from harness_runtime.lifecycle.mcp_server import materialize_mcp_server_stage
+
+    server = materialize_mcp_server_stage(drain_timeout_seconds=30.0)
+
+    async def _call() -> None:
+        # Direct invocation through the FastMCP tool manager (bypassing
+        # the in-memory transport, for unit-test economy). Production
+        # invocation is exercised at AC #6 e2e integration test.
+        tool = server.server._tool_manager.get_tool("run_workflow")  # type: ignore[attr-defined]
+        assert tool is not None
+        # We can't easily synth a real Context here; verify the registry
+        # gate fires first by writing _harness_ctx but NOT the workflow.
+        server._state["_harness_ctx"] = object()
+        # The fn closure raises on lookup before ever touching ctx.
+        await tool.fn(workflow_id="missing", ctx=object())  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="not registered"):
+        asyncio.run(_call())
+
+
+def test_run_workflow_tool_rejects_unbound_harness_ctx() -> None:
+    """AC #3 failure semantics: tool body raises `RuntimeError` when
+    `_state['_harness_ctx']` is not bound. Indicates the tool was called
+    outside the `api.run()` flow per AC #5 (the only sanctioned caller).
+    """
+    import asyncio
+
+    from harness_runtime.lifecycle.mcp_server import materialize_mcp_server_stage
+
+    server = materialize_mcp_server_stage(drain_timeout_seconds=30.0)
+
+    async def _call() -> None:
+        tool = server.server._tool_manager.get_tool("run_workflow")  # type: ignore[attr-defined]
+        assert tool is not None
+        # No `_harness_ctx` bound on `_state`; the tool body MUST raise
+        # before reaching the workflow_registry lookup.
+        await tool.fn(workflow_id="any", ctx=object())  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="bound the post-bootstrap"):
+        asyncio.run(_call())
+
+
 def test_harness_context_field_admits_both_mcp_roles() -> None:
     """AC #1: `HarnessContext.mcp_server` field admits `HarnessMCPServer`
     sibling to existing `mcp_host: MCPHost`. The `mcp_server` field is
