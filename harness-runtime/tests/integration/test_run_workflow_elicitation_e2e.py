@@ -141,55 +141,28 @@ class _FakeDaemon:
         _ = timeout_seconds
 
 
-class _NoOpSpan:
-    """Minimal no-op span supporting start/end + attribute setting + event recording."""
+def _make_real_tracer_provider() -> tuple[Any, Any]:
+    """Build a real OTel SDK TracerProvider + InMemorySpanExporter pair.
 
-    def set_attribute(self, key: str, value: Any) -> None:
-        _ = key, value
+    Per advisor reconciliation at the commit-7 tightening pass — the
+    earlier no-op tracer silently absorbed span emissions, leaving the
+    AC #6 criterion-B audit + span hierarchy verification unvalidated.
+    The real exporter records every span the HITL composer emits, so
+    the test can assert the 3 canonical HITL spans per matching
+    placement per spec §14.8.5 (`hitl.gate.evaluated` + `hitl.invocation.
+    opened` + `hitl.invocation.responded` — timeout-branch unexercised
+    on accept path).
+    """
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
 
-    def add_event(self, name: str, attributes: Any = None) -> None:
-        _ = name, attributes
-
-    def record_exception(self, exc: BaseException, **kwargs: Any) -> None:
-        _ = exc, kwargs
-
-    def set_status(self, status: Any, description: str | None = None) -> None:
-        _ = status, description
-
-    def end(self) -> None:
-        return None
-
-    def get_span_context(self) -> Any:
-        return None
-
-    def __enter__(self) -> _NoOpSpan:
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        return None
-
-
-class _NoOpTracer:
-    def start_span(self, name: str, **kwargs: Any) -> _NoOpSpan:
-        _ = name, kwargs
-        return _NoOpSpan()
-
-    def start_as_current_span(self, name: str, **kwargs: Any) -> _NoOpSpan:
-        _ = name, kwargs
-        return _NoOpSpan()
-
-
-class _FakeTracerProvider:
-    def get_tracer(self, name: str, *args: Any, **kwargs: Any) -> _NoOpTracer:
-        _ = name, args, kwargs
-        return _NoOpTracer()
-
-    def force_flush(self, timeout_millis: int = 30_000) -> bool:
-        _ = timeout_millis
-        return True
-
-    def shutdown(self) -> None:
-        return None
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return provider, exporter
 
 
 @pytest.fixture
@@ -212,7 +185,7 @@ def _patched_runtime(
     )
 
     daemon = _FakeDaemon()
-    tracer = _FakeTracerProvider()
+    tracer_provider, span_exporter = _make_real_tracer_provider()
 
     class _CollectorStage:
         def __init__(self, d: Any) -> None:
@@ -233,14 +206,19 @@ def _patched_runtime(
     )
     monkeypatch.setattr(
         _stage_4_od_mod, "materialize_tracer_provider_stage",
-        lambda config, **_k: _TracerStage(tracer),
+        lambda config, **_k: _TracerStage(tracer_provider),
     )
     monkeypatch.setattr(
         _stage_4_od_mod, "materialize_span_processor_stage",
         lambda config, _p, **_k: None,
     )
 
-    yield {"providers": providers, "daemon": daemon, "tracer": tracer}
+    yield {
+        "providers": providers,
+        "daemon": daemon,
+        "tracer_provider": tracer_provider,
+        "span_exporter": span_exporter,
+    }
 
 
 def _build_workflow_with_hitl_placement(
@@ -381,6 +359,11 @@ async def test_e2e_run_workflow_elicit_round_trip(
     ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert ctx.mcp_server is not None, "U-RT-62 AC #2 — mcp_server bound at stage 2"
 
+    # AC #6 criterion-B verification surface — the audit_writer is a
+    # frozen+slotted dataclass (no attribute assignment), so we use the
+    # `read_all()` reader post-run to count audit-ledger entries emitted
+    # by composer step 4h 4-substep audit-write (spec §14.8.6).
+    audit_writer_for_count = ctx.audit_writer
     elicit_call_count: list[int] = [0]
     received_messages: list[str] = []
 
@@ -456,6 +439,40 @@ async def test_e2e_run_workflow_elicit_round_trip(
             f"{cp_result_dict.get('status')!r}"
         )
         assert cp_result_dict["workflow_id"] == workflow.workflow_id
+
+        # AC #6 (v) — 4-span canonical HITL hierarchy per spec §14.8.5
+        # (timeout branch unexercised on accept path → 3 spans emitted:
+        # `hitl.gate.evaluated` + `hitl.invocation.opened` +
+        # `hitl.invocation.responded`).
+        span_exporter = _patched_runtime["span_exporter"]
+        finished_spans = span_exporter.get_finished_spans()
+        hitl_span_names = [s.name for s in finished_spans if "hitl" in s.name]
+        assert len(hitl_span_names) >= 3, (
+            f"expected ≥3 canonical HITL spans (gate.evaluated + "
+            f"invocation.opened + invocation.responded) on accept path; "
+            f"got {hitl_span_names}"
+        )
+        # Verify the 3 canonical names are present (timeout branch not
+        # exercised on accept path).
+        names_set = set(hitl_span_names)
+        assert any("gate.evaluated" in n for n in names_set), (
+            f"missing hitl.gate.evaluated span; got {names_set}"
+        )
+        assert any("invocation.opened" in n for n in names_set), (
+            f"missing hitl.invocation.opened span; got {names_set}"
+        )
+        assert any("invocation.responded" in n for n in names_set), (
+            f"missing hitl.invocation.responded span; got {names_set}"
+        )
+
+        # AC #6 (v) — 4-substep audit-write per spec §14.8.6 (composer
+        # step 4h emits ≥1 audit-ledger entry on the matching placement).
+        audit_entries = audit_writer_for_count.read_all()
+        assert len(audit_entries) >= 1, (
+            f"expected ≥1 audit-ledger entry from composer step 4h "
+            f"4-substep audit-write on PRE_ACTION matching placement; "
+            f"saw {len(audit_entries)}"
+        )
     finally:
         ctx.mcp_server._state.pop("_harness_ctx", None)
         ctx.mcp_server.workflow_registry.pop(workflow.workflow_id, None)
