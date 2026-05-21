@@ -32,6 +32,18 @@ Protocol via `ask(prompt, options, timeout) -> AskUserQuestionResult`;
 the `_PlaceholderMCPCallback` is sentinel-only and is not invoked under
 test fixtures (tests inject their own callback).
 
+**Callback-abstraction impl-discretion citation.** The injectable
+`mcp_callback: MCPAskCallback` abstraction is authorized by
+`Spec_Harness_Runtime_v1.md` v1.11 §14.8.3 Q3 ratification (v1.10
+introduction; preserved verbatim at v1.11): "the integration-test harness
+(MCP-host-side handler fixture against the MCP-server substitution-
+mechanism category per §14.8.3 v1.10 pin) **is implementation discretion**
+— mechanism-specific fixture shape (e.g., `InMemoryMCPHostFixture` or
+equivalent) is not pinned at v1.10 to preserve future durable-async swap
+testing flexibility." The callback shape preserves the future C-RT-19 /
+U-RT-61 durable-async swap surface per Q4 ratification (transparent to
+the H_T runtime above this surface).
+
 **Future durable-async swap.** Per Q4 ratification at the c_rt_18 binding-
 mechanism fork: durable-async swap surface (C-RT-19 / U-RT-61) stays
 inside the MCP envelope — transparent to the H_T runtime above this

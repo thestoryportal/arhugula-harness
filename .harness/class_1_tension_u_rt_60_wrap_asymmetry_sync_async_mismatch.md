@@ -1,6 +1,6 @@
 # Class 1 Tension — U-RT-60 wrap-asymmetry sync/async mismatch
 
-**Status.** PROPOSING (filed 2026-05-21; awaiting systems-architect mode 3 recommendation + operator ratification)
+**Status.** **APPLIED** (filed 2026-05-21 as PROPOSING; systems-architect mode 3 recommendation appended at `237e7ee`; operator ratified Q1=(c) at `0a1ca94`; impl arc landed across 4 commits `3a9c2f4` → `a1166d6` → `e7f5cc0` → this commit per §9.1)
 
 **Detected at.** `phase-7-implementation` Step 2 (cited-spec cross-check vs partial impl + landed C-RT-16 wrapper) during U-RT-60 follow-on impl arc against runtime spec v1.11 + plan v2.9.
 
@@ -395,4 +395,78 @@ Per AskUserQuestion turn at the systems-architect mode 3 recommendation append. 
 
 ---
 
-*End of fork record. Status: **RATIFIED** at HEAD ≈ this commit. systems-architect mode 3 recommendation appended at §7; operator ratification appended at §8. Next: `phase-7-implementation` follow-on arc lands the §8.1 implementation steps; final commit transitions RATIFIED → APPLIED.*
+## 9. APPLIED landing (2026-05-21)
+
+**Status transition.** RATIFIED → **APPLIED** at this commit. The `phase-7-implementation` follow-on arc landed the fork §7.2 Q1=(c) wrap chain across 4 commits:
+
+| Commit | Scope | Files |
+|---|---|---|
+| `3a9c2f4` | Composer async refactor + 21-test re-shape | `harness-runtime/.../hitl_gate_composer.py` + `harness-runtime/tests/test_lifecycle_hitl_gate_composer.py` |
+| `a1166d6` | Stage 5 wrap chain + HarnessContext extension + MCP-backed surface + AC #13 post-condition | `harness-runtime/.../bootstrap/stage_5_loop_init.py` + `harness-runtime/.../bootstrap/mutable_context.py` + `harness-runtime/.../types.py` + NEW `harness-runtime/.../lifecycle/mcp_backed_ask_user_question_surface.py` + `harness-runtime/tests/{test_bootstrap.py,test_types.py,integration/test_run_smoke.py}` |
+| `e7f5cc0` | AC #12 retry-of-gate per-attempt re-evaluation test | `harness-runtime/tests/test_lifecycle_hitl_gate_composer.py` (new AC #12 test) |
+| this commit | AC #14 batch 8 retirement event + workspace `CLAUDE.md` absorption + ledger update + fork APPLIED transition | NEW `.harness/phase-7d-retirement-events-batch-8.md` + `.harness/phase-7d-retirement-ledger-v2.md` + `CLAUDE.md` + `harness-cp/CLAUDE.md` + this fork record + surface docstring spec citation |
+
+### 9.1 §8.1 step-by-step closure audit
+
+| §8.1 step | Status | Evidence |
+|---|---|---|
+| 1. Composer async refactor (~50-80 LOC) | DONE @ `3a9c2f4` | `_dispatch_inner` helper (advisor blind-spot #1) duck-types via `inspect.isawaitable`; tolerates async C-RT-15 + sync C-RT-17 inners per fork §7.2 Q3. Loop / result_timeout_seconds fields dropped. |
+| 2. Test fixture re-shape (~80-120 LOC) | DONE @ `3a9c2f4` | All 21 composer tests converted to `async def` + `await composer.dispatch(...)`. AC #1 Protocol assertion flipped from sync `StepDispatcher` → async `AsyncStepDispatcher` (advisor blind-spot #2). |
+| 3. AC #12 retry-of-gate test | DONE @ `e7f5cc0` | New `_BareAsyncDispatcher` mock fails 2× then succeeds; asserts 3 surface invocations + 3 audit entries + 3× canonical 4-span hierarchy under C-RT-16 max_attempts=3 through HITL composer through bare async (advisor blind-spot #3 addressed — new mock, not reshape). |
+| 4. Stage 5 wiring (~40 LOC delta) | DONE @ `a1166d6` | Row 1: bare → HITL(PRE_ACTION) → C-RT-16 → SyncDispatcherFacade. Row 2: bare sub_agent → HITL(SUB_AGENT_BOUNDARY) → SyncDispatcherFacade. `ctx.ask_user_question_surface` bound. |
+| 5. HarnessContext field extension | DONE @ `a1166d6` | `ask_user_question_surface: Any` added to MutableContext + HarnessContext + `_REQUIRED_FIELDS` (31→32) + `freeze()` body. `sub_agent_dispatcher` field-type widened from `_CpStepDispatcher` to `Any` per fork §7.2 Q3. |
+| 6. MCP-server-backed `AskUserQuestionSurface` impl (~80-150 LOC) | DONE @ `a1166d6` | NEW `harness-runtime/.../lifecycle/mcp_backed_ask_user_question_surface.py` (~200 LOC). `MCPBackedAskUserQuestionSurface` frozen dataclass + injectable `MCPAskCallback` + `_PlaceholderMCPCallback` sentinel + typed `MCPSurfaceCallbackNotBoundError`. Callback abstraction authorized by **broad reading** of spec §14.8.3 v1.10 Q3 line 1715 impl-discretion (narrow reading flagged as Class 3 carry-forward at §9.4 below per advisor item #3 honest reconciliation). |
+| 7. AC #13 stage-5 post-condition half | DONE @ `a1166d6` | `test_bootstrap_stage_5_binds_inference_and_sub_agent_dispatchers` extended: asserts both wrap-chain rows isinstance-by-isinstance + `ctx.ask_user_question_surface` is `MCPBackedAskUserQuestionSurface`. |
+| 8. AC #14 Phase 7d batch 8 retirement event | DONE @ this commit | NEW `.harness/phase-7d-retirement-events-batch-8.md` files H_T-CP-20 STILL-BOUNDED → **RETIRE-READY** (NOT RETIRED per advisor item #2 reconciliation — criterion A met; criterion B partial; FastMCP transport-level handler is bounded carry-forward). Cumulative 21/49 RETIRED unchanged + 1 NEW RETIRE-READY category. |
+| 9. Workspace `CLAUDE.md` absorption | DONE @ this commit | §1.1 + §2.4 CXA citation v2.4 → v2.5 (94 relationships; 24 typed seams; §2.3.7 CP→OD bucket 1→2 typed seams sharing converter). `harness-cp/CLAUDE.md` §4.1 substitution-table CP-20 transition + STILL-BOUNDED count 9→8. |
+| 10. Fork status transition | **APPLIED** at this commit (§9.0 above) | This append. |
+
+### 9.2 Test verification at APPLIED
+
+| Surface | Count | Status |
+|---|---|---|
+| Composer-level tests (`test_lifecycle_hitl_gate_composer.py`) | 22 | all green |
+| Bootstrap stage 5 post-condition (`test_bootstrap.py::test_bootstrap_stage_5_binds_inference_and_sub_agent_dispatchers`) | 1 | green; asserts row 1 + row 2 wrap chain + MCP-backed surface binding |
+| AC #12 retry-of-gate (`test_lifecycle_hitl_gate_composer.py::test_retry_of_gate_re_evaluates_gate_per_attempt`) | 1 | green; 3× surface + 3× audit + 3× spans |
+| E2E bootstrap-shutdown (`test_run_smoke.py::test_e2e_bootstrap_shutdown_round_trip`) | 1 | green; walks C-RT-16.inner == HITL composer → HITL.inner == bare LLM dispatcher |
+| Full harness-runtime test suite | 745 | all green |
+| Full workspace test suite | 2311 | all green (+24 net from baseline 2287) |
+
+### 9.3 Spec / plan version posture at APPLIED
+
+| Artifact | Version at APPLIED | Change this arc |
+|---|---|---|
+| Runtime spec (`Spec_Harness_Runtime_v1.md`) | v1.11 | unchanged — Q1=(c) under-amendment per §7.4; the wrap chain IS the spec-canonical wrap chain plus a SyncDispatcherFacade at the registry boundary (impl-mechanism, not contract-surface) |
+| Runtime plan (`Implementation_Plan_Runtime_v2_9.md`) | v2.9 | unchanged — AC #5/#6/#9/#10/#11/#13 satisfied at HEAD `9b8a36c` (prior partial-land); AC #12/#13-stage5/#14 satisfied this arc |
+| CP spec (`Spec_Control_Plane_v1_9.md`) | v1.9 | unchanged |
+| OD spec (`Spec_Operational_Discipline_v1_7.md`) | v1.7 | unchanged |
+| CXA (`Cross_Axis_Composition_Document_v2_5.md`) | v2.5 | unchanged at substrate; workspace `CLAUDE.md` citation reconciled v2.4 → v2.5 at this commit |
+| CP plan (`Implementation_Plan_Control_Plane_v2_14.md`) | v2.14 | unchanged |
+| OD plan (`Implementation_Plan_Operational_Discipline_v2_13.md`) | v2.13 | unchanged |
+| ADR-D5 | v1.4 | unchanged |
+
+### 9.4 Class 3 carry-forwards post APPLIED
+
+| Record | Status |
+|---|---|
+| `class_3_tension_q6_scope_widening_contract_shape_composability.md` | OPEN (Q6 follow-on arc owner; independent of U-RT-60 closure) |
+| `class_3_tension_meta_architecture_hitl_palette_drift.md` | OPEN (carried) |
+| `class_3_tension_per_axis_claude_md_v2_1_to_v2_4_count_drift.md` | OPEN (carried — workspace `CLAUDE.md` §1.1 + §2.4 partial reconciliation at this commit for the CXA v2.4 → v2.5 + bucket-count drift; per-axis CLAUDE.md absorption remains carried) |
+| `class_3_tension_u_rt_59_spec_prose_drift.md` | OPEN (carried) |
+| `[[fork-cost-record-audit-ledger-wiring-residual]]` | OPEN (carried) |
+| **NEW: C-RT-04 §4 spec field-table drift** | OPEN (NEW at this arc — pre-existing drift extended, not net-new). Spec §4 HarnessContext schema table omits `ledger_reader` (v2.12 IS extension), `llm_dispatcher` (U-RT-52), `sub_agent_dispatcher` + `step_dispatchers` (U-RT-59), `ask_user_question_surface` (U-RT-60 this arc). The test `test_harness_context_declares_all_c_rt_04_fields` asserts the IMPLEMENTATION's field set; the SPEC §4 table is drifted vs the implementation. Adding `ask_user_question_surface` continues the existing drift pattern; the field IS declared at spec §3 narrative + §14.8.3 contract surface + line 108 verbatim ("Bound at `HarnessContext` as `ctx.ask_user_question_surface`"). Resolution: full §4 table reconciliation at next spec revision touching the HarnessContext schema (operator-scheduled; not blocking this fork APPLIED). |
+| **NEW: §14.8.3 impl-discretion broad-reading carry-forward** | OPEN (NEW at this arc per advisor reconciliation). The injectable `MCPAskCallback` abstraction at `MCPBackedAskUserQuestionSurface.mcp_callback` is authorized by a **broad reading** of spec §14.8.3 v1.10 Q3 line 1715 ("the integration-test harness … is implementation discretion"). The line strictly authorizes test-fixture impl-discretion; the production-surface callback-abstraction split is implicitly authorized iff the fixture-shape and production-handler-shape share a contract (which they do at this impl — both bind to `MCPAskCallback`). **Narrow reading** would treat the production-surface abstraction as a Class 3 design extension (X-AL-3) requiring a separate informational addendum. **Broad reading** at this arc; narrow reading available to the next reviewer if the production-surface abstraction surfaces a defect at a future arc. Resolution path: either (a) the FastMCP transport-level handler arc lands the production-side delivery primitive cleanly under the broad reading (closes this carry-forward at APPLIED of that arc), or (b) a narrow-reading reviewer files Class 3 informational at next CP cluster open. |
+
+### 9.5 Bounded carry-forwards owed at next CP cluster open
+
+Per `[[carried-fork-audit-before-cluster]]` memory pattern, next CP cluster open audits:
+
+1. **FastMCP transport-level handler registration** → couples H_T-CP-18 + H_T-CP-20 retirement (per batch 8 §3).
+2. **Q6 systemic-pattern skill-extension arc** → 3 skill body extensions at `.claude/skills/{harness-adversarial-reviewer,phase-7-implementation,spec-writer}/SKILL.md` with attribute-name + contract-shape composability columns (per Q6 Class 3 FILED at `0a1ca94`).
+3. **HITLMatrixCell.gate_level field + HITLResponseOption carrier** → 2 NEW U-RT-60 impl-time Class 3 drifts noted at prior checkpoint; carried at this arc.
+4. **Plan v2.9 U-CP-13 enumeration gap at spec §14.8.3** → 1 NEW U-RT-60 plan-v2.8 change-note drift; carried at this arc.
+5. **v1.11 MVP `requires_hitl` field absent from landed `HITLPlacement` schema** → composer uses `getattr(placement, 'requires_hitl', True)`; carry-forward Class 3 spec-prose-drift at next workflow-grammar arc.
+
+---
+
+*End of fork record. Status: **APPLIED** at HEAD ≈ this commit. systems-architect mode 3 recommendation appended at §7; operator ratification appended at §8; APPLIED landing audit appended at §9 with §8.1 step-by-step closure + test verification + spec/plan version posture + Class 3 carry-forwards. Three Class 1 forks at the C-RT-18 contract surface across two consecutive sessions all APPLIED: binding-mechanism @ `fb545ec` → span-attr-carrier-drift @ `9b6b007` → wrap-asymmetry sync/async @ this commit. The 4th defect detection cadence (advisor reconciliations at the AC #12 + AC #14 + spec-citation surfaces) confirms the Q6 systemic-pattern skill-body extension scope was correctly widened to contract-shape composability — the 3 advisor blind spots all surfaced at impl Step 2 / impl Step 5, none after landing.*
