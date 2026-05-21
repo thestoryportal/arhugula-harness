@@ -1,4 +1,46 @@
-# Specification — Harness Runtime v1.8
+# Specification — Harness Runtime v1.9
+
+## Change-note (v1.8 → v1.9)
+
+**Scope of revision.** In-CLI spec growth per workspace `CLAUDE.md` §4.3 + memory `[[design-substrate-divergence]]`. New runtime composition contract for the HITL gate composer — the runtime-side production callsite for the CP-axis cluster 6 HITL typed library (U-CP-37/38/39/40/41 — landed) + cluster 7 audit + hitl-span declarations (U-CP-46 — landed) + the L5 CP_ROUTING runtime registry (U-RT-25 — landed; `hitl_gate` co-stubbed `NotImplementedError`). Same architectural shape as the v1.6 C-RT-17 amendment: contract pins the producer site for an upstream-CP-declared observability + audit surface; runtime owns the composition seam.
+
+**Class 1 fork resolution.** Fork record `.harness/class_1_tension_cp_20_hitl_gate_composer_underspec.md` filed + systems-architect mode 3 recommendation appended + operator-ratified same-session 2026-05-20 (HEAD `2a15504`). Five architectural recommendations ratified:
+
+| Q | Ratified | Citation |
+|---|---|---|
+| Q1 | H_E gate-delivery surface at sub-phase 7b = `AskUserQuestion` (synchronous); webhook deferred to post-bootstrap composer arc | `Phase_7_Meta_Architecture_v1.md` §5 line 23 + §10 line 942 |
+| Q2 | Composer-stack ordering outer-to-inner = C-RT-16 (retry) → HITL gate evaluator (placement-dispatched) → C-RT-15/C-RT-17/tool-dispatch inner | `Spec_Control_Plane_v1_9.md` C-CP-17 §17.1+§17.2 + §14.6/§14.7 wrap precedent |
+| Q3 | SHARED `cp_audit_to_od_audit` converter; CXA v2.4 §2.3.7 CP→OD bucket grows 1→2 typed seams (CXA v2.4 → v2.5 co-published) | `Spec_Control_Plane_v1_9.md` §13.5.1 NOTE 5; converter implementation evidence |
+| Q4 | SEPARATE arc — pause/resume + `deliver_webhook` defer to future C-RT-19 / U-RT-61 | `Phase_7_Meta_Architecture_v1.md` §5 line 25 structural separation + U-RT-59 narrow-scope precedent |
+| Q5 | C-RT-18 scope = PRE_ACTION + SUB_AGENT_BOUNDARY only; VALIDATOR_ESCALATION foreclosed at v1.9 MVP | `Phase_7_Meta_Architecture_v1.md` §5 line 24 H_T-CP-21 separation + dependency analysis + U-RT-59 narrow-scope precedent |
+
+**Single-finding addition.** New **§14.8 C-RT-18 — HITL gate composer** specifies the runtime composition seam that:
+
+1. Adds `RuntimeHITLGateComposer` as a runtime-internal wrapper composer — wraps an inner `StepDispatcher` and produces a HITL-gated `StepDispatcher`. The wrap-shape is per-step-kind asymmetric (see §14.8.1 wrap-asymmetry table): at `INFERENCE_STEP`, HITL gate wraps `C-RT-15` *inside* `C-RT-16`'s retry — per Q2 ratification ("the gate gets retried — `retry.*` covers all per-step attempts including HITL-gated ones"); at `SUB_AGENT_DISPATCH`, HITL gate wraps `C-RT-17` directly (no retry layer around C-RT-17 today); at `TOOL_STEP`, the binding site is named but the inner tool-dispatch composer does not exist at v1.9 (future AS-axis composer arc).
+2. Adds the `AskUserQuestion` H_E surface as the sub-phase 7b gate-delivery primitive — synchronous operator-turn invocation per Q1 ratification. Bound at `HarnessContext` as `ctx.ask_user_question_surface` (Protocol-typed; H_E substitution at v1.9; replaced post-bootstrap by durable-async `deliver_webhook` per future C-RT-19 arc).
+3. Adds placement-trigger evaluation per `WorkflowManifestEntry.hitl_placements` — composer reads `step.hitl_placements: Sequence[HITLPlacement]` and dispatches placement-eligible gates per `HITLPlacementKind`. v1.9 binds 2 of 3 placements (`PRE_ACTION` + `SUB_AGENT_BOUNDARY`); `VALIDATOR_ESCALATION` foreclosed at v1.9 MVP per Q5 (validator-composer arc lands the trigger source).
+4. Adds 4-substep audit-write sequence at gate-response time — composes the same 8a/8b/8c/8d chain established at §14.7.2 step 8 for sub-agent dispatch, populating `CPAuditLedgerEntry.response` with the operator's actual response value (one of `{approve, edit, reject, respond}`) per the C-CP-16 §16.2 HITL-canonical shape. Q3 ratification: SHARED `cp_audit_to_od_audit` converter at `harness-cxa/src/harness_cxa/cp_audit_conversion.py` (HITL-canonical at origin per CP spec v1.9 §13.5.1 NOTE 5; sub-agent dispatch was the reuse via `response="approve"` convention).
+5. Adds 4 path-(ii) NOTE-deferrals at §14.8.7 — pre-emptively documenting load-bearing future-arc commitments matching the U-RT-59 path-(i) NOTE absorption pattern, preventing the F2-01-style discovery-at-implementation hazard.
+
+**Sections revised (substantive).**
+- New **§14.8 C-RT-18** — HITL gate composer contract (after §14.7; §-pin `.8` decimal continuing the §14.5 / §14.6 / §14.7 pattern).
+- **§14** failure-mode taxonomy — new rows `RT-FAIL-HITL-GATE-REJECTED` (permanent), `RT-FAIL-HITL-GATE-TIMEOUT` (permanent), `RT-FAIL-HITL-GATE-AUDIT-COMPOSE` (permanent).
+- **§15** Spec-to-plan traceability — new row for U-RT-60 (the new plan unit carrying C-RT-18).
+
+**Sections preserved verbatim from v1.8.** All v1.8 content outside the additions above preserved unchanged. The §14.7 C-RT-17 contract surface stands (including all v1.8 NOTE-form absorptions at step 8a). The §14.6 C-RT-16 contract surface stands. The §14.5 C-RT-15 contract surface stands. The 4-substep audit chain established at §14.7.2 step 8 (8a/8b/8c/8d) is referenced by §14.8 audit-composition discipline but not re-stated.
+
+**Status posture.** Proposed (v1.8) → **Proposed (v1.9)**. Adversarial-review pass scheduled at U-RT-60 implementation landing per Phase 7 sub-phase 7b discipline (optional per operator gating).
+
+**Co-publication.** Co-published with `Cross_Axis_Composition_Document_v2_4.md` v2.4 → v2.5 (§2.3.7 CP→OD bucket cardinality 1 → 2 typed seams per Q3 ratification — adds U-CP-46 → U-OD-00 HITL audit-write seam alongside existing U-CP-28 → U-OD-00 sub-agent dispatch seam).
+
+**Downstream absorption owed.**
+- `.harness/phase-2-session-3-track-a-atomic-decomposition.md` v2.6 → v2.7 — add U-RT-60 (HITL gate composer at workflow_driver per-step path) per `phase-7-implementation` skill discipline; co-published with this v1.9 amendment at the implementation-planner skill arc.
+- `Cross_Axis_Composition_Document_v2_5.md` (NEW file) — §2.3.7 cardinality bump 1 → 2 + new U-CP-46 → U-OD-00 typed-seam row per Q3 ratification.
+- `Phase_7_Meta_Architecture_v1.md` — H_T-CP-20 substitution row palette-value drift per `[[class_3_tension_meta_architecture_hitl_palette_drift]]` (Class 3, non-blocking; defer to next Meta-Architecture revision pass).
+- `harness-cp/CLAUDE.md` §4.1 retirement table updated post-U-RT-60-landing (H_T-CP-20 STILL-BOUNDED → RETIRE-READY).
+- Workspace `CLAUDE.md` §2.3 + §2.4 absorb runtime spec v1.9 + CXA v2.5 versions at co-publication arc.
+
+---
 
 ## Change-note (v1.7 → v1.8)
 
@@ -1385,6 +1427,187 @@ The C-RT-17 contract specifies the composition seam whose absence was the substi
 
 ---
 
+## §14.8 C-RT-18 — HITL gate composer (new at v1.9; in-CLI spec growth)
+
+> **✅ Class 1 fork RESOLVED at v1.9.** Fork record `.harness/class_1_tension_cp_20_hitl_gate_composer_underspec.md` filed + systems-architect mode 3 recommendation appended + operator-ratified same-session 2026-05-20 (HEAD `2a15504`). Five architectural questions resolved per the change-note table above. The §14.8 narrative below applies the five ratifications.
+
+**Contract surface.** New runtime-internal wrapper class `RuntimeHITLGateComposer` (wraps an inner `StepDispatcher` and produces a HITL-gated `StepDispatcher`) + new `AskUserQuestion` H_E delivery surface at `HarnessContext` (`ctx.ask_user_question_surface`, Protocol-typed) + bootstrap stage 5 composition discipline (asymmetric wrap per step_kind — see §14.8.1) + integration obligations with `ctx.hitl_placement` (U-RT-25 CP_ROUTING registry; `select_variant` / `rewrite_tool_call_to_hitl` / `on_hitl_timeout` already landed), `ctx.handoff_registry` (U-RT-26), `ctx.state_ledger_writer` (IS C-IS-10 §10.5), `ctx.audit_writer` (C-RT-04), `ctx.tracer_provider` (C-RT-06), C-CP-16 §16.1–§16.4 (4-response palette + per-response audit shapes + invariants), C-CP-17 §17.1–§17.3 (3-placement enum + `hitl_gate` interface + `HITLPlacement` schema), C-CP-18 §18.1–§18.5 (persona-tier × engine-class matrix + overlay + observer + binding-selection), C-CP-19 §19.1 (`_hitl_required` 4-axis composition — declarative library at U-CP-43), C-CP-20 §20.4 (`audit.*` 7-attribute namespace) + §20.5 (`hitl.*` 4-attribute span schema) + §20.6 (HITL-event span schema), the existing `cp_audit_to_od_audit` converter at `harness-cxa/src/harness_cxa/cp_audit_conversion.py` (HITL-canonical at origin per CP spec v1.9 §13.5.1 NOTE 5), and Cross_Axis_Composition_Document_v2_5.md §2.3.7 (new typed seam U-CP-46 → U-OD-00).
+
+**PRD enablement.** Operationalizes the HITL primitive + 4-response palette + `hitl.*` / `audit.*` namespaces at runtime. R-CP-10 (4-response operator palette at every HITL invocation — produced at production callsite). R-CP-11 (3-placement HITL topology primitive — operationalized at PRE_ACTION + SUB_AGENT_BOUNDARY). R-CP-12 (multi-tenant-compliance audit attribute composition — `audit.*` namespace emitted per persona-tier monotonic discipline per C-CP-20 §20.5). R-OD-02 (audit-ledger compliance posture — HITL response audit entries produced at production execution path, not synthesized post-hoc).
+
+**ADR commitment(s) honored.** ADR-D1 v1.2 (HITL primitive — runtime production callsite for the CP-declared 4-response palette + 3-placement enum); ADR-D5 v1.3 §1.4.1 (HITL placement + invocation matrix); ADR-D5 v1.3 §1.8 (per-persona-tier audit emission monotonicity); ADD §3.1.4 Synthesis (HITL gate operationalized at runtime).
+
+**Fork-resolution provenance.** Class 1 fork `.harness/class_1_tension_cp_20_hitl_gate_composer_underspec.md` (filed 2026-05-20 same session as this v1.9 amendment; ratified path A inline at AskUserQuestion option A; systems-architect mode 3 recommendation appended to fork record; operator ratified all 5 recommendations at follow-on AskUserQuestion option A this session). Architectural decisions captured in the fork record's "Systems-architect mode 3 resolution recommendation" + "Operator ratification" sections.
+
+**Specification content.**
+
+### §14.8.1 Architectural surfaces introduced — wrap-asymmetry per step_kind
+
+The runtime contributes one new wrapper composer at v1.9:
+
+1. **`RuntimeHITLGateComposer`** (new class at `harness-runtime/src/harness_runtime/lifecycle/hitl_gate_composer.py`):
+   - Constructor: `RuntimeHITLGateComposer(inner: StepDispatcher, applicable_placements: frozenset[HITLPlacementKind], hitl_placement: HITLPlacementRegistry, handoff_registry: HandoffRegistry, ask_user_question_surface: AskUserQuestionSurface, state_ledger_writer: StateLedgerWriter, audit_writer: AuditLedgerWriter, tracer_provider: TracerProvider, audit_signing_key_id: str, audit_signing_algorithm: SignatureAlgorithm)`.
+   - Satisfies the `StepDispatcher` Protocol (declared at `harness-cp/src/harness_cp/workflow_driver.py:151`).
+   - Async `dispatch(binding, step, *, step_context) -> StepOutput`.
+   - Construction site: bootstrap stage 5 (LOOP_INIT) — asymmetric per step_kind per the wrap-shape table below.
+   - The composer is **single-instance-per-step_kind** at v1.9 MVP (one `INFERENCE_STEP`-targeted instance with `applicable_placements={PRE_ACTION}` + one `SUB_AGENT_DISPATCH`-targeted instance with `applicable_placements={SUB_AGENT_BOUNDARY}`); future arcs may add more instances.
+
+2. **`AskUserQuestionSurface`** (new Protocol at `harness-runtime/src/harness_runtime/lifecycle/ask_user_question_surface.py`):
+   - Protocol with one async method: `async def ask(prompt: str, options: Sequence[HITLResponseOption], timeout: Duration | None) -> AskUserQuestionResult`.
+   - `AskUserQuestionResult` carries the operator's selected `HITLResponse` + optional `edited_proposal` (when response==EDIT) + optional `response_text` (when response==RESPOND) + optional `rejection_reason` (when response==REJECT) + response latency in ms.
+   - **v1.9 H_E substitution.** Bound at bootstrap stage 5 to an H_E-backed implementation that wraps Claude Code's `AskUserQuestion` mechanism. The Protocol surface itself is H_T-canonical (replaceable post-bootstrap by `deliver_webhook` per future C-RT-19 arc — Q4 ratification).
+   - The Protocol does NOT carry placement-specific semantics — it is a pure delivery primitive. Placement semantics live at the composer body (§14.8.2).
+
+**Wrap-asymmetry table** (per step_kind, Q2 ratification):
+
+| step_kind | Bootstrap-stage-5 wrap chain | Composer reachable via | Retry-of-gate semantics |
+|---|---|---|---|
+| `INFERENCE_STEP` | `ctx.llm_dispatcher = c_rt_16_compose(hitl_gate_composer(c_rt_15, applicable_placements={PRE_ACTION}))` | `ctx.step_dispatchers.lookup(INFERENCE_STEP)` | C-RT-16 retry is outer of HITL gate — every retry attempt re-evaluates the gate. `retry.*` namespace covers all per-step attempts including HITL-gated ones. |
+| `SUB_AGENT_DISPATCH` | `ctx.sub_agent_dispatcher = hitl_gate_composer(c_rt_17, applicable_placements={SUB_AGENT_BOUNDARY})` | `ctx.step_dispatchers.lookup(SUB_AGENT_DISPATCH)` | NO retry layer around C-RT-17 at v1.9 (sub-agent dispatch is not retry-wrapped). HITL gate fires once per dispatch. |
+| `TOOL_STEP` | Binding site reserved — inner tool-dispatch composer is a future AS-axis composer arc (deferred per `harness-runtime/lifecycle/step_dispatchers.py` v1.6 §14.7.1 — `TOOL_STEP` not bound at v1.6 / v1.7 / v1.8 / v1.9; lookup raises `StepKindDispatcherNotBoundError`) | n/a at v1.9 | When the tool-dispatch composer arc lands, the binding pattern follows `INFERENCE_STEP` (HITL wraps inner; outer wrap shape determined at that arc — retry-wrap is the natural default). |
+| `DECLARATIVE_STEP` | NOT in HITL gate composer scope — declarative steps are body-of-prose evaluation (no action surface to gate). Bootstrap leaves this binding for the declarative-evaluator composer arc (future). | n/a | n/a |
+| `HITL_STEP` | NOT in HITL gate composer scope — `HITL_STEP` is a workflow-author-declared explicit-HITL step kind (the step IS a HITL invocation, not an action-with-HITL-gate). Bootstrap leaves this binding for a separate explicit-HITL composer arc (future). | n/a | n/a |
+
+The asymmetry is intentional: HITL gate composer is a per-step *wrap layer*, not a step_kind binding. It overlays the existing inner composers per `WorkflowManifestEntry.hitl_placements` declarations. The wrap-chain is bootstrap-time composition; runtime dispatch remains step_kind-routed through `ctx.step_dispatchers` per §14.7.7.
+
+### §14.8.2 Per-step invocation discipline (composer body)
+
+The body of `RuntimeHITLGateComposer.dispatch(binding, step, *, step_context)`:
+
+1. **Read placement triggers from step.** `placements = step.hitl_placements` (Sequence[HITLPlacement] per C-CP-17 §17.3; populated at workflow-binding time per U-CP-13 + U-CP-38). If `placements` is empty: skip directly to step 9 (delegate to inner dispatcher) — no gate fires when no placement is declared.
+2. **Filter placements by composer's applicable set.** `matching = [p for p in placements if p.position in self.applicable_placements]`. If `matching` is empty: skip directly to step 9.
+3. **Foreclose VALIDATOR_ESCALATION at v1.9 MVP.** If any placement in `matching` has `position == VALIDATOR_ESCALATION`: raise `HITLPlacementForeclosedAtV19Error` mapping to a new fail class (see §14.8 failure-mode taxonomy below). The placement-trigger evaluator returns `no-placement-match` for `VALIDATOR_ESCALATION` at v1.9 MVP per the Q5 ratification foreclosure clause: "v1.9 MVP `VALIDATOR_ESCALATION` emission is foreclosed: composer MUST NOT raise validator-escalation gate; the placement-trigger evaluator returns `no-placement-match` for `VALIDATOR_ESCALATION` at v1.9. Validator-composer arc lands the trigger source." Cardinality-3 invariant at `HITL_PLACEMENT_TRIGGERS` is preserved at the typed library; foreclosure is at the runtime-invocation-binding layer only.
+4. **For each matching placement (in declaration order):**
+   - 4a. **Compose `HandoffContext` per C-CP-13 §13.1.** Build the 7-field `HandoffContext` from step inputs + parent context per the §14.7.2 step 2 composition discipline (re-used verbatim from C-RT-17). `audit_trail_link` sourced from `step_context.parent_action_id` + `parent_entry_hash` + `parent_actor` per `Spec_Control_Plane_v1_6.md` §25.2.1 Path A.
+   - 4b. **Resolve persona-tier × engine-class matrix cell.** `cell = matrix_cell_for(persona_tier=binding.persona_tier, engine_class=binding.engine_class)` per C-CP-18 §18.1. If `cell.is_excluded`: raise `HITLCellExcludedError` mapping to a new fail class. The cell carries the response palette + invocation-primitive-shape commitments.
+   - 4c. **Compute `_hitl_required` predicate.** v1.9 MVP defers full 4-axis composition (C-CP-19 §19.1) to the validator-composer arc; v1.9 reads the bool from the placement declaration: `if not placement.requires_hitl: skip to 4j`. (The full `_hitl_required(persona_tier, blast_radius_tier, deployment_surface, mcp_trust_tier)` composition is gated on validator-composer arc per Q5 dependency analysis; v1.9 MVP treats placement.requires_hitl as the authoritative trigger.)
+   - 4d. **Determine response palette.** v1.9 MVP shape: `palette = placement.response_palette or DEFAULT_FULL_PALETTE` where `DEFAULT_FULL_PALETTE = frozenset({APPROVE, EDIT, REJECT, RESPOND})` per C-CP-16 §16.1. Cross-trust-boundary palette restriction (per C-CP-19 §19.4) is **deferred to validator-composer arc** per NOTE 6-iv (§14.8.7) — v1.9 MVP uses the full palette unconditionally.
+   - 4e. **Open `hitl.gate.evaluated` span.** `with tracer.start_as_current_span("hitl.gate.evaluated") as gate_span:`. Set attributes per C-CP-20 §20.5 row 1 (`hitl.gate.evaluated.placement` = string-value of `placement.position`) + row 2 (`hitl.gate.evaluated.response_palette` = sorted-tuple-of-string-values of `palette`). Per `Spec_Control_Plane_v1_9.md` U-CP-46 AC #10: the gate-evaluated span fires regardless of `_hitl_required` outcome (records the evaluation decision).
+   - 4f. **Invoke gate via AskUserQuestion.** `gate_result = await ctx.ask_user_question_surface.ask(prompt=compose_gate_prompt(placement, handoff_context), options=[HITLResponseOption(response=r, label=...) for r in palette], timeout=placement.timeout)`. The prompt composition is implementation discretion at v1.9 (see "Deferred to implementation discretion" below). Timeout semantics: on `placement.timeout` elapse, the surface raises `AskUserQuestionTimeoutError`; composer maps to `RT-FAIL-HITL-GATE-TIMEOUT` (see §14.8 failure-mode taxonomy).
+   - 4g. **Open `hitl.invocation.responded` span (only on response received).** Per C-CP-20 §20.5 row 3 + U-CP-46 AC #11: `hitl.invocation.responded` span fires only when human response received (timeout → no span; recorded at `hitl.gate.evaluated.outcome="timeout"` attribute extension). `with tracer.start_as_current_span("hitl.invocation.responded") as resp_span:`. Set `hitl.invocation.responded.response_class` = string-value of `gate_result.response` per C-CP-20 §20.5 row 3 + `hitl.invocation.responded.response_latency_ms` = `gate_result.latency_ms` per row 4.
+   - 4h. **Compose + write audit entry — 4-substep sequence per §14.7.2 step 8 pattern.** The §14.7 4-substep sequence (8a/8b/8c/8d) is re-used verbatim for HITL audit-write with three substantive differences from sub-agent dispatch:
+     - **8a-HITL**: `cp_entry = compose_hitl_response_audit(action_id=compose_hitl_action_id(step_context.parent_action_id, placement.position), gate_level=cell.gate_level, response=gate_result.response, edited_proposal_hash=sha256(gate_result.edited_proposal) if gate_result.response==EDIT else None, rejection_reason_hash=sha256(gate_result.rejection_reason) if gate_result.response==REJECT else None, response_text_hash=sha256(gate_result.response_text) if gate_result.response==RESPOND else None)`. Per CP spec v1.9 §13.5.1 NOTE 5 ("The CPAuditLedgerEntry shape is declared at C-CP-16 §16.2 as the HITL per-response audit shape"), the `CPAuditLedgerEntry` carrier is HITL-canonical at origin; `response` populates per the operator's actual response (one of `{approve, edit, reject, respond}`), unlike sub-agent dispatch which populates `response="approve"` via convention.
+     - **8b-HITL**: identical to §14.7.2 step 8b (F2 state-ledger entry write for the HITL action) — `payload = EntryPayload(action_id=Identifier(f"hitl:{step_context.parent_action_id}:{placement.position.value}"), idempotency_key=Identifier(f"hitl:{step_context.parent_action_id}:{placement.position.value}"), actor=step_context.parent_actor, timestamp=time_source())`. The `hitl:` action_id prefix is the HITL-source discriminator at OD audit-trace consumers (matches `dispatch:` prefix discriminator at §14.7.2 NOTE 8a-ii dispatch-vs-HITL composite check).
+     - **8c-HITL**: identical to §14.7.2 step 8c — `od_entry = cp_audit_to_od_audit(cp_entry, key_id=ctx.audit_signing_key_id, algo=ctx.audit_signing_algorithm, entry_core=StateLedgerEntryRef(<step-8b-HITL entry_hash>))`. **The same converter is reused per Q3 ratification** (HITL-canonical at origin per CP spec v1.9 §13.5.1 NOTE 5); no parallel converter. CXA v2.5 §2.3.7 absorbs the second typed seam (U-CP-46 → U-OD-00 HITL audit-write seam alongside existing U-CP-28 → U-OD-00 sub-agent dispatch seam).
+     - **8d-HITL**: identical to §14.7.2 step 8d — `write_result = ctx.audit_writer.append(tenant_id=step_context.tenant_id, audit_entry=od_entry)`.
+   - 4i. **Process gate response.** Per the 4-response palette:
+     - `APPROVE`: proceed to step 5 (delegate to inner dispatcher) with `step` unchanged.
+     - `EDIT`: mutate `step` per `gate_result.edited_proposal` (v1.9 MVP shape: the edited proposal replaces `step.step_payload`; richer mutation semantics deferred to NOTE 6-ii §14.8.7); proceed to step 5 with mutated step.
+     - `REJECT`: raise `HITLGateRejectedError` mapping to `RT-FAIL-HITL-GATE-REJECTED` (see §14.8 failure-mode taxonomy). The audit entry from step 4h carries the rejection reason; downstream observability records the rejection cleanly.
+     - `RESPOND`: record the operator's response text in the audit entry (8a-HITL `response_text_hash`); the response text is NOT injected into `step.step_payload` (RESPOND is "continue dialogue without action" per C-CP-16 §16.1 row 4 + U-CP-37 AC #7); proceed to step 5 with `step` unchanged.
+   - 4j. **Skip gate (when `_hitl_required` returned false at 4c).** Skip the gate invocation; do NOT emit `hitl.gate.evaluated` or `hitl.invocation.responded` spans for this placement; proceed to next placement.
+5. **Delegate to inner dispatcher.** `output = await self.inner.dispatch(binding, step, step_context=step_context)`. Re-uses the existing `StepDispatcher` Protocol per `Spec_Control_Plane_v1_6.md` §25.2.1.
+6. **Return step output.** Step output is the inner dispatcher's output verbatim; the composer is transparent to step semantics other than gate-mediated step-payload mutation (EDIT case).
+
+### §14.8.3 HITL gate delivery via AskUserQuestion at sub-phase 7b (Q1 ratification)
+
+Per Q1 ratification, the v1.9 H_E surface for HITL gate delivery is the `AskUserQuestionSurface` Protocol, bound at bootstrap stage 5 to an H_E-backed implementation that wraps Claude Code's `AskUserQuestion` mechanism. The Protocol surface itself is H_T-canonical; the H_E binding is the v1.9 substitution per `Phase_7_Meta_Architecture_v1.md` §5 line 23 + §10 line 942 ("`AskUserQuestion` tool + permission-prompt approval" = H_E substitution for H_T-CP-20).
+
+**Substitution retirement criterion (X-AL-2).** Retirement of H_T-CP-20 requires (A) cited unit IDs landed — U-CP-37 + U-CP-38 + U-CP-39 + U-CP-40 + U-CP-41 + U-CP-46 + U-RT-60 — AND (B) the H_E surface "no longer invoked at substitution site." At v1.9 MVP, condition (B) reads narrowly: the `AskUserQuestion` H_E surface IS still invoked at the H_E binding of `AskUserQuestionSurface`; the substitution is structurally framed as "H_E `AskUserQuestion` wrapped by H_T 4-response palette + namespace emission." Per `Phase_7_Meta_Architecture_v1.md` §5 H_T-CP-20 narrative ("Covers: HITL invocation surface. Does NOT cover: 4-response palette; namespace emission"), retirement is satisfied when the H_T-canonical surfaces (palette + namespaces) compose at production execution path — the H_E delivery primitive remains as the bounded transport, analogous to `Phase_7_Meta_Architecture_v1.md` "MCP-server" substitution mechanism category.
+
+**Post-bootstrap webhook surface.** Per Q4 ratification (separate arc), the `deliver_webhook` primitive at `harness-runtime/lifecycle/hitl_placement.py:22-25` (co-stubbed `NotImplementedError`) is materialized at a future C-RT-19 / U-RT-61 arc together with `capture_pause_snapshot` + `attempt_resume`. At that arc, the `AskUserQuestionSurface` Protocol gains a durable-async implementation; bootstrap binds the durable-async impl conditionally on deployment surface. v1.9 MVP binds only the synchronous AskUserQuestion-backed impl.
+
+### §14.8.4 Placement-trigger evaluator + scope foreclosure at v1.9 MVP (Q5 ratification)
+
+v1.9 binds 2 of 3 placement kinds:
+
+| Placement | v1.9 binding | Foreclosure |
+|---|---|---|
+| `PRE_ACTION` | Composer with `applicable_placements={PRE_ACTION}` wraps `INFERENCE_STEP` inner dispatchers (and future `TOOL_STEP` dispatchers when the AS-axis tool-dispatch arc lands). HITL-as-tool-call rewriting (C-CP-17 §17.2) invoked at the PRE_ACTION evaluator when `step.kind == TOOL_STEP` (deferred binding; cited here for traceability). | None at v1.9 |
+| `SUB_AGENT_BOUNDARY` | Composer with `applicable_placements={SUB_AGENT_BOUNDARY}` wraps the `SUB_AGENT_DISPATCH` inner dispatcher (C-RT-17 composer). | None at v1.9 |
+| `VALIDATOR_ESCALATION` | NOT bound at v1.9 MVP. Per Q5 ratification: "v1.9 MVP `VALIDATOR_ESCALATION` emission is foreclosed: composer MUST NOT raise validator-escalation gate; the placement-trigger evaluator returns `no-placement-match` for `VALIDATOR_ESCALATION` at v1.9. Validator-composer arc lands the trigger source." | Step 3 raises `HITLPlacementForeclosedAtV19Error` if a workflow declares VALIDATOR_ESCALATION at v1.9. |
+
+The cardinality-3 invariant at `HITL_PLACEMENT_TRIGGERS` (per U-CP-38 AC #2: "Closed at cardinality 3 — extension requires Workflow §4.1.2 Class-2 D5 revision") is preserved at the typed library layer. The foreclosure is at the **runtime-invocation-binding** layer only; the library cardinality is unaffected.
+
+**HITL-as-tool-call rewriting.** Per C-CP-17 §17.2, when the action is a tool call (step.kind == TOOL_STEP), the HITL gate evaluator transforms the tool call into a synchronous AskUserQuestion variant rather than dispatching the tool. v1.9 MVP cites this binding for traceability but does NOT operationalize it (TOOL_STEP dispatcher not bound at v1.9 per the wrap-asymmetry table at §14.8.1). When the AS-axis tool-dispatch composer arc lands, the rewriting integrates at PRE_ACTION evaluator step 4a (compose HandoffContext) + step 4e (composer reads `step.kind`; if TOOL_STEP, invokes `rewrite_tool_call_to_hitl` per U-CP-39 before opening the gate span).
+
+### §14.8.5 Span emission per C-CP-20 §20.5
+
+v1.9 emits two spans per HITL invocation:
+
+```
+parent step (workflow_driver step.boundary, wrapped by C-RT-16 retry attempt for INFERENCE_STEP)
+└── hitl.gate.evaluated                    (attrs: hitl.gate.evaluated.placement,
+    │                                              hitl.gate.evaluated.response_palette)
+    └── hitl.invocation.responded          (attrs: hitl.invocation.responded.response_class,
+                                                    hitl.invocation.responded.response_latency_ms)
+                                            (NOT emitted on timeout per U-CP-46 AC #11)
+```
+
+The narrow-scope shape preserves the C-CP-20 §20.5 + §20.6 invariants. Per-persona-tier audit emission per C-CP-20 §20.4 + U-CP-46 AC #4 monotonic ascending rule: `audit.*` attributes emit per the persona-tier monotonic discipline (SOLO_DEVELOPER → required `{audit.gate.computed_level}`; TEAM_BINDING → required additional `{audit.gate.composition_winner_axis, audit.policy.override_kind}`; MULTI_TENANT_COMPLIANCE → required all 7).
+
+**Producer-side attribute carrier reference.** v1.9 composer imports the canonical `hitl.*` + `audit.*` attribute name set from `harness_cp.audit_hitl_span_namespace.AUDIT_NAMESPACE_SCHEMA` + `harness_cp.audit_hitl_span_namespace.HITL_SPAN_NAMESPACE_SCHEMA` (landed per U-CP-46). Hand-coded attribute strings are NOT permitted; the carrier import ties retirement criterion B verification ("references the canonical attribute carrier") directly to the canonical producer surface (analog of §14.6 / §14.7 producer-carrier discipline).
+
+### §14.8.6 Audit-entry composition per C-CP-13 §13.5 + CXA v2.5 §2.3.7
+
+v1.9 composer composes the HITL audit entry per the 4-substep sequence at §14.8.2 step 4h. The shape is byte-equivalent to §14.7.2 step 8 (sub-agent dispatch audit-write) per Q3 ratification — same `cp_audit_to_od_audit` converter; same OD `AuditLedgerEntry` shape per C-OD-24.2; same `audit.cp.*` sub-namespace per C-OD-24.6.
+
+**CXA edge cardinality (CXA v2.5 §2.3.7).** Per Q3 ratification, the CXA v2.4 §2.3.7 CP→OD bucket grows from 1 typed seam to 2 typed seams:
+
+| Seam | Source unit | Target unit | Pattern | Source spec |
+|---|---|---|---|---|
+| Sub-agent dispatch audit | U-CP-28 (HandoffContext schema) | U-OD-00 (AuditLedgerEntry shape) | P1 (byte-exact alignment) | C-CP-13 §13.5.1 NOTE 5 + §14.7.2 step 8 |
+| HITL gate response audit (NEW at v2.5) | U-CP-46 (audit + hitl-span namespace declarations) | U-OD-00 (AuditLedgerEntry shape) | P1 (byte-exact alignment) | C-CP-16 §16.2 + §14.8.2 step 4h (this contract) |
+
+The two seams share the `cp_audit_to_od_audit` converter at `harness-cxa/src/harness_cxa/cp_audit_conversion.py` per CP spec v1.9 §13.5.1 NOTE 5 (HITL-canonical at origin). The discriminator between source events at OD audit-trace consumers is the F2-entry action_id prefix: `dispatch:` for sub-agent dispatch source (per §14.7.2 step 8b) + `hitl:` for HITL gate response source (per §14.8.2 step 4h-HITL substep 8b). Both populate `CPAuditLedgerEntry.response` per the C-CP-16 §16.2 4-response palette, but with semantically distinct field values: `response="approve"` for dispatch (via convention) + `response ∈ {approve, edit, reject, respond}` for HITL (per the operator's actual response).
+
+### §14.8.7 Path-(ii) NOTEs deferred (pre-emptive disclosure per advisor recommendation)
+
+Anticipating the U-RT-59 path-(i)-vs-path-(ii) NOTE pattern (per CP spec v1.9 §13.5.1 NOTE 4/5/6 + runtime spec v1.8 §14.7.2 NOTE 8a-i…iv), v1.9 pre-emptively documents four follow-on-arc commitments as NOTEs rather than discovery-at-implementation. This is a **pre-spec-writer absorption** of likely-load-bearing future questions; resolution is deferred but the path is staked.
+
+**NOTE 6-i — Multi-placement same step at v1.9 MVP (load-bearing future-arc commitment).** When `step.hitl_placements` declares multiple placements with overlapping `applicable_placements` (e.g., one step declares both `PRE_ACTION` for the action AND `SUB_AGENT_BOUNDARY` for a child sub-agent), each placement evaluates independently per the §14.8.2 step 4 loop. Each placement's audit entry uses a distinct `action_id` (action_id includes `placement.position.value` per substep 8b-HITL). Sibling-distinguishability via the IS-anchored `entry_core` is preserved (each placement's F2 entry has its own action_id pattern). At v1.9 MVP, multi-placement same-step is not exercised by existing C-CP-25 §25.3.3 step body shapes (single step typically declares 0 or 1 placement); the contract supports it but operator workflows that exercise it are deferred to a future arc landing where workflow-grammar surfaces require it.
+
+**NOTE 6-ii — `edited_proposal` mutation semantics at v1.9 MVP (load-bearing future-arc commitment).** Per §14.8.2 step 4i `EDIT` branch: v1.9 MVP shape mutates `step.step_payload` by replacement (the edited proposal becomes the new step_payload verbatim). This is the simplest semantics; richer mutation (field-level patches, type-aware merging, multi-version-history-tracking) is deferred to a future workflow-mutation-discipline arc. The `edited_proposal_hash` audit field captures the post-mutation payload hash (not the diff). v1.9 implementations MUST replace-not-merge; consumers MUST treat `gate_result.edited_proposal` as authoritative replacement.
+
+**NOTE 6-iii — Retry interaction with HITL gate (load-bearing future-arc commitment).** Per Q2 ratification, C-RT-16 retry is outer of HITL gate at `INFERENCE_STEP`. This means: when an LLM dispatch attempt fails and retry triggers a new attempt, the wrapper re-enters the HITL gate composer at step 1 of §14.8.2 — re-evaluating the gate per the configured placement. **Semantically: the operator is re-asked on each retry.** v1.9 MVP accepts this as the literal Q2 reading; the operator burden is mitigated only by the `retry.*` attempt cap (per C-CP-03 §3.5 jittered backoff). Optimization to "approve-once-cache-for-retry-attempts" is deferred to a future ops-burden-reduction arc; the audit-trail discipline (per-attempt audit entry) is preserved at the cached-approve case by emitting a single audit entry on first approve + retry attempts referencing the cached approve via `audit.cp.cached_from_attempt_number`. v1.9 MVP does not implement the cache; each retry attempt emits its own audit entry.
+
+**NOTE 6-iv — Cross-trust-boundary palette restriction at v1.9 MVP (load-bearing future-arc commitment).** Per C-CP-19 §19.4 + U-CP-48: when `cross_trust_boundary_state ∈ {CROSS_FAMILY_ACTIVE, LOCAL_TERMINAL_ACTIVE, UNTRUSTED_MCP_ACTIVE}`, the response palette restricts (per `PALETTE_RESTRICTION_TABLE`). v1.9 MVP does NOT consult `cross_trust_boundary_state` — composer uses `DEFAULT_FULL_PALETTE` unconditionally per §14.8.2 step 4d. Cross-trust-boundary detection requires the trust-framework primitive (H_T-CP-18, MCP composer arc — separate future composer arc). When that arc lands, §14.8.2 step 4d gains a palette-restriction lookup per the landed cross-trust-boundary-state detector; the audit entry's palette attribute reflects the restricted set rather than the full set.
+
+**Invariants.**
+
+- `RuntimeHITLGateComposer` is async (matches C-RT-08 async-only `run()` posture; matches `StepDispatcher` Protocol async).
+- `RuntimeHITLGateComposer` satisfies `isinstance(dispatcher, StepDispatcher)` via the same `@runtime_checkable` introspection.
+- `hitl.gate.evaluated` span emitted exactly once per matching placement; `hitl.invocation.responded` span emitted exactly once per matching placement IFF response received (not timeout).
+- `hitl.*` and `audit.*` attributes set from the canonical CP-side carrier (no hand-coded attribute strings).
+- The audit entry is composed + written before delegating to the inner dispatcher (audit precedes action — the audit-trail is an authorization record, not a result record).
+- The composer does NOT swallow exceptions from the inner dispatcher: typed errors propagate to the driver's `try/except` per C-CP-25 §25.3.3.4.
+- `RuntimeHITLGateComposer.applicable_placements` is frozenset (immutable post-construction).
+- `VALIDATOR_ESCALATION` foreclosure at v1.9 MVP is by construction (composer body raises typed error at step 3; placement-trigger evaluator returns `no-placement-match`).
+- Cross-trust-boundary palette restriction (NOTE 6-iv) and `_hitl_required` 4-axis composition (step 4c bounded reading) are foreclosed at v1.9 MVP; both deferred to validator-composer + MCP-trust-framework arcs.
+
+**Failure-mode taxonomy.** Per C-RT-14, with three new fail classes added at v1.9 (analog of §14.7 v1.7 RT-FAIL-SUB-AGENT-AUDIT-COMPOSE addition):
+
+| Fail class | Trigger | Behavior |
+|---|---|---|
+| `RT-FAIL-HITL-GATE-REJECTED` (permanent, new at v1.9) | Operator selects `REJECT` at the gate per §14.8.2 step 4i | Composer emits the rejection audit entry per §14.8.2 step 4h (carrying `rejection_reason_hash`) BEFORE raising; annotates `hitl.invocation.responded.response_class = "reject"`; raises typed `HITLGateRejectedError`; driver `try/except` maps to `step-failure: RT-FAIL-HITL-GATE-REJECTED: ...` per C-CP-25 §25.3.3.4. **Retry interaction:** per Q2 + NOTE 6-iii, C-RT-16 retry MAY re-attempt the step — the gate re-evaluates on each attempt. Retry semantics treat REJECT as a fail-class-eligible outcome (retry continues until `retry_policy.max_attempts` or breaker trip). |
+| `RT-FAIL-HITL-GATE-TIMEOUT` (permanent, new at v1.9) | `placement.timeout` elapses without operator response per §14.8.2 step 4f (AskUserQuestionTimeoutError) | Composer emits a partial audit entry with `response=None` + `hitl.gate.evaluated.outcome="timeout"` attribute extension; does NOT emit `hitl.invocation.responded` span (per U-CP-46 AC #11); raises typed `HITLGateTimeoutError`; driver `try/except` maps to `step-failure: RT-FAIL-HITL-GATE-TIMEOUT: ...`. Per-persona-tier timeout-degradation (per `harness_cp.hitl_timeout_degradation`) is consulted at the audit-entry composition for the `audit.policy.*` namespace value derivation. |
+| `RT-FAIL-HITL-GATE-AUDIT-COMPOSE` (permanent, new at v1.9) | One of the §14.8.2 step 4h audit-composition substeps (8b-HITL F2-write, 8c-HITL CP→OD convert + sign, 8d-HITL audit_writer.append) raised a typed error when the gate response path was APPROVE / EDIT / RESPOND. | Composer annotates `hitl.gate.evaluated` span with `hitl.gate.evaluated.outcome="audit-compose-failed"`; raises typed `HITLGateAuditComposeError`; driver `try/except` maps to `step-failure: RT-FAIL-HITL-GATE-AUDIT-COMPOSE: ...`. **Suppressed on REJECT path** — `HITLGateRejectedError` is the primary fault; the rejection audit entry preserves the operator's intent even if downstream composition fails (matches §14.7 v1.7 audit-fact-preservation discipline). |
+
+**Additional fail class added at v1.9 for placement-foreclosure:**
+
+| Fail class | Trigger | Behavior |
+|---|---|---|
+| `RT-FAIL-HITL-PLACEMENT-FORECLOSED-AT-V19` (permanent, new at v1.9; documented expected behavior at MVP) | Workflow declares a placement with `position == VALIDATOR_ESCALATION` at v1.9 per §14.8.2 step 3 | Composer raises typed `HITLPlacementForeclosedAtV19Error`; driver `try/except` maps to `step-failure: RT-FAIL-HITL-PLACEMENT-FORECLOSED-AT-V19: ...`. Documented expected behavior at v1.9; resolved at the validator-composer arc landing (future C-RT-NN). |
+
+**X-AL-2 retirement implications (v1.9 → retirement event prerequisites).**
+
+The C-RT-18 contract specifies the composition seam whose absence was the substitution-site B-condition blocker for H_T-CP-20 per `Phase_7_Meta_Architecture_v1.md` §5.4. At U-RT-60 landing event:
+
+- **H_T-CP-20 RETIRE-READY.** 4-response palette + `hitl.*` / `audit.*` namespaces emitted at production execution path per §14.8.5 + §14.8.6. Condition A: U-CP-37 + U-CP-38 + U-CP-39 + U-CP-40 + U-CP-41 + U-CP-46 + U-RT-25 + U-RT-60 landed. Condition B: namespace emission at production execution path (vs `CLAUDE.md`-substituted). The H_E `AskUserQuestion` surface remains as the bounded delivery transport per the substitution-retirement reading at §14.8.3.
+
+**Cross-axis cascade considerations.** CXA v2.4 § 2.3.7 CP→OD bucket grows from 1 → 2 typed seams per Q3 ratification; CXA v2.5 absorbs the new U-CP-46 → U-OD-00 HITL audit-write seam. No other cross-axis cascade enabled directly by this contract.
+
+**Deferred to implementation discretion.**
+
+- Exact composer class name (suggest `RuntimeHITLGateComposer`).
+- Gate prompt composition shape (`compose_gate_prompt(placement, handoff_context)`): suggest a structured prompt with the proposed action description + persona-tier context + cell binding + cascade policy summary. Implementation discretion at v1.9; future arc may formalize a `GatePromptComposer` Protocol.
+- `compose_hitl_action_id(parent_action_id, placement_position)` construction shape (suggest `f"hitl:{parent_action_id}:{placement_position.value}"` for traceability; mirrors `dispatch:` prefix shape from §14.7.2 step 8b).
+- Whether `AskUserQuestionSurface` is constructed at bootstrap stage 5 or earlier (suggest stage 5 for symmetry with other dispatcher bindings; H_E surface availability assumed throughout bootstrap).
+- Test mock strategy: suggest a `MockAskUserQuestionSurface` fixture that returns a queue of canned `AskUserQuestionResult` values per call; verify composer's audit-entry composition + span emission + step-mutation discipline against the recorded sequence. Pytest-asyncio for async surface.
+- Whether `_hitl_required` predicate evaluation at step 4c reads from `placement.requires_hitl` (v1.9 MVP shape) or composes the full 4-axis predicate per C-CP-19 §19.1 — v1.9 MVP defers; validator-composer arc lands the 4-axis composition.
+
+---
+
 ## §15 Spec-to-plan traceability
 
 Each Track A plan v2 unit cites at least one contract in this spec. Coverage matrix:
@@ -1417,6 +1640,7 @@ Each Track A plan v2 unit cites at least one contract in this spec. Coverage mat
 | U-RT-52 (new at v1.2) | C-RT-15, C-RT-05, C-RT-06 | LLM-dispatch composer; satisfies `harness_cp.workflow_driver.StepDispatcher` Protocol; emits GenAI semconv 1.41.0 spans |
 | U-RT-58 (new at v1.4) | C-RT-16, C-RT-15, C-RT-06 + C-CP-03 §3.5, C-CP-04 §4.2, C-CP-21 §21.2 | Retry/breaker/fallback composer wrapping C-RT-15; owns per-step candidate-iteration loop + per-candidate retry loop; emits `retry.*` 6-attribute namespace on inner per-attempt span + `fallback.exhausted` on outer span on chain exhaustion; reserved registry key `"llm_dispatch"`; replaces bare C-RT-15 dispatcher at `ctx.llm_dispatcher` (preserving the `StepDispatcher` Protocol seam) |
 | U-RT-59 (new at v1.6) | C-RT-17, C-RT-04, C-RT-06, C-RT-08 + C-CP-10, C-CP-12, C-CP-13, C-CP-14 §14.1/§14.2 (narrow-scope), C-CP-25 §25.2/§25.3.3.4 | Sub-agent dispatch composer + `StepKindDispatcherRegistry` driver routing layer + `ChildWorkflowRunner` in-process recursive invocation primitive; emits `subagent.*` 7-attribute namespace (full) + `topology.*` 2-attribute subset (`pattern` + `workload_class`); composes `HandoffContext` per C-CP-13 §13.1; invokes `ctx.handoff_registry.dispatch` for gate descent per C-CP-12 + `ctx.topology_dispatcher.dispatch` + `is_admissible` per C-CP-10 §10.3; composes audit entry via existing `compose_dispatch_audit`; refactors driver to dispatch via `ctx.step_dispatchers.lookup(step.kind)` (preserves `StepDispatcher` Protocol + C-CP-25 §25.3.3.4 "step body opaque to driver" invariant); fan-out + cache warm-up + cross-family-fallback-at-fan-out out of scope at v1.6 (parent-topology-expansion arc) |
+| U-RT-60 (new at v1.9) | C-RT-18, C-RT-04, C-RT-06, C-RT-08 + C-CP-16 §16.1–§16.4, C-CP-17 §17.1–§17.3, C-CP-18 §18.1–§18.5, C-CP-19 §19.1 (bounded), C-CP-20 §20.4/§20.5/§20.6, C-CP-25 §25.2/§25.3.3.4 + CXA v2.5 §2.3.7 | HITL gate composer + `RuntimeHITLGateComposer` wrapper class + `AskUserQuestionSurface` H_E delivery Protocol; emits `hitl.*` 4-attribute namespace per C-CP-20 §20.5 (`hitl.gate.evaluated` + `hitl.invocation.responded` spans) + `audit.*` 7-attribute namespace per C-CP-20 §20.4 (per-persona-tier monotonic emission); composes `HandoffContext` per §14.8.2 step 4a + reuses 4-substep audit-write chain per §14.7.2 step 8 pattern (HITL-canonical `CPAuditLedgerEntry` per CP spec v1.9 §13.5.1 NOTE 5; shared `cp_audit_to_od_audit` converter; CXA v2.5 §2.3.7 CP→OD bucket grows 1→2 typed seams adding U-CP-46 → U-OD-00); wrap-asymmetry per step_kind (INFERENCE_STEP retry-outer-of-HITL; SUB_AGENT_DISPATCH HITL-direct; TOOL_STEP deferred to AS-axis composer arc); PRE_ACTION + SUB_AGENT_BOUNDARY only at v1.9 MVP (VALIDATOR_ESCALATION foreclosed per Q5 ratification — validator-composer arc lands trigger source); 4 path-(ii) NOTEs deferred at §14.8.7 (multi-placement same step + edited_proposal mutation + retry-of-gate-eval semantics + cross-trust-boundary palette restriction) |
 | (cross-cutting) | C-RT-14 | Every U-RT-NN that surfaces a failure emits via the runtime-local fail-class taxonomy |
 
 Every U-RT-NN unit traces to ≥1 spec contract. ✓
