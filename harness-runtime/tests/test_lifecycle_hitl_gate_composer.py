@@ -35,14 +35,12 @@ Deferred to follow-on commits (clearly bounded scope at v1.11 MVP landing):
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 import pytest
 from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.hitl_response_palette import HITLResponse
-from harness_cp.workflow_driver import StepDispatcher
 from harness_core.identity import StepID
 from harness_cp.workflow_driver_types import (
     StepExecutionContext,
@@ -65,6 +63,7 @@ from harness_runtime.lifecycle.hitl_gate_composer import (
     RuntimeHITLGateComposer,
     compose_hitl_action_id,
 )
+from harness_runtime.lifecycle.sync_dispatcher_facade import AsyncStepDispatcher
 
 
 # ---------------------------------------------------------------------------
@@ -196,31 +195,31 @@ def tracer_provider() -> tuple[TracerProvider, InMemorySpanExporter]:
 
 def _make_composer(
     *,
-    inner: _MockInnerDispatcher,
+    inner: Any,
     surface: _MockAskUserQuestionSurface,
     tracer_provider: TracerProvider,
     applicable_placements: frozenset[HITLPlacementKind] = frozenset(
         {HITLPlacementKind.PRE_ACTION}
     ),
-    loop: asyncio.AbstractEventLoop | None = None,
+    ledger_writer: Any | None = None,
+    audit_writer: Any | None = None,
 ) -> RuntimeHITLGateComposer:
-    if loop is None:
-        # For sync-tests that don't actually invoke the surface (e.g.,
-        # placement filter / VALIDATOR foreclosure paths), a new-event-loop
-        # is fine. For tests that invoke the surface, the caller passes
-        # the active loop.
-        loop = asyncio.new_event_loop()
+    """Build composer fixture per U-RT-60 wrap-asymmetry fork (c) ratification.
+
+    Composer is async per spec §14.8.1 item 1; no `loop` /
+    `result_timeout_seconds` ceremony needed (those fields are dropped at
+    the fork APPLIED landing). The registry-boundary sync bridging lives at
+    `SyncDispatcherFacade` (asserted at AC #13 stage-5 post-condition).
+    """
     return RuntimeHITLGateComposer(
         inner=inner,
         applicable_placements=applicable_placements,
         ask_user_question_surface=cast(AskUserQuestionSurface, surface),
-        ledger_writer=cast(Any, _MockLedgerWriter()),
-        audit_writer=cast(Any, _MockAuditWriter()),
+        ledger_writer=cast(Any, ledger_writer if ledger_writer is not None else _MockLedgerWriter()),
+        audit_writer=cast(Any, audit_writer if audit_writer is not None else _MockAuditWriter()),
         tracer_provider=tracer_provider,
         audit_signing_key_id="harness-runtime-test",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
-        loop=loop,
-        result_timeout_seconds=5.0,
     )
 
 
@@ -229,17 +228,24 @@ def _make_composer(
 # ---------------------------------------------------------------------------
 
 
-def test_runtime_hitl_gate_composer_satisfies_step_dispatcher_protocol(
+def test_runtime_hitl_gate_composer_satisfies_async_step_dispatcher_protocol(
     tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
 ) -> None:
-    """AC #1: `isinstance(composer, StepDispatcher)` returns True."""
+    """AC #1 (post-U-RT-60 wrap-asymmetry fork APPLIED): `isinstance(composer,
+    AsyncStepDispatcher)` returns True.
+
+    Per the fork RATIFIED Q1=(c) wrap chain, the composer is async per spec
+    §14.8.1 item 1; the sync CP `StepDispatcher` Protocol satisfaction now
+    belongs to `SyncDispatcherFacade(composer)` at the registry boundary
+    (asserted at AC #13 stage-5 post-condition test).
+    """
     provider, _ = tracer_provider
     composer = _make_composer(
         inner=_MockInnerDispatcher(),
         surface=_MockAskUserQuestionSurface([]),
         tracer_provider=provider,
     )
-    assert isinstance(composer, StepDispatcher)
+    assert isinstance(composer, AsyncStepDispatcher)
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +264,8 @@ def test_ask_user_question_surface_protocol_is_runtime_checkable() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_dispatch_with_empty_hitl_placements_delegates_to_inner(
+@pytest.mark.asyncio
+async def test_dispatch_with_empty_hitl_placements_delegates_to_inner(
     tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
 ) -> None:
     """AC #3: empty `step.hitl_placements` → composer delegates directly."""
@@ -272,7 +279,7 @@ def test_dispatch_with_empty_hitl_placements_delegates_to_inner(
     step = _make_step(placements=())
     ctx = _make_step_context()
 
-    result = composer.dispatch(cast(Any, object()), step, step_context=ctx)
+    result = await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
     assert result == {"inner_dispatched": True}
     assert len(inner.calls) == 1
@@ -280,7 +287,8 @@ def test_dispatch_with_empty_hitl_placements_delegates_to_inner(
     assert exporter.get_finished_spans() == ()
 
 
-def test_dispatch_with_non_matching_placements_delegates_to_inner(
+@pytest.mark.asyncio
+async def test_dispatch_with_non_matching_placements_delegates_to_inner(
     tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
 ) -> None:
     """AC #3: placements present but none matching `applicable_placements` → delegate."""
@@ -297,7 +305,7 @@ def test_dispatch_with_non_matching_placements_delegates_to_inner(
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    result = composer.dispatch(cast(Any, object()), step, step_context=ctx)
+    result = await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
     assert result == {"inner_dispatched": True}
     assert len(inner.calls) == 1
@@ -309,7 +317,8 @@ def test_dispatch_with_non_matching_placements_delegates_to_inner(
 # ---------------------------------------------------------------------------
 
 
-def test_dispatch_with_validator_escalation_placement_raises_foreclosed(
+@pytest.mark.asyncio
+async def test_dispatch_with_validator_escalation_placement_raises_foreclosed(
     tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
 ) -> None:
     """AC #4: VALIDATOR_ESCALATION placement → raises HITLPlacementForeclosedAtV19Error."""
@@ -326,7 +335,7 @@ def test_dispatch_with_validator_escalation_placement_raises_foreclosed(
     ctx = _make_step_context()
 
     with pytest.raises(HITLPlacementForeclosedAtV19Error, match="VALIDATOR_ESCALATION"):
-        composer.dispatch(cast(Any, object()), step, step_context=ctx)
+        await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
     # No inner delegation; no spans (foreclosure raises before span open)
     assert inner.calls == []
@@ -336,32 +345,6 @@ def test_dispatch_with_validator_escalation_placement_raises_foreclosed(
 # ---------------------------------------------------------------------------
 # AC #7 + AC #8 — canonical 4-span shape (response received path)
 # ---------------------------------------------------------------------------
-
-
-def _drive_composer_on_event_loop(  # pyright: ignore[reportUnusedFunction]
-    composer: RuntimeHITLGateComposer,
-    step: WorkflowStep,
-    ctx: StepExecutionContext,
-) -> Mapping[str, Any]:
-    """Drive composer.dispatch() from a thread while the captured loop runs.
-
-    Mirrors the production pattern: composer.dispatch is sync; it bridges to
-    the captured loop via run_coroutine_threadsafe. Tests must run the loop
-    while dispatch executes off-thread.
-    """
-    result_holder: dict[str, Any] = {}
-
-    def _worker() -> None:
-        result_holder["value"] = composer.dispatch(
-            cast(Any, object()), step, step_context=ctx
-        )
-
-    async def _run() -> Mapping[str, Any]:
-        await asyncio.to_thread(_worker)
-        return cast(Mapping[str, Any], result_holder["value"])
-
-    loop = composer.loop
-    return loop.run_until_complete(_run())
 
 
 @pytest.mark.asyncio
@@ -386,14 +369,12 @@ async def test_dispatch_with_matching_placement_opens_3_canonical_spans(
         inner=inner,
         surface=surface,
         tracer_provider=provider,
-        loop=asyncio.get_event_loop(),
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    result = await asyncio.to_thread(
-        composer.dispatch, cast(Any, object()), step, step_context=ctx
+    result = await composer.dispatch(cast(Any, object()), step, step_context=ctx
     )
 
     assert result == {"inner_dispatched": True}
@@ -428,14 +409,12 @@ async def test_hitl_gate_evaluated_span_carries_canonical_3_attributes(
         inner=inner,
         surface=surface,
         tracer_provider=provider,
-        loop=asyncio.get_event_loop(),
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    await asyncio.to_thread(
-        composer.dispatch, cast(Any, object()), step, step_context=ctx
+    await composer.dispatch(cast(Any, object()), step, step_context=ctx
     )
 
     gate_spans = [
@@ -473,14 +452,12 @@ async def test_hitl_response_class_attribute_carries_operator_response(
         inner=inner,
         surface=surface,
         tracer_provider=provider,
-        loop=asyncio.get_event_loop(),
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    await asyncio.to_thread(
-        composer.dispatch, cast(Any, object()), step, step_context=ctx
+    await composer.dispatch(cast(Any, object()), step, step_context=ctx
     )
 
     resp_spans = [
@@ -574,14 +551,12 @@ async def test_dispatch_composes_real_handoff_context_for_size_attribute(
         inner=inner,
         surface=surface,
         tracer_provider=provider,
-        loop=asyncio.get_event_loop(),
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    await asyncio.to_thread(
-        composer.dispatch, cast(Any, object()), step, step_context=ctx
+    await composer.dispatch(cast(Any, object()), step, step_context=ctx
     )
 
     opened = [s for s in exporter.get_finished_spans() if s.name == "hitl.invocation.opened"]
@@ -595,7 +570,8 @@ async def test_dispatch_composes_real_handoff_context_for_size_attribute(
     assert size > 0
 
 
-def test_dispatch_skips_gate_when_requires_hitl_is_false(
+@pytest.mark.asyncio
+async def test_dispatch_skips_gate_when_requires_hitl_is_false(
     tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
 ) -> None:
     """AC #5: `_hitl_required == False` → step 4j skip (no spans, delegate to inner).
@@ -632,7 +608,7 @@ def test_dispatch_skips_gate_when_requires_hitl_is_false(
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    result = composer.dispatch(cast(Any, object()), step, step_context=ctx)
+    result = await composer.dispatch(cast(Any, object()), step, step_context=ctx)
     assert result == {"inner_dispatched": True}
     assert len(inner.calls) == 1
 
@@ -667,14 +643,12 @@ async def test_surface_receives_full_4_response_palette(
         inner=inner,
         surface=surface,
         tracer_provider=provider,
-        loop=asyncio.get_event_loop(),
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    await asyncio.to_thread(
-        composer.dispatch, cast(Any, object()), step, step_context=ctx
+    await composer.dispatch(cast(Any, object()), step, step_context=ctx
     )
 
     assert len(surface.calls) == 1
@@ -710,15 +684,12 @@ async def test_4_substep_audit_chain_writes_one_cp_one_od_entry_per_placement(
         tracer_provider=provider,
         audit_signing_key_id="harness-runtime-test",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
-        loop=asyncio.get_event_loop(),
-        result_timeout_seconds=5.0,
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    await asyncio.to_thread(
-        composer.dispatch, cast(Any, object()), step, step_context=ctx
+    await composer.dispatch(cast(Any, object()), step, step_context=ctx
     )
 
     # 8b: one F2 entry appended with action_id matching hitl:<parent>:<position>
@@ -758,14 +729,12 @@ async def test_approve_response_delegates_to_inner(
     )
     composer = _make_composer(
         inner=inner, surface=surface, tracer_provider=provider,
-        loop=asyncio.get_event_loop(),
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    result = await asyncio.to_thread(
-        composer.dispatch, cast(Any, object()), step, step_context=ctx
+    result = await composer.dispatch(cast(Any, object()), step, step_context=ctx
     )
 
     assert result == {"inner_dispatched": True}
@@ -799,15 +768,12 @@ async def test_edit_response_records_edited_proposal_hash_in_audit(
         tracer_provider=provider,
         audit_signing_key_id="harness-runtime-test",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
-        loop=asyncio.get_event_loop(),
-        result_timeout_seconds=5.0,
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    await asyncio.to_thread(
-        composer.dispatch, cast(Any, object()), step, step_context=ctx
+    await composer.dispatch(cast(Any, object()), step, step_context=ctx
     )
 
     # Inner still called (EDIT proceeds to step 5)
@@ -846,16 +812,13 @@ async def test_reject_response_raises_typed_error(
         tracer_provider=provider,
         audit_signing_key_id="harness-runtime-test",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
-        loop=asyncio.get_event_loop(),
-        result_timeout_seconds=5.0,
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
     with pytest.raises(HITLGateRejectedError, match="rejected"):
-        await asyncio.to_thread(
-            composer.dispatch, cast(Any, object()), step, step_context=ctx
+        await composer.dispatch(cast(Any, object()), step, step_context=ctx
         )
 
     # Inner NOT called on REJECT path
@@ -895,8 +858,6 @@ async def test_respond_response_does_not_inject_payload(
         tracer_provider=provider,
         audit_signing_key_id="harness-runtime-test",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
-        loop=asyncio.get_event_loop(),
-        result_timeout_seconds=5.0,
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     original_payload = {"prompt": "original"}
@@ -917,8 +878,7 @@ async def test_respond_response_does_not_inject_payload(
     step = cast(WorkflowStep, _StepAdapter(inner_step, (placement,)))
     ctx = _make_step_context()
 
-    await asyncio.to_thread(
-        composer.dispatch, cast(Any, object()), step, step_context=ctx
+    await composer.dispatch(cast(Any, object()), step, step_context=ctx
     )
 
     # Inner WAS called (RESPOND proceeds to step 5 with step unchanged)
@@ -966,8 +926,6 @@ async def test_two_pre_action_placements_emit_per_placement_canonical_4_spans(
         tracer_provider=provider,
         audit_signing_key_id="harness-runtime-test",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
-        loop=asyncio.get_event_loop(),
-        result_timeout_seconds=5.0,
     )
     # Two PRE_ACTION placements on a single step (NOTE 6-i exercise-able case)
     placement_a = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
@@ -975,8 +933,7 @@ async def test_two_pre_action_placements_emit_per_placement_canonical_4_spans(
     step = _make_step(placements=(placement_a, placement_b))
     ctx = _make_step_context()
 
-    await asyncio.to_thread(
-        composer.dispatch, cast(Any, object()), step, step_context=ctx
+    await composer.dispatch(cast(Any, object()), step, step_context=ctx
     )
 
     # Surface called twice (once per placement)

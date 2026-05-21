@@ -26,10 +26,25 @@ HITL-canonical at-origin shape (per CP spec v1.9 §13.5.1 NOTE 5): the
 (unlike sub-agent dispatch's `response="approve"` convention). Shared
 `cp_audit_to_od_audit` converter at `harness-cxa/` per Q3 ratification.
 
-**Sync `dispatch` per Protocol.** The CP `StepDispatcher` Protocol declares
-sync; the composer satisfies that. `AskUserQuestionSurface.ask` is async and
-is called from sync `dispatch` via `asyncio.run_coroutine_threadsafe` against
-a captured loop (same pattern as `SyncDispatcherFacade`).
+**Async `dispatch` per spec §14.8.1 item 1.** Per the U-RT-60 wrap-asymmetry
+sync/async mismatch Class 1 fork (RATIFIED at HEAD `0a1ca94`; Q1=(c) async
+HITL + SyncDispatcherFacade for registry), the composer's `dispatch` is
+`async def`. Spec §14.8.1 item 1 line 1539 declares verbatim:
+``Async dispatch(binding, step, *, step_context) -> StepOutput``. The
+wrap chain at §14.8.1 row 1 (`c_rt_16_compose(hitl(c_rt_15))`) requires
+the composer to be async because C-RT-16's wrapper strictly awaits its
+inner (`retry_breaker_fallback.py:393` line `await self.inner.dispatch(...)`).
+
+At the registry boundary the composer is wrapped by `SyncDispatcherFacade`
+(U-RT-59 Path B precedent reuse at one site) so the sync CP `StepDispatcher`
+Protocol consumed by the workflow driver continues to be satisfied.
+
+**Inner duck-typed sync/async tolerance.** The composer's `inner` may be
+*async* (C-RT-15 bare for the INFERENCE_STEP row at the §14.8.1 table) or
+*sync* (C-RT-17 sub-agent dispatcher for the SUB_AGENT_DISPATCH row).
+`_dispatch_inner` calls `self.inner.dispatch(...)` and awaits the result
+iff `inspect.isawaitable(result)` is True. Defensive vs raw coroutine
+check — tolerates any awaitable (Future, custom `__await__`).
 
 **v1.11 amendment per c_rt_18 span-attr-carrier-drift fork (RATIFIED at
 HEAD 95a9436).** Composer emits canonical 4-span shape with carrier-canonical
@@ -90,8 +105,8 @@ Audit-compose failure: composer annotates `hitl.gate.evaluated` via
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
+import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
@@ -377,17 +392,24 @@ class RuntimeHITLGateComposer:
     by C-RT-16) for PRE_ACTION + to `HarnessContext.sub_agent_dispatcher`
     for SUB_AGENT_BOUNDARY.
 
-    Constructor args mirror sub_agent_dispatch + add the AskUserQuestionSurface
-    + the captured event loop + the result_timeout for async-to-sync bridging.
+    Constructor args mirror sub_agent_dispatch + add the AskUserQuestionSurface.
+    Composer body is **async** per spec §14.8.1 item 1; bridges to the sync
+    CP `StepDispatcher` Protocol via `SyncDispatcherFacade` at the registry
+    boundary (U-RT-59 Path B precedent reuse).
 
-    The `inner` field is the inner `StepDispatcher` whose dispatch is gated.
+    The `inner` field is the inner dispatcher whose dispatch is gated. May be
+    sync (e.g., C-RT-17 sub-agent dispatcher) or async (e.g., C-RT-15 bare
+    LLM dispatcher); `_dispatch_inner` duck-types via `inspect.isawaitable`.
     The composer is **single-instance-per-step_kind** at v1.11 MVP:
     `applicable_placements={PRE_ACTION}` or `={SUB_AGENT_BOUNDARY}`.
     """
 
     inner: Any
-    """Inner `StepDispatcher` (sync) wrapped by this composer. Typed `Any` per
-    the C-RT-04 Protocol-vs-concrete-narrowing pattern at composition site."""
+    """Inner dispatcher wrapped by this composer. May be sync or async; the
+    composer awaits the result iff `inspect.isawaitable(result)`. Typed `Any`
+    per the C-RT-04 Protocol-vs-concrete-narrowing pattern at composition
+    site (per the U-RT-60 wrap-asymmetry fork Q3 ratification — INFERENCE_STEP
+    row inner is async C-RT-15; SUB_AGENT_DISPATCH row inner is sync C-RT-17)."""
 
     applicable_placements: frozenset[HITLPlacementKind]
     """Which `HITLPlacementKind` values this composer instance acts on. Per
@@ -413,18 +435,6 @@ class RuntimeHITLGateComposer:
     audit_signing_algorithm: SignatureAlgorithm
     """Signing algorithm passed to `cp_audit_to_od_audit` at substep 8c-HITL."""
 
-    loop: asyncio.AbstractEventLoop
-    """Captured event loop for bridging async `surface.ask(...)` from sync
-    `dispatch`. MUST be the outer loop hosting the eventual
-    `asyncio.to_thread(execute_workflow, ...)` per the
-    `SyncDispatcherFacade` precedent."""
-
-    result_timeout_seconds: float
-    """Upper-bound on the worker-thread blocking wait per surface invocation.
-    Used as the `future.result(timeout=...)` budget when bridging
-    `surface.ask(...)` from sync context. Operator-tunable per the
-    `step_dispatch_timeout_seconds` config split Class 3 drift item 7."""
-
     # Carrier-canonical attribute name constants (per spec §14.8.5 producer-
     # side carrier import discipline). Frozen at construction so a typo in
     # the spec carrier surfaces at dataclass instantiation, not first dispatch.
@@ -445,26 +455,25 @@ class RuntimeHITLGateComposer:
             tuple(a.attribute_name for a in AUDIT_NAMESPACE_SCHEMA),
         )
 
-    def _ask_via_surface(
+    async def _dispatch_inner(
         self,
-        prompt: str,
-        options: list[HITLResponse],
-        timeout: float | None,
-    ) -> AskUserQuestionResult:
-        """Bridge async `surface.ask(...)` to sync via run_coroutine_threadsafe.
+        binding: Any,
+        step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
+    ) -> Mapping[str, Any]:
+        """Invoke `self.inner.dispatch(...)`; await if awaitable.
 
-        Same pattern as `SyncDispatcherFacade.dispatch` — schedules the
-        coroutine on the captured loop + blocks on `future.result(...)`.
-        On `AskUserQuestionTimeoutError`, the surface raises and the
-        exception propagates verbatim through `future.result(...)` (no
-        wrapping). The composer's caller (step 4f) handles the typed
-        timeout error.
+        Per the U-RT-60 wrap-asymmetry fork Q3 ratification, the composer's
+        inner may be sync (C-RT-17 sub-agent dispatcher at SUB_AGENT_BOUNDARY)
+        or async (C-RT-15 bare LLM dispatcher at PRE_ACTION). `isawaitable`
+        is defensive vs `iscoroutine` — tolerates Future / custom `__await__`
+        shapes in addition to bare coroutines.
         """
-        coro = self.ask_user_question_surface.ask(
-            prompt=prompt, options=options, timeout=timeout
-        )
-        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
-        return future.result(timeout=self.result_timeout_seconds)
+        result = self.inner.dispatch(binding, step, step_context=step_context)
+        if inspect.isawaitable(result):
+            result = await result
+        return cast(Mapping[str, Any], result)
 
     def _compose_and_persist_audit(
         self,
@@ -593,14 +602,14 @@ class RuntimeHITLGateComposer:
 
         return cp_entry, write_result
 
-    def dispatch(
+    async def dispatch(
         self,
         binding: Any,
         step: WorkflowStep,
         *,
         step_context: StepExecutionContext,
     ) -> Mapping[str, Any]:
-        """Sync dispatch composer body per spec §14.8.2 (v1.11 canonical 4-span).
+        """Async dispatch composer body per spec §14.8.2 (v1.11 canonical 4-span).
 
         See module docstring for the 9-step body discipline.
 
@@ -622,12 +631,12 @@ class RuntimeHITLGateComposer:
             step, "hitl_placements", ()
         )
         if not placements:
-            return self.inner.dispatch(binding, step, step_context=step_context)
+            return await self._dispatch_inner(binding, step, step_context=step_context)
 
         # --- Step 2: Filter by composer's applicable set --------------------
         matching = [p for p in placements if p.position in self.applicable_placements]
         if not matching:
-            return self.inner.dispatch(binding, step, step_context=step_context)
+            return await self._dispatch_inner(binding, step, step_context=step_context)
 
         # --- Step 3: Foreclose VALIDATOR_ESCALATION at v1.11 MVP -----------
         for p in matching:
@@ -735,7 +744,7 @@ class RuntimeHITLGateComposer:
                     )
                     options: list[HITLResponse] = sorted(palette)
                     try:
-                        gate_result = self._ask_via_surface(
+                        gate_result = await self.ask_user_question_surface.ask(
                             prompt=f"HITL gate at {placement.position.value}",
                             options=options,
                             timeout=timeout_seconds,
@@ -849,7 +858,7 @@ class RuntimeHITLGateComposer:
                         pass
 
         # --- Step 5: Delegate to inner dispatcher --------------------------
-        return self.inner.dispatch(binding, step, step_context=step_context)
+        return await self._dispatch_inner(binding, step, step_context=step_context)
 
 
 class _SentinelMatrixCell:
