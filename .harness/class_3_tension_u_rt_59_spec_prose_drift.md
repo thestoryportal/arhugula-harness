@@ -1,4 +1,4 @@
-# Class 3 Tension: U-RT-59 spec-prose-plan-body drift (5 items rolled into one record)
+# Class 3 Tension: U-RT-59 spec-prose-plan-body drift (7 items rolled into one record)
 
 **Class:** 3 — informational; non-blocking.
 **Filed:** 2026-05-20, Phase 7 sub-phase 7b, U-RT-59 landing arc.
@@ -9,6 +9,8 @@
 ## Context
 
 U-RT-59 implementation surfaced 5 small drifts between `Spec_Harness_Runtime_v1.md` v1.6 §14.7 prose and the actual landed library code surfaces. Each is mechanical (no decision required); landed against the real names per `[[spec-prose-plan-body-drift-pattern]]`. Rolled into one Class 3 record so the next spec revision pass can absorb all five together.
+
+**2026-05-20 update (U-RT-59 async/sync fork Path B wiring arc):** items 6 + 7 added per the Path B wiring landing (`d64d8cf`). Item 6 documents the `SyncDispatcherFacade` adapter at the INFERENCE_STEP binding site (transport-adapter detail invisible at the §14.7.7 contract level but worth documenting in a new subsection). Item 7 records the per-step-vs-whole-workflow timeout-budget conflation taken at v1.7 wiring to avoid spec-touching configuration change.
 
 ---
 
@@ -95,6 +97,45 @@ class ChildWorkflowRunner(Protocol):
 
 ---
 
+## §6 `SyncDispatcherFacade` adapter at INFERENCE_STEP binding site (added 2026-05-20)
+
+**Spec prose:** §14.7.7 line 1272 declares the binding as `step_dispatchers = StepKindDispatcherRegistry(dispatchers={StepKind.INFERENCE_STEP: ctx.llm_dispatcher, StepKind.SUB_AGENT_DISPATCH: ctx.sub_agent_dispatcher})` — i.e., `ctx.llm_dispatcher` bound directly. Line 1278 says "Integration with C-RT-15 + C-RT-16 (inner dispatchers). No protocol change to either. The C-RT-16 wrapper is reused verbatim as the `INFERENCE_STEP` dispatcher binding in the registry."
+
+**Real code (v1.7 wiring, commit `d64d8cf`):** `harness-runtime/src/harness_runtime/bootstrap/stage_5_loop_init.py:148-167` wraps `ctx.llm_dispatcher` through `SyncDispatcherFacade` via `materialize_sync_dispatcher_facade(result_timeout_seconds=config.drain_timeout_seconds)` and binds `INFERENCE_STEP → facade(llm_dispatcher)` (not `INFERENCE_STEP → ctx.llm_dispatcher`).
+
+**Rationale:** The async `RetryBreakerFallbackDispatcher.dispatch` cannot be bound directly to the sync `StepDispatcher` Protocol the driver consumes (per `[[class_1_tension_u_rt_59_async_sync_step_dispatcher]]` — provider clients are loop-bound via httpx `ConnectionPool`'s anyio.Semaphore; cross-loop reuse via naive `asyncio.run` inside the to_thread worker raises RuntimeError). The facade is a transport adapter that captures the api.py outer loop at construction time and schedules coroutines back via `asyncio.run_coroutine_threadsafe(...).result(timeout=...)` from the worker thread. The C-RT-16 wrapper IS reused verbatim — the facade does not modify or wrap any policy / behavior surface; it is purely a sync→async transport bridge.
+
+**Spec revision owed (v1.7+):** Add a new §14.7.8 subsection "Async/sync transport seam at INFERENCE_STEP binding" documenting:
+- The async/sync mismatch between `RetryBreakerFallbackDispatcher.dispatch` (async per §14.6) and the CP-side `StepDispatcher` Protocol (sync per `harness_cp/workflow_driver.py:175`).
+- The `SyncDispatcherFacade` adapter pattern (loop capture at stage 5 + `asyncio.run_coroutine_threadsafe` from worker thread + bounded `future.result(timeout=...)`).
+- The loop-capture-timing invariant (must construct on the loop that hosts the eventual `asyncio.to_thread`).
+- The cancellation-interaction invariant (bounded result_timeout_seconds prevents worker-thread leak when drain timeout fires).
+- The framing: the facade is a transport-adapter detail invisible at the C-RT-15/C-RT-16 contract level (those Protocols and behaviors are unchanged). The facade is documented at §14.7.8 (composition-seam discipline) rather than as a contract amendment to §14.6 / §14.7.
+
+Discovery + wiring commits: `84edc30` (facade module + 6 D1-D6 discovery tests) + `d64d8cf` (stage 5 wiring + D7-D8 integration tests + AC #11 bootstrap-end-to-end verification).
+
+---
+
+## §7 Per-step-vs-whole-workflow timeout-budget conflation at v1.7 wiring (added 2026-05-20)
+
+**Spec prose:** §11 declares `drain_timeout_seconds` as the **whole-workflow drain shutdown** bound. The spec does NOT (at v1.6) declare a per-step dispatch timeout budget separate from drain timeout.
+
+**Real code (v1.7 wiring, commit `d64d8cf`):** `stage_5_loop_init.py:159-167` constructs the facade with `result_timeout_seconds=config.drain_timeout_seconds`. This **conflates** the per-step worker-thread blocking bound (`SyncDispatcherFacade.dispatch`'s `future.result(timeout=...)`) with the whole-workflow drain bound. A single hung dispatch can therefore consume the entire drain-timeout budget before the worker unblocks.
+
+**Rationale for v1.7 conflation:** Avoiding a spec-touching `RuntimeConfig` addition at this arc keeps the wiring landing zero-spec-edit. The facade's `result_timeout_seconds` is constructor-supplied, so a future config split is mechanical (add `step_dispatch_timeout_seconds: float = <default>` to `RuntimeConfig` at C-RT-03, thread to stage 5 facade construction).
+
+**Spec revision owed (v1.7+):** Add `step_dispatch_timeout_seconds: float = <default>` to the C-RT-03 `RuntimeConfig` schema with documented semantics:
+- Default: smaller than `drain_timeout_seconds` (suggested 30s vs drain's 60s; operator-tunable).
+- Bounds the per-step `SyncDispatcherFacade.dispatch` worker-thread wait for the inner coroutine to complete.
+- On expiry: raises `TimeoutError` which the driver maps via the existing C-CP-25 §25.3.3.4 typed try/except path.
+- Independent of `drain_timeout_seconds`: a single step's hang cannot consume the whole drain budget.
+
+Update stage 5 wiring to thread `config.step_dispatch_timeout_seconds` (not `config.drain_timeout_seconds`) into `materialize_sync_dispatcher_facade(...)`.
+
+Companion retirement-event reference: `.harness/phase-7d-retirement-events-batch-5.md` §0 documents the v1.7 wiring posture; the conflation is bounded and reversible.
+
+---
+
 ## Cross-fork pairing
 
 - `[[class_1_tension_u_rt_59_async_sync_step_dispatcher]]` — pairs with §5 above. The Class 1 fork covers the **production INFERENCE_STEP binding** async/sync mismatch (load-bearing, partial-land surfaced); this Class 3 §5 covers the **composer-side prose drift** (resolved by ratification — land sync).
@@ -107,6 +148,6 @@ class ChildWorkflowRunner(Protocol):
 | Field | Value |
 |---|---|
 | Filed by | sub-agent dispatch composer landing arc (U-RT-59 implementation session) |
-| Spec revision target | `Spec_Harness_Runtime_v1.md` v1.7 (next runtime spec revision pass) — absorb all 5 items |
+| Spec revision target | `Spec_Harness_Runtime_v1.md` v1.7 (next runtime spec revision pass) — absorb all 7 items |
 | Resolution mode | In-CLI spec edit at next revision per `[[design-substrate-divergence]]` (workspace design-substrate/ is canonical; spec edits in-CLI) |
 | Re-evaluation trigger | Next runtime spec revision pass OR when a downstream consumer needs to cite §14.7 byte-exact |

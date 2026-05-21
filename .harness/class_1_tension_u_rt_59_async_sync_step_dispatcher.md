@@ -2,7 +2,7 @@
 
 **Class:** 1 — halt-route-split (partial-landing per `[[halt-route-split-AC-pattern]]`).
 **Filed:** 2026-05-20, Phase 7 sub-phase 7b, U-RT-59 landing arc.
-**Status:** OPEN — partial-landing absorbed at U-RT-59 (INFERENCE_STEP binding STRUCK from plan AC #11); root-cause resolution owed.
+**Status:** **RESOLVED 2026-05-20** at Path B wiring landing `d64d8cf` (follows discovery landing `84edc30`). INFERENCE_STEP routing-registry binding restored at bootstrap stage 5 via `SyncDispatcherFacade(ctx.llm_dispatcher)` — plan v2.5 L9-ter AC #11 fully met. **Spec text unchanged — already correct at v1.6 §14.7.7;** the facade is a transport-adapter detail invisible at the contract level. Facade adapter documentation owed to Class 3 drift batch item 6 (next runtime spec revision pass to v1.7+). Wiring-arc criterion B re-affirmation event filed at `.harness/phase-7d-retirement-events-batch-5.md` (NO new retirements; CP-1 / CP-3 / CP-4 / CP-5 strict-X-AL-2 re-affirmed for end-to-end execution path).
 
 ---
 
@@ -101,3 +101,63 @@ The literal fork-text Path B reading (`asyncio.run(...)` inside `to_thread`) is 
 6. Status flip OPEN → RESOLVED at the wiring arc's commit landing.
 
 **D2 framing caveat (advisor cross-check):** D2 uses `httpx.MockTransport` which is loop-agnostic — it does NOT empirically prove `AsyncHTTPTransport.ConnectionPool` survives the facade's pattern, only that `run_coroutine_threadsafe` works through *some* httpx surface. The production pathology proof is D1's pending-future test (proxy for httpx's loop-bound anyio.Semaphore). Real-SDK integration test (above) is the wiring-arc empirical proof.
+
+---
+
+## Resolution landing (2026-05-20, commit `d64d8cf`)
+
+**Path B wiring** landed on top of discovery commit `84edc30`. Operator ratified discovery-first → wiring posture at this session; six-item wiring arc collapsed into a single landing (integration tests + cancellation test + stage 5 wiring + retirement event + Class 3 drift items + fork flip + memory updates).
+
+### Stage 5 wiring (production change)
+
+`harness-runtime/src/harness_runtime/bootstrap/stage_5_loop_init.py:148-167` now:
+
+```python
+inference_step_dispatcher = materialize_sync_dispatcher_facade(
+    cast(Any, ctx.llm_dispatcher),
+    result_timeout_seconds=config.drain_timeout_seconds,
+)
+
+ctx.step_dispatchers = StepKindDispatcherRegistry(
+    dispatchers={
+        StepKind.INFERENCE_STEP: inference_step_dispatcher,
+        StepKind.SUB_AGENT_DISPATCH: sub_agent_dispatcher,
+    },
+)
+```
+
+Loop-capture timing satisfied: stage 5 is `async def execute(...)` awaited from `await run_bootstrap(...)` at api.py:349 — the running loop here IS the loop that subsequently hosts `asyncio.to_thread(execute_workflow, ...)` per api.py:399. `materialize_sync_dispatcher_facade` calls `asyncio.get_running_loop()` at construction.
+
+### Wiring-arc tests (2 added at this commit, on top of D1-D6 discovery)
+
+- **D7** — full dispatcher chain through facade preserves loop affinity (`_LoopAffinityCapturingDispatcher` asserts `asyncio.get_running_loop() is construction_loop` at every `dispatch` call; also exercises real `asyncio.sleep(0)` driven by outer loop via `run_coroutine_threadsafe`). Proxy for httpx anyio.Semaphore pathology that we don't exercise directly.
+- **D8** — `asyncio.CancelledError` raised on outer loop surfaces verbatim at worker thread's `facade.dispatch` (drain-shutdown propagation contract). Documented limit: cancellation of the `to_thread` future does NOT propagate through the facade to the inner coroutine; `result_timeout_seconds` (covered by D4) is the upper bound on the leak window.
+
+### Bootstrap end-to-end AC #11 verification
+
+`harness-runtime/tests/test_bootstrap.py::test_bootstrap_stage_5_binds_inference_and_sub_agent_dispatchers` runs full `run_bootstrap(...)` and asserts:
+- `ctx.step_dispatchers.lookup(StepKind.INFERENCE_STEP)` is a `SyncDispatcherFacade` wrapping `ctx.llm_dispatcher` with `result_timeout_seconds == config.drain_timeout_seconds`.
+- `ctx.step_dispatchers.lookup(StepKind.SUB_AGENT_DISPATCH)` is a `RuntimeSubAgentDispatcher`.
+- TOOL / HITL / DECLARATIVE step kinds raise `StepKindDispatcherNotBoundError` on lookup.
+
+### Class 3 drift items added at this arc
+
+- **Item 6** — `SyncDispatcherFacade` adapter at INFERENCE_STEP binding site. Documents the transport-adapter at a new §14.7.8 subsection (transport-adapter detail, invisible at §14.7.7 contract level).
+- **Item 7** — per-step-vs-whole-workflow timeout-budget conflation at v1.7 wiring. Documents the `config.drain_timeout_seconds` reuse + future `step_dispatch_timeout_seconds` RuntimeConfig split.
+
+### Spec text status
+
+§14.7.7 (binding declaration) is **unchanged at v1.6** — already correct (`step_dispatchers = StepKindDispatcherRegistry(dispatchers={StepKind.INFERENCE_STEP: ctx.llm_dispatcher, ...})`). The "AC #11 strike" was an implementation deviation captured at this fork file, not a spec edit. No spec bump at this arc; facade documentation absorbed at next runtime spec revision pass per Class 3 drift items 6+7.
+
+### Retirement-event filing
+
+`.harness/phase-7d-retirement-events-batch-5.md` (criterion-B re-affirmation event; NO new RETIRED transitions; cumulative 21/49 (42.9%) unchanged). Documents end-to-end LLM-dispatch execution path completion for CP-1 / CP-3 / CP-4 / CP-5 at strict X-AL-2 reading. CP-10 advisory-gate narrowing from batch 4 §1 preserved unchanged.
+
+### Sibling forks remaining OPEN
+
+- `[[class_1_tension_u_rt_59_cp_to_od_audit_write_gap]]` — AC #9 write half STRUCK; CPAuditLedgerEntry → AuditLedgerEntry converter owed.
+- `[[class_1_tension_u_rt_59_topology_admissibility_predicate]]` — strict admissibility gate dropped; primary-or-cross-pattern helper owed.
+
+### Test posture at resolution
+
+715 harness-runtime tests green (was 712 at facade discovery; +2 D7/D8 + 1 stage 5 AC #11 test). Ruff clean. Pre-existing pyright errors on stage_5_loop_init.py:113-114 (U-RT-58 wrapper section, predates this arc) unchanged.

@@ -177,7 +177,12 @@ Full per-substitution bounded-scope + retirement criterion at Meta-Architecture 
 
 **§6.3.2 F-CP-01 Stage 3b inversion cascade FULLY DISCHARGED (U-RT-58 landing arc, 2026-05-20).** Both endpoints retired (H_T-OD-2 batch 2 + H_T-CP-24 authoring close v1 §1) + production `harness.breaker.*` emission site landed at `retry_breaker_fallback.py:_emit_breaker_transition` which delegates to `RuntimeRetryBreaker.emit_breaker_transition_event` per OD-canonical C-OD-07 §7.1 7-attribute schema. **H_T-CXA-5 RETIRED** at batch 3 (the inversion seam is operational end-to-end).
 
-CP-axis post-batch-4: **9 / 22 retired (40.9%, including CP-24 authoring-retired)**. 4 PARTIAL (CP-8 / CP-9 / CP-11 / CP-14 single-sub-agent slice) + 10 STILL-BOUNDED. The remaining STILL-BOUNDED retirements gate on HITL / validator / tool-invocation / memory / files / mcp composers landing (next arcs). Two Class 1 forks filed at U-RT-59 landing — `[[class_1_tension_u_rt_59_async_sync_step_dispatcher]]` (INFERENCE_STEP routing-registry binding deferred per async/sync wrapper mismatch) + `[[class_1_tension_u_rt_59_cp_to_od_audit_write_gap]]` (CP→OD audit-write composition owed to Phase 6 CP-composer-authoring arc; joins `[[fork-cp-is-wiring-gaps]]` family).
+CP-axis post-batch-5: **9 / 22 retired (40.9%, including CP-24 authoring-retired; unchanged from batch 4 — batch 5 is a criterion-B re-affirmation event, not a new-retirement event)**. 4 PARTIAL (CP-8 / CP-9 / CP-11 / CP-14 single-sub-agent slice) + 10 STILL-BOUNDED. The remaining STILL-BOUNDED retirements gate on HITL / validator / tool-invocation / memory / files / mcp composers landing (next arcs).
+
+**U-RT-59 sibling-fork status (post batch 5, 2026-05-20):**
+- `[[class_1_tension_u_rt_59_async_sync_step_dispatcher]]` — **RESOLVED** at Path B wiring landing `d64d8cf` (INFERENCE_STEP bound via `SyncDispatcherFacade(ctx.llm_dispatcher)` at stage 5; spec text unchanged at v1.6 §14.7.7; facade documentation owed to Class 3 drift item 6). End-to-end LLM-dispatch execution path re-affirmed at strict X-AL-2 reading for CP-1/CP-3/CP-4/CP-5 per `.harness/phase-7d-retirement-events-batch-5.md`.
+- `[[class_1_tension_u_rt_59_cp_to_od_audit_write_gap]]` — OPEN (AC #9 write half STRUCK; CP→OD audit-write composition owed to Phase 6 CP-composer-authoring arc; joins `[[fork-cp-is-wiring-gaps]]` family).
+- `[[class_1_tension_u_rt_59_topology_admissibility_predicate]]` — OPEN (strict admissibility gate dropped per predicate-semantic-mismatch; primary-or-cross-pattern helper owed at follow-on arc).
 
 ### 4.2 CP-axis anti-leakage rules (5 — largest rule set)
 
