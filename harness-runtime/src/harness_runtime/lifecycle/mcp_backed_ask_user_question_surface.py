@@ -94,28 +94,57 @@ the surface body is a thin adapter."""
 
 
 class MCPSurfaceCallbackNotBoundError(NotImplementedError):
-    """Default MCP callback invoked — operator did not bind a real delivery primitive.
+    """Default MCP callback invoked — no operator-bound delivery primitive available.
 
-    Per `Spec_Harness_Runtime_v1.md` v1.11 §14.8.3 binding pin: the MCP-
-    backed surface's `mcp_callback` field defaults to a sentinel placeholder
-    that raises this typed error on invocation. The wire is in place at
-    stage 5 (composer + registry binding satisfy the Protocol contracts);
-    what's deferred is the FastMCP transport-level handler registration.
+    Per `Spec_Harness_Runtime_v1.md` v1.12 §14.8.3 v1.12 workflow-initiation
+    topology pin (Reading α CC-initiates): the production default at stage 5
+    binds `ServerCtxElicitCallback` (per U-RT-62 AC #4) when
+    `ctx.mcp_server` is materialized. The sentinel `_PlaceholderMCPCallback`
+    is retained as defensive fallback for transitional bootstrap-builder
+    shapes that do NOT materialize the FastMCP server (e.g., test
+    substrates that explicitly leave `ctx.mcp_server = None`).
 
-    H_T-CP-20 substitution carry-forward: RETIRE-READY at the U-RT-60
-    wrap-asymmetry fork APPLIED landing; the binding mechanism is pinned
-    + the wrap chain is materialized; the FastMCP host wiring lands at
-    a follow-on arc per Phase 7d retirement batch 8 record.
+    Raised at v1.12 when:
+    - Both `harness_mcp_server=` AND explicit `mcp_callback=` are absent
+      at `materialize_mcp_backed_ask_user_question_surface_stage(...)`,
+      AND the composer subsequently fires (test fixture / partial
+      bootstrap path).
+    - `ServerCtxElicitCallback.__call__` is invoked but no in-flight
+      `run_workflow` tool ctx is bound at
+      `HarnessMCPServer._state['_current_tool_ctx']` (out-of-`api.run()`-
+      flow invocation — defensive failure rather than silent absorption).
+
+    H_T-CP-20 substitution status at v1.12 with U-RT-62 landed (per Phase
+    7d retirement batch 9 record): RETIRE-READY → RETIRED. The FastMCP
+    server hosting + `run_workflow` tool + Claude Code MCP-client
+    connection are operational; the H_E `AskUserQuestion` surface is
+    reached only via the MCP envelope per criterion B (X-AL-2).
     """
 
 
 class _PlaceholderMCPCallback:
-    """Default MCP callback — raises `MCPSurfaceCallbackNotBoundError` on invocation.
+    """Defensive fallback MCP callback — raises on invocation.
 
-    Sentinel placeholder bound at bootstrap stage 5 when the operator
-    does not override `mcp_callback`. Tests replace with their own async
-    callable; production replaces with a FastMCP-host-bound delivery
-    primitive when the FastMCP host wiring arc lands.
+    **At v1.12 (U-RT-62 landed): NOT the production default.** Stage 5
+    `materialize_mcp_backed_ask_user_question_surface_stage(...)` binds
+    `ServerCtxElicitCallback(mcp_server=ctx.mcp_server)` as the default
+    when `ctx.mcp_server` is non-None (post-U-RT-62 bootstrap completion).
+    This placeholder is retained for:
+
+    - Test substrates that explicitly leave `ctx.mcp_server = None` and
+      do NOT exercise HITL gate firing (defensive failure on accidental
+      composer fire vs silent absorption).
+    - Pre-bootstrap shapes that construct the surface in isolation
+      without a materialized FastMCP server.
+    - Future test-fixture patterns that inject a custom non-MCP
+      callback via the `mcp_callback=` explicit override path.
+
+    Per U-RT-62 AC #9 — retention reading per impl-discretion option (a):
+    "retained as documented fallback for test substrates explicitly
+    injecting it (with a docstring note that production binding uses
+    `ServerCtxElicitCallback` per v1.12)". The `MCPSurfaceCallbackNotBoundError`
+    typed error continues to fire defensively when neither
+    `ServerCtxElicitCallback` nor an operator-bound callback is wired.
     """
 
     async def __call__(
@@ -127,10 +156,13 @@ class _PlaceholderMCPCallback:
         _ = (prompt, options, timeout)
         raise MCPSurfaceCallbackNotBoundError(
             "MCPBackedAskUserQuestionSurface: no operator-bound MCP callback "
-            "installed. Bootstrap stage 5 binds the sentinel placeholder per "
-            "spec §14.8.3 v1.11 binding pin; the FastMCP host wiring lands "
-            "at a follow-on arc per H_T-CP-20 retirement event (Phase 7d "
-            "batch 8 record)."
+            "installed and no `ServerCtxElicitCallback` wired (transitional "
+            "bootstrap-builder shape — `ctx.mcp_server` was None at stage 5 "
+            "default-binding). At v1.12 production bootstrap, stage 2 AS "
+            "materializes `ctx.mcp_server` per U-RT-62 AC #2 + stage 5 "
+            "rebinds the default to `ServerCtxElicitCallback` per AC #4; "
+            "the placeholder is retained as defensive failure for test "
+            "substrates that explicitly bypass the MCP-server path."
         )
 
 
