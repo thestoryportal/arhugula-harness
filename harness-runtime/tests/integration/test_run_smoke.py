@@ -248,17 +248,23 @@ async def test_e2e_bootstrap_shutdown_round_trip(
     ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert isinstance(ctx, HarnessContext)
 
-    # U-RT-58 AC #9: stage 5 wraps the bare RuntimeLLMDispatcher with the
-    # RetryBreakerFallbackDispatcher (C-RT-16). Verify the post-condition
-    # at the full-bootstrap path — the wrapper is what `ctx.llm_dispatcher`
-    # exposes, and its `.inner` is the bare dispatcher.
+    # U-RT-58 AC #9 + U-RT-60 AC #13 (post-wrap-asymmetry-fork APPLIED):
+    # stage 5 row 1 chain at C-RT-18 §14.8.1 — bare RuntimeLLMDispatcher
+    # → HITL gate composer (PRE_ACTION) → RetryBreakerFallbackDispatcher
+    # (C-RT-16). Verify the post-condition at the full-bootstrap path:
+    # ctx.llm_dispatcher is the C-RT-16 wrapper; its .inner is the
+    # HITL composer; the composer's .inner is the bare dispatcher.
+    from harness_runtime.lifecycle.hitl_gate_composer import (
+        RuntimeHITLGateComposer,
+    )
     from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
     from harness_runtime.lifecycle.retry_breaker_fallback import (
         RetryBreakerFallbackDispatcher,
     )
 
     assert isinstance(ctx.llm_dispatcher, RetryBreakerFallbackDispatcher)
-    assert isinstance(ctx.llm_dispatcher.inner, RuntimeLLMDispatcher)
+    assert isinstance(ctx.llm_dispatcher.inner, RuntimeHITLGateComposer)
+    assert isinstance(ctx.llm_dispatcher.inner.inner, RuntimeLLMDispatcher)
 
     # AC #1: all 9 BootstrapStage enum members emitted via lifecycle events.
     # `lifecycle_emitter` is the LifecycleEventEmitter Protocol (no

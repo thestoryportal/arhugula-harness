@@ -251,20 +251,46 @@ async def test_bootstrap_stage_5_binds_inference_and_sub_agent_dispatchers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """U-RT-59 AC #11 (v1.7 wiring): stage 5 binds both step kinds.
+    """U-RT-59 AC #11 + U-RT-60 AC #13 (v1.11 wrap-asymmetry chain): stage 5
+    binds both step kinds through the C-RT-18 wrap chain.
 
-    Verifies the post-Path-B-resolution stage 5 wiring per
-    ``.harness/class_1_tension_u_rt_59_async_sync_step_dispatcher.md``:
+    Verifies the post-U-RT-60-wrap-asymmetry-fork-APPLIED stage 5 wiring per
+    ``.harness/class_1_tension_u_rt_60_wrap_asymmetry_sync_async_mismatch.md``
+    §7.2 Q1 materialized chain:
 
+    Row 1 (INFERENCE_STEP):
+        bare C-RT-15 → HITL(PRE_ACTION) → C-RT-16 retry → SyncDispatcherFacade
+
+    Row 2 (SUB_AGENT_DISPATCH):
+        bare C-RT-17 sub_agent_dispatcher → HITL(SUB_AGENT_BOUNDARY)
+          → SyncDispatcherFacade
+
+    AC #13 stage-5 post-condition:
     - ``ctx.step_dispatchers`` is a populated ``StepKindDispatcherRegistry``.
-    - ``INFERENCE_STEP`` resolves to a ``SyncDispatcherFacade`` wrapping the
-      async ``ctx.llm_dispatcher`` (the U-RT-58
-      ``RetryBreakerFallbackDispatcher`` wrapper).
-    - ``SUB_AGENT_DISPATCH`` resolves to a ``RuntimeSubAgentDispatcher``.
+    - ``INFERENCE_STEP`` resolves to a ``SyncDispatcherFacade`` wrapping
+      ``ctx.llm_dispatcher`` (the C-RT-16 wrapper) whose ``inner`` is
+      a ``RuntimeHITLGateComposer`` with
+      ``applicable_placements={PRE_ACTION}``.
+    - ``SUB_AGENT_DISPATCH`` resolves to a ``SyncDispatcherFacade`` wrapping
+      a ``RuntimeHITLGateComposer`` with
+      ``applicable_placements={SUB_AGENT_BOUNDARY}`` whose ``inner`` is the
+      bare ``RuntimeSubAgentDispatcher``.
+    - ``ctx.sub_agent_dispatcher`` is the row-2 HITL composer (field type
+      widened from sync ``_CpStepDispatcher`` to async ``Any`` per fork
+      §7.2 Q3 ratification).
+    - ``ctx.ask_user_question_surface`` is bound to a
+      ``MCPBackedAskUserQuestionSurface`` per spec §14.8.3 v1.11 pin.
     - The 3 unbound step kinds (TOOL / HITL / DECLARATIVE) raise
       ``StepKindDispatcherNotBoundError`` on lookup per registry contract.
     """
+    from harness_cp.hitl_placement import HITLPlacementKind
     from harness_cp.workflow_driver_types import StepKind
+    from harness_runtime.lifecycle.hitl_gate_composer import (
+        RuntimeHITLGateComposer,
+    )
+    from harness_runtime.lifecycle.mcp_backed_ask_user_question_surface import (
+        MCPBackedAskUserQuestionSurface,
+    )
     from harness_runtime.lifecycle.step_dispatchers import (
         StepKindDispatcherNotBoundError,
     )
@@ -280,14 +306,35 @@ async def test_bootstrap_stage_5_binds_inference_and_sub_agent_dispatchers(
     ctx = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
 
     assert ctx.step_dispatchers is not None
+
+    # AC #13: ask_user_question_surface bound to MCP-backed concrete impl.
+    assert isinstance(ctx.ask_user_question_surface, MCPBackedAskUserQuestionSurface)
+
+    # AC #13 row 1: SyncDispatcherFacade(C-RT-16(HITL(PRE_ACTION)(bare C-RT-15)))
     inference_dispatcher = ctx.step_dispatchers.lookup(StepKind.INFERENCE_STEP)
     assert isinstance(inference_dispatcher, SyncDispatcherFacade)
-    # The facade wraps ctx.llm_dispatcher and captures the bootstrap loop.
     assert inference_dispatcher.inner is ctx.llm_dispatcher
     assert inference_dispatcher.result_timeout_seconds == ctx.config.drain_timeout_seconds
+    # ctx.llm_dispatcher.inner is the PRE_ACTION HITL composer per the wrap chain
+    hitl_inference = ctx.llm_dispatcher.inner  # type: ignore[attr-defined]
+    assert isinstance(hitl_inference, RuntimeHITLGateComposer)
+    assert hitl_inference.applicable_placements == frozenset(
+        {HITLPlacementKind.PRE_ACTION}
+    )
 
-    sub_agent_dispatcher = ctx.step_dispatchers.lookup(StepKind.SUB_AGENT_DISPATCH)
-    assert isinstance(sub_agent_dispatcher, RuntimeSubAgentDispatcher)
+    # AC #13 row 2: SyncDispatcherFacade(HITL(SUB_AGENT_BOUNDARY)(bare sub_agent))
+    sub_agent_step = ctx.step_dispatchers.lookup(StepKind.SUB_AGENT_DISPATCH)
+    assert isinstance(sub_agent_step, SyncDispatcherFacade)
+    # Field-type-widened ctx.sub_agent_dispatcher is the HITL composer (not
+    # the bare sub-agent dispatcher) per fork §7.2 Q3 ratification.
+    assert isinstance(ctx.sub_agent_dispatcher, RuntimeHITLGateComposer)
+    assert ctx.sub_agent_dispatcher.applicable_placements == frozenset(
+        {HITLPlacementKind.SUB_AGENT_BOUNDARY}
+    )
+    assert isinstance(
+        ctx.sub_agent_dispatcher.inner, RuntimeSubAgentDispatcher
+    )
+    assert sub_agent_step.inner is ctx.sub_agent_dispatcher
 
     for unbound in (StepKind.TOOL_STEP, StepKind.HITL_STEP, StepKind.DECLARATIVE_STEP):
         with pytest.raises(StepKindDispatcherNotBoundError):
@@ -507,15 +554,17 @@ def test_freeze_raises_incomplete_when_required_field_none() -> None:
     ctx = _MutableHarnessContext()
     with pytest.raises(IncompleteBootstrapError) as excinfo:
         ctx.freeze()
-    # All 31 required fields are missing (U-RT-52 +1 for `llm_dispatcher`;
-    # U-RT-59 +2 for `sub_agent_dispatcher` + `step_dispatchers`).
+    # All 32 required fields are missing (U-RT-52 +1 for `llm_dispatcher`;
+    # U-RT-59 +2 for `sub_agent_dispatcher` + `step_dispatchers`;
+    # U-RT-60 +1 for `ask_user_question_surface`).
     assert "config" in excinfo.value.missing_fields
     assert "lifecycle_emitter" in excinfo.value.missing_fields
     assert "ledger_reader" in excinfo.value.missing_fields
     assert "llm_dispatcher" in excinfo.value.missing_fields
     assert "sub_agent_dispatcher" in excinfo.value.missing_fields
     assert "step_dispatchers" in excinfo.value.missing_fields
-    assert len(excinfo.value.missing_fields) == 31
+    assert "ask_user_question_surface" in excinfo.value.missing_fields
+    assert len(excinfo.value.missing_fields) == 32
 
 
 def test_bootstrap_stage_complete_event_is_frozen() -> None:

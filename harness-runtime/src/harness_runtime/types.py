@@ -79,7 +79,6 @@ from harness_cp.validator_fail_transient_staircase import (
     StaircaseStage,
     StaircaseTransition,
 )
-from harness_cp.workflow_driver import StepDispatcher as _CpStepDispatcher
 from harness_cp.workflow_driver import StepDispatcherRegistry as _CpStepDispatcherRegistry
 from harness_cp.workflow_driver_types import WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
@@ -1084,15 +1083,37 @@ class HarnessContext(BaseModel):
     `harness_runtime.lifecycle.llm_dispatch.RuntimeLLMDispatcher`.
     """
 
-    sub_agent_dispatcher: _CpStepDispatcher
-    """Per-step sub-agent dispatch composer (U-RT-59; C-RT-17 §14.7).
+    sub_agent_dispatcher: Any
+    """Per-step sub-agent dispatch composer (U-RT-59; C-RT-17 §14.7) +
+    HITL gate composer wrap layer (U-RT-60; C-RT-18 §14.8).
+
+    Materialized at stage 5 LOOP_INIT. v1.6–v1.10 lineage: concretized by
+    `harness_runtime.lifecycle.sub_agent_dispatch.RuntimeSubAgentDispatcher`
+    (sync; satisfies `harness_cp.workflow_driver.StepDispatcher` Protocol).
+
+    v1.11 (post-U-RT-60 wrap-asymmetry fork APPLIED): bound to
+    `harness_runtime.lifecycle.hitl_gate_composer.RuntimeHITLGateComposer`
+    with `applicable_placements={SUB_AGENT_BOUNDARY}` wrapping the
+    sub-agent dispatcher. Composer is **async** per spec §14.8.1 item 1;
+    field type widened from `_CpStepDispatcher` (sync Protocol) to `Any`
+    to admit the async composer. The sync `StepDispatcher` Protocol
+    satisfaction at the registry boundary is carried by `SyncDispatcherFacade`
+    per the U-RT-59 Path B precedent (see `ctx.step_dispatchers`).
+    """
+
+    ask_user_question_surface: Any
+    """H_E `AskUserQuestion` delivery surface (U-RT-60 AC #2; C-RT-18 §14.8.3
+    v1.11 binding pin).
 
     Materialized at stage 5 LOOP_INIT. Concretized by
-    `harness_runtime.lifecycle.sub_agent_dispatch.RuntimeSubAgentDispatcher`.
-    Satisfies the `harness_cp.workflow_driver.StepDispatcher` Protocol;
-    bound as the registry's `SUB_AGENT_DISPATCH` entry at
-    `ctx.step_dispatchers`.
-    """
+    `harness_runtime.lifecycle.mcp_backed_ask_user_question_surface.MCPBackedAskUserQuestionSurface`.
+    Satisfies the `AskUserQuestionSurface` Protocol declared at
+    `harness_runtime.lifecycle.ask_user_question_surface`. Bound into both
+    HITL composers (`PRE_ACTION` + `SUB_AGENT_BOUNDARY`) so the composer
+    body step 4f can `await self.ask_user_question_surface.ask(...)`.
+
+    Typed `Any` per the C-RT-04 Protocol-vs-concrete-narrowing pattern
+    (mirrors `sub_agent_dispatcher` + `tracer_provider`)."""
 
     step_dispatchers: _CpStepDispatcherRegistry
     """Step-kind routing registry (U-RT-59; C-RT-17 §14.7.1 + §14.7.7).

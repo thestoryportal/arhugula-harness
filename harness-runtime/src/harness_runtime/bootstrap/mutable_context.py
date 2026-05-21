@@ -137,6 +137,7 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "lifecycle_emitter",
     "llm_dispatcher",
     "sub_agent_dispatcher",
+    "ask_user_question_surface",
     "step_dispatchers",
 )
 
@@ -196,11 +197,23 @@ class _MutableHarnessContext:
     Protocol so the C-RT-16 wrap is type-transparent."""
 
     sub_agent_dispatcher: Any = None
-    """U-RT-59 (C-RT-17 §14.7) sub-agent dispatch composer; bound at stage
-    5 LOOP_INIT alongside ``llm_dispatcher``. Concretized by
-    ``harness_runtime.lifecycle.sub_agent_dispatch.RuntimeSubAgentDispatcher``.
-    Typed ``Any`` to avoid pulling the CP `StepDispatcher` Protocol into
-    the schema layer (mirrors the ``llm_dispatcher`` pattern)."""
+    """U-RT-59 (C-RT-17 §14.7) sub-agent dispatch composer + U-RT-60
+    (C-RT-18 §14.8) HITL gate composer wrap layer; bound at stage 5
+    LOOP_INIT alongside ``llm_dispatcher``. v1.11 (post-U-RT-60 wrap-
+    asymmetry fork APPLIED): bound to ``RuntimeHITLGateComposer`` with
+    ``applicable_placements={SUB_AGENT_BOUNDARY}`` wrapping the sync
+    sub-agent dispatcher; the composer is async + the sync Protocol
+    satisfaction at registry boundary is carried by ``SyncDispatcherFacade``
+    (see ``step_dispatchers``). Typed ``Any`` (same pattern as
+    ``llm_dispatcher``)."""
+
+    ask_user_question_surface: Any = None
+    """U-RT-60 (C-RT-18 §14.8.3 v1.11 binding pin) MCP-backed
+    AskUserQuestion delivery surface; bound at stage 5 LOOP_INIT. Concretized
+    by ``MCPBackedAskUserQuestionSurface``; satisfies the
+    ``AskUserQuestionSurface`` Protocol consumed by both HITL composers
+    (PRE_ACTION + SUB_AGENT_BOUNDARY rows of the §14.8.1 wrap-asymmetry
+    table). Typed ``Any`` (same pattern as ``sub_agent_dispatcher``)."""
 
     step_dispatchers: Any = None
     """U-RT-59 (C-RT-17 §14.7.1 + §14.7.7) step-kind routing registry;
@@ -255,6 +268,7 @@ class _MutableHarnessContext:
             lifecycle_emitter=self.lifecycle_emitter,
             llm_dispatcher=self.llm_dispatcher,
             sub_agent_dispatcher=self.sub_agent_dispatcher,
+            ask_user_question_surface=self.ask_user_question_surface,
             step_dispatchers=self.step_dispatchers,
         )
         self.frozen = ctx

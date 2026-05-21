@@ -28,12 +28,18 @@ from harness_core.workload_class import WorkloadClass
 from harness_cp.workflow_driver_types import StepKind
 from harness_od.audit_ledger_types import SignatureAlgorithm
 
+from harness_cp.hitl_placement import HITLPlacementKind
+
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
+from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
 from harness_runtime.lifecycle.lifecycle_emitter import materialize_lifecycle_emitter_stage
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchBindError,
     materialize_llm_dispatcher_stage,
+)
+from harness_runtime.lifecycle.mcp_backed_ask_user_question_surface import (
+    materialize_mcp_backed_ask_user_question_surface_stage,
 )
 from harness_runtime.lifecycle.override_evaluator import materialize_override_evaluator_stage
 from harness_runtime.lifecycle.retry_breaker_fallback import (
@@ -110,8 +116,55 @@ async def execute(
             "did not populate the fallback chain (U-RT-58 wrapper "
             "construction requires it per C-RT-16 §14.6 D6)"
         )
-    ctx.llm_dispatcher = materialize_retry_breaker_fallback_dispatcher_stage(
+    # ---------------------------------------------------------------------
+    # U-RT-60 (C-RT-18 §14.8) wrap-asymmetry fork APPLIED — row 1 chain:
+    #   bare (async C-RT-15)
+    #     → HITL gate composer (async; applicable_placements={PRE_ACTION})
+    #     → RetryBreakerFallback (async C-RT-16; outer of HITL gate)
+    #     → SyncDispatcherFacade (sync; registry binding)
+    #
+    # AskUserQuestionSurface is bound to the H_T-CP-20-substituted MCP-
+    # backed surface (placeholder MCP callback at this arc; FastMCP host
+    # wiring deferred per Phase 7d retirement batch 8 H_T-CP-20 RETIRE-READY).
+    # Stage 4 OD's `audit_writer` + stage 1 IS's `ledger_writer` are
+    # consumed by the HITL composer for the 4-substep audit-write at
+    # spec §14.8.2 step 4h (same dep set as U-RT-59 sub-agent dispatch
+    # per Q3 ratification — shared `cp_audit_to_od_audit` converter).
+    if ctx.ledger_writer is None or ctx.audit_writer is None:
+        raise LLMDispatchBindError(
+            "ctx.ledger_writer / ctx.audit_writer is None at stage 5 — stage 1 "
+            "IS / stage 4 OD must complete before stage 5 HITL gate composer "
+            "construction per the runtime spec v1.11 §14.8.2 step 4h "
+            "4-substep audit-write composition contract"
+        )
+    if ctx.mcp_host is None:
+        raise LLMDispatchBindError(
+            "ctx.mcp_host is None at stage 5 — stage 2 AS did not populate "
+            "the MCP host (U-RT-60 AskUserQuestionSurface construction "
+            "requires it per spec §14.8.3 v1.11 binding pin)"
+        )
+    # `ctx.mcp_host` is typed against the schema-level Protocol at
+    # `harness_runtime.types.MCPHost`; the concrete dataclass at
+    # `harness_runtime.lifecycle.mcp_host.MCPHost` is what stage 2 bound
+    # (same C-RT-04 Protocol-vs-concrete pattern as `tracer_provider` +
+    # `ledger_writer` / `audit_writer`).
+    ask_surface = materialize_mcp_backed_ask_user_question_surface_stage(
+        cast(Any, ctx.mcp_host)
+    )
+    ctx.ask_user_question_surface = ask_surface
+
+    hitl_inference = RuntimeHITLGateComposer(
         inner=bare_dispatcher,
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(Any, ask_surface),
+        ledger_writer=cast(Any, ctx.ledger_writer),
+        audit_writer=cast(Any, ctx.audit_writer),
+        tracer_provider=cast(Any, tracer_provider),
+        audit_signing_key_id="harness-runtime-dev",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+    )
+    ctx.llm_dispatcher = materialize_retry_breaker_fallback_dispatcher_stage(
+        inner=cast(Any, hitl_inference),
         retry_breaker=retry_breaker,
         fallback_chain=fallback_chain,
         tracer_provider=cast(Any, tracer_provider),
@@ -148,21 +201,14 @@ async def execute(
     # v1.7 §14.7.2 step 8 4-substep audit composition extends the
     # dispatcher's dependency set with the IS state-ledger writer (8b F2-
     # write), the OD audit writer (8d IS-anchored append), and signing
-    # config + time source for the CP→OD converter at 8c. Stage 1 IS +
-    # stage 4 OD have already populated ctx.ledger_writer + ctx.audit_writer
-    # per the bootstrap traversal order.
-    if ctx.ledger_writer is None or ctx.audit_writer is None:
-        raise LLMDispatchBindError(
-            "ctx.ledger_writer / ctx.audit_writer is None at stage 5 — stage 1 "
-            "IS / stage 4 OD must complete before stage 5 sub-agent dispatcher "
-            "construction per the runtime spec v1.7 §14.7.2 step 8 4-substep "
-            "audit composition contract"
-        )
+    # config + time source for the CP→OD converter at 8c. The audit-writer
+    # availability check above (HITL composer construction) covers the
+    # same dependency set.
     # Audit-signing config — operator surface deferred per spec §14.7
     # "Deferred to implementation discretion" + ADR-D5 v1.3 §1.4.1 (HSM /
     # KMS / keystore custody). v1.7 MVP binds a deployment-default value;
     # operator-tunable surface is a follow-on RuntimeConfig extension.
-    sub_agent_dispatcher = RuntimeSubAgentDispatcher(
+    bare_sub_agent_dispatcher = RuntimeSubAgentDispatcher(
         handoff_registry=ctx.handoff_registry,  # type: ignore[arg-type]  # narrowed at stage 3b
         topology_dispatcher=topology.dispatcher,
         tracer_provider=cast(Any, tracer_provider),
@@ -179,27 +225,47 @@ async def execute(
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
         time_source=lambda: datetime.now(UTC),
     )
-    ctx.sub_agent_dispatcher = sub_agent_dispatcher
 
-    # INFERENCE_STEP binding: wrap the async `ctx.llm_dispatcher` through
-    # `SyncDispatcherFacade` so it satisfies the sync `StepDispatcher`
-    # Protocol the CP driver consumes. Result timeout reuses
-    # `config.drain_timeout_seconds` as the worker-thread blocking bound;
-    # this conflates per-step bound with whole-workflow drain bound —
+    # U-RT-60 (C-RT-18 §14.8) wrap-asymmetry fork APPLIED — row 2 chain:
+    #   bare sub-agent dispatcher (sync C-RT-17)
+    #     → HITL gate composer (async; applicable_placements={SUB_AGENT_BOUNDARY})
+    #     → SyncDispatcherFacade (sync; registry binding)
+    #
+    # Inner-call shape: HITL composer body invokes `self.inner.dispatch(...)`
+    # via the duck-typed `_dispatch_inner` helper at `hitl_gate_composer.py`;
+    # for sync C-RT-17 inner the call returns a Mapping directly (no await
+    # needed), per fork §7.2 Q3 ratification.
+    hitl_sub_agent = RuntimeHITLGateComposer(
+        inner=bare_sub_agent_dispatcher,
+        applicable_placements=frozenset({HITLPlacementKind.SUB_AGENT_BOUNDARY}),
+        ask_user_question_surface=cast(Any, ask_surface),
+        ledger_writer=cast(Any, ctx.ledger_writer),
+        audit_writer=cast(Any, ctx.audit_writer),
+        tracer_provider=cast(Any, tracer_provider),
+        audit_signing_key_id="harness-runtime-dev",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+    )
+    ctx.sub_agent_dispatcher = hitl_sub_agent
+
+    # Registry binding: both rows wrap through `SyncDispatcherFacade` at the
+    # top so the CP `StepDispatcher` Protocol (sync) is satisfied uniformly.
+    # `materialize_sync_dispatcher_facade` captures the running event loop
+    # (this stage executes on the outer api.py loop per loop-capture-timing
+    # invariant). Result-timeout reuses `config.drain_timeout_seconds`;
     # tracked at Class 3 drift item 7 for the future
-    # `step_dispatch_timeout_seconds` config split. The facade is
-    # constructed here (stage 5, on the outer loop) so the captured loop
-    # is the api.py outer loop that hosts the eventual
-    # `asyncio.to_thread(execute_workflow, ...)` per the
-    # loop-capture-timing invariant documented at the facade module.
+    # `step_dispatch_timeout_seconds` config split.
     inference_step_dispatcher = materialize_sync_dispatcher_facade(
         cast(Any, ctx.llm_dispatcher),
+        result_timeout_seconds=config.drain_timeout_seconds,
+    )
+    sub_agent_step_dispatcher = materialize_sync_dispatcher_facade(
+        cast(Any, hitl_sub_agent),
         result_timeout_seconds=config.drain_timeout_seconds,
     )
 
     ctx.step_dispatchers = StepKindDispatcherRegistry(
         dispatchers={
             StepKind.INFERENCE_STEP: inference_step_dispatcher,
-            StepKind.SUB_AGENT_DISPATCH: sub_agent_dispatcher,
+            StepKind.SUB_AGENT_DISPATCH: sub_agent_step_dispatcher,
         },
     )

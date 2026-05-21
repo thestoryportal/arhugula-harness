@@ -144,6 +144,7 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         "lifecycle_emitter",
         "llm_dispatcher",  # U-RT-52 — C-RT-15 LLM-dispatch composer
         "sub_agent_dispatcher",  # U-RT-59 — C-RT-17 §14.7 sub-agent dispatch composer
+        "ask_user_question_surface",  # U-RT-60 — C-RT-18 §14.8.3 MCP-backed HITL surface
         "step_dispatchers",  # U-RT-59 — C-RT-17 §14.7.1 + §14.7.7 step-kind routing registry
     }
     actual = set(HarnessContext.model_fields.keys())
