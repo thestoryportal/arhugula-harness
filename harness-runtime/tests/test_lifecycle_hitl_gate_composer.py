@@ -952,6 +952,202 @@ async def test_two_pre_action_placements_emit_per_placement_canonical_4_spans(
 
 
 # ---------------------------------------------------------------------------
+# AC #12 — retry-of-gate: each C-RT-16 retry attempt re-evaluates the gate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_retry_of_gate_re_evaluates_gate_per_attempt(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """AC #12: C-RT-16 retry of the HITL gate composer fires the gate on
+    EVERY attempt — per spec §14.8.7 NOTE 6-iii ("operator re-asked on each
+    retry attempt") + plan v2.9 U-RT-60 AC #12 literal Q2 reading.
+
+    Wrap chain (post-U-RT-60 wrap-asymmetry fork APPLIED):
+
+        bare async dispatcher (fails 2× then succeeds)
+          → RuntimeHITLGateComposer (PRE_ACTION; async)
+          → RetryBreakerFallbackDispatcher (C-RT-16; max_attempts=3)
+
+    Each retry attempt at `retry_breaker_fallback.py:393` (
+    `await self.inner.dispatch(rebound_binding, step, ...)`) re-enters the
+    composer body step 1; the composer step 4f invokes the surface; the
+    composer step 4h emits one CP→OD audit pair. **3 attempts → 3 surface
+    invocations → 3 audit entries → 3× canonical 4-span hierarchy.**
+
+    This test is the load-bearing AC for the fork (c) wrap chain Q1
+    ratification — proves the spec-canonical wrap chain actually delivers
+    the per-attempt re-evaluation semantic. Failure here means the wrap
+    chain is structurally wrong; the test is the wrap-chain post-condition
+    at the workflow-driver dispatch level.
+    """
+    # Use the C-RT-16 retry fixture pattern from
+    # `test_lifecycle_retry_breaker_fallback.py` verbatim — do NOT
+    # construct retry budget from scratch (advisor-flagged blind spot).
+    from harness_core.identity import StepID as _StepID
+    from harness_cp.cp_shared_types import ModelBinding
+    from harness_cp.cross_family_fallback_chain import (
+        FallbackChain,
+        ProviderCandidate,
+        ProviderFamily,
+    )
+    from harness_cp.engine_class import EngineClass
+    from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+    from harness_cp.routing_manifest_residence import RetryPolicy
+    from harness_runtime.lifecycle.retry_breaker import (
+        DEFAULT_RETRY_POLICY,
+        RuntimeRetryBreaker,
+    )
+    from harness_runtime.lifecycle.retry_breaker_fallback import (
+        RESERVED_LLM_DISPATCH_KEY,
+        RetryBreakerFallbackDispatcher,
+    )
+
+    provider, exporter = tracer_provider
+
+    # Bare async inner — fails 2× transient, succeeds on attempt 3.
+    class _BareAsyncDispatcher:
+        def __init__(self) -> None:
+            self.attempt = 0
+            self.outcomes: list[Mapping[str, Any] | BaseException] = [
+                RuntimeError("transient attempt 0"),
+                RuntimeError("transient attempt 1"),
+                {"result": "success-on-attempt-3"},
+            ]
+            self.calls: list[Any] = []
+
+        async def dispatch(
+            self,
+            binding: Any,
+            step: WorkflowStep,
+            *,
+            step_context: StepExecutionContext,
+        ) -> Mapping[str, Any]:
+            self.calls.append((binding, step, step_context))
+            outcome = self.outcomes[self.attempt]
+            self.attempt += 1
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+    bare = _BareAsyncDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [
+            AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0),
+            AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=2.0),
+            AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=3.0),
+        ]
+    )
+    ledger = _MockLedgerWriter()
+    audit = _MockAuditWriter()
+
+    # Row 1 of §14.8.1 wrap-asymmetry table: bare → HITL → C-RT-16.
+    hitl = RuntimeHITLGateComposer(
+        inner=bare,
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, surface),
+        ledger_writer=cast(Any, ledger),
+        audit_writer=cast(Any, audit),
+        tracer_provider=provider,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+    )
+
+    # C-RT-16 retry/fallback wrapper — replicate
+    # `_retry_breaker_with_llm_policy(max_attempts=3)` + `_chain(_candidate)`
+    # from the existing C-RT-16 fixture for parity (advisor-flagged).
+    breaker = RuntimeRetryBreaker(
+        retry_policies={
+            RESERVED_LLM_DISPATCH_KEY: RetryPolicy(
+                max_attempts=3,
+                backoff="full_jitter",
+                jitter="full_jitter",
+            )
+        },
+        default_policy=DEFAULT_RETRY_POLICY,
+        base_delay_seconds=0.0,
+        delay_cap_seconds=0.01,
+    )
+    primary = ProviderCandidate(
+        provider="anthropic",
+        model="claude-test-1",
+        family=ProviderFamily.ANTHROPIC,
+    )
+    chain = FallbackChain(
+        primary=primary, same_family=(), cross_family=(), terminal=None
+    )
+
+    async def _noop_sleep(_seconds: float) -> None:
+        return None
+
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=cast(Any, hitl),
+        retry_breaker=breaker,
+        fallback_chain=chain,
+        tracer_provider=provider,
+        sleep_fn=_noop_sleep,
+    )
+
+    # Standard binding + step + ctx for the C-RT-16 → HITL → bare chain.
+    binding = StepEffectiveBinding(
+        step_id="step-rt-60-ac-12",
+        model_binding=ModelBinding(provider="anthropic", model="claude-test-1"),
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        override_applied=False,
+    )
+    placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    inner_step = WorkflowStep(
+        step_id=_StepID("step-rt-60-ac-12"),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={"messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    class _StepWithPlacements:
+        def __init__(self, inner: WorkflowStep, placements: tuple[HITLPlacement, ...]) -> None:
+            self._inner = inner
+            self.hitl_placements = placements
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
+
+    step = cast(WorkflowStep, _StepWithPlacements(inner_step, (placement,)))
+    step_ctx = _make_step_context()
+
+    # Dispatch the full wrap chain. C-RT-16 retries 3× through HITL
+    # composer → bare; bare fails 2× then succeeds on attempt 3.
+    result = await wrapper.dispatch(binding, step, step_context=step_ctx)
+    assert result == {"result": "success-on-attempt-3"}
+
+    # AC #12 load-bearing assertions: 3 surface invocations + 3 audit
+    # entries + 3 invocations of `hitl.invocation.responded` span (one
+    # per retry attempt). Each retry through the C-RT-16 wrapper re-
+    # enters the HITL composer body step 1 of §14.8.2 → fires the gate.
+    assert len(surface.calls) == 3, (
+        f"AC #12: expected 3 surface invocations (one per retry attempt), "
+        f"got {len(surface.calls)}"
+    )
+    assert len(audit.appends) == 3, (
+        f"AC #12: expected 3 audit entries (one per retry attempt), "
+        f"got {len(audit.appends)}"
+    )
+    assert bare.attempt == 3, (
+        f"AC #12: expected 3 bare-inner invocations (one per retry attempt), "
+        f"got {bare.attempt}"
+    )
+
+    # Per spec §14.8.5 canonical 4-span shape per gate invocation: 3
+    # attempts → 3× each gate/invocation span. Non-timeout response path
+    # yields gate.evaluated + invocation.opened + invocation.responded
+    # (timed_out NOT fired on response-received path).
+    span_names = [s.name for s in exporter.get_finished_spans()]
+    assert span_names.count("hitl.gate.evaluated") == 3
+    assert span_names.count("hitl.invocation.opened") == 3
+    assert span_names.count("hitl.invocation.responded") == 3
+    assert "hitl.invocation.timed_out" not in span_names
+
+
+# ---------------------------------------------------------------------------
 # AC #13 — producer-side carrier import discipline (no hand-coded names)
 # ---------------------------------------------------------------------------
 
