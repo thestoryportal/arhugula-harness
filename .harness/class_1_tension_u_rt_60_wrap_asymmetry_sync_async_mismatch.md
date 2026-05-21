@@ -175,4 +175,188 @@ Per `Project_Workflow_v1_8.md` §2.7.6 Class 1 (halt-execution) routing:
 
 ---
 
-*End of fork record. Status: PROPOSING. Awaiting systems-architect mode 3 recommendation + operator ratification.*
+## 7. Systems-architect mode 3 resolution recommendation (appended 2026-05-21)
+
+**Mode.** `systems-architect` skill §4A tension-resolution. Author does NOT decide; produces a recommendation traced to the canonical authority chain per workspace `CLAUDE.md` §1.3. **Operator decides** at the AskUserQuestion ratification turn.
+
+### 7.1 §2 discipline decomposition
+
+**Five-axis (per `systems-architect` §2.1).**
+- **Primary axis: Control Plane.** Wrap-chain composition mechanism for `INFERENCE_STEP` + `SUB_AGENT_DISPATCH` dispatchers. Touches the per-step dispatch composition seam declared at C-RT-18 §14.8.1.
+- **Secondary axis: Operational Discipline.** Retry namespace emission per `retry.*` (C-CP-03 §3.5) + audit-entry composition per the 4-substep sequence (C-CP-13 §13.5.1 + §14.8.2 step 4h). Retry-of-gate semantics affect operator-burden + audit-trail cardinality.
+- **Out of axis:** ADR-F1 v1.2 (multi-LLM commitment) is unaffected. CP `StepDispatcher` Protocol shape stays sync (the U-RT-59 Path B resolution; not under reconsideration).
+
+**Probabilistic-deterministic boundary (per `systems-architect` §2.2).** The wrap chain is pure deterministic — sync/async composability + dispatcher Protocol satisfaction. No probabilistic surface implicated. The "operator re-asked each retry attempt" semantic (NOTE 6-iii) is a *deterministic* surface: each retry attempt deterministically re-invokes the gate composer (the operator's *response* is probabilistic; the *gate invocation* is not).
+
+**Decision ordering (per `systems-architect` §2.3).** This is a **D-level (derivative)** decision. The F-level commitments are: ADR-F1 v1.2 (multi-LLM) + sync `StepDispatcher` Protocol (post-U-RT-59 Path B) + async `RetryBreakerFallbackDispatcher` (post-U-RT-58 landing) + spec §14.8.1 wrap-asymmetry table (declares `c_rt_16(hitl(c_rt_15))` per Q2 ratification at the c_rt_18 cp_20 fork). The wrap-mechanism choice is downstream of all four and constrained by them.
+
+### 7.2 Per-Q recommendation
+
+#### Q1 — Adapter direction [HIGH] → **(c) make HITL composer async; SyncDispatcherFacade for registry binding**
+
+**Recommended.** Three concurrent chain anchors converge on (c):
+
+1. **Spec-canonical posture.** Spec §14.8.1 item 1 line 1539 declares verbatim:
+   > Async `dispatch(binding, step, *, step_context) -> StepOutput`.
+
+   The partial-impl sync choice (HEAD `6998e2a`) is a leaf-narrative deviation from this declaration. Spec is canonical for the composer's posture; the partial-impl deviation is the artifact-out-of-chain.
+
+2. **Wrap-chain literal preservation.** Spec §14.8.1 wrap-asymmetry table row 1 declares verbatim:
+   > `ctx.llm_dispatcher = c_rt_16_compose(hitl_gate_composer(c_rt_15, applicable_placements={PRE_ACTION}))`
+
+   Only (c) realizes this literally as a 3-layer chain. Option (a) requires a 4-layer chain with two facades (sync→async for HITL-as-inner-of-async-retry + async→sync at the registry top). Option (b) modifies the C-RT-16 retry primitive itself — leaks dispatcher sync/async knowledge into the retry contract.
+
+3. **U-RT-59 Path B precedent.** `SyncDispatcherFacade` at `harness-runtime/.../sync_dispatcher_facade.py` was authored explicitly to bridge async-dispatcher → sync `StepDispatcher` Protocol via `asyncio.run_coroutine_threadsafe(...).result(timeout=...)` against captured outer loop. (c) reuses this primitive at one site (the registry top); no new facade module needed. (a) requires a *reverse* facade (sync→async) — new module, non-symmetric with the precedent.
+
+**Chain coherence summary:**
+
+| Option | Spec §14.8.1 item 1 (async) | Spec §14.8.1 row 1 literal | U-RT-59 facade reuse | Sync HITL leaf-deviation conformed |
+|---|---|---|---|---|
+| (a) Reverse facade | ✗ (HITL stays sync; spec declares async) | ✗ (4-layer chain; 2 facades) | ✗ (requires NEW reverse facade) | ✗ (leaf-deviation preserved) |
+| (b) C-RT-16 sync-tolerant inner | ✗ | ~ (3-layer + retry primitive contract leak) | ✗ (no facade reuse; modifies primitive) | ✗ |
+| **(c) async HITL + SyncDispatcherFacade** | **✓** | **✓** (3-layer chain; 1 facade at top) | **✓** (reuses existing facade) | **✓** (conforms leaf to chain) |
+| (d) Drop AC #12 + spec amendment | ~ (spec amends to allow sync) | ✗ (semantic change; HITL fires once per step) | — | n/a |
+
+**Materialized wrap chain under (c):**
+
+```python
+# stage 5 LOOP_INIT
+bare = materialize_llm_dispatcher_stage(...)               # async (C-RT-15)
+hitl_inf = RuntimeHITLGateComposer(
+    inner=bare, applicable_placements={PRE_ACTION}, ...
+)                                                          # async (C-RT-18 new)
+ctx.llm_dispatcher = materialize_retry_breaker_fallback_dispatcher_stage(
+    inner=hitl_inf, ...
+)                                                          # async (C-RT-16 existing)
+sync_inf = materialize_sync_dispatcher_facade(ctx.llm_dispatcher, ...)  # sync (U-RT-59 reuse)
+
+hitl_sub = RuntimeHITLGateComposer(
+    inner=sub_agent_dispatcher, applicable_placements={SUB_AGENT_BOUNDARY}, ...
+)                                                          # async wrapping sync C-RT-17 (clean)
+ctx.sub_agent_dispatcher = hitl_sub                        # field type: async (was sync)
+sync_sub = materialize_sync_dispatcher_facade(hitl_sub, ...)
+
+ctx.step_dispatchers = StepKindDispatcherRegistry(
+    dispatchers={
+        StepKind.INFERENCE_STEP: sync_inf,
+        StepKind.SUB_AGENT_DISPATCH: sync_sub,
+    },
+)
+```
+
+This is the **literal spec §14.8.1 wrap-asymmetry table** with the U-RT-59 Path B SyncDispatcherFacade at the registry boundary on both rows.
+
+**Confidence:** [HIGH] — three convergent chain anchors; partial-impl sync choice is the demonstrable leaf-deviation. The cost (composer async refactor ~50-80 LOC + test fixture re-shape to pytest-asyncio with `await composer.dispatch(...)` directly instead of `asyncio.to_thread`-bridging from sync) is bounded and well-precedented.
+
+#### Q2 — Single-instance-per-step_kind impact [HIGH] → **Preserved trivially under (c)**
+
+The single-instance-per-step_kind discipline (spec §14.8.1) is a *binding cardinality* invariant: one composer instance per `applicable_placements` value at v1.11 MVP. (c) does not change this — the wrap chain shown at Q1 instantiates exactly one HITL composer for `{PRE_ACTION}` + exactly one for `{SUB_AGENT_BOUNDARY}`. Same as (a), (b), (d).
+
+**Confidence:** [HIGH]. No cascade.
+
+#### Q3 — `SUB_AGENT_DISPATCH` wrap-chain coherence [HIGH] → **Cleanly handled under (c)**
+
+Spec §14.8.1 row 2 declares `ctx.sub_agent_dispatcher = hitl_gate_composer(c_rt_17, {SUB_AGENT_BOUNDARY})` — no retry layer. C-RT-17 (sub-agent dispatch composer at `RuntimeSubAgentDispatcher.dispatch`) is **sync** (per U-RT-59 landing).
+
+Under (c): async HITL wraps sync C-RT-17. The HITL composer's `async def dispatch` calls `self.inner.dispatch(...)` synchronously inside the async body (no `await` — sync call within `async def` is legal and standard). Works cleanly. Then `SyncDispatcherFacade(hitl_sub)` wraps to the sync Protocol for the registry.
+
+**Field-type change.** `_MutableHarnessContext.sub_agent_dispatcher` field-type changes from the concrete sync `RuntimeSubAgentDispatcher` to the new async `RuntimeHITLGateComposer`. Per the C-RT-04 Protocol-vs-concrete narrowing pattern already used at `ctx.llm_dispatcher` (typed as `LLMDispatcher` Protocol; concretely `RetryBreakerFallbackDispatcher`), the field type is typically narrowed via `Any` or a Protocol — verify the existing type annotation tolerates the swap. If strictly typed, one narrow `cast(Any, ...)` at the binding site suffices (precedented at `stage_5_loop_init.py:117` for `ctx.tracer_provider` + `:176-177` for `ctx.ledger_writer / ctx.audit_writer`).
+
+**Consistency obligation.** Both rows wrap with `SyncDispatcherFacade` at the registry top under (c). This is a *consistency*, not an *inconsistency* — both rows follow the U-RT-59 Path B precedent uniformly. (a) would require the reverse facade on row 1 only — row 2's sync-HITL-wrapping-sync-C-RT-17 needs no adapter — *that* would be the inconsistency.
+
+**Confidence:** [HIGH]. Row 1 + row 2 wrap-chain shape under (c) is uniform; field-type swap is precedented.
+
+#### Q4 — AC #12 semantic preservation [HIGH] → **Fully preserved under (c)**
+
+Per spec §14.8.7 NOTE 6-iii ("operator re-asked on each retry attempt") + plan v2.9 U-RT-60 AC #12 ("3× `hitl.gate.evaluated` spans + 3× `hitl.invocation.responded` spans + 3× audit entries with distinct timestamps"):
+
+Under (c), each `RetryBreakerFallbackDispatcher` retry attempt at line 393 executes:
+```python
+result = await self.inner.dispatch(rebound_binding, step, ...)
+```
+where `self.inner = hitl_inf` (async HITL composer). Each attempt re-enters HITL composer body step 1 of §14.8.2 — re-evaluates the gate per the configured placement — re-invokes the AskUserQuestion surface — produces a fresh audit entry. **Operator is re-asked each retry attempt**, verbatim per Q2 ratification.
+
+**Confidence:** [HIGH]. AC #12 test can be authored against the (c) wrap chain: mock 3-attempt retry → assert 3× canonical 4-span hierarchy + 3× audit entries + 3× surface.ask calls.
+
+#### Q5 — Cascade scope [HIGH] → **Bounded; no cross-axis cascade**
+
+**Changes under (c):**
+
+1. `harness-runtime/src/harness_runtime/lifecycle/hitl_gate_composer.py` (~50-80 LOC delta):
+   - `RuntimeHITLGateComposer.dispatch` → `async def dispatch`
+   - Drop `loop` + `result_timeout_seconds` constructor fields (no longer needed — async body awaits surface directly)
+   - Drop `_ask_via_surface` helper (becomes `await self.ask_user_question_surface.ask(...)` directly)
+   - `_compose_and_persist_audit` may stay sync (4-substep writes do not need awaitable inner calls; ledger_writer + audit_writer surfaces are sync per landed types)
+2. `harness-runtime/tests/test_lifecycle_hitl_gate_composer.py` (~80-120 LOC test-fixture re-shape):
+   - Replace `asyncio.to_thread(composer.dispatch, ...)` with `await composer.dispatch(...)` directly (cleaner; removes loop-capture ceremony)
+   - Drop `_make_composer(..., loop=asyncio.get_event_loop())` ceremony; pass nothing for the loop fixture
+   - 21 existing tests + the 11 added at HEAD `9b8a36c` re-shape mechanically
+3. `harness-runtime/src/harness_runtime/bootstrap/stage_5_loop_init.py` (~40 LOC delta):
+   - Add HITL wrap layers per the Q1 materialized chain
+   - Add 2 new `SyncDispatcherFacade` wraps (1 per registry row)
+   - Add `ctx.ask_user_question_surface` binding
+4. `harness-runtime/src/harness_runtime/bootstrap/mutable_context.py` + `harness-runtime/src/harness_runtime/types.py`:
+   - Add `ask_user_question_surface` field (`AskUserQuestionSurface | None`)
+   - `sub_agent_dispatcher` field type widening (or `cast(Any, ...)` at binding site per existing precedent)
+5. NEW MCP-server-backed `AskUserQuestionSurface` impl (per spec §14.8.3 v1.11 binding pin) (~80-150 LOC depending on chosen mechanism)
+6. `harness-runtime/tests/integration/test_cxa_pattern_p1.py`: AC #13 stage-5 post-condition assertion (the `isinstance(ctx.llm_dispatcher.inner, RuntimeHITLGateComposer)` half not landed at HEAD `9b8a36c`)
+7. NEW Phase 7d batch 8 retirement event record per AC #14 (H_T-CP-20 RETIRE-READY)
+
+**Does NOT change:**
+
+- CP `StepDispatcher` Protocol shape (stays **sync** at `harness_cp/workflow_driver.py:155`) — the U-RT-59 Path B resolution is preserved verbatim
+- C-RT-16 `RetryBreakerFallbackDispatcher` wrapper — no changes (consumes async inner per its existing contract)
+- C-RT-17 `RuntimeSubAgentDispatcher` — no changes (sync; wrapped by async HITL above)
+- ADR-F1 v1.2 / D1 / D5 / D6 — no changes
+- Spec `Spec_Harness_Runtime_v1.md` v1.11 — no amendment under (c) (the wrap chain shown at Q1 IS the spec-canonical wrap chain plus a SyncDispatcherFacade at the registry boundary per U-RT-59 Path B precedent; the facade is implementation-mechanism, not contract-surface)
+- Plan v2.9 U-RT-60 ACs — no body amendments (ACs #5/#6/#9/#10/#11/#13-source-half satisfied at HEAD `9b8a36c`; ACs #12/#13-wrap-chain-half/#14 land at follow-on impl arc against (c))
+- CXA v2.5 edges — no changes
+- `harness-cp/CLAUDE.md` substitution table — H_T-CP-20 retirement event files at AC #14 landing per existing plan
+
+**Cross-axis cascade: NONE.** The change is entirely within harness-runtime + harness-runtime tests. No CP / AS / OD / CXA / IS edits required.
+
+**Confidence:** [HIGH] on the scope enumeration. The MCP-server-backed binding (#5) is the largest remaining surface; its scope is bounded by spec §14.8.3 v1.11 pin (MCP-server substitution-mechanism category — direct, in-class with the 11 other MCP-server-category bounded-transport substitutions).
+
+#### Q6 — Retroactive Q6-systemic-pattern catch validation [MODERATE-HIGH] → **Scope-widening confirmed; recommend Class 3 informational addendum to c_rt_18 fork's Q6 disposition**
+
+The fork record (§2 Q6) already articulates the validation: none of the three currently-ratified Q6 extensions (carrier-diff at adversarial review + Step 2 attribute-name cross-check at phase-7-implementation + carrier-diff at spec-writer revision) would have caught the present wrap-asymmetry sync/async mismatch at pre-impl review. The mismatch is a **contract-shape composability defect**, not an attribute-name defect.
+
+**Recommended scope-widening for the Q6 follow-on arc:**
+
+| Extension surface | Currently ratified | Add for contract-shape composability |
+|---|---|---|
+| `harness-adversarial-reviewer` (pre-spec-clearance review) | Carrier-vs-narrative attribute-name diff | **Verify wrap-chain composability:** for every contract declaring a wrap chain across previously-landed wrappers, verify sync/async posture of each layer + inner-call shape of the outer layer + Protocol satisfaction at registry boundary. |
+| `phase-7-implementation` Step 2 (cited-spec cross-check) | Attribute-name cross-check vs canonical carrier | **Wrap-chain composability check:** for every cited wrap chain in the spec contract, verify each layer's sync/async posture matches the inner-call shape of its outer layer (e.g., `async def dispatch` strictly `await self.inner.dispatch(...)` requires async inner). |
+| `spec-writer` (at spec authoring touching a wrap chain) | Carrier-diff at attribute revision | **Composability declaration:** at any spec authoring declaring a wrap chain, mandate explicit sync/async posture statement for each layer + verify against landed wrapper inner-call shapes. |
+
+**Routing:** This is a Class 3 informational addendum to the c_rt_18 span-attr-carrier-drift fork's Q6 disposition (file under that fork or as a new Class 3 record `class_3_tension_q6_scope_widening_contract_shape_composability.md`). Does NOT block U-RT-60 resolution. Operator schedules the Q6 follow-on arc independently of this fork's ratification.
+
+**Confidence:** [MODERATE-HIGH]. Three convergent cases (c_rt_18 binding-mechanism / span-attr-carrier-drift / now wrap-asymmetry sync/async) establish the pattern; scope-widening is well-founded. MODERATE-HIGH (not HIGH) because the empirical test of "would the extension have caught the defect" is necessarily counterfactual.
+
+### 7.3 Tiebreaker check
+
+Per `systems-architect` §4A.2 step 5: the single verifiable fact that, if confirmed, makes (c) determinate is:
+
+> **The HITL composer body does NOT require sync inner-call invocation for its 4-substep audit-write (step 4h) chain.** All four substep sites — `compose_hitl_response_audit` (sync function), `ledger_writer.append` (sync per landed types at `state_ledger.py`), `cp_audit_to_od_audit` (sync at `harness-cxa/`), `audit_writer.append` (sync per landed types at `audit_writer.py`) — are sync; the composer's async body can call them synchronously without `await`. The ONLY awaitable invocation in the composer body is `await self.ask_user_question_surface.ask(...)` at step 4f.
+
+**Verification.** Inspect `harness-runtime/src/harness_runtime/lifecycle/{state_ledger,audit_writer}.py` for the `append` method signatures (must be sync) + `harness-cxa/src/harness_cxa/cp_audit_conversion.py:cp_audit_to_od_audit` (must be sync). All three already confirmed sync at the AC #9 4-substep E2E test landing (HEAD `9b8a36c`). **Tiebreaker check: PASSES.**
+
+### 7.4 Class confirmation + operator-decides marker
+
+**Fork class: 1 (halt-execution)** per `Project_Workflow_v1_8.md` §2.7.6 confirmed. Phase 7 sub-phase 7b execution of the wrap-chain-dependent ACs (#12 / #13 wrap-chain-half / stage 5 wiring / MCP binding / AC #14 retirement event) remains halted until operator ratification.
+
+**Resolution path under (c):** PROPOSING → RATIFIED → APPLIED. **No spec amendment required** (the wrap chain shown at Q1 IS the spec-canonical wrap chain plus a SyncDispatcherFacade at the registry boundary per U-RT-59 Path B precedent; the facade is implementation-mechanism, not contract-surface). `phase-7-implementation` resumes directly against the v1.11/v2.9 substrate post-ratification.
+
+**Resolution path under (d):** PROPOSING → RATIFIED → spec-writer applies spec v1.11 → v1.12 amendment (drops Q2 ratification "operator re-asked on each retry" semantic from NOTE 6-iii) + implementation-planner updates plan v2.9 → v2.10 (rewrite AC #12 to single-fire-per-step semantic) → APPLIED → `phase-7-implementation` resumes.
+
+**Recommended:** **Option (c).** Three convergent chain anchors. Bounded cascade scope. No cross-axis edits. AC #12 semantic preserved verbatim. Composer body cleanly async. Test fixtures simpler under async (removes the existing `asyncio.to_thread`-bridge ceremony from the 21 existing + 11 added tests at HEAD `9b8a36c`).
+
+**OPERATOR DECIDES.** Per `systems-architect` §4A.4: this is a recommendation, not a decision. Operator selects Q1 = (a) / (b) / (c) / (d) at the AskUserQuestion ratification turn. The Q2–Q5 recommendations follow Q1 (each is internally consistent under any Q1 choice; Q6 scope-widening is independent of Q1).
+
+### 7.5 Status transition
+
+PROPOSING → **ready-for-operator-ratification** at this commit. Next session opens with operator AskUserQuestion on Q1 (4 options) + Q6 disposition (file Class 3 informational addendum vs defer to Q6 follow-on arc). Post-ratification: PROPOSING → RATIFIED → APPLIED at the resumed `phase-7-implementation` arc closing landing.
+
+---
+
+*End of fork record. Status: PROPOSING → ready-for-operator-ratification. systems-architect mode 3 recommendation appended; operator decides at AskUserQuestion turn.*
