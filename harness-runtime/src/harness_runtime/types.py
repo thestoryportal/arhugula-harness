@@ -768,6 +768,19 @@ class TopologyDispatcher(Protocol):
         """Cross-pattern admissibility per C-CP-10 §10.3 (delegates to CP)."""
         ...
 
+    def is_topology_permitted(
+        self, pattern: TopologyPattern, workload: WorkloadClass
+    ) -> bool:
+        """Primary OR cross-pattern admissibility (C-CP-11 §11.1 ∪ C-CP-10 §10.3).
+
+        The correct gate for sub-agent dispatch composer step 4 — see the
+        U-RT-59 topology-admissibility Class 1 fork resolution at
+        ``.harness/class_1_tension_u_rt_59_topology_admissibility_predicate.md``.
+        Delegates to ``harness_cp.per_workload_class_topology
+        .is_topology_permitted_for_workload``.
+        """
+        ...
+
 
 @runtime_checkable
 class LLMDispatcher(Protocol):

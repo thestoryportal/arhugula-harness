@@ -148,3 +148,81 @@ PER_WORKLOAD_CLASS_TOPOLOGY: tuple[PerWorkloadClassTopologyCommitment, ...] = (
 )
 """The 4 per-workload-class topology commitments (C-CP-11 §11.1) — one entry
 per `WorkloadClass`."""
+
+
+# ---------------------------------------------------------------------------
+# Lookup helpers — added 2026-05-20 for U-RT-59 topology admissibility fork
+# Path A resolution per
+# `.harness/class_1_tension_u_rt_59_topology_admissibility_predicate.md`.
+# ---------------------------------------------------------------------------
+
+
+def _commitment_for(workload: WorkloadClass) -> PerWorkloadClassTopologyCommitment:
+    """Return the C-CP-11 §11.1 commitment row for ``workload``.
+
+    Linear scan over the 4-row table (workload set is closed at 4 entries per
+    `WorkloadClass`; lookup cost is bounded). The `WorkloadClass` enum and the
+    commitment table are coupled at authoring; an unknown workload is a
+    workspace defect (enum entry without a §11.1 row), not a runtime input.
+    """
+    for commitment in PER_WORKLOAD_CLASS_TOPOLOGY:
+        if commitment.workload_class is workload:
+            return commitment
+    raise WorkloadClassMissingFromTopologyCommitmentTableError(workload)
+
+
+def is_topology_permitted_for_workload(
+    topology: TopologyPattern, workload: WorkloadClass
+) -> bool:
+    """Return whether ``topology`` is **admissible at all** for ``workload``.
+
+    Composition of "is this a primary topology for the workload?" (per C-CP-11
+    §11.1) ∪ "is this a §10.3-annotated cross-pattern admissible alternative?"
+    (per C-CP-10 §10.3 — what ``is_admissible`` answers). Implemented as
+    membership in ``permitted_patterns`` (which is constructed by ``_permitted``
+    as exactly that union — primary patterns ∪ admissibility-closed
+    cross-patterns; see this module's `_permitted` factory).
+
+    **Why this is needed.** ``is_admissible(...)`` answers C-CP-10 §10.3's
+    CROSS-PATTERN (non-primary) admissibility question only — it returns
+    ``False`` for every workload's primary topology because the §10.3 table
+    annotates non-primary alternatives, not the primaries themselves. Naive
+    use of ``is_admissible`` as a gate (as the U-RT-59 v1.6 composer spec
+    prose at §14.7.2 step 4 directed) rejected the common case
+    "SOFTWARE_ENGINEERING + EVALUATOR_OPTIMIZER" because EVALUATOR_OPTIMIZER
+    is the workload's primary, not a §10.3-annotated alternative. Path A
+    resolution of the U-RT-59 topology-admissibility Class 1 fork: gate via
+    this primary-OR-cross-pattern union predicate instead.
+
+    Raises
+    ------
+    WorkloadClassMissingFromTopologyCommitmentTableError
+        If ``workload`` is not represented in ``PER_WORKLOAD_CLASS_TOPOLOGY``
+        (workspace defect — `WorkloadClass` enum grew without a §11.1 row).
+
+    See also
+    --------
+    is_admissible : the underlying §10.3 cross-pattern-only predicate.
+    PerWorkloadClassTopologyCommitment.permitted_patterns : the union set.
+    """
+    return topology in _commitment_for(workload).permitted_patterns
+
+
+class WorkloadClassMissingFromTopologyCommitmentTableError(Exception):
+    """A ``WorkloadClass`` is not represented at C-CP-11 §11.1.
+
+    Signals a workspace defect (the `WorkloadClass` enum has an entry without
+    a corresponding `PerWorkloadClassTopologyCommitment` row in
+    `PER_WORKLOAD_CLASS_TOPOLOGY`). The table and the enum are authored as a
+    coupled pair; divergence is a Class-1-ish authoring drift, not a runtime
+    input error.
+    """
+
+    def __init__(self, workload: WorkloadClass) -> None:
+        self.workload = workload
+        super().__init__(
+            f"WorkloadClass {workload.value!r} has no entry in "
+            f"PER_WORKLOAD_CLASS_TOPOLOGY (C-CP-11 §11.1 commitment table). "
+            f"Add a PerWorkloadClassTopologyCommitment row, or remove the "
+            f"enum entry."
+        )

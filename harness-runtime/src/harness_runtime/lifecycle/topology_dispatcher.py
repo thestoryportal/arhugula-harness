@@ -35,6 +35,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from harness_core.workload_class import WorkloadClass
+from harness_cp.per_workload_class_topology import (
+    is_topology_permitted_for_workload,
+)
 from harness_cp.topology_pattern import (
     TopologyPattern,
     is_admissible,
@@ -82,8 +85,32 @@ class RuntimeTopologyDispatcher:
         is committed separately at C-CP-11 §11.1 (U-CP-23) — a `False`
         result here means "not annotated as cross-pattern admissible at
         §10.3", not "inadmissible outright".
+
+        For "admissible at all" (primary OR cross-pattern) use
+        ``is_topology_permitted`` below.
         """
         return is_admissible(pattern, workload)
+
+    def is_topology_permitted(
+        self,
+        pattern: TopologyPattern,
+        workload: WorkloadClass,
+    ) -> bool:
+        """Whether ``pattern`` is admissible at all for ``workload``.
+
+        Delegates to ``harness_cp.per_workload_class_topology
+        .is_topology_permitted_for_workload`` — the C-CP-11 §11.1 primary
+        topologies ∪ C-CP-10 §10.3 cross-pattern admissibility union
+        predicate. This is the correct gate for sub-agent dispatch step 4
+        (per the U-RT-59 topology-admissibility Class 1 fork Path A
+        resolution; see
+        ``.harness/class_1_tension_u_rt_59_topology_admissibility_predicate.md``).
+
+        Returns ``True`` iff ``pattern`` is in the workload's
+        ``permitted_patterns`` set (primary topologies + admissibility-closed
+        cross-patterns).
+        """
+        return is_topology_permitted_for_workload(pattern, workload)
 
 
 @dataclass(frozen=True, slots=True)

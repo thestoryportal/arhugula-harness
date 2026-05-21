@@ -11,7 +11,9 @@ Acceptance-criterion coverage (per Phase-2 Session-3 Track-A v2.5 L9-ter):
       → test_handoff_context_audit_trail_link_per_path_a_v1_6
   AC #5  — gate-level descent + topology admissibility
       → test_dispatch_invokes_handoff_registry_with_step_context_seeds
-      → test_topology_inadmissible_raises_typed_error_pre_span
+      → test_topology_primary_passes_strict_gate
+      → test_topology_cross_pattern_admissible_passes_strict_gate
+      → test_topology_neither_primary_nor_admissible_raises
   AC #6  — subagent.span + topology.* emission
       → test_dispatch_emits_exactly_one_subagent_span
       → test_subagent_span_carries_7_subagent_attributes
@@ -76,6 +78,7 @@ from harness_runtime.lifecycle.sub_agent_dispatch import (
     SubAgentChildFailedError,
     SubAgentDispatchPayload,
     SubAgentDispatchPayloadShapeError,
+    SubAgentDispatchTopologyInadmissibleError,
 )
 from harness_runtime.lifecycle.topology_dispatcher import RuntimeTopologyDispatcher
 from opentelemetry.sdk.trace import TracerProvider
@@ -371,39 +374,76 @@ def test_dispatch_invokes_handoff_registry_with_step_context_seeds() -> None:
     assert descent.child_gate_level == GateLevel.AUTO
 
 
-def test_topology_advisory_admissibility_does_not_gate_at_v1_6_mvp() -> None:
-    """AC #5b PARTIAL (v1.6 MVP per Class 1 fork on admissibility-predicate
-    semantic mismatch — see
-    `.harness/class_1_tension_u_rt_59_topology_admissibility_predicate.md`).
+def test_topology_primary_passes_strict_gate() -> None:
+    """AC #5b: child topology = workload's primary topology passes step 4.
 
-    Spec §14.7.2 step 4 names `is_admissible(topology, workload_class)` as
-    the gate; that predicate answers cross-pattern non-primary admissibility,
-    not absolute admissibility — every workload's primary topology returns
-    False. Operator ratified 2026-05-20: drop the strict gate; call the
-    predicate advisorially. Composer no longer raises on False; instead it
-    proceeds to span emission. The `SubAgentDispatchTopologyInadmissibleError`
-    type is preserved in the module for the future arc that may add a real
-    admissibility gate (e.g., 'primary OR cross-pattern admissible' check
-    via C-CP-11 primary-topology lookup).
+    Path A resolution of the U-RT-59 topology-admissibility Class 1 fork
+    (`.harness/class_1_tension_u_rt_59_topology_admissibility_predicate.md`):
+    composer step 4 gates on `is_topology_permitted(pattern, workload)` —
+    the C-CP-11 §11.1 primary topologies ∪ C-CP-10 §10.3 cross-pattern
+    union predicate, NOT the bare §10.3 `is_admissible` predicate.
+
+    SINGLE_THREADED_LINEAR is PIPELINE_AUTOMATION's primary topology per
+    C-CP-11 §11.1 row 3 — the strict gate must accept it. (The same case
+    against SOFTWARE_ENGINEERING fails per the third test below: it is
+    neither SE's primary nor a §10.3 cross-pattern-admissible alternative.)
     """
-    # SINGLE_THREADED_LINEAR is NOT in §10.3 cross-pattern admissible set for
-    # any workload (it's the implicit primary for every workload). Pre-fork,
-    # this would have raised; post-fork resolution, the composer proceeds.
+    payload = _payload(
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+        topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+    )
+    dispatcher, runner, exporter = _dispatcher()
+    dispatcher.dispatch(_binding(), _step(payload), step_context=_step_context())
+    spans = [s for s in exporter.get_finished_spans() if s.name == "subagent.span"]
+    assert len(spans) == 1
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["topology.pattern"] == TopologyPattern.SINGLE_THREADED_LINEAR.value
+    assert len(runner.calls) == 1
+
+
+def test_topology_cross_pattern_admissible_passes_strict_gate() -> None:
+    """AC #5b: child topology = §10.3 cross-pattern admissible passes step 4.
+
+    HIERARCHICAL_DELEGATION + SOFTWARE_ENGINEERING is one of the 5
+    cross-pattern admissible cells in `_CROSS_PATTERN_ADMISSIBLE` — non-primary
+    but admissibility-closed in the workload's `permitted_patterns`. The
+    strict gate accepts it because the union predicate covers both halves.
+    """
+    payload = _payload(
+        workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
+        topology=TopologyPattern.HIERARCHICAL_DELEGATION,
+    )
+    dispatcher, runner, exporter = _dispatcher()
+    dispatcher.dispatch(_binding(), _step(payload), step_context=_step_context())
+    spans = [s for s in exporter.get_finished_spans() if s.name == "subagent.span"]
+    assert len(spans) == 1
+    attrs = dict(spans[0].attributes or {})
+    assert attrs["topology.pattern"] == TopologyPattern.HIERARCHICAL_DELEGATION.value
+    assert len(runner.calls) == 1
+
+
+def test_topology_neither_primary_nor_admissible_raises() -> None:
+    """AC #5b: child topology not in workload's permitted set raises.
+
+    SINGLE_THREADED_LINEAR + SOFTWARE_ENGINEERING is neither SE's primary
+    (which is EVALUATOR_OPTIMIZER + ORCHESTRATOR_WORKERS per C-CP-11 §11.1
+    row 1) nor a §10.3 cross-pattern admissible alternative
+    (HIERARCHICAL_DELEGATION is the only SE cross-pattern). The strict gate
+    raises `SubAgentDispatchTopologyInadmissibleError` before `subagent.span`
+    opens — no partial span emission.
+    """
     payload = _payload(
         workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
         topology=TopologyPattern.SINGLE_THREADED_LINEAR,
     )
     dispatcher, runner, exporter = _dispatcher()
-    # No exception expected.
-    dispatcher.dispatch(_binding(), _step(payload), step_context=_step_context())
-    # Span IS emitted (advisory gate, not strict).
+    with pytest.raises(SubAgentDispatchTopologyInadmissibleError):
+        dispatcher.dispatch(_binding(), _step(payload), step_context=_step_context())
+    # No partial subagent.span emitted (gate fires before span open).
     spans = [s for s in exporter.get_finished_spans() if s.name == "subagent.span"]
-    assert len(spans) == 1
-    # topology.pattern attribute reflects the dispatched primary topology.
-    attrs = dict(spans[0].attributes or {})
-    assert attrs["topology.pattern"] == TopologyPattern.SINGLE_THREADED_LINEAR.value
-    # Child runner was invoked (composer didn't short-circuit).
-    assert len(runner.calls) == 1
+    assert len(spans) == 0
+    # Child runner not invoked (composer short-circuited at step 4).
+    assert len(runner.calls) == 0
 
 
 # ---------------------------------------------------------------------------

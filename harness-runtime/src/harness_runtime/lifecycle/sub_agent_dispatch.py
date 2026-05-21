@@ -158,7 +158,14 @@ class SubAgentDispatchPayloadShapeError(Exception):
 
 
 class SubAgentDispatchTopologyInadmissibleError(Exception):
-    """Child manifest's topology + workload pair fails C-CP-10 §10.3 admissibility.
+    """Child manifest's topology + workload pair is not admissible at all.
+
+    The pair is neither a C-CP-11 §11.1 primary topology for the workload nor a
+    C-CP-10 §10.3 cross-pattern-admissible alternative. Verified at composer
+    step 4 via ``ctx.topology_dispatcher.is_topology_permitted(pattern,
+    workload)`` (the union predicate per U-RT-59 topology-admissibility Class
+    1 fork Path A resolution; see
+    ``.harness/class_1_tension_u_rt_59_topology_admissibility_predicate.md``).
 
     Raised before `subagent.span` opens; no partial spans emitted. Driver's
     try/except per C-CP-25 §25.3.3.4 maps to
@@ -370,25 +377,34 @@ class RuntimeSubAgentDispatcher:
             operator_override=None,
         )
 
-        # --- Step 4: topology dispatch + advisory admissibility (AC #5b partial) ---
-        # v1.6 MVP per Class 1 fork
+        # --- Step 4: topology dispatch + strict permission gate (AC #5b) ---
+        # Path A resolution of the U-RT-59 topology-admissibility Class 1 fork
         # (.harness/class_1_tension_u_rt_59_topology_admissibility_predicate.md):
-        # spec §14.7.2 step 4 names `is_admissible(topology, workload_class)` as
-        # the gate. The predicate at `harness_cp.topology_pattern.is_admissible`
-        # answers C-CP-10 §10.3's CROSS-PATTERN (non-primary) admissibility,
-        # not absolute admissibility — its own docstring says "A False result
-        # here means 'not annotated as cross-pattern admissible at §10.3', not
-        # 'inadmissible outright'." The admissible set is 5 cells; every
-        # workload's primary topology returns False, including the natural
-        # child-sub-agent default SINGLE_THREADED_LINEAR. Operator ratified
-        # 2026-05-20: drop the strict gate; call the predicate advisorially
-        # for span-attribute completeness but do not raise on False. Strict
-        # admissibility gating awaits a runtime C-CP-11 primary-topology
-        # lookup (separate follow-on arc).
+        # the spec-named predicate `is_admissible(...)` at §14.7.2 step 4
+        # answers C-CP-10 §10.3's CROSS-PATTERN-only admissibility — it returns
+        # False for every workload's primary topology because §10.3 annotates
+        # non-primary alternatives only. The composer's intent is "admissible
+        # at all for this workload" — primary OR cross-pattern. Path A adds
+        # `is_topology_permitted(pattern, workload)` at the runtime topology
+        # dispatcher, delegating to `harness_cp.per_workload_class_topology
+        # .is_topology_permitted_for_workload` (membership in the workload's
+        # `permitted_patterns` set, constructed as primary topologies ∪
+        # admissibility-closed cross-patterns per the `_permitted` factory).
+        # The strict gate is restored with the correct union semantic.
+        #
+        # Spec §14.7.2 step 4 still names `is_admissible(...)` — this is a
+        # documented Class 3 drift (item 8 at
+        # `.harness/class_3_tension_u_rt_59_spec_prose_drift.md`); the
+        # composer lands against the correct predicate and the spec prose
+        # absorbs the rename at the next runtime spec revision pass.
         topology = self.topology_dispatcher.dispatch(payload.child_manifest_entry)
-        _ = self.topology_dispatcher.is_admissible(
-            topology, payload.child_manifest_entry.workload_class
-        )  # advisory call; result not gated at v1.6 MVP
+        workload = payload.child_manifest_entry.workload_class
+        if not self.topology_dispatcher.is_topology_permitted(topology, workload):
+            raise SubAgentDispatchTopologyInadmissibleError(
+                f"topology {topology.value!r} is not admissible for workload "
+                f"{workload.value!r} — neither a C-CP-11 §11.1 primary topology "
+                f"nor a C-CP-10 §10.3 cross-pattern-admissible alternative"
+            )
 
         # --- Step 5: open subagent.span + set attributes (AC #6) -----------
         tracer = self.tracer_provider.get_tracer(
