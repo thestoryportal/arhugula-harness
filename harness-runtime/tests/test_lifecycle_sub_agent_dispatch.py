@@ -27,14 +27,19 @@ Acceptance-criterion coverage (per Phase-2 Session-3 Track-A v2.5 L9-ter):
       → test_success_maps_to_completed_returns_final_state
       → test_drained_maps_to_completed_returns_partial_state
       → test_failed_raises_sub_agent_child_failed_error_with_span_attrs
-  AC #9 partial — audit-entry composition (write half STRUCK per Class 1 fork)
-      → test_audit_entry_composed_via_handoff_registry
-      → test_audit_entry_not_written_via_ctx_audit_writer_v1_6_mvp
+  AC #9  — audit-entry 4-substep composition (UN-STRUCK at v1.7 §14.7.2 step 8)
+      → test_dispatcher_takes_audit_writer_kwarg_at_v1_7
+      → test_step8a_composes_cp_audit_entry
+      → test_step8b_writes_f2_dispatch_action_entry
+      → test_step8c_8d_persists_od_audit_entry_through_writer
+      → test_step8b_failure_raises_audit_compose_error_on_success_path
+      → test_step8_failure_swallowed_on_failed_child_path
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -72,10 +77,14 @@ from harness_cp.workflow_driver_types import (
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_od.audit_ledger_types import SignatureAlgorithm
+from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
 from harness_runtime.lifecycle.handoff import RuntimeHandoffRegistry
+from harness_runtime.lifecycle.state_ledger import LedgerWriter
 from harness_runtime.lifecycle.sub_agent_dispatch import (
     RuntimeSubAgentDispatcher,
     SubAgentChildFailedError,
+    SubAgentDispatchAuditComposeError,
     SubAgentDispatchPayload,
     SubAgentDispatchPayloadShapeError,
     SubAgentDispatchTopologyInadmissibleError,
@@ -272,20 +281,58 @@ def _failed_result() -> RunResult:
     )
 
 
-def _dispatcher(*, child_result: RunResult | None = None) -> tuple[
-    RuntimeSubAgentDispatcher, _MockChildWorkflowRunner, InMemorySpanExporter
-]:
+def _build_ledger_writer(tmp_path: Path) -> LedgerWriter:
+    """Build a real `LedgerWriter` rooted in `tmp_path` (test isolation).
+
+    Bypasses `PathResolver` — constructs the `JsonlLedgerHandle` directly
+    against a tmp-path JSONL file so tests don't need a path-class registry
+    fixture.
+    """
+    from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
+
+    path = tmp_path / "state.jsonl"
+    path.touch()
+    handle = JsonlLedgerHandle(canonical_path=path, exists=True, entry_count=0)
+    return LedgerWriter(handle=handle, actor=_ACTOR)
+
+
+def _dispatcher(
+    tmp_path: Path,
+    *,
+    child_result: RunResult | None = None,
+    audit_writer_override: RuntimeAuditLedgerWriter | None = None,
+    ledger_writer_override: LedgerWriter | None = None,
+) -> tuple[RuntimeSubAgentDispatcher, _MockChildWorkflowRunner, InMemorySpanExporter]:
     """Compose a RuntimeSubAgentDispatcher with mocked child runner + real
-    handoff/topology registries + InMemorySpanExporter for verification."""
+    handoff/topology registries + real `LedgerWriter` + `RuntimeAuditLedgerWriter`
+    (rooted in `tmp_path`) + InMemorySpanExporter for verification.
+
+    v1.7 §14.7.2 step 8 4-substep contract requires the dispatcher to wire
+    `ledger_writer` (8b F2-write), `audit_writer` (8d OD persistence),
+    `audit_signing_key_id` + `audit_signing_algorithm` (8c CP→OD converter
+    signing), and `time_source` (8b F2 timestamp).
+    """
+    from datetime import UTC, datetime
+
     tp, exporter = _tracer_provider_with_exporter()
     runner = _MockChildWorkflowRunner(
         next_result=child_result if child_result is not None else _success_result()
+    )
+    ledger_writer = ledger_writer_override or _build_ledger_writer(tmp_path)
+    audit_writer = audit_writer_override or RuntimeAuditLedgerWriter(
+        ledger_writer=ledger_writer,
+        time_source=lambda: datetime.now(UTC),
     )
     dispatcher = RuntimeSubAgentDispatcher(
         handoff_registry=RuntimeHandoffRegistry(),
         topology_dispatcher=RuntimeTopologyDispatcher(),
         tracer_provider=tp,
         child_workflow_runner=runner,  # type: ignore[arg-type]
+        ledger_writer=ledger_writer,
+        audit_writer=audit_writer,
+        audit_signing_key_id="test-signing-key",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        time_source=lambda: datetime.now(UTC),
     )
     return dispatcher, runner, exporter
 
@@ -295,9 +342,9 @@ def _dispatcher(*, child_result: RunResult | None = None) -> tuple[
 # ---------------------------------------------------------------------------
 
 
-def test_runtime_sub_agent_dispatcher_satisfies_step_dispatcher_protocol() -> None:
+def test_runtime_sub_agent_dispatcher_satisfies_step_dispatcher_protocol(tmp_path: Path) -> None:
     """AC #2: isinstance check passes via @runtime_checkable Protocol."""
-    dispatcher, _, _ = _dispatcher()
+    dispatcher, _, _ = _dispatcher(tmp_path)
     assert isinstance(dispatcher, StepDispatcher)
 
 
@@ -306,9 +353,9 @@ def test_runtime_sub_agent_dispatcher_satisfies_step_dispatcher_protocol() -> No
 # ---------------------------------------------------------------------------
 
 
-def test_payload_validation_rejects_mis_shaped_payload() -> None:
+def test_payload_validation_rejects_mis_shaped_payload(tmp_path: Path) -> None:
     """AC #3: a SUB_AGENT_DISPATCH step with bad step_payload raises typed error."""
-    dispatcher, _, _ = _dispatcher()
+    dispatcher, _, _ = _dispatcher(tmp_path)
     bad_step = WorkflowStep(
         step_id=StepID("step-0"),
         step_kind=StepKind.SUB_AGENT_DISPATCH,
@@ -318,7 +365,7 @@ def test_payload_validation_rejects_mis_shaped_payload() -> None:
         dispatcher.dispatch(_binding(), bad_step, step_context=_step_context())
 
 
-def test_payload_validation_accepts_4_field_shape() -> None:
+def test_payload_validation_accepts_4_field_shape(tmp_path: Path) -> None:
     """AC #3: valid 4-field payload validates + composer proceeds."""
     payload = _payload()
     assert payload.child_workflow_id == "child-wf"
@@ -331,9 +378,9 @@ def test_payload_validation_accepts_4_field_shape() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_handoff_context_composed_per_v1_6_mvp_table() -> None:
+def test_handoff_context_composed_per_v1_6_mvp_table(tmp_path: Path) -> None:
     """AC #4: composer constructs the 7-field HandoffContext per §14.7.3 table."""
-    dispatcher, runner, _ = _dispatcher()
+    dispatcher, runner, _ = _dispatcher(tmp_path)
     dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
     assert len(runner.calls) == 1
     hc = runner.calls[0]["handoff_context"]
@@ -347,9 +394,9 @@ def test_handoff_context_composed_per_v1_6_mvp_table() -> None:
     assert hc.retry_history.retry_count == 0
 
 
-def test_handoff_context_audit_trail_link_per_path_a_v1_6() -> None:
+def test_handoff_context_audit_trail_link_per_path_a_v1_6(tmp_path: Path) -> None:
     """AC #4: audit_trail_link constructed from step_context per v1.6 Path A."""
-    dispatcher, runner, _ = _dispatcher()
+    dispatcher, runner, _ = _dispatcher(tmp_path)
     dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
     hc = runner.calls[0]["handoff_context"]
     assert hc.audit_trail_link.action_id == _step_context().parent_action_id
@@ -363,9 +410,9 @@ def test_handoff_context_audit_trail_link_per_path_a_v1_6() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_dispatch_invokes_handoff_registry_with_step_context_seeds() -> None:
+def test_dispatch_invokes_handoff_registry_with_step_context_seeds(tmp_path: Path) -> None:
     """AC #5a: composer's handoff_registry.dispatch receives step_context seeds."""
-    dispatcher, runner, _ = _dispatcher()
+    dispatcher, runner, _ = _dispatcher(tmp_path)
     dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
     descent = runner.calls[0]["descent"]
     assert isinstance(descent, SubAgentGateLevelDescent)
@@ -374,7 +421,7 @@ def test_dispatch_invokes_handoff_registry_with_step_context_seeds() -> None:
     assert descent.child_gate_level == GateLevel.AUTO
 
 
-def test_topology_primary_passes_strict_gate() -> None:
+def test_topology_primary_passes_strict_gate(tmp_path: Path) -> None:
     """AC #5b: child topology = workload's primary topology passes step 4.
 
     Path A resolution of the U-RT-59 topology-admissibility Class 1 fork
@@ -392,7 +439,7 @@ def test_topology_primary_passes_strict_gate() -> None:
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
         topology=TopologyPattern.SINGLE_THREADED_LINEAR,
     )
-    dispatcher, runner, exporter = _dispatcher()
+    dispatcher, runner, exporter = _dispatcher(tmp_path)
     dispatcher.dispatch(_binding(), _step(payload), step_context=_step_context())
     spans = [s for s in exporter.get_finished_spans() if s.name == "subagent.span"]
     assert len(spans) == 1
@@ -401,7 +448,7 @@ def test_topology_primary_passes_strict_gate() -> None:
     assert len(runner.calls) == 1
 
 
-def test_topology_cross_pattern_admissible_passes_strict_gate() -> None:
+def test_topology_cross_pattern_admissible_passes_strict_gate(tmp_path: Path) -> None:
     """AC #5b: child topology = §10.3 cross-pattern admissible passes step 4.
 
     HIERARCHICAL_DELEGATION + SOFTWARE_ENGINEERING is one of the 5
@@ -413,7 +460,7 @@ def test_topology_cross_pattern_admissible_passes_strict_gate() -> None:
         workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
         topology=TopologyPattern.HIERARCHICAL_DELEGATION,
     )
-    dispatcher, runner, exporter = _dispatcher()
+    dispatcher, runner, exporter = _dispatcher(tmp_path)
     dispatcher.dispatch(_binding(), _step(payload), step_context=_step_context())
     spans = [s for s in exporter.get_finished_spans() if s.name == "subagent.span"]
     assert len(spans) == 1
@@ -422,7 +469,7 @@ def test_topology_cross_pattern_admissible_passes_strict_gate() -> None:
     assert len(runner.calls) == 1
 
 
-def test_topology_neither_primary_nor_admissible_raises() -> None:
+def test_topology_neither_primary_nor_admissible_raises(tmp_path: Path) -> None:
     """AC #5b: child topology not in workload's permitted set raises.
 
     SINGLE_THREADED_LINEAR + SOFTWARE_ENGINEERING is neither SE's primary
@@ -436,7 +483,7 @@ def test_topology_neither_primary_nor_admissible_raises() -> None:
         workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
         topology=TopologyPattern.SINGLE_THREADED_LINEAR,
     )
-    dispatcher, runner, exporter = _dispatcher()
+    dispatcher, runner, exporter = _dispatcher(tmp_path)
     with pytest.raises(SubAgentDispatchTopologyInadmissibleError):
         dispatcher.dispatch(_binding(), _step(payload), step_context=_step_context())
     # No partial subagent.span emitted (gate fires before span open).
@@ -451,17 +498,17 @@ def test_topology_neither_primary_nor_admissible_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_dispatch_emits_exactly_one_subagent_span() -> None:
+def test_dispatch_emits_exactly_one_subagent_span(tmp_path: Path) -> None:
     """AC #6: exactly one subagent.span per composer invocation."""
-    dispatcher, _, exporter = _dispatcher()
+    dispatcher, _, exporter = _dispatcher(tmp_path)
     dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
     spans = [s for s in exporter.get_finished_spans() if s.name == "subagent.span"]
     assert len(spans) == 1
 
 
-def test_subagent_span_carries_7_subagent_attributes() -> None:
+def test_subagent_span_carries_7_subagent_attributes(tmp_path: Path) -> None:
     """AC #6: the 7 subagent.* attributes per C-CP-14 §14.2 verbatim."""
-    dispatcher, _, exporter = _dispatcher()
+    dispatcher, _, exporter = _dispatcher(tmp_path)
     dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
     span = next(s for s in exporter.get_finished_spans() if s.name == "subagent.span")
     attrs = dict(span.attributes or {})
@@ -469,9 +516,9 @@ def test_subagent_span_carries_7_subagent_attributes() -> None:
     assert expected.issubset(set(attrs.keys()))
 
 
-def test_subagent_span_carries_2_narrow_topology_attributes() -> None:
+def test_subagent_span_carries_2_narrow_topology_attributes(tmp_path: Path) -> None:
     """AC #6: narrow-subset 2 topology.* attributes (pattern + workload_class)."""
-    dispatcher, _, exporter = _dispatcher()
+    dispatcher, _, exporter = _dispatcher(tmp_path)
     dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
     span = next(s for s in exporter.get_finished_spans() if s.name == "subagent.span")
     attrs = dict(span.attributes or {})
@@ -479,9 +526,9 @@ def test_subagent_span_carries_2_narrow_topology_attributes() -> None:
     assert "topology.workload_class" in attrs
 
 
-def test_subagent_span_does_not_carry_8_fanout_topology_attributes() -> None:
+def test_subagent_span_does_not_carry_8_fanout_topology_attributes(tmp_path: Path) -> None:
     """AC #6: explicit absence of 8 fan-out-specific topology.* attributes."""
-    dispatcher, _, exporter = _dispatcher()
+    dispatcher, _, exporter = _dispatcher(tmp_path)
     dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
     span = next(s for s in exporter.get_finished_spans() if s.name == "subagent.span")
     attrs = dict(span.attributes or {})
@@ -498,7 +545,7 @@ def test_subagent_span_does_not_carry_8_fanout_topology_attributes() -> None:
     assert forbidden.isdisjoint(set(attrs.keys()))
 
 
-def test_attribute_names_come_from_canonical_carrier() -> None:
+def test_attribute_names_come_from_canonical_carrier(tmp_path: Path) -> None:
     """AC #6: subagent.* + topology.pattern + topology.workload_class are sourced
     from the canonical CP-side carrier (no hand-coded attribute strings)."""
     subagent_carrier_names = {s.attribute_name for s in SUBAGENT_NAMESPACE_SCHEMA}
@@ -516,9 +563,9 @@ def test_attribute_names_come_from_canonical_carrier() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_dispatch_invokes_child_workflow_runner() -> None:
+def test_dispatch_invokes_child_workflow_runner(tmp_path: Path) -> None:
     """AC #7: composer invokes the injected child runner with the child shape."""
-    dispatcher, runner, _ = _dispatcher()
+    dispatcher, runner, _ = _dispatcher(tmp_path)
     dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
     assert len(runner.calls) == 1
     call = runner.calls[0]
@@ -528,9 +575,9 @@ def test_dispatch_invokes_child_workflow_runner() -> None:
     assert call["default_model_binding"] == _binding().model_binding
 
 
-def test_child_runner_receives_handoff_context_and_descent() -> None:
+def test_child_runner_receives_handoff_context_and_descent(tmp_path: Path) -> None:
     """AC #7: child runner sees fully-composed HandoffContext + descent."""
-    dispatcher, runner, _ = _dispatcher()
+    dispatcher, runner, _ = _dispatcher(tmp_path)
     dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
     call = runner.calls[0]
     assert call["handoff_context"].proposed_action.action_kind == ActionKind.SUB_AGENT_DISPATCH
@@ -542,9 +589,9 @@ def test_child_runner_receives_handoff_context_and_descent() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_success_maps_to_completed_returns_final_state() -> None:
+def test_success_maps_to_completed_returns_final_state(tmp_path: Path) -> None:
     """AC #8a: child SUCCESS → subagent.result_status=completed; returns final_state."""
-    dispatcher, _, exporter = _dispatcher(child_result=_success_result())
+    dispatcher, _, exporter = _dispatcher(tmp_path, child_result=_success_result())
     out = dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
     assert out == {"child_field": "value"}
     span = next(s for s in exporter.get_finished_spans() if s.name == "subagent.span")
@@ -553,9 +600,9 @@ def test_success_maps_to_completed_returns_final_state() -> None:
     assert attrs["subagent.request_blocked_by_budget"] is False
 
 
-def test_drained_maps_to_completed_returns_partial_state() -> None:
+def test_drained_maps_to_completed_returns_partial_state(tmp_path: Path) -> None:
     """AC #8b: child DRAINED → subagent.result_status=completed; returns partial_state."""
-    dispatcher, _, exporter = _dispatcher(child_result=_drained_result())
+    dispatcher, _, exporter = _dispatcher(tmp_path, child_result=_drained_result())
     out = dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
     assert out == {"partial_field": "partial_value"}
     span = next(s for s in exporter.get_finished_spans() if s.name == "subagent.span")
@@ -563,9 +610,9 @@ def test_drained_maps_to_completed_returns_partial_state() -> None:
     assert attrs["subagent.result_status"] == "completed"
 
 
-def test_failed_raises_sub_agent_child_failed_error_with_span_attrs() -> None:
+def test_failed_raises_sub_agent_child_failed_error_with_span_attrs(tmp_path: Path) -> None:
     """AC #8c: child FAILED → subagent.result_status=failed + raises typed error."""
-    dispatcher, _, exporter = _dispatcher(child_result=_failed_result())
+    dispatcher, _, exporter = _dispatcher(tmp_path, child_result=_failed_result())
     with pytest.raises(SubAgentChildFailedError):
         dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
     span = next(s for s in exporter.get_finished_spans() if s.name == "subagent.span")
@@ -574,44 +621,134 @@ def test_failed_raises_sub_agent_child_failed_error_with_span_attrs() -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC #9 partial — audit-entry composition (write half STRUCK per Class 1 fork)
+# AC #9 — audit-entry 4-substep composition (UN-STRUCK at v1.7 §14.7.2 step 8)
 # ---------------------------------------------------------------------------
 
 
-def test_audit_entry_composed_via_handoff_registry() -> None:
-    """AC #9 partial: composer calls handoff_registry.compose_dispatch_audit.
-
-    Write site (ctx.audit_writer.append) is STRUCK at v1.6 MVP per the Class 1
-    fork on CP→OD audit-write composition (joins fork-cp-is-wiring-gaps).
-    Verified indirectly: dispatch completes without raising on
-    audit-write-related types; the entry is composed (composer body inspection)
-    but not persisted.
-    """
-    dispatcher, _, _ = _dispatcher()
-    # Dispatch completes without raising → audit composition succeeded.
-    # (The CPAuditLedgerEntry is composed inline; not surfaced through
-    # any return path at v1.6 MVP since the write site is STRUCK.)
-    out = dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
-    assert out is not None
-
-
-def test_audit_entry_not_written_via_ctx_audit_writer_v1_6_mvp() -> None:
-    """AC #9 partial: confirm RuntimeSubAgentDispatcher takes no audit_writer
-    parameter at v1.6 MVP per the Class 1 fork on CP→OD audit-write composition.
-
-    Structural assertion: the dataclass's __init__ signature does not include
-    an `audit_writer` parameter. v1.6 composer composes the
-    CPAuditLedgerEntry via handoff_registry; the OD-side write site is
-    deferred to a future Phase 6 CP-composer-authoring arc.
+def test_dispatcher_takes_audit_writer_kwarg_at_v1_7(tmp_path: Path) -> None:
+    """AC #9 contract surface: `RuntimeSubAgentDispatcher` exposes the 5 new
+    v1.7 step-8 kwargs (ledger_writer, audit_writer, audit_signing_key_id,
+    audit_signing_algorithm, time_source). Inverts the v1.6 MVP structural
+    assertion (which forbade `audit_writer` per the Class 1 fork strike).
     """
     import inspect
 
     sig = inspect.signature(RuntimeSubAgentDispatcher)
-    assert "audit_writer" not in sig.parameters, (
-        "RuntimeSubAgentDispatcher must not take an audit_writer at v1.6 MVP — "
-        "the CP→OD audit-write composition is deferred per the Class 1 fork; "
-        "compose-only AC #9 partial-landing means no write-side dependency."
+    for required in (
+        "ledger_writer",
+        "audit_writer",
+        "audit_signing_key_id",
+        "audit_signing_algorithm",
+        "time_source",
+    ):
+        assert required in sig.parameters, (
+            f"RuntimeSubAgentDispatcher missing {required!r} kwarg required "
+            f"by spec v1.7 §14.7.2 step 8 4-substep audit composition"
+        )
+
+
+def test_step8a_composes_cp_audit_entry(tmp_path: Path) -> None:
+    """AC #9.8a: dispatch produces a `CPAuditLedgerEntry` for the dispatch fact.
+
+    Verified indirectly via the F2 entry's existence at 8b (the dispatch
+    fact's ground truth) — see `test_step8b_writes_f2_dispatch_action_entry`.
+    """
+    dispatcher, _, _ = _dispatcher(tmp_path)
+    out = dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    assert out is not None
+
+
+def test_step8b_writes_f2_dispatch_action_entry(tmp_path: Path) -> None:
+    """AC #9.8b: composer writes an F2 state-ledger entry whose action_id
+    encodes the dispatch action — `dispatch:<parent_action_id>:<child_index>`
+    per spec §14.7.2 step 8b.
+    """
+    from harness_is.state_ledger_write import read_ledger
+
+    ledger_writer = _build_ledger_writer(tmp_path)
+    dispatcher, _, _ = _dispatcher(tmp_path, ledger_writer_override=ledger_writer)
+    dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    entries = read_ledger(ledger_writer.handle)
+    dispatch_entries = [
+        e for e in entries if str(e.action_id).startswith("dispatch:")
+    ]
+    assert len(dispatch_entries) == 1, (
+        f"expected exactly one F2 dispatch entry at step 8b; got {len(dispatch_entries)}"
     )
+    assert "workflow:parent-wf:step:0" in str(dispatch_entries[0].action_id)
+
+
+def test_step8c_8d_persists_od_audit_entry_through_writer(tmp_path: Path) -> None:
+    """AC #9.8c+8d: dispatch produces a CP→OD converter call (8c) + OD
+    `AuditLedgerEntry` persisted via `audit_writer.append` (8d); verified by
+    reading the audit-tagged entries back from the underlying ledger.
+    """
+    ledger_writer = _build_ledger_writer(tmp_path)
+    dispatcher, _, _ = _dispatcher(tmp_path, ledger_writer_override=ledger_writer)
+    dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    # `RuntimeAuditLedgerWriter` wraps audit entries with action_id prefix
+    # `audit:<tag>:` per its append discipline; presence of such an entry
+    # confirms 8c→8d completed end-to-end.
+    audit_writer = dispatcher.audit_writer
+    audit_entries = audit_writer.read_all()
+    assert len(audit_entries) == 1, (
+        f"expected exactly one OD audit entry persisted at step 8d; "
+        f"got {len(audit_entries)}"
+    )
+
+
+def test_step8b_failure_raises_audit_compose_error_on_success_path(
+    tmp_path: Path,
+) -> None:
+    """v1.7 §14.7.2 step 8 failure semantics: F2-write failure on SUCCESS path
+    raises `SubAgentDispatchAuditComposeError` mapping to
+    `RT-FAIL-SUB-AGENT-AUDIT-COMPOSE`.
+    """
+    from datetime import UTC, datetime
+    from unittest.mock import MagicMock
+
+    failing_ledger = MagicMock(spec=LedgerWriter)
+    failing_ledger.actor = _ACTOR
+    failing_ledger.append.side_effect = OSError("simulated F2-write failure")
+    audit_writer = RuntimeAuditLedgerWriter(
+        ledger_writer=_build_ledger_writer(tmp_path),
+        time_source=lambda: datetime.now(UTC),
+    )
+    dispatcher, _, _ = _dispatcher(
+        tmp_path,
+        ledger_writer_override=failing_ledger,
+        audit_writer_override=audit_writer,
+    )
+    with pytest.raises(SubAgentDispatchAuditComposeError):
+        dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+
+
+def test_step8_failure_swallowed_on_failed_child_path(tmp_path: Path) -> None:
+    """v1.7 §14.7.2 step 8 failure semantics: on FAILED child path, audit
+    composition failures are swallowed; `SubAgentChildFailedError` remains the
+    primary fault per "the audit-trail-fact record is preserved even when
+    downstream substeps fail" clause.
+    """
+    from datetime import UTC, datetime
+    from unittest.mock import MagicMock
+
+    failing_ledger = MagicMock(spec=LedgerWriter)
+    failing_ledger.actor = _ACTOR
+    failing_ledger.append.side_effect = OSError("simulated F2-write failure")
+    audit_writer = RuntimeAuditLedgerWriter(
+        ledger_writer=_build_ledger_writer(tmp_path),
+        time_source=lambda: datetime.now(UTC),
+    )
+    dispatcher, _, _ = _dispatcher(
+        tmp_path,
+        child_result=_failed_result(),
+        ledger_writer_override=failing_ledger,
+        audit_writer_override=audit_writer,
+    )
+    # Even with a broken F2-write surface, the child-failure remains the
+    # surfaced fault — audit composition is best-effort.
+    with pytest.raises(SubAgentChildFailedError):
+        dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
 
 
 # ---------------------------------------------------------------------------
@@ -636,7 +773,7 @@ def test_audit_entry_not_written_via_ctx_audit_writer_v1_6_mvp() -> None:
 # here that exercises the real compose_child_workflow_runner.
 
 
-def test_compose_child_workflow_runner_factory_is_constructible() -> None:
+def test_compose_child_workflow_runner_factory_is_constructible(tmp_path: Path) -> None:
     """Smoke check: real `compose_child_workflow_runner(ctx)` builds a callable.
 
     Validates the factory shape without invoking the runner (which would
@@ -655,6 +792,58 @@ def test_compose_child_workflow_runner_factory_is_constructible() -> None:
 
     runner = compose_child_workflow_runner(cast(Any, _CtxStub()))
     assert callable(runner)
+
+
+# ---------------------------------------------------------------------------
+# AC #9 integration — multi-dispatch chain + IS hash-chain integrity
+# ---------------------------------------------------------------------------
+
+
+def test_three_sequential_dispatches_chain_through_audit_writer(tmp_path: Path) -> None:
+    """v1.7 §14.7.2 step 8 integration: three sequential sub-agent dispatches
+    each produce both an F2 dispatch entry (step 8b) AND an OD audit entry
+    (step 8d) through the IS-anchored ledger; the underlying IS hash chain
+    remains VALID per `verify_chain` (C-IS-06 §6.4).
+    """
+    from harness_is.chain_verification import VerificationStatus, verify_chain
+    from harness_is.state_ledger_write import read_ledger
+
+    ledger_writer = _build_ledger_writer(tmp_path)
+    dispatcher, _, _ = _dispatcher(tmp_path, ledger_writer_override=ledger_writer)
+
+    # Three sequential dispatches with distinct parent_action_ids → distinct
+    # F2 dispatch action_ids; idempotency-key collisions avoided per the
+    # composer's `dispatch:<parent_action_id>:<child_index>` scheme.
+    for i in range(3):
+        ctx = StepExecutionContext(
+            parent_action_id=f"workflow:parent-wf:step:{i}",
+            parent_gate_level=GateLevel.AUTO,
+            parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+            parent_actor=_ACTOR,
+            parent_entry_hash="",
+            parent_idempotency_key="0" * 64,
+            tenant_id=None,
+            step_index=i,
+        )
+        dispatcher.dispatch(_binding(), _step(), step_context=ctx)
+
+    # Read back: 3 F2 dispatch entries (8b) + 3 OD audit-wrapped entries (8d)
+    # interleaved in append order.
+    entries = read_ledger(ledger_writer.handle)
+    dispatch_entries = [e for e in entries if str(e.action_id).startswith("dispatch:")]
+    audit_entries = [e for e in entries if str(e.action_id).startswith("audit:")]
+    assert len(dispatch_entries) == 3, (
+        f"expected 3 F2 dispatch entries; got {len(dispatch_entries)}"
+    )
+    assert len(audit_entries) == 3, (
+        f"expected 3 OD audit-wrapped entries; got {len(audit_entries)}"
+    )
+
+    # IS hash chain across all 6 entries remains VALID per C-IS-06 §6.4.
+    result = verify_chain(entries)
+    assert result.status == VerificationStatus.VALID, (
+        f"IS hash chain verification failed across the 6 sequential entries: {result}"
+    )
 
 
 # ---------------------------------------------------------------------------

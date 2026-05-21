@@ -1,10 +1,16 @@
 """Sub-agent dispatch composer — stage 5 LOOP_INIT (U-RT-59 ACs #2-#9).
 
-Per `Spec_Harness_Runtime_v1.md` v1.6 §14.7 C-RT-17 (sub-agent dispatch
+Per `Spec_Harness_Runtime_v1.md` v1.7 §14.7 C-RT-17 (sub-agent dispatch
 composer; Path A resolution of the StepDispatcher Protocol parent-context
-gap). Concretes the `StepDispatcher` Protocol for `StepKind.SUB_AGENT_DISPATCH`
-steps; composer body per §14.7.2 ten-step discipline, narrowed at v1.6 MVP per
-operator-ratified fork resolutions documented below.
+gap) + v1.7 §14.7.2 step 8 4-substep sequence (Path D + Path B-revised-a
+resolution of U-RT-59 Fork 2 CP→OD audit-write gap). Concretes the
+`StepDispatcher` Protocol for `StepKind.SUB_AGENT_DISPATCH` steps; composer
+body per §14.7.2 ten-step discipline with the v1.7 step 8 4-substep audit
+composition: (8a) compose CP audit → (8b) F2-write dispatch action → (8c)
+CP→OD convert → (8d) `ctx.audit_writer.append`. AC #9 write half UN-STRUCK
+at v1.7 per the now-coherent spec substrate (CXA v2.4 + CP spec v1.7 §13.5.1
+converter contract + ADR-D5 v1.4 + OD spec v1.5 C-OD-24 + runtime spec v1.7
+§14.7.2 step 8).
 
 **Operator-ratified fork resolutions absorbed at landing.**
 
@@ -15,16 +21,20 @@ operator-ratified fork resolutions documented below.
    froze the `StepDispatcher` Protocol as sync; `execute_workflow` is sync.
    Operator ratified land-sync per the de-facto Stage 1 contract.
 
-2. **Class 1 — CP→OD audit-write gap (filed at landing).** Spec §14.7.2
-   step 8 calls `ctx.audit_writer.append(tenant_id, audit_entry)` with
-   `audit_entry: CPAuditLedgerEntry`. The real `audit_writer.append`
-   signature takes OD-shaped `AuditLedgerEntry` (different schema); no
-   CP→OD audit-shape converter exists. Joins the
-   `[[fork-cp-is-wiring-gaps]]` Phase-6 CP-composer-authoring residual.
-   Halt-route-split per `[[halt-route-split-AC-pattern]]`: AC #9 write
-   half STRUCK; compose half landed (dispatch-fact `CPAuditLedgerEntry`
-   produced for retirement-criterion-B evidence; end-to-end write owed
-   to follow-on arc).
+2. **Class 1 — CP→OD audit-write gap (RESOLVED at v1.7 spec arc).** Original
+   v1.6 prose at §14.7.2 step 8 was incompatible with `audit_writer.append`'s
+   OD-shape contract; AC #9 write half STRUCK at landing. Full Fork 2 spec
+   arc closed 2026-05-20 across 8 commits (CXA v2.4 + CP spec v1.7 §13.5.1
+   converter contract + ADR-D5 v1.4 §1.4 + OD spec v1.5 C-OD-24 + runtime
+   spec v1.7 §14.7.2 step 8 4-substep sequence + CP spec v1.8 Form A NOTE
+   reconciliation). v1.7 implementation arc materializes the 4-substep
+   sequence: (8a) `compose_dispatch_audit` → `CPAuditLedgerEntry` (existing
+   surface); (8b) `ledger_writer.append(...)` → F2 entry for the dispatch
+   action (Q2(a) — composer writes F2 BEFORE composing OD audit); (8c)
+   `cp_audit_to_od_audit(...)` → signed OD `AuditLedgerEntry` (CP spec
+   §13.5.1 converter); (8d) `audit_writer.append(tenant_id, od_entry)` →
+   IS-anchored persistence via OD wrapper. AC #9 UN-STRUCK at the same
+   landing.
 
 3. **Class 1 — async/sync dispatcher defect (filed at landing).**
    `ctx.llm_dispatcher` (U-RT-58 `RetryBreakerFallbackDispatcher` wrapper)
@@ -42,26 +52,52 @@ operator-ratified fork resolutions documented below.
    `action_kind / payload / brief` (not `text`); `ChildWorkflowRunner`
    carries additive `default_model_binding` kwarg.
 
-**Composer body shape (v1.6 MVP, post-fork-absorption).**
+**Composer body shape (v1.7, post-Fork-2-resolution).**
 
 1. Pydantic-validate `step.step_payload → SubAgentDispatchPayload` (AC #3)
 2. Compose `HandoffContext` from `step_context` + payload (AC #4)
 3. Compute `SubAgentGateLevelDescent` via `ctx.handoff_registry.dispatch` (AC #5a)
-4. Verify topology admissibility via `ctx.topology_dispatcher` + `is_admissible` (AC #5b)
+4. Verify topology admissibility via `ctx.topology_dispatcher` + `is_topology_permitted` (AC #5b)
 5. Open `subagent.span` + set canonical `subagent.*` + narrow `topology.*` attributes (AC #6)
 6. Invoke child runner sync (AC #7)
 7. Map child `RunResult.status` → `subagent.result_status` (AC #8)
-8. Compose `CPAuditLedgerEntry` via `compose_dispatch_audit` (AC #9 partial — compose only)
+8. Audit composition + persistence — 4-substep sequence (AC #9 — UN-STRUCK at v1.7):
+     8a. Compose `CPAuditLedgerEntry` via `compose_dispatch_audit`
+     8b. F2-write dispatch action via `ledger_writer.append(...)` → action_id is
+         the `StateLedgerEntryRef` for the audit entry's `entry_core`
+     8c. Convert CP→OD via `cp_audit_to_od_audit(...)` → signed OD `AuditLedgerEntry`
+     8d. Persist via `audit_writer.append(tenant_id, od_entry)` → IS-anchored
 9. Return step output (child `final_state` or `partial_state`)
 10. Typed error propagation: typed error subclasses bubble; outer driver's
     try/except per C-CP-25 §25.3.3.4 maps to fail class
 
-**Failure-mode taxonomy (per spec §14.7).** Three typed errors are raised
-from this module + propagated through the sync driver:
+**Failure-mode taxonomy (per spec §14.7 + v1.7 step 8 follow-on).** Four
+typed errors are raised from this module + propagated through the sync driver:
 
 - `SubAgentDispatchPayloadShapeError` → `RT-FAIL-PAYLOAD-SHAPE`
 - `SubAgentDispatchTopologyInadmissibleError` → `RT-FAIL-SUB-AGENT-TOPOLOGY-INADMISSIBLE`
 - `SubAgentChildFailedError` → `RT-FAIL-SUB-AGENT-CHILD-FAILED`
+- `SubAgentDispatchAuditComposeError` → `RT-FAIL-SUB-AGENT-AUDIT-COMPOSE` (new at v1.7;
+  raised on 8b/8c/8d failure when the child path is SUCCESS / DRAINED; suppressed
+  on FAILED / exception-bubble paths to preserve the primary fault).
+
+**Entry-core source semantic (Q2(a) ratification).** Per CP spec v1.7 §13.5.1
++ OD spec v1.5 C-OD-24.6: the audit's `entry_core: StateLedgerEntryRef` (opaque
+str per §24.4) references the F2 state-ledger entry recording the audited
+dispatch action. v1.7 implementation uses the F2 entry's `action_id` as the
+`StateLedgerEntryRef` value — `StateLedgerEntryRef` is opaque `NewType(str)`
+per OD spec §24.4 and the action_id IS-canonically identifies the persisted
+F2 entry (consistent with how `RuntimeAuditLedgerWriter._action_id_for(...)`
+wraps audit entries into the IS chain). Spec narrative at step 8b mentions
+"F2 entry's entry_hash"; this is a Class 3 prose drift — the IS
+`LedgerWriter.append` does NOT expose the forward chain hash, and the OD-side
+type is opaque str, so the action_id discipline holds without surface
+extension. Carry-forward at the runtime spec drift items.
+
+**Audit-signing config posture.** v1.7 MVP binds a deployment-level signing
+key_id + algorithm at construction. Operator surfaces are deferred per spec
+§14.7 "Deferred to implementation discretion" + ADR-D5 v1.3 §1.4.1 (HSM /
+KMS / keystore deferral).
 """
 
 from __future__ import annotations
@@ -69,7 +105,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from harness_core.identity import ActionID
 from harness_cp.cp_shared_types import ActorIdentity
@@ -92,16 +128,25 @@ from harness_cp.workflow_driver_types import (
     WorkflowStep,
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
-from harness_is.state_ledger_entry_schema import Identifier
+from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
+from harness_is.state_ledger_entry_schema import Identifier, Timestamp
+from harness_is.state_ledger_write import EntryPayload, WriteKey, WriteResult
+from harness_od.audit_ledger_types import SignatureAlgorithm, StateLedgerEntryRef
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
 from harness_runtime.lifecycle.child_workflow_runner import ChildWorkflowRunner
 from harness_runtime.lifecycle.handoff import RuntimeHandoffRegistry
+from harness_runtime.lifecycle.state_ledger import LedgerWriter
 from harness_runtime.lifecycle.topology_dispatcher import RuntimeTopologyDispatcher
+
+if TYPE_CHECKING:  # pragma: no cover — type-only import
+    from collections.abc import Callable
 
 __all__ = [
     "RuntimeSubAgentDispatcher",
     "SubAgentChildFailedError",
+    "SubAgentDispatchAuditComposeError",
     "SubAgentDispatchPayload",
     "SubAgentDispatchPayloadShapeError",
     "SubAgentDispatchTopologyInadmissibleError",
@@ -180,6 +225,34 @@ class SubAgentChildFailedError(Exception):
     Composer sets `subagent.result_status = "failed"` on the `subagent.span`
     before re-raising; the outer driver's try/except per C-CP-25 §25.3.3.4
     maps to `RT-FAIL-SUB-AGENT-CHILD-FAILED`.
+    """
+
+
+class SubAgentDispatchAuditComposeError(Exception):
+    """Failure at one of step 8's audit-composition substeps (8b/8c/8d).
+
+    Raised when the child path was SUCCESS / DRAINED but the audit
+    composition + persistence sequence at §14.7.2 step 8 failed. Causes
+    map as follows:
+
+    - **8b (`LedgerWriteError` family)** — F2-write of the dispatch action
+      raised a typed IS write error (`WriteKeyMismatchError`,
+      `NonMonotonicTimestampError`, OSError on the underlying JSONL).
+    - **8c (`ValueError` from `sign_audit_entry`)** — converter signature
+      contract violation per CP spec v1.7 §13.5.1 (empty `key_id`, etc.).
+    - **8d (`LedgerWriteError` family on audit_writer.append)** — IS-side
+      persistence failure of the OD audit entry.
+
+    The composer annotates `subagent.span` with `subagent.result_status =
+    "failed"` before raising. Driver's try/except per C-CP-25 §25.3.3.4
+    maps to `RT-FAIL-SUB-AGENT-AUDIT-COMPOSE` (new fail class at runtime
+    spec v1.7 §14 follow-on patch).
+
+    Suppressed on FAILED / exception-bubble paths — the primary fault is
+    `SubAgentChildFailedError` / the original exception; audit composition
+    is best-effort on those paths per spec §14.7.2 step 8 failure-semantics
+    paragraph ("the audit-trail-fact record is preserved even when
+    downstream substeps fail").
     """
 
 
@@ -285,15 +358,24 @@ class RuntimeSubAgentDispatcher:
     Constructed at bootstrap stage 5 (LOOP_INIT) per spec §14.7.7
     "Integration with C-RT-04"; bound to `HarnessContext.sub_agent_dispatcher`.
 
-    Composition arguments per §14.7.1:
+    Composition arguments per §14.7.1 + v1.7 §14.7.2 step 8 extension:
 
     - `handoff_registry` (U-RT-26) — composes `HandoffContext` + computes
-      `SubAgentGateLevelDescent` + composes `CPAuditLedgerEntry`.
+      `SubAgentGateLevelDescent` + composes `CPAuditLedgerEntry` at 8a.
     - `topology_dispatcher` (U-RT-40) — dispatches `TopologyPattern` per
       child manifest + verifies admissibility.
     - `tracer_provider` (C-RT-06) — opens the `subagent.span`.
-    - `child_workflow_runner` (this arc, U-RT-59 AC #7) — invokes the
-      child sub-workflow in-process per §14.7.4 recursive primitive.
+    - `child_workflow_runner` (U-RT-59 AC #7) — invokes the child sub-
+      workflow in-process per §14.7.4 recursive primitive.
+    - `ledger_writer` (U-RT-12) — F2-write of the dispatch action at 8b.
+    - `audit_writer` (U-RT-32) — IS-anchored OD audit-entry persistence
+      at 8d via `RuntimeAuditLedgerWriter.append(tenant_id, od_entry)`.
+    - `audit_signing_key_id` / `audit_signing_algorithm` — signing config
+      passed to the converter at 8c (`cp_audit_to_od_audit`); operator
+      surface deferred per ADR-D5 v1.3 §1.4.1.
+    - `time_source` — timestamp injection point for the F2 dispatch
+      entry at 8b (test determinism; default `datetime.now(UTC)` at the
+      construction site).
     """
 
     handoff_registry: RuntimeHandoffRegistry
@@ -304,6 +386,11 @@ class RuntimeSubAgentDispatcher:
     `RetryBreakerFallbackDispatcher` discipline."""
 
     child_workflow_runner: ChildWorkflowRunner
+    ledger_writer: LedgerWriter
+    audit_writer: RuntimeAuditLedgerWriter
+    audit_signing_key_id: str
+    audit_signing_algorithm: SignatureAlgorithm
+    time_source: Callable[[], Timestamp]
 
     # Module-bound canonical attribute name constants (per spec §14.7.5
     # "Producer-side attribute carrier reference" — imported from the
@@ -324,6 +411,102 @@ class RuntimeSubAgentDispatcher:
             "_topology_attr_names",
             tuple(s.attribute_name for s in TOPOLOGY_NAMESPACE_SCHEMA),
         )
+
+    def _compose_and_persist_audit(
+        self,
+        *,
+        parent_action_id: ActionID,
+        descent: Any,
+        payload: SubAgentDispatchPayload,
+        step_context: StepExecutionContext,
+        raise_on_failure: bool,
+    ) -> tuple[Any, WriteResult | None]:
+        """Step 8 4-substep audit sequence (v1.7 §14.7.2 step 8).
+
+        Returns ``(cp_entry, write_result)`` — the CP-shape dispatch fact
+        and the WriteResult from 8d (or ``None`` when an intermediate
+        substep fails and ``raise_on_failure=False``).
+
+        - **8a** Compose `CPAuditLedgerEntry` via
+          `handoff_registry.compose_dispatch_audit(...)`. Never fails
+          under normal conditions; an exception here propagates regardless
+          of `raise_on_failure` since 8a is the dispatch-fact ground truth.
+        - **8b** F2-write the dispatch action via `ledger_writer.append`.
+          Action_id pattern: ``dispatch:<parent_action_id>:<child_index>``.
+          The action_id IS the `StateLedgerEntryRef` passed to 8c per the
+          OD spec v1.5 C-OD-24.4 opaque-str discipline.
+        - **8c** Convert CP→OD via `cp_audit_to_od_audit(...)` —
+          `audit.cp.*` namespace projection + OD signing per CP spec v1.7
+          §13.5.1.
+        - **8d** Persist via `audit_writer.append(tenant_id, od_entry)`
+          per C-RT-04 + OD spec v1.5 C-OD-24.
+
+        On 8b/8c/8d failure with ``raise_on_failure=True``:
+        ``SubAgentDispatchAuditComposeError`` is raised (caller responsible
+        for annotating `subagent.span` with ``result_status="failed"``).
+        With ``raise_on_failure=False`` (used on FAILED + exception-bubble
+        paths), the failure is swallowed and ``(cp_entry, None)`` is
+        returned — the dispatch fact at 8a is preserved per spec
+        §14.7.2 step 8 failure-semantics paragraph.
+        """
+        # 8a — compose CP audit (dispatch fact; always produced).
+        brief_hash = self.handoff_registry.dispatch_response_hash(payload.brief)
+        cp_entry = self.handoff_registry.compose_dispatch_audit(
+            parent_action_id=parent_action_id,
+            descent=descent,
+            brief_hash=brief_hash,
+        )
+
+        # Compose the F2 dispatch-action action_id once; reused as both the
+        # IS entry's identity AND the StateLedgerEntryRef bound at 8c.
+        # OD spec v1.5 C-OD-24.4: `StateLedgerEntryRef = NewType(str)` —
+        # opaque marker; action_id IS-canonically identifies the persisted
+        # F2 entry. Spec narrative cites "entry_hash"; Class 3 prose drift
+        # carry-forward (LedgerWriter.append does not expose the forward
+        # chain hash + the OD type accepts opaque str).
+        child_index = getattr(descent, "child_index", 0)
+        dispatch_action_id = Identifier(
+            f"dispatch:{parent_action_id}:{child_index}"
+        )
+
+        try:
+            # 8b — F2-write the dispatch action.
+            f2_payload = EntryPayload(
+                action_id=dispatch_action_id,
+                idempotency_key=dispatch_action_id,
+                actor=step_context.parent_actor,
+                timestamp=self.time_source(),
+            )
+            f2_key = WriteKey(
+                thread_id=Identifier(f"dispatch:{parent_action_id}"),
+                step_id=dispatch_action_id,
+                idempotency_key=dispatch_action_id,
+            )
+            self.ledger_writer.append(f2_payload, f2_key)
+            entry_core = StateLedgerEntryRef(str(dispatch_action_id))
+
+            # 8c — convert CP → OD (signing happens inside the converter).
+            od_entry = cp_audit_to_od_audit(
+                cp_entry,
+                key_id=self.audit_signing_key_id,
+                algo=self.audit_signing_algorithm,
+                entry_core=entry_core,
+            )
+
+            # 8d — persist OD audit entry through IS hash chain.
+            write_result = self.audit_writer.append(
+                tenant_id=step_context.tenant_id,
+                audit_entry=od_entry,
+            )
+        except Exception as exc:
+            if raise_on_failure:
+                raise SubAgentDispatchAuditComposeError(
+                    f"sub-agent dispatch audit composition failed for "
+                    f"parent_action_id={parent_action_id!r}: {exc}"
+                ) from exc
+            return cp_entry, None
+
+        return cp_entry, write_result
 
     def dispatch(
         self,
@@ -451,14 +634,15 @@ class RuntimeSubAgentDispatcher:
                 span.set_attribute("subagent.tokens_in", 0)
                 span.set_attribute("subagent.tokens_out", 0)
                 span.set_attribute("subagent.cached_tokens_in", 0)
-                # Compose audit entry even on child runner unhandled exception
-                # (dispatch-fact persists; child failure-fact lives at span).
-                _ = self.handoff_registry.compose_dispatch_audit(
+                # Best-effort audit composition — dispatch fact at 8a is
+                # preserved; downstream 8b/8c/8d failures are swallowed so
+                # the child's original exception remains the primary fault.
+                _ = self._compose_and_persist_audit(
                     parent_action_id=parent_action_id,
                     descent=descent,
-                    brief_hash=self.handoff_registry.dispatch_response_hash(
-                        payload.brief
-                    ),
+                    payload=payload,
+                    step_context=step_context,
+                    raise_on_failure=False,
                 )
                 raise
 
@@ -481,16 +665,17 @@ class RuntimeSubAgentDispatcher:
                 span.set_attribute("subagent.tokens_in", 0)
                 span.set_attribute("subagent.tokens_out", 0)
                 span.set_attribute("subagent.cached_tokens_in", 0)
-                # --- Step 8 partial: compose audit entry (AC #9 partial) ---
-                # CP→OD audit-write composition Class 1 deferred; compose
-                # the dispatch-fact entry for retirement criterion B evidence;
-                # do NOT call ctx.audit_writer.append(...) per fork resolution.
-                _ = self.handoff_registry.compose_dispatch_audit(
+                # --- Step 8: best-effort audit (FAILED path) ----------------
+                # v1.7 4-substep sequence runs best-effort on child FAILED;
+                # the primary fault is SubAgentChildFailedError. Audit-write
+                # failures are swallowed so the child failure remains the
+                # surfaced error per spec §14.7.2 step 8 failure-semantics.
+                _ = self._compose_and_persist_audit(
                     parent_action_id=parent_action_id,
                     descent=descent,
-                    brief_hash=self.handoff_registry.dispatch_response_hash(
-                        payload.brief
-                    ),
+                    payload=payload,
+                    step_context=step_context,
+                    raise_on_failure=False,
                 )
                 raise SubAgentChildFailedError(
                     f"child sub-workflow {payload.child_workflow_id!r} "
@@ -512,19 +697,22 @@ class RuntimeSubAgentDispatcher:
             span.set_attribute("subagent.tokens_out", 0)
             span.set_attribute("subagent.cached_tokens_in", 0)
 
-            # --- Step 8: compose audit entry (AC #9 partial) ---------------
-            # CP→OD audit-write composition Class 1 deferred per landing fork
-            # resolution. Compose the dispatch-fact CPAuditLedgerEntry for
-            # retirement criterion B evidence (H_T-CP-13). End-to-end write
-            # via ctx.audit_writer.append(...) is owed to follow-on arc
-            # (joins fork-cp-is-wiring-gaps Phase 6 CP-composer authoring).
-            _ = self.handoff_registry.compose_dispatch_audit(
-                parent_action_id=parent_action_id,
-                descent=descent,
-                brief_hash=self.handoff_registry.dispatch_response_hash(
-                    payload.brief
-                ),
-            )
+            # --- Step 8: 4-substep audit composition (AC #9, UN-STRUCK) ---
+            # v1.7 §14.7.2 step 8: 8a compose CP → 8b F2-write dispatch →
+            # 8c CP→OD convert → 8d audit_writer.append. Audit failures on
+            # the SUCCESS / DRAINED path raise SubAgentDispatchAuditComposeError
+            # → driver maps to RT-FAIL-SUB-AGENT-AUDIT-COMPOSE.
+            try:
+                _ = self._compose_and_persist_audit(
+                    parent_action_id=parent_action_id,
+                    descent=descent,
+                    payload=payload,
+                    step_context=step_context,
+                    raise_on_failure=True,
+                )
+            except SubAgentDispatchAuditComposeError:
+                span.set_attribute("subagent.result_status", "failed")
+                raise
 
             # --- Step 9: return step output --------------------------------
             return step_output

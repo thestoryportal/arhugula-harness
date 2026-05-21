@@ -1,6 +1,6 @@
 """Round-trip materializability tests for the CP→OD audit converter prototype.
 
-**Validates the discovery prototype at `harness_runtime.lifecycle.cp_audit_conversion`.**
+**Validates the discovery prototype at `harness_cxa.cp_audit_conversion`.**
 Not a production-wiring test — see module docstring + the discovery report at
 `.harness/u_rt_59_fork_2_cp_to_od_audit_discovery.md`.
 
@@ -33,7 +33,7 @@ from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
     verify_hash_chain_integrity,
 )
 from harness_od.observability_matrix import CellID
-from harness_runtime.lifecycle.cp_audit_conversion import (
+from harness_cxa.cp_audit_conversion import (
     CP_AUDIT_NAMESPACE_PREFIX,
     cp_audit_to_od_audit,
 )

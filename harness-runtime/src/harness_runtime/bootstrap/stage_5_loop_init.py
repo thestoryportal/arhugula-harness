@@ -21,10 +21,12 @@ freshly-materialized emitter.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from harness_core.workload_class import WorkloadClass
 from harness_cp.workflow_driver_types import StepKind
+from harness_od.audit_ledger_types import SignatureAlgorithm
 
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
@@ -143,11 +145,39 @@ async def execute(
     # api.py uses on the frozen ctx.
     child_runner = compose_child_workflow_runner(cast(HarnessContext, ctx))
 
+    # v1.7 §14.7.2 step 8 4-substep audit composition extends the
+    # dispatcher's dependency set with the IS state-ledger writer (8b F2-
+    # write), the OD audit writer (8d IS-anchored append), and signing
+    # config + time source for the CP→OD converter at 8c. Stage 1 IS +
+    # stage 4 OD have already populated ctx.ledger_writer + ctx.audit_writer
+    # per the bootstrap traversal order.
+    if ctx.ledger_writer is None or ctx.audit_writer is None:
+        raise LLMDispatchBindError(
+            "ctx.ledger_writer / ctx.audit_writer is None at stage 5 — stage 1 "
+            "IS / stage 4 OD must complete before stage 5 sub-agent dispatcher "
+            "construction per the runtime spec v1.7 §14.7.2 step 8 4-substep "
+            "audit composition contract"
+        )
+    # Audit-signing config — operator surface deferred per spec §14.7
+    # "Deferred to implementation discretion" + ADR-D5 v1.3 §1.4.1 (HSM /
+    # KMS / keystore custody). v1.7 MVP binds a deployment-default value;
+    # operator-tunable surface is a follow-on RuntimeConfig extension.
     sub_agent_dispatcher = RuntimeSubAgentDispatcher(
         handoff_registry=ctx.handoff_registry,  # type: ignore[arg-type]  # narrowed at stage 3b
         topology_dispatcher=topology.dispatcher,
         tracer_provider=cast(Any, tracer_provider),
         child_workflow_runner=child_runner,
+        # `ctx.ledger_writer` / `ctx.audit_writer` are typed as Protocols at
+        # `harness_runtime.types` (C-RT-04 schema layer); the dispatcher
+        # consumes the concrete dataclass types from `harness_runtime.lifecycle`.
+        # The structural shape matches; cast bridges the Protocol → concrete
+        # mismatch at the composition site per the C-RT-04 pattern reused at
+        # tracer_provider above.
+        ledger_writer=cast(Any, ctx.ledger_writer),
+        audit_writer=cast(Any, ctx.audit_writer),
+        audit_signing_key_id="harness-runtime-dev",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        time_source=lambda: datetime.now(UTC),
     )
     ctx.sub_agent_dispatcher = sub_agent_dispatcher
 

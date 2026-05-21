@@ -298,3 +298,60 @@ All Fork 2 design-substrate work landed on main across 5 substantive commits + 2
 ---
 
 *§11 closes the Fork 2 spec arc. Discovery → halt → re-routing → Path D + B-revised-a + runtime spec v1.7 + CP spec v1.8 all landed across 7 commits in one session. Implementation arc remains as the only outstanding work; spec substrate is now coherent end-to-end. Re-enter at next session per phase-7-implementation skill discipline against the v1.7 §14.7.2 step 8 4-substep contract.*
+
+---
+
+## §12 Implementation arc CLOSED (added 2026-05-20, next session per §11 routing)
+
+All §11.4 owed items landed in a single phase-7-implementation arc commit. Fork 2 is fully closed — spec + implementation + plan absorptions all coherent.
+
+### §12.1 Implementation deltas landed
+
+| Work item | Materialization site |
+|---|---|
+| Composer wiring (step 8 4-substep sequence) | `harness-runtime/src/harness_runtime/lifecycle/sub_agent_dispatch.py` — new `_compose_and_persist_audit(...)` helper threading 8a → 8b → 8c → 8d; 3 call sites (success/drained, child-failed, exception-bubble) consume via `raise_on_failure` flag per spec §14.7.2 step 8 failure-semantics paragraph |
+| F2-write of dispatch action (8b) | `dispatch:<parent_action_id>:<child_index>` action_id pattern; action_id IS the `StateLedgerEntryRef` for 8c (per OD spec v1.5 C-OD-24.4 opaque-str discipline) |
+| Converter move + import rewrite (Q5) | `harness-runtime/src/harness_runtime/lifecycle/cp_audit_conversion.py` → `harness-cxa/src/harness_cxa/cp_audit_conversion.py` + test file moved + harness-cxa `py.typed` marker added; converter docstring rewritten from DISCOVERY-GRADE framing to production-seam framing |
+| AC #9 un-strike | `.harness/phase-2-session-3-track-a-atomic-decomposition.md` v2.5 → v2.6 (new revision-history entry + rewritten AC #9 body citing the 4-substep contract) |
+| New fail class | `Spec_Harness_Runtime_v1.md` v1.7 §14 failure-mode taxonomy — new row `RT-FAIL-SUB-AGENT-AUDIT-COMPOSE` with full trigger + behavior + suppression-on-failed-path discipline |
+| New typed error | `harness_runtime.lifecycle.sub_agent_dispatch.SubAgentDispatchAuditComposeError` |
+| Integration test | `test_three_sequential_dispatches_chain_through_audit_writer` (3 dispatches; 3 F2 dispatch entries + 3 OD audit entries persisted; IS hash-chain verification VALID per C-IS-06 §6.4 across all 6 entries) |
+| CP plan absorption | `Implementation_Plan_Control_Plane_v2_14.md` — U-CP-28 `Implements:` extended with §13.5.1; CP→OD CXA edge acknowledged |
+| OD plan absorption | `Implementation_Plan_Operational_Discipline_v2_12.md` — U-OD-00 `Implements:` extended with C-OD-24; X-AL-3 drift retirement documented |
+| Workspace CLAUDE.md | §2.2 ADR-D5 v1.3 → v1.4; §2.3 CP spec v1.3 → v1.8 + OD spec v1.4 → v1.5 (OD contract count 23 → 24); §2.4 CP plan v2.10 → v2.14 + OD plan v2.11 → v2.12 + CXA v2.3 → v2.4 |
+| Fork file status flip | `.harness/class_1_tension_u_rt_59_cp_to_od_audit_write_gap.md` Status header: OPEN-PARTIAL → **RESOLVED at implementation-arc landing 2026-05-20** |
+
+### §12.2 Test posture at close
+
+2283 workspace tests green at the implementation arc landing (up from 2278 at the spec-arc close session). Delta breakdown:
+
+- +6 new step-8-specific unit tests (per-substep verification + failure semantics + dispatcher signature surface)
+- +1 multi-dispatch IS-chain-integrity integration test
+- −2 stale AC #9-partial-landing tests (`test_audit_entry_composed_via_handoff_registry` + `test_audit_entry_not_written_via_ctx_audit_writer_v1_6_mvp`) — the latter explicitly inverted at v1.7 since the dispatcher now DOES take an `audit_writer` kwarg
+
+Net: +5 tests in `test_lifecycle_sub_agent_dispatch.py` (33 total in that file). Total workspace delta: +5 (2278 → 2283). The remaining gap is accounted for by the 12 converter tests at `test_cp_audit_conversion.py` (unchanged by the move) being counted under the new package home — git treats both files as renames, test count is preserved.
+
+### §12.3 Items explicitly deferred
+
+| Item | Routing |
+|---|---|
+| AC #12 — H_T-CP-10 / H_T-CP-13 / H_T-CP-14 retirement events | Phase 7d batch 4 per operator-ratified retirement audit cadence per Meta-Architecture §10.2.4 step 5 |
+| Adversarial-review pass on runtime spec v1.7 | Scheduled per spec v1.7 status posture per Phase 7 sub-phase 7b discipline |
+| `harness-cp/CLAUDE.md` + `harness-od/CLAUDE.md` Form A deltas for CXA v2.4 axis back-edge | Class 3 non-blocking per `.harness/class_3_tension_cxa_v2_4_axis_back_edge.md` |
+| Class 3 prose drift for action_id-as-StateLedgerEntryRef deviation (spec narrative cites "entry_hash") | Carry-forward at runtime spec drift items; documented inline at the dispatcher module + the AC #9 v2.6 body |
+| Class 3 §14.7.6 residual `audit_ledger_writer` field-name occurrences (4 of original 5) | Carry-forward — step 8 site was resolved at v1.7 step 8d rewrite; §14.7.6 prose absorption owed at next runtime spec revision pass |
+| Operator-tunable `audit_signing_key_id` / `audit_signing_algorithm` surface | Deferred per spec §14.7 "Deferred to implementation discretion" + ADR-D5 v1.4 §1.4.1 (HSM / KMS / keystore deferral) — v1.7 MVP binds deployment-default `harness-runtime-dev` / `ED25519` |
+
+### §12.4 Substitution retirement re-evaluation
+
+The §11 X-AL-2 retirement implications at runtime spec v1.7 §14.7 are now testable end-to-end at production callsite:
+
+- **H_T-CP-10 RETIRE-READY** — topology dispatcher + `is_topology_permitted` predicate operational at composer step 4. Condition B verified end-to-end via the 3-dispatch integration test (each dispatch traverses the predicate gate).
+- **H_T-CP-13 RETIRE-READY** — `RuntimeHandoffRegistry.dispatch(...)` + `HandoffContext` composition operational at composer steps 2–3. Verified at `test_dispatch_invokes_handoff_registry_with_step_context_seeds` + `test_handoff_context_composed_per_v1_6_mvp_table`.
+- **H_T-CP-14 PARTIAL → RETIRE-READY (single-sub-agent slice)** — `subagent.*` + narrow `topology.*` namespace emission at production span hierarchy verified at `test_subagent_span_carries_7_subagent_attributes` + `test_subagent_span_carries_2_narrow_topology_attributes`.
+
+Operator ratifies the retirement transitions at Phase 7d batch 4 retirement audit per X-AL-2 strict-reading discipline.
+
+---
+
+*§12 closes the U-RT-59 Fork 2 implementation arc. Spec authority (CXA v2.4 + CP spec v1.7/v1.8 + ADR-D5 v1.4 + OD spec v1.5 + runtime spec v1.7) + code substrate (dispatcher + converter + bootstrap) + plan substrate (CP v2.14 + OD v2.12 + atomic-decomp v2.6) + workspace CLAUDE.md all coherent end-to-end. Fork file flipped to RESOLVED. The Fork 2 arc — surfaced 2026-05-20 at U-RT-59 landing — closes the same session day across 9 commits (8 spec + 1 implementation).*

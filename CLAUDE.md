@@ -65,7 +65,7 @@ All canonical artifacts reside at the **design-phase workspace** (separate Claud
 | ADR-D2 | v1.2 | Sandbox tier |
 | ADR-D3 | v1.2 | Validation contract |
 | ADR-D4 | v1.1 | Cost attribution |
-| ADR-D5 | v1.3 | Topology pattern |
+| ADR-D5 | v1.4 | Topology pattern — §1.4 storage-form reconciliation (SQLite → JSONL via IS composition) + §1.4.1 `entry_hash` recipe tightening per U-RT-59 Fork 2 Path B-revised-a (2026-05-20) |
 | ADR-D6 | v1.2 | OTel schema (12 namespaces) |
 | `Architectural_Design_Document_v1_3.md` | v1.3 | ADR consolidation; coherent architectural overview |
 | `PRD_v1_1.md` | v1.1 | Product requirements; observable behavior |
@@ -76,8 +76,8 @@ All canonical artifacts reside at the **design-phase workspace** (separate Claud
 |---|---|
 | IS | `Spec_Information_Substrate_v1.md` (v1.2 per ADD v1.3 attestation) |
 | AS | `Spec_Action_Surface_v1.md` (v1.3 — C-AS-02/§11.1 `sandbox_tier_floor` reconciliation per S2 + C-AS-05 §5.1 3-param `fetch_secret` per S3, 2026-05-15) |
-| CP | `Spec_Control_Plane_v1_3.md` (v1.3) |
-| OD | `Spec_Operational_Discipline_v1_4.md` (v1.4 — C-OD-20 §20.1 `CollectorPlacement` 7-value enum formalized + §1.2 enum grown 6→7, FF-2 resolution 2026-05-16) |
+| CP | `Spec_Control_Plane_v1_8.md` (v1.8 — Form A NOTE-reference reconciliation over v1.7 §13.5.1 `cp_audit_to_od_audit` converter contract per U-RT-59 Fork 2 Path D, 2026-05-20) |
+| OD | `Spec_Operational_Discipline_v1_5.md` (v1.5 — new **C-OD-24** audit-ledger payload + entry composition contract + `compute_entry_hash` canonical helper + CP-sourced audit-entry recognition at §24.6 per U-RT-59 Fork 2 Path B-revised-a; OD contract count grows 23 → 24; preserves v1.4 FF-2 collector-placement, 2026-05-20) |
 
 ### 2.4 Per-axis plans (Phase 6 canonical — execution authority)
 
@@ -86,9 +86,9 @@ All canonical artifacts reside at the **design-phase workspace** (separate Claud
 | core | `Implementation_Plan_Harness_Core_v1_1.md` | 1 unit (U-CORE-01) — shared-type carrier; added 2026-05-15 per revision pass R1; v1.1 carrier-thin Class 1 fork resolution (WorkflowEvent payload model struck) 2026-05-15 |
 | IS | `Implementation_Plan_Information_Substrate_v2_3.md` | 17 units (U-IS-01 – U-IS-17) |
 | AS | `Implementation_Plan_Action_Surface_v1_2.md` | 33 units (U-AS-01 – U-AS-33) |
-| CP | `Implementation_Plan_Control_Plane_v2_10.md` | 58 units (U-CP-00, U-CP-00b, U-CP-00c, U-CP-01 – U-CP-55); v2.8 — new L0 carrier U-CP-00c specifies the 9 deferred structured shared types (all FACTOR-OUT, traced byte-exact); v2.9 multi-body delta — Pattern-D tail structured types specified across 8 unit bodies (U-CP-04/14/17/22/30/33/41/52); v2.10 — 7c-prereq reconcile: `RoleRoutingBinding`/`WorkloadRoutingOverride` Class 1 RESOLVED (operator-ratified R-2/W-2 schemas; U-CP-04 `RoutingManifest` FULL-LAND) 2026-05-16 |
-| OD | `Implementation_Plan_Operational_Discipline_v2_11.md` | 35 units (U-OD-00, U-OD-01 – U-OD-34); v2.8 — five Class 1 defects + F3 pinning; v2.9 — FF-2 U-OD-28 collector-placement; v2.10 — FF-3 U-OD-29 `SandboxTier` conformed to the AS-owned enum + OD spec §20.3; v2.11 — 7c-prereq Form A: OD-outbound cross-axis placeholder carrier IDs resolved (§4.5.2/§4.5.3 + 8 unit bodies) 2026-05-16 |
-| CXA | `Cross_Axis_Composition_Document_v2_3.md` | 92 canonical cross-axis relationships (6 composition buckets); v2.3 — 7c reclassification: every edge re-tagged genuine-typed-seam (22) / convention-level (46) / phase-2-runtime (24) / spurious (10 struck); v2.1/v2.2 "101/99 typed edges" was a category error |
+| CP | `Implementation_Plan_Control_Plane_v2_14.md` | 58 units (U-CP-00, U-CP-00b, U-CP-00c, U-CP-01 – U-CP-55); v2.8–v2.10 prior structured-types + Pattern-D + RoleRoutingBinding/WorkloadRoutingOverride landings; v2.13 — CP spec v1.5 §25.9 cost-attribution emission absorption (2026-05-20); v2.14 — U-RT-59 Fork 2 implementation arc absorption: U-CP-28 `Implements:` extended with C-CP-13 §13.5.1 converter contract citation + new CP→OD CXA edge (Cross_Axis_Composition_Document_v2_4.md §2.3.7) (2026-05-20) |
+| OD | `Implementation_Plan_Operational_Discipline_v2_12.md` | 35 units (U-OD-00, U-OD-01 – U-OD-34); v2.8–v2.10 prior Class 1 + FF-2 + FF-3 landings; v2.11 — 7c-prereq Form A OD-outbound placeholder carrier resolution (2026-05-16); v2.12 — U-RT-59 Fork 2 implementation arc absorption: U-OD-00 `Implements:` extended with C-OD-24 audit-ledger payload + entry composition contract citation; X-AL-3 drift retired at v1.5 / v2.12 co-publication (2026-05-20) |
+| CXA | `Cross_Axis_Composition_Document_v2_4.md` | 93 canonical cross-axis relationships (6 composition buckets + new CP→OD bucket at §2.3.7 per U-RT-59 Fork 2 Path D); v2.3 — 7c reclassification: every edge re-tagged genuine-typed-seam (22) / convention-level (46) / phase-2-runtime (24) / spurious (10 struck); v2.4 — new §2.3.7 CP→OD bucket with U-CP-28 → U-OD-00 typed seam (class G, Pattern P1) (2026-05-20) |
 
 ### 2.5 Per-axis subdirectory `CLAUDE.md` pointers
 
