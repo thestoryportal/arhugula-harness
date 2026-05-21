@@ -2,7 +2,12 @@
 
 **Class:** 3 — informational; non-blocking; documented.
 **Filed:** 2026-05-20 at CXA v2.4 landing (`ee5ae21`).
-**Status:** OPEN-FLAGGED — surfaced for operator visibility; absorbed at next CP/OD plan revision change-notes.
+**Status:** **RESOLVED 2026-05-20** — all three pointer-amendment sites absorbed:
+- workspace `CLAUDE.md` §1.1 (CXA row): 92 → 93 / 22 → 23 / cite `_v2_4.md`; first cross-axis back-edge per Fork 2 Path D landing noted inline.
+- `harness-cp/CLAUDE.md` §2.3: CP → OD (outbound) | 0 → 1 row replaced; cites CXA v2.4 §2.3.7 + U-CP-28 → U-OD-00 + Q5 ratification physical-import home.
+- `harness-od/CLAUDE.md` §2.2 + §1.1 axis posture: new CP → OD (inbound) | 1 row added at §2.2; §1.1 "0 outbound (downstream)" invariant preserved + new inbound at U-OD-00 acknowledged.
+
+CP §1.1 + §2.3 v2.1-baseline outbound count drift (60 / 36 / 24 vs v2.4 56 / 37 / 18) surfaced during absorption inspection and **deliberately not patched** to avoid silent absorption of unrelated reclassification drift inside this arc; isolated at `[[class_3_tension_per_axis_claude_md_v2_1_to_v2_4_count_drift]]` for next CP plan revision pass.
 
 ---
 

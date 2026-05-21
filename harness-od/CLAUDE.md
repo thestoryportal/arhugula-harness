@@ -10,7 +10,7 @@
 
 The Operational Discipline (OD) axis owns **observability + cost + audit + HITL primitive**: HITL invocation primitive (4-response palette canonical schema), audit ledger schema (hash-chain integrity composition), cost attribution 5-step chain (per-attempt + idempotency-key join + hash-chain composition + replay-aware dedup + cause_attribution invariance), validator fail catalog (medium-cardinality cause_attribution + 5-class fail-class taxonomy), 15-namespace OTel observability ingestion map (`anthropic.*` / `mcp.*` / `skill.*` / `managed_agents.*` / `sandbox.*` / `hitl.*` / `topology.*` / `subagent.*` / `engine.*` / `audit.*` / `validator.fail.*` / `files.*` / `memory.*` / `harness.breaker.*` / `provider_discriminator.*`), F3 capability-floor lifecycle event mapping, in-process OTLP collector + sampling discipline.
 
-OD posture per `Cross_Axis_Composition_Document_v2_1.md` §2.1: **consumer-most-downstream axis** — 0 outbound cross-axis edges; 26 inbound consumer edges (6 → IS at CXA v2.1 baseline / 4 at OD plan v2.6 per C3-15; 10 → AS; 12 → CP). OD terminates the axis-level dependency graph.
+OD posture per `Cross_Axis_Composition_Document_v2_1.md` §2.1 (baseline) + `Cross_Axis_Composition_Document_v2_4.md` §2.3.7 (v2.4 delta): **consumer-most-downstream axis** — 0 outbound (downstream) cross-axis edges (preserved invariant); 26 outbound consumer edges (6 → IS at CXA v2.1 baseline / 4 at OD plan v2.6 per C3-15; 10 → AS; 12 → CP); **1 inbound edge from CP at U-OD-00** per CXA v2.4 §2.3.7 (U-CP-28 audit-ledger entry composition; first cross-axis back-edge per U-RT-59 Fork 2 Path D landing — `[[class_3_tension_cxa_v2_4_axis_back_edge]]`). OD terminates the axis-level *downstream* dependency graph; the new v2.4 CP→OD inbound is acknowledged at U-OD-00 carrier consumption and does not alter the 0-outbound-downstream invariant.
 
 ### 1.2 Spec + plan authority
 
@@ -62,16 +62,17 @@ OD posture per `Cross_Axis_Composition_Document_v2_1.md` §2.1: **consumer-most-
 
 ADD attestation: `Architectural_Design_Document_v1_3.md` v1.3.
 
-### 2.2 Cross-axis edge inventory (CXA v2.1)
+### 2.2 Cross-axis edge inventory (CXA v2.1 baseline + v2.4 CP→OD inbound)
 
-OD is consumer-most-downstream; all OD-direction edges are **outbound consumer edges**:
+OD is consumer-most-downstream. Pre-v2.4: all OD-direction cross-axis edges are **outbound consumer edges**. At v2.4 (per U-RT-59 Fork 2 Path D landing), OD gains its **first cross-axis inbound edge** — CP→OD at U-OD-00 (audit-ledger entry composition); the 0-outbound-downstream invariant is preserved:
 
 | Edge direction | Edges | Source artifact |
 |---|---|---|
 | OD → IS (outbound consumer) | 6 (CXA v2.1 baseline) / 4 (OD plan v2.6 §4.5.1 per C3-15 Path (i-refined) deletions) | `Cross_Axis_Composition_Document_v2_1.md` §2.3.5; `Implementation_Plan_Operational_Discipline_v2_6.md` §0.7 + §4.5.1 |
 | OD → AS (outbound consumer) | 10 | `Cross_Axis_Composition_Document_v2_1.md` §2.3.6 |
 | OD → CP (outbound consumer) | 12 | `Cross_Axis_Composition_Document_v2_1.md` §2.3.3 |
-| **OD outbound (downstream)** | **0** | OD terminates the axis-level dependency graph |
+| **CP → OD (inbound) — NEW v2.4** | **1** | `Cross_Axis_Composition_Document_v2_4.md` §2.3.7 — genuine-typed-seam U-CP-28 → U-OD-00 (C-CP-13 §13.5.1 converter contract output type `AuditLedgerEntry`); first cross-axis back-edge per Fork 2 Path D. `[[class_3_tension_cxa_v2_4_axis_back_edge]]` |
+| **OD outbound (downstream)** | **0** | OD terminates the axis-level *downstream* dependency graph (invariant preserved at v2.4; new edge is inbound at OD, not outbound) |
 
 CXA-OD-IS-EDGE-DRIFT Class 3 informational item: CXA v2.1 §2.3.5 enumerates 6 edges (baseline at OD plan v2.3); OD plan v2.6 §4.5.1 enumerates 4 (rows 2 + 3 deleted as OD-internal mis-routed; rows 4 + 5 remapped to canonical IS contracts). Routing: future composition-document revision pass; non-blocking.
 

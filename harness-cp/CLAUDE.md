@@ -82,7 +82,7 @@ CP terminal aggregate exporters: U-CP-54 + U-CP-55 (per C-CP-24 §24). 12 OD→C
 | CP → IS (outbound) | 36 | `Cross_Axis_Composition_Document_v2_1.md` §2.3.2; `Implementation_Plan_Control_Plane_v1.md` §3.3 |
 | CP → AS (outbound) | 24 | `Cross_Axis_Composition_Document_v2_1.md` §2.3.4; CP plan §3.3 |
 | OD → CP (inbound) | 12 | `Cross_Axis_Composition_Document_v2_1.md` §2.3.3 |
-| CP → OD (outbound) | 0 | OD pulls from CP via U-CP-54 + U-CP-55 manifest |
+| CP → OD (outbound) | 1 | `Cross_Axis_Composition_Document_v2_4.md` §2.3.7 — genuine-typed-seam at U-CP-28 → U-OD-00 (C-CP-13 §13.5.1 converter contract); physical import homed at `harness-cxa/src/harness_cxa/cp_audit_conversion.py` per Q5 ratification. First cross-axis back-edge per U-RT-59 Fork 2 Path D landing. `[[class_3_tension_cxa_v2_4_axis_back_edge]]`. NOTE: U-CP-54 + U-CP-55 manifest is the OD→CP **inbound** terminal-aggregate-exporter surface (12 edges row above), not a CP→OD outbound. |
 
 ### 2.4 Per-cluster cross-axis edge profile (preserved at v2.10)
 

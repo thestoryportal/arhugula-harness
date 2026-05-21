@@ -18,7 +18,7 @@ The harness has four design axes plus a cross-axis composition surface:
 | **AS** — Action Surface | Tool contracts (typed I/O schemas), MCP integration (FastMCP host + client), sandbox (4-tier blast radius), skills filesystem |
 | **CP** — Control Plane | Routing (capability-aware multi-LLM), retry / breaker / idempotency, workflow lifecycle, topology (6-class enum), HITL placement |
 | **OD** — Operational Discipline | HITL primitives (4-response palette), audit ledger schema, cost attribution (5-step chain), observability (12-namespace OTel schema) |
-| **CXA** — Cross-Axis Composition | 92 canonical cross-axis relationships across 6 composition buckets per `Cross_Axis_Composition_Document_v2_3.md` §2.3 (22 genuine typed seams; 46 convention-level; 24 phase-2-runtime) |
+| **CXA** — Cross-Axis Composition | 93 canonical cross-axis relationships across 7 composition buckets per `Cross_Axis_Composition_Document_v2_4.md` §2.3 (23 genuine typed seams; 46 convention-level; 24 phase-2-runtime); §2.3.7 NEW v2.4 CP→OD bucket = first cross-axis back-edge per U-RT-59 Fork 2 Path D landing |
 
 ### 1.2 What this workspace is NOT
 
