@@ -1,4 +1,4 @@
-# Spec — Action Surface v1
+# Spec — Action Surface v1.4
 
 ## Status block
 
@@ -20,6 +20,44 @@
 | Revision date | 2026-05-15 |
 | Revision | v1.2 → v1.3 (Phase 7 C-AS-05 `fetch_secret` signature reconciliation per `spec-writer` application of the operator-ratified Q-R3-2 / decision D1 R1-direction decision — 2026-05-15; C-AS-05 contract title + §5.1 signature + §5.1 parameter table + §6.2 + §8.4 reconciled from the 2-parameter `fetch_secret(name, scope) -> SecretRef` form to the 3-parameter `fetch_secret(name, scope, tier) -> SecretRef` form, where `tier` is the call site's resolved `SandboxTier` passed as a plain explicit argument — not a bundled context object; aligns C-AS-05 with AS plan U-AS-20's body per `Implementation_Plan_Action_Surface_v1_2.md`; no other section changed) |
 | Revision date | 2026-05-15 |
+| Revision | v1.3 → v1.4 (Phase A.2 ratified-drafts apply pass per `.harness/Phase_A_2_Contract_Drafts_v1.md` — 2026-05-21; C-AS-14 §14.3 + C-AS-15 §15 extended with producer-site reference notes ONLY; `mcp.*` 7-attribute namespace at H_T-as-MCP-client site is now contracted via CP spec v1.10 §27 C-CP-27 MCPClientNamespaceEmitter; `sandbox.*` namespace at tool-invocation site is now contracted via runtime spec v1.13 §14.9 C-RT-19 RuntimeToolDispatcher; no field-set change, no attribute-list change, no AS-AL rule added, no other section changed) |
+| Revision date | 2026-05-21 |
+
+---
+
+## Change-note (v1.3 → v1.4)
+
+**Trigger.** Phase A.2 ratified-drafts apply pass per `.harness/Phase_A_2_Contract_Drafts_v1.md` (operator-ratified 2026-05-21 at session plan file `/Users/robertrhu/.claude/plans/begin-comprehensive-and-sharded-bird.md` Phase A.2). Three new composer contracts authored at runtime spec v1.13 (§14.9 C-RT-19 + §14.10 C-RT-20) + CP spec v1.10 (§25 + §26 + §27 + §17.4). The new contracts CONSUME the existing `mcp.*` 7-attribute namespace per C-AS-14 §14.3 and `sandbox.*` 7-attribute namespace per C-AS-15 §15. v1.4 adds producer-site reference notes documenting which downstream contract emits each namespace at the canonical tool-invocation site.
+
+**Scope of revision.** Pure annotation-level extension. NO field-set change. NO attribute-list change. NO new AS-AL rule. NO contract signature change. The amendments are documentary back-references to v1.13 runtime spec + v1.10 CP spec contracts:
+
+| Site | Amendment | Reason |
+|---|---|---|
+| **C-AS-14 §14.3** (footer note) | NEW NOTE: *"At H_T-as-MCP-client sites (i.e., when H_T consumes external MCP servers via runtime spec v1.13 §14.9 `RuntimeToolDispatcher` / `MCPClientHost`), the `mcp.*` 7-attribute namespace is emitted by `MCPClientNamespaceEmitter` per CP spec v1.10 §27 C-CP-27. The attribute set declared at this §14.3 is canonical; CP §27 owns the producer-side mutation discipline at the `mcp.tool.call` span context."* | Documents producer-side ownership of the namespace at the H_T-as-MCP-client tool-invocation site (Class 2 C.1 Path X composer landing). |
+| **C-AS-15 §15** (footer note) | NEW NOTE: *"At tool-invocation runtime sites (i.e., the H_T-as-MCP-client dispatch path landed at runtime spec v1.13 §14.9 `RuntimeToolDispatcher`), the `sandbox.*` 7-attribute namespace at §15 + the `sandbox.enter` / `sandbox.violation` / `sandbox.exit` / `sandbox.tier_escalation` event emission is owned by C-RT-19 §14.9.4 span emission discipline. The attribute set + always-sampled discipline declared at this §15 are canonical; runtime §14.9 owns the producer-side span lifecycle."* | Documents producer-side ownership of sandbox observability at the H_T-as-MCP-client tool-invocation site. |
+
+**Sections preserved verbatim from v1.3.** All v1.3 content outside the two footer notes preserved verbatim. C-AS-01 through C-AS-16 (v1.3 numbering) preserved. The v1.3 + v1.2 + v1.1 + v1 chain preserved.
+
+**Status posture.** Proposed (v1.3) → **Proposed (v1.4)**. v1.4 is a documentary-only patch — two producer-site reference NOTEs; no signature change; no acceptance criterion change.
+
+**Downstream absorption owed (post-v1.4).**
+(a) Workspace `CLAUDE.md` §2.3 AS row version bump (v1.3 → v1.4).
+(b) `harness-as/CLAUDE.md` §1.2 + §4.1 retirement-table extensions (H_T-AS-2 / H_T-AS-4 / H_T-AS-5 / H_T-AS-8 transition shapes pending runtime spec v1.13 §14.9 implementation arc).
+(c) Co-published with runtime spec v1.13 + CP spec v1.10 in this single Phase A.2 arc.
+
+**Adjacent defects surfaced (not patched).** None.
+
+---
+
+## C-AS-14 §14.3 producer-site reference note (NEW at v1.4)
+
+> **Producer-site reference (v1.4).** At H_T-as-MCP-client sites — i.e., when H_T consumes external MCP servers via runtime spec v1.13 §14.9 `RuntimeToolDispatcher` / `MCPClientHost` — the `mcp.*` 7-attribute namespace declared at this §14.3 is **emitted by `MCPClientNamespaceEmitter`** per CP spec v1.10 §27 C-CP-27. The attribute set (`mcp.server.name`, `mcp.server.trust_tier`, `mcp.protocol_version`, `mcp.transport`, `mcp.auth_present`, `mcp.primitive.kind`, `mcp.primitive.signature.sha256`) and sampling discipline (head=1.0 always) declared at this §14.3 are canonical; CP §27 owns the producer-side mutation discipline at the `mcp.tool.call` span context. Producer-vs-canonical-schema separation per D6 ingestion-pattern discipline (workspace `CLAUDE.md` §1.1: "CP emits, OD ingests; canonical schema at OD"; analogous discipline applies here: "CP-axis emits, AS-axis owns canonical schema").
+
+---
+
+## C-AS-15 §15 producer-site reference note (NEW at v1.4)
+
+> **Producer-site reference (v1.4).** At tool-invocation runtime sites — i.e., the H_T-as-MCP-client dispatch path landed at runtime spec v1.13 §14.9 `RuntimeToolDispatcher` — the `sandbox.*` 7-attribute namespace at this §15 plus the `sandbox.enter` / `sandbox.violation` / `sandbox.exit` / `sandbox.tier_escalation` event emission are **owned by C-RT-19 §14.9.4** span emission discipline. The attribute set (`sandbox.tier`, `sandbox.tech`, `sandbox.provider`, `sandbox.policy.assigned_tier_reason`, `sandbox.cost.tier_overhead_ms`, `sandbox.fail.class`, `sandbox.tier_escalation` event) plus always-sampled discipline (head=1.0 for `sandbox.violation` + `sandbox.tier_escalation`) declared at this §15 are canonical; runtime §14.9 owns the producer-side span lifecycle.
 
 ---
 

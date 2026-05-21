@@ -1,4 +1,37 @@
-# Specification — Harness Runtime v1.12
+# Specification — Harness Runtime v1.13
+
+## Change-note (v1.12 → v1.13)
+
+**Scope of revision.** Phase A.2 ratified-drafts apply pass per `.harness/Phase_A_2_Contract_Drafts_v1.md` (operator-ratified 2026-05-21 at this session's plan file `/Users/robertrhu/.claude/plans/begin-comprehensive-and-sharded-bird.md` Phase A.2 + ratification footer). Two new §14 subsections added — §14.9 C-RT-19 (`RuntimeToolDispatcher` + `MCPClientHost`) and §14.10 C-RT-20 (`WebhookDeliveryComposer` + `OperatorBurdenEvaluator`). 11 new fail-class rows added to the §14 runtime-local fail-class taxonomy. v1.12 §14.8.3 workflow-initiation topology pin + §14.8 HITL gate composer + §14.7 sub-agent dispatch composer + §14.6 retry/breaker/fallback wrapper + §14.5 LLM-dispatch composer + §1–§14.4 + §15–§17 all preserved verbatim. No signature change to any v1.12 contract; no field-projection table change; no v1.12 fail-class change.
+
+**Source of fix.** Plan-orchestrated Remaining-Work Closure Arc Phase A.2 with prerequisites:
+- Phase A.0 (`.harness/Phase_A_0_LLM_Dispatch_Fork_Audit_v1.md`) — LLM-dispatch composer fork CLOSED as Option-A-taken at U-RT-52 + U-RT-58.
+- Phase A.1 (`.harness/Phase_A_1_Tension_Resolution_v1.md`) — Pattern-D 13-type cluster + CP unit sequencing CONFIRMED-RESOLVED at CP plan v2.9 + v2.10. Inherits citation-ready field-set table.
+- Class 2 C.1 (tool-invocation composer scope) — operator-ratified Path X (Phase-7 deferred runtime unit, U-RT-58 shape) per plan file; transport scope expanded to STDIO + HTTP + SSE per Decision 1.D4.
+- Class 2 C.2 (LLM-dispatch composer fork) — operator-ratified close-as-resolved per Phase A.0.
+
+**Two new contracts.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§14.9 (NEW) C-RT-19 RuntimeToolDispatcher + MCPClientHost** | Defines per-step `TOOL_STEP` dispatch path satisfying `StepDispatcher` Protocol. `MCPClientHost` at stage 3a owns subprocess lifecycle (STDIO + HTTP + SSE all in scope at v1 per Decision 1.D4); `list_tools` populates `ToolRegistry` at host-startup; `call_tool` invoked at dispatch time. Per-server-trust gate evaluation invokes `ctx.per_server_trust_evaluator` (CP spec v1.10 §27). `sandbox.*` 7-attribute namespace per C-AS-15 §15 + `mcp.*` 7-attribute namespace per C-AS-14 §14.3 emitted at sandbox.enter / sandbox.exit / mcp.tool.call spans. Adds 8 fail classes. Driver-side step-kind branching at `workflow_driver.py:379` resolves via existing step-dispatcher table (`TOOL_STEP → ctx.tool_dispatcher`). | Phase A.2 ratified drafts §1; Class 2 C.1 Path X ratification |
+| **§14.10 (NEW) C-RT-20 WebhookDeliveryComposer + OperatorBurdenEvaluator** | Defines asynchronous out-of-process HITL delivery via HTTP POST for `AskUserQuestionSurface` webhook mode (vs default MCP-server-elicit mode at U-RT-60). `OperatorBurdenEvaluator` owns cross-step burden aggregation per persona-tier configuration; degradation policy fires when threshold exceeded. Adds 3 fail classes. Sampling discipline: webhook spans head=1.0, burden eval head=0.1 with tail-keep on `degrade=true`. | Phase A.2 ratified drafts §2B |
+
+**Sections preserved verbatim from v1.12.** All v1.12 content outside the two new §14.9 + §14.10 subsections preserved unchanged. §1–§14.8 (including §14.8.3 workflow-initiation topology pin) + §15 plan-traceability + §16 open-questions + §17 + §17.1 coherence-pass content stand. The v1.12 + v1.11 + v1.10 + v1.9 + v1.8 + v1.7 + v1.6 + v1.5 + v1.4 + v1.3 + v1.2 + v1.1 + v1 chain all preserved.
+
+**Status posture.** Proposed (v1.12) → **Proposed (v1.13)**. v1.13 is an additive-only patch — two new contracts at §14.9 + §14.10; no v1.12 contract re-decomposition; no acceptance criterion change; no contract removal.
+
+**Downstream absorption owed (post-v1.13).**
+(a) Workspace `CLAUDE.md` §2.3 runtime row version bump (v1.12 → v1.13).
+(b) `Spec_Control_Plane_v1_9.md` → v1.10 co-published this arc with §25 (C-CP-25 ValidatorFramework), §26 (C-CP-26 PauseResumeProtocol), §27 (C-CP-27 PerServerTrustEvaluator + MCPClientNamespaceEmitter), §17.4 (`hitl_gate` canonical signature materialization).
+(c) `Spec_Action_Surface_v1.md` → v1.4 co-published this arc with C-AS-14 §14.3 + C-AS-15 §15 producer-site reference notes.
+(d) `Implementation_Plan_Harness_Runtime` revision-pass: new atomic units U-RT-63+ for §14.9 + §14.10 materialization. Owed to `implementation-planner` revision-pass at Phase C.
+(e) `Cross_Axis_Composition_Document_v2_5.md` → v2.6 co-published at Phase A.4 with new CXA edges: tool-invocation → IS (audit secret-fetch); tool-invocation → OD (sandbox observability); ValidatorFramework → OD (validator.* audit); PerServerTrust → OD (mcp.trust audit).
+(f) `Spec_Operational_Discipline_v1_7.md` → v1.8 absorption deferred to Phase A.5 (OD compound-irrelevance unblock).
+
+**Adjacent defects surfaced (not patched per FM-2 no-extension discipline).** None — the apply pass is fidelity-pure transcription of ratified draft content into spec form.
+
+---
 
 ## Change-note (v1.11 → v1.12)
 
@@ -1762,6 +1795,244 @@ The C-RT-18 contract specifies the composition seam whose absence was the substi
 - Whether `_hitl_required` predicate evaluation at step 4c reads from `placement.requires_hitl` (v1.9 MVP shape) or composes the full 4-axis predicate per C-CP-19 §19.1 — v1.9 MVP defers; validator-composer arc lands the 4-axis composition.
 - **`hitl.response.summary_hash` content shape (v1.11 NEW — deferred per Q1 resolution).** The canonical attribute is emitted at `hitl.invocation.responded` per ADR-D5 v1.3 §1.8 row 3 + CP carrier. The under-hash content shape is implementation discretion at v1.11. Suggested shape: `sha256` of one of the per-response content-fields hashed at step 4h substep 8a-HITL (`edited_proposal_hash` when response==EDIT; `response_text_hash` when response==RESPOND; `rejection_reason_hash` when response==REJECT; `sha256(b"")` empty-hash when response==APPROVE — APPROVE carries no content). Alternative shape: a single canonical serialization-then-hash of the AskUserQuestionResult fields. Impl arc selects + documents at composer body; future arc may formalize via D6 ingestion-contract revision.
 - **`hitl.invocation.handoff_context_size_bytes` computation shape (v1.11 NEW — deferred per Q2 resolution).** The canonical attribute is emitted at `hitl.invocation.opened` per ADR-D5 §1.8 row 2 + CP carrier. Suggested shape: `len(handoff_context.model_dump_json().encode("utf-8"))` — Pydantic v2 model_dump_json gives a stable canonical serialization. Alternative shape: prefix-of-payload byte length. Impl arc selects + documents at composer body.
+
+---
+
+## §14.9 C-RT-19 — RuntimeToolDispatcher + MCPClientHost (new at v1.13)
+
+**Contract surface.** `RuntimeToolDispatcher` owns the `TOOL_STEP` dispatch path. Production callsite at `harness-cp/src/harness_cp/workflow_driver.py:379` invokes the step-dispatcher table; for `step.step_kind == TOOL_STEP`, dispatch resolves to a `RuntimeToolDispatcher` instance bound at bootstrap stage 5. The composer satisfies the same `StepDispatcher` Protocol as `RuntimeLLMDispatcher` (C-RT-15 §14.5) and `RuntimeSubAgentDispatcher` (C-RT-17 §14.7). The MCP server subprocess lifecycle (start/health/shutdown) is owned by a sibling `MCPClientHost` composer materialized at bootstrap stage 3a (alongside provider construction per C-RT-05).
+
+**PRD enablement.** PRD v1.1 §"Action surface — typed tool dispatch with sandbox observability".
+
+**ADR commitment.** ADR-F4 v1.1 (sandbox tier + blast-radius enforcement) + ADR-D2 v1.2 (sandbox primitive) + ADR-D6 v1.2 (observability substrate — `sandbox.*` + `mcp.*` namespaces).
+
+**Fork-resolution provenance.** `.harness/class_2_fork_tool_invocation_composer_scope.md` — Class 2 Path X operator-ratified 2026-05-21 (Phase-7 deferred runtime unit, U-RT-58 shape). Transport scope expanded to STDIO + HTTP + SSE per Decision 1.D4 ratification (was Path W deferred; X selected this arc).
+
+### §14.9.1 Architectural surfaces introduced
+
+**`MCPClientHost` (stage 3a):**
+
+```python
+class MCPClientHost:
+    async def start(self) -> None: ...                     # transport-specific startup: STDIO spawns subprocess + protocol handshake; HTTP opens client + auth handshake; SSE opens event stream. All transports populate ToolRegistry via list_tools.
+    async def health_check(self) -> MCPHostHealth: ...     # liveness probe; called per-dispatch (per-transport: STDIO ping subprocess; HTTP GET /health; SSE connection liveness)
+    async def shutdown(self) -> None: ...                  # transport-specific shutdown: STDIO subprocess termination; HTTP connection-pool close; SSE event-stream close
+    @property
+    def tool_registry(self) -> ToolRegistry: ...            # immutable after start()
+    async def call_tool(self, name: str, args: Mapping[str, Any], idempotency_key: str) -> Mapping[str, Any]: ...
+```
+
+**Transport-neutral lifecycle terminology.** Per Decision 1.D4 RATIFIED (operator-ratified 2026-05-21), STDIO + HTTP + SSE all in scope at v1. Where this contract uses "MCP host process" or "MCP client instance" it refers to the transport-appropriate runtime artifact (subprocess for STDIO; HTTP client + connection pool for HTTP; event-stream consumer for SSE). Where the contract uses "subprocess" explicitly, it scopes specifically to STDIO transport.
+
+**`MCPHostHealth`:**
+
+```python
+@dataclass(frozen=True)
+class MCPHostHealth:
+    alive: bool
+    last_ping_ms: int
+    protocol_version: str                                  # "2025-06-18" per C-AS-14
+    transport: Literal["stdio", "streamable_http", "sse"]  # all 3 in scope at v1 per Decision 1.D4
+    server_name: str                                       # per-deployment registry ID
+    trust_tier: MCPTrustTier                               # from CP plan v2.8 U-CP-00c carrier
+```
+
+**`RuntimeToolDispatcher` (stage 5):**
+
+```python
+class RuntimeToolDispatcher:
+    async def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
+    ) -> StepOutput: ...
+```
+
+Dispatch body (per §14.9.2 below):
+1. Resolve `ToolContract` from `ctx.mcp_client_host.tool_registry` by `step.tool_id`.
+2. Per-server-trust gate evaluation via `ctx.per_server_trust_evaluator.evaluate(...)` (CP spec v1.10 §27); raises `RT-FAIL-TOOL-INVOCATION-TRUST-VIOLATION` on deny.
+3. Open `tool.dispatch` outer span (envelope; engine-class-sampled per D6 §1.3).
+4. Open `sandbox.enter` span; emit `sandbox.*` 7-attribute namespace per C-AS-15 §15: `sandbox.tier`, `sandbox.tech`, `sandbox.provider`, `sandbox.policy.assigned_tier_reason`, `sandbox.cost.tier_overhead_ms`, `sandbox.fail.class` (initially null), `sandbox.tier_escalation` event if monotonic ascent required.
+5. Tier-floor evaluation: computed `sandbox.tier` ≥ `ToolContract.minimum_tier`; raises `RT-FAIL-SANDBOX-TIER-FLOOR-VIOLATION` on floor breach.
+6. Compose idempotency-key per parent step.
+7. Invoke `ctx.mcp_client_host.call_tool(name, args, idempotency_key)`; opens `mcp.tool.call` span; emit `mcp.*` 7-attribute namespace per C-AS-14 §14.3: `mcp.server.name`, `mcp.server.trust_tier`, `mcp.protocol_version`, `mcp.transport`, `mcp.auth_present`, `mcp.primitive.kind="tool"`, `mcp.primitive.signature.sha256`. The `MCPClientNamespaceEmitter` per CP spec v1.10 §27 owns attribute population.
+8. Validate response against `ToolContract.output_schema`; raises `RT-FAIL-TOOL-INVOCATION-SCHEMA-VIOLATION` on schema breach.
+9. Emit `sandbox.violation` event (always-sampled, head=1.0) if blast-radius / capability / egress policy hit during call.
+10. Close `sandbox.exit` span; emit final `sandbox.fail.class` (null on success).
+11. Wrap response in `StepOutput`; return.
+
+### §14.9.2 Per-step invocation discipline (composer body)
+
+The composer body executes synchronously within a single async `dispatch()` call. Per-dispatch invariants:
+
+1. **Schema validation at both directions.** Args validated against `ToolContract.input_schema` pre-call; response validated against `ToolContract.output_schema` post-call.
+2. **Per-server-trust evaluated every dispatch.** No caching of trust verdicts across dispatches (operator may revoke between calls per CP spec v1.10 §27 invariant 1).
+3. **Health check per dispatch.** `health_check()` invoked pre-call; failure raises `RT-FAIL-MCP-HOST-UNREACHABLE` (transient, retryable per C-RT-16).
+4. **No retry inside `RuntimeToolDispatcher`.** Retry/breaker/fallback wrapping applied at C-RT-16 layer by extension: a `RetryBreakerFallbackDispatcher` with `inner=ctx.tool_dispatcher` (registry key `"tool_dispatch"`) materializes at stage 5 alongside the existing `"llm_dispatch"` wrap per C-RT-16 §14.6 D6.
+
+### §14.9.3 Lifecycle stage placement
+
+**Stage 3a (LOOP_INIT prereqs):** `MCPClientHost` materialized alongside provider construction (per C-RT-05). Subprocess spawn + protocol handshake + `list_tools` registry population happen here. Failure to start raises `RT-FAIL-MCP-HOST-STARTUP` → bootstrap aborts (fail-closed per ADR-F4 v1.1 §Consequences (c)).
+
+**Stage 5 (LOOP_INIT):** `RuntimeToolDispatcher` instantiated with reference to `ctx.mcp_client_host`. Bound to `ctx.tool_dispatcher`. Step-dispatcher table updated: `TOOL_STEP → ctx.tool_dispatcher`. Per C-RT-16 §14.6 D6, the registry key `"tool_dispatch"` reserved for retry-wrap composition (matching existing `"llm_dispatch"` naming convention).
+
+**Workflow-driver branching.** At `workflow_driver.py:379`, the existing step-dispatcher table resolves both `INFERENCE_STEP → ctx.llm_dispatcher` (U-RT-58 wrapper, existing) and `TOOL_STEP → ctx.tool_dispatcher` (new). No new conditional in `workflow_driver.py` body — dispatch resolves via the typed table.
+
+### §14.9.4 Span emission
+
+Spans emitted per dispatch (nested, in order):
+
+1. `tool.dispatch` — outer envelope; mirrors `harness.runtime.retry_breaker_fallback` shape. Attributes: `step.id`, `step.step_kind="TOOL_STEP"`, `tool.contract.name`.
+2. `sandbox.enter` — opens at tier-floor evaluation; emits full `sandbox.*` 7-attribute namespace per C-AS-15 §15.
+3. `mcp.tool.call` — opens at FastMCP `call_tool` invocation; emits full `mcp.*` 7-attribute namespace per C-AS-14 §14.3 (always-sampled, head=1.0).
+4. `sandbox.violation` — emitted only on policy breach during call; always-sampled (head=1.0).
+5. `sandbox.exit` — closes at call return; emits final `sandbox.fail.class`.
+
+`sandbox.violation` + `sandbox.tier_escalation` + `mcp.tool.call` are always-sampled per C-AS-15 §15 + C-AS-14 §14.3 (preserved discipline). `tool.dispatch` outer span follows engine-class sampling per D6 §1.3.
+
+### §14.9.5 Failure-mode taxonomy
+
+8 new fail classes added to §14 runtime-local fail-class taxonomy:
+
+| Fail class | Trigger | Permanent? |
+|---|---|---|
+| `RT-FAIL-TOOL-CONTRACT-UNKNOWN` | `step.tool_id` not in `ToolRegistry` | YES |
+| `RT-FAIL-TOOL-INVOCATION-TRUST-VIOLATION` | Per-server-trust gate denies the call | YES |
+| `RT-FAIL-TOOL-INVOCATION-TIMEOUT` | FastMCP `call_tool` exceeds tool-contract timeout | NO (retryable per C-RT-16) |
+| `RT-FAIL-TOOL-INVOCATION-PROTOCOL-ERROR` | MCP protocol error from subprocess | YES |
+| `RT-FAIL-TOOL-INVOCATION-SCHEMA-VIOLATION` | Response fails `ToolContract.output_schema` validation | YES |
+| `RT-FAIL-MCP-HOST-STARTUP` | `MCPClientHost.start()` failure at stage 3a | YES (bootstrap aborts) |
+| `RT-FAIL-MCP-HOST-UNREACHABLE` | Health check fails mid-dispatch | NO (retryable; transient) |
+| `RT-FAIL-SANDBOX-TIER-FLOOR-VIOLATION` | Computed tier < `ToolContract.minimum_tier` | YES |
+
+### §14.9.6 Invariants
+
+1. **MCP host instance started exactly once per bootstrap.** Stage 3a starts; stage 7 SHUTDOWN drains. Transport-specific lifecycle: STDIO transport spawns one subprocess per `MCPClientHost`; HTTP transport opens one client connection pool per host; SSE transport opens one event-stream consumer per host. Idempotent restart out of scope at v1 (deferred to operator-driven restart arc).
+2. **Tier-floor monotonic ascent.** Computed `sandbox.tier` ≥ `ToolContract.minimum_tier` always; floor-violation raises before `call_tool` invocation.
+3. **Per-server-trust evaluated every dispatch.** No caching.
+4. **Schema validation at both directions.** Args + response both validated.
+5. **STDIO + HTTP + SSE all supported at v1.** Per Decision 1.D4. `MCPClientHost.start()` selects transport per per-server bootstrap config; all 3 implement transport-appropriate startup lifecycle (per §14.9.1 transport-neutral terminology block), `list_tools` / `call_tool` protocol, and health-check. `mcp.transport` span attribute populates accordingly (`stdio` | `streamable_http` | `sse`).
+6. **No retry inside `RuntimeToolDispatcher`.** Retry handled at C-RT-16 wrap layer.
+
+### §14.9.7 Deferred to implementation discretion
+
+- **`MCPClientNamespaceEmitter` mutation site.** The emitter (CP spec v1.10 §27) mutates the `mcp.tool.call` span attributes; the exact mutation-call mechanism (set_attribute vs. start-time attribute dict) is implementation discretion. Suggested: `set_attribute` calls inside the `mcp.tool.call` span context manager, immediately after span open.
+- **Idempotency-key composition recipe.** Per parent step. Suggested: sha256(`run_idempotency_key` + `step.step_id` + `step.tool_id`).
+- **Subprocess health-check cadence config.** v1 MVP fires `health_check()` per dispatch. Operator may configure probe-interval-with-cache via `MCPClientHost` bootstrap config; cache TTL bounded by `TrustPolicy.audit_required_below_tier` revocation semantics.
+
+---
+
+## §14.10 C-RT-20 — WebhookDeliveryComposer + OperatorBurdenEvaluator (new at v1.13)
+
+**Contract surface.** `WebhookDeliveryComposer` owns asynchronous out-of-process HITL delivery via HTTP POST when the operator's `AskUserQuestionSurface` is configured for webhook mode (vs the default MCP-server-elicit mode at U-RT-60). `OperatorBurdenEvaluator` owns cross-step burden aggregation — spans counted per persona-tier configuration; degradation policy fires when threshold exceeded.
+
+**PRD enablement.** PRD v1.1 §"HITL delivery + operator-burden management".
+
+**ADR commitment.** ADR-D5 v1.4 (HITL palette + cross-deployment monotonicity) + ADR-D6 v1.2 (observability substrate — `hitl.*` namespace).
+
+**Fork-resolution provenance.** Substitution H_T-CP-20 RETIRED batch 9 close note (FastMCP transport-level handler registration carry-forward bounded to webhook delivery arc) + C-CP-17 §17 v1.9 NOTE on `deliver_webhook` deferral.
+
+### §14.10.1 Architectural surfaces introduced
+
+```python
+class WebhookDeliveryComposer:
+    async def deliver_webhook(
+        self,
+        webhook_config: WebhookConfig,        # from CP plan v2.9 T2 factor-out (Pattern-D inherited per Phase A.1 §4.2)
+        payload: WebhookPayload,              # from CP plan v2.9 T2 factor-out
+        idempotency_key: str,
+    ) -> WebhookDeliveryResult: ...
+
+class OperatorBurdenEvaluator:
+    async def compute_operator_burden(
+        self,
+        span_window: SpanWindow,
+        persona_tier: PersonaTier,
+    ) -> OperatorBurdenScore: ...
+
+    async def should_degrade(
+        self,
+        score: OperatorBurdenScore,
+        degradation_policy: DegradationPolicy,
+    ) -> DegradationDecision: ...
+```
+
+Field sets introduced:
+
+```python
+@dataclass(frozen=True)
+class WebhookDeliveryResult:
+    delivered: bool
+    status_code: int | None
+    response_idempotency_key: str
+    delivery_attempts: int
+    final_attempt_at: int    # epoch ms
+
+@dataclass(frozen=True)
+class OperatorBurdenScore:
+    cumulative_invocations: int
+    window_start: int        # epoch ms
+    window_end: int          # epoch ms
+    persona_tier: PersonaTier
+
+@dataclass(frozen=True)
+class DegradationDecision:
+    degrade: bool
+    degradation_mode: Literal["auto_approve", "auto_reject", "pause_workflow", "operator_notify"] | None
+    reason: str              # operator-readable
+
+@dataclass(frozen=True)
+class SpanWindow:
+    start: int               # epoch ms
+    end: int                 # epoch ms
+```
+
+Reused (NOT re-authored):
+- `WebhookConfig` / `WebhookPayload` from CP plan v2.9 T2 X-AL-3 FACTOR-OUT
+- `PersonaTier` from CP plan v2.8 U-CP-00c
+- `DegradationPolicy` from CP plan U-CP-25 (`CP_ROUTING` registry — `on_hitl_timeout`)
+
+### §14.10.2 Lifecycle stage placement
+
+**Stage 5 (LOOP_INIT):** Both composers instantiated. Bound to `ctx.webhook_delivery_composer` + `ctx.operator_burden_evaluator`. The existing `MCPBackedAskUserQuestionSurface` per U-RT-60 is extended to delegate to webhook composer if `ctx.surface_config.mode == "webhook"`.
+
+### §14.10.3 Span emission
+
+**Webhook spans:**
+
+1. `hitl.webhook.deliver` — outer envelope; attributes: `webhook.url_hash`, `webhook.delivery_attempts`, `webhook.idempotency_key`.
+2. `hitl.webhook.attempt` — per-attempt inner span (mirrors `harness.runtime.retry_attempt`); attributes: `retry.attempt_number`, `webhook.status_code`, `webhook.attempt_latency_ms`.
+
+**Burden namespace (single span `hitl.operator_burden.evaluated`; the `hitl.operator_burden.*` prefix is the namespace identifier for the span's attribute set, not a span-family discriminator):**
+
+1. `hitl.operator_burden.evaluated` — emitted per evaluation; attributes: `hitl.operator_burden.cumulative_invocations`, `hitl.operator_burden.window_ms`, `hitl.operator_burden.persona_tier`, `hitl.operator_burden.degrade`.
+
+**Sampling discipline:** Webhook spans head=1.0. Burden evaluations head=1.0 only on `degrade=true`; otherwise head=0.1 (tail-keep on degradation per D6 §1.3 §"tail-keep on dimensional violations").
+
+### §14.10.4 Failure-mode taxonomy
+
+3 new fail classes added:
+
+| Fail class | Trigger |
+|---|---|
+| `RT-FAIL-HITL-WEBHOOK-DELIVERY-EXHAUSTED` | All retry attempts failed (per `ctx.retry_breaker.get_policy("hitl_webhook")`) |
+| `RT-FAIL-HITL-WEBHOOK-SCHEMA-VIOLATION` | Response doesn't match `WebhookConfig` schema |
+| `RT-FAIL-HITL-OPERATOR-BURDEN-DEGRADATION-CONFLICT` | `DegradationDecision.degrade=true` but no policy match |
+
+### §14.10.5 Invariants
+
+1. **Webhook delivery idempotent.** Same `idempotency_key` → same outcome (within retention window).
+2. **Burden window operator-configurable.** Default 1-hour rolling window; tunable per persona-tier.
+3. **Degradation deterministic.** Same (score, policy) → same `DegradationDecision`.
+4. **No webhook in test mode.** Test fixtures inject mock surfaces; webhook composer is production-only.
+
+### §14.10.6 Deferred to implementation discretion
+
+- **Retry policy registry key.** Inherits from `ctx.retry_breaker.get_policy("hitl_webhook")`; policy table populated at bootstrap config (cf. `"llm_dispatch"` / `"tool_dispatch"` keys per C-RT-16 §14.6 D6).
+- **Burden-window default tunability.** v1 MVP = 1-hour rolling; persona-tier-specific overrides via `ctx.surface_config.burden_window_overrides`.
+- **Degradation-mode prose.** Each `degradation_mode` literal value documented at `OperatorBurdenEvaluator.should_degrade()` docstring at implementation time per Phase C unit landing.
 
 ---
 
