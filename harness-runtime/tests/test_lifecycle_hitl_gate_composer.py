@@ -43,9 +43,9 @@ import pytest
 from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.workflow_driver import StepDispatcher
+from harness_core.identity import StepID
 from harness_cp.workflow_driver_types import (
     StepExecutionContext,
-    StepID,
     StepKind,
     WorkflowStep,
 )
@@ -338,7 +338,7 @@ def test_dispatch_with_validator_escalation_placement_raises_foreclosed(
 # ---------------------------------------------------------------------------
 
 
-def _drive_composer_on_event_loop(
+def _drive_composer_on_event_loop(  # pyright: ignore[reportUnusedFunction]
     composer: RuntimeHITLGateComposer,
     step: WorkflowStep,
     ctx: StepExecutionContext,
@@ -519,3 +519,516 @@ def test_default_full_palette_is_4_responses() -> None:
     assert HITLResponse.EDIT in DEFAULT_FULL_PALETTE
     assert HITLResponse.REJECT in DEFAULT_FULL_PALETTE
     assert HITLResponse.RESPOND in DEFAULT_FULL_PALETTE
+
+
+# ---------------------------------------------------------------------------
+# AC #5 — binding-aware HandoffContext composition
+# ---------------------------------------------------------------------------
+
+
+def test_compose_hitl_handoff_context_inference_step_shape() -> None:
+    """AC #5: `_compose_hitl_handoff_context` produces a 7-field HandoffContext.
+
+    INFERENCE_STEP kind → `ProposedAction.action_kind = INFERENCE_STEP` per
+    spec §14.8.2 step 4a. `audit_trail_link` sourced from `step_context`
+    per `Spec_Control_Plane_v1_6.md` §25.2.1 Path A.
+    """
+    from harness_cp.handoff_context import ActionKind, HandoffContext
+
+    from harness_runtime.lifecycle import hitl_gate_composer as _hgc
+
+    _compose_hitl_handoff_context = _hgc._compose_hitl_handoff_context  # pyright: ignore[reportPrivateUsage]
+
+    step = WorkflowStep(
+        step_id=StepID("step-hc-0"),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={"prompt": "go"},
+    )
+    ctx = _make_step_context()
+    handoff = _compose_hitl_handoff_context(step_context=ctx, step=step)
+
+    assert isinstance(handoff, HandoffContext)
+    assert handoff.proposed_action.action_kind == ActionKind.INFERENCE_STEP
+    assert handoff.proposed_action.payload == {"prompt": "go"}
+    assert handoff.proposed_action.brief is None
+    assert handoff.failed_attempts == ()
+    assert handoff.alternatives_considered == ()
+    # audit_trail_link cites parent action via step_context per spec §14.8.2 step 4a
+    assert str(handoff.audit_trail_link.action_id) == str(ctx.parent_action_id)
+    assert handoff.audit_trail_link.entry_hash == ctx.parent_entry_hash
+
+
+@pytest.mark.asyncio
+async def test_dispatch_composes_real_handoff_context_for_size_attribute(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """AC #5: composer's `hitl.invocation.handoff_context_size_bytes` reflects
+    a real serialized payload size (>0) instead of the v1.11 MVP placeholder 0.
+    """
+    provider, exporter = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=11.0)]
+    )
+    composer = _make_composer(
+        inner=inner,
+        surface=surface,
+        tracer_provider=provider,
+        loop=asyncio.get_event_loop(),
+    )
+    placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    step = _make_step(placements=(placement,))
+    ctx = _make_step_context()
+
+    await asyncio.to_thread(
+        composer.dispatch, cast(Any, object()), step, step_context=ctx
+    )
+
+    opened = [s for s in exporter.get_finished_spans() if s.name == "hitl.invocation.opened"]
+    assert len(opened) == 1
+    attrs = dict(opened[0].attributes) if opened[0].attributes else {}
+    size = attrs.get("hitl.invocation.handoff_context_size_bytes")
+    assert isinstance(size, int)
+    # Real Pydantic model_dump_json byte length is non-trivial (>50 bytes for
+    # a typical 7-field HandoffContext); strict >0 catches the previous v1.11
+    # MVP placeholder=0 regression.
+    assert size > 0
+
+
+def test_dispatch_skips_gate_when_requires_hitl_is_false(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """AC #5: `_hitl_required == False` → step 4j skip (no spans, delegate to inner).
+
+    Per spec §14.8.2 step 4c bounded reading: when placement carries an
+    explicit `requires_hitl=False` (future workflow-grammar shape), composer
+    skips the gate; only `hitl.gate.evaluated` may fire (carries `.required=False`).
+    """
+    provider, exporter = tracer_provider
+    inner = _MockInnerDispatcher()
+    composer = _make_composer(
+        inner=inner,
+        surface=_MockAskUserQuestionSurface([]),
+        tracer_provider=provider,
+    )
+
+    # Build a placement with a dynamic `requires_hitl=False` attribute via
+    # adapter (HITLPlacement is frozen + extra=forbid).
+    class _PlacementWithRequiresHitl:
+        def __init__(self, inner: HITLPlacement, requires_hitl: bool) -> None:
+            self._inner = inner
+            self.requires_hitl = requires_hitl
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
+
+    placement = cast(
+        HITLPlacement,
+        _PlacementWithRequiresHitl(
+            HITLPlacement(position=HITLPlacementKind.PRE_ACTION),
+            requires_hitl=False,
+        ),
+    )
+    step = _make_step(placements=(placement,))
+    ctx = _make_step_context()
+
+    result = composer.dispatch(cast(Any, object()), step, step_context=ctx)
+    assert result == {"inner_dispatched": True}
+    assert len(inner.calls) == 1
+
+    span_names = [s.name for s in exporter.get_finished_spans()]
+    # gate.evaluated fires (records the decision per U-CP-46 AC #10);
+    # invocation.opened MUST NOT fire because the surface was never invoked.
+    assert "hitl.gate.evaluated" in span_names
+    assert "hitl.invocation.opened" not in span_names
+    assert "hitl.invocation.responded" not in span_names
+    # And the gate-evaluated span carries .required=False
+    gate = [s for s in exporter.get_finished_spans() if s.name == "hitl.gate.evaluated"][0]
+    attrs = dict(gate.attributes) if gate.attributes else {}
+    assert attrs.get("hitl.gate.required") is False
+
+
+# ---------------------------------------------------------------------------
+# AC #6 — full palette emission verification
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_surface_receives_full_4_response_palette(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """AC #6: composer passes the full 4-response palette to surface.ask unconditionally."""
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)]
+    )
+    composer = _make_composer(
+        inner=inner,
+        surface=surface,
+        tracer_provider=provider,
+        loop=asyncio.get_event_loop(),
+    )
+    placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    step = _make_step(placements=(placement,))
+    ctx = _make_step_context()
+
+    await asyncio.to_thread(
+        composer.dispatch, cast(Any, object()), step, step_context=ctx
+    )
+
+    assert len(surface.calls) == 1
+    _, options, _ = surface.calls[0]
+    assert set(options) == set(DEFAULT_FULL_PALETTE)
+    assert len(options) == 4
+
+
+# ---------------------------------------------------------------------------
+# AC #9 — 4-substep audit-write E2E (8a → 8b → 8c → 8d)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_4_substep_audit_chain_writes_one_cp_one_od_entry_per_placement(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """AC #9: one matching placement → ledger_writer.append called once (8b);
+    audit_writer.append called once (8d) carrying the converted OD entry."""
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=5.0)]
+    )
+    ledger = _MockLedgerWriter()
+    audit = _MockAuditWriter()
+    composer = RuntimeHITLGateComposer(
+        inner=inner,
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, surface),
+        ledger_writer=cast(Any, ledger),
+        audit_writer=cast(Any, audit),
+        tracer_provider=provider,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        loop=asyncio.get_event_loop(),
+        result_timeout_seconds=5.0,
+    )
+    placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    step = _make_step(placements=(placement,))
+    ctx = _make_step_context()
+
+    await asyncio.to_thread(
+        composer.dispatch, cast(Any, object()), step, step_context=ctx
+    )
+
+    # 8b: one F2 entry appended with action_id matching hitl:<parent>:<position>
+    assert len(ledger.appends) == 1
+    payload, _key = ledger.appends[0]
+    assert str(payload.action_id).startswith("hitl:")
+    assert "pre-action" in str(payload.action_id)
+    # 8d: one OD audit entry persisted; it's the result of cp_audit_to_od_audit
+    assert len(audit.appends) == 1
+    tenant_id, od_entry = audit.appends[0]
+    assert tenant_id == ctx.tenant_id
+    # The OD AuditLedgerEntry's payload carries the CP-projected attrs
+    from harness_od.audit_ledger_types import AuditLedgerEntry
+
+    assert isinstance(od_entry, AuditLedgerEntry)
+    # Substep 8c projected the CP entry's action_id under audit.cp.action_id
+    cp_action_id_attr = od_entry.payload.audit_namespace_attrs.get(
+        "audit.cp.action_id"
+    )
+    assert cp_action_id_attr is not None and cp_action_id_attr.startswith("hitl:")
+
+
+# ---------------------------------------------------------------------------
+# AC #10 — 4-response branch coverage (APPROVE / EDIT / REJECT / RESPOND)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_approve_response_delegates_to_inner(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """AC #10 APPROVE: composer delegates to inner with step unchanged."""
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=2.0)]
+    )
+    composer = _make_composer(
+        inner=inner, surface=surface, tracer_provider=provider,
+        loop=asyncio.get_event_loop(),
+    )
+    placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    step = _make_step(placements=(placement,))
+    ctx = _make_step_context()
+
+    result = await asyncio.to_thread(
+        composer.dispatch, cast(Any, object()), step, step_context=ctx
+    )
+
+    assert result == {"inner_dispatched": True}
+    assert len(inner.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_edit_response_records_edited_proposal_hash_in_audit(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """AC #10 EDIT: composer records edited_proposal_hash at 8a-HITL; inner called."""
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [
+            AskUserQuestionResult(
+                response=HITLResponse.EDIT,
+                latency_ms=12.0,
+                edited_proposal="REPLACEMENT_PAYLOAD",
+            )
+        ]
+    )
+    ledger = _MockLedgerWriter()
+    audit = _MockAuditWriter()
+    composer = RuntimeHITLGateComposer(
+        inner=inner,
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, surface),
+        ledger_writer=cast(Any, ledger),
+        audit_writer=cast(Any, audit),
+        tracer_provider=provider,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        loop=asyncio.get_event_loop(),
+        result_timeout_seconds=5.0,
+    )
+    placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    step = _make_step(placements=(placement,))
+    ctx = _make_step_context()
+
+    await asyncio.to_thread(
+        composer.dispatch, cast(Any, object()), step, step_context=ctx
+    )
+
+    # Inner still called (EDIT proceeds to step 5)
+    assert len(inner.calls) == 1
+    # Audit entry carries audit.cp.edited_proposal_hash per converter
+    _, od_entry = audit.appends[0]
+    assert "audit.cp.edited_proposal_hash" in od_entry.payload.audit_namespace_attrs
+
+
+@pytest.mark.asyncio
+async def test_reject_response_raises_typed_error(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """AC #10 REJECT: composer raises HITLGateRejectedError; rejection audit preserved."""
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLGateRejectedError
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [
+            AskUserQuestionResult(
+                response=HITLResponse.REJECT,
+                latency_ms=8.0,
+                rejection_reason="not approved",
+            )
+        ]
+    )
+    ledger = _MockLedgerWriter()
+    audit = _MockAuditWriter()
+    composer = RuntimeHITLGateComposer(
+        inner=inner,
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, surface),
+        ledger_writer=cast(Any, ledger),
+        audit_writer=cast(Any, audit),
+        tracer_provider=provider,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        loop=asyncio.get_event_loop(),
+        result_timeout_seconds=5.0,
+    )
+    placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    step = _make_step(placements=(placement,))
+    ctx = _make_step_context()
+
+    with pytest.raises(HITLGateRejectedError, match="rejected"):
+        await asyncio.to_thread(
+            composer.dispatch, cast(Any, object()), step, step_context=ctx
+        )
+
+    # Inner NOT called on REJECT path
+    assert inner.calls == []
+    # Rejection audit entry was preserved (audit-suppression-on-REJECT discipline
+    # preserves the audit fact — converter ran and audit.cp.rejection_reason_hash
+    # is in the projected attrs).
+    assert len(audit.appends) == 1
+    _, od_entry = audit.appends[0]
+    assert "audit.cp.rejection_reason_hash" in od_entry.payload.audit_namespace_attrs
+
+
+@pytest.mark.asyncio
+async def test_respond_response_does_not_inject_payload(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """AC #10 RESPOND: composer records response_text_hash; step.step_payload untouched."""
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [
+            AskUserQuestionResult(
+                response=HITLResponse.RESPOND,
+                latency_ms=4.0,
+                response_text="continuing dialogue",
+            )
+        ]
+    )
+    ledger = _MockLedgerWriter()
+    audit = _MockAuditWriter()
+    composer = RuntimeHITLGateComposer(
+        inner=inner,
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, surface),
+        ledger_writer=cast(Any, ledger),
+        audit_writer=cast(Any, audit),
+        tracer_provider=provider,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        loop=asyncio.get_event_loop(),
+        result_timeout_seconds=5.0,
+    )
+    placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    original_payload = {"prompt": "original"}
+    inner_step = WorkflowStep(
+        step_id=StepID("respond-step"),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload=original_payload,
+    )
+    # Wrap with placements (same adapter pattern as _make_step)
+    class _StepAdapter:
+        def __init__(self, inner: WorkflowStep, placements: tuple[HITLPlacement, ...]) -> None:
+            self._inner = inner
+            self.hitl_placements = placements
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
+
+    step = cast(WorkflowStep, _StepAdapter(inner_step, (placement,)))
+    ctx = _make_step_context()
+
+    await asyncio.to_thread(
+        composer.dispatch, cast(Any, object()), step, step_context=ctx
+    )
+
+    # Inner WAS called (RESPOND proceeds to step 5 with step unchanged)
+    assert len(inner.calls) == 1
+    _, delivered_step, _ = inner.calls[0]
+    # Step payload not mutated — inner sees original
+    assert delivered_step.step_payload == original_payload
+    # Audit carries response_text_hash
+    _, od_entry = audit.appends[0]
+    assert "audit.cp.response_text_hash" in od_entry.payload.audit_namespace_attrs
+
+
+# ---------------------------------------------------------------------------
+# AC #11 — multi-placement same-position 4-span emission count
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_two_pre_action_placements_emit_per_placement_canonical_4_spans(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """AC #11: 2 PRE_ACTION placements on a single step → 2× each canonical span.
+
+    Per spec v1.11 §14.8.5 hierarchy diagram + §14.8.6 Invariants ("exactly
+    once per matching placement"): each matching placement gets exactly one
+    `hitl.gate.evaluated` + one `hitl.invocation.opened` + one
+    `hitl.invocation.responded`. Distinct action_ids per placement preserved.
+    """
+    provider, exporter = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [
+            AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0),
+            AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=2.0),
+        ]
+    )
+    ledger = _MockLedgerWriter()
+    audit = _MockAuditWriter()
+    composer = RuntimeHITLGateComposer(
+        inner=inner,
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, surface),
+        ledger_writer=cast(Any, ledger),
+        audit_writer=cast(Any, audit),
+        tracer_provider=provider,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        loop=asyncio.get_event_loop(),
+        result_timeout_seconds=5.0,
+    )
+    # Two PRE_ACTION placements on a single step (NOTE 6-i exercise-able case)
+    placement_a = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    placement_b = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    step = _make_step(placements=(placement_a, placement_b))
+    ctx = _make_step_context()
+
+    await asyncio.to_thread(
+        composer.dispatch, cast(Any, object()), step, step_context=ctx
+    )
+
+    # Surface called twice (once per placement)
+    assert len(surface.calls) == 2
+    # 2× each canonical span
+    span_names = [s.name for s in exporter.get_finished_spans()]
+    assert span_names.count("hitl.gate.evaluated") == 2
+    assert span_names.count("hitl.invocation.opened") == 2
+    assert span_names.count("hitl.invocation.responded") == 2
+    # 2× audit entries reach the writer
+    assert len(audit.appends) == 2
+    # Note: the v1.11 MVP action_id shape `hitl:<parent>:<position>` collides
+    # across same-position placements; per spec §14.8.2 step 4 NOTE 6-i,
+    # in-loop sub-shape is impl-discretion. This test asserts at-least the
+    # 2-emission cardinality and surface invocation pattern.
+
+
+# ---------------------------------------------------------------------------
+# AC #13 — producer-side carrier import discipline (no hand-coded names)
+# ---------------------------------------------------------------------------
+
+
+def test_composer_source_imports_canonical_carrier_constants() -> None:
+    """AC #13: composer module imports HITL_SPAN_NAMESPACE_SCHEMA + AUDIT_NAMESPACE_SCHEMA.
+
+    Producer-side carrier-import discipline per spec §14.8.5 — the
+    composer source MUST cite the canonical CP carrier; this guards against
+    silent regression to hand-coded attribute names.
+    """
+    import inspect
+
+    from harness_runtime.lifecycle import hitl_gate_composer
+
+    source = inspect.getsource(hitl_gate_composer)
+    assert "HITL_SPAN_NAMESPACE_SCHEMA" in source, (
+        "composer source must import HITL_SPAN_NAMESPACE_SCHEMA per spec §14.8.5"
+    )
+    assert "AUDIT_NAMESPACE_SCHEMA" in source, (
+        "composer source must import AUDIT_NAMESPACE_SCHEMA per spec §14.8.5"
+    )
+    # Retired v1.9/v1.10 hand-coded names MUST NOT appear in the source
+    # (carrier-canonical attribute discipline per Q1+Q2 fork resolution).
+    forbidden = (
+        "hitl.gate.evaluated.placement",
+        "hitl.gate.evaluated.response_palette",
+        "hitl.gate.evaluated.outcome",
+        "hitl.invocation.responded.response_class",
+        "hitl.invocation.responded.response_latency_ms",
+    )
+    for name in forbidden:
+        assert name not in source, (
+            f"retired v1.9/v1.10 hand-coded attribute name {name!r} "
+            f"must not appear in composer source (carrier-canonical "
+            f"discipline per spec §14.8.5 v1.11)"
+        )

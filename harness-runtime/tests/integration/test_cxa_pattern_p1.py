@@ -187,6 +187,24 @@ PATTERN_P1_SEAMS: tuple[tuple[str, str, str, str], ...] = (
         "harness_as.sandbox_tier",
         "SandboxTier",
     ),
+    # ---- §2.3.7 CP → OD (2 G; NEW v2.4 + v2.5) --------------------------
+    # First seam added at CXA v2.4 §2.3.7 (sub-agent dispatch audit-write per
+    # U-RT-59 Fork 2 Path D); second seam added at CXA v2.5 §2.3.7 (HITL gate
+    # response audit-write per U-RT-60 Q3 ratification). Both seams share the
+    # `cp_audit_to_od_audit` converter at `harness-cxa/`. Both classify as G
+    # per the converter-output-type precedent (CXA v2.4 §0.3 + v2.5 §0.3).
+    (
+        "U-CP-28→U-OD-00",
+        "harness_cxa.cp_audit_conversion",
+        "harness_od.audit_ledger_types",
+        "AuditLedgerEntry",
+    ),
+    (
+        "U-CP-46→U-OD-00",
+        "harness_cxa.cp_audit_conversion",
+        "harness_od.audit_ledger_types",
+        "AuditLedgerEntry",
+    ),
 )
 
 
@@ -195,9 +213,15 @@ PATTERN_P1_SEAMS: tuple[tuple[str, str, str, str], ...] = (
 # ---------------------------------------------------------------------------
 
 
-def test_seam_count_is_22() -> None:
-    """CXA v2.3 §2.3 enumerates exactly 22 genuine typed seams."""
-    assert len(PATTERN_P1_SEAMS) == 22
+def test_seam_count_is_24() -> None:
+    """CXA v2.5 §2.3 enumerates exactly 24 genuine typed seams.
+
+    v2.3 baseline: 22 seams. v2.4 added §2.3.7 with 1 seam (U-CP-28 → U-OD-00
+    sub-agent dispatch audit-write). v2.5 grew §2.3.7 to 2 seams (added
+    U-CP-46 → U-OD-00 HITL gate response audit-write per Q3 ratification —
+    shared `cp_audit_to_od_audit` converter at `harness-cxa/`).
+    """
+    assert len(PATTERN_P1_SEAMS) == 24
 
 
 # ---------------------------------------------------------------------------

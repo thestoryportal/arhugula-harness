@@ -101,6 +101,16 @@ from harness_cp.audit_hitl_span_namespace import (
     AUDIT_NAMESPACE_SCHEMA,
     HITL_SPAN_NAMESPACE_SCHEMA,
 )
+from harness_as import GateLevel
+from harness_cp.cp_shared_types import ActorIdentity
+from harness_cp.handoff_context import (
+    ActionKind,
+    HandoffContext,
+    LedgerEntryRef,
+    ProposedAction,
+    RetryHistory,
+    StateSummary,
+)
 from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry
@@ -253,6 +263,82 @@ def _compute_response_summary_hash(result: AskUserQuestionResult) -> str:
     else:
         payload = b""
     return hashlib.sha256(payload).hexdigest()
+
+
+def _compose_hitl_handoff_context(
+    *,
+    step_context: StepExecutionContext,
+    step: WorkflowStep,
+) -> HandoffContext:
+    """Build the v1.11 MVP HITL-flavor `HandoffContext` per spec §14.8.2 step 4a.
+
+    Spec wording: "re-used verbatim from C-RT-17". The C-RT-17
+    `_compose_handoff_context(step_context, payload)` shape consumes a
+    `SubAgentDispatchPayload`; HITL at PRE_ACTION binding does not have that
+    payload type. The HITL-flavor composes the same 7-field schema with:
+
+    - `proposed_action` — `ProposedAction(action_kind=<derived from step.kind>,
+      payload=step.step_payload, brief=None)` — `brief` is `None` for non-
+      SUB_AGENT_DISPATCH kinds (per `harness_cp.handoff_context.ProposedAction`
+      `brief: SubAgentBrief | None = None`).
+    - `agent_confidence` — `None` at v1.11 MVP.
+    - `failed_attempts` — empty tuple.
+    - `alternatives_considered` — empty tuple.
+    - `state_summary` — `StateSummary(relevant_entries=(parent_entry_ref,),
+      summary_text="", summary_hash=sha256(b""),
+      idempotency_key=step_context.parent_idempotency_key,
+      external_references=())`.
+    - `audit_trail_link` — `LedgerEntryRef(action_id=step_context.parent_action_id,
+      entry_hash=step_context.parent_entry_hash,
+      actor=step_context.parent_actor.actor_id)` per `Spec_Control_Plane_v1_6.md`
+      §25.2.1 Path A.
+    - `retry_history` — empty `RetryHistory`.
+
+    Kind mapping: `INFERENCE_STEP` → `ActionKind.INFERENCE_STEP`;
+    `TOOL_STEP` → `ActionKind.TOOL_CALL`; other step kinds (e.g.,
+    `SUB_AGENT_DISPATCH`, `DECLARATIVE_STEP`, `HITL_STEP`) map to
+    `ActionKind.INFERENCE_STEP` as the v1.11 MVP default (closest match for
+    pre-action gate semantics — the gate proposes *some* action to the
+    operator; the precise enum is HITL-narrative, not load-bearing at v1.11).
+    """
+    step_kind_name = getattr(step.step_kind, "value", str(step.step_kind))
+    if step_kind_name == "tool-step":
+        action_kind = ActionKind.TOOL_CALL
+    elif step_kind_name == "sub-agent-dispatch":
+        action_kind = ActionKind.SUB_AGENT_DISPATCH
+    else:
+        action_kind = ActionKind.INFERENCE_STEP
+
+    parent_action_id = cast(ActionID, step_context.parent_action_id)
+    actor_identity = ActorIdentity(step_context.parent_actor.actor_id)
+    parent_entry_ref = LedgerEntryRef(
+        action_id=parent_action_id,
+        entry_hash=step_context.parent_entry_hash,
+        actor=actor_identity,
+    )
+    return HandoffContext(
+        proposed_action=ProposedAction(
+            action_kind=action_kind,
+            payload=cast(Any, step.step_payload),
+            brief=None,
+        ),
+        agent_confidence=None,
+        failed_attempts=(),
+        alternatives_considered=(),
+        state_summary=StateSummary(
+            relevant_entries=(parent_entry_ref,),
+            summary_text="",
+            summary_hash=_empty_summary_hash(),
+            idempotency_key=Identifier(step_context.parent_idempotency_key),
+            external_references=(),
+        ),
+        audit_trail_link=parent_entry_ref,
+        retry_history=RetryHistory(
+            attempts=(),
+            retry_count=0,
+            last_retry_cause=None,
+        ),
+    )
 
 
 def _compute_handoff_context_size_bytes(handoff_context: Any) -> int:
@@ -457,7 +543,7 @@ class RuntimeHITLGateComposer:
         # drift item for future revision pass.
         cp_entry = CPAuditLedgerEntry(
             action_id=hitl_action_id,
-            gate_level=cast(Any, "auto"),
+            gate_level=GateLevel.AUTO,
             response=response_value,
             edited_proposal_hash=edited_hash,
             rejection_reason_hash=rejection_hash,
@@ -558,14 +644,16 @@ class RuntimeHITLGateComposer:
         # --- Step 4: Per matching placement (in declaration order) --------
         for placement in matching:
             # --- 4a/4b: HandoffContext composition + matrix cell -----------
-            # v1.11 MVP: HandoffContext composition at PRE_ACTION is deferred
-            # to workflow-grammar arc (the C-RT-17 pattern is for
-            # SUB_AGENT_DISPATCH; PRE_ACTION binding shape not yet pinned).
-            # Pass None into helpers tolerant of it. Matrix-cell resolution
-            # at v1.11 MVP also tolerates incomplete binding shapes (the
-            # binding object's persona_tier + engine_class fields are read
-            # if present).
-            handoff_context = None  # v1.11 MVP placeholder
+            # AC #5: compose real `HandoffContext` per spec §14.8.2 step 4a
+            # ("re-used verbatim from C-RT-17"). HITL-flavor wrapper handles
+            # the non-SUB_AGENT_DISPATCH binding shape (PRE_ACTION's
+            # `ProposedAction.brief` is None per the landed CP schema).
+            # Matrix-cell resolution at v1.11 MVP still tolerates incomplete
+            # binding shapes (binding's persona_tier + engine_class read if
+            # present; sentinel fallback for partial-binding test fixtures).
+            handoff_context = _compose_hitl_handoff_context(
+                step_context=step_context, step=step
+            )
             persona_tier = getattr(binding, "persona_tier", None)
             engine_class = getattr(binding, "engine_class", None)
             if persona_tier is not None and engine_class is not None:
@@ -585,13 +673,19 @@ class RuntimeHITLGateComposer:
                 # gate_level for span emission.
                 cell = cast(HITLMatrixCell, _SentinelMatrixCell())
 
-            # --- 4c: _hitl_required predicate (v1.11 MVP — always True) ----
-            # `placement.requires_hitl` is not a field on HITLPlacement at
-            # v1.11 landed CP schema (per
-            # `harness-cp/src/harness_cp/hitl_placement.py:135`); MVP defaults
-            # to True (gate fires on every matching placement). Full 4-axis
-            # composition per C-CP-19 §19.1 deferred to validator-composer.
-            hitl_required = True
+            # --- 4c: _hitl_required predicate (v1.11 MVP bounded reading) --
+            # Spec §14.8.2 step 4c: "v1.9 MVP reads the bool from the
+            # placement declaration: `if not placement.requires_hitl: skip
+            # to 4j`". The landed `HITLPlacement` schema at
+            # `harness-cp/src/harness_cp/hitl_placement.py:135` does NOT
+            # carry a `requires_hitl` field (4 fields: position / tool_filter
+            # / cascade_policy / timeout) — Class 3 spec-prose-drift item
+            # (carried at the runtime drift items). v1.11 MVP uses a
+            # `getattr` tolerant read: default True so the gate fires when
+            # the field is absent (preserves AC #5 + AC #6 unconditional-
+            # gate semantics), but supports the skip-to-4j path for future
+            # workflow-grammar arcs that DO declare `requires_hitl`.
+            hitl_required = bool(getattr(placement, "requires_hitl", True))
 
             # --- 4d: Determine response palette (v1.11 MVP — full palette) -
             palette = DEFAULT_FULL_PALETTE
