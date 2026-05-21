@@ -418,6 +418,215 @@ def test_envelope_nests_child_spans(
 
 
 # ---------------------------------------------------------------------------
+# U-OD-36 — 12-attribute set per §C-OD-25.1
+# ---------------------------------------------------------------------------
+
+
+_EXPECTED_OPEN_TIME_ATTRS = {
+    "workflow.id",
+    "workflow.run_id",
+    "workflow.idempotency_key",
+    "workflow.entry_version",
+    "workflow.topology_pattern",
+    "workflow.engine_class",
+    "workflow.workload_class",
+    "workflow.persona_tier",
+}
+
+
+def test_envelope_open_time_attributes_populated(
+    exporter_and_provider: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    """AC #1 — All 8 open-time attributes present + AC #4 — enums serialize via .value."""
+    exporter, provider = exporter_and_provider
+    ctx = _FakeCtx(tracer_provider=provider)
+    manifest = _manifest(workflow_id="wf-attr")
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0)],
+        run_id="run-attr",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+    )
+    envelope = _single_envelope(exporter)
+    attrs = dict(envelope.attributes or {})
+
+    # All open-time attribute keys present
+    missing = _EXPECTED_OPEN_TIME_ATTRS - attrs.keys()
+    assert not missing, f"missing open-time attributes: {missing}"
+
+    # Identity attributes carry expected values
+    assert attrs["workflow.id"] == "wf-attr"
+    assert attrs["workflow.run_id"] == "run-attr"
+    assert isinstance(attrs["workflow.idempotency_key"], str)
+    assert len(attrs["workflow.idempotency_key"]) == 64  # sha256 hex
+    assert isinstance(attrs["workflow.entry_version"], int)
+
+    # AC #4 — enums serialize via .value (string form)
+    assert attrs["workflow.topology_pattern"] == TopologyPattern.SINGLE_THREADED_LINEAR.value
+    assert attrs["workflow.engine_class"] == EngineClass.PURE_PATTERN_NO_ENGINE.value
+    assert attrs["workflow.workload_class"] == WorkloadClass.PIPELINE_AUTOMATION.value
+    assert attrs["workflow.persona_tier"] == PersonaTier.TEAM_BINDING.value
+
+
+def test_envelope_close_attributes_on_success(
+    exporter_and_provider: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    """AC #1 — outcome+step_count populated on SUCCESS; terminal_step_index omitted;
+    fail_class omitted."""
+    exporter, provider = exporter_and_provider
+    ctx = _FakeCtx(tracer_provider=provider)
+    execute_workflow(
+        manifest_entry=_manifest(),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-success",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+    )
+    envelope = _single_envelope(exporter)
+    attrs = dict(envelope.attributes or {})
+
+    assert attrs["workflow.outcome"] == RunStatus.SUCCESS.value
+    assert attrs["workflow.step_count"] == 3
+    assert "workflow.fail_class" not in attrs
+    assert "workflow.terminal_step_index" not in attrs
+
+
+def test_envelope_close_attributes_on_failed(
+    exporter_and_provider: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    """AC #1 — outcome+fail_class+terminal_step_index+step_count on FAILED;
+    step_count reflects fully-completed steps (failing step does NOT count)."""
+    exporter, provider = exporter_and_provider
+    ctx = _FakeCtx(tracer_provider=provider)
+
+    class _RaiseAtIndexDispatcher:
+        def __init__(self, fail_at: int) -> None:
+            self.dispatched = 0
+            self._fail_at = fail_at
+
+        def dispatch(
+            self,
+            binding: StepEffectiveBinding,
+            step: WorkflowStep,
+            *,
+            step_context: Any = None,
+        ) -> dict[str, Any]:
+            if self.dispatched == self._fail_at:
+                raise RuntimeError("simulated failure at index 2")
+            self.dispatched += 1
+            return {"step_id": str(step.step_id), "echoed_payload": {}}
+
+    execute_workflow(
+        manifest_entry=_manifest(),
+        steps=[_step(0), _step(1), _step(2), _step(3)],
+        run_id="run-fail",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _RaiseAtIndexDispatcher(fail_at=2))),
+    )
+    envelope = _single_envelope(exporter)
+    attrs = dict(envelope.attributes or {})
+
+    assert attrs["workflow.outcome"] == RunStatus.FAILED.value
+    assert "workflow.fail_class" in attrs
+    assert "step-failure" in str(attrs["workflow.fail_class"])
+    assert attrs["workflow.terminal_step_index"] == 2  # failed step index
+    assert attrs["workflow.step_count"] == 2  # steps 0 + 1 completed; 2 raised
+
+
+def test_envelope_close_attributes_on_drained_mid_execution(
+    exporter_and_provider: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    """AC #2 — fail_class null on DRAINED (omitted attribute); outcome=DRAINED;
+    step_count reflects completed steps."""
+    exporter, provider = exporter_and_provider
+    ctx = _FakeCtx(tracer_provider=provider)
+
+    class _DrainAfterFirstDispatcher:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def dispatch(
+            self,
+            binding: StepEffectiveBinding,
+            step: WorkflowStep,
+            *,
+            step_context: Any = None,
+        ) -> dict[str, Any]:
+            self.calls += 1
+            if self.calls >= 1:
+                ctx.drained_flag.set()
+            return {"step_id": str(step.step_id), "echoed_payload": {}}
+
+    execute_workflow(
+        manifest_entry=_manifest(),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-drain",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _DrainAfterFirstDispatcher())),
+    )
+    envelope = _single_envelope(exporter)
+    attrs = dict(envelope.attributes or {})
+
+    assert attrs["workflow.outcome"] == RunStatus.DRAINED.value
+    assert "workflow.fail_class" not in attrs  # null-on-DRAINED per §25.5
+    # post-step drain at step 0: terminal_step_index = 0; step_count = 1
+    assert attrs["workflow.terminal_step_index"] == 0
+    assert attrs["workflow.step_count"] == 1
+
+
+def test_envelope_step_count_zero_when_no_steps_complete_before_drain(
+    exporter_and_provider: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    """Pre-step drain at first step (mid-envelope, not at-entry): step_count=0."""
+    exporter, provider = exporter_and_provider
+    ctx = _FakeCtx(tracer_provider=provider)
+
+    class _SetDrainBeforeDispatchDispatcher:
+        def dispatch(
+            self,
+            binding: StepEffectiveBinding,
+            step: WorkflowStep,
+            *,
+            step_context: Any = None,
+        ) -> dict[str, Any]:
+            # Should never be called — drain is set before the dispatch.
+            raise AssertionError("should not dispatch")
+
+    # Set drain INSIDE the workflow (not at entry) via a custom emitter that
+    # trips drain on workflow.start emission.
+    class _DrainOnStartEmitter:
+        def __init__(self) -> None:
+            self.emits: list[WorkflowEventClass] = []
+
+        def emit(self, event_class: WorkflowEventClass) -> None:
+            self.emits.append(event_class)
+            if event_class is WorkflowEventClass.WORKFLOW_START:
+                ctx.drained_flag.set()
+
+    ctx.lifecycle_emitter = _DrainOnStartEmitter()
+    execute_workflow(
+        manifest_entry=_manifest(),
+        steps=[_step(0)],
+        run_id="run-drain-pre",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _SetDrainBeforeDispatchDispatcher())),
+    )
+    envelope = _single_envelope(exporter)
+    attrs = dict(envelope.attributes or {})
+
+    assert attrs["workflow.outcome"] == RunStatus.DRAINED.value
+    assert attrs["workflow.step_count"] == 0
+    # terminal_step_index is None at pre-step-0 drain → omitted attribute
+    assert "workflow.terminal_step_index" not in attrs
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

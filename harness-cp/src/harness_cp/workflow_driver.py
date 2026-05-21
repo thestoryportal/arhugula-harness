@@ -404,7 +404,27 @@ def execute_workflow(
         "harness.cp.workflow_driver"
     )
     with tracer.start_as_current_span("workflow.envelope") as span:
-        result = _execute_workflow_body(
+        # C-OD-25 §25.1 — populate the 8 envelope-open attributes from
+        # manifest_entry + run identity (workflow.id / run_id / idempotency_key
+        # / entry_version / topology_pattern / engine_class / workload_class /
+        # persona_tier). Enum values serialize via .value (AC #4 — string
+        # form). idempotency_key matches the run-scope key computed inside
+        # the body per §25.6 (kept consistent via _compute_run_idempotency_key).
+        run_idempotency_key = _compute_run_idempotency_key(
+            run_id,
+            manifest_entry.workflow_id,
+            extras=(str(manifest_entry.entry_version),),
+        )
+        span.set_attribute("workflow.id", manifest_entry.workflow_id)
+        span.set_attribute("workflow.run_id", run_id)
+        span.set_attribute("workflow.idempotency_key", run_idempotency_key)
+        span.set_attribute("workflow.entry_version", int(manifest_entry.entry_version))
+        span.set_attribute("workflow.topology_pattern", manifest_entry.topology_pattern.value)
+        span.set_attribute("workflow.engine_class", manifest_entry.engine_class.value)
+        span.set_attribute("workflow.workload_class", manifest_entry.workload_class.value)
+        span.set_attribute("workflow.persona_tier", manifest_entry.persona_tier.value)
+
+        result, steps_executed = _execute_workflow_body(
             manifest_entry=manifest_entry,
             steps=steps,
             run_id=run_id,
@@ -412,11 +432,24 @@ def execute_workflow(
             default_model_binding=default_model_binding,
             step_dispatchers=step_dispatchers,
             span=span,
+            run_idempotency_key=run_idempotency_key,
         )
+
+        # C-OD-25 §25.1 close-time attributes (4 of 12). Outcome enum serializes
+        # via .value. fail_class null on DRAINED per §25.5 default (omit
+        # attribute rather than set null). terminal_step_index null on SUCCESS
+        # (omit). step_count = steps_executed (single-attribute terminal-only
+        # per §25.5 default).
+        span.set_attribute("workflow.outcome", result.status.value)
+        if result.status is RunStatus.FAILED and result.fail_class is not None:
+            span.set_attribute("workflow.fail_class", result.fail_class)
+        if result.terminal_step_index is not None:
+            span.set_attribute("workflow.terminal_step_index", int(result.terminal_step_index))
+        span.set_attribute("workflow.step_count", int(steps_executed))
+
         # C-OD-25 §25.4 invariant 2 — deterministic close. Set span status
         # from RunResult.status. FAILED → StatusCode.ERROR with fail_class
-        # description; SUCCESS / DRAINED leave default UNSET (envelope
-        # observable; outcome attribute populated at U-OD-36).
+        # description; SUCCESS / DRAINED leave default UNSET.
         if result.status is RunStatus.FAILED:
             span.set_status(
                 Status(StatusCode.ERROR, result.fail_class or "FAILED")
@@ -433,31 +466,27 @@ def _execute_workflow_body(
     default_model_binding: ModelBinding,
     step_dispatchers: StepDispatcherRegistry,
     span: Any,
-) -> RunResult:
+    run_idempotency_key: str,
+) -> tuple[RunResult, int]:
     """Execute the workflow body within the workflow.envelope OTel span.
 
     Per C-OD-25 §25.1–§25.5 (OD spec v1.8): this helper executes inside the
-    envelope opened by execute_workflow above. The span parameter is consumed
-    by U-OD-36 (12-attribute population) and U-OD-37 (explicit exception
-    handling). U-OD-35 baseline: helper consumes span for the envelope-context
-    binding only (attribute population deferred).
+    envelope opened by execute_workflow above. Returns the RunResult plus the
+    count of steps fully executed (body + step.boundary emit + ledger append
+    all succeeded) — consumed by the wrapper to populate the
+    workflow.step_count close-time attribute (§25.5 default — single-attribute
+    terminal-only).
+
+    The run_idempotency_key parameter is computed by the wrapper (per §25.6
+    + §25.1 workflow.idempotency_key attribute) and threaded through to keep
+    the run-scope key identical between envelope-attribute set and the
+    resumption N-lookup.
     """
     # § 25.3.1 — Validate topology + engine class.
     if manifest_entry.topology_pattern not in _IN_SCOPE_TOPOLOGY:
         raise TopologyPatternNotYetMaterializedError(manifest_entry.topology_pattern)
     if manifest_entry.engine_class not in _IN_SCOPE_ENGINE_CLASSES:
         raise EngineClassNotYetMaterializedError(manifest_entry.engine_class)
-
-    # § 25.6 — Replay-resumption check at re-entry.
-    # `run_idempotency_key = sha256(run_id, workflow_id, entry_version)`
-    # per CP spec v1.4 §25.6 line 270. `entry_version` was added to
-    # `WorkflowManifestEntry` at U-CP-13 carrier-growth (CP plan v2.12),
-    # resolving `[[fork-u-cp-56-resumption-underspec]]`.
-    run_idempotency_key = _compute_run_idempotency_key(
-        run_id,
-        manifest_entry.workflow_id,
-        extras=(str(manifest_entry.entry_version),),
-    )
 
     # Selective per-run replay-resumption via N-lookup over the existing
     # IS `read_by_idempotency_key` primitive (CP plan v2.12 §0.1 +
@@ -484,7 +513,13 @@ def _execute_workflow_body(
     # § 25.3.3 — Iterate steps in declaration order (SINGLE_THREADED_LINEAR
     # has no parallel/fan-out branching). Begin at `resume_at` to skip
     # already-materialized steps from a prior crashed/drained run.
+    # `steps_executed` tracks completed-this-envelope step count for the
+    # workflow.step_count close-time attribute per C-OD-25 §25.1 (U-OD-36).
+    # Fresh-envelope-on-resumption (§25.4 invariant 1 + §25.5 default) means
+    # prior re-materialized steps were observed under the prior envelope;
+    # this counter reflects only this envelope's executions.
     accumulated: dict[str, Any] = {}
+    steps_executed = 0
     for step_index, step in enumerate(steps[resume_at:], start=resume_at):
         # § 25.4 row "Per-step pre-entry" — drain check before entering next
         # step (U-CP-57 AC #2; Path B operator-ratified — no `step.boundary`
@@ -500,7 +535,7 @@ def _execute_workflow_body(
                 partial_state=dict(accumulated),
                 final_state=None,
                 fail_class=None,
-            )
+            ), steps_executed
 
         # § 25.3.3.2 — Resolve binding via U-CP-14.
         binding = resolve_step_binding(
@@ -570,7 +605,7 @@ def _execute_workflow_body(
                     f"step-failure: RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND: "
                     f"{exc}"
                 ),
-            )
+            ), steps_executed
         except Exception as exc:
             return RunResult(
                 workflow_id=manifest_entry.workflow_id,
@@ -580,7 +615,7 @@ def _execute_workflow_body(
                 partial_state=dict(accumulated),
                 final_state=None,
                 fail_class=f"step-failure: {type(exc).__name__}: {exc}",
-            )
+            ), steps_executed
 
         # § 25.3.3.5 — Emit step.boundary.
         ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
@@ -608,10 +643,14 @@ def _execute_workflow_body(
                 partial_state=dict(accumulated),
                 final_state=None,
                 fail_class=f"ledger-append-failed: {type(exc).__name__}: {exc}",
-            )
+            ), steps_executed
 
         # Accumulate step output under its step id for terminal state.
         accumulated[str(step.step_id)] = dict(step_output)
+        # Step is fully complete (body + step.boundary + ledger append all
+        # succeeded). Increment the workflow.step_count carrier per §C-OD-25
+        # (U-OD-36).
+        steps_executed += 1
 
         # § 25.4 row "Per-step post-exit" — drain check after step body
         # completes + step.boundary emitted + ledger append persisted
@@ -627,7 +666,7 @@ def _execute_workflow_body(
                 partial_state=dict(accumulated),
                 final_state=None,
                 fail_class=None,
-            )
+            ), steps_executed
 
     # § 25.3.4 + § 25.3.5 — Terminal SUCCESS return. No new event class at
     # terminal exit; the absence of a further step.boundary plus the
@@ -640,7 +679,7 @@ def _execute_workflow_body(
         partial_state=None,
         final_state=dict(accumulated),
         fail_class=None,
-    )
+    ), steps_executed
 
 
 def _determine_resume_at(
