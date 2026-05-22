@@ -1,7 +1,7 @@
 # Class 1 Fork — U-RT-68 retry-wrap shape gap + bootstrap-wiring scope gap
 
 **Filed:** 2026-05-22 at L9-sexies cluster impl arc, post-U-RT-70 landing.
-**Status:** OPEN — operator decision required at next session.
+**Status:** RATIFIED 2026-05-22 — operator ratified Q1=B (new sibling `RetryBreakerToolDispatcher`) + Q2=B2 (new atomic units U-RT-71..N decomposing bootstrap-wiring chain) + Q3=yes (full deferral accepted) + Q4=now (resolution arc opens immediately). Routing target: runtime spec v1.13 → v1.14 (Phase 5 revision via spec-writer) + runtime plan v2.11 → v2.12 (Phase 6 revision via implementation-planner revision-pass).
 **Scope:** Phase 7b atomic-unit consumption discipline; halt-execution Class 1
 per `Project_Workflow_v1_8.md` §2.7.6 + workspace CLAUDE.md §4.3.
 **Surfaced by:** `phase-7-implementation` skill during U-RT-68 (Stage 5
@@ -153,12 +153,13 @@ operator decides at next session:
 
 ## 4. Decision required
 
-| # | Question | Recommendation |
-|---|---|---|
-| Q1 | Which retry-wrap reading (A literal / B sibling / C extend) is canonical? | **B** — new sibling `RetryBreakerToolDispatcher` for clean separation; spec amendment at v1.14 to clarify "a C-RT-16-shape wrap (RetryBreaker[Fallback]Dispatcher class family)" rather than literal class reuse |
-| Q2 | How should the bootstrap-wiring scope gap be closed? | **B2** — decompose new atomic units (U-RT-71..N) for the missing config schema + stage-3a factories + stage-5 wiring; preserves U-RT-68's atomic-unit scope discipline. Alternative B2a: amend U-RT-68 ACs to include the bootstrap chain (~600 LOC scope; violates atomic-unit discipline). |
-| Q3 | Is full deferral of U-RT-68 at this arc acceptable? | **Yes** — partial-land would silently absorb design defects per workspace CLAUDE.md §4.3. Full deferral preserves design integrity; cluster L9-sexies closes at 7/8 with explicit gap surfacing. |
-| Q4 | When should the resolution arc be scheduled? | After cluster L9-sexies close — pairs naturally with a CP plan v2.18 + runtime spec v1.14 + runtime plan v2.12 co-publication amendment cycle decomposing both the retry-wrap shape AND the bootstrap-wiring decomposition. |
+| # | Question | Recommendation | Ratification |
+|---|---|---|---|
+| Q1 | Which retry-wrap reading (A literal / B sibling / C extend) is canonical? | **B** — new sibling `RetryBreakerToolDispatcher` for clean separation; spec amendment at v1.14 to clarify "a C-RT-16-shape wrap (RetryBreaker[Fallback]Dispatcher class family)" rather than literal class reuse | **RATIFIED B 2026-05-22** |
+| Q1a | Inside Q1=B, does `RetryBreakerToolDispatcher` use per-tool/per-server breaker or retry-only MVP? Surfaced at spec-writer FM-1 check 2026-05-22: extending `BreakerScope` (canonical 2 values `per_model`/`per_provider` per OD spec §7.1) to add PER_TOOL/PER_SERVER would route to OD back-flow (OD v1.10 + ADR-D6 v1.3 + U-OD-09 re-conformance + OTel cardinality bump) — OUT OF SCOPE for this runtime-spec arc. | **(i)** retry-only MVP at v1.14 (no breaker; defer to future OD-coordinated arc); avoids OD cascade entirely | **RATIFIED (i) 2026-05-22** — `RetryBreakerToolDispatcher` retry-only at v1.14; breaker semantics deferred with explicit pointer at the new D7 contract |
+| Q2 | How should the bootstrap-wiring scope gap be closed? | **B2** — decompose new atomic units (U-RT-71..N) for the missing config schema + stage-3a factories + stage-5 wiring; preserves U-RT-68's atomic-unit scope discipline. Alternative B2a: amend U-RT-68 ACs to include the bootstrap chain (~600 LOC scope; violates atomic-unit discipline). | **RATIFIED B2 2026-05-22** |
+| Q3 | Is full deferral of U-RT-68 at this arc acceptable? | **Yes** — partial-land would silently absorb design defects per workspace CLAUDE.md §4.3. Full deferral preserves design integrity; cluster L9-sexies closes at 7/8 with explicit gap surfacing. | **RATIFIED Yes 2026-05-22** (no code landed at filing arc) |
+| Q4 | When should the resolution arc be scheduled? | After cluster L9-sexies close — pairs naturally with a CP plan v2.18 + runtime spec v1.14 + runtime plan v2.12 co-publication amendment cycle decomposing both the retry-wrap shape AND the bootstrap-wiring decomposition. | **RATIFIED now 2026-05-22** — resolution arc opens at this session |
 
 ## 5. Cross-axis impact
 
