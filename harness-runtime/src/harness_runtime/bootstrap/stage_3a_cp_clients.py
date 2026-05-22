@@ -16,6 +16,9 @@ from __future__ import annotations
 
 from harness_core.workload_class import WorkloadClass
 
+from harness_runtime.bootstrap.factories.mcp_client_host_factory import (
+    materialize_mcp_client_host_stage,
+)
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.lifecycle.providers import materialize_provider_clients_stage
 from harness_runtime.types import RuntimeConfig
@@ -28,9 +31,18 @@ async def execute(
     config: RuntimeConfig,
     workload_class: WorkloadClass,
 ) -> None:
-    """Populate stage 3a CP_CLIENTS fields on `ctx`."""
+    """Populate stage 3a CP_CLIENTS fields on `ctx`.
+
+    Per spec v1.16 §14.9.3 stage 3a post-conditions: provider clients
+    constructed (existing) + `mcp_client_host` materialized via the new
+    factory (U-RT-73). Both bind onto the mutable context for stage 7
+    freeze.
+    """
     _ = workload_class
     assert ctx.keyring_resolver is not None, "stage 0 must construct ctx.keyring_resolver"
 
     stage = await materialize_provider_clients_stage(config, ctx.keyring_resolver)
     ctx.providers = dict(stage.providers)
+
+    # U-RT-73: stage 3a now also materializes the H_T-as-MCP-client host.
+    ctx.mcp_client_host = await materialize_mcp_client_host_stage(config)
