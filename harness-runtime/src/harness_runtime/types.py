@@ -47,7 +47,7 @@ from harness_as.discriminators import MCPTransport
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_as.sandbox_tier_floor import MCPServerTrustLevel
 from harness_as.tool_contract import SecretAllowlistEntry, ToolContract
-from harness_core import ClientName, SkillID
+from harness_core import ClientName, SandboxDecisionPolicy, SkillID
 from harness_core.deployment_surface import DeploymentSurface
 from harness_core.identity import ActionID
 from harness_core.persona_tier import PersonaTier
@@ -64,6 +64,7 @@ from harness_cp.hitl_as_tool_call_rewriting import (
 )
 from harness_cp.hitl_timeout_degradation import TimeoutDegradationKind
 from harness_cp.pause_resume_protocol import ResumeOutcomeKind
+from harness_cp.per_server_trust_types import TrustPolicy
 from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry, StepEffectiveBinding
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass
 from harness_cp.routing_manifest_residence import RetryPolicy, RoutingManifest
@@ -1022,6 +1023,32 @@ class RuntimeConfig(BaseModel):
     stage 3b in test scenarios that don't exercise routing dispatch. Operators
     supply a populated manifest via kwarg at runtime construction; the manifest
     is persisted to `PathClass.ROUTING_MANIFEST` at stage 3b per C-CP-01 §1.3.
+    """
+
+    trust_policy: TrustPolicy | None = None
+    """Operator-supplied per-server trust policy (CP spec v1.11 §27.2 carrier).
+
+    Added at U-RT-71 per `Spec_Harness_Runtime_v1.md` v1.16 §3 C-RT-02
+    field-table extension. Optional — when `None` the stage-5 factory
+    (`materialize_runtime_tool_dispatcher_stage`, U-RT-75) constructs the
+    `PerServerTrustEvaluator` with a runtime-supplied conservative default;
+    operators supply a populated `TrustPolicy` via kwarg at runtime
+    construction to override the default trust posture.
+    """
+
+    sandbox_decision_policy: SandboxDecisionPolicy | None = None
+    """Operator-supplied sandbox decision policy (harness-core empty-marker
+    carrier per U-CORE-02; cite re-pointed at runtime spec v1.16 / runtime
+    plan v2.13 absorbing Q1=C-i Class 1 fork resolution 2026-05-22 at
+    `.harness/class_1_fork_sandbox_decision_policy_phantom_cite.md`).
+
+    Added at U-RT-71 per `Spec_Harness_Runtime_v1.md` v1.16 §3 C-RT-02
+    field-table extension. Optional — when `None` the stage-5 factory
+    (`materialize_runtime_tool_dispatcher_stage`, U-RT-75) supplies
+    `SandboxDecisionPolicy.default()` (the empty-marker instance). The
+    carrier is empty-marker shape at v1.16 per X-AL-3 + carrier-shape
+    decision; future operator-driven extension surfaces via spec extension
+    + planner revision pass.
     """
 
 
