@@ -1,4 +1,36 @@
-# Specification — Harness Runtime v1.14
+# Specification — Harness Runtime v1.15
+
+## Change-note (v1.14 → v1.15)
+
+**Scope of revision.** U-RT-68 Class 1 fork ratification apply pass per `.harness/class_1_fork_u_rt_68_retry_wrap_shape_gap.md` (operator-ratified 2026-05-22 at this session). The fork surfaced (a) retry-wrap class-shape ambiguity at §14.9.2 inv 4 / §14.9.3 stage-5 / §14.9.6 inv 6 (the v1.13 prose pinned literal `RetryBreakerFallbackDispatcher` class reuse for tool-dispatch wrap, but the class is hard-typed to LLM-fallback shapes — `FallbackChain` + `ProviderCandidate` + `BreakerScope.PER_MODEL`) and (b) a wider bootstrap-wiring scope gap — the cluster L9-sexies primitive surface had no spec-authored config-schema / factory contracts for the operator-config-to-runtime-instance wiring chain (`HarnessContext.mcp_client_host` / `tool_dispatcher` / `per_server_trust_evaluator` / `mcp_namespace_emitter` fields + stage-3a/5 factory functions + `RuntimeConfig.trust_policy` / `sandbox_decision_policy` operator-input fields). Operator ratification: **Q1=B** (new sibling class `RetryBreakerToolDispatcher`) + **Q1a=(i)** (retry-only MVP at v1.15; no breaker; breaker semantics deferred to future OD-axis-coordinated arc to avoid `BreakerScope` 2-value enum extension which would route to OD spec v1.10 + ADR-D6 v1.3 back-flow with U-OD-09 conformance break + OTel cardinality bump) + **Q2=B2** (new atomic units U-RT-71..N decompose bootstrap chain at runtime plan v2.12) + **Q3=yes** (full U-RT-68 deferral at filing arc accepted) + **Q4=now** (resolution arc opens this session).
+
+**Source of fix.** `.harness/class_1_fork_u_rt_68_retry_wrap_shape_gap.md` RATIFIED 2026-05-22 (operator). Filed at L9-sexies cluster impl arc commit `e2cada0` post-U-RT-70 landing; ratification + sub-fork Q1a ratification + apply this arc.
+
+**Amendments.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§3 C-RT-02 RuntimeConfig field table** | NEW optional sub-model fields `trust_policy: TrustPolicy \| None` (CP spec v1.11 §27 carrier) + `sandbox_decision_policy: SandboxDecisionPolicy \| None` (AS spec v1.3 §15 carrier). Both `None` = use defaults. Ingested by stage-3a + stage-5 factories per §14.9.3 amendment. Existing `mcp_clients: list[MCPClientConfig]` field preserved verbatim (per-server transport_config already carried by `MCPClientConfig`). | Q2=B2 ratification — config-schema fields needed for stage-3a/5 factory ingestion |
+| **§4 C-RT-04 HarnessContext field table** | NEW fields `mcp_client_host: MCPClientHost` (stage 3a) + `tool_dispatcher: RuntimeToolDispatcher` (stage 5) + `per_server_trust_evaluator: PerServerTrustEvaluator` (stage 5; CP spec v1.11 §27 carrier) + `mcp_namespace_emitter: MCPClientNamespaceEmitter` (stage 5; CP spec v1.11 §27 carrier). Note `mcp_host: MCPHost (FastMCP)` at stage 2 is the SERVER-side FastMCP host per U-RT-15 — distinct primitive from `mcp_client_host` which is CLIENT-side per §14.9.1. | Q2=B2 ratification — context fields needed for downstream consumer access |
+| **§14.9.2 invariant 4** | Prose amend: "Retry/breaker/fallback wrapping applied at C-RT-16 layer by extension: a `RetryBreakerFallbackDispatcher`..." → "Retry wrapping applied via the C-RT-16 class family — specifically a `RetryBreakerToolDispatcher` sibling carrier per new §14.11 C-RT-21 (retry-only MVP at v1.15; no breaker; no fallback chain) with `inner=ctx.tool_dispatcher` (registry key `"tool_dispatch"`) materializing at stage 5 alongside the existing `"llm_dispatch"` wrap per C-RT-16 §14.6 D6. The new sibling is REQUIRED because `RetryBreakerFallbackDispatcher` is hard-typed to LLM-fallback shapes (`FallbackChain`/`ProviderCandidate`/`BreakerScope.PER_MODEL`) that have no tool-dispatch analog — see §14.11 for the sibling contract." | Q1=B + Q1a=(i) ratification |
+| **§14.9.3 stage 3a + stage 5** | Stage 3a: NEW factory contract `materialize_mcp_client_host_stage(config.mcp_clients) → MCPClientHost`; binds to `ctx.mcp_client_host`. Stage 5: NEW factory contract `materialize_runtime_tool_dispatcher_stage(ctx.mcp_client_host, config.trust_policy, config.sandbox_decision_policy) → RuntimeToolDispatcher`; instantiates `PerServerTrustEvaluator` + `MCPClientNamespaceEmitter` (bound to `ctx.per_server_trust_evaluator` + `ctx.mcp_namespace_emitter`); binds bare dispatcher; then wraps with `RetryBreakerToolDispatcher` per new §14.11 and binds the wrapper to `ctx.tool_dispatcher`. Prose updated: "RetryBreakerToolDispatcher binding at registry key `"tool_dispatch"` per new §14.11" replaces v1.13 prose. | Q1=B + Q2=B2 ratification |
+| **§14.9.6 invariant 6** | Prose amend: "No retry inside `RuntimeToolDispatcher`. Retry handled at C-RT-16 wrap layer." → "No retry inside `RuntimeToolDispatcher`. Retry handled at the C-RT-16-family wrap layer via the new §14.11 C-RT-21 `RetryBreakerToolDispatcher` sibling carrier." | Q1=B ratification |
+| **§14.11 (NEW) C-RT-21 RetryBreakerToolDispatcher** | NEW contract surface defining sibling carrier to §14.6 C-RT-16: retry-only semantics (no fallback chain, no breaker at v1.15 MVP), consumes `"tool_dispatch"` registry policy, satisfies same `StepDispatcher` Protocol as C-RT-15/C-RT-16/C-RT-17/C-RT-19, raises `RT-FAIL-TOOL-RETRY-EXHAUSTED` on `RetryPolicy.max_attempts` exhaustion (new fail class added to §14 taxonomy). EXPLICIT POINTER: breaker semantics deferred to future OD-axis-coordinated arc per Q1a=(i) ratification. | Q1=B + Q1a=(i) ratification |
+
+**Sections preserved verbatim from v1.14.** All v1.14 content outside the amendment sites above preserved unchanged. §1 + §2 + §3 (table preserved; new sub-model fields appended) + §4 (table preserved; new fields appended) + §5–§14.4 + §14.5 + §14.6 + §14.7 + §14.8 + §14.9.1 + §14.9.4 + §14.9.5 + §14.9.7 + §14.10 + §15 + §16 + §17 + §17.1 all preserved. The v1.14 path β citation reconciliation at §14.6 line ~1339 preserved verbatim. The v1.13 + v1.12 + v1.11 + v1.10 + v1.9 + v1.8 + v1.7 + v1.6 + v1.5 + v1.4 + v1.3 + v1.2 + v1.1 + v1 chain all preserved.
+
+**Status posture.** Proposed (v1.14) → **Proposed (v1.15)**. v1.15 is an additive-plus-clarification patch — new optional config-schema fields + new HarnessContext fields + new §14.11 contract + invariant-prose clarification at §14.9.2/3/6. No v1.14 contract removed; no acceptance criterion change at preserved sections.
+
+**Downstream absorption owed (post-v1.15).**
+(a) Workspace `CLAUDE.md` §2.3 runtime row version bump (v1.14 → v1.15).
+(b) `Implementation_Plan_Harness_Runtime_v2_11.md` → v2.12 co-published this arc via implementation-planner revision-pass: NEW atomic units U-RT-71..N decomposing the Q2=B2 bootstrap chain (RuntimeConfig schema extension + HarnessContext field additions + stage-3a `materialize_mcp_client_host_stage` factory + stage-5 `materialize_runtime_tool_dispatcher_stage` factory + new §14.11 C-RT-21 `RetryBreakerToolDispatcher` materialization + U-RT-68 wire-up consumer); U-RT-68 AC #2 un-struck or rewritten to bind via §14.11 sibling.
+(c) `Cross_Axis_Composition_Document_v2_8.md` cross-axis seams unchanged at v1.15 — fork doc §5 confirms ZERO cross-axis cascade. The new `PerServerTrustEvaluator` + `MCPClientNamespaceEmitter` ctx-bindings consume already-landed CP spec v1.11 §27 carriers without new edge introduction.
+(d) Filing footer staleness (`Status | Proposed (v1.2)` at line 2148; predecessor chain ends at v1.2) noted as surfaced adjacent defect — NOT patched at this arc per FM-2 no-extension discipline (pre-existing drift from v1.3 onward; separate bookkeeping arc owed).
+
+**Adjacent defects surfaced (not patched per FM-2 no-extension discipline).**
+- Filing footer (§Filing footer line 2147-2154) status posture + predecessor chain are stale at "Proposed (v1.2)" / chain ending at v1.2 (2026-05-20). The drift accumulated across v1.3 through v1.14 without filing-footer updates. Pre-existing condition; separate bookkeeping arc owed.
+
+---
 
 ## Change-note (v1.13 → v1.14)
 
@@ -605,6 +637,8 @@ The orchestrator (`harness_runtime.bootstrap.__init__`) executes the 9 stages fr
 | `mcp_clients` | `list[MCPClientConfig]` | no (default `[]`) | MCP client connection configs |
 | `default_topology` | `TopologyPattern` (CP enum) | yes | The TopologyPattern the runtime dispatches when no per-workflow override is set |
 | `tenant_id` | `str | None` | no | Multi-tenant separation key per OD audit-ledger; None = single-tenant mode |
+| `trust_policy` | `TrustPolicy | None` (CP spec v1.11 §27 carrier) | no (default `None` → uses `TrustPolicy.default()`) | Operator-supplied per-MCP-server trust policy ingested at stage 5 by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3; consumed by `PerServerTrustEvaluator` bound to `ctx.per_server_trust_evaluator`. Added at v1.15 per U-RT-68 fork Q2=B2 ratification. |
+| `sandbox_decision_policy` | `SandboxDecisionPolicy | None` (AS spec v1.3 §15 carrier) | no (default `None` → uses `SandboxDecisionPolicy.default()`) | Operator-supplied sandbox-tier decision policy ingested at stage 5 by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3; consumed by `RuntimeToolDispatcher` for tier-floor evaluation per §14.9.1 step 5. Added at v1.15 per U-RT-68 fork Q2=B2 ratification. |
 
 **Invariants.**
 
@@ -669,6 +703,10 @@ The orchestrator (`harness_runtime.bootstrap.__init__`) executes the 9 stages fr
 | `topology_dispatcher` | `TopologyDispatcher` (CP, runtime-bound) | 5 | TopologyPattern dispatcher |
 | `lifecycle_emitter` | `LifecycleEventEmitter` (runtime-defined) | 5 | Emits `workflow_event_class` events |
 | `drained_flag` | `asyncio.Event` | 0 (initialized) | Set by signal handler; polled by CP loop for drain |
+| `mcp_client_host` | `MCPClientHost` (runtime-defined, C-RT-19 §14.9.1) | 3a | Per-MCP-server subprocess/HTTP/SSE lifecycle owner. Distinct from `mcp_host` at stage 2 (which is the SERVER-side FastMCP host per U-RT-15). Materialized by `materialize_mcp_client_host_stage` factory per §14.9.3. Added at v1.15 per U-RT-68 fork Q2=B2 ratification. |
+| `tool_dispatcher` | `RetryBreakerToolDispatcher` (C-RT-21 §14.11 wrapper around C-RT-19 §14.9.1 `RuntimeToolDispatcher`) | 5 | `TOOL_STEP` dispatch entry point. Bound to the C-RT-21 retry-wrap wrapper, not the bare C-RT-19 dispatcher (mirrors the §14.6 C-RT-16 wrap-binding pattern at `ctx.llm_dispatcher`). Materialized by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3. Added at v1.15 per U-RT-68 fork Q2=B2 ratification. |
+| `per_server_trust_evaluator` | `PerServerTrustEvaluator` (CP spec v1.11 §27 carrier) | 5 | Per-MCP-server trust gate evaluator consumed by `RuntimeToolDispatcher` per §14.9.1 step 2. Materialized by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3 with `RuntimeConfig.trust_policy` ingestion. Added at v1.15 per U-RT-68 fork Q2=B2 ratification. |
+| `mcp_namespace_emitter` | `MCPClientNamespaceEmitter` (CP spec v1.11 §27 carrier) | 5 | `mcp.*` 7-attribute namespace emitter for `mcp.tool.call` spans per §14.9.1 step 7. Materialized by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3. Added at v1.15 per U-RT-68 fork Q2=B2 ratification. |
 
 **Invariants.**
 
@@ -1881,15 +1919,22 @@ The composer body executes synchronously within a single async `dispatch()` call
 1. **Schema validation at both directions.** Args validated against `ToolContract.input_schema` pre-call; response validated against `ToolContract.output_schema` post-call.
 2. **Per-server-trust evaluated every dispatch.** No caching of trust verdicts across dispatches (operator may revoke between calls per CP spec v1.10 §27 invariant 1).
 3. **Health check per dispatch.** `health_check()` invoked pre-call; failure raises `RT-FAIL-MCP-HOST-UNREACHABLE` (transient, retryable per C-RT-16).
-4. **No retry inside `RuntimeToolDispatcher`.** Retry/breaker/fallback wrapping applied at C-RT-16 layer by extension: a `RetryBreakerFallbackDispatcher` with `inner=ctx.tool_dispatcher` (registry key `"tool_dispatch"`) materializes at stage 5 alongside the existing `"llm_dispatch"` wrap per C-RT-16 §14.6 D6.
+4. **No retry inside `RuntimeToolDispatcher`.** Retry wrapping applied via the C-RT-16 class family — specifically a `RetryBreakerToolDispatcher` sibling carrier per new §14.11 C-RT-21 (retry-only MVP at v1.15; no breaker; no fallback chain) with `inner=<bare RuntimeToolDispatcher instance>` (registry key `"tool_dispatch"`) materializing at stage 5 alongside the existing `"llm_dispatch"` wrap per C-RT-16 §14.6 D6. The new sibling carrier is REQUIRED at v1.15 (per U-RT-68 fork Q1=B + Q1a=(i) ratification 2026-05-22) because `RetryBreakerFallbackDispatcher` is hard-typed to LLM-fallback shapes (`FallbackChain` / `ProviderCandidate` / `BreakerScope.PER_MODEL`) that have no tool-dispatch analog — tool name resolves to a single MCP server + single tool, no provider/model fallback semantics. See §14.11 for the sibling contract surface. Per Q1a=(i) ratification, breaker semantics deferred to a future OD-axis-coordinated arc (extending `BreakerScope` would route to OD spec back-flow).
 
 ### §14.9.3 Lifecycle stage placement
 
-**Stage 3a (LOOP_INIT prereqs):** `MCPClientHost` materialized alongside provider construction (per C-RT-05). Subprocess spawn + protocol handshake + `list_tools` registry population happen here. Failure to start raises `RT-FAIL-MCP-HOST-STARTUP` → bootstrap aborts (fail-closed per ADR-F4 v1.1 §Consequences (c)).
+**Stage 3a (LOOP_INIT prereqs):** `MCPClientHost` materialized alongside provider construction (per C-RT-05) via NEW factory contract `materialize_mcp_client_host_stage(config: RuntimeConfig) → MCPClientHost` (added at v1.15 per U-RT-68 fork Q2=B2 ratification). Factory ingests `config.mcp_clients: list[MCPClientConfig]` (per-server transport_config) and instantiates the host; subprocess spawn + protocol handshake + `list_tools` registry population happen here. Binds to `ctx.mcp_client_host` (new field at C-RT-04 v1.15). Failure to start raises `RT-FAIL-MCP-HOST-STARTUP` → bootstrap aborts (fail-closed per ADR-F4 v1.1 §Consequences (c)).
 
-**Stage 5 (LOOP_INIT):** `RuntimeToolDispatcher` instantiated with reference to `ctx.mcp_client_host`. Bound to `ctx.tool_dispatcher`. Step-dispatcher table updated: `TOOL_STEP → ctx.tool_dispatcher`. Per C-RT-16 §14.6 D6, the registry key `"tool_dispatch"` reserved for retry-wrap composition (matching existing `"llm_dispatch"` naming convention).
+**Stage 5 (LOOP_INIT):** Bootstrap stage 5 wires the `TOOL_STEP` dispatch chain via NEW factory contract `materialize_runtime_tool_dispatcher_stage(ctx: _MutableHarnessContext, config: RuntimeConfig) → RetryBreakerToolDispatcher` (added at v1.15 per U-RT-68 fork Q2=B2 ratification). Factory body:
+1. Construct `PerServerTrustEvaluator` (CP spec v1.11 §27 carrier) consuming `config.trust_policy` (defaults to `TrustPolicy.default()` if `None`); bind to `ctx.per_server_trust_evaluator`.
+2. Construct `MCPClientNamespaceEmitter` (CP spec v1.11 §27 carrier) consuming `ctx.mcp_client_host.tool_registry`; bind to `ctx.mcp_namespace_emitter`.
+3. Construct bare `RuntimeToolDispatcher` with references to `ctx.mcp_client_host` + `ctx.per_server_trust_evaluator` + `ctx.mcp_namespace_emitter` + `config.sandbox_decision_policy` (defaults to `SandboxDecisionPolicy.default()` if `None`).
+4. Construct `RetryBreakerToolDispatcher` per new §14.11 C-RT-21 wrapping the bare `RuntimeToolDispatcher` at registry key `"tool_dispatch"` per C-RT-16 §14.6 D6 (matching existing `"llm_dispatch"` naming convention).
+5. Bind the WRAPPER (not the bare dispatcher) to `ctx.tool_dispatcher`. Step-dispatcher table updated: `TOOL_STEP → ctx.tool_dispatcher`.
 
-**Workflow-driver branching.** At `workflow_driver.py:379`, the existing step-dispatcher table resolves both `INFERENCE_STEP → ctx.llm_dispatcher` (U-RT-58 wrapper, existing) and `TOOL_STEP → ctx.tool_dispatcher` (new). No new conditional in `workflow_driver.py` body — dispatch resolves via the typed table.
+Per Q1=B + Q1a=(i) ratification (U-RT-68 fork 2026-05-22), the registry key `"tool_dispatch"` is reserved for the new `RetryBreakerToolDispatcher` sibling carrier (retry-only MVP; no breaker; no fallback chain). The reserved-key discipline at C-RT-16 §14.6 (Q2=c registry key extension) extends transparently: `RuntimeRetryBreaker.get_policy("tool_dispatch")` resolves to the operator-supplied `RetryPolicy` at `RuntimeConfig.routing_manifest.retry_policies["tool_dispatch"]`, falling back to default `RetryPolicy(max_attempts=3, backoff="full_jitter", base_delay_seconds=0.2, delay_cap_seconds=10.0)` if absent. Tool manifest validation rejects tool names equal to the reserved `"tool_dispatch"` key per the existing `ReservedToolNameError` discipline at C-RT-16.
+
+**Workflow-driver branching.** At `workflow_driver.py:379`, the existing step-dispatcher table resolves both `INFERENCE_STEP → ctx.llm_dispatcher` (U-RT-58 wrapper, existing) and `TOOL_STEP → ctx.tool_dispatcher` (new; bound to the §14.11 C-RT-21 retry-wrap wrapper at stage 5 per factory body step 5 above). No new conditional in `workflow_driver.py` body — dispatch resolves via the typed table.
 
 ### §14.9.4 Span emission
 
@@ -1925,7 +1970,7 @@ Spans emitted per dispatch (nested, in order):
 3. **Per-server-trust evaluated every dispatch.** No caching.
 4. **Schema validation at both directions.** Args + response both validated.
 5. **STDIO + HTTP + SSE all supported at v1.** Per Decision 1.D4. `MCPClientHost.start()` selects transport per per-server bootstrap config; all 3 implement transport-appropriate startup lifecycle (per §14.9.1 transport-neutral terminology block), `list_tools` / `call_tool` protocol, and health-check. `mcp.transport` span attribute populates accordingly (`stdio` | `streamable_http` | `sse`).
-6. **No retry inside `RuntimeToolDispatcher`.** Retry handled at C-RT-16 wrap layer.
+6. **No retry inside `RuntimeToolDispatcher`.** Retry handled at the C-RT-16-family wrap layer via the new §14.11 C-RT-21 `RetryBreakerToolDispatcher` sibling carrier (retry-only MVP at v1.15; no breaker; no fallback chain). Per U-RT-68 fork Q1=B + Q1a=(i) ratification 2026-05-22, the wrap is materialized at stage 5 by `materialize_runtime_tool_dispatcher_stage` per §14.9.3 and bound to `ctx.tool_dispatcher`; the bare `RuntimeToolDispatcher` is a private constructor arg of the wrapper (not exposed on `HarnessContext` at v1.15).
 
 ### §14.9.7 Deferred to implementation discretion
 
@@ -2044,6 +2089,77 @@ Reused (NOT re-authored):
 - **Retry policy registry key.** Inherits from `ctx.retry_breaker.get_policy("hitl_webhook")`; policy table populated at bootstrap config (cf. `"llm_dispatch"` / `"tool_dispatch"` keys per C-RT-16 §14.6 D6).
 - **Burden-window default tunability.** v1 MVP = 1-hour rolling; persona-tier-specific overrides via `ctx.surface_config.burden_window_overrides`.
 - **Degradation-mode prose.** Each `degradation_mode` literal value documented at `OperatorBurdenEvaluator.should_degrade()` docstring at implementation time per Phase C unit landing.
+
+---
+
+## §14.11 C-RT-21 — `RetryBreakerToolDispatcher` sibling carrier (new at v1.15)
+
+**Contract surface.** Wrapper module + Protocol-satisfying callable + integration obligations with C-RT-19 (inner `RuntimeToolDispatcher` at §14.9.1) + `ctx.retry_breaker` (existing U-RT-24 registry binding) + C-RT-06 (TracerProvider for nested span emission) + C-CP-03 §3.5 (`retry.*` namespace at the inner per-attempt span). Sibling to §14.6 C-RT-16 `RetryBreakerFallbackDispatcher`; shares retry-loop semantics + registry-key reservation discipline but explicitly OMITS fallback chain (no `FallbackChain` / `ProviderCandidate` consumption) and OMITS breaker integration at v1.15 MVP (no `BreakerStateMachine` consultation; no `harness.breaker.*` emission from this composer).
+
+**PRD enablement.** Completes the tool-dispatch runtime composition surface: C-RT-19 enables per-step single-attempt tool dispatch (`MCPClientHost.call_tool`); C-RT-21 enables resilient multi-attempt tool dispatch when transient errors (timeout, MCP-host-unreachable) are recoverable. R-AS-* (action surface resilience at runtime). H_T-CP-18 substitution retirement criterion B: the tool-dispatch retry wrap layer becomes production-execution-grounded at U-RT-71..N landing (bootstrap-wiring chain decomposition per Q2=B2 ratification).
+
+**ADR commitment(s) honored.** ADR-F4 v1.1 §Decision (action surface resilience operationalized at runtime) + ADR-D2 v1.2 §Decision (sandbox primitive — retry-wrap preserves tier-floor semantics across attempts) + ADR-D3 v1.2 §Decision (validation-contract retry-staircase semantics composed at the tool-dispatch site via `RuntimeRetryBreaker.advance_staircase` — same library API as C-RT-16).
+
+**Fork-resolution provenance.** `.harness/class_1_fork_u_rt_68_retry_wrap_shape_gap.md` — Class 1 operator-ratified 2026-05-22 at this session. Inner Q1a sub-ratification: **Q1a=(i)** retry-only MVP at v1.15 (no breaker; breaker semantics deferred to a future OD-axis-coordinated arc because the existing `BreakerScope` 2-value enum at OD spec §7.1 has no per-tool/per-server analog; extending it would route to OD spec v1.10 + ADR-D6 v1.3 back-flow with U-OD-09 conformance break + OTel cardinality bump — out of scope for this runtime spec arc).
+
+**Specification content.**
+
+The runtime contributes one production wrapper class — `RetryBreakerToolDispatcher` — that owns the per-step retry orchestration loop around the inner C-RT-19 `RuntimeToolDispatcher.dispatch` invocation. The wrapper satisfies the same `StepDispatcher` Protocol that C-RT-19 satisfies (declared at `harness-cp/src/harness_cp/workflow_driver.py:151`); from the driver's perspective the wrapper IS the tool dispatcher.
+
+Per-step invocation discipline (the body of `RetryBreakerToolDispatcher.dispatch(binding, step, *, step_context)`):
+
+1. **Lookup `RetryPolicy` from the registry under the reserved `"tool_dispatch"` key** via `ctx.retry_breaker.get_policy("tool_dispatch")`. Resolves to `RetryPolicy(max_attempts, backoff, jitter)` per `harness_cp.routing_manifest_residence.RetryPolicy` (same library API as C-RT-16). The reserved key's `RetryPolicy` is operator-supplied at `RuntimeConfig.routing_manifest.retry_policies["tool_dispatch"]`; if absent at runtime, the registry's `materialize_retry_breaker_stage` materializer binds a default `RetryPolicy(max_attempts=3, backoff="full_jitter", base_delay_seconds=0.2, delay_cap_seconds=10.0)`.
+2. **Start the outer span** via `with tracer.start_as_current_span("harness.runtime.retry_tool_dispatch")` (synchronous CM, matching §14.6 phrasing). The outer span covers the full retry envelope and is the carrier for the eventual `RT-FAIL-TOOL-RETRY-EXHAUSTED` outcome on exhaustion.
+3. **Per-attempt loop** (bounded by `RetryPolicy.max_attempts`):
+   - **Start inner span** via `with tracer.start_as_current_span("harness.runtime.tool_retry_attempt")`. Inner span carries the canonical C-CP-03 §3.5 `retry.*` 6-attribute namespace (same set as C-RT-16 inner spans; the CP namespace declarations are key-agnostic): `retry.attempt_number` (integer; 1-indexed), `retry.original_span_id` (string; 16-hex W3C trace-context format; carries the outer wrapper span's `span_id`), `retry.delay_ms` (integer; jittered delay per full-jitter backoff), `retry.cause_attribution` (string; open-set enum from C5 cause_attribution catalog per C-CP-21), `retry.fail_class` (5-class enum from `harness_cp.validator_fail_taxonomy.ValidatorRetryExitClass`; canonical post-v1.14 path-β rename), and `engine.replay_disposition` (composition with engine namespace per D1 v1.2 §1.1.1; for tool dispatch this resolves to the workflow's enclosing engine binding per `binding.engine_class`).
+   - **Dispatch to inner.** `result = await self.inner.dispatch(binding, step, step_context=step_context)` — the bare `RuntimeToolDispatcher` invoked unchanged (no `rebound` operation — tool dispatch has no candidate parameter to override).
+   - **On success:** annotate inner span with `retry.terminal = "success"`; return `result` (outer span closes via CM).
+   - **On retry-eligible transient (per §14.9.5 fail-class taxonomy — `RT-FAIL-TOOL-INVOCATION-TIMEOUT` + `RT-FAIL-MCP-HOST-UNREACHABLE` — the only two NO entries in §14.9.5 "Permanent?" column):** advance the staircase via `ctx.retry_breaker.advance_staircase(policy, attempt_count, validator_fail_class)`. If staircase result is `RETRY_WITH_BACKOFF`: sleep `compute_full_jitter_delay_seconds(policy, attempt_count)`; annotate inner span with `retry.terminal = "retry"` + `retry.backoff_ms`; continue per-attempt loop. If staircase result escalates beyond `RETRY_WITH_BACKOFF` (e.g., `LOCAL_TERMINAL` / `HITL_ESCALATION`): annotate inner span with `retry.terminal = "escalate"`; break out of per-attempt loop; raise the escalated typed error verbatim (the driver `try/except` boundary maps per C-CP-25 §25.3.3.4).
+   - **On fail-fast permanent error (every other §14.9.5 fail class — `RT-FAIL-TOOL-CONTRACT-UNKNOWN`, `RT-FAIL-TOOL-INVOCATION-TRUST-VIOLATION`, `RT-FAIL-TOOL-INVOCATION-PROTOCOL-ERROR`, `RT-FAIL-TOOL-INVOCATION-SCHEMA-VIOLATION`, `RT-FAIL-SANDBOX-TIER-FLOOR-VIOLATION`):** annotate inner span with `retry.terminal = "fail-fast"` + `retry.cause_class = "{class_name}"`; break out of per-attempt loop; raise the typed error verbatim. `RT-FAIL-MCP-HOST-STARTUP` is excluded — it raises at bootstrap stage 3a, never reaching dispatch.
+   - **On `RetryPolicy.max_attempts` exhaustion:** annotate inner span with `retry.terminal = "max-attempts"`; break out of per-attempt loop; emit `tool_retry.exhausted` span event on the outer span with attributes `tool_retry.max_attempts` + `tool_retry.last_failure_class`; raise the new typed `RetryToolExhaustedError` (mapped to new fail class `RT-FAIL-TOOL-RETRY-EXHAUSTED` per §14 fail-class taxonomy addition below).
+
+**Registry key extension (mirrors C-RT-16 Q2=c clause).** The `harness_runtime.lifecycle.retry_breaker.RuntimeRetryBreaker.get_policy(name)` method already accepts the reserved string `"tool_dispatch"` per existing implementation discretion at §14.9.3 stage-5 prose. v1.15 ratifies the reservation: the runtime composer reserves `"tool_dispatch"` for tool-dispatch retry-policy lookup; tools may not declare a tool named `"tool_dispatch"` (enforced at manifest-validation time via the existing `ReservedToolNameError` discipline at C-RT-16 §14.6). The reserved key's `RetryPolicy` is operator-supplied at `RuntimeConfig.routing_manifest.retry_policies["tool_dispatch"]`; default fallback as specified in step 1 above.
+
+**Composer module residence.** `harness-runtime/src/harness_runtime/lifecycle/retry_breaker_tool.py` (new file at v1.15 per U-RT-71..N landing per Q2=B2 ratification). Module exposes one production class — `RetryBreakerToolDispatcher` — that satisfies `StepDispatcher` via duck-typing. Construction site: bound at bootstrap stage 5 (LOOP_INIT) per the `materialize_runtime_tool_dispatcher_stage` factory body step 4 (see §14.9.3 amendment), wrapping the bare `RuntimeToolDispatcher` constructor invocation. `ctx.tool_dispatcher` post-condition shape is the wrapper, not the bare dispatcher.
+
+**Integration with C-RT-04 (HarnessContext).** No new field beyond the v1.15 additions documented at §4 (`mcp_client_host`, `tool_dispatcher`, `per_server_trust_evaluator`, `mcp_namespace_emitter`). The wrapper consumes `ctx.retry_breaker` (existing, U-RT-24) + `ctx.tracer_provider` (existing, C-RT-06) + an internally-constructed bare `RuntimeToolDispatcher` instance (private constructor arg). `ctx.tool_dispatcher` is the wrapper at v1.15 (the bare dispatcher is not surfaced on `HarnessContext`).
+
+**Integration with C-RT-19 (inner tool dispatch composer).** No protocol change to `RuntimeToolDispatcher.dispatch` at v1.15. The wrapper invokes the inner dispatcher exactly once per attempt with the binding + step + step_context unchanged. The inner dispatcher's typed exception propagation per §14.9.5 fail-class taxonomy is the boundary where the wrapper takes over (transient-retry-eligible vs fail-fast classification per the §14.9.5 "Permanent?" column).
+
+**Integration with C-RT-06 (TracerProvider).** Two nested spans per composer invocation: outer (`harness.runtime.retry_tool_dispatch`, covers full envelope) + inner per-attempt (`harness.runtime.tool_retry_attempt`, carries `retry.*` namespace). The inner C-RT-19 spans (`tool.dispatch` + `sandbox.enter` + `mcp.tool.call` + `sandbox.exit`) nest inside the inner per-attempt span — three levels of nesting (outer composer → per-attempt retry → per-call tool.dispatch envelope). This mirrors the §14.6 C-RT-16 OTel pattern for retry-wrapper instrumentation.
+
+**Invariants.**
+
+- Wrapper is async (matches C-RT-08 async-only `run()` posture + C-RT-19 async dispatch).
+- Wrapper satisfies `isinstance(wrapper, StepDispatcher)` via the same `@runtime_checkable` introspection.
+- Outer span emitted exactly once per composer invocation; inner per-attempt span emitted exactly once per attempt.
+- `retry.*` namespace attributes per the CP-canonical 6-attribute set (per C-CP-03 §3.5 v1.3; carrier at `harness_cp.retry_fallback_namespace.RETRY_ATTEMPT_CHILD_SPAN_SCHEMA`) set on the inner per-attempt span only; outer span carries the `tool_retry.*` attributes on exhaustion.
+- **No breaker integration at v1.15.** The wrapper does NOT call `ctx.retry_breaker.get_breaker(...)`; does NOT call `breaker.record_failure()` / `record_success()`; does NOT consume `BreakerScope` enum. Breaker semantics deferred to a future OD-axis-coordinated arc per Q1a=(i) ratification 2026-05-22.
+- **No fallback chain at v1.15.** The wrapper does NOT consume `ctx.fallback_chain`; does NOT iterate `ProviderCandidate`; does NOT emit `fallback.exhausted`. Tool dispatch has no provider/model fallback semantics (one tool name = one MCP server + one tool); fallback deferred indefinitely (no foreseeable analog).
+- Wrapper does NOT swallow exceptions: all paths terminate in either successful return OR raised typed fail-class.
+- Reserved registry key `"tool_dispatch"` is the runtime-emitted retry-policy lookup for tool dispatch; per-tool keys remain available but are NOT consumed by this composer at v1.15 MVP (operator-supplied per-tool retry overrides deferred).
+
+**Failure-mode taxonomy.** Per §14 (C-RT-14 + §14.9.5), with one new fail class added at v1.15:
+
+| Fail class | Trigger | Behavior |
+|---|---|---|
+| `RT-FAIL-TOOL-RETRY-EXHAUSTED` (permanent, new at v1.15) | Per-step retry exhaustion when transient fail class (`RT-FAIL-TOOL-INVOCATION-TIMEOUT` / `RT-FAIL-MCP-HOST-UNREACHABLE`) hits `RetryPolicy.max_attempts` under the reserved `"tool_dispatch"` policy | Wrapper emits `tool_retry.exhausted` event on outer span; raises typed `RetryToolExhaustedError`; driver `try/except` maps to `step-failure: RT-FAIL-TOOL-RETRY-EXHAUSTED: ...` per C-CP-25 §25.3.3.4 |
+
+The §14.9.5 fail classes propagate through the wrapper unchanged for fail-fast permanent classes (`RT-FAIL-TOOL-CONTRACT-UNKNOWN`, `RT-FAIL-TOOL-INVOCATION-TRUST-VIOLATION`, `RT-FAIL-TOOL-INVOCATION-PROTOCOL-ERROR`, `RT-FAIL-TOOL-INVOCATION-SCHEMA-VIOLATION`, `RT-FAIL-SANDBOX-TIER-FLOOR-VIOLATION`). `RT-FAIL-TOOL-INVOCATION-TIMEOUT` + `RT-FAIL-MCP-HOST-UNREACHABLE` are consumed by the per-attempt retry loop; on `max_attempts` exhaustion the wrapper raises `RT-FAIL-TOOL-RETRY-EXHAUSTED` carrying the last-failure class as attribute. `RT-FAIL-MCP-HOST-STARTUP` cannot reach the wrapper (raised at bootstrap stage 3a per §14.9.3, before any dispatch).
+
+**X-AL-2 retirement implications (v1.15 → retirement event prerequisites).**
+
+The C-RT-21 contract specifies the composition seam that — alongside C-RT-19 (already landed at U-RT-67 commit `83d3b54` 2026-05-21) + the Q2=B2 bootstrap-wiring chain decomposed at U-RT-71..N in runtime plan v2.12 — closes H_T-CP-18 substitution retirement criterion B. Retirement event filed at the U-RT-71..N + U-RT-68 wire-up landing arc (criterion B requires production-execution-grounded retry-wrap; criterion A already met at C-RT-21 spec authoring this arc).
+
+**Cross-axis cascade closures at U-RT-71..N + U-RT-68 wire-up landing.** Per fork doc §5 (Cross-axis impact): ZERO cross-axis cascade introduced by C-RT-21. The new `PerServerTrustEvaluator` + `MCPClientNamespaceEmitter` ctx-bindings at §14.9.3 stage-5 factory consume already-landed CP spec v1.11 §27 carriers (cluster 10-CP-C landed commits) without new CXA edge introduction.
+
+**Deferred to implementation discretion.**
+
+- Exact wrapper class name (suggest `RetryBreakerToolDispatcher` per the §14.11 narrative recommendation; same naming convention as §14.6 sibling).
+- Span name conventions for outer + inner (suggest `harness.runtime.retry_tool_dispatch` + `harness.runtime.tool_retry_attempt`; mirror §14.6 conventions).
+- Test mock strategy (suggest a `MockRuntimeToolDispatcher` fixture that records the sequence of `(binding, step)` calls + returns canned success/failure per call; verify wrapper's retry behavior against the recorded sequence; pytest-asyncio for async surface).
+- Whether the wrapper emits `retry.skipped` or similar attribute on retry-budget consumption — defer to OTel telemetry-volume discretion at implementation; spec-MUST is just that exhaustion is observable via the `tool_retry.exhausted` event.
+- **Breaker integration future arc.** When the OD-axis-coordinated `BreakerScope` extension lands (per-tool or per-server analog), the C-RT-21 contract will be amended to consume the new scope at a future runtime spec arc. v1.15 explicitly disclaims breaker semantics.
 
 ---
 
