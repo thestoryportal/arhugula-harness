@@ -478,20 +478,70 @@ create_connected_server_and_client_session`. Production callers leave
 
     @asynccontextmanager
     async def _http_connection_context(self) -> AsyncIterator[Any]:
-        """HTTP transport per U-RT-65. Lands at U-RT-65."""
-        raise NotImplementedError(
-            "MCPClientHost streamable_http transport — implementation lands "
-            "at U-RT-65"
-        )
-        yield  # type: ignore[unreachable]
+        """HTTP transport per U-RT-65 — streamable_http via httpx.
+
+        Per spec §14.9.1 HTTP branch + Decision 1.D4 scope expansion +
+        §14.9.6 inv 5. Uses `mcp.client.streamable_http.streamablehttp_client`
+        which opens an httpx client connection pool, performs the
+        streamable-HTTP handshake, and yields `(read, write, get_session_id)`.
+        `_extract_streams` consumes the first two; the session-id callback
+        is reserved for future session-resumption arcs.
+
+        `transport_config` keys consumed:
+        - `url`: server URL (REQUIRED str)
+        - `headers`: dict[str, str] of auth + custom headers (OPTIONAL)
+        - `timeout`: connection timeout seconds (default 30)
+        - `sse_read_timeout`: server-sent-event read timeout (default 300)
+        """
+        from mcp.client.streamable_http import streamablehttp_client
+
+        url = self._transport_config.get("url")
+        if not isinstance(url, str) or not url:
+            raise ValueError(
+                f"streamable_http transport_config requires str 'url' "
+                f"(got {url!r})"
+            )
+        kwargs: dict[str, Any] = {}
+        if "headers" in self._transport_config:
+            kwargs["headers"] = self._transport_config["headers"]
+        if "timeout" in self._transport_config:
+            kwargs["timeout"] = self._transport_config["timeout"]
+        if "sse_read_timeout" in self._transport_config:
+            kwargs["sse_read_timeout"] = self._transport_config["sse_read_timeout"]
+        async with streamablehttp_client(url, **kwargs) as connection:
+            yield connection
 
     @asynccontextmanager
     async def _sse_connection_context(self) -> AsyncIterator[Any]:
-        """SSE transport per U-RT-66. Lands at U-RT-66."""
-        raise NotImplementedError(
-            "MCPClientHost sse transport — implementation lands at U-RT-66"
-        )
-        yield  # type: ignore[unreachable]
+        """SSE transport per U-RT-66 — server-sent events via httpx.
+
+        Per spec §14.9.1 SSE branch + Decision 1.D4 scope expansion. Uses
+        `mcp.client.sse.sse_client` which opens an SSE event stream over
+        httpx and yields `(read, write)` streams plus an internal session
+        for the SSE protocol.
+
+        `transport_config` keys consumed:
+        - `url`: SSE endpoint URL (REQUIRED str)
+        - `headers`: dict[str, Any] (OPTIONAL)
+        - `timeout`: connection timeout seconds (default 5)
+        - `sse_read_timeout`: event-stream read timeout (default 300)
+        """
+        from mcp.client.sse import sse_client
+
+        url = self._transport_config.get("url")
+        if not isinstance(url, str) or not url:
+            raise ValueError(
+                f"sse transport_config requires str 'url' (got {url!r})"
+            )
+        kwargs: dict[str, Any] = {}
+        if "headers" in self._transport_config:
+            kwargs["headers"] = self._transport_config["headers"]
+        if "timeout" in self._transport_config:
+            kwargs["timeout"] = self._transport_config["timeout"]
+        if "sse_read_timeout" in self._transport_config:
+            kwargs["sse_read_timeout"] = self._transport_config["sse_read_timeout"]
+        async with sse_client(url, **kwargs) as connection:
+            yield connection
 
     @staticmethod
     def _extract_streams(connection: Any) -> tuple[Any, Any]:

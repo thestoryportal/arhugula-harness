@@ -396,3 +396,104 @@ def test_stdio_transport_config_requires_command_str() -> None:
         # it bypasses the need for an event loop here.
         import asyncio
         asyncio.run(cm.__aenter__())
+
+
+# ---------- U-RT-65 — HTTP transport unit-level ----------------------------
+
+
+def test_http_transport_config_requires_url_str() -> None:
+    """HTTP connection-context constructor validates 'url' is non-empty str."""
+    host = MCPClientHost(
+        transport="streamable_http",
+        server_name="srv",
+        trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
+        transport_config={},  # missing 'url'
+        tool_contract_converter=_make_tool_contract_converter(),
+    )
+    cm = host._http_connection_context()
+    with pytest.raises(ValueError, match="requires str 'url'"):
+        import asyncio
+        asyncio.run(cm.__aenter__())
+
+
+def test_http_transport_config_rejects_non_str_url() -> None:
+    host = MCPClientHost(
+        transport="streamable_http",
+        server_name="srv",
+        trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
+        transport_config={"url": 42},
+        tool_contract_converter=_make_tool_contract_converter(),
+    )
+    cm = host._http_connection_context()
+    with pytest.raises(ValueError, match="requires str 'url'"):
+        import asyncio
+        asyncio.run(cm.__aenter__())
+
+
+@pytest.mark.asyncio
+async def test_http_transport_dispatch_via_session_factory_injection() -> None:
+    """HTTP transport — end-to-end start() + list_tools + call_tool +
+    health_check + shutdown via session_context_factory injection (the
+    HTTP connection path is exercised at integration time; the dispatch
+    path is exercised here via the in-memory session test seam)."""
+    server = _build_test_fastmcp_server()
+    host = MCPClientHost(
+        transport="streamable_http",
+        server_name="http-srv",
+        trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
+        transport_config={"url": "http://mock-server.test"},
+        tool_contract_converter=_make_tool_contract_converter(),
+        session_context_factory=_make_session_factory(server),
+        auth_present=True,
+    )
+    try:
+        await host.start()
+        assert host.transport == "streamable_http"
+        health = await host.health_check()
+        assert health.transport == "streamable_http"
+        assert health.alive is True
+        result = await host.call_tool("echo", {"message": "via-http"}, "idem-http")
+        assert result["isError"] is False
+    finally:
+        await host.shutdown()
+
+
+# ---------- U-RT-66 — SSE transport unit-level ----------------------------
+
+
+def test_sse_transport_config_requires_url_str() -> None:
+    host = MCPClientHost(
+        transport="sse",
+        server_name="srv",
+        trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
+        transport_config={},  # missing 'url'
+        tool_contract_converter=_make_tool_contract_converter(),
+    )
+    cm = host._sse_connection_context()
+    with pytest.raises(ValueError, match="requires str 'url'"):
+        import asyncio
+        asyncio.run(cm.__aenter__())
+
+
+@pytest.mark.asyncio
+async def test_sse_transport_dispatch_via_session_factory_injection() -> None:
+    """SSE transport — end-to-end start() + list_tools + health_check via
+    session_context_factory injection."""
+    server = _build_test_fastmcp_server()
+    host = MCPClientHost(
+        transport="sse",
+        server_name="sse-srv",
+        trust_tier=MCPTrustTier.LEVEL_1_SIGNED_PINNED,
+        transport_config={"url": "http://mock-sse.test/events"},
+        tool_contract_converter=_make_tool_contract_converter(),
+        session_context_factory=_make_session_factory(server),
+    )
+    try:
+        await host.start()
+        assert host.transport == "sse"
+        health = await host.health_check()
+        assert health.transport == "sse"
+        assert health.alive is True
+        assert health.trust_tier is MCPTrustTier.LEVEL_1_SIGNED_PINNED
+    finally:
+        await host.shutdown()
