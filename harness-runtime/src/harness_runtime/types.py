@@ -1098,6 +1098,14 @@ class HarnessContext(BaseModel):
     collector_daemon: CollectorDaemonHandle
     cost_chain: CostAttributionChain
     audit_writer: AuditLedgerWriter
+    # U-CP-61 — optional ValidatorFramework binding (operator-opt-in per
+    # Decision 2.D3 + spec §25.3). When None, the workflow_driver post-dispatch
+    # validation hook is skipped (driver-level opt-out). When bound, the
+    # operator wires a `SyncValidatorFrameworkFacade` whose `.evaluate(...)`
+    # bridges to the async ConcreteValidatorFramework via the captured
+    # asyncio event loop. Typed `object | None` per the same Protocol-avoiding
+    # discipline as `tracer_provider`.
+    validator_framework: object | None = None
 
     # Stage 5 LOOP_INIT.
     override_evaluator: PerStepOverrideEvaluator

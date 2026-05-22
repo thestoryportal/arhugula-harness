@@ -44,8 +44,10 @@ Authority: CP spec v1.10 §25 (C-CP-25 ValidatorFramework); plan unit U-CP-60
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Protocol, runtime_checkable
 
 from harness_cp.validator_framework_types import (
     Validator,
@@ -283,3 +285,100 @@ class ConcreteValidatorFramework:
         if converted_from_revalidate:
             attrs["validator.revalidation.terminal_conversion"] = "permanent_fail"
         return attrs
+
+
+# ============================================================================
+# U-CP-61 — SyncValidatorFrameworkFacade (sync bridge over async framework)
+# ============================================================================
+#
+# Mirrors `harness_runtime.lifecycle.sync_dispatcher_facade.SyncDispatcherFacade`
+# (U-RT-59 precedent). The async/sync mismatch between spec §25.1
+# `async def evaluate` and the sync `execute_workflow` driver is bridged via
+# `asyncio.run_coroutine_threadsafe(coro, loop)` from the driver's
+# worker thread (per `asyncio.to_thread(execute_workflow, ...)` at
+# `harness_runtime/api.py`).
+
+
+@runtime_checkable
+class SyncValidatorFrameworkLike(Protocol):
+    """Sync-facing ValidatorFramework surface consumed by the workflow_driver hook.
+
+    The CP driver's `execute_workflow` is sync (per spec §25.3 + workflow_driver
+    surface); ValidatorFramework.evaluate is async (per spec §25.1). The driver
+    consumes the sync facade; the facade bridges to the async impl via the
+    captured async event loop. Pattern mirrors `SyncDispatcherFacade` at
+    `harness_runtime.lifecycle.sync_dispatcher_facade` (U-RT-59 precedent).
+    """
+
+    def evaluate(
+        self,
+        step: WorkflowStep,
+        step_result: Mapping[str, Any],
+        *,
+        step_context: StepExecutionContext,
+    ) -> ValidatorEvaluation: ...
+
+
+@dataclass(frozen=True)
+class SyncValidatorFrameworkFacade:
+    """Sync ValidatorFramework facade over an async ConcreteValidatorFramework.
+
+    Construction MUST occur on the event loop that will host the eventual
+    `asyncio.to_thread(execute_workflow, ...)` invocation. Use
+    `materialize_sync_validator_framework_facade` rather than constructing
+    directly so the loop is captured uniformly.
+
+    Mirrors `SyncDispatcherFacade` from `harness_runtime.lifecycle.sync_dispatcher_facade`
+    per U-RT-59 precedent for the same async/sync bridge pattern.
+    """
+
+    inner: ValidatorFramework
+    loop: asyncio.AbstractEventLoop
+    result_timeout_seconds: float
+
+    def evaluate(
+        self,
+        step: WorkflowStep,
+        step_result: Mapping[str, Any],
+        *,
+        step_context: StepExecutionContext,
+    ) -> ValidatorEvaluation:
+        """Sync `evaluate`; bridges to captured async loop.
+
+        Invoked from the CP driver's worker thread. Schedules
+        `self.inner.evaluate(...)` onto `self.loop` via
+        `asyncio.run_coroutine_threadsafe` and blocks on
+        `future.result(timeout=self.result_timeout_seconds)`.
+
+        Exception propagation: `future.result()` re-raises any exception
+        raised by the inner coroutine verbatim (no wrapping).
+        """
+        coro = self.inner.evaluate(step, step_result, step_context=step_context)
+        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+        return future.result(timeout=self.result_timeout_seconds)
+
+
+def materialize_sync_validator_framework_facade(
+    inner: ValidatorFramework,
+    *,
+    result_timeout_seconds: float,
+) -> SyncValidatorFrameworkFacade:
+    """Construct `SyncValidatorFrameworkFacade` capturing the running event loop.
+
+    MUST be invoked from a coroutine running on the event loop that hosts
+    the subsequent worker-thread `evaluate(...)` invocations. Bootstrap
+    stage 5 (when wired) satisfies this — until then, operator-populated
+    integration uses this factory directly.
+
+    Raises
+    ------
+    RuntimeError
+        If called from sync code or a non-loop-owning thread —
+        `asyncio.get_running_loop()` propagates verbatim.
+    """
+    loop = asyncio.get_running_loop()
+    return SyncValidatorFrameworkFacade(
+        inner=inner,
+        loop=loop,
+        result_timeout_seconds=result_timeout_seconds,
+    )

@@ -157,6 +157,9 @@ class _FakeCtx:
         # quiescent. Envelope behavior on DRAINED close is exercised in
         # test_workflow_driver_envelope.py.
         self.tracer_provider = NoOpTracerProvider()
+        # U-CP-61 — optional ValidatorFramework binding; drain tests don't
+        # exercise validators (validator_framework=None skips the hook).
+        self.validator_framework: object | None = None
 
 
 class _EchoDispatcher:

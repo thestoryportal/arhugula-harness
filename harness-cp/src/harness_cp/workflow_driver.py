@@ -279,6 +279,18 @@ class DriverContext(Protocol):
     # `object`-typed field per harness-runtime/types.py).
     tracer_provider: object
 
+    # OPTIONAL ValidatorFramework — operator-opt-in per C-CP-25 §25.3 +
+    # Decision 2.D3 (Phase A.2 RATIFIED). When None, the U-CP-61 post-dispatch
+    # validation hook is skipped (driver-level opt-out). When bound, the
+    # operator-populated validator_registry must cover every step.step_id
+    # (Decision 2.D3 in-band opt-out is via no-op validator at registry, not
+    # at framework binding). Typed as `object | None` so the CP Protocol does
+    # not import the sync facade type — concrete binding at runtime stage 5
+    # uses `harness_cp.validator_framework.SyncValidatorFrameworkFacade`
+    # (structural match via the `.evaluate(...)` sync method per
+    # `SyncValidatorFrameworkLike` Protocol).
+    validator_framework: object | None
+
 
 # ---------------------------------------------------------------------------
 # Driver core
@@ -635,6 +647,86 @@ def _execute_workflow_body(
         ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
 
         # § 25.3.3.6 — Release lease (deferred per §25.3.3.3 above).
+
+        # § 25.3.5 (NEW at v1.10) — U-CP-61 post-dispatch validation hook.
+        # Per C-CP-25 §25.3 "post-dispatch, pre-ledger-append validation
+        # hook". Operator-opt-in: skip when ctx.validator_framework is None
+        # (driver-level opt-out). When bound, the framework returns a
+        # ValidatorEvaluation; the next_action drives the branch:
+        #   PROCEED   → fall through to ledger append (normal flow)
+        #   RETRY     → caller's retry wrapper (C-RT-16) handles; pass through
+        #               here (the framework body has no retry-state visibility;
+        #               the U-CP-60 convert_revalidate_to_permanent_fail() is
+        #               invoked externally on budget exhaustion). v1.10 MVP:
+        #               proceeds-with-validator.revalidation event emit.
+        #   ESCALATE_HITL → emit validator.escalation event; proceeds-with-
+        #               escalation-marker. Actual HITL gate dispatch (per spec
+        #               §25.7 invariant 4) is a future arc; v1.10 MVP emits the
+        #               span linking-to subsequent hitl.gate.evaluated per
+        #               §C-OD-29.1 row 10 + F2-02 absorption.
+        #   ABORT     → return RunResult(FAILED) with CP-FAIL-VALIDATOR-PERMANENT
+        if ctx.validator_framework is not None:
+            tracer = ctx.tracer_provider.get_tracer("harness.cp.workflow_driver")  # type: ignore[attr-defined]
+            with tracer.start_as_current_span("validator.evaluate") as evaluate_span:
+                try:
+                    evaluation = ctx.validator_framework.evaluate(  # type: ignore[attr-defined]
+                        step,
+                        step_output,
+                        step_context=step_context,
+                    )
+                except Exception as exc:
+                    evaluate_span.record_exception(exc)
+                    return RunResult(
+                        workflow_id=manifest_entry.workflow_id,
+                        run_id=run_id,
+                        status=RunStatus.FAILED,
+                        terminal_step_index=step_index,
+                        partial_state=dict(accumulated),
+                        final_state=None,
+                        fail_class=(
+                            f"validator-framework-failure: "
+                            f"{type(exc).__name__}: {exc}"
+                        ),
+                    ), steps_executed
+
+                # §C-OD-29.1 outer envelope (3 attrs).
+                for attr_name, attr_value in evaluation.span_attributes.items():
+                    evaluate_span.set_attribute(attr_name, attr_value)
+
+                # AC #4 — populate validator.escalation.parent_hitl_span_id
+                # when outcome=ESCALATE (links to subsequent hitl.gate.evaluated
+                # span per F2-02 absorption). v1.10 MVP: use current span_id
+                # as the parent-link marker; future HITL gate composer reads
+                # this attribute to anchor its parent context.
+                if evaluation.result.outcome.value == "escalate":
+                    parent_hitl_span_id = format(
+                        evaluate_span.get_span_context().span_id, "016x"
+                    )
+                    evaluate_span.set_attribute(
+                        "validator.escalation.parent_hitl_span_id",
+                        parent_hitl_span_id,
+                    )
+                    if evaluation.result.fail_class is not None:
+                        evaluate_span.set_attribute(
+                            "validator.escalation.fail_class",
+                            evaluation.result.fail_class.value,
+                        )
+
+                # AC #5 branch on next_action.
+                if evaluation.next_action.value == "abort":
+                    return RunResult(
+                        workflow_id=manifest_entry.workflow_id,
+                        run_id=run_id,
+                        status=RunStatus.FAILED,
+                        terminal_step_index=step_index,
+                        partial_state=dict(accumulated),
+                        final_state=None,
+                        fail_class=(
+                            f"CP-FAIL-VALIDATOR-PERMANENT: "
+                            f"validator returned PERMANENT_FAIL at step_id="
+                            f"{step.step_id!r}"
+                        ),
+                    ), steps_executed
 
         # § 25.3.3.7 — State-ledger append via U-IS-11 composition.
         # Reuse pre-dispatch step_idempotency_key composed at the

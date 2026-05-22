@@ -194,6 +194,7 @@ class _FakeCtx:
         drained_flag: asyncio.Event | None = None,
         ledger_reader: _FakeLedgerReader | None = None,
         tracer_provider: object | None = None,
+        validator_framework: object | None = None,
     ) -> None:
         from opentelemetry.trace import NoOpTracerProvider
 
@@ -205,6 +206,8 @@ class _FakeCtx:
         # Default to NoOpTracerProvider so happy-path tests don't assert span
         # observables; envelope-specific tests live in test_workflow_driver_envelope.py.
         self.tracer_provider = tracer_provider if tracer_provider is not None else NoOpTracerProvider()
+        # U-CP-61 — optional ValidatorFramework binding; default None (skip hook).
+        self.validator_framework = validator_framework
 
 
 class _SingleKindRegistry:

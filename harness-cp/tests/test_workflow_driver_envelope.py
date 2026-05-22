@@ -163,6 +163,7 @@ class _FakeCtx:
         *,
         tracer_provider: TracerProvider,
         drained: bool = False,
+        validator_framework: object | None = None,
     ) -> None:
         self.ledger_writer = _FakeLedger()
         self.ledger_reader = _FakeLedgerReader()
@@ -171,6 +172,7 @@ class _FakeCtx:
         if drained:
             self.drained_flag.set()
         self.tracer_provider = tracer_provider
+        self.validator_framework = validator_framework
 
 
 class _EchoDispatcher:
