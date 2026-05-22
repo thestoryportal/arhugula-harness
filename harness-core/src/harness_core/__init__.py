@@ -36,6 +36,7 @@ from harness_core.identity import (
     WorkflowID,
 )
 from harness_core.persona_tier import PersonaTier
+from harness_core.sandbox_decision_policy import SandboxDecisionPolicy
 from harness_core.schema_attribute_enums import AttributeValueType, Cardinality
 from harness_core.workflow_event_class import WorkflowEventClass
 from harness_core.workload_class import WorkloadClass
@@ -50,6 +51,7 @@ __all__ = [
     "EntryID",
     "PersonaTier",
     "ReferenceToUnit",
+    "SandboxDecisionPolicy",
     "SkillID",
     "StageID",
     "StepID",
