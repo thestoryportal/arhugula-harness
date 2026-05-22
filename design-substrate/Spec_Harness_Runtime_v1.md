@@ -1,4 +1,38 @@
-# Specification — Harness Runtime v1.15
+# Specification — Harness Runtime v1.16
+
+## Change-note (v1.15 → v1.16)
+
+**Scope of revision.** Class 1 fork resolution apply pass per `.harness/class_1_fork_sandbox_decision_policy_phantom_cite.md` (operator-ratified 2026-05-22 at this session, post-cluster-4-OD-E partial close `128ab4f`). The fork surfaced an empirically-verified phantom cite introduced during the v1.14 → v1.15 U-RT-68 fork absorption pass: the §3 C-RT-02 field-table row for `sandbox_decision_policy` cited the carrier home as "AS spec v1.3 §15 carrier", but (a) AS spec v1.3 §15 / C-AS-15 is the `secret.fetch` span attribute schema, NOT a sandbox decision policy class; (b) AS spec v1.3 sandbox surface is `sandbox_tier_floor(...) -> SandboxTier | REFUSE` (a 5-arg function per §2.3 row-keying), not a policy class; (c) ZERO hits of `SandboxDecisionPolicy` across all axis source trees (`harness-{as,cp,runtime,core}`) at filing time. Operator ratification: **Q1=C-i** (re-home the carrier to `harness-core` package — smallest spec edit; preserves the field; no AS-axis-spec reopen; no semantic commitment to AS-internal sandbox policy at the runtime layer) + **Q2=Open-now** (resolution arc opens this session).
+
+**Source of fix.** `.harness/class_1_fork_sandbox_decision_policy_phantom_cite.md` ratified 2026-05-22 (operator). Surfaced by `phase-7-implementation` skill at §3.4 dependency-verification step during U-RT-71 (RuntimeConfig schema extension) consumption attempt; cluster L9-septies halted 0/6 at fork filing.
+
+**Amendments.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§3 C-RT-02 RuntimeConfig field table (`sandbox_decision_policy` row)** | Cite re-point ONLY: `(AS spec v1.3 §15 carrier)` → `(harness-core carrier)`. Field type + default + ingestion-site + consumer-site prose preserved verbatim outside this 4-token edit. Inline note appended at end of cell recording the v1.16 re-point + fork doc reference, per change-note traceability discipline. | Q1=C-i ratification |
+
+**Sections preserved verbatim from v1.15.** All v1.15 content outside the single §3 C-RT-02 `sandbox_decision_policy` row cell preserved unchanged. §1 + §2 + §3 (table preserved; only the `sandbox_decision_policy` cell's carrier-home parenthetical + trailing inline-note edited) + §4 + §5–§14.4 + §14.5 + §14.6 + §14.7 + §14.8 + §14.9.1 + §14.9.2 + §14.9.3 + §14.9.4 + §14.9.5 + §14.9.6 + §14.9.7 + §14.10 + §14.11 (NEW at v1.15; preserved verbatim) + §15 + §16 + §17 + §17.1 all preserved. The v1.14 + v1.13 + v1.12 + ... + v1 chain all preserved.
+
+The v1.15 change-note section below is preserved as a historical record of what v1.15 published; readers navigating v1.16 see the corrected §3 C-RT-02 row, while the v1.15 change-note still records what the v1.15 publication contained (including the bad cite the v1.16 fix corrects).
+
+**Status posture.** Proposed (v1.15) → **Proposed (v1.16)**. v1.16 is a single-token-edit citation-correction patch under FM-2 no-extension discipline — no new field, no new contract, no new invariant, no AC change, no §14.9.1 amendment. The dangling forward-cite at line 641 cell prose ("consumed by `RuntimeToolDispatcher` for tier-floor evaluation per §14.9.1 step 5") was empirically verified at v1.16 application time to be a false-positive forward-cite (§14.9.1 step 5 reads only `sandbox.tier ≥ ToolContract.minimum_tier`; does NOT consume `sandbox_decision_policy`); this is surfaced as a finding at §"Adjacent defects surfaced" below, NOT patched per FM-2.
+
+**Downstream absorption owed (post-v1.16).**
+(a) Workspace `CLAUDE.md` §2.3 runtime row version bump (v1.15 → v1.16); co-published this arc.
+(b) `Implementation_Plan_Harness_Runtime_v2_12.md` → v2.13 via `implementation-planner` revision-pass: 3 cite sites at lines 149/151/212 absorb the `harness-core` re-home + planner-side decision on whether to add a new harness-core atomic unit (U-CORE-NN) for `SandboxDecisionPolicy` carrier authoring OR absorb into U-RT-71 with a within-axis-to-harness-core dependency. Planner-side scope; flagged here.
+(c) `Implementation_Plan_Harness_Core_v1_1.md` may need a new unit U-CORE-NN if planner picks the new-unit route per (b); planner-side decision.
+(d) `Cross_Axis_Composition_Document_v2_8.md` unchanged — fork doc §5 confirms ZERO cross-axis cascade. AS spec v1.3 / CP spec v1.11 / OD spec v1.9 unchanged.
+
+**Adjacent defects surfaced (not patched per FM-2 no-extension discipline).**
+
+(i) **§14.9.1 step 5 dangling forward-cite.** The §3 C-RT-02 `sandbox_decision_policy` row cell asserts the policy is "consumed by `RuntimeToolDispatcher` for tier-floor evaluation per §14.9.1 step 5". Empirical verification at v1.16 apply: §14.9.1 step 5 reads "Tier-floor evaluation: computed `sandbox.tier` ≥ `ToolContract.minimum_tier`; raises `RT-FAIL-SANDBOX-TIER-FLOOR-VIOLATION` on floor breach." — does NOT consume `sandbox_decision_policy`. The field is a **dangling marker** at v1.15/v1.16: declared in §3, threaded through §14.9.3 stage-5 step 3 into the bare `RuntimeToolDispatcher` constructor, but no §14 contract specifies what the dispatcher DOES with it. The C-i ratification path is consistent with this — a minimal `harness-core` marker dataclass with `.default()` factory suffices for the field's current operational role (preserve the surface for future operator-driven extension). Future arc options: either (α) amend §14.9.1 step 5 to actually consume the policy (e.g., for tier-floor overrides keyed by tool_id), or (β) strike the forward-cite in the §3 cell prose. Both routes require operator ratification per X-AL-3 (no silent design extension); neither patched here.
+
+(ii) **Filing footer staleness.** Pre-existing carry-forward: filing footer below still reads "Proposed (v1.2)" since 2026-05-20 across v1.3..v1.16. NOT patched this arc per FM-2 no-extension discipline (separate bookkeeping arc owed). Carry-forward noted at v1.15 change-note section §"Adjacent defects surfaced" preserved.
+
+(iii) **v1.15 change-note line 13 historical cite.** The v1.15 change-note section below contains a table row at the §3 C-RT-02 amendment line which records the cite as "(AS spec v1.3 §15 carrier)" — this is the cite as v1.15 published it. Preserved verbatim as historical record per append-only change-note discipline; the v1.16 fix is recorded only at the canonical §3 table row + this v1.16 change-note.
+
+---
 
 ## Change-note (v1.14 → v1.15)
 
@@ -638,7 +672,7 @@ The orchestrator (`harness_runtime.bootstrap.__init__`) executes the 9 stages fr
 | `default_topology` | `TopologyPattern` (CP enum) | yes | The TopologyPattern the runtime dispatches when no per-workflow override is set |
 | `tenant_id` | `str | None` | no | Multi-tenant separation key per OD audit-ledger; None = single-tenant mode |
 | `trust_policy` | `TrustPolicy | None` (CP spec v1.11 §27 carrier) | no (default `None` → uses `TrustPolicy.default()`) | Operator-supplied per-MCP-server trust policy ingested at stage 5 by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3; consumed by `PerServerTrustEvaluator` bound to `ctx.per_server_trust_evaluator`. Added at v1.15 per U-RT-68 fork Q2=B2 ratification. |
-| `sandbox_decision_policy` | `SandboxDecisionPolicy | None` (AS spec v1.3 §15 carrier) | no (default `None` → uses `SandboxDecisionPolicy.default()`) | Operator-supplied sandbox-tier decision policy ingested at stage 5 by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3; consumed by `RuntimeToolDispatcher` for tier-floor evaluation per §14.9.1 step 5. Added at v1.15 per U-RT-68 fork Q2=B2 ratification. |
+| `sandbox_decision_policy` | `SandboxDecisionPolicy | None` (harness-core carrier) | no (default `None` → uses `SandboxDecisionPolicy.default()`) | Operator-supplied sandbox-tier decision policy ingested at stage 5 by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3; consumed by `RuntimeToolDispatcher` for tier-floor evaluation per §14.9.1 step 5. Added at v1.15 per U-RT-68 fork Q2=B2 ratification; carrier home re-pointed from `AS spec v1.3 §15 carrier` → `harness-core carrier` at v1.16 per Class 1 fork resolution at `.harness/class_1_fork_sandbox_decision_policy_phantom_cite.md` (operator-ratified Q1=C-i 2026-05-22). |
 
 **Invariants.**
 
