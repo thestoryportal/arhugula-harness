@@ -178,9 +178,17 @@ import json
 from collections.abc import Callable
 
 from harness_cp.pause_resume_protocol_types import (
+    MaterialDiffPolicy,
     PauseSnapshot,
+    ResumeResult,
     WorkflowPauseReason,
 )
+
+
+# CP fail class identifiers per CP spec v1.11 §26.5.
+CP_FAIL_PAUSE_SNAPSHOT_CORRUPTION: str = "CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION"
+CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED: str = "CP-FAIL-RESUME-MATERIAL-DIFF-DETECTED"
+CP_FAIL_RESUME_OPERATOR_ARBITRATION_OWED: str = "CP-FAIL-RESUME-OPERATOR-ARBITRATION-OWED"
 
 
 PauseContextReader = Callable[[], tuple[StateSummary, str]]
@@ -283,6 +291,99 @@ class PauseResumeProtocol:
             state_ledger_anchor=state_ledger_anchor,
         )
 
+    async def attempt_resume(
+        self,
+        snapshot: PauseSnapshot,
+        *,
+        material_diff_policy: MaterialDiffPolicy,
+    ) -> ResumeResult:
+        """Attempt workflow resumption from a pause snapshot per CP spec v1.11 §26.1.
+
+        Per §26.6 invariants 4-5:
+        4. Per-pause-reason routing — each WorkflowPauseReason has its own
+           resume policy default (operator-configurable at bootstrap per §26.7;
+           U-CP-64 does NOT consume the per-reason routing — the caller selects
+           `material_diff_policy` based on the routing it wants for this resume).
+        5. Coexist with U-CP-56 prefix-replay-based resumption — this method
+           handles explicit-pause resumption; U-CP-56 handles prefix-replay.
+           The two paths are non-overlapping and operate at different layers.
+
+        AC #1: snapshot_hash validated by recomputing canonical hash; mismatch
+               → CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION (snapshot corrupted in transit
+               or storage).
+        AC #2: material diff = state_ledger_anchor divergence at resume time
+               (snapshot's anchor no longer equal to current entry chain head).
+               MVP cheap-correct interpretation: anchor equality check. Deeper
+               reachability traversal across prior_event_hash chains is impl-
+               discretion per §26.7 spirit; can be substituted by a stronger
+               predicate via `_anchor_reachable_predicate` override at U-CP-22
+               implementation arc when the LedgerReader gains reachability API.
+        AC #3: STRICT + diff → CP-FAIL-RESUME-MATERIAL-DIFF-DETECTED (abort).
+        AC #4: OPERATOR_ARBITRATE + diff → CP-FAIL-RESUME-OPERATOR-ARBITRATION-OWED
+               (HITL escalation owed — caller opens the gate; this method emits
+               the fail-class marker, the actual gate-open is a future arc
+               similar to U-CP-61 validator-escalation→HITL link via span_id).
+        """
+        # AC #1 — validate snapshot_hash by recomputing canonical hash
+        expected_hash = _compute_snapshot_hash(
+            workflow_id=snapshot.workflow_id,
+            run_id=snapshot.run_id,
+            step_index=snapshot.step_index,
+            state_summary=snapshot.state_summary,
+        )
+        if expected_hash != snapshot.snapshot_hash:
+            return ResumeResult(
+                resumed=False,
+                diff_detected=False,
+                fail_class=CP_FAIL_PAUSE_SNAPSHOT_CORRUPTION,
+            )
+
+        # AC #2 — detect material diff via state_ledger_anchor divergence
+        _current_state_summary, current_anchor = self._pause_context_reader()
+        diff_detected = self._is_material_diff(snapshot, current_anchor)
+
+        if not diff_detected:
+            # Clean resume — no diff, no fail-class
+            return ResumeResult(resumed=True, diff_detected=False)
+
+        # Diff detected — compute diff summary hash + branch on policy
+        diff_summary_hash = _compute_diff_summary_hash(
+            snapshot_anchor=snapshot.state_ledger_anchor,
+            current_anchor=current_anchor,
+        )
+
+        if material_diff_policy is MaterialDiffPolicy.STRICT:
+            # AC #3
+            return ResumeResult(
+                resumed=False,
+                diff_detected=True,
+                diff_summary_hash=diff_summary_hash,
+                fail_class=CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED,
+            )
+        if material_diff_policy is MaterialDiffPolicy.OPERATOR_ARBITRATE:
+            # AC #4 — HITL arbitration owed; caller opens gate
+            return ResumeResult(
+                resumed=False,
+                diff_detected=True,
+                diff_summary_hash=diff_summary_hash,
+                fail_class=CP_FAIL_RESUME_OPERATOR_ARBITRATION_OWED,
+            )
+        # LENIENT — diff permitted; resumption proceeds with diff_detected marker
+        return ResumeResult(
+            resumed=True,
+            diff_detected=True,
+            diff_summary_hash=diff_summary_hash,
+        )
+
+    def _is_material_diff(self, snapshot: PauseSnapshot, current_anchor: str) -> bool:
+        """Material-diff predicate per §26.6 invariant 3.
+
+        MVP: anchor equality check. Snapshot anchor != current anchor → diff.
+        Future arc (U-CP-22 implementation) may substitute a chain-reachability
+        traversal via the LedgerReader; this method is the predicate seam.
+        """
+        return snapshot.state_ledger_anchor != current_anchor
+
 
 def _compute_snapshot_hash(
     *,
@@ -312,3 +413,25 @@ def _now_epoch_ms() -> int:
     import time
 
     return int(time.time() * 1000)
+
+
+def _compute_diff_summary_hash(
+    *,
+    snapshot_anchor: str,
+    current_anchor: str,
+) -> str:
+    """sha256 hex over (snapshot_anchor, current_anchor) for ResumeResult.diff_summary_hash.
+
+    MVP shape per §26.7 deferred-to-implementation-discretion: the spec
+    states "diff_summary_hash content shape — sha256 of diff serialization;
+    format owed to U-CP-22 implementation arc". U-CP-64 lands an MVP shape
+    capturing the two anchors that diverged; U-CP-22 implementation may
+    substitute a richer serialization (e.g., enumerating the per-reference
+    diff entries from the LedgerReader).
+    """
+    canonical = {
+        "snapshot_anchor": snapshot_anchor,
+        "current_anchor": current_anchor,
+    }
+    payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
