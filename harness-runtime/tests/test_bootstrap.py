@@ -339,7 +339,13 @@ async def test_bootstrap_stage_5_binds_inference_and_sub_agent_dispatchers(
     )
     assert sub_agent_step.inner is ctx.sub_agent_dispatcher
 
-    for unbound in (StepKind.TOOL_STEP, StepKind.HITL_STEP, StepKind.DECLARATIVE_STEP):
+    # TOOL_STEP bound at U-RT-68 cluster-close per spec v1.16 §14.9.3 +
+    # §14.11 C-RT-21 RetryBreakerToolDispatcher wrap. HITL / DECLARATIVE
+    # remain unbound (follow-on composer arcs).
+    tool_step = ctx.step_dispatchers.lookup(StepKind.TOOL_STEP)
+    assert isinstance(tool_step, SyncDispatcherFacade)
+    assert tool_step.inner is ctx.tool_dispatcher
+    for unbound in (StepKind.HITL_STEP, StepKind.DECLARATIVE_STEP):
         with pytest.raises(StepKindDispatcherNotBoundError):
             ctx.step_dispatchers.lookup(unbound)
 

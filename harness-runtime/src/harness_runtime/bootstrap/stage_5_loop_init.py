@@ -42,6 +42,9 @@ from harness_runtime.lifecycle.mcp_backed_ask_user_question_surface import (
     materialize_mcp_backed_ask_user_question_surface_stage,
 )
 from harness_runtime.lifecycle.override_evaluator import materialize_override_evaluator_stage
+from harness_runtime.bootstrap.factories.runtime_tool_dispatcher_factory import (
+    materialize_runtime_tool_dispatcher_stage,
+)
 from harness_runtime.lifecycle.retry_breaker_fallback import (
     materialize_retry_breaker_fallback_dispatcher_stage,
 )
@@ -291,9 +294,30 @@ async def execute(
         result_timeout_seconds=config.drain_timeout_seconds,
     )
 
+    # ---------------------------------------------------------------------
+    # U-RT-68 (REWRITTEN at v2.12): stage-5 TOOL_STEP wire-up via the
+    # U-RT-75 `materialize_runtime_tool_dispatcher_stage` factory. Per
+    # spec v1.16 §14.9.3 stage-5 prose + §14.11 C-RT-21: the factory
+    # composes the 5-step chain (PerServerTrustEvaluator → MCPClientNamespaceEmitter
+    # → bare RuntimeToolDispatcher → RetryBreakerToolDispatcher wrap →
+    # return wrapper). The bare dispatcher is private to the wrapper per
+    # spec §14.9.6 inv 6; ctx.tool_dispatcher binds to the wrapper.
+    #
+    # Mirrors the existing `ctx.llm_dispatcher` wrap-binding pattern at
+    # C-RT-16 §14.6 D6 above. Step-dispatcher registry below extends with
+    # TOOL_STEP → tool_step_dispatcher facade.
+    ctx.tool_dispatcher = await materialize_runtime_tool_dispatcher_stage(
+        ctx, config
+    )
+    tool_step_dispatcher = materialize_sync_dispatcher_facade(
+        ctx.tool_dispatcher,
+        result_timeout_seconds=config.drain_timeout_seconds,
+    )
+
     ctx.step_dispatchers = StepKindDispatcherRegistry(
         dispatchers={
             StepKind.INFERENCE_STEP: inference_step_dispatcher,
             StepKind.SUB_AGENT_DISPATCH: sub_agent_step_dispatcher,
+            StepKind.TOOL_STEP: tool_step_dispatcher,
         },
     )
