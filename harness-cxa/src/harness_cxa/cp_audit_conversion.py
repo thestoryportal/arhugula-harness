@@ -1,11 +1,25 @@
-"""CP→OD audit-write converter — production CXA seam (U-RT-59 Fork 2 close).
+"""CP→OD audit-write converter — production CXA seam (U-RT-59 Fork 2 close
++ U-CP-72 10-CP-D 6-prefix extension).
 
 Production-grade converter materializing the typed CP→OD audit-write seam
-declared at `Cross_Axis_Composition_Document_v2_4.md` §2.3.7 + the converter
-contract at `Spec_Control_Plane_v1_7.md` §13.5.1 + the OD-side recognition
+declared at `Cross_Axis_Composition_Document_v2_8.md` §2.3.7 (extended via
+the U-CP-72 6-prefix dispatch at 10-CP-D cluster). The converter contract
+is at `Spec_Control_Plane_v1_7.md` §13.5.1 + the OD-side recognition
 discipline at `Spec_Operational_Discipline_v1_5.md` C-OD-24.6. Wired at the
 sub-agent dispatch composer per `Spec_Harness_Runtime_v1.md` v1.7 §14.7.2
-step 8c.
+step 8c + (future) the validator + webhook + operator-burden + per-server-
+trust composers as they wire audit emission.
+
+**U-CP-72 prefix-dispatch extension (10-CP-D, 2026-05-22).** Per the v1.16
+spec contract surface + Implementation_Plan_Control_Plane_v2_15.md U-CP-72,
+the converter signature widens from a single `CPAuditLedgerEntry` input to
+a tagged union over 5 carrier types (the existing CP-side carrier plus 4
+producer-specific AuditPayload subclasses). Dispatch routes on isinstance.
+6 of 8 plan-mandated branches land at this arc (`dispatch:` + `hitl:` via
+CPAuditLedgerEntry; `hitl_webhook:` + `operator_burden:` + `validator:` +
+`mcp_trust:` via their respective AuditPayload subclasses). 2 prefixes
+(`pause:`/`resume:`, `cost:`) STRUCK per `[[halt-route-split-AC-pattern]]`
+— see `.harness/class_1_fork_u_cp_72_cost_and_pause_resume_prefix_gap.md`.
 
 **Home rationale (Q5 ratification, 2026-05-20).** Lives at `harness-cxa/` per
 the workspace `CLAUDE.md` §2.5 assignment ("harness-cxa/ hosts CXA seam
@@ -46,12 +60,37 @@ from harness_od.audit_ledger_types import (
     StateLedgerEntryRef,
     compute_entry_hash,
 )
+from harness_od.hitl_operator_burden_namespace import OperatorBurdenAuditPayload
+from harness_od.hitl_webhook_namespace import WebhookDeliveryAuditPayload
+from harness_od.mcp_trust_namespace import TrustEvaluationAuditPayload
 from harness_od.multi_tenant_trace_separation_and_audit_ledger import sign_audit_entry
+from harness_od.validator_namespace import ValidatorEscalationAuditPayload
 
 #: Namespace prefix for CP-sourced fields landing in OD `audit_namespace_attrs`.
 #: Ratified at OD spec v1.5 C-OD-24.6 (Q4 — `audit.cp.*` sub-namespace
 #: extends OD-canonical `audit.*` per C-OD-05 §5.1).
 CP_AUDIT_NAMESPACE_PREFIX = "audit.cp"
+
+#: Producer-specific sub-namespace prefixes per U-CP-72 6-prefix dispatch
+#: (10-CP-D, 2026-05-22). Each AuditPayload subclass projects its
+#: producer-specific fields into the corresponding sub-namespace at write
+#: time per OD spec v1.9 §C-OD-24.6 sub-namespace tagging discipline.
+WEBHOOK_AUDIT_NAMESPACE_PREFIX = "audit.hitl_webhook"
+OPERATOR_BURDEN_AUDIT_NAMESPACE_PREFIX = "audit.operator_burden"
+VALIDATOR_AUDIT_NAMESPACE_PREFIX = "audit.validator"
+MCP_TRUST_AUDIT_NAMESPACE_PREFIX = "audit.mcp_trust"
+
+#: Union of carrier types accepted by `cp_audit_to_od_audit` per U-CP-72
+#: prefix dispatch. The `pause`/`resume` + `cost` branches are STRUCK at
+#: this arc per `.harness/class_1_fork_u_cp_72_cost_and_pause_resume_prefix_gap.md`
+#: and will widen this union at their respective re-binding arcs.
+CpAuditCarrier = (
+    CPAuditLedgerEntry
+    | WebhookDeliveryAuditPayload
+    | OperatorBurdenAuditPayload
+    | ValidatorEscalationAuditPayload
+    | TrustEvaluationAuditPayload
+)
 
 
 def _project_namespace_attrs(cp_entry: CPAuditLedgerEntry) -> dict[str, str]:
@@ -82,58 +121,156 @@ def _project_namespace_attrs(cp_entry: CPAuditLedgerEntry) -> dict[str, str]:
     return attrs
 
 
+def _project_producer_namespace_attrs(
+    carrier: WebhookDeliveryAuditPayload
+    | OperatorBurdenAuditPayload
+    | ValidatorEscalationAuditPayload
+    | TrustEvaluationAuditPayload,
+    producer_prefix: str,
+) -> dict[str, str]:
+    """Project a producer-specific AuditPayload subclass into the unified
+    `audit_namespace_attrs` dict per OD spec v1.9 §C-OD-24.6 sub-namespace
+    discipline.
+
+    Common `audit_cp_*` fields land under `audit.cp.*`; producer-specific
+    fields land under `audit.{producer_prefix}.*`. Optional fields are
+    elided when `None` (per §C-OD-24.6 conditional-field discipline).
+    """
+    attrs: dict[str, str] = {}
+    data = carrier.model_dump()
+    for field_name, value in data.items():
+        if value is None:
+            continue
+        rendered = str(value)
+        if field_name.startswith("audit_cp_"):
+            suffix = field_name[len("audit_cp_") :]
+            attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.{suffix}"] = rendered
+        else:
+            attrs[f"{producer_prefix}.{field_name}"] = rendered
+    return attrs
+
+
+def _entry_core_or_default(
+    entry_core: StateLedgerEntryRef | None, action_id: str
+) -> StateLedgerEntryRef:
+    """Resolve `entry_core` to the supplied value or a synthesized opaque
+    marker per Q2(a) source-semantic discipline (production composer always
+    supplies; tests + legacy callers may omit)."""
+    if entry_core is not None:
+        return entry_core
+    return StateLedgerEntryRef(f"cp-audit:{action_id}")
+
+
 def cp_audit_to_od_audit(
-    cp_entry: CPAuditLedgerEntry,
+    cp_entry: CpAuditCarrier,
     *,
     key_id: str,
     algo: SignatureAlgorithm = SignatureAlgorithm.ED25519,
     entry_core: StateLedgerEntryRef | None = None,
 ) -> AuditLedgerEntry:
-    """Convert a `CPAuditLedgerEntry` to a signed OD `AuditLedgerEntry`.
+    """Convert any CP-side audit carrier to a signed OD `AuditLedgerEntry`.
 
-    Production seam per CP spec v1.7 §13.5.1 + OD spec v1.5 C-OD-24.6.
-    Sub-agent dispatch composer (runtime spec v1.7 §14.7.2 step 8c) invokes
-    this function on every dispatch on the SUCCESS / DRAINED path; failure
-    paths invoke it best-effort.
+    Production seam per CP spec v1.7 §13.5.1 + OD spec v1.5 C-OD-24.6 +
+    U-CP-72 6-prefix extension (10-CP-D 2026-05-22).
+
+    Dispatches on the carrier type:
+
+    - `CPAuditLedgerEntry` → existing `dispatch:` + `hitl:` prefix paths
+      (preserved verbatim from the U-RT-59 Fork 2 close).
+    - `WebhookDeliveryAuditPayload` → `audit.hitl_webhook.*` sub-namespace
+      composition (`hitl_webhook:` prefix).
+    - `OperatorBurdenAuditPayload` → `audit.operator_burden.*` sub-namespace
+      composition (`operator_burden:` prefix).
+    - `ValidatorEscalationAuditPayload` → `audit.validator.*` sub-namespace
+      composition (`validator:` prefix).
+    - `TrustEvaluationAuditPayload` → `audit.mcp_trust.*` sub-namespace
+      composition (`mcp_trust:` prefix).
+
+    The `pause:`/`resume:` and `cost:` prefixes are STRUCK at this arc per
+    `.harness/class_1_fork_u_cp_72_cost_and_pause_resume_prefix_gap.md`;
+    re-binding criteria documented at fork doc §3.
 
     Parameters:
-        cp_entry: the CP-shape unsigned audit entry from the composer
-            (composed at step 8a via `compose_dispatch_audit`).
+        cp_entry: any CP-side audit carrier per `CpAuditCarrier` union.
         key_id: OD `audit.signature.key_id` per C-OD-21 §21.2 + ADR-D5
-            v1.4 §1.4.1. Operator surface deferred per spec §14.7.
-        algo: OD `audit.signature.algorithm`; defaults to Ed25519 per
-            ADR-D5 v1.4 §1.4.1.
-        entry_core: OD `payload.entry_core` IS reference per Q2(a) — the
-            `StateLedgerEntryRef` for the F2 dispatch-action entry the
-            composer wrote at step 8b. If None (legacy compat / unit-test
-            convenience), synthesizes `cp-audit:<cp_action_id>` opaque
-            marker; the production composer always supplies a real ref.
+            v1.4 §1.4.1.
+        algo: OD `audit.signature.algorithm`; defaults to Ed25519.
+        entry_core: OD `payload.entry_core` IS reference per Q2(a). If
+            None, synthesizes an opaque `cp-audit:<action_id>` marker.
 
     Returns:
         a fully-signed `AuditLedgerEntry` ready for `audit_writer.append`.
 
     Raises:
-        ValueError: from `sign_audit_entry` when `key_id` is empty per the
-            CP spec v1.7 §13.5.1 converter signature contract.
+        ValueError: from `sign_audit_entry` when `key_id` is empty.
+        TypeError: if `cp_entry` is not a member of `CpAuditCarrier`.
     """
-    # Q2(a) entry_core source semantic: production composer supplies the
-    # F2 dispatch-action `StateLedgerEntryRef`. Synthesis fallback retained
-    # for unit-test ergonomics + legacy callers (e.g., the round-trip
-    # property tests that don't simulate a full composer).
-    resolved_entry_core: StateLedgerEntryRef = (
-        entry_core
-        if entry_core is not None
-        else StateLedgerEntryRef(f"cp-audit:{cp_entry.action_id}")
-    )
-
-    # Q1 chain-equivalence: CP `prior_event_hash` and OD `prior_entry_hash`
-    # are the same SHA-256 hash-chain link per C-IS-06 / C-IS-13 §13.5. Direct
-    # re-use; operator ratifies at spec amendment.
-    payload = AuditPayload(
-        entry_core=resolved_entry_core,
-        audit_namespace_attrs=_project_namespace_attrs(cp_entry),
-        prior_entry_hash=cp_entry.prior_event_hash,
-    )
+    if isinstance(cp_entry, CPAuditLedgerEntry):
+        # Existing dispatch / hitl path — preserved verbatim from U-RT-59
+        # Fork 2 close. The CP-side action_id already encodes the
+        # `dispatch:` or `hitl:` prefix per the producer-side composers.
+        resolved_entry_core = _entry_core_or_default(
+            entry_core, str(cp_entry.action_id)
+        )
+        payload = AuditPayload(
+            entry_core=resolved_entry_core,
+            audit_namespace_attrs=_project_namespace_attrs(cp_entry),
+            prior_entry_hash=cp_entry.prior_event_hash,
+        )
+    elif isinstance(cp_entry, WebhookDeliveryAuditPayload):
+        resolved_entry_core = _entry_core_or_default(
+            entry_core, cp_entry.audit_cp_action_id
+        )
+        payload = AuditPayload(
+            entry_core=resolved_entry_core,
+            audit_namespace_attrs=_project_producer_namespace_attrs(
+                cp_entry, WEBHOOK_AUDIT_NAMESPACE_PREFIX
+            ),
+            prior_entry_hash=cp_entry.audit_cp_prior_event_hash,
+        )
+    elif isinstance(cp_entry, OperatorBurdenAuditPayload):
+        resolved_entry_core = _entry_core_or_default(
+            entry_core, cp_entry.audit_cp_action_id
+        )
+        payload = AuditPayload(
+            entry_core=resolved_entry_core,
+            audit_namespace_attrs=_project_producer_namespace_attrs(
+                cp_entry, OPERATOR_BURDEN_AUDIT_NAMESPACE_PREFIX
+            ),
+            prior_entry_hash=cp_entry.audit_cp_prior_event_hash,
+        )
+    elif isinstance(cp_entry, ValidatorEscalationAuditPayload):
+        resolved_entry_core = _entry_core_or_default(
+            entry_core, cp_entry.audit_cp_action_id
+        )
+        payload = AuditPayload(
+            entry_core=resolved_entry_core,
+            audit_namespace_attrs=_project_producer_namespace_attrs(
+                cp_entry, VALIDATOR_AUDIT_NAMESPACE_PREFIX
+            ),
+            prior_entry_hash=cp_entry.audit_cp_prior_event_hash,
+        )
+    elif isinstance(cp_entry, TrustEvaluationAuditPayload):  # noqa: UP040  # type: ignore[reportUnnecessaryIsInstance]
+        resolved_entry_core = _entry_core_or_default(
+            entry_core, cp_entry.audit_cp_action_id
+        )
+        payload = AuditPayload(
+            entry_core=resolved_entry_core,
+            audit_namespace_attrs=_project_producer_namespace_attrs(
+                cp_entry, MCP_TRUST_AUDIT_NAMESPACE_PREFIX
+            ),
+            prior_entry_hash=cp_entry.audit_cp_prior_event_hash,
+        )
+    else:
+        raise TypeError(
+            f"cp_audit_to_od_audit: unsupported carrier type "
+            f"{type(cp_entry).__name__}; expected one of "
+            f"CPAuditLedgerEntry, WebhookDeliveryAuditPayload, "
+            f"OperatorBurdenAuditPayload, ValidatorEscalationAuditPayload, "
+            f"TrustEvaluationAuditPayload (pause/resume + cost prefixes "
+            f"STRUCK per .harness/class_1_fork_u_cp_72_cost_and_pause_"
+            f"resume_prefix_gap.md)"
+        )
 
     signature_attrs = sign_audit_entry(payload, key_id=key_id, algo=algo)
     entry_hash = compute_entry_hash(payload)
