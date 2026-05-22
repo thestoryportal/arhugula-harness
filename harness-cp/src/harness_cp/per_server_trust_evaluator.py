@@ -53,8 +53,9 @@ Authority: CP spec v1.10 §27.1 + §27.6 (NEW C-CP-27); plan unit U-CP-68
 
 from __future__ import annotations
 
+import random as _random_module
 from collections.abc import Callable
-from typing import Final
+from typing import Any, Final
 
 from harness_as.tool_contract import ToolContract
 from harness_cp.cp_shared_types import MCPTrustTier
@@ -251,3 +252,83 @@ def _tier_at_or_above_floor(tier: MCPTrustTier, floor: MCPTrustTier) -> bool:
 def _require_audit_for_tier(tier: MCPTrustTier, audit_floor: MCPTrustTier) -> bool:
     """Audit required iff `tier < audit_floor` per `TrustPolicy.require_audit_below_tier`."""
     return _TIER_RANK[tier] < _TIER_RANK[audit_floor]
+
+
+# ---------------------------------------------------------------------------
+# U-CP-70 — mcp.trust.evaluate span emission + head sampling
+# ---------------------------------------------------------------------------
+
+MCP_TRUST_EVALUATE_SPAN_NAME: Final[str] = "mcp.trust.evaluate"
+"""Span site emitted per evaluation per CP spec v1.10 §27.4."""
+
+# Pattern-P1 alignment: attribute name literals match OD spec v1.9 §C-OD-31.1
+# byte-exact. Runtime emits string literals; OD schema module is NOT imported
+# at runtime per Phase D iteration-1 F1-03 absorption (mirrors the U-CP-65
+# caller-side emission pattern).
+ATTR_MCP_TRUST_SERVER_NAME: Final[str] = "mcp.trust.server_name"
+ATTR_MCP_TRUST_PRIMITIVE_KIND: Final[str] = "mcp.trust.primitive_kind"
+ATTR_MCP_TRUST_DECISION_REASON: Final[str] = "mcp.trust.decision_reason"
+ATTR_MCP_TRUST_AUDIT_REQUIRED: Final[str] = "mcp.trust.audit_required"
+ATTR_MCP_TRUST_TIER_EVALUATED: Final[str] = "mcp.trust.tier_evaluated"
+
+_NON_AUDIT_SAMPLE_RATE: Final[float] = 0.1
+"""Head sample rate for non-audit-required evaluations per §27.4 (head=0.1)."""
+
+
+def _default_rng() -> _random_module.Random:
+    return _random_module.Random()
+
+
+def emit_mcp_trust_evaluate_span(
+    tracer: Any,  # noqa: ANN401 — Tracer typed as Any to avoid OTel SDK coupling
+    evaluation: TrustEvaluation,
+    server_name: str,
+    primitive: MCPPrimitive,
+    *,
+    rng: _random_module.Random | None = None,
+) -> Any:  # returns Span | None — typed Any to avoid OTel SDK coupling
+    """Emit the `mcp.trust.evaluate` span for a single PerServerTrustEvaluator
+    result per CP spec v1.10 §27.4 + sampling discipline.
+
+    **Caller-side emission pattern** (mirrors U-CP-65 `emit_pause_captured_span`
+    + U-CP-61 `emit_validator_evaluate_span`): the framework class
+    (PerServerTrustEvaluator) is decoupled from tracer dependencies — the
+    caller (Stage 5 RuntimeToolDispatcher per §27.3) wraps the evaluator
+    invocation with this helper.
+
+    **Sampling discipline** per §27.4 + §27.6 invariant 5:
+    - `audit_required=True` → **always** emit (head=1.0)
+    - `audit_required=False` → head=0.1 (per `_NON_AUDIT_SAMPLE_RATE`)
+
+    UNKNOWN_SERVER_* decisions ALWAYS carry `audit_required=True` per
+    Decision 3.D1 + §27.6 invariant 4, so they ALWAYS emit (covered by the
+    audit_required branch above).
+
+    :param tracer: opentelemetry Tracer-like (typed Any to avoid SDK coupling)
+    :param evaluation: TrustEvaluation result from
+        `PerServerTrustEvaluator.evaluate(...)`
+    :param server_name: MCP server registry identifier (carried to span attr)
+    :param primitive: MCPPrimitive (carried to span attr)
+    :param rng: optional Random instance for deterministic testing; defaults
+        to a fresh Random() per call when omitted
+
+    :returns: the emitted Span context manager value (after exit) OR None when
+        sampled out at the non-audit branch
+    """
+    if not evaluation.audit_required:
+        sampler = rng if rng is not None else _default_rng()
+        if sampler.random() >= _NON_AUDIT_SAMPLE_RATE:
+            return None
+    with tracer.start_as_current_span(MCP_TRUST_EVALUATE_SPAN_NAME) as span:
+        span.set_attribute(ATTR_MCP_TRUST_SERVER_NAME, server_name)
+        span.set_attribute(ATTR_MCP_TRUST_PRIMITIVE_KIND, primitive.value)
+        span.set_attribute(
+            ATTR_MCP_TRUST_DECISION_REASON, evaluation.decision_reason.value
+        )
+        span.set_attribute(
+            ATTR_MCP_TRUST_AUDIT_REQUIRED, evaluation.audit_required
+        )
+        span.set_attribute(
+            ATTR_MCP_TRUST_TIER_EVALUATED, evaluation.trust_tier_evaluated.value
+        )
+        return span

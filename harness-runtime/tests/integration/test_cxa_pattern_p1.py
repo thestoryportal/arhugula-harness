@@ -180,6 +180,18 @@ PATTERN_P1_SEAMS: tuple[tuple[str, str, str, str], ...] = (
         "harness_as.sandbox_tier",
         "BlastRadiusTier",
     ),
+    # NEW at cluster 10-CP-C close (2026-05-21): U-CP-68
+    # PerServerTrustEvaluator.evaluate() signature requires
+    # `tool_contract: ToolContract | None` per CP spec v1.10 §27.1; physical
+    # import of ToolContract from harness_as creates a genuine typed
+    # CP→AS Pattern-P1 seam. Routes to next CXA amendment (CXA v2.5 §2.3.3
+    # CP→AS bucket: 5 → 6 entries; aggregate 24 → 25 typed seams).
+    (
+        "U-CP-68→U-AS-03",
+        "harness_cp.per_server_trust_evaluator",
+        "harness_as.tool_contract",
+        "ToolContract",
+    ),
     # ---- §2.3.5 OD → AS (1 G) -------------------------------------------
     (
         "U-OD-29→U-AS-15",
@@ -213,15 +225,22 @@ PATTERN_P1_SEAMS: tuple[tuple[str, str, str, str], ...] = (
 # ---------------------------------------------------------------------------
 
 
-def test_seam_count_is_24() -> None:
-    """CXA v2.5 §2.3 enumerates exactly 24 genuine typed seams.
+def test_seam_count_is_25() -> None:
+    """CXA v2.5 §2.3 enumerates 24 genuine typed seams + 1 awaiting CXA amendment.
 
     v2.3 baseline: 22 seams. v2.4 added §2.3.7 with 1 seam (U-CP-28 → U-OD-00
     sub-agent dispatch audit-write). v2.5 grew §2.3.7 to 2 seams (added
     U-CP-46 → U-OD-00 HITL gate response audit-write per Q3 ratification —
     shared `cp_audit_to_od_audit` converter at `harness-cxa/`).
+
+    Cluster 10-CP-C close (2026-05-21) added a 25th seam: U-CP-68 → U-AS-03
+    (PerServerTrustEvaluator.evaluate() signature consumes ToolContract per CP
+    spec v1.10 §27.1). CXA §2.3.3 CP→AS amendment owed (5 → 6 in-bucket;
+    aggregate 24 → 25) at next CXA revision pass; the seam is enumerated here
+    in advance to keep the runtime Pattern-P1 enforcement check in agreement
+    with the landed code. Filed as Class 3 drift at cluster close.
     """
-    assert len(PATTERN_P1_SEAMS) == 24
+    assert len(PATTERN_P1_SEAMS) == 25
 
 
 # ---------------------------------------------------------------------------
