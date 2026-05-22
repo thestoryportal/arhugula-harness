@@ -161,3 +161,154 @@ def classify_resume(
     if revalidation_succeeded:
         return ResumeOutcomeKind.RESUME_AFTER_REVALIDATION
     return ResumeOutcomeKind.ABORT_REVALIDATION_FAILED
+
+
+# ---------------------------------------------------------------------------
+# C-CP-26 PauseResumeProtocol (NEW at CP spec v1.10; renamed identifiers at
+# v1.11 per path γ disambiguation). U-CP-63 capture_pause_snapshot landing.
+#
+# Per CP spec v1.11 §26 NEW NOTE coexistence: this class-method surface
+# coexists with the OLD U-CP-49 free-function surface above. They are
+# distinct architectural primitives at distinct layers — engine-layer
+# replay-pause (above) vs workflow-layer explicit-pause (below).
+# ---------------------------------------------------------------------------
+
+import hashlib
+import json
+from collections.abc import Callable
+
+from harness_cp.pause_resume_protocol_types import (
+    PauseSnapshot,
+    WorkflowPauseReason,
+)
+
+
+PauseContextReader = Callable[[], tuple[StateSummary, str]]
+"""Provider returning (current state_summary, current state_ledger_anchor entry_hash).
+
+Impl-discretion FACTOR-OUT for the C-CP-26 PauseResumeProtocol class body.
+CP spec v1.11 §26.1 signature is locked at 4 method params; §26.3 enumerates
+state_ledger_writer + state_ledger_reader as constructor refs but doesn't
+specify how the current state_summary or current entry_hash gets read at
+capture-time. The workflow driver — which holds both per its own composition
+— supplies a reader callable at stage 5 LOOP_INIT bootstrap. This is the
+U-CP-60 precedent pattern (operator-supplied substrate injected at __init__;
+internal state held by the framework instance).
+
+The reader returns a tuple to keep the call site atomic — both values are
+needed together at every capture; splitting into two readers would risk
+inconsistency if the underlying ledger advances between reads.
+"""
+
+
+class PauseResumeProtocol:
+    """Concrete C-CP-26 PauseResumeProtocol per CP spec v1.11 §26.1.
+
+    Workflow-layer explicit-pause + material-diff resumption protocol.
+    Distinct from the engine-layer C-CP-22 §22.1 surface above (free
+    functions `capture_pause_snapshot` / `attempt_resume` / `classify_resume`
+    landed at U-CP-49). Per CP spec v1.11 §26 NEW NOTE coexistence: the two
+    surfaces coexist as distinct architectural primitives at distinct layers.
+
+    **Constructor refs.** Per §26.3 stage 5 LOOP_INIT instantiation:
+    `state_ledger_writer` + `state_ledger_reader` are spec-enumerated. The
+    `pause_context_reader` is an impl-discretion FACTOR-OUT (see module-level
+    docstring): the workflow driver supplies a callable returning the current
+    (state_summary, state_ledger_anchor) tuple — needed at capture-time to
+    compose the snapshot_hash + populate the state_ledger_anchor field.
+
+    **AC #1 / U-CP-63 — snapshot_hash composition.** sha256 hex over
+    canonical JSON serialization of (workflow_id + run_id + step_index +
+    state_summary). Deterministic — equal inputs yield equal hashes.
+
+    **AC #2 / U-CP-63 — immutability.** The returned `PauseSnapshot` is a
+    frozen Pydantic v2 model (`model_config = ConfigDict(frozen=True)`).
+    §26.6 invariant 1: "Snapshot is immutable once captured. No mutation
+    after pause."
+
+    **AC #3 / U-CP-63 — state-ledger anchor.** Populated with the current
+    `entry_hash` per C-IS-05 §5 via the pause_context_reader. Material-diff
+    detection at U-CP-64 will check reachability from the current entry chain.
+    """
+
+    def __init__(
+        self,
+        *,
+        state_ledger_writer: object,
+        state_ledger_reader: object,
+        pause_context_reader: PauseContextReader,
+    ) -> None:
+        """Construct with state-ledger refs + pause-context reader callable.
+
+        `state_ledger_writer` / `state_ledger_reader` typed as `object`
+        rather than against `LedgerWriterLike` / `LedgerReaderLike` Protocols
+        to avoid a CP→CP within-axis circular import at this module (the
+        Protocols live at `harness_cp.workflow_driver`). U-CP-64 will narrow
+        the type when material-diff detection consumes the reader surface.
+        """
+        self._state_ledger_writer = state_ledger_writer
+        self._state_ledger_reader = state_ledger_reader
+        self._pause_context_reader = pause_context_reader
+
+    async def capture_pause_snapshot(
+        self,
+        workflow_id: str,
+        run_id: str,
+        step_index: int,
+        pause_reason: WorkflowPauseReason,
+    ) -> PauseSnapshot:
+        """Capture a workflow-layer pause snapshot per CP spec v1.11 §26.1.
+
+        Per §26.6 invariants 1-3:
+        1. Snapshot is immutable once captured (frozen Pydantic model).
+        2. Resume must validate snapshot_hash (U-CP-64 responsibility).
+        3. State-ledger anchor populated from current entry_hash; material
+           diff defined as state_ledger_anchor divergence at resume time.
+        """
+        state_summary, state_ledger_anchor = self._pause_context_reader()
+        snapshot_hash = _compute_snapshot_hash(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            step_index=step_index,
+            state_summary=state_summary,
+        )
+        return PauseSnapshot(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            step_index=step_index,
+            pause_reason=pause_reason,
+            state_summary=state_summary,
+            snapshot_hash=snapshot_hash,
+            created_at=_now_epoch_ms(),
+            state_ledger_anchor=state_ledger_anchor,
+        )
+
+
+def _compute_snapshot_hash(
+    *,
+    workflow_id: str,
+    run_id: str,
+    step_index: int,
+    state_summary: StateSummary,
+) -> str:
+    """sha256 hex over canonical JSON of (workflow_id, run_id, step_index, state_summary).
+
+    Mirrors the `canonicalize_brief` / `compute_brief_summary_hash` pattern at
+    `harness_cp.sub_agent_brief` — sorted-key JSON, compact separators,
+    UTF-8 encoded. Deterministic.
+    """
+    canonical = {
+        "workflow_id": workflow_id,
+        "run_id": run_id,
+        "step_index": step_index,
+        "state_summary": state_summary.model_dump(mode="json"),
+    }
+    payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _now_epoch_ms() -> int:
+    """Current epoch milliseconds for PauseSnapshot.created_at."""
+    import time
+
+    return int(time.time() * 1000)
