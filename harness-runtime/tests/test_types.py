@@ -127,6 +127,7 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         "sandbox_dispatch",
         # Stage 3a CP_CLIENTS.
         "providers",
+        "mcp_client_host",  # U-RT-72 — C-RT-04 §4 v1.16 H_T-as-MCP-client host (U-RT-73 populates)
         # Stage 3b CP_ROUTING.
         "routing_manifest",
         "engine_selector",
@@ -148,6 +149,9 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         "ask_user_question_surface",  # U-RT-60 — C-RT-18 §14.8.3 MCP-backed HITL surface
         "step_dispatchers",  # U-RT-59 — C-RT-17 §14.7.1 + §14.7.7 step-kind routing registry
         "validator_framework",  # U-CP-61 — optional ValidatorFramework binding (Decision 2.D3 RATIFIED)
+        "tool_dispatcher",  # U-RT-72 — C-RT-04 §4 v1.16 retry-wrapped TOOL_STEP dispatcher (U-RT-75 populates)
+        "per_server_trust_evaluator",  # U-RT-72 — C-RT-04 §4 v1.16 (U-RT-75 populates)
+        "mcp_namespace_emitter",  # U-RT-72 — C-RT-04 §4 v1.16 (U-RT-75 populates)
     }
     actual = set(HarnessContext.model_fields.keys())
     assert actual == expected, f"missing: {expected - actual}; extra: {actual - expected}"

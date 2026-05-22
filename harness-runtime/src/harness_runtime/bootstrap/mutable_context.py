@@ -121,6 +121,7 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "tool_contracts",
     "mcp_host",
     "mcp_clients",
+    "mcp_client_host",
     "sandbox_dispatch",
     "providers",
     "routing_manifest",
@@ -140,6 +141,9 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "sub_agent_dispatcher",
     "ask_user_question_surface",
     "step_dispatchers",
+    "tool_dispatcher",
+    "per_server_trust_evaluator",
+    "mcp_namespace_emitter",
 )
 
 
@@ -176,6 +180,11 @@ class _MutableHarnessContext:
 
     # Stage 3a CP_CLIENTS.
     providers: dict[str, ProviderClient] | None = None
+    mcp_client_host: Any = None
+    """U-RT-72 — H_T-as-MCP-client host (concrete:
+    `harness_runtime.lifecycle.mcp_client_host.MCPClientHost`). Populated
+    at stage 3a by `materialize_mcp_client_host_stage` (U-RT-73). Required
+    on the frozen HarnessContext per spec v1.16 §4 C-RT-04."""
 
     # Stage 3b CP_ROUTING.
     routing_manifest: RoutingManifest | None = None
@@ -231,6 +240,26 @@ class _MutableHarnessContext:
     mismatch). Typed ``Any`` to avoid pulling the CP
     ``StepDispatcherRegistry`` Protocol into the schema layer."""
 
+    tool_dispatcher: Any = None
+    """U-RT-72/75 (C-RT-21 §14.11 retry-wrap around C-RT-19) TOOL_STEP
+    dispatcher; bound at stage 5 LOOP_INIT by
+    ``materialize_runtime_tool_dispatcher_stage`` (U-RT-75). The bare
+    ``RuntimeToolDispatcher`` is private to the wrapper (constructor arg
+    per spec §14.9.6 inv 6). Required on the frozen HarnessContext per
+    spec v1.16 §4 C-RT-04."""
+
+    per_server_trust_evaluator: Any = None
+    """U-RT-72; U-CP-68 PerServerTrustEvaluator. Bound at stage 5 within
+    ``materialize_runtime_tool_dispatcher_stage`` (U-RT-75) step 1 from
+    ``config.trust_policy``. Required on the frozen HarnessContext per
+    spec v1.16 §4 C-RT-04."""
+
+    mcp_namespace_emitter: Any = None
+    """U-RT-72; U-CP-69 MCPClientNamespaceEmitter. Bound at stage 5 within
+    ``materialize_runtime_tool_dispatcher_stage`` (U-RT-75) step 2 from
+    ``ctx.mcp_client_host.tool_registry``. Required on the frozen
+    HarnessContext per spec v1.16 §4 C-RT-04."""
+
     # Orchestrator bookkeeping — not part of HarnessContext.
     completed_stages: list[BootstrapStage] = field(default_factory=list)
     emitted_bootstrap_events: list[BootstrapStageCompleteEvent] = field(default_factory=list)
@@ -258,6 +287,7 @@ class _MutableHarnessContext:
             mcp_host=self.mcp_host,
             mcp_clients=self.mcp_clients,
             mcp_server=self.mcp_server,
+            mcp_client_host=self.mcp_client_host,
             sandbox_dispatch=self.sandbox_dispatch,
             providers=self.providers,
             routing_manifest=self.routing_manifest,
@@ -277,6 +307,9 @@ class _MutableHarnessContext:
             sub_agent_dispatcher=self.sub_agent_dispatcher,
             ask_user_question_surface=self.ask_user_question_surface,
             step_dispatchers=self.step_dispatchers,
+            tool_dispatcher=self.tool_dispatcher,
+            per_server_trust_evaluator=self.per_server_trust_evaluator,
+            mcp_namespace_emitter=self.mcp_namespace_emitter,
         )
         self.frozen = ctx
         return ctx

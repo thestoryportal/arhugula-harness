@@ -557,9 +557,11 @@ def test_freeze_raises_incomplete_when_required_field_none() -> None:
     ctx = _MutableHarnessContext()
     with pytest.raises(IncompleteBootstrapError) as excinfo:
         ctx.freeze()
-    # All 32 required fields are missing (U-RT-52 +1 for `llm_dispatcher`;
+    # All 36 required fields are missing (U-RT-52 +1 for `llm_dispatcher`;
     # U-RT-59 +2 for `sub_agent_dispatcher` + `step_dispatchers`;
-    # U-RT-60 +1 for `ask_user_question_surface`).
+    # U-RT-60 +1 for `ask_user_question_surface`; U-RT-72 +4 for
+    # `mcp_client_host` + `tool_dispatcher` + `per_server_trust_evaluator`
+    # + `mcp_namespace_emitter` per spec v1.16 §4 C-RT-04 extension).
     assert "config" in excinfo.value.missing_fields
     assert "lifecycle_emitter" in excinfo.value.missing_fields
     assert "ledger_reader" in excinfo.value.missing_fields
@@ -567,7 +569,11 @@ def test_freeze_raises_incomplete_when_required_field_none() -> None:
     assert "sub_agent_dispatcher" in excinfo.value.missing_fields
     assert "step_dispatchers" in excinfo.value.missing_fields
     assert "ask_user_question_surface" in excinfo.value.missing_fields
-    assert len(excinfo.value.missing_fields) == 32
+    assert "mcp_client_host" in excinfo.value.missing_fields
+    assert "tool_dispatcher" in excinfo.value.missing_fields
+    assert "per_server_trust_evaluator" in excinfo.value.missing_fields
+    assert "mcp_namespace_emitter" in excinfo.value.missing_fields
+    assert len(excinfo.value.missing_fields) == 36
 
 
 def test_bootstrap_stage_complete_event_is_frozen() -> None:

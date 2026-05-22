@@ -1181,6 +1181,65 @@ class HarnessContext(BaseModel):
     Typed `Any` per the C-RT-04 Protocol-vs-concrete-narrowing pattern
     (mirrors `sub_agent_dispatcher` + `tracer_provider`)."""
 
+    # Stage 3a CP_CLIENTS (extended at U-RT-72 per spec v1.16 §4 C-RT-04).
+    mcp_client_host: Any
+    """H_T-as-MCP-client host (U-RT-63/64/65/66 — concretized by
+    `harness_runtime.lifecycle.mcp_client_host.MCPClientHost`).
+
+    Materialized at stage 3a by `materialize_mcp_client_host_stage` (U-RT-73).
+    Distinct primitive from `ctx.mcp_host` (the H_T-as-MCP-server stage-2
+    surface per U-RT-15) — `mcp_host` hosts H_T's tools for external MCP
+    clients; `mcp_client_host` consumes external MCP servers' tools at H_T's
+    `TOOL_STEP` dispatch site. Spec §14.9.2 inv 4: ctx.mcp_host ≠ ctx.mcp_client_host.
+
+    Typed `Any` per the C-RT-04 Protocol-vs-concrete-narrowing pattern to
+    avoid the `lifecycle.mcp_client_host → types` import cycle (matches
+    existing `sub_agent_dispatcher` precedent at v1.11).
+    """
+
+    # Stage 5 LOOP_INIT (extended at U-RT-72 per spec v1.16 §4 C-RT-04).
+    tool_dispatcher: Any
+    """`TOOL_STEP` dispatch entry point — the C-RT-21 §14.11 retry-wrap
+    wrapper around the bare C-RT-19 `RuntimeToolDispatcher` (concretized by
+    `harness_runtime.lifecycle.retry_breaker_tool.RetryBreakerToolDispatcher`).
+
+    Materialized at stage 5 by `materialize_runtime_tool_dispatcher_stage`
+    (U-RT-75). The bare `RuntimeToolDispatcher` is private to the wrapper
+    (constructor arg per spec §14.9.6 invariant 6); not surfaced here.
+    Mirrors the §14.6 wrap-binding pattern at `ctx.llm_dispatcher`.
+
+    Typed `Any` per the C-RT-04 Protocol-vs-concrete-narrowing pattern to
+    avoid the `lifecycle.retry_breaker_tool → types` import cycle.
+    """
+
+    per_server_trust_evaluator: Any
+    """CP-axis per-server trust evaluator (U-CP-68 — concretized by
+    `harness_cp.per_server_trust_evaluator.PerServerTrustEvaluator`).
+
+    Materialized at stage 5 within
+    `materialize_runtime_tool_dispatcher_stage` (U-RT-75) step 1 from
+    `config.trust_policy` (or `TrustPolicy.default()` if `None`). Consumed
+    by the bare `RuntimeToolDispatcher.dispatch` step 2 per-server-trust
+    gate per spec §14.9.2 inv 2.
+
+    Typed `Any` per the C-RT-04 narrowing pattern (consistent with the
+    other stage-5 sibling fields).
+    """
+
+    mcp_namespace_emitter: Any
+    """CP-axis MCP namespace emitter (U-CP-69 — concretized by
+    `harness_cp.mcp_client_namespace_emitter.MCPClientNamespaceEmitter`).
+
+    Materialized at stage 5 within
+    `materialize_runtime_tool_dispatcher_stage` (U-RT-75) step 2 from
+    `ctx.mcp_client_host.tool_registry`. Consumed by the bare
+    `RuntimeToolDispatcher` mid-dispatch to emit the canonical 7-attribute
+    `mcp.*` namespace on the `mcp.tool.call` span per C-AS-14 §14.3.
+
+    Typed `Any` per the C-RT-04 narrowing pattern (consistent with the
+    other stage-5 sibling fields).
+    """
+
     step_dispatchers: _CpStepDispatcherRegistry
     """Step-kind routing registry (U-RT-59; C-RT-17 §14.7.1 + §14.7.7).
 
