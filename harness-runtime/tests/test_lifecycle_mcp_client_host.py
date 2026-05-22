@@ -1,24 +1,26 @@
 """U-RT-63 — `MCPClientHost` class skeleton + transport selector.
+U-RT-64 — `MCPClientHost.start()` STDIO subprocess lifecycle + list_tools.
 
-Per `Implementation_Plan_Harness_Runtime_v2_11.md` §1 U-RT-63 ACs:
-1. `__init__` accepts transport literal + raises `ValueError` on unknown
-2. `MCPHostHealth` dataclass instantiable with all 6 fields per §14.9.1
-3. `tool_registry` property raises `MCPHostNotStartedError` before `start()`
-4. Importable; pyright strict
-5. Coverage ≥ 90% on the skeleton
+Per `Implementation_Plan_Harness_Runtime_v2_11.md` §1 U-RT-63 + U-RT-64 ACs.
 """
 
 from __future__ import annotations
 
 import pytest
+from contextlib import asynccontextmanager
 
+from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
+from harness_as.tool_contract import ToolContract
 from harness_cp.cp_shared_types import MCPTrustTier
+from mcp.server.fastmcp import FastMCP
+from mcp.shared.memory import create_connected_server_and_client_session
 
 from harness_runtime.lifecycle.mcp_client_host import (
     MCPClientHost,
     MCPHostAlreadyStartedError,
     MCPHostHealth,
     MCPHostNotStartedError,
+    MCPHostStartupError,
 )
 
 
@@ -119,60 +121,278 @@ def test_module_exports_public_surface() -> None:
     assert "MCPTransport" in mod.__all__
 
 
-# ---------- AC #5 — skeleton methods raise NotImplementedError --------------
+# ---------- typed errors ----------------------------------------------------
+
+
+def test_typed_errors_are_runtime_error_subclasses() -> None:
+    assert issubclass(MCPHostAlreadyStartedError, RuntimeError)
+    assert issubclass(MCPHostNotStartedError, RuntimeError)
+    assert issubclass(MCPHostStartupError, RuntimeError)
 
 
 @pytest.mark.asyncio
-async def test_start_raises_not_implemented_pre_u_rt_64() -> None:
-    host = MCPClientHost(
-        transport="stdio",
-        server_name="srv-1",
-        trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
-        transport_config={},
-    )
-    with pytest.raises(NotImplementedError, match="U-RT-64"):
-        await host.start()
-
-
-@pytest.mark.asyncio
-async def test_health_check_raises_not_implemented_pre_per_transport() -> None:
+async def test_health_check_pre_start_raises_not_started() -> None:
     host = MCPClientHost(
         transport="streamable_http",
         server_name="srv-1",
         trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
         transport_config={},
     )
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(MCPHostNotStartedError):
         await host.health_check()
 
 
 @pytest.mark.asyncio
-async def test_shutdown_raises_not_implemented_pre_per_transport() -> None:
+async def test_call_tool_pre_start_raises_not_started() -> None:
     host = MCPClientHost(
         transport="sse",
         server_name="srv-1",
         trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
         transport_config={},
     )
-    with pytest.raises(NotImplementedError):
-        await host.shutdown()
+    with pytest.raises(MCPHostNotStartedError):
+        await host.call_tool("some_tool", {}, "idempotency-1")
 
 
 @pytest.mark.asyncio
-async def test_call_tool_raises_not_implemented_pre_per_transport() -> None:
+async def test_shutdown_before_start_is_noop() -> None:
     host = MCPClientHost(
         transport="stdio",
         server_name="srv-1",
         trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
         transport_config={},
     )
-    with pytest.raises(NotImplementedError):
-        await host.call_tool("some_tool", {}, "idempotency-1")
+    # Should not raise — graceful no-op per impl.
+    await host.shutdown()
+    assert host.started is False
 
 
-# ---------- AlreadyStartedError typed (used by U-RT-64) ---------------------
+# ---------- U-RT-64 — end-to-end start() via in-memory session --------------
 
 
-def test_already_started_error_is_runtime_error_subclass() -> None:
-    assert issubclass(MCPHostAlreadyStartedError, RuntimeError)
-    assert issubclass(MCPHostNotStartedError, RuntimeError)
+def _build_test_fastmcp_server() -> FastMCP:
+    """Construct an in-memory FastMCP server with a known tool registered."""
+    server = FastMCP(name="test-mcp-srv")
+
+    @server.tool(description="A test echo tool — returns the input verbatim.")
+    def echo(message: str) -> str:
+        return f"echoed: {message}"
+
+    @server.tool(description="A test add tool — returns x + y.")
+    def add(x: int, y: int) -> int:
+        return x + y
+
+    return server
+
+
+def _make_tool_contract_converter():
+    """Build a converter that maps MCP tools → AS ToolContract with a
+    conservative default (TIER_2 + READ_ONLY) for testing."""
+
+    def convert(tool: object) -> ToolContract:
+        name = getattr(tool, "name")
+        description = getattr(tool, "description", "")
+        input_schema = getattr(tool, "inputSchema", None) or {"type": "object"}
+        output_schema = getattr(tool, "outputSchema", None) or {"type": "object"}
+        return ToolContract(
+            name=name,
+            description=description or "",
+            input_schema=input_schema,
+            output_schema=output_schema,
+            minimum_tier=SandboxTier.TIER_2_CONTAINER,
+            blast_radius_tier=BlastRadiusTier.READ_ONLY,
+        )
+
+    return convert
+
+
+def _make_session_factory(server: FastMCP):
+    @asynccontextmanager
+    async def factory():
+        async with create_connected_server_and_client_session(
+            server,
+            raise_exceptions=True,
+        ) as session:
+            yield session
+
+    return factory
+
+
+@pytest.mark.asyncio
+async def test_start_populates_registry_and_completes_handshake() -> None:
+    """AC #1 + #2 (STDIO branch): start() spawns + handshake + list_tools."""
+    server = _build_test_fastmcp_server()
+    host = MCPClientHost(
+        transport="stdio",
+        server_name="test-mcp-srv",
+        trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
+        transport_config={"command": "unused-bypassed-by-session-factory"},
+        tool_contract_converter=_make_tool_contract_converter(),
+        session_context_factory=_make_session_factory(server),
+    )
+    try:
+        await host.start()
+        assert host.started is True
+        registry = host.tool_registry
+        assert len(registry) == 2
+        assert "echo" in {str(n) for n in registry.names()}
+        assert "add" in {str(n) for n in registry.names()}
+    finally:
+        await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_double_start_raises_already_started() -> None:
+    """AC #4: idempotent re-start() raises MCPHostAlreadyStartedError."""
+    server = _build_test_fastmcp_server()
+    host = MCPClientHost(
+        transport="stdio",
+        server_name="test-mcp-srv",
+        trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
+        transport_config={"command": "unused"},
+        tool_contract_converter=_make_tool_contract_converter(),
+        session_context_factory=_make_session_factory(server),
+    )
+    try:
+        await host.start()
+        with pytest.raises(MCPHostAlreadyStartedError):
+            await host.start()
+    finally:
+        await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_start_failure_wraps_in_startup_error() -> None:
+    """AC #3: start() failure raises RT-FAIL-MCP-HOST-STARTUP."""
+
+    @asynccontextmanager
+    async def failing_factory():
+        raise RuntimeError("simulated transport failure")
+        yield  # pragma: no cover
+
+    host = MCPClientHost(
+        transport="stdio",
+        server_name="test-mcp-srv",
+        trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
+        transport_config={"command": "unused"},
+        tool_contract_converter=_make_tool_contract_converter(),
+        session_context_factory=failing_factory,
+    )
+    with pytest.raises(MCPHostStartupError) as exc_info:
+        await host.start()
+    assert "RT-FAIL-MCP-HOST-STARTUP" in str(exc_info.value)
+    assert "simulated transport failure" in str(exc_info.value)
+    assert host.started is False
+
+
+@pytest.mark.asyncio
+async def test_default_converter_raises_on_production_misconfig() -> None:
+    """The default converter raises (loud-on-misconfig discipline)."""
+    server = _build_test_fastmcp_server()
+    host = MCPClientHost(
+        transport="stdio",
+        server_name="test-mcp-srv",
+        trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
+        transport_config={"command": "unused"},
+        # NOT supplying tool_contract_converter — should hit default.
+        session_context_factory=_make_session_factory(server),
+    )
+    with pytest.raises(MCPHostStartupError) as exc_info:
+        await host.start()
+    # The startup error wraps a LookupError from the default converter.
+    assert isinstance(exc_info.value.__cause__, LookupError)
+
+
+@pytest.mark.asyncio
+async def test_health_check_post_start_returns_alive() -> None:
+    """AC #2 (parity for HTTP/SSE units): health_check returns liveness."""
+    server = _build_test_fastmcp_server()
+    host = MCPClientHost(
+        transport="stdio",
+        server_name="test-mcp-srv",
+        trust_tier=MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT,
+        transport_config={"command": "unused"},
+        tool_contract_converter=_make_tool_contract_converter(),
+        session_context_factory=_make_session_factory(server),
+    )
+    try:
+        await host.start()
+        health = await host.health_check()
+        assert health.alive is True
+        assert health.transport == "stdio"
+        assert health.server_name == "test-mcp-srv"
+        assert health.trust_tier is MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT
+        assert health.last_ping_ms >= 0
+    finally:
+        await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_call_tool_post_start_invokes_tool() -> None:
+    """AC #5: integration test against in-memory mock — call_tool works."""
+    server = _build_test_fastmcp_server()
+    host = MCPClientHost(
+        transport="stdio",
+        server_name="test-mcp-srv",
+        trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
+        transport_config={"command": "unused"},
+        tool_contract_converter=_make_tool_contract_converter(),
+        session_context_factory=_make_session_factory(server),
+    )
+    try:
+        await host.start()
+        result = await host.call_tool(
+            "echo", {"message": "hello"}, "idem-1"
+        )
+        assert result["isError"] is False
+        # The FastMCP echo returns "echoed: hello"; surfaced in content blocks.
+        content_text = "".join(
+            (b.get("text") if isinstance(b, dict) else "") or ""
+            for b in result["content"]
+        )
+        assert "echoed: hello" in content_text
+    finally:
+        await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_call_tool_arithmetic_via_in_memory_server() -> None:
+    """Second call_tool exercise — verifies multi-tool dispatch + arg shapes."""
+    server = _build_test_fastmcp_server()
+    host = MCPClientHost(
+        transport="stdio",
+        server_name="test-mcp-srv",
+        trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
+        transport_config={"command": "unused"},
+        tool_contract_converter=_make_tool_contract_converter(),
+        session_context_factory=_make_session_factory(server),
+    )
+    try:
+        await host.start()
+        result = await host.call_tool("add", {"x": 2, "y": 3}, "idem-2")
+        assert result["isError"] is False
+    finally:
+        await host.shutdown()
+
+
+# ---------- production-path STDIO transport_config validation ---------------
+
+
+def test_stdio_transport_config_requires_command_str() -> None:
+    """Direct unit on the STDIO connection-context constructor — validates
+    that `transport_config` carries a non-empty str `command`."""
+    host = MCPClientHost(
+        transport="stdio",
+        server_name="srv",
+        trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
+        transport_config={},  # missing 'command'
+        tool_contract_converter=_make_tool_contract_converter(),
+    )
+    # Build the context manager and drive its first step to surface the
+    # ValueError out of the context body.
+    cm = host._stdio_connection_context()
+    with pytest.raises(ValueError, match="requires str 'command'"):
+        # __aenter__ is what would be invoked by AsyncExitStack; calling
+        # it bypasses the need for an event loop here.
+        import asyncio
+        asyncio.run(cm.__aenter__())
