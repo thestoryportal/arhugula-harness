@@ -31,14 +31,18 @@ verbatim into v1.3); ADR-D5 v1.3 §1.3 + §1.3.1.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any, Protocol, runtime_checkable
 
 from harness_core.identity import EntryID
 from pydantic import BaseModel, ConfigDict
 
-from harness_cp.handoff_context import HandoffContext, ProposedAction
+from harness_cp.handoff_context import ProposedAction
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.topology_pattern import CascadePolicy
+from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 
 
 class HITLPlacementKind(StrEnum):
@@ -155,27 +159,110 @@ class HITLPlacement(BaseModel):
     budget. `Duration` rendered as `int`; concrete type deferred per §17.3."""
 
 
-def hitl_gate(
-    placement: HITLPlacementKind,
-    handoff_context: HandoffContext,
-    response_palette: set[HITLResponse],
-    timeout: int | None,
-    cascade_policy: CascadePolicy,
-) -> HITLResult:
-    """The HITL topology-primitive interface signature (C-CP-17 §17.1.1).
+@runtime_checkable
+class AskUserQuestionSurface(Protocol):
+    """Structural surface for HITL question delivery (U-RT-60 binding pin).
 
-    Five parameters verbatim; returns `HITLResult` (6 fields). `response_palette`
-    is a `Set[HITLResponse]` (NOT a `List`) — the palette is a set per the
-    U-CP-48 restriction rule. `timeout` is `None` for sync-blocking cells and
-    bounded for durable-async cells per C-CP-21 §21.3.
-
-    This is an **interface signature**. The concrete gate-delivery mechanism
-    (cell synchrony, durable-async signal-and-wait) is composed by U-CP-39
-    (HITL-as-tool-call rewriting) and U-CP-52 (timeout-degradation). C-CP-17
-    §17.1.1 commits the signature shape only; this unit declares the contract
-    surface.
+    Declared here as a CP-side Protocol so the §17.4 canonical `hitl_gate`
+    signature does not introduce a CP → runtime package dependency.
+    Concretized by
+    `harness_runtime.lifecycle.mcp_backed_ask_user_question_surface.MCPBackedAskUserQuestionSurface`
+    (and the broader `AskUserQuestionSurface` Protocol declared at
+    `harness_runtime.lifecycle.ask_user_question_surface`); structural
+    duck-typing satisfies this CP-side declaration.
     """
+
+    async def ask(self, *args: Any, **kwargs: Any) -> Any:
+        """Deliver a HITL question; return the operator response payload."""
+        ...
+
+
+@dataclass(frozen=True)
+class HITLGateResult:
+    """Typed return envelope for the canonical §17.4 `hitl_gate(...)` signature.
+
+    Reuses the C-CP-16 §16.1 4-response palette (`HITLResponse`). Response-
+    conditional fields are populated only when `response` matches their
+    discipline per C-CP-16 §16.2:
+
+    - `edited_proposal`: populated iff `response == EDIT`
+    - `rejection_reason`: populated iff `response == REJECT`
+    - `response_text`: populated iff `response == RESPOND`
+
+    `response_latency_ms` carries the end-to-end gate-delivery wall-clock
+    latency; `timed_out` is True on bounded-timeout exhaustion per
+    C-CP-21 §21.3.
+    """
+
+    response: HITLResponse
+    edited_proposal: Mapping[str, Any] | None
+    rejection_reason: str | None
+    response_text: str | None
+    response_latency_ms: int
+    timed_out: bool
+
+
+async def hitl_gate(
+    placement: HITLPlacement,
+    step: WorkflowStep,
+    step_context: StepExecutionContext,
+    *,
+    surface: AskUserQuestionSurface,
+    palette: frozenset[HITLResponse] | None = None,
+    timeout: int | None = None,
+) -> HITLGateResult:
+    """Canonical §17.4 HITL gate signature (C-CP-17 §17.4 NEW at spec v1.10).
+
+    Pure signature materialization closing the historical
+    `NotImplementedError` left at v1.2 + carried through v1.9. The gate
+    body composition is owned by the runtime-side composer per
+    `Spec_Harness_Runtime_v1.md` v1.13 §14.8 (existing
+    `RuntimeHITLGateComposer`). Callers reaching this CP-side signature
+    are bootstrap / spec-conformance paths that prove the surface is
+    declared; production gate delivery flows through the runtime composer
+    bound at `ctx.sub_agent_dispatcher` + `ctx.llm_dispatcher` wraps.
+
+    Per spec §17.4:
+    - `palette` defaults to the C-CP-16 §16.1 4-response palette when
+      `None` (`frozenset({APPROVE, EDIT, REJECT, RESPOND})`).
+    - `surface` is REQUIRED — operator-injected per U-RT-60. Raises
+      `ValueError` when `surface is None`.
+
+    Raises
+    ------
+    NotImplementedError
+        Production callers MUST go through the runtime-side
+        `RuntimeHITLGateComposer` per C-RT-18 §14.8. This CP-side surface
+        is signature-only.
+    ValueError
+        `surface is None`.
+    """
+    if surface is None:  # type: ignore[truthy-bool]  # operator-injected per AC #5
+        raise ValueError(
+            "hitl_gate(...) `surface` is required per CP spec v1.10 §17.4 "
+            "(injected per U-RT-60 MCPBackedAskUserQuestionSurface)."
+        )
+    _ = placement, step, step_context, palette, timeout
     raise NotImplementedError(
-        "hitl_gate is an interface signature (C-CP-17 §17.1.1); the "
-        "gate-delivery mechanism is composed by U-CP-39 / U-CP-52."
+        "hitl_gate is a canonical §17.4 signature; the gate body is "
+        "composed by the runtime-side RuntimeHITLGateComposer per "
+        "Spec_Harness_Runtime_v1.md v1.13 §14.8 (production callers reach "
+        "the runtime composer via ctx.sub_agent_dispatcher / ctx.llm_dispatcher)."
     )
+
+
+# C-CP-16 §16.1 4-response palette default (per spec §17.4 invariant 2).
+DEFAULT_HITL_PALETTE: frozenset[HITLResponse] = frozenset(
+    {
+        HITLResponse.APPROVE,
+        HITLResponse.EDIT,
+        HITLResponse.REJECT,
+        HITLResponse.RESPOND,
+    }
+)
+"""Canonical 4-response palette default per CP spec v1.10 §17.4 invariant 2.
+
+The §17.4 signature defaults `palette` to `None`; callers that pass `None`
+indicate "use the canonical 4-response default"; the runtime composer
+(C-RT-18 §14.8) applies this default at composition time.
+"""

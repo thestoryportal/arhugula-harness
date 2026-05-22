@@ -74,16 +74,20 @@ def test_placement_triggers_match_spec() -> None:
     )
 
 
-def test_hitl_gate_signature_five_parameters() -> None:
+def test_hitl_gate_signature_six_parameters() -> None:
+    # v1.10 §17.4 (U-CP-71): signature rewritten — async, 6 parameters
+    # (placement, step, step_context, *, surface, palette, timeout);
+    # returns HITLGateResult per spec §17.4 typed return envelope.
     sig = inspect.signature(hitl_gate)
     assert list(sig.parameters) == [
         "placement",
-        "handoff_context",
-        "response_palette",
+        "step",
+        "step_context",
+        "surface",
+        "palette",
         "timeout",
-        "cascade_policy",
     ]
-    assert sig.return_annotation == "HITLResult"
+    assert sig.return_annotation == "HITLGateResult"
 
 
 def test_hitl_result_six_fields() -> None:
@@ -116,9 +120,11 @@ def test_hitl_result_edit_and_respond_fields() -> None:
     assert respond.response_text == "continue"
 
 
-def test_response_palette_is_set() -> None:
+def test_palette_annotation_is_frozenset() -> None:
+    # v1.10 §17.4 (U-CP-71): the palette parameter is now `frozenset` per
+    # spec §17.4 canonical signature (was `set` at v1.9 §17.1.1).
     sig = inspect.signature(hitl_gate)
-    assert sig.parameters["response_palette"].annotation == "set[HITLResponse]"
+    assert sig.parameters["palette"].annotation == "frozenset[HITLResponse] | None"
 
 
 def test_hitl_placement_four_fields() -> None:
@@ -141,12 +147,51 @@ def test_multiple_placements_permitted() -> None:
     assert len(placements) == 2
 
 
-def test_hitl_gate_is_interface_signature() -> None:
-    with pytest.raises(NotImplementedError):
-        hitl_gate(
-            HITLPlacementKind.PRE_ACTION,
-            _HANDOFF,
-            {HITLResponse.APPROVE},
-            None,
-            CascadePolicy.PAUSE,
+def test_hitl_gate_is_signature_only_for_runtime_composer() -> None:
+    # v1.10 §17.4 (U-CP-71): the canonical CP-side signature is signature-
+    # only; production gate body composition lives at C-RT-18 §14.8
+    # (`RuntimeHITLGateComposer`). Calling the CP-side signature directly
+    # raises NotImplementedError with the composer pointer.
+    import asyncio
+
+    from harness_cp.hitl_placement import (
+        HITLPlacement,
+        HITLPlacementKind as _HPK,
+    )
+    from harness_cp.workflow_driver_types import StepKind, WorkflowStep
+
+    class _Surface:
+        async def ask(self, *args: object, **kwargs: object) -> object:
+            return None
+
+    from harness_as.sandbox_tier import SandboxTier
+    from harness_core.identity import StepID
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_cp.workflow_driver_types import StepExecutionContext
+    from harness_is.state_ledger_entry_schema import Actor, ActorClass
+
+    placement = HITLPlacement(position=_HPK.PRE_ACTION)
+    step = WorkflowStep(
+        step_id=StepID("step-001"),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={},
+    )
+    step_context = StepExecutionContext(
+        parent_action_id="workflow:test:step:0",
+        parent_gate_level=GateLevel.AUTO,
+        parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        parent_actor=Actor(actor_class=ActorClass.AGENT, actor_id="test"),
+        parent_entry_hash="",
+        parent_idempotency_key="k",
+        tenant_id=None,
+        step_index=0,
+    )
+    with pytest.raises(NotImplementedError, match="RuntimeHITLGateComposer"):
+        asyncio.run(
+            hitl_gate(
+                placement=placement,
+                step=step,
+                step_context=step_context,
+                surface=_Surface(),
+            )
         )
