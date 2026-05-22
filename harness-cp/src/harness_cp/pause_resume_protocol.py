@@ -176,6 +176,7 @@ def classify_resume(
 import hashlib
 import json
 from collections.abc import Callable
+from typing import Any
 
 from harness_cp.pause_resume_protocol_types import (
     MaterialDiffPolicy,
@@ -435,3 +436,102 @@ def _compute_diff_summary_hash(
     }
     payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# U-CP-65 — pause.captured + resume.attempted span emission
+#
+# Per CP spec v1.11 §26.4 + OD spec v1.9 §C-OD-30.1 (Pattern-P1 byte-exact
+# alignment): 2 spans, 4 attributes each.
+#
+# Module-level emit helpers, caller-side invocation (mirrors U-CP-61
+# validator.* span emission at workflow_driver post-dispatch hook — keeps
+# the PauseResumeProtocol class decoupled from tracer dependencies).
+#
+# Soft-dep on U-OD-51 per CP plan v2.17 §4 (preserved from v2.15): attribute
+# names are runtime-emitted as string literals; OD schema module is NOT
+# imported at runtime. Pattern-P1 alignment verified by integration test
+# against OD canonical schema (test-time only).
+# ---------------------------------------------------------------------------
+
+
+# §C-OD-30.1 resume.outcome 3-class enum values, plus an MVP 4th value for
+# the corruption path not enumerated at OD spec v1.9 §C-OD-30.1. The OD
+# enum lists {resumed, diff_aborted, arbitration_owed}; corruption is a CP
+# fail class (§26.5) but lacks a matching OD outcome value. Caller convention:
+# DO NOT emit resume.attempted span on corruption — corruption is a
+# pre-resume validation failure, not a "resume invoked" event per §26.4
+# trigger. RESUME_OUTCOME_DIFF_ABORTED / ARBITRATION_OWED / RESUMED are
+# the only legal values runtime-emitted; corruption surfaces via fail-class
+# on ResumeResult, not via span outcome.
+RESUME_OUTCOME_RESUMED: str = "resumed"
+RESUME_OUTCOME_DIFF_ABORTED: str = "diff_aborted"
+RESUME_OUTCOME_ARBITRATION_OWED: str = "arbitration_owed"
+
+
+def emit_pause_captured_span(snapshot: PauseSnapshot, *, tracer: Any) -> None:
+    """Emit `pause.captured` span with 4 attributes per OD spec v1.9 §C-OD-30.1.
+
+    AC #1: 4 attributes (pause.reason, pause.snapshot_hash, pause.step_index,
+    pause.state_ledger_anchor) per §26.4 + §C-OD-30.1.
+    AC #3: head=1.0 always-sampled (sampling policy is TracerProvider-level
+    configuration; this helper emits unconditionally; sampling enforced by
+    the provider).
+    AC #4: attribute names byte-exact per OD canonical schema.
+
+    Caller-side invocation per the U-CP-61 pattern: workflow driver invokes
+    `protocol.capture_pause_snapshot(...)`, then this helper with the returned
+    snapshot + driver-held tracer.
+    """
+    with tracer.start_as_current_span("pause.captured") as span:
+        span.set_attribute("pause.reason", snapshot.pause_reason.value)
+        span.set_attribute("pause.snapshot_hash", snapshot.snapshot_hash)
+        span.set_attribute("pause.step_index", snapshot.step_index)
+        span.set_attribute("pause.state_ledger_anchor", snapshot.state_ledger_anchor)
+
+
+def emit_resume_attempted_span(
+    snapshot: PauseSnapshot,
+    result: ResumeResult,
+    *,
+    tracer: Any,
+    diff_policy: MaterialDiffPolicy,
+) -> None:
+    """Emit `resume.attempted` span with 4 attributes per OD spec v1.9 §C-OD-30.1.
+
+    AC #2: 4 attributes (resume.snapshot_hash, resume.diff_detected,
+    resume.diff_policy, resume.outcome) per §26.4 + §C-OD-30.1.
+    AC #3: head=1.0 always-sampled (sampling policy TracerProvider-level).
+    AC #4: attribute names byte-exact per OD canonical schema.
+
+    Caller convention: DO NOT invoke on corruption path. Per the §C-OD-30.1
+    `resume.outcome` enum (resumed / diff_aborted / arbitration_owed),
+    corruption has no matching outcome value — corruption is a pre-resume
+    validation failure surfaced via ResumeResult.fail_class. Workflow driver
+    checks `result.fail_class != CP_FAIL_PAUSE_SNAPSHOT_CORRUPTION` before
+    invoking this helper.
+    """
+    outcome = _derive_resume_outcome(result)
+    with tracer.start_as_current_span("resume.attempted") as span:
+        span.set_attribute("resume.snapshot_hash", snapshot.snapshot_hash)
+        span.set_attribute("resume.diff_detected", result.diff_detected)
+        span.set_attribute("resume.diff_policy", diff_policy.value)
+        span.set_attribute("resume.outcome", outcome)
+
+
+def _derive_resume_outcome(result: ResumeResult) -> str:
+    """Map ResumeResult to §C-OD-30.1 `resume.outcome` 3-class enum value.
+
+    - fail_class CP-FAIL-RESUME-MATERIAL-DIFF-DETECTED → "diff_aborted"
+    - fail_class CP-FAIL-RESUME-OPERATOR-ARBITRATION-OWED → "arbitration_owed"
+    - else (resumed=True or LENIENT-with-diff) → "resumed"
+
+    Corruption fail-class is NOT enumerated at OD §C-OD-30.1 outcome enum;
+    caller-side guard prevents this helper from being invoked on corruption
+    paths (see `emit_resume_attempted_span` docstring).
+    """
+    if result.fail_class == CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED:
+        return RESUME_OUTCOME_DIFF_ABORTED
+    if result.fail_class == CP_FAIL_RESUME_OPERATOR_ARBITRATION_OWED:
+        return RESUME_OUTCOME_ARBITRATION_OWED
+    return RESUME_OUTCOME_RESUMED
