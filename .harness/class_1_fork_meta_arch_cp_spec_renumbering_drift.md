@@ -452,3 +452,49 @@ ZERO cross-axis cascade at v1.3 (H_T-CP-19 single-row scope, all cites within CP
 ---
 
 *End of §13 v1.3 absorbing arc + new sibling fork filing. Fork doc status post-§13: APPLIED-EXCEPT-(H_T-CP-15/16/17 + missing-primitives + §2.2-AS-axis-recurrence). 4 of 7 §10.4 rows APPLIED. 3 rows + §10.5 missing primitives + new §2.2 recurrence carried at follow-on arcs.*
+
+---
+
+## 14. v1.4 absorbing arc — H_T-CP-15/16/17 APPLIED via new-sibling-fork §6 cite shapes (2026-05-23, same session as §13)
+
+**Absorbing arc.** Meta-Arch v1.3 → v1.4 spec-writer arc executed against new sibling fork `.harness/class_1_fork_meta_arch_section_2_2_as_axis_carrier_phantom_cites.md` §6 systems-architect ratified recommendation (operator AskUserQuestion 2026-05-23: ratify all 6 rows + ambiguities a.i + b.i + c.i). Single bundled commit landed Meta-Arch v1.4 + new-sibling-fork §7 application footer + this §14 footer.
+
+**§12.3 disposition replacement.** This fork's §12.3 ratified dispositions for H_T-CP-15/16/17 borrowed Meta-Arch §2.2 H_T-AS-6/7 phantom cites (per `[[fork-meta-arch-section-2-2-as-axis-carrier-phantom-cites]]` §3 cross-fork dependency analysis). New-sibling-fork §6.4.4/§6.4.5/§6.4.6 REPLACE those phantom-bearing dispositions with empirically-verified AS-axis primitive home cites. v1.4 spec-writer applied the REPLACEMENT dispositions, not the §12.3 originals.
+
+**Per-row application status (all 7 §10.4 rows now closed):**
+
+| §10.4 row | v1.4 final disposition | Cite shape applied | Application arc |
+|---|---|---|---|
+| H_T-CP-15 | ✓ APPLIED via new-sibling-fork §6.4.4 | `C-AS-13 + C-AS-14 §14.4 + C-CP-13 §13` / `U-AS-28 + U-AS-31 + U-CP-28..30` | v1.4 (this session) |
+| H_T-CP-16 | ✓ APPLIED via new-sibling-fork §6.4.5 | `C-AS-13 §13.1 row 11 + C-AS-14 §14.7` / `U-AS-28 + U-AS-31` at §2.3 + §5.4 | v1.4 (this session) |
+| H_T-CP-17 | ✓ APPLIED via new-sibling-fork §6.4.6 | `C-AS-13 §13.1 row 10 + C-AS-14 §14.6` / `U-AS-28 + U-AS-31` at §2.3 + §5.4 | v1.4 (this session) |
+| H_T-CP-18 | ✓ APPLIED (carry-forward from v1.1 + v1.2) | §5.4 v1.1 α fix + §2.3 v1.2 re-anchor to C-CP-27 §27 + U-CP-00b | v1.1 + v1.2 |
+| H_T-CP-19 | ✓ APPLIED via §12.3 ratification (clean cites) | `C-CP-19 §19` / `U-CP-26 + U-CP-27 + U-CP-43` at §2.3 + §5.4 | v1.3 (this session, earlier) |
+| H_T-CP-20 | ✓ APPLIED (carry-forward from v1.2) | §2.3 multi-contract anchor augment + §5.4 carrier augment | v1.2 |
+| H_T-CP-21 | ✓ APPLIED (carry-forward from v1.2) | §2.3 anchor augment to C-CP-21 + C-CP-25 + §5.4 U-CP-52 strike | v1.2 |
+
+**§5.8 audit-summary table cumulative status (post-v1.4):**
+
+| Bucket | v1.4 count | Members |
+|---|---|---|
+| Resolved | 6 of 6 H_T-CP-* findings (1 α fix + 5 §5.8 audit findings) | H_T-CP-18 (v1.1) + H_T-CP-20/21 (v1.2) + H_T-CP-19 (v1.3) + H_T-CP-16/17 (v1.4) |
+| Clean (no defect identified) | 17 | (enumerated at §5.8) |
+
+All H_T-CP-* §5.8 phantom-or-partial findings RESOLVED across v1.1 + v1.2 + v1.3 + v1.4. The original Class 1 fork at this doc is functionally CLOSED for all §10.4 row dispositions.
+
+**Fork status post-§14.** APPLIED-EXCEPT-(H_T-CP-15/16/17 + missing-primitives + §2.2-AS-axis-recurrence) → **APPLIED-EXCEPT-missing-primitives**. The §2.2-AS-axis-recurrence + H_T-CP-15/16/17 deferred dispositions both RESOLVED at v1.4 via new sibling fork. §10.5 missing-primitive 4 NEW contracts (§17.4/§25/§26/§27) remain OPEN at separate routing track.
+
+**Pattern density observation.** Across this fork + new sibling fork + 3 prior phantom-cite forks in the 3-session cluster, the consistent surfacing mechanism is **empirical-verification pass at apply-time** rather than at recommendation-authoring time. The fork chain:
+1. `[[fork-sandbox-decision-policy-phantom-cite]]` — surfaced by `spec-writer` empirical grep before commit
+2. `[[fork-u-rt-68-retry-wrap-and-bootstrap-wiring-gap]]` — surfaced by `phase-7-implementation` shape mismatch
+3. `[[fork-h-t-cp-18-phantom-retirement-cite]]` — surfaced by `phase-7-substitution-retirement` cite verification
+4. This fork (`[[fork-meta-arch-cp-spec-renumbering-drift]]`) — surfaced by retirement-event replacement-cite investigation
+5. `[[fork-meta-arch-section-2-2-as-axis-carrier-phantom-cites]]` — surfaced by `spec-writer` apply-time verification of `systems-architect` recommendation's borrowed cite shapes
+
+The structural lesson: every layer in the recommendation → ratification → application chain must perform empirical verification of cited surfaces, because each layer's verification scope is bounded. `systems-architect` reasons against the authority chain but does not always grep the apply-side files; `spec-writer` greps the apply-side files but does not always reason against the upstream authority chain. The FM-1 + FM-3 disciplines at `spec-writer` empirical-verification pass are the critical structural safeguard against cross-layer phantom propagation.
+
+ZERO cross-axis cascade at v1.4. L9-septies + 10-CP-D cluster closes stand. H_T-CP-18 batch-10 RETIRE-READY at `eb4475d` stands. 2751/2751 tests stand.
+
+---
+
+*End of §14 v1.4 absorbing arc. Fork doc status post-§14: APPLIED-EXCEPT-missing-primitives. 7/7 §10.4 rows now APPLIED. New-sibling-fork §6/§7 RESOLVED parallel. §10.5 missing-primitives + per-row retirement filings + parallel-axis audit + §4.4.3 coherence pass carried at follow-on arcs.*

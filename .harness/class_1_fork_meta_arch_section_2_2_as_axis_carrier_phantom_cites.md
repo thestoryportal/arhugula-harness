@@ -299,3 +299,64 @@ grep -nE "§1\.8\.1|six.*attribute namespace|anthropic\.\*.*mcp\.\*.*skill" desi
 ---
 
 *End of §6 systems-architect recommendation. Recommendation appended per skill §4A.3. Operator decides per-row + per-ambiguity at follow-on AskUserQuestion. Fork status preserved as OPEN pending operator ratification + spec-writer absorbing arc.*
+
+---
+
+## 7. v1.4 absorbing-arc application footer (2026-05-23, same session as §6)
+
+**Operator ratification.** AskUserQuestion 2026-05-23 selected "Ratify all 6 rows + all 3 ambiguities per recommended (a.i + b.i + c.i)":
+- All 6 per-row cite shapes at §6.4.1..§6.4.6 ratified verbatim
+- Ambiguity (a.i): preserve H_T-AS-6/7 row split at §2.2 (no row consolidation)
+- Ambiguity (b.i): correct H_T-AS-8 "15-namespace exports" → "6 namespaces per C-AS-14 §14" row-label at this arc
+- Ambiguity (c.i): bundle §2.2 + sibling-fork §2.3/§5.4 at single Meta-Arch v1.3 → v1.4 absorbing arc
+
+**Spec-writer absorbing arc.** Meta-Arch v1.3 → v1.4 applied at single commit this session. Eleven amendment sites: 3 §2.2 + 3 §2.3 + 2 §5.4 + 2 §5.8 per-finding + 1 §5.8 summary. Status block (Version + Status + Date) amended. New §0.4 change-note documenting all sites + preservation + audit + verbatim round-trip + FM checks. ZERO cross-axis cascade per §6.7 + new §0.4. All non-amended sections preserved verbatim from v1.3.
+
+**Per-row application status:**
+
+| §6 row | v1.4 disposition | Cite shape applied |
+|---|---|---|
+| §6.4.1 H_T-AS-6 (§2.2) | ✓ APPLIED | Anchor `C-AS-13 §13.1 row 1 + C-AS-14 §14.4`; carrier `U-AS-28 + U-AS-31`; cross-axis-posture amended for IS binding |
+| §6.4.2 H_T-AS-7 (§2.2) | ✓ APPLIED | Anchor `C-AS-13 §13.1+§13.2 row 1`; carrier `U-AS-28`; cross-axis-posture narrowed |
+| §6.4.3 H_T-AS-8 (§2.2) | ✓ APPLIED | Row label "15-namespace" → "6 namespaces per C-AS-14 §14"; carrier narrowed to `U-AS-28 + U-AS-31` |
+| §6.4.4 H_T-CP-15 (§2.3) | ✓ APPLIED | Anchor `C-AS-13 + C-AS-14 §14.4 + C-CP-13 §13`; carrier `U-AS-28 + U-AS-31 + U-CP-28..30` |
+| §6.4.5 H_T-CP-16 (§2.3 + §5.4 + §5.8) | ✓ APPLIED | Anchor `C-AS-13 §13.1 row 11 + C-AS-14 §14.7`; carrier `U-AS-28 + U-AS-31` at both §2.3 + §5.4; §5.8 disposition RESOLVED at v1.4 |
+| §6.4.6 H_T-CP-17 (§2.3 + §5.4 + §5.8) | ✓ APPLIED | Anchor `C-AS-13 §13.1 row 10 + C-AS-14 §14.6`; carrier `U-AS-28 + U-AS-31` at both §2.3 + §5.4; §5.8 disposition RESOLVED at v1.4 |
+
+**Ambiguity application status:**
+
+| Ambiguity | Ratification | v1.4 disposition |
+|---|---|---|
+| (a) H_T-AS-6/7 row consolidation | a.i — preserve split | ✓ Rows preserved at §2.2; §2.6 catalog aggregate cell preserved |
+| (b) H_T-AS-8 label correction | b.i — in-place correction | ✓ Row label amended at §2.2 line 257 |
+| (c) Bundle scope | c.i — single arc | ✓ Single bundled commit applied |
+
+**§5.8 audit-summary table cumulative status.**
+
+| Bucket | v1.1 baseline | v1.2 | v1.3 | v1.4 |
+|---|---|---|---|---|
+| Resolved at v1.1 α fix | 1 (H_T-CP-18) | 1 | 1 | 1 |
+| Phantom — full row | 3 (H_T-CP-16/17/19) | 3 | 2 (H_T-CP-19 → RESOLVED) | **0** (H_T-CP-16/17 → RESOLVED) |
+| Partial — cite-shape gap | 2 (H_T-CP-20/21) | 2 (both RESOLVED at v1.2 per-finding cells; bucket label unchanged) | 2 | 2 |
+| Clean | 17 | 17 | 17 | 17 |
+| Total H_T-CP-* §5.8 phantom-or-partial findings | 5 | 5 | 5 | 5 |
+| Cumulative RESOLVED | 1 (v1.1 H_T-CP-18) | 3 (+v1.2 H_T-CP-20/21) | 4 (+v1.3 H_T-CP-19) | **6** (+v1.4 H_T-CP-16/17) |
+
+**Cross-fork dependency resolved.** Sibling fork `class_1_fork_meta_arch_cp_spec_renumbering_drift.md` §12.3 phantom-bearing dispositions for H_T-CP-15/16/17 (which borrowed §2.2 H_T-AS-6/7 phantoms) are now REPLACED by this fork's §6.4.4/§6.4.5/§6.4.6 ratified dispositions applied at v1.4. Sibling fork §14 footer appended this session documenting the resolution (status advance PARTIALLY-APPLIED → APPLIED-EXCEPT-missing-primitives).
+
+**Fork status post-§7.** OPEN → **APPLIED**.
+
+**Outstanding items (post-§7).**
+
+1. **§4.4.3 CP-axis classification + H_T-AS-6/7/8 rationale descriptors** (Meta-Arch lines ~427-429 + ~450-452) carry-forward at v1.4 per FM-2 single-scope. Routed to follow-on cross-row coherence-pass arc per Meta-Arch v1.4 §0.4 adjacent defects (i) + (ii). Includes the parallel "15-namespace" stale cite at §4.4.3 H_T-AS-8 row mirror.
+2. **Parallel-axis audit cadence** (per §6 of this fork): §2.1 IS / §2.4 OD / §2.5 CXA carrier-cite columns + §5.2 IS / §5.3 AS / §5.5 OD / §5.6 CXA γ-audit. Operator-discretion timing.
+3. **Sibling-fork §10.5 missing-primitive additions** (4 NEW v1.10/v1.11 contracts: §17.4 hitl_gate / §25 ValidatorFramework / §26 PauseResumeProtocol / §27 MaterialDiffPolicy) remain OPEN at separate routing track.
+4. **Per-row `phase-7-substitution-retirement` re-invocation** for H_T-CP-15/16/17 against v1.4 cite shapes (operator-discretion timing per X-AL-2 criterion verification).
+
+**Pattern reinforcement (5th phantom-cite/mis-anchoring fork in 3-session cluster).** This fork's resolution closes the §2.2 AS-axis recurrence cleanly. Memory pattern at `[[advisor-before-substantive-work-for-cross-axis-blockers]]` trigger surface confirmed expanded per §7 of this fork: borrowing cite shapes from another Meta-Arch section without empirical verification is a phantom-cite vector. Spec-writer FM-1+FM-3 empirical-verification pass at apply-time is the structural safeguard against cross-fork phantom propagation.
+
+ZERO cross-axis cascade. L9-septies + 10-CP-D cluster closes stand. H_T-CP-18 batch-10 RETIRE-READY at `eb4475d` stands. 2751/2751 tests stand.
+
+---
+
+*End of §7 v1.4 absorbing-arc application. Fork doc status post-§7: APPLIED. All §6 ratified amendments landed at Meta-Arch v1.4. Sibling-fork H_T-CP-15/16/17 surface RESOLVED at this fork. Parallel-axis audit + §4.4.3 coherence-pass + §10.5 missing-primitives + per-row retirement filings carried at follow-on arcs.*
