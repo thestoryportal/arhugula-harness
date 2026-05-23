@@ -349,3 +349,66 @@ ZERO cross-axis cascade. L9-septies + 10-CP-D cluster closes stand. H_T-CP-18 v1
 ---
 
 *End of §11 partial ratification. Fork doc status: PARTIALLY-APPLIED. 4 §10.4 rows + §10.5 missing primitives remain OPEN.*
+
+---
+
+## 12. §10.7 tiebreaker resolution + §10.4 deferred-row ratification (2026-05-23, follow-on arc)
+
+**Tiebreaker arc:** Operator authorized "Tiebreaker grep for deferred rows" routing at session resume (AskUserQuestion 2026-05-23 post-checkpoint resume). Empirical investigation against canonical CP plan v2.17 + CP spec v1.11 + (for U-CP-27/43 atomic-unit bodies which live at v2.1/v2.4 amendment layers, since v2.10+ are delta-amendment files) the cumulative cascade.
+
+### 12.1 §10.7 Question (1) — H_T-CP-19 cite shape
+
+**Empirical findings:**
+
+| Unit | Definition site | `Implements:` anchor | Role in C-CP-19 §19 surface |
+|---|---|---|---|
+| U-CP-43 | v2.4 line 435 (most recent amendment); v2.1 line 2289 base | `[C-CP-19 §19.1, §19.2, §19.4]` | **PRIMARY producer** of `gate_level()` 4-axis multiplicative rule + `_hitl_required` + persona-tier floor. The sole CP-corpus unit anchoring directly on C-CP-19 §19 |
+| U-CP-27 | v2.1 line 1388 | `[C-CP-12 §12.2, §12.3, §12.4, §12.5]` | **Consumer** — implements C-CP-12 monotonic-descent + cross-deployment monotonicity composition; `Depends on: [..., U-CP-43, ...]`; consumes `gate_level()` from U-CP-43 at parent dispatch site |
+| U-CP-26 | (default-downgrade rule) | (per v2.x plan) | Upstream sub-input to U-CP-43's per-axis floors |
+
+**Anchor-vs-label gap.** Meta-Arch row label "D5 cross-deployment monotonicity" describes U-CP-27's C-CP-12 §12 composition surface. Anchor cite `C-CP-19 §19` describes U-CP-43's 4-axis multiplicative + cross-deployment monotonicity invariant (per CP spec v1.2 line 1604).
+
+**Operator ratification (AskUserQuestion 2026-05-23, session H_T-CP-15..21 deferred rows arc):** **Union: U-CP-26 + U-CP-27 + U-CP-43** (material-location-resident reading per Meta-Arch v1.1 §5.1.1). Surfaces both the formula producer (U-CP-43) and the cross-deployment monotonicity composition consumers (U-CP-26 + U-CP-27). Aligns with H_T-CP-20 multi-cite pattern absorbed at Meta-Arch v1.2.
+
+### 12.2 §10.7 Question (2) — H_T-CP-15 / H_T-CP-16 / H_T-CP-17 primitive grep
+
+**Empirical findings (canonical CP plan v2.17 + CP spec v1.11):**
+
+| Search term | CP plan v2.17 hits | CP spec v1.11 hits |
+|---|---|---|
+| `memory primitive` | 0 | 0 |
+| `files primitive` | 0 | 0 |
+| `skills primitive` / `skill primitive` | 0 | 0 |
+
+**Default branch confirmed.** Zero CP-corpus carrier for Memory/Files/Skills primitives. Per fork doc §10.4 default branch: STRIKE anchor + cross-axis re-cite to AS-axis primitive home.
+
+**Operator ratification (same AskUserQuestion 2026-05-23):** All 3 rows → **STRIKE** disposition confirmed. Routing for spec-writer arc: bundle all 4 deferred rows (H_T-CP-15/16/17 STRIKE + H_T-CP-19 union-cite) into single Meta-Arch v1.2 → v1.3 absorption arc.
+
+### 12.3 Ratified §10.4 dispositions (bundled spec-writer arc → Meta-Arch v1.3)
+
+| Row | §2.3 anchor cite | §2.3 carrier units | §5.4 retirement-criterion cite | §5.8 disposition |
+|---|---|---|---|---|
+| **H_T-CP-15** | **STRIKE** `C-CP-15 §15`; replace with cross-axis cite `C-AS-05 §5 + C-AS-06 §6 + C-AS-07 §7 (Skills primitive declaration) + C-CP-13 §13 (HandoffContext + SubAgentBrief brief loading)` | **STRIKE** `U-CP-33 → U-CP-37`; replace with `U-AS-20..U-AS-27 (Skills authoring + filesystem residence) + U-CP-28..U-CP-30 (HandoffContext + SubAgentBrief composing skills via brief)` | Same as §2.3 cross-axis cite (material-location-resident reading per v1.1 §5.1.1) | RESOLVED at v1.3 |
+| **H_T-CP-16** | **STRIKE** `C-CP-16 §16` anchor (current C-CP-16 is audit-ledger entry schema, unrelated to memory primitive); replace with cross-axis cite to AS-axis primitive home + observability namespace `C-AS-14 §14 (memory.* namespace export) + AS-axis primitive declarations` (specific cite shape per spec-writer arc; default = AS spec §14 memory.* export) | **STRIKE** existing carrier; cross-axis re-cite to AS-axis primitive consumers + OD observability consumer | Same as §2.3 cross-axis cite | RESOLVED at v1.3 |
+| **H_T-CP-17** | **STRIKE** `C-CP-17 §17` anchor; replace with cross-axis cite `C-AS-14 §14 (files.* namespace export) + AS-axis primitive declarations` (parallel to H_T-CP-16) | **STRIKE** existing carrier; cross-axis re-cite (parallel) | Same as §2.3 cross-axis cite | RESOLVED at v1.3 |
+| **H_T-CP-19** | **PRESERVE** `C-CP-19 §19` anchor (aligned) | **REPLACE** `U-CP-46` with **`U-CP-26 + U-CP-27 + U-CP-43`** (union; per §12.1 tiebreaker) | Same as §2.3 union cite | RESOLVED at v1.3 |
+
+**Spec-writer arc scope:** Single absorption commit landing Meta-Arch v1.2 → v1.3 with the 4-row amendment table above. §2.3 + §5.4 row updates + §5.8 disposition updates (5 row dispositions: 4 RESOLVED at v1.3 + H_T-CP-18/20/21 already RESOLVED at v1.2 — only the 4 new RESOLVED transitions are amended). Preserve verbatim all v1.2 content outside amendment sites. FM-2 no-extension discipline: do NOT add missing-primitive rows (§10.5) — those remain DEFERRED to subsequent arc.
+
+### 12.4 Adjacent items NOT addressed at this arc (FM-2 discipline)
+
+- **§4.4.3 CP-axis classification descriptor refresh** (per v1.2 §0.2 adjacent defect (i)) — descriptor rationale columns for H_T-CP-15/16/17/19 not refreshed at v1.3; routed to follow-on cross-row coherence-pass arc
+- **§10.5 missing primitives** (4 NEW v1.10/v1.11 contracts: §17.4 hitl_gate / §25 ValidatorFramework / §26 PauseResumeProtocol / §27 MaterialDiffPolicy) — remain DEFERRED to systems-architect re-invocation arc (ADD-style additions, not pure cite fixes)
+- **CP-axis substitution count (§4.1 workspace CLAUDE.md cite)** — currently states 21 entries. With H_T-CP-15/16/17 STRIKE dispositions, count becomes 18 entries. Workspace CLAUDE.md §4.1 amendment routed to follow-on session (or bundled with missing-primitive arc that re-establishes count)
+- **Per-axis `harness-cp/CLAUDE.md` §4.1 retirement table** — may reference deferred rows; reconciliation routed to follow-on arc
+- **§5.8 γ-audit appendix follow-on** — Meta-Arch v1.1 §5.8 listed 5 findings (H_T-CP-16/17/19/20/21). At v1.2, H_T-CP-20/21 marked RESOLVED. At v1.3, H_T-CP-16/17/19 will be marked RESOLVED. H_T-CP-15 was NOT in §5.8 (it was identified at fork doc §10.4 as parallel pattern); v1.3 may add a §5.8 footnote noting v1.3 absorbs H_T-CP-15 alongside the original 5 findings
+
+### 12.5 Post-arc fork status
+
+After Meta-Arch v1.3 absorbing arc lands: 7 of 7 §10.4 rows APPLIED; §10.5 missing primitives remain OPEN. Fork status will advance from PARTIALLY-APPLIED → APPLIED-EXCEPT-MISSING-PRIMITIVES. Full close awaits the systems-architect re-invocation arc for §10.5 4-primitive addition (and any subsequent operator-ratification of those additions).
+
+ZERO cross-axis cascade expected from v1.3 absorption (mirrors v1.2 zero-cascade pattern). 2751/2751 tests expected to stand.
+
+---
+
+*End of §12 tiebreaker resolution + ratification. Fork doc status post-§12: PARTIALLY-APPLIED with all 7 §10.4 rows now RATIFIED (3 APPLIED at v1.2 + 4 RATIFIED-AWAITING-v1.3-ABSORBING-ARC). §10.5 missing primitives remain OPEN.*
