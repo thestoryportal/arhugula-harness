@@ -1,7 +1,7 @@
 # Class 1 Fork — Meta-Architecture ↔ CP-spec systemic alignment drift at H_T-CP-15..21
 
 **Filed:** 2026-05-23 at γ-audit follow-on arc post-Meta-Arch v1.1 landing (`40d9f78`) + batch-10 retirement ledger (`eb4475d`).
-**Status:** OPEN — awaiting `systems-architect` skill invocation for cross-artifact alignment recommendation.
+**Status:** PARTIALLY-APPLIED 2026-05-23 — priority-3 rows H_T-CP-18/20/21 APPLIED at Meta-Arch v1.2; 4 §10.4 rows (H_T-CP-15/16/17/19) + §10.5 missing primitives DEFERRED per operator-ratified PER-ROW-RATIFY routing. See §11 ratification footer.
 **Scope:** Phase 7d substitution retirement discipline; halt-execution Class 1 per `Project_Workflow_v1_8.md` §2.7.6 + workspace `CLAUDE.md` §4.3.
 **Surfaced by:** `spec-writer` skill FM-1 no-resolution discipline triggered at empirical investigation of §5.8 γ-audit findings replacement-cite candidates during operator-authorized "α+γ, proceed" follow-on arc. Empirical cross-check of Meta-Arch §2.3 + §5.4 H_T-CP-NN row labels against current CP spec v1.2 base contracts revealed systemic semantic divergence across 4 of 7 rows H_T-CP-15..21.
 **Disposition:** All per-row α-style replacement-cite fixes for §5.8 γ-audit findings (rows H_T-CP-16 / H_T-CP-17 / H_T-CP-19 / H_T-CP-20 / H_T-CP-21) HALTED. NO further Meta-Arch §5.4 amendment beyond the v1.1 H_T-CP-18 α fix already landed. Routing target: `systems-architect` skill for cross-artifact alignment recommendation, NOT `spec-writer` skill for per-row mechanical fix (which would silently absorb a deeper architectural divergence per FM-1).
@@ -308,3 +308,44 @@ Recommendation: **PER-ROW-RATIFY with §10.4 H_T-CP-18 + H_T-CP-20 + H_T-CP-21 p
 ---
 
 *End of systems-architect recommendation §10. Per skill §4A.3 + workspace CLAUDE.md §4.3: this recommendation is APPENDED to the Class 1 fork doc; the fork stands OPEN until operator ratifies per-row dispositions and spec-writer absorbs at Meta-Arch v1.2.*
+
+---
+
+## 11. Partial ratification 2026-05-23 — priority-3 rows APPLIED at Meta-Arch v1.2
+
+**Status:** OPEN → **PARTIALLY-APPLIED**.
+
+**Applied dispositions (3 of 7 §10.4 rows):**
+
+- ✓ **H_T-CP-18 §2.3 row** — anchor re-anchored from stale `C-CP-18 §18` → `C-CP-27 §27`; carrier units re-pointed from stale `U-CP-45` → `U-CP-00b`
+- ✓ **H_T-CP-20 §2.3 + §5.4 rows** — anchor augmented to `C-CP-16 §16 + C-CP-17 §17 + §17.4 + C-CP-20 §20`; carrier/retirement cites augmented to `U-CP-37 + U-CP-38 + U-CP-39 + U-CP-46`
+- ✓ **H_T-CP-21 §2.3 + §5.4 rows** — anchor augmented to `C-CP-21 §21 + C-CP-25 §25`; `U-CP-52` STRUCK from carrier/retirement cites
+
+**Absorbing arc:** Meta-Arch v1.1 → v1.2 at this session. Spec-writer skill applied 6 amendment sites (3 §2.3 + 2 §5.4 + 1 §5.8 disposition update) per operator-ratified PER-ROW-RATIFY priority-3 dispositions (AskUserQuestion 2026-05-23).
+
+**Deferred dispositions (4 of 7 §10.4 rows + missing-primitive surfacing at §10.5):**
+
+- ⏸ **H_T-CP-15** (Skills enabling discipline) — STRIKE C-CP-15 §15 anchor; cross-axis re-cite to AS-axis. Awaiting follow-on arc.
+- ⏸ **H_T-CP-16** (Memory primitives + memory.*) — STRIKE OR cross-axis cite only. Tiebreaker §10.7 (2) required: empirical grep for CP-axis memory PRIMITIVE.
+- ⏸ **H_T-CP-17** (Files primitives + files.*) — same as H_T-CP-16. Tiebreaker §10.7 (2) required.
+- ⏸ **H_T-CP-19** (D5 cross-deployment monotonicity) — REPLACE U-CP-46 cite with U-CP-26 + U-CP-27. Tiebreaker §10.7 (1) required: U-CP-27 vs U-CP-43 cite shape.
+- ⏸ **Missing primitives §10.5** — 4 NEW v1.10/v1.11 contracts (§17.4 hitl_gate / §25 C-CP-25 / §26 C-CP-26 / §27 MaterialDiffPolicy) owed Meta-Arch §2.3 + §5.4 rows. Awaiting follow-on arc.
+
+**Routing for deferred dispositions:**
+
+1. Tiebreaker resolution arc — operator-discretion timing; empirical grep for §10.7 questions.
+2. Per-row spec-writer arcs for H_T-CP-15/16/17/19 (4 rows) following tiebreaker resolution.
+3. Missing-primitive addition arc(s) — possibly bundled with §10.5 systems-architect re-invocation for missing-primitive row authoring (these are ADD-style additions, not pure cite fixes).
+4. Cross-row coherence-pass audit at §4.4.3 CP-axis classification (per v1.2 §0.2 adjacent defect (i)) — refresh "Brief rationale" descriptors against current retirement-status transitions.
+
+**Fork status post-this-arc:** Class 1 PARTIALLY-APPLIED. The fork remains OPEN for the 4 deferred §10.4 rows + missing-primitive §10.5 additions. Subsequent ratification arcs will append further §N sections documenting each disposition application.
+
+**Meta-Arch v1.2 commits at this session:**
+- Spec-writer absorption commit: (this session, immediately following this fork-doc update)
+- Fork-doc PARTIALLY-APPLIED status update: (this session)
+
+ZERO cross-axis cascade. L9-septies + 10-CP-D cluster closes stand. H_T-CP-18 v1.1 α fix + batch-10 RETIRE-READY at `eb4475d` stand. 2751/2751 tests stand.
+
+---
+
+*End of §11 partial ratification. Fork doc status: PARTIALLY-APPLIED. 4 §10.4 rows + §10.5 missing primitives remain OPEN.*
