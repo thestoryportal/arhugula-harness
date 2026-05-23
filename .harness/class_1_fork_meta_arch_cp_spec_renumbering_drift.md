@@ -498,3 +498,165 @@ ZERO cross-axis cascade at v1.4. L9-septies + 10-CP-D cluster closes stand. H_T-
 ---
 
 *End of §14 v1.4 absorbing arc. Fork doc status post-§14: APPLIED-EXCEPT-missing-primitives. 7/7 §10.4 rows now APPLIED. New-sibling-fork §6/§7 RESOLVED parallel. §10.5 missing-primitives + per-row retirement filings + parallel-axis audit + §4.4.3 coherence pass carried at follow-on arcs.*
+
+---
+
+## §15 — §10.5 missing-primitive systems-architect recommendation per skill §4A.3 (2026-05-23)
+
+### §15.1 Tension statement
+
+§10.5 surfaces 4 NEW v1.10/v1.11 CP spec contracts as missing-primitive candidates for Meta-Arch §2.3 + §5.4 representation. Empirical verification at this filing reduces the enumeration to **3 distinct primitives across 3 existing §2.3 + §5.4 rows**:
+
+| Candidate | Substrate locus (empirically verified at HEAD `4ea4ac4`) | Meta-Arch v1.4 coverage |
+|---|---|---|
+| §17.4 NEW `hitl_gate` canonical signature | CP spec v1.10 §17.4 (extends C-CP-17 §17); `harness-cp/src/harness_cp/hitl_placement.py:205 async def hitl_gate(...)` | H_T-CP-20 anchor cites `§17.4` (v1.2 augmentation) ✓; carrier set MISSING **U-CP-71** |
+| §25 NEW C-CP-25 ValidatorFramework | CP spec v1.10 §25 (NEW C-CP-25 + 5-class enums + envelope + 4-span emission); `harness-cp/src/harness_cp/validator_framework.py` + `validator_framework_types.py` | H_T-CP-21 anchor cites `C-CP-25 §25` (v1.2 augmentation) ✓; carrier set MISSING **U-CP-58..U-CP-61** |
+| §26 NEW C-CP-26 PauseResumeProtocol | CP spec v1.10 §26 (NEW C-CP-26 + WorkflowPauseReason 5-class + MaterialDiffPolicy 3-class + PauseSnapshot + ResumeResult) + v1.11 §26.2 enum rename + §26 NEW NOTE coexistence; `harness-cp/src/harness_cp/pause_resume_protocol.py` + `pause_resume_protocol_types.py` | H_T-CP-22 anchor cites **C-CP-22 §22 ONLY** (engine-layer; v1.10 §26 workflow-layer surface NOT cited); carrier set MISSING **U-CP-62..U-CP-65** |
+| **§10.5 row-4 DRIFT FINDING** — "§27 NEW C-CP-27 MaterialDiffPolicy" | DRIFT — MaterialDiffPolicy is at §26.2, NOT §27. CP spec v1.10 §27 = C-CP-27 PerServerTrustEvaluator + MCPClientNamespaceEmitter (already at H_T-CP-18 v1.2 re-anchor). Verified at CP spec v1.10 §26.2 line 321 + landed code `pause_resume_protocol_types.py:70` | Subsumed under row 3 above (§26.2 MaterialDiffPolicy → H_T-CP-22 augmentation) |
+
+The fork doc §10.5 4-row enumeration was authored before empirical landed-code verification was feasible (v1.10 contracts not yet materialized at filing time). 3 of the 4 rows resolve to existing-row augmentation; the 4th row resolves to drift (MaterialDiffPolicy mis-located at §27).
+
+### §15.2 Per-artifact authority-chain placement
+
+Per workspace `CLAUDE.md` §1.3: ADR → ADD v1.3 → PRD v1.1 → per-axis spec v1.x → per-axis plan v2.x + CXA v2.1. Earlier is canonical.
+
+| Primitive | Authority chain placement |
+|---|---|
+| §17.4 hitl_gate | ADR-D1 v1.2 (HITL primitive) → ADD §HITL → CP spec v1.10 §17 (C-CP-17 HITLPlacement schema) + §17.4 (NEW v1.10 signature materialization) → CP plan v2.17 U-CP-71 (cluster 10-CP-D L0) |
+| §25 ValidatorFramework | ADR-D3 v1.2 (Validation contract) → ADD §Validation → CP spec v1.10 §25 (NEW C-CP-25) → CP plan v2.17 U-CP-58..U-CP-61 (cluster 10-CP-A) |
+| §26 PauseResumeProtocol | ADR-D5 v1.4 (Topology pattern — pause/resume) + ADR-F4 v1.1 (Workflow lifecycle) → ADD §PauseResume → CP spec v1.10 §26 + v1.11 §26.2 + §26 NEW NOTE → CP plan v2.17 U-CP-62..U-CP-65 (cluster 10-CP-B) |
+
+All 3 primitives anchor at the per-axis-spec layer — the highest-authority artifact below ADRs that speaks to their contract surface. Per Meta-Arch v1.4 §2 column semantic, the spec-layer surface is the canonical anchor for §2.3 + §5.4 row representation.
+
+### §15.3 §2-discipline analysis
+
+**Five-axis decomposition.** All 3 primitives are **CP-axis** at the spec layer. All belong in §2.3 + §5.4 CP sub-tables.
+
+**Probabilistic-deterministic boundary.** All 3 are deterministic-side:
+- `hitl_gate`: typed Pydantic v2 signature; deterministic 4-response palette eval
+- `ValidatorFramework`: deterministic outcome→action mapping; bijective enum-driven gate
+- `PauseResumeProtocol`: typed envelope-passing + content-hash material-diff detection
+
+Per skill §2.2, deterministic-side primitives produce production-reliability surface — correctly placed in CP-axis.
+
+**Decision ordering.** All 3 are **derivative (D-class)**:
+- `hitl_gate` materializes the canonical signature for existing C-CP-17 §17 HITLPlacement (D1-derived) — pure signature work, NO new contract surface
+- `ValidatorFramework` augments validator surface at existing C-CP-21 ValidatorFailClass — D-class framework wrapping existing taxonomy
+- `PauseResumeProtocol` introduces NEW workflow-layer contract coexisting with engine-layer C-CP-22 (per v1.11 §26 NEW NOTE) — D-class derived from ADR-D5
+
+No primitive is F-class; no new ADR authoring required; all 3 absorbable via row-augmentation pattern per §10.4 precedent.
+
+**Cross-axis verification.**
+- §17.4 hitl_gate: CP-internal at runtime (composer body owned by C-RT-18 §14.8 per CP spec v1.10 §17.4 note); no cross-axis cite drift
+- §25 ValidatorFramework: emits `validator.*` 11-attribute namespace per OD spec v1.9 C-OD-29 (cross-axis observable at H_T-OD-2 OTel-substrate). U-OD-50 is the cross-axis observability carrier — **does NOT belong** in §5.4 H_T-CP-21 retirement cite per axis-row semantic (namespace ownership scope = H_T-OD-2). Cross-axis composition already covered at H_T-CXA-4 OD→CP edge (CXA v2.8 §2.3.7)
+- §26 PauseResumeProtocol: emits `pause.*` / `resume.*` per OD spec v1.9 §C-OD-30.1. U-OD-51 is the cross-axis observability carrier — same axis-row exclusion. **Note:** U-OD-51 is currently cross-axis blocked per `[[fork-u-cp-72-cost-and-pause-resume-prefix-gap]]` PauseResumeAuditPayload prefix unblock — not blocking this recommendation, since U-OD-51 is NOT cited at §5.4 CP-axis row
+
+### §15.4 Per-row recommended cite shapes
+
+#### Row 1 — H_T-CP-20 (HITL primitive + 4-response palette + `hitl.*` / `audit.*`)
+
+**Current state at v1.4:**
+- §2.3 anchor: `C-CP-16 §16 + C-CP-17 §17 + §17.4 + C-CP-20 §20` (v1.2 augmentation — already cites §17.4)
+- §2.3 + §5.4 carriers: `U-CP-37 + U-CP-38 + U-CP-39 + U-CP-46`
+
+**Recommended amendment (cite-shape correction only):**
+- §2.3 anchor: **PRESERVE** (already cites §17.4 at v1.2)
+- §2.3 + §5.4 carriers: **AUGMENT** → `U-CP-37 + U-CP-38 + U-CP-39 + U-CP-46 + U-CP-71`
+
+**Justification.** v1.2 anchor augmentation cited §17.4 but carrier set did not yet include the §17.4 implementer (which had not landed at v1.2 filing time). U-CP-71 materializes the canonical `hitl_gate(...)` signature per CP spec v1.10 §17.4, landed at closure-arc commit `5d67959` (cluster 10-CP-D L0). Single-token carrier augmentation; no anchor change; no retirement-status regression (H_T-CP-20 RETIRED at batch-9 stands).
+
+**Empirical verification at HEAD `4ea4ac4`:** `harness-cp/src/harness_cp/hitl_placement.py:205 async def hitl_gate(...)` ✓
+
+#### Row 2 — H_T-CP-21 (ValidatorFailClass 5-class + operator-burden eval primitive)
+
+**Current state at v1.4:**
+- §2.3 anchor: `C-CP-21 §21 + C-CP-25 §25` (v1.2 augmentation — already cites C-CP-25)
+- §2.3 + §5.4 carriers: `U-CP-47, U-CP-48, U-CP-51` (v1.2 with U-CP-52 STRIKE)
+
+**Recommended amendment (cite-shape correction only):**
+- §2.3 anchor: **PRESERVE** (already cites C-CP-25 at v1.2)
+- §2.3 + §5.4 carriers: **AUGMENT** → `U-CP-47 + U-CP-48 + U-CP-51 + U-CP-58 + U-CP-59 + U-CP-60 + U-CP-61`
+
+**Justification.** v1.2 anchor augmentation cited C-CP-25 but carrier set did not yet include the C-CP-25 implementers (cluster 10-CP-A had not landed at v1.2 filing time). Cluster 10-CP-A landed all 4 carriers at closure-arc commits `16cf6d7` (U-CP-58 enum carriers) / `cdf83b1` (U-CP-59 Protocol + envelope) / `5ca86aa` (U-CP-60 ConcreteValidatorFramework body) / `9b009d3` (U-CP-61 workflow_driver post-dispatch hook + SyncValidatorFrameworkFacade). **U-OD-50 explicitly NOT cited** per §15.3 cross-axis verification.
+
+**Empirical verification at HEAD `4ea4ac4`:**
+- `harness-cp/src/harness_cp/validator_framework.py:130 class ConcreteValidatorFramework` ✓
+- `harness-cp/src/harness_cp/validator_framework_types.py:211 class ValidatorFramework(Protocol)` ✓
+- `harness-cp/src/harness_cp/validator_framework_types.py:41 class ValidatorOutcome` ✓
+- `harness-cp/src/harness_cp/validator_framework_types.py:69 class ValidatorFailClass` ✓
+- `harness-cp/src/harness_cp/validator_framework_types.py:173 class ValidatorEvaluation` ✓
+
+#### Row 3 — H_T-CP-22 (Pause/resume protocol + state_summary snapshot + material-diff)
+
+**Current state at v1.4:**
+- §2.3 anchor: **`C-CP-22 §22` ONLY** (engine-layer; NOT updated at v1.2/v1.3/v1.4)
+- §2.3 + §5.4 carriers: **`U-CP-49 + U-CP-50` ONLY** (engine-layer)
+- §5.8 disposition: row enumerated as "clean" (17/23) at v1.1 γ-audit — clean **against §22 engine-layer surface only**; the §26 NEW v1.10 workflow-layer surface was NOT in scope of the v1.1 audit (audit pre-dates v1.10 contract additions)
+
+**Recommended amendment (substantive — augments BOTH anchor AND carrier):**
+- §2.3 anchor: **AUGMENT** → `C-CP-22 §22 + C-CP-26 §26` (add v1.10 NEW workflow-layer surface; engine-layer §22 preserved per CP spec v1.11 §26 NEW NOTE coexistence)
+- §2.3 + §5.4 carriers: **AUGMENT** → `U-CP-49 + U-CP-50 + U-CP-62 + U-CP-63 + U-CP-64 + U-CP-65`
+
+**Justification.** H_T-CP-22 row label "Pause/resume protocol + state_summary snapshot + **material-diff**" semantically encompasses both surfaces: §22 engine-layer (U-CP-49/50 free-function `capture_pause_snapshot` + `attempt_resume` at OLD `harness-cp/src/harness_cp/pause_resume_protocol.py:106..125` + `:128..147`) AND §26 workflow-layer (U-CP-62..U-CP-65 class-method `PauseResumeProtocol.capture_pause_snapshot()` + `.attempt_resume()` + WorkflowPauseReason + MaterialDiffPolicy + PauseSnapshot + ResumeResult). MaterialDiffPolicy is at §26.2 (NOT §27 per §15.1 drift correction). Per CP spec v1.11 §26 NEW NOTE: "C-CP-22 (§22) ... and C-CP-26 (§26) ... are **distinct architectural primitives at distinct layers**" — both belong in H_T-CP-22's anchor + carrier set under the existing row label.
+
+**Pattern parallel.** Structurally identical to v1.2 H_T-CP-20 augmentation (`C-CP-20 §20` → `C-CP-16/17/§17.4/20`) and v1.2 H_T-CP-21 augmentation (`C-CP-21` → `C-CP-21/25`) — multi-version layered primitive with NEW v1.10 contracts coexisting with v1 originals. Per §10.4 + v1.2 precedent, AUGMENT is operator-ratified for this shape.
+
+**Empirical verification at HEAD `4ea4ac4`:**
+- `harness-cp/src/harness_cp/pause_resume_protocol.py:213 class PauseResumeProtocol` ✓
+- `harness-cp/src/harness_cp/pause_resume_protocol_types.py:43 class WorkflowPauseReason` ✓
+- `harness-cp/src/harness_cp/pause_resume_protocol_types.py:70 class MaterialDiffPolicy` ✓
+- `harness-cp/src/harness_cp/pause_resume_protocol_types.py:88 class PauseSnapshot` ✓
+- `harness-cp/src/harness_cp/pause_resume_protocol_types.py:130 class ResumeResult` ✓
+- §22 engine-layer free-functions preserved verbatim per CP spec v1.11 §26 NEW NOTE coexistence ✓
+
+### §15.5 §5.8 γ-audit appendix amendment owed
+
+H_T-CP-22 currently enumerated at §5.8 "Rows verified clean (17/23)". The v1.1 audit pass verified clean **against the §22 engine-layer surface only** (audit method per §5.8 — Phase 7a-pre-v1.10 contract baseline). The §26 NEW v1.10 workflow-layer surface was NOT in scope of the v1.1 audit.
+
+**Recommended disposition at v1.5 absorption:**
+- **Option A (audit-trail discipline):** ADD H_T-CP-22 as a NEW 7th finding row to §5.8 with disposition "RESOLVED at v1.5 — see §0.5 Site N (missing-primitive augmentation per §15 recommendation; §26 v1.10 NEW workflow-layer surface added)". Maintains forward-only ledger; surfaces the v1.1 audit-scope-limitation explicitly.
+- **Option B (missing-primitive distinction):** PRESERVE H_T-CP-22 in clean enumeration (audit-time-correct against §22-only baseline). Document the §26 addition at v1.5 §0.5 change-note ONLY; treat as "missing-primitive addition" distinct from "phantom cite finding". Mirrors v1.2 §10.4 precedent where H_T-CP-20/21 amendments resolved §5.8 priority-3 findings (already in §5.8 from authoring time).
+
+**Recommendation: Option A.** Surfacing the audit-scope-limitation preserves audit-trail discipline + makes the §22 ↔ §26 coexistence distinction visible at the §5.8 layer (parallel to the v1.11 §26 NEW NOTE preservation at the spec layer).
+
+### §15.6 Tiebreaker check
+
+Per skill §4A.2 step 5:
+
+> **Per-primitive landed-code grep at HEAD `4ea4ac4`** — `harness-cp/src/harness_cp/hitl_placement.py` contains `async def hitl_gate` ✓; `validator_framework{,_types}.py` contains all 5 C-CP-25 carriers ✓; `pause_resume_protocol{,_types}.py` contains all 5 C-CP-26 carriers ✓.
+
+**VERIFIED at this skill invocation** (per §15.4 empirical-verification rows). All 3 primitives have empirical landed-code carriers at HEAD; the recommended cite shapes are reachable at the empirical authority chain.
+
+### §15.7 Fork classification per Project_Workflow §2.7.6
+
+**Class 1 (halt-execution — design artifact requires revision).** Sibling Class 1 fork continuation; this §15 recommendation closes the OPEN §10.5 work item (the last remaining work item for full close of this fork). Phase 7 execution-time is NOT halted at this filing — landed-code carriers all materialized; the §10.5 work is design-substrate-only cite-fidelity (zero blast radius beyond Meta-Arch row text).
+
+### §15.8 Operator-decision ambiguities
+
+Per skill §4A discipline (recommend, don't decide), the following decisions remain operator-owned:
+
+**(a) Bundled vs split absorbing arc.** Per §10.4 precedent v1.2 bundled 3 rows; v1.3 was single-row; v1.4 bundled 3 rows. Recommend: **bundled v1.5** landing all 3 row augmentations + §5.8 amendment + §10.5 drift correction in single absorbing arc. Bundled scope is precedent-aligned + maintains forward-only ledger cadence.
+
+**(b) §5.8 disposition for H_T-CP-22.** Option A (NEW finding row) vs Option B (preserve-clean + document at §0.5 only). Recommend: **Option A** (per §15.5 rationale).
+
+**(c) U-OD-50 / U-OD-51 / U-OD-52 cross-axis observer cite question.** Recommendation: **DO NOT CITE** at §5.4 CP-axis rows. Observability namespaces (`validator.*` / `pause.*` / `mcp.trust.*`) belong at H_T-OD-2 OTel-substrate sub-table per axis-row semantic. Cross-axis composition handled at H_T-CXA-4 OD→CP edge per CXA v2.8 §2.3.7. **Asymmetry note:** H_T-CP-20 already cites `audit.*` emission via U-CP-46 (CP-owned-namespace); rule = "cite if CP owns namespace production; do NOT cite if OD owns namespace consumption."
+
+**(d) §10.5 fork-doc row-4 drift correction.** Fork doc §10.5 row 4 mis-locates MaterialDiffPolicy at §27. Recommend: **STRIKE row 4** from fork-doc §10.5 table at v1.5 absorbing arc (silent absorption avoidance — surface drift explicitly). Alternative: leave fork-doc §10.5 as-is for historical fidelity; cite drift at v1.5 §0.5 change-note only.
+
+### §15.9 Operator decides
+
+> **OPERATOR DECIDES.** This §15 recommendation is a skill output per §4A.3 discipline. The 4 ambiguities at §15.8 (a/b/c/d) require explicit operator selection. The 3 per-row cite-shape recommendations at §15.4 await operator ratification before `spec-writer` re-invocation at v1.4 → v1.5 absorbing arc.
+
+### §15.10 Downstream sequencing post-ratification
+
+| Step | Work | Owner |
+|---|---|---|
+| 1 | Operator ratification of §15.4 per-row recommendations + §15.8 ambiguities (a/b/c/d) | Operator |
+| 2 | Meta-Arch v1.4 → v1.5 absorbing arc with NEW §0.5 change-note + §2.3 H_T-CP-20/21/22 row augmentations + §5.4 H_T-CP-20/21/22 retirement-column augmentations + (per §15.8.b selection) §5.8 amendment + (per §15.8.d selection) §10.5 row-4 drift correction | `spec-writer` skill |
+| 3 | This fork doc — append §16 footer documenting v1.5 absorbing arc; status transition APPLIED-EXCEPT-missing-primitives → **APPLIED** (full close) | This fork doc / `spec-writer` |
+| 4 | Per-row `phase-7-substitution-retirement` re-invocation against v1.5 augmented cites (operator-discretion timing). H_T-CP-20 RETIRED at batch-9 — v1.5 strengthens carrier coverage, no retirement-status transition. H_T-CP-21 + H_T-CP-22 STILL-BOUNDED — v1.5 unblocks future retirement filings against augmented carrier surface | `phase-7-substitution-retirement` skill |
+| 5 | Sibling memory `[[fork-meta-arch-cp-spec-renumbering-drift]]` refresh to APPLIED status (currently stale per checkpoint footer at last session close) | Operator-discretion or this absorbing arc |
+
+---
+
+*End of §15 §10.5 missing-primitive systems-architect recommendation per skill §4A.3. Fork doc status post-§15: APPLIED-EXCEPT-missing-primitives (unchanged at recommendation filing — APPLIED transition at v1.5 absorbing arc post-operator ratification).*
