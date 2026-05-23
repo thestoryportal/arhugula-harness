@@ -9,9 +9,9 @@
 | Field | Value |
 |---|---|
 | Artifact | `Phase_7_Meta_Architecture_v1.md` |
-| Version | v1 |
-| Status | **Proposed** — Phase 6.5 Session 4 (η + θ) primary deliverable |
-| Date | 2026-05-15 |
+| Version | v1.1 |
+| Status | **Proposed (v1.1)** — Phase 7b in-CLI revision absorbing Class 1 fork `.harness/class_1_fork_h_t_cp_18_phantom_retirement_cite.md` (RATIFIED 2026-05-23 α + γ-audit-appendix) — α single-row fix at §5.4 row H_T-CP-18 + Class 3 documentation note at new §5.1.1 (material-location-resident cited-unit-column convention) + γ-audit findings appendix at new §5.8. v1 substantive content preserved verbatim outside the 3 amendment sites. |
+| Date | 2026-05-23 (v1.1); 2026-05-15 (v1) |
 | Phase | Phase 6.5 (pre-transition arc) Session 4 (η + θ — chicken-and-egg meta-architecture + Phase 7 internal workflow) |
 | Authoring authority | Operator directive 2026-05-14 (Phase 6.5 arc entry); `Phase_6_5_Pre_Transition_Arc_Manifest.md` §3.2 Session 4 enumeration; `Phase_6_5_Session_4_Kickoff.md` §2 |
 | Predecessor | `Phase_6_5_Session_3_Close_Handoff.md`; v2.2 / v1 / v2.3 / v2.4 implementation plans + CXA v2.1; `Target_Stack_Commitment_v1.md`; `Plan_Executability_Audit_v1.md` |
@@ -19,6 +19,58 @@
 | Successor (arc) | Phase 7 execution at separate Claude Code CLI workspace per Workflow DP-4 default |
 | Skill activation | `council-orchestrator` SKILL.md (selective-convening sub-mode: C1 + C7 + C11); `spec-writer` SKILL.md (canonicalization) |
 | Filing destination | `/mnt/user-data/outputs/Phase_7_Meta_Architecture_v1.md` → operator pushes to `/mnt/project/` |
+
+---
+
+## §0.1 Change-note — v1 → v1.1 (2026-05-23)
+
+**Trigger.** Class 1 fork `.harness/class_1_fork_h_t_cp_18_phantom_retirement_cite.md` (filed 2026-05-22 at H_T-CP-18 retirement filing arc; RATIFIED 2026-05-23 at /checkpoint-resume session). Operator-ratified routing: **α + γ-audit-appendix** with **α sub-question YES** (cross-axis runtime cites permitted on CP-axis rows under material-location-resident reading).
+
+**Authority chain.** `phase-7-substitution-retirement` skill §7 halt-condition → Class 1 fork doc filing → operator ratification → this v1.1 revision per workspace `CLAUDE.md` §4.3 Class 1 routing to design-phase back-flow (Meta-Architecture revision). Spec-writer skill applies the decided fix per its fidelity core (never-resolve, never-extend, verbatim integrity, preservation, audit-before-emit). Per FM-1 discipline, the spec-writer does NOT pick replacement cites for γ-audit findings beyond the operator-ratified row H_T-CP-18; γ-audit findings are surfaced for follow-on operator routing.
+
+**Scope of revision.** Three amendment sites; all within §5.4 CP-axis substitution table and its surrounding documentation in §5. ZERO cross-axis cascade per fork doc §5 — no spec change, no plan change, no code change. L9-septies + 10-CP-D cluster closes stand; 2751/2751 tests stand at HEAD `245d07e`.
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§5.4 row H_T-CP-18 — α single-row fix** | Retirement column cited-unit cell: `U-CP-45` → `U-CP-00b, U-RT-73, U-RT-74, U-RT-75, U-RT-68`. Substitution column + Bounded scope column preserved verbatim. | Fork doc §3.1 (α reading) + §4 (recommendation) + operator ratification 2026-05-23 with α sub-question YES |
+| **§5.1.1 — Class 3 documentation note (NEW sub-section)** | New sub-section after §5.1 entry shape documenting the material-location-resident reading of the cited-unit column: cross-axis (e.g., runtime) unit cites are admissible on CP-axis substitution rows when the substitution-target surface materializes at a cross-axis location. Foreclose ambiguity on future cross-axis retirement cites. | Fork doc §3.1 α sub-question + operator ratification 2026-05-23 |
+| **§5.8 — γ-audit findings appendix (NEW sub-section)** | New sub-section after §5.7 documenting the empirical audit pass across all 23 H_T-CP-* rows in §5.4. Per-finding shape: row name + cited unit(s) + v2.1 base-plan unit-body actual contract + surface-mismatch description + disposition (operator-decision-owed for replacement cites). Findings are SURFACED only; replacement cites are NOT picked per FM-1 spec-writer discipline. | Fork doc §3.3 (γ reading) + §4 (recommendation) + operator ratification 2026-05-23 + spec-writer FM-1 no-resolution discipline |
+
+**§5 substantive content preserved verbatim outside the 3 amendment sites.** §5.1 entry shape preserved. §5.2 IS / §5.3 AS / §5.4 CP (all rows except row H_T-CP-18 retirement-column cell) / §5.5 OD / §5.6 CXA / §5.7 substitution-type breakdown all preserved verbatim. The §5.7 total-count (49) is preserved — no substitution row added or removed.
+
+**Sections outside §5 preserved verbatim from v1.** §0 (status block — only Version + Status + Date cells amended) / §1 identity / §2 H_T catalog (including §2.3 CP-axis sub-table carrier-units cites — preserved verbatim per FM-2; produces intentional internal inconsistency with §5.4 row H_T-CP-18 documented at §0.1 adjacent-defects (ii)) / §3 H_E catalog / §4 capability overlap / §6 self-hosting gradient / §7 substitution-risk discipline / §8 H_E-rich-zone / §9 Class 2 surface / §10 Phase 7 internal workflow / §11 η ↔ θ coupling / §12 coherence pass / §13 filing footer (preserved verbatim — original v1 filing metadata; v1.1 amendment metadata at §0 status-block + §0.1 change-note) all preserved verbatim.
+
+**Adjacent defects surfaced as findings (not patched per FM-2 no-extension discipline).**
+
+(i) **§5.4 column adjacent defects.** The §5.8 γ-audit findings appendix enumerates 5 additional phantom/partial-cite findings across rows H_T-CP-16 / H_T-CP-17 / H_T-CP-19 / H_T-CP-20 / H_T-CP-21. Each finding is SURFACED only. Resolution requires per-finding operator-decision routing (Class 1 fork per row, or aggregate Class 1 routing the full §5.4 audit at a follow-on arc). No silent re-pointing applied. Resolution timing is operator-discretion; runtime/CP/AS retirement filings targeting any of the 5 affected rows must HALT per `phase-7-substitution-retirement` §7 until per-row resolution lands.
+
+(ii) **§2.3 parallel-cite adjacent defect (Carrier-units column).** The §2.3 H_T components catalog (CP-axis sub-table at lines 145..170) carries an independent "Carrier units" column citing U-CP unit IDs for each H_T-CP-NN primitive. Empirical audit at this arc reveals the §2.3 carrier-cites for the 6 phantom/partial rows surfaced at §5.8 are **identical** to the corresponding §5.4 retirement-cites (H_T-CP-16 cites U-CP-38..41; H_T-CP-17 cites U-CP-42..44; H_T-CP-18 cites `U-CP-45`; H_T-CP-19 cites U-CP-46; H_T-CP-20 cites U-CP-46; H_T-CP-21 cites U-CP-47, U-CP-48, U-CP-51, U-CP-52). The §2.3 cites are therefore subject to the same phantom/partial-cite defects.
+
+Per FM-2 no-extension discipline, §2.3 is preserved verbatim from v1 at this revision arc — including the v1 phantom cites at the 6 affected rows. This creates an **intentional internal inconsistency** at row H_T-CP-18 only: §5.4 row 124 cites `U-CP-00b + U-RT-73 + U-RT-74 + U-RT-75 + U-RT-68` (v1.1 α fix) while §2.3 line 164 preserves `U-CP-45` (v1 verbatim). Other affected rows (H_T-CP-16/17/19/20/21) remain consistently-but-defectively cited at both §2.3 and §5.4.
+
+The §2.3 carrier-units-column convention has distinct semantics from the §5.4 retirement-criterion column ("Carrier units" = which units carry the primitive's substantive types/signatures; "Retirement criterion" = which units' landing satisfies the substitution retirement). A correctly-pointed §2.3 cite for H_T-CP-18 would plausibly be a subset of the §5.4 cite (e.g., `U-CP-00b` alone, as the MCPTrustTier carrier; or `U-CP-00b + U-RT-72` as the carrier + ctx-field landings). Picking the §2.3 cite shape is itself an operator-decision item per FM-1 spec-writer no-resolution discipline and was not included in the original Class 1 fork ratification.
+
+**Routing for §2.3 adjacent defect.** Operator-decision-owed; route through `systems-architect` (per-row carrier-cite recommendation against the v1.1 §5.1.1 convention) → operator ratification → `spec-writer` re-invocation for §2.3 amendment. May be bundled with the per-row §5.8 finding resolutions at a single follow-on arc per row, or aggregated as a single §2.3 column audit arc parallel to this v1.1 §5.4 audit.
+
+**Runtime risk of intentional inconsistency.** The §5.4 ↔ §2.3 H_T-CP-18 inconsistency is bounded — `phase-7-substitution-retirement` skill reads §5.4 retirement-criterion column, not §2.3 carrier-units column, for retirement event verification (per skill SKILL.md §7 routing). No retirement event is affected by the §2.3 staleness. The inconsistency is documentary-only and is the surfacing mechanism for the operator-decision routing.
+
+**Class 3 amendment record (§5.8 audit-findings list).** Filed inline as the §5.8 appendix itself (single-artifact bounded scope per fork doc §5). Per-finding routing flagged at each row entry. No separate `.harness/` fork doc filed per finding at this arc — the §5.8 appendix is the canonical surfacing surface. Per-finding fork docs filed at the operator-decision arc when each finding is routed for resolution.
+
+**Downstream absorption owed (post-v1.1).**
+
+(a) **No workspace `CLAUDE.md` §2.1 update required.** §2.1 cites `Phase_7_Meta_Architecture_v1.md` without a version stamp. The §5 entry count (49) and the §7 anti-leakage-rule count (18 axis + 3 cross-cutting) are unchanged. §2.1 stands verbatim.
+
+(b) **Re-invocation of `phase-7-substitution-retirement` skill for H_T-CP-18** against the re-pointed cites at row 124. Expected outcome: RETIRE-READY transition (not RETIRED) — structural wiring met at HEAD `245d07e` (mcp.tool.call span emission site + PerServerTrustEvaluator + MCPClientNamespaceEmitter wired + TOOL_STEP→SyncDispatcherFacade bound), but bounded carry-forward on empty-sentinel `mcp_servers=[]` default config; live MCP-client traffic gated on operator config + external MCP server availability. Mirrors H_T-CP-20 batch-8 RETIRE-READY pattern.
+
+(c) **Operator decision per §5.8 finding** (5 surfaced phantom/partial-cite findings) at follow-on arcs. Each resolution routes through `systems-architect` (replacement-cite recommendation) → operator ratification → `spec-writer` re-invocation (per-finding row amendment) per workspace `CLAUDE.md` §4.3.
+
+**No-extension audit (FM-2).** No new H_T primitive declared. No new substitution mechanism category. No new retirement criterion type. No new anti-leakage rule. No new substitution row. No new section beyond §0.1 change-note + §5.1.1 documentation note + §5.8 audit-findings appendix — all three are bookkeeping artifacts (change record / convention documentation / findings surfacing), not architectural extensions.
+
+**Verbatim round-trip (FM-3).** α replacement cites `U-CP-00b, U-RT-73, U-RT-74, U-RT-75, U-RT-68` verified verbatim against fork doc §3.1 + §9 ratification footer. §5.1.1 convention text verified against fork doc §3.1 α sub-question prose + ratification YES outcome. §5.8 per-finding cites (v2.1 unit-body titles) verified verbatim against `Implementation_Plan_Control_Plane_v2_1.md` section headings at lines 1992, 2056, 2108, 2172, 2242, 2289, 2347, 2484, 2897.
+
+**Preservation check (FM-4).** All §5.4 rows other than H_T-CP-18 preserved verbatim. All §5.2 / §5.3 / §5.5 / §5.6 / §5.7 content preserved verbatim. All §0 status-block cells other than Version + Status + Date preserved verbatim. All §1 through §13 sections (except §5) preserved verbatim from v1.
+
+**Back-reference reconciliation (FM-5).** `U-CP-45` appears in v1 at two independent declaration sites: §2.3 row H_T-CP-18 carrier-units column (v1 line 164) and §5.4 row H_T-CP-18 retirement-criterion column (v1 line 382). These are parallel declarations, not back-references — neither cites the other. The §5.4 cite is amended at v1.1; the §2.3 cite is preserved verbatim per FM-2 and surfaced as adjacent defect (ii) above. No intra-file *cross-reference* targets either site by cited-unit ID. No cross-file back-reference within the artifact corpus cites Meta-Arch §5.4 row 124 or §2.3 line 164 by line number; downstream consumers (per-axis CLAUDE.md retirement tables; `phase-7d-retirement-events-batch-*.md` records) cite by substitution-primitive ID (H_T-CP-18) not by line number, so the line-shift from new §0.1 + §5.1.1 + §5.8 sections does not invalidate any back-reference.
 
 ---
 
@@ -334,6 +386,18 @@ Per H_T primitive lacking H_E native support: substitution mechanism + bounded s
 | Bounded scope | What the substitution covers; what it explicitly does NOT cover |
 | Retirement criterion | H_T unit ID(s) whose landing retires the substitution |
 
+### §5.1.1 Cited-unit column convention — material-location-resident reading (v1.1, 2026-05-23)
+
+The Retirement column at §5.2 through §5.6 cites H_T unit IDs whose landing satisfies the retirement criterion for the substitution row. Per Class 1 fork resolution (`.harness/class_1_fork_h_t_cp_18_phantom_retirement_cite.md` §3.1 α sub-question, RATIFIED 2026-05-23):
+
+**The cited-unit column is material-location-resident, not authority-axis-resident.** Cited unit IDs may name units from any axis (IS / AS / CP / OD / runtime / core / CXA) — the citation tracks **where the substitution-target surface actually materializes**, not the authority axis of the substitution row. A row in §5.4 (CP-axis substitutions) MAY cite runtime-axis units (`U-RT-NN`) or harness-core units (`U-CORE-NN`) when the H_T-side substitution-target surface materializes in those axes' implementation plans.
+
+**Rationale.** Phase 7 implementation discovered that several H_T primitives nominally homed in one design-axis are materialized cross-axis at the implementation layer — for example, the MCP-integration surface for H_T-CP-18 (C-CP-18) is materialized at the runtime-axis L9-septies cluster (U-RT-73 + U-RT-74 + U-RT-75 + U-RT-68) plus a harness-core/CP-axis carrier (U-CP-00b for `MCPTrustTier`). Restricting §5.4 citations to CP-axis units only would either (a) require synthetic CP-axis wrapper units shadowing the actual implementation, or (b) leave the retirement criterion empirically unverifiable. Material-location-resident citation is the empirically-verifiable convention.
+
+**Verification discipline (per X-AL-2 retirement criterion fidelity).** A retirement event for substitution-row R requires: (i) every cited unit in R's Retirement column has its body materialized at HEAD, AND (ii) the substituted H_E surface is no longer invoked at the substitution site. The cited units may be cross-axis; the verification discipline is unchanged.
+
+**Class 3 convention note** — this sub-section was added at v1.1 as a documentation amendment per fork doc §9 ratification work item 3. It clarifies an existing convention surfaced empirically; it does not change the verification semantics of any §5 row.
+
 ### §5.2 IS axis substitutions (9 entries)
 
 | Primitive | Substitution | Bounded scope | Retirement |
@@ -379,7 +443,7 @@ Per H_T primitive lacking H_E native support: substitution mechanism + bounded s
 | H_T-CP-14 | None at H_E layer — span emission deferred to harness-authored orchestration at MCP server side | Does NOT cover: multi-agent span hierarchy; `topology.*` / `subagent.*` namespaces | U-CP-31 + U-CP-32 |
 | H_T-CP-16 | `CLAUDE.md` hierarchy as memory; no `memory.*` namespace emission | Covers: persistent memory at H_E hierarchy. Does NOT cover: observability namespace; programmatic memory mutation API | U-CP-38 → U-CP-41 |
 | H_T-CP-17 | H_E `Read`/`Write`/`Edit`/`Glob`/`Grep`; no `files.*` namespace emission | Covers: filesystem ops. Does NOT cover: `files.*` namespace; files-primitive composition with ledger | U-CP-42 + U-CP-43 + U-CP-44 |
-| H_T-CP-18 | H_E `claude mcp` + `.claude/mcp.json` + scope hierarchy; no `mcp.*` namespace emission | Covers: MCP server registration + scope-based access. Does NOT cover: 5-tier trust framework; `mcp.*` namespace; tool-poisoning detection | U-CP-45 |
+| H_T-CP-18 | H_E `claude mcp` + `.claude/mcp.json` + scope hierarchy; no `mcp.*` namespace emission | Covers: MCP server registration + scope-based access. Does NOT cover: 5-tier trust framework; `mcp.*` namespace; tool-poisoning detection | U-CP-00b + U-RT-73 + U-RT-74 + U-RT-75 + U-RT-68 [v1.1 α fix — material-location-resident cross-axis cite per §5.1.1; supersedes v1 `U-CP-45` phantom cite per fork doc §3.1] |
 | H_T-CP-19 | None — single deployment shape during 7a | Does NOT cover: sandbox-tier floor + gate-level floor across deployment surfaces | U-CP-46 |
 | H_T-CP-20 | `AskUserQuestion` tool + permission-prompt approval; no 4-response palette; no `hitl.*` / `audit.*` namespaces | Covers: HITL invocation surface. Does NOT cover: 4-response palette (APPROVE / APPROVE_WITH_NOTE / DEFER / REJECT); namespace emission | U-CP-46 |
 | H_T-CP-21 | Operator reviews every sub-agent output before commit; no automated validator framework; operator-burden via manual ledger annotation | Covers: human-mediated validation gate. Does NOT cover: 5-class ValidatorFailClass; transient staircase; cause-branching; operator-burden eval primitive | U-CP-47 + U-CP-48 + U-CP-51 + U-CP-52 |
@@ -421,6 +485,54 @@ Per H_T primitive lacking H_E native support: substitution mechanism + bounded s
 | None — manual operator orchestration during 7a | 5 |
 | None — authoring artifact only | 4 |
 | **Total** | **49** |
+
+### §5.8 γ-audit findings appendix (v1.1, 2026-05-23)
+
+**Audit pass scope.** Column-wide empirical pass across all 23 H_T-CP-* rows at §5.4 per Class 1 fork doc §3.3 (γ reading) + §4 (recommendation) + operator ratification 2026-05-23. Audit method: for each row, cross-check the cited retirement-criterion unit IDs against (i) existence as a section-heading-declared unit body in the canonical CP plan v2.1 (3846 lines) plus the cumulative v2.1+ delta cascade, and (ii) the cited unit body's contract matching the row's Substitution + Bounded scope columns.
+
+**Audit method limitation.** The audit verifies cite-fidelity at the structural level (does the cited unit exist; does its body implement the surface the row describes). It does NOT verify implementation-time materialization at HEAD — that verification is the `phase-7-substitution-retirement` skill's responsibility at retirement-event filing arcs. The audit surfaces phantom/partial cites; per-row resolution (replacement cites) requires operator decision per FM-1 spec-writer no-resolution discipline.
+
+**Audit-pass result.** 6 rows surface phantom or partial cites (1 resolved at this arc via α fix; 5 surfaced for follow-on routing). 17 rows verify clean.
+
+**Per-finding surfacing.**
+
+| Row | Substitution surface (Bounded scope summary) | Cited unit(s) at v1 | v2.1 unit-body actual contract | Mismatch class | Disposition |
+|---|---|---|---|---|---|
+| **H_T-CP-16** | Memory hierarchy substitution + `memory.*` namespace emission gap | U-CP-38 + U-CP-39 + U-CP-40 + U-CP-41 | U-CP-38: "Declare 3-placement enum + `hitl_gate(...)` interface + `HITLPlacement` workflow-definition schema" (v2.1 line 1992); U-CP-39: "Implement HITL-as-tool-call rewriting algorithm + three semantic variants" (line 2056); U-CP-40: "Declare persona-tier × engine-class 2D matrix + cell exclusion inheritance" (line 2108); U-CP-41: "Implement both-by-tier overlay + two-agent-observer meta-class + persona-tier-binding selection" (line 2172) | **PHANTOM — full row** | Cited units implement HITL placement + persona-tier surfaces, NOT memory. No memory.* namespace producer identified in v2.1 CP-axis unit roster. Operator-decision-owed: replacement cites OR confirmation that H_T-CP-16 has no current CP-axis retirement criterion (in which case row may need re-targeting at a different axis per §5.1.1 material-location-resident convention). HALT all H_T-CP-16 retirement filings until resolved. |
+| **H_T-CP-17** | Filesystem ops + `files.*` namespace emission gap | U-CP-42 + U-CP-43 + U-CP-44 | U-CP-42: "Declare per-persona-tier audit-ledger cryptographic shape table" (v2.1 line 2242); U-CP-43: "Implement 4-axis multiplicative gate-level rule + monotonicity + `_hitl_required` predicate + persona-tier floor" (line 2289); U-CP-44: "Implement F5 signing-key resolution for `MULTI_TENANT_COMPLIANCE`" (line 2347) | **PHANTOM — full row** | Cited units implement audit-ledger cryptography + HITL gate-level rule + F5 signing-key, NOT filesystem. No `files.*` namespace producer identified in v2.1 CP-axis unit roster. Operator-decision-owed: replacement cites OR cross-axis re-pointing per §5.1.1 (IS-axis filesystem path-class units may be the material-location-resident target). HALT all H_T-CP-17 retirement filings until resolved. |
+| **H_T-CP-18** | MCP integration + 5-tier trust + `mcp.*` consumption | ~~U-CP-45~~ → U-CP-00b + U-RT-73 + U-RT-74 + U-RT-75 + U-RT-68 (v1.1 α fix) | U-CP-45: "Implement 5-axis composition (C-AS-12 + C-CP-19) + operator-policy override + key-rotation two-row pattern" (v2.1 line 2395) — implements C-CP-19/20, NOT C-CP-18 | **PHANTOM — resolved at v1.1 α fix** | Resolved at this arc. Row 124 re-pointed per fork doc §9 ratification. Re-invocation of `phase-7-substitution-retirement` against re-pointed cites expected to yield RETIRE-READY transition (bounded by empty-sentinel `mcp_servers=[]` default config). |
+| **H_T-CP-19** | Sandbox-tier floor + gate-level floor across deployment surfaces | U-CP-46 | U-CP-46: "Declare 7 `audit.*` attributes + per-persona-tier emission table + 4 `hitl.*` span attribute schemas" (v2.1 line 2484) | **PHANTOM — full row** | Cited unit implements audit.* + hitl.* attribute schemas, NOT sandbox-tier floor. The sandbox-tier-floor surface is C-AS-02 §11.1 (AS-axis); cross-axis re-pointing to AS-axis or harness-core may apply per §5.1.1. Operator-decision-owed: replacement cites. HALT all H_T-CP-19 retirement filings until resolved. |
+| **H_T-CP-20** | HITL 4-response palette + namespace emission | U-CP-46 | U-CP-46: "Declare 7 `audit.*` attributes + per-persona-tier emission table + 4 `hitl.*` span attribute schemas" (v2.1 line 2484) — covers emission half but NOT 4-response palette declaration | **PARTIAL — cite incomplete** | U-CP-46 covers the `hitl.*` namespace-emission half of the substitution gap. The 4-response palette declaration (APPROVE / APPROVE_WITH_NOTE / DEFER / REJECT) is at U-CP-37 (v2.1 line 1924: "Declare 4-response palette + per-response audit entry shape + palette invariants + `hitl.response.class` attribute"). Operator-decision-owed: confirm augmentation cite `U-CP-37 + U-CP-46` (palette+emission). H_T-CP-20 batch-8 RETIRE-READY event already filed against the implicit U-CP-37+U-CP-46 surface per workspace history; this finding documents the cite-shape gap, not a retirement-status regression. Resolution may be a single-row augmentation rather than a re-point. |
+| **H_T-CP-21** | ValidatorFailClass 5-class + transient staircase + cause-branching + operator-burden eval | U-CP-47 + U-CP-48 + U-CP-51 + **U-CP-52** | U-CP-47: "Declare 5-class fail taxonomy + `validator.fail.*` namespace" (v2.1 line 2574) ✓; U-CP-48: "Implement transient staircase + cause-attribution branching + palette restriction" (line 2636) ✓; U-CP-51: "Implement operator-burden eval primitive sampling + tail-keep rules" (line 2851) ✓; U-CP-52: "Implement HITL timeout-degradation + webhook delivery semantics" (line 2897) — implements HITL webhook/timeout, NOT validator | **PARTIAL — single-cite mismatch** | U-CP-47/48/51 match the row's substitution surface verbatim. U-CP-52 is mis-cited — its body implements HITL timeout-degradation + webhook delivery, which belongs to a different substitution (H_T-CP-20 HITL palette domain). Operator-decision-owed: strike U-CP-52 from H_T-CP-21 cite OR confirm intentional aggregation (e.g., HITL timeout-degradation is part of validator-failure response path). Likely single-token strike; row otherwise verifies clean. |
+
+**Rows verified clean (17/23).** H_T-CP-1 / H_T-CP-2 / H_T-CP-3 / H_T-CP-4 / H_T-CP-5 / H_T-CP-6 / H_T-CP-7 / H_T-CP-8 / H_T-CP-9 / H_T-CP-10 / H_T-CP-11 / H_T-CP-12 / H_T-CP-13 / H_T-CP-14 / H_T-CP-22 / H_T-CP-23 / H_T-CP-24. Each row's cited units exist as v2.1 section-heading-declared bodies and the body contracts match the row's Substitution + Bounded scope columns.
+
+**Audit-pass disposition summary.**
+
+| Bucket | Count | Rows | Resolution timing |
+|---|---|---|---|
+| Resolved at v1.1 α fix | 1 | H_T-CP-18 | This arc — re-invoke `phase-7-substitution-retirement` post-v1.1 |
+| Phantom — full row | 3 | H_T-CP-16, H_T-CP-17, H_T-CP-19 | Operator-decision-owed; per-row Class 1 fork at follow-on arc(s); HALT retirement filings until resolved |
+| Partial — cite-shape gap | 2 | H_T-CP-20, H_T-CP-21 | Operator-decision-owed; likely single-token augmentation/strike per row; lower-priority than full-phantom resolutions |
+| Clean | 17 | (enumerated above) | None |
+
+**Per-row Class 3 amendment records.** Filed inline as this §5.8 appendix per fork doc §6 step 3 single-artifact bounded-scope discipline. Per-row fork docs at `.harness/class_1_fork_h_t_cp_NN_phantom_retirement_cite.md` filed at the operator-decision arc when each finding is routed for resolution.
+
+**No silent re-pointing applied.** Per FM-1 spec-writer no-resolution discipline, the spec-writer does NOT pick replacement cites for the 5 surfaced findings beyond row H_T-CP-18 (where the operator-ratified replacement cites at fork doc §9 are decided). Resolution is operator-discretion routed through `systems-architect` → operator ratification → `spec-writer` re-invocation per workspace `CLAUDE.md` §4.3.
+
+**Recurrence-pattern observation.** This audit pass surfaces 5 additional phantom/partial cites in §5.4 against the 1 surfaced at the original Class 1 fork — a 6:1 amplification ratio. Pattern density supports the fork doc's hypothesis that the §5.4 column was authored before plan v2.7 renumbering and never reconciled. Audit passes against §5.2 (IS) / §5.3 (AS) / §5.5 (OD) / §5.6 (CXA) are NOT performed at this arc per FM-2 no-extension discipline — those passes are operator-discretion follow-on work routed at the same per-axis adversarial-review cadence.
+
+**Cross-section parallel cite observation (§2.3 ↔ §5.4 mirroring).** The §2.3 H_T components catalog (CP-axis sub-table) carries an independent "Carrier units" column citing the same U-CP unit IDs as §5.4's "Retirement criterion" column. Empirical audit confirms the §2.3 cites for the 6 phantom/partial rows surfaced above are identical to the §5.4 cites and are therefore subject to the same defects. §2.3 is preserved verbatim from v1 per FM-2 no-extension discipline; the resulting §5.4 ↔ §2.3 intentional inconsistency at row H_T-CP-18 + the consistently-defective cites at the 5 other affected rows are documented at §0.1 adjacent-defects (ii) and routed to follow-on operator-decision arcs. Resolution sequencing operator-discretion (per-row paired with §5.8 finding routing, OR aggregated §2.3 column audit).
+
+**Audit scope note (intentional non-pass).** This appendix audits §5.4 cited-unit-column entries only. The following audit dimensions are EXPLICITLY NOT performed at this arc and are operator-discretion follow-on work:
+
+- §5.4 Substitution-mechanism column — does each row's H_E surface description still reflect the current H_E substrate (v1 authored 2026-05-15; some H_E surfaces may have shifted at Claude Code releases since)
+- §5.4 Bounded-scope column — does each "Does NOT cover" enumeration still hold against current H_T implementation deltas
+- §6 Self-hosting milestone gradient — does the per-primitive retirement gradient still align with current plan unit IDs (likely subject to the same author-time-vs-implementation-time drift surfaced here)
+- §7 Anti-leakage rules (18 axis + 3 cross-cutting) — does each rule's cited surface still exist in current implementation
+- §2 H_T components catalog (other than the §2.3 CP-axis carrier-cite finding above) — IS / AS / OD / runtime / core sub-tables not audited
+
+Each of these dimensions could surface additional phantom/partial cites under the same pattern density as the §5.4 audit. Routing for those audit passes is operator-discretion.
 
 ---
 
