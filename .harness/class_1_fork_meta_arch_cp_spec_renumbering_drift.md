@@ -412,3 +412,43 @@ ZERO cross-axis cascade expected from v1.3 absorption (mirrors v1.2 zero-cascade
 ---
 
 *End of §12 tiebreaker resolution + ratification. Fork doc status post-§12: PARTIALLY-APPLIED with all 7 §10.4 rows now RATIFIED (3 APPLIED at v1.2 + 4 RATIFIED-AWAITING-v1.3-ABSORBING-ARC). §10.5 missing primitives remain OPEN.*
+
+---
+
+## 13. v1.3 absorbing arc — partial application + new sibling fork (2026-05-23, same session as §12)
+
+**Absorbing arc.** Meta-Arch v1.2 → v1.3 spec-writer arc executed against §12.3 ratified disposition table. **FM-1 + FM-3 HALT condition surfaced** during empirical verification pass: §12.3 cite shapes for H_T-CP-15/16/17 borrowed Meta-Arch §2.2 H_T-AS-6/7/8 carrier cites that are themselves empirically phantom (U-AS-20..U-AS-27 implement SECRETS surface, not Skills/memory/files). Spec-writer filed new sibling Class 1 fork `.harness/class_1_fork_meta_arch_section_2_2_as_axis_carrier_phantom_cites.md` documenting the §2.2 recurrence and HALTed H_T-CP-15/16/17 application. H_T-CP-19 cites (U-CP-26 + U-CP-27 + U-CP-43) verify empirically clean and proceed at v1.3.
+
+**Per-row landing status:**
+
+| §10.4 / §12.3 row | v1.3 disposition | Authority for status |
+|---|---|---|
+| **H_T-CP-15** | **DEFERRED-AT-v1.3** — sibling fork §12.3 borrowed §2.2 H_T-AS-6/7 carrier phantoms; cite shape owed | New fork `class_1_fork_meta_arch_section_2_2_as_axis_carrier_phantom_cites.md` §4 PARTIAL-APPLY routing |
+| **H_T-CP-16** | **DEFERRED-AT-v1.3** — same | Same |
+| **H_T-CP-17** | **DEFERRED-AT-v1.3** — same | Same |
+| **H_T-CP-19** | ✓ **APPLIED at v1.3** — §2.3 + §5.4 carrier-cite re-pointed to U-CP-26 + U-CP-27 + U-CP-43; §5.8 disposition row updated to RESOLVED at v1.3 | Meta-Arch v1.3 §0.3 Site 1/2/3 |
+
+**Sibling fork filed at same session.** `.harness/class_1_fork_meta_arch_section_2_2_as_axis_carrier_phantom_cites.md` — Class 1, OPEN. Documents §2.2 H_T-AS-6/7/8 carrier-cite phantom recurrence (analogous to original §5.4 fork at §2.3/§5.4 CP-axis). Routing target = `systems-architect` skill at follow-on arc for refined AS-axis cite shapes + sibling-fork H_T-CP-15/16/17 re-ratification.
+
+**Fork status post-§13.** PARTIALLY-APPLIED → **APPLIED-EXCEPT-(H_T-CP-15/16/17 + missing-primitives + §2.2-AS-axis-recurrence)**. Total §10.4 row applications: 4/7 (H_T-CP-18 at v1.1; H_T-CP-20 + H_T-CP-21 at v1.2; H_T-CP-19 at v1.3). 3/7 deferred to sibling-fork resolution. §10.5 missing-primitive 4 NEW contracts (§17.4/§25/§26/§27) remain OPEN at separate routing track.
+
+**v1.3 commits at this session.**
+- Sibling fork filing: this session, `.harness/class_1_fork_meta_arch_section_2_2_as_axis_carrier_phantom_cites.md`
+- Meta-Arch v1.3 absorption: this session, `design-substrate/Phase_7_Meta_Architecture_v1.md`
+- §13 footer update at this fork: this session
+- Single bundled commit (per operator routing choice)
+
+**Pattern recurrence observation.** Including this surfacing, **5 phantom-cite/mis-anchoring Class 1 forks** filed across 3-session cluster:
+1. `[[fork-sandbox-decision-policy-phantom-cite]]` — APPLIED L9-septies
+2. `[[fork-u-rt-68-retry-wrap-and-bootstrap-wiring-gap]]` — APPLIED L9-septies arc
+3. `[[fork-h-t-cp-18-phantom-retirement-cite]]` — APPLIED-AND-RETIRE-READY (Meta-Arch v1.1)
+4. `[[fork-meta-arch-cp-spec-renumbering-drift]]` (this fork) — APPLIED-EXCEPT-(3-rows + missing-primitives) (Meta-Arch v1.2 + v1.3)
+5. **NEW: `class_1_fork_meta_arch_section_2_2_as_axis_carrier_phantom_cites`** — OPEN (Meta-Arch §2.2 AS-axis recurrence)
+
+The recurrence-pattern observation at v1.1 §5.8 and §10.6 (k) is now empirically reinforced. Memory pattern at `[[advisor-before-substantive-work-for-cross-axis-blockers]]` trigger surface expanded to include "borrowed cite shape from another Meta-Arch section without empirical verification of the borrowed cite" — see new fork §7.
+
+ZERO cross-axis cascade at v1.3 (H_T-CP-19 single-row scope, all cites within CP plan v2.x). L9-septies + 10-CP-D cluster closes stand. H_T-CP-18 batch-10 RETIRE-READY at `eb4475d` stands. 2751/2751 tests stand.
+
+---
+
+*End of §13 v1.3 absorbing arc + new sibling fork filing. Fork doc status post-§13: APPLIED-EXCEPT-(H_T-CP-15/16/17 + missing-primitives + §2.2-AS-axis-recurrence). 4 of 7 §10.4 rows APPLIED. 3 rows + §10.5 missing primitives + new §2.2 recurrence carried at follow-on arcs.*
