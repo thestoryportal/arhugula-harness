@@ -35,5 +35,9 @@ async def execute(
     _ = workload_class  # unused at stage 0; threaded for uniformity
     ctx.config = config
     ctx.drained_flag = asyncio.Event()
+    # U-RT-87 — `pause_requested_flag` sibling-pattern to `drained_flag` per
+    # runtime spec v1.21 §4 + §14.14.3. Caller-side pause-signaling primitive
+    # consumed at workflow_driver per-step pre-entry detection.
+    ctx.pause_requested_flag = asyncio.Event()
     ctx.keyring_resolver = make_keyring_resolver(config.provider_secrets)
     ctx.actor = Actor(actor_class=ActorClass.AGENT, actor_id="harness-runtime")

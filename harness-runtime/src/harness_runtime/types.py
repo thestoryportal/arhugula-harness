@@ -109,6 +109,14 @@ from harness_runtime.lifecycle.memory_tool_types import MemoryToolBackendConfig
 from harness_runtime.lifecycle.validator_framework_types import (
     ValidatorFrameworkConfig,
 )
+# U-RT-87 — Pause/resume protocol config carrier import (per spec v1.21 §3
+# C-RT-02 field-table extension). PauseResumeProtocolConfig declared at U-RT-87.
+from harness_runtime.lifecycle.pause_resume_protocol_types import (
+    PauseResumeProtocolConfig,
+)
+# U-RT-87 — PauseResumeProtocol class carrier import (per spec v1.21 §4
+# C-RT-04 field-table extension). Class body landed at U-CP-62 cluster 10-CP-B.
+from harness_cp.pause_resume_protocol import PauseResumeProtocol
 
 __all__ = [
     "AuditLedgerWriter",
@@ -1099,6 +1107,30 @@ class RuntimeConfig(BaseModel):
     `materialize_validator_framework_stage` factory (U-RT-84) per §14.13.3.
     """
 
+    pause_resume_protocol_config: PauseResumeProtocolConfig | None = None
+    """Operator-supplied pause/resume protocol opt-in marker.
+
+    Added at U-RT-87 per `Spec_Harness_Runtime_v1.md` v1.21 §3 C-RT-02
+    field-table extension (CP composer authoring arc — operator-ratified
+    narrow-scope AskUserQuestion 2026-05-24).
+
+    Empty-marker shape at v1.21 Reading A scope per spec §14.14.1. `None`
+    (the default) → operator opt-out → stage-5 factory returns `None` →
+    `ctx.pause_resume_protocol is None` → workflow_driver per-step pre-entry
+    pause-trigger detection branch sibling to `drained_flag.is_set()` evaluates
+    False (production-default state preserved). Non-`None` → operator opt-in
+    → stage-5 factory constructs a `PauseResumeProtocol` instance bound to
+    `ctx.pause_resume_protocol`; driver per-step pre-entry True-arm fires
+    `ctx.pause_resume_protocol.capture_pause_snapshot(...)` on
+    `ctx.pause_requested_flag.is_set()` + returns `RunStatus.PAUSED` per
+    C-RT-24 §14.14.3.
+
+    Internal operator-supply shape (snapshot-storage substrate, pause-trigger
+    detection mechanism, resume-API-surface) deferred to implementation
+    discretion per §14.14.7. Ingested at stage 5 LOOP_INIT by
+    `materialize_pause_resume_protocol_stage` factory (U-RT-88) per §14.14.3.
+    """
+
 
 # ----------------------------------------------------------------------------
 # `HarnessContext` — C-RT-04 v1.1 schema.
@@ -1120,6 +1152,17 @@ class HarnessContext(BaseModel):
     # Stage 0 PREAMBLE.
     config: RuntimeConfig
     drained_flag: asyncio.Event
+    # U-RT-87 — Caller-side pause-signaling primitive per runtime spec v1.21
+    # §4 + §14.14.3 sibling-pattern to `drained_flag`. Set by external caller
+    # (operator API, MCP tool, etc.) to request driver pause at the next
+    # per-step pre-entry; polled by CP driver at the per-step pre-entry as a
+    # sibling check to `drained_flag.is_set()` per workflow_driver.py:549
+    # precedent. When set + `ctx.pause_resume_protocol is not None`: driver
+    # invokes `ctx.pause_resume_protocol.capture_pause_snapshot(...)` +
+    # returns `RunStatus.PAUSED`. When set + `ctx.pause_resume_protocol is
+    # None`: driver behavior unchanged from pre-v1.21 (silently no-op).
+    # Initialized at `_MutableHarnessContext` builder during stage 0 PREAMBLE.
+    pause_requested_flag: asyncio.Event
 
     # Stage 1 IS.
     path_resolver: PathResolver
@@ -1181,6 +1224,14 @@ class HarnessContext(BaseModel):
     # is the production-default (operator opt-out → driver hook False arm).
     # See §14.13.1 + plan v2.17 U-RT-84 AC #5.
     validator_framework: ValidatorFramework | None = None
+
+    # U-RT-87 — PauseResumeProtocol carrier per runtime spec v1.21 §4 +
+    # §14.14 (CP spec v1.13 §26 carrier from harness_cp.pause_resume_protocol).
+    # Stage 5 LOOP_INIT-bucket factory `materialize_pause_resume_protocol_stage`
+    # produces this; `None` is the production-default (operator opt-out → driver
+    # per-step pre-entry pause-trigger detection branch False arm).
+    # See §14.14.1 + plan v2.20 U-RT-87 AC #2.
+    pause_resume_protocol: PauseResumeProtocol | None = None
 
     # Stage 5 LOOP_INIT.
     override_evaluator: PerStepOverrideEvaluator

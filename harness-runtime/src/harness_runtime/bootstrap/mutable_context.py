@@ -110,6 +110,7 @@ class BootstrapStageCompleteEvent(BaseModel):
 _REQUIRED_FIELDS: tuple[str, ...] = (
     "config",
     "drained_flag",
+    "pause_requested_flag",
     "path_resolver",
     "worktree_manager",
     "shadow_git",
@@ -155,6 +156,11 @@ class _MutableHarnessContext:
     # Stage 0 PREAMBLE.
     config: RuntimeConfig | None = None
     drained_flag: asyncio.Event | None = None
+    pause_requested_flag: asyncio.Event | None = None
+    """U-RT-87 — Caller-side pause-signaling primitive per runtime spec v1.21
+    §4 + §14.14.3 sibling-pattern to `drained_flag`. Initialized at stage 0
+    PREAMBLE alongside `drained_flag`. Required on the frozen HarnessContext
+    per spec v1.21 §4 C-RT-04."""
     actor: Any = None  # harness_is.Actor — runtime identity; threaded into stage 1
     keyring_resolver: Any = None  # KeyringSecretResolver — threaded into stage 3a
 
@@ -270,6 +276,17 @@ class _MutableHarnessContext:
     Memory-only arc absorption 2026-05-23). Typed ``Any`` per the
     Protocol-vs-concrete-narrowing pattern (mirrors ``tool_dispatcher``)."""
 
+    pause_resume_protocol: Any = None
+    """U-RT-87 — Pause/resume protocol (CP spec v1.13 §26
+    ``PauseResumeProtocol`` class body). Bound at stage 5 LOOP_INIT by
+    ``materialize_pause_resume_protocol_stage`` per runtime spec v1.21
+    §14.14.3. Optional (``None`` = operator opt-out preserving the v1.20
+    production-default state); NOT in ``_REQUIRED_FIELDS``. Typed ``Any``
+    on the mutable builder per the same Protocol-vs-concrete-narrowing
+    pattern as ``validator_framework`` + ``tool_dispatcher`` +
+    ``memory_tool_registry``; the frozen ``HarnessContext.pause_resume_protocol``
+    field carries the narrowed ``PauseResumeProtocol | None`` class surface."""
+
     validator_framework: Any = None
     """U-RT-84 — Validator framework (CP spec v1.11 §25
     ``ConcreteValidatorFramework`` / ``ValidatorFramework`` Protocol). Bound at
@@ -296,6 +313,8 @@ class _MutableHarnessContext:
         ctx = HarnessContext(
             config=self.config,
             drained_flag=self.drained_flag,
+            pause_requested_flag=self.pause_requested_flag,
+            pause_resume_protocol=self.pause_resume_protocol,
             path_resolver=self.path_resolver,
             worktree_manager=self.worktree_manager,
             shadow_git=self.shadow_git,
