@@ -1,4 +1,33 @@
-# Spec — Action Surface v1.4
+# Spec — Action Surface v1.5
+
+## Change-note (v1.4 → v1.5)
+
+**Trigger.** Class 1 fork resolution apply pass per `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §16 (operator-ratified 2026-05-23). The fork's §13 systems-architect Mode 3 recommendation §13.6.D ratified at §14 routing requires AS spec §14.7 `memory.*` namespace to gain a producer-site reference footer note pointing at the NEW runtime spec v1.17 §14.12 C-RT-22 `MemoryToolRegistry` / `MemoryToolStorageBackendProtocol` callback-invocation sites (parallel to v1.4 §14.3 mcp.* footer pattern). Co-published with runtime spec v1.17.
+
+**Scope of revision.** Pure annotation-level extension. NO field-set change. NO attribute-list change. NO new AS-AL rule. NO contract signature change. ONE new footer note added at §14.7 `memory.*` namespace.
+
+| Site | Amendment | Reason |
+|---|---|---|
+| **C-AS-14 §14.7** (footer note) | NEW NOTE: *"At H_T-as-Memory-tool-consumer sites (i.e., when H_T invokes Anthropic Memory tool via runtime spec v1.17 §14.5.1 C-RT-15 callback-injection composer-step + §14.12 C-RT-22 `MemoryToolRegistry`), the `memory.*` 6-attribute namespace is emitted by the storage-backend callback per C-RT-15 §14.5.1 step 4 + C-RT-22 §14.12.2 invariant 2. The attribute set declared at this §14.7 is canonical; runtime spec §14.5.1 + §14.12 own the producer-side emission discipline at each storage-backend callback span context. Memory tool is **client-side** per ADR-D3 §1.1 #11 — the harness implements the storage backend; the Anthropic SDK runs the message loop; the harness storage-backend callback emits one `memory.operation` span per CRUD invocation (`view` / `create` / `delete` / `str_replace` / `insert` callbacks per C-RT-22 §14.12.1). This pattern differs structurally from C-AS-14 §14.3 `mcp.*` (single dispatch-site emission at C-RT-19 §14.9.4 `mcp.tool.call` span) — per-callback emission, not per-dispatch."* | Documents producer-side ownership of `memory.*` namespace at the H_T-as-Memory-tool-consumer callback-invocation sites. Per `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §13.6.D recommendation: emission site differs from MCP single-dispatch-span pattern — each storage-backend callback emits its own span. |
+
+**Files API (§14.6) NOT amended at v1.5.** Per `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §14.C ratification: Files API arc deferred indefinitely. The `files.*` namespace at §14.6 retains its existing declaration without a producer-site reference footer (no runtime spec executable consumer contract authored at v1.17 to reference). Re-opens at future Files arc when operational driver materializes.
+
+**Sections preserved verbatim from v1.4.** All v1.4 content outside the single §14.7 footer note preserved verbatim. C-AS-01 through C-AS-16 (v1.4 numbering) preserved. The v1.4 §14.3 `mcp.*` footer note + §15 `sandbox.*` footer note (both new at v1.4) preserved. The v1.4 + v1.3 + v1.2 + v1.1 + v1 chain preserved.
+
+**Status posture.** Proposed (v1.4) → **Proposed (v1.5)**. v1.5 is a documentary-only patch — one producer-site reference NOTE at §14.7; no signature change; no acceptance criterion change; no AS-AL rule extension.
+
+**Downstream absorption owed (post-v1.5).**
+(a) Workspace `CLAUDE.md` §2.3 AS row version bump (v1.4 → v1.5); co-published this arc.
+(b) `harness-as/CLAUDE.md` §1.2 + §4.1 retirement-table extension shapes pending runtime spec v1.17 §14.12 implementation arc (H_T-AS-related shapes deferred to implementation arc per existing v1.4 (b) carry-forward pattern).
+(c) Co-published with runtime spec v1.16 → v1.17 in this single Class 1 fork resolution arc.
+
+**Adjacent defects surfaced (not patched).**
+
+(i) **Files API §14.6 footer note absence.** Per §14.C ratification, Files API arc deferred indefinitely; corresponding §14.6 producer-site reference footer note NOT authored at v1.5. Re-opens at future Files arc opening (operator-discretion timing). The §14.6 namespace declaration itself preserved verbatim from v1.4.
+
+(ii) **§14.3 `mcp.*` footer note structural-pattern comparison.** The v1.4 §14.3 footer note points at a single canonical dispatch site (C-RT-19 §14.9.4 `mcp.tool.call` span). The v1.5 §14.7 footer note points at per-callback emission sites (5 distinct `memory.operation` spans per CRUD callback per C-RT-22 §14.12.2 invariant 2). The structural divergence is intentional per §13.6.D architect recommendation — Memory tool is client-side per ADR-D3 §1.1 #11 (no single dispatch site). This is a documentary observation, not a defect; NOT patched per FM-2 no-extension discipline.
+
+---
 
 ## Status block
 
@@ -58,6 +87,16 @@
 ## C-AS-15 §15 producer-site reference note (NEW at v1.4)
 
 > **Producer-site reference (v1.4).** At tool-invocation runtime sites — i.e., the H_T-as-MCP-client dispatch path landed at runtime spec v1.13 §14.9 `RuntimeToolDispatcher` — the `sandbox.*` 7-attribute namespace at this §15 plus the `sandbox.enter` / `sandbox.violation` / `sandbox.exit` / `sandbox.tier_escalation` event emission are **owned by C-RT-19 §14.9.4** span emission discipline. The attribute set (`sandbox.tier`, `sandbox.tech`, `sandbox.provider`, `sandbox.policy.assigned_tier_reason`, `sandbox.cost.tier_overhead_ms`, `sandbox.fail.class`, `sandbox.tier_escalation` event) plus always-sampled discipline (head=1.0 for `sandbox.violation` + `sandbox.tier_escalation`) declared at this §15 are canonical; runtime §14.9 owns the producer-side span lifecycle.
+
+---
+
+## C-AS-14 §14.7 producer-site reference note (NEW at v1.5)
+
+> **Producer-site reference (v1.5).** At H_T-as-Memory-tool-consumer sites — i.e., when H_T invokes Anthropic Memory tool via runtime spec v1.17 §14.5.1 C-RT-15 callback-injection composer-step + §14.12 C-RT-22 `MemoryToolRegistry` — the `memory.*` 6-attribute namespace declared at this §14.7 is **emitted by the storage-backend callback** per C-RT-15 §14.5.1 step 4 + C-RT-22 §14.12.2 invariant 2. The attribute set (`memory.operation.kind`, `memory.path`, `memory.backend`, `memory.bytes_read`, `memory.bytes_written`, `memory.context_editing_active`) plus sampling discipline (head=1.0 at `kind ∈ {write, update, delete}` audit-floor; base-rate at `kind ∈ {read, list}`) declared at this §14.7 are canonical; runtime spec §14.5.1 + §14.12 own the producer-side span lifecycle at each storage-backend callback boundary.
+>
+> **Structural-pattern divergence from §14.3 mcp.* footer note.** Memory tool is **client-side** per ADR-D3 §1.1 #11 — the harness implements the storage backend; the Anthropic SDK runs the message loop; the harness storage-backend callback emits one `memory.operation` span per CRUD invocation (5 callbacks per C-RT-22 §14.12.1: `view` / `create` / `delete` / `str_replace` / `insert`). This is **per-callback emission**, not per-dispatch as in the §14.3 mcp.* pattern (single `mcp.tool.call` span per C-RT-19 §14.9.4 dispatch). The producer-vs-canonical-schema separation per D6 ingestion-pattern discipline (workspace `CLAUDE.md` §1.1) applies analogously: runtime spec §14.5.1 + §14.12 emit at callback sites; AS spec §14.7 owns the canonical attribute-set schema + sampling discipline + audit-floor commitment.
+>
+> **Files API §14.6 footer note NOT authored at v1.5.** Per `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §14.C ratification (2026-05-23): Files API runtime executable consumer arc deferred indefinitely. The §14.6 `files.*` namespace declaration retains canonical status without a producer-site footer reference until the future Files arc opens.
 
 ---
 

@@ -1,4 +1,40 @@
-# Specification — Harness Runtime v1.16
+# Specification — Harness Runtime v1.17
+
+## Change-note (v1.16 → v1.17)
+
+**Scope of revision.** Class 1 fork resolution apply pass per `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §16 (operator-ratified 2026-05-23, same session as §11 PROVISIONAL filing + §13 systems-architect Mode 3 recommendation + §14 routing). The fork surfaced H_T-CP-16 (memory.*) + H_T-CP-17 (files.*) executable-consumer absence at HEAD `b2cf37b`: what landed at U-AS-28 + U-AS-31 is adoption-classification enums + OTel namespace schemas only, NOT callable APIs. The original §11 ratification assumed L9-septies MCP-shaped parallelism. The §13 architect recommendation surfaced 3-way structural-shape divergence (MCP / Memory tool / Files API) per ADR-D3 §1.1 #10 + #11 canonical primitive classifications. The §16 amendment ratified: (i) **Memory-only scope** — Files API arc deferred indefinitely per §14.C; (ii) **per-primitive binding sites** — Memory at NEW callback-registry contract consumed by C-RT-15 §14.5 LLM dispatcher (NOT C-RT-19 extension); (iii) **local-filesystem backend at retirement-gate** per §14.D (S3 deferred to follow-on retirement-batch arc).
+
+**Source of fix.** `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §16 RATIFIED 2026-05-23. Surfaced by `spec-writer` skill FM-1 trigger at the original §11 ratification's spec-writer arc opening this session; architect Mode 3 recommendation at §13 + operator §14 routing ratification — full filing-to-ratification arc in single session.
+
+**Amendments.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§3 C-RT-02 RuntimeConfig field table** | NEW optional field `memory_tool_backend_config: MemoryToolBackendConfig \| None` (default `None` → `MemoryToolStorageBackend.FILESYSTEM` at `LOCAL_DEV` deployment surface per `harness_as.anthropic_graceful_degradation.memory_tool_storage_backend` resolver). Ingested at stage 5 by `materialize_memory_tool_registry_stage` factory per §14.12.3. Existing fields preserved verbatim. | §16 §6.A v2 A.iv ratification — Memory tool runtime binding requires config-schema field for operator-supplied backend selection override |
+| **§4 C-RT-04 HarnessContext field table** | NEW field `memory_tool_registry: MemoryToolRegistry` (stage 5; harness-runtime-defined per §14.12). Existing fields preserved verbatim. | §16 §6.A v2 A.iv ratification — Context field needed for C-RT-15 §14.5 callback-injection composer-step access |
+| **§14.5 C-RT-15 LLM-dispatch composer** | NEW sub-section §14.5.1 "Memory tool storage-backend callback binding (new at v1.17)" appended after Failure-mode taxonomy + before "Deferred to implementation discretion". Documents that when `step.step_payload.tools` contains the Anthropic Memory tool definition (`tool type "memory_20250818"` per ADR-D3 §1.1 #11), the composer queries `ctx.memory_tool_registry.resolve_backend(config.deployment_surface)` for the storage backend and wires the CRUD callbacks into the SDK tool-use → tool-result inner loop per the §14.12 contract. `memory.*` 6-attr namespace per AS spec v1.5 §14.7 emitted at each callback invocation. Implementation-discretion details (inner-loop mechanism: SDK-feature-bound vs harness-authored) deferred. Existing §14.5 body preserved verbatim. | §16 §6.E v2 E.iv ratification — Memory binds at C-RT-15 LLM dispatcher composer-step amendment |
+| **§14.12 (NEW) C-RT-22 MemoryToolRegistry + MemoryToolStorageBackendProtocol** | NEW contract surface authoring the storage-backend Protocol (5 CRUD callbacks per ADR-D3 §1.1 #11: `view` / `create` / `delete` / `str_replace` / `insert` on `/memories` paths) + registry binding storage-backend implementation to deployment-surface per `harness_as.MemoryToolStorageBackend` enum. Failure-mode taxonomy adds 3 fail classes: `RT-FAIL-MEMORY-BACKEND-RESOLUTION`, `RT-FAIL-MEMORY-CALLBACK-IO`, `RT-FAIL-MEMORY-PATH-VIOLATION`. Construction at stage 5 via NEW `materialize_memory_tool_registry_stage(config, ctx)` factory. Consumed by C-RT-15 §14.5.1 callback-injection composer-step. Operator-opt-in RETIRE-READY pattern documented per §16 §6.D D.i preservation: structural criterion-B MET at landing arc (factory wiring); full RETIRED gates on operator-bound `memory_tool_backend_config` non-default + local-filesystem-backend e2e exercise at follow-on retirement-batch arc per §16 §6.C v2 C.vii scope. | §16 §6.A v2 A.iv + §6.B v2 B.iv + §6.D PRESERVED ratifications — NEW callback-registry contract at runtime spec |
+
+**Sections preserved verbatim from v1.16.** All v1.16 content outside the four amendment sites above preserved unchanged. §1 + §2 + §3 (table preserved; only `memory_tool_backend_config` field appended) + §4 (table preserved; only `memory_tool_registry` field appended) + §5–§14.4 + §14.5 (existing body preserved verbatim; NEW sub-section §14.5.1 appended) + §14.6 + §14.7 + §14.8 + §14.9 (C-RT-19 unchanged per §16 §6.E v2 E.iv — no extension to RuntimeToolDispatcher; MCP/Memory/Files are structurally divergent per §13.3) + §14.10 + §14.11 + §15 + §16 (existing "§15 Spec-to-plan traceability" + "§16 Open questions" remain at their existing positions; NEW §14.12 inserted between §14.11 and §15) + §17 + §17.1 all preserved.
+
+**Status posture.** Proposed (v1.16) → **Proposed (v1.17)**. v1.17 is an additive contract authoring (NEW §14.12) + minor amendment (NEW §14.5.1 sub-section + NEW RuntimeConfig field + NEW HarnessContext field). No v1.16 contract removed; no acceptance criterion change at preserved sections. NO Files API contract authoring at v1.17 — Files arc deferred indefinitely per §14.C.
+
+**Downstream absorption owed (post-v1.17).**
+(a) Workspace `CLAUDE.md` §2.3 runtime row version bump (v1.16 → v1.17); co-published this arc.
+(b) AS spec v1.4 → v1.5 — NEW §14.7 producer-site reference note (parallel to v1.4 §14.3 mcp.* footer) repointed per §13.6.D to runtime spec v1.17 §14.12 C-RT-22 callback-invocation sites; §14.6 files.* footer NOT authored (Files arc deferred per §14.C); co-published this arc.
+(c) `Implementation_Plan_Harness_Runtime_v2_13.md` → v2.14 via `implementation-planner` revision-pass: NEW L-M cluster decomposing Memory tool primitive (storage-backend protocol carrier + filesystem-implementation + callback-injection at C-RT-15 + e2e — 3-5 units estimated). Separate skill invocation arc per §16 routing.
+(d) `Cross_Axis_Composition_Document_v2_8.md` unchanged — no new CXA edge introduction; the new `memory_tool_registry` ctx-binding consumes already-landed `MemoryToolStorageBackend` enum carrier (`harness-as/src/harness_as/anthropic_graceful_degradation.py:88`) without new cross-axis composition seam.
+(e) Filing footer staleness (carried adjacent defect from v1.13..v1.16) NOT patched per FM-2 no-extension discipline.
+
+**Adjacent defects surfaced (not patched per FM-2 no-extension discipline).**
+
+(i) **Files API contract authoring deferred.** Per §14.C ratification, Files arc deferred indefinitely. Files API executable consumer (parallel to but structurally distinct from C-RT-22) remains absent at HEAD post-v1.17. H_T-CP-17 PARTIAL → RETIRE-READY gate unchanged from batch-11 ledger. NOT patched here per §14.C explicit ratification; surfaced for future arc opening when operational driver materializes.
+
+(ii) **§14.5 C-RT-15 inner-loop mechanism.** The §14.5.1 amendment documents the contract surface (storage-backend callback binding) without prescribing the SDK-tool-use → tool-result inner-loop implementation mechanism. Options: (α) Anthropic SDK beta-feature `context-management-2025-06-27` may provide SDK-internal handling; (β) harness-authored inner loop wrapping `messages.create` calls; (γ) harness-authored sibling-composer to C-RT-15 wrapping the dispatcher with memory-tool loop. Implementation discretion at C-RT-22 landing arc per FM-2 no-extension discipline.
+
+(iii) **Filing footer staleness (carried).** Pre-existing carry-forward from v1.13..v1.16 noted at prior change-notes. NOT patched per FM-2.
+
+---
 
 ## Change-note (v1.15 → v1.16)
 
@@ -673,6 +709,7 @@ The orchestrator (`harness_runtime.bootstrap.__init__`) executes the 9 stages fr
 | `tenant_id` | `str | None` | no | Multi-tenant separation key per OD audit-ledger; None = single-tenant mode |
 | `trust_policy` | `TrustPolicy | None` (CP spec v1.11 §27 carrier) | no (default `None` → uses `TrustPolicy.default()`) | Operator-supplied per-MCP-server trust policy ingested at stage 5 by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3; consumed by `PerServerTrustEvaluator` bound to `ctx.per_server_trust_evaluator`. Added at v1.15 per U-RT-68 fork Q2=B2 ratification. |
 | `sandbox_decision_policy` | `SandboxDecisionPolicy | None` (harness-core carrier) | no (default `None` → uses `SandboxDecisionPolicy.default()`) | Operator-supplied sandbox-tier decision policy ingested at stage 5 by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3; consumed by `RuntimeToolDispatcher` for tier-floor evaluation per §14.9.1 step 5. Added at v1.15 per U-RT-68 fork Q2=B2 ratification; carrier home re-pointed from `AS spec v1.3 §15 carrier` → `harness-core carrier` at v1.16 per Class 1 fork resolution at `.harness/class_1_fork_sandbox_decision_policy_phantom_cite.md` (operator-ratified Q1=C-i 2026-05-22). |
+| `memory_tool_backend_config` | `MemoryToolBackendConfig | None` (harness-runtime sub-model per §14.12) | no (default `None` → `MemoryToolStorageBackend.FILESYSTEM` at LOCAL_DEV per `harness_as.anthropic_graceful_degradation.memory_tool_storage_backend` resolver) | Operator-supplied Memory tool storage-backend selection override. `None` defers backend resolution to the deployment-surface-keyed graceful-degradation resolver at `harness_as.anthropic_graceful_degradation.memory_tool_storage_backend(config.deployment_surface)`. Non-`None` overrides the resolver for explicit backend pinning (e.g., S3 at LOCAL_DEV for test-fixture purposes; encrypted-filesystem at MANAGED_CLOUD for additional discipline). Ingested at stage 5 by `materialize_memory_tool_registry_stage` factory per §14.12.3. Consumed by `MemoryToolRegistry.resolve_backend(...)` per §14.12.1. Added at v1.17 per `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §16 §6.A v2 A.iv ratification (2026-05-23). |
 
 **Invariants.**
 
@@ -741,6 +778,7 @@ The orchestrator (`harness_runtime.bootstrap.__init__`) executes the 9 stages fr
 | `tool_dispatcher` | `RetryBreakerToolDispatcher` (C-RT-21 §14.11 wrapper around C-RT-19 §14.9.1 `RuntimeToolDispatcher`) | 5 | `TOOL_STEP` dispatch entry point. Bound to the C-RT-21 retry-wrap wrapper, not the bare C-RT-19 dispatcher (mirrors the §14.6 C-RT-16 wrap-binding pattern at `ctx.llm_dispatcher`). Materialized by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3. Added at v1.15 per U-RT-68 fork Q2=B2 ratification. |
 | `per_server_trust_evaluator` | `PerServerTrustEvaluator` (CP spec v1.11 §27 carrier) | 5 | Per-MCP-server trust gate evaluator consumed by `RuntimeToolDispatcher` per §14.9.1 step 2. Materialized by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3 with `RuntimeConfig.trust_policy` ingestion. Added at v1.15 per U-RT-68 fork Q2=B2 ratification. |
 | `mcp_namespace_emitter` | `MCPClientNamespaceEmitter` (CP spec v1.11 §27 carrier) | 5 | `mcp.*` 7-attribute namespace emitter for `mcp.tool.call` spans per §14.9.1 step 7. Materialized by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3. Added at v1.15 per U-RT-68 fork Q2=B2 ratification. |
+| `memory_tool_registry` | `MemoryToolRegistry` (harness-runtime-defined, C-RT-22 §14.12.1) | 5 | Memory tool storage-backend registry. Resolves a `MemoryToolStorageBackendProtocol` implementation per `RuntimeConfig.deployment_surface` + optional `RuntimeConfig.memory_tool_backend_config` override. Consumed by C-RT-15 §14.5.1 callback-injection composer-step when `step.step_payload.tools` contains the Anthropic Memory tool definition (`tool type "memory_20250818"` per ADR-D3 §1.1 #11). Materialized by `materialize_memory_tool_registry_stage` factory per §14.12.3. Added at v1.17 per `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §16 §6.A v2 A.iv ratification (2026-05-23). |
 
 **Invariants.**
 
@@ -1376,6 +1414,27 @@ The remaining 6 attributes in C-AS-14 §14.2 (`thinking_mode` / `thinking_budget
 | `RT-FAIL-PAYLOAD-SHAPE` (permanent, new at v1.3) | `step.step_payload` not coercible to `ProviderAgnosticPayload` (missing `messages` / wrong shape / pydantic validation failure) | Raise; propagates to driver `try / except` boundary; driver fails the step with `step-failure: RT-FAIL-PAYLOAD-SHAPE: ...` |
 
 v1.3 introduces one new fail class (`RT-FAIL-PAYLOAD-SHAPE`); the remaining three carry forward from C-RT-14 unchanged.
+
+### §14.5.1 Memory tool storage-backend callback binding (new at v1.17)
+
+Per `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §16 §6.E v2 E.iv ratification (2026-05-23): when the LLM-dispatch composer body composes the `tools=[...]` arg at §14.5 step 4 dispatch and `step.step_payload.tools` contains the Anthropic Memory tool definition (`tool type "memory_20250818"` + beta header `context-management-2025-06-27` per ADR-D3 §1.1 #11), the composer MUST wire the storage-backend CRUD callbacks per the C-RT-22 §14.12 contract.
+
+**Composer-step amendment (per-dispatch invariant).**
+
+1. **Detect memory tool in step payload.** Iterate `step.step_payload.tools`; check for tool element with `type == "memory_20250818"`. If absent, dispatch proceeds without memory-tool wiring per the unchanged §14.5 step 4. If present, continue with steps 2-5 of this sub-section.
+2. **Resolve storage backend.** Call `ctx.memory_tool_registry.resolve_backend(ctx.config.deployment_surface)` per C-RT-22 §14.12.1. The registry returns a `MemoryToolStorageBackendProtocol` implementation per `RuntimeConfig.memory_tool_backend_config` override OR per the `harness_as.anthropic_graceful_degradation.memory_tool_storage_backend` resolver default. Raises `RT-FAIL-MEMORY-BACKEND-RESOLUTION` per C-RT-22 §14.12.4 on resolver failure.
+3. **Wire CRUD callbacks into SDK tool-use → tool-result inner loop.** The 5 callbacks (`view` / `create` / `delete` / `str_replace` / `insert`) per C-RT-22 §14.12.1 are bound for invocation when the Anthropic SDK message-create response surfaces a `tool_use` content block invoking `memory` tool. The inner loop mechanism is implementation discretion per §14.12.7 — three landing options (α/β/γ enumerated at v1.17 change-note adjacent-defect (ii)). The contract surface is: each callback invocation MUST emit one `memory.operation` span carrying the `memory.*` 6-attribute namespace per AS spec v1.5 §14.7.
+4. **Emit memory.* namespace per callback invocation.** Per AS spec v1.5 §14.7 + the v1.5 producer-site reference footer note: `memory.operation.kind` (one of `read` / `write` / `update` / `delete` / `list` corresponding to the 5 CRUD callbacks); `memory.path` (callback path arg, structure-not-content discipline per AS spec §14.7 row 2); `memory.backend` (the `MemoryToolStorageBackend` enum value the registry resolved); optional `memory.bytes_read` / `memory.bytes_written` per callback I/O; `memory.context_editing_active` (boolean per parent `llm.inference` span's `clear_tool_uses_20250919` directive presence). Sampling per AS spec §14.8: head=1.0 at `kind ∈ {write, update, delete}`; base-rate at `kind ∈ {read, list}`.
+5. **Propagate callback failures to driver.** Storage-backend callback failures raise typed fail classes per C-RT-22 §14.12.4 (`RT-FAIL-MEMORY-CALLBACK-IO` for I/O failure at storage backend; `RT-FAIL-MEMORY-PATH-VIOLATION` for path-discipline violation). These propagate to the driver `try/except` boundary at `workflow_driver.py:380-389` per existing C-CP-25 §25.3.3.4 contract; driver fails the step with `step-failure: {RT-FAIL-MEMORY-*}: ...`.
+
+**Implementation discretion (§14.5.1).** Inner-loop mechanism enumeration per v1.17 change-note adjacent-defect (ii) — three landing options:
+- **(α)** SDK-internal handling via Anthropic SDK beta `context-management-2025-06-27`. If the SDK exposes a callback-registration hook, the composer registers the 5 callbacks at dispatch time and the SDK runs the inner loop.
+- **(β)** Harness-authored inner loop wrapping the `messages.create` call. Composer dispatches initial request, polls response for `tool_use` content block invoking memory tool, executes the callback, formats `tool_result` content block, re-dispatches until non-memory-tool-use response.
+- **(γ)** Harness-authored sibling-composer to C-RT-15 wrapping the dispatcher with memory-tool loop. Parallel structure to C-RT-16 RetryBreakerFallbackDispatcher's wrap-around-C-RT-15 pattern.
+
+Implementation discretion at C-RT-22 landing arc per FM-2 no-extension discipline. The §14.5.1 contract surface (callback-binding declaration + memory.* emission discipline) is normative; the inner-loop mechanism is operator-discretion at follow-on implementation arc.
+
+**Cross-axis citation.** AS spec v1.5 §14.7 owns the canonical `memory.*` 6-attribute namespace declaration. The §14.7 producer-site reference footer note (new at v1.5) points back here at §14.5.1 + at §14.12 C-RT-22 callback-invocation sites as the canonical emission locus.
 
 **Deferred to implementation discretion.**
 
@@ -2194,6 +2253,157 @@ The C-RT-21 contract specifies the composition seam that — alongside C-RT-19 (
 - Test mock strategy (suggest a `MockRuntimeToolDispatcher` fixture that records the sequence of `(binding, step)` calls + returns canned success/failure per call; verify wrapper's retry behavior against the recorded sequence; pytest-asyncio for async surface).
 - Whether the wrapper emits `retry.skipped` or similar attribute on retry-budget consumption — defer to OTel telemetry-volume discretion at implementation; spec-MUST is just that exhaustion is observable via the `tool_retry.exhausted` event.
 - **Breaker integration future arc.** When the OD-axis-coordinated `BreakerScope` extension lands (per-tool or per-server analog), the C-RT-21 contract will be amended to consume the new scope at a future runtime spec arc. v1.15 explicitly disclaims breaker semantics.
+
+---
+
+## §14.12 C-RT-22 — `MemoryToolRegistry` + `MemoryToolStorageBackendProtocol` (new at v1.17)
+
+**Contract surface.** Storage-backend Protocol (PEP 544) + registry binding storage-backend implementation to deployment-surface. Consumed by C-RT-15 §14.5.1 callback-injection composer-step. The contract authors the harness-side surface for the Anthropic Memory tool client-side primitive per ADR-D3 §1.1 #11 (Memory tool is **client-side** — the harness implements the storage backend that responds to `view` / `create` / `delete` / `str_replace` / `insert` operations on `/memories` paths).
+
+**PRD enablement.** Completes the Memory tool runtime composition surface: AS spec §13 C-AS-13 row 11 declares the primitive at adoption-classification level (workload × engine-class composition matrix + storage-backend per `MemoryToolStorageBackend` enum + per-deployment-surface graceful-degradation per `harness_as.anthropic_graceful_degradation.memory_tool_storage_backend` resolver). AS spec §14.7 declares the `memory.*` 6-attribute OTel namespace schema. C-RT-22 closes the missing executable surface: a Protocol the harness implements + a registry binding implementations to deployment-surface. H_T-CP-16 substitution retirement criterion B becomes structural-criterion-B MET via factory wiring at the C-RT-22 landing arc per `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §16 §6.D D.i operator-opt-in RETIRE-READY pattern.
+
+**ADR commitment(s) honored.** ADR-D3 v1.2 §1.1 #11 §Decision (Memory tool client-side classification) + ADR-D3 v1.2 §1.3 (storage-backend per engine class) + ADR-D3 v1.2 §1.7 (graceful-degradation row 11: client-side, composes with cross-family fallback if harness preserves backend across providers) + ADR-D3 v1.2 §1.8.1 (`memory.*` namespace declaration at D3 source).
+
+**Fork-resolution provenance.** `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` — Class 1 operator-ratified 2026-05-23 at §11 PROVISIONAL → §13 systems-architect Mode 3 recommendation → §14 routing → §16 RATIFIED-AMENDED (Memory-only scope; Files arc deferred per §14.C). §13.6.A architect recommendation: NEW callback-registry contract at runtime spec consumed by C-RT-15 (NOT C-RT-19 extension; MCP/Memory/Files structurally divergent per §13.3 + §13.7 tiebreaker confirmed empirically).
+
+### §14.12.1 Architectural surfaces introduced
+
+**`MemoryToolStorageBackendProtocol` (5 CRUD callbacks per ADR-D3 §1.1 #11):**
+
+```python
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class MemoryToolStorageBackendProtocol(Protocol):
+    """Storage-backend contract for the Anthropic Memory tool client-side primitive.
+
+    Per ADR-D3 §1.1 #11: harness implements storage backend; filesystem-style
+    interface in `/memories` paths Claude controls; operations are 5 CRUD
+    callbacks invoked by the SDK tool-use → tool-result inner loop per C-RT-15
+    §14.5.1.
+    """
+    async def view(self, path: str) -> bytes:
+        """Read the content of `/memories/{path}`. Raises MemoryPathViolationError
+        if path escapes `/memories` scope. Raises MemoryCallbackIOError on
+        storage-backend I/O failure."""
+        ...
+    async def create(self, path: str, content: bytes) -> None:
+        """Create `/memories/{path}` with `content`. Overwrites if exists.
+        Same exception discipline as `view`."""
+        ...
+    async def delete(self, path: str) -> None:
+        """Delete `/memories/{path}`. No-op if absent. Same exception discipline."""
+        ...
+    async def str_replace(self, path: str, old: str, new: str) -> None:
+        """Replace `old` substring with `new` in `/memories/{path}`. Raises
+        MemoryCallbackIOError if `old` not found. Same exception discipline."""
+        ...
+    async def insert(self, path: str, line: int, content: str) -> None:
+        """Insert `content` at `line` in `/memories/{path}`. 1-indexed lines per
+        Anthropic Memory tool convention. Same exception discipline."""
+        ...
+```
+
+**Path discipline.** All 5 callbacks accept a `path: str` that the backend MUST validate as scoped to `/memories/` per ADR-D3 §1.1 #11 "filesystem-style interface in `/memories` Claude controls". Backends MUST raise `MemoryPathViolationError` (→ `RT-FAIL-MEMORY-PATH-VIOLATION`) on attempts to escape the scope (path traversal `..`, absolute paths outside `/memories/`, etc.). The path-discipline is a deterministic-layer invariant per `systems-architect` §2.2 boundary discipline — the LLM may emit any path string; the harness enforces scope.
+
+**`MemoryToolRegistry` (stage 5):**
+
+```python
+class MemoryToolRegistry:
+    """Registry binding MemoryToolStorageBackendProtocol implementations to
+    deployment surfaces. Constructed at bootstrap stage 5 by
+    `materialize_memory_tool_registry_stage` per §14.12.3.
+    """
+    def resolve_backend(
+        self,
+        deployment_surface: DeploymentSurface,
+    ) -> MemoryToolStorageBackendProtocol: ...
+
+    @property
+    def configured_backend(self) -> MemoryToolStorageBackend: ...  # the enum value resolved
+```
+
+`resolve_backend(...)` returns the storage-backend implementation for the deployment surface, honoring `RuntimeConfig.memory_tool_backend_config` operator override OR falling back to `harness_as.anthropic_graceful_degradation.memory_tool_storage_backend(deployment_surface)` resolver per the graceful-degradation discipline at C-AS-13 §13.6 step 8. Raises `RT-FAIL-MEMORY-BACKEND-RESOLUTION` on resolver failure (e.g., backend implementation not available for the surface; operator-supplied override references an unsupported backend per `MemoryToolStorageBackend` enum).
+
+**`MemoryToolBackendConfig` (RuntimeConfig sub-model):**
+
+```python
+@dataclass(frozen=True)
+class MemoryToolBackendConfig:
+    """Operator-supplied Memory tool storage-backend selection override.
+
+    Optional; absent (None at RuntimeConfig) defers to graceful-degradation
+    resolver. Present forces the named backend regardless of deployment surface.
+    """
+    backend: MemoryToolStorageBackend                              # the enum from harness-as
+    backend_params: Mapping[str, str] | None = None                # per-backend connection params (e.g., S3 bucket name, encryption-key reference); structure-not-content discipline applies
+```
+
+### §14.12.2 Per-callback invocation discipline (composer body)
+
+Per-dispatch invariants (when C-RT-15 §14.5.1 wires the callbacks into the SDK tool-use → tool-result loop):
+
+1. **Path validation at every callback.** Each of the 5 callbacks validates the `path` argument against `/memories/` scope discipline BEFORE invoking backend I/O. Failure raises `MemoryPathViolationError` → `RT-FAIL-MEMORY-PATH-VIOLATION`.
+2. **One `memory.operation` span per callback invocation.** Span opens at callback entry; closes at backend I/O completion (success OR failure). Emits the `memory.*` 6-attribute namespace per AS spec v1.5 §14.7 row-by-row mapping (per C-RT-15 §14.5.1 step 4).
+3. **Backend implementation owns concurrency discipline.** The Protocol does NOT mandate concurrency model. Filesystem-backend implementations may use `asyncio.Lock` per path; S3-backend implementations may delegate to the AWS SDK's per-bucket concurrency. The Protocol surface is async-only per C-RT-08 async-only posture.
+4. **No retry inside the callback.** Storage-backend I/O failures propagate as `MemoryCallbackIOError` → `RT-FAIL-MEMORY-CALLBACK-IO` (transient per C-RT-14 fail-class taxonomy). Retry MAY be wrapped at the C-RT-15 dispatcher level (deferred to follow-on retry-wrap arc per implementation discretion); v1.17 contract does not specify retry semantics inside the callback boundary.
+
+### §14.12.3 Lifecycle stage placement
+
+**Stage 5 (LOOP_INIT):** Bootstrap stage 5 wires the Memory tool registry via NEW factory contract `materialize_memory_tool_registry_stage(config: RuntimeConfig, ctx: _MutableHarnessContext) → MemoryToolRegistry` (added at v1.17 per §16 §6.A v2 A.iv ratification). Factory body:
+
+1. Resolve the configured backend per `config.memory_tool_backend_config` override (if present) OR via `harness_as.anthropic_graceful_degradation.memory_tool_storage_backend(config.deployment_surface)` resolver default. Returns a `MemoryToolStorageBackend` enum value.
+2. Construct the storage-backend implementation per the resolved enum value:
+   - `MemoryToolStorageBackend.FILESYSTEM` → instantiate a filesystem-backed implementation rooted at a deployment-surface-appropriate path (e.g., `ctx.path_resolver.resolve(PathClass.MEMORY_TOOL_BACKEND_ROOT, ...)`).
+   - `MemoryToolStorageBackend.ENCRYPTED_FILESYSTEM` → wrap filesystem implementation with per-path encryption per operator-supplied key reference at `backend_params`.
+   - `MemoryToolStorageBackend.S3` → instantiate an S3-backed implementation per `backend_params['bucket']` + AWS credentials per `harness-runtime` standard credential resolution.
+   - `MemoryToolStorageBackend.DATABASE` → instantiate a database-backed implementation per `backend_params['connection_string']`.
+   - `MemoryToolStorageBackend.OPERATOR_DEFINED` → instantiate per operator-supplied implementation per `backend_params['class_qualified_name']` (introspection-based; raises `RT-FAIL-MEMORY-BACKEND-RESOLUTION` on class-resolution failure).
+3. Construct `MemoryToolRegistry` bound to the storage-backend implementation; bind to `ctx.memory_tool_registry`.
+
+Failure to resolve OR construct raises `RT-FAIL-MEMORY-BACKEND-RESOLUTION` → bootstrap aborts (fail-closed per ADR-F4 v1.1 §Consequences (c)).
+
+**Stage 5 ordering.** The `materialize_memory_tool_registry_stage` factory runs at stage 5 after `materialize_runtime_tool_dispatcher_stage` (§14.9.3) — registry construction has no dependency on the tool dispatcher; ordering is arbitrary within stage 5 LOOP_INIT.
+
+### §14.12.4 Failure-mode taxonomy
+
+3 new fail classes added to §14 runtime-local fail-class taxonomy:
+
+| Fail class | Trigger | Permanent? |
+|---|---|---|
+| `RT-FAIL-MEMORY-BACKEND-RESOLUTION` | `materialize_memory_tool_registry_stage` cannot resolve or construct the storage-backend implementation (e.g., operator-supplied backend not available at deployment surface; `OPERATOR_DEFINED` class qualifier fails introspection; required `backend_params` missing) | YES (bootstrap aborts) |
+| `RT-FAIL-MEMORY-CALLBACK-IO` | Storage-backend callback raises I/O failure (filesystem permission denied; S3 5xx; database connection failure; etc.) | NO (transient; retry wrap MAY apply at C-RT-15 dispatcher level — implementation discretion) |
+| `RT-FAIL-MEMORY-PATH-VIOLATION` | Callback path arg escapes `/memories/` scope (path traversal attempt; absolute path outside scope) | YES (LLM-emitted invalid path; not retryable; propagates as step-failure) |
+
+### §14.12.5 Invariants
+
+1. **Storage-backend resolved exactly once per bootstrap.** Stage 5 resolves; bound to `ctx.memory_tool_registry`. No re-resolution at dispatch-time. Operator backend override changes require process restart.
+2. **All 5 CRUD callbacks satisfy the Protocol.** Each concrete `MemoryToolStorageBackendProtocol` implementation MUST implement all 5 methods. Enforced via `@runtime_checkable` introspection at stage 5 binding (raises `RT-FAIL-MEMORY-BACKEND-RESOLUTION` on missing method).
+3. **Path discipline enforced at backend.** Every callback validates `path` against `/memories/` scope BEFORE backend I/O. Backends MUST NOT defer scope validation to underlying storage (e.g., filesystem implementations MUST validate before opening the file, not rely on filesystem permission errors).
+4. **No callback emits secrets in span attributes.** `memory.path` carries the path string (structure-not-content per AS spec §14.7 row 2 + §14.9 redaction-discipline forward-reference); callback content (the bytes read/written) is NEVER emitted as span attribute per AS spec §14.9 redaction discipline + ADR-D3 v1.2 §1.8.1 sensitive-data commitment.
+5. **memory.* sampling per AS spec §14.8.** head=1.0 at `kind ∈ {write, update, delete}` (audit-floor commitment per ADR-D3 v1.2 §1.8.1); base-rate at `kind ∈ {read, list}`. Backends MUST NOT downsample mutation operations.
+6. **Backend lifecycle owned by backend.** Per-backend cleanup (e.g., S3 client connection close at shutdown) deferred to implementation discretion via C-RT-10 shutdown sequence — implementations MAY register shutdown hooks via `ctx.shutdown_registry.register(...)` (existing primitive) for per-backend cleanup; not required.
+
+### §14.12.6 X-AL-2 retirement implications (v1.17 → retirement event prerequisites)
+
+The C-RT-22 contract specifies the composition seam that, alongside C-RT-15 §14.5.1 callback-injection composer-step amendment + the operator-bound `memory_tool_backend_config` non-default at HarnessContext, closes H_T-CP-16 substitution retirement criterion B at structural-only-met level per §16 §6.D D.i operator-opt-in RETIRE-READY pattern (mirrors batch-10 H_T-CP-18 RETIRE-READY pattern + batch-11 H_T-CP-21 RETIRE-READY pattern).
+
+Full RETIRED transition (RETIRE-READY → RETIRED) gates on the follow-on retirement-batch arc per §16 §6.C v2 C.vii scope:
+1. Operator-bound `RuntimeConfig.memory_tool_backend_config` non-default (operator explicitly selects a storage backend, opting in to the Memory tool runtime path)
+2. Local-filesystem-backend e2e exercise: real Anthropic API `messages.create` call with `tools=[memory_tool]` + `MemoryToolStorageBackend.FILESYSTEM` backend wired through the registry; LLM-driven `create`/`view`/`str_replace` callback invocation observed; `memory.*` namespace emitted at each callback span
+
+S3-backend e2e + ENCRYPTED_FILESYSTEM e2e + DATABASE e2e deferred to operator-discretion follow-on retirement-batch arcs per §16 §6.C v2 C.vii scope.
+
+**Cross-axis cascade closures at C-RT-22 landing.** Per §13 architect recommendation §13.6.D: AS spec v1.5 §14.7 NEW producer-site reference footer note (co-published this arc) repoints to runtime spec v1.17 §14.12 C-RT-22 callback-invocation sites as the canonical `memory.*` emission locus. Per §13 architect §5 (cross-axis impact at fork-doc §16): ZERO cross-axis cascade beyond the AS spec footer note — the `memory_tool_registry` ctx-binding consumes already-landed `MemoryToolStorageBackend` enum carrier (`harness-as/src/harness_as/anthropic_graceful_degradation.py:88`) without new cross-axis composition seam (CXA v2.8 unchanged).
+
+### §14.12.7 Deferred to implementation discretion
+
+- **Storage-backend implementation modules.** Per-backend implementation files (e.g., `harness-runtime/src/harness_runtime/lifecycle/memory_tool_filesystem.py` + `memory_tool_s3.py` + etc.) — module organization is implementation discretion. v1.17 contract specifies only the Protocol surface + the registry binding.
+- **Filesystem-backend root path.** Suggested: a deployment-surface-appropriate path resolved via `ctx.path_resolver.resolve(PathClass.MEMORY_TOOL_BACKEND_ROOT, ...)` — the `PathClass` enum extension is implementation-arc discretion (may require IS spec extension if path-class enum changes route through IS axis).
+- **Per-backend concurrency model.** Async-only per Protocol; specific concurrency primitives (per-path locks, connection pools, etc.) are implementation discretion.
+- **SDK tool-use → tool-result inner loop mechanism.** Per C-RT-15 §14.5.1 adjacent-defect (ii) enumeration: SDK-internal beta-feature handling (α) vs harness-authored inner loop (β) vs sibling-composer wrap (γ). Operator selects at implementation arc.
+- **Operator-defined backend introspection mechanism.** `MemoryToolStorageBackend.OPERATOR_DEFINED` requires class-qualified-name resolution at runtime; specific mechanism (e.g., `importlib.import_module` + `getattr` vs entry-point-based registration) is implementation discretion.
+- **Backend telemetry-attribution.** Whether storage backends themselves emit OTel spans (e.g., `memory.backend.s3.put`) is implementation discretion; the `memory.operation` span at the C-RT-22 callback boundary is normative; backend-internal observability is optional.
 
 ---
 
