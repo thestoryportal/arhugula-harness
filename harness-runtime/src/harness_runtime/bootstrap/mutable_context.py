@@ -144,13 +144,7 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "tool_dispatcher",
     "per_server_trust_evaluator",
     "mcp_namespace_emitter",
-    # NOTE: `memory_tool_registry` (added at U-RT-79) is intentionally NOT
-    # in this required-fields tuple at U-RT-79 landing. The factory that
-    # binds it (`materialize_memory_tool_registry_stage` per spec §14.12.3)
-    # lands at U-RT-80; adding to required-fields will be a single-token
-    # edit at the U-RT-80 commit alongside the factory. This deferral
-    # preserves all existing bootstrap tests through U-RT-79 (no test
-    # constructs a registry yet) per `[[halt-route-split-AC-pattern]]`.
+    "memory_tool_registry",
 )
 
 

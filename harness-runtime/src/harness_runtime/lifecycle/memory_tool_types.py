@@ -31,6 +31,7 @@ from typing import Protocol, runtime_checkable
 from harness_as.anthropic_graceful_degradation import MemoryToolStorageBackend
 
 __all__ = [
+    "MemoryBackendResolutionError",
     "MemoryCallbackIOError",
     "MemoryPathViolationError",
     "MemoryToolBackendConfig",
@@ -132,4 +133,25 @@ class MemoryCallbackIOError(Exception):
 
     Per §14.12.2 invariant 4: no retry inside the callback boundary; retry
     MAY be wrapped at C-RT-15 dispatcher level (implementation discretion).
+    """
+
+
+class MemoryBackendResolutionError(Exception):
+    """`materialize_memory_tool_registry_stage` cannot resolve or construct
+    the storage-backend implementation.
+
+    Maps to `RT-FAIL-MEMORY-BACKEND-RESOLUTION` (permanent — bootstrap
+    aborts fail-closed per ADR-F4 v1.1 §Consequences (c)) per runtime spec
+    v1.17 §14.12.4 fail-class taxonomy. Raised at U-RT-80 factory body when:
+
+    - Operator-supplied `MemoryToolStorageBackend` enum value has no
+      implementation landed at v2.15 (only `FILESYSTEM` materialized per
+      §14.D operator ratification; `S3` / `ENCRYPTED_FILESYSTEM` /
+      `DATABASE` / `OPERATOR_DEFINED` deferred to follow-on
+      retirement-batch arcs).
+    - Default-path resolver returns a frozenset whose intersection with the
+      v2.15 implemented set is empty.
+    - Constructed backend object fails `MemoryToolStorageBackendProtocol`
+      `@runtime_checkable` introspection (missing one or more of the 5
+      required CRUD methods) per §14.12.5 invariant 2.
     """

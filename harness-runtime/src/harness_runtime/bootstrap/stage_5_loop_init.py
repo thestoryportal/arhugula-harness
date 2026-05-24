@@ -42,6 +42,9 @@ from harness_runtime.lifecycle.mcp_backed_ask_user_question_surface import (
     materialize_mcp_backed_ask_user_question_surface_stage,
 )
 from harness_runtime.lifecycle.override_evaluator import materialize_override_evaluator_stage
+from harness_runtime.bootstrap.factories.memory_tool_registry_factory import (
+    materialize_memory_tool_registry_stage,
+)
 from harness_runtime.bootstrap.factories.runtime_tool_dispatcher_factory import (
     materialize_runtime_tool_dispatcher_stage,
 )
@@ -321,3 +324,13 @@ async def execute(
             StepKind.TOOL_STEP: tool_step_dispatcher,
         },
     )
+
+    # ---------------------------------------------------------------------
+    # U-RT-80 (C-RT-22 §14.12.3): Memory tool storage-backend registry.
+    # Composes the 4-step body (resolve enum → construct backend →
+    # Protocol-conformance check → construct + bind registry). Ordering
+    # within stage 5 LOOP_INIT is arbitrary per spec §14.12.3 — placed last
+    # so all preceding stage-5 wiring remains observable to debuggers
+    # without registry-failure interleaving.
+    await materialize_memory_tool_registry_stage(config, ctx)
+

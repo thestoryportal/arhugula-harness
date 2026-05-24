@@ -144,22 +144,17 @@ def test_mutable_context_carries_memory_tool_registry_field() -> None:
     assert builder.memory_tool_registry is registry
 
 
-def test_memory_tool_registry_required_fields_deferred_to_u_rt_80() -> None:
-    """AC #5 (split landing per `[[halt-route-split-AC-pattern]]`) —
-    `memory_tool_registry` is NOT yet in `_REQUIRED_FIELDS` at U-RT-79
-    landing; addition deferred to U-RT-80 alongside the factory that
-    binds the field at stage 5 LOOP_INIT.
-
-    Adding to required-fields at U-RT-79 without a binding factory would
-    break every existing bootstrap test (no test constructs a registry
-    yet). The defer-to-factory-landing pattern preserves atomic-rollback
-    boundaries per implementation-planner SKILL §3.4."""
+def test_memory_tool_registry_in_required_fields_at_u_rt_80() -> None:
+    """AC #5 (post-U-RT-80 landing) — `memory_tool_registry` is in
+    `_REQUIRED_FIELDS` once the U-RT-80 factory binds it at stage 5
+    LOOP_INIT. The U-RT-79 → U-RT-80 split per `[[halt-route-split-AC-pattern]]`
+    deferred this addition to U-RT-80 to preserve atomic-rollback
+    boundaries during the L9-octies traversal."""
     from harness_runtime.bootstrap.mutable_context import _REQUIRED_FIELDS
 
-    assert "memory_tool_registry" not in _REQUIRED_FIELDS, (
-        "memory_tool_registry should be added to _REQUIRED_FIELDS at "
-        "U-RT-80 landing (alongside the factory that binds it), NOT at "
-        "U-RT-79 schema-extension landing"
+    assert "memory_tool_registry" in _REQUIRED_FIELDS, (
+        "memory_tool_registry must be in _REQUIRED_FIELDS at U-RT-80 "
+        "landing (the factory binds it at stage 5 LOOP_INIT)"
     )
 
 
