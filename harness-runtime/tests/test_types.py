@@ -152,6 +152,7 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         "tool_dispatcher",  # U-RT-72 — C-RT-04 §4 v1.16 retry-wrapped TOOL_STEP dispatcher (U-RT-75 populates)
         "per_server_trust_evaluator",  # U-RT-72 — C-RT-04 §4 v1.16 (U-RT-75 populates)
         "mcp_namespace_emitter",  # U-RT-72 — C-RT-04 §4 v1.16 (U-RT-75 populates)
+        "memory_tool_registry",  # U-RT-79 — C-RT-04 §4 v1.17 Memory tool storage-backend registry (U-RT-80 populates)
     }
     actual = set(HarnessContext.model_fields.keys())
     assert actual == expected, f"missing: {expected - actual}; extra: {actual - expected}"

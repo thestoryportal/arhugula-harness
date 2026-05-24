@@ -144,6 +144,13 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "tool_dispatcher",
     "per_server_trust_evaluator",
     "mcp_namespace_emitter",
+    # NOTE: `memory_tool_registry` (added at U-RT-79) is intentionally NOT
+    # in this required-fields tuple at U-RT-79 landing. The factory that
+    # binds it (`materialize_memory_tool_registry_stage` per spec §14.12.3)
+    # lands at U-RT-80; adding to required-fields will be a single-token
+    # edit at the U-RT-80 commit alongside the factory. This deferral
+    # preserves all existing bootstrap tests through U-RT-79 (no test
+    # constructs a registry yet) per `[[halt-route-split-AC-pattern]]`.
 )
 
 
@@ -260,6 +267,15 @@ class _MutableHarnessContext:
     ``ctx.mcp_client_host.tool_registry``. Required on the frozen
     HarnessContext per spec v1.16 §4 C-RT-04."""
 
+    memory_tool_registry: Any = None
+    """U-RT-79 — Memory tool storage-backend registry (U-RT-78
+    ``MemoryToolRegistry``). Bound at stage 5 LOOP_INIT by
+    ``materialize_memory_tool_registry_stage`` (U-RT-80) per spec v1.17
+    §14.12.3. Required on the frozen HarnessContext per spec v1.17 §4
+    C-RT-04 (added at v1.17 per Class 1 fork H_T-CP-16+17 §16 ratified
+    Memory-only arc absorption 2026-05-23). Typed ``Any`` per the
+    Protocol-vs-concrete-narrowing pattern (mirrors ``tool_dispatcher``)."""
+
     # Orchestrator bookkeeping — not part of HarnessContext.
     completed_stages: list[BootstrapStage] = field(default_factory=list)
     emitted_bootstrap_events: list[BootstrapStageCompleteEvent] = field(default_factory=list)
@@ -310,6 +326,7 @@ class _MutableHarnessContext:
             tool_dispatcher=self.tool_dispatcher,
             per_server_trust_evaluator=self.per_server_trust_evaluator,
             mcp_namespace_emitter=self.mcp_namespace_emitter,
+            memory_tool_registry=self.memory_tool_registry,
         )
         self.frozen = ctx
         return ctx

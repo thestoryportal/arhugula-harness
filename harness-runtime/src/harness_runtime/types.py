@@ -65,6 +65,10 @@ from harness_cp.hitl_as_tool_call_rewriting import (
 from harness_cp.hitl_timeout_degradation import TimeoutDegradationKind
 from harness_cp.pause_resume_protocol import ResumeOutcomeKind
 from harness_cp.per_server_trust_types import TrustPolicy
+
+# U-RT-79 — Memory tool backend config carrier import (per spec v1.17 §3 C-RT-02
+# field-table extension). MemoryToolBackendConfig declared at U-RT-76.
+from harness_runtime.lifecycle.memory_tool_types import MemoryToolBackendConfig
 from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry, StepEffectiveBinding
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass
 from harness_cp.routing_manifest_residence import RetryPolicy, RoutingManifest
@@ -1051,6 +1055,24 @@ class RuntimeConfig(BaseModel):
     + planner revision pass.
     """
 
+    memory_tool_backend_config: MemoryToolBackendConfig | None = None
+    """Operator-supplied Memory tool storage-backend selection override.
+
+    Added at U-RT-79 per `Spec_Harness_Runtime_v1.md` v1.17 §3 C-RT-02
+    field-table extension (Class 1 fork H_T-CP-16+17 §16 ratified Memory-
+    only arc absorption at `.harness/class_1_fork_h_t_cp_16_17_executable_
+    consumer_absence.md`; operator-ratified 2026-05-23).
+
+    Optional. `None` defers backend resolution to the deployment-surface-
+    keyed graceful-degradation resolver at
+    `harness_as.anthropic_graceful_degradation.memory_tool_storage_backend
+    (config.deployment_surface)`. Non-`None` overrides the resolver for
+    explicit backend pinning (e.g., S3 at LOCAL_DEVELOPMENT for test-fixture
+    purposes; encrypted-filesystem at MANAGED_CLOUD for additional
+    discipline). Ingested at stage 5 by `materialize_memory_tool_registry_
+    stage` factory (U-RT-80) per §14.12.3.
+    """
+
 
 # ----------------------------------------------------------------------------
 # `HarnessContext` — C-RT-04 v1.1 schema.
@@ -1224,6 +1246,28 @@ class HarnessContext(BaseModel):
 
     Typed `Any` per the C-RT-04 narrowing pattern (consistent with the
     other stage-5 sibling fields).
+    """
+
+    memory_tool_registry: Any
+    """Memory tool storage-backend registry (U-RT-78
+    `MemoryToolRegistry` — concretized by
+    `harness_runtime.lifecycle.memory_tool_registry.MemoryToolRegistry`).
+
+    Materialized at stage 5 LOOP_INIT by
+    `materialize_memory_tool_registry_stage` (U-RT-80) per spec v1.17
+    §14.12.3. Resolves a `MemoryToolStorageBackendProtocol` implementation
+    per `RuntimeConfig.deployment_surface` + optional
+    `RuntimeConfig.memory_tool_backend_config` override per §14.12.1.
+    Consumed by C-RT-15 §14.5.1 callback-injection composer-step
+    (U-RT-81) when `step.step_payload.tools` contains the Anthropic
+    Memory tool definition (`tool type "memory_20250818"` per ADR-D3
+    v1.2 §1.1 #11).
+
+    Added at U-RT-79 per `Spec_Harness_Runtime_v1.md` v1.17 §4 C-RT-04
+    field-table extension. Typed `Any` per the C-RT-04 Protocol-vs-
+    concrete-narrowing pattern (mirrors `tool_dispatcher` +
+    `mcp_client_host`) to avoid the `lifecycle.memory_tool_registry →
+    types` import cycle.
     """
 
     mcp_namespace_emitter: Any
