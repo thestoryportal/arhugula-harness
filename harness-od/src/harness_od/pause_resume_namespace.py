@@ -271,3 +271,212 @@ class PauseResumeAuditPayload(BaseModel):
     """resume.outcome enum value (resume path only): `resumed` /
     `diff_aborted` / `arbitration_owed`. Serialized as string at the audit-
     ledger row per §C-OD-30.1 row 8 attribute type."""
+
+
+# ----------------------------------------------------------------------------
+# Canonical production-invocation helpers (§C-OD-30.4 — NEW at OD spec v1.11)
+# ----------------------------------------------------------------------------
+#
+# Per `[[fork-u-cp-72-cost-and-pause-resume-prefix-gap]]` §9 + OD spec v1.11
+# §C-OD-30.4 + OD plan v2.18 U-OD-51 ACs #6 + #7 + #8 + #10.
+#
+# Two module-level helpers project PauseEvent / (ResumeAttempt, ResumeOutcome)
+# carriers from harness-cp into PauseResumeAuditPayload instances ready for the
+# `cp_audit_to_od_audit` converter (already operational at
+# `harness-cxa/src/harness_cxa/cp_audit_conversion.py:289-299` per Sub-arc A).
+#
+# Narrow-scope framing: no production callsite exists at the harness today —
+# capture_pause_snapshot + attempt_resume at harness-cp/.../pause_resume_protocol.py
+# are NotImplementedError stubs; workflow_driver.py does not invoke
+# PauseResumeProtocol. These helpers land as a library surface ready for the
+# CP composer authoring arc (gates H_T-CP-22 PARTIAL → RETIRE-READY per
+# harness-cp/CLAUDE.md §4.1). Helpers are DEAD CODE at landing.
+
+from harness_cp.pause_resume_protocol import (
+    PauseEvent,
+    ResumeAttempt,
+    ResumeOutcome,
+    ResumeOutcomeKind,
+)
+
+
+def _project_pause_event_to_audit_payload(
+    event: PauseEvent,
+    *,
+    workflow_id: str,
+    step_index: int,
+    snapshot_hash: str,
+    state_ledger_anchor: str,
+    prior_event_hash: str,
+    timestamp: str = "",
+) -> PauseResumeAuditPayload:
+    """Project a `PauseEvent` into a `PauseResumeAuditPayload` per §C-OD-30.4.
+
+    Per OD spec v1.11 §C-OD-30.4.1 step 2: sets `audit_cp_action_id` to
+    `f"pause:{workflow_id}:{step_index}"` per the canonical CXA v2.9 §0.3
+    8-prefix discriminator table entry. Per §C-OD-30.4.1 step 3: hard-codes
+    `audit_cp_response` to `"paused"` per the §C-OD-30.2 comment-line
+    discipline. Per §C-OD-30.4.1 step 8: nulls resume-path fields
+    (`diff_detected`, `diff_policy`, `diff_summary_hash`, `resume_outcome`).
+
+    Composition discipline (per §C-OD-30.4 helper-signature rationale):
+
+    - `workflow_id` kwarg required (PauseEvent does not carry it).
+    - `step_index` kwarg required (carried at audit payload + appears in
+      action_id pattern).
+    - `snapshot_hash` external — composition site computes from the snapshot
+      serialization per §22.1 acceptance #9 implementer-discretion.
+    - `state_ledger_anchor` external — composition site supplies the F2
+      state-ledger `entry_hash` written at pause boundary.
+    - `prior_event_hash` + `timestamp` external — step-context-derived sentinel
+      values (`"0" * 64` zero-hash; `""` empty-string) caller-set per sibling-
+      subclass convention.
+
+    The `event.pause_reason` (a `PauseReason` StrEnum at
+    harness_cp/pause_resume_protocol.py) is serialized to its string value per
+    §C-OD-30.2 `pause_reason: str | None` field typing (enum-value serialized
+    at the audit-ledger row, not enum class identifier).
+
+    Args:
+        event: The CP-side `PauseEvent` captured at the pause boundary.
+        workflow_id: The workflow's identifier (composition-site-supplied).
+        step_index: The step index at the pause event.
+        snapshot_hash: SHA-256 hex of the snapshot at pause boundary.
+        state_ledger_anchor: `entry_hash` of the F2 state-ledger entry written
+            at pause boundary (composition-site-supplied).
+        prior_event_hash: SHA-256 hex (64) of prior CP event hash, or
+            `"0" * 64` sentinel.
+        timestamp: ISO-8601 UTC timestamp, or `""` MVP sentinel.
+
+    Returns:
+        A frozen `PauseResumeAuditPayload` ready for the
+        `cp_audit_to_od_audit` converter via the `pause:` prefix branch.
+    """
+    return PauseResumeAuditPayload(
+        # CP-sourced common fields per §C-OD-24.6:
+        audit_cp_action_id=f"pause:{workflow_id}:{step_index}",
+        audit_cp_response="paused",
+        audit_cp_timestamp=timestamp,
+        audit_cp_prior_event_hash=prior_event_hash,
+        # Always-populated common fields per §C-OD-30.2:
+        snapshot_hash=snapshot_hash,
+        step_index=step_index,
+        # Pause-path-specific fields (populated):
+        pause_reason=event.pause_reason.value,
+        state_ledger_anchor=state_ledger_anchor,
+        # Resume-path-specific fields (nulled per §C-OD-30.4.1 step 8):
+        diff_detected=None,
+        diff_policy=None,
+        diff_summary_hash=None,
+        resume_outcome=None,
+    )
+
+
+def _project_resume_outcome_to_audit_payload(
+    attempt: ResumeAttempt,
+    outcome: ResumeOutcome,
+    *,
+    step_index: int,
+    snapshot_hash: str,
+    diff_summary_hash: str | None,
+    prior_event_hash: str,
+    timestamp: str = "",
+) -> PauseResumeAuditPayload:
+    """Project a `(ResumeAttempt, ResumeOutcome)` pair into a
+    `PauseResumeAuditPayload` per §C-OD-30.4.
+
+    Per OD spec v1.11 §C-OD-30.4.1 step 2: sets `audit_cp_action_id` to
+    `f"resume:{attempt.paused_workflow_id}:{step_index}"` — workflow_id
+    extracted from the carrier per §C-OD-30.4 helper-signature rationale.
+
+    Per §C-OD-30.4.1 step 3: selects `audit_cp_response` per `outcome.outcome_kind`:
+    - `RESUME_CLEAN` → `"resumed"`
+    - `RESUME_AFTER_REVALIDATION` → `"resumed"` (revalidation succeeded)
+    - `ABORT_REVALIDATION_FAILED` → `"diff_detected"` (material diff blocked)
+    - `ABORT_SNAPSHOT_CORRUPTED` → `"diff_detected"` (integrity failure)
+
+    Per §C-OD-30.4.1 step 8: nulls pause-path fields (`pause_reason`,
+    `state_ledger_anchor`).
+
+    Per §C-OD-30.4.1 step 9: `diff_policy` inlined as `None` for `RESUME_CLEAN`
+    outcomes; for non-clean outcomes the helper sets the active policy enum
+    value per implementer discretion. v1.11 takes the simplest path: emit the
+    outcome_kind's value as a stand-in for the diff_policy until the composer
+    arc surfaces the actual policy as input (per §C-OD-30.4.5 deferred
+    discretion). Future arc MAY widen the signature to accept `diff_policy`
+    as an explicit kwarg.
+
+    Args:
+        attempt: The CP-side `ResumeAttempt` consumed at the resume boundary.
+        outcome: The CP-side `ResumeOutcome` produced by `attempt_resume`.
+        step_index: The step index at the resume event.
+        snapshot_hash: SHA-256 hex of the prior snapshot being resumed from.
+        diff_summary_hash: SHA-256 hex of the material-diff summary if
+            `outcome.outcome_kind != RESUME_CLEAN`; `None` for `RESUME_CLEAN`.
+        prior_event_hash: SHA-256 hex (64) of prior CP event hash, or
+            `"0" * 64` sentinel.
+        timestamp: ISO-8601 UTC timestamp, or `""` MVP sentinel.
+
+    Returns:
+        A frozen `PauseResumeAuditPayload` ready for the
+        `cp_audit_to_od_audit` converter via the `resume:` prefix branch.
+    """
+    # Per §C-OD-30.4.1 step 3 outcome-kind switch:
+    if outcome.outcome_kind in (
+        ResumeOutcomeKind.RESUME_CLEAN,
+        ResumeOutcomeKind.RESUME_AFTER_REVALIDATION,
+    ):
+        response = "resumed"
+    else:
+        # ABORT_REVALIDATION_FAILED + ABORT_SNAPSHOT_CORRUPTED both surface as
+        # diff_detected per §C-OD-30.4.1 step 3 (integrity-failure → audit row
+        # marks diff_detected per §C-OD-30.2 comment).
+        response = "diff_detected"
+
+    diff_detected = outcome.outcome_kind != ResumeOutcomeKind.RESUME_CLEAN
+
+    # Per §C-OD-30.4.1 step 9: diff_policy inlined None for RESUME_CLEAN;
+    # outcome_kind value as stand-in for non-clean (implementer-discretion
+    # per §C-OD-30.4.5 deferred discretion until composer arc surfaces the
+    # actual policy as input).
+    if outcome.outcome_kind == ResumeOutcomeKind.RESUME_CLEAN:
+        diff_policy: str | None = None
+    else:
+        diff_policy = outcome.outcome_kind.value
+
+    return PauseResumeAuditPayload(
+        # CP-sourced common fields per §C-OD-24.6:
+        audit_cp_action_id=f"resume:{attempt.paused_workflow_id}:{step_index}",
+        audit_cp_response=response,
+        audit_cp_timestamp=timestamp,
+        audit_cp_prior_event_hash=prior_event_hash,
+        # Always-populated common fields per §C-OD-30.2:
+        snapshot_hash=snapshot_hash,
+        step_index=step_index,
+        # Pause-path-specific fields (nulled per §C-OD-30.4.1 step 8):
+        pause_reason=None,
+        state_ledger_anchor=None,
+        # Resume-path-specific fields (populated):
+        diff_detected=diff_detected,
+        diff_policy=diff_policy,
+        diff_summary_hash=diff_summary_hash,
+        resume_outcome=outcome.outcome_kind.value,
+    )
+
+
+__all__ = [
+    "AttributeSpec",
+    "PAUSE_RESUME_SPAN_NAMESPACE_SCHEMA",
+    "PauseResumeAuditPayload",
+    "SPAN_SITE_PAUSE_CAPTURED",
+    "SPAN_SITE_RESUME_ATTEMPTED",
+    # Production-invocation helpers (§C-OD-30.4 NEW at OD spec v1.11; dead code
+    # at landing until CP composer authoring arc — gates H_T-CP-22 PARTIAL →
+    # RETIRE-READY per harness-cp/CLAUDE.md §4.1). Underscore-prefixed names
+    # mirror cost-axis sibling precedent at `cost_record_audit_writer.py` per
+    # the AuditPayload-subclass canonical helper convention; explicitly
+    # re-exported via __all__ to make the helper-only production-construction
+    # discipline per §C-OD-30.4.1 step 1 explicit at the module boundary.
+    "_project_pause_event_to_audit_payload",
+    "_project_resume_outcome_to_audit_payload",
+]
