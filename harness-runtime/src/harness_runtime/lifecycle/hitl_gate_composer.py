@@ -128,8 +128,16 @@ from harness_cp.handoff_context import (
 )
 from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.hitl_response_palette import HITLResponse
-from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry
-from harness_cp.persona_engine_hitl_matrix import HITLMatrixCell, matrix_cell_for
+from harness_cp.per_step_override_evaluator import (
+    CPAuditLedgerEntry,
+    StepEffectiveBinding,
+)
+from harness_cp.persona_engine_hitl_matrix import (
+    HITLMatrixCell,
+    SynchronyClass,
+    matrix_cell_for,
+)
+from harness_cp.validator_framework_types import HITLEscalationBrief
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
 from harness_is.state_ledger_entry_schema import Identifier
@@ -142,6 +150,9 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
     AskUserQuestionSurface,
     AskUserQuestionTimeoutError,
 )
+from harness_runtime.lifecycle.webhook_delivery_composer import (
+    WebhookDeliveryResult,
+)
 
 if TYPE_CHECKING:  # pragma: no cover — type-only imports
     from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
@@ -153,6 +164,7 @@ __all__ = [
     "HITLGateAuditComposeError",
     "HITLGateRejectedError",
     "HITLGateTimeoutError",
+    "HITLPauseRequestedSignal",
     "RuntimeHITLGateComposer",
     "compose_hitl_action_id",
 ]
@@ -230,6 +242,44 @@ class HITLGateAuditComposeError(Exception):
     """
 
 
+class HITLPauseRequestedSignal(BaseException):
+    """Typed control-flow signal raised at §14.8.2 step 4-bis durable-async branch.
+
+    Authored at runtime spec v1.24 §14.8.8.2 (preserved verbatim at v1.25)
+    per U-RT-93 (L9-terdecies L0). NOT a fail class — this is a normal-path
+    control-flow signal indicating that the HITL gate fired the durable-async
+    composition body and the workflow MUST pause pending operator response
+    via inbound webhook.
+
+    Inherits ``BaseException`` (not ``Exception``) per spec §14.8.8.2
+    inheritance-choice-rationale: normal-path ``try / except Exception`` blocks
+    MUST NOT suppress the signal. Only explicit ``except HITLPauseRequestedSignal``
+    (the driver-side handler at U-RT-95) or ``except BaseException`` may consume it.
+
+    Carrier fields per spec §14.8.8.2:
+      - ``brief``           : ``HITLEscalationBrief`` composed at step 1 per
+                              C-CP-28 §25.2.
+      - ``delivery_result`` : ``WebhookDeliveryResult`` from
+                              ``ctx.webhook_delivery_composer.deliver_webhook(...)``
+                              at step 3 per C-RT-20 §14.10.1.
+
+    On catch, the driver invokes ``continue`` to the next iteration, falling
+    through to the existing v1.21 §14.14.3 per-step pre-entry pause-trigger
+    detection (which observes ``ctx.pause_requested_flag`` set by step 5 of
+    the §14.8.8.1 composer body and fires ``capture_pause_snapshot(...)``).
+    """
+
+    def __init__(
+        self,
+        *,
+        brief: HITLEscalationBrief,
+        delivery_result: WebhookDeliveryResult,
+    ) -> None:
+        super().__init__("HITL durable-async pause requested")
+        self.brief = brief
+        self.delivery_result = delivery_result
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -292,6 +342,40 @@ def _evaluate_hitl_required_tolerant(
         mcp_trust_tier=MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
     )
     return evaluate_hitl_required(input_)
+
+
+def _evaluate_cell_synchrony_tolerant(  # pyright: ignore[reportUnusedFunction]
+    binding: StepEffectiveBinding | None,
+) -> SynchronyClass | None:
+    """Runtime spec v1.24 §14.8.8.3 — binding-tolerant matrix synchrony lookup.
+
+    Thin-wrap over CP-axis ``matrix_cell_for(binding.persona_tier,
+    binding.engine_class).synchrony_class`` per scoping doc Q1 (α-revised) +
+    U-RT-93 AC #1/#2. Returns:
+
+    * ``None`` when ``binding is None`` (operator-opt-out arm — composer at
+      §14.8.8.1 step 1 falls through to sync-blocking per change-note (ii)).
+    * ``None`` when ``binding`` does not carry ``persona_tier`` (test-fixture
+      / partial-binding tolerance — mirrors the ``getattr`` precedent at
+      ``_evaluate_hitl_required_tolerant`` + the existing dispatch callsite
+      at line 821; canonical ``StepEffectiveBinding`` per
+      ``per_step_override_evaluator.py`` does NOT declare ``persona_tier``,
+      so production callers pass duck-typed extension shapes).
+    * ``matrix_cell_for(persona_tier, binding.engine_class).synchrony_class``
+      otherwise — the four-class ``SynchronyClass`` value declared at CP spec
+      v1.2 §18.1 (preserved verbatim through v1.16). The ``EXCLUDED`` case is
+      delegated to the existing §14.8.2 step 4b ``HITLCellExcludedError`` raise
+      and does NOT need additional handling at this helper.
+
+    Sibling pattern to ``_evaluate_hitl_required_tolerant`` (Reading B
+    precedent at v1.22 §14.8.2 step 4c).
+    """
+    if binding is None:
+        return None
+    persona_tier = getattr(binding, "persona_tier", None)
+    if persona_tier is None:
+        return None
+    return matrix_cell_for(persona_tier, binding.engine_class).synchrony_class
 
 
 def _compute_effective_palette_tolerant(
