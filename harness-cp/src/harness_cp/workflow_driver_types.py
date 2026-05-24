@@ -37,6 +37,7 @@ from harness_is.state_ledger_entry_schema import Actor
 from pydantic import BaseModel, ConfigDict
 
 from harness_cp.gate_level_rule import GateLevel
+from harness_cp.pause_resume_protocol_types import PauseSnapshot
 
 
 class RunStatus(StrEnum):
@@ -54,6 +55,9 @@ class RunStatus(StrEnum):
     DRAINED = "drained"
     FAILED = "failed"
     PARTIAL = "partial"  # reserved for future multi-step error modes
+    PAUSED = "paused"  # U-RT-89 (v2.20) — workflow paused via PauseResumeProtocol;
+    # `pause_snapshot` populated for caller-side resume invocation. Additive
+    # minor-version evolution per runtime spec v1.21 §14.14.5 invariant 4.
 
 
 class StepKind(StrEnum):
@@ -116,6 +120,17 @@ class RunResult(BaseModel):
     partial_state: Mapping[str, Any] | None = None
     final_state: Mapping[str, Any] | None = None
     fail_class: str | None = None
+    pause_snapshot: PauseSnapshot | None = None
+    """U-RT-89 (v2.20) — pause snapshot when `status == PAUSED`.
+
+    Populated by the workflow_driver per-step pre-entry pause-trigger detection
+    branch when `ctx.pause_resume_protocol is not None` and
+    `ctx.pause_requested_flag.is_set()` — the captured `PauseSnapshot` is
+    threaded back to the caller via this field so that a follow-on
+    `execute_workflow(..., pause_snapshot_input=<captured>)` invocation can
+    resume. `None` for all non-PAUSED returns per runtime spec v1.21 §14.14.5
+    invariant 4. Additive minor-version evolution.
+    """
 
 
 class StepExecutionContext(BaseModel):

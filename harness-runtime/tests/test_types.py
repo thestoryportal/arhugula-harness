@@ -153,6 +153,10 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         "per_server_trust_evaluator",  # U-RT-72 — C-RT-04 §4 v1.16 (U-RT-75 populates)
         "mcp_namespace_emitter",  # U-RT-72 — C-RT-04 §4 v1.16 (U-RT-75 populates)
         "memory_tool_registry",  # U-RT-79 — C-RT-04 §4 v1.17 Memory tool storage-backend registry (U-RT-80 populates)
+        # U-RT-87 (v2.20) — pause/resume protocol binding + caller-signal flag
+        # per runtime spec v1.21 §4 + §14.14.3 (CP composer authoring arc).
+        "pause_resume_protocol",
+        "pause_requested_flag",
     }
     actual = set(HarnessContext.model_fields.keys())
     assert actual == expected, f"missing: {expected - actual}; extra: {actual - expected}"

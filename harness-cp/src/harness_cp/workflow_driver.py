@@ -37,7 +37,8 @@ import asyncio
 import hashlib
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Any, Protocol, runtime_checkable
+from collections.abc import Coroutine
+from typing import Any, Protocol, TypeVar, cast, runtime_checkable
 
 from harness_as.sandbox_tier import SandboxTier
 from harness_core.identity import ActionID
@@ -53,6 +54,12 @@ from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver_errors import (
     EngineClassNotYetMaterializedError,
     TopologyPatternNotYetMaterializedError,
+)
+from harness_cp.pause_resume_protocol import PauseResumeProtocol
+from harness_cp.pause_resume_protocol_types import (
+    MaterialDiffPolicy,
+    PauseSnapshot,
+    WorkflowPauseReason,
 )
 from harness_cp.workflow_driver_types import (
     RunResult,
@@ -291,6 +298,26 @@ class DriverContext(Protocol):
     # `SyncValidatorFrameworkLike` Protocol).
     validator_framework: object | None
 
+    # OPTIONAL PauseResumeProtocol — U-RT-87 (v2.20) operator-opt-in per
+    # runtime spec v1.21 §14.14.3 workflow_driver per-step pre-entry
+    # pause-trigger detection point. When None (default), the per-step
+    # pre-entry pause-trigger detection branch sibling to
+    # `drained_flag.is_set()` evaluates False (driver-level opt-out;
+    # production-default state preserved per spec §14.14.5 invariant 2).
+    # When bound, the driver invokes `protocol.capture_pause_snapshot(...)`
+    # on `pause_requested_flag.is_set()` + returns `RunStatus.PAUSED`.
+    # Typed as `object | None` to avoid pulling
+    # `harness_cp.pause_resume_protocol.PauseResumeProtocol` into the
+    # Protocol surface (HarnessContext exposes the typed narrowed field
+    # per runtime spec v1.21 §4).
+    pause_resume_protocol: object | None
+
+    # U-RT-87 (v2.20) caller-side pause-signaling primitive sibling-pattern
+    # to `drained_flag` per runtime spec v1.21 §14.14.3. Set by external
+    # caller to request driver pause at next per-step pre-entry; polled by
+    # the driver as a sibling check to `drained_flag.is_set()`.
+    pause_requested_flag: asyncio.Event
+
 
 # ---------------------------------------------------------------------------
 # Driver core
@@ -330,6 +357,32 @@ def _compute_step_idempotency_key(run_idempotency_key: str, step_index: int) -> 
     return h.hexdigest()
 
 
+_TProtocolResult = TypeVar("_TProtocolResult")
+
+
+def _run_protocol_method_sync(
+    coro: Coroutine[Any, Any, _TProtocolResult],
+) -> _TProtocolResult:
+    """Run a PauseResumeProtocol async-method coroutine to completion from sync
+    driver context.
+
+    The PauseResumeProtocol class declares its methods `async def` per CP spec
+    v1.13 §26.1 but the body of `capture_pause_snapshot` + `attempt_resume`
+    contains no actual `await` expressions at the v1.21 narrow-scope MVP
+    (state-summary serialization + hash composition + reader invocation are
+    all synchronous primitives). The workflow_driver runs in a worker thread
+    spawned by `asyncio.to_thread` from `harness_runtime.api.run` — no current
+    event loop is bound on the worker thread. `asyncio.run` constructs a new
+    loop for this single coroutine.
+
+    Per spec v1.21 §14.14.7 deferred-discretion: the sync-bridging mechanism
+    is impl-discretion. The MVP uses `asyncio.run`; future arcs may substitute
+    a `SyncDispatcherFacade`-style captured-loop bridge if the protocol body
+    ever introduces real async I/O (e.g., async snapshot persistence).
+    """
+    return asyncio.run(coro)
+
+
 def execute_workflow(
     manifest_entry: WorkflowManifestEntry,
     steps: Sequence[WorkflowStep],
@@ -338,6 +391,7 @@ def execute_workflow(
     *,
     default_model_binding: ModelBinding,
     step_dispatchers: StepDispatcherRegistry,
+    pause_snapshot_input: PauseSnapshot | None = None,
 ) -> RunResult:
     """Execute the workflow per C-CP-25 §25.3 happy-path discipline.
 
@@ -403,6 +457,40 @@ def execute_workflow(
             fail_class=None,
         )
 
+    # U-RT-89 (C-RT-24 §14.14.3) — entry-point resume detection.
+    # When the caller supplies a pause_snapshot_input + the operator has bound
+    # PauseResumeProtocol at ctx, invoke `attempt_resume(...)` to validate the
+    # snapshot's integrity + check for material diff. The MVP fires the
+    # STRICT MaterialDiffPolicy default per spec v1.21 change-note adjacent
+    # defect (iii); operator-supplied per-resume policy selection is impl-
+    # discretion at follow-on composer arc per spec §14.14.7.
+    #
+    # The resume detection runs BEFORE the workflow.envelope opens — a failed
+    # resume (corruption or diff-aborted) returns FAILED without opening a
+    # new envelope. A clean resume sets resume_at_step_index that overrides
+    # the prefix-replay path at the body per spec §14.14.5 invariant 5
+    # mutual-exclusivity (the two paths are non-overlapping).
+    resume_at_step_index: int | None = None
+    if pause_snapshot_input is not None and ctx.pause_resume_protocol is not None:
+        protocol = cast(PauseResumeProtocol, ctx.pause_resume_protocol)
+        resume_result = _run_protocol_method_sync(
+            protocol.attempt_resume(
+                pause_snapshot_input,
+                material_diff_policy=MaterialDiffPolicy.STRICT,
+            )
+        )
+        if not resume_result.resumed:
+            return RunResult(
+                workflow_id=manifest_entry.workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=pause_snapshot_input.step_index,
+                partial_state=None,
+                final_state=None,
+                fail_class=resume_result.fail_class,
+            )
+        resume_at_step_index = pause_snapshot_input.step_index
+
     # § C-OD-25 §25.1 — Open the workflow.envelope outer OTel span via
     # ctx.tracer_provider.get_tracer(...).start_as_current_span(...). Every
     # downstream child span (LLM dispatch / tool dispatch / HITL gate /
@@ -459,6 +547,7 @@ def execute_workflow(
             step_dispatchers=step_dispatchers,
             span=span,
             run_idempotency_key=run_idempotency_key,
+            resume_at_step_index_override=resume_at_step_index,
         )
 
         # C-OD-25 §25.1 close-time attributes (4 of 12). Outcome enum serializes
@@ -493,6 +582,7 @@ def _execute_workflow_body(
     step_dispatchers: StepDispatcherRegistry,
     span: Any,
     run_idempotency_key: str,
+    resume_at_step_index_override: int | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the workflow body within the workflow.envelope OTel span.
 
@@ -520,8 +610,20 @@ def _execute_workflow_body(
     # no new IS prefix-match primitive). For each step index, compute the
     # expected per-step idempotency_key and look it up; advance `resume_at`
     # over the contiguous prefix of materialized steps.
+    #
+    # U-RT-89 (C-RT-24 §14.14.5 invariant 5): explicit-pause resume override.
+    # When the entry-point caller supplied `pause_snapshot_input` + the
+    # `attempt_resume(...)` returned `resumed=True`, the resume_at_step_index
+    # override REPLACES the prefix-replay path. The two paths are mutually
+    # exclusive per spec — explicit-pause resumption handles workflow-layer
+    # PauseResumeProtocol resume; prefix-replay handles save-point-checkpoint
+    # crash-recovery resumption.
     resume_at = 0
-    if manifest_entry.engine_class is EngineClass.SAVE_POINT_CHECKPOINT:
+    if resume_at_step_index_override is not None:
+        resume_at = resume_at_step_index_override
+        if resume_at > 0:
+            ctx.lifecycle_emitter.emit(WorkflowEventClass.RESUMPTION)
+    elif manifest_entry.engine_class is EngineClass.SAVE_POINT_CHECKPOINT:
         resume_at = _determine_resume_at(
             ctx=ctx,
             run_idempotency_key=run_idempotency_key,
@@ -561,6 +663,37 @@ def _execute_workflow_body(
                 partial_state=dict(accumulated),
                 final_state=None,
                 fail_class=None,
+            ), steps_executed
+
+        # U-RT-89 (C-RT-24 §14.14.3) — per-step pre-entry pause-trigger
+        # detection. Sibling check to `ctx.drained_flag.is_set()` above.
+        # When the operator has bound PauseResumeProtocol + the caller has
+        # signaled pause via `ctx.pause_requested_flag.set()`, capture a
+        # PauseSnapshot via the protocol + return RunStatus.PAUSED with the
+        # snapshot populated for caller-side resume invocation. MVP fires
+        # WorkflowPauseReason.EXPLICIT_OPERATOR as the default reason per
+        # spec v1.21 change-note adjacent defect (ii); finer-grained reason
+        # selection is impl-discretion at follow-on composer arc per spec
+        # §14.14.7.
+        if ctx.pause_resume_protocol is not None and ctx.pause_requested_flag.is_set():
+            protocol = cast(PauseResumeProtocol, ctx.pause_resume_protocol)
+            pause_snapshot = _run_protocol_method_sync(
+                protocol.capture_pause_snapshot(
+                    workflow_id=manifest_entry.workflow_id,
+                    run_id=run_id,
+                    step_index=step_index,
+                    pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+                )
+            )
+            return RunResult(
+                workflow_id=manifest_entry.workflow_id,
+                run_id=run_id,
+                status=RunStatus.PAUSED,
+                terminal_step_index=step_index - 1 if step_index > 0 else None,
+                partial_state=dict(accumulated),
+                final_state=None,
+                fail_class=None,
+                pause_snapshot=pause_snapshot,
             ), steps_executed
 
         # § 25.3.3.2 — Resolve binding via U-CP-14.

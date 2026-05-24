@@ -195,12 +195,20 @@ class _FakeCtx:
         ledger_reader: _FakeLedgerReader | None = None,
         tracer_provider: object | None = None,
         validator_framework: object | None = None,
+        pause_resume_protocol: object | None = None,
+        pause_requested_flag: asyncio.Event | None = None,
     ) -> None:
         from opentelemetry.trace import NoOpTracerProvider
 
         self.ledger_writer = ledger
         self.lifecycle_emitter = emitter
         self.drained_flag = drained_flag if drained_flag is not None else asyncio.Event()
+        # U-RT-87 (v2.20) — pause_resume_protocol + pause_requested_flag fields
+        # per runtime spec v1.21 §4 + §14.14.3 DriverContext Protocol extension.
+        self.pause_resume_protocol = pause_resume_protocol
+        self.pause_requested_flag = (
+            pause_requested_flag if pause_requested_flag is not None else asyncio.Event()
+        )
         self.ledger_reader = ledger_reader if ledger_reader is not None else _FakeLedgerReader()
         # U-OD-35 — DriverContext requires tracer_provider per C-OD-25 §25.2.
         # Default to NoOpTracerProvider so happy-path tests don't assert span
@@ -274,7 +282,9 @@ def _ctx(*, prior_entries: int = 0) -> tuple[_FakeCtx, _FakeLedger, _FakeEmitter
 # ---------------------------------------------------------------------------
 
 
-def test_run_result_seven_fields() -> None:
+def test_run_result_eight_fields() -> None:
+    """8-field RunResult per C-CP-25 §25.2 + v1.21 §14.14.5 invariant 4
+    additive `pause_snapshot` field (U-RT-89)."""
     result = RunResult(
         workflow_id="wf",
         run_id="run-1",
@@ -289,12 +299,15 @@ def test_run_result_seven_fields() -> None:
         "partial_state",
         "final_state",
         "fail_class",
+        "pause_snapshot",
     }
 
 
-def test_run_status_four_members() -> None:
+def test_run_status_five_members() -> None:
+    """5-member RunStatus per C-CP-25 §25.2 + v1.21 §14.14.5 invariant 4
+    additive `PAUSED` value (U-RT-89)."""
     members = {m.name for m in RunStatus}
-    assert members == {"SUCCESS", "DRAINED", "FAILED", "PARTIAL"}
+    assert members == {"SUCCESS", "DRAINED", "FAILED", "PARTIAL", "PAUSED"}
 
 
 def test_step_kind_five_members() -> None:

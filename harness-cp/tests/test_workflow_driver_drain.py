@@ -160,6 +160,11 @@ class _FakeCtx:
         # U-CP-61 — optional ValidatorFramework binding; drain tests don't
         # exercise validators (validator_framework=None skips the hook).
         self.validator_framework: object | None = None
+        # U-RT-87 (v2.20) — pause_resume_protocol + pause_requested_flag per
+        # runtime spec v1.21 §4 + §14.14.3 DriverContext Protocol extension.
+        # Drain tests don't exercise pause-trigger (protocol=None skips check).
+        self.pause_resume_protocol: object | None = None
+        self.pause_requested_flag = asyncio.Event()
 
 
 class _EchoDispatcher:
