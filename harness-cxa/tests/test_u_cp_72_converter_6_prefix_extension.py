@@ -207,10 +207,11 @@ def test_all_4_new_branches_produce_distinct_attribute_sets() -> None:
 
 
 def test_unsupported_carrier_type_raises_type_error() -> None:
-    # The pause/resume + cost carriers don't exist yet (per fork doc);
-    # passing an arbitrary non-carrier type raises TypeError with the
-    # fork-doc pointer in the message.
-    with pytest.raises(TypeError, match="class_1_fork_u_cp_72"):
+    # Post-Sub-arc-B (2026-05-24): all 8 prefixes covered. Passing an
+    # arbitrary non-carrier type raises TypeError enumerating the 7 supported
+    # carrier types (CPAuditLedgerEntry + 6 producer-specific AuditPayload
+    # subclasses including CostRecordAuditPayload from Sub-arc B).
+    with pytest.raises(TypeError, match="unsupported carrier type"):
         cp_audit_to_od_audit("not_a_carrier", key_id=_KEY)  # type: ignore[arg-type]
 
 
@@ -349,3 +350,85 @@ def test_signed_with_ed25519_default() -> None:
     }
     # signature_attrs carries the algorithm via its own attributes.
     assert entry.signature_attrs is not None
+
+
+# ============================================================================
+# U-OD-41 — cost branch un-STRUCK per Sub-arc B of
+# [[fork-u-cp-72-cost-and-pause-resume-prefix-gap]] §2.2 routing target.
+# Tests below append-only; existing 7-prefix test surface preserved verbatim
+# per FM-2 + workspace CLAUDE.md §4.3 forward-only ledger discipline.
+# ============================================================================
+
+
+from harness_cxa.cp_audit_conversion import COST_AUDIT_NAMESPACE_PREFIX  # noqa: E402
+from harness_od.cost_namespace import CostRecordAuditPayload  # noqa: E402
+
+
+def _cost_carrier() -> CostRecordAuditPayload:
+    return CostRecordAuditPayload(
+        audit_cp_action_id="cost:wf-1:step-llm-7",
+        audit_cp_response="cost_attributed",
+        audit_cp_timestamp="2026-05-24T10:00:00Z",
+        audit_cp_prior_event_hash="0" * 64,
+        span_id="span-abc123",
+        idempotency_key="idem-xyz789",
+        provider="anthropic",
+        model_id="claude-opus-4-7",
+        usage_total_cost_usd=0.0125,
+    )
+
+
+def test_cost_carrier_projects_to_audit_cost_subnamespace() -> None:
+    entry = cp_audit_to_od_audit(_cost_carrier(), key_id=_KEY)
+    attrs = entry.payload.audit_namespace_attrs
+    # Common audit_cp_* fields project under audit.cp.* sub-namespace.
+    assert attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.action_id"] == "cost:wf-1:step-llm-7"
+    assert attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.response"] == "cost_attributed"
+    # Cost-specific fields project under audit.cost.* sub-namespace.
+    assert attrs[f"{COST_AUDIT_NAMESPACE_PREFIX}.span_id"] == "span-abc123"
+    assert attrs[f"{COST_AUDIT_NAMESPACE_PREFIX}.idempotency_key"] == "idem-xyz789"
+    assert attrs[f"{COST_AUDIT_NAMESPACE_PREFIX}.provider"] == "anthropic"
+    assert attrs[f"{COST_AUDIT_NAMESPACE_PREFIX}.model_id"] == "claude-opus-4-7"
+    assert attrs[f"{COST_AUDIT_NAMESPACE_PREFIX}.usage_total_cost_usd"] == "0.0125"
+
+
+def test_cost_branch_signature_attrs_present() -> None:
+    entry = cp_audit_to_od_audit(_cost_carrier(), key_id=_KEY)
+    assert entry.signature_attrs is not None
+    assert entry.entry_hash
+
+
+def test_cost_branch_prior_entry_hash_propagated() -> None:
+    # The audit_cp_prior_event_hash field flows to AuditPayload.prior_entry_hash
+    # per the established branch shape (mirrors pause/resume + validator + etc.).
+    entry = cp_audit_to_od_audit(_cost_carrier(), key_id=_KEY)
+    assert entry.payload.prior_entry_hash == "0" * 64
+
+
+def test_post_sub_arc_b_6_audit_payload_branches_distinct() -> None:
+    # Post-Sub-arc-B: 6 producer-specific AuditPayload subclass branches
+    # (5 prior + cost) produce distinct sub-namespace attribute sets. Full
+    # 8-prefix coverage at the converter post this arc.
+    entries = [
+        cp_audit_to_od_audit(_webhook_carrier(), key_id=_KEY),
+        cp_audit_to_od_audit(_operator_burden_carrier(), key_id=_KEY),
+        cp_audit_to_od_audit(_validator_carrier(), key_id=_KEY),
+        cp_audit_to_od_audit(_mcp_trust_carrier(), key_id=_KEY),
+        cp_audit_to_od_audit(_pause_carrier(), key_id=_KEY),
+        cp_audit_to_od_audit(_cost_carrier(), key_id=_KEY),
+    ]
+    seen_roots: set[str] = set()
+    for entry in entries:
+        for k in entry.payload.audit_namespace_attrs:
+            if k.startswith("audit.") and not k.startswith("audit.cp."):
+                root = k.split(".")[1]
+                seen_roots.add(root)
+    expected = {
+        "hitl_webhook",
+        "operator_burden",
+        "validator",
+        "mcp_trust",
+        "pause_resume",
+        "cost",
+    }
+    assert seen_roots == expected
