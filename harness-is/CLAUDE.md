@@ -134,7 +134,7 @@ Per `Phase_7_Meta_Architecture_v1.md` §5.2: **9 IS-axis substitution entries** 
 
 Full per-substitution bounded-scope + retirement criterion at Meta-Architecture §5.2. Retirement bindings: U-IS-NN landings per the criterion column.
 
-**Retirement status (post 7d second pass, 2026-05-20).** Per `.harness/phase-7d-retirement-events-batch-1.md` + v2 ledger `.harness/phase-7d-retirement-ledger-v2.md` §3 under operator-ratified runtime-only substitution-site reading:
+**Retirement status (post 7d batch 11 doc-hygiene-pass refresh, 2026-05-23).** Per cumulative batch records `.harness/phase-7d-retirement-events-batch-{1..11}.md` + v2 ledger `.harness/phase-7d-retirement-ledger-v2.md` §3 under operator-ratified runtime-only substitution-site reading + line-33 strict-reading discipline. **IS-axis status unchanged since 2026-05-20 second-pass closure** — no IS-axis primitive transitions across batches 3–11; the 2 STILL-BOUNDED carry-forwards (H_T-IS-2 + H_T-IS-4) remain bounded on the same gates documented at v2 ledger §3 + §9.4. Pipeline advanced (R+RR+P): **7/9 = 77.8%** (stable across the doc-hygiene window).
 
 | Substitution | Status | Source |
 |---|---|---|
