@@ -387,3 +387,39 @@ The §13 recommendation surfaces sub-decisions for operator ratification before 
 | Predecessor | §11 operator ratification (this same session, ~30 min prior) |
 | Next step | Operator AskUserQuestion on §14.A/B/C/D/E; on ratification, spec-writer re-invocation with revised structural shape |
 | Memory entries to update post-ratification | `[[h-t-cp-16-17-retire-ready-gate-runtime-composer-arcs]]` (revise gate-shape analysis); `[[retirement-batch-11-v1-5-re-invocation]]` (no change — batch-11 status unchanged) |
+
+## §16 §14 operator ratification (2026-05-23, immediate post-§13)
+
+| Sub-decision | Ratified | Per recommendation? |
+|---|---|---|
+| §14.A ratification scope | **Amend §11 in-place** — preserve §6.D (operator-opt-in RETIRE-READY); revise §6.A (split per primitive), §6.B (NO bundled — split), §6.C (re-scoped per §14.D), §6.E (NOT C-RT-19 extension) | Per recommendation |
+| §14.B architecture | **Accept §13.6** — Memory at NEW callback-registry contract consumed by C-RT-15; Files at NEW sibling REST-client contract (deferred per §14.C); MCP / C-RT-19 unchanged | Per recommendation |
+| §14.C arc split | **Memory-only at this opening; Files arc deferred indefinitely** — no current downstream blocker; operator-discretion timing for Files re-open when operational driver surfaces | Per recommendation |
+| §14.D Memory e2e operational scope | **Local-filesystem backend for retirement-gate** — `MemoryToolStorageBackend.FILESYSTEM` round-trip with real Anthropic API call; single-credential-set (Anthropic only); S3 backend deferred to follow-on retirement-batch arc when S3 infra availability + operator cost-acceptance ratified separately | Per recommendation |
+| §14.E Files arc timing | **N/A** (Files arc deferred indefinitely per §14.C) | — |
+
+**§11 amendments (in-place)** per §14.A:
+
+| §11 row | v1 disposition (PROVISIONAL) | v2 disposition (RATIFIED 2026-05-23 per §14) |
+|---|---|---|
+| §6.A spec axis home | A.iii Split (runtime owns NEW §14.X MemoryToolHost + §14.Y FilesAPIHost contracts; AS adds §14 footer references) — **VOID** | **A.iv per-primitive binding sites per §13.6.A** — Memory at NEW callback-registry contract (runtime spec NEW §14.12 C-RT-22 `MemoryToolRegistry` + `MemoryToolStorageBackendProtocol`) consumed by C-RT-15 RuntimeLLMDispatcher composer-step amendment; AS spec v1.4 §14.7 footer note repointed. Files arc deferred per §14.C |
+| §6.B bundled vs split | B.i Bundled CP-16+17 single arc (~7-10 commits) — **VOID** | **B.iv Memory arc only** (~5-8 commits per §13.6.C); Files arc deferred indefinitely per §14.C |
+| §6.C e2e exercise scope | C.ii+C.iv Real backends (S3 memory + live Anthropic Files API) — **REVISED** | **C.vii Local-filesystem memory backend** (`MemoryToolStorageBackend.FILESYSTEM`) round-trip with real Anthropic API call; single-credential-set retirement-gate; S3 backend deferred to follow-on retirement-batch arc |
+| §6.D retirement-gate stringency | D.i Operator-opt-in RETIRE-READY | **PRESERVED** — structural criterion-B MET at landing arc; RETIRED gated on operator-bound config + e2e per §14.D revised scope |
+| §6.E invocation site | E.ii Tool dispatch routing extension via C-RT-19 RuntimeToolDispatcher — **VOID** | **E.iv No C-RT-19 extension** per §13.6.A — Memory binds at C-RT-15 §14.5 LLM dispatcher composer-step amendment (callback-injection when `tools=[memory_tool]` in step-effective-binding); no new StepKind values |
+| §6.F prioritization | N/A (was conditional on §6.B split) | N/A (Memory-only per §14.C; Files deferred) |
+
+**Status transition: §11 PROVISIONAL → §11 RATIFIED-AMENDED.** Fork-doc cleared for spec-writer re-invocation with Memory-only scope per §16 amended dispositions.
+
+**Revised arc shape under §16 ratification:**
+
+1. Runtime spec v1.16 → v1.17:
+   - NEW §14.12 C-RT-22 `MemoryToolStorageBackendProtocol` + `MemoryToolRegistry` contract (CRUD callbacks per ADR-D3 §1.1 #11 — `view` / `create` / `delete` / `str_replace` / `insert` on `/memories` paths; deployment-surface-keyed backend selection per `MemoryToolStorageBackend` enum)
+   - C-RT-15 §14.5 amendment: callback-injection composer-step when LLM-dispatch composes `tools=[...]` arg with memory tool element in step-effective-binding; emit `memory.*` 6-attr namespace per AS spec §14.7 at each callback invocation
+   - §3 C-RT-02 RuntimeConfig NEW optional field `memory_tool_backend_config: MemoryToolBackendConfig | None`
+   - §4 C-RT-04 HarnessContext NEW field `memory_tool_registry: MemoryToolRegistry` (stage 5)
+2. AS spec v1.4 → v1.5: §14.7 NEW producer-site reference note (parallel to v1.4 §14.3 mcp.* footer — repointed per §13.6.D); §14.6 `files.*` namespace UNCHANGED (Files arc deferred per §14.C)
+3. Runtime plan v2.13 → v2.14 (separate `implementation-planner` arc): NEW L-M cluster decomposing Memory tool primitive (storage-backend protocol + filesystem implementation + callback injection + e2e — 3-5 units estimated)
+4. E2e exercise (separate arc): real Anthropic API `messages.create` with `tools=[memory_tool]` + filesystem storage backend round-trip
+
+**Operator-discretion timing.** Spec-writer + implementation-planner + implementation arcs may open this session OR defer. Files arc remains bounded-residual indefinitely (re-opens when operational driver surfaces).
