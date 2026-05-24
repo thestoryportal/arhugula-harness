@@ -186,3 +186,25 @@ Per the §6 enumeration:
 | Predecessor pattern | L9-septies MCPClientHost arc (CP-18 RETIRE-READY at batch-10) |
 | Memory entries | `[[h-t-cp-16-17-retire-ready-gate-runtime-composer-arcs]]`, `[[retirement-batch-11-v1-5-re-invocation]]` |
 | Next step | Operator AskUserQuestion on §6 ambiguities; recommended disposition at §8 |
+
+## §11 Operator ratification (2026-05-23)
+
+| Question | Ratified | Vs recommendation |
+|---|---|---|
+| §6.A spec axis home | **A.iii Split** (runtime owns contract + dispatcher; AS adds §14 footer references) | Per recommendation |
+| §6.B bundled vs split | **B.i Bundled CP-16+17 single arc** | Per recommendation |
+| §6.C e2e exercise scope | **C.ii + C.iv Real backends** (memory: S3/Database at managed-cloud; files: live Anthropic Files API) | **Stricter than recommended** — operator chose highest fidelity; introduces external operational dependency at retirement-gate criterion (mirrors H_T-CP-18 external-server gate); requires Anthropic credentials + S3 setup at e2e environment |
+| §6.D retirement-gate stringency | **D.i Operator-opt-in RETIRE-READY** | Per recommendation |
+| §6.E invocation site | **E.ii Tool dispatch routing extension** via C-RT-19 RuntimeToolDispatcher | Per recommendation |
+| §6.F prioritization | **N/A** (bundled arc per §6.B) | — |
+
+**Status transition: PROPOSING → RATIFIED.** Fork-doc cleared for next arc (spec-writer + implementation-planner revision-pass per §8 estimated arc shape — bundled CP-16+17 arc, runtime spec NEW §14.X (MemoryToolHost) + NEW §14.Y (FilesAPIHost) + AS spec C-AS-14 §14.6/§14.7 footer notes + runtime spec C-RT-19 RuntimeToolDispatcher extension to memory-tool/files-api families + runtime plan NEW L-N cluster with 4-6 units + implementation + e2e test with **real S3 backend memory + live Anthropic Files API**).
+
+**Implication of §6.C C.ii+C.iv ratification.** Retirement-gate criterion for RETIRED transition now requires:
+- Operator-bound `memory_tool_host` config with non-mock S3/Database backend at managed-cloud surface
+- Operator-bound Anthropic API credentials at e2e environment
+- Live Anthropic Files API round-trip exercise at retirement-batch arc
+
+This mirrors the H_T-CP-18 RETIRED gate (operator-supplied `mcp_servers` non-empty + external MCP server availability). RETIRE-READY pattern unchanged — landing arc promotes both substitutions to RETIRE-READY with structural criterion-B MET; RETIRED transition deferred to operator-bound-config + e2e exercise batch.
+
+**Operator-discretion timing on opening the spec-writer arc.** Fork-doc RATIFIED; no commitment on when the bundled-arc opens. Per §7 bounded-carry-forward acceptable. Next arc invocation: `spec-writer` skill against runtime spec v1.16 → v1.17 (NEW §14.X + §14.Y) + AS spec v1.4 → v1.5 (§14.6/§14.7 footer notes) + `implementation-planner` against runtime plan v2.13 → v2.14 (NEW L-N cluster).
