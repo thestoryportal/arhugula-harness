@@ -1,4 +1,37 @@
-# Specification — Harness Runtime v1.20
+# Specification — Harness Runtime v1.21
+
+## Change-note (v1.20 → v1.21)
+
+**Scope of revision.** Class 1 fork — pause/resume workflow-layer composer arc absent at runtime layer (`harness-cp/CLAUDE.md` §4.1 H_T-CP-22 PARTIAL gate citation: "no workflow_driver invocation of capture_pause_snapshot/attempt_resume per hitl_placement.py:18-23 deferral"). At HEAD, the `PauseResumeProtocol` class body landed at `harness-cp/src/harness_cp/pause_resume_protocol.py:213+` per U-CP-62 (cluster 10-CP-B `49617e7`) but no stage-factory contract, no `RuntimeConfig` operator-supply field, no `HarnessContext.pause_resume_protocol` field, and no `workflow_driver` per-step pause-trigger detection — the class is unreachable from production bootstrap. v1.21 lands the minimal stage-factory binding-chain contract authoring (mirroring v1.18 §14.13 validator-framework precedent — Reading A scope discipline) sufficient to bind an operator-supplied `PauseResumeProtocol` instance at production `HarnessContext`; the per-step pause-trigger detection point in `workflow_driver` is authored at C-RT-24 §14.14.3 as a sibling check to the existing `drained_flag.is_set()` per-step pre-entry pattern at `workflow_driver.py:549`.
+
+**Source of fix.** Operator-ratified narrow-scope CP composer authoring arc per AskUserQuestion 2026-05-24 ("driver-invocation-only" scope; audit-write side authored at last session's narrow-scope landing at `7988335` consumes engine-layer §22.1 helpers — workflow-layer audit-write is a separate follow-on arc out of v1.21 scope). H_T-CP-22 PARTIAL → RETIRE-READY (structural materialization) → RETIRED (e2e exercise) joint advance gates on this contract landing + impl arc + e2e per `[[verification-shape-sharpened-grep-vs-e2e]]` discipline.
+
+**Amendments.**
+
+| Site | Amendment shape |
+|---|---|
+| **§3 C-RT-02 RuntimeConfig field table** | NEW optional field `pause_resume_protocol_config: PauseResumeProtocolConfig \| None` (default `None` → factory returns `None` → `ctx.pause_resume_protocol is None`; driver branch at `workflow_driver.py:per-step-pre-entry` for pause-trigger detection evaluates "no pause-protocol bound → skip" per the False arm; operator opt-out is the default). Ingested at stage 5 LOOP_INIT by `materialize_pause_resume_protocol_stage` factory per §14.14.3. Existing fields preserved verbatim. |
+| **§4 C-RT-04 HarnessContext field table** | NEW field `pause_resume_protocol: PauseResumeProtocol \| None` populated at stage 5 (CP spec v1.13 §26 carrier — concrete `PauseResumeProtocol` body at `harness-cp/src/harness_cp/pause_resume_protocol.py:213+` per U-CP-62 cluster 10-CP-B). NEW field `pause_requested_flag: asyncio.Event` initialized at stage 0 (sibling-pattern to existing `drained_flag` per `workflow_driver.py:549` precedent — caller-side pause signaling primitive consumed at per-step pre-entry in driver per §14.14.3). Existing field rows preserved verbatim. |
+| **§14 fail-class taxonomy** | NEW row `RT-FAIL-PAUSE-RESUME-STAGE-MATERIALIZE` (permanent; stage 5 LOOP_INIT factory). Existing rows preserved verbatim. |
+| **§14.14 (NEW) C-RT-24 `materialize_pause_resume_protocol_stage`** | NEW contract surface authoring the stage-5 LOOP_INIT factory `materialize_pause_resume_protocol_stage(config: RuntimeConfig, ctx) → PauseResumeProtocol \| None` consuming `config.pause_resume_protocol_config` + `ctx.ledger_writer` + `ctx.ledger_reader` + a `pause_context_reader` callable composed at the factory body + producing the `PauseResumeProtocol` instance (or `None` on opt-out default). `PauseResumeProtocolConfig` sub-model authored as **empty-marker dataclass** at §14.14.1 per the `ValidatorFrameworkConfig` precedent — internal operator-supply shape deferred to implementation discretion at C-RT-24 landing arc per FM-2 no-extension discipline. Operator-opt-in RETIRE-READY pattern documented: structural criterion-B MET at factory landing + binding-chain materialization (RuntimeConfig field + stage factory + driver pause-trigger detection + driver invocation `protocol.capture_pause_snapshot(...)` / `protocol.attempt_resume(...)` at per-step pre-entry); full RETIRED gates on operator-bound `pause_resume_protocol_config` non-default + operator-exercised pause/resume cycle e2e at follow-on retirement-batch arc per batch-17 §4 verification-shape sharpening discipline. |
+
+**Sections preserved verbatim from v1.20.** All v1.20 content outside the listed amendment sites preserved unchanged. The v1.20 §14.13.3 partial-order fix + v1.19 ValidatorFramework cite-cascade retags + v1.18 NEW §14.13 contract authoring + all prior change-notes preserved verbatim.
+
+**Status posture.** Proposed (v1.20) → **Proposed (v1.21)**. v1.21 is an additive contract authoring (NEW §14.14 C-RT-24) + minor amendment (NEW RuntimeConfig field + NEW HarnessContext field rows + NEW fail class). No v1.20 contract removed; no acceptance criterion change at preserved sections. NO CP spec / OD spec amendment owed at this arc — per OD spec v1.11 §C-OD-30.4.5 the workflow_driver pause-event handler invoking `PauseResumeProtocol` is explicitly "deferred to implementation discretion" + per CP spec v1.13 §26.7 the per-step pause-trigger source is implementer-discretion; v1.21 executes those deferrals at the runtime spec layer (correct architectural locus for stage-5 wiring + workflow_driver composition site per the C-RT-23 precedent).
+
+**Downstream absorption owed (post-v1.21).**
+(a) Workspace `CLAUDE.md` §2.3 runtime spec row version bump (v1.20 → v1.21); co-published this CP composer authoring arc.
+(b) `Implementation_Plan_Harness_Runtime_v2_19.md` → v2.20 via `implementation-planner` revision-pass: NEW L9-undecies 3-unit cluster decomposing the C-RT-24 landing — U-RT-87 (`RuntimeConfig.pause_resume_protocol_config` field + `PauseResumeProtocolConfig` empty-marker sub-model + `HarnessContext.pause_resume_protocol` field + `HarnessContext.pause_requested_flag` field) + U-RT-88 (`materialize_pause_resume_protocol_stage` factory + stage-5 wiring + `pause_context_reader` composition + `RT-FAIL-PAUSE-RESUME-STAGE-MATERIALIZE` fail class) + U-RT-89 (workflow_driver per-step pre-entry pause-trigger detection + protocol invocation + new `RunStatus.PAUSED` + resume-on-snapshot-context entry-point branch + real-bootstrap e2e pause/resume cycle).
+(c) CP spec v1.13 unchanged at v1.21 — the `PauseResumeProtocol` body at C-CP-26 §26 is the canonical class surface; runtime spec §14.14 consumes it without amendment.
+(d) OD spec v1.11 unchanged at v1.21 — the §C-OD-30.4 audit-write helpers consume engine-layer §22.1 carriers; workflow-layer audit-write requires a separate OD spec extension (out of v1.21 scope).
+(e) H_T-CP-22 PARTIAL → RETIRE-READY → RETIRED close-pattern arc owed at follow-on batch-18 retirement event filing per `[[verification-shape-sharpened-grep-vs-e2e]]` discipline.
+
+**Adjacent defects surfaced (NOT patched per FM-2).**
+(i) `harness-cp/CLAUDE.md` §4.1 H_T-CP-22 cite "`hitl_placement.py:18-23 deferral`" surfaces as the architecturally meaningful pause-trigger source (HITL gate opens → pause-event handler fires). v1.21 §14.14.3 authors the per-step pre-entry detection point as the sibling-pattern to `drained_flag.is_set()`; the HITL-gate-as-pause-trigger composition is a follow-on arc (out of v1.21 scope).
+(ii) The `WorkflowPauseReason` 5-class per CP spec v1.13 §26.2 is distinct from the engine-layer `PauseReason` 4-class per C-CP-22 §22.1 — the two enums have non-bijective value sets. The MVP per-step pause-trigger detection at §14.14.3 binds `WorkflowPauseReason.EXPLICIT_OPERATOR` unconditionally as the default trigger reason; finer-grained reason selection is implementation discretion at the C-RT-24 landing arc.
+(iii) `MaterialDiffPolicy.STRICT` per CP spec v1.13 §26.2 §26.6 invariant 4 is the default; the MVP per-step resume invocation at §14.14.3 binds `STRICT` unconditionally; operator-supplied per-resume policy selection is implementation discretion at follow-on composer arc.
+
+---
 
 ## Change-note (v1.19 → v1.20)
 
@@ -822,6 +855,7 @@ The orchestrator (`harness_runtime.bootstrap.__init__`) executes the 9 stages fr
 | `sandbox_decision_policy` | `SandboxDecisionPolicy | None` (harness-core carrier) | no (default `None` → uses `SandboxDecisionPolicy.default()`) | Operator-supplied sandbox-tier decision policy ingested at stage 5 by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3; consumed by `RuntimeToolDispatcher` for tier-floor evaluation per §14.9.1 step 5. Added at v1.15 per U-RT-68 fork Q2=B2 ratification; carrier home re-pointed from `AS spec v1.3 §15 carrier` → `harness-core carrier` at v1.16 per Class 1 fork resolution at `.harness/class_1_fork_sandbox_decision_policy_phantom_cite.md` (operator-ratified Q1=C-i 2026-05-22). |
 | `memory_tool_backend_config` | `MemoryToolBackendConfig | None` (harness-runtime sub-model per §14.12) | no (default `None` → `MemoryToolStorageBackend.FILESYSTEM` at LOCAL_DEV per `harness_as.anthropic_graceful_degradation.memory_tool_storage_backend` resolver) | Operator-supplied Memory tool storage-backend selection override. `None` defers backend resolution to the deployment-surface-keyed graceful-degradation resolver at `harness_as.anthropic_graceful_degradation.memory_tool_storage_backend(config.deployment_surface)`. Non-`None` overrides the resolver for explicit backend pinning (e.g., S3 at LOCAL_DEV for test-fixture purposes; encrypted-filesystem at MANAGED_CLOUD for additional discipline). Ingested at stage 5 by `materialize_memory_tool_registry_stage` factory per §14.12.3. Consumed by `MemoryToolRegistry.resolve_backend(...)` per §14.12.1. Added at v1.17 per `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §16 §6.A v2 A.iv ratification (2026-05-23). |
 | `validator_framework_config` | `ValidatorFrameworkConfig | None` (harness-runtime sub-model per §14.13) | no (default `None` → factory returns `None` → `ctx.validator_framework is None`; driver branch `if ctx.validator_framework is not None:` at `workflow_driver.py:668` evaluates False; operator opt-out is the default) | Operator-supplied validator framework opt-in signal. `None` produces a no-validator `HarnessContext` (the production state at HEAD pre-v1.18; preserves backward-compatible behavior for callers who do not supply a validator framework). Non-`None` triggers the stage-4 factory to construct the operator-supplied `ValidatorFramework` instance per §14.13.1 + §14.13.3. Ingested at stage 4 OD bucket by `materialize_validator_framework_stage` factory per §14.13.3. Consumed by `ConcreteValidatorFramework.evaluate(...)` at the `validator.*` post-dispatch hook in `workflow_driver.py:668` per C-CP-28 §28.3.3.4. The internal shape of `ValidatorFrameworkConfig` is empty-marker at v1.18 per §14.13.1 (operator-supply mechanism — validator catalog, per-validator config, discovery mechanism — deferred to implementation discretion at C-RT-23 landing arc per FM-2 no-extension discipline). Added at v1.18 per `.harness/class_1_fork_validator_composer_arc_stage_4_absence.md` §3.1 Reading A ratification (2026-05-24). |
+| `pause_resume_protocol_config` | `PauseResumeProtocolConfig | None` (harness-runtime sub-model per §14.14) | no (default `None` → factory returns `None` → `ctx.pause_resume_protocol is None`; driver branch at per-step pre-entry for pause-trigger detection evaluates "no pause-protocol bound → skip" per the False arm; operator opt-out is the default) | Operator-supplied pause/resume protocol opt-in signal. `None` produces a no-pause-protocol `HarnessContext` (the production state at HEAD pre-v1.21; preserves backward-compatible behavior for callers who do not supply a pause/resume protocol). Non-`None` triggers the stage-5 factory to construct the `PauseResumeProtocol` instance per §14.14.1 + §14.14.3. Ingested at stage 5 LOOP_INIT by `materialize_pause_resume_protocol_stage` factory per §14.14.3. Consumed by `PauseResumeProtocol.capture_pause_snapshot(...)` / `.attempt_resume(...)` at the per-step pre-entry pause-trigger detection point in `workflow_driver.py` per C-RT-24 §14.14.3 (sibling check to existing `drained_flag.is_set()` at line 549). The internal shape of `PauseResumeProtocolConfig` is empty-marker at v1.21 per §14.14.1 (operator-supply mechanism — snapshot-storage substrate, pause-trigger detection mechanism, resume-API-surface — deferred to implementation discretion at C-RT-24 landing arc per FM-2 no-extension discipline). Added at v1.21 per CP composer authoring arc (operator-ratified narrow-scope 2026-05-24). |
 
 **Invariants.**
 
@@ -892,6 +926,8 @@ The orchestrator (`harness_runtime.bootstrap.__init__`) executes the 9 stages fr
 | `mcp_namespace_emitter` | `MCPClientNamespaceEmitter` (CP spec v1.11 §27 carrier) | 5 | `mcp.*` 7-attribute namespace emitter for `mcp.tool.call` spans per §14.9.1 step 7. Materialized by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3. Added at v1.15 per U-RT-68 fork Q2=B2 ratification. |
 | `memory_tool_registry` | `MemoryToolRegistry` (harness-runtime-defined, C-RT-22 §14.12.1) | 5 | Memory tool storage-backend registry. Resolves a `MemoryToolStorageBackendProtocol` implementation per `RuntimeConfig.deployment_surface` + optional `RuntimeConfig.memory_tool_backend_config` override. Consumed by C-RT-15 §14.5.1 callback-injection composer-step when `step.step_payload.tools` contains the Anthropic Memory tool definition (`tool type "memory_20250818"` per ADR-D3 §1.1 #11). Materialized by `materialize_memory_tool_registry_stage` factory per §14.12.3. Added at v1.17 per `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §16 §6.A v2 A.iv ratification (2026-05-23). |
 | `validator_framework` | `ValidatorFramework | None` (CP spec v1.13 §28 carrier — Protocol surface at `harness_cp.validator_framework_types.ValidatorFramework`; concrete `ConcreteValidatorFramework` body at `harness-cp/src/harness_cp/validator_framework.py:130` per C-CP-28 §28.3) | 4 | Validator framework instance for `validator.*` post-dispatch hook consumption at `workflow_driver.py:668`. `None` value (the default when `RuntimeConfig.validator_framework_config is None`) signals operator opt-out; the driver hook branch `if ctx.validator_framework is not None:` evaluates False and the post-dispatch validator-evaluation path is bypassed. Non-`None` value (when operator supplies `RuntimeConfig.validator_framework_config`) is the framework instance produced by `materialize_validator_framework_stage` per §14.13.3; the driver branch fires the 5-class outcome routing per C-CP-28 §28.3.3.4 (`PASS`/`PERMANENT_FAIL`/`ESCALATE_HITL`/`REVALIDATE`/`TRANSIENT_FAIL`). The field type at runtime spec v1.18 narrows the v1.17-era untyped `object | None` carrier at `harness-runtime/src/harness_runtime/types.py:1157` (carried as untyped per cross-axis-types-import-avoidance discipline) to the typed Protocol surface from CP spec. Materialized by `materialize_validator_framework_stage` factory per §14.13.3. Added at v1.18 per `.harness/class_1_fork_validator_composer_arc_stage_4_absence.md` §3.1 Reading A ratification (2026-05-24). |
+| `pause_resume_protocol` | `PauseResumeProtocol | None` (CP spec v1.13 §26 carrier — concrete `PauseResumeProtocol` class body at `harness-cp/src/harness_cp/pause_resume_protocol.py:213+` per U-CP-62 cluster 10-CP-B `49617e7`) | 5 | Pause/resume protocol instance for per-step pause-trigger detection + snapshot capture + resume invocation in `workflow_driver.py`. `None` value (the default when `RuntimeConfig.pause_resume_protocol_config is None`) signals operator opt-out; the driver per-step pre-entry pause-trigger detection branch evaluates "no pause-protocol bound → skip" per the False arm (no behavior change vs pre-v1.21). Non-`None` value (when operator supplies `RuntimeConfig.pause_resume_protocol_config`) is the protocol instance produced by `materialize_pause_resume_protocol_stage` per §14.14.3; the driver per-step pre-entry detection branch sibling to `drained_flag.is_set()` fires `ctx.pause_resume_protocol.capture_pause_snapshot(...)` on `ctx.pause_requested_flag.is_set()` + returns `RunStatus.PAUSED`; the resume-on-snapshot-context entry-point branch fires `ctx.pause_resume_protocol.attempt_resume(...)` + branches on `ResumeResult` per CP spec v1.13 §26.6 invariants 1-5. Materialized by `materialize_pause_resume_protocol_stage` factory per §14.14.3. Added at v1.21 per CP composer authoring arc (operator-ratified narrow-scope 2026-05-24). |
+| `pause_requested_flag` | `asyncio.Event` | 0 (initialized) | Caller-side pause-signaling primitive. Set by external caller (operator API, MCP tool, etc.) to request that the driver pause at the next per-step pre-entry; polled by CP driver at the per-step pre-entry as a sibling check to `drained_flag.is_set()` per §14.14.3. When set + `ctx.pause_resume_protocol is not None`: driver invokes `ctx.pause_resume_protocol.capture_pause_snapshot(...)` + returns `RunStatus.PAUSED`. When set + `ctx.pause_resume_protocol is None`: driver behavior unchanged from pre-v1.21 (the flag is silently a no-op without a bound protocol). Caller-surface contract for setting the flag is implementation discretion per §14.14.7 (operator API / MCP tool / programmatic signal). Added at v1.21 per CP composer authoring arc (operator-ratified narrow-scope 2026-05-24). |
 
 **Invariants.**
 
@@ -1419,6 +1455,7 @@ The runtime axis introduces a fail-class enumeration distinct from CP's workflow
 | `RT-FAIL-SUB-AGENT-CHILD-FAILED` (new at v1.6) | permanent | C-RT-17 child sub-workflow's terminal `RunResult.status == FAILED` after child-runner invocation | Composer raises typed `SubAgentChildFailedError`; driver `try/except` maps to `step-failure: RT-FAIL-SUB-AGENT-CHILD-FAILED: ...` per C-CP-25 §25.3.3.4 |
 | `RT-FAIL-SUB-AGENT-TOPOLOGY-INADMISSIBLE` (new at v1.6) | permanent | C-RT-17 `is_admissible(topology, workload_class)` returns False before sub-workflow invocation | Composer raises typed `SubAgentDispatchTopologyInadmissibleError`; driver `try/except` maps to `step-failure: RT-FAIL-SUB-AGENT-TOPOLOGY-INADMISSIBLE: ...` per C-CP-25 §25.3.3.4 |
 | `RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND` (new at v1.6) | permanent | Driver invokes `ctx.step_dispatchers.lookup(step.kind)` with an unbound step_kind (3 of 5 unbound at v1.6) | Registry raises `StepKindDispatcherNotBoundError`; driver `try/except` maps to `step-failure: RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND: ...` per C-CP-25 §25.3.3.4 |
+| `RT-FAIL-PAUSE-RESUME-STAGE-MATERIALIZE` (new at v1.21) | permanent | `materialize_pause_resume_protocol_stage` cannot construct the `PauseResumeProtocol` instance (e.g., operator-supplied `PauseResumeProtocolConfig` references unavailable substrate; `pause_context_reader` composition fails; required `state_ledger_writer` / `state_ledger_reader` not populated at stage 5; construction body raises) | Bootstrap aborts; reverse-order rollback per C-RT-02 reverses stages 0..4 |
 
 **Relationship to CP `validator_fail_taxonomy`:**
 
@@ -2670,6 +2707,238 @@ Full RETIRED transition (PARTIAL → RETIRE-READY → RETIRED) gates on:
 - **4-axis `_hitl_required` composition.** EXPLICIT POINTER: full 4-axis composition (C-CP-19 §19.1) per §14.8.2 step 4c is **deferred to a future Reading B full-arc opening** per fork doc §3.2. v1.18 explicitly disclaims; §14.8.2 step 4c v1.9 MVP "treats placement.requires_hitl as the authoritative trigger" PRESERVED VERBATIM.
 - **Cross-trust-boundary palette restriction.** EXPLICIT POINTER: cross-trust-boundary palette restriction per C-CP-19 §19.4 + §14.8.2 step 4d NOTE 6-iv (§14.8.7) is **deferred to a future Reading B full-arc opening** per fork doc §3.2. v1.18 explicitly disclaims; §14.8.2 step 4d "v1.9 MVP uses the full palette unconditionally" PRESERVED VERBATIM.
 - **Reading B full-arc opening.** When operator authorizes Reading B at a future arc per fork doc §3.2, the C-RT-23 contract MAY be extended (or a successor C-RT-NN contract authored) to consume the broader validator-composer arc surfaces. v1.18 explicitly disclaims Reading B scope per Reading A operator authorization.
+
+---
+
+## §14.14 C-RT-24 — `materialize_pause_resume_protocol_stage` (new at v1.21)
+
+**Contract surface.** Bootstrap stage-5 LOOP_INIT factory + `PauseResumeProtocolConfig` empty-marker sub-model + binding contract to `HarnessContext.pause_resume_protocol` + `HarnessContext.pause_requested_flag` sibling caller-signal field + workflow_driver per-step pre-entry pause-trigger detection point. Consumed by the workflow_driver per-step pre-entry sibling check to `drained_flag.is_set()` at `harness-cp/src/harness_cp/workflow_driver.py:549` (the canonical per-step pre-entry detection precedent). The contract authors the missing runtime binding chain that `harness-cp/CLAUDE.md` §4.1 H_T-CP-22 PARTIAL cites as absent: the `PauseResumeProtocol` class body has existed at `harness-cp/src/harness_cp/pause_resume_protocol.py:213+` since the U-CP-62 cluster 10-CP-B landing at `49617e7` but with no stage-factory contract, no `RuntimeConfig` operator-supply field, no `HarnessContext.pause_resume_protocol` field, and no workflow_driver pause-trigger detection — the class is unreachable from production bootstrap.
+
+**PRD enablement.** Completes the pause/resume protocol runtime binding chain: C-CP-26 §26.1 declares the `PauseResumeProtocol` class + `capture_pause_snapshot(...)` async method + `attempt_resume(...)` async method; §26.2 declares the `WorkflowPauseReason` 5-class enum + `MaterialDiffPolicy` 3-class enum + `PauseSnapshot` 8-field envelope + `ResumeResult` 5-field envelope; §26.3 declares the constructor-ref discipline (state_ledger_writer + state_ledger_reader + pause_context_reader callable); §26.4 declares the `pause.captured` + `resume.attempted` span schemas; §26.5 declares the 3 CP fail classes; §26.6 declares the 5 protocol invariants. C-RT-24 closes the missing runtime binding: a stage-5 LOOP_INIT factory that constructs the operator-supplied `PauseResumeProtocol` instance and binds it to `ctx.pause_resume_protocol`, enabling the workflow_driver per-step pre-entry pause-trigger detection to fire at production runtime. H_T-CP-22 substitution retirement criterion B becomes structural-criterion-B MET via factory wiring + driver pause-trigger detection at the C-RT-24 landing arc per operator-opt-in RETIRE-READY pattern (mirrors v1.18 §14.13.6 H_T-CP-21 close-pattern).
+
+**ADR commitment(s) honored.** ADR-D1 v1.2 §Decision (engine + replay primitive — runtime materializes the pause/resume binding chain) + ADR-D5 v1.3 §Decision (cross-deployment monotonicity — pause/resume preserves workflow-layer state-ledger anchor invariant per CP spec §26.6 invariant 3).
+
+**Fork-resolution provenance.** Operator-ratified narrow-scope CP composer authoring arc per AskUserQuestion 2026-05-24 ("driver-invocation-only" scope). Predecessor classification: `harness-cp/CLAUDE.md` §4.1 H_T-CP-22 PARTIAL gate citation: "no workflow_driver invocation of capture_pause_snapshot/attempt_resume per hitl_placement.py:18-23 deferral". The Reading A scope arc opens the binding-chain materialization path to advance H_T-CP-22 to RETIRE-READY/RETIRED via the operator-opt-in pattern.
+
+### §14.14.1 Architectural surfaces introduced
+
+**`PauseResumeProtocolConfig` (RuntimeConfig sub-model — empty-marker at v1.21):**
+
+```python
+@dataclass(frozen=True)
+class PauseResumeProtocolConfig:
+    """Operator-supplied pause/resume protocol opt-in marker.
+
+    v1.21 empty-marker per the `ValidatorFrameworkConfig` precedent
+    (`.harness/class_1_fork_validator_composer_arc_stage_4_absence.md` §3.1
+    Reading A ratification 2026-05-24): the carrier shape is intentionally
+    empty at narrow-scope arc. Presence at `RuntimeConfig.pause_resume_protocol_config`
+    signals operator opt-in to the pause/resume protocol; absence (None default
+    at C-RT-02) signals operator opt-out and yields `ctx.pause_resume_protocol
+    is None`.
+
+    Internal operator-supply shape — snapshot-storage substrate selection
+    (in-memory dict vs sqlite-backed vs F2 state-ledger-backed), pause-trigger
+    detection mechanism (caller-set `pause_requested_flag` vs HITL-gate-composer
+    integration vs operator API surface), resume-API-surface selection
+    (re-invocation via `execute_workflow(snapshot_context=...)` vs MCP tool vs
+    operator API) — is **deferred to implementation discretion** at C-RT-24
+    landing arc per FM-2 no-extension discipline. The follow-on retirement-batch
+    arc that closes H_T-CP-22 RETIRED requires the operator to exercise the
+    pause/resume cycle via this config; the `.default()` factory returns the
+    empty marker for opt-out semantics.
+    """
+
+    @classmethod
+    def default(cls) -> "PauseResumeProtocolConfig":
+        """Return the empty-marker default. Equivalent to `None` at
+        `RuntimeConfig.pause_resume_protocol_config` per the opt-out shape."""
+        return cls()
+```
+
+**Path discipline.** No operator-supplied path arguments at v1.21 — the empty-marker shape carries no substrate-path references. Path-discipline at the impl arc when the internal shape materializes: snapshot-substrate path resolution must use the existing IS `PathResolver` + `WorktreeIsolationManager` per stage-1 IS substrate (no new path primitive needed).
+
+**`pause_context_reader` callable (PauseResumeProtocol constructor-ref per CP spec v1.13 §26.3):**
+
+```python
+PauseContextReader = Callable[[], tuple[StateSummary, str]]
+"""Provider returning (current state_summary, current state_ledger_anchor entry_hash).
+
+Per `harness-cp/src/harness_cp/pause_resume_protocol.py:195-210` docstring:
+"Impl-discretion FACTOR-OUT for the C-CP-26 PauseResumeProtocol class body.
+CP spec v1.11 §26.1 signature is locked at 4 method params; §26.3 enumerates
+state_ledger_writer + state_ledger_reader as constructor refs but doesn't
+specify how the current state_summary or current entry_hash gets read at
+capture-time."
+
+C-RT-24 v1.21 specifies the composition: the factory body constructs a
+callable that closes over `ctx.ledger_reader` + a workflow_driver-supplied
+`current_state_summary_provider` (the workflow driver holds per-step
+accumulated state per workflow_driver.py:551 `accumulated: dict[str, Any]`;
+the provider serializes the current accumulated state into a StateSummary).
+"""
+```
+
+**`materialize_pause_resume_protocol_stage` factory (stage 5 LOOP_INIT):**
+
+```python
+async def materialize_pause_resume_protocol_stage(
+    config: RuntimeConfig,
+    ctx: _MutableHarnessContext,
+    *,
+    pause_context_reader: PauseContextReader,
+) -> PauseResumeProtocol | None:
+    """Construct the stage-5 `PauseResumeProtocol` instance from operator-supplied
+    config, or return `None` when the operator has not opted in.
+
+    Per spec v1.21 §14.14.3 stage-5 factory contract.
+
+    Parameters
+    ----------
+    config : RuntimeConfig
+        Runtime config; `config.pause_resume_protocol_config` is the operator
+        opt-in signal.
+    ctx : _MutableHarnessContext
+        Mutable bootstrap context; `ctx.ledger_writer` + `ctx.ledger_reader`
+        (from stage 1 IS) are consumed as PauseResumeProtocol constructor-refs.
+    pause_context_reader : PauseContextReader
+        Composed at the factory body invocation site (stage 5 LOOP_INIT module
+        wiring); reads (current state_summary, current state_ledger_anchor)
+        at capture-time per §14.14.1 callable docstring.
+
+    Returns
+    -------
+    PauseResumeProtocol | None
+        `None` when `config.pause_resume_protocol_config is None` — the operator
+        has not opted in; driver per-step pre-entry pause-trigger detection
+        branch evaluates the False arm (no pause-protocol bound → skip).
+        Non-`None` when the operator has supplied a `PauseResumeProtocolConfig`
+        instance — factory body constructs the `PauseResumeProtocol` per CP spec
+        v1.13 §26.3 from `ctx.ledger_writer` + `ctx.ledger_reader` +
+        `pause_context_reader`.
+    """
+    if config.pause_resume_protocol_config is None:
+        return None
+    if ctx.ledger_writer is None or ctx.ledger_reader is None:
+        raise PauseResumeStageMaterializeError(
+            "ctx.ledger_writer / ctx.ledger_reader is None at stage 5 — stage 1 "
+            "IS did not populate the state-ledger substrate required by C-CP-26 "
+            "§26.3 constructor-refs"
+        )
+    return PauseResumeProtocol(
+        state_ledger_writer=ctx.ledger_writer,
+        state_ledger_reader=ctx.ledger_reader,
+        pause_context_reader=pause_context_reader,
+    )
+```
+
+### §14.14.2 Per-factory invocation discipline (factory body)
+
+Per-bootstrap invariants (when stage 5 LOOP_INIT wires the pause/resume protocol binding):
+
+1. **Empty-sentinel default at opt-out.** When `config.pause_resume_protocol_config is None`, factory returns `None` without raising. This is the production-default state at v1.21 (no operator has opted in); `ctx.pause_resume_protocol` binds to `None` and the workflow_driver per-step pre-entry pause-trigger detection branch sibling to `drained_flag.is_set()` evaluates the False arm (no behavior change vs pre-v1.21 — caller may set `ctx.pause_requested_flag` but the driver no-ops on the request when no protocol is bound).
+2. **Single PauseResumeProtocol instance per bootstrap.** Stage 5 constructs at most one `PauseResumeProtocol` instance per `HarnessContext`. No per-step re-resolution. Operator config changes require process restart.
+3. **State-ledger substrate prerequisites.** Factory body requires `ctx.ledger_writer` + `ctx.ledger_reader` non-None at invocation (stage 1 IS prerequisite); raises `RT-FAIL-PAUSE-RESUME-STAGE-MATERIALIZE` on absence per §14.14.4. The per-step pause-trigger detection at §14.14.3 consumes the protocol's bound state-ledger refs at capture/resume time per CP spec v1.13 §26.3.
+4. **`pause_context_reader` composition is impl-discretion at the factory invocation site.** The stage-5 LOOP_INIT module composes the callable from `ctx.ledger_reader` + a workflow-driver-supplied current-state-summary provider; the specific composition shape (closure-over-ctx vs partial-application vs class-bound-method) is implementer-discretion per §14.14.7.
+5. **No telemetry emission at factory body.** The factory itself does NOT emit OTel spans (the `pause.*` + `resume.*` namespace per OD spec v1.11 §C-OD-30.1 fires at per-pause/resume invocation at the workflow_driver per-step pre-entry detection, not at factory construction). Construction-failure events surface as `RT-FAIL-PAUSE-RESUME-STAGE-MATERIALIZE` per §14.14.4 with bootstrap rollback per C-RT-02.
+
+### §14.14.3 Lifecycle stage placement + workflow_driver detection point
+
+**Stage 5 (LOOP_INIT):** Bootstrap stage 5 wires the pause/resume protocol via NEW factory contract `materialize_pause_resume_protocol_stage(config: RuntimeConfig, ctx, *, pause_context_reader: PauseContextReader) → PauseResumeProtocol | None` (added at v1.21). Factory body per §14.14.2.
+
+**Stage 5 ordering.** The `materialize_pause_resume_protocol_stage` factory runs at stage 5 LOOP_INIT after `ctx.ledger_writer` + `ctx.ledger_reader` are populated by stage 1 IS (the canonical prerequisites per CP spec v1.13 §26.3). Within stage 5, ordering relative to sibling stage-5 bindings (`override_evaluator` / `topology_dispatcher` / `lifecycle_emitter` / `llm_dispatcher` / `sub_agent_dispatcher` / `step_dispatchers` / `tool_dispatcher` / `memory_tool_registry` / `ask_user_question_surface`) is unconstrained (implementation discretion; the pause/resume protocol consumes only stage-1 IS prerequisites + the stage-5-internal `pause_context_reader` callable).
+
+**Workflow-driver per-step pre-entry detection point.** At workflow execution time, the workflow_driver per-step pre-entry detection at `harness-cp/src/harness_cp/workflow_driver.py:549` (existing `drained_flag.is_set()` check) gains a sibling check:
+
+```python
+# harness-cp/src/harness_cp/workflow_driver.py (NEW at C-RT-24 §14.14.3)
+# Sibling check to existing drained_flag.is_set() at line 549:
+if ctx.pause_resume_protocol is not None and ctx.pause_requested_flag.is_set():
+    # Pause-trigger detected. Capture snapshot via PauseResumeProtocol.
+    pause_snapshot = await ctx.pause_resume_protocol.capture_pause_snapshot(
+        workflow_id=manifest_entry.workflow_id,
+        run_id=run_id,
+        step_index=step_index,
+        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+    )
+    return RunResult(
+        workflow_id=manifest_entry.workflow_id,
+        run_id=run_id,
+        status=RunStatus.PAUSED,
+        terminal_step_index=step_index - 1 if step_index > 0 else None,
+        partial_state=dict(accumulated),
+        final_state=None,
+        fail_class=None,
+        pause_snapshot=pause_snapshot,  # NEW field per §9 RunResult shape
+    ), steps_executed
+```
+
+When `ctx.pause_resume_protocol is not None` (operator-opt-in) and `ctx.pause_requested_flag.is_set()` (caller has signaled pause), the True arm fires; the protocol's `capture_pause_snapshot(...)` async method is invoked; the returned `PauseSnapshot` is carried via the new `RunResult.pause_snapshot: PauseSnapshot | None` field (additive to C-RT-09 §9 RunResult shape per §14.14.5 invariant 4); `RunStatus.PAUSED` is returned. When either prerequisite is False, the True arm does not fire and the loop proceeds normally (no behavior change vs pre-v1.21).
+
+**Workflow-driver entry-point resume detection.** At workflow `execute_workflow` entry, an additional pre-loop branch detects resume-with-snapshot:
+
+```python
+# harness-cp/src/harness_cp/workflow_driver.py (NEW at C-RT-24 §14.14.3)
+# Pre-loop resume detection (after envelope open, before drain check at line 549):
+pause_snapshot_input: PauseSnapshot | None = ... # caller supplies via execute_workflow signature
+if pause_snapshot_input is not None and ctx.pause_resume_protocol is not None:
+    resume_result = await ctx.pause_resume_protocol.attempt_resume(
+        pause_snapshot_input,
+        material_diff_policy=MaterialDiffPolicy.STRICT,
+    )
+    if not resume_result.resumed:
+        # Resume aborted per CP spec v1.13 §26.6 invariant 4.
+        return RunResult(
+            workflow_id=manifest_entry.workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=pause_snapshot_input.step_index,
+            partial_state=None,
+            final_state=None,
+            fail_class=resume_result.fail_class,
+        ), 0
+    # Resume succeeded — continue execution from snapshot's step_index.
+    resume_at_step_index = pause_snapshot_input.step_index
+```
+
+### §14.14.4 Failure-mode taxonomy
+
+1 new fail class added to §14 runtime-local fail-class taxonomy:
+
+| Fail class | Trigger | Permanent? |
+|---|---|---|
+| `RT-FAIL-PAUSE-RESUME-STAGE-MATERIALIZE` | `materialize_pause_resume_protocol_stage` cannot construct the `PauseResumeProtocol` instance (e.g., `ctx.ledger_writer` / `ctx.ledger_reader` not populated at stage 5; `pause_context_reader` composition fails at the invocation site; construction body raises on invalid operator-supplied substrate) | YES (bootstrap aborts) |
+
+The `RT-FAIL-PAUSE-RESUME-STAGE-MATERIALIZE` class fires only on the non-`None` factory branch (operator opt-in). The opt-out branch (`config.pause_resume_protocol_config is None` → factory returns `None`) is unconditional and cannot raise this fail class. Bootstrap rollback per C-RT-02 reverses stages 0..4 on this failure.
+
+### §14.14.5 Invariants
+
+1. **Pause/resume protocol resolved exactly once per bootstrap.** Stage 5 resolves; bound to `ctx.pause_resume_protocol`. No re-resolution at dispatch-time. Operator config changes require process restart.
+2. **Empty-sentinel default preserves backward-compatible behavior.** When `config.pause_resume_protocol_config is None` (the default for callers who do not supply a pause/resume protocol — the production state at HEAD pre-v1.21), `ctx.pause_resume_protocol` binds to `None`; the workflow_driver per-step pre-entry pause-trigger detection branch sibling to `drained_flag.is_set()` does not fire; the caller-side `ctx.pause_requested_flag.set()` is silently no-op without a bound protocol. Backward-compatible with all pre-v1.21 caller code.
+3. **CP-canonical Protocol satisfaction.** When the factory returns a non-`None` `PauseResumeProtocol` instance, the instance MUST be the CP-canonical class body at `harness_cp.pause_resume_protocol.PauseResumeProtocol` per CP spec v1.13 §26 (not a substitute or wrapper); subclasses are permitted; the factory MUST NOT bypass the CP-canonical class.
+4. **RunResult shape additive evolution.** `RunResult.pause_snapshot: PauseSnapshot | None` is added at v1.21 as an additive optional field (minor version evolution per §9 Version evolution clause); the field is `None` for all non-PAUSED returns; existing callers reading RunResult unchanged.
+5. **Resume-on-snapshot determinism.** Per CP spec v1.13 §26.6 invariant 5: "Coexist with U-CP-56 prefix-replay-based resumption — this method handles explicit-pause resumption; U-CP-56 handles prefix-replay. The two paths are non-overlapping and operate at different layers." The C-RT-24 contract preserves this — the workflow_driver entry-point resume detection at §14.14.3 fires for `pause_snapshot_input is not None`; the existing `_determine_resume_at` prefix-replay path at `workflow_driver.py:792` fires for save-point-checkpoint binding. The two paths are mutually exclusive at any given `execute_workflow` invocation.
+
+### §14.14.6 X-AL-2 retirement implications (v1.21 → retirement event prerequisites)
+
+The C-RT-24 contract specifies the binding-chain seam that — alongside the workflow_driver per-step pre-entry detection at §14.14.3 + the operator-bound `pause_resume_protocol_config` non-default at RuntimeConfig — closes H_T-CP-22 substitution retirement structural-criterion-B per operator-opt-in pattern (mirrors batch-17 H_T-CP-21 RETIRE-READY → RETIRED close-pattern + batch-16 §6 verification-shape sharpening).
+
+Full RETIRED transition (PARTIAL → RETIRE-READY → RETIRED) gates on:
+
+1. **C-RT-24 stage-factory landing + workflow_driver pause-trigger detection at impl arc** (PARTIAL → RETIRE-READY) — the L9-undecies (or naming-equivalent) 3-unit cluster at runtime plan v2.20 lands U-RT-87 (`RuntimeConfig.pause_resume_protocol_config` field + `PauseResumeProtocolConfig` empty-marker sub-model + `HarnessContext.pause_resume_protocol` field + `HarnessContext.pause_requested_flag` field) + U-RT-88 (`materialize_pause_resume_protocol_stage` factory + stage-5 wiring + `pause_context_reader` composition) + U-RT-89 (workflow_driver per-step pre-entry pause-trigger detection + protocol invocation + new `RunStatus.PAUSED` + resume-on-snapshot-context entry-point branch + real-bootstrap e2e pause/resume cycle).
+2. **Operator-bound `pause_resume_protocol_config` non-default + e2e exercise** (RETIRE-READY → RETIRED) — the operator supplies a real `PauseResumeProtocolConfig` instance at production `RuntimeConfig`; U-RT-89-shape e2e exercises the wired path end-to-end against a real `PauseResumeProtocol` instance with a real workflow that pauses + resumes; both branches fire (capture_pause_snapshot at the pause boundary + attempt_resume at the resume boundary); `ResumeResult.resumed=True` is observed for the clean-resume path. RETIRED recorded at batch-18 filing per the close-pattern + batch-16 §6 verification-shape sharpening discipline ("driver invocation succeeds end-to-end against a real substrate").
+
+**Cross-axis cascade closures at C-RT-24 landing.** Per the narrow-scope arc framing: ZERO cross-axis cascade introduced by C-RT-24. The `pause_resume_protocol` ctx-binding consumes already-landed CP spec v1.13 §26 `PauseResumeProtocol` carrier without new CXA edge introduction. CXA v2.9 unchanged; CP spec v1.13 unchanged; OD spec v1.11 unchanged.
+
+### §14.14.7 Deferred to implementation discretion
+
+- **`PauseResumeProtocolConfig` internal shape.** v1.21 authors empty-marker only. The internal operator-supply shape (snapshot-storage substrate selection — in-memory dict vs sqlite-backed vs F2 state-ledger-backed; pause-trigger detection mechanism — caller-set flag vs HITL-gate-composer integration vs operator API surface; resume-API-surface selection — re-invocation via `execute_workflow(snapshot_context=...)` vs MCP tool vs operator API) is implementation discretion at the C-RT-24 landing arc per FM-2 no-extension discipline. The follow-on retirement-batch arc that closes H_T-CP-22 RETIRED requires the operator to exercise the pause/resume cycle via the materialized config shape.
+- **`pause_context_reader` composition body.** v1.21 specifies the callable signature + the factory invocation site composition discipline (§14.14.2 invariant 4). The specific composition shape (closure-over-ctx vs partial-application vs class-bound-method on a stage-5 helper class) is implementation discretion at the C-RT-24 landing arc.
+- **Pause-trigger reason source.** v1.21 §14.14.3 binds `WorkflowPauseReason.EXPLICIT_OPERATOR` as the default trigger reason at the per-step pre-entry detection. Finer-grained reason selection — e.g., consume an operator-supplied reason via a `RuntimeConfig.pause_reason_default` extension or via a per-set-flag-payload sidecar — is implementation discretion at the C-RT-24 landing arc.
+- **Resume-policy source.** v1.21 §14.14.3 binds `MaterialDiffPolicy.STRICT` as the default resume policy at the entry-point resume detection. Operator-supplied per-resume policy selection (e.g., from manifest + step context per CP spec v1.13 §26.6 invariant 4 NOTE) is implementation discretion at follow-on composer arc.
+- **`pause_requested_flag` caller-surface contract.** v1.21 §4 C-RT-04 field row specifies the flag as a sibling-pattern to `drained_flag`. The caller-surface contract for setting the flag — operator API endpoint vs MCP tool vs programmatic signal handler vs ingress-routed external signal — is implementation discretion at the C-RT-24 landing arc + follow-on operator-surface arcs.
+- **HITL-gate-as-pause-trigger composition.** Per the change-note adjacent defect (i): the HITL gate composer body firing `ctx.pause_requested_flag.set()` on durable-async cell synchrony per C-CP-18 §18.3 is a follow-on arc (workflow-driver HITL-gate-composer integration; out of v1.21 scope). The v1.21 contract authors the per-step pre-entry detection point + caller-side flag-signal surface only.
+- **Snapshot persistence across `execute_workflow` invocations.** v1.21 §14.14.3 sketches the resume-on-snapshot-context entry-point branch consuming a `pause_snapshot_input: PauseSnapshot | None` argument to `execute_workflow`. The mechanism by which the caller persists the snapshot between the pause-return and the resume-invocation (in-memory across same process vs sqlite-backed vs F2 state-ledger lookup) is implementation discretion at the C-RT-24 landing arc.
 
 ---
 
