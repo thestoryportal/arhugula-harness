@@ -289,4 +289,39 @@ Operator holds decision authority per workspace `CLAUDE.md` §1.3 + skill §4A.4
 
 ---
 
-*End of fork doc. Routing: cite-cascade absorption at runtime spec + plan files + workspace bookkeeping per §8 routing target table. Fork remains OPEN as cite-cascade tracker until all §7.10 artifacts absorb the rename.*
+## §9 Cite-cascade arc closure (2026-05-24, follow-on session)
+
+**Trigger.** Operator request "start the cite-cascade arc" at follow-on session opening (checkpoint resume at HEAD `01d11c8`). Session goal: complete the §7.10 + §8 cascade absorption owed across runtime spec / plan files / workspace bookkeeping / adjacent fork doc, lifting the OPEN-as-cite-cascade-tracker status.
+
+**Cite-cascade absorption arc closed across 4 commits this follow-on session** (artifact #4 adjacent-fork-doc retag bundled with artifact #5 cascade-closure commit; 5 distinct artifacts absorbed across 4 commits).
+
+| # | Artifact | Disposition |
+|---|---|---|
+| 1 | `Spec_Harness_Runtime_v1.md` v1.18 → **v1.19** (in-place; single-file spec, not delta-chain) | 17 ValidatorFramework-context cite sites retagged §25.x → §28.x / C-CP-25 → C-CP-28 across §3 + §4 + §14.13 + §14.13.1 + §14.13.2 + §14.13.3 + §14.13.6 + 2 historical change-notes (v1.14→v1.15 path β fork + v1.16→v1.17 §(b)). v1.6-lineage WorkflowDriver cites (§25.2.1 StepExecutionContext + §25.3.3.4 step-dispatch boundary + §25.3.3 step-body-opaque) preserved verbatim per advisor-confirmed discrimination rule. Commit `8f75589`. |
+| 2 | `Implementation_Plan_Control_Plane_v2_18.md` → **v2.19** (NEW delta file; delta-only convention) | §0(i) adjacent-defect note refreshed ("non-blocking; routing to future arc" → RESOLVED at CP spec v1.13). NEW §1 cluster 10-CP-A canonical-reading amendment table for U-CP-58/59/60/61 (delta-only preservation: v2.15/v2.16 plan files containing unit bodies NOT edited — canonical reading at v2.19 retags per §1 table). U-CP-56 (v1.6-lineage WorkflowDriver at §25.2.1) preserved verbatim. Commit `8cd2aba`. |
+| 3 | `Implementation_Plan_Harness_Runtime_v2_17.md` → **v2.18** (NEW delta file; delta-only convention) | NEW §1 L9-decies cluster canonical-reading amendment with 23-site per-line retag enumeration table (U-RT-83 + U-RT-84 + U-RT-85 unit bodies + Implements/Files/Signatures/Depends-on/AC/coverage-matrix/cite-precision-audit/spec-carrier-inventory/adversarial-review-checkpoint-matrix sites). Delta-only preservation: v2.17 plan file NOT edited — canonical reading retags per §1. Cluster-boundary edges to U-CP-58/59/60/61 unchanged at edge-declaration level. Commit `3864f4e`. |
+| 4 | `.harness/class_1_fork_validator_composer_arc_stage_4_absence.md` (in-place edit) | Lines 127 + 152 ValidatorFramework-context cite retag: line 127 `C-CP-25/26/27` enumeration → `C-CP-28 (ValidatorFramework, renamed from v1.10 C-CP-25 at v1.13) / C-CP-26 / C-CP-27`; line 152 `C-CP-25 ValidatorFramework Protocol` → `C-CP-28 ValidatorFramework Protocol`. Bundled with §5 commit. |
+| 5 | Workspace `CLAUDE.md` §2.3 CP spec row + §2.3 runtime spec row + §2.4 CP plan row + §2.4 runtime plan row + fork doc §9 closure footer (this) + MEMORY.md fork-cp-spec-section-25 index entry | Row version bumps + change-note appendings: CP spec v1.13 row trailing sentence amended to record cascade APPLIED status; runtime spec row bumped v1.18 → v1.19; CP plan row bumped v2.18 → v2.19; runtime plan row bumped v2.17 → v2.18. |
+
+**Empirical inventory confirmed at session open.** Per workspace `CLAUDE.md` §4.3 fidelity discipline, follow-on session ran empirical grep across all §7.10 routing targets:
+- `harness-cp/CLAUDE.md` — empirical grep ZERO §25/C-CP-25 spec-section cite-shape hits (only `ValidatorFramework` code-symbol references at retirement-status rows, NOT spec section cites). NO retag owed at harness-cp/CLAUDE.md.
+- `Cross_Axis_Composition_Document_v2_9.md` — empirical grep ZERO §25/C-CP-25/ValidatorFramework spec-section cite hits. NO retag owed at CXA v2.9.
+- `Adversarial_Review_06` + `Adversarial_Review_07` cite drift — bookkeeping-only at next adversarial-review touch per §7.10 + §8 routing.
+
+**Discrimination rule application.** Per advisor consultation at runtime spec retag arc opening (advisor confirmed: "v1.13 §1 explicitly enumerates §25.x → §28.x mapping byte-exact; cite-cascade against whatever v1.13 actually anchors"): each cite site contextually discriminated per surrounding prose:
+- **WorkflowDriver context** (step-failure mapping / step-body-opaque / `try/except` boundary / step.kind routing / `StepExecutionContext` plumbing / `SUB_AGENT_DISPATCH` / `single-sub-agent` / `fan-out` / `topology expansion`) → preserved as `§25.x` / `C-CP-25 §25.x` per v1.6-lineage primacy
+- **ValidatorFramework context** (validator hook / 5-class outcome routing / `ConcreteValidatorFramework.evaluate` / Protocol envelope / `ValidatorFailClass` enum / `ValidatorEvaluation` envelope / driver-hook True-arm / `workflow_driver.py:668` 5-class outcome routing) → retagged to `§28.x` / `C-CP-28 §28.x` per v1.13 §1 rename
+
+**Status post-§9.** **OPEN cite-cascade tracker → FULLY-CLOSED.** All §7.10 + §8 routing target artifacts absorbed the rename per applicable convention (in-place for single-file spec / NEW delta for delta-only plan-chain / in-place for adjacent fork doc / canonical-reading-table for predecessor plan files preserved byte-exact). The fork is now FULLY-RESOLVED + FULLY-APPLIED + CASCADE-CLOSED. Reading B full validator-composer arc remains OPEN at §3.2 for future operator-discretion routing (separate scope; not gated on this fork's closure).
+
+**Adjacent defects preserved across cascade arc.**
+(i) `§28` non-sequential numbering at CP spec v1.13 (preserved per fidelity-pure rename; NOT addressed at cascade).
+(ii) Delta-only canonical-reading amendment pattern (preserved per established convention; interpretive layer surfaced at CP plan v2.19 §"Adjacent defects (ii)" + runtime plan v2.18).
+(iii) Adversarial Review 06 + 07 cite drift (bookkeeping-only; cite retag at next adversarial-review touch).
+(iv) Filing footer staleness at runtime spec (carry-forward from v1.13..v1.18; NOT patched per FM-2).
+
+**Pattern catalogued.** Two-arc fork resolution: arc 1 (filing + ratification + apply at canonical artifact) + arc 2 (cite-cascade absorption across downstream artifacts). Cascade arc 2 benefits from fresh context window per FM-4 risk-aware scoping operator-deferred from arc 1. Cumulative session deliverable across both arcs: **7 commits total** (3 at arc 1 last session: `baeb595` → `50bb8b9` → `01d11c8`; 4 at this arc: `8f75589` → `8cd2aba` → `3864f4e` → (this) bundling adjacent-fork-doc retag + workspace CLAUDE.md row bumps + fork §9 closure footer + MEMORY.md index update).
+
+---
+
+*End of fork doc. Routing: FULLY-CLOSED at §9 cascade absorption. Reading B full validator-composer arc remains OPEN at §3.2 for future operator-discretion routing (separate scope; not gated on this fork's closure).*

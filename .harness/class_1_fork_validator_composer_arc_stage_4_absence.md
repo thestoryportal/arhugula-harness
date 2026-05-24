@@ -124,7 +124,7 @@ Per `[[advisor-before-substantive-work-for-cross-axis-blockers]]` pattern: advis
 |---|---|
 | `Spec_Harness_Runtime_v1.md` v1.17 → v1.18 (or v1.x with significant body delta) | NEW C-RT-NN validator-composer arc contract (likely paralleling §14.8 HITL-gate composer surface in scope); resolution of all 6 §14.8.2 deferrals enumerated at §1.3; new failure-mode taxonomy entries replacing `RT-FAIL-HITL-PLACEMENT-FORECLOSED-AT-V19`; §0.6 Q5 ratification reversal |
 | `Implementation_Plan_Harness_Runtime_v2_15.md` v2.15 → v2.16 | New multi-cluster decomposition (likely L9-N + L9-N+1 + possibly more); estimate 8-15 atomic units (analogous to U-RT-60-cluster L9-quinquies HITL-gate-composer scope) |
-| `Spec_Control_Plane_v1_11.md` | Possibly amended — depends on whether the validator-composer arc surfaces any clarification owed at C-CP-25/26/27 producer-side; spec-writer determines at revision time |
+| `Spec_Control_Plane_v1_11.md` | Possibly amended — depends on whether the validator-composer arc surfaces any clarification owed at C-CP-28 (ValidatorFramework, renamed from v1.10 C-CP-25 at v1.13 per `[[fork-cp-spec-section-25-contract-id-collision]]` Reading A) / C-CP-26 (PauseResumeProtocol) / C-CP-27 (PerServerTrustEvaluator) producer-side; spec-writer determines at revision time |
 | `Cross_Axis_Composition_Document_v2_8.md` | Possibly amended — VALIDATOR_ESCALATION resolution may surface new CP→OD typed seam at §2.3.7 |
 | `Spec_Operational_Discipline_v1_9.md` | Possibly amended — `_hitl_required` 4-axis composition may surface new OD-side observability requirements |
 
@@ -149,7 +149,7 @@ Per `[[advisor-before-substantive-work-for-cross-axis-blockers]]` pattern: advis
 
 ### 3.4 Reading D — Re-evaluate CP-21 gate definition
 
-**Scope:** Question the operator-opt-in gate definition itself at H_T-CP-21. Per `Phase_7_Meta_Architecture_v1.md` §5 H_T-CP-21 row + `phase-7d-retirement-ledger-v2.md` §2.1 line-33 strict-reading: is the gate genuinely "operator-supplied `validator_framework` non-None at HarnessContext" (which is unachievable without stage factory), or is it "C-CP-25 `ValidatorFramework` Protocol + `ValidatorFailClass` 5-class + 5-class outcome-evaluation hook at workflow_driver" (which IS landed at HEAD via U-CP-58/59/60/61 cluster 10-CP-A)?
+**Scope:** Question the operator-opt-in gate definition itself at H_T-CP-21. Per `Phase_7_Meta_Architecture_v1.md` §5 H_T-CP-21 row + `phase-7d-retirement-ledger-v2.md` §2.1 line-33 strict-reading: is the gate genuinely "operator-supplied `validator_framework` non-None at HarnessContext" (which is unachievable without stage factory), or is it "C-CP-28 `ValidatorFramework` Protocol + `ValidatorFailClass` 5-class + 5-class outcome-evaluation hook at workflow_driver" (which IS landed at HEAD via U-CP-58/59/60/61 cluster 10-CP-A; C-CP-28 renamed from v1.10 C-CP-25 at CP spec v1.13 per `[[fork-cp-spec-section-25-contract-id-collision]]` Reading A apply pass)?
 
 If the latter reading is canonical, CP-21 may already be RETIRED at HEAD under the proper gate interpretation, and the batch-11 + harness-cp/CLAUDE.md classification was the over-conservative one (inherited the CP-18/20 external-substrate pattern by name without auditing whether the gate semantics applied).
 
