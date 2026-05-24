@@ -15,11 +15,13 @@ spec contract surface + Implementation_Plan_Control_Plane_v2_15.md U-CP-72,
 the converter signature widens from a single `CPAuditLedgerEntry` input to
 a tagged union over 5 carrier types (the existing CP-side carrier plus 4
 producer-specific AuditPayload subclasses). Dispatch routes on isinstance.
-6 of 8 plan-mandated branches land at this arc (`dispatch:` + `hitl:` via
+7 of 8 plan-mandated branches land post-Sub-arc-A (`dispatch:` + `hitl:` via
 CPAuditLedgerEntry; `hitl_webhook:` + `operator_burden:` + `validator:` +
-`mcp_trust:` via their respective AuditPayload subclasses). 2 prefixes
-(`pause:`/`resume:`, `cost:`) STRUCK per `[[halt-route-split-AC-pattern]]`
-— see `.harness/class_1_fork_u_cp_72_cost_and_pause_resume_prefix_gap.md`.
+`mcp_trust:` + **`pause:`/`resume:` via PauseResumeAuditPayload (un-STRUCK at
+U-OD-51 landing 2026-05-23 per Sub-arc A of `[[fork-u-cp-72-cost-and-pause-
+resume-prefix-gap]]` §2.1 routing target (a))**). 1 prefix (`cost:`) remains
+STRUCK per `[[halt-route-split-AC-pattern]]` — see `.harness/class_1_fork_u_cp_72_cost_and_pause_resume_prefix_gap.md`
+§2.2 (Sub-arc B: CostRecordAuditPayload authoring + CXA v2.9 amendment owed).
 
 **Home rationale (Q5 ratification, 2026-05-20).** Lives at `harness-cxa/` per
 the workspace `CLAUDE.md` §2.5 assignment ("harness-cxa/ hosts CXA seam
@@ -64,6 +66,7 @@ from harness_od.hitl_operator_burden_namespace import OperatorBurdenAuditPayload
 from harness_od.hitl_webhook_namespace import WebhookDeliveryAuditPayload
 from harness_od.mcp_trust_namespace import TrustEvaluationAuditPayload
 from harness_od.multi_tenant_trace_separation_and_audit_ledger import sign_audit_entry
+from harness_od.pause_resume_namespace import PauseResumeAuditPayload
 from harness_od.validator_namespace import ValidatorEscalationAuditPayload
 
 #: Namespace prefix for CP-sourced fields landing in OD `audit_namespace_attrs`.
@@ -71,25 +74,30 @@ from harness_od.validator_namespace import ValidatorEscalationAuditPayload
 #: extends OD-canonical `audit.*` per C-OD-05 §5.1).
 CP_AUDIT_NAMESPACE_PREFIX = "audit.cp"
 
-#: Producer-specific sub-namespace prefixes per U-CP-72 6-prefix dispatch
-#: (10-CP-D, 2026-05-22). Each AuditPayload subclass projects its
-#: producer-specific fields into the corresponding sub-namespace at write
+#: Producer-specific sub-namespace prefixes per U-CP-72 7-prefix dispatch
+#: post-Sub-arc-A (initial 6-prefix landing at 10-CP-D 2026-05-22; pause_resume
+#: added at U-OD-51 landing 2026-05-23). Each AuditPayload subclass projects
+#: its producer-specific fields into the corresponding sub-namespace at write
 #: time per OD spec v1.9 §C-OD-24.6 sub-namespace tagging discipline.
 WEBHOOK_AUDIT_NAMESPACE_PREFIX = "audit.hitl_webhook"
 OPERATOR_BURDEN_AUDIT_NAMESPACE_PREFIX = "audit.operator_burden"
 VALIDATOR_AUDIT_NAMESPACE_PREFIX = "audit.validator"
 MCP_TRUST_AUDIT_NAMESPACE_PREFIX = "audit.mcp_trust"
+PAUSE_RESUME_AUDIT_NAMESPACE_PREFIX = "audit.pause_resume"
 
 #: Union of carrier types accepted by `cp_audit_to_od_audit` per U-CP-72
-#: prefix dispatch. The `pause`/`resume` + `cost` branches are STRUCK at
-#: this arc per `.harness/class_1_fork_u_cp_72_cost_and_pause_resume_prefix_gap.md`
-#: and will widen this union at their respective re-binding arcs.
+#: prefix dispatch. The `cost` branch remains STRUCK at this arc per
+#: `.harness/class_1_fork_u_cp_72_cost_and_pause_resume_prefix_gap.md` §2.2
+#: (Sub-arc B: CostRecordAuditPayload authoring at OD spec + CXA v2.9
+#: amendment owed). The `pause`/`resume` branch un-STRUCK at U-OD-51 landing
+#: 2026-05-23 per Sub-arc A of the same fork §2.1.
 CpAuditCarrier = (
     CPAuditLedgerEntry
     | WebhookDeliveryAuditPayload
     | OperatorBurdenAuditPayload
     | ValidatorEscalationAuditPayload
     | TrustEvaluationAuditPayload
+    | PauseResumeAuditPayload
 )
 
 
@@ -125,7 +133,8 @@ def _project_producer_namespace_attrs(
     carrier: WebhookDeliveryAuditPayload
     | OperatorBurdenAuditPayload
     | ValidatorEscalationAuditPayload
-    | TrustEvaluationAuditPayload,
+    | TrustEvaluationAuditPayload
+    | PauseResumeAuditPayload,
     producer_prefix: str,
 ) -> dict[str, str]:
     """Project a producer-specific AuditPayload subclass into the unified
@@ -185,10 +194,18 @@ def cp_audit_to_od_audit(
       composition (`validator:` prefix).
     - `TrustEvaluationAuditPayload` → `audit.mcp_trust.*` sub-namespace
       composition (`mcp_trust:` prefix).
+    - `PauseResumeAuditPayload` → `audit.pause_resume.*` sub-namespace
+      composition (`pause:` OR `resume:` prefix per
+      `audit_cp_action_id` discriminator at the producer-side; converter
+      isinstance branches once on the union type, prefix discrimination is
+      authored at U-OD-51 producer-side per OD spec v1.9 §C-OD-30.2
+      action_id pattern).
 
-    The `pause:`/`resume:` and `cost:` prefixes are STRUCK at this arc per
-    `.harness/class_1_fork_u_cp_72_cost_and_pause_resume_prefix_gap.md`;
-    re-binding criteria documented at fork doc §3.
+    The `cost:` prefix remains STRUCK at this arc per
+    `.harness/class_1_fork_u_cp_72_cost_and_pause_resume_prefix_gap.md` §2.2;
+    re-binding criteria documented at fork doc §3 (Sub-arc B owed).
+    The `pause:`/`resume:` prefix un-STRUCK at U-OD-51 landing 2026-05-23
+    per Sub-arc A of the same fork §2.1.
 
     Parameters:
         cp_entry: any CP-side audit carrier per `CpAuditCarrier` union.
@@ -250,7 +267,7 @@ def cp_audit_to_od_audit(
             ),
             prior_entry_hash=cp_entry.audit_cp_prior_event_hash,
         )
-    elif isinstance(cp_entry, TrustEvaluationAuditPayload):  # noqa: UP040  # type: ignore[reportUnnecessaryIsInstance]
+    elif isinstance(cp_entry, TrustEvaluationAuditPayload):
         resolved_entry_core = _entry_core_or_default(
             entry_core, cp_entry.audit_cp_action_id
         )
@@ -261,15 +278,26 @@ def cp_audit_to_od_audit(
             ),
             prior_entry_hash=cp_entry.audit_cp_prior_event_hash,
         )
+    elif isinstance(cp_entry, PauseResumeAuditPayload):  # noqa: UP040  # type: ignore[reportUnnecessaryIsInstance]
+        resolved_entry_core = _entry_core_or_default(
+            entry_core, cp_entry.audit_cp_action_id
+        )
+        payload = AuditPayload(
+            entry_core=resolved_entry_core,
+            audit_namespace_attrs=_project_producer_namespace_attrs(
+                cp_entry, PAUSE_RESUME_AUDIT_NAMESPACE_PREFIX
+            ),
+            prior_entry_hash=cp_entry.audit_cp_prior_event_hash,
+        )
     else:
         raise TypeError(
             f"cp_audit_to_od_audit: unsupported carrier type "
             f"{type(cp_entry).__name__}; expected one of "
             f"CPAuditLedgerEntry, WebhookDeliveryAuditPayload, "
             f"OperatorBurdenAuditPayload, ValidatorEscalationAuditPayload, "
-            f"TrustEvaluationAuditPayload (pause/resume + cost prefixes "
-            f"STRUCK per .harness/class_1_fork_u_cp_72_cost_and_pause_"
-            f"resume_prefix_gap.md)"
+            f"TrustEvaluationAuditPayload, PauseResumeAuditPayload "
+            f"(cost: prefix STRUCK per .harness/class_1_fork_u_cp_72_"
+            f"cost_and_pause_resume_prefix_gap.md §2.2 — Sub-arc B owed)"
         )
 
     signature_attrs = sign_audit_entry(payload, key_id=key_id, algo=algo)
