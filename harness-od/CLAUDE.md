@@ -133,20 +133,43 @@ Per `Phase_7_Meta_Architecture_v1.md` §5.5. H_E classification per §4.4.4 — 
 
 Full per-substitution bounded-scope + retirement criterion at Meta-Architecture §5.5.
 
-**Retirement status (post 7d second pass, 2026-05-20).** Per v2 ledger `.harness/phase-7d-retirement-ledger-v2.md` §6 under operator-ratified runtime-only substitution-site reading. OD-axis had 0 RETIRE-READY at batch 1 — same compound-irrelevance pattern as CXA: even with composers materialized at bootstrap, the production execution path emits zero spans / makes zero `audit_writer.append` calls (only `read_all` at shutdown for head-hash), so the OD telemetry / cost / sampler / audit primitives are starved of input.
+**Retirement status (post 7d batch 11 doc-hygiene-pass refresh, 2026-05-23).** Per v2 ledger `.harness/phase-7d-retirement-ledger-v2.md` §6 + cumulative batch records `.harness/phase-7d-retirement-events-batch-{1..11}.md` under operator-ratified runtime-only substitution-site reading + line-33 strict-reading discipline. Compound-irrelevance pattern from earlier OD-axis blockages (zero spans emitted → telemetry / cost / sampler / audit primitives starved of input) has materially shifted post-batch-2 with significant span-emission landings since 2026-05-20: cluster 4-OD-A (workflow.envelope) + cluster 4-OD-C (rate-table substrate) + cluster 4-OD-D (cost-attribution at LLM dispatch site) + cluster 10-CP-A/B/C/D span schemas (validator.*, mcp.trust.*, hitl.webhook.*, hitl.operator_burden.*) — see §"Span-emission substrate activity" below. Forward-only ledger discipline preserved.
 
 | Substitution | Status | Source |
 |---|---|---|
 | H_T-OD-1 (deferral envelope) | STILL-BOUNDED | No `deferral_envelope` import in `harness-runtime/`; scope deferrals remain `CLAUDE.md`-prose convention at runtime |
-| H_T-OD-2 (OTel SDK base + GenAI semconv) | **RETIRED** 2026-05-20 (batch 2, U-RT-52 close arc) | OTel SDK base wired (`tracer_provider.py`); GenAI semconv 1.41.0 binding LIVE at `lifecycle/llm_dispatch.py:RuntimeLLMDispatcher.dispatch` per Spec v1.3 §14.5 C-RT-15. Runtime emits `gen_ai.system` + `gen_ai.request.model` + `gen_ai.usage.{input,output}_tokens` + `gen_ai.response.id` per provider. Tests verify emission across all 3 providers. CXA-5 cascade partially closed — OD-2 precondition met; full closure still gated on CP-3 retry/breaker retirement (Q2a-deferred) |
-| H_T-OD-3 (Composite Sampler) | STILL-BOUNDED | Stock `ParentBased(ALWAYS_ON)`, not project-authored composite head/tail |
-| H_T-OD-4 (Pre-Collector redaction SpanProcessor) | STILL-BOUNDED | Stock `BatchSpanProcessor`; zero redaction references; doubly inactive (no spans to redact) |
-| H_T-OD-5 (Cost-attribution 5-step chain) | STILL-BOUNDED | `CostAttributionChain` wired into ctx; zero production callsites; `api.py:463` hard-codes `cost_attribution=()` per U-OD-21 HALT carry-forward. PRICE_TABLE_REF carry per `[[fork-price-table-ref-substitution-retirement]]`; audit-ledger wiring per `[[fork-cost-record-audit-ledger-wiring-residual]]` |
-| H_T-OD-6 (Local-first OTLP ingestion) | PARTIAL | Collector daemon + ring buffer wired; sqlite write path deferred (U-RT-30 PARTIAL-LAND, AC #2 STRUCK); TUI absent. Compound-irrelevant: no spans → collector ingests nothing |
+| H_T-OD-2 (OTel SDK base + GenAI semconv) | **RETIRED** 2026-05-20 (batch 2, U-RT-52 close arc) | OTel SDK base wired (`tracer_provider.py`); GenAI semconv 1.41.0 binding LIVE at `lifecycle/llm_dispatch.py:RuntimeLLMDispatcher.dispatch` per Spec v1.3 §14.5 C-RT-15. Runtime emits `gen_ai.system` + `gen_ai.request.model` + `gen_ai.usage.{input,output}_tokens` + `gen_ai.response.id` per provider. RETIRED status strengthened by post-batch-2 namespace activity: workflow.envelope (U-OD-35/36/37, cluster 4-OD-A) + validator.* (U-OD-50) + mcp.trust.* (U-OD-52) + hitl.webhook.* (U-OD-53) + hitl.operator_burden.* (U-OD-54) all emit through the same TracerProvider substrate. CXA-5 cascade closed at batch 3 (per workspace-CP CLAUDE.md §4.1 + ledger-v2 §7) |
+| H_T-OD-3 (Composite Sampler) | STILL-BOUNDED | Stock `ParentBased(ALWAYS_ON)`, not project-authored composite head/tail. NOTE: compound-irrelevance lifted post-batch-2 (spans now actively emit per H_T-OD-2 namespace activity) — sampler-discipline gap now materially observable, no longer compound-inactive |
+| H_T-OD-4 (Pre-Collector redaction SpanProcessor) | STILL-BOUNDED | Stock `BatchSpanProcessor`; zero redaction references. NOTE: compound-irrelevance lifted post-batch-2 (spans actively emit) — redaction-discipline gap now materially observable, no longer compound-inactive |
+| H_T-OD-5 (Cost-attribution 5-step chain) | **PARTIAL** (batch 11 doc-hygiene transition) | Cost-attribution wired at LLM dispatch site via U-OD-38 landing (`7104fd7`, cluster 4-OD-D commit 1/2): production LLM-dispatch path invokes `resolve_for(RATE_TABLE_V1, provider, model)` per `[[fork-price-table-ref-substitution-retirement]]` (PRICE_TABLE_REF RETIRED). 5-step chain operational at 1 of 4 dispatch surfaces (LLM); **tool / validator / webhook dispatch sites cross-axis-blocked**: U-OD-39 on U-RT-67/U-RT-69 (tool-invocation composer); U-OD-40 on U-CP-60 (validator framework — landed, downstream wiring not yet routed); U-OD-41 on U-CP-72 (audit-write seam, PARTIAL-LAND 6/8 per `[[fork-u-cp-72-cost-and-pause-resume-prefix-gap]]`). Audit-ledger wiring residual per `[[fork-cost-record-audit-ledger-wiring-residual]]` (CXA v2.9 amendment owed) |
+| H_T-OD-6 (Local-first OTLP ingestion) | PARTIAL | Collector daemon + ring buffer wired; sqlite write path deferred (U-RT-30 PARTIAL-LAND, AC #2 STRUCK); TUI absent. NOTE: compound-irrelevance lifted post-batch-2 (spans actively emit) — collector now has actual ingest pressure; sqlite write site + TUI gaps materially observable |
 | H_T-OD-7 (Preservation invariants 5-dimension) | STILL-BOUNDED | Library carrier only; no runtime enforcement loop |
 | H_T-OD-8 (aggregate manifest + Stage 3b inversion) | RETIRED (authoring close, v1 §1) | Authoring-only |
 
-OD-axis post-batch-2 (U-RT-52 close arc, 2026-05-20): 2 / 8 retired (25%, includes OD-8 authoring-close + OD-2 GenAI binding live). 1 PARTIAL + 5 STILL-BOUNDED carried as bounded-residual gated on (a) LLM-dispatch composer enabling cost-attribution chain invocation (OD-5), (b) sqlite write site land (OD-6), (c) preservation invariant enforcement loop (OD-7).
+**OD-axis cumulative post-batch-11 (2026-05-23):** **2 / 8 RETIRED (25%, includes OD-8 authoring-close + OD-2 GenAI binding)** + **2 / 8 PARTIAL (25%, OD-5 cost-attribution LLM-only + OD-6 collector daemon)** + **4 / 8 STILL-BOUNDED (50%, OD-1 + OD-3 + OD-4 + OD-7)**. Pipeline advanced (R+RR+P): **4/8 = 50.0%** (up from 3/8 = 37.5% post-batch-2).
+
+**Span-emission substrate activity since 2026-05-20 (cluster 4-OD-A/C/D + 10-CP-A/B/C/D landings):**
+
+| Namespace | Carrier unit + commit | Status at HEAD |
+|---|---|---|
+| `workflow.envelope` (12 attrs) | U-OD-35 + U-OD-36 + U-OD-37 (cluster 4-OD-A: `1efc5ea` + `1dd098e` + `461ba5e`) | Span opened at workflow_driver entry post-drain-check; 12 attrs populated; deterministic close + exception handling + fresh-envelope-on-resumption per spec v1.8 §C-OD-25 |
+| `validator.*` (11 attrs at C-OD-29) | U-OD-50 (cluster 10-CP-A: `b70e9a6`) | Schema + ValidatorEscalationAuditPayload landed; emission tied to ctx.validator_framework operator-opt-in branch at workflow_driver.py:670 (RETIRE-READY per H_T-CP-21 batch-11) |
+| `mcp.trust.*` (5 attrs) | U-OD-52 (cluster 10-CP-C: `257273d`) | Schema + TrustEvaluationAuditPayload landed; emission tied to ctx.per_server_trust_evaluator at MCP-client production dispatch (RETIRE-READY per H_T-CP-18 batch-10) |
+| `hitl.webhook.*` | U-OD-53 (cluster 4-OD-E: `0aed0ac`) | Schema + WebhookDeliveryAuditPayload landed; operator-config-gated (mirror of CP-18 / CP-21 operator-opt-in pattern) |
+| `hitl.operator_burden.*` | U-OD-54 (cluster 4-OD-E: `128ab4f`) | Schema + OperatorBurdenAuditPayload landed |
+| Rate-table substrate (4 frozen Pydantic v2 models + resolver + Decimal serialization) | U-OD-46 + U-OD-47 + U-OD-48 + U-OD-49 (cluster 4-OD-C: `1daeda0` + `2e025e1` + `4899792` + `404fef7`) | PRICE_TABLE_REF canonical schema + v1 default rate-table substrate (anthropic + openai + ollama) + provider-then-model resolver + CP-FAIL-RATE-TABLE-MISSING typed error + Decimal string-serialization at OTel attribute boundary |
+
+**PARTIAL → RETIRE-READY gates (OD-5 + OD-6):**
+
+- **OD-5 (cost-attribution):** gate on U-OD-39/40/41 unblocks (tool/validator/webhook cost-attribution at dispatch sites) — currently cross-axis-blocked on U-RT-67 / U-RT-69 (tool-invocation composer) + U-CP-72 audit-write seam un-STRIKE (PauseResumeAuditPayload + CostRecordAuditPayload). 3-arc cascade per `[[fork-u-cp-72-cost-and-pause-resume-prefix-gap]]` §6.
+- **OD-6 (local-first OTLP ingestion):** gate on sqlite write site re-eligibility (U-RT-30 AC #2 un-STRIKE) + TUI substrate authoring. Operator-discretion timing.
+
+**STILL-BOUNDED → PARTIAL gates (OD-1 + OD-3 + OD-4 + OD-7):**
+
+- **OD-1 (deferral envelope):** gate on runtime composer importing `deferral_envelope` + scope-deferral typed primitive replacing `CLAUDE.md`-prose convention at runtime.
+- **OD-3 (Composite Sampler):** gate on project-authored composite head/tail sampler subclass + integration at materialize_sampler_stage (post-batch-2 span-emission activity makes this materially relevant).
+- **OD-4 (Pre-Collector redaction SpanProcessor):** gate on `RedactionSpanProcessor` authoring + integration at materialize_span_processor_stage upstream of OTLPSpanExporter (post-batch-2 span-emission activity makes this materially relevant).
+- **OD-7 (Preservation invariants):** gate on runtime enforcement loop invoking `per_dimension_preservation_invariants` against runtime ledger entries.
 
 ### 4.2 OD-axis anti-leakage rules (3 entries)
 
