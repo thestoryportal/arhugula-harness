@@ -1,4 +1,29 @@
-# Specification — Harness Runtime v1.22
+# Specification — Harness Runtime v1.23
+
+## Change-note (v1.22 → v1.23)
+
+**Scope of revision.** Narrow-scope bookkeeping refresh — flip the §14.15.2 step 7 self-flag from "CXA v2.9 §0.3 action-id prefix enumeration MAY need refresh at follow-on bookkeeping arc — surfaced as adjacent finding NOT patched per FM-2" to "patched at CXA v2.10 §0.3 per v1.22 → v1.23 paired co-publication arc 2026-05-24". v1.23 is the runtime-spec-side companion to CXA v2.9 → v2.10 publication (this session, prior commit). FM-2 item (c) from Reading B close checkpoint, second half of co-publication arc.
+
+**Source of fix.** CXA v2.10 §0.7(iii) "Runtime spec v1.22 §14.15.2 step 7 self-flag flip owed" framing + the established v2.9 ↔ OD spec v1.10 / U-CP-72 / U-OD-41 co-publication pattern at sub-arc B sequel. Operator authority: AskUserQuestion 2026-05-24 selecting "all 4 FM-2 items".
+
+**Amendments.**
+
+| Site | Amendment shape |
+|---|---|
+| **§14.15.2 step 7 parenthetical (line 3015)** | SELF-FLAG FLIPPED. v1.22 parenthetical text "(The `validator:` action_id prefix is a NEW discriminator at v1.22; the CXA v2.9 §0.3 action-id prefix enumeration MAY need refresh at follow-on bookkeeping arc — surfaced as adjacent finding NOT patched per FM-2.)" REPLACED with "(The `validator:` action_id prefix is a NEW production-consumer at v1.22 — the CXA-side canonicalization is at v2.6 §2.3.7 ValidatorFramework row, one of 5 v2.6 composer-arc absorption seams. The CXA §0.3 action-id prefix enumeration refresh was patched at CXA v2.10 §0.3 per the v1.22 → v1.23 paired co-publication arc 2026-05-24.)" Clarifies the CXA-side-vs-runtime-side perspective distinction surfaced at CXA v2.10 §0.1 + retires the dangling self-flag. ZERO semantic change at the composer-body contract (action_id pattern `validator:<step_action_id>:escalation` preserved verbatim; 4-substep audit-write sequence preserved verbatim). |
+
+**Adjacent harmonization sites.** None — the self-flag flip is a single-paragraph edit. No back-reference reconciliation triggered.
+
+**Sections preserved verbatim from v1.22.** All v1.22 content outside the single §14.15.2 step 7 parenthetical preserved unchanged. §14.15 C-RT-25 contract body preserved verbatim; §14.13 + §14.14 contracts preserved verbatim; all v1.18/v1.19/v1.20/v1.21/v1.22 change-notes preserved verbatim as historical record.
+
+**Status posture.** Proposed (v1.22) → **Proposed (v1.23)**. v1.23 is a single-site bookkeeping refresh. Net contract count: 0. Net fail class count: 0. ZERO behavior change at composer body. ZERO cross-axis cascade (CXA v2.10 already published this session at prior commit). NO CP spec / OD spec / ADR amendment owed.
+
+**Downstream absorption owed (post-v1.23).**
+(a) Workspace `CLAUDE.md` §2.3 runtime spec row version bump (v1.22 → v1.23); co-published this arc.
+
+**Adjacent defects surfaced (NOT patched per FM-2).** None at this revision — the self-flag flip is mechanically scoped.
+
+---
 
 ## Change-note (v1.21 → v1.22)
 
@@ -3012,7 +3037,7 @@ The body of `ValidatorEscalationGateComposer.compose_validator_escalation_gate(.
 4. **Open `hitl.invocation.opened` span (§14.8.2 step 4f-bis pattern).** `with tracer.start_as_current_span("hitl.invocation.opened") as invocation_span:`. Set attributes per HITL_SPAN_NAMESPACE_SCHEMA[1]: `hitl.gate.level` (cross-event reference) + `hitl.invocation.placement` (string-value `"validator_escalation"` — VALIDATOR_ESCALATION placement-kind discriminator) + `hitl.invocation.handoff_context_size_bytes` (computed from `brief` serialization) + `hitl.invocation.audit_ledger_entry_id` (set at step 7 completion — see below).
 5. **Invoke gate via AskUserQuestion.** `gate_result = await ctx.ask_user_question_surface.ask(prompt=compose_escalation_prompt(brief, palette), options=[HITLResponseOption(response=r, label=...) for r in palette], timeout=ESCALATION_TIMEOUT_DEFAULT)`. Prompt composition is implementation discretion at the C-RT-25 landing arc per FM-2 — recommended shape incorporates `brief.escalation_reason` + `brief.fail_class` + persona-tier context.
 6. **Open `hitl.invocation.responded` span on response received** (or `hitl.invocation.timed_out` on timeout — same exclusive-OR pattern as §14.8.2 step 4g + 4f). Span attributes per §14.8.2 step 4g + 4f.
-7. **Compose + write audit entry — 4-substep sequence per §14.7.2 step 8 pattern.** Re-uses §14.7.2 + §14.8.2 step 4h 4-substep pattern (8a/8b/8c/8d) with one substantive difference from §14.8.2 step 4h: the action_id uses `validator:` prefix discriminator (vs `hitl:` for wrap-time HITL or `dispatch:` for sub-agent dispatch): `action_id=Identifier(f"validator:{step_action_id}:escalation")`. The 4-substep chain compose_validator_escalation_audit → ledger_writer.append → cp_audit_to_od_audit converter → audit_writer.append is otherwise identical. (The `validator:` action_id prefix is a NEW discriminator at v1.22; the CXA v2.9 §0.3 action-id prefix enumeration MAY need refresh at follow-on bookkeeping arc — surfaced as adjacent finding NOT patched per FM-2.)
+7. **Compose + write audit entry — 4-substep sequence per §14.7.2 step 8 pattern.** Re-uses §14.7.2 + §14.8.2 step 4h 4-substep pattern (8a/8b/8c/8d) with one substantive difference from §14.8.2 step 4h: the action_id uses `validator:` prefix discriminator (vs `hitl:` for wrap-time HITL or `dispatch:` for sub-agent dispatch): `action_id=Identifier(f"validator:{step_action_id}:escalation")`. The 4-substep chain compose_validator_escalation_audit → ledger_writer.append → cp_audit_to_od_audit converter → audit_writer.append is otherwise identical. (The `validator:` action_id prefix is a NEW production-consumer at v1.22 — the CXA-side canonicalization is at v2.6 §2.3.7 ValidatorFramework row, one of 5 v2.6 composer-arc absorption seams. The CXA §0.3 action-id prefix enumeration refresh was patched at CXA v2.10 §0.3 per the v1.22 → v1.23 paired co-publication arc 2026-05-24.)
 8. **Process gate response.** Per the 4-response palette (mirroring §14.8.2 step 4i):
    - `APPROVE`: return `HITLResponse.APPROVE` to the workflow_driver post-dispatch hook; the validator-escalation is dispositioned as approved; step proceeds to ledger-append per C-CP-28 §25.4 invariant 2.
    - `EDIT`: return `HITLResponse.EDIT` with `gate_result.edited_proposal` — semantics of how the edit applies to the validator outcome is deferred to the workflow_driver hook body (implementation discretion at U-RT-NN-B landing arc per FM-2; recommended: edit overrides the validator's escalation, treating the operator's edit as the authoritative step outcome).
