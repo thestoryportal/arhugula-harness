@@ -382,6 +382,22 @@ _ALLOWLISTED_CROSS_AXIS_SYMBOLS: frozenset[tuple[str, str]] = frozenset(
         # `.harness/class_3_drift_u_rt_51_od_cp_replay_disposition_seam.md`.
         # Future CXA revision pass bumps genuine count 22 → 23.
         ("harness_cp.engine_namespace", "ReplayDisposition"),
+        # Pause/resume engine-layer projection-helper imports — consumed by
+        # `harness_od.pause_resume_namespace._project_pause_event_to_audit_payload`
+        # + `_project_resume_outcome_to_audit_payload` per OD spec v1.11
+        # §C-OD-30.4 (helper-contract landing at fork §10 commit `10129c8`,
+        # 2026-05-24). CP→OD pause/resume audit-write seam IS enumerated at
+        # CXA v2.9 §2.3.7 + §0.3 8-prefix discriminator (`pause:` / `resume:`);
+        # these carrier symbols are the projection inputs at the CXA-homed
+        # converter dispatch. Engine-layer (§22 / C-CP-22 / U-CP-49) carriers
+        # only — workflow-layer (§26 / C-CP-26) carriers PauseSnapshot /
+        # ResumeResult NOT imported here per fork §11 won't-fix closure
+        # (commit `1b7bcb0`, 2026-05-24; lossy projection foreclosed by
+        # CP spec v1.11 §26 NOTE disjoint-primitives declaration).
+        ("harness_cp.pause_resume_protocol", "PauseEvent"),
+        ("harness_cp.pause_resume_protocol", "ResumeAttempt"),
+        ("harness_cp.pause_resume_protocol", "ResumeOutcome"),
+        ("harness_cp.pause_resume_protocol", "ResumeOutcomeKind"),
     }
 )
 
