@@ -101,6 +101,9 @@ asyncio_mode = "auto"
 # collision that arises when multiple workspace members each carry a `tests/`
 # package with `__init__.py`. Standard fix per the pytest-importmode docs.
 addopts = "--import-mode=importlib"
+markers = [
+    "e2e: end-to-end tests exercising real external services (e.g., Anthropic API); typically gated on credential env vars (ANTHROPIC_API_KEY etc.) and excluded from default CI runs",
+]
 testpaths = [
     "harness-core/tests",
     "harness-is/tests",
