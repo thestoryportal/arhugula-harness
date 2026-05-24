@@ -113,12 +113,21 @@ async def execute(
             "OD did not populate the cost-attribution substrate required by "
             "U-OD-38 (C-OD-26.1 + C-OD-26.2 row 'llm_dispatch')."
         )
+    # U-RT-80 (C-RT-22 §14.12.3): Memory tool storage-backend registry.
+    # Construct BEFORE the LLM dispatcher so U-RT-81's C-RT-15 §14.5.1
+    # callback-injection composer-step can be threaded the registry +
+    # deployment_surface at construction time. Ordering within stage 5
+    # LOOP_INIT is arbitrary per spec §14.12.3.
+    await materialize_memory_tool_registry_stage(config, ctx)
+
     bare_dispatcher = materialize_llm_dispatcher_stage(
         providers,
         cast(Any, tracer_provider),
         cost_chain=cast(Any, ctx.cost_chain),
         audit_writer=cast(Any, ctx.audit_writer),
         rate_table=RATE_TABLE_V1,
+        memory_tool_registry=ctx.memory_tool_registry,
+        deployment_surface=config.deployment_surface,
     )
 
     # U-RT-58 (C-RT-16 §14.6 D6): rebind ``ctx.llm_dispatcher`` from the
@@ -324,13 +333,4 @@ async def execute(
             StepKind.TOOL_STEP: tool_step_dispatcher,
         },
     )
-
-    # ---------------------------------------------------------------------
-    # U-RT-80 (C-RT-22 §14.12.3): Memory tool storage-backend registry.
-    # Composes the 4-step body (resolve enum → construct backend →
-    # Protocol-conformance check → construct + bind registry). Ordering
-    # within stage 5 LOOP_INIT is arbitrary per spec §14.12.3 — placed last
-    # so all preceding stage-5 wiring remains observable to debuggers
-    # without registry-failure interleaving.
-    await materialize_memory_tool_registry_stage(config, ctx)
 

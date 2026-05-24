@@ -61,6 +61,12 @@ from harness_cp.cp_shared_types import ProviderAgnosticPayload
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 
+from harness_runtime.lifecycle.memory_tool_dispatch import (
+    derive_context_editing_active,
+    execute_with_memory_callbacks,
+    step_has_memory_tool,
+)
+
 
 class LLMDispatchBindError(Exception):
     """Raised when LLM-dispatch composer stage materialization fails."""
@@ -253,6 +259,16 @@ class RuntimeLLMDispatcher:
     cost_chain: Any = None
     audit_writer: Any = None
     rate_table: Any = None
+    # U-RT-81 (C-RT-15 §14.5.1) — Memory tool storage-backend registry +
+    # deployment_surface for `resolve_backend` call. When `step.step_payload.
+    # tools` contains the Anthropic Memory tool definition + both fields are
+    # bound, the dispatcher routes the anthropic branch through the harness-
+    # authored inner loop at `memory_tool_dispatch.execute_with_memory_callbacks`
+    # per spec v1.17 §14.5.1 mechanism β. Both defaulted to None for unit-test
+    # ergonomics; production stage-5 binding sets both per `materialize_
+    # llm_dispatcher_stage` kwargs.
+    memory_tool_registry: Any = None
+    deployment_surface: Any = None
 
     async def dispatch(
         self,
@@ -317,9 +333,32 @@ class RuntimeLLMDispatcher:
             # --- Step 3: per-provider dispatch --------------------------
             cache_attrs: _AnthropicCacheAttrs | None
             if provider_name == "anthropic":
-                response, usage_attrs, cache_attrs = await _dispatch_anthropic(
-                    adapter, model, payload
-                )
+                # U-RT-81 (C-RT-15 §14.5.1) — Memory tool callback-injection
+                # composer-step. If `step.step_payload.tools` contains the
+                # Anthropic Memory tool definition AND the registry + surface
+                # are bound, route through the harness-authored inner loop
+                # (mechanism β). Otherwise the existing §14.5 step 4 path
+                # preserves verbatim. The branch detection is intentionally
+                # cheap (single `step_has_memory_tool` predicate over the
+                # `payload.tools` sequence) so non-memory dispatches see
+                # zero overhead.
+                if (
+                    self.memory_tool_registry is not None
+                    and self.deployment_surface is not None
+                    and step_has_memory_tool(payload.tools)
+                ):
+                    response, usage_attrs, cache_attrs = await _dispatch_anthropic_with_memory(
+                        adapter,
+                        model,
+                        payload,
+                        registry=self.memory_tool_registry,
+                        deployment_surface=self.deployment_surface,
+                        tracer=tracer,
+                    )
+                else:
+                    response, usage_attrs, cache_attrs = await _dispatch_anthropic(
+                        adapter, model, payload
+                    )
             elif provider_name == "openai":
                 response, usage_attrs = await _dispatch_openai(
                     adapter, model, payload
@@ -460,6 +499,62 @@ def _payload_to_ollama_kwargs(payload: ProviderAgnosticPayload) -> dict[str, Any
         kwargs["tools"] = list(payload.tools)
     kwargs.update(payload.params)
     return kwargs
+
+
+async def _dispatch_anthropic_with_memory(
+    adapter: Any,
+    model: str,
+    payload: ProviderAgnosticPayload,
+    *,
+    registry: Any,
+    deployment_surface: Any,
+    tracer: Any,
+) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs]:
+    """Anthropic provider branch with Memory tool inner loop (U-RT-81).
+
+    Per spec v1.17 §14.5.1 mechanism β + AS spec v1.5 §14.7 memory.*
+    namespace emission. Resolves the storage backend via the registry,
+    derives `memory.context_editing_active`, then defers to
+    `execute_with_memory_callbacks` for the inner tool-use loop.
+
+    `MemoryPathViolationError` / `MemoryCallbackIOError` propagate
+    VERBATIM through this helper to the C-RT-15 dispatcher boundary →
+    driver `try/except` at `workflow_driver.py:618-635` per spec §14.5.1
+    step 5.
+    """
+    backend = registry.resolve_backend(deployment_surface)
+    configured_backend = registry.configured_backend
+    context_editing_active = derive_context_editing_active(payload.params)
+    kwargs = _payload_to_anthropic_kwargs(payload)
+
+    response = await execute_with_memory_callbacks(
+        adapter=adapter,
+        model=model,
+        messages_create_kwargs=kwargs,
+        backend=backend,
+        backend_enum=configured_backend,
+        tracer=tracer,
+        context_editing_active=context_editing_active,
+    )
+
+    usage = getattr(response, "usage", None)
+    usage_attrs = _UsageAttrs(
+        input_tokens=getattr(usage, "input_tokens", None),
+        output_tokens=getattr(usage, "output_tokens", None),
+        response_id=getattr(response, "id", None),
+    )
+    cache_breakpoint_id, cache_ttl_seconds = (
+        _extract_anthropic_cache_request_attrs(payload)
+    )
+    cache_attrs = _AnthropicCacheAttrs(
+        cache_creation_input_tokens=getattr(
+            usage, "cache_creation_input_tokens", None
+        ),
+        cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", None),
+        cache_breakpoint_id=cache_breakpoint_id,
+        cache_ttl_seconds=cache_ttl_seconds,
+    )
+    return (_response_to_mapping(response), usage_attrs, cache_attrs)
 
 
 async def _dispatch_anthropic(
@@ -636,6 +731,8 @@ def materialize_llm_dispatcher_stage(
     cost_chain: Any = None,
     audit_writer: Any = None,
     rate_table: Any = None,
+    memory_tool_registry: Any = None,
+    deployment_surface: Any = None,
 ) -> RuntimeLLMDispatcher:
     """Stage 5 LOOP_INIT composer factory for the LLM dispatcher (U-RT-52).
 
@@ -664,6 +761,8 @@ def materialize_llm_dispatcher_stage(
         cost_chain=cost_chain,
         audit_writer=audit_writer,
         rate_table=rate_table,
+        memory_tool_registry=memory_tool_registry,
+        deployment_surface=deployment_surface,
     )
 
 
