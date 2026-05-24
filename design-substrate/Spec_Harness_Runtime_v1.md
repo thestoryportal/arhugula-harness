@@ -1,4 +1,26 @@
-# Specification — Harness Runtime v1.19
+# Specification — Harness Runtime v1.20
+
+## Change-note (v1.19 → v1.20)
+
+**Scope of revision.** AdvReview 07 Class 1 finding F1-01 inline doc-drift fix per `Adversarial_Review_07_Runtime_v1_18_+_v2_17.md` §"F1-01 — Spec §14.13.3 stage-4 sub-ordering self-contradiction". §14.13.3 prose at line 2601 (v1.19 numbering) enumerated a strict four-position total order (`tracer_provider` → `audit_writer` → `cost_chain` → `collector_daemon` → `materialize_validator_framework_stage`) while the same revision's change-note adjacent observation (v) at line 86 explicitly disclaimed sub-ordering pin. The two readings were mutually inconsistent. v1.20 resolves the drift via AdvReview-recommended path: explicit partial-order phrasing — validator framework after all four siblings; intermediate sibling order unconstrained. Plan U-RT-84 AC #4 partial-order phrasing already harmonizes with this fix.
+
+**Source of fix.** `Adversarial_Review_07_Runtime_v1_18_+_v2_17.md` Class 1 F1-01 (cleared with inline fixes per disposition).
+
+**Amendments.**
+
+| Site | Amendment shape |
+|---|---|
+| §14.13.3 stage-4 ordering paragraph (v1.19 line 2601) | Strict total-order enumeration `tracer_provider → audit_writer → cost_chain → collector_daemon → materialize_validator_framework_stage` REPLACED with partial-order phrasing: `materialize_validator_framework_stage` runs AFTER all four sibling stage-4 OD-bucket bindings; intermediate ordering among the four siblings unconstrained (empirical bootstrap order at HEAD documented as implementer-discretion exemplar). |
+
+**Sections preserved verbatim from v1.19.** All v1.19 content outside the §14.13.3 stage-4 ordering paragraph preserved unchanged. The v1.19 ValidatorFramework-context cite-cascade retags (17 sites) + v1.18 NEW §14.13 contract authoring + all prior change-notes preserved verbatim.
+
+**Status posture.** Proposed (v1.19) → **Proposed (v1.20)**. v1.20 is a single-paragraph inline doc-drift fix under FM-2 no-extension discipline — no new field, no new contract, no new invariant, no AC change.
+
+**Downstream absorption owed (post-v1.20).**
+(a) Workspace `CLAUDE.md` §2.3 runtime spec row version bump (v1.19 → v1.20); co-published this AdvReview 07 doc-drift fix arc.
+(b) AdvReview 07 Class 1 F1-01 marked RESOLVED at this arc; F1-02 + F1-03 (plan-side) absorbed at runtime plan v2.18 → v2.19 (this session).
+
+---
 
 ## Change-note (v1.18 → v1.19)
 
@@ -2598,7 +2620,7 @@ Per-bootstrap invariants (when stage 4 OD bucket wires the validator framework b
 
 **Stage 4 (OD):** Bootstrap stage 4 wires the validator framework via NEW factory contract `materialize_validator_framework_stage(config: RuntimeConfig) → ValidatorFramework | None` (added at v1.18 per fork doc §3.1 Reading A ratification). Factory body per §14.13.2.
 
-**Stage 4 ordering.** The `materialize_validator_framework_stage` factory runs at stage 4 OD after `tracer_provider` construction (per C-RT-06) AND after `audit_writer` construction (per C-RT-04 stage-4 binding). Both prerequisites are sibling stage-4 bindings; the validator framework requires neither at construction time (the empty-sentinel default does not consult them), but operator-supplied non-empty construction MAY consume `ctx.tracer_provider` and `ctx.audit_writer` for runtime-side observability — implementation discretion at impl arc. Ordering within stage 4: `tracer_provider` → `audit_writer` → `cost_chain` → `collector_daemon` → `materialize_validator_framework_stage` (validator framework as the final stage-4 binding; this places it after all OD-side telemetry primitives are available for the framework instance to consume).
+**Stage 4 ordering.** The `materialize_validator_framework_stage` factory runs at stage 4 OD after `tracer_provider` construction (per C-RT-06) AND after `audit_writer` construction (per C-RT-04 stage-4 binding). Both prerequisites are sibling stage-4 bindings; the validator framework requires neither at construction time (the empty-sentinel default does not consult them), but operator-supplied non-empty construction MAY consume `ctx.tracer_provider` and `ctx.audit_writer` for runtime-side observability — implementation discretion at impl arc. Partial order within stage 4: **`materialize_validator_framework_stage` runs AFTER all four sibling stage-4 OD-bucket bindings (`tracer_provider` + `audit_writer` + `cost_chain` + `collector_daemon`)**; intermediate ordering among those four siblings is **unconstrained** at v1.18 (implementation discretion; the empirical bootstrap module `harness-runtime/src/harness_runtime/bootstrap/stage_4_od.py` selects `tracer_provider` → `collector_daemon` → `cost_chain` → `audit_writer` at HEAD). The "validator framework as final stage-4 binding" placement guarantees all OD-side telemetry primitives are available for the framework instance to consume regardless of the intermediate sibling order.
 
 **Stage-5 driver-hook fires.** At workflow execution time (post-stage-7 INGRESS_ACCEPT), the C-CP-28 §28.3.3.4 driver hook at `workflow_driver.py:668` fires per-step post-dispatch:
 
