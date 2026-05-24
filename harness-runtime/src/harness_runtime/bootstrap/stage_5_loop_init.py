@@ -45,6 +45,9 @@ from harness_runtime.lifecycle.override_evaluator import materialize_override_ev
 from harness_runtime.bootstrap.factories.memory_tool_registry_factory import (
     materialize_memory_tool_registry_stage,
 )
+from harness_runtime.bootstrap.factories.pause_resume_protocol_factory import (
+    materialize_pause_resume_protocol_stage,
+)
 from harness_runtime.bootstrap.factories.runtime_tool_dispatcher_factory import (
     materialize_runtime_tool_dispatcher_stage,
 )
@@ -332,5 +335,18 @@ async def execute(
             StepKind.SUB_AGENT_DISPATCH: sub_agent_step_dispatcher,
             StepKind.TOOL_STEP: tool_step_dispatcher,
         },
+    )
+
+    # U-RT-88 (C-RT-24 §14.14): PauseResumeProtocol stage-5 LOOP_INIT factory
+    # binding. Returns None on operator opt-out (config.pause_resume_protocol_config
+    # is None — production-default state preserved); returns the CP-canonical
+    # PauseResumeProtocol class bound to ctx.ledger_writer + ctx.ledger_reader
+    # + composed pause_context_reader on operator opt-in. Driver per-step
+    # pre-entry pause-trigger detection at workflow_driver.py (U-RT-89) consumes
+    # ctx.pause_resume_protocol per spec §14.14.3. Within-stage-5 ordering
+    # unconstrained per spec §14.14.3 (factory consumes only stage-1 IS
+    # prerequisites + a stage-5-internal pause_context_reader callable).
+    ctx.pause_resume_protocol = await materialize_pause_resume_protocol_stage(
+        config, ctx
     )
 
