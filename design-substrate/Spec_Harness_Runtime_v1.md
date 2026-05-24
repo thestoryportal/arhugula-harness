@@ -1,4 +1,184 @@
-# Specification — Harness Runtime v1.24
+# Specification — Harness Runtime v1.25
+
+## Change-note (v1.24 → v1.25)
+
+**Scope of revision.** Two narrow-scope amendments absorbing pre-implementation advisor-caught architectural gaps at v1.24 §14.8.8 (operator-ratified 2026-05-24 same session via AskUserQuestion D9 + D10).
+
+**(1) §14.8.8.1 step 1 precondition (D9 — v1.25 spec amendment now).** Spec internal contradiction: v1.24 §14.8.8.7 invariant 5 *claimed* "when `ctx.pause_resume_protocol is None` (operator-opt-out per v1.21 §14.14 default), composer's flag-set is silent no-op + driver per-step pre-entry detection False-arm fires + loop continues normally — equivalent to ignoring the durable-async cell synchrony", but v1.24 §14.8.8.1 step 5 fires `ctx.pause_requested_flag.set()` + raises `HITLPauseRequestedSignal` unconditionally on `delivered=True`. Walk the contradiction path: operator binds `webhook_delivery_composer` but NOT `pause_resume_protocol`, cell is DURABLE_ASYNC → webhook fires (operator sees prompt) → flag set → signal raised → driver catches → continue → v1.21 §14.14.3 pre-entry detection False-arm fires (no protocol bound → silent no-op) → workflow proceeds to next step. **The gate was never evaluated; the operator response is orphaned at the webhook endpoint; the workflow ran without the HITL approval it logically required.** v1.25 closes the contradiction at the step-1 precondition site: ADD a precondition check at §14.8.8.1 step 1 (BEFORE composer body fires) — `if ctx.pause_resume_protocol is None: fall through to step 4f (treat as SYNC_BLOCKING regardless of cell synchrony class)`. Invariant 5 becomes mechanically enforced rather than claimed-only.
+
+**(2) §14.8.8.9 NEW ResumeContextHolder sidecar carrier (D10 — ResumeContextHolder sidecar pre-decision).** v1.24 §14.8.8.8 deferred the `ctx.resume_context` binding-site shape to implementer-discretion at U-RT-94 landing arc. Empirical-verification post-v1.24: HarnessContext is Pydantic v2 frozen per v1.21 docstring ("Mutation during bootstrap goes through a separate `_MutableHarnessContext` builder; at stage 7 INGRESS_ACCEPT the builder is materialized into this frozen final form"). Direct mutation `ctx.resume_context = None` at runtime composer (per §14.8.8.5 one-shot consume-and-clear discipline) raises `FrozenInstanceError`. The implementer-discretion deferral is closed pre-impl by operator ratification of the **sidecar carrier** option: NEW `ResumeContextHolder` Pydantic v2 BaseModel with a single mutable internal field carrying the current ResumeContext; bound at HarnessContext as `ctx.resume_context_holder: ResumeContextHolder`. The holder exposes `consume_and_clear()` method enforcing one-shot semantic. v1.25 authors the holder carrier at NEW §14.8.8.9 sub-section + adds the HarnessContext field row at §4 C-RT-04 table.
+
+ZERO change to existing field-sets at PauseSnapshot / MaterialDiffPolicy / ResumeResult / PauseReason / WorkflowPauseReason / HITLEscalationBrief / WebhookDeliveryResult / HITLPauseRequestedSignal. ZERO change to attempt_resume / capture_pause_snapshot / deliver_webhook signatures. ZERO new fail class. ZERO new typed control-flow signal. ZERO new helper. ZERO cross-axis cascade beyond runtime-spec internal — `ResumeContextHolder` is a runtime-spec-layer carrier (NOT CP-axis); the CP spec v1.16 §26.8 `ResumeContext` carrier (the data envelope) remains canonical at CP-axis; runtime-side `ResumeContextHolder` (the mutable container) is purely runtime-internal.
+
+**Source of fix.** Pre-implementation advisor-caught issues (#1 + #2 of 4) at session 2026-05-24 after runtime plan v2.23 commit `fbf44d6` + before U-RT-93/94/95 impl landing. Operator AskUserQuestion same session: D9 = "v1.25 spec amendment now" (gap fix) + D10 = "ResumeContextHolder sidecar (recommended)" (binding mechanism).
+
+**Authority basis for fix direction.** Both fixes are fidelity-preserving — D9 makes step 1 mechanically consistent with invariant 5 (NOT a new commitment, but the mechanical enforcement of a claimed invariant). D10 closes the §14.8.8.8 implementer-discretion deferral with the option that the empty-marker sub-model precedent (PauseResumeProtocolConfig at v1.21 + ValidatorFrameworkConfig at v1.18) most naturally extends — a narrow sub-model with mutable internal state + frozen-outer pattern. Both fixes have ZERO behavior change at non-durable-async paths (sync-blocking cells unchanged; sync HITL gate body unchanged; resume cycle for non-HITL pause reasons unchanged).
+
+**Amendments.**
+
+| Site | Amendment shape |
+|---|---|
+| **§14.8.8.1 step 1 precondition (D9)** | INSERT new pre-step at §14.8.8.1 step 1 BEFORE existing 6-step composer body: "Step 0 (NEW at v1.25). Operator-binding precondition. If `ctx.pause_resume_protocol is None`: durable-async cell synchrony is not actionable — operator has not bound a pause-resume protocol per v1.21 §14.14 operator-opt-out default. Fall through to §14.8.2 step 4f (treat as SYNC_BLOCKING regardless of `cell.synchrony_class` value). NO webhook delivery fires; NO flag-set fires; NO signal raise; NO orphan operator response. Enforces §14.8.8.7 invariant 5 mechanically (was claimed-only at v1.24)." Subsequent 6 steps preserved verbatim from v1.24 §14.8.8.1 (renumbered 1-6 → 2-7 if implementer-discretion calls for explicit re-enumeration; renumbering NOT REQUIRED — implementer can preserve step labels 1-6 with the NEW step 0 as a precondition guard above the numbered sequence). |
+| **NEW §14.8.8.9 ResumeContextHolder sidecar carrier (D10)** | NEW sub-section appended at the end of §14.8.8. Authors `ResumeContextHolder` Pydantic v2 BaseModel — frozen-outer container with single mutable internal field `_current_context: ResumeContext | None` + public methods `set(resume_context: ResumeContext) -> None` (called at driver-side resume entry-point per CP spec v1.16 §26.8.5 amended `attempt_resume` ingestion) + `consume_and_clear() -> ResumeContext | None` (called at runtime composer §14.8.8.5 resumed-step gate-evaluation; returns current value AND clears to None in one atomic step; enforces one-shot semantic per §14.8.8.7 invariant 3). The holder design pattern: frozen Pydantic v2 outer (`model_config = ConfigDict(frozen=True)`) + private mutable internal state via `PrivateAttr` (Pydantic v2 idiomatic mutable-internal-state pattern; field annotated with leading underscore + `PrivateAttr` default factory; mutation goes through public methods, NOT direct field assignment). |
+| **§4 C-RT-04 HarnessContext field table** | NEW field row `resume_context_holder: ResumeContextHolder` (non-`None`; initialized at stage 5 LOOP_INIT to empty holder — `ResumeContextHolder()` with `_current_context = None` default). Consumed at (a) driver-side resume entry-point per CP spec v1.16 §26.8.5 — `ctx.resume_context_holder.set(resume_context_arg_from_attempt_resume)` after operator-supplied `attempt_resume(..., resume_context=...)` ingestion; (b) runtime composer at §14.8.8.5 resumed-step gate-evaluation — `hitl_response = ctx.resume_context_holder.consume_and_clear(); if hitl_response is not None and hitl_response.hitl_response is not None: gate_result = hitl_response.hitl_response` (atomic consume-and-clear). Initialized at stage 5 (NOT via operator-supply at RuntimeConfig — the holder is a runtime-loop carrier, not a deployment-time configuration surface). Existing field rows preserved verbatim. |
+
+**Adjacent harmonization sites.** None — both amendments are surgical insertions. §14.8.8 sub-sections 1-8 + §14.8.8.7 invariant list + §14.8.8.8 deferred-discretion enumeration preserved verbatim (D10 absorption closes one of the §14.8.8.8 implementer-discretion items; surfaced at change-note here as "Resolved at §14.8.8.9 v1.25 amendment").
+
+**Sections preserved verbatim from v1.24.** All v1.24 substantive content outside the listed amendment sites preserved unchanged. §14.8.8.1 steps 1-6 prose preserved verbatim (renumbering NOT required; precondition guard at NEW step 0 is structurally above the existing enumeration). §14.8.8.2 HITLPauseRequestedSignal class + §14.8.8.3 _evaluate_cell_synchrony_tolerant helper + §14.8.8.4 driver-side signal handling + §14.8.8.5 resume-side one-shot delivery + §14.8.8.6 composition + §14.8.8.7 6 invariants preserved verbatim. §14.8.8.8 5-item deferred-to-impl-discretion list preserved verbatim — D10 absorption closes the "ctx.resume_context binding site at HarnessContext" item but does NOT remove the item enumeration (the item now reads RESOLVED at §14.8.8.9). §14.15 C-RT-25 + §14.14 C-RT-24 + §14.13 C-RT-23 + all prior contract bodies preserved verbatim. §3 C-RT-02 RuntimeConfig field table preserved verbatim (NO new RuntimeConfig field — the holder is initialized at stage 5, not operator-supplied). All v1.18-v1.24 change-notes preserved verbatim as historical record.
+
+**Status posture.** Proposed (v1.24) → **Proposed (v1.25)**. v1.25 is a fidelity-pure pre-implementation gap-fix amendment. Net contract count: 0. Net fail class count: 0. Net typed control-flow signal count: 0. Net binding-tolerant helper count: 0. Net HarnessContext field count: +1 (`resume_context_holder: ResumeContextHolder`). Net runtime-spec-layer carrier count: +1 (`ResumeContextHolder` Pydantic v2 BaseModel — a frozen-outer / mutable-internal sidecar; structurally distinct from CP spec v1.16 §26.8 `ResumeContext` data envelope). Signature change at any Protocol: 0. Behavior change at composer body: D9 adds an early-exit precondition at §14.8.8.1 step 1 — durable-async path is now reachable ONLY when both `ctx.pause_resume_protocol` is bound AND `ctx.webhook_delivery_composer` is bound; degradation to sync-blocking is mechanical at step 1 (was: claimed at invariant 5 but mechanically reachable as orphan-response bug at v1.24 step 5). D10 closes the §14.8.8.8 binding-site impl-discretion at the architecture layer. NO CP spec / OD spec / ADR / CXA amendment owed at v1.25.
+
+**Downstream absorption owed (post-v1.25).**
+
+(a) Workspace `CLAUDE.md` §2.3 runtime spec row version bump (v1.24 → v1.25); co-published this arc.
+
+(b) `Implementation_Plan_Harness_Runtime_v2_23.md` → v2.24 via `implementation-planner` revision-pass — single-unit-body amendment at U-RT-94: add NEW AC #9 covering §14.8.8.1 step 0 precondition + NEW AC #10 covering ResumeContextHolder sidecar landing at U-RT-94 (Files-column EXTEND adding `harness-runtime/src/harness_runtime/types.py` `ResumeContextHolder` BaseModel + HarnessContext field addition); U-RT-95 e2e test path (v) ADD coverage for the precondition arm (operator binds webhook but not pause-resume protocol → composer falls through to sync-blocking; no webhook fires).
+
+(c) `harness-runtime` impl — at U-RT-93/94 landing arcs absorb the v1.25 amendments per the plan v2.24 ACs.
+
+(d) OD spec / OD plan / OD impl / CP spec / CP plan / CXA / ADR: ZERO cascade.
+
+**Adjacent defects surfaced (NOT patched per FM-2).**
+
+(i) **§14.8.8.7 invariant 5 prose harmonization.** v1.24 invariant 5 framing claimed the silent-no-op fall-through; v1.25 makes it mechanical via step 0 precondition. The invariant prose at v1.24 reads correctly post-v1.25 (the claim is now mechanically enforced). NO invariant-text edit owed at v1.25 per FM-2.
+
+(ii) **`ResumeContextHolder.set()` re-entrance semantics.** If `set()` is called twice between `consume_and_clear()` calls (e.g., two consecutive resume invocations before the resumed-step gate fires), the second set overrides the first. v1.25 authors this semantic as **last-write-wins**; the alternative (raise on double-set without intervening consume) is implementer-discretion at U-RT-94 landing per FM-2.
+
+(iii) **Holder initialization at non-pause-resume-protocol-bound configurations.** Even when `ctx.pause_resume_protocol is None`, `ctx.resume_context_holder` is still initialized at stage 5 (empty holder; `_current_context = None`). The holder is unconditionally bound at HarnessContext per §4 row v1.25; only the durable-async path's *use* of the holder is gated on `pause_resume_protocol is not None` per §14.8.8.1 step 0. Surfaced.
+
+(iv) **Pydantic v2 PrivateAttr mutability via model_post_init.** The `ResumeContextHolder._current_context: ResumeContext | None` field declared with `PrivateAttr(default=None)` is Pydantic v2 idiomatic mutable-internal-state. Some Pydantic v2 versions enforce frozen at PrivateAttr layer differently across minor versions; the impl arc at U-RT-94 verifies behavior under the workspace-pinned Pydantic v2 version. Implementer-discretion at U-RT-94 per FM-2.
+
+---
+
+## §14.8.8.9 (NEW at v1.25) — ResumeContextHolder sidecar carrier
+
+### §14.8.8.9.1 Carrier definition
+
+```python
+from pydantic import BaseModel, ConfigDict, PrivateAttr
+
+class ResumeContextHolder(BaseModel):
+    """Runtime-internal sidecar carrier for one-shot ResumeContext delivery
+    across the pause-resume cycle.
+
+    Authored at runtime spec v1.25 §14.8.8.9 to close the v1.24 §14.8.8.8
+    implementer-discretion deferral on ctx.resume_context binding-site
+    (D10 operator-ratified 2026-05-24).
+
+    The holder is a frozen-outer Pydantic v2 BaseModel with a single
+    mutable internal field (PrivateAttr pattern). Mutation goes through
+    public methods set()/consume_and_clear(), NOT direct field assignment.
+
+    Lifecycle:
+    1. Initialized at stage 5 LOOP_INIT to empty holder (_current_context = None).
+    2. Driver-side resume entry-point per CP spec v1.16 §26.8.5: when caller
+       invokes attempt_resume(snapshot, *, material_diff_policy,
+       resume_context=ResumeContext(hitl_response=...)), the driver receives
+       the resume_context arg and calls
+       ctx.resume_context_holder.set(resume_context) BEFORE driver hands
+       control to the resumed-step inner loop.
+    3. Runtime composer at §14.8.8.5 resumed-step gate-evaluation:
+       holder_state = ctx.resume_context_holder.consume_and_clear()
+       (atomic — returns current value AND clears to None in one step).
+       If holder_state is not None and holder_state.hitl_response is not None,
+       the gate-evaluation consumes the operator response as the gate_result
+       per §14.8.8.5 one-shot delivery; otherwise the gate-evaluation re-fires
+       sync (or durable-async per cell synchrony — though re-pause-on-retry
+       within a single resume cycle is structurally precluded by the §14.8.8.7
+       invariant 3 one-shot-per-resume semantic).
+
+    Sibling pattern: ValidatorFrameworkConfig (v1.18 §14.13) +
+    PauseResumeProtocolConfig (v1.21 §14.14) — empty-marker sub-model
+    precedent; ResumeContextHolder differs by carrying mutable internal
+    state via PrivateAttr (the marker subs are field-less; the holder
+    has one private field).
+    """
+    model_config = ConfigDict(frozen=True)
+
+    _current_context: ResumeContext | None = PrivateAttr(default=None)
+
+    def set(self, resume_context: ResumeContext) -> None:
+        """Set the current resume context.
+
+        Called at driver-side resume entry-point per CP spec v1.16 §26.8.5.
+        Last-write-wins semantic per v1.25 change-note adjacent defect (ii):
+        if called twice between consume_and_clear() calls, the second call
+        overrides the first.
+        """
+        self._current_context = resume_context
+
+    def consume_and_clear(self) -> ResumeContext | None:
+        """Atomically return the current resume context AND clear to None.
+
+        Called at runtime composer §14.8.8.5 resumed-step gate-evaluation.
+        Enforces §14.8.8.7 invariant 3 one-shot semantic — subsequent calls
+        return None until set() is invoked again.
+
+        The atomicity is at the level of the Python interpreter's GIL +
+        the sequential nature of asyncio (within a single asyncio task,
+        the read-and-clear sequence is uninterruptible by another resume
+        invocation in the same task). Cross-task atomicity is NOT
+        guaranteed; the holder is scoped to a single workflow execution
+        per HarnessContext lifecycle per C-RT-04.
+        """
+        current = self._current_context
+        self._current_context = None
+        return current
+```
+
+### §14.8.8.9.2 Binding at HarnessContext
+
+Per §4 C-RT-04 v1.25 amendment: new field row `resume_context_holder: ResumeContextHolder` (non-`None`; initialized at stage 5 LOOP_INIT to empty holder). Field is unconditionally bound at HarnessContext regardless of operator-supply at RuntimeConfig — the holder is a runtime-loop carrier (NOT a deployment-time configuration surface). When `ctx.pause_resume_protocol is None`, the holder is still bound but unreachable in the durable-async path per §14.8.8.1 step 0 precondition; the holder's `consume_and_clear()` returns None throughout the workflow execution (no resume cycle fires).
+
+### §14.8.8.9.3 Composition with §14.8.8.5 one-shot delivery
+
+The §14.8.8.5 resumed-step gate-evaluation flow at v1.25 reads:
+
+```python
+# Resumed-step HITL gate evaluation at §14.8.2 step 4-cluster (v1.25):
+holder_state = ctx.resume_context_holder.consume_and_clear()
+if holder_state is not None and holder_state.hitl_response is not None:
+    # One-shot delivery: consume the response WITHOUT re-firing webhook.
+    gate_result = holder_state.hitl_response
+    # No explicit clear needed — consume_and_clear() handled it atomically.
+else:
+    # Normal gate-fire path (either sync at step 4f OR durable-async re-fire).
+    ...
+```
+
+Key v1.25 difference from v1.24 §14.8.8.5: the `ctx.resume_context = None` direct mutation (which would have raised `FrozenInstanceError` on Pydantic v2 frozen HarnessContext) is replaced by `consume_and_clear()` atomic method call.
+
+### §14.8.8.9.4 Driver-side set discipline
+
+The driver-side resume entry-point (per CP spec v1.16 §26.8.5 + v1.21 §14.14.3 resume-on-snapshot-context entry-point branch) ingests the operator-supplied `resume_context` from the `attempt_resume(...)` keyword-only parameter and propagates to the runtime composer via:
+
+```python
+# Driver-side resume entry-point (conceptual; lives at harness-cp workflow_driver.py):
+async def _resume_workflow_from_snapshot(
+    snapshot: PauseSnapshot,
+    *,
+    material_diff_policy: MaterialDiffPolicy,
+    resume_context: ResumeContext | None = None,
+    ctx: HarnessContext,
+):
+    if resume_context is not None:
+        ctx.resume_context_holder.set(resume_context)
+    # ... rest of resume entry-point logic ...
+    # The runtime composer at next gate-evaluation calls
+    # ctx.resume_context_holder.consume_and_clear() per §14.8.8.9.3.
+```
+
+The driver SETS but does NOT consume — the runtime composer consumes. This preserves the CP→runtime composition pattern at v1.10 §26.3 (CP authors the protocol; runtime composes consumption).
+
+---
+
+## §4 C-RT-04 HarnessContext field table — NEW row at v1.25
+
+| Field | Type | Stage | Notes |
+|---|---|---|---|
+| `resume_context_holder` | `ResumeContextHolder` (runtime spec v1.25 §14.8.8.9 carrier — frozen-outer Pydantic v2 with mutable internal PrivateAttr field) | 5 | Runtime-internal sidecar carrier for one-shot `ResumeContext` delivery across the pause-resume cycle. Initialized at stage 5 LOOP_INIT to empty holder (`ResumeContextHolder()` with `_current_context = None` default). Driver-side resume entry-point sets the holder via `ctx.resume_context_holder.set(resume_context)` after operator-supplied `attempt_resume(..., resume_context=...)` ingestion per CP spec v1.16 §26.8.5. Runtime composer at §14.8.8.5 resumed-step gate-evaluation consumes via `ctx.resume_context_holder.consume_and_clear()` (atomic one-shot read-and-clear). NOT operator-supplied at RuntimeConfig — the holder is a runtime-loop carrier, not deployment-time configuration. Added at v1.25 per D10 operator-ratified ResumeContextHolder sidecar pre-decision. Existing field rows preserved verbatim. |
+
+---
 
 ## Change-note (v1.23 → v1.24)
 
