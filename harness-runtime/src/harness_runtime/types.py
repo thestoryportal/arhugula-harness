@@ -65,10 +65,6 @@ from harness_cp.hitl_as_tool_call_rewriting import (
 from harness_cp.hitl_timeout_degradation import TimeoutDegradationKind
 from harness_cp.pause_resume_protocol import ResumeOutcomeKind
 from harness_cp.per_server_trust_types import TrustPolicy
-
-# U-RT-79 — Memory tool backend config carrier import (per spec v1.17 §3 C-RT-02
-# field-table extension). MemoryToolBackendConfig declared at U-RT-76.
-from harness_runtime.lifecycle.memory_tool_types import MemoryToolBackendConfig
 from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry, StepEffectiveBinding
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass
 from harness_cp.routing_manifest_residence import RetryPolicy, RoutingManifest
@@ -106,6 +102,13 @@ from harness_od.per_cell_collector_placement_matrix import CollectorPlacement
 from harness_od.sampling_mode import SamplingMode
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# U-RT-79 — Memory tool backend config carrier import (per spec v1.17 §3 C-RT-02
+# field-table extension). MemoryToolBackendConfig declared at U-RT-76.
+from harness_runtime.lifecycle.memory_tool_types import MemoryToolBackendConfig
+from harness_runtime.lifecycle.validator_framework_types import (
+    ValidatorFrameworkConfig,
+)
+
 __all__ = [
     "AuditLedgerWriter",
     "BootstrapStage",
@@ -118,6 +121,7 @@ __all__ = [
     "HITLPlacementRegistry",
     "HandoffRegistry",
     "HarnessContext",
+    "HarnessMCPServer",
     "LLMDispatcher",
     "LedgerReader",
     "LedgerWriter",
@@ -125,7 +129,6 @@ __all__ = [
     "MCPClient",
     "MCPClientConfig",
     "MCPHost",
-    "HarnessMCPServer",
     "OTelConfig",
     "PathBindingConfig",
     "PerStepOverrideEvaluator",
@@ -1071,6 +1074,28 @@ class RuntimeConfig(BaseModel):
     purposes; encrypted-filesystem at MANAGED_CLOUD for additional
     discipline). Ingested at stage 5 by `materialize_memory_tool_registry_
     stage` factory (U-RT-80) per §14.12.3.
+    """
+
+    validator_framework_config: ValidatorFrameworkConfig | None = None
+    """Operator-supplied validator framework opt-in marker.
+
+    Added at U-RT-83 per `Spec_Harness_Runtime_v1.md` v1.18 §3 C-RT-02
+    field-table extension (Class 1 fork validator-composer arc stage-4
+    absence Reading A absorption at `.harness/class_1_fork_validator_
+    composer_arc_stage_4_absence.md`; operator-ratified 2026-05-24).
+
+    Empty-marker shape at v1.18 Reading A scope per spec §14.13.1. `None`
+    (the default) → operator opt-out → stage-4 factory returns `None` →
+    `ctx.validator_framework is None` → the `workflow_driver.py:668`
+    post-dispatch hook branch evaluates False (production-default state
+    preserved). Non-`None` → operator opt-in → stage-4 factory constructs
+    a `ConcreteValidatorFramework` instance bound to `ctx.validator_
+    framework`; the driver hook True-arm fires per C-CP-25 §25.3.3.4.
+
+    Internal operator-supply shape (validator catalog, per-validator config,
+    discovery mechanism) deferred to implementation discretion per
+    §14.13.7. Ingested at stage 4 OD bucket by
+    `materialize_validator_framework_stage` factory (U-RT-84) per §14.13.3.
     """
 
 
