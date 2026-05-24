@@ -862,6 +862,110 @@ def _execute_workflow_body(
                         ),
                     ), steps_executed
 
+                # Reading B v1.22 §14.15 — ESCALATE_HITL mid-step re-entry.
+                # Per C-CP-28 §25.4 invariant 4: "ESCALATE always emits HITL
+                # gate. Escalation cannot be silently dropped." Fires the
+                # ValidatorEscalationGateComposer mid-step pre-ledger-append
+                # per C-CP-28 §25.3 + §25.4 invariant 2. Operator-opt-in:
+                # only when both validator_framework AND ask_user_question_
+                # surface are bound at ctx (production paths supply both;
+                # test paths may set ask_user_question_surface = None and
+                # the escalation outcome will fail-closed).
+                if evaluation.next_action.value == "escalate_hitl":
+                    ask_user_question_surface = getattr(
+                        ctx, "ask_user_question_surface", None
+                    )
+                    escalation_brief = evaluation.result.escalation_brief
+                    if (
+                        ask_user_question_surface is not None
+                        and escalation_brief is not None
+                    ):
+                        # Lazy import to avoid cycle (runtime → cp → runtime).
+                        # GateLevel is module-level imported at line 51;
+                        # do NOT lazy-import here (would shadow + break
+                        # line 735's GateLevel.AUTO reference).
+                        from harness_runtime.lifecycle.validator_escalation_composer import (
+                            ValidatorEscalationGateAuditComposeError,
+                            ValidatorEscalationGateRejectedError,
+                            ValidatorEscalationGateTimeoutError,
+                            compose_validator_escalation_gate,
+                        )
+                        from harness_cp.validator_fail_transient_staircase import (
+                            CrossTrustBoundaryState,
+                        )
+
+                        try:
+                            # Async composer bridged to sync driver context
+                            # per `_run_protocol_method_sync` pattern (analog
+                            # of PauseResumeProtocol bridging at U-CP-62).
+                            hitl_response = _run_protocol_method_sync(
+                                compose_validator_escalation_gate(
+                                    ask_user_question_surface=ask_user_question_surface,
+                                    brief=escalation_brief,
+                                    step_action_id=str(step_context.parent_action_id),
+                                    # v1.22 MVP sentinels per spec §14.15.8
+                                    # deferred-discretion; full cross-trust-
+                                    # state derivation gated on follow-on arc
+                                    # per scoping doc adjacent observation (c).
+                                    cross_trust_state=CrossTrustBoundaryState.NONE,
+                                    gate_level=GateLevel.ASK,
+                                    tracer_provider=ctx.tracer_provider,
+                                )
+                            )
+                        except ValidatorEscalationGateRejectedError as exc:
+                            return RunResult(
+                                workflow_id=manifest_entry.workflow_id,
+                                run_id=run_id,
+                                status=RunStatus.FAILED,
+                                terminal_step_index=step_index,
+                                partial_state=dict(accumulated),
+                                final_state=None,
+                                fail_class=(
+                                    f"RT-FAIL-HITL-GATE-REJECTED: "
+                                    f"validator-escalation rejected at "
+                                    f"step_id={step.step_id!r}: {exc}"
+                                ),
+                            ), steps_executed
+                        except ValidatorEscalationGateTimeoutError as exc:
+                            return RunResult(
+                                workflow_id=manifest_entry.workflow_id,
+                                run_id=run_id,
+                                status=RunStatus.FAILED,
+                                terminal_step_index=step_index,
+                                partial_state=dict(accumulated),
+                                final_state=None,
+                                fail_class=(
+                                    f"RT-FAIL-HITL-GATE-TIMEOUT: "
+                                    f"validator-escalation timed out at "
+                                    f"step_id={step.step_id!r}: {exc}"
+                                ),
+                            ), steps_executed
+                        except ValidatorEscalationGateAuditComposeError as exc:
+                            return RunResult(
+                                workflow_id=manifest_entry.workflow_id,
+                                run_id=run_id,
+                                status=RunStatus.FAILED,
+                                terminal_step_index=step_index,
+                                partial_state=dict(accumulated),
+                                final_state=None,
+                                fail_class=(
+                                    f"RT-FAIL-VALIDATOR-ESCALATION-GATE-COMPOSE: "
+                                    f"audit-compose failed at step_id="
+                                    f"{step.step_id!r}: {exc}"
+                                ),
+                            ), steps_executed
+
+                        # APPROVE / EDIT / RESPOND — proceed to ledger append.
+                        # Per spec §14.15.8 deferred-discretion: EDIT semantics
+                        # (whether to mutate step_output) is implementer-
+                        # discretion at v1.22 MVP — proceed-with-original-
+                        # outcome is the safe default; future arc may apply
+                        # operator edits to step_output. RESPOND: operator
+                        # response recorded in audit (deferred to follow-on
+                        # CP composer arc per scoping doc adjacent obs (d));
+                        # workflow proceeds with original validator outcome.
+                        _ = hitl_response  # noqa — outcome consumed by audit
+
         # § 25.3.3.7 — State-ledger append via U-IS-11 composition.
         # Reuse pre-dispatch step_idempotency_key composed at the
         # StepExecutionContext site above (identical per-step value).

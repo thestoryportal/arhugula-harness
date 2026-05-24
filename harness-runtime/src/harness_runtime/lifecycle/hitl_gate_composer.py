@@ -153,7 +153,6 @@ __all__ = [
     "HITLGateAuditComposeError",
     "HITLGateRejectedError",
     "HITLGateTimeoutError",
-    "HITLPlacementForeclosedAtV19Error",
     "RuntimeHITLGateComposer",
     "compose_hitl_action_id",
 ]
@@ -175,15 +174,14 @@ validator-composer + MCP-trust-framework arcs."""
 # ---------------------------------------------------------------------------
 
 
-class HITLPlacementForeclosedAtV19Error(Exception):
-    """Workflow declared `VALIDATOR_ESCALATION` placement at v1.11 MVP.
-
-    Per spec §14.8.2 step 3 + Q5 ratification: `VALIDATOR_ESCALATION` emission
-    is foreclosed at v1.11 MVP; validator-composer arc lands the trigger
-    source. Composer body raises this error at step 3 before any spans open.
-    Driver `try/except` per C-CP-25 §25.3.3.4 maps to
-    `RT-FAIL-HITL-PLACEMENT-FORECLOSED-AT-V19`.
-    """
+# NOTE — `HITLPlacementForeclosedAtV19Error` REMOVED at Reading B v1.22 per
+# spec §14.8.2 step 3 un-foreclosure. VALIDATOR_ESCALATION placements are
+# now VALID at the runtime layer; they fire via the mid-step re-entry path
+# at `validator_escalation_composer.compose_validator_escalation_gate` from
+# workflow_driver post-dispatch hook. The wrap-time composer body at §14.8.2
+# filters VALIDATOR_ESCALATION placements out of `matching` (they do not fire
+# at wrap-time path). Old `RT-FAIL-HITL-PLACEMENT-FORECLOSED-AT-V19` fail
+# class also REMOVED from §14.8 failure-mode taxonomy.
 
 
 class HITLCellExcludedError(Exception):
@@ -250,6 +248,75 @@ def compose_hitl_action_id(
     at OD audit-trace consumers.
     """
     return ActionID(f"hitl:{parent_action_id}:{placement_position.value}")
+
+
+def _evaluate_hitl_required_tolerant(
+    *, binding: object, placement: object
+) -> bool:
+    """Reading B v1.22 §14.8.2 step 4c — binding-tolerant 4-axis consumption.
+
+    When ``binding`` exposes both ``persona_tier`` and ``blast_radius_tier``,
+    consume the full 4-axis ``evaluate_hitl_required`` via CP-axis
+    ``GateLevelInput`` (sentinel defaults for ``deployment_surface`` +
+    ``mcp_trust_tier`` per CP plan v2.4 §0.8 unconsumed axes carry).
+    Otherwise (test-fixture partial-binding case), fall back to the v1.11 MVP
+    ``placement.requires_hitl`` getattr-tolerant default (True when absent).
+    """
+    from harness_as import BlastRadiusTier  # local import to avoid cycle
+    from harness_core import DeploymentSurface
+    from harness_cp.cp_shared_types import MCPTrustTier
+    from harness_cp.gate_level_rule import GateLevelInput
+
+    from harness_runtime.lifecycle.hitl_required_consumption import (
+        evaluate_hitl_required,
+    )
+
+    persona_tier = getattr(binding, "persona_tier", None)
+    blast_radius_tier = getattr(binding, "blast_radius_tier", None)
+    if persona_tier is None or blast_radius_tier is None:
+        # Test-fixture / partial-binding fallback — preserve v1.11 MVP behavior.
+        return bool(getattr(placement, "requires_hitl", True))
+
+    if not isinstance(blast_radius_tier, BlastRadiusTier):
+        return bool(getattr(placement, "requires_hitl", True))
+
+    input_ = GateLevelInput(
+        persona_tier=persona_tier,
+        blast_radius_tier=blast_radius_tier,
+        deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
+        mcp_trust_tier=MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
+    )
+    return evaluate_hitl_required(input_)
+
+
+def _compute_effective_palette_tolerant(
+    *, binding: object
+) -> frozenset[HITLResponse]:
+    """Reading B v1.22 §14.8.2 step 4d — binding-tolerant UNION-intersection.
+
+    Wrap-time path passes ``validator_escalation_brief=None``. When binding-
+    derived ``gate_level`` is available, consume ``compute_effective_palette``
+    with ``cross_trust_state=NONE`` (wrap-time path has no cross-trust context).
+    Otherwise fall back to ``DEFAULT_FULL_PALETTE`` (v1.11 MVP behavior).
+    """
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_cp.validator_fail_transient_staircase import (
+        CrossTrustBoundaryState,
+    )
+
+    from harness_runtime.lifecycle.effective_palette import (
+        compute_effective_palette,
+    )
+
+    # Wrap-time path: no per-step gate_level computed; v1.22 baseline uses
+    # ASK as the sentinel (gate fires when wrap-time composer reaches step 4d,
+    # which presupposes hitl_required=True per step 4c).
+    gate_level = GateLevel.ASK
+    return compute_effective_palette(
+        gate_level=gate_level,
+        cross_trust_state=CrossTrustBoundaryState.NONE,
+        validator_escalation_brief=None,
+    )
 
 
 def _empty_summary_hash() -> str:
@@ -638,14 +705,19 @@ class RuntimeHITLGateComposer:
         if not matching:
             return await self._dispatch_inner(binding, step, step_context=step_context)
 
-        # --- Step 3: Foreclose VALIDATOR_ESCALATION at v1.11 MVP -----------
-        for p in matching:
-            if p.position == HITLPlacementKind.VALIDATOR_ESCALATION:
-                raise HITLPlacementForeclosedAtV19Error(
-                    f"VALIDATOR_ESCALATION placement foreclosed at v1.11 MVP "
-                    f"per spec §14.8.2 step 3 + Q5 ratification; validator-"
-                    f"composer arc lands the trigger source"
-                )
+        # --- Step 3: Filter VALIDATOR_ESCALATION placements (Reading B v1.22).
+        # Per spec v1.22 §14.8.2 step 3: VALIDATOR_ESCALATION placements are
+        # VALID at v1.22 — they fire via the mid-step re-entry path at
+        # `validator_escalation_composer.compose_validator_escalation_gate`
+        # invoked from workflow_driver post-dispatch hook (NOT here at
+        # wrap-time composer). The wrap-time composer body ignores
+        # VALIDATOR_ESCALATION placements (filtered out of `matching`).
+        matching = [
+            p for p in matching
+            if p.position != HITLPlacementKind.VALIDATOR_ESCALATION
+        ]
+        if not matching:
+            return await self._dispatch_inner(binding, step, step_context=step_context)
 
         tracer = self.tracer_provider.get_tracer("harness.runtime.hitl_gate")
         parent_action_id = cast(ActionID, step_context.parent_action_id)
@@ -682,22 +754,27 @@ class RuntimeHITLGateComposer:
                 # gate_level for span emission.
                 cell = cast(HITLMatrixCell, _SentinelMatrixCell())
 
-            # --- 4c: _hitl_required predicate (v1.11 MVP bounded reading) --
-            # Spec §14.8.2 step 4c: "v1.9 MVP reads the bool from the
-            # placement declaration: `if not placement.requires_hitl: skip
-            # to 4j`". The landed `HITLPlacement` schema at
-            # `harness-cp/src/harness_cp/hitl_placement.py:135` does NOT
-            # carry a `requires_hitl` field (4 fields: position / tool_filter
-            # / cascade_policy / timeout) — Class 3 spec-prose-drift item
-            # (carried at the runtime drift items). v1.11 MVP uses a
-            # `getattr` tolerant read: default True so the gate fires when
-            # the field is absent (preserves AC #5 + AC #6 unconditional-
-            # gate semantics), but supports the skip-to-4j path for future
-            # workflow-grammar arcs that DO declare `requires_hitl`.
-            hitl_required = bool(getattr(placement, "requires_hitl", True))
+            # --- 4c: _hitl_required predicate (Reading B v1.22 consumption) -
+            # Spec v1.22 §14.8.2 step 4c: full 4-axis _hitl_required evaluation
+            # per C-CP-19 §19.1. Reading B replaces v1.9 MVP `placement.
+            # requires_hitl` shortcut with `evaluate_hitl_required` consumption.
+            # Binding-tolerant fallback: when binding-derived axes are NOT
+            # available (test-fixture partial-binding case), retain getattr
+            # default-True for backward-compatible test behavior; production
+            # paths consume the full 4-axis composition per CP-axis surface.
+            hitl_required = _evaluate_hitl_required_tolerant(
+                binding=binding, placement=placement
+            )
 
-            # --- 4d: Determine response palette (v1.11 MVP — full palette) -
-            palette = DEFAULT_FULL_PALETTE
+            # --- 4d: Determine effective palette (Reading B v1.22 consumption)
+            # Spec v1.22 §14.8.2 step 4d: UNION-intersection of C-CP-19 §19.4
+            # deny-row + C-CP-21 §21.3 cross-trust-boundary via
+            # `compute_effective_palette`. Wrap-time composer passes
+            # validator_escalation_brief=None (validator context not in scope
+            # at wrap-time path — fires at §14.15 mid-step re-entry only).
+            # Binding-tolerant fallback: when binding-derived gate_level is
+            # NOT available, retain DEFAULT_FULL_PALETTE.
+            palette = _compute_effective_palette_tolerant(binding=binding)
 
             # --- 4e: Open hitl.gate.evaluated span + canonical 3 attrs -----
             with tracer.start_as_current_span("hitl.gate.evaluated") as gate_span:

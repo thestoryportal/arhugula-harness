@@ -59,7 +59,6 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
 )
 from harness_runtime.lifecycle.hitl_gate_composer import (
     DEFAULT_FULL_PALETTE,
-    HITLPlacementForeclosedAtV19Error,
     RuntimeHITLGateComposer,
     compose_hitl_action_id,
 )
@@ -314,15 +313,19 @@ async def test_dispatch_with_non_matching_placements_delegates_to_inner(
 
 
 # ---------------------------------------------------------------------------
-# AC #4 — VALIDATOR_ESCALATION foreclosure
+# AC #4 — VALIDATOR_ESCALATION support at Reading B v1.22
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_dispatch_with_validator_escalation_placement_raises_foreclosed(
+async def test_dispatch_with_validator_escalation_placement_is_filtered_at_wrap_time(
     tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
 ) -> None:
-    """AC #4: VALIDATOR_ESCALATION placement → raises HITLPlacementForeclosedAtV19Error."""
+    """Reading B v1.22 §14.8.2 step 3: VALIDATOR_ESCALATION placements are
+    filtered out of wrap-time `matching` set; wrap-time composer body
+    delegates to inner dispatcher without firing a gate. The mid-step re-entry
+    path at §14.15 (workflow_driver post-dispatch hook) fires these placements.
+    """
     provider, exporter = tracer_provider
     inner = _MockInnerDispatcher()
     composer = _make_composer(
@@ -335,11 +338,14 @@ async def test_dispatch_with_validator_escalation_placement_raises_foreclosed(
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    with pytest.raises(HITLPlacementForeclosedAtV19Error, match="VALIDATOR_ESCALATION"):
-        await composer.dispatch(cast(Any, object()), step, step_context=ctx)
+    # Should NOT raise; wrap-time composer filters VALIDATOR_ESCALATION out
+    # and delegates to inner dispatcher per v1.22 amendment.
+    result = await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
-    # No inner delegation; no spans (foreclosure raises before span open)
-    assert inner.calls == []
+    assert result == {"inner_dispatched": True}
+    assert len(inner.calls) == 1
+    # No gate spans emitted at wrap-time path; mid-step re-entry at §14.15
+    # is the firing site for VALIDATOR_ESCALATION.
     assert exporter.get_finished_spans() == ()
 
 
