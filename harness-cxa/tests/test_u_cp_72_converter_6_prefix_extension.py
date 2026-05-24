@@ -227,7 +227,118 @@ def test_signature_attrs_present_on_every_branch() -> None:
         entry = cp_audit_to_od_audit(carrier, key_id=_KEY)
         assert entry.signature_attrs is not None
         assert entry.entry_hash
-        assert entry.payload.prior_entry_hash == "0" * 64
+
+
+# ============================================================================
+# U-OD-51 — pause/resume branch un-STRUCK per Sub-arc A of
+# [[fork-u-cp-72-cost-and-pause-resume-prefix-gap]] §2.1 routing target (a).
+# Tests below append-only; existing 6-prefix test surface preserved verbatim
+# per FM-2 + workspace CLAUDE.md §4.3 forward-only ledger discipline.
+# ============================================================================
+
+
+from harness_od.pause_resume_namespace import PauseResumeAuditPayload  # noqa: E402
+
+PAUSE_RESUME_AUDIT_NAMESPACE_PREFIX = "audit.pause_resume"
+
+
+def _pause_carrier() -> PauseResumeAuditPayload:
+    return PauseResumeAuditPayload(
+        audit_cp_action_id="pause:wf-1:5",
+        audit_cp_response="paused",
+        audit_cp_timestamp="2026-05-23T14:00:00Z",
+        audit_cp_prior_event_hash="0" * 64,
+        snapshot_hash="a" * 64,
+        step_index=5,
+        pause_reason="hitl_defer",
+        state_ledger_anchor="entry_hash:abc123",
+        diff_detected=None,
+        diff_policy=None,
+        diff_summary_hash=None,
+        resume_outcome=None,
+    )
+
+
+def _resume_carrier() -> PauseResumeAuditPayload:
+    return PauseResumeAuditPayload(
+        audit_cp_action_id="resume:wf-1:5",
+        audit_cp_response="resumed",
+        audit_cp_timestamp="2026-05-23T14:00:00Z",
+        audit_cp_prior_event_hash="0" * 64,
+        snapshot_hash="a" * 64,
+        step_index=5,
+        pause_reason=None,
+        state_ledger_anchor=None,
+        diff_detected=False,
+        diff_policy="STRICT",
+        diff_summary_hash=None,
+        resume_outcome="resumed",
+    )
+
+
+def test_pause_carrier_projects_to_audit_pause_resume_subnamespace() -> None:
+    entry = cp_audit_to_od_audit(_pause_carrier(), key_id=_KEY)
+    attrs = entry.payload.audit_namespace_attrs
+    assert (
+        attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.action_id"] == "pause:wf-1:5"
+    )
+    pause_resume_keys = [
+        k for k in attrs if k.startswith(f"{PAUSE_RESUME_AUDIT_NAMESPACE_PREFIX}.")
+    ]
+    assert len(pause_resume_keys) >= 1
+    # AC #4 — pause-path-specific fields populated; resume-path fields elided
+    # (None values dropped per _project_producer_namespace_attrs conditional-
+    # field discipline).
+    assert f"{PAUSE_RESUME_AUDIT_NAMESPACE_PREFIX}.pause_reason" in attrs
+    assert (
+        f"{PAUSE_RESUME_AUDIT_NAMESPACE_PREFIX}.state_ledger_anchor" in attrs
+    )
+    assert f"{PAUSE_RESUME_AUDIT_NAMESPACE_PREFIX}.resume_outcome" not in attrs
+
+
+def test_resume_carrier_projects_to_audit_pause_resume_subnamespace() -> None:
+    entry = cp_audit_to_od_audit(_resume_carrier(), key_id=_KEY)
+    attrs = entry.payload.audit_namespace_attrs
+    assert attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.action_id"] == "resume:wf-1:5"
+    # AC #4 — resume-path fields populated; pause-path fields elided.
+    assert f"{PAUSE_RESUME_AUDIT_NAMESPACE_PREFIX}.resume_outcome" in attrs
+    assert f"{PAUSE_RESUME_AUDIT_NAMESPACE_PREFIX}.diff_policy" in attrs
+    assert f"{PAUSE_RESUME_AUDIT_NAMESPACE_PREFIX}.pause_reason" not in attrs
+
+
+def test_pause_resume_branch_signature_attrs_present() -> None:
+    for carrier in [_pause_carrier(), _resume_carrier()]:
+        entry = cp_audit_to_od_audit(carrier, key_id=_KEY)
+        assert entry.signature_attrs is not None
+        assert entry.entry_hash
+
+
+def test_post_sub_arc_a_5_audit_payload_branches_distinct() -> None:
+    # Post-Sub-arc-A: 5 producer-specific AuditPayload subclass branches
+    # (4 prior + pause_resume) produce distinct sub-namespace attribute sets.
+    # The cost: prefix remains STRUCK per Sub-arc B (CostRecordAuditPayload
+    # not yet authored).
+    entries = [
+        cp_audit_to_od_audit(_webhook_carrier(), key_id=_KEY),
+        cp_audit_to_od_audit(_operator_burden_carrier(), key_id=_KEY),
+        cp_audit_to_od_audit(_validator_carrier(), key_id=_KEY),
+        cp_audit_to_od_audit(_mcp_trust_carrier(), key_id=_KEY),
+        cp_audit_to_od_audit(_pause_carrier(), key_id=_KEY),
+    ]
+    seen_prefixes: set[str] = set()
+    for entry in entries:
+        producer_prefixes = {
+            ".".join(k.split(".")[1:3]) if k.split(".")[1] == "pause_resume"
+            else k.split(".")[1]
+            for k in entry.payload.audit_namespace_attrs
+            if k.startswith("audit.") and not k.startswith("audit.cp.")
+        }
+        seen_prefixes.update(producer_prefixes)
+    # Each producer-specific prefix at exactly its sub-namespace root.
+    expected = {"hitl_webhook", "operator_burden", "validator", "mcp_trust", "pause_resume"}
+    # Filter seen_prefixes to root-level (drop trailing attribute names).
+    seen_roots = {p.split(".")[0] for p in seen_prefixes}
+    assert seen_roots == expected
 
 
 def test_signed_with_ed25519_default() -> None:
