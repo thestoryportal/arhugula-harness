@@ -253,4 +253,40 @@ Operator holds decision authority per workspace `CLAUDE.md` §1.3 + skill §4A.4
 
 ---
 
-*End of fork doc. Routing: operator ratification of Reading A → spec-writer apply pass per §7.10 → adversarial review.*
+## §8 Reading A ratification + apply-pass footer (2026-05-24)
+
+**Trigger.** Operator ratification via AskUserQuestion 2026-05-24 — operator selected "Ratify Reading A; open spec-writer apply pass now" at session HEAD `50bb8b9` (post architect Mode 3 recommendation commit). Ratification followed Mode 3 §7 recommendation at [HIGH] confidence on three convergent chain anchors + tiebreaker pass per §7.8.
+
+**Apply-pass artifact landed this session.**
+
+| Artifact | Disposition |
+|---|---|
+| `design-substrate/Spec_Control_Plane_v1_13.md` | NEW delta file authored by `spec-writer` per skill §6 workflow. v1.13 amends the v1.10 NEW §25 / C-CP-25 ValidatorFramework body to §28 / C-CP-28; v1.12 substantive content preserved verbatim outside the rename. ZERO contract change; ZERO signature change; ZERO acceptance-criterion change; ZERO behavior change; fidelity-pure citation-correction patch. |
+| Workspace `CLAUDE.md` §2.3 CP spec row | Version bump v1.12 → v1.13 (co-published this session per v1.13 change-note Downstream absorption §(a)). |
+
+**Apply-pass artifacts owed (next-arc cascade).** Per v1.13 change-note Downstream absorption §(b)–(i):
+
+| Artifact | Routing target |
+|---|---|
+| `Spec_Harness_Runtime_v1.md` v1.18 cite retag | `spec-writer` follow-on arc — runtime spec is single-file (not delta-chain); cite retag absorbed at v1.18 → v1.19 micro-bump or in-place v1.18 amendment. ~6 cite sites. |
+| `Implementation_Plan_Control_Plane_v2_18.md` → v2.19 | `implementation-planner` revision-pass — cluster 10-CP-A units (U-CP-58/59/60/61) Implements/Files/Signatures cite retag C-CP-25 → C-CP-28; U-CP-56 (WorkflowDriver-lineage) preserved verbatim. |
+| `Implementation_Plan_Harness_Runtime_v2_17.md` → v2.18 | `implementation-planner` revision-pass — L9-decies cluster 13+ cite sites "CP spec v1.11 §25" → "CP spec v1.13 §28". |
+| `harness-cp/CLAUDE.md` cite retag | Per-axis bookkeeping arc — §1.3 ValidatorFramework scope row + §4.1 H_T-CP-21 substitution row. |
+| `.harness/class_1_fork_validator_composer_arc_stage_4_absence.md` cite retag | Adjacent fork doc bookkeeping at next-touch arc. |
+| `Cross_Axis_Composition_Document_v2_8.md` (or successor) | CXA next-touch arc — if §2.3.7 composer-arc absorption row references C-CP-25 ValidatorFramework, retag to C-CP-28. |
+| Adversarial Review 06 + 07 cite drift (bookkeeping-only; cleared pre-v1.13) | Cite retag at next adversarial review touch OR at implementation-planner cite-cascade arc. |
+
+**Fork class disposition.** Class 1 (halt-execution) per §7.9 — narrow-scope halt: new CP spec authoring + adversarial-review surface cite-resolution. Existing in-flight work was not blocked. Class 1 halt-status LIFTED at this v1.13 apply pass: new CP spec authoring may proceed against the disambiguated §25 (WorkflowDriver) / §28 (ValidatorFramework) ID space; cite-cascade across runtime spec + plans + workspace bookkeeping is owed at follow-on arcs but does not block other Phase-7 work.
+
+**Status post-§8.** OPEN → ARCHITECT-RECOMMENDED → **READING-A-RATIFIED-AND-APPLIED-AT-CP-SPEC** → cascade absorption owed at runtime spec / plan files / workspace bookkeeping (next-arc routing). The fork remains OPEN as a cite-cascade tracker; FULLY-CLOSED at all §7.10 + §8 cascade artifacts absorbing the rename.
+
+**Single-session arc.** 3 commits in this session:
+1. `baeb595` — Class 1 fork filing
+2. `50bb8b9` — systems-architect Mode 3 §7 recommendation
+3. (this commit) — spec-writer apply pass: CP spec v1.13 NEW + workspace CLAUDE.md row bump + §8 ratification footer
+
+**Pattern reinforced.** Fidelity-pure rename-the-offender resolution mirrors the meta-arch-side sibling fork `.harness/class_1_fork_meta_arch_cp_spec_renumbering_drift.md` Reading A pattern at Meta-Arch v1.5 `b2cf37b`. Both arcs: when a renumbering collision surfaces, fidelity-pure resolution renames the offender (later-authored), not the canonical (first-authored).
+
+---
+
+*End of fork doc. Routing: cite-cascade absorption at runtime spec + plan files + workspace bookkeeping per §8 routing target table. Fork remains OPEN as cite-cascade tracker until all §7.10 artifacts absorb the rename.*
