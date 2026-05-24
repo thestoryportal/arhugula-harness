@@ -198,3 +198,61 @@ def _project_resume_outcome_to_audit_payload(
 **Memory updates this arc.**
 
 - MEMORY.md `[[fork-u-cp-72]]` index entry updated to reflect pause/resume Sub-arc helper-contract landing (status posture: helper landed as dead code; production-wiring residual remains; CP composer authoring arc is the unblock path).
+
+## §11 Workflow-layer audit-write residual closure as WON'T-FIX (2026-05-24, narrow-scope ratification)
+
+**Trigger.** Workflow-layer audit-write residual surfaced at runtime spec v1.21 change-note (d) (line 26 — "OD spec v1.11 unchanged at v1.21 — the §C-OD-30.4 audit-write helpers consume engine-layer §22.1 carriers; workflow-layer audit-write requires a separate OD spec extension (out of v1.21 scope)") + carried at fork §10 routing-target prose (the CP composer authoring arc shipped at narrow-scope driver-invocation-only — H_T-CP-22 PARTIAL → RETIRED at batch-18 — without authoring workflow-layer audit emission at `capture_pause_snapshot` / `attempt_resume` callsites in `workflow_driver.py`). Arc opened 2026-05-24 per operator selection on the remaining-work menu surfaced at `/checkpoint resume`.
+
+**Operator decision (AskUserQuestion 2026-05-24).** Operator selected scope = "Stay-deferred / won't-fix at this scope" from a 3-option menu (Stay-deferred / Identify-consumer-first / Open-full-arc). The residual is closed-as-won't-fix at this arc, recoverable if a concrete downstream consumer surfaces.
+
+**Pre-decision orientation (advisor-driven).** Per `[[advisor-before-substantive-work-for-cross-axis-blockers]]` discipline (10th application this project), advisor surfaced three discriminating questions before any spec extension authoring:
+
+(1) **Concrete consumer.** None named. H_T-CP-22 already RETIRED at batch-18 — no retirement gate. No failing test cites missing workflow-layer pause audit emission. No compliance shape cites workflow-layer pause audit consumption. Audit-completeness-as-architectural-principle is FM-2-suspect (speculative authoring against an unnamed consumer).
+
+(2) **Projection collapse — does NOT hold cleanly.** Per CP spec v1.11 §26 NEW NOTE (line 21 — added at Path γ enum identifier rename absorption pass): the two protocols are **distinct architectural primitives at distinct layers**. They share neither Python class identifiers (post-v1.11 `WorkflowPauseReason` rename), nor envelope types (`PauseEvent` vs `PauseSnapshot` are already-distinct identifiers at v1.10), nor method-surface shapes (free-function vs class-method). Specifically:
+
+| Surface | Engine-layer (§22 / C-CP-22 / U-CP-49) | Workflow-layer (§26 / C-CP-26 / U-CP-62-65) |
+|---|---|---|
+| Pause reason enum | `PauseReason` 4-class (`HITL_INVOCATION_PENDING` / `CROSS_DEPLOYMENT_BRIDGING_ARC_PAUSE` / `OPERATOR_INITIATED_PAUSE` / `ENGINE_NATIVE_PAUSE`) | `WorkflowPauseReason` 5-class (`EXPLICIT_OPERATOR` / `HITL_PENDING` / `VALIDATOR_ESCALATION` / `TIMEOUT_BOUNDARY` / `EXTERNAL_DEPENDENCY`) |
+| Pause envelope | `PauseEvent` Pydantic envelope | `PauseSnapshot` 8-field frozen dataclass |
+| Resume envelope | `ResumeAttempt` + `ResumeOutcome` + `ResumeOutcomeKind` | `ResumeResult` 5-field frozen dataclass + `MaterialDiffPolicy` 3-class enum |
+| Method surface | Free-function at module-level | `PauseResumeProtocol` class-method (async) |
+
+A projection from `PauseSnapshot` → `PauseEvent` at the audit-write boundary would be **lossy + audit-misleading**: 3 of the 5 `WorkflowPauseReason` members (`VALIDATOR_ESCALATION` / `TIMEOUT_BOUNDARY` / `EXTERNAL_DEPENDENCY`) have NO engine-layer analogue. The audit ledger would emit `pause.reason = "<engine-mappable-only>"` for all workflow-layer pauses, discarding the workflow-layer enum richness. The existing `_project_pause_event_to_audit_payload` / `_project_resume_outcome_to_audit_payload` helpers at OD spec v1.11 §C-OD-30.4 **cannot be reused without spec extension** authoring parallel workflow-layer-typed helpers.
+
+(3) **CXA P1 allowlist pre-existing red gate.** Pre-existing failure carried at the workspace per the checkpoint remaining-work item #8. Opening an arc on a red-test gate would invert the `[[verification-shape-sharpened-grep-vs-e2e]]` discipline catalogued at batch-16/17 §4. Disjointness from this arc's test surface unverified.
+
+**Rationale for won't-fix.** With (1) no concrete consumer + (2) lossy projection foreclosing zero-spec-extension reuse + (3) pre-existing red gate, opening a 6-9 commit multi-axis spec/plan/impl arc would be:
+
+- Authoring against an architectural principle (audit-completeness) rather than a named consumer surface → FM-2 violation pattern (no-extension discipline applies to spec extensions authored ahead of consumer demand)
+- Adding ~6-9 commits of code-and-test surface area against a feature surface (workflow-layer pause/resume) that itself emerged from the narrow-scope CP composer arc at H_T-CP-22 RETIRE-READY → RETIRED close — i.e., the entire workflow-layer surface is operational against operator-supplied `PauseResumeProtocol` instances (binding-chain MET; e2e exercises the protocol method invocations). Audit emission would add observability but not unblock any retirement gate or failing test.
+- Pre-existing CXA P1 red gate makes a "tests green" claim suspect at landing-arc verification.
+
+**Recovery path if a concrete consumer surfaces.** If a downstream consumer is named later (compliance query naming workflow-layer pause reasons; OTel collector schema requiring `pause.reason` mapped to `WorkflowPauseReason` member strings; integration test exercising workflow_driver pause emission against an audit-ledger reader fixture), this fork can be reopened. The arc shape is preserved here for future reference:
+
+| Surface | OD spec v1.11 → v1.12 NEW §C-OD-30.5 (workflow-layer projection helpers) |
+|---|---|
+| Helper 1 | `_project_pause_snapshot_to_audit_payload(snapshot: PauseSnapshot, *, prior_event_hash: str, timestamp: str = "") -> WorkflowPauseResumeAuditPayload` |
+| Helper 2 | `_project_resume_result_to_audit_payload(result: ResumeResult, *, snapshot_hash: str, prior_event_hash: str, timestamp: str = "") -> WorkflowPauseResumeAuditPayload` |
+| Carrier | NEW `WorkflowPauseResumeAuditPayload` typed Pydantic v2 BaseModel (cannot reuse existing `PauseResumeAuditPayload` per (2)) |
+| Action-id pattern | `pause-workflow:<workflow_id>:<step_index>` / `resume-workflow:<workflow_id>:<step_index>` (workflow-layer carriers carry `workflow_id` + `step_index` directly per `PauseSnapshot` 8-field shape; distinct prefix discriminator from engine-layer `pause:` / `resume:` per CXA v2.9 §0.3 8-prefix slot — a 9th + 10th prefix slot would be owed at the CXA edge extension) |
+| CXA cascade | NEW row at §2.3.7 (CP→OD bucket) for workflow-layer audit-write seam OR extension of the existing pause/resume rows to include workflow-layer-typed payload variant |
+| CP composer site | NEW emission at `workflow_driver.py` pause-trigger detection branch + resume-on-snapshot-context entry-point branch; F2 state-ledger entry anchoring per the existing 8a/8b/8c/8d pattern (compose → state-ledger write → converter → audit-write) |
+
+Estimated 6-9 commits, multi-axis (OD spec + OD plan + impl + CP composer site + tests + CXA amendment).
+
+**Adjacent defects surfaced (not patched per FM-2).**
+
+(i) `harness-cp/CLAUDE.md` line 170 row text "workflow-layer audit-write residual remains OPEN per spec §14.14 change-note (d) for follow-on operator-discretion arc" should ideally update to "CLOSED-as-WON'T-FIX per fork §11 2026-05-24" — but this is a pointer-update at the per-axis CLAUDE.md status row, not a spec amendment. Pre-existing convention treats per-axis CLAUDE.md rows as bookkeeping that may evolve as residuals close; patching this row is scope-appropriate at this closure arc (handled below).
+
+(ii) Runtime spec v1.21 change-note (d) prose at line 26 still says "workflow-layer audit-write requires a separate OD spec extension (out of v1.21 scope)" — the prose is technically accurate (a separate extension IS required IF the arc opens) but does not record the won't-fix closure. NOT patched per FM-2 no-spec-amendment discipline (the spec records a deferred-arc routing target; the routing-target now resolves to won't-fix at this fork §11; the spec does not need to absorb the routing resolution).
+
+(iii) Workspace CLAUDE.md root §1.1 H_T-CP-22 row (if present) — not pointer-bumped to reference fork §11 closure. NOT patched per FM-2 (workspace CLAUDE.md root is canonical per §9.1 filing footer; pointer bumps to fork-doc residuals belong at design-phase back-flow, not at fork-doc closure).
+
+**Cross-axis cascade.** ZERO at this arc. No spec amendment; no CXA amendment; no plan revision; no impl commit; no new test surface. Pure fork-doc bookkeeping closure.
+
+**Status post-§11.** Pause/resume-helper-contract-FULLY-LANDED + production-wiring-RETIRED-at-batch-18 + **workflow-layer-audit-write-CLOSED-as-WON'T-FIX (this arc, 2026-05-24)**. The fork's pause/resume residual is now: typed engine-layer carrier (Sub-arc A `5d6051d`) + converter dispatch (Sub-arc A `5d6051d`) + canonical production-invocation contract + engine-layer helpers (§10 arc, 3 commits) + production callsite via CP composer narrow-scope arc (batch-18 H_T-CP-22 RETIRED) + workflow-layer audit-write closed-as-won't-fix per (1)+(2)+(3) above. Recovery path preserved if a concrete consumer surfaces.
+
+**Memory updates this arc.**
+
+- MEMORY.md `[[fork-u-cp-72]]` index entry to reflect workflow-layer audit-write won't-fix closure (recovery path preserved).
