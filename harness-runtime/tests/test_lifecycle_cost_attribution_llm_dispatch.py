@@ -92,6 +92,8 @@ def test_attribute_llm_dispatch_cost_returns_attached_record_for_anthropic(
         model="claude-haiku-4-5",
         span_id="0123456789abcdef",
         parent_idempotency_key="parent-idem-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
         input_tokens=1000,
         output_tokens=500,
     )
@@ -118,6 +120,8 @@ def test_attribute_llm_dispatch_cost_writes_audit_entry(
         model="claude-haiku-4-5",
         span_id="abcdef0123456789",
         parent_idempotency_key="parent-1",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
         input_tokens=100,
         output_tokens=50,
     )
@@ -128,8 +132,9 @@ def test_attribute_llm_dispatch_cost_writes_audit_entry(
     assert hasattr(audit_entry, "payload")
     assert hasattr(audit_entry, "entry_hash")
     attrs = audit_entry.payload.audit_namespace_attrs
-    # Per §C-OD-26.3 — action_id=cost:{span_id}, response=cost_attributed
-    assert attrs["audit.cp.action_id"] == "cost:abcdef0123456789"
+    # Per OD spec v1.10 §C-OD-26.6.1 step 2 canonical pattern:
+    # cost:<workflow_id>:<step_action_id>; response=cost_attributed
+    assert attrs["audit.cp.action_id"] == "cost:test-wf:workflow:test-wf:step:0"
     assert attrs["audit.cp.response"] == "cost_attributed"
 
 
@@ -152,6 +157,8 @@ def test_idempotency_key_attached_before_audit_write(
         model="gpt-5",
         span_id="ffff000011112222",
         parent_idempotency_key="WORKFLOW-PARENT-KEY-42",
+        workflow_id="test-wf",
+        parent_action_id="workflow:test-wf:step:0",
         input_tokens=10,
         output_tokens=5,
     )
@@ -182,6 +189,8 @@ def test_unknown_provider_raises_rate_table_missing(
             model="command-r",
             span_id="0000000000000000",
             parent_idempotency_key="parent-x",
+            workflow_id="test-wf",
+            parent_action_id="workflow:test-wf:step:0",
             input_tokens=1,
             output_tokens=1,
         )
@@ -208,6 +217,8 @@ def test_cost_attribution_works_for_all_3_adr_f1_providers(
             model=f"test-{provider}-model",
             span_id=f"{'a' * 16}",
             parent_idempotency_key=f"parent-{provider}",
+            workflow_id="test-wf",
+            parent_action_id="workflow:test-wf:step:0",
             input_tokens=100,
             output_tokens=50,
         )

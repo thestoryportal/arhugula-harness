@@ -1,9 +1,10 @@
-"""U-OD-38 — cost-attribution helper for LLM dispatch.
+"""U-OD-38 + U-OD-41 sub-arc B production wiring — cost-attribution helper for LLM dispatch.
 
-Per OD spec v1.8 §C-OD-26.1 + §26.2 row "llm_dispatch": every LLM dispatch
-must invoke the cost-attribution chain post-provider-call and write one
-audit-ledger entry. This helper packs the §26.1 5-substep convention into a
-single callable invoked from `RuntimeLLMDispatcher.dispatch`:
+Per OD spec v1.10 §C-OD-26.1 (amended) + §26.2 row "llm_dispatch": every
+LLM dispatch must invoke the cost-attribution chain post-provider-call and
+write one audit-ledger entry. This helper packs the §C-OD-26.1 v1.10
+canonical 5-substep convention into a single callable invoked from
+`RuntimeLLMDispatcher.dispatch`:
 
   1. Resolve per-(provider, model) rates from the RateTable
      (`harness_od.rate_table_resolver.resolve_for`).
@@ -13,8 +14,11 @@ single callable invoked from `RuntimeLLMDispatcher.dispatch`:
      (`CostAttributionChain.compute_per_attempt_cost`).
   4. Build a SpanCostRecord; attach idempotency_key joining to the IS state
      ledger parent entry (`CostAttributionChain.attach_idempotency_key`).
-  5. Project the cost-record to a CPAuditLedgerEntry shape and pass through
-     the `cp_audit_to_od_audit` converter to obtain a signed
+  5. Project the cost-record to a `CostRecordAuditPayload` typed carrier via
+     the canonical helper `_project_cost_record_to_audit_payload` at
+     `harness-od/src/harness_od/cost_record_audit_writer.py` per OD spec
+     v1.10 §C-OD-26.6.1; pass through the `cp_audit_to_od_audit` converter
+     via the `cost:` action_id prefix branch to obtain a signed
      AuditLedgerEntry; append via `audit_writer.append`.
 
 Home rationale: this helper composes OD types (SpanCostInputs / PriceRateEntry /
@@ -31,24 +35,37 @@ Per AC #1 + AC #4 (U-OD-38): cost-attribution invoked on every LLM dispatch
 `RateTableMissingError` (CP-FAIL-RATE-TABLE-MISSING) per §C-OD-28.2 default
 fail-closed.
 
+Per U-OD-41 AC #8 (Sub-arc B production wiring, 2026-05-24 follow-on arc):
+the production callsite was migrated from the legacy CPAuditLedgerEntry path
+(`cost:{span_id}` action_id pattern preserved at OD spec v1.8 §C-OD-26.3) to
+the v1.10 typed CostRecordAuditPayload path with the canonical
+`cost:<workflow_id>:<step_action_id>` action_id pattern per OD spec v1.10
+§C-OD-26.6.1 step 2. The migration consumes `step_context.workflow_id`
+(NEW field at CP spec v1.12 §25.2.1 per
+`.harness/class_1_fork_step_execution_context_workflow_id_field_absence.md`
+Path A ratification) + `step_context.parent_action_id` from the runtime
+context plumbed by the workflow driver.
+
 Authority:
-- `Spec_Operational_Discipline_v1_8.md` §C-OD-26 + §C-OD-28
-- `Implementation_Plan_Operational_Discipline_v2_14.md` U-OD-38
-- `Cross_Axis_Composition_Document_v2_6.md` §2.3.7 (CP→OD audit seam)
+- `Spec_Operational_Discipline_v1_10.md` §C-OD-26.1 (amended) + §C-OD-26.6
+- `Spec_Control_Plane_v1_12.md` §25.2.1 (NEW workflow_id field)
+- `Implementation_Plan_Operational_Discipline_v2_17.md` U-OD-41 (Sub-arc B)
+- `Implementation_Plan_Control_Plane_v2_18.md` U-CP-56 (StepExecutionContext)
+- `Cross_Axis_Composition_Document_v2_9.md` §2.3.7 row 8 (cost-attribution
+  audit-write seam)
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
 
-from harness_core.identity import ActionID
 from harness_cp.engine_namespace import ReplayDisposition
-from harness_cp.gate_level_rule import GateLevel
-from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
 from harness_od.audit_ledger_types import AuditLedgerEntry
 from harness_od.cost_formula import PriceRateKey, SpanCostInputs
+from harness_od.cost_record_audit_writer import (
+    _project_cost_record_to_audit_payload,
+)
 from harness_od.idempotency_join_dedup import SpanCostRecord
 from harness_od.rate_table_bridge import provider_rates_to_price_rate_entry
 from harness_od.rate_table_resolver import resolve_for
@@ -83,6 +100,8 @@ def attribute_llm_dispatch_cost(
     model: str,
     span_id: str,
     parent_idempotency_key: str,
+    workflow_id: str,
+    parent_action_id: str,
     input_tokens: int,
     output_tokens: int,
     cache_creation: int = 0,
@@ -90,10 +109,11 @@ def attribute_llm_dispatch_cost(
     tokenizer_version: str | None = None,
     tenant_id: str | None = None,
 ) -> SpanCostRecord:
-    """Run the §C-OD-26.1 5-substep cost-attribution chain for one LLM dispatch.
+    """Run the §C-OD-26.1 v1.10 canonical cost-attribution chain for one LLM dispatch.
 
     Resolves rates → computes cost → attaches idempotency key → projects to
-    CPAuditLedgerEntry → converts → appends to audit ledger. Returns the
+    CostRecordAuditPayload via the canonical helper → converts via
+    cp_audit_to_od_audit → appends to audit ledger. Returns the
     idempotency-key-bearing SpanCostRecord so the caller can emit the
     cost.attributed_decimal OTel span attribute per U-OD-49.
 
@@ -111,11 +131,19 @@ def attribute_llm_dispatch_cost(
     model
         LLM model id from `binding.model_binding.model`.
     span_id
-        The current dispatch span's OTel span_id (hex form) — becomes the
-        `cost:{span_id}` action_id.
+        The current dispatch span's OTel span_id (hex form) — preserved at
+        the SpanCostRecord and OTel boundary.
     parent_idempotency_key
         Parent's `idempotency_key` per C-IS-05 (the F2 state-ledger join key).
         Sourced from `step_context.parent_idempotency_key`.
+    workflow_id
+        Parent workflow identifier sourced from `step_context.workflow_id`
+        (NEW at CP spec v1.12 §25.2.1). Composes the canonical
+        `cost:<workflow_id>:<step_action_id>` audit action_id pattern per
+        OD spec v1.10 §C-OD-26.6.1 step 2.
+    parent_action_id
+        Parent step action_id sourced from `step_context.parent_action_id`.
+        Used as `<step_action_id>` in the canonical action_id pattern.
     input_tokens
         Per-attempt input token count from `gen_ai.usage.input_tokens`.
     output_tokens
@@ -192,56 +220,29 @@ def attribute_llm_dispatch_cost(
         span_id, parent_idempotency_key, cost_record
     )
 
-    # Substep 5 — project to CPAuditLedgerEntry shape; convert via CXA seam;
-    # append to audit ledger. Per §C-OD-26.3, action_id=cost:{span_id},
-    # response=cost_attributed.
-    audit_entry = _project_and_convert_audit_entry(
-        cost_record=attached,
-        provider_name=provider_name,
+    # Substep 5 — project to typed CostRecordAuditPayload via the canonical
+    # helper; convert via the cp_audit_to_od_audit `cost:` action_id prefix
+    # branch; append to audit ledger. Per OD spec v1.10 §C-OD-26.6.1:
+    # action_id pattern is `cost:<workflow_id>:<step_action_id>` (canonical
+    # at v1.10; the v1.8 §C-OD-26.3 `cost:{span_id}` prose preserved verbatim
+    # at v1.10 but the more-specific pattern is operationalized at the
+    # helper construction). audit_cp_response="cost_attributed" hard-coded
+    # at the helper per §C-OD-26.6.1 step 4. prior_event_hash defaults to
+    # the helper's sentinel `"0"*64` per sibling-subclass convention.
+    cost_payload = _project_cost_record_to_audit_payload(
+        attached,
+        workflow_id=workflow_id,
+        parent_action_id=parent_action_id,
+    )
+    audit_entry: AuditLedgerEntry = cp_audit_to_od_audit(
+        cost_payload,
+        key_id=_DEFAULT_SIGNING_KEY_ID,
     )
     audit_writer.append(tenant_id, audit_entry)
 
     # Return the attached SpanCostRecord for caller-side OTel attribute
     # emission via U-OD-49 string-form serialization at the OTel boundary.
     return attached  # type: ignore[no-any-return]
-
-
-def _project_and_convert_audit_entry(
-    *,
-    cost_record: object,
-    provider_name: str,
-) -> AuditLedgerEntry:
-    """Project a SpanCostRecord-shape into CPAuditLedgerEntry + convert.
-
-    Per §C-OD-26.3 + the CXA v2.6 §2.3.7 CP→OD audit-seam discipline:
-    cost-records project to an audit entry with audit.cp.action_id =
-    f"cost:{span_id}" + audit.cp.response = "cost_attributed". The
-    CPAuditLedgerEntry shape was designed for HITL audit (gate_level field is
-    HITL-semantic) but the cp_audit_to_od_audit converter is generic over
-    action_id; we set gate_level=AUTO as a no-op default for non-HITL
-    cost-attribution entries. U-CP-72 will canonicalize this projection at
-    the converter producer-side rewrite.
-
-    Hash-chain link: `prior_event_hash=""` placeholder follows the existing
-    pattern at `RuntimeHandoffRegistry.compose_dispatch_audit` (handoff.py:
-    216-218 docstring — placeholder filled at write-time discipline). The OD
-    audit chain validity is a follow-on concern; this commit prioritizes
-    cost-record emission + audit-ledger persistence over chain-link
-    accuracy. Class 3 drift candidate.
-    """
-    cr: SpanCostRecord = cost_record  # type: ignore[assignment]
-    cp_entry = CPAuditLedgerEntry(
-        action_id=ActionID(f"cost:{cr.span_id}"),
-        gate_level=GateLevel.AUTO,
-        response="cost_attributed",
-        timestamp=datetime.now(UTC).isoformat(),
-        prior_event_hash="",
-    )
-    _ = provider_name  # reserved for future use (per-provider sub-namespace)
-    return cp_audit_to_od_audit(
-        cp_entry,
-        key_id=_DEFAULT_SIGNING_KEY_ID,
-    )
 
 
 __all__ = [
