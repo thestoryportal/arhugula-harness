@@ -107,14 +107,19 @@ _FIXTURE_PATH = "/memories/notes.txt"
 _FIXTURE_CONTENT = "User prefers concise responses with bullet points."
 _SYSTEM_PROMPT = (
     "You have access to a Memory tool that lets you persist notes across "
-    "conversations. Use the Memory tool's `create` operation to save the "
-    f"following content to {_FIXTURE_PATH!r}. Use ONLY the `create` "
-    "operation; do not view existing memory first; do not call any other "
-    "operation. After creating the memory file, respond briefly to confirm "
-    "you've saved the note."
+    "conversations. Use the Memory tool's `create` operation to save a note "
+    f"to {_FIXTURE_PATH!r}. Use ONLY the `create` operation; do not view "
+    "existing memory first; do not call any other operation. "
+    "CRITICAL: pass the user's content to the `content` parameter EXACTLY "
+    "as given, byte-for-byte, with no reformatting, no markdown headers, "
+    "no bullet rewrites, no paraphrasing, and no added whitespace. The "
+    "file body must equal the user-provided string verbatim. After "
+    "creating the memory file, respond briefly to confirm you've saved "
+    "the note."
 )
 _USER_MESSAGE = (
-    "Please save this preference to memory:\n\n"
+    "Save the following text to memory verbatim. The exact string to pass "
+    "as the `content` parameter, with no modifications, is:\n\n"
     f"{_FIXTURE_CONTENT}"
 )
 
