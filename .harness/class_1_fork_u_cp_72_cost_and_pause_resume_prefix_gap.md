@@ -126,3 +126,75 @@ OD plan v2.14 §1 U-OD-41 signature `_project_cost_record_to_audit_entry(attache
 **Memory updates this arc.**
 
 - MEMORY.md `[[fork-u-cp-72]]` index entry updated to mark Sub-arc A FULLY-LANDED at `5d6051d` (was previously "Sub-arc A advanced at plan layer; U-OD-51 ready-to-implement; U-CP-72 minor revision … owed at separate arc"). Cost-axis closure language preserved verbatim from 2026-05-24 update.
+
+---
+
+## §10 Pause/resume Sub-arc helper-contract authoring landing footer (2026-05-24, narrow-scope ratification)
+
+**Trigger.** Pause/resume residual production-wiring gap surfaced at §9 (Sub-arc A FULLY-LANDED at `5d6051d` 2026-05-23; production-callsite migration deferred at fork doc §9 to operator-decision back-flow arc; arc opened 2026-05-24 per operator selection on the remaining-work menu surfaced at `/checkpoint resume`). Cost-axis Sub-arc B FULLY-CLOSED 2026-05-24 (§9 prior footer) freed advisor + operator attention for the pause/resume residual.
+
+**Operator decision (AskUserQuestion 2026-05-24).** Operator selected scope = "Narrow — OD-side helper only" from a 3-option menu (Narrow / Joint / Stay-deferred). Narrow-scope ratification: author the OD-side production-invocation contract + helper without authoring production-callsite construction. Reverses fork §9 doc-only deferral. Honest framing accepted by operator: helper lands as DEAD CODE until CP composer authoring arc lands (gates H_T-CP-22 PARTIAL → RETIRE-READY per `harness-cp/CLAUDE.md` §4.1).
+
+**Structural asymmetry from cost-axis Sub-arc B framed explicitly.** Cost-axis Sub-arc B widened an EXISTING production callsite (`cost_attribution_llm_dispatch.py:198-202`, operational since U-OD-38). Pause/resume has NO production callsite at landing — `capture_pause_snapshot` + `attempt_resume` at `harness-cp/src/harness_cp/pause_resume_protocol.py:106-147` are `NotImplementedError` stubs; `workflow_driver.py` does not invoke `PauseResumeProtocol`. Per advisor pre-flight + operator confirmation: cost-axis precedent did not map cleanly; narrow scope is the honest framing.
+
+**Artifacts landed (3-commit arc).**
+
+| # | Commit | Artifact | Verification |
+|---|---|---|---|
+| 1 | `ba85a1e` | `Spec_Operational_Discipline_v1_11.md` — NEW §C-OD-30.4 production-invocation contract (262 insertions) | Spec preserves v1.10 + v1.9 + v1.8 chain verbatim outside the NEW §C-OD-30.4 sub-section |
+| 2 | `24ffbd9` | `Implementation_Plan_Operational_Discipline_v2_18.md` — U-OD-51 AC re-decomposition 5→10 ACs (111 insertions) | Plan preserves v2.17 + v2.16 + ... + v2.14 chain verbatim outside the single-unit-body amendment at U-OD-51; ACs #1-#5 preserved byte-exact |
+| 3 | `10129c8` | `harness-od/src/harness_od/pause_resume_namespace.py` EXTEND + `harness-od/tests/test_pause_resume_audit_helpers.py` NEW (619 insertions / 2 files) | 16/16 new helper tests PASS + 27/27 Sub-arc A tests preserved + 16/16 converter tests preserved = 59/59 PASS; pyright strict 0 errors / 0 warnings |
+
+**Helper signatures landed.**
+
+```python
+def _project_pause_event_to_audit_payload(
+    event: PauseEvent,
+    *,
+    workflow_id: str,
+    step_index: int,
+    snapshot_hash: str,
+    state_ledger_anchor: str,
+    prior_event_hash: str,
+    timestamp: str = "",
+) -> PauseResumeAuditPayload: ...
+
+
+def _project_resume_outcome_to_audit_payload(
+    attempt: ResumeAttempt,
+    outcome: ResumeOutcome,
+    *,
+    step_index: int,
+    snapshot_hash: str,
+    diff_summary_hash: str | None,
+    prior_event_hash: str,
+    timestamp: str = "",
+) -> PauseResumeAuditPayload: ...
+```
+
+**Composition discipline encoded.**
+
+- `audit_cp_action_id` patterns: `pause:<workflow_id>:<step_index>` / `resume:<workflow_id>:<step_index>` per §C-OD-30.2 + CXA v2.9 §0.3 8-prefix discriminator.
+- `audit_cp_response` constants: pause helper hard-codes `"paused"`; resume helper switches per `ResumeOutcomeKind` (RESUME_CLEAN / RESUME_AFTER_REVALIDATION → `"resumed"`; ABORT_REVALIDATION_FAILED / ABORT_SNAPSHOT_CORRUPTED → `"diff_detected"`).
+- Path-disjoint field nullification: pause helper sets resume-path fields to `None`; resume helper sets pause-path fields to `None` (enforced at helper body explicitly).
+- `diff_policy` source: inlined `None` for `RESUME_CLEAN`; outcome-kind value as stand-in for non-clean outcomes per §C-OD-30.4.1 step 9 implementer-discretion deferral. Future arc MAY widen resume helper signature to accept `diff_policy` as explicit kwarg.
+
+**Adjacent defects surfaced (not patched per FM-2).**
+
+(i) `PauseResumeProtocol` body stubs at `harness-cp/src/harness_cp/pause_resume_protocol.py:106-147` remain `NotImplementedError`. CP-axis scope; not addressed at this arc.
+
+(ii) `step_index`-vs-`step_action_id` divergence with cost-axis. Cost-axis uses `cost:<workflow_id>:<step_action_id>`; pause/resume uses `pause:<workflow_id>:<step_index>` / `resume:<workflow_id>:<step_index>` per §C-OD-30.2 comment-line empirical convention. Preserved at v1.11; reconciliation candidate at future arc if CP composer arc surfaces a preferred pattern.
+
+(iii) Cross-axis import precedent. `harness-od/src/harness_od/pause_resume_namespace.py` imports `PauseEvent` / `ResumeAttempt` / `ResumeOutcome` / `ResumeOutcomeKind` from `harness_cp.pause_resume_protocol`. Matches existing precedent at `idempotency_join_dedup.py:40` (`from harness_cp.engine_namespace import ReplayDisposition`). `harness-od/pyproject.toml` does not declare `harness-cp` as a dep; import works via uv workspace shared site-packages. Pre-existing layering inconsistency (`harness-od/CLAUDE.md` §1.1 claims "0 outbound cross-axis edges to other axes"); not addressed at this arc (would require Class 3 routing).
+
+(iv) `PauseResumeProtocol` composer-binding invocation surface enumeration not yet committed. No spec section enumerates exactly which CP composer events trigger `_project_pause_event_to_audit_payload` vs `_project_resume_outcome_to_audit_payload`. Surfaced at §C-OD-30.4 change-note (iv); deferred to CP composer authoring arc.
+
+**Cross-axis cascade.** ZERO at this arc. CXA v2.9 §0.3 already covers `pause:` + `resume:` discriminators per v2.6 7-row composer-arc absorption. No CXA amendment owed. No new fail class committed. No cross-axis edge added.
+
+**Routing target for production-wiring residual (post-§10).** Remains operator-decision arc per fork §9 routing target. The CP composer authoring arc — `PauseResumeProtocol` body authoring + workflow_driver pause-event handler invoking PauseResumeProtocol + composition site invoking the §C-OD-30.4 helpers + F2 state-ledger entry anchoring + IS bounded-read for snapshot retrieval at resume boundary — is the unblock path. Estimated 15-25 commits, multi-axis (CP + runtime + possibly OD spec for `diff_policy` kwarg widening), likely multi-session. Advances H_T-CP-22 PARTIAL → RETIRE-READY.
+
+**Status post-§10.** OPEN → PARTIAL-RESOLVED → partially-advanced-Sub-arc-A → Sub-arc-A-FULLY-LANDED → Sub-arc-B-FULLY-CLOSED (cost-axis) → **Pause/resume-helper-contract-FULLY-LANDED (narrow scope per operator 2026-05-24)**. The fork's pause/resume residual is now: typed carrier (Sub-arc A `5d6051d`) + converter dispatch (Sub-arc A `5d6051d`) + canonical production-invocation contract + helpers (this arc, 3 commits). Production callsite construction remains UNMET — gates on operator-decision CP composer authoring arc per X-AL-3 silent-extension foreclosure.
+
+**Memory updates this arc.**
+
+- MEMORY.md `[[fork-u-cp-72]]` index entry updated to reflect pause/resume Sub-arc helper-contract landing (status posture: helper landed as dead code; production-wiring residual remains; CP composer authoring arc is the unblock path).
