@@ -26,6 +26,9 @@ from __future__ import annotations
 
 from harness_core.workload_class import WorkloadClass
 
+from harness_runtime.bootstrap.factories.validator_framework_factory import (
+    materialize_validator_framework_stage,
+)
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.lifecycle.audit_writer import materialize_audit_writer_stage
 from harness_runtime.lifecycle.collector_daemon import materialize_collector_daemon_stage
@@ -78,3 +81,9 @@ async def execute(
     # 7. Audit-ledger writer (depends on stage 1 ledger writer).
     audit = materialize_audit_writer_stage(config, ctx.ledger_writer)
     ctx.audit_writer = audit.writer
+
+    # 8. Validator framework (U-RT-84) — final stage-4 binding per runtime
+    # spec v1.18 §14.13.3. Operator-opt-in: `None` (default) preserves the
+    # v1.17 production-default state; non-`None` constructs an empty-registry
+    # ConcreteValidatorFramework per Reading A scope.
+    ctx.validator_framework = await materialize_validator_framework_stage(config)

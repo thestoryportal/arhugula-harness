@@ -270,6 +270,17 @@ class _MutableHarnessContext:
     Memory-only arc absorption 2026-05-23). Typed ``Any`` per the
     Protocol-vs-concrete-narrowing pattern (mirrors ``tool_dispatcher``)."""
 
+    validator_framework: Any = None
+    """U-RT-84 — Validator framework (CP spec v1.11 §25
+    ``ConcreteValidatorFramework`` / ``ValidatorFramework`` Protocol). Bound at
+    stage 4 OD by ``materialize_validator_framework_stage`` per runtime spec
+    v1.18 §14.13.3. Optional (``None`` = operator opt-out preserving the v1.17
+    production-default state); NOT in ``_REQUIRED_FIELDS``. Typed ``Any`` on
+    the mutable builder per the same Protocol-vs-concrete-narrowing pattern
+    as ``tool_dispatcher`` + ``memory_tool_registry``; the frozen
+    ``HarnessContext.validator_framework`` field carries the narrowed
+    ``ValidatorFramework | None`` Protocol surface."""
+
     # Orchestrator bookkeeping — not part of HarnessContext.
     completed_stages: list[BootstrapStage] = field(default_factory=list)
     emitted_bootstrap_events: list[BootstrapStageCompleteEvent] = field(default_factory=list)
@@ -321,6 +332,7 @@ class _MutableHarnessContext:
             per_server_trust_evaluator=self.per_server_trust_evaluator,
             mcp_namespace_emitter=self.mcp_namespace_emitter,
             memory_tool_registry=self.memory_tool_registry,
+            validator_framework=self.validator_framework,
         )
         self.frozen = ctx
         return ctx

@@ -80,6 +80,7 @@ from harness_cp.validator_fail_transient_staircase import (
     StaircaseStage,
     StaircaseTransition,
 )
+from harness_cp.validator_framework_types import ValidatorFramework
 from harness_cp.workflow_driver import StepDispatcherRegistry as _CpStepDispatcherRegistry
 from harness_cp.workflow_driver_types import WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
@@ -1172,14 +1173,14 @@ class HarnessContext(BaseModel):
     collector_daemon: CollectorDaemonHandle
     cost_chain: CostAttributionChain
     audit_writer: AuditLedgerWriter
-    # U-CP-61 — optional ValidatorFramework binding (operator-opt-in per
-    # Decision 2.D3 + spec §25.3). When None, the workflow_driver post-dispatch
-    # validation hook is skipped (driver-level opt-out). When bound, the
-    # operator wires a `SyncValidatorFrameworkFacade` whose `.evaluate(...)`
-    # bridges to the async ConcreteValidatorFramework via the captured
-    # asyncio event loop. Typed `object | None` per the same Protocol-avoiding
-    # discipline as `tracer_provider`.
-    validator_framework: object | None = None
+    # U-RT-84 — ValidatorFramework Protocol-typed binding per runtime spec
+    # v1.18 §4 + §14.13. Narrowed from the v1.17-era `object | None` carrier
+    # to the CP-canonical Protocol surface from CP spec v1.11 §25.1
+    # (Mapping[str, Validator] + async evaluate(...)). Stage 4 OD-bucket
+    # factory `materialize_validator_framework_stage` produces this; `None`
+    # is the production-default (operator opt-out → driver hook False arm).
+    # See §14.13.1 + plan v2.17 U-RT-84 AC #5.
+    validator_framework: ValidatorFramework | None = None
 
     # Stage 5 LOOP_INIT.
     override_evaluator: PerStepOverrideEvaluator
