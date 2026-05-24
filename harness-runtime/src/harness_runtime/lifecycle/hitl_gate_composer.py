@@ -256,16 +256,17 @@ def _evaluate_hitl_required_tolerant(
     """Reading B v1.22 §14.8.2 step 4c — binding-tolerant 4-axis consumption.
 
     When ``binding`` exposes both ``persona_tier`` and ``blast_radius_tier``,
-    consume the full 4-axis ``evaluate_hitl_required`` via CP-axis
-    ``GateLevelInput`` (sentinel defaults for ``deployment_surface`` +
-    ``mcp_trust_tier`` per CP plan v2.4 §0.8 unconsumed axes carry).
-    Otherwise (test-fixture partial-binding case), fall back to the v1.11 MVP
+    consume the spec-canonical 4-axis ``evaluate_hitl_required`` via CP-axis
+    ``GateLevelInput`` per CP spec v1.15 §19.1.1 (v2.20 conformance —
+    ``per_tool_gate_level`` from binding when available else sentinel default
+    ``GateLevel.AUTO``; sentinel default for ``mcp_trust_tier`` per CP plan
+    v2.20 §0.8 row 2 PARTIAL-ADVANCE unconsumed axis). Otherwise (test-fixture
+    partial-binding case), fall back to the v1.11 MVP
     ``placement.requires_hitl`` getattr-tolerant default (True when absent).
     """
     from harness_as import BlastRadiusTier  # local import to avoid cycle
-    from harness_core import DeploymentSurface
     from harness_cp.cp_shared_types import MCPTrustTier
-    from harness_cp.gate_level_rule import GateLevelInput
+    from harness_cp.gate_level_rule import GateLevel, GateLevelInput
 
     from harness_runtime.lifecycle.hitl_required_consumption import (
         evaluate_hitl_required,
@@ -280,10 +281,14 @@ def _evaluate_hitl_required_tolerant(
     if not isinstance(blast_radius_tier, BlastRadiusTier):
         return bool(getattr(placement, "requires_hitl", True))
 
+    per_tool = getattr(binding, "per_tool_gate_level", GateLevel.AUTO)
+    if not isinstance(per_tool, GateLevel):
+        per_tool = GateLevel.AUTO
+
     input_ = GateLevelInput(
+        per_tool_gate_level=per_tool,
         persona_tier=persona_tier,
         blast_radius_tier=blast_radius_tier,
-        deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
         mcp_trust_tier=MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
     )
     return evaluate_hitl_required(input_)

@@ -43,15 +43,31 @@ from harness_cp.gate_level_rule import GateLevel, GateLevelInput, gate_level
 class FiveAxisCompositionInput(BaseModel):
     """The 5-axis composition input (C-CP-19 §19.3).
 
-    Four axes from U-CP-43's `GateLevelInput` plus the U-AS-12 cross-axis
-    `sandbox_tier`.
+    Four axes from U-CP-43's `GateLevelInput` (v2.20 spec-canonical conformance
+    per CP spec v1.15 §19.1.1.1: `per_tool_gate_level`, `blast_radius_tier`,
+    `persona_tier`, `mcp_trust_tier`) plus the U-AS-12 cross-axis `sandbox_tier`.
+
+    NOTE — `deployment_surface` is preserved as a field for U-CP-45 §19.3
+    consumer compatibility at this revision; §19.3 5-axis spec-canonical
+    enumeration is `{per_tool_gate_level, blast_radius, server_trust,
+    persona_tier, sandbox_tier}` per AS C-AS-12 (deployment_surface is NOT
+    a §19.3 D2-layer axis either — it's an input to sandbox_tier_floor
+    computation). Full §19.3 spec-canonical conformance is out of v2.20 (B2)
+    scope and remains a parallel drift logged for future follow-on.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    per_tool_gate_level: GateLevel
+    """Spec-canonical D5-layer axis (v2.20 ADDED — passes into GateLevelInput)."""
+
     persona_tier: PersonaTier
     blast_radius_tier: BlastRadiusTier
     deployment_surface: DeploymentSurface
+    """v2.4-lineage field; preserved for U-CP-45 §19.3 compatibility. §19.3
+    spec-canonical does NOT carry deployment_surface as an axis — full §19.3
+    conformance deferred to follow-on arc."""
+
     mcp_trust_tier: MCPTrustTier
     sandbox_tier: SandboxTier
     """From U-AS-12 (cross-axis: AS)."""
@@ -94,9 +110,9 @@ def compose_five_axis(
     """
     computation = gate_level(
         GateLevelInput(
+            per_tool_gate_level=input.per_tool_gate_level,
             persona_tier=input.persona_tier,
             blast_radius_tier=input.blast_radius_tier,
-            deployment_surface=input.deployment_surface,
             mcp_trust_tier=input.mcp_trust_tier,
         )
     )

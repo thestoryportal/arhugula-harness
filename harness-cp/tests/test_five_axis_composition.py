@@ -21,6 +21,7 @@ from harness_as.sandbox_tier import SandboxTier
 from harness_core import DeploymentSurface, PersonaTier
 from harness_cp.cp_shared_types import MCPTrustTier
 from harness_cp.f5_signing_key_resolution import SecretScopeKind, SigningKeyScope
+from harness_cp.gate_level_rule import GateLevel
 from harness_cp.five_axis_composition import (
     OPERATOR_POLICY_OVERRIDE_SCOPE_TABLE,
     ROTATION_VERIFICATION_STEPS,
@@ -40,6 +41,7 @@ from harness_cp.five_axis_composition import (
 
 def _input() -> FiveAxisCompositionInput:
     return FiveAxisCompositionInput(
+        per_tool_gate_level=GateLevel.AUTO,
         persona_tier=PersonaTier.SOLO_DEVELOPER,
         blast_radius_tier=BlastRadiusTier.EXTERNAL_REVERSIBLE,
         deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,

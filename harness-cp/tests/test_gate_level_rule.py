@@ -1,25 +1,29 @@
 """Tests for U-CP-43 — 4-axis multiplicative gate-level rule (C-CP-19 §19.1/§19.2/§19.4).
 
-Acceptance-criterion coverage (v2.4 amendment):
+Acceptance-criterion coverage (v2.20 amendment per CP spec v1.15 §19.1.1):
   #1 GateLevel cardinality 3              -> test_gate_level_cardinality_three,
                                              test_gate_level_values_match_spec_19_1_16_2
   #2 max() over materialized floors       -> test_gate_level_max_composition_over_materialized_floors
   #3 BLAST_RADIUS floor §19.1 verbatim    -> test_blast_radius_floor_match_spec_19_1
   #4 PERSONA_TIER floor all three ASK     -> test_persona_tier_floor_all_three_ask
+  #6 (v2.20 NEW) per_tool_gate_level axis -> test_per_tool_gate_level_axis_in_max_composition,
+                                             test_per_tool_gate_level_degenerate_no_floor_table
   #7 cross-persona monotonicity §19.2     -> test_cross_persona_monotonicity
   #8 _hitl_required ask-or-deny §19.4     -> test_hitl_required_predicate_ask_or_deny
+  #9 (v2.20 NEW) GateLevelInput field-set -> test_gate_level_input_no_deployment_surface_field
   #10 composition_winner attribution      -> test_composition_winner_attribution
 
-Acc #5 (MCP_TRUST floor) + #6 (DEPLOYMENT_SURFACE floor) STRUCK — §0.8 spec-
-silence carry; see .harness/class_1_tension_u_cp_43_spec_silent_floors.md.
-Carried-item tests deliberately NOT authored (would bake an unverified mapping).
+Acc #5 (MCP_TRUST floor) preserved §0.8 row 2 PARTIAL-ADVANCE — per-tier mapping
+spec-silent at both CP §19.1 + AS §10.3; owed at follow-on spec-extension arc.
+Acc #6 (DEPLOYMENT_SURFACE floor) RETIRED at v2.20 per CP spec v1.15 §19.1.1 (v)
+non-axis statement. New per_tool_gate_level tests authored at v2.20 (NEW acc #6).
 """
 
 from __future__ import annotations
 
 import pytest
 from harness_as import BlastRadiusTier
-from harness_core import DeploymentSurface, PersonaTier
+from harness_core import PersonaTier
 from harness_cp.cp_shared_types import Axis, MCPTrustTier
 from harness_cp.gate_level_rule import (
     BLAST_RADIUS_GATE_LEVEL_FLOOR,
@@ -35,11 +39,12 @@ from harness_cp.gate_level_rule import (
 def _input(
     persona: PersonaTier = PersonaTier.SOLO_DEVELOPER,
     blast: BlastRadiusTier = BlastRadiusTier.READ_ONLY,
+    per_tool: GateLevel = GateLevel.AUTO,
 ) -> GateLevelInput:
     return GateLevelInput(
+        per_tool_gate_level=per_tool,
         persona_tier=persona,
         blast_radius_tier=blast,
-        deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER,
         mcp_trust_tier=MCPTrustTier.LEVEL_1_SIGNED_PINNED,
     )
 
@@ -55,19 +60,68 @@ def test_gate_level_values_match_spec_19_1_16_2() -> None:
 
 
 def test_gate_level_max_composition_over_materialized_floors() -> None:
-    """#2 (degraded per §0.8) — max() over the two materialized floors.
+    """#2 (v2.20) — max() over the three materialized floors.
 
-    Both BLAST_RADIUS and PERSONA_TIER floors compose by escalation rank;
-    `external-irreversible` (ASK) + solo-developer (ASK) -> ASK.
+    PER_TOOL_GATE_LEVEL + BLAST_RADIUS + PERSONA_TIER floors compose by
+    escalation rank. `external-irreversible` (ASK) + solo-developer (ASK) +
+    per_tool AUTO -> ASK.
     """
     comp = gate_level(
         _input(PersonaTier.SOLO_DEVELOPER, BlastRadiusTier.EXTERNAL_IRREVERSIBLE)
     )
     assert comp.computed_gate_level is GateLevel.ASK
-    # read-only + solo -> max(AUTO, ASK) = ASK (persona floor wins).
+    # read-only + solo + per_tool AUTO -> max(AUTO, AUTO, ASK) = ASK (persona wins).
     comp2 = gate_level(_input(PersonaTier.SOLO_DEVELOPER, BlastRadiusTier.READ_ONLY))
     assert comp2.computed_gate_level is GateLevel.ASK
-    assert set(comp.per_axis_floors) == {Axis.BLAST_RADIUS, Axis.PERSONA_TIER}
+    assert set(comp.per_axis_floors) == {
+        Axis.PER_TOOL_GATE_LEVEL,
+        Axis.BLAST_RADIUS,
+        Axis.PERSONA_TIER,
+    }
+
+
+def test_per_tool_gate_level_axis_in_max_composition() -> None:
+    """#6 (v2.20 NEW) — per_tool_gate_level participates in max() composition.
+
+    Per CP spec v1.15 §19.1.1 (i): per_tool_gate_level IS the gate-level value
+    declared per-tool at C-AS-03 SKILL.md frontmatter; degenerate axis with no
+    per-tier mapping; consumed directly at max().
+    """
+    # per_tool DENY dominates persona ASK + blast AUTO.
+    comp = gate_level(
+        _input(PersonaTier.SOLO_DEVELOPER, BlastRadiusTier.READ_ONLY, GateLevel.DENY)
+    )
+    assert comp.computed_gate_level is GateLevel.DENY
+    assert comp.composition_winner is Axis.PER_TOOL_GATE_LEVEL
+    assert comp.per_axis_floors[Axis.PER_TOOL_GATE_LEVEL] is GateLevel.DENY
+
+
+def test_per_tool_gate_level_degenerate_no_floor_table() -> None:
+    """#6 (v2.20 NEW) — no PER_TOOL_GATE_LEVEL_FLOOR constant exists.
+
+    per_tool_gate_level IS the GateLevel value (per CP spec v1.15 §19.1.1 (i)
+    degenerate axis); no per-tier → gate-level mapping table needed.
+    """
+    import harness_cp.gate_level_rule as glr
+
+    assert not hasattr(glr, "PER_TOOL_GATE_LEVEL_FLOOR")
+
+
+def test_gate_level_input_no_deployment_surface_field() -> None:
+    """#9 (v2.20 NEW) — GateLevelInput field-set conformed to spec-canonical 4-axis.
+
+    Per CP spec v1.15 §19.1.1 (v) non-axis statement: deployment_surface is
+    NOT a §19.1 D5-layer axis (belongs at §19.3 D2-layer sandbox composition
+    only). v2.20 drops the field from GateLevelInput.
+    """
+    assert "deployment_surface" not in GateLevelInput.model_fields
+    assert "per_tool_gate_level" in GateLevelInput.model_fields
+    assert set(GateLevelInput.model_fields) == {
+        "per_tool_gate_level",
+        "persona_tier",
+        "blast_radius_tier",
+        "mcp_trust_tier",
+    }
 
 
 def test_blast_radius_floor_match_spec_19_1() -> None:

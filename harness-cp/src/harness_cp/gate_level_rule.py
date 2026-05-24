@@ -3,33 +3,35 @@
 Implements C-CP-19 §19.1 (the multiplicative gate-level `max()` rule), §19.2
 (cross-persona-tier monotonicity), and §19.4 (the `_hitl_required` predicate).
 
-**Partial land — halt-route-split-AC.** CP plan v2.4 §0.8 carries two
-spec-silence findings the plan body itself leaves flagged (acc #5/#6):
+**Partial land — halt-route-split-AC.** CP plan v2.20 §0.8 row 2 PARTIAL-ADVANCE
+preserves one spec-silence finding:
 
-  - `MCP_TRUST_GATE_LEVEL_FLOOR` — CP spec §19.1 names a "C10 five-tier
-    framework" for `per_mcp_server_trust_floor` but does NOT enumerate the
-    per-tier → gate-level mapping; the spec is genuinely silent.
-  - `DEPLOYMENT_SURFACE_GATE_LEVEL_FLOOR` — CP spec §19.1's 4-axis `max()`
-    does not carry `deployment_surface` as an axis (deployment-surface gating
-    appears only inside `sandbox_tier_floor` at §19.3); the spec carries no
-    per-deployment-surface → gate-level mapping.
+  - `MCP_TRUST_GATE_LEVEL_FLOOR` — AS spec C-AS-10 §10.3 4-level enumeration is
+    canonical at AS-side (per CP spec v1.14 narrative reconciliation), but the
+    per-tier → gate-level mapping (`MCPTrustTier` → `GateLevel`) remains
+    spec-silent at both CP §19.1 and AS §10.3. Mapping owed at separate
+    follow-on spec-extension arc.
 
-Per the plan's own acc #5/#6 ("authoring them now would bake an unverified
-mapping") these two floor tables are NOT materialized. Acc #5 / #6 are struck;
-acc #2 is degraded to a `max()` over the two materialized §19.1-conformed
-floors (`BLAST_RADIUS` + `PERSONA_TIER`); acc #9 is informational. See
-`.harness/class_1_tension_u_cp_43_spec_silent_floors.md`.
+Per the v2.20 (B2) plan-follows-spec disposition (operator AskUserQuestion
+2026-05-24 + CP spec v1.15 §19.1.1 publication), the v2.4-era `deployment_surface`
+axis is DROPPED — it belongs at §19.3 D2-layer sandbox composition only, NOT
+§19.1 D5-layer HITL composition. The `per_tool_gate_level` axis is ADDED — it
+IS the gate-level value declared per-tool at C-AS-03 SKILL.md frontmatter /
+MCP server manifest (degenerate axis: no per-tier mapping; consumed directly).
 
-The materializable surface IS landed: the §19.1/§16.2-conformed `GateLevel`
+The materializable surface AS LANDED: the §19.1/§16.2-conformed `GateLevel`
 3-value enum, the `BLAST_RADIUS` + `PERSONA_TIER` §19.1-verbatim floors, the
-`gate_level` multiplicative `max()` rule over those two axes, cross-persona-
-tier monotonicity (§19.2), and the `_hitl_required` predicate (§19.4).
+`per_tool_gate_level` direct-input axis (v2.20), the `gate_level` multiplicative
+`max()` rule over those three axes, cross-persona-tier monotonicity (§19.2),
+and the `_hitl_required` predicate (§19.4). MCP_TRUST 4th axis remains
+unmaterialized per §0.8 row 2 PARTIAL-ADVANCE.
 
-Authority: Implementation_Plan_Control_Plane_v2_4.md §2 U-CP-43 (v2.4
-amendment — `GateLevel` + `BLAST_RADIUS` + `PERSONA_TIER` floors conformed to
-CP spec §19.1/§16.2 verbatim; `MCP_TRUST` + `DEPLOYMENT_SURFACE` floors
-carried per §0.8); Spec_Control_Plane_v1_3.md §19 C-CP-19 §19.1 + §19.2 + §19.4
-+ §16.2.
+Authority: Implementation_Plan_Control_Plane_v2_20.md §1 U-CP-43 canonical-reading
+amendment (v2.20 — `GateLevelInput` field-set conformed to spec-canonical
+4-axis per CP spec v1.15 §19.1.1.1: add `per_tool_gate_level`, drop
+`deployment_surface`); Spec_Control_Plane_v1_15.md §19.1.1 NEW canonical 4-axis
+statement + Spec_Control_Plane_v1_2.md §19.1 (preserved-by-reference)
+composition formula + §19.4 `_hitl_required` predicate.
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ from __future__ import annotations
 from enum import IntEnum, StrEnum
 
 from harness_as import BlastRadiusTier
-from harness_core import DeploymentSurface, PersonaTier
+from harness_core import PersonaTier
 from pydantic import BaseModel, ConfigDict
 
 from harness_cp.cp_shared_types import Axis, MCPTrustTier
@@ -75,41 +77,50 @@ _BY_RANK: dict[_GateRank, GateLevel] = {v: k for k, v in _RANK.items()}
 
 
 class GateLevelInput(BaseModel):
-    """The 4-axis input set for the gate-level rule (U-CP-43 plan signature).
+    """The 4-axis input set for the gate-level rule (U-CP-43, v2.20 conformed).
 
-    NOTE — the plan's 4-axis input set is `{persona_tier, blast_radius_tier,
-    deployment_surface, mcp_trust_tier}`; CP spec §19.1's 4-axis `max()` is
-    over `{per_tool_gate_level, blast_radius_floor, per_mcp_server_trust_floor,
-    persona_tier_floor}`. The input-set divergence is the §0.8 carry (acc #9 —
-    informational). The record is authored at the plan's declared shape; only
-    the `persona_tier` + `blast_radius_tier` axes have materialized floors.
+    Conformed to spec-canonical 4-axis per CP spec v1.15 §19.1.1.1: `{
+    per_tool_gate_level, blast_radius_tier, persona_tier, mcp_trust_tier }`.
+    The `deployment_surface` axis was DROPPED at v2.20 — `deployment_surface`
+    belongs at §19.3 D2-layer sandbox composition only, NOT §19.1 D5-layer
+    HITL composition (CP spec v1.15 §19.1.1 (v) non-axis statement). The
+    `per_tool_gate_level` axis was ADDED at v2.20 — it IS the gate-level value
+    declared per-tool at C-AS-03 SKILL.md frontmatter / MCP server manifest
+    (degenerate per CP spec v1.15 §19.1.1 (i): no per-tier mapping; consumed
+    directly at `max()`).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    per_tool_gate_level: GateLevel
+    """Spec-canonical axis (v2.20 ADDED per CP spec v1.15 §19.1.1 (i)). The
+    per-tool gate-level value declared per-tool at C-AS-03 SKILL.md frontmatter
+    / MCP server manifest `tier` field (`{auto, ask, deny}`). Degenerate axis:
+    no per-tier mapping table; consumed directly at `gate_level()` `max()`."""
+
     persona_tier: PersonaTier
     blast_radius_tier: BlastRadiusTier
-    deployment_surface: DeploymentSurface
-    """Plan-signature axis. [carried per §0.8] No
-    `DEPLOYMENT_SURFACE_GATE_LEVEL_FLOOR` is materialized — §19.1 does not
-    carry deployment-surface as a `max()` axis — so this field is unconsumed
-    by `gate_level()`. The field type is the landed `DeploymentSurface` enum."""
 
     mcp_trust_tier: MCPTrustTier
-    """Plan-signature axis. [carried per §0.8] No `MCP_TRUST_GATE_LEVEL_FLOOR`
-    is materialized — §19.1 is silent on the per-trust-tier → gate-level
-    mapping — so this field is unconsumed by `gate_level()`. The field type is
-    the landed U-CP-00c `MCPTrustTier` enum (no re-declaration, per v2.9 §0)."""
+    """Spec-canonical axis. [§0.8 row 2 PARTIAL-ADVANCE] AS spec C-AS-10 §10.3
+    4-level enumeration is canonical at AS-side (cardinality narrative
+    reconciled at CP spec v1.14); per-tier → gate-level mapping
+    (`MCP_TRUST_GATE_LEVEL_FLOOR`) is spec-silent at both CP §19.1 and AS §10.3
+    so this field is unconsumed by `gate_level()` until the mapping lands at
+    follow-on spec-extension arc. The field type is the landed U-CP-00c
+    `MCPTrustTier` enum."""
 
 
 class GateLevelComputation(BaseModel):
     """The result of a gate-level computation (C-CP-19 §19.1).
 
-    `per_axis_floors` carries only the two materialized axes (`BLAST_RADIUS`,
-    `PERSONA_TIER`); the `MCP_TRUST` / `PER_TOOL_GATE_LEVEL` / sandbox axes are
-    §0.8-carried and absent. `composition_winner` identifies which axis set the
-    winning floor — retained as an internal field with no downstream audit sink
-    at v2.4 (the `audit.gate.*` namespace was dissolved at v2.4 U-CP-46).
+    `per_axis_floors` carries the three materialized axes (`PER_TOOL_GATE_LEVEL`,
+    `BLAST_RADIUS`, `PERSONA_TIER`) at v2.20; the `MCP_TRUST` 4th axis remains
+    §0.8 row 2 PARTIAL-ADVANCE (per-tier mapping spec-silent at both CP §19.1
+    and AS §10.3 — owed at follow-on spec-extension arc). `composition_winner`
+    identifies which axis set the winning floor — retained as an internal field
+    with no downstream audit sink at v2.4 (the `audit.gate.*` namespace was
+    dissolved at v2.4 U-CP-46).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -155,14 +166,18 @@ def gate_level(input: GateLevelInput) -> GateLevelComputation:
     """Compute the gate level — `max()` over the materialized per-axis floors.
 
     C-CP-19 §19.1 composition rule: `max()` over the per-axis floors.
-    Deterministic given inputs. **Degraded per §0.8 (acc #2 carry):** the
-    `max()` ranges over the two materialized §19.1-conformed floors
-    (`BLAST_RADIUS`, `PERSONA_TIER`) only; the `MCP_TRUST` and (plan-invented)
-    `DEPLOYMENT_SURFACE` axes are spec-silent and not materialized.
+    Deterministic given inputs. **v2.20 — 3-axis materialized:** the
+    `max()` ranges over the three materialized §19.1-conformed inputs
+    (`PER_TOOL_GATE_LEVEL` direct, `BLAST_RADIUS` floor, `PERSONA_TIER` floor)
+    per CP spec v1.15 §19.1.1.1. The `MCP_TRUST` 4th axis remains
+    §0.8 row 2 PARTIAL-ADVANCE — per-tier → gate-level mapping spec-silent
+    until follow-on spec-extension arc.
     """
+    per_tool_floor = input.per_tool_gate_level  # degenerate — IS the value
     blast_floor = BLAST_RADIUS_GATE_LEVEL_FLOOR[input.blast_radius_tier]
     persona_floor = PERSONA_TIER_GATE_LEVEL_FLOOR[input.persona_tier]
     per_axis_floors: dict[Axis, GateLevel] = {
+        Axis.PER_TOOL_GATE_LEVEL: per_tool_floor,
         Axis.BLAST_RADIUS: blast_floor,
         Axis.PERSONA_TIER: persona_floor,
     }

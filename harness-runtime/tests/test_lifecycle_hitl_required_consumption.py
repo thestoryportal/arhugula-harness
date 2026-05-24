@@ -1,16 +1,17 @@
 """U-RT-90 unit tests — `_hitl_required` 4-axis consumption per Reading B.
 
 Covers runtime spec v1.22 §14.8.2 step 4c — thin wrapper around CP-axis
-`harness_cp.gate_level_rule.hitl_required` (CP-as-landed degraded 2-axis
-composition per CP plan v2.4 §0.8 carry).
+`harness_cp.gate_level_rule.hitl_required` (v2.20 spec-canonical conformance
+per CP spec v1.15 §19.1.1 — 3-axis materialized {per_tool_gate_level,
+blast_radius, persona_tier}; MCP_TRUST 4th axis §0.8 row 2 PARTIAL-ADVANCE).
 """
 
 from __future__ import annotations
 
 from harness_as import BlastRadiusTier
-from harness_core import DeploymentSurface, PersonaTier
+from harness_core import PersonaTier
 from harness_cp.cp_shared_types import MCPTrustTier
-from harness_cp.gate_level_rule import GateLevelInput
+from harness_cp.gate_level_rule import GateLevel, GateLevelInput
 
 from harness_runtime.lifecycle.hitl_required_consumption import (
     evaluate_hitl_required,
@@ -20,17 +21,18 @@ from harness_runtime.lifecycle.hitl_required_consumption import (
 def _input(
     persona: PersonaTier = PersonaTier.SOLO_DEVELOPER,
     blast_radius: BlastRadiusTier = BlastRadiusTier.READ_ONLY,
+    per_tool: GateLevel = GateLevel.AUTO,
 ) -> GateLevelInput:
-    """Construct a GateLevelInput with sentinel defaults for unconsumed axes.
+    """Construct a GateLevelInput conformed to v2.20 spec-canonical 4-axis.
 
-    CP-as-landed `deployment_surface` and `mcp_trust_tier` are field-required
-    but `gate_level()` does not consume them per CP plan v2.4 §0.8 carry —
-    any value works; using LOCAL_DEVELOPMENT + LEVEL_0_REFUSE_REMOTE as sentinels.
+    Per CP spec v1.15 §19.1.1.1 — fields: per_tool_gate_level (degenerate
+    direct value), persona_tier, blast_radius_tier, mcp_trust_tier (§0.8
+    row 2 PARTIAL-ADVANCE — mapping spec-silent so any value works as sentinel).
     """
     return GateLevelInput(
+        per_tool_gate_level=per_tool,
         persona_tier=persona,
         blast_radius_tier=blast_radius,
-        deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
         mcp_trust_tier=MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
     )
 
