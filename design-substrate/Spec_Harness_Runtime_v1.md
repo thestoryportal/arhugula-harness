@@ -1,4 +1,153 @@
-# Specification — Harness Runtime v1.25
+# Specification — Harness Runtime v1.26
+
+## Change-note (v1.25 → v1.26)
+
+**Scope of revision.** Narrow-scope amendments authoring the production binding chain for `ctx.webhook_delivery_composer` (the outbound HITL-webhook surface consumed at §14.8.8.1 step 3 + step 4) — closes the empirical-verification gap surfaced at fork doc `.harness/class_1_fork_u_rt_94_webhook_delivery_composer_binding_chain_absence.md` §1 (filing event impl(U-RT-94) HALT-on-discovery 2026-05-24 post AC #9 carrier landing commit `ba072f4`; operator AskUserQuestion 2026-05-24 close ratified Reading A path 1). The `WebhookDeliveryComposer` carrier class body landed at U-RT-69 per C-RT-20 §14.10.1 + `materialize_webhook_delivery_composer_stage` factory body exists at `harness-runtime/src/harness_runtime/lifecycle/webhook_delivery_composer.py:262` — but the production binding chain (RuntimeConfig opt-in field + HarnessContext field + stage-5 LOOP_INIT factory invocation from bootstrap + `_MutableHarnessContext` builder field + `_REQUIRED_FIELDS` membership + `freeze()` propagation) was never authored. The §14.8.8 durable-async cell HITL composer body authored at v1.24 references `ctx.webhook_delivery_composer.deliver_webhook(...)` as if the field were bound — identical-shape to the resolved fork `[[fork-validator-composer-arc-stage-4-absence]]` which required spec v1.18 §14.13 NEW C-RT-23 factory + plan v2.17 L9-decies cluster + 3-unit impl arc. v1.26 mirrors precedent at the stage-5 LOOP_INIT bucket — NEW §14.16 C-RT-26 `materialize_webhook_delivery_composer_stage` contract surface; NEW RuntimeConfig optional field `webhook_delivery_composer_config: WebhookDeliveryComposerConfig | None`; NEW HarnessContext field `webhook_delivery_composer: WebhookDeliveryComposer | None`; NEW fail class `RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE`; §14.8.8.1 step 0 precondition CANONICAL-READING AMENDMENT extending the v1.25 D9 condition with `OR ctx.webhook_delivery_composer is None`; §14.8.8.6 composition claim CANONICAL-READING AMENDMENT acknowledging the binding-chain authoring; operator-opt-in RETIRE-READY pattern documented per the precedent at C-RT-23 + C-RT-24. Operator-ratified 2026-05-24. ZERO change to existing carrier class (`WebhookDeliveryComposer` at C-RT-20 §14.10.1 preserved verbatim). ZERO change to `deliver_webhook(brief, idempotency_key)` signature. ZERO change to existing field-sets at `HITLEscalationBrief` / `WebhookDeliveryResult` / `WebhookDeliveryExhaustedError` / `HITLPauseRequestedSignal` / `ResumeContextHolder`. ZERO new typed control-flow signal. ZERO new helper. ZERO cross-axis cascade — `WebhookDeliveryComposer` is intra-runtime-spec (CP / OD / CXA / ADR / ADD / PRD unaffected; the C-RT-20 carrier was already authored at v1.20-era; v1.26 only authors the production binding chain that was missing).
+
+**Source of fix.** Class 1 fork doc `.harness/class_1_fork_u_rt_94_webhook_delivery_composer_binding_chain_absence.md` §3.1 step 1 (Reading A path 1) + operator AskUserQuestion 2026-05-24 close ("Reading A path 1 — author full webhook binding chain + StepEffectiveBinding.persona_tier extension"). Empirical-grep verification at HEAD `ba072f4` confirmed `webhook_delivery_composer` is NOT present at `harness-runtime/src/harness_runtime/types.py` (HarnessContext field set), NOT present at `harness-runtime/src/harness_runtime/bootstrap/mutable_context.py` (`_MutableHarnessContext` field set + `_REQUIRED_FIELDS` + `freeze()`), NOT invoked anywhere under `harness-runtime/src/harness_runtime/bootstrap/` (no stage-N module calls the factory). Only the carrier class body + factory function definition exist at `harness-runtime/src/harness_runtime/lifecycle/webhook_delivery_composer.py:94` + `:262`. The fork doc §1.2 grep evidence is the authority for this amendment.
+
+**Authority basis for fix direction.** The §14.8.8 durable-async cell HITL composer body authored at v1.24 §14.8.8.1 step 3 references `ctx.webhook_delivery_composer.deliver_webhook(brief, idempotency_key) per C-RT-20 §14.10.1` — the consumer cite. The v1.24 change-note at "Sections preserved verbatim from v1.23" claimed "§4 C-RT-04 HarnessContext field table preserved verbatim (NO new field owed per Q4 b-revised; the existing `pause_requested_flag` + `webhook_delivery_composer` fields are the consumed surfaces)" — this v1.24 claim was internally inconsistent: `pause_requested_flag` was authored at v1.21 per CP composer arc, but `webhook_delivery_composer` was never authored at any version (the C-RT-20 carrier class at v1.20 landed the *contract surface* + the factory body, NOT the binding chain — the v1.24 "preserved verbatim" claim was reading a phantom field). The v1.21 binding-chain pattern (C-RT-24 PauseResumeProtocol factory + RuntimeConfig field + HarnessContext field + new fail class) is the structural precedent: v1.21 §14.14 authoring is identical-shape to what v1.26 §14.16 must author for WebhookDeliveryComposer. Reading A path 1 closes the gap by mirroring the v1.21 precedent.
+
+**Four amendment sites (1 NEW contract surface + 2 NEW field rows + 1 canonical-reading amendment + 1 composition-claim amendment).**
+
+| Site | Amendment shape |
+|---|---|
+| **§14.16 (NEW) C-RT-26 `materialize_webhook_delivery_composer_stage`** | NEW contract surface — sibling to §14.13 C-RT-23 + §14.14 C-RT-24 + §14.15 C-RT-25. Stage-5 LOOP_INIT factory `materialize_webhook_delivery_composer_stage(config: RuntimeConfig, ctx) → WebhookDeliveryComposer \| None` consuming `config.webhook_delivery_composer_config` + (composer-internal: idempotency key composition surface; outbound HTTP client per C-RT-20 §14.10.1 internal substrate) and producing the `WebhookDeliveryComposer` instance (or `None` on opt-out default). `WebhookDeliveryComposerConfig` sub-model authored as **empty-marker dataclass** at §14.16.1 per the `ValidatorFrameworkConfig` (v1.18 §14.13.1) + `PauseResumeProtocolConfig` (v1.21 §14.14.1) precedents — internal operator-supply shape (per-endpoint URL, per-retry-policy, per-idempotency-key-store substrate, outbound HTTP timeout, TLS/auth) deferred to implementation discretion at C-RT-26 landing arc per FM-2 no-extension discipline. Failure-mode taxonomy adds 1 new fail class: `RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE`. Construction at stage 5 LOOP_INIT bucket alongside `materialize_pause_resume_protocol_stage` (the durable-async branch at §14.8.8.1 consumes BOTH `ctx.pause_resume_protocol` AND `ctx.webhook_delivery_composer` — co-bucketing simplifies the joint-precondition discipline at the composer body). Operator-opt-in RETIRE-READY pattern documented: structural criterion-B MET at factory landing + binding-chain materialization (RuntimeConfig field + stage factory + composer-body invocation `ctx.webhook_delivery_composer.deliver_webhook(...)` at §14.8.8.1 step 3 — runtime spec v1.24 already authored the invocation site, unreachable pre-v1.26); full RETIRED gates on operator-bound `webhook_delivery_composer_config` non-default + operator-exercised durable-async cell pause/resume cycle e2e at follow-on retirement-batch arc per batch-17 §4 verification-shape sharpening discipline. Construction body deferred to implementation discretion per FM-2 (the existing `materialize_webhook_delivery_composer_stage` function at `harness-runtime/src/harness_runtime/lifecycle/webhook_delivery_composer.py:262` is the implementer-discretion concrete body; impl arc updates the function to consume the `RuntimeConfig.webhook_delivery_composer_config` parameter and return `None` on `None`-default opt-out). |
+| **§3 C-RT-02 RuntimeConfig field table — NEW row at v1.26** | NEW optional field `webhook_delivery_composer_config: WebhookDeliveryComposerConfig \| None` (default `None` → factory returns `None` → `ctx.webhook_delivery_composer is None`; composer-body branch at §14.8.8.1 step 0 precondition evaluates "no webhook composer bound → fall through to sync-blocking" per the False arm; operator opt-out is the default). Ingested at stage 5 LOOP_INIT by `materialize_webhook_delivery_composer_stage` factory per §14.16.3. Existing fields preserved verbatim. |
+| **§4 C-RT-04 HarnessContext field table — NEW row at v1.26** | NEW field `webhook_delivery_composer: WebhookDeliveryComposer \| None` populated at stage 5 LOOP_INIT (carrier class body at C-RT-20 §14.10.1 / `harness-runtime/src/harness_runtime/lifecycle/webhook_delivery_composer.py:94` per U-RT-69 landing). `None` value (the default when `RuntimeConfig.webhook_delivery_composer_config is None`) signals operator opt-out; the §14.8.8.1 step 0 precondition AND-arm evaluates "no webhook composer bound" + falls through to sync-blocking per §14.8.2 step 4f. Non-`None` value (when operator supplies `RuntimeConfig.webhook_delivery_composer_config`) is the composer instance produced by `materialize_webhook_delivery_composer_stage` per §14.16.3; consumed at §14.8.8.1 step 3 `await ctx.webhook_delivery_composer.deliver_webhook(brief, idempotency_key)`. Existing field rows preserved verbatim. |
+| **§14.8.8.1 step 0 precondition CANONICAL-READING AMENDMENT** | The v1.25 step 0 precondition at amendment site row 1 of v1.25 change-note reads: `if ctx.pause_resume_protocol is None: fall through to step 4f (treat as SYNC_BLOCKING regardless of cell synchrony class)`. v1.26 canonically re-reads as: `if ctx.pause_resume_protocol is None OR ctx.webhook_delivery_composer is None: fall through to step 4f (treat as SYNC_BLOCKING regardless of cell synchrony class). NO webhook delivery fires; NO flag-set fires; NO signal raise; NO orphan operator response.` Enforces v1.24 §14.8.8.7 invariant 5 mechanically at the joint-binding-required precondition (was: v1.25 enforced single-binding via `pause_resume_protocol`-only check; v1.26 extends to joint-binding required for the durable-async path). The v1.25 file text is NOT edited — the canonical-reading amendment at v1.26 is the canonical interpretation of step 0 going forward. |
+| **§14.8.8.6 composition claim CANONICAL-READING AMENDMENT** | The v1.24 §14.8.8.6 composition claim (per v1.24 change-note row 1 (e) sub-bullet): "composition with §14.8.2 step 4f (sync path) + §14.8.3 (post-bootstrap webhook surface paragraph back-reference reconciliation) + §14.14 (C-RT-24 PauseResumeProtocol + driver pre-entry detection)" is canonically re-read at v1.26 as ADDING the cross-reference to NEW §14.16 (C-RT-26 WebhookDeliveryComposer + stage-5 LOOP_INIT factory). The durable-async branch is now reachable ONLY when (i) `ctx.pause_resume_protocol is not None` (operator-bound per C-RT-24 §14.14.3); (ii) `ctx.webhook_delivery_composer is not None` (operator-bound per NEW C-RT-26 §14.16.3); (iii) `synchrony == SynchronyClass.DURABLE_ASYNC` per v1.24 §14.8.2 step 4-bis. The v1.24 file text claim is NOT edited — the canonical-reading amendment at v1.26 is the canonical interpretation of the composition claim going forward. |
+
+**Adjacent harmonization sites.** None — all four amendments are surgical. §14.8.8.1 step 0 is extended (canonical-reading amendment, not in-place edit). §14.8.8.6 composition claim cross-reference is extended (canonical-reading amendment, not in-place edit). §14.10 C-RT-20 WebhookDeliveryComposer carrier class body + signature + failure-mode rows preserved verbatim — v1.26 only adds the production binding chain (factory + RuntimeConfig field + HarnessContext field + fail class), not the carrier or its method shape.
+
+**Sections preserved verbatim from v1.25.** All v1.25 NEW §14.8.8.9 ResumeContextHolder sidecar carrier (§14.8.8.9.1 / §14.8.8.9.2 / §14.8.8.9.3 / §14.8.8.9.4) preserved verbatim. v1.25 D9 step 0 precondition preserved verbatim (v1.26 amends via canonical-reading extension, NOT in-place edit). All v1.24 NEW §14.8.8 durable-async cell HITL composition substantive content (§14.8.8.1 6-step composer body + §14.8.8.2 HITLPauseRequestedSignal class + §14.8.8.3 _evaluate_cell_synchrony_tolerant helper + §14.8.8.4 driver-side signal handling + §14.8.8.5 resume-side one-shot delivery + §14.8.8.6 composition + §14.8.8.7 6 invariants + §14.8.8.8 5-item deferred-to-impl-discretion list) preserved verbatim. All v1.18-v1.24 change-notes preserved verbatim as historical record. §14.15 C-RT-25 + §14.14 C-RT-24 + §14.13 C-RT-23 + §14.10 C-RT-20 + all prior contract bodies preserved verbatim.
+
+**Status posture.** Proposed (v1.25) → **Proposed (v1.26)**. v1.26 is a fidelity-pure binding-chain authoring amendment — mirrors the C-RT-23 (v1.18) + C-RT-24 (v1.21) precedent pattern. Net contract count: +1 (`C-RT-26 materialize_webhook_delivery_composer_stage`). Net fail class count: +1 (`RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE`). Net RuntimeConfig field count: +1 (`webhook_delivery_composer_config`). Net HarnessContext field count: +1 (`webhook_delivery_composer`). Net typed control-flow signal count: 0. Net binding-tolerant helper count: 0. Signature change at any Protocol: 0. Behavior change at composer body: the §14.8.8.1 step 0 precondition is mechanically strengthened — durable-async path now requires both bindings; at canonical state (operator binds NEITHER per the default `None`-default opt-out at both fields), pre-v1.26 behavior is preserved (the v1.25 step 0 check was sufficient because the pause-resume protocol gate at single-binding was equivalent to the joint gate when both defaults are `None`). NO CP spec / OD spec / ADR / CXA / ADD / PRD amendment owed at v1.26.
+
+**Downstream absorption owed (post-v1.26).**
+
+(a) Workspace `CLAUDE.md` §2.3 runtime spec row version bump (v1.25 → v1.26); co-published this arc OR next bookkeeping commit.
+
+(b) `Implementation_Plan_Harness_Runtime_v2_24.md` → v2.25 via `implementation-planner` revision-pass — NEW pre-U-RT-94 cluster decomposing the C-RT-26 landing: NEW unit U-RT-96 (or naming-equivalent per Phase 2 step 5 of checkpoint plan) — `RuntimeConfig.webhook_delivery_composer_config` field + `WebhookDeliveryComposerConfig` empty-marker sub-model + `HarnessContext.webhook_delivery_composer` field + `_MutableHarnessContext.webhook_delivery_composer` field + `_REQUIRED_FIELDS` extension (39→40) + `freeze()` propagation + `materialize_webhook_delivery_composer_stage` factory wiring at stage-5 LOOP_INIT bootstrap module + `RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE` fail class. U-RT-94 re-author: AC #1-8 + #10 absorb the joint precondition (operator binds BOTH `pause_resume_protocol` AND `webhook_delivery_composer` for durable-async path) per fork doc §3.1 Reading A path 1 step 5. U-RT-95 e2e: extend path (vi) to cover the operator-binds-pause-resume-protocol-but-not-webhook arm (NEW per amended step 0 precondition) — composer falls through to sync-blocking; no webhook fires; no flag-set; gate evaluates synchronously.
+
+(c) `harness-runtime` impl — at U-RT-96 + U-RT-94 + U-RT-95 landing arcs absorb the v1.26 amendments per the plan v2.25 ACs. The existing `materialize_webhook_delivery_composer_stage` function at `harness-runtime/src/harness_runtime/lifecycle/webhook_delivery_composer.py:262` is updated to accept `RuntimeConfig` parameter (consume `config.webhook_delivery_composer_config`; return `None` on `None`-default opt-out).
+
+(d) CP spec / CP plan / OD spec / OD plan / OD impl / CXA / ADR / ADD / PRD: ZERO cascade. The `WebhookDeliveryComposer` carrier is intra-runtime-spec; the production binding chain is intra-runtime-spec; the durable-async cell composition consumer at §14.8.8 is intra-runtime-spec.
+
+**Adjacent defects surfaced (NOT patched per FM-2 no-extension discipline).**
+
+(i) **`WebhookDeliveryComposerConfig` internal shape.** Authored as empty-marker dataclass at §14.16.1 per the `ValidatorFrameworkConfig` + `PauseResumeProtocolConfig` precedents. Internal operator-supply shape (per-endpoint URL, per-retry-policy, per-idempotency-key-store substrate, outbound HTTP timeout, TLS/auth) deferred to implementation discretion at C-RT-26 landing arc per FM-2. Surfaced as adjacent finding; NOT patched at v1.26.
+
+(ii) **Stage-5 LOOP_INIT sub-ordering within the bucket.** §14.16 specifies stage-5 placement but does not pin sub-ordering among the stage-5 LOOP_INIT siblings (`materialize_pause_resume_protocol_stage` per C-RT-24 + `materialize_webhook_delivery_composer_stage` per C-RT-26 + ResumeContextHolder initialization per v1.25 §14.8.8.9.2). Implementation discretion at impl arc; both factories' return values are consumed at the §14.8.8.1 step 0 precondition AND-arm, so sibling ordering within stage 5 is observationally equivalent. Surfaced; NOT patched per FM-2.
+
+(iii) **`HITLEscalationBrief.fail_class` non-Optional vs §14.8.8.1 step 1 `fail_class=None` divergence (carried from CP spec v1.17 adjacent defect (i)).** Per CP spec v1.17 change-note adjacent defect (i): canonical `HITLEscalationBrief` at C-CP-28 §25.2 declares `fail_class: ValidatorFailClass` as non-Optional, but the §14.8.8.1 step 1 composer-body construction at v1.24 calls for `fail_class=None`. This is a third spec/code divergence surfaced at impl(U-RT-93) HALT-on-discovery 2026-05-24. v1.26 does NOT patch this — the resolution choice (amend `HITLEscalationBrief.fail_class` at C-CP-28 §25.2 to `ValidatorFailClass | None = None` per checkpoint Phase 1 step 3 OR runtime-side workaround via sentinel value pattern OR runtime-side `fail_class=ValidatorFailClass.SCHEMA_VIOLATION + fail_detail_hash="0"*64` placeholder pattern per U-RT-93 fixture posture at `2cfc5dc`) is orthogonal to the webhook binding chain authoring and was explicitly scoped out at operator AskUserQuestion 2026-05-24 close ("optional Phase 1 step 3"). Surfaced; routed to operator-discretion arc at Phase 1 step 3 OR runtime-side absorption per `[[halt-route-split-AC-pattern]]`.
+
+(iv) **`_evaluate_cell_synchrony_tolerant` helper reachability post-CP spec v1.17 landing.** Per CP spec v1.17 §6.5.4 + fork doc §2 adjacent finding: the v1.24 §14.8.8.3 helper `_evaluate_cell_synchrony_tolerant(binding)` consumes `binding.persona_tier` via getattr-tolerant fallback because canonical `StepEffectiveBinding` lacked the field at v1.16-pre-v1.17. CP spec v1.17 §6.5 declares the canonical `persona_tier: PersonaTier` field on `StepEffectiveBinding` (no default — required). Post-CP-v1.17 + impl-arc landing per Phase 3 step 6, the helper can be amended to consume `binding.persona_tier` directly (no getattr-tolerance). v1.26 does NOT amend the v1.24 helper shape — the helper continues to read correctly at v1.26 (the tolerant pattern is a strict superset of the direct-access pattern). Adjacent harmonization owed at U-RT-93 helper revision per Phase 3 step 8 of checkpoint plan (the helper can drop the getattr-tolerance + drop the pyright `reportUnusedFunction` suppression once consumer lands at U-RT-94). NOT patched at v1.26 per FM-2 — implementation-arc-level absorption.
+
+(v) **Pre-v1.26 phantom-cite at v1.23 / v1.24 change-notes.** The v1.23 + v1.24 change-notes contain prose "the existing `webhook_delivery_composer` field" referring to HarnessContext at §4 — these cites were phantom (the field was never authored). v1.26 does NOT edit the historical change-notes (delta-only spec-file preservation per workspace convention preserves prior change-notes byte-exact). Future readers should interpret the v1.23/v1.24 "existing" claim as a documentation drift carried until v1.26; the field is now genuinely existing at v1.26 per the §4 amendment site row. Surfaced as historical-cite drift; NOT patched at v1.26 per FM-2.
+
+---
+
+## §14.16 (NEW at v1.26) — `materialize_webhook_delivery_composer_stage` factory contract
+
+### §14.16.1 `WebhookDeliveryComposerConfig` empty-marker sub-model
+
+Authored at runtime spec v1.26 §14.16.1 per the `ValidatorFrameworkConfig` (v1.18 §14.13.1) + `PauseResumeProtocolConfig` (v1.21 §14.14.1) empty-marker precedents:
+
+```python
+class WebhookDeliveryComposerConfig(BaseModel):
+    """Operator-opt-in signal for WebhookDeliveryComposer materialization.
+
+    Authored at runtime spec v1.26 §14.16.1 to bind the outbound HITL-webhook
+    surface consumed at §14.8.8.1 step 3 (the durable-async cell HITL
+    composer body's `await ctx.webhook_delivery_composer.deliver_webhook(...)`
+    invocation per C-RT-20 §14.10.1).
+
+    Empty-marker shape per ValidatorFrameworkConfig + PauseResumeProtocolConfig
+    precedents — internal operator-supply shape (per-endpoint URL, per-retry-
+    policy, per-idempotency-key-store substrate, outbound HTTP timeout,
+    TLS/auth) deferred to implementation discretion at C-RT-26 landing arc
+    per FM-2 no-extension discipline (see v1.26 change-note adjacent defect (i)).
+    """
+    model_config = ConfigDict(frozen=True)
+```
+
+Frozen Pydantic v2 BaseModel; zero fields at v1.26 authoring scope; the operator-supplied internal shape is deferred to implementation discretion at the C-RT-26 landing arc per FM-2.
+
+### §14.16.2 C-RT-26 contract surface
+
+`materialize_webhook_delivery_composer_stage` is the stage-5 LOOP_INIT factory producing the `WebhookDeliveryComposer | None` binding for `HarnessContext.webhook_delivery_composer`. Signature:
+
+```python
+def materialize_webhook_delivery_composer_stage(
+    config: RuntimeConfig,
+    ctx,                                  # _MutableHarnessContext builder
+) -> WebhookDeliveryComposer | None: ...
+```
+
+**Return-value contract.**
+
+- `None` on opt-out default — when `config.webhook_delivery_composer_config is None`, the factory returns `None`; `ctx.webhook_delivery_composer` is bound to `None`; the §14.8.8.1 step 0 precondition AND-arm evaluates "no webhook composer bound → fall through to sync-blocking".
+- `WebhookDeliveryComposer` instance on opt-in — when `config.webhook_delivery_composer_config` is non-`None`, the factory constructs the operator-supplied composer instance per C-RT-20 §14.10.1 contract (the existing carrier class at `harness-runtime/src/harness_runtime/lifecycle/webhook_delivery_composer.py:94`) and returns the instance; `ctx.webhook_delivery_composer` is bound to the instance; the §14.8.8.1 step 0 precondition AND-arm evaluates True for the webhook component (subject to `pause_resume_protocol` also being bound).
+
+**Construction body posture.** Implementation discretion per FM-2. The existing function at `harness-runtime/src/harness_runtime/lifecycle/webhook_delivery_composer.py:262` is the implementer-discretion concrete body; the impl arc updates the function to accept the `RuntimeConfig` parameter and to consume `config.webhook_delivery_composer_config` per the opt-in default discipline above.
+
+### §14.16.3 Stage-5 LOOP_INIT placement
+
+Construction at stage 5 LOOP_INIT bucket alongside `materialize_pause_resume_protocol_stage` per C-RT-24 §14.14.3 + ResumeContextHolder initialization per v1.25 §14.8.8.9.2. The durable-async branch at §14.8.8.1 consumes BOTH `ctx.pause_resume_protocol` AND `ctx.webhook_delivery_composer` — co-bucketing simplifies the joint-precondition discipline at the composer body. Sibling ordering within stage 5 is implementer-discretion (see v1.26 change-note adjacent defect (ii)).
+
+### §14.16.4 Failure-mode taxonomy extension
+
+NEW fail class added at the §14 failure-mode taxonomy table:
+
+| Fail class | Class | Trigger | Behavior |
+|---|---|---|---|
+| `RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE` (new at v1.26) | permanent | `materialize_webhook_delivery_composer_stage` cannot construct the `WebhookDeliveryComposer` instance (e.g., operator-supplied `WebhookDeliveryComposerConfig` references unavailable substrate; outbound HTTP client construction fails; required idempotency-key-store unavailable; TLS material missing) | Bootstrap aborts; reverse-order rollback per C-RT-02 reverses stages 0..4 + sibling stage-5 bindings already constructed |
+
+Mirrors precedent at `RT-FAIL-VALIDATOR-STAGE-MATERIALIZE` (v1.18) + `RT-FAIL-PAUSE-RESUME-STAGE-MATERIALIZE` (v1.21).
+
+### §14.16.5 Operator-opt-in RETIRE-READY pattern
+
+Per the C-RT-23 + C-RT-24 precedents:
+
+- **Structural criterion-B MET at landing arc:** RuntimeConfig field + stage factory + composer-body invocation `ctx.webhook_delivery_composer.deliver_webhook(...)` at §14.8.8.1 step 3 (runtime spec v1.24 already authored the invocation site; v1.26 lands the binding chain that makes it reachable).
+- **Full RETIRED gates on:** (a) operator-bound `webhook_delivery_composer_config` non-default; (b) operator-exercised durable-async cell pause/resume cycle e2e at follow-on retirement-batch arc per batch-17 §4 verification-shape sharpening discipline.
+
+The operator-opt-in pattern mirrors the H_T-CP-16 (memory.*) + H_T-CP-18 + H_T-AS-2 + H_T-CP-21 retire-event close shapes catalogued at `[[h-t-cp-16-17-retire-ready-gate-runtime-composer-arcs]]` precedent.
+
+### §14.16.6 Composition with §14.8.8.1 step 0 precondition + step 3 invocation
+
+**Step 0 precondition (per v1.26 canonical-reading amendment over v1.25 D9):**
+
+```python
+# §14.8.8.1 step 0 (canonical-reading at v1.26):
+if ctx.pause_resume_protocol is None or ctx.webhook_delivery_composer is None:
+    # durable-async cell synchrony is not actionable —
+    # at least one required binding is absent.
+    # fall through to §14.8.2 step 4f (sync AskUserQuestion path).
+    # NO webhook delivery fires; NO flag-set; NO signal raise; NO orphan response.
+    return _evaluate_sync_blocking_gate(binding, brief, ...)
+```
+
+**Step 3 invocation (preserved verbatim from v1.24):**
+
+```python
+# §14.8.8.1 step 3 (preserved verbatim from v1.24):
+delivery_result: WebhookDeliveryResult = await ctx.webhook_delivery_composer.deliver_webhook(
+    brief, idempotency_key
+)
+# per C-RT-20 §14.10.1 contract; reachable only when step 0 precondition passed
+```
+
+The composition is now reachable at production callers post-v1.26 + impl-arc landing per Phase 2 step 5 + Phase 3 steps 7-10 of checkpoint plan (was unreachable pre-v1.26 because the field was unbound).
+
+### §14.16.7 Verbatim-layer integrity
+
+The v1.24 §14.8.8.1 6-step composer body + §14.8.8.6 composition claim are NOT edited at v1.26 — delta-only spec-chain preservation discipline preserved per v1.18 / v1.21 / v1.25 precedent. The step 0 precondition + composition claim extensions are recorded as canonical-reading amendments at the change-note above; consumers reading the delta chain interpret the v1.24/v1.25 substantive content AS canonically supplemented at v1.26 per this change-note.
+
+The v1.21 / v1.25 §3 + §4 field tables are NOT edited at v1.26 — the NEW field rows are recorded as canonical-reading additions at the change-note "Amendments" table above; consumers reading the delta chain interpret the existing tables AS extended at v1.26 per this change-note.
+
+---
 
 ## Change-note (v1.24 → v1.25)
 
