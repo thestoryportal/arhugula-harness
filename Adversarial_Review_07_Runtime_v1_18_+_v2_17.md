@@ -111,3 +111,24 @@ Per `Project_Workflow_v1_8.md` §4.1.1 (Class 1 disposition = clearance with inl
 - Rejected-findings completeness: 12 substantive checks itemized ✓
 - Cross-artifact pattern surfacing: N/A (no systemic recurrence) ✓
 - Disposition-evidence match: Class 1 only → clearance with inline fixes per §4.1.1 ✓
+
+---
+
+## Closure (2026-05-24, follow-on session)
+
+**All 3 Class 1 findings RESOLVED at this session's AdvReview-absorption arc.**
+
+| Finding | Resolution | Artifact bumped |
+|---|---|---|
+| F1-01 — Spec §14.13.3 stage-4 sub-ordering self-contradiction | Strict total-order enumeration REPLACED with partial-order phrasing (`materialize_validator_framework_stage` runs AFTER all 4 sibling stage-4 OD-bucket bindings; intermediate sibling order unconstrained — harmonizes with §"Adjacent defects" (v) disclaimer + plan U-RT-84 AC #4 + empirical bootstrap order at HEAD) | `Spec_Harness_Runtime_v1.md` v1.19 → **v1.20** (in-place; single-file spec) |
+| F1-02 — Plan U-RT-83 AC #4 mis-attaches Pydantic v2 frozen-model validation to dataclass shape | AC #4 reword (canonical-reading amendment): outer `RuntimeConfig` carries Pydantic v2 frozen-model validation; inner `ValidatorFrameworkConfig` is `@dataclass(frozen=True)` per spec §14.13.1 line 2469. Testable observable unchanged. | `Implementation_Plan_Harness_Runtime_v2_18.md` → **v2.19** (NEW delta; delta-only convention; v2.17 plan body preserved byte-exact) |
+| F1-03 — Plan U-RT-83 module-organization parallel-to claim vs empirical layout drift | Recommended path retagged from top-level `validator_framework_config.py` to empirically-landed `lifecycle/validator_framework_types.py:29` (now matches §14.12 `MemoryToolBackendConfig` precedent at `lifecycle/memory_tool_types.py:93`; implementer-discretion clause at AC #3 absorbed the resolution at impl arc — empirical evidence: actual class definition lives at the lifecycle/ path per HEAD grep). | `Implementation_Plan_Harness_Runtime_v2_18.md` → **v2.19** (NEW delta; canonical-reading amendment) |
+
+**Resolution arc commits.**
+1. `97f7484` — spec v1.19 → v1.20 F1-01 fix
+2. `0138446` — plan v2.18 → v2.19 F1-02 + F1-03 absorption
+3. (this commit) — workspace `CLAUDE.md` §2.3 + §2.4 row bumps + AdvReview 07 closure footer
+
+**Status post-closure.** Adversarial Review 07 is now **FULLY-CLOSED** at 0 Class 3 / 0 Class 2 / 3 Class 1 RESOLVED. No remaining open findings. The Reading A scope discipline preserved across the full cite-cascade + doc-drift fix sequence (verified byte-exact at §14.8.2 deferrals across spec v1.18 → v1.19 → v1.20 chain). Reading B full validator-composer arc remains OPEN at `.harness/class_1_fork_validator_composer_arc_stage_4_absence.md` §3.2 for future operator-discretion routing (separate scope; not gated on this AdvReview's closure).
+
+**Pattern catalogued.** AdvReview 07 closure exemplifies the workflow §4.1.1 Class 1 inline-fix disposition: surfaced at adversarial-review time, deferred to next spec/plan touch, absorbed at follow-on doc-drift arc without phase-reopening. Co-published with cite-cascade arc (preceding) demonstrating that bundling adversarial-review absorption with cite-cascade work is feasible when both scopes are doc-only and surgical.
