@@ -660,3 +660,90 @@ Per skill §4A discipline (recommend, don't decide), the following decisions rem
 ---
 
 *End of §15 §10.5 missing-primitive systems-architect recommendation per skill §4A.3. Fork doc status post-§15: APPLIED-EXCEPT-missing-primitives (unchanged at recommendation filing — APPLIED transition at v1.5 absorbing arc post-operator ratification).*
+
+---
+
+## §16 — v1.5 absorbing-arc application footer (2026-05-23)
+
+**Trigger.** Operator ratification of §15 systems-architect recommendation (commit `685f131`) at AskUserQuestion 2026-05-23: (a) BUNDLED + (b) Option A + (c) DO NOT CITE + (d) STRIKE row 4. Spec-writer skill invoked to apply ratified amendments at Meta-Arch v1.4 → v1.5 absorbing arc.
+
+**Application commit.** `a6b56a1` "docs(Phase_7_Meta_Architecture v1.4 → v1.5): absorb bundled §10.5 missing-primitive amendments per systems-architect §15 ratification (BUNDLED + Option A + DO NOT CITE + STRIKE)".
+
+### §16.1 Per-row application ledger
+
+| Row | Pre-v1.5 state | v1.5 disposition | Application site at Meta-Arch v1.5 |
+|---|---|---|---|
+| **H_T-CP-20** (§17.4 hitl_gate carrier gap) | §2.3 + §5.4 carrier missing U-CP-71 | ✓ APPLIED — carrier AUGMENT + U-CP-71 (single-token, no anchor change) | §0.5 Site 1 + Site 4 |
+| **H_T-CP-21** (§25 ValidatorFramework carrier gap) | §2.3 + §5.4 carrier missing C-CP-25 implementers | ✓ APPLIED — carrier AUGMENT + U-CP-58..U-CP-61 (4 carriers from cluster 10-CP-A; U-OD-50 NOT cited per (c)) | §0.5 Site 2 + Site 5 |
+| **H_T-CP-22** (§26 PauseResumeProtocol anchor + carrier gap) | §2.3 anchor cites C-CP-22 §22 only; §2.3 + §5.4 carriers cite U-CP-49/50 only | ✓ APPLIED — anchor AUGMENT + C-CP-26 §26; carrier AUGMENT + U-CP-62..U-CP-65 (4 carriers from cluster 10-CP-B; U-OD-51 NOT cited per (c); §22 engine-layer preserved per CP spec v1.11 §26 NEW NOTE coexistence) | §0.5 Site 3 + Site 6 |
+| **§5.8 H_T-CP-22 audit-trail** (v1.1 audit-scope-limitation surface) | H_T-CP-22 in "Rows verified clean (17/23)" — point-in-time correct against §22-only baseline | ✓ APPLIED — Option A: ADD NEW H_T-CP-22 7th finding row to §5.8 per-finding table with RESOLVED at v1.5 disposition; REMOVE H_T-CP-22 from clean enumeration (17 → 16); update audit-pass disposition summary | §0.5 Site 7 |
+
+### §16.2 §10.5 row-4 drift correction disposition
+
+Per (d) ratification: STRIKE fork-doc §10.5 row 4 "§27 NEW C-CP-27 MaterialDiffPolicy". The Meta-Arch v1.5 absorbing arc body (§0.5 (i) adjacent-defect surface) records the strike as drift correction. MaterialDiffPolicy canonical home is CP spec v1.10 §26.2 (within PauseResumeProtocol contract surface), NOT §27. The §15.1 tension statement already documents the drift; this §16.2 records the application disposition for forward-ledger audit-trail discipline.
+
+**Fork-doc §10.5 table state post-§16:** row 4 line struck (kept in body for historical audit-trail; STRIKE annotation added). Effective enumeration reduces from 4 rows → 3 distinct primitives per §15.1 empirical verification.
+
+### §16.3 Cumulative resolution status
+
+| §10.4 row | Resolution version | Application commit |
+|---|---|---|
+| H_T-CP-15 | v1.4 (cross-axis re-anchor to AS-axis Skills primitive home) | `4ea4ac4` |
+| H_T-CP-16 | v1.4 (cross-axis re-anchor to AS-axis Memory primitive home) | `4ea4ac4` |
+| H_T-CP-17 | v1.4 (cross-axis re-anchor to AS-axis Files primitive home) | `4ea4ac4` |
+| H_T-CP-18 | v1.1 α + v1.2 §2.3 re-anchor to C-CP-27 §27 | `40d9f78` + `37856f2` |
+| H_T-CP-19 | v1.3 (union cite per material-location-resident §5.1.1) | `7f64b1f` |
+| H_T-CP-20 | v1.2 (anchor + carrier augmentation per §10.4) + v1.5 (carrier completion + U-CP-71) | `37856f2` + `a6b56a1` |
+| H_T-CP-21 | v1.2 (anchor + carrier augmentation per §10.4) + v1.5 (carrier completion + U-CP-58..U-CP-61) | `37856f2` + `a6b56a1` |
+
+**§10.4 rows aggregate: 7/7 APPLIED.**
+
+| §10.5 missing-primitive row | Resolution version | Application commit |
+|---|---|---|
+| §17.4 hitl_gate canonical signature | v1.2 anchor + v1.5 carrier (H_T-CP-20 row) | `37856f2` + `a6b56a1` |
+| §25 NEW C-CP-25 ValidatorFramework | v1.2 anchor + v1.5 carrier (H_T-CP-21 row) | `37856f2` + `a6b56a1` |
+| §26 NEW C-CP-26 PauseResumeProtocol | v1.5 anchor + carrier (H_T-CP-22 row) | `a6b56a1` |
+| ~~§27 NEW C-CP-27 MaterialDiffPolicy~~ STRUCK | v1.5 drift correction per (d) ratification (MaterialDiffPolicy is at §26.2, NOT §27 — subsumed under H_T-CP-22 row 3 above) | `a6b56a1` |
+
+**§10.5 rows aggregate: 3/3 distinct primitives APPLIED + 1 drift correction STRUCK.**
+
+### §16.4 Sibling-fork dependency status
+
+| Fork | Status post-§16 |
+|---|---|
+| `class_1_fork_h_t_cp_18_phantom_retirement_cite.md` | APPLIED-AND-RETIRE-READY at batch-10 `eb4475d` (unchanged at this arc) |
+| `class_1_fork_meta_arch_section_2_2_as_axis_carrier_phantom_cites.md` | APPLIED at v1.4 + sibling §14 footer (unchanged at this arc) |
+| **`class_1_fork_meta_arch_cp_spec_renumbering_drift.md` (this fork)** | **APPLIED-EXCEPT-missing-primitives → APPLIED** ← transition at this §16 footer |
+
+### §16.5 Adjacent-defects audit
+
+Per spec-writer §0.5 (i)-(v) adjacent-defect surfacing:
+
+- (i) Fork-doc §10.5 row-4 drift correction — recorded at §16.2 above
+- (ii) §5.7 substitution-type breakdown total cell (49) — unchanged at v1.5 (no row count change)
+- (iii) §2.6 catalog aggregate cell — unchanged at v1.5 (no primitive count change)
+- (iv) §4.4.3 CP-axis classification table H_T-CP-20/21/22 "Brief rationale" descriptors — carry-forward; future cross-row coherence-pass arc
+- (v) U-OD-50/51/52 cross-axis observer cites at §5.4 CP rows — explicitly NOT patched per (c) ratification; asymmetry rule documented at §0.5
+
+None of these are blocking the §16 APPLIED transition. All are carry-forward routing items.
+
+### §16.6 Downstream sequencing post-APPLIED
+
+| Step | Work | Owner | Timing |
+|---|---|---|---|
+| 1 | Sibling memory `[[fork-meta-arch-cp-spec-renumbering-drift]]` refresh to APPLIED status (currently stale at APPLIED-EXCEPT-missing-primitives per `[[fork-meta-arch-section-2-2-as-axis-carrier-phantom-cites]]` checkpoint footer note) | Operator-discretion or next checkpoint save | Imminent |
+| 2 | Per-row `phase-7-substitution-retirement` re-invocation for H_T-CP-22 against augmented C-CP-26 PauseResumeProtocol carrier surface (U-CP-62..U-CP-65) | `phase-7-substitution-retirement` skill | Operator-discretion |
+| 3 | Per-row `phase-7-substitution-retirement` re-invocation for H_T-CP-21 against augmented C-CP-25 ValidatorFramework carrier surface (U-CP-58..U-CP-61) | `phase-7-substitution-retirement` skill | Operator-discretion |
+| 4 | H_T-CP-20 already RETIRED at batch-9 — v1.5 strengthens carrier coverage; no re-invocation owed | n/a | n/a |
+| 5 | §4.4.3 CP-axis classification + H_T-AS-6/7/8 rationale descriptors coherence-pass arc — carry-forward from v1.2/v1.3/v1.4/v1.5 §0.X adjacent-defect surfaces | Future arc | Operator-discretion |
+| 6 | Parallel-axis audit cadence (§5.2 IS / §5.3 AS / §5.5 OD / §5.6 CXA Retirement column γ-audit; §6 self-hosting milestone gradient cited-unit ID audit; §7 anti-leakage-rule cited surface ID audit) | Future arcs | Multi-session; operator-discretion |
+
+### §16.7 Pattern reinforcement
+
+Per `[[advisor-before-substantive-work-for-cross-axis-blockers]]`: this arc applied the §15 recommendation against landed-code carriers verified empirically at HEAD `4ea4ac4`. The §15.6 tiebreaker check (per-primitive grep at `harness-cp/src/`) made the recommendation determinate before any spec edit. This is the structural safeguard that surfaced the §10.5 row-4 drift (MaterialDiffPolicy at §26.2 vs §27) — empirical verification at apply-time catches authoring-time mis-anchoring that authority-chain reasoning alone may silently propagate.
+
+Per `[[fork-meta-arch-section-2-2-as-axis-carrier-phantom-cites]]` memory closure note: "spec-writer empirical-verification at apply-time is the critical structural safeguard against cross-layer phantom propagation". The §15 systems-architect recommendation INCLUDED the empirical-verification rows at §15.4 — pre-routing the safeguard to recommendation-time rather than waiting for spec-writer to surface drift at apply-time. This is a refinement of the v1.4 closure-arc pattern: empirical verification migrates upstream (systems-architect → operator ratification → spec-writer apply-time) as fork closure cadence stabilizes.
+
+---
+
+*End of §16 v1.5 absorbing-arc application footer. **Fork doc status post-§16: APPLIED.** 7/7 §10.4 rows APPLIED across v1.1+v1.2+v1.3+v1.4 commits. §10.5 3/3 distinct missing-primitive rows APPLIED + 1 drift correction STRUCK at v1.5 commit `a6b56a1`. Sibling fork [[fork-meta-arch-section-2-2-as-axis-carrier-phantom-cites]] APPLIED at v1.4. Cumulative §5.8 H_T-CP-* findings: 7/7 RESOLVED. Per-row retirement-filing re-invocations + parallel-axis audit cadence + §4.4.3 coherence pass remain operator-discretion follow-on work.*
