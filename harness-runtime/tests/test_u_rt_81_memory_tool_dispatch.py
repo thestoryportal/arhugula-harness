@@ -90,6 +90,7 @@ def _binding(provider: str = "anthropic", model: str = "claude-sonnet-4-5") -> S
 
 def _step_context() -> StepExecutionContext:
     return StepExecutionContext(
+        workflow_id="test-wf",
         parent_action_id="workflow:test-wf:step:0",
         parent_gate_level=GateLevel.AUTO,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,

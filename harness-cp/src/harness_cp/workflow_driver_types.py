@@ -7,11 +7,13 @@ Implements C-CP-25 §25.2 verbatim:
   named enum at C-CP-25 §25.2 in-session amendment §E 2026-05-20)
 - `WorkflowStep` record (in-session amendment §E — step-sequence source
   decoupled from `WorkflowManifestEntry` per operator Path A)
-- `StepExecutionContext` 8-field record (NEW at v1.6 Path A — per-step
-  parent context surface composed by the driver and passed to the
-  `StepDispatcher` Protocol per the U-RT-59 sub-agent dispatch composer
-  needs; resolves the Class 1 fork at
-  `.harness/class_1_tension_c_rt_17_step_dispatcher_parent_context_gap.md`)
+- `StepExecutionContext` 9-field record (NEW at v1.6 Path A as 8-field;
+  extended at v1.12 with 9th field `workflow_id` per
+  `.harness/class_1_fork_step_execution_context_workflow_id_field_absence.md`
+  Path A ratification — per-step parent context surface composed by the
+  driver and passed to the `StepDispatcher` Protocol per the U-RT-59
+  sub-agent dispatch composer needs + OD-axis cost-attribution audit-write
+  wiring per OD spec v1.10 §C-OD-26.6.1 step 2 cite)
 
 Authority:
 - `Spec_Control_Plane_v1_4.md` §25.2 (signatures) + §25 in-session amendment §E
@@ -131,6 +133,15 @@ class StepExecutionContext(BaseModel):
 
     Field semantics:
 
+    - ``workflow_id`` (NEW at v1.12 per CP spec v1.12 §25.2.1): the parent
+      workflow's identifier sourced from ``manifest_entry.workflow_id`` at
+      the driver §25.3.3.4 composition site. Required (NOT Optional).
+      Discrete typed surface for consumer dispatchers + OD-axis cost-
+      attribution audit-write wiring per OD spec v1.10 §C-OD-26.6.1 step 2
+      cite (`cost:<workflow_id>:<step_action_id>` audit action_id pattern).
+      The value is already in driver scope at the existing composition site
+      where ``parent_action_id`` is composed via string interpolation from
+      the same value (``f"workflow:{workflow_id}:step:{step_index}"``).
     - ``parent_action_id``: composed by the driver per the existing pattern
       ``ActionID(f"workflow:{workflow_id}:step:{step_index}")`` (per
       ``workflow_driver.py:_append_step_ledger_entry``).
@@ -166,12 +177,15 @@ class StepExecutionContext(BaseModel):
     The 4 deferred-to-MVP-default fields (``parent_gate_level``,
     ``parent_sandbox_tier``, ``parent_entry_hash``, ``tenant_id``) are
     documented as deferred at C-RT-17 §14.7 "Deferred to implementation
-    discretion". The remaining 4 fields are composed deterministically from
-    driver-tracked state per the existing patterns.
+    discretion". The remaining 5 fields (at v1.12 — was 4 at v1.6) are
+    composed deterministically from driver-tracked state per the existing
+    patterns: ``workflow_id``, ``parent_action_id``, ``parent_actor``,
+    ``parent_idempotency_key``, ``step_index``.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    workflow_id: str
     parent_action_id: str
     parent_gate_level: GateLevel
     parent_sandbox_tier: SandboxTier

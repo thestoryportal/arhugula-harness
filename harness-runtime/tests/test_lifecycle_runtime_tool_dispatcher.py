@@ -112,6 +112,7 @@ async def _build_started_host(register_echo: bool = True) -> MCPClientHost:
 
 def _make_step_context() -> StepExecutionContext:
     return StepExecutionContext(
+        workflow_id="wf-1",
         parent_action_id="workflow:wf-1:step:0",
         parent_gate_level=GateLevel.AUTO,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,

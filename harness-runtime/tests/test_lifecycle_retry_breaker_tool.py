@@ -135,6 +135,7 @@ def _step() -> WorkflowStep:
 
 def _step_context(step_index: int = 0) -> StepExecutionContext:
     return StepExecutionContext(
+        workflow_id="test-wf",
         parent_action_id=f"workflow:test-wf:step:{step_index}",
         parent_gate_level=GateLevel.AUTO,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,

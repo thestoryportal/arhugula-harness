@@ -123,6 +123,7 @@ def test_schema_pattern_p1_alignment_with_cp_validator_framework() -> None:
         step_payload={},
     )
     ctx = StepExecutionContext(
+        workflow_id="wf-pp1",
         parent_action_id="workflow:wf-pp1:step:0",
         parent_gate_level=GateLevel.AUTO,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,

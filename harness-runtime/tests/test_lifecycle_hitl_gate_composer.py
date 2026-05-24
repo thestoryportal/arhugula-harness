@@ -174,6 +174,7 @@ def _make_step_context() -> StepExecutionContext:
     from harness_is.state_ledger_entry_schema import Identifier
 
     return StepExecutionContext(
+        workflow_id="test",
         parent_action_id=ActionID("workflow:test:step:0"),
         parent_gate_level=GateLevel.AUTO,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,

@@ -274,6 +274,7 @@ def test_end_to_end_dispatch_emits_cost_attribution_audit_entry(
         step_payload={"messages": [{"role": "user", "content": "hi"}], "tools": None, "params": {"max_tokens": 1}},
     )
     step_context = StepExecutionContext(
+        workflow_id="wf",
         parent_action_id="workflow:wf:step:0",
         parent_gate_level=GateLevel.AUTO,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
@@ -326,6 +327,7 @@ def test_dispatcher_without_cost_substrate_silently_skips_cost_attribution() -> 
         step_payload={"messages": [{"role": "user", "content": "hi"}], "tools": None, "params": {"max_tokens": 1}},
     )
     step_context = StepExecutionContext(
+        workflow_id="wf",
         parent_action_id="workflow:wf:step:0",
         parent_gate_level=GateLevel.AUTO,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,

@@ -177,6 +177,7 @@ def test_hitl_gate_is_signature_only_for_runtime_composer() -> None:
         step_payload={},
     )
     step_context = StepExecutionContext(
+        workflow_id="test",
         parent_action_id="workflow:test:step:0",
         parent_gate_level=GateLevel.AUTO,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,

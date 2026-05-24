@@ -143,6 +143,7 @@ def tracer_with_exporter() -> tuple[TracerProvider, InMemorySpanExporter]:
 
 def _make_step_context() -> StepExecutionContext:
     return StepExecutionContext(
+        workflow_id="wf-u-rt-86",
         parent_action_id="workflow:wf-u-rt-86:step:0",
         parent_gate_level=GateLevel.AUTO,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,

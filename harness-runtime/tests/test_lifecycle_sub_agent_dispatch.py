@@ -181,6 +181,7 @@ def _step(payload: SubAgentDispatchPayload | None = None) -> WorkflowStep:
 
 def _step_context() -> StepExecutionContext:
     return StepExecutionContext(
+        workflow_id="parent-wf",
         parent_action_id="workflow:parent-wf:step:0",
         parent_gate_level=GateLevel.AUTO,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
@@ -816,6 +817,7 @@ def test_three_sequential_dispatches_chain_through_audit_writer(tmp_path: Path) 
     # composer's `dispatch:<parent_action_id>:<child_index>` scheme.
     for i in range(3):
         ctx = StepExecutionContext(
+            workflow_id="parent-wf",
             parent_action_id=f"workflow:parent-wf:step:{i}",
             parent_gate_level=GateLevel.AUTO,
             parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,

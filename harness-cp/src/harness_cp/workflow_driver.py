@@ -595,6 +595,7 @@ def _execute_workflow_body(
         # parent_entry_hash = "" (child shares parent ledger writer per
         # C-RT-17 §14.7.4); tenant_id = None (multi-tenancy not at v1.6 stack).
         step_context = StepExecutionContext(
+            workflow_id=manifest_entry.workflow_id,
             parent_action_id=(
                 f"workflow:{manifest_entry.workflow_id}:step:{step_index}"
             ),

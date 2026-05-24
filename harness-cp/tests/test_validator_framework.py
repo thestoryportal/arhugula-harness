@@ -56,6 +56,7 @@ def _make_step_context(step_id_str: str = "step-1") -> StepExecutionContext:
     from harness_as.sandbox_tier import SandboxTier
 
     return StepExecutionContext(
+        workflow_id="wf-test",
         parent_action_id="workflow:wf-test:step:0",
         parent_gate_level=GateLevel.AUTO,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,

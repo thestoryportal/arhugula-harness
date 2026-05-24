@@ -202,6 +202,7 @@ def _step() -> WorkflowStep:
 
 def _step_context() -> StepExecutionContext:
     return StepExecutionContext(
+        workflow_id="u-rt-82-e2e",
         parent_action_id="workflow:u-rt-82-e2e:step:0",
         parent_gate_level=GateLevel.AUTO,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
