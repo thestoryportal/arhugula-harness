@@ -79,5 +79,21 @@ OD plan v2.14 §1 U-OD-41 signature `_project_cost_record_to_audit_entry(attache
 | Filing arc | 10-CP-D cluster impl (U-CP-71 + U-CP-72 pair) |
 | Filing skill | `phase-7-implementation` §3.4 dependency-verification |
 | Resolution arc(s) | (a) U-OD-51 unblock at U-CP-62 landing; (b) CXA v2.9 amendment + CostRecordAuditPayload authoring |
-| Status | OPEN at filing → PARTIAL-RESOLVED at U-CP-72 6-branch landing → FULLY-RESOLVED at re-binding arcs |
+| Status | OPEN at filing → PARTIAL-RESOLVED at U-CP-72 6-branch landing → **partially-advanced-Sub-arc-A (2026-05-23, OD plan v2.16)** → FULLY-RESOLVED at re-binding arcs |
 | Related memory | `[[halt-route-split-AC-pattern]]`, `[[carried-fork-audit-before-cluster]]` |
+
+---
+
+## §8 Sub-arc A partial-advance footer (2026-05-23)
+
+**Trigger.** U-CP-62 (`WorkflowPauseReason` + `MaterialDiffPolicy` + `PauseSnapshot` + `ResumeResult` carriers) landed at commit `49617e7` (cluster 10-CP-B impl arc commit 1/4, 2026-05-22) per CP plan v2.17 §1. Cross-axis prerequisite at §2.1 routing target (a) ("U-OD-51 cross-axis-blocked on U-CP-62 (CP plan v2.17 §1)") thereby satisfied.
+
+**Sub-arc A scope (operator-ratified at AskUserQuestion 2026-05-23 — "Sub-arc scope" = A only).** OD plan v2.15 → v2.16 single-clause amendment lifting the cross-axis-block status-claim at §0 (c) clause. U-OD-51 transitions from cross-axis-blocked → implementation-ready at plan layer. Plan-body Depends-on relation `[U-CP-62 (cross-axis: CP)]` preserved verbatim (the DAG dependency itself remains canonical regardless of upstream landed-vs-bounded state; what lifts is the §0 status-block orchestration-time block-claim). No AC change, no signature change, no spec change.
+
+**Artifact landed.** `design-substrate/Implementation_Plan_Operational_Discipline_v2_16.md` — 1 amendment site (§0 (c) clause single-clause delta); 4 downstream absorption pointers (workspace CLAUDE.md + harness-od CLAUDE.md preservation + Phase 7b cluster-open authorization for U-OD-51 + Sub-arc B carry-forward).
+
+**Remaining Sub-arc A landing event.** U-OD-51 implementation arc at next `phase-7-implementation` skill activation against OD plan v2.16. Carrier: `PauseResumeAuditPayload` dataclass extending `AuditPayload` with 8 pause/resume-specific fields per OD spec v1.9 §C-OD-30.2 + Pattern-P1 byte-exact alignment with CP spec v1.11 §26.4 (U-CP-65 producer-side). Implementation arc landing additionally enables U-CP-72 `pause:` + `resume:` branch un-STRIKE at `cp_audit_to_od_audit` converter (per fork §3 partial-land table) — would advance H_T-CP-22 PARTIAL → RETIRE-READY at the workflow_driver pause-event invocation level (per batch-11 §5 H_T-CP-22 gate).
+
+**Sub-arc B status (unchanged).** CostRecordAuditPayload authoring at OD spec + CXA v2.9 amendment + U-OD-41 signature revision remain owed per §2.2. Operator preference (i) revise-U-OD-41-signature noted at AskUserQuestion 2026-05-23 — when Sub-arc B opens, U-OD-41 signature `_project_cost_record_to_audit_entry(attached: SpanCostRecord) -> CPAuditLedgerEntry` revises to return `CostRecordAuditPayload`; no new dedicated AuditPayload-author unit. Recorded for Sub-arc B opening arc per fork §6 ambiguity resolution.
+
+**Status post-§8.** OPEN → PARTIAL-RESOLVED → **partially-advanced-Sub-arc-A** (cross-axis-block lift at plan layer absorbed; Sub-arc A implementation landing pending; Sub-arc B carry-forward intact). The fork remains OPEN as a multi-arc cascade tracker; FULLY-RESOLVED routes at Sub-arc A implementation + Sub-arc B full authoring + landing.
