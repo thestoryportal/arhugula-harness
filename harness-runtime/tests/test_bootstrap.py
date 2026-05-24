@@ -583,7 +583,8 @@ def test_freeze_raises_incomplete_when_required_field_none() -> None:
     assert "mcp_namespace_emitter" in excinfo.value.missing_fields
     assert "memory_tool_registry" in excinfo.value.missing_fields
     assert "pause_requested_flag" in excinfo.value.missing_fields
-    assert len(excinfo.value.missing_fields) == 38
+    assert "resume_context_holder" in excinfo.value.missing_fields
+    assert len(excinfo.value.missing_fields) == 39
 
 
 def test_bootstrap_stage_complete_event_is_frozen() -> None:

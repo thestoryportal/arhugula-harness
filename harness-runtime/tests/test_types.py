@@ -157,6 +157,10 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         # per runtime spec v1.21 §4 + §14.14.3 (CP composer authoring arc).
         "pause_resume_protocol",
         "pause_requested_flag",
+        # U-RT-94 (v2.24) — ResumeContextHolder sidecar for one-shot
+        # ResumeContext delivery across pause-resume cycle (runtime spec v1.25
+        # §4 C-RT-04 NEW field row + §14.8.8.9 carrier).
+        "resume_context_holder",
     }
     actual = set(HarnessContext.model_fields.keys())
     assert actual == expected, f"missing: {expected - actual}; extra: {actual - expected}"

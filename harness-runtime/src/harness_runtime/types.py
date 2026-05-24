@@ -117,6 +117,9 @@ from harness_runtime.lifecycle.pause_resume_protocol_types import (
 # U-RT-87 — PauseResumeProtocol class carrier import (per spec v1.21 §4
 # C-RT-04 field-table extension). Class body landed at U-CP-62 cluster 10-CP-B.
 from harness_cp.pause_resume_protocol import PauseResumeProtocol
+# U-RT-94 — ResumeContextHolder sidecar import (per spec v1.25 §4 C-RT-04
+# NEW field row + §14.8.8.9 carrier definition).
+from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
 
 __all__ = [
     "AuditLedgerWriter",
@@ -1232,6 +1235,19 @@ class HarnessContext(BaseModel):
     # per-step pre-entry pause-trigger detection branch False arm).
     # See §14.14.1 + plan v2.20 U-RT-87 AC #2.
     pause_resume_protocol: PauseResumeProtocol | None = None
+
+    # U-RT-94 — Runtime-internal sidecar carrier for one-shot ResumeContext
+    # delivery across the pause-resume cycle. Bound at stage 5 LOOP_INIT to
+    # an empty holder (``ResumeContextHolder()`` with ``_current_context = None``
+    # default). Driver-side resume entry-point per CP spec v1.16 §26.8.5 calls
+    # ``ctx.resume_context_holder.set(resume_context)`` after operator-supplied
+    # ``attempt_resume(..., resume_context=...)`` ingestion. Runtime composer
+    # at §14.8.8.5 resumed-step gate-evaluation consumes via
+    # ``ctx.resume_context_holder.consume_and_clear()`` (atomic one-shot
+    # read-and-clear). NOT operator-supplied at RuntimeConfig — the holder is
+    # a runtime-loop carrier, not deployment-time configuration. Per spec
+    # v1.25 §4 C-RT-04 + §14.8.8.9.
+    resume_context_holder: ResumeContextHolder
 
     # Stage 5 LOOP_INIT.
     override_evaluator: PerStepOverrideEvaluator

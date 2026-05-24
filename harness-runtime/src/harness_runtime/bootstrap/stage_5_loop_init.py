@@ -48,6 +48,7 @@ from harness_runtime.bootstrap.factories.memory_tool_registry_factory import (
 from harness_runtime.bootstrap.factories.pause_resume_protocol_factory import (
     materialize_pause_resume_protocol_stage,
 )
+from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
 from harness_runtime.bootstrap.factories.runtime_tool_dispatcher_factory import (
     materialize_runtime_tool_dispatcher_stage,
 )
@@ -349,4 +350,18 @@ async def execute(
     ctx.pause_resume_protocol = await materialize_pause_resume_protocol_stage(
         config, ctx
     )
+
+    # U-RT-94 (runtime spec v1.25 §14.8.8.9 + §4 C-RT-04): ResumeContextHolder
+    # sidecar carrier for one-shot ResumeContext delivery across the
+    # pause-resume cycle. Bound unconditionally at stage 5 LOOP_INIT to an
+    # empty holder regardless of operator-supply at RuntimeConfig (the holder
+    # is a runtime-loop carrier, NOT deployment-time configuration; even when
+    # ``ctx.pause_resume_protocol is None``, the holder is still bound but
+    # unreachable in the durable-async path per §14.8.8.1 step 0 precondition).
+    # Driver-side resume entry-point sets the holder via
+    # ``ctx.resume_context_holder.set(resume_context)`` after operator-supplied
+    # ``attempt_resume(..., resume_context=...)`` ingestion (CP spec v1.16
+    # §26.8.5). Runtime composer at §14.8.8.5 consumes via
+    # ``ctx.resume_context_holder.consume_and_clear()`` (atomic one-shot).
+    ctx.resume_context_holder = ResumeContextHolder()
 

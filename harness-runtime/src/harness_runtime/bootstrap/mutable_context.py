@@ -146,6 +146,7 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "per_server_trust_evaluator",
     "mcp_namespace_emitter",
     "memory_tool_registry",
+    "resume_context_holder",
 )
 
 
@@ -287,6 +288,19 @@ class _MutableHarnessContext:
     ``memory_tool_registry``; the frozen ``HarnessContext.pause_resume_protocol``
     field carries the narrowed ``PauseResumeProtocol | None`` class surface."""
 
+    resume_context_holder: Any = None
+    """U-RT-94 — Runtime-internal sidecar carrier for one-shot ResumeContext
+    delivery across the pause-resume cycle (runtime spec v1.25 §14.8.8.9
+    + §4 C-RT-04 NEW field row). Bound at stage 5 LOOP_INIT to an empty
+    holder (``ResumeContextHolder()`` with ``_current_context = None``
+    default). REQUIRED on the frozen ``HarnessContext`` (unconditionally
+    bound regardless of operator-supply at RuntimeConfig — the holder is a
+    runtime-loop carrier, not deployment-time configuration); listed in
+    ``_REQUIRED_FIELDS``. Typed ``Any`` on the mutable builder per the same
+    Protocol-vs-concrete-narrowing pattern as ``pause_resume_protocol`` +
+    ``validator_framework``; the frozen ``HarnessContext.resume_context_holder``
+    field carries the narrowed ``ResumeContextHolder`` class surface."""
+
     validator_framework: Any = None
     """U-RT-84 — Validator framework (CP spec v1.11 §25
     ``ConcreteValidatorFramework`` / ``ValidatorFramework`` Protocol). Bound at
@@ -352,6 +366,7 @@ class _MutableHarnessContext:
             mcp_namespace_emitter=self.mcp_namespace_emitter,
             memory_tool_registry=self.memory_tool_registry,
             validator_framework=self.validator_framework,
+            resume_context_holder=self.resume_context_holder,
         )
         self.frozen = ctx
         return ctx

@@ -92,10 +92,11 @@ def test_required_fields_count_includes_four_new() -> None:
     # (was 32 at v1.14; 36 at v1.16 post U-RT-72; 37 at v1.17 post U-RT-80
     # adds `memory_tool_registry` per spec §14.12 C-RT-22 + §4 C-RT-04;
     # 38 at v1.21 post U-RT-87 adds `pause_requested_flag` per spec §14.14.3
-    # sibling-pattern to `drained_flag`).
+    # sibling-pattern to `drained_flag`; 39 at v1.25 post U-RT-94 adds
+    # `resume_context_holder` per spec §4 C-RT-04 + §14.8.8.9 NEW carrier).
     from harness_runtime.bootstrap.mutable_context import _REQUIRED_FIELDS
 
-    assert len(_REQUIRED_FIELDS) == 38
+    assert len(_REQUIRED_FIELDS) == 39
     for new_field in (
         "mcp_client_host",
         "tool_dispatcher",
