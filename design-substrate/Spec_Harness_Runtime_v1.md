@@ -1,4 +1,46 @@
-# Specification — Harness Runtime v1.17
+# Specification — Harness Runtime v1.18
+
+## Change-note (v1.17 → v1.18)
+
+**Scope of revision.** Class 1 fork resolution apply pass per `.harness/class_1_fork_validator_composer_arc_stage_4_absence.md` §3.1 Reading A (operator-ratified 2026-05-24, this session, post-batch-16 close at HEAD `1c55138`). The fork surfaced H_T-CP-21 binding-chain absence at HEAD: production `HarnessContext.validator_framework: object | None = None` field exists in code at `harness-runtime/src/harness_runtime/types.py:1157` without any spec materialization contract, no `materialize_validator_framework_*_stage` factory, and no `RuntimeConfig.validator_framework_config` operator-supply field. The `workflow_driver.py:668` branch `if ctx.validator_framework is not None:` is a dead branch in production — batch-15 DOWN-classified H_T-CP-21 from RETIRE-READY → PARTIAL on this empirical finding. Reading A operator ratification: **minimal stage-factory landing only** — author the stage-4 OD-bucket factory contract sufficient to bind an operator-supplied `validator_framework` at production `HarnessContext`; do NOT touch the §14.8.2 validator-composer arc deferrals (VALIDATOR_ESCALATION foreclosure at step 3; full 4-axis `_hitl_required` composition at step 4c; cross-trust-boundary palette restriction at step 4d) — those remain deferred to a future Reading B full-arc opening.
+
+**Source of fix.** `.harness/class_1_fork_validator_composer_arc_stage_4_absence.md` §3.1 Reading A RATIFIED 2026-05-24 (operator). Predecessor classification arc: batch-15 RETIRE-READY → PARTIAL DOWN-classification at `f373c93` per Reading D audit. The Reading A arc opens the design-phase channel to restore H_T-CP-21 to RETIRE-READY/RETIRED via the operator-opt-in pattern (mirrors batch-10 H_T-CP-18 + batch-13 H_T-CP-16 RETIRE-READY shape: production execution path branches on operator-supplied config with empty-sentinel default; RETIRE-READY at factory landing; RETIRED at operator-config-non-default + e2e exercise).
+
+**Amendments.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§3 C-RT-02 RuntimeConfig field table** | NEW optional field `validator_framework_config: ValidatorFrameworkConfig \| None` (default `None` → factory returns `None` → driver branch `if ctx.validator_framework is not None:` evaluates False; operator opt-out is the default). Ingested at stage 4 by `materialize_validator_framework_stage` factory per §14.13.3. Existing fields preserved verbatim. | Fork doc §3.1 Reading A — operator-supply opt-in field at runtime config layer |
+| **§4 C-RT-04 HarnessContext field table** | NEW field `validator_framework: ValidatorFramework \| None` (stage 4 OD bucket; CP spec v1.11 §25 carrier `ConcreteValidatorFramework` per C-CP-25 §25.3). Field narrows the v1.17-era untyped `object \| None` carrier at `harness-runtime/.../types.py:1157` to the typed Protocol surface from CP spec. Existing fields preserved verbatim. | Fork doc §3.1 Reading A — Context field needs materialization contract reference for workflow_driver.py:668 hook consumption |
+| **§14.13 (NEW) C-RT-23 ValidatorFramework materialization** | NEW contract surface authoring the stage-4 factory `materialize_validator_framework_stage(config: RuntimeConfig) → ValidatorFramework \| None` consuming `config.validator_framework_config` and producing the operator-supplied framework instance (or `None` on opt-out default). `ValidatorFrameworkConfig` sub-model authored as **empty-marker dataclass** at §14.13.1 per the `SandboxDecisionPolicy` precedent (`.harness/class_1_fork_sandbox_decision_policy_phantom_cite.md` Q1=C-i ratification 2026-05-22) — internal operator-supply shape (validator catalog, per-validator config, validator-discovery mechanism) deferred to implementation discretion at C-RT-23 landing arc per FM-2 no-extension discipline. Failure-mode taxonomy adds 1 new fail class: `RT-FAIL-VALIDATOR-STAGE-MATERIALIZE`. Construction at stage 4 OD bucket alongside `tracer_provider` + `audit_writer` (validator span emission per OD spec v1.9 §C-OD-29.1 `validator.*` namespace depends on tracer; validator audit entries flow through audit_writer). Operator-opt-in RETIRE-READY pattern documented per fork doc §3.1: structural criterion-B MET at factory landing + binding-chain materialization (RuntimeConfig field + stage factory + driver invocation `workflow_driver.py:668` already landed at U-CP-61 commit `9b009d3`); full RETIRED gates on operator-bound `validator_framework_config` non-default + operator-supplied `ValidatorFramework` instance + e2e exercise at follow-on retirement-batch arc per batch-14 §6(a) close pattern + batch-16 §6 verification-shape sharpening discipline. | Fork doc §3.1 Reading A — minimal stage-factory landing only |
+
+**Sections preserved verbatim from v1.17.** All v1.17 content outside the three amendment sites above preserved unchanged. §1 + §2 + §3 (table preserved; only `validator_framework_config` field appended) + §4 (table preserved; only `validator_framework` field appended) + §5–§14.4 + §14.5 + §14.5.1 + §14.6 + §14.7 + §14.8 (including §14.8.2 step 3 VALIDATOR_ESCALATION foreclosure + step 4c full 4-axis `_hitl_required` deferral + step 4d cross-trust-boundary palette restriction deferral — ALL PRESERVED VERBATIM per Reading A scope discipline) + §14.9 + §14.10 + §14.11 + §14.12 + §15 + §16 + §17 + §17.1 all preserved. The v1.17 + v1.16 + v1.15 + ... + v1 chain all preserved.
+
+**Status posture.** Proposed (v1.17) → **Proposed (v1.18)**. v1.18 is an additive contract authoring (NEW §14.13) + minor amendment (NEW RuntimeConfig field + NEW HarnessContext field row). No v1.17 contract removed; no acceptance criterion change at preserved sections. NO validator-composer arc deferrals resolved at v1.18 — those remain deferred to a future Reading B full-arc opening per fork doc §3.2 (currently OPEN; operator-discretion routing).
+
+**Downstream absorption owed (post-v1.18).**
+(a) Workspace `CLAUDE.md` §2.3 runtime row version bump (v1.17 → v1.18); co-published at plan revision pass arc OR batch-17 retirement-event arc (whichever fires first).
+(b) `Implementation_Plan_Harness_Runtime_v2_16.md` → v2.17 via `implementation-planner` revision-pass: NEW L9-decies (or naming-equivalent) 3-unit cluster decomposing the C-RT-23 landing — U-RT-83 (`RuntimeConfig.validator_framework_config` field landing + `ValidatorFrameworkConfig` empty-marker sub-model) + U-RT-84 (`materialize_validator_framework_stage` factory + stage-4 wiring + `HarnessContext.validator_framework` field type narrowing) + U-RT-85 (real-bootstrap e2e against operator-supplied `ValidatorFramework` instance, analogous to U-RT-82 for CP-16 + U-RT-86 for CP-18+AS-2 e2e shapes). Separate skill invocation arc post-spec-clearance.
+(c) `Cross_Axis_Composition_Document_v2_8.md` unchanged — the `validator_framework` ctx-binding consumes already-landed CP spec v1.11 §25 `ConcreteValidatorFramework` carrier without new cross-axis composition seam. ZERO cross-axis cascade per fork doc §5.
+(d) CP spec v1.11 unchanged at v1.18 — the `ConcreteValidatorFramework` Protocol body at C-CP-25 §25.3 is the canonical Protocol surface; runtime spec §14.13 consumes it without amendment.
+(e) OD spec v1.9 unchanged at v1.18 — the `validator.*` span schema at §C-OD-29.1 is the canonical observability surface; runtime composer at workflow_driver.py:668 emits per OD-canonical attribute set without OD-side amendment.
+(f) Filing footer staleness (carried adjacent defect from v1.13..v1.17) NOT patched per FM-2 no-extension discipline.
+
+**Adjacent defects surfaced (not patched per FM-2 no-extension discipline).**
+
+(i) **VALIDATOR_ESCALATION foreclosure at §14.8.2 step 3.** Preserved verbatim per Reading A scope. Resolution gates on Reading B full-arc opening. Operator-discretion routing per fork doc §3.2.
+
+(ii) **Full 4-axis `_hitl_required` composition deferral at §14.8.2 step 4c.** Preserved verbatim per Reading A scope. Resolution gates on Reading B full-arc opening (C-CP-19 §19.1 composition). Operator-discretion routing per fork doc §3.2.
+
+(iii) **Cross-trust-boundary palette restriction deferral at §14.8.2 step 4d + NOTE 6-iv (§14.8.7).** Preserved verbatim per Reading A scope. Resolution gates on Reading B full-arc opening (C-CP-19 §19.4 composition). Operator-discretion routing per fork doc §3.2.
+
+(iv) **`ValidatorFrameworkConfig` internal shape.** Authored as empty-marker dataclass at §14.13.1 per SandboxDecisionPolicy precedent. Internal operator-supply shape (validator catalog mechanism, per-validator config, validator-discovery — class-qualified-name vs entry-point vs callable-factory) deferred to implementation discretion at C-RT-23 landing arc. Surfaced as adjacent finding; NOT patched per FM-2.
+
+(v) **Stage-4 ordering within OD bucket.** §14.13.3 specifies stage 4 placement but does not pin sub-ordering within stage 4 (`tracer_provider` + `audit_writer` + `cost_chain` + `collector_daemon` are sibling stage-4 bindings). Implementation discretion; the validator framework requires `tracer_provider` constructed (for `validator.*` span emission) and `audit_writer` constructed (for validator audit entries) — both materialized within stage 4 by the time `materialize_validator_framework_stage` runs.
+
+(vi) **Filing footer staleness (carried).** Pre-existing carry-forward from v1.13..v1.17 noted at prior change-notes. NOT patched per FM-2.
+
+---
 
 ## Change-note (v1.16 → v1.17)
 
@@ -710,6 +752,7 @@ The orchestrator (`harness_runtime.bootstrap.__init__`) executes the 9 stages fr
 | `trust_policy` | `TrustPolicy | None` (CP spec v1.11 §27 carrier) | no (default `None` → uses `TrustPolicy.default()`) | Operator-supplied per-MCP-server trust policy ingested at stage 5 by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3; consumed by `PerServerTrustEvaluator` bound to `ctx.per_server_trust_evaluator`. Added at v1.15 per U-RT-68 fork Q2=B2 ratification. |
 | `sandbox_decision_policy` | `SandboxDecisionPolicy | None` (harness-core carrier) | no (default `None` → uses `SandboxDecisionPolicy.default()`) | Operator-supplied sandbox-tier decision policy ingested at stage 5 by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3; consumed by `RuntimeToolDispatcher` for tier-floor evaluation per §14.9.1 step 5. Added at v1.15 per U-RT-68 fork Q2=B2 ratification; carrier home re-pointed from `AS spec v1.3 §15 carrier` → `harness-core carrier` at v1.16 per Class 1 fork resolution at `.harness/class_1_fork_sandbox_decision_policy_phantom_cite.md` (operator-ratified Q1=C-i 2026-05-22). |
 | `memory_tool_backend_config` | `MemoryToolBackendConfig | None` (harness-runtime sub-model per §14.12) | no (default `None` → `MemoryToolStorageBackend.FILESYSTEM` at LOCAL_DEV per `harness_as.anthropic_graceful_degradation.memory_tool_storage_backend` resolver) | Operator-supplied Memory tool storage-backend selection override. `None` defers backend resolution to the deployment-surface-keyed graceful-degradation resolver at `harness_as.anthropic_graceful_degradation.memory_tool_storage_backend(config.deployment_surface)`. Non-`None` overrides the resolver for explicit backend pinning (e.g., S3 at LOCAL_DEV for test-fixture purposes; encrypted-filesystem at MANAGED_CLOUD for additional discipline). Ingested at stage 5 by `materialize_memory_tool_registry_stage` factory per §14.12.3. Consumed by `MemoryToolRegistry.resolve_backend(...)` per §14.12.1. Added at v1.17 per `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §16 §6.A v2 A.iv ratification (2026-05-23). |
+| `validator_framework_config` | `ValidatorFrameworkConfig | None` (harness-runtime sub-model per §14.13) | no (default `None` → factory returns `None` → `ctx.validator_framework is None`; driver branch `if ctx.validator_framework is not None:` at `workflow_driver.py:668` evaluates False; operator opt-out is the default) | Operator-supplied validator framework opt-in signal. `None` produces a no-validator `HarnessContext` (the production state at HEAD pre-v1.18; preserves backward-compatible behavior for callers who do not supply a validator framework). Non-`None` triggers the stage-4 factory to construct the operator-supplied `ValidatorFramework` instance per §14.13.1 + §14.13.3. Ingested at stage 4 OD bucket by `materialize_validator_framework_stage` factory per §14.13.3. Consumed by `ConcreteValidatorFramework.evaluate(...)` at the `validator.*` post-dispatch hook in `workflow_driver.py:668` per C-CP-25 §25.3.3.4. The internal shape of `ValidatorFrameworkConfig` is empty-marker at v1.18 per §14.13.1 (operator-supply mechanism — validator catalog, per-validator config, discovery mechanism — deferred to implementation discretion at C-RT-23 landing arc per FM-2 no-extension discipline). Added at v1.18 per `.harness/class_1_fork_validator_composer_arc_stage_4_absence.md` §3.1 Reading A ratification (2026-05-24). |
 
 **Invariants.**
 
@@ -779,6 +822,7 @@ The orchestrator (`harness_runtime.bootstrap.__init__`) executes the 9 stages fr
 | `per_server_trust_evaluator` | `PerServerTrustEvaluator` (CP spec v1.11 §27 carrier) | 5 | Per-MCP-server trust gate evaluator consumed by `RuntimeToolDispatcher` per §14.9.1 step 2. Materialized by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3 with `RuntimeConfig.trust_policy` ingestion. Added at v1.15 per U-RT-68 fork Q2=B2 ratification. |
 | `mcp_namespace_emitter` | `MCPClientNamespaceEmitter` (CP spec v1.11 §27 carrier) | 5 | `mcp.*` 7-attribute namespace emitter for `mcp.tool.call` spans per §14.9.1 step 7. Materialized by `materialize_runtime_tool_dispatcher_stage` factory per §14.9.3. Added at v1.15 per U-RT-68 fork Q2=B2 ratification. |
 | `memory_tool_registry` | `MemoryToolRegistry` (harness-runtime-defined, C-RT-22 §14.12.1) | 5 | Memory tool storage-backend registry. Resolves a `MemoryToolStorageBackendProtocol` implementation per `RuntimeConfig.deployment_surface` + optional `RuntimeConfig.memory_tool_backend_config` override. Consumed by C-RT-15 §14.5.1 callback-injection composer-step when `step.step_payload.tools` contains the Anthropic Memory tool definition (`tool type "memory_20250818"` per ADR-D3 §1.1 #11). Materialized by `materialize_memory_tool_registry_stage` factory per §14.12.3. Added at v1.17 per `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §16 §6.A v2 A.iv ratification (2026-05-23). |
+| `validator_framework` | `ValidatorFramework | None` (CP spec v1.11 §25 carrier — Protocol surface at `harness_cp.validator_framework_types.ValidatorFramework`; concrete `ConcreteValidatorFramework` body at `harness-cp/src/harness_cp/validator_framework.py:130` per C-CP-25 §25.3) | 4 | Validator framework instance for `validator.*` post-dispatch hook consumption at `workflow_driver.py:668`. `None` value (the default when `RuntimeConfig.validator_framework_config is None`) signals operator opt-out; the driver hook branch `if ctx.validator_framework is not None:` evaluates False and the post-dispatch validator-evaluation path is bypassed. Non-`None` value (when operator supplies `RuntimeConfig.validator_framework_config`) is the framework instance produced by `materialize_validator_framework_stage` per §14.13.3; the driver branch fires the 5-class outcome routing per C-CP-25 §25.3.3.4 (`PASS`/`PERMANENT_FAIL`/`ESCALATE_HITL`/`REVALIDATE`/`TRANSIENT_FAIL`). The field type at runtime spec v1.18 narrows the v1.17-era untyped `object | None` carrier at `harness-runtime/src/harness_runtime/types.py:1157` (carried as untyped per cross-axis-types-import-avoidance discipline) to the typed Protocol surface from CP spec. Materialized by `materialize_validator_framework_stage` factory per §14.13.3. Added at v1.18 per `.harness/class_1_fork_validator_composer_arc_stage_4_absence.md` §3.1 Reading A ratification (2026-05-24). |
 
 **Invariants.**
 
@@ -2404,6 +2448,159 @@ S3-backend e2e + ENCRYPTED_FILESYSTEM e2e + DATABASE e2e deferred to operator-di
 - **SDK tool-use → tool-result inner loop mechanism.** Per C-RT-15 §14.5.1 adjacent-defect (ii) enumeration: SDK-internal beta-feature handling (α) vs harness-authored inner loop (β) vs sibling-composer wrap (γ). Operator selects at implementation arc.
 - **Operator-defined backend introspection mechanism.** `MemoryToolStorageBackend.OPERATOR_DEFINED` requires class-qualified-name resolution at runtime; specific mechanism (e.g., `importlib.import_module` + `getattr` vs entry-point-based registration) is implementation discretion.
 - **Backend telemetry-attribution.** Whether storage backends themselves emit OTel spans (e.g., `memory.backend.s3.put`) is implementation discretion; the `memory.operation` span at the C-RT-22 callback boundary is normative; backend-internal observability is optional.
+
+---
+
+## §14.13 C-RT-23 — `materialize_validator_framework_stage` (new at v1.18)
+
+**Contract surface.** Bootstrap stage-4 OD-bucket factory + `ValidatorFrameworkConfig` empty-marker sub-model + binding contract to `HarnessContext.validator_framework`. Consumed by the existing `validator.*` post-dispatch hook at `workflow_driver.py:668` per C-CP-25 §25.3.3.4 (5-class outcome routing — `PASS` / `PERMANENT_FAIL` / `ESCALATE_HITL` / `REVALIDATE` / `TRANSIENT_FAIL`). The contract authors the missing runtime binding chain that batch-15 §1.2 surfaced as absent: the `HarnessContext.validator_framework` field has existed at `harness-runtime/src/harness_runtime/types.py:1157` since the C-CP-25 v1.10 absorption pass but with no stage-factory contract and no `RuntimeConfig` operator-supply field, the driver hook branch is unreachable from production bootstrap.
+
+**PRD enablement.** Completes the validator framework runtime binding chain: C-CP-25 §25.1 declares the `Validator` + `ValidatorResult` + `ValidatorEvaluation` + `ValidatorFramework` Protocol envelopes; §25.2 declares the `ValidatorFailClass` 5-class enum; §25.3 declares the `ConcreteValidatorFramework` body + `evaluate()` async method + `SyncValidatorFrameworkLike` Protocol + `SyncValidatorFrameworkFacade` sync-bridge + `materialize_sync_validator_framework_facade` factory; §25.3.3.4 declares the workflow_driver post-dispatch hook contract. C-RT-23 closes the missing runtime binding: a stage-4 factory that constructs the operator-supplied `ValidatorFramework` instance and binds it to `ctx.validator_framework`, enabling the C-CP-25 §25.3.3.4 driver hook to fire at production runtime. H_T-CP-21 substitution retirement criterion B becomes structural-criterion-B MET via factory wiring at the C-RT-23 landing arc per fork doc §3.1 Reading A operator-opt-in RETIRE-READY pattern.
+
+**ADR commitment(s) honored.** ADR-D5 v1.4 §Decision (validator-based evaluation primitive — runtime materializes the validator framework binding chain) + ADR-D3 v1.2 §Decision (validation-contract semantics composed at the workflow-step site via the operator-supplied validator framework — same library API as C-CP-25 §25).
+
+**Fork-resolution provenance.** `.harness/class_1_fork_validator_composer_arc_stage_4_absence.md` — Class 1 operator-ratified 2026-05-24 at this session, post-batch-16 close at HEAD `1c55138`. Reading A authorization: minimal stage-factory landing only. Predecessor classification arc: batch-15 H_T-CP-21 RETIRE-READY → PARTIAL DOWN-classification at `f373c93` per Reading D audit empirical bootstrap-binding-chain verification per ledger-v2 §2.1 line-33 strict-reading discipline. The Reading A arc opens the design-phase channel to restore H_T-CP-21 to RETIRE-READY/RETIRED via the operator-opt-in pattern.
+
+### §14.13.1 Architectural surfaces introduced
+
+**`ValidatorFrameworkConfig` (RuntimeConfig sub-model — empty-marker at v1.18):**
+
+```python
+@dataclass(frozen=True)
+class ValidatorFrameworkConfig:
+    """Operator-supplied validator framework opt-in marker.
+
+    v1.18 empty-marker per the `SandboxDecisionPolicy` precedent
+    (`.harness/class_1_fork_sandbox_decision_policy_phantom_cite.md` Q1=C-i
+    ratification 2026-05-22): the carrier shape is intentionally empty at
+    Reading A scope. Presence at `RuntimeConfig.validator_framework_config`
+    signals operator opt-in to the validator framework; absence (None default
+    at C-RT-02) signals operator opt-out and yields `ctx.validator_framework
+    is None`.
+
+    Internal operator-supply shape — validator catalog mechanism, per-validator
+    config, validator-discovery (class-qualified-name vs entry-point-based vs
+    operator-supplied callable-factory) — is **deferred to implementation
+    discretion** at C-RT-23 landing arc per FM-2 no-extension discipline. The
+    follow-on retirement-batch arc that closes H_T-CP-21 RETIRED requires the
+    operator to provide actual validator implementations via this config; the
+    `.default()` factory returns the empty marker for opt-out semantics.
+    """
+
+    @classmethod
+    def default(cls) -> "ValidatorFrameworkConfig":
+        """Return the empty-marker default. Equivalent to `None` at
+        `RuntimeConfig.validator_framework_config` per the opt-out shape."""
+        return cls()
+```
+
+**Path discipline.** No operator-supplied path arguments at v1.18 — the empty-marker shape carries no validator references. Path-discipline at the impl arc when the internal shape materializes: validator class-qualified-name resolution must use the same introspection-based discipline as `MemoryToolStorageBackend.OPERATOR_DEFINED` per §14.12.3 step 2 OPERATOR_DEFINED bullet.
+
+**`materialize_validator_framework_stage` factory (stage 4 OD bucket):**
+
+```python
+async def materialize_validator_framework_stage(
+    config: RuntimeConfig,
+) -> ValidatorFramework | None:
+    """Construct the stage-4 `ValidatorFramework` instance from operator-supplied
+    config, or return `None` when the operator has not opted in.
+
+    Per spec v1.18 §14.13.3 stage-4 factory contract + fork doc
+    `.harness/class_1_fork_validator_composer_arc_stage_4_absence.md` §3.1
+    Reading A ratification.
+
+    Returns
+    -------
+    ValidatorFramework | None
+        `None` when `config.validator_framework_config is None` — the operator
+        has not opted in; driver hook at `workflow_driver.py:668` will branch
+        to the dead-branch False arm. Non-`None` when the operator has supplied
+        a `ValidatorFrameworkConfig` instance — factory body constructs the
+        `ConcreteValidatorFramework` per CP spec v1.11 §25.3 from the config's
+        internal carrier (impl arc decides the construction body per §14.13.7
+        deferred items).
+    """
+    if config.validator_framework_config is None:
+        # Empty-sentinel branch. Operator opted out; `ctx.validator_framework`
+        # binds to None; driver hook dead branch at workflow_driver.py:668
+        # is unreachable per the False arm.
+        return None
+
+    # Operator opt-in branch. Construct ConcreteValidatorFramework per CP spec
+    # v1.11 §25.3 ConcreteValidatorFramework body. Construction body is
+    # implementation discretion at C-RT-23 landing arc per §14.13.7 — the
+    # spec-MUST is that the returned instance satisfies the CP-canonical
+    # `ValidatorFramework` Protocol (Mapping[str, Validator] + evaluate(...)
+    # async method).
+    raise NotImplementedError(
+        "ValidatorFrameworkConfig internal shape deferred to C-RT-23 landing "
+        "arc per §14.13.7 implementation discretion items."
+    )
+```
+
+### §14.13.2 Per-factory invocation discipline (factory body)
+
+Per-bootstrap invariants (when stage 4 OD bucket wires the validator framework binding):
+
+1. **Empty-sentinel default at opt-out.** When `config.validator_framework_config is None`, factory returns `None` without raising. This is the production-default state at v1.18 (no operator has opted in); `ctx.validator_framework` binds to `None` and the C-CP-25 §25.3.3.4 driver hook at `workflow_driver.py:668` branches to the False arm (existing behavior preserved verbatim per Reading A scope).
+2. **Single ValidatorFramework instance per bootstrap.** Stage 4 constructs at most one `ValidatorFramework` instance per `HarnessContext`. No per-step re-resolution. Operator config changes require process restart.
+3. **Construction body implementation discretion.** The body that materializes a `ConcreteValidatorFramework` from a non-None `ValidatorFrameworkConfig` is deferred to implementation discretion at the C-RT-23 landing arc per §14.13.7. The spec-MUST is: the returned instance MUST satisfy the CP-canonical `ValidatorFramework` Protocol (Mapping[str, Validator] + `evaluate(...)` async method per C-CP-25 §25.1); subclasses of `ConcreteValidatorFramework` are permitted; the factory MUST NOT bypass the CP-canonical Protocol.
+4. **No telemetry emission at factory body.** The factory itself does NOT emit OTel spans (the `validator.*` namespace per OD spec v1.9 §C-OD-29.1 fires at per-evaluation invocation at `workflow_driver.py:668` post-dispatch, not at framework construction). Construction-failure events surface as `RT-FAIL-VALIDATOR-STAGE-MATERIALIZE` per §14.13.4 with bootstrap rollback per C-RT-02.
+
+### §14.13.3 Lifecycle stage placement
+
+**Stage 4 (OD):** Bootstrap stage 4 wires the validator framework via NEW factory contract `materialize_validator_framework_stage(config: RuntimeConfig) → ValidatorFramework | None` (added at v1.18 per fork doc §3.1 Reading A ratification). Factory body per §14.13.2.
+
+**Stage 4 ordering.** The `materialize_validator_framework_stage` factory runs at stage 4 OD after `tracer_provider` construction (per C-RT-06) AND after `audit_writer` construction (per C-RT-04 stage-4 binding). Both prerequisites are sibling stage-4 bindings; the validator framework requires neither at construction time (the empty-sentinel default does not consult them), but operator-supplied non-empty construction MAY consume `ctx.tracer_provider` and `ctx.audit_writer` for runtime-side observability — implementation discretion at impl arc. Ordering within stage 4: `tracer_provider` → `audit_writer` → `cost_chain` → `collector_daemon` → `materialize_validator_framework_stage` (validator framework as the final stage-4 binding; this places it after all OD-side telemetry primitives are available for the framework instance to consume).
+
+**Stage-5 driver-hook fires.** At workflow execution time (post-stage-7 INGRESS_ACCEPT), the C-CP-25 §25.3.3.4 driver hook at `workflow_driver.py:668` fires per-step post-dispatch:
+
+```python
+# harness-cp/src/harness_cp/workflow_driver.py:668 (existing at HEAD, unchanged at v1.18)
+if ctx.validator_framework is not None:
+    # 5-class outcome routing per C-CP-25 §25.3.3.4
+    # ... validator.* span emission per OD spec v1.9 §C-OD-29.1 ...
+```
+
+When `ctx.validator_framework is not None` (operator-opt-in), the True arm fires; the framework's `evaluate(...)` async method is invoked; the 5-class `ValidatorFailClass` outcome is routed per the established C-CP-25 §25.3.3.4 contract (no spec amendment required at v1.18 — the driver hook contract preserved verbatim).
+
+### §14.13.4 Failure-mode taxonomy
+
+1 new fail class added to §14 runtime-local fail-class taxonomy:
+
+| Fail class | Trigger | Permanent? |
+|---|---|---|
+| `RT-FAIL-VALIDATOR-STAGE-MATERIALIZE` | `materialize_validator_framework_stage` cannot construct the `ValidatorFramework` instance (e.g., operator-supplied `ValidatorFrameworkConfig` references unavailable validator class; class-qualified-name fails introspection at impl arc; required Protocol method missing from operator-supplied implementation) | YES (bootstrap aborts) |
+
+The `RT-FAIL-VALIDATOR-STAGE-MATERIALIZE` class fires only on the non-`None` factory branch (operator opt-in). The opt-out branch (`config.validator_framework_config is None` → factory returns `None`) is unconditional and cannot raise this fail class. Bootstrap rollback per C-RT-02 reverses stages 0..3b on this failure.
+
+### §14.13.5 Invariants
+
+1. **Validator framework resolved exactly once per bootstrap.** Stage 4 resolves; bound to `ctx.validator_framework`. No re-resolution at dispatch-time. Operator framework override changes require process restart.
+2. **Empty-sentinel default preserves backward-compatible behavior.** When `config.validator_framework_config is None` (the default for callers who do not supply a validator framework — the production state at HEAD pre-v1.18), `ctx.validator_framework` binds to `None`; the `workflow_driver.py:668` hook branch is unreachable; no validator path fires. Backward-compatible with all pre-v1.18 caller code.
+3. **CP-canonical Protocol satisfaction.** When the factory returns a non-`None` `ValidatorFramework` instance, the instance MUST satisfy the CP-canonical `ValidatorFramework` Protocol (Mapping[str, Validator] + `evaluate(self, step, ...) -> ValidatorEvaluation` async method per C-CP-25 §25.1). Enforced via `@runtime_checkable` introspection at the factory body (raises `RT-FAIL-VALIDATOR-STAGE-MATERIALIZE` on Protocol-conformance failure).
+4. **No validator-composer arc resolutions at v1.18.** The §14.8.2 step 3 VALIDATOR_ESCALATION foreclosure + step 4c full 4-axis `_hitl_required` composition deferral + step 4d cross-trust-boundary palette restriction deferral are ALL preserved verbatim. C-RT-23 lands only the binding-chain factory; the broader validator-composer arc (Reading B at fork doc §3.2) remains OPEN per operator-discretion routing.
+
+### §14.13.6 X-AL-2 retirement implications (v1.18 → retirement event prerequisites)
+
+The C-RT-23 contract specifies the binding-chain seam that — alongside the C-CP-25 §25.3.3.4 driver hook already landed at U-CP-61 commit `9b009d3` + the operator-bound `validator_framework_config` non-default at RuntimeConfig — closes H_T-CP-21 substitution retirement structural-criterion-B per fork doc §3.1 Reading A operator-opt-in pattern (mirrors batch-10 H_T-CP-18 + batch-12 H_T-AS-2 + batch-13 H_T-CP-16 RETIRE-READY shape).
+
+Full RETIRED transition (PARTIAL → RETIRE-READY → RETIRED) gates on:
+
+1. **C-RT-23 stage-factory landing at impl arc** (PARTIAL → RETIRE-READY) — the L9-decies (or naming-equivalent) 3-unit cluster at runtime plan v2.17 lands U-RT-83 (`RuntimeConfig.validator_framework_config` field + `ValidatorFrameworkConfig` empty-marker sub-model) + U-RT-84 (`materialize_validator_framework_stage` factory + stage-4 wiring + `HarnessContext.validator_framework` field type narrowing) + U-RT-85 (real-bootstrap e2e against operator-supplied `ValidatorFramework` instance). RETIRE-READY recorded at batch-N filing per batch-14 §6(a) close pattern.
+2. **Operator-bound `validator_framework_config` non-default + e2e exercise** (RETIRE-READY → RETIRED) — the operator supplies a real `ValidatorFrameworkConfig` instance at production `RuntimeConfig`; U-RT-85-shape e2e exercises the wired path end-to-end against a real `ConcreteValidatorFramework` instance with non-no-op `Validator` implementations; the `workflow_driver.py:668` True-arm fires; the 5-class outcome routing exercises at least the `PASS` outcome (other outcomes deferred to operator-discretion follow-on test fixtures). RETIRED recorded at batch-N+1 filing per the close-pattern + batch-16 §6 verification-shape sharpening discipline ("driver invocation succeeds end-to-end against a real substrate").
+
+**Cross-axis cascade closures at C-RT-23 landing.** Per fork doc §5 (cross-axis impact): ZERO cross-axis cascade introduced by C-RT-23. The `validator_framework` ctx-binding consumes already-landed CP spec v1.11 §25 `ConcreteValidatorFramework` carrier without new CXA edge introduction. CXA v2.8 unchanged; CP spec v1.11 unchanged; OD spec v1.9 unchanged.
+
+### §14.13.7 Deferred to implementation discretion
+
+- **`ValidatorFrameworkConfig` internal shape.** v1.18 authors empty-marker only. The internal operator-supply shape (validator catalog mechanism — explicit list vs entry-point-based discovery vs operator-supplied callable-factory; per-validator config — validator class-qualified-name + params; validator-discovery resolution — `importlib.import_module` + `getattr` vs entry-point-based registration vs operator-supplied factory function) is implementation discretion at the C-RT-23 landing arc per FM-2 no-extension discipline. The follow-on retirement-batch arc that closes H_T-CP-21 RETIRED requires the operator to provide actual validator implementations via the materialized config shape.
+- **Factory body construction.** v1.18 specifies the opt-out branch (return None) + the opt-in branch contract (return a `ValidatorFramework` Protocol-satisfying instance). The construction body that translates a non-None `ValidatorFrameworkConfig` into a `ConcreteValidatorFramework` instance is implementation discretion — the impl arc chooses how the config carriers are mapped to `Validator` instances and how the `ConcreteValidatorFramework` constructor is invoked.
+- **Per-framework concurrency model.** Async-only per CP spec v1.11 §25.3 (`evaluate(...)` async); specific concurrency primitives (per-validator locks, validator catalog mutability, etc.) are implementation discretion.
+- **VALIDATOR_ESCALATION trigger source.** EXPLICIT POINTER: VALIDATOR_ESCALATION emission from the validator framework to the HITL gate composer per §14.8.2 step 3 foreclosure is **deferred to a future Reading B full-arc opening** per fork doc §3.2. v1.18 explicitly disclaims VALIDATOR_ESCALATION resolution — the §14.8.2 step 3 foreclosure clause "v1.9 MVP `VALIDATOR_ESCALATION` emission is foreclosed: composer MUST NOT raise validator-escalation gate; the placement-trigger evaluator returns `no-placement-match` for `VALIDATOR_ESCALATION` at v1.9. Validator-composer arc lands the trigger source." is PRESERVED VERBATIM at v1.18.
+- **4-axis `_hitl_required` composition.** EXPLICIT POINTER: full 4-axis composition (C-CP-19 §19.1) per §14.8.2 step 4c is **deferred to a future Reading B full-arc opening** per fork doc §3.2. v1.18 explicitly disclaims; §14.8.2 step 4c v1.9 MVP "treats placement.requires_hitl as the authoritative trigger" PRESERVED VERBATIM.
+- **Cross-trust-boundary palette restriction.** EXPLICIT POINTER: cross-trust-boundary palette restriction per C-CP-19 §19.4 + §14.8.2 step 4d NOTE 6-iv (§14.8.7) is **deferred to a future Reading B full-arc opening** per fork doc §3.2. v1.18 explicitly disclaims; §14.8.2 step 4d "v1.9 MVP uses the full palette unconditionally" PRESERVED VERBATIM.
+- **Reading B full-arc opening.** When operator authorizes Reading B at a future arc per fork doc §3.2, the C-RT-23 contract MAY be extended (or a successor C-RT-NN contract authored) to consume the broader validator-composer arc surfaces. v1.18 explicitly disclaims Reading B scope per Reading A operator authorization.
 
 ---
 
