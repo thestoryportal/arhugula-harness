@@ -248,3 +248,78 @@ def test_workflow_pause_reason_class_identity_distinct() -> None:
     from harness_cp.pause_resume_protocol import PauseReason as EngineLayerPauseReason
 
     assert WorkflowPauseReason is not EngineLayerPauseReason
+
+
+# --- §26.8 ResumeContext carrier (v2.21 AC #6) -----------------------------
+
+
+def _build_hitl_result():  # type: ignore[no-untyped-def]
+    """Construct a populated HITLResult for ResumeContext field-population tests."""
+    from harness_core.identity import EntryID
+
+    from harness_cp.hitl_placement import HITLResult
+    from harness_cp.hitl_response_palette import HITLResponse
+
+    return HITLResult(
+        response=HITLResponse.RESPOND,
+        response_text="approve",
+        timestamp="2026-05-24T00:00:00Z",
+        audit_ledger_entry_id=EntryID("e-rc-1"),
+        response_summary_hash="a" * 64,
+    )
+
+
+def test_resume_context_default_hitl_response_is_none() -> None:
+    """AC #6: ResumeContext defaults `hitl_response` to None (backward-compat).
+
+    The default-None posture preserves identical control flow for existing
+    callers (L9-undecies `workflow_driver.py:477` async-bridge invocation
+    passes no `resume_context` → receives None at `attempt_resume`)."""
+    # Import deferred until pause_resume_protocol is loaded so model_rebuild fires.
+    from harness_cp.pause_resume_protocol import ResumeContext  # noqa: F401
+    from harness_cp.pause_resume_protocol_types import ResumeContext as _RC
+
+    rc = _RC()
+    assert rc.hitl_response is None
+
+
+def test_resume_context_accepts_populated_hitl_response() -> None:
+    """AC #6: ResumeContext accepts a populated HITLResult per CP spec v1.16 §26.8.2."""
+    from harness_cp.pause_resume_protocol import ResumeContext  # noqa: F401
+    from harness_cp.pause_resume_protocol_types import ResumeContext as _RC
+
+    hitl = _build_hitl_result()
+    rc = _RC(hitl_response=hitl)
+    assert rc.hitl_response is hitl
+
+
+def test_resume_context_is_frozen() -> None:
+    """AC #6: ResumeContext is a frozen Pydantic v2 BaseModel per §26.8.1."""
+    from harness_cp.pause_resume_protocol import ResumeContext  # noqa: F401
+    from harness_cp.pause_resume_protocol_types import ResumeContext as _RC
+
+    rc = _RC()
+    with pytest.raises(ValidationError):
+        rc.hitl_response = _build_hitl_result()  # type: ignore[misc]
+
+
+def test_resume_context_extra_forbid() -> None:
+    """AC #6: ResumeContext forbids extra fields (extra='forbid' from ConfigDict)."""
+    from harness_cp.pause_resume_protocol import ResumeContext  # noqa: F401
+    from harness_cp.pause_resume_protocol_types import ResumeContext as _RC
+
+    with pytest.raises(ValidationError):
+        _RC(extra_field="x")  # pyright: ignore[reportCallIssue]
+
+
+def test_resume_context_single_field_shape() -> None:
+    """AC #6: ResumeContext has exactly one declared field at v1.16 per §26.8.2.
+
+    Future arcs may extend (per §26.8.1 change-note adjacent defect (i)).
+    This gate locks the v1.16 single-field shape so any future extension is
+    a deliberate spec amendment, not a silent absorption.
+    """
+    from harness_cp.pause_resume_protocol import ResumeContext  # noqa: F401
+    from harness_cp.pause_resume_protocol_types import ResumeContext as _RC
+
+    assert set(_RC.model_fields.keys()) == {"hitl_response"}

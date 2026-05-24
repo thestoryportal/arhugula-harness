@@ -34,10 +34,14 @@ identifier rename absorbed); plan unit U-CP-62 (CP plan v2.17 §1).
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
 from harness_cp.handoff_context import StateSummary
+
+if TYPE_CHECKING:
+    from harness_cp.hitl_placement import HITLResult
 
 
 class WorkflowPauseReason(StrEnum):
@@ -156,3 +160,33 @@ class ResumeResult(BaseModel):
     """CP-FAIL-* class identifier on resume failure; None on clean resume.
     One of CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION, CP-FAIL-RESUME-MATERIAL-DIFF-DETECTED,
     CP-FAIL-RESUME-OPERATOR-ARBITRATION-OWED per §26.5."""
+
+
+class ResumeContext(BaseModel):
+    """Operator-supplied resume-time context envelope (CP spec v1.16 §26.8.1).
+
+    Authored at CP spec v1.16 to enable HITL-gate-as-pause-trigger composition
+    per runtime spec v1.21 §14.14.7 deferred-discretion residual (i) resolution.
+    The envelope carries operator-supplied data the resumed step must consume
+    during the resume cycle. v1.16 authors a single field for the durable-async
+    HITL response delivery surface; future arcs may extend per v1.16 §26.8.1
+    change-note adjacent defect (i).
+
+    Consumed by runtime spec v1.24 §14.8.2 step 4-bis (the HITL gate composer
+    body durable-async branch on resumed-step re-entry). The CP-side
+    `attempt_resume(...)` method ingests but does NOT consume `ResumeContext`
+    per CP spec v1.16 §26.8.5 method-body-posture-at-v1.16 framing.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    hitl_response: HITLResult | None = None
+    """Operator HITL response delivered during durable-async pause.
+
+    None when the pause was not correlated with a HITL gate (e.g.,
+    EXPLICIT_OPERATOR, TIMEOUT_BOUNDARY, EXTERNAL_DEPENDENCY pause reasons).
+    Populated HITLResult when the pause was triggered by a HITL gate composer
+    body firing on durable-async cell synchrony per C-CP-18 §18.1 and the
+    operator has delivered a response via the inbound webhook endpoint.
+    HITLResult shape canonical at C-CP-17 §17.1.1 (`harness_cp.hitl_placement`).
+    """

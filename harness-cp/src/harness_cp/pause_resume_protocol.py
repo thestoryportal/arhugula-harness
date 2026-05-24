@@ -181,6 +181,7 @@ from typing import Any
 from harness_cp.pause_resume_protocol_types import (
     MaterialDiffPolicy,
     PauseSnapshot,
+    ResumeContext,
     ResumeResult,
     WorkflowPauseReason,
 )
@@ -297,8 +298,17 @@ class PauseResumeProtocol:
         snapshot: PauseSnapshot,
         *,
         material_diff_policy: MaterialDiffPolicy,
+        resume_context: ResumeContext | None = None,
     ) -> ResumeResult:
         """Attempt workflow resumption from a pause snapshot per CP spec v1.11 §26.1.
+
+        ``resume_context`` (NEW at CP spec v1.16 §26.8.5; backward-compatible
+        default None) is the operator-supplied resume-time context envelope.
+        This method INGESTS but does NOT consume the parameter at v1.16 —
+        propagation to the resumed-step HITL gate is the runtime-side caller's
+        responsibility per CP spec v1.16 §26.8.5 method-body-posture framing.
+        Existing callers pass no ``resume_context`` → receive None default →
+        identical control flow to pre-v1.16 baseline.
 
         Per §26.6 invariants 4-5:
         4. Per-pause-reason routing — each WorkflowPauseReason has its own
@@ -535,3 +545,13 @@ def _derive_resume_outcome(result: ResumeResult) -> str:
     if result.fail_class == CP_FAIL_RESUME_OPERATOR_ARBITRATION_OWED:
         return RESUME_OUTCOME_ARBITRATION_OWED
     return RESUME_OUTCOME_RESUMED
+
+
+# Resolve forward-ref `HITLResult` on ResumeContext per CP spec v1.16 §26.8.1.
+# The types module guards `HITLResult` under TYPE_CHECKING to avoid the
+# hitl_placement → workflow_driver_types → pause_resume_protocol_types cycle;
+# this module sits outside that cycle and rebuilds the model so runtime
+# validation resolves the field annotation.
+from harness_cp.hitl_placement import HITLResult as _HITLResult  # noqa: E402
+
+ResumeContext.model_rebuild(_types_namespace={"HITLResult": _HITLResult})

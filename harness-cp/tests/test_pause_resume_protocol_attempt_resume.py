@@ -27,6 +27,7 @@ from harness_cp.pause_resume_protocol import (
 from harness_cp.pause_resume_protocol_types import (
     MaterialDiffPolicy,
     PauseSnapshot,
+    ResumeContext,
     ResumeResult,
     WorkflowPauseReason,
 )
@@ -286,3 +287,94 @@ def test_resume_result_is_frozen() -> None:
     )
     with pytest.raises(ValidationError):
         result.resumed = False  # type: ignore[misc]
+
+
+# --- AC #6 (v2.21) — attempt_resume accepts ResumeContext keyword-only param
+
+
+def test_attempt_resume_accepts_resume_context_none_default() -> None:
+    """AC #6 — `attempt_resume` accepts no resume_context arg (None default).
+
+    Backward-compat per CP spec v1.16 §26.8.5: callers passing no
+    `resume_context` receive None default → identical control flow to
+    pre-v1.16 baseline. Verified against the same clean-resume path covered
+    at `test_no_diff_when_anchor_unchanged_yields_clean_resume`.
+    """
+    snapshot, protocol = _capture_then_protocol(
+        capture_anchor="a" * 64, resume_anchor="a" * 64
+    )
+    result = asyncio.run(
+        protocol.attempt_resume(snapshot, material_diff_policy=MaterialDiffPolicy.STRICT)
+    )
+    assert result.resumed is True
+    assert result.diff_detected is False
+
+
+def test_attempt_resume_accepts_explicit_resume_context_none() -> None:
+    """AC #6 — `attempt_resume(..., resume_context=None)` is a no-op vs default."""
+    snapshot, protocol = _capture_then_protocol(
+        capture_anchor="a" * 64, resume_anchor="a" * 64
+    )
+    result = asyncio.run(
+        protocol.attempt_resume(
+            snapshot,
+            material_diff_policy=MaterialDiffPolicy.STRICT,
+            resume_context=None,
+        )
+    )
+    assert result.resumed is True
+
+
+def test_attempt_resume_ingests_populated_resume_context_without_consuming() -> None:
+    """AC #6 — `attempt_resume` ingests `ResumeContext(hitl_response=...)` but
+    does NOT consume it at v1.16 per CP spec v1.16 §26.8.5 method-body-posture
+    framing. Behavior identical to None default: the CP-side method carries
+    the parameter through; runtime-side is the propagation site.
+    """
+    from harness_core.identity import EntryID
+
+    from harness_cp.hitl_placement import HITLResult
+    from harness_cp.hitl_response_palette import HITLResponse
+
+    snapshot, protocol = _capture_then_protocol(
+        capture_anchor="a" * 64, resume_anchor="a" * 64
+    )
+    hitl = HITLResult(
+        response=HITLResponse.APPROVE,
+        timestamp="2026-05-24T00:00:00Z",
+        audit_ledger_entry_id=EntryID("e-rc-1"),
+        response_summary_hash="0" * 64,
+    )
+    rc = ResumeContext(hitl_response=hitl)
+    result_with = asyncio.run(
+        protocol.attempt_resume(
+            snapshot,
+            material_diff_policy=MaterialDiffPolicy.STRICT,
+            resume_context=rc,
+        )
+    )
+    result_without = asyncio.run(
+        protocol.attempt_resume(snapshot, material_diff_policy=MaterialDiffPolicy.STRICT)
+    )
+    # Identical control flow at v1.16 — CP-side ingests but does not consume.
+    assert result_with.resumed == result_without.resumed
+    assert result_with.diff_detected == result_without.diff_detected
+    assert result_with.fail_class == result_without.fail_class
+
+
+def test_attempt_resume_resume_context_is_keyword_only() -> None:
+    """AC #6 — `resume_context` is keyword-only per CP spec v1.16 §26.8.5
+    canonical signature reading.
+    """
+    import pytest
+
+    snapshot, protocol = _capture_then_protocol()
+    # Positional invocation must fail (kw-only after `*`).
+    with pytest.raises(TypeError):
+        asyncio.run(
+            protocol.attempt_resume(
+                snapshot,
+                MaterialDiffPolicy.STRICT,  # type: ignore[misc]
+                None,
+            )
+        )
