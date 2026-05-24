@@ -133,3 +133,49 @@ Rationale:
 | Resolution arc(s) (if §3.A ratified) | (a) CP spec v1.11 → v1.12 amendment; (b) CP plan v2.17 → v2.18 revision; (c) driver impl + StepExecutionContext field add; (d) OD-side helper consumer migration + production callsite widening |
 | Status | OPEN at filing → RATIFIED at AskUserQuestion → APPLIED at multi-commit arc |
 | Related memory | `[[fork-u-cp-72-cost-and-pause-resume-prefix-gap]]` (cost-axis production-wiring close gated on this fork resolution); `[[advisor-before-substantive-work-for-cross-axis-blockers]]` (advisor call confirmed pre-implementation gate); `[[halt-route-split-AC-pattern]]` (Sub-arc B AC #8 deferral pattern); `[[fork-u-rt-68-retry-wrap-and-bootstrap-wiring-gap]]` (filing-first multi-arc precedent if §3.D selected) |
+
+---
+
+## §8 Path A ratification + apply footer (2026-05-24)
+
+**Ratification.** AskUserQuestion 2026-05-24 selected **§3.A — CP-spec amendment + full migration arc this session**.
+
+**Applied across 4 commits (single-session, same worktree):**
+
+| # | Commit | Scope |
+|---|---|---|
+| 1 | `53f8d1c` | Fork doc filing (this artifact §1–§7) |
+| 2 | `8614c9f` | CP spec v1.11 → v1.12: NEW §25.2.1 9th field `workflow_id` |
+| 3 | `94ea8c9` | CP plan v2.17 → v2.18: U-CP-56 StepExecutionContext 9-field absorption (AC #1 + AC #6 + Signatures line updates) |
+| 4 | `0cfd23a` | harness-cp impl: StepExecutionContext field add at `workflow_driver_types.py:174` + driver fill at `workflow_driver.py:597-609` + 15 test-fixture call-site additions (additive `workflow_id` kwarg) |
+| 5 | `e3fd675` | harness-runtime impl: `attribute_llm_dispatch_cost` signature widened (`workflow_id` + `parent_action_id` kwargs); caller at `llm_dispatch.py:414/710` passes from `step_context.workflow_id` + `step_context.parent_action_id`; local `_project_and_convert_audit_entry` helper DELETED + replaced by canonical `_project_cost_record_to_audit_payload` import from `harness_od.cost_record_audit_writer`; test action_id assertion updated to canonical pattern `cost:test-wf:workflow:test-wf:step:0` per OD spec v1.10 §C-OD-26.6.1 step 2 |
+
+**Verification.**
+
+| Test suite | Result |
+|---|---|
+| harness-cp full suite | 677 tests pass |
+| harness-runtime full unit suite | 921 tests pass |
+| harness-od + harness-cxa + harness-is + harness-as combined | 1212 tests pass |
+| Cumulative axis-suite passes this arc | **2810 tests pass** |
+
+**Status transitions.**
+
+| Status | Marker | Transition |
+|---|---|---|
+| OPEN | `53f8d1c` filing | Fork doc files §1–§7; operator ratification pending |
+| RATIFIED | AskUserQuestion 2026-05-24 | Operator selected §3.A (CP-spec amendment + full arc) |
+| APPLIED | `e3fd675` (HEAD post-impl) | Spec + plan + impl + tests + workspace CLAUDE.md absorbed; fork CLOSED-APPLIED |
+
+**Bounded-scope post-apply.**
+
+- Cost-axis production callsite migration (Sub-arc B AC #8 deferred at `0919a9b`) — **CLOSED** at this arc. The legacy CPAuditLedgerEntry path with `cost:{span_id}` action_id pattern is no longer the production path; production now uses the typed CostRecordAuditPayload path with the canonical `cost:<workflow_id>:<step_action_id>` action_id pattern per OD spec v1.10 §C-OD-26.6.1 step 2.
+
+- Pause/resume axis status preserved verbatim — `[[fork-u-cp-72-cost-and-pause-resume-prefix-gap]]` §2.1 routing target (a) still gates on U-OD-51 implementation landing + U-CP-72 minor revision restoring `pause:`/`resume:` converter branches.
+
+- §25-renumbering drift at CP spec v1.10 (§25 became NEW ValidatorFramework collision with v1.6 NEW §25 WorkflowDriver) — surfaced at v1.12 + v2.18 change-notes as adjacent finding, NOT patched per FM-2 no-extension discipline. Routing target: future CP spec hygiene revision arc.
+
+**Cross-axis cascade — ZERO.** OD spec v1.10 § C-OD-26.6.1 step 2 cite was implicit-forward-cite at Sub-arc B publication arc (`0919a9b`); v1.12 amendment RESOLVES the cite without introducing a new cross-axis edge. CXA v2.9 §2.3.7 row 8 cost-attribution audit-write seam already canonical at HEAD.
+
+**Status post-§8.** OPEN → RATIFIED → **APPLIED 2026-05-24** at `e3fd675`. Fork CLOSED-APPLIED.
+
