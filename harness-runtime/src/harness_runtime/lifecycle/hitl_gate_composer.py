@@ -105,6 +105,7 @@ Audit-compose failure: composer annotates `hitl.gate.evaluated` via
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import inspect
 from collections.abc import Mapping
@@ -150,11 +151,15 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
     AskUserQuestionSurface,
     AskUserQuestionTimeoutError,
 )
+from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
 from harness_runtime.lifecycle.webhook_delivery_composer import (
+    WebhookDeliveryComposer,
+    WebhookDeliveryExhaustedError,
     WebhookDeliveryResult,
 )
 
 if TYPE_CHECKING:  # pragma: no cover — type-only imports
+    from harness_cp.pause_resume_protocol import PauseResumeProtocol
     from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
     from harness_runtime.lifecycle.state_ledger import LedgerWriter
 
@@ -591,6 +596,45 @@ class RuntimeHITLGateComposer:
     audit_signing_algorithm: SignatureAlgorithm
     """Signing algorithm passed to `cp_audit_to_od_audit` at substep 8c-HITL."""
 
+    # --- v2.25 §7.2 AC #12: 4 new fields for durable-async cell HITL ---------
+    #
+    # Per runtime plan v2.25 §7.2 AC #12 (Reading A path 1 absorption of fork
+    # `class_1_fork_u_rt_94_webhook_delivery_composer_binding_chain_absence.md`).
+    # All four fields default to None / fresh-instance so existing test
+    # fixtures (constructed without these args) keep working unchanged; the
+    # §14.8.8.1 step 0 OR-form precondition AND-arm at the composer body
+    # treats `None` values as operator opt-out (sync-blocking fall-through).
+    # Bootstrap stage-5 LOOP_INIT populates with real instances via the
+    # binding chain landed at L9-quaterdecies (U-RT-96/97/98) +
+    # L9-undecies (U-RT-87/88/89).
+    pause_resume_protocol: PauseResumeProtocol | None = None
+    """CP-canonical PauseResumeProtocol (C-CP-26 §26) bound at stage-5
+    LOOP_INIT by `materialize_pause_resume_protocol_stage` per C-RT-24
+    §14.14.3. `None` (default) → operator opt-out → §14.8.8.1 step 0 OR-form
+    precondition AND-arm at `ctx.pause_resume_protocol is None` evaluates
+    True → fall through to step 4f (sync-blocking)."""
+
+    pause_requested_flag: asyncio.Event = field(default_factory=asyncio.Event)
+    """Caller-signal flag set by composer body §14.8.8.1 step 5 to indicate
+    a pause is pending; observed by workflow_driver per-step pre-entry
+    pause-trigger detection branch per C-RT-24 §14.14.3."""
+
+    webhook_delivery_composer: WebhookDeliveryComposer | None = None
+    """C-RT-20 §14.10.1 WebhookDeliveryComposer bound at stage-5 LOOP_INIT by
+    `materialize_webhook_delivery_composer_stage` per C-RT-26 §14.16.3.
+    `None` (default) → operator opt-out → §14.8.8.1 step 0 OR-form
+    precondition AND-arm at `ctx.webhook_delivery_composer is None` evaluates
+    True → fall through to step 4f (sync-blocking). Non-`None` → durable-
+    async branch at step 3 invokes `deliver_webhook(brief, idempotency_key)`."""
+
+    resume_context_holder: ResumeContextHolder = field(
+        default_factory=lambda: ResumeContextHolder()
+    )
+    """Runtime-internal sidecar carrier for one-shot ResumeContext delivery
+    per v1.25 §14.8.8.9. Bound at stage-5 LOOP_INIT to an empty holder.
+    Consumed at §14.8.8.5 resume-side gate-evaluation via
+    `consume_and_clear()` atomic one-shot read-and-clear."""
+
     # Carrier-canonical attribute name constants (per spec §14.8.5 producer-
     # side carrier import discipline). Frozen at construction so a typo in
     # the spec carrier surfaces at dataclass instantiation, not first dispatch.
@@ -782,6 +826,26 @@ class RuntimeHITLGateComposer:
         HITLGateAuditComposeError
             Audit-write substep failed on APPROVE / EDIT / RESPOND path.
         """
+        # --- Step 0: Resume-side one-shot consume per §14.8.8.5 -----------
+        # Runtime spec v1.25 §14.8.8.9.3 + v1.24 §14.8.8.5: when the workflow
+        # resumes from a durable-async pause cycle, the driver-side resume
+        # entry-point populated `ctx.resume_context_holder` via
+        # `holder.set(resume_context)`. The composer at the resumed-step
+        # gate-evaluation reads `consume_and_clear()` (atomic one-shot
+        # read-and-clear enforcing §14.8.8.7 invariant 3). When the holder
+        # carries a hitl_response, the operator has already responded — the
+        # gate is logically resolved; skip the gate composition body and
+        # proceed to the inner dispatcher per the auto-approve semantic of
+        # the resumed gate (MVP integration shape per v2.24 AC #7; the
+        # detailed audit-write integration of the resumed response into the
+        # 4h substep flow is implementer-discretion deferred to a follow-on
+        # arc per FM-2).
+        resume_state = self.resume_context_holder.consume_and_clear()
+        if resume_state is not None and resume_state.hitl_response is not None:
+            return await self._dispatch_inner(
+                binding, step, step_context=step_context
+            )
+
         # --- Step 1: Read placement triggers from step ---------------------
         placements: tuple[HITLPlacement, ...] = getattr(
             step, "hitl_placements", ()
@@ -884,6 +948,77 @@ class RuntimeHITLGateComposer:
                 if not hitl_required:
                     # Step 4j skip-gate: no further spans for this placement.
                     continue
+
+                # --- 4-bis: Durable-async cell branch (v1.24 §14.8.8.1) -----
+                # Per runtime spec v1.26 §14.8.8.1 step 0 OR-form precondition
+                # (canonical-reading amendment) + §14.8.2 step 4-bis insertion:
+                # if joint binding (pause_resume_protocol + webhook_delivery_composer)
+                # is satisfied AND the matrix cell synchrony is DURABLE_ASYNC,
+                # fire the §14.8.8.1 6-step durable-async composer body.
+                # Otherwise (any precondition False OR SYNC_BLOCKING), fall
+                # through to the existing step 4f sync-blocking path.
+                #
+                # Composer-body binding-tolerant access: `binding: Any` per the
+                # CP StepDispatcher Protocol; test fixtures pass bare `object()`
+                # without persona_tier/engine_class. Production callers post-
+                # CP-v1.17 land canonical StepEffectiveBinding. The defensive
+                # getattr at lines 871-872 above resolved persona_tier+engine_class
+                # for the EXCLUDED check; here we reuse `cell.synchrony_class`
+                # (resolved at lines 873-875 to a real cell OR sentinel).
+                _synchrony_attr = getattr(cell, "synchrony_class", None)
+                joint_binding_present = (
+                    self.pause_resume_protocol is not None
+                    and self.webhook_delivery_composer is not None
+                )
+                if (
+                    joint_binding_present
+                    and _synchrony_attr is SynchronyClass.DURABLE_ASYNC
+                ):
+                    # §14.8.8.1 step 1: compose HITLEscalationBrief.
+                    # fail_class=None per CP spec v1.18 §25.2.X Optional
+                    # widening (pause-trigger construction site is not a
+                    # validator failure — no validator outcome at this site).
+                    durable_brief = HITLEscalationBrief(
+                        parent_step_id=str(step.step_id),
+                        parent_action_id=str(parent_action_id),
+                        fail_class=None,
+                        fail_detail_hash="0" * 64,
+                        escalation_reason="durable_async_cell_synchrony",
+                        proposed_response_palette=frozenset(sorted(palette)),
+                    )
+                    # §14.8.8.1 step 2: compose idempotency_key per
+                    # `compose_hitl_action_id` shape (mirrors §14.7.2 step 8b
+                    # convention; hitl: prefix is the source discriminator).
+                    idempotency_key = str(
+                        compose_hitl_action_id(parent_action_id, placement.position)
+                    )
+                    # §14.8.8.1 step 3 + step 4: deliver_webhook; on exhausted
+                    # the typed exception propagates (driver-side handler
+                    # OR caller-side handler decides what to do with it).
+                    try:
+                        delivery_result = (
+                            await self.webhook_delivery_composer.deliver_webhook(
+                                durable_brief, idempotency_key
+                            )
+                        )
+                    except WebhookDeliveryExhaustedError:
+                        # Step 4: webhook delivery exhausted. NO flag-set;
+                        # NO signal raise. Per spec §14.8.8.1 step 4 the
+                        # composer surfaces the failure as a fault — re-raise
+                        # for the driver-side error path.
+                        raise
+                    # §14.8.8.1 step 5: set pause_requested_flag (caller-signal
+                    # observed by workflow_driver per-step pre-entry detection
+                    # per C-RT-24 §14.14.3).
+                    self.pause_requested_flag.set()
+                    # §14.8.8.1 step 6: raise HITLPauseRequestedSignal (typed
+                    # control-flow exception per §14.8.8.2 — BaseException
+                    # subclass; only explicit catch consumes it).
+                    raise HITLPauseRequestedSignal(
+                        brief=durable_brief,
+                        delivery_result=delivery_result,
+                    )
+                # End of step 4-bis. Fall through to step 4f sync-blocking.
 
                 # --- 4f-bis: Open hitl.invocation.opened span ---------------
                 with tracer.start_as_current_span(

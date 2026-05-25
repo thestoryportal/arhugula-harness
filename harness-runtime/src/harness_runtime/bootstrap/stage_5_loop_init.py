@@ -203,6 +203,22 @@ async def execute(
     )
     ctx.ask_user_question_surface = ask_surface
 
+    # U-RT-94 (v2.25 §7.2 AC #11/#12/#14): materialize pause/webhook/resume
+    # bindings BEFORE the HITL composer construction so the composer can
+    # capture them at construction time per AC #12 (4 NEW constructor
+    # fields). Within-stage-5 sibling ordering is implementer-discretion per
+    # spec §14.16.3 + change-note adjacent defect (ii); ordering "pause +
+    # webhook + holder BEFORE composer" is observationally equivalent to
+    # the reverse because the §14.8.8.1 step 0 OR-form precondition consumes
+    # the joint binding at composer dispatch-time.
+    ctx.pause_resume_protocol = await materialize_pause_resume_protocol_stage(
+        config, ctx
+    )
+    ctx.webhook_delivery_composer = await materialize_webhook_delivery_composer_stage(
+        config, ctx
+    )
+    ctx.resume_context_holder = ResumeContextHolder()
+
     hitl_inference = RuntimeHITLGateComposer(
         inner=bare_dispatcher,
         applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
@@ -212,6 +228,10 @@ async def execute(
         tracer_provider=cast(Any, tracer_provider),
         audit_signing_key_id="harness-runtime-dev",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        pause_resume_protocol=ctx.pause_resume_protocol,
+        pause_requested_flag=ctx.pause_requested_flag,
+        webhook_delivery_composer=ctx.webhook_delivery_composer,
+        resume_context_holder=ctx.resume_context_holder,
     )
     ctx.llm_dispatcher = materialize_retry_breaker_fallback_dispatcher_stage(
         inner=cast(Any, hitl_inference),
@@ -294,6 +314,10 @@ async def execute(
         tracer_provider=cast(Any, tracer_provider),
         audit_signing_key_id="harness-runtime-dev",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        pause_resume_protocol=ctx.pause_resume_protocol,
+        pause_requested_flag=ctx.pause_requested_flag,
+        webhook_delivery_composer=ctx.webhook_delivery_composer,
+        resume_context_holder=ctx.resume_context_holder,
     )
     ctx.sub_agent_dispatcher = hitl_sub_agent
 
@@ -341,46 +365,12 @@ async def execute(
         },
     )
 
-    # U-RT-88 (C-RT-24 §14.14): PauseResumeProtocol stage-5 LOOP_INIT factory
-    # binding. Returns None on operator opt-out (config.pause_resume_protocol_config
-    # is None — production-default state preserved); returns the CP-canonical
-    # PauseResumeProtocol class bound to ctx.ledger_writer + ctx.ledger_reader
-    # + composed pause_context_reader on operator opt-in. Driver per-step
-    # pre-entry pause-trigger detection at workflow_driver.py (U-RT-89) consumes
-    # ctx.pause_resume_protocol per spec §14.14.3. Within-stage-5 ordering
-    # unconstrained per spec §14.14.3 (factory consumes only stage-1 IS
-    # prerequisites + a stage-5-internal pause_context_reader callable).
-    ctx.pause_resume_protocol = await materialize_pause_resume_protocol_stage(
-        config, ctx
-    )
-
-    # U-RT-97 (C-RT-26 §14.16): WebhookDeliveryComposer stage-5 LOOP_INIT
-    # factory binding (Reading A path 1 absorption of fork
-    # class_1_fork_u_rt_94_webhook_delivery_composer_binding_chain_absence.md).
-    # Returns None on operator opt-out (config.webhook_delivery_composer_config
-    # is None — pre-v1.26 production-default state preserved); returns the
-    # C-RT-20 §14.10.1 WebhookDeliveryComposer instance bound to
-    # ctx.tracer_provider on operator opt-in. Co-bucketed with
-    # materialize_pause_resume_protocol_stage per spec §14.16.3: the
-    # §14.8.8.1 step 0 OR-form precondition AND-arm consumes BOTH
-    # ctx.pause_resume_protocol AND ctx.webhook_delivery_composer for the
-    # durable-async branch to be reachable. Within-stage-5 sibling ordering
-    # unconstrained per spec §14.16.3 + change-note adjacent defect (ii).
-    ctx.webhook_delivery_composer = await materialize_webhook_delivery_composer_stage(
-        config, ctx
-    )
-
-    # U-RT-94 (runtime spec v1.25 §14.8.8.9 + §4 C-RT-04): ResumeContextHolder
-    # sidecar carrier for one-shot ResumeContext delivery across the
-    # pause-resume cycle. Bound unconditionally at stage 5 LOOP_INIT to an
-    # empty holder regardless of operator-supply at RuntimeConfig (the holder
-    # is a runtime-loop carrier, NOT deployment-time configuration; even when
-    # ``ctx.pause_resume_protocol is None``, the holder is still bound but
-    # unreachable in the durable-async path per §14.8.8.1 step 0 precondition).
-    # Driver-side resume entry-point sets the holder via
-    # ``ctx.resume_context_holder.set(resume_context)`` after operator-supplied
-    # ``attempt_resume(..., resume_context=...)`` ingestion (CP spec v1.16
-    # §26.8.5). Runtime composer at §14.8.8.5 consumes via
-    # ``ctx.resume_context_holder.consume_and_clear()`` (atomic one-shot).
-    ctx.resume_context_holder = ResumeContextHolder()
+    # U-RT-88 (C-RT-24 §14.14) + U-RT-97 (C-RT-26 §14.16) + U-RT-94 (v1.25
+    # §14.8.8.9): pause_resume_protocol + webhook_delivery_composer +
+    # resume_context_holder bindings hoisted ABOVE the HITL composer
+    # construction sites at v2.25 §7.2 AC #12 absorption — so the
+    # RuntimeHITLGateComposer constructor can capture them at construction
+    # time per the 4-NEW-fields amendment (lines 211-233 above). Re-binding
+    # here would shadow the values the composer captured + introduce a
+    # divergence between composer-local refs and ctx-local refs.
 
