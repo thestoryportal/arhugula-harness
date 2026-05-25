@@ -48,6 +48,9 @@ from harness_runtime.bootstrap.factories.memory_tool_registry_factory import (
 from harness_runtime.bootstrap.factories.pause_resume_protocol_factory import (
     materialize_pause_resume_protocol_stage,
 )
+from harness_runtime.bootstrap.factories.webhook_delivery_composer_factory import (
+    materialize_webhook_delivery_composer_stage,
+)
 from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
 from harness_runtime.bootstrap.factories.runtime_tool_dispatcher_factory import (
     materialize_runtime_tool_dispatcher_stage,
@@ -348,6 +351,22 @@ async def execute(
     # unconstrained per spec §14.14.3 (factory consumes only stage-1 IS
     # prerequisites + a stage-5-internal pause_context_reader callable).
     ctx.pause_resume_protocol = await materialize_pause_resume_protocol_stage(
+        config, ctx
+    )
+
+    # U-RT-97 (C-RT-26 §14.16): WebhookDeliveryComposer stage-5 LOOP_INIT
+    # factory binding (Reading A path 1 absorption of fork
+    # class_1_fork_u_rt_94_webhook_delivery_composer_binding_chain_absence.md).
+    # Returns None on operator opt-out (config.webhook_delivery_composer_config
+    # is None — pre-v1.26 production-default state preserved); returns the
+    # C-RT-20 §14.10.1 WebhookDeliveryComposer instance bound to
+    # ctx.tracer_provider on operator opt-in. Co-bucketed with
+    # materialize_pause_resume_protocol_stage per spec §14.16.3: the
+    # §14.8.8.1 step 0 OR-form precondition AND-arm consumes BOTH
+    # ctx.pause_resume_protocol AND ctx.webhook_delivery_composer for the
+    # durable-async branch to be reachable. Within-stage-5 sibling ordering
+    # unconstrained per spec §14.16.3 + change-note adjacent defect (ii).
+    ctx.webhook_delivery_composer = await materialize_webhook_delivery_composer_stage(
         config, ctx
     )
 

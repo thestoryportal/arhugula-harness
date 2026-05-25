@@ -34,7 +34,6 @@ __all__ = [
     "WebhookDeliveryExhaustedError",
     "WebhookDeliveryResult",
     "WebhookDeliverySchemaViolationError",
-    "materialize_webhook_delivery_composer_stage",
 ]
 
 
@@ -257,14 +256,13 @@ class WebhookDeliveryComposer:
 
 
 # --- factory ----------------------------------------------------------------
-
-
-def materialize_webhook_delivery_composer_stage(
-    *,
-    tracer_provider: Any = None,
-) -> WebhookDeliveryComposer:
-    """Stage 5 LOOP_INIT factory for the webhook delivery composer."""
-    return WebhookDeliveryComposer(tracer_provider=tracer_provider)
+#
+# Note: the v1.26 stage-5 LOOP_INIT factory body — accepting `RuntimeConfig` +
+# returning `WebhookDeliveryComposer | None` per spec §14.16.2 — lives at
+# `bootstrap/factories/webhook_delivery_composer_factory.py` (U-RT-97). This
+# module retains only the carrier class body (U-RT-69) per the
+# carrier-vs-factory split established by validator_framework_types.py +
+# pause_resume_protocol_types.py precedents.
 
 
 # --- private helpers --------------------------------------------------------

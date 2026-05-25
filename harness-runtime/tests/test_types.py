@@ -161,6 +161,11 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         # ResumeContext delivery across pause-resume cycle (runtime spec v1.25
         # §4 C-RT-04 NEW field row + §14.8.8.9 carrier).
         "resume_context_holder",
+        # U-RT-96 (v2.25) — WebhookDeliveryComposer binding per runtime spec
+        # v1.26 §4 C-RT-04 NEW field row + §14.16 C-RT-26 factory contract
+        # (Reading A path 1 absorption of fork
+        # class_1_fork_u_rt_94_webhook_delivery_composer_binding_chain_absence.md).
+        "webhook_delivery_composer",
     }
     actual = set(HarnessContext.model_fields.keys())
     assert actual == expected, f"missing: {expected - actual}; extra: {actual - expected}"

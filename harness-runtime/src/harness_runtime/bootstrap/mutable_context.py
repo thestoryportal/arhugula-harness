@@ -288,6 +288,18 @@ class _MutableHarnessContext:
     ``memory_tool_registry``; the frozen ``HarnessContext.pause_resume_protocol``
     field carries the narrowed ``PauseResumeProtocol | None`` class surface."""
 
+    webhook_delivery_composer: Any = None
+    """U-RT-96 — Webhook delivery composer (runtime spec v1.26 §14.10.1
+    ``WebhookDeliveryComposer`` class body landed at U-RT-69). Bound at
+    stage 5 LOOP_INIT by ``materialize_webhook_delivery_composer_stage`` per
+    runtime spec v1.26 §14.16.3. Optional (``None`` = operator opt-out
+    preserving the pre-v1.26 production-default state); NOT in
+    ``_REQUIRED_FIELDS``. Typed ``Any`` on the mutable builder per the
+    same Protocol-vs-concrete-narrowing pattern as ``pause_resume_protocol``
+    + ``validator_framework`` + ``tool_dispatcher`` + ``memory_tool_registry``;
+    the frozen ``HarnessContext.webhook_delivery_composer`` field carries the
+    narrowed ``WebhookDeliveryComposer | None`` class surface."""
+
     resume_context_holder: Any = None
     """U-RT-94 — Runtime-internal sidecar carrier for one-shot ResumeContext
     delivery across the pause-resume cycle (runtime spec v1.25 §14.8.8.9
@@ -367,6 +379,7 @@ class _MutableHarnessContext:
             memory_tool_registry=self.memory_tool_registry,
             validator_framework=self.validator_framework,
             resume_context_holder=self.resume_context_holder,
+            webhook_delivery_composer=self.webhook_delivery_composer,
         )
         self.frozen = ctx
         return ctx

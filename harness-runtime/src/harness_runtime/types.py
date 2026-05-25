@@ -120,6 +120,18 @@ from harness_cp.pause_resume_protocol import PauseResumeProtocol
 # U-RT-94 — ResumeContextHolder sidecar import (per spec v1.25 §4 C-RT-04
 # NEW field row + §14.8.8.9 carrier definition).
 from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
+# U-RT-96 — WebhookDeliveryComposer config carrier import (per spec v1.26 §3
+# C-RT-02 field-table extension). WebhookDeliveryComposerConfig declared at
+# U-RT-96 in lifecycle/webhook_delivery_composer_types.py.
+from harness_runtime.lifecycle.webhook_delivery_composer_types import (
+    WebhookDeliveryComposerConfig,
+)
+# U-RT-96 — WebhookDeliveryComposer class carrier import (per spec v1.26 §4
+# C-RT-04 field-table extension). Class body landed at U-RT-69 in
+# lifecycle/webhook_delivery_composer.py.
+from harness_runtime.lifecycle.webhook_delivery_composer import (
+    WebhookDeliveryComposer,
+)
 
 __all__ = [
     "AuditLedgerWriter",
@@ -1135,6 +1147,31 @@ class RuntimeConfig(BaseModel):
     `materialize_pause_resume_protocol_stage` factory (U-RT-88) per §14.14.3.
     """
 
+    webhook_delivery_composer_config: WebhookDeliveryComposerConfig | None = None
+    """Operator-supplied webhook-delivery composer opt-in marker.
+
+    Added at U-RT-96 per `Spec_Harness_Runtime_v1.md` v1.26 §3 C-RT-02
+    field-table extension (Reading A path 1 absorption of fork
+    `class_1_fork_u_rt_94_webhook_delivery_composer_binding_chain_absence.md`;
+    operator-ratified 2026-05-24).
+
+    Empty-marker shape at v1.26 authoring scope per spec §14.16.1. `None`
+    (the default) → operator opt-out → stage-5 factory returns `None` →
+    `ctx.webhook_delivery_composer is None` → §14.8.8.1 step 0 OR-form
+    precondition AND-arm evaluates False (durable-async branch falls through
+    to sync-blocking; production-default state preserved). Non-`None` →
+    operator opt-in → stage-5 factory constructs a `WebhookDeliveryComposer`
+    instance bound to `ctx.webhook_delivery_composer`; durable-async branch
+    at §14.8.8.1 step 3 invokes `ctx.webhook_delivery_composer.deliver_webhook(...)`.
+
+    Internal operator-supply shape (per-endpoint URL, per-retry-policy,
+    per-idempotency-key-store substrate, outbound HTTP timeout, TLS/auth)
+    deferred to implementation discretion at C-RT-26 landing arc per FM-2
+    (spec §14.16.1 + change-note adjacent defect (i)). Ingested at stage 5
+    LOOP_INIT by `materialize_webhook_delivery_composer_stage` factory
+    (U-RT-97) per §14.16.3.
+    """
+
 
 # ----------------------------------------------------------------------------
 # `HarnessContext` — C-RT-04 v1.1 schema.
@@ -1236,6 +1273,17 @@ class HarnessContext(BaseModel):
     # per-step pre-entry pause-trigger detection branch False arm).
     # See §14.14.1 + plan v2.20 U-RT-87 AC #2.
     pause_resume_protocol: PauseResumeProtocol | None = None
+
+    # U-RT-96 — Webhook delivery composer carrier. Populated at stage 5
+    # LOOP_INIT by `materialize_webhook_delivery_composer_stage` per spec
+    # v1.26 §14.16.3. `None` when `RuntimeConfig.webhook_delivery_composer_config
+    # is None` (operator opt-out — production-default state; §14.8.8.1 step 0
+    # OR-form precondition AND-arm evaluates False, durable-async branch
+    # falls through to sync-blocking). Non-`None` when operator supplies the
+    # config; the durable-async branch at §14.8.8.1 step 3 invokes
+    # `ctx.webhook_delivery_composer.deliver_webhook(brief, idempotency_key)`.
+    # See spec v1.26 §4 row + §14.16.
+    webhook_delivery_composer: WebhookDeliveryComposer | None = None
 
     # U-RT-94 — Runtime-internal sidecar carrier for one-shot ResumeContext
     # delivery across the pause-resume cycle. Bound at stage 5 LOOP_INIT to

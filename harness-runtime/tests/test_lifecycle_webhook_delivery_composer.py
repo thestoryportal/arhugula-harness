@@ -30,7 +30,6 @@ from harness_runtime.lifecycle.webhook_delivery_composer import (
     WebhookDeliveryComposer,
     WebhookDeliveryExhaustedError,
     WebhookDeliveryResult,
-    materialize_webhook_delivery_composer_stage,
 )
 
 
@@ -233,8 +232,12 @@ async def test_deliver_emits_outer_and_attempt_spans() -> None:
 
 
 def test_factory_returns_composer_with_tracer_bound() -> None:
+    # v1.26 §14.16.2 factory landed at bootstrap/factories/
+    # webhook_delivery_composer_factory.py; this test verifies the carrier
+    # construction shape against TracerProvider. The bootstrap factory unit
+    # tests live at test_u_rt_97_webhook_delivery_composer_factory.py.
     provider = TracerProvider()
-    composer = materialize_webhook_delivery_composer_stage(tracer_provider=provider)
+    composer = WebhookDeliveryComposer(tracer_provider=provider)
     assert isinstance(composer, WebhookDeliveryComposer)
 
 
