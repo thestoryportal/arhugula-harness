@@ -218,3 +218,50 @@ OD-axis: `sandbox.*` namespace consumption is at H_T-OD-2 (already RETIRED at ba
 | Memory anchors | `[[verification-shape-sharpened-grep-vs-e2e]]` (4th-check discriminator extension caught this fork at scope-commit gate); `[[fork-meta-arch-section-2-2-as-axis-carrier-phantom-cites]]` (parallel AS-axis carrier-cite drift pattern at spec layer); `[[fork-meta-arch-cp-spec-renumbering-drift]]` (sibling spec-coherence-fidelity pattern); `[[stale-grep-partial-re-audit-pattern]]` (owed memory entry — sweep framing missed this fork) |
 | Related forks | None — fresh fork at fresh defect surface |
 | Status at filing | OPEN — awaiting operator AskUserQuestion routing OR systems-architect Mode 3 recommendation arc |
+
+---
+
+## §8 — Closure block (Reading B arc 1 LANDED — spec amendment 2026-05-25)
+
+### §8.1 Operator routing decision
+
+AskUserQuestion 2026-05-25 ratified **Reading B** ("NEW MCP-protocol-layer fail-class taxonomy at §15 (sibling to F4)") per fork §3.2 — operator deferred to recommendation per fork §4 (architecturally cleanest; preserves F4 enum semantic coherence; matches production exception types 1:1 at MCP-protocol abstraction layer).
+
+### §8.2 Arc 1 deliverable — AS spec v1.5 → v1.6 amendment (LANDED)
+
+AS spec amendment authored at commit pending this session. Site-by-site delta:
+
+| Site | Amendment | Status |
+|---|---|---|
+| Title | "Spec — Action Surface v1.5" → "Spec — Action Surface v1.6" | ✓ LANDED |
+| Change-note (v1.5 → v1.6) | NEW change-note section authored at top (Trigger / Scope / Site table / Sections preserved / Status posture / Downstream absorption owed / Adjacent defects surfaced) | ✓ LANDED |
+| Status block | NEW Revision row v1.5 → v1.6 (2026-05-25) | ✓ LANDED |
+| C-AS-15 §15.8 | NEW `MCPInvocationFailClass` 4-value StrEnum (`transport` / `protocol_error` / `schema_violation` / `timeout`) + per-class semantic + C5/C9 routing posture + authority anchors + composition with F4 | ✓ LANDED |
+| C-AS-15 §15.9 | NEW `mcp.fail.class` attribute on `sandbox.violation` child span + dual-attribute emission discipline matrix + cross-axis composition + sensitive-data discipline + authority anchors | ✓ LANDED |
+| C-AS-15 §15.10 | NEW best-effort projection table MCP-shape → F4-shape + per-row semantic-stretch acknowledgement + implementation discretion + authority anchors | ✓ LANDED |
+| §4.1 F4 enum | PRESERVED VERBATIM | ✓ |
+| §15.1..§15.7 | PRESERVED VERBATIM | ✓ |
+| Workspace CLAUDE.md §2.3 AS row | v1.5 → v1.6 (preserved tail history v1.5..v1.3) | ✓ LANDED |
+
+### §8.3 Arc 2 deliverables (PENDING, fresh worktree recommended)
+
+Per fork §7 change-note item (b): two-arc resolution pattern from `[[fork-cp-spec-section-25-contract-id-collision]]` — arc 2 = plan + impl + retirement bundle at fresh worktree per FM-4 risk-aware scoping.
+
+| Deliverable | Routing | Estimated scope |
+|---|---|---|
+| (1) AS plan v1.2 → v1.3 | implementation-planner revision-pass per §C-AS-15 §15.8/§15.9/§15.10 absorption | U-AS-17 + U-AS-18 AC bodies absorb dual-attribute emission; potential NEW carrier-unit for MCPInvocationFailClass OR extend U-AS-03 fail-class enum carrier; cite-cascade refresh at U-AS-15..18 unit anchors |
+| (2) harness-as impl | NEW `mcp_invocation_fail_class.py` (or extend `sandbox_fail_class.py`) StrEnum carrier per §15.8 | 1 module + 1 test file |
+| (3) harness-runtime impl | Fix dispatcher line 400 + 407 invented strings + open `sandbox.violation` child span per §15.1 hierarchy + emit dual fail-class attrs per §15.9 + projection-table application per §15.10 (option a recommended default) | runtime_tool_dispatcher.py changes + 4-5 new tests + existing test updates |
+| (4) Retirement batch-20 | `phase-7-substitution-retirement` skill — H_T-AS-4 PARTIAL → RETIRED close per Reading B resolution path | 1 batch event file; AS-axis 3/5 → 4/5 (60% → 80%) |
+| (5) Fork doc §8.X closure | Update this §8 with arc 2 close evidence + final status: OPEN → READING-B-APPLIED | This file edit |
+
+Estimated arc 2 cycle cost: ~5-8 commits multi-axis, 1-2 sessions.
+
+### §8.4 Status
+
+| Field | Value |
+|---|---|
+| Fork status | OPEN → **READING-B-ARC-1-LANDED** (spec amendment commit at this session); arc 2 (plan + impl + retirement) pending fresh worktree |
+| HEAD at arc 1 close | Commit pending this session — AS spec v1.6 + workspace CLAUDE.md row bump + this §8 closure block |
+| Arc 2 unblocker | None — operator may open arc 2 at any time; preferred at fresh worktree per FM-4 risk-aware scoping |
+| Cross-axis cascade | ZERO at semantics layer; potential cite cascade owed at follow-on OD §C-OD-05/06 + CXA v2.10 §2.3 (NOT patched per FM-2 no-extension discipline) |

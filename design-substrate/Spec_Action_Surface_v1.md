@@ -1,6 +1,42 @@
-# Spec — Action Surface v1.5
+# Spec — Action Surface v1.6
 
-## Change-note (v1.4 → v1.5)
+## Change-note (v1.5 → v1.6)
+
+**Trigger.** Class 1 fork resolution apply pass per `.harness/class_1_fork_as_4_f4_enum_taxonomy_mismatch_and_production_bug.md` (operator-ratified 2026-05-25 — Reading B "NEW MCP-protocol-layer fail-class taxonomy at §15 (sibling to F4)"). The fork surfaced (i) production bug at `runtime_tool_dispatcher.py:400 + :407` assigning `sandbox_fail_class = "transport"` / `"schema-violation"` strings NOT in canonical `SandboxFailClass` (F4) enum, (ii) `sandbox.violation` child span absent in production (deferred per `runtime_tool_dispatcher.py:414` comment), (iii) structural taxonomy mismatch — F4 enum is process-execution-shaped (escape/egress/timeout/oom/signal/exit_nonzero/policy_override) but production exceptions are MCP-protocol-shaped (`ToolInvocationTimeoutError`, `ToolInvocationProtocolError`, `MCPHostUnreachableError`, `jsonschema.ValidationError`). Reading B authors a sibling taxonomy at the proper MCP-protocol abstraction layer, preserving F4 enum semantic coherence at process-execution layer.
+
+**Scope of revision.** Additive contract extension at C-AS-15 §15. NEW §15.8 authors `MCPInvocationFailClass` 4-value StrEnum at AS-axis as canonical declaration site (parallel to F4 at C-AS-04 §4.1 + sandbox.* canonical attribute declaration at §15.2). NEW §15.9 authors `mcp.fail.class` attribute on `sandbox.violation` child span (sibling to existing `sandbox.fail.class` per §15.2 row 3). §15.10 authors a best-effort projection table mapping MCP-shape values to F4-shape values for cross-layer correlation. F4 enum at §4.1 PRESERVED VERBATIM — no field change. Existing §15.1..§15.7 PRESERVED VERBATIM. Producer-side mutation discipline at runtime spec §14.9 owns the dispatcher-side mapping (producer-vs-canonical-schema separation per D6 ingestion-pattern discipline, mirroring v1.4 §14.3 footer pattern: runtime emits, AS-axis owns canonical schema).
+
+| Site | Amendment | Reason |
+|---|---|---|
+| **C-AS-15 §15.8** (NEW subsection) | NEW `MCPInvocationFailClass` 4-value StrEnum: `transport` / `protocol_error` / `schema_violation` / `timeout` + per-class semantic + cardinality | Canonical declaration of MCP-protocol-layer fail-class taxonomy at AS-axis. Sibling to F4 enum at C-AS-04 §4.1 (process-execution-layer). Carries MCP-protocol-boundary failure modes that production runtime catches at `harness-runtime/src/harness_runtime/lifecycle/runtime_tool_dispatcher.py:395-412` dispatcher exception handlers. |
+| **C-AS-15 §15.9** (NEW subsection) | NEW `mcp.fail.class` attribute on `sandbox.violation` child span — enum string per §15.8 4-value enum; bounded (4); always-emitted on sandbox.violation event; discriminator role = MCP-protocol-boundary failure-class taxonomy (sibling to `sandbox.fail.class` F4 taxonomy at process-execution layer) | sandbox.violation child span now carries BOTH `sandbox.fail.class` (F4 process-shape per §15.2 row 3) AND `mcp.fail.class` (MCP-shape per §15.8). Both attributes always-emitted; either may carry null/empty when the violation does not span both layers (e.g., a sandbox `escape_attempt` may have no MCP-layer correlate). |
+| **C-AS-15 §15.10** (NEW subsection) | NEW best-effort projection table from `MCPInvocationFailClass` (§15.8) to `SandboxFailClass` (§4.1) — partial mapping for cross-layer correlation discipline | When a `sandbox.violation` event carries a non-null `mcp.fail.class`, the runtime SHOULD also assign the projected `sandbox.fail.class` per §15.10 table to maintain F4 audit-ledger continuity. Projection is best-effort — semantic stretch is acknowledged at §15.10 footer; not all MCP-shape values have clean F4 correlates. |
+
+**Sections preserved verbatim from v1.5.** All v1.5 content outside the three new C-AS-15 subsections preserved verbatim. C-AS-01 through C-AS-16 (v1.5 numbering) preserved. §4.1 F4 `sandbox.fail.class` enum PRESERVED VERBATIM. §15.1..§15.7 (existing C-AS-15 subsections) PRESERVED VERBATIM. The v1.5 + v1.4 + v1.3 + v1.2 + v1.1 + v1 chain preserved.
+
+**Status posture.** Proposed (v1.5) → **Proposed (v1.6)**. v1.6 is an additive substantive amendment — new contract content authored at C-AS-15 §15.8 / §15.9 / §15.10; F4 enum at §4.1 unchanged; existing §15 subsections unchanged.
+
+**Downstream absorption owed (post-v1.6).**
+(a) Workspace `CLAUDE.md` §2.3 AS row version bump (v1.5 → v1.6); co-published this arc.
+(b) AS plan v1.2 → v1.3 — U-AS-17 + U-AS-18 absorption (sandbox.violation child span gains `mcp.fail.class` attribute per §15.9; U-AS-17 AC #3 attribute count grows; U-AS-18 sampling-discipline carries §15.4 row 3 unchanged; potentially NEW carrier unit for `MCPInvocationFailClass` enum or extend U-AS-03 fail-class enum carrier unit). Owed at follow-on plan revision arc.
+(c) `harness-as/src/harness_as/` impl — NEW `mcp_invocation_fail_class.py` (or extend `sandbox_fail_class.py` module) authoring `MCPInvocationFailClass` StrEnum carrier. Owed at impl arc.
+(d) `harness-runtime/src/harness_runtime/lifecycle/runtime_tool_dispatcher.py:395-412` impl — fix exception handler mapping (lines 400 + 407) per §15.8 enum + open `sandbox.violation` child span per §15.1 hierarchy (currently deferred at line 414 comment) emitting both `sandbox.fail.class` (per §4.1 projected via §15.10) and `mcp.fail.class` (per §15.8 directly). Owed at impl arc.
+(e) Retirement batch — H_T-AS-4 PARTIAL → RETIRED at impl arc landing (mirrors `[[fork-validator-composer-arc-stage-4-absence]]` Reading A close pattern); AS-axis advances 3/5 → 4/5 (60% → 80%).
+(f) Fork doc §8 closure block — file at fork close per `[[fork-cp-spec-section-25-contract-id-collision]]` two-arc resolution pattern (arc 1 = this spec amendment; arc 2 = plan + impl + retirement bundle at fresh worktree per FM-4 risk-aware scoping).
+
+**Adjacent defects surfaced (not patched at v1.6).**
+
+(i) **CXA / OD spec cite cascade.** OD spec v1.11 §C-OD-05 (namespace-ingestion-map at U-OD-05) declares the AS-source namespace 7-entry set (anthropic / mcp / skill / managed_agents / sandbox / files / memory). NEW `mcp.fail.class` attribute is at AS-axis sandbox.* namespace, not a new top-level namespace, so §C-OD-05 row count unchanged. However OD §C-OD-06 (AS-source namespace verification at U-OD-06) MAY require attribute-set verification refresh — owed at follow-on OD spec revision pass if attribute-set verification surfaces. NOT patched at v1.6 per FM-2 no-extension discipline.
+
+(ii) **CXA v2.10 §2.3 AS→OD bucket attribute-shape carry.** CXA v2.10 §2.3 AS→OD bucket lists sandbox.* namespace as AS→OD typed seam. The new `mcp.fail.class` attribute composes into the existing seam at attribute layer (not new edge). CXA cardinality unchanged at semantics layer; potential CXA-side §0.3 attribute-list refresh owed at follow-on CXA revision pass. NOT patched at v1.6 per FM-2 no-extension discipline.
+
+(iii) **ADR-D2 reference frame.** ADR-D2 v1.2 §1.7 + §1.7.1 declared the F4 enum at C-AS-04 §4.1 as canonical declaration site. The NEW MCPInvocationFailClass at §15.8 is NOT declared at ADR-D2 — it is an AS-spec-internal contract additive at C-AS-15 §15. ADR-D2 reference frame UNCHANGED; no ADR revision triggered. Future ADR-D2 revision arcs MAY surface the MCP-protocol-layer fail-class as a downstream ADR-D2 §1.7.X sub-section if cross-axis composition demands it; deferred to operator-discretion timing per X-AL-3 no-silent-design-extension discipline at later phases.
+
+(iv) **Production bug at `runtime_tool_dispatcher.py:400 + :407`.** The string assignments `"transport"` and `"schema-violation"` to `sandbox_fail_class` are bugs — those strings are not in canonical F4 enum at §4.1. v1.6 spec authoring does NOT fix the production bug; the bug fix is owed at impl arc per downstream absorption item (d). At impl arc landing, the strings become canonical F4 values (per §15.10 projection table) AND the MCP-shape exception type → mcp.fail.class enum value is also assigned at the new attribute. The bug is filed at the fork doc Defect (i); fix lands at impl arc.
+
+(v) **`SandboxTierFloorViolationError` raise site.** This exception fires at dispatcher line 330 BEFORE any sandbox.* span opens. Per fork doc §6 adjacent finding (b): the violation child span must open in the exception path, not at sandbox.exit. Impl-arc design owes this discriminator: open `sandbox.violation` span DURING exception unwinding (OTel allows; child spans can open/close on exception paths). NOT patched at v1.6 — owed at impl arc per (d).
+
+---
 
 **Trigger.** Class 1 fork resolution apply pass per `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §16 (operator-ratified 2026-05-23). The fork's §13 systems-architect Mode 3 recommendation §13.6.D ratified at §14 routing requires AS spec §14.7 `memory.*` namespace to gain a producer-site reference footer note pointing at the NEW runtime spec v1.17 §14.12 C-RT-22 `MemoryToolRegistry` / `MemoryToolStorageBackendProtocol` callback-invocation sites (parallel to v1.4 §14.3 mcp.* footer pattern). Co-published with runtime spec v1.17.
 
@@ -51,6 +87,10 @@
 | Revision date | 2026-05-15 |
 | Revision | v1.3 → v1.4 (Phase A.2 ratified-drafts apply pass per `.harness/Phase_A_2_Contract_Drafts_v1.md` — 2026-05-21; C-AS-14 §14.3 + C-AS-15 §15 extended with producer-site reference notes ONLY; `mcp.*` 7-attribute namespace at H_T-as-MCP-client site is now contracted via CP spec v1.10 §27 C-CP-27 MCPClientNamespaceEmitter; `sandbox.*` namespace at tool-invocation site is now contracted via runtime spec v1.13 §14.9 C-RT-19 RuntimeToolDispatcher; no field-set change, no attribute-list change, no AS-AL rule added, no other section changed) |
 | Revision date | 2026-05-21 |
+| Revision | v1.4 → v1.5 (Class 1 fork resolution apply pass per `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §16 — 2026-05-23; C-AS-14 §14.7 NEW producer-site reference footer note for `memory.*` 6-attribute namespace pointing at runtime spec v1.17 §14.5.1 C-RT-15 callback-injection + §14.12 C-RT-22 `MemoryToolRegistry` per-callback emission discipline; Memory tool client-side per ADR-D3 §1.1 #11 — per-callback emission structurally distinct from §14.3 mcp.* per-dispatch pattern; Files API §14.6 footer NOT authored per §14.C ratification; pure annotation-level extension; no field-set change, no AS-AL rule added) |
+| Revision date | 2026-05-23 |
+| Revision | v1.5 → v1.6 (Class 1 fork resolution apply pass per `.harness/class_1_fork_as_4_f4_enum_taxonomy_mismatch_and_production_bug.md` Reading B — 2026-05-25; C-AS-15 §15 extended with NEW §15.8 `MCPInvocationFailClass` 4-value StrEnum (`transport` / `protocol_error` / `schema_violation` / `timeout`) + NEW §15.9 `mcp.fail.class` attribute on `sandbox.violation` child span + NEW §15.10 best-effort projection table MCP-shape → F4-shape; F4 enum at §4.1 PRESERVED VERBATIM; existing §15.1..§15.7 PRESERVED VERBATIM; additive substantive amendment authored at AS-axis as canonical declaration site for MCP-protocol-layer fail-class taxonomy sibling to F4 process-execution-layer taxonomy at C-AS-04; producer-side mutation discipline at runtime spec §14.9 owns the dispatcher-side mapping per existing v1.4 §14.3 footer producer-vs-canonical-schema separation pattern; resolves AS-4 retirement gate at sandbox.violation emission absence) |
+| Revision date | 2026-05-25 |
 
 ---
 
@@ -1301,6 +1341,69 @@ Per `Spec_Information_Substrate_v1.md` C-IS-10 §10.1 (state-ledger entry shape 
 Per ADR-D2 v1.2 §1.7.1 + ADR-F3 v1.1 capability-floor (iv): F3 capability-floor (iv) requires observable lifecycle including sandbox-related events. This contract declares the attribute substrate at D2 source per F2-05 sandbox sub-finding closure. **ADR-D6 §1.2 row `sandbox.*` reads from this contract verbatim**; the F4-authoritative-naming honored at this source contract — D6 §1.2 ingests without re-declaration (cross-axis to Operational Discipline spec at session 4).
 
 **Deferred to implementation discretion.** Specific OTel/OTLP span emission implementation; specific tail-keep-on-classification filter implementation; specific per-cell `sandbox.cost.tier_overhead_*` metric aggregation window; specific sub-agent `idempotency_key` extension algorithm (delegated to D4 §1.9 at session 3).
+
+### §15.8 `MCPInvocationFailClass` enum (NEW at v1.6)
+
+Four-value MCP-protocol-layer fail-class taxonomy, sibling to the F4 process-execution-layer taxonomy at C-AS-04 §4.1. F4 carries what FAILED inside the sandboxed process; this enum carries what FAILED at the MCP-protocol boundary. The two layers compose at the `sandbox.violation` child span carrying both `sandbox.fail.class` (F4) and `mcp.fail.class` (this enum) attributes per §15.9.
+
+| `mcp.fail.class` | Semantic | Production exception correlate | C5 fail-class | C9 retry posture |
+|---|---|---|---|---|
+| `transport` | MCP host process unreachable; network-layer or process-lifecycle failure prevents reaching the MCP server boundary at all | `MCPHostUnreachableError` (and equivalent host-reachability failures) | transient-fail | C9 backoff + retry; max 3 attempts per Cluster 3 retry protocol [HIGH]; on exhaustion → HITL escalation |
+| `protocol_error` | MCP protocol-layer error — the MCP exchange itself was malformed (invalid JSON-RPC envelope, missing required fields, protocol-version mismatch, etc.) | `ToolInvocationProtocolError` (and equivalent protocol-violation failures) | permanent-fail (deterministic protocol hit; the same exchange will fail identically on retry) | NO retry; tool registry update OR HITL escalation per C-AS-12 §12.2 operator-policy override |
+| `schema_violation` | Tool I/O schema mismatch — the MCP exchange completed but the tool's response did not match its declared JSON schema (or the request was rejected at schema validation pre-dispatch) | `jsonschema.ValidationError` raised at tool-input/output schema enforcement | permanent-fail (the tool contract is the violated invariant) | NO retry; per-tool C9 retry-exit per Cluster 4 §2.2.3 [HIGH] absent; audit ledger per C-AS-08 |
+| `timeout` | MCP call exceeded its per-call time budget at the protocol boundary (the call MAY have completed inside the sandboxed process; the MCP exchange itself timed out) | `ToolInvocationTimeoutError` (and equivalent MCP-call-timeout failures) | transient-fail | C9 backoff + retry; max 3 attempts per Cluster 3 retry protocol [HIGH]; note: parallels F4 `timeout` at process-execution layer but they are distinct attributes — an MCP timeout MAY have a sandbox process that completed (server-side delay) or did not complete (client-side blocking); both `mcp.fail.class = timeout` and `sandbox.fail.class = timeout` MAY co-occur or independently fire |
+
+**Cardinality + sampling.** Bounded (4); always-emitted on `sandbox.violation` event per §15.9 alongside `sandbox.fail.class`. Always-sampled (head=1.0) discipline at §15.4 row 3 applies to the carrying event (`sandbox.violation`); both attribute names ride the same sampling posture.
+
+**Authority anchors.** This contract is authored at AS-axis as canonical declaration site per the producer-vs-canonical-schema separation discipline at v1.4 §14.3 footer note (workspace `CLAUDE.md` §1.1: "CP-axis emits, AS-axis owns canonical schema" generalizes to: "runtime-axis emits the MCP-fail-class mapping at dispatcher; AS-axis owns the canonical enum + sampling + sensitive-data discipline"). Cross-axis citation: `Spec_Harness_Runtime_v1.md` §14.9 C-RT-19 producer-side mutation discipline owns the dispatcher exception-handler-to-`mcp.fail.class` mapping at `harness-runtime/src/harness_runtime/lifecycle/runtime_tool_dispatcher.py:395-412`.
+
+**Composition with F4.** §15.10 below authors a best-effort projection table mapping MCP-shape values to F4-shape values, used at the dispatcher to emit BOTH attributes simultaneously per §15.9. The projection is best-effort because MCP-protocol-shape concerns DO NOT cleanly map to process-execution-shape concerns at all values; the projection table acknowledges semantic stretch where it occurs.
+
+**Deferred to implementation discretion.** Specific dispatcher exception-handler-to-enum-value mapping at runtime spec §14.9 producer site; specific projection-table application at the §15.10 projection layer; specific telemetry filtering at tail-keep-on-classification per §15.4.
+
+### §15.9 `mcp.fail.class` attribute on `sandbox.violation` child span (NEW at v1.6)
+
+The `sandbox.violation` child span per §15.1 hierarchy carries TWO fail-class attributes simultaneously at v1.6 forward:
+
+| Attribute | Source enum | Layer | Discriminator role |
+|---|---|---|---|
+| `sandbox.fail.class` | C-AS-04 §4.1 7-value `SandboxFailClass` | Process-execution layer | What FAILED inside the sandboxed process (escape attempt, OOM, signal, etc.) |
+| `mcp.fail.class` | §15.8 4-value `MCPInvocationFailClass` (NEW at v1.6) | MCP-protocol layer | What FAILED at the MCP-protocol boundary (host unreachable, protocol malformed, schema violated, timeout) |
+
+**Emission discipline.** Both attributes always-emitted on the `sandbox.violation` event per §15.4 always-sampled (head=1.0) discipline. Either attribute MAY carry `null` (or be omitted-not-null per OTel attribute semantics) when the violation does not span both layers:
+
+| Violation scenario | `sandbox.fail.class` | `mcp.fail.class` |
+|---|---|---|
+| Sandbox containment breach detected by seccomp / cgroup / hypervisor; MCP exchange did not begin | `escape_attempt` | omitted-not-null (no MCP-layer event) |
+| MCP host process unreachable (network failure pre-dispatch) | omitted-not-null (no process-layer event) | `transport` |
+| Tool returned valid response but its content fails schema validation post-dispatch | omitted-not-null (process completed normally) | `schema_violation` |
+| MCP call timed out at protocol boundary; sandboxed process may or may not have completed | per §15.10 projection table (`timeout` at process layer if completion not detectable; omitted-not-null if process completed but server-side held the response) | `timeout` |
+| Sandbox tier downgrade attempt via operator policy override (deterministic policy hit) | `policy_override` per §4.1 + §11.5 row 3 | omitted-not-null (policy hit is process-layer concern, not MCP-protocol) |
+
+**Cross-axis composition.** `mcp.fail.class` joins on `idempotency_key` per §15.6 — the violation event's `idempotency_key` matches the parent `tool.call` span's. Audit-ledger surface at C-AS-08 records BOTH attribute values (or null) per F2-12 closure manifest (Audit Schema records the structure, not the content; both fail-class attribute values are structural metadata).
+
+**Sensitive-data discipline.** Per §15.5 structure-not-content rule: both attribute values are enum-bounded (4 + 7 = 11 distinct strings); neither carries raw I/O content. The structure is auditable; the content remains in T-perm-2 surface exclusion.
+
+**Authority anchors.** ADR-D2 v1.2 §1.7 + §1.7.1 (canonical sandbox.* attribute declaration site at C-AS-15); ADR-D6 §1.2 row `sandbox.*` ingests this attribute verbatim post-v1.6 (the namespace continues to be C-AS-15 §15 owned; OD-axis reads via §C-OD-04 base layer + §C-OD-06 AS-source verification per OD spec v1.11).
+
+### §15.10 Best-effort projection table — `mcp.fail.class` → `sandbox.fail.class` (NEW at v1.6)
+
+When a `sandbox.violation` event carries a non-null `mcp.fail.class` value AND the violation does not have a clean independent process-execution-layer signal, the runtime SHOULD project to a `sandbox.fail.class` value per the following table to maintain F4 audit-ledger continuity at the structural level:
+
+| `mcp.fail.class` (MCP-shape) | Projected `sandbox.fail.class` (F4 process-shape) | Projection rationale | Semantic stretch |
+|---|---|---|---|
+| `transport` | `exit_nonzero` | Host unreachable = sandboxed process unable to communicate; cleanest F4 correlate per "process exited without normal completion" | MODERATE — F4 `exit_nonzero` means process exited with non-zero status; transport failure may or may not involve a process exit at all (e.g., process never started). Projection is for audit-ledger continuity, not semantic equivalence. |
+| `protocol_error` | `exit_nonzero` | Protocol malformed = sandboxed process produced output that failed protocol-layer validation; cleanest F4 correlate per "process completed but output is not consumable" | MODERATE — same rationale as `transport`. The projection treats protocol violation as a structural process-exit anomaly even though the process may have exited cleanly. |
+| `schema_violation` | `policy_override` | Schema violation = the tool contract (the I/O schema) was violated; closest F4 correlate per §4.1 row 7 "operator-tunable downgrade per C-AS-12 §12.2 audit-ledger entry" (analogous: a contract violation is an audit-ledger entry, not a process containment breach) | HIGH — F4 `policy_override` is documented as "operator-tunable downgrade", not "contract violation". The projection acknowledges this stretch; future spec revision MAY add a F4 `contract_violation` value to absorb this projection cleanly. |
+| `timeout` | `timeout` | Direct one-to-one mapping at the value name (both enums share the value); the projection asserts that an MCP-layer timeout SHOULD also fire a process-layer timeout attribute when the dispatcher cannot independently detect process completion | CLEAN at value name; SEMANTIC STRETCH at layer interpretation — an MCP timeout MAY have a process that completed (server-side held the response); the projection assigns the process-layer timeout for audit-ledger continuity even when the process semantically did not time out. |
+
+**Projection is best-effort.** The rationale + semantic-stretch columns acknowledge that MCP-shape and F4 process-shape are different abstraction layers; projection forces a structural correspondence for audit-ledger continuity but does NOT claim semantic equivalence. The `mcp.fail.class` attribute remains the authoritative MCP-layer record; `sandbox.fail.class` (projected) provides F4-layer compatibility for systems that read only the F4 attribute.
+
+**Implementation discretion.** The dispatcher at runtime spec §14.9 producer site MAY:
+(a) Apply the projection table verbatim at exception-handler binding (recommended default — emit BOTH attributes from BOTH enums per §15.9 emission discipline matrix), OR
+(b) Emit only `mcp.fail.class` and let downstream OD-axis ingestion compute the projected `sandbox.fail.class` at audit-ledger consumption (per OD spec §C-OD-06 AS-source verification) — this option requires an OD spec extension authoring the projection logic at OD axis, NOT undertaken at v1.6 spec amendment.
+
+**Authority anchors.** §15.8 (MCPInvocationFailClass enum); §4.1 (SandboxFailClass enum, PRESERVED VERBATIM); §15.9 (dual-attribute emission discipline). Future ADR-D2 revision arc MAY ratify the projection at ADR layer (currently AS-spec-internal contract additive); deferred to operator-discretion timing per X-AL-3 no-silent-design-extension discipline.
 
 ---
 
