@@ -769,7 +769,55 @@ def _execute_workflow_body(
                     f"{exc}"
                 ),
             ), steps_executed
-        except Exception as exc:
+        except BaseException as exc:
+            # U-RT-95 (runtime spec v1.24 §14.8.8.4) — driver-side handler for
+            # the HITLPauseRequestedSignal typed control-flow exception raised
+            # by the HITL gate composer's durable-async branch (§14.8.8.1
+            # step 6). The signal inherits BaseException (not Exception) so
+            # `except Exception` below does NOT consume it; explicit
+            # BaseException catch + class-name match honors the layering
+            # discipline (harness-cp cannot import from harness-runtime per
+            # the workspace dependency graph). On catch: capture the pause
+            # snapshot via ctx.pause_resume_protocol (guaranteed non-None by
+            # the §14.8.8.1 step 0 OR-form precondition that gated the
+            # signal raise) + return RunStatus.PAUSED with
+            # terminal_step_index = step_index - 1 (paused at step N's HITL
+            # gate; completed through step N-1).
+            if type(exc).__name__ == "HITLPauseRequestedSignal":
+                if (
+                    ctx.pause_resume_protocol is not None
+                    and ctx.pause_requested_flag.is_set()
+                ):
+                    protocol = cast(
+                        PauseResumeProtocol, ctx.pause_resume_protocol
+                    )
+                    pause_snapshot = _run_protocol_method_sync(
+                        protocol.capture_pause_snapshot(
+                            workflow_id=manifest_entry.workflow_id,
+                            run_id=run_id,
+                            step_index=step_index,
+                            pause_reason=WorkflowPauseReason.HITL_PENDING,
+                        )
+                    )
+                    return RunResult(
+                        workflow_id=manifest_entry.workflow_id,
+                        run_id=run_id,
+                        status=RunStatus.PAUSED,
+                        terminal_step_index=(
+                            step_index - 1 if step_index > 0 else None
+                        ),
+                        partial_state=dict(accumulated),
+                        final_state=None,
+                        fail_class=None,
+                        pause_snapshot=pause_snapshot,
+                    ), steps_executed
+                # Defensive — signal fired but pause_resume_protocol absent.
+                # Per §14.8.8.1 step 0 OR-form precondition this is
+                # unreachable; surface as FAILED for visibility.
+            if not isinstance(exc, Exception):
+                # Unknown BaseException (KeyboardInterrupt, SystemExit, etc.) —
+                # re-raise per Python convention; do not consume.
+                raise
             return RunResult(
                 workflow_id=manifest_entry.workflow_id,
                 run_id=run_id,
