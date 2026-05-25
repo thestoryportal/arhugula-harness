@@ -976,13 +976,15 @@ class RuntimeHITLGateComposer:
                 ):
                     # §14.8.8.1 step 1: compose HITLEscalationBrief.
                     # fail_class=None per CP spec v1.18 §25.2.X Optional
-                    # widening (pause-trigger construction site is not a
-                    # validator failure — no validator outcome at this site).
+                    # widening + fail_detail_hash=None per CP spec v1.19
+                    # §25.2.Y Optional widening (pause-trigger construction
+                    # site is not a validator failure — no validator outcome
+                    # at this site).
                     durable_brief = HITLEscalationBrief(
                         parent_step_id=str(step.step_id),
                         parent_action_id=str(parent_action_id),
                         fail_class=None,
-                        fail_detail_hash="0" * 64,
+                        fail_detail_hash=None,
                         escalation_reason="durable_async_cell_synchrony",
                         proposed_response_palette=frozenset(sorted(palette)),
                     )

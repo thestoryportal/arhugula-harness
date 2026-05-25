@@ -118,19 +118,19 @@ def _build_brief() -> HITLEscalationBrief:
     """Test fixture brief for signal-carrier tests.
 
     Post-CP-v1.18 §25.2.X: ``HITLEscalationBrief.fail_class`` widened to
-    ``ValidatorFailClass | None = None``. Durable-async cell pause-trigger
-    construction site uses ``fail_class=None`` directly (the v2.24-era
-    sentinel ``ValidatorFailClass.SCHEMA_VIOLATION + fail_detail_hash="0"*64``
-    placeholder is retired per runtime plan v2.25 §7.1 AC #6 absorption).
-    ``fail_detail_hash`` parallel widening foreclosed at FM-2 per CP spec
-    v1.18 change-note adjacent defect (i); ``"0" * 64`` placeholder hash
-    retained until that follow-on arc.
+    ``ValidatorFailClass | None = None``. Post-CP-v1.19 §25.2.Y:
+    ``HITLEscalationBrief.fail_detail_hash`` widened to ``str | None = None``.
+    Durable-async cell pause-trigger construction site uses ``fail_class=None``
+    + ``fail_detail_hash=None`` directly (the v2.24-era sentinel
+    ``ValidatorFailClass.SCHEMA_VIOLATION + fail_detail_hash="0"*64``
+    placeholder is fully retired per runtime plan v2.25 §7.1 AC #6 + v2.26
+    U-RT-94 AC #13 absorption).
     """
     return HITLEscalationBrief(
         parent_step_id="step-1",
         parent_action_id="action-1",
         fail_class=None,
-        fail_detail_hash="0" * 64,
+        fail_detail_hash=None,
         escalation_reason="durable_async_cell_synchrony",
         proposed_response_palette=frozenset(),
     )

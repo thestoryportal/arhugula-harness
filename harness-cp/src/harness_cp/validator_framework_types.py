@@ -145,7 +145,7 @@ class HITLEscalationBrief(BaseModel):
     parent_step_id: str
     parent_action_id: str
     fail_class: ValidatorFailClass | None = None
-    fail_detail_hash: str
+    fail_detail_hash: str | None = None
     escalation_reason: str
     proposed_response_palette: frozenset[HITLResponse] = _DEFAULT_HITL_PALETTE
 
