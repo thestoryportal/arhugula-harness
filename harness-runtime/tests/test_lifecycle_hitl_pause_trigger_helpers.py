@@ -1,52 +1,49 @@
-"""Tests for U-RT-93 — `_evaluate_cell_synchrony_tolerant` binding-tolerant
-helper + `HITLPauseRequestedSignal` typed control-flow exception class.
+"""Tests for U-RT-93 — `_evaluate_cell_synchrony` matrix-cell synchrony helper
++ `HITLPauseRequestedSignal` typed control-flow exception class.
 
 Authority: Runtime spec v1.24 §14.8.8.2 (signal) + §14.8.8.3 (helper)
-preserved verbatim at v1.25; Implementation_Plan_Harness_Runtime_v2_23.md
-§1 U-RT-93 ACs #1–#4.
+preserved verbatim at v1.25 + v1.26; Implementation_Plan_Harness_Runtime_v2_25.md
+§7.1 U-RT-93 ACs #1–#7 (post-CP-v1.17 §6.5 absorption — persona_tier is now
+a required field on the canonical StepEffectiveBinding; the getattr-tolerance
+fallback path is retired per ACs #5/#6/#7).
 """
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 from harness_core import PersonaTier
+from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass, matrix_cell_for
-from harness_cp.cp_shared_types import ModelBinding
-from harness_cp.validator_framework_types import (
-    HITLEscalationBrief,
-    ValidatorFailClass,
-)
+from harness_cp.validator_framework_types import HITLEscalationBrief
 
 from harness_runtime.lifecycle.hitl_gate_composer import (
     HITLPauseRequestedSignal,
+    _evaluate_cell_synchrony,  # pyright: ignore[reportPrivateUsage]
     _evaluate_cell_synchrony_tolerant,  # pyright: ignore[reportPrivateUsage]
 )
 from harness_runtime.lifecycle.webhook_delivery_composer import WebhookDeliveryResult
 
 
-# --- _evaluate_cell_synchrony_tolerant -------------------------------------
+# --- _evaluate_cell_synchrony ----------------------------------------------
 
 
-def _binding_with_persona_tier(*, persona_tier: PersonaTier, engine_class: EngineClass) -> Any:
-    """Duck-typed binding fixture matching the production callsite pattern at
-    `hitl_gate_composer.py:821` (`getattr(binding, "persona_tier", None)`).
+def _binding_with_persona_tier(
+    *, persona_tier: PersonaTier, engine_class: EngineClass
+) -> StepEffectiveBinding:
+    """Canonical StepEffectiveBinding fixture with operator-supplied tier.
 
-    Canonical ``StepEffectiveBinding`` does NOT declare ``persona_tier`` as a
-    field — production callers pass duck-typed extension shapes. The helper
-    matches the existing tolerant precedent at ``_evaluate_hitl_required_tolerant``.
+    Post-CP-v1.17 §6.5: StepEffectiveBinding declares ``persona_tier`` as a
+    required field — no duck-typing needed.
     """
-
-    class _DuckBinding:
-        pass
-
-    obj = _DuckBinding()
-    obj.persona_tier = persona_tier  # type: ignore[attr-defined]
-    obj.engine_class = engine_class  # type: ignore[attr-defined]
-    return obj
+    return StepEffectiveBinding(
+        step_id="step-1",
+        model_binding=ModelBinding(provider="anthropic", model="claude-opus-4-7"),
+        engine_class=engine_class,
+        override_applied=False,
+        persona_tier=persona_tier,
+    )
 
 
 def test_evaluate_cell_synchrony_tolerant_returns_none_for_none_binding() -> None:
@@ -99,27 +96,6 @@ def test_evaluate_cell_synchrony_tolerant_returns_excluded_for_excluded_cell() -
     assert _evaluate_cell_synchrony_tolerant(binding) is SynchronyClass.EXCLUDED
 
 
-@pytest.mark.skip(
-    reason=(
-        "Post-CP-v1.17 §6.5: canonical StepEffectiveBinding now REQUIRES "
-        "persona_tier; the bare-binding-without-persona_tier path is "
-        "structurally unreachable. Retired at Phase 3 step 8 (U-RT-93 helper "
-        "revision) per checkpoint Reading A path 1 arc + runtime plan v2.25 "
-        "§7.1 AC #5."
-    )
-)
-def test_evaluate_cell_synchrony_tolerant_returns_none_for_binding_without_persona_tier() -> None:
-    """Retired by CP spec v1.17 §6.5 — persona_tier now required field."""
-    bare = StepEffectiveBinding(
-        step_id="step-1",
-        model_binding=ModelBinding(provider="anthropic", model="claude-opus-4-7"),
-        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
-        override_applied=False,
-        persona_tier=PersonaTier.SOLO_DEVELOPER,
-    )
-    assert _evaluate_cell_synchrony_tolerant(bare) is None
-
-
 def test_evaluate_cell_synchrony_tolerant_delegates_to_matrix_cell_for() -> None:
     """AC #2 — helper is a thin-wrap; result matches direct matrix_cell_for call.
 
@@ -141,18 +117,19 @@ def test_evaluate_cell_synchrony_tolerant_delegates_to_matrix_cell_for() -> None
 def _build_brief() -> HITLEscalationBrief:
     """Test fixture brief for signal-carrier tests.
 
-    Spec U-RT-94 AC #2 calls for ``fail_class=None`` + ``fail_detail_hash=None``
-    at composer-body construction site (durable-async cell synchrony reason);
-    the canonical ``HITLEscalationBrief`` model declares both fields as
-    non-optional (``ValidatorFailClass`` + ``str``). This is a documented
-    spec/code mismatch surfaced at impl-time per FM-2 — for U-RT-93 helper
-    tests we exercise the carrier round-trip with valid non-None values; the
-    composer-body construction-site reshape lands at U-RT-94.
+    Post-CP-v1.18 §25.2.X: ``HITLEscalationBrief.fail_class`` widened to
+    ``ValidatorFailClass | None = None``. Durable-async cell pause-trigger
+    construction site uses ``fail_class=None`` directly (the v2.24-era
+    sentinel ``ValidatorFailClass.SCHEMA_VIOLATION + fail_detail_hash="0"*64``
+    placeholder is retired per runtime plan v2.25 §7.1 AC #6 absorption).
+    ``fail_detail_hash`` parallel widening foreclosed at FM-2 per CP spec
+    v1.18 change-note adjacent defect (i); ``"0" * 64`` placeholder hash
+    retained until that follow-on arc.
     """
     return HITLEscalationBrief(
         parent_step_id="step-1",
         parent_action_id="action-1",
-        fail_class=ValidatorFailClass.SCHEMA_VIOLATION,
+        fail_class=None,
         fail_detail_hash="0" * 64,
         escalation_reason="durable_async_cell_synchrony",
         proposed_response_palette=frozenset(),

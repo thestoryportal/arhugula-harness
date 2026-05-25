@@ -344,10 +344,10 @@ def _evaluate_hitl_required_tolerant(
     return evaluate_hitl_required(input_)
 
 
-def _evaluate_cell_synchrony_tolerant(  # pyright: ignore[reportUnusedFunction]
+def _evaluate_cell_synchrony(
     binding: StepEffectiveBinding | None,
 ) -> SynchronyClass | None:
-    """Runtime spec v1.24 §14.8.8.3 — binding-tolerant matrix synchrony lookup.
+    """Runtime spec v1.24 §14.8.8.3 — matrix synchrony lookup.
 
     Thin-wrap over CP-axis ``matrix_cell_for(binding.persona_tier,
     binding.engine_class).synchrony_class`` per scoping doc Q1 (α-revised) +
@@ -355,27 +355,27 @@ def _evaluate_cell_synchrony_tolerant(  # pyright: ignore[reportUnusedFunction]
 
     * ``None`` when ``binding is None`` (operator-opt-out arm — composer at
       §14.8.8.1 step 1 falls through to sync-blocking per change-note (ii)).
-    * ``None`` when ``binding`` does not carry ``persona_tier`` (test-fixture
-      / partial-binding tolerance — mirrors the ``getattr`` precedent at
-      ``_evaluate_hitl_required_tolerant`` + the existing dispatch callsite
-      at line 821; canonical ``StepEffectiveBinding`` per
-      ``per_step_override_evaluator.py`` does NOT declare ``persona_tier``,
-      so production callers pass duck-typed extension shapes).
-    * ``matrix_cell_for(persona_tier, binding.engine_class).synchrony_class``
+    * ``matrix_cell_for(binding.persona_tier, binding.engine_class).synchrony_class``
       otherwise — the four-class ``SynchronyClass`` value declared at CP spec
-      v1.2 §18.1 (preserved verbatim through v1.16). The ``EXCLUDED`` case is
-      delegated to the existing §14.8.2 step 4b ``HITLCellExcludedError`` raise
-      and does NOT need additional handling at this helper.
+      v1.2 §18.1. The ``EXCLUDED`` case is delegated to the existing §14.8.2
+      step 4b ``HITLCellExcludedError`` raise and does NOT need additional
+      handling at this helper.
 
-    Sibling pattern to ``_evaluate_hitl_required_tolerant`` (Reading B
-    precedent at v1.22 §14.8.2 step 4c).
+    Post-CP-v1.17 §6.5 — ``StepEffectiveBinding.persona_tier`` is now a
+    required field on the canonical model (no getattr-tolerance needed; the
+    pre-v1.17 fallback path returning ``None`` for bare bindings is retired
+    per runtime plan v2.25 §7.1 ACs #5/#6/#7 absorption).
     """
     if binding is None:
         return None
-    persona_tier = getattr(binding, "persona_tier", None)
-    if persona_tier is None:
-        return None
-    return matrix_cell_for(persona_tier, binding.engine_class).synchrony_class
+    return matrix_cell_for(binding.persona_tier, binding.engine_class).synchrony_class
+
+
+# Alias preserved for downstream callers during the v2.25 transition; the
+# `_tolerant` suffix is no longer accurate post-CP-v1.17 (persona_tier is
+# required on StepEffectiveBinding). Direct callers should prefer the
+# unsuffixed name. Removable at a follow-on cleanup arc.
+_evaluate_cell_synchrony_tolerant = _evaluate_cell_synchrony
 
 
 def _compute_effective_palette_tolerant(
