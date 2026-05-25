@@ -209,3 +209,50 @@ Per `[[halt-route-split-AC-pattern]]` precedent:
 | Related forks (resolved) | `[[fork-validator-composer-arc-stage-4-absence]]` — identical-shape precedent |
 | Related memory | `[[halt-route-split-AC-pattern]]` — AC #9 committed; ACs #1-#8+#10 deferred |
 | Pattern application | 18th `[[advisor-before-substantive-work-for-cross-axis-blockers]]` trigger — advisor flagged the binding-chain absence + persona_tier adjacency before impl proceeded |
+
+---
+
+## §8 — Closure block (Reading A path 1 RESOLVED)
+
+**Operator decision (AskUserQuestion 2026-05-24):** Reading A path 1 — author full webhook binding chain + `StepEffectiveBinding.persona_tier` extension.
+
+**Resolution arc landed across 19 commits on `worktree-hitl-pause-trigger` since `main` `e394074`:**
+
+| Phase | Step | Commit | Scope |
+|---|---|---|---|
+| 1 | spec(cp) v1.16→v1.17 | `9f22924` | `StepEffectiveBinding.persona_tier` field extension + `resolve_step_binding` signature widening per §6.5 |
+| 1 | spec(runtime) v1.25→v1.26 | `cc16fc8` | NEW §14.16 C-RT-26 `materialize_webhook_delivery_composer_stage` contract + RuntimeConfig field + HarnessContext field + fail-class + §14.8.8.1 step 0 OR-form precondition canonical-reading amendment |
+| 1 | spec(cp) v1.17→v1.18 | `fe4d622` | `HITLEscalationBrief.fail_class` widened to `ValidatorFailClass \| None = None` (Optional) — resolves 3rd spec/code divergence |
+| 2 step 4 | plan(cp) v2.21→v2.22 | `491f162` | U-CP-14 + U-CP-59 plan-body amendments absorbing CP v1.17 + v1.18 (+4 ACs across 2 units) |
+| 2 step 5 | plan(runtime) v2.24→v2.25 | `fc57c99` | NEW L9-quaterdecies cluster (U-RT-96/97/98) + L9-terdecies amendments (+24 ACs) |
+| 3 step 6 | impl(cp) U-CP-14 + U-CP-59 | `8a6e786` | `persona_tier` field landing + `resolve_step_binding` signature widening + `fail_class \| None` widening + ~15 caller-site fixture updates |
+| 3 step 7 | impl(L9-quaterdecies) | `049ce29` | U-RT-96 field landings + U-RT-97 factory + stage-5 wiring + U-RT-98 real-bootstrap e2e (10 + 5 new tests) |
+| 3 step 8 | impl(U-RT-93) revision | `1eb0c55` | helper drops getattr-tolerance + sentinel pattern + reportUnusedFunction suppression; bare-binding test retired |
+| 3 step 9 | impl(U-RT-94) | `06ed03d` | composer constructor +4 fields; step 4-bis durable-async body; step 0 OR-form precondition; fail_class=None direct; resume-side consume_and_clear |
+| 3 step 10 | impl(U-RT-95) | `709cd99` | driver-side `except BaseException` + class-name match handler; 4-path e2e matrix (paths iii/v/vi/vii passing; path i deferred per FM-2) |
+| 4 | bookkeeping | (this commit) | Workspace `CLAUDE.md` §2.3/§2.4 row bumps + this §8 closure block |
+
+**Final test substrate health:** 1754 tests pass + 4 skipped on `worktree-hitl-pause-trigger` HEAD `709cd99` (pre-bookkeeping). Pyright strict 141 errors (delta +6 from main baseline; new errors are type-unknown cascade noise from new dataclass field defaults at the HITL composer + composer-internal flow; ZERO genuine logic errors).
+
+**Primary fork finding RESOLVED:** `ctx.webhook_delivery_composer` now exists at `HarnessContext` (`types.py` field; `_MutableHarnessContext` builder field; `_REQUIRED_FIELDS` not membership per Optional-carrier convention shared with `pause_resume_protocol` + `validator_framework`; `freeze()` propagation wired). Stage-5 LOOP_INIT factory invocation lives at `bootstrap/factories/webhook_delivery_composer_factory.py`. The §14.8.8.1 step 3 invocation site `ctx.webhook_delivery_composer.deliver_webhook(brief, idempotency_key)` is now reachable (was unreachable pre-v1.26 due to absent binding chain).
+
+**Adjacent finding RESOLVED:** `_evaluate_cell_synchrony` helper consumes `binding.persona_tier` directly post-CP-v1.17 §6.5 landing; pre-v1.17 getattr-tolerance fallback path retired. Production callsites at `hitl_gate_composer.py:827-828` retain defensive getattr for the composer-body `binding: Any` Protocol surface (test fixtures may still pass bare objects); the helper itself uses direct field access.
+
+**Path (i) full pause-trigger e2e DEFERRED per FM-2:** path (i) — durable-async pause-trigger end-to-end cycle through `execute_workflow` — requires a DURABLE_ASYNC matrix cell (RECONCILER_LOOP / WAL_SEGMENT engine classes per CP §18.1). Those engine classes are NOT yet materialized at runtime per `EngineClassNotYetMaterializedError`; only PURE_PATTERN_NO_ENGINE + EVENT_SOURCED_REPLAY + SAVE_POINT_CHECKPOINT are runtime-materialized. Test body at `harness-runtime/tests/integration/test_u_rt_95_hitl_pause_trigger_durable_async_full_execution_path.py::test_path_i_durable_async_pause_trigger_returns_paused` is `@pytest.mark.skip`'d with documented reason; the composer-side body + driver-side catch handler are unit-tested separately at composer + workflow_driver test modules.
+
+**Operator-opt-in RETIRE-READY pattern (post-Reading-A-path-1):** the bucket is EMPTY at this fork's closure. H_T-CP-22 (PauseResumeProtocol) was RETIRED at batch-18 (FOURTH RETIRE-READY → RETIRED close). The webhook-delivery binding chain landed by this arc satisfies structural-criterion-B per runtime spec v1.26 §14.16.5 + operational-criterion-B partially (binding-chain e2e at U-RT-98; full operator-bound webhook delivery + durable-async cell engine class materialization deferred). The new C-RT-26 contract surface is on the operator-opt-in retirement track but is NOT yet a substitution-row in `Phase_7_Meta_Architecture_v1.md` §5 (no substitution row currently covers durable-async cell HITL operational state per v2.25 §6.1 footnote).
+
+**Reading B / C / D status:** Reading B (DOWN-classify durable-async cell branch as test-fixture-only) — superseded by Reading A path 1 landing the production binding chain. Reading C (DOWN-classify entire HITL-pause-trigger arc) — superseded. Reading D (operator-opt-in RETIRE-READY-without-RETIRED) — partially applied: the carrier landing is operator-opt-in, but the full RETIRED close gates on path (i) e2e at the follow-on arc when DURABLE_ASYNC engine classes materialize.
+
+**18th `[[advisor-before-substantive-work-for-cross-axis-blockers]]` application catalogued:** the advisor sanity-check at impl(U-RT-94) HALT-on-discovery (post-AC-#9 carrier landing) correctly identified both the primary binding-chain absence AND the adjacent persona_tier unreachability as compound findings, prompting the joint Reading A path 1 resolution. Pattern reinforced: when filing a Class 1 fork that touches multiple architectural surfaces, the advisor catches compound findings that individual analysis would split into separate arcs.
+
+| Field | Value |
+|---|---|
+| Closure status | **RESOLVED** at Reading A path 1 landing |
+| Closure HEAD | `709cd99` (pre-bookkeeping) + this commit (Phase 4 bookkeeping) |
+| Closure date | 2026-05-25 |
+| Commits in arc | 19 (3 spec + 2 plan + 5 impl + 1 fork-filing + 1 bookkeeping = 12 substantive + 7 carry-forward from prior session) |
+| Test delta | +18 net (1736 pre-arc → 1754 post-arc); +4 skipped (incl. path-i deferred) |
+| Pyright delta | +6 net from main baseline (type-unknown noise from new field defaults; ZERO genuine logic errors) |
+| Cross-axis cascade | ZERO (all three spec amendments intra-axis; runtime spec intra-runtime; CP specs intra-CP) |
+| Path (i) deferred to | Follow-on arc when DURABLE_ASYNC engine classes (RECONCILER_LOOP / WAL_SEGMENT) materialize at runtime |
