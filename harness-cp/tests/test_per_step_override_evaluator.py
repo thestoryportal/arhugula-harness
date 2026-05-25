@@ -68,11 +68,15 @@ def test_resolve_step_binding_field_by_field_override() -> None:
         }
     )
     binding = resolve_step_binding(
-        manifest, "s1", default_model_binding=_DEFAULT_BINDING
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
     )
     # model_binding overridden; engine_class inherits the manifest default.
     assert binding.model_binding == _OVERRIDE_BINDING
     assert binding.engine_class is EngineClass.PURE_PATTERN_NO_ENGINE
+    assert binding.persona_tier is PersonaTier.TEAM_BINDING
 
 
 def test_audit_ref_populated_on_override() -> None:
@@ -84,16 +88,23 @@ def test_audit_ref_populated_on_override() -> None:
         }
     )
     binding = resolve_step_binding(
-        manifest, "s1", default_model_binding=_DEFAULT_BINDING
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
     )
     assert binding.override_applied is True
     assert binding.override_audit_ref is not None
 
     no_override = resolve_step_binding(
-        manifest, "s2", default_model_binding=_DEFAULT_BINDING
+        manifest,
+        "s2",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
     )
     assert no_override.override_applied is False
     assert no_override.override_audit_ref is None
+    assert no_override.persona_tier is PersonaTier.TEAM_BINDING
 
 
 def test_audit_entry_action_id_composition() -> None:
@@ -114,8 +125,18 @@ def test_override_evaluator_deterministic() -> None:
             )
         }
     )
-    a = resolve_step_binding(manifest, "s1", default_model_binding=_DEFAULT_BINDING)
-    b = resolve_step_binding(manifest, "s1", default_model_binding=_DEFAULT_BINDING)
+    a = resolve_step_binding(
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    b = resolve_step_binding(
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
     assert a == b
 
 

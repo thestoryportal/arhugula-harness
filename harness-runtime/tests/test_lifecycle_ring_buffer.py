@@ -151,8 +151,7 @@ def test_rotate_until_within_policy_drains_to_threshold(tmp_path: Path) -> None:
     ).ring_buffer
     large_attrs = "x" * 600_000  # each row ≈ 0.6 MB
     rows = [
-        _span_row(f"row-{i}", start_time_unix_ns=i * _HOUR_NS, attrs=large_attrs)
-        for i in range(5)
+        _span_row(f"row-{i}", start_time_unix_ns=i * _HOUR_NS, attrs=large_attrs) for i in range(5)
     ]
     _seed(daemon, rows)
     evicted = ring.rotate_until_within_policy(now_unix_ns=5 * _HOUR_NS)

@@ -119,9 +119,7 @@ _STAGES: tuple[tuple[BootstrapStage, Any, tuple[str, ...]], ...] = (
 # ---------------------------------------------------------------------------
 
 
-def _patch_stage_to_explode(
-    monkeypatch: pytest.MonkeyPatch, stage_module: Any
-) -> None:
+def _patch_stage_to_explode(monkeypatch: pytest.MonkeyPatch, stage_module: Any) -> None:
     """Replace `<stage_module>.execute` with one that raises RuntimeError."""
 
     async def _boom(*_args: Any, **_kwargs: Any) -> None:
@@ -169,9 +167,7 @@ def _spy_rollback_order(
 
         return _spy
 
-    new_handlers: dict[
-        BootstrapStage, Callable[[_MutableHarnessContext], Awaitable[None]]
-    ] = {
+    new_handlers: dict[BootstrapStage, Callable[[_MutableHarnessContext], Awaitable[None]]] = {
         stage: _make_spy(stage, original)
         for stage, original in _boot._ROLLBACK_HANDLERS.items()  # type: ignore[attr-defined]
     }
@@ -225,8 +221,7 @@ async def test_through_stage_n_post_conditions(
     for attr in attrs:
         value = getattr(ctx, attr, None)
         assert value is not None, (
-            f"stage {stage.name} post-condition violated: "
-            f"builder.{attr} is None"
+            f"stage {stage.name} post-condition violated: builder.{attr} is None"
         )
 
 

@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from harness_core import PersonaTier
 from harness_as.sandbox_tier import SandboxTier
 from harness_core.identity import StepID
 from harness_cp.cp_shared_types import ModelBinding
@@ -180,6 +181,7 @@ def _binding(provider: str, model: str = "test-model-1") -> StepEffectiveBinding
         model_binding=ModelBinding(provider=provider, model=model),
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         override_applied=False,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
     )
 
 
@@ -258,9 +260,7 @@ async def test_dispatch_anthropic_round_trip() -> None:
 
     assert adapter.client.messages.last_kwargs is not None
     assert adapter.client.messages.last_kwargs["model"] == "test-model-1"
-    assert adapter.client.messages.last_kwargs["messages"] == [
-        {"role": "user", "content": "hi"}
-    ]
+    assert adapter.client.messages.last_kwargs["messages"] == [{"role": "user", "content": "hi"}]
     assert adapter.client.messages.last_kwargs["max_tokens"] == 100
     assert result["id"] == "msg_test_001"
 

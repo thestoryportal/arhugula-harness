@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+from harness_core import PersonaTier
 from harness_as.sandbox_tier import SandboxTier
 from harness_core.identity import StepID
 from harness_cp.cp_shared_types import ModelBinding
@@ -88,9 +89,7 @@ class _MockInnerToolDispatcher:
     ) -> Mapping[str, Any]:
         self.calls.append((binding, step))
         if self._cursor >= len(self.outcomes):
-            raise IndexError(
-                f"_MockInnerToolDispatcher exhausted after {self._cursor} calls"
-            )
+            raise IndexError(f"_MockInnerToolDispatcher exhausted after {self._cursor} calls")
         outcome = self.outcomes[self._cursor]
         self._cursor += 1
         if isinstance(outcome, BaseException):
@@ -119,6 +118,7 @@ def _binding() -> StepEffectiveBinding:
         model_binding=ModelBinding(provider="anthropic", model="claude-test-1"),
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         override_applied=False,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
     )
 
 
@@ -258,8 +258,7 @@ async def test_transient_fail_then_success_emits_two_inner_spans() -> None:
     assert out == success_payload
     assert len(inner.calls) == 2
     inner_spans = [
-        s for s in exporter.get_finished_spans()
-        if s.name == "harness.runtime.tool_retry_attempt"
+        s for s in exporter.get_finished_spans() if s.name == "harness.runtime.tool_retry_attempt"
     ]
     assert len(inner_spans) == 2
     by_attempt = {s.attributes["retry.attempt_number"]: s for s in inner_spans}
@@ -298,8 +297,7 @@ async def test_max_attempts_exhaustion_raises_typed_terminal_error() -> None:
     assert excinfo.value.last_failure_class == "ToolInvocationTimeoutError"
     assert "RT-FAIL-TOOL-RETRY-EXHAUSTED" in str(excinfo.value)
     outer_spans = [
-        s for s in exporter.get_finished_spans()
-        if s.name == "harness.runtime.retry_tool_dispatch"
+        s for s in exporter.get_finished_spans() if s.name == "harness.runtime.retry_tool_dispatch"
     ]
     assert len(outer_spans) == 1
     events = list(outer_spans[0].events)
@@ -358,8 +356,7 @@ async def test_fail_fast_on_permanent_error_reraises_verbatim() -> None:
     # Only one inner call (no retry consumption on fail-fast).
     assert len(inner.calls) == 1
     inner_spans = [
-        s for s in exporter.get_finished_spans()
-        if s.name == "harness.runtime.tool_retry_attempt"
+        s for s in exporter.get_finished_spans() if s.name == "harness.runtime.tool_retry_attempt"
     ]
     assert len(inner_spans) == 1
     assert inner_spans[0].attributes["retry.terminal"] == "fail-fast"
@@ -410,8 +407,7 @@ async def test_no_breaker_interaction_during_dispatch() -> None:
     await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
 
     assert recorder.breaker_calls == [], (
-        f"v1.15 invariant: wrapper must NOT call breaker API; "
-        f"observed: {recorder.breaker_calls}"
+        f"v1.15 invariant: wrapper must NOT call breaker API; observed: {recorder.breaker_calls}"
     )
     # No harness.breaker.* spans emitted either.
     breaker_spans = [
@@ -439,8 +435,7 @@ def test_module_does_not_import_fallback_chain_symbols() -> None:
     }
     leaked = forbidden & set(vars(mod))
     assert not leaked, (
-        f"v1.15 invariant: wrapper module must not surface fallback-chain "
-        f"symbols; leaked: {leaked}"
+        f"v1.15 invariant: wrapper module must not surface fallback-chain symbols; leaked: {leaked}"
     )
 
 

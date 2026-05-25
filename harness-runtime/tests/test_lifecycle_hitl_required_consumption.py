@@ -40,7 +40,9 @@ def _input(
 class TestEvaluateHitlRequired:
     """4-axis composition coverage per C-CP-19 §19.1 + §19.4 (AC #2)."""
 
-    def test_read_only_blast_radius_alone_does_not_force_hitl_unless_persona_floor_applies(self) -> None:
+    def test_read_only_blast_radius_alone_does_not_force_hitl_unless_persona_floor_applies(
+        self,
+    ) -> None:
         """READ_ONLY blast → AUTO; but persona floor for all 3 tiers = ASK → True."""
         # All 3 persona tiers map to ASK per PERSONA_TIER_GATE_LEVEL_FLOOR.
         # So max(blast=AUTO, persona=ASK) = ASK → True.
@@ -49,9 +51,7 @@ class TestEvaluateHitlRequired:
 
     def test_external_irreversible_blast_radius_forces_hitl(self) -> None:
         """EXTERNAL_IRREVERSIBLE → ASK; combined with persona ASK → True."""
-        result = evaluate_hitl_required(
-            _input(blast_radius=BlastRadiusTier.EXTERNAL_IRREVERSIBLE)
-        )
+        result = evaluate_hitl_required(_input(blast_radius=BlastRadiusTier.EXTERNAL_IRREVERSIBLE))
         assert result is True
 
     def test_all_persona_tiers_yield_hitl_required(self) -> None:

@@ -43,9 +43,7 @@ def _stub() -> StepDispatcher:
 
 def test_registry_is_frozen_post_construction() -> None:
     """AC #1: StepKindDispatcherRegistry is frozen — mutation raises."""
-    registry = StepKindDispatcherRegistry(
-        dispatchers={StepKind.SUB_AGENT_DISPATCH: _stub()}
-    )
+    registry = StepKindDispatcherRegistry(dispatchers={StepKind.SUB_AGENT_DISPATCH: _stub()})
     with pytest.raises(Exception):  # noqa: B017 — Pydantic frozen-violation
         registry.dispatchers = {}  # type: ignore[misc]
 
@@ -53,9 +51,7 @@ def test_registry_is_frozen_post_construction() -> None:
 def test_registry_lookup_returns_bound_dispatcher() -> None:
     """AC #1: lookup of a bound kind returns the registered dispatcher."""
     dispatcher = _stub()
-    registry = StepKindDispatcherRegistry(
-        dispatchers={StepKind.SUB_AGENT_DISPATCH: dispatcher}
-    )
+    registry = StepKindDispatcherRegistry(dispatchers={StepKind.SUB_AGENT_DISPATCH: dispatcher})
     assert registry.lookup(StepKind.SUB_AGENT_DISPATCH) is dispatcher
 
 
@@ -69,9 +65,7 @@ def test_registry_lookup_unbound_raises_step_kind_dispatcher_not_bound_error() -
     Path B resolution); TOOL_STEP / HITL_STEP / DECLARATIVE_STEP remain
     unbound at the production registry pending their composer arcs.
     """
-    registry = StepKindDispatcherRegistry(
-        dispatchers={StepKind.SUB_AGENT_DISPATCH: _stub()}
-    )
+    registry = StepKindDispatcherRegistry(dispatchers={StepKind.SUB_AGENT_DISPATCH: _stub()})
     for unbound in (
         StepKind.INFERENCE_STEP,
         StepKind.TOOL_STEP,
@@ -84,9 +78,7 @@ def test_registry_lookup_unbound_raises_step_kind_dispatcher_not_bound_error() -
 
 def test_registry_lookup_error_carries_step_kind() -> None:
     """AC #1: typed error exposes the failing step_kind."""
-    registry = StepKindDispatcherRegistry(
-        dispatchers={StepKind.SUB_AGENT_DISPATCH: _stub()}
-    )
+    registry = StepKindDispatcherRegistry(dispatchers={StepKind.SUB_AGENT_DISPATCH: _stub()})
     with pytest.raises(StepKindDispatcherNotBoundError) as excinfo:
         registry.lookup(StepKind.INFERENCE_STEP)
     assert excinfo.value.step_kind == StepKind.INFERENCE_STEP

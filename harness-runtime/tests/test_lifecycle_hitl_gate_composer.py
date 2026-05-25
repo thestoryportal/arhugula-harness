@@ -39,6 +39,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 import pytest
+from harness_core import PersonaTier
 from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_core.identity import StepID
@@ -153,6 +154,7 @@ def _make_step(
         step_kind=StepKind.INFERENCE_STEP,
         step_payload={},
     )
+
     # Tests need to attach `hitl_placements` for composer step-1 read. Since
     # WorkflowStep is frozen + extra=forbid, wrap in a small adapter object.
     class _StepWithPlacements:
@@ -198,9 +200,7 @@ def _make_composer(
     inner: Any,
     surface: _MockAskUserQuestionSurface,
     tracer_provider: TracerProvider,
-    applicable_placements: frozenset[HITLPlacementKind] = frozenset(
-        {HITLPlacementKind.PRE_ACTION}
-    ),
+    applicable_placements: frozenset[HITLPlacementKind] = frozenset({HITLPlacementKind.PRE_ACTION}),
     ledger_writer: Any | None = None,
     audit_writer: Any | None = None,
 ) -> RuntimeHITLGateComposer:
@@ -215,7 +215,9 @@ def _make_composer(
         inner=inner,
         applicable_placements=applicable_placements,
         ask_user_question_surface=cast(AskUserQuestionSurface, surface),
-        ledger_writer=cast(Any, ledger_writer if ledger_writer is not None else _MockLedgerWriter()),
+        ledger_writer=cast(
+            Any, ledger_writer if ledger_writer is not None else _MockLedgerWriter()
+        ),
         audit_writer=cast(Any, audit_writer if audit_writer is not None else _MockAuditWriter()),
         tracer_provider=tracer_provider,
         audit_signing_key_id="harness-runtime-test",
@@ -381,8 +383,7 @@ async def test_dispatch_with_matching_placement_opens_3_canonical_spans(
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    result = await composer.dispatch(cast(Any, object()), step, step_context=ctx
-    )
+    result = await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
     assert result == {"inner_dispatched": True}
     assert len(inner.calls) == 1
@@ -421,12 +422,9 @@ async def test_hitl_gate_evaluated_span_carries_canonical_3_attributes(
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    await composer.dispatch(cast(Any, object()), step, step_context=ctx
-    )
+    await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
-    gate_spans = [
-        s for s in exporter.get_finished_spans() if s.name == "hitl.gate.evaluated"
-    ]
+    gate_spans = [s for s in exporter.get_finished_spans() if s.name == "hitl.gate.evaluated"]
     assert len(gate_spans) == 1
     gate_span = gate_spans[0]
     attrs = dict(gate_span.attributes) if gate_span.attributes else {}
@@ -464,12 +462,9 @@ async def test_hitl_response_class_attribute_carries_operator_response(
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    await composer.dispatch(cast(Any, object()), step, step_context=ctx
-    )
+    await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
-    resp_spans = [
-        s for s in exporter.get_finished_spans() if s.name == "hitl.invocation.responded"
-    ]
+    resp_spans = [s for s in exporter.get_finished_spans() if s.name == "hitl.invocation.responded"]
     assert len(resp_spans) == 1
     attrs = dict(resp_spans[0].attributes) if resp_spans[0].attributes else {}
     # Canonical 3 per ADR-D5 v1.3 §1.8 row 3 + CP carrier HITL_SPAN_NAMESPACE_SCHEMA[2]
@@ -563,8 +558,7 @@ async def test_dispatch_composes_real_handoff_context_for_size_attribute(
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    await composer.dispatch(cast(Any, object()), step, step_context=ctx
-    )
+    await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
     opened = [s for s in exporter.get_finished_spans() if s.name == "hitl.invocation.opened"]
     assert len(opened) == 1
@@ -655,8 +649,7 @@ async def test_surface_receives_full_4_response_palette(
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    await composer.dispatch(cast(Any, object()), step, step_context=ctx
-    )
+    await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
     assert len(surface.calls) == 1
     _, options, _ = surface.calls[0]
@@ -696,8 +689,7 @@ async def test_4_substep_audit_chain_writes_one_cp_one_od_entry_per_placement(
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    await composer.dispatch(cast(Any, object()), step, step_context=ctx
-    )
+    await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
     # 8b: one F2 entry appended with action_id matching hitl:<parent>:<position>
     assert len(ledger.appends) == 1
@@ -713,9 +705,7 @@ async def test_4_substep_audit_chain_writes_one_cp_one_od_entry_per_placement(
 
     assert isinstance(od_entry, AuditLedgerEntry)
     # Substep 8c projected the CP entry's action_id under audit.cp.action_id
-    cp_action_id_attr = od_entry.payload.audit_namespace_attrs.get(
-        "audit.cp.action_id"
-    )
+    cp_action_id_attr = od_entry.payload.audit_namespace_attrs.get("audit.cp.action_id")
     assert cp_action_id_attr is not None and cp_action_id_attr.startswith("hitl:")
 
 
@@ -735,14 +725,15 @@ async def test_approve_response_delegates_to_inner(
         [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=2.0)]
     )
     composer = _make_composer(
-        inner=inner, surface=surface, tracer_provider=provider,
+        inner=inner,
+        surface=surface,
+        tracer_provider=provider,
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    result = await composer.dispatch(cast(Any, object()), step, step_context=ctx
-    )
+    result = await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
     assert result == {"inner_dispatched": True}
     assert len(inner.calls) == 1
@@ -780,8 +771,7 @@ async def test_edit_response_records_edited_proposal_hash_in_audit(
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    await composer.dispatch(cast(Any, object()), step, step_context=ctx
-    )
+    await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
     # Inner still called (EDIT proceeds to step 5)
     assert len(inner.calls) == 1
@@ -825,8 +815,7 @@ async def test_reject_response_raises_typed_error(
     ctx = _make_step_context()
 
     with pytest.raises(HITLGateRejectedError, match="rejected"):
-        await composer.dispatch(cast(Any, object()), step, step_context=ctx
-        )
+        await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
     # Inner NOT called on REJECT path
     assert inner.calls == []
@@ -873,6 +862,7 @@ async def test_respond_response_does_not_inject_payload(
         step_kind=StepKind.INFERENCE_STEP,
         step_payload=original_payload,
     )
+
     # Wrap with placements (same adapter pattern as _make_step)
     class _StepAdapter:
         def __init__(self, inner: WorkflowStep, placements: tuple[HITLPlacement, ...]) -> None:
@@ -885,8 +875,7 @@ async def test_respond_response_does_not_inject_payload(
     step = cast(WorkflowStep, _StepAdapter(inner_step, (placement,)))
     ctx = _make_step_context()
 
-    await composer.dispatch(cast(Any, object()), step, step_context=ctx
-    )
+    await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
     # Inner WAS called (RESPOND proceeds to step 5 with step unchanged)
     assert len(inner.calls) == 1
@@ -940,8 +929,7 @@ async def test_two_pre_action_placements_emit_per_placement_canonical_4_spans(
     step = _make_step(placements=(placement_a, placement_b))
     ctx = _make_step_context()
 
-    await composer.dispatch(cast(Any, object()), step, step_context=ctx
-    )
+    await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
     # Surface called twice (once per placement)
     assert len(surface.calls) == 2
@@ -1081,9 +1069,7 @@ async def test_retry_of_gate_re_evaluates_gate_per_attempt(
         model="claude-test-1",
         family=ProviderFamily.ANTHROPIC,
     )
-    chain = FallbackChain(
-        primary=primary, same_family=(), cross_family=(), terminal=None
-    )
+    chain = FallbackChain(primary=primary, same_family=(), cross_family=(), terminal=None)
 
     async def _noop_sleep(_seconds: float) -> None:
         return None
@@ -1102,6 +1088,7 @@ async def test_retry_of_gate_re_evaluates_gate_per_attempt(
         model_binding=ModelBinding(provider="anthropic", model="claude-test-1"),
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         override_applied=False,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     inner_step = WorkflowStep(
@@ -1131,16 +1118,13 @@ async def test_retry_of_gate_re_evaluates_gate_per_attempt(
     # per retry attempt). Each retry through the C-RT-16 wrapper re-
     # enters the HITL composer body step 1 of §14.8.2 → fires the gate.
     assert len(surface.calls) == 3, (
-        f"AC #12: expected 3 surface invocations (one per retry attempt), "
-        f"got {len(surface.calls)}"
+        f"AC #12: expected 3 surface invocations (one per retry attempt), got {len(surface.calls)}"
     )
     assert len(audit.appends) == 3, (
-        f"AC #12: expected 3 audit entries (one per retry attempt), "
-        f"got {len(audit.appends)}"
+        f"AC #12: expected 3 audit entries (one per retry attempt), got {len(audit.appends)}"
     )
     assert bare.attempt == 3, (
-        f"AC #12: expected 3 bare-inner invocations (one per retry attempt), "
-        f"got {bare.attempt}"
+        f"AC #12: expected 3 bare-inner invocations (one per retry attempt), got {bare.attempt}"
     )
 
     # Per spec §14.8.5 canonical 4-span shape per gate invocation: 3

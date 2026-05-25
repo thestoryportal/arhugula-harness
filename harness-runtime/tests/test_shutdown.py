@@ -463,9 +463,7 @@ async def test_shutdown_happy_path(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_shutdown_step_1_sets_drained_flag(tmp_path: Path) -> None:
     tracer = _FakeTracerWithShutdown()
-    ctx = _shutdown_ctx(
-        tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={}
-    )
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
     assert ctx.drained_flag.is_set() is False
 
     await shutdown(ctx)
@@ -477,9 +475,7 @@ async def test_shutdown_step_1_sets_drained_flag(tmp_path: Path) -> None:
 async def test_shutdown_delegates_step_2_to_flush(tmp_path: Path) -> None:
     """The report's inner `flush` field is populated by flush_observability."""
     tracer = _FakeTracerWithShutdown(returns=True)
-    ctx = _shutdown_ctx(
-        tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={}
-    )
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
     await shutdown(ctx, timeout=2.0)
     # force_flush should have been called with ~2000ms budget (allow drift).
     assert len(tracer.calls) == 1
@@ -517,9 +513,7 @@ async def test_shutdown_invokes_tracer_shutdown_via_to_thread(
 
     monkeypatch.setattr(asyncio, "to_thread", _spy)
     tracer = _FakeTracerWithShutdown(returns=True)
-    ctx = _shutdown_ctx(
-        tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={}
-    )
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=_FakeCollectorDaemon(), providers={})
 
     await shutdown(ctx)
 
@@ -619,9 +613,7 @@ async def test_shutdown_idempotent_second_call_returns_cached(tmp_path: Path) ->
     daemon = _FakeCollectorDaemon()
     tracer = _FakeTracerWithShutdown()
     providers = {"anthropic": _FakeProvider()}
-    ctx = _shutdown_ctx(
-        tmp_path, tracer=tracer, daemon=daemon, providers=providers
-    )
+    ctx = _shutdown_ctx(tmp_path, tracer=tracer, daemon=daemon, providers=providers)
 
     r1 = await shutdown(ctx)
     # Reset side-effect markers; second call must NOT re-invoke closes.

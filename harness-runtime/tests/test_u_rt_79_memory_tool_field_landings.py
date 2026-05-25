@@ -181,8 +181,7 @@ def test_freeze_signature_carries_memory_tool_registry_kwarg(
 
     freeze_source = inspect.getsource(mutable_context._MutableHarnessContext.freeze)
     assert "memory_tool_registry=self.memory_tool_registry" in freeze_source, (
-        "freeze() body must pass memory_tool_registry to HarnessContext per "
-        "U-RT-79 AC #5"
+        "freeze() body must pass memory_tool_registry to HarnessContext per U-RT-79 AC #5"
     )
 
 

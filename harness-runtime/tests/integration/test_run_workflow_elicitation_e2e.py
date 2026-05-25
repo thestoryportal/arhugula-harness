@@ -197,19 +197,23 @@ def _patched_runtime(
             self.registered_globally = False
 
     monkeypatch.setattr(
-        _stage_4_od_mod, "materialize_collector_daemon_stage",
+        _stage_4_od_mod,
+        "materialize_collector_daemon_stage",
         lambda config, **_k: _CollectorStage(daemon),
     )
     monkeypatch.setattr(
-        _stage_4_od_mod, "materialize_ring_buffer_stage",
+        _stage_4_od_mod,
+        "materialize_ring_buffer_stage",
         lambda config, _d: None,
     )
     monkeypatch.setattr(
-        _stage_4_od_mod, "materialize_tracer_provider_stage",
+        _stage_4_od_mod,
+        "materialize_tracer_provider_stage",
         lambda config, **_k: _TracerStage(tracer_provider),
     )
     monkeypatch.setattr(
-        _stage_4_od_mod, "materialize_span_processor_stage",
+        _stage_4_od_mod,
+        "materialize_span_processor_stage",
         lambda config, _p, **_k: None,
     )
 
@@ -238,9 +242,7 @@ def _build_workflow_with_hitl_placement(
 
     class _StepWithPlacements:
         def __init__(self) -> None:
-            self.hitl_placements = (
-                HITLPlacement(position=HITLPlacementKind.PRE_ACTION),
-            )
+            self.hitl_placements = (HITLPlacement(position=HITLPlacementKind.PRE_ACTION),)
 
         def __getattr__(self, name: str) -> Any:
             return getattr(base_step, name)
@@ -261,7 +263,13 @@ def _build_workflow_with_hitl_placement(
             return WorkflowManifestEntry(
                 workflow_id="wf-u-rt-62-e2e",
                 workload_class=_WORKLOAD,
-                persona_tier=PersonaTier.TEAM_BINDING,
+                # Post-CP-v1.17 §6.5: persona_tier is now a required field on
+                # StepEffectiveBinding and the HITL composer evaluates the
+                # (persona_tier, engine_class) matrix cell at hitl_gate_composer
+                # line 830. (TEAM_BINDING, PURE_PATTERN_NO_ENGINE) is EXCLUDED
+                # per CP §18.1. Use (SOLO_DEVELOPER, PURE_PATTERN_NO_ENGINE) =
+                # SYNC_BLOCKING so the elicit path remains exercised.
+                persona_tier=PersonaTier.SOLO_DEVELOPER,
                 engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
                 topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
                 layer_budgets=(),
@@ -413,9 +421,7 @@ async def test_e2e_run_workflow_elicit_round_trip(
             )
 
         # AC #6 (i): tool call succeeds.
-        assert tool_result.isError is False, (
-            f"run_workflow tool error: {tool_result.content!r}"
-        )
+        assert tool_result.isError is False, f"run_workflow tool error: {tool_result.content!r}"
         assert tool_result.content, "expected JSON RunResult content"
 
         # AC #6 (iii): ctx.elicit invoked exactly once.
@@ -435,8 +441,7 @@ async def test_e2e_run_workflow_elicit_round_trip(
         payload_text = tool_result.content[0].text  # type: ignore[union-attr]
         cp_result_dict = json.loads(payload_text)
         assert cp_result_dict["status"] == "success", (
-            f"expected SUCCESS status from completed workflow; got "
-            f"{cp_result_dict.get('status')!r}"
+            f"expected SUCCESS status from completed workflow; got {cp_result_dict.get('status')!r}"
         )
         assert cp_result_dict["workflow_id"] == workflow.workflow_id
 
@@ -501,9 +506,7 @@ async def test_e2e_run_workflow_decline_maps_to_reject(
         _ = request_context, params
         return ElicitResult(action="decline", content=None)
 
-    workflow = _build_workflow_with_hitl_placement(
-        _make_test_step_dispatchers_override(ctx, [])
-    )
+    workflow = _build_workflow_with_hitl_placement(_make_test_step_dispatchers_override(ctx, []))
     ctx.mcp_server._state["_harness_ctx"] = ctx
     ctx.mcp_server.workflow_registry[workflow.workflow_id] = workflow
 

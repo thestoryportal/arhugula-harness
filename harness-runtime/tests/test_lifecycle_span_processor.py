@@ -98,9 +98,7 @@ def test_flush_drives_exporter_for_emitted_span(tmp_path: Path) -> None:
     """After emitting a span and calling flush, the exporter has received it."""
     in_memory = InMemorySpanExporter()
     provider = _provider()
-    stage = materialize_span_processor_stage(
-        _config(tmp_path), provider, exporter=in_memory
-    )
+    stage = materialize_span_processor_stage(_config(tmp_path), provider, exporter=in_memory)
     tracer = provider.get_tracer("u-rt-28-test")
     with tracer.start_as_current_span("test-span"):
         pass
@@ -186,9 +184,7 @@ def test_materialize_returns_stage_with_processor_and_exporter(
     tmp_path: Path,
 ) -> None:
     exporter = InMemorySpanExporter()
-    stage = materialize_span_processor_stage(
-        _config(tmp_path), _provider(), exporter=exporter
-    )
+    stage = materialize_span_processor_stage(_config(tmp_path), _provider(), exporter=exporter)
     assert isinstance(stage, SpanProcessorStage)
     assert isinstance(stage.processor, BatchSpanProcessor)
     assert stage.exporter is exporter
@@ -202,9 +198,7 @@ def test_materialize_attaches_processor_to_provider(tmp_path: Path) -> None:
     pipeline."""
     in_memory = InMemorySpanExporter()
     provider = _provider()
-    stage = materialize_span_processor_stage(
-        _config(tmp_path), provider, exporter=in_memory
-    )
+    stage = materialize_span_processor_stage(_config(tmp_path), provider, exporter=in_memory)
     tracer = provider.get_tracer("attach-test")
     with tracer.start_as_current_span("attached"):
         pass

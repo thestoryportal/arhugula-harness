@@ -22,6 +22,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 
+from harness_core import PersonaTier
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_as.tool_contract import ToolContract
 from harness_cp.cp_shared_types import MCPTrustTier
@@ -116,9 +117,7 @@ def _make_step_context() -> StepExecutionContext:
         parent_action_id="workflow:wf-1:step:0",
         parent_gate_level=GateLevel.AUTO,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
-        parent_actor=Actor(
-            actor_class=ActorClass.OPERATOR, actor_id="harness-runtime"
-        ),
+        parent_actor=Actor(actor_class=ActorClass.OPERATOR, actor_id="harness-runtime"),
         parent_entry_hash="",
         parent_idempotency_key="run-idem-key-abc",
         tenant_id=None,
@@ -140,6 +139,7 @@ def _make_binding() -> StepEffectiveBinding:
         model_binding=ModelBinding(provider="anthropic", model="claude-opus-4-7"),
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         override_applied=False,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
     )
 
 
@@ -232,9 +232,7 @@ async def test_dispatch_missing_tool_id_in_payload_raises() -> None:
             step_payload={},  # no tool_id
         )
         with pytest.raises(ToolContractUnknownError, match="missing or non-str"):
-            await dispatcher.dispatch(
-                _make_binding(), step, step_context=_make_step_context()
-            )
+            await dispatcher.dispatch(_make_binding(), step, step_context=_make_step_context())
     finally:
         await host.shutdown()
 
@@ -361,9 +359,7 @@ async def test_dispatch_schema_violation_raises() -> None:
         sandbox_decision_resolver=_good_sandbox_resolver,
     )
     try:
-        with pytest.raises(
-            ToolInvocationSchemaViolationError, match="output_schema validation"
-        ):
+        with pytest.raises(ToolInvocationSchemaViolationError, match="output_schema validation"):
             await dispatcher.dispatch(
                 _make_binding(),
                 _make_step("echo", {"message": "x"}),

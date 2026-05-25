@@ -284,9 +284,7 @@ def test_factory_symbol_importable() -> None:
     from harness_runtime.bootstrap.factories import memory_tool_registry_factory
 
     assert callable(memory_tool_registry_factory.materialize_memory_tool_registry_stage)
-    assert memory_tool_registry_factory.MEMORY_TOOL_FILESYSTEM_ROOT_SUBPATH == (
-        ".harness/memories"
-    )
+    assert memory_tool_registry_factory.MEMORY_TOOL_FILESYSTEM_ROOT_SUBPATH == (".harness/memories")
     assert memory_tool_registry_factory.PROTOCOL_REQUIRED_METHODS == (
         "view",
         "create",

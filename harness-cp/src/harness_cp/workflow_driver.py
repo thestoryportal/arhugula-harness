@@ -697,10 +697,13 @@ def _execute_workflow_body(
             ), steps_executed
 
         # § 25.3.3.2 — Resolve binding via U-CP-14.
+        # `persona_tier` sourced from manifest_entry per CP spec v1.17 §6.5.3
+        # (canonical upstream — §6.1 WorkflowManifestEntry.persona_tier).
         binding = resolve_step_binding(
             manifest_entry,
             str(step.step_id),
             default_model_binding=default_model_binding,
+            persona_tier=manifest_entry.persona_tier,
         )
 
         # § 25.3.3.3 — Acquire lease (per §5.3 lease.mechanism substrate;

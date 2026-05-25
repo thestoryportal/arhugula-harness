@@ -198,10 +198,7 @@ async def test_empty_relative_path_rejected(tmp_path: Path) -> None:
 async def test_concurrent_distinct_paths_complete(tmp_path: Path) -> None:
     """100 concurrent create calls to distinct paths complete without error."""
     backend = LocalFilesystemMemoryToolBackend(root=tmp_path)
-    tasks = [
-        backend.create(f"/memories/file_{i}.txt", f"content_{i}".encode())
-        for i in range(100)
-    ]
+    tasks = [backend.create(f"/memories/file_{i}.txt", f"content_{i}".encode()) for i in range(100)]
     await asyncio.gather(*tasks)
     # Verify all readable
     for i in range(100):
@@ -290,9 +287,7 @@ async def test_no_retry_on_io_failure_create(tmp_path: Path) -> None:
         with pytest.raises(MemoryCallbackIOError):
             await backend.create("/memories/foo.txt", b"data")
 
-    assert call_count == 1, (
-        f"expected exactly 1 filesystem write attempt; got {call_count}"
-    )
+    assert call_count == 1, f"expected exactly 1 filesystem write attempt; got {call_count}"
 
 
 @pytest.mark.asyncio

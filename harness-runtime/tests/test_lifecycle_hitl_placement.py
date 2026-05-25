@@ -355,9 +355,7 @@ def test_rewrite_tool_call_restricted_palette_at_cross_family_active(
         cross_trust_boundary_state=CrossTrustBoundaryState.CROSS_FAMILY_ACTIVE,
         hitl_required=True,
     )
-    assert result.response_palette == frozenset(
-        {HITLResponse.REJECT, HITLResponse.RESPOND}
-    )
+    assert result.response_palette == frozenset({HITLResponse.REJECT, HITLResponse.RESPOND})
 
 
 # ---------------------------------------------------------------------------
@@ -449,5 +447,3 @@ def test_hitl_placement_stage_is_frozen(tmp_path: Path) -> None:
     stage = materialize_hitl_placement_stage(_config(tmp_path))
     with pytest.raises(FrozenInstanceError):
         stage.registry = RuntimeHITLPlacementRegistry()  # type: ignore[misc]
-
-

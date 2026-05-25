@@ -323,6 +323,7 @@ async def test_valid_run_executes_via_driver_and_returns_run_result(
     `tests/integration/test_run_smoke.py`.
     """
     import sys
+
     _shutdown_mod = sys.modules["harness_runtime.shutdown"]
 
     from types import SimpleNamespace
@@ -379,12 +380,8 @@ async def test_valid_run_executes_via_driver_and_returns_run_result(
         )
 
     monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _fake_bootstrap)
-    monkeypatch.setattr(
-        _api, "_default_config", lambda: SimpleNamespace(drain_timeout_seconds=5.0)
-    )
-    monkeypatch.setattr(
-        _api, "_invoke_run_workflow_via_in_process_mcp", _fake_invoke
-    )
+    monkeypatch.setattr(_api, "_default_config", lambda: SimpleNamespace(drain_timeout_seconds=5.0))
+    monkeypatch.setattr(_api, "_invoke_run_workflow_via_in_process_mcp", _fake_invoke)
     monkeypatch.setattr(_shutdown_mod, "shutdown", _fake_shutdown)
 
     result = await run(_Workflow())
@@ -396,6 +393,7 @@ async def test_valid_run_executes_via_driver_and_returns_run_result(
 async def test_run_releases_lock_after_completion(monkeypatch: pytest.MonkeyPatch) -> None:
     """A successful `run()` releases the lock; subsequent calls work."""
     import sys
+
     _shutdown_mod = sys.modules["harness_runtime.shutdown"]
 
     from types import SimpleNamespace
@@ -450,12 +448,8 @@ async def test_run_releases_lock_after_completion(monkeypatch: pytest.MonkeyPatc
         )
 
     monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _fake_bootstrap)
-    monkeypatch.setattr(
-        _api, "_default_config", lambda: SimpleNamespace(drain_timeout_seconds=5.0)
-    )
-    monkeypatch.setattr(
-        _api, "_invoke_run_workflow_via_in_process_mcp", _fake_invoke
-    )
+    monkeypatch.setattr(_api, "_default_config", lambda: SimpleNamespace(drain_timeout_seconds=5.0))
+    monkeypatch.setattr(_api, "_invoke_run_workflow_via_in_process_mcp", _fake_invoke)
     monkeypatch.setattr(_shutdown_mod, "shutdown", _fake_shutdown)
 
     _ = await run(_Workflow())

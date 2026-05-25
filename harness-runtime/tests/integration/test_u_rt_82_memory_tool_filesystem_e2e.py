@@ -45,6 +45,7 @@ from typing import Any
 
 import pytest
 from anthropic import AsyncAnthropic
+from harness_core import PersonaTier
 from harness_as.anthropic_graceful_degradation import MemoryToolStorageBackend
 from harness_core.identity import StepID
 from harness_cp.cp_shared_types import ModelBinding
@@ -181,6 +182,7 @@ def _binding() -> StepEffectiveBinding:
         model_binding=ModelBinding(provider="anthropic", model=_E2E_MODEL),
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         override_applied=False,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
     )
 
 
@@ -302,13 +304,10 @@ async def test_memory_tool_filesystem_e2e_write_path(
     )
 
     # AC #4: memory.operation span emitted with the right attributes.
-    memory_spans = [
-        s for s in exporter.get_finished_spans() if s.name == "memory.operation"
-    ]
+    memory_spans = [s for s in exporter.get_finished_spans() if s.name == "memory.operation"]
     assert memory_spans, "no memory.operation span emitted"
     write_spans = [
-        s for s in memory_spans
-        if (s.attributes or {}).get("memory.operation.kind") == "write"
+        s for s in memory_spans if (s.attributes or {}).get("memory.operation.kind") == "write"
     ]
     assert write_spans, (
         f"no memory.operation span with kind=write; observed spans: "
@@ -337,9 +336,7 @@ def test_module_skip_gate_present() -> None:
     """AC #2 gate-mechanism assertion: the module-level pytestmark includes
     a skipif gate on ANTHROPIC_API_KEY env var, so the e2e tests skip
     cleanly when no credential is available (no false failure in CI)."""
-    skipif_marker = next(
-        (m for m in pytestmark if m.name == "skipif"), None
-    )
+    skipif_marker = next((m for m in pytestmark if m.name == "skipif"), None)
     assert skipif_marker is not None
     # The skipif condition is `not os.getenv("ANTHROPIC_API_KEY")` — when
     # the env var is set (as it must be for this test to even reach this

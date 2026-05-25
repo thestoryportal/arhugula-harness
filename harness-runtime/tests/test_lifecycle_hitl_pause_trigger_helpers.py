@@ -31,9 +31,7 @@ from harness_runtime.lifecycle.webhook_delivery_composer import WebhookDeliveryR
 # --- _evaluate_cell_synchrony_tolerant -------------------------------------
 
 
-def _binding_with_persona_tier(
-    *, persona_tier: PersonaTier, engine_class: EngineClass
-) -> Any:
+def _binding_with_persona_tier(*, persona_tier: PersonaTier, engine_class: EngineClass) -> Any:
     """Duck-typed binding fixture matching the production callsite pattern at
     `hitl_gate_composer.py:821` (`getattr(binding, "persona_tier", None)`).
 
@@ -70,9 +68,7 @@ def test_evaluate_cell_synchrony_tolerant_returns_synchrony_for_sync_blocking_ce
         persona_tier=PersonaTier.SOLO_DEVELOPER,
         engine_class=EngineClass.EVENT_SOURCED_REPLAY,
     )
-    assert (
-        _evaluate_cell_synchrony_tolerant(binding) is SynchronyClass.SYNC_BLOCKING
-    )
+    assert _evaluate_cell_synchrony_tolerant(binding) is SynchronyClass.SYNC_BLOCKING
 
 
 def test_evaluate_cell_synchrony_tolerant_returns_synchrony_for_durable_async_cell() -> None:
@@ -85,9 +81,7 @@ def test_evaluate_cell_synchrony_tolerant_returns_synchrony_for_durable_async_ce
         persona_tier=PersonaTier.SOLO_DEVELOPER,
         engine_class=EngineClass.RECONCILER_LOOP,
     )
-    assert (
-        _evaluate_cell_synchrony_tolerant(binding) is SynchronyClass.DURABLE_ASYNC
-    )
+    assert _evaluate_cell_synchrony_tolerant(binding) is SynchronyClass.DURABLE_ASYNC
 
 
 def test_evaluate_cell_synchrony_tolerant_returns_excluded_for_excluded_cell() -> None:
@@ -105,17 +99,23 @@ def test_evaluate_cell_synchrony_tolerant_returns_excluded_for_excluded_cell() -
     assert _evaluate_cell_synchrony_tolerant(binding) is SynchronyClass.EXCLUDED
 
 
+@pytest.mark.skip(
+    reason=(
+        "Post-CP-v1.17 §6.5: canonical StepEffectiveBinding now REQUIRES "
+        "persona_tier; the bare-binding-without-persona_tier path is "
+        "structurally unreachable. Retired at Phase 3 step 8 (U-RT-93 helper "
+        "revision) per checkpoint Reading A path 1 arc + runtime plan v2.25 "
+        "§7.1 AC #5."
+    )
+)
 def test_evaluate_cell_synchrony_tolerant_returns_none_for_binding_without_persona_tier() -> None:
-    """Test-fixture / partial-binding tolerance — canonical StepEffectiveBinding
-    does NOT declare persona_tier; helper returns None to signal sync-blocking
-    fall-through (mirrors existing _evaluate_hitl_required_tolerant precedent +
-    dispatch callsite at hitl_gate_composer.py:821).
-    """
+    """Retired by CP spec v1.17 §6.5 — persona_tier now required field."""
     bare = StepEffectiveBinding(
         step_id="step-1",
         model_binding=ModelBinding(provider="anthropic", model="claude-opus-4-7"),
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         override_applied=False,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
     )
     assert _evaluate_cell_synchrony_tolerant(bare) is None
 
@@ -184,9 +184,7 @@ def test_hitl_pause_requested_signal_normal_except_exception_does_not_suppress()
     ``HITLPauseRequestedSignal``. Only ``except BaseException`` (or the typed
     handler at U-RT-95 driver) consumes it.
     """
-    sig = HITLPauseRequestedSignal(
-        brief=_build_brief(), delivery_result=_build_delivery_result()
-    )
+    sig = HITLPauseRequestedSignal(brief=_build_brief(), delivery_result=_build_delivery_result())
     suppressed = False
     try:
         try:

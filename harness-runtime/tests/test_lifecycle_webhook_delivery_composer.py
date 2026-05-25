@@ -145,9 +145,7 @@ async def test_deliver_succeeds_after_retry() -> None:
 @pytest.mark.asyncio
 async def test_deliver_all_attempts_fail_raises_exhausted() -> None:
     sleep_fn, _ = _async_noop_sleep_factory()
-    client = _RecordingClient(
-        [_MockResponse(500), _MockResponse(500), _MockResponse(503)]
-    )
+    client = _RecordingClient([_MockResponse(500), _MockResponse(500), _MockResponse(503)])
     composer = WebhookDeliveryComposer(
         retry_max_attempts=3,
         http_client_factory=lambda: client,

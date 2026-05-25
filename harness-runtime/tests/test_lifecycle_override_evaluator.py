@@ -131,9 +131,17 @@ def test_default_path_matches_cp_direct(tmp_path: Path) -> None:
     """No override → result identical to calling CP's resolve_step_binding."""
     manifest = _manifest()
     runtime_result = _evaluator(tmp_path).resolve_step_binding(
-        manifest, "s1", default_model_binding=_DEFAULT_BINDING
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
     )
-    cp_result = resolve_step_binding(manifest, "s1", default_model_binding=_DEFAULT_BINDING)
+    cp_result = resolve_step_binding(
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
     assert isinstance(runtime_result, StepEffectiveBinding)
     assert runtime_result == cp_result
 
@@ -146,9 +154,17 @@ def test_override_path_matches_cp_direct(tmp_path: Path) -> None:
         }
     )
     runtime_result = _evaluator(tmp_path).resolve_step_binding(
-        manifest, "s1", default_model_binding=_DEFAULT_BINDING
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
     )
-    cp_result = resolve_step_binding(manifest, "s1", default_model_binding=_DEFAULT_BINDING)
+    cp_result = resolve_step_binding(
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
     assert isinstance(runtime_result, StepEffectiveBinding)
     # `override_audit_ref` carries a fresh UUID inside the CP composer, so
     # the two results diverge on that field. Compare the deterministic
@@ -170,7 +186,10 @@ def test_override_path_populates_audit_ref(tmp_path: Path) -> None:
         }
     )
     result = _evaluator(tmp_path).resolve_step_binding(
-        manifest, "s1", default_model_binding=_DEFAULT_BINDING
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
     )
     assert isinstance(result, StepEffectiveBinding)
     assert result.override_applied is True
@@ -186,7 +205,10 @@ def test_override_path_populates_audit_ref(tmp_path: Path) -> None:
 def test_default_path_no_override(tmp_path: Path) -> None:
     manifest = _manifest()
     result = _evaluator(tmp_path).resolve_step_binding(
-        manifest, "s1", default_model_binding=_DEFAULT_BINDING
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
     )
     assert isinstance(result, StepEffectiveBinding)
     assert result.override_applied is False
@@ -199,6 +221,16 @@ def test_evaluator_is_stateless_between_calls(tmp_path: Path) -> None:
     """Two calls with same inputs → equal deterministic-subset results."""
     evaluator = _evaluator(tmp_path)
     manifest = _manifest()
-    a = evaluator.resolve_step_binding(manifest, "s1", default_model_binding=_DEFAULT_BINDING)
-    b = evaluator.resolve_step_binding(manifest, "s1", default_model_binding=_DEFAULT_BINDING)
+    a = evaluator.resolve_step_binding(
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    b = evaluator.resolve_step_binding(
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
     assert a == b

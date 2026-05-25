@@ -136,9 +136,7 @@ def _span() -> SpanRef:
 def test_materialize_returns_stage_with_default_policy(tmp_path: Path) -> None:
     """The empty manifest yields a registry that returns `DEFAULT_RETRY_POLICY`
     for every tool name (the default policy carries identity)."""
-    stage = materialize_retry_breaker_stage(
-        _config(tmp_path, manifest=_manifest())
-    )
+    stage = materialize_retry_breaker_stage(_config(tmp_path, manifest=_manifest()))
     assert isinstance(stage, RetryBreakerStage)
     assert stage.registry.get_policy("any-tool") is DEFAULT_RETRY_POLICY
 
@@ -171,9 +169,7 @@ def test_materialize_raises_on_invalid_max_attempts(tmp_path: Path) -> None:
 
 def test_materialize_raises_on_invalid_default_policy(tmp_path: Path) -> None:
     """A caller-supplied default policy with `max_attempts < 1` raises."""
-    bad_default = RetryPolicy(
-        max_attempts=0, backoff="full-jitter", jitter="full-jitter"
-    )
+    bad_default = RetryPolicy(max_attempts=0, backoff="full-jitter", jitter="full-jitter")
     with pytest.raises(RetryBreakerBindError, match="default retry policy"):
         materialize_retry_breaker_stage(
             _config(tmp_path, manifest=_manifest()),
@@ -183,9 +179,7 @@ def test_materialize_raises_on_invalid_default_policy(tmp_path: Path) -> None:
 
 def test_get_breaker_returns_same_instance_on_repeat_lookup(tmp_path: Path) -> None:
     """Lazy instantiation: the same `(scope, identifier)` returns the same machine."""
-    stage = materialize_retry_breaker_stage(
-        _config(tmp_path, manifest=_manifest())
-    )
+    stage = materialize_retry_breaker_stage(_config(tmp_path, manifest=_manifest()))
     a = stage.registry.get_breaker(BreakerScope.PER_MODEL, "tool-x")
     b = stage.registry.get_breaker(BreakerScope.PER_MODEL, "tool-x")
     assert a is b
@@ -196,9 +190,7 @@ def test_get_breaker_returns_same_instance_on_repeat_lookup(tmp_path: Path) -> N
 
 def test_retry_breaker_stage_is_frozen(tmp_path: Path) -> None:
     """`RetryBreakerStage` is a frozen dataclass — assignment raises."""
-    stage = materialize_retry_breaker_stage(
-        _config(tmp_path, manifest=_manifest())
-    )
+    stage = materialize_retry_breaker_stage(_config(tmp_path, manifest=_manifest()))
     with pytest.raises(FrozenInstanceError):
         stage.registry = RuntimeRetryBreaker(  # type: ignore[misc]
             retry_policies={}, default_policy=DEFAULT_RETRY_POLICY
@@ -217,9 +209,7 @@ def test_staircase_advances_through_5_stages_on_transient_retry(tmp_path: Path) 
     Stage 1 → Stage 2 (cache kept) → Stage 3 (cache lost; cross-family) →
     Stage 4 (local terminal) → Stage 5 (HITL escalation).
     """
-    stage = materialize_retry_breaker_stage(
-        _config(tmp_path, manifest=_manifest())
-    ).registry
+    stage = materialize_retry_breaker_stage(_config(tmp_path, manifest=_manifest())).registry
     cause = ValidatorRetryExitClass.TRANSIENT_RETRY
 
     t1 = stage.advance_staircase(StaircaseStage.STAGE_1_REFLEXION, cause, 1)
@@ -247,9 +237,7 @@ def test_staircase_emits_n_intervals_for_n_transient_faults(tmp_path: Path) -> N
     transitions; each non-terminal stage maps to a `compute_delay_seconds`
     schedule entry. The transitions sequence is the §21.2 escalation envelope.
     """
-    registry = materialize_retry_breaker_stage(
-        _config(tmp_path, manifest=_manifest())
-    ).registry
+    registry = materialize_retry_breaker_stage(_config(tmp_path, manifest=_manifest())).registry
     cause = ValidatorRetryExitClass.TRANSIENT_RETRY
     current = StaircaseStage.STAGE_1_REFLEXION
 
@@ -288,12 +276,8 @@ def test_compute_delay_seconds_deterministic_under_seeded_rng() -> None:
     observable surface."""
     rng_a = random.Random(0xABCD)
     rng_b = random.Random(0xABCD)
-    delays_a = [
-        compute_full_jitter_delay_seconds(attempt, rng=rng_a) for attempt in range(4)
-    ]
-    delays_b = [
-        compute_full_jitter_delay_seconds(attempt, rng=rng_b) for attempt in range(4)
-    ]
+    delays_a = [compute_full_jitter_delay_seconds(attempt, rng=rng_a) for attempt in range(4)]
+    delays_b = [compute_full_jitter_delay_seconds(attempt, rng=rng_b) for attempt in range(4)]
     assert delays_a == delays_b
 
 
@@ -507,9 +491,7 @@ def test_dedupe_decision_first_ingestion_then_drop_on_deterministic_replay(
     When the U-RT-32 audit writer consumes outcomes, a DROP yields no new
     ledger row → exactly one ledger entry total.
     """
-    registry = materialize_retry_breaker_stage(
-        _config(tmp_path, manifest=_manifest())
-    ).registry
+    registry = materialize_retry_breaker_stage(_config(tmp_path, manifest=_manifest())).registry
     key = "req-1234"
     span = _span_view(key)
 
@@ -526,12 +508,8 @@ def test_dedupe_decision_first_ingestion_then_drop_on_deterministic_replay(
 def test_dedupe_decision_replay_derived_for_checkpoint_resume(tmp_path: Path) -> None:
     """`checkpoint_resume` replay disposition yields `RECORD_REPLAY_DERIVED`
     (re-emission is expected; the writer records a new replay-derived row)."""
-    registry = materialize_retry_breaker_stage(
-        _config(tmp_path, manifest=_manifest())
-    ).registry
-    span = _span_view(
-        "req-5678", disposition=ReplayDisposition.CHECKPOINT_RESUME
-    )
+    registry = materialize_retry_breaker_stage(_config(tmp_path, manifest=_manifest())).registry
+    span = _span_view("req-5678", disposition=ReplayDisposition.CHECKPOINT_RESUME)
     outcome = registry.dedupe_decision(span, _ledger_entry("req-5678"))
     assert outcome is DedupOutcome.RECORD_REPLAY_DERIVED
 
@@ -541,9 +519,7 @@ def test_dedupe_decision_escalates_on_cause_attribution_mismatch(
 ) -> None:
     """Deterministic replay with a `cause_attribution` mismatch escalates per
     C-OD-14 §14.5.3 invariance check."""
-    registry = materialize_retry_breaker_stage(
-        _config(tmp_path, manifest=_manifest())
-    ).registry
+    registry = materialize_retry_breaker_stage(_config(tmp_path, manifest=_manifest())).registry
     span = _span_view("req-9999", cause="rate_limit")
     prior = _ledger_entry("req-9999", cause="transient_provider_error")
     outcome = registry.dedupe_decision(span, prior)

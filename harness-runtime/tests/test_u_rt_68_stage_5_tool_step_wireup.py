@@ -23,9 +23,7 @@ def test_workflow_driver_branching_via_typed_table_no_new_conditional() -> None:
     the typed step-dispatcher table without a new conditional in the driver
     body. The Path A discipline (single dispatch table; no per-StepKind
     branches) is preserved at the workflow driver."""
-    driver_src = Path(
-        "harness-cp/src/harness_cp/workflow_driver.py"
-    ).read_text(encoding="utf-8")
+    driver_src = Path("harness-cp/src/harness_cp/workflow_driver.py").read_text(encoding="utf-8")
     assert "step.step_kind == StepKind.TOOL_STEP" not in driver_src
     assert "step_kind == 'TOOL_STEP'" not in driver_src
     assert 'step_kind == "TOOL_STEP"' not in driver_src

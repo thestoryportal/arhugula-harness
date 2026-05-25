@@ -35,6 +35,7 @@ ADR-F2 v1.2 audit composition.
 from __future__ import annotations
 
 from harness_as import GateLevel
+from harness_core import PersonaTier
 from harness_core.identity import ActionID
 from pydantic import BaseModel, ConfigDict
 
@@ -133,12 +134,21 @@ class StepEffectiveBinding(BaseModel):
     override_audit_ref: LedgerEntryRef | None = None
     """Populated only when `override_applied` is `True`."""
 
+    persona_tier: PersonaTier
+    """Persona-tier resolution per CP spec v1.17 §6.5 (required, no default).
+
+    Caller resolves persona tier prior to invocation per §6.5.3 — canonical
+    upstream is `WorkflowManifestEntry.persona_tier` per §6.1 (also exposed
+    at routing-manifest tier resolution per C-CP-01 §1.3).
+    """
+
 
 def resolve_step_binding(
     manifest_entry: WorkflowManifestEntry,
     step_id: str,
     *,
     default_model_binding: ModelBinding,
+    persona_tier: PersonaTier,
 ) -> StepEffectiveBinding:
     """Resolve the effective binding for a step — deterministic (C-CP-06 §6.2).
 
@@ -150,6 +160,10 @@ def resolve_step_binding(
     `default_model_binding` carries the manifest-default model binding (the
     manifest-entry shape does not carry a top-level `model_binding`; the default
     is supplied by the caller's routing-manifest resolution per C-CP-01 §1.3).
+
+    `persona_tier` is required (no default) per CP spec v1.17 §6.5; the caller
+    resolves the tier from `WorkflowManifestEntry.persona_tier` (§6.1) or
+    routing-manifest tier resolution (C-CP-01 §1.3) prior to invocation.
     """
     override = manifest_entry.per_step_overrides.get(step_id)  # type: ignore[arg-type]
     if override is None:
@@ -160,6 +174,7 @@ def resolve_step_binding(
             hitl_placement=None,
             override_applied=False,
             override_audit_ref=None,
+            persona_tier=persona_tier,
         )
     audit_entry = emit_override_audit_entry(
         workflow_id=manifest_entry.workflow_id,
@@ -178,6 +193,7 @@ def resolve_step_binding(
             entry_hash=audit_entry.prior_event_hash,
             actor=ActorIdentity("control-plane"),
         ),
+        persona_tier=persona_tier,
     )
 
 

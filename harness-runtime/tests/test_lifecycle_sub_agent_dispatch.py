@@ -201,6 +201,7 @@ def _binding() -> StepEffectiveBinding:
         hitl_placement=None,
         override_applied=False,
         override_audit_ref=None,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
     )
 
 
@@ -670,9 +671,7 @@ def test_step8b_writes_f2_dispatch_action_entry(tmp_path: Path) -> None:
     dispatcher, _, _ = _dispatcher(tmp_path, ledger_writer_override=ledger_writer)
     dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
     entries = read_ledger(ledger_writer.handle)
-    dispatch_entries = [
-        e for e in entries if str(e.action_id).startswith("dispatch:")
-    ]
+    dispatch_entries = [e for e in entries if str(e.action_id).startswith("dispatch:")]
     assert len(dispatch_entries) == 1, (
         f"expected exactly one F2 dispatch entry at step 8b; got {len(dispatch_entries)}"
     )
@@ -693,8 +692,7 @@ def test_step8c_8d_persists_od_audit_entry_through_writer(tmp_path: Path) -> Non
     audit_writer = dispatcher.audit_writer
     audit_entries = audit_writer.read_all()
     assert len(audit_entries) == 1, (
-        f"expected exactly one OD audit entry persisted at step 8d; "
-        f"got {len(audit_entries)}"
+        f"expected exactly one OD audit entry persisted at step 8d; got {len(audit_entries)}"
     )
 
 
@@ -837,9 +835,7 @@ def test_three_sequential_dispatches_chain_through_audit_writer(tmp_path: Path) 
     assert len(dispatch_entries) == 3, (
         f"expected 3 F2 dispatch entries; got {len(dispatch_entries)}"
     )
-    assert len(audit_entries) == 3, (
-        f"expected 3 OD audit-wrapped entries; got {len(audit_entries)}"
-    )
+    assert len(audit_entries) == 3, f"expected 3 OD audit-wrapped entries; got {len(audit_entries)}"
 
     # IS hash chain across all 6 entries remains VALID per C-IS-06 §6.4.
     result = verify_chain(entries)

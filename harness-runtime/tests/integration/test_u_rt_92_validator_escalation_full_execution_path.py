@@ -267,7 +267,8 @@ async def test_validator_escalation_e2e_through_execute_workflow(
     # wrap async framework in SyncValidatorFrameworkFacade capturing the
     # current event loop per U-CP-61 bridge pattern.
     custom_framework = materialize_sync_validator_framework_facade(
-        inner=custom_framework_async, result_timeout_seconds=30.0  # type: ignore[arg-type]
+        inner=custom_framework_async,
+        result_timeout_seconds=30.0,  # type: ignore[arg-type]
     )
     approving_surface = _ApprovingAskUserQuestionSurface()
     ctx = ctx_orig.model_copy(
@@ -371,7 +372,8 @@ async def test_validator_pass_does_not_fire_composer_through_execute_workflow(
         validator_registry={step.step_id: _PassingValidator()}  # type: ignore[dict-item]
     )
     custom_framework = materialize_sync_validator_framework_facade(
-        inner=custom_framework_async, result_timeout_seconds=30.0  # type: ignore[arg-type]
+        inner=custom_framework_async,
+        result_timeout_seconds=30.0,  # type: ignore[arg-type]
     )
     approving_surface = _ApprovingAskUserQuestionSurface()
     ctx = ctx_orig.model_copy(
@@ -404,6 +406,5 @@ async def test_validator_pass_does_not_fire_composer_through_execute_workflow(
 
     # PASS branch must NOT invoke the composer surface.
     assert len(approving_surface.invocations) == 0, (
-        f"expected zero composer invocations on PASS; got "
-        f"{len(approving_surface.invocations)}"
+        f"expected zero composer invocations on PASS; got {len(approving_surface.invocations)}"
     )

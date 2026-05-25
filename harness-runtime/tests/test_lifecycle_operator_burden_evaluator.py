@@ -55,9 +55,7 @@ async def test_compute_operator_burden_aggregates_via_counter() -> None:
         return 7
 
     evaluator = OperatorBurdenEvaluator(burden_span_counter=counter)
-    score = await evaluator.compute_operator_burden(
-        _make_window(), PersonaTier.SOLO_DEVELOPER
-    )
+    score = await evaluator.compute_operator_burden(_make_window(), PersonaTier.SOLO_DEVELOPER)
     assert isinstance(score, OperatorBurdenScore)
     assert score.cumulative_invocations == 7
     assert score.persona_tier is PersonaTier.SOLO_DEVELOPER
@@ -68,9 +66,7 @@ async def test_compute_operator_burden_aggregates_via_counter() -> None:
 async def test_default_counter_raises_on_misconfig() -> None:
     evaluator = OperatorBurdenEvaluator()  # default counter
     with pytest.raises(LookupError, match="default BurdenSpanCounter"):
-        await evaluator.compute_operator_burden(
-            _make_window(), PersonaTier.TEAM_BINDING
-        )
+        await evaluator.compute_operator_burden(_make_window(), PersonaTier.TEAM_BINDING)
 
 
 # ---------- AC #2 — should_degrade ----------------------------------------
@@ -136,10 +132,7 @@ async def test_should_degrade_emits_span_when_degrade_true() -> None:
     attrs = dict(span.attributes or {})
     assert attrs[ATTR_HITL_OPERATOR_BURDEN_CUMULATIVE_INVOCATIONS] == 20
     assert attrs[ATTR_HITL_OPERATOR_BURDEN_WINDOW_MS] == 3_600_000
-    assert (
-        attrs[ATTR_HITL_OPERATOR_BURDEN_PERSONA_TIER]
-        == "multi-tenant-compliance"
-    )
+    assert attrs[ATTR_HITL_OPERATOR_BURDEN_PERSONA_TIER] == "multi-tenant-compliance"
     assert attrs[ATTR_HITL_OPERATOR_BURDEN_DEGRADE] is True
 
 
@@ -164,9 +157,7 @@ async def test_should_degrade_skips_span_below_sampling_floor() -> None:
         window_end=3_600_000,
         persona_tier=PersonaTier.SOLO_DEVELOPER,
     )
-    decision = await evaluator.should_degrade(
-        score, _make_policy(threshold=5)
-    )
+    decision = await evaluator.should_degrade(score, _make_policy(threshold=5))
     assert decision.degrade is False
     spans = exporter.get_finished_spans()
     assert len(spans) == 0  # below 0.1 sampling floor → no emission
@@ -216,9 +207,7 @@ def test_burden_window_override_via_constructor() -> None:
 
 def test_factory_returns_evaluator() -> None:
     provider = TracerProvider()
-    evaluator = materialize_operator_burden_evaluator_stage(
-        tracer_provider=provider
-    )
+    evaluator = materialize_operator_burden_evaluator_stage(tracer_provider=provider)
     assert isinstance(evaluator, OperatorBurdenEvaluator)
 
 
@@ -243,8 +232,6 @@ def test_operator_burden_score_frozen() -> None:
 
 
 def test_degradation_decision_frozen() -> None:
-    d = DegradationDecision(
-        degrade=True, degradation_mode="auto_approve", reason="x"
-    )
+    d = DegradationDecision(degrade=True, degradation_mode="auto_approve", reason="x")
     with pytest.raises(Exception):
         d.degrade = False  # type: ignore[misc]

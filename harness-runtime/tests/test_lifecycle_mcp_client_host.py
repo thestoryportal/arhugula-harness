@@ -341,14 +341,11 @@ async def test_call_tool_post_start_invokes_tool() -> None:
     )
     try:
         await host.start()
-        result = await host.call_tool(
-            "echo", {"message": "hello"}, "idem-1"
-        )
+        result = await host.call_tool("echo", {"message": "hello"}, "idem-1")
         assert result["isError"] is False
         # The FastMCP echo returns "echoed: hello"; surfaced in content blocks.
         content_text = "".join(
-            (b.get("text") if isinstance(b, dict) else "") or ""
-            for b in result["content"]
+            (b.get("text") if isinstance(b, dict) else "") or "" for b in result["content"]
         )
         assert "echoed: hello" in content_text
     finally:
@@ -395,6 +392,7 @@ def test_stdio_transport_config_requires_command_str() -> None:
         # __aenter__ is what would be invoked by AsyncExitStack; calling
         # it bypasses the need for an event loop here.
         import asyncio
+
         asyncio.run(cm.__aenter__())
 
 
@@ -413,6 +411,7 @@ def test_http_transport_config_requires_url_str() -> None:
     cm = host._http_connection_context()
     with pytest.raises(ValueError, match="requires str 'url'"):
         import asyncio
+
         asyncio.run(cm.__aenter__())
 
 
@@ -427,6 +426,7 @@ def test_http_transport_config_rejects_non_str_url() -> None:
     cm = host._http_connection_context()
     with pytest.raises(ValueError, match="requires str 'url'"):
         import asyncio
+
         asyncio.run(cm.__aenter__())
 
 
@@ -472,6 +472,7 @@ def test_sse_transport_config_requires_url_str() -> None:
     cm = host._sse_connection_context()
     with pytest.raises(ValueError, match="requires str 'url'"):
         import asyncio
+
         asyncio.run(cm.__aenter__())
 
 

@@ -321,9 +321,7 @@ async def test_bootstrap_stage_5_binds_inference_and_sub_agent_dispatchers(
     # ctx.llm_dispatcher.inner is the PRE_ACTION HITL composer per the wrap chain
     hitl_inference = ctx.llm_dispatcher.inner  # type: ignore[attr-defined]
     assert isinstance(hitl_inference, RuntimeHITLGateComposer)
-    assert hitl_inference.applicable_placements == frozenset(
-        {HITLPlacementKind.PRE_ACTION}
-    )
+    assert hitl_inference.applicable_placements == frozenset({HITLPlacementKind.PRE_ACTION})
 
     # AC #13 row 2: SyncDispatcherFacade(HITL(SUB_AGENT_BOUNDARY)(bare sub_agent))
     sub_agent_step = ctx.step_dispatchers.lookup(StepKind.SUB_AGENT_DISPATCH)
@@ -334,9 +332,7 @@ async def test_bootstrap_stage_5_binds_inference_and_sub_agent_dispatchers(
     assert ctx.sub_agent_dispatcher.applicable_placements == frozenset(
         {HITLPlacementKind.SUB_AGENT_BOUNDARY}
     )
-    assert isinstance(
-        ctx.sub_agent_dispatcher.inner, RuntimeSubAgentDispatcher
-    )
+    assert isinstance(ctx.sub_agent_dispatcher.inner, RuntimeSubAgentDispatcher)
     assert sub_agent_step.inner is ctx.sub_agent_dispatcher
 
     # TOOL_STEP bound at U-RT-68 cluster-close per spec v1.16 §14.9.3 +
@@ -772,6 +768,7 @@ async def test_api_run_passes_workload_class_into_bootstrap(
     # layout.
     import sys
     from types import SimpleNamespace
+
     _shutdown_mod = sys.modules["harness_runtime.shutdown"]
     from harness_runtime import api as _api_mod
     from harness_runtime.api import run
@@ -791,9 +788,7 @@ async def test_api_run_passes_workload_class_into_bootstrap(
             )
         )
 
-    monkeypatch.setattr(
-        "harness_runtime.bootstrap.run_bootstrap", _wrapped_fake_bootstrap
-    )
+    monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _wrapped_fake_bootstrap)
 
     async def _fake_invoke(fastmcp_server: Any, workflow_id: str) -> Any:
         _ = fastmcp_server, workflow_id
@@ -827,9 +822,7 @@ async def test_api_run_passes_workload_class_into_bootstrap(
             audit_ledger_head_hash=None,
         )
 
-    monkeypatch.setattr(
-        _api_mod, "_invoke_run_workflow_via_in_process_mcp", _fake_invoke
-    )
+    monkeypatch.setattr(_api_mod, "_invoke_run_workflow_via_in_process_mcp", _fake_invoke)
     monkeypatch.setattr(_shutdown_mod, "shutdown", _fake_shutdown)
 
     result = await run(_Workflow(workload_class=WorkloadClass.RESEARCH))

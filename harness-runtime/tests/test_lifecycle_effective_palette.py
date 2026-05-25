@@ -48,9 +48,7 @@ class TestComputeEffectivePalette:
 
     def test_deny_no_cross_trust_yields_deny_row(self) -> None:
         """gate=DENY + cross-trust=NONE → {REJECT, RESPOND} per §19.4."""
-        result = compute_effective_palette(
-            GateLevel.DENY, CrossTrustBoundaryState.NONE, None
-        )
+        result = compute_effective_palette(GateLevel.DENY, CrossTrustBoundaryState.NONE, None)
         assert result == frozenset({REJECT, RESPOND})
 
     def test_deny_with_cross_trust_yields_deny_row(self) -> None:
@@ -62,9 +60,7 @@ class TestComputeEffectivePalette:
 
     def test_ask_no_cross_trust_yields_full_palette(self) -> None:
         """gate=ASK + cross-trust=NONE → full palette per C-CP-16 §16.1."""
-        result = compute_effective_palette(
-            GateLevel.ASK, CrossTrustBoundaryState.NONE, None
-        )
+        result = compute_effective_palette(GateLevel.ASK, CrossTrustBoundaryState.NONE, None)
         assert result == frozenset({APPROVE, EDIT, REJECT, RESPOND})
 
     def test_ask_with_cross_trust_yields_restricted_palette(self) -> None:
@@ -85,9 +81,7 @@ class TestComputeEffectivePalette:
             CrossTrustBoundaryState.UNTRUSTED_MCP_ACTIVE,
         ],
     )
-    def test_ask_with_other_cross_trust_states(
-        self, cross_trust: CrossTrustBoundaryState
-    ) -> None:
+    def test_ask_with_other_cross_trust_states(self, cross_trust: CrossTrustBoundaryState) -> None:
         """All 3 non-NONE cross-trust states narrow uniformly per CP-as-landed."""
         result = compute_effective_palette(GateLevel.ASK, cross_trust, None)
         assert result == frozenset({REJECT, RESPOND})
@@ -99,25 +93,19 @@ class TestValidatorEscalationBriefNarrowing:
     def test_default_brief_palette_no_extra_narrowing(self) -> None:
         """Default brief palette = full → no additional narrowing."""
         brief = _brief()
-        result = compute_effective_palette(
-            GateLevel.ASK, CrossTrustBoundaryState.NONE, brief
-        )
+        result = compute_effective_palette(GateLevel.ASK, CrossTrustBoundaryState.NONE, brief)
         assert result == frozenset({APPROVE, EDIT, REJECT, RESPOND})
 
     def test_brief_palette_intersection_narrows_further(self) -> None:
         """Brief proposing {APPROVE, REJECT} narrows full palette to {APPROVE, REJECT}."""
         brief = _brief(palette=frozenset({APPROVE, REJECT}))
-        result = compute_effective_palette(
-            GateLevel.ASK, CrossTrustBoundaryState.NONE, brief
-        )
+        result = compute_effective_palette(GateLevel.ASK, CrossTrustBoundaryState.NONE, brief)
         assert result == frozenset({APPROVE, REJECT})
 
     def test_brief_palette_cannot_exceed_constraints(self) -> None:
         """Even when brief proposes APPROVE, deny-row strips it out (final ≤ both)."""
         brief = _brief(palette=frozenset({APPROVE, REJECT, RESPOND}))
-        result = compute_effective_palette(
-            GateLevel.DENY, CrossTrustBoundaryState.NONE, brief
-        )
+        result = compute_effective_palette(GateLevel.DENY, CrossTrustBoundaryState.NONE, brief)
         # deny-row palette = {REJECT, RESPOND}; brief intersection drops APPROVE.
         assert result == frozenset({REJECT, RESPOND})
         assert APPROVE not in result
@@ -151,10 +139,6 @@ class TestPureFunctionGuarantee:
     def test_no_module_state_between_calls(self) -> None:
         """Result depends only on arguments — not on call history."""
         # Different call → different result; no hidden state.
-        deny_result = compute_effective_palette(
-            GateLevel.DENY, CrossTrustBoundaryState.NONE, None
-        )
-        ask_result = compute_effective_palette(
-            GateLevel.ASK, CrossTrustBoundaryState.NONE, None
-        )
+        deny_result = compute_effective_palette(GateLevel.DENY, CrossTrustBoundaryState.NONE, None)
+        ask_result = compute_effective_palette(GateLevel.ASK, CrossTrustBoundaryState.NONE, None)
         assert deny_result != ask_result

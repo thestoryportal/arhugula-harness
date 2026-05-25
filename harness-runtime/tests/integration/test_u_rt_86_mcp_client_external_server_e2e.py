@@ -51,7 +51,7 @@ from harness_as.discriminators import MCPTransport
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_as.sandbox_tier_floor import MCPServerTrustLevel
 from harness_as.tool_contract import ToolContract
-from harness_core import ClientName
+from harness_core import ClientName, PersonaTier
 from harness_core.deployment_surface import DeploymentSurface
 from harness_core.workload_class import WorkloadClass
 from harness_cp.cp_shared_types import MCPTrustTier, ModelBinding
@@ -98,9 +98,7 @@ from harness_runtime.types import (
 )
 
 
-_FIXTURE_PATH = (
-    Path(__file__).parent / "fixtures" / "mcp_echo_server.py"
-).resolve()
+_FIXTURE_PATH = (Path(__file__).parent / "fixtures" / "mcp_echo_server.py").resolve()
 
 _SERVER_NAME = "u-rt-86-fixture-echo-server"
 
@@ -147,9 +145,7 @@ def _make_step_context() -> StepExecutionContext:
         parent_action_id="workflow:wf-u-rt-86:step:0",
         parent_gate_level=GateLevel.AUTO,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
-        parent_actor=Actor(
-            actor_class=ActorClass.OPERATOR, actor_id="harness-runtime-u-rt-86"
-        ),
+        parent_actor=Actor(actor_class=ActorClass.OPERATOR, actor_id="harness-runtime-u-rt-86"),
         parent_entry_hash="",
         parent_idempotency_key="run-idem-key-u-rt-86",
         tenant_id=None,
@@ -171,6 +167,7 @@ def _make_binding() -> StepEffectiveBinding:
         model_binding=ModelBinding(provider="anthropic", model="claude-haiku-4-5"),
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         override_applied=False,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
     )
 
 
@@ -276,8 +273,7 @@ async def test_mcp_client_external_server_e2e_tool_call_path(
     config = _runtime_config()
     factory_host = await materialize_mcp_client_host_stage(config)
     assert factory_host.server_name == _SERVER_NAME, (
-        f"factory produced host with wrong server_name: "
-        f"{factory_host.server_name!r}"
+        f"factory produced host with wrong server_name: {factory_host.server_name!r}"
     )
 
     # Operator-supplied MCPClientHost (mirrors how operators must
@@ -321,17 +317,12 @@ async def test_mcp_client_external_server_e2e_tool_call_path(
         # under `result["response"]` alongside dispatch-side metadata
         # (tool_id, idempotency_key, trust_decision_reason, sandbox_tier).
         # The host-level content shape is `response.content` (list[block]).
-        assert "response" in result, (
-            f"dispatcher result missing 'response' key: {result!r}"
-        )
+        assert "response" in result, f"dispatcher result missing 'response' key: {result!r}"
         response = result["response"]
         content_blocks = response.get("content") or []
-        assert content_blocks, (
-            f"dispatcher response has empty content: {result!r}"
-        )
+        assert content_blocks, f"dispatcher response has empty content: {result!r}"
         text_parts = [
-            block.get("text", "") if isinstance(block, dict) else ""
-            for block in content_blocks
+            block.get("text", "") if isinstance(block, dict) else "" for block in content_blocks
         ]
         joined = "".join(text_parts)
         assert "hello-u-rt-86" in joined, (
@@ -342,8 +333,7 @@ async def test_mcp_client_external_server_e2e_tool_call_path(
         spans = exporter.get_finished_spans()
         mcp_spans = [s for s in spans if s.name == "mcp.tool.call"]
         assert mcp_spans, (
-            f"no `mcp.tool.call` span emitted; observed span names: "
-            f"{[s.name for s in spans]!r}"
+            f"no `mcp.tool.call` span emitted; observed span names: {[s.name for s in spans]!r}"
         )
         mcp_span = mcp_spans[0]
         attrs = dict(mcp_span.attributes or {})

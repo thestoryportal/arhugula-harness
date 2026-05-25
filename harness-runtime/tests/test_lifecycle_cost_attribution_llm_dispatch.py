@@ -29,7 +29,7 @@ from harness_cp.workflow_driver_types import (
     WorkflowStep,
 )
 from harness_as.sandbox_tier import SandboxTier
-from harness_core import StepID
+from harness_core import StepID, PersonaTier
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_od.cost_record_otel_serializer import COST_ATTRIBUTED_DECIMAL_ATTR
 from harness_od.rate_table_resolver import RateTableMissingError
@@ -278,11 +278,16 @@ def test_end_to_end_dispatch_emits_cost_attribution_audit_entry(
         model_binding=_DEFAULT_BINDING,
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         override_applied=False,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
     )
     step = WorkflowStep(
         step_id=StepID("step-0"),
         step_kind=StepKind.INFERENCE_STEP,
-        step_payload={"messages": [{"role": "user", "content": "hi"}], "tools": None, "params": {"max_tokens": 1}},
+        step_payload={
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": None,
+            "params": {"max_tokens": 1},
+        },
     )
     step_context = StepExecutionContext(
         workflow_id="wf",
@@ -331,11 +336,16 @@ def test_dispatcher_without_cost_substrate_silently_skips_cost_attribution() -> 
         model_binding=_DEFAULT_BINDING,
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         override_applied=False,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
     )
     step = WorkflowStep(
         step_id=StepID("step-0"),
         step_kind=StepKind.INFERENCE_STEP,
-        step_payload={"messages": [{"role": "user", "content": "hi"}], "tools": None, "params": {"max_tokens": 1}},
+        step_payload={
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": None,
+            "params": {"max_tokens": 1},
+        },
     )
     step_context = StepExecutionContext(
         workflow_id="wf",

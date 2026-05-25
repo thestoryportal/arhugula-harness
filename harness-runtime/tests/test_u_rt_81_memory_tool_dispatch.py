@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+from harness_core import PersonaTier
 from harness_as.anthropic_graceful_degradation import MemoryToolStorageBackend
 from harness_as.sandbox_tier import SandboxTier
 from harness_core.identity import StepID
@@ -85,6 +86,7 @@ def _binding(provider: str = "anthropic", model: str = "claude-sonnet-4-5") -> S
         model_binding=ModelBinding(provider=provider, model=model),
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         override_applied=False,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
     )
 
 
@@ -190,9 +192,7 @@ class _FakeAdapter:
 
 
 def test_step_has_memory_tool_detects_memory_20250818() -> None:
-    assert step_has_memory_tool(
-        ({"type": MEMORY_TOOL_TYPE, "name": "memory"},)
-    ) is True
+    assert step_has_memory_tool(({"type": MEMORY_TOOL_TYPE, "name": "memory"},)) is True
 
 
 def test_step_has_memory_tool_returns_false_for_absent_or_other() -> None:
@@ -210,9 +210,10 @@ def test_memory_command_kind_lock_per_ac_3() -> None:
         "insert": "update",
         "delete": "delete",
     }
-    assert "list" not in MEMORY_COMMAND_KIND.values() or sum(
-        1 for v in MEMORY_COMMAND_KIND.values() if v == "list"
-    ) == 0
+    assert (
+        "list" not in MEMORY_COMMAND_KIND.values()
+        or sum(1 for v in MEMORY_COMMAND_KIND.values() if v == "list") == 0
+    )
 
 
 def test_derive_context_editing_active_true_on_clear_tool_uses_memory_excluded() -> None:
@@ -232,22 +233,23 @@ def test_derive_context_editing_active_true_on_clear_tool_uses_memory_excluded()
 def test_derive_context_editing_active_false_on_absent_or_wrong_shape() -> None:
     assert derive_context_editing_active({}) is False
     assert derive_context_editing_active({"context_management": None}) is False
-    assert derive_context_editing_active(
-        {"context_management": {"edits": []}}
-    ) is False
+    assert derive_context_editing_active({"context_management": {"edits": []}}) is False
     # exclude_tools doesn't contain "memory"
-    assert derive_context_editing_active(
-        {
-            "context_management": {
-                "edits": [
-                    {
-                        "type": "clear_tool_uses_20250919",
-                        "exclude_tools": ["files"],
-                    }
-                ]
+    assert (
+        derive_context_editing_active(
+            {
+                "context_management": {
+                    "edits": [
+                        {
+                            "type": "clear_tool_uses_20250919",
+                            "exclude_tools": ["files"],
+                        }
+                    ]
+                }
             }
-        }
-    ) is False
+        )
+        is False
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -582,9 +584,7 @@ async def test_span_emits_path_not_content(
     assert "memory.content" not in attrs
     # The secret content MUST NOT appear in any span attribute value (per AS §14.9).
     for v in attrs.values():
-        assert secret not in str(v), (
-            f"secret leaked into span attribute: {v!r}"
-        )
+        assert secret not in str(v), f"secret leaked into span attribute: {v!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -668,7 +668,9 @@ async def test_memory_dispatch_routes_through_inner_loop(tmp_path: Path) -> None
         deployment_surface=object(),
     )
 
-    result = await dispatcher.dispatch(_binding(), _step_with_memory_tool(), step_context=_step_context())
+    result = await dispatcher.dispatch(
+        _binding(), _step_with_memory_tool(), step_context=_step_context()
+    )
 
     assert len(msgs.calls) == 2
     assert isinstance(result, Mapping)

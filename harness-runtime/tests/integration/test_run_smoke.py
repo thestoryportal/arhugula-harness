@@ -385,9 +385,7 @@ async def test_e2e_run_executes_workflow_via_cp_driver(
 
     real_run_bootstrap = run_bootstrap
 
-    async def _wrapped_bootstrap(
-        cfg: RuntimeConfig, *, workload_class: WorkloadClass
-    ) -> _Any:
+    async def _wrapped_bootstrap(cfg: RuntimeConfig, *, workload_class: WorkloadClass) -> _Any:
         ctx = await real_run_bootstrap(cfg, workload_class=workload_class)
         original_append = ctx.ledger_writer.append
 
@@ -400,14 +398,13 @@ async def test_e2e_run_executes_workflow_via_cp_driver(
         object.__setattr__(ctx.ledger_writer, "append", _capture_append)
         return ctx
 
-    monkeypatch.setattr(
-        "harness_runtime.bootstrap.run_bootstrap", _wrapped_bootstrap
-    )
+    monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _wrapped_bootstrap)
 
     # Build a single-step WorkflowObject.
     class _NoopDispatcher:
-        def dispatch(self, binding: _Any, step: WorkflowStep
-        , *, step_context: Any = None) -> dict[str, _Any]:
+        def dispatch(
+            self, binding: _Any, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, _Any]:
             _ = binding
             return {"step_id": str(step.step_id), "ok": True}
 
@@ -500,17 +497,13 @@ async def test_e2e_run_returns_drained_when_flag_set_before_execute(
 
     real_run_bootstrap = run_bootstrap
 
-    async def _wrapped_bootstrap(
-        cfg: RuntimeConfig, *, workload_class: WorkloadClass
-    ) -> Any:
+    async def _wrapped_bootstrap(cfg: RuntimeConfig, *, workload_class: WorkloadClass) -> Any:
         ctx = await real_run_bootstrap(cfg, workload_class=workload_class)
         # Set drained_flag pre-execute → driver returns DRAINED at entry.
         ctx.drained_flag.set()
         return ctx
 
-    monkeypatch.setattr(
-        "harness_runtime.bootstrap.run_bootstrap", _wrapped_bootstrap
-    )
+    monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _wrapped_bootstrap)
 
     # Build a minimal WorkflowObject identical in shape to the prior test.
     from harness_core.identity import StepID
@@ -750,16 +743,12 @@ async def test_e2e_run_step_body_fires_cost_attribution_chain(
 
     real_run_bootstrap = run_bootstrap
 
-    async def _wrapped_bootstrap(
-        cfg: RuntimeConfig, *, workload_class: WorkloadClass
-    ) -> _Any:
+    async def _wrapped_bootstrap(cfg: RuntimeConfig, *, workload_class: WorkloadClass) -> _Any:
         ctx = await real_run_bootstrap(cfg, workload_class=workload_class)
         ctx_holder["ctx"] = ctx
         return ctx
 
-    monkeypatch.setattr(
-        "harness_runtime.bootstrap.run_bootstrap", _wrapped_bootstrap
-    )
+    monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _wrapped_bootstrap)
 
     # Mock rate snapshot per Q3c — bypasses the deferred PRICE_TABLE_REF
     # substitution by supplying an explicit PriceRateEntry directly.
@@ -770,15 +759,16 @@ async def test_e2e_run_step_body_fires_cost_attribution_chain(
     )
     _mock_rates = PriceRateEntry(
         key=_mock_rate_key,
-        base_input=3.0e-6,   # $3 / MTok input — mock value, not authoritative
+        base_input=3.0e-6,  # $3 / MTok input — mock value, not authoritative
         base_output=15.0e-6,  # $15 / MTok output — mock value, not authoritative
     )
 
     class _CostFiringDispatcher:
         """Step body that owns cost-attribution invocation per §25.9."""
 
-        def dispatch(self, binding: _Any, step: WorkflowStep
-        , *, step_context: Any = None) -> dict[str, _Any]:
+        def dispatch(
+            self, binding: _Any, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, _Any]:
             _ = binding
 
             # Step body sources SpanCostInputs from its local provider-
@@ -796,9 +786,7 @@ async def test_e2e_run_step_body_fires_cost_attribution_chain(
 
             # Step 1: per-attempt cost (C-OD-14 §14.1) — invoked through
             # compute_span_cost_with_rates (mock-rate bypass per Q3c).
-            cost_usd = ctx.cost_chain.compute_per_attempt_cost(
-                inputs, _mock_rates
-            )
+            cost_usd = ctx.cost_chain.compute_per_attempt_cost(inputs, _mock_rates)
 
             # Step 2: sandbox-overhead composition (C-OD-14 §14.2) —
             # non-sandboxed step → sandbox_overhead=None passes through.

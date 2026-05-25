@@ -769,6 +769,7 @@ class PerStepOverrideEvaluator(Protocol):
         step_id: str,
         *,
         default_model_binding: ModelBinding,
+        persona_tier: PersonaTier,
     ) -> object:
         """Resolve the effective per-step binding (delegates to CP C-CP-06 §6.2)."""
         ...

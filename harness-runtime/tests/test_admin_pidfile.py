@@ -38,9 +38,7 @@ def test_write_pidfile_creates_parent_directory(tmp_path: Path) -> None:
     assert path.is_file()
 
 
-def test_write_pidfile_atomic(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_write_pidfile_atomic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Tmp file must be renamed atomically via os.replace."""
     path = tmp_path / "runtime.pid"
     calls: list[tuple[str, str]] = []

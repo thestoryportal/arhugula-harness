@@ -249,9 +249,7 @@ def test_step_2_compose_total_cost_adds_sandbox_overhead(tmp_path: Path) -> None
 def test_step_2_compose_total_cost_no_sandbox_passthrough(tmp_path: Path) -> None:
     """Non-sandbox spans pass `sandbox_overhead=None` → totals equal inputs."""
     chain = _chain(tmp_path)
-    total = chain.compose_total_cost(
-        span_cost=0.05, span_duration_ms=300, sandbox_overhead=None
-    )
+    total = chain.compose_total_cost(span_cost=0.05, span_duration_ms=300, sandbox_overhead=None)
     assert math.isclose(total.total_cost, 0.05)
     assert total.total_latency_ms == 300
     assert total.sandbox_overhead is None
@@ -303,9 +301,7 @@ def test_step_5_dedupe_on_replay_drop_on_deterministic_match(tmp_path: Path) -> 
         original_span_id="s",
         cause_attribution="transient",
     )
-    assert (
-        chain.dedupe_on_replay(span, entry) is DedupOutcome.DROP_DETERMINISTIC_REPLAY_RE_READ
-    )
+    assert chain.dedupe_on_replay(span, entry) is DedupOutcome.DROP_DETERMINISTIC_REPLAY_RE_READ
 
 
 # ---------------------------------------------------------------------------

@@ -156,8 +156,16 @@ async def compose_validator_escalation_gate(
     with tracer.start_as_current_span("validator.escalation") as escalation_span:
         escalation_span.set_attribute("step.id", step_action_id)
         escalation_span.set_attribute("validator.outcome", "escalate")
+        # Post-CP-v1.18 §25.2.X: HITLEscalationBrief.fail_class is now
+        # `ValidatorFailClass | None` (widened to support the pause-trigger
+        # composer-body construction site at runtime spec §14.8.8.1 step 1).
+        # The validator-escalation path constructs the brief FROM a real
+        # validator failure (ValidatorOutcome.ESCALATE) so fail_class should
+        # be non-None here; fall back to "unspecified" defensively for the
+        # widened type.
         escalation_span.set_attribute(
-            "validator.fail.class", brief.fail_class.value
+            "validator.fail.class",
+            brief.fail_class.value if brief.fail_class is not None else "unspecified",
         )
 
         # §14.15.2 step 3 — Open hitl.gate.evaluated span within escalation

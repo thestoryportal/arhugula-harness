@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from harness_core.persona_tier import PersonaTier
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.per_step_override_evaluator import (
     StepEffectiveBinding,
@@ -54,12 +55,14 @@ class RuntimePerStepOverrideEvaluator:
         step_id: str,
         *,
         default_model_binding: ModelBinding,
+        persona_tier: PersonaTier,
     ) -> StepEffectiveBinding:
         """Resolve the effective per-step binding (delegates to CP C-CP-06 §6.2)."""
         return resolve_step_binding(
             manifest_entry,
             step_id,
             default_model_binding=default_model_binding,
+            persona_tier=persona_tier,
         )
 
 

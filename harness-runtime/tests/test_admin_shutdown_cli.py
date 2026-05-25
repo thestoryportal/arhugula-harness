@@ -36,9 +36,7 @@ def test_parser_defaults() -> None:
 
 
 def test_parser_flags() -> None:
-    ns = build_parser().parse_args(
-        ["--pidfile-path", "/tmp/p.pid", "--wait", "2.5", "--json"]
-    )
+    ns = build_parser().parse_args(["--pidfile-path", "/tmp/p.pid", "--wait", "2.5", "--json"])
     assert ns.pidfile_path == Path("/tmp/p.pid")
     assert ns.wait == 2.5
     assert ns.json is True
@@ -49,9 +47,7 @@ def test_parser_flags() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _signal_spy(
-    monkeypatch: pytest.MonkeyPatch, *, alive: bool = True
-) -> list[tuple[int, int]]:
+def _signal_spy(monkeypatch: pytest.MonkeyPatch, *, alive: bool = True) -> list[tuple[int, int]]:
     """Replace os.kill with a spy. `alive=True` makes the liveness probe pass."""
     calls: list[tuple[int, int]] = []
 
@@ -107,9 +103,7 @@ def test_shutdown_cli_json_output(
 # ---------------------------------------------------------------------------
 
 
-def test_shutdown_cli_missing_pidfile(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_shutdown_cli_missing_pidfile(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     code = main(["--pidfile-path", str(tmp_path / "missing.pid")])
     assert code == 2
     err = capsys.readouterr().err
@@ -244,9 +238,7 @@ def test_shutdown_cli_does_not_open_anything_for_write(
         return real_path_open(self, mode, *args, **kwargs)
 
     def _spy_os_open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
-        write_flags = (
-            os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
-        )
+        write_flags = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
         if flags & write_flags:
             write_attempts.append(f"os.open({path}, flags={flags})")
         return real_os_open(path, flags, *args, **kwargs)  # type: ignore[no-any-return]
@@ -265,9 +257,7 @@ def test_shutdown_cli_does_not_open_anything_for_write(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32", reason="POSIX signal semantics required"
-)
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signal semantics required")
 def test_shutdown_cli_signals_real_subprocess(tmp_path: Path) -> None:
     """Fork a real subprocess and verify SIGTERM is delivered.
 
@@ -315,5 +305,5 @@ def test_pyproject_scripts_entry_present() -> None:
     here = Path(__file__).resolve()
     pyproject = here.parent.parent / "pyproject.toml"
     text = pyproject.read_text()
-    assert 'harness-shutdown' in text
-    assert 'harness_runtime.admin.shutdown_cli:main' in text
+    assert "harness-shutdown" in text
+    assert "harness_runtime.admin.shutdown_cli:main" in text

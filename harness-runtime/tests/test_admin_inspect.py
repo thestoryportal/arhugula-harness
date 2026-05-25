@@ -69,9 +69,7 @@ def _write_n_entries(ledger_path: Path, n: int) -> list[StateLedgerEntry]:
         )
         append_ledger_entry(handle, payload, write_key)
         # Re-read handle counter so chain construction picks up prior entries.
-        new_count = sum(
-            1 for line in ledger_path.read_text().splitlines() if line.strip()
-        )
+        new_count = sum(1 for line in ledger_path.read_text().splitlines() if line.strip())
         handle = JsonlLedgerHandle(
             canonical_path=ledger_path,
             exists=True,
@@ -98,9 +96,7 @@ def test_parser_defaults() -> None:
 
 
 def test_parser_flags() -> None:
-    ns = build_parser().parse_args(
-        ["--ledger-path", "/tmp/x.jsonl", "--last-n", "3", "--json"]
-    )
+    ns = build_parser().parse_args(["--ledger-path", "/tmp/x.jsonl", "--last-n", "3", "--json"])
     assert ns.ledger_path == Path("/tmp/x.jsonl")
     assert ns.last_n == 3
     assert ns.json is True
@@ -139,9 +135,7 @@ def test_inspect_reports_head_hash_lowercase_hex(
     assert len(head) == 64  # SHA-256
 
 
-def test_inspect_default_last_n_is_10(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_inspect_default_last_n_is_10(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     ledger = tmp_path / "state.jsonl"
     _write_n_entries(ledger, 15)
 
@@ -153,9 +147,7 @@ def test_inspect_default_last_n_is_10(
     assert "action-14" in out
 
 
-def test_inspect_respects_last_n_flag(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_inspect_respects_last_n_flag(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     ledger = tmp_path / "state.jsonl"
     _write_n_entries(ledger, 5)
 
@@ -175,9 +167,7 @@ def test_inspect_respects_last_n_flag(
 # ---------------------------------------------------------------------------
 
 
-def test_inspect_json_flag_outputs_json(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_inspect_json_flag_outputs_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     ledger = tmp_path / "state.jsonl"
     _write_n_entries(ledger, 2)
 
@@ -194,9 +184,7 @@ def test_inspect_json_flag_outputs_json(
     assert len(payload["entries"]) == 2
 
 
-def test_inspect_json_empty_ledger(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_inspect_json_empty_ledger(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     ledger = tmp_path / "state.jsonl"
     ledger.write_text("")
 
@@ -313,9 +301,7 @@ def test_inspect_does_not_open_anything_for_write(
         return real_path_open(self, mode, *args, **kwargs)
 
     def _spy_os_open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
-        write_flags = (
-            os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
-        )
+        write_flags = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
         if flags & write_flags:
             write_attempts.append(f"os.open({path}, flags={flags})")
         return real_os_open(path, flags, *args, **kwargs)  # type: ignore[no-any-return]
@@ -341,9 +327,9 @@ def test_pyproject_scripts_entry_present() -> None:
     pyproject = here.parent.parent / "pyproject.toml"
     assert pyproject.exists()
     text = pyproject.read_text()
-    assert (
-        'harness-inspect    = "harness_runtime.admin.inspect:main"' in text
-    ), f"harness-inspect script entry missing in {pyproject}"
+    assert 'harness-inspect    = "harness_runtime.admin.inspect:main"' in text, (
+        f"harness-inspect script entry missing in {pyproject}"
+    )
 
 
 # ---------------------------------------------------------------------------

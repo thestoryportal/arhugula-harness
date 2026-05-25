@@ -151,9 +151,7 @@ def test_dispatch_response_hash_round_trips_against_brief_summary_hash(
     brief `summary_hash` — the same canonicalize + sha256 pipeline."""
     registry = _registry(tmp_path)
     brief = _brief()
-    assert registry.dispatch_response_hash(
-        brief
-    ) == registry.compute_brief_summary_hash(brief)
+    assert registry.dispatch_response_hash(brief) == registry.compute_brief_summary_hash(brief)
 
 
 def test_compose_dispatch_audit_carries_descent_gate_level(tmp_path: Path) -> None:
@@ -187,9 +185,7 @@ def test_brief_inheritance_table_surfaces_canonical_4_rows(tmp_path: Path) -> No
     registry = _registry(tmp_path)
     assert registry.brief_inheritance_table is BRIEF_AUTHORING_INHERITANCE
     assert len(registry.brief_inheritance_table) == 4
-    workload_classes = {
-        row.workload_class for row in registry.brief_inheritance_table
-    }
+    workload_classes = {row.workload_class for row in registry.brief_inheritance_table}
     assert workload_classes == set(WorkloadClass)
 
 
@@ -282,9 +278,7 @@ def test_assert_descent_at_or_below_parent_passes(tmp_path: Path) -> None:
     """child_gate_level <= parent_gate_level passes silently."""
     registry = _registry(tmp_path)
     # Equality permitted.
-    registry.assert_descent(
-        GateLevel.DENY, GateLevel.DENY
-    )
+    registry.assert_descent(GateLevel.DENY, GateLevel.DENY)
     # Strict descent permitted.
     registry.assert_descent(GateLevel.DENY, GateLevel.ASK)
 
@@ -293,31 +287,23 @@ def test_assert_descent_above_parent_raises(tmp_path: Path) -> None:
     """child_gate_level > parent_gate_level raises (§12.2 ascent prohibited)."""
     registry = _registry(tmp_path)
     with pytest.raises(ValueError, match="monotonic-descent"):
-        registry.assert_descent(
-            GateLevel.ASK, GateLevel.DENY
-        )
+        registry.assert_descent(GateLevel.ASK, GateLevel.DENY)
 
 
 def test_assert_ascent_at_or_above_parent_passes(tmp_path: Path) -> None:
     """child_sandbox_tier >= parent_sandbox_tier passes silently."""
     registry = _registry(tmp_path)
     # Equality permitted.
-    registry.assert_ascent(
-        SandboxTier.TIER_1_PROCESS, SandboxTier.TIER_1_PROCESS
-    )
+    registry.assert_ascent(SandboxTier.TIER_1_PROCESS, SandboxTier.TIER_1_PROCESS)
     # Strict ascent permitted.
-    registry.assert_ascent(
-        SandboxTier.TIER_1_PROCESS, SandboxTier.TIER_2_CONTAINER
-    )
+    registry.assert_ascent(SandboxTier.TIER_1_PROCESS, SandboxTier.TIER_2_CONTAINER)
 
 
 def test_assert_ascent_below_parent_raises(tmp_path: Path) -> None:
     """child_sandbox_tier < parent_sandbox_tier raises (C-AS-11 descent prohibited)."""
     registry = _registry(tmp_path)
     with pytest.raises(ValueError):
-        registry.assert_ascent(
-            SandboxTier.TIER_2_CONTAINER, SandboxTier.TIER_1_PROCESS
-        )
+        registry.assert_ascent(SandboxTier.TIER_2_CONTAINER, SandboxTier.TIER_1_PROCESS)
 
 
 # ---------------------------------------------------------------------------

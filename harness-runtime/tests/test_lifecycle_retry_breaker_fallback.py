@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+from harness_core import PersonaTier
 from harness_as.sandbox_tier import SandboxTier
 from harness_core.identity import StepID
 from harness_cp.cp_shared_types import ModelBinding
@@ -131,9 +132,7 @@ def _candidate(provider: str, model: str) -> ProviderCandidate:
         "openai": ProviderFamily.OPENAI,
         "ollama": ProviderFamily.LOCAL_OPEN_WEIGHT,
     }
-    return ProviderCandidate(
-        provider=provider, model=model, family=family_map[provider]
-    )
+    return ProviderCandidate(provider=provider, model=model, family=family_map[provider])
 
 
 def _chain(
@@ -157,6 +156,7 @@ def _binding(provider: str = "anthropic", model: str = "claude-test-1") -> StepE
         model_binding=ModelBinding(provider=provider, model=model),
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         override_applied=False,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
     )
 
 
@@ -199,9 +199,7 @@ def _step_context(step_index: int = 0) -> StepExecutionContext:
     )
 
 
-def _retry_breaker_with_llm_policy(
-    *, max_attempts: int = 3
-) -> RuntimeRetryBreaker:
+def _retry_breaker_with_llm_policy(*, max_attempts: int = 3) -> RuntimeRetryBreaker:
     """Construct a registry with the reserved LLM-dispatch policy pre-bound.
 
     Mirrors what ``materialize_retry_breaker_stage`` does at bootstrap; used
@@ -334,9 +332,7 @@ async def test_retries_twice_then_succeeds_on_attempt_3() -> None:
     spans = exporter.get_finished_spans()
     attempt_spans = [s for s in spans if s.name == "harness.runtime.retry_attempt"]
     assert len(attempt_spans) == 3
-    outer_spans = [
-        s for s in spans if s.name == "harness.runtime.retry_breaker_fallback"
-    ]
+    outer_spans = [s for s in spans if s.name == "harness.runtime.retry_breaker_fallback"]
     assert len(outer_spans) == 1
 
     # Final attempt is the success path — canonical CP §3.5 sampling discipline
@@ -570,28 +566,20 @@ async def test_breaker_transition_emitted_via_registry() -> None:
         def get_policy(self, tool_name: str) -> RetryPolicy:
             return self.inner.get_policy(tool_name)
 
-        def get_breaker(
-            self, scope: BreakerScope, identifier: str
-        ) -> BreakerStateMachine:
+        def get_breaker(self, scope: BreakerScope, identifier: str) -> BreakerStateMachine:
             return self.inner.get_breaker(scope, identifier)
 
-        def compute_delay_seconds(
-            self, attempt: int, rng: Any | None = None
-        ) -> float:
+        def compute_delay_seconds(self, attempt: int, rng: Any | None = None) -> float:
             return self.inner.compute_delay_seconds(attempt, rng)
 
-        def advance_staircase(
-            self, current: Any, cause: Any, attempt: int
-        ) -> Any:
+        def advance_staircase(self, current: Any, cause: Any, attempt: int) -> Any:
             return self.inner.advance_staircase(current, cause, attempt)
 
         def emit_breaker_transition_event(
             self, transition: Any, parent_span_ref: Any, **kwargs: Any
         ) -> Any:
             emissions.append(transition)
-            return self.inner.emit_breaker_transition_event(
-                transition, parent_span_ref, **kwargs
-            )
+            return self.inner.emit_breaker_transition_event(transition, parent_span_ref, **kwargs)
 
     spying = _SpyingRegistry(inner=breaker)
 
@@ -706,9 +694,7 @@ def test_valid_manifest_passes_with_non_reserved_tool_names() -> None:
         per_workload_overrides={},
         fallback_chains=(_chain(_candidate("anthropic", "claude-test-1")),),
         retry_policies={
-            "my_tool": RetryPolicy(
-                max_attempts=2, backoff="full_jitter", jitter="full_jitter"
-            )
+            "my_tool": RetryPolicy(max_attempts=2, backoff="full_jitter", jitter="full_jitter")
         },
     )
     assert validate_routing_manifest(manifest) is None
@@ -751,9 +737,7 @@ async def test_single_candidate_chain_fail_fast_exhausts() -> None:
     primary = _candidate("anthropic", "claude-test-1")
     chain = _chain(primary)
     breaker = _retry_breaker_with_llm_policy(max_attempts=1)
-    inner = _MockInnerDispatcher(
-        outcomes=[LLMDispatchProviderUnreachableError("anthropic")]
-    )
+    inner = _MockInnerDispatcher(outcomes=[LLMDispatchProviderUnreachableError("anthropic")])
     tp, _ = _tracer_provider_with_exporter()
     wrapper = RetryBreakerFallbackDispatcher(
         inner=inner,

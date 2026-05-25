@@ -124,9 +124,7 @@ def test_provider_resource_carries_namespace_declared_attrs(tmp_path: Path) -> N
     (`provider_discriminator`) has no trailing `.`, producing
     `namespace.provider_discriminatordeclared`. Total is 15 either way.
     """
-    stage = materialize_tracer_provider_stage(
-        _config(tmp_path), register_globally=False
-    )
+    stage = materialize_tracer_provider_stage(_config(tmp_path), register_globally=False)
     attrs = stage.provider.resource.attributes
     declared_keys = [k for k in attrs if k.startswith("namespace.")]
     # The 15-row OD namespace map produces 15 namespace.* attributes.
@@ -171,9 +169,7 @@ def test_double_runtime_registration_raises_concurrent_error(
 
 
 def test_materialize_returns_stage_with_provider(tmp_path: Path) -> None:
-    stage = materialize_tracer_provider_stage(
-        _config(tmp_path), register_globally=False
-    )
+    stage = materialize_tracer_provider_stage(_config(tmp_path), register_globally=False)
     assert isinstance(stage, TracerProviderStage)
     assert isinstance(stage.provider, TracerProvider)
 
@@ -183,16 +179,12 @@ def test_materialize_without_register_globally_does_not_set_global(
 ) -> None:
     """`register_globally=False` builds the provider but skips the global
     registration step (`registered_globally=False`)."""
-    stage = materialize_tracer_provider_stage(
-        _config(tmp_path), register_globally=False
-    )
+    stage = materialize_tracer_provider_stage(_config(tmp_path), register_globally=False)
     assert stage.registered_globally is False
 
 
 def test_tracer_provider_stage_is_frozen(tmp_path: Path) -> None:
-    stage = materialize_tracer_provider_stage(
-        _config(tmp_path), register_globally=False
-    )
+    stage = materialize_tracer_provider_stage(_config(tmp_path), register_globally=False)
     with pytest.raises(FrozenInstanceError):
         stage.registered_globally = True  # type: ignore[misc]
 

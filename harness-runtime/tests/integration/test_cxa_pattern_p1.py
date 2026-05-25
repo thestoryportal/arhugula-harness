@@ -302,9 +302,7 @@ def _axis_of(module_path: str) -> str | None:
     return None
 
 
-def _walk_cross_axis_imports(
-    src_root: Path, owner_axis: str
-) -> list[tuple[str, str, str]]:
+def _walk_cross_axis_imports(src_root: Path, owner_axis: str) -> list[tuple[str, str, str]]:
     """AST-walk `src_root/*.py` for `from harness_X import Y` where X != owner.
 
     Returns a list of (consumer_module, producer_module_or_axis, symbol).
@@ -423,9 +421,7 @@ def test_cross_axis_imports_match_enumerated_seams() -> None:
         found_triples.extend(_walk_cross_axis_imports(src_root, owner_axis))
 
     # Build the enumerated-seam set keyed by (producer_module, symbol).
-    enumerated: set[tuple[str, str]] = {
-        (row[2], row[3]) for row in PATTERN_P1_SEAMS
-    }
+    enumerated: set[tuple[str, str]] = {(row[2], row[3]) for row in PATTERN_P1_SEAMS}
 
     # Symbols permitted to cross axes that aren't in the genuine-seam set.
     permitted = enumerated | _ALLOWLISTED_CROSS_AXIS_SYMBOLS
@@ -439,10 +435,7 @@ def test_cross_axis_imports_match_enumerated_seams() -> None:
     assert not unaccounted, (
         "Found cross-axis imports not enumerated in PATTERN_P1_SEAMS or "
         "_ALLOWLISTED_CROSS_AXIS_SYMBOLS — update CXA v2.3 + this test:\n  "
-        + "\n  ".join(
-            f"{c} imports {s!r} from {p}"
-            for c, p, s in unaccounted
-        )
+        + "\n  ".join(f"{c} imports {s!r} from {p}" for c, p, s in unaccounted)
     )
 
 
@@ -461,9 +454,7 @@ def test_all_enumerated_seams_have_consumer_import() -> None:
 
     found_triples: set[tuple[str, str]] = set()
     for owner_axis, src_root in consumers.items():
-        for consumer_mod, producer_mod, symbol in _walk_cross_axis_imports(
-            src_root, owner_axis
-        ):
+        for consumer_mod, producer_mod, symbol in _walk_cross_axis_imports(src_root, owner_axis):
             _ = consumer_mod
             found_triples.add((producer_mod, symbol))
 
@@ -485,8 +476,7 @@ def test_all_enumerated_seams_have_consumer_import() -> None:
             continue
         if getattr(consumer, symbol, None) is None:
             missing.append(
-                f"{edge}: {consumer_mod} does not bind {symbol!r} "
-                f"(producer {producer_mod})"
+                f"{edge}: {consumer_mod} does not bind {symbol!r} (producer {producer_mod})"
             )
 
     assert not missing, "Enumerated seams without landed imports:\n  " + "\n  ".join(missing)

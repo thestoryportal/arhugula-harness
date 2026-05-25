@@ -234,9 +234,7 @@ async def test_validator_escalation_composer_happy_path_through_real_ctx(
 
     # AC #2: surface received the correct UNION-intersected palette.
     # gate_level=ASK + cross_trust=NONE + default brief palette = FULL.
-    expected_palette = compute_effective_palette(
-        GateLevel.ASK, CrossTrustBoundaryState.NONE, brief
-    )
+    expected_palette = compute_effective_palette(GateLevel.ASK, CrossTrustBoundaryState.NONE, brief)
     assert frozenset(invocation["options"]) == expected_palette
 
     # AC #5: composer returns the operator's response value.
