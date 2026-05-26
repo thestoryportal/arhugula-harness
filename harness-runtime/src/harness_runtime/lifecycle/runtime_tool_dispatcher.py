@@ -37,6 +37,10 @@ from typing import Any
 
 import jsonschema
 
+from harness_as.sandbox_fail_class import (
+    MCPInvocationFailClass,
+    project_mcp_to_sandbox_fail_class,
+)
 from harness_as.sandbox_tier import SandboxTier
 from harness_as.tool_contract import ToolContract
 from harness_cp.mcp_client_namespace_emitter import (
@@ -182,6 +186,7 @@ ATTR_SANDBOX_PROVIDER = "sandbox.provider"
 ATTR_SANDBOX_POLICY_ASSIGNED_TIER_REASON = "sandbox.policy.assigned_tier_reason"
 ATTR_SANDBOX_COST_TIER_OVERHEAD_MS = "sandbox.cost.tier_overhead_ms"
 ATTR_SANDBOX_FAIL_CLASS = "sandbox.fail.class"
+ATTR_MCP_FAIL_CLASS = "mcp.fail.class"
 
 ATTR_TOOL_CONTRACT_NAME = "tool.contract.name"
 ATTR_STEP_ID = "step.id"
@@ -252,6 +257,29 @@ class RuntimeToolDispatcher:
             sandbox_decision_resolver or _default_sandbox_decision_resolver
         )
         self._tracer_provider = tracer_provider
+
+    def _emit_sandbox_violation(
+        self, tracer: Any, mcp_fail_class: MCPInvocationFailClass
+    ) -> None:
+        """Open the `sandbox.violation` child span with both fail-class attrs.
+
+        Per AS spec v1.6 §15.9 dual-attribute emission discipline: the
+        `sandbox.violation` event carries BOTH `mcp.fail.class` (direct from
+        §15.8 enum) AND `sandbox.fail.class` (F4 projected via §15.10).
+        Sibling to `sandbox.enter` / `sandbox.exit` under `tool.dispatch`
+        per §15.1 hierarchy.
+
+        Span is opened + closed inline (start_as_current_span + immediate
+        with-block exit) so the attribute emission lands even though the
+        caller re-raises immediately after — sandbox.violation IS the
+        diagnostic record, not an in-flight tracing scope.
+        """
+        if tracer is None:
+            return
+        projected = project_mcp_to_sandbox_fail_class(mcp_fail_class)
+        with tracer.start_as_current_span("sandbox.violation") as span:
+            _set(span, ATTR_MCP_FAIL_CLASS, mcp_fail_class.value)
+            _set(span, ATTR_SANDBOX_FAIL_CLASS, projected.value)
 
     async def dispatch(
         self,
@@ -348,7 +376,6 @@ class RuntimeToolDispatcher:
                 if tracer is not None
                 else _null_span_cm()
             )
-            sandbox_fail_class: str | None = None
             with sandbox_enter_cm as sandbox_enter_span:
                 _set(sandbox_enter_span, ATTR_SANDBOX_TIER, sandbox_decision.tier.value)
                 _set(sandbox_enter_span, ATTR_SANDBOX_TECH, sandbox_decision.tech)
@@ -371,6 +398,11 @@ class RuntimeToolDispatcher:
             )
 
             # --- Step 7: invoke + mcp.tool.call span emission ---------------
+            # Per AS spec v1.6 §15.9 dual-attribute emission: any MCP-protocol
+            # exception opens a `sandbox.violation` child span carrying BOTH
+            # `mcp.fail.class` (§15.8 direct) AND `sandbox.fail.class` (F4
+            # projected via §15.10) before re-raise. The producer-side
+            # mapping owned at this dispatcher per runtime spec §14.9.
             mcp_call_cm = (
                 tracer.start_as_current_span("mcp.tool.call")
                 if tracer is not None
@@ -392,37 +424,39 @@ class RuntimeToolDispatcher:
                     response = await self._mcp_client_host.call_tool(
                         tool_id, tool_args, idempotency_key
                     )
-            except (
-                ToolInvocationTimeoutError,
-                ToolInvocationProtocolError,
-                MCPHostUnreachableError,
-            ):
-                sandbox_fail_class = "transport"
+            except ToolInvocationTimeoutError:
+                self._emit_sandbox_violation(tracer, MCPInvocationFailClass.TIMEOUT)
+                raise
+            except ToolInvocationProtocolError:
+                self._emit_sandbox_violation(
+                    tracer, MCPInvocationFailClass.PROTOCOL_ERROR
+                )
+                raise
+            except MCPHostUnreachableError:
+                self._emit_sandbox_violation(tracer, MCPInvocationFailClass.TRANSPORT)
                 raise
 
             # --- Step 8: response schema validation -------------------------
             try:
                 _validate_response_schema(response, contract.output_schema)
             except jsonschema.ValidationError as exc:
-                sandbox_fail_class = "schema-violation"
+                self._emit_sandbox_violation(
+                    tracer, MCPInvocationFailClass.SCHEMA_VIOLATION
+                )
                 raise ToolInvocationSchemaViolationError(
                     f"RT-FAIL-TOOL-INVOCATION-SCHEMA-VIOLATION: tool="
                     f"{tool_id!r} response failed output_schema validation: "
                     f"{exc.message}"
                 ) from exc
 
-            # --- Step 9-10: sandbox.exit span (sandbox.violation deferred) --
+            # --- Step 9-10: sandbox.exit span (success path) ----------------
             sandbox_exit_cm = (
                 tracer.start_as_current_span("sandbox.exit")
                 if tracer is not None
                 else _null_span_cm()
             )
             with sandbox_exit_cm as sandbox_exit_span:
-                _set(
-                    sandbox_exit_span,
-                    ATTR_SANDBOX_FAIL_CLASS,
-                    sandbox_fail_class or "",
-                )
+                _set(sandbox_exit_span, ATTR_SANDBOX_FAIL_CLASS, "")
 
             # --- Step 11: wrap response + return ----------------------------
             return {
