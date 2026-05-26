@@ -332,6 +332,7 @@ class RuntimeLLMDispatcher:
 
             # --- Step 3: per-provider dispatch --------------------------
             cache_attrs: _AnthropicCacheAttrs | None
+            request_attrs: _AnthropicRequestAttrs | None
             if provider_name == "anthropic":
                 # U-RT-81 (C-RT-15 §14.5.1) — Memory tool callback-injection
                 # composer-step. If `step.step_payload.tools` contains the
@@ -347,7 +348,12 @@ class RuntimeLLMDispatcher:
                     and self.deployment_surface is not None
                     and step_has_memory_tool(payload.tools)
                 ):
-                    response, usage_attrs, cache_attrs = await _dispatch_anthropic_with_memory(
+                    (
+                        response,
+                        usage_attrs,
+                        cache_attrs,
+                        request_attrs,
+                    ) = await _dispatch_anthropic_with_memory(
                         adapter,
                         model,
                         payload,
@@ -356,19 +362,24 @@ class RuntimeLLMDispatcher:
                         tracer=tracer,
                     )
                 else:
-                    response, usage_attrs, cache_attrs = await _dispatch_anthropic(
-                        adapter, model, payload
-                    )
+                    (
+                        response,
+                        usage_attrs,
+                        cache_attrs,
+                        request_attrs,
+                    ) = await _dispatch_anthropic(adapter, model, payload)
             elif provider_name == "openai":
                 response, usage_attrs = await _dispatch_openai(
                     adapter, model, payload
                 )
                 cache_attrs = None
+                request_attrs = None
             else:  # provider_name == "ollama" (only remaining branch)
                 response, usage_attrs = await _dispatch_ollama(
                     adapter, model, payload
                 )
                 cache_attrs = None
+                request_attrs = None
 
             # --- Step 4: populate response-side attributes --------------
             _set_if_present(
@@ -401,6 +412,31 @@ class RuntimeLLMDispatcher:
                     span,
                     "anthropic.cache_ttl_seconds",
                     cache_attrs.cache_ttl_seconds,
+                )
+            # anthropic.* rows 5-10 per C-AS-14 §14.2 — request-side +
+            # model-derived attrs. `tokenizer_version` always emits;
+            # the optional 5 emit only when present per spec optional
+            # discipline (`_set_if_present` short-circuits on None).
+            if request_attrs is not None:
+                _set_if_present(
+                    span, "anthropic.thinking_mode", request_attrs.thinking_mode
+                )
+                _set_if_present(
+                    span,
+                    "anthropic.thinking_budget_tokens",
+                    request_attrs.thinking_budget_tokens,
+                )
+                _set_if_present(
+                    span,
+                    "anthropic.thinking_effort",
+                    request_attrs.thinking_effort,
+                )
+                _set_if_present(span, "anthropic.batch_id", request_attrs.batch_id)
+                span.set_attribute(
+                    "anthropic.tokenizer_version", request_attrs.tokenizer_version
+                )
+                _set_if_present(
+                    span, "anthropic.inference_geo", request_attrs.inference_geo
                 )
 
             # --- Step 4.5: cost-attribution (U-OD-38) -------------------
@@ -471,6 +507,84 @@ class _AnthropicCacheAttrs:
     cache_ttl_seconds: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class _AnthropicRequestAttrs:
+    """Anthropic request-side + model-derived attribute carrier per C-AS-14
+    §14.2 rows 5-10 (the 6 non-cache attrs on the `llm.inference` span).
+
+    Sources per Anthropic Python SDK `MessageCreateParams` shape:
+    - `thinking_mode` / `thinking_budget_tokens` — `payload.params["thinking"]`
+    - `thinking_effort` — beta `payload.params["output_config"]["effort"]`
+    - `inference_geo` — `payload.params["inference_geo"]`
+    - `batch_id` — operator-supplied marker at `payload.params["batch_id"]`
+      (not in synchronous messages.create; out-of-band Batch API submission marker)
+    - `tokenizer_version` — model-derived: `"v2"` for Opus 4.7+; else `"v1"` per
+      spec §14.2 row "v1 (default); v2 (Opus 4.7)". Always emitted.
+    """
+
+    thinking_mode: str | None
+    thinking_budget_tokens: int | None
+    thinking_effort: str | None
+    batch_id: str | None
+    tokenizer_version: str  # always emitted; bounded enum {"v1", "v2"}
+    inference_geo: str | None
+
+
+def _derive_tokenizer_version(model: str) -> str:
+    """Per spec §14.2 row 9 — strict reading: `v2` for Opus 4.7+; else `v1`.
+
+    Future model families MAY warrant additional `v*` values; that surface
+    extension routes through design-phase back-flow per X-AL-3.
+    """
+    return "v2" if model.startswith("claude-opus-4-7") else "v1"
+
+
+def _extract_anthropic_request_attrs(
+    payload: ProviderAgnosticPayload, model: str
+) -> _AnthropicRequestAttrs:
+    """Extract the 6 non-cache anthropic.* attrs from request payload + model.
+
+    Per C-AS-14 §14.2 rows 5-10. Best-effort: payloads that don't follow the
+    expected shape return `None` per-field rather than raising. Total over
+    `_AnthropicRequestAttrs` field domain.
+    """
+    params = payload.params
+    thinking_cfg = params.get("thinking")
+    thinking_mode: str | None = None
+    thinking_budget: int | None = None
+    if isinstance(thinking_cfg, Mapping):
+        cfg = cast(Mapping[str, Any], thinking_cfg)
+        type_raw = cfg.get("type")
+        budget_raw = cfg.get("budget_tokens")
+        if isinstance(type_raw, str):
+            thinking_mode = type_raw
+        if isinstance(budget_raw, int) and not isinstance(budget_raw, bool):
+            thinking_budget = budget_raw
+
+    output_cfg = params.get("output_config")
+    thinking_effort: str | None = None
+    if isinstance(output_cfg, Mapping):
+        cfg = cast(Mapping[str, Any], output_cfg)
+        effort_raw = cfg.get("effort")
+        if isinstance(effort_raw, str):
+            thinking_effort = effort_raw
+
+    batch_id_raw = params.get("batch_id")
+    batch_id = batch_id_raw if isinstance(batch_id_raw, str) else None
+
+    inference_geo_raw = params.get("inference_geo")
+    inference_geo = inference_geo_raw if isinstance(inference_geo_raw, str) else None
+
+    return _AnthropicRequestAttrs(
+        thinking_mode=thinking_mode,
+        thinking_budget_tokens=thinking_budget,
+        thinking_effort=thinking_effort,
+        batch_id=batch_id,
+        tokenizer_version=_derive_tokenizer_version(model),
+        inference_geo=inference_geo,
+    )
+
+
 def _payload_to_anthropic_kwargs(payload: ProviderAgnosticPayload) -> dict[str, Any]:
     """Translate `ProviderAgnosticPayload` → ``messages.create`` kwargs.
 
@@ -511,7 +625,7 @@ async def _dispatch_anthropic_with_memory(
     registry: Any,
     deployment_surface: Any,
     tracer: Any,
-) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs]:
+) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch with Memory tool inner loop (U-RT-81).
 
     Per spec v1.17 §14.5.1 mechanism β + AS spec v1.5 §14.7 memory.*
@@ -556,14 +670,15 @@ async def _dispatch_anthropic_with_memory(
         cache_breakpoint_id=cache_breakpoint_id,
         cache_ttl_seconds=cache_ttl_seconds,
     )
-    return (_response_to_mapping(response), usage_attrs, cache_attrs)
+    request_attrs = _extract_anthropic_request_attrs(payload, model)
+    return (_response_to_mapping(response), usage_attrs, cache_attrs, request_attrs)
 
 
 async def _dispatch_anthropic(
     adapter: Any,
     model: str,
     payload: ProviderAgnosticPayload,
-) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs]:
+) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch — ``client.messages.create(...)``."""
     kwargs = _payload_to_anthropic_kwargs(payload)
     response = await adapter.client.messages.create(model=model, **kwargs)
@@ -585,8 +700,9 @@ async def _dispatch_anthropic(
         cache_breakpoint_id=cache_breakpoint_id,
         cache_ttl_seconds=cache_ttl_seconds,
     )
+    request_attrs = _extract_anthropic_request_attrs(payload, model)
 
-    return (_response_to_mapping(response), usage_attrs, cache_attrs)
+    return (_response_to_mapping(response), usage_attrs, cache_attrs, request_attrs)
 
 
 async def _dispatch_openai(
