@@ -473,3 +473,183 @@ async def test_mis_shaped_payload_raises_payload_shape_error() -> None:
     )
     with pytest.raises(LLMDispatchPayloadShapeError):
         await dispatcher.dispatch(_binding("anthropic"), bad_step, step_context=_step_context())
+
+
+# ---------------------------------------------------------------------------
+# AS-8 anthropic.* 6-attr extension per C-AS-14 §14.2 rows 5-10.
+# Closes the request-side + model-derived attr emission gap. Anthropic SDK
+# parameter sources resolved via context7 at AS-8 discriminator audit.
+# ---------------------------------------------------------------------------
+
+
+async def _dispatch_with_payload(
+    payload: dict[str, Any],
+    *,
+    model: str = "claude-sonnet-4-6",
+) -> dict[str, Any]:
+    """Dispatch + return the gen_ai span's attribute dict."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(providers={"anthropic": adapter}, tracer_provider=tp)
+    await dispatcher.dispatch(
+        _binding("anthropic", model=model),
+        _step(payload),
+        step_context=_step_context(),
+    )
+    return dict((exporter.get_finished_spans()[0].attributes) or {})
+
+
+def _default_payload(params: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": None,
+        "params": params or {"max_tokens": 100},
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_tokenizer_version_always_emits_v1_for_non_opus_47() -> None:
+    """§14.2 row 9 — strict reading: v2 only for Opus 4.7; else v1.
+
+    `tokenizer_version` is always-emitted (the only non-optional of the 6
+    new attrs); model-derived from the binding's `model` string.
+    """
+    attrs = await _dispatch_with_payload(_default_payload(), model="claude-sonnet-4-6")
+    assert attrs["anthropic.tokenizer_version"] == "v1"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_tokenizer_version_emits_v2_for_opus_47() -> None:
+    """§14.2 row 9 — Opus 4.7 model strings get tokenizer_version=v2."""
+    attrs = await _dispatch_with_payload(
+        _default_payload(), model="claude-opus-4-7-20250101"
+    )
+    assert attrs["anthropic.tokenizer_version"] == "v2"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_thinking_mode_emits_when_thinking_config_present() -> None:
+    """§14.2 row 5 — `thinking.type` from payload.params emits as enum string."""
+    attrs = await _dispatch_with_payload(
+        _default_payload(
+            {"max_tokens": 100, "thinking": {"type": "enabled", "budget_tokens": 2048}}
+        )
+    )
+    assert attrs["anthropic.thinking_mode"] == "enabled"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_thinking_mode_omitted_when_thinking_absent() -> None:
+    """§14.2 row 5 — optional field; omitted when payload lacks `thinking`."""
+    attrs = await _dispatch_with_payload(_default_payload())
+    assert "anthropic.thinking_mode" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_anthropic_thinking_budget_tokens_emits_when_present() -> None:
+    """§14.2 row 6 — `thinking.budget_tokens` from payload.params."""
+    attrs = await _dispatch_with_payload(
+        _default_payload(
+            {"max_tokens": 100, "thinking": {"type": "enabled", "budget_tokens": 4096}}
+        )
+    )
+    assert attrs["anthropic.thinking_budget_tokens"] == 4096
+
+
+@pytest.mark.asyncio
+async def test_anthropic_thinking_budget_tokens_omitted_when_thinking_absent() -> None:
+    attrs = await _dispatch_with_payload(_default_payload())
+    assert "anthropic.thinking_budget_tokens" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_anthropic_thinking_effort_emits_when_output_config_effort_present() -> None:
+    """§14.2 row 7 — `output_config.effort` is a beta SDK field (nested)."""
+    attrs = await _dispatch_with_payload(
+        _default_payload(
+            {"max_tokens": 100, "output_config": {"effort": "high"}}
+        )
+    )
+    assert attrs["anthropic.thinking_effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_thinking_effort_omitted_when_output_config_absent() -> None:
+    attrs = await _dispatch_with_payload(_default_payload())
+    assert "anthropic.thinking_effort" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_anthropic_batch_id_emits_when_operator_supplies_marker() -> None:
+    """§14.2 row 8 — batch_id is operator-supplied out-of-band marker (Batch
+    API submission). Not in the synchronous messages.create SDK params.
+    """
+    attrs = await _dispatch_with_payload(
+        _default_payload({"max_tokens": 100, "batch_id": "batch_test_001"})
+    )
+    assert attrs["anthropic.batch_id"] == "batch_test_001"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_batch_id_omitted_when_not_supplied() -> None:
+    attrs = await _dispatch_with_payload(_default_payload())
+    assert "anthropic.batch_id" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_anthropic_inference_geo_emits_when_supplied() -> None:
+    """§14.2 row 10 — `inference_geo` from payload.params (data-residency)."""
+    attrs = await _dispatch_with_payload(
+        _default_payload({"max_tokens": 100, "inference_geo": "us"})
+    )
+    assert attrs["anthropic.inference_geo"] == "us"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_inference_geo_omitted_when_absent() -> None:
+    attrs = await _dispatch_with_payload(_default_payload())
+    assert "anthropic.inference_geo" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_anthropic_six_attrs_all_emit_together_when_payload_complete() -> None:
+    """Integration: when payload supplies all optional sources, all 6 attrs land."""
+    attrs = await _dispatch_with_payload(
+        _default_payload(
+            {
+                "max_tokens": 100,
+                "thinking": {"type": "enabled", "budget_tokens": 2048},
+                "output_config": {"effort": "medium"},
+                "batch_id": "batch_test_002",
+                "inference_geo": "us",
+            }
+        ),
+        model="claude-opus-4-7-20260101",
+    )
+    assert attrs["anthropic.thinking_mode"] == "enabled"
+    assert attrs["anthropic.thinking_budget_tokens"] == 2048
+    assert attrs["anthropic.thinking_effort"] == "medium"
+    assert attrs["anthropic.batch_id"] == "batch_test_002"
+    assert attrs["anthropic.tokenizer_version"] == "v2"
+    assert attrs["anthropic.inference_geo"] == "us"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_six_attrs_absent_for_non_anthropic_providers() -> None:
+    """Per AS-AL-3 — anthropic.* emitted ONLY when provider=='anthropic'."""
+    oa_tp, oa_exporter = _tracer_provider_with_exporter()
+    oa = RuntimeLLMDispatcher(
+        providers={"openai": _OpenAIFakeAdapter(_OpenAIClient())},
+        tracer_provider=oa_tp,
+    )
+    await oa.dispatch(_binding("openai"), _step(), step_context=_step_context())
+    oa_attrs = (oa_exporter.get_finished_spans()[0].attributes) or {}
+    for key in (
+        "anthropic.thinking_mode",
+        "anthropic.thinking_budget_tokens",
+        "anthropic.thinking_effort",
+        "anthropic.batch_id",
+        "anthropic.tokenizer_version",
+        "anthropic.inference_geo",
+    ):
+        assert key not in oa_attrs
