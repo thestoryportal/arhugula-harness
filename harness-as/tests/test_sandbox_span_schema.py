@@ -35,6 +35,21 @@ def test_sandbox_violation_attributes_include_fail_class() -> None:
     assert "sandbox.fail.class" in SANDBOX_VIOLATION_ATTRIBUTES
 
 
+def test_sandbox_violation_attributes_includes_mcp_fail_class() -> None:
+    """AS plan v1.4 §2 AC #9 — sandbox.violation carries mcp.fail.class (§15.9)."""
+    assert "mcp.fail.class" in SANDBOX_VIOLATION_ATTRIBUTES
+
+
+def test_sandbox_violation_attributes_cardinality_two() -> None:
+    """AS plan v1.4 §2 AC #3 (text-replace) — sandbox.violation carries 2 attribute names.
+
+    Per AS spec v1.6 §15.9 dual-attribute emission. Either MAY be
+    omitted-not-null on a given emission per §15.9 5-row matrix; both
+    names ride the canonical schema.
+    """
+    assert len(SANDBOX_VIOLATION_ATTRIBUTES) == 2
+
+
 def test_sandbox_tier_escalation_attributes_per_spec() -> None:
     """Acceptance #3 — sandbox.tier_escalation carries 3 attributes."""
     assert SANDBOX_TIER_ESCALATION_ATTRIBUTES == frozenset(

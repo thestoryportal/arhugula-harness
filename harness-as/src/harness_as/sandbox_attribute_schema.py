@@ -136,6 +136,23 @@ SANDBOX_ATTRIBUTE_SCHEMA: tuple[SandboxAttributeSchema, ...] = (
     ),
 )
 
+#: The `mcp.fail.class` attribute co-emitted on `sandbox.violation` per
+#: AS spec v1.6 §15.9 dual-attribute emission discipline. Carries the
+#: §15.8 MCPInvocationFailClass 4-value taxonomy at the MCP-protocol
+#: layer (sibling to §4.1 F4 SandboxFailClass at the process-execution
+#: layer). NOT a member of the 7-row `SANDBOX_ATTRIBUTE_SCHEMA` above —
+#: `mcp.fail.class` carries the `mcp.*` namespace prefix; the schema row
+#: lives in a sibling tuple to preserve the §15.2 "seven" semantics.
+MCP_INVOCATION_ATTRIBUTE_SCHEMA: tuple[SandboxAttributeSchema, ...] = (
+    SandboxAttributeSchema(
+        attribute_name="mcp.fail.class",
+        value_type=_ENUM,
+        cardinality=Cardinality.LOW,
+        emitted_on=_VIOLATION,
+        discriminator_role="MCP-protocol-layer fail-class taxonomy (§15.8)",
+    ),
+)
+
 # §15.3 join table — each provider belongs to exactly one tech class.
 _PROVIDER_TECH: dict[SandboxProvider, SandboxTechClass] = {
     SandboxProvider.E2B_FIRECRACKER: SandboxTechClass.MICROVM,
