@@ -85,7 +85,14 @@ SANDBOX_ENTER_ATTRIBUTES: frozenset[str] = frozenset(
         "persona_tier",
     }
 )
-SANDBOX_VIOLATION_ATTRIBUTES: frozenset[str] = frozenset({"sandbox.fail.class"})
+SANDBOX_VIOLATION_ATTRIBUTES: frozenset[str] = frozenset(
+    {"sandbox.fail.class", "mcp.fail.class"}
+)
+"""Per AS spec v1.6 §15.9 dual-attribute emission. `sandbox.violation`
+carries BOTH `sandbox.fail.class` (F4 process-shape per §4.1) AND
+`mcp.fail.class` (MCP-shape per §15.8). Either MAY be omitted-not-null
+on a given emission per §15.9 5-row scenario matrix; both names ride
+the canonical schema."""
 SANDBOX_TIER_ESCALATION_ATTRIBUTES: frozenset[str] = frozenset(
     {"from_tier", "to_tier", "escalation_cause"}
 )

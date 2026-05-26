@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from harness_as.sandbox_attribute_schema import (
+    MCP_INVOCATION_ATTRIBUTE_SCHEMA,
     SANDBOX_ATTRIBUTE_SCHEMA,
     SandboxProvider,
     SandboxTechClass,
@@ -86,3 +87,15 @@ def test_tech_admits_provider_functional_join() -> None:
     """Acceptance #5 — tech_admits_provider is the functional belongs-to join."""
     assert tech_admits_provider(SandboxTechClass.MICROVM, SandboxProvider.E2B_FIRECRACKER)
     assert not tech_admits_provider(SandboxTechClass.CONTAINER, SandboxProvider.E2B_FIRECRACKER)
+
+
+def test_mcp_invocation_attribute_schema_cardinality_one() -> None:
+    """AS plan v1.4 §2 AC #10 — MCP_INVOCATION_ATTRIBUTE_SCHEMA declares 1 entry."""
+    assert len(MCP_INVOCATION_ATTRIBUTE_SCHEMA) == 1
+
+
+def test_mcp_fail_class_emitted_on_sandbox_violation_event() -> None:
+    """AS plan v1.4 §2 AC #10 — mcp.fail.class emitted_on=sandbox.violation per §15.9."""
+    row = MCP_INVOCATION_ATTRIBUTE_SCHEMA[0]
+    assert row.attribute_name == "mcp.fail.class"
+    assert row.emitted_on == "sandbox.violation"
