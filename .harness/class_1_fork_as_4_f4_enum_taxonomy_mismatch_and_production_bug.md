@@ -261,7 +261,19 @@ Estimated arc 2 cycle cost: ~5-8 commits multi-axis, 1-2 sessions.
 
 | Field | Value |
 |---|---|
-| Fork status | OPEN → **READING-B-ARC-1-LANDED** (spec amendment commit at this session); arc 2 (plan + impl + retirement) pending fresh worktree |
-| HEAD at arc 1 close | Commit pending this session — AS spec v1.6 + workspace CLAUDE.md row bump + this §8 closure block |
-| Arc 2 unblocker | None — operator may open arc 2 at any time; preferred at fresh worktree per FM-4 risk-aware scoping |
-| Cross-axis cascade | ZERO at semantics layer; potential cite cascade owed at follow-on OD §C-OD-05/06 + CXA v2.10 §2.3 (NOT patched per FM-2 no-extension discipline) |
+| Fork status | OPEN → READING-B-ARC-1-LANDED → **READING-B-APPLIED** (arc 2 close at 2026-05-26) |
+| HEAD at arc 1 close | `bb2474d` — AS spec v1.5 → v1.6 + workspace CLAUDE.md row bump + §8 closure block (2026-05-25) |
+| HEAD at arc 2 close | Commit pending this session — AS plan v1.3 → v1.4 (`54b992d`) + harness-runtime dispatcher fix + 5 e2e tests (`c3545b6`) + retirement batch-19 + workspace + harness-as/CLAUDE.md row bumps + this §8 closure update |
+| Cross-axis cascade | ZERO at semantics layer; 3 deferred cascades (OD §C-OD-04/05/06 dual-attr ingestion + CXA v2.10 §2.3.6 edge enumeration + ADR-D2 §1.7.X future-arc projection ratification) surfaced at AS plan v1.4 §3 NOT patched per FM-2 no-extension discipline |
+
+### §8.5 Arc 2 close evidence (2026-05-26)
+
+| Deliverable | Commit | Evidence |
+|---|---|---|
+| (1) AS plan v1.3 → v1.4 | `54b992d` | Delta-only plan file at `design-substrate/Implementation_Plan_Action_Surface_v1_4.md`; two single-unit-body amendments (U-AS-03 carrier-extension + U-AS-17 AC #3 text-replace + ACs #9/#10); ZERO new units; ZERO DAG change |
+| (2) harness-as impl | `54b992d` | `MCPInvocationFailClass` 4-value StrEnum + `project_mcp_to_sandbox_fail_class` projection function + `__all__` exports at `sandbox_fail_class.py`; `SANDBOX_VIOLATION_ATTRIBUTES` extended at `sandbox_span_schema.py`; `MCP_INVOCATION_ATTRIBUTE_SCHEMA` sibling tuple at `sandbox_attribute_schema.py`; 17 new unit tests; pyright strict 0 errors at carrier modules; 317/317 harness-as tests PASS |
+| (3) harness-runtime impl | `c3545b6` | Bug fix at `runtime_tool_dispatcher.py:395-412` (invented-string dead-code REPLACED with isinstance dispatch mapping each MCP-protocol exception to MCPInvocationFailClass); NEW `_emit_sandbox_violation` helper opens `sandbox.violation` child span on exception path with dual fail-class attrs per §15.9 + §15.10; 5 new e2e tests against real fastmcp echo fixture (4 exception paths + happy-path no-violation regression guard); 1069/1069 runtime tests PASS; pyright src-side neutral |
+| (4) Retirement batch-19 | pending this session | `phase-7d-retirement-events-batch-19.md` filed; H_T-AS-4 PARTIAL → RETIRED close per Reading B resolution path; cumulative 27/49 → 28/49 RETIRED (57.1%); AS-axis 3/6 → 4/6 (66.7%) |
+| (5) Fork doc §8 closure | this edit | OPEN → READING-B-ARC-1-LANDED → READING-B-APPLIED |
+
+**Fork CLOSED-APPLIED 2026-05-26.**
