@@ -60,7 +60,7 @@ from typing import Any, Protocol, cast, runtime_checkable
 from harness_cp.cp_shared_types import ProviderAgnosticPayload
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
-from harness_od.otel_genai_base import GenAiOperation
+from harness_od.otel_genai_base import GenAiOperation, HIERARCHY_CORRELATION_KEY
 
 from harness_runtime.lifecycle.memory_tool_dispatch import (
     derive_context_editing_active,
@@ -270,6 +270,13 @@ class RuntimeLLMDispatcher:
     # llm_dispatcher_stage` kwargs.
     memory_tool_registry: Any = None
     deployment_surface: Any = None
+    # OD spec v1.20 §C-OD-04 §4.3 `server.address` / `server.port` resolution
+    # for the ollama provider (operator-configurable endpoint). Threaded from
+    # `RuntimeConfig.ollama_host` at stage 5 per `[[fork-od-spec-declared-but-
+    # not-emitted-attributes]]` Path A. Defaults to None: when unset, ollama
+    # spans emit neither `server.address` nor `server.port` per OTel
+    # Conditionally Required "If `server.address` is set" gating.
+    ollama_host: str | None = None
 
     async def dispatch(
         self,
@@ -336,10 +343,34 @@ class RuntimeLLMDispatcher:
         # OTel tracer CM is synchronous (returns ``ContextManager``, not
         # ``AsyncContextManager``); spec §14.5 phrasing is imprecise.
         with tracer.start_as_current_span(span_name) as span:
-            # §4.3 Required (Stable) tier — all 3 attributes always emitted.
+            # §4.3 Required (Stable) tier — all 2 attributes always emitted
+            # (per v1.19 §1.1 redistribution: `gen_ai.operation.name` +
+            # `gen_ai.provider.name`).
             span.set_attribute("gen_ai.operation.name", operation.value)
             span.set_attribute("gen_ai.provider.name", provider_name)
+            # §4.3 Conditionally Required tier — harness emits the model
+            # unconditionally (always known at dispatch) + the conversation
+            # id from `step_context.workflow_id` (always known per CP spec
+            # v1.12 §25.2.1 9th-field). `server.port` emission below is
+            # gated on `server.address` per the OTel canonical condition.
+            # Closes `[[fork-od-spec-declared-but-not-emitted-attributes]]`
+            # finding (g) Path A 2026-05-27.
             span.set_attribute("gen_ai.request.model", model)
+            span.set_attribute(HIERARCHY_CORRELATION_KEY, step_context.workflow_id)
+            # §4.3 `server.address` Recommended (Development) + `server.port`
+            # Conditionally Required ("If `server.address` is set"). Hosted
+            # providers resolve from static maps; ollama resolves from the
+            # dispatcher-bound `ollama_host` (None → no emission per OTel
+            # Conditionally Required gating). Closes Path A finding (f).
+            if provider_name == "ollama":
+                server_address, server_port = _parse_ollama_host(self.ollama_host)
+            else:
+                server_address = _PROVIDER_SERVER_ADDRESS.get(provider_name)
+                server_port = _PROVIDER_SERVER_PORT.get(provider_name)
+            if server_address is not None:
+                span.set_attribute("server.address", server_address)
+                if server_port is not None:
+                    span.set_attribute("server.port", server_port)
 
             # --- Step 3: per-provider dispatch --------------------------
             cache_attrs: _AnthropicCacheAttrs | None
@@ -507,6 +538,62 @@ _PROVIDER_OPERATIONS: dict[str, GenAiOperation] = {
     "openai": GenAiOperation.CHAT,
     "ollama": GenAiOperation.CHAT,
 }
+
+
+#: Per-hosted-provider `server.address` per OD spec v1.20 §C-OD-04 §4.3
+#: Recommended (Development) tier. Hosted providers (anthropic / openai) have
+#: stable canonical endpoints. Ollama is operator-configurable and is resolved
+#: from `RuntimeLLMDispatcher.ollama_host` per the OTel Conditionally Required
+#: "If `server.address` is set" rule (no emission when the value is unknown).
+_PROVIDER_SERVER_ADDRESS: dict[str, str] = {
+    "anthropic": "api.anthropic.com",
+    "openai": "api.openai.com",
+}
+
+#: Per-hosted-provider `server.port` per OD spec v1.20 §C-OD-04 §4.3
+#: Conditionally Required tier. Both hosted providers are HTTPS-only.
+_PROVIDER_SERVER_PORT: dict[str, int] = {
+    "anthropic": 443,
+    "openai": 443,
+}
+
+
+def _parse_ollama_host(host: str | None) -> tuple[str | None, int | None]:
+    """Parse `RuntimeConfig.ollama_host` into `(address, port)`.
+
+    Accepts a full URL (e.g., ``http://localhost:11434``) per spec §5 line
+    354 `AsyncClient(host=...)` convention. Returns ``(None, None)`` when
+    the input is ``None``, satisfying the OTel Conditionally Required "If
+    `server.address` is set" gating — when the harness does not know the
+    user's configured ollama endpoint, the harness emits neither attribute
+    (per advisor 2026-05-27 correction to fork doc §3 Path A static-map
+    framing; static `localhost` would be a factual lie in telemetry when
+    the operator binds a remote daemon).
+
+    When the input is set but port is omitted, defaults to the ollama SDK
+    default port 11434 (matching `AsyncOllamaClient` fallback at
+    `lifecycle/providers.py:504-505`).
+    """
+    if host is None:
+        return (None, None)
+    # Strip scheme.
+    remainder = host
+    for scheme in ("http://", "https://"):
+        if remainder.startswith(scheme):
+            remainder = remainder[len(scheme):]
+            break
+    # Strip path.
+    if "/" in remainder:
+        remainder = remainder.split("/", 1)[0]
+    # Split host:port.
+    if ":" in remainder:
+        address, _, port_str = remainder.partition(":")
+        try:
+            port = int(port_str)
+        except ValueError:
+            return (address or None, 11434)
+        return (address or None, port)
+    return (remainder or None, 11434)
 
 
 @dataclass(frozen=True, slots=True)
@@ -876,6 +963,7 @@ def materialize_llm_dispatcher_stage(
     rate_table: Any = None,
     memory_tool_registry: Any = None,
     deployment_surface: Any = None,
+    ollama_host: str | None = None,
 ) -> RuntimeLLMDispatcher:
     """Stage 5 LOOP_INIT composer factory for the LLM dispatcher (U-RT-52).
 
@@ -906,6 +994,7 @@ def materialize_llm_dispatcher_stage(
         rate_table=rate_table,
         memory_tool_registry=memory_tool_registry,
         deployment_surface=deployment_surface,
+        ollama_host=ollama_host,
     )
 
 
