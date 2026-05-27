@@ -3,7 +3,7 @@
 Acceptance-criterion coverage:
   #1 4-attribute set per §1.4   -> test_routing_namespace_cardinality_four,
                                    test_routing_attributes_match_spec_verbatim
-  #2 inherits llm.inference     -> test_routing_inherits_from_llm_inference
+  #2 inherits the LLM inference span  -> test_routing_inherits_from_llm_inference
   #3 no independent sampling    -> test_no_independent_sampling_discipline
   #4 D6 ingestion out of scope  -> structural (no emission/ingestion surface)
 """
@@ -32,9 +32,17 @@ def test_routing_attributes_match_spec_verbatim() -> None:
 
 
 def test_routing_inherits_from_llm_inference() -> None:
-    """Acceptance #2 — every attribute cites the `llm.inference` parent span."""
+    """Acceptance #2 — every attribute cites the LLM inference span parent.
+
+    Per AS spec v1.7 §14.1 alias-term convention: the spec-side parent-anchor
+    is "the LLM inference span" (alias for the span opened by the runtime LLM
+    dispatcher composer per OD spec v1.12 §C-OD-04 §4.1, runtime name
+    `{operation} {model}`). Pre-v1.7 the literal `llm.inference` was used;
+    R3 apply-pass refactored to alias term per
+    `.harness/class_1_fork_genai_span_name_four_way_drift.md` §7.4.3.
+    """
     for attr in ROUTING_NAMESPACE_SCHEMA:
-        assert "llm.inference" in attr.inherited_from
+        assert "the LLM inference span" in attr.inherited_from
         assert "OTel GenAI semconv 1.41.0" in attr.inherited_from
 
 

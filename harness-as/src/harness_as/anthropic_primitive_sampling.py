@@ -37,7 +37,11 @@ class AnthropicPrimitiveSamplingPosture(StrEnum):
 ANTHROPIC_PRIMITIVE_SAMPLING_POLICY: Mapping[str, AnthropicPrimitiveSamplingPosture] = (
     MappingProxyType(
         {
-            "llm.inference": AnthropicPrimitiveSamplingPosture.HEAD_BASED_DEV_TAIL_BASED_PROD,
+            # Alias-term key per AS spec v1.7 §14.1 + §14.8 row 1 — the LLM
+            # inference span is owned at OD spec v1.12 §C-OD-04 §4.1 (actual
+            # runtime span-name `{operation} {model}`); spec-side cite uses
+            # the alias term, not the literal runtime span name.
+            "the LLM inference span": AnthropicPrimitiveSamplingPosture.HEAD_BASED_DEV_TAIL_BASED_PROD,
             "skill.activation": (
                 AnthropicPrimitiveSamplingPosture.HEAD_1_0_DESIGN_TIME_BASE_RATE_PROD
             ),

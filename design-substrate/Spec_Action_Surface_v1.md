@@ -1,4 +1,44 @@
-# Spec — Action Surface v1.6
+# Spec — Action Surface v1.7
+
+## Change-note (v1.6 → v1.7)
+
+**Scope of revision.** GenAI span-name format Class 1 fork resolution R3 follow-on per `.harness/class_1_fork_genai_span_name_four_way_drift.md` §7.4.3 (R3) operator-ratified 2026-05-26 option (A) + option (b) alias-term abstraction. NEW alias-term convention introduced at §14.1 + applied at §14.2 + §14.7 + §14.8: literal string `llm.inference` (which was never an actual emitted span name at production — see fork §2.2) replaced with conceptual alias term **"the LLM inference span"** with cross-reference to OD spec v1.12 §C-OD-04 §4.1 for the actual runtime span-name format.
+
+**Architectural rationale.** Per fork §7.4.3 architect Mode-3 finding: option (a) literal rename is structurally impossible because the post-R2 actual emitted span name is template-instantiated per-call (`{operation} {model}` resolves to e.g. `chat claude-opus-4-7` at one dispatch and `embeddings text-embedding-3` at another). A literal-string parent-anchor cite cannot point at a per-call-variable name. The current `llm.inference` literal works only because it's never emitted at production — phantom anchor. Option (b) alias-term abstraction decouples spec parent-anchor citations from runtime span-name resolution: future semconv version bumps (1.41.0 → 1.42.0 etc.) ripple only through OD §4.1 + production rename; AS spec parent-anchor cites are immune.
+
+**Narrow-scope framing.** The amendment touches ONLY parent-span anchor citations for the `anthropic.*` namespace (the namespace that consumes the LLM-dispatch span). Other namespaces with literal parent-span anchors at §14.1 (`mcp.*` → `mcp.tool.call`, `skill.*` → `skill.activation`, `managed_agents.*` → `managed_agents.runtime`, `files.*` → `files.operation`, `memory.*` → `memory.operation`) PRESERVED VERBATIM — those parent-span names ARE the actual emitted span names at production (verified at filing). The `memory.context_editing_active` semantic at §14.7 cites "parent llm.inference" — also amended per the alias-term convention.
+
+**Amendment sites.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§14.1 (new sub-note before the 6-row table)** | NEW alias-term declaration: *"**The LLM inference span** is the conceptual reference used at this specification for the span opened by the runtime LLM dispatcher composer per OD spec v1.12 §C-OD-04 §4.1 (actual emitted span name = `{gen_ai.operation.name} {gen_ai.request.model}` 2-token byte-exact to OTel GenAI semconv 1.41.0). Cited at AS spec rows + downstream namespace schemas as 'the LLM inference span' — the literal span-name format is OD-axis-owned at §4.1. This decoupling means AS spec parent-anchor citations are immune to future OTel semconv version bumps; only OD §4.1 + production rename ripple."* | Class 1 fork §7.4.3 option (b) + OD spec v1.12 §C-OD-04 §4.1 |
+| **§14.1 row 1129 `anthropic.*` parent-span column** | `llm.inference` → `the LLM inference span` (alias per §14.1 sub-note) | Class 1 fork §7.4.3 option (b) |
+| **§14.2 section header** | `(ten attributes on \`llm.inference\` span)` → `(ten attributes on the LLM inference span)` | Class 1 fork §7.4.3 option (b) |
+| **§14.7 `memory.context_editing_active` semantic cite** | `True if parent \`llm.inference\` uses \`clear_tool_uses_20250919\`...` → `True if parent (the LLM inference span) uses \`clear_tool_uses_20250919\`...` | Class 1 fork §7.4.3 option (b) |
+| **§14.8 sampling-policy table row 1** | Key `llm.inference` → `the LLM inference span` (alias per §14.1 sub-note); remaining 5 rows (`skill.activation` / `mcp.tool.call` / `managed_agents.runtime` / `files.operation` / `memory.operation`) PRESERVED VERBATIM — those keys ARE actual emitted span names | Class 1 fork §7.4.3 option (b) |
+
+**Cross-file absorption owed (per spec-writer §5; flagged for downstream).**
+
+| Artifact | Required change | Owner |
+|---|---|---|
+| `harness-as/src/harness_as/anthropic_attribute_namespaces.py:110` | `_ANTHROPIC_SPAN = "llm.inference"` → `_ANTHROPIC_SPAN = "the LLM inference span"` (alias marker per §14.1 amendment) | Direct impl edit (R3 this session) |
+| `harness-as/src/harness_as/anthropic_primitive_sampling.py:40` | Mapping key `"llm.inference"` → `"the LLM inference span"` matching alias | Direct impl edit (R3 this session) |
+| `harness-cp/src/harness_cp/routing_namespace.py:50-52` | `_LLM_INFERENCE_PARENT` text content updated to alias phrasing (preserves OTel semconv citation, replaces literal with alias) | Direct impl edit (R3 this session) |
+| `harness-cp/src/harness_cp/multi_agent_span_hierarchy.py:84` | `"llm.inference[]"` → `"the LLM inference span[]"` (alias marker) | Direct impl edit (R3 this session) |
+| 11 source-file docstring sites | Replace literal `llm.inference` references with alias-term phrasing per fork §2.2 | Direct impl edit (R3 this session) |
+| `harness-cp/tests/test_routing_namespace.py:6,35,37` | Alias-aware assertion (substring match against new alias text) | Direct test edit (R3 this session) |
+| `Cross_Axis_Composition_Document_v2_10.md` → v2.11 | Declare AS §14.1 ↔ OD §4.1 cross-axis seam at §2.3.x convention bucket (alias-term ↔ format owner) | Direct CXA edit (R3 this session) |
+
+**Adjacent observations (NOT patched per FM-2).**
+
+(a) **Other §14.1 parent-span literals.** `mcp.tool.call` / `skill.activation` / `managed_agents.runtime` / `files.operation` / `memory.operation` literals are PRESERVED VERBATIM because those names ARE actual emitted span names at production. If future arcs introduce per-call-variable naming for any of these (unlikely per current design), the alias-term convention extends naturally — but no extension owed at this arc.
+
+(b) **`gen_ai.system` vs `gen_ai.provider.name` attribute-name divergence at production (OD v1.12 §"Adjacent observations" (f)).** Unchanged; separate apply-pass arc.
+
+(c) **`_PROVIDER_OPERATIONS` non-§4.2-enum-conformance at production (runtime spec v1.27 §"Adjacent observation").** Unchanged; separate apply-pass arc.
+
+---
 
 ## Change-note (v1.5 → v1.6)
 
@@ -1124,16 +1164,18 @@ At workload-binding-time:
 
 ### §14.1 Six namespace declarations
 
+**Alias-term convention (v1.7 NEW per `.harness/class_1_fork_genai_span_name_four_way_drift.md` §7.4.3 R3 option (b)).** **The LLM inference span** is the conceptual reference used at this specification for the span opened by the runtime LLM dispatcher composer per OD spec v1.12 §C-OD-04 §4.1 (actual emitted span name = `{gen_ai.operation.name} {gen_ai.request.model}` 2-token byte-exact to OTel GenAI semantic conventions 1.41.0 archived text). Cited at AS spec rows + downstream namespace schemas as "the LLM inference span" — the literal span-name format is OD-axis-owned at §4.1. This decoupling means AS spec parent-anchor citations are immune to future OTel semconv version bumps; only OD §4.1 + production rename ripple.
+
 | Namespace | Attribute count | Parent span | Per ADR-D3 v1.2 §1.8.1 declaration site |
 |---|---|---|---|
-| `anthropic.*` | 10 | `llm.inference` | ADR-D3 v1.2 §1.8.1 anthropic namespace block |
+| `anthropic.*` | 10 | the LLM inference span | ADR-D3 v1.2 §1.8.1 anthropic namespace block |
 | `mcp.*` | 7 | `mcp.tool.call` | ADR-D3 v1.2 §1.8.1 mcp namespace block (F2-02 alignment with D6) |
 | `skill.*` | 6 | `skill.activation` | ADR-D3 v1.2 §1.8.1 skill namespace block (F2-03 joint set preserving semantic distinction) |
 | `managed_agents.*` | 3 | `managed_agents.runtime` | ADR-D3 v1.2 §1.8.1 managed_agents namespace block (F2-04 namespace consolidated) |
 | `files.*` | 8 | `files.operation` | ADR-D3 v1.2 §1.8.1 files namespace block (v1.1 — F2-11 Reading 2 closure) |
 | `memory.*` | 6 | `memory.operation` | ADR-D3 v1.2 §1.8.1 memory namespace block (v1.1 — F2-11 Reading 2 closure) |
 
-### §14.2 `anthropic.*` namespace (ten attributes on `llm.inference` span)
+### §14.2 `anthropic.*` namespace (ten attributes on the LLM inference span)
 
 | Attribute | Type | Semantic | Cardinality |
 |---|---|---|---|
@@ -1203,7 +1245,7 @@ At workload-binding-time:
 | `memory.backend` | enum string | `filesystem` / `s3` / `database` / `encrypted_filesystem` / `operator_defined` (deployment-binding-time per C-AS-13 §13.6) | bounded (5) |
 | `memory.bytes_read` | int (optional) | Read operations; cost attribution | unbounded (metric) |
 | `memory.bytes_written` | int (optional) | Write operations; cost attribution | unbounded (metric) |
-| `memory.context_editing_active` | bool | True if parent `llm.inference` uses `clear_tool_uses_20250919` with `exclude_tools: ["memory"]` per docs.claude.com [HIGH] | binary |
+| `memory.context_editing_active` | bool | True if parent (the LLM inference span) uses `clear_tool_uses_20250919` with `exclude_tools: ["memory"]` per docs.claude.com [HIGH] | binary |
 
 ### §14.8 Sampling discipline + audit-floor commitments
 
@@ -1211,7 +1253,7 @@ Per ADR-D3 v1.2 §1.8 sampling table:
 
 | Span | Sampling rate | Rationale |
 |---|---|---|
-| `llm.inference` | head-based-dev / tail-based-prod | Volume-bounded; tail-keep-on-classification for failures |
+| the LLM inference span | head-based-dev / tail-based-prod | Volume-bounded; tail-keep-on-classification for failures |
 | `skill.activation` | head=1.0 design-time; base-rate at production | Skills coverage holdout per C8 |
 | `mcp.tool.call` | **head=1.0 with tail-keep-on-trust-tier-floor-violations** | C10 audit requirement (audit-floor commitment) |
 | `managed_agents.runtime` | head=1.0 always | Cost attribution ($0.08/hr non-trivial) |

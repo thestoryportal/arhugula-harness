@@ -282,7 +282,7 @@ class RuntimeLLMDispatcher:
         ``step_context`` parameter accepted at v1.6 Path A per amended
         ``StepDispatcher`` Protocol (C-RT-17 resolution). C-RT-15 does NOT
         consume ``step_context`` at v1.6; reserved for v1.7+ surfaces that
-        may bind parent context to ``llm.inference`` span attributes per
+        may bind parent context to the LLM inference span attributes per
         future C-RT-NN amendments.
 
         Per C-RT-15 §Specification content steps 1-5. Provider-specific

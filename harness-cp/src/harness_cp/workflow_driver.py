@@ -175,7 +175,7 @@ class StepDispatcher(Protocol):
     audit-trail-link composition. Existing dispatchers (C-RT-15 inner LLM
     dispatch, C-RT-16 retry/breaker/fallback wrapper) accept the parameter
     but do not consume it at v1.6; the parameter is reserved for v1.7+
-    surfaces that may bind step context to llm.inference span attributes or
+    surfaces that may bind step context to the LLM inference span attributes or
     similar. See:
     `.harness/class_1_tension_c_rt_17_step_dispatcher_parent_context_gap.md`
     for the resolution rationale.
