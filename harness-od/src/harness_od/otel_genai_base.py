@@ -134,8 +134,14 @@ SPAN_NAME_FORMAT: str = "{gen_ai.operation.name} {gen_ai.request.model}"
 BASE_METRIC_NAME: str = "gen_ai.client.operation.duration"
 
 #: §4.4 hierarchy-correlation key — the correlation attribute for the
-#: `invoke_agent` / `chat` / `execute_tool` span hierarchy. Span-attribute only,
-#: never a metric dimension, per cardinality-safe discipline (C-OD-11).
+#: `invoke_agent` / `chat` operations per OD spec v1.20 §1.1 canonical reading
+#: (narrowed from v1.2-v1.19 `invoke_agent` / `chat` / `execute_tool` claim;
+#: OTel 1.41.0 execute_tool span attribute table does NOT declare
+#: `gen_ai.conversation.id` — verified at gen-ai-spans.md lines 612-621).
+#: Cross-span linkage from `execute_tool` to its parent `invoke_agent` or
+#: `chat` span uses OTel-canonical trace context (trace_id + parent_span_id),
+#: not `gen_ai.conversation.id`. Span-attribute only, never a metric dimension,
+#: per cardinality-safe discipline (C-OD-11).
 HIERARCHY_CORRELATION_KEY: str = "gen_ai.conversation.id"
 
 #: §4.3 base-layer attribute set with per-attribute tier classification,
