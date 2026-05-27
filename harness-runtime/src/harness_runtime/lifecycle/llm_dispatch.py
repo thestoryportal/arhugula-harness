@@ -312,8 +312,17 @@ class RuntimeLLMDispatcher:
         model = binding.model_binding.model
 
         # --- Step 2: open GenAI-semconv span ----------------------------
-        # Span name per OTel GenAI semconv guidance:
-        # `gen_ai.{system}.{operation}`.
+        # Span name per OD spec v1.12 §C-OD-04 §4.1 (2-token space-separated):
+        # `{gen_ai.operation.name} {gen_ai.request.model}`. Byte-exact to OTel
+        # GenAI semantic conventions 1.41.0 archived text per
+        # `.harness/class_1_fork_genai_span_name_four_way_drift.md` §7.4.2 (R1).
+        # v1.2-v1.11 3-token reading + runtime spec v1.26 line 2033 informal
+        # deferral `gen_ai.{provider}.{operation}` SUPERSEDED at OD spec v1.12
+        # + runtime spec v1.27 (STRIKE). `provider_name` preserved as the
+        # `gen_ai.system` attribute set below at step 2 (attribute-name
+        # divergence vs §4.3 `gen_ai.provider.name` is a separate finding
+        # NOT patched per FM-2 at this R1 arc — see OD spec v1.12 §"Adjacent
+        # observations" (f)).
         tracer = self.tracer_provider.get_tracer("harness.runtime.llm_dispatch")
         operation = _PROVIDER_OPERATIONS.get(provider_name)
         if operation is None:
@@ -321,7 +330,7 @@ class RuntimeLLMDispatcher:
             # three constructed at stage 3a per C-RT-05. Surfacing any
             # other key as UNREACHABLE preserves the C-RT-14 taxonomy.
             raise LLMDispatchProviderUnreachableError(provider_name)
-        span_name = f"gen_ai.{provider_name}.{operation}"
+        span_name = f"{operation} {model}"
 
         # OTel tracer CM is synchronous (returns ``ContextManager``, not
         # ``AsyncContextManager``); spec §14.5 phrasing is imprecise.

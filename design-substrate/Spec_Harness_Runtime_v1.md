@@ -1,4 +1,22 @@
-# Specification — Harness Runtime v1.26
+# Specification — Harness Runtime v1.27
+
+## Change-note (v1.26 → v1.27)
+
+**Scope of revision.** GenAI span-name format Class 1 fork resolution R1 follow-on per `.harness/class_1_fork_genai_span_name_four_way_drift.md` §7.4.2 + §7.5a (operator-ratified 2026-05-26 option (A) full acceptance). Single-line STRIKE at §14.5 C-RT-15 "Deferred to implementation discretion" sub-section bullet on span-name convention. The v1.26-and-earlier informal deferral suggestion `gen_ai.{provider}.{model_or_method}` is REMOVED — the suggestion was the lineage of production divergence from OD spec C-OD-04 §4.1 per fork §7.5a S6 finding (production at `harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py:324` silently followed the runtime-spec informal suggestion rather than the OD-spec authoritative declaration). The runtime spec does not own GenAI span-name format per axis-ownership convention — OD owns §4.1. Replacement bullet text restates the bullet as a cross-reference to OD spec v1.12 §C-OD-04 §4.1 with no inline format suggestion.
+
+**v1.26 substantive content preserved verbatim.** §14.16 C-RT-26 webhook-delivery-composer-stage + all v1.25..v1 lineage content preserved unchanged at v1.27. The amendment touches ONLY the §14.5 deferred-to-implementation-discretion bullet on span-name convention.
+
+**Source of fix.** Class 1 fork resolution R1 apply pass — companion artifacts at this session: OD spec v1.12 (`Spec_Operational_Discipline_v1_12.md` commit `43f6199`); R2 follow-on at helper + test + R4 STRIKE + workspace CLAUDE.md OD spec row (commit `5221264`); OD plan v2.19 + workspace CLAUDE.md OD plan row (commit `65922eb`); R1 production rename at `llm_dispatch.py:324` + test fixture at `test_lifecycle_llm_dispatch.py:318` (this session arc, sibling commit).
+
+**Amendment site.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§14.5 C-RT-15 "Deferred to implementation discretion" bullet on span-name convention** (currently at line 2033 of file content) | REPLACE bullet text: ~~`Span name convention (suggest `gen_ai.{provider}.{model_or_method}` per OTel GenAI semconv guidance, e.g., `gen_ai.anthropic.messages.create`).`~~ → `Span name convention: per OD spec v1.12 §C-OD-04 §4.1 — `{gen_ai.operation.name} {gen_ai.request.model}` 2-token space-separated, byte-exact to OTel GenAI semantic conventions 1.41.0. Span-name format is OD-axis-owned per axis-ownership convention; runtime spec does NOT carry an authoring or suggestion at this surface beyond cross-reference to OD §4.1.` | Class 1 fork §7.5a + §7.4.2 R1 + OD spec v1.12 §C-OD-04 §4.1 |
+
+**Adjacent observation (NOT patched per FM-2).** Production at `_PROVIDER_OPERATIONS` dict (`harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py:484-488`) maps provider name to API method name (`messages.create` / `chat.completions` / `chat`) — NOT to OTel GenAI semconv §4.2 operation enum values (`chat` / `text_completion` / etc.). Production span name post-R1 is e.g. `messages.create claude-opus-4-7` — conforms to v1.12 §4.1 2-token shape but the `operation` token is an API method name, not a §4.2 enum value. This is a pre-existing defect surfaced as adjacent finding (g) sibling to OD spec v1.12 §"Adjacent observations" (f) `gen_ai.system` vs `gen_ai.provider.name` attribute-name divergence. NOT patched at this R1 arc; owed at separate apply-pass arc.
+
+---
 
 ## Change-note (v1.25 → v1.26)
 
@@ -2030,7 +2048,7 @@ Implementation discretion at C-RT-22 landing arc per FM-2 no-extension disciplin
 - Exact composer class name (suggest `RuntimeLLMDispatcher` per v1.2 spec body recommendation).
 - Whether composer attaches at `ctx.llm_dispatcher` or is constructed per-step inside `run()`'s caller composition (MVP recommendation: attach at ctx for parallel construction with override evaluator / topology dispatcher / lifecycle emitter).
 - GenAI semconv attribute selection beyond the required set (which optional attributes to emit by default — request/response body, message content, finish reason — driven by OD redaction discipline at C-OD-13..16; composer emits the basic set, SpanProcessor handles redaction).
-- Span name convention (suggest `gen_ai.{provider}.{model_or_method}` per OTel GenAI semconv guidance, e.g., `gen_ai.anthropic.messages.create`).
+- Span name convention: per OD spec v1.12 §C-OD-04 §4.1 — `{gen_ai.operation.name} {gen_ai.request.model}` 2-token space-separated, byte-exact to OTel GenAI semantic conventions 1.41.0. Span-name format is OD-axis-owned per axis-ownership convention; runtime spec does NOT carry an authoring or suggestion at this surface beyond cross-reference to OD §4.1. (v1.27 STRIKE per `.harness/class_1_fork_genai_span_name_four_way_drift.md` §7.5a R1 — v1.26-and-earlier informal suggestion `gen_ai.{provider}.{model_or_method}` removed.)
 - Whether provider-specific dispatch branches live in `llm_dispatch.py` directly or in per-provider sub-modules (`llm_dispatch_anthropic.py` etc.) — defer to module-size discretion at implementation.
 - Test mock strategy: suggest a `MockProviderClient` fixture per provider that records dispatched calls + returns canned responses; pytest-asyncio for async surface.
 
