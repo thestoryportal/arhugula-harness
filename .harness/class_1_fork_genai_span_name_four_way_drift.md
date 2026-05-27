@@ -371,3 +371,31 @@ Producer-side conform to OD spec v1.12 §C-OD-04 §4.3 Required (Stable) tier la
 **Adjacent: `provider_name` value-space.** OTel 1.41.0 `gen_ai.provider.name` known-values enum includes `anthropic`, `openai`, `gcp.gemini`, `azure.ai.openai`. Current production values (`anthropic`, `openai`, `ollama`) — first two conformant; `ollama` is NOT in the 1.41.0 known-values enum. NOT patched at this arc; surfaces as adjacent finding (h) — value-space conform of `provider_name` to §4.3 known-values enum (likely requires either an `ollama` ratification at OTel semconv upstream OR a harness-specific extension declared at OD spec).
 
 **Commit anchor:** [filled at commit time]
+
+---
+
+## §9 Finding (g) RESOLVED 2026-05-26 — §4.2 operation enum value-space conform at `_PROVIDER_OPERATIONS`
+
+Producer-side conform to OD spec v1.12 §C-OD-04 §4.2 operation enum at `harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py:497-509`. Dict re-typed from `dict[str, str]` (with API method-name string values) → `dict[str, GenAiOperation]` (with canonical §4.2 enum members). All 3 providers dispatch chat-style completions, so all 3 map to `GenAiOperation.CHAT`:
+
+| Provider | Pre-arc value | Post-arc value | Provider-side method |
+|---|---|---|---|
+| `anthropic` | `"messages.create"` | `GenAiOperation.CHAT` (= `"chat"`) | `client.messages.create` |
+| `openai` | `"chat.completions"` | `GenAiOperation.CHAT` (= `"chat"`) | `client.chat.completions.create` |
+| `ollama` | `"chat"` | `GenAiOperation.CHAT` (= `"chat"`) | `client.chat` |
+
+Span name + `gen_ai.operation.name` attribute value shift in lockstep (both source from the same lookup):
+
+| Surface | Pre-arc | Post-arc |
+|---|---|---|
+| Span name (openai example) | `"chat.completions gpt-4o-mini"` | `"chat gpt-4o-mini"` |
+| `gen_ai.operation.name` attribute (openai example) | `"chat.completions"` | `"chat"` |
+| `gen_ai.operation.name` attribute (anthropic example) | `"messages.create"` | `"chat"` |
+
+**Scope:** narrow producer-side value-space conform; typed enum import binds production to canonical §4.2 declaration (`harness_od.otel_genai_base.GenAiOperation`). OD spec already declared the canonical enum at v1.2 (no spec amendment owed). Single production site + single test assertion update; 27/27 `test_lifecycle_llm_dispatch.py` PASS; 1077/1084 harness-runtime tests PASS (7 pre-existing cwd-sensitive failures unrelated); 773/773 harness-od tests PASS; pyright strict 0 errors.
+
+**Type-discipline upgrade.** `_PROVIDER_OPERATIONS: dict[str, GenAiOperation]` (was `dict[str, str]`) — future-proofs against §4.2 enum drift; if OD spec amends the enum (e.g., reverts to a different operation per-provider), pyright will catch consumer-side drift.
+
+**Finding (h) preserved.** OTel 1.41.0 `gen_ai.provider.name` known-values enum includes `anthropic` + `openai` + `gcp.gemini` + `azure.ai.openai` etc.; `ollama` is NOT in the 1.41.0 known-values enum. NOT patched at this arc; carries forward per FM-2.
+
+**Commit anchor:** [filled at commit time]
