@@ -76,19 +76,23 @@ _SPEC_OPT_IN_CONTENT = {
 # --- acceptance #1 — span name format --------------------------------------
 
 
-def test_span_name_format_byte_exact_three_component() -> None:
-    """§4.1 verbatim — the 3-component span name format."""
+def test_span_name_format_byte_exact_two_component() -> None:
+    """§4.1 verbatim — the 2-component span name format per v1.12 amendment.
+
+    Conforms to OTel GenAI semantic conventions 1.41.0 archived text:
+    `Span name SHOULD be {gen_ai.operation.name} {gen_ai.request.model}`.
+    """
     assert SPAN_NAME_FORMAT == (
-        "{gen_ai.operation.name} {gen_ai.provider.name} {gen_ai.request.model}"
+        "{gen_ai.operation.name} {gen_ai.request.model}"
     )
-    assert SPAN_NAME_FORMAT.count("{") == 3
+    assert SPAN_NAME_FORMAT.count("{") == 2
 
 
 def test_span_name_resolves_at_span_emission_time() -> None:
     """`span_name` materializes the §4.1 format with call-bound values."""
     assert (
-        span_name(GenAiOperation.CHAT, "anthropic", "claude-opus-4-7")
-        == "chat anthropic claude-opus-4-7"
+        span_name(GenAiOperation.CHAT, "claude-opus-4-7")
+        == "chat claude-opus-4-7"
     )
 
 

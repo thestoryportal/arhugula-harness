@@ -1,8 +1,30 @@
 # Class 3 Drift — C-OD-04 GenAI semconv binding-site silence vs `llm_dispatch.py:328` production emission
 
 **Filed:** 2026-05-25 (surfaced during H_T-OD-2 retirement-state re-audit; OD-2 confirmed already RETIRED at batch-2 §4 from 2026-05-20 — this drift records the spec-side gap found during the re-audit, NOT a new retirement event)
-**Status:** OPEN bounded — informational; non-blocking
-**Routing target:** OD spec v1.11 future revision-pass — paired with next C-OD-04..C-OD-08 amendment
+**Status:** SUPERSEDED at 2026-05-26 per R4 STRIKE — see top-of-file notice below.
+**Routing target:** ABSORBED at OD spec v1.12 — see top-of-file notice below.
+
+---
+
+## 2026-05-26 R4 STRIKE notice (top-of-file)
+
+Per `.harness/class_1_fork_genai_span_name_four_way_drift.md` §7.4.4 (R4) operator-ratified 2026-05-26 option (A) full acceptance:
+
+This filing's §1.2 inline comment at line 34 — `# span_name = f"gen_ai.{provider_name}.{operation}" per C-OD-04 §4.1` — falsely claimed the production dot-joined form was "per C-OD-04 §4.1". The claim is empirically false:
+
+- At v1.2-v1.11, C-OD-04 §4.1 specified 3-token space-separated form (`{operation} {provider} {model}`)
+- At v1.12 (this session), C-OD-04 §4.1 specifies 2-token space-separated form (`{operation} {model}`) per actual OTel 1.41.0 archived text
+- Production dot-joined `gen_ai.{provider}.{operation}` matches **neither** the 3-token form nor the 2-token form
+
+The lineage of the production form is the runtime spec line 2033 informal deferral suggestion (fork §7.5a S6 finding), NOT OD spec §4.1. R1 apply-pass arc (separate, follow-on) owes production rename at `harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py:324` to the v1.12 §4.1 2-token form.
+
+This filing's §1.3 reading (*"binding choice is architecturally unambiguous"*) is also **superseded** — the choice was ambiguous between OD spec authoritative §4.1 and runtime spec informal deferral suggestion line 2033; production silently followed the latter without acknowledgement.
+
+§2.1 recommendation (spec-side amendment owed) is **fulfilled** at OD spec v1.12 amendment landing this session.
+
+The inline comment at line 34 below is preserved historically with STRIKE annotation for traceability.
+
+---
 **Detection mode:** H_T-OD-2 retirement-state re-audit per `[[verification-shape-sharpened-grep-vs-e2e]]` — production binding chain verified MET at HEAD; spec-side binding-site silence surfaced as adjacent finding
 
 ---
@@ -31,7 +53,8 @@
 
 ```python
 with tracer.start_as_current_span(span_name) as span:
-    # span_name = f"gen_ai.{provider_name}.{operation}" per C-OD-04 §4.1
+    # STRUCK 2026-05-26 per R4: ~~span_name = f"gen_ai.{provider_name}.{operation}" per C-OD-04 §4.1~~
+    # Production form matches NEITHER §4.1 v1.2-v1.11 3-token NOR §4.1 v1.12 2-token; lineage is runtime spec line 2033.
     span.set_attribute("gen_ai.system", provider_name)
     span.set_attribute("gen_ai.request.model", model)
     # ... gen_ai.usage.input_tokens, gen_ai.usage.output_tokens, gen_ai.response.id

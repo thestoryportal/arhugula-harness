@@ -101,7 +101,14 @@ class GenAiAttribute(BaseModel):
 
 
 #: §4.1 span name format, verbatim (acceptance #1).
-SPAN_NAME_FORMAT: str = "{gen_ai.operation.name} {gen_ai.provider.name} {gen_ai.request.model}"
+#:
+#: v1.12 canonical-reading amendment per .harness/class_1_fork_genai_span_name_
+#: four_way_drift.md §7.4.1 (operator-ratified 2026-05-26). The v1.2-v1.11
+#: 3-token form was a misreading of the cited OTel GenAI semconv 1.41.0
+#: archived text; the actual 1.41.0 text specifies 2-token. `gen_ai.provider.name`
+#: is REMOVED from the span-name format but PRESERVED as a Required (Stable)
+#: tier attribute at §4.3 (BASE_LAYER_ATTRIBUTES below).
+SPAN_NAME_FORMAT: str = "{gen_ai.operation.name} {gen_ai.request.model}"
 
 #: §4.5 base metric name, verbatim — a histogram with cardinality control per
 #: C-OD-11 (acceptance #6).
@@ -142,16 +149,17 @@ BASE_LAYER_ATTRIBUTES: tuple[GenAiAttribute, ...] = (
 )
 
 
-def span_name(operation: GenAiOperation, provider: str, model: str) -> str:
+def span_name(operation: GenAiOperation, model: str) -> str:
     """Resolve the §4.1 span name for a GenAI call at span-emission time.
 
-    Materializes `SPAN_NAME_FORMAT` — the 3-component
-    `{gen_ai.operation.name} {gen_ai.provider.name} {gen_ai.request.model}`
-    (acceptance #1). The operation is constrained to the §4.2 enum; provider and
-    model are the call-bound `gen_ai.provider.name` / `gen_ai.request.model`
-    values.
+    Materializes `SPAN_NAME_FORMAT` — the 2-component
+    `{gen_ai.operation.name} {gen_ai.request.model}` (acceptance #1). The
+    operation is constrained to the §4.2 enum; model is the call-bound
+    `gen_ai.request.model` value. `gen_ai.provider.name` is carried as a span
+    attribute per §4.3 Required (Stable) tier — not as a span-name component
+    per v1.12 canonical-reading amendment.
     """
-    return f"{operation.value} {provider} {model}"
+    return f"{operation.value} {model}"
 
 
 def attributes_in_tier(tier: AttributeTier) -> tuple[GenAiAttribute, ...]:
