@@ -20,6 +20,20 @@ v2 does NOT modify any code; it is a verification ledger. Per-axis `CLAUDE.md` s
 
 ---
 
+## §0.5 Snapshot supersession note (2026-05-27 refresh)
+
+**This document is a frozen verification snapshot dated 2026-05-20 at commit `43500bf`.** It is NOT a live per-substitution status table. Per-row verdicts at §3–§7, cascade dispositions at §8, eligible-retirements list at §9.1, "within reach" list at §9.2.4, and closure counts at §9.3 reflect the 2026-05-20 evaluation only.
+
+For current per-substitution status, read:
+
+1. **Per-axis `CLAUDE.md` §4.1** at `harness-{is,as,cp,od}/CLAUDE.md` — these are refreshed at each batch close and carry the authoritative live status table for their axis.
+2. **Batch records** at `.harness/phase-7d-retirement-events-batch-{1..N}.md` — append-only event records; the latest filed batch is `batch-19` (2026-05-26, H_T-AS-4 PARTIAL → RETIRED, cumulative 28/49 RETIRED).
+3. **Cross-axis cascade re-evaluations** are recorded at the batch in which the gating retirement filed (e.g., §6.3.2 OD-2 → CXA-5 cascade closure recorded at batch-3, NOT at this snapshot's §8.2 which remains "DORMANT" against the 2026-05-20 evaluation).
+
+Row text at §3–§7 is **preserved verbatim** per forward-only ledger discipline. Surfaced supersession sites discovered during the 2026-05-27 audit pass are catalogued at §11 below — they document deltas without rewriting the original verdicts.
+
+---
+
 ## §1 Methodology
 
 **Operator decision recorded.** Substitution-site reading clarified by operator at v2 pass (this session): the runtime-only reading. Condition B is met when the runtime-invoked workflow no longer routes through the H_E surface for the substituted primitive. Operator-authoring lane is out of scope — operators may still invoke `Bash(git commit)` / `Read .harness/state.jsonl` directly for authoring activities without that counting as "H_E surface still invoked at substitution site." The strict reading (which would regress most IS retirements to PARTIAL) was rejected; the operator-authoring lane is treated as a separate concern not gating 7d closure.
@@ -240,4 +254,60 @@ Per skill §5.3, bounded-residual carry-forward at 7d closure requires operator 
 
 ---
 
-*End of phase-7d-retirement-ledger v2 (second pass against Phase 2 runtime closure).*
+## §11 Surfaced supersession sites (2026-05-27 refresh)
+
+Audit pass on 2026-05-27 triggered by a candidate batch-20 evaluation for H_T-OD-2 surfaced the following supersession sites. Catalogued here for the reader; original §3–§9 row text preserved verbatim per forward-only discipline.
+
+### §11.1 H_T-OD-2 — RETIRED at batch-2
+
+| Snapshot site | Snapshot text | Superseded by |
+|---|---|---|
+| §6 row line 124 | "PARTIAL ... GenAI semconv NOT bound ... Zero CP-driver span emission" | **RETIRED 2026-05-20** at `.harness/phase-7d-retirement-events-batch-2.md` §4 (U-RT-52 close arc; criterion B met at `RuntimeLLMDispatcher.dispatch` Step 2 span + Step 4-5 attribute set). Subsequent strengthening at `e874a03` (Path A, 2026-05-27): `llm_dispatch.py:343-360` widened from 5 → 6 of 9 non-Opt-In §C-OD-04 §4.3 attrs (added `gen_ai.conversation.id` + `server.address` + `server.port` per provider). Per-axis live status at `harness-od/CLAUDE.md` §4.1 |
+| §8.2 cascade DORMANT | "H_T-OD-2 is PARTIAL ... Cascade does not fire until OD-2 transitions PARTIAL → RETIRE-READY" | **Cascade closed at batch-3** per `harness-od/CLAUDE.md` §4.1 H_T-OD-2 row ("CXA-5 cascade closed at batch 3"). §6.3.2 joint precondition with CP-24 (authoring-retired v1 §1) satisfied at OD-2 RETIRED batch-2 + batch-3 cascade re-evaluation. CXA-5 type-system inversion verification continues to fire at bootstrap per §7 row line 143 |
+| §9.2.4 line 197 "within reach" | "OD-2 ... within reach of RETIRE-READY" | OD-2 already RETIRED at batch-2 (4 batches before this snapshot was filed — text was stale at authoring time per the operator-ratified runtime-only substitution-site reading recorded at batch-2 §4) |
+
+### §11.2 H_T-AS-2 — RETIRED at batch-16
+
+| Snapshot site | Snapshot text | Superseded by |
+|---|---|---|
+| §9.2.4 line 197 "within reach" | "AS-2 ... within reach of RETIRE-READY" | **RETIRED 2026-05-24** at `.harness/phase-7d-retirement-events-batch-16.md` (joint close with H_T-CP-18 via shared MCP-client substrate; U-RT-86 L9-novies cluster close at `8e6311f`; 2/2 e2e tests pass against in-process stdio MCP echo fixture). Per-axis live status at `harness-as/CLAUDE.md` §4.1 |
+
+### §11.3 §9.1 "8 RETIRE-READY ready to file" — all 8 filed at batch-2
+
+The §9.1 table (IS-1, IS-5, IS-6, IS-7, IS-8, IS-9, AS-1, CP-6) was filed as 8 RETIRED events at `.harness/phase-7d-retirement-events-batch-2.md` §0 cumulative footer (15/49 RETIRED post-batch-2, which includes IS-axis 9/9 at batch-1 + this 8 at batch-2 + OD-2 + CP-1 + CP-2 + AS-8-related at batch-2). The §9.4 operator ratification request (3 items) was satisfied at the batch-2 + batch-3 arcs. For current cumulative status see §11.5 below.
+
+### §11.4 Cross-row drift NOT in this audit's scope
+
+The 2026-05-27 audit pass focused on the surfaced OD-2 candidate transition + sibling rows on the same §9.2.4 line. The following sites at §3–§9 have also drifted between 2026-05-20 and HEAD but are NOT individually catalogued here:
+
+- §3 IS axis row verdicts: 6 RETIRE-READY rows all transitioned to RETIRED at batch-1/batch-2.
+- §4 AS axis row verdicts: AS-1 RETIRED batch-1; AS-2 RETIRED batch-16; AS-4 PARTIAL → RETIRED batch-19; AS-8 advances mentioned at multiple batches.
+- §5 CP axis row verdicts: CP-1, CP-2, CP-6 RETIRED at batch-1/2; CP-16 batch-14; CP-18 batch-16; CP-21 batch-17; CP-22 batch-18; many more PARTIAL/RETIRE-READY transitions across batches 3–18.
+- §6 OD axis row verdicts: OD-5 STILL-BOUNDED → PARTIAL at batch-11 (1 of 4 dispatch surfaces wired).
+- §9.3 closure counts (8/45/30 numerators): superseded by cumulative 28/49 RETIRED at batch-19.
+
+Readers requiring exhaustive per-row supersession should consult per-axis `CLAUDE.md` §4.1 + the batch-19 §0 cumulative footer + sibling row references therein. A future doc-hygiene pass MAY produce a complete per-row supersession map; this 2026-05-27 pass deliberately scopes only the OD-2-adjacent surface that triggered the audit.
+
+### §11.5 Cumulative status pointer
+
+| | Live source |
+|---|---|
+| Latest filed batch | `batch-19` (2026-05-26, H_T-AS-4 PARTIAL → RETIRED) |
+| Cumulative RETIRED count | 28/49 (57.1%) per batch-19 §0 footer |
+| Cumulative pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) | 35/49 (71.4%) per batch-19 §0 footer |
+| Per-axis live status | `harness-{is,as,cp,od}/CLAUDE.md` §4.1 |
+| Cross-axis cascade live status | §6.3.1 + §6.3.2 cascade re-evaluations at the batch in which the gating retirement filed (see batch-2 §3 + batch-3 referenced from `harness-od/CLAUDE.md`) |
+
+### §11.6 Refresh footer
+
+| Field | Value |
+|---|---|
+| Refresh date | 2026-05-27 |
+| Trigger | Candidate batch-20 evaluation for H_T-OD-2 PARTIAL → RETIRE-READY driven by Path A production-emission at `e874a03` surfaced that OD-2 was already RETIRED at batch-2; halt-and-redirect produced this doc-hygiene refresh instead of a batch-20 frame |
+| Skill | `phase-7-substitution-retirement` §7 halt condition routing — substitution already RETIRED at predecessor batch is not a new retirement event; doc-hygiene supersession is the correct disposition |
+| Scope | §0.5 snapshot supersession header + §11 surfaced supersession map; ZERO mutation of §3–§9 row text per forward-only ledger discipline |
+| Retirement-count delta | ZERO. This refresh does NOT file a new retirement transition; it documents that prior transitions filed at batches 2–19 supersede the 2026-05-20 snapshot's row verdicts |
+
+---
+
+*End of phase-7d-retirement-ledger v2 (second pass against Phase 2 runtime closure) + 2026-05-27 supersession refresh.*
