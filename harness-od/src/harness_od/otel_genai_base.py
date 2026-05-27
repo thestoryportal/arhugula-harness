@@ -56,32 +56,51 @@ type SpanAttributes = _OTelAttributes
 
 
 class GenAiOperation(StrEnum):
-    """The 7 `gen_ai.operation.name` values (C-OD-04 §4.2, verbatim).
+    """The 9 `gen_ai.operation.name` values per OTel 1.41.0 archived text.
 
-    Member string values are the §4.2 enumeration verbatim:
-    `{chat, text_completion, embeddings, generate_content, create_agent,
-    invoke_agent, execute_tool}`.
+    v1.16 canonical-reading amendment per .harness/class_1_fork_tension_004_
+    d2_d3_otel_141_relitigation.md §4.1 (A) (operator-ratified 2026-05-26).
+    The v1.2-v1.15 7-value enumeration was a misreading of the cited OTel
+    GenAI semconv 1.41.0 archived text; the actual 1.41.0 text at
+    `github.com/open-telemetry/semantic-conventions/blob/v1.41.0/docs/gen-ai/
+    gen-ai-spans.md` declares 9 values. `invoke_workflow` + `retrieval` are
+    NEW at v1.16 per OD spec v1.16 §1.1.
     """
 
     CHAT = "chat"
-    TEXT_COMPLETION = "text_completion"
-    EMBEDDINGS = "embeddings"
-    GENERATE_CONTENT = "generate_content"
     CREATE_AGENT = "create_agent"
-    INVOKE_AGENT = "invoke_agent"
+    EMBEDDINGS = "embeddings"
     EXECUTE_TOOL = "execute_tool"
+    GENERATE_CONTENT = "generate_content"
+    INVOKE_AGENT = "invoke_agent"
+    INVOKE_WORKFLOW = "invoke_workflow"
+    RETRIEVAL = "retrieval"
+    TEXT_COMPLETION = "text_completion"
 
 
 class AttributeTier(StrEnum):
-    """The 3 attribute tiers (C-OD-04 §4.3, verbatim).
+    """The 4 attribute tiers per OTel 1.41.0 archived text.
 
-    Member string values are the §4.3 table "Tier" column verbatim. Emission
-    posture per tier: Required (Stable) always emitted; Recommended
-    (Development) emitted unless cardinality-safe-attribute discipline excludes
-    (C-OD-11); Opt-In content default-off per redaction discipline (C-OD-12).
+    v1.16 canonical-reading amendment per .harness/class_1_fork_tension_004_
+    d2_d3_otel_141_relitigation.md §4.1 (A) (operator-ratified 2026-05-26).
+    The v1.2-v1.15 3-tier enumeration was a misreading of the cited OTel
+    GenAI semconv 1.41.0 archived text; the actual 1.41.0 text declares 4
+    tiers. `CONDITIONALLY_REQUIRED` is NEW at v1.16 per OD spec v1.16 §1.2.
+    Internal naming preserved (`REQUIRED_STABLE` / `RECOMMENDED_DEVELOPMENT`
+    / `OPT_IN_CONTENT`) per v1.2-v1.15 lineage with OTel canonical names
+    documented as derivative per OD spec v1.16 §1.2 mapping table.
+
+    Emission posture per tier: Required (Stable) always emitted;
+    Conditionally Required emitted per per-attribute conditional rule (NEW
+    at v1.16 — per-attribute conditional rules owed at future tier-assignment
+    audit per OD spec v1.16 §1.3 + §"Adjacent observations" (e));
+    Recommended (Development) emitted unless cardinality-safe-attribute
+    discipline excludes (C-OD-11); Opt-In content default-off per redaction
+    discipline (C-OD-12).
     """
 
     REQUIRED_STABLE = "Required (Stable)"
+    CONDITIONALLY_REQUIRED = "Conditionally Required"
     RECOMMENDED_DEVELOPMENT = "Recommended (Development)"
     OPT_IN_CONTENT = "Opt-In content"
 

@@ -36,15 +36,19 @@ from pydantic import ValidationError
 
 # --- Spec §4 verbatim reference sets (transcribed from C-OD-04) -------------
 
-# §4.2 operations enum.
+# §4.2 operations enum — 9 values per OD spec v1.16 §1.1 (OTel 1.41.0 archived
+# text). v1.2-v1.15 declared 7 values; `invoke_workflow` + `retrieval` added at
+# v1.16 per .harness/class_1_fork_tension_004_d2_d3_otel_141_relitigation.md.
 _SPEC_OPERATIONS = {
     "chat",
-    "text_completion",
-    "embeddings",
-    "generate_content",
     "create_agent",
-    "invoke_agent",
+    "embeddings",
     "execute_tool",
+    "generate_content",
+    "invoke_agent",
+    "invoke_workflow",
+    "retrieval",
+    "text_completion",
 }
 
 # §4.3 attribute-tier table.
@@ -99,9 +103,15 @@ def test_span_name_resolves_at_span_emission_time() -> None:
 # --- acceptance #2 — operations enum ---------------------------------------
 
 
-def test_genai_operation_cardinality_seven() -> None:
-    """§4.2 — exactly 7 operations."""
-    assert len(GenAiOperation) == 7
+def test_genai_operation_cardinality_nine() -> None:
+    """§4.2 — exactly 9 operations per OD spec v1.16 §1.1 (OTel 1.41.0).
+
+    v1.2-v1.15 declared 7 operations; v1.16 adds `invoke_workflow` +
+    `retrieval` per OTel GenAI semconv 1.41.0 archived text at
+    `github.com/open-telemetry/semantic-conventions/blob/v1.41.0/docs/gen-ai/
+    gen-ai-spans.md`.
+    """
+    assert len(GenAiOperation) == 9
     assert {op.value for op in GenAiOperation} == _SPEC_OPERATIONS
 
 
@@ -110,17 +120,39 @@ def test_genai_operation_includes_generate_content() -> None:
     assert GenAiOperation.GENERATE_CONTENT.value == "generate_content"
 
 
+def test_genai_operation_includes_invoke_workflow() -> None:
+    """§4.2 — `invoke_workflow` NEW at v1.16 per OD spec §1.1."""
+    assert GenAiOperation.INVOKE_WORKFLOW.value == "invoke_workflow"
+
+
+def test_genai_operation_includes_retrieval() -> None:
+    """§4.2 — `retrieval` NEW at v1.16 per OD spec §1.1."""
+    assert GenAiOperation.RETRIEVAL.value == "retrieval"
+
+
 # --- acceptance #3 — attribute tiers ---------------------------------------
 
 
-def test_attribute_tier_cardinality_three() -> None:
-    """§4.3 — exactly 3 tiers (the v2.1 enum carried a 4th, `CONDITIONAL`)."""
-    assert len(AttributeTier) == 3
+def test_attribute_tier_cardinality_four() -> None:
+    """§4.3 — exactly 4 tiers per OD spec v1.16 §1.2 (OTel 1.41.0).
+
+    v1.2-v1.15 declared 3 tiers; v1.16 adds `CONDITIONALLY_REQUIRED` per
+    OTel GenAI semconv 1.41.0 archived text. The original v2.1-v2.4 plan
+    carried a `CONDITIONAL` tier that was struck at OD plan v2.5
+    plan-conforms-to-spec — that strike is SUPERSEDED by v1.16.
+    """
+    assert len(AttributeTier) == 4
     assert {t.value for t in AttributeTier} == {
         "Required (Stable)",
+        "Conditionally Required",
         "Recommended (Development)",
         "Opt-In content",
     }
+
+
+def test_attribute_tier_conditionally_required_present() -> None:
+    """§4.3 — `CONDITIONALLY_REQUIRED` NEW at v1.16 per OD spec §1.2."""
+    assert AttributeTier.CONDITIONALLY_REQUIRED.value == "Conditionally Required"
 
 
 # --- acceptance #4 — base-layer attribute set + per-attribute tier ----------

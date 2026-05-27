@@ -17,7 +17,7 @@ resolution. Shape-identical to Tension 002.*
 | Detected at | Phase 7 sub-phase 7b, atomic unit **U-OD-04** (OTel GenAI semconv 1.41.0 base-layer attributes) |
 | Detected | 2026-05-15 |
 | Halt point | U-OD-04 implementation — surfaced before code execution |
-| Status | **CLOSED** 2026-05-26 — D-2/D-3/D-3b/D-4 RESOLVED at OD plan v2.5; D-1 SUPERSEDED at OD spec v1.12 + plan v2.19 (re-litigation per the §4 tiebreaker check originally deferred at 2026-05-15). See §7. |
+| Status | **CLOSED** 2026-05-26 — D-1 SUPERSEDED at OD spec v1.12 + plan v2.19 (re-litigation per §4 step 3 tiebreaker check; FIRST tension re-litigation in workspace history); **D-2 + D-3 SUPERSEDED at OD spec v1.16 + plan v2.20 same day** (SECOND tension re-litigation per same §4 step 3 tiebreaker check that §7.1 D-2/D-3 closure did NOT re-perform — see §7.6); D-3b PRESERVED VERBATIM per OD spec v1.16 §1.3; D-4 RESOLVED at OD plan v2.5 + verified MATCH at OTel 1.41.0 archived text 2026-05-26. See §7 + §7.6. |
 
 ## §2 Defect
 
@@ -130,3 +130,51 @@ This §7 reconciliation is a doc-status-field flip + closure pass. NO OD spec ve
 Reference patterns: `[[empirical-verification-supersedes-training-data-knowledge]]` (§7.2 D-1 re-litigation discipline — perform named tiebreaker checks AT ratification, not defer them). `[[advisor-before-substantive-work-for-cross-axis-blockers]]` (the 2026-05-26 GenAI fork arc applied advisor at every scope transition; the deferred tiebreaker check from 2026-05-15 was the historical counter-example that motivates the discipline).
 
 **Commit anchor:** [filled at commit time]
+
+---
+
+## §7.6 D-2 + D-3 re-litigation supersession 2026-05-26 (SECOND tension re-litigation)
+
+Filed: 2026-05-26 (same day as §7 reconciliation pass; same day as D-1 R2 re-litigation arc earlier in the morning).
+Fork doc: `.harness/class_1_fork_tension_004_d2_d3_otel_141_relitigation.md` (filed + operator-ratified + applied this session — single-session arc, mirrors D-1 R2 shape).
+Operator ratification: §4.1 (A) full conformance + §4.2 (γ) single-focus 2026-05-26.
+
+### §7.6.1 Why §7.1 D-2 + D-3 closures are superseded
+
+The §7.1 closure table closed D-2 + D-3 as "RESOLVED at OD plan v2.5 plan-conforms-to-spec." The §7.5 pattern catalogue named `[[tension-record-status-field-reconciliation-discipline]]` BUT the reconciliation pass itself did NOT re-perform the §4 step 3 tiebreaker check named at the original 2026-05-15 filing — the same deferred-not-performed failure mode that produced the D-1 R2 re-litigation earlier the same day.
+
+This v1.16 + v2.20 re-litigation arc performed the check via WebFetch against archived OTel 1.41.0 specifications:
+
+- `github.com/open-telemetry/semantic-conventions/blob/v1.41.0/docs/gen-ai/gen-ai-spans.md` — operations enum + attribute tiers
+- `github.com/open-telemetry/semantic-conventions/blob/v1.41.0/docs/gen-ai/gen-ai-metrics.md` — base metric
+
+The check FAILED for D-2 + D-3; PASSED (MATCH byte-exact) for D-4.
+
+### §7.6.2 Per-divergence post-supersession state
+
+| Divergence | §7.1 framing (pre-supersession) | §7.6 post-re-litigation state | Resolution lineage |
+|---|---|---|---|
+| **D-2** §4.2 operations enum | "7 values matching spec verbatim" (RESOLVED at OD plan v2.5 6 → 7) | **SUPERSEDED at OD spec v1.16 §1.1** — actually 9 values per OTel 1.41.0 (`{chat, create_agent, embeddings, execute_tool, generate_content, invoke_agent, invoke_workflow, retrieval, text_completion}`). Spec was missing `invoke_workflow` + `retrieval`. v1.16 amendment adds both; OD plan v2.20 U-OD-04 AC #2 cardinality 6 → 9. | Three-stage: plan-conforms-to-spec at v2.5 (6 → 7) → spec-conforms-to-external-authority at v1.16 (7 → 9) → plan absorption at v2.20 (6 → 9 against pre-v2.5 reference) |
+| **D-3** §4.3 attribute tiers | "3 tiers matching spec verbatim" (RESOLVED at OD plan v2.5 4 → 3 tier-strike) | **SUPERSEDED at OD spec v1.16 §1.2** — actually 4 tiers per OTel 1.41.0 (`Required / Conditionally Required / Recommended / Opt-In`). Spec was missing `Conditionally Required`. **The original v2.1-v2.4 plan was conformant on tier cardinality (had `CONDITIONAL`); the v2.5 plan-conforms-to-spec strike was wrong-direction.** v1.16 amendment adds the missing tier; OD plan v2.20 U-OD-04 AC #3 cardinality 3 → 4 (restores the v2.1-v2.4 4-tier shape). | Three-stage: plan-strike-Conditional-conforms-to-spec at v2.5 (wrong-direction) → spec-conforms-to-external-authority at v1.16 (3 → 4) → plan-restore-Conditional at v2.20 |
+| **D-3b** §4.3 tier assignment | input/output tokens at Recommended (Development); `gen_ai.response.id` absent | PRESERVED VERBATIM at v1.16 §1.3 — tier-assignment for individual attributes against the new 4-tier table is a SEPARATE audit owed at future operator-routed arc per FM-2 + fork doc §4.2 (γ) single-focus | Stable post-v2.5; per-attribute audit owed at future arc |
+| **D-4** §4.5 base metric | `gen_ai.client.operation.duration` matching spec verbatim (RESOLVED at OD plan v2.5) | UNCHANGED — WebFetch verified MATCH byte-exact (`gen_ai.client.operation.duration` Histogram per `gen-ai-metrics.md`). No amendment owed. | Single-stage; verified MATCH against external authority at v1.16 |
+
+### §7.6.3 Pattern reinforcement
+
+`[[tension-record-status-field-reconciliation-discipline]]` (catalogued at §7.5) is REINFORCED + EXTENDED:
+
+- Original §7.5 catalogue: tension-record status-field reconciliation passes should write back to the doc + perform named tiebreaker checks at reconciliation pass time.
+- §7.6 extension: **the named tiebreaker check is load-bearing.** Reconciliation passes that flip status fields without re-performing named external-authority tiebreaker checks CAN silently absorb the same defect twice — Tension 004 is the empirical example, with the same defect (deferred-not-performed §4 step 3 check) producing two separate re-litigation events on the same day (D-1 R2 morning; D-2 + D-3 evening). The discipline is workflow-grammar-level; candidate for `Project_Workflow_v1_8.md` revision arc per fork doc §5(c).
+
+### §7.6.4 Adjacent observations from v7.6 arc (not patched)
+
+(a) **D-3b tier-assignment audit against 4-tier table owed.** v1.16 §1.3 preserves 17 attributes at v1.2-lineage tier assignments (3 Required + 6 Recommended + 8 Opt-In; none at new `Conditionally Required`). Future audit owed against per-attribute requirement levels at OTel 1.41.0 archived text. Surfaced at OD spec v1.16 §"Adjacent observations" (e).
+
+(b) **§4.4 audit against archived text NOT performed.** §4.4 (semantic conventions for content/tool calls) was not in original D-element set + not verified at this single-focus arc. Defensive audit owed. Surfaced at OD spec v1.16 §"Adjacent observations" (f).
+
+(c) **`harness_breaker_schema.py:21` docstring drift.** Docstring claims "AttributeTier enum has no `CONDITIONAL` members"; stale post-v1.16. NOT patched per fork doc §4.2 (γ) single-focus. Surfaced at OD plan v2.20 §"Adjacent observations" (e).
+
+### §7.6.5 Commit anchor
+
+[filled at commit time]
+
