@@ -139,13 +139,24 @@ BASE_METRIC_NAME: str = "gen_ai.client.operation.duration"
 HIERARCHY_CORRELATION_KEY: str = "gen_ai.conversation.id"
 
 #: §4.3 base-layer attribute set with per-attribute tier classification,
-#: transcribed verbatim from the §4.3 table (acceptance #4). 3 Required +
-#: 6 Recommended + 8 Opt-In = 17 attributes.
+#: transcribed verbatim from the §4.3 table (acceptance #4). v1.19 canonical
+#: reading per OD spec v1.19 §1.1 — per-attribute Requirement-Level audit
+#: against OTel GenAI semconv 1.41.0 chat-span table redistributed 3
+#: attributes to Conditionally Required tier (`gen_ai.request.model`,
+#: `server.port`, `gen_ai.conversation.id`). 2 Required + 3 Conditionally
+#: Required + 4 Recommended + 8 Opt-In = 17 attributes (attribute SET
+#: preserved verbatim from v1.2; tier classification only redistributed).
 BASE_LAYER_ATTRIBUTES: tuple[GenAiAttribute, ...] = (
-    # Required (Stable) — always emitted.
+    # Required (Stable) — always emitted (OTel 1.41.0: Required).
     GenAiAttribute(name="gen_ai.operation.name", tier=AttributeTier.REQUIRED_STABLE),
     GenAiAttribute(name="gen_ai.provider.name", tier=AttributeTier.REQUIRED_STABLE),
-    GenAiAttribute(name="gen_ai.request.model", tier=AttributeTier.REQUIRED_STABLE),
+    # Conditionally Required — OTel 1.41.0 per-attribute condition; harness
+    # may emit unconditionally where condition is harness-always-met (e.g.
+    # `gen_ai.request.model` "If available" with harness always knowing
+    # model). Tier classification at §4.3; emission policy at OD plan AC #4.
+    GenAiAttribute(name="gen_ai.request.model", tier=AttributeTier.CONDITIONALLY_REQUIRED),
+    GenAiAttribute(name="server.port", tier=AttributeTier.CONDITIONALLY_REQUIRED),
+    GenAiAttribute(name="gen_ai.conversation.id", tier=AttributeTier.CONDITIONALLY_REQUIRED),
     # Recommended (Development) — emitted unless cardinality-safe discipline excludes.
     GenAiAttribute(name="gen_ai.usage.input_tokens", tier=AttributeTier.RECOMMENDED_DEVELOPMENT),
     GenAiAttribute(name="gen_ai.usage.output_tokens", tier=AttributeTier.RECOMMENDED_DEVELOPMENT),
@@ -154,8 +165,6 @@ BASE_LAYER_ATTRIBUTES: tuple[GenAiAttribute, ...] = (
         tier=AttributeTier.RECOMMENDED_DEVELOPMENT,
     ),
     GenAiAttribute(name="server.address", tier=AttributeTier.RECOMMENDED_DEVELOPMENT),
-    GenAiAttribute(name="server.port", tier=AttributeTier.RECOMMENDED_DEVELOPMENT),
-    GenAiAttribute(name="gen_ai.conversation.id", tier=AttributeTier.RECOMMENDED_DEVELOPMENT),
     # Opt-In content — default-off per redaction discipline (C-OD-12).
     GenAiAttribute(name="gen_ai.input.messages", tier=AttributeTier.OPT_IN_CONTENT),
     GenAiAttribute(name="gen_ai.output.messages", tier=AttributeTier.OPT_IN_CONTENT),
