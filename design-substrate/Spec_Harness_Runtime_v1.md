@@ -1,4 +1,29 @@
-# Specification — Harness Runtime v1.27
+# Specification — Harness Runtime v1.28
+
+## Change-note (v1.27 → v1.28)
+
+**Scope of revision.** Fidelity-pure citation-correction patch refreshing canonical-reading at §14.5 body cites for the `gen_ai.system` → `gen_ai.provider.name` attribute-name rename per OD spec v1.17 §3 cross-artifact cite-cascade disposition (co-publication this arc). The v1 baseline file body at §14.5 C-RT-15 cites `gen_ai.system` at two sites (lines 1963 + 1993) as canonical-text — these cites were correct at v1 authoring (pre-OD spec v1.12 §"Adjacent observations" (f) divergence-flagging) but became stale at OD spec v1.12 amendment (2026-05-26 morning) + producer-side conform at commit `115387b` (2026-05-26 evening, same day) which renamed the producer attribute `gen_ai.system` → `gen_ai.provider.name` to match the OD spec §C-OD-04 §4.3 canonical declaration. The runtime spec body cites lagged the rename; v1.28 refreshes the canonical reading via amendment table per delta-only-spec-file convention.
+
+**Source of fix.** OD spec v1.17 §3 cross-artifact cite-cascade disposition table — runtime spec row identifies body lines 1963 + 1993 as cite-cascade sites requiring refresh; co-publication owed at this arc per workspace `CLAUDE.md` §8 I-1 byte-exact discipline. Empirical-grep verification at production this session: ZERO `gen_ai.system` literals remain at `harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py` (only `gen_ai.system_instructions` Opt-In content attribute, semantically distinct).
+
+**v1.27 substantive content preserved verbatim.** §14.5 C-RT-15 "Deferred to implementation discretion" sub-section span-name convention amendment + all v1.26..v1 lineage content preserved unchanged at v1.28. The amendment touches ONLY the canonical-reading layer for the two body-cite sites.
+
+**Amendment site.**
+
+| Site | Original text (v1 baseline, preserved verbatim through v1.27) | Canonical reading at v1.28 |
+|---|---|---|
+| **§14.5 C-RT-15 body — line 1963** (composer step 3 narrative: "Starts a span on the runtime's TracerProvider...") | "...under the GenAI semconv 1.41.0 attribute set per OD spec C-OD-04..08 (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, plus the per-provider sub-namespaces..." | "...under the GenAI semconv 1.41.0 attribute set per OD spec C-OD-04..08 (`gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, plus the per-provider sub-namespaces..." (3-attribute Required (Stable) tier per OD spec v1.2 §C-OD-04 §4.3 + v1.17 §1.2 conformance confirmation; producer-side conform at commit `115387b`) |
+| **§14.5 C-RT-15 body — line 1993** (TracerProvider integration narrative: "GenAI semconv binding: composer obtains a `Tracer`...") | "Attributes follow OpenTelemetry GenAI semantic conventions 1.41.0 (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.response.id`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, etc.)." | "Attributes follow OpenTelemetry GenAI semantic conventions 1.41.0 (`gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.response.id`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, etc.)." (3-attribute Required (Stable) tier per OD spec v1.2 §C-OD-04 §4.3 + v1.17 §1.2 conformance confirmation; producer-side conform at commit `115387b`) |
+
+**Note on file body preservation.** Per delta-only-spec-file convention applied across the runtime spec lineage chain (v1 single file accumulating change-notes), the v1 baseline body text at lines 1963 + 1993 is PRESERVED VERBATIM. The canonical-reading amendment at v1.28 is the canonical interpretation of those body cites going forward; downstream readers MUST apply the amendment-table substitutions when interpreting the §14.5 attribute lists.
+
+**Adjacent observation (NOT patched per FM-2).** The v1.27 top change-note "Adjacent observation" — production at `_PROVIDER_OPERATIONS` dict maps provider name to API method name (NOT to §4.2 operation enum) — is **NOT closed at v1.28**. v1.28 closes the `gen_ai.system` → `gen_ai.provider.name` attribute-name divergence only (single-focus arc scope per FM-2). The `_PROVIDER_OPERATIONS` value-space non-conformance is sibling-defect to the attribute-name divergence (both are surfacing-of-the-same-day commit `115387b` finding sequence) but is a distinct semantic defect (value-space vs name-space) and owed at separate apply-pass arc per OD spec v1.17 §"Adjacent observations" finding (g) carry-forward.
+
+**Status posture.** Proposed (v1.27) → **Proposed (v1.28)**. v1.28 is a fidelity-pure citation-correction amendment — mirrors the OD spec v1.15/v1.17 phantom-closure-and-cite-correction precedent. Net contract count: 0. Net field count: 0. Net signature change: 0. Net behavior change: 0. NO CP spec / OD spec / ADR / CXA / ADD / PRD amendment owed at v1.28 (OD spec v1.17 co-published this arc is the OD-side companion, not a downstream cascade).
+
+**Downstream absorption owed (post-v1.28).** Workspace `CLAUDE.md` §2.3 runtime spec row version bump (v1.27 → v1.28); co-published this arc.
+
+---
 
 ## Change-note (v1.26 → v1.27)
 
