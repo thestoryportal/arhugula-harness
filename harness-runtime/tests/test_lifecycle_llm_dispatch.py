@@ -350,6 +350,143 @@ async def test_genai_span_handles_ollama_usage_shape() -> None:
 
 
 # ---------------------------------------------------------------------------
+# `[[fork-od-spec-declared-but-not-emitted-attributes]]` Path A — 3 attrs:
+# `gen_ai.conversation.id` + `server.address` + `server.port`.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_conversation_id_emitted_from_step_context_workflow_id() -> None:
+    """`gen_ai.conversation.id` sources from `step_context.workflow_id`."""
+    adapter = _OpenAIFakeAdapter(_OpenAIClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(providers={"openai": adapter}, tracer_provider=tp)
+
+    await dispatcher.dispatch(
+        _binding("openai"), _step(), step_context=_step_context()
+    )
+
+    attrs = (exporter.get_finished_spans()[0].attributes) or {}
+    assert attrs["gen_ai.conversation.id"] == "test-wf"
+
+
+@pytest.mark.asyncio
+async def test_server_address_and_port_emitted_for_anthropic() -> None:
+    """Anthropic emits static `api.anthropic.com:443` per Path A."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter}, tracer_provider=tp
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic"), _step(), step_context=_step_context()
+    )
+
+    attrs = (exporter.get_finished_spans()[0].attributes) or {}
+    assert attrs["server.address"] == "api.anthropic.com"
+    assert attrs["server.port"] == 443
+
+
+@pytest.mark.asyncio
+async def test_server_address_and_port_emitted_for_openai() -> None:
+    """OpenAI emits static `api.openai.com:443` per Path A."""
+    adapter = _OpenAIFakeAdapter(_OpenAIClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(providers={"openai": adapter}, tracer_provider=tp)
+
+    await dispatcher.dispatch(
+        _binding("openai"), _step(), step_context=_step_context()
+    )
+
+    attrs = (exporter.get_finished_spans()[0].attributes) or {}
+    assert attrs["server.address"] == "api.openai.com"
+    assert attrs["server.port"] == 443
+
+
+@pytest.mark.asyncio
+async def test_server_address_and_port_absent_for_ollama_when_host_unset() -> None:
+    """Ollama with `ollama_host=None` emits NEITHER `server.address` NOR
+    `server.port` — OTel Conditionally Required gating prevents the
+    static-map-lies-about-remote-daemon failure mode."""
+    adapter = _OllamaFakeAdapter(_OllamaClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": adapter}, tracer_provider=tp, ollama_host=None
+    )
+
+    await dispatcher.dispatch(
+        _binding("ollama"), _step(), step_context=_step_context()
+    )
+
+    attrs = (exporter.get_finished_spans()[0].attributes) or {}
+    assert "server.address" not in attrs
+    assert "server.port" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_server_address_and_port_emitted_for_ollama_with_localhost_host() -> None:
+    """Ollama with `ollama_host=http://localhost:11434` parses to
+    `localhost:11434` and emits both attributes."""
+    adapter = _OllamaFakeAdapter(_OllamaClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": adapter},
+        tracer_provider=tp,
+        ollama_host="http://localhost:11434",
+    )
+
+    await dispatcher.dispatch(
+        _binding("ollama"), _step(), step_context=_step_context()
+    )
+
+    attrs = (exporter.get_finished_spans()[0].attributes) or {}
+    assert attrs["server.address"] == "localhost"
+    assert attrs["server.port"] == 11434
+
+
+@pytest.mark.asyncio
+async def test_server_address_and_port_emitted_for_ollama_with_remote_host() -> None:
+    """Ollama with a remote `ollama_host` emits the operator-configured
+    address+port faithfully — the static-map approach would have lied here."""
+    adapter = _OllamaFakeAdapter(_OllamaClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": adapter},
+        tracer_provider=tp,
+        ollama_host="http://ollama.internal:8080",
+    )
+
+    await dispatcher.dispatch(
+        _binding("ollama"), _step(), step_context=_step_context()
+    )
+
+    attrs = (exporter.get_finished_spans()[0].attributes) or {}
+    assert attrs["server.address"] == "ollama.internal"
+    assert attrs["server.port"] == 8080
+
+
+@pytest.mark.asyncio
+async def test_server_address_and_port_emitted_for_ollama_with_host_only() -> None:
+    """Ollama with host-only (no port) defaults to the SDK port 11434."""
+    adapter = _OllamaFakeAdapter(_OllamaClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"ollama": adapter},
+        tracer_provider=tp,
+        ollama_host="ollama.internal",
+    )
+
+    await dispatcher.dispatch(
+        _binding("ollama"), _step(), step_context=_step_context()
+    )
+
+    attrs = (exporter.get_finished_spans()[0].attributes) or {}
+    assert attrs["server.address"] == "ollama.internal"
+    assert attrs["server.port"] == 11434
+
+
+# ---------------------------------------------------------------------------
 # AC #4 — anthropic.* conditional emission.
 # ---------------------------------------------------------------------------
 

@@ -135,6 +135,7 @@ async def execute(
         rate_table=RATE_TABLE_V1,
         memory_tool_registry=ctx.memory_tool_registry,
         deployment_surface=config.deployment_surface,
+        ollama_host=config.ollama_host,
     )
 
     # U-RT-58 (C-RT-16 §14.6 D6): rebind ``ctx.llm_dispatcher`` from the
