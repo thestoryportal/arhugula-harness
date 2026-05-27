@@ -316,13 +316,15 @@ class RuntimeLLMDispatcher:
         # `{gen_ai.operation.name} {gen_ai.request.model}`. Byte-exact to OTel
         # GenAI semantic conventions 1.41.0 archived text per
         # `.harness/class_1_fork_genai_span_name_four_way_drift.md` §7.4.2 (R1).
-        # v1.2-v1.11 3-token reading + runtime spec v1.26 line 2033 informal
-        # deferral `gen_ai.{provider}.{operation}` SUPERSEDED at OD spec v1.12
-        # + runtime spec v1.27 (STRIKE). `provider_name` preserved as the
-        # `gen_ai.system` attribute set below at step 2 (attribute-name
-        # divergence vs §4.3 `gen_ai.provider.name` is a separate finding
-        # NOT patched per FM-2 at this R1 arc — see OD spec v1.12 §"Adjacent
-        # observations" (f)).
+        # Required (Stable) attribute set per §4.3: `gen_ai.operation.name` +
+        # `gen_ai.provider.name` + `gen_ai.request.model` — all 3 emitted at
+        # step 2 below per fork §"Adjacent observations" (f) RESOLVED arc.
+        # Finding (g) — `_PROVIDER_OPERATIONS` values (`messages.create` /
+        # `chat.completions` / `chat`) are API method names, not §4.2 enum
+        # values; the operation-token in the span name + the
+        # `gen_ai.operation.name` attribute value are byte-identical and
+        # share the same value-space non-conformance. Value-space conform
+        # to §4.2 enum is a separate arc per FM-2.
         tracer = self.tracer_provider.get_tracer("harness.runtime.llm_dispatch")
         operation = _PROVIDER_OPERATIONS.get(provider_name)
         if operation is None:
@@ -335,8 +337,9 @@ class RuntimeLLMDispatcher:
         # OTel tracer CM is synchronous (returns ``ContextManager``, not
         # ``AsyncContextManager``); spec §14.5 phrasing is imprecise.
         with tracer.start_as_current_span(span_name) as span:
-            # Required GenAI semconv 1.41.0 attributes (request side).
-            span.set_attribute("gen_ai.system", provider_name)
+            # §4.3 Required (Stable) tier — all 3 attributes always emitted.
+            span.set_attribute("gen_ai.operation.name", operation)
+            span.set_attribute("gen_ai.provider.name", provider_name)
             span.set_attribute("gen_ai.request.model", model)
 
             # --- Step 3: per-provider dispatch --------------------------

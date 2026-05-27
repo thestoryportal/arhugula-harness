@@ -300,7 +300,7 @@ async def test_dispatch_ollama_round_trip() -> None:
 
 @pytest.mark.asyncio
 async def test_genai_span_emits_required_attributes_for_openai() -> None:
-    """Span carries gen_ai.system, gen_ai.request.model, gen_ai.usage.*."""
+    """Span carries §4.3 Required (Stable) tier + gen_ai.usage.* + response.id."""
     adapter = _OpenAIFakeAdapter(_OpenAIClient())
     tp, exporter = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(providers={"openai": adapter}, tracer_provider=tp)
@@ -320,9 +320,13 @@ async def test_genai_span_emits_required_attributes_for_openai() -> None:
     # per `.harness/class_1_fork_genai_span_name_four_way_drift.md` R1 apply.
     # `operation` carries the existing _PROVIDER_OPERATIONS value
     # (`chat.completions` for openai) — pre-existing non-conformance to §4.2
-    # operation enum is a separate finding (g) NOT patched per FM-2.
+    # operation enum is finding (g) NOT patched per FM-2 (value-space, not
+    # name-space).
     assert span.name == "chat.completions gpt-4o-mini"
-    assert attrs["gen_ai.system"] == "openai"
+    # §4.3 Required (Stable) tier — all 3 attributes always emitted
+    # (finding (f) RESOLVED 2026-05-26 per fork doc §"Adjacent observations").
+    assert attrs["gen_ai.operation.name"] == "chat.completions"
+    assert attrs["gen_ai.provider.name"] == "openai"
     assert attrs["gen_ai.request.model"] == "gpt-4o-mini"
     assert attrs["gen_ai.usage.input_tokens"] == 15
     assert attrs["gen_ai.usage.output_tokens"] == 7
