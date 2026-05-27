@@ -132,3 +132,222 @@ Per `systems-architect` skill §4A (Phase-7 architectural-tension resolution mod
 | Blocks | NOT a hard block on AS-8 RETIRED close (AS-8's RETIRED gate is on Skills/Files/managed_agents producer-site authoring per per-namespace breakdown filing, not on span-name shape). Surfaces a Class 1 contract violation that should resolve before further AS-axis or OD-axis spec revisions touch C-OD-04 or C-AS-14 §14.1. |
 | Predecessor | Tension 004 (2026-05-15); class_3_drift_c_od_04 (2026-05-25) |
 | Adjacent | `[[verification-shape-sharpened-grep-vs-e2e]]` (5th application; first cross-spec-vs-external-authority application); `[[advisor-before-substantive-work-for-cross-axis-blockers]]` (11th application; advisor caught three-readings-not-two framing + helper-dead-code verification + 1.41.0 archived-spec fetch as load-bearing) |
+
+---
+
+## §7 Systems-architect Mode-3 recommendation (appended 2026-05-26)
+
+*Per `systems-architect` skill §4A.3 — resolution recommendation appended; operator decides.*
+
+### §7.1 Precise tension statement (verbatim per artifact)
+
+**ADR-D6 v1.2 §1.2** (`design-substrate/ADR-D6_v1_2.md` line 51 + 53):
+
+> The unified ingestion contract assembles cleanly across the five upstream span-schema commitments via additive namespace separation, with OTel GenAI semantic conventions 1.41.0 [HIGH] as the cross-vendor floor.
+>
+> **Base layer — OTel GenAI semconv 1.41.0 [HIGH].** [Preserved verbatim from v1.1 §1.2 base-layer block.]
+
+ADR-D6 makes a **cite, not an authoring**. The shape is owned by the external standard at the cited version; ADR-D6's commitment is *to that external standard at that version*.
+
+**OD spec v1.2 §4.1** (`design-substrate/Spec_Operational_Discipline_v1_2.md` lines 279–285, preserved verbatim through v1.11):
+
+> ### §4.1 Span name format
+>
+> ```
+> {gen_ai.operation.name} {gen_ai.provider.name} {gen_ai.request.model}
+> ```
+>
+> Per OTel GenAI semconv 1.41.0 [HIGH] canonical span name format.
+
+OD spec **claims** its 3-token form is "Per OTel GenAI semconv 1.41.0". The claim is empirically false against the archived 1.41.0 text (verified via WebFetch this session at `github.com/open-telemetry/semantic-conventions/blob/v1.41.0/docs/gen-ai/gen-ai-spans.md`):
+
+> Span name SHOULD be `{gen_ai.operation.name} {gen_ai.request.model}`.
+
+**2-token, not 3-token.** No `gen_ai.provider.name` component.
+
+**AS spec v1.6 §14.1 row 1129** (`design-substrate/Spec_Action_Surface_v1.md`):
+
+> | `anthropic.*` | 10 | `llm.inference` | ADR-D3 v1.2 §1.8.1 anthropic namespace block |
+
+`llm.inference` is a literal-string parent-anchor cite. The same literal string appears at 8 production data-value sites (per fork §2.2) and 11 docstring sites. **No span named `llm.inference` is ever emitted at runtime.**
+
+**Production `llm_dispatch.py:324`**:
+
+```python
+span_name = f"gen_ai.{provider_name}.{operation}"
+```
+
+Dot-joined 2-token form. Matches no design-phase artifact.
+
+### §7.2 Per-artifact authority-chain placement
+
+Per `CLAUDE.md` §1.3 chain: **ADR (F1–F5 + D1–D6) → ADD v1.3 → PRD v1.1 → per-axis spec v1.x → per-axis plan v2.x + CXA v2.1**.
+
+| Artifact | Chain position | Authority over span-name shape |
+|---|---|---|
+| OTel semconv 1.41.0 archived text | **External anchor** cited by ADR-D6 at [HIGH] | Highest — ADR-D6 made the cite, not an authoring |
+| ADR-D6 v1.2 §1.2 | F5-derivative (D6 cites F5 substrate commitment) | Defers to external anchor by construction |
+| OD spec C-OD-04 §4.1 | Per-axis spec, derives from ADR-D6 | Canonical for spec-layer; subject to chain ancestor |
+| AS spec §14.1 row 1129 | Per-axis spec, declares parent-anchor convention for `anthropic.*` | Independent of OD §4.1 — different architectural surface (parent-anchor citation vs span-name format) |
+| Production `llm_dispatch.py:324` | Phase-7 implementation | Must conform to spec |
+
+**Critical authority-chain reading:** when an artifact makes a *cite* to an external authority, the canonical reading at that chain position is determined by the external authority's actual content, NOT by the spec's internal rendering of what the external authority says. ADR-D6 §1.2 cites 1.41.0 [HIGH] as the floor — the floor IS what 1.41.0 actually specifies. OD spec C-OD-04 §4.1's 3-token rendering is **a misreading of the cited authority**, not an authoring of an alternative shape.
+
+This is structurally identical to the §2.4 citation-byte-exact discipline (`Project_Workflow_v1_8.md` §7.4.2 invariant I-1): when a citation claims to reproduce external content but does not, the external content is canonical and the citation is in error.
+
+### §7.3 §2 discipline analysis
+
+**Five-axis decomposition.**
+
+| Axis | Concern |
+|---|---|
+| Action surface (AS) | Parent-anchor convention for `anthropic.*` / `mcp.*` / `memory.*` attribute namespaces (S4). Different architectural surface from span-name format — anchors what attributes hang on, not the name itself. |
+| Operational discipline (OD) | Span-name format declaration (S1/S2/S3). Owns the format. |
+| Information substrate (IS) | None. |
+| Control plane (CP) | Routing-namespace cite to parent span (R3 cascade). |
+| Deployment surface | None (span emission is deployment-neutral). |
+| **Cross-axis seam** | **AS §14.1 parent-anchor convention ↔ OD §4.1 format.** This seam is **not currently declared at CXA v2.10**. That absence is itself a finding — the seam exists in production (the AS parent-anchor cite IS the OD-formatted span) but is unnamed at the cross-axis layer. |
+
+**Probabilistic-deterministic boundary.** All elements on the deterministic side — span-name construction is a string template at dispatch time, deterministic. No prob/det concern.
+
+**F/D/I classification.** ADR-D6 is F5-derivative; OD spec C-OD-04 is D-level (derived from D6's cited external anchor). Span-name format is D-level. AS parent-anchor convention is D-level. This is a **D-level divergence cluster** — lower severity than touching F5 substrate commitment itself; resolvable without ADR revision (the external authority anchor at D6 is preserved; the spec's internal misreading is what's amended).
+
+### §7.4 Recommended reading
+
+#### §7.4.1 R2 (OD spec correction) — RECOMMENDED conform to 2-token
+
+**Reading.** OD spec C-OD-04 §4.1 amends to:
+
+```
+{gen_ai.operation.name} {gen_ai.request.model}
+```
+
+Per OTel GenAI semconv 1.41.0 [HIGH] canonical span name format — *byte-exact to the cited authority at the cited version*.
+
+**Authority-chain citation.** ADR-D6 v1.2 §1.2 cites 1.41.0 [HIGH] as the cross-vendor floor (line 53). The actual 1.41.0 text specifies 2-token. The spec internal rendering is in error vs the cited authority; the cited authority wins per the citation-byte-exact discipline.
+
+**Tension 004 status.** This re-litigates the 2026-05-15 Tension 004 ratification. The ratification recommendation at §4 step 3 explicitly named the required tiebreaker: *"confirm OTel GenAI semconv 1.41.0 itself (the cited external standard) matches the spec §4.x reading — if the actual 1.41.0 convention differs from §4.x, that is a separate spec defect."* That tiebreaker check was deferred-not-performed. This fork performs the check; the check fails; the Tension 004 ratification is superseded.
+
+**Downstream artifacts to absorb (sequenced for spec-writer / implementation-planner):**
+
+1. OD spec v1.11 → v1.12 — §C-OD-04 §4.1 2-token form per actual 1.41.0; §4.2 + §4.3 unchanged at this arc (separate question — Tension 004 also flagged D-2 operations enum 6-vs-7 + D-3 tiers 4-vs-3 divergences; out-of-scope here per FM-2).
+2. OD impl `harness-od/src/harness_od/otel_genai_base.py:104` — `SPAN_NAME_FORMAT` becomes 2-token; `span_name(operation, model)` signature drops `provider` parameter.
+3. OD test `harness-od/tests/test_otel_genai_base.py:81-90` — 2-token assertion.
+4. OD plan v2.18 → v2.19 — U-OD-04 absorption (1-line AC text update + 2-token assertion).
+5. Workspace `CLAUDE.md` row + OD spec row + OD plan row updates.
+6. Meta-finding logged: Tension 004 ratification deferred-not-performed the §4 tiebreaker check; pattern catalogued for future tension-resolution ratifications.
+
+#### §7.4.2 R1 (production rename) — RECOMMENDED follow R2
+
+**Reading.** `harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py:324`:
+
+```python
+span_name = f"{operation} {model}"  # per OD spec v1.12 §C-OD-04 §4.1
+```
+
+`provider_name` reference at line 324 is dropped from the span-name; preserved as `gen_ai.provider.name` attribute set on the span (already at line 330 — `span.set_attribute("gen_ai.system", provider_name)` — note `gen_ai.system` vs `gen_ai.provider.name`; that attribute-name divergence is a separate Tension-004-D-3 carry-forward not patched here per FM-2).
+
+**Downstream artifacts:**
+
+1. Production rename at `llm_dispatch.py:324`.
+2. Test fixtures at `harness-runtime/tests/test_lifecycle_llm_dispatch.py` (13 tests) + `test_lifecycle_cost_attribution_llm_dispatch.py` (7 tests) updated to expect 2-token form.
+3. R4 STRIKE on `class_3_drift_c_od_04_gen_ai_binding_site_silence.md` line 34 (absorb via R2 spec amendment per existing filing's §2.1 self-recommendation).
+
+#### §7.4.3 R3 (AS spec parent-anchor) — RECOMMENDED option (b) alias-term abstraction
+
+**Architectural finding: option (a) literal rename is structurally impossible.** Post-R2 span-name is template-instantiated per-call (`{operation} {model}` resolves to e.g. `chat claude-opus-4-7` at one dispatch and `embeddings text-embedding-3` at another). A *literal string* parent-anchor cite cannot point at a per-call-variable name. The current `llm.inference` literal works only because it's never emitted — it's a phantom anchor.
+
+**Reading.** Introduce a canonical alias term at AS spec §14.1 (or co-published at ADR-D6 §1.2 — operator-discretion on authoring site):
+
+> **The LLM inference span** — the span opened by the runtime LLM dispatcher composer per OD C-OD-04 §4.1 (span name = `{gen_ai.operation.name} {gen_ai.request.model}` per actual emission). Cited at this spec as "the LLM inference span"; the literal span-name format is owned by OD §4.1.
+
+AS spec §14.1 row 1129 then reads: `anthropic.*` parent-anchor = **the LLM inference span** (alias term, not literal).
+
+**Downstream artifacts:**
+
+1. AS spec v1.6 → v1.7 — §14.1 row 1129 + table-header note introducing alias term; row text becomes "the LLM inference span" (alias) with footer note cite to OD §4.1 format owner.
+2. AS impl `harness-as/src/harness_as/anthropic_attribute_namespaces.py:110` — `_ANTHROPIC_SPAN = "llm.inference"` constant either (i) removed (anchor is conceptual at spec-layer, not enforced at runtime) OR (ii) refactored to a per-call resolver `def parent_inference_span_name(operation, model) -> str:` aligned with OD helper. Recommend (i) — the constant is unused at any assertion site that checks the actual emitted name.
+3. 11 source-file docstring sites at fork §2.2 — replace literal `llm.inference` with alias term phrasing.
+4. 8 data-value sites at fork §2.2 — case-by-case: most are docstring data structures (low-stakes); the `multi_agent_span_hierarchy.py:84` literal `"llm.inference[]"` and `routing_namespace.py:51` `inherited_from` constant need refactor to alias-resolver or removal.
+5. Test `test_routing_namespace.py:6,35,37` — alias-aware assertion.
+
+**Why option (b) over option (a).** Option (a)'s scope is ~3-4 commits but produces a STILL-WRONG cite — the new literal would be e.g. `"chat claude-opus-4-7"` which is itself a per-call-variable masquerading as a literal. Option (b)'s scope is ~5-7 commits but produces a STRUCTURALLY-CORRECT cite — a stable alias term that decouples spec parent-anchor citations from runtime span-name resolution. Future semconv version bumps (1.41.0 → 1.42.0 etc.) ripple only through OD §4.1 + production rename; AS spec parent-anchor cites are immune.
+
+**Cross-axis seam declaration owed at CXA v2.10.** Per §7.3 finding — the AS §14.1 parent-anchor convention ↔ OD §4.1 format seam is not currently declared at CXA. The R3 option (b) landing should co-declare this seam at CXA v2.10 → v2.11 (new row at §2.3.x convention-level bucket; not a typed seam since both sides are spec-only at this layer).
+
+#### §7.4.4 R4 (class_3 filing STRIKE) — RECOMMENDED concurrent with R2
+
+Single-line patch at `class_3_drift_c_od_04_gen_ai_binding_site_silence.md` line 34. Co-published with R2.
+
+### §7.5 Recommended sequencing
+
+| Step | Arc | Scope | Authority anchor |
+|---|---|---|---|
+| 1 | **R2** OD spec correction + R4 STRIKE | ~4-6 commits | ADR-D6 §1.2 cited 1.41.0 actual text |
+| 2 | **R1** production rename | ~2 commits | OD spec v1.12 §4.1 post-R2 |
+| 3 | **R3 option (b)** AS spec alias-term + CXA seam declaration | ~5-7 commits | Decouples parent-anchor cite from runtime span-name format |
+
+Total: ~11-15 commits across 2-3 sessions. R1 may be folded into R2's apply-pass arc if scope-narrowing is operator-preferred.
+
+### §7.5a Runtime-spec deferral suggestion (S6 lineage finding) — surfaced during tiebreaker check
+
+**Finding from §7.6 tiebreaker grep.** `design-substrate/Spec_Harness_Runtime_v1.md` line 2033 (within a deferrals / non-canonical section):
+
+> Span name convention (suggest `gen_ai.{provider}.{model_or_method}` per OTel GenAI semconv guidance, e.g., `gen_ai.anthropic.messages.create`).
+
+This is **S6** — a sixth span-name shape, framed as an informal suggestion at runtime spec's deferral layer. **Production at `llm_dispatch.py:324` implements S6**, not OD spec §4.1's authoritative S2. The runtime-spec suggestion is at lower chain authority than OD spec §4.1 — per `CLAUDE.md` §1.3 axis-ownership convention, OD spec owns C-OD-04 GenAI span-name format; runtime spec defers to OD on cross-axis attribute schemas (line 1930 explicitly: *"ADR-F5 v1.1 §Decision (observability substrate carries GenAI-semconv attribution per OD spec C-OD-04..08)"*).
+
+**Authority-chain implication.** S6 was an unsigned informal suggestion that production silently followed. The suggestion does not override OD spec §4.1 authority. Production's lineage from S6 — rather than from S2 — is **the load-bearing finding** for understanding HOW the divergence persisted: production followed the wrong authority at the runtime-spec deferral layer.
+
+**Additional downstream artifact for R1 apply-pass.** Runtime spec v1.x line 2033 deferral suggestion amendment — either (i) **remove** the suggestion (preferred; the format is OD's to declare, not runtime's to suggest), or (ii) **restate as cross-reference** "see OD spec C-OD-04 §4.1 (post-R2 v1.12)" with no inline format suggestion. Adds ~1 commit to the R1 apply-pass arc.
+
+This finding strengthens the §7.4.1 R2 recommendation — production divergence is now traceably attributed to a documented suggestion, not unsigned implementer-discretion drift.
+
+### §7.6 Tiebreaker check
+
+**The single verifiable fact:** Confirm no artifact at the design-phase substrate later than ADR-D6 v1.2 (2026-05-15 era) re-anchors the GenAI base layer to a semconv version OTHER than 1.41.0.
+
+Verification command:
+
+```bash
+grep -rn "semconv\|GenAI" design-substrate/ | grep -v "1.41.0" | head -30
+```
+
+**Verification result (executed 2026-05-26 at this filing):** Tiebreaker HOLDS. No artifact re-anchors to a non-1.41.0 version. Other non-1.41.0 matches resolve as:
+
+- `Target_Stack_Commitment_v1.md` A3 row cites semconv 1.36.0 as a JS-instrumentation capability observation (not an authoring anchor; Python tooling cited at 1.41.0)
+- `ADR-D4.md` references "OTel GenAI semconv" without version (inherits 1.41.0 via D6)
+- `ADR-F5.md` references "OTel GenAI semconv extensions" without version
+- `Spec_Control_Plane_v1_2.md` references "OTel GenAI semconv extension" without version
+- Plan v2.5 + v2.1 tests cite `_per_semconv_1_41_0` consistent with the anchor
+- `Spec_Harness_Runtime_v1.md` line 2033 deferral suggestion uses "OTel GenAI semconv guidance" without version anchor — see §7.5a finding
+
+1.41.0 is the unambiguous canonical version anchor. The 2-token target shape per §7.4.1 is determinate.
+
+**Sub-tiebreaker (R3 option b).** Confirm CXA v2.10 §2.3 conventions bucket can absorb a new row declaring the AS §14.1 parent-anchor ↔ OD §4.1 format seam without architectural conflict. If CXA v2.10 §0 or §2 explicitly forecloses convention-level seam additions (it does not at v2.10 read), R3 option (b)'s CXA co-declaration owes a separate scoping arc.
+
+### §7.7 Fork classification per Project_Workflow_v1_8.md §2.7.6
+
+**Class 1 (halt-execution).** Three independent Class 1 triggers per fork §2.3 — production matches no spec (X-AL-3 + I-1 violation); OD spec contradicts cited external authority (citation byte-exact discipline failure); AS spec parent-anchor cite unfaithful to production.
+
+Halt scope: **R2 + R1 should land before any further OD-axis or AS-axis spec revision touches C-OD-04 or C-AS-14 §14.1.** R3 may land in parallel or after — independent. AS-8 RETIRED close is NOT halted on this fork (per fork §6 — AS-8 gates on Skills/Files/managed_agents producer-site authoring, not span-name shape).
+
+### §7.8 Operator decides
+
+The systems-architect skill produces this recommendation per §4A.4 — *does not decide*. The operator chooses among:
+
+| Choice | What it commits to |
+|---|---|
+| **(A) Accept §7.4 + §7.5 in full** | Open R2 + R4 apply-pass arc this session; R1 follows; R3 option (b) sequenced after |
+| **(B) Accept R2 + R1 only; defer R3** | Open R2 + R1 + R4 apply-pass arc this session; R3 deferred to operator-discretion follow-on |
+| **(C) Accept R2 only (narrow scope)** | OD spec v1.11 → v1.12 + helper + tests this session; R1/R3/R4 deferred |
+| **(D) Reject recommendation; preserve Tension 004 reading** | Requires explicit operator authoring of (i) why the 3-token form is preserved despite contradicting cited 1.41.0 text, (ii) whether ADR-D6 v1.2 §1.2 cite is amended to a different version anchor that matches the 3-token form, or (iii) whether the 3-token form is canonicalized as a harness-specific extension above the 1.41.0 floor (in which case ADR-D6 wording change owed) |
+| **(E) File-only; defer all apply** | Fork doc stands as durable record; apply timing operator-discretion |
+
+**Architect's explicit recommendation: (A) full acceptance with R2 + R4 first.** Rationale: the external-authority contradiction (§7.4.1) is the load-bearing finding; R1 cannot land coherently before R2 (R1's target shape is post-R2); R3 option (b) is structurally necessary independent of R1/R2 timing; sequencing in order R2 → R1 → R3 minimizes within-arc rework.
+
+**Tension 004 ratification (2026-05-15) is superseded** by the §7.4.1 reading at this fork's operator ratification, whichever option (A)–(D) is selected — even (D) requires explicit operator authoring of the chain-reading defense, which is itself a ratification superseding the 2026-05-15 reading.
+
+---
+
+*End §7 architect Mode-3 recommendation. Operator decides per §7.8.*
