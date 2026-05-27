@@ -351,3 +351,23 @@ The systems-architect skill produces this recommendation per §4A.4 — *does no
 ---
 
 *End §7 architect Mode-3 recommendation. Operator decides per §7.8.*
+
+---
+
+## §8 Finding (f) RESOLVED 2026-05-26 — §4.3 Required (Stable) tier full conform arc
+
+Producer-side conform to OD spec v1.12 §C-OD-04 §4.3 Required (Stable) tier landed at `harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py:337-340`. Three attributes now emitted on every GenAI span (previously: 1-of-3 + 1 wrong-named):
+
+| §4.3 attribute | Pre-arc state | Post-arc state |
+|---|---|---|
+| `gen_ai.operation.name` | Not emitted as a span attribute (only in span name) | `span.set_attribute("gen_ai.operation.name", operation)` — value = `_PROVIDER_OPERATIONS[provider_name]` (same as operation-token in span name) |
+| `gen_ai.provider.name` | Emitted under the old OTel name `gen_ai.system` | Renamed to `gen_ai.provider.name`; value unchanged (`provider_name`) |
+| `gen_ai.request.model` | Emitted correctly | Preserved verbatim |
+
+**Scope:** narrow producer-side conform; OD spec already declared the canonical names at v1.12 (no spec amendment owed). Single production site + single test file; 27/27 `test_lifecycle_llm_dispatch.py` PASS; 773/773 harness-od tests PASS; pyright strict 0 errors.
+
+**Finding (g) refined.** Pre-arc framing: "`_PROVIDER_OPERATIONS` values are non-§4.2-enum-conformant in the span-name operation token." Post-arc framing: same non-conformance now visible **at both** the span-name operation-token **and** the `gen_ai.operation.name` attribute value (both share the same `_PROVIDER_OPERATIONS` lookup at `llm_dispatch.py:327`). Value-space conform of `_PROVIDER_OPERATIONS` to §4.2 enum + emission of `gen_ai.operation.name` with the conformed value is a separate arc per FM-2.
+
+**Adjacent: `provider_name` value-space.** OTel 1.41.0 `gen_ai.provider.name` known-values enum includes `anthropic`, `openai`, `gcp.gemini`, `azure.ai.openai`. Current production values (`anthropic`, `openai`, `ollama`) — first two conformant; `ollama` is NOT in the 1.41.0 known-values enum. NOT patched at this arc; surfaces as adjacent finding (h) — value-space conform of `provider_name` to §4.3 known-values enum (likely requires either an `ollama` ratification at OTel semconv upstream OR a harness-specific extension declared at OD spec).
+
+**Commit anchor:** [filled at commit time]
