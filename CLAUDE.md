@@ -45,7 +45,7 @@ All canonical artifacts reside at the **design-phase workspace** (separate Claud
 
 | Artifact | Role |
 |---|---|
-| `Project_Workflow_v1_8.md` | Canonical workflow governance; §2.6.5 Phase 6.5 arc; §2.7 Phase 7 execution discipline; §2.7.6 back-flow routing; §7.4 fidelity-grammar |
+| `Project_Workflow_v1_9.md` | Canonical workflow governance; §2.6.5 Phase 6.5 arc; §2.7 Phase 7 execution discipline; §2.7.6 back-flow routing; §7.4 fidelity-grammar (v1.9 — NEW §7.4.7 stale-carry-text disposition discipline + 5-species catalogue + pre-substantive empirical-verification audit at every amendment arc per OD spec v1.15/v1.16/v1.17/v1.18/v1.21 empirical lineage 2026-05-26 → 2026-05-27; §1–§7.3 + §7.4.1–§7.4.6 + §8 PRESERVED VERBATIM; delta-only authoring path adopted, NEW workspace precedent for narrow workflow-doc revisions). v1.8 PRESERVED VERBATIM as historical anchor. |
 | `Phase_7_Meta_Architecture_v1.md` | H_T ↔ H_E substitution mapping (§5 — 49 entries); anti-leakage rules (§7 — 18 axis + 3 cross-cutting); self-hosting milestone gradient (§6) |
 | `Phase_7_Kickoff_Prompt.md` | Phase 7 entry framing; back-flow routing reference at §6 |
 | `Target_Stack_Commitment_v1.md` | Stack commitment (see §3) |
