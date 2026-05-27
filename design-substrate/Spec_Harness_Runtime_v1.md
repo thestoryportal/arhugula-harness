@@ -1,4 +1,29 @@
-# Specification — Harness Runtime v1.28
+# Specification — Harness Runtime v1.29
+
+## Change-note (v1.28 → v1.29)
+
+**Scope of revision.** Fidelity-pure citation-correction patch refreshing canonical-reading at v1.27 top change-note "Adjacent observation (NOT patched per FM-2)" framing — `_PROVIDER_OPERATIONS` value-space non-conformance to §4.2 operation enum (finding (g) sibling-defect) — as **CLOSED-as-resolved-at-production-commit-ca5674b** 2026-05-26 per OD spec v1.18 §3 cross-artifact cite-cascade disposition (co-publication this arc). The v1.27 top adjacent-observation flagged the carry; the v1.28 top change-note "Adjacent observation" reiterated the carry framing ("`_PROVIDER_OPERATIONS` value-space non-conformance... is sibling-defect to the attribute-name divergence... NOT closed at v1.28... owed at separate apply-pass arc per OD spec v1.17 §"Adjacent observations" finding (g) carry-forward"). Both v1.27 + v1.28 carry-text framings became stale at commit `ca5674b` (2026-05-26 19:45 -0600) which producer-side-conformed `_PROVIDER_OPERATIONS` from `dict[str, str]` (API method-name string values) → `dict[str, GenAiOperation]` (canonical §4.2 enum members; all 3 providers map to `GenAiOperation.CHAT`).
+
+**Source of fix.** OD spec v1.18 §3 cross-artifact cite-cascade disposition table — runtime spec row identifies v1.27 top adjacent-observation as cite-cascade site requiring refresh; co-publication owed at this arc per workspace `CLAUDE.md` §8 I-1 byte-exact discipline. Empirical-grep verification at production this session: `harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py:497-509` carries `_PROVIDER_OPERATIONS: dict[str, GenAiOperation]` typed enum binding; inline production comment at lines 502-504 self-documents closure (`# Finding (g) RESOLVED at this binding (was: API method names not in §4.2 enum — messages.create / chat.completions / chat)`).
+
+**v1.28 substantive content preserved verbatim.** v1.28 canonical-reading amendment table refreshing §14.5 body cites at lines 1963 + 1993 (`gen_ai.system` → `gen_ai.provider.name`) + v1.27..v1 lineage content preserved unchanged at v1.29. The amendment touches ONLY the canonical-reading layer for the v1.27 top adjacent-observation carry-text disposition.
+
+**Amendment site.**
+
+| Site | Original text (v1.27 top change-note "Adjacent observation"; v1.28 top change-note reiteration; both preserved verbatim) | Canonical reading at v1.29 |
+|---|---|---|
+| **v1.27 top change-note "Adjacent observation (NOT patched per FM-2)"** — "Production at `_PROVIDER_OPERATIONS` dict (`harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py:484-488`) maps provider name to API method name (`messages.create` / `chat.completions` / `chat`) — NOT to OTel GenAI semconv §4.2 operation enum values (`chat` / `text_completion` / etc.)... NOT patched at this R1 arc; owed at separate apply-pass arc." | **CLOSED-as-resolved-at-ca5674b** — producer-side conform at `harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py:497-509` typed `_PROVIDER_OPERATIONS: dict[str, GenAiOperation]` with all 3 providers mapped to `GenAiOperation.CHAT` per §4.2 enum; inline production comment at lines 502-504 self-documents closure; fork doc `class_1_fork_genai_span_name_four_way_drift.md` §9 declares (g) RESOLVED at `ca5674b` 2026-05-26 19:45 -0600 (5 minutes after sibling commit `115387b` finding (f) closure). Post-`ca5674b` span name is e.g. `chat claude-opus-4-7` (not `messages.create claude-opus-4-7` per pre-arc); `gen_ai.operation.name` attribute emits `"chat"` (not API method name). Line-number reference `:484-488` in the original v1.27 carry-text is stale; post-`ca5674b` actual lines are `:497-509`. |
+| **v1.28 top change-note paragraph (sibling reiteration)** — "v1.27 top change-note 'Adjacent observation' on `_PROVIDER_OPERATIONS` value-space non-conformance NOT closed at v1.28 (carried forward per FM-2 single-focus arc scope; sibling-defect surfaced as OD spec v1.17 finding (g) for future operator-routed arc)" | **CLOSED-as-resolved-at-ca5674b** per row 1 above. The v1.28 narrative was internally consistent at v1.28 publication time given the v1.17 (g) carry framing, BUT the v1.17 (g) carry was itself authoring-time-stale (resolved at `ca5674b` before v1.17 was written; production self-documents closure). v1.29 refreshes both v1.27 + v1.28 carry-text dispositions in one canonical-reading amendment site. |
+
+**Note on file body preservation.** Per delta-only-spec-file convention applied across the runtime spec lineage chain (v1 single file accumulating change-notes), the v1 baseline body text + v1.27 + v1.28 change-note text are PRESERVED VERBATIM. The canonical-reading amendment at v1.29 is the canonical interpretation of the v1.27 + v1.28 top adjacent-observation paragraphs going forward; downstream readers MUST apply the amendment-table substitutions when interpreting the `_PROVIDER_OPERATIONS` value-space framing.
+
+**Adjacent observation (NOT patched per FM-2).** Finding (h) `provider_name` value-space partial-conformance to OTel 1.41.0 `gen_ai.provider.name` known-values enum (`ollama` not in 1.41.0 enum) is **NOT a defect** per fork doc §10 (OTel `type: members:` declaration without `allow_custom_values: false` flag is open-known-values discipline; production `provider_name` cardinality 3 ≤ 20 within OD spec C-OD-04 line 664 bound). The v1.27 + v1.28 carry-text framings did NOT cite (h) directly at runtime spec; closure at OD spec v1.18 §1.2 + fork doc §10. No runtime-spec amendment owed for (h).
+
+**Status posture.** Proposed (v1.28) → **Proposed (v1.29)**. v1.29 is a fidelity-pure citation-correction amendment — mirrors the v1.28 (gen_ai.system rename) + OD spec v1.15/v1.17/v1.18 phantom-closure-and-cite-correction precedent. Net contract count: 0. Net field count: 0. Net signature change: 0. Net behavior change: 0. NO CP spec / OD spec / ADR / CXA / ADD / PRD amendment owed at v1.29 beyond co-published OD spec v1.18.
+
+**Downstream absorption owed (post-v1.29).** Workspace `CLAUDE.md` §2.3 runtime spec row version bump (v1.28 → v1.29); co-published this arc.
+
+---
 
 ## Change-note (v1.27 → v1.28)
 
