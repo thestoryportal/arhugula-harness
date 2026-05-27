@@ -51,19 +51,25 @@ _SPEC_OPERATIONS = {
     "text_completion",
 }
 
-# §4.3 attribute-tier table.
+# §4.3 attribute-tier table per OD spec v1.19 §1.1 canonical reading
+# (per-attribute Requirement-Level audit against OTel GenAI semconv 1.41.0
+# chat-span table). v1.2-v1.18 declared 3 Required + 6 Recommended + 8 Opt-In;
+# v1.19 redistributes 3 attributes to the v1.16-NEW Conditionally Required
+# tier (`gen_ai.request.model`, `server.port`, `gen_ai.conversation.id`).
 _SPEC_REQUIRED_STABLE = {
     "gen_ai.operation.name",
     "gen_ai.provider.name",
+}
+_SPEC_CONDITIONALLY_REQUIRED = {
     "gen_ai.request.model",
+    "server.port",
+    "gen_ai.conversation.id",
 }
 _SPEC_RECOMMENDED_DEVELOPMENT = {
     "gen_ai.usage.input_tokens",
     "gen_ai.usage.output_tokens",
     "gen_ai.response.finish_reasons",
     "server.address",
-    "server.port",
-    "gen_ai.conversation.id",
 }
 _SPEC_OPT_IN_CONTENT = {
     "gen_ai.input.messages",
@@ -161,18 +167,45 @@ def test_attribute_tier_conditionally_required_present() -> None:
 def test_base_layer_attributes_byte_exact_per_semconv_1_41_0() -> None:
     """§4.3 — the base-layer attribute name set, verbatim (17 attributes)."""
     names = {attr.name for attr in BASE_LAYER_ATTRIBUTES}
-    assert names == (_SPEC_REQUIRED_STABLE | _SPEC_RECOMMENDED_DEVELOPMENT | _SPEC_OPT_IN_CONTENT)
+    assert names == (
+        _SPEC_REQUIRED_STABLE
+        | _SPEC_CONDITIONALLY_REQUIRED
+        | _SPEC_RECOMMENDED_DEVELOPMENT
+        | _SPEC_OPT_IN_CONTENT
+    )
     assert len(BASE_LAYER_ATTRIBUTES) == 17
 
 
 def test_required_stable_tier_attributes_per_spec_4_3() -> None:
-    """§4.3 Required (Stable) row, verbatim."""
+    """§4.3 Required (Stable) row per v1.19 §1.1 canonical reading.
+
+    v1.2-v1.18 listed 3 attrs; v1.19 redistributes `gen_ai.request.model`
+    to Conditionally Required per OTel 1.41.0 chat-span Requirement-Level
+    audit. Required (Stable) cardinality at v1.19 = 2.
+    """
     got = {a.name for a in attributes_in_tier(AttributeTier.REQUIRED_STABLE)}
     assert got == _SPEC_REQUIRED_STABLE
 
 
+def test_conditionally_required_tier_attributes_per_spec_4_3() -> None:
+    """§4.3 Conditionally Required row per v1.19 §1.1 canonical reading.
+
+    NEW at v1.19 — tier was added at v1.16 §1.2 (cardinality 3 → 4)
+    without populating; v1.19 populates per OTel 1.41.0 chat-span audit:
+    `gen_ai.request.model` (CR "If available") + `server.port` (CR "If
+    server.address set") + `gen_ai.conversation.id` (CR "when available").
+    """
+    got = {a.name for a in attributes_in_tier(AttributeTier.CONDITIONALLY_REQUIRED)}
+    assert got == _SPEC_CONDITIONALLY_REQUIRED
+
+
 def test_recommended_development_tier_attributes_per_spec_4_3() -> None:
-    """§4.3 Recommended (Development) row, verbatim."""
+    """§4.3 Recommended (Development) row per v1.19 §1.1 canonical reading.
+
+    v1.2-v1.18 listed 6 attrs; v1.19 redistributes `server.port` +
+    `gen_ai.conversation.id` to Conditionally Required. Recommended
+    (Development) cardinality at v1.19 = 4.
+    """
     got = {a.name for a in attributes_in_tier(AttributeTier.RECOMMENDED_DEVELOPMENT)}
     assert got == _SPEC_RECOMMENDED_DEVELOPMENT
 
