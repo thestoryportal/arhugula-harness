@@ -60,6 +60,7 @@ from typing import Any, Protocol, cast, runtime_checkable
 from harness_cp.cp_shared_types import ProviderAgnosticPayload
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
+from harness_od.otel_genai_base import GenAiOperation
 
 from harness_runtime.lifecycle.memory_tool_dispatch import (
     derive_context_editing_active,
@@ -319,12 +320,10 @@ class RuntimeLLMDispatcher:
         # Required (Stable) attribute set per §4.3: `gen_ai.operation.name` +
         # `gen_ai.provider.name` + `gen_ai.request.model` — all 3 emitted at
         # step 2 below per fork §"Adjacent observations" (f) RESOLVED arc.
-        # Finding (g) — `_PROVIDER_OPERATIONS` values (`messages.create` /
-        # `chat.completions` / `chat`) are API method names, not §4.2 enum
-        # values; the operation-token in the span name + the
-        # `gen_ai.operation.name` attribute value are byte-identical and
-        # share the same value-space non-conformance. Value-space conform
-        # to §4.2 enum is a separate arc per FM-2.
+        # Finding (g) RESOLVED at `_PROVIDER_OPERATIONS` binding above —
+        # the operation-token in the span name + the `gen_ai.operation.name`
+        # attribute value both source from `GenAiOperation.CHAT.value`
+        # ("chat") per §4.2 enum.
         tracer = self.tracer_provider.get_tracer("harness.runtime.llm_dispatch")
         operation = _PROVIDER_OPERATIONS.get(provider_name)
         if operation is None:
@@ -332,13 +331,13 @@ class RuntimeLLMDispatcher:
             # three constructed at stage 3a per C-RT-05. Surfacing any
             # other key as UNREACHABLE preserves the C-RT-14 taxonomy.
             raise LLMDispatchProviderUnreachableError(provider_name)
-        span_name = f"{operation} {model}"
+        span_name = f"{operation.value} {model}"
 
         # OTel tracer CM is synchronous (returns ``ContextManager``, not
         # ``AsyncContextManager``); spec §14.5 phrasing is imprecise.
         with tracer.start_as_current_span(span_name) as span:
             # §4.3 Required (Stable) tier — all 3 attributes always emitted.
-            span.set_attribute("gen_ai.operation.name", operation)
+            span.set_attribute("gen_ai.operation.name", operation.value)
             span.set_attribute("gen_ai.provider.name", provider_name)
             span.set_attribute("gen_ai.request.model", model)
 
@@ -493,10 +492,20 @@ class RuntimeLLMDispatcher:
 # ---------------------------------------------------------------------------
 
 
-_PROVIDER_OPERATIONS: dict[str, str] = {
-    "anthropic": "messages.create",
-    "openai": "chat.completions",
-    "ollama": "chat",
+#: Per-provider §4.2 operation enum value used for both the span name
+#: operation-token (per OD spec v1.12 §C-OD-04 §4.1) and the
+#: `gen_ai.operation.name` Required (Stable) attribute (§4.3). All 3
+#: providers dispatch chat-style completions:
+#:   - `anthropic` → `client.messages.create` (Anthropic Messages API)
+#:   - `openai`    → `client.chat.completions.create`
+#:   - `ollama`    → `client.chat`
+#: All 3 map to `GenAiOperation.CHAT` per OTel GenAI semconv 1.41.0 §4.2.
+#: Finding (g) RESOLVED at this binding (was: API method names not in §4.2
+#: enum — `messages.create` / `chat.completions` / `chat`).
+_PROVIDER_OPERATIONS: dict[str, GenAiOperation] = {
+    "anthropic": GenAiOperation.CHAT,
+    "openai": GenAiOperation.CHAT,
+    "ollama": GenAiOperation.CHAT,
 }
 
 

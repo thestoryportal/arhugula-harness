@@ -316,16 +316,14 @@ async def test_genai_span_emits_required_attributes_for_openai() -> None:
     span = finished[0]
     attrs = span.attributes or {}
     # Span name per OD spec v1.12 §C-OD-04 §4.1 2-token form:
-    # `{operation} {model}` byte-exact to OTel GenAI semconv 1.41.0
-    # per `.harness/class_1_fork_genai_span_name_four_way_drift.md` R1 apply.
-    # `operation` carries the existing _PROVIDER_OPERATIONS value
-    # (`chat.completions` for openai) — pre-existing non-conformance to §4.2
-    # operation enum is finding (g) NOT patched per FM-2 (value-space, not
-    # name-space).
-    assert span.name == "chat.completions gpt-4o-mini"
+    # `{gen_ai.operation.name} {gen_ai.request.model}` byte-exact to OTel
+    # GenAI semconv 1.41.0 per fork doc R1 apply. Operation-token sources
+    # from `GenAiOperation.CHAT.value` per §4.2 enum (finding (g) RESOLVED
+    # 2026-05-26 per fork doc §9).
+    assert span.name == "chat gpt-4o-mini"
     # §4.3 Required (Stable) tier — all 3 attributes always emitted
-    # (finding (f) RESOLVED 2026-05-26 per fork doc §"Adjacent observations").
-    assert attrs["gen_ai.operation.name"] == "chat.completions"
+    # (finding (f) RESOLVED 2026-05-26 per fork doc §8).
+    assert attrs["gen_ai.operation.name"] == "chat"
     assert attrs["gen_ai.provider.name"] == "openai"
     assert attrs["gen_ai.request.model"] == "gpt-4o-mini"
     assert attrs["gen_ai.usage.input_tokens"] == 15
