@@ -399,3 +399,62 @@ Span name + `gen_ai.operation.name` attribute value shift in lockstep (both sour
 **Finding (h) preserved.** OTel 1.41.0 `gen_ai.provider.name` known-values enum includes `anthropic` + `openai` + `gcp.gemini` + `azure.ai.openai` etc.; `ollama` is NOT in the 1.41.0 known-values enum. NOT patched at this arc; carries forward per FM-2.
 
 **Commit anchor:** [filled at commit time]
+
+---
+
+## §10 Finding (h) CLOSED-NOT-A-DEFECT 2026-05-26 — `ollama` is OTel-conformant under open-known-values discipline
+
+Finding (h) was surfaced at fork §8 + §9 closure notes as "value-space conform of `provider_name` to OTel 1.41.0 `gen_ai.provider.name` known-values enum" with the framing that `ollama` is not in OTel's 15-member list. Empirical verification at OTel 1.41.0 archived spec yields the opposite conclusion: **`ollama` emission is fully conformant**; the prior framing was based on misreading OTel's `type: members:` shape as a closed enum.
+
+### Empirical evidence (verified 2026-05-26 via raw GitHub fetch)
+
+Source: `https://raw.githubusercontent.com/open-telemetry/semantic-conventions/v1.41.0/model/gen-ai/registry.yaml`
+
+The `gen_ai.provider.name` attribute is declared as:
+
+```yaml
+- id: gen_ai.provider.name
+  stability: development
+  type:
+    members:
+      - id: openai
+        stability: development
+        value: "openai"
+        # ... 14 more members ...
+  brief: The Generative AI provider as identified by the client
+    or server instrumentation.
+  note: |
+    The attribute SHOULD be set based on the instrumentation's best
+    knowledge and may differ from the actual model provider.
+```
+
+The 15 named members are: `openai` / `gcp.gen_ai` / `gcp.vertex_ai` / `gcp.gemini` / `anthropic` / `cohere` / `azure.ai.inference` / `azure.ai.openai` / `ibm.watsonx.ai` / `aws.bedrock` / `perplexity` / `x_ai` / `deepseek` / `groq` / `mistral_ai`. `ollama` is NOT in this list.
+
+### Why this is NOT a defect
+
+| Discriminating fact | Source | Implication |
+|---|---|---|
+| **OTel `type: members:` is open known-values, not closed enum** | OTel semconv convention: `type: members:` without `allow_custom_values: false` flag = "well-known values with custom value support" by default | Custom values (`ollama`) are tolerated when no listed value applies |
+| **`note:` language is SHOULD + "instrumentation's best knowledge"** | OTel 1.41.0 registry.yaml verbatim | SHOULD-not-MUST + best-knowledge framing = open-known-values discipline |
+| **OD spec C-OD-04 cardinality table line 664 framing** | `gen_ai.provider.name` is "bounded (per-provider enumeration; expected ≤20 across all providers)" | OD spec explicitly frames as cardinality-bounded, NOT closed enum; conformant with OTel's open shape |
+| **Production `provider_name` value-space at HEAD** | `llm_dispatch.py:339` emits `binding.model_binding.provider` ∈ `{anthropic, openai, ollama}` (per `_PROVIDER_OPERATIONS` dict at line 497) | Cardinality = 3 ≤ 20 (within OD spec bound); 2 of 3 in OTel known-values list; `ollama` is a valid custom value per open-known-values discipline |
+
+### Adjacent observation (NOT patched per FM-2)
+
+(i) **`gen_ai.provider.name` stability divergence — Class 3 informational.** OTel 1.41.0 declares this attribute as `stability: development` at both the attribute-level AND every member-level (including `anthropic` + `openai` which production also emits). OD spec C-OD-04 §4.3 classifies the same attribute as **Required (Stable)** tier (always-emit per OD discipline). The OD-spec tier classification is OD's own emission-posture discipline (independent of OTel's stability metadata); the divergence is at the spec-narrative layer, not the wire-protocol layer. Routing: future OD spec doc-hygiene pass MAY add a footer clarifying that OD's Required (Stable) tier classification ≠ OTel attribute stability declaration. Non-blocking; surfaces no production-side action.
+
+### Resolution + fork doc closure cascade
+
+Finding (h) framing across this fork doc updated to NOT-A-DEFECT:
+
+- §8 (finding (f) closure) — "Adjacent: `provider_name` value-space" paragraph PRESERVED VERBATIM as historical record of the surfacing observation; this §10 supersedes the framing
+- §9 (finding (g) closure) — "Finding (h) preserved per FM-2" paragraph PRESERVED VERBATIM as historical record; this §10 supersedes
+- This §10 is the canonical resolution
+
+**No code change. No spec amendment. No worktree commits beyond this doc append.**
+
+**Commit anchor:** [filled at commit time]
+
+### Pattern catalogued
+
+**`[[empirical-verification-supersedes-training-data-knowledge]]`** — finding (h) was framed based on training-data knowledge of OTel known-values lists ("`anthropic` + `openai` conformant; `ollama` is NOT in the 1.41.0 known-values enum"). Empirical fetch of the authoritative YAML disambiguated `members:` shape semantics (open vs closed) which training-data summarization had collapsed. Sibling pattern to fork §7.4.1 (R2) where empirical fetch of 1.41.0 §4.1 span-name text superseded Tension 004 D-1 ratification (also a training-data-collapse: the spec text said 2-token but was paraphrased as 3-token at v1.2 authoring). Discipline: when a finding cites an external authority, perform the empirical fetch BEFORE opening the apply arc — the fetch may dissolve the finding.
