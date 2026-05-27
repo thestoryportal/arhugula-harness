@@ -102,6 +102,7 @@ from harness_as.operator_policy_override_scope import (
     override_scope,
 )
 from harness_as.sandbox_attribute_schema import (
+    MCP_INVOCATION_ATTRIBUTE_SCHEMA,
     SANDBOX_ATTRIBUTE_SCHEMA,
     SandboxAttributeSchema,
     SandboxProvider,
@@ -126,10 +127,12 @@ from harness_as.sandbox_event_sampling import (
 from harness_as.sandbox_fail_class import (
     C5FailClass,
     C9RetryPosture,
+    MCPInvocationFailClass,
     SandboxFailClass,
     SandboxFailClassMetadata,
     fail_class_metadata,
     permanent_fail_skips_staircase,
+    project_mcp_to_sandbox_fail_class,
 )
 from harness_as.sandbox_provider_class import (
     ClassCardinality,
@@ -263,6 +266,7 @@ __all__ = [
     "REDACTION_SENTINEL",
     "REFUSE",
     "SAMPLING_POLICY",
+    "MCP_INVOCATION_ATTRIBUTE_SCHEMA",
     "SANDBOX_ATTRIBUTE_SCHEMA",
     "SANDBOX_ENTER_ATTRIBUTES",
     "SANDBOX_EXIT_ATTRIBUTES",
@@ -315,6 +319,7 @@ __all__ = [
     "JSONSchema",
     "MCPServer",
     "MCPServerTrustLevel",
+    "MCPInvocationFailClass",
     "MCPTransport",
     "MechanismClass",
     "MemoryToolStorageBackend",
@@ -412,6 +417,7 @@ __all__ = [
     "override_scope",
     "permanent_fail_skips_staircase",
     "persona_tier_traversal_ascends",
+    "project_mcp_to_sandbox_fail_class",
     "provider_belongs_to",
     "provider_class_metadata",
     "redact_secrets_in_input_span_attributes",

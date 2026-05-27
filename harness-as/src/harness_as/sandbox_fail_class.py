@@ -10,6 +10,13 @@ Spec_Action_Surface_v1.md §4 C-AS-04; ADR-D2 v1.1 §1.7.1 + §1.8.
 
 C9 retry-posture is informational at this unit — the actual retry loop
 lives in the CP-axis plan (acceptance #7).
+
+v1.4 carrier-extension (per AS plan v1.4 §1) — additionally declares
+`MCPInvocationFailClass` 4-value StrEnum per AS spec v1.6 §15.8 and the
+`project_mcp_to_sandbox_fail_class` projection function per §15.10. The
+MCP-protocol-layer taxonomy siblings the F4 process-execution-layer
+taxonomy above; both compose on the `sandbox.violation` child span per
+§15.9 dual-attribute emission discipline.
 """
 
 from __future__ import annotations
@@ -149,3 +156,50 @@ def permanent_fail_skips_staircase(c: SandboxFailClass) -> bool:
     True exactly for ESCAPE_ATTEMPT, EGRESS_DENIED, SIGNAL (C-AS-04 §4.2).
     """
     return _FAIL_CLASS_METADATA[c].skips_pre_hitl_staircase
+
+
+# --- MCP-protocol-layer fail-class (v1.4 carrier-extension; AS spec v1.6 §15.8) --
+
+
+class MCPInvocationFailClass(StrEnum):
+    """The 4 MCP-protocol-layer fail classes (C-AS-15 §15.8).
+
+    Sibling to `SandboxFailClass` (F4 process-execution-layer at §4.1).
+    Carries what FAILED at the MCP-protocol boundary; F4 carries what
+    FAILED inside the sandboxed process. Both compose on the
+    `sandbox.violation` child span per §15.9 dual-attribute emission.
+    """
+
+    TRANSPORT = "transport"
+    PROTOCOL_ERROR = "protocol_error"
+    SCHEMA_VIOLATION = "schema_violation"
+    TIMEOUT = "timeout"
+
+
+_MCP_TO_SANDBOX_PROJECTION: Mapping[MCPInvocationFailClass, SandboxFailClass] = MappingProxyType(
+    {
+        MCPInvocationFailClass.TRANSPORT: SandboxFailClass.EXIT_NONZERO,
+        MCPInvocationFailClass.PROTOCOL_ERROR: SandboxFailClass.EXIT_NONZERO,
+        MCPInvocationFailClass.SCHEMA_VIOLATION: SandboxFailClass.POLICY_OVERRIDE,
+        MCPInvocationFailClass.TIMEOUT: SandboxFailClass.TIMEOUT,
+    }
+)
+
+
+def project_mcp_to_sandbox_fail_class(
+    mcp_fail_class: MCPInvocationFailClass,
+) -> SandboxFailClass:
+    """Best-effort projection MCP-shape → F4 process-shape per §15.10.
+
+    Total over the 4-value MCPInvocationFailClass domain. Used at the
+    dispatcher exception-handler binding to emit BOTH attributes from
+    BOTH enums per §15.9 emission discipline (recommended default
+    option (a) at §15.10).
+
+    Projection is best-effort: §15.10 row 3
+    (`schema_violation → policy_override`) is flagged HIGH semantic
+    stretch in the spec itself. Future ADR-D2 / F4 enum revision arc
+    MAY add a `contract_violation` value to absorb this projection
+    cleanly.
+    """
+    return _MCP_TO_SANDBOX_PROJECTION[mcp_fail_class]

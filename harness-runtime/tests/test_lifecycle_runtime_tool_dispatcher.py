@@ -48,11 +48,14 @@ from harness_is.state_ledger_entry_schema import Actor, ActorClass
 
 from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
 from harness_runtime.lifecycle.runtime_tool_dispatcher import (
+    MCPHostUnreachableError,
     RuntimeToolDispatcher,
     SandboxDispatchDecision,
     SandboxTierFloorViolationError,
     ToolContractUnknownError,
+    ToolInvocationProtocolError,
     ToolInvocationSchemaViolationError,
+    ToolInvocationTimeoutError,
     ToolInvocationTrustViolationError,
 )
 
@@ -471,5 +474,190 @@ async def test_default_sandbox_resolver_raises() -> None:
                 _make_step("echo", {"message": "x"}),
                 step_context=_make_step_context(),
             )
+    finally:
+        await host.shutdown()
+
+
+# ---------- AS spec v1.6 §15.9 dual-attribute emission discipline ---------
+
+
+def _otel_setup() -> tuple[InMemorySpanExporter, TracerProvider]:
+    """Standalone in-memory OTel exporter + provider for dispatcher tests."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return exporter, provider
+
+
+async def _dispatch_with_failing_call_tool(
+    exc: Exception,
+) -> tuple[InMemorySpanExporter, Exception]:
+    """Build a real fastmcp-backed dispatcher, then patch host.call_tool to
+    raise `exc` post-MCP-span-open. Returns the OTel exporter + the
+    raised exception for caller assertions."""
+    host = await _build_started_host()
+
+    async def _failing_call_tool(*_args, **_kwargs):
+        raise exc
+
+    # Patch the bound method on this host instance.
+    host.call_tool = _failing_call_tool  # type: ignore[method-assign]
+
+    exporter, provider = _otel_setup()
+    dispatcher = RuntimeToolDispatcher(
+        mcp_client_host=host,
+        per_server_trust_evaluator=PerServerTrustEvaluator(),
+        mcp_namespace_emitter=_make_emitter(),
+        trust_policy=_make_trust_policy(),
+        sandbox_decision_resolver=_good_sandbox_resolver,
+        tracer_provider=provider,
+    )
+    raised: Exception | None = None
+    try:
+        try:
+            await dispatcher.dispatch(
+                _make_binding(),
+                _make_step("echo", {"message": "x"}),
+                step_context=_make_step_context(),
+            )
+        except Exception as e:
+            raised = e
+    finally:
+        await host.shutdown()
+    assert raised is not None
+    return exporter, raised
+
+
+def _violation_attrs(exporter: InMemorySpanExporter) -> dict[str, object]:
+    spans = exporter.get_finished_spans()
+    violation = next((s for s in spans if s.name == "sandbox.violation"), None)
+    assert violation is not None, (
+        f"expected sandbox.violation span, got names={[s.name for s in spans]}"
+    )
+    return dict(violation.attributes or {})
+
+
+@pytest.mark.asyncio
+async def test_dispatch_transport_failure_emits_sandbox_violation_dual_attrs() -> None:
+    """§15.9 row 2 — MCPHostUnreachableError → mcp.fail.class=transport;
+    projected sandbox.fail.class=exit_nonzero per §15.10 row 1."""
+    exporter, raised = await _dispatch_with_failing_call_tool(
+        MCPHostUnreachableError("host unreachable")
+    )
+    assert isinstance(raised, MCPHostUnreachableError)
+    attrs = _violation_attrs(exporter)
+    assert attrs["mcp.fail.class"] == "transport"
+    assert attrs["sandbox.fail.class"] == "exit_nonzero"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_protocol_error_emits_sandbox_violation_dual_attrs() -> None:
+    """ToolInvocationProtocolError → mcp.fail.class=protocol_error;
+    projected sandbox.fail.class=exit_nonzero per §15.10 row 2."""
+    exporter, raised = await _dispatch_with_failing_call_tool(
+        ToolInvocationProtocolError("malformed")
+    )
+    assert isinstance(raised, ToolInvocationProtocolError)
+    attrs = _violation_attrs(exporter)
+    assert attrs["mcp.fail.class"] == "protocol_error"
+    assert attrs["sandbox.fail.class"] == "exit_nonzero"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_timeout_emits_sandbox_violation_dual_attrs() -> None:
+    """§15.9 row 4 — ToolInvocationTimeoutError → mcp.fail.class=timeout;
+    projected sandbox.fail.class=timeout per §15.10 row 4 (value-name parity)."""
+    exporter, raised = await _dispatch_with_failing_call_tool(
+        ToolInvocationTimeoutError("call timed out")
+    )
+    assert isinstance(raised, ToolInvocationTimeoutError)
+    attrs = _violation_attrs(exporter)
+    assert attrs["mcp.fail.class"] == "timeout"
+    assert attrs["sandbox.fail.class"] == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_schema_violation_emits_sandbox_violation_dual_attrs() -> None:
+    """§15.9 row 3 — jsonschema.ValidationError → mcp.fail.class=schema_violation;
+    projected sandbox.fail.class=policy_override per §15.10 row 3 (HIGH stretch).
+
+    Uses a real fastmcp server with strict output schema that the echo
+    response will fail (the dispatcher catches `jsonschema.ValidationError`
+    inside its own `_validate_response_schema` step).
+    """
+    server = _build_fastmcp_server()
+
+    def strict_converter(tool):
+        return ToolContract(
+            name=tool.name,
+            description=tool.description or "",
+            input_schema=tool.inputSchema or {"type": "object"},
+            output_schema={
+                "type": "object",
+                "required": ["must_be_present"],
+                "properties": {"must_be_present": {"type": "string"}},
+            },
+            minimum_tier=SandboxTier.TIER_1_PROCESS,
+            blast_radius_tier=BlastRadiusTier.READ_ONLY,
+        )
+
+    host = MCPClientHost(
+        transport="stdio",
+        server_name="dispatcher-test-srv",
+        trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
+        transport_config={"command": "unused"},
+        tool_contract_converter=strict_converter,
+        session_context_factory=_build_session_factory(server),
+    )
+    await host.start()
+    exporter, provider = _otel_setup()
+    dispatcher = RuntimeToolDispatcher(
+        mcp_client_host=host,
+        per_server_trust_evaluator=PerServerTrustEvaluator(),
+        mcp_namespace_emitter=_make_emitter(),
+        trust_policy=_make_trust_policy(),
+        sandbox_decision_resolver=_good_sandbox_resolver,
+        tracer_provider=provider,
+    )
+    try:
+        with pytest.raises(ToolInvocationSchemaViolationError):
+            await dispatcher.dispatch(
+                _make_binding(),
+                _make_step("echo", {"message": "x"}),
+                step_context=_make_step_context(),
+            )
+        attrs = _violation_attrs(exporter)
+        assert attrs["mcp.fail.class"] == "schema_violation"
+        assert attrs["sandbox.fail.class"] == "policy_override"
+    finally:
+        await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_happy_path_emits_no_sandbox_violation() -> None:
+    """Success path: sandbox.exit emits without a preceding sandbox.violation.
+
+    Regression guard — the violation span only opens on the exception path
+    per §15.9 emission discipline.
+    """
+    host = await _build_started_host()
+    exporter, provider = _otel_setup()
+    dispatcher = RuntimeToolDispatcher(
+        mcp_client_host=host,
+        per_server_trust_evaluator=PerServerTrustEvaluator(),
+        mcp_namespace_emitter=_make_emitter(),
+        trust_policy=_make_trust_policy(),
+        sandbox_decision_resolver=_good_sandbox_resolver,
+        tracer_provider=provider,
+    )
+    try:
+        await dispatcher.dispatch(
+            _make_binding(),
+            _make_step("echo", {"message": "ok"}),
+            step_context=_make_step_context(),
+        )
+        names = {s.name for s in exporter.get_finished_spans()}
+        assert "sandbox.violation" not in names
+        assert "sandbox.exit" in names
     finally:
         await host.shutdown()
