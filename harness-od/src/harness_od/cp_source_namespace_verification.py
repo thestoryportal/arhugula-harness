@@ -11,7 +11,7 @@ substrate seam exports manifest (C-CP-24 §24.1.A + §24.1.B).
 
 `routing.*` is deliberately NOT in the CP-source set (acceptance #3): per
 C-OD-05 §5.1 it is a CP-axis-only namespace declared at C-CP-01 §1.4 and
-inherited from the parent `llm.inference` span under sampling composition — it
+inherited from the parent LLM inference span under sampling composition — it
 is not directly ingested at the OD axis.
 
 Per the §5.2 source-as-authoritative-declarer invariant, OD does NOT re-declare

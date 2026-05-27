@@ -3,11 +3,13 @@
 Implements C-CP-01 §1.4 (run-event attribution at call surface). Declares the
 `RoutingAttributeSchema` record and the 4-entry `ROUTING_NAMESPACE_SCHEMA`.
 
-The `routing.*` attributes attach to the `llm.inference` span emitted per AS
-C-AS-14 §14.2 (`anthropic.*` namespace + cross-family analogs) and are
-namespace-rooted at `routing.*` per the OTel GenAI semconv extension. The
-namespace carries **no independent sampling discipline** — it inherits from the
-parent `llm.inference` span per C-CP-24 §24.1.C. D6 ingestion is out of scope
+The `routing.*` attributes attach to the LLM inference span (per AS spec v1.7
+§14.1 alias-term convention; actual runtime span-name `{operation} {model}`
+per OD spec v1.12 §C-OD-04 §4.1) emitted per AS C-AS-14 §14.2 (`anthropic.*`
+namespace + cross-family analogs) and are namespace-rooted at `routing.*` per
+the OTel GenAI semconv extension. The namespace carries **no independent
+sampling discipline** — it inherits from the parent LLM inference span per
+C-CP-24 §24.1.C. D6 ingestion is out of scope
 at this unit; OD plan Session 4 ingests via the U-CP-54 namespace export
 manifest.
 
@@ -44,11 +46,14 @@ class RoutingAttributeSchema(BaseModel):
 
     inherited_from: str
     """Parent-span citation — every `routing.*` attribute inherits from the
-    `llm.inference` parent span per OTel GenAI semconv 1.41.0 (acceptance #2)."""
+    LLM inference span (per AS spec v1.7 §14.1 alias-term convention; actual
+    runtime span-name format `{operation} {model}` per OD spec v1.12
+    §C-OD-04 §4.1, byte-exact to OTel GenAI semconv 1.41.0). (acceptance #2)."""
 
 
 _LLM_INFERENCE_PARENT = (
-    "llm.inference parent span per OTel GenAI semconv 1.41.0"
+    "the LLM inference span per OTel GenAI semconv 1.41.0 "
+    "(AS spec v1.7 §14.1 alias-term; OD spec v1.12 §C-OD-04 §4.1 format owner)"
 )
 
 # --- Registry population (spec C-CP-01 §1.4 attribute table) ----------------

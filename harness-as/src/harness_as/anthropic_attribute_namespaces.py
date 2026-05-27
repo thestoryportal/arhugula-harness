@@ -106,8 +106,8 @@ def _row(
     )
 
 
-# §14.2 — anthropic.* (10 attributes on the llm.inference span)
-_ANTHROPIC_SPAN = "llm.inference"
+# §14.2 — anthropic.* (10 attributes on the LLM inference span per AS spec v1.7 §14.1 alias-term convention)
+_ANTHROPIC_SPAN = "the LLM inference span"  # alias-term per AS spec v1.7 §14.1 (decouples parent-anchor from runtime span-name owned by OD spec v1.12 §C-OD-04 §4.1)
 ANTHROPIC_NAMESPACE_SCHEMA: tuple[AttributeSchema, ...] = (
     _row("anthropic.cache_creation_input_tokens", _INT, "Cache write count", _PR, _ANTHROPIC_SPAN),
     _row(
@@ -288,7 +288,7 @@ MEMORY_NAMESPACE_SCHEMA: tuple[AttributeSchema, ...] = (
     _row(
         "memory.context_editing_active",
         _BOOL,
-        "True if parent llm.inference uses clear_tool_uses_20250919",
+        "True if parent (the LLM inference span) uses clear_tool_uses_20250919",
         _LOW,
         _MEMORY_SPAN,
     ),

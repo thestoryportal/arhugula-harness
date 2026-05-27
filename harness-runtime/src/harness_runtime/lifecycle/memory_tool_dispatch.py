@@ -105,11 +105,13 @@ def step_has_memory_tool(payload_tools: Sequence[Mapping[str, Any]] | None) -> b
 
 
 def derive_context_editing_active(payload_params: Mapping[str, Any]) -> bool:
-    """Return True iff parent `llm.inference` step has Anthropic context
+    """Return True iff the parent LLM inference span step has Anthropic context
     management `clear_tool_uses_20250919` edit excluding `"memory"`.
 
-    Per AS spec v1.5 §14.7 row 6: `memory.context_editing_active` is True
-    iff parent `llm.inference` uses `clear_tool_uses_20250919` with
+    Per AS spec v1.7 §14.7 row 6: `memory.context_editing_active` is True
+    iff the parent (the LLM inference span per AS §14.1 alias-term; runtime
+    span-name format owned by OD spec v1.12 §C-OD-04 §4.1) uses
+    `clear_tool_uses_20250919` with
     `exclude_tools: ["memory"]` per docs.claude.com [HIGH]. The directive
     rides in `payload.params["context_management"]` per Anthropic's
     `BetaContextManagementConfigParam` shape.
