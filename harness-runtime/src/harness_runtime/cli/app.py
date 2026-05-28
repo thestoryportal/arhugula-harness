@@ -33,11 +33,6 @@ from harness_runtime.lifecycle.workflow_manifest_loader import (
     WorkflowManifestLoader,
 )
 
-_STUB_DAEMON_CLIENT_MESSAGE = (
-    "Not yet implemented — landing at U-RT-108 (daemon-client mode)"
-)
-
-
 class OutputFormat(StrEnum):
     """`harness run --output` format selector per Q-F at G1 ratification."""
 
@@ -144,6 +139,116 @@ def _print_fail_class(fail_class: str, detail: str) -> None:
     typer.echo(f"{fail_class}: {detail}", err=True)
 
 
+async def _daemon_client_dispatch(
+    *,
+    workflow_file: Path,
+    socket_path: Path,
+) -> dict[str, Any]:
+    """Connect to the running daemon via Unix-socket; invoke run_workflow.
+
+    Per `.harness/class_1_fork_u_rt_107_daemon_run_workflow_signature_
+    underspec.md` Reading (A) + Q2=(i) ratification: the daemon's
+    ``run_workflow`` tool accepts the manifest filesystem path as the
+    ``workflow_id`` argument; the daemon-side handler discriminates path-vs-
+    registry-key and loads the manifest on path-input.
+
+    Transport: MCP streamable-HTTP over Unix-socket via a custom httpx
+    client factory injecting :class:`httpx.AsyncHTTPTransport(uds=...)`. The
+    URL hostname is irrelevant when uds is bound at the transport; the path
+    component matches FastMCP's default ``streamable_http_path = "/mcp"``.
+
+    Returns
+    -------
+    dict[str, Any]
+        Raw JSON dict returned by the ``run_workflow`` tool (CP RunResult
+        ``model_dump(mode='json')`` shape per U-RT-62 handler line ~242).
+    """
+    import httpx
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+
+    transport = httpx.AsyncHTTPTransport(uds=str(socket_path))
+    http_client = httpx.AsyncClient(
+        transport=transport, timeout=httpx.Timeout(30.0)
+    )
+
+    try:
+        async with streamable_http_client(
+            "http://harness-daemon/mcp",
+            http_client=http_client,
+        ) as (read_stream, write_stream, _get_session_id):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                tool_result = await session.call_tool(
+                    "run_workflow",
+                    {"workflow_id": str(workflow_file)},
+                )
+    except OSError as exc:
+        raise DaemonStartupError(
+            f"failed to connect to daemon at {socket_path}: {exc}"
+        ) from exc
+    finally:
+        await http_client.aclose()
+
+    if tool_result.isError:
+        # The handler raised; surface the textual error to operator.
+        text_block = (
+            tool_result.content[0]
+            if tool_result.content
+            else None
+        )
+        detail = getattr(text_block, "text", "unknown tool error")
+        raise DaemonStartupError(
+            f"daemon-side run_workflow failed: {detail}"
+        )
+    if not tool_result.content:
+        raise DaemonStartupError(
+            "daemon-side run_workflow returned empty content"
+        )
+
+    import json
+
+    text_block = tool_result.content[0]
+    payload_text = getattr(text_block, "text", None)
+    if payload_text is None:
+        raise DaemonStartupError(
+            f"daemon-side run_workflow returned non-text content: "
+            f"{type(text_block).__name__}"
+        )
+    parsed = json.loads(payload_text)
+    if not isinstance(parsed, dict):
+        raise DaemonStartupError(
+            f"daemon-side run_workflow returned non-dict payload: "
+            f"{type(parsed).__name__}"
+        )
+    result: dict[str, Any] = {str(k): v for k, v in parsed.items()}  # type: ignore[reportUnknownVariableType,reportUnknownMemberType]
+    return result
+
+
+# CP RunStatus → CLI exit code mapping (mirror of api.py:_CP_TO_RT_STATUS).
+# CP statuses: 'success' / 'drained' / 'failed' / 'partial' / 'pending'.
+_CP_STATUS_TO_EXIT_CODE: dict[str, int] = {
+    "success": EXIT_SUCCESS,
+    "drained": EXIT_WORKFLOW_FAIL,
+    "failed": EXIT_WORKFLOW_FAIL,
+    "partial": EXIT_WORKFLOW_FAIL,
+    "pending": EXIT_WORKFLOW_FAIL,
+}
+
+
+def _emit_daemon_run_result(payload: dict[str, Any], *, output: OutputFormat) -> None:
+    """Emit the daemon-side CP RunResult payload per ``--output`` mode."""
+    if output is OutputFormat.json:
+        import json
+
+        typer.echo(json.dumps(payload))
+        return
+    typer.echo(f"status:    {payload.get('status', 'unknown')}")
+    typer.echo(f"workflow:  {payload.get('workflow_id', '-')}")
+    if payload.get("fail_class"):
+        typer.echo(f"fail:      {payload['fail_class']}", err=True)
+
+
 @app.command("run")
 def run_command(
     workflow_file: Annotated[
@@ -177,11 +282,40 @@ def run_command(
         str | None,
         typer.Option("--tenant-id", help="Override RuntimeConfig.tenant_id"),
     ] = None,
+    socket_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--socket-path",
+            help="Unix-socket path of the daemon (only with --daemon)",
+        ),
+    ] = None,
 ) -> None:
     """Invoke a workflow (one-shot, or daemon-client when ``--daemon`` is set)."""
     if daemon:
-        typer.echo(_STUB_DAEMON_CLIENT_MESSAGE, err=True)
-        raise typer.Exit(code=EXIT_BOOTSTRAP_ERROR)
+        # --- Daemon-client mode (U-RT-108 per plan v2.31 §1.8) -----------
+        resolved_socket = (
+            socket_path if socket_path is not None else _default_daemon_socket_path()
+        )
+        if not resolved_socket.exists():
+            _print_fail_class(
+                "RT-FAIL-CLI-DAEMON-CONNECTION",
+                f"socket path {resolved_socket} does not exist (daemon not running?)",
+            )
+            raise typer.Exit(code=EXIT_BOOTSTRAP_ERROR)
+        try:
+            payload = asyncio.run(
+                _daemon_client_dispatch(
+                    workflow_file=workflow_file, socket_path=resolved_socket
+                )
+            )
+        except DaemonStartupError as exc:
+            _print_fail_class(exc.FAIL_CLASS, str(exc))
+            raise typer.Exit(code=EXIT_BOOTSTRAP_ERROR) from exc
+        _emit_daemon_run_result(payload, output=output)
+        status = str(payload.get("status", "")).lower()
+        raise typer.Exit(
+            code=_CP_STATUS_TO_EXIT_CODE.get(status, EXIT_WORKFLOW_FAIL)
+        )
 
     # --- Stage 1: config load (RT-FAIL-CLI-CONFIG-LOAD → exit 3) ----------
     cli_overrides = _build_cli_overrides(tenant_id=tenant_id)
