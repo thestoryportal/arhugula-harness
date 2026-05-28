@@ -57,6 +57,7 @@ from harness_cp.workflow_driver_types import (
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_runtime.lifecycle.sync_dispatcher_facade import (
     AsyncStepDispatcher,
+    StepDispatchTimeoutError,
     materialize_sync_dispatcher_facade,
 )
 
@@ -282,14 +283,16 @@ async def test_d3_facade_satisfies_step_dispatcher_protocol() -> None:
 
 @pytest.mark.asyncio
 async def test_d4_result_timeout_fires() -> None:
-    """D4 — ``result_timeout_seconds`` raises when inner exceeds budget."""
+    """D4 — ``result_timeout_seconds`` raises ``StepDispatchTimeoutError``
+    when inner exceeds the per-step worker-thread blocking bound (spec
+    v1.31 §11 RT-FAIL-STEP-DISPATCH-TIMEOUT)."""
     inner = _SlowAsyncDispatcher(delay_seconds=2.0)
     facade = materialize_sync_dispatcher_facade(inner, result_timeout_seconds=0.1)
 
     def _worker() -> Mapping[str, Any]:
         return facade.dispatch(_binding(), _step(), step_context=_step_context())
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(StepDispatchTimeoutError):
         await asyncio.to_thread(_worker)
 
 

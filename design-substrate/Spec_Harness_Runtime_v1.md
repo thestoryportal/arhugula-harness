@@ -1,4 +1,38 @@
-# Specification — Harness Runtime v1.30
+# Specification — Harness Runtime v1.31
+
+## Change-note (v1.30 → v1.31)
+
+**Scope of revision.** Substantive amendment authoring NEW `step_dispatch_timeout_seconds: float = 30.0` field at §3 C-RT-03 `RuntimeConfig` schema + NEW `RT-FAIL-STEP-DISPATCH-TIMEOUT` fail class at §11 failure-mode taxonomy. Resolves the v1.30 §7 carve-out documented at "Adjacent observation" below ("fork doc §7 (step_dispatch_timeout_seconds) CARVED OUT, NOT absorbed at v1.30") and closes the final outstanding item in the 8-item `class_3_tension_u_rt_59_spec_prose_drift.md` carry (8-OF-8 CLOSED at v1.31; carry-window 22 + 1 = 23 delta versions × 8 days).
+
+**Source of fix.** `.harness/class_1_fork_step_dispatch_timeout_seconds_field_extension.md` Reading A + operator ratification 2026-05-28 (Q1=A required-field-with-default; Q2=30.0s default; Q3=β in-place at U-RT-02; Q4=p `RT-FAIL-STEP-DISPATCH-TIMEOUT`). Fork doc cites §1.3 failure mode: production at HEAD passes `config.drain_timeout_seconds` as `result_timeout_seconds` to `materialize_sync_dispatcher_facade(...)` at all 3 stage-5 callsites (`stage_5_loop_init.py:332/336/356`), conflating the per-step worker-thread blocking bound with the whole-workflow drain shutdown bound. A single hung step can consume the entire drain-timeout budget at the per-step layer; the per-step bound is operationally inert pre-v1.31. v1.31 splits the bounds at the spec contract layer; production binding co-publishes this arc.
+
+**v1.30 substantive content preserved verbatim.** v1.30 canonical-reading amendment for 7 of 8 u_rt_59 spec-prose drift items + v1.29..v1 lineage content preserved unchanged at v1.31. The v1.30 "Adjacent observation — fork doc §7 (step_dispatch_timeout_seconds) CARVED OUT" disposition is RESOLVED at v1.31 per Reading A absorption; the v1.30 carry-text is preserved verbatim per delta-only-spec-file convention with the v1.31 closure documented here.
+
+**Amendment site §1 — §3 C-RT-03 `RuntimeConfig` schema.** Append the following row to the §3 field table:
+
+| Field | Type | Required | Semantic |
+|---|---|---|---|
+| `step_dispatch_timeout_seconds` | `float` | no (default `30.0`) | Per-step worker-thread blocking bound at `SyncDispatcherFacade.dispatch`'s `future.result(timeout=...)`. A single step's hang surfaces a typed `RT-FAIL-STEP-DISPATCH-TIMEOUT` failure BEFORE the whole-workflow `drain_timeout_seconds` bound fires. Independent of `drain_timeout_seconds`; the drain bound serves as backstop ensuring shutdown progress when per-step bound is exceeded or when other progress conditions fail. Default `30.0` (~2× headroom against the `drain_timeout_seconds = 60.0` default per `RuntimeConfig.drain_timeout_seconds` declaration at the `harness-runtime/src/harness_runtime/types.py` schema). Ingested at stage 5 by all 3 `materialize_sync_dispatcher_facade(...)` callsites (INFERENCE_STEP / SUB_AGENT_DISPATCH / TOOL_STEP) per `stage_5_loop_init.py:332/336/356`; threaded into the facade's `result_timeout_seconds` constructor parameter (replacing the v1.30-era `config.drain_timeout_seconds` conflation per fork doc §1.1). Added at v1.31 per `.harness/class_1_fork_step_dispatch_timeout_seconds_field_extension.md` Reading A ratification (2026-05-28). |
+
+**Amendment site §2 — §11 failure-mode taxonomy.** Append the following row to the §11 fail-class taxonomy table:
+
+| Fail class | Severity | Trigger | Mitigation |
+|---|---|---|---|
+| `RT-FAIL-STEP-DISPATCH-TIMEOUT` (new at v1.31) | transient | `SyncDispatcherFacade.dispatch`'s `future.result(timeout=config.step_dispatch_timeout_seconds)` raises `concurrent.futures.TimeoutError` before the worker thread returns the step result. Sibling to `RT-FAIL-DRAIN-TIMEOUT` at the per-step layer (vs whole-workflow layer). | Per-step failure surfaces via the existing `StepDispatcher` Protocol fail-propagation path (workflow driver `try/except` maps to `step-failure: RT-FAIL-STEP-DISPATCH-TIMEOUT: ...` per C-CP-25 §25.3.3.4). Worker thread is NOT cancelled (Python threads cannot be cancelled); the worker may continue but its result is discarded. The whole-workflow `drain_timeout_seconds` bound remains as backstop ensuring shutdown progress. |
+
+**Production binding co-publication.** This amendment co-publishes with production binding at the same arc per Reading A ratification (Q1=A precondition). Binding sites:
+
+- `harness-runtime/src/harness_runtime/types.py` — NEW `step_dispatch_timeout_seconds: float = 30.0` field on `RuntimeConfig` (sibling to existing `drain_timeout_seconds: float = 60.0` field).
+- `harness-runtime/src/harness_runtime/bootstrap/stage_5_loop_init.py:332/336/356` — 3 callsite updates reading `config.step_dispatch_timeout_seconds` instead of `config.drain_timeout_seconds` for `result_timeout_seconds`. The drift-item-7 comment marker at lines 325-331 is removed at this arc (closure-and-cleanup).
+- New `RT-FAIL-STEP-DISPATCH-TIMEOUT` fail class registration at the runtime fail-class enum.
+
+**ZERO cross-axis cascade verified at filing.** Per fork doc §4: `step_dispatch_timeout_seconds` is intra-C-RT-03; no IS / AS / CP / OD / CXA / ADR / ADD / PRD artifact cites the field. Verified via grep at `design-substrate/` this arc — no consumer references the field name (field does not exist pre-v1.31). NO CP spec / OD spec / AS spec / CXA / ADR / ADD / PRD amendment owed at v1.31.
+
+**Adjacent observation (NOT patched per FM-2).** ZERO other findings surfaced at this arc. The v1.30 "Adjacent observation — fork doc §7 CARVED OUT" disposition is the immediate predecessor of v1.31's amendment scope; no new defect catalogued.
+
+**Status posture.** Proposed (v1.30) → **Proposed (v1.31)**. v1.31 is a substantive amendment (NEW field + NEW fail class at C-RT-03 + C-RT-11 contract surfaces). Pattern catalogued: **carve-out → fork-doc → ratify → apply** lineage per Reading A operator-ratified path; mirror shape with `h_t_cp_19_default_gate_level_spec_extension` precedent (filed → ratified → applied single-day 3-arc); the v1.31 arc is 1-arc absorption (file already at v1.30) consuming the v1.30 carve-out disposition. **8-OF-8 CLOSED** at `class_3_tension_u_rt_59_spec_prose_drift.md` carry-set (residual carry at §1 §14.7.6 occurrences is documented at the v1.30 absorption note §1 row; no further item).
+
+---
 
 ## Change-note (v1.29 → v1.30)
 

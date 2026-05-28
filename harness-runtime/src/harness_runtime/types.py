@@ -1030,6 +1030,29 @@ class RuntimeConfig(BaseModel):
     Lane 6 (2026-05-20) addition; spec §3 (C-RT-03) "Deferred to
     implementation discretion" clause covers this configuration."""
 
+    step_dispatch_timeout_seconds: float = 30.0
+    """Per-step worker-thread blocking bound (C-RT-03 v1.31; RT-FAIL-STEP-
+    DISPATCH-TIMEOUT).
+
+    Threaded into all 3 stage-5 `materialize_sync_dispatcher_facade(...)`
+    callsites as the facade's `result_timeout_seconds` constructor parameter
+    (INFERENCE_STEP / SUB_AGENT_DISPATCH / TOOL_STEP). A single step's hang
+    surfaces `RT-FAIL-STEP-DISPATCH-TIMEOUT` BEFORE the whole-workflow
+    `drain_timeout_seconds` bound fires.
+
+    Independent of `drain_timeout_seconds`: the drain bound serves as
+    backstop ensuring shutdown progress when the per-step bound is exceeded
+    or other progress conditions fail. Default 30.0 (~2× headroom against
+    drain default 60.0). Worker threads are not cancelled — Python threads
+    cannot be cancelled cooperatively; result is discarded on per-step
+    timeout.
+
+    Resolves the v1.7..v1.30 per-step ↔ whole-workflow timeout-budget
+    conflation documented at `class_3_tension_u_rt_59_spec_prose_drift.md`
+    §7 (filed 2026-05-20; CLOSED 2026-05-28 at v1.31 / v2.27). Added at
+    v1.31 per `.harness/class_1_fork_step_dispatch_timeout_seconds_field_
+    extension.md` Reading A ratification (Q1=A, Q2=30.0s)."""
+
     pidfile_path: Path | None = None
     """Override for the pidfile location (spec §13 deferred-to-discretion).
 
