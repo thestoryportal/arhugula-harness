@@ -55,13 +55,12 @@ def test_harness_daemon_help_shows_flag_inventory() -> None:
     assert "--config" in _plain(result.stdout)
 
 
-# AC #4
-def test_harness_run_stub_exits_code_4(tmp_path: Path) -> None:
-    fake_workflow = tmp_path / "wf.yaml"
-    fake_workflow.write_text("# stub\n", encoding="utf-8")
-    result = runner.invoke(app, ["run", str(fake_workflow)])
-    assert result.exit_code == 4
-    assert "Not yet implemented" in _plain(result.stderr)
+# AC #4 — SUPERSEDED at U-RT-106 (one-shot mode body landed at runtime plan
+# v2.31 §1.6 / v2.32 §2). The U-RT-102 stub message is no longer emitted by
+# `harness run <file>`; the concrete one-shot body + the 11 ACs at
+# `test_cli_one_shot.py` supersede this scaffolding-stage assertion. The
+# `harness run --daemon` flag remains a stub (U-RT-108) and is covered at
+# U-RT-108 landing.
 
 
 # AC #5
