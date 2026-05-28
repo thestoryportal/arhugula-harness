@@ -1,5 +1,7 @@
 # Class 1 Tension — U-CP-43 spec-silent gate-level floors
 
+**Status:** ✅ PARTIALLY-CLOSED (verified workspace-wide audit 2026-05-20; status-line refreshed 2026-05-27) — partial-lands at `gate_level_rule.py`: BLAST_RADIUS + PERSONA_TIER floors materialized; MCP_TRUST + DEPLOYMENT_SURFACE floors struck due to spec §19.1 silence. 2/4 floors DEFERRED-PARTITION pending spec amendment — operator decision owed but not architectural defect. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
 **Filed:** 2026-05-16 — Phase 7 sub-phase 7b, CP axis-stream.
 **Unit:** U-CP-43 — 4-axis multiplicative gate-level rule (C-CP-19 §19.1/§19.2/§19.4).
 **Disposition:** halt-route-split-AC — U-CP-43 partial-landed; two acceptance

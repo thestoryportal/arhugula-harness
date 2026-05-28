@@ -1,5 +1,7 @@
 # Class 1 Tension — U-AS-31 cross-axis consumption of CP-homed schema enums
 
+**Status:** ✅ CLOSED-via-harness-core-v1.0 (resolved 2026-05-16; verified workspace-wide audit 2026-05-20; status-line refreshed 2026-05-27) — operator-ratified re-home: `AttributeValueType` + `Cardinality` moved to `harness-core` v1.0; U-AS-31 lands. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
 *Phase 7 sub-phase 7b. Fork detected at U-AS-31 execution-time (AS Level-2
 cluster). Routed per `CLAUDE.md` §4.3 + `harness-as/CLAUDE.md` §5. **RESOLVED**
 2026-05-16 — operator ruled re-home; applied; U-AS-31 landed.*

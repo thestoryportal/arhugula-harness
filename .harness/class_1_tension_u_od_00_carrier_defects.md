@@ -1,5 +1,7 @@
 # Class 1 Tension — U-OD-00 carrier-unit defects (D-1 / D-2 / D-3)
 
+**Status:** ✅ CLOSED-via-OD-plan-v2.7 (resolved 2026-05-15; verified workspace-wide audit 2026-05-20; status-line refreshed 2026-05-27) — D-1/D-2/D-3 carrier defects addressed at OD plan v2.7. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
 *Phase 7 sub-phase 7b. Fork detected at U-OD-00 execution-time. Routed per
 `CLAUDE.md` §4.3 + `harness-od/CLAUDE.md` §5.1. RESOLVED — operator ruling
 2026-05-15.*

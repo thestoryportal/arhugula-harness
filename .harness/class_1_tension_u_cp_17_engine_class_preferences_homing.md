@@ -1,5 +1,7 @@
 # Class 1 Tension — U-CP-17 `EngineClassPreferences` carrier homed at a blocked unit
 
+**Status:** ✅ PARTIALLY-CLOSED (verified workspace-wide audit 2026-05-20; status-line refreshed 2026-05-27) — partial-lands at `workload_binding_engine_class_selection.py` (4/5 steps of §7.3 procedure; step 4 'apply operator preferences' struck). `EngineClassPreferences` re-homing is DEFERRED-PARTITION resolving at future CP plan revision designating permanent home — not open architectural defect. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
 **Filed:** 2026-05-16
 **Filer:** phase-7-implementation (CP axis-stream, 7b)
 **Unit:** U-CP-17 — workload-binding-time engine-class selection (5-step procedure)

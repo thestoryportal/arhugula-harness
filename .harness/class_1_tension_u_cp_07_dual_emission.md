@@ -1,5 +1,7 @@
 # Class 1 Tension — U-CP-07 acceptance #7 (dual-emission discipline)
 
+**Status:** ✅ PARTIALLY-CLOSED (verified workspace-wide audit 2026-05-20; status-line refreshed 2026-05-27) — U-CP-07 partial-lands (schemas A/1–6 landed; AC #7 + 5 emission tests struck per `[[halt-route-split-AC-pattern]]`); dual-emission discipline routed to future OTel emitter unit as bounded X-AL-2 residual, NOT open defect. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
 | Field | Value |
 |---|---|
 | Unit | U-CP-07 — Declare `fallback.*` + `harness.breaker.*` + `retry.*` namespaces |

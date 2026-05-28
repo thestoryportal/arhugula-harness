@@ -1,5 +1,7 @@
 # Class 1 Tension — U-OD-02 (cell-4 / cell-5 backend-class alternation un-materializable against single-value signature)
 
+**Status:** ✅ CLOSED-via-OD-plan-v2.8-§0.2 (resolved 2026-05-16; verified workspace-wide audit 2026-05-20; status-line refreshed 2026-05-27) — backend-class signature widened for cell-4/5 alternation; unit unblocked. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
 | Field | Value |
 |---|---|
 | Unit | U-OD-02 — Declare per-cell backend class + candidate witness columns |

@@ -1,5 +1,7 @@
 # Class 1 Tension — U-OD-13 topological-level misplacement / unmet dependency
 
+**Status:** ✅ CLOSED-via-OD-plan-v2.8-§0.2 (resolved 2026-05-16; verified workspace-wide audit 2026-05-20; status-line refreshed 2026-05-27) — Option B applied: U-OD-11 edge struck from dependency set; U-OD-13 lands at L2. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
 **Filed:** 2026-05-16
 **Sub-phase:** 7b — OD axis-stream, Level 2 batch
 **Unit:** U-OD-13 — Declare per-cell cardinality budget + Pattern P1 discipline anchor

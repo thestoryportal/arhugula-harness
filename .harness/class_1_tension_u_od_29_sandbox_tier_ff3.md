@@ -1,5 +1,7 @@
 # Class 1 Tension — U-OD-29 `SandboxTier`: 0-indexed in-unit enum vs AS-owned cross-axis enum (FF-3)
 
+**Status:** ✅ CLOSED-via-OD-plan-v2.10 (resolved 2026-05-16; verified workspace-wide audit 2026-05-20; status-line refreshed 2026-05-27) — in-unit `SandboxTier` struck; AS enum imported. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
 | Field | Value |
 |---|---|
 | Unit | U-OD-29 — Verify per-sandbox-tier OTLP reachability + F4 capability-floor composition |
