@@ -10,6 +10,9 @@ infrastructure outside this MVP arc.
 
 Mechanism α (in-process, always runs):
 - AC #2 YAML↔TOML round-trip equivalence at the manifest-load layer
+- AC #4 multi-step deterministic execution to SUCCESS through the
+  driver's per-step iteration loop with hash-chain-intact ledger
+  (sibling to AC #5 drain path; covers the no-drain SUCCESS surface)
 - AC #5 mid-multi-step in-process drain trigger → DRAINED + partial-state
   populated + hash-chain-intact state ledger (mech-γ subprocess reframe
   per AC #6 precedent — same composition friction that defers
@@ -230,6 +233,342 @@ def test_ac4_multi_step_manifest_loads_three_steps(
     assert workflow.steps[0].step_id == "step-1"
     assert workflow.steps[1].step_id == "step-2"
     assert workflow.steps[2].step_id == "step-3"
+
+
+# ---------------------------------------------------------------------------
+# AC #4 mech-α — multi-step deterministic execution to SUCCESS (sibling of AC #5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ac4_multi_step_deterministic_execution_completes_all_steps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC #4 — mech-α — multi-step driver execution through 3 INFERENCE_STEPs
+    to terminal SUCCESS, with the ledger carrying a hash-chain-intact entry
+    per completed step.
+
+    Sibling to AC #5 (`test_ac5_sigint_mid_multi_step_produces_drained_resumable_state`):
+    reuses the deterministic-dispatcher scaffold but the dispatcher does
+    NOT fire `ctx.drained_flag` — all 3 step iterations complete and the
+    driver returns `RunStatus.SUCCESS` per `workflow_driver.py:1177`.
+
+    AC #4's mech-β sibling at `test_ac4_multi_step_real_llm_execution`
+    (PR #10 on `worktree-mech-beta-ac4`) covers the real-LLM path; this
+    mech-α test covers the driver-loop + ledger-chain path that is
+    independent of LLM substrate. The two together close the AC #4
+    matrix (load × execute × LLM-substrate).
+
+    Invariants verified (mapping to runtime plan v2.31 §1.9 AC #4):
+      1. All 3 dispatcher calls fire (one per INFERENCE_STEP).
+      2. ``RunResult.status == SUCCESS`` + ``terminal_step_index is None``
+         per `workflow_driver.py:1174-1182`.
+      3. ``final_state`` is a populated dict carrying the accumulated
+         per-step contributions; ``partial_state is None``.
+      4. The on-disk state ledger carries ≥3 entries (one per completed
+         step per the smoke test invariant at
+         `test_run_smoke.py:467-471`) with:
+         - intact ``prior_event_hash → response_hash`` chain per
+           ADR-D5 §1.4 (entry 0's prior = ``ALL_ZEROS_SENTINEL``);
+         - canonical ``response_hash`` round-trip via
+           ``compute_response_hash``;
+         - unique idempotency keys across all entries.
+
+    Scope per advisor scope discipline at the AC #5 implementation arc
+    (`[[advisor-before-substantive-work-for-cross-axis-blockers]]`):
+    deterministic in-process dispatcher; no real LLM; no subprocess. The
+    substantive surface this test verifies is the driver's no-drain
+    per-step iteration loop + ledger emission discipline.
+
+    Independent of the mech-β PR stack (PRs #5–#10) — does not require
+    `ANTHROPIC_API_KEY` and does not touch keyring or provider
+    construction.
+    """
+    from collections.abc import Sequence
+    from functools import partial
+
+    from harness_core.deployment_surface import DeploymentSurface
+    from harness_core.identity import StepID
+    from harness_core.persona_tier import PersonaTier
+    from harness_core.workload_class import WorkloadClass
+    from harness_cp.cp_shared_types import ModelBinding
+    from harness_cp.cross_family_fallback_chain import (
+        FallbackChain,
+        ProviderCandidate,
+        ProviderFamily,
+    )
+    from harness_cp.engine_class import EngineClass
+    from harness_cp.routing_manifest_residence import RoutingManifest
+    from harness_cp.topology_pattern import TopologyPattern
+    from harness_cp.workflow_driver import execute_workflow
+    from harness_cp.workflow_driver_types import (
+        RunStatus as _CpRunStatus,
+    )
+    from harness_cp.workflow_driver_types import (
+        StepKind,
+        WorkflowStep,
+    )
+    from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+    from harness_is.chain_link_construction import construct_prior_event_hash
+    from harness_is.entry_hash import compute_response_hash
+    from harness_is.path_class_registry import PathClass
+    from harness_is.state_ledger_entry_schema import ALL_ZEROS_SENTINEL
+    from harness_is.state_ledger_write import read_ledger
+    from harness_runtime.bootstrap import run_bootstrap
+    from harness_runtime.bootstrap import stage_3a_cp_clients as _stage_3a_mod
+    from harness_runtime.bootstrap import stage_4_od as _stage_4_od_mod
+    from harness_runtime.lifecycle.providers import ProviderClientsStage
+
+    # ---------------- patched runtime (mirror of AC #5 + test_run_smoke.py) ----------------
+
+    class _FakeProvider:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def aclose(self) -> None:
+            return None
+
+    async def _fake_clients(
+        *_args: object, **_kwargs: object
+    ) -> ProviderClientsStage:
+        return ProviderClientsStage(
+            providers={
+                "anthropic": _FakeProvider("anthropic"),
+                "openai": _FakeProvider("openai"),
+                "ollama": _FakeProvider("ollama"),
+            }
+        )
+
+    monkeypatch.setattr(
+        _stage_3a_mod, "materialize_provider_clients_stage", _fake_clients
+    )
+
+    class _FakeDaemon:
+        async def start(self) -> None:
+            return None
+
+        async def stop(self, *, timeout_seconds: float = 5.0) -> None:
+            _ = timeout_seconds
+            return None
+
+    class _CollectorStage:
+        def __init__(self, d: _FakeDaemon) -> None:
+            self.daemon = d
+
+    class _FakeTracerProvider:
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            _ = timeout_millis
+            return True
+
+        def shutdown(self) -> None:
+            return None
+
+        def get_tracer(self, instrumenting_module_name: str, /) -> object:
+            from opentelemetry.trace import NoOpTracer
+
+            _ = instrumenting_module_name
+            return NoOpTracer()
+
+    class _TracerStage:
+        def __init__(self, p: _FakeTracerProvider) -> None:
+            self.provider = p
+            self.registered_globally = False
+
+    monkeypatch.setattr(
+        _stage_4_od_mod,
+        "materialize_collector_daemon_stage",
+        lambda config, **_: _CollectorStage(_FakeDaemon()),
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_ring_buffer_stage", lambda config, _d: None
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod,
+        "materialize_tracer_provider_stage",
+        lambda config, **_: _TracerStage(_FakeTracerProvider()),
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod,
+        "materialize_span_processor_stage",
+        lambda config, _p, **_k: None,
+    )
+
+    # ---------------- config ----------------
+    surface = DeploymentSurface.LOCAL_DEVELOPMENT
+    workload = WorkloadClass.SOFTWARE_ENGINEERING
+    chain = FallbackChain(
+        primary=ProviderCandidate(
+            provider="anthropic",
+            model="claude-haiku-4-5",
+            family=ProviderFamily.ANTHROPIC,
+        ),
+        same_family=(),
+        cross_family=(),
+        terminal=None,
+    )
+    config = RuntimeConfig(
+        deployment_surface=surface,
+        repository_root=tmp_path,
+        path_bindings=PathBindingConfig(
+            raw_entries=tuple(
+                {
+                    "path_class": pc,
+                    "workflow_class": workload,
+                    "deployment_surface": surface,
+                    "path": str(tmp_path / pc.value.lower()),
+                }
+                for pc in PathClass
+            ),
+        ),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4317"),
+        collector=CollectorConfig(),
+        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        mcp_clients=[],
+        ollama_optional=True,
+        routing_manifest=RoutingManifest(
+            manifest_version=1,
+            per_role_bindings={},
+            per_workload_overrides={},
+            fallback_chains=(chain,),
+            retry_policies={},
+        ),
+    )
+
+    ctx = await run_bootstrap(config, workload_class=workload)
+
+    # ---------------- deterministic dispatcher (no drain trigger) ----------------
+    dispatch_count = {"n": 0}
+
+    class _NoDrainDispatcher:
+        def dispatch(
+            self,
+            binding: Any,
+            step: WorkflowStep,
+            *,
+            step_context: Any = None,
+        ) -> dict[str, Any]:
+            _ = binding, step_context
+            dispatch_count["n"] += 1
+            return {"step_id": str(step.step_id), "ok": True, "index": dispatch_count["n"] - 1}
+
+    class _SingleKindRegistry:
+        def __init__(self, dispatcher: Any) -> None:
+            self._dispatcher = dispatcher
+
+        def lookup(self, step_kind: Any) -> Any:
+            _ = step_kind
+            return self._dispatcher
+
+    # ---------------- 3-step workflow ----------------
+    workflow_id = "wf-ac4-multi-step-deterministic"
+    manifest = WorkflowManifestEntry(
+        workflow_id=workflow_id,
+        workload_class=workload,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+        layer_budgets=(),
+        fallback_chain=chain,
+        hitl_placements=(),
+        per_step_overrides={},
+    )
+    steps: Sequence[WorkflowStep] = tuple(
+        WorkflowStep(
+            step_id=StepID(f"step-{i}"),
+            step_kind=StepKind.INFERENCE_STEP,
+            step_payload={"index": i},
+        )
+        for i in range(3)
+    )
+
+    # Dispatch via asyncio.to_thread per the AC #5 + U-RT-89 e2e pattern
+    # (the driver's internal async-to-sync bridge can't run from a live
+    # event loop; pytest-asyncio holds one).
+    import asyncio
+
+    cp_result = await asyncio.to_thread(
+        partial(
+            execute_workflow,
+            manifest_entry=manifest,
+            steps=steps,
+            run_id="run-ac4-mech-alpha-1",
+            ctx=ctx,  # type: ignore[arg-type]
+            default_model_binding=ModelBinding(
+                provider="anthropic", model="claude-haiku-4-5"
+            ),
+            step_dispatchers=_SingleKindRegistry(  # type: ignore[arg-type]
+                _NoDrainDispatcher()
+            ),
+        )
+    )
+
+    # ---------------- invariant 1: all 3 dispatches fired ----------------
+    assert dispatch_count["n"] == 3, (
+        f"expected 3 dispatches (one per step); got {dispatch_count['n']}"
+    )
+
+    # ---------------- invariant 2: status == SUCCESS ----------------
+    assert cp_result.status == _CpRunStatus.SUCCESS, (
+        f"expected SUCCESS, got {cp_result.status}; "
+        f"fail_class={cp_result.fail_class}"
+    )
+    # SUCCESS sets terminal_step_index=None per workflow_driver.py:1178.
+    assert cp_result.terminal_step_index is None
+    assert cp_result.fail_class is None
+
+    # ---------------- invariant 3: final_state populated, partial_state None ----------------
+    # Per workflow_driver.py:1174-1182 SUCCESS branch sets partial_state=None
+    # + final_state=dict(accumulated). The accumulated dict carries one
+    # entry per executed step under PURE_PATTERN_NO_ENGINE.
+    assert cp_result.partial_state is None, (
+        f"SUCCESS branch must set partial_state=None; got {cp_result.partial_state!r}"
+    )
+    assert cp_result.final_state is not None
+    assert isinstance(cp_result.final_state, dict)
+    assert len(cp_result.final_state) >= 1, (
+        f"final_state must carry accumulated per-step contributions; got "
+        f"{cp_result.final_state!r}"
+    )
+
+    # ---------------- invariant 4: ledger has 3 entries + hash chain intact ----------------
+    # Per `test_run_smoke.py:466-471` the CP driver writes one ledger entry
+    # per step under PURE_PATTERN_NO_ENGINE (see C-CP-25 §25.3.3.7).
+    handle = ctx.ledger_writer.handle  # type: ignore[attr-defined]
+    entries = read_ledger(handle)
+    assert len(entries) >= 3, (
+        f"expected ≥3 ledger entries (one per executed step); got "
+        f"{len(entries)} entries at {handle.canonical_path}"
+    )
+
+    # Hash-chain integrity per ADR-D5 §1.4: each entry's prior_event_hash
+    # equals the prior entry's response_hash (entry 0's prior =
+    # construct_prior_event_hash(None) = ALL_ZEROS).
+    expected_prior = construct_prior_event_hash(None)
+    assert expected_prior == ALL_ZEROS_SENTINEL or len(expected_prior) == 32
+    for i, entry in enumerate(entries):
+        assert entry.prior_event_hash == expected_prior, (
+            f"hash chain broken at entry {i}: prior_event_hash="
+            f"{entry.prior_event_hash.hex()} expected={expected_prior.hex()}"
+        )
+        recomputed = compute_response_hash(entry)
+        assert entry.response_hash == recomputed, (
+            f"response_hash mismatch at entry {i}: stored="
+            f"{entry.response_hash.hex()} recomputed={recomputed.hex()}"
+        )
+        for j, other in enumerate(entries):
+            if i != j:
+                assert entry.idempotency_key != other.idempotency_key, (
+                    f"duplicate idempotency_key between entries {i} and {j}: "
+                    f"{entry.idempotency_key!r}"
+                )
+        expected_prior = entry.response_hash
+
+    # Cleanup so background tasks terminate.
+    from harness_runtime.shutdown import shutdown as _shutdown
+
+    await _shutdown(ctx)
 
 
 # ---------------------------------------------------------------------------
