@@ -163,9 +163,10 @@ async def test_factory_binds_tracer_provider_from_ctx(tmp_path: Path) -> None:
 def test_stage_5_loop_init_invokes_webhook_delivery_composer_factory() -> None:
     """Verify the stage-5 LOOP_INIT bootstrap module invokes the webhook factory
     + binds the result to ctx.webhook_delivery_composer per spec §14.16.3."""
-    source = Path(
-        "harness-runtime/src/harness_runtime/bootstrap/stage_5_loop_init.py"
-    ).read_text()
+    from harness_runtime.bootstrap import stage_5_loop_init
+
+    assert stage_5_loop_init.__file__ is not None
+    source = Path(stage_5_loop_init.__file__).read_text()
     assert "materialize_webhook_delivery_composer_stage" in source, (
         "stage-5 LOOP_INIT must import + invoke the webhook factory per "
         "spec §14.16.3 sibling-bucketing with pause_resume_protocol"
@@ -186,10 +187,10 @@ def test_webhook_delivery_composer_stage_materialize_error_is_exception_subclass
 def test_fail_class_prefix_documented_at_factory_source() -> None:
     """Verify the RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE prefix is named at
     the factory module per spec §14.16.4 failure-mode taxonomy."""
-    source = Path(
-        "harness-runtime/src/harness_runtime/bootstrap/factories/"
-        "webhook_delivery_composer_factory.py"
-    ).read_text()
+    from harness_runtime.bootstrap.factories import webhook_delivery_composer_factory
+
+    assert webhook_delivery_composer_factory.__file__ is not None
+    source = Path(webhook_delivery_composer_factory.__file__).read_text()
     assert "RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE" in source
 
 

@@ -23,7 +23,10 @@ def test_workflow_driver_branching_via_typed_table_no_new_conditional() -> None:
     the typed step-dispatcher table without a new conditional in the driver
     body. The Path A discipline (single dispatch table; no per-StepKind
     branches) is preserved at the workflow driver."""
-    driver_src = Path("harness-cp/src/harness_cp/workflow_driver.py").read_text(encoding="utf-8")
+    from harness_cp import workflow_driver
+
+    assert workflow_driver.__file__ is not None
+    driver_src = Path(workflow_driver.__file__).read_text(encoding="utf-8")
     assert "step.step_kind == StepKind.TOOL_STEP" not in driver_src
     assert "step_kind == 'TOOL_STEP'" not in driver_src
     assert 'step_kind == "TOOL_STEP"' not in driver_src
@@ -33,9 +36,10 @@ def test_stage_5_imports_runtime_tool_dispatcher_factory() -> None:
     """AC #1 — stage 5 body imports the U-RT-75 factory + invokes it. Per
     the rewrite-provenance docstring: U-RT-68 becomes the thin "stage-5
     callsite invocation" unit consuming the new factory."""
-    stage_src = Path(
-        "harness-runtime/src/harness_runtime/bootstrap/stage_5_loop_init.py"
-    ).read_text(encoding="utf-8")
+    from harness_runtime.bootstrap import stage_5_loop_init
+
+    assert stage_5_loop_init.__file__ is not None
+    stage_src = Path(stage_5_loop_init.__file__).read_text(encoding="utf-8")
     assert (
         "from harness_runtime.bootstrap.factories.runtime_tool_dispatcher_factory import"
         in stage_src
@@ -53,9 +57,10 @@ def test_stage_5_imports_runtime_tool_dispatcher_factory() -> None:
 def test_stage_5_binds_tool_dispatcher_to_ctx() -> None:
     """AC #2 — wrapper binds to ctx.tool_dispatcher (not to bare or
     intermediate). Verified via source presence."""
-    stage_src = Path(
-        "harness-runtime/src/harness_runtime/bootstrap/stage_5_loop_init.py"
-    ).read_text(encoding="utf-8")
+    from harness_runtime.bootstrap import stage_5_loop_init
+
+    assert stage_5_loop_init.__file__ is not None
+    stage_src = Path(stage_5_loop_init.__file__).read_text(encoding="utf-8")
     assert "ctx.tool_dispatcher = await materialize_runtime_tool_dispatcher_stage(" in stage_src
 
 
@@ -63,9 +68,10 @@ def test_stage_5_extends_step_dispatcher_table_with_tool_step() -> None:
     """AC #3 — step-dispatcher table extended with TOOL_STEP →
     tool_step_dispatcher facade. Existing INFERENCE_STEP +
     SUB_AGENT_DISPATCH bindings preserved verbatim (source-presence)."""
-    stage_src = Path(
-        "harness-runtime/src/harness_runtime/bootstrap/stage_5_loop_init.py"
-    ).read_text(encoding="utf-8")
+    from harness_runtime.bootstrap import stage_5_loop_init
+
+    assert stage_5_loop_init.__file__ is not None
+    stage_src = Path(stage_5_loop_init.__file__).read_text(encoding="utf-8")
     assert "StepKind.TOOL_STEP: tool_step_dispatcher" in stage_src
     assert "StepKind.INFERENCE_STEP: inference_step_dispatcher" in stage_src
     assert "StepKind.SUB_AGENT_DISPATCH: sub_agent_step_dispatcher" in stage_src
@@ -81,6 +87,6 @@ def test_end_to_end_ac5_covered_by_extended_bootstrap_fixture() -> None:
 
     Marker test only — the actual assertion lives in the extended fixture.
     Verified by source presence."""
-    test_src = Path("harness-runtime/tests/test_bootstrap.py").read_text(encoding="utf-8")
+    test_src = (Path(__file__).parent / "test_bootstrap.py").read_text(encoding="utf-8")
     assert "TOOL_STEP bound at U-RT-68 cluster-close" in test_src
     assert "ctx.step_dispatchers.lookup(StepKind.TOOL_STEP)" in test_src
