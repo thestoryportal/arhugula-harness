@@ -296,7 +296,7 @@ The 2026-05-20 snapshot's §4 AS-axis row 5 (H_T-AS-8 STILL-BOUNDED) is **supers
 - Per drift doc §5(b) operator-discretion routing trigger + operator AskUserQuestion ratification 2026-05-28 (Option A) + advisor Scope B pre-substantive consultation: decomposition lands at ledger-v2-layer ONLY (Meta-Arch §2.2 row 423 PRESERVED VERBATIM per X-AL-3).
 - Decomposed sub-rows: AS-8a (anthropic.*) / AS-8b (mcp.*) / AS-8c (memory.*) / AS-8d (skill.*) / AS-8e (files.*) / AS-8f (managed_agents.*).
 - Immediate close transits at decomposition event (criteria already MET pre-decomp): AS-8a + AS-8b + AS-8c → RETIRED.
-- Carry-forward sub-rows: AS-8d STILL-BOUNDED (gates on Skills loading runtime composer); AS-8e STILL-BOUNDED-INDEFINITELY (Files arc DEFERRED per runtime spec v1.17 §14.C); AS-8f STILL-BOUNDED (gates on managed_agents SDK integration).
+- Carry-forward sub-rows: AS-8d STILL-BOUNDED → RETIRE-READY at batch-25 (operator-opt-in pattern, mirrors CP-18/CP-21/CP-22/RT-94 precedent); AS-8e STILL-BOUNDED-INDEFINITELY (Files arc DEFERRED per runtime spec v1.17 §14.C); AS-8f STILL-BOUNDED → STILL-BOUNDED-INDEFINITELY at batch-26 (DEFER INDEFINITELY mirror AS-8e per `.harness/class_1_fork_as_8f_managed_agents_namespace_production_only_exclusion.md` Q1=(C) + runtime spec v1.33 change-note + AS spec v1.7 → v1.8 §14.5 production-only exclusion footer; honors AS spec C-AS-13 §13.2 adoption-depth matrix design declaration excluding managed_agents at local-development for all workload classes).
 
 **§4 row text PRESERVED VERBATIM** per §0.5 forward-only ledger discipline; the live decomposed view lives at `harness-as/CLAUDE.md` §4.1 + `batch-24` filing.
 
@@ -308,9 +308,9 @@ The 2026-05-20 snapshot's §4 AS-axis row 5 (H_T-AS-8 STILL-BOUNDED) is **supers
 
 | | Live source |
 |---|---|
-| Latest filed batch | `batch-24` (2026-05-28, AS-8 decomposition + 3 sub-RETIRED transits AS-8a/b/c) |
-| Cumulative RETIRED count (raw ledger) | 33/54 (61.1%) per batch-24 §0 footer (cardinality bumped 49 → 54 at batch-24 AS-8 decomposition) |
-| Cumulative pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) | 38/54 (70.4%) per batch-24 §0 footer |
+| Latest filed batch | `batch-26` (2026-05-28, H_T-AS-8f STILL-BOUNDED → STILL-BOUNDED-INDEFINITELY DEFER INDEFINITELY mirror AS-8e) |
+| Cumulative RETIRED count (raw ledger) | 33/54 (61.1%) per batch-25 §0 footer (AS-8f routing transit at batch-26 does NOT change RETIRED count — SB → SB-INDEFINITE is X-AL-2 bounded-residual routing, not RETIRED close) |
+| Cumulative pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) | 39/54 (72.2%) per batch-25 §0 footer (AS-8d STILL-BOUNDED → RETIRE-READY; AS-8f routing transit at batch-26 does NOT promote pipeline-advanced — SB-INDEFINITE is terminal under X-AL-2) |
 | Per-axis live status | `harness-{is,as,cp,od}/CLAUDE.md` §4.1 |
 | Cross-axis cascade live status | §6.3.1 + §6.3.2 cascade re-evaluations at the batch in which the gating retirement filed (see batch-2 §3 + batch-3 referenced from `harness-od/CLAUDE.md`) |
 

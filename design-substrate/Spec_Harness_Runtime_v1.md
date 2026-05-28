@@ -1,4 +1,40 @@
-# Specification — Harness Runtime v1.32
+# Specification — Harness Runtime v1.33
+
+## Change-note (v1.32 → v1.33)
+
+**Scope of revision.** Indefinite-defer ratification record per `.harness/class_1_fork_as_8f_managed_agents_namespace_production_only_exclusion.md` Q1=(C) operator-ratification 2026-05-28. The fork surfaced that `managed_agents.*` producer-site absence at H_T runtime is a faithful materialization of the AS spec C-AS-13 §13.2 adoption-depth matrix design declaration (`surface_qualifier = LOCAL_DEVELOPMENT` + `"X at local-development"` exclusion across all four workload classes) + ADR-D3 §1.8.1 span-scope declaration (`managed_agents.runtime (Managed Agents only; v1.1 — F2-04 namespace unified)`) + harness-as enforcement test `test_managed_agents_excluded_at_local_development`. Q1=(C) DEFER INDEFINITELY ratification mirror of H_T-AS-8e files.* per v1.17 §14.C precedent — no managed_agents executable consumer contract authored at v1.33; no §14.18 C-RT-28 sibling to v1.32 §14.17 C-RT-27. AS-8f STILL-BOUNDED → STILL-BOUNDED-INDEFINITELY at workspace ledger v2 batch-26.
+
+**Source of fix.** `.harness/class_1_fork_as_8f_managed_agents_namespace_production_only_exclusion.md` Q1=(C) operator-ratified 2026-05-28. Reading B (operator-opt-in mirror AS-8d) dropped pre-ratification as category error per advisor pre-substantive consultation — cannot opt into a deployment-surface-excluded namespace at local-dev without either (i) dead code (violates Q1=B "MET-when-bound" semantic) or (ii) force-emit at spec-excluded surface (violates X-AL-3). Reading C is the plain reading honoring the design declaration.
+
+**Amendments.** None at the contract-body layer. v1.33 is a change-note-only revision recording the AS-8f indefinite-defer ratification.
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| Change-note section (v1.32 → v1.33) | NEW change-note documenting AS-8f Q1=(C) DEFER INDEFINITELY ratification; explicit "NO managed_agents executable consumer contract authored at v1.33" mirror of v1.17 §"Files API contract authoring deferred" prose; carry-forward record for future managed-cloud surface arc re-open | Q1=(C) ratification |
+
+**Sections preserved verbatim from v1.32.** All v1.32 contract bodies + NEW §14.17 C-RT-27 SkillActivationSpanEmitter + RuntimeConfig.skill_activation_hook_config field + HarnessContext.skill_activation_emitter field + RT-FAIL-SKILL-ACTIVATION-STAGE-MATERIALIZE fail class preserved verbatim. All v1.17 §14.5.1 Memory tool storage-backend callback binding + §14.12 C-RT-22 `MemoryToolRegistry` preserved verbatim. The v1.31 + v1.30 + ... + v1 lineage chain all preserved.
+
+**Status posture.** Proposed (v1.32) → **Proposed (v1.33)**. v1.33 is a change-note-only revision under FM-2 no-extension discipline — no new contract, no new field, no new fail class, no AC change, no §14 contract body amended. The indefinite-defer ratification is a record-keeping event; the production-surface re-open hook is preserved at the fork doc §4 IF Q1=A cascade specification.
+
+**Downstream absorption owed (post-v1.33).**
+
+(a) Workspace `CLAUDE.md` §2.3 runtime row version bump (v1.32 → v1.33); co-published this arc.
+
+(b) AS spec v1.6 → v1.7 — NEW §14.5 `managed_agents.*` production-only exclusion footer note co-published this arc (sibling to §14.4 v1.7-footer skill.* producer-site reference and §14.7 v1.5 memory.* producer-site reference); §14.6 `files.*` v1.5-vintage indefinite-defer pattern parallel.
+
+(c) `harness-as/CLAUDE.md` H_T-AS-8f row refresh STILL-BOUNDED → STILL-BOUNDED-INDEFINITELY; co-published this arc.
+
+(d) `.harness/phase-7d-retirement-ledger-v2.md` AS-8f row refresh + AS-axis cumulative recount (AS-axis active-substitution view denominator decreases by 1: AS-8f leaves the active bucket); co-published this arc.
+
+(e) `.harness/phase-7d-retirement-events-batch-26.md` NEW batch-26 retirement event filing; co-published this arc.
+
+**Adjacent defects surfaced (not patched per FM-2 no-extension discipline).**
+
+(i) **Filing footer staleness (carried).** Pre-existing carry-forward from v1.13..v1.32. NOT patched per FM-2.
+
+(ii) **No formal §14.C / §14.D section headers at runtime spec.** The v1.17 change-note prose references `§14.C` / `§14.D` as ratification-anchor labels pointing back at `class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §14.C / §14.D fork-doc sections, not runtime-spec section headers. The v1.33 AS-8f indefinite-defer ratification follows the same pattern: ratification anchor lives at the AS-8f fork doc §3 Q1=(C) decision row + §4 IF Q1=C cascade specification, not at a runtime-spec section header. No formal §14.E section authored. Carry-forward noted; not patched per FM-2.
+
+---
 
 ## Change-note (v1.31 → v1.32)
 
