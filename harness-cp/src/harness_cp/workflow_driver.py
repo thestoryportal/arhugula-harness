@@ -357,6 +357,20 @@ def _compute_step_idempotency_key(run_idempotency_key: str, step_index: int) -> 
     return h.hexdigest()
 
 
+def resolve_parent_gate_level(manifest_entry: WorkflowManifestEntry) -> GateLevel:
+    """Resolve `step_context.parent_gate_level` from manifest per CP spec v1.20 §6.1.Y.
+
+    Reading A composition: operator-supplied `default_gate_level` flows through
+    unchanged; `None` falls back to the v1.6 MVP hardcoded `GateLevel.AUTO`.
+    This is the single source of truth for the workflow_driver:738 composition
+    site — exposed as a module-level helper so H_T-CP-19 Layer 3 e2e tests
+    can exercise the chain without re-implementing the conditional.
+    """
+    if manifest_entry.default_gate_level is not None:
+        return manifest_entry.default_gate_level
+    return GateLevel.AUTO
+
+
 _TProtocolResult = TypeVar("_TProtocolResult")
 
 
@@ -742,11 +756,7 @@ def _execute_workflow_body(
             parent_action_id=(
                 f"workflow:{manifest_entry.workflow_id}:step:{step_index}"
             ),
-            parent_gate_level=(
-                manifest_entry.default_gate_level
-                if manifest_entry.default_gate_level is not None
-                else GateLevel.AUTO
-            ),
+            parent_gate_level=resolve_parent_gate_level(manifest_entry),
             parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
             parent_actor=ctx.ledger_writer.actor,
             parent_entry_hash="",
