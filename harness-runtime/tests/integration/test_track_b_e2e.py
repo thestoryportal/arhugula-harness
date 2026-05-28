@@ -1169,6 +1169,230 @@ async def test_ac3_daemon_mode_equivalent_to_one_shot_with_real_llm(
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
     reason=(
+        "Mechanism β AC #4 requires ANTHROPIC_API_KEY. Multi-step real-LLM "
+        "execution exercises the workflow_driver loop body + step boundary "
+        "across N>1 INFERENCE_STEPs."
+    ),
+)
+async def test_ac4_multi_step_real_llm_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC #4 mechanism β: multi-step real-LLM execution → SUCCESS.
+
+    AC #1 covered single-step real Anthropic dispatch via api.run.
+    AC #4 extends to N=3 sequential INFERENCE_STEPs in one workflow,
+    exercising the workflow_driver loop body's per-step boundary
+    transitions + step-state ledger writes + cross-step bootstrap-
+    bound dispatcher reuse.
+
+    The structural variant of this AC at
+    `test_ac4_multi_step_manifest_loads_three_steps` (line 215)
+    verifies the YAML manifest loads + dispatches to the CLI with 3
+    steps under a mocked `api.run`. This mech-β variant runs the
+    same 3-step shape against real Anthropic dispatch.
+
+    Cost discipline: each step uses `max_tokens=4` + a single-token
+    completion prompt; full 3-step run is ≈3 API calls × ≈12 tokens.
+
+    Stacks on AC #1 (real-LLM bootstrap + E-prod-3 per-provider opt-in).
+    """
+    from collections.abc import Sequence
+
+    from harness_core.deployment_surface import DeploymentSurface
+    from harness_core.identity import StepID
+    from harness_core.persona_tier import PersonaTier
+    from harness_core.workload_class import WorkloadClass
+    from harness_cp.cp_shared_types import ModelBinding
+    from harness_cp.cross_family_fallback_chain import (
+        FallbackChain,
+        ProviderCandidate,
+        ProviderFamily,
+    )
+    from harness_cp.engine_class import EngineClass
+    from harness_cp.routing_manifest_residence import RoutingManifest
+    from harness_cp.topology_pattern import TopologyPattern
+    from harness_cp.workflow_driver import StepDispatcher as _CpStepDispatcher
+    from harness_cp.workflow_driver_types import StepKind, WorkflowStep
+    from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+    from harness_is.path_class_registry import PathClass
+    from harness_runtime.api import run as _run
+    from harness_runtime.bootstrap import stage_4_od as _stage_4_od_mod
+
+    # ---------------- keyring → env shim (per AC #1) ----------------
+    api_key = os.environ["ANTHROPIC_API_KEY"]
+
+    def _fake_get_password(service: str, name: str) -> str | None:
+        _ = service
+        if name == "anthropic_key":
+            return api_key
+        return None
+
+    monkeypatch.setattr(
+        "harness_runtime.config.provider_secrets.keyring.get_password",
+        _fake_get_password,
+    )
+
+    # ---------------- tracer (NoOp; this AC asserts run shape not spans) ----------------
+    class _FakeTracerProvider:
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            _ = timeout_millis
+            return True
+
+        def shutdown(self) -> None:
+            return None
+
+        def get_tracer(self, instrumenting_module_name: str, /) -> object:
+            from opentelemetry.trace import NoOpTracer
+
+            _ = instrumenting_module_name
+            return NoOpTracer()
+
+    class _TracerStage:
+        def __init__(self, provider: _FakeTracerProvider) -> None:
+            self.provider = provider
+            self.registered_globally = False
+
+    def _fake_tracer_stage(config: Any, **_kwargs: Any) -> _TracerStage:
+        _ = config
+        return _TracerStage(_FakeTracerProvider())
+
+    def _fake_span_processor(config: Any, _p: Any, **_kwargs: Any) -> None:
+        _ = config
+        return None
+
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_tracer_provider_stage", _fake_tracer_stage
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_span_processor_stage", _fake_span_processor
+    )
+
+    # ---------------- config (per AC #1 — E-prod-3 opt-in) ----------------
+    surface = DeploymentSurface.LOCAL_DEVELOPMENT
+    workload = WorkloadClass.SOFTWARE_ENGINEERING
+    path_bindings = PathBindingConfig(
+        raw_entries=tuple(
+            {
+                "path_class": pc,
+                "workflow_class": workload,
+                "deployment_surface": surface,
+                "path": str(tmp_path / pc.value.lower()),
+            }
+            for pc in PathClass
+        ),
+    )
+    chain = FallbackChain(
+        primary=ProviderCandidate(
+            provider="anthropic",
+            model="claude-haiku-4-5",
+            family=ProviderFamily.ANTHROPIC,
+        ),
+        same_family=(),
+        cross_family=(),
+        terminal=None,
+    )
+    config = RuntimeConfig(
+        deployment_surface=surface,
+        repository_root=tmp_path,
+        path_bindings=path_bindings,
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+        collector=CollectorConfig(),
+        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        mcp_clients=[],
+        openai_optional=True,
+        ollama_optional=True,
+        routing_manifest=RoutingManifest(
+            manifest_version=1,
+            per_role_bindings={},
+            per_workload_overrides={},
+            fallback_chains=(chain,),
+            retry_policies={},
+        ),
+    )
+    monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
+
+    # ---------------- 3-step workflow with real INFERENCE_STEP payloads ----------------
+    # Each step gets a distinct prompt to confirm cross-step dispatcher reuse
+    # works (state-ledger isolation between steps). max_tokens=4 caps cost.
+    def _payload(prompt: str) -> dict[str, Any]:
+        return {
+            "messages": [{"role": "user", "content": prompt}],
+            "tools": [],
+            "params": {"max_tokens": 4},
+        }
+
+    class _Workflow:
+        @property
+        def workflow_id(self) -> str:
+            return "wf-ac4-multi-step"
+
+        @property
+        def workload_class(self) -> WorkloadClass:
+            return workload
+
+        @property
+        def manifest_entry(self) -> WorkflowManifestEntry:
+            return WorkflowManifestEntry(
+                workflow_id="wf-ac4-multi-step",
+                workload_class=workload,
+                persona_tier=PersonaTier.TEAM_BINDING,
+                engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+                topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+                layer_budgets=(),
+                fallback_chain=chain,
+                hitl_placements=(),
+                per_step_overrides={},
+            )
+
+        @property
+        def steps(self) -> Sequence[WorkflowStep]:
+            return (
+                WorkflowStep(
+                    step_id=StepID("step-0"),
+                    step_kind=StepKind.INFERENCE_STEP,
+                    step_payload=_payload("Say 'a'"),
+                ),
+                WorkflowStep(
+                    step_id=StepID("step-1"),
+                    step_kind=StepKind.INFERENCE_STEP,
+                    step_payload=_payload("Say 'b'"),
+                ),
+                WorkflowStep(
+                    step_id=StepID("step-2"),
+                    step_kind=StepKind.INFERENCE_STEP,
+                    step_payload=_payload("Say 'c'"),
+                ),
+            )
+
+        @property
+        def step_dispatcher(self) -> _CpStepDispatcher:
+            raise NotImplementedError("bootstrap-bound dispatcher is used")
+
+        @property
+        def step_dispatchers(self) -> Any:
+            return None
+
+        @property
+        def default_model_binding(self) -> ModelBinding:
+            return ModelBinding(provider="anthropic", model="claude-haiku-4-5")
+
+    # ---------------- exercise ----------------
+    result = await _run(_Workflow(), config=config)
+
+    assert isinstance(result, RunResult), f"got {type(result).__name__}"
+    assert result.status == "completed", (
+        f"expected status=completed; got status={result.status!r} "
+        f"failure_cause={getattr(result, 'failure_cause', None)!r}"
+    )
+    assert result.workflow_id == "wf-ac4-multi-step"
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not os.environ.get("ANTHROPIC_API_KEY"),
+    reason=(
         "Mechanism β AC #7 requires ANTHROPIC_API_KEY. Operator-bound "
         "SkillActivationHook + real LLM dispatch exercise X-AL-2 second "
         "conjunct for H_T-AS-8d retirement."
