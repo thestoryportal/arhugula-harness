@@ -179,14 +179,18 @@ class SkillActivationSpanEmitter:
         ----------
         tracer_provider :
             OpenTelemetry ``TracerProvider`` per OD spec §C-OD-04. Sourced
-            from ``ctx.tracer_provider`` at stage-5 materialization.
+            from ``ctx.tracer_provider`` at stage-5 materialization. Per
+            ``lifecycle.llm_dispatch.RuntimeLLMDispatcher`` precedent, the
+            tracer is acquired lazily at ``emit(...)`` time (NOT at
+            construction) so the emitter tolerates fake-tracer substrates
+            at integration-test stage-5 boundary.
         hook :
             Operator-supplied ``SkillActivationHook`` Protocol implementation
             consumed at the per-workflow-init + per-LLM-dispatch hook sites.
             ``None`` means automatic-hook sites silently no-op; the
             operator-explicit ``ctx.activate_skill`` path remains functional.
         """
-        self._tracer = tracer_provider.get_tracer("harness_runtime.skill_activation")
+        self._tracer_provider = tracer_provider
         self._hook = hook
 
     @property
@@ -217,7 +221,8 @@ class SkillActivationSpanEmitter:
             ``SkillManifest`` extension carries ``version_sha`` +
             ``body_tokens`` computed at load.
         """
-        with self._tracer.start_as_current_span("skill.activation") as span:
+        tracer = self._tracer_provider.get_tracer("harness_runtime.skill_activation")
+        with tracer.start_as_current_span("skill.activation") as span:
             span.set_attribute("skill.id", str(skill_id))
             span.set_attribute("skill.name", skill.manifest.name)
             span.set_attribute("skill.version_sha", skill.manifest.version_sha)
