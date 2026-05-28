@@ -147,7 +147,7 @@ Full per-substitution bounded-scope + retirement criterion at Meta-Architecture 
 | H_T-OD-7 (Preservation invariants 5-dimension) | STILL-BOUNDED | Library carrier only; no runtime enforcement loop |
 | H_T-OD-8 (aggregate manifest + Stage 3b inversion) | RETIRED (authoring close, v1 §1) | Authoring-only |
 
-**OD-axis cumulative post-batch-11 (2026-05-23):** **2 / 8 RETIRED (25%, includes OD-8 authoring-close + OD-2 GenAI binding)** + **2 / 8 PARTIAL (25%, OD-5 cost-attribution LLM-only + OD-6 collector daemon)** + **4 / 8 STILL-BOUNDED (50%, OD-1 + OD-3 + OD-4 + OD-7)**. Pipeline advanced (R+RR+P): **4/8 = 50.0%** (up from 3/8 = 37.5% post-batch-2).
+**OD-axis cumulative post-batch-28 (2026-05-28):** **2 / 8 RETIRED (25%, OD-8 authoring-close + OD-2 GenAI binding)** + **1 / 8 RETIRE-READY (12.5%, OD-5 cost-attribution 4/4 surfaces wired — LLM + tool + validator + webhook; terminal in-CLI state per Option B disposition awaiting deployment-time operator opt-in)** + **1 / 8 PARTIAL (12.5%, OD-6 collector daemon — sqlite write site + TUI gaps)** + **4 / 8 STILL-BOUNDED (50%, OD-1 + OD-3 + OD-4 + OD-7)**. Pipeline advanced (R+RR+P): **4/8 = 50.0%** (preserved across batches 12 → 28 within-tier PARTIAL → RETIRE-READY transit at OD-5).
 
 **Span-emission substrate activity since 2026-05-20 (cluster 4-OD-A/C/D + 10-CP-A/B/C/D landings):**
 
