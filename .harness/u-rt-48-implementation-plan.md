@@ -1,6 +1,8 @@
 # U-RT-48 — `harness-shutdown` admin stub (CLOSES L10 admin stubs)
 
-**Status:** in-progress
+**Status:** ✅ SUPERSEDED-BY-CANONICAL-PLAN (status-line refreshed 2026-05-28 Phase 1 status-cascade sweep per workflow v1.12 §7.4.7.3.B) — historical Phase 2 session-3 work-note pre-canonical-Phase-7-plan. Production `harness-shutdown` admin stub at `harness-runtime/src/harness_runtime/admin/shutdown_cli.py`; canonical unit tracking at `design-substrate/Implementation_Plan_Harness_Runtime_v2_30.md`. Species 3 stale-carry per workflow v1.12 §7.4.7.2.
+
+**Status:** in-progress *(historical; predates Phase 7 canonical plan)*
 **Spec:** `Spec_Harness_Runtime_v1.md` v1.1 §13 C-RT-13
 **Decomposition:** L10 U-RT-48 (deps: U-RT-44)
 **Predecessor:** U-RT-47 (commit `f97f1c3`)

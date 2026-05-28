@@ -1,6 +1,8 @@
 # U-RT-49 — E2E bootstrap → shutdown smoke (PARTIAL-LAND)
 
-**Status:** in-progress
+**Status:** ✅ SUPERSEDED-BY-CANONICAL-PLAN (status-line refreshed 2026-05-28 Phase 1 status-cascade sweep per workflow v1.12 §7.4.7.3.B) — historical Phase 2 session-3 work-note pre-canonical-Phase-7-plan. E2E bootstrap→shutdown smoke landed; canonical unit tracking at `design-substrate/Implementation_Plan_Harness_Runtime_v2_30.md`. Memory `[[fork-u-rt-49-cost-attribution-invocation-underspec]]` CLOSED 2026-05-20 at CP spec v1.5 §25.9 + plan v2.13. Species 3 stale-carry per workflow v1.12 §7.4.7.2.
+
+**Status:** in-progress *(historical; predates Phase 7 canonical plan)*
 **Spec source:** session-3 atomic decomposition L11 + spec §10 / §11
 **Decomposition:** `.harness/phase-2-session-3-track-a-atomic-decomposition.md` L11 U-RT-49
 **Predecessors:** U-RT-43 (bootstrap), U-RT-46 (shutdown) at commits `bf8d838` / `10a6bca`

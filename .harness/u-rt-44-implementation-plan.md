@@ -1,6 +1,8 @@
 # U-RT-44 — Drain semantics (runtime-owned flag-polling)
 
-**Status:** in-progress
+**Status:** ✅ SUPERSEDED-BY-CANONICAL-PLAN (status-line refreshed 2026-05-28 Phase 1 status-cascade sweep per workflow v1.12 §7.4.7.3.B) — historical Phase 2 session-3 work-note pre-canonical-Phase-7-plan. Production drained_flag landed at `harness-runtime/src/harness_runtime/shutdown.py:446`; canonical unit tracking at `design-substrate/Implementation_Plan_Harness_Runtime_v2_30.md`. Memory `[[fork-u-rt-44-workflow-loop-drain]]` CLOSED 2026-05-20. Species 3 stale-carry per workflow v1.12 §7.4.7.2.
+
+**Status:** in-progress *(historical; predates Phase 7 canonical plan)*
 **Spec:** `design-substrate/Spec_Harness_Runtime_v1.md` §11 (C-RT-11)
 **Decomposition:** `.harness/phase-2-session-3-track-a-atomic-decomposition.md` L10
 **Predecessor:** U-RT-43 (LANDED at commit `bf8d838`)

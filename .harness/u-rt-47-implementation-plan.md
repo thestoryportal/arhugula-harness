@@ -1,6 +1,8 @@
 # U-RT-47 — `harness-inspect` admin stub
 
-**Status:** in-progress
+**Status:** ✅ SUPERSEDED-BY-CANONICAL-PLAN (status-line refreshed 2026-05-28 Phase 1 status-cascade sweep per workflow v1.12 §7.4.7.3.B) — historical Phase 2 session-3 work-note pre-canonical-Phase-7-plan. Production `harness-inspect` admin stub at `harness-runtime/src/harness_runtime/admin/`; canonical unit tracking at `design-substrate/Implementation_Plan_Harness_Runtime_v2_30.md`. Species 3 stale-carry per workflow v1.12 §7.4.7.2.
+
+**Status:** in-progress *(historical; predates Phase 7 canonical plan)*
 **Spec:** `Spec_Harness_Runtime_v1.md` v1.1 §13 (C-RT-13 admin stub semantics)
 **Decomposition:** L10 U-RT-47
 **Predecessor:** U-RT-46 (commit `10a6bca`), chain_hash fix `645053c`
