@@ -195,12 +195,33 @@ class RuntimeConfigSource:
 
     @classmethod
     def _reject_plaintext_secrets(cls, node: object, source: str, path: str = "") -> None:
-        """Walk a parsed TOML document; raise on any key matching the secret pattern."""
+        """Walk a parsed TOML document; raise on any LEAF key matching the
+        secret pattern.
+
+        The detector targets plaintext-secret VALUES being placed in config
+        files (e.g., ``api_key = "sk-..."``), NOT schema table names that
+        happen to match the regex. Per
+        ``[[finding-runtime-config-loader-unreachable-sub-configs]]`` fix
+        (B): before this change, the SCHEMA FIELD NAME ``provider_secrets``
+        itself matched the regex (ends in ``secrets``), so any
+        ``[runtime.provider_secrets]`` sub-table — even empty — raised the
+        detector. This made the file-loader pathway unreachable in
+        conjunction with the missing sub-config defaults (the matching
+        ``types.py`` fix (A) restores those defaults).
+
+        Discrimination: skip the key-check when the value is a dict (i.e., a
+        TOML sub-table). Sub-tables can only carry name structure, not
+        secret values; their leaf descendants are still recursively checked.
+        Net: the detector still fires on real plaintext secrets at any
+        nesting depth (because the recursion proceeds into dict values and
+        eventually hits a leaf with a matching key) but no longer false-
+        matches on schema field names whose values are themselves tables.
+        """
         if isinstance(node, dict):
             for key, value in cast(dict[Any, Any], node).items():
                 if not isinstance(key, str):
                     continue
-                if _SECRET_KEY_PATTERN.search(key):
+                if not isinstance(value, dict) and _SECRET_KEY_PATTERN.search(key):
                     full_path = f"{path}.{key}" if path else key
                     raise RuntimeConfigLoadError(
                         f"plaintext secret detected at '{full_path}': "

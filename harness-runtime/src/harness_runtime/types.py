@@ -983,17 +983,39 @@ class RuntimeConfig(BaseModel):
     repository_root: Path
     """Absolute path; must exist (validator at U-RT-04). Basis for `.harness/`."""
 
-    path_bindings: PathBindingConfig
-    """Inputs to `PathResolver(binding)`. Enriched at U-RT-05."""
+    path_bindings: PathBindingConfig = Field(default_factory=PathBindingConfig)
+    """Inputs to `PathResolver(binding)`. Enriched at U-RT-05.
 
-    provider_secrets: ProviderSecretsConfig
-    """Keyring allowlist *keys* only — no secret values. Enriched at U-RT-06."""
+    Default-factory'd so operators can omit the sub-table from `harness.toml`
+    when they want the empty-config defaults. Per
+    `[[finding-runtime-config-loader-unreachable-sub-configs]]` resolution
+    fix (A): required sub-configs without defaults forced operators to author
+    every sub-table, which combined with the plaintext-secret detector
+    false-match on `provider_secrets` (see config_source.py fix (B)) made the
+    documented file-loader pathway unreachable from any source."""
+
+    provider_secrets: ProviderSecretsConfig = Field(
+        default_factory=ProviderSecretsConfig
+    )
+    """Keyring allowlist *keys* only — no secret values. Enriched at U-RT-06.
+
+    Default-factory'd per finding-fix (A) above. Carries ALLOWLIST KEYS only
+    (per the docstring on `ProviderSecretsConfig`); actual secret values come
+    from the OS keyring at request time per ADR-F5."""
 
     otel: OTelConfig
-    """OTLP endpoint, sampler mode, additional resource attrs. Enriched at U-RT-07."""
+    """OTLP endpoint, sampler mode, additional resource attrs. Enriched at U-RT-07.
 
-    collector: CollectorConfig
-    """Ring buffer size, sqlite rotation thresholds, placement-matrix. U-RT-08."""
+    Required (no default) — `otlp_endpoint` is genuinely operator-specific
+    and cannot reasonably default. Operators MUST provide either
+    `[runtime.otel] otlp_endpoint = "..."` in their config file OR pass via
+    CLI override."""
+
+    collector: CollectorConfig = Field(default_factory=CollectorConfig)
+    """Ring buffer size, sqlite rotation thresholds, placement-matrix. U-RT-08.
+
+    Default-factory'd per finding-fix (A) above. `CollectorConfig()` provides
+    sensible defaults for ring-buffer size + rotation thresholds + placement."""
 
     default_topology: TopologyPattern
     """TopologyPattern dispatched when no per-workflow override is set."""
