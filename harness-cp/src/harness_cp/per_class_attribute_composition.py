@@ -137,10 +137,15 @@ _REQUIRED_ATTRIBUTES: dict[WorkflowEventClass, frozenset[str]] = {
     WorkflowEventClass.LEASE_RELEASED: frozenset(
         {"lease.key", "lease.holder", "lease.release_cause"}
     ),
-    # §5.2 verbatim: workflow.id, engine.class, resumption.kind, idempotency_key.
-    # Per the v1.3 §5.2 amendment + U-CP-21 4-attribute namespace + U-CP-20
-    # acceptance #2, `engine.replay_disposition` is a required attribute at
-    # `workflow.resumption` (acc #3).
+    # §5.2 (v1.2 lineage) declared the carrier attribute as `resumption.kind`;
+    # §9.1 v1.3 amendment (F2-12 sub-scope (i) closure) introduced
+    # `engine.replay_disposition` as the canonical 4th `engine.*` attribute +
+    # superseded the §8.1/§5.2 `resumption.kind` carrier name at the at-emission
+    # layer. Plan U-CP-20 acceptance #2 + U-CP-21 4-attribute namespace adopted
+    # `engine.replay_disposition` as the required attribute at
+    # `workflow.resumption`. CP spec v1.23 canonical-reading amendment
+    # harmonizes §5.2 + §8.1 + §8.3 to cite `engine.replay_disposition` per
+    # §9.1 v1.3 supersession.
     WorkflowEventClass.RESUMPTION: frozenset(
         {"workflow.id", "engine.class", "engine.replay_disposition", "idempotency_key"}
     ),
