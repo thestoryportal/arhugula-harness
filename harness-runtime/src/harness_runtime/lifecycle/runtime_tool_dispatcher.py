@@ -33,7 +33,7 @@ import hashlib
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import jsonschema
 
@@ -49,7 +49,6 @@ from harness_cp.mcp_client_namespace_emitter import (
 from harness_cp.per_server_trust_evaluator import PerServerTrustEvaluator
 from harness_cp.per_server_trust_types import (
     MCPPrimitive,
-    TrustDecisionReason,
     TrustPolicy,
 )
 from harness_cp.workflow_driver_types import (
@@ -310,11 +309,15 @@ class RuntimeToolDispatcher:
                 f"{sorted(payload.keys())})"
             )
         tool_id: str = tool_id_raw
-        tool_args = payload.get("tool_args") or {}
-        if not isinstance(tool_args, Mapping):
+        tool_args_raw: Any = payload.get("tool_args")
+        if tool_args_raw is None:
+            tool_args: Mapping[str, Any] = {}
+        elif isinstance(tool_args_raw, Mapping):
+            tool_args = cast("Mapping[str, Any]", tool_args_raw)
+        else:
             raise ToolContractUnknownError(
                 f"TOOL_STEP 'tool_args' must be a mapping "
-                f"(got {type(tool_args).__name__})"
+                f"(got {type(tool_args_raw).__name__})"
             )
 
         # --- Step 1: resolve ToolContract from registry ---------------------
