@@ -1,6 +1,12 @@
 # Class 1 Fork — H_T-AS-8f `managed_agents.*` namespace producer-site absence + production-only exclusion semantic
 
-**Status:** 🟡 PROPOSING (filing-only stop-point per advisor pre-substantive consultation convention; ratification owed at next session via operator AskUserQuestion at §3 Q1)
+**Status:** ✅ RATIFIED 2026-05-28 (operator AskUserQuestion same-session as filing per accelerated single-session ratification cycle; apply arc opens at next commit)
+
+**Operator ratification (2026-05-28):**
+
+| Q | Answer | Note |
+|---|---|---|
+| Q1 | **(C) DEFER INDEFINITELY (mirror AS-8e files.* per runtime spec v1.17 §14.C ratification precedent)** | Honors AS spec C-AS-13 §13.2 design declaration excluding managed_agents at local-development for all workload classes; advisor-blessed; ~1 commit apply arc. Reading B (operator-opt-in mirror AS-8d) dropped pre-ratification as category error per advisor pre-substantive consultation. |
 
 **Filed at:** 2026-05-28
 
