@@ -1,5 +1,7 @@
 # Class 1 Fork — `ValidatorFailClass` namespace collision at U-CP-58 / 10-CP-A entry
 
+**Status:** ✅ RESOLVED-via-Path-β (status-line refreshed 2026-05-27) — collision resolved by renaming the EXISTING C-CP-21 enum (not the new C-CP-25 enum per fork's recommended Path α). Empirical verification at HEAD `3e15cbc`: `harness-cp/src/harness_cp/validator_fail_taxonomy.py:39` declares `ValidatorRetryExitClass` (renamed from C-CP-21 `ValidatorFailClass`); `harness-cp/src/harness_cp/validator_framework_types.py:69` declares the new `ValidatorFailClass` (C-CP-25 / renamed to §28 / C-CP-28 at CP spec v1.13 per `[[fork-cp-spec-section-25-contract-id-collision]]`); `validator_fail_transient_staircase.py:36` cascade-imports `ValidatorRetryExitClass`. No same-name collision at any layer. Operator chose Path β over recommended Path α — both preserved C-CP-25 contract surface; difference was which side absorbed the rename cost. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
 ## Filing metadata
 
 | Field | Value |
