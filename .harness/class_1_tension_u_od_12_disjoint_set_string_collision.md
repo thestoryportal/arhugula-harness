@@ -1,6 +1,8 @@
 # Class 1 Tension — U-OD-12: acc #2 set-disjointness contradicted by the declared member sets
 
-**Status:** 🛑 OPEN — filed 2026-05-16 during Phase 7 sub-phase 7b OD axis-stream (L5 batch).
+**Status:** ✅ CLOSED-via-OD-plan-v2.8-D-4 (resolved 2026-05-16; status-line refreshed 2026-05-27) — production landed at `harness-od/src/harness_od/base_rate_set_and_envelope.py` (`DUAL_REGIME_EVENT_CLASSES` documentation + v2.5 unconditional-disjointness test replaced by D-4-variant per OD plan v2.8 §0.2 defect table). **Status-line refresh** per workflow v1.9 §7.4.7.3 empirical-verification discipline — fork-doc body §"RESOLVED" (line 127) declared closure at v2.8 publication; top **Status:** field stale until this refresh. Species 3 (resolved-but-carry-stale-inherited) per workflow v1.9 §7.4.7.2.
+
+_Original filing:_ 🛑 OPEN — filed 2026-05-16 during Phase 7 sub-phase 7b OD axis-stream (L5 batch).
 **Unit:** U-OD-12 — Declare 13-entry base-rate-sampled set + per-cell tuning envelope.
 **Plan body:** `Implementation_Plan_Operational_Discipline_v2_5.md` §3.4.2 (v2.5 conformance revision; not re-pointed at v2.6 — v2.6 §3 pointer table does not list U-OD-12).
 **Spec contract:** `Spec_Operational_Discipline_v1_3.md` C-OD-10 §10.1, §10.2, §10.3 (preserved verbatim from v1.2 §10).

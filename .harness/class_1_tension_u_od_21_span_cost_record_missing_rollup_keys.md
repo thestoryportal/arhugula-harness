@@ -1,6 +1,8 @@
 # Class 1 Tension — U-OD-21: `SpanCostRecord` carrier lacks the rollup keys acc #3 requires
 
-**Status:** 🛑 OPEN — filed 2026-05-16 during Phase 7 sub-phase 7b OD axis-stream (L4 batch).
+**Status:** ✅ CLOSED-via-OD-plan-v2.8-D-5 (resolved 2026-05-16; carrier grown at commit `600b902` 2026-05-20; status-line refreshed 2026-05-27) — `SpanCostRecord` 9 → 12 fields with rollup keys `provider_discriminator` + `gen_ai_provider_name` + `gen_ai_request_model` at `harness-od/src/harness_od/idempotency_join_dedup.py:180-184` per OD plan v2.8 §0.2 defect table. **Status-line refresh** per workflow v1.9 §7.4.7.3 empirical-verification discipline — fork-doc body §"RESOLVED" (line 135) declared closure at v2.8 publication + source landing at `600b902`; top **Status:** field stale until this refresh. Species 3 (resolved-but-carry-stale-inherited) per workflow v1.9 §7.4.7.2.
+
+_Original filing:_ 🛑 OPEN — filed 2026-05-16 during Phase 7 sub-phase 7b OD axis-stream (L4 batch).
 **Unit:** U-OD-21 — Compose cross-family `provider_discriminator` rollup + tokenization-version anchor.
 **Plan body:** `Implementation_Plan_Operational_Discipline_v2_6.md` §3.5.4 (v2.6 M-2 revision) over `Implementation_Plan_Operational_Discipline_v2_1.md` §3.5.4 (v2.1 base body).
 **Spec contract:** `Spec_Operational_Discipline_v1_3.md` C-OD-15 §15.1, §15.2, §15.3 (preserved verbatim from v1.2).
