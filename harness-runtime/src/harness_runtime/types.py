@@ -133,6 +133,17 @@ from harness_runtime.lifecycle.webhook_delivery_composer import (
     WebhookDeliveryComposer,
 )
 
+# U-RT-99 — SkillActivationHookConfig + SkillActivationSpanEmitter carriers
+# per runtime spec v1.32 §14.17 (NEW C-RT-27). Operator-opt-in MVP shape per
+# .harness/class_1_fork_as_8d_skill_activation_surface_absence.md Reading B
+# (2026-05-28). Closes H_T-AS-8d producer-site absence at STILL-BOUNDED →
+# RETIRE-READY transit.
+from harness_runtime.lifecycle.skill_activation import (
+    SkillActivationHookConfig,
+    SkillActivationSpanEmitter,
+    UnknownSkillError,
+)
+
 __all__ = [
     "AuditLedgerWriter",
     "BootstrapStage",
@@ -1197,6 +1208,30 @@ class RuntimeConfig(BaseModel):
     (U-RT-97) per §14.16.3.
     """
 
+    skill_activation_hook_config: SkillActivationHookConfig | None = None
+    """Operator-supplied Skill activation hook policy + opt-in marker.
+
+    Added at U-RT-99 per runtime spec v1.32 §3 C-RT-02 field-table extension
+    (Reading B operator-opt-in MVP shape per
+    `.harness/class_1_fork_as_8d_skill_activation_surface_absence.md`;
+    operator-ratified 2026-05-28).
+
+    `None` (the default) → operator opt-out → stage-5 factory returns `None`
+    → `ctx.skill_activation_emitter is None` → all 3 hook binding sites
+    (per-LLM-dispatch / per-workflow-init / operator-explicit
+    `ctx.activate_skill(...)`) evaluate False arm (no spans emitted;
+    production-default state preserved). Non-`None` → operator opt-in →
+    stage-5 factory constructs a `SkillActivationSpanEmitter` instance
+    bound to `ctx.skill_activation_emitter`; hook binding sites query the
+    bound `SkillActivationHook` Protocol implementation (sourced from
+    `skill_activation_hook_config.hook`) at firing time + emit one
+    `skill.activation` span per activated skill.
+
+    Ingested at stage 5 LOOP_INIT by
+    `materialize_skill_activation_emitter_stage` factory (U-RT-100) per
+    §14.17.3.
+    """
+
 
 # ----------------------------------------------------------------------------
 # `HarnessContext` — C-RT-04 v1.1 schema.
@@ -1309,6 +1344,15 @@ class HarnessContext(BaseModel):
     # `ctx.webhook_delivery_composer.deliver_webhook(brief, idempotency_key)`.
     # See spec v1.26 §4 row + §14.16.
     webhook_delivery_composer: WebhookDeliveryComposer | None = None
+
+    # U-RT-100 — SkillActivationSpanEmitter carrier per runtime spec v1.32
+    # §4 + §14.17 (NEW C-RT-27). Operator-opt-in MVP per Reading B Q1=(B);
+    # bound at stage-5 LOOP_INIT factory `materialize_skill_activation_emitter_stage`.
+    # `None` when `RuntimeConfig.skill_activation_hook_config is None`
+    # (operator opt-out — production-default state). See spec §14.17.1.
+    skill_activation_emitter: SkillActivationSpanEmitter | None = None
+
+
 
     # U-RT-94 — Runtime-internal sidecar carrier for one-shot ResumeContext
     # delivery across the pause-resume cycle. Bound at stage 5 LOOP_INIT to
@@ -1493,3 +1537,41 @@ class HarnessContext(BaseModel):
         surfaced like ``default_gate_level`` at CP spec v1.20 §6.1.Y).
         """
         return self.config.tenant_id
+
+    def activate_skill(self, skill_id: SkillID, workflow_id: str = "") -> None:
+        """Operator-explicit Skill activation hook (hook-3 per spec §14.17.2).
+
+        Emits one ``skill.activation`` span with ``activation_mode =
+        FILESYSTEM_READ``. Silent-skip when ``skill_activation_emitter is
+        None`` (operator opt-out path per §14.17.5 invariant 3). Raises
+        ``UnknownSkillError`` when ``skill_id`` is not loaded.
+
+        Per ``Spec_Harness_Runtime_v1.md`` v1.32 §14.17.2 hook-3 (plan v2.28
+        U-RT-101). Co-located with ``HarnessContext`` per Q4=(q) NEW module
+        ratification at the fork: the activation surface (this method) lives
+        on the context; the emitter carrier lives at
+        ``harness_runtime/lifecycle/skill_activation.py``.
+
+        Parameters
+        ----------
+        skill_id :
+            Identifier of the loaded Skill to activate.
+        workflow_id :
+            Operator-supplied workflow correlation key per spec §14.17.7
+            deferred-discretion option (a). Defaults to empty string when
+            invoked outside an active workflow; operator code with workflow
+            scope SHOULD pass the current workflow_id explicitly.
+        """
+        if self.skill_activation_emitter is None:
+            # Silent-skip per §14.17.5 invariant 3 (operator opt-out path).
+            return
+        if skill_id not in self.skills:
+            raise UnknownSkillError(skill_id)
+        from harness_runtime.lifecycle.skill_activation import SkillActivationMode
+
+        self.skill_activation_emitter.emit(
+            skill_id=skill_id,
+            mode=SkillActivationMode.FILESYSTEM_READ,
+            workflow_id=workflow_id,
+            skill=self.skills[skill_id],
+        )

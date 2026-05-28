@@ -277,6 +277,14 @@ class RuntimeLLMDispatcher:
     # spans emit neither `server.address` nor `server.port` per OTel
     # Conditionally Required "If `server.address` is set" gating.
     ollama_host: str | None = None
+    # U-RT-101 (C-RT-27 §14.17.2 hook-2 per-LLM-dispatch) — Skill activation
+    # emitter + loaded skills carrier. Both default None for unit-test
+    # ergonomics; production stage-5 binding sets both when the operator opts
+    # in via `RuntimeConfig.skill_activation_hook_config`. When either is None
+    # OR the emitter's bound hook is None, the per-LLM-dispatch activation
+    # hook silent-skips per §14.17.5 invariant 3.
+    skill_activation_emitter: Any = None
+    skills: Any = None
 
     async def dispatch(
         self,
@@ -310,6 +318,38 @@ class RuntimeLLMDispatcher:
             at `workflow_driver.py:380-389` fails the step with
             ``step-failure: {type}: {exc}``.
         """
+        # --- C-RT-27 §14.17.2 hook-2 (per-LLM-dispatch activation hook) ---
+        # Pre-condition: emitter bound + hook bound + skills available. When
+        # any is missing/None, silent-skip per §14.17.5 invariant 3 (operator
+        # opt-out path preserves pre-v1.32 production behavior). Emit one
+        # `skill.activation` span per skill returned by the operator-supplied
+        # `SkillActivationHook.select_for_llm_dispatch(...)` policy, with
+        # `activation_mode = TOOL_SEARCH` per Q2=(d) hybrid hook-to-enum
+        # mapping. Fires BEFORE provider resolution + LLM call per §14.17.2
+        # hook-2 step 4 ordering.
+        if (
+            self.skill_activation_emitter is not None
+            and self.skill_activation_emitter.hook is not None
+            and self.skills is not None
+        ):
+            from harness_runtime.lifecycle.skill_activation import SkillActivationMode
+
+            selected_ids = list(
+                self.skill_activation_emitter.hook.select_for_llm_dispatch(
+                    loaded_skills=self.skills.keys(),
+                    workflow_id=step_context.workflow_id,
+                    step_index=step_context.step_index,
+                )
+            )
+            for skill_id in selected_ids:
+                if skill_id in self.skills:
+                    self.skill_activation_emitter.emit(
+                        skill_id=skill_id,
+                        mode=SkillActivationMode.TOOL_SEARCH,
+                        workflow_id=step_context.workflow_id,
+                        skill=self.skills[skill_id],
+                    )
+
         # --- Step 1: provider resolution --------------------------------
         provider_name = binding.model_binding.provider
         if provider_name not in self.providers:
@@ -964,6 +1004,8 @@ def materialize_llm_dispatcher_stage(
     memory_tool_registry: Any = None,
     deployment_surface: Any = None,
     ollama_host: str | None = None,
+    skill_activation_emitter: Any = None,
+    skills: Any = None,
 ) -> RuntimeLLMDispatcher:
     """Stage 5 LOOP_INIT composer factory for the LLM dispatcher (U-RT-52).
 
@@ -995,6 +1037,8 @@ def materialize_llm_dispatcher_stage(
         memory_tool_registry=memory_tool_registry,
         deployment_surface=deployment_surface,
         ollama_host=ollama_host,
+        skill_activation_emitter=skill_activation_emitter,
+        skills=skills,
     )
 
 

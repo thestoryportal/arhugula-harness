@@ -51,6 +51,9 @@ from harness_runtime.bootstrap.factories.pause_resume_protocol_factory import (
 from harness_runtime.bootstrap.factories.webhook_delivery_composer_factory import (
     materialize_webhook_delivery_composer_stage,
 )
+from harness_runtime.bootstrap.factories.skill_activation_emitter_factory import (
+    materialize_skill_activation_emitter_stage,
+)
 from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
 from harness_runtime.bootstrap.factories.runtime_tool_dispatcher_factory import (
     materialize_runtime_tool_dispatcher_stage,
@@ -127,6 +130,16 @@ async def execute(
     # LOOP_INIT is arbitrary per spec §14.12.3.
     await materialize_memory_tool_registry_stage(config, ctx)
 
+    # U-RT-100 — SkillActivationSpanEmitter materialization per runtime spec
+    # v1.32 §14.17.3. Operator-opt-in MVP per Reading B Q1=(B): factory returns
+    # None when config.skill_activation_hook_config is None (operator opt-out,
+    # production-default); returns a bound emitter when opt-in. Materialized
+    # BEFORE bare_dispatcher so the per-LLM-dispatch hook-2 binding site (§14.17.2)
+    # can be threaded into RuntimeLLMDispatcher construction.
+    ctx.skill_activation_emitter = await materialize_skill_activation_emitter_stage(
+        config, ctx
+    )
+
     bare_dispatcher = materialize_llm_dispatcher_stage(
         providers,
         cast(Any, tracer_provider),
@@ -136,6 +149,8 @@ async def execute(
         memory_tool_registry=ctx.memory_tool_registry,
         deployment_surface=config.deployment_surface,
         ollama_host=config.ollama_host,
+        skill_activation_emitter=ctx.skill_activation_emitter,
+        skills=ctx.skills,
     )
 
     # U-RT-58 (C-RT-16 §14.6 D6): rebind ``ctx.llm_dispatcher`` from the
@@ -219,6 +234,7 @@ async def execute(
         config, ctx
     )
     ctx.resume_context_holder = ResumeContextHolder()
+
 
     hitl_inference = RuntimeHITLGateComposer(
         inner=bare_dispatcher,

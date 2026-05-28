@@ -331,6 +331,16 @@ class DriverContext(Protocol):
     # WorkflowManifestEntry schema extension).
     tenant_id: str | None
 
+    # U-RT-101 (C-RT-27 §14.17.2 hook-1 per-workflow-init) — Skill activation
+    # emitter + loaded skills. Both default-None-safe at the binding-site
+    # arm; structurally satisfied by HarnessContext.skill_activation_emitter
+    # + ctx.skills per runtime spec v1.32 §4. Typed as `object | None` to
+    # avoid pulling harness_runtime.lifecycle.skill_activation into the CP
+    # Protocol surface. When None, the per-workflow-init hook silent-skips
+    # per §14.17.5 invariant 3 (operator opt-out path preserved).
+    skill_activation_emitter: object | None
+    skills: object
+
 
 # ---------------------------------------------------------------------------
 # Driver core
@@ -483,6 +493,38 @@ def execute_workflow(
             final_state=None,
             fail_class=None,
         )
+
+    # U-RT-101 (C-RT-27 §14.17.2 hook-1 per-workflow-init activation hook).
+    # Pre-condition: emitter bound + hook bound + skills available. When any
+    # is missing/None, silent-skip per §14.17.5 invariant 3 (operator opt-out
+    # path preserves pre-v1.32 production behavior). Emit one
+    # `skill.activation` span per skill returned by the operator-supplied
+    # `SkillActivationHook.select_for_workflow_init(...)` policy, with
+    # `activation_mode = FRONTMATTER_ONLY` per Q2=(d) hybrid hook-to-enum
+    # mapping. Fires AFTER drain check + BEFORE resume detection / first
+    # step dispatch per §14.17.2 hook-1 step 4 ordering.
+    _emitter = getattr(ctx, "skill_activation_emitter", None)
+    _skills = getattr(ctx, "skills", None)
+    if _emitter is not None and _skills is not None:
+        _hook = getattr(_emitter, "hook", None)
+        if _hook is not None:
+            # String literal per AS spec v1.7 §14.4 + runtime spec v1.32
+            # §14.17.1 enum. Passed as str (NOT importing SkillActivationMode)
+            # to preserve workspace dep-graph discipline — harness-cp does
+            # NOT depend on harness-runtime per harness-cp/pyproject.toml;
+            # the StrEnum value space is the contract surface across
+            # workspace package boundaries.
+            for _skill_id in _hook.select_for_workflow_init(
+                loaded_skills=_skills.keys(),
+                workflow_id=manifest_entry.workflow_id,
+            ):
+                if _skill_id in _skills:
+                    _emitter.emit(
+                        skill_id=_skill_id,
+                        mode="frontmatter_only",
+                        workflow_id=manifest_entry.workflow_id,
+                        skill=_skills[_skill_id],
+                    )
 
     # U-RT-89 (C-RT-24 §14.14.3) — entry-point resume detection.
     # When the caller supplies a pause_snapshot_input + the operator has bound

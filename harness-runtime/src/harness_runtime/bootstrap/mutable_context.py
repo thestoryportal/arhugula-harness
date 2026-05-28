@@ -324,6 +324,18 @@ class _MutableHarnessContext:
     ``HarnessContext.validator_framework`` field carries the narrowed
     ``ValidatorFramework | None`` Protocol surface."""
 
+    skill_activation_emitter: Any = None
+    """U-RT-100 — SkillActivationSpanEmitter (runtime spec v1.32 §14.17.1
+    ``SkillActivationSpanEmitter`` class body). Bound at stage 5 LOOP_INIT by
+    ``materialize_skill_activation_emitter_stage`` per runtime spec v1.32
+    §14.17.3. Optional (``None`` = operator opt-out preserving the pre-v1.32
+    production-default state); NOT in ``_REQUIRED_FIELDS``. Typed ``Any`` on
+    the mutable builder per the same Protocol-vs-concrete-narrowing pattern
+    as ``validator_framework`` + ``pause_resume_protocol`` +
+    ``webhook_delivery_composer``; the frozen
+    ``HarnessContext.skill_activation_emitter`` field carries the narrowed
+    ``SkillActivationSpanEmitter | None`` class surface."""
+
     # Orchestrator bookkeeping — not part of HarnessContext.
     completed_stages: list[BootstrapStage] = field(default_factory=list)
     emitted_bootstrap_events: list[BootstrapStageCompleteEvent] = field(default_factory=list)
@@ -380,6 +392,7 @@ class _MutableHarnessContext:
             validator_framework=self.validator_framework,
             resume_context_holder=self.resume_context_holder,
             webhook_delivery_composer=self.webhook_delivery_composer,
+            skill_activation_emitter=self.skill_activation_emitter,
         )
         self.frozen = ctx
         return ctx
