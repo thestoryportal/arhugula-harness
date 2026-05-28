@@ -399,12 +399,18 @@ class CollectorConfig(BaseModel):
     batch_size: int = BATCH_SPAN_PROCESSOR_BATCH_SIZE
     """BSP batch size (C-OD-19 §19.1 default = 512; > 0)."""
 
+    sqlite_retention_days: int = 7
+    """Retention horizon for sqlite span-store rows per OD spec v1.8 §C-OD-27.2
+    row 3 (operator-configurable; default 7 days). U-OD-44 lazy-on-write
+    cleanup applies this at every `RuntimeRingBuffer.flush_to_sqlite` call."""
+
     @field_validator(
         "ring_buffer_size",
         "sqlite_rotation_max_rows",
         "sqlite_rotation_max_bytes",
         "batch_window_seconds",
         "batch_size",
+        "sqlite_retention_days",
     )
     @classmethod
     def _positive(cls, value: int) -> int:

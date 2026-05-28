@@ -17,11 +17,18 @@ from harness_od.sqlite_span_store import (
     SpanInsertRow,
     initialize_span_store,
     insert_spans,
+    retention_cleanup_lazy,
 )
 
 
+_NS_PER_DAY = 86_400 * 1_000_000_000
+
+
 def _make_row(
-    span_id: str = "s1", *, parent_span_id: str | None = None
+    span_id: str = "s1",
+    *,
+    parent_span_id: str | None = None,
+    end_time_ns: int = 200,
 ) -> SpanInsertRow:
     return SpanInsertRow(
         span_id=span_id,
@@ -30,7 +37,7 @@ def _make_row(
         name="workflow.envelope",
         kind=0,
         start_time_ns=100,
-        end_time_ns=200,
+        end_time_ns=end_time_ns,
         status_code=0,
         status_message=None,
         attributes_json="{}",
@@ -260,6 +267,51 @@ def test_span_insert_row_is_frozen(db_path: Path) -> None:
     row = _make_row("s1")
     with pytest.raises(Exception):  # pydantic raises ValidationError on frozen
         row.span_id = "s2"  # type: ignore[misc]
+
+
+def test_retention_cleanup_deletes_rows_older_than_horizon(db_path: Path) -> None:
+    conn = initialize_span_store(db_path)
+    now_ns = 100 * _NS_PER_DAY
+    old = [_make_row(f"old{i}", end_time_ns=10 * _NS_PER_DAY) for i in range(5)]
+    fresh = [_make_row(f"new{i}", end_time_ns=99 * _NS_PER_DAY) for i in range(3)]
+    try:
+        insert_spans(conn, old + fresh)
+        deleted = retention_cleanup_lazy(conn, retention_days=7, now_ns=now_ns)
+        remaining = conn.execute("SELECT COUNT(*) FROM spans").fetchone()[0]
+    finally:
+        conn.close()
+    assert deleted == 5
+    assert remaining == 3
+
+
+def test_retention_cleanup_returns_zero_when_nothing_expired(db_path: Path) -> None:
+    conn = initialize_span_store(db_path)
+    now_ns = 10 * _NS_PER_DAY
+    rows = [_make_row(f"s{i}", end_time_ns=9 * _NS_PER_DAY) for i in range(4)]
+    try:
+        insert_spans(conn, rows)
+        deleted = retention_cleanup_lazy(conn, retention_days=7, now_ns=now_ns)
+    finally:
+        conn.close()
+    assert deleted == 0
+
+
+def test_retention_horizon_boundary_inclusive_at_cutoff(db_path: Path) -> None:
+    """Spec §27.2 row 3: DELETE WHERE end_time_ns < cutoff (strict less-than).
+    Row at exactly cutoff_ns is preserved."""
+    conn = initialize_span_store(db_path)
+    now_ns = 100 * _NS_PER_DAY
+    cutoff_ns = now_ns - 7 * _NS_PER_DAY
+    boundary = _make_row("boundary", end_time_ns=cutoff_ns)
+    just_before = _make_row("expired", end_time_ns=cutoff_ns - 1)
+    try:
+        insert_spans(conn, [boundary, just_before])
+        deleted = retention_cleanup_lazy(conn, retention_days=7, now_ns=now_ns)
+        remaining = sorted(r[0] for r in conn.execute("SELECT span_id FROM spans"))
+    finally:
+        conn.close()
+    assert deleted == 1
+    assert remaining == ["boundary"]
 
 
 def test_returns_open_sqlite3_connection(db_path: Path) -> None:

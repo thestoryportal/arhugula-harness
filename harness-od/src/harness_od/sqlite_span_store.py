@@ -35,7 +35,10 @@ __all__ = [
     "SpanInsertRow",
     "initialize_span_store",
     "insert_spans",
+    "retention_cleanup_lazy",
 ]
+
+_NS_PER_DAY: int = 86_400 * 1_000_000_000
 
 
 SPANS_DDL = """\
@@ -154,5 +157,24 @@ def insert_spans(conn: sqlite3.Connection, rows: Iterable[SpanInsertRow]) -> int
     if not tuples:
         return 0
     cur = conn.executemany(_INSERT_SQL, tuples)
+    conn.commit()
+    return cur.rowcount
+
+
+def retention_cleanup_lazy(
+    conn: sqlite3.Connection, retention_days: int, now_ns: int
+) -> int:
+    """Delete rows with `end_time_ns < (now_ns - retention_days * 86_400 * 1e9)`.
+
+    Implements OD spec v1.8 §C-OD-27.2 row 3 retention policy under the
+    §27.5 row 2 lazy-on-write default discipline. Caller invokes once per
+    flush (or per any sqlite-write moment) — no background task per
+    deliberate avoidance of additional async machinery.
+
+    Returns the count of rows deleted. `retention_days` is validated > 0 at
+    `CollectorConfig` boundary; we trust the contract here.
+    """
+    cutoff_ns = now_ns - retention_days * _NS_PER_DAY
+    cur = conn.execute("DELETE FROM spans WHERE end_time_ns < ?", (cutoff_ns,))
     conn.commit()
     return cur.rowcount

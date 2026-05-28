@@ -339,7 +339,8 @@ async def test_flush_to_sqlite_writes_buffered_rows(tmp_path: Path) -> None:
     _seed(daemon, [_span_row(f"s{i}") for i in range(5)])
     conn = initialize_span_store(tmp_path / "spans.db")
     try:
-        inserted = await ring.flush_to_sqlite(conn)
+        # now_ns=0 keeps placeholder-aged rows inside the retention horizon.
+        inserted = await ring.flush_to_sqlite(conn, now_ns=0)
         count = conn.execute("SELECT COUNT(*) FROM spans").fetchone()[0]
     finally:
         conn.close()
@@ -366,14 +367,67 @@ async def test_re_flush_is_no_op_per_spec_27_4_inv_3(tmp_path: Path) -> None:
     _seed(daemon, [_span_row(f"s{i}") for i in range(3)])
     conn = initialize_span_store(tmp_path / "spans.db")
     try:
-        first = await ring.flush_to_sqlite(conn)
-        second = await ring.flush_to_sqlite(conn)
+        first = await ring.flush_to_sqlite(conn, now_ns=0)
+        second = await ring.flush_to_sqlite(conn, now_ns=0)
         count = conn.execute("SELECT COUNT(*) FROM spans").fetchone()[0]
     finally:
         conn.close()
     assert first == 3
     assert second == 0
     assert count == 3
+
+
+async def test_flush_to_sqlite_applies_retention_cleanup_per_u_od_44(
+    tmp_path: Path,
+) -> None:
+    """100 spans across 14 days + flush with 7-day retention → ~50 remain
+    (AC #5: U-OD-44 ledger). Lazy-on-write cleanup fires during flush."""
+    from harness_od.sqlite_span_store import SpanInsertRow, insert_spans
+
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
+    conn = initialize_span_store(tmp_path / "spans.db")
+    _NS_PER_DAY = 86_400 * 1_000_000_000
+    now_ns = 14 * _NS_PER_DAY
+    # Pre-load spans directly (not via ring buffer) at varied ages.
+    seed_rows = [
+        SpanInsertRow(
+            span_id=f"s{i}",
+            trace_id="t1",
+            parent_span_id=None,
+            name="seed",
+            kind=0,
+            start_time_ns=i * _NS_PER_DAY,
+            end_time_ns=i * _NS_PER_DAY + 1,
+            status_code=0,
+            status_message=None,
+            attributes_json="{}",
+            events_json="[]",
+            workflow_id=None,
+            workflow_run_id=None,
+            workflow_idempotency_key=None,
+        )
+        for i in range(14)
+    ]
+    insert_spans(conn, seed_rows)
+    try:
+        # Flush with empty buffer + retention 7d at now=day-14 → rows with
+        # end_time_ns < day-7 (i.e. spans days 0..6 since end=day*ns+1 falls
+        # into the strict-less-than-cutoff bucket for i ≤ 6) are deleted.
+        await ring.flush_to_sqlite(conn, now_ns=now_ns)
+        remaining = conn.execute("SELECT COUNT(*) FROM spans").fetchone()[0]
+        ids = {r[0] for r in conn.execute("SELECT span_id FROM spans")}
+    finally:
+        conn.close()
+    assert remaining == 7
+    assert ids == {f"s{i}" for i in range(7, 14)}
+
+
+def test_ring_buffer_carries_retention_days_from_config(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(config, daemon).ring_buffer
+    assert ring.retention_days == 7  # CollectorConfig default
 
 
 async def test_flush_to_sqlite_100_span_batch_under_100ms_per_ac_5(
