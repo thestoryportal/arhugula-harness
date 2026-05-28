@@ -4,7 +4,9 @@
 **Class:** Phase 2 design substrate — authors NEW H_T design surfaces under X-AL-3 (no silent design extension at execution-time). Operator scoping session ratification gates Phase 2b implementation.
 **Mode:** Implementation-planner / systems-architect joint scoping under skill discipline.
 **Authority anchor:** Operator AskUserQuestion 2026-05-28 4-axis Q-set ratification (this session); fork `class_1_tension_runtime_entrypoint_design_gap.md` Track B partition (filed 2026-05-16).
-**Status:** PROPOSING — operator decides on §6 sub-questions + ratifies the design before Phase 2b atomic-unit decomposition opens.
+**Status:** PROPOSING v1.1 (advisor-revision absorbed 2026-05-28) — operator decides on §6 sub-questions + ratifies the design before Phase 2b atomic-unit decomposition opens.
+
+**v1.0 → v1.1 delta:** absorbed 7 advisor findings — NEW Q-L (secrets via ADR-F5) + NEW Q-M (F2-05 daemon concurrency invariant + per-session ctx isolation rationale) + NEW Q-N (eager manifest validation) + Q-K rationale tightening (stdio single-client → multi-client requires socket/HTTP) + §3.4 pydantic-settings dep declaration + U-RT-107/U-RT-108 dep-order swap (entrypoint before client) + SIGINT drain AC added to U-RT-106/U-RT-109.
 
 ---
 
@@ -69,7 +71,11 @@ The 4 ratified decisions surface **4 new H_T design contracts** that must be aut
 - **(α) Daemon = the existing FastMCP server.** `harness daemon` starts the same `HarnessMCPServer` per §14.8.3; `harness run --daemon` is an MCP client that submits workflow invocations via the `run_workflow` tool. **Pro:** Reuses existing architecture; ZERO new IPC mechanism; symmetric with Claude Code invocation path. **Con:** Requires MCP transport (stdio/HTTP/Unix-socket) bootstrap on operator host; operator must configure both daemon AND CLI client.
 - **(β) Daemon = separate IPC mechanism** (Unix socket + lightweight RPC; or HTTP + JSON; or in-memory shared-state). `harness daemon` is NOT the FastMCP server. **Pro:** Decouples CLI from MCP protocol complexity. **Con:** NEW IPC contract = NEW X-AL-3 surface; bifurcates the workflow-invocation paths (Claude Code via MCP; CLI via custom IPC); doubles the daemon surface.
 
-**Recommendation:** (α). Reuse the existing `HarnessMCPServer` substrate. The MCP transport at protocol level already supports stdio + HTTP + WebSocket per MCP spec; operator picks transport at config time. ZERO new IPC contract. Sub-fork doc title: `class_1_fork_harness_run_daemon_protocol.md` (files only if operator selects β).
+**Recommendation:** (α). Reuse the existing `HarnessMCPServer` substrate. The MCP transport at protocol level supports stdio + HTTP + WebSocket per MCP spec; operator picks transport at config time. ZERO new IPC contract. Sub-fork doc title: `class_1_fork_harness_run_daemon_protocol.md` (files only if operator selects β).
+
+**Multi-client invariant (informs Q-K).** FastMCP-Python-SDK's `stdio` transport is single-client by design (one stdin/stdout pair = one client connection). Multi-client daemon mode (Claude Code + `harness run --daemon` simultaneously) requires `HTTP` or `Unix-socket` transport. Q-K recommendation = Unix-socket per local-process IPC + multi-client support; HTTP is the cross-host alternative for remote operators.
+
+**Concurrency invariant (resolves Q-M).** Per C-RT-08 §8 F2-05 `ConcurrentRunNotSupported`: the invariant applies to **concurrent calls from the same Python process surface against the same `api.run()` instance** — preventing two concurrent `api.run()` invocations from the same process re-entering the workflow execution surface. In daemon mode, each MCP client opens its own `ctx` session at the FastMCP server; the `run_workflow` tool handler instantiates per-call workflow execution within the session's `ctx`. **Per-session `ctx` isolation means concurrent `run_workflow` calls from different MCP clients are concurrent INDEPENDENT runs, not concurrent re-entry of the same run.** F2-05 does NOT trigger. Recommendation: (b) parallel — concurrent `run_workflow` from independent clients run as independent workflow instances. Spec-MUST invariant authored at runtime spec §14.M (NEW).
 
 ### §3.3 Surface S3 — YAML/TOML workflow manifest schema (X-AL-3 surface)
 
@@ -108,7 +114,9 @@ Operator must decide:
 
 **Recommendation:** (β) `harness.toml` at workspace root. **Rationale:** (i) Tool-convention parity with ruff/pytest/uv; (ii) `.harness/` is for fork records (operational artifacts), not operator-authored config; (iii) `pyproject.toml` section couples harness config to Python project metadata which is wrong abstraction layer.
 
-**Precedence (fixed at A4 ratification):** environment variables → config file → CLI flags (lowest priority → highest priority). Implementation: Pydantic v2 `BaseSettings` with env source + file source + CLI source.
+**Precedence (fixed at A4 ratification):** environment variables → config file → CLI flags (lowest priority → highest priority).
+
+**Implementation note (dep surface).** Pydantic v2 `BaseSettings` moved to the `pydantic-settings` package at Pydantic v2 release. Track B implementation EITHER (i) adds `pydantic-settings>=2.0` to `harness-runtime/pyproject.toml` dependencies (recommended — well-maintained, single-source-of-truth precedence) OR (ii) hand-rolls 3-source layering against existing Pydantic v2 base model. Recommendation: (i) — pydantic-settings is the canonical 3-source layered-config substrate; hand-rolling risks precedence ordering bugs.
 
 ---
 
@@ -163,8 +171,11 @@ The 4 ratified decisions at A1-A4 surface 2 sub-forks per X-AL-3 (no silent H_T 
 | **Q-J** | S1 CLI | Subcommand structure: flat (`harness run`, `harness inspect`, `harness shutdown`) (a) vs nested (`harness workflow run`, `harness daemon start`) (b)? | **(a) flat** — preserves Track A precedent (`harness-inspect`, `harness-shutdown`); shorter typing surface |
 | **Q-K** | S2 daemon (gated on Q-A=α) | MCP transport for daemon ↔ CLI: stdio (a) vs HTTP (b) vs Unix-socket (c) vs WebSocket (d)? | **(c) Unix-socket** — local-process IPC; no port-collision risk; cross-platform per MCP transport plugins |
 | **Q-Q** | S1 CLI | `--watch` / `--reload` dev-loop mode: include at first cut (a) vs defer (b)? | **(b) defer** — dev-loop ergonomics is iteration-2 |
+| **Q-L** | S1 + S2 secrets | LLM API key source: env vars only (a) vs ADR-F5 tier-aware `python-keyring` (b) vs config-file plaintext (c)? | **(b)** — honors ADR-F5 tier-aware secret-fetch; env-var fallback at LOCAL_DEV tier; plaintext config-file rejected (security) |
+| **Q-M** | S2 daemon concurrency | `ConcurrentRunNotSupported` (C-RT-08 §8 F2-05) — daemon receives concurrent `run_workflow` from Claude Code + CLI client: queue serially (a) vs run parallel (b) vs reject 2nd (c)? | **(b) parallel** — each MCP `ctx` session is independent per FastMCP per-session ctx isolation; F2-05 applies to same-process same-WorkflowObject re-entry, NOT to independent client sessions; doc explicit invariant in §14.M |
+| **Q-N** | S3 manifest validation timing | Eager (fail-fast on load) (a) vs lazy (fail-at-dispatch) (b)? | **(a) eager** — operator-facing CLI ergonomics; surface errors before workflow dispatch; rejects malformed manifest at U-RT-104 load entrypoint |
 
-**Operator ratification routing:** All 13 sub-questions (Q-A through Q-K + Q-Q) ratified in a single AskUserQuestion round opens SF-1 + SF-2 (if needed) authoring; ratification of SF-1 + SF-2 opens Phase 2b atomic-unit decomposition.
+**Operator ratification routing:** All 17 sub-questions (Q-A through Q-K + Q-Q + Q-L + Q-M + Q-N) ratified in a single AskUserQuestion round opens SF-1 + SF-2 (if needed) authoring; ratification of SF-1 + SF-2 opens Phase 2b atomic-unit decomposition.
 
 ---
 
@@ -178,10 +189,10 @@ Pending operator ratification of §6 Q-set, the Phase 2b implementation plan add
 | **U-RT-103** | S4 config loader | `BaseSettings` 3-source loader (env + harness.toml + CLI flags); fixed precedence; YAML/TOML config-file parser | U-RT-102 |
 | **U-RT-104** | S3 manifest loader | `WorkflowManifestLoader` Protocol + step-list shape implementation + version validation + closed-schema rejection | U-RT-103 |
 | **U-RT-105** | S3 manifest → WorkflowObject projection | YAML/TOML manifest → `WorkflowObject` Protocol satisfaction (per existing C-RT-08 surface) | U-RT-104 |
-| **U-RT-106** | S1 CLI one-shot mode | `harness run <file>` invokes `api.run(workflow, config)` synchronously; emits RunResult to stdout | U-RT-105 |
-| **U-RT-107** | S2 daemon-mode CLI client | `harness run <file> --daemon` instantiates MCP client; submits via `run_workflow` tool; receives RunResult | U-RT-106 + existing U-RT-62 FastMCP server |
-| **U-RT-108** | S2 daemon-mode entrypoint | `harness daemon` admin CLI starts persistent `HarnessMCPServer` with Unix-socket transport per Q-K | U-RT-107 |
-| **U-RT-109** | E2E integration | Real YAML manifest → CLI invocation → real workflow execution → RunResult emission; one-shot + daemon both verified | U-RT-108 |
+| **U-RT-106** | S1 CLI one-shot mode | `harness run <file>` invokes `api.run(workflow, config)` synchronously; emits RunResult to stdout; SIGINT/SIGTERM propagates drain via existing `drained_flag` per shutdown.py | U-RT-105 |
+| **U-RT-107** | S2 daemon-mode entrypoint | `harness daemon` admin CLI starts persistent `HarnessMCPServer` with Unix-socket transport per Q-K | U-RT-106 + existing U-RT-62 FastMCP server |
+| **U-RT-108** | S2 daemon-mode CLI client | `harness run <file> --daemon` instantiates MCP client; submits via `run_workflow` tool; receives RunResult | U-RT-107 |
+| **U-RT-109** | E2E integration | Real YAML manifest → CLI invocation → real workflow execution → RunResult emission; one-shot + daemon both verified; SIGINT mid-workflow → clean drain → ledger-resumable next invocation | U-RT-108 |
 
 **Net additions:** 8 atomic units (U-RT-102 through U-RT-109); 1 NEW L-cluster; 7 within-cluster edges + 1 cluster-boundary edge to U-RT-62. ZERO cross-axis edges.
 
