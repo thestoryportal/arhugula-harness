@@ -1,7 +1,9 @@
 # Class 1 fork — Tension 004 D-2 / D-3 re-litigation against OTel 1.41.0 archived text
 
 **Filed:** 2026-05-26 (post OD spec v1.15 finding-(a) closure arc; arose from §"Adjacent observations" carry (b) re-evaluation per session resumption from checkpoint `20260526-223000-od-spec-v1-15-finding-a-phantom-close.md`)
-**Status:** OPEN — awaiting operator routing decision
+**Status:** ✅ RATIFIED-AND-APPLIED 2026-05-26 (status-line refreshed 2026-05-27) — SECOND tension re-litigation in workspace history (after D-1 R2); OD spec v1.16 NEW §1.1 operations enum 7 → 9 values (add `invoke_workflow` + `retrieval` per OTel 1.41.0 archived text) + §1.2 attribute tiers 3 → 4 tiers (add `Conditionally Required`) + OD plan v2.20 U-OD-04 absorption + helper carrier conform (`otel_genai_base.py:58-86`) + 25/25 helper tests pass + 27/27 runtime LLM dispatch tests pass; Tension 004 D-1 ratification SUPERSEDED per §4 step 3 tiebreaker check now performed. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
+_Original filing footer:_ **Status:** OPEN — awaiting operator routing decision
 **Class:** 1 (halt-execution semantics — design-phase artifact requires revision; spec contradicts named external authority for 2 of 3 D-elements; same failure-mode lineage as D-1 R2)
 **Predecessor:** `Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` §7 reconciliation pass (2026-05-26) closed D-2/D-3/D-3b/D-4 as "RESOLVED at OD plan v2.5 plan-conforms-to-spec" **without** performing the §4 step 3 tiebreaker check for D-2/D-3 — same deferred-not-performed failure that produced the D-1 R2 re-litigation arc earlier this session
 **Sibling fork:** `class_1_fork_genai_span_name_four_way_drift.md` (D-1 R2 — operator-ratified 2026-05-26; landed at OD spec v1.12 + plan v2.19)

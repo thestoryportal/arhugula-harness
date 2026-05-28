@@ -1,5 +1,7 @@
 # Class 1 Fork — U-RT-94 `ctx.webhook_delivery_composer` binding-chain absence
 
+**Status:** ✅ CLOSED-via-Reading-A-path-1 per §8 closure block (status-line refreshed 2026-05-27) — runtime spec v1.25 → v1.26 NEW §14.16 C-RT-26 `materialize_webhook_delivery_composer_stage` contract + `WebhookDeliveryComposerConfig` empty-marker + RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE fail-class + CP spec v1.17 + v1.18 + CP plan v2.22 + runtime plan v2.25 NEW L9-quaterdecies cluster (U-RT-96/97/98) + impl arc + 1754 tests pass + 4 skipped; ZERO cross-axis cascade. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
 **Filing event.** Phase 7 sub-phase 7b — `phase-7-implementation` skill arc impl(U-RT-94) HALT-on-discovery, 2026-05-24, post AC #9 carrier-landing commit `ba072f4`.
 
 **Filing operator.** `phase-7-implementation` skill execution per `phase-7-back-flow-routing` discipline.

@@ -1,7 +1,9 @@
 # Class 1 Fork — U-CP-63/64 `PauseReason` + `capture_pause_snapshot` name collision
 
 **Filed:** 2026-05-21 (cluster 10-CP-B open, pre-LOC carrier inspection)
-**Status:** OPEN — operator decision required before any U-CP-62..65 implementation
+**Status:** ✅ APPLIED — Path γ enum identifier rename absorbed at CP spec v1.11 §26.2 `PauseReason` → `WorkflowPauseReason` 5-class workflow-layer pause taxonomy + NEW §26 NOTE making §22 ↔ §26 engine-layer-vs-workflow-layer coexistence explicit (2026-05-21); cite-cascade at OD spec v1.9 §C-OD-30.1 (status-line refreshed 2026-05-27). Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
+_Original filing footer:_ **Status:** OPEN — operator decision required before any U-CP-62..65 implementation
 **Sibling pattern:** `[[class_1_fork_u_cp_58_validator_fail_class_collision]]` (path β rename, ratified 2026-05-21)
 **Detection mode:** pre-LOC `grep` of cited Python identifiers across landed code (workspace CLAUDE.md §4.3 silent-absorption discipline)
 

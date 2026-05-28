@@ -2,7 +2,9 @@
 
 **Filed:** 2026-05-24 at cost-axis production callsite migration arc opening (post-Sub-arc B + bucket-count refresh landing; HEAD `c413d40`).
 
-**Status:** OPEN — operator ratification pending; resolution arc not opened at filing.
+**Status:** ✅ APPLIED 2026-05-24 across 5-commit single-session arc (status-line refreshed 2026-05-27) — fork doc filing (`53f8d1c`) + CP spec v1.11 → v1.12 NEW §25.2.1 9th field `workflow_id` (`8614c9f`) + CP plan v2.17 → v2.18 U-CP-56 absorption (`94ea8c9`) + harness-cp impl + 15 test-fixture additions (`0cfd23a`) + harness-runtime canonical helper migration (`e3fd675`); closes `[[fork-u-cp-72-cost-and-pause-resume-prefix-gap]]` Sub-arc B AC #8 deferred at `0919a9b`. 2810 axis tests pass; ZERO cross-axis cascade. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
+_Original filing footer:_ **Status:** OPEN — operator ratification pending; resolution arc not opened at filing.
 
 **Trigger.** Operator opened the cost-axis production callsite migration arc at session resume per checkpoint Remaining Work item #1. Sub-arc B landed the typed `CostRecordAuditPayload` path (carrier + helper + converter branch) at `0919a9b` 2026-05-24; migration of production code from CPAuditLedgerEntry path → typed CostRecordAuditPayload path was DEFERRED at Sub-arc B per FM-2 + `[[halt-route-split-AC-pattern]]` (U-OD-41 plan v2.17 AC #8). The migration unblock arc surfaced an OD-spec-side silent absorption of a CP-spec extension: the canonical action_id pattern composition cites a `StepExecutionContext` field that does not exist at the CP-spec contract.
 

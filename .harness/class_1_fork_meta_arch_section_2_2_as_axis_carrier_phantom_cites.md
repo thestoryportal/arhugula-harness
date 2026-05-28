@@ -1,7 +1,9 @@
 # Class 1 Fork — Meta-Architecture §2.2 AS-axis carrier-cite phantom cites (parallel-axis recurrence)
 
 **Filed:** 2026-05-23 at Meta-Arch v1.2 → v1.3 bundled spec-writer arc — spec-writer FM-1 HALT condition surfaced during empirical verification of operator-ratified §12.3 cite shapes at sibling fork `.harness/class_1_fork_meta_arch_cp_spec_renumbering_drift.md`.
-**Status:** OPEN.
+**Status:** ✅ APPLIED 2026-05-23 at Meta-Arch v1.4 commit `4ea4ac4` (status-line refreshed 2026-05-27) — 11 amendment sites in single bundled commit (3 §2.2 + 3 §2.3 + 2 §5.4 + 3 §5.8) absorbing operator-ratified (a.i + b.i + c.i) recommendation; authority chain ADR-D3 v1.2 §1.1+§1.8.1 → C-AS-13+C-AS-14 → U-AS-28+U-AS-31; cumulative §5.8 H_T-CP-* findings: 7/7 RESOLVED at v1.5. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
+_Original filing footer:_ **Status:** OPEN.
 **Scope:** Phase 7 design-substrate cite-fidelity discipline; halt-execution Class 1 per `Project_Workflow_v1_8.md` §2.7.6 + workspace `CLAUDE.md` §4.3.
 **Surfaced by:** `spec-writer` skill FM-1 + FM-3 disciplines triggered at empirical AS plan v1 unit-body verification of §12.3 ratified cite shapes (U-AS-20..U-AS-27 + AS-axis primitive home for memory/files). Empirical verification shows cited unit IDs implement SECRETS surface, not Skills/memory/files surface.
 **Disposition:** Land H_T-CP-19 alone at Meta-Arch v1.3 (clean CP-axis cites); HALT H_T-CP-15/16/17 application at sibling fork §12.3 until §2.2 H_T-AS-6/7/8 carrier-cite recurrence is resolved.

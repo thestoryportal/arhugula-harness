@@ -1,7 +1,9 @@
 # Class 1 Fork — `SandboxDecisionPolicy` phantom cite at AS spec v1.3 §15
 
 **Filed:** 2026-05-22 at L9-septies cluster impl arc, pre-U-RT-71 landing.
-**Status:** OPEN — awaiting operator routing decision.
+**Status:** ✅ APPLIED 2026-05-22 at L9-septies cluster close `00da5ef` (status-line refreshed 2026-05-27) — operator ratified Q1=C-i (re-home to harness-core empty-marker); applied via runtime spec v1.15 → v1.16 + plan v2.12 → v2.13 + harness-core plan v1.1 → v1.2 + U-CORE-02 empty-marker `SandboxDecisionPolicy` Pydantic v2 BaseModel landing; ZERO cross-axis cascade per §5. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
+_Original filing footer:_ **Status:** OPEN — awaiting operator routing decision.
 **Scope:** Phase 7b atomic-unit consumption discipline; halt-execution Class 1
 per `Project_Workflow_v1_8.md` §2.7.6 + workspace CLAUDE.md §4.3.
 **Surfaced by:** `phase-7-implementation` skill at §3.4 dependency-verification

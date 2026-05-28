@@ -1,7 +1,9 @@
 # Class 1 Fork — Validator-composer arc: stage-4 factory contract absence blocks H_T-CP-21 RETIRED transition
 
 **Filed:** 2026-05-24 at HEAD `4479b07` (post batch-14 H_T-CP-16 RETIRED close).
-**Status:** OPEN — awaiting operator routing decision.
+**Status:** ✅ READING-A-APPLIED at batch-17 (worktree HEAD `37e9d67`, 2026-05-24; status-line refreshed 2026-05-27) — 5-commit single-session arc: spec v1.18 §14.13 NEW C-RT-23 `materialize_validator_framework_stage` stage-4 factory (`1707867`) + plan v2.17 NEW L9-decies 3-unit cluster (`34a1871`) + impl U-RT-83 (`3005643`) + U-RT-84 (`d55fbd7`) + U-RT-85 e2e 4/4 PASS (`37e9d67`); H_T-CP-21 corrective batch-15 DOWN → batch-17 RETIRED via Reading A resolution path (FIRST corrective close in retirement-ledger history). Reading B full validator-composer arc remains OPEN at §3.2 for future operator-discretion routing (separate scope; not gated on Reading A closure). Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
+_Original filing footer:_ **Status:** OPEN — awaiting operator routing decision.
 **Scope:** Phase 7d substitution-retirement; halt-execution Class 1 per `Project_Workflow_v1_8.md` §2.7.6 + workspace CLAUDE.md §4.3.
 **Surfaced by:** `phase-7-substitution-retirement` skill §3.2 verification at H_T-CP-21 RETIRE-READY → RETIRED transition attempt; reconciled via `[[advisor-before-substantive-work-for-cross-axis-blockers]]` (composer-depth check) per skill §5 anti-leakage discipline + I-2 (X-AL-3) preservation.
 **Disposition:** H_T-CP-21 stays RETIRE-READY at batch-14 §4 cumulative state. RETIRED transition halted. No code authored at this filing arc.
