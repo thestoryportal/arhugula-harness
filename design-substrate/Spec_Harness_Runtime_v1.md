@@ -1,4 +1,51 @@
-# Specification — Harness Runtime v1.33
+# Specification — Harness Runtime v1.34
+
+## Change-note (v1.33 → v1.34)
+
+**Status posture (REFRAMED → APPLIED-AS-READING-H 2026-05-28).** v1.34 was authored as a Class 1 fork resolution Reading A apply pass per `.harness/class_1_fork_webhook_composer_per_workflow_context_threading.md` Q-set ratified at operator AskUserQuestion 2026-05-28. Pre-substantive empirical orientation at impl arc start surfaced that **the spec contract at §14.10.1 declares a 2-arg `deliver_webhook(brief, idempotency_key)` signature while production code declares a 3-arg `deliver_webhook(webhook_config: WebhookConfig, payload: WebhookPayload, idempotency_key: str)` signature** — a long-carried carrier-consumer signature divergence not surfaced at the v1.20-era authoring, v1.24 §14.8.8 step 3 invocation site, or v1.26 §14.16 binding-chain absence arc. The original Q-set framing ("per-workflow context threading") described a real symptom (composer stores `workflow_id` etc. as instance state) but **misidentified the underlying defect**.
+
+Operator re-routed via NEW AskUserQuestion 2026-05-28: Reading (H) hybrid-with-adapter + single-session apply ratified. v1.34 lands as the spec-side absorption of Reading (H): ADDITIVE — both the existing 3-arg raw HTTP surface AND the spec-canonical 2-arg brief surface are declared; a new adapter module mediates between them.
+
+**Source of fix.** `.harness/class_1_fork_webhook_composer_per_workflow_context_threading.md` §0 reframe note + §0.1 Reading (H) ratification 2026-05-28.
+
+**Amendments.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§14.10.1 C-RT-20 `WebhookDeliveryComposer.__init__` signature** | NEW optional kw-only ctor param `webhook_config: WebhookConfig \| None = None`. Required when `deliver_webhook_for_brief(...)` brief surface is used; ignored by raw 3-arg `deliver_webhook(webhook_config, payload, idempotency_key)` surface (which accepts webhook_config per-call). Existing 13-param ctor preserved at field-set level; the NEW param is additive. | Reading (H) ratification |
+| **§14.10.1 C-RT-20 NEW public method `deliver_webhook_for_brief(brief: HITLEscalationBrief, idempotency_key: str) -> WebhookDeliveryResult`** | NEW spec-canonical 2-arg brief surface per §14.8.8.1 step 3 consumer expectation. Internally projects brief → `WebhookPayload` via `webhook_brief_adapter.project_brief_to_payload(...)` adapter (NEW module at `harness-runtime/src/harness_runtime/lifecycle/webhook_brief_adapter.py`) and dispatches via the existing raw 3-arg `deliver_webhook(...)` surface with ctor-supplied `webhook_config`. Raises `RuntimeError` when `webhook_config is None`. Existing raw 3-arg surface PRESERVED VERBATIM. | Reading (H) ratification + fork doc §0.1 |
+| **§14.10.1 NEW adapter module declaration** | NEW reference to `harness-runtime/src/harness_runtime/lifecycle/webhook_brief_adapter.py` declaring `project_brief_to_payload(brief, idempotency_key) -> WebhookPayload` with the faithful field-mapping `(approval_id ← brief.parent_action_id; idempotency_key ← per-call; gate_evaluation_ref ← brief.parent_action_id; payload_body ← serialized brief fields)`. No new contract — adapter is purely a projection helper. | Reading (H) ratification + fork doc §0.2 |
+| **§14.8.8.1 step 3 consumer cite refresh** | CANONICAL-READING AMENDMENT: the v1.24 `await ctx.webhook_delivery_composer.deliver_webhook(brief, idempotency_key)` cite is now resolved at the `deliver_webhook_for_brief(brief, idempotency_key)` NEW surface — consumer is coherent with spec-canonical brief abstraction; the raw 3-arg surface remains available for direct operator construction. Body text at §14.8.8.1 step 3 PRESERVED VERBATIM; canonical reading at v1.34 maps `deliver_webhook` → `deliver_webhook_for_brief` at the consumer cite. | Reading (H) ratification |
+
+**Adjacent harmonization sites.** §14.16.2 factory signature PRESERVED VERBATIM (factory does NOT thread cost-attribution substrates at this arc; the cost-attribution per-workflow concern at the bootstrap-singleton path remains orthogonal to the signature-divergence resolution per fork doc §0.2 final paragraph). §14.10 retry/breaker semantics + §14.10.4 fail classes PRESERVED VERBATIM. §14.16.5 operator-opt-in RETIRE-READY pattern PRESERVED VERBATIM.
+
+**Sections preserved verbatim from v1.33.** ALL v1.33 + v1.32 + ... + v1 lineage preserved verbatim per delta-only-spec-file convention.
+
+**Status posture.** Proposed (v1.33) → **Proposed (v1.34)**. v1.34 is a Class 1 fork resolution Reading (H) apply pass — additive interface contract change at §14.10.1 (NEW brief surface + NEW ctor `webhook_config` param + NEW adapter module); ZERO cross-axis cascade.
+
+**Downstream absorption owed (post-v1.34).**
+
+(a) Workspace `CLAUDE.md` §2.3 runtime row version bump (v1.33 → v1.34); co-published this arc.
+
+(b) Runtime plan v2.29 → v2.30 single-unit-body amendment at U-RT-94 (NEW brief surface + NEW ctor param + adapter module reference); ZERO new unit; ZERO U-RT-97 factory amendment; co-published this arc.
+
+(c) harness-runtime impl: NEW `webhook_brief_adapter.py` module + composer ctor + `deliver_webhook_for_brief` method + caller refresh at `hitl_gate_composer.py:1002`; co-published this arc.
+
+(d) Test refresh: 5 NEW adapter tests + 3 NEW composer brief-surface tests; 1158/1158 harness-runtime tests pass + 4 skipped (was 1110 + 4 baseline; net +48 ambient session deltas).
+
+(e) NO retirement event filing at this arc — H_T-OD-5 RETIRE-READY status preserved at batch-28 disposition; deployment-time gate per AS-8d precedent unchanged; webhook-side cost-attribution at the bootstrap-singleton path remains the open follow-on per batch-28 §3 (i) — Reading (H) closes the signature-divergence but does NOT close the cost-attribution gap (orthogonal concern).
+
+**Adjacent observations.**
+
+(i) **Cost-attribution at brief surface preserved via composer ctor params.** The composer's existing workflow context ctor params (`workflow_id` / `parent_action_id` / `parent_idempotency_key` / `tenant_id`) + cost substrate params (`rate_table` / `cost_chain` / `audit_writer`) remain operative. Operator constructing composer per-workflow (as `test_u_od_40_validator_webhook_integration.py:159-170` does) gets cost attribution at brief surface — `deliver_webhook_for_brief` calls raw `deliver_webhook` which calls `_attribute_webhook_cost_best_effort` consuming instance state. Bootstrap-singleton factory at stage-5 LOOP_INIT constructs composer WITHOUT cost params (workflow_id=None → cost attribution skip per existing guard). This is the same behavioral split as before Reading (H); not amended at this arc.
+
+(ii) **Caller at `hitl_gate_composer.py:1002` now LIVE.** Pre-v1.34 the caller at line 1002 passed 2 args to a 3-arg signature — dead code (would TypeError if reached). v1.34 makes the call coherent against the NEW `deliver_webhook_for_brief(brief, idempotency_key)` signature. Combined with bootstrap-singleton constructed WITHOUT webhook_config at default factory shape, the brief surface raises `RuntimeError("webhook_config")` at runtime — opt-in via operator-supplied `webhook_config` at composer construction is the activation path.
+
+(iii) **Cost-attribution + webhook_config joint operator-construction pattern.** Operators wanting cost-attribution AT webhook surface AT production durable-async path must construct composer per-workflow with BOTH cost substrates AND webhook_config supplied. Bootstrap-singleton default path provides default-off behavior for both observability surfaces.
+
+(iv) **Audit-trail integrity.** v1.34 was initially drafted as a Reading (A) per-call params framing (commit `c249ee3`); retracted at empirical-orientation discovery (commit `e378c9b`); re-applied as Reading (H) hybrid-with-adapter (this commit). The full reframe lineage is preserved at git history; v1.34 file body reflects the final Reading (H) canonical content.
+
+---
 
 ## Change-note (v1.32 → v1.33)
 

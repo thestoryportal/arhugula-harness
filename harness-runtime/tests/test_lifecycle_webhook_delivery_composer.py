@@ -254,3 +254,73 @@ def test_webhook_delivery_result_frozen() -> None:
     )
     with pytest.raises(Exception):
         result.delivered = False  # type: ignore[misc]
+
+
+# ---------- deliver_webhook_for_brief (Reading H) --------------------------
+# Per runtime spec v1.34 §14.10.1 brief-surface absorption + fork doc
+# `.harness/class_1_fork_webhook_composer_per_workflow_context_threading.md`
+# Reading (H) operator-ratified 2026-05-28.
+
+
+def _make_brief_for_composer_tests():
+    from harness_cp.hitl_response_palette import HITLResponse
+    from harness_cp.validator_framework_types import HITLEscalationBrief
+
+    return HITLEscalationBrief(
+        parent_step_id="step-1",
+        parent_action_id="workflow:wf-test:step:0",
+        fail_class=None,
+        fail_detail_hash=None,
+        escalation_reason="durable_async_cell_synchrony",
+        proposed_response_palette=frozenset({HITLResponse.APPROVE}),
+    )
+
+
+@pytest.mark.asyncio
+async def test_deliver_webhook_for_brief_raises_when_webhook_config_missing() -> None:
+    """Reading H invariant: brief surface requires ctor-supplied webhook_config."""
+    composer = WebhookDeliveryComposer(retry_max_attempts=1)  # no webhook_config
+    brief = _make_brief_for_composer_tests()
+    with pytest.raises(RuntimeError, match="webhook_config"):
+        await composer.deliver_webhook_for_brief(brief, "idem-1")
+
+
+@pytest.mark.asyncio
+async def test_deliver_webhook_for_brief_dispatches_via_raw_surface() -> None:
+    """Reading H projection: brief → payload → raw deliver_webhook."""
+    client = _RecordingClient([_MockResponse(200)])
+    composer = WebhookDeliveryComposer(
+        retry_max_attempts=1,
+        http_client_factory=lambda: client,
+        webhook_config=_make_webhook_config("https://example.test/brief-surface"),
+    )
+    brief = _make_brief_for_composer_tests()
+    result = await composer.deliver_webhook_for_brief(brief, "idem-brief-1")
+    assert result.delivered is True
+    assert result.status_code == 200
+    # Verify the raw HTTP layer received the projected payload
+    assert len(client.requests) == 1
+    url, body, headers = client.requests[0]
+    assert url == "https://example.test/brief-surface"
+    assert headers["Idempotency-Key"] == "idem-brief-1"
+    assert body["approval_id"] == "workflow:wf-test:step:0"
+    assert body["gate_evaluation_ref"] == "workflow:wf-test:step:0"
+    assert body["payload_body"]["escalation_reason"] == "durable_async_cell_synchrony"
+
+
+@pytest.mark.asyncio
+async def test_deliver_webhook_for_brief_propagates_exhausted_error() -> None:
+    """Reading H exhaustion path: brief surface propagates raw surface exhaustion."""
+    sleep_fn, _ = _async_noop_sleep_factory()
+    client = _RecordingClient(
+        [_MockResponse(500), _MockResponse(500), _MockResponse(500)]
+    )
+    composer = WebhookDeliveryComposer(
+        retry_max_attempts=3,
+        http_client_factory=lambda: client,
+        sleep_fn=sleep_fn,
+        webhook_config=_make_webhook_config(),
+    )
+    brief = _make_brief_for_composer_tests()
+    with pytest.raises(WebhookDeliveryExhaustedError):
+        await composer.deliver_webhook_for_brief(brief, "idem-exhaust-1")
