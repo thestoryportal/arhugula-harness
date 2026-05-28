@@ -332,13 +332,39 @@ The pre-batch-30 CP-axis CP-11 row PARTIAL classification is **superseded** by t
 
 **Cardinality delta at this batch:** CP-axis RETIRED 16/22 → 17/22 (72.7% → 77.3%); workspace RETIRED 34/54 → 35/54 (63.0% → 64.8%); workspace PARTIAL 5/54 → 4/54 (CP-11 transit-out); RETIRE-READY unchanged at 2/54 (AS-8d + OD-5); STILL-BOUNDED unchanged at 11/54; STILL-BOUNDED-INDEFINITELY unchanged at 2/54; workspace pipeline-advanced 41/54 = 75.9% (unchanged — within-tier promotion CP-11 PARTIAL → RETIRED). **Cardinality check at batch-30 close: 35 + 2 + 4 + 11 + 2 = 54 ✓.** Forward-only ledger discipline preserved at prior batch records.
 
+### §11.4d H_T-AS-8d — RETIRE-READY → RETIRED at batch-31
+
+The pre-batch-31 AS-axis AS-8d row RETIRE-READY classification is **superseded** by the deployment-time-opt-in-gate closure event filed at `batch-31` (2026-05-28; sibling-arc to batch-32 OD-5 close same merge):
+
+- Runtime spec v1.32 §14.17.6 retirement scope: operator-bound `RuntimeConfig.skill_activation_hook_config` non-None + e2e exercise observing `skill.activation` span at ≥1 hook site per X-AL-2 retirement criterion.
+- Empirical state at batch-31 filing: PR #14 merge at `24a9363` (2026-05-28) completed `_FakeSpanContext` OTel `Span` surface (`set_status` / `record_exception` / `add_event` / `end` / `get_span_context`) at `harness-runtime/tests/integration/conftest.py`; `just retire-as-8d` (AC #7) PASS on main against real Anthropic with operator-supplied `SkillActivationHookConfig(hook=_TestHook())`; `skill.activation` span captured with all 6 AS spec v1.7 §14.4 attributes + `workflow.id == "wf-ac7-skill-activation"`. IN COMPLIANCE.
+- ZERO production code change at the retirement arc itself; PR #14 was test-side fixture completion only.
+- ZERO spec amendment; ZERO cross-axis cascade — pure deployment-time-opt-in-gate close via mech-β AC #7 e2e green proof.
+
+**Sub-species 7.deployment-time-opt-in-gate FIRST CLOSURE** — joins sub-species 7.operator-discretion-ratification-at-spec-explicit-path (CP-19 batch-22 + CP-14 batch-29 + CP-11 batch-30) as the second closure-event-class under sub-species 7. EIGHTH RETIRE-READY → RETIRED close overall in ledger history. **FIRST AS-axis deployment-time-opt-in-gate closure** in ledger.
+
+**Cardinality delta at this batch:** AS-axis RETIRED 8/11 → 9/11 (72.7% → 81.8%); workspace RETIRED 35/54 → 36/54 (64.8% → 66.7%); workspace RETIRE-READY 2/54 → 1/54 (OD-5 carries forward to batch-32); workspace PARTIAL unchanged at 4/54; workspace STILL-BOUNDED unchanged at 11/54; workspace STILL-BOUNDED-INDEFINITELY unchanged at 2/54; workspace pipeline-advanced 41/54 = 75.9% (unchanged — within-tier promotion). **Cardinality check at batch-31 close: 36 + 1 + 4 + 11 + 2 = 54 ✓.** Forward-only ledger discipline preserved at prior batch records.
+
+### §11.4e H_T-OD-5 — RETIRE-READY → RETIRED at batch-32
+
+The pre-batch-32 OD-axis OD-5 row RETIRE-READY classification is **superseded** by the deployment-time-opt-in-gate closure event filed at `batch-32` (2026-05-28; sibling-arc to batch-31 AS-8d close same merge):
+
+- OD spec v1.24 §C-OD-26 + CXA v2.13 §2.3.7 row 8 retirement scope: operator-bound deployment substrate (`RuntimeConfig.validator_framework_config` non-None + operator-explicit `WebhookDeliveryComposer` construction with cost-attribution substrates per Reading H) + real workflow execution exercising ≥1 dispatch surface + production emitted `cost:`-prefixed audit-ledger entries per CXA v2.13 §2.3.7 row 8.
+- Empirical state at batch-32 filing: PR #14 merge at `24a9363` (2026-05-28) included AC #8 test typo fix (`retry.attempt.number` → `retry.attempt_number`) at `test_track_b_e2e.py:1922` AND the `_FakeSpanContext` OTel `Span` surface completion at `conftest.py`; `just retire-od-5` (AC #8) PASS on main against real Anthropic with operator-explicit `WebhookDeliveryComposer` + real httpx `MockTransport`; `hitl.webhook.deliver` outer span + `hitl.webhook.attempt` inner span captured with full attribute set (`webhook.url_hash` + `webhook.idempotency_key=='idem-ac8-1'` + `webhook.delivery_attempts==1` + `retry.attempt_number==1` + status code 200). IN COMPLIANCE.
+- ZERO production code change at the retirement arc itself; PR #14 was test-side fixture completion + one test-typo fix only.
+- ZERO spec amendment; ZERO cross-axis cascade verified — pure deployment-time-opt-in-gate close via mech-β AC #8 e2e green proof.
+
+**Sub-species 7.deployment-time-opt-in-gate SECOND CLOSURE** — joins AS-8d batch-31 (FIRST member); sub-species 7.deployment-time-opt-in-gate now has 2 closures in ledger. **NINTH RETIRE-READY → RETIRED close overall in ledger history. FIRST OD-axis deployment-time-opt-in-gate closure. JOINT same-arc cross-axis RETIRE-READY closure** (AS-8d + OD-5 share PR #14 upstream merge `24a9363`; first ledger event of this shape).
+
+**Cardinality delta at this batch:** OD-axis RETIRED 2/8 → 3/8 (25.0% → 37.5%); workspace RETIRED 36/54 → 37/54 (66.7% → 68.5%); workspace RETIRE-READY 1/54 → 0/54 (**bucket EMPTY at workspace layer — FIRST TIME in ledger history**); workspace PARTIAL unchanged at 4/54; workspace STILL-BOUNDED unchanged at 11/54; workspace STILL-BOUNDED-INDEFINITELY unchanged at 2/54; workspace pipeline-advanced 41/54 = 75.9% (unchanged — within-tier promotion). **Cardinality check at batch-32 close: 37 + 0 + 4 + 11 + 2 = 54 ✓.** Forward-only ledger discipline preserved at prior batch records.
+
 ### §11.5 Cumulative status pointer
 
 | | Live source |
 |---|---|
-| Latest filed batch | `batch-30` (2026-05-28, H_T-CP-11 PARTIAL → RETIRE-READY → RETIRED via operator-discretion ratification of v1.6 MVP cascade_policy carve-out — sibling-arc to CP-14 batch-29 same v1.6 MVP scope statement) |
-| Cumulative RETIRED count (raw ledger) | 35/54 (64.8%) per batch-30 §4 footer (+1 from batch-29) |
-| Cumulative pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) | 41/54 (75.9%) per batch-30 §4 footer |
+| Latest filed batch | `batch-32` (2026-05-28, H_T-OD-5 RETIRE-READY → RETIRED via deployment-time-opt-in-gate closure at mech-β AC #8 green on main; sibling-arc to batch-31 H_T-AS-8d close via same PR #14 merge `24a9363`; JOINT same-arc cross-axis closure pattern FIRST ledger instance) |
+| Cumulative RETIRED count (raw ledger) | 37/54 (68.5%) per batch-32 §4 footer (+2 from batch-30 via joint AS-8d + OD-5 close at batches 31 + 32) |
+| Cumulative pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) | 41/54 (75.9%) per batch-32 §4 footer |
 | Per-axis live status | `harness-{is,as,cp,od}/CLAUDE.md` §4.1 |
 | Cross-axis cascade live status | §6.3.1 + §6.3.2 cascade re-evaluations at the batch in which the gating retirement filed (see batch-2 §3 + batch-3 referenced from `harness-od/CLAUDE.md`) |
 
