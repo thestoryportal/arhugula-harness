@@ -30,6 +30,8 @@ The bare `RuntimeToolDispatcher` is private to the wrapper per spec
 
 from __future__ import annotations
 
+from typing import Any
+
 from harness_core import SandboxDecisionPolicy
 from harness_cp.cp_shared_types import MCPTrustTier
 from harness_cp.mcp_client_namespace_emitter import MCPClientNamespaceEmitter
@@ -66,6 +68,8 @@ DEFAULT_TRUST_POLICY = TrustPolicy(
 async def materialize_runtime_tool_dispatcher_stage(
     ctx: _MutableHarnessContext,
     config: RuntimeConfig,
+    *,
+    rate_table: Any = None,
 ) -> RetryBreakerToolDispatcher:
     """Compose the C-RT-21 retry-wrap around the bare C-RT-19 tool dispatcher.
 
@@ -106,12 +110,19 @@ async def materialize_runtime_tool_dispatcher_stage(
     ctx.mcp_namespace_emitter = mcp_namespace_emitter
 
     # --- Step 3: bare RuntimeToolDispatcher (C-RT-19) ------------------------
+    # U-OD-39: thread cost-attribution substrate (cost_chain + audit_writer
+    # from ctx; rate_table from caller kwarg sourced from RATE_TABLE_V1 at
+    # stage_5_loop_init.py). All 3 None-safe at unit-test path; production
+    # bootstrap binds all 3 per `_attribute_tool_cost_best_effort` semantics.
     bare_dispatcher = RuntimeToolDispatcher(
         mcp_client_host=ctx.mcp_client_host,
         per_server_trust_evaluator=per_server_trust_evaluator,
         mcp_namespace_emitter=mcp_namespace_emitter,
         trust_policy=trust_policy,
         tracer_provider=ctx.tracer_provider,
+        cost_chain=ctx.cost_chain,
+        audit_writer=ctx.audit_writer,
+        rate_table=rate_table,
     )
 
     # --- Step 4: RetryBreakerToolDispatcher (C-RT-21 §14.11) -----------------

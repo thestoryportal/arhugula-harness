@@ -223,6 +223,9 @@ class RuntimeToolDispatcher:
         trust_policy: TrustPolicy,
         sandbox_decision_resolver: SandboxDecisionResolver | None = None,
         tracer_provider: Any = None,
+        cost_chain: Any = None,
+        audit_writer: Any = None,
+        rate_table: Any = None,
     ) -> None:
         """Construct dispatcher with the cross-axis dependencies.
 
@@ -248,6 +251,20 @@ class RuntimeToolDispatcher:
             coupling per C-RT-04 pattern). Used to open `tool.dispatch` +
             `sandbox.enter` + `mcp.tool.call` + `sandbox.exit` spans. If
             `None`, span emission is skipped (test-injection seam).
+        cost_chain:
+            U-OD-39 cost-attribution chain (`ctx.cost_chain`) materialized
+            at stage 4 OD. Required at production construction (bootstrap
+            stage 5); defaulted to None to preserve construction ergonomics
+            for unit tests that only exercise the dispatch surface without
+            cost-attribution. When any of cost_chain / audit_writer /
+            rate_table is None, `_attribute_tool_cost_best_effort`
+            early-returns (no-op).
+        audit_writer:
+            U-OD-39 audit-ledger writer (`ctx.audit_writer`) materialized at
+            stage 4 OD. Same None-default discipline as `cost_chain`.
+        rate_table:
+            U-OD-39 PRICE_TABLE_REF (`RATE_TABLE_V1` at v1) materialized at
+            stage 4 OD. Same None-default discipline as `cost_chain`.
         """
         self._mcp_client_host = mcp_client_host
         self._trust_evaluator = per_server_trust_evaluator
@@ -257,6 +274,90 @@ class RuntimeToolDispatcher:
             sandbox_decision_resolver or _default_sandbox_decision_resolver
         )
         self._tracer_provider = tracer_provider
+        # U-OD-39 cost-attribution substrate (per OD spec §C-OD-26.2 row
+        # "tool.dispatch"). None-default preserves unit-test ergonomics;
+        # production stage-5 binding sets all 3 substrates per
+        # `materialize_runtime_tool_dispatcher_stage` kwargs.
+        self._cost_chain = cost_chain
+        self._audit_writer = audit_writer
+        self._rate_table = rate_table
+
+    def _attribute_tool_cost_best_effort(
+        self,
+        *,
+        outer_span: Any,
+        tool_id: str,
+        tool_args: Any,
+        response: Any,
+        idempotency_key: str,
+        step_context: StepExecutionContext,
+    ) -> None:
+        """U-OD-39 best-effort cost-attribution invocation per §C-OD-26.1.
+
+        Calls `attribute_tool_dispatch_cost`. On success, emits the
+        cost.attributed_decimal OTel attribute on `outer_span` via U-OD-49
+        string-form. On failure (rate-table missing OR upstream cost-chain
+        failure), swallows the exception — cost-attribution is observability,
+        not contract, and MUST NOT fail the dispatch per AC #1
+        (invoked on every dispatch, success + failure paths).
+
+        Mirror of `_invoke_cost_attribution` at `llm_dispatch.py`. Defer
+        imports to method body to keep `runtime_tool_dispatcher.py`'s cold
+        import surface narrow (cost-attribution path pulls OD + CXA types
+        transitively).
+        """
+        from decimal import Decimal
+
+        from harness_od.cost_record_otel_serializer import (
+            COST_ATTRIBUTED_DECIMAL_ATTR,
+            serialize_decimal_for_otel,
+        )
+
+        from harness_runtime.lifecycle.cost_attribution_tool_dispatch import (
+            attribute_tool_dispatch_cost,
+        )
+
+        if (
+            self._cost_chain is None
+            or self._audit_writer is None
+            or self._rate_table is None
+        ):
+            # Cost-attribution substrate not bound — unit-test path.
+            return
+
+        if outer_span is None:
+            # No active span (test-injection seam with tracer_provider=None)
+            # — cost-attribution requires a span_id for SpanCostRecord.
+            return
+
+        span_context = outer_span.get_span_context()
+        span_id_hex = format(span_context.span_id, "016x")
+
+        try:
+            attached = attribute_tool_dispatch_cost(
+                rate_table=self._rate_table,
+                cost_chain=self._cost_chain,
+                audit_writer=self._audit_writer,
+                tool_id=tool_id,
+                tool_args=tool_args,
+                response=response,
+                span_id=span_id_hex,
+                idempotency_key=idempotency_key,
+                parent_idempotency_key=step_context.parent_idempotency_key,
+                workflow_id=step_context.workflow_id,
+                parent_action_id=step_context.parent_action_id,
+                tenant_id=None,
+            )
+        except Exception:
+            # Cost-attribution is observability, not contract. Swallow.
+            return
+
+        # Emit cost.attributed_decimal OTel attribute via U-OD-49 string-form
+        # preserving the float→Decimal serialization at the OTel boundary.
+        outer_span.set_attribute(
+            COST_ATTRIBUTED_DECIMAL_ATTR,
+            serialize_decimal_for_otel(Decimal(str(attached.total_cost))),
+        )
 
     def _emit_sandbox_violation(
         self,
@@ -432,15 +533,42 @@ class RuntimeToolDispatcher:
                 self._emit_sandbox_violation(
                     tracer, MCPInvocationFailClass.TIMEOUT, idempotency_key
                 )
+                # U-OD-39 AC #1: cost-attribution invoked on every dispatch
+                # (success + failure paths). Failure-path response=None;
+                # per_output_byte cost_kind degrades to len('"null"')=6 bytes.
+                self._attribute_tool_cost_best_effort(
+                    outer_span=outer_span,
+                    tool_id=tool_id,
+                    tool_args=tool_args,
+                    response=None,
+                    idempotency_key=idempotency_key,
+                    step_context=step_context,
+                )
                 raise
             except ToolInvocationProtocolError:
                 self._emit_sandbox_violation(
                     tracer, MCPInvocationFailClass.PROTOCOL_ERROR, idempotency_key
                 )
+                self._attribute_tool_cost_best_effort(
+                    outer_span=outer_span,
+                    tool_id=tool_id,
+                    tool_args=tool_args,
+                    response=None,
+                    idempotency_key=idempotency_key,
+                    step_context=step_context,
+                )
                 raise
             except MCPHostUnreachableError:
                 self._emit_sandbox_violation(
                     tracer, MCPInvocationFailClass.TRANSPORT, idempotency_key
+                )
+                self._attribute_tool_cost_best_effort(
+                    outer_span=outer_span,
+                    tool_id=tool_id,
+                    tool_args=tool_args,
+                    response=None,
+                    idempotency_key=idempotency_key,
+                    step_context=step_context,
                 )
                 raise
 
@@ -450,6 +578,17 @@ class RuntimeToolDispatcher:
             except jsonschema.ValidationError as exc:
                 self._emit_sandbox_violation(
                     tracer, MCPInvocationFailClass.SCHEMA_VIOLATION, idempotency_key
+                )
+                # U-OD-39 AC #1: cost-attribution on schema-violation failure.
+                # Response IS available here (validation failed AFTER call),
+                # so per_output_byte cost_kind reflects actual response bytes.
+                self._attribute_tool_cost_best_effort(
+                    outer_span=outer_span,
+                    tool_id=tool_id,
+                    tool_args=tool_args,
+                    response=response,
+                    idempotency_key=idempotency_key,
+                    step_context=step_context,
                 )
                 raise ToolInvocationSchemaViolationError(
                     f"RT-FAIL-TOOL-INVOCATION-SCHEMA-VIOLATION: tool="
@@ -465,6 +604,19 @@ class RuntimeToolDispatcher:
             )
             with sandbox_exit_cm as sandbox_exit_span:
                 _set(sandbox_exit_span, ATTR_SANDBOX_FAIL_CLASS, "")
+
+            # --- U-OD-39 cost-attribution at success path -------------------
+            # AC #1 success branch + AC #3 mcp.tool.call piggyback (1 helper
+            # invocation per dispatch attributes entire tool-dispatch surface
+            # including nested mcp.tool.call span per §C-OD-26.2 table).
+            self._attribute_tool_cost_best_effort(
+                outer_span=outer_span,
+                tool_id=tool_id,
+                tool_args=tool_args,
+                response=response,
+                idempotency_key=idempotency_key,
+                step_context=step_context,
+            )
 
             # --- Step 11: wrap response + return ----------------------------
             return {
