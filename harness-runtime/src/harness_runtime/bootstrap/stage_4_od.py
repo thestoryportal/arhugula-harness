@@ -86,4 +86,18 @@ async def execute(
     # spec v1.18 §14.13.3. Operator-opt-in: `None` (default) preserves the
     # v1.17 production-default state; non-`None` constructs an empty-registry
     # ConcreteValidatorFramework per Reading A scope.
-    ctx.validator_framework = await materialize_validator_framework_stage(config)
+    #
+    # U-OD-40 cost-attribution hook wiring per CP spec v1.24 §28.10.5
+    # mechanism (a): pass rate_table + cost_chain + audit_writer through to
+    # the factory. When opt-in and all 3 substrates bound, the factory
+    # constructs a CostAttributingValidatorHook and injects it via the
+    # ConcreteValidatorFramework's optional post_evaluate_hook ctor param
+    # per CP spec v1.24 §28.10.2.
+    from harness_od.rate_table_v1 import RATE_TABLE_V1
+
+    ctx.validator_framework = await materialize_validator_framework_stage(
+        config,
+        rate_table=RATE_TABLE_V1,
+        cost_chain=ctx.cost_chain,
+        audit_writer=ctx.audit_writer,
+    )

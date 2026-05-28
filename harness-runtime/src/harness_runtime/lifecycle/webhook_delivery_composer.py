@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -108,6 +109,13 @@ class WebhookDeliveryComposer:
         tracer_provider: Any = None,
         http_client_factory: Callable[[], httpx.AsyncClient] | None = None,
         sleep_fn: Callable[[float], Any] | None = None,
+        rate_table: Any = None,
+        cost_chain: Any = None,
+        audit_writer: Any = None,
+        workflow_id: str | None = None,
+        parent_action_id: str | None = None,
+        parent_idempotency_key: str | None = None,
+        tenant_id: str | None = None,
     ) -> None:
         """Construct composer with retry-policy hyperparameters + tracer.
 
@@ -141,6 +149,19 @@ class WebhookDeliveryComposer:
             lambda: httpx.AsyncClient()
         )
         self._sleep_fn: Callable[[float], Any] = sleep_fn or asyncio.sleep
+        # U-OD-40 cost-attribution substrates per OD spec v1.8 §C-OD-26.2
+        # row "hitl.webhook.deliver". When ALL of (rate_table, cost_chain,
+        # audit_writer) are bound, deliver_webhook attributes one cost
+        # record per call (best-effort swallow per AC-1 observability
+        # discipline). workflow_id / parent_action_id / parent_idempotency_key
+        # provide the audit-ledger correlation; tenant_id scopes the write.
+        self._rate_table = rate_table
+        self._cost_chain = cost_chain
+        self._audit_writer = audit_writer
+        self._workflow_id = workflow_id
+        self._parent_action_id = parent_action_id
+        self._parent_idempotency_key = parent_idempotency_key
+        self._tenant_id = tenant_id
 
     async def deliver_webhook(
         self,
@@ -246,6 +267,19 @@ class WebhookDeliveryComposer:
             delivery_attempts=delivery_attempts,
             final_attempt_at=final_attempt_at,
         )
+
+        # U-OD-40 AC #2 + #3 + #4 — cost-attribution best-effort wrap per
+        # OD spec v1.8 §C-OD-26.2 row "hitl.webhook.deliver". Fires on
+        # BOTH success and failure paths (every attempted delivery is
+        # billable per flat_per_attempt semantics). Best-effort swallow
+        # mirrors `_attribute_tool_cost_best_effort` at
+        # runtime_tool_dispatcher.py:285.
+        self._attribute_webhook_cost_best_effort(
+            url=url,
+            request_body=request_body,
+            idempotency_key=idempotency_key,
+        )
+
         if not delivered:
             raise WebhookDeliveryExhaustedError(
                 f"RT-FAIL-HITL-WEBHOOK-DELIVERY-EXHAUSTED: "
@@ -253,6 +287,58 @@ class WebhookDeliveryComposer:
                 f"{delivery_attempts} terminal_status={last_status_code}"
             )
         return result
+
+    def _attribute_webhook_cost_best_effort(
+        self,
+        *,
+        url: str,
+        request_body: dict[str, Any],
+        idempotency_key: str,
+    ) -> None:
+        """Wrap U-OD-40 cost-attribution invocation in best-effort exception
+        swallowing per OD §C-OD-26.2 row "hitl.webhook.deliver" + U-OD-40
+        AC #1 observability discipline.
+
+        Cost-attribution is observability, not contract; failures MUST NOT
+        fail the dispatch. Mirror of `_attribute_tool_cost_best_effort` at
+        runtime_tool_dispatcher.py:285.
+
+        Skipped when any of (rate_table, cost_chain, audit_writer,
+        workflow_id, parent_action_id, parent_idempotency_key) is None
+        (operator opt-out / bootstrap not yet wired).
+        """
+        if (
+            self._rate_table is None
+            or self._cost_chain is None
+            or self._audit_writer is None
+            or self._workflow_id is None
+            or self._parent_action_id is None
+            or self._parent_idempotency_key is None
+        ):
+            return
+        try:
+            from harness_runtime.lifecycle.cost_attribution_webhook_dispatch import (
+                attribute_webhook_dispatch_cost,
+            )
+
+            bytes_sent = len(
+                json.dumps(request_body, separators=(",", ":")).encode("utf-8")
+            )
+            attribute_webhook_dispatch_cost(
+                rate_table=self._rate_table,
+                cost_chain=self._cost_chain,
+                audit_writer=self._audit_writer,
+                webhook_target=url,
+                bytes_sent=bytes_sent,
+                span_id=f"webhook-deliver-{idempotency_key}",
+                idempotency_key=idempotency_key,
+                parent_idempotency_key=self._parent_idempotency_key,
+                workflow_id=self._workflow_id,
+                parent_action_id=self._parent_action_id,
+                tenant_id=self._tenant_id,
+            )
+        except Exception:
+            pass  # observability-only; MUST NOT fail dispatch
 
 
 # --- factory ----------------------------------------------------------------

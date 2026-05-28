@@ -232,6 +232,83 @@ def attribute_validator_dispatch_cost(
     return attached  # type: ignore[no-any-return]
 
 
+class CostAttributingValidatorHook:
+    """ValidatorPostEvaluateHook impl wiring validator.evaluate → cost-attribution.
+
+    Implements `harness_cp.validator_framework_types.ValidatorPostEvaluateHook`
+    Protocol (declared at CP spec v1.24 §28.10.1; Protocol Pythonic shape
+    via @runtime_checkable + async on_post_evaluate). Constructed at
+    `materialize_validator_framework_stage` factory binding time when
+    `ctx.cost_chain` + `ctx.audit_writer` are bound (stage 4 OD ordering
+    per stage_4_od.py:79-82 places cost_chain + audit_writer BEFORE
+    validator_framework at line 89).
+
+    Per CP spec v1.24 §28.10.4 invariant 2 + 3 (best-effort observability):
+    exceptions from `attribute_validator_dispatch_cost` (e.g., rate-table
+    misconfiguration) propagate to the hook firing site at
+    `ConcreteValidatorFramework.evaluate()` which swallows them per
+    §28.10.4 invariant 2. The hook itself does NOT catch exceptions —
+    the catch happens at the framework firing site (preserves the
+    `__cause__` chain through to the framework's exception-swallow boundary
+    for debug visibility).
+    """
+
+    def __init__(
+        self,
+        *,
+        rate_table: RateTable,
+        cost_chain: CostAttributionChain,
+        audit_writer: AuditLedgerWriter,
+    ) -> None:
+        self._rate_table = rate_table
+        self._cost_chain = cost_chain
+        self._audit_writer = audit_writer
+
+    async def on_post_evaluate(
+        self,
+        *,
+        step,
+        step_context,
+        evaluation,
+        execution_time_ms: float,
+    ) -> None:
+        """Invoke cost-attribution chain for the completed validator evaluation.
+
+        validator_id derives from step.step_id (the per-step validator
+        identifier; matches the validator registry key). span_id is
+        synthesized from step_id + workflow_id since CP spec §25.5
+        validator.evaluate span emission is the workflow-driver
+        responsibility, not the framework's — the framework receives the
+        evaluation envelope but not the OTel span. Span correlation at the
+        audit-ledger row happens via the workflow.parent_action_id which IS
+        available at step_context.
+
+        Cost attribution proceeds even on non-PASS outcomes per U-OD-40
+        AC #1 (every evaluation is billable per Decision 2.D5; failure
+        outcomes still consumed CPU time).
+        """
+        validator_id = str(step.step_id)
+        span_id = f"validator-evaluate-{step_context.workflow_id}-{step.step_id}"
+        idempotency_key = (
+            f"validator:{step_context.workflow_id}:{step.step_id}"
+        )
+
+        attribute_validator_dispatch_cost(
+            rate_table=self._rate_table,
+            cost_chain=self._cost_chain,
+            audit_writer=self._audit_writer,
+            validator_id=validator_id,
+            execution_time_ms=execution_time_ms,
+            span_id=span_id,
+            idempotency_key=idempotency_key,
+            parent_idempotency_key=step_context.parent_idempotency_key,
+            workflow_id=step_context.workflow_id,
+            parent_action_id=step_context.parent_action_id,
+            tenant_id=step_context.tenant_id,
+        )
+
+
 __all__ = [
+    "CostAttributingValidatorHook",
     "attribute_validator_dispatch_cost",
 ]
