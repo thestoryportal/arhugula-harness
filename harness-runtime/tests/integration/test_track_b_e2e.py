@@ -662,27 +662,229 @@ def test_one_shot_and_daemon_client_pass_same_manifest_path(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
     reason=(
-        "Mechanism β requires ANTHROPIC_API_KEY. Deferred-with-cite per "
-        "L9-undecies precedent; H_T-AS-8d + H_T-OD-5 RETIRE-READY → RETIRED "
-        "gates open when operator sets the env var + exercises this test "
-        "against real Anthropic provider + skill activation hook + webhook "
-        "config (X-AL-2 second conjunct: operator-bound substitution surface "
-        "exercised end-to-end against real production substrate)."
+        "Mechanism β AC #1 requires ANTHROPIC_API_KEY. Foundational sanity "
+        "check for the real-LLM path through api.run; gates AC #7 (AS-8d) + "
+        "AC #8 (OD-5) but does not itself retire either substitution."
     ),
 )
-def test_ac1_real_anthropic_single_step_succeeds() -> None:
+async def test_ac1_real_anthropic_single_step_succeeds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """AC #1 mechanism β: real Anthropic provider single-step inference.
 
-    Deferred-with-cite per L9-undecies U-RT-89 e2e precedent (test author
-    sets `ANTHROPIC_API_KEY`; in-process bootstrap → real api.run() →
-    real claude-haiku-4-5 single-token inference → SUCCESS).
+    Mirrors the L9-undecies U-RT-89 e2e shape but exercises the FULL
+    `api.run()` path (bootstrap → in-process MCP `run_workflow` → CP
+    workflow_driver → bootstrap-bound INFERENCE_STEP dispatcher →
+    real `client.messages.create` → SUCCESS).
+
+    Bridges keyring → env per the `_FakeKeyring` precedent at
+    `test_config_provider_secrets.py:51`: production operators set the
+    key via `keyring set`; this test reads `ANTHROPIC_API_KEY` from env
+    and shims it through `keyring.get_password`.
+
+    OpenAI + Ollama providers are skipped via E-prod-3 per-provider opt-
+    in (`openai_optional=True` + `ollama_optional=True`) — only Anthropic
+    is required.
+
+    Per `[[finding-mech-beta-stub-bodies-vs-env-gate]]`: no body-level
+    pytest.skip — the skipif decorator is the sole gate.
     """
-    # Implementation deferred. Operator-discretion timing per
-    # `[[verification-shape-sharpened-grep-vs-e2e]]`.
-    pytest.skip("Real LLM exercise deferred — operator-discretion timing")
+    from collections.abc import Sequence
+
+    from harness_core.deployment_surface import DeploymentSurface
+    from harness_core.identity import StepID
+    from harness_core.persona_tier import PersonaTier
+    from harness_core.workload_class import WorkloadClass
+    from harness_cp.cp_shared_types import ModelBinding
+    from harness_cp.cross_family_fallback_chain import (
+        FallbackChain,
+        ProviderCandidate,
+        ProviderFamily,
+    )
+    from harness_cp.engine_class import EngineClass
+    from harness_cp.routing_manifest_residence import RoutingManifest
+    from harness_cp.topology_pattern import TopologyPattern
+    from harness_cp.workflow_driver import StepDispatcher as _CpStepDispatcher
+    from harness_cp.workflow_driver_types import StepKind, WorkflowStep
+    from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+    from harness_is.path_class_registry import PathClass
+    from harness_runtime.api import run as _run
+    from harness_runtime.bootstrap import stage_4_od as _stage_4_od_mod
+
+    # ---------------- keyring → env shim ----------------
+    api_key = os.environ["ANTHROPIC_API_KEY"]
+
+    def _fake_get_password(service: str, name: str) -> str | None:
+        _ = service
+        if name == "anthropic_key":
+            return api_key
+        return None
+
+    monkeypatch.setattr(
+        "harness_runtime.config.provider_secrets.keyring.get_password",
+        _fake_get_password,
+    )
+
+    # ---------------- tracer stage — fake to avoid global OTel re-registration ----------------
+    class _FakeTracerProvider:
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            _ = timeout_millis
+            return True
+
+        def shutdown(self) -> None:
+            return None
+
+        def get_tracer(self, instrumenting_module_name: str, /) -> object:
+            from opentelemetry.trace import NoOpTracer
+
+            _ = instrumenting_module_name
+            return NoOpTracer()
+
+    class _TracerStage:
+        def __init__(self, provider: _FakeTracerProvider) -> None:
+            self.provider = provider
+            self.registered_globally = False
+
+    def _fake_tracer_stage(config: Any, **_kwargs: Any) -> _TracerStage:
+        _ = config
+        return _TracerStage(_FakeTracerProvider())
+
+    def _fake_span_processor(config: Any, _p: Any, **_kwargs: Any) -> None:
+        _ = config
+        return None
+
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_tracer_provider_stage", _fake_tracer_stage
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_span_processor_stage", _fake_span_processor
+    )
+
+    # ---------------- config ----------------
+    surface = DeploymentSurface.LOCAL_DEVELOPMENT
+    workload = WorkloadClass.SOFTWARE_ENGINEERING
+    path_bindings = PathBindingConfig(
+        raw_entries=tuple(
+            {
+                "path_class": pc,
+                "workflow_class": workload,
+                "deployment_surface": surface,
+                "path": str(tmp_path / pc.value.lower()),
+            }
+            for pc in PathClass
+        ),
+    )
+    chain = FallbackChain(
+        primary=ProviderCandidate(
+            provider="anthropic",
+            model="claude-haiku-4-5",
+            family=ProviderFamily.ANTHROPIC,
+        ),
+        same_family=(),
+        cross_family=(),
+        terminal=None,
+    )
+    config = RuntimeConfig(
+        deployment_surface=surface,
+        repository_root=tmp_path,
+        path_bindings=path_bindings,
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+        collector=CollectorConfig(),
+        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        mcp_clients=[],
+        # E-prod-3 per-provider opt-in: anthropic required (default
+        # anthropic_optional=False); openai + ollama skipped.
+        openai_optional=True,
+        ollama_optional=True,
+        routing_manifest=RoutingManifest(
+            manifest_version=1,
+            per_role_bindings={},
+            per_workload_overrides={},
+            fallback_chains=(chain,),
+            retry_policies={},
+        ),
+    )
+    monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
+
+    # ---------------- workflow with real INFERENCE_STEP messages payload ----------------
+    # ProviderAgnosticPayload shape per `llm_dispatch.py:139` _coerce_payload:
+    # {messages, tools, params}. `max_tokens` is required by Anthropic
+    # messages.create per `llm_dispatch.py:739` _to_messages_create_kwargs.
+    # Single-token reply minimises cost + latency.
+    inference_payload = {
+        "messages": [
+            {"role": "user", "content": "Reply with the single word: ok"}
+        ],
+        "tools": [],
+        "params": {"max_tokens": 8},
+    }
+
+    class _Workflow:
+        @property
+        def workflow_id(self) -> str:
+            return "wf-ac1-real-anthropic"
+
+        @property
+        def workload_class(self) -> WorkloadClass:
+            return workload
+
+        @property
+        def manifest_entry(self) -> WorkflowManifestEntry:
+            return WorkflowManifestEntry(
+                workflow_id="wf-ac1-real-anthropic",
+                workload_class=workload,
+                persona_tier=PersonaTier.TEAM_BINDING,
+                engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+                topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+                layer_budgets=(),
+                fallback_chain=chain,
+                hitl_placements=(),
+                per_step_overrides={},
+            )
+
+        @property
+        def steps(self) -> Sequence[WorkflowStep]:
+            return (
+                WorkflowStep(
+                    step_id=StepID("step-0"),
+                    step_kind=StepKind.INFERENCE_STEP,
+                    step_payload=inference_payload,
+                ),
+            )
+
+        @property
+        def step_dispatcher(self) -> _CpStepDispatcher:
+            # Bootstrap-bound INFERENCE_STEP dispatcher takes precedence at
+            # the workflow_driver site; this attribute is required by the
+            # WorkflowObject Protocol but unused here.
+            raise NotImplementedError("bootstrap-bound dispatcher is used")
+
+        @property
+        def step_dispatchers(self) -> Any:
+            # Return None so workflow_driver falls back to ctx.step_dispatchers
+            # bound at stage 5 (real INFERENCE_STEP dispatcher → real LLM).
+            return None
+
+        @property
+        def default_model_binding(self) -> ModelBinding:
+            return ModelBinding(provider="anthropic", model="claude-haiku-4-5")
+
+    # ---------------- exercise ----------------
+    result = await _run(_Workflow(), config=config)
+
+    # AC #1 invariant — real LLM single-step inference completes SUCCESS.
+    assert isinstance(result, RunResult), f"got {type(result).__name__}"
+    assert result.status == "completed", (
+        f"expected status=completed, got status={result.status!r} "
+        f"failure_cause={getattr(result, 'failure_cause', None)!r}"
+    )
+    assert result.workflow_id == "wf-ac1-real-anthropic"
 
 
 @pytest.mark.skipif(
