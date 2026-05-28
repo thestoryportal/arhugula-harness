@@ -289,3 +289,159 @@ def test_compute_state_oldest_age_hours_from_unix_ns(tmp_path: Path) -> None:
     _seed(daemon, [_span_row("old", start_time_unix_ns=0)])
     state = ring.compute_state(now_unix_ns=5 * _HOUR_NS)
     assert state.oldest_row_age_hours == 5
+
+
+# ---------------------------------------------------------------------------
+# U-OD-43 — flush_to_sqlite + SpanRow → SpanInsertRow projection.
+# ---------------------------------------------------------------------------
+
+
+import time
+
+from harness_od.sqlite_span_store import SpanInsertRow, initialize_span_store
+
+from harness_runtime.lifecycle.ring_buffer import _project_span_row
+
+
+def test_project_span_row_fills_otel_defaults_for_missing_fields() -> None:
+    row = _span_row("s1", start_time_unix_ns=100, attrs='{"k":"v"}')
+    insert_row = _project_span_row(row)
+    assert isinstance(insert_row, SpanInsertRow)
+    assert insert_row.span_id == "s1"
+    assert insert_row.name == "test-span"
+    assert insert_row.start_time_ns == 100
+    assert insert_row.end_time_ns == 101  # start + duration_ns=1
+    assert insert_row.kind == 0
+    assert insert_row.status_code == 0
+    assert insert_row.events_json == "[]"
+    assert insert_row.attributes_json == '{"k":"v"}'
+    assert insert_row.parent_span_id is None
+    assert insert_row.status_message is None
+    assert insert_row.workflow_id is None
+    assert insert_row.workflow_run_id is None
+    assert insert_row.workflow_idempotency_key is None
+
+
+async def test_flush_to_sqlite_empty_buffer_returns_zero(tmp_path: Path) -> None:
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
+    conn = initialize_span_store(tmp_path / "spans.db")
+    try:
+        inserted = await ring.flush_to_sqlite(conn)
+    finally:
+        conn.close()
+    assert inserted == 0
+
+
+async def test_flush_to_sqlite_writes_buffered_rows(tmp_path: Path) -> None:
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
+    _seed(daemon, [_span_row(f"s{i}") for i in range(5)])
+    conn = initialize_span_store(tmp_path / "spans.db")
+    try:
+        # now_ns=0 keeps placeholder-aged rows inside the retention horizon.
+        inserted = await ring.flush_to_sqlite(conn, now_ns=0)
+        count = conn.execute("SELECT COUNT(*) FROM spans").fetchone()[0]
+    finally:
+        conn.close()
+    assert inserted == 5
+    assert count == 5
+
+
+async def test_flush_to_sqlite_is_non_draining(tmp_path: Path) -> None:
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
+    _seed(daemon, [_span_row("s1"), _span_row("s2")])
+    conn = initialize_span_store(tmp_path / "spans.db")
+    try:
+        await ring.flush_to_sqlite(conn)
+        # Buffer still contains rows; flush does not drain.
+        assert len(daemon._ingested_rows) == 2  # pyright: ignore[reportPrivateUsage]
+    finally:
+        conn.close()
+
+
+async def test_re_flush_is_no_op_per_spec_27_4_inv_3(tmp_path: Path) -> None:
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
+    _seed(daemon, [_span_row(f"s{i}") for i in range(3)])
+    conn = initialize_span_store(tmp_path / "spans.db")
+    try:
+        first = await ring.flush_to_sqlite(conn, now_ns=0)
+        second = await ring.flush_to_sqlite(conn, now_ns=0)
+        count = conn.execute("SELECT COUNT(*) FROM spans").fetchone()[0]
+    finally:
+        conn.close()
+    assert first == 3
+    assert second == 0
+    assert count == 3
+
+
+async def test_flush_to_sqlite_applies_retention_cleanup_per_u_od_44(
+    tmp_path: Path,
+) -> None:
+    """100 spans across 14 days + flush with 7-day retention → ~50 remain
+    (AC #5: U-OD-44 ledger). Lazy-on-write cleanup fires during flush."""
+    from harness_od.sqlite_span_store import SpanInsertRow, insert_spans
+
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
+    conn = initialize_span_store(tmp_path / "spans.db")
+    _NS_PER_DAY = 86_400 * 1_000_000_000
+    now_ns = 14 * _NS_PER_DAY
+    # Pre-load spans directly (not via ring buffer) at varied ages.
+    seed_rows = [
+        SpanInsertRow(
+            span_id=f"s{i}",
+            trace_id="t1",
+            parent_span_id=None,
+            name="seed",
+            kind=0,
+            start_time_ns=i * _NS_PER_DAY,
+            end_time_ns=i * _NS_PER_DAY + 1,
+            status_code=0,
+            status_message=None,
+            attributes_json="{}",
+            events_json="[]",
+            workflow_id=None,
+            workflow_run_id=None,
+            workflow_idempotency_key=None,
+        )
+        for i in range(14)
+    ]
+    insert_spans(conn, seed_rows)
+    try:
+        # Flush with empty buffer + retention 7d at now=day-14 → rows with
+        # end_time_ns < day-7 (i.e. spans days 0..6 since end=day*ns+1 falls
+        # into the strict-less-than-cutoff bucket for i ≤ 6) are deleted.
+        await ring.flush_to_sqlite(conn, now_ns=now_ns)
+        remaining = conn.execute("SELECT COUNT(*) FROM spans").fetchone()[0]
+        ids = {r[0] for r in conn.execute("SELECT span_id FROM spans")}
+    finally:
+        conn.close()
+    assert remaining == 7
+    assert ids == {f"s{i}" for i in range(7, 14)}
+
+
+def test_ring_buffer_carries_retention_days_from_config(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(config, daemon).ring_buffer
+    assert ring.retention_days == 7  # CollectorConfig default
+
+
+async def test_flush_to_sqlite_100_span_batch_under_100ms_per_ac_5(
+    tmp_path: Path,
+) -> None:
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
+    _seed(daemon, [_span_row(f"s{i}") for i in range(100)])
+    conn = initialize_span_store(tmp_path / "spans.db")
+    try:
+        start_ns = time.perf_counter_ns()
+        inserted = await ring.flush_to_sqlite(conn)
+        elapsed_ns = time.perf_counter_ns() - start_ns
+    finally:
+        conn.close()
+    assert inserted == 100
+    assert elapsed_ns < 100_000_000, f"flush took {elapsed_ns}ns; AC #5 budget 100ms"

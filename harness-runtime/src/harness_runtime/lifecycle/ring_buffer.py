@@ -65,6 +65,8 @@ backpressure observability surface only.
 
 from __future__ import annotations
 
+import asyncio
+import sqlite3
 import time
 from dataclasses import dataclass
 from typing import Final
@@ -75,6 +77,11 @@ from harness_od.local_first_otlp_collector import (
     RingBufferTraceStoragePolicy,
     SpanRow,
     evict_oldest_per_ring_buffer_policy,
+)
+from harness_od.sqlite_span_store import (
+    SpanInsertRow,
+    insert_spans,
+    retention_cleanup_lazy,
 )
 
 from harness_runtime.lifecycle.collector_daemon import CollectorDaemonSupervisor
@@ -92,6 +99,32 @@ __all__ = [
 #: Nanoseconds per hour — used to convert `start_time_unix_ns` deltas to
 #: the OD `RingBufferStorageState.oldest_row_age_hours` field.
 _NS_PER_HOUR: Final[int] = 3_600 * 1_000_000_000
+
+
+def _project_span_row(row: SpanRow) -> SpanInsertRow:
+    """Project U-RT-29 placeholder `SpanRow` (6 fields) → `SpanInsertRow` (14).
+
+    Defaults match OTel-canonical UNSPECIFIED/UNSET conventions. Surface
+    isolated for U-OD-43 schema-gap discipline; widening at the ingest layer
+    (richer `SpanRow` or pre-projection at the OTLP receiver) replaces this
+    function without touching `RuntimeRingBuffer.flush_to_sqlite`.
+    """
+    return SpanInsertRow(
+        span_id=row.span_id,
+        trace_id=row.trace_id,
+        parent_span_id=None,
+        name=row.span_name,
+        kind=0,
+        start_time_ns=row.start_time_unix_ns,
+        end_time_ns=row.start_time_unix_ns + row.duration_ns,
+        status_code=0,
+        status_message=None,
+        attributes_json=row.attributes_json,
+        events_json="[]",
+        workflow_id=None,
+        workflow_run_id=None,
+        workflow_idempotency_key=None,
+    )
 
 #: Bytes per megabyte — used to convert per-row byte counts to the OD
 #: `RingBufferStorageState.total_bytes_mb` field.
@@ -145,11 +178,18 @@ class RuntimeRingBuffer:
         *,
         policy: RingBufferTraceStoragePolicy,
         daemon: CollectorDaemonSupervisor,
+        retention_days: int = 7,
     ) -> None:
         self._policy: RingBufferTraceStoragePolicy = policy
         self._daemon: CollectorDaemonSupervisor = daemon
+        self._retention_days: int = retention_days
         self._evicted_total_count: int = 0
         self._evicted_total_bytes: int = 0
+
+    @property
+    def retention_days(self) -> int:
+        """Operator-configured retention horizon in days (U-OD-44)."""
+        return self._retention_days
 
     @property
     def policy(self) -> RingBufferTraceStoragePolicy:
@@ -256,6 +296,39 @@ class RuntimeRingBuffer:
         )
         return age_exceeded or bytes_exceeded
 
+    async def flush_to_sqlite(
+        self, conn: sqlite3.Connection, *, now_ns: int | None = None
+    ) -> int:
+        """Flush the current buffer to the sqlite span store via INSERT OR IGNORE
+        and apply U-OD-44 lazy-on-write retention cleanup.
+
+        Snapshots the live buffer (non-draining), projects each `SpanRow` to a
+        14-column `SpanInsertRow` per OD spec v1.8 §C-OD-27.1, and dispatches
+        to `harness_od.sqlite_span_store.insert_spans`. After insert, applies
+        `retention_cleanup_lazy(conn, self._retention_days, now_ns)` per spec
+        §27.5 row 2 lazy-on-write default. Returns the count of rows actually
+        inserted (excludes primary-key-collision skips per spec §27.4
+        invariant 3); retention cleanup is observable via row-count delta on
+        the spans table, not via this return value.
+
+        Schema gap projection (placeholder `SpanRow` 6 fields → `SpanInsertRow`
+        14 fields) fills OTel-canonical defaults at the runtime axis boundary:
+        `kind=0` (UNSPECIFIED), `status_code=0` (UNSET), `events_json="[]"`,
+        and `parent_span_id` / `status_message` / `workflow_*` to `None`.
+
+        Sqlite calls are blocking; we dispatch to `asyncio.to_thread` to keep
+        the runtime event loop free per AC #5 latency target (100-span batch
+        flush < 100ms).
+        """
+        clock_ns = now_ns if now_ns is not None else time.time_ns()
+        rows_snapshot = tuple(self._rows())
+        insert_rows = tuple(_project_span_row(r) for r in rows_snapshot)
+        inserted = await asyncio.to_thread(insert_spans, conn, insert_rows)
+        await asyncio.to_thread(
+            retention_cleanup_lazy, conn, self._retention_days, clock_ns
+        )
+        return inserted
+
     def snapshot(self, now_unix_ns: int | None = None) -> RingBufferSnapshot:
         """Return a frozen observability snapshot (AC #3 surface).
 
@@ -328,5 +401,9 @@ def materialize_ring_buffer_stage(
         raise RingBufferBindError(
             f"ring-buffer policy bind failed from CollectorConfig: {exc}"
         ) from exc
-    ring_buffer = RuntimeRingBuffer(policy=policy, daemon=daemon)
+    ring_buffer = RuntimeRingBuffer(
+        policy=policy,
+        daemon=daemon,
+        retention_days=config.collector.sqlite_retention_days,
+    )
     return RingBufferStage(ring_buffer=ring_buffer)
