@@ -549,13 +549,297 @@ def test_ac3_daemon_mode_equivalent_to_one_shot_with_real_llm() -> None:
     pytest.skip("Mechanism β deferred")
 
 
+@pytest.mark.asyncio
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
-    reason="Mechanism β: AC #7 skill activation real exercise",
+    reason=(
+        "Mechanism β AC #7 requires ANTHROPIC_API_KEY. Operator-bound "
+        "SkillActivationHook + real LLM dispatch exercise X-AL-2 second "
+        "conjunct for H_T-AS-8d retirement."
+    ),
 )
-def test_ac7_skill_activation_emits_skill_namespace_span() -> None:
-    """AC #7 mechanism β: advances H_T-AS-8d RETIRE-READY → RETIRED gate."""
-    pytest.skip("Mechanism β deferred — H_T-AS-8d gate")
+async def test_ac7_skill_activation_emits_skill_namespace_span(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC #7 mechanism β: advances H_T-AS-8d RETIRE-READY → RETIRED gate.
+
+    Exercises the **per-LLM-dispatch** hook firing site (hook-2 per
+    runtime spec v1.32 §14.17.2) — the production path where the LLM
+    dispatcher queries
+    `ctx.skill_activation_emitter.hook.select_for_llm_dispatch(...)`
+    BEFORE provider resolution and emits one `skill.activation` span
+    per selected skill with `activation_mode = tool_search` per Q2=(d)
+    hybrid hook-to-enum mapping.
+
+    Stacks on AC #1 (real-LLM bootstrap + api.run + E-prod-3 per-
+    provider opt-in) + adds:
+    - One loaded skill at `tmp_path/skills/*.skill.json` (resolved
+      via `PathClass.SKILLS` at bootstrap stage 2).
+    - `RuntimeConfig.skill_activation_hook_config =
+       SkillActivationHookConfig(hook=<test hook>)` per the operator-
+       opt-in pattern at U-RT-101.
+    - `FakeTracerProvider` (conftest) for span capture; the emitter
+      writes via `tracer.start_as_current_span("skill.activation")`
+      with 6 AS spec v1.7 §14.4 attributes set.
+
+    Verification per `[[verification-shape-sharpened-grep-vs-e2e]]`:
+    real bootstrap + real LLM dispatch + span captured at the emit
+    site — covers the per-LLM-dispatch hook (hook-2) that the U-RT-101
+    e2e at `test_u_rt_101_skill_activation_binding_chain.py` deferred
+    to the workflow-execution-e2e arc.
+    """
+    from collections.abc import Iterable, Sequence
+
+    from harness_core import SkillID
+    from harness_core.deployment_surface import DeploymentSurface
+    from harness_core.identity import StepID
+    from harness_core.persona_tier import PersonaTier
+    from harness_core.workload_class import WorkloadClass
+    from harness_cp.cp_shared_types import ModelBinding
+    from harness_cp.cross_family_fallback_chain import (
+        FallbackChain,
+        ProviderCandidate,
+        ProviderFamily,
+    )
+    from harness_cp.engine_class import EngineClass
+    from harness_cp.routing_manifest_residence import RoutingManifest
+    from harness_cp.topology_pattern import TopologyPattern
+    from harness_cp.workflow_driver import StepDispatcher as _CpStepDispatcher
+    from harness_cp.workflow_driver_types import StepKind, WorkflowStep
+    from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+    from harness_is.path_class_registry import PathClass
+    from harness_runtime.api import run as _run
+    from harness_runtime.bootstrap import stage_4_od as _stage_4_od_mod
+    from harness_runtime.lifecycle.skill_activation import (
+        SkillActivationHookConfig,
+    )
+
+    from .conftest import FakeTracerProvider
+
+    # ---------------- keyring → env shim (per AC #1) ----------------
+    api_key = os.environ["ANTHROPIC_API_KEY"]
+
+    def _fake_get_password(service: str, name: str) -> str | None:
+        _ = service
+        if name == "anthropic_key":
+            return api_key
+        return None
+
+    monkeypatch.setattr(
+        "harness_runtime.config.provider_secrets.keyring.get_password",
+        _fake_get_password,
+    )
+
+    # ---------------- tracer stage — capture-enabled fake ----------------
+    tracer = FakeTracerProvider()
+
+    class _TracerStage:
+        def __init__(self, provider: FakeTracerProvider) -> None:
+            self.provider = provider
+            self.registered_globally = False
+
+    def _fake_tracer_stage(config: Any, **_kwargs: Any) -> _TracerStage:
+        _ = config
+        return _TracerStage(tracer)
+
+    def _fake_span_processor(config: Any, _p: Any, **_kwargs: Any) -> None:
+        _ = config
+        return None
+
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_tracer_provider_stage", _fake_tracer_stage
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_span_processor_stage", _fake_span_processor
+    )
+
+    # ---------------- skills dir + one .skill.json ----------------
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    test_skill_id = "ac7-test-skill"
+    test_skill_name = "AC7 Test Skill"
+    test_skill_description = "Synthetic skill for AC #7 hook-2 e2e verification."
+    test_skill_version = "1.0.0"
+    skill_manifest_path = skills_dir / f"{test_skill_id}.skill.json"
+    skill_manifest_path.write_text(
+        '{"skill_id": "' + test_skill_id + '", '
+        '"name": "' + test_skill_name + '", '
+        '"description": "' + test_skill_description + '", '
+        '"version": "' + test_skill_version + '"}'
+    )
+
+    # ---------------- operator-supplied SkillActivationHook ----------------
+    hook_invocations: list[tuple[str, int]] = []
+
+    class _TestHook:
+        def select_for_workflow_init(
+            self,
+            loaded_skills: Iterable[SkillID],
+            workflow_id: str,
+        ) -> Iterable[SkillID]:
+            _ = loaded_skills, workflow_id
+            return []  # Hook-1 not exercised at this AC.
+
+        def select_for_llm_dispatch(
+            self,
+            loaded_skills: Iterable[SkillID],
+            workflow_id: str,
+            step_index: int,
+        ) -> Iterable[SkillID]:
+            # Activate every loaded skill (just one — the test skill).
+            ids = tuple(loaded_skills)
+            hook_invocations.append((workflow_id, step_index))
+            return ids
+
+    # ---------------- config (anthropic required; openai+ollama opt-in skip) ----------------
+    surface = DeploymentSurface.LOCAL_DEVELOPMENT
+    workload = WorkloadClass.SOFTWARE_ENGINEERING
+
+    # SKILLS path-class binding requires explicit raw_entry; others auto-tmp.
+    path_entries: list[dict[str, Any]] = []
+    for pc in PathClass:
+        if pc is PathClass.SKILLS:
+            path_entries.append(
+                {
+                    "path_class": pc,
+                    "workflow_class": workload,
+                    "deployment_surface": surface,
+                    "path": str(skills_dir),
+                }
+            )
+        else:
+            path_entries.append(
+                {
+                    "path_class": pc,
+                    "workflow_class": workload,
+                    "deployment_surface": surface,
+                    "path": str(tmp_path / pc.value.lower()),
+                }
+            )
+    path_bindings = PathBindingConfig(raw_entries=tuple(path_entries))
+
+    chain = FallbackChain(
+        primary=ProviderCandidate(
+            provider="anthropic",
+            model="claude-haiku-4-5",
+            family=ProviderFamily.ANTHROPIC,
+        ),
+        same_family=(),
+        cross_family=(),
+        terminal=None,
+    )
+    config = RuntimeConfig(
+        deployment_surface=surface,
+        repository_root=tmp_path,
+        path_bindings=path_bindings,
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+        collector=CollectorConfig(),
+        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        mcp_clients=[],
+        openai_optional=True,
+        ollama_optional=True,
+        skill_activation_hook_config=SkillActivationHookConfig(hook=_TestHook()),
+        routing_manifest=RoutingManifest(
+            manifest_version=1,
+            per_role_bindings={},
+            per_workload_overrides={},
+            fallback_chains=(chain,),
+            retry_policies={},
+        ),
+    )
+    monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
+
+    # ---------------- workflow with real INFERENCE_STEP ----------------
+    inference_payload = {
+        "messages": [
+            {"role": "user", "content": "Reply with the single word: ok"}
+        ],
+        "tools": [],
+        "params": {"max_tokens": 8},
+    }
+
+    class _Workflow:
+        @property
+        def workflow_id(self) -> str:
+            return "wf-ac7-skill-activation"
+
+        @property
+        def workload_class(self) -> WorkloadClass:
+            return workload
+
+        @property
+        def manifest_entry(self) -> WorkflowManifestEntry:
+            return WorkflowManifestEntry(
+                workflow_id="wf-ac7-skill-activation",
+                workload_class=workload,
+                persona_tier=PersonaTier.TEAM_BINDING,
+                engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+                topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+                layer_budgets=(),
+                fallback_chain=chain,
+                hitl_placements=(),
+                per_step_overrides={},
+            )
+
+        @property
+        def steps(self) -> Sequence[WorkflowStep]:
+            return (
+                WorkflowStep(
+                    step_id=StepID("step-0"),
+                    step_kind=StepKind.INFERENCE_STEP,
+                    step_payload=inference_payload,
+                ),
+            )
+
+        @property
+        def step_dispatcher(self) -> _CpStepDispatcher:
+            raise NotImplementedError("bootstrap-bound dispatcher is used")
+
+        @property
+        def step_dispatchers(self) -> Any:
+            return None
+
+        @property
+        def default_model_binding(self) -> ModelBinding:
+            return ModelBinding(provider="anthropic", model="claude-haiku-4-5")
+
+    # ---------------- exercise ----------------
+    result = await _run(_Workflow(), config=config)
+
+    # api.run success.
+    assert isinstance(result, RunResult), f"got {type(result).__name__}"
+    assert result.status == "completed", (
+        f"expected status=completed, got status={result.status!r} "
+        f"failure_cause={getattr(result, 'failure_cause', None)!r}"
+    )
+
+    # AC #7 invariant — per-LLM-dispatch hook fired with workflow-scope kwargs.
+    assert len(hook_invocations) >= 1, (
+        f"select_for_llm_dispatch never fired; invocations={hook_invocations!r}"
+    )
+    workflow_id_seen, step_index_seen = hook_invocations[0]
+    assert workflow_id_seen == "wf-ac7-skill-activation"
+    assert step_index_seen == 0
+
+    # AC #7 invariant — one `skill.activation` span emitted with the
+    # 6 AS spec v1.7 §14.4 attributes (skill.id / skill.name /
+    # skill.version_sha / skill.frontmatter.version / skill.body_tokens /
+    # skill.activation_mode) + the workflow.id trace-context primitive.
+    activation_spans = [s for s in tracer.spans if s.name == "skill.activation"]
+    assert len(activation_spans) >= 1, (
+        f"no skill.activation span emitted; captured names="
+        f"{[s.name for s in tracer.spans]!r}"
+    )
+    span = activation_spans[0]
+    assert span.attrs["skill.id"] == test_skill_id
+    assert span.attrs["skill.name"] == test_skill_name
+    assert span.attrs["skill.activation_mode"] == "tool_search"
+    assert span.attrs["skill.frontmatter.version"] == test_skill_version
+    assert "skill.version_sha" in span.attrs
+    assert "skill.body_tokens" in span.attrs
+    assert span.attrs["workflow.id"] == "wf-ac7-skill-activation"
 
 
 @pytest.mark.skipif(
