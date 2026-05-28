@@ -2,7 +2,9 @@
 
 **Filed:** 2026-05-24 during checkpoint #2 traversal (`§25-renumbering drift CP spec hygiene`) — Phase 7 sub-phase 7b at workspace HEAD `c0b9c87` (post pause/resume Sub-arc A doc reconciliation arc).
 
-**Status:** OPEN (routing target: systems-architect Mode 3 disambiguation recommendation → operator ratification → spec-writer apply pass).
+**Status:** ✅ FULLY-CLOSED 2026-05-24 across two-arc 7-commit total (status-line refreshed 2026-05-27) — arc 1 ratified + applied Reading A at CP spec v1.13 (`baeb595`/`50bb8b9`/`01d11c8`); arc 2 cascade-absorbed across runtime spec v1.18→v1.19 + CP plan v2.18→v2.19 + runtime plan v2.17→v2.18 + adjacent fork doc retag + workspace `CLAUDE.md` row bumps (`8f75589`/`8cd2aba`/`3864f4e` + closure bundle). Body §9 explicitly declares "**OPEN cite-cascade tracker → FULLY-CLOSED. ... The fork is now FULLY-RESOLVED + FULLY-APPLIED + CASCADE-CLOSED.**" Top **Status:** field stale at original OPEN-as-routing-target framing through both arcs. Species 3 (resolved-but-carry-stale-inherited) per workflow v1.9 §7.4.7.2. Reading B full validator-composer arc remains OPEN at §3.2 — separate scope, not gated on this fork's closure.
+
+_Original filing footer:_ OPEN (routing target: systems-architect Mode 3 disambiguation recommendation → operator ratification → spec-writer apply pass).
 
 **Filing skill:** `phase-7-implementation` §6 halt-condition "Cited spec contract section unreachable or under-specifies the surface" → upclassified from Class 3 documentation drift after empirical cite-inventory grep returned 67 bare `§25` + 119 bare `C-CP-25` cites across `design-substrate/` + axis CLAUDE.md substrate.
 

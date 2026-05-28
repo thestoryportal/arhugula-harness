@@ -1,5 +1,7 @@
 # Class 1 Tension — U-OD-09 acc #2 Required/Conditional tier classification has no spec basis (FF-1)
 
+**Status:** ✅ CLOSED-via-OD-plan-v2.8 (resolved 2026-05-16; verified at workspace-wide audit 2026-05-20; status-line refreshed 2026-05-27) — AC #2 tier classification redetermined per operator ruling + FF-1 carry-forward closed per OD plan v2.8 §0.2 defect table. Body §"RESOLVED" (line 46) + §"Audit reconciliation (2026-05-20)" declared closure; top **Filed:** field was never re-issued to carry a Status. Species 3 (resolved-but-carry-stale-inherited) per workflow v1.9 §7.4.7.2.
+
 **Filed:** 2026-05-16 (Phase 7 sub-phase 7b, OD axis-stream, L3 batch)
 **Unit:** U-OD-09 — Declare `harness.breaker.*` 7-attribute canonical schema
 **Plan body:** `Implementation_Plan_Operational_Discipline_v2_5.md` §3.3.1 (full body; v2.6 §3.3.1 is an M-1 delta over it)
