@@ -3,7 +3,9 @@
 **Filed:** 2026-05-28 (Phase 7 sub-phase 7b post-Gate-G1-ratification arc).
 **Class:** 1 — NEW H_T design surface under X-AL-3. Operator-ratified at Gate G1 (en bloc, 2026-05-28) that there will be a schema; this fork authors the schema body for separate ratification per Phase 2a design substrate §10 Gate G2.
 **Predecessor:** `.harness/phase_2_track_b_design_substrate.md` v1.1 §3.3 + §5 SF-1 declaration.
-**Status:** PROPOSING — operator ratifies the schema body before SF-1 closes + Phase 2b U-RT-104 (manifest loader) implementation opens.
+**Status:** ✅ RATIFIED (operator AskUserQuestion 2026-05-28 Gate G2 en-bloc ratification of all 6 Q-S sub-decisions Q-S1 through Q-S6 per recommended defaults). Closes SF-1 PROPOSING → RATIFIED. Gates G4 (runtime spec v1.34 → v1.35) + G5 (plan v2.30 → v2.31) + G6 (Phase 2b U-RT-104 + U-RT-105 + sibling-cluster impl) OPEN at next session.
+
+**Status:** PROPOSING — operator ratifies the schema body before SF-1 closes + Phase 2b U-RT-104 (manifest loader) implementation opens. *(historical, predates 2026-05-28 G2 ratification)*
 **Sub-questions resolved en bloc at G1:** Q-B1=(a) step-list / Q-B2=(c) YAML+TOML both / Q-B3=(a) explicit version / Q-B4=(a) closed schema / Q-H=(b) strictyaml.
 
 ---

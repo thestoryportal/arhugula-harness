@@ -4,7 +4,9 @@
 **Class:** Phase 2 design substrate — authors NEW H_T design surfaces under X-AL-3 (no silent design extension at execution-time). Operator scoping session ratification gates Phase 2b implementation.
 **Mode:** Implementation-planner / systems-architect joint scoping under skill discipline.
 **Authority anchor:** Operator AskUserQuestion 2026-05-28 4-axis Q-set ratification (this session); fork `class_1_tension_runtime_entrypoint_design_gap.md` Track B partition (filed 2026-05-16).
-**Status:** PROPOSING v1.1 (advisor-revision absorbed 2026-05-28) — operator decides on §6 sub-questions + ratifies the design before Phase 2b atomic-unit decomposition opens.
+**Status:** ✅ G1-RATIFIED + G2-RATIFIED (operator AskUserQuestion 2026-05-28 en-bloc ratification of all 17 sub-questions Q-A through Q-N per recommended defaults; SF-1 `class_1_fork_harness_run_yaml_manifest_schema.md` G2 en-bloc ratification 2026-05-28). G3 FORECLOSED at G1 per Q-A=(α). G4 (runtime spec v1.34 → v1.35 amendment) + G5 (plan v2.30 → v2.31 amendment) + G6 (Phase 2b U-RT-102..U-RT-109 implementation) OPEN at next session.
+
+**Status:** PROPOSING v1.1 (advisor-revision absorbed 2026-05-28) — operator decides on §6 sub-questions + ratifies the design before Phase 2b atomic-unit decomposition opens. *(historical, predates 2026-05-28 G1+G2 ratification)*
 
 **v1.0 → v1.1 delta:** absorbed 7 advisor findings — NEW Q-L (secrets via ADR-F5) + NEW Q-M (F2-05 daemon concurrency invariant + per-session ctx isolation rationale) + NEW Q-N (eager manifest validation) + Q-K rationale tightening (stdio single-client → multi-client requires socket/HTTP) + §3.4 pydantic-settings dep declaration + U-RT-107/U-RT-108 dep-order swap (entrypoint before client) + SIGINT drain AC added to U-RT-106/U-RT-109.
 
