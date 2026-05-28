@@ -283,3 +283,100 @@ def test_resolve_bootstrap_value_skips_allowlist_check(fake_keyring: _FakeKeyrin
     # Bootstrap path bypasses allowlist entirely.
     value = resolver.resolve_bootstrap_value("openai_key")
     assert value == "sk-test-no-allowlist-needed"
+
+
+# ---------------------------------------------------------------------------
+# Env-var fallback per ADR-F5 v1.1 §(b)(i) headless-mode framing.
+# Discretion record: .harness/binding_fix_keyring_resolver_env_var_fallback.md
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_bootstrap_value_falls_back_to_env_var_when_keyring_returns_none(
+    fake_keyring: _FakeKeyring,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Anthropic keyring miss + ANTHROPIC_API_KEY set → env-var value returned."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-from-env")
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    value = resolver.resolve_bootstrap_value("anthropic_key")
+    assert value == "sk-ant-from-env"
+
+
+def test_resolve_bootstrap_value_env_var_openai(
+    fake_keyring: _FakeKeyring,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OpenAI keyring miss + OPENAI_API_KEY set → env-var value returned."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-oa-from-env")
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    value = resolver.resolve_bootstrap_value("openai_key")
+    assert value == "sk-oa-from-env"
+
+
+def test_resolve_bootstrap_value_keyring_wins_over_env_var(
+    fake_keyring: _FakeKeyring,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Precedence: when both keyring and env var are present, keyring wins.
+
+    Preserves keyring as primary trust anchor per ADR-F5 LOCAL_DEV tier.
+    """
+    keyring.set_password("harness", "anthropic_key", "sk-ant-from-keyring")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-from-env")
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    value = resolver.resolve_bootstrap_value("anthropic_key")
+    assert value == "sk-ant-from-keyring"
+
+
+def test_resolve_bootstrap_value_no_mapping_no_fallback(
+    fake_keyring: _FakeKeyring,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Names without an env-var mapping fall through to keyring-only.
+
+    Setting an arbitrary env var must NOT satisfy an unmapped keyring miss.
+    Preserves prior behavior for non-provider secrets.
+    """
+    monkeypatch.setenv("UNRELATED_API_KEY", "should-be-ignored")
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    with pytest.raises(SecretResolutionError) as excinfo:
+        resolver.resolve_bootstrap_value("unmapped-name")
+    assert excinfo.value.fail_class is SecretFailClass.SECRET_UNKNOWN
+    assert excinfo.value.name == "unmapped-name"
+
+
+def test_resolve_bootstrap_value_neither_keyring_nor_env_raises(
+    fake_keyring: _FakeKeyring,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SECRET_UNKNOWN still raised when both keyring AND env var are absent."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    with pytest.raises(SecretResolutionError) as excinfo:
+        resolver.resolve_bootstrap_value("anthropic_key")
+    assert excinfo.value.fail_class is SecretFailClass.SECRET_UNKNOWN
+
+
+def test_resolve_env_var_fallback_honors_allowlist(
+    fake_keyring: _FakeKeyring,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Env-sourced secrets go through allowlist intersection identically.
+
+    Allowlist is access control orthogonal to secret-source per
+    `.harness/binding_fix_keyring_resolver_env_var_fallback.md` §3 (d). A
+    tool with NO `anthropic_key` in `required_secrets` is denied even when
+    the value comes from the env var.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-from-env")
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    # ToolContract with empty required_secrets → allowlist denies.
+    tool = _tool_with_allowed_secrets()
+    with pytest.raises(SecretAllowlistDeniedError) as excinfo:
+        resolver.resolve(
+            "anthropic_key",
+            _scope(),
+            SandboxTier.TIER_1_PROCESS,
+            tool=tool,
+        )
+    assert excinfo.value.decision is not AllowlistDecision.PERMITTED

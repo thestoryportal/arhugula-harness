@@ -271,20 +271,18 @@ def test_config_load_failure_exits_three(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
+@pytest.mark.skipif(
+    not os.environ.get("ANTHROPIC_API_KEY"),
     reason=(
-        "Subprocess smoke advances past bootstrap stage IS-1 with the "
-        "harness.toml fixture below (closes "
-        "[[finding-bootstrap-stage-is-1-requires-skills-path-binding]] "
-        "(D-test) reading), but blocks at stage 3a CP_CLIENTS: "
-        "ProviderNoneConfiguredError — at least one provider must "
-        "construct successfully + the keyring resolver has no env-var "
-        "fallback. Full unblock requires either (a) operator-set keyring "
-        "entry for at least one provider, (b) a test-only keyring backend, "
-        "or (c) a provider-construction relaxation at stage 3a. Fixture "
-        "PRESERVED below so the test runs further once that follow-on "
-        "lands."
-    )
+        "Daemon subprocess e2e requires ANTHROPIC_API_KEY to advance past "
+        "stage 3a CP_CLIENTS. With the env-var fallback at "
+        "`KeyringSecretResolver._lookup` (per "
+        "`.harness/binding_fix_keyring_resolver_env_var_fallback.md` + "
+        "ADR-F5 v1.1 §(b)(i) headless-mode framing), the daemon catches up "
+        "to ANTHROPIC_API_KEY without a keyring entry. Gating matches "
+        "mech-β AC #1 precedent. Subprocess will run ping against the real "
+        "Anthropic API once the key is present."
+    ),
 )
 def test_ac1_e2e_daemon_subprocess_binds_socket_and_shuts_down(
     tmp_path: Path,
@@ -295,8 +293,10 @@ def test_ac1_e2e_daemon_subprocess_binds_socket_and_shuts_down(
     Composes a minimal ``harness.toml`` with all 4 PathClass path-binding
     entries that bootstrap stage IS-1 requires (per
     ``[[finding-bootstrap-stage-is-1-requires-skills-path-binding]]``
-    Resolution reading (D-test)). Provider opt-ins gated in the same
-    config-file per the E-prod-3 landing.
+    Resolution reading (D-test)). Anthropic provider is required
+    (``anthropic_optional=False``); the env-var fallback at the keyring
+    resolver lets the test source the key from ``ANTHROPIC_API_KEY`` per
+    ADR-F5 §(b)(i) headless-mode framing.
     """
     socket_path = tmp_path / "smoke.sock"
     repo_root = tmp_path
@@ -321,7 +321,9 @@ def test_ac1_e2e_daemon_subprocess_binds_socket_and_shuts_down(
 
     config_file.write_text(
         "[runtime]\n"
-        'anthropic_optional = true\n'
+        # Anthropic is required so the env-fallback path is exercised.
+        # ANTHROPIC_API_KEY is sourced from the test env per the skipif gate.
+        'anthropic_optional = false\n'
         'openai_optional = true\n'
         'ollama_optional = true\n'
         "\n"
