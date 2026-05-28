@@ -1,7 +1,19 @@
 # Class 1 Fork — Validator-composer arc: stage-4 factory contract absence blocks H_T-CP-21 RETIRED transition
 
 **Filed:** 2026-05-24 at HEAD `4479b07` (post batch-14 H_T-CP-16 RETIRED close).
-**Status:** ✅ READING-A-APPLIED at batch-17 (worktree HEAD `37e9d67`, 2026-05-24; status-line refreshed 2026-05-27) — 5-commit single-session arc: spec v1.18 §14.13 NEW C-RT-23 `materialize_validator_framework_stage` stage-4 factory (`1707867`) + plan v2.17 NEW L9-decies 3-unit cluster (`34a1871`) + impl U-RT-83 (`3005643`) + U-RT-84 (`d55fbd7`) + U-RT-85 e2e 4/4 PASS (`37e9d67`); H_T-CP-21 corrective batch-15 DOWN → batch-17 RETIRED via Reading A resolution path (FIRST corrective close in retirement-ledger history). Reading B full validator-composer arc remains OPEN at §3.2 for future operator-discretion routing (separate scope; not gated on Reading A closure). Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+**Status:** ✅ READING-A-AND-READING-B-BOTH-APPLIED (status-line refreshed 2026-05-27 closing inherited Reading B `OPEN` framing).
+
+**Reading A applied at batch-17** (worktree HEAD `37e9d67`, 2026-05-24) — 5-commit single-session arc: spec v1.18 §14.13 NEW C-RT-23 `materialize_validator_framework_stage` stage-4 factory (`1707867`) + plan v2.17 NEW L9-decies 3-unit cluster (`34a1871`) + impl U-RT-83 (`3005643`) + U-RT-84 (`d55fbd7`) + U-RT-85 e2e 4/4 PASS (`37e9d67`); H_T-CP-21 corrective batch-15 DOWN → batch-17 RETIRED via Reading A resolution path (FIRST corrective close in retirement-ledger history).
+
+**Reading B applied at runtime spec v1.21 → v1.22** (commit `918f94a`, 2026-05-24, ~hours after Reading A landed in the same session) — full validator-composer arc absorbed per Mode-3 systems-architect scoping doc `.harness/reading_b_validator_composer_arc_scoping.md` (`f922835`) + operator AskUserQuestion ratifications ((D2) = Open Reading B NOW; (D1) = Q2(c-i) absorb cite-completeness fix into amendment). NEW §14.15 C-RT-25 `ValidatorEscalationGateComposer` mid-step re-entrant HITL composition contract surface; 4 amendment sites at §14.8.2 closing all 6 deferrals enumerated at §1.3: step 3 UN-FORECLOSED (VALIDATOR_ESCALATION placement-trigger evaluator returns match; `HITLPlacementForeclosedAtV19Error` raise REMOVED); step 4c REPLACED v1.9 MVP `placement.requires_hitl` shortcut → full 4-axis `_hitl_required(persona_tier, blast_radius_tier, mcp_server_trust_tier, per_tool_gate_level)` per C-CP-19 §19.1 multiplicative max() composition; step 4d REPLACED `DEFAULT_FULL_PALETTE` → `compute_effective_palette(gate_level, cross_trust_state, validator_escalation_brief)` UNION-intersection per C-CP-19 §19.4 deny-row + C-CP-21 §21.3 cross-trust-boundary; §14.8 failure-mode taxonomy: `RT-FAIL-HITL-PLACEMENT-FORECLOSED-AT-V19` REMOVED + NEW `RT-FAIL-VALIDATOR-ESCALATION-GATE-COMPOSE` permanent fail class; §0.6 Q5 ratification REVERSED. Co-published with runtime plan v2.20 → v2.21 NEW L9-duodecies cluster (U-RT-90/91/92) + impl arc 4 commits (`acc33bb` U-RT-90 helpers + `1c10f89` U-RT-91 composer + `145b8e6` / `e394074` U-RT-92 e2e) — 29/29 Reading-B tests PASS. Runtime plan v2.21 → v2.22 Reading B pragmatic-path divergence retirement (`ea9c60a`). Runtime spec v1.22 → v1.23 §14.15.2 step 7 self-flag flipped CXA v2.10 paired (`15823cb`).
+
+**Reading B closure absorbed at fork-doc-body layer 2026-05-27** — the stale `OPEN at §3.2 for future operator-discretion routing` status-line + §3.2 inline body framing carried verbatim across 3 days (2026-05-24 → 2026-05-27) despite Reading B landing earlier same day; refreshed at this arc per workspace `CLAUDE.md` `Reading B fork doc §3.2 STATUS: LANDED-AT-V22` post-absorption note (correctly catalogued in workspace `CLAUDE.md` runtime spec row v1.22 prior text but not propagated to this fork doc's own body until this closure delta). Species 3 sub-species: **3.fork-doc-closure** (carrier was the inline `OPEN` framing not the spec-side framing; sibling pattern to several prior 3.fork-doc-closure sub-species closures at OD spec lineage).
+
+**Reading C** (defer + re-classify RETIRE-READY-BLOCKED-ON-DESIGN-ARC) — superseded by Reading A landing at batch-17.
+
+**Reading D** (re-evaluate gate definition) — applied at batch-15 (`f373c93`, 2026-05-24) via DOWN-classification, then superseded by Reading A landing at batch-17 (corrective close).
+
+All four readings now have closure dispositions. Fork doc preserved as historical record of operator-decision surface + applied resolutions.
 
 _Original filing footer:_ **Status:** OPEN — awaiting operator routing decision.
 **Scope:** Phase 7d substitution-retirement; halt-execution Class 1 per `Project_Workflow_v1_8.md` §2.7.6 + workspace CLAUDE.md §4.3.
@@ -116,9 +128,11 @@ Per `[[advisor-before-substantive-work-for-cross-axis-blockers]]` pattern: advis
 
 **Trade-off:** Smallest scope; preserves spec-deferred sites at §14.8.2 (VALIDATOR_ESCALATION foreclosure stays in place); enables CP-21 RETIRED transition without unblocking the larger validator-composer arc primitives. Future scope-expansion arcs unblock VALIDATOR_ESCALATION + 4-axis composition + cross-trust palette independently.
 
-### 3.2 Reading B — Full validator-composer arc
+### 3.2 Reading B — Full validator-composer arc ✅ APPLIED at runtime spec v1.22 (2026-05-24)
 
-**Scope:** Open the full validator-composer arc as currently deferred at runtime spec v1.17. Lands: stage-4 factory (per Reading A) + VALIDATOR_ESCALATION trigger source + 4-axis `_hitl_required` composition + cross-trust palette restriction + any cross-axis seams the full arc requires.
+**Status:** ✅ APPLIED 2026-05-24 — Mode-3 systems-architect scoping doc `.harness/reading_b_validator_composer_arc_scoping.md` (`f922835`) + operator AskUserQuestion (D2) = Open Reading B NOW; (D1) = Q2(c-i) absorb cite-completeness fix into amendment. Absorbed at runtime spec v1.21 → v1.22 (`918f94a`); runtime plan v2.20 → v2.21 NEW L9-duodecies cluster U-RT-90/91/92 (`b3e4363`); 4 impl commits (`acc33bb` + `1c10f89` + `145b8e6` + `e394074`) with 29/29 Reading-B tests PASS; runtime plan v2.21 → v2.22 pragmatic-path divergence retirement (`ea9c60a`); runtime spec v1.22 → v1.23 step-7 self-flag flip (`15823cb`). Reading B body preserved verbatim at runtime spec v1.23..v1.29 (current canonical) per delta-only convention.
+
+**Scope (historical — preserved as filed):** Open the full validator-composer arc as currently deferred at runtime spec v1.17. Lands: stage-4 factory (per Reading A) + VALIDATOR_ESCALATION trigger source + 4-axis `_hitl_required` composition + cross-trust palette restriction + any cross-axis seams the full arc requires.
 
 **Design-phase artifacts affected:**
 
