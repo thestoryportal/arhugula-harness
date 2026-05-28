@@ -216,9 +216,15 @@ def test_missing_required_raises_validation_error() -> None:
     """Required-field absence from all three precedence levels raises typed error.
 
     Per C-RT-03 RT-FAIL-CONFIG (permanent).
+
+    Required fields after `[[finding-runtime-config-loader-unreachable-sub-
+    configs]]` fix (A): `deployment_surface`, `repository_root`,
+    `default_topology`, `otel` (the operator-specific endpoint).
+    `path_bindings`, `provider_secrets`, `collector` now default-factory.
     """
     with pytest.raises(ValidationError) as exc_info:
-        # Missing `repository_root`, `path_bindings`, etc.
+        # Missing `repository_root` + `otel`; the three default-factoried
+        # sub-configs are NOT missing per fix (A).
         materialize_runtime_config(
             env={},
             deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
@@ -226,7 +232,11 @@ def test_missing_required_raises_validation_error() -> None:
         )
     missing_fields = {err["loc"][0] for err in exc_info.value.errors()}
     assert "repository_root" in missing_fields
-    assert "path_bindings" in missing_fields
+    assert "otel" in missing_fields
+    # Default-factoried fields MUST NOT appear in the missing set.
+    assert "path_bindings" not in missing_fields
+    assert "provider_secrets" not in missing_fields
+    assert "collector" not in missing_fields
 
 
 def test_unknown_kwarg_rejected() -> None:
