@@ -1,5 +1,7 @@
 # Class 1 Tension — U-CORE-01 `WorkflowEvent` payload model unmaterializable
 
+**Status:** ✅ CLOSED-via-Core-v1.1 (resolved 2026-05-15; verified workspace-wide audit 2026-05-20; status-line refreshed 2026-05-27) — carrier-thin reading per operator ruling: U-CORE-01 lands 11 declarations at Core v1.1. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
 *Phase 7 sub-phase 7b. Fork detected at U-CORE-01 execution-time. Routed per
 `CLAUDE.md` §4.3 + `phase-7-implementation` SKILL.md §6. RESOLVED — operator
 ruling 2026-05-15.*

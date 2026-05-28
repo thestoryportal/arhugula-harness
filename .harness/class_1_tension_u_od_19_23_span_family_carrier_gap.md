@@ -1,5 +1,7 @@
 # Class 1 Tension — U-OD-19 / U-OD-23 `Span*` family carrier gap at landed U-OD-04
 
+**Status:** ✅ CLOSED-via-OD-plan-v2.6 (resolved 2026-05-16; verified workspace-wide audit 2026-05-20; status-line refreshed 2026-05-27) — carrier-growth applied to U-OD-04: `SpanRef` family added; 7 consumers cleared. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
 **Filed:** 2026-05-16
 **Sub-phase:** 7b — OD axis-stream, Level 2 batch
 **Units:** U-OD-19 (Compose sandbox-tier overhead + per-sibling rollup at fan-out

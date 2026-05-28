@@ -1,5 +1,7 @@
 # Class 1 Tension — U-CP-00b 9 structured shared types under-specified
 
+**Status:** ✅ CLOSED-via-CP-plan-v2.7/v2.8 (resolved 2026-05-16; verified workspace-wide audit 2026-05-20; status-line refreshed 2026-05-27) — U-CP-00b narrowed to 2 enums; 9 structured types moved to U-CP-00c. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
 *Phase 7 sub-phase 7b. Fork detected at U-CP-00b execution-time. Routed per
 `CLAUDE.md` §4.3 + `harness-cp/CLAUDE.md` §5. RESOLVED (split) — operator ruling
 2026-05-15. The 9 structured types remain OPEN pending a future CP plan revision.*

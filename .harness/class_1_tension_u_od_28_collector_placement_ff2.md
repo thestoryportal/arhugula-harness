@@ -1,5 +1,7 @@
 # Class 1 Tension — U-OD-28 collector-placement enum: three-way plan/§1.2/§20.1 mismatch (FF-2)
 
+**Status:** ✅ CLOSED-via-OD-spec-v1.4+OD-plan-v2.9 (resolved 2026-05-16; verified workspace-wide audit 2026-05-20; status-line refreshed 2026-05-27) — `CollectorPlacement` grown 6→7 values across spec + plan. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
 | Field | Value |
 |---|---|
 | Unit | U-OD-28 — Declare per-cell OTLP collector placement matrix + BatchSpanProcessor universality |

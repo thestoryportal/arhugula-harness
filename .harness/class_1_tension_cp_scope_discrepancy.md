@@ -1,5 +1,7 @@
 # Class 1 Tension — CP axis-stream scope discrepancy (final-batch brief)
 
+**Status:** ✅ CLOSED (verified workspace-wide audit 2026-05-20; status-line refreshed 2026-05-27) — all 14 residual units verified landed at `harness-cp/src/harness_cp/` (U-CP-03/27/32/33/39/41/45/46/49/50/51/52/54/55) + U-CP-56 `workflow_driver.py` at CP plan v2.12; CP axis stream COMPLETE at 7b. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
 **Filed:** 2026-05-16 — Phase 7 sub-phase 7b, CP axis-stream final batch.
 **Defect class:** Class 1 — task-brief / actual-state mismatch surfaced at
 execution-time. Routes to operator for re-scoping of the CP residual.

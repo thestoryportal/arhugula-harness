@@ -1,5 +1,7 @@
 # Class 1 Tension — harness runtime / entrypoint design gap
 
+**Status:** ✅ PARTIALLY-CLOSED (verified workspace-wide audit 2026-05-20; status-line refreshed 2026-05-27) — **Track A RESOLVED** at `Spec_Harness_Runtime_v1.md` v1.1→v1.3: Python API (C-RT-08 §8 `async run(workflow, config=None) -> RunResult`) + bootstrap orchestrator (C-RT-02 §2 9-stage) + admin CLI stubs (C-RT-13 §13) + LLM dispatch composer (C-RT-15 §14.5 U-RT-52 merged 2026-05-20 at `2b945ab`) all landed. **Track B DEFERRED-PARTITION** (operator-facing DevEx plane: `__main__`, `harness run` CLI, workflow-file loader, daemon, TUI) per spec §3 line 281 + §8 line 167 — operator-owned future scoping arc, not the original gap. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
 **Filed:** 2026-05-16 — Phase 7 sub-phase 7b, pre-OD-axis kickoff investigation.
 **Defect class:** Class 1 — H_T design surface missing from the design corpus;
 surfaced at execution-time. Routes to operator for a new-design decision (design

@@ -1,5 +1,7 @@
 # Class 1 Tension — U-CP-38 (unlanded `HandoffContext` dependency + Pattern D)
 
+**Status:** ✅ CLOSED (verified workspace-wide audit 2026-05-20; status-line refreshed 2026-05-27) — U-CP-38 landed at `harness-cp/src/harness_cp/hitl_placement.py` (3-placement HITL enum + `hitl_gate` signature + `HITLPlacement` per C-CP-17 §17.1/§17.1.1/§17.3); U-CP-30 `HandoffContext` landed at `handoff_context.py`; dependency satisfied. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
 | Field | Value |
 |---|---|
 | Unit | U-CP-38 — Declare 3-placement enum + `hitl_gate(...)` interface signature + `HITLPlacement` workflow-definition schema |
