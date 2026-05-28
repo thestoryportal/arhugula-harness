@@ -1,6 +1,6 @@
 # Class 1 Fork — H_T-AS-8d `skill.*` namespace producer-site absence + activation-surface design gap
 
-**Status:** ✅ RATIFIED (apply arc fresh-session-shape; ~5-7 commits per Q2=(d) hybrid scope)
+**Status:** ✅ FULLY-APPLIED (apply arc landed same-session 2026-05-28 in 3 commits: 471e0e2 spec+plan + 83251b2 impl+tests + this commit doc-update; H_T-AS-8d STILL-BOUNDED → RETIRE-READY)
 
 **Operator ratification (2026-05-28):**
 
