@@ -1,7 +1,67 @@
-# Class 1 Fork — WebhookDeliveryComposer per-workflow context threading
+# Class 1 Fork — WebhookDeliveryComposer signature divergence (reframed from per-workflow context threading)
 
 **Filed:** 2026-05-28 (post-U-OD-40 RETIRE-READY transit at batch-28; closure-event lineage for batch-28 §3 (i) Class 3 informational gap)
-**Status:** RATIFIED-AND-APPLYING (Q-set ratified at operator AskUserQuestion 2026-05-28)
+**Status:** PROPOSING-REFRAMED (original Q-set ratified 2026-05-28; empirical mid-impl discovery surfaced divergent shape; new Q-set required)
+
+---
+
+## §0 — Reframe note (2026-05-28, post-Q-set ratification, pre-impl)
+
+**Trigger:** Pre-substantive empirical orientation at impl arc start (`harness-runtime/src/harness_runtime/lifecycle/webhook_delivery_composer.py:166-171` read) surfaced that **the spec contract at §14.10.1 declares a 2-arg signature `deliver_webhook(brief, idempotency_key)` against `HITLEscalationBrief` (CP-axis), but production code declares a 3-arg signature `deliver_webhook(webhook_config: WebhookConfig, payload: WebhookPayload, idempotency_key: str)` against TWO different CP-axis types from `harness_cp.hitl_timeout_degradation`**. The two contracts are NOT signature-compatible — they describe different abstractions of the webhook surface.
+
+**Empirical findings (verification-shape):**
+1. **Spec signature** (§14.10.1 + §14.8.8.1 step 3 + §14.16 cites; 5+ recurrences across v1.20–v1.34 lineage): `deliver_webhook(brief, idempotency_key) -> WebhookDeliveryResult` against `HITLEscalationBrief`.
+2. **Production carrier signature** at `webhook_delivery_composer.py:166-171`: `deliver_webhook(self, webhook_config: WebhookConfig, payload: WebhookPayload, idempotency_key: str) -> WebhookDeliveryResult`.
+3. **Production caller** at `hitl_gate_composer.py:1002-1004` passes `(durable_brief, idempotency_key)` — 2 args matching spec, NOT production carrier. **This call is structurally unreachable at runtime — would raise TypeError if invoked.**
+4. **All 5 production webhook composer tests** use the 3-arg signature against `WebhookConfig` + `WebhookPayload` (`test_lifecycle_webhook_delivery_composer.py` + `test_u_od_40_validator_webhook_integration.py:184-186`).
+5. **U-RT-98 integration test docstring** at `test_u_rt_98_webhook_delivery_composer_binding_chain.py:37` explicitly states: "The `.deliver_webhook(...)` invocation path is NOT exercised at α scope" — confirming the caller is dead code in tests.
+6. **2200/2200 baseline passes** because the broken call site is never reached.
+
+**Domain entities (not signature-compatible):**
+- `HITLEscalationBrief` (`harness_cp/validator_framework_types.py:133`): per-validator-failure escalation context — `parent_step_id` / `parent_action_id` / `fail_class` / `fail_detail_hash` / `escalation_reason` / `proposed_response_palette`. Authored at v1.18 §25.2 (V-validator-context).
+- `WebhookConfig` (`harness_cp/hitl_timeout_degradation.py:91`): outbound endpoint config — `webhook_id` / `endpoint_url` / `timeout` / `degradation_mode`. Authored at U-CP-* HITL-timeout-degradation arc (pre-§14.8.8 lineage).
+- `WebhookPayload` (`harness_cp/hitl_timeout_degradation.py:110`): outbound HTTP body — `approval_id` / `idempotency_key` / `gate_evaluation_ref` / `payload_body`.
+
+**Reframe verdict:** The "per-workflow context threading" framing at §1–§5 below described a real symptom (composer stores `workflow_id` etc. as instance state) but **misidentified the underlying defect**. The real Class 1 fork is **carrier-consumer signature divergence at §14.10.1** — a long-carried spec-vs-production drift never reconciled, with a dead-code consumer at `hitl_gate_composer.py:1002` that satisfies the spec contract but cannot execute against the production carrier.
+
+**Original Q-set ratification — RETRACTED-AT-DISCOVERY 2026-05-28:** Q1=A per-call params + Q2 factory mechanism (a) + Q3 step_context.* + Q4 ZERO + Q5 single-session were ratified at operator AskUserQuestion 2026-05-28 BUT against a framing that did not match the empirical defect. Ratification is RETRACTED at this reframe; a NEW Q-set under the signature-divergence framing is required before substantive work resumes.
+
+**State at reframe filing:**
+- `.harness/class_1_fork_webhook_composer_per_workflow_context_threading.md` — Status PROPOSING-REFRAMED at this edit
+- `design-substrate/Spec_Harness_Runtime_v1.md` v1.34 change-note — content RETRACTED-IN-PLACE at this commit (replaced with reframe acknowledgement)
+- `design-substrate/Implementation_Plan_Harness_Runtime_v2_30.md` — content RETRACTED-IN-PLACE at this commit (replaced with reframe acknowledgement)
+- ZERO impl change at production source files
+- 2200/2200 baseline preserved
+
+---
+
+## §0.1 — Reading set for the signature-divergence resolution (NEW Q-set)
+
+**Reading (P) — Production-conforms-to-spec.** Refactor production `deliver_webhook` to spec-canonical 2-arg `(brief: HITLEscalationBrief, idempotency_key: str)` shape. `WebhookConfig` + `WebhookPayload` either (i) projection-deferred to internal helper consuming `brief.escalation_reason` + composer-internal endpoint config OR (ii) declared internal to composer construction. Production tests refactored. Caller at `:1002` becomes coherent. Scope: ~5–10 file changes; integration-test heavy.
+
+**Reading (S) — Spec-conforms-to-production.** Amend spec §14.10.1 + §14.8.8.1 step 3 + §14.16 cites to declare 3-arg `(webhook_config: WebhookConfig, payload: WebhookPayload, idempotency_key: str)` signature. Caller at `:1002` needs full rewrite to construct `WebhookConfig` + `WebhookPayload` from in-scope context. ZERO production carrier change. Scope: ~2 file changes (spec + caller); doc-heavy.
+
+**Reading (H) — Hybrid with adapter.** Spec ratifies the 2-arg conceptual surface; declare a NEW adapter/projector that transforms `HITLEscalationBrief` → `(WebhookConfig, WebhookPayload)` at the composer's body boundary. Caller stays 2-arg; production carrier stays 3-arg internally; adapter mediates. Scope: ~3 file changes (composer body + caller + spec adapter declaration).
+
+**Reading (D) — Defer.** Leave the divergence as Class 3 informational; mark `hitl_gate_composer.py:1002` as dead-code with a structured "WONT-FIX-PENDING-{P|S|H}-RATIFICATION" comment; revisit at a future arc. Preserves current state; no impl/spec change.
+
+---
+
+## §0.2 — Recommended reading (assistant)
+
+**(H) Hybrid with adapter.** Reasoning: (i) preserves both spec-conceptual surface (the brief is the natural authoring shape at validator-escalation site per CP spec v1.18 §25.2) AND production HTTP shape (the existing `WebhookPayload` JSON-serialization at `webhook_delivery_composer.py:204-209` is purpose-built for the outbound HTTP wire); (ii) localizes the divergence at a single adapter site rather than rippling through 5 production tests (P) or 5+ spec cite sites (S); (iii) the cost-attribution per-workflow context threading concern (the original v1.34 framing) collapses naturally — workflow context becomes part of the adapter's projection input.
+
+**Reframe cost-attribution sub-arc:** Under Reading (H), the original "per-workflow context threading" defect dissolves because the brief carries `parent_action_id` (per `HITLEscalationBrief.parent_action_id`) and workflow context flows through the adapter as additional projection params. The bootstrap-singleton concern remains valid but addressed by the adapter, not by signature widening.
+
+---
+
+## §0.3 — State preservation
+
+Original fork doc body (§1–§6 below) **preserved verbatim** as historical record. The §1–§6 framing is RETRACTED at reframe-filing per §0; do not act on the original Q-set ratification. New Q-set ratification at §0.1 supersedes; awaiting operator routing.
+
+---
+
+(Original fork doc body preserved verbatim — reframe-retracted; do not act:)
 
 **Q-set ratification (2026-05-28):**
 

@@ -1,6 +1,22 @@
-# Implementation Plan — Harness Runtime (v2.30)
+# Implementation Plan — Harness Runtime (v2.30, REFRAMED)
 
-*Delta over v2.29. v2.30 is a paired single-unit-body canonical-reading amendment at U-RT-94 (the `WebhookDeliveryComposer` carrier class — runtime spec v1.26 §14.10.1 / now v1.34 §14.10.1) + U-RT-97 (the `materialize_webhook_delivery_composer_stage` factory unit — runtime spec v1.26 §14.16.2 / now v1.34 §14.16.2) absorbing the v1.34 ratified Class 1 fork resolution Reading A per `.harness/class_1_fork_webhook_composer_per_workflow_context_threading.md` Q-set 2026-05-28. Unit count 99 → 99 (unchanged); ZERO new units; ZERO new cluster; ZERO DAG topology change; ZERO cross-axis cascade per Q4 ratification.*
+**Status posture (REFRAMED 2026-05-28).** v2.30 was authored as a paired single-unit-body canonical-reading amendment at U-RT-94 + U-RT-97 absorbing runtime spec v1.34 ratified Class 1 fork resolution Reading A per `.harness/class_1_fork_webhook_composer_per_workflow_context_threading.md` Q-set 2026-05-28. Pre-substantive empirical orientation at impl arc start surfaced that the spec contract at §14.10.1 declares a 2-arg `deliver_webhook(brief, idempotency_key)` signature while production code declares a 3-arg `deliver_webhook(webhook_config: WebhookConfig, payload: WebhookPayload, idempotency_key: str)` signature — a long-carried carrier-consumer signature divergence misidentified by the original Q-set framing. The v2.30 substantive amendments at U-RT-94 + U-RT-97 authored at this commit are **RETRACTED-IN-PLACE** pending NEW Q-set ratification under the signature-divergence framing per fork doc §0.1.
+
+**Source of reframe.** `.harness/class_1_fork_webhook_composer_per_workflow_context_threading.md` §0 reframe note 2026-05-28 + runtime spec v1.34 RETRACTED-IN-PLACE change-note + empirical findings at `webhook_delivery_composer.py:166-171` + `hitl_gate_composer.py:1002-1004`.
+
+**Amendments.** None at v2.30. v2.30 is a reframe-record-only delta plan file; ZERO new units; ZERO new cluster; ZERO DAG topology change; ZERO AC change at U-RT-94; ZERO AC change at U-RT-97; ZERO signature change at any unit. The U-RT-94 + U-RT-97 substantive amendments described in the RETRACTED-block-below are NOT applied; v2.29 plan state preserved verbatim.
+
+**Sections preserved verbatim from v2.29.** ALL v2.29 + v2.28 + ... + v1 lineage preserved verbatim per delta-only-plan-chain convention. NO U-RT-94 amendment; NO U-RT-97 amendment.
+
+**Status posture.** Proposed (v2.29) → **Proposed (v2.30, reframed)**. v2.30 is a reframe-record-only revision under FM-2 single-focus arc scope; the carrier-consumer signature-divergence resolution arc is deferred to a follow-on plan delta pending Q-set ratification per fork doc §0.1. ZERO cross-axis cascade.
+
+---
+
+**RETRACTED-AT-REFRAME-2026-05-28 — original v2.30 substantive content preserved below for audit-trail integrity. DO NOT ACT on this content; it describes plan amendments authored against a misidentified defect.**
+
+---
+
+*Delta over v2.29 (RETRACTED). v2.30 is a paired single-unit-body canonical-reading amendment at U-RT-94 (the `WebhookDeliveryComposer` carrier class — runtime spec v1.26 §14.10.1 / now v1.34 §14.10.1) + U-RT-97 (the `materialize_webhook_delivery_composer_stage` factory unit — runtime spec v1.26 §14.16.2 / now v1.34 §14.16.2) absorbing the v1.34 ratified Class 1 fork resolution Reading A per `.harness/class_1_fork_webhook_composer_per_workflow_context_threading.md` Q-set 2026-05-28. Unit count 99 → 99 (unchanged); ZERO new units; ZERO new cluster; ZERO DAG topology change; ZERO cross-axis cascade per Q4 ratification.*
 
 ## §0 Change note (v2.29 → v2.30)
 
