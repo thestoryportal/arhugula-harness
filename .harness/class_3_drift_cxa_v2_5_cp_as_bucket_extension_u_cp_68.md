@@ -61,4 +61,6 @@ cost-attribution amendment tied to U-CP-72 implementation per `handoff §6`).
 
 ## Status
 
-OPEN. Routes to next CXA revision pass.
+✅ CLOSED-via-CXA-v2.15 2026-05-27 — additive amendment landed: CXA v2.14 → v2.15 §2.3.3 row 6 NEW (U-CP-68 → U-AS-03 ToolContract Pattern-P1 seam) + §2.1 aggregate 100 → 101 + genuine 30 → 31 + §2.4 CP outbound 62 → 63 + CP genuine 21 → 22. Dependent cite refreshes co-published in single bundled arc: workspace `CLAUDE.md` §1.1 + §2.4 (cardinality bump + v2.9 → v2.15 cite); `harness-cp/CLAUDE.md` §1.1 + §2.3 (CP outbound 62 → 63 + 18 → AS → 19 → AS + v2.9 → v2.15 cite). `harness-as/CLAUDE.md` v2.1-baseline carry preserved per FM-2 (pre-existing `[[class_3_tension_per_axis_claude_md_v2_1_to_v2_4_count_drift]]` carry; separate arc). Runtime Pattern-P1 enforcement at `test_cxa_pattern_p1.py` PATTERN_P1_SEAMS landed the seam at U-CP-70 commit `2e417e0` (2026-05-21); CXA canonical enumeration carried the owe across v2.7..v2.14 narrow-scope publications and absorbed at v2.15 — same-shape pattern as v2.9 cost-attribution row 8 (runtime-first / CXA-follows; natural consequence of test-led pattern where runtime serves as de-facto canonical enumeration during carry window). Sub-species 3.test-led-canonical-during-carry-window catalogued — variant of resolved-but-carry-stale where the canonical-state lives at the test layer during the carry, then the CXA file catches up; precedent set at v2.9, second application at v2.15.
+
+_Original filing footer:_ **Status:** OPEN. Routes to next CXA revision pass.
