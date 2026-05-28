@@ -1,0 +1,216 @@
+"""U-RT-103 — `RuntimeConfigSource` 3-source layered precedence loader.
+
+Implements runtime spec v1.35 §3.7 (NEW). Composes a :class:`RuntimeConfig`
+from three sources in strict ascending priority:
+
+1. Environment variables (``HARNESS_*`` prefix, Pydantic-settings env source)
+2. TOML config file (``harness.toml`` at workspace root by default; overridable)
+3. CLI overrides (per-invocation dict; highest priority)
+
+Sibling to the legacy U-RT-04 ``materialize_runtime_config()`` (env + kwargs
+only); U-RT-103 adds the config-file layer and the secrets-exclusion guard
+per Q-L=(b) ratification.
+
+Failure surface (spec v1.35 §14.18.4):
+    All load-side errors raise :class:`RuntimeConfigLoadError`, mapped at the
+    CLI layer to fail-class ``RT-FAIL-CLI-CONFIG-LOAD`` → exit code 3.
+"""
+
+from __future__ import annotations
+
+import re
+import tomllib
+from pathlib import Path
+from typing import Any, ClassVar, cast
+
+from harness_core.deployment_surface import DeploymentSurface
+from harness_cp.topology_pattern import TopologyPattern
+from pydantic import ValidationError
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from harness_runtime.types import RuntimeConfig
+
+__all__ = [
+    "DEFAULT_CONFIG_FILE_NAME",
+    "ENV_PREFIX",
+    "RUNTIME_CONFIG_LOAD_FAIL_CLASS",
+    "RuntimeConfigLoadError",
+    "RuntimeConfigSource",
+]
+
+
+ENV_PREFIX = "HARNESS_"
+DEFAULT_CONFIG_FILE_NAME = "harness.toml"
+RUNTIME_CONFIG_LOAD_FAIL_CLASS = "RT-FAIL-CLI-CONFIG-LOAD"
+
+# Heuristic for plaintext secret detection in TOML. Per spec v1.35 §3.7
+# "Secrets exclusion" + Q-L=(b): operator-supplied secrets must flow through
+# ADR-F5 keyring, not plaintext config files. The patterns catch the obvious
+# mistakes (an LLM provider API key dropped into harness.toml). The match is
+# case-insensitive and applies at any nesting depth of the TOML document.
+_SECRET_KEY_PATTERN = re.compile(
+    r"(?:^|_)(api_?key|secret|password|passphrase|token|credential)s?$",
+    re.IGNORECASE,
+)
+
+
+class RuntimeConfigLoadError(Exception):
+    """Typed exception for any 3-source loader failure.
+
+    Maps to CLI fail-class ``RT-FAIL-CLI-CONFIG-LOAD`` at the
+    :mod:`harness_runtime.cli` layer (spec v1.35 §14.18.4 → exit code 3).
+    """
+
+    FAIL_CLASS: ClassVar[str] = RUNTIME_CONFIG_LOAD_FAIL_CLASS
+
+    def __init__(self, reason: str, *, source: str | None = None) -> None:
+        self.reason = reason
+        self.source = source
+        suffix = f" [source={source}]" if source else ""
+        super().__init__(f"{self.FAIL_CLASS}: {reason}{suffix}")
+
+
+class _RuntimeEnvSettings(BaseSettings):
+    """Sidecar :class:`BaseSettings` reading scalar ``HARNESS_*`` env vars.
+
+    Mirrors the existing U-RT-04 ``_ENV_SCALAR_FIELDS`` set. Sub-config
+    fields (path_bindings, provider_secrets, otel, collector) are NOT
+    env-keyed at the v1 source layer; operators provide them via config
+    file or CLI overrides.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix=ENV_PREFIX,
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    deployment_surface: DeploymentSurface | None = None
+    repository_root: Path | None = None
+    default_topology: TopologyPattern | None = None
+    tenant_id: str | None = None
+    ollama_host: str | None = None
+    ollama_optional: bool | None = None
+
+
+class RuntimeConfigSource:
+    """3-source layered loader composing :class:`RuntimeConfig` from env, file, CLI.
+
+    See module docstring for precedence.
+
+    Single public entrypoint :py:meth:`load` is a classmethod by design — the
+    source itself is stateless; the per-invocation state lives in the
+    ``config_file`` + ``cli_overrides`` arguments.
+    """
+
+    @classmethod
+    def load(
+        cls,
+        config_file: Path | None = None,
+        cli_overrides: dict[str, Any] | None = None,
+    ) -> RuntimeConfig:
+        """Compose a :class:`RuntimeConfig` from the 3 sources.
+
+        Parameters
+        ----------
+        config_file:
+            Path to a TOML config file. When ``None``, the config-file layer
+            contributes nothing (the precedence reduces to env + CLI).
+            When set, the file MUST exist and parse as TOML.
+        cli_overrides:
+            Per-invocation dict of CLI-flag overrides. Highest priority.
+
+        Raises
+        ------
+        RuntimeConfigLoadError
+            * TOML parse failure (``ManifestParseError``-shaped).
+            * Plaintext-secret detected at any TOML nesting level.
+            * Pydantic validation failure on the composed kwargs (e.g., type
+              mismatch, missing required field, unknown field).
+        """
+        env_values = cls._load_env_values()
+        file_values = (
+            cls._load_file_values(config_file) if config_file is not None else {}
+        )
+        cli_values = dict(cli_overrides or {})
+
+        merged: dict[str, Any] = {}
+        merged.update(env_values)
+        merged.update(file_values)
+        merged.update(cli_values)
+
+        try:
+            return RuntimeConfig(**merged)
+        except ValidationError as exc:
+            raise RuntimeConfigLoadError(
+                f"Pydantic validation failed: {exc.errors()}",
+                source="merged",
+            ) from exc
+
+    @staticmethod
+    def _load_env_values() -> dict[str, Any]:
+        """Read ``HARNESS_*`` env vars via pydantic-settings; return non-None values."""
+        try:
+            sidecar = _RuntimeEnvSettings()
+        except ValidationError as exc:
+            raise RuntimeConfigLoadError(
+                f"env-var coercion failed: {exc.errors()}",
+                source="env",
+            ) from exc
+        return {k: v for k, v in sidecar.model_dump().items() if v is not None}
+
+    @classmethod
+    def _load_file_values(cls, config_file: Path) -> dict[str, Any]:
+        """Read + parse a TOML config file; raise on plaintext-secret presence."""
+        try:
+            raw_bytes = config_file.read_bytes()
+        except OSError as exc:
+            raise RuntimeConfigLoadError(
+                f"config file read failed: {exc}",
+                source=str(config_file),
+            ) from exc
+
+        try:
+            document = tomllib.loads(raw_bytes.decode("utf-8"))
+        except tomllib.TOMLDecodeError as exc:
+            raise RuntimeConfigLoadError(
+                f"TOML parse error: {exc}",
+                source=str(config_file),
+            ) from exc
+        except UnicodeDecodeError as exc:
+            raise RuntimeConfigLoadError(
+                f"config file is not valid UTF-8: {exc}",
+                source=str(config_file),
+            ) from exc
+
+        cls._reject_plaintext_secrets(document, str(config_file))
+
+        # Project TOML structure to RuntimeConfig field-set. Spec §3.7
+        # declares section examples like `[runtime] tenant_id = "..."`;
+        # accept either flat top-level keys OR a `[runtime]` table.
+        runtime_section = document.get("runtime")
+        if isinstance(runtime_section, dict):
+            return dict(cast(dict[str, Any], runtime_section))
+        return dict(document)
+
+    @classmethod
+    def _reject_plaintext_secrets(cls, node: object, source: str, path: str = "") -> None:
+        """Walk a parsed TOML document; raise on any key matching the secret pattern."""
+        if isinstance(node, dict):
+            for key, value in cast(dict[Any, Any], node).items():
+                if not isinstance(key, str):
+                    continue
+                if _SECRET_KEY_PATTERN.search(key):
+                    full_path = f"{path}.{key}" if path else key
+                    raise RuntimeConfigLoadError(
+                        f"plaintext secret detected at '{full_path}': "
+                        "secrets must be sourced via ADR-F5 keyring "
+                        "(see RuntimeConfig.provider_secrets)",
+                        source=source,
+                    )
+                cls._reject_plaintext_secrets(
+                    value, source, f"{path}.{key}" if path else key
+                )
+        elif isinstance(node, list):
+            for idx, item in enumerate(cast(list[Any], node)):
+                cls._reject_plaintext_secrets(item, source, f"{path}[{idx}]")

@@ -501,6 +501,7 @@ dependencies = [
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-sdk" },
     { name = "pydantic" },
+    { name = "pydantic-settings" },
     { name = "typer" },
 ]
 
@@ -521,6 +522,7 @@ requires-dist = [
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.30" },
     { name = "opentelemetry-sdk", specifier = ">=1.30" },
     { name = "pydantic", specifier = ">=2.10" },
+    { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "typer", specifier = ">=0.12" },
 ]
 
