@@ -186,7 +186,7 @@ ZERO cross-axis cascade verified at filing.
 
 ## §6 — Resolution status
 
-**Status: ✅ APPLIED 2026-05-27 — operator ratified Q1=A + Q2=apply-now + Q3=defer-layer-3-e2e same session.**
+**Status: ✅ APPLIED-AND-RETIRE-READY 2026-05-27 — operator ratified Q1=A + Q2=apply-now + Q3=defer-layer-3-e2e same session; H_T-CP-19 PARTIAL → RETIRE-READY transit filed at `.harness/phase-7d-retirement-events-batch-21.md`.**
 
 Reading A absorbed across single bundled arc (this session):
 
@@ -211,7 +211,7 @@ Reading A absorbed across single bundled arc (this session):
 
 **H_T-CP-19 retirement status:** PARTIAL → **RETIRE-READY** (post-v1.20 binding chain MET per `[[verification-shape-sharpened-grep-vs-e2e]]` 3-stage verification: WorkflowManifestEntry field declared + workflow_driver.py composition site reads from field + 1091/1091 runtime tests pass through real bootstrap path). RETIRE-READY → RETIRED — **DEFERRED** pending layer-3 multi-deployment e2e per Q3 ratification.
 
-**Retirement event filing:** Owed at batch-21 (separate filing arc; operator-discretion timing per existing 7d cadence).
+**Retirement event filing:** ✅ FILED at `.harness/phase-7d-retirement-events-batch-21.md` 2026-05-27 (single-row batch; H_T-CP-19 PARTIAL → RETIRE-READY; cumulative 28/49 RETIRED unchanged; 1/49 RETIRE-READY NEW; 6/49 PARTIAL was 7; pipeline-advanced 35/49 = 71.4% unchanged).
 
 **Sub-species catalogue:** `3.spec-self-declared-future-extension-channel` — variant of resolved-but-carry-stale where the originating spec text (v1.6 §6 line 333 anti-extension invariant) EXPLICITLY self-declared the future amendment channel ("Workflow §4.1.2 Class-2 amendment to this contract"), and the v1.20 publication IS that exact channel. Distinct from prior species 3 sub-species — the carry was not stale-by-resolution but rather scheduled-by-original-spec-self-declaration. First application catalogued at H_T-CP-19 fork closure.
 
