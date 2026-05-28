@@ -197,6 +197,7 @@ class _FakeCtx:
         validator_framework: object | None = None,
         pause_resume_protocol: object | None = None,
         pause_requested_flag: asyncio.Event | None = None,
+        tenant_id: str | None = None,
     ) -> None:
         from opentelemetry.trace import NoOpTracerProvider
 
@@ -216,6 +217,10 @@ class _FakeCtx:
         self.tracer_provider = tracer_provider if tracer_provider is not None else NoOpTracerProvider()
         # U-CP-61 — optional ValidatorFramework binding; default None (skip hook).
         self.validator_framework = validator_framework
+        # tenant_id binding lift — DriverContext.tenant_id surfaced from
+        # HarnessContext.tenant_id (which reads RuntimeConfig.tenant_id).
+        # Default None preserves single-tenant behavior for happy-path tests.
+        self.tenant_id = tenant_id
 
 
 class _SingleKindRegistry:
@@ -817,3 +822,78 @@ def test_driver_iteration_deterministic_given_inputs() -> None:
             )
         )
     assert runs[0] == runs[1]
+
+
+# ---------------------------------------------------------------------------
+# Tenant-id binding lift — driver reads ctx.tenant_id at StepExecutionContext
+# composition site (replacing the v1.6 MVP hardcoded None). Per workflow_
+# driver_types.py deferral comment: this is the v1.7+ extension that lifts
+# the hardcode as a binding fix (per-deployment scoping via RuntimeConfig,
+# not a per-workflow WorkflowManifestEntry schema extension like CP-19's
+# default_gate_level at CP spec v1.20 §6.1.Y).
+# ---------------------------------------------------------------------------
+
+
+class _TenantIdProbeDispatcher:
+    """Records `step_context.tenant_id` observed at each dispatch."""
+
+    def __init__(self) -> None:
+        self.observed: list[str | None] = []
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        self.observed.append(getattr(step_context, "tenant_id", "<missing>"))
+        return {"step_id": str(step.step_id), "echoed_payload": dict(step.step_payload)}
+
+
+def _run_and_capture_tenant_id(*, tenant_id: str | None) -> str | None:
+    ctx, _, _ = _ctx()
+    ctx.tenant_id = tenant_id  # override default None set at _FakeCtx.__init__
+    probe = _TenantIdProbeDispatcher()
+    execute_workflow(
+        manifest_entry=_manifest(),
+        steps=[_step(0)],
+        run_id="run-tenant-test",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, probe)),
+    )
+    assert len(probe.observed) == 1
+    return probe.observed[0]
+
+
+def test_tenant_id_none_propagates_to_step_context() -> None:
+    """Single-tenant (default): ctx.tenant_id=None → step_context.tenant_id=None."""
+    assert _run_and_capture_tenant_id(tenant_id=None) is None
+
+
+def test_tenant_id_non_none_propagates_to_step_context() -> None:
+    """Multi-tenant: ctx.tenant_id='acme' → step_context.tenant_id='acme'."""
+    assert _run_and_capture_tenant_id(tenant_id="acme") == "acme"
+
+
+def test_tenant_id_empty_string_propagates_verbatim() -> None:
+    """Empty-string tenant is NOT coerced at driver layer.
+
+    Coercion (if any) is audit-writer's concern per `_tenant_tag` (which
+    treats falsy as single-tenant sentinel). The driver propagates verbatim.
+    """
+    assert _run_and_capture_tenant_id(tenant_id="") == ""
+
+
+def test_driver_context_protocol_declares_tenant_id() -> None:
+    """DriverContext Protocol must declare tenant_id (structural typing check).
+
+    HarnessContext satisfies the Protocol via a `@computed_field` property
+    reading `self.config.tenant_id`; test fixtures (_FakeCtx) bind it as a
+    plain instance attribute. Both shapes match structurally.
+    """
+    assert "tenant_id" in DriverContext.__annotations__, (
+        "DriverContext.tenant_id must be declared so HarnessContext can "
+        "structurally satisfy the protocol via the computed property."
+    )

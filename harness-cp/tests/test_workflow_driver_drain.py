@@ -165,6 +165,8 @@ class _FakeCtx:
         # Drain tests don't exercise pause-trigger (protocol=None skips check).
         self.pause_resume_protocol: object | None = None
         self.pause_requested_flag = asyncio.Event()
+        # tenant_id binding lift — drain tests run single-tenant.
+        self.tenant_id: str | None = None
 
 
 class _EchoDispatcher:
