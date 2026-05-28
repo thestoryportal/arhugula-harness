@@ -146,15 +146,24 @@ Suggested defaults per §2.1: `step_dispatch_timeout_seconds = 30.0` (Reading A)
 
 ### §3.3 Q3 — Cascade scope: where does the new field land at the plan layer?
 
-Runtime plan v2.26 declares 96 atomic units across L1..L9-quaterdecies clusters. The `RuntimeConfig` field-landing convention (per existing field additions at U-RT-87 / U-RT-96 / U-RT-83 precedent) places config-field landings at the cluster that first consumes the field. Three candidate landing patterns:
+Runtime plan v2.26 declares 96 atomic units across L1..L9-quaterdecies clusters. Two convention layers govern `RuntimeConfig` field landings, depending on the shape of the extension:
+
+- **Binding-chain shape** (config-field + empty-marker sub-model + HarnessContext field + factory + stage-wiring + fail-class + e2e) — modern precedent at L9-decies (U-RT-83 ValidatorFrameworkConfig) / L9-undecies (U-RT-87 PauseResumeProtocolConfig) / L9-quaterdecies (U-RT-96 WebhookDeliveryComposerConfig). Each lands as a NEW single-unit-or-3-unit cluster at the L9-N apex.
+- **Primitive scalar field-set extension shape** (single field + production binding read + fail-class — no sub-model, no ctx field, no factory) — modern precedent at single-unit-body in-place AC amendments per CP plan v2.25 U-CP-13 `default_gate_level` (+1 field, +3 ACs) and runtime plan v2.26 U-RT-94 `fail_detail_hash` (in-place AC text amendment).
+
+`step_dispatch_timeout_seconds` matches the **primitive scalar** shape — it is a single `float` field, no sub-model, no `HarnessContext` field, no factory, no stage materialization. The binding-chain shape is overkill.
+
+Empirical verification 2026-05-28: `RuntimeConfig` was originally authored at **U-RT-02** (commit `a04c6f8` "feat(runtime): U-RT-02 — RuntimeConfig + HarnessContext schemas"). The U-RT-02 body lives at the original v2.5-or-earlier authoring plan version and only delta-changes appear in v2.11+ delta plan files per delta-only-plan-chain convention.
+
+Three candidate landing patterns:
 
 | Option | Landing site | Rationale |
 |---|---|---|
-| (α) | NEW single-unit cluster (L9-quindecies) decomposing field addition + 3 callsite updates + test | Cleanest cluster boundary; matches L9-decies / L9-undecies / L9-quaterdecies single-spec-extension landing pattern |
-| (β) | U-RT-17 (or sibling) in-place AC text amendment + Files-line extension to add stage_5_loop_init.py callsites | Minimal cluster surface; matches v2.22 / v2.24 / v2.26 in-place AC amendment shape for tight scoping |
-| (γ) | Hybrid — field landing at U-RT-17 in-place AC + NEW single-unit for production binding + test cluster | Splits spec-extension from production-binding for cleaner traceability |
+| (α) | NEW single-unit cluster (L9-quindecies) decomposing field addition + 3 callsite updates + test | Cleanest cluster boundary if treated as binding-chain shape; overkill for a primitive float field per precedent above |
+| (β) | U-RT-02 in-place AC text amendment + Files-line extension to add stage_5_loop_init.py callsites + NEW AC for production binding | Minimal cluster surface; matches CP v2.25 U-CP-13 + runtime v2.26 U-RT-94 in-place single-unit-body amendment precedent for primitive scalar field-set extensions; lands at the authoring unit per spec-revision-driven plan-revision convention |
+| (γ) | Hybrid — field landing at U-RT-02 in-place AC + NEW single-unit at L9-quindecies for production binding + test | Splits spec-extension from production-binding for cleaner traceability; matches L9-decies / L9-undecies cluster-boundary split shape but with primitive field at L0 |
 
-Recommendation: **(β) in-place at U-RT-17** — the scope is tight (1 field + 3 callsites + 1 fail-class addition + 1 e2e test), and the in-place AC amendment shape matches recent precedent (v2.24/v2.26 `default_gate_level` and `fail_detail_hash` Optional widenings landed as single-unit-body amendments without new clusters).
+Recommendation: **(β) in-place at U-RT-02** — the scope is tight (1 field + 3 stage_5_loop_init.py callsite updates + 1 fail-class addition + 1-2 unit tests + 1 e2e test), and the in-place AC amendment shape matches the closest-precedent (primitive scalar field-set extensions). The L9-N cluster shape is reserved for binding chains with sub-models + factories.
 
 ### §3.4 Q4 — Fail-class naming?
 
@@ -177,7 +186,7 @@ Per §1.4 cascade scope analysis. Intra-runtime-axis only; ZERO cross-axis casca
 | Artifact | Touch | Notes |
 |---|---|---|
 | Runtime spec v1.30 → v1.31 §3 C-RT-03 | NEW field declaration + docstring + §11 fail-class addition | Spec-side authoring |
-| Runtime plan v2.26 → v2.27 U-RT-17 (or sibling) | In-place AC amendment per Q3 (β) | Plan-side absorption |
+| Runtime plan v2.26 → v2.27 U-RT-02 (or operator-ratified landing site per Q3) | In-place AC amendment per Q3 (β) | Plan-side absorption |
 | `harness-runtime/src/harness_runtime/types.py:1013` | NEW sibling field declaration | Pydantic field landing |
 | `harness-runtime/src/harness_runtime/bootstrap/stage_5_loop_init.py:332/336/356` | 3 callsite updates + comment-marker removal at :325-331 | Production binding |
 | `harness-runtime/tests/` | NEW e2e test covering per-step-timeout-fires-before-drain semantics | Test coverage |
