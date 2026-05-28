@@ -25,7 +25,22 @@ from pathlib import Path
 
 import pytest
 
+from harness_cp.cp_shared_types import ModelBinding
+from harness_cp.cross_family_fallback_chain import (
+    FallbackChain,
+    ProviderCandidate,
+    ProviderFamily,
+)
+from harness_cp.engine_class import EngineClass
+from harness_cp.topology_pattern import TopologyPattern
+from harness_cp.workflow_driver_types import StepKind, WorkflowStep
+from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+from harness_core.persona_tier import PersonaTier
+from harness_core.workload_class import WorkloadClass
+
+from harness_runtime.api import WorkflowObject
 from harness_runtime.lifecycle.workflow_manifest_loader import (
+    LoadedWorkflow,
     ManifestAdmissibilityError,
     ManifestEnumValueError,
     ManifestParseError,
@@ -363,3 +378,177 @@ def test_load_is_idempotent(tmp_path: Path) -> None:
     b = WorkflowManifestLoader.load(path)
     assert a == b
     assert isinstance(a, WorkflowManifest)
+
+
+# ===========================================================================
+# U-RT-105 — LoadedWorkflow projection tests (plan v2.31 §1.5)
+# ===========================================================================
+
+
+_WME_REQUIRED_YAML_FRAGMENT = """\
+  layer_budgets: []
+  fallback_chain:
+    primary:
+      provider: "anthropic"
+      model: "claude-opus-4-7"
+      family: "anthropic"
+    same_family: []
+    cross_family: []
+  hitl_placements: []
+  per_step_overrides: {}
+"""
+
+_WME_REQUIRED_TOML_FRAGMENT = """
+layer_budgets = []
+hitl_placements = []
+per_step_overrides = {}
+fallback_chain = { primary = { provider = "anthropic", model = "claude-opus-4-7", family = "anthropic" }, same_family = [], cross_family = [] }
+"""
+
+
+def _yaml_with_wme(extra_workflow_lines: str = "") -> str:
+    """Build a YAML manifest body that supplies the full WME field-set."""
+    return (
+        'version: 1\n'
+        'workflow:\n'
+        '  workflow_id: "wf-projected"\n'
+        '  workload_class: "software-engineering"\n'
+        '  persona_tier: "solo-developer"\n'
+        '  engine_class: "pure-pattern-no-engine"\n'
+        '  topology_pattern: "evaluator-optimizer"\n'
+        + extra_workflow_lines
+        + _WME_REQUIRED_YAML_FRAGMENT
+        + 'default_model_binding:\n'
+        + '  provider: "anthropic"\n'
+        + '  model: "claude-opus-4-7"\n'
+        + 'steps:\n'
+        + '  - step_id: "s1"\n'
+        + '    step_kind: "inference-step"\n'
+        + '    step_payload: {}\n'
+    )
+
+
+def _toml_with_wme(extra_workflow_lines: str = "") -> str:
+    return (
+        "version = 1\n\n"
+        "[workflow]\n"
+        'workflow_id = "wf-projected"\n'
+        'workload_class = "software-engineering"\n'
+        'persona_tier = "solo-developer"\n'
+        'engine_class = "pure-pattern-no-engine"\n'
+        'topology_pattern = "evaluator-optimizer"\n'
+        + extra_workflow_lines
+        + _WME_REQUIRED_TOML_FRAGMENT
+        + "\n[default_model_binding]\n"
+        + 'provider = "anthropic"\n'
+        + 'model = "claude-opus-4-7"\n\n'
+        + "[[steps]]\n"
+        + 'step_id = "s1"\n'
+        + 'step_kind = "inference-step"\n'
+        + "step_payload = {}\n"
+    )
+
+
+# AC #1 — minimum-required manifest produces WorkflowObject Protocol value
+def test_minimum_required_manifest_produces_workflow_object(tmp_path: Path) -> None:
+    path = _write(tmp_path, "min-wme.yaml", _yaml_with_wme())
+    workflow = WorkflowManifestLoader.load_workflow(path)
+    assert isinstance(workflow, LoadedWorkflow)
+    assert isinstance(workflow, WorkflowObject)  # Protocol-conformance
+    assert workflow.workflow_id == "wf-projected"
+    assert workflow.workload_class is WorkloadClass.SOFTWARE_ENGINEERING
+    assert workflow.manifest_entry.engine_class is EngineClass.PURE_PATTERN_NO_ENGINE
+    assert workflow.manifest_entry.topology_pattern is TopologyPattern.EVALUATOR_OPTIMIZER
+    assert workflow.default_model_binding.provider == "anthropic"
+    assert len(workflow.steps) == 1
+
+
+# AC #2 — full-optional manifest matches manual WME construction
+def test_full_optional_manifest_matches_manual_construction(tmp_path: Path) -> None:
+    extra = '  entry_version: 2\n  default_gate_level: "deny"\n'
+    path = _write(tmp_path, "full-wme.yaml", _yaml_with_wme(extra))
+    workflow = WorkflowManifestLoader.load_workflow(path)
+    manual_wme = WorkflowManifestEntry(
+        workflow_id="wf-projected",
+        workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        topology_pattern=TopologyPattern.EVALUATOR_OPTIMIZER,
+        layer_budgets=(),
+        fallback_chain=FallbackChain(
+            primary=ProviderCandidate(
+                provider="anthropic",
+                model="claude-opus-4-7",
+                family=ProviderFamily.ANTHROPIC,
+            ),
+            same_family=(),
+            cross_family=(),
+        ),
+        hitl_placements=(),
+        per_step_overrides={},
+        entry_version=2,
+        default_gate_level=__import__("harness_cp.gate_level_rule", fromlist=["GateLevel"]).GateLevel.DENY,
+    )
+    assert workflow.manifest_entry == manual_wme
+
+
+# AC #3 — Pydantic-default discipline (§14.19.4 #6): absent optional field
+# inherits the carrier's declared default, not a loader-supplied value
+def test_optional_field_absent_uses_pydantic_carrier_default(tmp_path: Path) -> None:
+    path = _write(tmp_path, "default.yaml", _yaml_with_wme())
+    workflow = WorkflowManifestLoader.load_workflow(path)
+    # `entry_version` not present in manifest → WME default of 1 applies.
+    assert workflow.manifest_entry.entry_version == 1
+    # `default_gate_level` not present → WME default of None applies.
+    assert workflow.manifest_entry.default_gate_level is None
+    # `sub_agent_briefs` not present → WME default of None applies.
+    assert workflow.manifest_entry.sub_agent_briefs is None
+
+
+# AC #4 — YAML↔TOML round-trip invariant (§14.19.4 #8)
+def test_yaml_toml_equivalent_inputs_produce_equivalent_workflow(
+    tmp_path: Path,
+) -> None:
+    yaml_path = _write(tmp_path, "equivalent.yaml", _yaml_with_wme())
+    toml_path = _write(tmp_path, "equivalent.toml", _toml_with_wme())
+    yaml_workflow = WorkflowManifestLoader.load_workflow(yaml_path)
+    toml_workflow = WorkflowManifestLoader.load_workflow(toml_path)
+    assert yaml_workflow == toml_workflow
+
+
+# AC #5 — step_payload JSON-serializability (§14.19.4 #9)
+def test_non_json_serializable_step_payload_raises_schema_error(
+    tmp_path: Path,
+) -> None:
+    # TOML offset-datetime → tomllib produces a `datetime.datetime`, which
+    # is NOT json.dumps serializable. Fixture verifies eager catch.
+    body = (
+        "version = 1\n\n"
+        "[workflow]\n"
+        'workflow_id = "wf-bad-payload"\n'
+        'workload_class = "software-engineering"\n'
+        'persona_tier = "solo-developer"\n'
+        'engine_class = "pure-pattern-no-engine"\n'
+        'topology_pattern = "evaluator-optimizer"\n'
+        + _WME_REQUIRED_TOML_FRAGMENT
+        + "\n[default_model_binding]\n"
+        + 'provider = "anthropic"\n'
+        + 'model = "claude-opus-4-7"\n\n'
+        + "[[steps]]\n"
+        + 'step_id = "s1"\n'
+        + 'step_kind = "inference-step"\n'
+        + 'step_payload = { scheduled_at = 2026-05-28T10:00:00Z }\n'
+    )
+    path = _write(tmp_path, "bad-payload.toml", body)
+    with pytest.raises(ManifestSchemaError) as exc:
+        WorkflowManifestLoader.load_workflow(path)
+    assert "JSON-serializable" in str(exc.value)
+
+
+# AC #6 — idempotency: repeated load_workflow returns equal LoadedWorkflow
+def test_load_workflow_is_idempotent(tmp_path: Path) -> None:
+    path = _write(tmp_path, "idem-projected.yaml", _yaml_with_wme())
+    a = WorkflowManifestLoader.load_workflow(path)
+    b = WorkflowManifestLoader.load_workflow(path)
+    assert a == b
+    assert isinstance(a, LoadedWorkflow)

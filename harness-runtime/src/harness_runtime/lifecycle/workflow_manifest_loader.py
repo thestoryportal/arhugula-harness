@@ -1,39 +1,54 @@
-"""U-RT-104 — `WorkflowManifestLoader` for YAML / TOML workflow manifests.
+"""U-RT-104 + U-RT-105 — `WorkflowManifestLoader` for YAML / TOML manifests.
 
 Implements C-RT-30 per runtime spec v1.36 §14.19 + SF-1 §3 + §4. Lands the
-loader skeleton: file-extension dispatch (`.yaml` / `.yml` → strictyaml,
-`.toml` → tomllib stdlib), 8 typed exceptions, intermediate Pydantic carrier
-projecting to the SF-1 §3.1 schema body, + 9 invariants per spec §14.19.4.
+loader skeleton + projection layer:
 
-Per the v1.36 canonical-reading amendment, the deployment-surface-keyed
-engine_class admissibility check defers to the runtime caller (U-RT-106).
+- U-RT-104 ``load(path) -> WorkflowManifest`` — file-extension dispatch
+  (``.yaml`` / ``.yml`` → strictyaml, ``.toml`` → tomllib stdlib), 8 typed
+  exceptions, intermediate Pydantic carrier projecting to the SF-1 §3.1
+  schema body, eager validation per spec §14.19.4 invariants 1-4 + 7.
+
+- U-RT-105 ``load_workflow(path) -> LoadedWorkflow`` — sibling method that
+  composes ``load()`` + projects the intermediate carrier to a
+  ``WorkflowObject`` Protocol-conformant value (via ``LoadedWorkflow`` frozen
+  Pydantic BaseModel). Adds step_payload JSON-serializability check
+  (invariant 9) + YAML↔TOML round-trip equivalence (invariant 8).
+
+The U-RT-105 plan §1.5 wording is "EXTEND load(path)"; implemented as a
+sibling method to preserve U-RT-104's intermediate-carrier surface (used by
+callers needing the parsed shape without forcing full WME projection — e.g.,
+operator-facing tooling that surfaces validation errors at the carrier layer).
+
+Per the v1.36 canonical-reading amendment, deployment-surface-keyed
+engine_class admissibility defers to the runtime caller (U-RT-106).
 U-CP-22 workload-keyed topology admissibility runs at load-time per AC #12.
-
-Per plan v2.32 §1.2, U-RT-104 AC #11 reframes to enum-validity only (covered
-by AC #9). U-RT-105 will extend `load()` to return a full `WorkflowObject`
-Protocol-conformant value; v1.36 lands the intermediate `WorkflowManifest`
-carrier shape.
+Per plan v2.32 §1.2, U-RT-104 AC #11 reframes to enum-validity only.
 """
 
 from __future__ import annotations
 
+import json
 import tomllib
 from pathlib import Path
 from typing import Any, ClassVar, cast
 
 import strictyaml  # pyright: ignore[reportMissingTypeStubs]
+from harness_core.identity import StepID
 from harness_core.persona_tier import PersonaTier
 from harness_core.workload_class import WorkloadClass
+from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.per_workload_class_topology import (
     is_topology_permitted_for_workload,
 )
 from harness_cp.topology_pattern import TopologyPattern
-from harness_cp.workflow_driver_types import StepKind
+from harness_cp.workflow_driver_types import StepKind, WorkflowStep
+from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 __all__ = [
+    "LoadedWorkflow",
     "ManifestAdmissibilityError",
     "ManifestEnumValueError",
     "ManifestParseError",
@@ -385,3 +400,104 @@ class WorkflowManifestLoader:
                 f"is_topology_permitted_for_workload",
                 source=source,
             )
+
+    # =============================================================
+    # U-RT-105 — projection to WorkflowObject Protocol
+    # =============================================================
+
+    @classmethod
+    def load_workflow(cls, path: Path) -> LoadedWorkflow:
+        """Load + project the manifest at ``path`` into a :class:`LoadedWorkflow`.
+
+        Composes :py:meth:`load` (U-RT-104 intermediate carrier) + projection
+        to a ``WorkflowObject``-Protocol-conformant value (U-RT-105). Adds
+        spec §14.19.4 invariant 9 (``step_payload`` JSON-serializability) on
+        top of the U-RT-104 validation surface.
+
+        Raises the same typed-exception taxonomy as :py:meth:`load`, plus
+        :class:`ManifestSchemaError` when any ``step_payload`` is not
+        ``json.dumps`` round-trippable.
+        """
+        manifest = cls.load(path)
+        cls._check_step_payloads_json_serializable(manifest, source=str(path))
+        return cls._project_to_loaded_workflow(manifest, source=str(path))
+
+    @staticmethod
+    def _check_step_payloads_json_serializable(
+        manifest: WorkflowManifest, *, source: str
+    ) -> None:
+        for idx, step in enumerate(manifest.steps):
+            try:
+                json.dumps(step.step_payload)
+            except (TypeError, ValueError) as exc:
+                raise ManifestSchemaError(
+                    f"steps[{idx}].step_payload ({step.step_id!r}) is not "
+                    f"JSON-serializable: {exc}",
+                    source=source,
+                ) from exc
+
+    @classmethod
+    def _project_to_loaded_workflow(
+        cls, manifest: WorkflowManifest, *, source: str
+    ) -> LoadedWorkflow:
+        try:
+            manifest_entry = WorkflowManifestEntry.model_validate(
+                {
+                    "workflow_id": manifest.workflow.workflow_id,
+                    "workload_class": manifest.workflow.workload_class,
+                    "persona_tier": manifest.workflow.persona_tier,
+                    "engine_class": manifest.workflow.engine_class,
+                    "topology_pattern": manifest.workflow.topology_pattern,
+                    "layer_budgets": manifest.workflow.layer_budgets,
+                    "fallback_chain": manifest.workflow.fallback_chain,
+                    "hitl_placements": manifest.workflow.hitl_placements,
+                    "sub_agent_briefs": manifest.workflow.sub_agent_briefs,
+                    "per_step_overrides": manifest.workflow.per_step_overrides,
+                    "entry_version": manifest.workflow.entry_version,
+                    "default_gate_level": manifest.workflow.default_gate_level,
+                }
+            )
+        except ValidationError as exc:
+            raise cls._project_validation_error(exc, source=source) from exc
+        steps = tuple(
+            WorkflowStep(
+                step_id=StepID(s.step_id),
+                step_kind=s.step_kind,
+                step_payload=s.step_payload,
+            )
+            for s in manifest.steps
+        )
+        default_model_binding = ModelBinding(
+            provider=manifest.default_model_binding.provider,
+            model=manifest.default_model_binding.model,
+        )
+        return LoadedWorkflow(
+            workflow_id=manifest.workflow.workflow_id,
+            workload_class=manifest.workflow.workload_class,
+            manifest_entry=manifest_entry,
+            steps=steps,
+            default_model_binding=default_model_binding,
+        )
+
+
+# ---------------------------------------------------------------------------
+# LoadedWorkflow — WorkflowObject Protocol-conformant value (U-RT-105)
+# ---------------------------------------------------------------------------
+
+
+class LoadedWorkflow(BaseModel):
+    """Frozen Pydantic model satisfying the :class:`WorkflowObject` Protocol.
+
+    Five Pydantic fields directly satisfy the 5-property Protocol surface
+    (``workflow_id`` / ``workload_class`` / ``manifest_entry`` / ``steps`` /
+    ``default_model_binding``). ``runtime_checkable`` Protocols accept either
+    ``@property`` or plain attributes; Pydantic frozen fields satisfy both.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    workflow_id: str
+    workload_class: WorkloadClass
+    manifest_entry: WorkflowManifestEntry
+    steps: tuple[WorkflowStep, ...]
+    default_model_binding: ModelBinding
