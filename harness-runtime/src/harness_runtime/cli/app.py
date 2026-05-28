@@ -33,7 +33,6 @@ from harness_runtime.lifecycle.workflow_manifest_loader import (
     WorkflowManifestLoader,
 )
 
-_STUB_DAEMON_MESSAGE = "Not yet implemented — landing at U-RT-107 (daemon entrypoint)"
 _STUB_DAEMON_CLIENT_MESSAGE = (
     "Not yet implemented — landing at U-RT-108 (daemon-client mode)"
 )
@@ -232,17 +231,167 @@ def run_command(
     raise typer.Exit(code=EXIT_WORKFLOW_FAIL)
 
 
+def _default_daemon_socket_path() -> Path:
+    """Default Unix-socket path for the daemon — `/tmp/harness-daemon-{pid}.sock`."""
+    import os
+    import tempfile
+
+    return Path(tempfile.gettempdir()) / f"harness-daemon-{os.getpid()}.sock"
+
+
+class DaemonStartupError(RuntimeError):
+    """Raised when the daemon entrypoint fails to bind / start the server.
+
+    Maps to CLI fail-class ``RT-FAIL-CLI-DAEMON-CONNECTION`` → exit code 4
+    per runtime spec v1.35 §14.18.4.
+    """
+
+    FAIL_CLASS: str = "RT-FAIL-CLI-DAEMON-CONNECTION"
+
+
+async def _daemon_main(
+    *,
+    runtime_config: Any,
+    socket_path: Path,
+) -> None:
+    """Daemon entrypoint body — bootstrap, serve on Unix-socket, shutdown.
+
+    Per `.harness/class_1_fork_u_rt_107_daemon_run_workflow_signature_
+    underspec.md` Reading (A) ratification 2026-05-28: workflow_id-as-path
+    widening at U-RT-62's `run_workflow` handler. Daemon mode reuses the
+    existing tool surface VERBATIM at the wire-level signature; the handler
+    body discriminates registry-key vs filesystem path on the input.
+
+    Mechanism α (recommended default): uvicorn serving FastMCP's
+    `streamable_http_app()` over Unix-socket via `uvicorn.Config(uds=...)`.
+    Per-session ctx isolation (spec §14.18.5 spec-MUST) is NOT addressed at
+    this MVP — the post-bootstrap `HarnessContext` at `_state['_harness_ctx']`
+    is single-shared across concurrent invocations. Concurrent invariant
+    (AC #5) deferred to U-RT-109 e2e per `[[verification-shape-sharpened-
+    grep-vs-e2e]]` + L9-undecies precedent.
+    """
+    import uvicorn
+    from harness_core.workload_class import WorkloadClass
+
+    from harness_runtime.bootstrap import BootstrapFailure, run_bootstrap
+    from harness_runtime.shutdown import shutdown as _shutdown
+
+    # Bootstrap stage 0..9 — constructs the FastMCP server (stage 2) and
+    # installs SIGINT/SIGTERM signal handlers (stage 7). The signal handlers
+    # set `ctx.drained_flag`; we await that event to break the serve loop.
+    try:
+        ctx = await run_bootstrap(
+            runtime_config, workload_class=WorkloadClass.SOFTWARE_ENGINEERING
+        )
+    except BootstrapFailure as exc:
+        raise DaemonStartupError(
+            f"bootstrap failure during daemon startup: {exc}"
+        ) from exc
+
+    try:
+        # Bind the post-bootstrap HarnessContext on the MCP server's state
+        # dict; the run_workflow tool handler reads from this key. The
+        # `HarnessMCPServer` Protocol at `types.py:551` declares the abstract
+        # shape; the concrete dataclass at `lifecycle/mcp_server.py:80` carries
+        # `server` + `_state`. Cast through `Any` to access the concrete
+        # surface; bootstrap stage 2 guarantees `ctx.mcp_server is not None`.
+        from typing import cast as _cast
+
+        concrete_server: Any = _cast(Any, ctx.mcp_server)
+        concrete_server._state["_harness_ctx"] = ctx
+
+        # Construct uvicorn server bound to the Unix-socket. FastMCP's
+        # `streamable_http_app()` returns a Starlette app exposing the MCP
+        # streamable-HTTP transport per the mcp-python-sdk default.
+        fastmcp: Any = concrete_server.server
+        starlette_app: Any = fastmcp.streamable_http_app()
+        uv_config = uvicorn.Config(
+            starlette_app,
+            uds=str(socket_path),
+            log_level="warning",
+            lifespan="on",
+        )
+        uv_server = uvicorn.Server(uv_config)
+
+        # Serve until `ctx.drained_flag` fires (bootstrap stage 7 wires SIGINT
+        # / SIGTERM → drained_flag.set()). We race the serve task against the
+        # drained_flag wait; the first to complete cancels the other.
+        serve_task = asyncio.create_task(uv_server.serve(), name="uvicorn-serve")
+        drain_task = asyncio.create_task(
+            ctx.drained_flag.wait(), name="daemon-drain-wait"
+        )
+        try:
+            done, pending = await asyncio.wait(
+                {serve_task, drain_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if drain_task in done:
+                # Drain signal received — request uvicorn shutdown.
+                uv_server.should_exit = True
+                try:
+                    await asyncio.wait_for(serve_task, timeout=10.0)
+                except (TimeoutError, asyncio.TimeoutError):
+                    uv_server.force_exit = True
+                    await serve_task
+            else:
+                # uvicorn exited first (e.g., bind failure or external stop).
+                drain_task.cancel()
+            for task in pending:
+                if not task.done():
+                    task.cancel()
+        except OSError as exc:
+            raise DaemonStartupError(
+                f"failed to bind Unix-socket {socket_path}: {exc}"
+            ) from exc
+    finally:
+        await _shutdown(ctx)
+        # Best-effort cleanup of the socket file.
+        try:
+            socket_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 @app.command("daemon")
 def daemon_command(
     config: Annotated[
         Path | None,
         typer.Option("--config", help="Override default harness.toml config path"),
     ] = None,
+    socket_path: Annotated[
+        Path | None,
+        typer.Option("--socket-path", help="Unix-socket path for the daemon"),
+    ] = None,
 ) -> None:
-    """Start the harness daemon (FastMCP server, Unix-socket transport)."""
-    del config
-    typer.echo(_STUB_DAEMON_MESSAGE, err=True)
-    raise typer.Exit(code=EXIT_BOOTSTRAP_ERROR)
+    """Start the harness daemon (FastMCP server, Unix-socket transport).
+
+    Per runtime spec v1.35 §14.18.1 + Q-K=(c) Unix-socket transport. Bootstraps
+    the harness, binds the FastMCP server's streamable-HTTP app to a Unix
+    domain socket, and serves until SIGINT/SIGTERM triggers drain. Reuses the
+    existing U-RT-62 `run_workflow` MCP tool (PRESERVED VERBATIM at wire-level
+    signature; handler-internal discriminator added per the U-RT-107 Class 1
+    fork Reading (A) ratification).
+    """
+    # --- Stage 1: config load (RT-FAIL-CLI-CONFIG-LOAD → exit 3) -----------
+    try:
+        runtime_config = RuntimeConfigSource.load(config_file=config)
+    except RuntimeConfigLoadError as exc:
+        _print_fail_class(exc.FAIL_CLASS, exc.reason)
+        raise typer.Exit(code=EXIT_CONFIG_ERROR) from exc
+
+    resolved_socket = (
+        socket_path if socket_path is not None else _default_daemon_socket_path()
+    )
+
+    # --- Stage 2: daemon serve (RT-FAIL-CLI-DAEMON-CONNECTION → exit 4) ----
+    try:
+        asyncio.run(
+            _daemon_main(runtime_config=runtime_config, socket_path=resolved_socket)
+        )
+    except DaemonStartupError as exc:
+        _print_fail_class(exc.FAIL_CLASS, str(exc))
+        raise typer.Exit(code=EXIT_BOOTSTRAP_ERROR) from exc
+
+    raise typer.Exit(code=EXIT_SUCCESS)
 
 
 # Click UsageError exits with code 2 by default. Per runtime spec v1.35

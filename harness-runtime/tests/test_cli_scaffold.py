@@ -63,11 +63,10 @@ def test_harness_daemon_help_shows_flag_inventory() -> None:
 # U-RT-108 landing.
 
 
-# AC #5
-def test_harness_daemon_stub_exits_code_4() -> None:
-    result = runner.invoke(app, ["daemon"])
-    assert result.exit_code == 4
-    assert "Not yet implemented" in _plain(result.stderr)
+# AC #5 — SUPERSEDED at U-RT-107 (daemon entrypoint body landed at runtime
+# plan v2.31 §1.7). The U-RT-102 stub message is no longer emitted by
+# `harness daemon`; the concrete daemon body + 8 ACs at `test_cli_daemon.py`
+# supersede this scaffolding-stage assertion.
 
 
 # AC #6 — Track A admin stubs are PRESERVED VERBATIM under `harness-inspect` +
