@@ -1,4 +1,213 @@
-# Specification — Harness Runtime v1.34
+# Specification — Harness Runtime v1.35
+
+## Change-note (v1.34 → v1.35)
+
+**Status posture (PROPOSED 2026-05-28).** v1.35 is a Phase-7 Phase-2a Gate G4 substantive amendment authoring the operator-facing **Track B `harness run` CLI** + **WorkflowManifestLoader** contract surfaces per `.harness/phase_2_track_b_design_substrate.md` v1.1 G1-RATIFIED (2026-05-28 en-bloc operator AskUserQuestion ratification of all 17 sub-questions Q-A through Q-N) + `.harness/class_1_fork_harness_run_yaml_manifest_schema.md` SF-1 RATIFIED (2026-05-28 en-bloc operator AskUserQuestion ratification of all 6 Q-S sub-decisions). Closes `class_1_tension_runtime_entrypoint_design_gap.md` Track B partition at Phase 2b implementation completion (post-G6).
+
+**Source of fix.** `.harness/phase_2_track_b_design_substrate.md` v1.1 §3 (4 NEW H_T design surfaces S1-S4) + §6 Q-A through Q-N ratifications + `.harness/class_1_fork_harness_run_yaml_manifest_schema.md` §3 schema body + §4 loader contract + §5 Q-S1 through Q-S6 ratifications.
+
+**Amendments.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **NEW §14.18 C-RT-29 `HarnessRunCLI`** | NEW operator-facing CLI contract surface: subcommand dispatcher (`harness run`, `harness daemon`); one-shot mode (invokes `api.run()` synchronously); daemon-mode (MCP client to FastMCP server via Unix-socket transport per Q-K); SIGINT/SIGTERM propagates drain via existing `drained_flag`; exit-code mapping (0 SUCCESS, 1 workflow-failure, 2 manifest-parse-error, 3 config-error, 4 runtime-bootstrap-error per Q-G strict); flat subcommand structure per Q-J; Typer dispatcher per Q-I; output stderr text default + `--output=json` per Q-F. Authored inline below per established §14.16 / §14.17 change-note-body convention. | Design substrate §3.1 S1 + §3.2 S2 + Q-F + Q-G + Q-I + Q-J + Q-K ratification |
+| **NEW §14.19 C-RT-30 `WorkflowManifestLoader`** | NEW manifest loader contract surface: classmethod `WorkflowManifestLoader.load(path: Path) -> WorkflowObject` with file-extension dispatch (`.yaml`/`.yml` → strictyaml per Q-H, `.toml` → tomllib stdlib); 7 typed exceptions (`UnsupportedManifestFormatError`, `UnsupportedManifestVersionError`, `ManifestParseError`, `ManifestSchemaError`, `ManifestEnumValueError`, `ManifestStepIDCollisionError`, `ManifestAdmissibilityError`) inheriting from `WorkflowManifestLoadError`; 9 invariants (closed schema per Q-B4, eager validation per Q-N, enum-value strictness, step-ID uniqueness, path-class neutrality, default-supplying via Pydantic carriers, idempotency, YAML↔TOML round-trip equivalence per Q-S3, step_payload JSON-serializability per Q-S6); step_payload remains opaque per Q-S1 + C-CP-25 §25.3.3; single workflow per file at v1 per Q-S2; no env-var interpolation at v1 per Q-S5; no JSON Schema shipped at v1 per Q-S4. Field-by-field projection contract authored inline below per established §14.16 / §14.17 change-note-body convention. | SF-1 §3 + §4 + §5 Q-S1 through Q-S6 ratification |
+| **§13 C-RT-13 — NEW §13.4 operator-facing CLI extension** | CANONICAL-READING AMENDMENT extending §13 admin stub semantics with NEW §13.4 declaring operator-facing `harness run` + `harness daemon` subcommands sibling to existing `harness-inspect` + `harness-shutdown` Track A admin stubs. The 4 subcommands compose under flat `harness <subcommand>` structure per Q-J=(a) ratification. `[project.scripts]` extension owed at Phase 2b: NEW `harness = "harness_runtime.cli:main"` entrypoint. | Design substrate §3.1 S1 + Q-J ratification |
+| **§3 C-RT-03 — NEW §3.7 `RuntimeConfigSource` precedence contract** | CANONICAL-READING AMENDMENT extending §3 RuntimeConfig schema with NEW §3.7 declaring the 3-source layered config-loading precedence: **env vars → config file → CLI flags** (lowest priority → highest priority) per Q-C=(β) operator-ratified config-file path `harness.toml` at workspace root. Implementation: `pydantic-settings>=2.0` package (BaseSettings moved out of main pydantic at v2). NEW dep declaration owed at Phase 2b at `harness-runtime/pyproject.toml`. The existing 28-field RuntimeConfig field-set canonical at v1.31 is PRESERVED VERBATIM — config-source precedence operates on the same field-set, not extending it. | Design substrate §3.4 S4 + Q-C + Q-I (Typer dispatcher) ratification |
+| **§14 fail-class taxonomy NEW rows** | NEW 8 fail-class rows extending §14 runtime-local fail-class taxonomy: `RT-FAIL-CLI-ARG-INVALID` (CLI arg parse failure → exit code 3); `RT-FAIL-CLI-MANIFEST-FORMAT-UNSUPPORTED` → exit 2; `RT-FAIL-CLI-MANIFEST-VERSION-UNSUPPORTED` → exit 2; `RT-FAIL-CLI-MANIFEST-PARSE` → exit 2; `RT-FAIL-CLI-MANIFEST-SCHEMA` → exit 2; `RT-FAIL-CLI-MANIFEST-ENUM-VALUE` → exit 2; `RT-FAIL-CLI-MANIFEST-STEP-ID-COLLISION` → exit 2; `RT-FAIL-CLI-MANIFEST-ADMISSIBILITY` → exit 2. Sibling rows for daemon-mode `RT-FAIL-CLI-DAEMON-CONNECTION` (Unix-socket connect failure) → exit 4; `RT-FAIL-CLI-CONFIG-LOAD` (config file parse failure) → exit 3. | §14.19 loader contract + Q-G strict exit-code mapping |
+
+**Adjacent harmonization sites.** §8 C-RT-08 `async def run(workflow, config=None) -> RunResult` PRESERVED VERBATIM — `harness run` CLI delegates to this signature; ZERO ABI change. §14.8.3 v1.10 Q1=α CC-initiates topology PRESERVED VERBATIM — `harness run --daemon` is an additional MCP client (NOT a replacement for Claude Code as MCP client). U-RT-62 FastMCP server (`HarnessMCPServer`) PRESERVED VERBATIM — daemon mode reuses this substrate; ZERO new IPC contract (Q-A=α forecloses SF-2). §13.1 / §13.2 / §13.3 admin stub semantics PRESERVED VERBATIM (NEW §13.4 is additive). §3.1 through §3.6 RuntimeConfig sub-sections PRESERVED VERBATIM (NEW §3.7 is additive). All §14.5 / §14.6 / §14.7 / §14.8 / §14.9 / §14.10 / §14.11 / §14.12 / §14.13 / §14.14 / §14.15 / §14.16 / §14.17 contract bodies PRESERVED VERBATIM.
+
+**Concurrency invariant (resolves Q-M ratification).** Per SF-1 §3.4 + design substrate §3.2 Q-M=(b) parallel + C-RT-08 §8 F2-05 `ConcurrentRunNotSupported`: F2-05 applies to **concurrent calls from the same Python process surface against the same `api.run()` instance**. In daemon mode, each MCP client opens its own `ctx` session at the FastMCP server; the `run_workflow` tool handler instantiates per-call workflow execution within the session's `ctx`. **Per-session `ctx` isolation means concurrent `run_workflow` calls from different MCP clients are concurrent INDEPENDENT runs, not concurrent re-entry of the same `api.run()` invocation.** F2-05 does NOT trigger in daemon-mode multi-client surface. Spec-MUST invariant: daemon-mode FastMCP server MUST support concurrent independent `run_workflow` invocations from distinct MCP client sessions; ConcurrentRunNotSupported MUST NOT raise on cross-client concurrency.
+
+**Secrets discipline (resolves Q-L ratification).** Per design substrate §6 Q-L=(b) operator-ratified: LLM API key source is **ADR-F5 tier-aware `python-keyring`**; env-var fallback (e.g., `ANTHROPIC_API_KEY`) at `LOCAL_DEV` tier; plaintext config-file storage REJECTED at loader layer per X-AL-3 security discipline. `harness run` CLI delegates secret resolution to the existing `harness_runtime.lifecycle.secret_fetcher` per C-RT-05 §5.1 + ADR-F5 tier-floor binding. ZERO new secrets surface authored at v1.35.
+
+**Sections preserved verbatim from v1.34.** ALL v1.34 + v1.33 + v1.32 + ... + v1 lineage preserved verbatim per delta-only-spec-file convention. The v1.34 Reading (H) §14.10.1 brief surface + adapter module + `webhook_config` ctor param preserved verbatim. All §14.* contract bodies preserved verbatim. All change-notes preserved verbatim as historical record. §15 + §16 + §17 + §17.1 preserved verbatim. ZERO cross-axis cascade (§9 of design substrate + §8 of SF-1 verified ZERO at canonical-plan + canonical-spec layers).
+
+**Status posture.** Proposed (v1.34) → **Proposed (v1.35)**. v1.35 is a Phase-7 Phase-2a Gate G4 substantive amendment — NEW §14.18 + NEW §14.19 contract surfaces + §13.4 + §3.7 canonical-reading amendments + §14 fail-class taxonomy 10 NEW rows. Phase 2b atomic-unit decomposition (U-RT-102 through U-RT-109) authored at runtime plan v2.30 → v2.31 amendment (Gate G5; sibling co-publication). Phase 2b implementation (Gate G6) gates AS-8d + OD-5 RETIRE-READY → RETIRED via first operator-exercised real workflow.
+
+---
+
+## §14.18 (NEW at v1.35) — C-RT-29 `HarnessRunCLI` operator-facing CLI contract
+
+### §14.18.1 Contract surface
+
+The `harness` CLI binary at `[project.scripts]` `harness = "harness_runtime.cli:main"` dispatches operator-facing workflow invocation + daemon-lifecycle subcommands sibling to Track A admin stubs (`harness-inspect`, `harness-shutdown`). Subcommands at v1 (Q-J=(a) flat structure):
+
+| Subcommand | Purpose | Mode |
+|---|---|---|
+| `harness run <workflow-file>` | One-shot workflow invocation | Spawn process → `WorkflowManifestLoader.load(path)` → `api.run(workflow, config)` → emit `RunResult` → exit |
+| `harness run <workflow-file> --daemon` | Daemon-client workflow invocation | Connect to `harness daemon` Unix-socket → MCP `run_workflow` tool call → receive `RunResult` → exit |
+| `harness daemon` | Daemon entrypoint | Start persistent `HarnessMCPServer` (per existing U-RT-62) with Unix-socket transport per Q-K=(c); accepts concurrent multi-client connections |
+| `harness inspect` | (Existing Track A admin stub — PRESERVED VERBATIM per `harness-inspect` registration) |
+| `harness shutdown` | (Existing Track A admin stub — PRESERVED VERBATIM per `harness-shutdown` registration) |
+
+CLI flag inventory at `harness run` (per Q-I=(c) Typer dispatcher):
+
+| Flag | Type | Source layer | Purpose |
+|---|---|---|---|
+| `--config <path>` | `Path` | CLI flag | Override default `harness.toml` config-file path |
+| `--daemon` | `bool` | CLI flag | Daemon-client mode (sibling to one-shot default) |
+| `--output {text,json}` | enum | CLI flag (Q-F) | RunResult output format; default `text` |
+| `--provider <provider>` | `str` | CLI flag (Q-I) | Override `default_model_binding.provider` |
+| `--model <model>` | `str` | CLI flag | Override `default_model_binding.model` |
+| `--tenant-id <id>` | `str` | CLI flag (sibling to existing `RuntimeConfig.tenant_id`) | Operator override |
+| `--watch` / `--reload` | (deferred per Q-Q=(b)) | — | Iteration-2 — not authored at v1.35 |
+
+### §14.18.2 Exit code mapping (per Q-G=(a) strict)
+
+| Exit code | Meaning | Trigger |
+|---|---|---|
+| `0` | SUCCESS | `RunResult.status == SUCCESS` |
+| `1` | WORKFLOW_FAILURE | `RunResult.status in {FAILED, PARTIAL, DRAINED}` (strict — PARTIAL maps to 1 unless operator override at iteration-2) |
+| `2` | MANIFEST_ERROR | Any `WorkflowManifestLoadError` subclass (per §14.19.2 taxonomy) |
+| `3` | CONFIG_ERROR | `RuntimeConfigSource` load failure; `RT-FAIL-CLI-ARG-INVALID`; `RT-FAIL-CLI-CONFIG-LOAD` |
+| `4` | RUNTIME_BOOTSTRAP_ERROR | Bootstrap-stage failure surfaced at C-RT-02 §2; `RT-FAIL-CLI-DAEMON-CONNECTION` |
+
+### §14.18.3 SIGINT / SIGTERM drain discipline
+
+`harness run` (one-shot mode) installs SIGINT + SIGTERM handlers that set the existing `ctx.drained_flag` per §11 C-RT-11 drain semantics + §10 C-RT-10 shutdown sequence. Drain propagates through existing `harness_runtime.shutdown.shutdown_sequence(ctx)` invocation. Workflow state at drain → `RunResult.status == DRAINED` + ledger-resumable on next `harness run` invocation per F2 state-ledger reload contract. Daemon mode SIGINT/SIGTERM at CLI client gracefully disconnects MCP session; daemon process continues serving other clients. Daemon-process SIGINT/SIGTERM triggers full shutdown sequence per existing C-RT-10.
+
+### §14.18.4 Failure-mode taxonomy (NEW rows extending §14)
+
+| Fail class | Trigger | Exit code |
+|---|---|---|
+| `RT-FAIL-CLI-ARG-INVALID` | Typer / argparse rejects CLI invocation arguments | 3 |
+| `RT-FAIL-CLI-CONFIG-LOAD` | `harness.toml` or env-var parse / type-coercion failure at `RuntimeConfigSource.load()` | 3 |
+| `RT-FAIL-CLI-DAEMON-CONNECTION` | Unix-socket connect failure when `--daemon` set + daemon not running OR connection refused | 4 |
+| `RT-FAIL-CLI-MANIFEST-FORMAT-UNSUPPORTED` | `WorkflowManifestLoader` rejects file extension (not `.yaml` / `.yml` / `.toml`) | 2 |
+| `RT-FAIL-CLI-MANIFEST-VERSION-UNSUPPORTED` | `version` field absent OR not equal to 1 | 2 |
+| `RT-FAIL-CLI-MANIFEST-PARSE` | strictyaml or tomllib raises on syntax error | 2 |
+| `RT-FAIL-CLI-MANIFEST-SCHEMA` | Required field missing OR unknown field present (closed schema per Q-B4) | 2 |
+| `RT-FAIL-CLI-MANIFEST-ENUM-VALUE` | Enum field value not in target StrEnum | 2 |
+| `RT-FAIL-CLI-MANIFEST-STEP-ID-COLLISION` | Two `steps[].step_id` values equal | 2 |
+| `RT-FAIL-CLI-MANIFEST-ADMISSIBILITY` | `(workload_class, engine_class)` not in U-CP-16 candidate mapping OR `topology_pattern` not admissible per U-CP-22 | 2 |
+
+### §14.18.5 Cross-axis surface (verified ZERO cascade)
+
+`harness run` is intra-runtime-axis. Consumes existing CP-axis carriers via `WorkflowManifestEntry` + `WorkflowStep` (read-only). No CP / AS / OD / IS / CXA / ADR / PRD amendment owed. Verified at SF-1 §8.
+
+### §14.18.6 Verbatim-layer integrity
+
+§13.1 / §13.2 / §13.3 admin stub semantics PRESERVED VERBATIM. C-RT-08 §8 `api.run()` Python API PRESERVED VERBATIM — CLI delegates to this signature. U-RT-62 FastMCP server PRESERVED VERBATIM — daemon mode reuses substrate.
+
+---
+
+## §14.19 (NEW at v1.35) — C-RT-30 `WorkflowManifestLoader` contract
+
+### §14.19.1 Contract surface
+
+```python
+# harness_runtime.lifecycle.workflow_manifest_loader
+
+from pathlib import Path
+from harness_runtime.api import WorkflowObject
+
+class WorkflowManifestLoader:
+    """Loads a YAML or TOML manifest file into a WorkflowObject (C-RT-08 Protocol).
+
+    File extension dispatch (Q-B2=(c) at G1):
+    - `.yaml` / `.yml` → strictyaml.load (Q-H=(b))
+    - `.toml`           → tomllib.load (stdlib)
+    - other            → UnsupportedManifestFormatError
+
+    Validation timing (Q-N=(a) at G1): EAGER — all schema + enum + uniqueness
+    + admissibility checks performed at .load() time; .load() either returns a
+    valid WorkflowObject or raises a typed exception (taxonomy at §14.19.2).
+    """
+
+    @classmethod
+    def load(cls, path: Path) -> WorkflowObject: ...
+```
+
+### §14.19.2 Typed exception taxonomy
+
+All exceptions inherit from `WorkflowManifestLoadError` base for catch-all handling at CLI layer (§14.18.4 fail-class mapping).
+
+| Exception | Trigger | Maps to CLI fail-class |
+|---|---|---|
+| `UnsupportedManifestFormatError` | File extension not in `{.yaml, .yml, .toml}` | `RT-FAIL-CLI-MANIFEST-FORMAT-UNSUPPORTED` |
+| `UnsupportedManifestVersionError` | `version` field absent OR not equal to 1 | `RT-FAIL-CLI-MANIFEST-VERSION-UNSUPPORTED` |
+| `ManifestParseError` | strictyaml or tomllib raises on syntax error | `RT-FAIL-CLI-MANIFEST-PARSE` |
+| `ManifestSchemaError` | Required field missing, unknown field present, type mismatch | `RT-FAIL-CLI-MANIFEST-SCHEMA` |
+| `ManifestEnumValueError` | Enum field value not in target StrEnum | `RT-FAIL-CLI-MANIFEST-ENUM-VALUE` |
+| `ManifestStepIDCollisionError` | Two `steps[].step_id` values equal | `RT-FAIL-CLI-MANIFEST-STEP-ID-COLLISION` |
+| `ManifestAdmissibilityError` | `(workload_class, engine_class)` not admissible per U-CP-16; `topology_pattern` not admissible per U-CP-22 | `RT-FAIL-CLI-MANIFEST-ADMISSIBILITY` |
+
+### §14.19.3 Field-by-field projection contract
+
+YAML/TOML manifest schema body authored at SF-1 §3.3 (17-row projection table). Spec-MUST: `WorkflowManifestLoader.load(path)` produces a `WorkflowObject` Protocol-conformant value byte-exact equivalent to one constructed manually with the same field values via `WorkflowManifestEntry(...)` + `WorkflowStep(...)` + `ModelBinding(...)` constructors. Field defaults supplied by Pydantic carrier `__init__` per SF-1 §4.3 invariant 6 (loader does NOT inject defaults; absence of optional field in manifest passes `None` / omitted-kwarg to carrier constructor).
+
+### §14.19.4 Nine invariants (per SF-1 §4.3 + Q-S3 + Q-S6)
+
+1. **Closed schema (Q-B4=(a)).** Unknown top-level OR nested fields raise `ManifestSchemaError`. NO silent passthrough.
+2. **Eager validation (Q-N=(a)).** All checks at `.load()`; no deferred-validation. A returned value satisfies WorkflowObject Protocol byte-exact.
+3. **Enum-value strictness.** Enum fields parse via target StrEnum `__class__(value)` constructor — case-sensitive; rejects implicit type coercion (strictyaml design intent per Q-H=(b)).
+4. **Step-ID uniqueness.** `steps[].step_id` set MUST have cardinality equal to `len(steps)`.
+5. **Path-class neutrality.** Manifest file path is operator-supplied; loader does NOT consult IS `PATH_CLASS_REGISTRY` (manifest is workspace-external dev artifact, not state-ledger content).
+6. **Default-supplying discipline.** Optional fields absent from manifest are passed through as `None` to `WorkflowManifestEntry` constructor; Pydantic carrier defaults apply OR validation rejects per carrier class discipline (no loader-side default-supplying that bypasses Pydantic).
+7. **Idempotency.** `WorkflowManifestLoader.load(p)` is deterministic; repeated invocations on the same file return equal `WorkflowObject` instances (frozen Pydantic models satisfy `__eq__`).
+8. **YAML↔TOML round-trip equivalence (Q-S3).** Equivalent inputs in YAML and TOML formats produce equivalent `WorkflowObject` instances. Test verification via `test_yaml_toml_equivalent_inputs_produce_equivalent_workflow`.
+9. **step_payload JSON-serializability (Q-S6).** Each `steps[].step_payload` value MUST `json.dumps()` round-trip without exception at load time. Catches silent-Pydantic-coercion bugs (e.g., `datetime` objects in payload).
+
+### §14.19.5 Deferred to implementation discretion
+
+- YAML library: strictyaml per Q-H=(b) recommended; per-line schema declarations OR top-level schema object at loader discretion
+- TOML parser: stdlib `tomllib` (Python 3.11+); no third-party dep
+- Error-message UX: traceback-style vs operator-friendly multi-line message at loader discretion
+- Multi-document YAML (`---`-separated): NOT supported at v1 per Q-S2=(no) — multi-document is iteration-2
+- JSON Schema shipping: NOT shipped at v1 per Q-S4=(no) — operator-facing schema docs at markdown only
+- Env-var interpolation `${VAR}`: NOT supported at v1 per Q-S5=(no) — operators use `--<flag>` precedence layer per A4
+
+### §14.19.6 Cross-axis surface (verified ZERO cascade)
+
+Schema CONSUMES CP-axis carriers (`WorkflowManifestEntry`, `WorkflowStep`) via projection; ZERO mutation. Admissibility checks call existing U-CP-16 + U-CP-22 predicates. No CP / AS / OD / IS / CXA / ADR / PRD amendment owed. Verified at SF-1 §8.
+
+### §14.19.7 Verbatim-layer integrity
+
+C-RT-08 §8 WorkflowObject Protocol PRESERVED VERBATIM — loader projects to existing 5-property surface. WorkflowManifestEntry + WorkflowStep + ModelBinding carrier classes PRESERVED VERBATIM (intra-CP-axis; consumed read-only).
+
+---
+
+## §13.4 (NEW at v1.35) — Operator-facing CLI subcommand extension
+
+§13 admin stub semantics (§13.1 / §13.2 / §13.3 PRESERVED VERBATIM) extended with NEW §13.4 declaring operator-facing `harness run` + `harness daemon` subcommands sibling to existing Track A admin stubs (`harness-inspect`, `harness-shutdown`).
+
+**Subcommand registration discipline.**
+
+| Subcommand | Track | `[project.scripts]` entrypoint | Lands at |
+|---|---|---|---|
+| `harness-inspect` | A admin (existing) | `harness_runtime.admin.inspect:main` | U-RT-47 (LANDED) |
+| `harness-shutdown` | A admin (existing) | `harness_runtime.admin.shutdown_cli:main` | U-RT-48 (LANDED) |
+| `harness` (dispatch parent) | B operator | `harness_runtime.cli:main` | U-RT-102 (Phase 2b) |
+| `harness run <file>` | B operator | (subcommand of `harness`) | U-RT-106 + U-RT-108 (Phase 2b) |
+| `harness daemon` | B operator | (subcommand of `harness`) | U-RT-107 (Phase 2b) |
+
+**Subcommand structure invariant (Q-J=(a) flat).** All 5 subcommands compose under flat `harness <subcommand>` namespace. NO nested subcommands at v1 (e.g., `harness workflow run` rejected). Track A `harness-inspect` + `harness-shutdown` PRESERVED VERBATIM as hyphenated standalone binaries per existing `[project.scripts]` registration; they MAY become subcommands of `harness` at iteration-2 (preserves operator muscle memory).
+
+**Cross-axis cascade.** ZERO. Track B is intra-runtime-axis.
+
+---
+
+## §3.7 (NEW at v1.35) — `RuntimeConfigSource` 3-source layered precedence contract
+
+§3 RuntimeConfig schema (§3.1 through §3.6 PRESERVED VERBATIM) extended with NEW §3.7 declaring config-loading source precedence per Q-C=(β) operator-ratified.
+
+**Precedence (lowest → highest priority).**
+
+1. **Environment variables.** Keyed `HARNESS_*` prefix. e.g., `HARNESS_TENANT_ID`, `HARNESS_PIDFILE_PATH`. Standard Pydantic-settings env-source binding.
+2. **Config file.** Path `harness.toml` at workspace root by default; overridable via `--config <path>` CLI flag. TOML-only (config file is TOML, even though workflow manifest may be YAML or TOML per §14.19). Sections map to RuntimeConfig field-set; e.g., `[runtime] tenant_id = "..."` projects to `RuntimeConfig.tenant_id`.
+3. **CLI flags.** Per-invocation `harness run --tenant-id=...` override.
+
+**Implementation discipline.** Implementation uses `pydantic-settings>=2.0` package — NEW dep at `harness-runtime/pyproject.toml`. `BaseSettings` moved out of main `pydantic` package at v2 release; hand-rolled 3-source layering rejected per CLAUDE.md §3.2 framework-pull discipline ("Hand-rolled. Do NOT pull X" applies to retry/breaker/workflow-orchestration NOT general-purpose config-loading where canonical solution exists).
+
+**Field-set invariant.** §3.7 operates on the existing 28-field RuntimeConfig set canonical at v1.31; ZERO new fields owed at v1.35. The 3 source layers compose into the same Pydantic model.
+
+**Secrets exclusion.** Per Q-L=(b) + §14.18 secrets discipline: LLM API keys NOT loaded from config file (security). Secrets layer = ADR-F5 tier-aware `python-keyring` with env-var fallback at `LOCAL_DEV` tier. `harness.toml` MAY declare keyring-service name (operator-discretion); MAY NOT declare API key values.
+
+**Cross-axis cascade.** ZERO. Config-source precedence is intra-runtime-axis.
+
+---
 
 ## Change-note (v1.33 → v1.34)
 
