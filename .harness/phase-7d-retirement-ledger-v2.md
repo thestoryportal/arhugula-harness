@@ -288,13 +288,29 @@ The 2026-05-27 audit pass focused on the surfaced OD-2 candidate transition + si
 
 Readers requiring exhaustive per-row supersession should consult per-axis `CLAUDE.md` §4.1 + the batch-19 §0 cumulative footer + sibling row references therein. A future doc-hygiene pass MAY produce a complete per-row supersession map; this 2026-05-27 pass deliberately scopes only the OD-2-adjacent surface that triggered the audit.
 
+### §11.4a H_T-AS-8 — DECOMPOSED into 6 sub-rows + 3 sub-RETIRED at batch-24
+
+The 2026-05-20 snapshot's §4 AS-axis row 5 (H_T-AS-8 STILL-BOUNDED) is **superseded** by the ledger-v2-layer decomposition event filed at `batch-24` (2026-05-28):
+
+- The monolithic H_T-AS-8 row was identified per `class_3_drift_as_8_partial_row_per_namespace_breakdown.md` as wrongly scoped to cover 6 independent producer sites (`anthropic.*` / `mcp.*` / `skill.*` / `managed_agents.*` / `files.*` / `memory.*`) with 6 distinct close gates.
+- Per drift doc §5(b) operator-discretion routing trigger + operator AskUserQuestion ratification 2026-05-28 (Option A) + advisor Scope B pre-substantive consultation: decomposition lands at ledger-v2-layer ONLY (Meta-Arch §2.2 row 423 PRESERVED VERBATIM per X-AL-3).
+- Decomposed sub-rows: AS-8a (anthropic.*) / AS-8b (mcp.*) / AS-8c (memory.*) / AS-8d (skill.*) / AS-8e (files.*) / AS-8f (managed_agents.*).
+- Immediate close transits at decomposition event (criteria already MET pre-decomp): AS-8a + AS-8b + AS-8c → RETIRED.
+- Carry-forward sub-rows: AS-8d STILL-BOUNDED (gates on Skills loading runtime composer); AS-8e STILL-BOUNDED-INDEFINITELY (Files arc DEFERRED per runtime spec v1.17 §14.C); AS-8f STILL-BOUNDED (gates on managed_agents SDK integration).
+
+**§4 row text PRESERVED VERBATIM** per §0.5 forward-only ledger discipline; the live decomposed view lives at `harness-as/CLAUDE.md` §4.1 + `batch-24` filing.
+
+**Cardinality delta at this batch:** AS-axis ledger denominator 5 → 10 (AS-8 row 1 → 6 sub-rows); workspace ledger denominator 49 → 54. Cumulative RETIRED 30/49 → 33/54 (61.2% → 61.1% — structural cardinality rebalance, not pipeline progress).
+
+**Sub-species 7c "retirement-ID-scoping-too-coarse"** catalogued at batch-24 §2 — distinct from prior 7a (CP-19 operator-explicit-deferred-close-gate at batch-22) + 7b (AS-5 gate-text-stale-vs-production-architecture at batch-23); FIRST instance of retirement-ID decomposition in ledger history.
+
 ### §11.5 Cumulative status pointer
 
 | | Live source |
 |---|---|
-| Latest filed batch | `batch-19` (2026-05-26, H_T-AS-4 PARTIAL → RETIRED) |
-| Cumulative RETIRED count | 28/49 (57.1%) per batch-19 §0 footer |
-| Cumulative pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) | 35/49 (71.4%) per batch-19 §0 footer |
+| Latest filed batch | `batch-24` (2026-05-28, AS-8 decomposition + 3 sub-RETIRED transits AS-8a/b/c) |
+| Cumulative RETIRED count (raw ledger) | 33/54 (61.1%) per batch-24 §0 footer (cardinality bumped 49 → 54 at batch-24 AS-8 decomposition) |
+| Cumulative pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) | 38/54 (70.4%) per batch-24 §0 footer |
 | Per-axis live status | `harness-{is,as,cp,od}/CLAUDE.md` §4.1 |
 | Cross-axis cascade live status | §6.3.1 + §6.3.2 cascade re-evaluations at the batch in which the gating retirement filed (see batch-2 §3 + batch-3 referenced from `harness-od/CLAUDE.md`) |
 
