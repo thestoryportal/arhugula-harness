@@ -28,6 +28,10 @@ build/
 venv/
 env/
 
+# Operator-local secrets (loaded by justfile via dotenv)
+.env
+.env.local
+
 # IDE / editor
 .vscode/
 .idea/
