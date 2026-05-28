@@ -160,9 +160,12 @@ Full per-substitution bounded-scope + retirement criterion at Meta-Architecture 
 | `hitl.operator_burden.*` | U-OD-54 (cluster 4-OD-E: `128ab4f`) | Schema + OperatorBurdenAuditPayload landed |
 | Rate-table substrate (4 frozen Pydantic v2 models + resolver + Decimal serialization) | U-OD-46 + U-OD-47 + U-OD-48 + U-OD-49 (cluster 4-OD-C: `1daeda0` + `2e025e1` + `4899792` + `404fef7`) | PRICE_TABLE_REF canonical schema + v1 default rate-table substrate (anthropic + openai + ollama) + provider-then-model resolver + CP-FAIL-RATE-TABLE-MISSING typed error + Decimal string-serialization at OTel attribute boundary |
 
-**PARTIAL → RETIRE-READY gates (OD-5 + OD-6):**
+**RETIRE-READY → RETIRED gates — operator deployment-time opt-in (terminal in-CLI state):**
 
-- **OD-5 (cost-attribution):** gate on U-OD-39/40/41 unblocks (tool/validator/webhook cost-attribution at dispatch sites) — currently cross-axis-blocked on U-RT-67 / U-RT-69 (tool-invocation composer) + U-CP-72 audit-write seam un-STRIKE (PauseResumeAuditPayload + CostRecordAuditPayload). 3-arc cascade per `[[fork-u-cp-72-cost-and-pause-resume-prefix-gap]]` §6.
+- **OD-5 (cost-attribution 5-step chain):** **Terminal in-CLI state at RETIRE-READY 2026-05-28 (batch-28).** Producer-binding chain MET at 4/4 dispatch surfaces (LLM + tool + validator + webhook); structural-criterion-B MET per X-AL-2 retirement criterion. No further in-CLI close pathway. Full RETIRED transit requires (a) operator-bound `RuntimeConfig.validator_framework_config` non-None with cost-attribution substrates supplied at deployment + operator-explicit `WebhookDeliveryComposer` construction with cost-attribution substrates per Reading H per-workflow-context-threading pattern; (b) real workflow execution exercising ≥1 dispatch surface at production runtime; (c) `cost:`-prefixed audit-ledger entries observed at the production audit substrate carrying SpanCostRecord payload per CXA v2.13 §2.3.7 row 8. Mirror H_T-AS-8d batch-25 operator-opt-in RETIRE-READY pattern; bucket-membership 1 → 2 at batch-28 (AS-8d + OD-5 NEW). Bounded-residual carry per X-AL-2; not a defect.
+
+**PARTIAL → RETIRE-READY gates (OD-6 only post-batch-28):**
+
 - **OD-6 (local-first OTLP ingestion):** gate on sqlite write site re-eligibility (U-RT-30 AC #2 un-STRIKE) + TUI substrate authoring. Operator-discretion timing.
 
 **STILL-BOUNDED → PARTIAL gates (OD-1 + OD-3 + OD-4 + OD-7):**
