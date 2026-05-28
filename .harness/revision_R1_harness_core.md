@@ -1,6 +1,8 @@
 # Revision R1 — `harness-core` Foundation: Introducing U-CORE-01
 
-**Status:** Proposed
+**Status:** ✅ ABSORBED-INTO-CANONICAL-PLAN (status-line refreshed 2026-05-28 Phase 1 status-cascade sweep per workflow v1.12 §7.4.7.3.B) — R1 ratified + applied at `design-substrate/Implementation_Plan_Harness_Core_v1_0.md` (now at canonical v1.2 per workspace `CLAUDE.md` §2.4 core row); revision proposal superseded by canonical plan chain. Species 3 stale-carry per workflow v1.12 §7.4.7.2.
+
+**Status:** Proposed *(historical; predates 2026-05-15 ratification)*
 **Revision pass:** R1 — `harness-core` foundation (the first of the 5-pass carrier-map absorption sequence R1–R5).
 **Authored:** 2026-05-15 by the `implementation-planner` role in revision-pass sub-mode (`implementation-planner` SKILL.md §8).
 **Mode:** Revision-pass. This is a **revision proposal artifact**, not an applied plan edit. The operator ratifies before any `design-substrate/` plan is amended.

@@ -1,7 +1,9 @@
 # Bounded Residual — `SpanCostRecord` → audit-ledger writer wiring
 
 **Class:** 3 informational (no AC fails at HEAD; bounded residual carried)
-**Status:** 🛑 OPEN — bounded residual; carried forward
+**Status:** ✅ CLOSED (status-line refreshed 2026-05-28 Phase 1 status-cascade sweep per workflow v1.12 §7.4.7.3.B) — wiring path resolved at CXA v2.9 §2.3.7 row 8 cost-attribution audit-write seam + OD spec §C-OD-26.6 `CostRecordAuditPayload` + U-OD-41 production landing. Producer: `harness-od/src/harness_od/cost_record_audit_writer.py` projects `SpanCostRecord` → `CostRecordAuditPayload` (12 fields → 4 audit_cp_* common + 5 cost-specific) → routes through `cp_audit_to_od_audit` converter via `cost:` action_id prefix → audit-ledger ingestion. Species 3 stale-carry per workflow v1.12 §7.4.7.2.
+
+**Status:** 🛑 OPEN — bounded residual; carried forward *(historical, predates 2026-05-24 CXA v2.9 row 8 + U-OD-41 landing)*
 **Filed:** 2026-05-20 alongside CP spec v1.5 §25.9 absorption (`.harness/fork_u_rt_49_cost_attribution_invocation_underspec.md` resolution arc)
 **Trigger:** Pattern P2 candidate caught at v1.5 spec-writer audit; conflation of *carrier production* vs *audit-ledger emission* surface.
 
