@@ -382,13 +382,130 @@ def test_ac5_sigint_mid_multi_step_produces_drained_resumable_state() -> None:
     pass
 
 
-@pytest.mark.skip(
-    reason=(
-        "Mechanism γ: AC #6 daemon-concurrent independent workflows. Requires "
-        "per-session ctx isolation per U-RT-107 fork doc §4 adjacent finding; "
-        "current _state['_harness_ctx'] is single-shared. Resolves via "
-        "contextvars OR per-connection bootstrap at a follow-on arc."
+def test_ac6_daemon_concurrent_two_clients_complete_independently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC #6 — concurrent run_workflow invocations from distinct MCP client
+    sessions complete independently per spec v1.36 §14.18 chapeau (line 65)
+    per-session ctx isolation.
+
+    Per `[[u-rt-107-fork-section-4-closed-contextvars]]` PR #2 unblock: the
+    `_current_tool_ctx` race resolved via module-level `contextvars.ContextVar`
+    + accessor methods on `HarnessMCPServer`. This test exercises the
+    isolation through the FULL `run_workflow` handler body (not just the
+    accessor; that's `test_lifecycle_mcp_server.py::
+    test_concurrent_set_current_tool_ctx_is_task_isolated`) by spawning two
+    concurrent `tool.fn(...)` invocations with distinct mock ctx objects and
+    asserting each invocation's observed `get_current_tool_ctx()` matches
+    its own input ctx.
+
+    Scope (per advisor scope discipline at the AC #6 implementation arc):
+    in-process direct tool invocation, NOT subprocess + real MCP-client
+    transport. The subprocess path is gated on the same `RuntimeConfig`
+    composition friction that defers `test_cli_daemon.py::
+    test_ac1_e2e_daemon_subprocess_binds_socket_and_shuts_down`; the
+    workspace pattern is "subprocess e2e deferred until composition lands."
+    AC #6 inherits that constraint — substantive isolation evidence comes
+    from observing the contextvar through the actual handler body.
+
+    Out of scope: real HITL elicit routing. The fake `_execute_workflow`
+    observing `get_current_tool_ctx()` is sufficient evidence that the
+    isolation holds through the handler's `asyncio.to_thread` bridge —
+    which is the only place a race could occur post-PR #2.
+    """
+    import asyncio
+    from types import SimpleNamespace
+
+    from harness_cp.workflow_driver_types import RunResult as _CpRunResult
+    from harness_cp.workflow_driver_types import RunStatus as _CpRunStatus
+
+    from harness_runtime.lifecycle.mcp_server import materialize_mcp_server_stage
+
+    # The handler at `lifecycle/mcp_server.py:328` calls
+    # `_execute_workflow(manifest_entry, steps, run_id, harness_ctx, ...)` via
+    # `asyncio.to_thread`. By the time this fake fires, the tool handler has
+    # already bound the ContextVar via `_CURRENT_TOOL_CTX.set(ctx)`. The fake
+    # observes the ContextVar from the worker thread (propagates via
+    # `asyncio.to_thread`'s `copy_context().run` per
+    # `test_contextvar_bridge_propagation.py`) and returns a synthetic
+    # SUCCESS `CpRunResult` so the handler completes normally.
+    observed: dict[str, Any | None] = {}
+
+    def _fake_execute_workflow(
+        manifest_entry: Any,
+        steps: Any,
+        run_id: str,
+        harness_ctx: Any,
+        *,
+        default_model_binding: Any = None,
+        step_dispatchers: Any = None,
+    ) -> _CpRunResult:
+        wf_id = manifest_entry.workflow_id
+        # The worker thread inherits the tool handler task's contextvars
+        # context via `asyncio.to_thread`'s `copy_context().run`. Reading via
+        # the server accessor proves isolation through the handler body.
+        observed[wf_id] = server.get_current_tool_ctx()
+        return _CpRunResult(
+            workflow_id=wf_id,
+            run_id=run_id,
+            status=_CpRunStatus.SUCCESS,
+            final_state={},
+        )
+
+    # Patch BEFORE `materialize_mcp_server_stage` — the production import at
+    # `lifecycle/mcp_server.py:228` is a lazy `from harness_cp.workflow_driver
+    # import execute_workflow as _execute_workflow` INSIDE the stage function.
+    # Patching the source module attribute makes the lazy import pick up the
+    # fake on first invocation of the registered tool.
+    monkeypatch.setattr(
+        "harness_cp.workflow_driver.execute_workflow", _fake_execute_workflow
     )
-)
-def test_ac6_daemon_concurrent_two_clients_complete_independently() -> None:
-    pass
+
+    server = materialize_mcp_server_stage(drain_timeout_seconds=30.0)
+    server._state["_harness_ctx"] = SimpleNamespace(step_dispatchers=None)
+
+    def _fake_workflow(wf_id: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            workflow_id=wf_id,
+            workload_class=None,
+            manifest_entry=SimpleNamespace(workflow_id=wf_id),
+            steps=(),
+            default_model_binding=None,
+            step_dispatchers=None,
+        )
+
+    server.workflow_registry["wf-alpha"] = _fake_workflow("wf-alpha")  # type: ignore[assignment]
+    server.workflow_registry["wf-beta"] = _fake_workflow("wf-beta")  # type: ignore[assignment]
+
+    async def _run() -> tuple[object, object]:
+        tool = server.server._tool_manager.get_tool("run_workflow")  # type: ignore[attr-defined]
+        assert tool is not None
+        ctx_alpha = object()
+        ctx_beta = object()
+        # asyncio.gather schedules both tool invocations as independent
+        # asyncio tasks. Each task binds its OWN ContextVar value via
+        # `_CURRENT_TOOL_CTX.set(...)` inside the handler; if isolation is
+        # broken, one would clobber the other before the worker-thread
+        # observation fires.
+        await asyncio.gather(
+            tool.fn(workflow_id="wf-alpha", ctx=ctx_alpha),  # type: ignore[arg-type]
+            tool.fn(workflow_id="wf-beta", ctx=ctx_beta),  # type: ignore[arg-type]
+        )
+        return ctx_alpha, ctx_beta
+
+    ctx_alpha, ctx_beta = asyncio.run(_run())
+
+    assert observed["wf-alpha"] is ctx_alpha, (
+        f"wf-alpha observed ctx {observed['wf-alpha']!r} but expected its "
+        f"own ctx {ctx_alpha!r} — concurrent invocation cross-talked through "
+        f"the handler body (post-PR-#2 contextvars isolation regression)"
+    )
+    assert observed["wf-beta"] is ctx_beta, (
+        f"wf-beta observed ctx {observed['wf-beta']!r} but expected its "
+        f"own ctx {ctx_beta!r} — concurrent invocation cross-talked through "
+        f"the handler body (post-PR-#2 contextvars isolation regression)"
+    )
+
+    # Post-condition: both `try/finally` blocks in the handler reset the
+    # ContextVar before exit, so no binding leaks into the test task.
+    assert server.get_current_tool_ctx() is None
