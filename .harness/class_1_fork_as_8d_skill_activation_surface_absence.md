@@ -1,6 +1,18 @@
 # Class 1 Fork — H_T-AS-8d `skill.*` namespace producer-site absence + activation-surface design gap
 
-**Status:** PROPOSING
+**Status:** ✅ RATIFIED (apply arc fresh-session-shape; ~5-7 commits per Q2=(d) hybrid scope)
+
+**Operator ratification (2026-05-28):**
+
+| Q | Answer | Note |
+|---|---|---|
+| Q1 | **(B) IN-SCOPE-MVP** | schema-stub + operator-opt-in emission; mirrors CP-18/CP-21/CP-22 RETIRE-READY pattern; transits AS-8d STILL-BOUNDED → RETIRE-READY at apply arc close |
+| Q2 | **(d) HYBRID all 3 hooks** | per-LLM-dispatch + per-workflow-init + operator-explicit; `activation_mode` enum discriminates which fired. Most faithful to AS spec §14.4 3-value enum intent; preserves Claude Code taxonomy verbatim under Q3=(i) by mapping each hook to one enum value descriptively: per-LLM-dispatch → `tool_search`; per-workflow-init → `frontmatter_only`; operator-explicit → `filesystem_read` |
+| Q3 | **(i) PRESERVE** | AS spec §14.4 enum values preserved verbatim; runtime spec extension documents the H_T-runtime mapping per Q2=(d) hook-to-enum-value assignment |
+| Q4 | **(q) NEW module** | `harness-runtime/src/harness_runtime/lifecycle/skill_activation.py` per Memory-tool precedent |
+| Q5 | **(β) NO new CXA edge** | CXA v2.15 unchanged; OD §C-OD-08 already declares cross-namespace ingestion |
+
+**Apply-arc scope refinement (per Q2=(d) hybrid):** 3 hook binding sites raise the apply-arc cost estimate from the §3 Q1=B baseline (~3-5 commits) to ~5-7 commits. Each hook is its own binding site (per-LLM-dispatch at `lifecycle/llm_dispatch.py`; per-workflow-init at workflow startup composer; operator-explicit at `ctx.activate_skill` surface).
 
 **Filed at:** 2026-05-28
 
