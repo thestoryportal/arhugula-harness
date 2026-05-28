@@ -19,30 +19,38 @@ Composition surface
 - `workflow_registry`: `dict[str, WorkflowObject]` — mutable holder keyed
   by `workflow.workflow_id`. `api.run()` pre-registers each workflow before
   invoking the in-process `run_workflow` tool.
-- `_state`: mutable holder dict carrying per-invocation state that the
-  `run_workflow` tool handler binds for the duration of the call:
-    - `_current_tool_ctx`: the in-flight `Context[ServerSession, None]` —
-      read by `ServerCtxElicitCallback` (per AC #4) to invoke
-      `await ctx.elicit(...)` outbound on the active server session.
+- `_state`: mutable holder dict carrying post-bootstrap state that the
+  `run_workflow` tool handler reads:
     - `_harness_ctx`: the full post-bootstrap `HarnessContext` —
       consumed by the tool body to reach `ctx.step_dispatchers` +
       `ctx.audit_writer` etc. when dispatching `execute_workflow`.
+- `_CURRENT_TOOL_CTX` (module-level `contextvars.ContextVar`): the
+  in-flight `Context[ServerSession, None]` — set by the `run_workflow`
+  tool handler on entry; read by `ServerCtxElicitCallback` (per AC #4)
+  to invoke `await ctx.elicit(...)` outbound on the active server session.
 
-The mutable holders are required because the frozen dataclass is
+The `_state` holder is required because the frozen dataclass is
 constructed at stage 2 — before stage 5 LOOP_INIT wiring completes — yet
 the tool handler (registered at stage 2) consumes state populated at
-`api.run()` time (post-bootstrap). Contextvar propagation across the
+`api.run()` time (post-bootstrap).
+
+**Per-session ctx isolation (spec v1.36 §14.18 chapeau).** The active
+MCP tool ctx is held in a module-level `contextvars.ContextVar`, NOT a
+`_state` dict key. This is required by the spec-MUST invariant that
+concurrent `run_workflow` invocations from distinct MCP client sessions
+are INDEPENDENT runs (not concurrent re-entry of the same `api.run()`).
+A shared `_state` key would race across concurrent invocations and route
+the wrong client's ctx into `ServerCtxElicitCallback`. ContextVar gives
+each asyncio task its own value; propagation across the
 `asyncio.to_thread` → `SyncDispatcherFacade.run_coroutine_threadsafe`
-bridge is unreliable (the run_coroutine_threadsafe submission copies the
-context from the calling thread, not the awaiting tool handler frame);
-the mutable-holder pattern is loop-thread-safe because both the tool
-handler write site and the `ServerCtxElicitCallback` read site execute
-on the main event loop.
+bridge is preserved (verified empirically at
+`tests/test_contextvar_bridge_propagation.py`).
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -74,6 +82,17 @@ __all__ = [
     "HarnessMCPServer",
     "materialize_mcp_server_stage",
 ]
+
+
+# Per-session ctx isolation per spec v1.36 §14.18 chapeau. Each concurrent
+# `run_workflow` invocation gets its own asyncio task; the ContextVar binds
+# the in-flight MCP tool ctx for the duration of that task and is read by
+# `ServerCtxElicitCallback` via `HarnessMCPServer.get_current_tool_ctx()`.
+# Bridge propagation (asyncio.to_thread → run_coroutine_threadsafe) verified
+# at `tests/test_contextvar_bridge_propagation.py`.
+_CURRENT_TOOL_CTX: contextvars.ContextVar["Context[Any, Any] | None"] = (
+    contextvars.ContextVar("harness.current_tool_ctx", default=None)
+)
 
 
 @dataclass(frozen=True)
@@ -118,23 +137,53 @@ class HarnessMCPServer:
     """
 
     _state: dict[str, Any] = field(default_factory=dict)
-    """Per-invocation mutable holder for tool-handler-bound state.
+    """Post-bootstrap state holder. Written once by `api.run()` before
+    invoking the `run_workflow` tool; read by the tool handler body.
 
-    Keys written by the `run_workflow` tool handler body:
-    - `_current_tool_ctx`: the in-flight `mcp.server.fastmcp.Context`
-      object — set on tool entry, cleared in `finally`.
+    Keys:
     - `_harness_ctx`: the full post-bootstrap `HarnessContext` — set by
-      `api.run()` before opening the in-process `ClientSession`.
+      `api.run()` before opening the in-process `ClientSession`. Singleton
+      per process (mandated by C-RT-06 set_tracer_provider one-per-process
+      invariant; shared across concurrent daemon-mode client sessions).
 
-    Read by `ServerCtxElicitCallback.__call__` to reach the active
-    `ctx` for `await ctx.elicit(...)`; read by the tool handler body
-    to reach `ctx.step_dispatchers` etc.
-
-    Loop-thread-safe: both the tool handler frame and the elicit
-    callback execute on the main event loop; the worker-thread bridge
-    (`SyncDispatcherFacade.run_coroutine_threadsafe`) submits the
-    composer coroutine back to the main loop before the read fires.
+    NOTE: the in-flight MCP tool ctx is NOT held on `_state` — it lives on
+    the module-level `_CURRENT_TOOL_CTX` ContextVar so concurrent
+    `run_workflow` invocations from distinct MCP clients see isolated ctx
+    values per spec v1.36 §14.18 chapeau. Access via the
+    `get_current_tool_ctx()` / `set_current_tool_ctx()` /
+    `reset_current_tool_ctx()` methods below.
     """
+
+    def get_current_tool_ctx(self) -> "Context[Any, Any] | None":
+        """Return the in-flight MCP tool ctx for the current asyncio task,
+        or None if no `run_workflow` invocation is in flight on this task.
+
+        Read site for `ServerCtxElicitCallback`. ContextVar semantics
+        guarantee each concurrent `run_workflow` task sees its own value.
+        """
+        return _CURRENT_TOOL_CTX.get()
+
+    def set_current_tool_ctx(
+        self, ctx: "Context[Any, Any]"
+    ) -> contextvars.Token["Context[Any, Any] | None"]:
+        """Bind the in-flight MCP tool ctx for the current asyncio task.
+
+        Returns a `contextvars.Token` that must be passed to
+        `reset_current_tool_ctx` in a `finally` block to release the binding.
+        Per spec v1.36 §14.18 chapeau per-session ctx isolation.
+        """
+        return _CURRENT_TOOL_CTX.set(ctx)
+
+    def reset_current_tool_ctx(
+        self, token: contextvars.Token["Context[Any, Any] | None"]
+    ) -> None:
+        """Release a binding previously installed by `set_current_tool_ctx`.
+
+        Mirrors the `try/finally` discipline that `_state.pop(...)` used in
+        the pre-isolation implementation, but operates on task-local
+        ContextVar state instead of shared dict state.
+        """
+        _CURRENT_TOOL_CTX.reset(token)
 
 
 def materialize_mcp_server_stage(
@@ -191,7 +240,10 @@ def materialize_mcp_server_stage(
         the main loop via `SyncDispatcherFacade.run_coroutine_threadsafe`
         and reaches `await ctx.elicit(...)` through
         `ServerCtxElicitCallback` (per AC #4) which reads this `ctx` from
-        the `_state['_current_tool_ctx']` holder written below.
+        the module-level `_CURRENT_TOOL_CTX` ContextVar bound below. Each
+        concurrent `run_workflow` invocation runs in its own asyncio task
+        and sees its own ContextVar value per spec v1.36 §14.18 chapeau
+        per-session ctx isolation.
 
         Parameters
         ----------
@@ -251,9 +303,11 @@ def materialize_mcp_server_stage(
 
         run_id = uuid.uuid4().hex
         # Bind the in-flight tool ctx for the duration of the workflow
-        # execution. `ServerCtxElicitCallback` (per AC #4) reads this key
-        # to reach `await ctx.elicit(...)` from the HITL gate composer.
-        state["_current_tool_ctx"] = ctx
+        # execution per spec v1.36 §14.18 chapeau per-session ctx isolation.
+        # `ServerCtxElicitCallback` (per AC #4) reads via the module-level
+        # ContextVar to reach `await ctx.elicit(...)` from the HITL gate
+        # composer; each concurrent invocation sees its own value.
+        ctx_token = _CURRENT_TOOL_CTX.set(ctx)
 
         # Workflow-supplied dispatcher override (test-fixture surface);
         # falls back to `ctx.step_dispatchers` from stage 5 LOOP_INIT.
@@ -303,7 +357,7 @@ def materialize_mcp_server_stage(
             )
             return cast(dict[str, Any], drained.model_dump(mode="json"))
         finally:
-            state.pop("_current_tool_ctx", None)
+            _CURRENT_TOOL_CTX.reset(ctx_token)
 
     return HarnessMCPServer(
         server=fastmcp,

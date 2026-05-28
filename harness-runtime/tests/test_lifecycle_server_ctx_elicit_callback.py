@@ -61,7 +61,12 @@ class _MockCtx:
 def _server_with_ctx(ctx: Any | None) -> HarnessMCPServer:
     server = HarnessMCPServer(server=object())
     if ctx is not None:
-        server._state["_current_tool_ctx"] = ctx
+        # Per-session ctx isolation per spec v1.36 §14.18 chapeau: the
+        # in-flight tool ctx lives on a module-level ContextVar (NOT
+        # `server._state`). Test setup binds it for the current asyncio
+        # task; the binding lives for the duration of the calling test
+        # function (asyncio task termination releases the ContextVar).
+        server.set_current_tool_ctx(ctx)
     return server
 
 
