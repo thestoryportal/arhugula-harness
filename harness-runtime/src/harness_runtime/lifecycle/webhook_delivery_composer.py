@@ -29,6 +29,7 @@ from harness_cp.hitl_timeout_degradation import (
     WebhookConfig,
     WebhookPayload,
 )
+from harness_cp.validator_framework_types import HITLEscalationBrief
 
 __all__ = [
     "WebhookDeliveryComposer",
@@ -116,6 +117,7 @@ class WebhookDeliveryComposer:
         parent_action_id: str | None = None,
         parent_idempotency_key: str | None = None,
         tenant_id: str | None = None,
+        webhook_config: WebhookConfig | None = None,
     ) -> None:
         """Construct composer with retry-policy hyperparameters + tracer.
 
@@ -162,6 +164,12 @@ class WebhookDeliveryComposer:
         self._parent_action_id = parent_action_id
         self._parent_idempotency_key = parent_idempotency_key
         self._tenant_id = tenant_id
+        # Reading H per fork doc §0.1: webhook_config bound at ctor when
+        # operator uses the spec-canonical brief surface
+        # (`deliver_webhook_for_brief`). The raw `deliver_webhook(...)` 3-arg
+        # surface accepts webhook_config as per-call param; ctor-supplied
+        # value is only consumed by `deliver_webhook_for_brief`.
+        self._webhook_config = webhook_config
 
     async def deliver_webhook(
         self,
@@ -339,6 +347,67 @@ class WebhookDeliveryComposer:
             )
         except Exception:
             pass  # observability-only; MUST NOT fail dispatch
+
+    async def deliver_webhook_for_brief(
+        self,
+        brief: HITLEscalationBrief,
+        idempotency_key: str,
+    ) -> WebhookDeliveryResult:
+        """Spec-canonical 2-arg brief surface per runtime spec v1.34 §14.10.1
+        Reading (H) absorption + §14.8.8.1 step 3 consumer cite.
+
+        Projects the `HITLEscalationBrief` to a `WebhookPayload` via
+        `webhook_brief_adapter.project_brief_to_payload(...)` and dispatches
+        via the existing raw 3-arg `deliver_webhook(...)` surface. The
+        composer's ctor-supplied `webhook_config` provides the endpoint URL +
+        timeout + degradation_mode per C-CP-18 §18.5.
+
+        Per fork doc `.harness/class_1_fork_webhook_composer_per_workflow_context_threading.md`
+        §0.1 Reading (H) operator-ratified 2026-05-28: this surface mediates
+        between the spec-canonical brief abstraction (CP-axis validator
+        escalation context) and the production-canonical 3-arg
+        `(webhook_config, payload, idempotency_key)` HTTP-wire surface.
+        Caller at `hitl_gate_composer.py:1002` consumes this surface.
+
+        Parameters
+        ----------
+        brief
+            The HITL escalation brief (CP spec v1.18 §25.2).
+        idempotency_key
+            The per-call idempotency key composed by the caller per
+            `compose_hitl_action_id(parent_action_id, placement_position)`.
+
+        Returns
+        -------
+        WebhookDeliveryResult
+            Outcome of the underlying raw `deliver_webhook(...)` call.
+
+        Raises
+        ------
+        RuntimeError
+            When `self._webhook_config is None` (ctor did not supply a
+            webhook_config; operator must construct the composer with a
+            non-None webhook_config to use this surface).
+        WebhookDeliveryExhaustedError
+            When the underlying retry loop exhausts.
+        """
+        if self._webhook_config is None:
+            raise RuntimeError(
+                "WebhookDeliveryComposer.deliver_webhook_for_brief requires "
+                "a non-None webhook_config supplied at composer construction. "
+                "Either construct with webhook_config=WebhookConfig(...) "
+                "or invoke the raw deliver_webhook(config, payload, key) "
+                "surface directly."
+            )
+        # Local import to avoid circular import at module load
+        from harness_runtime.lifecycle.webhook_brief_adapter import (
+            project_brief_to_payload,
+        )
+
+        payload = project_brief_to_payload(brief, idempotency_key)
+        return await self.deliver_webhook(
+            self._webhook_config, payload, idempotency_key
+        )
 
 
 # --- factory ----------------------------------------------------------------

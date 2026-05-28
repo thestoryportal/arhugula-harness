@@ -994,12 +994,18 @@ class RuntimeHITLGateComposer:
                     idempotency_key = str(
                         compose_hitl_action_id(parent_action_id, placement.position)
                     )
-                    # §14.8.8.1 step 3 + step 4: deliver_webhook; on exhausted
-                    # the typed exception propagates (driver-side handler
-                    # OR caller-side handler decides what to do with it).
+                    # §14.8.8.1 step 3 + step 4: deliver_webhook_for_brief; on
+                    # exhausted the typed exception propagates (driver-side
+                    # handler OR caller-side handler decides). Uses the
+                    # spec-canonical brief surface per runtime spec v1.34
+                    # §14.10.1 Reading (H) absorption + fork doc §0.1 at
+                    # `.harness/class_1_fork_webhook_composer_per_workflow_context_threading.md`
+                    # (operator-ratified 2026-05-28). The brief surface
+                    # projects to WebhookPayload via webhook_brief_adapter +
+                    # invokes the underlying raw 3-arg deliver_webhook.
                     try:
                         delivery_result = (
-                            await self.webhook_delivery_composer.deliver_webhook(
+                            await self.webhook_delivery_composer.deliver_webhook_for_brief(
                                 durable_brief, idempotency_key
                             )
                         )
