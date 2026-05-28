@@ -25,9 +25,16 @@ Reading A scope (per fork doc
 from __future__ import annotations
 
 from harness_cp.validator_framework import ConcreteValidatorFramework
-from harness_cp.validator_framework_types import ValidatorFramework
+from harness_cp.validator_framework_types import (
+    ValidatorFramework,
+    ValidatorPostEvaluateHook,
+)
+from harness_od.rate_table_types import RateTable
 
-from harness_runtime.types import RuntimeConfig
+from harness_runtime.lifecycle.cost_attribution_validator_dispatch import (
+    CostAttributingValidatorHook,
+)
+from harness_runtime.types import AuditLedgerWriter, CostAttributionChain, RuntimeConfig
 
 
 class ValidatorFrameworkStageMaterializeError(Exception):
@@ -43,6 +50,10 @@ class ValidatorFrameworkStageMaterializeError(Exception):
 
 async def materialize_validator_framework_stage(
     config: RuntimeConfig,
+    *,
+    rate_table: RateTable | None = None,
+    cost_chain: CostAttributionChain | None = None,
+    audit_writer: AuditLedgerWriter | None = None,
 ) -> ValidatorFramework | None:
     """Construct the stage-4 `ValidatorFramework` instance from operator-supplied
     config, or return `None` when the operator has not opted in.
@@ -87,7 +98,25 @@ async def materialize_validator_framework_stage(
     # framework's evaluate(...) method is invoked against an empty registry;
     # richer construction (populating the registry from operator-supplied
     # config) lands at a follow-on arc per §14.13.7.
-    framework: ValidatorFramework = ConcreteValidatorFramework(validator_registry={})
+    #
+    # U-OD-40 hook binding (CP spec v1.24 §28.10 + this factory's mechanism
+    # (a) per §28.10.5): when all 3 cost-attribution substrates are bound
+    # (rate_table + cost_chain + audit_writer), construct the
+    # CostAttributingValidatorHook and inject via ConcreteValidatorFramework's
+    # optional post_evaluate_hook ctor param. If any substrate is None,
+    # hook=None preserves pre-v1.24 behavior (cost attribution disabled).
+    post_evaluate_hook: ValidatorPostEvaluateHook | None = None
+    if rate_table is not None and cost_chain is not None and audit_writer is not None:
+        post_evaluate_hook = CostAttributingValidatorHook(
+            rate_table=rate_table,
+            cost_chain=cost_chain,
+            audit_writer=audit_writer,
+        )
+
+    framework: ValidatorFramework = ConcreteValidatorFramework(
+        validator_registry={},
+        post_evaluate_hook=post_evaluate_hook,
+    )
 
     # Spec §14.13.5 invariant 3 — Protocol-conformance enforcement.
     if not isinstance(framework, ValidatorFramework):

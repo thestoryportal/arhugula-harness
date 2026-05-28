@@ -74,9 +74,20 @@ def test_factory_is_async() -> None:
 def test_factory_signature_accepts_config_returns_framework_or_none() -> None:
     sig = inspect.signature(materialize_validator_framework_stage)
     params = list(sig.parameters)
-    assert params == ["config"], (
-        f"factory signature must be (config) per spec §14.13.1; got {params}"
+    # Per spec v1.18 §14.13.1 first positional is `config`. Per CP spec
+    # v1.24 §28.10.5 mechanism (a) the factory accepts optional kw-only
+    # cost-attribution substrates (rate_table, cost_chain, audit_writer).
+    assert params[0] == "config", (
+        f"factory signature first param must be `config` per spec §14.13.1; got {params}"
     )
+    # Cost-attribution substrates per U-OD-40 hook binding extension.
+    for name in ("rate_table", "cost_chain", "audit_writer"):
+        assert name in params, (
+            f"factory must accept kw-only `{name}` per CP spec v1.24 "
+            f"§28.10.5 mechanism (a); got {params}"
+        )
+        assert sig.parameters[name].kind == inspect.Parameter.KEYWORD_ONLY
+        assert sig.parameters[name].default is None
     # Return annotation is `ValidatorFramework | None` — str-rendered.
     return_annotation = sig.return_annotation
     rendered = str(return_annotation)
@@ -146,8 +157,11 @@ def test_stage_4_od_invokes_factory_after_audit_writer() -> None:
     from harness_runtime.bootstrap import stage_4_od
 
     source = inspect.getsource(stage_4_od.execute)
-    # Factory is invoked.
-    assert "materialize_validator_framework_stage(config)" in source
+    # Factory is invoked (signature widened at U-OD-40 to thread cost-
+    # attribution substrates per CP spec v1.24 §28.10.5 mechanism (a) —
+    # accept any positional-or-kw invocation containing `config`).
+    assert "materialize_validator_framework_stage(" in source
+    assert "config" in source[source.find("materialize_validator_framework_stage"):]
     # And bound to ctx.validator_framework.
     assert "ctx.validator_framework = " in source
     # And the invocation comes AFTER audit_writer.

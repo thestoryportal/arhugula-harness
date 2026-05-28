@@ -45,6 +45,7 @@ Authority: CP spec v1.10 §25 (C-CP-25 ValidatorFramework); plan unit U-CP-60
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
@@ -55,6 +56,7 @@ from harness_cp.validator_framework_types import (
     ValidatorFailClass,
     ValidatorNextAction,
     ValidatorOutcome,
+    ValidatorPostEvaluateHook,
     ValidatorResult,
 )
 from harness_core.identity import StepID
@@ -143,6 +145,8 @@ class ConcreteValidatorFramework:
     def __init__(
         self,
         validator_registry: Mapping[StepID, Validator],
+        *,
+        post_evaluate_hook: ValidatorPostEvaluateHook | None = None,
     ) -> None:
         """Construct with the operator-populated per-step Validator registry.
 
@@ -150,9 +154,16 @@ class ConcreteValidatorFramework:
         enforced at construction (Mapping type prohibits duplicate keys, but
         the AC #3 test verifies the typed error raises if construction is
         passed e.g. a list-of-pairs with duplicates).
+
+        Per CP spec v1.24 §28.10.2, optional `post_evaluate_hook` accepts an
+        operator-supplied `ValidatorPostEvaluateHook` Protocol implementation.
+        `None` default preserves all pre-v1.24 construction sites byte-
+        identical. Non-`None` opts in to post-evaluate observability hook
+        firing per §28.10.3 (best-effort swallow per §28.10.4 invariant 2).
         """
         self._validator_registry = validator_registry
         self._burden_count: int = 0
+        self._post_evaluate_hook = post_evaluate_hook
 
     @property
     def burden_count(self) -> int:
@@ -180,7 +191,18 @@ class ConcreteValidatorFramework:
         4. Map outcome → next_action (§25.2 mapping table; AC #1)
         5. Build span_attributes for §25.5 emission (validator.* namespace)
         6. Return ValidatorEvaluation
+
+        Per CP spec v1.24 §28.10.3, post-evaluate hook fires AFTER
+        ValidatorEvaluation construction + BEFORE return when
+        `self._post_evaluate_hook is not None`. Best-effort discipline
+        per §28.10.4 invariant 2: hook exceptions swallowed at the
+        firing site (cost-attribution is observability; MUST NOT fail
+        dispatch). Elapsed-time scope per §28.10.4 invariant 5: covers
+        validator-registry lookup through ValidatorEvaluation
+        construction; excludes the hook firing itself.
         """
+        start_monotonic_ns = time.monotonic_ns()
+
         validator = self._validator_registry[step.step_id]
 
         result: ValidatorResult = await validator.validate(
@@ -200,12 +222,29 @@ class ConcreteValidatorFramework:
             burden_count=self._burden_count,
         )
 
-        return ValidatorEvaluation(
+        evaluation = ValidatorEvaluation(
             result=result,
             span_attributes=span_attributes,
             next_action=next_action,
             burden_count=self._burden_count,
         )
+
+        # CP spec v1.24 §28.10.3 post-evaluate hook firing (best-effort).
+        if self._post_evaluate_hook is not None:
+            execution_time_ms = (
+                time.monotonic_ns() - start_monotonic_ns
+            ) / 1_000_000.0
+            try:
+                await self._post_evaluate_hook.on_post_evaluate(
+                    step=step,
+                    step_context=step_context,
+                    evaluation=evaluation,
+                    execution_time_ms=execution_time_ms,
+                )
+            except Exception:
+                pass  # §28.10.4 invariant 2 — observability MUST NOT fail dispatch
+
+        return evaluation
 
     def convert_revalidate_to_permanent_fail(
         self,

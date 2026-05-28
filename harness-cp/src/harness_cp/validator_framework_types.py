@@ -225,3 +225,34 @@ class ValidatorFramework(Protocol):
         *,
         step_context: StepExecutionContext,
     ) -> ValidatorEvaluation: ...
+
+
+@runtime_checkable
+class ValidatorPostEvaluateHook(Protocol):
+    """Operator-supplied post-evaluate observability hook (CP spec v1.24 §28.10.1).
+
+    Fires once per `ConcreteValidatorFramework.evaluate()` invocation,
+    AFTER `ValidatorEvaluation` construction, BEFORE return. Receives
+    elapsed wall-clock execution time + step + step_context + evaluation.
+
+    Hook is observability-only; MUST NOT modify the evaluation; MUST NOT
+    influence dispatch outcome. Implementation lives at harness-runtime
+    (which can import `harness_od` types for cost-attribution); the
+    Protocol surface declared here at harness-cp is independent of
+    OD-axis vocabulary per X-AL-3 spec extension at
+    `.harness/class_1_fork_u_od_40_validator_post_evaluate_hook.md`.
+
+    Best-effort firing discipline: hook exceptions swallowed at the
+    firing site per §28.10.4 invariant 2 (mirror
+    `_attribute_tool_cost_best_effort` at
+    `harness_runtime/lifecycle/runtime_tool_dispatcher.py:285`).
+    """
+
+    async def on_post_evaluate(
+        self,
+        *,
+        step: WorkflowStep,
+        step_context: StepExecutionContext,
+        evaluation: ValidatorEvaluation,
+        execution_time_ms: float,
+    ) -> None: ...
