@@ -318,6 +318,19 @@ class DriverContext(Protocol):
     # the driver as a sibling check to `drained_flag.is_set()`.
     pause_requested_flag: asyncio.Event
 
+    # Multi-tenant scoping key sourced from `RuntimeConfig.tenant_id`. None =
+    # single-tenant (the v1.6 MVP default; preserved unchanged at audit-writer
+    # via the `_SINGLE_TENANT_TAG` sentinel). Non-None values flow through the
+    # 4-substep audit composition (sub_agent_dispatch.py / hitl_gate_composer.py
+    # / llm_dispatch.py / audit_writer.py) via `StepExecutionContext.tenant_id`
+    # propagation. HarnessContext exposes this as a computed property reading
+    # `self.config.tenant_id` so DriverContext is structurally satisfied
+    # without duplicating storage. Per workflow_driver_types.py:189-192
+    # deferral comment, this is the v1.7+ extension that lifts the v1.6 MVP
+    # hardcode at the workflow_driver composition site (binding fix; not a
+    # WorkflowManifestEntry schema extension).
+    tenant_id: str | None
+
 
 # ---------------------------------------------------------------------------
 # Driver core
@@ -750,7 +763,11 @@ def _execute_workflow_body(
         # supplied (not None) values flow through unchanged.
         # parent_sandbox_tier = TIER_1_PROCESS; parent_entry_hash = ""
         # (child shares parent ledger writer per C-RT-17 §14.7.4); tenant_id
-        # = None (multi-tenancy not at v1.6 stack).
+        # sourced from `ctx.tenant_id` (HarnessContext exposes the
+        # `RuntimeConfig.tenant_id` value per the v1.7+ deferral comment
+        # at workflow_driver_types.py:189-192). None preserves single-tenant
+        # default; operator-supplied values flow through the 4-substep audit
+        # composition unchanged.
         step_context = StepExecutionContext(
             workflow_id=manifest_entry.workflow_id,
             parent_action_id=(
@@ -761,7 +778,7 @@ def _execute_workflow_body(
             parent_actor=ctx.ledger_writer.actor,
             parent_entry_hash="",
             parent_idempotency_key=step_idempotency_key_pre,
-            tenant_id=None,
+            tenant_id=ctx.tenant_id,
             step_index=step_index,
         )
         # v1.6 routing-layer refactor per C-RT-17 §14.7.7: dispatch via

@@ -132,6 +132,8 @@ class _FakeCtx:
         # runtime spec v1.21 §4 + §14.14.3 DriverContext Protocol extension.
         self.pause_resume_protocol: object | None = None
         self.pause_requested_flag = asyncio.Event()
+        # tenant_id binding lift — validator-hook tests run single-tenant.
+        self.tenant_id: str | None = None
 
 
 class _EchoDispatcher:

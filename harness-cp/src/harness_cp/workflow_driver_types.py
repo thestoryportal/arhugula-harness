@@ -186,20 +186,31 @@ class StepExecutionContext(BaseModel):
     - ``parent_idempotency_key``: derived per the existing
       ``_compute_step_idempotency_key(run_idempotency_key, step_index)``
       helper at ``workflow_driver.py:222``.
-    - ``tenant_id``: ``None`` at v1.6 MVP (stack discipline does not commit
-      to multi-tenancy at v1.6 per ``Target_Stack_Commitment_v1.md``;
-      v1.7+ extension when multi-tenancy commits — tenant_id sourced from
-      future ``HarnessContext.tenant_id`` or ``RuntimeConfig.tenant_id``).
+    - ``tenant_id``: sourced from ``ctx.tenant_id`` at the workflow_driver
+      composition site (HarnessContext exposes the value as a computed
+      property reading ``self.config.tenant_id`` so DriverContext is
+      structurally satisfied without duplicating storage). ``None`` =
+      single-tenant (the v1.6 MVP default; preserved at audit-writer via
+      the ``_SINGLE_TENANT_TAG`` sentinel); operator-supplied non-None
+      values flow through the 4-substep audit composition unchanged. The
+      v1.6 MVP hardcode at workflow_driver.py was lifted as a binding fix
+      (NOT a WorkflowManifestEntry schema extension — tenant_id is per-
+      deployment scoping sourced from RuntimeConfig, not per-workflow
+      operator-surfaced).
     - ``step_index``: the per-iteration loop variable from the driver's
       ``for step_index, step in enumerate(steps[resume_at:], start=resume_at)``.
 
-    The 4 deferred-to-MVP-default fields (``parent_gate_level``,
-    ``parent_sandbox_tier``, ``parent_entry_hash``, ``tenant_id``) are
-    documented as deferred at C-RT-17 §14.7 "Deferred to implementation
-    discretion". The remaining 5 fields (at v1.12 — was 4 at v1.6) are
-    composed deterministically from driver-tracked state per the existing
-    patterns: ``workflow_id``, ``parent_action_id``, ``parent_actor``,
-    ``parent_idempotency_key``, ``step_index``.
+    The deferred-to-MVP-default fields originally enumerated 4 at v1.6
+    (``parent_gate_level``, ``parent_sandbox_tier``, ``parent_entry_hash``,
+    ``tenant_id``). ``parent_gate_level`` was lifted at v1.20 per the CP-19
+    Reading A fork resolution; ``tenant_id`` was lifted as a binding fix
+    (per-deployment scoping via RuntimeConfig — not a WorkflowManifestEntry
+    schema extension). The remaining 2 (``parent_sandbox_tier``,
+    ``parent_entry_hash``) preserve the v1.6 anti-extension invariant
+    pending their respective retirement events. The driver-composed fields
+    (``workflow_id``, ``parent_action_id``, ``parent_actor``,
+    ``parent_idempotency_key``, ``step_index``) follow the existing
+    deterministic patterns.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)

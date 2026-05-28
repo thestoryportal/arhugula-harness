@@ -101,7 +101,7 @@ from harness_od.local_first_otlp_collector import (
 from harness_od.otel_genai_base import EventEmission, SpanRef
 from harness_od.per_cell_collector_placement_matrix import CollectorPlacement
 from harness_od.sampling_mode import SamplingMode
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 # U-RT-79 — Memory tool backend config carrier import (per spec v1.17 §3 C-RT-02
 # field-table extension). MemoryToolBackendConfig declared at U-RT-76.
@@ -1444,3 +1444,29 @@ class HarnessContext(BaseModel):
     `lookup` raises `StepKindDispatcherNotBoundError` (driver maps to
     `RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND`).
     """
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def tenant_id(self) -> str | None:
+        """Multi-tenant scoping key surfaced from ``RuntimeConfig.tenant_id``.
+
+        Exposed as a computed property so the CP-side ``DriverContext``
+        Protocol (``harness_cp.workflow_driver.DriverContext.tenant_id``) is
+        structurally satisfied without duplicating storage. The CP driver
+        reads ``ctx.tenant_id`` at the ``StepExecutionContext`` composition
+        site (``workflow_driver.py`` per spec C-CP-25 §25.2.1) instead of
+        the v1.6 MVP hardcoded ``None``. ``None`` = single-tenant (preserved
+        at audit-writer via the ``_SINGLE_TENANT_TAG`` sentinel); operator-
+        supplied non-None values flow through the 4-substep audit
+        composition unchanged (``StepExecutionContext.tenant_id`` propagates
+        to ``audit_writer.append(tenant_id, ...)`` at sub_agent_dispatch /
+        hitl_gate_composer / llm_dispatch composition sites).
+
+        Per ``workflow_driver_types.py`` deferral comment at the v1.6 MVP
+        baseline: this is the v1.7+ extension that lifts the deferred-to-
+        implementation-discretion hardcode as a binding fix (NOT a
+        WorkflowManifestEntry schema extension — tenant_id is per-deployment
+        scoping sourced from RuntimeConfig, not per-workflow operator-
+        surfaced like ``default_gate_level`` at CP spec v1.20 §6.1.Y).
+        """
+        return self.config.tenant_id
