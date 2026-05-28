@@ -186,7 +186,7 @@ ZERO cross-axis cascade verified at filing.
 
 ## §6 — Resolution status
 
-**Status: ✅ APPLIED-AND-RETIRE-READY 2026-05-27 — operator ratified Q1=A + Q2=apply-now + Q3=defer-layer-3-e2e same session; H_T-CP-19 PARTIAL → RETIRE-READY transit filed at `.harness/phase-7d-retirement-events-batch-21.md`.**
+**Status: ✅ FULLY-APPLIED-AND-RETIRED 2026-05-27 — Q1=A + Q2=apply-now + Q3=defer-layer-3-e2e ratified (batch-21); Q3 close-condition MET same-session via reframed in-process Layer 3 scope per advisor 2026-05-27; H_T-CP-19 RETIRE-READY → RETIRED transit filed at `.harness/phase-7d-retirement-events-batch-22.md`.**
 
 Reading A absorbed across single bundled arc (this session):
 
@@ -207,11 +207,13 @@ Reading A absorbed across single bundled arc (this session):
 
 - Layer 1 (spec extension) — **APPLIED** at CP spec v1.20 §6.1.Y
 - Layer 2 (production binding read) — **APPLIED** at workflow_driver.py composition site
-- Layer 3 (multi-deployment e2e fixture) — **DEFERRED to future arc** per Q3 ratification
+- Layer 3 (e2e fixture) — **APPLIED at batch-22 via reframed in-process scope** per advisor 2026-05-27. `resolve_parent_gate_level()` helper extracted at `workflow_driver.py:359` from inline composition expression (ZERO behavior change); 12 NEW e2e tests at `harness-cp/tests/test_default_gate_level_monotonicity_e2e.py` exercise the chain `ManifestEntry → resolve → step_context.parent_gate_level → dispatch_sub_agent → SubAgentGateLevelDescent.child_gate_level` end-to-end. ADR-D5 §1.5.2 monotonicity contract verified in-process; multi-deployment substrate NOT required (Q3 framing was over-conservative read of contract scope).
 
-**H_T-CP-19 retirement status:** PARTIAL → **RETIRE-READY** (post-v1.20 binding chain MET per `[[verification-shape-sharpened-grep-vs-e2e]]` 3-stage verification: WorkflowManifestEntry field declared + workflow_driver.py composition site reads from field + 1091/1091 runtime tests pass through real bootstrap path). RETIRE-READY → RETIRED — **DEFERRED** pending layer-3 multi-deployment e2e per Q3 ratification.
+**H_T-CP-19 retirement status:** PARTIAL → RETIRE-READY (batch-21) → **RETIRED** (batch-22). All 3 binding-chain stages empirically MET per `[[verification-shape-sharpened-grep-vs-e2e]]`.
 
-**Retirement event filing:** ✅ FILED at `.harness/phase-7d-retirement-events-batch-21.md` 2026-05-27 (single-row batch; H_T-CP-19 PARTIAL → RETIRE-READY; cumulative 28/49 RETIRED unchanged; 1/49 RETIRE-READY NEW; 6/49 PARTIAL was 7; pipeline-advanced 35/49 = 71.4% unchanged).
+**Retirement event filings:**
+- Batch-21 (PARTIAL → RETIRE-READY): `.harness/phase-7d-retirement-events-batch-21.md` 2026-05-27 21:14 (`c5582b6`)
+- Batch-22 (RETIRE-READY → RETIRED): `.harness/phase-7d-retirement-events-batch-22.md` 2026-05-27 (this commit) — cumulative 29/49 RETIRED (+1 from batch-21); RETIRE-READY bucket EMPTY; CP-axis 15/22 = 68.2% RETIRED; FIFTH RETIRE-READY → RETIRED close in ledger history.
 
 **Sub-species catalogue:** `3.spec-self-declared-future-extension-channel` — variant of resolved-but-carry-stale where the originating spec text (v1.6 §6 line 333 anti-extension invariant) EXPLICITLY self-declared the future amendment channel ("Workflow §4.1.2 Class-2 amendment to this contract"), and the v1.20 publication IS that exact channel. Distinct from prior species 3 sub-species — the carry was not stale-by-resolution but rather scheduled-by-original-spec-self-declaration. First application catalogued at H_T-CP-19 fork closure.
 
