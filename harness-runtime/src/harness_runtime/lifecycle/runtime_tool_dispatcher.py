@@ -186,6 +186,7 @@ ATTR_SANDBOX_POLICY_ASSIGNED_TIER_REASON = "sandbox.policy.assigned_tier_reason"
 ATTR_SANDBOX_COST_TIER_OVERHEAD_MS = "sandbox.cost.tier_overhead_ms"
 ATTR_SANDBOX_FAIL_CLASS = "sandbox.fail.class"
 ATTR_MCP_FAIL_CLASS = "mcp.fail.class"
+ATTR_IDEMPOTENCY_KEY = "idempotency_key"
 
 ATTR_TOOL_CONTRACT_NAME = "tool.contract.name"
 ATTR_STEP_ID = "step.id"
@@ -258,20 +259,19 @@ class RuntimeToolDispatcher:
         self._tracer_provider = tracer_provider
 
     def _emit_sandbox_violation(
-        self, tracer: Any, mcp_fail_class: MCPInvocationFailClass
+        self,
+        tracer: Any,
+        mcp_fail_class: MCPInvocationFailClass,
+        idempotency_key: str,
     ) -> None:
-        """Open the `sandbox.violation` child span with both fail-class attrs.
+        """Open the `sandbox.violation` child span with fail-class + idempotency attrs.
 
         Per AS spec v1.6 §15.9 dual-attribute emission discipline: the
         `sandbox.violation` event carries BOTH `mcp.fail.class` (direct from
         §15.8 enum) AND `sandbox.fail.class` (F4 projected via §15.10).
-        Sibling to `sandbox.enter` / `sandbox.exit` under `tool.dispatch`
-        per §15.1 hierarchy.
-
-        Span is opened + closed inline (start_as_current_span + immediate
-        with-block exit) so the attribute emission lands even though the
-        caller re-raises immediately after — sandbox.violation IS the
-        diagnostic record, not an in-flight tracing scope.
+        Per §15.6 row 1 idempotency-key join: the event also carries the
+        parent `tool.call` `idempotency_key` as the cross-axis join key
+        for cost-attribution (D6) and engine event history (D1).
         """
         if tracer is None:
             return
@@ -279,6 +279,7 @@ class RuntimeToolDispatcher:
         with tracer.start_as_current_span("sandbox.violation") as span:
             _set(span, ATTR_MCP_FAIL_CLASS, mcp_fail_class.value)
             _set(span, ATTR_SANDBOX_FAIL_CLASS, projected.value)
+            _set(span, ATTR_IDEMPOTENCY_KEY, idempotency_key)
 
     async def dispatch(
         self,
@@ -428,15 +429,19 @@ class RuntimeToolDispatcher:
                         tool_id, tool_args, idempotency_key
                     )
             except ToolInvocationTimeoutError:
-                self._emit_sandbox_violation(tracer, MCPInvocationFailClass.TIMEOUT)
+                self._emit_sandbox_violation(
+                    tracer, MCPInvocationFailClass.TIMEOUT, idempotency_key
+                )
                 raise
             except ToolInvocationProtocolError:
                 self._emit_sandbox_violation(
-                    tracer, MCPInvocationFailClass.PROTOCOL_ERROR
+                    tracer, MCPInvocationFailClass.PROTOCOL_ERROR, idempotency_key
                 )
                 raise
             except MCPHostUnreachableError:
-                self._emit_sandbox_violation(tracer, MCPInvocationFailClass.TRANSPORT)
+                self._emit_sandbox_violation(
+                    tracer, MCPInvocationFailClass.TRANSPORT, idempotency_key
+                )
                 raise
 
             # --- Step 8: response schema validation -------------------------
@@ -444,7 +449,7 @@ class RuntimeToolDispatcher:
                 _validate_response_schema(response, contract.output_schema)
             except jsonschema.ValidationError as exc:
                 self._emit_sandbox_violation(
-                    tracer, MCPInvocationFailClass.SCHEMA_VIOLATION
+                    tracer, MCPInvocationFailClass.SCHEMA_VIOLATION, idempotency_key
                 )
                 raise ToolInvocationSchemaViolationError(
                     f"RT-FAIL-TOOL-INVOCATION-SCHEMA-VIOLATION: tool="

@@ -548,6 +548,9 @@ async def test_dispatch_transport_failure_emits_sandbox_violation_dual_attrs() -
     attrs = _violation_attrs(exporter)
     assert attrs["mcp.fail.class"] == "transport"
     assert attrs["sandbox.fail.class"] == "exit_nonzero"
+    # AS spec v1.6 §15.6 row 1: sandbox.violation carries parent idempotency_key
+    idem = attrs.get("idempotency_key")
+    assert isinstance(idem, str) and len(idem) == 64  # sha256 hex
 
 
 @pytest.mark.asyncio
@@ -561,6 +564,8 @@ async def test_dispatch_protocol_error_emits_sandbox_violation_dual_attrs() -> N
     attrs = _violation_attrs(exporter)
     assert attrs["mcp.fail.class"] == "protocol_error"
     assert attrs["sandbox.fail.class"] == "exit_nonzero"
+    idem = attrs.get("idempotency_key")
+    assert isinstance(idem, str) and len(idem) == 64
 
 
 @pytest.mark.asyncio
@@ -574,6 +579,8 @@ async def test_dispatch_timeout_emits_sandbox_violation_dual_attrs() -> None:
     attrs = _violation_attrs(exporter)
     assert attrs["mcp.fail.class"] == "timeout"
     assert attrs["sandbox.fail.class"] == "timeout"
+    idem = attrs.get("idempotency_key")
+    assert isinstance(idem, str) and len(idem) == 64
 
 
 @pytest.mark.asyncio
@@ -629,6 +636,8 @@ async def test_dispatch_schema_violation_emits_sandbox_violation_dual_attrs() ->
         attrs = _violation_attrs(exporter)
         assert attrs["mcp.fail.class"] == "schema_violation"
         assert attrs["sandbox.fail.class"] == "policy_override"
+        idem = attrs.get("idempotency_key")
+        assert isinstance(idem, str) and len(idem) == 64
     finally:
         await host.shutdown()
 
@@ -661,3 +670,43 @@ async def test_dispatch_happy_path_emits_no_sandbox_violation() -> None:
         assert "sandbox.exit" in names
     finally:
         await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_sandbox_violation_idempotency_key_matches_parent_dispatch() -> None:
+    """AS spec v1.6 §15.6 row 1 idempotency-key join — H_T-AS-5 retirement gate.
+
+    The `sandbox.violation` event's `idempotency_key` MUST equal the value
+    passed to the parent `mcp.tool.call` (`host.call_tool(..., key)`), so
+    that cross-axis cost-attribution (D6) and engine event history (D1)
+    can correlate the violation back to its parent dispatch.
+    """
+    host = await _build_started_host()
+    captured: list[str] = []
+
+    async def _capturing_failing_call_tool(_tool_id, _tool_args, key):
+        captured.append(key)
+        raise MCPHostUnreachableError("host unreachable")
+
+    host.call_tool = _capturing_failing_call_tool  # type: ignore[method-assign]
+    exporter, provider = _otel_setup()
+    dispatcher = RuntimeToolDispatcher(
+        mcp_client_host=host,
+        per_server_trust_evaluator=PerServerTrustEvaluator(),
+        mcp_namespace_emitter=_make_emitter(),
+        trust_policy=_make_trust_policy(),
+        sandbox_decision_resolver=_good_sandbox_resolver,
+        tracer_provider=provider,
+    )
+    try:
+        with pytest.raises(MCPHostUnreachableError):
+            await dispatcher.dispatch(
+                _make_binding(),
+                _make_step("echo", {"message": "x"}),
+                step_context=_make_step_context(),
+            )
+    finally:
+        await host.shutdown()
+    assert len(captured) == 1
+    attrs = _violation_attrs(exporter)
+    assert attrs["idempotency_key"] == captured[0]
