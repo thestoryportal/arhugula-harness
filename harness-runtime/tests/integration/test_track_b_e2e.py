@@ -887,12 +887,282 @@ async def test_ac1_real_anthropic_single_step_succeeds(
     assert result.workflow_id == "wf-ac1-real-anthropic"
 
 
+@pytest.mark.asyncio
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
-    reason="Mechanism β: AC #3 daemon-equivalent real LLM exercise",
+    reason=(
+        "Mechanism β AC #3 requires ANTHROPIC_API_KEY. Exercises the "
+        "daemon-side run_workflow handler against a real LLM dispatch to "
+        "demonstrate daemon-mode equivalence to one-shot api.run."
+    ),
 )
-def test_ac3_daemon_mode_equivalent_to_one_shot_with_real_llm() -> None:
-    pytest.skip("Mechanism β deferred")
+async def test_ac3_daemon_mode_equivalent_to_one_shot_with_real_llm(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC #3 mechanism β: daemon-mode equivalent to one-shot real-LLM exercise.
+
+    AC #1 exercises one-shot mode via `api.run()` (internally uses an
+    in-process MCP `ClientSession` to invoke the `run_workflow` tool —
+    spec v1.12 §14.8.3 Reading α H_T-as-MCP-server topology pin).
+    AC #3 invokes the `run_workflow` MCP tool **directly** via
+    `tool.fn(workflow_id, ctx)` — the same entrypoint a real daemon-mode
+    MCP client reaches across the Unix-socket transport (per U-RT-108
+    daemon-client mode). Both paths route to the identical handler
+    body + bootstrap-bound `ctx.llm_dispatcher` → real LLM dispatch →
+    same `CpRunResult` shape.
+
+    Scope discipline (per `[[u-rt-107-fork-section-4-closed-contextvars]]`
+    AC #6 follow-on precedent at this file `test_ac6_...`): in-process
+    direct tool invocation, NOT subprocess + real MCP-client over
+    socket. The subprocess path is gated on `RuntimeConfig` composition
+    friction (`[[finding-runtime-config-loader-unreachable-sub-configs]]`)
+    and is mech-γ infrastructure. Direct tool.fn(...) exercises the
+    same handler body the daemon-mode CLI reaches via U-RT-108 socket
+    bridge.
+
+    Wire-layer note: this test exercises the daemon-side handler. The
+    socket-transport equivalence is verified at
+    `test_one_shot_and_daemon_client_pass_same_manifest_path` (mocked
+    `_daemon_client_dispatch`) — those two tests together establish the
+    full daemon-mode equivalence chain (CLI → socket → handler → LLM
+    dispatch → success).
+
+    Stacks on AC #1 (real-LLM bootstrap + E-prod-3 per-provider opt-in).
+    """
+    from collections.abc import Sequence
+    from types import SimpleNamespace
+    from typing import cast
+
+    from harness_core.deployment_surface import DeploymentSurface
+    from harness_core.identity import StepID
+    from harness_core.persona_tier import PersonaTier
+    from harness_core.workload_class import WorkloadClass
+    from harness_cp.cp_shared_types import ModelBinding
+    from harness_cp.cross_family_fallback_chain import (
+        FallbackChain,
+        ProviderCandidate,
+        ProviderFamily,
+    )
+    from harness_cp.engine_class import EngineClass
+    from harness_cp.routing_manifest_residence import RoutingManifest
+    from harness_cp.topology_pattern import TopologyPattern
+    from harness_cp.workflow_driver import StepDispatcher as _CpStepDispatcher
+    from harness_cp.workflow_driver_types import StepKind, WorkflowStep
+    from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+    from harness_is.path_class_registry import PathClass
+    from harness_runtime.bootstrap import run_bootstrap
+    from harness_runtime.bootstrap import stage_4_od as _stage_4_od_mod
+    from harness_runtime.shutdown import shutdown as _shutdown
+
+    # ---------------- keyring → env shim (per AC #1) ----------------
+    api_key = os.environ["ANTHROPIC_API_KEY"]
+
+    def _fake_get_password(service: str, name: str) -> str | None:
+        _ = service
+        if name == "anthropic_key":
+            return api_key
+        return None
+
+    monkeypatch.setattr(
+        "harness_runtime.config.provider_secrets.keyring.get_password",
+        _fake_get_password,
+    )
+
+    # ---------------- tracer (NoOp; this AC asserts result shape, not spans) ----------------
+    class _FakeTracerProvider:
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            _ = timeout_millis
+            return True
+
+        def shutdown(self) -> None:
+            return None
+
+        def get_tracer(self, instrumenting_module_name: str, /) -> object:
+            from opentelemetry.trace import NoOpTracer
+
+            _ = instrumenting_module_name
+            return NoOpTracer()
+
+    class _TracerStage:
+        def __init__(self, provider: _FakeTracerProvider) -> None:
+            self.provider = provider
+            self.registered_globally = False
+
+    def _fake_tracer_stage(config: Any, **_kwargs: Any) -> _TracerStage:
+        _ = config
+        return _TracerStage(_FakeTracerProvider())
+
+    def _fake_span_processor(config: Any, _p: Any, **_kwargs: Any) -> None:
+        _ = config
+        return None
+
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_tracer_provider_stage", _fake_tracer_stage
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_span_processor_stage", _fake_span_processor
+    )
+
+    # ---------------- config (per AC #1 — E-prod-3 opt-in) ----------------
+    surface = DeploymentSurface.LOCAL_DEVELOPMENT
+    workload = WorkloadClass.SOFTWARE_ENGINEERING
+    path_bindings = PathBindingConfig(
+        raw_entries=tuple(
+            {
+                "path_class": pc,
+                "workflow_class": workload,
+                "deployment_surface": surface,
+                "path": str(tmp_path / pc.value.lower()),
+            }
+            for pc in PathClass
+        ),
+    )
+    chain = FallbackChain(
+        primary=ProviderCandidate(
+            provider="anthropic",
+            model="claude-haiku-4-5",
+            family=ProviderFamily.ANTHROPIC,
+        ),
+        same_family=(),
+        cross_family=(),
+        terminal=None,
+    )
+    config = RuntimeConfig(
+        deployment_surface=surface,
+        repository_root=tmp_path,
+        path_bindings=path_bindings,
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+        collector=CollectorConfig(),
+        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        mcp_clients=[],
+        openai_optional=True,
+        ollama_optional=True,
+        routing_manifest=RoutingManifest(
+            manifest_version=1,
+            per_role_bindings={},
+            per_workload_overrides={},
+            fallback_chains=(chain,),
+            retry_policies={},
+        ),
+    )
+
+    # ---------------- workflow with real INFERENCE_STEP messages payload ----------------
+    inference_payload = {
+        "messages": [
+            {"role": "user", "content": "Reply with the single word: ok"}
+        ],
+        "tools": [],
+        "params": {"max_tokens": 8},
+    }
+
+    class _Workflow:
+        @property
+        def workflow_id(self) -> str:
+            return "wf-ac3-daemon-side"
+
+        @property
+        def workload_class(self) -> WorkloadClass:
+            return workload
+
+        @property
+        def manifest_entry(self) -> WorkflowManifestEntry:
+            return WorkflowManifestEntry(
+                workflow_id="wf-ac3-daemon-side",
+                workload_class=workload,
+                persona_tier=PersonaTier.TEAM_BINDING,
+                engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+                topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+                layer_budgets=(),
+                fallback_chain=chain,
+                hitl_placements=(),
+                per_step_overrides={},
+            )
+
+        @property
+        def steps(self) -> Sequence[WorkflowStep]:
+            return (
+                WorkflowStep(
+                    step_id=StepID("step-0"),
+                    step_kind=StepKind.INFERENCE_STEP,
+                    step_payload=inference_payload,
+                ),
+            )
+
+        @property
+        def step_dispatcher(self) -> _CpStepDispatcher:
+            raise NotImplementedError("bootstrap-bound dispatcher is used")
+
+        @property
+        def step_dispatchers(self) -> Any:
+            return None
+
+        @property
+        def default_model_binding(self) -> ModelBinding:
+            return ModelBinding(provider="anthropic", model="claude-haiku-4-5")
+
+    # ---------------- real bootstrap ----------------
+    ctx = await run_bootstrap(config, workload_class=workload)
+    assert ctx.mcp_server is not None, (
+        "ctx.mcp_server unbound post-bootstrap — stage 2 AS did not "
+        "materialize the FastMCP server (U-RT-62 AC #2)"
+    )
+
+    # ---------------- bind ctx + workflow on the mcp_server ----------------
+    # This is the same registration api.run() performs internally before
+    # invoking the in-process ClientSession (per api.py:478-484). AC #3
+    # invokes the tool DIRECTLY via tool.fn() — same handler, different
+    # entrypoint.
+    workflow = _Workflow()
+    ctx.mcp_server._state["_harness_ctx"] = ctx  # type: ignore[reportPrivateUsage]
+    ctx.mcp_server.workflow_registry[workflow.workflow_id] = workflow  # type: ignore[attr-defined]
+
+    try:
+        # Retrieve the registered run_workflow tool from the FastMCP server.
+        tool = ctx.mcp_server.server._tool_manager.get_tool("run_workflow")  # type: ignore[attr-defined]
+        assert tool is not None, "run_workflow tool not registered on FastMCP server"
+
+        # Mock MCP Context — the handler binds it via `_CURRENT_TOOL_CTX.set(ctx)`
+        # for downstream `ServerCtxElicitCallback.elicit(...)` access. The
+        # SUCCESS path with no HITL escalation never reads from ctx (no elicit
+        # call), so a SimpleNamespace placeholder suffices. If the workflow
+        # escalated, the elicit callback would fail — but this AC's payload
+        # ("reply with 'ok'") does not trigger any validator escalation.
+        mock_mcp_ctx = SimpleNamespace()
+
+        # Direct daemon-side invocation. The tool function body matches what
+        # a real daemon-client MCP invocation reaches across the U-RT-108
+        # Unix-socket transport.
+        result_dict = await tool.fn(  # type: ignore[attr-defined]
+            workflow_id=workflow.workflow_id,
+            ctx=cast(Any, mock_mcp_ctx),
+        )
+
+        # AC #3 invariant — daemon-side handler returns SUCCESS-class result.
+        # The CP driver's RunResult serializes to {workflow_id, run_id, status,
+        # final_state, ...}; `status` is the discriminator. The api.run path
+        # re-projects CP "success" → runtime "completed"; this test inspects
+        # the raw daemon-side return shape (no re-projection).
+        assert isinstance(result_dict, dict), (
+            f"expected dict from run_workflow tool; got {type(result_dict).__name__}"  # pyright: ignore[reportUnknownArgumentType]
+        )
+        result_dict_typed = cast(dict[str, Any], result_dict)
+        assert result_dict_typed["workflow_id"] == "wf-ac3-daemon-side", (
+            f"expected workflow_id='wf-ac3-daemon-side'; got {result_dict_typed!r}"
+        )
+        # CP RunStatus.SUCCESS serializes to "success" per StrEnum value.
+        assert result_dict_typed["status"] == "success", (
+            f"expected status='success'; got status={result_dict_typed.get('status')!r} "
+            f"full result={result_dict_typed!r}"
+        )
+
+    finally:
+        # Cleanup — drop registry entries + state binding before shutdown
+        # to mirror api.run's defensive cleanup at api.py:489-495.
+        ctx.mcp_server.workflow_registry.pop(workflow.workflow_id, None)  # type: ignore[attr-defined]
+        ctx.mcp_server._state.pop("_harness_ctx", None)  # type: ignore[reportPrivateUsage]
+        await _shutdown(ctx)
 
 
 @pytest.mark.asyncio
