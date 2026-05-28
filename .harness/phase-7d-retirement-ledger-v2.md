@@ -304,13 +304,27 @@ The 2026-05-20 snapshot's §4 AS-axis row 5 (H_T-AS-8 STILL-BOUNDED) is **supers
 
 **Sub-species 7c "retirement-ID-scoping-too-coarse"** catalogued at batch-24 §2 — distinct from prior 7a (CP-19 operator-explicit-deferred-close-gate at batch-22) + 7b (AS-5 gate-text-stale-vs-production-architecture at batch-23); FIRST instance of retirement-ID decomposition in ledger history.
 
+### §11.4b H_T-CP-14 — PARTIAL → RETIRED at batch-29
+
+The pre-batch-29 CP-axis CP-14 row PARTIAL classification is **superseded** by the operator-discretion ratification event filed at `batch-29` (2026-05-28):
+
+- Runtime spec v1.6 §14.7.2 step 5 line 2546 explicit operator-discretion retirement path: "Operator may ratify the single-sub-agent slice as PARTIAL → RETIRED at retirement audit IF the bounded scope is documented as a follow-on parent-topology-expansion arc."
+- Empirical state at batch-29 filing: production at `harness-runtime/src/harness_runtime/lifecycle/sub_agent_dispatch.py:613` emits v1.6 MVP narrow subset per spec — `topology.pattern` + `topology.workload_class` at open-time on `subagent.span`, 7 `subagent.*` attrs across open + close. IN COMPLIANCE.
+- Bounded-scope documentation: 8 fan-out-specific `topology.*` attrs (`fan_out_cap`, `cascade_policy`, `results_collected`, `results_failed`, `cascade_applied`, `synthesis_token_budget`, `cascade_decision_audit_ledger_id`, `concurrent_token_budget_at_dispatch`) deferred to v1.7+ parent-topology-expansion arc (Phase 6 substrate) per runtime spec v1.6 §14.7.2 step 5 "Scope: single-sub-agent within linear parent" carve-out.
+- Operator AskUserQuestion ratification 2026-05-28 selected "File batch-29 with PARTIAL → RETIRE-READY → RETIRED joint single-batch transit".
+- ZERO production code change; ZERO spec amendment; ZERO cross-axis cascade — pure retirement-audit ratification at spec-explicit operator-discretion path.
+
+**Sub-species 7.operator-explicit-deferred-close-gate SECOND CLOSURE** — joins CP-19 batch-22 (Layer 3 e2e reframed in-process scope). Both are *retirement-audit ratification at spec-explicit operator-discretion path*, distinct from sub-species 7.deployment-time-opt-in-gate (AS-8d + OD-5). SECOND same-session joint single-batch transit (CP-19 batch-22 was first; CP-14 batch-29 is second). SIXTH RETIRE-READY → RETIRED close overall in ledger history.
+
+**Cardinality delta at this batch:** CP-axis RETIRED 15/22 → 16/22 (68.2% → 72.7%); workspace RETIRED 33/54 → 34/54 (61.1% → 63.0%); workspace PARTIAL 6/54 → 5/54 (CP-14 transit-out; post-batch-28 empirical PARTIAL = 6 from per-axis CLAUDE.md §4.1 audit at batch-29: CP-8/9/11/14/17 (5 CP) + OD-6 (1 OD) = 6 sites; batch-28 §2 cite "4/54 PARTIAL" was per-axis-audit-undercounted); STILL-BOUNDED 11/54 (batch-28 §2 cite "13/54" was per-axis-audit-overcounted by 2; empirical: IS:2 + CP:2 + OD:4 + CXA:3 = 11); STILL-BOUNDED-INDEFINITELY 2/54 (AS-8e + AS-8f); workspace pipeline-advanced 39/54 → 41/54 (72.2% → 75.9%). **Cardinality check at batch-29 close: 34 + 2 + 5 + 11 + 2 = 54 ✓.** Forward-only ledger discipline preserved at prior batch records; corrected counts apply at batch-29 onward.
+
 ### §11.5 Cumulative status pointer
 
 | | Live source |
 |---|---|
-| Latest filed batch | `batch-26` (2026-05-28, H_T-AS-8f STILL-BOUNDED → STILL-BOUNDED-INDEFINITELY DEFER INDEFINITELY mirror AS-8e) |
-| Cumulative RETIRED count (raw ledger) | 33/54 (61.1%) per batch-25 §0 footer (AS-8f routing transit at batch-26 does NOT change RETIRED count — SB → SB-INDEFINITE is X-AL-2 bounded-residual routing, not RETIRED close) |
-| Cumulative pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) | 39/54 (72.2%) per batch-25 §0 footer (AS-8d STILL-BOUNDED → RETIRE-READY; AS-8f routing transit at batch-26 does NOT promote pipeline-advanced — SB-INDEFINITE is terminal under X-AL-2) |
+| Latest filed batch | `batch-29` (2026-05-28, H_T-CP-14 PARTIAL → RETIRE-READY → RETIRED via operator-discretion ratification of v1.6 MVP single-sub-agent slice bounded scope) |
+| Cumulative RETIRED count (raw ledger) | 34/54 (63.0%) per batch-29 §4 footer (+1 from batch-28) |
+| Cumulative pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) | 41/54 (75.9%) per batch-29 §4 footer |
 | Per-axis live status | `harness-{is,as,cp,od}/CLAUDE.md` §4.1 |
 | Cross-axis cascade live status | §6.3.1 + §6.3.2 cascade re-evaluations at the batch in which the gating retirement filed (see batch-2 §3 + batch-3 referenced from `harness-od/CLAUDE.md`) |
 
