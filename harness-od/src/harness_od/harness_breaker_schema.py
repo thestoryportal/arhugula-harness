@@ -20,9 +20,10 @@ classification (the §7.1 table columns are Attribute | Type | Source |
 Definition, with no tier column). `HARNESS_BREAKER_ATTRIBUTES` is re-typed
 `List<GenAiAttribute>` → `tuple[str, ...]` (the seven §7.1 attribute names).
 Per CLAUDE.md I-2 / X-AL-3 there is no spec basis to conform a tier split to.
-Note: the U-OD-04 `AttributeTier` enum has carried `REQUIRED_STABLE` +
-`RECOMMENDED_DEVELOPMENT` + `OPT_IN_CONTENT` members since v1.2 baseline and
-gained `CONDITIONALLY_REQUIRED` at OD spec v1.16 §1.2 (populated with 3
+Note: the U-OD-04 `AttributeTier` enum carries `REQUIRED` + `RECOMMENDED` +
+`OPT_IN` members (v1.2-lineage DERIVATIVE names `REQUIRED_STABLE` /
+`RECOMMENDED_DEVELOPMENT` / `OPT_IN_CONTENT` retired at OD spec v1.24 §1.2)
+and gained `CONDITIONALLY_REQUIRED` at OD spec v1.16 §1.2 (populated with 3
 attributes at v1.19 §1.1 per-attribute tier redistribution); the STRIKE
 rationale is anchored at the §7.1 absence-of-tier-column at C-OD-07, NOT at
 absence of enum members at C-OD-04.

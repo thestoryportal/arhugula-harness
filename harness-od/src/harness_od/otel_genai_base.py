@@ -94,12 +94,15 @@ class AttributeTier(StrEnum):
     archived text (WebFetch-verified 2026-05-27); see OD spec v1.23 §1.3
     §4.3.1 per-attribute stability classification table.
 
-    Internal enum-member naming preserved (`REQUIRED_STABLE` /
-    `RECOMMENDED_DEVELOPMENT` / `OPT_IN_CONTENT`) as DERIVATIVE per
-    OD spec v1.16 §1.2 + v1.23 §1.2 precedent; OTel canonical names
-    (`Required` / `Conditionally Required` / `Recommended` / `Opt-In`)
-    are the authoritative names. Enum-rename pass deferred per OD spec
-    v1.23 §"Adjacent observations" (f) as future operator-discretion arc.
+    Enum member identifiers + string values align byte-exact with the
+    OTel canonical names (`Required` / `Conditionally Required` /
+    `Recommended` / `Opt-In`) per OD spec v1.24 §1.2 DERIVATIVE-naming
+    retirement. The v1.2-lineage DERIVATIVE identifiers (`REQUIRED_STABLE`
+    / `RECOMMENDED_DEVELOPMENT` / `OPT_IN_CONTENT`) + their value strings
+    (`"Required (Stable)"` / `"Recommended (Development)"` / `"Opt-In
+    content"`) were preserved through v1.23 per v1.16 §1.2 precedent and
+    retired at v1.24 §1.2. Pre-v1.24 design-substrate/ cites use the
+    DERIVATIVE names; readers apply v1.24 §1.2 substitution table.
 
     Emission posture per tier: Required always emitted; Conditionally
     Required emitted per per-attribute conditional rule (NEW at v1.16 —
@@ -110,10 +113,10 @@ class AttributeTier(StrEnum):
     per OD spec v1.23 §1.3 emission-gating invariant.
     """
 
-    REQUIRED_STABLE = "Required (Stable)"
+    REQUIRED = "Required"
     CONDITIONALLY_REQUIRED = "Conditionally Required"
-    RECOMMENDED_DEVELOPMENT = "Recommended (Development)"
-    OPT_IN_CONTENT = "Opt-In content"
+    RECOMMENDED = "Recommended"
+    OPT_IN = "Opt-In"
 
 
 class GenAiAttribute(BaseModel):
@@ -137,10 +140,9 @@ class GenAiAttribute(BaseModel):
 #: 3-token form was a misreading of the cited OTel GenAI semconv 1.41.0
 #: archived text; the actual 1.41.0 text specifies 2-token. `gen_ai.provider.name`
 #: is REMOVED from the span-name format but PRESERVED as a Required
-#: (requirement-level, OTel canonical name; DERIVATIVE enum member
-#: `REQUIRED_STABLE` per OD spec v1.23 §1.2 dimensional split + §1.3
-#: §4.3.1 stability=Development classification) tier attribute at §4.3
-#: (BASE_LAYER_ATTRIBUTES below).
+#: tier attribute at §4.3 (OTel canonical name; per OD spec v1.23 §1.2
+#: dimensional split + §1.3 §4.3.1 stability=Development classification;
+#: v1.24 §1.2 DERIVATIVE-naming retirement) (BASE_LAYER_ATTRIBUTES below).
 SPAN_NAME_FORMAT: str = "{gen_ai.operation.name} {gen_ai.request.model}"
 
 #: §4.5 base metric name, verbatim — a histogram with cardinality control per
@@ -168,10 +170,10 @@ HIERARCHY_CORRELATION_KEY: str = "gen_ai.conversation.id"
 #: preserved verbatim from v1.2; tier classification only redistributed).
 BASE_LAYER_ATTRIBUTES: tuple[GenAiAttribute, ...] = (
     # Required — always emitted (OTel 1.41.0: Required, stability=Development
-    # per OD spec v1.23 §1.3 §4.3.1; DERIVATIVE enum member `REQUIRED_STABLE`
-    # preserved per OD spec v1.23 §1.2 + v1.16 §1.2 precedent).
-    GenAiAttribute(name="gen_ai.operation.name", tier=AttributeTier.REQUIRED_STABLE),
-    GenAiAttribute(name="gen_ai.provider.name", tier=AttributeTier.REQUIRED_STABLE),
+    # per OD spec v1.23 §1.3 §4.3.1; enum identifier aligned to OTel canonical
+    # name at OD spec v1.24 §1.2 DERIVATIVE-naming retirement).
+    GenAiAttribute(name="gen_ai.operation.name", tier=AttributeTier.REQUIRED),
+    GenAiAttribute(name="gen_ai.provider.name", tier=AttributeTier.REQUIRED),
     # Conditionally Required — OTel 1.41.0 per-attribute condition (stability=
     # Development per OD spec v1.23 §1.3 §4.3.1); harness may emit unconditionally
     # where condition is harness-always-met (e.g. `gen_ai.request.model` "If
@@ -182,27 +184,27 @@ BASE_LAYER_ATTRIBUTES: tuple[GenAiAttribute, ...] = (
     GenAiAttribute(name="gen_ai.conversation.id", tier=AttributeTier.CONDITIONALLY_REQUIRED),
     # Recommended — emitted unless cardinality-safe discipline excludes (OTel
     # 1.41.0: Recommended, stability=Development per OD spec v1.23 §1.3 §4.3.1;
-    # DERIVATIVE enum member `RECOMMENDED_DEVELOPMENT` preserved per OD spec
-    # v1.23 §1.2 + v1.16 §1.2 precedent).
-    GenAiAttribute(name="gen_ai.usage.input_tokens", tier=AttributeTier.RECOMMENDED_DEVELOPMENT),
-    GenAiAttribute(name="gen_ai.usage.output_tokens", tier=AttributeTier.RECOMMENDED_DEVELOPMENT),
+    # enum identifier aligned to OTel canonical name at OD spec v1.24 §1.2
+    # DERIVATIVE-naming retirement).
+    GenAiAttribute(name="gen_ai.usage.input_tokens", tier=AttributeTier.RECOMMENDED),
+    GenAiAttribute(name="gen_ai.usage.output_tokens", tier=AttributeTier.RECOMMENDED),
     GenAiAttribute(
         name="gen_ai.response.finish_reasons",
-        tier=AttributeTier.RECOMMENDED_DEVELOPMENT,
+        tier=AttributeTier.RECOMMENDED,
     ),
-    GenAiAttribute(name="server.address", tier=AttributeTier.RECOMMENDED_DEVELOPMENT),
+    GenAiAttribute(name="server.address", tier=AttributeTier.RECOMMENDED),
     # Opt-In — default-off per redaction discipline (C-OD-12; OTel 1.41.0:
-    # Opt-In, stability=Development per OD spec v1.23 §1.3 §4.3.1; DERIVATIVE
-    # enum member `OPT_IN_CONTENT` preserved per OD spec v1.23 §1.2 + v1.16
-    # §1.2 precedent).
-    GenAiAttribute(name="gen_ai.input.messages", tier=AttributeTier.OPT_IN_CONTENT),
-    GenAiAttribute(name="gen_ai.output.messages", tier=AttributeTier.OPT_IN_CONTENT),
-    GenAiAttribute(name="gen_ai.system_instructions", tier=AttributeTier.OPT_IN_CONTENT),
-    GenAiAttribute(name="gen_ai.tool.definitions", tier=AttributeTier.OPT_IN_CONTENT),
-    GenAiAttribute(name="gen_ai.tool.call.arguments", tier=AttributeTier.OPT_IN_CONTENT),
-    GenAiAttribute(name="gen_ai.tool.call.result", tier=AttributeTier.OPT_IN_CONTENT),
-    GenAiAttribute(name="gen_ai.retrieval.documents", tier=AttributeTier.OPT_IN_CONTENT),
-    GenAiAttribute(name="gen_ai.retrieval.query.text", tier=AttributeTier.OPT_IN_CONTENT),
+    # Opt-In, stability=Development per OD spec v1.23 §1.3 §4.3.1; enum
+    # identifier aligned to OTel canonical name at OD spec v1.24 §1.2
+    # DERIVATIVE-naming retirement).
+    GenAiAttribute(name="gen_ai.input.messages", tier=AttributeTier.OPT_IN),
+    GenAiAttribute(name="gen_ai.output.messages", tier=AttributeTier.OPT_IN),
+    GenAiAttribute(name="gen_ai.system_instructions", tier=AttributeTier.OPT_IN),
+    GenAiAttribute(name="gen_ai.tool.definitions", tier=AttributeTier.OPT_IN),
+    GenAiAttribute(name="gen_ai.tool.call.arguments", tier=AttributeTier.OPT_IN),
+    GenAiAttribute(name="gen_ai.tool.call.result", tier=AttributeTier.OPT_IN),
+    GenAiAttribute(name="gen_ai.retrieval.documents", tier=AttributeTier.OPT_IN),
+    GenAiAttribute(name="gen_ai.retrieval.query.text", tier=AttributeTier.OPT_IN),
 )
 
 

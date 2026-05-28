@@ -56,7 +56,7 @@ _SPEC_OPERATIONS = {
 # chat-span table). v1.2-v1.18 declared 3 Required + 6 Recommended + 8 Opt-In;
 # v1.19 redistributes 3 attributes to the v1.16-NEW Conditionally Required
 # tier (`gen_ai.request.model`, `server.port`, `gen_ai.conversation.id`).
-_SPEC_REQUIRED_STABLE = {
+_SPEC_REQUIRED = {
     "gen_ai.operation.name",
     "gen_ai.provider.name",
 }
@@ -65,13 +65,13 @@ _SPEC_CONDITIONALLY_REQUIRED = {
     "server.port",
     "gen_ai.conversation.id",
 }
-_SPEC_RECOMMENDED_DEVELOPMENT = {
+_SPEC_RECOMMENDED = {
     "gen_ai.usage.input_tokens",
     "gen_ai.usage.output_tokens",
     "gen_ai.response.finish_reasons",
     "server.address",
 }
-_SPEC_OPT_IN_CONTENT = {
+_SPEC_OPT_IN = {
     "gen_ai.input.messages",
     "gen_ai.output.messages",
     "gen_ai.system_instructions",
@@ -149,10 +149,10 @@ def test_attribute_tier_cardinality_four() -> None:
     """
     assert len(AttributeTier) == 4
     assert {t.value for t in AttributeTier} == {
-        "Required (Stable)",
+        "Required",
         "Conditionally Required",
-        "Recommended (Development)",
-        "Opt-In content",
+        "Recommended",
+        "Opt-In",
     }
 
 
@@ -168,10 +168,10 @@ def test_base_layer_attributes_byte_exact_per_semconv_1_41_0() -> None:
     """§4.3 — the base-layer attribute name set, verbatim (17 attributes)."""
     names = {attr.name for attr in BASE_LAYER_ATTRIBUTES}
     assert names == (
-        _SPEC_REQUIRED_STABLE
+        _SPEC_REQUIRED
         | _SPEC_CONDITIONALLY_REQUIRED
-        | _SPEC_RECOMMENDED_DEVELOPMENT
-        | _SPEC_OPT_IN_CONTENT
+        | _SPEC_RECOMMENDED
+        | _SPEC_OPT_IN
     )
     assert len(BASE_LAYER_ATTRIBUTES) == 17
 
@@ -183,8 +183,8 @@ def test_required_stable_tier_attributes_per_spec_4_3() -> None:
     to Conditionally Required per OTel 1.41.0 chat-span Requirement-Level
     audit. Required (Stable) cardinality at v1.19 = 2.
     """
-    got = {a.name for a in attributes_in_tier(AttributeTier.REQUIRED_STABLE)}
-    assert got == _SPEC_REQUIRED_STABLE
+    got = {a.name for a in attributes_in_tier(AttributeTier.REQUIRED)}
+    assert got == _SPEC_REQUIRED
 
 
 def test_conditionally_required_tier_attributes_per_spec_4_3() -> None:
@@ -206,22 +206,22 @@ def test_recommended_development_tier_attributes_per_spec_4_3() -> None:
     `gen_ai.conversation.id` to Conditionally Required. Recommended
     (Development) cardinality at v1.19 = 4.
     """
-    got = {a.name for a in attributes_in_tier(AttributeTier.RECOMMENDED_DEVELOPMENT)}
-    assert got == _SPEC_RECOMMENDED_DEVELOPMENT
+    got = {a.name for a in attributes_in_tier(AttributeTier.RECOMMENDED)}
+    assert got == _SPEC_RECOMMENDED
 
 
 def test_opt_in_content_tier_attributes_per_spec_4_3() -> None:
     """§4.3 Opt-In content row, verbatim."""
-    got = {a.name for a in attributes_in_tier(AttributeTier.OPT_IN_CONTENT)}
-    assert got == _SPEC_OPT_IN_CONTENT
+    got = {a.name for a in attributes_in_tier(AttributeTier.OPT_IN)}
+    assert got == _SPEC_OPT_IN
 
 
 def test_attribute_serialization_round_trip() -> None:
     """`GenAiAttribute` is frozen and round-trips through serialization."""
-    attr = GenAiAttribute(name="gen_ai.request.model", tier=AttributeTier.REQUIRED_STABLE)
+    attr = GenAiAttribute(name="gen_ai.request.model", tier=AttributeTier.REQUIRED)
     assert GenAiAttribute.model_validate(attr.model_dump()) == attr
     assert hash(attr) == hash(
-        GenAiAttribute(name="gen_ai.request.model", tier=AttributeTier.REQUIRED_STABLE)
+        GenAiAttribute(name="gen_ai.request.model", tier=AttributeTier.REQUIRED)
     )
 
 
@@ -279,7 +279,7 @@ def test_specialization_layer_does_not_replace_base_layer() -> None:
     # A specialization namespace adds attributes; the base set is unchanged.
     specialized = (
         *BASE_LAYER_ATTRIBUTES,
-        GenAiAttribute(name="hitl.gate.level", tier=AttributeTier.RECOMMENDED_DEVELOPMENT),
+        GenAiAttribute(name="hitl.gate.level", tier=AttributeTier.RECOMMENDED),
     )
     assert len(specialized) == len(BASE_LAYER_ATTRIBUTES) + 1
     assert all(base in specialized for base in BASE_LAYER_ATTRIBUTES)
