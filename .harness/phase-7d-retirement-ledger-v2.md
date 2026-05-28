@@ -318,13 +318,27 @@ The pre-batch-29 CP-axis CP-14 row PARTIAL classification is **superseded** by t
 
 **Cardinality delta at this batch:** CP-axis RETIRED 15/22 → 16/22 (68.2% → 72.7%); workspace RETIRED 33/54 → 34/54 (61.1% → 63.0%); workspace PARTIAL 6/54 → 5/54 (CP-14 transit-out; post-batch-28 empirical PARTIAL = 6 from per-axis CLAUDE.md §4.1 audit at batch-29: CP-8/9/11/14/17 (5 CP) + OD-6 (1 OD) = 6 sites; batch-28 §2 cite "4/54 PARTIAL" was per-axis-audit-undercounted); STILL-BOUNDED 11/54 (batch-28 §2 cite "13/54" was per-axis-audit-overcounted by 2; empirical: IS:2 + CP:2 + OD:4 + CXA:3 = 11); STILL-BOUNDED-INDEFINITELY 2/54 (AS-8e + AS-8f); workspace pipeline-advanced 39/54 → 41/54 (72.2% → 75.9%). **Cardinality check at batch-29 close: 34 + 2 + 5 + 11 + 2 = 54 ✓.** Forward-only ledger discipline preserved at prior batch records; corrected counts apply at batch-29 onward.
 
+### §11.4c H_T-CP-11 — PARTIAL → RETIRED at batch-30
+
+The pre-batch-30 CP-axis CP-11 row PARTIAL classification is **superseded** by the operator-discretion ratification event filed at `batch-30` (2026-05-28; sibling-arc to batch-29 CP-14 close earlier same session):
+
+- Runtime spec v1.6 §14.7.2 step 5 cascade_policy carve-out (SAME spec section that ratified CP-14 at batch-29): "Fan-out-specific `topology.*` attributes (`fan_out_cap`, **`cascade_policy`**, `results_collected`, `results_failed`, `cascade_applied`, `synthesis_token_budget`, `cascade_decision_audit_ledger_id`, `concurrent_token_budget_at_dispatch`) are NOT set at v1.6 (out of scope per change-note 'Scope: single-sub-agent within linear parent')."
+- Empirical state at batch-30 filing: U-CP-23 + U-CP-24 carriers landed and consumed at runtime (`topology_dispatcher.py:38, 113` admissibility + `workload_engine_class_matrix.py:77` default-pattern + `t_perm_3_composition.py:275-312` T-perm-3 composition); U-CP-25 2D matrix + `d4_tunable` carriers landed with full C-CP-11 §11.3 + §11.4 cardinality; `d4_tunable` runtime invocation structurally unreachable at v1.6 MVP single-sub-agent scope (ZERO production callers verified empirically; no siblings → no cascade-decision firing point → no `ParentFanoutCloseEntry` construction). IN COMPLIANCE.
+- Bounded-scope documentation: `d4_tunable` runtime invocation deferred to v1.7+ parent-topology-expansion arc (Phase 6 substrate — SAME gate as CP-14 batch-29 §3 (a)).
+- Operator routing 2026-05-28: AskUserQuestion selected "Deep-audit CP-11 production surface" with disposition "File appropriate retirement event OR fork doc"; audit verdict was clean sub-species 7 third closure via the same v1.6 MVP scope ratification path that closed CP-14 at batch-29.
+- ZERO production code change; ZERO spec amendment; ZERO cross-axis cascade — pure retirement-audit ratification at spec-explicit operator-discretion path.
+
+**Sub-species 7 THIRD CLOSURE** — joins CP-19 batch-22 (Layer 3 e2e reframed in-process scope) + CP-14 batch-29 (v1.6 MVP single-sub-agent slice bounded scope). All three are *retirement-audit ratification at spec-explicit operator-discretion path*, distinct from sub-species 7.deployment-time-opt-in-gate (AS-8d + OD-5). THIRD same-session joint single-batch transit (CP-19 batch-22 first; CP-14 batch-29 second; CP-11 batch-30 third). SEVENTH RETIRE-READY → RETIRED close overall in ledger history. **Framing A reinforced empirically**: CP-11 + CP-14 are sibling closures from the SAME §14.7.2 step 5 v1.6 MVP scope carve-out — strengthens the case that the common-ancestor *retirement-audit ratification at spec-explicit operator-discretion path* is the canonical sub-species, with lineage (never-exercised vs deferred-then-closed) as sub-discriminator rather than sister-sub-species split.
+
+**Cardinality delta at this batch:** CP-axis RETIRED 16/22 → 17/22 (72.7% → 77.3%); workspace RETIRED 34/54 → 35/54 (63.0% → 64.8%); workspace PARTIAL 5/54 → 4/54 (CP-11 transit-out); RETIRE-READY unchanged at 2/54 (AS-8d + OD-5); STILL-BOUNDED unchanged at 11/54; STILL-BOUNDED-INDEFINITELY unchanged at 2/54; workspace pipeline-advanced 41/54 = 75.9% (unchanged — within-tier promotion CP-11 PARTIAL → RETIRED). **Cardinality check at batch-30 close: 35 + 2 + 4 + 11 + 2 = 54 ✓.** Forward-only ledger discipline preserved at prior batch records.
+
 ### §11.5 Cumulative status pointer
 
 | | Live source |
 |---|---|
-| Latest filed batch | `batch-29` (2026-05-28, H_T-CP-14 PARTIAL → RETIRE-READY → RETIRED via operator-discretion ratification of v1.6 MVP single-sub-agent slice bounded scope) |
-| Cumulative RETIRED count (raw ledger) | 34/54 (63.0%) per batch-29 §4 footer (+1 from batch-28) |
-| Cumulative pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) | 41/54 (75.9%) per batch-29 §4 footer |
+| Latest filed batch | `batch-30` (2026-05-28, H_T-CP-11 PARTIAL → RETIRE-READY → RETIRED via operator-discretion ratification of v1.6 MVP cascade_policy carve-out — sibling-arc to CP-14 batch-29 same v1.6 MVP scope statement) |
+| Cumulative RETIRED count (raw ledger) | 35/54 (64.8%) per batch-30 §4 footer (+1 from batch-29) |
+| Cumulative pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) | 41/54 (75.9%) per batch-30 §4 footer |
 | Per-axis live status | `harness-{is,as,cp,od}/CLAUDE.md` §4.1 |
 | Cross-axis cascade live status | §6.3.1 + §6.3.2 cascade re-evaluations at the batch in which the gating retirement filed (see batch-2 §3 + batch-3 referenced from `harness-od/CLAUDE.md`) |
 
