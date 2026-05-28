@@ -187,6 +187,11 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         # (Reading A path 1 absorption of fork
         # class_1_fork_u_rt_94_webhook_delivery_composer_binding_chain_absence.md).
         "webhook_delivery_composer",
+        # U-RT-100 (v2.28) — SkillActivationSpanEmitter binding per runtime
+        # spec v1.32 §4 C-RT-04 NEW field row + §14.17 C-RT-27 factory
+        # contract (Reading B operator-opt-in MVP absorption of fork
+        # class_1_fork_as_8d_skill_activation_surface_absence.md).
+        "skill_activation_emitter",
     }
     actual = set(HarnessContext.model_fields.keys())
     assert actual == expected, f"missing: {expected - actual}; extra: {actual - expected}"

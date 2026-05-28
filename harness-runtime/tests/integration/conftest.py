@@ -106,10 +106,50 @@ class FakeDaemon:
         self.stopped = True
 
 
+class _FakeSpanContext:
+    """Minimal span context-manager substrate for ``FakeTracerProvider``."""
+
+    def __init__(self, name: str, parent: "FakeTracerProvider") -> None:
+        self.name = name
+        self.attrs: dict[str, object] = {}
+        self._parent = parent
+
+    def set_attribute(self, key: str, value: object) -> None:
+        self.attrs[key] = value
+
+    def __enter__(self) -> "_FakeSpanContext":
+        self._parent.spans.append(self)
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+
+class _FakeTracer:
+    def __init__(self, parent: "FakeTracerProvider") -> None:
+        self._parent = parent
+
+    def start_as_current_span(self, name: str) -> "_FakeSpanContext":
+        return _FakeSpanContext(name, self._parent)
+
+
 class FakeTracerProvider:
     def __init__(self) -> None:
         self.flushed = False
         self.shut_down = False
+        # U-RT-101 — span capture surface for skill_activation emitter +
+        # llm_dispatch emit-time verification at integration-test boundary.
+        self.spans: list["_FakeSpanContext"] = []
+
+    def get_tracer(self, _name: str) -> "_FakeTracer":
+        """OTel ``TracerProvider`` surface — emit-time tracer acquisition.
+
+        Added at U-RT-101 e2e (AS-8d retirement gate close) per
+        ``[[verification-shape-sharpened-grep-vs-e2e]]`` — emitters must
+        be exercised end-to-end at the integration-test boundary, not just
+        at unit-test scope with private _FakeTracerProvider shims.
+        """
+        return _FakeTracer(self)
 
     def force_flush(self, timeout_millis: int = 30_000) -> bool:
         _ = timeout_millis
