@@ -659,8 +659,14 @@ def _execute_workflow_body(
         )
         if resume_at > 0:
             ctx.lifecycle_emitter.emit(WorkflowEventClass.RESUMPTION)
-    # Under pure-pattern-no-engine: no resumption-specific emission
-    # (state-ledger native dedup per §8.2 row 3 handles per-step dedup).
+    # Under pure-pattern-no-engine: no resumption-specific emission per CP spec
+    # §25.5 v1.4 scope carve-out (`workflow.resumption` CONDITIONAL row: "At v1.4
+    # scope: emit on re-entry if manifest_entry.engine_class ==
+    # save-point-checkpoint"). §8.1 declares the 5-class ResumptionKind enum +
+    # universal observable behavior at §8.3 — those are the full contract space;
+    # §25.5 carves out the v1.4 implementation scope. §8.2 row 3 governs
+    # state-ledger native dedup for the pure-pattern engine class (orthogonal
+    # to emission scope; row 3 is JOIN discipline, not emission discipline).
 
     # § 25.3.2 — Emit workflow.start.
     ctx.lifecycle_emitter.emit(WorkflowEventClass.WORKFLOW_START)
