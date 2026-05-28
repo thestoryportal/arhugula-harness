@@ -45,6 +45,7 @@ __all__ = [
     "PerDeploymentSurfaceSamplingMode",
     "SamplingDecision",
     "SamplingMode",
+    "is_always_sampled",
     "sampling_decision",
 ]
 
@@ -122,6 +123,44 @@ ALWAYS_SAMPLED_EVENT_CLASSES: frozenset[str] = frozenset(
 )  # exactly 18 entries per §9.2
 
 
+# --- §9.2 always-sampled lookup at SDK boundary ----------------------------
+#
+# `ALWAYS_SAMPLED_EVENT_CLASSES` above declares the §9.2 18-entry set
+# verbatim per spec fidelity-grammar, including two wildcard entries
+# (`audit.*` and `validator.fail.*`). At the SDK boundary the sampler
+# receives concrete span names (`"audit.signature.write"`,
+# `"validator.fail.semantic_inconsistency"`) — set-membership lookup
+# against the literal `"audit.*"` would under-sample. `is_always_sampled`
+# decomposes the set into literals + dot-anchored prefixes derived once at
+# module load and resolves the §9.2 contract at concrete span names.
+
+_ALWAYS_SAMPLED_LITERALS: frozenset[str] = frozenset(
+    {entry for entry in ALWAYS_SAMPLED_EVENT_CLASSES if not entry.endswith(".*")}
+)
+#: Dot-anchored prefixes derived from `*.*` entries in the canonical set.
+#: An incoming span name `"audit.signature.write"` matches the `"audit."`
+#: prefix; `"audit"` alone does NOT (dot anchor forecloses spurious matches).
+_ALWAYS_SAMPLED_PREFIXES: tuple[str, ...] = tuple(
+    sorted(
+        entry[:-1]  # strip trailing `*`; keep the dot anchor
+        for entry in ALWAYS_SAMPLED_EVENT_CLASSES
+        if entry.endswith(".*")
+    )
+)
+
+
+def is_always_sampled(event_name: str) -> bool:
+    """Return True iff `event_name` matches §9.2 always-sampled discipline.
+
+    Resolves both literal entries (e.g. `sandbox.violation`) and dot-anchored
+    prefix entries (e.g. `audit.*` matches `audit.signature.write` AND
+    `audit.cp.dispatch`; `audit` alone does NOT match).
+    """
+    if event_name in _ALWAYS_SAMPLED_LITERALS:
+        return True
+    return any(event_name.startswith(prefix) for prefix in _ALWAYS_SAMPLED_PREFIXES)
+
+
 def sampling_decision(
     cell_id: CellID,
     event_class: str,
@@ -129,10 +168,11 @@ def sampling_decision(
 ) -> SamplingDecision:
     """Return the sampling regime for `event_class` (C-OD-09 §9.2 / §9.3, acc #6).
 
-    Returns `SAMPLE_ALWAYS` for any event in `ALWAYS_SAMPLED_EVENT_CLASSES`
-    regardless of `base_rate`; returns `SAMPLE_AT_BASE_RATE` otherwise. The
-    always-sampled set is independent of base-rate sampling (acc #4): events in
-    the set sample at head=1.0 at every cell.
+    Returns `SAMPLE_ALWAYS` for any event in the §9.2 always-sampled set
+    (literal entries OR dot-anchored prefix entries — see `is_always_sampled`);
+    returns `SAMPLE_AT_BASE_RATE` otherwise. The always-sampled set is
+    independent of base-rate sampling (acc #4): events in the set sample at
+    head=1.0 at every cell.
 
     `cell_id` and `base_rate` are accepted per the U-OD-11 signature; the
     always-sampled decision is uniform across all cells (§9.3 per-cell
@@ -141,6 +181,6 @@ def sampling_decision(
     composition substrate for the C-OD-10 base-rate regime.
     """
     del cell_id, base_rate  # uniform across cells per §9.3; no branch here
-    if event_class in ALWAYS_SAMPLED_EVENT_CLASSES:
+    if is_always_sampled(event_class):
         return SamplingDecision.SAMPLE_ALWAYS
     return SamplingDecision.SAMPLE_AT_BASE_RATE

@@ -18,23 +18,23 @@ C-RT-06 construction sequence (4 steps; U-RT-27 lands steps 1, 2, 4):
    registration that landed OD `operator_burden_eval_primitives.py`'s
    `get_tracer_provider()` call depends on.
 
-**Sampler choice (spec-deferred per §6).** The spec defers sampler choice
-to implementation discretion ("suggest `ParentBased(TraceIdRatioBased)`
-mapped from `RuntimeConfig.otel.sampler_mode`"). At HEAD this module binds
-`ParentBased(ALWAYS_ON)` for both `HEAD_BASED_DEV` and `TAIL_BASED_PROD`
-modes:
+**Sampler choice (project-authored, C-OD-09 §9.2-honoring).** This module
+binds `ParentBased(root=HarnessCompositeSampler(base_rate=1.0))` per OD
+spec v1.2 §9.2 always-sampled-set discipline:
 
-- `HEAD_BASED_DEV` (local-development): head=1.0 verbatim per C-OD-09 §9.1.
-- `TAIL_BASED_PROD` (self-hosted-server + managed-cloud): the SDK emits
-  every span; tail-decision happens at the OTLP collector boundary (C-OD-09
-  §9.3 tail-keep-on-classification + the 18-event `ALWAYS_SAMPLED_EVENT_CLASSES`
-  inviolable floor). Tail-side sampling at the collector is the canonical
-  surface; SDK-side under-sampling here would silently drop members of the
-  always-sampled set. `ParentBased(ALWAYS_ON)` is the safe over-sample
-  default.
+- `HEAD_BASED_DEV` (local-development): MVP base_rate=1.0 matches §10.3
+  solo-developer × local-development row; the §9.2 always-sampled set is
+  honored as defense-in-depth (members sample at head=1.0 regardless of
+  ratio).
+- `TAIL_BASED_PROD` (self-hosted-server + managed-cloud): SDK emits
+  per-base_rate at root spans NOT in the always-sampled set; tail-decision
+  at the OTLP collector boundary is owed at a follow-on arc (C-OD-09 §9.1
+  tail-keep-on-classification + per-attribute conditional-row refinement
+  at §9.2 — both deferred).
 
-A custom event-class-aware sampler (honoring `ALWAYS_SAMPLED_EVENT_CLASSES`
-at the SDK boundary as a defense-in-depth) is deferred to a future unit.
+H_T-OD-3 STILL-BOUNDED → PARTIAL at this binding (substrate retired; full
+RETIRE-READY gates on tail-keep-on-classification + persona-tier-aware
+base_rate envelope).
 
 **Global-state caveat.** `set_tracer_provider(...)` is process-global and
 one-shot per OTel SDK semantics (subsequent calls log a warning and are
@@ -69,7 +69,9 @@ from typing import Final
 from opentelemetry import trace as ot_trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.sampling import ALWAYS_ON, ParentBased, Sampler
+from opentelemetry.sdk.trace.sampling import Sampler
+
+from harness_od.composite_sampler import build_default_sampler
 
 from harness_runtime.config.otel_config import (
     build_resource_attributes,
@@ -85,12 +87,13 @@ __all__ = [
 ]
 
 
-#: The default SDK sampler at HEAD per the module docstring's sampler-choice
-#: rationale: parent-based always-on, safe across both `HEAD_BASED_DEV` and
-#: `TAIL_BASED_PROD` modes. A future unit may replace this with an
-#: event-class-aware sampler honoring `ALWAYS_SAMPLED_EVENT_CLASSES` at the
-#: SDK boundary.
-_DEFAULT_SAMPLER: Final[Sampler] = ParentBased(root=ALWAYS_ON)
+#: The default SDK sampler at HEAD: `ParentBased(root=HarnessCompositeSampler)`
+#: per OD spec v1.2 §9.2 always-sampled set discipline (project-authored
+#: sampler honoring §9.2 at the SDK boundary as defense-in-depth). H_T-OD-3
+#: STILL-BOUNDED → PARTIAL transit at this binding. Production-surface
+#: tail-keep-on-classification at the OTLP collector boundary per C-OD-09 §9.1
+#: is deferred to a follow-on arc.
+_DEFAULT_SAMPLER: Final[Sampler] = build_default_sampler()
 
 
 class TracerProviderBindError(Exception):
@@ -186,9 +189,9 @@ def materialize_tracer_provider_stage(
         global state.
     sampler :
         Optional SDK `Sampler` override; defaults to `_DEFAULT_SAMPLER`
-        (`ParentBased(ALWAYS_ON)`) per the module docstring's sampler-choice
-        rationale. Tests pass deterministic samplers; production code does not
-        thread this argument.
+        (`ParentBased(root=HarnessCompositeSampler(base_rate=1.0))`) per the
+        module docstring's sampler-choice rationale. Tests pass deterministic
+        samplers; production code does not thread this argument.
 
     Returns
     -------
