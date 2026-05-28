@@ -1,7 +1,17 @@
 # Class 1 Fork — WebhookDeliveryComposer per-workflow context threading
 
 **Filed:** 2026-05-28 (post-U-OD-40 RETIRE-READY transit at batch-28; closure-event lineage for batch-28 §3 (i) Class 3 informational gap)
-**Status:** PROPOSING (awaiting operator AskUserQuestion ratification)
+**Status:** RATIFIED-AND-APPLYING (Q-set ratified at operator AskUserQuestion 2026-05-28)
+
+**Q-set ratification (2026-05-28):**
+
+| Q | Ratification |
+|---|---|
+| Q1 — Reading selection | **(A) per-call params** |
+| Q2 — Factory signature shape | mirror validator factory mechanism (a): `materialize_webhook_delivery_composer_stage(config, ctx, *, rate_table=None, cost_chain=None, audit_writer=None) -> WebhookDeliveryComposer \| None` |
+| Q3 — Production caller update site | `hitl_gate_composer.py:1002` — `step_context.workflow_id` / `step_context.parent_action_id` (precedent at line 488/876) / `step_context.parent_idempotency_key` (precedent at lines 465/508) / `step_context.tenant_id` (precedent at line 792). All 4 per-workflow params sourced via `step_context.*` empirically confirmed in scope at the call site. |
+| Q4 — Cross-axis cascade | **ZERO** — intra-runtime-spec interface contract change |
+| Q5 — Co-publication shape | **Single-session full arc** — runtime spec v1.34 + plan v2.30 + impl + tests + retirement batch-29 + workspace `CLAUDE.md` row bumps |
 **Authority anchor:** Workspace `CLAUDE.md` §4.4 X-AL-3 (no silent H_T design extension at Phase 7 execution-time) + Phase 7 back-flow routing per `Project_Workflow_v1_10.md` §2.7.6
 **Mirror precedent:** `.harness/class_1_fork_u_od_40_validator_post_evaluate_hook.md` (sibling U-OD-40 surface — validator) + `.harness/class_1_fork_u_rt_94_webhook_delivery_composer_binding_chain_absence.md` (predecessor binding-chain absence arc — original `WebhookDeliveryComposer` factory authoring)
 

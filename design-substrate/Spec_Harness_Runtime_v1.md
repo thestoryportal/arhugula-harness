@@ -1,4 +1,41 @@
-# Specification — Harness Runtime v1.33
+# Specification — Harness Runtime v1.34
+
+## Change-note (v1.33 → v1.34)
+
+**Scope of revision.** Class 1 fork resolution Reading A apply pass per `.harness/class_1_fork_webhook_composer_per_workflow_context_threading.md` operator-ratified 2026-05-28 (Q1=A per-call params; Q2 mirror validator factory mechanism (a); Q3 `step_context.*` 4-axis source; Q4 ZERO cross-axis cascade; Q5 single-session full arc). Closes the v1.26 §14.16 binding-chain absence arc successor — the WebhookDeliveryComposer ctor stored `workflow_id` / `parent_action_id` / `parent_idempotency_key` / `tenant_id` as instance state (a per-workflow scoping shape) but the bootstrap-singleton factory at stage 5 LOOP_INIT cannot populate per-workflow params at bootstrap-time. The integration test at `test_u_od_40_validator_webhook_integration.py:159-170` (post-batch-28) confirmed: the composer is constructed PER-WORKFLOW-EXECUTION with workflow context bound at ctor — structurally incompatible with the §14.16 bootstrap-singleton design. Batch-28 §3 (i) catalogued the gap as Class 3 informational; pre-substantive empirical orientation at this arc promoted to Class 1 per X-AL-3 (the gap requires interface contract change at v1.33 §14.10 C-RT-20 `deliver_webhook` signature). v1.34 widens the `deliver_webhook` signature to accept the 4 per-workflow params as kw-only per-call values (composer becomes stateless w.r.t. workflow scope; bootstrap-singleton design preserved); the factory signature widens to thread cost-attribution substrates (`rate_table` + `cost_chain` + `audit_writer`) from `ctx` at bootstrap (mirror validator factory mechanism (a) per v1.18 §14.13.7 ratification at U-OD-40). Production caller at `harness-runtime/src/harness_runtime/lifecycle/hitl_gate_composer.py:1002` passes the 4 per-workflow values per-call from `step_context.*` (all 4 axes empirically in scope at the call site).
+
+**Source of fix.** `.harness/class_1_fork_webhook_composer_per_workflow_context_threading.md` Q1=(A) operator-ratified 2026-05-28. Reading (B) per-workflow construction via builder pattern was the alternative; (A) selected for smaller surface change + bootstrap-singleton preservation + mirror validator-hook + skill-activation-hook stateless-w.r.t.-workflow-scope posture.
+
+**Amendments.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§14.10.1 C-RT-20 `WebhookDeliveryComposer.__init__` signature** | STRIP 4 fields: `workflow_id` / `parent_action_id` / `parent_idempotency_key` / `tenant_id` REMOVED from ctor params. Retains: `retry_max_attempts` / `retry_base_delay_seconds` / `tracer_provider` / `http_client_factory` / `sleep_fn` / `rate_table` / `cost_chain` / `audit_writer` (cost substrates remain bootstrap-singleton lifetime). The composer is now stateless w.r.t. workflow scope. | Q1=A ratification |
+| **§14.10.1 C-RT-20 `deliver_webhook(...)` signature** | WIDEN signature `deliver_webhook(brief, idempotency_key)` → `deliver_webhook(brief, idempotency_key, *, workflow_id, parent_action_id, parent_idempotency_key, tenant_id=None)` (4 NEW kw-only per-call params; `tenant_id` defaults `None` for single-tenant deployments per CP spec v1.22 binding-fix precedent; the other 3 are required). The `_attribute_webhook_cost_best_effort(...)` invocation consumes per-call values not instance state. | Q1=A ratification + Q3 `step_context.*` source enumeration |
+| **§14.16.2 C-RT-26 `materialize_webhook_delivery_composer_stage` signature** | WIDEN signature to accept 3 NEW kw-only cost-attribution substrate params: `rate_table: RateTable \| None = None` + `cost_chain: CostAttributionChain \| None = None` + `audit_writer: AuditLedgerWriter \| None = None`. Mirror validator factory mechanism (a) per v1.18 §14.13.7. When all 3 are bound, factory threads them through composer ctor on opt-in branch; when any is `None`, cost-attribution disabled (composer constructed without cost substrates; preserves pre-v1.34 default-off behavior). | Q2 ratification |
+| **§14.16.3 Stage-5 LOOP_INIT invocation** | Stage-5 invocation at `bootstrap/stage_5_loop_init.py` passes `ctx.rate_table` + `ctx.cost_chain` + `ctx.audit_writer` to the factory (analogous to `stage_4_od.py:89` validator factory invocation post-U-OD-40). | Q2 + Q5 ratification |
+
+**Adjacent harmonization sites.** §14.8.8.1 step 0 OR-form precondition AND-arm at `ctx.webhook_delivery_composer is None` PRESERVED VERBATIM (bootstrap-singleton design preserved). §14.16.5 operator-opt-in RETIRE-READY pattern PRESERVED VERBATIM (`webhook_delivery_composer_config` opt-in semantics unchanged). §14.10 retry/breaker semantics + §14.10.1 outbound HTTP shape PRESERVED VERBATIM (only ctor + `deliver_webhook` signature changed; retry-policy + HTTP client substrate + sleep_fn injection seams unchanged). §14.16.4 `RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE` fail class PRESERVED VERBATIM.
+
+**Sections preserved verbatim from v1.33.** All v1.33 change-note (AS-8f Q1=(C) DEFER INDEFINITELY ratification record). All v1.32 contract bodies + NEW §14.17 C-RT-27 SkillActivationSpanEmitter. All v1.17 §14.5.1 Memory tool storage-backend callback binding + §14.12 C-RT-22 `MemoryToolRegistry`. The v1.31 + v1.30 + ... + v1 lineage chain all preserved.
+
+**Status posture.** Proposed (v1.33) → **Proposed (v1.34)**. v1.34 is a Class 1 fork resolution apply pass under X-AL-3 spec extension discipline — interface contract change at §14.10.1 `WebhookDeliveryComposer` ctor + `deliver_webhook` method signature + §14.16.2 factory signature. ZERO cross-axis cascade per Q4 ratification (intra-runtime-spec).
+
+**Downstream absorption owed (post-v1.34).**
+
+(a) Workspace `CLAUDE.md` §2.3 runtime row version bump (v1.33 → v1.34); co-published this arc.
+
+(b) Runtime plan v2.29 → v2.30 single-unit-body amendments at U-RT-94 (composer ctor + `deliver_webhook` signature) + U-RT-97 (factory signature widening); ZERO new unit; co-published this arc.
+
+(c) harness-runtime impl: composer.py ctor strip + `deliver_webhook` widening + factory threading + stage_5 invocation + hitl_gate caller update; co-published this arc.
+
+(d) Test refresh at integration + cost-dispatch + factory test suites; co-published this arc.
+
+(e) `.harness/phase-7d-retirement-events-batch-29.md` NEW filing — OD-5 surface-coverage doc-hygiene refresh (RETIRE-READY status preserved; deployment-time gate per AS-8d precedent unchanged); co-published this arc.
+
+**Adjacent observations.** None patched per FM-2 single-focus arc scope.
+
+---
 
 ## Change-note (v1.32 → v1.33)
 
