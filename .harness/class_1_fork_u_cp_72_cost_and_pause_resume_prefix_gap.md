@@ -2,7 +2,9 @@
 
 **Filed:** 2026-05-22 at 10-CP-D cluster open (during `phase-7-implementation` skill §3.4 dependency-verification step for U-CP-72).
 
-**Status:** OPEN (partial-land planned per `[[halt-route-split-AC-pattern]]` memory; 6 of 8 prefix branches materializable; 2 cross-axis-blocked).
+**Status:** ✅ ALL-RESIDUALS-CLOSED-OR-WONT-FIX per §11 (status-line refreshed 2026-05-27) — cost-axis Sub-arc B FULLY CLOSED 2026-05-24 (8-commit chain across CXA v2.9 §2.3.7 row 8 + OD spec v1.10 NEW §C-OD-26.6 + OD plan v2.17 U-OD-41 + impl + bucket-count refresh + step_execution_context workflow_id 5-commit arc); pause/resume Sub-arc A LANDED `5d6051d` + helper-contract authoring 3-commit arc 2026-05-24 (OD spec v1.11 NEW §C-OD-30.4 + OD plan v2.18 U-OD-51 + impl with 59 tests PASS) + production-wiring LANDED at batch-18 H_T-CP-22 RETIRED `671f195`; workflow-layer audit-write CLOSED-as-WON'T-FIX `1b7bcb0` (recovery path preserved at §11 if concrete consumer surfaces). Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
+_Original filing footer:_ **Status:** OPEN (partial-land planned per `[[halt-route-split-AC-pattern]]` memory; 6 of 8 prefix branches materializable; 2 cross-axis-blocked).
 
 **Trigger.** Implementation_Plan_Control_Plane_v2_15.md U-CP-72 AC #1 mandates routing for 8 action_id prefixes (`dispatch:` / `hitl:` / `hitl_webhook:` / `operator_burden:` / `validator:` / `pause:`+`resume:` / `mcp_trust:` / `cost:`). AC #2 mandates each branch produces a correct AuditPayload subclass per OD spec.
 

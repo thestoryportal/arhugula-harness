@@ -11,6 +11,8 @@ related_memories: [[h-t-cp-16-17-retire-ready-gate-runtime-composer-arcs]], [[re
 
 # Class 1 fork: H_T-CP-16 + H_T-CP-17 executable consumer absence
 
+**Status:** ✅ RATIFIED-AMENDED + PARTIAL-RETIREMENT 2026-05-23..2026-05-24 (status-line refreshed 2026-05-27) — fork RATIFIED-AMENDED per §16 (Memory-only scope per §14.C; Files arc deferred indefinitely); H_T-CP-16 RETIRED at batch-14 `4479b07` (U-RT-82 e2e vs real Anthropic API); H_T-CP-18 + H_T-AS-2 jointly RETIRED at batch-16 `8e6311f` (U-RT-86 e2e vs in-process FastMCP); H_T-CP-17 preserved PARTIAL pending Files arc operator-discretion. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
 ## §1 Fork detection
 
 **Trigger event.** Retirement-gate empirical re-evaluation at batch-11 v1.5 re-invocation arc + follow-on gate analysis (2026-05-23, post-`b2cf37b`). H_T-CP-16 + H_T-CP-17 transitioned STILL-BOUNDED → PARTIAL at batch-11 §2 + §3 against v1.4-augmented cite shapes (`U-AS-28 + U-AS-31`). PARTIAL → RETIRE-READY gate analysis at memory `[[h-t-cp-16-17-retire-ready-gate-runtime-composer-arcs]]` surfaces structural defect: **the gate cannot be cleared at the current spec corpus.**

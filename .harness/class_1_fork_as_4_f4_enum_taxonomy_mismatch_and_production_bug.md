@@ -1,7 +1,9 @@
 # Class 1 Fork — AS-4 F4 enum taxonomy mismatch + production bug at runtime_tool_dispatcher.py
 
 **Filed:** 2026-05-25 (H_T-AS-4 retirement arc scope-discriminator pass)
-**Status:** OPEN — Class 1 (halt-execution); routes to design-phase back-flow before AS-4 impl proceeds
+**Status:** ✅ APPLIED 2026-05-26 (status-line refreshed 2026-05-27) — Reading B arc 2 landed: AS spec v1.6 → v1.7 §15.8 `MCPInvocationFailClass` 4-value StrEnum + §15.9 dual-attribute `mcp.fail.class` emission + §15.10 projection table; AS plan v1.3 → v1.4 U-AS-03 + U-AS-17 absorption; harness-as carrier impl + harness-runtime dispatcher bug fix at `runtime_tool_dispatcher.py:395-412` + 17+5 new tests; retirement batch-19 H_T-AS-4 PARTIAL → RETIRED. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
+_Original filing footer:_ **Status:** OPEN — Class 1 (halt-execution); routes to design-phase back-flow before AS-4 impl proceeds
 **Halt target:** H_T-AS-4 retirement arc (PARTIAL since batch-13; sweep claimed "1-attr gap on sandbox.violation"; discriminator audit revealed the gap is structural, not 1-attr)
 **Routing target:** AS spec v1.5 → v1.6 amendment (F4 enum extension OR MCP-protocol-layer fail-class taxonomy addition) — operator routing decision required at systems-architect Mode 3 recommendation
 **Detection mode:** Discriminator audit per `[[verification-shape-sharpened-grep-vs-e2e]]` + advisor-flagged bug investigation at runtime_tool_dispatcher.py:380-420

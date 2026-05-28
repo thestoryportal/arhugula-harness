@@ -1,7 +1,9 @@
 # Class 1 fork — GenAI span-name four-way drift across AS spec / OD spec / OD helper / production
 
 **Filed:** 2026-05-26 (AS-8 follow-on discriminator audit per checkpoint `20260526-175836-as-4-retired-as-8-partial-advance.md` §"Remaining Work" item 1)
-**Status:** OPEN — awaiting operator routing decision
+**Status:** ✅ FULLY-APPLIED 2026-05-26 (status-line refreshed 2026-05-27) — R1/R2/R3 all ratified-and-applied per §7.4.1/§7.4.2/§7.4.3 across AS spec v1.7 (alias-term `the LLM inference span` abstraction at §14.1) + OD spec v1.12 (§C-OD-04 §4.1 3-token → 2-token byte-exact to OTel 1.41.0) + runtime spec v1.27 (§14.5 deferral STRIKE) + 12-site production refactor at `llm_dispatch.py:324` + helper carrier + test alias-aware assertion; findings (f)/(g)/(h) RESOLVED at body §8/§9/§10. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
+_Original filing footer:_ **Status:** OPEN — awaiting operator routing decision
 **Class:** 1 (halt-execution semantics — design-phase artifact requires revision; production span-name does not match any spec; cited external authority contradicts the OD-spec canonical reading from Tension 004)
 **Predecessor:** Tension 004 (`Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md`, 2026-05-15) — this fork re-opens that resolution against the actual 1.41.0 text
 **Adjacent:** `.harness/class_3_drift_c_od_04_gen_ai_binding_site_silence.md` (2026-05-25) — line 34 silently absorbed the divergence
