@@ -83,7 +83,9 @@ Paths B (CP-axis ownership) and C (defer to Phase 2 / Track B) were considered a
 3. Following session: implement U-RT-58 per `phase-7-implementation` skill discipline.
 4. Following landing: file retirement events for H_T-CP-3 + H_T-CP-4 + full-retire H_T-CP-5 (PARTIAL → RETIRED); update §6.3.2 cascade evaluation (CXA-5 unblocks once CP-3 RETIRED).
 
-**Status:** OPEN — awaiting spec + plan amendment; runtime composer implementation arc cannot open until both land.
+**Status:** ✅ CLOSED (status-line refreshed 2026-05-28 Phase 1 status-cascade sweep per workflow v1.12 §7.4.7.3.B) — spec C-RT-16 + plan U-RT-58 landed 2026-05-20 at commit `1f2f015` ("spec+plan: C-RT-16 + U-RT-58 — retry/breaker/fallback composer wrapping C-RT-15"); runtime composer arc resolved. H_T-CP-3/CP-4/CP-5 retirement cascade per memory `[[fork-cp-3-retry-breaker-composer-underspec]]`. Species 3 stale-carry per workflow v1.12 §7.4.7.2.
+
+**Status:** OPEN — awaiting spec + plan amendment; runtime composer implementation arc cannot open until both land. *(historical, predates 2026-05-20 closure)*
 
 ## Bounded scope (X-AL-3 discipline)
 

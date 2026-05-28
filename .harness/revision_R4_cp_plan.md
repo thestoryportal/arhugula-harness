@@ -1,6 +1,8 @@
 # Revision R4 — Control Plane Plan: Materializability Conformance (v2.5 → v2.6)
 
-**Status:** Proposed
+**Status:** ✅ ABSORBED-INTO-CANONICAL-PLAN (status-line refreshed 2026-05-28 Phase 1 status-cascade sweep per workflow v1.12 §7.4.7.3.B) — R4 ratified + applied; CP plan now at canonical v2.27 per workspace `CLAUDE.md` §2.4 CP row (R4 targeted v2.6); revision proposal superseded by 21 subsequent CP plan delta versions. Species 3 stale-carry per workflow v1.12 §7.4.7.2.
+
+**Status:** Proposed *(historical; predates 2026-05-15 ratification)*
 **Revision pass:** R4 — CP plan materializability conformance (the fourth of the 5-pass carrier-map absorption sequence R1–R5; the largest — 56 units, 24 forks).
 **Authored:** 2026-05-15 by the `implementation-planner` role in revision-pass sub-mode (`implementation-planner` SKILL.md §8).
 **Mode:** Revision-pass. This is a **revision PROPOSAL artifact**, not an applied plan edit. The operator ratifies before any `design-substrate/` plan is amended.

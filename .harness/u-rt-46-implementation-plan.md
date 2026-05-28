@@ -1,6 +1,8 @@
 # U-RT-46 — shutdown() orchestrator (closes L10)
 
-**Status:** in-progress
+**Status:** ✅ SUPERSEDED-BY-CANONICAL-PLAN (status-line refreshed 2026-05-28 Phase 1 status-cascade sweep per workflow v1.12 §7.4.7.3.B) — historical Phase 2 session-3 work-note pre-canonical-Phase-7-plan. Production shutdown() orchestrator at `harness-runtime/src/harness_runtime/shutdown.py`; canonical unit tracking at `design-substrate/Implementation_Plan_Harness_Runtime_v2_30.md`. Species 3 stale-carry per workflow v1.12 §7.4.7.2.
+
+**Status:** in-progress *(historical; predates Phase 7 canonical plan)*
 **Spec:** `Spec_Harness_Runtime_v1.md` v1.1 §10 (C-RT-10) — full shutdown sequence
 **Decomposition:** L10 U-RT-46
 **Predecessor:** U-RT-45 (`flush_observability`) at commit `5c73a02`

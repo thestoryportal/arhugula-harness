@@ -1,7 +1,9 @@
 # Substitution Retirement Carry-Forward — `PRICE_TABLE_REF`
 
 **Class:** Substitution retirement event (bounded H_E residual per X-AL-2)
-**Status:** 🛑 OPEN — bounded residual; carried forward
+**Status:** ✅ RETIRED (status-line refreshed 2026-05-28 Phase 1 status-cascade sweep per workflow v1.12 §7.4.7.3.B) — RETIRED 2026-05-21 at U-OD-38 landing `7104fd7` ("feat(U-OD-38 cluster 4-OD-D impl arc, commit 1/2 partial): cost-attribution at LLM dispatch site") via `resolve_for(RATE_TABLE_V1, provider, model)` per memory `[[fork-price-table-ref-substitution-retirement]]`. Species 3 stale-carry per workflow v1.12 §7.4.7.2.
+
+**Status:** 🛑 OPEN — bounded residual; carried forward *(historical, predates 2026-05-21 retirement)*
 **Filed:** 2026-05-20 alongside CP spec v1.5 §25.9 absorption (`.harness/fork_u_rt_49_cost_attribution_invocation_underspec.md` resolution arc)
 **Substrate:** `harness-od/src/harness_od/cost_formula.py:69` — `PRICE_TABLE_REF: PriceTableRef = PriceTableRef("od-price-table-ref::deferred-to-U-OD-21")`
 

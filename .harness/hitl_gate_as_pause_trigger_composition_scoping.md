@@ -4,7 +4,9 @@
 **Mode:** Systems-architect Mode 3 — Phase-7 architectural-tension-resolution recommendation under skill §4A discipline.
 **Scope:** Runtime spec v1.21 §14.14.7 deferral (i), preserved verbatim through v1.22/v1.23:
 > *HITL-gate-as-pause-trigger composition. Per the change-note adjacent defect (i): the HITL gate composer body firing `ctx.pause_requested_flag.set()` on durable-async cell synchrony per C-CP-18 §18.3 is a follow-on arc (workflow-driver HITL-gate-composer integration; out of v1.21 scope). The v1.21 contract authors the per-step pre-entry detection point + caller-side flag-signal surface only.*
-**Status:** RECOMMENDATION — operator decides per §6. Does NOT edit spec/plan/ADR. Does NOT extend H_T design (I-2 / X-AL-3).
+**Status:** ✅ RECOMMENDATION-ACTED-ON (closure note refreshed 2026-05-28 Phase 1 status-cascade sweep per workflow v1.12 §7.4.7.3.B) — operator ratified D1-D8 Q-set; absorbed at runtime spec v1.24 §14.8.8 durable-async cell HITL composition + plan v2.23 NEW L9-terdecies cluster U-RT-93/94/95 + impl arc. Webhook signature divergence subsequently caught + resolved at v1.34 Reading H. Original advisory framing preserved below.
+
+**Status:** RECOMMENDATION — operator decides per §6. Does NOT edit spec/plan/ADR. Does NOT extend H_T design (I-2 / X-AL-3). *(original advisory state at filing 2026-05-24)*
 **Filing trigger:** Operator authorization to proceed on checkpoint `20260524-130230` item #1 + advisor sanity-check confirming the carry-forward block "C-RT-19 / U-RT-61 durable-async swap" is stale-lineage cite (C-RT-19 reassigned to RuntimeToolDispatcher at v1.13; U-RT-61 not present in v2.20 plan).
 
 ---

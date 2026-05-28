@@ -3,7 +3,9 @@
 **Filed:** 2026-05-24 at HEAD `0459a3d` (post Reading-A absorption batch-17; runtime spec v1.21; CP spec v1.13; OD spec v1.11; CXA v2.9).
 **Mode:** Systems-architect Mode 3 — Phase-7 architectural-tension-resolution recommendation under skill §4A discipline.
 **Scope:** Reading B at `.harness/class_1_fork_validator_composer_arc_stage_4_absence.md` §3.2 — the full validator-composer arc currently deferred at runtime spec v1.21 §14.8.2 steps 3 / 4c / 4d.
-**Status:** RECOMMENDATION — operator decides per §6. Does NOT edit spec/plan/ADR. Does NOT extend H_T design (I-2 / X-AL-3).
+**Status:** ✅ RECOMMENDATION-ACTED-ON (closure note refreshed 2026-05-28 Phase 1 status-cascade sweep per workflow v1.12 §7.4.7.3.B) — operator ratified D2 = Open Reading B NOW + D1 = Q2(c-i) 2026-05-24; absorbed at runtime spec v1.22 (`918f94a`) + plan v2.21 L9-duodecies cluster U-RT-90/91/92 + 4 impl commits with 29/29 tests PASS. Fork `class_1_fork_validator_composer_arc_stage_4_absence.md` Reading A + Reading B both APPLIED per memory `[[fork-validator-composer-arc-stage-4-absence]]`. Original advisory framing preserved below.
+
+**Status:** RECOMMENDATION — operator decides per §6. Does NOT edit spec/plan/ADR. Does NOT extend H_T design (I-2 / X-AL-3). *(original advisory state at filing 2026-05-24)*
 **Filing trigger:** Operator authorization to proceed on prior-checkpoint Item #6 + advisor sanity-check confirming the fork doc's 8-15-commit estimate predates Reading A landing and warrants re-scoping against current canonical state.
 
 ---
