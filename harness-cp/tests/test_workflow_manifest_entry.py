@@ -49,9 +49,10 @@ def _entry(**over: object) -> WorkflowManifestEntry:
     return WorkflowManifestEntry(**base)  # type: ignore[arg-type]
 
 
-def test_workflow_manifest_entry_eleven_fields() -> None:
-    """v2.12 — `entry_version` field added per CP plan v2.12 §2.2."""
-    assert len(WorkflowManifestEntry.model_fields) == 11
+def test_workflow_manifest_entry_twelve_fields() -> None:
+    """v1.20 — `default_gate_level` field added per CP spec v1.20 §6.1.Y
+    Reading A absorption (was 11 at v2.12)."""
+    assert len(WorkflowManifestEntry.model_fields) == 12
     assert set(WorkflowManifestEntry.model_fields) == {
         "workflow_id",
         "workload_class",
@@ -64,6 +65,7 @@ def test_workflow_manifest_entry_eleven_fields() -> None:
         "sub_agent_briefs",
         "per_step_overrides",
         "entry_version",
+        "default_gate_level",
     }
 
 
@@ -84,6 +86,32 @@ def test_workflow_manifest_entry_accepts_explicit_entry_version() -> None:
     """v2.12 — operators bump entry_version when workflow contract changes."""
     entry = _entry(entry_version=42)
     assert entry.entry_version == 42
+
+
+def test_workflow_manifest_entry_has_default_gate_level_field() -> None:
+    """v1.20 — `default_gate_level` materialized at U-CP-13 carrier per
+    CP spec v1.20 §6.1.Y Reading A absorption."""
+    from harness_cp.gate_level_rule import GateLevel
+
+    assert "default_gate_level" in WorkflowManifestEntry.model_fields
+    field_info = WorkflowManifestEntry.model_fields["default_gate_level"]
+    assert field_info.annotation == GateLevel | None
+
+
+def test_workflow_manifest_entry_default_gate_level_is_none() -> None:
+    """v1.20 — default value None preserves v1.6 MVP behavior at construction
+    sites that do not surface the field; workflow_driver falls back to
+    GateLevel.AUTO at composition site."""
+    entry = _entry()
+    assert entry.default_gate_level is None
+
+
+def test_workflow_manifest_entry_accepts_explicit_default_gate_level() -> None:
+    """v1.20 — operators surface gate-level seed per ratified Reading A."""
+    from harness_cp.gate_level_rule import GateLevel
+
+    entry = _entry(default_gate_level=GateLevel.ASK)
+    assert entry.default_gate_level is GateLevel.ASK
 
 
 def test_workload_class_mandatory() -> None:

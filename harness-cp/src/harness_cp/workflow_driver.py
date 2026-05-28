@@ -727,15 +727,26 @@ def _execute_workflow_body(
             run_idempotency_key, step_index
         )
         # MVP defaults per C-CP-12 §12.4 + Spec_Control_Plane_v1_6.md §25.2.1:
-        # parent_gate_level = AUTO; parent_sandbox_tier = TIER_1_PROCESS;
-        # parent_entry_hash = "" (child shares parent ledger writer per
-        # C-RT-17 §14.7.4); tenant_id = None (multi-tenancy not at v1.6 stack).
+        # parent_gate_level: sourced from manifest_entry.default_gate_level
+        # per CP spec v1.20 §6.1.Y Reading A absorption (X-AL-3 silent-
+        # absorption gap closed at v1.20 per
+        # `.harness/class_1_fork_h_t_cp_19_default_gate_level_spec_extension.md`).
+        # None → GateLevel.AUTO preserves the v1.6 MVP hardcoded default
+        # at construction sites that do not surface the field; operator-
+        # supplied (not None) values flow through unchanged.
+        # parent_sandbox_tier = TIER_1_PROCESS; parent_entry_hash = ""
+        # (child shares parent ledger writer per C-RT-17 §14.7.4); tenant_id
+        # = None (multi-tenancy not at v1.6 stack).
         step_context = StepExecutionContext(
             workflow_id=manifest_entry.workflow_id,
             parent_action_id=(
                 f"workflow:{manifest_entry.workflow_id}:step:{step_index}"
             ),
-            parent_gate_level=GateLevel.AUTO,
+            parent_gate_level=(
+                manifest_entry.default_gate_level
+                if manifest_entry.default_gate_level is not None
+                else GateLevel.AUTO
+            ),
             parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
             parent_actor=ctx.ledger_writer.actor,
             parent_entry_hash="",
