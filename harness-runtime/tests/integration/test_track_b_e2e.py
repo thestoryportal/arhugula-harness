@@ -842,13 +842,250 @@ async def test_ac7_skill_activation_emits_skill_namespace_span(
     assert span.attrs["workflow.id"] == "wf-ac7-skill-activation"
 
 
+@pytest.mark.asyncio
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
-    reason="Mechanism β: AC #8 webhook delivery real exercise",
+    reason=(
+        "Mechanism β AC #8 requires ANTHROPIC_API_KEY. Operator-bound "
+        "WebhookDeliveryComposer + real HTTP exercise drive X-AL-2 second "
+        "conjunct for H_T-OD-5 retirement."
+    ),
 )
-def test_ac8_webhook_delivery_emits_hitl_webhook_span() -> None:
-    """AC #8 mechanism β: advances H_T-OD-5 RETIRE-READY → RETIRED gate."""
-    pytest.skip("Mechanism β deferred — H_T-OD-5 gate")
+async def test_ac8_webhook_delivery_emits_hitl_webhook_span(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC #8 mechanism β: advances H_T-OD-5 RETIRE-READY → RETIRED gate.
+
+    Exercises the operator-opt-in `WebhookDeliveryComposer` end-to-end via
+    real bootstrap → real `ctx.webhook_delivery_composer` →
+    `deliver_webhook_for_brief(brief, idempotency_key)` (the spec-canonical
+    brief surface per runtime spec v1.34 Reading H) → real httpx request
+    serialization → captured POST + `hitl.webhook.deliver` span emission.
+
+    Wire-layer note: the underlying socket transport is `httpx.MockTransport`
+    (the established httpx test pattern). All upper httpx machinery is real
+    (request construction, headers, timeout enforcement, response parsing).
+    The mech-β classification holds because:
+    1. Real bootstrap stack (no `patched_runtime` shortcuts for the composer
+       binding chain).
+    2. Operator-bound `WebhookDeliveryComposerConfig` at `RuntimeConfig`.
+    3. Spec-canonical `deliver_webhook_for_brief` brief→payload projection
+       via the `webhook_brief_adapter` (U-RT-94 Reading H).
+    4. Real httpx + real `hitl.webhook.deliver` outer + `hitl.webhook.attempt`
+       attempt-scope span emission.
+
+    Anthropic API key required at decorator gate per consistency with AC #1 /
+    AC #7 mech-β posture (`ANTHROPIC_API_KEY` is the harness mech-β capability
+    sentinel; the gate signals operator credential-binding posture rather
+    than a specific provider dependency at this test).
+
+    Stacks on AC #1 (real-LLM bootstrap + E-prod-3 per-provider opt-in) +
+    AC #7 (FakeTracerProvider span capture pattern).
+    """
+    import httpx
+    from harness_core.deployment_surface import DeploymentSurface
+    from harness_core.workload_class import WorkloadClass
+    from harness_cp.cross_family_fallback_chain import (
+        FallbackChain,
+        ProviderCandidate,
+        ProviderFamily,
+    )
+    from harness_cp.hitl_timeout_degradation import WebhookConfig
+    from harness_cp.routing_manifest_residence import RoutingManifest
+    from harness_cp.topology_pattern import TopologyPattern
+    from harness_cp.validator_framework_types import (
+        HITLEscalationBrief,
+        ValidatorFailClass,
+    )
+    from harness_is.path_class_registry import PathClass
+    from harness_runtime.bootstrap import run_bootstrap
+    from harness_runtime.bootstrap import stage_4_od as _stage_4_od_mod
+    from harness_runtime.lifecycle.webhook_delivery_composer_types import (
+        WebhookDeliveryComposerConfig,
+    )
+
+    from .conftest import FakeTracerProvider
+
+    # ---------------- keyring → env shim ----------------
+    api_key = os.environ["ANTHROPIC_API_KEY"]
+
+    def _fake_get_password(service: str, name: str) -> str | None:
+        _ = service
+        if name == "anthropic_key":
+            return api_key
+        return None
+
+    monkeypatch.setattr(
+        "harness_runtime.config.provider_secrets.keyring.get_password",
+        _fake_get_password,
+    )
+
+    # ---------------- tracer (capture-enabled fake) ----------------
+    tracer = FakeTracerProvider()
+
+    class _TracerStage:
+        def __init__(self, provider: FakeTracerProvider) -> None:
+            self.provider = provider
+            self.registered_globally = False
+
+    def _fake_tracer_stage(config: Any, **_kwargs: Any) -> _TracerStage:
+        _ = config
+        return _TracerStage(tracer)
+
+    def _fake_span_processor(config: Any, _p: Any, **_kwargs: Any) -> None:
+        _ = config
+        return None
+
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_tracer_provider_stage", _fake_tracer_stage
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_span_processor_stage", _fake_span_processor
+    )
+
+    # ---------------- config (webhook-opt-in + provider opt-in) ----------------
+    surface = DeploymentSurface.LOCAL_DEVELOPMENT
+    workload = WorkloadClass.SOFTWARE_ENGINEERING
+    path_bindings = PathBindingConfig(
+        raw_entries=tuple(
+            {
+                "path_class": pc,
+                "workflow_class": workload,
+                "deployment_surface": surface,
+                "path": str(tmp_path / pc.value.lower()),
+            }
+            for pc in PathClass
+        ),
+    )
+    chain = FallbackChain(
+        primary=ProviderCandidate(
+            provider="anthropic",
+            model="claude-haiku-4-5",
+            family=ProviderFamily.ANTHROPIC,
+        ),
+        same_family=(),
+        cross_family=(),
+        terminal=None,
+    )
+    config = RuntimeConfig(
+        deployment_surface=surface,
+        repository_root=tmp_path,
+        path_bindings=path_bindings,
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+        collector=CollectorConfig(),
+        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        mcp_clients=[],
+        openai_optional=True,
+        ollama_optional=True,
+        webhook_delivery_composer_config=WebhookDeliveryComposerConfig.default(),
+        routing_manifest=RoutingManifest(
+            manifest_version=1,
+            per_role_bindings={},
+            per_workload_overrides={},
+            fallback_chains=(chain,),
+            retry_policies={},
+        ),
+    )
+
+    # ---------------- real bootstrap ----------------
+    ctx = await run_bootstrap(config, workload_class=workload)
+    assert ctx.webhook_delivery_composer is not None, (
+        "expected ctx.webhook_delivery_composer bound post-bootstrap "
+        "(WebhookDeliveryComposerConfig opt-in supplied); got None"
+    )
+
+    # ---------------- httpx mock transport — capture the POST ----------------
+    captured_requests: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(200, json={"ack": True})
+
+    transport = httpx.MockTransport(_handler)
+    # Override the composer's http_client_factory to inject the mock transport.
+    # The bootstrap-factory ctor does not expose http_client_factory at v1.26
+    # (per FM-2 implementer-discretion); this is the test-injection seam used
+    # by the U-RT-69 unit tests (test_lifecycle_webhook_delivery_composer.py).
+    object.__setattr__(
+        ctx.webhook_delivery_composer,
+        "_http_client_factory",
+        lambda: httpx.AsyncClient(transport=transport),
+    )
+    # Bind the operator-supplied WebhookConfig at the composer for the
+    # spec-canonical brief surface path (Reading H per fork doc).
+    operator_webhook_config = WebhookConfig(
+        webhook_id="ac8-test-webhook",
+        endpoint_url="https://ac8-test.invalid/hook",
+        timeout=5,
+        degradation_mode="fail-closed",
+    )
+    object.__setattr__(
+        ctx.webhook_delivery_composer, "_webhook_config", operator_webhook_config
+    )
+
+    # ---------------- construct a synthetic HITL escalation brief ----------------
+    # HITLEscalationBrief field-set per CP spec v1.10 §25.2:
+    # parent_step_id / parent_action_id / fail_class? / fail_detail_hash? /
+    # escalation_reason / proposed_response_palette(default). The brief carries
+    # no idempotency_key by design (per webhook_brief_adapter docstring); the
+    # idempotency_key is passed alongside at the deliver_webhook_for_brief call.
+    brief = HITLEscalationBrief(
+        parent_step_id="step-0",
+        parent_action_id="action-ac8-1",
+        fail_class=ValidatorFailClass.EXTERNAL_REJECTION,
+        fail_detail_hash=None,
+        escalation_reason="ac8-synthetic-escalation",
+    )
+
+    # ---------------- exercise the spec-canonical brief surface ----------------
+    result = await ctx.webhook_delivery_composer.deliver_webhook_for_brief(
+        brief, "idem-ac8-1"
+    )
+
+    # AC #8 invariant — webhook delivered + status 200.
+    assert result.delivered is True, (
+        f"expected delivered=True; got result={result!r}"
+    )
+    assert result.status_code == 200
+    assert result.delivery_attempts == 1
+
+    # AC #8 invariant — exactly one POST request captured at the mock transport.
+    assert len(captured_requests) == 1, (
+        f"expected 1 POST; got {len(captured_requests)} requests"
+    )
+    request = captured_requests[0]
+    assert request.method == "POST"
+    assert request.url.path == "/hook"
+    assert request.headers["Idempotency-Key"] == "idem-ac8-1"
+    assert request.headers["Content-Type"].startswith("application/json")
+
+    # AC #8 invariant — outer + per-attempt spans emitted.
+    outer_spans = [s for s in tracer.spans if s.name == "hitl.webhook.deliver"]
+    attempt_spans = [s for s in tracer.spans if s.name == "hitl.webhook.attempt"]
+    assert len(outer_spans) >= 1, (
+        f"no hitl.webhook.deliver span emitted; captured names="
+        f"{[s.name for s in tracer.spans]!r}"
+    )
+    assert len(attempt_spans) >= 1, (
+        f"no hitl.webhook.attempt span emitted; captured names="
+        f"{[s.name for s in tracer.spans]!r}"
+    )
+    outer = outer_spans[0]
+    attempt = attempt_spans[0]
+    # Outer span carries url_hash + idempotency_key + delivery_attempts.
+    assert "webhook.url_hash" in outer.attrs
+    assert outer.attrs["webhook.idempotency_key"] == "idem-ac8-1"
+    assert outer.attrs["webhook.delivery_attempts"] == 1
+    # Attempt span carries attempt number + final status code.
+    assert attempt.attrs["retry.attempt.number"] == 1
+    assert attempt.attrs["webhook.status_code"] == 200
+
+    # Cleanup: shutdown the harness ctx so collector/provider tasks terminate.
+    from harness_runtime.shutdown import shutdown
+
+    await shutdown(ctx)
 
 
 # ---------------------------------------------------------------------------
