@@ -1,7 +1,9 @@
 # Class 1 Fork — H_T-CP-18 phantom retirement cite at Meta-Architecture §5.4 line 124
 
 **Filed:** 2026-05-22 at H_T-CP-18 retirement-event filing arc, pre-event-record.
-**Status:** RATIFIED 2026-05-23 — α + γ-audit-appendix; α sub-question: YES (cross-axis runtime cites permitted on CP-axis rows, material-location-resident reading).
+**Status:** ✅ FULLY-APPLIED + RETIRED 2026-05-23..batch-16 (status-line refreshed 2026-05-27) — operator ratified α + γ-audit-appendix at `245d07e`; Meta-Arch v1 → v1.1 absorption at `40d9f78` (α row-124 fix re-pointing U-CP-45 → U-CP-00b + U-RT-73/74/75 + U-RT-68 + NEW §5.1.1 cross-axis cite convention + §5.8 γ-audit appendix surfacing 5 additional phantom cites at H_T-CP-16/17/19/20/21 — all subsequently resolved across Meta-Arch v1.2..v1.5 lineage); batch-10 ledger transit H_T-CP-18 STILL-BOUNDED → RETIRE-READY; H_T-CP-18 RETIRED jointly with H_T-AS-2 at batch-16 `8e6311f` (U-RT-86 e2e vs in-process stdio MCP echo fixture) per `[[h-t-cp-16-17-retire-ready-gate-runtime-composer-arcs]]`. Species 3 stale-carry per workflow v1.9 §7.4.7.2.
+
+_Original filing footer:_ **Status:** RATIFIED 2026-05-23 — α + γ-audit-appendix; α sub-question: YES (cross-axis runtime cites permitted on CP-axis rows, material-location-resident reading).
 **Scope:** Phase 7d substitution retirement discipline; halt-execution Class 1
 per `Project_Workflow_v1_8.md` §2.7.6 + workspace CLAUDE.md §4.3.
 **Surfaced by:** `phase-7-substitution-retirement` skill at §7 halt-condition
