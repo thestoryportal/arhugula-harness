@@ -273,21 +273,66 @@ def test_config_load_failure_exits_three(
 
 @pytest.mark.skip(
     reason=(
-        "End-to-end subprocess test requires a full RuntimeConfig "
-        "(path_bindings + provider_secrets + otel + collector sub-configs) "
-        "which the env-only loader path does not compose. Deferred to "
-        "U-RT-109 e2e where the test fixture authors a real harness.toml + "
-        "exercises the daemon against a real MCP client over Unix-socket "
-        "per the L9-undecies U-RT-89 e2e precedent."
+        "Subprocess smoke advances past bootstrap stage IS-1 with the "
+        "harness.toml fixture below (closes "
+        "[[finding-bootstrap-stage-is-1-requires-skills-path-binding]] "
+        "(D-test) reading), but blocks at stage 3a CP_CLIENTS: "
+        "ProviderNoneConfiguredError — at least one provider must "
+        "construct successfully + the keyring resolver has no env-var "
+        "fallback. Full unblock requires either (a) operator-set keyring "
+        "entry for at least one provider, (b) a test-only keyring backend, "
+        "or (c) a provider-construction relaxation at stage 3a. Fixture "
+        "PRESERVED below so the test runs further once that follow-on "
+        "lands."
     )
 )
 def test_ac1_e2e_daemon_subprocess_binds_socket_and_shuts_down(
     tmp_path: Path,
 ) -> None:
     """End-to-end: launch real daemon subprocess, verify socket binding,
-    send SIGTERM, verify exit 0 + socket cleanup."""
+    send SIGTERM, verify exit 0 + socket cleanup.
+
+    Composes a minimal ``harness.toml`` with all 4 PathClass path-binding
+    entries that bootstrap stage IS-1 requires (per
+    ``[[finding-bootstrap-stage-is-1-requires-skills-path-binding]]``
+    Resolution reading (D-test)). Provider opt-ins gated in the same
+    config-file per the E-prod-3 landing.
+    """
     socket_path = tmp_path / "smoke.sock"
     repo_root = tmp_path
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    routing_manifest = tmp_path / "routing_manifest"
+    routing_manifest.mkdir()
+    state_ledger = tmp_path / "state_ledger"
+    state_ledger.mkdir()
+    config_file = tmp_path / "harness.toml"
+
+    def _binding(pc: str, path: Path) -> str:
+        return (
+            "[[runtime.path_bindings.raw_entries]]\n"
+            f'path_class = "{pc}"\n'
+            'workflow_class = "software-engineering"\n'
+            'deployment_surface = "local-development"\n'
+            f'path = "{path}"\n\n'
+        )
+
+    config_file.write_text(
+        "[runtime]\n"
+        'anthropic_optional = true\n'
+        'openai_optional = true\n'
+        'ollama_optional = true\n'
+        "\n"
+        "[runtime.otel]\n"
+        'otlp_endpoint = "http://localhost:4318"\n'
+        "\n"
+        + _binding("SKILLS", skills_dir)
+        + _binding("PROMPTS", prompts_dir)
+        + _binding("ROUTING_MANIFEST", routing_manifest)
+        + _binding("STATE_LEDGER", state_ledger)
+    )
     env = {
         **os.environ,
         "HARNESS_DEPLOYMENT_SURFACE": "local-development",
@@ -299,6 +344,8 @@ def test_ac1_e2e_daemon_subprocess_binds_socket_and_shuts_down(
         "-m",
         "harness_runtime.cli",
         "daemon",
+        "--config",
+        str(config_file),
         "--socket-path",
         str(socket_path),
     ]
