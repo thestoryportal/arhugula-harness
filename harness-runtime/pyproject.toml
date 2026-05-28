@@ -40,6 +40,8 @@ dependencies = [
     "opentelemetry-api>=1.30",
     "opentelemetry-sdk>=1.30",
     "opentelemetry-exporter-otlp>=1.30",
+    # Operator-facing CLI dispatcher (Q-I=c at G1, spec v1.35 §14.18). U-RT-102.
+    "typer>=0.12",
 ]
 
 [project.scripts]
@@ -48,6 +50,9 @@ dependencies = [
 # U-RT-47 activated 2026-05-20; U-RT-48 activated 2026-05-20 at commit landing.
 harness-inspect    = "harness_runtime.admin.inspect:main"        # U-RT-47
 harness-shutdown   = "harness_runtime.admin.shutdown_cli:main"   # U-RT-48
+# Track B: operator-facing parent dispatcher (`harness run`, `harness daemon`).
+# Cluster L9-sedecies (spec v1.35 §14.18 / §13.4); scaffolding at U-RT-102.
+harness            = "harness_runtime.cli:main"                  # U-RT-102
 
 [tool.uv.sources]
 harness-core = { workspace = true }
