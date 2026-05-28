@@ -110,9 +110,9 @@ class MCPSurfaceCallbackNotBoundError(NotImplementedError):
       AND the composer subsequently fires (test fixture / partial
       bootstrap path).
     - `ServerCtxElicitCallback.__call__` is invoked but no in-flight
-      `run_workflow` tool ctx is bound at
-      `HarnessMCPServer._state['_current_tool_ctx']` (out-of-`api.run()`-
-      flow invocation — defensive failure rather than silent absorption).
+      `run_workflow` tool ctx is bound on the `_CURRENT_TOOL_CTX`
+      ContextVar for the current asyncio task (out-of-`api.run()`-flow
+      invocation — defensive failure rather than silent absorption).
 
     H_T-CP-20 substitution status at v1.12 with U-RT-62 landed (per Phase
     7d retirement batch 9 record): RETIRE-READY → RETIRED. The FastMCP
@@ -223,18 +223,18 @@ class ServerCtxElicitCallback:
     Binding mechanism
     -----------------
 
-    The in-flight tool handler's `ctx` lives in
-    `harness_mcp_server._state['_current_tool_ctx']`. The `run_workflow`
-    tool handler body writes this key on entry + clears it in `finally`
-    per `lifecycle/mcp_server.py:materialize_mcp_server_stage()`. Both
-    the write site (tool handler frame) and the read site (this
-    callback) execute on the main event loop — the worker-thread
-    bridge via `SyncDispatcherFacade.run_coroutine_threadsafe` submits
-    the composer coroutine back to the main loop before reaching this
-    callback. Contextvar propagation was considered + rejected (the
-    `run_coroutine_threadsafe` submission copies the context from the
-    worker thread, not the awaiting tool handler frame); the mutable-
-    holder pattern is loop-thread-safe.
+    The in-flight tool handler's `ctx` lives in a module-level
+    `contextvars.ContextVar` in `lifecycle/mcp_server.py` (read via
+    `HarnessMCPServer.get_current_tool_ctx()`). The `run_workflow` tool
+    handler body sets the ContextVar on entry + resets it in `finally`
+    per `lifecycle/mcp_server.py:materialize_mcp_server_stage()`. The
+    ContextVar gives each concurrent `run_workflow` task its own ctx
+    binding per spec v1.36 §14.18 chapeau per-session ctx isolation —
+    distinct MCP client sessions submit independent runs that DO NOT
+    share `_current_tool_ctx`. Propagation across the
+    `asyncio.to_thread` → `SyncDispatcherFacade.run_coroutine_threadsafe`
+    bridge is preserved (verified empirically at
+    `tests/test_contextvar_bridge_propagation.py`).
 
     Response mapping
     ----------------
@@ -251,9 +251,10 @@ class ServerCtxElicitCallback:
     """
 
     mcp_server: "HarnessMCPServer"
-    """The `HarnessMCPServer` whose `_state['_current_tool_ctx']` holder
-    carries the active tool handler `ctx`. Bound at bootstrap stage 5
-    (post stage 2 MCP-server materialization)."""
+    """The `HarnessMCPServer` whose `get_current_tool_ctx()` accessor
+    surfaces the active tool handler `ctx` (held in a module-level
+    ContextVar per spec v1.36 §14.18 chapeau per-session ctx isolation).
+    Bound at bootstrap stage 5 (post stage 2 MCP-server materialization)."""
 
     async def __call__(
         self,
@@ -270,15 +271,14 @@ class ServerCtxElicitCallback:
         # on the callback if needed; v1.12 MVP relies on the MCP client's
         # native elicitation UI to honor operator deadlines).
 
-        ctx = self.mcp_server._state.get("_current_tool_ctx")
+        ctx = self.mcp_server.get_current_tool_ctx()
         if ctx is None:
             raise MCPSurfaceCallbackNotBoundError(
                 "ServerCtxElicitCallback invoked but no in-flight "
-                "`run_workflow` tool ctx bound at "
-                "`HarnessMCPServer._state['_current_tool_ctx']`. The "
-                "callback is intended for HITL gate invocation inside "
-                "a `run_workflow` tool body per spec v1.12 §14.8.3 "
-                "topology pin (Reading α)."
+                "`run_workflow` tool ctx bound on the `_CURRENT_TOOL_CTX` "
+                "ContextVar for the current asyncio task. The callback is "
+                "intended for HITL gate invocation inside a `run_workflow` "
+                "tool body per spec v1.12 §14.8.3 topology pin (Reading α)."
             )
 
         elicit_result = await ctx.elicit(

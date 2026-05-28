@@ -12,6 +12,7 @@ Per Phase 2 Session 3 plan v2.10 §2 L9-quinquies U-RT-62 AC #1:
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 
 import pytest
@@ -51,18 +52,75 @@ def test_workflow_registry_is_mutable_on_frozen_dataclass() -> None:
 
 
 def test_state_holder_is_mutable_on_frozen_dataclass() -> None:
-    """AC #1 + AC #4 prerequisite: `_state` holder accepts per-invocation
-    writes from the `run_workflow` tool handler body + reads from
-    `ServerCtxElicitCallback`. Loop-thread-safe because both sites
-    execute on the main event loop (the worker-thread bridge submits
-    back via `run_coroutine_threadsafe` before the read fires).
+    """AC #1 + AC #5 prerequisite: `_state` holder accepts the post-bootstrap
+    `_harness_ctx` write from `api.run()` before the in-process
+    `run_workflow` tool fires. The in-flight tool ctx is NOT held on `_state`
+    (moved to a module-level ContextVar per spec v1.36 §14.18 chapeau
+    per-session ctx isolation); see `test_current_tool_ctx_binding_lifecycle`
+    below for the ContextVar-backed accessor lifecycle.
     """
     server = HarnessMCPServer(server=object())
+    sentinel_harness_ctx = object()
+    server._state["_harness_ctx"] = sentinel_harness_ctx
+    assert server._state["_harness_ctx"] is sentinel_harness_ctx
+
+
+@pytest.mark.asyncio
+async def test_concurrent_set_current_tool_ctx_is_task_isolated() -> None:
+    """Per spec v1.36 §14.18 chapeau: two concurrent `run_workflow`-shaped
+    asyncio tasks each bind their own ctx via `set_current_tool_ctx`; each
+    task's `get_current_tool_ctx` reads back its OWN binding (NOT the other
+    task's). This is the production-grade variant of
+    `test_contextvar_bridge_propagation.py` exercised against the actual
+    `HarnessMCPServer` accessor API.
+
+    Failure of this test indicates either (a) the accessor methods are
+    not actually backed by a ContextVar, OR (b) asyncio task isolation
+    broke. Both would route the wrong client's ctx into HITL elicitation.
+    """
+    server = HarnessMCPServer(server=object())
+
+    async def _tool_handler_simulant(value: str) -> object | None:
+        token = server.set_current_tool_ctx(value)  # type: ignore[arg-type]
+        try:
+            # Yield to the loop so the OTHER concurrent task gets a turn
+            # to set its own value; if the accessor were not task-isolated,
+            # this is where cross-talk would surface.
+            await asyncio.sleep(0)
+            return server.get_current_tool_ctx()
+        finally:
+            server.reset_current_tool_ctx(token)
+
+    results = await asyncio.gather(
+        _tool_handler_simulant("client-alpha"),
+        _tool_handler_simulant("client-beta"),
+    )
+    assert results == ["client-alpha", "client-beta"], (
+        f"concurrent set_current_tool_ctx cross-talked: {results!r}"
+    )
+
+    # Post-condition: both tokens reset → no binding leaks into the test task
+    assert server.get_current_tool_ctx() is None
+
+
+def test_current_tool_ctx_binding_lifecycle() -> None:
+    """The `get_current_tool_ctx` / `set_current_tool_ctx` /
+    `reset_current_tool_ctx` accessors round-trip a ctx value via a
+    module-level ContextVar per spec v1.36 §14.18 chapeau per-session ctx
+    isolation. Replaces the prior `_state['_current_tool_ctx']` dict-key
+    pattern that would have raced across concurrent daemon-mode clients.
+    """
+    server = HarnessMCPServer(server=object())
+    assert server.get_current_tool_ctx() is None
+
     sentinel_ctx = object()
-    server._state["_current_tool_ctx"] = sentinel_ctx
-    assert server._state["_current_tool_ctx"] is sentinel_ctx
-    server._state.pop("_current_tool_ctx", None)
-    assert "_current_tool_ctx" not in server._state
+    token = server.set_current_tool_ctx(sentinel_ctx)  # type: ignore[arg-type]
+    try:
+        assert server.get_current_tool_ctx() is sentinel_ctx
+    finally:
+        server.reset_current_tool_ctx(token)
+
+    assert server.get_current_tool_ctx() is None
 
 
 def test_harness_mcp_server_distinct_from_mcp_host() -> None:

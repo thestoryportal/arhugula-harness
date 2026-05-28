@@ -75,6 +75,22 @@ ZERO at all three readings (intra-runtime-axis only). U-RT-62 + plan §1.7 (U-RT
 
 Independent of the signature gap, U-RT-62's `_state["_current_tool_ctx"] = ctx` line (mcp_server.py:215) is a race condition for concurrent invocations from distinct MCP client sessions. Spec §14.18.5 MUSTs "per-session ctx isolation"; current single-shared `_state` dict races. Likely resolves via `contextvars`-based per-call binding OR per-connection bootstrap. Surfaces here for the record; **not patched per FM-2** at this fork — separate sub-finding distinct from the signature gap. Operator-discretion routing at a follow-on arc.
 
+### §4 closure note (2026-05-28, follow-on arc)
+
+Resolved at `worktree-per-session-ctx-isolation` per the contextvars reading. Three corrections to the §4 framing above worth banking:
+
+1. **Spec cite was wrong.** The per-session ctx isolation MUST lives at the §14.18 chapeau (`design-substrate/Spec_Harness_Runtime_v1.md` line 65), NOT §14.18.5 (which is the cross-axis-cascade verification). Resolution arc cites the chapeau.
+
+2. **"per-connection bootstrap" was never viable.** C-RT-06's `set_tracer_provider` one-per-process invariant (spec line 2058) forecloses re-running bootstrap per MCP client. The two-reading framing collapsed to a single-reading arc: contextvars.
+
+3. **`_harness_ctx` is NOT racy.** The post-bootstrap `HarnessContext` is correctly singleton per process (forced by C-RT-06). Only `_current_tool_ctx` raced across concurrent invocations. The fork doc body above implied both were at risk; only one was.
+
+**Empirical verification.** CPython contextvar propagation across `asyncio.to_thread` → `asyncio.run_coroutine_threadsafe` was verified by a focused test at `harness-runtime/tests/test_contextvar_bridge_propagation.py` BEFORE the refactor: single-task baseline + N=2 concurrent + N=20 stress, all passing. The production docstring at `lifecycle/mcp_server.py` previously claimed contextvar propagation across this bridge was "unreliable" — empirically wrong; corrected at the resolution arc.
+
+**Production-grade isolation test** at `harness-runtime/tests/test_lifecycle_mcp_server.py::test_concurrent_set_current_tool_ctx_is_task_isolated` exercises the actual `HarnessMCPServer.set_current_tool_ctx` accessor under two concurrent asyncio tasks. Asserts each task reads back its own binding, not the other's.
+
+**Out of scope at this arc:** AC #6 daemon-concurrent two-clients e2e test body remains `pass` (unimplemented). Per-session ctx isolation was the prerequisite; AC #6 implementation is a separate unit with its own spec-traceability.
+
 ## §5 Adjacent observation — uvicorn vs bootstrap signal-handler conflict
 
 Bootstrap stage 7 installs `loop.add_signal_handler(SIGINT, _on_drain_signal, ctx)` per `harness-runtime/src/harness_runtime/drain.py:147-176`. uvicorn's `serve()` also installs its own SIGINT handler. The two will conflict in daemon mode. Implementation detail (not fork-worthy); resolves via `loop.add_signal_handler` precedence OR uvicorn lifespan hooks OR custom drain shim. Implementer discretion at the apply arc post-ratification.

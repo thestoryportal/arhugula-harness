@@ -208,7 +208,8 @@ async def execute(
     # callback from `_PlaceholderMCPCallback` to `ServerCtxElicitCallback`
     # when `ctx.mcp_server` is materialized (post-stage-2 per U-RT-62
     # AC #2). The callback reads the in-flight `run_workflow` tool ctx
-    # from `ctx.mcp_server._state['_current_tool_ctx']` + invokes
+    # via `ctx.mcp_server.get_current_tool_ctx()` (module-level ContextVar
+    # per spec v1.36 §14.18 chapeau per-session ctx isolation) + invokes
     # `await ctx.elicit(...)` outbound per spec v1.12 §14.8.3 topology
     # pin (Reading α CC-initiates). Test substrates that do not exercise
     # the MCP server path may leave `ctx.mcp_server = None` — the
