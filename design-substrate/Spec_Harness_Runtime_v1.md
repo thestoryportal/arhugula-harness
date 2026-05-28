@@ -1,4 +1,23 @@
-# Specification — Harness Runtime v1.31
+# Specification — Harness Runtime v1.32
+
+## Change-note (v1.31 → v1.32)
+
+**Scope of revision.** Substantive amendment authoring NEW §14.17 C-RT-27 `SkillActivationSpanEmitter` contract surface + NEW operator-config-gated activation-hook surface + NEW `RuntimeConfig.skill_activation_hook_config` field at §3 + NEW `HarnessContext.skill_activation_emitter` field at §4 + NEW `RT-FAIL-SKILL-ACTIVATION-STAGE-MATERIALIZE` fail class at §11. Closes the H_T-AS-8d `skill.*` namespace producer-site absence per `.harness/class_1_fork_as_8d_skill_activation_surface_absence.md` Reading B (IN-SCOPE-MVP operator-opt-in shape) + Q2=(d) hybrid all 3 hooks + Q3=(i) preserve Claude Code taxonomy + Q4=(q) NEW module + Q5=(β) NO new CXA edge — operator-ratified 2026-05-28 same-session-as-filing.
+
+**Source of fix.** `.harness/class_1_fork_as_8d_skill_activation_surface_absence.md` §3 Q-set operator-ratified 2026-05-28. AS-side schema substrate (`SKILL_NAMESPACE_SCHEMA` carrier at `harness-as/src/harness_as/anthropic_attribute_namespaces.py:178`) + sampling policy (`AuditFloorScope.SKILL_ACTIVATION_DESIGN_TIME_ALWAYS_SAMPLED` at `harness-as/src/harness_as/anthropic_primitive_sampling.py:82`) preserved verbatim. AS spec C-AS-14 §14.4 namespace declaration unchanged. The amendment authors the missing runtime activation surface + producer-site emission carrier; binds emission to operator-supplied `SkillActivationHook` Protocol implementation (None default = no emission). Mirrors CP-18 / CP-21 / CP-22 / RT-94 operator-opt-in RETIRE-READY precedent.
+
+**Q2=(d) hybrid all 3 hooks shape.** Three production activation events; `activation_mode` enum value discriminates which hook fired:
+- Per-LLM-dispatch hook at `lifecycle/llm_dispatch.py` → emits `activation_mode = SkillActivationMode.TOOL_SEARCH` (runtime's analog of tool-search is the LLM dispatch's tool selection moment)
+- Per-workflow-init hook at `harness-cp/src/harness_cp/workflow_driver.py:execute_workflow` entry → emits `activation_mode = SkillActivationMode.FRONTMATTER_ONLY` (Skill selected via frontmatter match at workflow init)
+- Operator-explicit `HarnessContext.activate_skill(skill_id)` surface → emits `activation_mode = SkillActivationMode.FILESYSTEM_READ` (operator points at filesystem path = explicit filesystem read intent)
+
+**v1.31 substantive content preserved verbatim.** v1.31 `step_dispatch_timeout_seconds` field landing + v1.30 canonical-reading amendment for 7 of 8 u_rt_59 spec-prose drift items + v1.29..v1 lineage content preserved unchanged at v1.32 per delta-only-spec-file convention.
+
+**ZERO cross-axis cascade verified.** Per Q5=(β) ratification: CXA v2.15 unchanged; OD §C-OD-08 already declares cross-namespace ingestion at convention layer; AS spec C-AS-14 §14.4 unchanged (Q3=(i) preserve); no CP / ADR / ADD / PRD cite cascade. Intra-runtime-spec amendment only. Co-published: AS spec v1.7 footer note at §14.4 (cite to runtime spec v1.32 §14.17 as canonical producer-site reference; mirrors AS v1.5 §14.7 memory-tool footer precedent).
+
+**AS-8d retirement transit.** STILL-BOUNDED → RETIRE-READY at apply-arc close (structural-criterion-B MET via factory wiring; full RETIRED gates on operator-bound `RuntimeConfig.skill_activation_hook_config` non-None + e2e exercise observing `skill.activation` span emission per X-AL-2 retirement criterion + §14.17.6 scope).
+
+---
 
 ## Change-note (v1.30 → v1.31)
 
@@ -13,6 +32,7 @@
 | Field | Type | Required | Semantic |
 |---|---|---|---|
 | `step_dispatch_timeout_seconds` | `float` | no (default `30.0`) | Per-step worker-thread blocking bound at `SyncDispatcherFacade.dispatch`'s `future.result(timeout=...)`. A single step's hang surfaces a typed `RT-FAIL-STEP-DISPATCH-TIMEOUT` failure BEFORE the whole-workflow `drain_timeout_seconds` bound fires. Independent of `drain_timeout_seconds`; the drain bound serves as backstop ensuring shutdown progress when per-step bound is exceeded or when other progress conditions fail. Default `30.0` (~2× headroom against the `drain_timeout_seconds = 60.0` default per `RuntimeConfig.drain_timeout_seconds` declaration at the `harness-runtime/src/harness_runtime/types.py` schema). Ingested at stage 5 by all 3 `materialize_sync_dispatcher_facade(...)` callsites (INFERENCE_STEP / SUB_AGENT_DISPATCH / TOOL_STEP) per `stage_5_loop_init.py:332/336/356`; threaded into the facade's `result_timeout_seconds` constructor parameter (replacing the v1.30-era `config.drain_timeout_seconds` conflation per fork doc §1.1). Added at v1.31 per `.harness/class_1_fork_step_dispatch_timeout_seconds_field_extension.md` Reading A ratification (2026-05-28). |
+| `skill_activation_hook_config` | `SkillActivationHookConfig | None` (harness-runtime sub-model per §14.17) | no (default `None`) | Operator-supplied Skill activation hook policy. `None` (default) = no emission at any of the 3 activation hook sites (per-LLM-dispatch / per-workflow-init / operator-explicit `ctx.activate_skill(...)` all become no-ops at the emission layer). Non-`None` activates the `SkillActivationHook` Protocol consumer per §14.17.1 + §14.17.2; the operator supplies the concrete hook implementation deciding which loaded skills activate at each hook site. Ingested at stage 5 by `materialize_skill_activation_emitter_stage` factory per §14.17.3. Consumed by `SkillActivationSpanEmitter.emit(...)` per §14.17.1 + by per-step / per-workflow-init / operator-explicit hook binding sites per §14.17.2. Added at v1.32 per `.harness/class_1_fork_as_8d_skill_activation_surface_absence.md` Q1=(B) IN-SCOPE-MVP + Q2=(d) hybrid + Q4=(q) NEW module ratification (2026-05-28). |
 
 **Amendment site §2 — §11 failure-mode taxonomy.** Append the following row to the §11 fail-class taxonomy table:
 
@@ -1502,6 +1522,7 @@ The orchestrator (`harness_runtime.bootstrap.__init__`) executes the 9 stages fr
 | `memory_tool_registry` | `MemoryToolRegistry` (harness-runtime-defined, C-RT-22 §14.12.1) | 5 | Memory tool storage-backend registry. Resolves a `MemoryToolStorageBackendProtocol` implementation per `RuntimeConfig.deployment_surface` + optional `RuntimeConfig.memory_tool_backend_config` override. Consumed by C-RT-15 §14.5.1 callback-injection composer-step when `step.step_payload.tools` contains the Anthropic Memory tool definition (`tool type "memory_20250818"` per ADR-D3 §1.1 #11). Materialized by `materialize_memory_tool_registry_stage` factory per §14.12.3. Added at v1.17 per `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §16 §6.A v2 A.iv ratification (2026-05-23). |
 | `validator_framework` | `ValidatorFramework | None` (CP spec v1.13 §28 carrier — Protocol surface at `harness_cp.validator_framework_types.ValidatorFramework`; concrete `ConcreteValidatorFramework` body at `harness-cp/src/harness_cp/validator_framework.py:130` per C-CP-28 §28.3) | 4 | Validator framework instance for `validator.*` post-dispatch hook consumption at `workflow_driver.py:668`. `None` value (the default when `RuntimeConfig.validator_framework_config is None`) signals operator opt-out; the driver hook branch `if ctx.validator_framework is not None:` evaluates False and the post-dispatch validator-evaluation path is bypassed. Non-`None` value (when operator supplies `RuntimeConfig.validator_framework_config`) is the framework instance produced by `materialize_validator_framework_stage` per §14.13.3; the driver branch fires the 5-class outcome routing per C-CP-28 §28.3.3.4 (`PASS`/`PERMANENT_FAIL`/`ESCALATE_HITL`/`REVALIDATE`/`TRANSIENT_FAIL`). The field type at runtime spec v1.18 narrows the v1.17-era untyped `object | None` carrier at `harness-runtime/src/harness_runtime/types.py:1157` (carried as untyped per cross-axis-types-import-avoidance discipline) to the typed Protocol surface from CP spec. Materialized by `materialize_validator_framework_stage` factory per §14.13.3. Added at v1.18 per `.harness/class_1_fork_validator_composer_arc_stage_4_absence.md` §3.1 Reading A ratification (2026-05-24). |
 | `pause_resume_protocol` | `PauseResumeProtocol | None` (CP spec v1.13 §26 carrier — concrete `PauseResumeProtocol` class body at `harness-cp/src/harness_cp/pause_resume_protocol.py:213+` per U-CP-62 cluster 10-CP-B `49617e7`) | 5 | Pause/resume protocol instance for per-step pause-trigger detection + snapshot capture + resume invocation in `workflow_driver.py`. `None` value (the default when `RuntimeConfig.pause_resume_protocol_config is None`) signals operator opt-out; the driver per-step pre-entry pause-trigger detection branch evaluates "no pause-protocol bound → skip" per the False arm (no behavior change vs pre-v1.21). Non-`None` value (when operator supplies `RuntimeConfig.pause_resume_protocol_config`) is the protocol instance produced by `materialize_pause_resume_protocol_stage` per §14.14.3; the driver per-step pre-entry detection branch sibling to `drained_flag.is_set()` fires `ctx.pause_resume_protocol.capture_pause_snapshot(...)` on `ctx.pause_requested_flag.is_set()` + returns `RunStatus.PAUSED`; the resume-on-snapshot-context entry-point branch fires `ctx.pause_resume_protocol.attempt_resume(...)` + branches on `ResumeResult` per CP spec v1.13 §26.6 invariants 1-5. Materialized by `materialize_pause_resume_protocol_stage` factory per §14.14.3. Added at v1.21 per CP composer authoring arc (operator-ratified narrow-scope 2026-05-24). |
+| `skill_activation_emitter` | `SkillActivationSpanEmitter | None` (harness-runtime-defined, C-RT-27 §14.17.1) | 5 | Skill activation span emitter. `None` value (the default when `RuntimeConfig.skill_activation_hook_config is None`) signals operator opt-out; all 3 hook binding sites (per-LLM-dispatch / per-workflow-init / operator-explicit `ctx.activate_skill(...)`) evaluate "no emitter bound → skip" per the False arm (no `skill.activation` span emitted). Non-`None` value (when operator supplies `RuntimeConfig.skill_activation_hook_config`) is the emitter instance produced by `materialize_skill_activation_emitter_stage` per §14.17.3; each hook binding site queries the bound `SkillActivationHook` Protocol implementation for the activation list (per-LLM-dispatch + per-workflow-init) or invokes directly (operator-explicit) + emits one `skill.activation` span per activated skill carrying the AS spec v1.7 §14.4 6-attribute namespace. Materialized by `materialize_skill_activation_emitter_stage` factory per §14.17.3. Added at v1.32 per `.harness/class_1_fork_as_8d_skill_activation_surface_absence.md` Q1=(B) + Q2=(d) + Q4=(q) ratification (2026-05-28). |
 | `pause_requested_flag` | `asyncio.Event` | 0 (initialized) | Caller-side pause-signaling primitive. Set by external caller (operator API, MCP tool, etc.) to request that the driver pause at the next per-step pre-entry; polled by CP driver at the per-step pre-entry as a sibling check to `drained_flag.is_set()` per §14.14.3. When set + `ctx.pause_resume_protocol is not None`: driver invokes `ctx.pause_resume_protocol.capture_pause_snapshot(...)` + returns `RunStatus.PAUSED`. When set + `ctx.pause_resume_protocol is None`: driver behavior unchanged from pre-v1.21 (the flag is silently a no-op without a bound protocol). Caller-surface contract for setting the flag is implementation discretion per §14.14.7 (operator API / MCP tool / programmatic signal). Added at v1.21 per CP composer authoring arc (operator-ratified narrow-scope 2026-05-24). |
 
 **Invariants.**
@@ -3791,6 +3812,193 @@ The C-RT-25 contract authoring at v1.22 does NOT force any retirement transition
 - **`validator:` action_id prefix discriminator.** The action_id prefix `validator:` (vs `hitl:` / `dispatch:`) is recommended at v1.22 §14.15.2 step 7; CXA v2.9 §0.3 action-id prefix enumeration refresh is owed at follow-on bookkeeping arc per change-note adjacent defect (also noted at §14.15.2 step 7 inline).
 - **Composition ordering for palette intersection.** Per change-note adjacent defect (ii): the composition ordering (validator-proposed palette as outer constraint with UNION-intersection narrowing, vs UNION-intersection as outer constraint with validator-proposed palette further narrowing) is implementation discretion at the U-RT-NN-B landing arc per FM-2. Both orderings semantically equivalent for canonical-default case; both must satisfy spec-MUST "final palette ≤ both constraints" per §14.15.4 invariant 4.
 - **APPROVE / EDIT / RESPOND post-gate workflow_driver branch semantics.** The §14.15.2 step 8 process-gate-response paths return `HITLResponse` to the workflow_driver hook; the hook body decides how each response interacts with the validator's escalation outcome (e.g., APPROVE → proceed to ledger-append per C-CP-28 §25.4 invariant 2; EDIT → override outcome; RESPOND → retry validation or proceed). The specific branch semantics are implementation discretion at the U-RT-NN-B landing arc per FM-2. The spec-MUST is: the hook MUST NOT bypass the gate on ESCALATE_HITL outcome (§14.15.4 invariant 2 by-construction).
+
+---
+
+## §14.17 C-RT-27 — `SkillActivationSpanEmitter` + `SkillActivationHook` (new at v1.32)
+
+**Contract surface.** Skill-activation span emitter + operator-supplied activation policy Protocol. Consumed by 3 hook binding sites (per-LLM-dispatch at `lifecycle/llm_dispatch.py`; per-workflow-init at `harness-cp/src/harness_cp/workflow_driver.py:execute_workflow`; operator-explicit `HarnessContext.activate_skill(...)`). The contract authors the missing producer-side surface for the `skill.*` namespace declared at AS spec v1.7 §14.4 (6 attributes on `skill.activation` span). Mirrors C-RT-22 (Memory tool) + C-RT-23 (validator framework) + C-RT-24 (pause/resume protocol) + C-RT-26 (webhook delivery composer) operator-opt-in RETIRE-READY precedent.
+
+**PRD enablement.** Completes the `skill.*` namespace producer-side surface: AS spec C-AS-14 §14.4 declares the 6-attribute schema + `validate_skill_attributes_carry_both_version_fields` enforcement; AS-side `SKILL_NAMESPACE_SCHEMA` carrier at `harness-as/src/harness_as/anthropic_attribute_namespaces.py:178` LANDED; sampling policy `AuditFloorScope.SKILL_ACTIVATION_DESIGN_TIME_ALWAYS_SAMPLED` LANDED. C-RT-27 closes the missing runtime activation surface: 3 production hook binding sites + emitter carrier + operator-supplied `SkillActivationHook` Protocol. H_T-AS-8d substitution retirement criterion B becomes structural-criterion-B MET via factory wiring at the C-RT-27 landing arc per `.harness/class_1_fork_as_8d_skill_activation_surface_absence.md` §3 Q1=(B) operator-opt-in RETIRE-READY pattern.
+
+**ADR commitment(s) honored.** ADR-D3 v1.2 §1.8.1 (`skill.*` namespace declaration at D3 source) + ADR-D6 v1.2 §1.2 (OTel namespace ingestion at OD substrate) + ADR-D3 v1.2 §1.1 #11-adjacent (Skills filesystem residence + 4-tier activation taxonomy preserved at AS spec layer per Q3=(i) ratification).
+
+**Fork-resolution provenance.** `.harness/class_1_fork_as_8d_skill_activation_surface_absence.md` — Class 1 operator-ratified 2026-05-28 (this arc, same-session-as-filing). Q1=(B) IN-SCOPE-MVP scope + Q2=(d) hybrid all 3 hooks + Q3=(i) preserve Claude Code taxonomy + Q4=(q) NEW module per Memory-tool precedent + Q5=(β) NO new CXA edge. The Reading B arc lands the producer-side emitter substrate + 3 hook surfaces at production; the emission gates on operator-bound `RuntimeConfig.skill_activation_hook_config` non-None per §14.17.6 retirement implications.
+
+### §14.17.1 Architectural surfaces introduced
+
+**`SkillActivationMode` enum (preserves AS spec v1.7 §14.4 Claude Code taxonomy per Q3=(i) ratification):**
+
+```python
+from enum import StrEnum
+
+class SkillActivationMode(StrEnum):
+    """Activation-mode discriminator for `skill.activation` span emission.
+
+    Per AS spec v1.7 §14.4 + Q3=(i) ratification (preserve Claude Code
+    taxonomy verbatim); H_T-runtime hook-to-enum mapping per Q2=(d) hybrid:
+    - FRONTMATTER_ONLY → per-workflow-init hook fired (Skill selected via
+      frontmatter match at workflow init)
+    - TOOL_SEARCH → per-LLM-dispatch hook fired (LLM dispatch's tool selection
+      moment activated this Skill)
+    - FILESYSTEM_READ → operator-explicit `ctx.activate_skill(...)` invoked
+      (operator points at filesystem path = explicit filesystem read intent)
+    """
+    FRONTMATTER_ONLY = "frontmatter_only"
+    TOOL_SEARCH = "tool_search"
+    FILESYSTEM_READ = "filesystem_read"
+```
+
+**`SkillActivationHook` Protocol (operator-supplied policy):**
+
+```python
+from typing import Protocol, runtime_checkable
+from collections.abc import Iterable
+
+@runtime_checkable
+class SkillActivationHook(Protocol):
+    """Operator-supplied activation policy.
+
+    Two query methods for the two automatic-activation hook sites; the
+    operator-explicit `HarnessContext.activate_skill(...)` site bypasses the
+    hook entirely (operator-supplied skill_id directly).
+    """
+    def select_for_workflow_init(
+        self,
+        loaded_skills: Iterable[SkillID],
+        workflow_id: str,
+    ) -> Iterable[SkillID]:
+        """Per-workflow-init activation policy. Returns the subset of
+        loaded skills the operator wants activated at workflow startup
+        (emitted with activation_mode = FRONTMATTER_ONLY)."""
+        ...
+
+    def select_for_llm_dispatch(
+        self,
+        loaded_skills: Iterable[SkillID],
+        workflow_id: str,
+        step_index: int,
+    ) -> Iterable[SkillID]:
+        """Per-LLM-dispatch activation policy. Returns the subset of
+        loaded skills the operator wants activated before this LLM dispatch
+        (emitted with activation_mode = TOOL_SEARCH)."""
+        ...
+```
+
+**`SkillActivationSpanEmitter` (stage 5):**
+
+```python
+class SkillActivationSpanEmitter:
+    """Producer-site emitter for the `skill.activation` span. Constructed
+    at bootstrap stage 5 by `materialize_skill_activation_emitter_stage`
+    per §14.17.3.
+    """
+    def emit(
+        self,
+        skill_id: SkillID,
+        mode: SkillActivationMode,
+        workflow_id: str,
+    ) -> None:
+        """Open a `skill.activation` span carrying the AS spec v1.7 §14.4
+        6-attribute namespace (`skill.id` / `skill.name` / `skill.version_sha`
+        / `skill.frontmatter.version` / `skill.body_tokens` / `skill.activation_mode`).
+        The span is short-lived (open + close synchronously); no nested span
+        scope is created. The 6 attributes are sourced from the `Skill` instance
+        looked up by `skill_id` in `ctx.skills` (per `lifecycle/skills.py`
+        SkillManifest at v1.32 extended with `version_sha` + `body_tokens`
+        computed at load)."""
+        ...
+```
+
+**`SkillActivationHookConfig` (RuntimeConfig sub-model, empty-marker):**
+
+```python
+@dataclass(frozen=True)
+class SkillActivationHookConfig:
+    """Empty-marker sub-model — presence signals operator opt-in.
+
+    The concrete `SkillActivationHook` Protocol implementation is supplied
+    out-of-band (e.g., via dependency injection at the operator-controlled
+    bootstrap site; or via a `hook: SkillActivationHook` field added at a
+    future spec revision per FM-2 — v1.32 keeps the empty-marker shape
+    parallel to `ValidatorFrameworkConfig` + `PauseResumeProtocolConfig` +
+    `WebhookDeliveryComposerConfig` precedents).
+    """
+```
+
+### §14.17.2 Per-hook invocation discipline
+
+Three hook binding sites per Q2=(d) hybrid ratification:
+
+**Hook 1 — Per-workflow-init (at `harness-cp/src/harness_cp/workflow_driver.py:execute_workflow` entry):**
+
+1. **Pre-condition.** `ctx.skill_activation_emitter is not None` (operator opt-in via `RuntimeConfig.skill_activation_hook_config` non-None). If None: skip; no spans emitted.
+2. **Query.** `selected_ids = list(operator_hook.select_for_workflow_init(loaded_skills=ctx.skills.keys(), workflow_id=run_idempotency_key))`. The operator hook returns the activation list.
+3. **Emit.** For each `skill_id` in `selected_ids`: `ctx.skill_activation_emitter.emit(skill_id, SkillActivationMode.FRONTMATTER_ONLY, workflow_id=run_idempotency_key)`.
+4. **Order.** Hook fires AFTER bootstrap stage-6 completion + BEFORE the first step dispatch in `execute_workflow`. Order within the loop is implementation-discretion.
+
+**Hook 2 — Per-LLM-dispatch (at `harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py` LLM call site):**
+
+1. **Pre-condition.** Same as Hook 1.
+2. **Query.** `selected_ids = list(operator_hook.select_for_llm_dispatch(loaded_skills=ctx.skills.keys(), workflow_id=workflow_id, step_index=step_index))`.
+3. **Emit.** For each `skill_id`: `ctx.skill_activation_emitter.emit(skill_id, SkillActivationMode.TOOL_SEARCH, workflow_id=workflow_id)`.
+4. **Order.** Hook fires BEFORE the LLM call (`messages.create` invocation). The activation event represents the LLM dispatch's tool-selection moment per Q2=(d) hook-to-enum mapping.
+
+**Hook 3 — Operator-explicit (at NEW `HarnessContext.activate_skill(...)` method):**
+
+1. **Surface.** NEW method `HarnessContext.activate_skill(skill_id: SkillID) -> None` invokable by operator code (e.g., within an MCP tool handler; within a sub-agent dispatch payload; within any operator-controlled execution surface).
+2. **Pre-condition.** Same as Hook 1. If `ctx.skill_activation_emitter is None`: raise no-op (silent skip) OR raise typed exception — `SkillActivationEmitterUnboundError` per FM-2 implementation discretion at landing arc. Recommended: silent skip (parallels Hook 1 + 2 behavior).
+3. **Validate skill_id.** `if skill_id not in ctx.skills: raise UnknownSkillError(skill_id)` — typed exception (NOT a fail-class; raised to caller scope).
+4. **Emit.** `ctx.skill_activation_emitter.emit(skill_id, SkillActivationMode.FILESYSTEM_READ, workflow_id=...)`. Workflow ID source is implementation-discretion (operator may pass it; OR `ctx` carries a recent workflow_id via current-step state).
+
+### §14.17.3 Lifecycle stage placement
+
+**Stage 5 (LOOP_INIT):** Bootstrap stage 5 wires the activation emitter via NEW factory `materialize_skill_activation_emitter_stage(config: RuntimeConfig, ctx: _MutableHarnessContext) → SkillActivationSpanEmitter | None`.
+
+Factory body:
+
+1. **If `config.skill_activation_hook_config is None`:** Bind `ctx.skill_activation_emitter = None`. Return None. (Operator opt-out path.)
+2. **Else:** Construct `SkillActivationSpanEmitter` bound to `ctx.tracer_provider` (sourced from stage-4 OD-bucket landing). Bind to `ctx.skill_activation_emitter`. Operator-supplied `SkillActivationHook` Protocol implementation is consumed at hook firing time (NOT bound at the emitter); the emitter only emits spans, the operator hook decides which skills.
+3. **Return** the emitter instance.
+
+**Stage 5 ordering.** Sibling-of `materialize_validator_framework_stage` / `materialize_pause_resume_protocol_stage` / `materialize_webhook_delivery_composer_stage` at stage 5 LOOP_INIT bucket. Intra-stage ordering arbitrary per stage discipline (factory has no inter-binding dependencies).
+
+### §14.17.4 Failure-mode taxonomy
+
+1 new fail class added to §11 runtime-local fail-class taxonomy:
+
+| Fail class | Trigger | Permanent? |
+|---|---|---|
+| `RT-FAIL-SKILL-ACTIVATION-STAGE-MATERIALIZE` | `materialize_skill_activation_emitter_stage` cannot construct the emitter (e.g., tracer provider unbound at stage-5 entry; operator-supplied hook fails `@runtime_checkable` introspection per future field addition at FM-2 follow-on; emitter construction raises) | YES (bootstrap aborts; fail-closed per ADR-F4 v1.1) |
+
+### §14.17.5 Invariants
+
+1. **Emitter constructed exactly once per bootstrap.** Stage 5 resolves; bound to `ctx.skill_activation_emitter`. No re-construction at dispatch-time.
+2. **All 6 AS spec §14.4 attributes emit at every `skill.activation` span.** Enforced via existing `validate_skill_attributes_carry_both_version_fields` at AS-side (raises if `version_sha` OR `frontmatter.version` absent); 6-attribute set is non-negotiable per spec contract.
+3. **Hook binding sites no-op when emitter is None.** All 3 hook sites (per-LLM-dispatch / per-workflow-init / operator-explicit) test `ctx.skill_activation_emitter is not None` before firing. Default-config workflows emit ZERO `skill.activation` spans. Backward-compatible.
+4. **Operator hook is queried at hook firing time, not bound at emitter.** The `SkillActivationHook` Protocol implementation is supplied out-of-band at the operator-controlled bootstrap site (e.g., a singleton accessor); the spec contract surface does NOT mandate hook-binding mechanism. v1.32 keeps the empty-marker `SkillActivationHookConfig` shape and defers hook-supply mechanism to FM-2 implementation discretion.
+5. **`skill.activation` sampling per AS spec v1.7 §14.8.** head=1.0 at design-time (`AuditFloorScope.SKILL_ACTIVATION_DESIGN_TIME_ALWAYS_SAMPLED`); base-rate at production. Producer MUST NOT downsample at design-time.
+6. **Skill must be loaded.** Hook implementations MUST only return `skill_id` values present in `ctx.skills.keys()`. Operator-explicit `ctx.activate_skill(skill_id)` MUST validate membership + raise `UnknownSkillError` on miss. Spans MUST NOT emit for unknown skills.
+7. **`version_sha` + `body_tokens` computed at load.** The `SkillManifest` carrier at `harness-runtime/src/harness_runtime/lifecycle/skills.py` is extended at v1.32 with 2 new fields (`version_sha: str` git content hash + `body_tokens: int` estimate); both computed at `load_skills_from_dir` invocation per §14.17.7 deferred-to-discretion. The `skill.activation` span sources these fields from `ctx.skills[skill_id]` at emission time.
+
+### §14.17.6 X-AL-2 retirement implications (v1.32 → retirement event prerequisites)
+
+The C-RT-27 contract specifies the composition seam that, alongside the 3 hook binding sites at production + operator-bound `skill_activation_hook_config` non-None at HarnessContext, closes H_T-AS-8d substitution retirement criterion B at structural-only-met level per fork doc §3 Q1=(B) operator-opt-in RETIRE-READY pattern (mirrors C-RT-22 Memory + C-RT-23 ValidatorFramework + C-RT-24 PauseResumeProtocol + C-RT-26 WebhookDeliveryComposer precedents).
+
+Full RETIRED transition (RETIRE-READY → RETIRED) gates on the follow-on retirement-batch arc:
+1. Operator-bound `RuntimeConfig.skill_activation_hook_config` non-None + operator-supplied `SkillActivationHook` Protocol implementation
+2. Real e2e exercise: workflow boot with the operator-bound hook; observation of `skill.activation` span emission at ≥1 hook site (per-workflow-init OR per-LLM-dispatch OR operator-explicit); span carries the AS spec §14.4 6-attribute namespace at every emission
+
+**Cross-axis cascade closures at C-RT-27 landing.** Per fork doc Q5=(β) ratification: AS spec v1.7 footer note at §14.4 (co-published this arc) repoints to runtime spec v1.32 §14.17 C-RT-27 callback-invocation sites as the canonical `skill.*` emission locus. ZERO cross-axis cascade beyond the AS spec footer note — `skill_activation_emitter` ctx-binding consumes already-landed `SKILL_NAMESPACE_SCHEMA` carrier without new cross-axis composition seam (CXA v2.15 unchanged).
+
+### §14.17.7 Deferred to implementation discretion
+
+- **`version_sha` computation mechanism.** Suggested: `git hash-object` subprocess against the SKILL.md file path (yields the git blob SHA per `Spec_Action_Surface_v1.md` §14.4 "git content hash" semantic). Alternative: pure-Python `hashlib.sha1` over the canonical git-blob-formatted byte sequence (`b"blob " + str(len(content)) + b"\0" + content`). v1.32 contract does not mandate; the value MUST be the git content hash (i.e., byte-exact-identical to `git hash-object <path>` output).
+- **`body_tokens` computation mechanism.** Suggested: rough estimate via `len(body) // 4` (common LLM-token-per-char heuristic) OR token-counter library (`tiktoken`-equivalent; not currently bundled per framework-pull discipline). v1.32 contract does not mandate the formula; the value MUST be a non-negative integer approximation of body token count.
+- **`SkillActivationHook` implementation supply mechanism.** v1.32 keeps the empty-marker `SkillActivationHookConfig`; the concrete hook Protocol implementation is supplied at the operator-controlled bootstrap site (e.g., via `harness_runtime.run_bootstrap(...)` accepting a `skill_activation_hook` parameter; via a singleton accessor `harness_runtime.set_skill_activation_hook(hook)` invoked pre-bootstrap; etc.). Mechanism is operator-discretion at the landing arc.
+- **`HarnessContext.activate_skill(...)` workflow_id source.** Three options: (a) operator passes explicitly via a 2nd parameter; (b) `ctx` carries a `current_workflow_id: str | None` field updated at workflow entry; (c) the method scans `ctx`'s recent state for an active workflow_id. v1.32 contract does not mandate; landing arc selects (b) recommended for symmetry with hook 1 + 2.
+- **Per-hook activation budget.** No max-activations-per-workflow constraint at v1.32 contract; future arc may add a `RuntimeConfig.skill_activation_max_per_workflow: int` field if production observability surfaces unbounded cardinality (sampling discipline mitigates per AS §14.8 base-rate at production).
+- **`SkillActivationEmitterUnboundError` vs silent-skip at Hook 3.** Per §14.17.2 Hook 3 step 2: behavior at `ctx.skill_activation_emitter is None` is implementation discretion. Recommended: silent-skip per parallel with Hook 1 + 2 (silently no-op when operator opts out).
 
 ---
 

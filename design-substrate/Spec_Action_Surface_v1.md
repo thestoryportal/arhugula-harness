@@ -1215,6 +1215,8 @@ At workload-binding-time:
 
 **Semantic distinction (load-bearing per ADR-D3 v1.2 §1.8.1).** `skill.version_sha` is the git content hash (changes on any byte change including comments and whitespace) — replay-determinism anchor. `skill.frontmatter.version` is the operator-declared semantic version — migration-tracking surface. **Both required**: replay determinism uses `version_sha`; cache-prefix integrity uses both jointly.
 
+**Producer-site reference (new at v1.7-footer; sibling to §14.7 memory.* footer at v1.5).** Per `.harness/class_1_fork_as_8d_skill_activation_surface_absence.md` Reading B operator-ratification 2026-05-28: the H_T-runtime producer-site for `skill.activation` span emission resides at runtime spec v1.32 §14.17 C-RT-27 `SkillActivationSpanEmitter` + 3 hook binding sites (per-LLM-dispatch at `lifecycle/llm_dispatch.py` → `activation_mode = "tool_search"`; per-workflow-init at `harness-cp/src/harness_cp/workflow_driver.py:execute_workflow` entry → `activation_mode = "frontmatter_only"`; operator-explicit `HarnessContext.activate_skill(...)` → `activation_mode = "filesystem_read"`) per Q2=(d) hybrid + Q3=(i) preserve Claude Code taxonomy ratification. AS spec §14.4 attribute SET preserved verbatim; H_T-runtime hook-to-enum mapping documented at runtime spec §14.17.1. Operator-opt-in via `RuntimeConfig.skill_activation_hook_config` per X-AL-2 retirement-criterion-B-MET-when-bound shape; H_T-AS-8d STILL-BOUNDED → RETIRE-READY at the runtime spec v1.32 landing arc.
+
 ### §14.5 `managed_agents.*` namespace (three attributes on `managed_agents.runtime` span)
 
 | Attribute | Type | Semantic | Cardinality |
