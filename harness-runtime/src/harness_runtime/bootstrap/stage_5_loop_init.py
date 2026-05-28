@@ -368,8 +368,13 @@ async def execute(
     # Mirrors the existing `ctx.llm_dispatcher` wrap-binding pattern at
     # C-RT-16 §14.6 D6 above. Step-dispatcher registry below extends with
     # TOOL_STEP → tool_step_dispatcher facade.
+    # U-OD-39: thread RATE_TABLE_V1 through to the bare dispatcher for
+    # cost-attribution at the tool-dispatch site per §C-OD-26.2 row
+    # "tool.dispatch". ctx.cost_chain + ctx.audit_writer were already
+    # validated non-None above (U-OD-38 enforcement at the LLM-dispatch
+    # bind block); the same substrate flows through.
     ctx.tool_dispatcher = await materialize_runtime_tool_dispatcher_stage(
-        ctx, config
+        ctx, config, rate_table=RATE_TABLE_V1
     )
     tool_step_dispatcher = materialize_sync_dispatcher_facade(
         ctx.tool_dispatcher,
