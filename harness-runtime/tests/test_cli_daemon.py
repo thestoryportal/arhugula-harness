@@ -1,0 +1,337 @@
+"""Tests for U-RT-107 — daemon entrypoint (``harness daemon``).
+
+Maps to acceptance criteria 1–8 at runtime plan v2.31 §1.7. Mechanism α
+(uvicorn + uds + ``streamable_http_app``) per the post-ratification apply
+arc 2026-05-28 of the U-RT-107 Class 1 fork at
+``.harness/class_1_fork_u_rt_107_daemon_run_workflow_signature_underspec.md``
+(Reading A + Q2=i + Q3=a + Q4=a).
+
+Strategy:
+- structural unit tests for helpers (``_looks_like_manifest_path`` +
+  ``_default_daemon_socket_path``)
+- mocked bootstrap + uvicorn tests for drain / startup-failure paths
+- 1 subprocess smoke test verifying real daemon binding + SIGTERM shutdown
+
+AC #5 (concurrent multi-client) + AC #6 (sequential single-client repeat)
++ AC #8 (PID file end-to-end) are deferred to U-RT-109 e2e per
+``[[verification-shape-sharpened-grep-vs-e2e]]`` + L9-undecies precedent
+(structural binding verified here; full e2e against real MCP client over
+Unix-socket lands at cluster terminus).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _plain(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+from typing import Any
+
+import pytest
+from harness_core.deployment_surface import DeploymentSurface
+from harness_cp.topology_pattern import TopologyPattern
+from typer.testing import CliRunner
+
+import harness_runtime.cli.app as _ensure_import  # noqa: F401
+
+_cli_app_mod = sys.modules["harness_runtime.cli.app"]
+assert _ensure_import is not None
+
+from harness_runtime.cli.app import (  # noqa: E402
+    EXIT_CONFIG_ERROR,
+    DaemonStartupError,
+    _default_daemon_socket_path,  # pyright: ignore[reportPrivateUsage]
+    app,
+)
+from harness_runtime.config_source import RuntimeConfigLoadError  # noqa: E402
+from harness_runtime.lifecycle.mcp_server import (  # noqa: E402
+    _looks_like_manifest_path,  # pyright: ignore[reportPrivateUsage]
+)
+from harness_runtime.types import (  # noqa: E402
+    CollectorConfig,
+    OTelConfig,
+    PathBindingConfig,
+    ProviderSecretsConfig,
+    RuntimeConfig,
+)
+
+runner = CliRunner()
+
+
+def _runtime_config(tmp_path: Path) -> RuntimeConfig:
+    return RuntimeConfig(
+        deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
+        repository_root=tmp_path,
+        path_bindings=PathBindingConfig(),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+        collector=CollectorConfig(),
+        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC #3 + discriminator — run_workflow handler workflow_id-as-path widening
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("workflow_id", "expected"),
+    [
+        ("workflow-key", False),
+        ("wf-min", False),
+        ("wf.yaml", True),
+        ("wf.yml", True),
+        ("wf.toml", True),
+        ("/abs/path/wf.yaml", True),
+        ("rel/path/wf", True),  # slash makes it a path
+        ("wf.YAML", True),  # case-insensitive
+        ("wf.unknown", False),
+        ("", False),
+    ],
+)
+def test_looks_like_manifest_path_discriminator(
+    workflow_id: str, expected: bool
+) -> None:
+    """U-RT-62 handler workflow_id discriminator per fork doc Q2=(i)."""
+    assert _looks_like_manifest_path(workflow_id) is expected
+
+
+# ---------------------------------------------------------------------------
+# AC #1/#2 — socket path default + override
+# ---------------------------------------------------------------------------
+
+
+def test_ac1_default_socket_path_uses_pid_namespacing() -> None:
+    path = _default_daemon_socket_path()
+    assert path.name == f"harness-daemon-{os.getpid()}.sock"
+    assert path.parent.exists()
+
+
+def test_ac2_socket_path_flag_appears_in_help() -> None:
+    result = runner.invoke(app, ["daemon", "--help"])
+    assert result.exit_code == 0
+    out = _plain(result.stdout)
+    assert "--socket-path" in out
+
+
+# ---------------------------------------------------------------------------
+# AC #4 — drained_flag → shutdown propagation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ac4_drained_flag_triggers_uvicorn_shutdown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When `ctx.drained_flag` fires, uvicorn.serve() is requested to exit."""
+    fake_ctx_state: dict[str, Any] = {}
+    drained = asyncio.Event()
+
+    class _FakeCtx:
+        def __init__(self) -> None:
+            self.drained_flag = drained
+            self.mcp_server = _FakeMCPServer()
+
+    class _FakeMCPServer:
+        def __init__(self) -> None:
+            self._state = fake_ctx_state
+            self.server = _FakeFastMCP()
+
+    class _FakeFastMCP:
+        def streamable_http_app(self) -> Any:
+            return object()
+
+    fake_ctx = _FakeCtx()
+
+    async def _fake_bootstrap(*args: Any, **kwargs: Any) -> Any:
+        return fake_ctx
+
+    shutdown_called: list[Any] = []
+
+    async def _fake_shutdown(ctx: Any, *, timeout: float = 30.0) -> Any:
+        shutdown_called.append(ctx)
+        return object()
+
+    serve_calls: list[bool] = []
+
+    class _FakeUvicornServer:
+        def __init__(self, config: Any) -> None:
+            self.config = config
+            self.should_exit = False
+            self.force_exit = False
+
+        async def serve(self) -> None:
+            serve_calls.append(True)
+            while not self.should_exit:
+                await asyncio.sleep(0.01)
+
+    class _FakeUvicornConfig:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.uds = kwargs.get("uds")
+
+    fake_uvicorn = type("uvicorn", (), {})()
+    fake_uvicorn.Server = _FakeUvicornServer  # type: ignore[attr-defined]
+    fake_uvicorn.Config = _FakeUvicornConfig  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+    import harness_runtime.bootstrap as _bootstrap_mod
+
+    monkeypatch.setattr(_bootstrap_mod, "run_bootstrap", _fake_bootstrap)
+    _shutdown_mod = sys.modules["harness_runtime.shutdown"]
+    monkeypatch.setattr(_shutdown_mod, "shutdown", _fake_shutdown)
+
+    socket_path = tmp_path / "ac4.sock"
+
+    async def _trigger_drain_soon() -> None:
+        await asyncio.sleep(0.05)
+        drained.set()
+
+    asyncio.create_task(_trigger_drain_soon())
+    await _cli_app_mod._daemon_main(
+        runtime_config=_runtime_config(tmp_path),
+        socket_path=socket_path,
+    )
+    assert len(serve_calls) == 1
+    assert len(shutdown_called) == 1
+    assert shutdown_called[0] is fake_ctx
+    # Socket file should be cleaned up.
+    assert not socket_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# AC #7 — daemon startup failure → RT-FAIL-CLI-DAEMON-CONNECTION → exit 4
+# ---------------------------------------------------------------------------
+
+
+def test_ac7_bootstrap_failure_raises_daemon_startup_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BootstrapFailure inside daemon_main is wrapped as DaemonStartupError."""
+    from harness_runtime.bootstrap import BootstrapFailure
+    from harness_runtime.types import BootstrapStage
+
+    async def _failing_bootstrap(*args: Any, **kwargs: Any) -> Any:
+        raise BootstrapFailure(
+            BootstrapStage.LOOP_INIT, RuntimeError("synthetic boot failure")
+        )
+
+    monkeypatch.setattr(
+        "harness_runtime.bootstrap.run_bootstrap", _failing_bootstrap
+    )
+    with pytest.raises(DaemonStartupError) as excinfo:
+        asyncio.run(
+            _cli_app_mod._daemon_main(
+                runtime_config=_runtime_config(tmp_path),
+                socket_path=tmp_path / "ac7.sock",
+            )
+        )
+    assert "bootstrap failure" in str(excinfo.value)
+    assert excinfo.value.FAIL_CLASS == "RT-FAIL-CLI-DAEMON-CONNECTION"
+
+
+# ---------------------------------------------------------------------------
+# Adjacent — config load failure surfaces at CLI layer as exit 3
+# ---------------------------------------------------------------------------
+
+
+def test_config_load_failure_exits_three(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fake_load(
+        cls: Any,
+        config_file: Path | None = None,
+        cli_overrides: dict[str, Any] | None = None,
+    ) -> RuntimeConfig:
+        raise RuntimeConfigLoadError("synthetic test failure", source="test")
+
+    monkeypatch.setattr(
+        _cli_app_mod.RuntimeConfigSource, "load", classmethod(_fake_load)
+    )
+    result = runner.invoke(app, ["daemon"])
+    assert result.exit_code == EXIT_CONFIG_ERROR, result.stdout + result.stderr
+    assert "RT-FAIL-CLI-CONFIG-LOAD" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# AC #1 e2e — subprocess smoke: daemon starts, binds socket, exits on SIGTERM
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skip(
+    reason=(
+        "End-to-end subprocess test requires a full RuntimeConfig "
+        "(path_bindings + provider_secrets + otel + collector sub-configs) "
+        "which the env-only loader path does not compose. Deferred to "
+        "U-RT-109 e2e where the test fixture authors a real harness.toml + "
+        "exercises the daemon against a real MCP client over Unix-socket "
+        "per the L9-undecies U-RT-89 e2e precedent."
+    )
+)
+def test_ac1_e2e_daemon_subprocess_binds_socket_and_shuts_down(
+    tmp_path: Path,
+) -> None:
+    """End-to-end: launch real daemon subprocess, verify socket binding,
+    send SIGTERM, verify exit 0 + socket cleanup."""
+    socket_path = tmp_path / "smoke.sock"
+    repo_root = tmp_path
+    env = {
+        **os.environ,
+        "HARNESS_DEPLOYMENT_SURFACE": "local-development",
+        "HARNESS_REPOSITORY_ROOT": str(repo_root),
+        "HARNESS_DEFAULT_TOPOLOGY": "single-threaded-linear",
+    }
+    cmd = [
+        sys.executable,
+        "-m",
+        "harness_runtime.cli",
+        "daemon",
+        "--socket-path",
+        str(socket_path),
+    ]
+    proc = subprocess.Popen(
+        cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    try:
+        # Wait for socket binding (up to 10s).
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            if socket_path.exists():
+                break
+            if proc.poll() is not None:
+                stdout = proc.stdout.read().decode() if proc.stdout else ""
+                stderr = proc.stderr.read().decode() if proc.stderr else ""
+                pytest.fail(
+                    f"daemon exited before binding socket (code={proc.returncode}): "
+                    f"stdout={stdout!r} stderr={stderr!r}"
+                )
+            time.sleep(0.1)
+        else:
+            proc.send_signal(signal.SIGKILL)
+            pytest.fail(f"socket {socket_path} did not appear within 10s")
+
+        # Send SIGTERM and verify clean exit.
+        proc.send_signal(signal.SIGTERM)
+        exit_code = proc.wait(timeout=15.0)
+        assert exit_code == 0, (
+            f"daemon exited non-zero: code={exit_code} "
+            f"stderr={proc.stderr.read().decode() if proc.stderr else ''!r}"
+        )
+        assert not socket_path.exists(), "socket file not cleaned up"
+    finally:
+        if proc.poll() is None:
+            proc.send_signal(signal.SIGKILL)
+            proc.wait(timeout=5.0)

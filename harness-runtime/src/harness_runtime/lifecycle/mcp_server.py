@@ -45,7 +45,25 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
+
+_MANIFEST_PATH_SUFFIXES: frozenset[str] = frozenset({".yaml", ".yml", ".toml"})
+
+
+def _looks_like_manifest_path(workflow_id: str) -> bool:
+    """Discriminator for the daemon-mode workflow_id-as-path widening.
+
+    Per `.harness/class_1_fork_u_rt_107_daemon_run_workflow_signature_
+    underspec.md` Reading (A) + Q2=(i) ratification 2026-05-28: workflow_id
+    is treated as a filesystem path iff it contains '/' OR ends in one of
+    `.yaml` / `.yml` / `.toml`.
+    """
+    if "/" in workflow_id:
+        return True
+    # Fast-path suffix check without constructing Path objects.
+    lower = workflow_id.lower()
+    return any(lower.endswith(suffix) for suffix in _MANIFEST_PATH_SUFFIXES)
 
 from mcp.server.fastmcp import Context, FastMCP
 
@@ -199,14 +217,37 @@ def materialize_mcp_server_stage(
                 "The tool is intended for in-process invocation from `api.run()` "
                 "per spec v1.12 §14.8.3 topology pin (Reading α)."
             )
-        workflow = workflow_registry.get(workflow_id)
-        if workflow is None:
-            raise RuntimeError(
-                f"workflow {workflow_id!r} not registered in "
-                f"`HarnessMCPServer.workflow_registry`; `api.run()` writes the "
-                f"`WorkflowObject` keyed by `workflow.workflow_id` before "
-                f"invoking the `run_workflow` tool per AC #5."
+
+        # workflow_id discriminator per `.harness/class_1_fork_u_rt_107_daemon_
+        # run_workflow_signature_underspec.md` Reading (A) + Q2=(i) ratification
+        # 2026-05-28. workflow_id is treated as a filesystem path iff it
+        # contains '/' OR ends in one of `.yaml` / `.yml` / `.toml`; otherwise
+        # registry key. Path-input invocations (daemon-client mode per U-RT-108)
+        # load the manifest via `WorkflowManifestLoader.load_workflow(path)` on
+        # every invocation (Q3=(a) no-cache). Registry-key path preserves the
+        # in-process `api.run()` pre-registration semantics verbatim.
+        if _looks_like_manifest_path(workflow_id):
+            from harness_runtime.lifecycle.workflow_manifest_loader import (
+                WorkflowManifestLoadError,
+                WorkflowManifestLoader,
             )
+
+            try:
+                workflow = WorkflowManifestLoader.load_workflow(Path(workflow_id))
+            except WorkflowManifestLoadError as exc:
+                raise RuntimeError(
+                    f"daemon-client run_workflow failed to load manifest at "
+                    f"path {workflow_id!r}: {exc.FAIL_CLASS}: {exc.reason}"
+                ) from exc
+        else:
+            workflow = workflow_registry.get(workflow_id)
+            if workflow is None:
+                raise RuntimeError(
+                    f"workflow {workflow_id!r} not registered in "
+                    f"`HarnessMCPServer.workflow_registry`; `api.run()` writes the "
+                    f"`WorkflowObject` keyed by `workflow.workflow_id` before "
+                    f"invoking the `run_workflow` tool per AC #5."
+                )
 
         run_id = uuid.uuid4().hex
         # Bind the in-flight tool ctx for the duration of the workflow

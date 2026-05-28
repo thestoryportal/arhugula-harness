@@ -1,4 +1,48 @@
-# Specification — Harness Runtime v1.35
+# Specification — Harness Runtime v1.36
+
+## Change-note (v1.35 → v1.36)
+
+**Status posture (PROPOSED 2026-05-28).** v1.36 is a Class 1 fork resolution Reading (β) apply pass per `.harness/class_1_fork_u_rt_104_admissibility_keying_and_carrier_defaults.md` Q1=(β) defer-to-runtime + Q2=(i) doc-only operator-ratified 2026-05-28. Canonical-reading amendment at v1.35 §14.19 + §14.18.4 absorbing the U-CP-16 admissibility-keying mismatch. v1.35 body PRESERVED VERBATIM per delta-only-spec-file convention.
+
+**Source of fix.** Fork doc §1.5 routing branch (β) + §5 amendment table. Architectural rationale: the existing `is_topology_permitted_for_workload(topology, workload)` precedent at `harness-cp/src/harness_cp/per_workload_class_topology.py:174` (both inputs from manifest) is the architecturally-symmetric design pattern; `(deployment_surface, engine_class)` admissibility cannot be performed at the manifest layer because `deployment_surface` lives at `RuntimeConfig`, not at the YAML/TOML manifest body. The v1.35-authored `(workload_class, engine_class)` cite was a phantom-cite drift; the architecturally-coherent reading defers deployment-surface-keyed admissibility to the runtime caller.
+
+**Amendments.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§14.19.2 row 7 `ManifestAdmissibilityError` trigger column** | CANONICAL-READING AMENDMENT: trigger reframed from "`(workload_class, engine_class)` not in U-CP-16 candidate mapping OR `topology_pattern` not in U-CP-22 admissibility" → "`topology_pattern` not in U-CP-22 admissibility per `is_topology_permitted_for_workload(topology, workload)`". Engine_class admissibility deferred to runtime caller (U-RT-106 one-shot dispatch site) per signature-without-config discipline. Body text at §14.19.2 PRESERVED VERBATIM; canonical reading at v1.36 maps the row 7 trigger text. | Fork doc §1.5 (β) |
+| **§14.19.4 invariant 2 (eager validation)** | CANONICAL-READING CARVE-OUT: "Eager validation at `.load()` = schema + enum + step-uniqueness + workload-keyed topology admissibility. Deployment-surface-keyed engine_class admissibility deferred to runtime caller per signature-without-config discipline; runtime caller is REQUIRED to perform admissibility before workflow execution at U-RT-106 dispatch site." Body text at §14.19.4 invariant 2 PRESERVED VERBATIM; the carve-out is the canonical interpretation. | Fork doc §1.5 (β) |
+| **§14.18.4 `RT-FAIL-CLI-MANIFEST-ADMISSIBILITY` emission site** | CANONICAL-READING AMENDMENT: emission site relocates from U-RT-104 load-time → U-RT-106 dispatch-time. The fail class identity + exit code (2) + CLI mapping PRESERVED VERBATIM; the emitting unit shifts per the deferral. Caller at U-RT-106 raises `ManifestAdmissibilityError` when `engine_class not in ENGINE_CLASS_CANDIDATES[config.deployment_surface].candidate_set` post-config-bind, mapping to fail-class at the CLI layer per existing §14.18.4 row machinery. | Fork doc §1.5 (β) + §5 |
+
+**Adjacent harmonization sites.** §14.19.1 `load(path: Path) -> WorkflowObject` signature PRESERVED VERBATIM — operator-ratified (β) explicitly forecloses (α) signature widening. §14.19.3 field-by-field projection contract PRESERVED VERBATIM — projection layer is unaffected by admissibility deferral. §14.19.4 invariants 1, 3–9 PRESERVED VERBATIM. §14.19.5 deferred-to-discretion items PRESERVED VERBATIM. §14.19.6 ZERO cross-axis cascade re-verified at v1.36 (intra-runtime-axis). §14.19.7 verbatim-layer integrity PRESERVED VERBATIM. §14.18.1 + §14.18.2 + §14.18.3 + §14.18.5 + §14.18.6 PRESERVED VERBATIM. §3.7 PRESERVED VERBATIM.
+
+**Sections preserved verbatim from v1.35.** ALL v1.35 + v1.34 + ... + v1 lineage preserved verbatim per delta-only-spec-file convention.
+
+**Status posture.** Proposed (v1.35) → **Proposed (v1.36)**. v1.36 is a Class 1 fork resolution Reading (β) canonical-reading amendment — ZERO body text change at §14.19; ZERO signature change at §14.19.1; ZERO contract removal; ZERO cross-axis cascade.
+
+**Downstream absorption owed (post-v1.36).**
+
+(a) Workspace `CLAUDE.md` §2.3 runtime row version bump (v1.35 → v1.36); co-published this arc.
+
+(b) Runtime plan v2.31 → v2.32 single-arc absorption: U-RT-104 AC #11 reframe to enum-validity only (covered by AC #9); U-RT-106 NEW AC carrying deployment-surface-keyed engine_class admissibility check. Co-published this arc.
+
+(c) SF-1 fork doc `.harness/class_1_fork_harness_run_yaml_manifest_schema.md` §3.3 row 5 + §4.2 row 7 canonical-reading note (U-CP-16 admissibility cite shape clarification + Q2=(i) §3.1/§3.3 OPTIONAL/Default drift note + phantom `FallbackChain.default()` cite strike per Finding B). Co-published this arc.
+
+(d) Fork doc `.harness/class_1_fork_u_rt_104_admissibility_keying_and_carrier_defaults.md` Status PROPOSING → ✅ APPLIED-AS-READING-β + Q2=APPLIED-AS-(i). Co-published this arc.
+
+(e) U-RT-104 implementation resumes at worktree branch `worktree-phase-2b-u-rt-102-cli-scaffolding` post-publication. ZERO retirement event filing at this arc.
+
+**Adjacent observations.**
+
+(i) **`is_topology_permitted_for_workload` precedent validated.** The architecturally-symmetric design pattern — manifest-internal admissibility predicates use manifest-internal inputs only — is preserved at v1.36. AC #12 (topology_pattern admissibility per workload_class) implementable cleanly at U-RT-104; AC #11 (engine_class admissibility per deployment_surface) cleanly deferred to U-RT-106.
+
+(ii) **Pre-substantive empirical-verification discipline validated.** 25th application of `[[advisor-before-substantive-work-for-cross-axis-blockers]]` posture caught the structural-blocking defect before any U-RT-104 loader code was authored. Defect-detection at empirical orientation is the operationally-validated pattern that continues across the workspace.
+
+(iii) **NEW species 3 sub-species candidate.** `3.pre-substantive-empirical-orientation-surfaces-cross-artifact-divergence-against-production-code` — the carry text at SF-1 §3.3 + spec v1.35 §14.19.2 + plan v2.31 §1.4 AC #11 was authored at THREE SIBLING ARTIFACTS in the same session (2026-05-28) without empirical verification at HEAD against `engine_class_candidate.py`. Detected by Phase 7 implementer at empirical orientation BEFORE substantive code authoring. Distinct closure-event-class candidate at workflow v1.12 §7.4.7.2 sub-species column; catalogue at memory after operator ratification.
+
+(iv) **Same-session triple-carry pattern.** SF-1 + spec v1.35 + plan v2.31 carry the same defect three times in the same session. A "session-coherence drift" sub-species candidate at workflow v1.12 §7.4.7.2 species-4 (authoring-time stale carry per OD spec v1.18 §5) — strengthened form where multiple sibling artifacts in the same session inherit each other's unverified claims.
+
+---
 
 ## Change-note (v1.34 → v1.35)
 
