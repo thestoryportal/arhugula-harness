@@ -68,6 +68,7 @@ from harness_od.per_sandbox_tier_otlp_reachability import (
     ReachabilityViolation,
     assert_otlp_reachable_from_sandbox,
 )
+from harness_od.redaction_span_processor import RedactionSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
@@ -116,14 +117,19 @@ class SpanProcessorStage:
     `processor.force_flush(...)` then `processor.shutdown()` in deterministic
     order.
 
-    The runtime's BSP only attaches at this stage; consumers acquire tracers
-    via `opentelemetry.trace.get_tracer(...)` and emit spans which flow
-    through this processor to the exporter on the BSP cadence (or on
-    `flush()` call).
+    The runtime attaches TWO processors at this stage in registration order:
+    (1) `RedactionSpanProcessor` (OD spec C-OD-12 §12.1 + C-OD-13 §13.2 —
+    pre-collector redaction at SDK / wrapper boundary BEFORE the BSP buffer);
+    (2) `BatchSpanProcessor(exporter)`. Consumers acquire tracers via
+    `opentelemetry.trace.get_tracer(...)` and emit spans which flow through
+    BOTH processors — redaction first (strips §12.1 default-off content
+    attributes from the attribute bag), then BSP (enqueues the now-redacted
+    span for export on cadence or on `flush()` call).
     """
 
     processor: BatchSpanProcessor
     exporter: SpanExporter
+    redaction_processor: RedactionSpanProcessor
 
     def flush(self, timeout_millis: int = 30_000) -> bool:
         """Force-flush buffered spans through the exporter.
@@ -201,10 +207,21 @@ def materialize_span_processor_stage(
             max_export_batch_size=config.collector.batch_size,
             schedule_delay_millis=config.collector.batch_window_seconds * 1000,
         )
+        redaction_processor = RedactionSpanProcessor()
     except Exception as exc:
         raise SpanProcessorBindError(
             f"BatchSpanProcessor / OTLPSpanExporter construction failed: {exc}"
         ) from exc
 
+    # Redaction MUST register BEFORE the BSP — the synchronous OTLP exporter
+    # serializes the SpanData inside its on_end path, so any attribute the
+    # BSP enqueues for export is what reaches the wire. Per OD spec C-OD-13
+    # §13.2: pre-collector redaction at SDK / wrapper boundary BEFORE the
+    # BatchSpanProcessor buffer.
+    provider.add_span_processor(redaction_processor)
     provider.add_span_processor(processor)
-    return SpanProcessorStage(processor=processor, exporter=resolved_exporter)
+    return SpanProcessorStage(
+        processor=processor,
+        exporter=resolved_exporter,
+        redaction_processor=redaction_processor,
+    )
