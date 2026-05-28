@@ -289,3 +289,105 @@ def test_compute_state_oldest_age_hours_from_unix_ns(tmp_path: Path) -> None:
     _seed(daemon, [_span_row("old", start_time_unix_ns=0)])
     state = ring.compute_state(now_unix_ns=5 * _HOUR_NS)
     assert state.oldest_row_age_hours == 5
+
+
+# ---------------------------------------------------------------------------
+# U-OD-43 — flush_to_sqlite + SpanRow → SpanInsertRow projection.
+# ---------------------------------------------------------------------------
+
+
+import time
+
+from harness_od.sqlite_span_store import SpanInsertRow, initialize_span_store
+
+from harness_runtime.lifecycle.ring_buffer import _project_span_row
+
+
+def test_project_span_row_fills_otel_defaults_for_missing_fields() -> None:
+    row = _span_row("s1", start_time_unix_ns=100, attrs='{"k":"v"}')
+    insert_row = _project_span_row(row)
+    assert isinstance(insert_row, SpanInsertRow)
+    assert insert_row.span_id == "s1"
+    assert insert_row.name == "test-span"
+    assert insert_row.start_time_ns == 100
+    assert insert_row.end_time_ns == 101  # start + duration_ns=1
+    assert insert_row.kind == 0
+    assert insert_row.status_code == 0
+    assert insert_row.events_json == "[]"
+    assert insert_row.attributes_json == '{"k":"v"}'
+    assert insert_row.parent_span_id is None
+    assert insert_row.status_message is None
+    assert insert_row.workflow_id is None
+    assert insert_row.workflow_run_id is None
+    assert insert_row.workflow_idempotency_key is None
+
+
+async def test_flush_to_sqlite_empty_buffer_returns_zero(tmp_path: Path) -> None:
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
+    conn = initialize_span_store(tmp_path / "spans.db")
+    try:
+        inserted = await ring.flush_to_sqlite(conn)
+    finally:
+        conn.close()
+    assert inserted == 0
+
+
+async def test_flush_to_sqlite_writes_buffered_rows(tmp_path: Path) -> None:
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
+    _seed(daemon, [_span_row(f"s{i}") for i in range(5)])
+    conn = initialize_span_store(tmp_path / "spans.db")
+    try:
+        inserted = await ring.flush_to_sqlite(conn)
+        count = conn.execute("SELECT COUNT(*) FROM spans").fetchone()[0]
+    finally:
+        conn.close()
+    assert inserted == 5
+    assert count == 5
+
+
+async def test_flush_to_sqlite_is_non_draining(tmp_path: Path) -> None:
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
+    _seed(daemon, [_span_row("s1"), _span_row("s2")])
+    conn = initialize_span_store(tmp_path / "spans.db")
+    try:
+        await ring.flush_to_sqlite(conn)
+        # Buffer still contains rows; flush does not drain.
+        assert len(daemon._ingested_rows) == 2  # pyright: ignore[reportPrivateUsage]
+    finally:
+        conn.close()
+
+
+async def test_re_flush_is_no_op_per_spec_27_4_inv_3(tmp_path: Path) -> None:
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
+    _seed(daemon, [_span_row(f"s{i}") for i in range(3)])
+    conn = initialize_span_store(tmp_path / "spans.db")
+    try:
+        first = await ring.flush_to_sqlite(conn)
+        second = await ring.flush_to_sqlite(conn)
+        count = conn.execute("SELECT COUNT(*) FROM spans").fetchone()[0]
+    finally:
+        conn.close()
+    assert first == 3
+    assert second == 0
+    assert count == 3
+
+
+async def test_flush_to_sqlite_100_span_batch_under_100ms_per_ac_5(
+    tmp_path: Path,
+) -> None:
+    daemon = _daemon(tmp_path)
+    ring = materialize_ring_buffer_stage(_config(tmp_path), daemon).ring_buffer
+    _seed(daemon, [_span_row(f"s{i}") for i in range(100)])
+    conn = initialize_span_store(tmp_path / "spans.db")
+    try:
+        start_ns = time.perf_counter_ns()
+        inserted = await ring.flush_to_sqlite(conn)
+        elapsed_ns = time.perf_counter_ns() - start_ns
+    finally:
+        conn.close()
+    assert inserted == 100
+    assert elapsed_ns < 100_000_000, f"flush took {elapsed_ns}ns; AC #5 budget 100ms"

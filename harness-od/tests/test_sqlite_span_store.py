@@ -13,7 +13,32 @@ from pathlib import Path
 
 import pytest
 
-from harness_od.sqlite_span_store import initialize_span_store
+from harness_od.sqlite_span_store import (
+    SpanInsertRow,
+    initialize_span_store,
+    insert_spans,
+)
+
+
+def _make_row(
+    span_id: str = "s1", *, parent_span_id: str | None = None
+) -> SpanInsertRow:
+    return SpanInsertRow(
+        span_id=span_id,
+        trace_id="t1",
+        parent_span_id=parent_span_id,
+        name="workflow.envelope",
+        kind=0,
+        start_time_ns=100,
+        end_time_ns=200,
+        status_code=0,
+        status_message=None,
+        attributes_json="{}",
+        events_json="[]",
+        workflow_id=None,
+        workflow_run_id=None,
+        workflow_idempotency_key=None,
+    )
 
 
 # Spec §C-OD-27.1 canonical 14-column schema. Column order matches the
@@ -167,6 +192,74 @@ def test_insert_or_ignore_preserves_existing_row_per_spec_27_4_inv_3(
     finally:
         conn.close()
     assert row == ("original",)
+
+
+def test_insert_spans_returns_zero_for_empty_iterable(db_path: Path) -> None:
+    conn = initialize_span_store(db_path)
+    try:
+        assert insert_spans(conn, []) == 0
+    finally:
+        conn.close()
+
+
+def test_insert_spans_writes_batch_and_returns_count(db_path: Path) -> None:
+    conn = initialize_span_store(db_path)
+    rows = [_make_row(f"s{i}") for i in range(10)]
+    try:
+        inserted = insert_spans(conn, rows)
+        count = conn.execute("SELECT COUNT(*) FROM spans").fetchone()[0]
+    finally:
+        conn.close()
+    assert inserted == 10
+    assert count == 10
+
+
+def test_insert_spans_idempotent_on_re_flush_per_spec_27_4_inv_3(
+    db_path: Path,
+) -> None:
+    conn = initialize_span_store(db_path)
+    rows = [_make_row(f"s{i}") for i in range(5)]
+    try:
+        first = insert_spans(conn, rows)
+        second = insert_spans(conn, rows)
+        count = conn.execute("SELECT COUNT(*) FROM spans").fetchone()[0]
+    finally:
+        conn.close()
+    assert first == 5
+    assert second == 0
+    assert count == 5
+
+
+def test_insert_spans_partial_overlap_inserts_only_new(db_path: Path) -> None:
+    conn = initialize_span_store(db_path)
+    try:
+        insert_spans(conn, [_make_row("s1"), _make_row("s2")])
+        added = insert_spans(
+            conn, [_make_row("s2"), _make_row("s3"), _make_row("s4")]
+        )
+        ids = sorted(r[0] for r in conn.execute("SELECT span_id FROM spans"))
+    finally:
+        conn.close()
+    assert added == 2
+    assert ids == ["s1", "s2", "s3", "s4"]
+
+
+def test_insert_spans_preserves_parent_span_id_when_set(db_path: Path) -> None:
+    conn = initialize_span_store(db_path)
+    try:
+        insert_spans(conn, [_make_row("s1", parent_span_id="p1")])
+        row = conn.execute(
+            "SELECT parent_span_id FROM spans WHERE span_id='s1'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == ("p1",)
+
+
+def test_span_insert_row_is_frozen(db_path: Path) -> None:
+    row = _make_row("s1")
+    with pytest.raises(Exception):  # pydantic raises ValidationError on frozen
+        row.span_id = "s2"  # type: ignore[misc]
 
 
 def test_returns_open_sqlite3_connection(db_path: Path) -> None:

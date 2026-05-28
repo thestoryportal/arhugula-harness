@@ -24,12 +24,17 @@ idempotent init.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterable
 from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict
 
 __all__ = [
     "SPANS_DDL",
     "INDEX_DDL",
+    "SpanInsertRow",
     "initialize_span_store",
+    "insert_spans",
 ]
 
 
@@ -68,7 +73,11 @@ def initialize_span_store(db_path: Path) -> sqlite3.Connection:
     `IF NOT EXISTS`; pragmas are idempotent).
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    # `check_same_thread=False` permits the runtime to dispatch sqlite calls
+    # via `asyncio.to_thread` (different worker threads across calls). Caller
+    # must serialize writes, which `RuntimeRingBuffer.flush_to_sqlite` does by
+    # virtue of single-writer invocation through the asyncio event loop.
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=OFF")
     conn.execute(SPANS_DDL)
@@ -76,3 +85,74 @@ def initialize_span_store(db_path: Path) -> sqlite3.Connection:
         conn.execute(stmt)
     conn.commit()
     return conn
+
+
+class SpanInsertRow(BaseModel):
+    """Typed 14-column row matching `spans` table per OD spec v1.8 §C-OD-27.1.
+
+    Frozen Pydantic v2 model preserving column-set + nullability discipline at
+    the OD-axis schema boundary. Caller (e.g. `harness-runtime` ring-buffer
+    flush) projects its in-memory span shape into this carrier before invoking
+    `insert_spans`.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    span_id: str
+    trace_id: str
+    parent_span_id: str | None
+    name: str
+    kind: int
+    start_time_ns: int
+    end_time_ns: int
+    status_code: int
+    status_message: str | None
+    attributes_json: str
+    events_json: str
+    workflow_id: str | None
+    workflow_run_id: str | None
+    workflow_idempotency_key: str | None
+
+
+_INSERT_SQL = """\
+INSERT OR IGNORE INTO spans (
+    span_id, trace_id, parent_span_id, name, kind,
+    start_time_ns, end_time_ns, status_code, status_message,
+    attributes_json, events_json,
+    workflow_id, workflow_run_id, workflow_idempotency_key
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+
+def insert_spans(conn: sqlite3.Connection, rows: Iterable[SpanInsertRow]) -> int:
+    """Batch-insert spans with INSERT OR IGNORE per spec §C-OD-27.4 invariant 3.
+
+    Returns the number of rows actually inserted (excludes rows skipped by the
+    primary-key IGNORE clause). Transaction commit is the caller's responsibility
+    when batching across multiple `insert_spans` calls; we commit once per call
+    to make idempotency at-call-site observable.
+    """
+    tuples = [
+        (
+            row.span_id,
+            row.trace_id,
+            row.parent_span_id,
+            row.name,
+            row.kind,
+            row.start_time_ns,
+            row.end_time_ns,
+            row.status_code,
+            row.status_message,
+            row.attributes_json,
+            row.events_json,
+            row.workflow_id,
+            row.workflow_run_id,
+            row.workflow_idempotency_key,
+        )
+        for row in rows
+    ]
+    if not tuples:
+        return 0
+    cur = conn.executemany(_INSERT_SQL, tuples)
+    conn.commit()
+    return cur.rowcount
