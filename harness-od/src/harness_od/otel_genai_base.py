@@ -82,21 +82,32 @@ class AttributeTier(StrEnum):
     """The 4 attribute tiers per OTel 1.41.0 archived text.
 
     v1.16 canonical-reading amendment per .harness/class_1_fork_tension_004_
-    d2_d3_otel_141_relitigation.md §4.1 (A) (operator-ratified 2026-05-26).
-    The v1.2-v1.15 3-tier enumeration was a misreading of the cited OTel
-    GenAI semconv 1.41.0 archived text; the actual 1.41.0 text declares 4
-    tiers. `CONDITIONALLY_REQUIRED` is NEW at v1.16 per OD spec v1.16 §1.2.
-    Internal naming preserved (`REQUIRED_STABLE` / `RECOMMENDED_DEVELOPMENT`
-    / `OPT_IN_CONTENT`) per v1.2-v1.15 lineage with OTel canonical names
-    documented as derivative per OD spec v1.16 §1.2 mapping table.
+    d2_d3_otel_141_relitigation.md §4.1 (A) (operator-ratified 2026-05-26)
+    split 3 → 4 tiers on the requirement-level axis; v1.23 canonical-reading
+    amendment refined the tier-label vocabulary at OD spec v1.23 §1.2 by
+    separating the requirement-level dimension from the OTel stability
+    dimension (the v1.2-lineage labels `Required (Stable)` / `Recommended
+    (Development)` / `Opt-In content` conflated the two; canonical reading
+    at v1.23 reads the labels as pure requirement-level: `Required` /
+    `Conditionally Required` / `Recommended` / `Opt-In`). All §4.3 base-
+    layer attributes ship at OTel stability=Development per OTel 1.41.0
+    archived text (WebFetch-verified 2026-05-27); see OD spec v1.23 §1.3
+    §4.3.1 per-attribute stability classification table.
 
-    Emission posture per tier: Required (Stable) always emitted;
-    Conditionally Required emitted per per-attribute conditional rule (NEW
-    at v1.16 — per-attribute conditional rules owed at future tier-assignment
-    audit per OD spec v1.16 §1.3 + §"Adjacent observations" (e));
-    Recommended (Development) emitted unless cardinality-safe-attribute
-    discipline excludes (C-OD-11); Opt-In content default-off per redaction
-    discipline (C-OD-12).
+    Internal enum-member naming preserved (`REQUIRED_STABLE` /
+    `RECOMMENDED_DEVELOPMENT` / `OPT_IN_CONTENT`) as DERIVATIVE per
+    OD spec v1.16 §1.2 + v1.23 §1.2 precedent; OTel canonical names
+    (`Required` / `Conditionally Required` / `Recommended` / `Opt-In`)
+    are the authoritative names. Enum-rename pass deferred per OD spec
+    v1.23 §"Adjacent observations" (f) as future operator-discretion arc.
+
+    Emission posture per tier: Required always emitted; Conditionally
+    Required emitted per per-attribute conditional rule (NEW at v1.16 —
+    per-attribute conditional rules owed at future tier-assignment audit
+    per OD spec v1.16 §1.3); Recommended emitted unless cardinality-safe-
+    attribute discipline excludes (C-OD-11); Opt-In default-off per
+    redaction discipline (C-OD-12). Stability tier does NOT gate emission
+    per OD spec v1.23 §1.3 emission-gating invariant.
     """
 
     REQUIRED_STABLE = "Required (Stable)"
@@ -125,8 +136,11 @@ class GenAiAttribute(BaseModel):
 #: four_way_drift.md §7.4.1 (operator-ratified 2026-05-26). The v1.2-v1.11
 #: 3-token form was a misreading of the cited OTel GenAI semconv 1.41.0
 #: archived text; the actual 1.41.0 text specifies 2-token. `gen_ai.provider.name`
-#: is REMOVED from the span-name format but PRESERVED as a Required (Stable)
-#: tier attribute at §4.3 (BASE_LAYER_ATTRIBUTES below).
+#: is REMOVED from the span-name format but PRESERVED as a Required
+#: (requirement-level, OTel canonical name; DERIVATIVE enum member
+#: `REQUIRED_STABLE` per OD spec v1.23 §1.2 dimensional split + §1.3
+#: §4.3.1 stability=Development classification) tier attribute at §4.3
+#: (BASE_LAYER_ATTRIBUTES below).
 SPAN_NAME_FORMAT: str = "{gen_ai.operation.name} {gen_ai.request.model}"
 
 #: §4.5 base metric name, verbatim — a histogram with cardinality control per
@@ -153,17 +167,23 @@ HIERARCHY_CORRELATION_KEY: str = "gen_ai.conversation.id"
 #: Required + 4 Recommended + 8 Opt-In = 17 attributes (attribute SET
 #: preserved verbatim from v1.2; tier classification only redistributed).
 BASE_LAYER_ATTRIBUTES: tuple[GenAiAttribute, ...] = (
-    # Required (Stable) — always emitted (OTel 1.41.0: Required).
+    # Required — always emitted (OTel 1.41.0: Required, stability=Development
+    # per OD spec v1.23 §1.3 §4.3.1; DERIVATIVE enum member `REQUIRED_STABLE`
+    # preserved per OD spec v1.23 §1.2 + v1.16 §1.2 precedent).
     GenAiAttribute(name="gen_ai.operation.name", tier=AttributeTier.REQUIRED_STABLE),
     GenAiAttribute(name="gen_ai.provider.name", tier=AttributeTier.REQUIRED_STABLE),
-    # Conditionally Required — OTel 1.41.0 per-attribute condition; harness
-    # may emit unconditionally where condition is harness-always-met (e.g.
-    # `gen_ai.request.model` "If available" with harness always knowing
-    # model). Tier classification at §4.3; emission policy at OD plan AC #4.
+    # Conditionally Required — OTel 1.41.0 per-attribute condition (stability=
+    # Development per OD spec v1.23 §1.3 §4.3.1); harness may emit unconditionally
+    # where condition is harness-always-met (e.g. `gen_ai.request.model` "If
+    # available" with harness always knowing model). Tier classification at §4.3;
+    # emission policy at OD plan AC #4.
     GenAiAttribute(name="gen_ai.request.model", tier=AttributeTier.CONDITIONALLY_REQUIRED),
     GenAiAttribute(name="server.port", tier=AttributeTier.CONDITIONALLY_REQUIRED),
     GenAiAttribute(name="gen_ai.conversation.id", tier=AttributeTier.CONDITIONALLY_REQUIRED),
-    # Recommended (Development) — emitted unless cardinality-safe discipline excludes.
+    # Recommended — emitted unless cardinality-safe discipline excludes (OTel
+    # 1.41.0: Recommended, stability=Development per OD spec v1.23 §1.3 §4.3.1;
+    # DERIVATIVE enum member `RECOMMENDED_DEVELOPMENT` preserved per OD spec
+    # v1.23 §1.2 + v1.16 §1.2 precedent).
     GenAiAttribute(name="gen_ai.usage.input_tokens", tier=AttributeTier.RECOMMENDED_DEVELOPMENT),
     GenAiAttribute(name="gen_ai.usage.output_tokens", tier=AttributeTier.RECOMMENDED_DEVELOPMENT),
     GenAiAttribute(
@@ -171,7 +191,10 @@ BASE_LAYER_ATTRIBUTES: tuple[GenAiAttribute, ...] = (
         tier=AttributeTier.RECOMMENDED_DEVELOPMENT,
     ),
     GenAiAttribute(name="server.address", tier=AttributeTier.RECOMMENDED_DEVELOPMENT),
-    # Opt-In content — default-off per redaction discipline (C-OD-12).
+    # Opt-In — default-off per redaction discipline (C-OD-12; OTel 1.41.0:
+    # Opt-In, stability=Development per OD spec v1.23 §1.3 §4.3.1; DERIVATIVE
+    # enum member `OPT_IN_CONTENT` preserved per OD spec v1.23 §1.2 + v1.16
+    # §1.2 precedent).
     GenAiAttribute(name="gen_ai.input.messages", tier=AttributeTier.OPT_IN_CONTENT),
     GenAiAttribute(name="gen_ai.output.messages", tier=AttributeTier.OPT_IN_CONTENT),
     GenAiAttribute(name="gen_ai.system_instructions", tier=AttributeTier.OPT_IN_CONTENT),
