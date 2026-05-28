@@ -84,6 +84,7 @@ __all__ = [
     "ProviderCapabilityBindings",
     "ProviderClientsStage",
     "ProviderDegradedWarning",
+    "ProviderNoneConfiguredError",
     "ProviderSecretMissingError",
     "ProviderTransientError",
     "construct_anthropic_adapter",
@@ -159,6 +160,28 @@ class ProviderAuthError(Exception):
         super().__init__(f"provider={provider!r}: auth failure: {cause}")
         self.provider = provider
         self.cause = cause
+
+
+class ProviderNoneConfiguredError(Exception):
+    """Stage-3a `RT-FAIL-PROVIDER-NONE-CONFIGURED` (permanent).
+
+    Raised at the end of `materialize_provider_clients_stage` when every
+    provider degraded via `*_optional=True` + construction failure, leaving
+    `ctx.providers` empty. The stage-5 LLM dispatcher binding requires at
+    least one provider per `llm_dispatch.py:1025`; surfacing this at stage 3a
+    gives operators a clear "no provider configured" message instead of an
+    opaque downstream failure.
+
+    Added per `.harness/class_1_fork_provider_construction_allowlist_semantic.md`
+    operator-ratified 2026-05-28 (E-prod-3).
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "stage 3a CP_CLIENTS: all providers failed to construct AND were "
+            "marked optional; no provider remains. Configure at least one "
+            "provider keyring entry, OR mark fewer providers optional."
+        )
 
 
 class ProviderDegradedWarning(Warning):
@@ -674,25 +697,51 @@ async def materialize_provider_clients_stage(
 
     providers: dict[str, ProviderClient] = {}
 
-    # Step 1: Anthropic. ProviderAuthError + SecretMissingError propagate
-    # (permanent); transient bounded-retries up to `max_attempts`.
-    providers["anthropic"] = await _attempt_with_bounded_retry(
-        "anthropic", anthropic_construct, max_attempts=max_attempts
-    )
+    # Step 1: Anthropic. ProviderAuthError ALWAYS propagates (operator
+    # misconfig). ProviderTransientError + ProviderSecretMissingError swallow
+    # only if `anthropic_optional=True` per
+    # `.harness/class_1_fork_provider_construction_allowlist_semantic.md`
+    # (E-prod-3, 2026-05-28).
+    try:
+        providers["anthropic"] = await _attempt_with_bounded_retry(
+            "anthropic", anthropic_construct, max_attempts=max_attempts
+        )
+    except (ProviderTransientError, ProviderSecretMissingError) as exc:
+        if config.anthropic_optional:
+            cause = exc.cause if isinstance(exc, ProviderTransientError) else exc
+            warnings.warn(
+                ProviderDegradedWarning("anthropic", cause),
+                stacklevel=2,
+            )
+            # `"anthropic"` key intentionally absent from providers dict.
+        else:
+            raise
 
-    # Step 2: OpenAI. Same posture as anthropic.
-    providers["openai"] = await _attempt_with_bounded_retry(
-        "openai", openai_construct, max_attempts=max_attempts
-    )
+    # Step 2: OpenAI. Symmetric to anthropic.
+    try:
+        providers["openai"] = await _attempt_with_bounded_retry(
+            "openai", openai_construct, max_attempts=max_attempts
+        )
+    except (ProviderTransientError, ProviderSecretMissingError) as exc:
+        if config.openai_optional:
+            cause = exc.cause if isinstance(exc, ProviderTransientError) else exc
+            warnings.warn(
+                ProviderDegradedWarning("openai", cause),
+                stacklevel=2,
+            )
+        else:
+            raise
 
-    # Step 3: Ollama with degraded branch.
+    # Step 3: Ollama. Keyring-less (local-tier); only ProviderTransientError
+    # is possible at construction (no SecretMissingError path). Matches the
+    # pre-E-prod-3 ollama_optional behavior.
     try:
         providers["ollama"] = await _attempt_with_bounded_retry(
             "ollama", ollama_construct, max_attempts=max_attempts
         )
     except ProviderTransientError as transient_exc:
         if config.ollama_optional:
-            # Surface degraded; continue with 2-provider context.
+            # Surface degraded; continue with reduced-provider context.
             # Unwrap to `transient_exc.cause` (e.g., ConnectionError) so the
             # warning identifies the underlying network failure, not the
             # ProviderTransientError wrapper that's an internal carry.
@@ -704,6 +753,13 @@ async def materialize_provider_clients_stage(
         else:
             # Hard stage-3a failure per multi-LLM commitment.
             raise
+
+    # Post-loop invariant: at least one provider successfully constructed.
+    # If every provider was optional + degraded, surface the typed
+    # `RT-FAIL-PROVIDER-NONE-CONFIGURED` here at the construction site rather
+    # than letting it bubble to stage 5 as an opaque `LLMDispatchBindError`.
+    if len(providers) == 0:
+        raise ProviderNoneConfiguredError()
 
     return ProviderClientsStage(providers=providers)
 

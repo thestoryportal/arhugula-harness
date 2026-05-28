@@ -50,6 +50,7 @@ from harness_runtime.lifecycle.providers import (
     ProviderCapabilityBindings,
     ProviderClientsStage,
     ProviderDegradedWarning,
+    ProviderNoneConfiguredError,
     ProviderSecretMissingError,
     ProviderTransientError,
     construct_anthropic_adapter,
@@ -576,6 +577,8 @@ def _runtime_config_with_ollama(
     *,
     ollama_host: str | None = None,
     ollama_optional: bool = False,
+    anthropic_optional: bool = False,
+    openai_optional: bool = False,
 ) -> RuntimeConfig:
     """`RuntimeConfig` with explicit Ollama config — for U-RT-19 tests."""
     return RuntimeConfig(
@@ -588,6 +591,8 @@ def _runtime_config_with_ollama(
         default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
         ollama_host=ollama_host,
         ollama_optional=ollama_optional,
+        anthropic_optional=anthropic_optional,
+        openai_optional=openai_optional,
     )
 
 
@@ -906,6 +911,200 @@ async def test_materialize_stage_ollama_not_optional_hard_fail(
             ollama_construct=ollama_down,
         )
     assert excinfo.value.provider == "ollama"
+
+
+# ---------------------------------------------------------------------------
+# E-prod-3 — per-provider optional tests (anthropic_optional + openai_optional).
+# Per `.harness/class_1_fork_provider_construction_allowlist_semantic.md`
+# operator-ratified 2026-05-28.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_materialize_stage_anthropic_optional_swallows_secret_missing(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """`anthropic_optional=True` + ProviderSecretMissingError → degraded warning.
+
+    This is the daemon-startup-unblock case from the original finding —
+    operator without an `anthropic_key` keyring entry can start the daemon
+    when `anthropic_optional=True`.
+    """
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    config = _runtime_config_with_ollama(tmp_path, anthropic_optional=True)
+
+    async def anthropic_no_key() -> ProviderClient:
+        raise ProviderSecretMissingError("anthropic", ANTHROPIC_KEYRING_NAME)
+
+    async def stable_openai() -> ProviderClient:
+        return _ready_adapter("openai")
+
+    async def stable_ollama() -> ProviderClient:
+        return _ready_adapter("ollama")
+
+    with pytest.warns(ProviderDegradedWarning):
+        stage = await materialize_provider_clients_stage(
+            config,
+            resolver,
+            anthropic_construct=anthropic_no_key,
+            openai_construct=stable_openai,
+            ollama_construct=stable_ollama,
+        )
+
+    assert "anthropic" not in stage.providers
+    assert set(stage.providers.keys()) == {"openai", "ollama"}
+
+
+@pytest.mark.asyncio
+async def test_materialize_stage_anthropic_optional_swallows_transient(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """`anthropic_optional=True` + persistent transient → degraded warning."""
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    config = _runtime_config_with_ollama(tmp_path, anthropic_optional=True)
+
+    async def anthropic_transient() -> ProviderClient:
+        raise ProviderTransientError("anthropic", ConnectionError("api unreachable"))
+
+    async def stable_openai() -> ProviderClient:
+        return _ready_adapter("openai")
+
+    async def stable_ollama() -> ProviderClient:
+        return _ready_adapter("ollama")
+
+    with pytest.warns(ProviderDegradedWarning):
+        stage = await materialize_provider_clients_stage(
+            config,
+            resolver,
+            anthropic_construct=anthropic_transient,
+            openai_construct=stable_openai,
+            ollama_construct=stable_ollama,
+        )
+
+    assert "anthropic" not in stage.providers
+
+
+@pytest.mark.asyncio
+async def test_materialize_stage_anthropic_optional_does_not_swallow_auth_error(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """`anthropic_optional=True` + `ProviderAuthError` → STILL RAISES.
+
+    Auth errors indicate operator HAS a keyring entry but it's invalid — that
+    misconfig must surface even with `*_optional=True`. Per fork doc §5.3
+    operator-UX framing.
+    """
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    config = _runtime_config_with_ollama(tmp_path, anthropic_optional=True)
+
+    async def anthropic_auth_fail() -> ProviderClient:
+        raise ProviderAuthError("anthropic", RuntimeError("401"))
+
+    async def unreached() -> ProviderClient:  # pragma: no cover
+        raise AssertionError("openai should not be reached after auth fail raises")
+
+    with pytest.raises(ProviderAuthError):
+        await materialize_provider_clients_stage(
+            config,
+            resolver,
+            anthropic_construct=anthropic_auth_fail,
+            openai_construct=unreached,
+            ollama_construct=unreached,
+        )
+
+
+@pytest.mark.asyncio
+async def test_materialize_stage_openai_optional_swallows_secret_missing(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """`openai_optional=True` + ProviderSecretMissingError → degraded warning."""
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    config = _runtime_config_with_ollama(tmp_path, openai_optional=True)
+
+    async def stable_anthropic() -> ProviderClient:
+        return _ready_adapter("anthropic")
+
+    async def openai_no_key() -> ProviderClient:
+        raise ProviderSecretMissingError("openai", OPENAI_KEYRING_NAME)
+
+    async def stable_ollama() -> ProviderClient:
+        return _ready_adapter("ollama")
+
+    with pytest.warns(ProviderDegradedWarning):
+        stage = await materialize_provider_clients_stage(
+            config,
+            resolver,
+            anthropic_construct=stable_anthropic,
+            openai_construct=openai_no_key,
+            ollama_construct=stable_ollama,
+        )
+
+    assert "openai" not in stage.providers
+    assert set(stage.providers.keys()) == {"anthropic", "ollama"}
+
+
+@pytest.mark.asyncio
+async def test_materialize_stage_all_three_optional_all_degraded_raises_none_configured(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """All three optional + all three degrade → `ProviderNoneConfiguredError`.
+
+    The post-loop empty-providers invariant. Surfacing at stage 3a (not
+    stage 5 LLM-dispatcher) gives operators a clear error message.
+    """
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    config = _runtime_config_with_ollama(
+        tmp_path,
+        ollama_optional=True,
+        anthropic_optional=True,
+        openai_optional=True,
+    )
+
+    async def anthropic_no_key() -> ProviderClient:
+        raise ProviderSecretMissingError("anthropic", ANTHROPIC_KEYRING_NAME)
+
+    async def openai_no_key() -> ProviderClient:
+        raise ProviderSecretMissingError("openai", OPENAI_KEYRING_NAME)
+
+    async def ollama_down() -> ProviderClient:
+        raise ProviderTransientError("ollama", ConnectionError("daemon unreachable"))
+
+    with pytest.warns(ProviderDegradedWarning):
+        with pytest.raises(ProviderNoneConfiguredError):
+            await materialize_provider_clients_stage(
+                config,
+                resolver,
+                anthropic_construct=anthropic_no_key,
+                openai_construct=openai_no_key,
+                ollama_construct=ollama_down,
+            )
+
+
+@pytest.mark.asyncio
+async def test_materialize_stage_anthropic_not_optional_secret_missing_hard_fail(
+    fake_keyring: _FakeKeyring, tmp_path: Path
+) -> None:
+    """`anthropic_optional=False` (default) + ProviderSecretMissingError → hard fail.
+
+    Regression guard: default behavior unchanged at `anthropic_optional=False`.
+    """
+    resolver = make_keyring_resolver(ProviderSecretsConfig())
+    config = _runtime_config_with_ollama(tmp_path)  # all *_optional default False
+
+    async def anthropic_no_key() -> ProviderClient:
+        raise ProviderSecretMissingError("anthropic", ANTHROPIC_KEYRING_NAME)
+
+    async def unreached() -> ProviderClient:  # pragma: no cover
+        raise AssertionError("openai should not be reached when anthropic hard-fails")
+
+    with pytest.raises(ProviderSecretMissingError):
+        await materialize_provider_clients_stage(
+            config,
+            resolver,
+            anthropic_construct=anthropic_no_key,
+            openai_construct=unreached,
+            ollama_construct=unreached,
+        )
 
 
 # ---------------------------------------------------------------------------

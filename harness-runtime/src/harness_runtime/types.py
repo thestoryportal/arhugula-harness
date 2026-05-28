@@ -1040,6 +1040,33 @@ class RuntimeConfig(BaseModel):
     commitment (ADR-F1 v1.2). U-RT-19 wires the degraded branch; field is
     declared here at U-RT-17 to keep schema additions in one commit."""
 
+    anthropic_optional: bool = False
+    """If True, Anthropic construction failure at stage 3a (keyring miss OR
+    network unreachable) → `RT-FAIL-PROVIDER-DEGRADED` (typed warning; stage
+    continues without `"anthropic"` in providers). Default False: Anthropic
+    failure is a hard stage 3a failure per the multi-LLM commitment
+    (ADR-F1 v1.2). Auth errors (`ProviderAuthError` — 401/403) ALWAYS surface
+    regardless of `anthropic_optional` because they indicate operator intent
+    + misconfig (keyring entry present but invalid).
+
+    Added per `.harness/class_1_fork_provider_construction_allowlist_semantic.md`
+    operator-ratified 2026-05-28 (E-prod-3). Symmetric extension of the
+    `ollama_optional` precedent at line 1938 deferred-to-discretion clause.
+    Unblocks daemon-mode subprocess e2e for operators without all keyring
+    entries configured."""
+
+    openai_optional: bool = False
+    """If True, OpenAI construction failure at stage 3a (keyring miss OR
+    network unreachable) → `RT-FAIL-PROVIDER-DEGRADED` (typed warning; stage
+    continues without `"openai"` in providers). Default False: OpenAI
+    failure is a hard stage 3a failure per the multi-LLM commitment
+    (ADR-F1 v1.2). Auth errors (`ProviderAuthError` — 401/403) ALWAYS surface
+    regardless of `openai_optional`.
+
+    Added per `.harness/class_1_fork_provider_construction_allowlist_semantic.md`
+    operator-ratified 2026-05-28 (E-prod-3). Symmetric extension of the
+    `ollama_optional` precedent."""
+
     tenant_id: str | None = None
     """Multi-tenant separation key per OD audit-ledger. `None` = single-tenant."""
 
