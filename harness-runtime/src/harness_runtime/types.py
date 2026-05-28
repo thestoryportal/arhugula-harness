@@ -82,7 +82,7 @@ from harness_cp.validator_fail_transient_staircase import (
 )
 from harness_cp.validator_framework_types import ValidatorFramework
 from harness_cp.workflow_driver import StepDispatcherRegistry as _CpStepDispatcherRegistry
-from harness_cp.workflow_driver_types import WorkflowStep
+from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_cp.workload_binding_engine_class_selection import HITLInvocation
 from harness_is.path_resolver import PathResolver
@@ -852,6 +852,8 @@ class LLMDispatcher(Protocol):
         self,
         binding: StepEffectiveBinding,
         step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
     ) -> Mapping[str, Any]:
         """Dispatch the step under the effective binding; return step output."""
         ...

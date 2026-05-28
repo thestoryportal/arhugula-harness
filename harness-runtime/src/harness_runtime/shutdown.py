@@ -71,7 +71,7 @@ from pydantic import BaseModel, ConfigDict
 from harness_runtime.lifecycle.state_ledger import LedgerWriter as _ConcreteLedgerWriter
 
 if TYPE_CHECKING:
-    from harness_runtime.types import HarnessContext, RuntimeConfig
+    from harness_runtime.types import HarnessContext
 
 __all__ = [
     "AlreadyShutDown",
@@ -349,13 +349,11 @@ def _resolve_ctx_pidfile_path(ctx: HarnessContext) -> Path | None:
         config = ctx.config  # type: ignore[attr-defined]
     except AttributeError:
         return None
-    if config is None:
-        return None
 
     from harness_runtime.admin.pidfile import resolve_pidfile_path
 
     try:
-        return resolve_pidfile_path(cast("RuntimeConfig", config))
+        return resolve_pidfile_path(config)
     except Exception:
         return None
 
