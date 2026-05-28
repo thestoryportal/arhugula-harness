@@ -41,6 +41,7 @@ from pydantic import BaseModel, ConfigDict
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import FallbackChain
 from harness_cp.engine_class import EngineClass
+from harness_cp.gate_level_rule import GateLevel
 from harness_cp.hitl_placement import HITLPlacement
 from harness_cp.layer_budget import LayerBudget
 from harness_cp.sub_agent_brief import SubAgentBrief
@@ -121,4 +122,27 @@ class WorkflowManifestEntry(BaseModel):
     `run_id` + `workflow_id` should be treated as a fresh run rather than
     a resumption. Orthogonal to the workflow's body steps' content
     (semantic-version-of-the-workflow-declaration semantics).
+    """
+
+    default_gate_level: GateLevel | None = None
+    """v1.20 addition (CP spec v1.20 §6.1.Y NEW field per ratified Reading A
+    of `.harness/class_1_fork_h_t_cp_19_default_gate_level_spec_extension.md`).
+    Operator-surfaced seed for the C-CP-12 §12.2 sub-agent gate-level
+    composition formula at workflow_driver per-step composition site.
+
+    Default value `None` preserves the v1.6 MVP behavior: when the field is
+    None at runtime, workflow_driver composes `StepExecutionContext` with
+    `parent_gate_level=GateLevel.AUTO` (the v1.6 hardcoded MVP default).
+    When operator-surfaced (not None), workflow_driver reads from this
+    field directly. Pydantic v2 Optional discipline preserves construction-
+    time omission across the existing 100+ test fixtures + manifest
+    construction sites (zero downstream-consumer disruption per the fork
+    doc §2.1 Reading A scope analysis).
+
+    Closes H_T-CP-19 spec-extension layer per
+    `.harness/class_1_fork_h_t_cp_19_default_gate_level_spec_extension.md`
+    Reading A ratification 2026-05-27 (operator Q1=A + Q2=apply-now +
+    Q3=defer-layer-3-e2e). RETIRE-READY promotion enabled at layer-2 close
+    (this field + workflow_driver.py:738 read site); RETIRE-READY → RETIRED
+    waits on multi-deployment e2e fixture per Q3 deferral.
     """

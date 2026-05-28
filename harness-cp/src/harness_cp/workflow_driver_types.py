@@ -161,11 +161,15 @@ class StepExecutionContext(BaseModel):
       ``ActionID(f"workflow:{workflow_id}:step:{step_index}")`` (per
       ``workflow_driver.py:_append_step_ledger_entry``).
     - ``parent_gate_level``: the seed input for the C-CP-12 §12.2 sub-agent
-      gate-level composition formula. v1.6 MVP default: ``GateLevel.AUTO``
-      (matches the harness solo-developer persona; operator surfaces this
-      via a future ``WorkflowManifestEntry.default_gate_level`` field per
-      v1.7+ extension). Per C-CP-12 §12.4 "deferred to implementation
-      discretion" — source of the seed is implementation-discretion-bounded.
+      gate-level composition formula. At v1.20 (post Reading A absorption
+      per `.harness/class_1_fork_h_t_cp_19_default_gate_level_spec_extension.md`):
+      sourced from ``manifest_entry.default_gate_level`` when surfaced;
+      falls back to ``GateLevel.AUTO`` (the v1.6 MVP default; matches the
+      harness solo-developer persona) when the field is None. Composition
+      site at ``workflow_driver.py`` reads ``default_gate_level if not
+      None else GateLevel.AUTO`` per CP spec v1.20 §6.1.Y. Per C-CP-12
+      §12.4: source-of-the-seed implementation-discretion-bounded at v1.6
+      was lifted to operator-surfaceable at v1.20.
     - ``parent_sandbox_tier``: the seed input for the C-AS-11 monotonic-
       ascension composition at sub-agent dispatch. v1.6 MVP default:
       ``SandboxTier.TIER_1_PROCESS`` (lowest tier; consistent with existing

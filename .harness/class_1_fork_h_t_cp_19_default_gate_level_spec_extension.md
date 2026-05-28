@@ -184,11 +184,36 @@ ZERO cross-axis cascade verified at filing.
 
 ---
 
-## §6 — Open routing decision
+## §6 — Resolution status
 
-**Status: PROPOSING — awaiting operator ratification of Reading + timing + layer-3 scope.**
+**Status: ✅ APPLIED 2026-05-27 — operator ratified Q1=A + Q2=apply-now + Q3=defer-layer-3-e2e same session.**
 
-Pre-substantive work HALTED per X-AL-3 + workspace `CLAUDE.md` §4.4 silent-absorption prevention. Resolution arc opens on operator ratification.
+Reading A absorbed across single bundled arc (this session):
+
+- **CP spec v1.19 → v1.20** NEW §6.1.Y `default_gate_level: GateLevel | None = None` field declaration; anti-extension invariant scope-narrowed 4 → 3 fields; ZERO cross-axis cascade
+- **CP plan v2.24 → v2.25** U-CP-13 single-unit-body canonical-reading amendment (11 → 12 fields; AC #1 12-field assertion; +3 tests; ZERO DAG/cluster/coverage change)
+- **harness-cp impl:**
+  - `workflow_manifest_entry.py` NEW `from harness_cp.gate_level_rule import GateLevel` import
+  - `workflow_manifest_entry.py` NEW field at position-end (12th field) with docstring
+  - `workflow_driver.py:738`-area composition site: reads from `manifest_entry.default_gate_level if not None else GateLevel.AUTO`
+  - `workflow_driver_types.py:163-168` StepExecutionContext docstring updated (deferral → applied)
+- **harness-cp tests:**
+  - `test_workflow_manifest_entry.py` `_eleven_fields` → `_twelve_fields` rename
+  - 3 NEW tests: `_has_default_gate_level_field`, `_default_gate_level_is_none`, `_accepts_explicit_default_gate_level`
+  - 692/692 harness-cp tests pass; 1091/1091 harness-runtime tests pass + 4 skipped
+- **Workspace `CLAUDE.md`** §2.3 CP spec + §2.4 CP plan rows bumped (v1.19 → v1.20; v2.24 → v2.25)
+
+**Layer status:**
+
+- Layer 1 (spec extension) — **APPLIED** at CP spec v1.20 §6.1.Y
+- Layer 2 (production binding read) — **APPLIED** at workflow_driver.py composition site
+- Layer 3 (multi-deployment e2e fixture) — **DEFERRED to future arc** per Q3 ratification
+
+**H_T-CP-19 retirement status:** PARTIAL → **RETIRE-READY** (post-v1.20 binding chain MET per `[[verification-shape-sharpened-grep-vs-e2e]]` 3-stage verification: WorkflowManifestEntry field declared + workflow_driver.py composition site reads from field + 1091/1091 runtime tests pass through real bootstrap path). RETIRE-READY → RETIRED — **DEFERRED** pending layer-3 multi-deployment e2e per Q3 ratification.
+
+**Retirement event filing:** Owed at batch-21 (separate filing arc; operator-discretion timing per existing 7d cadence).
+
+**Sub-species catalogue:** `3.spec-self-declared-future-extension-channel` — variant of resolved-but-carry-stale where the originating spec text (v1.6 §6 line 333 anti-extension invariant) EXPLICITLY self-declared the future amendment channel ("Workflow §4.1.2 Class-2 amendment to this contract"), and the v1.20 publication IS that exact channel. Distinct from prior species 3 sub-species — the carry was not stale-by-resolution but rather scheduled-by-original-spec-self-declaration. First application catalogued at H_T-CP-19 fork closure.
 
 ---
 
