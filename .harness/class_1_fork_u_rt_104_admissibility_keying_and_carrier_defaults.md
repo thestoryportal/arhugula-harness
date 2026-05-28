@@ -1,6 +1,6 @@
 # Class 1 Fork — U-RT-104 admissibility-keying mismatch + carrier-defaults divergence
 
-**Status:** PROPOSING — awaiting operator routing ratification.
+**Status:** ✅ APPLIED-AS-READING-β + Q2=APPLIED-AS-(i) (operator AskUserQuestion 2026-05-28 ratified Q1=(β) defer-to-runtime + Q2=(i) SF-1 doc-only reframe). Closes fork doc PROPOSING → APPLIED. Spec v1.35 → v1.36 + plan v2.31 → v2.32 + SF-1 canonical-reading addendum + workspace `CLAUDE.md` §2.3 + §2.4 row bumps co-published 2026-05-28. U-RT-104 implementation resumes against reframed AC #11 + U-RT-106 NEW AC #4.
 **Filed:** 2026-05-28 at U-RT-104 implementation arc open (Phase 2b L9-sedecies cluster, third unit in sequence; U-RT-102 + U-RT-103 already landed at worktree branch `worktree-phase-2b-u-rt-102-cli-scaffolding`).
 **Filing site:** `.harness/class_1_fork_u_rt_104_admissibility_keying_and_carrier_defaults.md`.
 **Halt point:** U-RT-104 (`WorkflowManifestLoader`) — implementation NOT started. Loader file + test file NOT authored.
