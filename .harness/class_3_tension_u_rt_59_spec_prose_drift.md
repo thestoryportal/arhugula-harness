@@ -2,7 +2,7 @@
 
 **Class:** 3 — informational; non-blocking.
 **Filed:** 2026-05-20, Phase 7 sub-phase 7b, U-RT-59 landing arc.
-**Status:** OPEN — landed against actual code surfaces; spec revisions owed at next CP/runtime spec revision pass.
+**Status:** ✅ 7-OF-8 CLOSED-via-runtime-spec-v1.30-bundled-absorption 2026-05-28 (status-line refreshed 2026-05-28) — items §§1-residual + 2 + 3 + 4 + 5 + 6 + 8 absorbed as canonical-reading amendments at runtime spec v1.29 → v1.30 §1 amendment-site table per delta-only-spec-file convention; v1 baseline body PRESERVED VERBATIM at all 7 sites; downstream readers MUST apply v1.30 §1 substitutions. Production state at HEAD already matches all 7 absorbed readings (spec catches up to production). **Item §7 (step_dispatch_timeout_seconds) CARVED OUT** per X-AL-3 silent-absorption discipline — §7 owes a NEW C-RT-03 RuntimeConfig field with NO current production binding (verified ZERO at all axis src/ trees this session; only a comment marker at `stage_5_loop_init.py:331`). Absorbing §7 into v1.30 as spec-only contract addition would be silent H_T design extension at Phase 7 per workspace `CLAUDE.md` §4.4. §7 routes separately as either (a) Class 1 fork for field addition + production binding arc, or (b) explicit "deferred to step_dispatch_timeout_seconds substantive arc" disposition — operator-discretion timing. Sub-species candidate at v1.30 §"Pattern catalogued": **bundled-absorption of multi-item spec-prose drift at delta-only-spec-file lineage** — distinct from species 3 (resolved-but-carry-stale-inherited); operates on carry-window-duration dimension (22 versions × 8 days carry).
 
 ---
 
