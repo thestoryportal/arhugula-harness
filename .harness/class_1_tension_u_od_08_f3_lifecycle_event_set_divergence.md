@@ -1,5 +1,7 @@
 # Class 1 Tension — U-OD-08 F3 lifecycle-event-class set diverges from spec §6.1
 
+**Status:** ✅ CLOSED-via-OD-plan-v2.8 (resolved 2026-05-16; verified at workspace-wide audit 2026-05-20; status-line refreshed 2026-05-27) — F3LifecycleEventClass conformed to spec §6.1 8-value set per OD plan v2.8 §0.2 defect table. Body §"RESOLVED" (line 57) + §"Audit reconciliation (2026-05-20)" declared closure; top **Filed:** field was never re-issued to carry a Status. Species 3 (resolved-but-carry-stale-inherited) per workflow v1.9 §7.4.7.2.
+
 **Filed:** 2026-05-16 (Phase 7 sub-phase 7b, OD axis-stream, L3 batch)
 **Unit:** U-OD-08 — Map F3 lifecycle events to span events
 **Plan body:** `Implementation_Plan_Operational_Discipline_v2_1.md` §3.2.5 (preserved verbatim through v2.7)
