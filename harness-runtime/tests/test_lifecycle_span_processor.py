@@ -31,6 +31,7 @@ from harness_od.per_cell_collector_placement_matrix import CollectorPlacement
 from harness_od.per_sandbox_tier_otlp_reachability import (
     PER_SANDBOX_TIER_REACHABILITY,
 )
+from harness_od.redaction_span_processor import RedactionSpanProcessor
 from harness_runtime.lifecycle.span_processor import (
     SpanProcessorReachabilityError,
     SpanProcessorStage,
@@ -188,6 +189,58 @@ def test_materialize_returns_stage_with_processor_and_exporter(
     assert isinstance(stage, SpanProcessorStage)
     assert isinstance(stage.processor, BatchSpanProcessor)
     assert stage.exporter is exporter
+    assert isinstance(stage.redaction_processor, RedactionSpanProcessor)
+
+
+# ---------------------------------------------------------------------------
+# C-OD-12 + C-OD-13 redaction wiring (H_T-OD-4 substrate retirement).
+# ---------------------------------------------------------------------------
+
+
+def test_materialize_attaches_redaction_processor_before_bsp(
+    tmp_path: Path,
+) -> None:
+    """OD-4 AC: materialize wires RedactionSpanProcessor + BSP on the provider.
+
+    Verified via behavior — emit a span carrying a §12.1 content attribute,
+    flush, observe the exporter received the span WITHOUT the content
+    attribute. The default attribute is stripped at on_end via the redaction
+    processor registered ahead of the BSP.
+    """
+    in_memory = InMemorySpanExporter()
+    provider = _provider()
+    stage = materialize_span_processor_stage(_config(tmp_path), provider, exporter=in_memory)
+    tracer = provider.get_tracer("redaction-wire-test")
+    with tracer.start_as_current_span("anthropic.messages.create") as span:
+        span.set_attribute("gen_ai.input.messages", "PII payload")
+        span.set_attribute("gen_ai.operation.name", "chat")
+    stage.flush(timeout_millis=5000)
+    [exported] = in_memory.get_finished_spans()
+    assert "gen_ai.input.messages" not in exported.attributes
+    assert exported.attributes["gen_ai.operation.name"] == "chat"
+
+
+def test_materialize_strips_all_13_content_attributes_at_export(
+    tmp_path: Path,
+) -> None:
+    """OD-4 AC: full §12.1 13-attribute set stripped at export time."""
+    from harness_od.content_structure_discipline import (
+        DEFAULT_OFF_CONTENT_ATTRIBUTES,
+    )
+
+    in_memory = InMemorySpanExporter()
+    provider = _provider()
+    stage = materialize_span_processor_stage(_config(tmp_path), provider, exporter=in_memory)
+    tracer = provider.get_tracer("redaction-full-test")
+    with tracer.start_as_current_span("s") as span:
+        for key in DEFAULT_OFF_CONTENT_ATTRIBUTES:
+            span.set_attribute(key, f"content for {key}")
+        span.set_attribute("sandbox.tier", "tier_1_process")
+    stage.flush(timeout_millis=5000)
+    [exported] = in_memory.get_finished_spans()
+    for key in DEFAULT_OFF_CONTENT_ATTRIBUTES:
+        assert key not in exported.attributes, f"runtime wiring leaked {key}"
+    assert exported.attributes["sandbox.tier"] == "tier_1_process"
 
 
 def test_materialize_attaches_processor_to_provider(tmp_path: Path) -> None:
