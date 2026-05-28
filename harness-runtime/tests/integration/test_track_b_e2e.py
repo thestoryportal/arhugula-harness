@@ -1919,7 +1919,7 @@ async def test_ac8_webhook_delivery_emits_hitl_webhook_span(
     assert outer.attrs["webhook.idempotency_key"] == "idem-ac8-1"
     assert outer.attrs["webhook.delivery_attempts"] == 1
     # Attempt span carries attempt number + final status code.
-    assert attempt.attrs["retry.attempt.number"] == 1
+    assert attempt.attrs["retry.attempt_number"] == 1
     assert attempt.attrs["webhook.status_code"] == 200
 
     # Cleanup: shutdown the harness ctx so collector/provider tasks terminate.

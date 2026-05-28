@@ -106,6 +106,14 @@ class FakeDaemon:
         self.stopped = True
 
 
+class _FakeSpanContextHandle:
+    """OTel ``SpanContext`` shim — minimal surface for ``span_id`` + ``is_valid``."""
+
+    def __init__(self, span_id: int) -> None:
+        self.span_id = span_id
+        self.is_valid = True
+
+
 class _FakeSpanContext:
     """Minimal span context-manager substrate for ``FakeTracerProvider``."""
 
@@ -116,6 +124,40 @@ class _FakeSpanContext:
 
     def set_attribute(self, key: str, value: object) -> None:
         self.attrs[key] = value
+
+    def set_status(self, *_args: object, **_kwargs: object) -> None:
+        """OTel ``Span.set_status`` no-op shim — production callers at
+        ``hitl_gate_composer`` + ``validator_escalation_composer`` invoke
+        this on every gate/escalation span; the fake captures attrs only.
+        """
+        return None
+
+    def record_exception(self, *_args: object, **_kwargs: object) -> None:
+        """OTel ``Span.record_exception`` no-op shim — sibling to
+        ``set_status``; production wraps audit-compose failures via this.
+        """
+        return None
+
+    def add_event(self, *_args: object, **_kwargs: object) -> None:
+        """OTel ``Span.add_event`` no-op shim — production attaches
+        per-step lifecycle events via this surface.
+        """
+        return None
+
+    def get_span_context(self) -> "_FakeSpanContextHandle":
+        """OTel ``Span.get_span_context`` shim — production retry-instrumentation
+        reads ``span_id`` from the returned handle to format
+        ``retry.original_span_id``.
+        """
+        # Stable per-instance span_id by Python object identity; sufficient
+        # for tests that only assert hex-formatting succeeds.
+        return _FakeSpanContextHandle(span_id=id(self) & 0xFFFFFFFFFFFFFFFF)
+
+    def end(self, *_args: object, **_kwargs: object) -> None:
+        """OTel ``Span.end`` no-op shim — production explicitly ends some
+        spans outside ``with`` blocks.
+        """
+        return None
 
     def __enter__(self) -> "_FakeSpanContext":
         self._parent.spans.append(self)
