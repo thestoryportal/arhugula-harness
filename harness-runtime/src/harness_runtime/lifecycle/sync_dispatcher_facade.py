@@ -100,9 +100,27 @@ from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 
 __all__ = [
     "AsyncStepDispatcher",
+    "StepDispatchTimeoutError",
     "SyncDispatcherFacade",
     "materialize_sync_dispatcher_facade",
 ]
+
+
+class StepDispatchTimeoutError(Exception):
+    """Typed per-step worker-thread blocking timeout.
+
+    Raised by ``SyncDispatcherFacade.dispatch`` when the underlying
+    ``future.result(timeout=self.result_timeout_seconds)`` exceeds the
+    bound. Discriminated from generic ``TimeoutError`` so the CP workflow
+    driver can map to ``RT-FAIL-STEP-DISPATCH-TIMEOUT`` per
+    ``Spec_Harness_Runtime_v1.md`` v1.31 §11 failure-mode taxonomy.
+
+    Cross-axis layering discipline: harness-cp cannot import this class
+    (harness-runtime → harness-cp would invert the workspace dependency
+    graph). The driver matches by ``type(exc).__name__ ==
+    "StepDispatchTimeoutError"`` per the existing HITLPauseRequestedSignal
+    name-match pattern at ``workflow_driver.py:830``.
+    """
 
 
 @runtime_checkable
@@ -185,7 +203,12 @@ class SyncDispatcherFacade:
         """
         coro = self.inner.dispatch(binding, step, step_context=step_context)
         future = asyncio.run_coroutine_threadsafe(coro, self.loop)
-        return future.result(timeout=self.result_timeout_seconds)
+        try:
+            return future.result(timeout=self.result_timeout_seconds)
+        except TimeoutError as exc:
+            raise StepDispatchTimeoutError(
+                f"step dispatch exceeded {self.result_timeout_seconds}s bound"
+            ) from exc
 
 
 def materialize_sync_dispatcher_facade(

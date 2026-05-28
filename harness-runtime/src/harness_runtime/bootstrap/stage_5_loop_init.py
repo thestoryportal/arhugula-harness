@@ -326,16 +326,18 @@ async def execute(
     # top so the CP `StepDispatcher` Protocol (sync) is satisfied uniformly.
     # `materialize_sync_dispatcher_facade` captures the running event loop
     # (this stage executes on the outer api.py loop per loop-capture-timing
-    # invariant). Result-timeout reuses `config.drain_timeout_seconds`;
-    # tracked at Class 3 drift item 7 for the future
-    # `step_dispatch_timeout_seconds` config split.
+    # invariant). Result-timeout reads `config.step_dispatch_timeout_seconds`
+    # per spec v1.31 §3 — per-step worker-thread bound, independent of
+    # whole-workflow `config.drain_timeout_seconds`. On expiry, the facade
+    # raises `StepDispatchTimeoutError`; CP driver maps to
+    # `RT-FAIL-STEP-DISPATCH-TIMEOUT` per spec v1.31 §11.
     inference_step_dispatcher = materialize_sync_dispatcher_facade(
         cast(Any, ctx.llm_dispatcher),
-        result_timeout_seconds=config.drain_timeout_seconds,
+        result_timeout_seconds=config.step_dispatch_timeout_seconds,
     )
     sub_agent_step_dispatcher = materialize_sync_dispatcher_facade(
         cast(Any, hitl_sub_agent),
-        result_timeout_seconds=config.drain_timeout_seconds,
+        result_timeout_seconds=config.step_dispatch_timeout_seconds,
     )
 
     # ---------------------------------------------------------------------
@@ -355,7 +357,7 @@ async def execute(
     )
     tool_step_dispatcher = materialize_sync_dispatcher_facade(
         ctx.tool_dispatcher,
-        result_timeout_seconds=config.drain_timeout_seconds,
+        result_timeout_seconds=config.step_dispatch_timeout_seconds,
     )
 
     ctx.step_dispatchers = StepKindDispatcherRegistry(

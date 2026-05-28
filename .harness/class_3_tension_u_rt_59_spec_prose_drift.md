@@ -2,7 +2,7 @@
 
 **Class:** 3 — informational; non-blocking.
 **Filed:** 2026-05-20, Phase 7 sub-phase 7b, U-RT-59 landing arc.
-**Status:** OPEN — landed against actual code surfaces; spec revisions owed at next CP/runtime spec revision pass.
+**Status:** ✅ 8-OF-8 CLOSED 2026-05-28 — items §§1-residual + 2 + 3 + 4 + 5 + 6 + 8 absorbed at runtime spec v1.29 → v1.30 bundled absorption (commit `3d3b7b1`); item §7 (`step_dispatch_timeout_seconds`) CARVED OUT at v1.30 per X-AL-3 silent-absorption discipline, then routed via Class 1 fork `.harness/class_1_fork_step_dispatch_timeout_seconds_field_extension.md` filed 2026-05-28 (commit `d591263`), operator-ratified Reading A (Q1=A required-with-default; Q2=30.0s; Q3=β in-place at U-RT-02; Q4=p `RT-FAIL-STEP-DISPATCH-TIMEOUT`) 2026-05-28, applied at runtime spec v1.30 → v1.31 + runtime plan v2.26 → v2.27 + harness-runtime impl (`types.py` field landing + `sync_dispatcher_facade.py` `StepDispatchTimeoutError` typed exception class + 3 `stage_5_loop_init.py` callsite updates + drift-item-7 comment-marker removal + `workflow_driver.py` name-match handler + 4 NEW tests + 1 in-place test refresh). 1802/1802 harness-runtime + harness-cp tests pass + 4 skipped. Production state at HEAD matches all 8 absorbed readings. Sub-species catalogued at v1.31 closure: **carve-out → fork-doc → ratify → apply lineage** — distinct from bundled-absorption sub-species at v1.30 (operates on the single-item residual closure dimension after bundled-absorption arc; mirrors `h_t_cp_19_default_gate_level_spec_extension` filed → ratified → applied single-day 3-arc precedent). Carry-window total: 22 + 1 = 23 delta versions × 8 days. ZERO cross-axis cascade verified.
 
 ---
 

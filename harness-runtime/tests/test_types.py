@@ -85,6 +85,27 @@ def test_runtime_config_tenant_id_defaults_none() -> None:
     assert cfg.tenant_id is None
 
 
+def test_runtime_config_step_dispatch_timeout_seconds_default_is_30_seconds() -> (
+    None
+):
+    """`step_dispatch_timeout_seconds` defaults to 30.0 per C-RT-03 v1.31
+    (per-step worker-thread blocking bound — RT-FAIL-STEP-DISPATCH-TIMEOUT)."""
+    cfg = _make_runtime_config()
+    assert cfg.step_dispatch_timeout_seconds == 30.0
+
+
+def test_runtime_config_step_dispatch_timeout_seconds_independent_from_drain() -> (
+    None
+):
+    """`step_dispatch_timeout_seconds` is independent from
+    `drain_timeout_seconds` per spec v1.31 §3 (per-step vs whole-workflow)."""
+    cfg = _make_runtime_config().model_copy(
+        update={"step_dispatch_timeout_seconds": 5.0, "drain_timeout_seconds": 120.0}
+    )
+    assert cfg.step_dispatch_timeout_seconds == 5.0
+    assert cfg.drain_timeout_seconds == 120.0
+
+
 def test_harness_context_is_frozen() -> None:
     """`HarnessContext.model_config['frozen']` is `True` per C-RT-04."""
     assert HarnessContext.model_config.get("frozen") is True

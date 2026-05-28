@@ -862,6 +862,25 @@ def _execute_workflow_body(
                 # Unknown BaseException (KeyboardInterrupt, SystemExit, etc.) —
                 # re-raise per Python convention; do not consume.
                 raise
+            # Spec v1.31 §11 — per-step worker-thread blocking bound exceeded
+            # at SyncDispatcherFacade.dispatch's
+            # future.result(timeout=config.step_dispatch_timeout_seconds).
+            # Discriminated from generic Exception so the fail-class string
+            # canonicalizes to RT-FAIL-STEP-DISPATCH-TIMEOUT. Name-match per
+            # the HITLPauseRequestedSignal pattern above (harness-cp cannot
+            # import from harness-runtime per workspace dependency graph).
+            if type(exc).__name__ == "StepDispatchTimeoutError":
+                return RunResult(
+                    workflow_id=manifest_entry.workflow_id,
+                    run_id=run_id,
+                    status=RunStatus.FAILED,
+                    terminal_step_index=step_index,
+                    partial_state=dict(accumulated),
+                    final_state=None,
+                    fail_class=(
+                        f"step-failure: RT-FAIL-STEP-DISPATCH-TIMEOUT: {exc}"
+                    ),
+                ), steps_executed
             return RunResult(
                 workflow_id=manifest_entry.workflow_id,
                 run_id=run_id,
