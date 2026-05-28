@@ -1,6 +1,6 @@
 # Class 1 Fork — H_T-AS-8f `managed_agents.*` namespace producer-site absence + production-only exclusion semantic
 
-**Status:** ✅ RATIFIED 2026-05-28 (operator AskUserQuestion same-session as filing per accelerated single-session ratification cycle; apply arc opens at next commit)
+**Status:** ✅ FULLY-APPLIED 2026-05-28 (3-commit single-session lifecycle: filing `dccc705` + ratify `d3e2148` + apply this commit; H_T-AS-8f STILL-BOUNDED → STILL-BOUNDED-INDEFINITELY routing transit at batch-26 retirement event)
 
 **Operator ratification (2026-05-28):**
 
