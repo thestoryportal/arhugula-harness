@@ -10,11 +10,14 @@ infrastructure outside this MVP arc.
 
 Mechanism α (in-process, always runs):
 - AC #2 YAML↔TOML round-trip equivalence at the manifest-load layer
+- AC #5 mid-multi-step in-process drain trigger → DRAINED + partial-state
+  populated + hash-chain-intact state ledger (mech-γ subprocess reframe
+  per AC #6 precedent — same composition friction that defers
+  test_cli_daemon.py subprocess e2e)
+- AC #6 daemon-mode concurrent two-client isolation via direct tool.fn
+  invocation through the FastMCP server (subprocess γ shape deferred)
 - AC #9 manifest error → exit 2 + RT-FAIL-CLI-MANIFEST-* fail class
 - AC #10 config error → exit 3 + RT-FAIL-CLI-CONFIG-LOAD
-- Adjacent: one-shot vs daemon-client semantic equivalence at the
-  workflow-id-as-path discriminator (AC #5 partial; full equivalence with
-  real LLM at mechanism β)
 
 Mechanism β (real LLM, env-gated; skipped without ``ANTHROPIC_API_KEY``):
 - AC #1 single-step real Anthropic inference → SUCCESS
@@ -24,9 +27,13 @@ Mechanism β (real LLM, env-gated; skipped without ``ANTHROPIC_API_KEY``):
 - AC #8 webhook delivery with operator-supplied webhook_config
 
 Mechanism γ (multi-process subprocess; deferred):
-- AC #5 SIGINT mid-multi-step → DRAINED + partial-state + resumable
-- AC #6 daemon concurrent: 2 clients submit independent workflows
 - Full e2e PID file lifecycle (U-RT-107 AC #8)
+- AC #5 subprocess + real OS-signal SIGINT shape (in-process mech-α
+  lands now per advisor-ratified reframe; subprocess shape carries to
+  the same arc that lifts test_cli_daemon.py subprocess deferral)
+- AC #6 subprocess + real MCP-client transport shape (in-process mech-α
+  lands now per the AC #6 implementation arc; subprocess shape carries
+  to the same arc as AC #5 above)
 
 The mechanism β/γ tests are deferred-with-cite per `[[verification-shape-
 sharpened-grep-vs-e2e]]` + L9-undecies precedent. The H_T-AS-8d (skill.*
@@ -366,20 +373,377 @@ def test_ac8_webhook_delivery_emits_hitl_webhook_span() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Mechanism γ placeholders (multi-process subprocess; deferred)
+# AC #5 — mech-α reframe: in-process drain-flag set mid-step (subprocess γ
+# deferred under same composition friction that defers test_cli_daemon.py
+# subprocess e2e per AC #6 precedent).
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason=(
-        "Mechanism γ: AC #5 SIGINT mid-multi-step → DRAINED + partial-state "
-        "+ resumable. Requires subprocess + signal timing + ledger-resumption "
-        "infrastructure; deferred to follow-on arc with explicit operator-"
-        "discretion scope statement."
+@pytest.mark.asyncio
+async def test_ac5_sigint_mid_multi_step_produces_drained_resumable_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC #5 — mid-multi-step drain produces DRAINED RunResult with
+    partial-state populated and a hash-chain-intact state ledger.
+
+    Mech-α reframe (operator-ratified per advisor pre-substantive arc):
+    the substantive surface AC #5 verifies is the driver's per-step
+    pre-entry drain-check loop (`workflow_driver.py:732`) and the
+    ledger's append-only hash-chain integrity invariant — both
+    orthogonal to whether the drain originates from an in-process
+    `ctx.drained_flag.set()` call or from an OS signal handler invoking
+    the same set() through `drain.py:_on_drain`. The signal-handler path
+    itself is covered at `tests/test_drain.py`. Mech-γ subprocess shape
+    is deferred under the same `RuntimeConfig` composition friction that
+    defers `test_cli_daemon.py::test_ac1_e2e_daemon_subprocess_binds_socket_and_shuts_down`
+    per the AC #6 reframe precedent.
+
+    Invariants verified (mapping to runtime plan v2.31 §1.9 AC #5):
+      1. ``RunResult.status == "drained"`` — driver returns DRAINED at
+         the top of the step-1 iteration when `drained_flag` was set
+         during step-0 dispatch.
+      2. Partial-state populated — ``RunResult.terminal_state`` carries
+         the step-0 accumulation (the partial dict returned by the CP
+         driver at `workflow_driver.py:738` ``partial_state=dict(accumulated)``).
+      3. Ledger-resumable next invocation — ``state.jsonl`` exists, has
+         at least one append (step-0's entry), and the
+         ``prior_event_hash → response_hash`` chain validates
+         per ADR-D5 §1.4. A future ``api.run`` invocation could open
+         the ledger and resume from the last completed step; this test
+         verifies the ledger is in the well-formed state that resumption
+         requires, without exercising the resumption-replay path itself.
+
+    Scope per the AC #6 reframe + L9-undecies U-RT-89 e2e precedent:
+    in-process drain trigger via custom dispatcher; no subprocess; no
+    real OS signal. The custom INFERENCE_STEP dispatcher sets
+    ``ctx.drained_flag`` after returning step-0's success result; the
+    driver's per-step pre-entry check at step_index=1 detects the flag
+    and returns DRAINED before binding-resolution + dispatch of step-1.
+
+    Out of scope: full ``api.run(resume_from=snapshot)`` round-trip
+    (resumption-replay path is operator-discretion at the pause/resume
+    composer arc per CP spec §26 + runtime spec §14.14; AC #5's third
+    conjunct "ledger-resumable next invocation" is satisfied by ledger
+    well-formedness, not by demonstrating an end-to-end resume cycle).
+    """
+    from collections.abc import Sequence
+    from functools import partial
+
+    from harness_core.deployment_surface import DeploymentSurface
+    from harness_core.identity import StepID
+    from harness_core.persona_tier import PersonaTier
+    from harness_core.workload_class import WorkloadClass
+    from harness_cp.cp_shared_types import ModelBinding
+    from harness_cp.cross_family_fallback_chain import (
+        FallbackChain,
+        ProviderCandidate,
+        ProviderFamily,
     )
-)
-def test_ac5_sigint_mid_multi_step_produces_drained_resumable_state() -> None:
-    pass
+    from harness_cp.engine_class import EngineClass
+    from harness_cp.routing_manifest_residence import RoutingManifest
+    from harness_cp.topology_pattern import TopologyPattern
+    from harness_cp.workflow_driver import execute_workflow
+    from harness_cp.workflow_driver_types import (
+        RunStatus as _CpRunStatus,
+    )
+    from harness_cp.workflow_driver_types import (
+        StepKind,
+        WorkflowStep,
+    )
+    from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+    from harness_is.path_class_registry import PathClass
+    from harness_is.state_ledger_write import read_ledger
+    from harness_runtime.bootstrap import run_bootstrap
+    from harness_runtime.bootstrap import stage_3a_cp_clients as _stage_3a_mod
+    from harness_runtime.bootstrap import stage_4_od as _stage_4_od_mod
+    from harness_runtime.lifecycle.providers import ProviderClientsStage
+
+    # --------------- patched runtime (mirror of test_run_smoke.py fakes) ---------------
+    # The bootstrap path materializes the real state-ledger writer
+    # (LedgerWriter at lifecycle/state_ledger.py) which writes to
+    # `<STATE_LEDGER path>/state.jsonl`. Only network-touching stages
+    # (provider clients + collector daemon + tracer provider) are stubbed
+    # so the ledger machinery exercised by the driver remains real.
+
+    class _FakeProvider:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def aclose(self) -> None:
+            return None
+
+    async def _fake_clients(
+        *_args: object, **_kwargs: object
+    ) -> ProviderClientsStage:
+        return ProviderClientsStage(
+            providers={
+                "anthropic": _FakeProvider("anthropic"),
+                "openai": _FakeProvider("openai"),
+                "ollama": _FakeProvider("ollama"),
+            }
+        )
+
+    monkeypatch.setattr(
+        _stage_3a_mod, "materialize_provider_clients_stage", _fake_clients
+    )
+
+    class _FakeDaemon:
+        async def start(self) -> None:
+            return None
+
+        async def stop(self, *, timeout_seconds: float = 5.0) -> None:
+            _ = timeout_seconds
+            return None
+
+    class _CollectorStage:
+        def __init__(self, d: _FakeDaemon) -> None:
+            self.daemon = d
+
+    class _FakeTracerProvider:
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            _ = timeout_millis
+            return True
+
+        def shutdown(self) -> None:
+            return None
+
+        def get_tracer(self, instrumenting_module_name: str, /) -> object:
+            from opentelemetry.trace import NoOpTracer
+
+            _ = instrumenting_module_name
+            return NoOpTracer()
+
+    class _TracerStage:
+        def __init__(self, p: _FakeTracerProvider) -> None:
+            self.provider = p
+            self.registered_globally = False
+
+    monkeypatch.setattr(
+        _stage_4_od_mod,
+        "materialize_collector_daemon_stage",
+        lambda config, **_: _CollectorStage(_FakeDaemon()),
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod, "materialize_ring_buffer_stage", lambda config, _d: None
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod,
+        "materialize_tracer_provider_stage",
+        lambda config, **_: _TracerStage(_FakeTracerProvider()),
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod,
+        "materialize_span_processor_stage",
+        lambda config, _p, **_k: None,
+    )
+
+    # --------------- config (mirror of conftest.build_config) ---------------
+    surface = DeploymentSurface.LOCAL_DEVELOPMENT
+    workload = WorkloadClass.SOFTWARE_ENGINEERING
+    chain = FallbackChain(
+        primary=ProviderCandidate(
+            provider="anthropic",
+            model="claude-haiku-4-5",
+            family=ProviderFamily.ANTHROPIC,
+        ),
+        same_family=(),
+        cross_family=(),
+        terminal=None,
+    )
+    config = RuntimeConfig(
+        deployment_surface=surface,
+        repository_root=tmp_path,
+        path_bindings=PathBindingConfig(
+            raw_entries=tuple(
+                {
+                    "path_class": pc,
+                    "workflow_class": workload,
+                    "deployment_surface": surface,
+                    "path": str(tmp_path / pc.value.lower()),
+                }
+                for pc in PathClass
+            ),
+        ),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4317"),
+        collector=CollectorConfig(),
+        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        mcp_clients=[],
+        ollama_optional=True,
+        routing_manifest=RoutingManifest(
+            manifest_version=1,
+            per_role_bindings={},
+            per_workload_overrides={},
+            fallback_chains=(chain,),
+            retry_policies={},
+        ),
+    )
+
+    ctx = await run_bootstrap(config, workload_class=workload)
+
+    # --------------- drain-triggering dispatcher ---------------
+    # The dispatcher counts invocations; on step-0 it returns success then
+    # sets ctx.drained_flag. Step-1's pre-entry drain-check
+    # (workflow_driver.py:732) fires before binding-resolution; driver
+    # returns RunStatus.DRAINED with terminal_step_index=0 and
+    # partial_state = dict(accumulated) containing step-0's contribution.
+    dispatch_count = {"n": 0}
+
+    class _DrainTriggeringDispatcher:
+        def dispatch(
+            self,
+            binding: Any,
+            step: WorkflowStep,
+            *,
+            step_context: Any = None,
+        ) -> dict[str, Any]:
+            _ = binding, step_context
+            dispatch_count["n"] += 1
+            if dispatch_count["n"] >= 3:
+                # Defensive — if drain check ever misses, surface as a
+                # loud failure instead of an opaque hang.
+                raise AssertionError(
+                    "drained_flag set after step-0 but driver continued past "
+                    "step-1 — per-step pre-entry drain-check regression at "
+                    "workflow_driver.py:732"
+                )
+            result = {"step_id": str(step.step_id), "ok": True}
+            if dispatch_count["n"] == 1:
+                # Mid-step drain trigger — set the flag AFTER returning
+                # the step-0 result so step-0's ledger append completes
+                # and accumulated picks up its entry before the loop
+                # advances to step-1.
+                ctx.drained_flag.set()
+            return result
+
+    class _SingleKindRegistry:
+        def __init__(self, dispatcher: Any) -> None:
+            self._dispatcher = dispatcher
+
+        def lookup(self, step_kind: Any) -> Any:
+            _ = step_kind
+            return self._dispatcher
+
+    # --------------- 3-step workflow ---------------
+    workflow_id = "wf-ac5-sigint-mid-multi-step"
+    manifest = WorkflowManifestEntry(
+        workflow_id=workflow_id,
+        workload_class=workload,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+        layer_budgets=(),
+        fallback_chain=chain,
+        hitl_placements=(),
+        per_step_overrides={},
+    )
+    steps: Sequence[WorkflowStep] = tuple(
+        WorkflowStep(
+            step_id=StepID(f"step-{i}"),
+            step_kind=StepKind.INFERENCE_STEP,
+            step_payload={"index": i},
+        )
+        for i in range(3)
+    )
+
+    # The driver is sync; execute_workflow's internal async-to-sync
+    # bridge calls asyncio.run() which cannot run inside an active loop.
+    # Dispatch into a thread per the api.run-internal asyncio.to_thread
+    # pattern (mirrors test_u_rt_89_pause_resume_full_execution_path.py).
+    import asyncio
+
+    cp_result = await asyncio.to_thread(
+        partial(
+            execute_workflow,
+            manifest_entry=manifest,
+            steps=steps,
+            run_id="run-ac5-1",
+            ctx=ctx,  # type: ignore[arg-type]
+            default_model_binding=ModelBinding(
+                provider="anthropic", model="claude-haiku-4-5"
+            ),
+            step_dispatchers=_SingleKindRegistry(  # type: ignore[arg-type]
+                _DrainTriggeringDispatcher()
+            ),
+        )
+    )
+
+    # --------------- invariant 1: status == DRAINED ---------------
+    assert cp_result.status == _CpRunStatus.DRAINED, (
+        f"expected DRAINED, got {cp_result.status}; "
+        f"fail_class={cp_result.fail_class}"
+    )
+    # terminal_step_index = step_index - 1 = 0 per workflow_driver.py:737.
+    assert cp_result.terminal_step_index == 0
+    # Exactly 1 dispatch fired (step-0); step-1 short-circuited at drain check.
+    assert dispatch_count["n"] == 1, (
+        f"expected exactly 1 dispatch (step-0) before drain; got "
+        f"{dispatch_count['n']}"
+    )
+
+    # --------------- invariant 2: partial_state populated ---------------
+    # The CP driver populates partial_state = dict(accumulated) at
+    # workflow_driver.py:738. accumulated grows per-step under
+    # PURE_PATTERN_NO_ENGINE (see C-CP-25 §25.3.3.7); step-0's
+    # contribution must be present.
+    assert cp_result.partial_state is not None, (
+        "partial_state must be a dict, not None, on DRAINED per "
+        "C-CP-25 §25.2 + workflow_driver.py:738"
+    )
+    assert isinstance(cp_result.partial_state, dict)
+    assert len(cp_result.partial_state) >= 1, (
+        f"partial_state must carry step-0's accumulation; got "
+        f"{cp_result.partial_state!r}"
+    )
+    assert cp_result.final_state is None  # DRAINED ≠ SUCCESS
+
+    # --------------- invariant 3: ledger-resumable (well-formedness) ---------------
+    # Read the on-disk ledger directly via the IS-axis reader.
+    # ctx.ledger_writer.handle is the JsonlLedgerHandle bound at stage 1.
+    handle = ctx.ledger_writer.handle  # type: ignore[attr-defined]
+    entries = read_ledger(handle)
+    assert len(entries) >= 1, (
+        f"expected ≥1 ledger entry from step-0 execution; got "
+        f"{len(entries)} entries at {handle.canonical_path}"
+    )
+
+    # Hash-chain integrity per ADR-D5 §1.4: each entry's prior_event_hash
+    # must equal the prior entry's response_hash (entry 0's prior =
+    # construct_prior_event_hash(None) = ALL_ZEROS).
+    from harness_is.chain_link_construction import construct_prior_event_hash
+    from harness_is.entry_hash import compute_response_hash
+    from harness_is.state_ledger_entry_schema import ALL_ZEROS_SENTINEL
+
+    expected_prior = construct_prior_event_hash(None)
+    assert expected_prior == ALL_ZEROS_SENTINEL or len(expected_prior) == 32
+    for i, entry in enumerate(entries):
+        assert entry.prior_event_hash == expected_prior, (
+            f"hash chain broken at entry {i}: prior_event_hash="
+            f"{entry.prior_event_hash.hex()} expected={expected_prior.hex()}"
+        )
+        # response_hash must be a recomputation of the entry's canonical
+        # form (sans the response_hash field itself) — verifies the
+        # writer didn't tamper with the canonicalization.
+        recomputed = compute_response_hash(entry)
+        assert entry.response_hash == recomputed, (
+            f"response_hash mismatch at entry {i}: stored="
+            f"{entry.response_hash.hex()} recomputed={recomputed.hex()}"
+        )
+        # Idempotency-key uniqueness within the ledger (no
+        # IDEMPOTENT_NOOP gaps shadowing real appends).
+        for j, other in enumerate(entries):
+            if i != j:
+                assert entry.idempotency_key != other.idempotency_key, (
+                    f"duplicate idempotency_key between entries {i} and {j}: "
+                    f"{entry.idempotency_key!r}"
+                )
+        expected_prior = entry.response_hash
+
+    # Cleanup so background tasks (collector, lifecycle emitter) terminate.
+    from harness_runtime.shutdown import shutdown as _shutdown
+
+    await _shutdown(ctx)
 
 
 def test_ac6_daemon_concurrent_two_clients_complete_independently(
