@@ -35,7 +35,9 @@ NOT in scope for U-RT-06 (deferred):
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from typing import Final
 
 import keyring
 from harness_as.sandbox_tier import SandboxTier
@@ -52,6 +54,18 @@ __all__ = [
     "SecretResolutionError",
     "make_keyring_resolver",
 ]
+
+_KEYRING_TO_ENV_VAR: Final[dict[str, str]] = {
+    "anthropic_key": "ANTHROPIC_API_KEY",
+    "openai_key": "OPENAI_API_KEY",
+}
+"""Keyring-name → vendor-canonical env-var name mapping.
+
+Per ADR-F5 v1.1 §(b)(i) headless-mode framing ("Headless modes use ...
+environment-pre-seeded values") + binding-fix discretion record at
+`.harness/binding_fix_keyring_resolver_env_var_fallback.md` §3 (a). Names
+without a mapping fall through to keyring-only (closed at this arc; future
+non-provider secrets can extend the map or remain keyring-only)."""
 
 
 class SecretResolutionError(Exception):
@@ -92,6 +106,24 @@ class KeyringSecretResolver:
     NOTE: at L1 the operator-allowlist intersection is exercised through the
     AS-landed `check_secret_allowlist` function; this driver does not
     re-implement allowlist semantics."""
+
+    def _lookup(self, name: str) -> str | None:
+        """Keyring-first lookup with env-var fallback per ADR-F5 v1.1 §(b)(i).
+
+        Returns the secret value when the keyring has it OR when the
+        vendor-canonical env var (per `_KEYRING_TO_ENV_VAR`) is set. Returns
+        `None` only when both sources are absent — at which point the caller
+        raises `SecretResolutionError(SECRET_UNKNOWN, ...)`.
+
+        Names without an env-var mapping fall through to keyring-only.
+        """
+        value = keyring.get_password(self.keyring_service, name)
+        if value is not None:
+            return value
+        env_var = _KEYRING_TO_ENV_VAR.get(name)
+        if env_var is not None:
+            return os.environ.get(env_var)
+        return None
 
     def resolve(
         self,
@@ -138,7 +170,7 @@ class KeyringSecretResolver:
             if decision is not AllowlistDecision.PERMITTED:
                 raise SecretAllowlistDeniedError(decision, name, scope)
 
-        value = keyring.get_password(self.keyring_service, name)
+        value = self._lookup(name)
         if value is None:
             raise SecretResolutionError(SecretFailClass.SECRET_UNKNOWN, name)
 
@@ -177,7 +209,7 @@ class KeyringSecretResolver:
             at the stage-3a fail-mode `RT-FAIL-SECRET-MISSING` per
             `Spec_Harness_Runtime_v1.md` §5 line 368.
         """
-        value = keyring.get_password(self.keyring_service, name)
+        value = self._lookup(name)
         if value is None:
             raise SecretResolutionError(SecretFailClass.SECRET_UNKNOWN, name)
         return value
