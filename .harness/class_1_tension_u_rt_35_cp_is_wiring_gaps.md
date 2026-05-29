@@ -162,3 +162,36 @@ follow-on commit records its closure-back-reference in this file.
 **Resolving artifact / evidence:** Path D applied 2026-05-20 (U-RT-35 partial-lands 1/17 edges — U-CP-34; remaining 16 deferred to 7c per-CP-unit re-lands as composers materialize). Bounded operator-ratified partition, not open defect.
 
 **Audit context:** Workspace-wide tension-record audit 2026-05-20 (post-U-RT-52 merge to main at 2b945ab). 33 records reviewed against current code + spec state. Result: 28 RESOLVED, 5 DEFERRED-PARTITION, 0 STILL-OPEN. The 'Status' line earlier in this record predates the audit; this section is the current verified state.
+
+
+---
+
+## Phase 6 design arc landing (2026-05-28)
+
+Closure-back-reference per §"Cross-axis observability" closure-back-reference discipline. The Phase 6 back-flow authorized at the RE-OPEN (Option A) absorbed across 4 design-substrate artifacts within a single in-CLI design arc, with impl-time grounding pass against `harness-cp/src/harness_cp/` HEAD identifying 2 NOT-APPLICABLE source units (U-CP-12 declarative-only + U-CP-52 runtime-axis-composed) + 3 naming-mismatch corrections (U-CP-27/37/49) at PR #37 in-flight revision:
+
+| Layer | Artifact | Status |
+|---|---|---|
+| Architect recommendation (within-Path-A Gap B (W/S) resolution + 6 sub-question Q-set) | `.harness/architect_recommendation_u_rt_35_gap_b_within_path_a.md` | **FILED** 2026-05-28 (operator-ratified at AskUserQuestion: (W/S)=S sibling-variant; Q1=Q1(b); Q3=Q3(a); Q4=Q4(b); Q5=Q5(a); Q6=Q6(a)) |
+| CP spec v1.24 → v1.25 NEW §16.5 CP→IS state-ledger emission contract (6 composer surfaces at §16.5.2 + 2 NOT-APPLICABLE reclassifications at NEW §16.5.10 per impl-time grounding pass; idempotency-key formulas at §16.5.4; response-hash recipes at §16.5.5; firing-site discipline at §16.5.7; dual-emission discipline at U-CP-14 per §16.5.6; 7 invariants at §16.5.9) | `design-substrate/Spec_Control_Plane_v1_25.md` | **FILED** 2026-05-28 (in-flight revised at PR #37 post impl-time grounding pass) |
+| CP plan v2.27 → v2.28 NEW units U-CP-74..79 (6 NEW atomic units per §16.5.2 enumeration; unit count 74 → 80; impl-grounded function refs `select_engine_class`/`rewrite_tool_call_to_hitl`/`capture_pause_snapshot`/`attempt_resume`/`PauseResumeProtocol` class) | `design-substrate/Implementation_Plan_Control_Plane_v2_28.md` | **FILED** 2026-05-28 (in-flight revised at PR #37 post impl-time grounding pass) |
+| CXA v2.15 → v2.16 §0.4 forward-tracking marker for §2.3.2 CP→IS bucket evolution (6 PENDING + 2 NOT-APPLICABLE rows; annotation-only; ZERO aggregate count change; per-CP-unit Pattern-P1 enforcement absorption + §2.3.2 canonical revision DEFER to Phase 7 7b consumption arcs) | `design-substrate/Cross_Axis_Composition_Document_v2_16.md` | **FILED** 2026-05-28 (in-flight revised at PR #37 post impl-time grounding pass) |
+
+**Two CP source units reclassified as NOT-APPLICABLE at CP spec v1.25 §16.5.10 per impl-time grounding pass (PR #37 in-flight revision 2026-05-28):**
+
+- **U-CP-12** `per_class_attribute_composition.py` — DECLARATIVE-ONLY module (static `PER_CLASS_ATTRIBUTE_SETS` tuple per C-CP-05 §5.2 + helper `required_attributes_for(...)`; NO runtime composer-action moment; consumers import `SamplingRate` enum only). ZERO CP-axis state-ledger emission edge owed. Runtime spec §12.3 17-edge canonical enumeration carries U-CP-12 as not-applicable-at-CP-side; runtime spec revision aligning the canonical-vs-materialized differential deferred to Gap C resolution arc.
+- **U-CP-52** `hitl_placement.py` — RUNTIME-AXIS-COMPOSED (canonical §17.4 `hitl_gate(...)` signature at line 205 raises `NotImplementedError`; production gate body composed at runtime-side `RuntimeHITLGateComposer` per C-RT-18 §14.8). ZERO CP-axis state-ledger emission edge owed at this surface. Future runtime-plan revision should author `emit_hitl_gate_state_ledger_entry` at the runtime composer site — distinct from CP-axis emission discipline.
+
+**Decisive structural argument for (S) sibling-variant.** CPAuditLedgerEntry carries signing contract at C-CP-20 §20.4 → `CPSignedAuditLedgerEntry` signs over the 8-field shape. CP spec v1.7 §13.5.1 NOTE 3 canonicalizes hash-bytes-immutability at signed-payload surfaces. Widening C-CP-16 §16.2 8-field shape would break C-CP-20 §20.4 signing contract OR defeat the widening. (S) preserves §16.2 + §20.4 verbatim → CP→OD converter at v1.7 §13.5.1 unchanged → CP-AL-2 typed taxonomy boundary respected per `harness-cp/CLAUDE.md` §4.2.
+
+**Pending post-Phase-6-design-arc closure of this Class 1 record.** Closure of this fork to RETIRE-READY requires full CP-materializable §12.3 wired:
+
+- 1 edge LANDED at U-CP-34 → U-IS-11 (U-RT-35 PARTIAL-LAND at `2e417e0` 2026-05-21) ✓
+- 6 edges PENDING per-CP-unit Phase 7 7b consumption arcs (6 CP plan v2.28 composer landings at U-CP-74..79 + 6 runtime-side materialize-stage helpers at separate runtime-plan revision arc + Pattern-P1 enforcement test absorption + CXA §2.3.2 canonical enumeration revision)
+- 2 edges NOT-APPLICABLE at CP-side per CP spec v1.25 §16.5.10 reclassification (U-CP-12 declarative-only + U-CP-52 runtime-axis-composed); Gap C canonical-vs-materialized differential resolution at runtime spec revision pass
+
+H_T-RT-35 PARTIAL → RETIRE-READY transit GATED on full CP-materializable 6-edge wired + Gap C canonical-vs-materialized differential resolution at runtime spec revision. Per-CP-unit landing cadence is operator-discretion at Phase 7 7b consumption rhythm per `Implementation_Plan_Control_Plane_v2_28.md` §0.8(d) and CXA v2.16 §0.4 forward-tracking discipline.
+
+**Carry-forward to Phase 7 7b consumption arcs.** Each per-CP-unit landing at U-CP-74..79 MUST annotate this fork doc with a closure-back-reference per §"Cross-axis observability" discipline. Bundling multiple per-CP-unit landings into a single CXA narrow-scope revision is acceptable per discretion per the v2.9 / v2.15 / v2.16 pattern precedent.
+
+**Impl-time grounding pass catalogued as workspace pattern candidate `[[impl-time-grounding-pass-pre-merge-revision]]`.** When design-substrate authoring depends on assumed function names / module shapes, run a grep sweep against the target modules BEFORE committing to the design-substrate enumeration. Catches catalogued at PR #37 in-flight revision 2026-05-28: 2 declarative-only / runtime-axis-composed architectural reclassifications + 3 function-name mismatches against `harness-cp/src/harness_cp/` HEAD. Force-push pre-merge is cheaper than merge-then-supersede (avoids 5+ sub-species-3 stale-row carry events). Pattern is the inverse temporal direction of the v2.9 / v2.15 CXA narrow-scope-revision precedent — design-substrate followed impl reality at v2.28, rather than impl following spec.
