@@ -314,3 +314,49 @@ All three meta-pattern with v2.35 AC #4 + v2.36 AC #1 + v2.37 AC #11 STRIKE rati
 - v2.38 IS the fourth sequel-strike. v2.35 STRUCK 4 ACs (#4/#5/#6/#8); v2.36 STRUCK 1 more (#1); v2.37 STRUCK 1 more (#11); v2.38 STRIKES 1 more (#2). Cumulative ACs STRUCK at U-RT-111: **7 of 12** (v2.34 original count). RETAINED at v2.38: ACs #3, #7, #9 (effective scope narrowed), #10 (reframed 1-site), #12 — **5 of 12**.
 - Same-calendar-day FOURTH sequel arc: v2.35 published 2026-05-29 (commit `f7d6442`, merged at `a35c716`); v2.36 authored 2026-05-29 (commit `9cca6d6`); v2.37 authored 2026-05-29 (commit `6415ce2`); v2.38 authored 2026-05-29 (this commit). All four within operator's single calendar day. **FOURTH consecutive same-day sequel-rescope arc at U-RT-111 — ratifies `[[plan-revision-against-not-yet-built-substrate]]` sub-species cardinality 4** at very strong empirical confidence.
 - **H_T-RT-35 RETIRE-READY now gated on 5 upstream arcs:** (1) engine-layer impl + (2) HITL disambiguator + (3) override disambiguator + (4) sibling-ledger firing-site + (5) **NEW: bootstrap-emission-substrate (runtime spec §1 BootstrapStage reorder OR `materialize_engine_selector` signature widening OR `RuntimeCpIsWiring.bootstrap_emission_buffer` primitive)**. The retirement gate complexity has quadrupled across the 4 sequel-rescope arcs; the v2.34 single-PR full-wire transit framing was structurally over-claimed at every step.
+
+## §12 Closure finding — AC #4 HITL disambiguator-derivation CLOSED-by-Reading-B + firing-site-absence carry-on opens (2026-05-29 post-PR-#61-merge session, plan v2.39)
+
+### §12.1 Finding shape
+
+Post-PR-#61-merge session (HEAD at `8012777`), worked the **upstream-blocker (2) HITL disambiguator extension** arc per checkpoint remaining-work item. Pre-substantive advisor consultation (43rd application of `[[advisor-before-substantive-work-for-cross-axis-blockers]]`) identified the plain face-value reading at AC #4's disambiguator gap: the existing `RewrittenToolCall.variant: HITLSemanticVariant | None` field IS the discriminator; the composer at `harness-cp/src/harness_cp/hitl_as_tool_call_rewriting.py:249-291` takes `semantic_variant_binding_id: str` as opaque string; `HITLSemanticVariant` is a StrEnum whose `.value` IS a string. Reading B derivation rule: `semantic_variant_binding_id = rewritten_call.variant.value` when `rewritten_call.hitl_required is True`. ZERO field-extension at `RewrittenToolCall`, `HITLSemanticVariantBinding`, or composer signature; ZERO spec extension owed at the disambiguator-derivation surface.
+
+CP spec v1.26 §16.5.4 line 71 informal cite ("the resolved `HITLSemanticVariantBinding` discriminator at `select_variant(...)` outcome") reads loosely — the actual discriminator is the variant enum returned by `select_variant()`. Optional cite-cleanup at follow-on CP spec revision pass (also: line cite `:72` → `:79`; line 72 is the `EngineBindingClass` docstring, `HITLSemanticVariantBinding` declaration lands at line 79).
+
+**Mid-arc empirical orientation surfaced a SECOND-tier finding the v2.35 STRIKE framing missed.** Grep at HEAD `8012777` for `\.rewrite_tool_call` and `HITLPlacementComposer`/`RuntimeHITLPlacementRegistry`:
+- 1 method definition at `harness-runtime/src/harness_runtime/lifecycle/hitl_placement.py:187` (`RuntimeHITLPlacementRegistry.rewrite_tool_call`)
+- 6 test callers at `harness-runtime/tests/test_lifecycle_hitl_placement.py:258, 278, 296, 313, 330, 349`
+- **ZERO production callers** anywhere in `harness-*/src/`
+
+Same structural shape as U-CP-34 `emit_sibling_ledger_entry` STRUCK at §10 v2.37 AC #11: composer exists at the lifecycle layer + U-RT-110 wiring method exists for it (`emit_hitl_tool_call_rewriting_state_ledger_entry` at `cp_is_wiring.py:265+286`) + ZERO production caller fires the composer. Catalogue candidate `firing-site-absence-at-LANDED-substrate` (sibling to §10 U-CP-34 instance).
+
+### §12.2 Closure shape
+
+Operator AskUserQuestion ratification 2026-05-29 (mid-arc reframe, option 1):
+
+> "Reading B confirmed: derivation rule `semantic_variant_binding_id = rewritten_call.variant.value`. Mid-arc finding: AC #4 cannot un-STRIKE on Reading B alone because `RuntimeHITLPlacementRegistry.rewrite_tool_call` has ZERO production callers at HEAD. Operator chose 'Document Reading B + keep AC #4 STRUCK': author plan v2.39 with Reading B derivation rule captured as future-applicable; AC #4 stays STRUCK pending firing-site-absence resolution."
+
+**v2.39 plan-revision captures Reading B derivation rule** in plan body §1.2 for future-applicable consumption when firing-site-absence resolves at a follow-on arc. AC #4 STRIKE PRESERVED on refined second-tier reason. Reading B is durable plan-doc anchor; future firing-site arcs cite "plan v2.39 §1.2 AC #4 Reading B" as authority for the disambiguator derivation rule without re-litigation.
+
+### §12.3 Out-of-axis owed (refined from §11.5)
+
+- **HITL `RuntimeHITLPlacementRegistry.rewrite_tool_call` firing-site-absence resolution.** Resolving requires substantive design decision (which call path SHOULD invoke the rewrite-and-emit chain). Possible call sites: (a) workflow_driver tool-dispatch pre-call hook (sibling to validator-escalation hook); (b) sub_agent_dispatch tool-dispatch wrap; (c) NEW dedicated HITL-rewrite stage at bootstrap.
+- **Sibling-bundle with U-CP-34 firing-site arc recommended.** Both AC #4 (HITL) and AC #11 (sibling-ledger) STRIKES are now firing-site-absence shape; design-phase routing for both could resolve together at a "where do we wire LANDED-but-never-fired composers" arc.
+- Runtime-axis OR CP-axis routing acceptable per operator-discretion at upstream arc; impl-axis routing recommended given the call-path-choice is implementation-discretion under spec §16.5.7 firing-site discipline silence on caller-side scope.
+
+### §12.4 Carry-set refinement at v2.39
+
+Plan v2.39 §0.4 refines the upstream-blocker carry from v2.38's 5 to **4** (HITL disambiguator-field-extension arc CLOSED at v2.39 plan-doc per Reading B captured) + opens a NEW carry (HITL firing-site-absence — sibling of U-CP-34 firing-site arc). Net effect: same total carry surface (5 arcs), but the HITL component reshaped from "field extension at type" to "firing-site routing at runtime". Operator-discretion at retirement-batch filing on whether to count v2.39 as net reduction or sibling-bundled.
+
+### §12.5 Sub-species pattern catalogue at v2.39
+
+**NEW closure-event-class: `[[strike-revision-on-refined-second-tier-reason]]`.** STRIKE preserved across plan-revisions on refined second-tier reason after empirical orientation surfaces a deeper gap than the original STRIKE framing identified. Distinct from prior `[[plan-revision-against-not-yet-built-substrate]]` sub-species at §§9-11 (v2.36/v2.37/v2.38 instances). Workflow-doc revision candidate: when empirical orientation at a future plan-revision arc surfaces a deeper gap than the original STRIKE identified, the STRIKE narrative MUST be refined at the next plan-revision (not silently re-cited verbatim) — fidelity-pure narrative refresh discipline.
+
+**Existing pattern extension: `[[plan-revision-explicit-derivation-rule-under-spec-composer-kwarg-silence]]` cardinality 1 → 2.** v2.38 AC #3 introduced explicit-derivation-documented framing under spec composer-kwarg silence for `event_sequence_id` + `protocol_state_snapshot` derivation rules. v2.39 extends to AC #4 `semantic_variant_binding_id` derivation rule. Cardinality 1 → 2 in 2 days across 2 atomic units U-RT-111 ACs #3 + #4.
+
+### §12.6 Audit-trail notes (NEW at §12)
+
+- **43rd application of `[[advisor-before-substantive-work-for-cross-axis-blockers]]`.** Pre-substantive advisor consultation at v2.39 authoring caught Reading B as the plain face-value reading PRE any spec-edit ("verify, don't escalate to fork"). Advisor also recommended grep-verification of consumer existence before treating as fidelity-pure cite-correction patch — that grep surfaced the SECOND-tier firing-site-absence finding that mid-arc reframed scope (Reading B captured for future-applicability, but AC #4 STRIKE preserved on refined second-tier reason). Discipline continues to validate: advisor consultation enabled the second-tier gap discovery BEFORE plan-revision authoring committed to "un-STRIKE AC #4" framing that would have been silent X-AL-3 extension on the firing-site axis.
+- **v2.39 closure pattern:** partial closure event — disambiguator-derivation portion CLOSED at v2.39 plan-doc; firing-site-absence portion REMAINS at carry-set. v2.39 IS NOT a STRIKE-reversal arc; it IS a STRIKE-narrative-refinement arc with embedded future-applicable derivation rule capture.
+- **Cumulative ACs STRUCK at U-RT-111: 7 of 12 (UNCHANGED at v2.39).** RETAINED: 5 of 12 (UNCHANGED). v2.39 is the FIRST plan-revision at U-RT-111 that does NOT change the STRUCK count — every prior v2.35→v2.38 revision added a STRIKE; v2.39 refines an existing STRIKE narrative.
+- **H_T-RT-35 RETIRE-READY transit posture UNCHANGED at v2.39.** Stays PARTIAL; 5 upstream arcs still required (composition refined: HITL disambiguator-field-extension arc CLOSES + HITL firing-site-absence arc opens as sibling of U-CP-34 firing-site arc).
