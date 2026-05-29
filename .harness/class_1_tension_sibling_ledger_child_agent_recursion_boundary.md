@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | PROPOSING |
+| Status | ✅ RATIFIED-AS-READING-C (bounded-defer per X-AL-2; structurally-unfireable-at-MVP) + Reading B noted as long-term self-hosting trajectory — 2026-05-29 |
 | Filed | 2026-05-29 |
 | Filed by | Operator + Claude (post-PR-#63 close, design-phase posture) |
 | Class | 1 (architectural; firing-site-absence at LANDED substrate; sibling to `[[class_1_tension_hitl_rewrite_tool_call_pre_dispatch_hook_absence]]` co-published this arc — DISTINCT structural shape per advisor 44th application) |
@@ -118,6 +118,32 @@ If operator prefers immediate closure: Reading A is the lowest-surface path but 
 | H_T-RT-35 RETIRE-READY transit | GATED on this arc + 4 sibling upstream arcs |
 | Recommended Q1 | (C) bounded-defer for THIS arc + (B) for the long-term self-hosting milestone trajectory |
 | Sibling arc | `[[class_1_tension_hitl_rewrite_tool_call_pre_dispatch_hook_absence]]` co-published this arc (DISTINCT structural shape; HITL firing-site question is pre-dispatch interception hook, NOT recursion-boundary) |
+
+---
+
+## §8 Ratification (2026-05-29)
+
+Operator ratified **Q1 = Reading C (bounded-defer)** for THIS arc per pre-substantive recommendation at §6, with **Reading B noted as long-term self-hosting trajectory** per `Phase_7_Meta_Architecture_v1.md` §6 milestone gradient. Q2–Q5 N/A under Reading C (no spec change, no recursive-harness authoring, no firing-site, no cross-axis cascade at this arc).
+
+### Rationale
+
+`emit_sibling_ledger_entry` is structurally unfireable at the current MVP H_T parent-child dispatch boundary. The harness boundary at `RuntimeSubAgentDispatcher.dispatch` sees a `SubAgentDispatchPayload → SubAgentDispatchResult` summary contract, NOT per-tool-call siblings inside child agent execution per CP spec §C-CP-15 §15.1. The v2.37 U-RT-111 AC #11 STRIKE established this finding decisively at the plan layer; this ratification anchors it at the architectural layer.
+
+Reading A (spec amendment widening §15.1 to parent dispatch) was foreclosed at v2.37 STRIKE rationale — it conflates F2 dispatch-entry hash-role with §15.1 per-sibling-tool-call hash-role + loses per-sibling auditability that §15.1 was designed for. Reading D (reframe to per-sub-agent-summary) is a workaround that risks shoehorning the more fundamental Reading B architectural decision.
+
+### Carry disposition
+
+- **CP composer (U-CP-34) + runtime wiring (U-RT-110)** PRESERVED VERBATIM at HEAD (LANDED substrate sits as future-applicable carrier per X-AL-2 bounded-residual carry-forward).
+- **H_T-RT-35 RETIRE-READY transit** remains GATED on this arc + 4 sibling upstream arcs. Bounded-defer at this arc does not advance the transit; it closes the fork-doc-level OPEN question.
+- **Long-term trajectory**: Reading B (recursive-harness architecture) is the architecturally-canonical path per `Phase_7_Meta_Architecture_v1.md` §6 self-hosting milestone gradient. Future re-litigation is expected to materialize Reading B via ADR-class scope (CP TopologyPattern interaction + IS state-ledger threading + AS ToolContract recursion-scoping + OD cost-attribution recursion-aware). Reading B is NOT authored at this arc; it is recorded as the long-term direction.
+- **Re-litigation trigger**: when the recursive-harness ADR arc opens (or when a §15.1 spec revision arc selects Reading D reframe), this fork doc should be re-opened and the firing-site materialized in that arc's context.
+
+### Cross-artifact effects
+
+- ZERO design-substrate edit (no spec / plan / ADR / ADD / PRD / CXA amendment).
+- ZERO production code change.
+- ZERO clearance marker (per CLAUDE.md §4.5 — bounded-defer dispositions without design-substrate edits do not require clearance markers).
+- ZERO MEMORY.md retirement-event filing (no retirement-tier transit).
 
 ---
 
