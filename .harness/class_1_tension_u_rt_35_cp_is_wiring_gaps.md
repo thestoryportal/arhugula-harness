@@ -195,3 +195,18 @@ H_T-RT-35 PARTIAL → RETIRE-READY transit GATED on full CP-materializable 6-edg
 **Carry-forward to Phase 7 7b consumption arcs.** Each per-CP-unit landing at U-CP-74..79 MUST annotate this fork doc with a closure-back-reference per §"Cross-axis observability" discipline. Bundling multiple per-CP-unit landings into a single CXA narrow-scope revision is acceptable per discretion per the v2.9 / v2.15 / v2.16 pattern precedent.
 
 **Impl-time grounding pass catalogued as workspace pattern candidate `[[impl-time-grounding-pass-pre-merge-revision]]`.** When design-substrate authoring depends on assumed function names / module shapes, run a grep sweep against the target modules BEFORE committing to the design-substrate enumeration. Catches catalogued at PR #37 in-flight revision 2026-05-28: 2 declarative-only / runtime-axis-composed architectural reclassifications + 3 function-name mismatches against `harness-cp/src/harness_cp/` HEAD. Force-push pre-merge is cheaper than merge-then-supersede (avoids 5+ sub-species-3 stale-row carry events). Pattern is the inverse temporal direction of the v2.9 / v2.15 CXA narrow-scope-revision precedent — design-substrate followed impl reality at v2.28, rather than impl following spec.
+
+---
+
+## Nested fork surfaced at 7b consumption (2026-05-29)
+
+First 7b consumption attempt against the landed design substrate (PR #37 merge `e6c2f2c` ~30 min prior) surfaced a NESTED Class 1 fork at U-CP-74 pre-substantive: `class_1_tension_u_cp_74_entrypayload_field_set_drift.md`. Two compounding drifts at CP spec v1.25 §16.5.3 + §16.5.5 vs IS HEAD `EntryPayload` (`harness-is/src/harness_is/state_ledger_write.py:62`) + `compute_response_hash` (`harness-is/src/harness_is/entry_hash.py:73`):
+
+1. Field-set drift — spec declares `EntryPayload(action_id, idempotency_key, actor, response_hash)`; IS HEAD has `(action_id, idempotency_key, actor, timestamp)`.
+2. Response_hash semantic drift — spec defines as SHA-256 over composer-specific OUTCOME canonical bytes (post-override step-config etc.); IS HEAD defines as SHA-256 over the entry's own canonical form per C-IS-06 §6.2.
+
+Distinct from Gap C drift the spec already acknowledges at §16.5.8 (which is sync/async + StateLedgerEntry-vs-EntryPayload type). Three resolution shapes documented at nested fork: (α) extend IS HEAD; (β) hold IS HEAD, rewrite spec §16.5.3+§16.5.5 to map to actual 4 fields; (γ) sibling typed wrapper CPStateLedgerEntryPayload + runtime translation stage. Recommend **(β.i)** — hold IS HEAD verbatim, fold outcome-bytes hash into idempotency_key derivation suffix; preserves Q5(a) "hash-over-outcome-bytes" ratification at idempotency_key discriminator; ZERO IS-axis cascade; structural mirror of parent fork's (S) sibling-variant resolution.
+
+**Impl-time-grounding-pass pattern sharpened.** PR #37 grounding caught module/symbol existence (2 reclassifications + 3 function-name mismatches) but did NOT verify type-definition field-sets of consumed types. `[[impl-time-grounding-pass-pre-merge-revision]]` candidate pattern sharpened: grounding MUST verify type field-sets when design substrate enumerates per-field semantics for an externally-defined type.
+
+Phase 7 sub-phase 7b cluster {U-CP-74..79} HALTED pending nested-fork resolution. CP spec v1.25 → v1.26 + plan v2.28 → v2.29 cascade owed.
