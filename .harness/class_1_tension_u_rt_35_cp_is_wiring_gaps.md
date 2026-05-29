@@ -225,3 +225,62 @@ Closure-back-reference to nested fork `class_1_tension_u_cp_74_entrypayload_fiel
 **`[[impl-time-grounding-pass-pre-merge-revision]]` workspace pattern SHARPENED** at nested fork filing: PR #37's impl-time grounding pass caught module/symbol existence (2 architectural reclassifications + 3 naming mismatches) but did NOT verify type-definition field-sets of externally-consumed types. Pattern update: when design substrate enumerates per-field semantics for an externally-defined type, the grounding MUST verify the type's actual field set against the substrate's claimed field set. This is a strict superset of the v1.25 grounding shape.
 
 Parent fork H_T-RT-35 PARTIAL → RETIRE-READY transit gating per §"Pending post-Phase-6-design-arc closure" section UNCHANGED at nested fork closure: 6 CP-materializable §12.3 edges PENDING per-CP-unit Phase 7 7b consumption arcs at U-CP-74..79; nested fork closure unblocks the 7b consumption (cluster resumption owed at this worktree against v1.26 + v2.29 substrate); 7b consumption landings progressively close the 6 PENDING edges per `Implementation_Plan_Control_Plane_v2_28.md` §0.8(d) + CXA v2.16 §0.4 forward-tracking discipline.
+
+---
+
+## Cluster A library-side COMPLETE (2026-05-29) — runtime-plan revision is the sole remaining design-phase ask
+
+**Cluster A CP→IS wiring library-side 6 of 6 landed on main as of `35744ab` 2026-05-29.** PR ledger:
+
+| PR | Unit | Module | Merge commit |
+|----|------|--------|--------------|
+| #39 | U-CP-74 | `state_ledger_canonicalization.py` (helper) + `per_step_override_evaluator.py` (sibling) | `e63a600` |
+| #40 | U-CP-75 | `workload_binding_engine_class_selection.py` | `332edac` |
+| #41 | U-CP-76 | `pause_resume_protocol.py` (workflow-layer + PauseResumeProtocolEventKind enum) | `d745450` |
+| #42 | U-CP-77 | `hitl_as_tool_call_rewriting.py` | `4765aaf` |
+| #43 | U-CP-78 | `pause_resume_protocol.py` (engine-layer pause-captured) | `a815ac9` |
+| #44 | U-CP-79 | `pause_resume_protocol.py` (engine-layer resume-attempted) | `35744ab` |
+
+6 composer surfaces materialized + 1 shared canonicalization helper + 67 new tests + ZERO IS-axis cascade preserved + ZERO CP-audit-axis cascade preserved per β.i resolution. **Per CP spec v1.25 §16.5.10 the 2 NOT-APPLICABLE reclassifications stand**: U-CP-12 declarative-only (no atomic unit owed); U-CP-52 runtime-axis-composed (composer body owed at runtime spec C-RT-18 §14.8 — separate runtime arc).
+
+## What remains — runtime-side wiring atomic unit ABSENT at runtime plan v2.32
+
+**Empirical grep at HEAD against `design-substrate/Implementation_Plan_Harness_Runtime_v2_32.md`:** ZERO occurrences of `ledger_writer`, `U-RT-35`, `16.5`, `resolve_step_binding`, `emit_*_state_ledger`, `append_ledger_entry`. The runtime plan does not have an atomic unit decomposing the runtime-side wiring of the 6 §16.5 composers to `ctx.ledger_writer.append_ledger_entry`. CP plan v2.28 §0 line 55 + line 72 explicitly defer this work to a "separate runtime-plan arc."
+
+The wiring scope (per CP spec v1.26 §16.5.8 + runtime spec v1.7 §14.7.2 step 8 + line 2315):
+
+1. **Binding-registry shape** for the 6 composer surfaces at runtime composition time, calling `ctx.ledger_writer.append_ledger_entry` with the producer-side 4-field `EntryPayload`.
+2. **Dual-emission at `resolve_step_binding:179`** per CP spec v1.26 §16.5.8 (the canonical-vs-materialized differential closure noted at the parent fork's §"Gap C").
+3. **Bootstrap stage placement** — likely stage-5 LOOP_INIT alongside other CP-axis composer factories, OR a new dedicated stage if cluster-shape diverges.
+4. **Factory shape** — operator-discretion: per-source-unit factories (mirrors L9-undecies/L9-quaterdecies precedent) vs single binding registry with composer dispatch table.
+
+Implementing the wiring in-CLI without a runtime-plan atomic unit = **X-AL-3 silent H_T design extension at Phase 7 execution** (workspace `CLAUDE.md` §4.4 + I-2). The spec authority exists (CP spec v1.26 §16.5 + runtime spec v1.7 §14.7.2 step 8); only the plan-side atomic-unit decomposition is missing.
+
+## Phase 6 back-flow ask
+
+| Element | Detail |
+|---|---|
+| **Routing target** | Phase 6 runtime plan revision-pass at design-phase workspace |
+| **Artifact owed** | Runtime plan v2.32 → v2.33 NEW atomic unit (or cluster) decomposing the runtime-side wiring |
+| **Architectural choices for the design-phase to ratify** | (a) one unit covering all 6 source-unit wirings, OR split per spec line 2315 if signature divergence surfaces at any source unit; (b) bootstrap stage placement (stage-5 LOOP_INIT vs dedicated stage); (c) factory shape (per-source-unit factories vs single binding registry) |
+| **Estimated in-CLI work post-design** | ~30-45 min CC for the wiring unit (binding registry + factory + 6 callsite wirings + stage integration + e2e test against in-process ledger) |
+| **Cascade owed at landing** | H_T-RT-35 PARTIAL → RETIRE-READY transit batch (workspace retirement-event ledger filing per `[[verification-shape-sharpened-grep-vs-e2e]]` discipline) + CXA v2.16 §0.4 forward-tracking 6 PENDING → 6 LANDED |
+| **Non-blocking carry** | `harness-cp/CLAUDE.md` §1.2 row stale-cite refresh; CXA v2.16 §0.4 narrow-scope revision-pass; both Class 3 informational |
+
+## Status
+
+**Phase 7 sub-phase execution HALTED at this workspace pending operator Phase 6 back-flow authoring at design-phase workspace.** All in-CLI work that was structurally possible against the canonical authority chain has landed. The remaining wiring requires the design-phase to author the runtime-plan atomic unit before in-CLI implementation can proceed without X-AL-3 violation.
+
+Alternative resolution paths the operator may also consider per parent fork's original Path enumeration:
+
+- **Path α (recommended):** Author runtime plan v2.33 at design-phase workspace with NEW U-RT-XX wiring unit. Estimated ~1 short Phase-6 session at design-phase per implementation-planner skill.
+- **Path β:** Fork-doc the gap as a sibling Class 1 architectural-tension if the wiring shape surfaces further ambiguity at runtime composition time (not currently anticipated — spec authority is well-defined).
+- **Path γ:** Defer indefinitely with bounded-residual H_E-substitution carry if deployment scope does not require the wiring (assistant does NOT recommend — the wiring IS the deployment-readiness gate per the 2026-05-28 audit re-open of this fork).
+
+---
+
+## Path α AUTHORIZED (2026-05-29)
+
+Operator authorized Path α at this session post-PR #45 fork doc closure-event publication. Phase 6 runtime plan revision-pass opens at design-phase workspace for authoring runtime plan v2.32 → v2.33 NEW U-RT-XX wiring unit per §"Phase 6 back-flow ask" above. Phase 7 sub-phase execution at this workspace remains HALTED pending revised runtime plan re-load.
+
+**Next event in this workspace:** Operator pushes revised `Implementation_Plan_Harness_Runtime_v2_33.md` (or higher) to design-phase substrate. On re-load, verify byte-exact integrity + that the NEW wiring unit's signature is materializable against `harness-cp/src/harness_cp/{state_ledger_canonicalization,per_step_override_evaluator,workload_binding_engine_class_selection,pause_resume_protocol,hitl_as_tool_call_rewriting}.py` HEAD per `[[impl-time-grounding-pass-pre-merge-revision]]` sharpened workspace pattern.
