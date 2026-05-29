@@ -51,7 +51,7 @@ from harness_cp.workflow_driver_types import (
     StepKind,
     WorkflowStep,
 )
-from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEntry
 from harness_is.chain_verification import VerificationStatus, verify_chain
 from harness_is.state_ledger_write import read_ledger
 from harness_runtime.bootstrap import run_bootstrap
@@ -63,6 +63,7 @@ from harness_runtime.types import RuntimeConfig
 from .conftest import WORKLOAD, build_config
 
 _PAUSE_RESUME_ACTION_ID = "cp.pause-resume-protocol"
+_OVERRIDE_ACTION_ID = "cp.per-step-override-application"
 
 
 def _config_with_pause_resume_opt_in(tmp_path: Path) -> RuntimeConfig:
@@ -391,4 +392,212 @@ async def test_no_pause_resume_protocol_binding_does_not_emit_state_ledger_entry
     assert result.status == RunStatus.PAUSED
 
     entries = _read_pause_resume_entries(ctx)
+    assert entries == []
+
+
+# ---------------------------------------------------------------------------
+# U-CP-74 override-emission caller-site integration.
+#
+# Mirrors the pause-resume scaffolding. Firing site is at workflow_driver
+# immediately after `resolve_step_binding(...)` returns: guard on
+# `binding.override_applied`, then invoke
+# `ctx.cp_is_wiring.emit_override_state_ledger_entry(...)` with
+# `post_override_step_config = binding.model_dump(mode="json")` per
+# CP spec v1.27 §16.5.5 outcome-bytes semantic.
+#
+# `emit_override_audit_entry` (audit-half, sibling at line :187 of
+# `per_step_override_evaluator.py`) is the Q2=iii deferred stub per PR
+# #66 — orthogonal to the state-ledger sibling exercised here.
+# ---------------------------------------------------------------------------
+
+
+def _read_override_entries(ctx: Any) -> list[Any]:
+    """State-ledger entries with action_id == cp.per-step-override-application."""
+    entries = read_ledger(ctx.ledger_writer.handle)  # type: ignore[arg-type]
+    return [e for e in entries if str(e.action_id) == _OVERRIDE_ACTION_ID]
+
+
+def _manifest_with_step_override(
+    workflow_id: str, step_id: str, override: StepOverride
+) -> WorkflowManifestEntry:
+    return WorkflowManifestEntry(
+        workflow_id=workflow_id,
+        workload_class=WORKLOAD,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+        layer_budgets=(),
+        fallback_chain=_CHAIN,
+        hitl_placements=(),
+        per_step_overrides={step_id: override},
+    )
+
+
+@pytest.mark.asyncio
+async def test_caller_site_override_emission_when_override_applied(
+    tmp_path: Path,
+    patched_runtime: dict[str, Any],
+) -> None:
+    """Override-applied path: state-ledger entry persisted via cp_is_wiring."""
+    _ = patched_runtime
+    config = _config_with_pause_resume_opt_in(tmp_path)
+    ctx = await run_bootstrap(config, workload_class=WORKLOAD)
+    _attach_get_tracer_to_ctx(ctx)
+    assert ctx.cp_is_wiring is not None
+
+    override_binding = ModelBinding(provider="anthropic", model="claude-opus-4-7")
+    override = StepOverride(
+        step_id=StepID("step-0"),
+        model_binding=override_binding,
+    )
+    manifest = _manifest_with_step_override(
+        "wf-override-applied", "step-0", override
+    )
+    steps = _single_inference_step()
+    dispatchers = _SingleKindRegistry(_NoopDispatcher())
+
+    result = await asyncio.to_thread(
+        partial(
+            execute_workflow,
+            manifest_entry=manifest,
+            steps=steps,
+            run_id="run-override",
+            ctx=ctx,  # type: ignore[arg-type]
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=dispatchers,  # type: ignore[arg-type]
+        )
+    )
+    assert result.status == RunStatus.SUCCESS
+
+    entries = _read_override_entries(ctx)
+    assert len(entries) == 1
+    assert str(entries[0].action_id) == _OVERRIDE_ACTION_ID
+
+
+@pytest.mark.asyncio
+async def test_caller_site_override_emission_skipped_when_no_override(
+    tmp_path: Path,
+    patched_runtime: dict[str, Any],
+) -> None:
+    """Absent-override path: ZERO override-emission entries persist.
+
+    Per CP spec v1.27 §16.5.6 dual-emission discipline — the emission is
+    gated on `binding.override_applied=True`. A manifest with empty
+    `per_step_overrides` produces `override_applied=False` at
+    `resolve_step_binding` and the firing block silent-skips.
+    """
+    _ = patched_runtime
+    config = _config_with_pause_resume_opt_in(tmp_path)
+    ctx = await run_bootstrap(config, workload_class=WORKLOAD)
+    _attach_get_tracer_to_ctx(ctx)
+    assert ctx.cp_is_wiring is not None
+
+    manifest = _minimal_manifest("wf-no-override")  # per_step_overrides={}
+    steps = _single_inference_step()
+    dispatchers = _SingleKindRegistry(_NoopDispatcher())
+
+    result = await asyncio.to_thread(
+        partial(
+            execute_workflow,
+            manifest_entry=manifest,
+            steps=steps,
+            run_id="run-no-override",
+            ctx=ctx,  # type: ignore[arg-type]
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=dispatchers,  # type: ignore[arg-type]
+        )
+    )
+    assert result.status == RunStatus.SUCCESS
+
+    entries = _read_override_entries(ctx)
+    assert entries == []
+
+
+@pytest.mark.asyncio
+async def test_caller_site_override_full_chain_verification_passes_e2e(
+    tmp_path: Path,
+    patched_runtime: dict[str, Any],
+) -> None:
+    """Override emission + full chain verification PASS.
+
+    Exercises the U-CP-74 emission at the workflow_driver firing site and
+    verifies the full state-ledger hash chain through `verify_chain`. This
+    is the override sibling of the pause-resume AC #10 e2e test above.
+    """
+    _ = patched_runtime
+    config = _config_with_pause_resume_opt_in(tmp_path)
+    ctx = await run_bootstrap(config, workload_class=WORKLOAD)
+    _attach_get_tracer_to_ctx(ctx)
+
+    override = StepOverride(
+        step_id=StepID("step-0"),
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+    )
+    manifest = _manifest_with_step_override(
+        "wf-override-e2e-full-chain", "step-0", override
+    )
+    steps = _single_inference_step()
+    dispatchers = _SingleKindRegistry(_NoopDispatcher())
+
+    result = await asyncio.to_thread(
+        partial(
+            execute_workflow,
+            manifest_entry=manifest,
+            steps=steps,
+            run_id="run-override-e2e",
+            ctx=ctx,  # type: ignore[arg-type]
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=dispatchers,  # type: ignore[arg-type]
+        )
+    )
+    assert result.status == RunStatus.SUCCESS
+
+    override_entries = _read_override_entries(ctx)
+    assert len(override_entries) == 1
+
+    all_entries = read_ledger(ctx.ledger_writer.handle)  # type: ignore[arg-type]
+    chain_result = verify_chain(all_entries)
+    assert chain_result.status == VerificationStatus.VALID, (
+        f"chain verification failed at position "
+        f"{chain_result.failure_position}: "
+        f"{chain_result.failure_type.value if chain_result.failure_type else 'unknown'}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_caller_site_override_no_cp_is_wiring_does_not_emit(
+    tmp_path: Path,
+    patched_runtime: dict[str, Any],
+) -> None:
+    """Operator opt-out: cp_is_wiring=None → silent-skip even when override applied."""
+    _ = patched_runtime
+    config = _config_with_pause_resume_opt_in(tmp_path)
+    ctx = await run_bootstrap(config, workload_class=WORKLOAD)
+    _attach_get_tracer_to_ctx(ctx)
+    object.__setattr__(ctx, "cp_is_wiring", None)
+
+    override = StepOverride(
+        step_id=StepID("step-0"),
+        model_binding=ModelBinding(provider="anthropic", model="claude-opus-4-7"),
+    )
+    manifest = _manifest_with_step_override(
+        "wf-override-opt-out", "step-0", override
+    )
+    steps = _single_inference_step()
+    dispatchers = _SingleKindRegistry(_NoopDispatcher())
+
+    result = await asyncio.to_thread(
+        partial(
+            execute_workflow,
+            manifest_entry=manifest,
+            steps=steps,
+            run_id="run-override-opt-out",
+            ctx=ctx,  # type: ignore[arg-type]
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=dispatchers,  # type: ignore[arg-type]
+        )
+    )
+    assert result.status == RunStatus.SUCCESS
+
+    entries = _read_override_entries(ctx)
     assert entries == []
