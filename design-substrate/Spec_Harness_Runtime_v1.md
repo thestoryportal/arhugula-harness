@@ -37,7 +37,7 @@ The NEW field is consumed at TWO stage-4 OD materializers:
 
 (e) Production binding co-published this arc: `RuntimeConfig.persona_tier` field at `harness-runtime/types.py`; `tracer_provider.py` per-cell base_rate; `span_processor.py` per-persona toggle thread-through; `RedactionSpanProcessor` ctor extension + `MultiTenantOverrideRefusedError` typed surface; 16 NEW tests at `tests/test_persona_tier_plumbing.py`. 3367/3367 tests pass + 10 skipped.
 
-(f) Joint H_T-OD-3 + H_T-OD-4 PARTIAL → RETIRE-READY transit at batch-N retirement event filing (sub-species 7 deployment-time-opt-in-gate close precedent — full RETIRED gates on operator-set `RuntimeConfig.persona_tier` non-default + production deployment exercise).
+(f) H_T-OD-3 + H_T-OD-4 remain PARTIAL (refined) per X-AL-2 partial-retirement-is-non-retirement at tier-up direction; gate closures at v1.37 apply: OD-3 gate (b) §10.3 base_rate envelope CLOSED; OD-4 gate (a) §13.1 per-persona-tier toggle PARTIALLY CLOSED (deployment-level persona_tier + multi-tenant non-toggleability; solo-developer per-session toggle still deferred). Tier transit to RETIRE-READY requires follow-on arcs closing OD-3 §9.1 tail-keep + OD-4 per-session toggle + OD-4 §13.2 opaque-token tokenization. Workflow v1.12 §7.4.7.3.C audit applied at `harness-od/CLAUDE.md` §4.1 + cumulative-counts line refreshed; pipeline-advanced 6/8 = 75.0% UNCHANGED.
 
 **Adjacent observations.**
 
