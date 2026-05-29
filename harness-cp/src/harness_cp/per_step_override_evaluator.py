@@ -34,15 +34,23 @@ ADR-F2 v1.2 audit composition.
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Awaitable, Callable, Mapping
+from datetime import UTC, datetime
+from typing import Any
+
 from harness_as import GateLevel
 from harness_core import PersonaTier
 from harness_core.identity import ActionID
+from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
+from harness_is.state_ledger_write import EntryPayload, WriteResult
 from pydantic import BaseModel, ConfigDict
 
 from harness_cp.cp_shared_types import ActorIdentity, ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.handoff_context import LedgerEntryRef
 from harness_cp.hitl_placement import HITLPlacement
+from harness_cp.state_ledger_canonicalization import _canonicalize_outcome_bytes
 from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEntry
 
 
@@ -221,3 +229,87 @@ def emit_override_audit_entry(
         timestamp="",
         prior_event_hash="0" * 64,
     )
+
+
+# --- U-CP-74 §16.5 sibling composer — CP→IS state-ledger emission ----------
+#
+# `emit_override_state_ledger_entry` is the §16.5 (S) sibling-variant composer
+# producing the IS-anchored state-ledger entry per CP spec v1.26 §16.5.3 +
+# §16.5.4 + §16.5.5 + §16.5.6 + §16.5.7. It is ADDITIVE — existing
+# `emit_override_audit_entry` above (line 200) is preserved verbatim per
+# §16.5.6 dual-emission discipline. The §16.5 contract preserves §16.2
+# CPAuditLedgerEntry shape + §20.4 signing contract verbatim.
+#
+# Dual-emission wiring at `resolve_step_binding:179` invokes BOTH composers per
+# §16.5.6. The async composer surface here is bound by the runtime-wiring
+# layer (separate runtime-plan unit) to an async `ledger_writer` that wraps the
+# IS HEAD sync `append_ledger_entry` per spec v1.26 §16.5.8.
+
+_OVERRIDE_ACTION_ID = "cp.per-step-override-application"
+"""CP spec v1.26 §16.5.3 row U-CP-14 canonical action_id."""
+
+_RECORD_SEPARATOR = b"\x1e"
+"""ASCII 0x1E (record-separator) byte — CP spec v1.26 §16.5.4 idempotency-key
+canonical-form rule. Forecloses concatenation-ambiguity attacks across the
+||-separated disambiguator segments."""
+
+
+def _override_idempotency_key(
+    workflow_id: str,
+    step_id: str,
+    override_id: str,
+    policy_id: str,
+    outcome_hash_hex: str,
+) -> str:
+    """Compose the U-CP-14 idempotency-key per CP spec v1.26 §16.5.4 row 1.
+
+    Bytes are the 0x1E-separated 5-tuple `(workflow_id, step_id, override_id,
+    policy_id, sha256(outcome_canonical_bytes).hex())`; SHA-256-hashed; hex-64
+    encoded. v1.25 disambiguator segments preserved verbatim per Q-β.i-1(a); the
+    outcome-hash suffix carries the Q5(a) "hash-over-outcome-bytes" semantic at
+    the dedup-key discriminator.
+    """
+    segments = [
+        workflow_id.encode("utf-8"),
+        step_id.encode("utf-8"),
+        override_id.encode("utf-8"),
+        policy_id.encode("utf-8"),
+        outcome_hash_hex.encode("utf-8"),
+    ]
+    return hashlib.sha256(_RECORD_SEPARATOR.join(segments)).hexdigest()
+
+
+async def emit_override_state_ledger_entry(
+    *,
+    workflow_id: str,
+    step_id: str,
+    override_id: str,
+    policy_id: str,
+    post_override_step_config: Mapping[str, Any],
+    actor: ActorIdentity,
+    ledger_writer: Callable[[EntryPayload], Awaitable[WriteResult]],
+) -> WriteResult:
+    """Compose + emit the §16.5 IS-anchored state-ledger entry for U-CP-14.
+
+    Per CP spec v1.26 §16.5.3: produces `EntryPayload` per IS HEAD 4-field shape
+    `(action_id, idempotency_key, actor, timestamp)`. `response_hash` and
+    `prior_event_hash` are IS-internal — composer does NOT control them
+    (C-IS-06 §6.2 + C-IS-13 §13.5). The outcome-bytes semantic at §16.5.5
+    (post-override step-config canonical JSON bytes) is carried at the
+    `idempotency_key` discriminator per §16.5.4 + Q-β.i-1(a).
+
+    Composer awaits `ledger_writer(payload)` return per §16.5.9 invariant 4;
+    does NOT condition on `WriteResult` variant.
+    """
+    outcome_canonical_bytes = _canonicalize_outcome_bytes(post_override_step_config)
+    outcome_hash_hex = hashlib.sha256(outcome_canonical_bytes).hexdigest()
+    idempotency_key = _override_idempotency_key(
+        workflow_id, step_id, override_id, policy_id, outcome_hash_hex
+    )
+    payload = EntryPayload(
+        action_id=Identifier(_OVERRIDE_ACTION_ID),
+        idempotency_key=Identifier(idempotency_key),
+        actor=Actor(actor_class=ActorClass.AGENT, actor_id=str(actor)),
+        timestamp=datetime.now(UTC),
+    )
+    return await ledger_writer(payload)
