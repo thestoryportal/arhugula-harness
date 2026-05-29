@@ -407,13 +407,27 @@ The pre-batch-47 CP-axis CP-8 row §5 PARTIAL classification (row line 111 "1 of
 
 **Fork doc closure:** `.harness/class_1_tension_u_rt_35_cp_is_wiring_gaps.md` transitions to CLOSED — paired transit completed at batches 46 (H_T-RT-35) + 47 (H_T-CP-8). Fork doc closure-back-reference appended at fork doc per §"Cross-axis observability" discipline.
 
+### §11.4g H_T-CP-9 — PARTIAL → RETIRED at batch-48 (sub-species 7a 4th closure)
+
+The pre-batch-48 CP-axis CP-9 row §5 PARTIAL classification (row line 112 "Replay-resumption materialized via `_determine_resume_at`... 5-class `ResumptionKind` taxonomy NOT emitted by driver (only binary RESUMPTION event class)") is **superseded** by the sub-species 7a `operator-explicit-deferred-close-gate` closure event filed at `batch-48` (2026-05-29; 4th sub-species 7a closure joining CP-19 batch-22 + CP-14 batch-29 + CP-11 batch-30):
+
+- CP spec v1.6 §25.5 line 375 `workflow.resumption` CONDITIONAL row v1.4 scope carve-out: "Only if driver entry is a re-entry per §8 replay-resumption semantics. At v1.4 scope: emit on re-entry if `manifest_entry.engine_class == 'save-point-checkpoint'` AND `run_id` matches a prior `Spec_Information_Substrate_v1.md` C-IS-05 ledger entry." Preserved verbatim through CP spec v1.27 per delta-only-spec-file convention.
+- Production at `harness-cp/src/harness_cp/workflow_driver.py:725-746` emits binary `WorkflowEventClass.RESUMPTION` IN COMPLIANCE with §25.5 v1.4 scope carve-out — two emission paths fire on (i) `resume_at_step_index_override is not None` and (ii) `manifest_entry.engine_class is EngineClass.SAVE_POINT_CHECKPOINT`. Inline comment at lines 738-746 explicitly cites the v1.4 scope carve-out and documents §8.1's 5-class `ResumptionKind` enum + §8.3's universal observable behavior as the full contract space; §25.5 carves out the v1.4 implementation scope.
+- X-AL-2 first conjunct (cited unit IDs landed) MET at U-CP-19 / U-CP-20 / U-CP-21 LANDED at runtime impl per CP spec §25.5 + §8.1 + §8.3 contract surfaces; X-AL-2 second conjunct (H_E surface no longer invoked at substitution site) MET — production typed `LifecycleEmitter` carrier displaces H_E `--resume` / `--continue` / `--fork-session` shell-out at the substitution site; 5-class expansion at non-`save-point-checkpoint` engine classes carries as bounded-residual per X-AL-2 + ledger v2 §0.5 bounded-residual discipline at sub-species 7a closure shape.
+
+**Sub-species 7a 4th CLOSURE — FIRST anchored at CP spec authority surface.** CP-19 batch-22 closed via Layer 3 in-process reframe at v1.6 e2e scope; CP-14 batch-29 + CP-11 batch-30 closed via runtime spec v1.6 §14.7.2 step 5 v1.6 MVP scope carve-out. CP-9 batch-48 anchors at CP spec v1.6 §25.5 line 375 — DISTINCT spec authority anchor from CP-11/CP-14. Sub-species 7a now spans **2 distinct spec-explicit operator-discretion authority anchors** demonstrating cross-spec-anchor closure path generalization within a single sub-species. Sub-species 7 lineage cardinality post-batch-48: **15 events across 7 sub-species** (7a=4 + 7b=1 + 7c=1 + 7d=6 + 7e=1 + 7f=2 + 7g=2).
+
+**Cardinality delta at this batch:** CP-axis RETIRED 20/22 → 21/22 (90.9% → 95.5%); CP-axis PARTIAL 2/22 → 0/22 (**CP-axis PARTIAL bucket EMPTY for FIRST TIME in ledger history**); workspace RETIRED 44/54 → 45/54 (81.5% → 83.3%); workspace pipeline-advanced 48/54 = 88.9% (unchanged — within-pipeline-advanced PARTIAL → RETIRED transit). **Cardinality check at batch-48 close: 45 + 0 + 3 + 0 + 3 = 51 active substitutions + 3 SB-INDEF = 54 ✓** (preserves batch-47 corrective baseline 44 + 0 + 4 + 0 + 3 = 51 active + 3 indef = 54). Forward-only ledger discipline preserved at prior batch records; row line 112 text PRESERVED VERBATIM per §0.5 forward-only discipline + this §11.4g supersession is the canonical disposition going forward.
+
+**Catalogue keep-its-keep validation.** PR #76 consolidated retirement-event-pattern catalogue at `.harness/retirement-event-pattern-catalogue.md` merged at `ddeede6` 2026-05-29 ~30 min prior to batch-48 authoring. 4th sub-species 7a closure citing canonical sub-species naming from PR #76 §1.1 validates the catalogue discipline empirically — same-session-sequel keep-its-keep per workflow v1.11 §7.4.7.2 sub-species 5.1 lineage.
+
 ### §11.5 Cumulative status pointer
 
 | | Live source |
 |---|---|
-| Latest filed batch | `batch-47` (2026-05-29, H_T-CP-8 PARTIAL → RETIRED via direct X-AL-2 first-conjunct satisfaction; sub-species 7e first instance; sibling-arc to batch-46 H_T-RT-35 paired transit at fork doc `class_1_tension_u_rt_35_cp_is_wiring_gaps.md`) |
-| Cumulative RETIRED count (raw ledger) | 44/54 (81.5%) per batch-47 §4 footer (CP-axis 20/22 = 90.9% — FIRST among active four-axis substitution sets to cross 90% RETIRED) |
-| Cumulative pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) | 48/54 (88.9%) per batch-47 §4 footer (preserved at §11.1a corrective baseline) |
+| Latest filed batch | `batch-48` (2026-05-29, H_T-CP-9 PARTIAL → RETIRED via sub-species 7a 4th closure at CP spec v1.6 §25.5 line 375 v1.4 scope carve-out; FIRST sub-species 7a closure anchored at CP spec authority surface; CP-axis PARTIAL bucket EMPTY for FIRST TIME in ledger history) |
+| Cumulative RETIRED count (raw ledger) | 45/54 (83.3%) per batch-48 §4 footer (CP-axis 21/22 = 95.5%; CP-axis enters single-axis-clean state at active substitution view) |
+| Cumulative pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) | 48/54 (88.9%) per batch-48 §4 footer (preserved at §11.1a corrective baseline) |
 | Per-axis live status | `harness-{is,as,cp,od}/CLAUDE.md` §4.1 |
 | Cross-axis cascade live status | §6.3.1 + §6.3.2 cascade re-evaluations at the batch in which the gating retirement filed (see batch-2 §3 + batch-3 referenced from `harness-od/CLAUDE.md`) |
 

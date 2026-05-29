@@ -38,7 +38,7 @@ Letters assigned at consolidation arc per **shipped-files-first** ordering: 7d (
 
 **Common ancestor:** X-AL-2 retirement gate closure-event-class at retirement-event-pattern catalogue surface. Each sub-species characterizes a distinct closure shape under X-AL-2's two-conjunct retirement criterion: (cited unit IDs landed) ∧ (substituted H_E surface no longer invoked at substitution site).
 
-**Cumulative cardinality post-consolidation (2026-05-29):** 14 closure events across 7 sub-species.
+**Cumulative cardinality post-consolidation (2026-05-29):** **15 closure events across 7 sub-species** (post-batch-48 in-place §1.1 cardinality refresh; was 14 at PR #76 consolidation; +1 from H_T-CP-9 sub-species 7a 4th closure at batch-48 PR #77).
 
 ### §1.1 Sub-species 7a — `operator-explicit-deferred-close-gate`
 
@@ -48,15 +48,18 @@ Letters assigned at consolidation arc per **shipped-files-first** ordering: 7d (
 
 **Distinctive closure-event class.** Retirement gate carries operator-deferred close shape per spec-explicit operator-discretion ratification path (e.g., v1.6 MVP scope carve-out at spec-explicit operator-discretion clause). Closure event fires when operator ratifies the deferred close at the spec-explicit path, often via SAME-SESSION reframing or via later operator-discretion arc opening.
 
-**Cardinality: 3 closures.**
+**Cardinality: 4 closures.**
 
 | # | Substitution row | Closure batch | Ratification path |
 |---|---|---|---|
 | 1 | H_T-CP-19 (cross-deployment monotonicity) | batch-22 (`b9a097f`) | Layer 3 in-process reframe |
 | 2 | H_T-CP-14 (multi-agent span hierarchy fan-out) | batch-29 (`b3d40b9`) | v1.6 MVP single-sub-agent slice bounded scope per runtime spec v1.6 §14.7.2 step 5 |
 | 3 | H_T-CP-11 (D4 multiplicative tunable / cascade_policy) | batch-30 (`d9c7e6c`) | v1.6 MVP cascade_policy carve-out — sibling close to CP-14 at same §14.7.2 step 5 carve-out |
+| 4 | H_T-CP-9 (ResumptionKind 5-class taxonomy + engine.* namespace) | batch-48 (PR #77 TBD post-merge) | v1.4 scope carve-out at CP spec v1.6 §25.5 line 375 `workflow.resumption` CONDITIONAL row (preserved verbatim through CP spec v1.27 per delta-only-spec-file convention) — FIRST sub-species 7a closure anchored at CP spec authority surface |
 
-**Distinct from sub-species 7b/7f.** 7a closes via spec-explicit operator-discretion ratification at a v1.6 MVP scope carve-out — the spec authority explicitly carves out the deferred scope. 7b closes via gate-text reframe against production architecture (no spec carve-out involved). 7f closes via deployment-time operator-bound opt-in substrate (no spec-explicit operator-discretion path; closure mechanism is mech-β AC e2e green proof at deployment time).
+**Distinct from sub-species 7b/7f.** 7a closes via spec-explicit operator-discretion ratification at a spec MVP scope carve-out — the spec authority explicitly carves out the deferred scope. 7b closes via gate-text reframe against production architecture (no spec carve-out involved). 7f closes via deployment-time operator-bound opt-in substrate (no spec-explicit operator-discretion path; closure mechanism is mech-β AC e2e green proof at deployment time).
+
+**Cross-spec-anchor closure path generalization (NEW at batch-48 4th closure).** Sub-species 7a is the FIRST sub-species in the 7-family to demonstrate cross-spec-anchor closure path generalization within a single sub-species. Closures 1-3 anchored at runtime spec v1.6 §14.7.2 step 5 (CP-14 + CP-11 MVP scope carve-outs) OR Layer 3 in-process reframe at v1.6 e2e scope (CP-19). Closure 4 (CP-9) anchors at CP spec v1.6 §25.5 line 375 v1.4 scope carve-out — DISTINCT spec authority anchor. Common ancestor preserved: spec-explicit operator-discretion ratification path. Future sub-species 7a instances MAY anchor at additional spec authority surfaces (CXA spec carve-outs / OD spec MVP scope clauses / IS spec contract-bounded scope clauses); pattern generalizes per §5.1 catalogue maintenance discipline.
 
 ### §1.2 Sub-species 7b — `gate-text-stale-vs-production-architecture`
 
@@ -221,7 +224,7 @@ Per §0.2 forward-only ledger preservation: prior cataloguing sites at batches 2
 
 | Canonical name (this catalogue) | Historical name(s) at prior batches | Historical sites |
 |---|---|---|
-| **Sub-species 7a** `operator-explicit-deferred-close-gate` | `sub-species 7.operator-explicit-deferred-close-gate` AND `sub-species 7.operator-discretion-ratification-at-spec-explicit-path` (both names refer to the SAME closure-event-class per §0.3 operator ratification) | Batch-21 §2 (CP-19 entry); batch-22 §2 (CP-19 close, FIRST CLOSURE); batch-23 §1.2 (sub-species 7a/7b split candidate); batch-29 (CP-14 close); batch-30 (CP-11 close); batch-47 §3.2 |
+| **Sub-species 7a** `operator-explicit-deferred-close-gate` | `sub-species 7.operator-explicit-deferred-close-gate` AND `sub-species 7.operator-discretion-ratification-at-spec-explicit-path` (both names refer to the SAME closure-event-class per §0.3 operator ratification) | Batch-21 §2 (CP-19 entry); batch-22 §2 (CP-19 close, FIRST CLOSURE); batch-23 §1.2 (sub-species 7a/7b split candidate); batch-29 (CP-14 close); batch-30 (CP-11 close); batch-47 §3.2; **batch-48 (CP-9 close, 4th CLOSURE; FIRST anchored at CP spec authority surface)** |
 | **Sub-species 7b** `gate-text-stale-vs-production-architecture` | `sub-species 7.gate-text-stale-vs-production-architecture` | Batch-23 §1.2 (AS-5 close + sub-species cataloguing); batch-47 §3.2 |
 | **Sub-species 7c** `retirement-ID-scoping-too-coarse` | (no `.name` form authored; "sub-species 7c (or 8)" candidate at batch-24 line 192) | Batch-24 §3 (h) + line 192 (AS-8 decomp); batch-47 §3.2 |
 | **Sub-species 7d** `LANDED-substrate-pending-upstream-loop-substrate` | `sub-species 7d-LANDED-substrate-pending-upstream-loop-substrate` provisional naming at batch-45 addendum | Batch-45 addendum §2.1 (cataloguing); batch-46 §2 (6th instance); batch-47 §3.2 |
@@ -318,6 +321,7 @@ This catalogue does NOT own workflow §7.4.7.2 species enumeration. Cross-refere
 | Operator ratifications | (1) Sub-species 7a dual-`.name` collapse to canonical `operator-explicit-deferred-close-gate`; (2) Letter suffix convention 7a..7g; (3) NEW file at `.harness/retirement-event-pattern-catalogue.md` |
 | Letter assignments at this arc | 7f = `deployment-time-opt-in-gate` (NEW assignment for batch-31 originating); 7g = `indefinite-defer-tier-reclassification` (NEW assignment for batch-44 originating). 7d + 7e preserved as published at shipped PRs #72 / #74 / #75. |
 | Cardinality at consolidation | 14 closure events across 7 sub-species (7a=3 + 7b=1 + 7c=1 + 7d=6 + 7e=1 + 7f=2 + 7g=2) + 1 species candidate OPEN |
+| Cardinality post-batch-48 in-place refresh | 15 closure events across 7 sub-species (7a=4 + 7b=1 + 7c=1 + 7d=6 + 7e=1 + 7f=2 + 7g=2) + 1 species candidate OPEN — sub-species 7a 4th closure at H_T-CP-9 batch-48 PR #77 anchored at CP spec v1.6 §25.5 line 375 v1.4 carve-out (FIRST sub-species 7a closure anchored at CP spec authority surface) |
 | Effects | ZERO production code change; ZERO design-substrate edit; ZERO clearance marker; ZERO retirement-event tier transit; ZERO advisor 53rd application owed (this is the recipient arc of the catalogue, not a substantive substitution-retirement arc) |
 | H_T-RT-35 transit posture | UNCHANGED at RETIRED (batch-46 close preserved); H_T-CP-8 UNCHANGED at RETIRED (batch-47 close preserved) |
 | Forward-only ledger discipline | Prior cataloguing sites at batches 21-47 PRESERVED VERBATIM; this catalogue is canonical going forward; cross-reference table at §3 governs interpretation of prior sites |
