@@ -2,8 +2,9 @@
 
 | Field | Value |
 |---|---|
-| Status | PROPOSING |
+| Status | ✅ APPLIED-AS-READING-A + Q2=iii + Q3=i + Q5=i + Q6=α (operator-ratified 2026-05-29; apply pass this PR) |
 | Filed | 2026-05-29 |
+| Closed | 2026-05-29 — Apply pass: CP spec v1.26 → v1.27 §16.5.4 row U-CP-14 formula collapse to `workflow_id \|\| step_id \|\| sha256(outcome_canonical_bytes).hex()` + §16.5.6 audit-half stub annotation per Q2=iii; CP plan v2.29 → v2.30 U-CP-74 single-unit-body amendment (AC #2 + Signatures + test names); harness-cp + harness-runtime impl signature trim; 2090 / 10 skipped tests pass; clearance marker filed at `.harness/clearance/Spec_Control_Plane-v1_27-cleared-2026-05-29.md`. Audit-half stub remediation + state-ledger-half firing-site wiring DEFERRED per Q2=iii + upstream `[[u-rt-111-ac-2-strike-fourth-rescope-substrate-lifecycle-mismatch]]`. |
 | Filed by | Operator + Claude (post-PR-#64 close, design-phase posture) |
 | Class | 1 (architectural; CP spec named-but-undefined disambiguator surface + audit-composer-stub finding + state-ledger composer firing-site absence — composite blocker) |
 | Triggers | Upstream blocker (2) for H_T-RT-35 RETIRE-READY per checkpoint 2026-05-29; advisor 45th application pre-substantive consultation surfaced 3 distinct findings the checkpoint framing missed |
