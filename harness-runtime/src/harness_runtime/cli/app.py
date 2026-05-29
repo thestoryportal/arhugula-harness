@@ -528,6 +528,66 @@ def daemon_command(
     raise typer.Exit(code=EXIT_SUCCESS)
 
 
+# --- Track A admin subcommand registration (PR #84 Reading A apply) --------
+#
+# Spec §13.4 + §14.18.1 declare 5-subcommand parent dispatcher; standalone
+# `harness-inspect` + `harness-shutdown` binaries at [project.scripts] are
+# PRESERVED VERBATIM (operator muscle memory). The 2 subcommands here are
+# pass-through wrappers — they forward all extra args (including --help) to
+# the admin modules' argparse-based `main(argv)` entrypoints unchanged.
+#
+# Discipline preserved: admin modules stay argparse-only per spec §13
+# "no click/typer" footer at their docstrings. The parent-app wrappers
+# are typer-typed (consistent with run + daemon siblings) but delegate
+# without translating flag shapes.
+
+@app.command(
+    "inspect",
+    context_settings={
+        "ignore_unknown_options": True,
+        "allow_extra_args": True,
+        # Disable typer's auto-help so --help flows through to the admin
+        # module's argparse parser (which shows the real flag inventory).
+        "help_option_names": [],
+    },
+    help="Read-only summary of state ledger + collector traces.",
+    short_help="Read-only state inspection (delegates to harness-inspect).",
+)
+def inspect_command(ctx: typer.Context) -> None:
+    """Pass-through wrapper for the Track A `harness-inspect` admin stub.
+
+    Forwards all extra args verbatim to
+    `harness_runtime.admin.inspect:main`. See `harness inspect --help` (which
+    routes via the admin module's argparse parser) for the flag inventory.
+    """
+    from harness_runtime.admin import inspect as _inspect_admin
+
+    raise typer.Exit(code=_inspect_admin.main(ctx.args))
+
+
+@app.command(
+    "shutdown",
+    context_settings={
+        "ignore_unknown_options": True,
+        "allow_extra_args": True,
+        "help_option_names": [],
+    },
+    help="Signal a running harness instance to shut down gracefully.",
+    short_help="Daemon shutdown (delegates to harness-shutdown).",
+)
+def shutdown_command(ctx: typer.Context) -> None:
+    """Pass-through wrapper for the Track A `harness-shutdown` admin stub.
+
+    Forwards all extra args verbatim to
+    `harness_runtime.admin.shutdown_cli:main`. See `harness shutdown --help`
+    (which routes via the admin module's argparse parser) for the flag
+    inventory.
+    """
+    from harness_runtime.admin import shutdown_cli as _shutdown_admin
+
+    raise typer.Exit(code=_shutdown_admin.main(ctx.args))
+
+
 # Click UsageError exits with code 2 by default. Per runtime spec v1.35
 # §14.18.4 + §14.18.2, CLI arg-parse failures map to RT-FAIL-CLI-ARG-INVALID
 # → exit code 3. We discriminate UsageError (arg-parse) from legitimate
