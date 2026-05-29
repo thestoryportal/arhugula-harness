@@ -275,3 +275,111 @@ def test_span_processor_stage_is_frozen(tmp_path: Path) -> None:
     )
     with pytest.raises(FrozenInstanceError):
         stage.processor = BatchSpanProcessor(InMemorySpanExporter())  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# §9.1 per-deployment-surface tail-keep wrapper gating.
+# ---------------------------------------------------------------------------
+
+
+def _config_at_surface(
+    tmp_path: Path,
+    *,
+    deployment_surface: DeploymentSurface,
+) -> RuntimeConfig:
+    """Build a `RuntimeConfig` at the requested surface for §9.1 tests."""
+    return RuntimeConfig(
+        deployment_surface=deployment_surface,
+        repository_root=tmp_path,
+        path_bindings=PathBindingConfig(),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4317"),
+        collector=CollectorConfig(placement=CollectorPlacement.IN_PROCESS),
+        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+    )
+
+
+def test_local_development_surface_does_not_wrap_with_tail_keep(
+    tmp_path: Path,
+) -> None:
+    """At LOCAL_DEVELOPMENT, §9.1 mandates head-based sampling — no tail-keep wrap."""
+    stage = materialize_span_processor_stage(
+        _config_at_surface(
+            tmp_path, deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT
+        ),
+        _provider(),
+        exporter=InMemorySpanExporter(),
+    )
+    assert stage.tail_keep_processor is None
+
+
+def test_self_hosted_server_surface_wraps_with_tail_keep(tmp_path: Path) -> None:
+    """At SELF_HOSTED_SERVER, §9.1 mandates tail-based sampling — wrap engaged."""
+    stage = materialize_span_processor_stage(
+        _config_at_surface(
+            tmp_path, deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER
+        ),
+        _provider(),
+        exporter=InMemorySpanExporter(),
+    )
+    assert stage.tail_keep_processor is not None
+    assert stage.tail_keep_processor.downstream is stage.processor
+
+
+def test_managed_cloud_surface_wraps_with_tail_keep(tmp_path: Path) -> None:
+    """At MANAGED_CLOUD, §9.1 mandates tail-based sampling — wrap engaged."""
+    stage = materialize_span_processor_stage(
+        _config_at_surface(
+            tmp_path, deployment_surface=DeploymentSurface.MANAGED_CLOUD
+        ),
+        _provider(),
+        exporter=InMemorySpanExporter(),
+    )
+    assert stage.tail_keep_processor is not None
+    assert stage.tail_keep_processor.downstream is stage.processor
+
+
+def test_production_surface_drops_unclassified_trace_at_export(
+    tmp_path: Path,
+) -> None:
+    """At production surface, a trace with no §10.2 trigger is dropped — exporter sees nothing."""
+    in_memory = InMemorySpanExporter()
+    provider = _provider()
+    stage = materialize_span_processor_stage(
+        _config_at_surface(
+            tmp_path, deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER
+        ),
+        provider,
+        exporter=in_memory,
+    )
+    tracer = provider.get_tracer("u-od-3-tail-keep-test")
+    with tracer.start_as_current_span("workflow.envelope"):
+        with tracer.start_as_current_span("plain.work"):
+            pass
+    assert stage.flush(timeout_millis=5000) is True
+    finished = in_memory.get_finished_spans()
+    assert finished == ()
+
+
+def test_production_surface_preserves_trace_when_sandbox_violation_present(
+    tmp_path: Path,
+) -> None:
+    """At production surface, sandbox.violation child preserves the entire trace."""
+    in_memory = InMemorySpanExporter()
+    provider = _provider()
+    stage = materialize_span_processor_stage(
+        _config_at_surface(
+            tmp_path, deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER
+        ),
+        provider,
+        exporter=in_memory,
+    )
+    tracer = provider.get_tracer("u-od-3-tail-keep-test")
+    with tracer.start_as_current_span("workflow.envelope"):
+        with tracer.start_as_current_span("sandbox.violation"):
+            pass
+    assert stage.flush(timeout_millis=5000) is True
+    finished = in_memory.get_finished_spans()
+    finished_names = {s.name for s in finished}
+    assert "sandbox.violation" in finished_names
+    assert "workflow.envelope" in finished_names
