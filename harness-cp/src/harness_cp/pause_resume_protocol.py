@@ -799,3 +799,122 @@ async def emit_pause_captured_state_ledger_entry(
         timestamp=datetime.now(UTC),
     )
     return await ledger_writer(payload)
+
+
+# --- U-CP-79 §16.5 greenfield composer — CP→IS state-ledger emission -------
+#
+# `emit_resume_attempted_state_ledger_entry` is the §16.5 row U-CP-50 greenfield
+# composer producing the IS-anchored state-ledger entry per CP spec v1.26
+# §16.5.3 + §16.5.4 + §16.5.5 + §16.5.7 at the engine-layer free-function
+# `attempt_resume(...)` invocation site (line 128). Fires at BOTH success and
+# failure `ResumeOutcome` resolutions per AC #5 — failure is a recorded outcome
+# via `ResumeOutcome.outcome_kind = ABORT_*`, not a swallowed exception. ZERO
+# CP audit-ledger entry is emitted per §16.5.9 invariant 5 (greenfield).
+# Orthogonal to U-CP-76 workflow-layer per CP spec v1.11 §26 NEW NOTE 2-layer
+# coexistence — engine-layer emits `cp.resume-attempted`; workflow-layer emits
+# `cp.pause-resume-protocol`.
+
+from collections.abc import Awaitable  # noqa: E402
+from datetime import UTC, datetime  # noqa: E402
+
+from harness_is.state_ledger_entry_schema import (  # noqa: E402
+    Actor,
+    ActorClass,
+    Identifier,
+)
+from harness_is.state_ledger_write import EntryPayload, WriteResult  # noqa: E402
+
+from harness_cp.state_ledger_canonicalization import (  # noqa: E402
+    _canonicalize_outcome_bytes,
+)
+
+_RESUME_ATTEMPTED_ACTION_ID = "cp.resume-attempted"
+"""CP spec v1.26 §16.5.3 row U-CP-50 canonical action_id (engine-layer)."""
+
+_RECORD_SEPARATOR = b"\x1e"
+"""ASCII 0x1E (record-separator) byte — CP spec v1.26 §16.5.4 canonical-form
+rule shared across §16.5 composers."""
+
+
+def _resume_attempted_idempotency_key(
+    workflow_id: str,
+    step_id: str,
+    resume_event_id: str,
+    resume_attempt_count: int,
+    outcome_hash_hex: str,
+) -> str:
+    """Compose the U-CP-50 idempotency-key per CP spec v1.26 §16.5.4 row 6.
+
+    Bytes are the 0x1E-separated 5-tuple `(workflow_id, step_id,
+    resume_event_id, resume_attempt_count, sha256(outcome_canonical_bytes)
+    .hex())`; SHA-256-hashed; hex-64 encoded.
+
+    The `resume_attempt_count` segment (position 4) discriminates retry
+    attempts at the same `resume_event_id` (v1.25 disambiguator preserved
+    verbatim per Q-β.i-1(a)). The outcome-hash suffix segment (position 5) is
+    independently computed via `_canonicalize_outcome_bytes` over the
+    `ResumeOutcome` canonical JSON bytes per Q5(a) "hash-over-outcome-bytes".
+    """
+    segments = [
+        workflow_id.encode("utf-8"),
+        step_id.encode("utf-8"),
+        resume_event_id.encode("utf-8"),
+        str(resume_attempt_count).encode("utf-8"),
+        outcome_hash_hex.encode("utf-8"),
+    ]
+    return hashlib.sha256(_RECORD_SEPARATOR.join(segments)).hexdigest()
+
+
+async def emit_resume_attempted_state_ledger_entry(
+    *,
+    workflow_id: str,
+    step_id: str,
+    resume_event_id: str,
+    resume_attempt_count: int,
+    resume_outcome: ResumeOutcome,
+    actor: ActorIdentity,
+    ledger_writer: Callable[[EntryPayload], Awaitable[WriteResult]],
+) -> WriteResult:
+    """Compose + emit the §16.5 IS-anchored state-ledger entry for U-CP-50.
+
+    Per CP spec v1.26 §16.5.3: produces `EntryPayload` per IS HEAD 4-field shape
+    `(action_id, idempotency_key, actor, timestamp)`. `response_hash` and
+    `prior_event_hash` are IS-internal — composer does NOT control them
+    (C-IS-06 §6.2 + C-IS-13 §13.5). The outcome-bytes semantic at §16.5.5 row
+    U-CP-50 (`ResumeOutcome` canonical JSON bytes — includes `outcome_kind` +
+    material_diff + context_revalidated + resume_audit_entry_id per impl line
+    91) is carried at the `idempotency_key` discriminator per §16.5.4 +
+    Q-β.i-1(a).
+
+    Fires AFTER `attempt_resume(...)` at line 128 resolves the `ResumeOutcome`
+    and BEFORE the outcome returns to the caller per §16.5.7. Fires at BOTH
+    success outcomes (`RESUME_CLEAN` / `RESUME_AFTER_REVALIDATION`) and failure
+    outcomes (`ABORT_REVALIDATION_FAILED` / `ABORT_SNAPSHOT_CORRUPTED`) per
+    AC #5 — failure is a recorded outcome via `ResumeOutcome.outcome_kind =
+    ABORT_*`, not a swallowed exception.
+
+    Engine-layer surface; ZERO `CPAuditLedgerEntry` is constructed per §16.5.9
+    invariant 5. Orthogonal to U-CP-76 workflow-layer emission per CP spec
+    v1.11 §26 NEW NOTE 2-layer coexistence (distinct action_id namespaces;
+    this composer emits `cp.resume-attempted`; workflow-layer emits
+    `cp.pause-resume-protocol`).
+
+    Composer awaits `ledger_writer(payload)` return per §16.5.9 invariant 4;
+    does NOT condition on `WriteResult` variant.
+    """
+    outcome_canonical_bytes = _canonicalize_outcome_bytes(resume_outcome)
+    outcome_hash_hex = hashlib.sha256(outcome_canonical_bytes).hexdigest()
+    idempotency_key = _resume_attempted_idempotency_key(
+        workflow_id,
+        step_id,
+        resume_event_id,
+        resume_attempt_count,
+        outcome_hash_hex,
+    )
+    payload = EntryPayload(
+        action_id=Identifier(_RESUME_ATTEMPTED_ACTION_ID),
+        idempotency_key=Identifier(idempotency_key),
+        actor=Actor(actor_class=ActorClass.AGENT, actor_id=str(actor)),
+        timestamp=datetime.now(UTC),
+    )
+    return await ledger_writer(payload)
