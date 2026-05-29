@@ -409,4 +409,81 @@ This workspace operates in strict isolation from any other project. Within-works
 
 ---
 
-*End of root `CLAUDE.md`. Per-axis subdirectory `CLAUDE.md` files at `harness-{is,as,cp,od}/`. Skills at `.claude/skills/`. Sub-agent boundary at `Sub_Agent_Boundary_Specification_v1.md`. Design-phase council at `.claude/skills/council/`.*
+## 11. Posture declaration
+
+*Closes the third axis of the X-AL-3 enforcement triad. PR #48 added the CI guard (file-presence check). PR #49 added the clearance marker convention (version-binding check). This section adds the session-time posture check (which-mode-is-this-session).*
+
+### 11.1 Concept
+
+This workspace has two logical postures co-resident in the same git repo:
+
+| Posture | What it edits | What it reads as canonical |
+|---|---|---|
+| **Design-phase** | `design-substrate/**`, `.harness/**` back-flow docs, `.harness/clearance/**` markers | substrate research + ADRs + ADD + workflow doc |
+| **Phase 7** | `harness-*/src/**`, `harness-*/tests/**`, axis subdirectory CLAUDE.md files | `design-substrate/*` (the cleared canonical) |
+
+Plus a third unconstrained mode for workspace operational work that touches neither (e.g., editing root `CLAUDE.md`, `.github/`, `.claude/`, `.harness/clearance/README.md` itself, this PR series).
+
+The X-AL-3 rule (§4.4) is the hard boundary between design-phase and Phase 7 postures. Mixed-edit sessions are the failure mode; they must either be (a) explicit bundled-absorption arcs documented via back-flow, or (b) halt + ask.
+
+### 11.2 Auto-detection from edit scope
+
+At any point Claude is about to make substantive edits, it should determine the session's posture by examining the set of file paths in play:
+
+| Files being edited | Posture |
+|---|---|
+| Only `design-substrate/**` (possibly with `.harness/**` companions) | **Design-phase** |
+| Only `harness-*/src/**` or `harness-*/tests/**` or axis subdirectory CLAUDE.md | **Phase 7** |
+| Only workspace operational files (root `CLAUDE.md`, `.github/`, `.claude/`, `.harness/clearance/README.md`, `pyproject.toml`, etc.) | **Mode-agnostic** |
+| Both `design-substrate/**` AND `harness-*/src/**` | **Halt + ask** — must be a documented bundled-absorption arc; verify back-flow doc presence |
+
+Mode-agnostic is the broadest posture and unconstrained by the X-AL-3 rule. Workspace operational PRs (like PRs #46–#50 in the venue-migration arc) fall here.
+
+### 11.3 Explicit operator declaration
+
+The operator may declare posture explicitly at session start (or any time). The declaration overrides auto-detection until the operator declares a new posture or ends the session. Phrasings that count as declaration:
+
+- *"Design-phase posture"* / *"this is a design-phase session"* / *"working on the spec"*
+- *"Phase 7 posture"* / *"impl session"* / *"Phase 7 execution"*
+- *"Mode-agnostic"* / *"workspace ops"* / *"workspace operational work"*
+
+When declared, Claude should:
+
+1. State the declared posture explicitly at session start
+2. Apply the posture's edit constraints
+3. Halt + ask if a subsequent request would violate the declared posture (e.g., a "design-phase posture" session is asked to edit `harness-cp/src/`)
+
+### 11.4 Bundled-absorption arcs (legitimate mixed-posture)
+
+Some PRs legitimately touch both `design-substrate/**` and `harness-*/src/**` — these are bundled-absorption arcs where a spec amendment cascades into impl in the same PR. Examples from workspace history:
+
+- CP spec v1.25 → v1.26 + harness-cp/src updates landed together (PR #37)
+- OD spec v1.27 + harness-od/src updates landed together (PR #26)
+- CP plan v2.28 → v2.29 + cascade tests landed together (PR #38)
+
+These are NOT posture violations — they're explicit Phase-7-absorbed-via-* events documented at `.harness/`. The CI guard (§4.4) recognizes them via the paired `.harness/` doc; the clearance convention (§4.5) records them as marker files.
+
+Discriminator: a bundled-absorption arc carries documented back-flow (fork doc, architect recommendation, retirement event, or clearance marker). A mixed-edit session without back-flow is the silent-absorption failure mode.
+
+### 11.5 Enforcement layers
+
+| Layer | What it catches | Where |
+|---|---|---|
+| **Self-discipline** | Most violations — auto-detect + operator declaration | This §11; CLAUDE.md loaded at every session start |
+| **CI guard** | File-presence violations at PR | `.github/workflows/x-al-3-guard.yml` (§4.4) |
+| **Clearance marker discipline** | Version-binding violations at consumption | `.harness/clearance/` (§4.5); skill-side enforcement future |
+
+The triad is intentionally redundant. Self-discipline catches most cases cheaply. CI catches misses before merge. Clearance markers protect Phase 7 consumers from consuming a not-yet-cleared design surface.
+
+### 11.6 What to do when posture is unclear
+
+If a session opens and the operator's intent is ambiguous (no explicit declaration, no obvious edit-scope signal), Claude should:
+
+1. Ask the operator which posture is operative — present the 3 options (design-phase / Phase 7 / mode-agnostic) with one-sentence framing each
+2. Honor the response for the rest of the session
+
+Don't infer silently. Posture confusion at session start contaminates downstream decisions.
+
+---
+
+*End of root `CLAUDE.md`. Per-axis subdirectory `CLAUDE.md` files at `harness-{is,as,cp,od}/`. Skills at `.claude/skills/`. Sub-agent boundary at `Sub_Agent_Boundary_Specification_v1.md`. Design-phase council at `.claude/skills/council/`. X-AL-3 enforcement triad: §4.4 (CI guard) + §4.5 (clearance markers) + §11 (posture declaration).*
