@@ -266,6 +266,30 @@ Audit pass on 2026-05-27 triggered by a candidate batch-20 evaluation for H_T-OD
 | §8.2 cascade DORMANT | "H_T-OD-2 is PARTIAL ... Cascade does not fire until OD-2 transitions PARTIAL → RETIRE-READY" | **Cascade closed at batch-3** per `harness-od/CLAUDE.md` §4.1 H_T-OD-2 row ("CXA-5 cascade closed at batch 3"). §6.3.2 joint precondition with CP-24 (authoring-retired v1 §1) satisfied at OD-2 RETIRED batch-2 + batch-3 cascade re-evaluation. CXA-5 type-system inversion verification continues to fire at bootstrap per §7 row line 143 |
 | §9.2.4 line 197 "within reach" | "OD-2 ... within reach of RETIRE-READY" | OD-2 already RETIRED at batch-2 (4 batches before this snapshot was filed — text was stale at authoring time per the operator-ratified runtime-only substitution-site reading recorded at batch-2 §4) |
 
+### §11.1a H_T-CXA-5 — RETIRED at batch-3 (supersession; filed 2026-05-28 batch-41 successor reconciliation)
+
+| Snapshot site | Snapshot text | Superseded by |
+|---|---|---|
+| §7 row line 143 | "STILL-BOUNDED-DOWNSTREAM ... Per Meta-Architecture §6.3.2, gated on H_T-OD-2 retirement. OD-2 is PARTIAL → CXA-5 cannot retire" | **RETIRED 2026-05-20** at `.harness/phase-7d-retirement-events-batch-3.md` §4 (U-RT-58 close arc — production `harness.breaker.*` emission site landed at `retry_breaker_fallback.py:_emit_breaker_transition` delegating to `RuntimeRetryBreaker.emit_breaker_transition_event` per OD-canonical C-OD-07 §7.1 7-attribute schema). Both endpoints retired pre-batch (OD-2 RETIRED batch-2 + CP-24 RETIRED authoring close v1 §1); production callsite landed at batch-3 activates the inversion seam end-to-end. Per-axis live status at workspace `CLAUDE.md` §2.5 + `harness-cp/CLAUDE.md` §"§6.3.2 F-CP-01 Stage 3b inversion cascade FULLY DISCHARGED" |
+| §7 "CXA pattern" footer line 145 | "no CXA seam can be RETIRE-READY at this pass" | **CXA-5 RETIRED at batch-3** (2026-05-20). Pre-2026-05-27-refresh §7 narrative did not include §11.x supersession for CXA-5; ledger v2 §7 row continued to read STILL-BOUNDED-DOWNSTREAM through 2026-05-27 §11 batch refresh + batches 22–41. Carry-window: 38 batches × 8 days. Cardinality drift propagated through every batch-cardinality check since batch-3: actual workspace cumulative post-batch-41 is **43/54 RETIRED (79.6%) + 2 RETIRE-READY (3.7%) + 3 PARTIAL (5.6%) + 4 STILL-BOUNDED (7.4%) + 2 STILL-BOUNDED-INDEFINITELY (3.7%) = 54 ✓** (was reported as 42 RETIRED + 5 STILL-BOUNDED per stale CXA-5 STILL-BOUNDED-DOWNSTREAM accounting). Pipeline-advanced: **48/54 = 88.9%** (was reported as 47/54 = 87.0%). Corrective accounting applies at batch-41 successor onward; prior batch records stand verbatim per workspace `CLAUDE.md` §4.3 forward-only ledger discipline. Per workflow v1.12 §7.4.7.3.C audit-template applied retroactively at batch-41 successor doc-hygiene arc. |
+
+**Sub-species 10 catalogue impact:** CXA-5 closure (batch-3) predates sub-species 10 catalogue authoring at workflow v1.12 publication 2026-05-28 + does not fit sub-species 10 categorical-mismatch shape (CXA-5 closed via production-emission-site-landing, not via doc-hygiene reclassification of vacuous H_E surface). Sub-species 10 cardinality at workflow v1.12 §7.4.7.2 remains 5 (OD-1 + OD-7 + IS-4 + CP-12 + CP-23 batches 37–41).
+
+**Cardinality adoption scope:** This §11.1a supersession recognizes CXA-5 batch-3 closure at ledger v2 §7 row. Whether the corrective workspace cumulative counts (43/54 RETIRED + 4 STILL-BOUNDED + 48/54 pipeline-advanced) are adopted at workspace `CLAUDE.md` §2.5 + `harness-cp/CLAUDE.md` + batch-41 footer is a separate doc-hygiene scope decision pending operator routing (see batch-41 successor reconciliation note).
+
+### §11.1b H_T-CXA-3 — audit-empty result (filed 2026-05-28 batch-41 successor)
+
+| Audit step | Finding |
+|---|---|
+| Meta-Arch §5.7 H_E classification | **~ partial** (line 646) — H_E covers untyped sub-agent + Skills + MCP composition via `Agent` + Skills loading + MCP registration + brief-authoring via `CLAUDE.md` |
+| Retirement criterion | "CP clusters 5+6+7 land as runtime composers displacing H_E `Agent`/Skills/MCP" (Meta-Arch §5.6 line 748 + §6.3 line 1217) |
+| Sub-cluster 5 status | U-CP-32..U-CP-36 includes Files-arc primitives **deferred indefinitely** per runtime spec v1.17 §14.C Memory-only ratified scope (2026-05-23). Sub-cluster 5 criterion B forecloses RETIRED transit at canonical runtime composer layer until Files-arc design-phase opens. |
+| Sub-species 10 (categorical-mismatch ✗ absent) fit | **FORECLOSED** — H_E classification is ~ partial, not ✗ absent. Pre-substantive empirical orientation against Meta-Arch §5.7 invalidated initial framing-candidate. |
+| Sub-species 7 (operator-discretion MVP carve-out) fit | **FORECLOSED** — no spec-explicit MVP carve-out cite parallel to CP-11/CP-14 (runtime spec v1.6 §14.7.2 step 5 single-sub-agent slice) covering the 24-edge typed contract surface at CXA v2.1 §2.3.3. Sub-cluster 5 Files-arc indefinite-defer is the structural blocker. |
+| Disposition | **STILL-BOUNDED preserved**. No in-session closure shape applies; advisor-recommended audit termination at cardinality 1 ratified by operator AskUserQuestion 2026-05-28. CXA-3 retirement pathway gated on either (α) Files-arc design-phase opening + sub-cluster 5 runtime composer landing OR (β) operator AskUserQuestion ratifying Memory-only-scope carve-out for CXA-3 retirement criterion narrowing (parallel to AS-8e + AS-8f indefinite-defer pattern but at CXA-axis row). Neither path is in-session-actionable at this arc. |
+
+**Class 3 informational disposition.** No ledger-row status change; no production code change; no spec amendment; no cross-axis cascade. §3(f) NEW species candidate audit terminates at cardinality 1 (CP-23 batch-41 framing-drift the sole instance; CXA-5 batch-3-vs-§7 framing-drift documented at §11.1a but distinct closure-event-class — production-emission-site-landing supersession, not ledger-authoring-time framing-drift causal pattern at the same level of generality).
+
 ### §11.2 H_T-AS-2 — RETIRED at batch-16
 
 | Snapshot site | Snapshot text | Superseded by |
