@@ -64,13 +64,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from harness_as.sandbox_tier import SandboxTier
+from harness_core import DeploymentSurface
 from harness_od.per_sandbox_tier_otlp_reachability import (
     ReachabilityViolation,
     assert_otlp_reachable_from_sandbox,
 )
 from harness_od.redaction_span_processor import RedactionSpanProcessor
+from harness_od.tail_keep_span_processor import TailKeepSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 
 from harness_runtime.types import RuntimeConfig
@@ -130,14 +132,27 @@ class SpanProcessorStage:
     processor: BatchSpanProcessor
     exporter: SpanExporter
     redaction_processor: RedactionSpanProcessor
+    #: §9.1 tail-keep wrapper around `processor`. Bound iff
+    #: `deployment_surface != LOCAL_DEVELOPMENT` per §9.1 (production-time
+    #: tail-based sampling); `None` at local-development per §9.1 head-based
+    #: sampling mandate. When bound, the `TracerProvider` registers
+    #: `tail_keep_processor` (which wraps `processor`) rather than the BSP
+    #: directly — see `materialize_span_processor_stage` step 5.
+    tail_keep_processor: TailKeepSpanProcessor | None
 
     def flush(self, timeout_millis: int = 30_000) -> bool:
         """Force-flush buffered spans through the exporter.
 
         Returns True iff the flush completed within `timeout_millis`. AC #1
-        surface (spans flush on demand). Delegates to
-        `BatchSpanProcessor.force_flush`.
+        surface (spans flush on demand). When the tail-keep wrapper is
+        engaged (production surfaces), force-flush drains its buffer
+        (keep-all on shutdown) before delegating to the BSP; at local-
+        development, delegates directly to BSP.
         """
+        if self.tail_keep_processor is not None:
+            return self.tail_keep_processor.force_flush(
+                timeout_millis=timeout_millis
+            )
         return self.processor.force_flush(timeout_millis=timeout_millis)
 
 
@@ -215,15 +230,31 @@ def materialize_span_processor_stage(
             f"BatchSpanProcessor / OTLPSpanExporter construction failed: {exc}"
         ) from exc
 
+    # §9.1 deployment-surface sampling-mode discriminator.
+    # Production-time surfaces (self-hosted-server + managed-cloud) wrap the
+    # BSP with `TailKeepSpanProcessor` per §10.2 tail-keep-on-classification
+    # per §9.3 implementer-discretion algorithm; local-development surface
+    # uses head-based sampling per §9.1 (no wrap, BSP receives spans
+    # directly per the sampler's binding decision at span creation).
+    tail_keep_processor: TailKeepSpanProcessor | None = None
+    bsp_chain_terminal: SpanProcessor = processor
+    if config.deployment_surface != DeploymentSurface.LOCAL_DEVELOPMENT:
+        tail_keep_processor = TailKeepSpanProcessor(downstream=processor)
+        bsp_chain_terminal = tail_keep_processor
+
     # Redaction MUST register BEFORE the BSP — the synchronous OTLP exporter
     # serializes the SpanData inside its on_end path, so any attribute the
     # BSP enqueues for export is what reaches the wire. Per OD spec C-OD-13
     # §13.2: pre-collector redaction at SDK / wrapper boundary BEFORE the
     # BatchSpanProcessor buffer.
     provider.add_span_processor(redaction_processor)
-    provider.add_span_processor(processor)
+    # At production surfaces, register `TailKeepSpanProcessor` (which wraps
+    # `processor` and forwards on root close based on §10.2 triggers); at
+    # local-development, register the BSP directly per head-based mandate.
+    provider.add_span_processor(bsp_chain_terminal)
     return SpanProcessorStage(
         processor=processor,
         exporter=resolved_exporter,
         redaction_processor=redaction_processor,
+        tail_keep_processor=tail_keep_processor,
     )

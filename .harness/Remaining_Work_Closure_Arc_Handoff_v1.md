@@ -290,3 +290,76 @@ Before merging the arc's worktree branch to `main`:
 | Findings resolved (B + D total) | 19 (7+4 at B + 5+4 at D, minus 1 cross-counted operator-decision) |
 | Phase E disposition | PRODUCTION-READY HANDOFF |
 | Next gate | Next session opens cluster per §7 (Option A recommended: 4-OD-A WorkflowEnvelope) |
+
+---
+
+## §12 STATE UPDATE 2026-05-28 (appended; v1 §1–§11 preserved verbatim above)
+
+This file was filed 2026-05-21 at Phase E close as a forward-looking handoff. As of 2026-05-28, the projected work has substantially landed across ~25 PRs to `main`. v1 §1–§11 above is preserved verbatim as historical anchor; this section is the current state.
+
+### §12.1 Cluster landing status (vs §3 + §5 projection)
+
+| Sub-cluster | v1 projection | Status 2026-05-28 |
+|---|---|---|
+| **4-OD-A** WorkflowEnvelope (3 units) | recommended first | **LANDED** |
+| **4-OD-B** SqliteWritePath (4 units) | order 9 | **LANDED** PR #18 (`406fbf5`); H_T-OD-6 PARTIAL → RETIRE-READY batch-33 |
+| **4-OD-C** PRICE_TABLE_REF + Decimal (4 units) | order 3 | **LANDED** |
+| **4-OD-D** CostAttribution (4 units) | order 4 | **LANDED**; OD-5 RETIRE-READY → RETIRED batch-32 |
+| **4-OD-E** canonical schemas (5 units) | order 6 | **LANDED** |
+| **10-CP-A** ValidatorFramework (4 units) | order 5 | **LANDED**; CP-21 batch-15 DOWN → corrective RETIRED batch-17 |
+| **10-CP-B** PauseResumeProtocol (4 units) | order 8 | **LANDED**; CP-22 RETIRED batch-18 |
+| **10-CP-C** PerServerTrust + MCPClientNamespace (5 units) | order 7 | **LANDED**; CP-18 RETIRED |
+| **10-CP-D** hitl_gate + converter (2 units) | order 10 | **LANDED** |
+| **L9-sexies** RuntimeToolDispatcher + MCPClientHost (8 units) | recommended second | **LANDED** as U-RT-71..U-RT-75 + retry-breaker arc (Class 1 fork resolution); AS-4 RETIRED batch-19; AS-5 RETIRED batch-23 |
+| **L9-septies..L9-sedecies** | not in v1 | All landed at follow-on arcs (Memory tool, validator-composer, pause-resume, webhook-composer, skill-activation, CLI scaffolding) |
+
+**v1 projection 22 → 32 RETIRED (65.3%); actual 2026-05-28: 37/54 RETIRED (68.5%)** after ledger decomposition expanded 49 → 54 at batch-24 (AS-8 monolithic → 6 sub-rows). Workspace RETIRE-READY bucket EMPTY for first time in ledger history at batch-32 close.
+
+### §12.2 Substitution retirement state (per `harness-{is,as,cp,od}/CLAUDE.md` §4.1 ledgers)
+
+| Axis | RETIRED | PARTIAL | RETIRE-READY | STILL-BOUNDED | Total |
+|---|---|---|---|---|---|
+| IS | 9/9 | — | — | — | 9 (100%) |
+| AS (decomposed) | 9/10 | — | — | AS-8f indefinite | 10 (90% active) |
+| CP | 17/22 | CP-8, CP-9, CP-17 (3) | — | CP-12, CP-16 (2) | 22 (77.3%) |
+| OD | 3/8 | OD-3 + OD-4 PARTIAL (refined; 1.5/4 gates) | — | OD-1, OD-7 (2) | 8 (37.5%) |
+| CXA | 1/5 | — | — | 4 | 5 |
+| **Aggregate** | **37/54** | **5** | **0** | **8 + 1 indefinite** | **54 (68.5%)** |
+
+### §12.3 v1 §6 deferred items disposition
+
+| v1 §6 deferred item | 2026-05-28 status |
+|---|---|
+| CXA v2.6 → v2.7 cost-attribution row 8 | **CLOSED** at CXA v2.9 (now at v2.15) |
+| **CP-12** sandbox-tier dispatch | STILL-BOUNDED |
+| **CP-16** memory primitive consumption | **RETIRED** via L9-octies U-RT-76..U-RT-82 + Memory tool registry arc |
+| **CP-17** files primitive consumption | PARTIAL (Files arc deferred indefinitely per runtime spec v1.17 §14.C) |
+| **CP-19** cross-deployment monotonicity | **RETIRED** batch-22 via `default_gate_level` spec extension + 3-arc single-day apply (2026-05-27) |
+| **CP-23** bridging-arc traversal | STILL-BOUNDED |
+| **OD-1** deferral envelope | STILL-BOUNDED |
+| **OD-3** composite sampler | PARTIAL (refined; gate (b) §10.3 CLOSED via PR #25; gate (a) §9.1 tail-keep deferred) |
+| **OD-4** pre-collector redaction | PARTIAL (refined; gate (a) §13.1 deployment-level CLOSED via PR #22+#25; per-session toggle + gate (b) §13.2 tokenization deferred) |
+| **OD-7** preservation invariants | STILL-BOUNDED |
+| SpanCostRecord audit-ledger residual | **CLOSED** via U-OD-39 + U-OD-40 cost-attribution arc |
+| FastMCP transport handler | LANDED at L9-sedecies CLI scaffolding cluster |
+| Per-axis CLAUDE.md v2.1→v2.4 cite drift | OPEN — `[[class_3_tension_per_axis_claude_md_v2_1_to_v2_4_count_drift]]` carried; AS-side still v2.1 baseline |
+
+### §12.4 Active backlog (prioritized; supersedes v1 §5 ROI sequence)
+
+1. **OD-3 gate (a)** §9.1 tail-keep at OTLP collector boundary — requires tail-keep mechanism arc; deferred per §9.3 implementer-discretion
+2. **OD-4 gate (a) residual** per-session toggle ("OPERATOR_SELF_REDACT") — requires session-control-substrate arc
+3. **OD-4 gate (b)** §13.2 opaque-token tokenization — requires eval-grade pipeline arc; strip-not-tokenize MVP preserved
+4. **OD-1** deferral envelope — runtime composer importing `deferral_envelope` typed primitive
+5. **OD-7** preservation invariants — runtime enforcement loop invoking `per_dimension_preservation_invariants`
+6. **CP-8 / CP-9 / CP-17 PARTIAL** — Phase 6 operator scoping owed
+7. **CP-12 / CP-23 STILL-BOUNDED** — composer arcs (sandbox-tier dispatch fan-out + multi-topology cascade)
+8. **OD-5 + OD-6 deployment-time gate** — RETIRED in-CLI; operator action to bind real production substitution surface
+9. **Per-axis CLAUDE.md v2.1→v2.4 cite drift** — AS-side bump owed
+10. **CI substrate** — operator timing per CLAUDE.md §3.1
+
+### §12.5 Disposition
+
+- v1 §1–§11 preserved verbatim as historical anchor for the Remaining-Work Closure Arc (2026-05-21).
+- v1 mission **COMPLETE**: all 43 atomic units across L9-sexies + clusters 10-CP-* + 4-OD-* landed; retirement projection exceeded (32 → 37 actual).
+- Active backlog now sits at the §12.4 enumeration; carried at workspace `CLAUDE.md` §2.3 + §2.4 row-bumps and per-axis `CLAUDE.md` §4.1 retirement ledgers (authoritative).
+- Next gate: operator scoping of OD-3 gate (a) / OD-4 residuals / CP-axis PARTIAL closure, OR Phase 6 follow-on arcs.
