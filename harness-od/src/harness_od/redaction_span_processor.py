@@ -90,15 +90,30 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from harness_core import PersonaTier
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 
 from harness_od.content_structure_discipline import DEFAULT_OFF_CONTENT_ATTRIBUTES
+from harness_od.redaction_gradient import PER_PERSONA_TIER_REDACTION
 
 if TYPE_CHECKING:
     pass
 
-__all__ = ["RedactionSpanProcessor"]
+__all__ = [
+    "MultiTenantOverrideRefusedError",
+    "RedactionSpanProcessor",
+]
+
+
+class MultiTenantOverrideRefusedError(Exception):
+    """Raised when an empty `redacted_attributes` is supplied at multi-tenant.
+
+    Per OD spec §C-OD-13 §13.1 row 3 + `PER_PERSONA_TIER_REDACTION[MULTI_TENANT_COMPLIANCE].toggleable=False`:
+    multi-tenant-compliance is non-toggleable; operator cannot disable
+    redaction at this tier. Surfaces at processor construction; never at
+    runtime.
+    """
 
 
 class RedactionSpanProcessor(SpanProcessor):
@@ -118,14 +133,42 @@ class RedactionSpanProcessor(SpanProcessor):
     def __init__(
         self,
         *,
+        persona_tier: PersonaTier = PersonaTier.SOLO_DEVELOPER,
         redacted_attributes: frozenset[str] = DEFAULT_OFF_CONTENT_ATTRIBUTES,
     ) -> None:
+        # OD spec §C-OD-13 §13.1 row 3 — multi-tenant-compliance is
+        # non-toggleable; operator cannot disable redaction at this tier.
+        # An empty `redacted_attributes` at multi-tenant is a disable attempt.
+        posture = PER_PERSONA_TIER_REDACTION[persona_tier]
+        if (
+            persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE
+            and len(redacted_attributes) == 0
+        ):
+            raise MultiTenantOverrideRefusedError(
+                f"persona_tier={persona_tier.value} is non-toggleable per "
+                f"PER_PERSONA_TIER_REDACTION[{persona_tier.value}].toggleable={posture.toggleable} "
+                f"(OD spec §C-OD-13 §13.1 row 3); empty redacted_attributes "
+                f"frozenset is rejected at construction. Re-pass the spec-canonical "
+                f"DEFAULT_OFF_CONTENT_ATTRIBUTES (default) or a non-empty operator-tuned set."
+            )
+        self._persona_tier: PersonaTier = persona_tier
         self._redacted: frozenset[str] = redacted_attributes
 
     @property
     def redacted_attributes(self) -> frozenset[str]:
         """The frozenset of attribute keys this processor strips at on_end."""
         return self._redacted
+
+    @property
+    def persona_tier(self) -> PersonaTier:
+        """The deployment's persona tier, gating §13.1 toggleability semantics.
+
+        Solo-developer + team-binding tiers permit operator override via the
+        ctor `redacted_attributes` keyword (including the empty-frozenset
+        disable path). Multi-tenant-compliance refuses the empty-frozenset
+        disable at construction per `MultiTenantOverrideRefusedError`.
+        """
+        return self._persona_tier
 
     def on_start(
         self,

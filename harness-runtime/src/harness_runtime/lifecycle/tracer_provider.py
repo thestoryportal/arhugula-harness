@@ -64,14 +64,15 @@ unit lands the provider construction + global registration only.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final
 
 from opentelemetry import trace as ot_trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.sampling import Sampler
 
+from harness_od.base_rate_set_and_envelope import PER_CELL_BASE_RATE_ENVELOPE
 from harness_od.composite_sampler import build_default_sampler
+from harness_od.observability_matrix import CellID, reject_excluded_cell
 
 from harness_runtime.config.otel_config import (
     build_resource_attributes,
@@ -87,13 +88,14 @@ __all__ = [
 ]
 
 
-#: The default SDK sampler at HEAD: `ParentBased(root=HarnessCompositeSampler)`
-#: per OD spec v1.2 §9.2 always-sampled set discipline (project-authored
-#: sampler honoring §9.2 at the SDK boundary as defense-in-depth). H_T-OD-3
-#: STILL-BOUNDED → PARTIAL transit at this binding. Production-surface
-#: tail-keep-on-classification at the OTLP collector boundary per C-OD-09 §9.1
-#: is deferred to a follow-on arc.
-_DEFAULT_SAMPLER: Final[Sampler] = build_default_sampler()
+# NOTE: As of the OD-3+OD-4 persona_tier plumbing arc (fork doc
+# `class_1_fork_od_3_od_4_retire_ready_persona_tier_plumbing.md`,
+# operator-ratified 2026-05-28), the default sampler is constructed per-call
+# inside `materialize_tracer_provider_stage` reading
+# `(config.persona_tier, config.deployment_surface)` per OD spec §10.3 8-row
+# base_rate envelope. The module-level `_DEFAULT_SAMPLER: Final[Sampler] =
+# build_default_sampler()` constant has been retired — it forced base_rate=1.0
+# at every cell and was the production gap blocking OD-3 PARTIAL → RETIRE-READY.
 
 
 class TracerProviderBindError(Exception):
@@ -188,10 +190,12 @@ def materialize_tracer_provider_stage(
         globally — allowing per-test isolation against the OTel SDK's one-shot
         global state.
     sampler :
-        Optional SDK `Sampler` override; defaults to `_DEFAULT_SAMPLER`
-        (`ParentBased(root=HarnessCompositeSampler(base_rate=1.0))`) per the
-        module docstring's sampler-choice rationale. Tests pass deterministic
-        samplers; production code does not thread this argument.
+        Optional SDK `Sampler` override. When `None` (production), the
+        composer constructs
+        `ParentBased(root=HarnessCompositeSampler(base_rate=base_rate_for(
+        config.persona_tier, config.deployment_surface)))` per OD spec §10.3
+        8-row table at `harness_od.base_rate_envelope`. Tests pass
+        deterministic samplers; production code does not thread this argument.
 
     Returns
     -------
@@ -211,7 +215,22 @@ def materialize_tracer_provider_stage(
 
     try:
         attrs = build_resource_attributes(config.otel, config.deployment_surface)
-        resolved_sampler = sampler or _DEFAULT_SAMPLER
+        if sampler is not None:
+            resolved_sampler = sampler
+        else:
+            # OD spec §10.3 8-row table — base_rate per cell
+            # (persona_tier × deployment_surface) via canonical substrate
+            # `PER_CELL_BASE_RATE_ENVELOPE` (U-OD-12). `reject_excluded_cell`
+            # raises `CellBindingViolation` at the single EXCLUDED cell
+            # (multi-tenant × local-development), surfacing misconfiguration
+            # at bootstrap rather than silent fallback.
+            cell = CellID(
+                persona_tier=config.persona_tier,
+                deployment_surface=config.deployment_surface,
+            )
+            reject_excluded_cell(cell)
+            base_rate = PER_CELL_BASE_RATE_ENVELOPE[cell].default_rate
+            resolved_sampler = build_default_sampler(base_rate=base_rate)
         # Resolve the sampling mode for the composer's audit trail; the
         # current default sampler ignores the mode (over-sample at SDK,
         # defer tail to collector — see module docstring). Future units may

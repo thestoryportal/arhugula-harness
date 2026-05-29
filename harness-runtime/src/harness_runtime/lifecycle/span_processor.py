@@ -207,7 +207,9 @@ def materialize_span_processor_stage(
             max_export_batch_size=config.collector.batch_size,
             schedule_delay_millis=config.collector.batch_window_seconds * 1000,
         )
-        redaction_processor = RedactionSpanProcessor()
+        redaction_processor = RedactionSpanProcessor(
+            persona_tier=config.persona_tier
+        )
     except Exception as exc:
         raise SpanProcessorBindError(
             f"BatchSpanProcessor / OTLPSpanExporter construction failed: {exc}"

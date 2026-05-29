@@ -1,4 +1,59 @@
-# Specification — Harness Runtime v1.36
+# Specification — Harness Runtime v1.37
+
+## Change-note (v1.36 → v1.37)
+
+**Status posture (PROPOSED 2026-05-28).** v1.37 is a substantive amendment authoring NEW `persona_tier: PersonaTier = PersonaTier.SOLO_DEVELOPER` field at §3 C-RT-03 `RuntimeConfig` schema per `.harness/class_1_fork_od_3_od_4_retire_ready_persona_tier_plumbing.md` Reading (α) operator-ratified 2026-05-28 (Q1=A + Q2=A + Q3=a + Q4=i + Q5=α). Single bundled binding-lift arc per `tenant_id` v1.22 + `default_gate_level` v1.20 + `step_dispatch_timeout_seconds` v1.31 + `skill_activation_hook_config` v1.32 primitive-scalar/sub-model field-set-extension precedents. v1.36 body PRESERVED VERBATIM per delta-only-spec-file convention.
+
+**Source of fix.** Fork doc §3 shared substrate + §6 architect-leaning recommendation Q4=(i) field-set extension at NEW §3 sub-section authoring (mirrors `tenant_id` binding-lift precedent). Empirical orientation surfaced two structural blockers for the OD-3 + OD-4 RETIRE-READY arcs: (1) `workflow.persona_tier` is set ONLY on the workflow root span at `harness-cp/.../workflow_driver.py:608`, forecloses per-span attribute-read at SpanProcessor `on_end` boundary; (2) Runtime spec C-RT-03 silent on `persona_tier` field, makes adding the field structurally ambiguous between binding-fix (silent-extension-OK) and X-AL-3 (silent-extension-prohibited). OD spec §13.1 reads persona_tier as per-deployment classification (solo-developer / team-binding / multi-tenant-compliance ARE deployment classes), matching the RuntimeConfig deployment-classification field surface. The two persona_tier semantic surfaces co-exist by design: CP-axis `StepEffectiveBinding.persona_tier` carries per-step persona_tier for gate-level / engine-class / HITL-matrix decisions; OD-axis reads per-deployment persona_tier for sampling + redaction discipline.
+
+**Amendments.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§3 C-RT-03 `RuntimeConfig` schema** | Append the following row to the §3 field table: `persona_tier` / `PersonaTier` (from `harness_core.persona_tier`) / no (default `PersonaTier.SOLO_DEVELOPER`) / Per-deployment persona classification per OD spec §C-OD-10 §10.3 + §C-OD-13 §13.1. Drives (a) `HarnessCompositeSampler` base_rate at `materialize_tracer_provider_stage` per §10.3 8-row table at `harness_od.base_rate_set_and_envelope.PER_CELL_BASE_RATE_ENVELOPE` (U-OD-12); (b) `RedactionSpanProcessor` per-persona override toggle at `materialize_span_processor_stage` per §13.1 toggleability gradient at `harness_od.redaction_gradient.PER_PERSONA_TIER_REDACTION` (U-OD-16). Default `SOLO_DEVELOPER` preserves MVP backward-compat at all existing test fixtures + the MVP `base_rate=1.0` defense-in-depth pre-arc behavior. Operators MUST opt-in to `TEAM_BINDING` / `MULTI_TENANT_COMPLIANCE` explicitly via env (`HARNESS_PERSONA_TIER`) / `harness.toml` (`persona_tier`) / CLI flag per U-RT-103 3-source resolution (§3.7). DISTINCT from CP-axis `StepEffectiveBinding.persona_tier` (CP spec v1.17 §6.5) which is per-step / per-workflow. | Fork doc §3 + Q4=(i) |
+| **§3.7 `RuntimeConfigSource` 3-source layered precedence** | CANONICAL-READING AMENDMENT — `persona_tier` field is sourced through the existing 3-source precedence at NO new wire-up cost: env (`HARNESS_PERSONA_TIER`) → `harness.toml` (`[runtime] persona_tier = "..."`) → CLI flag (`--persona-tier <tier>`). Body text at §3.7 PRESERVED VERBATIM; the canonical reading at v1.37 maps the new field through the existing source layers. Field-set cardinality grows 28 → 29 at v1.37 (the v1.35 §3.7 invariant "operates on the existing 28-field RuntimeConfig set canonical at v1.31" is REFRESHED at v1.37 to 29 fields). | Fork doc §6 Q4=(i) + §3.7 binding-fix precedent |
+
+**Materializer consumption (downstream — implementation surface, NOT spec contract).**
+
+The NEW field is consumed at TWO stage-4 OD materializers:
+
+1. `materialize_tracer_provider_stage` (`harness-runtime/.../lifecycle/tracer_provider.py`): reads `config.persona_tier` + `config.deployment_surface`; constructs `CellID(persona_tier=..., deployment_surface=...)`; invokes `reject_excluded_cell(cell)` (raises `CellBindingViolation` at the single EXCLUDED cell `multi-tenant-compliance × local-development` per §10.3 byte-exact); resolves `base_rate = PER_CELL_BASE_RATE_ENVELOPE[cell].default_rate`; constructs `build_default_sampler(base_rate=base_rate)`. The pre-v1.37 module-level `_DEFAULT_SAMPLER: Final[Sampler] = build_default_sampler()` constant RETIRED — it forced `base_rate=1.0` at every cell.
+
+2. `materialize_span_processor_stage` (`harness-runtime/.../lifecycle/span_processor.py`): reads `config.persona_tier`; threads through to `RedactionSpanProcessor(persona_tier=config.persona_tier)`. The processor's NEW ctor `persona_tier` kwarg gates §13.1 row 3 multi-tenant-compliance non-toggleability — empty `redacted_attributes` frozenset at multi-tenant raises `MultiTenantOverrideRefusedError` at construction.
+
+**Sections preserved verbatim from v1.36.** ALL v1.36 + v1.35 + ... + v1 lineage preserved verbatim per delta-only-spec-file convention. ZERO body text change at §14.x contract surfaces. ZERO signature change at §8 `api.run()`. ZERO contract removal.
+
+**Status posture.** Proposed (v1.36) → **Proposed (v1.37)**. v1.37 is a substantive single-field amendment under binding-fix shape — additive at §3 (29th field); operates on existing 3-source precedence at §3.7; backward-compatible default at all existing call sites; ZERO breaking change.
+
+**Downstream absorption owed (post-v1.37).**
+
+(a) Workspace `CLAUDE.md` §2.3 runtime row version bump (v1.36 → v1.37); co-published this arc.
+
+(b) OD spec v1.25 → v1.26 canonical-reading amendment at §C-OD-13 §13.1 clarifying per-deployment persona_tier classification; co-published this arc.
+
+(c) OD plan v2.24 → v2.25 single-arc absorption: amendments at U-OD-04 (sampler binding) + redactor unit (per-persona toggle binding) + tests; co-published this arc.
+
+(d) Fork doc `.harness/class_1_fork_od_3_od_4_retire_ready_persona_tier_plumbing.md` Status PROPOSING → ✅ APPLIED. Co-published this arc.
+
+(e) Production binding co-published this arc: `RuntimeConfig.persona_tier` field at `harness-runtime/types.py`; `tracer_provider.py` per-cell base_rate; `span_processor.py` per-persona toggle thread-through; `RedactionSpanProcessor` ctor extension + `MultiTenantOverrideRefusedError` typed surface; 16 NEW tests at `tests/test_persona_tier_plumbing.py`. 3367/3367 tests pass + 10 skipped.
+
+(f) H_T-OD-3 + H_T-OD-4 remain PARTIAL (refined) per X-AL-2 partial-retirement-is-non-retirement at tier-up direction; gate closures at v1.37 apply: OD-3 gate (b) §10.3 base_rate envelope CLOSED; OD-4 gate (a) §13.1 per-persona-tier toggle PARTIALLY CLOSED (deployment-level persona_tier + multi-tenant non-toggleability; solo-developer per-session toggle still deferred). Tier transit to RETIRE-READY requires follow-on arcs closing OD-3 §9.1 tail-keep + OD-4 per-session toggle + OD-4 §13.2 opaque-token tokenization. Workflow v1.12 §7.4.7.3.C audit applied at `harness-od/CLAUDE.md` §4.1 + cumulative-counts line refreshed; pipeline-advanced 6/8 = 75.0% UNCHANGED.
+
+**Adjacent observations.**
+
+(i) **Substrate already in place at OD axis.** `PER_CELL_BASE_RATE_ENVELOPE` (U-OD-12) + `PER_PERSONA_TIER_REDACTION` (U-OD-16) + `CellID` (U-OD-01) + `reject_excluded_cell` already canonical at HEAD. v1.37 lifts the consumer site at the runtime materializer; ZERO new OD substrate authored. Mirror-shape to OD-3 batch-34 + OD-4 batch-35 substrate-retirement precedents (substrate landed first; consumer lift second arc).
+
+(ii) **Reading (a) field-plumbing-no-behavior-change scope per advisor consultation.** RedactionSpanProcessor MVP strip-at-all-3-tiers preserved verbatim. Per-persona override-toggle behavior at solo-developer + team-binding is via ctor `redacted_attributes=frozenset()` (already supported pre-arc); multi-tenant non-toggleability NEW at v1.37 via `MultiTenantOverrideRefusedError`. Solo-developer §13.1 mechanism column "OPERATOR_SELF_REDACT" full behavioral conformance deferred to follow-on arc (operator-runtime override mechanism requires per-session toggle wire — out of scope at the deployment-level field).
+
+(iii) **§10.3 8-row table materialized; ENVELOPE column deferred.** v1.37 materializes the §10.3 "Base-rate default" column at the sampler binding. The "Base-rate envelope" column (operator-tunable ranges like `0.1–1.0`) requires a sub-config extension at `RuntimeConfig.otel` or sibling — deferred to a follow-on operator-discretion arc. The single EXCLUDED cell `multi-tenant-compliance × local-development` raises typed error at bootstrap via `reject_excluded_cell` per §10.3 row absence + U-OD-12 `CellBindingViolation` discipline.
+
+(iv) **NEW species candidate at workflow v1.12 §7.4.7.2 — `substrate-pre-landed-consumer-deferred-multi-arc-lift`.** Mirror-shape to OD-3 batch-34 + OD-4 batch-35 substrate-retirement precedents. Substrate is authored at one arc; consumer site lifts at a later arc when the cross-axis prerequisite (here: RuntimeConfig.persona_tier field) is in place. Distinct closure-event-class candidate at workflow v1.12 §7.4.7.2 species-3 sub-species column.
+
+(v) **26th application of `[[advisor-before-substantive-work-for-cross-axis-blockers]]` posture.** Pre-substantive advisor consultation surfaced (1) §10.3 byte-exact read need (8-row matrix FIXES base_rate; not a deferred discretion item); (2) `_DEFAULT_SAMPLER` module-level → call-time refactor risk assessment (no external callers; safe to refactor); (3) (a) vs (b) redactor scope (a) field-plumbing reading recommended over (b) behavior-change reading. All 3 surfaced gaps closed pre-code; ZERO false-starts at substantive code. Pattern continues to validate.
+
+(vi) **Duplicate substrate caught + reverted mid-arc.** Implementer initially authored NEW `base_rate_envelope.py` module + `base_rate_for(persona_tier, deployment_surface)` helper at OD axis, duplicating the canonical `PER_CELL_BASE_RATE_ENVELOPE` + `cost_attribution_dashboard_binding.base_rate_for(cell)` substrate already in place at HEAD. Caught at empirical grep `rg "base_rate_for|base_rate_envelope"` post-authoring; duplicates deleted; materializer refactored to use canonical `CellID` + `PER_CELL_BASE_RATE_ENVELOPE` + `reject_excluded_cell` substrate directly. Catalogue candidate at workflow v1.12 species-3 sub-species column — `redundant-substrate-authoring-at-pre-substantive-grep-gap`.
+
+---
 
 ## Change-note (v1.35 → v1.36)
 
