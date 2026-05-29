@@ -302,6 +302,28 @@ Closure-back-reference per §"Cross-axis observability" closure-back-reference d
 
 **CP plan v2.29 → v2.30 NOT OWED.** Initial v2.33 draft named CP plan v2.30 as cascade target; the corrected architectural framing under (S) sibling-variant commitment routes the second half entirely at runtime axis. CP-axis spec v1.26 §16.5 + plan v2.29 composer bodies PRESERVED VERBATIM; ZERO CP-axis cascade owed at the (F) second half.
 
+---
+
+## Path α SECOND HALF FILED (2026-05-29)
+
+Closure-back-reference per §"Cross-axis observability" closure-back-reference discipline. Runtime plan v2.33 → v2.34 authored at design-phase per corrected (F) FULL-WIRE-paired cascade target:
+
+| Layer | Artifact | Status |
+|---|---|---|
+| Runtime plan v2.33 → v2.34 NEW atomic unit U-RT-111 (production-caller invocation paths threading U-RT-110's 6 methods at 6 firing sites + U-CP-34 LANDED-but-never-fired residual closure at sub_agent_dispatch firing-site per AC #11; 12 ACs + 9 NEW tests; load-bearing e2e integration test substrate `test_cp_is_caller_site_integration.py`) | `design-substrate/Implementation_Plan_Harness_Runtime_v2_34.md` | **FILED** 2026-05-29 |
+| Workspace `CLAUDE.md` §2.4 row bump runtime plan v2.33 → v2.34 | `CLAUDE.md` | **FILED** 2026-05-29 (sibling co-publication this arc) |
+
+**(F) FULL-WIRE-paired BOTH HALVES authored at design-phase.** v2.33 = FIRST HALF (U-RT-110 binding-surface); v2.34 = SECOND HALF (U-RT-111 caller-site invocations). Both pending impl arc completion + e2e verification per `[[verification-shape-sharpened-grep-vs-e2e]]`.
+
+**H_T-RT-35 PARTIAL → RETIRE-READY transit GATED on v2.34 impl arc completion.** When v2.34 impl arc PR lands at main with `test_cp_is_caller_site_integration.py` PASS: H_T-RT-35 transit-eligible. Retirement-event filing collapses dual-half (F) into single retirement-batch entry per `[[h-t-cp-19-default-gate-level-spec-extension]]` precedent. CXA v2.16 → v2.17 §2.3.2 enumeration refresh sibling co-publication at retirement-batch filing arc. **U-CP-34 LANDED-but-never-fired residual** closes at SAME arc per v2.34 AC #11 — collapses all 7 §12.3 CP-materializable edges (1 U-CP-34 + 6 §16.5) in single transit-batch.
+
+**2 impl-arc risks flagged at v2.34 ACs #8 + #9 per advisor 37th application:**
+
+- **(8) Disambiguator-availability** at `RewrittenToolCall.semantic_variant_binding_id` / `PauseEvent.pause_event_id` / `ResumeOutcome.resume_attempt_count` access + `PauseResumeProtocolEventKind` bijectivity with `PauseResumeProtocol` class method set. If absent at HEAD → Class 1 fork at impl arc per `[[halt-route-split-AC-pattern]]` (do NOT invent fields at runtime axis = X-AL-3 silent design extension).
+- **(9) Actor-source verification** at `step_context.parent_actor` reachability per `Spec_Control_Plane_v1_6.md` §25.2.1 v1.7 F1-01 inline-fix anchor across step-execution-time caller sites + engine-layer caller-context actor binding.
+
+Both risks are bounded — likely all surfaces exist at HEAD. Explicit AC flagging prevents silent X-AL-3 extension.
+
 **Gap C deferred per (C-defer) ratification.** Runtime spec §12.3 prose drift (`Callable[[StateLedgerEntry], EntryHash]` vs IS HEAD `Callable[[EntryPayload], Awaitable[WriteResult]]`) carries to next runtime-spec revision pass per FM-2 + plan-revision-cannot-amend-spec discipline; v2.33 impl conforms to IS HEAD directly per CP spec v1.26 §16.5.8 Q4 ratification anchor; doc-hygiene STRIKE-and-rewrite with ZERO production-code impact.
 
 **CXA v2.16 §0.4 forward-tracking PRESERVED** at v2.33 publication. 6 PENDING entries transit to 6 LANDED at paired-cascade-completion (CXA narrow-scope revision at v2.16 → v2.17 absorbs §2.3.2 CP→IS bucket canonical enumeration refresh per v2.9 / v2.15 / v2.16 precedent at retirement-batch filing arc).
