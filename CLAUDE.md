@@ -224,6 +224,10 @@ The `phase-7-back-flow-routing` skill at `.claude/skills/` governs fork detectio
 
 Per X-AL-3 (Meta-Architecture §7.7): no silent H_T design extension at Phase 7 execution. New H_T primitives surfaced at execution-time route to design-phase back-flow (Class 1) before implementation proceeds.
 
+**Enforcement:** an X-AL-3 guard at `.github/workflows/x-al-3-guard.yml` runs on every PR. If a PR modifies `design-substrate/**` without also including back-flow documentation (any `.md` under `.harness/` — fork docs, architect recommendations, retirement event filings, or `.harness/clearance/` markers), the check FAILS. Escape hatch for routine doc-only design-substrate edits: PR label `design-phase-direct` (use sparingly; reviewer-verifiable).
+
+Local pre-commit advisory at `.githooks/pre-commit` gives early warning of the same condition (enable per-checkout via `git config core.hooksPath .githooks`; see `.githooks/README.md`).
+
 ---
 
 ## 5. Sub-agent boundary
