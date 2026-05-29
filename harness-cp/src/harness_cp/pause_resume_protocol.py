@@ -681,3 +681,121 @@ async def emit_pause_resume_state_ledger_entry(
         timestamp=datetime.now(UTC),
     )
     return await ledger_writer(payload)
+
+
+# --- U-CP-78 §16.5 greenfield composer — CP→IS state-ledger emission -------
+#
+# `emit_pause_captured_state_ledger_entry` is the §16.5 row U-CP-49 greenfield
+# composer producing the IS-anchored state-ledger entry per CP spec v1.26
+# §16.5.3 + §16.5.4 + §16.5.5 + §16.5.7 at the engine-layer free-function
+# `capture_pause_snapshot(...)` invocation site (line 106). ZERO CP audit-ledger
+# entry is emitted per §16.5.9 invariant 5 (greenfield composer). Orthogonal to
+# the workflow-layer U-CP-76 emission at `PauseResumeProtocol` class methods
+# per CP spec v1.11 §26 NEW NOTE 2-layer coexistence — engine-layer emits under
+# `cp.pause-captured` action_id; workflow-layer emits `cp.pause-resume-protocol`.
+
+from collections.abc import Awaitable  # noqa: E402
+from datetime import UTC, datetime  # noqa: E402
+
+from harness_is.state_ledger_entry_schema import (  # noqa: E402
+    Actor,
+    ActorClass,
+    Identifier,
+)
+from harness_is.state_ledger_write import EntryPayload, WriteResult  # noqa: E402
+
+from harness_cp.state_ledger_canonicalization import (  # noqa: E402
+    _canonicalize_outcome_bytes,
+)
+
+_PAUSE_CAPTURED_ACTION_ID = "cp.pause-captured"
+"""CP spec v1.26 §16.5.3 row U-CP-49 canonical action_id (engine-layer)."""
+
+_RECORD_SEPARATOR = b"\x1e"
+"""ASCII 0x1E (record-separator) byte — CP spec v1.26 §16.5.4 canonical-form
+rule shared across §16.5 composers."""
+
+
+def _pause_captured_idempotency_key(
+    workflow_id: str,
+    step_id: str,
+    pause_event_id: str,
+    snapshot_hash: str,
+    outcome_hash_hex: str,
+) -> str:
+    """Compose the U-CP-49 idempotency-key per CP spec v1.26 §16.5.4 row 5.
+
+    Bytes are the 0x1E-separated 5-tuple `(workflow_id, step_id, pause_event_id,
+    snapshot_hash, sha256(outcome_canonical_bytes).hex())`; SHA-256-hashed;
+    hex-64 encoded.
+
+    The `snapshot_hash` segment (position 4) is the pre-computed
+    `PauseSnapshot.snapshot_hash` field per `_compute_snapshot_hash` (line 399);
+    v1.25 disambiguator preserved verbatim per Q-β.i-1(a). The outcome-hash
+    suffix segment (position 5) is INDEPENDENTLY computed via
+    `_canonicalize_outcome_bytes` over the full `PauseSnapshot` canonical JSON
+    bytes — distinct value from `snapshot_hash` field, distinct semantic per
+    Q5(a) "hash-over-outcome-bytes".
+    """
+    segments = [
+        workflow_id.encode("utf-8"),
+        step_id.encode("utf-8"),
+        pause_event_id.encode("utf-8"),
+        snapshot_hash.encode("utf-8"),
+        outcome_hash_hex.encode("utf-8"),
+    ]
+    return hashlib.sha256(_RECORD_SEPARATOR.join(segments)).hexdigest()
+
+
+async def emit_pause_captured_state_ledger_entry(
+    *,
+    workflow_id: str,
+    step_id: str,
+    pause_event_id: str,
+    pause_snapshot: PauseSnapshot,
+    actor: ActorIdentity,
+    ledger_writer: Callable[[EntryPayload], Awaitable[WriteResult]],
+) -> WriteResult:
+    """Compose + emit the §16.5 IS-anchored state-ledger entry for U-CP-49.
+
+    Per CP spec v1.26 §16.5.3: produces `EntryPayload` per IS HEAD 4-field shape
+    `(action_id, idempotency_key, actor, timestamp)`. `response_hash` and
+    `prior_event_hash` are IS-internal — composer does NOT control them
+    (C-IS-06 §6.2 + C-IS-13 §13.5). The outcome-bytes semantic at §16.5.5 row
+    U-CP-49 (`PauseSnapshot` canonical JSON bytes) is carried at the
+    `idempotency_key` discriminator per §16.5.4 + Q-β.i-1(a).
+
+    Fires AFTER `capture_pause_snapshot(...)` at line 106 returns the
+    `PauseSnapshot` and BEFORE the snapshot returns to the caller per §16.5.7.
+    Engine-layer surface; ZERO `CPAuditLedgerEntry` is constructed per §16.5.9
+    invariant 5. Orthogonal to U-CP-76 workflow-layer emission per CP spec
+    v1.11 §26 NEW NOTE 2-layer coexistence (distinct action_id namespaces;
+    this composer emits `cp.pause-captured`; workflow-layer emits
+    `cp.pause-resume-protocol`).
+
+    Note: `pause_snapshot.snapshot_hash` (position 4) and the outcome-hash
+    suffix (position 5) are DISTINCT — the snapshot_hash field is pre-computed
+    at capture time via `_compute_snapshot_hash` over a restricted canonical
+    bytes form (`workflow_id` + `run_id` + `step_index` + `state_summary` per
+    line 399); the outcome-hash suffix is independently computed over the FULL
+    `PauseSnapshot` canonical JSON bytes via `_canonicalize_outcome_bytes`.
+
+    Composer awaits `ledger_writer(payload)` return per §16.5.9 invariant 4;
+    does NOT condition on `WriteResult` variant.
+    """
+    outcome_canonical_bytes = _canonicalize_outcome_bytes(pause_snapshot)
+    outcome_hash_hex = hashlib.sha256(outcome_canonical_bytes).hexdigest()
+    idempotency_key = _pause_captured_idempotency_key(
+        workflow_id,
+        step_id,
+        pause_event_id,
+        pause_snapshot.snapshot_hash,
+        outcome_hash_hex,
+    )
+    payload = EntryPayload(
+        action_id=Identifier(_PAUSE_CAPTURED_ACTION_ID),
+        idempotency_key=Identifier(idempotency_key),
+        actor=Actor(actor_class=ActorClass.AGENT, actor_id=str(actor)),
+        timestamp=datetime.now(UTC),
+    )
+    return await ledger_writer(payload)
