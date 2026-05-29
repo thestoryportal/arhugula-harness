@@ -228,6 +228,18 @@ Per X-AL-3 (Meta-Architecture §7.7): no silent H_T design extension at Phase 7 
 
 Local pre-commit advisory at `.githooks/pre-commit` gives early warning of the same condition (enable per-checkout via `git config core.hooksPath .githooks`; see `.githooks/README.md`).
 
+### 4.5 Clearance markers (P5-CK / P6-CK / Phase 7 absorption)
+
+When a design-substrate artifact version is operationally accepted for Phase 7 consumption — whether via original P5-CK / P6-CK adversarial review, Phase 7 in-flight absorption arc, retirement-event doc-hygiene refresh, or architect-recommendation-driven amendment — a **clearance marker** is filed at `.harness/clearance/`.
+
+Marker filename: `.harness/clearance/{artifact-slug}-v{version}-cleared-{YYYY-MM-DD}.md`. Frontmatter pins the artifact path + version + clearance event type + reviewer chain + merge commit. Body narrates what changed and what was reviewed. See `.harness/clearance/README.md` for full convention and `.harness/clearance/TEMPLATE.md` for the shape.
+
+The X-AL-3 guard (§4.4) recognizes clearance markers as back-flow documentation — a PR that lands a design-substrate edit alongside a new clearance marker passes the guard automatically.
+
+Phase 7 sessions consuming a design-substrate artifact SHOULD verify a matching clearance marker exists before treating the artifact's version as canonical. Missing marker → halt + route to operator (the convention is currently advisory at v1; future skill-side enforcement will tighten this).
+
+Retroactive scope: markers are NOT retroactive for back-catalog (pre-2026-05-29). Implicit clearance applies for pre-existing artifacts merged to main and not subsequently invalidated by a fork doc. Forward from 2026-05-29, every design-substrate amendment SHOULD include a clearance marker in the same PR.
+
 ---
 
 ## 5. Sub-agent boundary
