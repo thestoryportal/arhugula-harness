@@ -601,3 +601,76 @@ async def test_caller_site_override_no_cp_is_wiring_does_not_emit(
 
     entries = _read_override_entries(ctx)
     assert entries == []
+
+
+# Reading A apply (PR #83): regression test against the
+# `.harness/class_2_fork_u_cp_74_actor_field_malformation.md` finding —
+# override emission must persist a clean actor_id string at the
+# `actor.actor_id` slot, NOT a Pydantic field-repr of an upstream `Actor`
+# model. The 4 pre-existing override-emission tests above all pass on
+# both pre-Reading-A and post-Reading-A code because they assert presence
+# of the override entry, not the shape of its actor field. This test
+# asserts the shape directly.
+@pytest.mark.asyncio
+async def test_caller_site_override_emission_actor_id_is_clean_identity(
+    tmp_path: Path,
+    patched_runtime: dict[str, Any],
+) -> None:
+    """Override entry's actor.actor_id must be the bare identity string.
+
+    Pre-Reading-A defect: `workflow_driver.py:851` passed
+    `ctx.ledger_writer.actor` (an `Actor` Pydantic model) to a composer
+    whose signature declared `actor: ActorIdentity` (str-newtype) and
+    defensively re-wrapped via `actor=Actor(actor_id=str(actor))`.
+    `str(Actor)` returned the Pydantic field-repr, producing
+    `actor_id="actor_class=<ActorClass.AGENT: 'agent'> actor_id='...'"`.
+    Reading A (PR #83) changes the caller to pass
+    `ctx.ledger_writer.actor.actor_id` (the str slot) — composer's
+    `str(actor)` is now a no-op and the wire entry carries the clean
+    identity string at the nested slot.
+    """
+    _ = patched_runtime
+    config = _config_with_pause_resume_opt_in(tmp_path)
+    ctx = await run_bootstrap(config, workload_class=WORKLOAD)
+    _attach_get_tracer_to_ctx(ctx)
+    assert ctx.cp_is_wiring is not None
+
+    expected_actor_id = ctx.ledger_writer.actor.actor_id
+
+    override = StepOverride(
+        step_id=StepID("step-0"),
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+    )
+    manifest = _manifest_with_step_override(
+        "wf-override-actor-id-shape", "step-0", override
+    )
+    steps = _single_inference_step()
+    dispatchers = _SingleKindRegistry(_NoopDispatcher())
+
+    result = await asyncio.to_thread(
+        partial(
+            execute_workflow,
+            manifest_entry=manifest,
+            steps=steps,
+            run_id="run-override-actor-id-shape",
+            ctx=ctx,  # type: ignore[arg-type]
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=dispatchers,  # type: ignore[arg-type]
+        )
+    )
+    assert result.status == RunStatus.SUCCESS
+
+    entries = _read_override_entries(ctx)
+    assert len(entries) == 1
+    persisted_actor_id = entries[0].actor.actor_id
+    assert persisted_actor_id == expected_actor_id, (
+        f"Override entry actor_id is malformed: expected the bare "
+        f"identity string {expected_actor_id!r}, got {persisted_actor_id!r}. "
+        "If this fails with a string like 'actor_class=<ActorClass...> "
+        "actor_id=...' the Reading A caller-side fix at "
+        "workflow_driver.py:851 has regressed."
+    )
+    # Belt-and-braces: the malformed shape contains '=' and '<' from the
+    # Pydantic field-repr; the clean identity does not.
+    assert "=" not in persisted_actor_id
+    assert "<" not in persisted_actor_id
