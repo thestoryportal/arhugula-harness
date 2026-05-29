@@ -37,13 +37,21 @@ ADR-D1 v1.1 + ADR-D4 v1.1.
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+
 from harness_core import DeploymentSurface, PersonaTier, WorkloadClass
+from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
+from harness_is.state_ledger_write import EntryPayload, WriteResult
 from pydantic import BaseModel, ConfigDict
 
+from harness_cp.cp_shared_types import ActorIdentity
 from harness_cp.engine_class import EngineClass
 from harness_cp.engine_class_candidate import ENGINE_CLASS_CANDIDATES
 from harness_cp.handoff_context import HandoffContext
 from harness_cp.hitl_response_palette import HITLResponse
+from harness_cp.state_ledger_canonicalization import _canonicalize_outcome_bytes
 
 
 class WorkloadBindingSelectionInput(BaseModel):
@@ -241,3 +249,100 @@ class HITLInvocation(BaseModel):
 
     opened_at: str
     """ISO-8601 emission time of the `hitl.invocation.opened` event."""
+
+
+# --- U-CP-75 §16.5 greenfield composer — CP→IS state-ledger emission -------
+#
+# `emit_workload_class_selection_state_ledger_entry` is the §16.5 row U-CP-27
+# greenfield composer producing the IS-anchored state-ledger entry per CP spec
+# v1.26 §16.5.3 + §16.5.4 + §16.5.5 + §16.5.7. ZERO CP audit-ledger entry is
+# emitted per §16.5.9 invariant 5 — this is a greenfield CP→IS composer with no
+# pre-existing CP audit sibling to preserve. The async composer surface is bound
+# at runtime composition time to an async `ledger_writer` that wraps the IS HEAD
+# sync `append_ledger_entry` per spec v1.26 §16.5.8.
+
+_SELECTION_ACTION_ID = "cp.workload-binding-class-selection"
+"""CP spec v1.26 §16.5.3 row U-CP-27 canonical action_id."""
+
+_RECORD_SEPARATOR = b"\x1e"
+"""ASCII 0x1E (record-separator) byte — CP spec v1.26 §16.5.4 canonical-form
+rule shared across §16.5 composers."""
+
+
+def _selection_idempotency_key(
+    workflow_id: str,
+    step_id: str,
+    engine_class_id: str,
+    binding_selection_result_canonical_bytes: bytes,
+    outcome_hash_hex: str,
+) -> str:
+    """Compose the U-CP-27 idempotency-key per CP spec v1.26 §16.5.4 row 2.
+
+    Bytes are the 0x1E-separated 5-tuple `(workflow_id, step_id,
+    engine_class_id, binding_selection_result_canonical_bytes,
+    sha256(outcome_canonical_bytes).hex())`; SHA-256-hashed; hex-64 encoded.
+    v1.25 disambiguator segments preserved verbatim per Q-β.i-1(a); the
+    outcome-hash suffix carries the Q5(a) "hash-over-outcome-bytes" semantic at
+    the dedup-key discriminator. Per §16.5.5 row U-CP-27 the outcome canonical
+    bytes ARE the `WorkloadBindingSelectionResult` canonical JSON bytes —
+    structurally identical to `binding_selection_result_canonical_bytes` — the
+    suffix carries the same content through SHA-256 to honor the canonical
+    formula chain.
+    """
+    segments = [
+        workflow_id.encode("utf-8"),
+        step_id.encode("utf-8"),
+        engine_class_id.encode("utf-8"),
+        binding_selection_result_canonical_bytes,
+        outcome_hash_hex.encode("utf-8"),
+    ]
+    return hashlib.sha256(_RECORD_SEPARATOR.join(segments)).hexdigest()
+
+
+async def emit_workload_class_selection_state_ledger_entry(
+    *,
+    workflow_id: str,
+    step_id: str,
+    selection_result: WorkloadBindingSelectionResult,
+    actor: ActorIdentity,
+    ledger_writer: Callable[[EntryPayload], Awaitable[WriteResult]],
+) -> WriteResult:
+    """Compose + emit the §16.5 IS-anchored state-ledger entry for U-CP-27.
+
+    Per CP spec v1.26 §16.5.3: produces `EntryPayload` per IS HEAD 4-field shape
+    `(action_id, idempotency_key, actor, timestamp)`. `response_hash` and
+    `prior_event_hash` are IS-internal — composer does NOT control them
+    (C-IS-06 §6.2 + C-IS-13 §13.5). The outcome-bytes semantic at §16.5.5 row
+    U-CP-27 (the `WorkloadBindingSelectionResult` canonical JSON bytes — resolved
+    class binding + rationale) is carried at the `idempotency_key` discriminator
+    per §16.5.4 + Q-β.i-1(a).
+
+    Fires AFTER `select_engine_class(...)` resolves; BEFORE returning the result
+    to the caller — composer takes the already-constructed
+    `WorkloadBindingSelectionResult` as input, encoding the post-resolve-pre-
+    return firing-site discipline at the type system. ZERO `CPAuditLedgerEntry`
+    is constructed per §16.5.9 invariant 5 (greenfield composer).
+
+    Composer awaits `ledger_writer(payload)` return per §16.5.9 invariant 4;
+    does NOT condition on `WriteResult` variant.
+    """
+    binding_selection_result_canonical_bytes = _canonicalize_outcome_bytes(
+        selection_result
+    )
+    outcome_hash_hex = hashlib.sha256(
+        binding_selection_result_canonical_bytes
+    ).hexdigest()
+    idempotency_key = _selection_idempotency_key(
+        workflow_id,
+        step_id,
+        selection_result.selected_class.value,
+        binding_selection_result_canonical_bytes,
+        outcome_hash_hex,
+    )
+    payload = EntryPayload(
+        action_id=Identifier(_SELECTION_ACTION_ID),
+        idempotency_key=Identifier(idempotency_key),
+        actor=Actor(actor_class=ActorClass.AGENT, actor_id=str(actor)),
+        timestamp=datetime.now(UTC),
+    )
+    return await ledger_writer(payload)
