@@ -55,7 +55,10 @@ from harness_cp.workflow_driver_errors import (
     EngineClassNotYetMaterializedError,
     TopologyPatternNotYetMaterializedError,
 )
-from harness_cp.pause_resume_protocol import PauseResumeProtocol
+from harness_cp.pause_resume_protocol import (
+    PauseResumeProtocol,
+    PauseResumeProtocolEventKind,
+)
 from harness_cp.pause_resume_protocol_types import (
     MaterialDiffPolicy,
     PauseSnapshot,
@@ -561,6 +564,23 @@ def execute_workflow(
                 material_diff_policy=MaterialDiffPolicy.STRICT,
             )
         )
+        # U-RT-111 v2.38 AC #3 — RESUME_ATTEMPTED CP→IS state-ledger emission.
+        # Defensive operator-opt-in: when cp_is_wiring is None, silent-skip.
+        # Per-composer kwarg derivation per plan v2.38 §1.2 AC #3.
+        _cp_is_wiring = getattr(ctx, "cp_is_wiring", None)
+        if _cp_is_wiring is not None:
+            _run_protocol_method_sync(
+                _cp_is_wiring.emit_pause_resume_state_ledger_entry(
+                    workflow_id=manifest_entry.workflow_id,
+                    step_id=str(pause_snapshot_input.step_index),
+                    protocol_event_kind=(
+                        PauseResumeProtocolEventKind.RESUME_ATTEMPTED
+                    ),
+                    event_sequence_id=(pause_snapshot_input.step_index << 2) | 0,
+                    protocol_state_snapshot=resume_result.model_dump(mode="json"),
+                    actor=ctx.ledger_writer.actor,
+                )
+            )
         if not resume_result.resumed:
             return RunResult(
                 workflow_id=manifest_entry.workflow_id,
@@ -773,6 +793,24 @@ def _execute_workflow_body(
                     pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
                 )
             )
+            # U-RT-111 v2.38 AC #3 — PAUSE_CAPTURED drain-flag CP→IS emission.
+            # event_kind_index=1 reserves the low bit for drain-flag path.
+            _cp_is_wiring = getattr(ctx, "cp_is_wiring", None)
+            if _cp_is_wiring is not None:
+                _run_protocol_method_sync(
+                    _cp_is_wiring.emit_pause_resume_state_ledger_entry(
+                        workflow_id=manifest_entry.workflow_id,
+                        step_id=str(step_index),
+                        protocol_event_kind=(
+                            PauseResumeProtocolEventKind.PAUSE_CAPTURED
+                        ),
+                        event_sequence_id=(step_index << 2) | 1,
+                        protocol_state_snapshot=pause_snapshot.model_dump(
+                            mode="json"
+                        ),
+                        actor=ctx.ledger_writer.actor,
+                    )
+                )
             return RunResult(
                 workflow_id=manifest_entry.workflow_id,
                 run_id=run_id,
@@ -898,6 +936,25 @@ def _execute_workflow_body(
                             pause_reason=WorkflowPauseReason.HITL_PENDING,
                         )
                     )
+                    # U-RT-111 v2.38 AC #3 — PAUSE_CAPTURED HITL-signal CP→IS
+                    # emission. event_kind_index=2 disambiguates HITL-signal
+                    # path from drain-flag path (=1) at same step_index.
+                    _cp_is_wiring = getattr(ctx, "cp_is_wiring", None)
+                    if _cp_is_wiring is not None:
+                        _run_protocol_method_sync(
+                            _cp_is_wiring.emit_pause_resume_state_ledger_entry(
+                                workflow_id=manifest_entry.workflow_id,
+                                step_id=str(step_index),
+                                protocol_event_kind=(
+                                    PauseResumeProtocolEventKind.PAUSE_CAPTURED
+                                ),
+                                event_sequence_id=(step_index << 2) | 2,
+                                protocol_state_snapshot=(
+                                    pause_snapshot.model_dump(mode="json")
+                                ),
+                                actor=ctx.ledger_writer.actor,
+                            )
+                        )
                     return RunResult(
                         workflow_id=manifest_entry.workflow_id,
                         run_id=run_id,

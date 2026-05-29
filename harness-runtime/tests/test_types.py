@@ -192,6 +192,12 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         # contract (Reading B operator-opt-in MVP absorption of fork
         # class_1_fork_as_8d_skill_activation_surface_absence.md).
         "skill_activation_emitter",
+        # U-RT-111 (v2.36 Phase 1 plumbing) — RuntimeCpIsWiring binding
+        # surface per runtime plan v2.36 §1.2 ACs #3 + #11. Operator-opt-in
+        # MVP; default None preserves pre-v2.36 production behavior. Typed
+        # `object | None` to avoid CP-axis dependency on harness-runtime
+        # (workspace dep-graph discipline).
+        "cp_is_wiring",
     }
     actual = set(HarnessContext.model_fields.keys())
     assert actual == expected, f"missing: {expected - actual}; extra: {actual - expected}"
