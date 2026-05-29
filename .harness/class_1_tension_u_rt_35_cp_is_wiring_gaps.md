@@ -284,3 +284,22 @@ Alternative resolution paths the operator may also consider per parent fork's or
 Operator authorized Path α at this session post-PR #45 fork doc closure-event publication. Phase 6 runtime plan revision-pass opens at design-phase workspace for authoring runtime plan v2.32 → v2.33 NEW U-RT-XX wiring unit per §"Phase 6 back-flow ask" above. Phase 7 sub-phase execution at this workspace remains HALTED pending revised runtime plan re-load.
 
 **Next event in this workspace:** Operator pushes revised `Implementation_Plan_Harness_Runtime_v2_33.md` (or higher) to design-phase substrate. On re-load, verify byte-exact integrity + that the NEW wiring unit's signature is materializable against `harness-cp/src/harness_cp/{state_ledger_canonicalization,per_step_override_evaluator,workload_binding_engine_class_selection,pause_resume_protocol,hitl_as_tool_call_rewriting}.py` HEAD per `[[impl-time-grounding-pass-pre-merge-revision]]` sharpened workspace pattern.
+
+---
+
+## Path α first deliverable FILED (2026-05-29)
+
+Closure-back-reference per §"Cross-axis observability" closure-back-reference discipline. Runtime plan v2.32 → v2.33 authored at design-phase per operator AskUserQuestion 2026-05-29 ratifications **Q1=(F) FULL-WIRE-paired + Q2=(C-defer) Gap C deferred**:
+
+| Layer | Artifact | Status |
+|---|---|---|
+| Runtime plan v2.32 → v2.33 NEW atomic unit U-RT-110 (extends `RuntimeCpIsWiring` with 6 async methods + per-call adapter; preserves `materialize_cp_is_wiring_stage` factory signature; 10 ACs + 6 unit + 1 integration + 1 idempotent-on-replay tests) | `design-substrate/Implementation_Plan_Harness_Runtime_v2_33.md` | **FILED** 2026-05-29 |
+| Workspace `CLAUDE.md` §2.4 row bump runtime plan v2.32 → v2.33 | `CLAUDE.md` | **FILED** 2026-05-29 (sibling co-publication this arc) |
+
+**(F) FULL-WIRE-paired cascade owed at CP plan v2.29 → v2.30 separate arc.** v2.33 §0.3 declares the 6 NEW firing-site invocation units owed at the CP-axis plan revision. Threading-shape (kw-only param widening / StepEffectiveBinding field / ContextVar) implementation-discretion at CP plan v2.30 authoring (`implementation-planner` skill at CP-axis stream).
+
+**H_T-RT-35 PARTIAL → RETIRE-READY transit posture UNCHANGED at v2.33 publication.** Transit requires BOTH halves LANDED (U-RT-110 impl + 6 CP plan v2.30 firing-site impl units) + e2e verification per `[[verification-shape-sharpened-grep-vs-e2e]]` discipline. Filing the retirement-event-tier transit at v2.33 publication alone is X-AL-2 second-conjunct violation (substituted H_E surface still invoked: CP-axis production functions bypass the runtime wiring until paired CP plan v2.30 impl lands). Retirement event filing owed at workspace retirement-event ledger per `[[h-t-cp-19-default-gate-level-spec-extension]]` precedent when both halves materialize.
+
+**Gap C deferred per (C-defer) ratification.** Runtime spec §12.3 prose drift (`Callable[[StateLedgerEntry], EntryHash]` vs IS HEAD `Callable[[EntryPayload], Awaitable[WriteResult]]`) carries to next runtime-spec revision pass per FM-2 + plan-revision-cannot-amend-spec discipline; v2.33 impl conforms to IS HEAD directly per CP spec v1.26 §16.5.8 Q4 ratification anchor; doc-hygiene STRIKE-and-rewrite with ZERO production-code impact.
+
+**CXA v2.16 §0.4 forward-tracking PRESERVED** at v2.33 publication. 6 PENDING entries transit to 6 LANDED at paired-cascade-completion (CXA narrow-scope revision at v2.16 → v2.17 absorbs §2.3.2 CP→IS bucket canonical enumeration refresh per v2.9 / v2.15 / v2.16 precedent at retirement-batch filing arc).
