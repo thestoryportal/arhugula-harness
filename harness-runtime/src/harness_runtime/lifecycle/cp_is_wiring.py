@@ -166,14 +166,14 @@ class RuntimeCpIsWiring:
         *,
         workflow_id: str,
         step_id: str,
-        override_id: str,
-        policy_id: str,
         post_override_step_config: Mapping[str, Any],
         actor: ActorIdentity,
     ) -> WriteResult:
         """Wire U-CP-74 emit_override_state_ledger_entry → ledger_writer.append.
 
-        CP spec v1.26 §16.5 row U-CP-14. action_id `cp.per-step-override-application`.
+        CP spec v1.27 §16.5 row U-CP-14. action_id `cp.per-step-override-application`.
+        v1.27 Reading A: idempotency-key 3-tuple `(workflow_id, step_id, outcome_hash)`;
+        `override_id` + `policy_id` kwargs dropped per Q1=A ratification 2026-05-29.
         """
 
         async def _adapter(payload: EntryPayload) -> WriteResult:
@@ -187,8 +187,6 @@ class RuntimeCpIsWiring:
         return await emit_override_state_ledger_entry(
             workflow_id=workflow_id,
             step_id=step_id,
-            override_id=override_id,
-            policy_id=policy_id,
             post_override_step_config=post_override_step_config,
             actor=actor,
             ledger_writer=_adapter,

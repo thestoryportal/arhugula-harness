@@ -257,23 +257,22 @@ canonical-form rule. Forecloses concatenation-ambiguity attacks across the
 def _override_idempotency_key(
     workflow_id: str,
     step_id: str,
-    override_id: str,
-    policy_id: str,
     outcome_hash_hex: str,
 ) -> str:
-    """Compose the U-CP-14 idempotency-key per CP spec v1.26 §16.5.4 row 1.
+    """Compose the U-CP-14 idempotency-key per CP spec v1.27 §16.5.4 row 1.
 
-    Bytes are the 0x1E-separated 5-tuple `(workflow_id, step_id, override_id,
-    policy_id, sha256(outcome_canonical_bytes).hex())`; SHA-256-hashed; hex-64
-    encoded. v1.25 disambiguator segments preserved verbatim per Q-β.i-1(a); the
-    outcome-hash suffix carries the Q5(a) "hash-over-outcome-bytes" semantic at
-    the dedup-key discriminator.
+    Bytes are the 0x1E-separated 3-tuple `(workflow_id, step_id,
+    sha256(outcome_canonical_bytes).hex())`; SHA-256-hashed; hex-64 encoded. The
+    `(workflow_id, step_id)` discriminator carries per-WorkflowManifestEntry
+    step-id uniqueness per `per_step_overrides: dict[StepID, StepOverride]` at
+    `workflow_manifest_entry.py:109`; the outcome-hash suffix carries the Q5(a)
+    "hash-over-outcome-bytes" semantic at the dedup-key discriminator. v1.25 +
+    v1.26 `override_id` + `policy_id` placeholder segments dropped per Q1=A
+    operator ratification 2026-05-29 (Reading A).
     """
     segments = [
         workflow_id.encode("utf-8"),
         step_id.encode("utf-8"),
-        override_id.encode("utf-8"),
-        policy_id.encode("utf-8"),
         outcome_hash_hex.encode("utf-8"),
     ]
     return hashlib.sha256(_RECORD_SEPARATOR.join(segments)).hexdigest()
@@ -283,8 +282,6 @@ async def emit_override_state_ledger_entry(
     *,
     workflow_id: str,
     step_id: str,
-    override_id: str,
-    policy_id: str,
     post_override_step_config: Mapping[str, Any],
     actor: ActorIdentity,
     ledger_writer: Callable[[EntryPayload], Awaitable[WriteResult]],
@@ -296,7 +293,9 @@ async def emit_override_state_ledger_entry(
     `prior_event_hash` are IS-internal — composer does NOT control them
     (C-IS-06 §6.2 + C-IS-13 §13.5). The outcome-bytes semantic at §16.5.5
     (post-override step-config canonical JSON bytes) is carried at the
-    `idempotency_key` discriminator per §16.5.4 + Q-β.i-1(a).
+    `idempotency_key` discriminator per CP spec v1.27 §16.5.4 (Reading A:
+    3-tuple `(workflow_id, step_id, outcome_hash)` per the per-step-override
+    uniqueness invariant at `workflow_manifest_entry.py:109`).
 
     Composer awaits `ledger_writer(payload)` return per §16.5.9 invariant 4;
     does NOT condition on `WriteResult` variant.
@@ -304,7 +303,7 @@ async def emit_override_state_ledger_entry(
     outcome_canonical_bytes = _canonicalize_outcome_bytes(post_override_step_config)
     outcome_hash_hex = hashlib.sha256(outcome_canonical_bytes).hexdigest()
     idempotency_key = _override_idempotency_key(
-        workflow_id, step_id, override_id, policy_id, outcome_hash_hex
+        workflow_id, step_id, outcome_hash_hex
     )
     payload = EntryPayload(
         action_id=Identifier(_OVERRIDE_ACTION_ID),

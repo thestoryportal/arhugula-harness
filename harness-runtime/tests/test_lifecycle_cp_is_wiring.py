@@ -364,8 +364,6 @@ def test_emit_override_state_ledger_entry_writes_canonical_entry(
         wiring.emit_override_state_ledger_entry(
             workflow_id="wf-1",
             step_id="step-1",
-            override_id="ovr-1",
-            policy_id="pol-1",
             post_override_step_config={"model": "claude-opus-4-7"},
             actor=_ACTOR,
         )
@@ -479,8 +477,6 @@ def _invoke_six_methods(
             wiring.emit_override_state_ledger_entry(
                 workflow_id=f"{workflow_prefix}-override",
                 step_id="step-1",
-                override_id="ovr-1",
-                policy_id="pol-1",
                 post_override_step_config={"k": "v"},
                 actor=_ACTOR,
             )

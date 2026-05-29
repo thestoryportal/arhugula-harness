@@ -39,8 +39,6 @@ def _kwargs(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "workflow_id": "wf-1",
         "step_id": "step-2",
-        "override_id": "ov-3",
-        "policy_id": "pol-4",
         "post_override_step_config": _outcome(),
         "actor": ActorIdentity("control-plane"),
     }
@@ -65,16 +63,20 @@ def test_emit_override_state_ledger_action_id() -> None:
 # --- AC #2 ---
 
 
-def test_emit_override_state_ledger_idempotency_key_per_q1b() -> None:
-    """idempotency_key bytes follow §16.5.4 row U-CP-14 5-tuple (v1.26 with outcome-hash suffix)."""
+def test_emit_override_state_ledger_idempotency_key_per_reading_a() -> None:
+    """idempotency_key bytes follow CP spec v1.27 §16.5.4 row U-CP-14 3-tuple per Reading A.
+
+    v1.25 + v1.26 `override_id` + `policy_id` placeholder segments dropped per
+    Q1=A operator ratification 2026-05-29; `(workflow_id, step_id)` discriminator
+    carries per-step-override uniqueness per `per_step_overrides: dict[StepID,
+    StepOverride]` at `workflow_manifest_entry.py:109`.
+    """
     outcome_hash = hashlib.sha256(_canonicalize_outcome_bytes(_outcome())).hexdigest()
     expected = hashlib.sha256(
         b"\x1e".join(
             (
                 b"wf-1",
                 b"step-2",
-                b"ov-3",
-                b"pol-4",
                 outcome_hash.encode("utf-8"),
             )
         )
