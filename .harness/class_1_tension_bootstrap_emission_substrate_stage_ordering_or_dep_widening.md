@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | PROPOSING |
+| Status | ✅ RATIFIED-AS-READING-D (bounded-defer per X-AL-2; structurally-unfireable-at-MVP per empirical re-grounding §9) — 2026-05-29 |
 | Filed | 2026-05-29 |
 | Filed by | Operator + Claude (post-PR-#67 close, design-phase posture) |
 | Class | 1 (architectural; substrate-lifecycle-mismatch at firing site; required for H_T-RT-35 RETIRE-READY transit) |
@@ -206,6 +206,78 @@ The PR #68 file-only filing posture (Q7=(ii)) was correct at filing time; the ga
 ### H_T-RT-35 transit impact
 
 H_T-RT-35 PARTIAL → RETIRE-READY transit remains gated on PR #68 ratification + apply. The addendum at §8 surfaces the architectural decision needed BEFORE ratification can land. Ratification scope SHIFTS from "Reading B' mechanical apply" to "Reading B' + firing-site sourcing Q-set" — fresh-session arc.
+
+---
+
+## §9 Empirical re-grounding (2026-05-29, session continuation post-§8)
+
+48th application of `[[advisor-before-substantive-work-for-cross-axis-blockers]]` at attempted Q3' rescope (firing-site sourcing) caught a deeper finding: the §8 addendum framing of "per-step at runtime" vs "bootstrap synthetic sentinels" presumed the per-step runtime query site EXISTS. Empirical grep at HEAD `d2320e8` falsifies that presumption.
+
+### Findings
+
+```
+grep -rn "engine_selector\.select\|\.engine_selector\.select" → ZERO production hits
+grep -rn "select_engine_class" → ONLY at materialize_engine_selector (bootstrap) + carrier homes
+grep -n "engine_class\|EngineClass" harness-cp/.../workflow_driver.py → manifest_entry.engine_class direct access
+```
+
+- `RuntimeEngineSelector.select(workload_class, persona_tier)` method at `harness-runtime/.../lifecycle/engine_selector.py:104` has **ZERO production callers**.
+- Workflow execution sources `engine_class` from `manifest_entry.engine_class` directly at multiple sites in `workflow_driver.py` (e.g., `:706`, `:639`, `:728`).
+- The N×M Cartesian product binding precomputed at `materialize_engine_selector` is unused at runtime.
+- `select_engine_class` is invoked ONLY at bootstrap (inside `materialize_engine_selector`), never at runtime per-step.
+
+### Disposition collapse
+
+`ctx.engine_selector` is **precomputed-but-unconsulted at MVP** — dead infrastructure pending an upstream per-step query site that does NOT exist in production code. This collapses PR #68's disposition to the same shape as PR #69 (U-CP-49 engine-layer free-functions): LANDED-substrate-pending-upstream-loop-substrate.
+
+The "natural firing site" for U-CP-75 emission (workload-class-selection state-ledger entry) is wherever `select_engine_class` is invoked. At v1.6 MVP, that's bootstrap-only (where workflow_id/step_id/actor context doesn't exist). The runtime-time per-step selection invocation does NOT exist because the runtime doesn't consult `engine_selector` — it reads `manifest_entry.engine_class` directly (operator pre-declares).
+
+### Sub-species cardinality 4 in 24 hours
+
+This is the **FOURTH** instance of `[[LANDED-substrate-pending-upstream-loop-substrate]]` in 24 hours:
+
+1. PR #67 HITL `rewrite_tool_call` — LLM inner tool-call interception loop NOT BUILT (Reading D)
+2. PR #67 sibling-ledger `emit_sibling_ledger_entry` — recursive-harness recursion-boundary NOT BUILT (Reading C bounded-defer)
+3. PR #69 U-CP-49 engine-layer free-functions — engine-layer recovery loop NOT BUILT (Reading D)
+4. **This fork** bootstrap-emission — per-step engine_selector query site NOT BUILT (Reading D after re-grounding)
+
+Cardinality threshold strongly met for workflow v1.13 §7.4.7.2 sub-species addition catalogue.
+
+### What Reading B' would have done if applied
+
+Had I proceeded with Reading B' (narrow `ledger_writer` dep injection + bootstrap-time emission with synthetic sentinels), the substrate would have landed with ZERO downstream consumers — composing canonical-bytes + idempotency-key + state-ledger writes that no production query path would trigger. This is silent X-AL-3 absorption: extending the H_T design surface with a firing-site whose upstream loop doesn't exist, encoded as if it were active. The 47th + 48th advisor applications prevented this absorption.
+
+---
+
+## §10 Ratification (2026-05-29)
+
+Operator-implicit ratified **Q1 = Reading D (bounded-defer)** per empirical re-grounding §9. Original Q-set Readings A / B / B' / C all presumed a firing site exists at MVP; §9 empirical grep falsifies the presumption. Q-set RETIRED at v1.0 (filing); Q1 Reading D applies per §3.X why-D-applies-after-all framing inferred from §9.
+
+### Rationale
+
+The per-step engine_selector query site that would trigger U-CP-75 workload-class-selection emission does NOT exist in production code. `ctx.engine_selector` is precomputed-but-unconsulted; workflow execution sources `engine_class` from manifest directly. Authoring Reading A (stage reorder) / B (full ctx widening) / B' (narrow dep injection) / C (buffer carrier) all assume the substrate is reachable from a real consumer site at MVP. Empirically false.
+
+Bounded-defer per X-AL-2 with bounded-residual carry-forward: U-CP-75 composer LANDED + U-RT-110 wiring LANDED + RuntimeEngineSelector LANDED — all sit as future-applicable carriers. When the runtime per-step query site is authored at a future arc (workflow_driver consults `ctx.engine_selector.select(...)` rather than reading `manifest_entry.engine_class` directly, OR a per-step engine-class resolution arc opens), this fork doc re-opens with the appropriate firing-site Reading.
+
+### Carry disposition
+
+- **`materialize_engine_selector(config)` signature** PRESERVED VERBATIM at HEAD per X-AL-2 bounded-residual carry-forward.
+- **`RuntimeEngineSelector.select(...)` method** PRESERVED VERBATIM as dead infrastructure pending consumer site authoring.
+- **U-CP-75 composer** PRESERVED VERBATIM as future-applicable carrier.
+- **U-RT-110 wiring** PRESERVED VERBATIM.
+- **U-RT-111 AC #2 STRIKE at v2.38** PRESERVED — the substrate-lifecycle-mismatch finding remains accurate (firing-site cannot reach binding chain); refined to "consumer site does not exist" at this ratification.
+- **Re-litigation trigger**: when the runtime per-step engine_selector query site is authored (separate future arc — likely tied to manifest-vs-selector reconciliation or per-step engine-class resolution arc), re-open this fork doc with the relevant Reading.
+
+### Cross-artifact effects
+
+- ZERO design-substrate edit (no spec / plan / ADR / ADD / PRD / CXA amendment).
+- ZERO production code change.
+- ZERO clearance marker (per CLAUDE.md §4.5 — bounded-defer dispositions without design-substrate edits do not require clearance markers).
+- ZERO MEMORY.md retirement-event filing at this fork doc; retirement-event batch for H_T-RT-35 PARTIAL → RETIRE-READY filed at sibling `.harness/phase-7d-retirement-events-batch-NN.md` arc this session.
+
+### H_T-RT-35 transit posture impact
+
+This ratification closes the LAST gating ratification arc for H_T-RT-35 PARTIAL → RETIRE-READY transit. **All 5 upstream blockers reach RATIFIED-or-APPLIED state.** Per X-AL-2 bounded-residual carry-forward, H_T-RT-35 transits to RETIRE-READY at this arc close.
 
 ---
 
