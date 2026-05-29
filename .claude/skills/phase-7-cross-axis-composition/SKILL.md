@@ -7,6 +7,21 @@ description: Execute Phase 7 sub-phase 7c cross-axis composition seam instantiat
 
 Phase 7 sub-phase 7c cross-axis composition seam instantiation discipline. Drives wiring of the 101 typed cross-axis edges declared at `Cross_Axis_Composition_Document_v2_1.md` §2.3 across 6 composition buckets, against Pattern P1 byte-exact alignment.
 
+## 0. Posture precondition
+
+**This skill is Phase 7 only.** Per workspace `CLAUDE.md` §11 (posture declaration — third axis of the X-AL-3 enforcement triad), this workspace co-resides three logical postures (design-phase / Phase 7 / mode-agnostic). Cross-axis seam instantiation is a Phase-7 activity by definition: it reads `Cross_Axis_Composition_Document_v2_*.md` as canonical and edits `harness-cxa/` + cross-axis production wiring at `harness-*/src/**`.
+
+Before doing substantive work, verify the session posture:
+
+| Detected posture | Action |
+|---|---|
+| **Phase 7** (explicit declaration OR edit scope is `harness-cxa/` + `harness-*/src/**` cross-axis wiring + tests) | Proceed. |
+| **Mode-agnostic** (workspace ops) | This skill is not the right tool. Defer to operator. |
+| **Design-phase** (explicit declaration OR edit scope is `design-substrate/**` / `.harness/**` back-flow docs) | **HALT.** Cross-axis composition at design-phase posture would amend the CXA canonical enumeration — that's `spec-writer` / `implementation-planner` scope at the CXA artifact, not seam instantiation. Surface the conflict; suggest the operator either (a) re-declare posture as Phase 7 if the intent IS seam wiring, OR (b) invoke `implementation-planner` or `spec-writer` if the intent is CXA artifact revision. Do NOT proceed with seam instantiation work. |
+| **Unclear** | Halt + ask per `CLAUDE.md` §11.6. |
+
+Bundled-absorption arc discipline per `CLAUDE.md` §11.4 applies (e.g., a CXA edge enumeration refresh + paired seam-wiring landing in same PR carries a `.harness/` back-flow doc).
+
 ## 1. Activation surface
 
 ### 1.1 Active during

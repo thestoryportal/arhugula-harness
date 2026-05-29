@@ -7,6 +7,23 @@ description: Execute substitution retirement events against the 49-row substitut
 
 Event-driven substitution retirement discipline. Drives verification + recording of H_E substitution retirement against the 49-row substitution mapping table at `Phase_7_Meta_Architecture_v1.md` §5 under X-AL-2 retirement criterion fidelity.
 
+## 0. Posture precondition
+
+**This skill is Phase 7 only.** Per workspace `CLAUDE.md` §11 (posture declaration — third axis of the X-AL-3 enforcement triad), this workspace co-resides three logical postures (design-phase / Phase 7 / mode-agnostic). Substitution retirement is a Phase-7 activity by definition: it verifies that LANDED `harness-*/src/**` substrate has retired a `Phase_7_Meta_Architecture_v1.md` §5 substitution surface + files a retirement-event ledger entry at `.harness/phase-7d-retirement-events-batch-NN.md` + updates per-axis `CLAUDE.md` §4.1 substitution row.
+
+Before doing substantive work, verify the session posture:
+
+| Detected posture | Action |
+|---|---|
+| **Phase 7** (explicit declaration OR retirement-event scope: per-axis `CLAUDE.md` + `.harness/phase-7d-retirement-events-batch-NN.md` + cumulative-counts refresh) | Proceed. |
+| **Mode-agnostic** (workspace ops) | This skill is not the right tool. Defer to operator. |
+| **Design-phase** (explicit declaration OR edit scope is `design-substrate/**` substantive amendment) | **HALT.** Substitution retirement at design-phase posture would couple two distinct activities — verifying H_E surface retirement (Phase 7) and amending the substrate (design-phase). Surface the conflict; suggest the operator either (a) re-declare posture as Phase 7 if the intent IS retirement-event filing, OR (b) invoke `spec-writer` / `implementation-planner` if the intent is design-substrate revision. Do NOT proceed with retirement-event work in design-phase posture. |
+| **Unclear** | Halt + ask per `CLAUDE.md` §11.6. |
+
+Retirement-event filing legitimately edits per-axis `CLAUDE.md` §4.1 rows + workspace `CLAUDE.md` cumulative-counts — these are mode-agnostic operational files that DO appear under `harness-*/` (per-axis `CLAUDE.md`) but the substantive change is bookkeeping, not impl. Treat as Phase 7 posture (the retirement-event filing closes a Phase 7 transit, not a design-substrate amendment).
+
+Bundled-absorption arc discipline per `CLAUDE.md` §11.4 applies — e.g., a retirement-event filing PR that also touches `design-substrate/**` to refresh a cross-cite carries a `.harness/` back-flow doc.
+
 ## 1. Activation surface
 
 ### 1.1 Active during

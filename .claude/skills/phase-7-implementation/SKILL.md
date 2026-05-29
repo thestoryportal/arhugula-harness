@@ -7,6 +7,21 @@ description: Execute Phase 7 sub-phase 7b atomic unit consumption against the pe
 
 Phase 7 sub-phase 7b atomic unit consumption discipline. Drives execution of per-axis atomic units from the v2.x implementation plans under the deterministic outer-harness invariants of the multi-LLM agent harness build.
 
+## 0. Posture precondition
+
+**This skill is Phase 7 only.** Per workspace `CLAUDE.md` §11 (posture declaration — third axis of the X-AL-3 enforcement triad), this workspace co-resides three logical postures (design-phase / Phase 7 / mode-agnostic). Atomic unit consumption is a Phase-7 activity by definition: it reads `design-substrate/*` as canonical and edits `harness-*/src/**` + `harness-*/tests/**`.
+
+Before doing substantive work, verify the session posture:
+
+| Detected posture | Action |
+|---|---|
+| **Phase 7** (explicit declaration OR edit scope is `harness-*/src/**` + tests only) | Proceed. |
+| **Mode-agnostic** (workspace ops; edits are root `CLAUDE.md` / `.github/` / `.claude/` / etc.) | This skill is not the right tool. Suggest mode-agnostic work proceed without this skill's framing; defer to operator. |
+| **Design-phase** (explicit declaration OR edit scope is `design-substrate/**` / `.harness/**` back-flow docs) | **HALT.** Atomic unit consumption at design-phase posture is X-AL-3 silent H_T design extension (`CLAUDE.md` §4.4 + I-2). Surface the conflict; suggest the operator either (a) re-declare posture as Phase 7 if the intent IS impl execution, OR (b) invoke a design-phase skill (`implementation-planner`, `spec-writer`, `systems-architect`, `harness-adversarial-reviewer`) if the intent is plan/spec authoring. Do NOT proceed with atomic unit work. |
+| **Unclear** (no explicit declaration; ambiguous edit scope) | Halt + ask per `CLAUDE.md` §11.6. Present the 3 posture options; honor the response. |
+
+A bundled-absorption arc (legitimate mixed-posture per `CLAUDE.md` §11.4) — e.g., a spec amendment that cascades into impl in the same PR — DOES carry a `.harness/` back-flow doc (fork doc / architect recommendation / retirement event / clearance marker). If the operator declares "bundled-absorption arc" + names the back-flow doc, this skill activates for the impl portion while the design-phase skills handle the substrate portion in the same session. If no back-flow doc is named, treat as unclear → halt + ask.
+
 ## 1. Activation surface
 
 ### 1.1 Active during
