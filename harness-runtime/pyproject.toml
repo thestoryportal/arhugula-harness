@@ -44,8 +44,11 @@ dependencies = [
     "typer>=0.12",
     # 3-source layered RuntimeConfig loader (spec v1.35 §3.7, Q-C=β). U-RT-103.
     "pydantic-settings>=2.0",
-    # YAML workflow manifest parser (spec v1.36 §14.19, Q-H=b). U-RT-104.
-    "strictyaml>=1.7",
+    # YAML workflow manifest parser. spec v1.39 §14.19 Reading A re-litigates
+    # Q-H=b (pyyaml replaces strictyaml; closes probe finding #16/#17 native
+    # scalar coercion gap). Strictness preserved via StrictSafeLoader subclass
+    # at `lifecycle/strict_safe_loader.py`. U-RT-104.
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]

@@ -580,3 +580,83 @@ def test_load_workflow_is_idempotent(tmp_path: Path) -> None:
     b = WorkflowManifestLoader.load_workflow(path)
     assert a == b
     assert isinstance(a, LoadedWorkflow)
+
+
+# v1.39 §14.19 Reading A — pyyaml StrictSafeLoader preserves native scalar types
+# Closes use-the-product probe finding #16/#17 (PR #79): pre-v1.39 strictyaml.dirty_load
+# stringified every YAML scalar; max_tokens: 8 arrived as "8" at LLM SDK.
+def test_yaml_native_scalar_typing_per_v1_39_reading_a(tmp_path: Path) -> None:
+    body = (
+        "version: 1\n"
+        "workflow:\n"
+        '  workflow_id: "wf-native-scalars"\n'
+        '  workload_class: "pipeline-automation"\n'
+        '  persona_tier: "solo-developer"\n'
+        '  engine_class: "pure-pattern-no-engine"\n'
+        '  topology_pattern: "single-threaded-linear"\n'
+        "  layer_budgets: []\n"
+        "  fallback_chain:\n"
+        "    primary:\n"
+        '      provider: "anthropic"\n'
+        '      model: "claude-haiku-4-5"\n'
+        '      family: "anthropic"\n'
+        "    same_family: []\n"
+        "    cross_family: []\n"
+        "  hitl_placements: []\n"
+        "  per_step_overrides: {}\n"
+        "default_model_binding:\n"
+        '  provider: "anthropic"\n'
+        '  model: "claude-haiku-4-5"\n'
+        "steps:\n"
+        '  - step_id: "s1"\n'
+        '    step_kind: "inference-step"\n'
+        "    step_payload:\n"
+        "      max_tokens: 8\n"
+        "      temperature: 0.7\n"
+        "      stop_sequences:\n"
+        '        - "END"\n'
+    )
+    path = _write(tmp_path, "native.yaml", body)
+    wf = WorkflowManifestLoader.load_workflow(path)
+    payload = wf.steps[0].step_payload
+    assert payload["max_tokens"] == 8
+    assert isinstance(payload["max_tokens"], int)
+    assert payload["temperature"] == 0.7
+    assert isinstance(payload["temperature"], float)
+
+
+def test_yaml_duplicate_key_rejected_per_strict_safe_loader(tmp_path: Path) -> None:
+    body = (
+        "version: 1\n"
+        "workflow:\n"
+        '  workflow_id: "wf-dup"\n'
+        '  workflow_id: "wf-dup-2"\n'  # duplicate key
+    )
+    path = _write(tmp_path, "dup.yaml", body)
+    with pytest.raises(WorkflowManifestLoadError) as exc:
+        WorkflowManifestLoader.load(path)
+    assert "duplicate" in str(exc.value).lower()
+
+
+def test_yaml_anchor_alias_rejected_per_strict_safe_loader(tmp_path: Path) -> None:
+    body = (
+        "version: 1\n"
+        "workflow: &anchor\n"
+        '  workflow_id: "wf-anchor"\n'
+        "alias: *anchor\n"
+    )
+    path = _write(tmp_path, "anchor.yaml", body)
+    with pytest.raises(WorkflowManifestLoadError) as exc:
+        WorkflowManifestLoader.load(path)
+    assert "anchor" in str(exc.value).lower() or "alias" in str(exc.value).lower()
+
+
+def test_yaml_version_as_string_rejected_per_v1_39_native_type_discipline(
+    tmp_path: Path,
+) -> None:
+    # Pre-v1.39: strictyaml stringified all scalars, so `version: 1` arrived
+    # as "1" and was coerced. v1.39: native int required; quoted "1" rejected.
+    body = 'version: "1"\nworkflow: {}\n'
+    path = _write(tmp_path, "str-ver.yaml", body)
+    with pytest.raises(UnsupportedManifestVersionError):
+        WorkflowManifestLoader.load(path)

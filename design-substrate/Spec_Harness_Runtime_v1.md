@@ -1,4 +1,51 @@
-# Specification — Harness Runtime v1.38
+# Specification — Harness Runtime v1.39
+
+## Change-note (v1.38 → v1.39)
+
+**Status posture (PROPOSED 2026-05-29).** v1.39 is a Class 1 fork resolution Reading (A) apply pass per `.harness/class_1_fork_yaml_loader_step_payload_scalar_coercion_gap.md` operator-ratified 2026-05-29 (Q1=A replace strictyaml with pyyaml + Q2=α pipeline-automation fixture + Q3→routes-to-PR-#80 (closed at v1.38) + Q4=b land Q1 fix). Re-litigation of Phase 2a G2 Q-H=b ratification: strictyaml chosen for strictness; empirical use-the-product probe finding #16/#17 surfaced that `strictyaml.dirty_load` stringifies every YAML scalar — operators cannot run any `inference-step` workflow via YAML manifest at HEAD because LLM SDKs reject string-typed `max_tokens`. v1.39 replaces `strictyaml.dirty_load` with `pyyaml.safe_load` via a thin `StrictSafeLoader` subclass at `harness-runtime/.../lifecycle/strict_safe_loader.py` preserving all four LOAD-BEARING strictness features (duplicate-key detection + non-empty-flow-style ban + anchor/alias ban + native scalar typing). Closes the structural gap at the operator-facing YAML CLI; YAML and TOML manifests now reach the SDK with identical native-typed shapes. v1.38 + earlier lineage PRESERVED VERBATIM per delta-only-spec-file convention.
+
+**Source of fix.** Fork doc §1.5 Reading A + §3 Q-set + §4(d) Q-H=b ratification context. Empirical pre-substantive verification at advisor 56th application: 78-line `StrictSafeLoader` shim authored at scratch + 10/10 strictness tests passed BEFORE spec amendment authoring. All four LOAD-BEARING strictyaml strictness features survive at pyyaml: (1) duplicate-key detection at `construct_mapping`; (2) non-empty flow-style mapping/sequence ban (empty `{}` / `[]` allowed — only practical way to express empty in YAML); (3) anchor/alias ban at `compose_node`; (4) YAML 1.1 native scalar typing via SafeLoader resolvers (int / float / bool / null / str). Q-H=b ratification at G2 was an incomplete decision per fork §4(d) — the strictness motivation was preserved; the scalar-coercion consequence was not considered.
+
+**Amendments.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§14.19 YAML parser choice (re-litigates Q-H=b)** | CANONICAL-READING AMENDMENT: YAML parser changes from `strictyaml.dirty_load` to `pyyaml.safe_load` via `StrictSafeLoader` subclass. Q-H=b at G2 ratified strictyaml-via-strictness; v1.39 preserves the strictness via a 78-line `yaml.SafeLoader` subclass that bans duplicate keys + non-empty flow style + anchors/aliases while gaining YAML 1.1 native scalar typing. Body text at §14.19 PRESERVED VERBATIM. | Fork doc §1.5 (A) + §4(d) |
+| **§14.19.4 invariant 8 (YAML↔TOML round-trip equivalence per Q-S3)** | CANONICAL-READING AMENDMENT: invariant now empirically true at the typed-scalar layer. Pre-v1.39 invariant was vacuous for any workflow with typed `step_payload` (strictyaml stringified scalars; TOML preserved types; round-trip broke at boundary). v1.39 closes the asymmetry — both parsers preserve native int / float / bool. Body text at §14.19.4 invariant 8 PRESERVED VERBATIM. | Fork doc §1.5 (A) + §3 Q4=b |
+| **§14.19.2 row 3 (`ManifestParseError` exception class binding)** | CANONICAL-READING AMENDMENT: trigger now binds to `yaml.YAMLError` (subclasses include `yaml.scanner.ScannerError` + `yaml.parser.ParserError` + `yaml.constructor.ConstructorError`) at YAML path; `tomllib.TOMLDecodeError` at TOML path. Pre-v1.39: `strictyaml.YAMLError`. Body text at §14.19.2 PRESERVED VERBATIM. | Fork doc §1.5 (A) |
+| **U-RT-104 `_coerce_int_fields` helper RETIRED** | The helper present at v1.36-v1.38 to coerce `workflow.entry_version` from str → int (because strictyaml stringified the YAML scalar) is RETIRED at v1.39. Both YAML and TOML loaders now preserve native int; the boundary-coercion code path is no longer needed. `_check_version` simplified to reject any non-int `version` value directly. | Fork doc §3 Q1=A |
+
+**Adjacent harmonization sites.** §14.19.1 `load(path: Path) -> WorkflowManifest` signature PRESERVED VERBATIM. §14.19.3 field-by-field projection contract PRESERVED VERBATIM. §14.19.4 invariants 1–7 + 9 PRESERVED VERBATIM. §14.19.5 deferred-to-discretion items PRESERVED VERBATIM. §14.19.6 ZERO cross-axis cascade re-verified at v1.39 (intra-runtime-spec only; no CP / OD / AS / IS / CXA / ADR / ADD / PRD touch; Target_Stack_Commitment_v1 §5.1 PRESERVED VERBATIM at framework-pull-discipline layer). §14.19.7 verbatim-layer integrity PRESERVED VERBATIM. §14.18.x PRESERVED VERBATIM.
+
+**Sections preserved verbatim from v1.38.** ALL v1.38 + v1.37 + v1.36 + ... + v1 lineage preserved verbatim per delta-only-spec-file convention.
+
+**Status posture.** Proposed (v1.38) → **Proposed (v1.39)**. v1.39 is a Class 1 fork resolution Reading (A) canonical-reading amendment + production code refactor — ZERO body text edit at §14.19.x narrative; production code change replaces 1 import + 1 parser call + retires `_coerce_int_fields` + simplifies `_check_version` + NEW `lifecycle/strict_safe_loader.py` module (78 lines, ~50 actual code); tests gain 4 NEW assertions covering native scalar typing + strictness preservation. ZERO contract removal at any other contract; ZERO signature change at §14.19.1; ZERO cross-axis cascade.
+
+**Downstream absorption owed (post-v1.39).**
+
+(a) Workspace `CLAUDE.md` §2.3 runtime row version bump (v1.38 → v1.39); co-published this arc.
+
+(b) Runtime plan v2.40 → v2.41 single-arc absorption: U-RT-104 dependency declaration refresh + `_coerce_int_fields` retirement narrative. Co-published this arc.
+
+(c) Fork doc `.harness/class_1_fork_yaml_loader_step_payload_scalar_coercion_gap.md` Status PROPOSING → ✅ APPLIED-AS-READING-A with Q-set ratification record (Q1=A + Q2=α + Q3→routes-to-PR-#80 + Q4=b). Co-published this arc.
+
+(d) Clearance marker at `.harness/clearance/Spec_Harness_Runtime-v1_39-cleared-2026-05-29.md` per CLAUDE.md §4.5. Co-published this arc.
+
+(e) Production code change co-published this arc: NEW `harness-runtime/src/harness_runtime/lifecycle/strict_safe_loader.py` (78 lines); EDIT `workflow_manifest_loader.py` — drop strictyaml import + add yaml/strict_safe_load imports + replace `_parse_yaml` body + simplify `_check_version` + retire `_coerce_int_fields` + simplify `_build_carrier`; UPDATE `harness-runtime/pyproject.toml` (strictyaml → pyyaml dep); UPDATE `harness-runtime/tests/integration/fixtures/track_b/minimal.yaml` per Q2=α (pipeline-automation + single-threaded-linear + max_tokens:8 native int); UPDATE sibling `minimal.toml` for YAML↔TOML equivalence. 1305/1305 harness-runtime + 794/794 harness-cp tests pass.
+
+**Adjacent observations.**
+
+(i) **G2 en-bloc ratifications surfaced load-bearing consequences at use-the-product probe.** Q-H=b ratification at G2 chose strictyaml for strictness without empirical pressure on the scalar-coercion behavior. Both PR #79 (strictyaml stringification) AND PR #80 (load-time admissibility asymmetry) trace back to G2 en-bloc ratification gaps. Probe-pattern at PR #79 §4(e) IS the durable corrective. Future G-checkpoint ratifications with multiple en-bloc Q's MAY warrant a probe-eligible carve-out enumeration at the workflow doc.
+
+(ii) **Sibling PR #80 (v1.38) resolved in same calendar day.** PR #80 deferred load-time topology admissibility to runtime; PR #79 (v1.39) replaces YAML parser. Both close use-the-product probe findings at the YAML CLI surface; both required for operator-facing YAML CLI to ship runnable. Stacked apply arcs per advisor-recommended sequential-rollback-boundary.
+
+(iii) **YAML 1.1 boolean ambiguity preserved at YAML level (operator hygiene via quoting).** pyyaml SafeLoader resolves `yes` / `no` / `on` / `off` / `true` / `false` as booleans per YAML 1.1; operators wanting string-typed `tenant_id: "yes"` must quote. This is YAML 1.2's native rule — strictyaml's quoting requirement was a workaround for the same problem. Documented at fork doc §4(b) silent-corruption hazard mitigation 4.
+
+(iv) **57th application of `[[advisor-before-substantive-work-for-cross-axis-blockers]]` posture.** Pre-substantive advisor consultation 2026-05-29 caught: (1) "~15 line shim" claim was conversational — verify empirically before authoring spec text; (2) write full Q-set into fork doc Status block; (3) apply-PR shape (sequential separate PRs per fork). Empirical shim verification (78 LOC; 10/10 strictness tests pass) confirmed Reading A feasibility BEFORE spec authoring. Pattern continues to validate.
+
+(v) **NEW pattern catalogued — `g2-en-bloc-ratification-probe-surface`.** Q-H=b (PR #79) + Q-(loader-admissibility) (PR #80) BOTH ratified en-bloc at Phase 2a G2 2026-05-28; both surfaced as Class 1 forks at use-the-product probe 2026-05-29; both required Reading A apply within 24h. Sub-species candidate at workflow §7.4.7.2 — `5.en-bloc-ratification-with-probe-eligible-carve-out`; cardinality 2 (Q-H=b + Q-(loader-admissibility)). Workflow-doc revision candidate when third instance surfaces.
+
+---
 
 ## Change-note (v1.37 → v1.38)
 

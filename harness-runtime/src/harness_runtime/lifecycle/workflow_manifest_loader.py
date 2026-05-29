@@ -32,7 +32,7 @@ import tomllib
 from pathlib import Path
 from typing import Any, ClassVar, cast
 
-import strictyaml  # pyright: ignore[reportMissingTypeStubs]
+import yaml
 from harness_core.identity import StepID
 from harness_core.persona_tier import PersonaTier
 from harness_core.workload_class import WorkloadClass
@@ -42,6 +42,7 @@ from harness_cp.gate_level_rule import GateLevel
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver_types import StepKind, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+from harness_runtime.lifecycle.strict_safe_loader import strict_safe_load
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 __all__ = [
@@ -236,6 +237,11 @@ class WorkflowManifestLoader:
 
     @staticmethod
     def _parse_yaml(raw_bytes: bytes, source: str) -> dict[str, Any]:
+        # Per runtime spec v1.39 §14.19 Reading A: strictyaml.dirty_load was
+        # replaced with `strict_safe_load` (pyyaml SafeLoader subclass) to
+        # preserve YAML 1.1 native scalar typing (int/float/bool). Strictness
+        # preserved: duplicate-key detection + flow-style ban + anchor/alias
+        # ban. Closes probe finding #16/#17 (PR #79).
         try:
             text = raw_bytes.decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -244,24 +250,18 @@ class WorkflowManifestLoader:
                 source=source,
             ) from exc
         try:
-            parsed = cast(
-                Any,
-                strictyaml.dirty_load(  # pyright: ignore[reportUnknownMemberType]
-                    text, allow_flow_style=True
-                ),
-            )
-        except strictyaml.YAMLError as exc:
+            data = strict_safe_load(text)
+        except yaml.YAMLError as exc:
             raise ManifestParseError(
                 f"YAML parse error: {exc}",
                 source=source,
             ) from exc
-        data = parsed.data
         if not isinstance(data, dict):
             raise ManifestSchemaError(
                 "top-level YAML value must be a mapping",
                 source=source,
             )
-        return dict(cast(dict[str, Any], data))
+        return cast(dict[str, Any], data)
 
     @staticmethod
     def _parse_toml(raw_bytes: bytes, source: str) -> dict[str, Any]:
@@ -290,22 +290,21 @@ class WorkflowManifestLoader:
                 source=source,
             )
         raw_version = document["version"]
-        # YAML scalars from strictyaml.dirty_load may arrive as str even when
-        # the source said `version: 1` — coerce-via-int once and compare.
-        try:
-            version = int(str(raw_version))
-        except (ValueError, TypeError) as exc:
+        # YAML + TOML loaders both preserve native int scalars per spec v1.39
+        # Reading A (pyyaml StrictSafeLoader replaces strictyaml.dirty_load).
+        # Operator-string-typed `version: "1"` still rejected — version MUST
+        # be the literal int 1 per the contract.
+        if not isinstance(raw_version, int) or isinstance(raw_version, bool):
             raise UnsupportedManifestVersionError(
                 f"'version' must be the integer {MANIFEST_VERSION_V1}; got "
                 f"{raw_version!r}",
                 source=source,
-            ) from exc
-        if version != MANIFEST_VERSION_V1:
+            )
+        if raw_version != MANIFEST_VERSION_V1:
             raise UnsupportedManifestVersionError(
-                f"'version' must equal {MANIFEST_VERSION_V1}; got {version}",
+                f"'version' must equal {MANIFEST_VERSION_V1}; got {raw_version}",
                 source=source,
             )
-        document["version"] = version  # normalize for downstream Pydantic
 
     # ---------- carrier construction ----------
 
@@ -313,36 +312,14 @@ class WorkflowManifestLoader:
     def _build_carrier(
         cls, document: dict[str, Any], *, source: str
     ) -> WorkflowManifest:
-        # Coerce YAML-typed scalars at the boundary. strictyaml.dirty_load
-        # returns strings for non-flow-style scalars; TOML preserves types.
-        cls._coerce_int_fields(document, source=source)
+        # Per runtime spec v1.39 §14.19 Reading A: both YAML and TOML loaders
+        # preserve native scalar types; no boundary coercion needed. The
+        # `_coerce_int_fields` helper present pre-v1.39 was retired with the
+        # strictyaml.dirty_load → strict_safe_load swap.
         try:
             return WorkflowManifest.model_validate(document)
         except ValidationError as exc:
             raise cls._project_validation_error(exc, source=source) from exc
-
-    @staticmethod
-    def _coerce_int_fields(document: dict[str, Any], *, source: str) -> None:
-        """Coerce known integer fields when YAML scalars arrived as strings.
-
-        Currently only ``workflow.entry_version`` needs explicit coercion;
-        version was handled at ``_check_version``. step_payload scalars stay
-        opaque per AC #14.19.4 invariant 9 (JSON-serializability at U-RT-105).
-        """
-        workflow_section = document.get("workflow")
-        if not isinstance(workflow_section, dict):
-            return
-        workflow_dict = cast(dict[str, Any], workflow_section)
-        if "entry_version" in workflow_dict:
-            raw = workflow_dict["entry_version"]
-            if isinstance(raw, str):
-                try:
-                    workflow_dict["entry_version"] = int(raw)
-                except ValueError as exc:
-                    raise ManifestSchemaError(
-                        f"'workflow.entry_version' must be an integer; got {raw!r}",
-                        source=source,
-                    ) from exc
 
     @staticmethod
     def _project_validation_error(
