@@ -392,13 +392,28 @@ The pre-batch-32 OD-axis OD-5 row RETIRE-READY classification is **superseded** 
 
 **Cardinality delta at this batch:** OD-axis RETIRED 2/8 → 3/8 (25.0% → 37.5%); workspace RETIRED 36/54 → 37/54 (66.7% → 68.5%); workspace RETIRE-READY 1/54 → 0/54 (**bucket EMPTY at workspace layer — FIRST TIME in ledger history**); workspace PARTIAL unchanged at 4/54; workspace STILL-BOUNDED unchanged at 11/54; workspace STILL-BOUNDED-INDEFINITELY unchanged at 2/54; workspace pipeline-advanced 41/54 = 75.9% (unchanged — within-tier promotion). **Cardinality check at batch-32 close: 37 + 0 + 4 + 11 + 2 = 54 ✓.** Forward-only ledger discipline preserved at prior batch records.
 
+### §11.4f H_T-CP-8 — PARTIAL → RETIRED at batch-47 (sub-species 7e first instance)
+
+The pre-batch-47 CP-axis CP-8 row §5 PARTIAL classification (row line 111 "1 of 17 spec edges; 8 source units DEFERRED") is **superseded** by the direct X-AL-2 first-conjunct satisfaction closure event filed at `batch-47` (2026-05-29; sibling-arc to batch-46 H_T-RT-35 RETIRE-READY → RETIRED close at fork doc `.harness/class_1_tension_u_rt_35_cp_is_wiring_gaps.md` paired transit):
+
+- Gap A composer library COMPLETE on main `35744ab` via PRs #39–#44 (U-CP-74..79); 7 of 7 spec §12.3 source units disposed (5 substantive composer landings + 2 reclassified NOT-APPLICABLE at CP spec v1.25 §16.5.10 per impl-time grounding pass — U-CP-12 declarative-only + U-CP-52 runtime-axis-composed).
+- Gap B U-CP-14 shape divergence RESOLVED via (S) sibling-variant at CP spec v1.25 → v1.26 (commit `ec4a2f7`) per `.harness/architect_recommendation_u_rt_35_gap_b_within_path_a.md` operator-ratified 2026-05-28; sibling composer `emit_override_state_ledger_entry` LANDED at U-CP-74 PR #39 (`e63a600`); ZERO `CPAuditLedgerEntry` 8-field shape amendment; ZERO C-CP-20 §20.4 signing contract amendment; ZERO CP-audit-axis cascade.
+- Gap C runtime spec §12.3 prose drift DEFERRED per (C-defer) ratification at runtime plan v2.34 — Class 3 informational doc-hygiene, NOT a retirement gate under X-AL-2; impl conforms to IS HEAD directly per CP spec v1.26 §16.5.8 Q4 ratification anchor.
+- X-AL-2 first conjunct (cited unit IDs landed) MET at U-CP-18 LANDED + U-CP-34 LANDED + U-CP-74..79 LANDED (5 substantive + 2 reclassified). X-AL-2 second conjunct (H_E surface no longer invoked at substitution site) **MET BY CLASSIFICATION** — Meta-Architecture §5 row for CP-8 = "None — depends on H_T-IS-5, H_T-IS-7"; H_E coverage table = ✗ ("Depends on IS-axis primitives absent in H_E"). No H_E surface exists at the CP-8 substitution site; nothing to "no longer invoke."
+
+**Sub-species 7e FIRST CLOSURE** — `composer-library-complete-with-no-H_E-surface-classification` catalogued at `.harness/phase-7d-retirement-events-batch-47.md` §2; discriminated from sub-species 7d (LANDED-substrate-pending-upstream-loop-substrate) by H_E surface presence at the substitution site. Sub-species 7 lineage cardinality post-batch-47: **12 events across 5 sub-species** (7a=3 + 7b=1 + 7c=1 + 7d=6 + 7e=1). **TENTH PARTIAL → RETIRED close overall in ledger history**; **FIRST direct X-AL-2 first-conjunct close at a "✗ absent (no H_E surface)" Meta-Architecture classification row**.
+
+**Cardinality delta at this batch:** CP-axis RETIRED 19/22 → 20/22 (86.4% → 90.9%); workspace RETIRED 43/54 → 44/54 (79.6% → 81.5%); workspace PARTIAL 5/54 → 4/54 at active-substitution view (§11.1a corrective accounting baseline); workspace pipeline-advanced 48/54 = 88.9% (unchanged — within-pipeline-advanced PARTIAL → RETIRED transit). **Cardinality check at batch-47 close: 44 + 0 + 4 + 4 + 2 = 54 ✓** (preserves §11.1a corrective baseline 43 + 0 + 5 + 4 + 2 = 54). Forward-only ledger discipline preserved at prior batch records; row line 111 text PRESERVED VERBATIM per §0.5 forward-only discipline + this §11.4f supersession is the canonical disposition going forward.
+
+**Fork doc closure:** `.harness/class_1_tension_u_rt_35_cp_is_wiring_gaps.md` transitions to CLOSED — paired transit completed at batches 46 (H_T-RT-35) + 47 (H_T-CP-8). Fork doc closure-back-reference appended at fork doc per §"Cross-axis observability" discipline.
+
 ### §11.5 Cumulative status pointer
 
 | | Live source |
 |---|---|
-| Latest filed batch | `batch-32` (2026-05-28, H_T-OD-5 RETIRE-READY → RETIRED via deployment-time-opt-in-gate closure at mech-β AC #8 green on main; sibling-arc to batch-31 H_T-AS-8d close via same PR #14 merge `24a9363`; JOINT same-arc cross-axis closure pattern FIRST ledger instance) |
-| Cumulative RETIRED count (raw ledger) | 37/54 (68.5%) per batch-32 §4 footer (+2 from batch-30 via joint AS-8d + OD-5 close at batches 31 + 32) |
-| Cumulative pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) | 41/54 (75.9%) per batch-32 §4 footer |
+| Latest filed batch | `batch-47` (2026-05-29, H_T-CP-8 PARTIAL → RETIRED via direct X-AL-2 first-conjunct satisfaction; sub-species 7e first instance; sibling-arc to batch-46 H_T-RT-35 paired transit at fork doc `class_1_tension_u_rt_35_cp_is_wiring_gaps.md`) |
+| Cumulative RETIRED count (raw ledger) | 44/54 (81.5%) per batch-47 §4 footer (CP-axis 20/22 = 90.9% — FIRST among active four-axis substitution sets to cross 90% RETIRED) |
+| Cumulative pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) | 48/54 (88.9%) per batch-47 §4 footer (preserved at §11.1a corrective baseline) |
 | Per-axis live status | `harness-{is,as,cp,od}/CLAUDE.md` §4.1 |
 | Cross-axis cascade live status | §6.3.1 + §6.3.2 cascade re-evaluations at the batch in which the gating retirement filed (see batch-2 §3 + batch-3 referenced from `harness-od/CLAUDE.md`) |
 

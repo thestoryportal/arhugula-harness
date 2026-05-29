@@ -327,3 +327,31 @@ Both risks are bounded — likely all surfaces exist at HEAD. Explicit AC flaggi
 **Gap C deferred per (C-defer) ratification.** Runtime spec §12.3 prose drift (`Callable[[StateLedgerEntry], EntryHash]` vs IS HEAD `Callable[[EntryPayload], Awaitable[WriteResult]]`) carries to next runtime-spec revision pass per FM-2 + plan-revision-cannot-amend-spec discipline; v2.33 impl conforms to IS HEAD directly per CP spec v1.26 §16.5.8 Q4 ratification anchor; doc-hygiene STRIKE-and-rewrite with ZERO production-code impact.
 
 **CXA v2.16 §0.4 forward-tracking PRESERVED** at v2.33 publication. 6 PENDING entries transit to 6 LANDED at paired-cascade-completion (CXA narrow-scope revision at v2.16 → v2.17 absorbs §2.3.2 CP→IS bucket canonical enumeration refresh per v2.9 / v2.15 / v2.16 precedent at retirement-batch filing arc).
+
+---
+
+## Fork doc CLOSED — paired transit completed at batches 46 + 47 (2026-05-29)
+
+Closure-back-reference per §"Cross-axis observability" closure-back-reference discipline. Fork doc closure event at paired transit:
+
+| H_T row surface | Closure event | Closure shape |
+|---|---|---|
+| H_T-RT-35 (cross-axis emission compositional) | batch-46 (`c10af64`, PR #74, 2026-05-29) | Reading α' vacuous-second-conjunct at firing-site layer (sub-species 7d 6th instance) per `.harness/phase-7d-retirement-events-batch-46.md` §1.4 |
+| **H_T-CP-8 (F2-substrate-join substitution)** | **batch-47 (TBD post-merge, PR #75, 2026-05-29)** | **Direct X-AL-2 first-conjunct satisfaction under "✗ absent (no H_E surface)" Meta-Architecture §5 classification (sub-species 7e 1st instance)** per `.harness/phase-7d-retirement-events-batch-47.md` §1.3 |
+
+**Gap closure ledger at fork doc close:**
+
+- **Gap A — composer-authoring:** CLOSED. 7 of 7 spec §12.3 source units disposed (5 substantive composer landings at U-CP-74..79 PRs #39–#44 + 2 reclassified NOT-APPLICABLE at CP spec v1.25 §16.5.10 per impl-time grounding pass). ZERO units remain open at Gap A.
+- **Gap B — U-CP-14 spec amendment:** CLOSED. (S) sibling-variant resolution at CP spec v1.25 → v1.26 (commit `ec4a2f7`); sibling composer `emit_override_state_ledger_entry` LANDED at U-CP-74 PR #39 (`e63a600`); ZERO CP-audit-axis cascade. Nested fork β.i closed at same arc.
+- **Gap C — runtime spec §12.3 prose drift:** DEFERRED to next runtime-spec revision pass per (C-defer) ratification 2026-05-29. Class 3 informational doc-hygiene; non-blocking for retirement under X-AL-2. Impl conforms to IS HEAD directly per CP spec v1.26 §16.5.8 Q4 ratification anchor. Carry persists at the runtime-spec revision arc as bounded-residual.
+
+**Cascade closures at paired transit:**
+
+- (F) FULL-WIRE-paired cascade BOTH halves authored at design-phase (runtime plan v2.33 U-RT-110 binding-surface + v2.34 U-RT-111 caller-site invocations).
+- U-CP-34 LANDED-but-never-fired residual closed at batch-46 via Reading α' vacuous-second-conjunct (sub-species 7d 6th instance).
+- CXA v2.16 §0.4 forward-tracking 6 PENDING entries: cite-cascade closure at CXA narrow-scope revision (v2.16 → v2.17) DEFERRED per FM-2 narrow-scope discipline at this batch; operator-discretion timing per v2.9 / v2.15 / v2.16 precedent.
+- workspace `CLAUDE.md` §2.4 CP plan + runtime plan row-bumps (v2.29 + v2.34) preserved at prior session per `[[gstack-stash-cleanup-pending]]` row-bump discipline.
+
+**Phase 7 sub-phase execution UNHALTED at this workspace** (was HALTED at fork doc RE-OPEN 2026-05-28 + Phase 6 back-flow Option A authorization). All design-phase back-flow artifacts landed; all CP-axis substantive substrate landed; all paired transit closures completed. Future re-verification discipline per `.harness/phase-7d-retirement-events-batch-46.md` §1.5 + batch-47 §3.2: sub-species 7d closures are conditionally re-verifiable when future arcs land production callers at any of the 5 firing-site blocker substitution sites; sub-species 7e closure is permanent (H_E classification is a Meta-Architecture invariant).
+
+**Status:** **CLOSED — paired transit completed at batches 46 + 47** (2026-05-29). Forward-only ledger discipline; prior status lines preserved verbatim above. No follow-on arc owed at this fork doc; future H_T-CP-8 or H_T-RT-35 status re-verification routes to new fork doc per `[[verification-shape-sharpened-grep-vs-e2e]]` discipline + workspace `CLAUDE.md` §4.3 forward-only convention.
