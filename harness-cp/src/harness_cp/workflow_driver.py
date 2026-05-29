@@ -578,7 +578,11 @@ def execute_workflow(
                     ),
                     event_sequence_id=(pause_snapshot_input.step_index << 2) | 0,
                     protocol_state_snapshot=resume_result.model_dump(mode="json"),
-                    actor=ctx.ledger_writer.actor,
+                    # Reading A apply (PR #83 sibling-extension): pass
+                    # ActorIdentity str-newtype matching composer signature
+                    # `actor: ActorIdentity`. See
+                    # `.harness/class_2_fork_u_cp_74_actor_field_malformation.md`.
+                    actor=ActorIdentity(ctx.ledger_writer.actor.actor_id),
                 )
             )
         if not resume_result.resumed:
@@ -808,7 +812,9 @@ def _execute_workflow_body(
                         protocol_state_snapshot=pause_snapshot.model_dump(
                             mode="json"
                         ),
-                        actor=ctx.ledger_writer.actor,
+                        # Reading A apply (PR #83 sibling-extension): see fork
+                        # doc U-CP-74 actor field malformation.
+                        actor=ActorIdentity(ctx.ledger_writer.actor.actor_id),
                     )
                 )
             return RunResult(
@@ -979,7 +985,11 @@ def _execute_workflow_body(
                                 protocol_state_snapshot=(
                                     pause_snapshot.model_dump(mode="json")
                                 ),
-                                actor=ctx.ledger_writer.actor,
+                                # Reading A apply (PR #83 sibling-extension):
+                                # see fork doc U-CP-74 actor malformation.
+                                actor=ActorIdentity(
+                                    ctx.ledger_writer.actor.actor_id
+                                ),
                             )
                         )
                     return RunResult(
