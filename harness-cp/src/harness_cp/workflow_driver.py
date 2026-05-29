@@ -341,6 +341,19 @@ class DriverContext(Protocol):
     skill_activation_emitter: object | None
     skills: object
 
+    # U-RT-111 (v2.36) — `RuntimeCpIsWiring` carrier per runtime plan v2.36 §1.2
+    # ACs #3 + #11. Operator-opt-in MVP; default `None` preserves pre-v2.36
+    # production behavior (workflow_driver pause/resume sites silent-skip
+    # emission). Typed `object | None` to avoid pulling
+    # `harness_runtime.lifecycle.cp_is_wiring.RuntimeCpIsWiring` into the CP
+    # Protocol surface (workspace dep-graph discipline — harness-cp does NOT
+    # depend on harness-runtime per `harness-cp/pyproject.toml`). When bound,
+    # the 3 pause/resume firing sites at workflow_driver.py:546 + :756 + :881
+    # invoke `ctx.cp_is_wiring.emit_pause_resume_state_ledger_entry(...)` via
+    # `_run_protocol_method_sync(...)` per the same sync-bridging discipline as
+    # `protocol.attempt_resume(...)` + `protocol.capture_pause_snapshot(...)`.
+    cp_is_wiring: object | None
+
 
 # ---------------------------------------------------------------------------
 # Driver core

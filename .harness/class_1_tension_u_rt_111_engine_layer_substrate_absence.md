@@ -1,6 +1,6 @@
 # Class 1 Tension — U-RT-111 plan-vs-reality gap: engine-layer substrate absence + disambiguator gaps + X-AL-2 transit unreachability
 
-**Status:** APPLIED-AS-(A)-RESCOPE (operator AskUserQuestion ratified 2026-05-29; v2.35 narrow-scope rescope authored at same arc; closure-back-reference owed at runtime plan v2.34 §0.3 + workspace `CLAUDE.md` §2.4)
+**Status:** APPLIED-AS-(A)-RESCOPE-WITH-SEQUEL (operator AskUserQuestion ratified 2026-05-29; v2.35 narrow-scope rescope authored at same arc; sequel-strike at v2.36 STRIKING AC #1 per §9 NEW operator-ratified Reading (A)-sequel 2026-05-29 same-calendar-day; closure-back-reference owed at runtime plan v2.34 §0.3 + workspace `CLAUDE.md` §2.4)
 **Filed:** 2026-05-29
 **Surfaced at:** U-RT-111 empirical orientation pass (pre-substantive verification per ACs #8 + #9 halt-conditions per `[[halt-route-split-AC-pattern]]`)
 **Class:** 1 (halt-execution — design-phase artifact requires revision per `Project_Workflow_v1_12.md` §2.7.6)
@@ -120,3 +120,66 @@ The upstream blockers DO have cross-axis cascade implications (engine-layer impl
 **Status: APPLIED-AS-(A)-RESCOPE 2026-05-29.** Runtime plan v2.34 → v2.35 narrow-scope revision authored at same arc. Workspace `CLAUDE.md` §2.4 row bump co-published. Closure-back-reference annotation at v2.34 §0.3 owed at the impl arc PR.
 
 H_T-RT-35 transit posture clarified honestly: stays PARTIAL post-v2.35 + post-impl-arc. RETIRE-READY transit gated on the upstream engine-layer impl arc (separate Class 1 back-flow owed at CP-axis design-phase routing — NOT authored at this fork doc).
+
+---
+
+## §9 Sequel finding — AC #1 disambiguator gap surfaced at v2.36 impl arc empirical orientation (2026-05-29 same-calendar-day)
+
+### §9.1 Trigger
+
+Pre-substantive empirical orientation at the v2.36 impl arc (worktree `u-rt-111-impl-v2-35`, branched off main `a35c716` post-PR #60 v2.35 merge) surfaced a SECOND structural disambiguator gap at AC #1 (the override caller-site invocation) that v2.35 itself missed at authoring time, 19 hours after v2.35 publication.
+
+The v2.35 §1.2 row 1 claim was:
+
+> "`override_id` + `policy_id` from `manifest_entry.per_step_overrides[step_id]` access (the override the function applied)"
+
+This wording was authored without empirical grep-verification of the `StepOverride` model field set against the CP spec §16.5.4 row U-CP-14 disambiguator field names.
+
+### §9.2 Empirical finding at HEAD `a35c716`
+
+- **U-CP-14 composer surface** at `harness-cp/src/harness_cp/per_step_override_evaluator.py:282-315` (`emit_override_state_ledger_entry`) declares `override_id: str` + `policy_id: str` as REQUIRED kw inputs.
+- **`StepOverride` model** at `harness-cp/src/harness_cp/workflow_manifest_entry.py:51-65` has empirical field set `{step_id, model_binding, engine_class, hitl_placement}` — **NO `override_id` field; NO `policy_id` field**.
+- **CP spec v1.26 §16.5.4 row U-CP-14** idempotency-key formula names `workflow_id || step_id || override_id || policy_id || sha256(outcome_canonical_bytes).hex()` — both `override_id` + `policy_id` named as disambiguator segments.
+- **CP spec v1.26 §16.5.4 per-composer disambiguator notes** (rows U-CP-27, U-CP-30, U-CP-37, U-CP-49, U-CP-50) — **NO disambiguator note for U-CP-14**. Spec is SILENT on whether `override_id` + `policy_id` are caller-supplied from external source OR derivable via spec-authoritative rule.
+- **No other carrier surface** in the workspace exposes `override_id` or `policy_id` — verified via grep across `harness-cp/src/` + `harness-runtime/src/`.
+
+### §9.3 X-AL-3 risk classification — structurally identical to §2 row #4 (HITL `semantic_variant_binding_id`)
+
+Synthesizing `override_id` (e.g., `f"override:{workflow_id}:{step_id}"`) + `policy_id` (e.g., `"default"` or `workflow_id`) at the runtime axis under spec-silence would be **X-AL-3 silent H_T design extension** per `Phase_7_Meta_Architecture_v1.md` §7.7. The composer surface is contract-canonical at CP-axis; the disambiguator-field absence at `StepOverride` model is the runtime-blocker.
+
+Same structural shape as v2.35 §2 row #4 STRIKE (HITL `semantic_variant_binding_id` missing from `RewrittenToolCall`) and `[[fork-as-8f-managed-agents-production-only-exclusion]]` precedent — composer-side requires a field that producer-side does not surface; resolution requires either (a) CP spec amendment authoring derivation rule, OR (b) CP plan amendment authoring field-set extension.
+
+### §9.4 Reading (A)-sequel — STRIKE AC #1 + amend to v2.36 (operator-ratified 2026-05-29 same-calendar-day)
+
+**Per operator AskUserQuestion 2026-05-29 single-session sequel ratification:** option 1 (STRIKE AC #1 + amend v2.36; file gap finding at existing v2.35 fork doc).
+
+- AT V2.36: DROP AC #1 (override caller-site invocation) — same structural posture as v2.35's AC #4 STRIKE.
+- AT V2.36: PRESERVE ACs #2 + #3 + #7 + #9 + #11 + #12 (v2.35 reframed; v2.36 unchanged at these ACs).
+- AT V2.36: REFRAME AC #10 e2e from "3-or-4 sites" to "3 sites" (workload-class-selection + pause-resume workflow-layer + sibling-ledger).
+- AT V2.36: PRESERVE H_T-RT-35 transit posture (STAYS PARTIAL); add SECOND upstream-arc blocker (override-disambiguator gap) alongside engine-layer + HITL disambiguator blockers from v2.35.
+
+**Co-publications at the v2.36 sequel-arc (BUNDLED at same PR per CLAUDE.md §11.4 bundled-absorption with this fork doc as back-flow record):**
+- Runtime plan v2.36 at `design-substrate/Implementation_Plan_Harness_Runtime_v2_36.md` (NEW delta file).
+- Workspace `CLAUDE.md` §2.4 row v2.35 → v2.36.
+- This fork doc §9 NEW sequel finding (authored at v2.36 arc).
+- v2.36 impl arc landing ACs #2/#3/#11 + e2e at runtime + harness-cp sources.
+
+### §9.5 Out-of-axis owed (NEW at v2.36)
+
+- **CP spec v1.26 → v1.27 amendment OR `StepOverride` field-set extension at CP plan v2.29 → v2.30** surfacing `override_id` + `policy_id` as canonical caller-supplied fields. Routes to CP-axis design-phase per `Project_Workflow_v1_12.md` §2.7.6. Options at upstream arc:
+  - (a) CP spec §16.5.4 row U-CP-14 disambiguator note authoring rule for `override_id` (e.g., `override_id = f"override:{workflow_id}:{step_id}"`) + `policy_id` (e.g., `policy_id = workflow_id` for single-policy-per-workflow MVP).
+  - (b) `StepOverride` model field-set extension at CP plan v2.29 → v2.30 to carry `override_id: str` + `policy_id: str` as required fields.
+- Operator-discretion at upstream arc.
+
+### §9.6 Sub-species `plan-revision-against-not-yet-built-substrate` — cardinality 1 → 2 at workflow doc §7.4.7.2
+
+§7 sub-species candidate at v2.35 catalogued cardinality 1 (v2.34 → v2.35 transit). The v2.36 sequel IS the SECOND instance of the same sub-species at the SAME atomic-unit (U-RT-111) in a 19-hour window — strong empirical signal that the sub-species warrants formal inclusion at workflow doc §7.4.7.2 next revision pass.
+
+**Distinct closure-event-class from v2.35 §7 instance:** v2.35 instance was "engine-layer NotImplementedError stubs at downstream CP module" + "missing carrier-fields at HITL/pause/resume types"; v2.36 instance is "missing CP-spec derivation rule for composer disambiguator inputs" + "missing field-set on caller-side `StepOverride` model". Same sub-species at the meta-level (plan claims wiring against not-yet-built substrate); distinct surface (composer-input-disambiguator-source-silence in spec).
+
+### §9.7 Audit-trail notes (NEW at §9)
+
+- **39th application of `[[advisor-before-substantive-work-for-cross-axis-blockers]]`.** Advisor was consulted pre-substantive-work at v2.36 arc upon finding the AC #1 disambiguator gap; advisor confirmed "default verdict — HALT, don't silent-absorb" + identified spec-silence at CP spec §16.5.4 row U-CP-14 as the discriminator. Advisor sharpened the framing from "synthesize impl-discretion" to "halt + route per X-AL-3 — same shape as AC #4 STRIKE precedent."
+- Pre-substantive empirical orientation as the load-bearing discipline (39th instance at this advisor-pattern application). The check caught the gap BEFORE any runtime production code was written; ZERO X-AL-3 silent extension occurred.
+- v2.36 IS the sequel-strike. v2.35 STRUCK 4 ACs (#4/#5/#6/#10); v2.36 STRIKES 1 more AC (#1) plus reframes #10 (now 3 sites instead of 3-or-4). Cumulative ACs STRUCK at the U-RT-111 unit body: 5 of 12 (v2.34 original count). RETAINED at v2.36: ACs #2, #3, #7, #9, #11, #12, #10 (reframed) — 7 of 12.
+- Same-calendar-day sequel arc: v2.35 published at 2026-05-29 (commit `f7d6442`, merged at `a35c716`); v2.36 authored 2026-05-29 (this commit). 19-hour window between v2.35 merge + v2.36 sequel; both within operator's single calendar day. SECOND consecutive same-day sequel-rescope arc at U-RT-111 ratifies the `[[plan-revision-against-not-yet-built-substrate]]` sub-species discipline empirically.

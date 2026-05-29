@@ -1434,6 +1434,20 @@ class HarnessContext(BaseModel):
     # (operator opt-out — production-default state). See spec §14.17.1.
     skill_activation_emitter: SkillActivationSpanEmitter | None = None
 
+    # U-RT-111 (v2.36) — `RuntimeCpIsWiring` carrier per runtime plan v2.36 §1.2.
+    # Exposes the stage-6 CXA wiring (already materialized at
+    # `_MutableHarnessContext.cxa_stages["cp_is_wiring"]`) at the frozen
+    # HarnessContext so workflow_driver + sub_agent_dispatch + engine_selector
+    # caller-sites can invoke U-RT-110's emit methods (override / workload-class-
+    # selection / pause-resume workflow-layer / sibling-ledger). Operator-opt-in
+    # default `None` — when None, caller-sites silent-skip emission (preserves
+    # pre-v2.36 production behavior); when bound, fires the §16.5 composer
+    # contract per CP spec v1.26 §16.5.7 firing-site discipline. Typed `object`
+    # to avoid pulling `harness_runtime.lifecycle.cp_is_wiring.RuntimeCpIsWiring`
+    # into the L0 schema (HarnessContext arbitrary_types_allowed=True per
+    # `model_config`; consumers cast).
+    cp_is_wiring: object | None = None
+
 
 
     # U-RT-94 — Runtime-internal sidecar carrier for one-shot ResumeContext
