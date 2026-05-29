@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | PROPOSING |
+| Status | ✅ RATIFIED-AS-READING-D (bounded-defer per X-AL-2; structurally-unfireable-at-MVP) — 2026-05-29 |
 | Filed | 2026-05-29 |
 | Filed by | Operator + Claude (post-PR-#63 close, design-phase posture) |
 | Class | 1 (architectural; firing-site-absence at LANDED substrate; same structural shape as U-CP-34 v2.37 AC #11 — sibling to `[[class_1_tension_sibling_ledger_child_agent_recursion_boundary]]` co-published this arc) |
@@ -120,6 +120,29 @@ Reading C is NOT recommended — semantic mismatch with `rewrite_tool_call`'s LL
 | H_T-RT-35 RETIRE-READY transit | GATED on this arc + 4 sibling upstream arcs |
 | Recommended Q1 | (D) bounded-defer unless operator prefers immediate closure |
 | Sibling arc | `[[class_1_tension_sibling_ledger_child_agent_recursion_boundary]]` co-published this arc (DISTINCT structural shape per advisor 44th application) |
+
+---
+
+## §8 Ratification (2026-05-29)
+
+Operator ratified **Q1 = Reading D (bounded-defer)** per pre-substantive recommendation at §6. Q2–Q5 N/A under Reading D (no spec change, no Protocol authoring, no firing-site, no cross-axis cascade).
+
+### Rationale
+
+The LLM inner tool-call interception loop does NOT exist at MVP. Authoring a firing-site for `rewrite_tool_call` before the inner-loop arc is built would replay the v2.37 U-CP-34 pattern (premature wiring against not-yet-built downstream substrate). The U-RT-111 AC #4 STRIKE preserved at v2.39 per `[[2.strike-revision-on-refined-second-tier-reason]]` already encodes this finding at the plan layer; the fork-doc ratification anchors it at the architectural layer.
+
+### Carry disposition
+
+- **Composer + wiring** PRESERVED VERBATIM at HEAD (LANDED substrate sits as future-applicable carrier per X-AL-2 bounded-residual carry-forward).
+- **H_T-RT-35 RETIRE-READY transit** remains GATED on this arc + 4 sibling upstream arcs. Bounded-defer at this arc does not advance the transit; it closes the fork-doc-level OPEN question.
+- **Re-litigation trigger**: when the LLM inner tool-call interception loop is authored (separate future arc), this fork doc should be re-opened and a firing-site Reading (A / B / C) selected for that arc's context.
+
+### Cross-artifact effects
+
+- ZERO design-substrate edit (no spec / plan / ADR / ADD / PRD / CXA amendment).
+- ZERO production code change.
+- ZERO clearance marker (per CLAUDE.md §4.5 — bounded-defer dispositions without design-substrate edits do not require clearance markers).
+- ZERO MEMORY.md retirement-event filing (no retirement-tier transit).
 
 ---
 
