@@ -253,3 +253,64 @@ All three share the meta-pattern: plan-authoring claimed wiring against substrat
 - v2.37 IS the third sequel-strike. v2.35 STRUCK 4 ACs (#4/#5/#6/#10); v2.36 STRUCK 1 more AC (#1) + reframed #10; v2.37 STRIKES 1 more AC (#11) + reframes #10 (now 2 sites instead of 3). Cumulative ACs STRUCK at the U-RT-111 unit body: **6 of 12** (v2.34 original count). RETAINED at v2.37: ACs #2, #3, #7, #9, #12, #10 (reframed) — **6 of 12**.
 - Same-calendar-day THIRD sequel arc: v2.35 published 2026-05-29 (commit `f7d6442`, merged at `a35c716`); v2.36 authored 2026-05-29 (commit `9cca6d6`); v2.37 authored 2026-05-29 (this commit). All three within operator's single calendar day. **THIRD consecutive same-day sequel-rescope arc at U-RT-111 — ratifies `[[plan-revision-against-not-yet-built-substrate]]` sub-species cardinality 3** at strong empirical confidence.
 - **H_T-RT-35 RETIRE-READY now gated on 4 upstream arcs:** (1) engine-layer impl + (2) HITL disambiguator + (3) override disambiguator + (4) **NEW: sibling-ledger firing-site canonical-reading or alternate-site spec amendment**. The retirement gate complexity has tripled across the 3 sequel-rescope arcs; the v2.34 single-PR full-wire transit framing was structurally over-claimed.
+
+## §11 Third sequel finding — AC #2 workload-class-selection substrate-lifecycle-mismatch surfaced at v2.38 impl arc empirical orientation (2026-05-29 fourth same-calendar-day sequel)
+
+### §11.1 Trigger
+
+At v2.38 impl arc empirical orientation (PR #61 head `6415ce2`, post-v2.37 AC #11 STRIKE landing), the AC #2 caller-site investigation surfaced a **fourth structural disambiguator gap** at U-RT-111 — distinct shape from v2.35 + v2.36 + v2.37 STRIKES:
+
+- v2.35 STRIKES (ACs #4/#5/#6/#8): missing carrier-fields on downstream types (`RewrittenToolCall.semantic_variant_binding_id` + `PauseEvent.pause_event_id` + `resume_attempt_count`) + engine-layer NotImplementedError stubs.
+- v2.36 STRIKE (AC #1): missing field-set on caller-side `StepOverride` model + CP spec silence on `override_id`/`policy_id` derivation rule.
+- v2.37 STRIKE (AC #11): primitive-scope mismatch — `emit_sibling_ledger_entry` canonically bound at CP spec §15.1 to per-sibling tool-call events inside child agent execution, not parent dispatch site.
+- v2.38 STRIKE (AC #2): **substrate-lifecycle-mismatch** — bootstrap stage 3b CP_ROUTING (where AC #2's firing site at `materialize_engine_selector(config)` runs) precedes stage 6 CXA_WIRING (where `cp_is_wiring` binding is built). At the firing site, `ctx.cp_is_wiring` does not yet exist; `materialize_engine_selector(config)` does not even take a `ctx` parameter; actor source also unanchored at engine_selector scope.
+
+### §11.2 Findings — empirical convergence
+
+Three convergent evidence vectors confirm the substrate-lifecycle-mismatch is structural, not a binding-fix:
+
+1. **Bootstrap stage ordering at HEAD `6415ce2`.** `harness-runtime/src/harness_runtime/bootstrap/__init__.py:101-110` `_STAGE_MODULES` declares the 9-stage canonical order: PREAMBLE / IS / AS / CP_CLIENTS / CP_ROUTING (stage 3b) / OD / LOOP_INIT / CXA_WIRING (stage 6) / INGRESS_ACCEPT. Stage 3b precedes stage 6 by **3 intervening stages** (OD, LOOP_INIT, CXA_WIRING itself). The ordering is canonical per `Spec_Harness_Runtime_v1.md` v1.1 §1 9-value BootstrapStage enum.
+2. **`materialize_engine_selector` signature.** `harness-runtime/src/harness_runtime/lifecycle/engine_selector.py:122` declares `def materialize_engine_selector(config: RuntimeConfig) -> RuntimeEngineSelector`. The function takes ONLY `config`. The caller at `harness-runtime/src/harness_runtime/bootstrap/stage_3b_cp_routing.py:45` reads `ctx.engine_selector = materialize_engine_selector(config)` — the caller has `ctx` in scope, but the callee does not. Threading any ctx-attribute to the loop body at `:143-155` requires widening the signature.
+3. **`cp_is_wiring` binding lifecycle.** `harness-runtime/src/harness_runtime/lifecycle/cp_is_wiring.py:369` declares `materialize_cp_is_wiring_stage` which builds the `RuntimeCpIsWiring` instance. The factory is invoked at stage 6 per the v2.36 Phase 1 plumbing landing at HarnessContext field `cp_is_wiring: object | None = None` defaulted at construction. At stage 3b, the field IS the default `None`.
+
+The v2.34/v2.35/v2.36/v2.37 plan row 2 assumed `ctx.cp_is_wiring` reachable at `materialize_engine_selector` scope; empirical bootstrap ordering contradicts the assumption. AC #9's "actor sourced from `ctx.ledger_writer.actor`" mechanism similarly fails at engine_selector scope absent `ctx`.
+
+### §11.3 X-AL-3 silent design extension analysis
+
+Three architectural branches surface at this gap; all three would be X-AL-3 silent design extension at runtime axis under spec silence:
+
+- **(a) Bootstrap reorder.** Move stage 6 CXA_WIRING before stage 3b CP_ROUTING. Requires substrate audit: stage 6 currently consumes routing manifest (built at stage 3b row 1 — circular dependency surfaces). Runtime spec §1 9-value BootstrapStage enum is canonical authority; reordering is a runtime-spec amendment.
+- **(b) Inline adapter at stage 3b.** Bypass `cp_is_wiring` entirely; call CP composer free function `emit_workload_class_selection_state_ledger_entry` directly with an inline async adapter wrapping `ctx.ledger_writer.append`. Requires widening `materialize_engine_selector` signature to accept `ledger_writer: LedgerWriter` + `actor: ActorIdentity` (or `ctx: _MutableHarnessContext`). CP spec §16.5.8 binds runtime wiring to "ledger_writer Callable" but is silent on whether `cp_is_wiring` is the MANDATORY consumer surface.
+- **(c) Carrier-extension at U-RT-110.** Extend `RuntimeCpIsWiring` to optionally accept `bootstrap_emission_buffer` collecting pre-stage-6 emissions for replay at stage 6 binding-time. Requires spec extension (the buffer is a NEW primitive) AND runtime-side coordination across the stage 3b → stage 6 transition.
+
+All three meta-pattern with v2.35 AC #4 + v2.36 AC #1 + v2.37 AC #11 STRIKE rationales: plan-authoring claimed wiring against substrate that exists at the codebase but NOT at the firing site's spec-anchored execution moment.
+
+### §11.4 Readings + ratification
+
+**Reading (A) — sequel STRIKE AC #2 + amend to v2.38 + file at fork doc §11 NEW.** Same shape as v2.35 + v2.36 + v2.37 STRIKE precedents. Routes the bootstrap-emission-substrate question to runtime-axis / CP-axis design-phase. Bundled at PR #61 as additional commit on the v2.36 Phase 1 plumbing branch.
+
+**Reading (B) — synthesize at runtime axis** (one of (a) bootstrap reorder, (b) inline-adapter, (c) carrier-extension). REJECTED — X-AL-3 silent design extension; all three options require spec amendment that has not landed.
+
+**Operator ratification 2026-05-29 via AskUserQuestion: Reading (A).**
+
+### §11.5 Out-of-axis owed (NEW at v2.38)
+
+- **Runtime spec v1.7 → v1.N amendment AND/OR CP spec v1.26 → v1.27 amendment** authorizing the bootstrap-time emission substrate for U-CP-75 workload-class-selection at engine_selector scope. Options at upstream arc:
+  - (a) BootstrapStage enum reorder placing CXA_WIRING before CP_ROUTING (runtime spec §1 amendment). Requires resolving the routing-manifest circular dependency.
+  - (b) `materialize_engine_selector` signature widening + inline adapter (runtime spec §14.x amendment + CP spec §16.5.8 clarification permitting non-`cp_is_wiring` binding).
+  - (c) NEW `RuntimeCpIsWiring.bootstrap_emission_buffer` primitive with stage-6 flush (CP spec §16.5 extension + runtime spec extension).
+- Operator-discretion at upstream arc.
+
+### §11.6 Sub-species `plan-revision-against-not-yet-built-substrate` — cardinality 3 → 4 at workflow doc §7.4.7.2
+
+§10.6 catalogued cardinality 2 → 3 at v2.37 sequel. v2.38 IS the **FOURTH instance** of the same sub-species at the same atomic-unit (U-RT-111) in a single calendar day (2026-05-29). Workflow-doc revision candidate strengthens decisively — empirical cardinality 4 across 4 sibling arcs in 1 calendar day is very strong empirical signal warranting formal inclusion at workflow doc §7.4.7.2 next revision pass.
+
+**Distinct closure-event-class at v2.38 from v2.35/v2.36/v2.37 instances:** v2.35 + v2.36 instances were "missing carrier-field at downstream type" + "missing field-set on caller-side model" (downstream-substrate-absence shape); v2.37 instance was "primitive-scope mismatch between firing site and spec-anchored canonical use" (semantic-scope-conflation shape); v2.38 instance is "**binding-substrate not yet constructed at firing site execution-time per bootstrap stage ordering**" (substrate-lifecycle-mismatch shape — distinct from prior 3 because the substrate DOES exist at this codebase, just not at this firing site's execution moment). Same meta-pattern (plan claims wiring against not-spec-anchored substrate); distinct surface (bootstrap-stage-ordering mismatch vs missing-field vs primitive-scope).
+
+### §11.7 Audit-trail notes (NEW at §11)
+
+- **41st application of `[[advisor-before-substantive-work-for-cross-axis-blockers]]`.** Advisor was consulted pre-substantive-work at v2.38 arc upon orienting the bootstrap stage ordering; advisor flagged the 3b/6 ordering as the tightest constraint pre-substantive ("at AC #2 firing site, `ctx.cp_is_wiring` is None — the binding chain isn't built yet"). Advisor recommended grep `_STAGES` tuple to verify; if 3b → 6, STRIKE-via-AskUserQuestion. Empirical verification at `_STAGE_MODULES` confirmed; operator AskUserQuestion ratified Reading (A) STRIKE.
+- Pre-substantive empirical orientation as the load-bearing discipline (41st instance). The check caught the gap BEFORE any runtime production code was written; ZERO X-AL-3 silent extension occurred. FOURTH consecutive arc at this same atomic-unit where the discipline preserved scope integrity.
+- v2.38 IS the fourth sequel-strike. v2.35 STRUCK 4 ACs (#4/#5/#6/#8); v2.36 STRUCK 1 more (#1); v2.37 STRUCK 1 more (#11); v2.38 STRIKES 1 more (#2). Cumulative ACs STRUCK at U-RT-111: **7 of 12** (v2.34 original count). RETAINED at v2.38: ACs #3, #7, #9 (effective scope narrowed), #10 (reframed 1-site), #12 — **5 of 12**.
+- Same-calendar-day FOURTH sequel arc: v2.35 published 2026-05-29 (commit `f7d6442`, merged at `a35c716`); v2.36 authored 2026-05-29 (commit `9cca6d6`); v2.37 authored 2026-05-29 (commit `6415ce2`); v2.38 authored 2026-05-29 (this commit). All four within operator's single calendar day. **FOURTH consecutive same-day sequel-rescope arc at U-RT-111 — ratifies `[[plan-revision-against-not-yet-built-substrate]]` sub-species cardinality 4** at very strong empirical confidence.
+- **H_T-RT-35 RETIRE-READY now gated on 5 upstream arcs:** (1) engine-layer impl + (2) HITL disambiguator + (3) override disambiguator + (4) sibling-ledger firing-site + (5) **NEW: bootstrap-emission-substrate (runtime spec §1 BootstrapStage reorder OR `materialize_engine_selector` signature widening OR `RuntimeCpIsWiring.bootstrap_emission_buffer` primitive)**. The retirement gate complexity has quadrupled across the 4 sequel-rescope arcs; the v2.34 single-PR full-wire transit framing was structurally over-claimed at every step.
