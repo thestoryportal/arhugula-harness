@@ -555,3 +555,129 @@ def _derive_resume_outcome(result: ResumeResult) -> str:
 from harness_cp.hitl_placement import HITLResult as _HITLResult  # noqa: E402
 
 ResumeContext.model_rebuild(_types_namespace={"HITLResult": _HITLResult})
+
+
+# --- U-CP-76 §16.5 greenfield composer — CP→IS state-ledger emission -------
+#
+# `emit_pause_resume_state_ledger_entry` is the §16.5 row U-CP-30 greenfield
+# composer producing the IS-anchored state-ledger entry per CP spec v1.26
+# §16.5.3 + §16.5.4 + §16.5.5 + §16.5.7 at workflow-layer protocol-class method
+# invocations. ZERO CP audit-ledger entry is emitted per §16.5.9 invariant 5
+# (greenfield composer). Orthogonal to U-CP-78/U-CP-79 engine-layer free-function
+# emissions per CP spec v1.11 §26 NEW NOTE 2-layer coexistence — the two layers
+# share `cp.*` action_id namespace but discriminate via distinct action_id
+# identifiers (`cp.pause-resume-protocol` here vs `cp.pause-captured` /
+# `cp.resume-attempted` at U-CP-78/U-CP-79).
+
+from collections.abc import Awaitable, Mapping  # noqa: E402
+from datetime import UTC, datetime  # noqa: E402
+
+from harness_is.state_ledger_entry_schema import (  # noqa: E402
+    Actor,
+    ActorClass,
+    Identifier,
+)
+from harness_is.state_ledger_write import EntryPayload, WriteResult  # noqa: E402
+
+from harness_cp.state_ledger_canonicalization import (  # noqa: E402
+    _canonicalize_outcome_bytes,
+)
+
+
+class PauseResumeProtocolEventKind(StrEnum):
+    """Workflow-layer `PauseResumeProtocol` class-method transition discriminator.
+
+    Discriminates `cp.pause-resume-protocol` state-ledger entries by which
+    `PauseResumeProtocol` class method fired. Distinct from the engine-layer
+    free-function surface (`capture_pause_snapshot` / `attempt_resume` at module
+    top) which emits under `cp.pause-captured` / `cp.resume-attempted` per
+    U-CP-78/U-CP-79; the two layers coexist per CP spec v1.11 §26 NEW NOTE.
+    """
+
+    PAUSE_CAPTURED = "pause-captured"
+    """Fired post-`PauseResumeProtocol.capture_pause_snapshot(...)` return."""
+
+    RESUME_ATTEMPTED = "resume-attempted"
+    """Fired post-`PauseResumeProtocol.attempt_resume(...)` return (success or fail)."""
+
+
+_PAUSE_RESUME_ACTION_ID = "cp.pause-resume-protocol"
+"""CP spec v1.26 §16.5.3 row U-CP-30 canonical action_id."""
+
+_RECORD_SEPARATOR = b"\x1e"
+"""ASCII 0x1E (record-separator) byte — CP spec v1.26 §16.5.4 canonical-form
+rule shared across §16.5 composers."""
+
+
+def _pause_resume_idempotency_key(
+    workflow_id: str,
+    step_id: str,
+    protocol_event_kind: PauseResumeProtocolEventKind,
+    event_sequence_id: int,
+    outcome_hash_hex: str,
+) -> str:
+    """Compose the U-CP-30 idempotency-key per CP spec v1.26 §16.5.4 row 3.
+
+    Bytes are the 0x1E-separated 5-tuple `(workflow_id, step_id,
+    protocol_event_kind, event_sequence_id, sha256(outcome_canonical_bytes)
+    .hex())`; SHA-256-hashed; hex-64 encoded. v1.25 disambiguator segments
+    preserved verbatim per Q-β.i-1(a); the outcome-hash suffix carries the
+    Q5(a) "hash-over-outcome-bytes" semantic at the dedup-key discriminator.
+    """
+    segments = [
+        workflow_id.encode("utf-8"),
+        step_id.encode("utf-8"),
+        protocol_event_kind.value.encode("utf-8"),
+        str(event_sequence_id).encode("utf-8"),
+        outcome_hash_hex.encode("utf-8"),
+    ]
+    return hashlib.sha256(_RECORD_SEPARATOR.join(segments)).hexdigest()
+
+
+async def emit_pause_resume_state_ledger_entry(
+    *,
+    workflow_id: str,
+    step_id: str,
+    protocol_event_kind: PauseResumeProtocolEventKind,
+    event_sequence_id: int,
+    protocol_state_snapshot: Mapping[str, Any],
+    actor: ActorIdentity,
+    ledger_writer: Callable[[EntryPayload], Awaitable[WriteResult]],
+) -> WriteResult:
+    """Compose + emit the §16.5 IS-anchored state-ledger entry for U-CP-30.
+
+    Per CP spec v1.26 §16.5.3: produces `EntryPayload` per IS HEAD 4-field shape
+    `(action_id, idempotency_key, actor, timestamp)`. `response_hash` and
+    `prior_event_hash` are IS-internal — composer does NOT control them
+    (C-IS-06 §6.2 + C-IS-13 §13.5). The outcome-bytes semantic at §16.5.5 row
+    U-CP-30 (protocol-state-transition outcome canonical JSON bytes — the
+    protocol state snapshot after the class-level event) is carried at the
+    `idempotency_key` discriminator per §16.5.4 + Q-β.i-1(a).
+
+    Fires at workflow-layer protocol-class method invocations per §16.5.7;
+    `protocol_event_kind` discriminates the transition. ZERO `CPAuditLedgerEntry`
+    is constructed per §16.5.9 invariant 5. Orthogonal to engine-layer free-
+    function emissions at U-CP-78/U-CP-79 per CP spec v1.11 §26 NEW NOTE 2-layer
+    coexistence (distinct action_id namespaces; this composer emits
+    `cp.pause-resume-protocol`; engine-layer emits `cp.pause-captured` /
+    `cp.resume-attempted`).
+
+    Composer awaits `ledger_writer(payload)` return per §16.5.9 invariant 4;
+    does NOT condition on `WriteResult` variant.
+    """
+    outcome_canonical_bytes = _canonicalize_outcome_bytes(protocol_state_snapshot)
+    outcome_hash_hex = hashlib.sha256(outcome_canonical_bytes).hexdigest()
+    idempotency_key = _pause_resume_idempotency_key(
+        workflow_id,
+        step_id,
+        protocol_event_kind,
+        event_sequence_id,
+        outcome_hash_hex,
+    )
+    payload = EntryPayload(
+        action_id=Identifier(_PAUSE_RESUME_ACTION_ID),
+        idempotency_key=Identifier(idempotency_key),
+        actor=Actor(actor_class=ActorClass.AGENT, actor_id=str(actor)),
+        timestamp=datetime.now(UTC),
+    )
+    return await ledger_writer(payload)
