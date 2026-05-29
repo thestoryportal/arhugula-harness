@@ -2,7 +2,7 @@
 
 **Filed:** 2026-05-29 (Phase 7 sub-phase 7b — U-CP-74 pre-substantive halt)
 **Parent fork:** `class_1_tension_u_rt_35_cp_is_wiring_gaps.md` (Phase 6 design arc landing 2026-05-28 — this is a nested fork surfaced at first 7b consumption attempt against the landed design substrate)
-**Status:** HALT-EXECUTION — operator decision pending
+**Status:** APPLIED-IN-FULL 2026-05-29 (β.i + Q-β.i-1(a) + Q-β.i-3(b) — CP spec v1.26 commit `ec4a2f7` + CP plan v2.29 commit `4cc730b`; see closure-back-reference at file foot)
 **Halt point:** U-CP-74 (foundational unit of cluster {U-CP-74..79}); cluster traversal halted; ZERO production code written; ZERO test authored; worktree `worktree-u-cp-74-state-ledger-canonicalization` at clean tree on commit `e6c2f2c`.
 
 ---
@@ -161,3 +161,21 @@ Resolution sequence:
 ---
 
 *This is a Class 1 halt-execution fork. Phase 7 sub-phase 7b cluster traversal HALTED at U-CP-74 pending operator ratification of resolution shape + design-phase artifact re-issue per `phase-7-back-flow-routing` SKILL.md §4.5.*
+
+---
+
+## β.i resolution applied (2026-05-29)
+
+Closure-back-reference per workspace fork-doc convention. The β.i resolution + Q-β.i-1(a) + Q-β.i-3(b) operator-ratified at AskUserQuestion 2026-05-29 absorbed across 2 design-substrate artifacts within a single in-CLI design arc on branch `worktree-u-cp-74-state-ledger-canonicalization`:
+
+| Layer | Artifact | Commit | Status |
+|---|---|---|---|
+| CP spec v1.25 → v1.26 surgical amendment at §16.5.3 + §16.5.4 + §16.5.5 chapeau + §16.5.8 + §16.5.9 invariant 2 + change-note | `design-substrate/Spec_Control_Plane_v1_26.md` | `ec4a2f7` | **FILED** 2026-05-29 |
+| CP plan v2.28 → v2.29 surgical cascade at §2 U-CP-74..79 AC #2 + AC #3/#4 + Implements citation + Tests-list | `design-substrate/Implementation_Plan_Control_Plane_v2_29.md` | `4cc730b` | **FILED** 2026-05-29 |
+| Workspace `CLAUDE.md` row 79 (CP spec) + row 90 (CP plan) bumps | `CLAUDE.md` | `ec4a2f7` + `4cc730b` | **FILED** 2026-05-29 |
+| CXA v2.16 | (UNCHANGED — no cross-axis cascade per β.i ZERO-IS-axis-cascade structural argument) | n/a | n/a |
+| IS spec / IS plan / OD spec / OD plan / AS spec / AS plan / runtime spec / runtime plan | (UNCHANGED — no cross-axis cascade) | n/a | n/a |
+
+**Status: APPLIED-IN-FULL.** Halt-execution discharged. Cluster {U-CP-74..79} unblocks at re-issued substrate per `phase-7-back-flow-routing` SKILL.md §4.7 resume condition: re-issued artifacts preserve halted progress (unit atomization unchanged; signatures preserve outer surface; AC #2 + AC #3/#4 cascade absorbed at composer-internal logic; helper acceptance at U-CP-74 AC #8 unchanged).
+
+Cluster resumption owed at this worktree against `Spec_Control_Plane_v1_26.md` + `Implementation_Plan_Control_Plane_v2_29.md` substrate.

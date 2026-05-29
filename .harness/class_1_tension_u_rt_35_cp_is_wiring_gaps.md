@@ -210,3 +210,18 @@ Distinct from Gap C drift the spec already acknowledges at §16.5.8 (which is sy
 **Impl-time-grounding-pass pattern sharpened.** PR #37 grounding caught module/symbol existence (2 reclassifications + 3 function-name mismatches) but did NOT verify type-definition field-sets of consumed types. `[[impl-time-grounding-pass-pre-merge-revision]]` candidate pattern sharpened: grounding MUST verify type field-sets when design substrate enumerates per-field semantics for an externally-defined type.
 
 Phase 7 sub-phase 7b cluster {U-CP-74..79} HALTED pending nested-fork resolution. CP spec v1.25 → v1.26 + plan v2.28 → v2.29 cascade owed.
+
+---
+
+## Nested fork β.i resolution applied (2026-05-29)
+
+Closure-back-reference to nested fork `class_1_tension_u_cp_74_entrypayload_field_set_drift.md` filed 2026-05-29 at first 7b consumption attempt against PR #37 design substrate. Operator-ratified β.i resolution + Q-β.i-1(a) + Q-β.i-3(b) absorbed across 2 design-substrate artifacts within a single in-CLI design arc on branch `worktree-u-cp-74-state-ledger-canonicalization` (PR #38):
+
+- **CP spec v1.25 → v1.26** at `design-substrate/Spec_Control_Plane_v1_26.md` (commit `ec4a2f7`) — surgical amendment at §16.5.3 (EntryPayload field set rewritten to IS HEAD's actual 4 fields `(action_id, idempotency_key, actor, timestamp)`) + §16.5.4 (idempotency-key formulas appended with `|| sha256(outcome_canonical_bytes).hex()` suffix per Q-β.i-1(a)) + §16.5.5 chapeau (reframed as outcome-bytes scheme consumed by idempotency_key per Q-β.i-3(b); per-composer outcome-bytes recipe table preserved verbatim) + §16.5.8 Q4 attribution + §16.5.9 invariant 2.
+- **CP plan v2.28 → v2.29** at `design-substrate/Implementation_Plan_Control_Plane_v2_29.md` (commit `4cc730b`) — surgical cascade at U-CP-74..79 AC #2 (idempotency_key formula adds outcome-hash suffix) + AC #3/#4 (response_hash reframe — IS-internal not composer-controlled) + Implements citation refresh to spec v1.26 + Tests-list rename at response_hash test entries.
+
+**ZERO IS-axis cascade.** β.i is the structural mirror of (S) sibling-variant from the parent within-Path-A Gap B resolution at architect recommendation: hold the downstream-axis HEAD verbatim, adapt the producer-side composer surface. The (S) precedent's ZERO CP-audit-axis cascade and β.i's ZERO IS-axis cascade share the same architectural commitment.
+
+**`[[impl-time-grounding-pass-pre-merge-revision]]` workspace pattern SHARPENED** at nested fork filing: PR #37's impl-time grounding pass caught module/symbol existence (2 architectural reclassifications + 3 naming mismatches) but did NOT verify type-definition field-sets of externally-consumed types. Pattern update: when design substrate enumerates per-field semantics for an externally-defined type, the grounding MUST verify the type's actual field set against the substrate's claimed field set. This is a strict superset of the v1.25 grounding shape.
+
+Parent fork H_T-RT-35 PARTIAL → RETIRE-READY transit gating per §"Pending post-Phase-6-design-arc closure" section UNCHANGED at nested fork closure: 6 CP-materializable §12.3 edges PENDING per-CP-unit Phase 7 7b consumption arcs at U-CP-74..79; nested fork closure unblocks the 7b consumption (cluster resumption owed at this worktree against v1.26 + v2.29 substrate); 7b consumption landings progressively close the 6 PENDING edges per `Implementation_Plan_Control_Plane_v2_28.md` §0.8(d) + CXA v2.16 §0.4 forward-tracking discipline.
