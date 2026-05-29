@@ -163,4 +163,50 @@ If operator prefers immediate closure path: Reading B' with Q3=(i) narrow `ledge
 
 ---
 
+## §8 Addendum — pre-apply grounding gap (2026-05-29, post-merge)
+
+47th application of `[[advisor-before-substantive-work-for-cross-axis-blockers]]` at attempted Reading B' apply caught a load-bearing scope gap not surfaced at filing time. Recording here before fresh-session re-open per `[[plan-revision-against-not-yet-built-substrate]]` discipline.
+
+### Finding
+
+At `materialize_engine_selector(config)` (bootstrap stage 3b), the U-CP-75 composer signature requires:
+
+```python
+async def emit_workload_class_selection_state_ledger_entry(
+    *, workflow_id: str, step_id: str,
+    selection_result: WorkloadBindingSelectionResult,
+    actor: ActorIdentity,
+    ledger_writer: Callable[[EntryPayload], Awaitable[WriteResult]],
+) -> WriteResult:
+```
+
+At bootstrap stage 3b, NONE of `workflow_id`, `step_id`, or `actor` exist:
+- No workflow is running at bootstrap (pre-INGRESS_ACCEPT).
+- The N×M Cartesian product of (WorkloadClass × PersonaTier) bindings is precomputed at materialization — no per-step context.
+- `actor` is per-workflow / per-step semantic, not per-bootstrap-binding.
+
+The PR #68 fork doc Reading B' (narrow `ledger_writer` dep injection) closes the wiring gap but does NOT resolve the firing-site context-sourcing question.
+
+### Two possible reframes
+
+**(α) Per-step at runtime is the canonical firing site.** Then `materialize_engine_selector` is the WRONG firing site, and v2.38 STRIKE + this fork both encoded a mis-located gap. The actual firing site is wherever runtime queries `ctx.engine_selector.binding_for(...)` per-step at workflow execution time. Apply pass needs a different consumer site; PR #68 Readings need rescope.
+
+**(β) Bootstrap-per-binding is canonical.** Then `workflow_id` / `step_id` / `actor` need synthetic sentinels at bootstrap (e.g., `"__bootstrap__"` / `"__binding__"` / a system-actor). This is X-AL-3-adjacent — what semantic does a synthetic ID carry in the audit-ledger? Idempotency-key per §16.5.4 formula `(workflow_id, step_id, outcome_hash)` becomes `(__bootstrap__, __binding__, outcome_hash)` — collapsing to outcome-hash-only effectively. Needs explicit operator decision before apply.
+
+### Sub-species pattern this surfaces
+
+**`[[plan-revision-against-not-yet-built-substrate]]`** at workflow v1.13 §7.4.7.2 sub-species candidate cardinality — this is the 5th instance in 24 hours of "fork-filing surfaces a scope gap at pre-apply grounding" (v2.35/36/37/38/this). Distinct from `[[LANDED-substrate-pending-upstream-loop-substrate]]` (which is about ABSENT upstream loops) — this sub-species is about authoring substrate against a firing-site whose context isn't structurally available.
+
+### Routing target
+
+Fresh session re-opens with this orientation. NEW Q3': "firing-site sourcing — (α) relocate to runtime per-step query site / (β) synthetic sentinels at bootstrap / (γ) defer composer invocation to runtime per-step ALONGSIDE bootstrap binding precomputation".
+
+The PR #68 file-only filing posture (Q7=(ii)) was correct at filing time; the gap surfaced ONLY at pre-substantive apply-time grounding. Fork doc PRESERVED VERBATIM except for this addendum.
+
+### H_T-RT-35 transit impact
+
+H_T-RT-35 PARTIAL → RETIRE-READY transit remains gated on PR #68 ratification + apply. The addendum at §8 surfaces the architectural decision needed BEFORE ratification can land. Ratification scope SHIFTS from "Reading B' mechanical apply" to "Reading B' + firing-site sourcing Q-set" — fresh-session arc.
+
+---
+
 *End of fork doc.*

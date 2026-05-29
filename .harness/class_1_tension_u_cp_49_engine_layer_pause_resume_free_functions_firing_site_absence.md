@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | PROPOSING |
+| Status | ✅ RATIFIED-AS-READING-D (bounded-defer per X-AL-2; structurally-unfireable-at-MVP) — 2026-05-29 |
 | Filed | 2026-05-29 |
 | Filed by | Operator + Claude (post-PR-#68 close, design-phase posture) |
 | Class | 1 (architectural; LANDED-substrate-pending-upstream-loop-substrate; THIRD instance of this sub-species pattern in 24 hours after PR #67 HITL `rewrite_tool_call` + sibling-ledger `emit_sibling_ledger_entry`) |
@@ -198,6 +198,42 @@ Both ratifications are mechanical given empirical clarity. Once ratified, H_T-RT
 | Recommended Q1 | (D) bounded-defer |
 | Sub-species cardinality (this session) | 3 of 3 fits `LANDED-substrate-pending-upstream-loop-substrate` |
 | Sibling arc | PR #67 HITL + sibling-ledger bounded-defer (mirror precedent); PR #68 bootstrap-emission Reading B' (distinct sub-species — binding-chain ordering, not substrate absence) |
+
+---
+
+## §10 Ratification (2026-05-29)
+
+Operator ratified **Q1 = Reading D (bounded-defer)** per pre-substantive recommendation at §6 + empirical clarity of sub-species cardinality 3 at §3.5. Q2–Q7 N/A under Reading D (no spec change, no recovery-loop authoring, no firing-site, no cross-axis cascade).
+
+### Rationale
+
+The engine-layer recovery loop (crash-restart bootstrap path + timeout-restart path) does NOT exist at MVP. Authoring engine-layer free-function bodies (Reading A) against a not-yet-built upstream replays the v2.37 U-CP-34 / PR #62 v2.39 pattern. Reading B (build recovery loop) is ADR-class scope multi-arc work exceeding H_T-RT-35 RETIRE-READY closure scope. Reading C (spec reframe) is a workaround that risks shoehorning ADR-D1 v1.2 + ResumptionKind 5-class enum semantics.
+
+ZERO production callers verified at filing time + 3-instance sub-species cardinality this session = empirical clarity for Reading D as the canonical disposition.
+
+### Carry disposition
+
+- **Engine-layer free-functions** (`capture_pause_snapshot` + `attempt_resume` NotImplementedError stubs) PRESERVED VERBATIM at HEAD as future-applicable carriers per X-AL-2 bounded-residual carry-forward.
+- **Engine-layer `classify_resume`** (LANDED concrete impl, pure decision core) PRESERVED VERBATIM — usable now by any future caller without state-ledger composition.
+- **Workflow-layer C-CP-26 `PauseResumeProtocol` class** UNAFFECTED — production-active at `workflow_driver.py:562 + 789 + 932`.
+- **U-CP-50 `material_diff_detection.py`** UNAFFECTED — LANDED concrete impl available to workflow-layer.
+- **ResumptionKind enum** UNAFFECTED — CRASH_RECOVERY + TIMEOUT members carry without production callers as bounded-residual.
+- **Re-litigation trigger**: when the engine-layer recovery loop is authored (separate future arc per Phase_7_Meta_Architecture_v1.md §6 self-hosting milestone gradient), re-open this fork doc and select Reading A / B / C for that arc's context.
+
+### Sub-species cardinality catalogue candidate
+
+THIRD instance of `LANDED-substrate-pending-upstream-loop-substrate` in 24 hours (HITL + sibling-ledger at PR #67 + this engine-layer fork). Workflow v1.13 §7.4.7.2 sub-species addition candidate — cardinality 3-in-24-hours threshold MET per `[[u-rt-59-overlooked-sibling-pattern-deferred-pending-cardinality]]` precedent. Routing target: workflow doc revision at follow-on arc.
+
+### Cross-artifact effects
+
+- ZERO design-substrate edit (no spec / plan / ADR / ADD / PRD / CXA amendment).
+- ZERO production code change.
+- ZERO clearance marker (per CLAUDE.md §4.5 — bounded-defer dispositions without design-substrate edits do not require clearance markers).
+- ZERO MEMORY.md retirement-event filing (no retirement-tier transit at this arc).
+
+### H_T-RT-35 transit posture impact
+
+This ratification closes 1 of 2 remaining ratification arcs gating H_T-RT-35 PARTIAL → RETIRE-READY transit. PR #68 bootstrap-emission-substrate fork remains gated on fresh-session rescope (firing-site sourcing Q-set per PR #68 §8 addendum). RETIRE-READY transit awaits PR #68 ratification.
 
 ---
 
