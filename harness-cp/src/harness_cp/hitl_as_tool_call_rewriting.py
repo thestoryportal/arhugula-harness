@@ -22,14 +22,21 @@ ADR-D5 v1.3 §1.3.2.
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from harness_core import PersonaTier
+from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
+from harness_is.state_ledger_write import EntryPayload, WriteResult
 from pydantic import BaseModel, ConfigDict
 
+from harness_cp.cp_shared_types import ActorIdentity
 from harness_cp.handoff_context import ProposedAction
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass
+from harness_cp.state_ledger_canonicalization import _canonicalize_outcome_bytes
 from harness_cp.validator_fail_transient_staircase import (
     CrossTrustBoundaryState,
     compute_restricted_palette,
@@ -194,3 +201,91 @@ def rewrite_tool_call_to_hitl(
         variant=select_variant(cell_synchrony_class),
         response_palette=palette,
     )
+
+
+# --- U-CP-77 §16.5 greenfield composer — CP→IS state-ledger emission -------
+#
+# `emit_hitl_tool_call_rewriting_state_ledger_entry` is the §16.5 row U-CP-37
+# greenfield composer producing the IS-anchored state-ledger entry per CP spec
+# v1.26 §16.5.3 + §16.5.4 + §16.5.5 + §16.5.7 at HITL tool-call rewriting
+# invocations. ZERO CP audit-ledger entry is emitted per §16.5.9 invariant 5
+# (greenfield composer). Sibling to U-CP-74/U-CP-75/U-CP-76 §16.5 composers;
+# reuses shared `_canonicalize_outcome_bytes` helper from U-CP-74.
+
+
+_HITL_TOOL_CALL_REWRITING_ACTION_ID = "cp.hitl-tool-call-rewriting"
+"""CP spec v1.26 §16.5.3 row U-CP-37 canonical action_id."""
+
+_RECORD_SEPARATOR = b"\x1e"
+"""ASCII 0x1E (record-separator) byte — CP spec v1.26 §16.5.4 canonical-form
+rule shared across §16.5 composers."""
+
+
+def _hitl_tool_call_rewriting_idempotency_key(
+    workflow_id: str,
+    step_id: str,
+    tool_call_id: str,
+    semantic_variant_binding_id: str,
+    outcome_hash_hex: str,
+) -> str:
+    """Compose the U-CP-37 idempotency-key per CP spec v1.26 §16.5.4 row 4.
+
+    Bytes are the 0x1E-separated 5-tuple `(workflow_id, step_id, tool_call_id,
+    semantic_variant_binding_id, sha256(outcome_canonical_bytes).hex())`;
+    SHA-256-hashed; hex-64 encoded. v1.25 disambiguator segments preserved
+    verbatim per Q-β.i-1(a); the outcome-hash suffix carries the Q5(a)
+    "hash-over-outcome-bytes" semantic at the dedup-key discriminator.
+    """
+    segments = [
+        workflow_id.encode("utf-8"),
+        step_id.encode("utf-8"),
+        tool_call_id.encode("utf-8"),
+        semantic_variant_binding_id.encode("utf-8"),
+        outcome_hash_hex.encode("utf-8"),
+    ]
+    return hashlib.sha256(_RECORD_SEPARATOR.join(segments)).hexdigest()
+
+
+async def emit_hitl_tool_call_rewriting_state_ledger_entry(
+    *,
+    workflow_id: str,
+    step_id: str,
+    tool_call_id: str,
+    semantic_variant_binding_id: str,
+    rewritten_tool_call: RewrittenToolCall,
+    actor: ActorIdentity,
+    ledger_writer: Callable[[EntryPayload], Awaitable[WriteResult]],
+) -> WriteResult:
+    """Compose + emit the §16.5 IS-anchored state-ledger entry for U-CP-37.
+
+    Per CP spec v1.26 §16.5.3: produces `EntryPayload` per IS HEAD 4-field shape
+    `(action_id, idempotency_key, actor, timestamp)`. `response_hash` and
+    `prior_event_hash` are IS-internal — composer does NOT control them
+    (C-IS-06 §6.2 + C-IS-13 §13.5). The outcome-bytes semantic at §16.5.5 row
+    U-CP-37 (`RewrittenToolCall` canonical JSON bytes) is carried at the
+    `idempotency_key` discriminator per §16.5.4 + Q-β.i-1(a).
+
+    Fires AFTER `rewrite_tool_call_to_hitl(...)` at line 149 produces the
+    `RewrittenToolCall` and BEFORE the rewritten call returns to the caller
+    per §16.5.7. ZERO `CPAuditLedgerEntry` is constructed per §16.5.9
+    invariant 5 (greenfield composer at this CP source).
+
+    Composer awaits `ledger_writer(payload)` return per §16.5.9 invariant 4;
+    does NOT condition on `WriteResult` variant.
+    """
+    outcome_canonical_bytes = _canonicalize_outcome_bytes(rewritten_tool_call)
+    outcome_hash_hex = hashlib.sha256(outcome_canonical_bytes).hexdigest()
+    idempotency_key = _hitl_tool_call_rewriting_idempotency_key(
+        workflow_id,
+        step_id,
+        tool_call_id,
+        semantic_variant_binding_id,
+        outcome_hash_hex,
+    )
+    payload = EntryPayload(
+        action_id=Identifier(_HITL_TOOL_CALL_REWRITING_ACTION_ID),
+        idempotency_key=Identifier(idempotency_key),
+        actor=Actor(actor_class=ActorClass.AGENT, actor_id=str(actor)),
+        timestamp=datetime.now(UTC),
+    )
+    return await ledger_writer(payload)
