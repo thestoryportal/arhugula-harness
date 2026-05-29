@@ -1,6 +1,6 @@
 # Class 1 Fork — OD-3 + OD-4 RETIRE-READY persona_tier plumbing gap
 
-**Status:** PROPOSING — awaiting operator ratification.
+**Status:** ✅ APPLIED-AS-READING-(α) (operator AskUserQuestion 2026-05-28 ratified Q1=A + Q2=A + Q3=a + Q4=i + Q5=α; single bundled binding-lift arc). Runtime spec v1.36 → v1.37 + OD spec v1.25 → v1.26 + OD plan v2.24 → v2.25 + production binding at `harness-runtime/types.py` + `harness-runtime/lifecycle/tracer_provider.py` + `harness-runtime/lifecycle/span_processor.py` + `harness-od/redaction_span_processor.py` + 16 NEW tests at `tests/test_persona_tier_plumbing.py` + workspace `CLAUDE.md` §2.3 + §2.4 row bumps + this Status update co-published 2026-05-28. H_T-OD-3 + H_T-OD-4 PARTIAL → RETIRE-READY substrate-criterion-B MET at apply arc; full RETIRED gates on operator deployment-time-opt-in exercise per X-AL-2. 3367/3367 tests pass + 10 skipped.
 **Filed:** 2026-05-28 at OD-3 + OD-4 PARTIAL → RETIRE-READY arc open (post batch-34 + batch-35 substrate retirements).
 **Filing site:** `.harness/class_1_fork_od_3_od_4_retire_ready_persona_tier_plumbing.md`.
 **Halt point:** OD-3 §10.3 base_rate envelope + OD-4 §13.1 per-persona override toggle. No impl started.

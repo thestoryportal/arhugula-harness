@@ -1076,6 +1076,33 @@ class RuntimeConfig(BaseModel):
     tenant_id: str | None = None
     """Multi-tenant separation key per OD audit-ledger. `None` = single-tenant."""
 
+    persona_tier: PersonaTier = PersonaTier.SOLO_DEVELOPER
+    """Per-deployment persona classification per OD spec §C-OD-10 §10.3 + §C-OD-13 §13.1.
+
+    Drives (a) `HarnessCompositeSampler` base_rate at
+    `materialize_tracer_provider_stage` per §10.3 8-row table at
+    `harness_od.base_rate_envelope.BASE_RATE_DEFAULTS`; (b)
+    `RedactionSpanProcessor` per-persona override toggle at
+    `materialize_span_processor_stage` per §13.1 toggleability gradient at
+    `harness_od.redaction_gradient.PER_PERSONA_TIER_REDACTION`.
+
+    Default `SOLO_DEVELOPER` preserves backward-compat at all existing test
+    fixtures + the MVP `base_rate=1.0` defense-in-depth pre-arc behavior.
+    Operators MUST opt-in to TEAM_BINDING / MULTI_TENANT_COMPLIANCE explicitly
+    via env (`HARNESS_PERSONA_TIER`) / harness.toml (`persona_tier`) / CLI
+    flag per U-RT-103 3-source resolution.
+
+    Added per `.harness/class_1_fork_od_3_od_4_retire_ready_persona_tier_plumbing.md`
+    operator-ratified 2026-05-28 (Q1=A + Q2=A + Q3=a + Q4=i + Q5=α; single
+    bundled binding-lift arc per `tenant_id` v1.22 precedent).
+
+    Distinct from CP-axis `StepEffectiveBinding.persona_tier` (CP spec v1.17
+    §6.5) which is per-step / per-workflow for gate-level / engine-class /
+    HITL-matrix purposes. The two surfaces co-exist by design: CP-axis
+    carries per-step persona_tier for per-workflow decisions; OD-axis reads
+    per-deployment persona_tier for sampling + redaction discipline. Per fork
+    doc §3 + OD spec v1.26 §13.1 canonical-reading amendment."""
+
     drain_timeout_seconds: float = 60.0
     """Bounded-wait timeout on workflow-execution drain (U-RT-44 AC #2 typed-
     timeout branch; C-RT-11 + C-RT-14 RT-FAIL-DRAIN-TIMEOUT).
