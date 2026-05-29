@@ -276,3 +276,11 @@ Alternative resolution paths the operator may also consider per parent fork's or
 - **Path α (recommended):** Author runtime plan v2.33 at design-phase workspace with NEW U-RT-XX wiring unit. Estimated ~1 short Phase-6 session at design-phase per implementation-planner skill.
 - **Path β:** Fork-doc the gap as a sibling Class 1 architectural-tension if the wiring shape surfaces further ambiguity at runtime composition time (not currently anticipated — spec authority is well-defined).
 - **Path γ:** Defer indefinitely with bounded-residual H_E-substitution carry if deployment scope does not require the wiring (assistant does NOT recommend — the wiring IS the deployment-readiness gate per the 2026-05-28 audit re-open of this fork).
+
+---
+
+## Path α AUTHORIZED (2026-05-29)
+
+Operator authorized Path α at this session post-PR #45 fork doc closure-event publication. Phase 6 runtime plan revision-pass opens at design-phase workspace for authoring runtime plan v2.32 → v2.33 NEW U-RT-XX wiring unit per §"Phase 6 back-flow ask" above. Phase 7 sub-phase execution at this workspace remains HALTED pending revised runtime plan re-load.
+
+**Next event in this workspace:** Operator pushes revised `Implementation_Plan_Harness_Runtime_v2_33.md` (or higher) to design-phase substrate. On re-load, verify byte-exact integrity + that the NEW wiring unit's signature is materializable against `harness-cp/src/harness_cp/{state_ledger_canonicalization,per_step_override_evaluator,workload_binding_engine_class_selection,pause_resume_protocol,hitl_as_tool_call_rewriting}.py` HEAD per `[[impl-time-grounding-pass-pre-merge-revision]]` sharpened workspace pattern.
