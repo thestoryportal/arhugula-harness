@@ -39,7 +39,7 @@ Earlier artifacts in the chain are canonical for later artifacts. Conflicts rout
 
 ## 2. Canonical artifact pointers
 
-All canonical artifacts reside at the **design-phase workspace** (separate Claude.ai project; not co-resident with this workspace). When this `CLAUDE.md` cites a canonical artifact, consult the design-phase workspace copy. Citation byte-exact discipline per `Project_Workflow_v1_8.md` §7.4.2.
+All canonical artifacts reside at the **design-phase context** (separate Claude Code CLI session; venue details pending operator definition — historical authoring through 2026-05-28 occurred at a separate Claude.ai project, but forward design-phase work moves to Claude Code CLI per operator decision 2026-05-29). When this `CLAUDE.md` cites a canonical artifact, consult the design-phase substrate copy. Citation byte-exact discipline per `Project_Workflow_v1_8.md` §7.4.2.
 
 ### 2.1 Governance + execution discipline
 
@@ -303,7 +303,7 @@ This workspace was bootstrapped at Phase 6.5 Session 6 (ε) per `Phase_6_5_Sessi
 | Artifact | `CLAUDE.md` (workspace root) |
 | Authored at | Phase 6.5 Session 6 (ε), 2026-05-15 |
 | Authoring authority | `Phase_6_5_Session_6_Kickoff.md` §2.1.1 |
-| Predecessor authoring | Design-phase workspace (separate Claude.ai project) |
+| Predecessor authoring | Design-phase context (historical: separate Claude.ai project through 2026-05-28; forward: Claude Code CLI per operator decision 2026-05-29) |
 | Successor consumption | Phase 7 Session 1 onward (this workspace) |
 | Revision policy | This file is canonical for this workspace; revisions route to design-phase back-flow (§4.3) prior to in-workspace edit |
 
