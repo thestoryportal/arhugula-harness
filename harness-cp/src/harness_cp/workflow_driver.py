@@ -832,6 +832,26 @@ def _execute_workflow_body(
             persona_tier=manifest_entry.persona_tier,
         )
 
+        # U-CP-74 §16.5 (S) sibling-variant CP→IS state-ledger emission.
+        # Per CP spec v1.27 §16.5.6 dual-emission discipline: emit only when
+        # the per-step override was applied (binding.override_applied=True);
+        # absent-override steps inherit manifest defaults and have no
+        # override-specific state-ledger entry to emit. Defensive
+        # operator-opt-in: when cp_is_wiring is None, silent-skip.
+        # post_override_step_config is the StepEffectiveBinding canonical
+        # JSON projection per spec §16.5.5 outcome-bytes semantic.
+        if binding.override_applied:
+            _cp_is_wiring = getattr(ctx, "cp_is_wiring", None)
+            if _cp_is_wiring is not None:
+                _run_protocol_method_sync(
+                    _cp_is_wiring.emit_override_state_ledger_entry(
+                        workflow_id=manifest_entry.workflow_id,
+                        step_id=str(step.step_id),
+                        post_override_step_config=binding.model_dump(mode="json"),
+                        actor=ctx.ledger_writer.actor,
+                    )
+                )
+
         # § 25.3.3.3 — Acquire lease (per §5.3 lease.mechanism substrate;
         # per-engine-class binding under-specified at CP spec v1.4 §B
         # carry-forward — resolved at implementation per c1-orchestration-
