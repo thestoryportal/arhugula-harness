@@ -470,10 +470,11 @@ Discriminator: a bundled-absorption arc carries documented back-flow (fork doc, 
 | Layer | What it catches | Where |
 |---|---|---|
 | **Self-discipline** | Most violations — auto-detect + operator declaration | This §11; CLAUDE.md loaded at every session start |
+| **Skill-side posture-check preamble** | Skill invocations under wrong posture | `.claude/skills/phase-7-*/SKILL.md` §0 posture precondition (all 4 Phase 7 skills carry the §0 check; halt + ask on design-phase mismatch) |
 | **CI guard** | File-presence violations at PR | `.github/workflows/x-al-3-guard.yml` (§4.4) |
-| **Clearance marker discipline** | Version-binding violations at consumption | `.harness/clearance/` (§4.5); skill-side enforcement future |
+| **Clearance marker discipline** | Version-binding violations at consumption | `.harness/clearance/` (§4.5) |
 
-The triad is intentionally redundant. Self-discipline catches most cases cheaply. CI catches misses before merge. Clearance markers protect Phase 7 consumers from consuming a not-yet-cleared design surface.
+The triad-plus-skill-layer is intentionally redundant. Self-discipline catches most cases cheaply. Skill-side §0 catches at invocation. CI catches misses before merge. Clearance markers protect Phase 7 consumers from consuming a not-yet-cleared design surface.
 
 ### 11.6 What to do when posture is unclear
 

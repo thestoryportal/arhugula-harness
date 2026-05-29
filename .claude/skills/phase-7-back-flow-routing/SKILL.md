@@ -7,6 +7,21 @@ description: Detect and route Phase 7 execution-time forks to design-phase chann
 
 Phase 7 fork detection + design-phase channel routing discipline. Active across ALL sub-phases (7a–7d). The critical-failure-mode skill: silent absorption of design-phase defects is the worst possible failure mode at Phase 7 execution.
 
+## 0. Posture precondition
+
+**This skill activates from Phase 7 posture and routes TO design-phase.** Per workspace `CLAUDE.md` §11 (posture declaration — third axis of the X-AL-3 enforcement triad), this skill is the *bridge* between postures: it detects an architectural defect during Phase 7 impl, classifies the fork (Class 1 halt / Class 2 in-session / Class 3 informational), and routes the defect to the appropriate design-phase channel. The skill itself activates ONLY from Phase 7 posture — once routing completes, the design-phase work proceeds under design-phase posture in a separate session (or as an explicit bundled-absorption arc per `CLAUDE.md` §11.4).
+
+Before doing substantive work, verify the session posture:
+
+| Detected posture | Action |
+|---|---|
+| **Phase 7** (explicit declaration OR impl session encountering a Class 1 / Class 2 / Class 3 defect at execution-time) | Proceed. This is the canonical entry point. |
+| **Mode-agnostic** (workspace ops) | This skill is not the right tool. Defer to operator. |
+| **Design-phase** (explicit declaration; operator is already authoring the design-substrate amendment that resolves a fork) | **HALT.** Back-flow routing at design-phase posture is unnecessary — the routing has already happened (the session IS the design-phase response to a prior fork). Surface the conflict; suggest the operator either (a) re-declare posture as Phase 7 if there's a NEW execution-time fork to surface, OR (b) invoke `spec-writer` / `implementation-planner` / `systems-architect` / `harness-adversarial-reviewer` to author the design-substrate amendment that closes the existing fork. Do NOT proceed with back-flow routing in design-phase posture (it would re-route an already-routed fork). |
+| **Unclear** | Halt + ask per `CLAUDE.md` §11.6. |
+
+This skill's existence is itself a posture-bridge primitive — it converts a Phase 7 defect-detection event into a design-phase authoring assignment. The X-AL-3 rule (`CLAUDE.md` §4.4) is enforced HERE: silent absorption of a design-phase defect at Phase 7 = the worst possible failure mode. Halting on posture mismatch is part of the X-AL-3 enforcement triad (CI guard at §4.4 + clearance markers at §4.5 + posture declaration at §11 + this skill's halt discipline).
+
 ## 1. Activation surface
 
 ### 1.1 Active across ALL sub-phases
