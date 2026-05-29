@@ -183,3 +183,73 @@ Same structural shape as v2.35 §2 row #4 STRIKE (HITL `semantic_variant_binding
 - Pre-substantive empirical orientation as the load-bearing discipline (39th instance at this advisor-pattern application). The check caught the gap BEFORE any runtime production code was written; ZERO X-AL-3 silent extension occurred.
 - v2.36 IS the sequel-strike. v2.35 STRUCK 4 ACs (#4/#5/#6/#10); v2.36 STRIKES 1 more AC (#1) plus reframes #10 (now 3 sites instead of 3-or-4). Cumulative ACs STRUCK at the U-RT-111 unit body: 5 of 12 (v2.34 original count). RETAINED at v2.36: ACs #2, #3, #7, #9, #11, #12, #10 (reframed) — 7 of 12.
 - Same-calendar-day sequel arc: v2.35 published at 2026-05-29 (commit `f7d6442`, merged at `a35c716`); v2.36 authored 2026-05-29 (this commit). 19-hour window between v2.35 merge + v2.36 sequel; both within operator's single calendar day. SECOND consecutive same-day sequel-rescope arc at U-RT-111 ratifies the `[[plan-revision-against-not-yet-built-substrate]]` sub-species discipline empirically.
+
+---
+
+## §10 Second sequel finding — AC #11 sibling-ledger firing-site primitive-scope mismatch surfaced at v2.37 impl arc empirical orientation (2026-05-29 third same-calendar-day sequel)
+
+### §10.1 Trigger
+
+At v2.37 impl arc empirical orientation (PR #61 head `9cca6d6`, post-v2.36 Phase 1 plumbing landing), the AC #11 caller-site investigation surfaced a **third structural disambiguator gap** at U-RT-111 — distinct shape from v2.35 + v2.36 STRIKES:
+
+- v2.35 STRIKES (ACs #4/#5/#6): missing carrier-fields on downstream types (`RewrittenToolCall.semantic_variant_binding_id` + `PauseEvent.pause_event_id` + `resume_attempt_count`) + engine-layer NotImplementedError stubs.
+- v2.36 STRIKE (AC #1): missing field-set on caller-side `StepOverride` model + CP spec silence on `override_id`/`policy_id` derivation rule.
+- v2.37 STRIKE (AC #11): **primitive-scope mismatch** — `emit_sibling_ledger_entry` is canonically bound at CP spec §15.1 to per-sibling **tool-call** events inside child agent execution; plan v2.34/v2.35/v2.36 row 11 wires it at the parent sub-agent dispatch site, where the `tool` + `canonical_args` slots have no spec-anchored value.
+
+### §10.2 Findings — empirical convergence
+
+Three convergent evidence vectors confirm the primitive scope is per-sibling tool-call, NOT parent dispatch-site:
+
+1. **CP spec v1.2 §15.1 (preserved through v1.26).** Text reads "Per-sibling **tool calls** produce ledger entries keyed on the sibling's `thread_id`"; `response_hash = sha256(canonicalize(tool_output))` — no `tool_output` exists at parent dispatch moment (brief is INPUT, not output).
+2. **Test fixture (only canonical usage at HEAD `9cca6d6`).** `harness-runtime/tests/test_lifecycle_cp_is_wiring.py:106-123` `_sibling_kwargs(...)` defaults: `tool="Bash"`, `canonical_args='{"cmd":"echo hi"}'`, `sibling_agent_identity=ActorIdentity("agent-1")`. The fixture exercises §15.1 canonical use literally.
+3. **Zero non-test callers across all `harness-*/src/`.** Empirical grep at HEAD confirms the "LANDED-but-never-fired residual" framing presupposed dispatch-site as the firing point; the spec+fixture audit REVERSES this presupposition.
+
+At the parent dispatch site (`sub_agent_dispatch.py:716` post-step-8 success):
+- The "tool" being invoked IS the sub-agent dispatch operation; the action_id pattern at step 8b uses prefix `dispatch:` per spec §14.7.2 step 8b — but §15.1's `tool` field is a TOOL NAME (Bash, Read, etc.), not an operation pattern.
+- `canonical_args` would map to the brief contents — but the brief's hash (`brief_hash` at sub_agent_dispatch.py:453) is ALREADY consumed as the F2 `response_hash` at step 8b. Re-purposing it for §15.1's `canonical_args` would conflate two distinct hash-roles in the per-sibling shape.
+
+The v2.34 plan row 11 wrote "Source args at sub_agent_dispatch step 8 success-path site per spec v1.7 §14.7.2 step 8b state-ledger-entry-write semantics" — but spec §14.7.2 step 8b is about the **F2 dispatch-entry write contract** (action_id pattern `dispatch:<parent_action_id>:<child_index>`), NOT the per-sibling tool-call ledger entry contract at §15.1 (action_id pattern `ParentActionID || sibling_thread_id || step_index`). The row conflates two distinct ledger-write surfaces at adjacent spec sections.
+
+CP spec v1.26 §16.5 (NEW state-ledger composer contract at v1.25) does NOT include U-CP-34 — §16.5.7 enumerates rows U-CP-27 / U-CP-30 / U-CP-37 / U-CP-49 / U-CP-50 / U-CP-14 (6 composers, all greenfield post-v1.25). U-CP-34's `sibling_ledger_entry_composition` predates §16.5 and remains anchored at C-CP-15 §15.1 with the test-fixture-conformant canonical scope.
+
+### §10.3 X-AL-3 silent design extension analysis
+
+Synthesizing a parent-dispatch-site convention at runtime axis under spec-silence is X-AL-3 silent design extension per `Phase_7_Meta_Architecture_v1.md` §7.7 — structurally identical to v2.35's AC #4 + v2.36's AC #1 STRIKE rationales:
+
+- v2.35 AC #4: HITL `semantic_variant_binding_id` missing from `RewrittenToolCall` → "synthesize a UUID at runtime" rejected.
+- v2.36 AC #1: `StepOverride` missing `override_id`/`policy_id` → "synthesize `override_id = f"override:{workflow_id}:{step_id}"`" rejected.
+- v2.37 AC #11: `tool` + `canonical_args` not derivable from dispatch site → "synthesize `tool = 'sub_agent_dispatch'` + `canonical_args = brief_hash`" rejected.
+
+All three share the meta-pattern: plan-authoring claimed wiring against substrate that doesn't exist (v2.35/v2.36) OR substrate that exists but at a DIFFERENT spec-anchored scope (v2.37).
+
+### §10.4 Readings + ratification
+
+**Reading (A) — sequel STRIKE AC #11 + amend to v2.37 + file at fork doc §10 NEW.** Same shape as v2.35 + v2.36 STRIKE precedents. Routes the firing-site question to CP-axis design-phase. Bundled at PR #61 as additional commit on the v2.36 Phase 1 plumbing branch.
+
+**Reading (B) — synthesize convention at runtime** (e.g., `tool="sub_agent_dispatch"`, `canonical_args=brief_hash`). REJECTED — X-AL-3 silent design extension.
+
+**Reading (C) — reframe AC #11 firing site to child tool-call interception (per §15.1 actual scope).** Much larger arc: needs child-side hook plumbing in `child_workflow_runner` Protocol + per-tool-call interception in workflow_driver's STEP_TYPE dispatch. Crosses out of U-RT-111 scope. Probably requires its own fork doc + multi-unit decomposition arc. NOT this arc.
+
+**Operator ratification 2026-05-29 via AskUserQuestion: Reading (A).**
+
+### §10.5 Out-of-axis owed (NEW at v2.37)
+
+- **CP spec v1.26 → v1.27 canonical-reading amendment clarifying U-CP-34 `emit_sibling_ledger_entry` firing-site scope** (per-sibling tool-call inside child execution vs. parent dispatch-completion), OR **alternate-site spec amendment authoring a NEW primitive** for parent-dispatch-site emission with brief-derived disambiguators. Options at upstream arc:
+  - (a) Canonical-reading amendment confirming §15.1 scope + plan-side reframe of AC #11 to fire INSIDE child execution at tool-invocation sites (per Reading C — much larger arc).
+  - (b) NEW spec primitive `emit_dispatch_ledger_entry` (or extending §16.5.7 to include U-CP-34 with a per-composer disambiguator note) for parent-dispatch-site emission with brief-derived disambiguators.
+  - (c) Operator decision that U-CP-34 emission is fan-out-arc-deferred and the dispatch-site emission is NOT required at v1.6 MVP single-sub-agent scope.
+- Operator-discretion at upstream arc.
+
+### §10.6 Sub-species `plan-revision-against-not-yet-built-substrate` — cardinality 2 → 3 at workflow doc §7.4.7.2
+
+§9.6 catalogued cardinality 1 → 2 at v2.36 sequel. v2.37 IS the **THIRD instance** of the same sub-species at the same atomic-unit (U-RT-111) in a single calendar day (2026-05-29). Workflow-doc revision candidate strengthens further — empirical cardinality 3 across 3 sibling arcs in 1 calendar day is strong empirical signal that the sub-species warrants formal inclusion at workflow doc §7.4.7.2 next revision pass.
+
+**Distinct closure-event-class at v2.37 from v2.35/v2.36 instances:** v2.35 + v2.36 instances were "missing carrier-field at downstream type" + "missing field-set on caller-side model" (downstream-substrate-absence shape); v2.37 instance is "**primitive-scope mismatch between firing site and spec-anchored canonical use**" (semantic-scope-conflation shape). Same meta-pattern (plan claims wiring against not-spec-anchored substrate); distinct surface (semantic-scope-conflation in plan-authoring vs missing-field-on-existing-type).
+
+### §10.7 Audit-trail notes (NEW at §10)
+
+- **40th application of `[[advisor-before-substantive-work-for-cross-axis-blockers]]`.** Advisor was consulted pre-substantive-work at v2.37 arc upon orienting the 7 kw-args for `emit_sibling_ledger_entry`; advisor flagged the `canonical_args` source-derivation as load-bearing pre-substantive ("brief_hash is convenient not principled — that's the response_hash for the F2 dispatch event, NOT what §15.1 means by canonical_args"). Advisor recommended single operator AskUserQuestion if zero non-test callers exist for the dispatch-site convention.
+- Pre-substantive empirical orientation as the load-bearing discipline (40th instance at this advisor-pattern application). The check caught the gap BEFORE any runtime production code was written; ZERO X-AL-3 silent extension occurred. THIRD consecutive arc at this same atomic-unit where the discipline preserved scope integrity.
+- v2.37 IS the third sequel-strike. v2.35 STRUCK 4 ACs (#4/#5/#6/#10); v2.36 STRUCK 1 more AC (#1) + reframed #10; v2.37 STRIKES 1 more AC (#11) + reframes #10 (now 2 sites instead of 3). Cumulative ACs STRUCK at the U-RT-111 unit body: **6 of 12** (v2.34 original count). RETAINED at v2.37: ACs #2, #3, #7, #9, #12, #10 (reframed) — **6 of 12**.
+- Same-calendar-day THIRD sequel arc: v2.35 published 2026-05-29 (commit `f7d6442`, merged at `a35c716`); v2.36 authored 2026-05-29 (commit `9cca6d6`); v2.37 authored 2026-05-29 (this commit). All three within operator's single calendar day. **THIRD consecutive same-day sequel-rescope arc at U-RT-111 — ratifies `[[plan-revision-against-not-yet-built-substrate]]` sub-species cardinality 3** at strong empirical confidence.
+- **H_T-RT-35 RETIRE-READY now gated on 4 upstream arcs:** (1) engine-layer impl + (2) HITL disambiguator + (3) override disambiguator + (4) **NEW: sibling-ledger firing-site canonical-reading or alternate-site spec amendment**. The retirement gate complexity has tripled across the 3 sequel-rescope arcs; the v2.34 single-PR full-wire transit framing was structurally over-claimed.
