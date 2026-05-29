@@ -342,20 +342,48 @@ def test_duplicate_step_id_raises_step_id_collision_error(tmp_path: Path) -> Non
     assert "s1" in str(exc.value)
 
 
-# AC #12 — topology_pattern not admissible for workload_class → ManifestAdmissibilityError
-def test_topology_pattern_not_admissible_for_workload_raises_admissibility_error(
+# AC #12 (v1.38 Reading A) — topology_pattern admissibility DEFERRED to runtime.
+# Per `.harness/class_1_fork_topology_admissibility_check_load_time_vs_runtime_asymmetry.md`
+# operator-ratified Reading A (PR #80): the loader no longer enforces the
+# `is_topology_permitted_for_workload` predicate. Runtime authority is the
+# sub-agent-dispatch site (`sub_agent_dispatch.py:585`); single-step workflows
+# that never dispatch sub-agents pass through unchallenged — by design.
+# Pattern-consistent with v1.36 Reading β (engine_class admissibility loader →
+# U-RT-106). Test below asserts the previously-rejected combo now LOADS.
+def test_topology_pattern_admissibility_deferred_to_runtime_per_v1_38_reading_a(
     tmp_path: Path,
 ) -> None:
-    # RESEARCH only permits ORCHESTRATOR_WORKERS per the C-CP-11 §11.1 row.
-    # EVALUATOR_OPTIMIZER on RESEARCH is not in the permitted set.
+    # SOFTWARE_ENGINEERING's C-CP-11 §11.1 permitted set is
+    # {EVALUATOR_OPTIMIZER, ORCHESTRATOR_WORKERS}; SINGLE_THREADED_LINEAR is
+    # NOT in that set per the matrix design intent — BUT MVP-scope materializes
+    # only SINGLE_THREADED_LINEAR per probe finding #5. v1.38 Reading A defers
+    # the check to runtime so SE workflows at MVP scope can run.
+    body = _VALID_TOML_MINIMUM.replace(
+        'topology_pattern = "evaluator-optimizer"',
+        'topology_pattern = "single-threaded-linear"',
+    )
+    path = _write(tmp_path, "se-single-threaded.toml", body)
+    manifest = WorkflowManifestLoader.load(path)
+    assert manifest.workflow.workload_class.value == "software-engineering"
+    assert manifest.workflow.topology_pattern.value == "single-threaded-linear"
+
+
+def test_topology_pattern_admissibility_deferred_for_research_workload(
+    tmp_path: Path,
+) -> None:
+    # Sibling assertion: RESEARCH + SINGLE_THREADED_LINEAR was previously
+    # rejected at load (matrix permits only ORCHESTRATOR_WORKERS for RESEARCH).
+    # v1.38 Reading A: loader accepts; runtime is the authority.
     body = _VALID_TOML_MINIMUM.replace(
         'workload_class = "software-engineering"', 'workload_class = "research"'
+    ).replace(
+        'topology_pattern = "evaluator-optimizer"',
+        'topology_pattern = "single-threaded-linear"',
     )
-    path = _write(tmp_path, "bad-topo.toml", body)
-    with pytest.raises(ManifestAdmissibilityError) as exc:
-        WorkflowManifestLoader.load(path)
-    assert exc.value.FAIL_CLASS == "RT-FAIL-CLI-MANIFEST-ADMISSIBILITY"
-    assert "U-CP-22" in str(exc.value)
+    path = _write(tmp_path, "research-single-threaded.toml", body)
+    manifest = WorkflowManifestLoader.load(path)
+    assert manifest.workflow.workload_class.value == "research"
+    assert manifest.workflow.topology_pattern.value == "single-threaded-linear"
 
 
 # AC #13 — eager validation (all checks at .load() time)

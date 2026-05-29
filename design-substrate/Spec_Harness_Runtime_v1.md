@@ -1,4 +1,50 @@
-# Specification — Harness Runtime v1.37
+# Specification — Harness Runtime v1.38
+
+## Change-note (v1.37 → v1.38)
+
+**Status posture (PROPOSED 2026-05-29).** v1.38 is a Class 1 fork resolution Reading (A) apply pass per `.harness/class_1_fork_topology_admissibility_check_load_time_vs_runtime_asymmetry.md` operator-ratified 2026-05-29 (Q1=A defer-to-runtime + Q2=α pipeline-automation fixture + Q3=i sole-enforcement-at-#585 + Q4=c runtime-spec-amendment + Q5=β runtime-spec-cascade). Canonical-reading amendment + body-text amendment at §14.19.4 invariant 2 absorbing the topology_pattern admissibility deferral from load-time → runtime sub-agent-dispatch site. Pattern-consistent extension of v1.36 Reading (β) which deferred engine_class admissibility loader → U-RT-106. v1.37 + earlier lineage PRESERVED VERBATIM per delta-only-spec-file convention.
+
+**Source of fix.** Fork doc §1.5 Reading A + §3 Q-set. Use-the-product probe surfaced empirical inconsistency: `is_topology_permitted_for_workload(topology, workload)` enforced at loader (`workflow_manifest_loader.py:212`) but NOT at workflow_driver.execute_workflow OR `api.run` OR any bootstrap stage. Sole runtime enforcement at sub-agent-dispatch site `sub_agent_dispatch.py:585`. Single-step workflows that never dispatch sub-agents escape the runtime check entirely — verified empirically at `test_track_b_e2e.py::test_ac1_real_anthropic_single_step_succeeds` which uses `(SOFTWARE_ENGINEERING, SINGLE_THREADED_LINEAR)` (matrix-impermitted) successfully via Protocol-conformant bypass. Compounding gap: SOFTWARE_ENGINEERING's matrix-permitted topologies (`{EVALUATOR_OPTIMIZER, ORCHESTRATOR_WORKERS}`) are both unmaterialized at C-CP-25 v1.4 MVP scope — SE workload structurally unrunnable via YAML/TOML manifest path at MVP. Reading A defers admissibility to the runtime authority site; matrix design-intent preserved at C-CP-22 §11.1 (no CP spec amendment owed); runtime enforcement is sufficient because admissibility constrains fan-out shape, not single-step shape.
+
+**Amendments.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§14.19.2 row 7 `ManifestAdmissibilityError` trigger column** | CANONICAL-READING AMENDMENT: trigger reframed from v1.36 reading "`topology_pattern` not in U-CP-22 admissibility per `is_topology_permitted_for_workload(topology, workload)`" → "`(deployment_surface, engine_class)` not in U-CP-16 candidate mapping at U-RT-106 dispatch site". Topology_pattern admissibility relocates loader → runtime sub-agent-dispatch site (`sub_agent_dispatch.py:585`, `topology_dispatcher.is_topology_permitted`). Per Q1=A defer-to-runtime. Body text at §14.19.2 PRESERVED VERBATIM; canonical reading at v1.38 maps the row 7 trigger text. | Fork doc §1.5 (A) |
+| **§14.19.4 invariant 2 (eager validation)** | CANONICAL-READING AMENDMENT: "Eager validation at `.load()` = schema + enum + step-uniqueness. Both admissibility predicates (topology_pattern per C-CP-22 §11.1 AND engine_class per U-CP-16) deferred to runtime caller; topology admissibility at sub-agent-dispatch site (`sub_agent_dispatch.py:585`); engine_class admissibility at U-RT-106 one-shot dispatch site. Runtime caller is REQUIRED to perform admissibility before workflow execution where applicable." Body text at §14.19.4 invariant 2 PRESERVED VERBATIM (v1.36 carve-out shape extended at v1.38). | Fork doc §1.5 (A) |
+| **§14.19.4 invariants — AC #12 retirement** | The U-RT-104 AC #12 (load-time topology admissibility check) is RETIRED at v1.38. Production code at `workflow_manifest_loader.py:212` no longer invokes `_check_topology_admissibility`; the method is removed; the import of `is_topology_permitted_for_workload` is dropped. The loader becomes purely a schema-validation surface (per the v1.36 + v1.38 dual-deferral pattern). | Fork doc §3 Q1=A |
+
+**Adjacent harmonization sites.** §14.19.1 `load(path: Path) -> WorkflowManifest` signature PRESERVED VERBATIM. §14.19.3 field-by-field projection contract PRESERVED VERBATIM. §14.19.4 invariants 1, 3–9 PRESERVED VERBATIM. §14.19.5 deferred-to-discretion items PRESERVED VERBATIM. §14.19.6 ZERO cross-axis cascade re-verified at v1.38 per Q5=β (intra-runtime-spec only; no CP spec C-CP-22 §11.1 amendment owed — matrix design-intent preserved; no AS/OD/IS/CXA/ADR/ADD/PRD touch). §14.19.7 verbatim-layer integrity PRESERVED VERBATIM. §14.18.x PRESERVED VERBATIM. §3.7 PRESERVED VERBATIM.
+
+**Sections preserved verbatim from v1.37.** ALL v1.37 + v1.36 + v1.35 + ... + v1 lineage preserved verbatim per delta-only-spec-file convention.
+
+**Status posture.** Proposed (v1.37) → **Proposed (v1.38)**. v1.38 is a Class 1 fork resolution Reading (A) canonical-reading amendment + body-text deferral — ZERO body text edit at §14.19.x narrative; production code change removes one method (`_check_topology_admissibility`) + one call site + one import; tests flip from rejection assertion → acceptance assertion. ZERO contract removal at any other contract; ZERO signature change at §14.19.1; ZERO cross-axis cascade.
+
+**Downstream absorption owed (post-v1.38).**
+
+(a) Workspace `CLAUDE.md` §2.3 runtime row version bump (v1.37 → v1.38); co-published this arc.
+
+(b) Runtime plan v2.39 → v2.40 single-arc absorption: U-RT-104 AC #12 RETIRED (load-time admissibility check no longer required). Co-published this arc.
+
+(c) Fork doc `.harness/class_1_fork_topology_admissibility_check_load_time_vs_runtime_asymmetry.md` Status PROPOSING → ✅ APPLIED-AS-READING-A with Q-set ratification record (Q1=A + Q2=α + Q3=i + Q4=c + Q5=β). Co-published this arc.
+
+(d) Clearance marker at `.harness/clearance/Spec_Harness_Runtime-v1_38-cleared-2026-05-29.md` per CLAUDE.md §4.5. Co-published this arc.
+
+(e) Production code change co-published this arc: `harness-runtime/.../workflow_manifest_loader.py` — drop import + drop call at line 212 + retire `_check_topology_admissibility` method. Existing test at `test_workflow_manifest_loader.py:344` (asserted load-time rejection) replaced with 2 NEW tests asserting load-time acceptance of previously-rejected combos (`(SOFTWARE_ENGINEERING, SINGLE_THREADED_LINEAR)` + `(RESEARCH, SINGLE_THREADED_LINEAR)`). 1301/1301 harness-runtime + 794/794 harness-cp tests pass.
+
+**Adjacent observations.**
+
+(i) **v1.36 Reading β precedent extended at v1.38.** v1.36 deferred engine_class admissibility loader → U-RT-106 because `deployment_surface` lives at `RuntimeConfig`, not at the manifest. v1.38 defers topology_pattern admissibility loader → sub-agent-dispatch site because the constraint shape is about fan-out (sub-agent dispatch), not single-step shape — single-step workflows that never dispatch sub-agents do not require the check by design. Both deferrals follow the same architectural principle: **loader is schema-validation; runtime is admissibility authority**.
+
+(ii) **Probe-pattern empirical anchor.** Use-the-product probe at PR #79 §4(e) catalogued the empirical-end-to-end-exercise discipline; the topology admissibility gap was finding #14 in the same probe. The probe surfaced the runtime/loader asymmetry that integration test bypass demonstrated empirically. Probe pattern continues to validate.
+
+(iii) **NEW pattern catalogued — `test-bypass-as-runtime-truth`.** Per fork doc §4(e). When an integration test exercises a code path that the loader/CLI rejects but the runtime accepts, the asymmetry IS the defect — not necessarily the test bypass. In this case the integration test = runtime authority; the loader = over-strict. Future surfaces with this pattern should be evaluated bidirectionally (loader-canonical OR runtime-canonical readings both possible). First explicit catalogue at workspace `.harness/` scope.
+
+(iv) **MVP-scope SE-workload runnability closed.** Pre-v1.38: SOFTWARE_ENGINEERING workload structurally unrunnable via YAML/TOML manifest path (matrix-permitted topologies all unmaterialized at MVP). Post-v1.38: SE workflows with `SINGLE_THREADED_LINEAR` topology load successfully; runtime enforces shape constraints only where they apply (sub-agent dispatch). Closes probe findings #5 + #6 + #14 from PR #79 §4(a) catalogue.
+
+(v) **56th application of `[[advisor-before-substantive-work-for-cross-axis-blockers]]` posture.** Pre-substantive advisor consultation 2026-05-29 caught: (1) apply order — PR #80 first (smaller blast radius) then PR #79 (larger); (2) Q-set ratification record discipline (write Q1-Q5 into fork doc Status block, not just "Reading A"); (3) apply-PR shape (sequential separate PRs per fork, not bundled). All 3 surfaced gaps closed pre-code; ZERO false-starts.
+
+---
 
 ## Change-note (v1.36 → v1.37)
 

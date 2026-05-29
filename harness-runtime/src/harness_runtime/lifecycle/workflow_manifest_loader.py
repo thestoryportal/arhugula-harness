@@ -39,9 +39,6 @@ from harness_core.workload_class import WorkloadClass
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
-from harness_cp.per_workload_class_topology import (
-    is_topology_permitted_for_workload,
-)
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver_types import StepKind, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
@@ -209,7 +206,10 @@ class WorkflowManifestLoader:
         cls._check_version(document, source=str(path))
         carrier = cls._build_carrier(document, source=str(path))
         cls._check_step_id_uniqueness(carrier, source=str(path))
-        cls._check_topology_admissibility(carrier, source=str(path))
+        # Topology admissibility deferred to runtime sub-agent-dispatch site per
+        # spec v1.38 Reading A (PR #80). Workflows that never dispatch sub-agents
+        # (single-step inference workflows) escape the check entirely — by design.
+        # Runtime authority: harness-runtime/.../sub_agent_dispatch.py:585.
         return carrier
 
     # ---------- parse ----------
@@ -383,23 +383,15 @@ class WorkflowManifestLoader:
                 )
             seen[step.step_id] = idx
 
-    # ---------- topology admissibility (AC #12, U-CP-22) ----------
-
-    @staticmethod
-    def _check_topology_admissibility(
-        manifest: WorkflowManifest, *, source: str
-    ) -> None:
-        if not is_topology_permitted_for_workload(
-            manifest.workflow.topology_pattern,
-            manifest.workflow.workload_class,
-        ):
-            raise ManifestAdmissibilityError(
-                f"topology_pattern {manifest.workflow.topology_pattern.value!r} "
-                f"is not admissible for workload_class "
-                f"{manifest.workflow.workload_class.value!r} per U-CP-22 "
-                f"is_topology_permitted_for_workload",
-                source=source,
-            )
+    # ---------- topology admissibility ----------
+    # Per spec v1.38 §14.19.4 invariant 2 Reading A (PR #80): topology_pattern
+    # admissibility is deferred from load-time to runtime sub-agent-dispatch
+    # site at sub_agent_dispatch.py:585 (`topology_dispatcher.is_topology_permitted`).
+    # Workflows that never dispatch sub-agents (single-step inference workflows)
+    # escape the check by design. Pattern-consistent with v1.36 Reading β which
+    # moved engine_class admissibility loader → U-RT-106. The load-time check
+    # method previously here is RETIRED at v1.38; ManifestAdmissibilityError
+    # itself stays in the taxonomy for engine_class admissibility per v1.36.
 
     # =============================================================
     # U-RT-105 — projection to WorkflowObject Protocol
