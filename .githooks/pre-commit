@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Local pre-commit advisory check for X-AL-3 silent-absorption discipline.
+#
+# Non-blocking by design — the enforceable gate is the GitHub Action at
+# .github/workflows/x-al-3-guard.yml. This hook gives early local feedback
+# so you don't push a PR that will fail CI.
+#
+# Enable: git config core.hooksPath .githooks
+# (See .githooks/README.md for setup details.)
+
+STAGED=$(git diff --cached --name-only --diff-filter=AM 2>/dev/null || true)
+
+DESIGN_SUBSTRATE_STAGED=$(echo "$STAGED" | grep '^design-substrate/' || true)
+DESIGN_SUBSTRATE_COUNT=$(echo -n "$DESIGN_SUBSTRATE_STAGED" | grep -c . || true)
+
+BACK_FLOW_STAGED=$(echo "$STAGED" | grep -E '^\.harness/.+(\.md|/CLEARED)$' || true)
+BACK_FLOW_COUNT=$(echo -n "$BACK_FLOW_STAGED" | grep -c . || true)
+
+if [ "$DESIGN_SUBSTRATE_COUNT" -gt 0 ] && [ "$BACK_FLOW_COUNT" -eq 0 ]; then
+  echo ""
+  echo "⚠  X-AL-3 advisory: design-substrate/ staged without .harness/ back-flow doc"
+  echo ""
+  echo "Files staged in design-substrate/:"
+  echo "$DESIGN_SUBSTRATE_STAGED" | sed 's/^/   - /'
+  echo ""
+  echo "This commit will succeed locally but the GitHub Action will FAIL the PR"
+  echo "unless one of these is true:"
+  echo ""
+  echo "   • A fork doc, architect recommendation, retirement event, or clearance"
+  echo "     marker is added under .harness/ in this PR."
+  echo "   • The PR carries label 'design-phase-direct' (for routine doc-only edits)."
+  echo ""
+  echo "See workspace CLAUDE.md §4.4 + §10.5 for back-flow discipline."
+  echo ""
+  echo "Continuing with commit (local hook is advisory only)..."
+  echo ""
+fi
+
+exit 0
