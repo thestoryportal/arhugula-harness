@@ -290,6 +290,16 @@ Audit pass on 2026-05-27 triggered by a candidate batch-20 evaluation for H_T-OD
 
 **Class 3 informational disposition.** No ledger-row status change; no production code change; no spec amendment; no cross-axis cascade. §3(f) NEW species candidate audit terminates at cardinality 1 (CP-23 batch-41 framing-drift the sole instance; CXA-5 batch-3-vs-§7 framing-drift documented at §11.1a but distinct closure-event-class — production-emission-site-landing supersession, not ledger-authoring-time framing-drift causal pattern at the same level of generality).
 
+### §11.1c H_T-CXA-4 — STILL-BOUNDED → PARTIAL at batch-42 (filed 2026-05-28 deployment-readiness closure arc)
+
+| Snapshot site | Snapshot text | Superseded by |
+|---|---|---|
+| §7 row line 156 | "STILL-BOUNDED ... `ctx.audit_writer.append` has zero non-test callers in production code (only `read_all` in shutdown). OD `sign_audit_entry` / `AuditLedgerEntry` compose path not invoked from any runtime driver" | **PARTIAL 2026-05-28 (batch-42)** per empirical grep at HEAD `a0ad1be`: (1) 6 production callers of `audit_writer.append` at `harness-runtime/src/harness_runtime/lifecycle/{sub_agent_dispatch:497, hitl_gate_composer:699, cost_attribution_{llm,tool,validator,webhook}_dispatch}.py`; (2) `sign_audit_entry` invoked at `harness-cxa/src/harness_cxa/cp_audit_conversion.py:321` + `AuditLedgerEntry(...)` constructed at `:324` (compose path fully exercised); (3) 3 composer-materialization stages fire at `bootstrap/stage_6_cxa_wiring.py:69+74+78`. Of 26 canonical edges: ~5 materialized + 1 fully exercised (audit-write seam). Refreshed disposition + remaining transit gates at `.harness/phase-7d-retirement-events-batch-42.md` §1.2. |
+
+**Sub-species 3 catalogue expansion:** NEW sub-species candidate **`stale-ledger-row-vs-production-state`** at workflow v1.12 §7.4.7.2 — sibling to CXA-5 §11.1a batch-3-vs-§7 closure-event-class (also 2026-05-28). Cardinality 2 in single calendar day; species 3 sub-species column extension at future workflow revision increasingly warranted.
+
+**Forward-only ledger discipline:** §7 row 156 preserved verbatim. Refreshed row text canonical going forward at batch-42 §1.2. Pre-batch-42 cumulative checks across batches 12 → 41 stand verbatim.
+
 ### §11.2 H_T-AS-2 — RETIRED at batch-16
 
 | Snapshot site | Snapshot text | Superseded by |
