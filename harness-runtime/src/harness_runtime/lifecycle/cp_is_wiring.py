@@ -54,15 +54,35 @@ stage shape established at U-RT-27..34.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from harness_cp.cp_shared_types import ActorIdentity
+from harness_cp.hitl_as_tool_call_rewriting import (
+    RewrittenToolCall,
+    emit_hitl_tool_call_rewriting_state_ledger_entry,
+)
+from harness_cp.pause_resume_protocol import (
+    PauseResumeProtocolEventKind,
+    ResumeOutcome,
+    emit_pause_captured_state_ledger_entry,
+    emit_pause_resume_state_ledger_entry,
+    emit_resume_attempted_state_ledger_entry,
+)
+from harness_cp.pause_resume_protocol_types import PauseSnapshot
+from harness_cp.per_step_override_evaluator import emit_override_state_ledger_entry
 from harness_cp.sibling_ledger_entry_composition import (
     construct_sibling_ledger_entry,
 )
+from harness_cp.workload_binding_engine_class_selection import (
+    WorkloadBindingSelectionResult,
+    emit_workload_class_selection_state_ledger_entry,
+)
 from harness_is.state_ledger_entry_schema import Identifier
 from harness_is.state_ledger_write import (
+    EntryPayload,
     WriteKey,
     WriteResult,
 )
@@ -123,6 +143,215 @@ class RuntimeCpIsWiring:
             idempotency_key=payload.idempotency_key,
         )
         return self.ledger_writer.append(payload, write_key)
+
+    # ------------------------------------------------------------------
+    # U-RT-110 — 6 NEW §16.5 composer bindings (runtime plan v2.33).
+    #
+    # Each method exposes the per-composer kw-only inputs at the runtime
+    # surface, constructs an async `_adapter` closure capturing
+    # `(workflow_id, step_id)` for the WriteKey, and awaits the CP-axis
+    # composer with `ledger_writer=_adapter`. The composer produces
+    # `EntryPayload`, awaits the adapter (which sync-delegates to
+    # `LedgerWriter.append`), and returns the IS `WriteResult`.
+    #
+    # Per CP spec v1.26 §16.5.8: the runtime wiring discipline binds the
+    # ledger_writer Callable here; the inner LedgerWriter.append is sync
+    # per state_ledger.py:83. The adapter MUST be `async def` to satisfy
+    # the composers' `Callable[[EntryPayload], Awaitable[WriteResult]]`
+    # parameter type at pyright strict.
+    # ------------------------------------------------------------------
+
+    async def emit_override_state_ledger_entry(
+        self,
+        *,
+        workflow_id: str,
+        step_id: str,
+        override_id: str,
+        policy_id: str,
+        post_override_step_config: Mapping[str, Any],
+        actor: ActorIdentity,
+    ) -> WriteResult:
+        """Wire U-CP-74 emit_override_state_ledger_entry → ledger_writer.append.
+
+        CP spec v1.26 §16.5 row U-CP-14. action_id `cp.per-step-override-application`.
+        """
+
+        async def _adapter(payload: EntryPayload) -> WriteResult:
+            write_key = WriteKey(
+                thread_id=Identifier(workflow_id),
+                step_id=Identifier(step_id),
+                idempotency_key=payload.idempotency_key,
+            )
+            return self.ledger_writer.append(payload, write_key)
+
+        return await emit_override_state_ledger_entry(
+            workflow_id=workflow_id,
+            step_id=step_id,
+            override_id=override_id,
+            policy_id=policy_id,
+            post_override_step_config=post_override_step_config,
+            actor=actor,
+            ledger_writer=_adapter,
+        )
+
+    async def emit_workload_class_selection_state_ledger_entry(
+        self,
+        *,
+        workflow_id: str,
+        step_id: str,
+        selection_result: WorkloadBindingSelectionResult,
+        actor: ActorIdentity,
+    ) -> WriteResult:
+        """Wire U-CP-75 emit_workload_class_selection_state_ledger_entry.
+
+        CP spec v1.26 §16.5 row U-CP-27. action_id `cp.workload-binding-class-selection`.
+        """
+
+        async def _adapter(payload: EntryPayload) -> WriteResult:
+            write_key = WriteKey(
+                thread_id=Identifier(workflow_id),
+                step_id=Identifier(step_id),
+                idempotency_key=payload.idempotency_key,
+            )
+            return self.ledger_writer.append(payload, write_key)
+
+        return await emit_workload_class_selection_state_ledger_entry(
+            workflow_id=workflow_id,
+            step_id=step_id,
+            selection_result=selection_result,
+            actor=actor,
+            ledger_writer=_adapter,
+        )
+
+    async def emit_pause_resume_state_ledger_entry(
+        self,
+        *,
+        workflow_id: str,
+        step_id: str,
+        protocol_event_kind: PauseResumeProtocolEventKind,
+        event_sequence_id: int,
+        protocol_state_snapshot: Mapping[str, Any],
+        actor: ActorIdentity,
+    ) -> WriteResult:
+        """Wire U-CP-76 emit_pause_resume_state_ledger_entry (workflow-layer).
+
+        CP spec v1.26 §16.5 row U-CP-30. action_id `cp.pause-resume-protocol`.
+        """
+
+        async def _adapter(payload: EntryPayload) -> WriteResult:
+            write_key = WriteKey(
+                thread_id=Identifier(workflow_id),
+                step_id=Identifier(step_id),
+                idempotency_key=payload.idempotency_key,
+            )
+            return self.ledger_writer.append(payload, write_key)
+
+        return await emit_pause_resume_state_ledger_entry(
+            workflow_id=workflow_id,
+            step_id=step_id,
+            protocol_event_kind=protocol_event_kind,
+            event_sequence_id=event_sequence_id,
+            protocol_state_snapshot=protocol_state_snapshot,
+            actor=actor,
+            ledger_writer=_adapter,
+        )
+
+    async def emit_hitl_tool_call_rewriting_state_ledger_entry(
+        self,
+        *,
+        workflow_id: str,
+        step_id: str,
+        tool_call_id: str,
+        semantic_variant_binding_id: str,
+        rewritten_tool_call: RewrittenToolCall,
+        actor: ActorIdentity,
+    ) -> WriteResult:
+        """Wire U-CP-77 emit_hitl_tool_call_rewriting_state_ledger_entry.
+
+        CP spec v1.26 §16.5 row U-CP-37. action_id `cp.hitl-tool-call-rewriting`.
+        """
+
+        async def _adapter(payload: EntryPayload) -> WriteResult:
+            write_key = WriteKey(
+                thread_id=Identifier(workflow_id),
+                step_id=Identifier(step_id),
+                idempotency_key=payload.idempotency_key,
+            )
+            return self.ledger_writer.append(payload, write_key)
+
+        return await emit_hitl_tool_call_rewriting_state_ledger_entry(
+            workflow_id=workflow_id,
+            step_id=step_id,
+            tool_call_id=tool_call_id,
+            semantic_variant_binding_id=semantic_variant_binding_id,
+            rewritten_tool_call=rewritten_tool_call,
+            actor=actor,
+            ledger_writer=_adapter,
+        )
+
+    async def emit_pause_captured_state_ledger_entry(
+        self,
+        *,
+        workflow_id: str,
+        step_id: str,
+        pause_event_id: str,
+        pause_snapshot: PauseSnapshot,
+        actor: ActorIdentity,
+    ) -> WriteResult:
+        """Wire U-CP-78 emit_pause_captured_state_ledger_entry (engine-layer).
+
+        CP spec v1.26 §16.5 row U-CP-49. action_id `cp.pause-captured`.
+        """
+
+        async def _adapter(payload: EntryPayload) -> WriteResult:
+            write_key = WriteKey(
+                thread_id=Identifier(workflow_id),
+                step_id=Identifier(step_id),
+                idempotency_key=payload.idempotency_key,
+            )
+            return self.ledger_writer.append(payload, write_key)
+
+        return await emit_pause_captured_state_ledger_entry(
+            workflow_id=workflow_id,
+            step_id=step_id,
+            pause_event_id=pause_event_id,
+            pause_snapshot=pause_snapshot,
+            actor=actor,
+            ledger_writer=_adapter,
+        )
+
+    async def emit_resume_attempted_state_ledger_entry(
+        self,
+        *,
+        workflow_id: str,
+        step_id: str,
+        resume_event_id: str,
+        resume_attempt_count: int,
+        resume_outcome: ResumeOutcome,
+        actor: ActorIdentity,
+    ) -> WriteResult:
+        """Wire U-CP-79 emit_resume_attempted_state_ledger_entry (engine-layer).
+
+        CP spec v1.26 §16.5 row U-CP-50. action_id `cp.resume-attempted`.
+        """
+
+        async def _adapter(payload: EntryPayload) -> WriteResult:
+            write_key = WriteKey(
+                thread_id=Identifier(workflow_id),
+                step_id=Identifier(step_id),
+                idempotency_key=payload.idempotency_key,
+            )
+            return self.ledger_writer.append(payload, write_key)
+
+        return await emit_resume_attempted_state_ledger_entry(
+            workflow_id=workflow_id,
+            step_id=step_id,
+            resume_event_id=resume_event_id,
+            resume_attempt_count=resume_attempt_count,
+            resume_outcome=resume_outcome,
+            actor=actor,
+            ledger_writer=_adapter,
+        )
 
 
 @dataclass(frozen=True, slots=True)

@@ -249,3 +249,319 @@ def test_chain_integrity_across_50_sibling_emissions(tmp_path: Path) -> None:
     entries = read_ledger(wiring.ledger_writer.handle)
     assert len(entries) == 50
     assert verify_chain(entries).status is VerificationStatus.VALID
+
+
+# ---------------------------------------------------------------------------
+# U-RT-110 — 6 NEW §16.5 composer bindings on `RuntimeCpIsWiring`.
+#
+# Per runtime plan v2.33 §1.2 ACs #6 + #7 + #9. Each per-method test
+# constructs a real in-process LedgerWriter, awaits the corresponding
+# `emit_*_state_ledger_entry` method, reads the ledger, and asserts the
+# entry's `action_id` matches the canonical kebab-case identifier per
+# CP spec v1.26 §16.5.3. The integration tests cover full 6-entry
+# chain_verification + idempotent-on-replay.
+# ---------------------------------------------------------------------------
+
+import asyncio
+import hashlib
+
+from harness_cp.engine_class import EngineClass
+from harness_cp.handoff_context import StateSummary
+from harness_cp.hitl_as_tool_call_rewriting import (
+    HITLSemanticVariant,
+    RewrittenToolCall,
+)
+from harness_cp.hitl_response_palette import HITLResponse
+from harness_cp.pause_resume_protocol import (
+    PauseResumeProtocolEventKind,
+    ResumeOutcome,
+    ResumeOutcomeKind,
+)
+from harness_cp.pause_resume_protocol_types import (
+    PauseSnapshot,
+    WorkflowPauseReason,
+)
+from harness_cp.workload_binding_engine_class_selection import (
+    WorkloadBindingSelectionResult,
+)
+from harness_is.state_ledger_entry_schema import Identifier
+
+
+def _state_summary(version: str = "v1") -> StateSummary:
+    return StateSummary(
+        relevant_entries=(),
+        summary_text=version,
+        summary_hash=hashlib.sha256(version.encode()).hexdigest(),
+        idempotency_key=Identifier("idem-" + version),
+        external_references=(),
+    )
+
+
+def _pause_snapshot(
+    *,
+    workflow_id: str = "wf-1",
+    run_id: str = "run-1",
+    step_index: int = 7,
+    seed: str = "alpha",
+) -> PauseSnapshot:
+    return PauseSnapshot(
+        workflow_id=workflow_id,
+        run_id=run_id,
+        step_index=step_index,
+        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+        state_summary=_state_summary(),
+        snapshot_hash=hashlib.sha256(seed.encode()).hexdigest(),
+        created_at=1_700_000_000_000,
+        state_ledger_anchor="entry-" + seed,
+    )
+
+
+def _resume_outcome(
+    *,
+    kind: ResumeOutcomeKind = ResumeOutcomeKind.RESUME_CLEAN,
+) -> ResumeOutcome:
+    return ResumeOutcome(
+        outcome_kind=kind,
+        material_diff=(),
+        context_revalidated=True,
+        resume_audit_entry_id=None,
+    )
+
+
+def _rewritten_tool_call(
+    *,
+    tool: str = "send_email",
+    server: str = "mcp-mail",
+) -> RewrittenToolCall:
+    return RewrittenToolCall(
+        tool=tool,
+        server=server,
+        hitl_required=True,
+        variant=HITLSemanticVariant.AWAIT_HUMAN_APPROVAL,
+        response_palette=frozenset(HITLResponse),
+    )
+
+
+def _selection_result(
+    *,
+    selected: EngineClass = EngineClass.SAVE_POINT_CHECKPOINT,
+) -> WorkloadBindingSelectionResult:
+    return WorkloadBindingSelectionResult(
+        selected_class=selected,
+        candidate_set=frozenset({selected}),
+        selection_rationale="single-candidate",
+    )
+
+
+_ACTOR = ActorIdentity("control-plane")
+
+
+def test_emit_override_state_ledger_entry_writes_canonical_entry(
+    tmp_path: Path,
+) -> None:
+    wiring = _wiring(tmp_path)
+    result = asyncio.run(
+        wiring.emit_override_state_ledger_entry(
+            workflow_id="wf-1",
+            step_id="step-1",
+            override_id="ovr-1",
+            policy_id="pol-1",
+            post_override_step_config={"model": "claude-opus-4-7"},
+            actor=_ACTOR,
+        )
+    )
+    assert result is WriteResult.APPENDED
+    [persisted] = read_ledger(wiring.ledger_writer.handle)
+    assert persisted.action_id == "cp.per-step-override-application"
+
+
+def test_emit_workload_class_selection_state_ledger_entry_writes_canonical_entry(
+    tmp_path: Path,
+) -> None:
+    wiring = _wiring(tmp_path)
+    result = asyncio.run(
+        wiring.emit_workload_class_selection_state_ledger_entry(
+            workflow_id="wf-1",
+            step_id="step-1",
+            selection_result=_selection_result(),
+            actor=_ACTOR,
+        )
+    )
+    assert result is WriteResult.APPENDED
+    [persisted] = read_ledger(wiring.ledger_writer.handle)
+    assert persisted.action_id == "cp.workload-binding-class-selection"
+
+
+def test_emit_pause_resume_state_ledger_entry_writes_canonical_entry(
+    tmp_path: Path,
+) -> None:
+    wiring = _wiring(tmp_path)
+    result = asyncio.run(
+        wiring.emit_pause_resume_state_ledger_entry(
+            workflow_id="wf-1",
+            step_id="step-1",
+            protocol_event_kind=PauseResumeProtocolEventKind.PAUSE_CAPTURED,
+            event_sequence_id=1,
+            protocol_state_snapshot={"phase": "paused"},
+            actor=_ACTOR,
+        )
+    )
+    assert result is WriteResult.APPENDED
+    [persisted] = read_ledger(wiring.ledger_writer.handle)
+    assert persisted.action_id == "cp.pause-resume-protocol"
+
+
+def test_emit_hitl_tool_call_rewriting_state_ledger_entry_writes_canonical_entry(
+    tmp_path: Path,
+) -> None:
+    wiring = _wiring(tmp_path)
+    result = asyncio.run(
+        wiring.emit_hitl_tool_call_rewriting_state_ledger_entry(
+            workflow_id="wf-1",
+            step_id="step-1",
+            tool_call_id="call-1",
+            semantic_variant_binding_id="row-2-await-human-approval",
+            rewritten_tool_call=_rewritten_tool_call(),
+            actor=_ACTOR,
+        )
+    )
+    assert result is WriteResult.APPENDED
+    [persisted] = read_ledger(wiring.ledger_writer.handle)
+    assert persisted.action_id == "cp.hitl-tool-call-rewriting"
+
+
+def test_emit_pause_captured_state_ledger_entry_writes_canonical_entry(
+    tmp_path: Path,
+) -> None:
+    wiring = _wiring(tmp_path)
+    result = asyncio.run(
+        wiring.emit_pause_captured_state_ledger_entry(
+            workflow_id="wf-1",
+            step_id="step-1",
+            pause_event_id="pause-evt-1",
+            pause_snapshot=_pause_snapshot(),
+            actor=_ACTOR,
+        )
+    )
+    assert result is WriteResult.APPENDED
+    [persisted] = read_ledger(wiring.ledger_writer.handle)
+    assert persisted.action_id == "cp.pause-captured"
+
+
+def test_emit_resume_attempted_state_ledger_entry_writes_canonical_entry(
+    tmp_path: Path,
+) -> None:
+    wiring = _wiring(tmp_path)
+    result = asyncio.run(
+        wiring.emit_resume_attempted_state_ledger_entry(
+            workflow_id="wf-1",
+            step_id="step-1",
+            resume_event_id="resume-evt-1",
+            resume_attempt_count=1,
+            resume_outcome=_resume_outcome(),
+            actor=_ACTOR,
+        )
+    )
+    assert result is WriteResult.APPENDED
+    [persisted] = read_ledger(wiring.ledger_writer.handle)
+    assert persisted.action_id == "cp.resume-attempted"
+
+
+def _invoke_six_methods(
+    wiring: RuntimeCpIsWiring, *, workflow_prefix: str = "wf"
+) -> list[WriteResult]:
+    """Invoke all 6 new emit methods with distinct workflow_ids (distinct thread_id).
+
+    Returns the 6 WriteResults in invocation order.
+    """
+    return [
+        asyncio.run(
+            wiring.emit_override_state_ledger_entry(
+                workflow_id=f"{workflow_prefix}-override",
+                step_id="step-1",
+                override_id="ovr-1",
+                policy_id="pol-1",
+                post_override_step_config={"k": "v"},
+                actor=_ACTOR,
+            )
+        ),
+        asyncio.run(
+            wiring.emit_workload_class_selection_state_ledger_entry(
+                workflow_id=f"{workflow_prefix}-selection",
+                step_id="step-1",
+                selection_result=_selection_result(),
+                actor=_ACTOR,
+            )
+        ),
+        asyncio.run(
+            wiring.emit_pause_resume_state_ledger_entry(
+                workflow_id=f"{workflow_prefix}-pauseresume",
+                step_id="step-1",
+                protocol_event_kind=PauseResumeProtocolEventKind.PAUSE_CAPTURED,
+                event_sequence_id=1,
+                protocol_state_snapshot={"k": "v"},
+                actor=_ACTOR,
+            )
+        ),
+        asyncio.run(
+            wiring.emit_hitl_tool_call_rewriting_state_ledger_entry(
+                workflow_id=f"{workflow_prefix}-hitl",
+                step_id="step-1",
+                tool_call_id="call-1",
+                semantic_variant_binding_id="row-2-await-human-approval",
+                rewritten_tool_call=_rewritten_tool_call(),
+                actor=_ACTOR,
+            )
+        ),
+        asyncio.run(
+            wiring.emit_pause_captured_state_ledger_entry(
+                workflow_id=f"{workflow_prefix}-pcapt",
+                step_id="step-1",
+                pause_event_id="pause-evt-1",
+                pause_snapshot=_pause_snapshot(),
+                actor=_ACTOR,
+            )
+        ),
+        asyncio.run(
+            wiring.emit_resume_attempted_state_ledger_entry(
+                workflow_id=f"{workflow_prefix}-rattempt",
+                step_id="step-1",
+                resume_event_id="resume-evt-1",
+                resume_attempt_count=1,
+                resume_outcome=_resume_outcome(),
+                actor=_ACTOR,
+            )
+        ),
+    ]
+
+
+def test_six_emit_methods_full_chain_verification_passes(tmp_path: Path) -> None:
+    """All 6 NEW methods sequenced into one ledger; chain_verification passes (C-IS-06 §6)."""
+    wiring = _wiring(tmp_path)
+    results = _invoke_six_methods(wiring)
+    assert all(r is WriteResult.APPENDED for r in results)
+    entries = read_ledger(wiring.ledger_writer.handle)
+    assert len(entries) == 6
+    assert verify_chain(entries).status is VerificationStatus.VALID
+    action_ids = [e.action_id for e in entries]
+    assert action_ids == [
+        "cp.per-step-override-application",
+        "cp.workload-binding-class-selection",
+        "cp.pause-resume-protocol",
+        "cp.hitl-tool-call-rewriting",
+        "cp.pause-captured",
+        "cp.resume-attempted",
+    ]
+
+
+def test_six_emit_methods_idempotent_on_replay(tmp_path: Path) -> None:
+    """Re-invoking each method with identical inputs returns IDEMPOTENT_NOOP (§16.5.4)."""
+    wiring = _wiring(tmp_path)
+    first = _invoke_six_methods(wiring)
+    assert all(r is WriteResult.APPENDED for r in first)
+    second = _invoke_six_methods(wiring)
+    assert all(r is WriteResult.IDEMPOTENT_NOOP for r in second), second
+    # Ledger size unchanged after replay.
+    entries = read_ledger(wiring.ledger_writer.handle)
+    assert len(entries) == 6
+    assert verify_chain(entries).status is VerificationStatus.VALID
