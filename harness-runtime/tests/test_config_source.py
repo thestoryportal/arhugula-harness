@@ -166,7 +166,71 @@ def test_type_mismatch_raises_config_load_error_with_pydantic_validation(
         )
     err = excinfo.value
     assert err.FAIL_CLASS == "RT-FAIL-CLI-CONFIG-LOAD"
-    assert "Pydantic validation failed" in str(err)
+    # Per probe-v4 adjacent finding (a) β-scope apply 2026-05-29: the error
+    # payload now lists invalid fields by dotted path + message, rather
+    # than emitting a Python dict-repr. The `tenant_id` field receives an
+    # int and Pydantic surfaces an "Input should be a valid string"-shape
+    # message; the dotted path identifies the field unambiguously.
+    msg = str(err)
+    assert "Invalid fields:" in msg
+    assert "tenant_id" in msg
+    assert "Pydantic validation failed" not in msg  # old format struck
+
+
+# Probe-v4 adjacent finding (a) β-scope apply 2026-05-29: missing-required
+# error renders as a clean bullet list of dotted-path field names + a
+# pointer to the workspace-root template, rather than Python dict-repr.
+# Anchors operator-facing fix at `.harness/class_1_fork_daemon_default_
+# socket_path_pid_mismatch.md` §4 (a).
+def test_missing_required_fields_render_as_human_readable_bullet_list() -> None:
+    with pytest.raises(RuntimeConfigLoadError) as excinfo:
+        # No env, no file, no CLI overrides → RuntimeConfig's 4 required
+        # fields (deployment_surface, repository_root, otel,
+        # default_topology) all missing.
+        RuntimeConfigSource.load()
+    err = excinfo.value
+    msg = str(err)
+    assert err.FAIL_CLASS == "RT-FAIL-CLI-CONFIG-LOAD"
+    # Human-readable section heading
+    assert "Missing required fields:" in msg
+    # All 4 required fields surface as dotted-path bullets
+    for field in (
+        "deployment_surface",
+        "repository_root",
+        "otel",
+        "default_topology",
+    ):
+        assert f"- {field}" in msg, f"missing field bullet for {field!r}"
+    # Operator gets a pointer to a template they can copy
+    assert "harness.toml.example" in msg
+    # Old dict-repr format is gone
+    assert "Pydantic validation failed" not in msg
+    assert "'type': 'missing'" not in msg
+
+
+def test_nested_invalid_field_renders_with_dotted_loc_path(
+    tmp_path: Path,
+) -> None:
+    """Pydantic validation on a nested sub-config field renders with the
+    full dotted path (e.g. ``otel.otlp_endpoint``), not a tuple-repr."""
+    config_file = tmp_path / "harness.toml"
+    # Endpoint without a `://` scheme triggers OTelConfig's field validator.
+    config_file.write_text(
+        "[runtime.otel]\notlp_endpoint = \"no-scheme-host\"\n",
+        encoding="utf-8",
+    )
+    overrides = _minimum_required_overrides()
+    # Drop the override's `otel` so the file-supplied value flows through.
+    del overrides["otel"]
+    with pytest.raises(RuntimeConfigLoadError) as excinfo:
+        RuntimeConfigSource.load(
+            config_file=config_file,
+            cli_overrides=overrides,
+        )
+    msg = str(excinfo.value)
+    assert "Invalid fields:" in msg
+    assert "otel.otlp_endpoint" in msg
+    assert "harness.toml.example" in msg
 
 
 # Coverage extension: secrets-exclusion catches nested keys too (Q-L=b walks

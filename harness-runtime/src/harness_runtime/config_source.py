@@ -53,6 +53,62 @@ _SECRET_KEY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+EXAMPLE_CONFIG_FILE_NAME = "harness.toml.example"
+
+
+def _format_validation_error(exc: ValidationError) -> str:
+    """Render a Pydantic ``ValidationError`` as a human-readable message.
+
+    Pre-fix the loader raised ``f"Pydantic validation failed: {exc.errors()}"``
+    which emits Python ``list[dict].__repr__()`` (e.g. ``[{'type': 'missing',
+    'loc': ('deployment_surface',), 'msg': 'Field required', 'input': {},
+    'url': 'https://errors.pydantic.dev/2.13/v/missing'}, ...]``). Operators
+    parsing that at the terminal had to mentally decode the dict-repr to
+    discover which fields were missing or invalid.
+
+    Per probe-v4 adjacent finding (a) at
+    ``.harness/class_1_fork_daemon_default_socket_path_pid_mismatch.md`` §4
+    (operator-routed β-scope apply 2026-05-29): split errors into
+    ``missing`` vs ``invalid`` buckets, render each as a dotted-path
+    bullet list, and append a pointer to the workspace-root
+    ``harness.toml.example`` template.
+
+    Within X-AL-3 boundary: ZERO new operator-facing subcommand; ZERO new
+    spec surface; the fail-class identifier ``RT-FAIL-CLI-CONFIG-LOAD`` is
+    PRESERVED VERBATIM per runtime spec v1.39 §14.18.4. Only the payload
+    text is reformatted. ``harness init`` template-generator subcommand
+    (the third pain point at the same finding) remains foreclosed as
+    spec-extension shape per CLAUDE.md §4.4.
+    """
+    missing: list[str] = []
+    invalid: list[tuple[str, str]] = []
+    for err in exc.errors():
+        loc = ".".join(str(part) for part in err.get("loc", ()))
+        if not loc:
+            loc = "<root>"
+        if err.get("type") == "missing":
+            missing.append(loc)
+        else:
+            invalid.append((loc, str(err.get("msg", ""))))
+
+    lines: list[str] = []
+    if missing:
+        lines.append("Missing required fields:")
+        for field in missing:
+            lines.append(f"  - {field}")
+    if invalid:
+        if lines:
+            lines.append("")
+        lines.append("Invalid fields:")
+        for field, msg in invalid:
+            lines.append(f"  - {field}: {msg}")
+    lines.append("")
+    lines.append(
+        f"See {EXAMPLE_CONFIG_FILE_NAME} at the workspace root for a "
+        f"template covering all required fields."
+    )
+    return "\n".join(lines)
+
 
 class RuntimeConfigLoadError(Exception):
     """Typed exception for any 3-source loader failure.
@@ -143,7 +199,7 @@ class RuntimeConfigSource:
             return RuntimeConfig(**merged)
         except ValidationError as exc:
             raise RuntimeConfigLoadError(
-                f"Pydantic validation failed: {exc.errors()}",
+                _format_validation_error(exc),
                 source="merged",
             ) from exc
 
@@ -154,7 +210,7 @@ class RuntimeConfigSource:
             sidecar = _RuntimeEnvSettings()
         except ValidationError as exc:
             raise RuntimeConfigLoadError(
-                f"env-var coercion failed: {exc.errors()}",
+                f"env-var coercion failed:\n{_format_validation_error(exc)}",
                 source="env",
             ) from exc
         return {k: v for k, v in sidecar.model_dump().items() if v is not None}
