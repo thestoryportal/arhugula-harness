@@ -32,6 +32,7 @@ ADR-D4 v1.1 §1.5.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 
 from harness_as import GateLevel as ASGateLevel
@@ -200,7 +201,10 @@ def emit_sub_agent_dispatch_audit(
         action_id=ActionID(f"{parent_action_id}||sub-agent"),
         gate_level=ASGateLevel(descent.child_gate_level.value),
         response="approve",
-        timestamp="",
+        timestamp=datetime.now(UTC).isoformat(),
+        # `prior_event_hash="0"*64` sentinel canonical at solo-developer
+        # tier per ADR-D5 §1.4 row 1 ("no hash chain required by default").
+        # Team-binding+ tier wiring deferred per CP spec v1.28 §16.5.6.X.
         prior_event_hash="0" * 64,
     )
 

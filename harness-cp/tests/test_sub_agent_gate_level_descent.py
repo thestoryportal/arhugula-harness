@@ -155,6 +155,24 @@ def test_audit_entry_cp_audit_ledger_entry() -> None:
     assert entry.response_text_hash is None
 
 
+def test_audit_entry_timestamp_is_iso_8601_per_v1_28() -> None:
+    """CP spec v1.28 §16.5.6.X — `timestamp` is non-tier-conditional per
+    C-CP-16 §16.2 + ADR-D5 §1.4. Pre-v1.28 `timestamp=""` placeholder closed."""
+    from datetime import datetime
+
+    descent = dispatch_sub_agent(
+        ActionID("p0"),
+        GateLevel.ASK,
+        SandboxTier.TIER_2_CONTAINER,
+        _brief(),
+        None,
+    )
+    entry = emit_sub_agent_dispatch_audit(ActionID("p0"), descent, "0" * 64)
+    assert entry.timestamp != ""
+    parsed = datetime.fromisoformat(entry.timestamp)
+    assert parsed.tzinfo is not None, "timestamp MUST carry UTC tzinfo"
+
+
 def test_response_hash_brief_canonicalize() -> None:
     """#5 — response_hash = sha256(canonicalize(SubAgentBrief))."""
     brief = _brief()

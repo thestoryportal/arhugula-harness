@@ -117,6 +117,36 @@ def test_audit_entry_action_id_composition() -> None:
     assert entry.action_id == "wf-1||s1"
 
 
+def test_audit_entry_timestamp_is_iso_8601_per_v1_28() -> None:
+    """CP spec v1.28 §16.5.6.X — `timestamp` is non-tier-conditional per
+    C-CP-16 §16.2 + ADR-D5 §1.4. v1.27 `timestamp=""` placeholder closed."""
+    from datetime import datetime
+
+    entry = emit_override_audit_entry(
+        workflow_id="wf-1",
+        step_id="s1",
+        override=StepOverride(step_id=StepID("s1")),
+        actor="ctl",  # type: ignore[arg-type]
+    )
+    assert entry.timestamp != ""
+    # ISO-8601 parses round-trip
+    parsed = datetime.fromisoformat(entry.timestamp)
+    assert parsed.tzinfo is not None, "timestamp MUST carry UTC tzinfo"
+
+
+def test_audit_entry_prior_event_hash_sentinel_canonical_at_solo_developer() -> None:
+    """ADR-D5 §1.4 row 1: solo-developer tier requires no hash chain.
+    `"0"*64` sentinel is canonical per CP spec v1.28 §16.5.6.X. Team-binding+
+    tier wiring deferred per operator-deployment-time opt-in."""
+    entry = emit_override_audit_entry(
+        workflow_id="wf-1",
+        step_id="s1",
+        override=StepOverride(step_id=StepID("s1")),
+        actor="ctl",  # type: ignore[arg-type]
+    )
+    assert entry.prior_event_hash == "0" * 64
+
+
 def test_override_evaluator_deterministic() -> None:
     manifest = _manifest(
         per_step_overrides={

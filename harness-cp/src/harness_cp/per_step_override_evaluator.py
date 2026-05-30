@@ -221,12 +221,19 @@ def emit_override_audit_entry(
     override application is recorded as an `approve` response (no operator
     edit/reject/respond), so the three response-specific hash fields are absent.
     """
+    # `override` + `actor` preserved as ignored per CP spec v1.28 §16.5.6.X:
+    # C-CP-16 §16.2 audit-entry shape does not include an `actor` field;
+    # `override`'s fields surface at the caller's `StepEffectiveBinding` per
+    # line 193-205, not into the audit entry.
     _ = (override, actor)
     return CPAuditLedgerEntry(
         action_id=ActionID(f"{workflow_id}||{step_id}"),
         gate_level=GateLevel.AUTO,
         response="approve",
-        timestamp="",
+        timestamp=datetime.now(UTC).isoformat(),
+        # `prior_event_hash="0"*64` sentinel canonical at solo-developer
+        # tier per ADR-D5 §1.4 row 1 ("no hash chain required by default").
+        # Team-binding+ tier wiring deferred per CP spec v1.28 §16.5.6.X.
         prior_event_hash="0" * 64,
     )
 
