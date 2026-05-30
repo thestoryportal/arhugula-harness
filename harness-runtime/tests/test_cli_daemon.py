@@ -112,10 +112,32 @@ def test_looks_like_manifest_path_discriminator(
 # ---------------------------------------------------------------------------
 
 
-def test_ac1_default_socket_path_uses_pid_namespacing() -> None:
+def test_ac1_default_socket_path_is_pid_independent_well_known() -> None:
+    """Per Class 1 fork resolution Reading A at
+    ``.harness/class_1_fork_daemon_default_socket_path_pid_mismatch.md``
+    (operator-ratified 2026-05-29 probe-v4 finding): the default socket path
+    is a single well-known location so that ``harness daemon`` and
+    ``harness run --daemon`` resolve to the same socket without
+    operator-supplied ``--socket-path`` on either side. Previously the path
+    embedded ``os.getpid()``, which structurally cannot coordinate daemon
+    and client because they are different processes.
+    """
     path = _default_daemon_socket_path()
-    assert path.name == f"harness-daemon-{os.getpid()}.sock"
+    assert path.name == "harness-daemon.sock"
+    # PID-independence: invocations from any process resolve identically.
+    assert str(os.getpid()) not in path.name
     assert path.parent.exists()
+
+
+def test_ac1_default_socket_path_matches_across_simulated_processes() -> None:
+    """The whole point of Reading A: two callers in different processes
+    compute the same path. Simulate by calling twice (same process is the
+    structurally weaker check; if they match here they trivially match
+    across processes because the function takes no PID-coupled input).
+    """
+    a = _default_daemon_socket_path()
+    b = _default_daemon_socket_path()
+    assert a == b
 
 
 def test_ac2_socket_path_flag_appears_in_help() -> None:

@@ -366,11 +366,24 @@ def run_command(
 
 
 def _default_daemon_socket_path() -> Path:
-    """Default Unix-socket path for the daemon — `/tmp/harness-daemon-{pid}.sock`."""
-    import os
+    """Default Unix-socket path for the daemon — single well-known path so that
+    ``harness daemon`` and ``harness run --daemon`` resolve to the same socket
+    without operator-supplied ``--socket-path`` on either side.
+
+    Resolves to ``${tempfile.gettempdir()}/harness-daemon.sock`` (typically
+    ``/tmp/harness-daemon.sock`` on macOS/Linux). Multi-daemon-per-host operator
+    scenarios still require explicit ``--socket-path`` on at least one side per
+    runtime spec v1.39 §14.18.1; the single-daemon-per-host default Just Works.
+
+    Per Class 1 fork resolution Reading A at
+    ``.harness/class_1_fork_daemon_default_socket_path_pid_mismatch.md``
+    (operator-ratified 2026-05-29). Previously namespaced by ``os.getpid()``
+    which structurally cannot coordinate daemon and client (different
+    processes compute different paths).
+    """
     import tempfile
 
-    return Path(tempfile.gettempdir()) / f"harness-daemon-{os.getpid()}.sock"
+    return Path(tempfile.gettempdir()) / "harness-daemon.sock"
 
 
 class DaemonStartupError(RuntimeError):
