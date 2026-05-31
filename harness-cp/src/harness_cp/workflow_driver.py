@@ -46,7 +46,7 @@ from harness_core.workflow_event_class import WorkflowEventClass
 from harness_is.state_ledger_entry_schema import Actor
 from opentelemetry.trace import Status, StatusCode
 
-from harness_cp.cp_shared_types import ModelBinding
+from harness_cp.cp_shared_types import ActorIdentity, ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding, resolve_step_binding
@@ -578,7 +578,11 @@ def execute_workflow(
                     ),
                     event_sequence_id=(pause_snapshot_input.step_index << 2) | 0,
                     protocol_state_snapshot=resume_result.model_dump(mode="json"),
-                    actor=ctx.ledger_writer.actor,
+                    # Reading A apply (PR #83 sibling-extension): pass
+                    # ActorIdentity str-newtype matching composer signature
+                    # `actor: ActorIdentity`. See
+                    # `.harness/class_2_fork_u_cp_74_actor_field_malformation.md`.
+                    actor=ActorIdentity(ctx.ledger_writer.actor.actor_id),
                 )
             )
         if not resume_result.resumed:
@@ -808,7 +812,9 @@ def _execute_workflow_body(
                         protocol_state_snapshot=pause_snapshot.model_dump(
                             mode="json"
                         ),
-                        actor=ctx.ledger_writer.actor,
+                        # Reading A apply (PR #83 sibling-extension): see fork
+                        # doc U-CP-74 actor field malformation.
+                        actor=ActorIdentity(ctx.ledger_writer.actor.actor_id),
                     )
                 )
             return RunResult(
@@ -843,12 +849,19 @@ def _execute_workflow_body(
         if binding.override_applied:
             _cp_is_wiring = getattr(ctx, "cp_is_wiring", None)
             if _cp_is_wiring is not None:
+                # Reading A apply (PR #83): pass ActorIdentity str-newtype to
+                # match composer signature `actor: ActorIdentity` at
+                # `per_step_override_evaluator.py:286`. Pre-Reading-A passed
+                # `ctx.ledger_writer.actor` (an `Actor` Pydantic model);
+                # composer's `str(actor)` produced the Pydantic field-repr
+                # instead of the clean identity string. See
+                # `.harness/class_2_fork_u_cp_74_actor_field_malformation.md`.
                 _run_protocol_method_sync(
                     _cp_is_wiring.emit_override_state_ledger_entry(
                         workflow_id=manifest_entry.workflow_id,
                         step_id=str(step.step_id),
                         post_override_step_config=binding.model_dump(mode="json"),
-                        actor=ctx.ledger_writer.actor,
+                        actor=ActorIdentity(ctx.ledger_writer.actor.actor_id),
                     )
                 )
 
@@ -972,7 +985,11 @@ def _execute_workflow_body(
                                 protocol_state_snapshot=(
                                     pause_snapshot.model_dump(mode="json")
                                 ),
-                                actor=ctx.ledger_writer.actor,
+                                # Reading A apply (PR #83 sibling-extension):
+                                # see fork doc U-CP-74 actor malformation.
+                                actor=ActorIdentity(
+                                    ctx.ledger_writer.actor.actor_id
+                                ),
                             )
                         )
                     return RunResult(
