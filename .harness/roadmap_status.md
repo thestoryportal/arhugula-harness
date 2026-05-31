@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `9c31e4978c3d` |
-| `last_refreshed` | 2026-05-31T18:35:00-06:00 |
-| `git_head` | `89915afc` (main) — `apply(PR #105 Reading C): collapse §16.5.12 workflow/engine split to uniform resolver-closure` |
+| `workspace_state_hash` | `5a077d17765f` |
+| `last_refreshed` | 2026-05-31T18:58:00-06:00 |
+| `git_head` | `7f3e6ceb` (main) — `roadmap(v1): Project Roadmap v1 scaffolding — drift-detected deterministic next-action derivation (#112)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-49.md` |
 | `open_fork_doc_count` | 39 |
 
@@ -20,9 +20,9 @@
 
 ## Next action
 
-**`R-IF-roadmap-refresh`** — Refresh dashboard after PR-merge events. Currently this PR (the roadmap-v1 scaffolding PR) is the first to commit a populated dashboard, so the action is in-flight at this very session.
+**`R-IF-108`** — workflow v1.12 §7.4.7.3.C audit at per-axis CLAUDE.md §4.1 (in-flight PR; mode-agnostic posture; verification: grep). Per §4 derivation rule: priority 1 mode-agnostic infrastructure, lowest R-NNN among ACTIVE entries with all `depends_on` RESOLVED.
 
-**On merge of this PR**, the dashboard's `recently_completed` will list it; next derivation will return whichever of the §I/§II/§III ACTIVE entries has all dependencies RESOLVED — likely `R-IF-108` or `R-200-ci-pytest-pyright-ruff-matrix` per priority order.
+**Fallback if all R-IF-* close before next session:** `R-002` (remaining substitution retirements survey; surface I; posture phase-7; skill `phase-7-substitution-retirement`; verification grep). First execution decomposes §I atomic-unit set.
 
 ---
 
@@ -34,7 +34,7 @@
 | #109 | `worktree-memory-audit-round-3-2026-05-31` | `R-IF-109` | mode-agnostic |
 | #110 | `worktree-cxa-v2-18-item-11-od-is-edge-drift` | `R-IF-110` | design-phase |
 | #111 | `worktree-od-plan-v2-27-item-12-od-internal-formalization` | `R-IF-111` | design-phase |
-| *(this PR)* | `worktree-project-roadmap-v1-scaffolding` | *(self)* | mode-agnostic |
+| *(this PR)* | `worktree-roadmap-post-merge-refresh-pr-112` | *(self, post-merge refresh)* | mode-agnostic |
 
 ---
 
@@ -42,11 +42,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #112 (`7f3e6ce`) | 2026-05-31 | roadmap(v1) scaffolding — drift-detected deterministic next-action derivation (this artifact) |
 | PR #107 (`89915af`) | 2026-05-31 | apply PR #105 Reading C — CP spec v1.30 + plan v2.31 |
 | PR #106 (`c8918b3`) | 2026-05-31 | overnight expansion summary — 5 work units / 1 fork / 0 hidden halts |
 | PR #105 (`2ba7a1f`) | 2026-05-31 | Class 1 fork filing: PR-2 workflow-layer composer ctx-access |
 | PR #104 (`4294d41`) | 2026-05-31 | memory audit round-2 — 50 entries / 7 findings |
-| PR #103 (`08ac87d`) | 2026-05-31 | halt records — overnight expansion items 7+11+12+13 |
 
 ---
 
@@ -85,8 +85,9 @@ Sample (highest-leverage open):
 | Date | Source | Resolution |
 |---|---|---|
 | 2026-05-31 | Dashboard creation (v1 origin) | n/a |
+| 2026-05-31 | First post-merge refresh — PR #112 merged at `7f3e6ce`; dashboard hash recomputed `9c31e4978c3d` → `5a077d17765f` | Refreshed via this PR per CLAUDE.md §12.2. |
 
-**No drift detected since v1 publication.** First post-merge audit will populate this table if/when drift surfaces.
+**Audit protocol exercised end-to-end at v1 publication.** Post-merge refresh discipline confirmed operational.
 
 ---
 
