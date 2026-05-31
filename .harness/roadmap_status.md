@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `82ce25e90fd5` |
-| `last_refreshed` | 2026-05-31T20:10:00-06:00 |
-| `git_head` | `27bfeaff` (main) — `ops: SessionStart audit hook — fresh sessions auto-know roadmap state (#122)` |
+| `workspace_state_hash` | `a9f8cc1bd85d` |
+| `last_refreshed` | 2026-05-31T14:31:38-06:00 |
+| `git_head` | `54337c1` (main) — `audit: workflow v1.12 §7.4.7.3.C audit at per-axis CLAUDE.md §4.1 (#108)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-49.md` |
 | `open_fork_doc_count` | 39 |
 
@@ -20,7 +20,7 @@
 
 ## Next action
 
-**`R-IF-108`** — workflow v1.12 §7.4.7.3.C audit at per-axis CLAUDE.md §4.1 (in-flight PR; mode-agnostic posture; verification: grep). Per §4 derivation rule: priority 1 mode-agnostic infrastructure, lowest R-NNN among ACTIVE entries with all `depends_on` RESOLVED.
+**`R-IF-109`** — workspace memory-entry audit round-3 (in-flight PR #109; mode-agnostic posture; verification: grep). Per §4 derivation rule: priority 1 mode-agnostic infrastructure, lowest R-NNN among ACTIVE entries with all `depends_on` RESOLVED. (R-IF-108 CLOSED at PR #108 merge `54337c1` — §7.4.7.3.C audit landed with sibling-cumulative-counts completeness fix.)
 
 **Fallback if all R-IF-* close before next session:** `R-002` (remaining substitution retirements survey; surface I; posture phase-7; skill `phase-7-substitution-retirement`; verification grep). First execution decomposes §I atomic-unit set.
 
@@ -30,11 +30,10 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| #108 | `worktree-claude-md-section-4-1-audit-2026-05-31` | `R-IF-108` | mode-agnostic |
 | #109 | `worktree-memory-audit-round-3-2026-05-31` | `R-IF-109` | mode-agnostic |
 | #110 | `worktree-cxa-v2-18-item-11-od-is-edge-drift` | `R-IF-110` | design-phase |
 | #111 | `worktree-od-plan-v2-27-item-12-od-internal-formalization` | `R-IF-111` | design-phase |
-| *(this PR)* | `worktree-roadmap-post-merge-refresh-pr-112` | *(self, post-merge refresh)* | mode-agnostic |
+| *(this PR)* | `worktree-roadmap-refresh-post-pr-108` | *(self, post-merge refresh)* | mode-agnostic |
 
 ---
 
@@ -42,11 +41,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #108 (`54337c1`) | 2026-05-31 | R-IF-108 — workflow v1.12 §7.4.7.3.C audit at per-axis CLAUDE.md §4.1; +sibling cumulative-counts completeness fix (harness-is §4.1:151) caught at fresh-session verification |
+| PR #123 (`9f1bbf4`) | 2026-05-31 | ops: roadmap status refresh post-PR-122 (parallel-process terminating refresh; local main reconciled via fast-forward this session) |
 | PR #122 (`27bfeaf`) | 2026-05-31 | ops: SessionStart audit hook — enforcement-layer companion to §12.1 |
 | PR #121 (`0062cf6`) | 2026-05-31 | ops: roadmap status refresh post-PR-120 |
 | PR #120 (`622790c`) | 2026-05-31 | ops: NotebookLM MCP server supplement + .mcp.json registration |
-| PR #119 (`17aafc0`) | 2026-05-31 | ops: roadmap status refresh post-PR-118 |
-| PR #118 (`65ed646`) | 2026-05-31 | ops: NotebookLM skill installed + R-600 RESOLVED in single arc |
 
 ---
 
@@ -72,7 +71,7 @@ Sample (highest-leverage open):
 |---|---|---|
 | RETIRED | 33+ (per batch-49) | See `harness-*/CLAUDE.md` §4.1 + `phase-7d-retirement-events-batch-*.md` for canonical enumeration |
 | RETIRE-READY | 2 active (AS-8d + OD-5) | Both await operator deployment substrate per R-001 + R-004 |
-| PARTIAL | H_T-IS-2 + others | H_T-IS-2 awaits ~13 producer-site lifts per R-003 |
+| PARTIAL | H_T-IS-2 + others | H_T-IS-2 awaits 7 producer-site lifts remaining post-PR #107 (6-of-13 LANDED at PR #107 `89915af`) per R-003 |
 | STILL-BOUNDED | several | Decomposition-owed at R-002 |
 | RETIRED-AS-AUTHORING-ONLY | 4 | Sub-species 10 closures (OD-1, OD-7, IS-4, CP-23) per batches 37+38+39+41 |
 
@@ -92,8 +91,10 @@ Sample (highest-leverage open):
 | 2026-05-31 | Third terminating refresh — PR #118 NotebookLM skill setup merged at `65ed646`; §12.2 owed follow-on refresh | Single-file dashboard-only refresh per §12.2.1. Hash `12f34637fd3a` → `47c763cb4fb3`. |
 | 2026-05-31 | Fourth terminating refresh — PR #120 NotebookLM MCP server supplement merged at `622790c`; §12.2 owed follow-on refresh | Single-file dashboard-only refresh per §12.2.1. Hash `47c763cb4fb3` → `6283a744645e`. |
 | 2026-05-31 | Fifth terminating refresh — PR #122 SessionStart audit hook (enforcement layer) merged at `27bfeaf`; §12.2 owed follow-on refresh | Single-file dashboard-only refresh per §12.2.1. Hash `6283a744645e` → `82ce25e90fd5`. From this PR forward, audits auto-fire at every session start. |
+| 2026-05-31 | Fresh-session reconciliation — local `main` found 13 commits stale (showed `#106`) vs `origin/main` `#123`; SessionStart hook not yet on local main so no auto-orient | Fast-forwarded local main; reset to `origin/main` `9f1bbf4` after parallel process pushed equivalent post-#122 refresh (#123); identical-tree sibling discarded. No divergence created. |
+| 2026-05-31 | Sixth terminating refresh — PR #108 R-IF-108 audit merged at `54337c1`; `[ROADMAP DRIFT] action=§12.3` flagged by on-main hook; §12.2 owed follow-on refresh | Single-file dashboard-only refresh per §12.2.1. Hash `82ce25e90fd5` → `a9f8cc1bd85d`. R-IF-108 closed; next action recomputed to R-IF-109. |
 
-**Audit protocol exercised across 5 closure events.** Discipline + enforcement layers both operational.
+**Audit protocol exercised across 6 closure events + 1 fresh-session reconciliation.** Discipline + enforcement layers both operational.
 
 ---
 
