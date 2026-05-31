@@ -4,6 +4,11 @@
       "type": "stdio",
       "command": "uv",
       "args": ["run", "python", "scaffolding/mcp/server.py"]
+    },
+    "notebooklm": {
+      "type": "stdio",
+      "command": "notebooklm-mcp",
+      "args": ["--transport", "stdio"]
     }
   }
 }
