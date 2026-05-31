@@ -10,7 +10,7 @@
 
 The Action Surface (AS) axis owns **capability**: SandboxTier enum + tier-monotonicity ordering, tool contract schemas (I/O types + namespacing + strict-mode + description-as-prompt), tool gate policy (3-valued GateLevel), sandbox observability namespace (`sandbox.*` 7-attribute), sandbox-event idempotency-key composition, SkillFrontmatter schema + Skills loading discipline, Skills filesystem residence + reachability, Anthropic + MCP primitive observability (15-namespace exports), and AS substrate seam exports manifest.
 
-AS posture per `Cross_Axis_Composition_Document_v2_16.md` §2.4 per-axis attribution: producer of **11 outbound edges (all to IS); 7 genuine** (CXA-canonical at v2.6 → v2.16; AS does not declare outbound edges to CP or OD); consumer of 0 cross-axis edges from CP / OD at axis-attribution layer (CP and OD pull from AS via U-AS-33 substrate seam exports manifest — **19 CP→AS canonical / 6 genuine** + **10 OD→AS** = **29 inbound edges** at v2.16; CP→AS bucket grew 18→19 at v2.15 row 6 U-CP-68 → U-AS-03 ToolContract Pattern-P1 seam landed at U-CP-70 commit `2e417e0`). Active axis-posture claim refreshed at this PR per pre-existing `[[class_3_tension_per_axis_claude_md_v2_1_to_v2_4_count_drift]]` carry **PARTIAL-CLOSED 2026-05-31**; §2.4 plan-internal 13-edge table preserved verbatim per FM-2 (the 13-vs-11 plan-vs-CXA divergence pre-dates the named carry — CXA v2.0 was already at 11; full closure requires plan-vs-CXA reconciliation arc at separate scope).
+AS posture per `Cross_Axis_Composition_Document_v2_17.md` §2.4 per-axis attribution: producer of **11 outbound edges (all to IS); 7 genuine** (CXA-canonical at v2.6 → v2.17; AS does not declare outbound edges to CP or OD); consumer of 0 cross-axis edges from CP / OD at axis-attribution layer (CP and OD pull from AS via U-AS-33 substrate seam exports manifest — **19 CP→AS canonical / 6 genuine** + **10 OD→AS** = **29 inbound edges** at v2.17; CP→AS bucket grew 18→19 at v2.15 row 6 U-CP-68 → U-AS-03 ToolContract Pattern-P1 seam landed at U-CP-70 commit `2e417e0`). Active axis-posture claim refreshed at PR #91 2026-05-31 (v2.1 baseline → v2.16); v2.16 → v2.17 refresh at this PR per CXA v2.17 §0.3 absorbing 6-row CP→IS Pattern-P1 bucket growth at PR #92 commit `28259ed` 2026-05-31 — **AS-axis data PRESERVED VERBATIM at v2.17** (AS outbound 11/7 / CP→AS 19/6 / OD→AS 10 / 29 inbound unchanged — v2.17 grew CP→IS bucket only). `[[class_3_tension_per_axis_claude_md_v2_1_to_v2_4_count_drift]]` carry remains **PARTIAL-CLOSED**; §2.4 plan-internal 13-edge table preserved verbatim per FM-2 (the 13-vs-11 plan-vs-CXA divergence pre-dates the named carry — CXA v2.0 was already at 11; full closure requires plan-vs-CXA reconciliation arc at separate scope).
 
 ### 1.2 Spec + plan authority
 
@@ -66,20 +66,20 @@ ADD attestation: `Architectural_Design_Document_v1_3.md` v1.3.
 
 ### 2.2 AS export seams (consumed by CP / OD)
 
-Per U-AS-33 substrate seam exports manifest (C-AS-16). Cardinality at CXA v2.16: **19 edges CP→AS canonical (6 genuine) + 10 edges OD→AS = 29 inbound consumer edges** (v2.1 baseline was 24+10=34; refreshed at this PR per `[[class_3_tension_per_axis_claude_md_v2_1_to_v2_4_count_drift]]` PARTIAL-closure 2026-05-31). Detailed per-bucket enumeration at `Cross_Axis_Composition_Document_v2_16.md` §2.3.3 (CP→AS; v2.16 preserves v2.15 row 6 U-CP-68 → U-AS-03 ToolContract Pattern-P1 seam) + §2.3.5 (OD→AS; preserved verbatim from v2.6 → v2.16; original §2.3.6 cite at v2.1 baseline was a typo — §2.3.6 is the OD→CP bucket per CXA §2.3 canonical numbering).
+Per U-AS-33 substrate seam exports manifest (C-AS-16). Cardinality at CXA v2.17: **19 edges CP→AS canonical (6 genuine) + 10 edges OD→AS = 29 inbound consumer edges** (v2.1 baseline was 24+10=34; refreshed at PR #91 per `[[class_3_tension_per_axis_claude_md_v2_1_to_v2_4_count_drift]]` PARTIAL-closure 2026-05-31; preserved verbatim at v2.17). Detailed per-bucket enumeration at `Cross_Axis_Composition_Document_v2_17.md` §2.3.3 (CP→AS; v2.17 preserves v2.15 row 6 U-CP-68 → U-AS-03 ToolContract Pattern-P1 seam) + §2.3.5 (OD→AS; preserved verbatim from v2.6 → v2.17; original §2.3.6 cite at v2.1 baseline was a typo — §2.3.6 is the OD→CP bucket per CXA §2.3 canonical numbering).
 
-### 2.3 Cross-axis edge inventory (CXA v2.16; PARTIAL-refresh from v2.1 baseline at this PR)
+### 2.3 Cross-axis edge inventory (CXA v2.17; v2.16 → v2.17 cite refresh preserving AS-axis data verbatim)
 
 | Edge direction | Edges | Source artifact |
 |---|---|---|
-| AS → IS (outbound; canonical) | **11** (CXA v2.6+ canonical; AS plan v1.2 §3.4 internally enumerates 13 — see §2.4 divergence note) | `Cross_Axis_Composition_Document_v2_16.md` §2.3.1 + §2.4 per-axis attribution |
-| CP → AS (inbound) | **19 canonical / 6 genuine** (was 18/5 at v2.14; v2.15 row 6 U-CP-68 → U-AS-03 ToolContract Pattern-P1 seam landed) | `Cross_Axis_Composition_Document_v2_16.md` §2.3.3 |
-| OD → AS (inbound) | 10 (unchanged v2.6 → v2.16) | `Cross_Axis_Composition_Document_v2_16.md` §2.3.5 (original v2.1 cite at `§2.3.6` was a typo — §2.3.6 is OD→CP) |
+| AS → IS (outbound; canonical) | **11** (CXA v2.6+ canonical; AS plan v1.2 §3.4 internally enumerates 13 — see §2.4 divergence note) | `Cross_Axis_Composition_Document_v2_17.md` §2.3.1 + §2.4 per-axis attribution |
+| CP → AS (inbound) | **19 canonical / 6 genuine** (was 18/5 at v2.14; v2.15 row 6 U-CP-68 → U-AS-03 ToolContract Pattern-P1 seam landed) | `Cross_Axis_Composition_Document_v2_17.md` §2.3.3 |
+| OD → AS (inbound) | 10 (unchanged v2.6 → v2.17) | `Cross_Axis_Composition_Document_v2_17.md` §2.3.5 (original v2.1 cite at `§2.3.6` was a typo — §2.3.6 is OD→CP) |
 | AS → CP / AS → OD (outbound) | 0 | AS does not declare outbound edges to CP or OD; CP/OD pull from U-AS-33 |
 
 ### 2.4 AS → IS edge profile (13 plan-internal edges across 8 AS units; 11 at CXA canonical — see divergence note)
 
-Per `Implementation_Plan_Action_Surface_v1_2.md` §3.4. **Plan-internal enumeration; CXA v2.16 §2.4 per-axis attribution aggregates to 11 AS outbound.** The 13-vs-11 plan-vs-CXA divergence is a known split that pre-dates the named `[[class_3_tension_per_axis_claude_md_v2_1_to_v2_4_count_drift]]` carry (CXA v2.0 was already at 11); reconciliation arc owed at separate scope (either AS plan v1.2 §3.4 amends 13 → 11 or CXA §2.4 §2.3.1 revisits). **NOT patched at this PR per FM-2.**
+Per `Implementation_Plan_Action_Surface_v1_2.md` §3.4. **Plan-internal enumeration; CXA v2.17 §2.4 per-axis attribution aggregates to 11 AS outbound.** The 13-vs-11 plan-vs-CXA divergence is a known split that pre-dates the named `[[class_3_tension_per_axis_claude_md_v2_1_to_v2_4_count_drift]]` carry (CXA v2.0 was already at 11); reconciliation arc owed at separate scope (either AS plan v1.2 §3.4 amends 13 → 11 or CXA §2.4 §2.3.1 revisits). **NOT patched at this PR per FM-2.**
 
 | AS unit | IS carrier(s) | IS export seam |
 |---|---|---|
@@ -207,7 +207,7 @@ Axis-specific design defects route per `Project_Workflow_v1_8.md` §2.7.6 + work
 | AS spec v1.3 contract defect (C-AS-NN under-specifies the surface; spec inconsistent with ADR) | Phase 5 spec revision-pass at design-phase workspace |
 | ADR-F4 v1.1 / F5 v1.1 / D2 v1.2 / D3 v1.2 anchor decision defect | Phase 3a/3b ADR revision via council convening |
 | ADD v1.3 attestation mismatch with AS spec v1.3 | Phase 3d ADD revision |
-| CXA v2.16 §2.3.1 (AS→IS) / §2.3.3 (CP→AS) / §2.3.5 (OD→AS) edge defect | Phase 6 CXA revision-pass at design-phase workspace (original v2.1 cites at §2.3.4 (CP→AS) + §2.3.6 (OD→AS) were typos — canonical bucket numbering is §2.3.3 + §2.3.5; refreshed at this PR per `[[class_3_tension_per_axis_claude_md_v2_1_to_v2_4_count_drift]]` PARTIAL-closure 2026-05-31) |
+| CXA v2.17 §2.3.1 (AS→IS) / §2.3.3 (CP→AS) / §2.3.5 (OD→AS) edge defect | Phase 6 CXA revision-pass at design-phase workspace (original v2.1 cites at §2.3.4 (CP→AS) + §2.3.6 (OD→AS) were typos — canonical bucket numbering is §2.3.3 + §2.3.5; refreshed at PR #91 per `[[class_3_tension_per_axis_claude_md_v2_1_to_v2_4_count_drift]]` PARTIAL-closure 2026-05-31; cite bump v2.16 → v2.17 at this PR) |
 | AS export seam (U-AS-33 manifest) defect; consumer-side CP / OD plan re-cite required | Phase 6 AS plan revision-pass; cascade to consumer-side plans if seam-export shape changes |
 
 ### 5.2 Open carry-forwards at AS axis entry
@@ -235,4 +235,4 @@ C7 consultation outcome at audit (preserved): `opentelemetry-instrumentation-gen
 
 ---
 
-*End of `harness-as/CLAUDE.md`. Parent guidance at workspace root `CLAUDE.md`. AS spec + plan + CXA v2.16 §2.3.1 / §2.3.3 / §2.3.5 at design-phase workspace.*
+*End of `harness-as/CLAUDE.md`. Parent guidance at workspace root `CLAUDE.md`. AS spec + plan + CXA v2.17 §2.3.1 / §2.3.3 / §2.3.5 at design-phase workspace.*
