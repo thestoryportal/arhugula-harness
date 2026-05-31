@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `03714383e971` |
-| `last_refreshed` | 2026-05-31T16:35:00-06:00 |
-| `git_head` | `c339728` (main) — `R-003 Cluster B: lift procedural_tier_snapshot_ref at CP sites + document None-canonical (#137)` |
+| `workspace_state_hash` | `3111061f3b6b` |
+| `last_refreshed` | 2026-05-31T16:45:00-06:00 |
+| `git_head` | `a943caf` (main) — `roadmap(R-003): RESOLVED at PR #136 + #137; R-001-h-t-is-2-retired → ACTIVE (#138)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-49.md` |
 | `open_fork_doc_count` | 39 |
 
@@ -30,8 +30,8 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(none — R-003 Cluster A (#136) + Cluster B (#137) merged 2026-05-31)* | — | — | — |
-| *(this PR)* | `worktree-roadmap-refresh-post-r-003` | *(self, substantive — R-003→RESOLVED + R-001→ACTIVE; follow-on terminating refresh owed)* | mode-agnostic |
+| *(none — R-003 closed; #136/#137/#138 all merged 2026-05-31)* | — | — | — |
+| *(this PR)* | `worktree-roadmap-terminating-refresh-138` | *(self, terminating refresh post-PR-138 per §12.2.1)* | mode-agnostic |
 
 ---
 
@@ -39,11 +39,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #138 (`a943caf`) | 2026-05-31 | **R-003 RESOLVED** substantive roadmap refresh — R-003 → RESOLVED + R-001-h-t-is-2-retired BLOCKED → ACTIVE; dashboard hash + next-action + retirement-progress updated. Bundled (roadmap + dashboard) → this terminating refresh owed |
 | PR #137 (`c339728`) | 2026-05-31 | **R-003 Cluster B** — CP-axis producer-site lifts: `construct_sibling_ledger_entry` (via cp_is_wiring resolver) + `workflow_driver._append_step_ledger_entry` (DriverContext Protocol resolver field + HarnessContext/stage-6 wiring); + 3 None-canonical doc-comments. 6 new tests; 2281 pass |
 | PR #136 (`5e4a112`) | 2026-05-31 | **R-003 Cluster A** — runtime producer-site lifts: `RuntimeSubAgentDispatcher` (8b) + `RuntimeHITLGateComposer` (8b-HITL) populate `procedural_tier_snapshot_ref`; resolver built at bootstrap stage 5, threaded into 3 ctors. 4 new tests; 2146 pass |
 | PR #135 (`1895a6b`) | 2026-05-31 | ops: roadmap status refresh post-PR-134 (thirteenth terminating refresh; next-action → R-003 Cluster A) |
 | PR #134 (`f8572b3`) | 2026-05-31 | roadmap §3 schema amendment — declare `resume:` field + `satisfied:<date>` advisor value + checkpoint-on-pause rule (enum kept closed); reconcile R-003 to schema-legal |
-| PR #132 (`7c79fb4`) | 2026-05-31 | R-003 orientation persisted as resume-state — NEW `.harness/R-003-checkpoint.md` + entry resume pointer; stop-short seamless across `/clear` |
 
 ---
 
@@ -103,7 +103,9 @@ Sample (highest-leverage open):
 
 | 2026-05-31 | **R-003 RESOLVED** — Cluster A (#136 `5e4a112`) + Cluster B (#137 `c339728`) merged; substantive roadmap PR (this) marks R-003 → RESOLVED + R-001-h-t-is-2-retired BLOCKED → ACTIVE | Bundled change (Project_Roadmap_v1.md + dashboard) → NOT a terminating refresh per §12.2.1; title drops the `ops: roadmap status refresh` prefix; **follow-on terminating refresh owed**. Hash `1c852278bfc9` → `03714383e971` (state at `c339728`, pre-this-PR-merge). Next action re-derived: **R-001-h-t-is-2-retired** (IS-2 producer cascade complete; file the PARTIAL → RETIRED retirement event). |
 
-**Audit protocol exercised across 13 terminating-refresh closures + 1 fresh-session reconciliation + 1 substantive close (R-003).** Discipline + enforcement layers operational. **R-003 RESOLVED 2026-05-31 (PR #136 + #137); deterministic next-action = R-001-h-t-is-2-retired. A follow-on terminating refresh is owed per §12.2.1 (this PR is bundled/substantive, not dashboard-only).**
+| 2026-05-31 | Fourteenth terminating refresh — PR #138 substantive R-003-close refresh merged at `a943caf`; §12.2 owed follow-on | Single-file dashboard-only refresh per §12.2.1. Hash `03714383e971` → `3111061f3b6b` (state at `a943caf`). Next action UNCHANGED at **R-001-h-t-is-2-retired**. This is the recursion-stopping fixed point for the R-003 close: dashboard now lags by exactly one commit (this refresh's own merge), recognized as `lag-expected` by the next §12.1 session-start audit. |
+
+**Audit protocol exercised across 14 terminating-refresh closures + 1 fresh-session reconciliation + 1 substantive close (R-003).** Discipline + enforcement layers operational. **R-003 RESOLVED 2026-05-31 (PR #136 + #137 + #138 substantive refresh + this terminating refresh); deterministic next-action = R-001-h-t-is-2-retired (IS-2 PARTIAL → RETIRED retirement-event filing).**
 
 ---
 
