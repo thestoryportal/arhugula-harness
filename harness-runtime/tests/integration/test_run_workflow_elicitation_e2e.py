@@ -54,6 +54,7 @@ from harness_cp.workflow_driver_types import (
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_is.path_class_registry import PathClass
+from harness_is.state_ledger_entry_schema import Identifier as _Identifier
 from harness_od.audit_ledger_types import SignatureAlgorithm
 from harness_runtime.bootstrap import run_bootstrap
 from harness_runtime.bootstrap import stage_4_od as _stage_4_od_mod
@@ -73,7 +74,6 @@ from harness_runtime.types import (
 )
 from mcp.shared.memory import create_connected_server_and_client_session
 from mcp.types import ElicitResult
-
 
 _WORKLOAD = WorkloadClass.SOFTWARE_ENGINEERING
 _SURFACE = DeploymentSurface.LOCAL_DEVELOPMENT
@@ -332,6 +332,7 @@ def _make_test_step_dispatchers_override(
         tracer_provider=cast(Any, ctx.tracer_provider),
         audit_signing_key_id="harness-runtime-test",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
     )
     sync_facade = materialize_sync_dispatcher_facade(
         cast(Any, hitl_composer), result_timeout_seconds=30.0
