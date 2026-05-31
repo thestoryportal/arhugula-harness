@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `8780c87985f2` |
-| `last_refreshed` | 2026-05-31T17:15:01-06:00 |
-| `git_head` | `4a0aa1d` (main) — `phase-7d(batch-50): H_T-IS-2 PARTIAL → RETIRED — substantive substitution-retirement (#141)` |
+| `workspace_state_hash` | `ec4f50af797b` |
+| `last_refreshed` | 2026-05-31T17:21:39-06:00 |
+| `git_head` | `5ca46f5` (main) — `roadmap(R-001-h-t-is-2-retired): RESOLVED at PR #141 + log Cluster A/B drift + R-IF hygiene (#142)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-50.md` |
 | `open_fork_doc_count` | 39 |
 
@@ -31,7 +31,7 @@
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
 | *(none — #136/#137/#138/#139/#140/#141 all merged 2026-05-31)* | — | — | — |
-| *(this PR)* | `worktree-roadmap-close-r-001-post-pr-141` | *(self — substantive R-001 close + drift-log + R-IF hygiene; **follow-on terminating refresh owed** per §12.2.1)* | mode-agnostic |
+| *(this PR)* | `worktree-roadmap-terminating-refresh-post-pr-142` | *(self — terminating refresh post-PR-142 per §12.2.1; recursion-stopping fixed point)* | mode-agnostic |
 
 ---
 
@@ -39,11 +39,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #142 (`5ca46f5`) | 2026-05-31 | **R-001-h-t-is-2-retired RESOLVED** (substantive close) — marks R-001 RESOLVED + reconciles stale-ACTIVE R-IF-108/109/110/111 → RESOLVED + dashboard refresh (next-action re-derived to R-200-ci §III); logs the Cluster A/B drift + #140 hardening |
 | PR #141 (`4a0aa1d`) | 2026-05-31 | **R-001-h-t-is-2-retired RESOLVED** — batch-50: H_T-IS-2 PARTIAL → RETIRED (substantive substitution-retirement). All 13 producer sites handled; X-AL-2 both conjuncts MET. IS-axis 9/9 RETIRED = 100% (FIRST axis fully RETIRED at strict view). harness-is/CLAUDE.md §4.1 + ledger v2 §11.4h |
 | PR #140 (`e55e99b`) | 2026-05-31 | **Hook hardening** — `session-start.sh` behind-origin guard (fixes the Cluster A/B stale-next-action drift: local main 4 behind origin → hook reported stale `next=R-003`). Default-branch-gated, timeout-guarded fetch; can't hang/fail offline |
 | PR #138 (`a943caf`) | 2026-05-31 | **R-003 RESOLVED** substantive roadmap refresh — R-003 → RESOLVED + R-001-h-t-is-2-retired BLOCKED → ACTIVE |
 | PR #137 (`c339728`) | 2026-05-31 | **R-003 Cluster B** — CP-axis producer-site lifts: `construct_sibling_ledger_entry` + `workflow_driver._append_step_ledger_entry`; + 3 None-canonical doc-comments. 2281 pass |
-| PR #136 (`5e4a112`) | 2026-05-31 | **R-003 Cluster A** — runtime producer-site lifts: `RuntimeSubAgentDispatcher` + `RuntimeHITLGateComposer` populate `procedural_tier_snapshot_ref`; resolver built at bootstrap stage 5 |
 
 ---
 
@@ -107,7 +107,9 @@ Sample (highest-leverage open):
 
 | 2026-05-31 | **Fresh-session reconciliation (Cluster A/B drift) + R-001 close** — a `/clear`→`continue` session's hook reported `next=R-003` though R-003 (Clusters A+B) was already shipped+merged (#136–#139); the primary checkout's local `main` was 4 commits behind `origin/main` and the hook never fetched (2nd instance of the line-92 class). | Fixed via `git merge --ff-only origin/main` (clean ff, no divergence); **hardened the hook** with a default-branch behind-origin guard (**PR #140** `e55e99b`). Then executed the true next-action: **R-001-h-t-is-2-retired RESOLVED** at **PR #141** `4a0aa1d` (H_T-IS-2 PARTIAL → RETIRED, batch-50; IS-axis 9/9 = 100%, FIRST axis fully RETIRED). This PR marks R-001 RESOLVED + reconciles stale-ACTIVE R-IF-108/109/110/111 → RESOLVED (confirmed merged) + logs this event. Substantive (roadmap + dashboard) → NOT a terminating refresh; **follow-on terminating refresh owed** per §12.2.1. Hash `1c852278bfc9` → `8780c87985f2` (state at `4a0aa1d`, pre-this-PR-merge). Next action re-derived: **R-200-ci-pytest-pyright-ruff-matrix** (§III rank 3 — §I drained, §III outranks §II). |
 
-**Audit protocol exercised across 14 terminating-refresh closures + 2 fresh-session reconciliations + 2 substantive closes (R-003, R-001-h-t-is-2-retired).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **R-001-h-t-is-2-retired RESOLVED 2026-05-31 (PR #141; H_T-IS-2 RETIRED, IS-axis 9/9 = 100%); deterministic next-action = R-200-ci-pytest-pyright-ruff-matrix (§III CI substrate). A follow-on terminating refresh is owed for this substantive PR.**
+| 2026-05-31 | Fifteenth terminating refresh — PR #142 substantive R-001-close merged at `5ca46f5`; §12.2 owed follow-on | Single-file dashboard-only refresh per §12.2.1. Hash `8780c87985f2` → `ec4f50af797b` (state at `5ca46f5`). Next action UNCHANGED at **R-200-ci-pytest-pyright-ruff-matrix**. Recursion-stopping fixed point for the R-001 close: dashboard now lags by exactly one commit (this refresh's own merge), recognized as `lag-expected` by the next §12.1 session-start audit. |
+
+**Audit protocol exercised across 15 terminating-refresh closures + 2 fresh-session reconciliations + 2 substantive closes (R-003, R-001-h-t-is-2-retired).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **R-001-h-t-is-2-retired RESOLVED 2026-05-31 (PR #141 + #142 substantive close + this terminating refresh); H_T-IS-2 RETIRED, IS-axis 9/9 = 100%; deterministic next-action = R-200-ci-pytest-pyright-ruff-matrix (§III CI substrate).**
 
 ---
 
