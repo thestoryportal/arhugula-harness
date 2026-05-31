@@ -42,6 +42,52 @@ If the operator's request is ambiguous (e.g., "review this" without specifying a
 
 ---
 
+## Standing posture — 2026-05-31 bake-in
+
+Four standing amendments to activation + workflow, encoded here so they auto-apply without operator invocation:
+
+### A. Pre-merge gate posture (was: post-hoc)
+
+Adversarial review fires **at PR-open or PR-ready-for-review**, not after merge. When a design-substrate amendment PR is open against the workspace and the artifact is declared complete in the PR description, the skill should self-activate (or be invoked) BEFORE the PR is merged. Post-merge review can only catch documentation drift; pre-merge review can prevent it from landing.
+
+Concrete trigger: a PR touching `design-substrate/**` or a Phase 7 impl arc PR opening against a previously-cleared spec/plan should be reviewed before merge. The X-AL-3 guard (CLAUDE.md §4.4) is a file-presence check; adversarial review is the substantive complement.
+
+### B. Pattern-catalogue-aware standing checklist
+
+The workspace has accumulated 50+ named patterns at memory (`[[advisor-before-substantive-work-for-cross-axis-blockers]]` at 58 applications, sub-species 3 at cardinality 11+ across 8 days, etc.). Every review MUST audit the artifact against the standing checklist below before composing findings. If any checklist item flags, classify per the standard Class 1/2/3 discriminator tree.
+
+**Standing checklist (audit at every review):**
+
+1. **Stale-carry-text disposition** — does the artifact carry framing from a prior version that's now stale per downstream landing? (workflow v1.13 §7.4.7 + workspace species-3 sub-species catalogue at 11+ instances)
+2. **Sibling-spec staleness** — does the artifact cite a sibling spec at a version that has since advanced? E.g., CP spec carrying "4-field EntryPayload" framing across v1.27 + v1.28 after IS spec v1.3 absorbed the 5th field (v1.29 §3 (e) sub-species candidate).
+3. **Forward-looking cite phantom** — does the artifact name a unit ID, file path, or symbol that doesn't exist at HEAD? (3 instances in 8 days: phase-7d-retirement-batch-17 OD-6 + plan U-OD-43 + spec §C-OD-27)
+4. **Checkpoint-listed-as-open-but-already-applied** — does the artifact treat as open a finding that was already applied at a prior PR? (cardinality 4 across 3 calendar days per sub-species 3 catalogue)
+5. **Plan-revision-against-not-yet-built-substrate** — does an atomic unit's ACs cite types/fields/firing-sites that aren't materialized at HEAD? (U-RT-111 sub-species at cardinality 4 in one calendar day)
+6. **Spec-prose-vs-plan-body drift** — do plan ACs match the current spec body or a stale spec version?
+7. **Verification-shape sharpening: grep-vs-e2e** — does an AC claim verification by grep when the contract demands end-to-end exercise? (`[[verification-shape-sharpened-grep-vs-e2e]]`)
+8. **Anti-extension invariant violation** — does the artifact silently extend H_T design at Phase 7 in violation of X-AL-3? (always-check; the most load-bearing rule)
+9. **Halt-route-split-AC pattern** — does an AC bundle materializable + unmaterializable atoms that should be split?
+
+Findings against checklist items are NOT formulaic — each requires the standard Class 1/2/3 severity + actionable framing.
+
+### C. Cross-spec drift probes
+
+For any review touching a per-axis spec or plan, **MUST grep across sibling specs/plans** for stale cite-shapes against the artifact under review. The workspace's biggest defect class is cross-spec coordination drift; intra-artifact review misses it structurally.
+
+Probe shape: grep dependent spec/plan files for cite-shapes of the artifact under review's contracts (`§NN.M`, field names, type names, function names). Flag any cite that references a superseded shape per the current artifact.
+
+### D. External-canon mode (research-corpus integration)
+
+Workspace's adversarial review has been intra-workspace (specs vs. plans vs. impl). The research corpus at `research/` carries canonical industry patterns (Pattern Reference Catalog v1.0; 5 cluster deep-dives; thought-leader inventory; 1k+ star repo profiles). Add a NEW finding category:
+
+**Class 2 (external-canon divergence)** — the artifact's contract or pattern diverges from a canonical industry reference at `research/Pattern_Reference_Catalog_v1.0.md` or `research/agent-harness-eng-research-cluster-N-*.md` without an explicit ADR-level deviation rationale.
+
+External-canon findings should cite the research corpus file + section, prefer the primary source the corpus itself cites (Anthropic engineering, arXiv ID, GitHub repo), and frame the divergence as either (a) intentional + needs ADR/spec rationale, or (b) accidental + needs correction.
+
+See `.claude/skills/council/council-orchestrator/references/research-citations.md` for the voice → cluster mapping; the same mapping applies to the adversarial reviewer's external-canon mode (review CP-spec amendments against Cluster 1; OD against Cluster 4; etc.).
+
+---
+
 ## What this skill produces
 
 A single Markdown file per checkpoint, named `Adversarial_Review_NN.md` where `NN` is the checkpoint identifier (`3a`, `3`, `5`, `6`). The file's structure is a contract:
