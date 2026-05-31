@@ -303,4 +303,50 @@ Storage persistence is non-trivial: `procedural_tier` survival scope per spec §
 
 ---
 
-*End of architect recommendation. Operator ratifications captured at PR #89 review comment (Q1 = γ-family, Q1.1 = γ, Q2 = narrow, Q3 = bundled, Q4 = inline). Apply-pass arc owed at next session opener with Q-α + Q-β resolution as first deliverables before spec authoring begins.*
+*End of original architect recommendation. Operator ratifications captured at PR #89 review comment (Q1 = γ-family, Q1.1 = γ, Q2 = narrow, Q3 = bundled, Q4 = inline). Apply-pass arc owed at next session opener with Q-α + Q-β resolution as first deliverables before spec authoring begins.*
+
+---
+
+## §11 Apply-pass session 2026-05-30 — 3-of-3 findings catalogue + residence-decision AUQ (DEFERRED to next session)
+
+*Appended at apply-pass session 2026-05-30 close. Pre-substantive advisor pass at apply-pass session opening + mid-arc + halt-decision = 3 advisor consultations at single arc (cardinality 55th application of `[[advisor-before-substantive-work-for-cross-axis-blockers]]` posture, single-arc-multi-call shape).*
+
+### §11.1 Apply-pass docs-half LANDED
+
+Spec v1.2 → v1.3 + plan v2.3 → v2.4 + arch rec §10 + this §11 LAND at apply-pass session close 2026-05-30 per Q3=bundled scope ratification (the docs half — spec amendment + plan revision + clearance marker). Impl half (resolver primitive + EntryPayload sidecar field extension + tests) DEFERRED per finding 3 of 3 (residence-decision AUQ owed at next session).
+
+### §11.2 Finding 1 — Replay semantics ambiguity (RESOLVED at AUQ design)
+
+See plan v2.4 §0.8 finding 1. Pre-substantive advisor pass + empirical grep across `replay` mentions discriminated engine-replay (CP/OD layer) from procedural-tier-state-reconstruction; procedural artifacts persist at filesystem+git per §C-IS-02 line 163. All 3 Q-α sub-shapes remained live; Q-α × Q-β coupling collapsed to 4 legal pairs; AUQ authored over 4 legal pairs at single D1. **Resolution:** AUQ design refinement; no spec/plan amendment owed.
+
+### §11.3 Finding 2 — Prompts referent absent (RESOLVED by spec narrowing pre-commit)
+
+See plan v2.4 §0.8 finding 2. Empirical grep at HEAD `8816ce9` surfaced ZERO runtime binding for `active_prompt_version` (no field on `HarnessContext`; no `PromptManifest` carrier at any harness-* package). Per X-AL-3 the spec MUST NOT commit a content-hash recipe to a phantom referent. **Resolution:** Spec v1.3 §5.2 recipe narrowed from 3 components to 2 components pre-commit per `[[impl-time-grounding-pass-pre-merge-revision]]`; prompts component deferred to v1.x runtime-binding-extension arc.
+
+### §11.4 Finding 3 — Resolver residence cycle (HALT — operator-decision territory)
+
+See plan v2.4 §0.8 finding 3. Empirical grep surfaced dep-graph cycle: `harness-runtime/src/harness_runtime/types.py:88-90` imports from harness-is at runtime; harness-is cannot import HarnessContext from harness-runtime per circular-dep constraint. The architect-rec-assumed `harness-is` residence is **structurally foreclosed** at HEAD. The Q3=bundled ratification originally promised "spec + plan + IS resolver impl"; the IS-resolver-impl half is operator-decision territory not covered by Q3.
+
+#### §11.4.1 Residence-decision AUQ (owed at next session)
+
+**Q-γ — Resolver implementation residence.** Three options enumerated; pick one to unblock the impl arc:
+
+- **(γ-1) `harness-runtime/.../procedural_tier_snapshot.py` under U-IS-18.** Cross-package contract-impl pattern: IS-axis spec contract (C-IS-05 §5.2) authored at spec v1.3; impl resides at sibling package per dep-graph constraint. **Cost:** establishes NEW workspace convention (IS-contract impl outside harness-is package); zero workspace precedent at this shape. **Benefit:** preserves Q2=narrow at plan-unit-ownership layer; no new runtime plan unit owed; impl is straightforward (single module ~30 lines).
+- **(γ-2) `harness-runtime/.../procedural_tier_snapshot.py` under NEW U-RT-NN.** Runtime plan v2.41 → v2.42 cascade authoring NEW U-RT-NN unit; spec v1.3 §5.2 contract is consumed by runtime plan rather than implemented by IS plan. **Cost:** runtime plan cascade owed at this arc (Q2=narrow scope-extension); plan-unit-ownership moves to runtime-axis. **Benefit:** preserves "contract resides where impl resides" workspace convention; mirror precedent U-CORE-02 (harness-core contract impl).
+- **(γ-3) Protocol pattern at `harness-core/src/harness_core/procedural_tier_snapshot.py`.** harness-core declares a `ProceduralTierSnapshotSource` Protocol with structural fields (`skills: Mapping[..., ...]`, `routing_manifest: ...`); harness-is depends on harness-core (existing dep) + consumes the Protocol at U-IS-18 signature; HarnessContext structurally conforms (Python Protocols cross BaseModel + frozen dataclass per duck-typing). **Cost:** larger surface (Protocol declaration + concrete fields at harness-core; needs `SkillID` + `RoutingManifest` carrier reachability from harness-core); structural-typing semantics need pyright strict verification. **Benefit:** preserves both Q2=narrow (resolver lives in IS package per plan-unit-ownership) + intra-IS-axis dep-graph (harness-is → harness-core only); closest to U-CORE-02 precedent. **Caveat:** `SkillID` lives at harness-runtime + `RoutingManifest` at harness-cp; (γ-3) may require carrier-re-home arc OR a Protocol-of-Protocol pattern at harness-core before viable.
+
+**Decisive structural argument owed at next session opener** — (γ-3)'s viability gate: empirical grep at HEAD against carrier residence + dep-graph constraint for `SkillID` + `RoutingManifest` cross-package consumption from harness-core. If carrier-re-home required, (γ-3) becomes a multi-arc proposition; (γ-1) becomes the structurally-smallest path. If carriers can be referenced from harness-core (e.g., via TYPE_CHECKING-only imports or via Protocol-of-Protocol pattern), (γ-3) preserves workspace conventions cleanest.
+
+### §11.5 Sub-species catalogue candidate
+
+`[[architect-rec-assumed-cross-package-binding-fails-impl-time-empirical-orientation]]` — distinct closure-event-class at workflow v1.13 §7.4.7.2; awaits second instance for sub-species addition. Pattern: an architect rec authored before HEAD empirical orientation makes a residence assumption (or a cross-package binding assumption); apply-time empirical orientation finds the assumption is structurally foreclosed at HEAD; arc splits between docs-half (lands) + impl-half (deferred to residence-decision AUQ). Mirror but distinct from U-RT-111 v2.35-v2.39 5-rescope arc (which operated at the plan-revision layer for not-yet-built substrate); this finding 3 operates at the architect-rec-arc layer for cross-package-binding gaps.
+
+### §11.6 Transit posture at apply-pass session close
+
+H_T-IS-2 substitution-retirement transit posture: **STILL-BOUNDED at apply-pass session close 2026-05-30** (UNCHANGED from PR #89 baseline). Docs-half landing alone does NOT advance transit per X-AL-2 second conjunct ("H_E substitution surface no longer invoked at substitution site"); impl-half lands transit STILL-BOUNDED → PARTIAL at follow-on arc.
+
+### §11.7 Next session opener
+
+**First action:** present Q-γ AUQ (3 residence options) with empirical (γ-3)-viability grep as decisive structural argument source. Then author follow-on impl arc per ratified residence: resolver primitive + EntryPayload sidecar field landing + tests + transit STILL-BOUNDED → PARTIAL filing.
+
+*End of §11. Apply-pass session 2026-05-30 closed at docs-half-LANDED + impl-half-DEFERRED + Q-γ-residence-AUQ-owed-at-next-session.*
