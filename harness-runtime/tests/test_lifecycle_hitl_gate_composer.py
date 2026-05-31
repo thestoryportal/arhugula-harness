@@ -709,6 +709,48 @@ async def test_4_substep_audit_chain_writes_one_cp_one_od_entry_per_placement(
     assert cp_action_id_attr is not None and cp_action_id_attr.startswith("hitl:")
 
 
+@pytest.mark.asyncio
+async def test_cp_entry_timestamp_is_iso_8601_per_v1_28(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """CP spec v1.28 §16.5.6.X — `timestamp` is non-tier-conditional per
+    C-CP-16 §16.2 + ADR-D5 §1.4. Pre-v1.28 `timestamp=""` placeholder closed
+    at hitl_gate_composer.py:713 composer-site clock."""
+    from datetime import datetime
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=5.0)]
+    )
+    ledger = _MockLedgerWriter()
+    audit = _MockAuditWriter()
+    composer = RuntimeHITLGateComposer(
+        inner=inner,
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, surface),
+        ledger_writer=cast(Any, ledger),
+        audit_writer=cast(Any, audit),
+        tracer_provider=provider,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+    )
+    placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    step = _make_step(placements=(placement,))
+    ctx = _make_step_context()
+
+    await composer.dispatch(cast(Any, object()), step, step_context=ctx)
+
+    assert len(audit.appends) == 1
+    _tenant_id, od_entry = audit.appends[0]
+    # cp_entry.timestamp projects to audit.cp.timestamp per
+    # harness_cxa.cp_audit_conversion.cp_audit_to_od_audit
+    timestamp = od_entry.payload.audit_namespace_attrs.get("audit.cp.timestamp")
+    assert timestamp is not None and timestamp != ""
+    parsed = datetime.fromisoformat(timestamp)
+    assert parsed.tzinfo is not None, "timestamp MUST carry UTC tzinfo"
+
+
 # ---------------------------------------------------------------------------
 # AC #10 — 4-response branch coverage (APPROVE / EDIT / REJECT / RESPOND)
 # ---------------------------------------------------------------------------

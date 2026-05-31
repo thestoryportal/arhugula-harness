@@ -142,8 +142,12 @@ def test_emit_override_state_ledger_actor_direct_reuse() -> None:
 # --- AC #5 — sibling composer ADDITIVE ---
 
 
-def test_emit_override_audit_entry_preserved_verbatim_byte_identical() -> None:
-    """Existing CP-audit composer signature + return type byte-identical to pre-v1.26."""
+def test_emit_override_audit_entry_signature_preserved_post_v1_28() -> None:
+    """Composer signature + return type preserved at v1.28 per CP spec
+    v1.28 §16.5.6.X ZERO breaking change discipline. `timestamp` field
+    transitions from `""` placeholder to composer-site ISO-8601 clock per
+    the universal-fix scope. `prior_event_hash="0"*64` sentinel preserved
+    at solo-developer tier per ADR-D5 §1.4 row 1."""
     out = emit_override_audit_entry(
         workflow_id="wf-1",
         step_id="step-2",
@@ -153,8 +157,8 @@ def test_emit_override_audit_entry_preserved_verbatim_byte_identical() -> None:
     assert isinstance(out, CPAuditLedgerEntry)
     assert out.action_id == "wf-1||step-2"
     assert out.response == "approve"
-    assert out.timestamp == ""
-    assert out.prior_event_hash == "0" * 64
+    assert out.timestamp != ""  # v1.28: composer-site clock
+    assert out.prior_event_hash == "0" * 64  # solo-dev sentinel per ADR-D5 §1.4 row 1
 
 
 # --- AC #6 — dual-emission order-independent ---

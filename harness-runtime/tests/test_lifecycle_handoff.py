@@ -175,8 +175,11 @@ def test_compose_dispatch_audit_carries_descent_gate_level(tmp_path: Path) -> No
     assert entry.gate_level.value == descent.child_gate_level.value
     # Composed entry's action_id encodes the parent identity (§12.5 join).
     assert "act-003" in entry.action_id
-    # Placeholder fields the U-RT-32 writer fills.
-    assert entry.timestamp == ""
+    # CP spec v1.28 §16.5.6.X: `timestamp` populated at composer-site
+    # clock (universal fix; non-tier-conditional per C-CP-16 §16.2).
+    # `prior_event_hash="0"*64` sentinel canonical at solo-developer tier
+    # per ADR-D5 §1.4 row 1 ("no hash chain required by default").
+    assert entry.timestamp != ""
     assert entry.prior_event_hash == "0" * 64
 
 

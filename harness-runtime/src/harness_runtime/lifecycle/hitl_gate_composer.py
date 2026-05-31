@@ -110,6 +110,7 @@ import hashlib
 import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from harness_core.identity import ActionID
@@ -710,7 +711,10 @@ class RuntimeHITLGateComposer:
         shape).
         """
         # 8a-HITL — compose CP audit (always produced; HITL-canonical shape).
-        timestamp = ""  # placeholder; downstream signer / writer fills as needed
+        # Composer-site clock per CP spec v1.28 §16.5.6.X universal timestamp
+        # fix (was `""` placeholder pre-v1.28). ISO-8601 per C-CP-16 §16.2
+        # `timestamp: str` field docstring.
+        timestamp = datetime.now(UTC).isoformat()
         if gate_result is None:
             # Timeout path partial entry — response=None semantic surfaced
             # as empty-string placeholder (the CPAuditLedgerEntry.response
@@ -763,8 +767,6 @@ class RuntimeHITLGateComposer:
 
         try:
             # 8b-HITL — F2-write the HITL action.
-            from datetime import UTC, datetime
-
             f2_payload = EntryPayload(
                 action_id=Identifier(str(hitl_action_id)),
                 idempotency_key=Identifier(str(hitl_action_id)),
