@@ -421,13 +421,23 @@ The pre-batch-48 CP-axis CP-9 row §5 PARTIAL classification (row line 112 "Repl
 
 **Catalogue keep-its-keep validation.** PR #76 consolidated retirement-event-pattern catalogue at `.harness/retirement-event-pattern-catalogue.md` merged at `ddeede6` 2026-05-29 ~30 min prior to batch-48 authoring. 4th sub-species 7a closure citing canonical sub-species naming from PR #76 §1.1 validates the catalogue discipline empirically — same-session-sequel keep-its-keep per workflow v1.11 §7.4.7.2 sub-species 5.1 lineage.
 
+### §11.4h H_T-IS-2 — STILL-BOUNDED → PARTIAL (batch-49) → RETIRED (batch-50)
+
+The §3 row line 75 STILL-BOUNDED classification ("Typed library exists (`harness-is/.../artifact_tier_registry.py`); zero bootstrap composer invokes `materialize_artifact_tier_registry`; cross-tier traceability invariant unenforced at append-time") is **superseded** by the substantive substitution-retirement arc closed at `batch-50` (2026-05-31). The intervening STILL-BOUNDED → PARTIAL transit (`batch-49`, 2026-05-30) was recorded at `harness-is/CLAUDE.md` §4.1 (live status) but not catalogued at §11; this entry records the full transit:
+
+- **batch-49 (substrate landing, STILL-BOUNDED → PARTIAL):** IS spec v1.3 §C-IS-05 §5.1 (`EntryPayload.procedural_tier_snapshot_ref` sidecar) + §5.2 (`resolve_procedural_tier_snapshot` resolver contract) + §C-IS-02 line 170 substantive-runtime-gate authored; carrier + `StateLedgerEntry` D-derivative field + `entry_hash.canonicalize` contribution landed at harness-is; resolver primitive + `make_procedural_tier_snapshot_resolver(ctx)` factory landed at runtime axis (residence per Q-γ=(γ-2) per `.harness/architect_recommendation_h_t_is_2_artifact_tier_registry_wiring.md` §11.4). X-AL-2 first conjunct MET; second conjunct BOUNDED (producer-site call-sites not yet lifted).
+- **batch-50 (producer-site cascade complete, PARTIAL → RETIRED):** all 13 producer sites handled — 6 §16.5 CP→IS composers populate the sidecar (PR #107 Reading C apply `89915af`); 4 active-workflow-context sites lifted (R-003 Cluster A PR #136 `sub_agent_dispatch` + `hitl_gate_composer`; Cluster B PR #137 `workflow_driver._append_step_ledger_entry` + `sibling_ledger_entry_composition`); 3 outside-context sites documented `None`-canonical per IS §5.1 (`audit_writer`, `as_is_wiring`, `shadow_git_rollback`).
+- **X-AL-2 second conjunct MET at batch-50:** the H_E convention-substitution (manual cross-tier traceability via `action_id` text per `CLAUDE.md`-declared tier-naming convention) is no longer invoked at any active-workflow-context producer site; cross-tier traceability is now programmatic (typed sidecar field, resolver-populated) + hash-chained at append-time. Empirically verified at HEAD `e736f53`. Both conjuncts MET → **RETIRED** (substantive-substrate-lift close shape; NOT vacuous/authoring-only/categorical-mismatch).
+
+**Cardinality delta at batch-50:** IS-axis RETIRED 8/9 → **9/9 (100%)** — IS-axis PARTIAL bucket EMPTY; **FIRST axis fully RETIRED at the strict RETIRED view** (CP-axis reached PARTIAL-bucket-empty at batch-48 but carries bounded-residual rows). Workspace RETIRED 45/54 → **46/54 (85.2%)** (anchored to batch-49 footer baseline); workspace pipeline-advanced UNCHANGED at 49/54 = 90.7% (within-pipeline-advanced PARTIAL → RETIRED transit); workspace PARTIAL −1 (IS-2 transits out). Row line 75 text PRESERVED VERBATIM per §0.5 forward-only discipline; this §11.4h supersession is the canonical disposition going forward.
+
 ### §11.5 Cumulative status pointer
 
 | | Live source |
 |---|---|
-| Latest filed batch | `batch-48` (2026-05-29, H_T-CP-9 PARTIAL → RETIRED via sub-species 7a 4th closure at CP spec v1.6 §25.5 line 375 v1.4 scope carve-out; FIRST sub-species 7a closure anchored at CP spec authority surface; CP-axis PARTIAL bucket EMPTY for FIRST TIME in ledger history) |
-| Cumulative RETIRED count (raw ledger) | 45/54 (83.3%) per batch-48 §4 footer (CP-axis 21/22 = 95.5%; CP-axis enters single-axis-clean state at active substitution view) |
-| Cumulative pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) | 48/54 (88.9%) per batch-48 §4 footer (preserved at §11.1a corrective baseline) |
+| Latest filed batch | `batch-50` (2026-05-31, H_T-IS-2 PARTIAL → RETIRED — substantive substitution-retirement closing the R-003 producer-site cascade; **IS-axis 9/9 RETIRED = 100%, FIRST axis fully RETIRED at the strict RETIRED view**). Prior: `batch-49` (2026-05-30, H_T-IS-2 STILL-BOUNDED → PARTIAL substrate landing; see §11.4h). |
+| Cumulative RETIRED count (raw ledger) | 46/54 (85.2%) per batch-50 §4 footer (IS-axis 9/9 = 100%; CP-axis 21/22 = 95.5%) |
+| Cumulative pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) | 49/54 (90.7%) per batch-49/batch-50 footer (IS-2 advanced into pipeline-advanced at batch-49; UNCHANGED at batch-50 within-pipeline-advanced transit) |
 | Per-axis live status | `harness-{is,as,cp,od}/CLAUDE.md` §4.1 |
 | Cross-axis cascade live status | §6.3.1 + §6.3.2 cascade re-evaluations at the batch in which the gating retirement filed (see batch-2 §3 + batch-3 referenced from `harness-od/CLAUDE.md`) |
 
