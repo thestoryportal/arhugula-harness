@@ -72,6 +72,10 @@ class EntryPayload(BaseModel):
     idempotency_key: Identifier
     actor: Actor
     timestamp: Timestamp
+    # v1.3 NEW D-derivative sidecar (C-IS-05 §5.1; U-IS-11 v2.4 amendment).
+    # Optional default preserves backward compat at existing callers; non-None
+    # value propagates to StateLedgerEntry + canonicalize + persisted JSONL line.
+    procedural_tier_snapshot_ref: Identifier | None = None
 
 
 class WriteKey(BaseModel):
@@ -100,27 +104,38 @@ class NonMonotonicTimestampError(ValueError):
 
 
 def _serialize_entry(entry: StateLedgerEntry) -> str:
-    """Serialize an entry to one §7.3 JSONL line."""
-    return json.dumps(
-        {
-            "action_id": entry.action_id,
-            "idempotency_key": entry.idempotency_key,
-            "actor": {
-                "actor_class": entry.actor.actor_class.value,
-                "actor_id": entry.actor.actor_id,
-            },
-            "response_hash": entry.response_hash.hex(),
-            "timestamp": entry.timestamp.isoformat(),
-            "prior_event_hash": entry.prior_event_hash.hex(),
+    """Serialize an entry to one §7.3 JSONL line.
+
+    v1.3 sidecar discipline (U-IS-11 v2.4 AC #12): when
+    ``procedural_tier_snapshot_ref`` is non-``None``, persisted JSONL line
+    includes the field as a 7th key; when ``None``, the key is omitted to
+    preserve compact bytes at bootstrap entries.
+    """
+    payload: dict[str, object] = {
+        "action_id": entry.action_id,
+        "idempotency_key": entry.idempotency_key,
+        "actor": {
+            "actor_class": entry.actor.actor_class.value,
+            "actor_id": entry.actor.actor_id,
         },
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
+        "response_hash": entry.response_hash.hex(),
+        "timestamp": entry.timestamp.isoformat(),
+        "prior_event_hash": entry.prior_event_hash.hex(),
+    }
+    if entry.procedural_tier_snapshot_ref is not None:
+        payload["procedural_tier_snapshot_ref"] = entry.procedural_tier_snapshot_ref
+    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 
 def _deserialize_entry(line: str) -> StateLedgerEntry:
-    """Reconstruct an entry from one §7.3 JSONL line."""
+    """Reconstruct an entry from one §7.3 JSONL line.
+
+    v1.3 sidecar discipline: ``procedural_tier_snapshot_ref`` MAY be absent
+    on legacy entries written before v1.3; default ``None`` reproduces the
+    schema's optional shape.
+    """
     raw = json.loads(line)
+    snapshot_ref_raw = raw.get("procedural_tier_snapshot_ref")
     return StateLedgerEntry(
         action_id=Identifier(raw["action_id"]),
         idempotency_key=Identifier(raw["idempotency_key"]),
@@ -131,6 +146,9 @@ def _deserialize_entry(line: str) -> StateLedgerEntry:
         response_hash=bytes.fromhex(raw["response_hash"]),
         timestamp=Timestamp.fromisoformat(raw["timestamp"]),
         prior_event_hash=bytes.fromhex(raw["prior_event_hash"]),
+        procedural_tier_snapshot_ref=(
+            Identifier(snapshot_ref_raw) if snapshot_ref_raw is not None else None
+        ),
     )
 
 
@@ -182,6 +200,10 @@ def append_ledger_entry(
             response_hash=ALL_ZEROS_SENTINEL,  # placeholder — recomputed below
             timestamp=entry_payload.timestamp,
             prior_event_hash=construct_prior_event_hash(prior_entry),
+            # v1.3 NEW sidecar (U-IS-11 v2.4 AC #11/#12/#13/#14). Threaded
+            # through from EntryPayload; canonicalize() includes it in the
+            # hash recipe when non-None per AC #13.
+            procedural_tier_snapshot_ref=entry_payload.procedural_tier_snapshot_ref,
         )
         entry = draft.model_copy(update={"response_hash": compute_response_hash(draft)})
         with ledger_handle.canonical_path.open("a") as fh:

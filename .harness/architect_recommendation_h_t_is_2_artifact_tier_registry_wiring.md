@@ -350,3 +350,64 @@ H_T-IS-2 substitution-retirement transit posture: **STILL-BOUNDED at apply-pass 
 **First action:** present Q-γ AUQ (3 residence options) with empirical (γ-3)-viability grep as decisive structural argument source. Then author follow-on impl arc per ratified residence: resolver primitive + EntryPayload sidecar field landing + tests + transit STILL-BOUNDED → PARTIAL filing.
 
 *End of §11. Apply-pass session 2026-05-30 closed at docs-half-LANDED + impl-half-DEFERRED + Q-γ-residence-AUQ-owed-at-next-session.*
+
+---
+
+## §11.8 Apply-pass session-continuation 2026-05-30 — Q-γ ratification + impl-half LANDED
+
+**Q-γ AUQ ratification 2026-05-30 (session continuation post-PR-#89-docs-half push):** operator selected **(γ-2) NEW U-RT-NN at runtime plan v2.42 cascade** at next-session-opener AUQ. Decisive arguments per AskUserQuestion response: (1) preserves "contract resides where impl resides" workspace convention; (2) U-CORE-02 mirror precedent (harness-core-impl of AS-axis contract); (3) smallest cascade cost — NEW U-RT-112 + runtime plan v2.42 delta + harness-runtime impl module; NO Protocol declaration + NO carrier re-home.
+
+### §11.8.1 Empirical reconciliation at apply-pass orientation 2026-05-30
+
+Two checkpoint-vs-HEAD residence drifts discriminated via empirical grep pre-substantive-authoring:
+
+| Checkpoint claim | Empirical at HEAD `8816ce9` | Disposition |
+|---|---|---|
+| `SkillID` residence at `harness-runtime/.../skills.py` | `SkillID = NewType("SkillID", str)` at **`harness-core/identity.py:76`** | Stale-recall; corrected at apply-pass orientation; sub-species `[[checkpoint-recall-vs-empirical-HEAD]]` cardinality 1 |
+| `RoutingManifest` exposes `.sha`/`.hash()` | NO such method at HEAD | Resolver canonicalizes via `model_dump_json(by_alias=False)` + sha256 per spec §5.2 implementer-discretion footer; NOT halt-shape gap; closed at impl-discretion |
+
+(γ-3) Protocol-at-harness-core viability gate per pre-AUQ §11.4.1 reasoning: SkillID-side becomes reachable (was already correct), but RoutingManifest carrier still resides at harness-cp; Protocol-of-Protocol surface OR carrier re-home still owed at (γ-3) path. Operator selected (γ-2) preserving (γ-3) for future arcs if multi-axis Protocol-at-harness-core pattern emerges as workspace convention.
+
+### §11.8.2 Impl-half LANDED — co-publication arc
+
+The Phase 7 H_T-IS-2 substitution-retirement apply-pass impl-half lands as a stacked-new-PR off `worktree-h-t-is-2-architect-rec` branch (or rebases to main if PR #89 merges first). Co-publications:
+
+| Artifact | Action |
+|---|---|
+| `design-substrate/Implementation_Plan_Harness_Runtime_v2_42.md` | NEW (delta over v2.41); NEW U-RT-112 unit-body; +1 node + 4 edges at DAG; ZERO cross-axis cascade |
+| `design-substrate/Implementation_Plan_Information_Substrate_v2_5.md` | NEW (delta over v2.4); U-IS-18 RETIRED at canonical-reading layer (RELOCATED-TO-U-RT-112); U-IS-11 sidecar amendment PRESERVED VERBATIM |
+| `harness-runtime/src/harness_runtime/lifecycle/procedural_tier_snapshot.py` | NEW production module — `resolve_procedural_tier_snapshot(ctx)` + `_canonicalize_procedural_tier_payload` helper + `make_procedural_tier_snapshot_resolver(ctx)` factory |
+| `harness-runtime/tests/test_procedural_tier_snapshot.py` | NEW — 14 tests covering U-RT-112 ACs #1-#14 |
+| `harness-is/src/harness_is/state_ledger_write.py` | EDIT — EntryPayload sidecar field + thread through to StateLedgerEntry draft + _serialize_entry omit-when-None discipline + _deserialize_entry default-None recovery |
+| `harness-is/src/harness_is/state_ledger_entry_schema.py` | EDIT — StateLedgerEntry D-derivative sidecar field (additive Optional) |
+| `harness-is/src/harness_is/entry_hash.py` | EDIT — canonicalize includes sidecar contribution when non-None; legacy chain backward-compat preserved at None |
+| `harness-is/tests/test_state_ledger_write_sidecar.py` | NEW — 8 tests covering U-IS-11 v2.4 ACs #11-#14 + legacy-chain backward-compat |
+| `harness-is/tests/test_state_ledger_entry_schema.py` | EDIT — schema completeness test updated for v1.3 D-derivative field set (F-layer 6 + D-derivative 1 = 7); F-layer subset invariant preserved |
+| `.harness/clearance/Implementation_Plan_Harness_Runtime-v2_42-cleared-2026-05-30.md` | NEW clearance marker |
+| `.harness/clearance/Implementation_Plan_Information_Substrate-v2_5-cleared-2026-05-30.md` | NEW clearance marker |
+| `.harness/phase-7d-retirement-events-batch-49.md` | NEW — H_T-IS-2 STILL-BOUNDED → PARTIAL transit filing |
+| `CLAUDE.md` (workspace root) | row bumps at §2.3 (IS spec v1.2 → v1.3 already at PR #89; runtime spec unchanged at v1.39) + §2.4 (IS plan v2.4 → v2.5 + runtime plan v2.41 → v2.42) |
+| `harness-is/CLAUDE.md` | §4.1 H_T-IS-2 row refresh per workflow v1.12 §7.4.7.3.C retirement-tier-transit audit-template |
+| This file (`.harness/architect_recommendation_h_t_is_2_artifact_tier_registry_wiring.md`) | NEW §11.8 closure entry recording Q-γ ratification + impl-half co-publications + empirical findings |
+
+### §11.8.3 Test posture
+
+1458/1458 tests pass + 10 skipped workspace-wide post-impl. 22 NEW tests authored at this arc (14 resolver + 8 sidecar); 1 existing test edit (schema completeness reflecting v1.3 D-derivative addition). ZERO regressions.
+
+### §11.8.4 Transit posture
+
+H_T-IS-2 substitution-retirement: **STILL-BOUNDED → PARTIAL** at this arc merge per `.harness/phase-7d-retirement-events-batch-49.md`. PARTIAL → RETIRED gated on ~13 producer-site lifts across CP / runtime / AS composers deferred per Q2=narrow ratification. IS-axis pipeline-advanced view: 8/9 → 9/9 = 100% (FIRST IS-axis-clean state). Workspace pipeline-advanced: 48/54 → 49/54 = 90.7%.
+
+### §11.8.5 Sub-species catalogue candidates strengthened at this arc
+
+| Candidate | Cardinality at this arc | Workflow §7.4.7.2 addition trigger |
+|---|---|---|
+| `[[is-spec-contract-runtime-axis-impl-cross-package-pattern]]` | 3 (U-CORE-02 + U-RT-99 + U-RT-112) | Workspace-convention candidate at next workflow-doc revision pass |
+| `[[checkpoint-recall-vs-empirical-HEAD]]` | 1 (SkillID residence drift) | Awaits second instance |
+| `[[architect-rec-assumed-cross-package-binding-fails-impl-time-empirical-orientation]]` | 1 (resolver-residence cycle at v2.4 §0.8 finding 3; closed at this arc) | Awaits second instance per v2.4 §0.8 carry |
+
+### §11.8.6 Cardinality refresh — `[[advisor-before-substantive-work-for-cross-axis-blockers]]`
+
+55 (pre-arc) + 1 (this arc pre-substantive consultation 2026-05-30 catching checkpoint residence drift + RoutingManifest sha derivation surface absence + scope discipline at Q2=narrow) = **56 applications**.
+
+*End of §11.8. Apply-pass session 2026-05-30 (continuation arc) closed at impl-half-LANDED + H_T-IS-2 STILL-BOUNDED → PARTIAL + Q-γ-residence-decision-CLOSED.*
