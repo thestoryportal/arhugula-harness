@@ -219,7 +219,7 @@ def next_action(roadmap, workspace_state, session_posture):
 R-IF-108:
   title: PR #108 — workflow v1.12 §7.4.7.3.C audit at per-axis CLAUDE.md §4.1
   surface: VII
-  status: ACTIVE
+  status: RESOLVED
   depends_on: []
   blocks: []
   posture: mode-agnostic
@@ -230,12 +230,12 @@ R-IF-108:
   verification: { shape: grep, must_pass: ["§4.1 cumulative-count lines refreshed against batch-NN production state"] }
   close_shape: { type: PR-merge, artifact: "PR #108", cascade: [R-IF-roadmap-refresh] }
   next_pointer: null
-  notes: In-flight; track for merge. Do not touch.
+  notes: RESOLVED at PR #108 merge `54337c1` (2026-05-31). Stale-ACTIVE status reconciled at the R-001 close refresh (PR #141 cascade).
 
 R-IF-109:
   title: PR #109 — memory entries round-3 audit
   surface: VII
-  status: ACTIVE
+  status: RESOLVED
   depends_on: []
   blocks: []
   posture: mode-agnostic
@@ -246,12 +246,12 @@ R-IF-109:
   verification: { shape: grep, must_pass: ["3 findings resolved per PR body"] }
   close_shape: { type: PR-merge, artifact: "PR #109", cascade: [R-IF-roadmap-refresh] }
   next_pointer: null
-  notes: In-flight; track for merge.
+  notes: RESOLVED at PR #109 merge `a81fe2d` (2026-05-31). Stale-ACTIVE status reconciled at the R-001 close refresh.
 
 R-IF-110:
   title: PR #110 — CXA v2.18 absorb OD-IS-EDGE-DRIFT (halt-doc Item 11)
   surface: VII
-  status: ACTIVE
+  status: RESOLVED
   depends_on: []
   blocks: [R-700-OD-IS-EDGE-DRIFT]
   posture: design-phase
@@ -262,12 +262,12 @@ R-IF-110:
   verification: { shape: grep, must_pass: ["CXA §2.3.5 cardinality reconciled with OD plan v2.6 §4.5.1", "clearance marker filed"] }
   close_shape: { type: substrate-amendment, artifact: "CXA v2.17 → v2.18", cascade: [R-IF-roadmap-refresh] }
   next_pointer: R-IF-111
-  notes: In-flight; design-phase posture session must merge.
+  notes: RESOLVED at PR #110 merge `2f14604` (2026-05-31). Stale-ACTIVE status reconciled at the R-001 close refresh.
 
 R-IF-111:
   title: PR #111 — OD plan v2.27 NEW §4.6 OD-INTERNAL carve-out (halt-doc Item 12)
   surface: VII
-  status: ACTIVE
+  status: RESOLVED
   depends_on: []
   blocks: [R-700-OD-INTERNAL-FORMALIZATION]
   posture: design-phase
@@ -278,7 +278,7 @@ R-IF-111:
   verification: { shape: grep, must_pass: ["§4.6 OD-INTERNAL section authored", "clearance marker filed"] }
   close_shape: { type: substrate-amendment, artifact: "OD plan v2.26 → v2.27", cascade: [R-IF-roadmap-refresh] }
   next_pointer: null
-  notes: In-flight; sibling to PR #110.
+  notes: RESOLVED at PR #111 merge `fdf120b` (2026-05-31). Stale-ACTIVE status reconciled at the R-001 close refresh.
 
 R-IF-roadmap-refresh:
   title: Refresh roadmap status dashboard after PR merge
@@ -352,7 +352,7 @@ R-003:
 R-001-h-t-is-2-retired:
   title: H_T-IS-2 PARTIAL → RETIRED transit
   surface: I
-  status: ACTIVE   # unblocked — depends_on [R-003] RESOLVED at PR #136 + #137 merge 2026-05-31
+  status: RESOLVED   # H_T-IS-2 RETIRED at batch-50; PR #141 merge `4a0aa1d` 2026-05-31
   depends_on: [R-003]
   blocks: [R-700-phase-8-substitution-accounting]
   posture: phase-7
@@ -364,7 +364,7 @@ R-001-h-t-is-2-retired:
   close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-NN.md", cascade: [R-IF-roadmap-refresh] }
   next_pointer: R-002
   notes: >
-    UNBLOCKED 2026-05-31 — R-003 RESOLVED at PR #136 + #137 merge. The producer-site cascade that gated IS-2 RETIRED is complete: all 7 sites handled (4 lifted, 3 documented None-canonical). Execution = file the PARTIAL → RETIRED retirement event (batch-NN) + refresh harness-is/CLAUDE.md §4.1 + ledger-v2 §3, verifying X-AL-2 second conjunct. Was PARTIAL per batch-49 / runtime plan v2.42.
+    RESOLVED 2026-05-31 at PR #141 merge `4a0aa1d` — batch-50 filed (H_T-IS-2 PARTIAL → RETIRED; X-AL-2 BOTH conjuncts MET). All 13 producer sites handled: 6 §16.5 composers (PR #107) + 4 lifted (R-003 Cluster A #136: sub_agent_dispatch + hitl_gate_composer; Cluster B #137: workflow_driver + sibling_ledger) + 3 documented None-canonical (audit_writer, as_is_wiring, shadow_git_rollback). harness-is/CLAUDE.md §4.1 IS-2 row → RETIRED (IS-axis 9/9 RETIRED = 100%, FIRST axis fully RETIRED at the strict RETIRED view); ledger v2 §11.4h supersession entry (forward-only; §3 snapshot preserved). next_pointer R-002 already RESOLVED → re-derived next-action = R-200-ci-pytest-pyright-ruff-matrix (§III, rank 3) per §4.
 
 R-004:
   title: H_T-AS-8d skill.* — RETIRED (reconciled at R-002 survey)
