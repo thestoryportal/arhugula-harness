@@ -495,6 +495,54 @@ R-200-ci-coverage-gating:
   close_shape: { type: PR-merge, artifact: "ci: coverage reporting", cascade: [] }
   next_pointer: null
   notes: Don't enforce a threshold at v1; gather data first.
+
+R-200-session-start-audit-hook:
+  title: SessionStart hook automating CLAUDE.md §12.1 audit at every Claude Code session open
+  surface: III
+  status: RESOLVED
+  depends_on: []
+  blocks: []
+  posture: mode-agnostic
+  scope:
+    files: [.claude/settings.json, tools/roadmap-audit/session-start.sh]
+    contracts: []
+    cross_axis: no
+  skills: { primary: null, secondary: [] }
+  advisor_required: no
+  council_required: no
+  verification:
+    shape: integration
+    must_pass:
+      - "Hook registered at .claude/settings.json (project-shared; ${CLAUDE_PROJECT_DIR} placeholder for portability)"
+      - "Script computes workspace_state_hash per §12.1 step 2 recipe"
+      - "Script handles 3 cases: match (~13 tokens), lag-expected via §12.2.1 carve-out (~19 tokens), drift (~25 tokens)"
+      - "Script outputs valid JSON with hookSpecificOutput.additionalContext field per Claude Code SessionStart protocol"
+      - "Script always exits 0 (failure encoded in additionalContext, never silent skip)"
+      - "Token budget: all 3 output cases under 30 tokens to honor operator-stated context-optimization constraint"
+  close_shape:
+    type: PR-merge
+    artifact: "ops: SessionStart audit hook + tools/roadmap-audit/session-start.sh"
+    cascade: []
+  next_pointer: null
+  notes: |
+    Closes the enforcement-layer gap surfaced at the dashboard-discipline conversation 2026-05-31.
+    v1 shipped the discipline + data + recipes; v1.2 (this entry) ships the automation that
+    makes §12.1 fire automatically without operator prompting.
+
+    Token-optimization design constraint (operator AskUserQuestion 2026-05-31):
+    - Match case: "[ROADMAP] hash=ok next=R-IF-108 in_flight=4 forks=39" = ~13 tokens
+    - Lag case (post-refresh fixed-point per §12.2.1): "[ROADMAP] hash=lag-expected next=R-IF-108 (post-refresh fixed-point §12.2.1)" = ~19 tokens
+    - Drift case: "[ROADMAP DRIFT] dashboard=AAAA computed=BBBB next=R-IF-108 action=§12.3" = ~25 tokens
+
+    Hook output is JSON-wrapped per Claude Code's stdout-injection protocol (jq builds
+    additionalContext field); Claude sees the additionalContext as a system message
+    BEFORE the operator's first message reaches it.
+
+    NEW pattern candidate: [[enforcement-layer-vs-discipline-layer]] — codifying a rule in
+    a doc (discipline layer) is necessary but not sufficient; automation that fires the
+    rule at the right time (enforcement layer) is required for genuine self-application.
+    Mirror precedent: §12.2.1 codification at PR #114 was discipline-layer; this hook is
+    the enforcement-layer companion. Cardinality 1; awaits second instance.
 ```
 
 ### 5.5 Process discipline (R-600..R-699)
