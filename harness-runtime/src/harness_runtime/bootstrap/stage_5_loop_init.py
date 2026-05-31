@@ -25,11 +25,25 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 from harness_core.workload_class import WorkloadClass
+from harness_cp.hitl_placement import HITLPlacementKind
 from harness_cp.workflow_driver_types import StepKind
 from harness_od.audit_ledger_types import SignatureAlgorithm
 
-from harness_cp.hitl_placement import HITLPlacementKind
-
+from harness_runtime.bootstrap.factories.memory_tool_registry_factory import (
+    materialize_memory_tool_registry_stage,
+)
+from harness_runtime.bootstrap.factories.pause_resume_protocol_factory import (
+    materialize_pause_resume_protocol_stage,
+)
+from harness_runtime.bootstrap.factories.runtime_tool_dispatcher_factory import (
+    materialize_runtime_tool_dispatcher_stage,
+)
+from harness_runtime.bootstrap.factories.skill_activation_emitter_factory import (
+    materialize_skill_activation_emitter_stage,
+)
+from harness_runtime.bootstrap.factories.webhook_delivery_composer_factory import (
+    materialize_webhook_delivery_composer_stage,
+)
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
 from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
@@ -42,22 +56,10 @@ from harness_runtime.lifecycle.mcp_backed_ask_user_question_surface import (
     materialize_mcp_backed_ask_user_question_surface_stage,
 )
 from harness_runtime.lifecycle.override_evaluator import materialize_override_evaluator_stage
-from harness_runtime.bootstrap.factories.memory_tool_registry_factory import (
-    materialize_memory_tool_registry_stage,
-)
-from harness_runtime.bootstrap.factories.pause_resume_protocol_factory import (
-    materialize_pause_resume_protocol_stage,
-)
-from harness_runtime.bootstrap.factories.webhook_delivery_composer_factory import (
-    materialize_webhook_delivery_composer_stage,
-)
-from harness_runtime.bootstrap.factories.skill_activation_emitter_factory import (
-    materialize_skill_activation_emitter_stage,
+from harness_runtime.lifecycle.procedural_tier_snapshot import (
+    make_procedural_tier_snapshot_resolver,
 )
 from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
-from harness_runtime.bootstrap.factories.runtime_tool_dispatcher_factory import (
-    materialize_runtime_tool_dispatcher_stage,
-)
 from harness_runtime.lifecycle.retry_breaker_fallback import (
     materialize_retry_breaker_fallback_dispatcher_stage,
 )
@@ -236,6 +238,19 @@ async def execute(
     )
     ctx.resume_context_holder = ResumeContextHolder()
 
+    # R-003 producer-site lift — build the procedural-tier resolver closure
+    # HERE at stage 5 (LOOP_INIT) and thread it into the dispatcher/composer
+    # ctors below, so their 8b / 8b-HITL F2-write `EntryPayload(...)` can
+    # populate `procedural_tier_snapshot_ref` per IS spec v1.3 §C-IS-05 §5.1
+    # (workflow-context emissions MUST populate the sidecar). The factory only
+    # needs `ctx.skills` (stage 2) + `ctx.routing_manifest` (stage 3b), both
+    # populated by stage 5 — so building here is safe even though the
+    # `cp_is_wiring` sibling builds an equivalent closure at stage 6
+    # (CXA_WIRING). Two closures over the same `ctx` are observationally
+    # equivalent per U-RT-112 AC #8 direct-compute discipline.
+    procedural_tier_snapshot_resolver = make_procedural_tier_snapshot_resolver(
+        cast(HarnessContext, ctx),
+    )
 
     hitl_inference = RuntimeHITLGateComposer(
         inner=bare_dispatcher,
@@ -246,6 +261,7 @@ async def execute(
         tracer_provider=cast(Any, tracer_provider),
         audit_signing_key_id="harness-runtime-dev",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
         pause_resume_protocol=ctx.pause_resume_protocol,
         pause_requested_flag=ctx.pause_requested_flag,
         webhook_delivery_composer=ctx.webhook_delivery_composer,
@@ -312,6 +328,7 @@ async def execute(
         audit_signing_key_id="harness-runtime-dev",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
         time_source=lambda: datetime.now(UTC),
+        procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
     )
 
     # U-RT-60 (C-RT-18 §14.8) wrap-asymmetry fork APPLIED — row 2 chain:
@@ -332,6 +349,7 @@ async def execute(
         tracer_provider=cast(Any, tracer_provider),
         audit_signing_key_id="harness-runtime-dev",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
         pause_resume_protocol=ctx.pause_resume_protocol,
         pause_requested_flag=ctx.pause_requested_flag,
         webhook_delivery_composer=ctx.webhook_delivery_composer,

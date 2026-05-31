@@ -77,6 +77,7 @@ from harness_cp.workflow_driver_types import (
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_is.state_ledger_entry_schema import Identifier as _Identifier
 from harness_od.audit_ledger_types import SignatureAlgorithm
 from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
 from harness_runtime.lifecycle.handoff import RuntimeHandoffRegistry
@@ -335,6 +336,7 @@ def _dispatcher(
         audit_signing_key_id="test-signing-key",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
         time_source=lambda: datetime.now(UTC),
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
     )
     return dispatcher, runner, exporter
 
@@ -676,6 +678,51 @@ def test_step8b_writes_f2_dispatch_action_entry(tmp_path: Path) -> None:
         f"expected exactly one F2 dispatch entry at step 8b; got {len(dispatch_entries)}"
     )
     assert "workflow:parent-wf:step:0" in str(dispatch_entries[0].action_id)
+
+
+def test_step8b_f2_entry_populates_procedural_tier_snapshot_ref(
+    tmp_path: Path,
+) -> None:
+    """R-003: the 8b F2 dispatch entry populates the `procedural_tier_snapshot_ref`
+    D-derivative sidecar via the injected resolver closure (workflow-context
+    emission per IS spec v1.3 §C-IS-05 §5.1). `_dispatcher` wires the standard
+    test resolver `lambda: Identifier("b" * 64)`.
+    """
+    from harness_is.state_ledger_write import read_ledger
+
+    ledger_writer = _build_ledger_writer(tmp_path)
+    dispatcher, _, _ = _dispatcher(tmp_path, ledger_writer_override=ledger_writer)
+    dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    entries = read_ledger(ledger_writer.handle)
+    dispatch_entries = [e for e in entries if str(e.action_id).startswith("dispatch:")]
+    assert len(dispatch_entries) == 1
+    assert dispatch_entries[0].procedural_tier_snapshot_ref == _Identifier("b" * 64)
+
+
+def test_step8b_resolver_raise_halts_before_ledger_write(tmp_path: Path) -> None:
+    """R-003 HALT: a raising procedural-tier resolver propagates as
+    `SubAgentDispatchAuditComposeError` on the success path (caught by the
+    step-8 `except Exception` at the composer) and NO F2 dispatch entry is
+    written — the resolver fires before `ledger_writer.append` at 8b.
+    """
+    from harness_is.state_ledger_write import read_ledger
+
+    ledger_writer = _build_ledger_writer(tmp_path)
+    dispatcher, _, _ = _dispatcher(tmp_path, ledger_writer_override=ledger_writer)
+
+    def _boom() -> _Identifier:
+        raise RuntimeError("resolver boom")
+
+    dispatcher.procedural_tier_snapshot_resolver = _boom
+
+    with pytest.raises(SubAgentDispatchAuditComposeError):
+        dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+
+    entries = read_ledger(ledger_writer.handle)
+    dispatch_entries = [e for e in entries if str(e.action_id).startswith("dispatch:")]
+    assert dispatch_entries == [], (
+        "resolver raise must HALT before the 8b ledger write; no dispatch entry"
+    )
 
 
 def test_step8c_8d_persists_od_audit_entry_through_writer(tmp_path: Path) -> None:

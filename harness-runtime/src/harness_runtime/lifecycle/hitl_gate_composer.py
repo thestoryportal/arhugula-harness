@@ -108,17 +108,17 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import inspect
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
+from harness_as import GateLevel
 from harness_core.identity import ActionID
 from harness_cp.audit_hitl_span_namespace import (
     AUDIT_NAMESPACE_SCHEMA,
     HITL_SPAN_NAMESPACE_SCHEMA,
 )
-from harness_as import GateLevel
 from harness_cp.cp_shared_types import ActorIdentity
 from harness_cp.handoff_context import (
     ActionKind,
@@ -161,6 +161,7 @@ from harness_runtime.lifecycle.webhook_delivery_composer import (
 
 if TYPE_CHECKING:  # pragma: no cover — type-only imports
     from harness_cp.pause_resume_protocol import PauseResumeProtocol
+
     from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
     from harness_runtime.lifecycle.state_ledger import LedgerWriter
 
@@ -597,6 +598,17 @@ class RuntimeHITLGateComposer:
     audit_signing_algorithm: SignatureAlgorithm
     """Signing algorithm passed to `cp_audit_to_od_audit` at substep 8c-HITL."""
 
+    procedural_tier_snapshot_resolver: Callable[[], Identifier]
+    """R-003 producer-site lift — resolves the `procedural_tier_snapshot_ref`
+    D-derivative sidecar for the F2 HITL action entry at 8b-HITL. Invoked
+    zero-arg at the `EntryPayload(...)` construction. This is a workflow-context
+    emission per IS spec v1.3 §C-IS-05 §5.1, so the sidecar MUST be populated (a
+    `None` value would be a producer-site bug). Resolver closure built at
+    bootstrap stage 5 via `make_procedural_tier_snapshot_resolver(ctx)`; mirrors
+    the `RuntimeCpIsWiring.procedural_tier_snapshot_resolver` pattern for the 6
+    §16.5 CP composers (`cp_is_wiring.py`). Required (no default) — placed
+    before the v2.25 optional fields to satisfy dataclass field ordering."""
+
     # --- v2.25 §7.2 AC #12: 4 new fields for durable-async cell HITL ---------
     #
     # Per runtime plan v2.25 §7.2 AC #12 (Reading A path 1 absorption of fork
@@ -772,6 +784,9 @@ class RuntimeHITLGateComposer:
                 idempotency_key=Identifier(str(hitl_action_id)),
                 actor=step_context.parent_actor,
                 timestamp=datetime.now(UTC),
+                procedural_tier_snapshot_ref=(
+                    self.procedural_tier_snapshot_resolver()
+                ),
             )
             f2_key = WriteKey(
                 thread_id=Identifier(f"hitl:{step_context.parent_action_id}"),

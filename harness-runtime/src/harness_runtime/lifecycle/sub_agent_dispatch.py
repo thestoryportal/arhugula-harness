@@ -391,6 +391,15 @@ class RuntimeSubAgentDispatcher:
     audit_signing_key_id: str
     audit_signing_algorithm: SignatureAlgorithm
     time_source: Callable[[], Timestamp]
+    procedural_tier_snapshot_resolver: Callable[[], Identifier]
+    """R-003 producer-site lift — resolves the `procedural_tier_snapshot_ref`
+    D-derivative sidecar for the F2 dispatch entry at 8b. Invoked zero-arg at
+    the `EntryPayload(...)` construction. This is a workflow-context emission
+    per IS spec v1.3 §C-IS-05 §5.1, so the sidecar MUST be populated (a `None`
+    value would be a producer-site bug). Resolver closure built at bootstrap
+    stage 5 via `make_procedural_tier_snapshot_resolver(ctx)`; mirrors the
+    `RuntimeCpIsWiring.procedural_tier_snapshot_resolver` pattern for the 6
+    §16.5 CP composers (`cp_is_wiring.py`)."""
 
     # Module-bound canonical attribute name constants (per spec §14.7.5
     # "Producer-side attribute carrier reference" — imported from the
@@ -476,6 +485,9 @@ class RuntimeSubAgentDispatcher:
                 idempotency_key=dispatch_action_id,
                 actor=step_context.parent_actor,
                 timestamp=self.time_source(),
+                procedural_tier_snapshot_ref=(
+                    self.procedural_tier_snapshot_resolver()
+                ),
             )
             f2_key = WriteKey(
                 thread_id=Identifier(f"dispatch:{parent_action_id}"),

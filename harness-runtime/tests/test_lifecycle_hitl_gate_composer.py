@@ -40,20 +40,17 @@ from typing import Any, cast
 
 import pytest
 from harness_core import PersonaTier
+from harness_core.identity import StepID
 from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.hitl_response_palette import HITLResponse
-from harness_core.identity import StepID
 from harness_cp.workflow_driver_types import (
     StepExecutionContext,
     StepKind,
     WorkflowStep,
 )
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_is.state_ledger_entry_schema import Identifier as _Identifier
 from harness_od.audit_ledger_types import SignatureAlgorithm
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-
 from harness_runtime.lifecycle.ask_user_question_surface import (
     AskUserQuestionResult,
     AskUserQuestionSurface,
@@ -64,7 +61,9 @@ from harness_runtime.lifecycle.hitl_gate_composer import (
     compose_hitl_action_id,
 )
 from harness_runtime.lifecycle.sync_dispatcher_facade import AsyncStepDispatcher
-
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -222,6 +221,7 @@ def _make_composer(
         tracer_provider=tracer_provider,
         audit_signing_key_id="harness-runtime-test",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
     )
 
 
@@ -513,7 +513,6 @@ def test_compose_hitl_handoff_context_inference_step_shape() -> None:
     per `Spec_Control_Plane_v1_6.md` §25.2.1 Path A.
     """
     from harness_cp.handoff_context import ActionKind, HandoffContext
-
     from harness_runtime.lifecycle import hitl_gate_composer as _hgc
 
     _compose_hitl_handoff_context = _hgc._compose_hitl_handoff_context  # pyright: ignore[reportPrivateUsage]
@@ -684,6 +683,7 @@ async def test_4_substep_audit_chain_writes_one_cp_one_od_entry_per_placement(
         tracer_provider=provider,
         audit_signing_key_id="harness-runtime-test",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     step = _make_step(placements=(placement,))
@@ -707,6 +707,80 @@ async def test_4_substep_audit_chain_writes_one_cp_one_od_entry_per_placement(
     # Substep 8c projected the CP entry's action_id under audit.cp.action_id
     cp_action_id_attr = od_entry.payload.audit_namespace_attrs.get("audit.cp.action_id")
     assert cp_action_id_attr is not None and cp_action_id_attr.startswith("hitl:")
+
+
+@pytest.mark.asyncio
+async def test_8b_hitl_f2_entry_populates_procedural_tier_snapshot_ref(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """R-003: the 8b-HITL F2 entry populates `procedural_tier_snapshot_ref` via
+    the injected resolver closure (workflow-context emission per IS spec v1.3
+    §C-IS-05 §5.1)."""
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=5.0)]
+    )
+    ledger = _MockLedgerWriter()
+    composer = RuntimeHITLGateComposer(
+        inner=inner,
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, surface),
+        ledger_writer=cast(Any, ledger),
+        audit_writer=cast(Any, _MockAuditWriter()),
+        tracer_provider=provider,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
+    )
+    placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    step = _make_step(placements=(placement,))
+    await composer.dispatch(
+        cast(Any, object()), step, step_context=_make_step_context()
+    )
+    assert len(ledger.appends) == 1
+    payload, _key = ledger.appends[0]
+    assert payload.procedural_tier_snapshot_ref == _Identifier("b" * 64)
+
+
+@pytest.mark.asyncio
+async def test_8b_hitl_resolver_raise_halts_before_ledger_write(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """R-003 HALT: a raising procedural-tier resolver fires before the 8b-HITL
+    `ledger_writer.append`, so no F2 entry is written (invariant holds whether
+    the composer re-raises or swallows the failure per its 8-substep path)."""
+    provider, _ = tracer_provider
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=5.0)]
+    )
+    ledger = _MockLedgerWriter()
+
+    def _boom() -> _Identifier:
+        raise RuntimeError("resolver boom")
+
+    composer = RuntimeHITLGateComposer(
+        inner=_MockInnerDispatcher(),
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, surface),
+        ledger_writer=cast(Any, ledger),
+        audit_writer=cast(Any, _MockAuditWriter()),
+        tracer_provider=provider,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=_boom,
+    )
+    placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    step = _make_step(placements=(placement,))
+    try:
+        await composer.dispatch(
+            cast(Any, object()), step, step_context=_make_step_context()
+        )
+    except Exception:
+        pass  # raise-vs-swallow is path-dependent; the invariant below is what matters
+    assert ledger.appends == [], (
+        "resolver raise must HALT before the 8b-HITL ledger write"
+    )
 
 
 @pytest.mark.asyncio
@@ -734,6 +808,7 @@ async def test_cp_entry_timestamp_is_iso_8601_per_v1_28(
         tracer_provider=provider,
         audit_signing_key_id="harness-runtime-test",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     step = _make_step(placements=(placement,))
@@ -808,6 +883,7 @@ async def test_edit_response_records_edited_proposal_hash_in_audit(
         tracer_provider=provider,
         audit_signing_key_id="harness-runtime-test",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     step = _make_step(placements=(placement,))
@@ -851,6 +927,7 @@ async def test_reject_response_raises_typed_error(
         tracer_provider=provider,
         audit_signing_key_id="harness-runtime-test",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     step = _make_step(placements=(placement,))
@@ -896,6 +973,7 @@ async def test_respond_response_does_not_inject_payload(
         tracer_provider=provider,
         audit_signing_key_id="harness-runtime-test",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     original_payload = {"prompt": "original"}
@@ -964,6 +1042,7 @@ async def test_two_pre_action_placements_emit_per_placement_canonical_4_spans(
         tracer_provider=provider,
         audit_signing_key_id="harness-runtime-test",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
     )
     # Two PRE_ACTION placements on a single step (NOTE 6-i exercise-able case)
     placement_a = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
@@ -1089,6 +1168,7 @@ async def test_retry_of_gate_re_evaluates_gate_per_attempt(
         tracer_provider=provider,
         audit_signing_key_id="harness-runtime-test",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
     )
 
     # C-RT-16 retry/fallback wrapper — replicate
