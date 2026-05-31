@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `5a077d17765f` |
-| `last_refreshed` | 2026-05-31T18:58:00-06:00 |
-| `git_head` | `7f3e6ceb` (main) — `roadmap(v1): Project Roadmap v1 scaffolding — drift-detected deterministic next-action derivation (#112)` |
+| `workspace_state_hash` | `9bd06cb83b73` |
+| `last_refreshed` | 2026-05-31T19:05:00-06:00 |
+| `git_head` | `7da53e56` (main) — `roadmap(v1.1): §12.2.1 recursion-stopping codification + §12.1 step 6 fixed-point carve-out (#114)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-49.md` |
 | `open_fork_doc_count` | 39 |
 
@@ -42,11 +42,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| PR #112 (`7f3e6ce`) | 2026-05-31 | roadmap(v1) scaffolding — drift-detected deterministic next-action derivation (this artifact) |
+| PR #114 (`7da53e5`) | 2026-05-31 | roadmap(v1.1) §12.2.1 recursion-stopping codification + §12.1 step 6 fixed-point carve-out |
+| PR #113 (`1f5e69a`) | 2026-05-31 | ops: roadmap status refresh post-PR-112 |
+| PR #112 (`7f3e6ce`) | 2026-05-31 | roadmap(v1) scaffolding — drift-detected deterministic next-action derivation |
 | PR #107 (`89915af`) | 2026-05-31 | apply PR #105 Reading C — CP spec v1.30 + plan v2.31 |
 | PR #106 (`c8918b3`) | 2026-05-31 | overnight expansion summary — 5 work units / 1 fork / 0 hidden halts |
-| PR #105 (`2ba7a1f`) | 2026-05-31 | Class 1 fork filing: PR-2 workflow-layer composer ctx-access |
-| PR #104 (`4294d41`) | 2026-05-31 | memory audit round-2 — 50 entries / 7 findings |
 
 ---
 
@@ -85,9 +85,11 @@ Sample (highest-leverage open):
 | Date | Source | Resolution |
 |---|---|---|
 | 2026-05-31 | Dashboard creation (v1 origin) | n/a |
-| 2026-05-31 | First post-merge refresh — PR #112 merged at `7f3e6ce`; dashboard hash recomputed `9c31e4978c3d` → `5a077d17765f` | Refreshed via this PR per CLAUDE.md §12.2. |
+| 2026-05-31 | First post-merge refresh — PR #112 merged at `7f3e6ce`; dashboard hash recomputed `9c31e4978c3d` → `5a077d17765f` | Refreshed via PR #113 per CLAUDE.md §12.2. |
+| 2026-05-31 | Recursion-stop discipline gap surfaced — PR #113 merge left dashboard stale by 1 commit; §12.2 as written would recurse | Codified at PR #114 via §12.2.1 termination clause + §12.1 step 6 carve-out. |
+| 2026-05-31 | First terminating refresh per §12.2.1 — PR #114 merged at `7da53e5`; this PR is the terminating event | Single-file dashboard-only refresh; does NOT trigger another refresh per §12.2.1. Hash `5a077d17765f` → `9bd06cb83b73`. |
 
-**Audit protocol exercised end-to-end at v1 publication.** Post-merge refresh discipline confirmed operational.
+**Audit protocol exercised end-to-end at v1.1 closure.** Post-merge refresh + recursion-stop disciplines confirmed operational.
 
 ---
 
