@@ -54,7 +54,7 @@ stage shape established at U-RT-27..34.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -108,6 +108,15 @@ class RuntimeCpIsWiring:
 
     ledger_writer: LedgerWriter
     """IS state-ledger writer (U-RT-12) — durable substrate for CP emissions."""
+
+    procedural_tier_snapshot_resolver: Callable[[], Identifier]
+    """Procedural-tier snapshot resolver-closure (CP spec v1.30 §1.4).
+
+    Bound at stage 6 via ``make_procedural_tier_snapshot_resolver(ctx)``;
+    captures ``ctx.skills`` (stage 2) + ``ctx.routing_manifest`` (stage 3b).
+    Threaded into each of the 6 §16.5 composers per v1.30 §1.2 uniform
+    resolver-closure recipe.
+    """
 
     def emit_sibling_ledger_entry(
         self,
@@ -190,6 +199,7 @@ class RuntimeCpIsWiring:
             post_override_step_config=post_override_step_config,
             actor=actor,
             ledger_writer=_adapter,
+            procedural_tier_snapshot_resolver=self.procedural_tier_snapshot_resolver,
         )
 
     async def emit_workload_class_selection_state_ledger_entry(
@@ -219,6 +229,7 @@ class RuntimeCpIsWiring:
             selection_result=selection_result,
             actor=actor,
             ledger_writer=_adapter,
+            procedural_tier_snapshot_resolver=self.procedural_tier_snapshot_resolver,
         )
 
     async def emit_pause_resume_state_ledger_entry(
@@ -252,6 +263,7 @@ class RuntimeCpIsWiring:
             protocol_state_snapshot=protocol_state_snapshot,
             actor=actor,
             ledger_writer=_adapter,
+            procedural_tier_snapshot_resolver=self.procedural_tier_snapshot_resolver,
         )
 
     async def emit_hitl_tool_call_rewriting_state_ledger_entry(
@@ -285,6 +297,7 @@ class RuntimeCpIsWiring:
             rewritten_tool_call=rewritten_tool_call,
             actor=actor,
             ledger_writer=_adapter,
+            procedural_tier_snapshot_resolver=self.procedural_tier_snapshot_resolver,
         )
 
     async def emit_pause_captured_state_ledger_entry(
@@ -316,6 +329,7 @@ class RuntimeCpIsWiring:
             pause_snapshot=pause_snapshot,
             actor=actor,
             ledger_writer=_adapter,
+            procedural_tier_snapshot_resolver=self.procedural_tier_snapshot_resolver,
         )
 
     async def emit_resume_attempted_state_ledger_entry(
@@ -349,6 +363,7 @@ class RuntimeCpIsWiring:
             resume_outcome=resume_outcome,
             actor=actor,
             ledger_writer=_adapter,
+            procedural_tier_snapshot_resolver=self.procedural_tier_snapshot_resolver,
         )
 
 
@@ -367,6 +382,7 @@ class CpIsWiringStage:
 def materialize_cp_is_wiring_stage(
     config: RuntimeConfig,
     ledger_writer: LedgerWriter,
+    procedural_tier_snapshot_resolver: Callable[[], Identifier],
 ) -> CpIsWiringStage:
     """Build the stage 6 CP → IS wiring registry (PARTIAL-LAND).
 
@@ -374,10 +390,18 @@ def materialize_cp_is_wiring_stage(
     (U-RT-12); no new IS handle is created. CP sibling-ledger entries
     share the IS hash chain per the cross-axis edge §12.3 commitment.
 
+    The `procedural_tier_snapshot_resolver` per CP spec v1.30 §1.4 is built
+    by the bootstrap stage 6 caller via
+    ``make_procedural_tier_snapshot_resolver(ctx)`` and threaded into every
+    §16.5 composer via the `RuntimeCpIsWiring` per-method bindings.
+
     `config` is read for API consistency with the L6 / L7 composers; no
     field is consumed at HEAD.
     """
     _ = config
     return CpIsWiringStage(
-        wiring=RuntimeCpIsWiring(ledger_writer=ledger_writer),
+        wiring=RuntimeCpIsWiring(
+            ledger_writer=ledger_writer,
+            procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
+        ),
     )

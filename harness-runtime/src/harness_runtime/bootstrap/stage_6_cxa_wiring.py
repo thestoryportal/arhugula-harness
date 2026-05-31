@@ -24,6 +24,8 @@ populated at earlier stages are what matters).
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 from harness_core.workload_class import WorkloadClass
 from harness_od.substrate_seam_exports_aggregate_manifest import (
     OD_SUBSTRATE_SEAM_EXPORTS_MANIFEST,
@@ -38,7 +40,13 @@ from harness_runtime.lifecycle.cxa_terminal_imports import (
 from harness_runtime.lifecycle.od_as_wiring import materialize_od_as_wiring_stage
 from harness_runtime.lifecycle.od_cp_wiring import materialize_od_cp_wiring_stage
 from harness_runtime.lifecycle.od_is_wiring import materialize_od_is_wiring_stage
+from harness_runtime.lifecycle.procedural_tier_snapshot import (
+    make_procedural_tier_snapshot_resolver,
+)
 from harness_runtime.types import RuntimeConfig
+
+if TYPE_CHECKING:
+    from harness_runtime.types import HarnessContext
 
 __all__ = ["execute"]
 
@@ -62,9 +70,21 @@ async def execute(
         config,
         ctx.ledger_writer,
     )
+    # CP spec v1.30 §1.4: build the procedural-tier-snapshot resolver-closure
+    # at stage 6 entry where ctx.skills (stage 2) + ctx.routing_manifest
+    # (stage 3b) are populated. The resolver captures `ctx` (the mutable
+    # context being finalized at stage 6); at composer invocation time the
+    # closure re-resolves against the same captured ctx per U-RT-112 AC #8
+    # direct-compute discipline. The _MutableHarnessContext exposes the same
+    # `.skills` + `.routing_manifest` attribute surfaces as HarnessContext;
+    # cast is structural per the resolver's narrow consumption.
+    procedural_tier_snapshot_resolver = make_procedural_tier_snapshot_resolver(
+        cast("HarnessContext", ctx),
+    )
     ctx.cxa_stages["cp_is_wiring"] = materialize_cp_is_wiring_stage(
         config,
         ctx.ledger_writer,
+        procedural_tier_snapshot_resolver,
     )
     ctx.cxa_stages["od_is_wiring"] = materialize_od_is_wiring_stage(
         config,

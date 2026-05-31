@@ -643,6 +643,7 @@ async def emit_pause_resume_state_ledger_entry(
     protocol_state_snapshot: Mapping[str, Any],
     actor: ActorIdentity,
     ledger_writer: Callable[[EntryPayload], Awaitable[WriteResult]],
+    procedural_tier_snapshot_resolver: Callable[[], Identifier],
 ) -> WriteResult:
     """Compose + emit the §16.5 IS-anchored state-ledger entry for U-CP-30.
 
@@ -679,6 +680,7 @@ async def emit_pause_resume_state_ledger_entry(
         idempotency_key=Identifier(idempotency_key),
         actor=Actor(actor_class=ActorClass.AGENT, actor_id=str(actor)),
         timestamp=datetime.now(UTC),
+        procedural_tier_snapshot_ref=procedural_tier_snapshot_resolver(),
     )
     return await ledger_writer(payload)
 
@@ -755,6 +757,7 @@ async def emit_pause_captured_state_ledger_entry(
     pause_snapshot: PauseSnapshot,
     actor: ActorIdentity,
     ledger_writer: Callable[[EntryPayload], Awaitable[WriteResult]],
+    procedural_tier_snapshot_resolver: Callable[[], Identifier],
 ) -> WriteResult:
     """Compose + emit the §16.5 IS-anchored state-ledger entry for U-CP-49.
 
@@ -797,6 +800,7 @@ async def emit_pause_captured_state_ledger_entry(
         idempotency_key=Identifier(idempotency_key),
         actor=Actor(actor_class=ActorClass.AGENT, actor_id=str(actor)),
         timestamp=datetime.now(UTC),
+        procedural_tier_snapshot_ref=procedural_tier_snapshot_resolver(),
     )
     return await ledger_writer(payload)
 
@@ -874,6 +878,7 @@ async def emit_resume_attempted_state_ledger_entry(
     resume_outcome: ResumeOutcome,
     actor: ActorIdentity,
     ledger_writer: Callable[[EntryPayload], Awaitable[WriteResult]],
+    procedural_tier_snapshot_resolver: Callable[[], Identifier],
 ) -> WriteResult:
     """Compose + emit the §16.5 IS-anchored state-ledger entry for U-CP-50.
 
@@ -916,5 +921,6 @@ async def emit_resume_attempted_state_ledger_entry(
         idempotency_key=Identifier(idempotency_key),
         actor=Actor(actor_class=ActorClass.AGENT, actor_id=str(actor)),
         timestamp=datetime.now(UTC),
+        procedural_tier_snapshot_ref=procedural_tier_snapshot_resolver(),
     )
     return await ledger_writer(payload)

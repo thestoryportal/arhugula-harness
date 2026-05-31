@@ -20,6 +20,13 @@ from harness_cp.state_ledger_canonicalization import _canonicalize_outcome_bytes
 from harness_is.state_ledger_entry_schema import ActorClass, Identifier
 from harness_is.state_ledger_write import EntryPayload, WriteResult
 
+_PROCEDURAL_TIER_SNAPSHOT_FIXTURE = Identifier("a" * 64)
+
+
+def _pt_resolver() -> Identifier:
+    """CP spec v1.30 §1.4: zero-arg resolver closure returning the fixture."""
+    return _PROCEDURAL_TIER_SNAPSHOT_FIXTURE
+
 
 class _CapturingLedgerWriter:
     """Async ledger_writer stub capturing payloads for verification."""
@@ -70,6 +77,7 @@ def _kwargs(**overrides: Any) -> dict[str, Any]:
         "pause_event_id": "pause-evt-001",
         "pause_snapshot": _snapshot(),
         "actor": ActorIdentity("control-plane"),
+        "procedural_tier_snapshot_resolver": _pt_resolver,
     }
     base.update(overrides)
     return base
@@ -242,6 +250,7 @@ def test_emit_pause_captured_response_hash_is_is_computed() -> None:
         "idempotency_key",
         "actor",
         "timestamp",
+        "procedural_tier_snapshot_ref",
     }
 
 

@@ -17,8 +17,15 @@ from harness_cp.hitl_as_tool_call_rewriting import (
 )
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.state_ledger_canonicalization import _canonicalize_outcome_bytes
-from harness_is.state_ledger_entry_schema import ActorClass
+from harness_is.state_ledger_entry_schema import ActorClass, Identifier
 from harness_is.state_ledger_write import EntryPayload, WriteResult
+
+_PROCEDURAL_TIER_SNAPSHOT_FIXTURE = Identifier("a" * 64)
+
+
+def _pt_resolver() -> Identifier:
+    """CP spec v1.30 §1.4: zero-arg resolver closure returning the fixture."""
+    return _PROCEDURAL_TIER_SNAPSHOT_FIXTURE
 
 
 class _CapturingLedgerWriter:
@@ -56,6 +63,7 @@ def _kwargs(**overrides: Any) -> dict[str, Any]:
         "semantic_variant_binding_id": "row-2-await-human-approval",
         "rewritten_tool_call": _rewritten(),
         "actor": ActorIdentity("control-plane"),
+        "procedural_tier_snapshot_resolver": _pt_resolver,
     }
     base.update(overrides)
     return base
@@ -219,6 +227,7 @@ def test_emit_hitl_rewriting_response_hash_is_is_computed() -> None:
         "idempotency_key",
         "actor",
         "timestamp",
+        "procedural_tier_snapshot_ref",
     }
 
 
