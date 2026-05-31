@@ -67,13 +67,13 @@ Sample (highest-leverage open):
 
 | Bucket | Count | Notes |
 |---|---|---|
-| RETIRED | 33+ (per batch-49) | See `harness-*/CLAUDE.md` §4.1 + `phase-7d-retirement-events-batch-*.md` for canonical enumeration |
-| RETIRE-READY | 2 active (AS-8d + OD-5) | Both await operator deployment substrate per R-001 + R-004 |
-| PARTIAL | H_T-IS-2 + others | H_T-IS-2 awaits 7 producer-site lifts remaining post-PR #107 (6-of-13 LANDED at PR #107 `89915af`) per R-003 |
-| STILL-BOUNDED | several | Decomposition-owed at R-002 |
+| RETIRED | 35+ (per batch-49; incl. AS-8d batch-31 + OD-5 batch-32 via mech-β) | See `harness-*/CLAUDE.md` §4.1 + `phase-7d-retirement-events-batch-*.md` for canonical enumeration. CP-axis §4.1 fully RETIRED. |
+| RETIRE-READY | 2 active (**OD-3 + OD-6**) | OD-3 (R-007) + OD-6 (R-009) await real-deployment X-AL-2 second conjunct OR operator-AUQ Reading α. **Corrected at R-002 survey 2026-05-31: AS-8d + OD-5 are RETIRED (batches 31-32), not RETIRE-READY — prior table was stale.** |
+| PARTIAL | H_T-IS-2 (R-003) + H_T-OD-4 (R-008) | IS-2 awaits 7 producer-site lifts post-PR #107 (R-003); OD-4 awaits §13.1 per-session toggle + §13.2 tokenization gate closures (R-008). |
+| STILL-BOUNDED-INDEFINITELY | 2 (AS-8e + AS-8f) | AS-8e files.* (R-005 DEFERRED) + AS-8f managed_agents.* (R-006 DEFERRED) — indefinite-defer per runtime spec v1.17 §14.C / v1.33; X-AL-2 bounded-residual carry. |
 | RETIRED-AS-AUTHORING-ONLY | 4 | Sub-species 10 closures (OD-1, OD-7, IS-4, CP-23) per batches 37+38+39+41 |
 
-**Decomposition trigger:** R-002 execution generates per-row R-NNN entries for all non-RETIRED rows. Run when MVP-usable (§II) is enough closed that exact per-row classification (executable-now vs MVP-blocked vs operator-decision) is reliable.
+**Decomposition COMPLETE (R-002 RESOLVED 2026-05-31):** all non-RETIRED rows mapped to R-NNN entries at roadmap §5.2 — IS-2 (R-003 + R-001-h-t-is-2-retired), OD-3 (R-007), OD-4 (R-008), OD-6 (R-009), AS-8e (R-005), AS-8f (R-006). R-001 (OD-5) + R-004 (AS-8d) reconciled stale BLOCKED → RESOLVED. Execution of each per-row entry gated as noted (most on real-deployment / operator-decision; R-003 producer-lifts is the lone executable-now phase-7 entry).
 
 ---
 
