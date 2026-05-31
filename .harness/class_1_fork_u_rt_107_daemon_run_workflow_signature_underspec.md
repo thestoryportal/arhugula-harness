@@ -1,6 +1,8 @@
 # Class 1 fork — U-RT-107 daemon `run_workflow` tool signature underspecification
 
-**Status:** PROPOSING — operator ratification required before U-RT-107 substantive code lands.
+**Status:** ✅ APPLIED-AS-READING-A-Q2(i)-Q3(a)-Q4(a) 2026-05-28 at L9-sedecies cluster merge `7613214` (impl commit `b20963b` `impl(U-RT-107): daemon entrypoint — uvicorn + uds + streamable_http_app + workflow_id-as-path widening at U-RT-62 handler`). Verified at HEAD: `_looks_like_manifest_path` discriminator at `harness-runtime/src/harness_runtime/lifecycle/mcp_server.py:62-73` per Q2=(i) path-iff-slash-or-yaml/toml-suffix; per-call manifest-load with no cache per Q3=(a); applied single-arc per Q4=(a) mirroring U-RT-104 precedent. §4 `_current_tool_ctx` race resolved via contextvars at PR #2 (`worktree-per-session-ctx-isolation`) — §4 closure note at this doc carries that disposition. Status refresh at workflow §7.4.7.3.B audit 2026-05-31 (sub-species 3 `resolved-but-carry-stale-inherited`).
+
+**Original status (preserved for lineage):** PROPOSING — operator ratification required before U-RT-107 substantive code lands.
 **Filed:** 2026-05-28, U-RT-107 implementation arc empirical orientation.
 **Authority anchor:** workspace `CLAUDE.md` §4.3 Class 1 routing + §4.4 X-AL-3 silent-absorption discipline.
 **Workspace precedent:** mirrors `.harness/class_1_fork_u_rt_104_admissibility_keying_and_carrier_defaults.md` filed → ratified → applied single-session 2026-05-28 (same cluster, prior unit). 26th application of `[[advisor-before-substantive-work-for-cross-axis-blockers]]` posture.

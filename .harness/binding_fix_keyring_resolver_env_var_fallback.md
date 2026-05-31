@@ -1,6 +1,8 @@
 # Binding fix: `KeyringSecretResolver` env-var fallback for headless modes
 
-**Status:** PROPOSING 2026-05-28 — fork-doc-only commit lands first; impl gated on operator AskUserQuestion ratify-and-apply per workspace discipline.
+**Status:** ✅ APPLIED 2026-05-28 at PR #16 (commit `f374747`). Operator AskUserQuestion ratified §3 (a)-(e) + §4 production binding + §5 tests. Verified at HEAD: `_KEYRING_TO_ENV_VAR` mapping + `_lookup()` helper present at `harness-runtime/src/harness_runtime/config/provider_secrets.py:58-126`; both `resolve()` (`:173`) and `resolve_bootstrap_value()` (`:212`) route through `_lookup`; all 6 §5 tests at `harness-runtime/tests/test_config_provider_secrets.py`; daemon e2e un-skipped behind `ANTHROPIC_API_KEY` env gate at `test_cli_daemon.py:296`. Status refresh at workflow §7.4.7.3.B audit 2026-05-31 (sub-species 3 `resolved-but-carry-stale-inherited`).
+
+**Original status (preserved for lineage):** PROPOSING 2026-05-28 — fork-doc-only commit lands first; impl gated on operator AskUserQuestion ratify-and-apply per workspace discipline.
 
 **Shape:** Binding fix + discretion record. NOT a Class 1 fork — ADR-F5 v1.1 §(b)(i) already canonicalizes env-var fallback at "Headless modes use `pass` / `gpg` or environment-pre-seeded values where a user session is unavailable." Production binding catches up to spec authority. Mirrors `[[tenant-id-binding-lift-cp-v1-22]]` precedent (advisor pre-substantive consultation foreclosed Class 1 ceremony).
 
