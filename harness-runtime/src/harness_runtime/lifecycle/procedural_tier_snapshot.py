@@ -101,8 +101,18 @@ def resolve_procedural_tier_snapshot(
     # 3. Derive routing_manifest_sha via canonical-JSON-bytes SHA-256 per
     #    AC #12 (RoutingManifest exposes no .sha method at HEAD; canonicalize-
     #    at-resolver per spec §5.2 implementer-discretion footer).
-    routing_manifest_bytes = harness_context.routing_manifest.model_dump_json(
-        by_alias=False,
+    #
+    #    IMPORTANT: ``model_dump_json`` preserves Pydantic v2's dict insertion
+    #    order, which is NOT deterministic across logically-identical instances
+    #    constructed with different mapping insertion orders. To honor AC #6's
+    #    cross-instance determinism guarantee, canonicalize via ``model_dump``
+    #    + ``json.dumps(sort_keys=True)``. Empirical verification at adversarial
+    #    review of PR #89 (2026-05-30) confirmed insertion-order-dependence;
+    #    sort_keys=True closes the determinism gap.
+    routing_manifest_bytes = json.dumps(
+        harness_context.routing_manifest.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
     ).encode("utf-8")
     routing_manifest_sha = hashlib.sha256(routing_manifest_bytes).hexdigest()
 

@@ -364,7 +364,7 @@ Two checkpoint-vs-HEAD residence drifts discriminated via empirical grep pre-sub
 | Checkpoint claim | Empirical at HEAD `8816ce9` | Disposition |
 |---|---|---|
 | `SkillID` residence at `harness-runtime/.../skills.py` | `SkillID = NewType("SkillID", str)` at **`harness-core/identity.py:76`** | Stale-recall; corrected at apply-pass orientation; sub-species `[[checkpoint-recall-vs-empirical-HEAD]]` cardinality 1 |
-| `RoutingManifest` exposes `.sha`/`.hash()` | NO such method at HEAD | Resolver canonicalizes via `model_dump_json(by_alias=False)` + sha256 per spec §5.2 implementer-discretion footer; NOT halt-shape gap; closed at impl-discretion |
+| `RoutingManifest` exposes `.sha`/`.hash()` | NO such method at HEAD | Resolver canonicalizes via `json.dumps(model_dump(mode="json"), sort_keys=True, separators=(",", ":"))` + sha256 per spec §5.2 implementer-discretion footer; NOT halt-shape gap; closed at impl-discretion. **NOTE — `sort_keys=True` is load-bearing for AC #6 cross-instance determinism per PR #89 adversarial-review Finding A (2026-05-30): the naive `model_dump_json(by_alias=False)` path preserves Pydantic v2's dict insertion order, which produces different hashes for logically-identical RoutingManifests constructed with different mapping orders. The `json.dumps(sort_keys=True)` form is canonical and insertion-order-independent.** |
 
 (γ-3) Protocol-at-harness-core viability gate per pre-AUQ §11.4.1 reasoning: SkillID-side becomes reachable (was already correct), but RoutingManifest carrier still resides at harness-cp; Protocol-of-Protocol surface OR carrier re-home still owed at (γ-3) path. Operator selected (γ-2) preserving (γ-3) for future arcs if multi-axis Protocol-at-harness-core pattern emerges as workspace convention.
 

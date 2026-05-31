@@ -104,9 +104,14 @@ def test_resolve_skills_versions_sorted_ascending() -> None:
     skill_b = _skill("skill-b", version_sha="v-sha-a")
     ctx = _ctx(skills={SkillID("a"): skill_a, SkillID("b"): skill_b})
     # Construct an oracle by manually invoking the same recipe in sorted order.
+    # Use the canonical-JSON derivation per PR #89 Finding A fix (2026-05-30).
     expected_versions = sorted(["v-sha-z", "v-sha-a"])
     routing_sha = hashlib.sha256(
-        ctx.routing_manifest.model_dump_json(by_alias=False).encode("utf-8"),
+        json.dumps(
+            ctx.routing_manifest.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8"),
     ).hexdigest()
     oracle = hashlib.sha256(
         _canonicalize_procedural_tier_payload(expected_versions, routing_sha),
@@ -237,11 +242,21 @@ def test_resolve_canonical_payload_omits_prompts_key_at_v1_3() -> None:
 
 
 def test_resolve_routing_manifest_sha_derivation_byte_exact() -> None:
-    """AC #12: routing_manifest_sha derivation matches the documented recipe."""
+    """AC #12: routing_manifest_sha derivation matches the documented recipe.
+
+    Post-PR-#89 adversarial-review fix: derivation uses ``json.dumps`` over
+    ``model_dump(mode="json")`` with ``sort_keys=True`` + compact separators
+    to guarantee cross-instance determinism per AC #6 (Pydantic v2's
+    ``model_dump_json`` preserves dict insertion order, which is non-canonical).
+    """
     rm = _routing_manifest(manifest_version=7)
     ctx = _ctx(routing_manifest=rm)
     expected_routing_sha = hashlib.sha256(
-        rm.model_dump_json(by_alias=False).encode("utf-8"),
+        json.dumps(
+            rm.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8"),
     ).hexdigest()
     expected_payload = _canonicalize_procedural_tier_payload(
         active_skills_versions=[],
@@ -249,6 +264,64 @@ def test_resolve_routing_manifest_sha_derivation_byte_exact() -> None:
     )
     expected_hash = hashlib.sha256(expected_payload).hexdigest()
     assert resolve_procedural_tier_snapshot(ctx) == expected_hash  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Discriminator for AC #6 cross-instance determinism — RoutingManifest dict
+# insertion order MUST NOT affect resolver output (Finding A fix from PR #89
+# adversarial review, 2026-05-30).
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_routing_manifest_sha_invariant_under_dict_insertion_order() -> None:
+    """AC #6 cross-instance determinism: two logically-identical RoutingManifests
+    constructed with different mapping insertion orders MUST produce the same
+    snapshot hash. Pre-Finding-A fix this test would FAIL because Pydantic v2's
+    ``model_dump_json`` preserves dict insertion order; post-fix the
+    ``sort_keys=True`` canonicalization closes the gap.
+    """
+    from harness_cp.cp_shared_types import AgentRole, ModelBinding
+    from harness_cp.routing_manifest_residence import RoleRoutingBinding
+
+    mb_a = ModelBinding(provider="anthropic", model="claude-opus-4-7")
+    mb_b = ModelBinding(provider="openai", model="gpt-5")
+    rb_a = RoleRoutingBinding(
+        preferred_model_binding=mb_a,
+        layer_budget_overrides={},
+    )
+    rb_b = RoleRoutingBinding(
+        preferred_model_binding=mb_b,
+        layer_budget_overrides={},
+    )
+    # Two logically-identical RoutingManifests, different mapping insertion order.
+    rm_order_1 = RoutingManifest(
+        manifest_version=1,
+        per_role_bindings={
+            AgentRole("orchestrator"): rb_a,
+            AgentRole("worker"): rb_b,
+        },
+        per_workload_overrides={},
+        fallback_chains=(),
+        retry_policies={},
+    )
+    rm_order_2 = RoutingManifest(
+        manifest_version=1,
+        per_role_bindings={
+            AgentRole("worker"): rb_b,
+            AgentRole("orchestrator"): rb_a,
+        },
+        per_workload_overrides={},
+        fallback_chains=(),
+        retry_policies={},
+    )
+    ctx_1 = _ctx(routing_manifest=rm_order_1)
+    ctx_2 = _ctx(routing_manifest=rm_order_2)
+    snapshot_1 = resolve_procedural_tier_snapshot(ctx_1)  # type: ignore[arg-type]
+    snapshot_2 = resolve_procedural_tier_snapshot(ctx_2)  # type: ignore[arg-type]
+    assert snapshot_1 == snapshot_2, (
+        f"Resolver MUST be invariant under RoutingManifest dict insertion order "
+        f"per AC #6 cross-instance determinism; got {snapshot_1!r} vs {snapshot_2!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
