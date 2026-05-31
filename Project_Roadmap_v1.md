@@ -297,9 +297,9 @@ R-IF-roadmap-refresh:
 
 ```yaml
 R-001:
-  title: H_T-OD-5 RETIRE-READY → RETIRED transit (halt-doc Item 7)
+  title: H_T-OD-5 cost-attribution — RETIRED (reconciled at R-002 survey)
   surface: I
-  status: BLOCKED
+  status: RESOLVED
   depends_on: [R-100-mvp-operator-usable-cli-shipped, R-100-mvp-real-workflow-execution]
   blocks: [R-700-phase-8-substitution-accounting]
   posture: halt-route-to-operator
@@ -309,13 +309,13 @@ R-001:
   council_required: no
   verification: { shape: e2e, must_pass: ["operator-bound RuntimeConfig.validator_framework_config non-None", "operator-explicit WebhookDeliveryComposer with cost-attribution substrates", "≥1 real dispatch surface exercised", "cost:-prefixed audit-ledger entries observed at production"] }
   close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-NN.md", cascade: [R-IF-roadmap-refresh] }
-  next_pointer: R-002
-  notes: Reading α alternative — file as RETIRED-AS-BOUNDED-RESIDUAL via operator AUQ (mirror AS-8d batch-25). Operator-discretion.
+  next_pointer: R-IF-roadmap-refresh
+  notes: RESOLVED — OD-5 already RETIRED 2026-05-28 batch-32 via mech-β AC #8 green (PR #14 `24a9363`); harness-od/CLAUDE.md §4.1 gates sub-section confirms "Terminal in-CLI state at RETIRED ... full RETIRED achieved at batch-32". The BLOCKED-awaiting-operator-deployment model here was a stale-authoring error (used the stale dashboard "RETIRE-READY 2 active" claim). Reconciled at R-002 survey 2026-05-31.
 
 R-002:
-  title: Remaining substitution retirements survey
+  title: Remaining substitution retirements survey (Surface-I decomposition)
   surface: I
-  status: ACTIVE
+  status: RESOLVED
   depends_on: []
   blocks: [R-700-phase-8-substitution-accounting]
   posture: phase-7
@@ -325,8 +325,8 @@ R-002:
   council_required: no
   verification: { shape: grep, must_pass: ["all STILL-BOUNDED + PARTIAL + RETIRE-READY rows enumerated", "each row classified executable-now / awaiting-MVP / awaiting-multi-deployment / awaiting-operator-decision"] }
   close_shape: { type: substrate-amendment, artifact: "Roadmap §5.2 expanded with per-row R-NNN", cascade: [] }
-  next_pointer: <generated per-row>
-  notes: First execution of this is the §I decomposition pass. Output is itself R-NNN entries.
+  next_pointer: R-003
+  notes: RESOLVED at first execution 2026-05-31 (Surface-I decomposition pass). Survey enumerated all non-RETIRED rows across harness-*/CLAUDE.md §4.1. Output — IS-2 PARTIAL (covered R-003 + R-001-h-t-is-2-retired); OD-5 + AS-8d RETIRED (reconciled R-001 + R-004 stale BLOCKED → RESOLVED — they were retired via mech-β batches 31-32, not the operator-deployment path the entries modeled); AS-8e + AS-8f STILL-BOUNDED-INDEFINITELY (NEW R-005 + R-006 DEFERRED); OD-3 + OD-6 RETIRE-READY (NEW R-007 + R-009 BLOCKED on real-deployment X-AL-2 second conjunct OR operator-AUQ Reading α); OD-4 PARTIAL (NEW R-008 BLOCKED on §13.1/§13.2 gate closures). CP-axis §4.1 fully RETIRED — no entries owed. 7 distinct non-RETIRED rows now mapped. Dashboard "Phase 7 retirement progress" table reconciled in the same PR.
 
 R-003:
   title: Producer-site lifts at ~13 sites per IS spec v1.3 § procedural_tier_snapshot consumers
@@ -361,9 +361,9 @@ R-001-h-t-is-2-retired:
   notes: Currently at PARTIAL per batch-49 / runtime plan v2.42.
 
 R-004:
-  title: H_T-AS-8d RETIRE-READY → RETIRED transit
+  title: H_T-AS-8d skill.* — RETIRED (reconciled at R-002 survey)
   surface: I
-  status: BLOCKED
+  status: RESOLVED
   depends_on: [R-100-mvp-operator-usable-cli-shipped, R-100-mvp-real-workflow-execution]
   blocks: [R-700-phase-8-substitution-accounting]
   posture: halt-route-to-operator
@@ -373,8 +373,93 @@ R-004:
   council_required: no
   verification: { shape: e2e, must_pass: ["operator-bound RuntimeConfig.skill_activation_hook_config non-None", "≥1 real workflow exercises ≥1 of 3 skill activation hook surfaces", "skill.* namespace span emitted at production"] }
   close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-NN.md", cascade: [R-IF-roadmap-refresh] }
-  next_pointer: R-001
-  notes: Mirror precedent — Reading α as RETIRED-AS-BOUNDED-RESIDUAL also valid (operator-discretion).
+  next_pointer: R-IF-roadmap-refresh
+  notes: RESOLVED — AS-8d already RETIRED 2026-05-28 batch-31 via mech-β AC #7 green (PR #14 `24a9363`); harness-as/CLAUDE.md §4.1 row confirms RETIRED. BLOCKED-awaiting-operator-deployment model was a stale-authoring error. Reconciled at R-002 survey 2026-05-31.
+
+# ── R-005..R-009 authored at R-002 Surface-I decomposition pass (2026-05-31) ──
+# Survey of all non-RETIRED substitution rows across harness-*/CLAUDE.md §4.1.
+# Covered pre-survey: IS-2 (R-003 + R-001-h-t-is-2-retired); OD-5 (R-001 → RESOLVED);
+# AS-8d (R-004 → RESOLVED). NEW per-row entries below for the 5 uncovered rows.
+
+R-005-as-8e-files-indefinite:
+  title: H_T-AS-8e (files.* namespace) — INDEFINITE deferral accounting
+  surface: I
+  status: DEFERRED
+  depends_on: []
+  blocks: [R-700-phase-8-substitution-accounting]
+  posture: halt-route-to-operator
+  scope: { files: [.harness/phase-7d-retirement-events-batch-NN.md], contracts: [], cross_axis: no }
+  skills: { primary: phase-7-substitution-retirement, secondary: [] }
+  advisor_required: no
+  council_required: no
+  verification: { shape: none, must_pass: ["operator decision to author Files API surface OR carry as RETIRED-AS-BOUNDED-RESIDUAL at Phase 8"] }
+  close_shape: { type: retirement-event, artifact: "Phase 8 substitution accounting (R-700) OR a future Files-arc retirement event", cascade: [] }
+  next_pointer: null
+  notes: STILL-BOUNDED-INDEFINITELY per runtime spec v1.17 §14.C (Files arc DEFERRED INDEFINITELY, Memory-only MVP scope). Not executable in-CLI; gated on operator Files-API surface-authoring decision. X-AL-2 bounded-residual carry; resolves at R-700 Phase 8 accounting if not authored.
+
+R-006-as-8f-managed-agents-indefinite:
+  title: H_T-AS-8f (managed_agents.* namespace) — INDEFINITE deferral accounting
+  surface: I
+  status: DEFERRED
+  depends_on: []
+  blocks: [R-700-phase-8-substitution-accounting]
+  posture: halt-route-to-operator
+  scope: { files: [.harness/phase-7d-retirement-events-batch-NN.md], contracts: [], cross_axis: no }
+  skills: { primary: phase-7-substitution-retirement, secondary: [] }
+  advisor_required: no
+  council_required: no
+  verification: { shape: none, must_pass: ["operator decision on Anthropic managed_agents beta SDK integration + managed-cloud deployment OR carry as RETIRED-AS-BOUNDED-RESIDUAL at Phase 8"] }
+  close_shape: { type: retirement-event, artifact: "Phase 8 substitution accounting (R-700) OR a future managed_agents retirement event", cascade: [] }
+  next_pointer: null
+  notes: STILL-BOUNDED-INDEFINITELY per `.harness/class_1_fork_as_8f_managed_agents_namespace_production_only_exclusion.md` Q1=(C) + runtime spec v1.33 + AS spec v1.7 §14.5 footer (mirror AS-8e). Not executable in-CLI; gated on managed_agents beta SDK + managed-cloud surface. X-AL-2 bounded-residual carry.
+
+R-007-od-3-sampler-retired:
+  title: H_T-OD-3 (Composite Sampler) RETIRE-READY → RETIRED transit
+  surface: I
+  status: BLOCKED
+  depends_on: [R-100-mvp-real-workflow-execution]
+  blocks: [R-700-phase-8-substitution-accounting]
+  posture: halt-route-to-operator
+  scope: { files: [.harness/phase-7d-retirement-events-batch-NN.md], contracts: [], cross_axis: no }
+  skills: { primary: phase-7-substitution-retirement, secondary: [] }
+  advisor_required: yes
+  council_required: no
+  verification: { shape: e2e, must_pass: ["HarnessCompositeSampler + TailKeepSpanProcessor exercised at a production-surface deployment (non-LOCAL_DEVELOPMENT)", "X-AL-2 second conjunct — head-based sampler substitution no longer the active path at production OTel pipeline"] }
+  close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-NN.md", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: R-009-od-6-otlp-retired
+  notes: RETIRE-READY at batch-36 (both gates closed — §9.1 tail-keep + §10.3 base_rate envelope). Like OD-5/OD-6, RETIRED transit needs the X-AL-2 second conjunct at a real deployment; or operator-AUQ Reading α RETIRED-AS-BOUNDED-RESIDUAL. Sibling-arc candidate with OD-6 (joint same-arc tier advancement precedent batches 33-34).
+
+R-008-od-4-redaction-partial:
+  title: H_T-OD-4 (Pre-Collector redaction SpanProcessor) PARTIAL → RETIRE-READY gate closures
+  surface: I
+  status: BLOCKED
+  depends_on: []
+  blocks: [R-700-phase-8-substitution-accounting]
+  posture: phase-7
+  scope: { files: [harness-od/**, harness-runtime/**], contracts: [C-OD-12, C-OD-13 §13.1 §13.2], cross_axis: no }
+  skills: { primary: phase-7-implementation, secondary: [phase-7-substitution-retirement] }
+  advisor_required: conditional:if a gate closure touches a cross-axis contract
+  council_required: no
+  verification: { shape: integration, must_pass: ["§13.1 per-session redaction toggle mechanism authored (deferred at PR #25 apply arc)", "§13.2 opaque-token tokenization mode (strip-not-tokenize MVP scope-lock lifted)"] }
+  close_shape: { type: PR-merge, artifact: "PR closing the remaining OD-4 gates → PARTIAL → RETIRE-READY", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: R-007-od-3-sampler-retired
+  notes: PARTIAL (refined) at batch-35; gate (a) partially closed at PR #25 (deployment-level persona_tier + multi-tenant non-toggleability). Remaining — per-session toggle (needs session-control substrate) + §13.2 tokenization. NOT yet RETIRE-READY; further substrate before a retirement transit.
+
+R-009-od-6-otlp-retired:
+  title: H_T-OD-6 (Local-first OTLP ingestion) RETIRE-READY → RETIRED transit
+  surface: I
+  status: BLOCKED
+  depends_on: [R-100-mvp-real-workflow-execution]
+  blocks: [R-700-phase-8-substitution-accounting]
+  posture: halt-route-to-operator
+  scope: { files: [.harness/phase-7d-retirement-events-batch-NN.md], contracts: [], cross_axis: no }
+  skills: { primary: phase-7-substitution-retirement, secondary: [] }
+  advisor_required: yes
+  council_required: no
+  verification: { shape: e2e, must_pass: ["4-OD-B SqliteWritePath ingestion exercised against real spans at a deployment", "X-AL-2 second conjunct — local-first OTLP substitution surface no longer invoked at production"] }
+  close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-NN.md", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: R-001-h-t-is-2-retired
+  notes: RETIRE-READY at batch-33 ("Terminal in-CLI state"); substrate U-OD-42..U-OD-45 LANDED (PR #18). RETIRED transit needs X-AL-2 second conjunct at a real deployment; or operator-AUQ Reading α RETIRED-AS-BOUNDED-RESIDUAL. Sibling-arc candidate with OD-3.
 ```
 
 ### 5.3 MVP-operator-usable (R-100..R-199)
