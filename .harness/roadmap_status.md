@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `1c852278bfc9` |
-| `last_refreshed` | 2026-05-31T15:52:45-06:00 |
-| `git_head` | `f8572b3` (main) — `roadmap(§3): declare resume: field + satisfied: advisor value + checkpoint-on-pause rule; reconcile R-003 (#134)` |
+| `workspace_state_hash` | `03714383e971` |
+| `last_refreshed` | 2026-05-31T16:35:00-06:00 |
+| `git_head` | `c339728` (main) — `R-003 Cluster B: lift procedural_tier_snapshot_ref at CP sites + document None-canonical (#137)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-49.md` |
 | `open_fork_doc_count` | 39 |
 
@@ -20,9 +20,9 @@
 
 ## Next action
 
-**`R-003`** (status: **ACTIVE**, paused mid-execution per §3 `resume:` field; impl pending; **RESUME AT Cluster A**) — producer-site lifts of `EntryPayload.procedural_tier_snapshot_ref` at the **4 workflow-context sites** (phase-7; cross_axis: yes). **➡️ ON RESUME: read `.harness/R-003-checkpoint.md` FIRST, then start Cluster A — do NOT re-derive the orientation.** The hard analysis is settled this session: (1) **X-AL-3 cleared** — IS spec §5.1 is a general principle (None canonical outside active-workflow-context); this is NOT a scope-extension fork; advisor SATISFIED (55th application). (2) **Operator-ratified scope (Option A):** LIFT 4 workflow-step sites — `sub_agent_dispatch.py:474` + `hitl_gate_composer.py:770` (Cluster A, runtime), `workflow_driver.py:1360` + `sibling_ledger_entry_composition.py:144` (Cluster B, CP); DOCUMENT `audit_writer.py:120` + `as_is_wiring.py:110` + `shadow_git_rollback.py:114` as None-canonical. Injection-point map + the stage-5/6 resolver-timing wrinkle are in the checkpoint. Mirror `cp_is_wiring.py` (the 6 §16.5 composers already wired). Landing Cluster A + B + docs unblocks `R-001-h-t-is-2-retired` (IS-2 PARTIAL → RETIRED). PR-per-cluster per L9-* precedent.
+**`R-001-h-t-is-2-retired`** (status: **ACTIVE** — unblocked at the R-003 close; phase-7; cross_axis: no) — file the **H_T-IS-2 PARTIAL → RETIRED** retirement event. R-003's producer-site cascade is now complete (PR #136 Cluster A + #137 Cluster B): all **7** IS-2 producer sites handled — **4 lifted** (`sub_agent_dispatch`, `hitl_gate_composer`, `sibling_ledger`, `workflow_driver` per-step) + **3 documented None-canonical** (`audit_writer`, `as_is_wiring`, `shadow_git_rollback`). Execution = author `.harness/phase-7d-retirement-events-batch-NN.md` (next batch after 49) recording the PARTIAL → RETIRED transit + verify X-AL-2 second conjunct, then refresh `harness-is/CLAUDE.md` §4.1 + `.harness/phase-7d-retirement-ledger-v2.md` §3. close_shape = retirement-event; cascade → R-IF-roadmap-refresh; next_pointer → R-002 (already RESOLVED, so re-derive). `advisor_required: no`.
 
-**(R-002 RESOLVED at PR #130 merge `6f8dd66` — Surface-I decomposition complete: 7 non-RETIRED rows mapped to R-NNN; R-001 (OD-5) + R-004 (AS-8d) reconciled stale BLOCKED → RESOLVED; dashboard retirement-progress table corrected.)**
+**(R-003 RESOLVED at PR #136 + #137 merge `5e4a112` + `c339728` 2026-05-31 — producer-site lifts delivered across two clusters; 2281 tests pass; ruff+pyright clean. `resume:`/checkpoint pointer removed per §3.)**
 
 ---
 
@@ -30,8 +30,8 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(none — in-flight chain + hygiene cascade + R-002 decomposition all cleared 2026-05-31)* | — | — | — |
-| *(this PR)* | `worktree-roadmap-refresh-post-pr-130` | *(self, post-merge refresh)* | mode-agnostic |
+| *(none — R-003 Cluster A (#136) + Cluster B (#137) merged 2026-05-31)* | — | — | — |
+| *(this PR)* | `worktree-roadmap-refresh-post-r-003` | *(self, substantive — R-003→RESOLVED + R-001→ACTIVE; follow-on terminating refresh owed)* | mode-agnostic |
 
 ---
 
@@ -39,11 +39,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| PR #134 (`f8572b3`) | 2026-05-31 | roadmap §3 schema amendment — declare `resume:` field + `satisfied:<date>` advisor value + checkpoint-on-pause rule (enum kept closed); reconcile R-003 to schema-legal. Closes the §3↔§5 drift introduced at #132 |
-| PR #132 (`7c79fb4`) | 2026-05-31 | R-003 orientation persisted as resume-state — NEW `.harness/R-003-checkpoint.md` + entry resume pointer; makes the stop-short seamless across `/clear` (entry status reconciled to schema-legal ACTIVE at #134) |
-| PR #130 (`6f8dd66`) | 2026-05-31 | R-002 — Surface-I decomposition; 5 new per-row substitution entries (R-005..R-009); reconciled stale R-001 (OD-5) + R-004 (AS-8d) BLOCKED → RESOLVED (both RETIRED via mech-β batches 31-32); dashboard retirement-progress table corrected |
-| PR #128 (`3ba4fae`) | 2026-05-31 | R-IF-HYGIENE-CXA-COUNT-CASCADE — CXA v2.18 count cascade to canonical pointers (aggregate 107→105; phase-2-runtime 22→20; OD→IS 6→4; OD outbound 27→26); mode-agnostic; §108/§109 sibling-completeness applied |
-| PR #133 (`750ad8e`) | 2026-05-31 | ops: roadmap status refresh post-PR-132 (twelfth terminating refresh; next-action → R-003 ACTIVE+resume) |
+| PR #137 (`c339728`) | 2026-05-31 | **R-003 Cluster B** — CP-axis producer-site lifts: `construct_sibling_ledger_entry` (via cp_is_wiring resolver) + `workflow_driver._append_step_ledger_entry` (DriverContext Protocol resolver field + HarnessContext/stage-6 wiring); + 3 None-canonical doc-comments. 6 new tests; 2281 pass |
+| PR #136 (`5e4a112`) | 2026-05-31 | **R-003 Cluster A** — runtime producer-site lifts: `RuntimeSubAgentDispatcher` (8b) + `RuntimeHITLGateComposer` (8b-HITL) populate `procedural_tier_snapshot_ref`; resolver built at bootstrap stage 5, threaded into 3 ctors. 4 new tests; 2146 pass |
+| PR #135 (`1895a6b`) | 2026-05-31 | ops: roadmap status refresh post-PR-134 (thirteenth terminating refresh; next-action → R-003 Cluster A) |
+| PR #134 (`f8572b3`) | 2026-05-31 | roadmap §3 schema amendment — declare `resume:` field + `satisfied:<date>` advisor value + checkpoint-on-pause rule (enum kept closed); reconcile R-003 to schema-legal |
+| PR #132 (`7c79fb4`) | 2026-05-31 | R-003 orientation persisted as resume-state — NEW `.harness/R-003-checkpoint.md` + entry resume pointer; stop-short seamless across `/clear` |
 
 ---
 
@@ -69,7 +69,7 @@ Sample (highest-leverage open):
 |---|---|---|
 | RETIRED | 35+ (per batch-49; incl. AS-8d batch-31 + OD-5 batch-32 via mech-β) | See `harness-*/CLAUDE.md` §4.1 + `phase-7d-retirement-events-batch-*.md` for canonical enumeration. CP-axis §4.1 fully RETIRED. |
 | RETIRE-READY | 2 active (**OD-3 + OD-6**) | OD-3 (R-007) + OD-6 (R-009) await real-deployment X-AL-2 second conjunct OR operator-AUQ Reading α. **Corrected at R-002 survey 2026-05-31: AS-8d + OD-5 are RETIRED (batches 31-32), not RETIRE-READY — prior table was stale.** |
-| PARTIAL | H_T-IS-2 (R-003) + H_T-OD-4 (R-008) | IS-2 awaits 7 producer-site lifts post-PR #107 (R-003); OD-4 awaits §13.1 per-session toggle + §13.2 tokenization gate closures (R-008). |
+| PARTIAL | H_T-IS-2 (R-001-h-t-is-2-retired, ACTIVE) + H_T-OD-4 (R-008) | IS-2 producer-site cascade COMPLETE — R-003 RESOLVED at PR #136 + #137 (4 sites lifted + 3 documented None-canonical); IS-2 stays PARTIAL only until R-001-h-t-is-2-retired files the PARTIAL → RETIRED retirement event (now ACTIVE). OD-4 awaits §13.1 per-session toggle + §13.2 tokenization gate closures (R-008). |
 | STILL-BOUNDED-INDEFINITELY | 2 (AS-8e + AS-8f) | AS-8e files.* (R-005 DEFERRED) + AS-8f managed_agents.* (R-006 DEFERRED) — indefinite-defer per runtime spec v1.17 §14.C / v1.33; X-AL-2 bounded-residual carry. |
 | RETIRED-AS-AUTHORING-ONLY | 4 | Sub-species 10 closures (OD-1, OD-7, IS-4, CP-23) per batches 37+38+39+41 |
 
@@ -101,7 +101,9 @@ Sample (highest-leverage open):
 
 | 2026-05-31 | Thirteenth terminating refresh — PR #134 roadmap §3 schema amendment merged at `f8572b3`; `[ROADMAP DRIFT] action=§12.3` flagged; §12.2 owed follow-on refresh | Single-file dashboard-only refresh per §12.2.1. Hash `754826ddff19` → `1c852278bfc9`. Next action UNCHANGED at **R-003 Cluster A**. §3 now declares the `resume:` field + `satisfied:<date>` advisor value + checkpoint-on-pause rule (status enum kept closed); R-003 entry reconciled to schema-legal `ACTIVE`. Closes the §3↔§5 drift the operator caught (3 off-schema constructs landed at #132 before the schema sanctioned them — schema-first discipline restored). |
 
-**Audit protocol exercised across 13 closure events + 1 fresh-session reconciliation.** Discipline + enforcement layers both operational. **In-flight chain + hygiene cascade + R-002 decomposition cleared 2026-05-31; R-003 paused at schema-legal ACTIVE (resume-checkpoint per §3); deterministic next-action = R-003 Cluster A.**
+| 2026-05-31 | **R-003 RESOLVED** — Cluster A (#136 `5e4a112`) + Cluster B (#137 `c339728`) merged; substantive roadmap PR (this) marks R-003 → RESOLVED + R-001-h-t-is-2-retired BLOCKED → ACTIVE | Bundled change (Project_Roadmap_v1.md + dashboard) → NOT a terminating refresh per §12.2.1; title drops the `ops: roadmap status refresh` prefix; **follow-on terminating refresh owed**. Hash `1c852278bfc9` → `03714383e971` (state at `c339728`, pre-this-PR-merge). Next action re-derived: **R-001-h-t-is-2-retired** (IS-2 producer cascade complete; file the PARTIAL → RETIRED retirement event). |
+
+**Audit protocol exercised across 13 terminating-refresh closures + 1 fresh-session reconciliation + 1 substantive close (R-003).** Discipline + enforcement layers operational. **R-003 RESOLVED 2026-05-31 (PR #136 + #137); deterministic next-action = R-001-h-t-is-2-retired. A follow-on terminating refresh is owed per §12.2.1 (this PR is bundled/substantive, not dashboard-only).**
 
 ---
 

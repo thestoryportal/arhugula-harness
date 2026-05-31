@@ -335,7 +335,7 @@ R-002:
 R-003:
   title: Producer-site lifts of EntryPayload.procedural_tier_snapshot_ref (workflow-context sites)
   surface: I
-  status: ACTIVE   # paused mid-execution (orientation done, impl pending) — signalled by the resume: field per §3; RESUME at Cluster A
+  status: RESOLVED
   depends_on: []
   blocks: [R-001-h-t-is-2-retired]
   posture: phase-7
@@ -346,28 +346,25 @@ R-003:
   verification: { shape: integration, must_pass: ["each LIFTED workflow-context site populates EntryPayload.procedural_tier_snapshot_ref via resolver closure", "no lifted site bypasses resolver", "documented outside-context sites keep None per IS §5.1", "HALT-on-resolver-failure (no ledger write)"] }
   close_shape: { type: PR-merge, artifact: "PR per cluster — Cluster A (runtime: sub_agent_dispatch + hitl_gate_composer); Cluster B (CP: workflow_driver + sibling_ledger); + 5/6/7 None-canonical docs", cascade: [R-IF-roadmap-refresh, R-001-h-t-is-2-retired] }
   next_pointer: R-001-h-t-is-2-retired
-  resume: ".harness/R-003-checkpoint.md"   # READ THIS FIRST on resume — full injection-point map + 2-cluster plan + resolved decisions.
   notes: >
-    ORIENTATION COMPLETE 2026-05-31 — do NOT re-derive; read .harness/R-003-checkpoint.md and start Cluster A.
-    Resolved this arc: (1) X-AL-3 risk CLEARED — IS spec v1.3 §C-IS-05 §5.1 is a GENERAL principle (None canonical outside active workflow context); lifting workflow-context sites is spec-intended, not a scope-extension fork.
-    (2) Operator AskUserQuestion 2026-05-31 = Option A: lift the 4 workflow-step sites (sibling-ledger, workflow_driver step, sub_agent F2 :474, hitl F2 :770); DOCUMENT sites 5 (audit_writer), 6 (as_is_wiring secret-fetch), 7 (shadow_git_rollback) as None-canonical.
-    (3) Injection-point map + the stage-5-vs-stage-6 resolver-timing wrinkle + the site-1 caller-threading reframe are in the checkpoint. U-RT-112 resolver substrate LANDED (runtime v2.42); cp_is_wiring.py is the pattern to mirror.
+    RESOLVED 2026-05-31 — delivered across PR #136 (Cluster A: runtime sub_agent_dispatch + hitl_gate_composer, resolver built at bootstrap stage 5) + PR #137 (Cluster B: CP workflow_driver _append_step_ledger_entry + sibling-ledger via the cp_is_wiring resolver, resolver wired onto HarnessContext + DriverContext Protocol at stage 6) + the 3 None-canonical doc-comments (audit_writer, as_is_wiring, shadow_git_rollback). All 7 IS-2 producer sites handled (4 lifted, 3 documented). 2281 tests pass; ruff+pyright clean vs main. resume:/checkpoint pointer removed per §3 on RESOLVE; .harness/R-003-checkpoint.md retained as historical record. Unblocks R-001-h-t-is-2-retired.
 
 R-001-h-t-is-2-retired:
   title: H_T-IS-2 PARTIAL → RETIRED transit
   surface: I
-  status: BLOCKED
+  status: ACTIVE   # unblocked — depends_on [R-003] RESOLVED at PR #136 + #137 merge 2026-05-31
   depends_on: [R-003]
   blocks: [R-700-phase-8-substitution-accounting]
   posture: phase-7
-  scope: { files: [.harness/phase-7d-retirement-events-batch-NN.md], contracts: [], cross_axis: no }
+  scope: { files: [.harness/phase-7d-retirement-events-batch-NN.md, harness-is/CLAUDE.md, .harness/phase-7d-retirement-ledger-v2.md], contracts: [], cross_axis: no }
   skills: { primary: phase-7-substitution-retirement, secondary: [] }
   advisor_required: no
   council_required: no
-  verification: { shape: grep, must_pass: ["all ~13 producer sites verified populating sidecar", "X-AL-2 second conjunct (H_E surface no longer invoked) met"] }
+  verification: { shape: grep, must_pass: ["all 7 producer sites handled — 4 lifted (sub_agent_dispatch, hitl_gate_composer, sibling_ledger, workflow_driver step) + 3 documented None-canonical (audit_writer, as_is_wiring, shadow_git_rollback) per PR #136/#137", "X-AL-2 second conjunct (H_E surface no longer invoked) met"] }
   close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-NN.md", cascade: [R-IF-roadmap-refresh] }
   next_pointer: R-002
-  notes: Currently at PARTIAL per batch-49 / runtime plan v2.42.
+  notes: >
+    UNBLOCKED 2026-05-31 — R-003 RESOLVED at PR #136 + #137 merge. The producer-site cascade that gated IS-2 RETIRED is complete: all 7 sites handled (4 lifted, 3 documented None-canonical). Execution = file the PARTIAL → RETIRED retirement event (batch-NN) + refresh harness-is/CLAUDE.md §4.1 + ledger-v2 §3, verifying X-AL-2 second conjunct. Was PARTIAL per batch-49 / runtime plan v2.42.
 
 R-004:
   title: H_T-AS-8d skill.* — RETIRED (reconciled at R-002 survey)
