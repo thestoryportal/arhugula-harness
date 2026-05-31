@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `adb1e71359dd` |
-| `last_refreshed` | 2026-05-31T15:00:54-06:00 |
-| `git_head` | `3ba4fae` (main) — `hygiene: CXA v2.18 count cascade to canonical pointers (107→105) (#128)` |
+| `workspace_state_hash` | `7f251d6c7cc5` |
+| `last_refreshed` | 2026-05-31T15:12:27-06:00 |
+| `git_head` | `6f8dd66` (main) — `roadmap(R-002): Surface-I decomposition — 5 new per-row entries + reconcile stale R-001/R-004 (#130)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-49.md` |
 | `open_fork_doc_count` | 39 |
 
@@ -20,9 +20,9 @@
 
 ## Next action
 
-**`R-002`** — remaining substitution-retirements survey (surface I; **phase-7 posture**; skill `phase-7-substitution-retirement`; verification grep). First execution decomposes the §I atomic-unit set: survey the non-RETIRED rows across `harness-*/CLAUDE.md` §4.1 (H_T-IS-2 PARTIAL awaiting ~7 producer-site lifts; AS-8d + OD-5 RETIRE-READY awaiting operator deployment substrate; STILL-BOUNDED bucket) and classify each as executable-now vs MVP-blocked vs operator-decision, generating per-row R-NNN entries. Per §4 derivation rule: with the in-flight chain (R-IF-108→111) + the hygiene cascade all CLOSED this session, R-002 is the lowest-R-NNN ACTIVE entry with all `depends_on` RESOLVED. **Note:** R-002 is a substantive phase-7 survey (larger surface than the doc-hygiene chain just cleared); recommend a fresh decision before opening it.
+**`R-003`** — producer-site lifts at ~7 sites per IS spec v1.3 §C-IS-05 §5.2 `procedural_tier_snapshot` consumers (surface I; **phase-7 posture**; skill `phase-7-implementation` + `phase-7-cross-axis-composition`; **cross_axis: yes**; advisor_required: yes; verification: integration). The 7 remaining producer sites (post-PR #107): `harness-cp/.../sibling_ledger_entry_composition.py:144` + `workflow_driver.py:1360`; `harness-runtime/.../lifecycle/{sub_agent_dispatch.py:474, hitl_gate_composer.py:770, audit_writer.py:120, as_is_wiring.py:110}`; `harness-is/.../shadow_git_rollback.py:114`. Each populates `EntryPayload.procedural_tier_snapshot_ref` via the U-RT-112 resolver closure; landing all 7 unblocks `R-001-h-t-is-2-retired` (IS-2 PARTIAL → RETIRED). Per §4 derivation rule: with R-002 RESOLVED, R-003 is the lone executable-now ACTIVE phase-7 entry (all `depends_on` RESOLVED; R-005..R-009 are BLOCKED/DEFERRED on real-deployment or operator-decision). **Note:** R-003 is substantive phase-7 cross-axis implementation (edits `harness-cp/**` + `harness-runtime/**` + `harness-is/**` src + integration tests; PR-per-cluster of ~3-5 sites per L9-* precedent) — recommend a fresh decision + advisor pass before opening.
 
-**(R-IF-HYGIENE-CXA-COUNT-CASCADE CLOSED at PR #128 merge `3ba4fae` — CXA v2.18 count cascade landed; canonical pointers now read 105.)**
+**(R-002 RESOLVED at PR #130 merge `6f8dd66` — Surface-I decomposition complete: 7 non-RETIRED rows mapped to R-NNN; R-001 (OD-5) + R-004 (AS-8d) reconciled stale BLOCKED → RESOLVED; dashboard retirement-progress table corrected.)**
 
 ---
 
@@ -30,8 +30,8 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(none — in-flight chain #108→#109→#110→#111 + hygiene cascade #128 all cleared 2026-05-31)* | — | — | — |
-| *(this PR)* | `worktree-roadmap-refresh-post-pr-128` | *(self, post-merge refresh)* | mode-agnostic |
+| *(none — in-flight chain + hygiene cascade + R-002 decomposition all cleared 2026-05-31)* | — | — | — |
+| *(this PR)* | `worktree-roadmap-refresh-post-pr-130` | *(self, post-merge refresh)* | mode-agnostic |
 
 ---
 
@@ -39,11 +39,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #130 (`6f8dd66`) | 2026-05-31 | R-002 — Surface-I decomposition; 5 new per-row substitution entries (R-005..R-009); reconciled stale R-001 (OD-5) + R-004 (AS-8d) BLOCKED → RESOLVED (both RETIRED via mech-β batches 31-32); dashboard retirement-progress table corrected |
 | PR #128 (`3ba4fae`) | 2026-05-31 | R-IF-HYGIENE-CXA-COUNT-CASCADE — CXA v2.18 count cascade to canonical pointers (aggregate 107→105; phase-2-runtime 22→20; OD→IS 6→4; OD outbound 27→26); mode-agnostic; §108/§109 sibling-completeness applied |
 | PR #111 (`fdf120b`) | 2026-05-31 | R-IF-111 — OD plan v2.27 NEW §4.6.OD-INTERNAL carve-out; halt-doc Item 12 closed; sibling to #110; design-phase posture, clearance marker present (operator-ratified) |
 | PR #110 (`2f14604`) | 2026-05-31 | R-IF-110 — CXA v2.18; CXA-OD-IS-EDGE-DRIFT (Item 11) closed; §2.3.4 6→4, aggregate 107→105; design-phase posture, clearance marker present (operator-ratified) |
-| PR #109 (`a81fe2d`) | 2026-05-31 | R-IF-109 — workspace memory audit round-3 (50 entries / 3 findings); +apply-pass correction (AS-8e is STILL-BOUNDED-INDEFINITELY not PARTIAL) caught at verification |
-| PR #108 (`54337c1`) | 2026-05-31 | R-IF-108 — workflow v1.12 §7.4.7.3.C audit at per-axis CLAUDE.md §4.1; +sibling cumulative-counts completeness fix (harness-is §4.1:151) caught at fresh-session verification |
+| PR #129 (`84b9908`) | 2026-05-31 | ops: roadmap status refresh post-PR-128 (tenth terminating refresh; next-action → R-002) |
 
 ---
 
@@ -95,8 +95,9 @@ Sample (highest-leverage open):
 | 2026-05-31 | Eighth terminating refresh — PR #110 R-IF-110 CXA v2.18 (design-phase) merged at `2f14604`; `[ROADMAP DRIFT] action=§12.3` flagged; §12.2 owed follow-on refresh | Single-file dashboard-only refresh per §12.2.1. Hash `25d4b36d4359` → `17fe5dac2209`. R-IF-110 closed; next action recomputed to R-IF-111 (last in-flight entry). Downstream `CLAUDE.md` §1.1 count cascade (107→105) flagged as owed hygiene arc per CXA v2.18 §0.9 FM-2 deferral. |
 | 2026-05-31 | Ninth terminating refresh — PR #111 R-IF-111 OD plan v2.27 (design-phase) merged at `fdf120b`; `[ROADMAP DRIFT] action=§12.3` flagged; §12.2 owed follow-on refresh | Single-file dashboard-only refresh per §12.2.1. Hash `17fe5dac2209` → `a51d65ed22a2`. R-IF-111 closed — **in-flight chain #108→#109→#110→#111 fully cleared this session**. Next action recomputed to the owed hygiene cascade (CLAUDE.md §1.1 aggregate 107→105 + harness-od refresh), R-002 fallback after. |
 | 2026-05-31 | Tenth terminating refresh — PR #128 R-IF-HYGIENE-CXA-COUNT-CASCADE merged at `3ba4fae`; `[ROADMAP DRIFT] action=§12.3` flagged; §12.2 owed follow-on refresh | Single-file dashboard-only refresh per §12.2.1. Hash `a51d65ed22a2` → `adb1e71359dd`. Hygiene cascade closed (canonical pointers now read 105). **All in-flight + deferred-hygiene work cleared this session.** Next action recomputed to **R-002** (substantive phase-7 substitution-retirement survey — recommend a fresh decision before opening). |
+| 2026-05-31 | Eleventh terminating refresh — PR #130 R-002 Surface-I decomposition merged at `6f8dd66`; `[ROADMAP DRIFT] action=§12.3` flagged; §12.2 owed follow-on refresh | Single-file dashboard-only refresh per §12.2.1. Hash `adb1e71359dd` → `7f251d6c7cc5`. R-002 RESOLVED (7 non-RETIRED rows mapped to R-NNN; R-001/R-004 reconciled stale→RESOLVED). Next action recomputed to **R-003** (producer-site lifts, ~7 sites; substantive phase-7 cross-axis impl — recommend fresh decision + advisor before opening). **Survey-surfaced finding:** the roadmap §5.2 was authored 2026-05-31 with R-001/R-004 as RETIRE-READY-awaiting-deployment, but OD-5/AS-8d had been RETIRED via mech-β at batches 31-32 (2026-05-28) — a 3-day-stale authoring error, now corrected. |
 
-**Audit protocol exercised across 10 closure events + 1 fresh-session reconciliation.** Discipline + enforcement layers both operational. **In-flight chain + hygiene cascade fully cleared 2026-05-31; deterministic next-action = R-002 (phase-7 substitution-retirement survey).**
+**Audit protocol exercised across 11 closure events + 1 fresh-session reconciliation.** Discipline + enforcement layers both operational. **In-flight chain + hygiene cascade + R-002 decomposition fully cleared 2026-05-31; deterministic next-action = R-003 (phase-7 cross-axis producer-site lifts).**
 
 ---
 
