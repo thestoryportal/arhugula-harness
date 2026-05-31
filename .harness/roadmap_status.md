@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `47c763cb4fb3` |
-| `last_refreshed` | 2026-05-31T19:30:00-06:00 |
-| `git_head` | `65ed6463` (main) — `ops: NotebookLM skill installed + R-600 RESOLVED in single arc (#118)` |
+| `workspace_state_hash` | `6283a744645e` |
+| `last_refreshed` | 2026-05-31T19:50:00-06:00 |
+| `git_head` | `622790c3` (main) — `ops: NotebookLM MCP server supplement + .mcp.json registration (#120)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-49.md` |
 | `open_fork_doc_count` | 39 |
 
@@ -42,11 +42,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #120 (`622790c`) | 2026-05-31 | ops: NotebookLM MCP server supplement + .mcp.json registration |
+| PR #119 (`17aafc0`) | 2026-05-31 | ops: roadmap status refresh post-PR-118 |
 | PR #118 (`65ed646`) | 2026-05-31 | ops: NotebookLM skill installed + R-600 RESOLVED in single arc |
 | PR #117 (`6401e2a`) | 2026-05-31 | ops: roadmap status refresh post-PR-116 |
 | PR #116 (`63c4464`) | 2026-05-31 | roadmap-design-extension: NEW §XI surface + 3 R-XI PROPOSED entries |
-| PR #115 (`675c321`) | 2026-05-31 | ops: roadmap status refresh post-PR-114 |
-| PR #114 (`7da53e5`) | 2026-05-31 | roadmap(v1.1) §12.2.1 recursion-stopping codification + §12.1 step 6 fixed-point carve-out |
 
 ---
 
@@ -90,8 +90,9 @@ Sample (highest-leverage open):
 | 2026-05-31 | First terminating refresh per §12.2.1 — PR #114 merged at `7da53e5`; this PR is the terminating event | Single-file dashboard-only refresh; does NOT trigger another refresh per §12.2.1. Hash `5a077d17765f` → `9bd06cb83b73`. |
 | 2026-05-31 | Second terminating refresh — PR #116 bundled change merged at `63c4464`; §12.2 owed follow-on refresh | Single-file dashboard-only refresh per §12.2.1. Hash `9bd06cb83b73` → `12f34637fd3a`. |
 | 2026-05-31 | Third terminating refresh — PR #118 NotebookLM skill setup merged at `65ed646`; §12.2 owed follow-on refresh | Single-file dashboard-only refresh per §12.2.1. Hash `12f34637fd3a` → `47c763cb4fb3`. |
+| 2026-05-31 | Fourth terminating refresh — PR #120 NotebookLM MCP server supplement merged at `622790c`; §12.2 owed follow-on refresh | Single-file dashboard-only refresh per §12.2.1. Hash `47c763cb4fb3` → `6283a744645e`. |
 
-**Audit protocol exercised across 3 closure events.** Discipline operational at pure-refresh + bundled-roadmap-extension + bundled-tooling-setup shapes.
+**Audit protocol exercised across 4 closure events.** Discipline operational at pure-refresh + bundled-roadmap-extension + bundled-tooling-setup + bundled-mcp-server-registration shapes.
 
 ---
 
