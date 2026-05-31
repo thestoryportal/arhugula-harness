@@ -548,6 +548,55 @@ R-600-clearance-marker-backfill-survey:
   next_pointer: null
   notes: Non-retroactive per CLAUDE.md §4.5; survey identifies post-2026-05-29 gaps only.
 
+R-600-notebooklm-mcp-server-setup:
+  title: NotebookLM MCP server (jacob-bd/notebooklm-mcp-cli) installed as supplement to skill
+  surface: VII
+  status: RESOLVED
+  depends_on: [R-600-notebooklm-skill-setup]
+  blocks: []
+  posture: mode-agnostic
+  scope:
+    files: [.mcp.json, memory/notebooklm-harness-corpus-url.md]
+    contracts: []
+    cross_axis: no
+  skills: { primary: null, secondary: [] }
+  advisor_required: no
+  council_required: no
+  verification:
+    shape: integration
+    must_pass:
+      - "notebooklm-mcp-cli==0.6.13 installed via uv tool (Python 3.12)"
+      - "Auth via nlm login (interactive Chrome sign-in; cookie-import path fails because raw-string format loses per-domain metadata)"
+      - "nlm login --check returns Authentication valid + 23 notebooks visible"
+      - ".mcp.json registers notebooklm server at stdio transport"
+      - "Server starts cleanly on stdio (smoke-test)"
+  close_shape:
+    type: PR-merge
+    artifact: "ops: NotebookLM MCP server supplement + .mcp.json registration"
+    cascade: []
+  next_pointer: null
+  notes: |
+    SUPPLEMENT, not replacement. Two tools live concurrently per operator decision:
+    - This MCP server (jacob-bd) — Claude-native invocation via mcp__notebooklm__* tools;
+      35 granular tools; faster (no Chromium per query); preferred for council pre-bind
+      probes + adversarial external-canon + workflow v1.14 absorption deliberations.
+    - teng-lin skill (R-600-notebooklm-skill-setup) — CLI shellout from justfile recipes;
+      artifact generation surfaces (podcasts, video, mind maps); operator-direct queries.
+
+    Auth path lesson: nlm's `--manual --file` accepts raw "name=value; ..." cookie string
+    but strips per-domain metadata. When nlm refreshes CSRF token, ALL cookies arrive at
+    notebooklm.google.com with no domain attribution → SID name collisions → server
+    redirects to login. Only `nlm login` interactive flow yields working auth (~30s
+    one-time browser interaction). Memory entry refreshed in same PR with this finding.
+
+    NEW pattern candidate: [[raw-cookie-string-vs-per-domain-metadata]] — cookie auth via
+    a flat header string format only works when the receiving HTTP client doesn't
+    cross-domain. nlm cross-domains (accounts.google.com refresh + notebooklm.google.com
+    API) so raw-string fails. Cardinality 1; awaits second instance.
+
+    Audit usage after ~1 month: which tool fires more queries; retire the loser if
+    usage is clearly imbalanced.
+
 R-600-notebooklm-skill-setup:
   title: NotebookLM skill integration — interactive access to 28-URL-scrape research corpus
   surface: VII
