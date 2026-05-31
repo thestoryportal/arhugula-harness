@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `754826ddff19` |
-| `last_refreshed` | 2026-05-31T15:41:14-06:00 |
-| `git_head` | `7c79fb4` (main) — `roadmap(R-003): persist orientation as resume-state checkpoint (#132)` |
+| `workspace_state_hash` | `1c852278bfc9` |
+| `last_refreshed` | 2026-05-31T15:52:45-06:00 |
+| `git_head` | `f8572b3` (main) — `roadmap(§3): declare resume: field + satisfied: advisor value + checkpoint-on-pause rule; reconcile R-003 (#134)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-49.md` |
 | `open_fork_doc_count` | 39 |
 
@@ -39,11 +39,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| PR #132 (`7c79fb4`) | 2026-05-31 | R-003 orientation persisted as resume-state — NEW `.harness/R-003-checkpoint.md` + entry status ACTIVE-ORIENTATION-COMPLETE + dashboard resume pointer; makes the stop-short seamless across `/clear` |
+| PR #134 (`f8572b3`) | 2026-05-31 | roadmap §3 schema amendment — declare `resume:` field + `satisfied:<date>` advisor value + checkpoint-on-pause rule (enum kept closed); reconcile R-003 to schema-legal. Closes the §3↔§5 drift introduced at #132 |
+| PR #132 (`7c79fb4`) | 2026-05-31 | R-003 orientation persisted as resume-state — NEW `.harness/R-003-checkpoint.md` + entry resume pointer; makes the stop-short seamless across `/clear` (entry status reconciled to schema-legal ACTIVE at #134) |
 | PR #130 (`6f8dd66`) | 2026-05-31 | R-002 — Surface-I decomposition; 5 new per-row substitution entries (R-005..R-009); reconciled stale R-001 (OD-5) + R-004 (AS-8d) BLOCKED → RESOLVED (both RETIRED via mech-β batches 31-32); dashboard retirement-progress table corrected |
 | PR #128 (`3ba4fae`) | 2026-05-31 | R-IF-HYGIENE-CXA-COUNT-CASCADE — CXA v2.18 count cascade to canonical pointers (aggregate 107→105; phase-2-runtime 22→20; OD→IS 6→4; OD outbound 27→26); mode-agnostic; §108/§109 sibling-completeness applied |
-| PR #111 (`fdf120b`) | 2026-05-31 | R-IF-111 — OD plan v2.27 NEW §4.6.OD-INTERNAL carve-out; halt-doc Item 12 closed; sibling to #110; design-phase posture, clearance marker present (operator-ratified) |
-| PR #131 (`8d88de4`) | 2026-05-31 | ops: roadmap status refresh post-PR-130 (eleventh terminating refresh; next-action → R-003) |
+| PR #133 (`750ad8e`) | 2026-05-31 | ops: roadmap status refresh post-PR-132 (twelfth terminating refresh; next-action → R-003 ACTIVE+resume) |
 
 ---
 
@@ -99,7 +99,9 @@ Sample (highest-leverage open):
 
 | 2026-05-31 | Twelfth terminating refresh — PR #132 R-003 orientation-checkpoint merged at `7c79fb4`; `[ROADMAP DRIFT] action=§12.3` flagged; §12.2 owed follow-on refresh | Single-file dashboard-only refresh per §12.2.1. Hash `7f251d6c7cc5` → `754826ddff19`. Next action UNCHANGED at **R-003** but now **ACTIVE-ORIENTATION-COMPLETE** with a resume pointer to `.harness/R-003-checkpoint.md` — a fresh session (`/clear` → hook → `continue`) resumes at Cluster A without re-deriving. Demonstrates the **stop-short seamless-resume** discipline: a paused phase-7 entry persists its orientation as a checkpoint artifact + entry sub-status + dashboard pointer. |
 
-**Audit protocol exercised across 12 closure events + 1 fresh-session reconciliation.** Discipline + enforcement layers both operational. **In-flight chain + hygiene cascade + R-002 decomposition cleared 2026-05-31; R-003 paused at ACTIVE (resume-checkpoint per §3) with seamless-resume discipline; deterministic next-action = R-003 Cluster A.**
+| 2026-05-31 | Thirteenth terminating refresh — PR #134 roadmap §3 schema amendment merged at `f8572b3`; `[ROADMAP DRIFT] action=§12.3` flagged; §12.2 owed follow-on refresh | Single-file dashboard-only refresh per §12.2.1. Hash `754826ddff19` → `1c852278bfc9`. Next action UNCHANGED at **R-003 Cluster A**. §3 now declares the `resume:` field + `satisfied:<date>` advisor value + checkpoint-on-pause rule (status enum kept closed); R-003 entry reconciled to schema-legal `ACTIVE`. Closes the §3↔§5 drift the operator caught (3 off-schema constructs landed at #132 before the schema sanctioned them — schema-first discipline restored). |
+
+**Audit protocol exercised across 13 closure events + 1 fresh-session reconciliation.** Discipline + enforcement layers both operational. **In-flight chain + hygiene cascade + R-002 decomposition cleared 2026-05-31; R-003 paused at schema-legal ACTIVE (resume-checkpoint per §3); deterministic next-action = R-003 Cluster A.**
 
 ---
 
