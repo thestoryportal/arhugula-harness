@@ -217,6 +217,55 @@ PATTERN_P1_SEAMS: tuple[tuple[str, str, str, str], ...] = (
         "harness_od.audit_ledger_types",
         "AuditLedgerEntry",
     ),
+    # ---- §2.3.2 CP → IS — 6 NEW v2.17 §16.5 absorption rows --------------
+    # Six NEW genuine typed seams added at CXA v2.17 §2.3.2 rows 38-43
+    # absorbing the 6 PENDING §0.4 forward-tracking marker entries
+    # (U-CP-74..U-CP-79 §16.5 CP→IS composer atomic-unit LANDED events
+    # at PRs #39-#44 2026-05-28..29). Each composer constructs
+    # `EntryPayload` from `harness_is.state_ledger_write` per CP spec
+    # v1.25 §16.5.3 contract — vanilla Pattern-P1 symbol-equality
+    # CP→IS edge. Rows 40 + 42 + 43 share consumer module
+    # `pause_resume_protocol` (1 workflow-layer class method + 2
+    # engine-layer free functions per CP spec v1.11 §26 NOTE
+    # disjoint-primitives declaration); the (consumer_mod, producer_mod)
+    # pair enforcement at this test allows duplicate triples at different
+    # edge-names.
+    (
+        "U-CP-74→U-IS-11",
+        "harness_cp.per_step_override_evaluator",
+        "harness_is.state_ledger_write",
+        "EntryPayload",
+    ),
+    (
+        "U-CP-75→U-IS-11",
+        "harness_cp.workload_binding_engine_class_selection",
+        "harness_is.state_ledger_write",
+        "EntryPayload",
+    ),
+    (
+        "U-CP-76→U-IS-11",
+        "harness_cp.pause_resume_protocol",
+        "harness_is.state_ledger_write",
+        "EntryPayload",
+    ),
+    (
+        "U-CP-77→U-IS-11",
+        "harness_cp.hitl_as_tool_call_rewriting",
+        "harness_is.state_ledger_write",
+        "EntryPayload",
+    ),
+    (
+        "U-CP-78→U-IS-11",
+        "harness_cp.pause_resume_protocol",
+        "harness_is.state_ledger_write",
+        "EntryPayload",
+    ),
+    (
+        "U-CP-79→U-IS-11",
+        "harness_cp.pause_resume_protocol",
+        "harness_is.state_ledger_write",
+        "EntryPayload",
+    ),
 )
 
 
@@ -225,8 +274,8 @@ PATTERN_P1_SEAMS: tuple[tuple[str, str, str, str], ...] = (
 # ---------------------------------------------------------------------------
 
 
-def test_seam_count_is_25() -> None:
-    """CXA v2.5 §2.3 enumerates 24 genuine typed seams + 1 awaiting CXA amendment.
+def test_seam_count_is_31() -> None:
+    """CXA v2.17 §2.3 enumerates 31 genuine typed seams.
 
     v2.3 baseline: 22 seams. v2.4 added §2.3.7 with 1 seam (U-CP-28 → U-OD-00
     sub-agent dispatch audit-write). v2.5 grew §2.3.7 to 2 seams (added
@@ -235,12 +284,16 @@ def test_seam_count_is_25() -> None:
 
     Cluster 10-CP-C close (2026-05-21) added a 25th seam: U-CP-68 → U-AS-03
     (PerServerTrustEvaluator.evaluate() signature consumes ToolContract per CP
-    spec v1.10 §27.1). CXA §2.3.3 CP→AS amendment owed (5 → 6 in-bucket;
-    aggregate 24 → 25) at next CXA revision pass; the seam is enumerated here
-    in advance to keep the runtime Pattern-P1 enforcement check in agreement
-    with the landed code. Filed as Class 3 drift at cluster close.
+    spec v1.10 §27.1). CXA v2.15 §2.3.3 CP→AS amendment landed (5 → 6
+    in-bucket; aggregate 24 → 25) absorbing the seam.
+
+    CXA v2.17 (2026-05-31) absorbs 6 NEW §2.3.2 rows at U-CP-74..U-CP-79
+    §16.5 CP→IS composer atomic-unit LANDED events from PRs #39-#44
+    (2026-05-28..29) closing the v2.16 §0.4 forward-tracking marker
+    6-PENDING transit to 6-ABSORBED. CP→IS bucket grows 37 → 43 canonical;
+    9 → 15 genuine. Aggregate genuine 25 → 31.
     """
-    assert len(PATTERN_P1_SEAMS) == 25
+    assert len(PATTERN_P1_SEAMS) == 31
 
 
 # ---------------------------------------------------------------------------
