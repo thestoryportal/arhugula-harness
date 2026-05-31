@@ -54,6 +54,12 @@ def canonicalize(entry: StateLedgerEntry) -> bytes:
     entries across runs / machines (acceptance #1); field-order-insensitive
     (sorted keys), Unicode-normalized (NFC), number-representation-canonical
     (no float fields — vacuous) (acceptance #2).
+
+    v1.3 NEW D-derivative sidecar contribution (U-IS-11 v2.4 AC #13):
+    ``procedural_tier_snapshot_ref`` is included in the canonical payload
+    when non-``None``; omitted when ``None``. Legacy entries with no sidecar
+    field (pre-v1.3) hash identically to v1.3 entries with sidecar ``None`` —
+    ZERO breaking change at the hash level for the existing chain.
     """
     payload: dict[str, object] = {
         "action_id": _nfc(entry.action_id),
@@ -65,6 +71,10 @@ def canonicalize(entry: StateLedgerEntry) -> bytes:
         "timestamp": entry.timestamp.isoformat(),
         "prior_event_hash": entry.prior_event_hash.hex(),
     }
+    if entry.procedural_tier_snapshot_ref is not None:
+        payload["procedural_tier_snapshot_ref"] = _nfc(
+            entry.procedural_tier_snapshot_ref,
+        )
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
         "utf-8"
     )

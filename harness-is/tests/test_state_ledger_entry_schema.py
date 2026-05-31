@@ -26,6 +26,15 @@ _F_LAYER_FIELDS = {
     "prior_event_hash",
 }
 
+# v1.3 NEW D-derivative sidecar (C-IS-05 §5.1) — additive at the
+# extensibility layer authorized by §5 "Field-shape extensibility commitment."
+# The F-layer six-field shape PRESERVED VERBATIM; the sidecar lives at the
+# D-derivative layer.
+_D_DERIVATIVE_FIELDS = {
+    "procedural_tier_snapshot_ref",
+}
+_V1_3_FIELDS = _F_LAYER_FIELDS | _D_DERIVATIVE_FIELDS
+
 
 def _entry(action_id: str = "00000000-0000-4000-8000-000000000000") -> StateLedgerEntry:
     return StateLedgerEntry(
@@ -39,8 +48,15 @@ def _entry(action_id: str = "00000000-0000-4000-8000-000000000000") -> StateLedg
 
 
 def test_state_ledger_entry_schema_completeness() -> None:
-    """Acceptance #1 — StateLedgerEntry declares exactly the 6 §5 F-layer fields."""
-    assert set(StateLedgerEntry.model_fields) == _F_LAYER_FIELDS
+    """Acceptance #1 — StateLedgerEntry declares the 6 F-layer fields per §5
+    plus the D-derivative sidecar field per §5.1 (NEW at v1.3).
+
+    The F-layer six-field shape is preserved verbatim; the D-derivative
+    sidecar is additive at the extensibility layer authorized by §5.
+    """
+    assert set(StateLedgerEntry.model_fields) == _V1_3_FIELDS
+    # F-layer subset invariant — the 6 §5 fields remain unchanged.
+    assert _F_LAYER_FIELDS.issubset(set(StateLedgerEntry.model_fields))
 
 
 def test_actor_class_enum_completeness() -> None:

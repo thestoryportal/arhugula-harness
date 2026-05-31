@@ -66,6 +66,15 @@ class StateLedgerEntry(BaseModel):
     records subclass `StateLedgerEntry`: they inherit all six F-layer fields
     (a subclass cannot rename or omit them) and MAY add fields (acceptance #5).
     `frozen` → instances are immutable; the schema is statically validatable.
+
+    v1.3 NEW D-derivative sidecar field — `procedural_tier_snapshot_ref` per
+    C-IS-05 §5.1 (NEW). Carries the content-hash digest identifying which
+    procedural-tier snapshot was in scope at the entry's write-time. Optional;
+    default `None` permitted at entries written outside an active workflow
+    context (bootstrap-stage entries; operator-explicit administrative entries).
+    The F-layer six-field shape PRESERVED VERBATIM above; sidecar is additive
+    at the D-derivative extension layer authorized by §5 "Field-shape
+    extensibility commitment."
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -76,3 +85,5 @@ class StateLedgerEntry(BaseModel):
     response_hash: Bytes32
     timestamp: Timestamp
     prior_event_hash: Bytes32
+    # v1.3 NEW D-derivative sidecar (C-IS-05 §5.1).
+    procedural_tier_snapshot_ref: Identifier | None = None
