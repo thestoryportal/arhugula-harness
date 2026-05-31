@@ -126,6 +126,7 @@ def construct_sibling_ledger_entry(
     canonical_args: str,
     sibling_agent_identity: ActorIdentity,
     timestamp: datetime,
+    procedural_tier_snapshot_ref: Identifier | None = None,
 ) -> EntryPayload:
     """Compose the §15.1 per-sibling ledger entry caller-content.
 
@@ -136,7 +137,15 @@ def construct_sibling_ledger_entry(
     carries the sibling agent identity.
     `response_hash` / `prior_event_hash` are computed inside U-IS-11's
     `append_ledger_entry` per the C-IS-07 §7.1 write contract (acc #2/#3) — so
-    the caller-content is an `EntryPayload`."""
+    the caller-content is an `EntryPayload`.
+
+    `procedural_tier_snapshot_ref` (R-003 producer-site lift) is the
+    D-derivative sidecar per IS spec v1.3 §C-IS-05 §5.1. This is a workflow-
+    context emission, so the caller (`RuntimeCpIsWiring.emit_sibling_ledger_entry`)
+    supplies the resolved value from its bound resolver closure. The bare CP
+    helper takes it as a param (default `None` for the outside-workflow /
+    test paths) — the sidecar is producer-supplied, not IS-computed (only
+    `response_hash` / `prior_event_hash` are IS-computed)."""
     action_id = f"{parent_action_id}{sibling_thread_id}{step_index}"
     idempotency_key = _sibling_idempotency_key(
         parent_action_id, sibling_thread_id, step_index, tool, canonical_args
@@ -146,6 +155,7 @@ def construct_sibling_ledger_entry(
         idempotency_key=Identifier(idempotency_key),
         actor=Actor(actor_class=ActorClass.SUB_AGENT, actor_id=str(sibling_agent_identity)),
         timestamp=timestamp,
+        procedural_tier_snapshot_ref=procedural_tier_snapshot_ref,
     )
 
 

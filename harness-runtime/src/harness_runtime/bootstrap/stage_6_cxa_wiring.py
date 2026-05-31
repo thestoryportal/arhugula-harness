@@ -81,6 +81,12 @@ async def execute(
     procedural_tier_snapshot_resolver = make_procedural_tier_snapshot_resolver(
         cast("HarnessContext", ctx),
     )
+    # R-003 producer-site lift — expose the resolver on the frozen
+    # HarnessContext so the CP driver's `_append_step_ledger_entry` per-step
+    # ledger write (§25.3.3.7, a workflow-context emission) can populate the
+    # `procedural_tier_snapshot_ref` D-derivative sidecar per IS spec v1.3
+    # §C-IS-05 §5.1. Same closure that wires the §16.5 CP composers below.
+    ctx.procedural_tier_snapshot_resolver = procedural_tier_snapshot_resolver
     ctx.cxa_stages["cp_is_wiring"] = materialize_cp_is_wiring_stage(
         config,
         ctx.ledger_writer,

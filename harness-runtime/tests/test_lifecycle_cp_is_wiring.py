@@ -200,6 +200,16 @@ def test_emit_actor_class_is_sub_agent(tmp_path: Path) -> None:
     assert persisted.actor.actor_id == "agent-1"
 
 
+def test_emit_sibling_populates_procedural_tier_snapshot_ref(tmp_path: Path) -> None:
+    """R-003 — the sibling-ledger seam supplies the D-derivative sidecar from
+    the wiring's bound resolver (workflow-context emission per IS spec v1.3
+    §C-IS-05 §5.1). `_wiring` binds `_pt_resolver` → Identifier('a' * 64)."""
+    wiring = _wiring(tmp_path)
+    wiring.emit_sibling_ledger_entry(**_sibling_kwargs())
+    [persisted] = read_ledger(wiring.ledger_writer.handle)
+    assert persisted.procedural_tier_snapshot_ref == _PROCEDURAL_TIER_SNAPSHOT_FIXTURE
+
+
 def test_action_id_is_structural_concat(tmp_path: Path) -> None:
     """`action_id = ParentActionID || sibling_thread_id || step_index` (§15.1)."""
     wiring = _wiring(tmp_path)

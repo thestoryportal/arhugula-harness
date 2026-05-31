@@ -198,6 +198,12 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         # `object | None` to avoid CP-axis dependency on harness-runtime
         # (workspace dep-graph discipline).
         "cp_is_wiring",
+        # R-003 Cluster B — procedural-tier resolver binding surface. Bound at
+        # bootstrap stage 6 to make_procedural_tier_snapshot_resolver(ctx);
+        # consumed by the CP driver's _append_step_ledger_entry per-step ledger
+        # write to populate procedural_tier_snapshot_ref (IS spec v1.3 §5.1).
+        # Typed `object | None` mirroring cp_is_wiring (no CP-axis import coupling).
+        "procedural_tier_snapshot_resolver",
     }
     actual = set(HarnessContext.model_fields.keys())
     assert actual == expected, f"missing: {expected - actual}; extra: {actual - expected}"

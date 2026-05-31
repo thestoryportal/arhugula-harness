@@ -145,6 +145,11 @@ class RuntimeCpIsWiring:
             canonical_args=canonical_args,
             sibling_agent_identity=sibling_agent_identity,
             timestamp=timestamp,
+            # R-003 producer-site lift — supply the D-derivative sidecar from
+            # the bound resolver (workflow-context emission per IS spec v1.3
+            # §C-IS-05 §5.1). This wiring already holds the resolver per the
+            # §16.5 composer threading; reuse it for the sibling-ledger seam.
+            procedural_tier_snapshot_ref=self.procedural_tier_snapshot_resolver(),
         )
         write_key = WriteKey(
             thread_id=Identifier(sibling_thread_id),
