@@ -423,6 +423,35 @@ When a new request contradicts a prior decision, surface the contradiction expli
 
 This workspace operates in strict isolation from any other project. Within-workspace, the design-phase venue and the Phase 7 execution venue are **logically separate** even though physically co-resident in the same git repo — the X-AL-3 rule (§4.4) is the boundary.
 
+### 10.9 Standing posture — council + adversarial reviewer + research corpus (2026-05-31 bake-in)
+
+Standing posture amendments from the H_T-IS-2 cascade-scope council pilot (2026-05-31) — encoded here so they auto-apply at every session without HITL invocation.
+
+**Council orchestrator (`.claude/skills/council/council-orchestrator/`):**
+
+1. **Nameable-tension discriminator at activation.** Before convening, ask: can I name in advance a tension I expect between two voices? If no, route to single voice + advisor(). The pilot's lesson — councils that converge to single-voice + cosmetic consultants are primary-collapse failures. Tension-surfacing is the load-bearing value.
+2. **Dyadic mode default.** Default convening size is 2 voices (primary + 1 consultant), not 3. Expand to 3 only when you can name a distinct third axis-specific concern AND Layer C scoring places a 3rd voice meaningfully above threshold. Hard cap at 5 unchanged.
+3. **Slim CCR.** Enumerate Touched concerns only with one-sentence pre-check notes; collapse Not-Touched concerns into a single `n/a` line listing unaddressed concerns by name. CCR ritualization (6 verbose rows every time) is the failure mode being corrected.
+4. **Pre-bind to current spec versions.** Each convened voice's first cite MUST be from the canonical spec at the current version recorded in workspace `CLAUDE.md` §2 at session-start (not freelance from SKILL.md memory). External authority citations from `research/` are encouraged when intra-spec authority is insufficient.
+5. **Probe-first discipline at tension resolution.** Before emitting any TENSION block, run a 1-5 minute empirical probe at the most specific primary source relevant to the dispute. The pilot's lesson — council surfaces, primary sources decide. If probe resolves the tension, surface as `surfaced + probe-resolved` with the probe finding as resolution rationale. If probe is silent, emit Layer 1 surfaced-unresolved.
+
+**Adversarial reviewer (`.claude/skills/harness-adversarial-reviewer/`):**
+
+1. **Pre-merge gate posture.** Fire at PR-open / PR-ready-for-review for any `design-substrate/**` amendment or Phase 7 impl arc against previously-cleared spec/plan — not post-merge. X-AL-3 guard is file-presence; adversarial review is substantive complement.
+2. **Pattern-catalogue-aware standing checklist.** Every review audits against the 9-item workspace pattern checklist (stale-carry-text disposition; sibling-spec staleness; forward-looking cite phantom; checkpoint-listed-as-open-but-already-applied; plan-revision-against-not-yet-built-substrate; spec-prose-vs-plan-body drift; verification-shape grep-vs-e2e; X-AL-3 anti-extension; halt-route-split-AC). Findings against checklist items follow standard Class 1/2/3 discriminator.
+3. **Cross-spec drift probes.** For any per-axis spec/plan review, MUST grep across sibling specs/plans for stale cite-shapes against the artifact under review. The workspace's biggest defect class is cross-spec coordination drift; intra-artifact review misses it structurally.
+4. **External-canon mode (NEW Class 2 finding category).** Review the artifact's contracts/patterns against canonical industry patterns at `research/Pattern_Reference_Catalog_v1.0.md` + cluster deep-dives. Flag divergences as either (a) intentional + needs ADR/spec rationale, or (b) accidental + needs correction. Voice → cluster mapping at `.claude/skills/council/council-orchestrator/references/research-citations.md`.
+
+**Research corpus (`research/`):**
+
+The Phase 1 substrate at `research/` (11 files, ~8,500 lines) was consumed and crystallized into ADRs + ADD + PRD + specs at the design phase. For settled design decisions, the corpus is derivative-redundant. For ongoing work, it serves three roles:
+
+1. **Council external-authority citations.** Voices cite cluster deep-dives or Pattern Reference Catalog when their position needs grounding beyond intra-spec authority. Voice → cluster mapping at `.claude/skills/council/council-orchestrator/references/research-citations.md`.
+2. **Phase 7 implementation grounding.** Before authoring any cluster impl arc, grep the relevant cluster deep-dive for production failure modes from real systems (LangGraph, Temporal, OpenAI Agents SDK).
+3. **Adversarial reviewer external-canon mode.** Per posture amendment 4 above.
+
+**`agentic-engineeriing-sdlc.md`** at `research/` is NEW (not in the Phase 1 council context). It applies the 8-phase canonical SDLC to agent-native development as a delta against an `sdlc-research.md` baseline. Currently mapped to **workflow doc v1.14+ revision arcs** rather than a council voice's primary domain. When workflow v1.14 revision opens, this file SHOULD be consulted for: Phase 7 → Phase 8 retirement criteria; cross-cutting concern application (PM/Risk/CM/QA/Security/Compliance/Documentation/Measurement); canonical SDLC checkpoint vs. workspace's P3a-CK/P3-CK/P5-CK/P6-CK convention gap analysis.
+
 ---
 
 ## 11. Posture declaration

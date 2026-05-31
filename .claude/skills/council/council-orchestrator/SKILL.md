@@ -38,7 +38,9 @@ This skill operates against the locked design captured at this skill's `referenc
 - The prompt is a follow-up turn to a single-voice consultation. The active voice's skill carries the conversation; the orchestrator does not insert itself.
 - The task is non-council (general coding help, file editing without council framing, document writing, debugging unrelated code).
 
-If you're unsure whether a question warrants the orchestrator vs. a single voice, default to the orchestrator — convening with three voices is cheap, missing a relevant voice is expensive. The Convening Block's *"voices considered, not convened"* field is the operator's debugging surface for this judgment.
+If you're unsure whether a question warrants the orchestrator vs. a single voice, apply the **nameable-tension discriminator** (standing amendment 2026-05-31): can you name in advance a tension you expect to surface between two or more voices? If yes — convene. If no — route to single voice + advisor(). The pilot at H_T-IS-2 (2026-05-31) demonstrated that the council's load-bearing value is tension-surfacing, not collegiality — convening voices that will all concur is the primary-collapse failure mode and wastes tokens. The Convening Block's *"voices considered, not convened"* field is the operator's debugging surface for this judgment.
+
+**Default convening size is 2 (dyadic), not 3** (standing amendment 2026-05-31). Most genuinely multi-axis calls have exactly 2 substantive perspectives; the 3rd voice often concurs without rationale. Reserve 3-voice + 4-voice convening for tensions where you can name two distinct framings AND a third axis-specific concern. Hard cap at 5 unchanged.
 
 ---
 
@@ -73,13 +75,13 @@ If the operator named voices explicitly (`"C1 + C5 on this"`) or tagged a questi
 
 Classify the prompt into one of five canonical types — architectural, contract, failure-mode, tradeoff, cross-cutting. Then score each voice against the prompt using the voice's keyword profile. See `references/routing-rubric.md` "Layer B" and "Layer C" for full procedure.
 
-Convene the top scorers up to default size (3 voices) or hard cap (5 voices), respecting voice asymmetry — exactly one primary, optional second co-primary, remainder consultants. See `references/routing-rubric.md` "Convening size policy."
+Convene the top scorers up to default size (**2 voices — dyadic mode**, per 2026-05-31 standing amendment) or hard cap (5 voices), respecting voice asymmetry — exactly one primary, optional second co-primary, remainder consultants. Expand beyond 2 voices ONLY when (i) you can name a distinct third axis-specific concern AND (ii) Layer C scoring places a 3rd voice meaningfully above threshold. See `references/routing-rubric.md` "Convening size policy."
 
 If classification is genuinely ambiguous (the prompt reads as two question types at once), surface the ambiguity to the operator before convening rather than picking silently. Asking is cheaper than wrong-routing.
 
 ### 4. Emit Convening Block + CCR (pre-check), then route to voices
 
-Emit the Convening Block per `references/output-templates.md`. Then emit the CCR addressing all six cross-cutting concerns — Touched / Not Touched per concern, Owner status (convened / handled-by-reference / deferred) per Touched concern, Pre-check note per concern. Err toward Touched when borderline; false-positive Touched is cheap.
+Emit the Convening Block per `references/output-templates.md`. Then emit the CCR in **slim mode** (standing amendment 2026-05-31): enumerate ONLY the Touched concerns with their Owner status + Pre-check note; Not-Touched concerns may be collapsed into a single `n/a` line listing the unaddressed concerns by name. Pre-check note for each Touched concern stays one sentence with concrete framing. CCR ritualization (6 verbose rows every time) is the failure mode being corrected; slim mode preserves signal at lower token cost. Err toward Touched when borderline; false-positive Touched still cheap.
 
 Then write the convened voices' contributions in turn:
 
@@ -87,11 +89,19 @@ Then write the convened voices' contributions in turn:
 - **Co-primary if applicable** — speaks alongside primary, must engage primary directly. Maximum two co-primaries.
 - **Consultants** — each produces one of: concur-with-rationale, surface-tension, propose-refinement. *"Looks good"* alone is rejected — re-prompt internally for substantive rationale before emitting.
 
-For each voice's contribution, source the voice's perspective from the voice's individual SKILL.md plus the design-substrate canonical for that voice's axis. Do not fabricate voice positions; if you cannot produce a substantive contribution from a voice's encoded expertise, that voice should not have been convened — recuse it (Layer D recusal procedure in `references/routing-rubric.md`) and note in the Convening Block.
+For each voice's contribution, source the voice's perspective from the voice's individual SKILL.md plus the design-substrate canonical for that voice's axis **at the CURRENT VERSION recorded in workspace `CLAUDE.md` §2 at session-start** (standing amendment 2026-05-31 — pre-bind discipline). Workspace per-axis specs evolve frequently (e.g., CP spec was at v1.28 at this amendment's authoring; IS spec at v1.3); freelancing a voice's position from SKILL.md memory without grounding against the current spec version is the stale-citation failure mode. Each convened voice's first cite in their contribution MUST be from the current canonical spec.
 
-### 5. Surface tensions (Layer 1 default)
+Optional but encouraged: cite **external authority** from the research corpus at `research/` (Pattern Reference Catalog v1.0; cluster deep-dives 1-5; thought-leader inventory) when the voice's position needs grounding beyond intra-spec authority. See `references/research-citations.md` for voice → cluster pointer mapping.
 
-If two or more convened voices disagree, emit a TENSION block at the end of the response per `references/output-templates.md`. Do not smooth the disagreement; preserve both positions verbatim from the voices' turns; state the stakes neutrally.
+Do not fabricate voice positions; if you cannot produce a substantive contribution from a voice's encoded expertise grounded against the current spec version, that voice should not have been convened — recuse it (Layer D recusal procedure in `references/routing-rubric.md`) and note in the Convening Block.
+
+### 5. Surface tensions (Layer 1 default) — with mandatory probe-first discipline
+
+If two or more convened voices disagree, **BEFORE emitting the TENSION block, run an empirical probe at primary source for the disputed claim** (standing amendment 2026-05-31 — probe-first discipline). The H_T-IS-2 cascade-scope pilot (2026-05-31) demonstrated that tensions are scoped by deliberation but resolved by empirical probe at canonical artifacts: T1 (cascade-grouping shape) resolved at IS spec v1.3 §5.2 amendment 2 cite, not at deliberation. Council surfaces; specs decide.
+
+Probe shape: 1-5 minute targeted grep / Read at the most specific canonical artifact relevant to the dispute. Document the probe finding inline in the deliberation BEFORE the TENSION block. If the probe resolves the tension cleanly in favor of one voice, surface the tension as "**surfaced + probe-resolved**" with the probe finding as the resolution rationale — both positions still preserved verbatim, but the resolution is named.
+
+If the probe does NOT resolve the tension (e.g., the canonical artifact is genuinely silent on the disputed point), then emit a Layer 1 surfaced-unresolved TENSION block per `references/output-templates.md`. Do not smooth the disagreement; preserve both positions verbatim from the voices' turns; state the stakes neutrally.
 
 **Before emitting the TENSION block, check whether the disagreement engages a known Layer-3 permanent tension.** The locked Layer-3 list:
 
