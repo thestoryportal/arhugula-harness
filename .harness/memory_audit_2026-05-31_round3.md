@@ -47,6 +47,8 @@
 
 **Recommendation:** Add metadata field `mirror_status_as_of_date: 2026-05-20` and note for future audits to re-verify the AS-8e status.
 
+> **Apply-pass correction (reviewer, Opus, 2026-05-31, R-IF-109 land):** Finding 2b twice characterizes AS-8e as "PARTIAL"; the actual status is **STILL-BOUNDED-INDEFINITELY** (`harness-as/CLAUDE.md:173` — "Files arc DEFERRED INDEFINITELY per runtime spec v1.17 §14.C"). This weakens the "risks becoming Class 1 if AS-8e transits" framing: AS-8e is indefinitely deferred at operator-discretion (gated on a Files-API surface-authoring decision), not an active PARTIAL on a transit path. The underlying recommendation (`mirror_status_as_of_date` hygiene field) still stands, but the finding is effectively **Class 3** (informational) — the source memory entry `fork-as-8f-managed-agents-production-only-exclusion.md` already says "mirror AS-8e" correctly, and AS-8e's indefinite-defer posture makes the silent-transit risk negligible. Original Haiku finding preserved above per as-authored ledger convention.
+
 ---
 
 ## Class 3 Findings (Informational Drift)
