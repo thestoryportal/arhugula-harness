@@ -1,0 +1,110 @@
+name: CI
+
+# R-200-ci-pytest-pyright-ruff-matrix — the first substantive CI job for the
+# H_T workspace. Runs the same trio the `just check` recipe runs locally
+# (ruff lint + pyright strict + pytest) across the uv workspace at every PR
+# and on push to main. The X-AL-3 guard (design-substrate back-flow check)
+# remains a separate, path-scoped workflow.
+#
+# Authority: Project_Roadmap_v1.md §5.4 R-200-ci-pytest-pyright-ruff-matrix;
+#            CLAUDE.md §3.1 committed stack (Python 3.12+ / uv / pyright strict /
+#            ruff / pytest). Tool config lives in the root pyproject.toml
+#            ([tool.ruff], [tool.pyright], [tool.pytest.ini_options]).
+#
+# v1 enforcement posture (IMPORTANT — read before tightening):
+#   - pytest IS blocking. `uv run pytest -m "not e2e"` is green tree-wide
+#     (3543 passed / 7 skipped as of the R-200 authoring commit).
+#   - ruff + pyright are ADVISORY (continue-on-error) at v1. The workspace is
+#     NOT yet clean tree-wide under `uv run ruff check .` (366 findings, mostly
+#     import-organization in test files) or `uv run pyright` (894 strict errors,
+#     concentrated in test modules — reportPrivateUsage / reportUnusedImport).
+#     The dashboard's historical "ruff+pyright clean vs main" referred to
+#     per-PR diffs introducing no NEW errors, not an absolute-zero tree.
+#     Making these blocking on day one would render CI permanently red and
+#     useless. They run here so the signal is visible on every PR; a follow-up
+#     (drive the tree clean, then flip continue-on-error → false) makes them
+#     blocking. Mirrors R-200-ci-coverage-gating's "gather data first" stance.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref so a fast push series doesn't queue.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    name: pytest (all axis packages) — blocking
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync workspace (all members)
+        run: uv sync --all-packages
+
+      # Excludes the `e2e` marker — those tests exercise real external services
+      # (Anthropic API etc.) and are gated on credentials not available in CI
+      # per the marker definition in the root pyproject.toml. testpaths in
+      # [tool.pytest.ini_options] cover all 7 workspace packages (the 5 axes +
+      # harness-core + harness-runtime).
+      - name: Pytest (excludes e2e)
+        run: uv run pytest -m "not e2e"
+
+  lint:
+    runs-on: ubuntu-latest
+    name: ruff (lint + format) — advisory at v1
+    # Advisory until the tree is driven clean — see header note. Does not block merge.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync workspace (all members)
+        run: uv sync --all-packages
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+  typecheck:
+    runs-on: ubuntu-latest
+    name: pyright (strict) — advisory at v1
+    # Advisory until the tree is driven clean — see header note. Does not block merge.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync workspace (all members)
+        run: uv sync --all-packages
+
+      - name: Pyright (strict; config at root pyproject [tool.pyright])
+        run: uv run pyright
