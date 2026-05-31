@@ -538,6 +538,8 @@ Don't infer silently. Posture confusion at session start contaminates downstream
 
 ### 12.1 Mandatory session-start audit
 
+**Automation:** the audit fires automatically via the `SessionStart` hook at `.claude/settings.json` → `tools/roadmap-audit/session-start.sh`. Hook output (a compact `[ROADMAP]` / `[ROADMAP DRIFT]` block) is injected into the session preamble before Claude processes the operator's first message. Claude SHOULD honor the hook output; if the hook fails to fire (CI environment, custom Claude Code config), apply the procedure manually per the steps below.
+
 Before the first substantive edit in any session, Claude MUST:
 
 1. Read `.harness/roadmap_status.md`.
