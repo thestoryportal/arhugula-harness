@@ -1448,6 +1448,17 @@ class HarnessContext(BaseModel):
     # `model_config`; consumers cast).
     cp_is_wiring: object | None = None
 
+    # R-003 producer-site lift — zero-arg resolver returning the
+    # `procedural_tier_snapshot_ref` Identifier D-derivative sidecar per IS
+    # spec v1.3 §C-IS-05 §5.1. Bound at bootstrap stage 6 (CXA_WIRING) to the
+    # same `make_procedural_tier_snapshot_resolver(ctx)` closure that wires the
+    # §16.5 CP composers (cp_is_wiring). Consumed by the CP driver's
+    # `_append_step_ledger_entry` (§25.3.3.7 per-step state-ledger write) via
+    # the `DriverContext.procedural_tier_snapshot_resolver` Protocol field.
+    # Typed `object | None` mirroring `cp_is_wiring` (arbitrary_types_allowed;
+    # consumers call dynamically); `None` = operator opt-out → sidecar `None`.
+    procedural_tier_snapshot_resolver: object | None = None
+
 
 
     # U-RT-94 — Runtime-internal sidecar carrier for one-shot ResumeContext

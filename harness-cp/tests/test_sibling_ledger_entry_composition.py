@@ -77,6 +77,37 @@ def test_action_id_concatenation() -> None:
     assert payload.actor.actor_id == "sib-1"
 
 
+def test_procedural_tier_snapshot_ref_defaults_none() -> None:
+    """R-003 — the sidecar defaults to None when the caller omits it
+    (outside-workflow / pre-R-003 callers keep the prior behavior)."""
+    payload = construct_sibling_ledger_entry(
+        parent_action_id="P",
+        sibling_thread_id="T",
+        step_index=0,
+        tool="read",
+        canonical_args="{}",
+        sibling_agent_identity=ActorIdentity("sib-1"),
+        timestamp=datetime(2026, 5, 16, 1, tzinfo=UTC),
+    )
+    assert payload.procedural_tier_snapshot_ref is None
+
+
+def test_procedural_tier_snapshot_ref_populated_when_supplied() -> None:
+    """R-003 — when the caller (the runtime cp_is_wiring) supplies a resolved
+    Identifier, it lands on the EntryPayload sidecar per IS spec v1.3 §5.1."""
+    payload = construct_sibling_ledger_entry(
+        parent_action_id="P",
+        sibling_thread_id="T",
+        step_index=0,
+        tool="read",
+        canonical_args="{}",
+        sibling_agent_identity=ActorIdentity("sib-1"),
+        timestamp=datetime(2026, 5, 16, 1, tzinfo=UTC),
+        procedural_tier_snapshot_ref=Identifier("b" * 64),
+    )
+    assert payload.procedural_tier_snapshot_ref == Identifier("b" * 64)
+
+
 def test_f2_14_rationale_cardinality_three() -> None:
     """#4 — exactly three F2-14 Reading 1 rationale rows."""
     assert len(F2_14_READING_1_RATIONALE) == 3

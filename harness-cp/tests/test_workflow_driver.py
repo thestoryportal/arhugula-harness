@@ -55,6 +55,7 @@ from harness_cp.workflow_driver import (
     StepDispatcher,
     StepDispatcherRegistry,
     StepKindDispatcherNotBoundError,
+    _append_step_ledger_entry,
     execute_workflow,
 )
 from harness_cp.workflow_driver_errors import (
@@ -69,7 +70,7 @@ from harness_cp.workflow_driver_types import (
     WorkflowStep,
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
-from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 
 # ---------------------------------------------------------------------------
 # Fixtures + fakes
@@ -897,3 +898,50 @@ def test_driver_context_protocol_declares_tenant_id() -> None:
         "DriverContext.tenant_id must be declared so HarnessContext can "
         "structurally satisfy the protocol via the computed property."
     )
+
+
+def test_driver_context_protocol_declares_procedural_tier_snapshot_resolver() -> None:
+    """R-003 — DriverContext must declare the resolver field so HarnessContext
+    structurally satisfies it (bound at bootstrap stage 6)."""
+    assert "procedural_tier_snapshot_resolver" in DriverContext.__annotations__
+
+
+class _LedgerOnlyCtx:
+    """Minimal DriverContext shape for `_append_step_ledger_entry` (it reads
+    only `ledger_writer` + `procedural_tier_snapshot_resolver`)."""
+
+    def __init__(self, ledger: _FakeLedger, resolver: Any) -> None:
+        self.ledger_writer = ledger
+        self.procedural_tier_snapshot_resolver = resolver
+
+
+def test_append_step_ledger_entry_populates_procedural_tier_snapshot_ref() -> None:
+    """R-003 — the per-step state-ledger write (§25.3.3.7, workflow-context)
+    populates the sidecar via the bound resolver per IS spec v1.3 §C-IS-05 §5.1."""
+    ledger = _FakeLedger()
+    ctx = _LedgerOnlyCtx(ledger, lambda: Identifier("b" * 64))
+    _append_step_ledger_entry(
+        ctx=cast(DriverContext, ctx),
+        workflow_id="wf-1",
+        step_index=0,
+        step_idempotency_key="idem-0",
+        step_output={"ok": True},
+    )
+    [(payload, _key)] = ledger.appends
+    assert payload.procedural_tier_snapshot_ref == Identifier("b" * 64)
+
+
+def test_append_step_ledger_entry_none_when_resolver_absent() -> None:
+    """R-003 — when no resolver is bound (operator opt-out / test ctx), the
+    sidecar stays None (the getattr-defensive opt-out path)."""
+    ledger = _FakeLedger()
+    ctx = _LedgerOnlyCtx(ledger, None)
+    _append_step_ledger_entry(
+        ctx=cast(DriverContext, ctx),
+        workflow_id="wf-1",
+        step_index=0,
+        step_idempotency_key="idem-0",
+        step_output={"ok": True},
+    )
+    [(payload, _key)] = ledger.appends
+    assert payload.procedural_tier_snapshot_ref is None

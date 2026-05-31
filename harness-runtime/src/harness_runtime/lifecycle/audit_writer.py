@@ -117,6 +117,10 @@ class RuntimeAuditLedgerWriter:
         key (scoped by tenant via the action_id prefix).
         """
         action_id = self._action_id_for(tenant_id, audit_entry)
+        # R-003: `procedural_tier_snapshot_ref` is left `None`-canonical here
+        # (IS spec v1.3 §C-IS-05 §5.1). This append wraps pre-signed OD audit
+        # entries — a separate ledger family, not an active-workflow-context
+        # producer emission — so the D-derivative sidecar does not apply.
         payload = EntryPayload(
             action_id=action_id,
             idempotency_key=action_id,

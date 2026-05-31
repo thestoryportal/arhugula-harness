@@ -336,6 +336,16 @@ class _MutableHarnessContext:
     ``HarnessContext.skill_activation_emitter`` field carries the narrowed
     ``SkillActivationSpanEmitter | None`` class surface."""
 
+    procedural_tier_snapshot_resolver: Any = None
+    """R-003 — zero-arg procedural-tier resolver closure (IS spec v1.3
+    §C-IS-05 §5.1). Bound at stage 6 CXA_WIRING to
+    ``make_procedural_tier_snapshot_resolver(ctx)`` (the same closure that
+    wires the §16.5 CP composers). Optional (``None`` = operator opt-out);
+    NOT in ``_REQUIRED_FIELDS``. Typed ``Any`` per the same Protocol-vs-
+    concrete-narrowing pattern as ``cp_is_wiring``; the frozen
+    ``HarnessContext.procedural_tier_snapshot_resolver`` carries it for the CP
+    driver's ``_append_step_ledger_entry`` per-step ledger write."""
+
     # Orchestrator bookkeeping — not part of HarnessContext.
     completed_stages: list[BootstrapStage] = field(default_factory=list)
     emitted_bootstrap_events: list[BootstrapStageCompleteEvent] = field(default_factory=list)
@@ -398,6 +408,7 @@ class _MutableHarnessContext:
                 if "cp_is_wiring" in self.cxa_stages
                 else None
             ),
+            procedural_tier_snapshot_resolver=self.procedural_tier_snapshot_resolver,
         )
         self.frozen = ctx
         return ctx

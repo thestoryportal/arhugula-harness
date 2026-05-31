@@ -107,6 +107,10 @@ class RuntimeAsIsWiring:
         re-computes it per C-IS-07 §7.1 acceptance #8.
         """
         composed = compose_secret_fetch_audit_entry(event, prior_entry)
+        # R-003: `procedural_tier_snapshot_ref` is left `None`-canonical here
+        # (IS spec v1.3 §C-IS-05 §5.1). Secret-fetch audit entries fire at
+        # bootstrap / provider-construction — outside an active workflow
+        # context — so the D-derivative sidecar does not apply.
         payload = EntryPayload(
             action_id=composed.action_id,
             idempotency_key=composed.idempotency_key,

@@ -357,6 +357,19 @@ class DriverContext(Protocol):
     # `protocol.attempt_resume(...)` + `protocol.capture_pause_snapshot(...)`.
     cp_is_wiring: object | None
 
+    # R-003 producer-site lift — zero-arg resolver returning the
+    # `procedural_tier_snapshot_ref` Identifier D-derivative sidecar per IS
+    # spec v1.3 §C-IS-05 §5.1. Consumed at `_append_step_ledger_entry`
+    # (§25.3.3.7 per-step state-ledger write — a workflow-context emission).
+    # Typed `object | None` to avoid pulling
+    # `harness_runtime.lifecycle.procedural_tier_snapshot` into the CP Protocol
+    # surface (workspace dep-graph discipline — harness-cp does NOT depend on
+    # harness-runtime). When bound (production, via the frozen `HarnessContext`
+    # field set at bootstrap stage 6), `_append_step_ledger_entry` invokes it
+    # and populates the sidecar; when `None` (operator opt-out / outside-
+    # workflow / test ctx), the sidecar stays `None`.
+    procedural_tier_snapshot_resolver: object | None
+
 
 # ---------------------------------------------------------------------------
 # Driver core
@@ -1355,6 +1368,13 @@ def _append_step_ledger_entry(
     from harness_is.state_ledger_write import EntryPayload, WriteKey
 
     action_id = ActionID(f"workflow:{workflow_id}:step:{step_index}")
+    # R-003 producer-site lift — populate the `procedural_tier_snapshot_ref`
+    # D-derivative sidecar (IS spec v1.3 §C-IS-05 §5.1) for this workflow-
+    # context per-step emission. The resolver arrives via the DriverContext
+    # Protocol (never an import); `getattr` defensive-reads it the same way the
+    # `cp_is_wiring` firing sites do (operator-opt-out / test ctx → `None`).
+    _resolver = getattr(ctx, "procedural_tier_snapshot_resolver", None)
+    _procedural_tier_snapshot_ref = _resolver() if _resolver is not None else None
     # `Identifier` is the IS-typed string newtype for state-ledger string ids;
     # we pass through the action_id verbatim plus the idempotency hex.
     payload = EntryPayload(
@@ -1362,6 +1382,7 @@ def _append_step_ledger_entry(
         idempotency_key=Identifier(step_idempotency_key),
         actor=ctx.ledger_writer.actor,
         timestamp=datetime.now(UTC),
+        procedural_tier_snapshot_ref=_procedural_tier_snapshot_ref,
     )
     write_key = WriteKey(
         thread_id=Identifier(workflow_id),

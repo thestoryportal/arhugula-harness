@@ -108,6 +108,10 @@ def rollback_to_checkpoint(
         )
 
     # Record the rollback as a state-ledger entry (acceptance #4).
+    # R-003: `procedural_tier_snapshot_ref` is left `None`-canonical here
+    # (IS spec v1.3 §C-IS-05 §5.1). A rollback is an administrative / recovery
+    # operation, not an active-workflow-context producer emission — so the
+    # D-derivative sidecar does not apply.
     rollback_entry_id = Identifier(str(uuid.uuid4()))
     append_ledger_entry(
         ledger_handle,
