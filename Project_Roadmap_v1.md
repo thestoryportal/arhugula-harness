@@ -36,8 +36,9 @@ Ten surfaces of remaining work between current state and Phase 7 closure + Phase
 | VIII | Phase 8 retirement criteria | R-700..R-799 | All 49 substitutions either RETIRED or RETIRED-AS-BOUNDED-RESIDUAL with documented rationale per X-AL-2 |
 | IX | External integrations | R-800..R-899 | Real external MCP servers; managed_agents primitive (deferred per AS-8f); Files API (deferred per AS-8e) |
 | X | Existential / research | R-900..R-999 | Open architectural questions; speculative arcs; research-corpus extensions |
+| XI | Operator tooling / observability | R-XI-NN | Human-facing dashboards, status pages, CI-deployed observability surfaces; NOT for Claude consumption (Claude reads `.harness/roadmap_status.md` directly) |
 
-**Decomposition status:** §I + §II + §III + §VII have R-NNN actions populated at §5. §IV–§VI + §VIII–§X are named with decomposition-owed markers per §9.
+**Decomposition status:** §I + §II + §III + §VII + §XI have R-NNN actions populated at §5. §IV–§VI + §VIII–§X are named with decomposition-owed markers per §9.
 
 ---
 
@@ -63,6 +64,9 @@ Ten surfaces of remaining work between current state and Phase 7 closure + Phase
 §IX external ───┤── all gate on §II MVP-usable
                 ┘
 §X existential — research, no execution dependency
+
+§XI operator tooling — gates on §III CI substrate (auto-regenerate);
+                       parallel arc after §III opens
 ```
 
 **Hard dependencies (must respect):**
@@ -193,8 +197,9 @@ def next_action(roadmap, workspace_state, session_posture):
 4. `§II MVP-operator-usable` — multiplier
 5. `§VII process discipline` — parallel arc
 6. `§V multi-deployment` → `§VI multi-tenant` → `§IV multi-LLM` → `§IX external`
-7. `§VIII Phase 8` (only when most of §I closed)
-8. `§X existential` (when bored, or when an arc surfaces one)
+7. `§XI operator tooling` — parallel arc; opens after §III CI substrate baseline
+8. `§VIII Phase 8` (only when most of §I closed)
+9. `§X existential` (when bored, or when an arc surfaces one)
 
 **When to depart from the rule.** Operator AUQ overrides at any step. Class 1 fork detection (§4.3 of CLAUDE.md) halts the rule and routes to design-phase back-flow. Drift detection halts immediately. The rule is not a contract — it is a discipline that fails loudly.
 
@@ -582,7 +587,101 @@ R-700-OD-INTERNAL-FORMALIZATION:
   notes: Tracker for the closure; actual work at PR #111.
 ```
 
-### 5.7 Phase 8 accounting (R-700..R-799)
+### 5.7 Operator tooling / observability (R-XI-NN)
+
+Surface XI = human-facing tooling. Distinct from `.harness/roadmap_status.md` which is Claude-consumed. Gates on §III CI substrate so dashboards auto-regenerate (avoiding the manual-refresh failure mode v1 hit).
+
+```yaml
+R-XI-01:
+  title: Browser-based operator dashboard MVP — at-a-glance harness development status
+  surface: XI
+  status: PROPOSED
+  depends_on: [R-200-ci-pytest-pyright-ruff-matrix]
+  blocks: [R-XI-02, R-XI-03]
+  posture: mode-agnostic
+  scope:
+    files: [tools/dashboard/**, .github/workflows/dashboard-deploy.yml]
+    contracts: []
+    cross_axis: no
+  skills: { primary: phase-7-implementation, secondary: [verify, run] }
+  advisor_required: conditional:if tech-stack choice diverges from MVP recommendation (single static HTML + Tailwind CDN + vanilla JS)
+  council_required: no
+  verification:
+    shape: integration
+    must_pass:
+      - "Generator script reads from .harness/roadmap_status.md + Project_Roadmap_v1.md §5 + gh PR API + git log + harness-*/CLAUDE.md §4.1 and emits single-page roadmap.html"
+      - "GitHub Pages auto-deploys roadmap.html on every main push"
+      - "Dashboard surfaces: Phase 7 retirement progress bar, R-NNN status board, in-flight PRs with CI status, recently completed, operator gate inventory, drift detection log, next-action panel"
+      - "Loads under 2s in modern browser"
+      - "Operator can scan progress in <30 seconds without opening other tools"
+  close_shape:
+    type: PR-merge
+    artifact: "operator-dashboard: MVP at https://thestoryportal.github.io/arhugula-harness/"
+    cascade: [R-XI-02, R-XI-03]
+  next_pointer: R-XI-02
+  notes: |
+    Recommended tech stack: Python or Node generator script + Tailwind CSS (CDN, no build) + vanilla JS + Chart.js or uPlot for sparklines. NO bundler at MVP — pure static HTML.
+    Authored per dashboard-assessment conversation 2026-05-31. Surface XI added to roadmap at same arc.
+    PROPOSED until R-200-ci-pytest baseline closes — without CI auto-deploy, this becomes manual-refresh burden (same shape as v1 dashboard bug).
+
+R-XI-02:
+  title: Dashboard dependency-graph viz + sparklines (iteration 2)
+  surface: XI
+  status: PROPOSED
+  depends_on: [R-XI-01]
+  blocks: []
+  posture: mode-agnostic
+  scope:
+    files: [tools/dashboard/**]
+    contracts: []
+    cross_axis: no
+  skills: { primary: phase-7-implementation, secondary: [verify] }
+  advisor_required: no
+  council_required: no
+  verification:
+    shape: integration
+    must_pass:
+      - "Mermaid.js renders R-NNN dependency graph from §5 catalog"
+      - "Click R-NNN node → opens discipline schema panel"
+      - "PR cadence sparkline (last 30 days) renders correctly"
+      - "RETIRED count trend chart populated from git log + retirement-batch files"
+  close_shape:
+    type: PR-merge
+    artifact: "operator-dashboard: dep graph + sparklines"
+    cascade: []
+  next_pointer: R-XI-03
+  notes: Visual depth-of-decomposition by surface; spot bottleneck R-NNN that unblock most downstream work.
+
+R-XI-03:
+  title: Live-update mode — webhook or short-poll
+  surface: XI
+  status: PROPOSED
+  depends_on: [R-XI-01]
+  blocks: []
+  posture: mode-agnostic
+  scope:
+    files: [tools/dashboard/**]
+    contracts: []
+    cross_axis: no
+  skills: { primary: phase-7-implementation, secondary: [verify] }
+  advisor_required: conditional:if webhook approach requires backend infra
+  council_required: no
+  verification:
+    shape: integration
+    must_pass:
+      - "Dashboard refreshes within 60s of PR merge"
+      - "Refresh mechanism does not require operator-managed server (static-deploy-friendly)"
+  close_shape:
+    type: PR-merge
+    artifact: "operator-dashboard: live refresh"
+    cascade: []
+  next_pointer: null
+  notes: |
+    MVP path: GitHub Actions on main push triggers Pages redeploy; browser sees fresh dashboard on reload.
+    Live-mode path: short-poll GitHub API from browser every 60s; or webhook → static-file regeneration via Cloudflare Workers / Netlify functions.
+    Decide at execution time per cost + complexity tradeoff.
+```
+### 5.8 Phase 8 accounting (R-700..R-799)
 
 ```yaml
 R-700-phase-8-substitution-accounting:
@@ -712,6 +811,7 @@ Decomposition status per surface. **`decomposed`** means R-NNN entries exist at 
 | VIII | Phase 8 retirement criteria | `placeholder` (R-700-phase-8-substitution-accounting only) | Triggered when §I substitutions ≥45/49 closed |
 | IX | External integrations | `decomposition-owed` | Triggered by R-300 multi-LLM decomposition |
 | X | Existential / research | `decomposition-owed` | Surfaces opportunistically; not actively decomposed |
+| XI | Operator tooling / observability | `partially-decomposed` (R-XI-01 + R-XI-02 + R-XI-03, all PROPOSED) | Triggered by R-200-ci-pytest-pyright-ruff-matrix closure; R-XI-01 flips PROPOSED → ACTIVE at that point |
 
 **Decomposition-owed marker discipline.** When opening any surface for decomposition, operator AUQ required ONLY if scope is ambiguous; otherwise Claude decomposes per current workspace state. The roadmap is not a contract — it is a discipline.
 
