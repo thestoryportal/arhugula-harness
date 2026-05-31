@@ -10,7 +10,7 @@
 
 The Information Substrate (IS) axis owns **persistence**: state ledger, path-class registry, artifact-tier registry, hash-chain integrity discipline, JSONL composition contracts, shadow-Git checkpoint, worktree isolation, and substrate seam exports.
 
-IS is the **consumer-most-upstream axis** per `Cross_Axis_Composition_Document_v2_1.md` §2.2: 0 outbound cross-axis edges; all other axes (AS / CP / OD) consume IS exports via U-IS-17 terminal aggregate exporter manifest.
+IS is the **consumer-most-upstream axis** per `Cross_Axis_Composition_Document_v2_17.md` §2.2: 0 outbound cross-axis edges; all other axes (AS / CP / OD) consume IS exports via U-IS-17 terminal aggregate exporter manifest. v2.1 → v2.17 refresh per CXA v2.17 §0.3 absorbing the 6-row CP→IS Pattern-P1 bucket growth at PR #92 commit `28259ed` 2026-05-31 (U-CP-74..U-CP-79 §16.5 CP→IS composer atomic-unit LANDED events at PRs #39-#44 2026-05-28..29; each composer consumer `harness_cp.<composer_module>` imports `EntryPayload` from `harness_is.state_ledger_write` per CP spec v1.25 §16.5.3 contract). **IS-axis outbound invariant PRESERVED VERBATIM at v2.17** (0 outbound to other axes; all IS-direction edges are inbound — v2.17 grew the CP→IS inbound bucket only).
 
 ### 1.2 Spec + plan authority
 
@@ -73,16 +73,16 @@ Per U-IS-17 substrate seam exports manifest (C-IS-10):
 | JSONL_EVENT_LEDGER_FORMAT_EXPORT | C-IS-10 §10.5 | AS, CP, OD |
 | WORKLOAD_CLASS_OPT_IN_MANIFEST_EXPORT | C-IS-10 §10.6 | CP only |
 
-### 2.3 Cross-axis edge inventory (CXA v2.1)
+### 2.3 Cross-axis edge inventory (CXA v2.17)
 
 IS is consumer-most-upstream; all IS-direction edges are **inbound**:
 
 | Source axis → IS | Edges | Source artifact |
 |---|---|---|
-| AS → IS | 13 | `Cross_Axis_Composition_Document_v2_1.md` §2.3.1; `Implementation_Plan_Action_Surface_v1_2.md` §3.4 |
-| CP → IS | 36 | `Cross_Axis_Composition_Document_v2_1.md` §2.3.2 |
-| OD → IS | 6 (CXA v2.1 baseline) / 4 (OD plan v2.6 §4.5.1 per C3-15 Path (i-refined) deletions) | `Cross_Axis_Composition_Document_v2_1.md` §2.3.5; drift recorded at `Implementation_Plan_Information_Substrate_v2_3.md` §0.9 (CXA-OD-IS-EDGE-DRIFT, Class 3 informational) |
-| **IS outbound** | **0** | IS exports surface via U-IS-17 manifest; consumers declare `Depends on` at consumer-side plans |
+| AS → IS | 13 | `Cross_Axis_Composition_Document_v2_17.md` §2.3.1 (was v2.1 baseline; preserved verbatim through v2.17); `Implementation_Plan_Action_Surface_v1_2.md` §3.4 |
+| CP → IS | 43 (was 36 at v2.1 baseline; 37 at v2.6/v2.9..v2.16; **43 at v2.17** per §0.3 absorbing 6 NEW Pattern-P1 typed seams at rows 38-43 for U-CP-74..U-CP-79 §16.5 composer atomic-unit LANDED events at PRs #39-#44 2026-05-28..29 per CP spec v1.25 §16.5.3 contract) | `Cross_Axis_Composition_Document_v2_17.md` §2.3.2 |
+| OD → IS | 6 (CXA v2.1 baseline) / 4 (OD plan v2.6 §4.5.1 per C3-15 Path (i-refined) deletions) | `Cross_Axis_Composition_Document_v2_17.md` §2.3.5 (was v2.1 baseline; preserved verbatim through v2.17); drift recorded at `Implementation_Plan_Information_Substrate_v2_3.md` §0.9 (CXA-OD-IS-EDGE-DRIFT, Class 3 informational) |
+| **IS outbound** | **0** | IS exports surface via U-IS-17 manifest; consumers declare `Depends on` at consumer-side plans (invariant PRESERVED VERBATIM through v2.17) |
 
 ---
 
