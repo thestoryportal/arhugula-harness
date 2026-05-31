@@ -329,20 +329,25 @@ R-002:
   notes: RESOLVED at first execution 2026-05-31 (Surface-I decomposition pass). Survey enumerated all non-RETIRED rows across harness-*/CLAUDE.md §4.1. Output — IS-2 PARTIAL (covered R-003 + R-001-h-t-is-2-retired); OD-5 + AS-8d RETIRED (reconciled R-001 + R-004 stale BLOCKED → RESOLVED — they were retired via mech-β batches 31-32, not the operator-deployment path the entries modeled); AS-8e + AS-8f STILL-BOUNDED-INDEFINITELY (NEW R-005 + R-006 DEFERRED); OD-3 + OD-6 RETIRE-READY (NEW R-007 + R-009 BLOCKED on real-deployment X-AL-2 second conjunct OR operator-AUQ Reading α); OD-4 PARTIAL (NEW R-008 BLOCKED on §13.1/§13.2 gate closures). CP-axis §4.1 fully RETIRED — no entries owed. 7 distinct non-RETIRED rows now mapped. Dashboard "Phase 7 retirement progress" table reconciled in the same PR.
 
 R-003:
-  title: Producer-site lifts at ~13 sites per IS spec v1.3 § procedural_tier_snapshot consumers
+  title: Producer-site lifts of EntryPayload.procedural_tier_snapshot_ref (workflow-context sites)
   surface: I
-  status: ACTIVE
+  status: ACTIVE-ORIENTATION-COMPLETE   # impl pending; RESUME at Cluster A
   depends_on: []
   blocks: [R-001-h-t-is-2-retired]
   posture: phase-7
-  scope: { files: [harness-cp/**, harness-runtime/**, harness-as/**], contracts: [C-IS-05 §5.2], cross_axis: yes }
+  scope: { files: [harness-cp/**, harness-runtime/**], contracts: [C-IS-05 §5.1 §5.2], cross_axis: yes }
   skills: { primary: phase-7-implementation, secondary: [phase-7-cross-axis-composition] }
-  advisor_required: yes
+  advisor_required: SATISFIED-2026-05-31   # 55th application; X-AL-3 cleared (IS §5.1 general principle). Re-run only on a NEW cross-axis question.
   council_required: no
-  verification: { shape: integration, must_pass: ["each producer site populates EntryPayload.procedural_tier_snapshot_ref via resolver closure", "no producer site bypasses resolver", "ledger entries carry sidecar at production"] }
-  close_shape: { type: PR-merge, artifact: "PR per cluster of ~3-5 producer sites", cascade: [R-IF-roadmap-refresh] }
+  verification: { shape: integration, must_pass: ["each LIFTED workflow-context site populates EntryPayload.procedural_tier_snapshot_ref via resolver closure", "no lifted site bypasses resolver", "documented outside-context sites keep None per IS §5.1", "HALT-on-resolver-failure (no ledger write)"] }
+  close_shape: { type: PR-merge, artifact: "PR per cluster — Cluster A (runtime: sub_agent_dispatch + hitl_gate_composer); Cluster B (CP: workflow_driver + sibling_ledger); + 5/6/7 None-canonical docs", cascade: [R-IF-roadmap-refresh, R-001-h-t-is-2-retired] }
   next_pointer: R-001-h-t-is-2-retired
-  notes: U-RT-112 resolver substrate LANDED (runtime v2.42); producer-site lifts deferred per Q2=narrow at apply arc. Each cluster of producers = separate PR per L9-* precedent.
+  resume: ".harness/R-003-checkpoint.md"   # READ THIS FIRST on resume — full injection-point map + 2-cluster plan + resolved decisions.
+  notes: >
+    ORIENTATION COMPLETE 2026-05-31 — do NOT re-derive; read .harness/R-003-checkpoint.md and start Cluster A.
+    Resolved this arc: (1) X-AL-3 risk CLEARED — IS spec v1.3 §C-IS-05 §5.1 is a GENERAL principle (None canonical outside active workflow context); lifting workflow-context sites is spec-intended, not a scope-extension fork.
+    (2) Operator AskUserQuestion 2026-05-31 = Option A: lift the 4 workflow-step sites (sibling-ledger, workflow_driver step, sub_agent F2 :474, hitl F2 :770); DOCUMENT sites 5 (audit_writer), 6 (as_is_wiring secret-fetch), 7 (shadow_git_rollback) as None-canonical.
+    (3) Injection-point map + the stage-5-vs-stage-6 resolver-timing wrinkle + the site-1 caller-threading reframe are in the checkpoint. U-RT-112 resolver substrate LANDED (runtime v2.42); cp_is_wiring.py is the pattern to mirror.
 
 R-001-h-t-is-2-retired:
   title: H_T-IS-2 PARTIAL → RETIRED transit
