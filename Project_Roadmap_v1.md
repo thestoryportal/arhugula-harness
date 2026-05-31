@@ -547,6 +547,49 @@ R-600-clearance-marker-backfill-survey:
   close_shape: { type: PR-merge, artifact: "ops: clearance marker backfill", cascade: [] }
   next_pointer: null
   notes: Non-retroactive per CLAUDE.md §4.5; survey identifies post-2026-05-29 gaps only.
+
+R-600-notebooklm-skill-setup:
+  title: NotebookLM skill integration — interactive access to 28-URL-scrape research corpus
+  surface: VII
+  status: RESOLVED
+  depends_on: []
+  blocks: []
+  posture: mode-agnostic
+  scope:
+    files: [memory/notebooklm-harness-corpus-url.md]
+    contracts: []
+    cross_axis: no
+  skills: { primary: null, secondary: [] }
+  advisor_required: no
+  council_required: no
+  verification:
+    shape: integration
+    must_pass:
+      - "notebooklm-py 0.6.0 installed via uv tool (Python 3.12 base for rookiepy compat)"
+      - "Playwright Chromium installed at ~/Library/Caches/ms-playwright/"
+      - "Auth via Chrome cookie extraction (zero OAuth flow); status=ok + token_fetch=true"
+      - "Claude Code skill at ~/.claude/skills/notebooklm/ + Agent skill at ~/.agents/skills/notebooklm/"
+      - "Notebook 57b8d946-... pinned as default"
+      - "Test query against URL-scrape corpus returns content NOT in static research/notebooks/ extracts"
+  close_shape:
+    type: PR-merge
+    artifact: "ops: notebooklm-py skill installed + auth via chrome cookies + test query passed"
+    cascade: []
+  next_pointer: null
+  event_trigger: |
+    NotebookLM consultation now ACTIVE for:
+    - Workflow v1.14+ revision arc (Phase 7 → Phase 8 retirement; SDLC absorption)
+    - Adversarial reviewer external-canon mode (static-extract-unresolvable divergence)
+    - State-of-the-art queries post-2026-05-09 source-cutoff
+    - Council orchestrator pre-bind probe (voice cite needing primary-source verification)
+  notes: |
+    Framing correction at setup: integration is skill-based via teng-lin/notebooklm-py,
+    NOT MCP-server-based as the prior memory entry framed it. Repo provides Python CLI +
+    Playwright browser automation + Claude Code skill via `notebooklm skill install`.
+    Static extracts at research/notebooks/ remain load-bearing for ~95% of queries;
+    interactive corpus for the trigger events above. Memory entry [[notebooklm-harness-corpus-url]]
+    refreshed in same PR. RESOLVED in one arc (skipped PROPOSED → ACTIVE) since setup +
+    verification + documentation all closed at this PR's merge.
 ```
 
 ### 5.6 Halt-doc routings (2026-05-31 carries)
