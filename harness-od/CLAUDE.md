@@ -162,7 +162,7 @@ Full per-substitution bounded-scope + retirement criterion at Meta-Architecture 
 
 **RETIRE-READY → RETIRED gates — operator deployment-time opt-in (terminal in-CLI state):**
 
-- **OD-5 (cost-attribution 5-step chain):** **Terminal in-CLI state at RETIRE-READY 2026-05-28 (batch-28).** Producer-binding chain MET at 4/4 dispatch surfaces (LLM + tool + validator + webhook); structural-criterion-B MET per X-AL-2 retirement criterion. No further in-CLI close pathway. Full RETIRED transit requires (a) operator-bound `RuntimeConfig.validator_framework_config` non-None with cost-attribution substrates supplied at deployment + operator-explicit `WebhookDeliveryComposer` construction with cost-attribution substrates per Reading H per-workflow-context-threading pattern; (b) real workflow execution exercising ≥1 dispatch surface at production runtime; (c) `cost:`-prefixed audit-ledger entries observed at the production audit substrate carrying SpanCostRecord payload per CXA v2.13 §2.3.7 row 8. Mirror H_T-AS-8d batch-25 operator-opt-in RETIRE-READY pattern; bucket-membership 1 → 2 at batch-28 (AS-8d + OD-5 NEW). Bounded-residual carry per X-AL-2; not a defect.
+- **OD-5 (cost-attribution 5-step chain):** **RETIRED 2026-05-28 at batch-32 via mech-β AC #8 green** — see row table entry above + §"RETIRE-READY → RETIRED gates (OD-5 + OD-6 post-batch-34)" sub-section below. Pre-batch-32 framing "Terminal in-CLI state at RETIRE-READY 2026-05-28 (batch-28)" was stale carry-text vs production landing — refreshed at workflow v1.12 §7.4.7.3.C audit 2026-05-31.
 
 **RETIRE-READY → RETIRED gates (OD-5 + OD-6 post-batch-34):**
 
