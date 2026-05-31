@@ -255,6 +255,7 @@ async def emit_hitl_tool_call_rewriting_state_ledger_entry(
     rewritten_tool_call: RewrittenToolCall,
     actor: ActorIdentity,
     ledger_writer: Callable[[EntryPayload], Awaitable[WriteResult]],
+    procedural_tier_snapshot_resolver: Callable[[], Identifier],
 ) -> WriteResult:
     """Compose + emit the §16.5 IS-anchored state-ledger entry for U-CP-37.
 
@@ -287,5 +288,6 @@ async def emit_hitl_tool_call_rewriting_state_ledger_entry(
         idempotency_key=Identifier(idempotency_key),
         actor=Actor(actor_class=ActorClass.AGENT, actor_id=str(actor)),
         timestamp=datetime.now(UTC),
+        procedural_tier_snapshot_ref=procedural_tier_snapshot_resolver(),
     )
     return await ledger_writer(payload)

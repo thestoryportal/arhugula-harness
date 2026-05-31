@@ -15,8 +15,16 @@ from harness_cp.per_step_override_evaluator import (
 )
 from harness_cp.state_ledger_canonicalization import _canonicalize_outcome_bytes
 from harness_cp.workflow_manifest_entry import StepOverride
-from harness_is.state_ledger_entry_schema import ActorClass
+from harness_is.state_ledger_entry_schema import ActorClass, Identifier
 from harness_is.state_ledger_write import EntryPayload, WriteResult
+
+_PROCEDURAL_TIER_SNAPSHOT_FIXTURE = Identifier("a" * 64)
+"""CP spec v1.30 §1.2 fixture: stub Identifier returned by the test resolver."""
+
+
+def _snapshot_resolver() -> Identifier:
+    """CP spec v1.30 §1.4: zero-arg resolver closure returning the fixture."""
+    return _PROCEDURAL_TIER_SNAPSHOT_FIXTURE
 
 
 class _CapturingLedgerWriter:
@@ -41,6 +49,7 @@ def _kwargs(**overrides: Any) -> dict[str, Any]:
         "step_id": "step-2",
         "post_override_step_config": _outcome(),
         "actor": ActorIdentity("control-plane"),
+        "procedural_tier_snapshot_resolver": _snapshot_resolver,
     }
     base.update(overrides)
     return base
@@ -119,6 +128,7 @@ def test_emit_override_state_ledger_response_hash_is_is_computed_not_composer_co
         "idempotency_key",
         "actor",
         "timestamp",
+        "procedural_tier_snapshot_ref",
     }
 
 

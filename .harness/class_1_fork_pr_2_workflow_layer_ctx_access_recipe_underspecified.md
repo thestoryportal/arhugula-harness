@@ -2,7 +2,7 @@
 
 **Filed:** 2026-05-31 by autonomous overnight loop iteration 3
 **Trigger:** Probe-first discipline at PR-2 impl arc opening (standing posture amendment 5)
-**Status:** PROPOSING — awaits operator AskUserQuestion ratification
+**Status:** ✅ APPLIED-AS-READING-C 2026-05-31 — operator AskUserQuestion ratified (Q1=C uniform resolver-closure / Q2=v1.30 canonical-reading amendment / Q3=ZERO cross-axis cascade / Q4=PR-2+PR-3 collapse single PR). Co-published: CP spec v1.30 + CP plan v2.31 + 6-composer impl + cp_is_wiring runtime layer + bootstrap stage 6 binding + 11 NEW sanity tests + clearance markers at `.harness/clearance/Spec_Control_Plane-v1_30-cleared-2026-05-31.md` + `.harness/clearance/Implementation_Plan_Control_Plane-v2_31-cleared-2026-05-31.md`. 3533/3533 tests pass + 10 skipped.
 **Anchor:** CP spec v1.29 §16.5.12.2 + IS spec v1.3 §5.2 + workspace CLAUDE.md §4.4 X-AL-3
 
 ---

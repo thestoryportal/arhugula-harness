@@ -292,17 +292,23 @@ async def emit_override_state_ledger_entry(
     post_override_step_config: Mapping[str, Any],
     actor: ActorIdentity,
     ledger_writer: Callable[[EntryPayload], Awaitable[WriteResult]],
+    procedural_tier_snapshot_resolver: Callable[[], Identifier],
 ) -> WriteResult:
     """Compose + emit the §16.5 IS-anchored state-ledger entry for U-CP-14.
 
-    Per CP spec v1.26 §16.5.3: produces `EntryPayload` per IS HEAD 4-field shape
-    `(action_id, idempotency_key, actor, timestamp)`. `response_hash` and
-    `prior_event_hash` are IS-internal — composer does NOT control them
-    (C-IS-06 §6.2 + C-IS-13 §13.5). The outcome-bytes semantic at §16.5.5
-    (post-override step-config canonical JSON bytes) is carried at the
+    Per CP spec v1.26 §16.5.3 + v1.29 §16.5.12 + v1.30 §1.2 canonical reading:
+    produces `EntryPayload` per IS HEAD 5-field shape `(action_id,
+    idempotency_key, actor, timestamp, procedural_tier_snapshot_ref)`.
+    `response_hash` and `prior_event_hash` are IS-internal — composer does NOT
+    control them (C-IS-06 §6.2 + C-IS-13 §13.5). The outcome-bytes semantic at
+    §16.5.5 (post-override step-config canonical JSON bytes) is carried at the
     `idempotency_key` discriminator per CP spec v1.27 §16.5.4 (Reading A:
     3-tuple `(workflow_id, step_id, outcome_hash)` per the per-step-override
     uniqueness invariant at `workflow_manifest_entry.py:109`).
+
+    The `procedural_tier_snapshot_resolver` kw-only param is invoked at emission
+    per v1.30 §1.2 + §1.3 uniform-resolver-closure recipe; failure HALTs per
+    §16.5.12.5 (composer propagates resolver-raise to caller).
 
     Composer awaits `ledger_writer(payload)` return per §16.5.9 invariant 4;
     does NOT condition on `WriteResult` variant.
@@ -317,5 +323,6 @@ async def emit_override_state_ledger_entry(
         idempotency_key=Identifier(idempotency_key),
         actor=Actor(actor_class=ActorClass.AGENT, actor_id=str(actor)),
         timestamp=datetime.now(UTC),
+        procedural_tier_snapshot_ref=procedural_tier_snapshot_resolver(),
     )
     return await ledger_writer(payload)

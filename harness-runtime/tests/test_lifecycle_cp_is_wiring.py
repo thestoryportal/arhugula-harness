@@ -27,8 +27,15 @@ from harness_cp.topology_pattern import TopologyPattern
 from harness_is.chain_verification import VerificationStatus, verify_chain
 from harness_is.path_class_registry import PathClass
 from harness_is.path_resolver import PathResolver
-from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from harness_is.state_ledger_write import WriteResult, read_ledger
+
+_PROCEDURAL_TIER_SNAPSHOT_FIXTURE = Identifier("a" * 64)
+
+
+def _pt_resolver() -> Identifier:
+    """CP spec v1.30 §1.4: zero-arg resolver closure returning the fixture."""
+    return _PROCEDURAL_TIER_SNAPSHOT_FIXTURE
 from harness_runtime.config.path_bindings import build_path_binding
 from harness_runtime.lifecycle.cp_is_wiring import (
     CpIsWiringBindError,
@@ -89,7 +96,11 @@ def _config(tmp_path: Path) -> RuntimeConfig:
 
 
 def _wiring(tmp_path: Path) -> RuntimeCpIsWiring:
-    stage = materialize_cp_is_wiring_stage(_config(tmp_path), _ledger_writer(tmp_path))
+    stage = materialize_cp_is_wiring_stage(
+        _config(tmp_path),
+        _ledger_writer(tmp_path),
+        _pt_resolver,
+    )
     return stage.wiring
 
 
@@ -129,13 +140,17 @@ def _sibling_kwargs(
 
 
 def test_composer_returns_stage(tmp_path: Path) -> None:
-    stage = materialize_cp_is_wiring_stage(_config(tmp_path), _ledger_writer(tmp_path))
+    stage = materialize_cp_is_wiring_stage(
+        _config(tmp_path), _ledger_writer(tmp_path), _pt_resolver,
+    )
     assert isinstance(stage, CpIsWiringStage)
     assert isinstance(stage.wiring, RuntimeCpIsWiring)
 
 
 def test_stage_is_frozen(tmp_path: Path) -> None:
-    stage = materialize_cp_is_wiring_stage(_config(tmp_path), _ledger_writer(tmp_path))
+    stage = materialize_cp_is_wiring_stage(
+        _config(tmp_path), _ledger_writer(tmp_path), _pt_resolver,
+    )
     with pytest.raises(AttributeError):
         stage.wiring = stage.wiring  # type: ignore[misc]
 

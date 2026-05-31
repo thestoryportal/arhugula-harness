@@ -28,7 +28,13 @@ from harness_is.state_ledger_write import WriteKey, WriteResult
 
 
 def test_sibling_ledger_entry_matches_f2_shape() -> None:
-    """#1 — SiblingLedgerEntry inherits the F2 six-field shape verbatim."""
+    """#1 — SiblingLedgerEntry inherits the F2 shape; v1.3 5th D-derivative sidecar admissible.
+
+    Per IS spec v1.3 §5.1 (LANDED PR #89 2026-05-30): `StateLedgerEntry` gains a
+    D-derivative sidecar `procedural_tier_snapshot_ref: Identifier | None = None`
+    additive to the F-layer 6-field shape. `SiblingLedgerEntry` inherits the
+    extended field set verbatim per Pydantic v2 subclass semantics.
+    """
     assert issubclass(SiblingLedgerEntry, StateLedgerEntry)
     assert set(SiblingLedgerEntry.model_fields) == {
         "action_id",
@@ -37,6 +43,7 @@ def test_sibling_ledger_entry_matches_f2_shape() -> None:
         "response_hash",
         "timestamp",
         "prior_event_hash",
+        "procedural_tier_snapshot_ref",
     }
 
 

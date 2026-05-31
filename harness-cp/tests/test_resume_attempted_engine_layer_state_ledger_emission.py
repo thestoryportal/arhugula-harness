@@ -16,8 +16,15 @@ from harness_cp.pause_resume_protocol import (
     emit_resume_attempted_state_ledger_entry,
 )
 from harness_cp.state_ledger_canonicalization import _canonicalize_outcome_bytes
-from harness_is.state_ledger_entry_schema import ActorClass
+from harness_is.state_ledger_entry_schema import ActorClass, Identifier
 from harness_is.state_ledger_write import EntryPayload, WriteResult
+
+_PROCEDURAL_TIER_SNAPSHOT_FIXTURE = Identifier("a" * 64)
+
+
+def _pt_resolver() -> Identifier:
+    """CP spec v1.30 §1.4: zero-arg resolver closure returning the fixture."""
+    return _PROCEDURAL_TIER_SNAPSHOT_FIXTURE
 
 
 class _CapturingLedgerWriter:
@@ -53,6 +60,7 @@ def _kwargs(**overrides: Any) -> dict[str, Any]:
         "resume_attempt_count": 1,
         "resume_outcome": _outcome(),
         "actor": ActorIdentity("engine-layer"),
+        "procedural_tier_snapshot_resolver": _pt_resolver,
     }
     base.update(overrides)
     return base
@@ -205,6 +213,7 @@ def test_emit_resume_attempted_response_hash_is_is_computed() -> None:
         "idempotency_key",
         "actor",
         "timestamp",
+        "procedural_tier_snapshot_ref",
     }
 
 

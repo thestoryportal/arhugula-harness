@@ -16,8 +16,15 @@ from harness_cp.workload_binding_engine_class_selection import (
     WorkloadBindingSelectionResult,
     emit_workload_class_selection_state_ledger_entry,
 )
-from harness_is.state_ledger_entry_schema import ActorClass
+from harness_is.state_ledger_entry_schema import ActorClass, Identifier
 from harness_is.state_ledger_write import EntryPayload, WriteResult
+
+_PROCEDURAL_TIER_SNAPSHOT_FIXTURE = Identifier("a" * 64)
+
+
+def _snapshot_resolver() -> Identifier:
+    """CP spec v1.30 §1.4: zero-arg resolver closure returning the fixture."""
+    return _PROCEDURAL_TIER_SNAPSHOT_FIXTURE
 
 
 class _CapturingLedgerWriter:
@@ -49,6 +56,7 @@ def _kwargs(**overrides: Any) -> dict[str, Any]:
         "step_id": "step-2",
         "selection_result": _result(),
         "actor": ActorIdentity("control-plane"),
+        "procedural_tier_snapshot_resolver": _snapshot_resolver,
     }
     base.update(overrides)
     return base
@@ -172,6 +180,7 @@ def test_emit_workload_class_selection_response_hash_is_is_computed() -> None:
         "idempotency_key",
         "actor",
         "timestamp",
+        "procedural_tier_snapshot_ref",
     }
 
 
