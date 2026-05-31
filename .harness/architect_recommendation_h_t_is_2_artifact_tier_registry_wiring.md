@@ -267,4 +267,40 @@ Enum-byte-drift adjacent fix per §2.5 is NOT an operator-decision — spec is c
 
 ---
 
-*End of architect recommendation. Operator AUQ owed at next session opening. Plan revision arc gated on Q1 ratification + Q4 apply-posture decision.*
+## §10 Open contract questions for the apply-pass arc
+
+Surfaced at architect-rec ratification close 2026-05-30 per `[[advisor-before-substantive-work-for-cross-axis-blockers]]` discipline; both must be resolved before spec authoring begins or they will produce mid-arc Class 1 forks at impl-time grounding (mirror PR #37 force-push-pre-merge precedent).
+
+### Q-α — `ProceduralTierSnapshotRef` carrier shape
+
+§5 names the resolver signature `resolve_procedural_tier_snapshot(harness_context) -> ProceduralTierSnapshotRef` but punts the return-type shape. Three sub-shapes:
+
+- **(α-1) Content-hash form.** `Identifier = sha256(canonical_join(active_skills_versions || prompt_version || routing_manifest_sha))`. Self-describing; no separate lookup table needed; replay verifies the snapshot by re-hashing the procedural-tier state at replay time. Tight; immune to registry drift.
+- **(α-2) Opaque registry key.** Monotonic counter / UUID / ULID with a separate lookup table `snapshot_id → ProceduralTierSnapshot(skills, prompt, manifest)`. Registry holds canonical state; replay queries by key. Allows non-content-addressed snapshots (e.g., named versions); requires separate registry persistence.
+- **(α-3) Composite struct.** `frozen Pydantic v2 BaseModel { skills_set: frozenset[SkillVersionRef], prompt_version_ref: PromptRef, routing_manifest_sha: str }`. Self-describing AND queryable by component; richer than content-hash; widest entry-field footprint.
+
+Each sub-shape interacts differently with `(α-2)` storage contract at Q-β below. Decision matrix:
+
+| Shape | Storage need | Replay mechanism | Entry-field bytes |
+|---|---|---|---|
+| (α-1) hash | None (verifier re-computes) | Re-hash at replay; compare | 64 hex chars |
+| (α-2) key | Separate registry table; persistence-required | Lookup by key | 32-64 bytes |
+| (α-3) struct | None inline (self-describing) | Read fields directly | ~variable; per-entry inflated |
+
+### Q-β — Snapshot registry home + storage contract
+
+Three sub-shapes, partly dependent on Q-α:
+
+- **(β-1) New `harness-is` file** `procedural_tier_snapshot_registry.py` sibling to `artifact_tier_registry.py`. In-memory mapping populated at bootstrap from active filesystem state; resolver reads at write-time.
+- **(β-2) Storage backend Protocol pattern** per U-RT-76 `MemoryToolStorageBackendProtocol` precedent. `ProceduralTierSnapshotStorageBackend` Protocol with `read(snapshot_id) -> ProceduralTierSnapshot | None`, `write(snapshot_id, snapshot)` callbacks; concrete `LocalFilesystemProceduralTierSnapshotBackend` impl at runtime.
+- **(β-3) Direct ledger-side computation** — no separate registry; resolver computes the snapshot at every call from current `HarnessContext` state. Forecloses Q-α-2 (no key→snapshot lookup table); compatible with Q-α-1 + Q-α-3.
+
+Storage persistence is non-trivial: `procedural_tier` survival scope per spec §C-IS-02 §2 is "across runs and workflow versions" — implies the snapshot's **referent state** (skills, prompts, routing-manifest) persists across runs, but the **registry of snapshots-keyed-by-ref** is a derived structure whose persistence is not auto-implied. The apply-pass arc must decide whether the snapshot registry itself persists (replay-across-restart needs it; in-run-only doesn't) and whether shadow-git is the canonical persistence substrate (mirror state-ledger persistence pattern) or filesystem-only.
+
+### Note on workspace-precedent calibration
+
+§5 invokes `CostRecordAuditPayload` + `PauseResumeAuditPayload` as precedents for the sidecar shape. Calibration: those two are **per-event-type payloads** attached to specific composer functions (CP-axis cost-attribution composer; CP-axis pause/resume composer). `procedural_tier_snapshot_ref` is **per-entry universal metadata** attached to every state-ledger write across all composers. The precedent generalizes (the pattern is "typed-carrier-additive-not-substitutional") but is not a direct equivalence. The apply-pass spec amendment should acknowledge: γ generalizes the sidecar-payload precedent from per-event-type to per-entry-universal scope. This is the architectural shape the spec amendment introduces, and it should be named explicitly so future reviewers see the generalization rather than mistake it for direct equivalence.
+
+---
+
+*End of architect recommendation. Operator ratifications captured at PR #89 review comment (Q1 = γ-family, Q1.1 = γ, Q2 = narrow, Q3 = bundled, Q4 = inline). Apply-pass arc owed at next session opener with Q-α + Q-β resolution as first deliverables before spec authoring begins.*
