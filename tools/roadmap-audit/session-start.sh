@@ -39,6 +39,27 @@ NEXT=$(grep -oE '\*\*`R-[A-Za-z0-9-]+`\*\*' "$DASHBOARD" 2>/dev/null | head -1 |
 
 PR_COUNT=$([ -z "$PRS" ] && echo 0 || echo "$PRS" | tr ',' '\n' | grep -c .)
 
+# Recurrence guard (CLAUDE.md §12.3 / dashboard drift-log line-92 precedent): when on the
+# default branch, detect a local checkout trailing origin. The base hook reads only the LOCAL
+# dashboard + HEAD, so a checkout behind origin yields a globally-stale next-action that still
+# looks locally-consistent (the Cluster A/B drift, 2026-05-31). Only fires on the default branch
+# so feature-branch worktrees that intentionally trail main get no noise. Best-effort fetch is
+# timeout-guarded (and skipped when no timeout binary is present) so the hook can never hang or
+# fail offline — it falls back to the existing origin ref, which sibling worktrees/jobs keep fresh.
+DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
+[ -z "$DEFAULT_BRANCH" ] && DEFAULT_BRANCH=main
+CURRENT_BRANCH=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")
+if [ "$CURRENT_BRANCH" = "$DEFAULT_BRANCH" ]; then
+  TIMEOUT_BIN=""
+  command -v timeout  >/dev/null 2>&1 && TIMEOUT_BIN="timeout 4"
+  command -v gtimeout >/dev/null 2>&1 && TIMEOUT_BIN="gtimeout 4"
+  [ -n "$TIMEOUT_BIN" ] && $TIMEOUT_BIN git fetch --quiet --no-tags origin "$DEFAULT_BRANCH" >/dev/null 2>&1 || true
+  BEHIND=$(git rev-list --count "HEAD..origin/${DEFAULT_BRANCH}" 2>/dev/null || echo 0)
+  if [ "${BEHIND:-0}" -gt 0 ] 2>/dev/null; then
+    emit "[ROADMAP] behind-origin=${BEHIND} on ${DEFAULT_BRANCH} — fast-forward (git merge --ff-only origin/${DEFAULT_BRANCH}) before deriving next-action; dashboard next=${NEXT:-?} may be stale (§12.3 / line-92 precedent)."
+  fi
+fi
+
 if [ "$COMPUTED" = "$DASHBOARD_HASH" ]; then
   emit "[ROADMAP] hash=ok next=${NEXT:-?} in_flight=${PR_COUNT} forks=${FORKS}"
 fi
