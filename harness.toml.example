@@ -97,3 +97,46 @@ path_class = "STATE_LEDGER"
 workflow_class = "software-engineering"
 deployment_surface = "local-development"
 path = "/absolute/path/to/your/workspace/.harness/state.jsonl"
+
+
+# ---------------------------------------------------------------------------
+# Silencing the `ProviderDegradedWarning` (probe-v4 adjacent finding (c))
+# ---------------------------------------------------------------------------
+#
+# When `anthropic_optional` / `openai_optional` / `ollama_optional` is `true`
+# AND the corresponding provider construction fails (e.g., no API key in
+# keyring, or no local Ollama daemon running), stage 3a CP_CLIENTS emits a
+# `ProviderDegradedWarning` via `warnings.warn` per Spec_Harness_Runtime_v1
+# §5 mandate ("Surface typed warning; stage continues with reduced-provider
+# context"). The warning is spec-canonical — production cannot silence it
+# unilaterally without an X-AL-3 spec amendment.
+#
+# Operators who have intentionally opted into the degraded surface (the
+# `*_optional=true` declaration) and don't need the per-invocation warning
+# noise can suppress it via the standard Python warnings filter:
+#
+#   export PYTHONWARNINGS="ignore:provider="
+#
+# Caveats:
+#
+# 1. The filter syntax above is a message-prefix REGEX matched at the start
+#    of the warning message. It silences any future warning whose message
+#    begins with "provider=" (low collision risk; the harness uses this
+#    prefix exclusively at ProviderDegradedWarning emission sites).
+#
+# 2. The "obvious" category-name filter
+#    `PYTHONWARNINGS="ignore::harness_runtime.lifecycle.providers.ProviderDegradedWarning"`
+#    does NOT work — Python's `-W` / `PYTHONWARNINGS` parser only accepts
+#    built-in warning categories (DeprecationWarning, UserWarning, etc.),
+#    not custom subclasses defined in third-party modules.
+#
+# 3. Python's `warnings` module deduplicates by `(category, filename, lineno)`
+#    per process by default. The warning fires ONCE per `harness run` /
+#    `harness daemon` invocation, not on every operation within a session.
+#    For long-running daemon mode the warning is essentially one-shot at
+#    startup; for one-shot CLI iteration (`harness run foo.toml` repeated)
+#    the filter above eliminates the per-invocation noise.
+#
+# 4. Auth errors (HTTP 401/403 from the provider) ALWAYS surface as
+#    `ProviderAuthError` per Spec §5 row 2083 and are NOT silenced by this
+#    filter — they raise, halting bootstrap regardless of `*_optional`.

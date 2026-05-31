@@ -105,3 +105,23 @@ The use-the-product-probe pattern continues to surface operator-facing defects t
 ## 7. Closure-back-reference
 
 Per `[[use-the-product-probe]]` discipline: every probe ratification arc updates the pattern memory entry with the new cardinality + findings list. This fork doc's apply-pass MUST update `memory/use-the-product-probe-pattern.md` to cardinality 4.
+
+---
+
+## 8. Adjacent observation (c) closure — 2026-05-30
+
+**Disposition:** ✅ CLOSED-as-doc-only-no-spec-change-no-impl-change.
+
+**Empirical orientation at session resumption 2026-05-30** (4th consecutive checkpoint-staleness instance per `[[feedback-checkpoint-remaining-work-is-advisory-not-authoritative]]`; advisor 52nd application) reframed (c) from "small bounded fix or Class 1 fork" to "doc-only via PYTHONWARNINGS env var":
+
+- Spec §5 line 2084 explicitly mandates `Surface typed warning` at ollama-degraded — silencing in production = X-AL-3 spec amendment.
+- Sibling-symmetric pattern at all 3 providers (anthropic + openai + ollama emit `ProviderDegradedWarning` via `warnings.warn` per E-prod-3 allowlist semantics).
+- Python `warnings` module dedups by `(category, filename, lineno)` per process → fires ONCE per `harness run` / `harness daemon` invocation, not "every bootstrap" as the §4(c) framing suggested.
+- Operator has a one-line env var to silence: `PYTHONWARNINGS="ignore:provider="` (message-prefix regex; empirically verified 2026-05-30).
+- The "obvious" category-name filter `ignore::harness_runtime.lifecycle.providers.ProviderDegradedWarning` does NOT work — Python `-W` parser rejects "invalid module name" for non-builtin warning subclasses. Caught empirically before recommending it in docs (advisor verification step).
+
+**Apply pass:** `harness.toml.example` extended with a `Silencing the ProviderDegradedWarning` documentation section enumerating the working filter syntax, dedup semantic, and auth-error always-raises caveat. ZERO production code change; ZERO spec amendment; ZERO test addition.
+
+**Pattern catalogue contribution.** Adjacent (c) becomes the 5th consecutive stale-pick from the `20260529-204731-probe-v4-lineage-shipped-post-restore.md` checkpoint where empirical orientation reframed the disposition. Discriminator that finalized the close shape: "does the operator's pain change behavior or just visibility?" — visibility, therefore doc-only. Behavior change would have triggered spec amendment.
+
+**Adjacent (c) status closed at this filing; pattern memory `[[use-the-product-probe]]` cardinality unchanged (this is a doc-only close of a previously-surfaced finding, not a new probe finding).** Memory `[[feedback-checkpoint-remaining-work-is-advisory-not-authoritative]]` updates cardinality 4 → 5 (this instance).
