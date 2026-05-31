@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `7f251d6c7cc5` |
-| `last_refreshed` | 2026-05-31T15:12:27-06:00 |
-| `git_head` | `6f8dd66` (main) — `roadmap(R-002): Surface-I decomposition — 5 new per-row entries + reconcile stale R-001/R-004 (#130)` |
+| `workspace_state_hash` | `754826ddff19` |
+| `last_refreshed` | 2026-05-31T15:41:14-06:00 |
+| `git_head` | `7c79fb4` (main) — `roadmap(R-003): persist orientation as resume-state checkpoint (#132)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-49.md` |
 | `open_fork_doc_count` | 39 |
 
@@ -39,11 +39,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #132 (`7c79fb4`) | 2026-05-31 | R-003 orientation persisted as resume-state — NEW `.harness/R-003-checkpoint.md` + entry status ACTIVE-ORIENTATION-COMPLETE + dashboard resume pointer; makes the stop-short seamless across `/clear` |
 | PR #130 (`6f8dd66`) | 2026-05-31 | R-002 — Surface-I decomposition; 5 new per-row substitution entries (R-005..R-009); reconciled stale R-001 (OD-5) + R-004 (AS-8d) BLOCKED → RESOLVED (both RETIRED via mech-β batches 31-32); dashboard retirement-progress table corrected |
 | PR #128 (`3ba4fae`) | 2026-05-31 | R-IF-HYGIENE-CXA-COUNT-CASCADE — CXA v2.18 count cascade to canonical pointers (aggregate 107→105; phase-2-runtime 22→20; OD→IS 6→4; OD outbound 27→26); mode-agnostic; §108/§109 sibling-completeness applied |
 | PR #111 (`fdf120b`) | 2026-05-31 | R-IF-111 — OD plan v2.27 NEW §4.6.OD-INTERNAL carve-out; halt-doc Item 12 closed; sibling to #110; design-phase posture, clearance marker present (operator-ratified) |
-| PR #110 (`2f14604`) | 2026-05-31 | R-IF-110 — CXA v2.18; CXA-OD-IS-EDGE-DRIFT (Item 11) closed; §2.3.4 6→4, aggregate 107→105; design-phase posture, clearance marker present (operator-ratified) |
-| PR #129 (`84b9908`) | 2026-05-31 | ops: roadmap status refresh post-PR-128 (tenth terminating refresh; next-action → R-002) |
+| PR #131 (`8d88de4`) | 2026-05-31 | ops: roadmap status refresh post-PR-130 (eleventh terminating refresh; next-action → R-003) |
 
 ---
 
@@ -97,7 +97,9 @@ Sample (highest-leverage open):
 | 2026-05-31 | Tenth terminating refresh — PR #128 R-IF-HYGIENE-CXA-COUNT-CASCADE merged at `3ba4fae`; `[ROADMAP DRIFT] action=§12.3` flagged; §12.2 owed follow-on refresh | Single-file dashboard-only refresh per §12.2.1. Hash `a51d65ed22a2` → `adb1e71359dd`. Hygiene cascade closed (canonical pointers now read 105). **All in-flight + deferred-hygiene work cleared this session.** Next action recomputed to **R-002** (substantive phase-7 substitution-retirement survey — recommend a fresh decision before opening). |
 | 2026-05-31 | Eleventh terminating refresh — PR #130 R-002 Surface-I decomposition merged at `6f8dd66`; `[ROADMAP DRIFT] action=§12.3` flagged; §12.2 owed follow-on refresh | Single-file dashboard-only refresh per §12.2.1. Hash `adb1e71359dd` → `7f251d6c7cc5`. R-002 RESOLVED (7 non-RETIRED rows mapped to R-NNN; R-001/R-004 reconciled stale→RESOLVED). Next action recomputed to **R-003** (producer-site lifts, ~7 sites; substantive phase-7 cross-axis impl — recommend fresh decision + advisor before opening). **Survey-surfaced finding:** the roadmap §5.2 was authored 2026-05-31 with R-001/R-004 as RETIRE-READY-awaiting-deployment, but OD-5/AS-8d had been RETIRED via mech-β at batches 31-32 (2026-05-28) — a 3-day-stale authoring error, now corrected. |
 
-**Audit protocol exercised across 11 closure events + 1 fresh-session reconciliation.** Discipline + enforcement layers both operational. **In-flight chain + hygiene cascade + R-002 decomposition fully cleared 2026-05-31; deterministic next-action = R-003 (phase-7 cross-axis producer-site lifts).**
+| 2026-05-31 | Twelfth terminating refresh — PR #132 R-003 orientation-checkpoint merged at `7c79fb4`; `[ROADMAP DRIFT] action=§12.3` flagged; §12.2 owed follow-on refresh | Single-file dashboard-only refresh per §12.2.1. Hash `7f251d6c7cc5` → `754826ddff19`. Next action UNCHANGED at **R-003** but now **ACTIVE-ORIENTATION-COMPLETE** with a resume pointer to `.harness/R-003-checkpoint.md` — a fresh session (`/clear` → hook → `continue`) resumes at Cluster A without re-deriving. Demonstrates the **stop-short seamless-resume** discipline: a paused phase-7 entry persists its orientation as a checkpoint artifact + entry sub-status + dashboard pointer. |
+
+**Audit protocol exercised across 12 closure events + 1 fresh-session reconciliation.** Discipline + enforcement layers both operational. **In-flight chain + hygiene cascade + R-002 decomposition cleared 2026-05-31; R-003 paused at ACTIVE-ORIENTATION-COMPLETE with seamless-resume checkpoint; deterministic next-action = R-003 Cluster A.**
 
 ---
 
