@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `e95a2e943993` |
-| `last_refreshed` | 2026-06-01T12:30:00-06:00 |
-| `git_head` | `d1eaf75b` (main) — `R-700: Phase-8 closure accounting draft (54-row substitution log + beyond-substitutions register) (#207)` |
+| `workspace_state_hash` | `7afa7c5bb308` |
+| `last_refreshed` | 2026-06-01T13:00:00-06:00 |
+| `git_head` | `73839e10` (main) — `docs: post-Phase-8 forward work register (#209)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 43 |
 
@@ -56,7 +56,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* #209 | `post-phase-8-forward-register` | post-Phase-8 register + R-NNN decomposition + dashboard panel | mode-agnostic — lands `.harness/post-phase-8-forward-register.md` + **12 NEW R-NNN entries** (§5.10–§5.14: R-300/R-500/R-800/R-900 + R-CXA-1..4) + §9 IV/VI/IX/X → `decomposed` + NEW dashboard "Post-Phase-8 forward register" panel (`tools/dashboard/generate.py` + template) + this next-action. Substantive (bundled) → drops the `ops: roadmap status refresh` prefix per §12.2.1; follow-on terminating refresh owed for `workspace_state_hash` + `git_head`. |
+| *(this PR)* | `ops-roadmap-refresh-post-209` | *(terminating refresh §12.2.1)* | mode-agnostic — records PR #209 (post-Phase-8 register + 12 R-NNN entries + dashboard panel); `workspace_state_hash` recompute (`e95a2e943993` → `7afa7c5bb308`) + `git_head` → `73839e10` (#209 merge). Dashboard-only (`.harness/roadmap_status.md`); title `ops: roadmap status refresh post-PR-209` → next §12.1 audit sees expected lag-by-one (carve-out §12.1 step 6). |
 
 ---
 
@@ -64,11 +64,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #209 (`73839e1`) | 2026-06-01 | **Post-Phase-8 brought under the R-NNN discipline + dashboard section.** `.harness/post-phase-8-forward-register.md` + **12 NEW R-NNN entries** (§5.10–§5.14: R-300 multi-LLM / R-500 multi-tenant / R-800 external / R-900 research / R-CXA-1..4) + §9 IV/VI/IX/X → `decomposed` (closes the no-R-NNN-entry gap R-700 surfaced) + NEW dashboard "Post-Phase-8 forward register" panel (`generate.py` `post_phase_8()`; 20 items, LIVE). Memory: `post-phase-8-forward-tracking`. ruff (lint+format) fixed at follow-on commit. Mode-agnostic. |
 | PR #208 (`01cd0fa`) | 2026-06-01 | **Terminating refresh post-PR-207 (§12.2.1).** Recomputed `workspace_state_hash` `4d3120974cef` → `e95a2e943993` + `git_head` → `d1eaf75b` against the #207 merge (verified by reproducing the prior anchor; PRS empty / FORKS 43 / batch-51). Dashboard-only; recursion-stopping fixed point (lag-by-one). |
 | PR #207 | 2026-06-01 | **R-700-closure-accounting-draft RESOLVED — definitive remaining-to-closure log drafted.** `.harness/R-700-phase-8-closure-accounting-draft.md`: Part A 54-row substitution log (per-row disposition + tally) + Part B 8-entry beyond-substitutions register (R-410..R-440 + R-100-config-discovery; vendor + persona/surface + spec cites). **KEY FINDING:** published `48/54 RETIRED / 49 pipeline` is internally impossible (3 PARTIAL: OD-4 + CXA-1 + CXA-4); per-row truth = `46 RETIRED + 3 PARTIAL + 2 SB + 3 SB-INDEF = 54` (accounting (i); RETIRED integer 46–47, buckets co-vary); true open set = 8 rows (not 3) because CXA has no §4.1 + CXA corrective never folded in (ledger §11.1a line 278). NOT a regression. Dashboard `48/54` NOT overwritten — flagged as Phase-8 ratification item. NEW gap: CXA-1/2/3/4 + CP-17 have no R-NNN entries. Advisor-passed. Mode-agnostic; feeds BLOCKED `R-700-phase-8-substitution-accounting` (operator owns final integer). |
 | PR #201 (`2914887`) | 2026-06-01 | **R-600-workflow-v1-14-amendment RESOLVED — NEW §7.5 Process-discipline catalogue.** `Project_Workflow_v1_14.md`: §7.5 under §7 (sibling to §7.4), v1.9 framework-establishing precedent. 4 disciplines seeded (PD-1 halt-route-split-AC / PD-2 use-the-product-probe / PD-3 verification-shape-grep-vs-e2e / PD-4 plan-revision-against-not-yet-built-substrate, SUPERSEDES the v2.36→v2.38 §7.4.7.2-sub-species framing) + OPEN clause + 5 parked candidates failing the §7.5.1 independence gate. §10.9 adversarial-gate CLEAR (0/0/1; F1-01 inline-fixed). Co-published CLAUDE.md §2.1 v1.13→v1.14 + §10.2/§10.3 refresh + clearance marker. Open: `must_pass[1]` N/A-as-malformed owed operator confirm. Design-phase; ZERO cross-axis cascade. |
 | PR #200 (`a541b32`) | 2026-06-01 | **R-007 + R-009 RESOLVED — OD-3 RETIRED + OD-6 RETIRED-AS-BOUNDED-RESIDUAL (batch-51); 2 R-700 blockers drained.** Per-substitution X-AL-2 condition-(B) audit: OD-3 substantive RETIRED (sampler live at MVP; gate-text-stale-vs-production-landings, sub-species 10's 3rd closure; tail-keep-at-collector = R-430 feature-validation); OD-6 RETIRED-AS-BOUNDED-RESIDUAL (FIRST in ledger; `flush_to_sqlite` dormant at MVP; gated on R-420/R-421). Operator-ratified AUQ. Workspace RETIRED 46→48/54 (88.9%); OD-axis RETIRE-READY bucket EMPTY; pipeline-advanced unchanged 49/54. ZERO src/spec/test change. Phase-7 retirement. |
-| PR #198 (`4ecc208`) | 2026-06-01 | **fork-doc Status cadence sweep — corpus current, 0 stale.** Delegated read-sweep of all 43 fork docs vs. intervening merges #181–#196 (last pass #178). 43/43 Status lines accurate (41 terminal + 2 accurately-open). No fork-doc edit; appended dated audit-pass entry to `.harness/fork_doc_status_audit_log.md`. Mode-agnostic. |
 
 ---
 
