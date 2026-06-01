@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `f70fa8542b4d` |
-| `last_refreshed` | 2026-06-01T06:38:48-06:00 |
-| `git_head` | `a8105ee` (main) — `roadmap: decompose Surface V (multi-deployment) — author R-400..R-440 (#192)` |
+| `workspace_state_hash` | `c6c79d0515e2` |
+| `last_refreshed` | 2026-06-01T07:08:01-06:00 |
+| `git_head` | `18b2d5d` (main) — `test(od): cross-surface deployment-conditional emission integration suite (close R-400) (#194)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-50.md` |
 | `open_fork_doc_count` | 43 |
 
@@ -20,18 +20,18 @@
 
 ## Next action
 
-**§II R-100 MVP surface is now FULLY RESOLVED** (CLI + real-workflow + tool-step + yaml-loader + **multi-workflow-fixture-suite**). `R-100-mvp-multi-workflow-fixture-suite` is **RESOLVED** (PR #190): 6 operator-facing example manifests at `examples/workflows/topology/*.yaml` (one per `TopologyPattern`) + a 26-test deterministic suite that runs each parent fixture through the CP `execute_workflow` driver loop to terminal `RunStatus.SUCCESS` and fires the `is_topology_permitted` admissibility gate for each pattern (no key/ollama/daemon; CI-runnable). Honest scope: at MVP topology has NO distinct per-pattern orchestration — the suite is regression coverage of the `PER_WORKLOAD_CLASS_TOPOLOGY` admissibility matrix + dispatch-composer + telemetry, NOT distinct orchestration semantics (unbuilt; CP-axis contract work via Class 1 back-flow).
+**`R-400-deployment-surface-conditional-emission-suite` is now RESOLVED** (PR #194, `18b2d5d`) — **the one CI-runnable Surface-V row is closed.** `test_cross_surface_emission_suite.py` (17 tests) drives all four must_pass through the *real* stage-4 composers across all 3 `DeploymentSurface` members: sampler `base_rate == PER_CELL_BASE_RATE_ENVELOPE[CellID].default_rate` for every ACTIVE cell (8 = 3×3 minus the structurally-EXCLUDED cell; read back via `ParentBased._root.base_rate` — no public `.root`, verified empirically); `TailKeepSpanProcessor` wrapped IFF `deployment_surface != LOCAL_DEVELOPMENT`; `RedactionSpanProcessor` present + persona threads at all 3 surfaces; plus a negative case (EXCLUDED multi-tenant×local-development raises `TracerProviderBindError` wrapping `CellBindingViolation`). Honest MVP caveat banked: the §13.1 per-persona *behavioral* toggle is plumbed-not-consumed at the SDK boundary (that differential lives in `test_redaction_gradient.py`, cited in the docstring). ZERO src change; full integration dir 161 passed/10 skipped; ruff+pyright+pytest CI all GREEN.
 
-**§4 re-derivation (clean-main, 2026-06-01 post-#192):** Surface V (Multi-deployment) is now **`partially-decomposed`** — PR #192 authored the `R-400..R-440` block at §5.5. The §4 candidate queue has **exactly one ACTIVE phase-7 entry**: **`R-400-deployment-surface-conditional-emission-suite`** — a CI-runnable cross-surface integration suite (asserts the sampler base-rate envelope + tail-keep-iff-not-LOCAL + persona redaction resolve correctly through the real materialize stages at all 3 DeploymentSurfaces; deterministic, no key/ollama/collector). The remaining Surface-V rows (`R-410..R-440`) are **PROPOSED + live/infra-gated** (real container/microVM/VM runtime; real SELF_HOSTED_SERVER / MANAGED_CLOUD; real OTLP collector; real secrets backend). Honest spine: the sandbox tier model is real at the policy/observability layer but **execution is metadata-only today** (no code spins up a container/VM; FastMCP stdio always used).
+**§4 re-derivation (clean-main, 2026-06-01 post-#194):** With R-400 RESOLVED, **Surface V has no remaining Claude-executable ACTIVE entry** — `R-410..R-440` are all **PROPOSED + live/infra-gated** (real container/microVM/VM runtime; real SELF_HOSTED_SERVER / MANAGED_CLOUD; real OTLP collector; real secrets backend). Honest spine unchanged: the sandbox tier model is real at the policy/observability layer but **execution is metadata-only today** (no code spins up a container/VM; FastMCP stdio always used). **§IV (multi-LLM) is still `decomposition-owed`** — its trigger is `R-100-mvp-real-workflow-execution` closure, which is the operator-gated live e2e (not yet fired). So the §4 candidate queue's top entry by surface-priority remains **`R-100-mvp-real-workflow-execution` (ACTIVE, §II) — the operator-gated live Anthropic e2e** (the dominant product next-step; I will not fire the paid run unilatery per `[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`).
 
-**`R-XI-01` (operator dashboard MVP) — RESOLVED + LIVE** at **https://thestoryportal.github.io/arhugula-harness/** (HTTP 200). `R-XI-02` (dep-graph viz) + `R-XI-03` (live-update) are unblocked but remain `PROPOSED` (iteration-2; not triggered).
+**Next Claude-executable arc = §VII process discipline** (surface-priority 5, mode-agnostic, no operator gate):
+- **`R-600-pattern-bake-in-sweep`** (ACTIVE) — sweep workspace memory for pattern candidates ready for workflow-doc promotion.
+- **Cadence sweeps (owed):** fork-doc Status-line refresh — **43 open** (cadence ~5 PRs); **MEMORY.md audit — index is over its 24.4KB cap** (entries too long; trim per the system warning).
+- **`R-XI-02` / `R-XI-03`** (PROPOSED, iteration-2 dashboard enhancements) — fully Claude-executable if triggered.
 
-**Next action = `R-400-deployment-surface-conditional-emission-suite` (ACTIVE, phase-7).** If not pursuing R-400, the alternate Claude-executable boards are:
-- **`R-XI-02` / `R-XI-03`** (PROPOSED → ACTIVE if triggered) — iteration-2 dashboard enhancements; fully Claude-executable (mode-agnostic tooling).
-- **`R-600`-series process discipline** — cadence-driven (fork-doc Status sweep — 43 open; memory audit — MEMORY.md over its 24.4KB cap); Claude-executable.
-- **Operator-gated (paid LLM / infra, optional):** R-410..R-440 + any live multi-deployment / multi-tenant / multi-LLM facet.
+**`R-XI-01` (operator dashboard MVP) — RESOLVED + LIVE** at **https://thestoryportal.github.io/arhugula-harness/** (HTTP 200).
 
-**(PR #192 `a8105ee` decomposed Surface V → R-400 ACTIVE; §VI multi-tenant trigger fired. PR #190 closed R-100-mvp-multi-workflow-fixture-suite. PR #188 closed R-100-mvp-yaml-loader-shipped. PR #186 `just dashboard` recipes. PR #184 closed R-XI-01. This session: 1 substantive merge (#192) + terminating refresh.)**
+**(PR #194 `18b2d5d` closed R-400 → §V's only LOCAL-testable row done. PR #192 decomposed Surface V → R-400..R-440. PR #190 closed R-100-mvp-multi-workflow-fixture-suite. PR #188 closed R-100-mvp-yaml-loader-shipped. PR #184 closed R-XI-01. This session: 1 substantive merge (#194) + terminating refresh.)**
 
 ---
 
@@ -39,7 +39,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `roadmap-refresh-post-192` | *(terminating refresh §12.2.1)* | mode-agnostic — `workspace_state_hash` recompute (`7298e00f926c` → `f70fa8542b4d`) covering PR #192 (Surface V decomposition). ONLY `.harness/roadmap_status.md`; title `ops: roadmap status refresh post-PR-192` → next §12.1 audit sees expected lag-by-one |
+| *(this PR)* | `worktree-r-400-refresh` | *(terminating refresh §12.2.1)* | mode-agnostic — flips R-400 → RESOLVED (roadmap §5.5 + §9 row V) + `workspace_state_hash` recompute (`f70fa8542b4d` → `c6c79d0515e2`) covering PR #194. `Project_Roadmap_v1.md` + `.harness/roadmap_status.md`; title `ops: roadmap status refresh post-PR-194` → next §12.1 audit sees expected lag-by-one |
 
 ---
 
@@ -47,11 +47,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #194 (`18b2d5d`) | 2026-06-01 | **R-400-deployment-surface-conditional-emission-suite RESOLVED — the one CI-runnable Surface-V row closed.** `test_cross_surface_emission_suite.py` (17 tests) drives all 4 must_pass through the real stage-4 composers across all 3 surfaces: per-ACTIVE-cell sampler `base_rate == envelope.default_rate` (8 cells; read back via `ParentBased._root.base_rate` — no public `.root`, verified empirically), tail-keep wrapped IFF non-LOCAL, `RedactionSpanProcessor` present + persona threads at every surface, plus a negative EXCLUDED-cell case (`TracerProviderBindError` wrapping `CellBindingViolation`, mirroring #190). Honest caveat: §13.1 per-persona behavioral toggle is plumbed-not-consumed at the SDK boundary (covered in `test_redaction_gradient.py`). ZERO src change; full integration dir 161 passed/10 skipped; ruff+pyright+pytest CI all green. Phase-7 + roadmap §5. |
 | PR #192 (`a8105ee`) | 2026-06-01 | **Surface V (multi-deployment) decomposed — `R-400..R-440` authored at roadmap §5.5** (triggered by R-100-mvp-multi-workflow-fixture-suite closure per §9). 8 entries grounded by an empirical HEAD survey; honest spine = sandbox tiers are real at the policy/observability layer but execution is metadata-only (no container/VM runtime; FastMCP stdio always used). `R-400` ACTIVE (CI-runnable cross-surface emission suite); `R-410..R-440` PROPOSED/infra-gated. §1+§9 status updated (§V partially-decomposed; §VI trigger fired); headers renumbered 5.5→5.9. 1 advisor pass (fixed 2 subagent-sourced cites). `roadmap-design-extension`; mode-agnostic. |
 | PR #190 (`efd7834`) | 2026-06-01 | **R-100-mvp-multi-workflow-fixture-suite RESOLVED → §II R-100 MVP surface FULLY RESOLVED.** 6 example manifests at `examples/workflows/topology/*.yaml` (one per `TopologyPattern`, child paired with an admissible workload per `is_topology_permitted`) + 26-test suite `test_topology_fixture_suite.py`: driver-level e2e (each fixture through `execute_workflow` → `RunStatus.SUCCESS`, real `run_bootstrap` + faked provider/OD, deterministic child) + per-fixture gate-fires + topology.* span attrs + ≥1 audit-ledger entry + completeness guard + negative admissibility test. Honest caveat: regression coverage of `PER_WORKLOAD_CLASS_TOPOLOGY` admissibility + dispatch-composer + telemetry, NOT distinct per-pattern orchestration (unbuilt). ZERO src change; 26 passed; ruff+pyright clean. Phase-7 + roadmap §5. |
 | PR #188 (`e3f99a8`) | 2026-06-01 | **R-100-mvp-yaml-loader-shipped RESOLVED → §II R-100 MVP surface fully RESOLVED.** Both verification criteria green at the CI/deterministic level in `test_track_b_e2e.py`: must_pass[1] byte-equivalent payload (native int `max_tokens=8` parity) via strengthened load test; must_pass[0] loads+dispatches-identically via NEW `test_ac2_loaded_yaml_and_toml_dispatch_identically_deterministic` (both fixtures → real bootstrap + `execute_workflow` → identical SUCCESS, deterministic dispatcher, no key/ollama/daemon). 10 passed/5 skipped; ruff+pyright clean. Phase-7 + roadmap §5. |
 | PR #186 (`da45c29`) | 2026-06-01 | **`just dashboard` + `just dashboard-serve` recipes** — local view of the operator dashboard complementing the hosted Pages copy. `just dashboard` (generate + open) / `just dashboard-serve [port]` (generate + serve on localhost, default 8787). Writes to gitignored `tools/dashboard/public/`. Verified: generator clean + `http.server` serves HTTP 200. Mode-agnostic; justfile only. |
-| PR #184 (`5984cda`) | 2026-06-01 | **R-XI-01 RESOLVED — operator dashboard LIVE on GitHub Pages.** Operator made the repo public → Pages enabled (`build_type=workflow`); `dashboard-deploy` build+deploy both green (run `26750144964`); live at https://thestoryportal.github.io/arhugula-harness/ (HTTP 200). R-XI-02/R-XI-03 unblocked (stay PROPOSED). Mode-agnostic (roadmap §5). |
 
 ---
 
