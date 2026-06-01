@@ -1408,6 +1408,31 @@ R-XI-03:
 ### 5.9 Phase 8 accounting (R-700..R-799)
 
 ```yaml
+R-700-closure-accounting-draft:
+  title: Draft the definitive remaining-to-full-closure log — Part A 54-row substitution accounting + Part B beyond-substitutions register (Surface-V infra-gated + R-100-config-discovery)
+  surface: VIII
+  status: ACTIVE   # paused mid-arc after orientation; orientation banked at the checkpoint; resume = execute
+  depends_on: []
+  blocks: [R-700-phase-8-substitution-accounting]
+  posture: mode-agnostic
+  scope: { files: [.harness/R-700-phase-8-closure-accounting-draft.md, .harness/roadmap_status.md], contracts: [], cross_axis: no }
+  skills: { primary: phase-7-substitution-retirement, secondary: [] }
+  advisor_required: yes   # the 54-row arithmetic reconciliation (48 RETIRED + 6 non-RETIRED; CXA 5 + CP-22 + authoring/bounded tail) is the main correctness risk — advisor before declaring done
+  council_required: no
+  resume: .harness/R-700-closure-accounting-draft-checkpoint.md
+  verification: { shape: grep, must_pass: ["Part A: all 54 raw-ledger substitution rows enumerated + reconciled to the ledger §11.5 count (48 RETIRED / 6 non-RETIRED, or corrected)", "Part B: R-410..R-440 + R-100-mvp-config-discovery each with summary + vendor + persona/deployment-surface + spec/ADR cites", "feeds R-700-phase-8-substitution-accounting (operator still owns final Phase-8 review)"] }
+  close_shape: { type: substrate-amendment, artifact: ".harness/R-700-phase-8-closure-accounting-draft.md", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: R-700-phase-8-substitution-accounting
+  notes: >
+    Operator-requested 2026-06-01 (post-#204): a definitive remaining-to-closure log. The prior session
+    deliberately PAUSED before drafting (operator clearing the session for a fresh one) and banked the full task
+    spec + resolved facts + captured Surface-V data at the resume checkpoint. ➡️ ON RESUME: read
+    .harness/R-700-closure-accounting-draft-checkpoint.md FIRST (do not re-derive). The verified open-substitution
+    set is OD-4 (PARTIAL/R-008) + AS-8e (R-005) + AS-8f (R-006); the 48/54-vs-3-open arithmetic gap (CXA 5 subs
+    not in any per-axis §4.1 + CP-22 + authoring/bounded tail) is the reconciliation work Part A must close. This
+    draft is the Claude-executable input to R-700; the operator still owns the final Phase-8 review + bounded-residual
+    sign-offs (AS-8e/AS-8f/OD-6).
+
 R-700-phase-8-substitution-accounting:
   title: All 49 substitutions accounted for — RETIRED or RETIRED-AS-BOUNDED-RESIDUAL with rationale
   surface: VIII
