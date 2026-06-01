@@ -778,3 +778,60 @@ async def test_anthropic_six_attrs_absent_for_non_anthropic_providers() -> None:
         "anthropic.inference_geo",
     ):
         assert key not in oa_attrs
+
+
+# ---------------------------------------------------------------------------
+# R-300 — layered routing-selection activation (live INFERENCE_STEP dispatch).
+#
+# `dispatch()` is the registered INFERENCE_STEP dispatcher (stage_5_loop_init
+# `StepKindDispatcherRegistry`). These tests exercise the live dispatch path
+# (dispatch -> infer -> route -> _invoke_provider -> span) with an in-process
+# fake provider (mech-α; NO paid call). The e2e form of R-300 must_pass #2 is
+# asserted here against the production-observable `routing.layer` span attr;
+# the `InferenceResponse.routing_decision.layer` object-shape form is asserted
+# at the unit level in `test_routing_core_surface.py`
+# (`test_infer_declarative_layer_is_manifest`) because the live path discards
+# the InferenceResponse (the span is the canonical routing-visibility surface).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_routing_attributes_emitted_with_manifest_layer() -> None:
+    """R-300 must_pass #2 (e2e split) — the live INFERENCE_STEP dispatch routes
+    through `infer()`/`route()` and emits the full C-CP-01 §1.4 `routing.*` set
+    on the `llm.inference` span, with `routing.layer == "manifest"` on the
+    DECLARATIVE-echo hit."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(providers={"anthropic": adapter}, tracer_provider=tp)
+
+    await dispatcher.dispatch(
+        _binding("anthropic", "claude-opus-4-8"), _step(), step_context=_step_context()
+    )
+
+    attrs = (exporter.get_finished_spans()[0].attributes) or {}
+    # must_pass #2 — DECLARATIVE manifest layer hit.
+    assert attrs["routing.layer"] == "manifest"
+    # Full §1.4 set present (routing visibility survives the discarded
+    # InferenceResponse).
+    assert attrs["routing.provider"] == "anthropic"
+    assert attrs["routing.model"] == "claude-opus-4-8"
+    assert str(attrs["routing.binding_rationale"]).startswith("manifest:")
+
+
+@pytest.mark.asyncio
+async def test_routing_selection_is_behavior_preserving_at_mvp_echo() -> None:
+    """R-300 — the DECLARATIVE echo selects the resolved `binding.model_binding`,
+    so the routed provider/model reaching the provider SDK is unchanged from the
+    pre-activation static path (behavior-preserving at MVP)."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(providers={"anthropic": adapter}, tracer_provider=tp)
+
+    await dispatcher.dispatch(
+        _binding("anthropic", "claude-opus-4-8"), _step(), step_context=_step_context()
+    )
+
+    assert adapter.client.messages.last_kwargs is not None
+    # The routed model == the binding model (echo), not perturbed by routing.
+    assert adapter.client.messages.last_kwargs["model"] == "claude-opus-4-8"

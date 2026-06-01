@@ -80,7 +80,6 @@ async def execute(
     workload_class: WorkloadClass,
 ) -> None:
     """Populate stage 5 LOOP_INIT fields on `ctx`."""
-    _ = workload_class
 
     override = materialize_override_evaluator_stage(config)
     ctx.override_evaluator = override.evaluator
@@ -152,6 +151,12 @@ async def execute(
         ollama_host=config.ollama_host,
         skill_activation_emitter=ctx.skill_activation_emitter,
         skills=ctx.skills,
+        # R-300 — layered routing-selection substrate. routing_manifest from
+        # stage 3b CP_ROUTING; workload_class is the run workload; persona_tier
+        # from RuntimeConfig. The DECLARATIVE-echo path is behavior-preserving.
+        routing_manifest=ctx.routing_manifest,
+        workload_class=workload_class,
+        persona_tier=config.persona_tier,
     )
 
     # U-RT-58 (C-RT-16 §14.6 D6): rebind ``ctx.llm_dispatcher`` from the
