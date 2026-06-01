@@ -38,7 +38,7 @@ Ten surfaces of remaining work between current state and Phase 7 closure + Phase
 | X | Existential / research | R-900..R-999 | Open architectural questions; speculative arcs; research-corpus extensions |
 | XI | Operator tooling / observability | R-XI-NN | Human-facing dashboards, status pages, CI-deployed observability surfaces; NOT for Claude consumption (Claude reads `.harness/roadmap_status.md` directly) |
 
-**Decomposition status:** §I + §II + §III + §VII + §XI have R-NNN actions populated at §5. §IV–§VI + §VIII–§X are named with decomposition-owed markers per §9.
+**Decomposition status:** §I + §II + §III + §V + §VII + §XI have R-NNN actions populated at §5. §IV + §VI + §VIII–§X are named with decomposition-owed markers per §9.
 
 ---
 
@@ -895,7 +895,173 @@ R-200-session-start-audit-hook:
     the enforcement-layer companion. Cardinality 1; awaits second instance.
 ```
 
-### 5.5 Process discipline (R-600..R-699)
+### 5.5 Multi-deployment surfaces (R-400..R-499)
+
+Decomposition authored 2026-06-01 (triggered by `R-100-mvp-multi-workflow-fixture-suite` closure at PR #190 per §9). **Honest scope split** (grounded by empirical HEAD survey 2026-06-01): the harness models 3 deployment surfaces (`LOCAL_DEVELOPMENT` → `SELF_HOSTED_SERVER` → `MANAGED_CLOUD` at `harness-core/.../deployment_surface.py:26`) and a 4-tier sandbox model (`SandboxTier` + `BlastRadiusTier` + 6-class `SandboxProviderClass` + 12-cell `deployment_matrix.py` per ADR-D2 v1.2 / ADR-F4 v1.1). The sandbox tier model is **real at the policy + observability layer** (tier-floor `SandboxTierFloorViolationError` raised at `runtime_tool_dispatcher.py:455`; `sandbox.enter/exit/violation` span emission; operator-supplied `SandboxDecisionResolver`) but **execution is metadata-only** — no code path spins up a container / microVM / VM; tool calls always run in-process via FastMCP stdio (`mcp_client_host.py call_tool`). The OD deployment-conditional emission (per-cell sampler base-rate envelope; tail-keep wrap-iff-not-LOCAL; persona-tier redaction) is **deployed + LOCAL-testable at the materializer layer**, but the tail-keep *preservation* + multi-tenant *segregation* semantics live at a real OTLP collector (infra-gated). Net: **exactly one row (R-400) is Claude-executable at LOCAL_DEVELOPMENT**; the rest are live/infra-gated (real container runtime, real server, real collector, real cloud secrets backend) and PROPOSED pending operator infra provisioning.
+
+```yaml
+R-400-deployment-surface-conditional-emission-suite:
+  title: Cross-surface deployment-conditional OD-emission integration suite (LOCAL / SELF_HOSTED / MANAGED)
+  surface: V
+  status: ACTIVE
+  depends_on: []
+  blocks: []
+  posture: phase-7   # edits harness-runtime/tests (+ possibly harness-od/tests); deterministic, CI-runnable
+  scope: { files: [harness-runtime/tests/**, harness-od/tests/**], contracts: [C-OD-09 §9.1, C-OD-10 §10.3, C-OD-13 §13.1], cross_axis: no }
+  skills: { primary: phase-7-implementation, secondary: [verify] }
+  advisor_required: no
+  council_required: no
+  verification:
+    shape: integration
+    must_pass:
+      - "For each of the 3 DeploymentSurface members, materialize_tracer_provider_stage(RuntimeConfig(deployment_surface=X, persona_tier=Y)) resolves sampler base_rate == PER_CELL_BASE_RATE_ENVELOPE[CellID(Y, X)].default_rate"
+      - "materialize_span_processor_stage wraps TailKeepSpanProcessor IFF deployment_surface != LOCAL_DEVELOPMENT (bypassed at LOCAL per §9.1 head-based mandate)"
+      - "RedactionSpanProcessor present at all 3 surfaces; per-persona toggle resolves per §13.1"
+      - "deterministic; no key / ollama / daemon / real collector; CI-runnable under the not-e2e marker"
+  close_shape: { type: PR-merge, artifact: "test(od): cross-surface deployment-conditional emission integration suite", cascade: [] }
+  next_pointer: null   # surface-V remainder is infra-gated; §4 re-derives (likely §IV multi-LLM decomposition or §VII cadence)
+  notes: >
+    The one CI-runnable Surface-V row. Consolidates 3 deployment-conditional OD behaviors (sampler envelope
+    + tail-keep conditional + redaction) into ONE materializer-layer regression across all 3 surfaces. Honest
+    caveat: unit coverage of each behavior exists in isolation (test_base_rate_set_and_envelope.py /
+    test_redaction_gradient.py / tail-keep tests); the gap closed is the *composed cross-surface* assertion
+    driven through the real materialize stages. ZERO src change expected; mirror the #190 deterministic-suite shape.
+
+R-410-sandbox-tier-2-container-execution:
+  title: Real TIER_2_CONTAINER sandbox execution — tool calls run in an isolated container, not in-process FastMCP
+  surface: V
+  status: PROPOSED   # live/infra-gated — requires a real container runtime; makes the tier model executable (today it is metadata-only)
+  depends_on: []
+  blocks: [R-411-sandbox-tier-3-microvm-execution]
+  posture: phase-7
+  scope: { files: [harness-runtime/src/harness_runtime/lifecycle/**, harness-as/src/**], contracts: [C-AS-15 §15, runtime spec v1.41 §14.9.8 (sandbox-decision-resolver; no C-RT-NN ID)], cross_axis: yes }
+  skills: { primary: phase-7-implementation, secondary: [phase-7-back-flow-routing] }
+  advisor_required: yes   # the SandboxDecisionResolver returns a tier decision but NO code path enforces isolation today; wiring real execution likely surfaces a Class 1 spec gap (execution-driver contract is unspecified)
+  council_required: conditional:nameable-tension   # C10 (action-safety / blast-radius wants real isolation) vs C11 (operator-loop / local-deployment wants minimal provisioning burden)
+  verification: { shape: e2e, must_pass: ["a TOOL_STEP resolved to TIER_2_CONTAINER actually executes inside a container boundary (verifiable FS/network isolation)", "tier-floor still raises on under-tier resolution", "sandbox.enter/exit spans carry the real provider/tech"] }
+  close_shape: { type: PR-merge, artifact: "feat(sandbox): TIER_2 container execution provider", cascade: [R-411-sandbox-tier-3-microvm-execution] }
+  next_pointer: R-411-sandbox-tier-3-microvm-execution
+  notes: >
+    The honest heart of Surface V. At HEAD the sandbox tier/provider are observability + policy annotations only
+    (mcp_client_host.call_tool always uses in-process FastMCP stdio regardless of tier). Building a real container
+    provider is the first step toward executable isolation. Almost certainly opens a Class 1 fork: the execution-driver
+    contract (how a resolved tier maps to an actual sandbox mechanism) is unspecified beyond spec v1.41 §14.9.8 resolver.
+
+R-411-sandbox-tier-3-microvm-execution:
+  title: Real TIER_3 microVM sandbox execution (gVisor / Kata / shared-kernel container)
+  surface: V
+  status: PROPOSED   # live/infra-gated — requires gVisor/Kata runtime
+  depends_on: [R-410-sandbox-tier-2-container-execution]
+  blocks: [R-412-sandbox-tier-4-full-vm-execution]
+  posture: phase-7
+  scope: { files: [harness-runtime/src/**, harness-as/src/**], contracts: [C-AS-15 §15], cross_axis: yes }
+  skills: { primary: phase-7-implementation, secondary: [] }
+  advisor_required: yes
+  council_required: conditional:nameable-tension
+  verification: { shape: e2e, must_pass: ["TIER_3-resolved TOOL_STEP executes under a microVM/gVisor boundary", "EXTERNAL_REVERSIBLE blast-radius enforced"] }
+  close_shape: { type: PR-merge, artifact: "feat(sandbox): TIER_3 microVM execution provider", cascade: [R-412-sandbox-tier-4-full-vm-execution] }
+  next_pointer: R-412-sandbox-tier-4-full-vm-execution
+  notes: >
+    Extends R-410 up the tier ladder. Inherits the same execution-driver contract question; once R-410 settles the
+    pattern, R-411 + R-412 are provider-class additions (CONTAINER -> gVisor/Kata at TIER_3 per deployment_matrix.py).
+
+R-412-sandbox-tier-4-full-vm-execution:
+  title: Real TIER_4 full-VM / firecracker sandbox execution (MANAGED_CLOUD-only provider class)
+  surface: V
+  status: PROPOSED   # live/infra-gated — firecracker/full-VM; MANAGED_CLOUD per deployment_matrix.py
+  depends_on: [R-411-sandbox-tier-3-microvm-execution, R-421-managed-cloud-deployment-e2e]
+  blocks: []
+  posture: phase-7
+  scope: { files: [harness-runtime/src/**, harness-as/src/**], contracts: [C-AS-15 §15], cross_axis: yes }
+  skills: { primary: phase-7-implementation, secondary: [] }
+  advisor_required: yes
+  council_required: conditional:nameable-tension
+  verification: { shape: e2e, must_pass: ["TIER_4-resolved TOOL_STEP executes under firecracker/full-VM", "FULL_VM provider class active only at MANAGED_CLOUD surface", "EXTERNAL_IRREVERSIBLE blast-radius enforced"] }
+  close_shape: { type: PR-merge, artifact: "feat(sandbox): TIER_4 full-VM execution provider", cascade: [] }
+  next_pointer: null
+  notes: >
+    Top of the tier ladder. The 12-cell deployment_matrix.py reserves FULL_VM exclusively for MANAGED_CLOUD; this
+    row therefore co-gates on R-421 (a real MANAGED_CLOUD surface). Deferred-far per ADR-D2 graduated-isolation.
+
+R-420-self-hosted-server-deployment-e2e:
+  title: Exercise the harness at the SELF_HOSTED_SERVER deployment surface (real server + OTLP collector + tier secrets)
+  surface: V
+  status: PROPOSED   # operator/infra-gated — requires a real long-running server, a real OTLP collector, a tier-level secrets backend
+  depends_on: []
+  blocks: [R-421-managed-cloud-deployment-e2e, R-430-otlp-collector-tail-keep-preservation, R-440-tier-level-secrets-backend]
+  posture: halt-route-to-operator   # needs operator infra provisioning before any execution
+  scope: { files: [harness-runtime/**, deploy/**], contracts: [C-RT-29 §14.18 daemon mode, C-OD-09 §9.1], cross_axis: yes }
+  skills: { primary: phase-7-implementation, secondary: [verify] }
+  advisor_required: yes
+  council_required: conditional:nameable-tension
+  verification: { shape: e2e, must_pass: ["harness daemon runs at SELF_HOSTED_SERVER surface against a real OTLP collector", "tail-keep wrapping active (deployment_surface != LOCAL)", "per-cell base_rate matches the SELF_HOSTED cell", "secrets resolve via a tier-level backend (not env fallback)"] }
+  close_shape: { type: PR-merge, artifact: "feat(deploy): SELF_HOSTED_SERVER deployment e2e", cascade: [R-421-managed-cloud-deployment-e2e] }
+  next_pointer: R-421-managed-cloud-deployment-e2e
+  notes: >
+    The first real non-LOCAL surface. Unblocks the tail-keep preservation (R-430) + tier secrets (R-440) rows whose
+    semantics only exist on a real collector / real secrets backend. Daemon mode (C-RT-29 §14.18, FastMCP Unix-socket
+    server) is the entrypoint; the operator provisions the server + collector + secrets backend.
+
+R-421-managed-cloud-deployment-e2e:
+  title: Exercise the harness at the MANAGED_CLOUD deployment surface (cloud secrets + FULL_VM provider class + managed collector)
+  surface: V
+  status: PROPOSED   # operator/infra-gated — requires a real managed-cloud environment
+  depends_on: [R-420-self-hosted-server-deployment-e2e]
+  blocks: [R-412-sandbox-tier-4-full-vm-execution]
+  posture: halt-route-to-operator
+  scope: { files: [harness-runtime/**, deploy/**], contracts: [C-RT-29 §14.18, C-OD-13 §13.1], cross_axis: yes }
+  skills: { primary: phase-7-implementation, secondary: [] }
+  advisor_required: yes
+  council_required: conditional:nameable-tension
+  verification: { shape: e2e, must_pass: ["harness runs at MANAGED_CLOUD surface", "secrets resolve via a cloud backend (in-sandbox encrypted-fs per ADR-F5)", "MANAGED_CLOUD per-cell sampler + redaction posture active"] }
+  close_shape: { type: PR-merge, artifact: "feat(deploy): MANAGED_CLOUD deployment e2e", cascade: [R-412-sandbox-tier-4-full-vm-execution] }
+  next_pointer: null
+  notes: >
+    The terminal deployment surface. Co-gates R-412 (FULL_VM provider class is MANAGED_CLOUD-only per deployment_matrix.py).
+    Heaviest infra dependency; deferred-far. ADR-F5 tier-aware secret-fetch (in-sandbox encrypted-filesystem at this tier).
+
+R-430-otlp-collector-tail-keep-preservation:
+  title: Verify tail-keep-on-classification preservation at a real OTLP collector boundary
+  surface: V
+  status: PROPOSED   # infra-gated — the TailKeepSpanProcessor buffer logic exists; the drop/keep preservation semantic is collector-side
+  depends_on: [R-420-self-hosted-server-deployment-e2e]
+  blocks: []
+  posture: phase-7
+  scope: { files: [harness-od/**, deploy/**], contracts: [C-OD-09 §9.1, §9.2], cross_axis: no }
+  skills: { primary: phase-7-implementation, secondary: [verify] }
+  advisor_required: no
+  council_required: no
+  verification: { shape: e2e, must_pass: ["a trace with a classification-trigger span (validator.fail.permanence=permanent / sandbox.violation / breaker.tripped) is preserved end-to-end at a real collector", "a non-triggering trace is sampled per base_rate"] }
+  close_shape: { type: PR-merge, artifact: "test(od): tail-keep preservation at real OTLP collector", cascade: [] }
+  next_pointer: null
+  notes: >
+    The TailKeepSpanProcessor (tail_keep_span_processor.py) buffers per-trace + replays at root close; the actual
+    keep-vs-drop preservation is downstream at a real collector parsing is_classification_trigger. CI cannot deploy a
+    real collector — this row verifies the end-to-end preservation that the LOCAL suite (R-400) structurally cannot.
+
+R-440-tier-level-secrets-backend:
+  title: Wire a SELF_HOSTED_SERVER tier-level secrets backend (currently operator-supplied / env-fallback only)
+  surface: V
+  status: PROPOSED   # infra-gated — real secrets backend (Vault / cloud secrets manager); harness does not implement a provider today
+  depends_on: [R-420-self-hosted-server-deployment-e2e]
+  blocks: []
+  posture: phase-7
+  scope: { files: [harness-runtime/src/harness_runtime/config/**], contracts: [ADR-F5 §1, C-AS-05 §5.1 fetch_secret], cross_axis: no }
+  skills: { primary: phase-7-implementation, secondary: [] }
+  advisor_required: conditional:if a fix touches the fetch_secret contract or a cross-axis type
+  council_required: no
+  verification: { shape: integration, must_pass: ["secrets resolve via a tier-level backend at SELF_HOSTED_SERVER (not env fallback)", "LOCAL_DEVELOPMENT keyring + env-fallback path preserved (no regression)"] }
+  close_shape: { type: PR-merge, artifact: "feat(secrets): SELF_HOSTED tier-level secrets backend", cascade: [] }
+  next_pointer: null
+  notes: >
+    At HEAD provider_secrets.py documents tier-level (SELF_HOSTED) vs in-sandbox (MANAGED_CLOUD) backends but ships only
+    the LOCAL keyring + env-fallback path (per PR #16 binding-fix). This row implements a real tier-level backend per
+    ADR-F5 tier-aware secret-fetch. Mirror precedent: keyring env-fallback at [[pr-16-keyring-env-fallback-adr-f5]].
+```
+
+**Surface VI (multi-tenant) trigger fired.** Per §9, authoring this R-400 decomposition triggers §VI (Multi-tenant) decomposition. §VI remains `decomposition-owed` + live-gated (real multi-tenant deployment required); R-500-series authoring is a follow-on arc — not bundled here.
+
+### 5.6 Process discipline (R-600..R-699)
 
 ```yaml
 R-600-workflow-v1-14-amendment:
@@ -1048,7 +1214,7 @@ R-600-notebooklm-skill-setup:
     verification + documentation all closed at this PR's merge.
 ```
 
-### 5.6 Halt-doc routings (2026-05-31 carries)
+### 5.7 Halt-doc routings (2026-05-31 carries)
 
 R-700 prefix used because these are halt-resolutions awaiting downstream substantive arcs.
 
@@ -1086,7 +1252,7 @@ R-700-OD-INTERNAL-FORMALIZATION:
   notes: Tracker for the closure; actual work at PR #111.
 ```
 
-### 5.7 Operator tooling / observability (R-XI-NN)
+### 5.8 Operator tooling / observability (R-XI-NN)
 
 Surface XI = human-facing tooling. Distinct from `.harness/roadmap_status.md` which is Claude-consumed. Gates on §III CI substrate so dashboards auto-regenerate (avoiding the manual-refresh failure mode v1 hit).
 
@@ -1180,7 +1346,7 @@ R-XI-03:
     Live-mode path: short-poll GitHub API from browser every 60s; or webhook → static-file regeneration via Cloudflare Workers / Netlify functions.
     Decide at execution time per cost + complexity tradeoff.
 ```
-### 5.8 Phase 8 accounting (R-700..R-799)
+### 5.9 Phase 8 accounting (R-700..R-799)
 
 ```yaml
 R-700-phase-8-substitution-accounting:
@@ -1304,8 +1470,8 @@ Decomposition status per surface. **`decomposed`** means R-NNN entries exist at 
 | II | MVP-operator-usable | `partially-decomposed` (R-100 series) | Each merged PR generates next R-NNN at this surface |
 | III | CI substrate | `partially-decomposed` (R-200 series) | After R-200-ci-pytest closure, decompose §V multi-deployment dependencies |
 | IV | Multi-LLM maturity | `decomposition-owed` | Triggered by R-100-mvp-real-workflow-execution closure |
-| V | Multi-deployment surfaces | `decomposition-owed` | Triggered by R-100-mvp-multi-workflow-fixture-suite closure |
-| VI | Multi-tenant | `decomposition-owed` | Triggered by R-400 surface decomposition |
+| V | Multi-deployment surfaces | `partially-decomposed` (R-400 series, 2026-06-01) | Triggered by R-100-mvp-multi-workflow-fixture-suite closure (PR #190); decomposed at §5.5 — R-400 ACTIVE (LOCAL-testable), R-410..R-440 PROPOSED (live/infra-gated) |
+| VI | Multi-tenant | `decomposition-owed` (trigger fired 2026-06-01) | Triggered by R-400 surface decomposition (now fired); R-500-series authoring is a follow-on arc — live-gated |
 | VII | Process discipline | `partially-decomposed` (R-600 series + R-IF-roadmap-refresh) | Cadence-driven; sweep every ~10 PRs |
 | VIII | Phase 8 retirement criteria | `placeholder` (R-700-phase-8-substitution-accounting only) | Triggered when §I substitutions ≥45/49 closed |
 | IX | External integrations | `decomposition-owed` | Triggered by R-300 multi-LLM decomposition |
