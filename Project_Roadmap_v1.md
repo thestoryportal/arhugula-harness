@@ -1585,20 +1585,31 @@ R-820-managed-agents-integration:
   notes: STILL-BOUNDED-INDEFINITELY by design; AS schema landed (U-AS-31/32), zero runtime producer; criterion-B unexercisable in-CLI. Closes AS-8f bounded-residual. Register §B-12.
 
 R-830-memory-tool-production-backend:
-  title: Memory-tool production backend (cloud-vault / managed-db — CP-16)
+  title: Memory-tool MANAGED_CLOUD production backend (cloud-vault / managed-db, S3 — CP-16) — SELF_HOSTED DATABASE (SQLite) slice LANDED
   surface: IX
-  status: PROPOSED
+  status: PROPOSED    # this entry now tracks the MANAGED_CLOUD cloud-vault/managed-db remainder (operator-gated, unstarted); the SELF_HOSTED DATABASE (SQLite) slice LANDED this arc (see title + notes). PROPOSED is the recognized status vocabulary (generate.py STATUS_ORDER); no PARTIAL value exists
   depends_on: []
   blocks: []
-  posture: phase-7
-  scope: { files: [harness-runtime/src/harness_runtime/lifecycle/memory_tool_filesystem.py, harness-runtime/src/harness_runtime/bootstrap/factories/memory_tool_registry_factory.py], contracts: [runtime spec v1.17 §14.12 C-RT-22, ADR-D3], cross_axis: no }
+  posture: phase-7    # the cloud-backend e2e half is operator-gated (real creds/infra)
+  scope: { files: [harness-runtime/src/harness_runtime/lifecycle/memory_tool_sqlite.py, harness-runtime/src/harness_runtime/lifecycle/memory_tool_filesystem.py, harness-runtime/src/harness_runtime/bootstrap/factories/memory_tool_registry_factory.py], contracts: [runtime spec v1.17 §14.12 C-RT-22, ADR-D3], cross_axis: no }
   skills: { primary: phase-7-implementation, secondary: [] }
   advisor_required: no
   council_required: no
-  verification: { shape: e2e, must_pass: ["new backend class implements MemoryToolStorageBackendProtocol", "operator binds via RuntimeConfig.memory_tool_backend_config", "e2e read/write/delete across a workflow lifecycle"] }
-  close_shape: { type: PR-merge, artifact: "feat(memory): cloud Memory-tool backend", cascade: [] }
+  verification: { shape: e2e, must_pass: ["MANAGED_CLOUD cloud-vault / managed-db backend (S3 / real managed DB) implements MemoryToolStorageBackendProtocol", "operator binds it via RuntimeConfig.memory_tool_backend_config with real connection_string/creds", "e2e read/write/delete against the real cloud backend (operator-gated on creds/infra)"] }
+  close_shape: { type: PR-merge, artifact: "feat(memory): MANAGED_CLOUD Memory-tool backend (S3 / managed-db)", cascade: [] }
   next_pointer: null
-  notes: Local-filesystem backend landed (CP-16 RETIRED-AS-BOUNDED-RESIDUAL batch-44); cloud/db deferred. Override point RuntimeConfig.memory_tool_backend_config exists. Register §B-13.
+  notes: |
+    SELF_HOSTED DATABASE backend (SQLite, stdlib sqlite3) LANDED this arc —
+    SqliteMemoryToolBackend at lifecycle/memory_tool_sqlite.py implements the
+    already-spec'd MemoryToolStorageBackend.DATABASE enum value (runtime spec
+    §14.12.3 connection_string); operator binds via memory_tool_backend_config;
+    full read/write/delete e2e (no creds, no new deps). This is the SQL sibling
+    of the FILESYSTEM backend — NOT the MANAGED_CLOUD cloud-vault / managed-db the
+    title names (per advisor 2026-06-01: do not overclaim RESOLVED-as-cloud — the
+    §10.5 trap). The cloud remainder (S3 / real managed DB with creds) stays
+    operator-gated; MANAGED_CLOUD without an explicit DATABASE override still
+    raises (proof the cloud intent is unmet). FILESYSTEM backend landed earlier
+    (CP-16 RETIRED-AS-BOUNDED-RESIDUAL batch-44). Register §B-13.
 ```
 
 ### 5.13 Existential / research (R-900..R-999) — Surface X
