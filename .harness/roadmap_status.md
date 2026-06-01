@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `d63302c9f77b` |
-| `last_refreshed` | 2026-06-01T21:30:00-06:00 |
-| `git_head` | `bbb9afe5` (main) — `ops: roadmap status refresh post-PR-222 (#223)` (§12.1 step-6 lag-by-one converged here) |
+| `workspace_state_hash` | `5fc4e18f41cd` |
+| `last_refreshed` | 2026-06-01T22:00:00-06:00 |
+| `git_head` | `3d82ac75` (main) — `feat(memory): SELF_HOSTED DATABASE Memory-tool backend (SQLite) — R-830 (#224)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 44 |
 
@@ -60,8 +60,8 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `r-830-sqlite-database-backend` | `R-830` | phase-7 impl + mode-agnostic roadmap close (no design-substrate; no X-AL-3 — `DATABASE` is a declared enum value). **Substantive** (NOT a terminating refresh): SELF_HOSTED DATABASE (SQLite) backend + roadmap §5 R-830 (stays PROPOSED — cloud remainder; SQLite slice landed) + register §B-13 + dashboard. Converges the §12.1 step-6 lag (`fa56924f867c` → `d63302c9f77b`, `git_head` → `bbb9afe5` #223). Per §12.2.1 a follow-on `ops: roadmap status refresh post-PR-NN` is owed after merge. |
-| *(none else)* | — | — | open-PR set empty after #222+#223 merged; this PR opens R-830. |
+| *(this PR)* | `ops-roadmap-refresh-post-224` | *(terminating refresh §12.2.1)* | mode-agnostic — records PR #224 (R-830 SELF_HOSTED DATABASE SQLite backend landed; R-830 stays PROPOSED tracking the cloud remainder); `workspace_state_hash` recompute (`d63302c9f77b` → `5fc4e18f41cd`) + `git_head` → `3d82ac75` (#224 merge). Dashboard-only (`.harness/roadmap_status.md`); title `ops: roadmap status refresh post-PR-224` → next §12.1 audit sees expected lag-by-one (carve-out §12.1 step 6). |
+| *(none else)* | — | — | open-PR set empty after #224 merged. |
 
 ---
 
@@ -69,7 +69,7 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| *(this PR)* | 2026-06-01 | **R-830 SELF_HOSTED DATABASE Memory-tool backend (SQLite) LANDED (R-830 stays PROPOSED — cloud remainder).** Operator-picked grounding-first → grounding found R-830 is Claude-closeable without cloud creds via a stdlib SQLite `DATABASE` backend (not dead-code). `SqliteMemoryToolBackend` (lifecycle/memory_tool_sqlite.py) implements the already-spec'd `MemoryToolStorageBackend.DATABASE` enum (§14.12.3 `connection_string`); semantics byte-mirror FILESYSTEM; factory DATABASE branch (rejection→acceptance flip); no-LLM e2e through the real dispatch seam. **Closed HONESTLY per advisor (no §10.5 overclaim):** SELF_HOSTED_SERVER SQL sibling of FILESYSTEM — NOT the MANAGED_CLOUD cloud-vault/managed-db the title names (S3/managed-DB + creds stay operator-gated; MANAGED_CLOUD without explicit override still raises) → R-830 entry stays `PROPOSED` tracking that cloud remainder. NOT X-AL-3 (declared enum value; no design-substrate). 1423 harness-runtime tests pass +11 skipped; pyright strict + ruff clean. Phase-7 impl + roadmap §5 + register §B-13 + dashboard. |
+| PR #224 (`3d82ac7`) | 2026-06-01 | **R-830 SELF_HOSTED DATABASE Memory-tool backend (SQLite) LANDED (R-830 stays PROPOSED — cloud remainder).** Operator-picked grounding-first → grounding found R-830 is Claude-closeable without cloud creds via a stdlib SQLite `DATABASE` backend (not dead-code). `SqliteMemoryToolBackend` (lifecycle/memory_tool_sqlite.py) implements the already-spec'd `MemoryToolStorageBackend.DATABASE` enum (§14.12.3 `connection_string`); semantics byte-mirror FILESYSTEM; factory DATABASE branch (rejection→acceptance flip); no-LLM e2e through the real dispatch seam. **Closed HONESTLY per advisor (no §10.5 overclaim):** SELF_HOSTED_SERVER SQL sibling of FILESYSTEM — NOT the MANAGED_CLOUD cloud-vault/managed-db the title names (S3/managed-DB + creds stay operator-gated; MANAGED_CLOUD without explicit override still raises) → R-830 entry stays `PROPOSED` tracking that cloud remainder. NOT X-AL-3 (declared enum value; no design-substrate). 1423 harness-runtime tests pass +11 skipped; pyright strict + ruff clean. Phase-7 impl + roadmap §5 + register §B-13 + dashboard. |
 | PR #222 (`315b2c4`) | 2026-06-01 | **R-CXA-4-od-multi-seam GROUNDED → 0 wireable edges; ZERO production code.** Operator-picked grounding-first. A general-purpose producer-discovery sweep (verified 3 ways: edge-2 already wired w/ 4 producers; OD aggregate manifest carries only terminal targets; CXA §2.5 = 1 genuine seam) found the prior "~5 of 26 / ~21 remaining" framing was a **stale-carry mis-framing** (§10.5): the 26 OD-outbound edges = 1 genuine (already wired) + 6 phase-2-runtime (already at stage 6) + 19 convention (stage-6 `verify_*` + stale `U-AS-NN`/`U-CP-NN` placeholders, no producer). **There is no wiring task.** Follow-on = CXA convention-formalization revision (design-substrate, operator-owned; mirror v2.18 C3-15). R-CXA-4 stays PARTIAL. Mirrors R-CXA-1 (`[[r-cxa-seam-wiring-is-producer-discovery]]`, 3rd instance). Corrects register §B-14 + roadmap §5 + dashboard. advisor-confirmed. |
 | PR #220 (`d77647b`) | 2026-06-01 | **R-CXA-1 must_pass #1 fork RESOLVED-AS-READING-D (defer; don't wire).** Apply arc opened on the first-ratified Reading B; pre-substantive empirical orientation + advisor reconcile found it unwritable-as-previewed: bootstrap fetch is `resolve_bootstrap_value(NAME)` (name only — the scope-bearing `resolve()` path has ZERO production callers); unsourced-field sentinels are MATERIAL; idempotency key timestamp-free; `SecretFetchEvent` machinery has no real producer. Operator re-ratified DON'T-WIRE. must_pass #1 DEFERRED; R-CXA-1 PARTIAL; **ZERO production code**. (Refresh recorded at PR #221.) |
 | PR #218 (`3885074`) | 2026-06-01 | **R-CXA-1 must_pass #1 fork FILED** (`class_1_fork_cxa_1_secret_fetch_audit_bootstrap_ordering.md`). Grounded the top Claude-executable post-Phase-8 lever before opening; the secret-fetch caller fires at bootstrap stage 3a while the AS→IS emitter materializes at stage 6 (firing-site-precedes-wiring; U-RT-111 shape) → Class 1 back-flow. fork count 43→44. A filing, not a closure. |
