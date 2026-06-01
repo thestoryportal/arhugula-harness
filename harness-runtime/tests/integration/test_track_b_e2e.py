@@ -178,6 +178,13 @@ def test_ac2_yaml_and_toml_manifests_produce_equivalent_loaded_workflow() -> Non
     assert yaml_workflow.default_model_binding.model == toml_workflow.default_model_binding.model
     assert len(yaml_workflow.steps) == len(toml_workflow.steps)
     assert yaml_workflow.steps[0].step_id == toml_workflow.steps[0].step_id
+    # must_pass[1] — round-trip YAML↔TOML byte-equivalent payload. The v1.39
+    # §14.19 Reading A StrictSafeLoader must preserve native scalar typing so
+    # the YAML payload matches tomllib's: `max_tokens` is int 8, not str "8"
+    # (pre-v1.39 strictyaml stringified it → Anthropic SDK rejected).
+    assert yaml_workflow.steps[0].step_payload == toml_workflow.steps[0].step_payload
+    assert yaml_workflow.steps[0].step_payload == {"max_tokens": 8}
+    assert isinstance(yaml_workflow.steps[0].step_payload["max_tokens"], int)
 
 
 def test_ac2_yaml_and_toml_produce_equivalent_cli_dispatch(
@@ -205,6 +212,220 @@ def test_ac2_yaml_and_toml_produce_equivalent_cli_dispatch(
     # workflow_id="track-b-minimal" identically in both surface forms).
     assert "track-b-minimal" in out_yaml
     assert "track-b-minimal" in out_toml
+
+
+@pytest.mark.asyncio
+async def test_ac2_loaded_yaml_and_toml_dispatch_identically_deterministic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-100-mvp-yaml-loader-shipped must_pass[0] — "YAML fixture loads and
+    dispatches identically to TOML equivalent" — at the EXECUTION layer.
+
+    Loads BOTH canonical fixtures via ``WorkflowManifestLoader`` and runs each
+    through the real bootstrap + CP ``execute_workflow`` driver with a
+    deterministic in-process dispatcher (mirror of AC #4's mech-α scaffold:
+    no real LLM, no key, no daemon → CI-runnable, free, flake-free). The
+    YAML-loaded and TOML-loaded workflows MUST dispatch to identical terminal
+    outcomes. Complements the load-layer equivalence test above (byte-equal
+    loaded objects) by proving the loader output is actually *dispatchable*.
+    """
+    import asyncio
+    from collections.abc import Sequence
+    from functools import partial
+
+    from harness_core.deployment_surface import DeploymentSurface
+    from harness_core.workload_class import WorkloadClass
+    from harness_cp.cross_family_fallback_chain import (
+        FallbackChain,
+        ProviderCandidate,
+        ProviderFamily,
+    )
+    from harness_cp.routing_manifest_residence import RoutingManifest
+    from harness_cp.topology_pattern import TopologyPattern
+    from harness_cp.workflow_driver import execute_workflow
+    from harness_cp.workflow_driver_types import RunStatus as _CpRunStatus
+    from harness_cp.workflow_driver_types import WorkflowStep
+    from harness_is.path_class_registry import PathClass
+    from harness_runtime.bootstrap import run_bootstrap
+    from harness_runtime.bootstrap import stage_3a_cp_clients as _stage_3a_mod
+    from harness_runtime.bootstrap import stage_4_od as _stage_4_od_mod
+    from harness_runtime.lifecycle.providers import ProviderClientsStage
+    from harness_runtime.types import (
+        CollectorConfig,
+        OTelConfig,
+        PathBindingConfig,
+        ProviderSecretsConfig,
+        RuntimeConfig,
+    )
+
+    workload = WorkloadClass.PIPELINE_AUTOMATION  # matches the fixtures
+    surface = DeploymentSurface.LOCAL_DEVELOPMENT
+
+    # ---- fake provider + OD stages (no real LLM / key / daemon) ----
+    class _FakeProvider:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def aclose(self) -> None:
+            return None
+
+    async def _fake_clients(*_a: object, **_k: object) -> ProviderClientsStage:
+        return ProviderClientsStage(
+            providers={
+                "anthropic": _FakeProvider("anthropic"),
+                "openai": _FakeProvider("openai"),
+                "ollama": _FakeProvider("ollama"),
+            }
+        )
+
+    monkeypatch.setattr(_stage_3a_mod, "materialize_provider_clients_stage", _fake_clients)
+
+    class _FakeDaemon:
+        async def start(self) -> None:
+            return None
+
+        async def stop(self, *, timeout_seconds: float = 5.0) -> None:
+            _ = timeout_seconds
+            return None
+
+    class _CollectorStage:
+        def __init__(self, d: _FakeDaemon) -> None:
+            self.daemon = d
+
+    class _FakeTracerProvider:
+        def force_flush(self, timeout_millis: int = 30_000) -> bool:
+            _ = timeout_millis
+            return True
+
+        def shutdown(self) -> None:
+            return None
+
+        def get_tracer(self, instrumenting_module_name: str, /) -> object:
+            from opentelemetry.trace import NoOpTracer
+
+            _ = instrumenting_module_name
+            return NoOpTracer()
+
+    class _TracerStage:
+        def __init__(self, p: _FakeTracerProvider) -> None:
+            self.provider = p
+            self.registered_globally = False
+
+    monkeypatch.setattr(
+        _stage_4_od_mod,
+        "materialize_collector_daemon_stage",
+        lambda config, **_: _CollectorStage(_FakeDaemon()),
+    )
+    monkeypatch.setattr(_stage_4_od_mod, "materialize_ring_buffer_stage", lambda config, _d: None)
+    monkeypatch.setattr(
+        _stage_4_od_mod,
+        "materialize_tracer_provider_stage",
+        lambda config, **_: _TracerStage(_FakeTracerProvider()),
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod,
+        "materialize_span_processor_stage",
+        lambda config, _p, **_k: None,
+    )
+
+    # ---- deterministic single-kind dispatcher ----
+    class _Dispatcher:
+        def __init__(self) -> None:
+            self.n = 0
+
+        def dispatch(
+            self, binding: Any, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            _ = binding, step_context
+            self.n += 1
+            return {"step_id": str(step.step_id), "ok": True}
+
+    class _Registry:
+        def __init__(self, d: Any) -> None:
+            self._d = d
+
+        def lookup(self, step_kind: Any) -> Any:
+            _ = step_kind
+            return self._d
+
+    async def _run_fixture(name: str, subdir: Path) -> tuple[Any, int]:
+        """Bootstrap a fresh ctx (own ledger dir) + run the loaded fixture."""
+        config = RuntimeConfig(
+            deployment_surface=surface,
+            repository_root=subdir,
+            path_bindings=PathBindingConfig(
+                raw_entries=tuple(
+                    {
+                        "path_class": pc,
+                        "workflow_class": workload,
+                        "deployment_surface": surface,
+                        "path": str(subdir / pc.value.lower()),
+                    }
+                    for pc in PathClass
+                ),
+            ),
+            provider_secrets=ProviderSecretsConfig(),
+            otel=OTelConfig(otlp_endpoint="http://localhost:4317"),
+            collector=CollectorConfig(),
+            default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+            mcp_clients=[],
+            ollama_optional=True,
+            routing_manifest=RoutingManifest(
+                manifest_version=1,
+                per_role_bindings={},
+                per_workload_overrides={},
+                fallback_chains=(
+                    FallbackChain(
+                        primary=ProviderCandidate(
+                            provider="anthropic",
+                            model="claude-haiku-4-5",
+                            family=ProviderFamily.ANTHROPIC,
+                        ),
+                        same_family=(),
+                        cross_family=(),
+                        terminal=None,
+                    ),
+                ),
+                retry_policies={},
+            ),
+        )
+        ctx = await run_bootstrap(config, workload_class=workload)
+        loaded = WorkflowManifestLoader.load_workflow(_FIXTURE_DIR / name)
+        steps: Sequence[WorkflowStep] = tuple(loaded.steps)
+        dispatcher = _Dispatcher()
+        result = await asyncio.to_thread(
+            partial(
+                execute_workflow,
+                manifest_entry=loaded.manifest_entry,
+                steps=steps,
+                run_id=f"run-yaml-loader-{name}",
+                ctx=ctx,  # type: ignore[arg-type]
+                default_model_binding=loaded.default_model_binding,
+                step_dispatchers=_Registry(dispatcher),  # type: ignore[arg-type]
+            )
+        )
+        return result, dispatcher.n
+
+    result_yaml, n_yaml = await _run_fixture("minimal.yaml", tmp_path / "yaml")
+    result_toml, n_toml = await _run_fixture("minimal.toml", tmp_path / "toml")
+
+    # Both loaded fixtures dispatch the single declared INFERENCE_STEP once.
+    assert n_yaml == 1, f"yaml dispatch count {n_yaml}"
+    assert n_toml == 1, f"toml dispatch count {n_toml}"
+    # Both reach identical terminal status (SUCCESS) — dispatches identically.
+    assert result_yaml.status == _CpRunStatus.SUCCESS, (
+        f"yaml status={result_yaml.status} fail_class={result_yaml.fail_class}"
+    )
+    assert result_toml.status == _CpRunStatus.SUCCESS, (
+        f"toml status={result_toml.status} fail_class={result_toml.fail_class}"
+    )
+    assert result_yaml.status == result_toml.status
+    # Equivalent terminal shape (SUCCESS → terminal_step_index None, final_state set).
+    assert (result_yaml.terminal_step_index is None) == (
+        result_toml.terminal_step_index is None
+    )
+    assert (result_yaml.final_state is None) == (result_toml.final_state is None)
 
 
 # ---------------------------------------------------------------------------
