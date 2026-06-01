@@ -595,46 +595,55 @@ R-100-tool-step-converter:
     R-100-tool-step-sandbox-resolver (the AC#2-closing arc). AC #2 closes there, by execution.
 
 R-100-tool-step-sandbox-resolver:
-  title: AC#2-closing arc — wire the full bootstrap TOOL_STEP path (host start() + sandbox_decision_resolver) + echo-via-api.run e2e
+  title: AC#2-closing arc — wire the full 5-gap bootstrap TOOL_STEP path {D,B,C,E,F} + echo-via-api.run e2e
   surface: II
-  status: PROPOSING   # Gap C (resolver) is a design decision needing operator AskUserQuestion; Gap B (host start()) is an impl bug that lands in the same arc. Class 1 fork filed 2026-06-01.
+  status: PROPOSING   # Gap C (resolver) is a design decision needing operator AskUserQuestion + a spec amendment; B/E/F are impl, D is config. Class 1 fork filed 2026-06-01; gap set execution-confirmed (5 gaps) 2026-06-01.
   depends_on: [R-100-tool-step-converter]
   blocks: []
-  posture: design-phase   # §14.9.3 stage-5 factory amendment (resolver) + stage-3a host start() impl fix + e2e; mixed-posture bundled-absorption
-  scope: { files: [design-substrate/Spec_Harness_Runtime_v1.md, harness-runtime/src/harness_runtime/bootstrap/factories/runtime_tool_dispatcher_factory.py, harness-runtime/src/harness_runtime/lifecycle/runtime_tool_dispatcher.py, harness-runtime/src/harness_runtime/bootstrap/stage_3a_cp_clients.py, harness-runtime/tests/**, .harness/clearance/**], contracts: [C-RT-19 §14.9.1, C-RT-30 §14.9.3 stage-3a + stage-5], cross_axis: no }
+  posture: design-phase   # NEW §14.9.x resolver contract (spec amendment) + 4 impl/config fixes + e2e; mixed-posture bundled-absorption
+  scope: { files: [design-substrate/Spec_Harness_Runtime_v1.md, harness-runtime/src/harness_runtime/bootstrap/factories/runtime_tool_dispatcher_factory.py, harness-runtime/src/harness_runtime/lifecycle/runtime_tool_dispatcher.py, harness-runtime/src/harness_runtime/bootstrap/stage_3a_cp_clients.py, harness-runtime/src/harness_runtime/shutdown.py, harness-cp/src/harness_cp/mcp_client_namespace_emitter.py, harness-runtime/tests/**, .harness/clearance/**], contracts: [C-RT-19 §14.9.1, C-RT-30 §14.9.3 stage-3a + stage-5, NEW §14.9.x resolver contract], cross_axis: no }
   skills: { primary: phase-7-back-flow-routing, secondary: [spec-writer, phase-7-implementation, verify] }
-  advisor_required: yes   # design-surface ratification for the resolver (assigns a sandbox posture; converter precedent treated the symmetric callable as ratification-required)
+  advisor_required: yes   # design-surface ratification for the resolver (NO §14.9.7 discretion escape — that cite is phantom; ratification + spec amendment required for BOTH Readings A and B)
   council_required: no
-  verification: { shape: integration, must_pass: ["Gap B: stage-3a calls host.start() when mcp_clients non-empty (registry populated; converter runs) without breaking existing mcp_clients-populated bootstrap tests", "Gap C: bootstrap-produced RuntimeToolDispatcher has a non-raising sandbox_decision_resolver", "AC #2 e2e: a TOOL_STEP completes through api.run end-to-end (echo MCP) — proves the full chain start→list_tools→converter→registry→trust→resolver→call_tool BY EXECUTION", "the deterministic xfail marker at test_u_rt_75::test_ac2_bootstrap_dispatcher_resolves_sandbox_decision is removed (xpass → strict-fail forces it)"] }
-  close_shape: { type: PR-merge, artifact: "feat: wire full bootstrap TOOL_STEP path (host start + sandbox_decision_resolver) — closes R-100 AC #2 by e2e" }
+  verification: { shape: integration, must_pass: ["Gap D: bootstrap succeeds with a constructible provider (ANTHROPIC_API_KEY ping is non-inference / zero-token, OR live ollama) for a tool-only workflow", "Gap B: stage-3a calls host.start() when mcp_clients non-empty — DE-RISKED: all 6 bootstrap-going tests use mcp_clients=[] so the `if config.mcp_clients:` guard is safe", "Gap C: bootstrap-produced RuntimeToolDispatcher has a non-raising sandbox_decision_resolver per ratified Reading + NEW §14.9.x spec contract + phantom §14.9.7 cites at runtime_tool_dispatcher.py:85,:98 corrected", "Gap E: emitter info_lookup built from ctx.mcp_client_host (4 MCPServerInfo fields host-derivable)", "Gap F: host.shutdown() wired into shutdown.py step 4", "AC #2 e2e: a TOOL_STEP completes through api.run end-to-end (echo MCP) BY EXECUTION — skipif-gated (live-green is operator's run per Gap D)", "xfail marker at test_u_rt_75::test_ac2_bootstrap_dispatcher_resolves_sandbox_decision removed (xpass → strict-fail forces it)"] }
+  close_shape: { type: PR-merge, artifact: "feat: wire full bootstrap TOOL_STEP path {D,B,C,E,F} — closes R-100 AC #2 by e2e" }
   next_pointer: R-001
   notes: >
     THE AC#2-CLOSING ARC. AC #2 closes only when the FULL bootstrap TOOL_STEP path is wired
-    AND demonstrated end-to-end (echo MCP via api.run); the gap list is NOT asserted complete
-    (the two-gap "converter + resolver" model was undercounted twice — see fork §4). Known
-    gaps in this arc:
-    - Gap B (impl/spec-conformance bug, NO separate fork): `stage_3a_cp_clients.py:48` never
-      calls `host.start()`; spec §14.9.3 mandates it at stage 3a. Without it the registry is
-      empty and the v1.40 converter is unreachable. Fixing it touches integration tests that
-      populate mcp_clients and rely on no-start (test_run_smoke / test_track_b_e2e / conftest /
-      elicitation e2e) — that test-safety question is answered HERE, in context, with the e2e
-      as proof; NOT hastily at the converter PR. Flag: stage_3a docstring claims provider
-      construction is "the only stage that does network I/O at bootstrap" — tension with the
-      spec's stage-3a subprocess spawn; confirm eager-start intent here.
-    - Gap C (design decision, fork `.harness/class_1_fork_tool_step_no_bootstrap_sandbox_decision_resolver.md`
-      PROPOSING): the bootstrap RuntimeToolDispatcher wires no sandbox_decision_resolver
-      ((ToolContract, WorkflowStep) → SandboxDispatchDecision; defaults-to-raise at
-      runtime_tool_dispatcher.py:449, before the tier-floor check). The sharp question:
-      implementer-discretion (§14.9.7) vs operator-policy (parity with the converter). Fork
-      offers (A) identity resolver (tier = contract.minimum_tier; no new config; MVP-cleanest;
-      NOTE it makes the floor check vacuous — resolved == minimum always passes) / (B) per-server
-      default sandbox-mechanism fields / (C) defer. Recommendation: parity reading via (A).
-      Needs operator AskUserQuestion before apply.
-    - Gap D? candidate: bootstrap provider construction for a tool-only (no-inference) workflow —
-      does api.run require an LLM provider/key when the workflow has only TOOL_STEPs? Resolve here.
-    Gap B + Gap C land TOGETHER (only the e2e can prove the path is complete). U-RT-86 already
-    proves the dispatcher-level chain works given a started host + both callables (hand-built);
-    this arc wires that chain through the bootstrap.
+    AND demonstrated end-to-end (echo MCP via api.run). EXECUTION-CONFIRMED gap set is FIVE,
+    not three (the "converter + resolver" model undercounted twice; a scratch run wired all
+    five + completed a real TOOL_STEP) — see fork §4 table. Ordered by firing point:
+    - Gap D (config-around): providers.py raises ProviderNoneConfiguredError if zero providers
+      (unconditional, step-kind-blind). e2e needs ≥1 constructible provider → it CANNOT be
+      CI-green under config-around (skipif-gated; live-green is operator's run). A heavier
+      alternative — inference-step-gate provider construction so tool-only workflows bootstrap
+      with zero providers — is its OWN design decision (changes a bootstrap invariant + needs a
+      stage-5 llm_dispatch:998 carve-out); surfaced as a conditional 2nd AskUserQuestion.
+    - Gap B (impl, spec-conformant): stage_3a_cp_clients.py:48 never calls host.start(); §14.9.6
+      inv 1 mandates it. DE-RISKED: all 6 bootstrap-going tests use mcp_clients=[] → empty-
+      sentinel → `if config.mcp_clients: await host.start()` is safe. Flag: stage_3a docstring
+      "only network-I/O stage" tension with spec's stage-3a spawn; confirm eager-start in-arc.
+    - Gap C (THE DESIGN DECISION; fork PROPOSING): bootstrap wires no sandbox_decision_resolver
+      (defaults-to-raise at runtime_tool_dispatcher.py:449). The §14.9.7 "implementer-discretion"
+      escape is PHANTOM (verified — §14.9.7 covers only emitter/idempotency/health-check; the
+      resolver has zero spec anchor). So ratification is required, AND a spec amendment authoring
+      NEW §14.9.x (SandboxDispatchDecision + SandboxDecisionResolver) is required for BOTH
+      Readings — Reading A is NOT impl-only. Readings: (A) identity resolver (tier=minimum_tier;
+      no new config; RECOMMENDED) — tradeoffs: makes the floor vacuous + can overstate isolation
+      in telemetry (sandbox.enter span; ship a "default_minimum_tier must reflect real mechanism"
+      note); (B) per-server sandbox-mechanism fields (meaningful floor; bigger config surface);
+      (C) defer (rejected). Also fix the phantom §14.9.7 cites at runtime_tool_dispatcher.py:85,:98.
+    - Gap E (impl-wiring): factory:109 MCPClientNamespaceEmitter() bare → step-7 LookupError.
+      Build info_lookup from ctx.mcp_client_host (health_check builds all 4 MCPServerInfo fields).
+    - Gap F (impl-wiring): host.shutdown() never wired → teardown anyio error. Wire into
+      shutdown.py step 4 (same-task as run_bootstrap per api.py:449→509). §14.9.6 inv 1 mandates.
+    Gap G (NOT AC#2 — AC#4 cost only): RATE_TABLE_V1.tool_rates=={} → add echo/default rate if
+    AC#4 bundled; secondary doc-drift at rate_table_v1.py:87-92 (mis-cites §C-OD-28.2 zero-fallback;
+    canonical default is fail-closed=raise per OD spec v1.8 §C-OD-28:257).
+    NEW Gap D-1 (latent, NOT AC#2): config/loader.py _ENV_SCALAR_FIELDS omits anthropic_optional/
+    openai_optional → HARNESS_*_OPTIONAL env vars ignored on api.run(config=None); route separately.
+    All five {D,B,C,E,F} land in ONE PR; the e2e is the only artifact that proves the path complete.
+    U-RT-86 already proves the dispatcher-level chain given a started host + B+C+E hand-supplied.
 
 R-100-cost-attribution-firing:
   title: Per-dispatch cost-attribution fires on the real api.run inference path
