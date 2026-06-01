@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `460b766bedcc` |
-| `last_refreshed` | 2026-06-01T09:30:00-06:00 |
-| `git_head` | `4eaf42ee` (main) — `ops: ratify R-600-v1-14 must_pass[1] N/A (#203)` |
+| `workspace_state_hash` | `4d3120974cef` |
+| `last_refreshed` | 2026-06-01T10:00:00-06:00 |
+| `git_head` | `4f2f3fc5` (main) — `roadmap: R-700-closure-accounting-draft (paused) + resume checkpoint (#205)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 43 |
 
@@ -20,7 +20,11 @@
 
 ## Next action
 
-**3 R-NNN entries closed this session (PRs #200 + #201) — 2 R-700 Phase-8 blockers drained + the v1.14 process-discipline catalogue established.**
+**➡️ ON RESUME (paused mid-arc — `R-700-closure-accounting-draft`, status ACTIVE):** the operator requested a definitive remaining-to-full-closure log and then cleared the session; the prior session deliberately did NOT start drafting — it banked the full task spec. **FIRST read `.harness/R-700-closure-accounting-draft-checkpoint.md` (do not re-derive)**, then produce the two deliverables: **Part A** — the 54-row substitution closure log (draft `R-700` Phase-8 accounting; reconcile the 48/54-vs-3-open arithmetic gap = CXA's 5 subs + CP-22 + authoring/bounded tail); **Part B** — the beyond-substitutions register (`R-410..R-440` infra-gated + `R-100-mvp-config-discovery`) with per-entry summary + vendor + persona/deployment-surface + spec/ADR cites. Verified open-substitution set: OD-4 (PARTIAL/R-008) + AS-8e (R-005) + AS-8f (R-006). Output → `.harness/R-700-phase-8-closure-accounting-draft.md`; advisor pass before done; then RESOLVE the entry + refresh dashboard. Mode-agnostic posture. (The §12.1 audit will MATCH — this PR is a terminating refresh; lag-by-one carve-out.)
+
+---
+
+**3 R-NNN entries closed in the prior session (PRs #200 + #201) — 2 R-700 Phase-8 blockers drained + the v1.14 process-discipline catalogue established.**
 
 **`R-007` + `R-009` RESOLVED (PR #200 `phase-7: ... batch-51`).** Both flipped BLOCKED → eligible per §4 step 3 once `R-100-mvp-real-workflow-execution` RESOLVED (2026-06-01); a per-substitution X-AL-2 condition-(B) audit (advisor-prompted) split them: **H_T-OD-3 → substantive RETIRED** (`HarnessCompositeSampler` live at MVP via `materialize_tracer_provider_stage`; 7a-scaffold sampler no longer invoked; "tail-keep at OTLP collector" reframed as R-430 feature-validation, NOT a retirement gate — gate-text-stale-vs-production-landings, sub-species 10's 3rd closure); **H_T-OD-6 → RETIRED-AS-BOUNDED-RESIDUAL** (`flush_to_sqlite` dormant at MVP / zero callers → boundary unmoved → substantive RETIRED would be silent absorption; closed bounded-residual per X-AL-2 §5.3 — **FIRST bounded-residual close in the ledger**; gated on R-420/R-421). Workspace RETIRED 46→**48/54 (88.9%)**; OD-axis RETIRE-READY bucket EMPTY; pipeline-advanced unchanged 49/54.
 
@@ -30,7 +34,7 @@
 
 **`R-XI-01` (operator dashboard MVP) — RESOLVED + LIVE** at **https://thestoryportal.github.io/arhugula-harness/** (HTTP 200).
 
-**(This PR: terminating refresh post-PR-203 — dashboard-only. PR #203 ratified the R-600-v1-14 must_pass[1] N/A disposition (entry fully closed). PR #201 closed R-600-workflow-v1-14-amendment (§7.5 catalogue). PR #200 closed R-007 + R-009 (OD-3/OD-6 retirement, batch-51). PR #198 ran the fork-doc cadence sweep. PR #196 ran R-600-pattern-bake-in-sweep.)**
+**(This PR: terminating refresh post-PR-205 — dashboard-only. PR #205 landed the `R-700-closure-accounting-draft` entry (ACTIVE, paused) + resume checkpoint. PR #203 ratified the R-600-v1-14 must_pass[1] N/A. PR #201 closed R-600-workflow-v1-14-amendment (§7.5 catalogue). PR #200 closed R-007 + R-009 (OD-3/OD-6 retirement, batch-51).)**
 
 ---
 
@@ -38,7 +42,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `ops-roadmap-refresh-post-203` | *(terminating refresh §12.2.1)* | mode-agnostic — records PR #203 (R-600-v1-14 must_pass[1] N/A ratification); `workspace_state_hash` recompute (`6d92366b678d` → `460b766bedcc`). Dashboard-only (`.harness/roadmap_status.md`); title `ops: roadmap status refresh post-PR-203` → next §12.1 audit sees expected lag-by-one |
+| *(this PR)* | `ops-roadmap-refresh-post-205` | *(terminating refresh §12.2.1)* | mode-agnostic — records PR #205 (`R-700-closure-accounting-draft` ACTIVE-paused + resume checkpoint); `workspace_state_hash` recompute (`460b766bedcc` → `4d3120974cef`). Dashboard-only (`.harness/roadmap_status.md`); title `ops: roadmap status refresh post-PR-205` → next §12.1 audit sees expected lag-by-one, then surfaces the ➡️ ON RESUME block above |
 
 ---
 
