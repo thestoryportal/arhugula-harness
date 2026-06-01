@@ -160,3 +160,60 @@ async def test_factory_does_not_bind_tool_dispatcher_directly() -> None:
     await materialize_runtime_tool_dispatcher_stage(builder, cfg)
     # Factory does NOT bind tool_dispatcher; only intermediate carriers.
     assert builder.tool_dispatcher is None
+
+
+# ---------------------------------------------------------------------------
+# R-100 AC #2 — TOOL_STEP dispatchable via the bootstrap (operator `api.run`).
+#
+# Deterministic marker for the SIBLING resolver gap (the converter half closed
+# at spec v1.40). The bootstrap-produced dispatcher's `sandbox_decision_resolver`
+# is the raise-on-call default — dispatch raises at `runtime_tool_dispatcher.py`
+# line 449 (`self._sandbox_resolver(contract, step)`) BEFORE the tier-floor
+# check. xfail(strict=True) pending
+# `.harness/class_1_fork_tool_step_no_bootstrap_sandbox_decision_resolver.md`:
+# when that fork lands a real resolver, this test xpasses → strict-fail →
+# forces removal of the marker (the "remove me when fixed" self-documenting
+# pattern). NO subprocess / NO ANTHROPIC_API_KEY — pins the exact gap.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(
+    raises=LookupError,
+    strict=True,
+    reason=(
+        "AC #2 BLOCKED: bootstrap wires no sandbox_decision_resolver — "
+        "class_1_fork_tool_step_no_bootstrap_sandbox_decision_resolver.md "
+        "(converter half closed at spec v1.40). Remove when the resolver "
+        "fork lands."
+    ),
+)
+async def test_ac2_bootstrap_dispatcher_resolves_sandbox_decision() -> None:
+    from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
+    from harness_as.tool_contract import ToolContract
+    from harness_cp.workflow_driver_types import StepKind, WorkflowStep
+
+    cfg = _config()
+    builder = await _post_stage_3a_builder(cfg)
+    wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
+
+    contract = ToolContract(
+        name="echo",
+        description="echo a string",
+        input_schema={"type": "object"},
+        output_schema={"type": "object"},
+        minimum_tier=SandboxTier.TIER_1_PROCESS,
+        blast_radius_tier=BlastRadiusTier.READ_ONLY,
+    )
+    step = WorkflowStep(
+        step_id="step-1",
+        step_kind=StepKind.TOOL_STEP,
+        step_payload={"tool_id": "echo", "tool_args": {"text": "hi"}},
+    )
+
+    # The bootstrap-produced wrapper delegates to the bare RuntimeToolDispatcher
+    # (`wrapper.inner`); its `_sandbox_resolver` is what dispatch invokes. With a
+    # wired resolver this returns a SandboxDispatchDecision; at HEAD it raises
+    # LookupError (the default stub) — the AC #2 blocker.
+    decision = wrapper.inner._sandbox_resolver(contract, step)  # type: ignore[attr-defined]
+    assert decision.tier is not None

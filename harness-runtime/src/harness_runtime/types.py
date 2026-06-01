@@ -463,6 +463,21 @@ class MCPClientConfig(BaseModel):
     connection_url: str
     """Stdio command-line OR remote HTTP URL (per `transport`)."""
 
+    default_minimum_tier: SandboxTier = SandboxTier.TIER_2_CONTAINER
+    """Operator-declared per-server default sandbox tier (Reading B, spec v1.40
+    §14.9.3). The stage-3a factory builds a default-policy
+    `MCPToolContractConverter` that stamps every tool discovered from this
+    server with this `minimum_tier`. Conservative default per fork §0."""
+
+    default_blast_radius: BlastRadiusTier = BlastRadiusTier.READ_ONLY
+    """Operator-declared per-server default blast radius (Reading B, spec v1.40
+    §14.9.3). The stage-3a converter stamps every discovered tool's
+    `blast_radius_tier` with this value. Conservative default per fork §0.
+
+    NOTE (spec v1.40 Class 3 finding): overlaps the pre-existing unconsumed
+    `blast_radius` field above; consolidation owed at a future hygiene arc
+    (requires operator ratification per X-AL-3)."""
+
 
 # ----------------------------------------------------------------------------
 # Protocol stubs - spec-acknowledged runtime-defined types (C-RT-04).

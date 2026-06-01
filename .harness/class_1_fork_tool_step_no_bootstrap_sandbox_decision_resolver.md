@@ -1,0 +1,84 @@
+# Class 1 fork — TOOL_STEP not dispatchable via `api.run`: no bootstrap-supplied `sandbox_decision_resolver`
+
+**Status:** PROPOSING (needs operator AskUserQuestion) — filed 2026-06-01 during the `class_1_fork_tool_step_no_operator_supplied_converter.md` Reading B apply arc (spec v1.40).
+**Filed:** 2026-06-01, at the apply-arc pre-substantive empirical orientation (39th-shape `[[advisor-before-substantive-work-for-cross-axis-blockers]]` application — advisor reconcile call confirmed the gap is real and the ratified converter fix is necessary-but-not-sufficient).
+**Class:** 1 (architectural — a second operator-policy callable on the TOOL_STEP dispatch path is structurally unreachable through the bootstrap; closing it requires a config-surface / discretion decision).
+**Blocks:** R-100-mvp-real-workflow-execution **AC #2** ("tool dispatch surface exercised ≥1 site") *via the operator `api.run` path*. This is the **same AC** the converter fork blocked — converter-only does NOT unblock it. Does NOT block the dispatcher-level surface (U-RT-86 e2e exercises it by hand-supplying both callables).
+**Sibling of:** `.harness/class_1_fork_tool_step_no_operator_supplied_converter.md` (RATIFIED-AS-READING-B, applied at spec v1.40). That fork closed the `tool_contract_converter` config surface (one necessary piece). This fork carries the `sandbox_decision_resolver` design decision. **Do NOT read these as the only two gaps** — §4 lists at least one more open gap (bootstrap never calls `host.start()`) and does not assert the list complete. AC #2 closes only when the full bootstrap TOOL_STEP path is wired AND demonstrated e2e (§4).
+
+---
+
+## 1. The divergence
+
+A `StepKind.TOOL_STEP` dispatched through the full bootstrap (`api.run` → `run_bootstrap` → stage 5 `materialize_runtime_tool_dispatcher_stage` → `RuntimeToolDispatcher.dispatch`) raises before doing any work, because the bootstrap-built `RuntimeToolDispatcher` has no `sandbox_decision_resolver`, and an operator has no config surface to supply one. The default resolver raises `LookupError` on every invocation.
+
+This is structurally identical to the converter gap (sibling fork) but at a **different callable on the same path**. With the converter fix (spec v1.40) in place, a TOOL_STEP now gets past tool-contract conversion — and then dies at the sandbox-decision step.
+
+## 2. Evidence (code-level, conclusive — verified at HEAD `b220dd5`)
+
+1. **The dispatcher defaults the resolver to a raise-on-every-call stub.** `harness-runtime/src/harness_runtime/lifecycle/runtime_tool_dispatcher.py:221` — `sandbox_decision_resolver: SandboxDecisionResolver | None = None`; line 270 — `self._sandbox_resolver = sandbox_decision_resolver or _default_sandbox_decision_resolver`; lines 99-115 — `_default_sandbox_decision_resolver` `raise LookupError(...)` on every invocation. The resolver maps `(ToolContract, WorkflowStep) → SandboxDispatchDecision` (the 5-field carrier: `tier / tech / provider / assigned_tier_reason / cost_tier_overhead_ms`).
+
+2. **The bootstrap factory passes no resolver.** `harness-runtime/src/harness_runtime/bootstrap/factories/runtime_tool_dispatcher_factory.py:117` — the bare `RuntimeToolDispatcher(...)` construction passes `mcp_client_host / per_server_trust_evaluator / mcp_namespace_emitter / trust_policy / tracer_provider / cost_chain / audit_writer / rate_table` — **no `sandbox_decision_resolver=`** → the default-that-raises is used.
+
+3. **`config.sandbox_decision_policy` exists but is read-and-discarded.** The factory reads `config.sandbox_decision_policy` (defaulting to `SandboxDecisionPolicy.default()`) and then does `_ = sandbox_decision_policy` with the inline comment "the existing C-RT-19 dispatcher predates the field and does not yet consume it ... received here for spec-contract conformance + future-arc consumption." So a config surface exists at the policy level, but it is (a) an empty-marker dataclass (no fields, per `class_1_fork_sandbox_decision_policy_phantom_cite.md` Q1=C-i), and (b) not bridged to a `sandbox_decision_resolver`.
+
+4. **Dispatch invokes the resolver BEFORE the tier-floor check.** `runtime_tool_dispatcher.py:449` — `sandbox_decision = self._sandbox_resolver(contract, step)` (raises here under the default stub); `:451` — `if _SANDBOX_TIER_RANK[sandbox_decision.tier] < _SANDBOX_TIER_RANK[contract.minimum_tier]: raise SandboxTierFloorViolationError(...)`. So even a perfectly-stamped `ToolContract.minimum_tier` from the v1.40 converter cannot reach the floor comparison — the resolver raises first.
+
+5. **U-RT-86 self-documents the gap.** `test_u_rt_86_mcp_client_external_server_e2e.py:296-302` hand-constructs the `RuntimeToolDispatcher` with `sandbox_decision_resolver=_make_sandbox_resolver()` (lines 224-234), alongside the hand-supplied `tool_contract_converter`. The e2e exercises the dispatcher path, not `api.run`. **Both** callables are hand-supplied precisely because the factory wires neither.
+
+So at production HEAD, a TOOL_STEP dispatches only if an operator hand-builds BOTH a converter (closed at v1.40) AND a resolver (this fork) — neither of which the `harness` CLI / `api.run` provides a path to do.
+
+## 3. The decision (the sharp question)
+
+**RATIFICATION IS REQUIRED — the "implementer-discretion" escape is phantom (verified at HEAD by the AC#2-arc investigation, 2026-06-01).** An earlier draft of this fork argued §14.9.7 "deferred to implementation discretion" might authorize wiring a default resolver *without* a fork. That is FALSE: §14.9.7's three bullets (`Spec_Harness_Runtime_v1.md:3499-3501`) cover only the emitter-mutation site, the idempotency-key recipe, and the health-check cadence — **none defers the resolver / sandbox-decision derivation.** `SandboxDispatchDecision` and `SandboxDecisionResolver` appear in the *entire* spec exactly once (the v1.40 change-note at `:16`, which flags this very gap). The discretion branch is therefore EMPTY; it cannot authorize anything. The `runtime_tool_dispatcher.py:85` + `:98` docstring cites "Per spec §14.9.7 deferral" are **phantom cites** (the workspace's most-catalogued defect class) and MUST be corrected in the apply arc.
+
+**Consequences:**
+1. **Ratification is required for Reading A/B/C independently** — the empty §14.9.7 cannot license A, and the parity-with-converter argument (the resolver assigns a sandbox posture exactly as the converter did → operator policy, raises-loud) is a *second* converging argument, not the tiebreaker.
+2. **A spec amendment is required for BOTH A and B** (not only B): the carrier + resolver contract have zero spec anchor, so even identity-Reading-A needs a NEW §14.9.x authoring `SandboxDispatchDecision` + `SandboxDecisionResolver` + the derivation (specified or explicitly deferred). **Reading A is NOT "impl-only after ratification."**
+
+(Note: do NOT lean on spec v1.16 finding (i) here — that finding is about `sandbox_decision_policy`, the empty-marker config, not the `sandbox_decision_resolver` callable. Related, not identical.)
+
+### Readings
+
+- **(A) Identity resolver — MVP-cleanest (RECOMMENDED).** The factory wires a trivial resolver: `tier = contract.minimum_tier`, with placeholder `tech="host-process"` / `provider="host"` / `assigned_tier_reason="per-server-default-policy-identity"` / `cost_tier_overhead_ms=0`. No new config fields. Always passes the floor (`tier == minimum_tier`). The v1.40 converter-stamped `minimum_tier` (from per-server `default_minimum_tier`) becomes the **single source of truth** for the tool's sandbox tier. **Two decisive tradeoffs that MUST ship with A:** (i) it makes the tier-floor check a structural no-op (resolved ≡ minimum → always passes); (ii) the resolved tier flows to the `sandbox.enter` span (`runtime_tool_dispatcher.py:472-474`), so it can *overstate isolation in telemetry* — if `default_minimum_tier` stays at its `TIER_2_CONTAINER` Pydantic default while a local stdio server actually runs process-level (TIER_1), the span asserts container-tier over a process mechanism. Nothing validates tier↔tech consistency. **Mitigation (ship with A):** document that `default_minimum_tier` must reflect the real mechanism (`TIER_1_PROCESS` for local-dev).
+- **(B) Per-server default sandbox-mechanism fields.** `MCPClientConfig` gains `{default_sandbox_tier, default_sandbox_tech, default_sandbox_provider}` (and possibly overhead); the factory builds a resolver from them. Symmetric with the converter's per-server defaults. Heaviest — adds a second field cluster and lets the resolved tier diverge from `minimum_tier` (re-introducing a genuine floor check). Most faithful to "the resolver is operator policy."
+- **(C) Defer.** Declare TOOL_STEP-via-`api.run` out of MVP scope; operators wire the dispatcher manually (current de-facto state). AC #2 stays unreachable via the operator path.
+
+### Recommendation
+
+**Reading A (identity resolver)** — ship via a NEW spec §14.9.x resolver contract + the telemetry-honesty mitigation above. It honors the operator's already-ratified per-server tier declaration (`default_minimum_tier`) without a second config cluster. (B) is the most faithful "resolver-is-operator-policy" model (resolved tier can diverge from / exceed the floor) but over-built for the one-local-stdio-server MVP, and risks a second consolidation debt atop v1.40's `{default_minimum_tier, default_blast_radius}`. (C) defer is rejected — it leaves AC #2 permanently unreachable via `api.run`. **Both A and B require operator ratification AND a spec amendment** (§3 above) — neither is impl-only. This is the one design decision in the AC#2-closing arc; Gaps B/E/F are impl-conformance and Gap D is config (§4).
+
+## 4. The known-gaps list is NOT asserted complete (the sufficiency claim was undercounted twice)
+
+**Do not read this fork as "converter + resolver = sufficient for AC #2."** That two-gap framing was an undercount — and so was the corrected three-gap framing. An **execution-backed** investigation (2026-06-01; a scratch run wired every gap and completed a real TOOL_STEP) found the complete ordered blocker set is **FIVE gaps {D, B, C, E, F}**, ordered by firing point on the dispatch path. Each verified at HEAD `e8ee90d`:
+
+| Gap | Fires at | Evidence | Class |
+|---|---|---|---|
+| **A** converter | (closed) | spec v1.40 stage-3a factory | DONE |
+| **D** provider-construction precondition | bootstrap stage 3a, before any dispatch | `providers.py` post-loop `if len(providers)==0: raise ProviderNoneConfiguredError` — unconditional, step-kind-blind | constraint (config-around) |
+| **B** host never `.start()`ed | dispatch **step 1** → `RT-FAIL-TOOL-CONTRACT-UNKNOWN` (empty registry) | `stage_3a_cp_clients.py:48` binds, never starts; §14.9.6 inv 1 mandates "stage 3a starts" | impl bug |
+| **C** no `sandbox_decision_resolver` | dispatch **step 3** (`runtime_tool_dispatcher.py:449`, before floor `:451`) → `LookupError` | factory `:117-126` bare dispatcher; `_default_sandbox_decision_resolver` raises `:106-115` | **design decision (this fork)** |
+| **E** no emitter `info_lookup` | dispatch **step 7** (`:197`) → `LookupError` | factory `:109` `MCPClientNamespaceEmitter()` bare; `_default_info_lookup` raises (`harness-cp/.../mcp_client_namespace_emitter.py:122-130`) | impl-wiring (B-shaped; all 4 `MCPServerInfo` fields host-derivable from `health_check()`) |
+| **F** host `.shutdown()` never wired | success-path teardown → anyio "cancel scope in different task" | zero `mcp_client_host.shutdown()` callers in `src/`; `shutdown.py:51` "MCP host placeholder"; §14.9.6 inv 1 mandates "stage 7 SHUTDOWN drains" | impl-wiring |
+
+**Gap G is NOT an AC #2 blocker** — it fires post-dispatch and blocks AC #4 (cost) only (`RATE_TABLE_V1.tool_rates == {}`); AC #1 (status=completed) + AC #3 (ledger) succeed without it.
+
+**Ruled out by execution (do NOT re-investigate):** trust gate (CONSERVATIVE permits unknown server via floor-pass), sync-facade loop affinity, topology admissibility (enforced only at sub-agent dispatch, never top-level), TOOL_STEP routing, output-schema validation.
+
+**Confidence ceiling:** sufficiency of {D,B,C,E,F} is HIGH (one execution-confirmed scratch run) but the only *canonical* proof is the merged e2e. Treat as "complete to the best of execution-backed knowledge," not "provably exhaustive."
+
+**Canonical framing (non-falsifiable by the next gap):** R-100-mvp-real-workflow-execution **AC #2 closes only when the full bootstrap TOOL_STEP path is wired AND demonstrated end-to-end** (one echo-MCP-via-`api.run` workflow that completes a TOOL_STEP). All five fixes land in ONE PR; the e2e is the only artifact that establishes the path is complete. **e2e CI-runnability caveat:** Gap D's live-provider precondition means the e2e cannot be CI-green under the config-around default — it is skipif-gated and live-green is the operator's run (`[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`).
+
+The R-100 deterministic xfail marker (`test_u_rt_75_runtime_tool_dispatcher_factory.py::test_ac2_bootstrap_dispatcher_resolves_sandbox_decision`) demonstrates Gap C in isolation (it invokes the resolver directly, bypassing Gaps A+B); it is NOT an AC #2 e2e.
+
+## 5. Gap B — bootstrap never starts the MCP host (sibling impl-gap; lands in the same closing arc)
+
+**Evidence (conclusive, HEAD).** `harness-runtime/src/harness_runtime/bootstrap/stage_3a_cp_clients.py:48` — `ctx.mcp_client_host = await materialize_mcp_client_host_stage(config)` is the LAST statement of `execute()`; there is no `host.start()` call. Grep confirms no `mcp_client_host.start()` anywhere under `harness-runtime/src/harness_runtime/bootstrap/` or `api.py`. The factory returns an **unstarted** host (its docstring: "the stage 3a body is responsible for calling `.start()` afterward if `config.mcp_clients` is non-empty"), and spec §14.9.3 stage-3a mandates "subprocess spawn + protocol handshake + `list_tools` registry population happen here." `start()` is fully implemented (`mcp_client_host.py:379` `call_tool`; `:~310` `start`; `MCPHostStartupError` / `RT-FAIL-MCP-HOST-STARTUP` carrier present) — it is simply never invoked from bootstrap. This was latent (no production workflow reached `mcp_clients` because TOOL_STEP-via-`api.run` was unreachable at the converter gap); closing Gap A makes it the next-firing blocker.
+
+**Disposition.** Gap B is an **impl / spec-conformance bug**, not a design decision — so NO separate fork doc. It lands in the **same closing arc** as Gap C, because only together can one e2e prove the chain (`start → list_tools → converter → registry → trust → resolver → call_tool`). Fixing `start()` alone buys zero forward verification (the resolver still raises at step 3) while incurring integration-test fallout (several bootstrap-going tests populate `mcp_clients=[...]` and currently rely on the host never being started — `test_run_smoke`, `test_track_b_e2e`, integration `conftest`, elicitation e2e). That test-safety question is answered **in the closing arc, in context, with the e2e as proof** — not hastily at the converter PR.
+
+**Flag for the closing arc (do NOT resolve now).** `stage_3a_cp_clients.py`'s module docstring claims provider construction "is the only stage entry point in the runtime that performs network I/O at bootstrap time" — in direct tension with spec §14.9.3 placing a subprocess spawn at stage 3a. Default to the spec (eager start at 3a); the closing arc should confirm eager-start is the intent vs. a deliberate lazy-start choice the docstring hints at. That tension is why Gap B is not cleanly "a one-line typo."
+
+## 6. Tracking
+
+Tracked at roadmap `R-100-tool-step-sandbox-resolver` — broadened to the **AC#2-closing arc**: wire the full bootstrap TOOL_STEP path — **Gap D** (provider config-around) + **Gap B** (host `start()`) + **Gap C** (resolver — the design decision, this fork, needs ratification + spec amendment) + **Gap E** (emitter `info_lookup` from host) + **Gap F** (host `shutdown()` wiring) — and prove it with one echo-MCP-via-`api.run` e2e (skipif-gated; live-green is the operator's run). All five land in ONE PR. The arc must also fix the phantom §14.9.7 cites at `runtime_tool_dispatcher.py:85,:98` (§3). Sibling to `R-100-tool-step-converter` (Gap A, RESOLVED — converter config surface only).
