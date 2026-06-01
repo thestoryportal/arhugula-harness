@@ -927,7 +927,7 @@ R-600-pattern-bake-in-sweep:
 R-600-clearance-marker-backfill-survey:
   title: Survey design-substrate amendments lacking clearance markers
   surface: VII
-  status: ACTIVE
+  status: RESOLVED   # 2026-06-01 — survey complete; no spec/ADR/ADD/PRD/CXA/Workflow gap; intermediate-plan-version exemption documented at .harness/clearance/README.md
   depends_on: []
   blocks: []
   posture: mode-agnostic
@@ -938,7 +938,16 @@ R-600-clearance-marker-backfill-survey:
   verification: { shape: grep, must_pass: ["every design-substrate amendment merged after 2026-05-29 has a clearance marker", "exceptions documented at .harness/clearance/README.md"] }
   close_shape: { type: PR-merge, artifact: "ops: clearance marker backfill", cascade: [] }
   next_pointer: null
-  notes: Non-retroactive per CLAUDE.md §4.5; survey identifies post-2026-05-29 gaps only.
+  notes: >
+    RESOLVED 2026-06-01. Surveyed all 18 design-substrate/** amendments merged since 2026-05-29
+    against the 17 clearance markers on main. Result: every spec (CP v1.26–v1.30, runtime
+    v1.38–v1.41, IS v1.3), CXA (v2.17/v2.18), Workflow (v1.13), and every TERMINAL plan version
+    (runtime v2.42, CP v2.31, IS v2.5, OD v2.27) has a marker. The only versions lacking a
+    per-version marker are 10 INTERMEDIATE, already-superseded plan versions (runtime v2.34–v2.41,
+    CP v2.30, IS v2.4) — all covered by their cluster's terminal marker per the latest-consumed
+    Supersession rule. No backfill owed for the contract-authority surfaces (specs/ADR/ADD/PRD/
+    CXA/Workflow are gap-free). Codified the terminal-marker-covers-chain exemption (plans only)
+    + the survey log at .harness/clearance/README.md per must_pass #2. Non-retroactive per CLAUDE.md §4.5.
 
 R-600-notebooklm-mcp-server-setup:
   title: NotebookLM MCP server (jacob-bd/notebooklm-mcp-cli) installed as supplement to skill

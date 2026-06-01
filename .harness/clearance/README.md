@@ -64,6 +64,16 @@ When a new version of an artifact is cleared, the old marker remains in this dir
 
 A marker is never deleted. If a clearance is invalidated (e.g., a Class 3 fork retroactively invalidates a prior clearance), the marker is updated with a `superseded_by:` field in frontmatter pointing at the new marker.
 
+### Intermediate plan-version exemption (terminal-marker-covers-chain)
+
+Per-axis **plans** frequently advance through several delta-only revisions within a single session or cluster arc (e.g., a rescope chain that runs `v2.34 → v2.35 → … → v2.42` in one day). Because Phase 7 consumes the *latest* marker for an artifact (Supersession, above), the **terminal version's marker covers the whole intra-cluster chain** — the intermediate, already-superseded plan versions are EXEMPT from a per-version marker. A marker is owed only for the version a Phase 7 session would actually consume as canonical (the terminal version of the chain that landed on main).
+
+This exemption applies to **plan** artifacts (`Implementation_Plan_*`) only. **Specs / ADRs / ADD / PRD / CXA / Workflow** version amendments each get their own marker (no exemption) — those are the contract-authority surfaces Phase 7 cites byte-exact, so each version that ever landed on main is independently consumable and must be independently cleared.
+
+#### Survey log
+
+- **2026-06-01** (R-600-clearance-marker-backfill-survey): surveyed all 18 `design-substrate/**` amendments merged since 2026-05-29. Every spec (CP v1.26–v1.30, runtime v1.38–v1.41, IS v1.3), CXA (v2.17/v2.18), Workflow (v1.13), and every **terminal** plan version (runtime v2.42, CP v2.31, IS v2.5, OD v2.27) has a marker. The only versions lacking a per-version marker are 10 **intermediate, superseded plan versions** — runtime plan v2.34–v2.41, CP plan v2.30, IS plan v2.4 — all covered by their cluster's terminal marker per the exemption above. **No spec/ADR/ADD/PRD/CXA/Workflow gap; no backfill owed.**
+
 ## See also
 
 - Workspace `CLAUDE.md` §4 — substitution + back-flow discipline
