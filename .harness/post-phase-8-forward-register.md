@@ -25,33 +25,35 @@ The register has **two tiers**, kept distinct:
 
 ### Tier A — Phase-8 closure residuals (declare Phase 8 done)
 
-| # | Item | Owner action | Spec/source | Council? |
-|---|---|---|---|---|
-| A-1 | R-700 Phase-8 substitution review + final integer ratification | Review the R-700 draft; ratify 46–47-vs-48 + bounded-residual sign-offs | `R-700-phase-8-substitution-accounting` (BLOCKED) | no (AUQ) |
-| A-2 | Bounded-residual sign-offs (AS-8e, AS-8f, OD-6) | Operator signs the 3 deferred-by-design closes | X-AL-2 §5.3; Surface VIII | no (AUQ) |
-| A-3 | `R-NNN` coverage for the 5 invisible open rows (CXA-1/2/3/4 + CP-17) | Authorize an R-002-style Surface-I pass | R-700 draft §C item 2 | no |
-| A-4 | `harness.toml` auto-discovery fork ratification | Ratify Reading A/B/C of the config-discovery fork | `class_1_fork_harness_toml_default_discovery_unimplemented.md` | no (AUQ) |
+*Status legend: ~~strike~~ = definitively closed · **[open]** = actionable now · **[blocked]** / **[deferred]** / **[proposed]** = not-closed-not-open (word = why). Mirrors the live dashboard's R-NNN board + Post-Phase-8 register sections.*
+
+| # | Status | Item | Owner action | Spec/source | Council? |
+|---|---|---|---|---|---|
+| A-1 | **[blocked]** | R-700 Phase-8 substitution review + final integer ratification | Review the R-700 draft; ratify 46–47-vs-48 + bounded-residual sign-offs | `R-700-phase-8-substitution-accounting` (BLOCKED) | no (AUQ) |
+| A-2 | **[open]** | Bounded-residual sign-offs (AS-8e, AS-8f, OD-6) | Operator signs the 3 deferred-by-design closes | X-AL-2 §5.3; Surface VIII | no (AUQ) |
+| A-3 | **[open]** | `R-NNN` coverage for the 5 invisible open rows (CXA-1/2/3/4 + CP-17) | Authorize an R-002-style Surface-I pass | R-700 draft §C item 2 | no |
+| A-4 | **[blocked]** | `harness.toml` auto-discovery fork ratification | Ratify Reading A/B/C of the config-discovery fork | `class_1_fork_harness_toml_default_discovery_unimplemented.md` | no (AUQ) |
 
 ### Tier B — Post-Phase-8 forward activation
 
-| # | Surface | Item | Current state | Close-out class | Council? |
-|---|---|---|---|---|---|
-| B-1 | IV Multi-LLM | Layered capability-aware routing activation | routing-selection stubbed; fallback-chain dispatch wired; **unexercised** (single-provider MVP) | impl + operator creds | ⚖️ yes |
-| B-2 | IV Multi-LLM | Multi-provider credentials + mixed-provider exercise | only Anthropic exercised at R-100 | operator creds + fixture | no |
-| B-3 | V Deployment | Real TIER_2 container sandbox execution (R-410) | tier/provider are annotations-only; in-process FastMCP regardless of tier | impl + infra (Class-1 likely) | ⚖️ yes |
-| B-4 | V Deployment | TIER_3 microVM + TIER_4 full-VM execution (R-411/R-412) | not built | impl + infra | ⚖️ yes |
-| B-5 | V Deployment | SELF_HOSTED_SERVER + MANAGED_CLOUD e2e (R-420/R-421) | LOCAL-only exercised | operator infra | ⚖️ (R-421) |
-| B-6 | V Deployment | OTLP tail-keep collector-side validation (R-430) | buffer logic in-process; collector-side unverified | operator infra | no |
-| B-7 | V Deployment | Tier-level + cloud secrets backend (R-440) | LOCAL keyring + env-fallback only | impl + operator infra | ⚖️ yes |
-| B-8 | VI Multi-tenant | Non-default `tenant_id` / non-SOLO `persona_tier` deployment | fields plumbed; non-toggleability enforced; base-rate envelope live | operator deploy + impl | ⚖️ yes |
-| B-9 | VI Multi-tenant | OD-4: per-session redaction toggle (§13.1) + opaque-token tokenization (§13.2) | strip-not-tokenize MVP; toggle deferred | impl (R-008) | ⚖️ yes |
-| B-10 | IX External | Real external MCP server connection | **✅ R-800 RESOLVED (2026-06-01)** — `start()`/`shutdown()` wired at PR #172 (spec v1.41 §14.9.8 Gaps B/F); real external stdio e2e green & unconditional at `test_u_rt_86`. Full `api.run` path = Gap D (R-100 AC#2, operator-gated) | impl | no |
-| B-11 | IX External | Files API integration (AS-8e / CP-17) | STILL-BOUNDED-INDEFINITELY by design | design-phase + impl | no |
-| B-12 | IX External | managed_agents integration (AS-8f) | STILL-BOUNDED-INDEFINITELY by design | design-phase + impl | no |
-| B-13 | IX External | Memory-tool production backend (CP-16) | local-fs backend landed; cloud/db deferred | impl | no |
-| B-14 | CXA | Cross-axis seam completion (CXA-1/2/3/4) | CXA-1 PARTIAL, CXA-2/3 STILL-BOUNDED, CXA-4 PARTIAL | impl (mechanical) | no |
-| B-15 | XI Tooling | Dashboard iteration-2 (R-XI-02/R-XI-03) | MVP live | impl | no |
-| B-16 | X Research | Open architectural / speculative arcs | not decomposed | research | no |
+| # | Status | Surface | Item | Current state | Close-out class | Council? |
+|---|---|---|---|---|---|---|
+| B-1 | ~~closed~~ | IV Multi-LLM | ~~Layered capability-aware routing activation~~ | **routing activation RESOLVED (R-300-multi-llm-routing-activation, PR #213)** — declarative layer live; the multi-provider *exercise* is B-2 | impl + operator creds | ⚖️ yes |
+| B-2 | **[proposed]** | IV Multi-LLM | Multi-provider credentials + mixed-provider exercise | only Anthropic exercised at R-100; needs OpenAI/Ollama creds | operator creds + fixture | no |
+| B-3 | **[proposed]** | V Deployment | Real TIER_2 container sandbox execution (R-410) | tier/provider are annotations-only; in-process FastMCP regardless of tier | impl + infra (Class-1 likely) | ⚖️ yes |
+| B-4 | **[proposed]** | V Deployment | TIER_3 microVM + TIER_4 full-VM execution (R-411/R-412) | not built | impl + infra | ⚖️ yes |
+| B-5 | **[proposed]** | V Deployment | SELF_HOSTED_SERVER + MANAGED_CLOUD e2e (R-420/R-421) | LOCAL-only exercised | operator infra | ⚖️ (R-421) |
+| B-6 | **[proposed]** | V Deployment | OTLP tail-keep collector-side validation (R-430) | buffer logic in-process; collector-side unverified | operator infra | no |
+| B-7 | **[proposed]** | V Deployment | Tier-level + cloud secrets backend (R-440) | LOCAL keyring + env-fallback only | impl + operator infra | ⚖️ yes |
+| B-8 | **[proposed]** | VI Multi-tenant | Non-default `tenant_id` / non-SOLO `persona_tier` deployment | fields plumbed; non-toggleability enforced; base-rate envelope live | operator deploy + impl | ⚖️ yes |
+| B-9 | **[blocked]** | VI Multi-tenant | OD-4: per-session redaction toggle (§13.1) + opaque-token tokenization (§13.2) | strip-not-tokenize MVP; toggle deferred — needs session-control substrate (R-008) | impl (R-008) | ⚖️ yes |
+| B-10 | ~~closed~~ | IX External | ~~Real external MCP server connection~~ | **✅ R-800 RESOLVED (2026-06-01)** — `start()`/`shutdown()` wired at PR #172 (spec v1.41 §14.9.8 Gaps B/F); real external stdio e2e green & unconditional at `test_u_rt_86`. Full `api.run` path = Gap D (R-100 AC#2, operator-gated) | impl | no |
+| B-11 | **[deferred]** | IX External | Files API integration (AS-8e / CP-17) | STILL-BOUNDED-INDEFINITELY by design (managed-cloud arc) | design-phase + impl | no |
+| B-12 | **[deferred]** | IX External | managed_agents integration (AS-8f) | STILL-BOUNDED-INDEFINITELY by design (managed-cloud arc) | design-phase + impl | no |
+| B-13 | **[proposed]** | IX External | Memory-tool production backend (CP-16) | SELF_HOSTED SQLite slice landed (PR #224); cloud-vault/managed-DB remainder deferred (creds) | impl | no |
+| B-14 | **[partial]** | CXA | Cross-axis seam completion (CXA-1/2/3/4) | CXA-1 PARTIAL (no producer), CXA-2 STILL-BOUNDED (engine substrate), CXA-3 STILL-BOUNDED (no composer), CXA-4 PARTIAL (0-wireable, bookkeeping) — **placeholders resolved at v2.3/v2.11; v2.18 matrix defect fixed at v2.19/PR #226** | impl (mechanical) | no |
+| B-15 | **[proposed]** | XI Tooling | Dashboard iteration-2 (R-XI-02/R-XI-03) | MVP live; iteration-2 nice-to-have | impl | no |
+| B-16 | **[proposed]** | X Research | Open architectural / speculative arcs | not decomposed | research | no |
 
 ---
 
