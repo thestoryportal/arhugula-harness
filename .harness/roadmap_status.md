@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `e30b9dd81864` |
-| `last_refreshed` | 2026-05-31T20:40:00-06:00 |
-| `git_head` | `51f4131` (main) — `roadmap(R-200-ci-coverage-gating): RESOLVED at PR #150 + dashboard refresh post-#148/#149/#150 (#151)` |
+| `workspace_state_hash` | `e30b9dd81864` (stale — substantive close this PR; authoritative recompute owed at the post-merge terminating refresh per §12.2.1) |
+| `last_refreshed` | 2026-05-31T21:10:00-06:00 |
+| `git_head` | `f361a0e` (main) — `ops: roadmap status refresh post-PR-151 (#152)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-50.md` |
 | `open_fork_doc_count` | 39 |
 
@@ -20,9 +20,9 @@
 
 ## Next action
 
-**`R-200-ci-od-cp-dependency-leak`** (status: **ACTIVE**; surface III; **phase-7**; **advisor_required: yes**; **cross_axis: yes**) — resolve the undeclared `harness-od → harness-cp` dependency surfaced by the axis-isolation matrix (od leg RED: `harness-od/src/harness_od/pause_resume_namespace.py:295` imports `harness_cp.pause_resume_protocol`, + 4 od test modules, while harness-od declares only core+as), then drop the `od` `continue-on-error` carve-out in `ci.yml` so the matrix fully blocks. **Design call (needs advisor / operator):** (a) declare `harness-cp` as a harness-od dependency (acyclic-safe — cp doesn't depend on od) vs (b) relocate the CP→OD seam to a package that already declares cp (cxa/runtime) per the CXA cross-axis-edge architecture; likely a Class 3 cross-axis-import-drift observation. close_shape = PR-merge. **§4 derivation:** with `R-200-ci-coverage-gating` RESOLVED at PR #150, no mode-agnostic §III entry remains; the §III phase-7 entries (`R-200-ci-od-cp-dependency-leak` + `R-200-ci-lint-typecheck-blocking`) outrank §II `R-100-mvp-operator-usable-cli-shipped` (rank 4). Per the axis-matrix `next_pointer`, **od-cp-leak** is next; `lint-typecheck-blocking` (drive the 366-ruff/894-pyright tree clean, incl. the dup-`Skill` production bug) is its §III phase-7 sibling. Both §III phase-7 entries are advisor/operator-engagement points; §II MVP (live-Anthropic e2e) also remains executable. Pipeline not drained.
+**`R-200-ci-lint-typecheck-blocking`** (status: **ACTIVE**; surface III; **phase-7**; **advisor_required: conditional** — if a fix touches a cross-axis contract or production type; **cross_axis: no**) — drive the tree ruff/pyright-clean, then flip CI `lint` + `typecheck` from advisory (`continue-on-error`) to blocking. Tree is dirty at HEAD: `ruff check .` ≈ 366 (~222 `--fix`-able), `pyright` ≈ 894; src-only ruff 112 / pyright 186, **including a genuine production bug** — two distinct `Skill` classes (`harness_runtime.types.Skill` vs `harness_runtime.lifecycle.skills.Skill`) at `harness-runtime/src/harness_runtime/types.py:1683` (reportArgumentType). Likely multi-PR: (a) `ruff check --fix` + format sweep; (b) pyright cleanup incl. the `Skill` dedup; (c) flip `continue-on-error → false`. scope = `harness-*/**` + `ci.yml`. close_shape = PR-merge; cascade = `R-IF-roadmap-refresh`. **§4 derivation:** with `R-200-ci-od-cp-dependency-leak` RESOLVED (this PR; od isolation leg now blocks), the sole remaining ACTIVE §III entry is `R-200-ci-lint-typecheck-blocking` (phase-7), which outranks §II `R-100-mvp-operator-usable-cli-shipped` (rank 4). §II MVP (live-Anthropic e2e) also remains executable. Pipeline not drained.
 
-**(R-200-ci-coverage-gating RESOLVED at PR #150 `5d06106` — advisory `coverage` job + pytest-cov; CI-verified coverage-xml artifact. R-200-ci-axis-matrix RESOLVED at PR #147 `36d8fad`. Fork-doc Status audit landed at PR #148 `22f22ab`. R-001-h-t-is-2-retired RESOLVED at PR #141 — IS-axis 9/9 = 100%.)**
+**(R-200-ci-od-cp-dependency-leak RESOLVED this PR — harness-od declares harness-cp (OD→CP §2.3.3) + harness-is (OD→IS §2.3.4); od isolation leg green (887 passed) + carve-out dropped; corrected "reverse-direction" framing per `.harness/class_3_drift_od_cp_undeclared_dependency.md`. R-200-ci-coverage-gating RESOLVED at PR #150/#151. R-200-ci-axis-matrix RESOLVED at PR #147. R-001-h-t-is-2-retired RESOLVED at PR #141 — IS-axis 9/9 = 100%.)**
 
 ---
 
@@ -30,7 +30,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `roadmap-refresh-post-151` | *(terminating refresh §12.2.1)* | mode-agnostic — `workspace_state_hash` recompute (`b0d5c85c1136` → `e30b9dd81864`) + anchor refresh post-PR-151 merge. ONLY `.harness/roadmap_status.md`; title `ops: roadmap status refresh post-PR-151` → next §12.1 audit sees expected lag |
+| *(this PR)* | `roadmap-r200-od-cp-leak-close` | R-200-ci-od-cp-dependency-leak | mode-agnostic — declares harness-od's OD→CP + OD→IS consumer deps + drops the od isolation carve-out + Class 3 drift doc + marks the R-NNN RESOLVED + dashboard refresh. Bundled (touches `Project_Roadmap_v1.md`) → NOT a terminating refresh; follow-on `ops: roadmap status refresh post-PR-NNN` + `workspace_state_hash` recompute owed per §12.2.1 |
 
 ---
 
@@ -38,11 +38,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| *(this PR)* | 2026-05-31 | **R-200-ci-od-cp-dependency-leak RESOLVED** — harness-od declares `harness-cp` (canonical OD→CP §2.3.3 consumer; src reads `ReplayDisposition` from `engine_namespace`) + `harness-is` (OD→IS §2.3.4; test fixtures). Both acyclic-safe. od isolation leg verified green (887 passed) + `continue-on-error` carve-out dropped → full 6-leg matrix blocks. Corrected the dashboard/CI "reverse-direction / relocate the seam" framing (OD→CP is canonical) at `.harness/class_3_drift_od_cp_undeclared_dependency.md`. Advisor-gated (option (a)). Bundled → NOT a terminating refresh; follow-on owed. |
 | PR #151 (`51f4131`) | 2026-05-31 | **R-200-ci-coverage-gating substantive close** — `Project_Roadmap_v1.md` §5.4 ACTIVE → RESOLVED (PR #150) + dashboard refresh post-#148/#149/#150. Blocking `pytest` green; advisory legs (od axis-isolation, pyright, ruff) red-as-expected. Bundled → NOT a terminating refresh; this terminating refresh is the owed follow-on. |
 | PR #150 (`5d06106`) | 2026-05-31 | **R-200-ci-coverage-gating RESOLVED** — advisory `coverage` job in `ci.yml` (continue-on-error) + `pytest-cov>=6.0` + `[tool.coverage.run]` (branch, 7 packages, tests omitted). Publishes total line/branch coverage to the PR step-summary + uploads `coverage.xml`. CI-verified (job green; coverage-xml 36KB artifact). v1 informational, no `fail_under`. |
 | PR #148 (`22f22ab`) | 2026-05-31 | **Fork-doc Status audit** (hygiene) — refreshed 3 stale Status lines: `cp_16_17` frontmatter PROPOSING→resolved (body was already current), `u_od_40` RATIFIED→APPLIED-AS-READING-B (`dcb0017`), `harness_run_yaml_manifest_schema` RATIFIED→APPLIED (G4/G5/G6 landed). Each verified vs HEAD. |
 | PR #149 (`7d3c830`) | 2026-05-31 | **Terminating refresh post-PR-147** (§12.2.1) — `workspace_state_hash` → `b0d5c85c1136`; only `roadmap_status.md`. |
-| PR #147 (`36d8fad`) | 2026-05-31 | **R-200-ci-axis-matrix RESOLVED** — `axis-isolation` matrix in `ci.yml` (6 legs; `uv sync --package` isolation). core 26/is 133/as 317/cp 813/cxa 28 PASS; **od RED** (undeclared od→cp dep) → ADVISORY; tracked at R-200-ci-od-cp-dependency-leak. |
 
 ---
 
@@ -110,7 +110,9 @@ Sample (highest-leverage open):
 
 | 2026-05-31 | **R-200-ci-coverage-gating RESOLVED** + sixteenth terminating refresh — substantive close PR #151 merged at `51f4131` (blocking `pytest` green; advisory od/pyright/ruff legs red-as-expected); this PR is the owed follow-on terminating refresh per §12.2.1 | Single-file dashboard-only refresh. Hash `b0d5c85c1136` → `e30b9dd81864` (state at `51f4131`). Next action UNCHANGED at **R-200-ci-od-cp-dependency-leak** (re-derived at PR #151; mode-agnostic §III drained → §III phase-7 entries next). Recursion-stopping fixed point: dashboard lags by exactly one commit, recognized as `lag-expected` by the next §12.1 audit. |
 
-**Audit protocol exercised across 16 terminating-refresh closures + 2 fresh-session reconciliations + 3 substantive closes (R-003, R-001-h-t-is-2-retired, R-200-ci-coverage-gating).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **R-200-ci-coverage-gating RESOLVED 2026-05-31 (PR #150 substrate + PR #151 substantive close + this terminating refresh); all mode-agnostic §III CI entries drained; deterministic next-action = R-200-ci-od-cp-dependency-leak (§III phase-7; advisor + cross-axis design call).**
+| 2026-05-31 | **R-200-ci-od-cp-dependency-leak RESOLVED** (this PR, substantive) — od axis-isolation leg was advisory due to undeclared OD→CP + OD→IS consumer deps; advisor-gated resolution = option (a) declare the deps | Bundled (touches `Project_Roadmap_v1.md`) → NOT a terminating refresh; follow-on owed. `harness-od/pyproject.toml` declares `harness-cp` (canonical OD→CP §2.3.3; forcing consumer = `ReplayDisposition` read-only at `idempotency_join_dedup.py`) + `harness-is` (OD→IS §2.3.4; tests); both acyclic-safe. Broadened grep caught the `harness_is` 2nd dep a cp-only grep would miss. od leg green in isolation (887 passed) + `continue-on-error` carve-out dropped → full 6-leg matrix blocks. Corrected the "reverse-direction / relocate the seam" framing (OD→CP is canonical) at `.harness/class_3_drift_od_cp_undeclared_dependency.md`. Hash left stale `e30b9dd81864` (recompute owed at the post-merge terminating refresh). Next action re-derived: **R-200-ci-lint-typecheck-blocking** (§III phase-7, sole remaining ACTIVE §III; outranks §II MVP). |
+
+**Audit protocol exercised across 16 terminating-refresh closures + 2 fresh-session reconciliations + 4 substantive closes (R-003, R-001-h-t-is-2-retired, R-200-ci-coverage-gating, R-200-ci-od-cp-dependency-leak).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **R-200-ci-od-cp-dependency-leak RESOLVED 2026-05-31 (this PR); od isolation leg now blocking (full 6-leg matrix); deterministic next-action = R-200-ci-lint-typecheck-blocking (§III phase-7; conditional advisor).**
 
 ---
 

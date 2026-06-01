@@ -127,20 +127,17 @@ jobs:
     # harness-runtime is intentionally omitted: it depends on every axis, so its
     # "isolation" is a full install == the blocking `test` job above.
     #
-    # Enforcement posture (v1): 5 of 6 legs (core / is / as / cp / cxa) are GREEN
+    # Enforcement posture (v1): all 6 legs (core / is / as / cp / od / cxa) are GREEN
     # in isolation and BLOCKING — a NEW cross-axis leak in any of them fails CI.
-    # The `od` leg is ADVISORY (continue-on-error) because it is RED today: an
-    # undeclared od->cp dependency at
-    #   harness-od/src/harness_od/pause_resume_namespace.py:295
-    #     `from harness_cp.pause_resume_protocol import ...`
-    # plus 4 od test modules import harness_cp, while harness-od declares only
-    # harness-core + harness-as. Tracked at R-200-ci-od-cp-dependency-leak — fix
-    # the dependency-graph drift (declare the dep or relocate the seam), then
-    # drop the `od` advisory carve-out so the whole matrix blocks.
+    # The `od` leg was ADVISORY through R-200-ci-axis-matrix because harness-od had
+    # undeclared OD→CP + OD→IS consumer deps (src reads `ReplayDisposition` from
+    # harness_cp.engine_namespace; tests import harness_cp + harness_is). Closed at
+    # R-200-ci-od-cp-dependency-leak: harness-od now declares harness-cp (OD→CP,
+    # canonical CXA §2.3.3) + harness-is (OD→IS, canonical CXA §2.3.4) — both
+    # acyclic-safe. od leg verified green in isolation (887 passed). See
+    # .harness/class_3_drift_od_cp_undeclared_dependency.md for the direction analysis.
     name: axis isolation — harness-${{ matrix.axis }}
     runs-on: ubuntu-latest
-    # Only the known-leaky `od` leg is advisory; the other 5 block on regressions.
-    continue-on-error: ${{ matrix.axis == 'od' }}
     strategy:
       fail-fast: false
       matrix:

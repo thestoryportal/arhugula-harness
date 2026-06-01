@@ -597,10 +597,10 @@ R-200-ci-axis-matrix:
 R-200-ci-od-cp-dependency-leak:
   title: Resolve the undeclared harness-od -> harness-cp dependency, then make the od isolation leg blocking
   surface: III
-  status: ACTIVE   # surfaced by the axis-isolation matrix (R-200-ci-axis-matrix, PR #147)
+  status: RESOLVED   # surfaced by the axis-isolation matrix (PR #147); closed via option (a)
   depends_on: [R-200-ci-axis-matrix]
   blocks: []
-  posture: phase-7   # touches harness-od/pyproject.toml + possibly src/test relocation — design call on the dep graph
+  posture: phase-7   # build-metadata + ci.yml (no src/test relocation needed) — design call on the dep graph
   scope: { files: [harness-od/pyproject.toml, harness-od/src/**, harness-od/tests/**, .github/workflows/ci.yml], contracts: [], cross_axis: yes }
   skills: { primary: phase-7-back-flow-routing, secondary: [phase-7-implementation] }
   advisor_required: yes   # cross-axis dependency-graph change; may be a Class 3 cross-axis-import-drift fork
@@ -609,14 +609,19 @@ R-200-ci-od-cp-dependency-leak:
   close_shape: { type: PR-merge, artifact: "fix(od): declare harness-cp dependency / relocate CP->OD seam; flip od isolation leg blocking", cascade: [] }
   next_pointer: null
   notes: >
-    harness-od/src/harness_od/pause_resume_namespace.py:295 imports `harness_cp.pause_resume_protocol`
-    (CP->OD audit-projection seam), and 4 od test modules import harness_cp, but harness-od declares only
-    harness-core + harness-as in its [project.dependencies]. The all-packages CI `test` job masks this
-    (everything installed); the axis-isolation matrix surfaces it. Resolution is a design call: either (a)
-    declare `harness-cp` as a harness-od dependency (acyclic-safe — cp depends on as, not od), or (b)
-    relocate the CP->OD seam consumer to a package that already declares cp (harness-cxa / harness-runtime)
-    per the CXA cross-axis-edge architecture. Likely warrants a Class 3 cross-axis-import-drift observation.
-    Once resolved, drop `continue-on-error: ${{ matrix.axis == 'od' }}` from the axis-isolation job.
+    RESOLVED 2026-05-31 via option (a) — declare the deps. CORRECTED DIRECTION ANALYSIS (advisor 2026-05-31):
+    harness-od -> harness-cp is the CANONICAL OD->CP consumer direction (CXA v2.18 §2.3.3, 12 edges; OD ingests
+    CP-emitted namespaces incl. `engine.*`), NOT a reverse-direction drift — the "relocate the seam" framing was
+    mistaken. The forcing consumer is `ReplayDisposition` (harness_cp.engine_namespace) read READ-ONLY at
+    idempotency_join_dedup.py (live; fans out to cost_namespace/cross_family_rollup/runtime cost-attribution) —
+    not relocatable (OD-internal C-OD-08 logic; re-homing the enum violates CP axis-ownership). Broadened grep
+    also surfaced a 2nd undeclared dep a cp-only grep would miss: od tests import `harness_is`
+    (state_ledger_entry_schema) — canonical OD->IS (§2.3.4). harness-od now declares harness-cp + harness-is in
+    [project.dependencies] + [tool.uv.sources]; both acyclic-safe (cp deps={core,as}; is deps={core}; neither
+    depends on od; reverse CP->OD audit seam §2.3.7 is mediated via harness-cxa, no direct cp->od import).
+    Verified green in isolation: `uv sync --package harness-od && pytest harness-od/tests -m "not e2e"` = 887 passed.
+    `continue-on-error: ${{ matrix.axis == 'od' }}` dropped from ci.yml — full 6-leg matrix now blocks. Direction
+    analysis + re-home-to-core future-hygiene alternative recorded at .harness/class_3_drift_od_cp_undeclared_dependency.md.
 
 R-200-ci-coverage-gating:
   title: Coverage gating at PR (informational at first; enforce later)
