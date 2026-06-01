@@ -32,6 +32,7 @@ dependencies = [
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
+    "pytest-cov>=6.0",         # Coverage measurement — R-200-ci-coverage-gating (informational at v1; general-purpose tooling, not a framework-pull-discipline target)
     "pyright>=1.1.390",
     "ruff>=0.9",
     "opentelemetry-api>=1.30",
@@ -46,6 +47,30 @@ dev = [
 [tool.uv]
 package = false                # Root is not itself a buildable package.
 default-groups = ["dev"]        # `uv sync` installs the dev group by default.
+
+# Coverage config — R-200-ci-coverage-gating (informational at v1; NO threshold —
+# "gather data first" per Project_Roadmap_v1.md §5 R-200-ci-coverage-gating).
+# `source` lists the 7 workspace import packages so `pytest --cov` (no arg)
+# measures production code; test packages are omitted. The CI `coverage` job
+# (advisory) runs the non-e2e suite under coverage and publishes a summary +
+# coverage.xml artifact. No `fail_under` — a threshold lands only once a baseline
+# trend justifies it (tracked as a future tightening, mirroring lint/typecheck).
+[tool.coverage.run]
+branch = true
+source = [
+    "harness_core",
+    "harness_is",
+    "harness_as",
+    "harness_cp",
+    "harness_od",
+    "harness_cxa",
+    "harness_runtime",
+]
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
 
 [tool.uv.workspace]
 members = [
