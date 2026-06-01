@@ -1,9 +1,28 @@
 # Class 1 fork — per-dispatch cost-attribution does not fire on a real `api.run` inference workflow
 
-**Status:** PROPOSING — awaiting operator ratification (root-cause debug + OD-5 retirement-validity review).
+**Status:** ❌ RESOLVED-AS-INVALID — NOT a defect; this was a test-observation bug. 2026-06-01.
 **Filed:** 2026-05-31, during R-100-mvp-real-workflow-execution use-the-product probe (live 3-step Anthropic run).
-**Class:** 1 (a landed substitution surface — H_T-OD-5 cost-attribution, RETIRED batch-32 — does not produce its contracted output on the production path; the retirement may rest on a grep-vs-e2e verification gap).
-**Blocks:** R-100-mvp-real-workflow-execution AC #4 ("cost-attribution entries present"). Does NOT block AC #1 / AC #3.
+**Class:** 1 (claimed). **Withdrawn** at ratification grounding 2026-06-01.
+**OD-5 retirement-validity:** the implied concern is **withdrawn** — H_T-OD-5 (cost-attribution) RETIRED batch-32 is **valid**; cost-attribution fires and writes on the real production path.
+
+---
+
+## 0. RESOLUTION (2026-06-01) — RESOLVED-AS-INVALID
+
+The fork's core claim ("cost-attribution does not fire") is **false**. Empirical instrumentation of the live 3-step Anthropic `api.run` run (during ratification grounding) showed, per dispatch (×3):
+
+1. `_attribute_cost_best_effort` IS entered (`provider=anthropic model=claude-haiku-4-5 in=12 out=4`) — substrate present, usage tokens present, no swallowed exception.
+2. `attribute_llm_dispatch_cost` runs to completion and calls `audit_writer.append(tenant_id, audit_entry)` → returns **`WriteResult.APPENDED`**. The cost AuditLedgerEntry has fields `['payload', 'signature_attrs', 'entry_hash']`; its `cost:<workflow_id>:<step_action_id>` action_id lives in `payload`.
+
+**The actual bug was in the R-100 test's observation layer, not the product.** `RuntimeAuditLedgerWriter.append` writes the OD cost entry into the IS state ledger under the **audit thread** — the state-ledger entry's `action_id` is `audit:<tenant>:<hash>` and the cost `payload` is hashed into `response_hash`. The test asserted `state_ledger_action_id.startswith("cost:")`, which is the wrong layer (the literal `cost:` prefix never appears as a state-ledger action_id; the `cost:` seam discrimination per CXA v2.9 §0.3 is at the OD audit-payload layer, consumed via the audit-read API — not the on-disk state-ledger action_id). The original failing run's "zero `cost:` entries" was this mis-observation; the 3 `audit:_single:<hash>` entries it DID show ARE the 3 cost-attribution writes.
+
+**Corrective action (this arc):** `test_r100_real_workflow_e2e.py` AC #4 changed from `startswith("cost:")` + xfail → assert ≥1 audit-thread (`audit:`) entry per dispatch (the on-disk-observable proxy for the per-dispatch cost write per U-OD-38 AC #1); cost-specific content stays covered by the U-OD-38/39 unit suite. Test now **PASSES** (AC #1 + #3 + #4 green). R-100-cost-attribution-firing → RESOLVED-AS-INVALID; OD-5 retirement preserved.
+
+**Discipline lesson (memory-worthy):** "no entries found" must verify the **observation layer / sink** before concluding a defect — the advisor's repeated "check the right sink first." Cost writes are wrapped (OD payload → state-ledger audit thread); the discriminating marker is not at the layer the test read. Companion to the genuine sibling fork `class_1_fork_tool_step_no_operator_supplied_converter.md` (AC #2), which remains VALID.
+
+---
+
+## (Original filing preserved below for the record — superseded by §0.)
 
 ---
 

@@ -533,7 +533,7 @@ R-100-mvp-config-discovery:
 R-100-mvp-real-workflow-execution:
   title: Real multi-step workflow at SOLO_DEVELOPER tier against Anthropic provider
   surface: II
-  status: ACTIVE   # unblocked by R-100-mvp-operator-usable-cli-shipped RESOLVED (PR #164). 2 of 4 ACs delivered; AC #2 + #4 gated on the two forks below.
+  status: ACTIVE   # 3 of 4 ACs PASS (AC #1 + #3 + #4) via test_r100_real_workflow_e2e.py. AC #4 cost fork RESOLVED-AS-INVALID 2026-06-01 (test-bug, not a defect). Only AC #2 (tool dispatch via api.run) remains — R-100-tool-step-converter fork.
   depends_on: [R-100-mvp-operator-usable-cli-shipped]
   blocks: [R-001, R-004, R-100-mvp-yaml-loader-shipped, R-300-multi-llm-second-provider]
   posture: phase-7
@@ -588,24 +588,30 @@ R-100-tool-step-converter:
 R-100-cost-attribution-firing:
   title: Per-dispatch cost-attribution fires on the real api.run inference path
   surface: II
-  status: BLOCKED
+  status: RESOLVED   # RESOLVED-AS-INVALID 2026-06-01 — was a test-observation bug, not a defect. Cost-attribution fires + writes (WriteResult.APPENDED ×3). OD-5 retirement valid.
   depends_on: []
   blocks: []
   posture: phase-7
-  scope: { files: [harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py, harness-runtime/tests/integration/**], contracts: [C-OD-26], cross_axis: yes }
-  skills: { primary: phase-7-implementation, secondary: [phase-7-substitution-retirement] }
-  advisor_required: yes
+  scope: { files: [harness-runtime/tests/integration/**], contracts: [], cross_axis: no }
+  skills: { primary: phase-7-implementation, secondary: [] }
+  advisor_required: no
   council_required: no
-  verification: { shape: e2e, must_pass: ["a real inference run writes ≥1 cost: ledger entry", "the xfail in test_r100_real_workflow_e2e.py converts to a pass", "OD-5 retirement re-validated against the production cost-emission path"] }
-  close_shape: { type: PR-merge, artifact: "fix: LLM cost-attribution fires on real dispatch + OD-5 re-validation" }
+  verification: { shape: e2e, must_pass: ["a real inference run writes ≥1 audit-thread cost-attribution entry per dispatch", "test_r100_real_workflow_e2e.py AC #4 passes"] }
+  close_shape: { type: PR-merge, artifact: "fix: R-100 AC #4 test-observation bug + close cost fork as INVALID" }
   next_pointer: R-001
   notes: >
-    BLOCKED on ratification + debug of `.harness/class_1_fork_llm_cost_attribution_not_firing_on_real_dispatch.md`
-    (PROPOSING). Empirically confirmed: a live 3-step Anthropic run wrote zero `cost:`
-    entries. Candidate causes (llm_dispatch.py:930-959): usage tokens None / dispatch
-    method routing past the line-517 cost block / swallowed exception. Carries an OD-5
-    retirement-validity question (grep-vs-e2e). Cross-axis: OD cost surface consumed at
-    the runtime LLM dispatch site.
+    RESOLVED-AS-INVALID 2026-06-01 at fork-ratification grounding. The fork
+    `.harness/class_1_fork_llm_cost_attribution_not_firing_on_real_dispatch.md` is
+    WITHDRAWN: cost-attribution DOES fire + write on the real api.run path
+    (instrumentation: `_attribute_cost_best_effort` entered ×3, usage present,
+    `audit_writer.append` → WriteResult.APPENDED ×3). The "zero cost: entries" was a
+    test-observation bug — `RuntimeAuditLedgerWriter` writes the OD cost entry under the
+    audit thread as an `audit:<tenant>:<hash>` state-ledger entry (the `cost:` action_id
+    is in the hashed `payload`, not the state-ledger action_id). AC #4 in
+    test_r100_real_workflow_e2e.py corrected to assert ≥1 `audit:` entry per dispatch;
+    test now PASSES. **OD-5 retirement (batch-32) is VALID** — the retirement-validity
+    concern is withdrawn. Discipline lesson: verify the observation layer/sink before
+    concluding a defect.
 
 R-100-mvp-yaml-loader-shipped:
   title: YAML manifest loader operational (close Class 1 forks PR #79 / PR #80 lineage)
