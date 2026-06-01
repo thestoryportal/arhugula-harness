@@ -684,4 +684,46 @@ Before authoring against a memory or checkpoint claim:
 
 ---
 
-*End of root `CLAUDE.md`. Per-axis subdirectory `CLAUDE.md` files at `harness-{is,as,cp,od}/`. Skills at `.claude/skills/`. Sub-agent boundary at `Sub_Agent_Boundary_Specification_v1.md`. Design-phase council at `.claude/skills/council/`. X-AL-3 enforcement triad: §4.4 (CI guard) + §4.5 (clearance markers) + §11 (posture declaration). Roadmap discipline at §12.*
+## 13. Orchestration + effort discipline
+
+*Codifies how Claude allocates effort and reaches for multi-agent / multi-voice tooling, across BOTH postures (design-phase + Phase 7) and every effort level. Distilled from the 2026-06-01 ultracode retrospective. Load-bearing principle: **the verification disciplines (§13.1, cheap) catch the bugs — not raw reasoning depth or multi-agent fan-out.** Reach for heavier machinery deliberately, at named high-leverage moments; not by default.*
+
+### 13.1 Always-on disciplines (every session, every posture, independent of the effort knob)
+
+| Discipline | When |
+|---|---|
+| **`advisor()` at decision-forks + pre-done** | Before committing to an interpretation/approach, and before declaring done. Single stronger reviewer on the full transcript; value is front-loaded. Skip on mechanical steps + repeated calls on a settled path. |
+| **Completeness check before claiming "sufficient"** | Whenever about to assert "X closes/satisfies Y" — *especially* "this is the last gap." Verify **by execution** (run the path / e2e), not unit tests. (The 2026-06-01 AC#2 arc undercounted the gap set TWICE here: a green-unit-tested converter was unreachable through the bootstrap; the "two-gap" model was really five.) |
+| **Pre-merge adversarial review** | Any `design-substrate/**` amendment or Phase 7 impl arc against cleared spec/plan → red-team it BEFORE merge (per §10.9), not after. |
+| **Empirical cite-grounding** | Every cite (file:line, §section, symbol) verified at session-time — never recall. (§10.4.) A phantom cite I *authored* this session (§14.9.7 deferring the resolver) was caught only by re-grounding. |
+| **Cross-spec drift grep** | When touching any per-axis spec/plan, grep siblings for stale cite-shapes (the workspace's biggest defect class). |
+
+### 13.2 The orchestration decision matrix
+
+| Mechanism | Use when | NOT for | Cost |
+|---|---|---|---|
+| **Solo** (just Claude) | Mechanical / linear work (spec authoring, impl edits, test writing, back-flow docs); single-fact lookups; follow-ups dictated by tool output | High-stakes design forks; broad audits | cheapest |
+| **`advisor()`** | Decision-forks; stuck; change-of-approach; pre-done sanity (§13.1) | Mechanical steps; repeat calls on a settled path | cheap (one call) |
+| **Council** (design-phase; §10.7 + §10.9) | A **design** decision (authoring/revising ADR/spec/plan) with a **nameable multi-domain tension** between 2+ voices (security / blast-radius / observability / cost / reliability / eval-ability / HITL-local-first). Convene **dyadic (2 voices)** by default | Phase 7 impl; single-axis decisions; tensions you can't name in advance (→ single voice + `advisor()`) | moderate (one model call) |
+| **Adversarial reviewer** (skill; §10.9) | Pre-merge red-team of a *completed* design-substrate amendment or impl arc | In-flight authoring | moderate |
+| **Workflow** (multi-agent fan-out; **opt-in** per the Workflow tool rule) | Broad parallelizable audits/sweeps; exhaustive discovery; independent verification of a high-stakes finding; large migrations | Linear/interdependent impl; mechanical edits; anything one context can hold | highest (latency + tokens) — **flag + get a green-light before deploying** |
+
+### 13.3 Effort-level guidance for harness work
+
+- **Normal / High is home base.** High suits the comprehensive nature of harness arcs (spec + impl + tests + clearance + roadmap). The effort knob governs the *thoroughness of the solo pass*; it does NOT change which §13.2 mechanism is appropriate.
+- **Ultracode is NOT a standing default.** Most harness work is careful-but-linear, where correctness comes from §13.1 verification (cheap), not from xhigh reasoning or mandatory fan-out. Reserve ultracode for a deliberate exhaustive push the operator explicitly wants. (2026-06-01 retrospective: ultracode's *one* successful investigation workflow found 2 real gaps, but the §13.1 disciplines + `advisor()` caught the rest at a fraction of the latency; token cost was ~2-3% of plan limits — **latency + over-engineering are the real cost, not tokens**.)
+
+### 13.4 Worked example — the council that was missed (2026-06-01)
+
+The resolver Reading A-vs-B decision (identity resolver / *vacuous* floor **vs** per-server fields / *meaningful* floor) carried a nameable **C10 ⊥ C11** tension (action-safety/blast-radius wanting a real sandbox floor vs operator-loop/local-deployment wanting minimal per-server config burden) → **council-eligible** by the §10.9 nameable-tension discriminator. It was routed to `advisor()` + operator `AskUserQuestion` instead. Both reach a decision; the council surfaces the tension *structurally* before the operator chooses. **Rule of thumb: design decision + nameable cross-domain tension → offer a dyadic council convening (or at minimum name the voices' positions) before the operator `AskUserQuestion`.**
+
+### 13.5 Cross-references
+
+- Council activation + standing posture: §10.7 + §10.9. Voices at `.claude/skills/council/c1..c11` + `council-orchestrator`.
+- `advisor()` / memory / checkpoint composition: §12.5.
+- Posture (design-phase / Phase 7 / mode-agnostic): §11.
+- Workflow tool opt-in rule + quality patterns: the Workflow tool description.
+
+---
+
+*End of root `CLAUDE.md`. Per-axis subdirectory `CLAUDE.md` files at `harness-{is,as,cp,od}/`. Skills at `.claude/skills/`. Sub-agent boundary at `Sub_Agent_Boundary_Specification_v1.md`. Design-phase council at `.claude/skills/council/`. X-AL-3 enforcement triad: §4.4 (CI guard) + §4.5 (clearance markers) + §11 (posture declaration). Roadmap discipline at §12. Orchestration + effort discipline at §13.*
