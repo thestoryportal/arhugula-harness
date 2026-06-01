@@ -218,7 +218,7 @@ def test_attempt_does_not_alter_transition() -> None:
 
 def test_palette_table_frozen() -> None:
     """Palette-restriction records are frozen (ConfigDict frozen=True)."""
-    with pytest.raises(Exception):  # noqa: B017 - pydantic frozen violation
+    with pytest.raises(Exception):
         PALETTE_RESTRICTION_TABLE[0].cross_trust_state = (  # type: ignore[misc]
             CrossTrustBoundaryState.NONE
         )

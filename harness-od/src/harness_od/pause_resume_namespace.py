@@ -63,6 +63,12 @@ from collections.abc import Mapping
 from typing import Final
 
 from harness_core import AttributeValueType, Cardinality
+from harness_cp.pause_resume_protocol import (
+    PauseEvent,
+    ResumeAttempt,
+    ResumeOutcome,
+    ResumeOutcomeKind,
+)
 from pydantic import BaseModel, ConfigDict
 
 # ----------------------------------------------------------------------------
@@ -290,13 +296,6 @@ class PauseResumeAuditPayload(BaseModel):
 # CP composer authoring arc (gates H_T-CP-22 PARTIAL → RETIRE-READY per
 # harness-cp/CLAUDE.md §4.1). Helpers are DEAD CODE at landing.
 
-from harness_cp.pause_resume_protocol import (
-    PauseEvent,
-    ResumeAttempt,
-    ResumeOutcome,
-    ResumeOutcomeKind,
-)
-
 
 def _project_pause_event_to_audit_payload(
     event: PauseEvent,
@@ -462,7 +461,9 @@ def _project_resume_outcome_to_audit_payload(
     )
 
 
-__all__ = [
+__all__ = [  # noqa: RUF022 — grouped public-symbols-then-helpers with an
+    # explanatory comment block between the groups; alphabetic re-sort would
+    # destroy the documented two-group structure.
     "AttributeSpec",
     "PAUSE_RESUME_SPAN_NAMESPACE_SCHEMA",
     "PauseResumeAuditPayload",

@@ -20,7 +20,8 @@ CPAuditLedgerEntry; `hitl_webhook:` + `operator_burden:` + `validator:` +
 `mcp_trust:` + **`pause:`/`resume:` via PauseResumeAuditPayload (un-STRUCK at
 U-OD-51 landing 2026-05-23 per Sub-arc A of `[[fork-u-cp-72-cost-and-pause-
 resume-prefix-gap]]` §2.1 routing target (a))**). 1 prefix (`cost:`) remains
-STRUCK per `[[halt-route-split-AC-pattern]]` — see `.harness/class_1_fork_u_cp_72_cost_and_pause_resume_prefix_gap.md`
+STRUCK per `[[halt-route-split-AC-pattern]]` — see
+`.harness/class_1_fork_u_cp_72_cost_and_pause_resume_prefix_gap.md`
 §2.2 (Sub-arc B: CostRecordAuditPayload authoring + CXA v2.9 amendment owed).
 
 **Home rationale (Q5 ratification, 2026-05-20).** Lives at `harness-cxa/` per

@@ -61,18 +61,18 @@ from typer.testing import CliRunner
 _cli_app_mod = sys.modules["harness_runtime.cli.app"]
 assert _ensure_import is not None
 
-from harness_runtime.api import RunResult  # noqa: E402
-from harness_runtime.cli.app import (  # noqa: E402
+from harness_runtime.api import RunResult
+from harness_runtime.cli.app import (
     EXIT_CONFIG_ERROR,
     EXIT_MANIFEST_ERROR,
     EXIT_SUCCESS,
     app,
 )
-from harness_runtime.config_source import RuntimeConfigLoadError  # noqa: E402
-from harness_runtime.lifecycle.workflow_manifest_loader import (  # noqa: E402
+from harness_runtime.config_source import RuntimeConfigLoadError
+from harness_runtime.lifecycle.workflow_manifest_loader import (
     WorkflowManifestLoader,
 )
-from harness_runtime.types import (  # noqa: E402
+from harness_runtime.types import (
     CollectorConfig,
     OTelConfig,
     PathBindingConfig,

@@ -44,7 +44,7 @@ def _stub() -> StepDispatcher:
 def test_registry_is_frozen_post_construction() -> None:
     """AC #1: StepKindDispatcherRegistry is frozen — mutation raises."""
     registry = StepKindDispatcherRegistry(dispatchers={StepKind.SUB_AGENT_DISPATCH: _stub()})
-    with pytest.raises(Exception):  # noqa: B017 — Pydantic frozen-violation
+    with pytest.raises(Exception):
         registry.dispatchers = {}  # type: ignore[misc]
 
 

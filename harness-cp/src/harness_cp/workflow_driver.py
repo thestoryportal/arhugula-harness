@@ -37,7 +37,7 @@ import asyncio
 import hashlib
 from collections.abc import Coroutine, Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Any, Protocol, TypeVar, cast, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 from harness_as.sandbox_tier import SandboxTier
 from harness_core.identity import ActionID
@@ -418,12 +418,9 @@ def resolve_parent_gate_level(manifest_entry: WorkflowManifestEntry) -> GateLeve
     return GateLevel.AUTO
 
 
-_TProtocolResult = TypeVar("_TProtocolResult")
-
-
-def _run_protocol_method_sync(
-    coro: Coroutine[Any, Any, _TProtocolResult],
-) -> _TProtocolResult:
+def _run_protocol_method_sync[TProtocolResult](
+    coro: Coroutine[Any, Any, TProtocolResult],
+) -> TProtocolResult:
     """Run a PauseResumeProtocol async-method coroutine to completion from sync
     driver context.
 

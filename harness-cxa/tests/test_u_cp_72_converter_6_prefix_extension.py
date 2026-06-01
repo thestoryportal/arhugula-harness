@@ -221,7 +221,7 @@ def test_signature_attrs_present_on_every_branch() -> None:
 # ============================================================================
 
 
-from harness_od.pause_resume_namespace import PauseResumeAuditPayload  # noqa: E402
+from harness_od.pause_resume_namespace import PauseResumeAuditPayload
 
 PAUSE_RESUME_AUDIT_NAMESPACE_PREFIX = "audit.pause_resume"
 
@@ -338,8 +338,8 @@ def test_signed_with_ed25519_default() -> None:
 # ============================================================================
 
 
-from harness_cxa.cp_audit_conversion import COST_AUDIT_NAMESPACE_PREFIX  # noqa: E402
-from harness_od.cost_namespace import CostRecordAuditPayload  # noqa: E402
+from harness_cxa.cp_audit_conversion import COST_AUDIT_NAMESPACE_PREFIX
+from harness_od.cost_namespace import CostRecordAuditPayload
 
 
 def _cost_carrier() -> CostRecordAuditPayload:

@@ -18,8 +18,12 @@ the runtime spec authors the prompts binding.
 Recipe (v1.3 — 2-component scope):
 
     sha256(canonical_json({
-        "active_skills_versions": sorted(set(skill.manifest.version_sha for skill in ctx.skills.values())),
-        "routing_manifest_sha": sha256(ctx.routing_manifest.model_dump_json(by_alias=False).encode("utf-8")).hexdigest(),
+        "active_skills_versions": sorted(
+            set(skill.manifest.version_sha for skill in ctx.skills.values())
+        ),
+        "routing_manifest_sha": sha256(
+            ctx.routing_manifest.model_dump_json(by_alias=False).encode("utf-8")
+        ).hexdigest(),
     }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 Direct-compute discipline per spec §5.2: NO separate snapshot-keyed registry

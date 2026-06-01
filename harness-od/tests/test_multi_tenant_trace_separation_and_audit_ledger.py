@@ -277,5 +277,5 @@ def test_per_tenant_separation_is_frozen() -> None:
     """PerTenantSeparation is a frozen, extra-forbidding record."""
     binding = PER_TENANT_SEPARATION_BINDINGS[_CELL_7]
     assert isinstance(binding, PerTenantSeparation)
-    with pytest.raises(Exception):  # noqa: B017 — frozen-model mutation
+    with pytest.raises(Exception):
         binding.cross_tenant_aggregation_forbidden = False  # type: ignore[misc]
