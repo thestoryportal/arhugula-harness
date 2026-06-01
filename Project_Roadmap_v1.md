@@ -692,7 +692,7 @@ R-100-mvp-yaml-loader-shipped:
 R-100-mvp-multi-workflow-fixture-suite:
   title: Workflow fixture suite covering all 6 topology patterns
   surface: II
-  status: BLOCKED
+  status: RESOLVED   # 2026-06-01: dep R-100-mvp-yaml-loader-shipped RESOLVED → unblocked. 6 operator-facing example manifests at examples/workflows/topology/*.yaml — one per TopologyPattern — each a parent workflow with a sub-agent-dispatch step whose child manifest declares that pattern paired with an admissible workload (single-threaded-linear↔pipeline-automation, orchestrator-workers↔research, decentralized-handoff↔pipeline-automation, hierarchical-delegation↔software-engineering, evaluator-optimizer↔content-creation, parallelization↔research). Integration suite harness-runtime/tests/integration/test_topology_fixture_suite.py (26 tests) loads each via the real WorkflowManifestLoader and runs each parent fixture through the CP execute_workflow DRIVER LOOP to a terminal RunStatus.SUCCESS (driver-level e2e; mirror of test_track_b_e2e mech-α: real run_bootstrap + faked provider/OD stages; child sub-agent is a deterministic stand-in so the gate fires for real), deterministically (no key/ollama/daemon — CI-runnable per CI `not e2e` selector). must_pass green: [0] all 6 execute end-to-end through the driver to SUCCESS; [1] is_topology_permitted gate fires per pattern + topology.pattern/topology.workload_class span attrs; [2] ≥1 OD audit-ledger entry per dispatch. Plus completeness guard (all 6 patterns covered) + negative admissibility test (parallelization+pipeline-automation raises SubAgentDispatchTopologyInadmissibleError) + per-fixture load/model_validate coverage. HONESTY CAVEAT: topology has NO distinct per-pattern orchestration at MVP (dispatch is a stateless passthrough emitting telemetry); this suite is regression coverage of the PER_WORKLOAD_CLASS_TOPOLOGY admissibility matrix + dispatch-composer + telemetry, NOT distinct orchestration semantics (unbuilt; CP-axis contract work — Class 1 back-flow, out of this entry's contracts:[] cross_axis:no fences). 26 passed; ruff+pyright clean. Phase-7; roadmap §5.
   depends_on: [R-100-mvp-yaml-loader-shipped]
   blocks: [R-400-multi-deployment-self-hosted-server]
   posture: phase-7
@@ -703,7 +703,13 @@ R-100-mvp-multi-workflow-fixture-suite:
   verification: { shape: e2e, must_pass: ["6 fixture workflows execute end-to-end", "each fixture exercises ≥1 topology pattern", "audit-ledger emits expected lifecycle events per fixture"] }
   close_shape: { type: PR-merge, artifact: "mvp: 6-topology fixture suite", cascade: [] }
   next_pointer: R-400-multi-deployment-self-hosted-server
-  notes: Some patterns (parallelization, evaluator-optimizer) may require multiple PRs.
+  notes: >
+    RESOLVED 2026-06-01. MVP materializes no per-pattern orchestration — the
+    suite proves admissibility-matrix + dispatch-composer + telemetry coverage
+    for all 6 patterns via deterministic sub-agent dispatch. Distinct
+    orchestration semantics (true fan-out for parallelization, generator/
+    evaluator loop for evaluator-optimizer, etc.) remain unbuilt and are
+    CP-axis contract work routed via Class 1 back-flow when scheduled.
 ```
 
 ### 5.4 CI substrate (R-200..R-299)
