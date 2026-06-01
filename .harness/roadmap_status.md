@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `ac70928df292` |
-| `last_refreshed` | 2026-06-01T20:30:00-06:00 |
-| `git_head` | `08b66545` (main) — `ops: roadmap status refresh post-PR-220 (#221)` (terminating refresh of #220; §12.1 step-6 lag-by-one converged here) |
+| `workspace_state_hash` | `fa56924f867c` |
+| `last_refreshed` | 2026-06-01T20:55:00-06:00 |
+| `git_head` | `315b2c4a` (main) — `back-flow: R-CXA-4 grounded — 0 wireable edges; correct stale register framing (#222)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 44 |
 
@@ -60,8 +60,8 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `r-cxa-4-grounding-no-wireable` | `R-CXA-4` | mode-agnostic — **substantive** (NOT a terminating refresh): R-CXA-4 grounding result (0 wireable edges) → corrects register §B-14 stale framing + roadmap §5 reframe + dashboard. Converges the §12.1 step-6 lag-by-one (`42239f9ed02a` → `ac70928df292`, `git_head` → `08b66545` #221). Per §12.2.1 a follow-on `ops: roadmap status refresh post-PR-NN` is owed after this merges. |
-| *(none else)* | — | — | open-PR set was empty after #220+#221 merged; this PR opens R-CXA-4 grounding. |
+| *(this PR)* | `ops-roadmap-refresh-post-222` | *(terminating refresh §12.2.1)* | mode-agnostic — records PR #222 (R-CXA-4 grounded, 0 wireable); `workspace_state_hash` recompute (`ac70928df292` → `fa56924f867c`) + `git_head` → `315b2c4a` (#222 merge). Dashboard-only (`.harness/roadmap_status.md`); title `ops: roadmap status refresh post-PR-222` → next §12.1 audit sees expected lag-by-one (carve-out §12.1 step 6). |
+| *(none else)* | — | — | open-PR set empty after #222 merged. |
 
 ---
 
@@ -69,7 +69,7 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| *(this PR)* | 2026-06-01 | **R-CXA-4-od-multi-seam GROUNDED → 0 wireable edges; ZERO production code.** Operator-picked grounding-first. A general-purpose producer-discovery sweep (verified 3 ways: edge-2 already wired w/ 4 producers; OD aggregate manifest carries only terminal targets; CXA §2.5 = 1 genuine seam) found the prior "~5 of 26 / ~21 remaining" framing was a **stale-carry mis-framing** (§10.5): the 26 OD-outbound edges = 1 genuine (already wired) + 6 phase-2-runtime (already at stage 6) + 19 convention (stage-6 `verify_*` + stale `U-AS-NN`/`U-CP-NN` placeholders, no producer). **There is no wiring task.** Follow-on = CXA convention-formalization revision (design-substrate, operator-owned; mirror v2.18 C3-15). R-CXA-4 stays PARTIAL. Mirrors R-CXA-1 (`[[r-cxa-seam-wiring-is-producer-discovery]]`, 3rd instance). Corrects register §B-14 + roadmap §5 + dashboard. advisor-confirmed. |
+| PR #222 (`315b2c4`) | 2026-06-01 | **R-CXA-4-od-multi-seam GROUNDED → 0 wireable edges; ZERO production code.** Operator-picked grounding-first. A general-purpose producer-discovery sweep (verified 3 ways: edge-2 already wired w/ 4 producers; OD aggregate manifest carries only terminal targets; CXA §2.5 = 1 genuine seam) found the prior "~5 of 26 / ~21 remaining" framing was a **stale-carry mis-framing** (§10.5): the 26 OD-outbound edges = 1 genuine (already wired) + 6 phase-2-runtime (already at stage 6) + 19 convention (stage-6 `verify_*` + stale `U-AS-NN`/`U-CP-NN` placeholders, no producer). **There is no wiring task.** Follow-on = CXA convention-formalization revision (design-substrate, operator-owned; mirror v2.18 C3-15). R-CXA-4 stays PARTIAL. Mirrors R-CXA-1 (`[[r-cxa-seam-wiring-is-producer-discovery]]`, 3rd instance). Corrects register §B-14 + roadmap §5 + dashboard. advisor-confirmed. |
 | PR #220 (`d77647b`) | 2026-06-01 | **R-CXA-1 must_pass #1 fork RESOLVED-AS-READING-D (defer; don't wire).** Apply arc opened on the first-ratified Reading B; pre-substantive empirical orientation + advisor reconcile found it unwritable-as-previewed: bootstrap fetch is `resolve_bootstrap_value(NAME)` (name only — the scope-bearing `resolve()` path has ZERO production callers); unsourced-field sentinels are MATERIAL; idempotency key timestamp-free; `SecretFetchEvent` machinery has no real producer. Operator re-ratified DON'T-WIRE. must_pass #1 DEFERRED; R-CXA-1 PARTIAL; **ZERO production code**. (Refresh recorded at PR #221.) |
 | PR #218 (`3885074`) | 2026-06-01 | **R-CXA-1 must_pass #1 fork FILED** (`class_1_fork_cxa_1_secret_fetch_audit_bootstrap_ordering.md`). Grounded the top Claude-executable post-Phase-8 lever before opening; the secret-fetch caller fires at bootstrap stage 3a while the AS→IS emitter materializes at stage 6 (firing-site-precedes-wiring; U-RT-111 shape) → Class 1 back-flow. fork count 43→44. A filing, not a closure. |
 | PR #216 (`ed2e827`) | 2026-06-01 | **`just mvp-r100-real` recipe added — R-100 live e2e is now a one-liner.** justfile-only (mirrors `mech-beta-*`; `_require-anthropic` dep + dotenv-load). Runs the real 3-step Anthropic INFERENCE workflow e2e (`test_r100_real_workflow_e2e.py`, AC #1/#3/#4) through `api.run`. Both R-100 live e2e halves verified green this session: AC#2 TOOL_STEP via live ollama (free) + AC#1/#3/#4 real Anthropic `claude-haiku-4-5` (paid, operator-authorized). `R-100-mvp-real-workflow-execution` re-validated live (already RESOLVED 4/4; no state change). Mode-agnostic; ZERO src/spec/roadmap-state change. |
