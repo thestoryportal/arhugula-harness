@@ -1281,7 +1281,7 @@ R-700 prefix used because these are halt-resolutions awaiting downstream substan
 R-700-OD-IS-EDGE-DRIFT:
   title: OD→IS edge cardinality reconciliation (halt-doc Item 11; routes via PR #110)
   surface: VII
-  status: BLOCKED
+  status: RESOLVED   # PR #110 merged (must_pass satisfied); reconciliation end-state achieved. NOTE: v2.18's absorption rested on a phantom-drift premise (CXA was already conformed at v2.3) — corrected at CXA v2.19 / PR #226; CXA HEAD now consistent at aggregate 107. The edge cardinality IS reconciled, so RESOLVED is correct.
   depends_on: [R-IF-110]
   blocks: []
   posture: design-phase
@@ -1297,7 +1297,7 @@ R-700-OD-IS-EDGE-DRIFT:
 R-700-OD-INTERNAL-FORMALIZATION:
   title: OD plan §4.6 OD-INTERNAL carve-out (halt-doc Item 12; routes via PR #111)
   surface: VII
-  status: BLOCKED
+  status: RESOLVED   # PR #111 merged (must_pass satisfied); OD plan v2.27 §4.6.OD-INTERNAL carve-out landed. Was stale-BLOCKED.
   depends_on: [R-IF-111]
   blocks: []
   posture: design-phase
