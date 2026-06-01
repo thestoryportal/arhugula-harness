@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `7afa7c5bb308` |
-| `last_refreshed` | 2026-06-01T13:00:00-06:00 |
-| `git_head` | `73839e10` (main) — `docs: post-Phase-8 forward work register (#209)` |
+| `workspace_state_hash` | `7646d1d29e5f` |
+| `last_refreshed` | 2026-06-01T18:00:00-06:00 |
+| `git_head` | `26d50ece` (main) — `roadmap: R-800-external-mcp-server RESOLVED (already wired at #172) + stale-framing refresh (#211)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 43 |
 
@@ -52,7 +52,7 @@
 
 **`R-XI-01` (operator dashboard MVP) — RESOLVED + LIVE** at **https://thestoryportal.github.io/arhugula-harness/** (HTTP 200).
 
-**(This PR: substantive — marks `R-800-external-mcp-server` RESOLVED + refreshes the stale "unwired at bootstrap" framing across `Project_Roadmap_v1.md` §5.12 + register §B-10 + this dashboard. Mode-agnostic; ZERO src/spec/test change. A follow-on terminating refresh PR is owed per §12.2.1. PR #210 was the terminating refresh post-PR-209. PR #209 brought post-Phase-8 under the R-NNN discipline. PR #207 landed the R-700 closure-accounting draft.)**
+**(This PR: terminating refresh post-PR-211 (§12.2.1) — recomputes `workspace_state_hash` `7afa7c5bb308` → `7646d1d29e5f` + `git_head` → `26d50ece` against the #211 merge (PRS empty / FORKS 43 / batch-51). Dashboard-only; recursion-stopping fixed point. PR #211 marked R-800 RESOLVED + refreshed the stale framing. PR #210 was the terminating refresh post-PR-209.)**
 
 ---
 
@@ -60,7 +60,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `roadmap-r-800-external-mcp-resolved` | `R-800-external-mcp-server` (RESOLVED) | mode-agnostic substantive — marks R-800 RESOLVED (already wired at PR #172) + refreshes stale "unwired at bootstrap" framing at `Project_Roadmap_v1.md` §5.12 + register §B-10 (summary + detail) + dashboard. ZERO src/spec/test change. NOT a terminating refresh (substantive title) → a follow-on `ops: roadmap status refresh` PR is owed per §12.2.1; `workspace_state_hash` recompute deferred to that PR. |
+| *(this PR)* | `ops-roadmap-refresh-post-211` | *(terminating refresh §12.2.1)* | mode-agnostic — records PR #211 (R-800 RESOLVED + stale-framing refresh); `workspace_state_hash` recompute (`7afa7c5bb308` → `7646d1d29e5f`) + `git_head` → `26d50ece` (#211 merge). Dashboard-only (`.harness/roadmap_status.md`); title `ops: roadmap status refresh post-PR-211` → next §12.1 audit sees expected lag-by-one (carve-out §12.1 step 6). |
 
 ---
 
@@ -68,11 +68,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #211 (`26d50ec`) | 2026-06-01 | **R-800-external-mcp-server RESOLVED — verified already complete (PR #172); no production change.** Operator picked R-800 from the post-Phase-8 menu; pre-substantive grounding found all 3 must_pass met (`host.start()` stage_3a:59 + `host.shutdown()` shutdown.py:484 at #172 spec v1.41 Gaps B/F; real external stdio MCP e2e green & unconditional at `test_u_rt_86`, 9/9). Stale "unwired at bootstrap" framing (authored PR #209) refreshed across roadmap §5.12 + register §B-10 + dashboard — stale-carry-text disposition (§10.5). Residual = Gap D / R-100 AC#2 (operator-gated; C9⊥C11 fork candidate). Mode-agnostic; ZERO src/spec/test change. |
 | PR #210 (`cd5bf0a`) | 2026-06-01 | **Terminating refresh post-PR-209 (§12.2.1).** Recomputed `workspace_state_hash` `e95a2e943993` → `7afa7c5bb308` + `git_head` → `73839e10` against the #209 merge. Dashboard-only; recursion-stopping fixed point (lag-by-one). |
 | PR #209 (`73839e1`) | 2026-06-01 | **Post-Phase-8 brought under the R-NNN discipline + dashboard section.** `.harness/post-phase-8-forward-register.md` + **12 NEW R-NNN entries** (§5.10–§5.14: R-300 multi-LLM / R-500 multi-tenant / R-800 external / R-900 research / R-CXA-1..4) + §9 IV/VI/IX/X → `decomposed` (closes the no-R-NNN-entry gap R-700 surfaced) + NEW dashboard "Post-Phase-8 forward register" panel (`generate.py` `post_phase_8()`; 20 items, LIVE). Memory: `post-phase-8-forward-tracking`. ruff (lint+format) fixed at follow-on commit. Mode-agnostic. |
 | PR #208 (`01cd0fa`) | 2026-06-01 | **Terminating refresh post-PR-207 (§12.2.1).** Recomputed `workspace_state_hash` `4d3120974cef` → `e95a2e943993` + `git_head` → `d1eaf75b` against the #207 merge (verified by reproducing the prior anchor; PRS empty / FORKS 43 / batch-51). Dashboard-only; recursion-stopping fixed point (lag-by-one). |
 | PR #207 | 2026-06-01 | **R-700-closure-accounting-draft RESOLVED — definitive remaining-to-closure log drafted.** `.harness/R-700-phase-8-closure-accounting-draft.md`: Part A 54-row substitution log (per-row disposition + tally) + Part B 8-entry beyond-substitutions register (R-410..R-440 + R-100-config-discovery; vendor + persona/surface + spec cites). **KEY FINDING:** published `48/54 RETIRED / 49 pipeline` is internally impossible (3 PARTIAL: OD-4 + CXA-1 + CXA-4); per-row truth = `46 RETIRED + 3 PARTIAL + 2 SB + 3 SB-INDEF = 54` (accounting (i); RETIRED integer 46–47, buckets co-vary); true open set = 8 rows (not 3) because CXA has no §4.1 + CXA corrective never folded in (ledger §11.1a line 278). NOT a regression. Dashboard `48/54` NOT overwritten — flagged as Phase-8 ratification item. NEW gap: CXA-1/2/3/4 + CP-17 have no R-NNN entries. Advisor-passed. Mode-agnostic; feeds BLOCKED `R-700-phase-8-substitution-accounting` (operator owns final integer). |
-| PR #201 (`2914887`) | 2026-06-01 | **R-600-workflow-v1-14-amendment RESOLVED — NEW §7.5 Process-discipline catalogue.** `Project_Workflow_v1_14.md`: §7.5 under §7 (sibling to §7.4), v1.9 framework-establishing precedent. 4 disciplines seeded (PD-1 halt-route-split-AC / PD-2 use-the-product-probe / PD-3 verification-shape-grep-vs-e2e / PD-4 plan-revision-against-not-yet-built-substrate, SUPERSEDES the v2.36→v2.38 §7.4.7.2-sub-species framing) + OPEN clause + 5 parked candidates failing the §7.5.1 independence gate. §10.9 adversarial-gate CLEAR (0/0/1; F1-01 inline-fixed). Co-published CLAUDE.md §2.1 v1.13→v1.14 + §10.2/§10.3 refresh + clearance marker. Open: `must_pass[1]` N/A-as-malformed owed operator confirm. Design-phase; ZERO cross-axis cascade. |
 
 ---
 
