@@ -1411,15 +1411,14 @@ R-XI-03:
 R-700-closure-accounting-draft:
   title: Draft the definitive remaining-to-full-closure log — Part A 54-row substitution accounting + Part B beyond-substitutions register (Surface-V infra-gated + R-100-config-discovery)
   surface: VIII
-  status: ACTIVE   # paused mid-arc after orientation; orientation banked at the checkpoint; resume = execute
+  status: RESOLVED   # 2026-06-01 — draft landed at .harness/R-700-phase-8-closure-accounting-draft.md; advisor-passed
   depends_on: []
   blocks: [R-700-phase-8-substitution-accounting]
   posture: mode-agnostic
   scope: { files: [.harness/R-700-phase-8-closure-accounting-draft.md, .harness/roadmap_status.md], contracts: [], cross_axis: no }
   skills: { primary: phase-7-substitution-retirement, secondary: [] }
-  advisor_required: yes   # the 54-row arithmetic reconciliation (48 RETIRED + 6 non-RETIRED; CXA 5 + CP-22 + authoring/bounded tail) is the main correctness risk — advisor before declaring done
+  advisor_required: yes   # the 54-row arithmetic reconciliation is the main correctness risk — advisor-passed this arc (thesis confirmed load-bearing)
   council_required: no
-  resume: .harness/R-700-closure-accounting-draft-checkpoint.md
   verification: { shape: grep, must_pass: ["Part A: all 54 raw-ledger substitution rows enumerated + reconciled to the ledger §11.5 count (48 RETIRED / 6 non-RETIRED, or corrected)", "Part B: R-410..R-440 + R-100-mvp-config-discovery each with summary + vendor + persona/deployment-surface + spec/ADR cites", "feeds R-700-phase-8-substitution-accounting (operator still owns final Phase-8 review)"] }
   close_shape: { type: substrate-amendment, artifact: ".harness/R-700-phase-8-closure-accounting-draft.md", cascade: [R-IF-roadmap-refresh] }
   next_pointer: R-700-phase-8-substitution-accounting
@@ -1432,6 +1431,14 @@ R-700-closure-accounting-draft:
     not in any per-axis §4.1 + CP-22 + authoring/bounded tail) is the reconciliation work Part A must close. This
     draft is the Claude-executable input to R-700; the operator still owns the final Phase-8 review + bounded-residual
     sign-offs (AS-8e/AS-8f/OD-6).
+    RESOLVED 2026-06-01: draft landed (Part A 54-row table + Part B 8-entry register). KEY FINDING — the published
+    48/54-RETIRED/49-pipeline figure is internally impossible (49 pipeline-advanced ⇒ ≤1 PARTIAL, but OD-4 + CXA-1 +
+    CXA-4 = 3 PARTIAL). Per-row reconciliation = 46–47 RETIRED + 3 PARTIAL + 2 STILL-BOUNDED + 3 SB-INDEF = 54;
+    pipeline-advanced 49–50/54. Root cause: the 5 CXA rows have no per-axis §4.1 + the CXA corrective was never folded
+    into the cumulative (ledger §11.1a line 278). True open set = 8 rows (OD-4, CXA-1/2/3/4, AS-8e, AS-8f, CP-17), not 3.
+    NOT a regression. 4 flagged Phase-8 ratification items at draft §C (operator owns the final integer; dashboard 48/54
+    intentionally NOT overwritten). NEW gap surfaced: CXA-1/2/3/4 + CP-17 have no R-NNN entries — recommend an
+    R-002-style Surface-I decomposition pass over CXA + CP-17.
 
 R-700-phase-8-substitution-accounting:
   title: All 49 substitutions accounted for — RETIRED or RETIRED-AS-BOUNDED-RESIDUAL with rationale
