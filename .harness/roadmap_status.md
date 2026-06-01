@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `7abd92ea0952` (narrative-refresh only this PR; authoritative recompute owed at the post-merge terminating refresh per §12.2.1) |
-| `last_refreshed` | 2026-05-31T19:30:00-06:00 |
-| `git_head` | `3223ab9` (main) — `roadmap(R-200): RESOLVED at PR #144 + flip §III dependents ACTIVE + add lint/typecheck-blocking follow-up (#145)` |
+| `workspace_state_hash` | `b0d5c85c1136` |
+| `last_refreshed` | 2026-05-31T19:45:00-06:00 |
+| `git_head` | `36d8fad` (main) — `ci: per-axis isolation matrix (R-200-ci-axis-matrix) (#147)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-50.md` |
 | `open_fork_doc_count` | 39 |
 
@@ -30,7 +30,8 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `r200-ci-axis-isolation-matrix` | R-200-ci-axis-matrix | mode-agnostic — adds `axis-isolation` matrix to `ci.yml`, marks R-200-ci-axis-matrix RESOLVED, adds R-200-ci-od-cp-dependency-leak follow-up, dashboard narrative refresh. NOT a terminating refresh → follow-on terminating refresh + `workspace_state_hash` recompute owed post-merge per §12.2.1 |
+| #148 | `fork-doc-status-audit` | *(hygiene — audit-owed)* | mode-agnostic — refreshes 3 stale fork-doc Status lines (cp_16_17 frontmatter, u_od_40, harness_run_yaml_manifest_schema); independent of ci.yml. Self-closing; no roadmap follow-up |
+| *(this PR)* | `roadmap-refresh-post-147` | *(terminating refresh §12.2.1)* | mode-agnostic — `workspace_state_hash` recompute + anchor refresh post-PR-147 merge. ONLY `.harness/roadmap_status.md`; title `ops: roadmap status refresh post-PR-147` → next §12.1 audit sees expected lag |
 
 ---
 
