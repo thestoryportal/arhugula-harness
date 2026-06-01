@@ -621,7 +621,7 @@ R-200-ci-od-cp-dependency-leak:
 R-200-ci-coverage-gating:
   title: Coverage gating at PR (informational at first; enforce later)
   surface: III
-  status: ACTIVE   # unblocked by R-200-ci-pytest-pyright-ruff-matrix RESOLVED (PR #144)
+  status: RESOLVED   # PR #150 `5d06106` — advisory coverage job + pytest-cov
   depends_on: [R-200-ci-pytest-pyright-ruff-matrix]
   blocks: []
   posture: mode-agnostic
@@ -632,7 +632,16 @@ R-200-ci-coverage-gating:
   verification: { shape: integration, must_pass: ["coverage report uploaded to PR", "trend visible across last 5 PRs"] }
   close_shape: { type: PR-merge, artifact: "ci: coverage reporting", cascade: [] }
   next_pointer: null
-  notes: Don't enforce a threshold at v1; gather data first.
+  notes: >
+    RESOLVED 2026-05-31 at PR #150 merge `5d06106`. NEW advisory `coverage` job in `ci.yml`
+    (continue-on-error) + `pytest-cov>=6.0` in dev group + `[tool.coverage.run]` (branch=true,
+    source = 7 import packages, tests omitted). Runs the non-e2e suite under coverage, publishes
+    total line/branch coverage to the job step-summary (visible on the PR Checks tab), uploads
+    coverage.xml as an artifact. CI-verified: coverage job PASSED + coverage-xml artifact (36KB)
+    uploaded at the PR #150 run. v1 = informational, NO `fail_under` threshold ("gather data
+    first"); cross-PR trend via codecov/badge + a threshold are a future tightening (mirrors the
+    lint/typecheck advisory-until-justified stance). Per must_pass row 2, true cross-PR trend
+    needs a service — deferred; per-run step-summary + artifact is the v1 informational surface.
 
 R-200-ci-lint-typecheck-blocking:
   title: Drive the tree ruff/pyright-clean, then flip CI lint + typecheck from advisory to blocking
