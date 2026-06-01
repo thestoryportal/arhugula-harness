@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `e077fe676860` |
-| `last_refreshed` | 2026-05-31T21:55:00-06:00 |
-| `git_head` | `f1f9a52` (main) — `style: ruff auto-fix + format sweep (R-200-ci-lint-typecheck-blocking progress) (#155)` |
+| `workspace_state_hash` | `8070fa6466c7` |
+| `last_refreshed` | 2026-05-31T22:15:00-06:00 |
+| `git_head` | `ce211ee` (main) — `fix: 3 F821 undefined-name real defects (R-200-ci-lint-typecheck-blocking) (#157)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-50.md` |
 | `open_fork_doc_count` | 39 |
 
@@ -30,7 +30,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `roadmap-refresh-post-155` | *(terminating refresh §12.2.1)* | mode-agnostic — `workspace_state_hash` recompute (`7fe422eb023c` → `e077fe676860`) + anchor refresh post-PR-155 merge. ONLY `.harness/roadmap_status.md`; title `ops: roadmap status refresh post-PR-155` → next §12.1 audit sees expected lag |
+| *(this PR)* | `roadmap-refresh-post-157` | *(terminating refresh §12.2.1)* | mode-agnostic — `workspace_state_hash` recompute (`e077fe676860` → `8070fa6466c7`) + anchor refresh post-PR-157 merge. ONLY `.harness/roadmap_status.md`; title `ops: roadmap status refresh post-PR-157` → next §12.1 audit sees expected lag |
 
 ---
 
@@ -38,11 +38,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #157 (`ce211ee`) | 2026-05-31 | **R-200-ci-lint-typecheck-blocking progress (NOT a close)** — 3 F821 undefined-name **real defects** fixed (missing imports masked by `from __future__ import annotations`): `ValidatorFramework` at `validator_framework.py` + `Any` at `test_api.py`. ruff 136 → 133; **F821 tree-wide now 0**; 43 affected tests pass. Entry stays ACTIVE. |
 | PR #155 (`f1f9a52`) | 2026-05-31 | **R-200-ci-lint-typecheck-blocking progress (NOT a close)** — mechanical ruff sweep: `ruff check --fix` (safe; 224 fixed) + `ruff format` (210 files). ruff 366 → 136; `ruff format --check` clean tree-wide. 258 files; **3543 passed / 7 skipped, zero regression**. Entry stays ACTIVE — residual 136 manual ruff (incl. F821 ×3) + ~894 pyright + flip-blocking remain. |
 | PR #153 (`4d0914d`) | 2026-05-31 | **R-200-ci-od-cp-dependency-leak RESOLVED** — harness-od declares `harness-cp` (canonical OD→CP §2.3.3 consumer; src reads `ReplayDisposition` from `engine_namespace`) + `harness-is` (OD→IS §2.3.4; test fixtures). Both acyclic-safe. od isolation leg verified green in CI as blocking (887 passed) + `continue-on-error` carve-out dropped → full 6-leg matrix blocks. Corrected the dashboard/CI "reverse-direction / relocate the seam" framing (OD→CP is canonical) at `.harness/class_3_drift_od_cp_undeclared_dependency.md`. Advisor-gated (option (a)). |
 | PR #151 (`51f4131`) | 2026-05-31 | **R-200-ci-coverage-gating substantive close** — `Project_Roadmap_v1.md` §5.4 ACTIVE → RESOLVED (PR #150) + dashboard refresh post-#148/#149/#150. Blocking `pytest` green; advisory legs (od axis-isolation, pyright, ruff) red-as-expected. Bundled → NOT a terminating refresh; this terminating refresh is the owed follow-on. |
 | PR #150 (`5d06106`) | 2026-05-31 | **R-200-ci-coverage-gating RESOLVED** — advisory `coverage` job in `ci.yml` (continue-on-error) + `pytest-cov>=6.0` + `[tool.coverage.run]` (branch, 7 packages, tests omitted). Publishes total line/branch coverage to the PR step-summary + uploads `coverage.xml`. CI-verified (job green; coverage-xml 36KB artifact). v1 informational, no `fail_under`. |
-| PR #148 (`22f22ab`) | 2026-05-31 | **Fork-doc Status audit** (hygiene) — refreshed 3 stale Status lines: `cp_16_17` frontmatter PROPOSING→resolved (body was already current), `u_od_40` RATIFIED→APPLIED-AS-READING-B (`dcb0017`), `harness_run_yaml_manifest_schema` RATIFIED→APPLIED (G4/G5/G6 landed). Each verified vs HEAD. |
 
 ---
 
@@ -116,7 +116,9 @@ Sample (highest-leverage open):
 
 | 2026-05-31 | Eighteenth terminating refresh — PR #155 ruff mechanical sweep (R-200-ci-lint-typecheck-blocking **progress**, not a close) merged at `f1f9a52`; §12.2 owed follow-on | Single-file dashboard-only refresh per §12.2.1. Hash `7fe422eb023c` → `e077fe676860` (state at `f1f9a52`). Next action UNCHANGED at **R-200-ci-lint-typecheck-blocking** (entry still ACTIVE — sweep dropped ruff 366 → 136 + cleaned format tree-wide, zero regression; manual ruff + pyright + flip-blocking remain). Recursion-stopping fixed point: dashboard lags by exactly one commit, recognized as `lag-expected` by the next §12.1 audit. |
 
-**Audit protocol exercised across 18 terminating-refresh closures + 2 fresh-session reconciliations + 4 substantive closes (R-003, R-001-h-t-is-2-retired, R-200-ci-coverage-gating, R-200-ci-od-cp-dependency-leak) + 1 in-progress entry (R-200-ci-lint-typecheck-blocking — PR #155 sweep).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **R-200-ci-lint-typecheck-blocking IN PROGRESS 2026-05-31 (PR #155 ruff sweep + this terminating refresh); deterministic next-action UNCHANGED = R-200-ci-lint-typecheck-blocking (manual ruff residual → pyright → flip blocking).**
+| 2026-05-31 | Nineteenth terminating refresh — PR #157 F821 real-defect fixes (R-200-ci-lint-typecheck-blocking **progress**, not a close) merged at `ce211ee`; §12.2 owed follow-on | Single-file dashboard-only refresh per §12.2.1. Hash `e077fe676860` → `8070fa6466c7` (state at `ce211ee`). Next action UNCHANGED at **R-200-ci-lint-typecheck-blocking** (entry still ACTIVE — 3 F821 real defects fixed, ruff 136 → 133, F821 tree-wide now 0; 133 manual ruff residual + ~894 pyright + flip-blocking remain). Recursion-stopping fixed point: dashboard lags by exactly one commit, recognized as `lag-expected` by the next §12.1 audit. |
+
+**Audit protocol exercised across 19 terminating-refresh closures + 2 fresh-session reconciliations + 4 substantive closes (R-003, R-001-h-t-is-2-retired, R-200-ci-coverage-gating, R-200-ci-od-cp-dependency-leak) + 1 in-progress entry (R-200-ci-lint-typecheck-blocking — PRs #155 sweep + #157 F821).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **R-200-ci-lint-typecheck-blocking IN PROGRESS 2026-05-31 (PRs #155 + #157 + this terminating refresh); deterministic next-action UNCHANGED = R-200-ci-lint-typecheck-blocking (133 manual ruff residual → ~894 pyright → flip blocking).**
 
 ---
 
