@@ -115,3 +115,22 @@ markers:
 # Show currently-skipped tests with reasons.
 skips:
     uv run pytest --collect-only -q -rs | grep -E "^SKIP" || echo "(no skips)"
+
+# ─── operator dashboard (R-XI-01) ──────────────────────────────────────────
+#
+# Local view of the operator roadmap dashboard. Output goes to the gitignored
+# tools/dashboard/public/ (same path CI uses), so it never dirties the tree.
+# The hosted copy is live at https://thestoryportal.github.io/arhugula-harness/
+# and auto-redeploys on every merge that touches the dashboard sources.
+
+# Regenerate the dashboard from current roadmap state and open it in the browser.
+dashboard:
+    uv run python tools/dashboard/generate.py --root . --out tools/dashboard/public/index.html
+    open tools/dashboard/public/index.html
+
+# Regenerate + serve the dashboard locally on PORT (default 8787) until Ctrl-C.
+# Visit http://localhost:PORT/ — re-run this recipe to refresh from current state.
+dashboard-serve port='8787':
+    uv run python tools/dashboard/generate.py --root . --out tools/dashboard/public/index.html
+    @echo "Dashboard at http://localhost:{{port}}/  (Ctrl-C to stop)"
+    cd tools/dashboard/public && python3 -m http.server {{port}}
