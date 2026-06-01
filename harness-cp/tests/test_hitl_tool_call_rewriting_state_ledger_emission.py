@@ -79,11 +79,7 @@ def _run(coro: Any) -> Any:
 def test_emit_hitl_rewriting_action_id() -> None:
     """action_id is the canonical kebab-case identifier per spec v1.26 §16.5.3 row U-CP-37."""
     writer = _CapturingLedgerWriter()
-    _run(
-        emit_hitl_tool_call_rewriting_state_ledger_entry(
-            **_kwargs(), ledger_writer=writer
-        )
-    )
+    _run(emit_hitl_tool_call_rewriting_state_ledger_entry(**_kwargs(), ledger_writer=writer))
     assert writer.captured[0].action_id == "cp.hitl-tool-call-rewriting"
 
 
@@ -114,9 +110,7 @@ def test_emit_hitl_rewriting_idempotency_key_per_q_beta_i_1a() -> None:
     assert writer.captured[0].idempotency_key == expected
 
 
-def test_emit_hitl_rewriting_idempotency_key_includes_semantic_variant_binding_id() -> (
-    None
-):
+def test_emit_hitl_rewriting_idempotency_key_includes_semantic_variant_binding_id() -> None:
     """Different semantic_variant_binding_id at otherwise-identical inputs → different keys."""
     writer_a = _CapturingLedgerWriter()
     writer_b = _CapturingLedgerWriter()
@@ -132,10 +126,7 @@ def test_emit_hitl_rewriting_idempotency_key_includes_semantic_variant_binding_i
             ledger_writer=writer_b,
         )
     )
-    assert (
-        writer_a.captured[0].idempotency_key
-        != writer_b.captured[0].idempotency_key
-    )
+    assert writer_a.captured[0].idempotency_key != writer_b.captured[0].idempotency_key
 
 
 def test_emit_hitl_rewriting_idempotency_key_includes_tool_call_id() -> None:
@@ -152,10 +143,7 @@ def test_emit_hitl_rewriting_idempotency_key_includes_tool_call_id() -> None:
             **_kwargs(tool_call_id="call-2"), ledger_writer=writer_b
         )
     )
-    assert (
-        writer_a.captured[0].idempotency_key
-        != writer_b.captured[0].idempotency_key
-    )
+    assert writer_a.captured[0].idempotency_key != writer_b.captured[0].idempotency_key
 
 
 def test_emit_hitl_rewriting_idempotency_key_includes_outcome_hash_suffix() -> None:
@@ -165,9 +153,7 @@ def test_emit_hitl_rewriting_idempotency_key_includes_outcome_hash_suffix() -> N
     _run(
         emit_hitl_tool_call_rewriting_state_ledger_entry(
             **_kwargs(
-                rewritten_tool_call=_rewritten(
-                    variant=HITLSemanticVariant.REQUEST_HUMAN_INPUT
-                )
+                rewritten_tool_call=_rewritten(variant=HITLSemanticVariant.REQUEST_HUMAN_INPUT)
             ),
             ledger_writer=writer_a,
         )
@@ -175,17 +161,12 @@ def test_emit_hitl_rewriting_idempotency_key_includes_outcome_hash_suffix() -> N
     _run(
         emit_hitl_tool_call_rewriting_state_ledger_entry(
             **_kwargs(
-                rewritten_tool_call=_rewritten(
-                    variant=HITLSemanticVariant.ESCALATE_TO_HUMAN
-                )
+                rewritten_tool_call=_rewritten(variant=HITLSemanticVariant.ESCALATE_TO_HUMAN)
             ),
             ledger_writer=writer_b,
         )
     )
-    assert (
-        writer_a.captured[0].idempotency_key
-        != writer_b.captured[0].idempotency_key
-    )
+    assert writer_a.captured[0].idempotency_key != writer_b.captured[0].idempotency_key
 
 
 # --- AC #3 ---
@@ -216,11 +197,7 @@ def test_emit_hitl_rewriting_response_hash_is_is_computed() -> None:
     """β.i Q-β.i-3(b): composer does NOT supply response_hash; EntryPayload has no such field."""
     assert "response_hash" not in EntryPayload.model_fields
     writer = _CapturingLedgerWriter()
-    _run(
-        emit_hitl_tool_call_rewriting_state_ledger_entry(
-            **_kwargs(), ledger_writer=writer
-        )
-    )
+    _run(emit_hitl_tool_call_rewriting_state_ledger_entry(**_kwargs(), ledger_writer=writer))
     payload = writer.captured[0]
     assert set(payload.model_fields_set) <= {
         "action_id",
@@ -238,9 +215,7 @@ def test_emit_hitl_rewriting_zero_cp_audit_emission() -> None:
     """AC #5: greenfield composer emits NO CPAuditLedgerEntry per §16.5.9 invariant 5."""
     writer = _CapturingLedgerWriter()
     result = _run(
-        emit_hitl_tool_call_rewriting_state_ledger_entry(
-            **_kwargs(), ledger_writer=writer
-        )
+        emit_hitl_tool_call_rewriting_state_ledger_entry(**_kwargs(), ledger_writer=writer)
     )
     assert isinstance(result, WriteResult)
     assert len(writer.captured) == 1
@@ -252,9 +227,7 @@ def test_emit_hitl_rewriting_zero_cp_audit_emission() -> None:
 def test_emit_hitl_rewriting_reuses_canonicalize_outcome_bytes_helper() -> None:
     """AC #6: outcome bytes computed via shared `_canonicalize_outcome_bytes` (U-CP-74)."""
     rewritten = _rewritten()
-    expected_outcome_hash = hashlib.sha256(
-        _canonicalize_outcome_bytes(rewritten)
-    ).hexdigest()
+    expected_outcome_hash = hashlib.sha256(_canonicalize_outcome_bytes(rewritten)).hexdigest()
     # Independently re-derive the idempotency_key using the shared helper.
     expected_key = hashlib.sha256(
         b"\x1e".join(
@@ -285,22 +258,15 @@ def test_emit_hitl_rewriting_orthogonal_to_writer_result_variant() -> None:
     noop_writer = _CapturingLedgerWriter(returns=WriteResult.IDEMPOTENT_NOOP)
 
     result_a = _run(
-        emit_hitl_tool_call_rewriting_state_ledger_entry(
-            **_kwargs(), ledger_writer=appended_writer
-        )
+        emit_hitl_tool_call_rewriting_state_ledger_entry(**_kwargs(), ledger_writer=appended_writer)
     )
     result_b = _run(
-        emit_hitl_tool_call_rewriting_state_ledger_entry(
-            **_kwargs(), ledger_writer=noop_writer
-        )
+        emit_hitl_tool_call_rewriting_state_ledger_entry(**_kwargs(), ledger_writer=noop_writer)
     )
 
     assert result_a == WriteResult.APPENDED
     assert result_b == WriteResult.IDEMPOTENT_NOOP
-    assert (
-        appended_writer.captured[0].idempotency_key
-        == noop_writer.captured[0].idempotency_key
-    )
+    assert appended_writer.captured[0].idempotency_key == noop_writer.captured[0].idempotency_key
 
 
 # --- Actor projection ---

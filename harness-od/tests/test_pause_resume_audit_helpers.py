@@ -60,7 +60,6 @@ from harness_cp.pause_resume_protocol import (
     ResumeOutcomeKind,
 )
 from harness_is.state_ledger_entry_schema import Identifier
-from pydantic import ValidationError
 
 # Test-fixture direct-construction of helpers per OD spec v1.11 §C-OD-30.4.1
 # step 1 explicit carve-out: "Direct construction at TEST fixtures and at the
@@ -71,7 +70,7 @@ from harness_od.pause_resume_namespace import (  # pyright: ignore[reportPrivate
     _project_pause_event_to_audit_payload,
     _project_resume_outcome_to_audit_payload,
 )
-
+from pydantic import ValidationError
 
 # ----------------------------------------------------------------------------
 # Test fixtures (mirror harness-cp/tests/test_pause_resume_protocol.py shapes)
@@ -123,8 +122,7 @@ def _resume_outcome(
     return ResumeOutcome(
         outcome_kind=outcome_kind,
         material_diff=diff,
-        context_revalidated=outcome_kind
-        == ResumeOutcomeKind.RESUME_AFTER_REVALIDATION,
+        context_revalidated=outcome_kind == ResumeOutcomeKind.RESUME_AFTER_REVALIDATION,
         resume_audit_entry_id=EntryID("e1") if diff == () else None,
     )
 

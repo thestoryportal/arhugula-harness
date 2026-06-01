@@ -125,9 +125,7 @@ def test_signature_attrs_absent_at_solo() -> None:
 
 def test_attribute_names_byte_exact() -> None:
     """#9 — every audit.* attribute name is byte-exact per §20.4."""
-    assert set(a.attribute_name for a in AUDIT_NAMESPACE_SCHEMA) == set(
-        _SPEC_20_4_ATTRS
-    )
+    assert set(a.attribute_name for a in AUDIT_NAMESPACE_SCHEMA) == set(_SPEC_20_4_ATTRS)
 
 
 def test_cardinality_invariants_at_startup() -> None:

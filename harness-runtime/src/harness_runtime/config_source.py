@@ -185,9 +185,7 @@ class RuntimeConfigSource:
               mismatch, missing required field, unknown field).
         """
         env_values = cls._load_env_values()
-        file_values = (
-            cls._load_file_values(config_file) if config_file is not None else {}
-        )
+        file_values = cls._load_file_values(config_file) if config_file is not None else {}
         cli_values = dict(cli_overrides or {})
 
         merged: dict[str, Any] = {}
@@ -285,9 +283,7 @@ class RuntimeConfigSource:
                         "(see RuntimeConfig.provider_secrets)",
                         source=source,
                     )
-                cls._reject_plaintext_secrets(
-                    value, source, f"{path}.{key}" if path else key
-                )
+                cls._reject_plaintext_secrets(value, source, f"{path}.{key}" if path else key)
         elif isinstance(node, list):
             for idx, item in enumerate(cast(list[Any], node)):
                 cls._reject_plaintext_secrets(item, source, f"{path}[{idx}]")

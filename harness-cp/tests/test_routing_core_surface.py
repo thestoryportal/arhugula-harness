@@ -33,9 +33,7 @@ def _request() -> InferenceRequest:
         persona_tier=PersonaTier.SOLO_DEVELOPER,
         context_tokens=1024,
         request_payload=ProviderAgnosticPayload(messages=(), tools=None, params={}),
-        trace_context=TraceContext(
-            trace_id="t0", span_id="s0", trace_flags=0, trace_state=None
-        ),
+        trace_context=TraceContext(trace_id="t0", span_id="s0", trace_flags=0, trace_state=None),
     )
 
 
@@ -68,10 +66,7 @@ def test_inference_request_routing_discriminators() -> None:
 
 def test_infer_emits_routing_attributes() -> None:
     """#3 — InferenceResponse.routing_decision carries the routing trace."""
-    assert (
-        InferenceResponse.model_fields["routing_decision"].annotation
-        is RoutingDecisionTrace
-    )
+    assert InferenceResponse.model_fields["routing_decision"].annotation is RoutingDecisionTrace
     assert set(InferenceResponse.model_fields) == {
         "provider_used",
         "model_used",

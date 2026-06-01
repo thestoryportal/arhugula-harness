@@ -84,6 +84,7 @@ __all__ = [
 
 # --- §20.3 OtlpReachabilityClass enum (declared in-unit) --------------------
 
+
 class OtlpReachabilityClass(StrEnum):
     """The 4 per-sandbox-tier OTLP reachability shapes (C-OD-20 §20.3).
 
@@ -111,6 +112,7 @@ class OtlpReachabilityClass(StrEnum):
 
 # --- §20.3 reachability-violation error arm --------------------------------
 
+
 class ReachabilityViolation(Exception):  # noqa: N818 — name is the U-OD-29 plan signature verbatim
     """Raised when a sandbox tier lacks §20.3-required OTLP collector reachability.
 
@@ -123,6 +125,7 @@ class ReachabilityViolation(Exception):  # noqa: N818 — name is the U-OD-29 pl
 
 
 # --- §20.3 per-tier reachability record ------------------------------------
+
 
 class SandboxTierReachability(BaseModel):
     """The §20.3 OTLP reachability shape committed for one sandbox tier.
@@ -209,9 +212,9 @@ _LOCALHOST_SOCKET_PLACEMENTS: frozenset[CollectorPlacement] = frozenset(
 #: vendor-managed, per-tenant). Tier-2/3/4 require network reachability to one
 #: of these; `IN_PROCESS` alone does not give an isolated tier network
 #: reachability to the collector (acc #4).
-_NETWORK_REACHABLE_PLACEMENTS: frozenset[CollectorPlacement] = frozenset(
-    CollectorPlacement
-) - _LOCALHOST_SOCKET_PLACEMENTS
+_NETWORK_REACHABLE_PLACEMENTS: frozenset[CollectorPlacement] = (
+    frozenset(CollectorPlacement) - _LOCALHOST_SOCKET_PLACEMENTS
+)
 
 #: The §20.3 private / vendor-managed collector endpoints to which the
 #: most-isolated tiers (Tier-3 microVM, Tier-4 full-VM) MAY egress — they MUST

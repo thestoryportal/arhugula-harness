@@ -66,9 +66,7 @@ def test_gate_level_max_composition_over_materialized_floors() -> None:
     escalation rank. `external-irreversible` (ASK) + solo-developer (ASK) +
     per_tool AUTO -> ASK.
     """
-    comp = gate_level(
-        _input(PersonaTier.SOLO_DEVELOPER, BlastRadiusTier.EXTERNAL_IRREVERSIBLE)
-    )
+    comp = gate_level(_input(PersonaTier.SOLO_DEVELOPER, BlastRadiusTier.EXTERNAL_IRREVERSIBLE))
     assert comp.computed_gate_level is GateLevel.ASK
     # read-only + solo + per_tool AUTO -> max(AUTO, AUTO, ASK) = ASK (persona wins).
     comp2 = gate_level(_input(PersonaTier.SOLO_DEVELOPER, BlastRadiusTier.READ_ONLY))
@@ -88,9 +86,7 @@ def test_per_tool_gate_level_axis_in_max_composition() -> None:
     per-tier mapping; consumed directly at max().
     """
     # per_tool DENY dominates persona ASK + blast AUTO.
-    comp = gate_level(
-        _input(PersonaTier.SOLO_DEVELOPER, BlastRadiusTier.READ_ONLY, GateLevel.DENY)
-    )
+    comp = gate_level(_input(PersonaTier.SOLO_DEVELOPER, BlastRadiusTier.READ_ONLY, GateLevel.DENY))
     assert comp.computed_gate_level is GateLevel.DENY
     assert comp.composition_winner is Axis.PER_TOOL_GATE_LEVEL
     assert comp.per_axis_floors[Axis.PER_TOOL_GATE_LEVEL] is GateLevel.DENY
@@ -143,15 +139,9 @@ def test_persona_tier_floor_all_three_ask() -> None:
 def test_cross_persona_monotonicity() -> None:
     """#7 — persona-tier ascends monotonically; descent is structurally prohibited."""
     # Ascending / equal transitions are admissible.
-    assert_cross_persona_monotonicity(
-        PersonaTier.SOLO_DEVELOPER, PersonaTier.TEAM_BINDING
-    )
-    assert_cross_persona_monotonicity(
-        PersonaTier.TEAM_BINDING, PersonaTier.MULTI_TENANT_COMPLIANCE
-    )
-    assert_cross_persona_monotonicity(
-        PersonaTier.TEAM_BINDING, PersonaTier.TEAM_BINDING
-    )
+    assert_cross_persona_monotonicity(PersonaTier.SOLO_DEVELOPER, PersonaTier.TEAM_BINDING)
+    assert_cross_persona_monotonicity(PersonaTier.TEAM_BINDING, PersonaTier.MULTI_TENANT_COMPLIANCE)
+    assert_cross_persona_monotonicity(PersonaTier.TEAM_BINDING, PersonaTier.TEAM_BINDING)
     # A descent raises (the §19.2 manifest-validation error).
     with pytest.raises(ValueError, match="monotonicity violated"):
         assert_cross_persona_monotonicity(
@@ -165,8 +155,7 @@ def test_hitl_required_predicate_ask_or_deny() -> None:
     assert hitl_required(_input()) is True
     assert (
         hitl_required(
-            _input(PersonaTier.MULTI_TENANT_COMPLIANCE,
-                   BlastRadiusTier.EXTERNAL_IRREVERSIBLE)
+            _input(PersonaTier.MULTI_TENANT_COMPLIANCE, BlastRadiusTier.EXTERNAL_IRREVERSIBLE)
         )
         is True
     )

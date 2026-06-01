@@ -29,7 +29,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 
-
 # ---------------------------------------------------------------------------
 # AC #1 — serialize_decimal_for_otel preserves full precision
 # ---------------------------------------------------------------------------

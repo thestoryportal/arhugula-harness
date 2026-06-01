@@ -62,8 +62,6 @@ from harness_cp.validator_framework import (
 )
 from harness_cp.validator_framework_types import (
     HITLEscalationBrief,
-    Validator,
-    ValidatorEvaluation,
     ValidatorFailClass,
     ValidatorOutcome,
     ValidatorResult,

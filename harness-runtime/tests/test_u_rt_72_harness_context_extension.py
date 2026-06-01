@@ -138,5 +138,5 @@ async def test_frozen_harness_context_accepts_four_new_fields_populated() -> Non
     # into the HarnessContext constructor (covered by AC #2 + the freeze body
     # extension committed in this unit). Coverage of full end-to-end
     # construction is exercised by `test_bootstrap.py` post cluster close.
-    with pytest.raises(Exception):  # noqa: BLE001 — Pydantic ValidationError on prior fields
+    with pytest.raises(Exception):
         builder.freeze()

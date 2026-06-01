@@ -10,14 +10,6 @@ buffering + classification-trigger preservation + always-sampled passthrough
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
-
-from opentelemetry.context import Context
-from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor, TracerProvider
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-    InMemorySpanExporter,
-)
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
 from harness_od.tail_keep_classification import (
     BREAKER_TRIPPED_SPAN_NAME,
@@ -27,7 +19,12 @@ from harness_od.tail_keep_classification import (
     is_classification_trigger,
 )
 from harness_od.tail_keep_span_processor import TailKeepSpanProcessor
-
+from opentelemetry.context import Context
+from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 # --- Recording downstream double ---------------------------------------------
 
@@ -41,9 +38,7 @@ class _RecordingProcessor(SpanProcessor):
     force_flush_calls: int = 0
     shutdown_calls: int = 0
 
-    def on_start(
-        self, span: Span, parent_context: Optional[Context] = None
-    ) -> None:
+    def on_start(self, span: Span, parent_context: Context | None = None) -> None:
         self.on_start_calls += 1
 
     def on_end(self, span: ReadableSpan) -> None:

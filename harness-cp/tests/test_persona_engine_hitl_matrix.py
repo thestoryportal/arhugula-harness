@@ -80,9 +80,7 @@ def test_matrix_cells_match_spec() -> None:
         is SynchronyClass.SYNC_BLOCKING
     )
     assert (
-        matrix_cell_for(
-            PersonaTier.SOLO_DEVELOPER, EngineClass.RECONCILER_LOOP
-        ).synchrony_class
+        matrix_cell_for(PersonaTier.SOLO_DEVELOPER, EngineClass.RECONCILER_LOOP).synchrony_class
         is SynchronyClass.DURABLE_ASYNC
     )
     assert (
@@ -92,26 +90,20 @@ def test_matrix_cells_match_spec() -> None:
         is SynchronyClass.DURABLE_ASYNC
     )
     # Every HITL primitive shape is used somewhere in the matrix.
-    used = {
-        s for c in HITL_MATRIX for s in c.primary_primitive_shapes
-    }
+    used = {s for c in HITL_MATRIX for s in c.primary_primitive_shapes}
     assert used == set(HITLPrimitiveShape)
 
 
 def test_team_binding_pure_pattern_excluded() -> None:
     """Acceptance #4 — (team-binding, pure-pattern) cell is excluded."""
-    cell = matrix_cell_for(
-        PersonaTier.TEAM_BINDING, EngineClass.PURE_PATTERN_NO_ENGINE
-    )
+    cell = matrix_cell_for(PersonaTier.TEAM_BINDING, EngineClass.PURE_PATTERN_NO_ENGINE)
     assert cell.is_excluded
     assert cell.synchrony_class is SynchronyClass.EXCLUDED
 
 
 def test_multi_tenant_pure_pattern_excluded() -> None:
     """Acceptance #4 — (multi-tenant, pure-pattern) cell is excluded."""
-    cell = matrix_cell_for(
-        PersonaTier.MULTI_TENANT_COMPLIANCE, EngineClass.PURE_PATTERN_NO_ENGINE
-    )
+    cell = matrix_cell_for(PersonaTier.MULTI_TENANT_COMPLIANCE, EngineClass.PURE_PATTERN_NO_ENGINE)
     assert cell.is_excluded
     assert cell.synchrony_class is SynchronyClass.EXCLUDED
 
@@ -138,10 +130,6 @@ def test_non_excluded_cells_have_primitive() -> None:
 
 def test_both_by_tier_at_team_save_point() -> None:
     """Acceptance #7 — (team-binding, save-point) uses BOTH_BY_TIER."""
-    cell = matrix_cell_for(
-        PersonaTier.TEAM_BINDING, EngineClass.SAVE_POINT_CHECKPOINT
-    )
+    cell = matrix_cell_for(PersonaTier.TEAM_BINDING, EngineClass.SAVE_POINT_CHECKPOINT)
     assert cell.synchrony_class is SynchronyClass.BOTH_BY_TIER
-    assert HITLPrimitiveShape.CLAUDE_CODE_PERMISSION_MODEL in (
-        cell.primary_primitive_shapes
-    )
+    assert HITLPrimitiveShape.CLAUDE_CODE_PERMISSION_MODEL in (cell.primary_primitive_shapes)

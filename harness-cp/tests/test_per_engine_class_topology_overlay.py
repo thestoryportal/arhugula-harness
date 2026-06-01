@@ -83,6 +83,5 @@ def test_cascade_enforcement_consistent_with_reading() -> None:
             )
         else:
             assert (
-                o.cascade_enforcement_mechanism
-                is CascadeEnforcementMechanism.CRD_RECONCILER_DRIVEN
+                o.cascade_enforcement_mechanism is CascadeEnforcementMechanism.CRD_RECONCILER_DRIVEN
             )

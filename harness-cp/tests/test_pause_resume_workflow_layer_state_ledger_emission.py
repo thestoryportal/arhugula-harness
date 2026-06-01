@@ -114,10 +114,7 @@ def test_emit_pause_resume_idempotency_key_includes_event_kind() -> None:
             ledger_writer=writer_b,
         )
     )
-    assert (
-        writer_a.captured[0].idempotency_key
-        != writer_b.captured[0].idempotency_key
-    )
+    assert writer_a.captured[0].idempotency_key != writer_b.captured[0].idempotency_key
 
 
 def test_emit_pause_resume_idempotency_key_includes_event_sequence_id() -> None:
@@ -125,19 +122,12 @@ def test_emit_pause_resume_idempotency_key_includes_event_sequence_id() -> None:
     writer_a = _CapturingLedgerWriter()
     writer_b = _CapturingLedgerWriter()
     _run(
-        emit_pause_resume_state_ledger_entry(
-            **_kwargs(event_sequence_id=1), ledger_writer=writer_a
-        )
+        emit_pause_resume_state_ledger_entry(**_kwargs(event_sequence_id=1), ledger_writer=writer_a)
     )
     _run(
-        emit_pause_resume_state_ledger_entry(
-            **_kwargs(event_sequence_id=2), ledger_writer=writer_b
-        )
+        emit_pause_resume_state_ledger_entry(**_kwargs(event_sequence_id=2), ledger_writer=writer_b)
     )
-    assert (
-        writer_a.captured[0].idempotency_key
-        != writer_b.captured[0].idempotency_key
-    )
+    assert writer_a.captured[0].idempotency_key != writer_b.captured[0].idempotency_key
 
 
 def test_emit_pause_resume_idempotency_key_includes_outcome_hash_suffix() -> None:
@@ -156,10 +146,7 @@ def test_emit_pause_resume_idempotency_key_includes_outcome_hash_suffix() -> Non
             ledger_writer=writer_b,
         )
     )
-    assert (
-        writer_a.captured[0].idempotency_key
-        != writer_b.captured[0].idempotency_key
-    )
+    assert writer_a.captured[0].idempotency_key != writer_b.captured[0].idempotency_key
 
 
 # --- AC #3 ---
@@ -204,9 +191,7 @@ def test_emit_pause_resume_response_hash_is_is_computed() -> None:
 def test_emit_pause_resume_zero_cp_audit_emission() -> None:
     """AC #5: greenfield composer emits NO CPAuditLedgerEntry per §16.5.9 invariant 5."""
     writer = _CapturingLedgerWriter()
-    result = _run(
-        emit_pause_resume_state_ledger_entry(**_kwargs(), ledger_writer=writer)
-    )
+    result = _run(emit_pause_resume_state_ledger_entry(**_kwargs(), ledger_writer=writer))
     assert isinstance(result, WriteResult)
     assert len(writer.captured) == 1
 
@@ -249,22 +234,13 @@ def test_emit_pause_resume_orthogonal_to_writer_result_variant() -> None:
     noop_writer = _CapturingLedgerWriter(returns=WriteResult.IDEMPOTENT_NOOP)
 
     result_a = _run(
-        emit_pause_resume_state_ledger_entry(
-            **_kwargs(), ledger_writer=appended_writer
-        )
+        emit_pause_resume_state_ledger_entry(**_kwargs(), ledger_writer=appended_writer)
     )
-    result_b = _run(
-        emit_pause_resume_state_ledger_entry(
-            **_kwargs(), ledger_writer=noop_writer
-        )
-    )
+    result_b = _run(emit_pause_resume_state_ledger_entry(**_kwargs(), ledger_writer=noop_writer))
 
     assert result_a == WriteResult.APPENDED
     assert result_b == WriteResult.IDEMPOTENT_NOOP
-    assert (
-        appended_writer.captured[0].idempotency_key
-        == noop_writer.captured[0].idempotency_key
-    )
+    assert appended_writer.captured[0].idempotency_key == noop_writer.captured[0].idempotency_key
 
 
 # --- Actor projection ---

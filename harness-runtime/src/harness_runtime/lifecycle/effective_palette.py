@@ -50,7 +50,7 @@ from harness_cp.validator_fail_transient_staircase import (
 )
 from harness_cp.validator_framework_types import HITLEscalationBrief
 
-__all__ = ["compute_effective_palette", "FULL_PALETTE", "DENY_ROW_PALETTE"]
+__all__ = ["DENY_ROW_PALETTE", "FULL_PALETTE", "compute_effective_palette"]
 
 
 FULL_PALETTE: frozenset[HITLResponse] = frozenset(
@@ -58,9 +58,7 @@ FULL_PALETTE: frozenset[HITLResponse] = frozenset(
 )
 """The full 4-response palette per C-CP-16 §16.1. Default for non-restricted cases."""
 
-DENY_ROW_PALETTE: frozenset[HITLResponse] = frozenset(
-    {HITLResponse.REJECT, HITLResponse.RESPOND}
-)
+DENY_ROW_PALETTE: frozenset[HITLResponse] = frozenset({HITLResponse.REJECT, HITLResponse.RESPOND})
 """C-CP-19 §19.4 deny-row restricted palette. Removes APPROVE and EDIT.
 
 Per §19.4: when ``gate_level == DENY``, tool dispatch is structurally rejected

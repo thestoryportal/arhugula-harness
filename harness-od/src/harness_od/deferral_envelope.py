@@ -136,9 +136,7 @@ _DEPLOYMENT_BINDING_TIME = "deployment_binding_time"
 _PHASE_6_IMPLEMENTATION = "phase_6_implementation"
 
 #: Admissible `DeferredSurface.closure_target` values (acc #6 — exactly 2).
-CLOSURE_TARGETS: frozenset[str] = frozenset(
-    {_DEPLOYMENT_BINDING_TIME, _PHASE_6_IMPLEMENTATION}
-)
+CLOSURE_TARGETS: frozenset[str] = frozenset({_DEPLOYMENT_BINDING_TIME, _PHASE_6_IMPLEMENTATION})
 
 
 #: The deferred-surface inventory — one entry per OD spec v1.2 contract §1-§23,
@@ -310,8 +308,7 @@ DEFERRED_SURFACES: tuple[DeferredSurface, ...] = (
 # Boundary-invariant sanity pin (§3.3 — acc #4 / acc #1): committed and
 # deferred surface-name sets are disjoint — no surface is in both classes.
 assert not (
-    {s.surface_name for s in COMMITTED_AT_D6_SURFACES}
-    & {s.surface_name for s in DEFERRED_SURFACES}
+    {s.surface_name for s in COMMITTED_AT_D6_SURFACES} & {s.surface_name for s in DEFERRED_SURFACES}
 ), "deferral envelope §3.3 boundary invariant — committed and deferred surfaces must be disjoint"
 
 # Cardinality pins per acc #2 / acc #3.

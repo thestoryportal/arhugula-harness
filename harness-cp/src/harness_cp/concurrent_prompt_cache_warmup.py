@@ -111,9 +111,7 @@ def persist_lead_agent_plan(
     canonical `FilesystemPath` (`pathlib.Path`).
     """
     _ = plan
-    return resolver.resolve_path(
-        PathClass.PROMPTS, workload_class, deployment_surface
-    )
+    return resolver.resolve_path(PathClass.PROMPTS, workload_class, deployment_surface)
 
 
 def await_cache_completion(sibling: SubAgent) -> CacheCompletionProxy:

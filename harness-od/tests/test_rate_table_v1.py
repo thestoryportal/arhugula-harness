@@ -84,8 +84,8 @@ def test_all_3_adr_f1_providers_present() -> None:
 def test_rate_table_v1_is_immutable() -> None:
     """§C-OD-28.4 invariant 1 — rate-table version immutable per workflow.
     Verified at the type-system level via frozen=True ConfigDict."""
-    from pydantic import ValidationError
     import pytest
+    from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
         RATE_TABLE_V1.version = "9999-99-99"  # type: ignore[misc]

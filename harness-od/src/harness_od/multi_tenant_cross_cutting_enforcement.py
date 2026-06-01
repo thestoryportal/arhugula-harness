@@ -70,6 +70,7 @@ __all__ = [
 
 # --- §0.8 inline error arms ------------------------------------------------
 
+
 class PreCollectorRedactionViolation(Exception):  # noqa: N818 — U-OD-31 plan signature verbatim
     """Raised when pre-collector redaction is not applied at a multi-tenant cell.
 
@@ -103,6 +104,7 @@ class PerTenantAlertingViolation(Exception):  # noqa: N818 — U-OD-31 plan sign
 
 
 # --- §21.5 cross-tenant aggregation prohibition ----------------------------
+
 
 class CrossTenantAggregationProhibition(BaseModel):
     """The cross-tenant aggregation prohibition surface (C-OD-21 §21.5).
@@ -138,6 +140,7 @@ CROSS_TENANT_AGGREGATION_PROHIBITION: CrossTenantAggregationProhibition = (
 
 
 # --- in-unit single-consumer records (v2.6 M-1) ----------------------------
+
 
 class DashboardQuery(BaseModel):
     """A query constructed against the per-cell dashboard surface (§21.5).
@@ -179,17 +182,14 @@ class CardinalityCounters(BaseModel):
 
 # --- multi-tenant cell set -------------------------------------------------
 
+
 def _cell(pt: PersonaTier, ds: DeploymentSurface) -> CellID:
     """Construct a `CellID` — local helper mirroring `per_cell_backend_class`."""
     return CellID(persona_tier=pt, deployment_surface=ds)
 
 
-_CELL_7 = _cell(
-    PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.SELF_HOSTED_SERVER
-)
-_CELL_8 = _cell(
-    PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.MANAGED_CLOUD
-)
+_CELL_7 = _cell(PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.SELF_HOSTED_SERVER)
+_CELL_8 = _cell(PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.MANAGED_CLOUD)
 
 #: The multi-tenant cells — pre-collector redaction + per-tenant isolation
 #: apply only here (C-OD-21 §21.3).
@@ -197,6 +197,7 @@ _MULTI_TENANT_CELLS: frozenset[CellID] = frozenset({_CELL_7, _CELL_8})
 
 
 # --- §21.3 pre-collector redaction enforcement -----------------------------
+
 
 def assert_pre_collector_redaction_applied(
     span_attrs: SpanAttributes,
@@ -232,6 +233,7 @@ def assert_pre_collector_redaction_applied(
 
 # --- §21.5 cross-tenant query rejection ------------------------------------
 
+
 def reject_cross_tenant_query(query: DashboardQuery) -> None:
     """Reject an unscoped / cross-tenant-aggregating dashboard query (§21.5).
 
@@ -259,6 +261,7 @@ def reject_cross_tenant_query(query: DashboardQuery) -> None:
 
 
 # --- §21.4 per-tenant cardinality isolation --------------------------------
+
 
 def assert_per_tenant_cardinality_isolation(
     tenant_id: str,
@@ -291,6 +294,7 @@ def assert_per_tenant_cardinality_isolation(
 
 
 # --- §21.4 per-tenant alerting isolation -----------------------------------
+
 
 def assert_per_tenant_alerting_isolation(
     alerting_signal: AlertingSignal,

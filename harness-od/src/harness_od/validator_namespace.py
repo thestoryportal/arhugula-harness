@@ -43,10 +43,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict
-
 from harness_core import AttributeValueType, Cardinality
-
+from pydantic import BaseModel, ConfigDict
 
 # ----------------------------------------------------------------------------
 # Span-site identifiers (4 sites per §C-OD-29.1)

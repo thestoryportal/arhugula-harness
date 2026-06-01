@@ -21,9 +21,8 @@ state via ``PrivateAttr`` (the marker subs are field-less).
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr
-
 from harness_cp.pause_resume_protocol_types import ResumeContext
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 __all__ = ["ResumeContextHolder"]
 

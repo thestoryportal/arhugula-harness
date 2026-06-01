@@ -168,12 +168,8 @@ class MCPClientHost:
         transport_config: Mapping[str, Any],
         tool_contract_converter: MCPToolContractConverter | None = None,
         auth_present: bool = False,
-        connection_factory: (
-            Callable[[], Any] | None
-        ) = None,
-        session_context_factory: (
-            Callable[[], Any] | None
-        ) = None,
+        connection_factory: (Callable[[], Any] | None) = None,
+        session_context_factory: (Callable[[], Any] | None) = None,
     ) -> None:
         """Construct an unstarted `MCPClientHost`.
 
@@ -230,9 +226,7 @@ create_connected_server_and_client_session`. Production callers leave
         )
         self._auth_present: bool = auth_present
         self._connection_factory: Callable[[], Any] | None = connection_factory
-        self._session_context_factory: Callable[[], Any] | None = (
-            session_context_factory
-        )
+        self._session_context_factory: Callable[[], Any] | None = session_context_factory
         self._started: bool = False
         self._tool_registry: ToolRegistry | None = None
         self._session: Any = None
@@ -295,17 +289,13 @@ create_connected_server_and_client_session`. Production callers leave
             if self._session_context_factory is not None:
                 # Higher-level test injection — session is pre-built +
                 # already initialized. Skip stream + ClientSession setup.
-                session = await stack.enter_async_context(
-                    self._session_context_factory()
-                )
+                session = await stack.enter_async_context(self._session_context_factory())
                 # `create_connected_server_and_client_session` does NOT call
                 # `initialize()` itself; ClientSession is constructed but the
                 # protocol handshake is left to the consumer. Mirror the
                 # production path: initialize the session here.
                 init_result = await session.initialize()
-                protocol_version = getattr(
-                    init_result, "protocolVersion", "2025-06-18"
-                )
+                protocol_version = getattr(init_result, "protocolVersion", "2025-06-18")
             else:
                 # Production path — open transport-specific stream pair +
                 # wrap in ClientSession + perform protocol handshake.
@@ -314,13 +304,9 @@ create_connected_server_and_client_session`. Production callers leave
                 read_stream, write_stream = self._extract_streams(connection)
                 from mcp.client.session import ClientSession
 
-                session = await stack.enter_async_context(
-                    ClientSession(read_stream, write_stream)
-                )
+                session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
                 init_result = await session.initialize()
-                protocol_version = getattr(
-                    init_result, "protocolVersion", "2025-06-18"
-                )
+                protocol_version = getattr(init_result, "protocolVersion", "2025-06-18")
 
             # list_tools → ToolRegistry population.
             list_result = await session.list_tools()
@@ -364,7 +350,7 @@ create_connected_server_and_client_session`. Production callers leave
         try:
             await self._session.send_ping()
             alive = True
-        except Exception:  # noqa: BLE001 — liveness probe; classify as not-alive
+        except Exception:
             alive = False
         end_ns = time.perf_counter_ns()
         return MCPHostHealth(
@@ -463,10 +449,7 @@ create_connected_server_and_client_session`. Production callers leave
 
         command = self._transport_config.get("command")
         if not isinstance(command, str) or not command:
-            raise ValueError(
-                "STDIO transport_config requires str 'command' "
-                f"(got {command!r})"
-            )
+            raise ValueError(f"STDIO transport_config requires str 'command' (got {command!r})")
         params = StdioServerParameters(
             command=command,
             args=list(self._transport_config.get("args") or []),
@@ -497,10 +480,7 @@ create_connected_server_and_client_session`. Production callers leave
 
         url = self._transport_config.get("url")
         if not isinstance(url, str) or not url:
-            raise ValueError(
-                f"streamable_http transport_config requires str 'url' "
-                f"(got {url!r})"
-            )
+            raise ValueError(f"streamable_http transport_config requires str 'url' (got {url!r})")
         kwargs: dict[str, Any] = {}
         if "headers" in self._transport_config:
             kwargs["headers"] = self._transport_config["headers"]
@@ -530,9 +510,7 @@ create_connected_server_and_client_session`. Production callers leave
 
         url = self._transport_config.get("url")
         if not isinstance(url, str) or not url:
-            raise ValueError(
-                f"sse transport_config requires str 'url' (got {url!r})"
-            )
+            raise ValueError(f"sse transport_config requires str 'url' (got {url!r})")
         kwargs: dict[str, Any] = {}
         if "headers" in self._transport_config:
             kwargs["headers"] = self._transport_config["headers"]

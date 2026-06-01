@@ -231,9 +231,7 @@ def emit_drift_event(
         "threshold": "gen_ai.eval.alignment_floor.threshold",
         "observation_window": "gen_ai.eval.alignment_floor.observation_window",
     }
-    missing = [
-        field_to_attr[f] for f in field_to_attr if f not in present
-    ]
+    missing = [field_to_attr[f] for f in field_to_attr if f not in present]
     if missing:
         raise DriftEmissionError(
             f"drift-event emission is missing required §18.2 attribute(s): "
@@ -246,9 +244,7 @@ def emit_drift_event(
             "gen_ai.eval.primitive": attrs.primitive.value,
             "gen_ai.eval.alignment_floor.current": attrs.current_value,
             "gen_ai.eval.alignment_floor.threshold": attrs.threshold,
-            "gen_ai.eval.alignment_floor.observation_window": (
-                attrs.observation_window.kind.value
-            ),
+            "gen_ai.eval.alignment_floor.observation_window": (attrs.observation_window.kind.value),
         },
     )
     return EventEmission(

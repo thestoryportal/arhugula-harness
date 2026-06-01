@@ -66,9 +66,7 @@ def test_compute_span_cost_no_cache_no_thinking() -> None:
 
 def test_compute_span_cost_with_cache_creation() -> None:
     """Acceptance #2 — cache-creation contributes BASE_INPUT * 1.25 surcharge."""
-    inputs = _inputs(
-        input_tokens=100, cache_creation=40, cache_read=0, output_tokens=0
-    )
+    inputs = _inputs(input_tokens=100, cache_creation=40, cache_read=0, output_tokens=0)
     # uncached = 100-0-40 = 60 → 60*10 = 600
     # cache_creation 40*10*1.25 = 500
     assert compute_span_cost_with_rates(inputs, _RATES) == 1100.0
@@ -76,9 +74,7 @@ def test_compute_span_cost_with_cache_creation() -> None:
 
 def test_compute_span_cost_with_cache_read() -> None:
     """Acceptance #2 — cache-read contributes BASE_INPUT * 0.10 discount."""
-    inputs = _inputs(
-        input_tokens=100, cache_creation=0, cache_read=60, output_tokens=0
-    )
+    inputs = _inputs(input_tokens=100, cache_creation=0, cache_read=60, output_tokens=0)
     # uncached = 100-60-0 = 40 → 40*10 = 400
     # cache_read 60*10*0.10 = 60
     assert compute_span_cost_with_rates(inputs, _RATES) == 460.0
@@ -86,9 +82,7 @@ def test_compute_span_cost_with_cache_read() -> None:
 
 def test_compute_span_cost_full_breakdown() -> None:
     """Acceptance #2 — all four formula terms compose per §14.1."""
-    inputs = _inputs(
-        input_tokens=200, cache_creation=50, cache_read=50, output_tokens=30
-    )
+    inputs = _inputs(input_tokens=200, cache_creation=50, cache_read=50, output_tokens=30)
     # uncached = 200-50-50 = 100 → 100*10 = 1000
     # cache_creation 50*10*1.25 = 625
     # cache_read 50*10*0.10 = 50
@@ -100,9 +94,7 @@ def test_compute_span_cost_extended_thinking_included() -> None:
     """Acceptance #4 — output-token contribution includes extended-thinking
     tokens (they are counted in output_tokens, billed at BASE_OUTPUT)."""
     base = _inputs(input_tokens=10, cache_creation=0, cache_read=0, output_tokens=10)
-    with_thinking = _inputs(
-        input_tokens=10, cache_creation=0, cache_read=0, output_tokens=30
-    )
+    with_thinking = _inputs(input_tokens=10, cache_creation=0, cache_read=0, output_tokens=30)
     base_cost = compute_span_cost_with_rates(base, _RATES)
     thinking_cost = compute_span_cost_with_rates(with_thinking, _RATES)
     # 20 extra output tokens at BASE_OUTPUT=20 → +400
@@ -128,9 +120,7 @@ def test_no_reasoning_output_tokens_field() -> None:
 def test_compute_span_cost_non_negative() -> None:
     """Acceptance #1 — cost is non-negative for any valid inputs
     (input_tokens >= cache_read + cache_creation, output_tokens >= 0)."""
-    inputs = _inputs(
-        input_tokens=500, cache_creation=100, cache_read=200, output_tokens=0
-    )
+    inputs = _inputs(input_tokens=500, cache_creation=100, cache_read=200, output_tokens=0)
     assert compute_span_cost_with_rates(inputs, _RATES) >= 0.0
 
 
@@ -152,9 +142,7 @@ def test_rate_key_three_field_cardinality() -> None:
 def test_cache_invariant_holds_at_input() -> None:
     """Acceptance #6 — the formula assumes cache_creation + cache_read + uncached
     == input_tokens; with a well-formed input the uncached term is non-negative."""
-    inputs = _inputs(
-        input_tokens=300, cache_creation=100, cache_read=100, output_tokens=10
-    )
+    inputs = _inputs(input_tokens=300, cache_creation=100, cache_read=100, output_tokens=10)
     uncached = inputs.input_tokens - inputs.cache_read - inputs.cache_creation
     assert uncached == 100
     assert uncached >= 0
@@ -168,9 +156,7 @@ def test_extended_thinking_semantic_note_byte_exact() -> None:
 
 def test_compute_span_cost_deterministic() -> None:
     """Acceptance #7 — the formula is deterministic given inputs + rate snapshot."""
-    inputs = _inputs(
-        input_tokens=123, cache_creation=10, cache_read=20, output_tokens=45
-    )
+    inputs = _inputs(input_tokens=123, cache_creation=10, cache_read=20, output_tokens=45)
     first = compute_span_cost_with_rates(inputs, _RATES)
     second = compute_span_cost_with_rates(inputs, _RATES)
     assert first == second

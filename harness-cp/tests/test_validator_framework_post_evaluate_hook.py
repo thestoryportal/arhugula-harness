@@ -22,7 +22,6 @@ from collections.abc import Mapping
 from typing import Any
 
 import pytest
-
 from harness_as.sandbox_tier import SandboxTier
 from harness_core.identity import StepID
 from harness_cp.sub_agent_gate_level_descent import GateLevel
@@ -40,7 +39,6 @@ from harness_cp.validator_framework_types import (
 from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 
-
 # ----------------------------------------------------------------------------
 # Fixtures
 # ----------------------------------------------------------------------------
@@ -57,7 +55,7 @@ def _make_step(step_id_str: str = "step-1") -> WorkflowStep:
 def _make_step_context(step_id_str: str = "step-1") -> StepExecutionContext:
     return StepExecutionContext(
         workflow_id="wf-test",
-        parent_action_id=f"workflow:wf-test:step:0",
+        parent_action_id="workflow:wf-test:step:0",
         parent_gate_level=GateLevel.AUTO,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
         parent_actor=Actor(actor_class=ActorClass.AGENT, actor_id="test-hook"),
@@ -360,15 +358,11 @@ async def test_sync_facade_transparent_hook_passthrough() -> None:
         validator_registry={step.step_id: validator},
         post_evaluate_hook=hook,
     )
-    facade = materialize_sync_validator_framework_facade(
-        fw, result_timeout_seconds=5.0
-    )
+    facade = materialize_sync_validator_framework_facade(fw, result_timeout_seconds=5.0)
 
     # Sync facade.evaluate() runs from a worker thread + bridges to the
     # captured loop. Exercise the facade via to_thread.
-    evaluation = await _asyncio.to_thread(
-        facade.evaluate, step, {}, step_context=ctx
-    )
+    evaluation = await _asyncio.to_thread(facade.evaluate, step, {}, step_context=ctx)
 
     assert evaluation.result.outcome == ValidatorOutcome.PASS
     assert len(hook.calls) == 1

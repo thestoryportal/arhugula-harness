@@ -118,9 +118,7 @@ class VerificationResult(StrEnum):
     SIGNATURE_MISMATCH = "signature_mismatch"
 
 
-def resolve_signing_key(
-    scope: SigningKeyScope, persona_tier: PersonaTier
-) -> SigningKeyResult:
+def resolve_signing_key(scope: SigningKeyScope, persona_tier: PersonaTier) -> SigningKeyResult:
     """Resolve the F5 audit-signing key for `scope` — C-CP-20 §20.3.1.
 
     Signing keys are MULTI_TENANT_COMPLIANCE-exclusive: any lower persona tier

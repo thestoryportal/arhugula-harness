@@ -250,7 +250,7 @@ class ServerCtxElicitCallback:
       `RT-FAIL-HITL-GATE-TIMEOUT` per spec §14.8 failure-mode taxonomy).
     """
 
-    mcp_server: "HarnessMCPServer"
+    mcp_server: HarnessMCPServer
     """The `HarnessMCPServer` whose `get_current_tool_ctx()` accessor
     surfaces the active tool handler `ctx` (held in a module-level
     ContextVar per spec v1.36 §14.18 chapeau per-session ctx isolation).
@@ -388,7 +388,7 @@ def materialize_mcp_backed_ask_user_question_surface_stage(
     mcp_host: MCPHost,
     *,
     mcp_callback: MCPAskCallback | None = None,
-    harness_mcp_server: "HarnessMCPServer | None" = None,
+    harness_mcp_server: HarnessMCPServer | None = None,
 ) -> MCPBackedAskUserQuestionSurface:
     """Construct the MCP-backed surface at bootstrap stage 5 LOOP_INIT.
 

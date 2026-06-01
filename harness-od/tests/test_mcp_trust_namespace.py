@@ -14,16 +14,13 @@ ACs from OD plan v2.14 §1 U-OD-52 (preserved at v2.15):
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from harness_core import AttributeValueType, Cardinality
 from harness_od.mcp_trust_namespace import (
     MCP_TRUST_SPAN_NAMESPACE_SCHEMA,
     SPAN_SITE_MCP_TRUST_EVALUATE,
-    AttributeSpec,
     TrustEvaluationAuditPayload,
 )
-
+from pydantic import ValidationError
 
 # ---------------------------------------------------------------------------
 # AC #1 + AC #5 — schema declares 5 attributes; row-by-row verbatim match

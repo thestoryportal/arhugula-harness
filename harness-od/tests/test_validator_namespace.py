@@ -14,8 +14,6 @@ ACs from OD plan v2.14 §1 U-OD-50:
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from harness_core import AttributeValueType, Cardinality
 from harness_od.validator_namespace import (
     SPAN_SITE_VALIDATOR_ESCALATION,
@@ -23,10 +21,9 @@ from harness_od.validator_namespace import (
     SPAN_SITE_VALIDATOR_FAIL,
     SPAN_SITE_VALIDATOR_REVALIDATION,
     VALIDATOR_SPAN_NAMESPACE_SCHEMA,
-    AttributeSpec,
     ValidatorEscalationAuditPayload,
 )
-
+from pydantic import ValidationError
 
 # ----------------------------------------------------------------------------
 # AC #1 + AC #5 — schema declares all 11 attributes; row-by-row match
@@ -103,6 +100,11 @@ def test_schema_pattern_p1_alignment_with_cp_validator_framework() -> None:
     from collections.abc import Mapping
     from typing import Any
 
+    from harness_as.sandbox_tier import SandboxTier
+    from harness_core.identity import StepID
+
+    # Replicates the U-CP-60 test fixture inline:
+    from harness_cp.sub_agent_gate_level_descent import GateLevel
     from harness_cp.validator_framework import ConcreteValidatorFramework
     from harness_cp.validator_framework_types import (
         ValidatorFailClass,
@@ -110,11 +112,6 @@ def test_schema_pattern_p1_alignment_with_cp_validator_framework() -> None:
         ValidatorResult,
     )
     from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
-    from harness_core.identity import StepID
-
-    # Replicates the U-CP-60 test fixture inline:
-    from harness_cp.sub_agent_gate_level_descent import GateLevel
-    from harness_as.sandbox_tier import SandboxTier
     from harness_is.state_ledger_entry_schema import Actor, ActorClass
 
     step = WorkflowStep(
@@ -155,7 +152,9 @@ def test_schema_pattern_p1_alignment_with_cp_validator_framework() -> None:
 
     # Every CP-emitted key must be a recognized validator.* OD canonical key
     # OR a step.id (also in the schema). non-validator.* keys are not constrained.
-    validator_keys_emitted = {k for k in evaluation.span_attributes.keys() if k.startswith("validator.") or k == "step.id"}
+    validator_keys_emitted = {
+        k for k in evaluation.span_attributes.keys() if k.startswith("validator.") or k == "step.id"
+    }
     canonical_keys = set(VALIDATOR_SPAN_NAMESPACE_SCHEMA.keys())
     unrecognized = validator_keys_emitted - canonical_keys
     assert not unrecognized, f"CP framework emitted non-canonical keys: {unrecognized}"

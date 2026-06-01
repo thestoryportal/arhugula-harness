@@ -49,31 +49,19 @@ class SynchronyClass(StrEnum):
 class HITLPrimitiveShape(StrEnum):
     """The 12 HITL primitive shapes named in the C-CP-18 §18.1 matrix cells."""
 
-    IN_PROCESS_FUNCTION_SYNCHRONOUS_RETURN = (
-        "in-process-function-synchronous-return"
-    )
+    IN_PROCESS_FUNCTION_SYNCHRONOUS_RETURN = "in-process-function-synchronous-return"
     LANGGRAPH_INTERRUPT_COMMAND_RESUME = "langgraph-interrupt-command-resume"
     TWELVE_FACTOR_APPLICATION_DEFINED_EVENT_AND_RESUME = (
         "twelve-factor-application-defined-event-and-resume"
     )
-    SEGMENT_RESUME_WITH_APPROVAL_PENDING_MARKER = (
-        "segment-resume-with-approval-pending-marker"
-    )
+    SEGMENT_RESUME_WITH_APPROVAL_PENDING_MARKER = "segment-resume-with-approval-pending-marker"
     CONTACT_CHANNEL_CR_MESH_PATTERN = "contact-channel-cr-mesh-pattern"
-    TEMPORAL_WAIT_CONDITION_SIGNAL_HANDLER = (
-        "temporal-wait-condition-signal-handler"
-    )
+    TEMPORAL_WAIT_CONDITION_SIGNAL_HANDLER = "temporal-wait-condition-signal-handler"
     LANGGRAPH_POSTGRES_REDIS_LEASE = "langgraph-postgres-redis-lease"
     CLAUDE_CODE_PERMISSION_MODEL = "claude-code-permission-model"
-    TEMPORAL_CLOUD_BEDROCK_VERTEX_NATIVE = (
-        "temporal-cloud-bedrock-vertex-native"
-    )
-    LANGGRAPH_DYNAMODB_MANAGED_CHECKPOINTER = (
-        "langgraph-dynamodb-managed-checkpointer"
-    )
-    ACP_K8S_MULTI_TENANT_CONTACT_CHANNEL = (
-        "acp-k8s-multi-tenant-contact-channel"
-    )
+    TEMPORAL_CLOUD_BEDROCK_VERTEX_NATIVE = "temporal-cloud-bedrock-vertex-native"
+    LANGGRAPH_DYNAMODB_MANAGED_CHECKPOINTER = "langgraph-dynamodb-managed-checkpointer"
+    ACP_K8S_MULTI_TENANT_CONTACT_CHANNEL = "acp-k8s-multi-tenant-contact-channel"
     MANAGED_WAL_CRYPTOGRAPHIC_AUDIT = "managed-wal-cryptographic-audit"
 
 
@@ -130,8 +118,7 @@ _MATRIX_ROWS: tuple[
         _EC.PURE_PATTERN_NO_ENGINE,
         _SC.SYNC_BLOCKING,
         (_HS.TWELVE_FACTOR_APPLICATION_DEFINED_EVENT_AND_RESUME,),
-        "sync-blocking PRIMARY | 12-Factor Factor 7 application-defined "
-        "event-and-resume [HIGH]",
+        "sync-blocking PRIMARY | 12-Factor Factor 7 application-defined event-and-resume [HIGH]",
     ),
     (
         _PT.SOLO_DEVELOPER,
@@ -146,8 +133,7 @@ _MATRIX_ROWS: tuple[
         _EC.WAL_SEGMENT,
         _SC.SYNC_BLOCKING,
         (_HS.SEGMENT_RESUME_WITH_APPROVAL_PENDING_MARKER,),
-        "sync-blocking PRIMARY | segment-resume on restart with "
-        "approval-pending-segment marker",
+        "sync-blocking PRIMARY | segment-resume on restart with approval-pending-segment marker",
     ),
     # --- team-binding row ---
     (
@@ -171,24 +157,21 @@ _MATRIX_ROWS: tuple[
         _EC.PURE_PATTERN_NO_ENGINE,
         _SC.EXCLUDED,
         (),
-        "EXCLUDED (per C-CP-07 §7.2 self-hosted-server row excludes "
-        "pure-pattern for durable pole)",
+        "EXCLUDED (per C-CP-07 §7.2 self-hosted-server row excludes pure-pattern for durable pole)",
     ),
     (
         _PT.TEAM_BINDING,
         _EC.RECONCILER_LOOP,
         _SC.DURABLE_ASYNC,
         (_HS.CONTACT_CHANNEL_CR_MESH_PATTERN,),
-        "durable-async PRIMARY | `ContactChannel` CR mesh-pattern with "
-        "K8s-resident operator",
+        "durable-async PRIMARY | `ContactChannel` CR mesh-pattern with K8s-resident operator",
     ),
     (
         _PT.TEAM_BINDING,
         _EC.WAL_SEGMENT,
         _SC.DURABLE_ASYNC,
         (_HS.SEGMENT_RESUME_WITH_APPROVAL_PENDING_MARKER,),
-        "durable-async PRIMARY | segment-resume + external trigger via "
-        "webhook ingress",
+        "durable-async PRIMARY | segment-resume + external trigger via webhook ingress",
     ),
     # --- multi-tenant-compliance row ---
     (
@@ -228,8 +211,7 @@ _MATRIX_ROWS: tuple[
         _EC.WAL_SEGMENT,
         _SC.DURABLE_ASYNC,
         (_HS.MANAGED_WAL_CRYPTOGRAPHIC_AUDIT,),
-        "durable-async PRIMARY | managed-WAL with cryptographic-signed "
-        "audit ledger",
+        "durable-async PRIMARY | managed-WAL with cryptographic-signed audit ledger",
     ),
 )
 
@@ -253,9 +235,7 @@ _CELL_INDEX: dict[tuple[PersonaTier, EngineClass], HITLMatrixCell] = {
 }
 
 
-def matrix_cell_for(
-    persona_tier: PersonaTier, engine_class: EngineClass
-) -> HITLMatrixCell:
+def matrix_cell_for(persona_tier: PersonaTier, engine_class: EngineClass) -> HITLMatrixCell:
     """Return the §18.1 matrix cell for `(persona_tier, engine_class)`.
 
     Total over `PersonaTier × EngineClass` — `HITL_MATRIX` carries one entry

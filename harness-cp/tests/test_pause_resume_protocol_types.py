@@ -17,8 +17,6 @@ from __future__ import annotations
 import hashlib
 
 import pytest
-from pydantic import ValidationError
-
 from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol_types import (
     MaterialDiffPolicy,
@@ -26,7 +24,7 @@ from harness_cp.pause_resume_protocol_types import (
     ResumeResult,
     WorkflowPauseReason,
 )
-
+from pydantic import ValidationError
 
 # --- AC #1 — WorkflowPauseReason 5-class -----------------------------------
 
@@ -256,7 +254,6 @@ def test_workflow_pause_reason_class_identity_distinct() -> None:
 def _build_hitl_result():  # type: ignore[no-untyped-def]
     """Construct a populated HITLResult for ResumeContext field-population tests."""
     from harness_core.identity import EntryID
-
     from harness_cp.hitl_placement import HITLResult
     from harness_cp.hitl_response_palette import HITLResponse
 

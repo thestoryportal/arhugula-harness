@@ -59,9 +59,7 @@ def test_verify_as_source_namespace_set_mismatch_err() -> None:
     with pytest.raises(NamespaceSetMismatch):
         verify_as_source_namespace_set(AS_SOURCE_NAMESPACE_PREFIXES | {"routing."})
     with pytest.raises(NamespaceSetMismatch):
-        verify_as_source_namespace_set(
-            (AS_SOURCE_NAMESPACE_PREFIXES - {"mcp."}) | {"mcp"}
-        )
+        verify_as_source_namespace_set((AS_SOURCE_NAMESPACE_PREFIXES - {"mcp."}) | {"mcp"})
 
 
 def test_assert_namespace_attribute_count_per_prefix() -> None:

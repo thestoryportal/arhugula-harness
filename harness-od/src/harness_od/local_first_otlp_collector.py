@@ -83,6 +83,7 @@ __all__ = [
 
 # --- error types (in-unit; landed-unit Result-arm convention) --------------
 
+
 class CellBindingError(Exception):
     """Raised when `bind_in_process_collector` is called for a non-cell-1 cell.
 
@@ -171,6 +172,7 @@ def bind_in_process_collector(cell_id: CellID) -> InProcessCollectorBinding:
 
 # --- §19.2 sqlite ring-buffer trace storage --------------------------------
 
+
 class SpanRow(BaseModel):
     """One row of the sqlite ring-buffer trace store (C-OD-19 §19.2).
 
@@ -222,9 +224,7 @@ class RingBufferTraceStoragePolicy(BaseModel):
     retention_class: Literal["MAX_AGE_OR_MAX_BYTES"]
     default_max_age_hours: int | None
     default_max_bytes_mb: int | None
-    closure_invariant: Literal[
-        "FRESH_ON_RESTART_OPTIONAL_PERSISTENCE_BETWEEN_RESTARTS"
-    ]
+    closure_invariant: Literal["FRESH_ON_RESTART_OPTIONAL_PERSISTENCE_BETWEEN_RESTARTS"]
 
 
 class RingBufferStorageState(BaseModel):
@@ -282,8 +282,7 @@ def evict_oldest_per_ring_buffer_policy(
         )
     if not storage_state.rows:
         raise RingBufferError(
-            "ring-buffer eviction threshold fired but the buffer is empty "
-            "(C-OD-19 §19.2)"
+            "ring-buffer eviction threshold fired but the buffer is empty (C-OD-19 §19.2)"
         )
     # FIFO-by-age — evict the single oldest row (`rows` is oldest-first).
     evicted_bytes = storage_state.row_bytes[0] if storage_state.row_bytes else 0
@@ -298,6 +297,7 @@ def evict_oldest_per_ring_buffer_policy(
 
 
 # --- §19.3 TUI trace browser primitive -------------------------------------
+
 
 class TuiQuery(BaseModel):
     """One scoped query of the TUI trace browser (C-OD-19 §19.3).

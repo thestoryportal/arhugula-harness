@@ -18,11 +18,9 @@ from harness_od.rate_table_resolver import RateTableMissingError, resolve_for
 from harness_od.rate_table_types import (
     ProviderRates,
     RateTable,
-    ToolRate,
     WebhookRate,
 )
 from harness_od.rate_table_v1 import RATE_TABLE_V1
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

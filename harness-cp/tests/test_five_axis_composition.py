@@ -21,7 +21,6 @@ from harness_as.sandbox_tier import SandboxTier
 from harness_core import DeploymentSurface, PersonaTier
 from harness_cp.cp_shared_types import MCPTrustTier
 from harness_cp.f5_signing_key_resolution import SecretScopeKind, SigningKeyScope
-from harness_cp.gate_level_rule import GateLevel
 from harness_cp.five_axis_composition import (
     OPERATOR_POLICY_OVERRIDE_SCOPE_TABLE,
     ROTATION_VERIFICATION_STEPS,
@@ -37,6 +36,7 @@ from harness_cp.five_axis_composition import (
     execute_key_rotation,
     verify_rotation_6_steps,
 )
+from harness_cp.gate_level_rule import GateLevel
 
 
 def _input() -> FiveAxisCompositionInput:
@@ -51,15 +51,11 @@ def _input() -> FiveAxisCompositionInput:
 
 
 def _scope() -> SigningKeyScope:
-    return SigningKeyScope(
-        scope_kind=SecretScopeKind.TENANT_BOUND, scope_identifier="solo"
-    )
+    return SigningKeyScope(scope_kind=SecretScopeKind.TENANT_BOUND, scope_identifier="solo")
 
 
 def _by_kind(kind: OverrideKind) -> OperatorPolicyOverride:
-    return next(
-        o for o in OPERATOR_POLICY_OVERRIDE_SCOPE_TABLE if o.override_kind is kind
-    )
+    return next(o for o in OPERATOR_POLICY_OVERRIDE_SCOPE_TABLE if o.override_kind is kind)
 
 
 def test_five_axis_orthogonality() -> None:
@@ -84,9 +80,7 @@ def test_composition_admissible_for_valid_inputs() -> None:
 def test_override_scope_table_match_spec() -> None:
     """#3 — OPERATOR_POLICY_OVERRIDE_SCOPE_TABLE has the 3 §19.5 entries."""
     assert len(OPERATOR_POLICY_OVERRIDE_SCOPE_TABLE) == 3
-    assert {o.override_kind for o in OPERATOR_POLICY_OVERRIDE_SCOPE_TABLE} == set(
-        OverrideKind
-    )
+    assert {o.override_kind for o in OPERATOR_POLICY_OVERRIDE_SCOPE_TABLE} == set(OverrideKind)
     for o in OPERATOR_POLICY_OVERRIDE_SCOPE_TABLE:
         assert o.audit_required is True
         assert isinstance(o.scope, OverrideScope)
@@ -99,24 +93,18 @@ def test_lower_gate_prohibited_at_multi_tenant() -> None:
     assert PersonaTier.SOLO_DEVELOPER in lower.permitted_at
     assert PersonaTier.TEAM_BINDING in lower.permitted_at
     base = compose_five_axis(_input())
-    rejection = apply_operator_policy_override(
-        base, lower, PersonaTier.MULTI_TENANT_COMPLIANCE
-    )
+    rejection = apply_operator_policy_override(base, lower, PersonaTier.MULTI_TENANT_COMPLIANCE)
     assert isinstance(rejection, OverrideRejection)
 
 
 def test_raise_gate_permitted_at_all_tiers() -> None:
     """#3 — RAISE_GATE_LEVEL is permitted at all three persona tiers."""
-    assert _by_kind(OverrideKind.RAISE_GATE_LEVEL).permitted_at == frozenset(
-        PersonaTier
-    )
+    assert _by_kind(OverrideKind.RAISE_GATE_LEVEL).permitted_at == frozenset(PersonaTier)
 
 
 def test_narrow_palette_permitted_at_all_tiers() -> None:
     """#3 — NARROW_PALETTE is permitted at all three persona tiers."""
-    assert _by_kind(OverrideKind.NARROW_PALETTE).permitted_at == frozenset(
-        PersonaTier
-    )
+    assert _by_kind(OverrideKind.NARROW_PALETTE).permitted_at == frozenset(PersonaTier)
 
 
 def test_override_emits_audit_regardless_of_tier() -> None:

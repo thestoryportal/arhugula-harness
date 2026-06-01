@@ -130,9 +130,7 @@ def test_cross_trust_state_cardinality_four() -> None:
 def test_palette_restriction_match_spec_21_3() -> None:
     """Acceptance #5 — 4 entries, one per cross-trust state."""
     assert len(PALETTE_RESTRICTION_TABLE) == 4
-    assert {r.cross_trust_state for r in PALETTE_RESTRICTION_TABLE} == set(
-        CrossTrustBoundaryState
-    )
+    assert {r.cross_trust_state for r in PALETTE_RESTRICTION_TABLE} == set(CrossTrustBoundaryState)
 
 
 def test_none_full_palette() -> None:
@@ -149,23 +147,23 @@ def test_none_full_palette() -> None:
 
 def test_cross_family_restricted_to_reject_respond() -> None:
     """Acceptance #5 — `CROSS_FAMILY_ACTIVE` restricts to {reject, respond}."""
-    assert compute_restricted_palette(
-        CrossTrustBoundaryState.CROSS_FAMILY_ACTIVE
-    ) == frozenset({HITLResponse.REJECT, HITLResponse.RESPOND})
+    assert compute_restricted_palette(CrossTrustBoundaryState.CROSS_FAMILY_ACTIVE) == frozenset(
+        {HITLResponse.REJECT, HITLResponse.RESPOND}
+    )
 
 
 def test_local_terminal_restricted_to_reject_respond() -> None:
     """Acceptance #5 — `LOCAL_TERMINAL_ACTIVE` restricts to {reject, respond}."""
-    assert compute_restricted_palette(
-        CrossTrustBoundaryState.LOCAL_TERMINAL_ACTIVE
-    ) == frozenset({HITLResponse.REJECT, HITLResponse.RESPOND})
+    assert compute_restricted_palette(CrossTrustBoundaryState.LOCAL_TERMINAL_ACTIVE) == frozenset(
+        {HITLResponse.REJECT, HITLResponse.RESPOND}
+    )
 
 
 def test_untrusted_mcp_restricted_to_reject_respond() -> None:
     """Acceptance #5 — `UNTRUSTED_MCP_ACTIVE` restricts to {reject, respond}."""
-    assert compute_restricted_palette(
-        CrossTrustBoundaryState.UNTRUSTED_MCP_ACTIVE
-    ) == frozenset({HITLResponse.REJECT, HITLResponse.RESPOND})
+    assert compute_restricted_palette(CrossTrustBoundaryState.UNTRUSTED_MCP_ACTIVE) == frozenset(
+        {HITLResponse.REJECT, HITLResponse.RESPOND}
+    )
 
 
 def test_restriction_composes_with_completeness_invariant() -> None:

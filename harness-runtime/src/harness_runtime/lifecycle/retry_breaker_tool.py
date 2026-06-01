@@ -163,9 +163,7 @@ class RetryBreakerToolDispatcher:
     inner: Any  # StepDispatcher Protocol (typed Any to keep schema L0-free)
     retry_breaker: RetryBreakerRegistry
     tracer_provider: Any
-    sleep_fn: Callable[[float], Awaitable[None]] = field(
-        default_factory=lambda: asyncio.sleep
-    )
+    sleep_fn: Callable[[float], Awaitable[None]] = field(default_factory=lambda: asyncio.sleep)
 
     async def dispatch(
         self,
@@ -189,13 +187,9 @@ class RetryBreakerToolDispatcher:
             dispatcher propagates verbatim (fail-fast).
         """
         policy = self.retry_breaker.get_policy(RESERVED_TOOL_DISPATCH_KEY)
-        tracer = self.tracer_provider.get_tracer(
-            "harness.runtime.retry_tool_dispatch"
-        )
+        tracer = self.tracer_provider.get_tracer("harness.runtime.retry_tool_dispatch")
 
-        with tracer.start_as_current_span(
-            "harness.runtime.retry_tool_dispatch"
-        ) as outer_span:
+        with tracer.start_as_current_span("harness.runtime.retry_tool_dispatch") as outer_span:
             original_span_id_hex = _format_span_id_hex(outer_span)
             replay_disposition = REPLAY_DISPOSITION_MAPPING[binding.engine_class]
             last_failure_class: str = "unknown"
@@ -205,17 +199,11 @@ class RetryBreakerToolDispatcher:
                     "harness.runtime.tool_retry_attempt"
                 ) as inner_span:
                     inner_span.set_attribute("retry.attempt_number", attempt + 1)
-                    inner_span.set_attribute(
-                        "retry.original_span_id", original_span_id_hex
-                    )
-                    inner_span.set_attribute(
-                        "engine.replay_disposition", replay_disposition.value
-                    )
+                    inner_span.set_attribute("retry.original_span_id", original_span_id_hex)
+                    inner_span.set_attribute("engine.replay_disposition", replay_disposition.value)
 
                     try:
-                        result = await self.inner.dispatch(
-                            binding, step, step_context=step_context
-                        )
+                        result = await self.inner.dispatch(binding, step, step_context=step_context)
                     except asyncio.CancelledError:
                         raise
                     except _TRANSIENT_TOOL_DISPATCH_ERRORS as exc:
@@ -232,12 +220,8 @@ class RetryBreakerToolDispatcher:
                             next_stage is StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF
                             and not is_last_attempt
                         ):
-                            backoff_seconds = (
-                                self.retry_breaker.compute_delay_seconds(attempt)
-                            )
-                            inner_span.set_attribute(
-                                "retry.delay_ms", int(backoff_seconds * 1000)
-                            )
+                            backoff_seconds = self.retry_breaker.compute_delay_seconds(attempt)
+                            inner_span.set_attribute("retry.delay_ms", int(backoff_seconds * 1000))
                             inner_span.set_attribute(
                                 "retry.cause_attribution",
                                 ValidatorRetryExitClass.TRANSIENT_RETRY.value,
@@ -266,9 +250,7 @@ class RetryBreakerToolDispatcher:
                     except Exception as exc:
                         # Fail-fast: any other §14.9.5 typed error propagates.
                         inner_span.set_attribute("retry.delay_ms", 0)
-                        inner_span.set_attribute(
-                            "retry.cause_attribution", type(exc).__name__
-                        )
+                        inner_span.set_attribute("retry.cause_attribution", type(exc).__name__)
                         inner_span.set_attribute(
                             "retry.fail_class",
                             ValidatorRetryExitClass.PERMANENT_FAIL_EXIT.value,
@@ -283,9 +265,7 @@ class RetryBreakerToolDispatcher:
 
                 # Sleep between retries (outside the inner span CM).
                 # Only reached on the retry-with-backoff branch above.
-                await self.sleep_fn(
-                    self.retry_breaker.compute_delay_seconds(attempt)
-                )
+                await self.sleep_fn(self.retry_breaker.compute_delay_seconds(attempt))
 
             # Exhausted: emit event + raise typed terminal error.
             outer_span.add_event(
@@ -309,9 +289,7 @@ def _format_span_id_hex(span: Any) -> str:
     characters, zero-padded. Returns the empty string if the span isn't
     recording.
     """
-    span_context = (
-        span.get_span_context() if hasattr(span, "get_span_context") else None
-    )
+    span_context = span.get_span_context() if hasattr(span, "get_span_context") else None
     if span_context is None or not getattr(span_context, "is_valid", True):
         return ""
     span_id_int = span_context.span_id

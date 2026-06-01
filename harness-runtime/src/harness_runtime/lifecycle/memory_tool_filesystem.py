@@ -67,26 +67,20 @@ class LocalFilesystemMemoryToolBackend:
         - paths whose resolved location escapes `self._root`
         """
         if not path.startswith(_MEMORIES_SCOPE):
-            raise MemoryPathViolationError(
-                f"path {path!r} not prefixed with {_MEMORIES_SCOPE!r}"
-            )
+            raise MemoryPathViolationError(f"path {path!r} not prefixed with {_MEMORIES_SCOPE!r}")
 
-        relative = path[len(_MEMORIES_SCOPE):]
+        relative = path[len(_MEMORIES_SCOPE) :]
         if not relative:
             raise MemoryPathViolationError(
                 f"path {path!r} resolves to /memories/ directory itself; expected file path"
             )
         if relative.startswith("/"):
-            raise MemoryPathViolationError(
-                f"path {path!r} double-slash after /memories/ scope"
-            )
+            raise MemoryPathViolationError(f"path {path!r} double-slash after /memories/ scope")
 
         # Reject `..` traversal segments BEFORE resolution attempt
         # (defense in depth — resolution check below also catches escapes).
         if ".." in PurePosixPath(relative).parts:
-            raise MemoryPathViolationError(
-                f"path {path!r} contains path-traversal segment '..'"
-            )
+            raise MemoryPathViolationError(f"path {path!r} contains path-traversal segment '..'")
 
         resolved = (self._root / relative).resolve()
         # Defense-in-depth: resolved path must lie inside self._root
@@ -115,9 +109,7 @@ class LocalFilesystemMemoryToolBackend:
             try:
                 return await asyncio.to_thread(target.read_bytes)
             except OSError as exc:
-                raise MemoryCallbackIOError(
-                    f"view({path!r}) failed: {exc}"
-                ) from exc
+                raise MemoryCallbackIOError(f"view({path!r}) failed: {exc}") from exc
 
     async def create(self, path: str, content: bytes) -> None:
         """Create `/memories/{path}` with `content`; overwrites if exists.
@@ -132,9 +124,7 @@ class LocalFilesystemMemoryToolBackend:
                 await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
                 await asyncio.to_thread(target.write_bytes, content)
             except OSError as exc:
-                raise MemoryCallbackIOError(
-                    f"create({path!r}) failed: {exc}"
-                ) from exc
+                raise MemoryCallbackIOError(f"create({path!r}) failed: {exc}") from exc
 
     async def delete(self, path: str) -> None:
         """Delete `/memories/{path}`; no-op if absent."""
@@ -143,9 +133,7 @@ class LocalFilesystemMemoryToolBackend:
             try:
                 await asyncio.to_thread(target.unlink, missing_ok=True)
             except OSError as exc:
-                raise MemoryCallbackIOError(
-                    f"delete({path!r}) failed: {exc}"
-                ) from exc
+                raise MemoryCallbackIOError(f"delete({path!r}) failed: {exc}") from exc
 
     async def str_replace(self, path: str, old: str, new: str) -> None:
         """Replace `old` with `new` in `/memories/{path}`.
@@ -158,22 +146,16 @@ class LocalFilesystemMemoryToolBackend:
             try:
                 content = await asyncio.to_thread(target.read_text)
             except OSError as exc:
-                raise MemoryCallbackIOError(
-                    f"str_replace({path!r}) read failed: {exc}"
-                ) from exc
+                raise MemoryCallbackIOError(f"str_replace({path!r}) read failed: {exc}") from exc
 
             if old not in content:
-                raise MemoryCallbackIOError(
-                    f"str_replace({path!r}): substring {old!r} not found"
-                )
+                raise MemoryCallbackIOError(f"str_replace({path!r}): substring {old!r} not found")
 
             replaced = content.replace(old, new)
             try:
                 await asyncio.to_thread(target.write_text, replaced)
             except OSError as exc:
-                raise MemoryCallbackIOError(
-                    f"str_replace({path!r}) write failed: {exc}"
-                ) from exc
+                raise MemoryCallbackIOError(f"str_replace({path!r}) write failed: {exc}") from exc
 
     async def insert(self, path: str, line: int, content: str) -> None:
         """Insert `content` at 1-indexed `line` in `/memories/{path}`.
@@ -187,16 +169,13 @@ class LocalFilesystemMemoryToolBackend:
             try:
                 existing = await asyncio.to_thread(target.read_text)
             except OSError as exc:
-                raise MemoryCallbackIOError(
-                    f"insert({path!r}) read failed: {exc}"
-                ) from exc
+                raise MemoryCallbackIOError(f"insert({path!r}) read failed: {exc}") from exc
 
             lines = existing.splitlines(keepends=True)
             # 1-indexed; line=1 → insert before lines[0]; line=len(lines)+1 → append.
             if line < 1 or line > len(lines) + 1:
                 raise MemoryCallbackIOError(
-                    f"insert({path!r}, line={line}): out of range "
-                    f"(1..{len(lines) + 1})"
+                    f"insert({path!r}, line={line}): out of range (1..{len(lines) + 1})"
                 )
 
             lines.insert(line - 1, content)
@@ -205,6 +184,4 @@ class LocalFilesystemMemoryToolBackend:
             try:
                 await asyncio.to_thread(target.write_text, replaced)
             except OSError as exc:
-                raise MemoryCallbackIOError(
-                    f"insert({path!r}) write failed: {exc}"
-                ) from exc
+                raise MemoryCallbackIOError(f"insert({path!r}) write failed: {exc}") from exc

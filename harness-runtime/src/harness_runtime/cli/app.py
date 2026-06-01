@@ -29,9 +29,10 @@ from harness_runtime.config_source import (
 from harness_runtime.lifecycle.workflow_manifest_loader import (
     LoadedWorkflow,
     ManifestAdmissibilityError,
-    WorkflowManifestLoadError,
     WorkflowManifestLoader,
+    WorkflowManifestLoadError,
 )
+
 
 class OutputFormat(StrEnum):
     """`harness run --output` format selector per Q-F at G1 ratification."""
@@ -168,9 +169,7 @@ async def _daemon_client_dispatch(
     from mcp.client.streamable_http import streamable_http_client
 
     transport = httpx.AsyncHTTPTransport(uds=str(socket_path))
-    http_client = httpx.AsyncClient(
-        transport=transport, timeout=httpx.Timeout(30.0)
-    )
+    http_client = httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(30.0))
 
     try:
         async with streamable_http_client(
@@ -184,27 +183,17 @@ async def _daemon_client_dispatch(
                     {"workflow_id": str(workflow_file)},
                 )
     except OSError as exc:
-        raise DaemonStartupError(
-            f"failed to connect to daemon at {socket_path}: {exc}"
-        ) from exc
+        raise DaemonStartupError(f"failed to connect to daemon at {socket_path}: {exc}") from exc
     finally:
         await http_client.aclose()
 
     if tool_result.isError:
         # The handler raised; surface the textual error to operator.
-        text_block = (
-            tool_result.content[0]
-            if tool_result.content
-            else None
-        )
+        text_block = tool_result.content[0] if tool_result.content else None
         detail = getattr(text_block, "text", "unknown tool error")
-        raise DaemonStartupError(
-            f"daemon-side run_workflow failed: {detail}"
-        )
+        raise DaemonStartupError(f"daemon-side run_workflow failed: {detail}")
     if not tool_result.content:
-        raise DaemonStartupError(
-            "daemon-side run_workflow returned empty content"
-        )
+        raise DaemonStartupError("daemon-side run_workflow returned empty content")
 
     import json
 
@@ -212,14 +201,12 @@ async def _daemon_client_dispatch(
     payload_text = getattr(text_block, "text", None)
     if payload_text is None:
         raise DaemonStartupError(
-            f"daemon-side run_workflow returned non-text content: "
-            f"{type(text_block).__name__}"
+            f"daemon-side run_workflow returned non-text content: {type(text_block).__name__}"
         )
     parsed = json.loads(payload_text)
     if not isinstance(parsed, dict):
         raise DaemonStartupError(
-            f"daemon-side run_workflow returned non-dict payload: "
-            f"{type(parsed).__name__}"
+            f"daemon-side run_workflow returned non-dict payload: {type(parsed).__name__}"
         )
     result: dict[str, Any] = {str(k): v for k, v in parsed.items()}  # type: ignore[reportUnknownVariableType,reportUnknownMemberType]
     return result
@@ -293,9 +280,7 @@ def run_command(
     """Invoke a workflow (one-shot, or daemon-client when ``--daemon`` is set)."""
     if daemon:
         # --- Daemon-client mode (U-RT-108 per plan v2.31 §1.8) -----------
-        resolved_socket = (
-            socket_path if socket_path is not None else _default_daemon_socket_path()
-        )
+        resolved_socket = socket_path if socket_path is not None else _default_daemon_socket_path()
         if not resolved_socket.exists():
             _print_fail_class(
                 "RT-FAIL-CLI-DAEMON-CONNECTION",
@@ -304,25 +289,19 @@ def run_command(
             raise typer.Exit(code=EXIT_BOOTSTRAP_ERROR)
         try:
             payload = asyncio.run(
-                _daemon_client_dispatch(
-                    workflow_file=workflow_file, socket_path=resolved_socket
-                )
+                _daemon_client_dispatch(workflow_file=workflow_file, socket_path=resolved_socket)
             )
         except DaemonStartupError as exc:
             _print_fail_class(exc.FAIL_CLASS, str(exc))
             raise typer.Exit(code=EXIT_BOOTSTRAP_ERROR) from exc
         _emit_daemon_run_result(payload, output=output)
         status = str(payload.get("status", "")).lower()
-        raise typer.Exit(
-            code=_CP_STATUS_TO_EXIT_CODE.get(status, EXIT_WORKFLOW_FAIL)
-        )
+        raise typer.Exit(code=_CP_STATUS_TO_EXIT_CODE.get(status, EXIT_WORKFLOW_FAIL))
 
     # --- Stage 1: config load (RT-FAIL-CLI-CONFIG-LOAD → exit 3) ----------
     cli_overrides = _build_cli_overrides(tenant_id=tenant_id)
     try:
-        runtime_config = RuntimeConfigSource.load(
-            config_file=config, cli_overrides=cli_overrides
-        )
+        runtime_config = RuntimeConfigSource.load(config_file=config, cli_overrides=cli_overrides)
     except RuntimeConfigLoadError as exc:
         _print_fail_class(exc.FAIL_CLASS, exc.reason)
         raise typer.Exit(code=EXIT_CONFIG_ERROR) from exc
@@ -427,13 +406,9 @@ async def _daemon_main(
     # installs SIGINT/SIGTERM signal handlers (stage 7). The signal handlers
     # set `ctx.drained_flag`; we await that event to break the serve loop.
     try:
-        ctx = await run_bootstrap(
-            runtime_config, workload_class=WorkloadClass.SOFTWARE_ENGINEERING
-        )
+        ctx = await run_bootstrap(runtime_config, workload_class=WorkloadClass.SOFTWARE_ENGINEERING)
     except BootstrapFailure as exc:
-        raise DaemonStartupError(
-            f"bootstrap failure during daemon startup: {exc}"
-        ) from exc
+        raise DaemonStartupError(f"bootstrap failure during daemon startup: {exc}") from exc
 
     try:
         # Bind the post-bootstrap HarnessContext on the MCP server's state
@@ -464,9 +439,7 @@ async def _daemon_main(
         # / SIGTERM → drained_flag.set()). We race the serve task against the
         # drained_flag wait; the first to complete cancels the other.
         serve_task = asyncio.create_task(uv_server.serve(), name="uvicorn-serve")
-        drain_task = asyncio.create_task(
-            ctx.drained_flag.wait(), name="daemon-drain-wait"
-        )
+        drain_task = asyncio.create_task(ctx.drained_flag.wait(), name="daemon-drain-wait")
         try:
             done, pending = await asyncio.wait(
                 {serve_task, drain_task}, return_when=asyncio.FIRST_COMPLETED
@@ -476,7 +449,7 @@ async def _daemon_main(
                 uv_server.should_exit = True
                 try:
                     await asyncio.wait_for(serve_task, timeout=10.0)
-                except (TimeoutError, asyncio.TimeoutError):
+                except TimeoutError:
                     uv_server.force_exit = True
                     await serve_task
             else:
@@ -486,9 +459,7 @@ async def _daemon_main(
                 if not task.done():
                     task.cancel()
         except OSError as exc:
-            raise DaemonStartupError(
-                f"failed to bind Unix-socket {socket_path}: {exc}"
-            ) from exc
+            raise DaemonStartupError(f"failed to bind Unix-socket {socket_path}: {exc}") from exc
     finally:
         await _shutdown(ctx)
         # Best-effort cleanup of the socket file.
@@ -525,15 +496,11 @@ def daemon_command(
         _print_fail_class(exc.FAIL_CLASS, exc.reason)
         raise typer.Exit(code=EXIT_CONFIG_ERROR) from exc
 
-    resolved_socket = (
-        socket_path if socket_path is not None else _default_daemon_socket_path()
-    )
+    resolved_socket = socket_path if socket_path is not None else _default_daemon_socket_path()
 
     # --- Stage 2: daemon serve (RT-FAIL-CLI-DAEMON-CONNECTION → exit 4) ----
     try:
-        asyncio.run(
-            _daemon_main(runtime_config=runtime_config, socket_path=resolved_socket)
-        )
+        asyncio.run(_daemon_main(runtime_config=runtime_config, socket_path=resolved_socket))
     except DaemonStartupError as exc:
         _print_fail_class(exc.FAIL_CLASS, str(exc))
         raise typer.Exit(code=EXIT_BOOTSTRAP_ERROR) from exc
@@ -553,6 +520,7 @@ def daemon_command(
 # "no click/typer" footer at their docstrings. The parent-app wrappers
 # are typer-typed (consistent with run + daemon siblings) but delegate
 # without translating flag shapes.
+
 
 @app.command(
     "inspect",
@@ -620,7 +588,11 @@ def main() -> None:
     # remap consistently.
     from typer._click.exceptions import (
         ClickException as _ClickException,
+    )
+    from typer._click.exceptions import (
         Exit as _Exit,
+    )
+    from typer._click.exceptions import (
         UsageError as _UsageError,
     )
 

@@ -77,15 +77,9 @@ def test_transition_type_cardinality_two() -> None:
 def test_five_within_column_three_diagonal() -> None:
     """Acceptance #1 / #2 — 5 within-column + 3 diagonal transitions per §22.1."""
     within = [
-        t
-        for t in BRIDGING_ARC_TRANSITIONS
-        if t.transition_type is TransitionType.WITHIN_COLUMN
+        t for t in BRIDGING_ARC_TRANSITIONS if t.transition_type is TransitionType.WITHIN_COLUMN
     ]
-    diagonal = [
-        t
-        for t in BRIDGING_ARC_TRANSITIONS
-        if t.transition_type is TransitionType.DIAGONAL
-    ]
+    diagonal = [t for t in BRIDGING_ARC_TRANSITIONS if t.transition_type is TransitionType.DIAGONAL]
     assert len(within) == 5
     assert len(diagonal) == 3
 
@@ -132,9 +126,7 @@ def test_verify_transition_returns_six_results() -> None:
 def test_pass_cell_matrix_reachability_both_active() -> None:
     """Acceptance #7 — CELL_MATRIX_REACHABILITY PASS when both cells ACTIVE."""
     for transition in BRIDGING_ARC_TRANSITIONS:
-        results = verify_transition(
-            transition, [VerificationDimension.CELL_MATRIX_REACHABILITY]
-        )
+        results = verify_transition(transition, [VerificationDimension.CELL_MATRIX_REACHABILITY])
         assert results[0].outcome is VerificationOutcome.PASS
 
 
@@ -168,9 +160,7 @@ def test_fail_redaction_class_target_lt_source() -> None:
     reverse = BridgingArcTransition(
         transition_id=99,
         source_cell=_cell(PersonaTier.TEAM_BINDING, DeploymentSurface.LOCAL_DEVELOPMENT),
-        target_cell=_cell(
-            PersonaTier.SOLO_DEVELOPER, DeploymentSurface.LOCAL_DEVELOPMENT
-        ),
+        target_cell=_cell(PersonaTier.SOLO_DEVELOPER, DeploymentSurface.LOCAL_DEVELOPMENT),
         transition_type=TransitionType.WITHIN_COLUMN,
     )
     results = verify_transition(

@@ -216,9 +216,7 @@ def attribute_llm_dispatch_cost(
         gen_ai_provider_name=provider_name,
         gen_ai_request_model=model,
     )
-    attached = cost_chain.attach_idempotency_key(
-        span_id, parent_idempotency_key, cost_record
-    )
+    attached = cost_chain.attach_idempotency_key(span_id, parent_idempotency_key, cost_record)
 
     # Substep 5 — project to typed CostRecordAuditPayload via the canonical
     # helper; convert via the cp_audit_to_od_audit `cost:` action_id prefix

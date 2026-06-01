@@ -178,7 +178,7 @@ class MCPClientNamespaceEmitter:
 
     def emit_mcp_call_span(
         self,
-        span: Any,  # noqa: ANN401 — Span typed as Any to avoid OTel SDK coupling
+        span: Any,
         server_name: str,
         primitive: MCPPrimitive,
         signature_hash: str,

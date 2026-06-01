@@ -21,13 +21,11 @@ from decimal import Decimal
 
 import pytest
 from harness_od.rate_table_types import RateTable, WebhookRate
-
 from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
 from harness_runtime.lifecycle.cost_attribution_validator_dispatch import (
     _compute_validator_cost,
     attribute_validator_dispatch_cost,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -49,9 +47,7 @@ def _make_rate_table(cpu_rate_per_ms: Decimal) -> RateTable:
         version="2026-05-28-test",
         providers={},
         tool_rates={},
-        webhook_rate=WebhookRate(
-            flat_per_attempt=Decimal("0"), plus_egress=False
-        ),
+        webhook_rate=WebhookRate(flat_per_attempt=Decimal("0"), plus_egress=False),
         cpu_rate_per_ms=cpu_rate_per_ms,
         egress_rate_per_byte=Decimal("0"),
     )
@@ -218,7 +214,6 @@ def test_three_validator_dispatches_produce_three_audit_writes(
     assert len(audit_writer.appended) == 3
     # Each audit entry has distinct action_id (per-step parent_action_id)
     action_ids = [
-        e[1].payload.audit_namespace_attrs["audit.cp.action_id"]
-        for e in audit_writer.appended
+        e[1].payload.audit_namespace_attrs["audit.cp.action_id"] for e in audit_writer.appended
     ]
     assert len(set(action_ids)) == 3

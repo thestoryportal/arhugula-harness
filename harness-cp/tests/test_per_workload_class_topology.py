@@ -29,9 +29,7 @@ def _by_class() -> dict[WorkloadClass, PerWorkloadClassTopologyCommitment]:
 def test_per_workload_class_topology_cardinality_four() -> None:
     """#1 — exactly four entries, one per `WorkloadClass`."""
     assert len(PER_WORKLOAD_CLASS_TOPOLOGY) == 4
-    assert {c.workload_class for c in PER_WORKLOAD_CLASS_TOPOLOGY} == set(
-        WorkloadClass
-    )
+    assert {c.workload_class for c in PER_WORKLOAD_CLASS_TOPOLOGY} == set(WorkloadClass)
 
 
 def test_default_patterns_match_spec_11_1() -> None:
@@ -50,10 +48,7 @@ def test_default_patterns_match_spec_11_1() -> None:
         by_class[WorkloadClass.PIPELINE_AUTOMATION].default_pattern
         is TopologyPattern.SINGLE_THREADED_LINEAR
     )
-    assert (
-        by_class[WorkloadClass.RESEARCH].default_pattern
-        is TopologyPattern.ORCHESTRATOR_WORKERS
-    )
+    assert by_class[WorkloadClass.RESEARCH].default_pattern is TopologyPattern.ORCHESTRATOR_WORKERS
 
 
 def test_software_engineering_dual_primary_carried() -> None:

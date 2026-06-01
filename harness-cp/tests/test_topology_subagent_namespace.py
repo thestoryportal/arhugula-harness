@@ -24,9 +24,7 @@ from harness_cp.topology_subagent_namespace import (
 def test_topology_namespace_cardinality_ten() -> None:
     """Acceptance #1 — exactly 10 `topology.*` attributes."""
     assert len(TOPOLOGY_NAMESPACE_SCHEMA) == 10
-    assert all(
-        isinstance(a, TopologyAttributeSchema) for a in TOPOLOGY_NAMESPACE_SCHEMA
-    )
+    assert all(isinstance(a, TopologyAttributeSchema) for a in TOPOLOGY_NAMESPACE_SCHEMA)
 
 
 def test_topology_attributes_match_spec_verbatim() -> None:
@@ -53,9 +51,7 @@ def test_topology_attributes_match_spec_verbatim() -> None:
 def test_subagent_namespace_cardinality_seven() -> None:
     """Acceptance #2 — exactly 7 `subagent.*` attributes."""
     assert len(SUBAGENT_NAMESPACE_SCHEMA) == 7
-    assert all(
-        isinstance(a, SubAgentAttributeSchema) for a in SUBAGENT_NAMESPACE_SCHEMA
-    )
+    assert all(isinstance(a, SubAgentAttributeSchema) for a in SUBAGENT_NAMESPACE_SCHEMA)
 
 
 def test_subagent_attributes_match_spec_verbatim() -> None:

@@ -100,22 +100,10 @@ def test_returns_original_when_false() -> None:
 
 def test_variant_selection_per_synchrony() -> None:
     """#4 — variant selection is deterministic per cell synchrony class."""
-    assert (
-        select_variant(SynchronyClass.SYNC_BLOCKING)
-        is HITLSemanticVariant.REQUEST_HUMAN_INPUT
-    )
-    assert (
-        select_variant(SynchronyClass.DURABLE_ASYNC)
-        is HITLSemanticVariant.AWAIT_HUMAN_APPROVAL
-    )
-    assert (
-        select_variant(SynchronyClass.BOTH_BY_TIER)
-        is HITLSemanticVariant.ESCALATE_TO_HUMAN
-    )
-    assert (
-        select_variant(SynchronyClass.EXCLUDED)
-        is HITLSemanticVariant.ESCALATE_TO_HUMAN
-    )
+    assert select_variant(SynchronyClass.SYNC_BLOCKING) is HITLSemanticVariant.REQUEST_HUMAN_INPUT
+    assert select_variant(SynchronyClass.DURABLE_ASYNC) is HITLSemanticVariant.AWAIT_HUMAN_APPROVAL
+    assert select_variant(SynchronyClass.BOTH_BY_TIER) is HITLSemanticVariant.ESCALATE_TO_HUMAN
+    assert select_variant(SynchronyClass.EXCLUDED) is HITLSemanticVariant.ESCALATE_TO_HUMAN
 
 
 def _rewrite(state: CrossTrustBoundaryState) -> frozenset[HITLResponse]:

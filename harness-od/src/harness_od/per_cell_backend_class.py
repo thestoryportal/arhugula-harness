@@ -146,9 +146,7 @@ PER_CELL_BACKEND_BINDINGS: dict[CellID, PerCellBackendBinding] = {
     _CELL_1: PerCellBackendBinding(
         cell_id=_CELL_1,
         backend_class=frozenset({BackendClass.OTEL_ONLY}),
-        candidates=(
-            _w("otelcol-contrib + sqlite ring-buffer", "OTel-only", "in-process"),
-        ),
+        candidates=(_w("otelcol-contrib + sqlite ring-buffer", "OTel-only", "in-process"),),
     ),
     _CELL_2: PerCellBackendBinding(
         cell_id=_CELL_2,
@@ -229,9 +227,7 @@ PER_CELL_BACKEND_BINDINGS: dict[CellID, PerCellBackendBinding] = {
     _CELL_8: PerCellBackendBinding(
         cell_id=_CELL_8,
         backend_class=frozenset(
-            {
-                BackendClass.VENDOR_MANAGED_MULTI_TENANT_LLM_OBS_OR_CLOUD_NATIVE_MANAGED_AGENT_RUNTIME
-            }
+            {BackendClass.VENDOR_MANAGED_MULTI_TENANT_LLM_OBS_OR_CLOUD_NATIVE_MANAGED_AGENT_RUNTIME}
         ),
         candidates=(
             _w("AWS Bedrock AgentCore Runtime", "managed agent runtime", "managed-cloud"),

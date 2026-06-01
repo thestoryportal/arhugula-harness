@@ -73,6 +73,7 @@ def _looks_like_manifest_path(workflow_id: str) -> bool:
     lower = workflow_id.lower()
     return any(lower.endswith(suffix) for suffix in _MANIFEST_PATH_SUFFIXES)
 
+
 from mcp.server.fastmcp import Context, FastMCP
 
 if TYPE_CHECKING:
@@ -90,8 +91,8 @@ __all__ = [
 # `ServerCtxElicitCallback` via `HarnessMCPServer.get_current_tool_ctx()`.
 # Bridge propagation (asyncio.to_thread → run_coroutine_threadsafe) verified
 # at `tests/test_contextvar_bridge_propagation.py`.
-_CURRENT_TOOL_CTX: contextvars.ContextVar["Context[Any, Any] | None"] = (
-    contextvars.ContextVar("harness.current_tool_ctx", default=None)
+_CURRENT_TOOL_CTX: contextvars.ContextVar[Context[Any, Any] | None] = contextvars.ContextVar(
+    "harness.current_tool_ctx", default=None
 )
 
 
@@ -126,7 +127,7 @@ class HarnessMCPServer:
     on tool registration failure, the stage raises and the
     constructed `HarnessMCPServer(started=False)` is discarded."""
 
-    workflow_registry: dict[str, "WorkflowObject"] = field(default_factory=dict)
+    workflow_registry: dict[str, WorkflowObject] = field(default_factory=dict)
     """Workflow lookup table keyed by `workflow.workflow_id`.
 
     `api.run()` writes the operator-supplied `WorkflowObject` here
@@ -154,7 +155,7 @@ class HarnessMCPServer:
     `reset_current_tool_ctx()` methods below.
     """
 
-    def get_current_tool_ctx(self) -> "Context[Any, Any] | None":
+    def get_current_tool_ctx(self) -> Context[Any, Any] | None:
         """Return the in-flight MCP tool ctx for the current asyncio task,
         or None if no `run_workflow` invocation is in flight on this task.
 
@@ -164,8 +165,8 @@ class HarnessMCPServer:
         return _CURRENT_TOOL_CTX.get()
 
     def set_current_tool_ctx(
-        self, ctx: "Context[Any, Any]"
-    ) -> contextvars.Token["Context[Any, Any] | None"]:
+        self, ctx: Context[Any, Any]
+    ) -> contextvars.Token[Context[Any, Any] | None]:
         """Bind the in-flight MCP tool ctx for the current asyncio task.
 
         Returns a `contextvars.Token` that must be passed to
@@ -174,9 +175,7 @@ class HarnessMCPServer:
         """
         return _CURRENT_TOOL_CTX.set(ctx)
 
-    def reset_current_tool_ctx(
-        self, token: contextvars.Token["Context[Any, Any] | None"]
-    ) -> None:
+    def reset_current_tool_ctx(self, token: contextvars.Token[Context[Any, Any] | None]) -> None:
         """Release a binding previously installed by `set_current_tool_ctx`.
 
         Mirrors the `try/finally` discipline that `_state.pop(...)` used in
@@ -280,8 +279,8 @@ def materialize_mcp_server_stage(
         # in-process `api.run()` pre-registration semantics verbatim.
         if _looks_like_manifest_path(workflow_id):
             from harness_runtime.lifecycle.workflow_manifest_loader import (
-                WorkflowManifestLoadError,
                 WorkflowManifestLoader,
+                WorkflowManifestLoadError,
             )
 
             try:

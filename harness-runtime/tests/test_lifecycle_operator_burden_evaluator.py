@@ -8,14 +8,7 @@ from __future__ import annotations
 import random
 
 import pytest
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-    InMemorySpanExporter,
-)
-
 from harness_core.persona_tier import PersonaTier
-
 from harness_runtime.lifecycle.operator_burden_evaluator import (
     ATTR_HITL_OPERATOR_BURDEN_CUMULATIVE_INVOCATIONS,
     ATTR_HITL_OPERATOR_BURDEN_DEGRADE,
@@ -28,7 +21,11 @@ from harness_runtime.lifecycle.operator_burden_evaluator import (
     SpanWindow,
     materialize_operator_burden_evaluator_stage,
 )
-
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 # ---------- helpers -------------------------------------------------------
 
@@ -49,7 +46,7 @@ def _make_policy(threshold: int = 5, mode: str = "auto_reject") -> DegradationPo
 
 @pytest.mark.asyncio
 async def test_compute_operator_burden_aggregates_via_counter() -> None:
-    def counter(window, persona):  # noqa: ANN001
+    def counter(window, persona):
         assert window.start == 1_000_000
         assert persona is PersonaTier.SOLO_DEVELOPER
         return 7

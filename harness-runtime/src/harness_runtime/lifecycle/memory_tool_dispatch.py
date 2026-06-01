@@ -46,6 +46,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Final, cast
 
 from harness_as.anthropic_graceful_degradation import MemoryToolStorageBackend
+
 from harness_runtime.lifecycle.memory_tool_types import (
     MemoryCallbackIOError,
     MemoryPathViolationError,
@@ -336,9 +337,7 @@ class _MemoryOperationSpanContext:
             self._span.set_attribute("memory.bytes_read", self._bytes_read)
         if self._bytes_written is not None:
             self._span.set_attribute("memory.bytes_written", self._bytes_written)
-        self._span.set_attribute(
-            "memory.context_editing_active", self._context_editing_active
-        )
+        self._span.set_attribute("memory.context_editing_active", self._context_editing_active)
         # Audit-floor commitment per AS spec §14.8 + ADR-D3 §1.8.1 — mutation
         # kinds head-sampled at 1.0. The attribute is read by the OD-side
         # Sampler; the span emission lifecycle here is unaffected.
@@ -434,15 +433,17 @@ async def execute_with_memory_callbacks(
             command_input = cast(Mapping[str, Any], command_input_raw)
 
             if tool_name != "memory":
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tool_use_id,
-                    "content": (
-                        f"Tool {tool_name!r} not handled by Memory tool "
-                        f"composer-step (C-RT-15 §14.5.1)"
-                    ),
-                    "is_error": True,
-                })
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": (
+                            f"Tool {tool_name!r} not handled by Memory tool "
+                            f"composer-step (C-RT-15 §14.5.1)"
+                        ),
+                        "is_error": True,
+                    }
+                )
                 continue
 
             command_name_raw = command_input.get("command")
@@ -469,11 +470,13 @@ async def execute_with_memory_callbacks(
                     backend, command_name, command_input
                 )
                 span_ctx.update_bytes(read=bytes_read, written=bytes_written)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tool_use_id,
-                    "content": content,
-                })
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": content,
+                    }
+                )
 
         messages.append({"role": "user", "content": tool_results})
 

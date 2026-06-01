@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from harness_od.sqlite_span_store import (
     SpanInsertRow,
     initialize_span_store,

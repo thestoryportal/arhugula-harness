@@ -121,9 +121,7 @@ class EnforcementLayer(StrEnum):
     DESIGN_TIME_VERIFICATION = "DESIGN_TIME_VERIFICATION"
     """Verified at design time by U-OD-32 `verify_transition`."""
 
-    RUNTIME_ENFORCEMENT_AT_COLLECTOR_BOUNDARY = (
-        "RUNTIME_ENFORCEMENT_AT_COLLECTOR_BOUNDARY"
-    )
+    RUNTIME_ENFORCEMENT_AT_COLLECTOR_BOUNDARY = "RUNTIME_ENFORCEMENT_AT_COLLECTOR_BOUNDARY"
     """Enforced at runtime at the OTLP collector boundary (U-OD-31)."""
 
     CROSS_AXIS_COMPOSITION_VERIFICATION = "CROSS_AXIS_COMPOSITION_VERIFICATION"
@@ -295,10 +293,7 @@ def assert_cross_axis_composition_verified_at_session_5(
     `None` (the `Ok(())` arm) — those dimensions require no cross-axis matrix.
     """
     invariant = PRESERVATION_INVARIANTS[dimension]
-    if (
-        invariant.enforcement_layer
-        is EnforcementLayer.CROSS_AXIS_COMPOSITION_VERIFICATION
-    ):
+    if invariant.enforcement_layer is EnforcementLayer.CROSS_AXIS_COMPOSITION_VERIFICATION:
         raise CrossAxisCompositionPending(
             f"cross-axis composition verification for {dimension} is pending: "
             f"the {invariant.cross_axis_composition_target} composition is the "
@@ -310,12 +305,10 @@ def assert_cross_axis_composition_verified_at_session_5(
 
 # Cardinality sanity-pins per acc #1 / #2.
 assert len(PreservationDimension) == 5, "C-OD-22 §22.2 — exactly 5 dimensions"
-assert len(PRESERVATION_INVARIANTS) == 5, (
-    "C-OD-22 §22.2 — exactly 5 preservation invariants"
-)
+assert len(PRESERVATION_INVARIANTS) == 5, "C-OD-22 §22.2 — exactly 5 preservation invariants"
 assert set(PRESERVATION_INVARIANTS) == set(PreservationDimension), (
     "PRESERVATION_INVARIANTS must key every preservation dimension"
 )
-assert all(
-    dim is inv.dimension for dim, inv in PRESERVATION_INVARIANTS.items()
-), "each PRESERVATION_INVARIANTS entry's dimension must match its key"
+assert all(dim is inv.dimension for dim, inv in PRESERVATION_INVARIANTS.items()), (
+    "each PRESERVATION_INVARIANTS entry's dimension must match its key"
+)

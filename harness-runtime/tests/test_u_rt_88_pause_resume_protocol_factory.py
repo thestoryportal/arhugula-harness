@@ -32,10 +32,9 @@ from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol import PauseResumeProtocol
 from harness_cp.topology_pattern import TopologyPattern
 from harness_is.state_ledger_entry_schema import Identifier
-
 from harness_runtime.bootstrap.factories.pause_resume_protocol_factory import (
-    PauseResumeStageMaterializeError,
     _MVP_PAUSE_ANCHOR_SENTINEL,
+    PauseResumeStageMaterializeError,
     _make_default_pause_context_reader,
     materialize_pause_resume_protocol_stage,
 )

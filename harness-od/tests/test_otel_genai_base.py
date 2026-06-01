@@ -92,18 +92,13 @@ def test_span_name_format_byte_exact_two_component() -> None:
     Conforms to OTel GenAI semantic conventions 1.41.0 archived text:
     `Span name SHOULD be {gen_ai.operation.name} {gen_ai.request.model}`.
     """
-    assert SPAN_NAME_FORMAT == (
-        "{gen_ai.operation.name} {gen_ai.request.model}"
-    )
+    assert SPAN_NAME_FORMAT == ("{gen_ai.operation.name} {gen_ai.request.model}")
     assert SPAN_NAME_FORMAT.count("{") == 2
 
 
 def test_span_name_resolves_at_span_emission_time() -> None:
     """`span_name` materializes the §4.1 format with call-bound values."""
-    assert (
-        span_name(GenAiOperation.CHAT, "claude-opus-4-7")
-        == "chat claude-opus-4-7"
-    )
+    assert span_name(GenAiOperation.CHAT, "claude-opus-4-7") == "chat claude-opus-4-7"
 
 
 # --- acceptance #2 — operations enum ---------------------------------------
@@ -168,10 +163,7 @@ def test_base_layer_attributes_byte_exact_per_semconv_1_41_0() -> None:
     """§4.3 — the base-layer attribute name set, verbatim (17 attributes)."""
     names = {attr.name for attr in BASE_LAYER_ATTRIBUTES}
     assert names == (
-        _SPEC_REQUIRED
-        | _SPEC_CONDITIONALLY_REQUIRED
-        | _SPEC_RECOMMENDED
-        | _SPEC_OPT_IN
+        _SPEC_REQUIRED | _SPEC_CONDITIONALLY_REQUIRED | _SPEC_RECOMMENDED | _SPEC_OPT_IN
     )
     assert len(BASE_LAYER_ATTRIBUTES) == 17
 

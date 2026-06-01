@@ -35,14 +35,15 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 def _plain(text: str) -> str:
     return _ANSI_RE.sub("", text)
+
+
 from typing import Any
 
+import harness_runtime.cli.app as _ensure_import
 import pytest
 from harness_core.deployment_surface import DeploymentSurface
 from harness_cp.topology_pattern import TopologyPattern
 from typer.testing import CliRunner
-
-import harness_runtime.cli.app as _ensure_import  # noqa: F401
 
 _cli_app_mod = sys.modules["harness_runtime.cli.app"]
 assert _ensure_import is not None
@@ -100,9 +101,7 @@ def _runtime_config(tmp_path: Path) -> RuntimeConfig:
         ("", False),
     ],
 )
-def test_looks_like_manifest_path_discriminator(
-    workflow_id: str, expected: bool
-) -> None:
+def test_looks_like_manifest_path_discriminator(workflow_id: str, expected: bool) -> None:
     """U-RT-62 handler workflow_id discriminator per fork doc Q2=(i)."""
     assert _looks_like_manifest_path(workflow_id) is expected
 
@@ -246,13 +245,9 @@ def test_ac7_bootstrap_failure_raises_daemon_startup_error(
     from harness_runtime.types import BootstrapStage
 
     async def _failing_bootstrap(*args: Any, **kwargs: Any) -> Any:
-        raise BootstrapFailure(
-            BootstrapStage.LOOP_INIT, RuntimeError("synthetic boot failure")
-        )
+        raise BootstrapFailure(BootstrapStage.LOOP_INIT, RuntimeError("synthetic boot failure"))
 
-    monkeypatch.setattr(
-        "harness_runtime.bootstrap.run_bootstrap", _failing_bootstrap
-    )
+    monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _failing_bootstrap)
     with pytest.raises(DaemonStartupError) as excinfo:
         asyncio.run(
             _cli_app_mod._daemon_main(
@@ -280,9 +275,7 @@ def test_config_load_failure_exits_three(
     ) -> RuntimeConfig:
         raise RuntimeConfigLoadError("synthetic test failure", source="test")
 
-    monkeypatch.setattr(
-        _cli_app_mod.RuntimeConfigSource, "load", classmethod(_fake_load)
-    )
+    monkeypatch.setattr(_cli_app_mod.RuntimeConfigSource, "load", classmethod(_fake_load))
     result = runner.invoke(app, ["daemon"])
     assert result.exit_code == EXIT_CONFIG_ERROR, result.stdout + result.stderr
     assert "RT-FAIL-CLI-CONFIG-LOAD" in result.stderr
@@ -345,9 +338,9 @@ def test_ac1_e2e_daemon_subprocess_binds_socket_and_shuts_down(
         "[runtime]\n"
         # Anthropic is required so the env-fallback path is exercised.
         # ANTHROPIC_API_KEY is sourced from the test env per the skipif gate.
-        'anthropic_optional = false\n'
-        'openai_optional = true\n'
-        'ollama_optional = true\n'
+        "anthropic_optional = false\n"
+        "openai_optional = true\n"
+        "ollama_optional = true\n"
         "\n"
         "[runtime.otel]\n"
         'otlp_endpoint = "http://localhost:4318"\n'
@@ -373,9 +366,7 @@ def test_ac1_e2e_daemon_subprocess_binds_socket_and_shuts_down(
         "--socket-path",
         str(socket_path),
     ]
-    proc = subprocess.Popen(
-        cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
+    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         # Wait for socket binding (up to 10s).
         deadline = time.monotonic() + 10.0

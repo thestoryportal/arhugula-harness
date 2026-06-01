@@ -71,6 +71,7 @@ __all__ = [
 
 # --- §20.1 CollectorPlacement enum (v1.4 — canonical declaration) ----------
 
+
 class CollectorPlacement(StrEnum):
     """The 7 architectural collector-placement classes (C-OD-20 §20.1).
 
@@ -116,6 +117,7 @@ class CollectorPlacement(StrEnum):
 
 # --- §20.2 BatchSpanProcessor universality error arm -----------------------
 
+
 class EmissionModeViolation(Exception):  # noqa: N818 — name is the U-OD-28 plan signature verbatim
     """Raised when a cell's emission mode deviates from BatchSpanProcessor async.
 
@@ -127,6 +129,7 @@ class EmissionModeViolation(Exception):  # noqa: N818 — name is the U-OD-28 pl
 
 
 # --- §20.1 per-cell placement record ---------------------------------------
+
 
 class PerCellPlacement(BaseModel):
     """The collector placement committed for one ACTIVE matrix cell (§20.1).
@@ -165,12 +168,8 @@ _CELL_3 = _cell(PersonaTier.SOLO_DEVELOPER, DeploymentSurface.MANAGED_CLOUD)
 _CELL_4 = _cell(PersonaTier.TEAM_BINDING, DeploymentSurface.LOCAL_DEVELOPMENT)
 _CELL_5 = _cell(PersonaTier.TEAM_BINDING, DeploymentSurface.SELF_HOSTED_SERVER)
 _CELL_6 = _cell(PersonaTier.TEAM_BINDING, DeploymentSurface.MANAGED_CLOUD)
-_CELL_7 = _cell(
-    PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.SELF_HOSTED_SERVER
-)
-_CELL_8 = _cell(
-    PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.MANAGED_CLOUD
-)
+_CELL_7 = _cell(PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.SELF_HOSTED_SERVER)
+_CELL_8 = _cell(PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.MANAGED_CLOUD)
 
 
 def _placement(cell: CellID, classes: frozenset[CollectorPlacement]) -> PerCellPlacement:
@@ -198,9 +197,7 @@ PER_CELL_COLLECTOR_PLACEMENT: dict[CellID, PerCellPlacement] = {
             }
         ),
     ),
-    _CELL_3: _placement(
-        _CELL_3, frozenset({CollectorPlacement.VENDOR_PIPELINE})
-    ),
+    _CELL_3: _placement(_CELL_3, frozenset({CollectorPlacement.VENDOR_PIPELINE})),
     _CELL_4: _placement(
         _CELL_4,
         frozenset(
@@ -211,9 +208,7 @@ PER_CELL_COLLECTOR_PLACEMENT: dict[CellID, PerCellPlacement] = {
         ),
     ),
     _CELL_5: _placement(_CELL_5, frozenset({CollectorPlacement.SIDECAR})),
-    _CELL_6: _placement(
-        _CELL_6, frozenset({CollectorPlacement.VENDOR_PIPELINE})
-    ),
+    _CELL_6: _placement(_CELL_6, frozenset({CollectorPlacement.VENDOR_PIPELINE})),
     _CELL_7: _placement(
         _CELL_7,
         frozenset(
@@ -223,9 +218,7 @@ PER_CELL_COLLECTOR_PLACEMENT: dict[CellID, PerCellPlacement] = {
             }
         ),
     ),
-    _CELL_8: _placement(
-        _CELL_8, frozenset({CollectorPlacement.VENDOR_MANAGED_COLLECTOR})
-    ),
+    _CELL_8: _placement(_CELL_8, frozenset({CollectorPlacement.VENDOR_MANAGED_COLLECTOR})),
 }
 
 #: Closure invariant — the matrix covers exactly the 8 ACTIVE cells (acc #2).

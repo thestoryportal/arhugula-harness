@@ -119,6 +119,7 @@ async def execute(
     # default per §C-OD-28.3 (operator override via bootstrap config is a
     # future arc — ctx.rate_table extension on HarnessContext).
     from harness_od.rate_table_v1 import RATE_TABLE_V1
+
     if ctx.cost_chain is None or ctx.audit_writer is None:
         raise LLMDispatchBindError(
             "ctx.cost_chain / ctx.audit_writer is None at stage 5 — stage 4 "
@@ -138,9 +139,7 @@ async def execute(
     # production-default); returns a bound emitter when opt-in. Materialized
     # BEFORE bare_dispatcher so the per-LLM-dispatch hook-2 binding site (§14.17.2)
     # can be threaded into RuntimeLLMDispatcher construction.
-    ctx.skill_activation_emitter = await materialize_skill_activation_emitter_stage(
-        config, ctx
-    )
+    ctx.skill_activation_emitter = await materialize_skill_activation_emitter_stage(config, ctx)
 
     bare_dispatcher = materialize_llm_dispatcher_stage(
         providers,
@@ -230,12 +229,8 @@ async def execute(
     # webhook + holder BEFORE composer" is observationally equivalent to
     # the reverse because the §14.8.8.1 step 0 OR-form precondition consumes
     # the joint binding at composer dispatch-time.
-    ctx.pause_resume_protocol = await materialize_pause_resume_protocol_stage(
-        config, ctx
-    )
-    ctx.webhook_delivery_composer = await materialize_webhook_delivery_composer_stage(
-        config, ctx
-    )
+    ctx.pause_resume_protocol = await materialize_pause_resume_protocol_stage(config, ctx)
+    ctx.webhook_delivery_composer = await materialize_webhook_delivery_composer_stage(config, ctx)
     ctx.resume_context_holder = ResumeContextHolder()
 
     # R-003 producer-site lift — build the procedural-tier resolver closure
@@ -416,4 +411,3 @@ async def execute(
     # time per the 4-NEW-fields amendment (lines 211-233 above). Re-binding
     # here would shadow the values the composer captured + introduce a
     # divergence between composer-local refs and ctx-local refs.
-

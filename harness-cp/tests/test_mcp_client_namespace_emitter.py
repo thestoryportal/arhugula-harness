@@ -13,12 +13,6 @@ ACs from CP plan v2.15 §1 U-CP-69 (preserved at v2.17):
 from __future__ import annotations
 
 import pytest
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-    InMemorySpanExporter,
-)
-
 from harness_cp.cp_shared_types import MCPTrustTier
 from harness_cp.mcp_client_namespace_emitter import (
     ATTR_MCP_AUTH_PRESENT,
@@ -33,6 +27,11 @@ from harness_cp.mcp_client_namespace_emitter import (
     MCPServerInfo,
 )
 from harness_cp.per_server_trust_types import MCPPrimitive
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 
 @pytest.fixture
@@ -45,7 +44,7 @@ def exporter_and_provider() -> tuple[InMemorySpanExporter, TracerProvider]:
 
 
 def _info_lookup_factory(info: MCPServerInfo):
-    def _lookup(server_name: str) -> MCPServerInfo:  # noqa: ARG001
+    def _lookup(server_name: str) -> MCPServerInfo:
         return info
 
     return _lookup

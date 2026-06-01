@@ -60,9 +60,7 @@ def _fanout_close() -> ParentFanoutCloseEntry:
 def test_cross_sibling_composition_cardinality_three() -> None:
     """#1 — exactly three compositions, one per persona tier."""
     assert len(CROSS_SIBLING_CRYPTOGRAPHIC_COMPOSITION) == 3
-    assert {c.persona_tier for c in CROSS_SIBLING_CRYPTOGRAPHIC_COMPOSITION} == set(
-        PersonaTier
-    )
+    assert {c.persona_tier for c in CROSS_SIBLING_CRYPTOGRAPHIC_COMPOSITION} == set(PersonaTier)
 
 
 def test_per_tier_match_spec() -> None:
@@ -76,10 +74,7 @@ def test_per_tier_match_spec() -> None:
     }
     for comp in CROSS_SIBLING_CRYPTOGRAPHIC_COMPOSITION:
         assert comp.sibling_ledger_entry_cryptographic_shape == expected[comp.persona_tier]
-        assert (
-            comp.parent_fanout_close_entry_cryptographic_shape
-            == expected[comp.persona_tier]
-        )
+        assert comp.parent_fanout_close_entry_cryptographic_shape == expected[comp.persona_tier]
 
 
 def test_rows_delegate_to_u_cp_42() -> None:

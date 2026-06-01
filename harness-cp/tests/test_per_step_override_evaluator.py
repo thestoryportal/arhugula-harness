@@ -34,9 +34,7 @@ from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEnt
 _DEFAULT_BINDING = ModelBinding(provider="anthropic", model="default-model")
 _OVERRIDE_BINDING = ModelBinding(provider="anthropic", model="override-model")
 _CHAIN = FallbackChain(
-    primary=ProviderCandidate(
-        provider="anthropic", model="m", family=ProviderFamily.ANTHROPIC
-    ),
+    primary=ProviderCandidate(provider="anthropic", model="m", family=ProviderFamily.ANTHROPIC),
     same_family=(),
     cross_family=(),
     terminal=None,
@@ -62,9 +60,7 @@ def _manifest(**over: object) -> WorkflowManifestEntry:
 def test_resolve_step_binding_field_by_field_override() -> None:
     manifest = _manifest(
         per_step_overrides={
-            StepID("s1"): StepOverride(
-                step_id=StepID("s1"), model_binding=_OVERRIDE_BINDING
-            )
+            StepID("s1"): StepOverride(step_id=StepID("s1"), model_binding=_OVERRIDE_BINDING)
         }
     )
     binding = resolve_step_binding(
@@ -150,9 +146,7 @@ def test_audit_entry_prior_event_hash_sentinel_canonical_at_solo_developer() -> 
 def test_override_evaluator_deterministic() -> None:
     manifest = _manifest(
         per_step_overrides={
-            StepID("s1"): StepOverride(
-                step_id=StepID("s1"), model_binding=_OVERRIDE_BINDING
-            )
+            StepID("s1"): StepOverride(step_id=StepID("s1"), model_binding=_OVERRIDE_BINDING)
         }
     )
     a = resolve_step_binding(

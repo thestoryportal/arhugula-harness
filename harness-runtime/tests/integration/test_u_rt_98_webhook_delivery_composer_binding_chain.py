@@ -75,9 +75,7 @@ from .conftest import WORKLOAD, build_config
 def _config_with_webhook_opt_in(tmp_path: Path) -> RuntimeConfig:
     base = build_config(tmp_path)
     return base.model_copy(
-        update={
-            "webhook_delivery_composer_config": WebhookDeliveryComposerConfig.default()
-        },
+        update={"webhook_delivery_composer_config": WebhookDeliveryComposerConfig.default()},
     )
 
 
@@ -136,8 +134,7 @@ async def test_webhook_delivery_composer_e2e_opt_in_binding_chain(
 
     assert isinstance(ctx, HarnessContext)
     assert ctx.webhook_delivery_composer is not None, (
-        "opt-in config must yield a bound WebhookDeliveryComposer instance "
-        "per spec §14.16.2"
+        "opt-in config must yield a bound WebhookDeliveryComposer instance per spec §14.16.2"
     )
     assert isinstance(ctx.webhook_delivery_composer, WebhookDeliveryComposer)
 

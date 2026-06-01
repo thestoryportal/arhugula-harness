@@ -27,9 +27,7 @@ from harness_cp.f5_signing_key_resolution import (
 )
 from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry
 
-_SCOPE = SigningKeyScope(
-    scope_kind=SecretScopeKind.TENANT_BOUND, scope_identifier="tenant-7"
-)
+_SCOPE = SigningKeyScope(scope_kind=SecretScopeKind.TENANT_BOUND, scope_identifier="tenant-7")
 _ENTRY = CPAuditLedgerEntry(
     action_id="wf||s1",  # type: ignore[arg-type]
     gate_level=GateLevel.AUTO,
@@ -84,10 +82,7 @@ def test_verify_at_read() -> None:
     result = resolve_signing_key(_SCOPE, PersonaTier.MULTI_TENANT_COMPLIANCE)
     assert result.handle is not None
     signed = sign_audit_entry(_ENTRY, result.handle, key_period=1)
-    assert (
-        verify_audit_entry_signature(signed, result.handle)
-        is VerificationResult.VERIFIED
-    )
+    assert verify_audit_entry_signature(signed, result.handle) is VerificationResult.VERIFIED
 
 
 def test_signature_algorithm_recorded() -> None:

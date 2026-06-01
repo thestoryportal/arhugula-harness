@@ -126,22 +126,15 @@ def test_classify_attribute_returns_correct_classification() -> None:
     """Acceptance #4 — classify_attribute returns the correct class per attribute."""
     # Content attribute → DEFAULT_OFF_CONTENT.
     assert (
-        classify_attribute("gen_ai.input.messages")
-        is AttributeClassification.DEFAULT_OFF_CONTENT
+        classify_attribute("gen_ai.input.messages") is AttributeClassification.DEFAULT_OFF_CONTENT
     )
-    assert (
-        classify_attribute("files.content")
-        is AttributeClassification.DEFAULT_OFF_CONTENT
-    )
+    assert classify_attribute("files.content") is AttributeClassification.DEFAULT_OFF_CONTENT
     # Structure attribute → DEFAULT_ON_STRUCTURE.
     assert (
         classify_attribute("gen_ai.usage.input_tokens")
         is AttributeClassification.DEFAULT_ON_STRUCTURE
     )
-    assert (
-        classify_attribute("sandbox.tier")
-        is AttributeClassification.DEFAULT_ON_STRUCTURE
-    )
+    assert classify_attribute("sandbox.tier") is AttributeClassification.DEFAULT_ON_STRUCTURE
     # Hash-digest attribute → HASH_DIGEST_OF_CONTENT.
     assert (
         classify_attribute("hitl.response.summary_hash")
@@ -158,6 +151,5 @@ def test_classify_attribute_unknown_defaults_to_structure() -> None:
     """Acceptance #2 / #4 — an attribute not in the content or hash-digest sets
     classifies as DEFAULT_ON_STRUCTURE (structure is the default posture)."""
     assert (
-        classify_attribute("some.unknown.attribute")
-        is AttributeClassification.DEFAULT_ON_STRUCTURE
+        classify_attribute("some.unknown.attribute") is AttributeClassification.DEFAULT_ON_STRUCTURE
     )

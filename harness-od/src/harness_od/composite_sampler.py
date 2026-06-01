@@ -41,7 +41,7 @@ production-surface envelopes are deferred. Class 3 informational.
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace.sampling import (
@@ -73,9 +73,7 @@ class HarnessCompositeSampler(Sampler):
 
     def __init__(self, base_rate: float = 1.0) -> None:
         if not (0.0 <= base_rate <= 1.0):
-            raise ValueError(
-                f"base_rate must be in [0.0, 1.0]; got {base_rate}"
-            )
+            raise ValueError(f"base_rate must be in [0.0, 1.0]; got {base_rate}")
         self._base_rate = base_rate
         self._ratio_sampler = TraceIdRatioBased(base_rate)
 
@@ -112,8 +110,7 @@ class HarnessCompositeSampler(Sampler):
 
     def get_description(self) -> str:
         return (
-            f"HarnessCompositeSampler(always_sampled_per_C-OD-09_§9.2, "
-            f"base_rate={self._base_rate})"
+            f"HarnessCompositeSampler(always_sampled_per_C-OD-09_§9.2, base_rate={self._base_rate})"
         )
 
 

@@ -19,7 +19,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-
 _FROZEN_CONFIG = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
 
 
@@ -48,13 +47,15 @@ class ProviderRates(BaseModel):
             if self.per_model_overrides is not None
             else None
         )
-        return hash((
-            self.input_token_rate,
-            self.output_token_rate,
-            self.cache_read_rate,
-            self.cache_write_rate,
-            overrides_hash,
-        ))
+        return hash(
+            (
+                self.input_token_rate,
+                self.output_token_rate,
+                self.cache_read_rate,
+                self.cache_write_rate,
+                overrides_hash,
+            )
+        )
 
 
 class ToolRate(BaseModel):
@@ -112,14 +113,16 @@ class RateTable(BaseModel):
     egress_rate_per_byte: Decimal
 
     def __hash__(self) -> int:
-        return hash((
-            self.version,
-            frozenset(self.providers.items()),
-            frozenset(self.tool_rates.items()),
-            self.webhook_rate,
-            self.cpu_rate_per_ms,
-            self.egress_rate_per_byte,
-        ))
+        return hash(
+            (
+                self.version,
+                frozenset(self.providers.items()),
+                frozenset(self.tool_rates.items()),
+                self.webhook_rate,
+                self.cpu_rate_per_ms,
+                self.egress_rate_per_byte,
+            )
+        )
 
 
 # Pydantic forward-reference resolution for the self-referential

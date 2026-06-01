@@ -17,11 +17,6 @@ import threading
 from collections.abc import Mapping
 from typing import Any, cast
 
-import pytest
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-
 from harness_core import PersonaTier, StepID, WorkloadClass
 from harness_core.workflow_event_class import WorkflowEventClass
 from harness_cp.cp_shared_types import ModelBinding
@@ -51,6 +46,9 @@ from harness_cp.workflow_driver import (
 from harness_cp.workflow_driver_types import StepKind, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 _DEFAULT_BINDING = ModelBinding(provider="anthropic", model="claude-haiku-4-5")
 _CHAIN = FallbackChain(
@@ -101,9 +99,7 @@ class _FakeLedger:
 
 
 class _FakeLedgerReader:
-    def find_by_workflow_step(
-        self, workflow_id: str, step_index: int
-    ) -> object | None:
+    def find_by_workflow_step(self, workflow_id: str, step_index: int) -> object | None:
         return None
 
 

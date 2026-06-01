@@ -34,9 +34,7 @@ def test_engine_f2_join_contracts_cardinality_five() -> None:
     """Acceptance #2 — exactly 5 contracts, one per `EngineClass`."""
     assert len(ENGINE_F2_JOIN_CONTRACTS) == 5
     assert {c.engine_class for c in ENGINE_F2_JOIN_CONTRACTS} == set(EngineClass)
-    assert all(
-        isinstance(c, EngineF2JoinContract) for c in ENGINE_F2_JOIN_CONTRACTS
-    )
+    assert all(isinstance(c, EngineF2JoinContract) for c in ENGINE_F2_JOIN_CONTRACTS)
 
 
 def test_per_engine_join_kind_match_spec() -> None:

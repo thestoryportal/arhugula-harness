@@ -36,7 +36,6 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 import jsonschema
-
 from harness_as.sandbox_fail_class import (
     MCPInvocationFailClass,
     project_mcp_to_sandbox_fail_class,
@@ -51,11 +50,11 @@ from harness_cp.per_server_trust_types import (
     MCPPrimitive,
     TrustPolicy,
 )
+from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver_types import (
     StepExecutionContext,
     WorkflowStep,
 )
-from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 
 from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
 
@@ -93,9 +92,7 @@ class SandboxDispatchDecision:
     cost_tier_overhead_ms: int  # estimated per-tier startup overhead
 
 
-SandboxDecisionResolver = Callable[
-    [ToolContract, WorkflowStep], SandboxDispatchDecision
-]
+SandboxDecisionResolver = Callable[[ToolContract, WorkflowStep], SandboxDispatchDecision]
 """Operator-supplied resolver mapping (contract, step) → dispatch decision.
 
 Per spec §14.9.7 implementation-discretion: the runtime dispatcher
@@ -317,11 +314,7 @@ class RuntimeToolDispatcher:
             attribute_tool_dispatch_cost,
         )
 
-        if (
-            self._cost_chain is None
-            or self._audit_writer is None
-            or self._rate_table is None
-        ):
+        if self._cost_chain is None or self._audit_writer is None or self._rate_table is None:
             # Cost-attribution substrate not bound — unit-test path.
             return
 
@@ -418,8 +411,7 @@ class RuntimeToolDispatcher:
             tool_args = cast("Mapping[str, Any]", tool_args_raw)
         else:
             raise ToolContractUnknownError(
-                f"TOOL_STEP 'tool_args' must be a mapping "
-                f"(got {type(tool_args_raw).__name__})"
+                f"TOOL_STEP 'tool_args' must be a mapping (got {type(tool_args_raw).__name__})"
             )
 
         # --- Step 1: resolve ToolContract from registry ---------------------
@@ -456,10 +448,7 @@ class RuntimeToolDispatcher:
         )
         sandbox_decision = self._sandbox_resolver(contract, step)
         # Tier-floor enforcement per spec §14.9.6 inv 2.
-        if (
-            _SANDBOX_TIER_RANK[sandbox_decision.tier]
-            < _SANDBOX_TIER_RANK[contract.minimum_tier]
-        ):
+        if _SANDBOX_TIER_RANK[sandbox_decision.tier] < _SANDBOX_TIER_RANK[contract.minimum_tier]:
             raise SandboxTierFloorViolationError(
                 f"RT-FAIL-SANDBOX-TIER-FLOOR-VIOLATION: tool={tool_id!r} "
                 f"resolved_tier={sandbox_decision.tier.value} "
@@ -467,9 +456,7 @@ class RuntimeToolDispatcher:
             )
 
         outer_span_cm = (
-            tracer.start_as_current_span("tool.dispatch")
-            if tracer is not None
-            else _null_span_cm()
+            tracer.start_as_current_span("tool.dispatch") if tracer is not None else _null_span_cm()
         )
         with outer_span_cm as outer_span:
             _set(outer_span, ATTR_STEP_ID, step.step_id)
@@ -650,9 +637,7 @@ def _null_span_cm() -> _NullSpanContext:
     return _NullSpanContext()
 
 
-def _compose_idempotency_key(
-    parent_idempotency_key: str, step_id: str, tool_id: str
-) -> str:
+def _compose_idempotency_key(parent_idempotency_key: str, step_id: str, tool_id: str) -> str:
     """Per spec §14.9.7 suggested recipe — sha256 over parent key + step + tool."""
     digest = hashlib.sha256()
     digest.update(parent_idempotency_key.encode("utf-8"))

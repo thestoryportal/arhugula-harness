@@ -51,9 +51,7 @@ LAYER_ORDER: tuple[RoutingLayer, ...] = (
 LayerDecisionFn = Callable[[InferenceRequest, RoutingManifest], "str | None"]
 
 
-def layer_budget_for(
-    layer: RoutingLayer, budgets: tuple[LayerBudget, ...]
-) -> LayerBudget | None:
+def layer_budget_for(layer: RoutingLayer, budgets: tuple[LayerBudget, ...]) -> LayerBudget | None:
     """Return the `LayerBudget` for `layer`, or `None` if unbudgeted (U-CP-06)."""
     for b in budgets:
         if b.layer == layer:

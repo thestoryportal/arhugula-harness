@@ -299,7 +299,6 @@ def test_compute_state_oldest_age_hours_from_unix_ns(tmp_path: Path) -> None:
 import time
 
 from harness_od.sqlite_span_store import SpanInsertRow, initialize_span_store
-
 from harness_runtime.lifecycle.ring_buffer import _project_span_row
 
 

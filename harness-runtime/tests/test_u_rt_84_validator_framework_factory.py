@@ -161,7 +161,7 @@ def test_stage_4_od_invokes_factory_after_audit_writer() -> None:
     # attribution substrates per CP spec v1.24 §28.10.5 mechanism (a) —
     # accept any positional-or-kw invocation containing `config`).
     assert "materialize_validator_framework_stage(" in source
-    assert "config" in source[source.find("materialize_validator_framework_stage"):]
+    assert "config" in source[source.find("materialize_validator_framework_stage") :]
     # And bound to ctx.validator_framework.
     assert "ctx.validator_framework = " in source
     # And the invocation comes AFTER audit_writer.

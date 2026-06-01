@@ -22,11 +22,9 @@ concern at U-OD-39 production binding arc to follow).
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any
 
 import pytest
 from harness_od.rate_table_types import RateTable, ToolRate, WebhookRate
-
 from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
 from harness_runtime.lifecycle.cost_attribution_tool_dispatch import (
     ToolRateMissingError,
@@ -35,7 +33,6 @@ from harness_runtime.lifecycle.cost_attribution_tool_dispatch import (
     _resolve_tool_rate,
     attribute_tool_dispatch_cost,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -64,9 +61,7 @@ def _make_rate_table(tool_rates: dict[str, ToolRate]) -> RateTable:
         version="2026-05-28-test",
         providers={},
         tool_rates=tool_rates,
-        webhook_rate=WebhookRate(
-            flat_per_attempt=Decimal("0"), plus_egress=False
-        ),
+        webhook_rate=WebhookRate(flat_per_attempt=Decimal("0"), plus_egress=False),
         cpu_rate_per_ms=Decimal("0"),
         egress_rate_per_byte=Decimal("0"),
     )
@@ -112,9 +107,7 @@ def test_cost_kind_per_output_byte() -> None:
     """per_output_byte: cost = rate × len(canonical_json(response))."""
     rate = ToolRate(cost_kind="per_output_byte", rate=Decimal("0.002"))
     response = {"result": [1, 2, 3]}
-    cost = _compute_tool_cost(
-        rate, tool_args={"any": "ignored"}, response=response
-    )
+    cost = _compute_tool_cost(rate, tool_args={"any": "ignored"}, response=response)
     # canonical_json({"result": [1, 2, 3]}, sort, sep) = '{"result":[1,2,3]}' = 18 bytes
     expected = Decimal("0.002") * Decimal(18)
     assert cost == expected
@@ -124,9 +117,7 @@ def test_cost_kind_per_output_byte() -> None:
 def test_decimal_precision_preserved() -> None:
     """§C-OD-28.4 invariant 2: all arithmetic in Decimal; no float coercion."""
     # 17 sig-digit rate × 33-byte payload — float would lose precision here.
-    rate = ToolRate(
-        cost_kind="per_input_byte", rate=Decimal("0.12345678901234567")
-    )
+    rate = ToolRate(cost_kind="per_input_byte", rate=Decimal("0.12345678901234567"))
     payload = {"deep": "x" * 20}  # canonical_json = '{"deep":"xxxxxxxxxxxxxxxxxxxx"}' = 31 bytes
     cost = _compute_tool_cost(rate, tool_args=payload, response={})
     assert isinstance(cost, Decimal)
@@ -145,9 +136,7 @@ def test_canonical_json_byte_length_sorts_keys() -> None:
     # Two equivalent payloads with different insertion order
     payload_a = {"b": 2, "a": 1}
     payload_b = {"a": 1, "b": 2}
-    assert _canonical_json_byte_length(payload_a) == _canonical_json_byte_length(
-        payload_b
-    )
+    assert _canonical_json_byte_length(payload_a) == _canonical_json_byte_length(payload_b)
 
 
 def test_canonical_json_byte_length_minimal_whitespace() -> None:
@@ -243,11 +232,13 @@ def test_three_cost_kind_branches_produce_three_distinct_audit_writes(
 ) -> None:
     """AC #5 integration shape: 3 tool calls (one per cost_kind) →
     3 distinct cost-records + 3 audit entries."""
-    rate_table = _make_rate_table({
-        "tool_flat": ToolRate(cost_kind="flat_per_invocation", rate=Decimal("1")),
-        "tool_input": ToolRate(cost_kind="per_input_byte", rate=Decimal("0.1")),
-        "tool_output": ToolRate(cost_kind="per_output_byte", rate=Decimal("0.01")),
-    })
+    rate_table = _make_rate_table(
+        {
+            "tool_flat": ToolRate(cost_kind="flat_per_invocation", rate=Decimal("1")),
+            "tool_input": ToolRate(cost_kind="per_input_byte", rate=Decimal("0.1")),
+            "tool_output": ToolRate(cost_kind="per_output_byte", rate=Decimal("0.01")),
+        }
+    )
     common = dict(
         rate_table=rate_table,
         cost_chain=cost_chain,
@@ -259,15 +250,9 @@ def test_three_cost_kind_branches_produce_three_distinct_audit_writes(
         workflow_id="wf",
         parent_action_id="aid",
     )
-    r_flat = attribute_tool_dispatch_cost(
-        tool_id="tool_flat", span_id="aaa1", **common
-    )
-    r_input = attribute_tool_dispatch_cost(
-        tool_id="tool_input", span_id="aaa2", **common
-    )
-    r_output = attribute_tool_dispatch_cost(
-        tool_id="tool_output", span_id="aaa3", **common
-    )
+    r_flat = attribute_tool_dispatch_cost(tool_id="tool_flat", span_id="aaa1", **common)
+    r_input = attribute_tool_dispatch_cost(tool_id="tool_input", span_id="aaa2", **common)
+    r_output = attribute_tool_dispatch_cost(tool_id="tool_output", span_id="aaa3", **common)
     # 3 distinct cost values from 3 cost_kind formulas
     assert r_flat.total_cost == pytest.approx(1.0, rel=1e-9)
     # canonical_json({"a":1}) = '{"a":1}' = 7 bytes

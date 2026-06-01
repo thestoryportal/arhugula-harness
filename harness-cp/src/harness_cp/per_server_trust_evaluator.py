@@ -58,6 +58,7 @@ from collections.abc import Callable
 from typing import Any, Final
 
 from harness_as.tool_contract import ToolContract
+
 from harness_cp.cp_shared_types import MCPTrustTier
 from harness_cp.per_server_trust_types import (
     MCPPrimitive,
@@ -99,8 +100,8 @@ signature owed to U-CP-18 implementation arc per §27.7."""
 
 
 def _default_tier_resolver(
-    server_name: str,  # noqa: ARG001
-    tool_contract: ToolContract | None,  # noqa: ARG001
+    server_name: str,
+    tool_contract: ToolContract | None,
     rule: TierDerivationRule,
 ) -> MCPTrustTier:
     """Default tier resolver — CONSERVATIVE returns MIN, other rules raise.
@@ -154,7 +155,7 @@ class PerServerTrustEvaluator:
     async def evaluate(
         self,
         server_name: str,
-        primitive: MCPPrimitive,  # noqa: ARG002
+        primitive: MCPPrimitive,
         tool_contract: ToolContract | None,
         operator_policy: TrustPolicy,
     ) -> TrustEvaluation:
@@ -280,7 +281,7 @@ def _default_rng() -> _random_module.Random:
 
 
 def emit_mcp_trust_evaluate_span(
-    tracer: Any,  # noqa: ANN401 — Tracer typed as Any to avoid OTel SDK coupling
+    tracer: Any,
     evaluation: TrustEvaluation,
     server_name: str,
     primitive: MCPPrimitive,
@@ -322,13 +323,7 @@ def emit_mcp_trust_evaluate_span(
     with tracer.start_as_current_span(MCP_TRUST_EVALUATE_SPAN_NAME) as span:
         span.set_attribute(ATTR_MCP_TRUST_SERVER_NAME, server_name)
         span.set_attribute(ATTR_MCP_TRUST_PRIMITIVE_KIND, primitive.value)
-        span.set_attribute(
-            ATTR_MCP_TRUST_DECISION_REASON, evaluation.decision_reason.value
-        )
-        span.set_attribute(
-            ATTR_MCP_TRUST_AUDIT_REQUIRED, evaluation.audit_required
-        )
-        span.set_attribute(
-            ATTR_MCP_TRUST_TIER_EVALUATED, evaluation.trust_tier_evaluated.value
-        )
+        span.set_attribute(ATTR_MCP_TRUST_DECISION_REASON, evaluation.decision_reason.value)
+        span.set_attribute(ATTR_MCP_TRUST_AUDIT_REQUIRED, evaluation.audit_required)
+        span.set_attribute(ATTR_MCP_TRUST_TIER_EVALUATED, evaluation.trust_tier_evaluated.value)
         return span

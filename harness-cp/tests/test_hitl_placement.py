@@ -69,9 +69,7 @@ def test_placement_kind_cardinality_three() -> None:
 
 def test_placement_triggers_match_spec() -> None:
     assert len(HITL_PLACEMENT_TRIGGERS) == 3
-    assert {t.placement_kind for t in HITL_PLACEMENT_TRIGGERS} == set(
-        HITLPlacementKind
-    )
+    assert {t.placement_kind for t in HITL_PLACEMENT_TRIGGERS} == set(HITLPlacementKind)
 
 
 def test_hitl_gate_signature_six_parameters() -> None:
@@ -156,6 +154,8 @@ def test_hitl_gate_is_signature_only_for_runtime_composer() -> None:
 
     from harness_cp.hitl_placement import (
         HITLPlacement,
+    )
+    from harness_cp.hitl_placement import (
         HITLPlacementKind as _HPK,
     )
     from harness_cp.workflow_driver_types import StepKind, WorkflowStep

@@ -9,12 +9,11 @@ field type + `.default()` factory; no internal fields are spec-committed
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel, ValidationError
-
 from harness_core import SandboxDecisionPolicy
 from harness_core.sandbox_decision_policy import (
     SandboxDecisionPolicy as DirectImport,
 )
+from pydantic import BaseModel, ValidationError
 
 
 def test_sandbox_decision_policy_is_pydantic_base_model() -> None:
@@ -68,9 +67,7 @@ def test_sandbox_decision_policy_no_spec_extension_audit() -> None:
     class _EmptyBaseline(BaseModel):
         model_config = SandboxDecisionPolicy.model_config
 
-    carrier_public = {
-        name for name in dir(SandboxDecisionPolicy) if not name.startswith("_")
-    }
+    carrier_public = {name for name in dir(SandboxDecisionPolicy) if not name.startswith("_")}
     baseline_public = {name for name in dir(_EmptyBaseline) if not name.startswith("_")}
     delta = carrier_public - baseline_public
     assert delta == {"default"}, (

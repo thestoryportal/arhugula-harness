@@ -88,15 +88,9 @@ def effective_budget(
     Both unset returns the layer default `time_budget_ms`.
     """
     budget = _budget_for_layer(layer)
-    if (
-        budget.per_workload_override is not None
-        and workload_class in budget.per_workload_override
-    ):
+    if budget.per_workload_override is not None and workload_class in budget.per_workload_override:
         return budget.per_workload_override[workload_class]
-    if (
-        budget.per_persona_override is not None
-        and persona_tier in budget.per_persona_override
-    ):
+    if budget.per_persona_override is not None and persona_tier in budget.per_persona_override:
         return budget.per_persona_override[persona_tier]
     return budget.time_budget_ms
 

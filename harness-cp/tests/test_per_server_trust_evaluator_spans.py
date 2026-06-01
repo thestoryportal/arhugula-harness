@@ -20,12 +20,6 @@ from __future__ import annotations
 import random
 
 import pytest
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-    InMemorySpanExporter,
-)
-
 from harness_cp.cp_shared_types import MCPTrustTier
 from harness_cp.per_server_trust_evaluator import (
     ATTR_MCP_TRUST_AUDIT_REQUIRED,
@@ -43,6 +37,11 @@ from harness_cp.per_server_trust_types import (
     TrustDecisionReason,
     TrustEvaluation,
     TrustPolicy,
+)
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
 )
 
 
@@ -95,9 +94,7 @@ def test_audit_required_emits_5_attributes(
         tier=MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT,
         audit=True,
     )
-    result = emit_mcp_trust_evaluate_span(
-        tracer, eval_, "srv-a", MCPPrimitive.TOOL
-    )
+    result = emit_mcp_trust_evaluate_span(tracer, eval_, "srv-a", MCPPrimitive.TOOL)
     assert result is not None
     attrs = _exported_attrs(exporter)
     assert attrs == {
@@ -141,9 +138,7 @@ def test_audit_required_always_emits(
     # Use a Random that would sample out non-audit calls.
     rng = random.Random()
     rng.seed(42)  # any seed — the audit branch doesn't consult rng
-    result = emit_mcp_trust_evaluate_span(
-        tracer, eval_, "srv", MCPPrimitive.TOOL, rng=rng
-    )
+    result = emit_mcp_trust_evaluate_span(tracer, eval_, "srv", MCPPrimitive.TOOL, rng=rng)
     assert result is not None
     assert len(exporter.get_finished_spans()) == 1
 
@@ -166,7 +161,11 @@ def test_non_audit_emit_when_rng_below_threshold(
         audit=False,
     )
     result = emit_mcp_trust_evaluate_span(
-        tracer, eval_, "srv", MCPPrimitive.TOOL, rng=_FixedRng()  # type: ignore[arg-type]
+        tracer,
+        eval_,
+        "srv",
+        MCPPrimitive.TOOL,
+        rng=_FixedRng(),  # type: ignore[arg-type]
     )
     assert result is not None
     assert len(exporter.get_finished_spans()) == 1
@@ -190,7 +189,11 @@ def test_non_audit_skip_when_rng_above_threshold(
         audit=False,
     )
     result = emit_mcp_trust_evaluate_span(
-        tracer, eval_, "srv", MCPPrimitive.TOOL, rng=_FixedRng()  # type: ignore[arg-type]
+        tracer,
+        eval_,
+        "srv",
+        MCPPrimitive.TOOL,
+        rng=_FixedRng(),  # type: ignore[arg-type]
     )
     assert result is None
     assert exporter.get_finished_spans() == ()
@@ -226,7 +229,11 @@ def test_unknown_server_decisions_always_emit(
             return 0.99
 
     result = emit_mcp_trust_evaluate_span(
-        tracer, eval_, "novel-srv", MCPPrimitive.TOOL, rng=_AlwaysSampleOutRng()  # type: ignore[arg-type]
+        tracer,
+        eval_,
+        "novel-srv",
+        MCPPrimitive.TOOL,
+        rng=_AlwaysSampleOutRng(),  # type: ignore[arg-type]
     )
     assert result is not None
     assert len(exporter.get_finished_spans()) == 1
@@ -245,14 +252,10 @@ async def test_integration_all_six_decision_reasons_emit_via_evaluator(
     reasons + verify span emission per evaluation."""
     exporter, tracer = exporter_and_tracer
 
-    def _high_tier_resolver(
-        s: str, c: object | None, r: TierDerivationRule
-    ) -> MCPTrustTier:
+    def _high_tier_resolver(s: str, c: object | None, r: TierDerivationRule) -> MCPTrustTier:
         return MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT
 
-    def _low_tier_resolver(
-        s: str, c: object | None, r: TierDerivationRule
-    ) -> MCPTrustTier:
+    def _low_tier_resolver(s: str, c: object | None, r: TierDerivationRule) -> MCPTrustTier:
         return MCPTrustTier.LEVEL_0_REFUSE_REMOTE
 
     class _ForceEmitRng:
@@ -272,11 +275,13 @@ async def test_integration_all_six_decision_reasons_emit_via_evaluator(
         require_audit_below_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
         tier_derivation=TierDerivationRule.CONSERVATIVE,
     )
-    eval1 = await PerServerTrustEvaluator().evaluate(
-        "bad", MCPPrimitive.TOOL, None, pol_deny
-    )
+    eval1 = await PerServerTrustEvaluator().evaluate("bad", MCPPrimitive.TOOL, None, pol_deny)
     emit_mcp_trust_evaluate_span(
-        tracer, eval1, "bad", MCPPrimitive.TOOL, rng=rng  # type: ignore[arg-type]
+        tracer,
+        eval1,
+        "bad",
+        MCPPrimitive.TOOL,
+        rng=rng,  # type: ignore[arg-type]
     )
 
     # 2. EXPLICIT_ALLOW
@@ -288,11 +293,13 @@ async def test_integration_all_six_decision_reasons_emit_via_evaluator(
         require_audit_below_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
         tier_derivation=TierDerivationRule.CONSERVATIVE,
     )
-    eval2 = await PerServerTrustEvaluator().evaluate(
-        "good", MCPPrimitive.RESOURCE, None, pol_allow
-    )
+    eval2 = await PerServerTrustEvaluator().evaluate("good", MCPPrimitive.RESOURCE, None, pol_allow)
     emit_mcp_trust_evaluate_span(
-        tracer, eval2, "good", MCPPrimitive.RESOURCE, rng=rng  # type: ignore[arg-type]
+        tracer,
+        eval2,
+        "good",
+        MCPPrimitive.RESOURCE,
+        rng=rng,  # type: ignore[arg-type]
     )
 
     # 3. TIER_FLOOR_PASS
@@ -304,11 +311,13 @@ async def test_integration_all_six_decision_reasons_emit_via_evaluator(
         require_audit_below_tier=MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
         tier_derivation=TierDerivationRule.CONSERVATIVE,
     )
-    eval3 = await PerServerTrustEvaluator().evaluate(
-        "mid", MCPPrimitive.PROMPT, None, pol_pass
-    )
+    eval3 = await PerServerTrustEvaluator().evaluate("mid", MCPPrimitive.PROMPT, None, pol_pass)
     emit_mcp_trust_evaluate_span(
-        tracer, eval3, "mid", MCPPrimitive.PROMPT, rng=rng  # type: ignore[arg-type]
+        tracer,
+        eval3,
+        "mid",
+        MCPPrimitive.PROMPT,
+        rng=rng,  # type: ignore[arg-type]
     )
 
     # 4. TIER_FLOOR_VIOLATION
@@ -320,11 +329,13 @@ async def test_integration_all_six_decision_reasons_emit_via_evaluator(
         require_audit_below_tier=MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT,
         tier_derivation=TierDerivationRule.CONSERVATIVE,
     )
-    eval4 = await PerServerTrustEvaluator().evaluate(
-        "low", MCPPrimitive.SAMPLING, None, pol_viol
-    )
+    eval4 = await PerServerTrustEvaluator().evaluate("low", MCPPrimitive.SAMPLING, None, pol_viol)
     emit_mcp_trust_evaluate_span(
-        tracer, eval4, "low", MCPPrimitive.SAMPLING, rng=rng  # type: ignore[arg-type]
+        tracer,
+        eval4,
+        "low",
+        MCPPrimitive.SAMPLING,
+        rng=rng,  # type: ignore[arg-type]
     )
 
     # 5. UNKNOWN_SERVER_TIER_FLOOR_PASS
@@ -336,11 +347,15 @@ async def test_integration_all_six_decision_reasons_emit_via_evaluator(
         require_audit_below_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
         tier_derivation=TierDerivationRule.OPERATOR_HOOK,
     )
-    eval5 = await PerServerTrustEvaluator(
-        tier_resolver=_high_tier_resolver
-    ).evaluate("novel-high", MCPPrimitive.TOOL, None, pol_unk_pass)
+    eval5 = await PerServerTrustEvaluator(tier_resolver=_high_tier_resolver).evaluate(
+        "novel-high", MCPPrimitive.TOOL, None, pol_unk_pass
+    )
     emit_mcp_trust_evaluate_span(
-        tracer, eval5, "novel-high", MCPPrimitive.TOOL, rng=rng  # type: ignore[arg-type]
+        tracer,
+        eval5,
+        "novel-high",
+        MCPPrimitive.TOOL,
+        rng=rng,  # type: ignore[arg-type]
     )
 
     # 6. UNKNOWN_SERVER_TIER_FLOOR_VIOLATION
@@ -352,19 +367,20 @@ async def test_integration_all_six_decision_reasons_emit_via_evaluator(
         require_audit_below_tier=MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT,
         tier_derivation=TierDerivationRule.OPERATOR_HOOK,
     )
-    eval6 = await PerServerTrustEvaluator(
-        tier_resolver=_low_tier_resolver
-    ).evaluate("novel-low", MCPPrimitive.RESOURCE, None, pol_unk_viol)
+    eval6 = await PerServerTrustEvaluator(tier_resolver=_low_tier_resolver).evaluate(
+        "novel-low", MCPPrimitive.RESOURCE, None, pol_unk_viol
+    )
     emit_mcp_trust_evaluate_span(
-        tracer, eval6, "novel-low", MCPPrimitive.RESOURCE, rng=rng  # type: ignore[arg-type]
+        tracer,
+        eval6,
+        "novel-low",
+        MCPPrimitive.RESOURCE,
+        rng=rng,  # type: ignore[arg-type]
     )
 
     spans = exporter.get_finished_spans()
     assert len(spans) == 6
-    reasons_emitted = {
-        dict(s.attributes or {}).get(ATTR_MCP_TRUST_DECISION_REASON)
-        for s in spans
-    }
+    reasons_emitted = {dict(s.attributes or {}).get(ATTR_MCP_TRUST_DECISION_REASON) for s in spans}
     assert reasons_emitted == {
         "explicit_deny",
         "explicit_allow",

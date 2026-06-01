@@ -201,9 +201,7 @@ BRIDGING_ARC_TRANSITIONS: tuple[BridgingArcTransition, ...] = (
     BridgingArcTransition(
         transition_id=5,
         source_cell=_cell(PersonaTier.TEAM_BINDING, DeploymentSurface.MANAGED_CLOUD),
-        target_cell=_cell(
-            PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.MANAGED_CLOUD
-        ),
+        target_cell=_cell(PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.MANAGED_CLOUD),
         transition_type=TransitionType.WITHIN_COLUMN,
     ),
     BridgingArcTransition(
@@ -223,9 +221,7 @@ BRIDGING_ARC_TRANSITIONS: tuple[BridgingArcTransition, ...] = (
     BridgingArcTransition(
         transition_id=8,
         source_cell=_cell(PersonaTier.TEAM_BINDING, DeploymentSurface.SELF_HOSTED_SERVER),
-        target_cell=_cell(
-            PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.MANAGED_CLOUD
-        ),
+        target_cell=_cell(PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.MANAGED_CLOUD),
         transition_type=TransitionType.DIAGONAL,
     ),
 )

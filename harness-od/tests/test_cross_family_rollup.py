@@ -95,9 +95,7 @@ def test_rollup_per_provider_and_model() -> None:
             gen_ai_request_model="claude-opus-4-7",
             total_cost=2.0,
         ),
-        _cost_record(
-            gen_ai_provider_name="openai", gen_ai_request_model="gpt-5", total_cost=4.0
-        ),
+        _cost_record(gen_ai_provider_name="openai", gen_ai_request_model="gpt-5", total_cost=4.0),
     ]
     rollups = rollup_costs_by_axis(records, RollupAxis.PER_PROVIDER_AND_MODEL)
     by_key = {r.group_key: r for r in rollups}

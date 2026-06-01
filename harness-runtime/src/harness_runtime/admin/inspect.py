@@ -239,15 +239,13 @@ def main(argv: list[str] | None = None) -> int:
         entries = _read_entries(ledger_path)
     except FileNotFoundError:
         print(
-            f"harness-inspect: RT-FAIL-INSPECT-PATH — ledger not found: "
-            f"{ledger_path}",
+            f"harness-inspect: RT-FAIL-INSPECT-PATH — ledger not found: {ledger_path}",
             file=sys.stderr,
         )
         return _EXIT_INSPECT_PATH
     except OSError as exc:
         print(
-            f"harness-inspect: RT-FAIL-INSPECT-PATH — read error on "
-            f"{ledger_path}: {exc}",
+            f"harness-inspect: RT-FAIL-INSPECT-PATH — read error on {ledger_path}: {exc}",
             file=sys.stderr,
         )
         return _EXIT_INSPECT_PATH
@@ -255,9 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         output = _format_json(ledger_path=ledger_path, entries=entries, last_n=last_n)
     else:
-        output = _format_human(
-            ledger_path=ledger_path, entries=entries, last_n=last_n
-        )
+        output = _format_human(ledger_path=ledger_path, entries=entries, last_n=last_n)
 
     sys.stdout.write(output)
     return _EXIT_OK

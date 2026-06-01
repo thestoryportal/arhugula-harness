@@ -36,6 +36,8 @@ _PROCEDURAL_TIER_SNAPSHOT_FIXTURE = Identifier("a" * 64)
 def _pt_resolver() -> Identifier:
     """CP spec v1.30 §1.4: zero-arg resolver closure returning the fixture."""
     return _PROCEDURAL_TIER_SNAPSHOT_FIXTURE
+
+
 from harness_runtime.config.path_bindings import build_path_binding
 from harness_runtime.lifecycle.cp_is_wiring import (
     CpIsWiringBindError,
@@ -141,7 +143,9 @@ def _sibling_kwargs(
 
 def test_composer_returns_stage(tmp_path: Path) -> None:
     stage = materialize_cp_is_wiring_stage(
-        _config(tmp_path), _ledger_writer(tmp_path), _pt_resolver,
+        _config(tmp_path),
+        _ledger_writer(tmp_path),
+        _pt_resolver,
     )
     assert isinstance(stage, CpIsWiringStage)
     assert isinstance(stage.wiring, RuntimeCpIsWiring)
@@ -149,7 +153,9 @@ def test_composer_returns_stage(tmp_path: Path) -> None:
 
 def test_stage_is_frozen(tmp_path: Path) -> None:
     stage = materialize_cp_is_wiring_stage(
-        _config(tmp_path), _ledger_writer(tmp_path), _pt_resolver,
+        _config(tmp_path),
+        _ledger_writer(tmp_path),
+        _pt_resolver,
     )
     with pytest.raises(AttributeError):
         stage.wiring = stage.wiring  # type: ignore[misc]

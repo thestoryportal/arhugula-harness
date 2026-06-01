@@ -21,12 +21,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-    InMemorySpanExporter,
-)
-
 from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol import (
     PauseResumeProtocol,
@@ -38,6 +32,11 @@ from harness_cp.pause_resume_protocol_types import (
     WorkflowPauseReason,
 )
 from harness_is.state_ledger_entry_schema import Identifier
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 
 @pytest.fixture
@@ -217,9 +216,7 @@ def test_resume_attempted_span_diff_aborted_outcome(
         pause_context_reader=lambda: (summary, "b" * 64),
     )
     result = asyncio.run(
-        resume_proto.attempt_resume(
-            snapshot, material_diff_policy=MaterialDiffPolicy.STRICT
-        )
+        resume_proto.attempt_resume(snapshot, material_diff_policy=MaterialDiffPolicy.STRICT)
     )
     emit_resume_attempted_span(
         snapshot, result, tracer=tracer, diff_policy=MaterialDiffPolicy.STRICT
@@ -399,9 +396,7 @@ def test_resume_attempted_span_lenient_with_diff(
         pause_context_reader=lambda: (summary, "b" * 64),
     )
     result = asyncio.run(
-        resume_proto.attempt_resume(
-            snapshot, material_diff_policy=MaterialDiffPolicy.LENIENT
-        )
+        resume_proto.attempt_resume(snapshot, material_diff_policy=MaterialDiffPolicy.LENIENT)
     )
     emit_resume_attempted_span(
         snapshot, result, tracer=tracer, diff_policy=MaterialDiffPolicy.LENIENT

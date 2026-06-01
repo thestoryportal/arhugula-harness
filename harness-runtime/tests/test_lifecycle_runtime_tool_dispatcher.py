@@ -13,19 +13,12 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 import pytest
-from mcp.server.fastmcp import FastMCP
-from mcp.shared.memory import create_connected_server_and_client_session
-from opentelemetry import trace as otel_trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-    InMemorySpanExporter,
-)
-
-from harness_core import PersonaTier
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_as.tool_contract import ToolContract
-from harness_cp.cp_shared_types import MCPTrustTier
+from harness_core import PersonaTier
+from harness_cp.cp_shared_types import MCPTrustTier, ModelBinding
+from harness_cp.engine_class import EngineClass
+from harness_cp.gate_level_rule import GateLevel
 from harness_cp.mcp_client_namespace_emitter import (
     MCPClientNamespaceEmitter,
     MCPServerInfo,
@@ -41,11 +34,7 @@ from harness_cp.workflow_driver_types import (
     StepKind,
     WorkflowStep,
 )
-from harness_cp.cp_shared_types import ModelBinding
-from harness_cp.engine_class import EngineClass
-from harness_cp.gate_level_rule import GateLevel
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
-
 from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
 from harness_runtime.lifecycle.runtime_tool_dispatcher import (
     MCPHostUnreachableError,
@@ -58,7 +47,13 @@ from harness_runtime.lifecycle.runtime_tool_dispatcher import (
     ToolInvocationTimeoutError,
     ToolInvocationTrustViolationError,
 )
-
+from mcp.server.fastmcp import FastMCP
+from mcp.shared.memory import create_connected_server_and_client_session
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 # ---------- fixtures + helpers ---------------------------------------------
 

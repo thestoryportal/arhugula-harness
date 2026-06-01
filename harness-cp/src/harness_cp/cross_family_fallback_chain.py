@@ -111,9 +111,7 @@ def _ordered_candidates(chain: FallbackChain) -> tuple[ProviderCandidate, ...]:
     return tuple(ordered)
 
 
-def on_provider_failure(
-    failed: ProviderCandidate, chain: FallbackChain
-) -> OnFailureResult:
+def on_provider_failure(failed: ProviderCandidate, chain: FallbackChain) -> OnFailureResult:
     """Return the next candidate after `failed`, per the §4.2 ordering rule.
 
     Same-family fallback precedes cross-family precedes terminal. When the

@@ -135,9 +135,7 @@ def test_holdout_meta_judge_count_two() -> None:
 def test_ratio_rollup_count_one() -> None:
     """§3.6.1 signature — `RATIO_ROLLUP` covers primitive 4."""
     ratio = [
-        d
-        for d in EVAL_PRIMITIVE_DECLARATIONS
-        if d.computation_kind is ComputationKind.RATIO_ROLLUP
+        d for d in EVAL_PRIMITIVE_DECLARATIONS if d.computation_kind is ComputationKind.RATIO_ROLLUP
     ]
     assert len(ratio) == 1
 

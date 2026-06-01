@@ -15,11 +15,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from harness_as.anthropic_graceful_degradation import MemoryToolStorageBackend
 from harness_core.deployment_surface import DeploymentSurface
 from harness_cp.topology_pattern import TopologyPattern
-
 from harness_runtime.bootstrap.factories.memory_tool_registry_factory import (
     MEMORY_TOOL_FILESYSTEM_ROOT_SUBPATH,
     materialize_memory_tool_registry_stage,
@@ -213,12 +211,12 @@ async def test_incomplete_protocol_backend_raises_with_missing_method_names(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class IncompleteBackend:
-        async def view(self, path: str) -> bytes:  # noqa: ARG002
+        async def view(self, path: str) -> bytes:
             return b""
 
         # create / delete / str_replace / insert intentionally missing.
 
-    def _fake_ctor(*, root: Path) -> IncompleteBackend:  # noqa: ARG001
+    def _fake_ctor(*, root: Path) -> IncompleteBackend:
         return IncompleteBackend()
 
     monkeypatch.setattr(
@@ -254,7 +252,7 @@ async def test_non_callable_protocol_attribute_raises(
         str_replace = None
         insert = None
 
-    def _fake_ctor(*, root: Path) -> NonCallableBackend:  # noqa: ARG001
+    def _fake_ctor(*, root: Path) -> NonCallableBackend:
         return NonCallableBackend()
 
     monkeypatch.setattr(

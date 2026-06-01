@@ -129,14 +129,10 @@ def _candidate_set_for(surface: DeploymentSurface) -> frozenset[EngineClass]:
             return candidate.candidate_set
     # ENGINE_CLASS_CANDIDATES has one entry per DeploymentSurface (U-CP-16
     # acceptance #1) — this is unreachable for a valid enum member.
-    raise WorkloadBindingError(
-        f"no §7.2 candidate set for deployment surface {surface!r}"
-    )
+    raise WorkloadBindingError(f"no §7.2 candidate set for deployment surface {surface!r}")
 
 
-def _persona_tier_admits(
-    persona_tier: PersonaTier, engine_class: EngineClass
-) -> bool:
+def _persona_tier_admits(persona_tier: PersonaTier, engine_class: EngineClass) -> bool:
     """§7.3 step 3 — whether `persona_tier` admits `engine_class`.
 
     `pure-pattern-no-engine` is admitted only at `solo-developer`; every other
@@ -172,9 +168,7 @@ def select_engine_class(
     # Step 3 (applied first as a filter) — restrict to persona-tier-admissible
     # candidates. Determinism: a pure set intersection, no ordering dependence.
     tier_admissible = frozenset(
-        ec
-        for ec in candidate_set
-        if _persona_tier_admits(input.persona_tier, ec)
+        ec for ec in candidate_set if _persona_tier_admits(input.persona_tier, ec)
     )
     if not tier_admissible:
         raise WorkloadBindingError(
@@ -327,12 +321,8 @@ async def emit_workload_class_selection_state_ledger_entry(
     Composer awaits `ledger_writer(payload)` return per §16.5.9 invariant 4;
     does NOT condition on `WriteResult` variant.
     """
-    binding_selection_result_canonical_bytes = _canonicalize_outcome_bytes(
-        selection_result
-    )
-    outcome_hash_hex = hashlib.sha256(
-        binding_selection_result_canonical_bytes
-    ).hexdigest()
+    binding_selection_result_canonical_bytes = _canonicalize_outcome_bytes(selection_result)
+    outcome_hash_hex = hashlib.sha256(binding_selection_result_canonical_bytes).hexdigest()
     idempotency_key = _selection_idempotency_key(
         workflow_id,
         step_id,

@@ -35,9 +35,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Coroutine, Mapping, Sequence
 from datetime import UTC, datetime
-from collections.abc import Coroutine
 from typing import Any, Protocol, TypeVar, cast, runtime_checkable
 
 from harness_as.sandbox_tier import SandboxTier
@@ -49,12 +48,6 @@ from opentelemetry.trace import Status, StatusCode
 from harness_cp.cp_shared_types import ActorIdentity, ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
-from harness_cp.per_step_override_evaluator import StepEffectiveBinding, resolve_step_binding
-from harness_cp.topology_pattern import TopologyPattern
-from harness_cp.workflow_driver_errors import (
-    EngineClassNotYetMaterializedError,
-    TopologyPatternNotYetMaterializedError,
-)
 from harness_cp.pause_resume_protocol import (
     PauseResumeProtocol,
     PauseResumeProtocolEventKind,
@@ -63,6 +56,12 @@ from harness_cp.pause_resume_protocol_types import (
     MaterialDiffPolicy,
     PauseSnapshot,
     WorkflowPauseReason,
+)
+from harness_cp.per_step_override_evaluator import StepEffectiveBinding, resolve_step_binding
+from harness_cp.topology_pattern import TopologyPattern
+from harness_cp.workflow_driver_errors import (
+    EngineClassNotYetMaterializedError,
+    TopologyPatternNotYetMaterializedError,
 )
 from harness_cp.workflow_driver_types import (
     RunResult,
@@ -77,9 +76,7 @@ from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 # v1.4 in-scope sets (per C-CP-25 §25.1 + Implementation Plan §0.2)
 # ---------------------------------------------------------------------------
 
-_IN_SCOPE_TOPOLOGY: frozenset[TopologyPattern] = frozenset(
-    {TopologyPattern.SINGLE_THREADED_LINEAR}
-)
+_IN_SCOPE_TOPOLOGY: frozenset[TopologyPattern] = frozenset({TopologyPattern.SINGLE_THREADED_LINEAR})
 
 _IN_SCOPE_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
     {EngineClass.PURE_PATTERN_NO_ENGINE, EngineClass.SAVE_POINT_CHECKPOINT}
@@ -221,9 +218,7 @@ class StepKindDispatcherNotBoundError(Exception):
     """
 
     def __init__(self, step_kind: StepKind) -> None:
-        super().__init__(
-            f"no StepDispatcher bound for step_kind {step_kind.value!r}"
-        )
+        super().__init__(f"no StepDispatcher bound for step_kind {step_kind.value!r}")
         self.step_kind = step_kind
 
 
@@ -586,9 +581,7 @@ def execute_workflow(
                 _cp_is_wiring.emit_pause_resume_state_ledger_entry(
                     workflow_id=manifest_entry.workflow_id,
                     step_id=str(pause_snapshot_input.step_index),
-                    protocol_event_kind=(
-                        PauseResumeProtocolEventKind.RESUME_ATTEMPTED
-                    ),
+                    protocol_event_kind=(PauseResumeProtocolEventKind.RESUME_ATTEMPTED),
                     event_sequence_id=(pause_snapshot_input.step_index << 2) | 0,
                     protocol_state_snapshot=resume_result.model_dump(mode="json"),
                     # Reading A apply (PR #83 sibling-extension): pass
@@ -685,9 +678,7 @@ def execute_workflow(
         # from RunResult.status. FAILED → StatusCode.ERROR with fail_class
         # description; SUCCESS / DRAINED leave default UNSET.
         if result.status is RunStatus.FAILED:
-            span.set_status(
-                Status(StatusCode.ERROR, result.fail_class or "FAILED")
-            )
+            span.set_status(Status(StatusCode.ERROR, result.fail_class or "FAILED"))
         return result
 
 
@@ -818,13 +809,9 @@ def _execute_workflow_body(
                     _cp_is_wiring.emit_pause_resume_state_ledger_entry(
                         workflow_id=manifest_entry.workflow_id,
                         step_id=str(step_index),
-                        protocol_event_kind=(
-                            PauseResumeProtocolEventKind.PAUSE_CAPTURED
-                        ),
+                        protocol_event_kind=(PauseResumeProtocolEventKind.PAUSE_CAPTURED),
                         event_sequence_id=(step_index << 2) | 1,
-                        protocol_state_snapshot=pause_snapshot.model_dump(
-                            mode="json"
-                        ),
+                        protocol_state_snapshot=pause_snapshot.model_dump(mode="json"),
                         # Reading A apply (PR #83 sibling-extension): see fork
                         # doc U-CP-74 actor field malformation.
                         actor=ActorIdentity(ctx.ledger_writer.actor.actor_id),
@@ -895,9 +882,7 @@ def _execute_workflow_body(
         # the type's docstring for per-field semantics + MVP-default
         # rationale. Resolves the C-RT-17 Class 1 fork on StepDispatcher
         # parent-context gap (Path A ratified 2026-05-20).
-        step_idempotency_key_pre = _compute_step_idempotency_key(
-            run_idempotency_key, step_index
-        )
+        step_idempotency_key_pre = _compute_step_idempotency_key(run_idempotency_key, step_index)
         # MVP defaults per C-CP-12 §12.4 + Spec_Control_Plane_v1_6.md §25.2.1:
         # parent_gate_level: sourced from manifest_entry.default_gate_level
         # per CP spec v1.20 §6.1.Y Reading A absorption (X-AL-3 silent-
@@ -915,9 +900,7 @@ def _execute_workflow_body(
         # composition unchanged.
         step_context = StepExecutionContext(
             workflow_id=manifest_entry.workflow_id,
-            parent_action_id=(
-                f"workflow:{manifest_entry.workflow_id}:step:{step_index}"
-            ),
+            parent_action_id=(f"workflow:{manifest_entry.workflow_id}:step:{step_index}"),
             parent_gate_level=resolve_parent_gate_level(manifest_entry),
             parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
             parent_actor=ctx.ledger_writer.actor,
@@ -947,10 +930,7 @@ def _execute_workflow_body(
                 terminal_step_index=step_index,
                 partial_state=dict(accumulated),
                 final_state=None,
-                fail_class=(
-                    f"step-failure: RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND: "
-                    f"{exc}"
-                ),
+                fail_class=(f"step-failure: RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND: {exc}"),
             ), steps_executed
         except BaseException as exc:
             # U-RT-95 (runtime spec v1.24 §14.8.8.4) — driver-side handler for
@@ -967,13 +947,8 @@ def _execute_workflow_body(
             # terminal_step_index = step_index - 1 (paused at step N's HITL
             # gate; completed through step N-1).
             if type(exc).__name__ == "HITLPauseRequestedSignal":
-                if (
-                    ctx.pause_resume_protocol is not None
-                    and ctx.pause_requested_flag.is_set()
-                ):
-                    protocol = cast(
-                        PauseResumeProtocol, ctx.pause_resume_protocol
-                    )
+                if ctx.pause_resume_protocol is not None and ctx.pause_requested_flag.is_set():
+                    protocol = cast(PauseResumeProtocol, ctx.pause_resume_protocol)
                     pause_snapshot = _run_protocol_method_sync(
                         protocol.capture_pause_snapshot(
                             workflow_id=manifest_entry.workflow_id,
@@ -991,27 +966,19 @@ def _execute_workflow_body(
                             _cp_is_wiring.emit_pause_resume_state_ledger_entry(
                                 workflow_id=manifest_entry.workflow_id,
                                 step_id=str(step_index),
-                                protocol_event_kind=(
-                                    PauseResumeProtocolEventKind.PAUSE_CAPTURED
-                                ),
+                                protocol_event_kind=(PauseResumeProtocolEventKind.PAUSE_CAPTURED),
                                 event_sequence_id=(step_index << 2) | 2,
-                                protocol_state_snapshot=(
-                                    pause_snapshot.model_dump(mode="json")
-                                ),
+                                protocol_state_snapshot=(pause_snapshot.model_dump(mode="json")),
                                 # Reading A apply (PR #83 sibling-extension):
                                 # see fork doc U-CP-74 actor malformation.
-                                actor=ActorIdentity(
-                                    ctx.ledger_writer.actor.actor_id
-                                ),
+                                actor=ActorIdentity(ctx.ledger_writer.actor.actor_id),
                             )
                         )
                     return RunResult(
                         workflow_id=manifest_entry.workflow_id,
                         run_id=run_id,
                         status=RunStatus.PAUSED,
-                        terminal_step_index=(
-                            step_index - 1 if step_index > 0 else None
-                        ),
+                        terminal_step_index=(step_index - 1 if step_index > 0 else None),
                         partial_state=dict(accumulated),
                         final_state=None,
                         fail_class=None,
@@ -1039,9 +1006,7 @@ def _execute_workflow_body(
                     terminal_step_index=step_index,
                     partial_state=dict(accumulated),
                     final_state=None,
-                    fail_class=(
-                        f"step-failure: RT-FAIL-STEP-DISPATCH-TIMEOUT: {exc}"
-                    ),
+                    fail_class=(f"step-failure: RT-FAIL-STEP-DISPATCH-TIMEOUT: {exc}"),
                 ), steps_executed
             return RunResult(
                 workflow_id=manifest_entry.workflow_id,
@@ -1093,10 +1058,7 @@ def _execute_workflow_body(
                         terminal_step_index=step_index,
                         partial_state=dict(accumulated),
                         final_state=None,
-                        fail_class=(
-                            f"validator-framework-failure: "
-                            f"{type(exc).__name__}: {exc}"
-                        ),
+                        fail_class=(f"validator-framework-failure: {type(exc).__name__}: {exc}"),
                     ), steps_executed
 
                 # §C-OD-29.1 outer envelope (3 attrs).
@@ -1109,9 +1071,7 @@ def _execute_workflow_body(
                 # as the parent-link marker; future HITL gate composer reads
                 # this attribute to anchor its parent context.
                 if evaluation.result.outcome.value == "escalate":
-                    parent_hitl_span_id = format(
-                        evaluate_span.get_span_context().span_id, "016x"
-                    )
+                    parent_hitl_span_id = format(evaluate_span.get_span_context().span_id, "016x")
                     evaluate_span.set_attribute(
                         "validator.escalation.parent_hitl_span_id",
                         parent_hitl_span_id,
@@ -1148,14 +1108,9 @@ def _execute_workflow_body(
                 # test paths may set ask_user_question_surface = None and
                 # the escalation outcome will fail-closed).
                 if evaluation.next_action.value == "escalate_hitl":
-                    ask_user_question_surface = getattr(
-                        ctx, "ask_user_question_surface", None
-                    )
+                    ask_user_question_surface = getattr(ctx, "ask_user_question_surface", None)
                     escalation_brief = evaluation.result.escalation_brief
-                    if (
-                        ask_user_question_surface is not None
-                        and escalation_brief is not None
-                    ):
+                    if ask_user_question_surface is not None and escalation_brief is not None:
                         # Lazy import to avoid cycle (runtime → cp → runtime).
                         # GateLevel is module-level imported at line 51;
                         # do NOT lazy-import here (would shadow + break
@@ -1166,6 +1121,7 @@ def _execute_workflow_body(
                             ValidatorEscalationGateTimeoutError,
                             compose_validator_escalation_gate,
                         )
+
                         from harness_cp.validator_fail_transient_staircase import (
                             CrossTrustBoundaryState,
                         )
@@ -1240,7 +1196,7 @@ def _execute_workflow_body(
                         # response recorded in audit (deferred to follow-on
                         # CP composer arc per scoping doc adjacent obs (d));
                         # workflow proceeds with original validator outcome.
-                        _ = hitl_response  # noqa — outcome consumed by audit
+                        _ = hitl_response
 
         # § 25.3.3.7 — State-ledger append via U-IS-11 composition.
         # Reuse pre-dispatch step_idempotency_key composed at the

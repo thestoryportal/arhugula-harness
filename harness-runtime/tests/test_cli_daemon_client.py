@@ -24,10 +24,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import harness_runtime.cli.app as _ensure_import
 import pytest
 from typer.testing import CliRunner
-
-import harness_runtime.cli.app as _ensure_import  # noqa: F401
 
 _cli_app_mod = sys.modules["harness_runtime.cli.app"]
 assert _ensure_import is not None
@@ -85,11 +84,15 @@ def _stub_dispatch(
         captured["socket_path"] = socket_path
         if raises is not None:
             raise raises
-        return payload if payload is not None else {
-            "status": "success",
-            "workflow_id": "wf-cli-daemon-client",
-            "run_id": "abc123",
-        }
+        return (
+            payload
+            if payload is not None
+            else {
+                "status": "success",
+                "workflow_id": "wf-cli-daemon-client",
+                "run_id": "abc123",
+            }
+        )
 
     monkeypatch.setattr(_cli_app_mod, "_daemon_client_dispatch", _fake)
     return captured
@@ -174,9 +177,7 @@ def test_ac3_connection_error_during_dispatch_exits_four(
 
     _stub_dispatch(
         monkeypatch,
-        raises=DaemonStartupError(
-            "synthetic mid-dispatch connection failure"
-        ),
+        raises=DaemonStartupError("synthetic mid-dispatch connection failure"),
     )
     manifest = _write_yaml(tmp_path)
     result = runner.invoke(
@@ -214,9 +215,7 @@ def test_ac4_cp_status_to_exit_code_mapping(
     result = runner.invoke(
         app, ["run", str(manifest), "--daemon", "--socket-path", str(socket_path)]
     )
-    assert result.exit_code == expected_exit, (
-        f"status={status!r}: {result.stdout + result.stderr}"
-    )
+    assert result.exit_code == expected_exit, f"status={status!r}: {result.stdout + result.stderr}"
 
 
 # ---------------------------------------------------------------------------

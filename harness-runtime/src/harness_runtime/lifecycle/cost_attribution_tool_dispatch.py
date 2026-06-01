@@ -62,7 +62,7 @@ from __future__ import annotations
 
 import json
 from decimal import Decimal
-from typing import Any, Mapping
+from typing import Any
 
 from harness_cp.engine_namespace import ReplayDisposition
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
@@ -130,14 +130,10 @@ def _canonical_json_byte_length(payload: Any) -> int:
     composition (consistency with the substrate's canonical-JSON convention
     is the operative tiebreaker).
     """
-    return len(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    )
+    return len(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
 
 
-def _compute_tool_cost(
-    rate: ToolRate, *, tool_args: Any, response: Any
-) -> Decimal:
+def _compute_tool_cost(rate: ToolRate, *, tool_args: Any, response: Any) -> Decimal:
     """Compute tool-dispatch cost per `ToolRate.cost_kind` formula.
 
     Per U-OD-39 AC #2 + §C-OD-28.4 invariant 2 (Decimal-precision-preserving
@@ -257,9 +253,7 @@ def attribute_tool_dispatch_cost(
     # because tool rates don't need the Decimal→float ProviderRates→
     # PriceRateEntry bridge of the LLM path; the ToolRate.rate is already
     # Decimal at the carrier per C-OD-28.1.
-    cost_decimal = _compute_tool_cost(
-        tool_rate, tool_args=tool_args, response=response
-    )
+    cost_decimal = _compute_tool_cost(tool_rate, tool_args=tool_args, response=response)
 
     # Substep 4 — build SpanCostRecord; attach idempotency key joining to the
     # IS state-ledger parent entry per C-IS-05 / C-OD-14 §14.4.
@@ -281,9 +275,7 @@ def attribute_tool_dispatch_cost(
         gen_ai_provider_name=f"tool:{tool_id}",
         gen_ai_request_model="",
     )
-    attached = cost_chain.attach_idempotency_key(
-        span_id, parent_idempotency_key, cost_record
-    )
+    attached = cost_chain.attach_idempotency_key(span_id, parent_idempotency_key, cost_record)
 
     # Substep 5 — project to typed CostRecordAuditPayload via the canonical
     # helper; convert via cp_audit_to_od_audit `cost:` action_id prefix

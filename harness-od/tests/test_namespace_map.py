@@ -135,14 +135,8 @@ def test_lookup_namespace_missing_returns_none() -> None:
 
 def test_assert_source_authoritative_declarer_match_ok() -> None:
     """Acceptance #6 — assert_source_authoritative_declarer returns None on match."""
-    assert (
-        assert_source_authoritative_declarer("anthropic.", NamespaceSourceAxis.AS_SOURCE)
-        is None
-    )
-    assert (
-        assert_source_authoritative_declarer("hitl.", NamespaceSourceAxis.CP_SOURCE)
-        is None
-    )
+    assert assert_source_authoritative_declarer("anthropic.", NamespaceSourceAxis.AS_SOURCE) is None
+    assert assert_source_authoritative_declarer("hitl.", NamespaceSourceAxis.CP_SOURCE) is None
     assert (
         assert_source_authoritative_declarer(
             "provider_discriminator", NamespaceSourceAxis.OD_CANONICAL
@@ -167,9 +161,7 @@ def test_assert_source_authoritative_declarer_undeclared_err() -> None:
     """Acceptance #6 / #7 — an undeclared namespace has no authoritative declarer;
     asserting any axis for it raises AuthorityViolation."""
     with pytest.raises(AuthorityViolation):
-        assert_source_authoritative_declarer(
-            "nonexistent.", NamespaceSourceAxis.AS_SOURCE
-        )
+        assert_source_authoritative_declarer("nonexistent.", NamespaceSourceAxis.AS_SOURCE)
 
 
 def test_single_authoritative_declarer_per_namespace() -> None:

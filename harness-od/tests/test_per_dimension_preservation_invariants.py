@@ -87,10 +87,7 @@ def test_cardinality_invariant_form_scalar_le() -> None:
     RUNTIME_ENFORCEMENT_AT_COLLECTOR_BOUNDARY."""
     inv = PRESERVATION_INVARIANTS[PreservationDimension.CARDINALITY_BUDGET]
     assert inv.invariant_form is InvariantForm.SCALAR_MONOTONIC_TIGHTENING_LE
-    assert (
-        inv.enforcement_layer
-        is EnforcementLayer.RUNTIME_ENFORCEMENT_AT_COLLECTOR_BOUNDARY
-    )
+    assert inv.enforcement_layer is EnforcementLayer.RUNTIME_ENFORCEMENT_AT_COLLECTOR_BOUNDARY
     assert inv.cross_axis_composition_target is None
 
 
@@ -125,20 +122,14 @@ def test_gate_policy_enforcement_cross_axis_composition() -> None:
     """acc #4 — GATE_POLICY enforcement layer is CROSS_AXIS_COMPOSITION_
     VERIFICATION (verified at the Session 5 cross-axis matrix)."""
     inv = PRESERVATION_INVARIANTS[PreservationDimension.GATE_POLICY]
-    assert (
-        inv.enforcement_layer
-        is EnforcementLayer.CROSS_AXIS_COMPOSITION_VERIFICATION
-    )
+    assert inv.enforcement_layer is EnforcementLayer.CROSS_AXIS_COMPOSITION_VERIFICATION
 
 
 def test_sandbox_tier_enforcement_cross_axis_composition() -> None:
     """acc #4 — SANDBOX_TIER enforcement layer is CROSS_AXIS_COMPOSITION_
     VERIFICATION (verified at the Session 5 cross-axis matrix)."""
     inv = PRESERVATION_INVARIANTS[PreservationDimension.SANDBOX_TIER]
-    assert (
-        inv.enforcement_layer
-        is EnforcementLayer.CROSS_AXIS_COMPOSITION_VERIFICATION
-    )
+    assert inv.enforcement_layer is EnforcementLayer.CROSS_AXIS_COMPOSITION_VERIFICATION
 
 
 # --- acc #3 — verify_per_dimension_preservation ---------------------------
@@ -148,9 +139,7 @@ def test_verify_per_dimension_sampling_pass() -> None:
     """acc #3 — verify_per_dimension_preservation returns Ok (None) when the
     transition preserves SAMPLING_DISCIPLINE."""
     assert (
-        verify_per_dimension_preservation(
-            _TRANSITION_1, PreservationDimension.SAMPLING_DISCIPLINE
-        )
+        verify_per_dimension_preservation(_TRANSITION_1, PreservationDimension.SAMPLING_DISCIPLINE)
         is None
     )
 
@@ -165,15 +154,11 @@ def test_verify_per_dimension_redaction_downgrade_reject() -> None:
             PersonaTier.MULTI_TENANT_COMPLIANCE,
             DeploymentSurface.SELF_HOSTED_SERVER,
         ),
-        target_cell=_cell(
-            PersonaTier.SOLO_DEVELOPER, DeploymentSurface.SELF_HOSTED_SERVER
-        ),
+        target_cell=_cell(PersonaTier.SOLO_DEVELOPER, DeploymentSurface.SELF_HOSTED_SERVER),
         transition_type=TransitionType.WITHIN_COLUMN,
     )
     with pytest.raises(PreservationViolation):
-        verify_per_dimension_preservation(
-            downgrade, PreservationDimension.REDACTION_CLASS
-        )
+        verify_per_dimension_preservation(downgrade, PreservationDimension.REDACTION_CLASS)
 
 
 # --- acc #5 — assert_cross_axis_composition_verified_at_session_5 ----------

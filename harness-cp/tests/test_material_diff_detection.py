@@ -72,37 +72,27 @@ def test_summarization_per_tier() -> None:
     assert mtc.primary_binding.model == "claude-opus-4-7"
     assert mtc.fallback_binding.model == "claude-sonnet-4-6"
     # summarize_diff_for_operator resolves the per-tier binding.
-    assert (
-        summarize_diff_for_operator((), PersonaTier.SOLO_DEVELOPER) is solo
-    )
+    assert summarize_diff_for_operator((), PersonaTier.SOLO_DEVELOPER) is solo
 
 
 def test_revalidate_solo_auto_resume() -> None:
     """#11 — solo-developer auto-resumes after operator notification."""
     outcome = revalidate_context((), PersonaTier.SOLO_DEVELOPER)
-    assert (
-        outcome.outcome_kind
-        is RevalidationOutcomeKind.AUTO_RESUME_AFTER_NOTIFICATION
-    )
+    assert outcome.outcome_kind is RevalidationOutcomeKind.AUTO_RESUME_AFTER_NOTIFICATION
     assert outcome.audit_required is False
 
 
 def test_revalidate_team_operator_approval() -> None:
     """#11 — team-binding requires operator approval."""
     outcome = revalidate_context((), PersonaTier.TEAM_BINDING)
-    assert (
-        outcome.outcome_kind is RevalidationOutcomeKind.OPERATOR_APPROVAL_REQUIRED
-    )
+    assert outcome.outcome_kind is RevalidationOutcomeKind.OPERATOR_APPROVAL_REQUIRED
     assert outcome.audit_required is False
 
 
 def test_revalidate_multi_tenant_approval_plus_audit() -> None:
     """#11 — multi-tenant-compliance requires operator approval AND audit."""
     outcome = revalidate_context((), PersonaTier.MULTI_TENANT_COMPLIANCE)
-    assert (
-        outcome.outcome_kind
-        is RevalidationOutcomeKind.OPERATOR_APPROVAL_PLUS_AUDIT
-    )
+    assert outcome.outcome_kind is RevalidationOutcomeKind.OPERATOR_APPROVAL_PLUS_AUDIT
     assert outcome.audit_required is True
 
 

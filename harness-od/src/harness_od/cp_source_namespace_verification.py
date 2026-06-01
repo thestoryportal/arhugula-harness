@@ -103,9 +103,7 @@ def verify_cp_source_namespace_set(declared: frozenset[str]) -> None:
     return None
 
 
-def assert_namespace_attribute_count(
-    prefix: str, expected_count: int, observed_count: int
-) -> None:
+def assert_namespace_attribute_count(prefix: str, expected_count: int, observed_count: int) -> None:
     """Assert an observed per-prefix attribute count matches the expectation.
 
     Returns `None` (the `Ok(())` arm) when `observed_count == expected_count`;

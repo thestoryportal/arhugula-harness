@@ -93,9 +93,7 @@ class AlertingHook(StrEnum):
     """solo-developer cells — operator-self-inspection; alerting optional via
     TUI threshold annotation."""
 
-    BACKEND_SIDE_ALERTING_PER_CLASS_COST_CEILING = (
-        "BACKEND_SIDE_ALERTING_PER_CLASS_COST_CEILING"
-    )
+    BACKEND_SIDE_ALERTING_PER_CLASS_COST_CEILING = "BACKEND_SIDE_ALERTING_PER_CLASS_COST_CEILING"
     """team-binding cells — backend-side alerting bound to the per-class cost
     ceiling threshold."""
 

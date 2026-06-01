@@ -27,15 +27,13 @@ from typing import Any
 
 import pytest
 from harness_core.deployment_surface import DeploymentSurface
-from pydantic import ValidationError
-
+from harness_cp.topology_pattern import TopologyPattern
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.lifecycle.memory_tool_registry import MemoryToolRegistry
 from harness_runtime.lifecycle.memory_tool_types import (
     MemoryToolBackendConfig,
     MemoryToolStorageBackend,
 )
-from harness_cp.topology_pattern import TopologyPattern
 from harness_runtime.types import (
     CollectorConfig,
     HarnessContext,
@@ -44,7 +42,7 @@ from harness_runtime.types import (
     ProviderSecretsConfig,
     RuntimeConfig,
 )
-
+from pydantic import ValidationError
 
 # ----------------------------------------------------------------------------
 # Minimal RuntimeConfig kwargs fixture — fills required fields only.
@@ -189,7 +187,8 @@ def test_freeze_signature_carries_memory_tool_registry_kwarg(
 
 
 def test_carriers_importable() -> None:
-    from harness_runtime.types import HarnessContext as HC, RuntimeConfig as RC
+    from harness_runtime.types import HarnessContext as HC
+    from harness_runtime.types import RuntimeConfig as RC
 
     # Verify the new fields exist in the Pydantic model schemas.
     assert "memory_tool_backend_config" in RC.model_fields
@@ -220,7 +219,7 @@ class _FakeBackend:
         return None
 
 
-def _fully_populated_builder(  # noqa: ARG001 — retained for future U-RT-80 integration tests
+def _fully_populated_builder(
     tmp_path: Path,
     *,
     memory_tool_registry: Any = None,

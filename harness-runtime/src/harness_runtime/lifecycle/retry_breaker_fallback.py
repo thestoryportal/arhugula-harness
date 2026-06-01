@@ -147,11 +147,7 @@ def _rebind_to_candidate(
     """Construct a new ``StepEffectiveBinding`` with ``model_binding`` overridden
     to the current fallback candidate. Other fields carry forward unchanged."""
     return binding.model_copy(
-        update={
-            "model_binding": ModelBinding(
-                provider=candidate.provider, model=candidate.model
-            )
-        }
+        update={"model_binding": ModelBinding(provider=candidate.provider, model=candidate.model)}
     )
 
 
@@ -219,9 +215,7 @@ class RetryBreakerFallbackDispatcher:
     retry_breaker: RetryBreakerRegistry
     fallback_chain: FallbackChain
     tracer_provider: Any
-    sleep_fn: Callable[[float], Awaitable[None]] = field(
-        default_factory=lambda: asyncio.sleep
-    )
+    sleep_fn: Callable[[float], Awaitable[None]] = field(default_factory=lambda: asyncio.sleep)
 
     async def dispatch(
         self,
@@ -249,13 +243,9 @@ class RetryBreakerFallbackDispatcher:
             Re-raised verbatim (shutdown / cancellation propagates).
         """
         policy = self.retry_breaker.get_policy(RESERVED_LLM_DISPATCH_KEY)
-        tracer = self.tracer_provider.get_tracer(
-            "harness.runtime.retry_breaker_fallback"
-        )
+        tracer = self.tracer_provider.get_tracer("harness.runtime.retry_breaker_fallback")
 
-        with tracer.start_as_current_span(
-            "harness.runtime.retry_breaker_fallback"
-        ) as outer_span:
+        with tracer.start_as_current_span("harness.runtime.retry_breaker_fallback") as outer_span:
             candidate: ProviderCandidate = self.fallback_chain.primary
             last_failure_class: str | None = None
             chain_length = _chain_length(self.fallback_chain)
@@ -374,9 +364,7 @@ class RetryBreakerFallbackDispatcher:
         replay_disposition = REPLAY_DISPOSITION_MAPPING[binding.engine_class]
 
         for attempt in range(policy.max_attempts):
-            with tracer.start_as_current_span(
-                "harness.runtime.retry_attempt"
-            ) as inner_span:
+            with tracer.start_as_current_span("harness.runtime.retry_attempt") as inner_span:
                 # CP-canonical retry.* 6-attribute namespace per Spec_Control_Plane_v1_3.md
                 # §3.5 + ADR-D1 v1.2 §1.1.1 + landed carrier at
                 # `harness_cp.retry_fallback_namespace.RETRY_ATTEMPT_CHILD_SPAN_SCHEMA`.
@@ -385,14 +373,10 @@ class RetryBreakerFallbackDispatcher:
                 # the original-operation reference per spec §14.6 v1.5 amendment.
                 inner_span.set_attribute("retry.attempt_number", attempt + 1)
                 inner_span.set_attribute("retry.original_span_id", original_span_id_hex)
-                inner_span.set_attribute(
-                    "engine.replay_disposition", replay_disposition.value
-                )
+                inner_span.set_attribute("engine.replay_disposition", replay_disposition.value)
 
                 try:
-                    result = await self.inner.dispatch(
-                        rebound, step, step_context=step_context
-                    )
+                    result = await self.inner.dispatch(rebound, step, step_context=step_context)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -403,9 +387,7 @@ class RetryBreakerFallbackDispatcher:
                         # `retry.cause_attribution` carries the broader
                         # open-set string (Python exception class name MVP).
                         inner_span.set_attribute("retry.delay_ms", 0)
-                        inner_span.set_attribute(
-                            "retry.cause_attribution", type(exc).__name__
-                        )
+                        inner_span.set_attribute("retry.cause_attribution", type(exc).__name__)
                         inner_span.set_attribute(
                             "retry.fail_class",
                             ValidatorRetryExitClass.PERMANENT_FAIL_EXIT.value,
@@ -431,15 +413,9 @@ class RetryBreakerFallbackDispatcher:
                         next_stage is StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF
                         and not is_last_attempt
                     ):
-                        backoff_seconds = self.retry_breaker.compute_delay_seconds(
-                            attempt
-                        )
-                        inner_span.set_attribute(
-                            "retry.delay_ms", int(backoff_seconds * 1000)
-                        )
-                        inner_span.set_attribute(
-                            "retry.cause_attribution", cause.value
-                        )
+                        backoff_seconds = self.retry_breaker.compute_delay_seconds(attempt)
+                        inner_span.set_attribute("retry.delay_ms", int(backoff_seconds * 1000))
+                        inner_span.set_attribute("retry.cause_attribution", cause.value)
                         inner_span.set_attribute("retry.fail_class", cause.value)
                         last_failure_class = cause.value
                         # Sleep outside the span CM is fine; OTel ends the span
@@ -447,16 +423,13 @@ class RetryBreakerFallbackDispatcher:
                         # attempt terminal so the inner span carries the
                         # actually-elapsed backoff hint.
                     elif (
-                        next_stage is StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF
-                        and is_last_attempt
+                        next_stage is StaircaseStage.STAGE_2_RETRY_WITH_BACKOFF and is_last_attempt
                     ):
                         # Staircase would retry, but max_attempts exhausted.
                         # Per CP §3.5: `retry.fail_class = terminal-fail-exit`
                         # for the last-attempt exhaustion (canonical 5-class entry).
                         inner_span.set_attribute("retry.delay_ms", 0)
-                        inner_span.set_attribute(
-                            "retry.cause_attribution", cause.value
-                        )
+                        inner_span.set_attribute("retry.cause_attribution", cause.value)
                         inner_span.set_attribute(
                             "retry.fail_class",
                             ValidatorRetryExitClass.TERMINAL_FAIL_EXIT.value,
@@ -476,9 +449,7 @@ class RetryBreakerFallbackDispatcher:
                         # class itself (HITL_RECOVERABLE / PERMANENT_FAIL_EXIT /
                         # TERMINAL_FAIL_EXIT per the staircase skip-class set).
                         inner_span.set_attribute("retry.delay_ms", 0)
-                        inner_span.set_attribute(
-                            "retry.cause_attribution", cause.value
-                        )
+                        inner_span.set_attribute("retry.cause_attribution", cause.value)
                         inner_span.set_attribute("retry.fail_class", cause.value)
                         transition = breaker.record_failure()
                         if transition is not None:
@@ -497,9 +468,7 @@ class RetryBreakerFallbackDispatcher:
                     transition = breaker.record_success()
                     if transition is not None:
                         self._emit_breaker_transition(transition, outer_span)
-                    return _PerCandidateTerminal(
-                        result=result, last_failure_class=None
-                    )
+                    return _PerCandidateTerminal(result=result, last_failure_class=None)
 
             # Sleep between retries (outside the inner span CM).
             await self.sleep_fn(self.retry_breaker.compute_delay_seconds(attempt))

@@ -34,9 +34,7 @@ def test_schema_has_exactly_four_attributes() -> None:
 
 def test_schema_has_single_span_site() -> None:
     """AC #1 — all 4 attributes on the `hitl.operator_burden.evaluated` site."""
-    sites = {
-        attr.span_site for attr in HITL_OPERATOR_BURDEN_SPAN_NAMESPACE_SCHEMA.values()
-    }
+    sites = {attr.span_site for attr in HITL_OPERATOR_BURDEN_SPAN_NAMESPACE_SCHEMA.values()}
     assert sites == {SPAN_SITE_HITL_OPERATOR_BURDEN_EVALUATED}
 
 
@@ -52,9 +50,7 @@ def test_schema_attribute_names_verbatim() -> None:
 
 def test_span_site_constant_value() -> None:
     """AC #5 — span-site constant has the byte-exact span-name value."""
-    assert (
-        SPAN_SITE_HITL_OPERATOR_BURDEN_EVALUATED == "hitl.operator_burden.evaluated"
-    )
+    assert SPAN_SITE_HITL_OPERATOR_BURDEN_EVALUATED == "hitl.operator_burden.evaluated"
 
 
 # ---------------------------------------------------------------------------
@@ -64,9 +60,7 @@ def test_span_site_constant_value() -> None:
 
 def test_cumulative_invocations_is_int_medium() -> None:
     """AC #3 — `hitl.operator_burden.cumulative_invocations` is int + medium."""
-    attr = HITL_OPERATOR_BURDEN_SPAN_NAMESPACE_SCHEMA[
-        "hitl.operator_burden.cumulative_invocations"
-    ]
+    attr = HITL_OPERATOR_BURDEN_SPAN_NAMESPACE_SCHEMA["hitl.operator_burden.cumulative_invocations"]
     assert attr.value_type == AttributeValueType.INT
     assert attr.cardinality == Cardinality.MEDIUM
 
@@ -80,9 +74,7 @@ def test_window_ms_is_int_low() -> None:
 
 def test_persona_tier_is_enum_low() -> None:
     """AC #3 — `hitl.operator_burden.persona_tier` is enum + low (bounded-4)."""
-    attr = HITL_OPERATOR_BURDEN_SPAN_NAMESPACE_SCHEMA[
-        "hitl.operator_burden.persona_tier"
-    ]
+    attr = HITL_OPERATOR_BURDEN_SPAN_NAMESPACE_SCHEMA["hitl.operator_burden.persona_tier"]
     assert attr.value_type == AttributeValueType.ENUM_REF
     assert attr.cardinality == Cardinality.LOW
 

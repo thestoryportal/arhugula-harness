@@ -89,9 +89,7 @@ def test_pause_reason_cardinality_four() -> None:
 def test_capture_pause_snapshot_surface() -> None:
     """#4 — capture_pause_snapshot declares the pause-protocol surface."""
     with pytest.raises(NotImplementedError):
-        capture_pause_snapshot(
-            WorkflowID("w0"), PauseReason.OPERATOR_INITIATED_PAUSE
-        )
+        capture_pause_snapshot(WorkflowID("w0"), PauseReason.OPERATOR_INITIATED_PAUSE)
 
 
 def test_attempt_resume_surface() -> None:
@@ -112,26 +110,27 @@ def test_resume_outcome_cardinality_four() -> None:
 
 def test_clean_resume_no_diff() -> None:
     """#7 — an empty / immaterial diff-set classifies as RESUME_CLEAN."""
-    assert classify_resume((), revalidation_succeeded=True) is (
-        ResumeOutcomeKind.RESUME_CLEAN
+    assert classify_resume((), revalidation_succeeded=True) is (ResumeOutcomeKind.RESUME_CLEAN)
+    assert (
+        classify_resume((_material(False),), revalidation_succeeded=True)
+        is ResumeOutcomeKind.RESUME_CLEAN
     )
-    assert classify_resume(
-        (_material(False),), revalidation_succeeded=True
-    ) is ResumeOutcomeKind.RESUME_CLEAN
 
 
 def test_revalidation_resume_with_diff() -> None:
     """#7 — a material diff with successful revalidation resumes."""
-    assert classify_resume(
-        (_material(True),), revalidation_succeeded=True
-    ) is ResumeOutcomeKind.RESUME_AFTER_REVALIDATION
+    assert (
+        classify_resume((_material(True),), revalidation_succeeded=True)
+        is ResumeOutcomeKind.RESUME_AFTER_REVALIDATION
+    )
 
 
 def test_abort_on_revalidation_fail() -> None:
     """#7 — a material diff with failed revalidation aborts."""
-    assert classify_resume(
-        (_material(True),), revalidation_succeeded=False
-    ) is ResumeOutcomeKind.ABORT_REVALIDATION_FAILED
+    assert (
+        classify_resume((_material(True),), revalidation_succeeded=False)
+        is ResumeOutcomeKind.ABORT_REVALIDATION_FAILED
+    )
 
 
 def test_resume_classification_deterministic() -> None:

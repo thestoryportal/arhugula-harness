@@ -20,10 +20,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-from harness_core import PersonaTier
 from harness_as.anthropic_graceful_degradation import MemoryToolStorageBackend
 from harness_as.sandbox_tier import SandboxTier
+from harness_core import PersonaTier
 from harness_core.identity import StepID
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class import EngineClass
@@ -35,12 +34,6 @@ from harness_cp.workflow_driver_types import (
     WorkflowStep,
 )
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-    InMemorySpanExporter,
-)
-
 from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
 from harness_runtime.lifecycle.memory_tool_dispatch import (
     MEMORY_COMMAND_KIND,
@@ -57,7 +50,11 @@ from harness_runtime.lifecycle.memory_tool_types import (
     MemoryCallbackIOError,
     MemoryPathViolationError,
 )
-
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures + helpers.
@@ -434,19 +431,19 @@ async def test_each_command_emits_correct_kind(
 
 
 class _IOFailingBackend:
-    async def view(self, path: str) -> bytes:  # noqa: ARG002
+    async def view(self, path: str) -> bytes:
         return b""
 
-    async def create(self, path: str, content: bytes) -> None:  # noqa: ARG002
+    async def create(self, path: str, content: bytes) -> None:
         raise MemoryCallbackIOError(f"create({path!r}) simulated I/O failure")
 
-    async def delete(self, path: str) -> None:  # noqa: ARG002
+    async def delete(self, path: str) -> None:
         pass
 
-    async def str_replace(self, path: str, old: str, new: str) -> None:  # noqa: ARG002
+    async def str_replace(self, path: str, old: str, new: str) -> None:
         pass
 
-    async def insert(self, path: str, line: int, content: str) -> None:  # noqa: ARG002
+    async def insert(self, path: str, line: int, content: str) -> None:
         pass
 
 
@@ -683,7 +680,7 @@ async def test_memory_dispatch_routes_through_inner_loop(tmp_path: Path) -> None
 
 
 def test_module_importable() -> None:
-    from harness_runtime.lifecycle import memory_tool_dispatch  # noqa: F401
+    from harness_runtime.lifecycle import memory_tool_dispatch
 
     assert callable(memory_tool_dispatch.execute_with_memory_callbacks)
     assert callable(memory_tool_dispatch.step_has_memory_tool)

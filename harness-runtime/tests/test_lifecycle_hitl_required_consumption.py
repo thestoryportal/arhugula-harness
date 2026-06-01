@@ -12,7 +12,6 @@ from harness_as import BlastRadiusTier
 from harness_core import PersonaTier
 from harness_cp.cp_shared_types import MCPTrustTier
 from harness_cp.gate_level_rule import GateLevel, GateLevelInput
-
 from harness_runtime.lifecycle.hitl_required_consumption import (
     evaluate_hitl_required,
 )

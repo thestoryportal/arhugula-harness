@@ -94,10 +94,7 @@ def test_unknown_attribute_rejected_as_dashboard_dim() -> None:
 
 def test_safe_attribute_passes_prohibited_gate() -> None:
     """Acceptance #6 — a non-prohibited attribute passes the prohibited gate."""
-    assert (
-        assert_cardinality_prohibited_not_in_dashboard_dimension("sandbox.tier")
-        is None
-    )
+    assert assert_cardinality_prohibited_not_in_dashboard_dimension("sandbox.tier") is None
 
 
 def test_unknown_attribute_passes_prohibited_gate() -> None:
@@ -106,7 +103,4 @@ def test_unknown_attribute_passes_prohibited_gate() -> None:
     The prohibited gate only blocks the §11.3 set; unknown attributes are
     caught by the cardinality-safe gate (acceptance #5), not this one.
     """
-    assert (
-        assert_cardinality_prohibited_not_in_dashboard_dimension("some.unknown.attr")
-        is None
-    )
+    assert assert_cardinality_prohibited_not_in_dashboard_dimension("some.unknown.attr") is None

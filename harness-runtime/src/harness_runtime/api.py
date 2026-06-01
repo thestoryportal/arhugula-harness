@@ -75,19 +75,12 @@ poison the lock.
 from __future__ import annotations
 
 import asyncio
-import uuid
 from collections.abc import Sequence
-from typing import Any, Literal, Protocol, cast, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from harness_core.identity import WorkflowID
 from harness_core.workload_class import WorkloadClass
 from harness_cp.cp_shared_types import ModelBinding
-from harness_cp.workflow_driver import (
-    DriverContext as _CpDriverContext,
-)
-from harness_cp.workflow_driver import (
-    execute_workflow,
-)
 from harness_cp.workflow_driver_types import RunResult as _CpRunResult
 from harness_cp.workflow_driver_types import (
     RunStatus as _CpRunStatus,
@@ -286,9 +279,7 @@ _run_lock: asyncio.Lock = asyncio.Lock()
 # ---------------------------------------------------------------------------
 
 
-async def _refuse_elicitation_in_api_run(
-    context: Any, params: Any
-) -> Any:
+async def _refuse_elicitation_in_api_run(context: Any, params: Any) -> Any:
     """Elicitation callback for `api.run()`'s in-process ClientSession.
 
     Per the operator-ratified Q2+Q3 reading at the C-RT-18 v1.12 fork:
@@ -343,9 +334,7 @@ async def _invoke_run_workflow_via_in_process_mcp(
         elicitation_callback=_refuse_elicitation_in_api_run,
         raise_exceptions=True,
     ) as session:
-        tool_result = await session.call_tool(
-            "run_workflow", {"workflow_id": workflow_id}
-        )
+        tool_result = await session.call_tool("run_workflow", {"workflow_id": workflow_id})
 
     if tool_result.isError:
         # Tool body raised. FastMCP serializes the error text into
@@ -357,8 +346,7 @@ async def _invoke_run_workflow_via_in_process_mcp(
             else "unknown tool error"
         )
         raise RuntimeError(
-            f"run_workflow MCP tool raised inside in-process invocation: "
-            f"{error_text}"
+            f"run_workflow MCP tool raised inside in-process invocation: {error_text}"
         )
 
     if not tool_result.content:
@@ -371,8 +359,7 @@ async def _invoke_run_workflow_via_in_process_mcp(
     payload_text = getattr(text_block, "text", None)
     if payload_text is None:
         raise RuntimeError(
-            f"run_workflow MCP tool returned non-text content: "
-            f"{type(text_block).__name__}"
+            f"run_workflow MCP tool returned non-text content: {type(text_block).__name__}"
         )
 
     # FastMCP wraps dict returns in a top-level JSON object; verify the

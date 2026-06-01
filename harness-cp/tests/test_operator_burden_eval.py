@@ -57,26 +57,20 @@ def test_gate_evaluated_keep_when_required() -> None:
     """#2 — hitl.gate.evaluated kept iff a gate was required."""
     rule = _rule("hitl.gate.evaluated")
     assert rule.keep_predicate(_Span("hitl.gate.evaluated", gate_required=True))
-    assert not rule.keep_predicate(
-        _Span("hitl.gate.evaluated", gate_required=False)
-    )
+    assert not rule.keep_predicate(_Span("hitl.gate.evaluated", gate_required=False))
     # via evaluate_tail_keep dispatch
     assert evaluate_tail_keep(_Span("hitl.gate.evaluated", gate_required=True))
 
 
 def test_invocation_responded_always_keep() -> None:
     """#2 — hitl.invocation.responded is always-keep."""
-    assert _rule("hitl.invocation.responded").keep_predicate(
-        _Span("hitl.invocation.responded")
-    )
+    assert _rule("hitl.invocation.responded").keep_predicate(_Span("hitl.invocation.responded"))
     assert evaluate_tail_keep(_Span("hitl.invocation.responded"))
 
 
 def test_policy_overridden_always_keep() -> None:
     """#2 — hitl.policy.overridden is always-keep (override audit evidence)."""
-    assert _rule("hitl.policy.overridden").keep_predicate(
-        _Span("hitl.policy.overridden")
-    )
+    assert _rule("hitl.policy.overridden").keep_predicate(_Span("hitl.policy.overridden"))
 
 
 def test_responses_per_class_cardinality_four() -> None:

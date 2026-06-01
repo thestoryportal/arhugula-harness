@@ -73,6 +73,7 @@ __all__ = [
 
 # --- §23.1 export record types ---------------------------------------------
 
+
 class ConsumerAxis(StrEnum):
     """The axes that consume an OD substrate-seam export (C-OD-23 §23.1)."""
 
@@ -188,36 +189,25 @@ _EXPORTS: tuple[SubstrateSeamExport, ...] = (
         export_name="F3 lifecycle event-to-span-event mapping (8 events)",
         source_unit="U-OD-08",
         contract_anchor="C-OD-06 §6.1",
-        consumer_axis=frozenset(
-            {ConsumerAxis.CONTROL_PLANE, ConsumerAxis.PHASE_6_IMPLEMENTATION}
-        ),
+        consumer_axis=frozenset({ConsumerAxis.CONTROL_PLANE, ConsumerAxis.PHASE_6_IMPLEMENTATION}),
         cross_axis_edge_targets=("U-CP-54",),
     ),
     SubstrateSeamExport(
-        export_name=(
-            "harness.breaker.* 7-attribute substrate-anchored canonical schema"
-        ),
+        export_name=("harness.breaker.* 7-attribute substrate-anchored canonical schema"),
         source_unit="U-OD-09",
         contract_anchor="C-OD-07 §7.1",
-        consumer_axis=frozenset(
-            {ConsumerAxis.CONTROL_PLANE, ConsumerAxis.PHASE_6_IMPLEMENTATION}
-        ),
+        consumer_axis=frozenset({ConsumerAxis.CONTROL_PLANE, ConsumerAxis.PHASE_6_IMPLEMENTATION}),
         cross_axis_edge_targets=("U-CP-54",),
     ),
     SubstrateSeamExport(
-        export_name=(
-            "18-entry always-sampled set + 13-entry base-rate set + "
-            "per-cell envelope"
-        ),
+        export_name=("18-entry always-sampled set + 13-entry base-rate set + per-cell envelope"),
         source_unit="U-OD-11 + U-OD-12",
         contract_anchor="C-OD-09 §9.2 + C-OD-10 §10.1",
         consumer_axis=frozenset({ConsumerAxis.PHASE_6_IMPLEMENTATION}),
         cross_axis_edge_targets=(),
     ),
     SubstrateSeamExport(
-        export_name=(
-            "Per-span cost formula + idempotency-key join + cross-family rollup"
-        ),
+        export_name=("Per-span cost formula + idempotency-key join + cross-family rollup"),
         source_unit="U-OD-18 + U-OD-20 + U-OD-21",
         contract_anchor="C-OD-14 §14.1, §14.4, §14.5 + C-OD-15 §15.1",
         consumer_axis=frozenset(
@@ -231,10 +221,7 @@ _EXPORTS: tuple[SubstrateSeamExport, ...] = (
         cross_axis_edge_targets=("U-IS-17", "U-AS-33", "U-CP-54", "U-CP-55"),
     ),
     SubstrateSeamExport(
-        export_name=(
-            "Local-first OTLP collector at cell-1 + per-cell collector "
-            "placement matrix"
-        ),
+        export_name=("Local-first OTLP collector at cell-1 + per-cell collector placement matrix"),
         source_unit="U-OD-27 + U-OD-28",
         contract_anchor="C-OD-19 §19.1-§19.3 + C-OD-20 §20.1",
         consumer_axis=frozenset(
@@ -274,9 +261,7 @@ _F2_12_INHERITANCE: F2_12_CarryForwardInheritance = F2_12_CarryForwardInheritanc
     closure_target="OD plan v2 (revision-pass mode per SKILL.md §8)",
     closure_pending_at_v1=True,
     partial_closure_rejected=True,
-    forward_routing=(
-        "parallel council-orchestrator C7+C9 session per ADD §6.3.1 active path"
-    ),
+    forward_routing=("parallel council-orchestrator C7+C9 session per ADD §6.3.1 active path"),
 )
 
 
@@ -298,26 +283,20 @@ _CROSS_AXIS_EDGE_COUNT: int = 26
 #: THE TERMINAL AGGREGATE EXPORTER — the OD axis's substrate seam exports
 #: aggregate manifest. Closes the OD axis-stream; consumed at sub-phase 7c
 #: cross-axis composition.
-OD_SUBSTRATE_SEAM_EXPORTS_MANIFEST: SubstrateSeamExportsManifest = (
-    SubstrateSeamExportsManifest(
-        exports=_EXPORTS,
-        cross_axis_edge_count=_CROSS_AXIS_EDGE_COUNT,
-        cross_axis_edge_breakdown=_CROSS_AXIS_EDGE_BREAKDOWN,
-        f2_12_carry_forward_inheritance=_F2_12_INHERITANCE,
-        manifest_scope=(
-            ManifestScope.TERMINAL_AGGREGATE_FOR_PHASE_6_PLUS_IMPLEMENTATION
-        ),
-    )
+OD_SUBSTRATE_SEAM_EXPORTS_MANIFEST: SubstrateSeamExportsManifest = SubstrateSeamExportsManifest(
+    exports=_EXPORTS,
+    cross_axis_edge_count=_CROSS_AXIS_EDGE_COUNT,
+    cross_axis_edge_breakdown=_CROSS_AXIS_EDGE_BREAKDOWN,
+    f2_12_carry_forward_inheritance=_F2_12_INHERITANCE,
+    manifest_scope=(ManifestScope.TERMINAL_AGGREGATE_FOR_PHASE_6_PLUS_IMPLEMENTATION),
 )
 
 #: Closure invariant — the manifest declares exactly 8 export sub-sections
 #: (C-OD-23 §23.1, acc #1) and the M-3-conformed cross-axis edge aggregate
 #: (acc #3/#4).
 assert len(OD_SUBSTRATE_SEAM_EXPORTS_MANIFEST.exports) == 8, (
-    "OD substrate seam exports manifest must declare exactly 8 export "
-    "sub-sections (C-OD-23 §23.1)"
+    "OD substrate seam exports manifest must declare exactly 8 export sub-sections (C-OD-23 §23.1)"
 )
-assert (
-    OD_SUBSTRATE_SEAM_EXPORTS_MANIFEST.cross_axis_edge_count
-    == sum(_CROSS_AXIS_EDGE_BREAKDOWN.values())
+assert OD_SUBSTRATE_SEAM_EXPORTS_MANIFEST.cross_axis_edge_count == sum(
+    _CROSS_AXIS_EDGE_BREAKDOWN.values()
 ), "cross_axis_edge_count must equal the sum of the per-axis breakdown"

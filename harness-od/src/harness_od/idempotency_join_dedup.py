@@ -232,9 +232,7 @@ class DedupOutcome(StrEnum):
     DROP_DETERMINISTIC_REPLAY_RE_READ = "DROP_DETERMINISTIC_REPLAY_RE_READ"
     RECORD_REPLAY_DERIVED = "RECORD_REPLAY_DERIVED"
     RECORD_FIRST_INGESTION = "RECORD_FIRST_INGESTION"
-    ERROR_UNEXPECTED_RE_INGESTION_FOR_NO_REPLAY = (
-        "ERROR_UNEXPECTED_RE_INGESTION_FOR_NO_REPLAY"
-    )
+    ERROR_UNEXPECTED_RE_INGESTION_FOR_NO_REPLAY = "ERROR_UNEXPECTED_RE_INGESTION_FOR_NO_REPLAY"
     ESCALATE_REPLAY_SEMANTIC_DIVERGENCE = "ESCALATE_REPLAY_SEMANTIC_DIVERGENCE"
 
 
@@ -277,9 +275,7 @@ def dedupe_on_replay(
             span.trace_id == ledger_entry.original_trace_id
             and span.span_id == ledger_entry.original_span_id
         )
-        cause_matches = (
-            span.retry_cause_attribution == ledger_entry.cause_attribution
-        )
+        cause_matches = span.retry_cause_attribution == ledger_entry.cause_attribution
         if topology_matches and cause_matches:
             return DedupOutcome.DROP_DETERMINISTIC_REPLAY_RE_READ
         return DedupOutcome.ESCALATE_REPLAY_SEMANTIC_DIVERGENCE
@@ -405,9 +401,7 @@ def per_attempt_cost_attribution_roll_up(
             continue
         attempt = record.retry_attempt_number if record.retry_attempt_number else 1
         total_cost += record.total_cost
-        per_attempt_costs[attempt] = (
-            per_attempt_costs.get(attempt, 0.0) + record.total_cost
-        )
+        per_attempt_costs[attempt] = per_attempt_costs.get(attempt, 0.0) + record.total_cost
     return ParentOperationTotalCost(
         parent_operation_id=parent_operation_id,
         total_cost=total_cost,
@@ -428,15 +422,11 @@ class F2_12_DeferredSurface(StrEnum):  # noqa: N801 — name is the U-OD-20 plan
     §14.5.1 (acceptance #5).
     """
 
-    SPAN_REEMISSION_SEMANTICS_UNDER_ENGINE_REPLAY = (
-        "SPAN_REEMISSION_SEMANTICS_UNDER_ENGINE_REPLAY"
-    )
+    SPAN_REEMISSION_SEMANTICS_UNDER_ENGINE_REPLAY = "SPAN_REEMISSION_SEMANTICS_UNDER_ENGINE_REPLAY"
     RETRY_ATTEMPT_SIBLING_SPAN_DISCIPLINE_AT_D6_INGESTION = (
         "RETRY_ATTEMPT_SIBLING_SPAN_DISCIPLINE_AT_D6_INGESTION"
     )
-    TRACE_INGESTION_DEDUP_COMPOSITION_ALGORITHM = (
-        "TRACE_INGESTION_DEDUP_COMPOSITION_ALGORITHM"
-    )
+    TRACE_INGESTION_DEDUP_COMPOSITION_ALGORITHM = "TRACE_INGESTION_DEDUP_COMPOSITION_ALGORITHM"
 
 
 class ClosureStatus(StrEnum):
@@ -496,9 +486,7 @@ class F2_12_AffectedContractNotation(BaseModel):  # noqa: N801 — name is the U
     #: historical active engagement site (acceptance #6).
     active_engagement_site: str = "C-OD-14 §14.5"
     #: the v1.3 closed engagement site (acceptance #6).
-    closed_engagement_site: str = (
-        "C-OD-14 §14.5 (closed) + §14.5.1 + §14.5.2 + §14.5.3 + §14.5.4"
-    )
+    closed_engagement_site: str = "C-OD-14 §14.5 (closed) + §14.5.1 + §14.5.2 + §14.5.3 + §14.5.4"
     #: the 3 deferred surfaces — historical record (acceptance #5).
     deferred_surfaces_at_v1: frozenset[F2_12_DeferredSurface]
     #: each deferred surface mapped to its closing cascade step label (acc #5).
@@ -609,9 +597,7 @@ F2_12_NOTATION: F2_12_AffectedContractNotation = F2_12_AffectedContractNotation(
     deferred_surfaces_at_v1=frozenset(F2_12_DeferredSurface),
     closure_status_per_surface={
         F2_12_DeferredSurface.SPAN_REEMISSION_SEMANTICS_UNDER_ENGINE_REPLAY: "Step 2a",
-        F2_12_DeferredSurface.RETRY_ATTEMPT_SIBLING_SPAN_DISCIPLINE_AT_D6_INGESTION: (
-            "Step 2b"
-        ),
+        F2_12_DeferredSurface.RETRY_ATTEMPT_SIBLING_SPAN_DISCIPLINE_AT_D6_INGESTION: ("Step 2b"),
         F2_12_DeferredSurface.TRACE_INGESTION_DEDUP_COMPOSITION_ALGORITHM: "Step 2b",
     },
     closure_path=F2_12_CLOSURE_PATH,

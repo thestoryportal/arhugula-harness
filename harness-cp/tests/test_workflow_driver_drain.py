@@ -72,6 +72,7 @@ class _SingleKindRegistry:
 def _registry(dispatcher: StepDispatcher) -> StepDispatcherRegistry:
     return cast(StepDispatcherRegistry, _SingleKindRegistry(StepKind.INFERENCE_STEP, dispatcher))
 
+
 # ---------------------------------------------------------------------------
 # Fixtures + fakes
 # ---------------------------------------------------------------------------
@@ -557,9 +558,7 @@ def test_drained_flag_not_set_on_step_failure() -> None:
         def __init__(self) -> None:
             self.dispatched: list[tuple[StepEffectiveBinding, WorkflowStep]] = []
 
-        def dispatch(
-            self, binding: StepEffectiveBinding, step: WorkflowStep
-        ) -> dict[str, Any]:
+        def dispatch(self, binding: StepEffectiveBinding, step: WorkflowStep) -> dict[str, Any]:
             raise RuntimeError("step failure")
 
     assert not flag.is_set()

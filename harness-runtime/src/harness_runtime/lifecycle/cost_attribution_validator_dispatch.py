@@ -78,9 +78,7 @@ _DEFAULT_REPLAY_DISPOSITION = ReplayDisposition.NO_REPLAY
 _VALIDATOR_FAMILY_TAG = "validator"
 
 
-def _compute_validator_cost(
-    rate_table: RateTable, execution_time_ms: float
-) -> Decimal:
+def _compute_validator_cost(rate_table: RateTable, execution_time_ms: float) -> Decimal:
     """Compute validator-dispatch cost per Decision 2.D5 CPU-meter formula.
 
     Per OD spec v1.8 §C-OD-28.1 RATE_TABLE_V1 substrate + U-OD-40 AC #1:
@@ -207,9 +205,7 @@ def attribute_validator_dispatch_cost(
         gen_ai_provider_name=f"validator:{validator_id}",
         gen_ai_request_model="",
     )
-    attached = cost_chain.attach_idempotency_key(
-        span_id, parent_idempotency_key, cost_record
-    )
+    attached = cost_chain.attach_idempotency_key(span_id, parent_idempotency_key, cost_record)
 
     # Substep 4 + 5 — project to typed CostRecordAuditPayload via the
     # canonical helper; convert via cp_audit_to_od_audit `cost:` action_id
@@ -289,9 +285,7 @@ class CostAttributingValidatorHook:
         """
         validator_id = str(step.step_id)
         span_id = f"validator-evaluate-{step_context.workflow_id}-{step.step_id}"
-        idempotency_key = (
-            f"validator:{step_context.workflow_id}:{step.step_id}"
-        )
+        idempotency_key = f"validator:{step_context.workflow_id}:{step.step_id}"
 
         attribute_validator_dispatch_cost(
             rate_table=self._rate_table,

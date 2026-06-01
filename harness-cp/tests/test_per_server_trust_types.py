@@ -23,8 +23,6 @@ U-CP-67 ACs (CP plan v2.15 §1, preserved at v2.17):
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from harness_cp.cp_shared_types import MCPTrustTier
 from harness_cp.per_server_trust_types import (
     MCPPrimitive,
@@ -33,7 +31,7 @@ from harness_cp.per_server_trust_types import (
     TrustEvaluation,
     TrustPolicy,
 )
-
+from pydantic import ValidationError
 
 # ---------------------------------------------------------------------------
 # U-CP-66 AC #1 — MCPPrimitive 4-class verbatim

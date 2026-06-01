@@ -53,7 +53,6 @@ from harness_as.sandbox_tier_floor import MCPServerTrustLevel
 from harness_as.tool_contract import ToolContract
 from harness_core import ClientName, PersonaTier
 from harness_core.deployment_surface import DeploymentSurface
-from harness_core.workload_class import WorkloadClass
 from harness_cp.cp_shared_types import MCPTrustTier, ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
@@ -74,12 +73,6 @@ from harness_cp.workflow_driver_types import (
     WorkflowStep,
 )
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-    InMemorySpanExporter,
-)
-
 from harness_runtime.bootstrap.factories.mcp_client_host_factory import (
     materialize_mcp_client_host_stage,
 )
@@ -96,7 +89,11 @@ from harness_runtime.types import (
     ProviderSecretsConfig,
     RuntimeConfig,
 )
-
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 _FIXTURE_PATH = (Path(__file__).parent / "fixtures" / "mcp_echo_server.py").resolve()
 

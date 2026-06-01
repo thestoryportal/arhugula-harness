@@ -39,7 +39,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
 
-
 # ----------------------------------------------------------------------------
 # CostRecordAuditPayload (§C-OD-26.6 audit-ledger projection)
 # ----------------------------------------------------------------------------

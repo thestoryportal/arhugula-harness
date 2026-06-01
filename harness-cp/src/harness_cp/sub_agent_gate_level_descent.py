@@ -122,9 +122,7 @@ def dispatch_sub_agent(
     entry and the F2 `LedgerEntryRef` is materialized.
     """
     _ = sub_agent_brief
-    child_ceiling = compute_child_blast_radius_ceiling(
-        _blast_radius_of(parent_sandbox_tier)
-    )
+    child_ceiling = compute_child_blast_radius_ceiling(_blast_radius_of(parent_sandbox_tier))
     return SubAgentGateLevelDescent(
         parent_gate_level=parent_gate_level,
         parent_sandbox_tier=parent_sandbox_tier,
@@ -148,9 +146,7 @@ def _blast_radius_of(tier: SandboxTier) -> BlastRadiusTier:
     return BlastRadiusTier.LOCAL_MUTATION
 
 
-def assert_monotonic_descent(
-    parent_gate_level: GateLevel, child_gate_level: GateLevel
-) -> None:
+def assert_monotonic_descent(parent_gate_level: GateLevel, child_gate_level: GateLevel) -> None:
     """Enforce the §12.2 monotonic-descent invariant.
 
     `child_gate_level <= parent_gate_level` — ascent is structurally

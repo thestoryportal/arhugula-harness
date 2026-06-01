@@ -474,9 +474,7 @@ class RuntimeSubAgentDispatcher:
         # carry-forward (LedgerWriter.append does not expose the forward
         # chain hash + the OD type accepts opaque str).
         child_index = getattr(descent, "child_index", 0)
-        dispatch_action_id = Identifier(
-            f"dispatch:{parent_action_id}:{child_index}"
-        )
+        dispatch_action_id = Identifier(f"dispatch:{parent_action_id}:{child_index}")
 
         try:
             # 8b — F2-write the dispatch action.
@@ -485,9 +483,7 @@ class RuntimeSubAgentDispatcher:
                 idempotency_key=dispatch_action_id,
                 actor=step_context.parent_actor,
                 timestamp=self.time_source(),
-                procedural_tier_snapshot_ref=(
-                    self.procedural_tier_snapshot_resolver()
-                ),
+                procedural_tier_snapshot_ref=(self.procedural_tier_snapshot_resolver()),
             )
             f2_key = WriteKey(
                 thread_id=Identifier(f"dispatch:{parent_action_id}"),
@@ -558,9 +554,7 @@ class RuntimeSubAgentDispatcher:
             ) from exc
 
         # --- Step 2: compose HandoffContext (AC #4) ------------------------
-        handoff_context = _compose_handoff_context(
-            step_context=step_context, payload=payload
-        )
+        handoff_context = _compose_handoff_context(step_context=step_context, payload=payload)
 
         # --- Step 3: compute gate-level descent (AC #5a) -------------------
         parent_action_id = cast(ActionID, step_context.parent_action_id)
@@ -602,15 +596,11 @@ class RuntimeSubAgentDispatcher:
             )
 
         # --- Step 5: open subagent.span + set attributes (AC #6) -----------
-        tracer = self.tracer_provider.get_tracer(
-            "harness.runtime.sub_agent_dispatch"
-        )
+        tracer = self.tracer_provider.get_tracer("harness.runtime.sub_agent_dispatch")
         with tracer.start_as_current_span("subagent.span") as span:
             span_context = span.get_span_context()
             span_id_hex = f"{span_context.span_id:016x}"
-            parent_span_context = (
-                span.parent if hasattr(span, "parent") and span.parent else None
-            )
+            parent_span_context = span.parent if hasattr(span, "parent") and span.parent else None
             parent_span_id_hex = (
                 f"{parent_span_context.span_id:016x}"
                 if parent_span_context is not None
@@ -728,5 +718,3 @@ class RuntimeSubAgentDispatcher:
 
             # --- Step 9: return step output --------------------------------
             return step_output
-
-

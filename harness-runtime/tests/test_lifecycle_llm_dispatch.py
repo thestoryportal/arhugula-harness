@@ -25,8 +25,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from harness_core import PersonaTier
 from harness_as.sandbox_tier import SandboxTier
+from harness_core import PersonaTier
 from harness_core.identity import StepID
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class import EngineClass
@@ -362,9 +362,7 @@ async def test_conversation_id_emitted_from_step_context_workflow_id() -> None:
     tp, exporter = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(providers={"openai": adapter}, tracer_provider=tp)
 
-    await dispatcher.dispatch(
-        _binding("openai"), _step(), step_context=_step_context()
-    )
+    await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
 
     attrs = (exporter.get_finished_spans()[0].attributes) or {}
     assert attrs["gen_ai.conversation.id"] == "test-wf"
@@ -375,13 +373,9 @@ async def test_server_address_and_port_emitted_for_anthropic() -> None:
     """Anthropic emits static `api.anthropic.com:443` per Path A."""
     adapter = _AnthropicFakeAdapter(_AnthropicClient())
     tp, exporter = _tracer_provider_with_exporter()
-    dispatcher = RuntimeLLMDispatcher(
-        providers={"anthropic": adapter}, tracer_provider=tp
-    )
+    dispatcher = RuntimeLLMDispatcher(providers={"anthropic": adapter}, tracer_provider=tp)
 
-    await dispatcher.dispatch(
-        _binding("anthropic"), _step(), step_context=_step_context()
-    )
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
 
     attrs = (exporter.get_finished_spans()[0].attributes) or {}
     assert attrs["server.address"] == "api.anthropic.com"
@@ -395,9 +389,7 @@ async def test_server_address_and_port_emitted_for_openai() -> None:
     tp, exporter = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(providers={"openai": adapter}, tracer_provider=tp)
 
-    await dispatcher.dispatch(
-        _binding("openai"), _step(), step_context=_step_context()
-    )
+    await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
 
     attrs = (exporter.get_finished_spans()[0].attributes) or {}
     assert attrs["server.address"] == "api.openai.com"
@@ -415,9 +407,7 @@ async def test_server_address_and_port_absent_for_ollama_when_host_unset() -> No
         providers={"ollama": adapter}, tracer_provider=tp, ollama_host=None
     )
 
-    await dispatcher.dispatch(
-        _binding("ollama"), _step(), step_context=_step_context()
-    )
+    await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
 
     attrs = (exporter.get_finished_spans()[0].attributes) or {}
     assert "server.address" not in attrs
@@ -436,9 +426,7 @@ async def test_server_address_and_port_emitted_for_ollama_with_localhost_host() 
         ollama_host="http://localhost:11434",
     )
 
-    await dispatcher.dispatch(
-        _binding("ollama"), _step(), step_context=_step_context()
-    )
+    await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
 
     attrs = (exporter.get_finished_spans()[0].attributes) or {}
     assert attrs["server.address"] == "localhost"
@@ -457,9 +445,7 @@ async def test_server_address_and_port_emitted_for_ollama_with_remote_host() -> 
         ollama_host="http://ollama.internal:8080",
     )
 
-    await dispatcher.dispatch(
-        _binding("ollama"), _step(), step_context=_step_context()
-    )
+    await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
 
     attrs = (exporter.get_finished_spans()[0].attributes) or {}
     assert attrs["server.address"] == "ollama.internal"
@@ -477,9 +463,7 @@ async def test_server_address_and_port_emitted_for_ollama_with_host_only() -> No
         ollama_host="ollama.internal",
     )
 
-    await dispatcher.dispatch(
-        _binding("ollama"), _step(), step_context=_step_context()
-    )
+    await dispatcher.dispatch(_binding("ollama"), _step(), step_context=_step_context())
 
     attrs = (exporter.get_finished_spans()[0].attributes) or {}
     assert attrs["server.address"] == "ollama.internal"
@@ -666,9 +650,7 @@ async def test_anthropic_tokenizer_version_always_emits_v1_for_non_opus_47() -> 
 @pytest.mark.asyncio
 async def test_anthropic_tokenizer_version_emits_v2_for_opus_47() -> None:
     """§14.2 row 9 — Opus 4.7 model strings get tokenizer_version=v2."""
-    attrs = await _dispatch_with_payload(
-        _default_payload(), model="claude-opus-4-7-20250101"
-    )
+    attrs = await _dispatch_with_payload(_default_payload(), model="claude-opus-4-7-20250101")
     assert attrs["anthropic.tokenizer_version"] == "v2"
 
 
@@ -711,9 +693,7 @@ async def test_anthropic_thinking_budget_tokens_omitted_when_thinking_absent() -
 async def test_anthropic_thinking_effort_emits_when_output_config_effort_present() -> None:
     """§14.2 row 7 — `output_config.effort` is a beta SDK field (nested)."""
     attrs = await _dispatch_with_payload(
-        _default_payload(
-            {"max_tokens": 100, "output_config": {"effort": "high"}}
-        )
+        _default_payload({"max_tokens": 100, "output_config": {"effort": "high"}})
     )
     assert attrs["anthropic.thinking_effort"] == "high"
 

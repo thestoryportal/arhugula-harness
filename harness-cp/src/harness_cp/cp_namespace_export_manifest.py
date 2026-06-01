@@ -166,6 +166,4 @@ CP_NAMESPACE_EXPORT_MANIFEST: tuple[NamespaceExport, ...] = (
 
 #: Total CP-axis attribute count exported to the OD plan Session 4 D6 — the
 #: §24.1 (34 + 25 + 4) = 63 sum (acceptance #6).
-CP_EXPORTED_ATTRIBUTE_COUNT: int = sum(
-    e.attribute_count for e in CP_NAMESPACE_EXPORT_MANIFEST
-)
+CP_EXPORTED_ATTRIBUTE_COUNT: int = sum(e.attribute_count for e in CP_NAMESPACE_EXPORT_MANIFEST)

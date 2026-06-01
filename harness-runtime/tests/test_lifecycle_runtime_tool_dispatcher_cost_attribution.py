@@ -17,17 +17,8 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from decimal import Decimal
-from typing import Any
 
 import pytest
-from mcp.server.fastmcp import FastMCP
-from mcp.shared.memory import create_connected_server_and_client_session
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-    InMemorySpanExporter,
-)
-
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_as.tool_contract import ToolContract
 from harness_core import PersonaTier
@@ -49,7 +40,6 @@ from harness_cp.workflow_driver_types import (
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_od.cost_record_otel_serializer import COST_ATTRIBUTED_DECIMAL_ATTR
 from harness_od.rate_table_types import RateTable, ToolRate, WebhookRate
-
 from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
 from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
 from harness_runtime.lifecycle.runtime_tool_dispatcher import (
@@ -57,7 +47,13 @@ from harness_runtime.lifecycle.runtime_tool_dispatcher import (
     SandboxDispatchDecision,
     ToolInvocationSchemaViolationError,
 )
-
+from mcp.server.fastmcp import FastMCP
+from mcp.shared.memory import create_connected_server_and_client_session
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures (lifted from test_lifecycle_runtime_tool_dispatcher.py)
@@ -185,9 +181,7 @@ def _make_rate_table(tool_rates: dict[str, ToolRate]) -> RateTable:
         version="2026-05-28-test",
         providers={},
         tool_rates=tool_rates,
-        webhook_rate=WebhookRate(
-            flat_per_attempt=Decimal("0"), plus_egress=False
-        ),
+        webhook_rate=WebhookRate(flat_per_attempt=Decimal("0"), plus_egress=False),
         cpu_rate_per_ms=Decimal("0"),
         egress_rate_per_byte=Decimal("0"),
     )
@@ -341,7 +335,12 @@ async def test_three_cost_kind_formulas_at_production_binding(tracer_setup) -> N
     ]:
         host = await _build_started_host()
         rate_table = _make_rate_table(
-            {"echo": ToolRate(cost_kind=cost_kind, rate=Decimal("0.1") if cost_kind == "flat_per_invocation" else Decimal("0.001"))}
+            {
+                "echo": ToolRate(
+                    cost_kind=cost_kind,
+                    rate=Decimal("0.1") if cost_kind == "flat_per_invocation" else Decimal("0.001"),
+                )
+            }
         )
         audit_writer = _RecordingAuditWriter()
         dispatcher = RuntimeToolDispatcher(

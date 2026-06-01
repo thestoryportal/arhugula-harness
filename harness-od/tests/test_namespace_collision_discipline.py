@@ -45,10 +45,7 @@ def test_namespace_collisions_includes_harness_breaker_precedence() -> None:
     resolution = NAMESPACE_COLLISIONS[0]
     assert resolution.colliding_prefix == "breaker."
     assert resolution.authoritative_prefix == "harness.breaker."
-    assert (
-        resolution.precedence_rule
-        is NamespacePrecedenceRule.SUBSTRATE_ANCHORED_TAKES_PRECEDENCE
-    )
+    assert resolution.precedence_rule is NamespacePrecedenceRule.SUBSTRATE_ANCHORED_TAKES_PRECEDENCE
 
 
 def test_substrate_anchored_takes_precedence_per_section_8_1() -> None:

@@ -60,7 +60,7 @@ from typing import Any, Protocol, cast, runtime_checkable
 from harness_cp.cp_shared_types import ProviderAgnosticPayload
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
-from harness_od.otel_genai_base import GenAiOperation, HIERARCHY_CORRELATION_KEY
+from harness_od.otel_genai_base import HIERARCHY_CORRELATION_KEY, GenAiOperation
 
 from harness_runtime.lifecycle.memory_tool_dispatch import (
     derive_context_editing_active,
@@ -86,8 +86,7 @@ class LLMDispatchProviderUnreachableError(Exception):
     def __init__(self, provider_name: str) -> None:
         self.provider_name = provider_name
         super().__init__(
-            f"RT-FAIL-PROVIDER-UNREACHABLE: provider "
-            f"{provider_name!r} not in ctx.providers"
+            f"RT-FAIL-PROVIDER-UNREACHABLE: provider {provider_name!r} not in ctx.providers"
         )
 
 
@@ -451,25 +450,17 @@ class RuntimeLLMDispatcher:
                         request_attrs,
                     ) = await _dispatch_anthropic(adapter, model, payload)
             elif provider_name == "openai":
-                response, usage_attrs = await _dispatch_openai(
-                    adapter, model, payload
-                )
+                response, usage_attrs = await _dispatch_openai(adapter, model, payload)
                 cache_attrs = None
                 request_attrs = None
             else:  # provider_name == "ollama" (only remaining branch)
-                response, usage_attrs = await _dispatch_ollama(
-                    adapter, model, payload
-                )
+                response, usage_attrs = await _dispatch_ollama(adapter, model, payload)
                 cache_attrs = None
                 request_attrs = None
 
             # --- Step 4: populate response-side attributes --------------
-            _set_if_present(
-                span, "gen_ai.usage.input_tokens", usage_attrs.input_tokens
-            )
-            _set_if_present(
-                span, "gen_ai.usage.output_tokens", usage_attrs.output_tokens
-            )
+            _set_if_present(span, "gen_ai.usage.input_tokens", usage_attrs.input_tokens)
+            _set_if_present(span, "gen_ai.usage.output_tokens", usage_attrs.output_tokens)
             _set_if_present(span, "gen_ai.response.id", usage_attrs.response_id)
 
             # anthropic.* per C-AS-14 §14.2 — emitted ONLY when
@@ -500,9 +491,7 @@ class RuntimeLLMDispatcher:
             # the optional 5 emit only when present per spec optional
             # discipline (`_set_if_present` short-circuits on None).
             if request_attrs is not None:
-                _set_if_present(
-                    span, "anthropic.thinking_mode", request_attrs.thinking_mode
-                )
+                _set_if_present(span, "anthropic.thinking_mode", request_attrs.thinking_mode)
                 _set_if_present(
                     span,
                     "anthropic.thinking_budget_tokens",
@@ -514,12 +503,8 @@ class RuntimeLLMDispatcher:
                     request_attrs.thinking_effort,
                 )
                 _set_if_present(span, "anthropic.batch_id", request_attrs.batch_id)
-                span.set_attribute(
-                    "anthropic.tokenizer_version", request_attrs.tokenizer_version
-                )
-                _set_if_present(
-                    span, "anthropic.inference_geo", request_attrs.inference_geo
-                )
+                span.set_attribute("anthropic.tokenizer_version", request_attrs.tokenizer_version)
+                _set_if_present(span, "anthropic.inference_geo", request_attrs.inference_geo)
 
             # --- Step 4.5: cost-attribution (U-OD-38) -------------------
             # Per §C-OD-26.1 + §C-OD-26.2 row "llm_dispatch": every LLM
@@ -542,14 +527,10 @@ class RuntimeLLMDispatcher:
                 input_tokens=usage_attrs.input_tokens,
                 output_tokens=usage_attrs.output_tokens,
                 cache_creation=(
-                    cache_attrs.cache_creation_input_tokens
-                    if cache_attrs is not None
-                    else None
+                    cache_attrs.cache_creation_input_tokens if cache_attrs is not None else None
                 ),
                 cache_read=(
-                    cache_attrs.cache_read_input_tokens
-                    if cache_attrs is not None
-                    else None
+                    cache_attrs.cache_read_input_tokens if cache_attrs is not None else None
                 ),
                 tenant_id=step_context.tenant_id,
             )
@@ -620,7 +601,7 @@ def _parse_ollama_host(host: str | None) -> tuple[str | None, int | None]:
     remainder = host
     for scheme in ("http://", "https://"):
         if remainder.startswith(scheme):
-            remainder = remainder[len(scheme):]
+            remainder = remainder[len(scheme) :]
             break
     # Strip path.
     if "/" in remainder:
@@ -807,13 +788,9 @@ async def _dispatch_anthropic_with_memory(
         output_tokens=getattr(usage, "output_tokens", None),
         response_id=getattr(response, "id", None),
     )
-    cache_breakpoint_id, cache_ttl_seconds = (
-        _extract_anthropic_cache_request_attrs(payload)
-    )
+    cache_breakpoint_id, cache_ttl_seconds = _extract_anthropic_cache_request_attrs(payload)
     cache_attrs = _AnthropicCacheAttrs(
-        cache_creation_input_tokens=getattr(
-            usage, "cache_creation_input_tokens", None
-        ),
+        cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", None),
         cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", None),
         cache_breakpoint_id=cache_breakpoint_id,
         cache_ttl_seconds=cache_ttl_seconds,
@@ -837,13 +814,9 @@ async def _dispatch_anthropic(
         output_tokens=getattr(usage, "output_tokens", None),
         response_id=getattr(response, "id", None),
     )
-    cache_breakpoint_id, cache_ttl_seconds = (
-        _extract_anthropic_cache_request_attrs(payload)
-    )
+    cache_breakpoint_id, cache_ttl_seconds = _extract_anthropic_cache_request_attrs(payload)
     cache_attrs = _AnthropicCacheAttrs(
-        cache_creation_input_tokens=getattr(
-            usage, "cache_creation_input_tokens", None
-        ),
+        cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", None),
         cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", None),
         cache_breakpoint_id=cache_breakpoint_id,
         cache_ttl_seconds=cache_ttl_seconds,
@@ -1024,8 +997,7 @@ def materialize_llm_dispatcher_stage(
     """
     if len(providers) == 0:
         raise LLMDispatchBindError(
-            "No providers registered at stage 3a — cannot bind "
-            "LLM dispatcher at stage 5"
+            "No providers registered at stage 3a — cannot bind LLM dispatcher at stage 5"
         )
 
     return RuntimeLLMDispatcher(

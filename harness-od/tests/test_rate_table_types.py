@@ -21,7 +21,6 @@ from harness_od.rate_table_types import (
 )
 from pydantic import ValidationError
 
-
 # ---------------------------------------------------------------------------
 # AC #1 — Instantiation with Decimal-typed fields
 # ---------------------------------------------------------------------------
@@ -198,9 +197,7 @@ def _table() -> RateTable:
     return RateTable(
         version="2026-05-21",
         providers={"anthropic": _anthropic_rates()},
-        tool_rates={
-            "echo": ToolRate(cost_kind="flat_per_invocation", rate=Decimal("0.001"))
-        },
+        tool_rates={"echo": ToolRate(cost_kind="flat_per_invocation", rate=Decimal("0.001"))},
         webhook_rate=WebhookRate(flat_per_attempt=Decimal("0.0001"), plus_egress=True),
         cpu_rate_per_ms=Decimal("0.000001"),
         egress_rate_per_byte=Decimal("0.00000001"),

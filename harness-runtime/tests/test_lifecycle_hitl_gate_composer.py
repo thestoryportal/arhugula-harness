@@ -735,9 +735,7 @@ async def test_8b_hitl_f2_entry_populates_procedural_tier_snapshot_ref(
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     step = _make_step(placements=(placement,))
-    await composer.dispatch(
-        cast(Any, object()), step, step_context=_make_step_context()
-    )
+    await composer.dispatch(cast(Any, object()), step, step_context=_make_step_context())
     assert len(ledger.appends) == 1
     payload, _key = ledger.appends[0]
     assert payload.procedural_tier_snapshot_ref == _Identifier("b" * 64)
@@ -773,14 +771,10 @@ async def test_8b_hitl_resolver_raise_halts_before_ledger_write(
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
     step = _make_step(placements=(placement,))
     try:
-        await composer.dispatch(
-            cast(Any, object()), step, step_context=_make_step_context()
-        )
+        await composer.dispatch(cast(Any, object()), step, step_context=_make_step_context())
     except Exception:
         pass  # raise-vs-swallow is path-dependent; the invariant below is what matters
-    assert ledger.appends == [], (
-        "resolver raise must HALT before the 8b-HITL ledger write"
-    )
+    assert ledger.appends == [], "resolver raise must HALT before the 8b-HITL ledger write"
 
 
 @pytest.mark.asyncio

@@ -39,7 +39,6 @@ from harness_runtime.lifecycle.memory_tool_types import (
     MemoryToolStorageBackendProtocol,
 )
 
-
 # AC #1 — instantiation + Protocol conformance.
 
 

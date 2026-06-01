@@ -50,9 +50,7 @@ from harness_cp.workflow_driver import resolve_parent_gate_level
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 
 _CHAIN = FallbackChain(
-    primary=ProviderCandidate(
-        provider="anthropic", model="m", family=ProviderFamily.ANTHROPIC
-    ),
+    primary=ProviderCandidate(provider="anthropic", model="m", family=ProviderFamily.ANTHROPIC),
     same_family=(),
     cross_family=(),
     terminal=None,
@@ -180,15 +178,9 @@ def test_monotonic_descent_admits_equality_and_strict_descent() -> None:
     parent_gate_level = resolve_parent_gate_level(entry)
 
     # All three are <= DENY in rank — no raise.
-    assert_monotonic_descent(
-        parent_gate_level=parent_gate_level, child_gate_level=GateLevel.DENY
-    )
-    assert_monotonic_descent(
-        parent_gate_level=parent_gate_level, child_gate_level=GateLevel.ASK
-    )
-    assert_monotonic_descent(
-        parent_gate_level=parent_gate_level, child_gate_level=GateLevel.AUTO
-    )
+    assert_monotonic_descent(parent_gate_level=parent_gate_level, child_gate_level=GateLevel.DENY)
+    assert_monotonic_descent(parent_gate_level=parent_gate_level, child_gate_level=GateLevel.ASK)
+    assert_monotonic_descent(parent_gate_level=parent_gate_level, child_gate_level=GateLevel.AUTO)
 
 
 # --- §3 Cross-deployment monotonicity (two manifests, distinct outcomes) ----

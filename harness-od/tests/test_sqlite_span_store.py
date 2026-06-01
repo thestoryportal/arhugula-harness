@@ -12,14 +12,12 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-
 from harness_od.sqlite_span_store import (
     SpanInsertRow,
     initialize_span_store,
     insert_spans,
     retention_cleanup_lazy,
 )
-
 
 _NS_PER_DAY = 86_400 * 1_000_000_000
 
@@ -241,9 +239,7 @@ def test_insert_spans_partial_overlap_inserts_only_new(db_path: Path) -> None:
     conn = initialize_span_store(db_path)
     try:
         insert_spans(conn, [_make_row("s1"), _make_row("s2")])
-        added = insert_spans(
-            conn, [_make_row("s2"), _make_row("s3"), _make_row("s4")]
-        )
+        added = insert_spans(conn, [_make_row("s2"), _make_row("s3"), _make_row("s4")])
         ids = sorted(r[0] for r in conn.execute("SELECT span_id FROM spans"))
     finally:
         conn.close()
@@ -255,9 +251,7 @@ def test_insert_spans_preserves_parent_span_id_when_set(db_path: Path) -> None:
     conn = initialize_span_store(db_path)
     try:
         insert_spans(conn, [_make_row("s1", parent_span_id="p1")])
-        row = conn.execute(
-            "SELECT parent_span_id FROM spans WHERE span_id='s1'"
-        ).fetchone()
+        row = conn.execute("SELECT parent_span_id FROM spans WHERE span_id='s1'").fetchone()
     finally:
         conn.close()
     assert row == ("p1",)

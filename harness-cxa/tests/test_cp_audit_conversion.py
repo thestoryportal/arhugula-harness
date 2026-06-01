@@ -22,6 +22,10 @@ from harness_as.gate_level_composition import GateLevel
 from harness_core import DeploymentSurface, PersonaTier
 from harness_core.identity import ActionID
 from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry
+from harness_cxa.cp_audit_conversion import (
+    CP_AUDIT_NAMESPACE_PREFIX,
+    cp_audit_to_od_audit,
+)
 from harness_od.audit_ledger_types import (
     AuditLedger,
     AuditLedgerEntry,
@@ -33,10 +37,6 @@ from harness_od.multi_tenant_trace_separation_and_audit_ledger import (
     verify_hash_chain_integrity,
 )
 from harness_od.observability_matrix import CellID
-from harness_cxa.cp_audit_conversion import (
-    CP_AUDIT_NAMESPACE_PREFIX,
-    cp_audit_to_od_audit,
-)
 
 _ZERO_HASH = "0" * 64
 _PRIOR_HASH = "a" * 64

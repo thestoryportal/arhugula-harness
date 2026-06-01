@@ -101,8 +101,7 @@ HITL_PLACEMENT_TRIGGERS: tuple[HITLPlacementTrigger, ...] = (
     HITLPlacementTrigger(
         placement_kind=HITLPlacementKind.VALIDATOR_ESCALATION,
         trigger_summary=(
-            "After retry-budget exhaustion (3rd validator fail per "
-            "Cluster 4 §2.2.3 [HIGH])"
+            "After retry-budget exhaustion (3rd validator fail per Cluster 4 §2.2.3 [HIGH])"
         ),
         cell_applicability_qualifier="All cells",
     ),

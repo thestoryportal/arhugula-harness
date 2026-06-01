@@ -36,9 +36,7 @@ def compose_escalation_prompt(
         future arc may formalize via Protocol surface per spec §14.15.8.
     """
     palette_labels = ", ".join(sorted(r.value for r in palette))
-    fail_class_label = (
-        brief.fail_class.value if brief.fail_class is not None else "unspecified"
-    )
+    fail_class_label = brief.fail_class.value if brief.fail_class is not None else "unspecified"
     return (
         f"Validator escalation at step {brief.parent_step_id} "
         f"(action_id={brief.parent_action_id}). "

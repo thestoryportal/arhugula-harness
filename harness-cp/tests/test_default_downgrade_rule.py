@@ -25,18 +25,17 @@ from harness_cp.default_downgrade_rule import (
 
 def test_default_downgrade_rule_per_spec() -> None:
     """Acceptance #1 — parent Tier-3 (external-reversible) → child Tier-1."""
-    assert DEFAULT_DOWNGRADE_RULE.parent_blast_radius == (
-        BlastRadiusTier.EXTERNAL_REVERSIBLE
-    )
+    assert DEFAULT_DOWNGRADE_RULE.parent_blast_radius == (BlastRadiusTier.EXTERNAL_REVERSIBLE)
     assert DEFAULT_DOWNGRADE_RULE.child_ceiling == BlastRadiusTier.READ_ONLY
     assert "§12.1" in DEFAULT_DOWNGRADE_RULE.rationale
 
 
 def test_tier_3_parent_yields_tier_1_child() -> None:
     """Acceptance #2 — Tier-3 parent → Tier-1 (READ_ONLY) child ceiling."""
-    assert compute_child_blast_radius_ceiling(
-        BlastRadiusTier.EXTERNAL_REVERSIBLE
-    ) == BlastRadiusTier.READ_ONLY
+    assert (
+        compute_child_blast_radius_ceiling(BlastRadiusTier.EXTERNAL_REVERSIBLE)
+        == BlastRadiusTier.READ_ONLY
+    )
 
 
 def test_compute_ceiling_four_row_table() -> None:
@@ -46,9 +45,7 @@ def test_compute_ceiling_four_row_table() -> None:
     parents default-downgrade to a Tier-1 child ceiling.
     """
     for parent in BlastRadiusTier:
-        assert compute_child_blast_radius_ceiling(parent) == (
-            BlastRadiusTier.READ_ONLY
-        )
+        assert compute_child_blast_radius_ceiling(parent) == (BlastRadiusTier.READ_ONLY)
 
 
 def test_default_with_override_permitted() -> None:

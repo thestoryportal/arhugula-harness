@@ -217,6 +217,4 @@ def summarize_diff_for_operator(
     LLM-invoking step of the revalidation flow (acceptance #12).
     """
     _ = diff
-    return next(
-        b for b in SUMMARIZATION_MODEL_TABLE if b.persona_tier is persona_tier
-    )
+    return next(b for b in SUMMARIZATION_MODEL_TABLE if b.persona_tier is persona_tier)
