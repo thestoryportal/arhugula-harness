@@ -3,7 +3,7 @@ fork_class: Class 1 (halt-execution — X-AL-3 surface)
 fork_id: class_1_fork_h_t_cp_16_17_executable_consumer_absence
 filed_at: 2026-05-23
 filed_against_head: b2cf37b
-status: PROPOSING — operator ratification required at §6 ambiguities
+status: ✅ RATIFIED-AMENDED + PARTIAL-RETIREMENT 2026-05-23..2026-05-24 (frontmatter refreshed 2026-05-31 to match body Status refreshed 2026-05-27) — Memory-only scope per §16/§14.C; H_T-CP-16 RETIRED batch-14 `4479b07`; H_T-CP-18 + H_T-AS-2 RETIRED batch-16 `8e6311f`; H_T-CP-17 (Files) preserved PARTIAL, deferred indefinitely
 routing_target: Runtime spec revision-pass (preferred per L9-septies precedent) OR AS spec revision-pass (alternative per namespace-co-residence) — §6.A operator decision
 related_substitutions: H_T-CP-16 (memory.*) + H_T-CP-17 (files.*)
 related_memories: [[h-t-cp-16-17-retire-ready-gate-runtime-composer-arcs]], [[retirement-batch-11-v1-5-re-invocation]], [[fork-h-t-cp-18-phantom-retirement-cite]]
