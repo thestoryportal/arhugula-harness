@@ -36,3 +36,30 @@ For each `.harness/class_*_fork_*.md`:
 - **`class_1_fork_cp_spec_section_25_contract_id_collision.md`** — headline verdict `FULLY-CLOSED` is correct and unchanged. Its **trailing cross-reference clause** "Reading B full validator-composer arc remains OPEN at §3.2" (appearing at 3 sites: Status line, §"Status post-§9", end-of-doc routing line) was **stale**. That clause is a cross-reference to `class_1_fork_validator_composer_arc_stage_4_absence.md` §3.2, whose Reading B was **APPLIED at runtime spec v1.22 on 2026-05-24** (commit `918f94a`) — and which closed its *own* copy of the stale-carry on 2026-05-27 without propagating to this doc. Refreshed all 3 sites to reflect the APPLIED state. Species-3 (resolved-but-carry-stale-inherited) per workflow v1.9 §7.4.7.2 — sub-shape: stale *cross-reference* (the carrier was a citation to a sibling fork's §3.2, not this fork's own framing).
 
 **Conclusion.** Fork-doc Status corpus is current. 1 stale cross-reference refreshed; 42/43 verdicts accurate (41 terminal + 1 accurately-`PROPOSING`). No headline Status verdict required a change. Next audit cadence: ~5 PRs or operator-discretion.
+
+---
+
+## 2026-06-01 — audit pass (cadence; post-PR-#196)
+
+**Anchor.** Workspace HEAD `eed6a6d` (origin/main at audit time; post-PR-#196); 43 open fork docs; latest retirement batch `.harness/phase-7d-retirement-events-batch-50.md`; merged PRs through #196; zero open PRs at audit. Delegated read-sweep (Explore subagent) of all 43 `.harness/class_*_fork_*.md`.
+
+**Scope.** All 43 fork docs. Cadence-driven (last pass #178; 18 PRs elapsed — past the ~5-PR cadence). Focus on docs touched by the intervening state-changing merges: **#181/#182** (R-100 AC#2 TOOL_STEP closed via live local ollama → real-workflow-execution + sandbox-resolver forks RESOLVED), #184 (R-XI-01 dashboard live), #188/#190 (yaml-loader + multi-workflow-fixture-suite RESOLVED), #192/#194 (Surface V decomposed / R-400 RESOLVED), #196 (R-600 survey).
+
+**Distribution (leading verdict).** 41/43 terminal + 2 accurately-non-terminal. ZERO stale.
+
+**Spot-verified against the intervening merges (no edit — Status already accurate):**
+
+| Fork doc | Verdict | Verification |
+|---|---|---|
+| `class_1_fork_tool_step_no_bootstrap_sandbox_decision_resolver.md` | APPLIED-AS-READING-B + AC #2 CLOSED 2026-06-01 | Already reflects PR #182 `8529a45` (skipif-gated e2e green vs live local ollama daemon). The prior "AC #2 final close = operator live e2e" obligation is **discharged** in the doc — not stale. |
+| `class_1_fork_tool_step_no_operator_supplied_converter.md` | APPLIED-AS-READING-B | Reflects PR #171/#172. Current. |
+| `class_1_fork_llm_cost_attribution_not_firing_on_real_dispatch.md` | RESOLVED-AS-INVALID | Reflects PR #168 `a9ee48d` (test-observation bug; cost fires+writes; OD-5 retirement valid). Current. |
+
+**Genuinely non-terminal — verified ACCURATE (no edit):**
+
+| Fork doc | Verdict | Verification |
+|---|---|---|
+| `class_1_fork_harness_toml_default_discovery_unimplemented.md` | `PROPOSING` | Filed 2026-05-31; no intervening arc closed it; tracked at roadmap `R-100-mvp-config-discovery`; non-blocking for the MVP. |
+| `class_2_fork_tool_invocation_composer_scope.md` | `DEFERRED` (bounded-residual, 2026-05-20) | CP-axis tool-invocation-composer scope decision still owed at operator timing; distinct surface from the PR #171/#172 runtime dispatch path. Aging, not stale. |
+
+**Conclusion.** Fork-doc Status corpus is **current — ZERO stale Status lines / cross-references this pass** (the 1 stale cross-ref from the #178 pass was fixed at #179). 43/43 accurate (41 terminal + 2 accurately-open). No edit required. Next audit cadence: ~5 PRs or operator-discretion.
