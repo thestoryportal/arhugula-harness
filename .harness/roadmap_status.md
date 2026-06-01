@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `ec4f50af797b` |
-| `last_refreshed` | 2026-05-31T17:21:39-06:00 |
-| `git_head` | `5ca46f5` (main) — `roadmap(R-001-h-t-is-2-retired): RESOLVED at PR #141 + log Cluster A/B drift + R-IF hygiene (#142)` |
+| `workspace_state_hash` | `c9584b27103d` |
+| `last_refreshed` | 2026-05-31T18:05:00-06:00 |
+| `git_head` | `f06c30a` (main) — `ci: pytest + pyright + ruff matrix (#144)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-50.md` |
 | `open_fork_doc_count` | 39 |
 
@@ -20,7 +20,7 @@
 
 ## Next action
 
-**`R-200-ci-pytest-pyright-ruff-matrix`** (status: **ACTIVE**; surface III CI substrate; mode-agnostic; cross_axis: no) — author the first substantive CI job: a GitHub Actions workflow running **pytest + pyright (strict) + ruff** across all 5 axis packages at PR-open + push (today only the X-AL-3 guard runs at CI). scope = `.github/workflows/ci.yml` + `pyproject.toml`; verification (integration) = CI runs on every PR; all 5 axis packages tested; pyright strict + ruff pass. close_shape = PR-merge; `advisor_required: no`. **§4 derivation:** with R-001-h-t-is-2-retired RESOLVED, §I has no ACTIVE candidate; rank-1 mode-agnostic R-IF entries (108–111) are RESOLVED (reconciled this PR) and R-IF-roadmap-refresh is the perennial refresh mechanism (satisfied by this refresh); so the top candidate is **§III CI substrate (rank 3)** — which outranks §II MVP-operator-usable (rank 4: `R-100-mvp-operator-usable-cli-shipped`, also ACTIVE). The pipeline is **not** drained — Surface II/III multipliers remain executable.
+**`R-200-ci-axis-matrix`** (status: **ACTIVE**; surface III CI substrate; mode-agnostic; cross_axis: no) — per-axis test-isolation matrix in CI (each axis runs without sibling-package import leak; matrix < 10 min), now unblocked by **R-200-ci-pytest-pyright-ruff-matrix RESOLVED at PR #144 `f06c30a`** (`.github/workflows/ci.yml`: `test` blocking+green; `lint`+`typecheck` advisory because the tree isn't clean — see R-200-ci-lint-typecheck-blocking). Also newly ACTIVE in §III: `R-200-ci-coverage-gating` + `R-200-ci-lint-typecheck-blocking`. Original R-200-ci-pytest scope below is retained for history. scope = `.github/workflows/ci.yml` + `pyproject.toml`; verification (integration) = CI runs on every PR; all 5 axis packages tested; pyright strict + ruff pass. close_shape = PR-merge; `advisor_required: no`. **§4 derivation:** with R-001-h-t-is-2-retired RESOLVED, §I has no ACTIVE candidate; rank-1 mode-agnostic R-IF entries (108–111) are RESOLVED (reconciled this PR) and R-IF-roadmap-refresh is the perennial refresh mechanism (satisfied by this refresh); so the top candidate is **§III CI substrate (rank 3)** — which outranks §II MVP-operator-usable (rank 4: `R-100-mvp-operator-usable-cli-shipped`, also ACTIVE). The pipeline is **not** drained — Surface II/III multipliers remain executable.
 
 **(R-001-h-t-is-2-retired RESOLVED at PR #141 merge `4a0aa1d` 2026-05-31 — H_T-IS-2 PARTIAL → RETIRED, batch-50; IS-axis 9/9 RETIRED = 100%, FIRST axis fully RETIRED at the strict view. R-003 RESOLVED at #136+#137+#138. Hook hardened against the local-behind-origin drift at PR #140 `e55e99b`.)**
 
@@ -30,8 +30,8 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(none — #136/#137/#138/#139/#140/#141 all merged 2026-05-31)* | — | — | — |
-| *(this PR)* | `worktree-roadmap-terminating-refresh-post-pr-142` | *(self — terminating refresh post-PR-142 per §12.2.1; recursion-stopping fixed point)* | mode-agnostic |
+| *(none — #144 merged `f06c30a` 2026-05-31; #136–#143 all merged)* | — | — | — |
+| *(this PR)* | `roadmap-r200-close` | *(self — substantive R-200 close: marks R-200-ci-pytest RESOLVED + flips §III dependents ACTIVE + adds R-200-ci-lint-typecheck-blocking + dashboard refresh. NOT a terminating refresh → follow-on terminating refresh owed per §12.2.1)* | mode-agnostic |
 
 ---
 
@@ -39,6 +39,7 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #144 (`f06c30a`) | 2026-05-31 | **R-200-ci-pytest-pyright-ruff-matrix RESOLVED** — first substantive CI job. `.github/workflows/ci.yml`: `test` (`pytest -m "not e2e"`) BLOCKING + green (3543 passed); `lint`+`typecheck` ADVISORY (tree not ruff/pyright-clean — 366 ruff / 894 pyright, incl. a real dup-`Skill` bug at types.py:1683). §III dependents flipped ACTIVE; follow-up `R-200-ci-lint-typecheck-blocking` added. |
 | PR #142 (`5ca46f5`) | 2026-05-31 | **R-001-h-t-is-2-retired RESOLVED** (substantive close) — marks R-001 RESOLVED + reconciles stale-ACTIVE R-IF-108/109/110/111 → RESOLVED + dashboard refresh (next-action re-derived to R-200-ci §III); logs the Cluster A/B drift + #140 hardening |
 | PR #141 (`4a0aa1d`) | 2026-05-31 | **R-001-h-t-is-2-retired RESOLVED** — batch-50: H_T-IS-2 PARTIAL → RETIRED (substantive substitution-retirement). All 13 producer sites handled; X-AL-2 both conjuncts MET. IS-axis 9/9 RETIRED = 100% (FIRST axis fully RETIRED at strict view). harness-is/CLAUDE.md §4.1 + ledger v2 §11.4h |
 | PR #140 (`e55e99b`) | 2026-05-31 | **Hook hardening** — `session-start.sh` behind-origin guard (fixes the Cluster A/B stale-next-action drift: local main 4 behind origin → hook reported stale `next=R-003`). Default-branch-gated, timeout-guarded fetch; can't hang/fail offline |

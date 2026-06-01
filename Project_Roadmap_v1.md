@@ -542,7 +542,7 @@ R-100-mvp-multi-workflow-fixture-suite:
 R-200-ci-pytest-pyright-ruff-matrix:
   title: GitHub Actions workflow — pytest + pyright + ruff matrix at PR open
   surface: III
-  status: ACTIVE
+  status: RESOLVED   # PR #144 squash-merged `f06c30a` 2026-05-31; CI run green overall
   depends_on: []
   blocks: [R-200-ci-coverage-gating, R-200-ci-axis-matrix]
   posture: mode-agnostic
@@ -553,12 +553,19 @@ R-200-ci-pytest-pyright-ruff-matrix:
   verification: { shape: integration, must_pass: ["CI runs on every PR open + push", "all 5 axis packages tested", "pyright strict passes", "ruff check passes"] }
   close_shape: { type: PR-merge, artifact: "ci: pytest + pyright + ruff matrix", cascade: [] }
   next_pointer: R-200-ci-axis-matrix
-  notes: Currently only X-AL-3 guard runs at CI. This is the first substantive CI job.
+  notes: >
+    RESOLVED 2026-05-31 at PR #144 merge `f06c30a` (.github/workflows/ci.yml). 3 jobs on PR + push-to-main
+    via astral-sh/setup-uv@v5 + Python 3.12 + `uv sync --all-packages`: `test` (`uv run pytest -m "not e2e"`)
+    BLOCKING and green (3543 passed / 7 skipped); `lint` (ruff check + format-check) + `typecheck` (pyright strict)
+    ADVISORY (continue-on-error) at v1. ADVISORY because the tree is NOT lint/type-clean — `ruff check .` = 366,
+    `pyright` = 894 (even src-only: ruff 112, pyright 186, incl. a real dup-`Skill`-type bug at
+    harness-runtime/.../types.py:1683). Making them blocking on day one = permanently-red CI. Tightening tracked at
+    R-200-ci-lint-typecheck-blocking. next_pointer R-200-ci-axis-matrix.
 
 R-200-ci-axis-matrix:
   title: Per-axis test isolation matrix
   surface: III
-  status: BLOCKED
+  status: ACTIVE   # unblocked by R-200-ci-pytest-pyright-ruff-matrix RESOLVED (PR #144)
   depends_on: [R-200-ci-pytest-pyright-ruff-matrix]
   blocks: []
   posture: mode-agnostic
@@ -574,7 +581,7 @@ R-200-ci-axis-matrix:
 R-200-ci-coverage-gating:
   title: Coverage gating at PR (informational at first; enforce later)
   surface: III
-  status: BLOCKED
+  status: ACTIVE   # unblocked by R-200-ci-pytest-pyright-ruff-matrix RESOLVED (PR #144)
   depends_on: [R-200-ci-pytest-pyright-ruff-matrix]
   blocks: []
   posture: mode-agnostic
@@ -586,6 +593,27 @@ R-200-ci-coverage-gating:
   close_shape: { type: PR-merge, artifact: "ci: coverage reporting", cascade: [] }
   next_pointer: null
   notes: Don't enforce a threshold at v1; gather data first.
+
+R-200-ci-lint-typecheck-blocking:
+  title: Drive the tree ruff/pyright-clean, then flip CI lint + typecheck from advisory to blocking
+  surface: III
+  status: ACTIVE
+  depends_on: [R-200-ci-pytest-pyright-ruff-matrix]
+  blocks: []
+  posture: phase-7
+  scope: { files: [harness-*/**, tests/**, .github/workflows/ci.yml], contracts: [], cross_axis: no }
+  skills: { primary: phase-7-implementation, secondary: [verify] }
+  advisor_required: conditional:if a fix touches a cross-axis contract or production type
+  council_required: no
+  verification: { shape: integration, must_pass: ["uv run ruff check . exits 0", "uv run ruff format --check . exits 0", "uv run pyright exits 0 (strict, tree-wide)", "ci.yml lint + typecheck jobs drop continue-on-error"] }
+  close_shape: { type: PR-merge, artifact: "ci: lint + typecheck blocking (tree clean)", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: R-200-ci-axis-matrix
+  notes: >
+    Authored at the R-200-ci-pytest close (PR #144). CI shipped lint/typecheck ADVISORY because the tree is dirty:
+    `ruff check .` = 366 (≈222 `--fix`-able), `pyright` = 894; src-only ruff 112 / pyright 186, INCLUDING a genuine
+    production bug — two distinct `Skill` classes (`harness_runtime.types.Skill` vs `harness_runtime.lifecycle.skills.Skill`)
+    at harness-runtime/src/harness_runtime/types.py:1683 (reportArgumentType). Likely multi-PR: (a) `ruff check --fix`
+    + format sweep; (b) pyright cleanup incl. the Skill dedup; (c) flip continue-on-error -> false. Mostly test-module noise.
 
 R-200-session-start-audit-hook:
   title: SessionStart hook automating CLAUDE.md §12.1 audit at every Claude Code session open
