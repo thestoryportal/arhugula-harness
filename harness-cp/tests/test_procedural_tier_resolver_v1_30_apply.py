@@ -18,7 +18,6 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
-
 from harness_cp.cp_shared_types import ActorIdentity
 from harness_cp.engine_class import EngineClass
 from harness_cp.hitl_as_tool_call_rewriting import (
@@ -146,7 +145,9 @@ def test_u_cp_27_workload_class_selection_populates_sidecar() -> None:
     writer = _CapturingWriter()
     selection = WorkloadBindingSelectionResult(
         selected_class=EngineClass.SAVE_POINT_CHECKPOINT,
-        candidate_set=frozenset({EngineClass.SAVE_POINT_CHECKPOINT, EngineClass.PURE_PATTERN_NO_ENGINE}),
+        candidate_set=frozenset(
+            {EngineClass.SAVE_POINT_CHECKPOINT, EngineClass.PURE_PATTERN_NO_ENGINE}
+        ),
         selection_rationale="apply-pass fixture",
     )
     _run(

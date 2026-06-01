@@ -93,9 +93,7 @@ def _run(coro: Any) -> Any:
 def test_emit_pause_captured_action_id() -> None:
     """action_id is the canonical kebab-case identifier per spec v1.26 §16.5.3 row U-CP-49."""
     writer = _CapturingLedgerWriter()
-    _run(
-        emit_pause_captured_state_ledger_entry(**_kwargs(), ledger_writer=writer)
-    )
+    _run(emit_pause_captured_state_ledger_entry(**_kwargs(), ledger_writer=writer))
     assert writer.captured[0].action_id == "cp.pause-captured"
 
 
@@ -142,10 +140,7 @@ def test_emit_pause_captured_idempotency_key_includes_snapshot_hash() -> None:
             ledger_writer=writer_b,
         )
     )
-    assert (
-        writer_a.captured[0].idempotency_key
-        != writer_b.captured[0].idempotency_key
-    )
+    assert writer_a.captured[0].idempotency_key != writer_b.captured[0].idempotency_key
 
 
 def test_emit_pause_captured_idempotency_key_includes_pause_event_id() -> None:
@@ -162,10 +157,7 @@ def test_emit_pause_captured_idempotency_key_includes_pause_event_id() -> None:
             **_kwargs(pause_event_id="evt-B"), ledger_writer=writer_b
         )
     )
-    assert (
-        writer_a.captured[0].idempotency_key
-        != writer_b.captured[0].idempotency_key
-    )
+    assert writer_a.captured[0].idempotency_key != writer_b.captured[0].idempotency_key
 
 
 def test_emit_pause_captured_idempotency_key_includes_outcome_hash_suffix() -> None:
@@ -180,9 +172,7 @@ def test_emit_pause_captured_idempotency_key_includes_outcome_hash_suffix() -> N
     snap_a = _snapshot(snapshot_hash_seed="fixed", state_summary_version="v1")
     snap_b = _snapshot(snapshot_hash_seed="fixed", state_summary_version="v2")
     assert snap_a.snapshot_hash == snap_b.snapshot_hash  # invariant of fixture
-    assert _canonicalize_outcome_bytes(snap_a) != _canonicalize_outcome_bytes(
-        snap_b
-    )
+    assert _canonicalize_outcome_bytes(snap_a) != _canonicalize_outcome_bytes(snap_b)
 
     writer_a = _CapturingLedgerWriter()
     writer_b = _CapturingLedgerWriter()
@@ -196,10 +186,7 @@ def test_emit_pause_captured_idempotency_key_includes_outcome_hash_suffix() -> N
             **_kwargs(pause_snapshot=snap_b), ledger_writer=writer_b
         )
     )
-    assert (
-        writer_a.captured[0].idempotency_key
-        != writer_b.captured[0].idempotency_key
-    )
+    assert writer_a.captured[0].idempotency_key != writer_b.captured[0].idempotency_key
 
 
 def test_emit_pause_captured_snapshot_hash_and_outcome_hash_are_distinct() -> None:
@@ -227,9 +214,7 @@ def test_emit_pause_captured_fires_post_capture_pre_return() -> None:
     to caller. Single-invocation → single payload.
     """
     writer = _CapturingLedgerWriter()
-    _run(
-        emit_pause_captured_state_ledger_entry(**_kwargs(), ledger_writer=writer)
-    )
+    _run(emit_pause_captured_state_ledger_entry(**_kwargs(), ledger_writer=writer))
     assert len(writer.captured) == 1
     assert writer.captured[0].action_id == "cp.pause-captured"
 
@@ -241,9 +226,7 @@ def test_emit_pause_captured_response_hash_is_is_computed() -> None:
     """β.i Q-β.i-3(b): composer does NOT supply response_hash; EntryPayload has no such field."""
     assert "response_hash" not in EntryPayload.model_fields
     writer = _CapturingLedgerWriter()
-    _run(
-        emit_pause_captured_state_ledger_entry(**_kwargs(), ledger_writer=writer)
-    )
+    _run(emit_pause_captured_state_ledger_entry(**_kwargs(), ledger_writer=writer))
     payload = writer.captured[0]
     assert set(payload.model_fields_set) <= {
         "action_id",
@@ -260,16 +243,12 @@ def test_emit_pause_captured_response_hash_is_is_computed() -> None:
 def test_emit_pause_captured_zero_cp_audit_emission() -> None:
     """AC #5: greenfield composer emits NO CPAuditLedgerEntry per §16.5.9 invariant 5."""
     writer = _CapturingLedgerWriter()
-    result = _run(
-        emit_pause_captured_state_ledger_entry(**_kwargs(), ledger_writer=writer)
-    )
+    result = _run(emit_pause_captured_state_ledger_entry(**_kwargs(), ledger_writer=writer))
     assert isinstance(result, WriteResult)
     assert len(writer.captured) == 1
 
 
-def test_emit_pause_captured_engine_layer_orthogonal_to_workflow_layer_at_u_cp_76() -> (
-    None
-):
+def test_emit_pause_captured_engine_layer_orthogonal_to_workflow_layer_at_u_cp_76() -> None:
     """AC #5: engine-layer action_id distinct from workflow-layer at U-CP-76.
 
     Per CP spec v1.11 §26 NEW NOTE 2-layer coexistence: engine-layer emits
@@ -278,9 +257,7 @@ def test_emit_pause_captured_engine_layer_orthogonal_to_workflow_layer_at_u_cp_7
     ledger-level collision; downstream consumers discriminate via prefix.
     """
     writer = _CapturingLedgerWriter()
-    _run(
-        emit_pause_captured_state_ledger_entry(**_kwargs(), ledger_writer=writer)
-    )
+    _run(emit_pause_captured_state_ledger_entry(**_kwargs(), ledger_writer=writer))
     engine_layer_action_id = writer.captured[0].action_id
     assert engine_layer_action_id == "cp.pause-captured"
     # Workflow-layer action_id at U-CP-76 is distinct.
@@ -296,22 +273,13 @@ def test_emit_pause_captured_orthogonal_to_writer_result_variant() -> None:
     noop_writer = _CapturingLedgerWriter(returns=WriteResult.IDEMPOTENT_NOOP)
 
     result_a = _run(
-        emit_pause_captured_state_ledger_entry(
-            **_kwargs(), ledger_writer=appended_writer
-        )
+        emit_pause_captured_state_ledger_entry(**_kwargs(), ledger_writer=appended_writer)
     )
-    result_b = _run(
-        emit_pause_captured_state_ledger_entry(
-            **_kwargs(), ledger_writer=noop_writer
-        )
-    )
+    result_b = _run(emit_pause_captured_state_ledger_entry(**_kwargs(), ledger_writer=noop_writer))
 
     assert result_a == WriteResult.APPENDED
     assert result_b == WriteResult.IDEMPOTENT_NOOP
-    assert (
-        appended_writer.captured[0].idempotency_key
-        == noop_writer.captured[0].idempotency_key
-    )
+    assert appended_writer.captured[0].idempotency_key == noop_writer.captured[0].idempotency_key
 
 
 # --- Actor projection ---

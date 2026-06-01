@@ -11,6 +11,8 @@ injected custom strip-set surface.
 from __future__ import annotations
 
 import pytest
+from harness_od.content_structure_discipline import DEFAULT_OFF_CONTENT_ATTRIBUTES
+from harness_od.redaction_span_processor import RedactionSpanProcessor
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
     SimpleSpanProcessor,
@@ -18,10 +20,6 @@ from opentelemetry.sdk.trace.export import (
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-
-from harness_od.content_structure_discipline import DEFAULT_OFF_CONTENT_ATTRIBUTES
-from harness_od.redaction_span_processor import RedactionSpanProcessor
-
 
 # --- §12.1 default-off content keys ----------------------------------------
 
@@ -112,9 +110,7 @@ def test_on_end_strips_all_13_content_attributes(
     span.end()
     [exported] = exporter.get_finished_spans()
     for key in DEFAULT_OFF_CONTENT_ATTRIBUTES:
-        assert key not in exported.attributes, (
-            f"redaction failed to strip {key}"
-        )
+        assert key not in exported.attributes, f"redaction failed to strip {key}"
     assert exported.attributes["gen_ai.operation.name"] == "preserved"
 
 

@@ -51,9 +51,7 @@ def _proxy() -> CacheCompletionProxy:
 def _input(n: int) -> CacheWarmupInput:
     siblings: tuple[SubAgent, ...] = tuple({"idx": i} for i in range(n))
     plan: LeadAgentPlan = {"plan_text": "decompose the task", "steps": [1, 2]}
-    return CacheWarmupInput(
-        siblings=siblings, cache_breakpoint_id="bp-0", lead_agent_plan=plan
-    )
+    return CacheWarmupInput(siblings=siblings, cache_breakpoint_id="bp-0", lead_agent_plan=plan)
 
 
 def test_on_fanout_dispatch_four_steps_in_order() -> None:
@@ -66,9 +64,7 @@ def test_on_fanout_dispatch_four_steps_in_order() -> None:
         _proxy(),
     )
     assert result.plan_path == "/harness/prompts"
-    assert result.completion_proxy.proxy_kind is (
-        CacheCompletionProxyKind.CACHE_ACKNOWLEDGEMENT
-    )
+    assert result.completion_proxy.proxy_kind is (CacheCompletionProxyKind.CACHE_ACKNOWLEDGEMENT)
     assert result.siblings_dispatched == 3
 
 

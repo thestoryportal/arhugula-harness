@@ -27,6 +27,7 @@ from pydantic import ValidationError
 
 # --- acc #1 — SandboxTier consumed from AS axis, not declared in-unit -------
 
+
 def test_sandbox_tier_consumed_from_as_axis_not_declared_in_unit() -> None:
     """acc #1 — `SandboxTier` is the AS-axis-owned enum, not declared in-unit."""
     # The enum U-OD-29 uses is identically the AS-axis-owned type.
@@ -61,6 +62,7 @@ def test_sandbox_tier_cardinality_four() -> None:
 
 # --- acc #2 — OtlpReachabilityClass enumerates exactly 4 values ------------
 
+
 def test_reachability_class_cardinality_four() -> None:
     """acc #2 — `OtlpReachabilityClass` enumerates exactly 4 §20.3 values."""
     assert len(OtlpReachabilityClass) == 4
@@ -73,6 +75,7 @@ def test_reachability_class_cardinality_four() -> None:
 
 
 # --- acc #3 — PER_SANDBOX_TIER_REACHABILITY: 4 entries, §20.3 mapping ------
+
 
 def test_per_tier_reachability_cardinality_four() -> None:
     """acc #3 — `PER_SANDBOX_TIER_REACHABILITY` declares exactly 4 entries."""
@@ -98,24 +101,19 @@ def test_tier_2_container_explicit_network_config() -> None:
 def test_tier_3_microvm_per_microvm_agent_or_egress_allowlist() -> None:
     """acc #3 — `TIER_3_MICROVM -> PER_MICROVM_AGENT_OR_EGRESS_ALLOWLIST`."""
     entry = PER_SANDBOX_TIER_REACHABILITY[SandboxTier.TIER_3_MICROVM]
-    assert (
-        entry.reachability_class
-        is OtlpReachabilityClass.PER_MICROVM_AGENT_OR_EGRESS_ALLOWLIST
-    )
+    assert entry.reachability_class is OtlpReachabilityClass.PER_MICROVM_AGENT_OR_EGRESS_ALLOWLIST
     assert entry.per_tier_egress_required is True
 
 
 def test_tier_4_full_vm_vendor_managed_collector() -> None:
     """acc #3 — `TIER_4_FULL_VM -> VENDOR_MANAGED_COLLECTOR_REACHABILITY`."""
     entry = PER_SANDBOX_TIER_REACHABILITY[SandboxTier.TIER_4_FULL_VM]
-    assert (
-        entry.reachability_class
-        is OtlpReachabilityClass.VENDOR_MANAGED_COLLECTOR_REACHABILITY
-    )
+    assert entry.reachability_class is OtlpReachabilityClass.VENDOR_MANAGED_COLLECTOR_REACHABILITY
     assert entry.per_tier_egress_required is True
 
 
 # --- acc #4 — assert_otlp_reachable_from_sandbox accept / reject -----------
+
 
 def test_assert_reachable_tier_1_in_process_accept() -> None:
     """acc #4 — Tier-1 process with an in-process collector reaches (Ok)."""
@@ -198,6 +196,7 @@ def test_assert_reachable_tier_4_full_vm_vendor_managed_accept() -> None:
 
 # --- acc #5 — F4 capability-floor lifecycle-event-emission anchor ----------
 
+
 def test_f4_capability_floor_lifecycle_anchor_byte_exact() -> None:
     """acc #5 — the F4 capability-floor anchor is byte-exact with v2.10 §3.7.3."""
     assert F4_CAPABILITY_FLOOR_LIFECYCLE_EMISSION_ANCHOR == (
@@ -219,6 +218,7 @@ def test_lifecycle_event_emission_required_at_every_tier() -> None:
 
 # --- acc #6 — Tier-3/4 egress-policy composition with C-AS-12 §12.4 --------
 
+
 def test_tier_4_reject_in_process_no_network_reachability() -> None:
     """acc #6 — Tier-4 full-VM with only an in-process collector is a violation
     (the most-isolated tier has no network reachability to it)."""
@@ -230,14 +230,12 @@ def test_tier_4_reject_in_process_no_network_reachability() -> None:
 
 # --- acc #7 — additive composition with U-OD-28 per-cell placement ---------
 
+
 def test_reachability_composes_additively_with_placement() -> None:
     """acc #7 — per-tier reachability composes additively with the U-OD-28
     per-cell collector placement; both must hold for emission to succeed."""
     # Every per-tier entry declares it composes with cell placement.
-    assert all(
-        e.composes_with_cell_placement
-        for e in PER_SANDBOX_TIER_REACHABILITY.values()
-    )
+    assert all(e.composes_with_cell_placement for e in PER_SANDBOX_TIER_REACHABILITY.values())
     # The assertion function takes BOTH the tier and the U-OD-28 placement —
     # a tier reachable in the abstract still fails if the cell placement does
     # not satisfy it (additive: tier-side AND placement-side).
@@ -248,12 +246,11 @@ def test_reachability_composes_additively_with_placement() -> None:
         is None
     )
     with pytest.raises(ReachabilityViolation):
-        assert_otlp_reachable_from_sandbox(
-            SandboxTier.TIER_1_PROCESS, CollectorPlacement.SIDECAR
-        )
+        assert_otlp_reachable_from_sandbox(SandboxTier.TIER_1_PROCESS, CollectorPlacement.SIDECAR)
 
 
 # --- acc #8 — cross-axis edge OD-S4-3.A to U-AS-NN (C-AS-12 §12.4) ---------
+
 
 def test_cross_axis_edge_to_u_as_nn_c_as_12_section_12_4() -> None:
     """acc #8 — the C-AS-12 §12.4 cross-axis edge is declared in the module
@@ -270,6 +267,7 @@ def test_cross_axis_edge_to_u_as_nn_c_as_12_section_12_4() -> None:
 
 
 # --- structural — SandboxTierReachability is frozen + extra-forbid ---------
+
 
 def test_sandbox_tier_reachability_frozen_extra_forbid() -> None:
     """`SandboxTierReachability` is frozen with `extra="forbid"`."""

@@ -15,11 +15,9 @@ ACs from CP plan v2.15 §1 U-CP-68 (preserved at v2.17):
 from __future__ import annotations
 
 import pytest
-
 from harness_cp.cp_shared_types import MCPTrustTier
 from harness_cp.per_server_trust_evaluator import (
     PerServerTrustEvaluator,
-    TierResolver,
 )
 from harness_cp.per_server_trust_types import (
     MCPPrimitive,
@@ -27,7 +25,6 @@ from harness_cp.per_server_trust_types import (
     TrustDecisionReason,
     TrustPolicy,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures — TrustPolicy variants exercising each branch
@@ -66,9 +63,7 @@ async def test_deny_list_wins_over_allow_list() -> None:
         deny=frozenset({"both-listed"}),
         allow=frozenset({"both-listed"}),
     )
-    result = await evaluator.evaluate(
-        "both-listed", MCPPrimitive.TOOL, None, policy
-    )
+    result = await evaluator.evaluate("both-listed", MCPPrimitive.TOOL, None, policy)
     assert result.permitted is False
     assert result.decision_reason == TrustDecisionReason.EXPLICIT_DENY
     assert result.audit_required is True
@@ -93,13 +88,9 @@ async def test_unknown_server_above_floor_permitted() -> None:
         default_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
         tier_rule=TierDerivationRule.OPERATOR_HOOK,
     )
-    result = await evaluator.evaluate(
-        "unknown-server", MCPPrimitive.TOOL, None, policy
-    )
+    result = await evaluator.evaluate("unknown-server", MCPPrimitive.TOOL, None, policy)
     assert result.permitted is True
-    assert result.decision_reason == (
-        TrustDecisionReason.UNKNOWN_SERVER_TIER_FLOOR_PASS
-    )
+    assert result.decision_reason == (TrustDecisionReason.UNKNOWN_SERVER_TIER_FLOOR_PASS)
 
 
 # ---------------------------------------------------------------------------
@@ -126,9 +117,7 @@ async def test_unknown_server_pass_always_audit_required() -> None:
         audit_below=MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
         tier_rule=TierDerivationRule.OPERATOR_HOOK,
     )
-    result = await evaluator.evaluate(
-        "unknown-srv", MCPPrimitive.TOOL, None, policy
-    )
+    result = await evaluator.evaluate("unknown-srv", MCPPrimitive.TOOL, None, policy)
     assert result.audit_required is True
 
 
@@ -137,13 +126,9 @@ async def test_unknown_server_violation_always_audit_required() -> None:
     """AC #3 — UNKNOWN_SERVER_TIER_FLOOR_VIOLATION sets audit_required=True."""
     evaluator = PerServerTrustEvaluator()  # default CONSERVATIVE → LEVEL_0
     policy = _policy(default_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL)
-    result = await evaluator.evaluate(
-        "unknown", MCPPrimitive.TOOL, None, policy
-    )
+    result = await evaluator.evaluate("unknown", MCPPrimitive.TOOL, None, policy)
     assert result.audit_required is True
-    assert result.decision_reason == (
-        TrustDecisionReason.UNKNOWN_SERVER_TIER_FLOOR_VIOLATION
-    )
+    assert result.decision_reason == (TrustDecisionReason.UNKNOWN_SERVER_TIER_FLOOR_VIOLATION)
 
 
 # ---------------------------------------------------------------------------
@@ -203,9 +188,7 @@ async def test_decision_reason_unknown_server_tier_floor_pass() -> None:
     UNKNOWN_SERVER_TIER_FLOOR_PASS (covered also by AC #2 test above; this
     repeats the assertion under different fixture pattern for clarity)."""
 
-    def resolver(
-        s: str, c: object | None, r: TierDerivationRule
-    ) -> MCPTrustTier:
+    def resolver(s: str, c: object | None, r: TierDerivationRule) -> MCPTrustTier:
         return MCPTrustTier.LEVEL_2_SANDBOX_ALL
 
     evaluator = PerServerTrustEvaluator(tier_resolver=resolver)
@@ -213,12 +196,8 @@ async def test_decision_reason_unknown_server_tier_floor_pass() -> None:
         default_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
         tier_rule=TierDerivationRule.PROTOCOL_VERSION_TABLE,
     )
-    result = await evaluator.evaluate(
-        "novel", MCPPrimitive.RESOURCE, None, policy
-    )
-    assert result.decision_reason == (
-        TrustDecisionReason.UNKNOWN_SERVER_TIER_FLOOR_PASS
-    )
+    result = await evaluator.evaluate("novel", MCPPrimitive.RESOURCE, None, policy)
+    assert result.decision_reason == (TrustDecisionReason.UNKNOWN_SERVER_TIER_FLOOR_PASS)
     assert result.permitted is True
 
 
@@ -229,12 +208,8 @@ async def test_decision_reason_unknown_server_tier_floor_violation() -> None:
     any LEVEL_>=1 floor)."""
     evaluator = PerServerTrustEvaluator()
     policy = _policy(default_tier=MCPTrustTier.LEVEL_1_SIGNED_PINNED)
-    result = await evaluator.evaluate(
-        "anyone", MCPPrimitive.PROMPT, None, policy
-    )
-    assert result.decision_reason == (
-        TrustDecisionReason.UNKNOWN_SERVER_TIER_FLOOR_VIOLATION
-    )
+    result = await evaluator.evaluate("anyone", MCPPrimitive.PROMPT, None, policy)
+    assert result.decision_reason == (TrustDecisionReason.UNKNOWN_SERVER_TIER_FLOOR_VIOLATION)
     assert result.permitted is False
 
 
@@ -251,9 +226,7 @@ async def test_default_resolver_raises_for_non_conservative_rules() -> None:
     evaluator = PerServerTrustEvaluator()  # default resolver
     policy = _policy(tier_rule=TierDerivationRule.PROTOCOL_VERSION_TABLE)
     with pytest.raises(ValueError, match="requires an operator-supplied TierResolver"):
-        await evaluator.evaluate(
-            "unknown", MCPPrimitive.TOOL, None, policy
-        )
+        await evaluator.evaluate("unknown", MCPPrimitive.TOOL, None, policy)
 
 
 @pytest.mark.asyncio
@@ -262,9 +235,7 @@ async def test_default_resolver_returns_min_tier_for_conservative() -> None:
     evaluator = PerServerTrustEvaluator()
     # Use a floor of LEVEL_0 — unknown server passes (MIN == floor).
     policy = _policy(default_tier=MCPTrustTier.LEVEL_0_REFUSE_REMOTE)
-    result = await evaluator.evaluate(
-        "unknown", MCPPrimitive.TOOL, None, policy
-    )
+    result = await evaluator.evaluate("unknown", MCPPrimitive.TOOL, None, policy)
     assert result.trust_tier_evaluated == MCPTrustTier.LEVEL_0_REFUSE_REMOTE
     assert result.permitted is True
 
@@ -299,8 +270,6 @@ async def test_allow_list_no_audit_when_tier_above_audit_floor() -> None:
         overrides={"allowed": MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT},
         audit_below=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
     )
-    result = await evaluator.evaluate(
-        "allowed", MCPPrimitive.TOOL, None, policy
-    )
+    result = await evaluator.evaluate("allowed", MCPPrimitive.TOOL, None, policy)
     assert result.decision_reason == TrustDecisionReason.EXPLICIT_ALLOW
     assert result.audit_required is False

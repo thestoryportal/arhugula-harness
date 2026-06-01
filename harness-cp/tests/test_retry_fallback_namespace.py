@@ -82,9 +82,7 @@ def test_harness_breaker_namespace_cardinality_seven() -> None:
 
 def test_harness_breaker_attributes_match_spec_verbatim() -> None:
     """Acceptance #2 — `harness.breaker.*` names match §3.5 + OD C-OD-07 §7.1."""
-    assert {
-        a.attribute_name for a in HARNESS_BREAKER_NAMESPACE_SCHEMA
-    } == _SPEC_HARNESS_BREAKER
+    assert {a.attribute_name for a in HARNESS_BREAKER_NAMESPACE_SCHEMA} == _SPEC_HARNESS_BREAKER
 
 
 def test_harness_breaker_source_authority() -> None:
@@ -124,9 +122,7 @@ def test_retry_attempt_event_schema_cardinality_three() -> None:
 
 def test_retry_attempt_event_fields_match_spec_verbatim() -> None:
     """Acceptance #6 — event field names match ADR-D6 v1.2 §1.2.2.2 verbatim."""
-    assert {
-        f.field_name for f in RETRY_ATTEMPT_EVENT_SCHEMA
-    } == _SPEC_RETRY_EVENT
+    assert {f.field_name for f in RETRY_ATTEMPT_EVENT_SCHEMA} == _SPEC_RETRY_EVENT
 
 
 def test_retry_attempt_event_parent_next_delay_ms_optional() -> None:

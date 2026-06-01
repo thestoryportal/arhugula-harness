@@ -13,13 +13,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
 from harness_core import SkillID
 from harness_cp.routing_manifest_residence import RoutingManifest
-from harness_is.state_ledger_entry_schema import Identifier
 from harness_runtime.lifecycle.procedural_tier_snapshot import (
     _canonicalize_procedural_tier_payload,
     make_procedural_tier_snapshot_resolver,

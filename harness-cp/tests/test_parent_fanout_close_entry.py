@@ -110,8 +110,8 @@ def test_merkle_construction_no_f2_writes() -> None:
     # No step has an F2-mutating effect — only the read-only / no-write /
     # separate-primitive effects are present (none writes an F2 entry).
     assert all(
-        s.f2_effect in {F2Effect.READ_ONLY, F2Effect.NO_F2_WRITES,
-                        F2Effect.SEPARATE_PRIMITIVE_WRITE}
+        s.f2_effect
+        in {F2Effect.READ_ONLY, F2Effect.NO_F2_WRITES, F2Effect.SEPARATE_PRIMITIVE_WRITE}
         for s in MERKLE_CONSTRUCTION_STEPS
     )
 

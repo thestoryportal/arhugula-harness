@@ -15,7 +15,6 @@ from harness_cp.validator_framework_types import (
     HITLEscalationBrief,
     ValidatorFailClass,
 )
-
 from harness_runtime.lifecycle.effective_palette import (
     DENY_ROW_PALETTE,
     FULL_PALETTE,

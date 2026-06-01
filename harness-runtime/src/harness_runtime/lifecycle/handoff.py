@@ -218,9 +218,7 @@ class RuntimeHandoffRegistry:
         the live clock and the prior-entry hash chain (U-IS-09 / U-IS-11) at
         write-time. Pure composition of
         `harness_cp.sub_agent_gate_level_descent.emit_sub_agent_dispatch_audit`."""
-        return emit_sub_agent_dispatch_audit(
-            parent_action_id, descent, brief_hash
-        )
+        return emit_sub_agent_dispatch_audit(parent_action_id, descent, brief_hash)
 
 
 @dataclass(frozen=True, slots=True)

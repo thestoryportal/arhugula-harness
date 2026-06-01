@@ -450,9 +450,7 @@ async def test_caller_site_override_emission_when_override_applied(
         step_id=StepID("step-0"),
         model_binding=override_binding,
     )
-    manifest = _manifest_with_step_override(
-        "wf-override-applied", "step-0", override
-    )
+    manifest = _manifest_with_step_override("wf-override-applied", "step-0", override)
     steps = _single_inference_step()
     dispatchers = _SingleKindRegistry(_NoopDispatcher())
 
@@ -533,9 +531,7 @@ async def test_caller_site_override_full_chain_verification_passes_e2e(
         step_id=StepID("step-0"),
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
     )
-    manifest = _manifest_with_step_override(
-        "wf-override-e2e-full-chain", "step-0", override
-    )
+    manifest = _manifest_with_step_override("wf-override-e2e-full-chain", "step-0", override)
     steps = _single_inference_step()
     dispatchers = _SingleKindRegistry(_NoopDispatcher())
 
@@ -580,9 +576,7 @@ async def test_caller_site_override_no_cp_is_wiring_does_not_emit(
         step_id=StepID("step-0"),
         model_binding=ModelBinding(provider="anthropic", model="claude-opus-4-7"),
     )
-    manifest = _manifest_with_step_override(
-        "wf-override-opt-out", "step-0", override
-    )
+    manifest = _manifest_with_step_override("wf-override-opt-out", "step-0", override)
     steps = _single_inference_step()
     dispatchers = _SingleKindRegistry(_NoopDispatcher())
 
@@ -641,9 +635,7 @@ async def test_caller_site_override_emission_actor_id_is_clean_identity(
         step_id=StepID("step-0"),
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
     )
-    manifest = _manifest_with_step_override(
-        "wf-override-actor-id-shape", "step-0", override
-    )
+    manifest = _manifest_with_step_override("wf-override-actor-id-shape", "step-0", override)
     steps = _single_inference_step()
     dispatchers = _SingleKindRegistry(_NoopDispatcher())
 

@@ -117,7 +117,7 @@ class _FakeSpanContextHandle:
 class _FakeSpanContext:
     """Minimal span context-manager substrate for ``FakeTracerProvider``."""
 
-    def __init__(self, name: str, parent: "FakeTracerProvider") -> None:
+    def __init__(self, name: str, parent: FakeTracerProvider) -> None:
         self.name = name
         self.attrs: dict[str, object] = {}
         self._parent = parent
@@ -144,7 +144,7 @@ class _FakeSpanContext:
         """
         return None
 
-    def get_span_context(self) -> "_FakeSpanContextHandle":
+    def get_span_context(self) -> _FakeSpanContextHandle:
         """OTel ``Span.get_span_context`` shim — production retry-instrumentation
         reads ``span_id`` from the returned handle to format
         ``retry.original_span_id``.
@@ -159,7 +159,7 @@ class _FakeSpanContext:
         """
         return None
 
-    def __enter__(self) -> "_FakeSpanContext":
+    def __enter__(self) -> _FakeSpanContext:
         self._parent.spans.append(self)
         return self
 
@@ -168,10 +168,10 @@ class _FakeSpanContext:
 
 
 class _FakeTracer:
-    def __init__(self, parent: "FakeTracerProvider") -> None:
+    def __init__(self, parent: FakeTracerProvider) -> None:
         self._parent = parent
 
-    def start_as_current_span(self, name: str) -> "_FakeSpanContext":
+    def start_as_current_span(self, name: str) -> _FakeSpanContext:
         return _FakeSpanContext(name, self._parent)
 
 
@@ -181,9 +181,9 @@ class FakeTracerProvider:
         self.shut_down = False
         # U-RT-101 — span capture surface for skill_activation emitter +
         # llm_dispatch emit-time verification at integration-test boundary.
-        self.spans: list["_FakeSpanContext"] = []
+        self.spans: list[_FakeSpanContext] = []
 
-    def get_tracer(self, _name: str) -> "_FakeTracer":
+    def get_tracer(self, _name: str) -> _FakeTracer:
         """OTel ``TracerProvider`` surface — emit-time tracer acquisition.
 
         Added at U-RT-101 e2e (AS-8d retirement gate close) per

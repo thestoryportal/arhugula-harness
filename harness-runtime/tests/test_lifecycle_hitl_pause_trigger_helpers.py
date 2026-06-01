@@ -17,14 +17,11 @@ from harness_cp.engine_class import EngineClass
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass, matrix_cell_for
 from harness_cp.validator_framework_types import HITLEscalationBrief
-
 from harness_runtime.lifecycle.hitl_gate_composer import (
     HITLPauseRequestedSignal,
-    _evaluate_cell_synchrony,  # pyright: ignore[reportPrivateUsage]
     _evaluate_cell_synchrony_tolerant,  # pyright: ignore[reportPrivateUsage]
 )
 from harness_runtime.lifecycle.webhook_delivery_composer import WebhookDeliveryResult
-
 
 # --- _evaluate_cell_synchrony ----------------------------------------------
 
@@ -166,7 +163,7 @@ def test_hitl_pause_requested_signal_normal_except_exception_does_not_suppress()
     try:
         try:
             raise sig
-        except Exception:  # noqa: BLE001 — intentional broad catch under test
+        except Exception:
             suppressed = True
     except HITLPauseRequestedSignal:
         pass

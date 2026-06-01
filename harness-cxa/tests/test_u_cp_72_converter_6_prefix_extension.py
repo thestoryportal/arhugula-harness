@@ -34,7 +34,6 @@ from harness_od.hitl_webhook_namespace import WebhookDeliveryAuditPayload
 from harness_od.mcp_trust_namespace import TrustEvaluationAuditPayload
 from harness_od.validator_namespace import ValidatorEscalationAuditPayload
 
-
 _KEY = "test-key"
 
 
@@ -133,10 +132,7 @@ def test_webhook_carrier_projects_to_audit_hitl_webhook_subnamespace() -> None:
     assert isinstance(entry, AuditLedgerEntry)
     attrs = entry.payload.audit_namespace_attrs
     assert f"{CP_AUDIT_NAMESPACE_PREFIX}.action_id" in attrs
-    assert (
-        attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.action_id"]
-        == "hitl_webhook:wf-1:step-0:idem-abc"
-    )
+    assert attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.action_id"] == "hitl_webhook:wf-1:step-0:idem-abc"
     assert f"{WEBHOOK_AUDIT_NAMESPACE_PREFIX}.url_hash" in attrs
     assert f"{WEBHOOK_AUDIT_NAMESPACE_PREFIX}.delivery_attempts" in attrs
 
@@ -144,10 +140,7 @@ def test_webhook_carrier_projects_to_audit_hitl_webhook_subnamespace() -> None:
 def test_operator_burden_carrier_projects_to_audit_operator_burden_subnamespace() -> None:
     entry = cp_audit_to_od_audit(_operator_burden_carrier(), key_id=_KEY)
     attrs = entry.payload.audit_namespace_attrs
-    assert (
-        attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.action_id"]
-        == "operator_burden:wf-1:step-0:burden-1"
-    )
+    assert attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.action_id"] == "operator_burden:wf-1:step-0:burden-1"
     # At least one producer-specific attr in the operator_burden namespace.
     operator_burden_keys = [
         k for k in attrs if k.startswith(f"{OPERATOR_BURDEN_AUDIT_NAMESPACE_PREFIX}.")
@@ -158,26 +151,16 @@ def test_operator_burden_carrier_projects_to_audit_operator_burden_subnamespace(
 def test_validator_carrier_projects_to_audit_validator_subnamespace() -> None:
     entry = cp_audit_to_od_audit(_validator_carrier(), key_id=_KEY)
     attrs = entry.payload.audit_namespace_attrs
-    assert (
-        attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.action_id"]
-        == "validator:wf-1:step-0:v-1"
-    )
-    validator_keys = [
-        k for k in attrs if k.startswith(f"{VALIDATOR_AUDIT_NAMESPACE_PREFIX}.")
-    ]
+    assert attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.action_id"] == "validator:wf-1:step-0:v-1"
+    validator_keys = [k for k in attrs if k.startswith(f"{VALIDATOR_AUDIT_NAMESPACE_PREFIX}.")]
     assert len(validator_keys) >= 1
 
 
 def test_mcp_trust_carrier_projects_to_audit_mcp_trust_subnamespace() -> None:
     entry = cp_audit_to_od_audit(_mcp_trust_carrier(), key_id=_KEY)
     attrs = entry.payload.audit_namespace_attrs
-    assert (
-        attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.action_id"]
-        == "mcp_trust:wf-1:step-0:t-1"
-    )
-    mcp_trust_keys = [
-        k for k in attrs if k.startswith(f"{MCP_TRUST_AUDIT_NAMESPACE_PREFIX}.")
-    ]
+    assert attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.action_id"] == "mcp_trust:wf-1:step-0:t-1"
+    mcp_trust_keys = [k for k in attrs if k.startswith(f"{MCP_TRUST_AUDIT_NAMESPACE_PREFIX}.")]
     assert len(mcp_trust_keys) >= 1
 
 
@@ -280,9 +263,7 @@ def _resume_carrier() -> PauseResumeAuditPayload:
 def test_pause_carrier_projects_to_audit_pause_resume_subnamespace() -> None:
     entry = cp_audit_to_od_audit(_pause_carrier(), key_id=_KEY)
     attrs = entry.payload.audit_namespace_attrs
-    assert (
-        attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.action_id"] == "pause:wf-1:5"
-    )
+    assert attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.action_id"] == "pause:wf-1:5"
     pause_resume_keys = [
         k for k in attrs if k.startswith(f"{PAUSE_RESUME_AUDIT_NAMESPACE_PREFIX}.")
     ]
@@ -291,9 +272,7 @@ def test_pause_carrier_projects_to_audit_pause_resume_subnamespace() -> None:
     # (None values dropped per _project_producer_namespace_attrs conditional-
     # field discipline).
     assert f"{PAUSE_RESUME_AUDIT_NAMESPACE_PREFIX}.pause_reason" in attrs
-    assert (
-        f"{PAUSE_RESUME_AUDIT_NAMESPACE_PREFIX}.state_ledger_anchor" in attrs
-    )
+    assert f"{PAUSE_RESUME_AUDIT_NAMESPACE_PREFIX}.state_ledger_anchor" in attrs
     assert f"{PAUSE_RESUME_AUDIT_NAMESPACE_PREFIX}.resume_outcome" not in attrs
 
 
@@ -329,8 +308,7 @@ def test_post_sub_arc_a_5_audit_payload_branches_distinct() -> None:
     seen_prefixes: set[str] = set()
     for entry in entries:
         producer_prefixes = {
-            ".".join(k.split(".")[1:3]) if k.split(".")[1] == "pause_resume"
-            else k.split(".")[1]
+            ".".join(k.split(".")[1:3]) if k.split(".")[1] == "pause_resume" else k.split(".")[1]
             for k in entry.payload.audit_namespace_attrs
             if k.startswith("audit.") and not k.startswith("audit.cp.")
         }

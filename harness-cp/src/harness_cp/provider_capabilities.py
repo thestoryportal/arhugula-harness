@@ -76,9 +76,7 @@ class ProviderCapabilities(BaseModel):
 # extended-thinking tier. The tier members are anchored to U-AS-29's landed
 # `AnthropicModel` enum (Sonnet 4.6 / Opus 4.6 / Opus 4.7); Haiku 4.5 is the
 # non-thinking Anthropic model and is excluded.
-_ANTHROPIC_THINKING_MODELS: frozenset[str] = frozenset(
-    {"sonnet-4-6", "opus-4-6", "opus-4-7"}
-)
+_ANTHROPIC_THINKING_MODELS: frozenset[str] = frozenset({"sonnet-4-6", "opus-4-6", "opus-4-7"})
 """The Anthropic models with extended-thinking support (C-CP-01 §1.2 +
 AS C-AS-13 §13.4). String values are the §13.4 model-tier identifiers."""
 
@@ -113,9 +111,7 @@ def reflect_provider_capabilities(provider: str, model: str) -> ProviderCapabili
     )
 
 
-def provider_supports(
-    capability: ProviderCapability, caps: ProviderCapabilities
-) -> bool:
+def provider_supports(capability: ProviderCapability, caps: ProviderCapabilities) -> bool:
     """Whether `caps` supports `capability` (C-CP-01 §1.2).
 
     Pure projection of the boolean capability fields onto the

@@ -35,8 +35,8 @@ if TYPE_CHECKING:
     from opentelemetry.sdk.trace import ReadableSpan
 
 __all__ = [
-    "SANDBOX_VIOLATION_SPAN_NAME",
     "BREAKER_TRIPPED_SPAN_NAME",
+    "SANDBOX_VIOLATION_SPAN_NAME",
     "VALIDATOR_FAIL_PERMANENCE_ATTR",
     "VALIDATOR_FAIL_PERMANENCE_PERMANENT_VALUE",
     "is_classification_trigger",
@@ -78,6 +78,4 @@ def is_classification_trigger(span: ReadableSpan) -> bool:
     attrs = span.attributes
     if attrs is None:
         return False
-    return attrs.get(VALIDATOR_FAIL_PERMANENCE_ATTR) == (
-        VALIDATOR_FAIL_PERMANENCE_PERMANENT_VALUE
-    )
+    return attrs.get(VALIDATOR_FAIL_PERMANENCE_ATTR) == (VALIDATOR_FAIL_PERMANENCE_PERMANENT_VALUE)

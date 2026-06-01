@@ -28,11 +28,9 @@ from harness_is.state_ledger_write import (
     read_ledger,
 )
 
-
 _ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="agent-1")
 _SNAPSHOT_REF = Identifier(
-    "ffeeddccbbaa99887766554433221100"
-    "0011223344556677889900aabbccddeeff"[:64]
+    "ffeeddccbbaa998877665544332211000011223344556677889900aabbccddeeff"[:64]
 )
 
 
@@ -169,11 +167,15 @@ def test_action_id_and_sidecar_compose_without_conflation(tmp_path: Path) -> Non
         timestamp=datetime(2026, 5, 30, 1, tzinfo=UTC),
         procedural_tier_snapshot_ref=_SNAPSHOT_REF,  # procedural-tier ref
     )
-    append_ledger_entry(handle, payload, WriteKey(
-        thread_id=Identifier("t"),
-        step_id=Identifier("s"),
-        idempotency_key=Identifier("idem-x"),
-    ))
+    append_ledger_entry(
+        handle,
+        payload,
+        WriteKey(
+            thread_id=Identifier("t"),
+            step_id=Identifier("s"),
+            idempotency_key=Identifier("idem-x"),
+        ),
+    )
     entries = read_ledger(handle)
     assert entries[0].action_id == "workflow.step.completed"
     assert entries[0].procedural_tier_snapshot_ref == _SNAPSHOT_REF

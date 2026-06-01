@@ -56,8 +56,6 @@ from harness_cp.cross_family_fallback_chain import (
     ProviderFamily,
 )
 from harness_cp.engine_class import EngineClass
-from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
-from harness_cp.pause_resume_protocol_types import PauseSnapshot
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import execute_workflow
@@ -67,14 +65,12 @@ from harness_runtime.bootstrap import run_bootstrap
 from harness_runtime.lifecycle.pause_resume_protocol_types import (
     PauseResumeProtocolConfig,
 )
-from harness_runtime.lifecycle.webhook_delivery_composer import WebhookDeliveryResult
 from harness_runtime.lifecycle.webhook_delivery_composer_types import (
     WebhookDeliveryComposerConfig,
 )
 from harness_runtime.types import RuntimeConfig
 
 from .conftest import WORKLOAD, build_config
-
 
 # --- Test fixtures ----------------------------------------------------------
 
@@ -182,9 +178,7 @@ def _config_webhook_only(tmp_path: Path) -> RuntimeConfig:
     """webhook opt-in; pause-resume opt-out (path (v) substrate)."""
     base = build_config(tmp_path)
     return base.model_copy(
-        update={
-            "webhook_delivery_composer_config": WebhookDeliveryComposerConfig.default()
-        },
+        update={"webhook_delivery_composer_config": WebhookDeliveryComposerConfig.default()},
     )
 
 
@@ -232,8 +226,7 @@ async def test_path_iii_neither_binding_falls_through_to_sync(
         )
     )
     assert result.status == RunStatus.SUCCESS, (
-        f"expected SUCCESS, got {result.status}; "
-        f"fail_class={result.fail_class}"
+        f"expected SUCCESS, got {result.status}; fail_class={result.fail_class}"
     )
 
 

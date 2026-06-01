@@ -33,7 +33,6 @@ from typing import Any
 import pytest
 from harness_core.deployment_surface import DeploymentSurface
 from harness_cp.topology_pattern import TopologyPattern
-
 from harness_runtime.bootstrap.factories.webhook_delivery_composer_factory import (
     WebhookDeliveryComposerStageMaterializeError,
     materialize_webhook_delivery_composer_stage,
@@ -87,8 +86,7 @@ def test_factory_signature_accepts_config_ctx() -> None:
     sig = inspect.signature(materialize_webhook_delivery_composer_stage)
     params = list(sig.parameters)
     assert params == ["config", "ctx"], (
-        "factory signature must be (config, ctx) per spec §14.16.2; "
-        f"got {params}"
+        f"factory signature must be (config, ctx) per spec §14.16.2; got {params}"
     )
 
 

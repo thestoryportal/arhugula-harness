@@ -72,9 +72,7 @@ class SamplingPostureF18(StrEnum):
     — the `offline_judge` posture per C-OD-17 §17.2 separate-child-span emission.
     """
 
-    ALWAYS_SAMPLED_IF_FAILURE_BASE_RATE_IF_PASS = (
-        "ALWAYS_SAMPLED_IF_FAILURE_BASE_RATE_IF_PASS"
-    )
+    ALWAYS_SAMPLED_IF_FAILURE_BASE_RATE_IF_PASS = "ALWAYS_SAMPLED_IF_FAILURE_BASE_RATE_IF_PASS"
     SEPARATE_CHILD_SPAN_PER_U_OD_23 = "SEPARATE_CHILD_SPAN_PER_U_OD_23"
 
 
@@ -190,8 +188,7 @@ def validate_eval_span_routing(
     if discriminator is EvalKindDiscriminator.INLINE_GATE:
         if routing.emitted_as_child_span:
             raise EvalShapeViolation(
-                "inline_gate span MUST NOT be emitted as a separate child span "
-                "(C-OD-18 §18.3)"
+                "inline_gate span MUST NOT be emitted as a separate child span (C-OD-18 §18.3)"
             )
         if not routing.has_validator_fail_attributes:
             raise EvalShapeViolation(

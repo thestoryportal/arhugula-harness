@@ -24,8 +24,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
-from harness_cp.cp_shared_types import ModelBinding
+from harness_core.persona_tier import PersonaTier
+from harness_core.workload_class import WorkloadClass
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
     ProviderCandidate,
@@ -33,15 +33,10 @@ from harness_cp.cross_family_fallback_chain import (
 )
 from harness_cp.engine_class import EngineClass
 from harness_cp.topology_pattern import TopologyPattern
-from harness_cp.workflow_driver_types import StepKind, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
-from harness_core.persona_tier import PersonaTier
-from harness_core.workload_class import WorkloadClass
-
 from harness_runtime.api import WorkflowObject
 from harness_runtime.lifecycle.workflow_manifest_loader import (
     LoadedWorkflow,
-    ManifestAdmissibilityError,
     ManifestEnumValueError,
     ManifestParseError,
     ManifestSchemaError,
@@ -49,8 +44,8 @@ from harness_runtime.lifecycle.workflow_manifest_loader import (
     UnsupportedManifestFormatError,
     UnsupportedManifestVersionError,
     WorkflowManifest,
-    WorkflowManifestLoadError,
     WorkflowManifestLoader,
+    WorkflowManifestLoadError,
 )
 
 # ---------------------------------------------------------------------------
@@ -331,10 +326,7 @@ def test_engine_class_invalid_enum_value_raises_manifest_enum_value_error(
 # AC #10 — duplicate step_id → ManifestStepIDCollisionError naming the collision
 def test_duplicate_step_id_raises_step_id_collision_error(tmp_path: Path) -> None:
     body = _VALID_TOML_MINIMUM + (
-        '\n[[steps]]\n'
-        'step_id = "s1"\n'
-        'step_kind = "tool-step"\n'
-        'step_payload = {}\n'
+        '\n[[steps]]\nstep_id = "s1"\nstep_kind = "tool-step"\nstep_payload = {}\n'
     )
     path = _write(tmp_path, "dup.toml", body)
     with pytest.raises(ManifestStepIDCollisionError) as exc:
@@ -437,8 +429,8 @@ fallback_chain = { primary = { provider = "anthropic", model = "claude-opus-4-7"
 def _yaml_with_wme(extra_workflow_lines: str = "") -> str:
     """Build a YAML manifest body that supplies the full WME field-set."""
     return (
-        'version: 1\n'
-        'workflow:\n'
+        "version: 1\n"
+        "workflow:\n"
         '  workflow_id: "wf-projected"\n'
         '  workload_class: "software-engineering"\n'
         '  persona_tier: "solo-developer"\n'
@@ -446,13 +438,13 @@ def _yaml_with_wme(extra_workflow_lines: str = "") -> str:
         '  topology_pattern: "evaluator-optimizer"\n'
         + extra_workflow_lines
         + _WME_REQUIRED_YAML_FRAGMENT
-        + 'default_model_binding:\n'
+        + "default_model_binding:\n"
         + '  provider: "anthropic"\n'
         + '  model: "claude-opus-4-7"\n'
-        + 'steps:\n'
+        + "steps:\n"
         + '  - step_id: "s1"\n'
         + '    step_kind: "inference-step"\n'
-        + '    step_payload: {}\n'
+        + "    step_payload: {}\n"
     )
 
 
@@ -515,7 +507,9 @@ def test_full_optional_manifest_matches_manual_construction(tmp_path: Path) -> N
         hitl_placements=(),
         per_step_overrides={},
         entry_version=2,
-        default_gate_level=__import__("harness_cp.gate_level_rule", fromlist=["GateLevel"]).GateLevel.DENY,
+        default_gate_level=__import__(
+            "harness_cp.gate_level_rule", fromlist=["GateLevel"]
+        ).GateLevel.DENY,
     )
     assert workflow.manifest_entry == manual_wme
 
@@ -565,7 +559,7 @@ def test_non_json_serializable_step_payload_raises_schema_error(
         + "[[steps]]\n"
         + 'step_id = "s1"\n'
         + 'step_kind = "inference-step"\n'
-        + 'step_payload = { scheduled_at = 2026-05-28T10:00:00Z }\n'
+        + "step_payload = { scheduled_at = 2026-05-28T10:00:00Z }\n"
     )
     path = _write(tmp_path, "bad-payload.toml", body)
     with pytest.raises(ManifestSchemaError) as exc:
@@ -639,12 +633,7 @@ def test_yaml_duplicate_key_rejected_per_strict_safe_loader(tmp_path: Path) -> N
 
 
 def test_yaml_anchor_alias_rejected_per_strict_safe_loader(tmp_path: Path) -> None:
-    body = (
-        "version: 1\n"
-        "workflow: &anchor\n"
-        '  workflow_id: "wf-anchor"\n'
-        "alias: *anchor\n"
-    )
+    body = 'version: 1\nworkflow: &anchor\n  workflow_id: "wf-anchor"\nalias: *anchor\n'
     path = _write(tmp_path, "anchor.yaml", body)
     with pytest.raises(WorkflowManifestLoadError) as exc:
         WorkflowManifestLoader.load(path)

@@ -24,11 +24,7 @@ from harness_cp.cp_cross_axis_composition_manifest import (
 
 
 def _by_name(name: str):
-    return next(
-        e
-        for e in CP_CROSS_AXIS_COMPOSITION_MANIFEST
-        if e.composition_name == name
-    )
+    return next(e for e in CP_CROSS_AXIS_COMPOSITION_MANIFEST if e.composition_name == name)
 
 
 def test_cross_axis_composition_manifest_cardinality_nine() -> None:
@@ -38,13 +34,9 @@ def test_cross_axis_composition_manifest_cardinality_nine() -> None:
 
 def test_per_composition_source_units_match_spec() -> None:
     """#1 — per-composition CP source units match C-CP-24 §24.2 verbatim."""
-    assert _by_name("CP_namespace_exports").composition_surfaces[
-        0
-    ].cp_source_units == ("U-CP-54",)
+    assert _by_name("CP_namespace_exports").composition_surfaces[0].cp_source_units == ("U-CP-54",)
     assert set(
-        _by_name("five_axis_gate_level_composition")
-        .composition_surfaces[0]
-        .cp_source_units
+        _by_name("five_axis_gate_level_composition").composition_surfaces[0].cp_source_units
     ) == {"U-CP-43", "U-CP-45"}
     assert set(
         _by_name("per_persona_tier_audit_cryptographic_shape")
@@ -58,9 +50,9 @@ def test_session_targets_match_spec() -> None:
     assert _by_name("CP_namespace_exports").exported_to_session == (
         SessionTarget.OD_PLAN_SESSION_4,
     )
-    assert _by_name(
-        "T_perm_3_three_layer_composition"
-    ).exported_to_session == (SessionTarget.CROSS_AXIS_COMPOSITION_SESSION_5,)
+    assert _by_name("T_perm_3_three_layer_composition").exported_to_session == (
+        SessionTarget.CROSS_AXIS_COMPOSITION_SESSION_5,
+    )
     # deterministic_outer_harness_boundary exports to both sessions.
     both = _by_name("deterministic_outer_harness_boundary").exported_to_session
     assert set(both) == {

@@ -54,10 +54,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import harness_runtime.cli.app as _ensure_import
 import pytest
 from typer.testing import CliRunner
-
-import harness_runtime.cli.app as _ensure_import  # noqa: F401
 
 _cli_app_mod = sys.modules["harness_runtime.cli.app"]
 assert _ensure_import is not None
@@ -147,9 +146,7 @@ def _install_mocks(
         captured["config"] = config
         return run_result if run_result is not None else _run_result()
 
-    monkeypatch.setattr(
-        _cli_app_mod.RuntimeConfigSource, "load", classmethod(_fake_config_load)
-    )
+    monkeypatch.setattr(_cli_app_mod.RuntimeConfigSource, "load", classmethod(_fake_config_load))
     monkeypatch.setattr("harness_runtime.api.run", _fake_api_run)
     return captured
 
@@ -170,22 +167,15 @@ def test_ac2_yaml_and_toml_manifests_produce_equivalent_loaded_workflow() -> Non
     toml_workflow = WorkflowManifestLoader.load_workflow(_FIXTURE_DIR / "minimal.toml")
     assert yaml_workflow.workflow_id == toml_workflow.workflow_id
     assert yaml_workflow.workload_class is toml_workflow.workload_class
-    assert (
-        yaml_workflow.manifest_entry.engine_class
-        is toml_workflow.manifest_entry.engine_class
-    )
+    assert yaml_workflow.manifest_entry.engine_class is toml_workflow.manifest_entry.engine_class
     assert (
         yaml_workflow.manifest_entry.topology_pattern
         is toml_workflow.manifest_entry.topology_pattern
     )
     assert (
-        yaml_workflow.default_model_binding.provider
-        == toml_workflow.default_model_binding.provider
+        yaml_workflow.default_model_binding.provider == toml_workflow.default_model_binding.provider
     )
-    assert (
-        yaml_workflow.default_model_binding.model
-        == toml_workflow.default_model_binding.model
-    )
+    assert yaml_workflow.default_model_binding.model == toml_workflow.default_model_binding.model
     assert len(yaml_workflow.steps) == len(toml_workflow.steps)
     assert yaml_workflow.steps[0].step_id == toml_workflow.steps[0].step_id
 
@@ -329,9 +319,7 @@ async def test_ac4_multi_step_deterministic_execution_completes_all_steps(
         async def aclose(self) -> None:
             return None
 
-    async def _fake_clients(
-        *_args: object, **_kwargs: object
-    ) -> ProviderClientsStage:
+    async def _fake_clients(*_args: object, **_kwargs: object) -> ProviderClientsStage:
         return ProviderClientsStage(
             providers={
                 "anthropic": _FakeProvider("anthropic"),
@@ -340,9 +328,7 @@ async def test_ac4_multi_step_deterministic_execution_completes_all_steps(
             }
         )
 
-    monkeypatch.setattr(
-        _stage_3a_mod, "materialize_provider_clients_stage", _fake_clients
-    )
+    monkeypatch.setattr(_stage_3a_mod, "materialize_provider_clients_stage", _fake_clients)
 
     class _FakeDaemon:
         async def start(self) -> None:
@@ -380,9 +366,7 @@ async def test_ac4_multi_step_deterministic_execution_completes_all_steps(
         "materialize_collector_daemon_stage",
         lambda config, **_: _CollectorStage(_FakeDaemon()),
     )
-    monkeypatch.setattr(
-        _stage_4_od_mod, "materialize_ring_buffer_stage", lambda config, _d: None
-    )
+    monkeypatch.setattr(_stage_4_od_mod, "materialize_ring_buffer_stage", lambda config, _d: None)
     monkeypatch.setattr(
         _stage_4_od_mod,
         "materialize_tracer_provider_stage",
@@ -495,9 +479,7 @@ async def test_ac4_multi_step_deterministic_execution_completes_all_steps(
             steps=steps,
             run_id="run-ac4-mech-alpha-1",
             ctx=ctx,  # type: ignore[arg-type]
-            default_model_binding=ModelBinding(
-                provider="anthropic", model="claude-haiku-4-5"
-            ),
+            default_model_binding=ModelBinding(provider="anthropic", model="claude-haiku-4-5"),
             step_dispatchers=_SingleKindRegistry(  # type: ignore[arg-type]
                 _NoDrainDispatcher()
             ),
@@ -511,8 +493,7 @@ async def test_ac4_multi_step_deterministic_execution_completes_all_steps(
 
     # ---------------- invariant 2: status == SUCCESS ----------------
     assert cp_result.status == _CpRunStatus.SUCCESS, (
-        f"expected SUCCESS, got {cp_result.status}; "
-        f"fail_class={cp_result.fail_class}"
+        f"expected SUCCESS, got {cp_result.status}; fail_class={cp_result.fail_class}"
     )
     # SUCCESS sets terminal_step_index=None per workflow_driver.py:1178.
     assert cp_result.terminal_step_index is None
@@ -528,8 +509,7 @@ async def test_ac4_multi_step_deterministic_execution_completes_all_steps(
     assert cp_result.final_state is not None
     assert isinstance(cp_result.final_state, dict)
     assert len(cp_result.final_state) >= 1, (
-        f"final_state must carry accumulated per-step contributions; got "
-        f"{cp_result.final_state!r}"
+        f"final_state must carry accumulated per-step contributions; got {cp_result.final_state!r}"
     )
 
     # ---------------- invariant 4: ledger has 3 entries + hash chain intact ----------------
@@ -595,9 +575,7 @@ def test_ac10_config_load_failure_exits_three(
 ) -> None:
     _install_mocks(
         monkeypatch,
-        config_raises=RuntimeConfigLoadError(
-            "synthetic e2e config failure", source="track-b-e2e"
-        ),
+        config_raises=RuntimeConfigLoadError("synthetic e2e config failure", source="track-b-e2e"),
     )
     result = runner.invoke(app, ["run", str(_FIXTURE_DIR / "minimal.yaml")])
     assert result.exit_code == EXIT_CONFIG_ERROR, result.stdout + result.stderr
@@ -629,9 +607,7 @@ def test_one_shot_and_daemon_client_pass_same_manifest_path(
     # Daemon-client mode: mock _daemon_client_dispatch + verify it sees the path.
     daemon_captured: dict[str, Any] = {}
 
-    async def _fake_daemon_dispatch(
-        *, workflow_file: Path, socket_path: Path
-    ) -> dict[str, Any]:
+    async def _fake_daemon_dispatch(*, workflow_file: Path, socket_path: Path) -> dict[str, Any]:
         daemon_captured["workflow_file"] = workflow_file
         daemon_captured["socket_path"] = socket_path
         return {"status": "success", "workflow_id": "track-b-minimal"}
@@ -649,12 +625,8 @@ def test_one_shot_and_daemon_client_pass_same_manifest_path(
     # Both modes report SUCCESS-class status (exit code 0 verified above).
     # one-shot uses runtime status="completed"; daemon-client uses CP "success".
     # The surface equivalence is the exit code; status-string format differs.
-    assert "completed" in _plain(result_os.stdout) or "track-b-minimal" in _plain(
-        result_os.stdout
-    )
-    assert "success" in _plain(result_dc.stdout) or "track-b-minimal" in _plain(
-        result_dc.stdout
-    )
+    assert "completed" in _plain(result_os.stdout) or "track-b-minimal" in _plain(result_os.stdout)
+    assert "success" in _plain(result_dc.stdout) or "track-b-minimal" in _plain(result_dc.stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -758,12 +730,8 @@ async def test_ac1_real_anthropic_single_step_succeeds(
         _ = config
         return None
 
-    monkeypatch.setattr(
-        _stage_4_od_mod, "materialize_tracer_provider_stage", _fake_tracer_stage
-    )
-    monkeypatch.setattr(
-        _stage_4_od_mod, "materialize_span_processor_stage", _fake_span_processor
-    )
+    monkeypatch.setattr(_stage_4_od_mod, "materialize_tracer_provider_stage", _fake_tracer_stage)
+    monkeypatch.setattr(_stage_4_od_mod, "materialize_span_processor_stage", _fake_span_processor)
 
     # ---------------- config ----------------
     surface = DeploymentSurface.LOCAL_DEVELOPMENT
@@ -818,9 +786,7 @@ async def test_ac1_real_anthropic_single_step_succeeds(
     # messages.create per `llm_dispatch.py:739` _to_messages_create_kwargs.
     # Single-token reply minimises cost + latency.
     inference_payload = {
-        "messages": [
-            {"role": "user", "content": "Reply with the single word: ok"}
-        ],
+        "messages": [{"role": "user", "content": "Reply with the single word: ok"}],
         "tools": [],
         "params": {"max_tokens": 8},
     }
@@ -997,12 +963,8 @@ async def test_ac3_daemon_mode_equivalent_to_one_shot_with_real_llm(
         _ = config
         return None
 
-    monkeypatch.setattr(
-        _stage_4_od_mod, "materialize_tracer_provider_stage", _fake_tracer_stage
-    )
-    monkeypatch.setattr(
-        _stage_4_od_mod, "materialize_span_processor_stage", _fake_span_processor
-    )
+    monkeypatch.setattr(_stage_4_od_mod, "materialize_tracer_provider_stage", _fake_tracer_stage)
+    monkeypatch.setattr(_stage_4_od_mod, "materialize_span_processor_stage", _fake_span_processor)
 
     # ---------------- config (per AC #1 — E-prod-3 opt-in) ----------------
     surface = DeploymentSurface.LOCAL_DEVELOPMENT
@@ -1050,9 +1012,7 @@ async def test_ac3_daemon_mode_equivalent_to_one_shot_with_real_llm(
 
     # ---------------- workflow with real INFERENCE_STEP messages payload ----------------
     inference_payload = {
-        "messages": [
-            {"role": "user", "content": "Reply with the single word: ok"}
-        ],
+        "messages": [{"role": "user", "content": "Reply with the single word: ok"}],
         "tools": [],
         "params": {"max_tokens": 8},
     }
@@ -1261,12 +1221,8 @@ async def test_ac4_multi_step_real_llm_execution(
         _ = config
         return None
 
-    monkeypatch.setattr(
-        _stage_4_od_mod, "materialize_tracer_provider_stage", _fake_tracer_stage
-    )
-    monkeypatch.setattr(
-        _stage_4_od_mod, "materialize_span_processor_stage", _fake_span_processor
-    )
+    monkeypatch.setattr(_stage_4_od_mod, "materialize_tracer_provider_stage", _fake_tracer_stage)
+    monkeypatch.setattr(_stage_4_od_mod, "materialize_span_processor_stage", _fake_span_processor)
 
     # ---------------- config (per AC #1 — E-prod-3 opt-in) ----------------
     surface = DeploymentSurface.LOCAL_DEVELOPMENT
@@ -1487,12 +1443,8 @@ async def test_ac7_skill_activation_emits_skill_namespace_span(
         _ = config
         return None
 
-    monkeypatch.setattr(
-        _stage_4_od_mod, "materialize_tracer_provider_stage", _fake_tracer_stage
-    )
-    monkeypatch.setattr(
-        _stage_4_od_mod, "materialize_span_processor_stage", _fake_span_processor
-    )
+    monkeypatch.setattr(_stage_4_od_mod, "materialize_tracer_provider_stage", _fake_tracer_stage)
+    monkeypatch.setattr(_stage_4_od_mod, "materialize_span_processor_stage", _fake_span_processor)
 
     # ---------------- skills dir + one .skill.json ----------------
     skills_dir = tmp_path / "skills"
@@ -1593,9 +1545,7 @@ async def test_ac7_skill_activation_emits_skill_namespace_span(
 
     # ---------------- workflow with real INFERENCE_STEP ----------------
     inference_payload = {
-        "messages": [
-            {"role": "user", "content": "Reply with the single word: ok"}
-        ],
+        "messages": [{"role": "user", "content": "Reply with the single word: ok"}],
         "tools": [],
         "params": {"max_tokens": 8},
     }
@@ -1669,8 +1619,7 @@ async def test_ac7_skill_activation_emits_skill_namespace_span(
     # skill.activation_mode) + the workflow.id trace-context primitive.
     activation_spans = [s for s in tracer.spans if s.name == "skill.activation"]
     assert len(activation_spans) >= 1, (
-        f"no skill.activation span emitted; captured names="
-        f"{[s.name for s in tracer.spans]!r}"
+        f"no skill.activation span emitted; captured names={[s.name for s in tracer.spans]!r}"
     )
     span = activation_spans[0]
     assert span.attrs["skill.id"] == test_skill_id
@@ -1777,12 +1726,8 @@ async def test_ac8_webhook_delivery_emits_hitl_webhook_span(
         _ = config
         return None
 
-    monkeypatch.setattr(
-        _stage_4_od_mod, "materialize_tracer_provider_stage", _fake_tracer_stage
-    )
-    monkeypatch.setattr(
-        _stage_4_od_mod, "materialize_span_processor_stage", _fake_span_processor
-    )
+    monkeypatch.setattr(_stage_4_od_mod, "materialize_tracer_provider_stage", _fake_tracer_stage)
+    monkeypatch.setattr(_stage_4_od_mod, "materialize_span_processor_stage", _fake_span_processor)
 
     # ---------------- config (webhook-opt-in + provider opt-in) ----------------
     surface = DeploymentSurface.LOCAL_DEVELOPMENT
@@ -1861,9 +1806,7 @@ async def test_ac8_webhook_delivery_emits_hitl_webhook_span(
         timeout=5,
         degradation_mode="fail-closed",
     )
-    object.__setattr__(
-        ctx.webhook_delivery_composer, "_webhook_config", operator_webhook_config
-    )
+    object.__setattr__(ctx.webhook_delivery_composer, "_webhook_config", operator_webhook_config)
 
     # ---------------- construct a synthetic HITL escalation brief ----------------
     # HITLEscalationBrief field-set per CP spec v1.10 §25.2:
@@ -1880,21 +1823,15 @@ async def test_ac8_webhook_delivery_emits_hitl_webhook_span(
     )
 
     # ---------------- exercise the spec-canonical brief surface ----------------
-    result = await ctx.webhook_delivery_composer.deliver_webhook_for_brief(
-        brief, "idem-ac8-1"
-    )
+    result = await ctx.webhook_delivery_composer.deliver_webhook_for_brief(brief, "idem-ac8-1")
 
     # AC #8 invariant — webhook delivered + status 200.
-    assert result.delivered is True, (
-        f"expected delivered=True; got result={result!r}"
-    )
+    assert result.delivered is True, f"expected delivered=True; got result={result!r}"
     assert result.status_code == 200
     assert result.delivery_attempts == 1
 
     # AC #8 invariant — exactly one POST request captured at the mock transport.
-    assert len(captured_requests) == 1, (
-        f"expected 1 POST; got {len(captured_requests)} requests"
-    )
+    assert len(captured_requests) == 1, f"expected 1 POST; got {len(captured_requests)} requests"
     request = captured_requests[0]
     assert request.method == "POST"
     assert request.url.path == "/hook"
@@ -1905,12 +1842,10 @@ async def test_ac8_webhook_delivery_emits_hitl_webhook_span(
     outer_spans = [s for s in tracer.spans if s.name == "hitl.webhook.deliver"]
     attempt_spans = [s for s in tracer.spans if s.name == "hitl.webhook.attempt"]
     assert len(outer_spans) >= 1, (
-        f"no hitl.webhook.deliver span emitted; captured names="
-        f"{[s.name for s in tracer.spans]!r}"
+        f"no hitl.webhook.deliver span emitted; captured names={[s.name for s in tracer.spans]!r}"
     )
     assert len(attempt_spans) >= 1, (
-        f"no hitl.webhook.attempt span emitted; captured names="
-        f"{[s.name for s in tracer.spans]!r}"
+        f"no hitl.webhook.attempt span emitted; captured names={[s.name for s in tracer.spans]!r}"
     )
     outer = outer_spans[0]
     attempt = attempt_spans[0]
@@ -2029,9 +1964,7 @@ async def test_ac5_sigint_mid_multi_step_produces_drained_resumable_state(
         async def aclose(self) -> None:
             return None
 
-    async def _fake_clients(
-        *_args: object, **_kwargs: object
-    ) -> ProviderClientsStage:
+    async def _fake_clients(*_args: object, **_kwargs: object) -> ProviderClientsStage:
         return ProviderClientsStage(
             providers={
                 "anthropic": _FakeProvider("anthropic"),
@@ -2040,9 +1973,7 @@ async def test_ac5_sigint_mid_multi_step_produces_drained_resumable_state(
             }
         )
 
-    monkeypatch.setattr(
-        _stage_3a_mod, "materialize_provider_clients_stage", _fake_clients
-    )
+    monkeypatch.setattr(_stage_3a_mod, "materialize_provider_clients_stage", _fake_clients)
 
     class _FakeDaemon:
         async def start(self) -> None:
@@ -2080,9 +2011,7 @@ async def test_ac5_sigint_mid_multi_step_produces_drained_resumable_state(
         "materialize_collector_daemon_stage",
         lambda config, **_: _CollectorStage(_FakeDaemon()),
     )
-    monkeypatch.setattr(
-        _stage_4_od_mod, "materialize_ring_buffer_stage", lambda config, _d: None
-    )
+    monkeypatch.setattr(_stage_4_od_mod, "materialize_ring_buffer_stage", lambda config, _d: None)
     monkeypatch.setattr(
         _stage_4_od_mod,
         "materialize_tracer_provider_stage",
@@ -2216,9 +2145,7 @@ async def test_ac5_sigint_mid_multi_step_produces_drained_resumable_state(
             steps=steps,
             run_id="run-ac5-1",
             ctx=ctx,  # type: ignore[arg-type]
-            default_model_binding=ModelBinding(
-                provider="anthropic", model="claude-haiku-4-5"
-            ),
+            default_model_binding=ModelBinding(provider="anthropic", model="claude-haiku-4-5"),
             step_dispatchers=_SingleKindRegistry(  # type: ignore[arg-type]
                 _DrainTriggeringDispatcher()
             ),
@@ -2227,15 +2154,13 @@ async def test_ac5_sigint_mid_multi_step_produces_drained_resumable_state(
 
     # --------------- invariant 1: status == DRAINED ---------------
     assert cp_result.status == _CpRunStatus.DRAINED, (
-        f"expected DRAINED, got {cp_result.status}; "
-        f"fail_class={cp_result.fail_class}"
+        f"expected DRAINED, got {cp_result.status}; fail_class={cp_result.fail_class}"
     )
     # terminal_step_index = step_index - 1 = 0 per workflow_driver.py:737.
     assert cp_result.terminal_step_index == 0
     # Exactly 1 dispatch fired (step-0); step-1 short-circuited at drain check.
     assert dispatch_count["n"] == 1, (
-        f"expected exactly 1 dispatch (step-0) before drain; got "
-        f"{dispatch_count['n']}"
+        f"expected exactly 1 dispatch (step-0) before drain; got {dispatch_count['n']}"
     )
 
     # --------------- invariant 2: partial_state populated ---------------
@@ -2249,8 +2174,7 @@ async def test_ac5_sigint_mid_multi_step_produces_drained_resumable_state(
     )
     assert isinstance(cp_result.partial_state, dict)
     assert len(cp_result.partial_state) >= 1, (
-        f"partial_state must carry step-0's accumulation; got "
-        f"{cp_result.partial_state!r}"
+        f"partial_state must carry step-0's accumulation; got {cp_result.partial_state!r}"
     )
     assert cp_result.final_state is None  # DRAINED ≠ SUCCESS
 
@@ -2338,7 +2262,6 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
 
     from harness_cp.workflow_driver_types import RunResult as _CpRunResult
     from harness_cp.workflow_driver_types import RunStatus as _CpRunStatus
-
     from harness_runtime.lifecycle.mcp_server import materialize_mcp_server_stage
 
     # The handler at `lifecycle/mcp_server.py:328` calls
@@ -2377,9 +2300,7 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
     # import execute_workflow as _execute_workflow` INSIDE the stage function.
     # Patching the source module attribute makes the lazy import pick up the
     # fake on first invocation of the registered tool.
-    monkeypatch.setattr(
-        "harness_cp.workflow_driver.execute_workflow", _fake_execute_workflow
-    )
+    monkeypatch.setattr("harness_cp.workflow_driver.execute_workflow", _fake_execute_workflow)
 
     server = materialize_mcp_server_stage(drain_timeout_seconds=30.0)
     server._state["_harness_ctx"] = SimpleNamespace(step_dispatchers=None)

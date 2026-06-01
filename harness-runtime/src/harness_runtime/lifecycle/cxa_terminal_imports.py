@@ -85,15 +85,9 @@ TERMINAL_MANIFEST_MODULES: Final[tuple[ModuleType, ...]] = (
 #: Per-manifest top-level constant references (test-side identity check anchor).
 #: Keys are the qualified module names; values are the manifest constants.
 TERMINAL_MANIFEST_CONSTANTS: Final[dict[str, object]] = {
-    "harness_is.substrate_seam_exports": (
-        _is_seam_exports.IS_SUBSTRATE_SEAM_EXPORTS_MANIFEST
-    ),
-    "harness_as.as_substrate_seam_exports": (
-        _as_seam_exports.AS_SUBSTRATE_SEAM_EXPORTS
-    ),
-    "harness_cp.cp_namespace_export_manifest": (
-        _cp_ns_manifest.CP_NAMESPACE_EXPORT_MANIFEST
-    ),
+    "harness_is.substrate_seam_exports": (_is_seam_exports.IS_SUBSTRATE_SEAM_EXPORTS_MANIFEST),
+    "harness_as.as_substrate_seam_exports": (_as_seam_exports.AS_SUBSTRATE_SEAM_EXPORTS),
+    "harness_cp.cp_namespace_export_manifest": (_cp_ns_manifest.CP_NAMESPACE_EXPORT_MANIFEST),
     "harness_cp.cp_cross_axis_composition_manifest": (
         _cp_xa_manifest.CP_CROSS_AXIS_COMPOSITION_MANIFEST
     ),

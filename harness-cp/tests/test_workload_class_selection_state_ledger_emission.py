@@ -72,11 +72,7 @@ def _run(coro: Any) -> Any:
 def test_emit_workload_class_selection_action_id() -> None:
     """action_id is the canonical kebab-case identifier per spec v1.26 §16.5.3 row U-CP-27."""
     writer = _CapturingLedgerWriter()
-    _run(
-        emit_workload_class_selection_state_ledger_entry(
-            **_kwargs(), ledger_writer=writer
-        )
-    )
+    _run(emit_workload_class_selection_state_ledger_entry(**_kwargs(), ledger_writer=writer))
     assert writer.captured[0].action_id == "cp.workload-binding-class-selection"
 
 
@@ -134,10 +130,7 @@ def test_emit_workload_class_selection_idempotency_key_includes_engine_class_id(
             ledger_writer=writer_b,
         )
     )
-    assert (
-        writer_a.captured[0].idempotency_key
-        != writer_b.captured[0].idempotency_key
-    )
+    assert writer_a.captured[0].idempotency_key != writer_b.captured[0].idempotency_key
 
 
 def test_emit_workload_class_selection_idempotency_key_includes_outcome_hash_suffix() -> None:
@@ -156,10 +149,7 @@ def test_emit_workload_class_selection_idempotency_key_includes_outcome_hash_suf
             ledger_writer=writer_b,
         )
     )
-    assert (
-        writer_a.captured[0].idempotency_key
-        != writer_b.captured[0].idempotency_key
-    )
+    assert writer_a.captured[0].idempotency_key != writer_b.captured[0].idempotency_key
 
 
 # --- AC #3 ---
@@ -169,11 +159,7 @@ def test_emit_workload_class_selection_response_hash_is_is_computed() -> None:
     """β.i Q-β.i-3(b): composer does NOT supply response_hash; EntryPayload has no such field."""
     assert "response_hash" not in EntryPayload.model_fields
     writer = _CapturingLedgerWriter()
-    _run(
-        emit_workload_class_selection_state_ledger_entry(
-            **_kwargs(), ledger_writer=writer
-        )
-    )
+    _run(emit_workload_class_selection_state_ledger_entry(**_kwargs(), ledger_writer=writer))
     payload = writer.captured[0]
     assert set(payload.model_fields_set) <= {
         "action_id",
@@ -224,9 +210,7 @@ def test_emit_workload_class_selection_zero_cp_audit_emission() -> None:
     """AC #5: greenfield composer emits NO CPAuditLedgerEntry per §16.5.9 invariant 5."""
     writer = _CapturingLedgerWriter()
     result = _run(
-        emit_workload_class_selection_state_ledger_entry(
-            **_kwargs(), ledger_writer=writer
-        )
+        emit_workload_class_selection_state_ledger_entry(**_kwargs(), ledger_writer=writer)
     )
     # Composer returns the WriteResult (state-ledger emission) — NOT a
     # CPAuditLedgerEntry. Single ledger_writer invocation; no sibling audit-write.
@@ -264,22 +248,15 @@ def test_emit_workload_class_selection_orthogonal_to_writer_result_variant() -> 
     noop_writer = _CapturingLedgerWriter(returns=WriteResult.IDEMPOTENT_NOOP)
 
     result_a = _run(
-        emit_workload_class_selection_state_ledger_entry(
-            **_kwargs(), ledger_writer=appended_writer
-        )
+        emit_workload_class_selection_state_ledger_entry(**_kwargs(), ledger_writer=appended_writer)
     )
     result_b = _run(
-        emit_workload_class_selection_state_ledger_entry(
-            **_kwargs(), ledger_writer=noop_writer
-        )
+        emit_workload_class_selection_state_ledger_entry(**_kwargs(), ledger_writer=noop_writer)
     )
 
     assert result_a == WriteResult.APPENDED
     assert result_b == WriteResult.IDEMPOTENT_NOOP
-    assert (
-        appended_writer.captured[0].idempotency_key
-        == noop_writer.captured[0].idempotency_key
-    )
+    assert appended_writer.captured[0].idempotency_key == noop_writer.captured[0].idempotency_key
 
 
 # --- Actor projection ---

@@ -94,12 +94,8 @@ def test_child_sandbox_tier_monotonic_ascent() -> None:
 def test_monotonic_ascent_rejects_descent() -> None:
     """#4 — sandbox-tier downgrade is structurally rejected."""
     with pytest.raises(ValueError, match="monotonic-ascension"):
-        assert_monotonic_ascent(
-            SandboxTier.TIER_3_MICROVM, SandboxTier.TIER_1_PROCESS
-        )
-    assert_monotonic_ascent(
-        SandboxTier.TIER_1_PROCESS, SandboxTier.TIER_3_MICROVM
-    )
+        assert_monotonic_ascent(SandboxTier.TIER_3_MICROVM, SandboxTier.TIER_1_PROCESS)
+    assert_monotonic_ascent(SandboxTier.TIER_1_PROCESS, SandboxTier.TIER_3_MICROVM)
 
 
 def test_default_downgrade_applied() -> None:
@@ -176,9 +172,7 @@ def test_audit_entry_timestamp_is_iso_8601_per_v1_28() -> None:
 def test_response_hash_brief_canonicalize() -> None:
     """#5 — response_hash = sha256(canonicalize(SubAgentBrief))."""
     brief = _brief()
-    assert sub_agent_dispatch_response_hash(brief) == compute_brief_summary_hash(
-        brief
-    )
+    assert sub_agent_dispatch_response_hash(brief) == compute_brief_summary_hash(brief)
 
 
 def test_parent_gate_level_consumed_not_recomputed() -> None:

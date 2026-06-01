@@ -328,12 +328,10 @@ def verify_rotation_6_steps(scope: SigningKeyScope) -> tuple[StepResult, ...]:
     _ = scope
     details: dict[RotationVerificationStep, str] = {
         RotationVerificationStep.STAGE_NEW_KEY: (
-            f"new key provisioned via U-CP-44; rotation_state = "
-            f"{KeyRotationState.ROTATING.value}"
+            f"new key provisioned via U-CP-44; rotation_state = {KeyRotationState.ROTATING.value}"
         ),
         RotationVerificationStep.WRITE_DUAL_VERIFY_ENTRY: (
-            "first new-key-signed entry written; old key remains in the "
-            "verification set"
+            "first new-key-signed entry written; old key remains in the verification set"
         ),
         RotationVerificationStep.PROBE_VERIFY_AT_READ: (
             "both keys verify the new entry successfully"
@@ -346,8 +344,7 @@ def verify_rotation_6_steps(scope: SigningKeyScope) -> tuple[StepResult, ...]:
             f"key rotation_state = {KeyRotationState.ACTIVE.value}"
         ),
         RotationVerificationStep.RETIRE_OLD_KEY: (
-            "old key removed from the verification set after dual-verify "
-            "quiescence"
+            "old key removed from the verification set after dual-verify quiescence"
         ),
     }
     return tuple(

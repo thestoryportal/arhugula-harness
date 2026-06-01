@@ -17,7 +17,6 @@ from decimal import Decimal
 
 import pytest
 from harness_od.rate_table_types import RateTable, WebhookRate
-
 from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
 from harness_runtime.lifecycle.cost_attribution_webhook_dispatch import (
     _compute_webhook_cost,
@@ -122,9 +121,7 @@ def test_webhook_cost_decimal_precision_preserved() -> None:
         egress_rate_per_byte=Decimal("0.00000000123456789"),
     )
     cost = _compute_webhook_cost(rate_table, bytes_sent=12345)
-    expected = Decimal("0.12345678901234567") + Decimal(
-        "0.00000000123456789"
-    ) * Decimal(12345)
+    expected = Decimal("0.12345678901234567") + Decimal("0.00000000123456789") * Decimal(12345)
     assert cost == expected
     assert isinstance(cost, Decimal)
 
@@ -242,7 +239,6 @@ def test_three_webhook_dispatches_produce_three_audit_writes(
         )
     assert len(audit_writer.appended) == 3
     action_ids = [
-        e[1].payload.audit_namespace_attrs["audit.cp.action_id"]
-        for e in audit_writer.appended
+        e[1].payload.audit_namespace_attrs["audit.cp.action_id"] for e in audit_writer.appended
     ]
     assert len(set(action_ids)) == 3

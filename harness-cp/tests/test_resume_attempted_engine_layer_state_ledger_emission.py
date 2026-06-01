@@ -76,9 +76,7 @@ def _run(coro: Any) -> Any:
 def test_emit_resume_attempted_action_id() -> None:
     """action_id is the canonical kebab-case identifier per spec v1.26 §16.5.3 row U-CP-50."""
     writer = _CapturingLedgerWriter()
-    _run(
-        emit_resume_attempted_state_ledger_entry(**_kwargs(), ledger_writer=writer)
-    )
+    _run(emit_resume_attempted_state_ledger_entry(**_kwargs(), ledger_writer=writer))
     assert writer.captured[0].action_id == "cp.resume-attempted"
 
 
@@ -126,10 +124,7 @@ def test_emit_resume_attempted_idempotency_key_includes_attempt_count() -> None:
             **_kwargs(resume_attempt_count=2), ledger_writer=writer_b
         )
     )
-    assert (
-        writer_a.captured[0].idempotency_key
-        != writer_b.captured[0].idempotency_key
-    )
+    assert writer_a.captured[0].idempotency_key != writer_b.captured[0].idempotency_key
 
 
 def test_emit_resume_attempted_idempotency_key_includes_resume_event_id() -> None:
@@ -146,10 +141,7 @@ def test_emit_resume_attempted_idempotency_key_includes_resume_event_id() -> Non
             **_kwargs(resume_event_id="evt-B"), ledger_writer=writer_b
         )
     )
-    assert (
-        writer_a.captured[0].idempotency_key
-        != writer_b.captured[0].idempotency_key
-    )
+    assert writer_a.captured[0].idempotency_key != writer_b.captured[0].idempotency_key
 
 
 def test_emit_resume_attempted_idempotency_key_includes_outcome_hash_suffix() -> None:
@@ -173,10 +165,7 @@ def test_emit_resume_attempted_idempotency_key_includes_outcome_hash_suffix() ->
             ledger_writer=writer_b,
         )
     )
-    assert (
-        writer_a.captured[0].idempotency_key
-        != writer_b.captured[0].idempotency_key
-    )
+    assert writer_a.captured[0].idempotency_key != writer_b.captured[0].idempotency_key
 
 
 # --- AC #3 (fires post-resolve pre-return) ---
@@ -190,9 +179,7 @@ def test_emit_resume_attempted_fires_post_resolve_pre_return() -> None:
     invocation → single payload.
     """
     writer = _CapturingLedgerWriter()
-    _run(
-        emit_resume_attempted_state_ledger_entry(**_kwargs(), ledger_writer=writer)
-    )
+    _run(emit_resume_attempted_state_ledger_entry(**_kwargs(), ledger_writer=writer))
     assert len(writer.captured) == 1
     assert writer.captured[0].action_id == "cp.resume-attempted"
 
@@ -204,9 +191,7 @@ def test_emit_resume_attempted_response_hash_is_is_computed() -> None:
     """β.i Q-β.i-3(b): composer does NOT supply response_hash; EntryPayload has no such field."""
     assert "response_hash" not in EntryPayload.model_fields
     writer = _CapturingLedgerWriter()
-    _run(
-        emit_resume_attempted_state_ledger_entry(**_kwargs(), ledger_writer=writer)
-    )
+    _run(emit_resume_attempted_state_ledger_entry(**_kwargs(), ledger_writer=writer))
     payload = writer.captured[0]
     assert set(payload.model_fields_set) <= {
         "action_id",
@@ -223,16 +208,12 @@ def test_emit_resume_attempted_response_hash_is_is_computed() -> None:
 def test_emit_resume_attempted_zero_cp_audit_emission() -> None:
     """AC #5: greenfield composer emits NO CPAuditLedgerEntry per §16.5.9 invariant 5."""
     writer = _CapturingLedgerWriter()
-    result = _run(
-        emit_resume_attempted_state_ledger_entry(**_kwargs(), ledger_writer=writer)
-    )
+    result = _run(emit_resume_attempted_state_ledger_entry(**_kwargs(), ledger_writer=writer))
     assert isinstance(result, WriteResult)
     assert len(writer.captured) == 1
 
 
-def test_emit_resume_attempted_engine_layer_orthogonal_to_workflow_layer_at_u_cp_76() -> (
-    None
-):
+def test_emit_resume_attempted_engine_layer_orthogonal_to_workflow_layer_at_u_cp_76() -> None:
     """AC #5: engine-layer action_id distinct from workflow-layer at U-CP-76.
 
     Per CP spec v1.11 §26 NEW NOTE 2-layer coexistence: engine-layer emits
@@ -242,9 +223,7 @@ def test_emit_resume_attempted_engine_layer_orthogonal_to_workflow_layer_at_u_cp
     ledger-level collision; downstream consumers discriminate via prefix.
     """
     writer = _CapturingLedgerWriter()
-    _run(
-        emit_resume_attempted_state_ledger_entry(**_kwargs(), ledger_writer=writer)
-    )
+    _run(emit_resume_attempted_state_ledger_entry(**_kwargs(), ledger_writer=writer))
     engine_layer_action_id = writer.captured[0].action_id
     assert engine_layer_action_id == "cp.resume-attempted"
     assert engine_layer_action_id != "cp.pause-resume-protocol"
@@ -308,26 +287,19 @@ def test_emit_resume_attempted_success_and_failure_yield_different_keys() -> Non
     writer_failure = _CapturingLedgerWriter()
     _run(
         emit_resume_attempted_state_ledger_entry(
-            **_kwargs(
-                resume_outcome=_outcome(outcome_kind=ResumeOutcomeKind.RESUME_CLEAN)
-            ),
+            **_kwargs(resume_outcome=_outcome(outcome_kind=ResumeOutcomeKind.RESUME_CLEAN)),
             ledger_writer=writer_success,
         )
     )
     _run(
         emit_resume_attempted_state_ledger_entry(
             **_kwargs(
-                resume_outcome=_outcome(
-                    outcome_kind=ResumeOutcomeKind.ABORT_SNAPSHOT_CORRUPTED
-                )
+                resume_outcome=_outcome(outcome_kind=ResumeOutcomeKind.ABORT_SNAPSHOT_CORRUPTED)
             ),
             ledger_writer=writer_failure,
         )
     )
-    assert (
-        writer_success.captured[0].idempotency_key
-        != writer_failure.captured[0].idempotency_key
-    )
+    assert writer_success.captured[0].idempotency_key != writer_failure.captured[0].idempotency_key
 
 
 # --- composer-await discipline (orthogonal to U-CP-74 AC #9) ---
@@ -339,22 +311,15 @@ def test_emit_resume_attempted_orthogonal_to_writer_result_variant() -> None:
     noop_writer = _CapturingLedgerWriter(returns=WriteResult.IDEMPOTENT_NOOP)
 
     result_a = _run(
-        emit_resume_attempted_state_ledger_entry(
-            **_kwargs(), ledger_writer=appended_writer
-        )
+        emit_resume_attempted_state_ledger_entry(**_kwargs(), ledger_writer=appended_writer)
     )
     result_b = _run(
-        emit_resume_attempted_state_ledger_entry(
-            **_kwargs(), ledger_writer=noop_writer
-        )
+        emit_resume_attempted_state_ledger_entry(**_kwargs(), ledger_writer=noop_writer)
     )
 
     assert result_a == WriteResult.APPENDED
     assert result_b == WriteResult.IDEMPOTENT_NOOP
-    assert (
-        appended_writer.captured[0].idempotency_key
-        == noop_writer.captured[0].idempotency_key
-    )
+    assert appended_writer.captured[0].idempotency_key == noop_writer.captured[0].idempotency_key
 
 
 # --- Actor projection ---

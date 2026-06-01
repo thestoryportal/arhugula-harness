@@ -5,22 +5,14 @@ Per `Implementation_Plan_Harness_Runtime_v2_11.md` §1 U-RT-69 (5 ACs).
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
 import pytest
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-    InMemorySpanExporter,
-)
-
 from harness_cp.hitl_timeout_degradation import (
     WebhookConfig,
     WebhookPayload,
 )
-
 from harness_runtime.lifecycle.webhook_delivery_composer import (
     ATTR_RETRY_ATTEMPT_NUMBER,
     ATTR_WEBHOOK_DELIVERY_ATTEMPTS,
@@ -31,7 +23,11 @@ from harness_runtime.lifecycle.webhook_delivery_composer import (
     WebhookDeliveryExhaustedError,
     WebhookDeliveryResult,
 )
-
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 # ---------- helpers --------------------------------------------------------
 
@@ -312,9 +308,7 @@ async def test_deliver_webhook_for_brief_dispatches_via_raw_surface() -> None:
 async def test_deliver_webhook_for_brief_propagates_exhausted_error() -> None:
     """Reading H exhaustion path: brief surface propagates raw surface exhaustion."""
     sleep_fn, _ = _async_noop_sleep_factory()
-    client = _RecordingClient(
-        [_MockResponse(500), _MockResponse(500), _MockResponse(500)]
-    )
+    client = _RecordingClient([_MockResponse(500), _MockResponse(500), _MockResponse(500)])
     composer = WebhookDeliveryComposer(
         retry_max_attempts=3,
         http_client_factory=lambda: client,

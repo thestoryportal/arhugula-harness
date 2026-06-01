@@ -126,6 +126,7 @@ def _project_span_row(row: SpanRow) -> SpanInsertRow:
         workflow_idempotency_key=None,
     )
 
+
 #: Bytes per megabyte — used to convert per-row byte counts to the OD
 #: `RingBufferStorageState.total_bytes_mb` field.
 _BYTES_PER_MB: Final[int] = 1_000_000
@@ -296,9 +297,7 @@ class RuntimeRingBuffer:
         )
         return age_exceeded or bytes_exceeded
 
-    async def flush_to_sqlite(
-        self, conn: sqlite3.Connection, *, now_ns: int | None = None
-    ) -> int:
+    async def flush_to_sqlite(self, conn: sqlite3.Connection, *, now_ns: int | None = None) -> int:
         """Flush the current buffer to the sqlite span store via INSERT OR IGNORE
         and apply U-OD-44 lazy-on-write retention cleanup.
 
@@ -324,9 +323,7 @@ class RuntimeRingBuffer:
         rows_snapshot = tuple(self._rows())
         insert_rows = tuple(_project_span_row(r) for r in rows_snapshot)
         inserted = await asyncio.to_thread(insert_spans, conn, insert_rows)
-        await asyncio.to_thread(
-            retention_cleanup_lazy, conn, self._retention_days, clock_ns
-        )
+        await asyncio.to_thread(retention_cleanup_lazy, conn, self._retention_days, clock_ns)
         return inserted
 
     def snapshot(self, now_unix_ns: int | None = None) -> RingBufferSnapshot:

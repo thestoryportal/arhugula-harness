@@ -90,10 +90,7 @@ def test_solo_cells_tui_ring_buffer_scoped() -> None:
     """Acceptance #3 — solo-developer cells → TUI ring-buffer scoped queries."""
     for cell, binding in PER_CELL_EVAL_DASHBOARD_BINDINGS.items():
         if cell.persona_tier is PersonaTier.SOLO_DEVELOPER:
-            assert (
-                binding.dashboard_form
-                is EvalDashboardForm.TUI_RING_BUFFER_SCOPED_QUERIES
-            )
+            assert binding.dashboard_form is EvalDashboardForm.TUI_RING_BUFFER_SCOPED_QUERIES
 
 
 # --- acceptance #4 — team cells named queries + alignment-floor alerting ---
@@ -153,8 +150,7 @@ def test_husain_loop_solo_self_curation() -> None:
     for cell, binding in PER_CELL_EVAL_DASHBOARD_BINDINGS.items():
         if cell.persona_tier is PersonaTier.SOLO_DEVELOPER:
             assert (
-                binding.husain_loop_binding
-                is HusainLoopBinding.RING_BUFFER_OPERATOR_SELF_CURATION
+                binding.husain_loop_binding is HusainLoopBinding.RING_BUFFER_OPERATOR_SELF_CURATION
             )
 
 
@@ -164,10 +160,7 @@ def test_husain_loop_team_and_multi_tenant_backend_hosted() -> None:
         if cell.persona_tier is PersonaTier.TEAM_BINDING:
             assert binding.husain_loop_binding is HusainLoopBinding.BACKEND_HOSTED
         elif cell.persona_tier is PersonaTier.MULTI_TENANT_COMPLIANCE:
-            assert (
-                binding.husain_loop_binding
-                is HusainLoopBinding.PER_TENANT_BACKEND_HOSTED
-            )
+            assert binding.husain_loop_binding is HusainLoopBinding.PER_TENANT_BACKEND_HOSTED
 
 
 # --- acceptance #8 (v2.6) — in-unit HusainLoopState ------------------------
@@ -188,9 +181,7 @@ def test_husain_loop_state_declared_in_unit() -> None:
 def test_run_husain_loop_returns_husain_loop_state() -> None:
     """Acceptance #8 (v2.6) — run_husain_loop_at_cell returns HusainLoopState."""
     cell = _cell(PersonaTier.TEAM_BINDING, DeploymentSurface.SELF_HOSTED_SERVER)
-    state = run_husain_loop_at_cell(
-        cell, OperatorBurdenEvalPrimitive.ROUTING_ACCURACY_HOLDOUT
-    )
+    state = run_husain_loop_at_cell(cell, OperatorBurdenEvalPrimitive.ROUTING_ACCURACY_HOLDOUT)
     assert isinstance(state, HusainLoopState)
     assert state.cell_id == cell
     assert state.loop_binding is HusainLoopBinding.BACKEND_HOSTED

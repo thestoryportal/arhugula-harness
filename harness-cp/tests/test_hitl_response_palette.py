@@ -75,9 +75,7 @@ def test_approve_audit_required_fields() -> None:
 
 def test_edit_audit_carries_edited_proposal_hash() -> None:
     """Acceptance #3 — `edit` adds required `edited_proposal_hash`."""
-    assert AuditFieldName.EDITED_PROPOSAL_HASH in _shape(
-        HITLResponse.EDIT
-    ).required_fields
+    assert AuditFieldName.EDITED_PROPOSAL_HASH in _shape(HITLResponse.EDIT).required_fields
 
 
 def test_reject_audit_rejection_reason_optional() -> None:
@@ -89,9 +87,7 @@ def test_reject_audit_rejection_reason_optional() -> None:
 
 def test_respond_audit_required_response_text_hash() -> None:
     """Acceptance #3 — `respond` adds *required* `response_text_hash`."""
-    assert AuditFieldName.RESPONSE_TEXT_HASH in _shape(
-        HITLResponse.RESPOND
-    ).required_fields
+    assert AuditFieldName.RESPONSE_TEXT_HASH in _shape(HITLResponse.RESPOND).required_fields
 
 
 def test_palette_invariants_cardinality_three() -> None:
@@ -129,11 +125,7 @@ def test_prior_event_hash_in_every_audit_shape() -> None:
 def test_respond_distinct_from_reject() -> None:
     """Acceptance #7 — `respond` (continue dialogue) is distinct from `reject`."""
     assert HITLResponse.RESPOND != HITLResponse.REJECT
-    respond_sem = next(
-        s for s in HITL_RESPONSE_SEMANTICS if s.response == HITLResponse.RESPOND
-    )
-    reject_sem = next(
-        s for s in HITL_RESPONSE_SEMANTICS if s.response == HITLResponse.REJECT
-    )
+    respond_sem = next(s for s in HITL_RESPONSE_SEMANTICS if s.response == HITLResponse.RESPOND)
+    reject_sem = next(s for s in HITL_RESPONSE_SEMANTICS if s.response == HITLResponse.REJECT)
     assert "without action" in respond_sem.semantic
     assert "Cancel" in reject_sem.semantic

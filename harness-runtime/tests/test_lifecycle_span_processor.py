@@ -304,9 +304,7 @@ def test_local_development_surface_does_not_wrap_with_tail_keep(
 ) -> None:
     """At LOCAL_DEVELOPMENT, §9.1 mandates head-based sampling — no tail-keep wrap."""
     stage = materialize_span_processor_stage(
-        _config_at_surface(
-            tmp_path, deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT
-        ),
+        _config_at_surface(tmp_path, deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT),
         _provider(),
         exporter=InMemorySpanExporter(),
     )
@@ -316,9 +314,7 @@ def test_local_development_surface_does_not_wrap_with_tail_keep(
 def test_self_hosted_server_surface_wraps_with_tail_keep(tmp_path: Path) -> None:
     """At SELF_HOSTED_SERVER, §9.1 mandates tail-based sampling — wrap engaged."""
     stage = materialize_span_processor_stage(
-        _config_at_surface(
-            tmp_path, deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER
-        ),
+        _config_at_surface(tmp_path, deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER),
         _provider(),
         exporter=InMemorySpanExporter(),
     )
@@ -329,9 +325,7 @@ def test_self_hosted_server_surface_wraps_with_tail_keep(tmp_path: Path) -> None
 def test_managed_cloud_surface_wraps_with_tail_keep(tmp_path: Path) -> None:
     """At MANAGED_CLOUD, §9.1 mandates tail-based sampling — wrap engaged."""
     stage = materialize_span_processor_stage(
-        _config_at_surface(
-            tmp_path, deployment_surface=DeploymentSurface.MANAGED_CLOUD
-        ),
+        _config_at_surface(tmp_path, deployment_surface=DeploymentSurface.MANAGED_CLOUD),
         _provider(),
         exporter=InMemorySpanExporter(),
     )
@@ -346,9 +340,7 @@ def test_production_surface_drops_unclassified_trace_at_export(
     in_memory = InMemorySpanExporter()
     provider = _provider()
     stage = materialize_span_processor_stage(
-        _config_at_surface(
-            tmp_path, deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER
-        ),
+        _config_at_surface(tmp_path, deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER),
         provider,
         exporter=in_memory,
     )
@@ -368,9 +360,7 @@ def test_production_surface_preserves_trace_when_sandbox_violation_present(
     in_memory = InMemorySpanExporter()
     provider = _provider()
     stage = materialize_span_processor_stage(
-        _config_at_surface(
-            tmp_path, deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER
-        ),
+        _config_at_surface(tmp_path, deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER),
         provider,
         exporter=in_memory,
     )

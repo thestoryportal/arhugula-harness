@@ -164,15 +164,11 @@ def on_hitl_timeout(
     at integration time.
     """
     _ = invocation
-    policy = next(
-        p for p in TIMEOUT_DEGRADATION_TABLE if p.persona_tier is persona_tier
-    )
+    policy = next(p for p in TIMEOUT_DEGRADATION_TABLE if p.persona_tier is persona_tier)
     return policy.default_kind
 
 
-def deliver_webhook(
-    webhook: WebhookConfig, payload: WebhookPayload
-) -> WebhookDeliveryEvent:
+def deliver_webhook(webhook: WebhookConfig, payload: WebhookPayload) -> WebhookDeliveryEvent:
     """Deliver a webhook signal (C-CP-18 §18.5 / C-CP-21 §21.8).
 
     Webhook delivery is **idempotent** — duplicate delivery on retry does not

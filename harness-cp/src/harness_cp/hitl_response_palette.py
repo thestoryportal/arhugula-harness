@@ -191,8 +191,7 @@ PALETTE_INVARIANTS: tuple[PaletteCompletenessInvariant, ...] = (
     PaletteCompletenessInvariant(
         invariant_name="pre_hitl_escalation_may_narrow_palette",
         invariant_statement=(
-            "At pre-HITL escalation invocations the palette MAY be narrowed "
-            "per C-CP-21 §21.2."
+            "At pre-HITL escalation invocations the palette MAY be narrowed per C-CP-21 §21.2."
         ),
         enforced_at=InvariantEnforcementPoint.PRE_HITL_ESCALATION,
     ),
@@ -212,13 +211,11 @@ class HITLResponseClassAttribute(BaseModel):
     emitted_on: str
 
 
-HITL_RESPONSE_CLASS_ATTRIBUTE: HITLResponseClassAttribute = (
-    HITLResponseClassAttribute(
-        attribute_name="hitl.response.class",
-        value_type=AttributeValueType.ENUM_REF,
-        cardinality=Cardinality.LOW,
-        emitted_on="hitl.invocation.responded",
-    )
+HITL_RESPONSE_CLASS_ATTRIBUTE: HITLResponseClassAttribute = HITLResponseClassAttribute(
+    attribute_name="hitl.response.class",
+    value_type=AttributeValueType.ENUM_REF,
+    cardinality=Cardinality.LOW,
+    emitted_on="hitl.invocation.responded",
 )
 """The §16.4 `hitl.response.class` span attribute — bounded-4 enum (the
 `HITLResponse` palette), emitted on the `hitl.invocation.responded` event."""

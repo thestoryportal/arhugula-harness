@@ -171,9 +171,7 @@ def _commitment_for(workload: WorkloadClass) -> PerWorkloadClassTopologyCommitme
     raise WorkloadClassMissingFromTopologyCommitmentTableError(workload)
 
 
-def is_topology_permitted_for_workload(
-    topology: TopologyPattern, workload: WorkloadClass
-) -> bool:
+def is_topology_permitted_for_workload(topology: TopologyPattern, workload: WorkloadClass) -> bool:
     """Return whether ``topology`` is **admissible at all** for ``workload``.
 
     Composition of "is this a primary topology for the workload?" (per C-CP-11

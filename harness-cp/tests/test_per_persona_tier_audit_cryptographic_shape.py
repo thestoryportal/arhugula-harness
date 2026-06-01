@@ -68,8 +68,7 @@ def test_multi_tenant_signed() -> None:
 def test_monotonic_strength_ascending() -> None:
     """#3 — cryptographic shape strength ascends strict-monotonically."""
     strengths = [
-        shape_strength(cryptographic_shape_for(t).cryptographic_shape)
-        for t in _PERSONA_TIER_ORDER
+        shape_strength(cryptographic_shape_for(t).cryptographic_shape) for t in _PERSONA_TIER_ORDER
     ]
     assert strengths == sorted(strengths)
     assert len(set(strengths)) == 3  # strict — no two tiers share a strength

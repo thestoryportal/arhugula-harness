@@ -104,14 +104,8 @@ def test_sampling_decision_always_sampled_event() -> None:
     for event_class in ALWAYS_SAMPLED_EVENT_CLASSES:
         # Independent of base-rate (acc #4): low and high base-rates both
         # yield SAMPLE_ALWAYS.
-        assert (
-            sampling_decision(cell, event_class, base_rate=0.0)
-            is SamplingDecision.SAMPLE_ALWAYS
-        )
-        assert (
-            sampling_decision(cell, event_class, base_rate=1.0)
-            is SamplingDecision.SAMPLE_ALWAYS
-        )
+        assert sampling_decision(cell, event_class, base_rate=0.0) is SamplingDecision.SAMPLE_ALWAYS
+        assert sampling_decision(cell, event_class, base_rate=1.0) is SamplingDecision.SAMPLE_ALWAYS
 
 
 def test_sampling_decision_base_rate_event_below_threshold() -> None:
@@ -120,10 +114,7 @@ def test_sampling_decision_base_rate_event_below_threshold() -> None:
         persona_tier=_SOLO,
         deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER,
     )
-    assert (
-        sampling_decision(cell, "chat", base_rate=0.05)
-        is SamplingDecision.SAMPLE_AT_BASE_RATE
-    )
+    assert sampling_decision(cell, "chat", base_rate=0.05) is SamplingDecision.SAMPLE_AT_BASE_RATE
     assert (
         sampling_decision(cell, "execute_tool", base_rate=0.5)
         is SamplingDecision.SAMPLE_AT_BASE_RATE
@@ -159,10 +150,7 @@ def test_audit_glob_in_always_sampled_set() -> None:
         persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
         deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER,
     )
-    assert (
-        sampling_decision(cell, "audit.*", base_rate=0.2)
-        is SamplingDecision.SAMPLE_ALWAYS
-    )
+    assert sampling_decision(cell, "audit.*", base_rate=0.2) is SamplingDecision.SAMPLE_ALWAYS
 
 
 # --- acc #3 (reliability-critical member spot check) -----------------------

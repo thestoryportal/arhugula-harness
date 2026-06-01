@@ -45,34 +45,32 @@ from typing import Any
 
 import pytest
 from anthropic import AsyncAnthropic
-from harness_core import PersonaTier
 from harness_as.anthropic_graceful_degradation import MemoryToolStorageBackend
+from harness_as.sandbox_tier import SandboxTier
+from harness_core import PersonaTier
+from harness_core.deployment_surface import DeploymentSurface
 from harness_core.identity import StepID
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class import EngineClass
+from harness_cp.gate_level_rule import GateLevel
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver_types import (
     StepExecutionContext,
     StepKind,
     WorkflowStep,
 )
-from harness_as.sandbox_tier import SandboxTier
-from harness_cp.gate_level_rule import GateLevel
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-    InMemorySpanExporter,
-)
-
-from harness_core.deployment_surface import DeploymentSurface
 from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
 from harness_runtime.lifecycle.memory_tool_filesystem import (
     LocalFilesystemMemoryToolBackend,
 )
 from harness_runtime.lifecycle.memory_tool_registry import MemoryToolRegistry
 from harness_runtime.lifecycle.providers import AnthropicAdapter
-
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 # ---------------------------------------------------------------------------
 # Module-level gating: every test in this module requires ANTHROPIC_API_KEY.

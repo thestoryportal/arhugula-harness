@@ -10,12 +10,6 @@ ParentBased propagation through the canonical wrapping pattern.
 from __future__ import annotations
 
 import pytest
-from opentelemetry.sdk.trace.sampling import Decision, ParentBased
-from opentelemetry.trace import SpanContext, SpanKind, TraceFlags
-from opentelemetry.trace.span import NonRecordingSpan
-from opentelemetry import context as ot_context
-from opentelemetry import trace as ot_trace
-
 from harness_od.composite_sampler import (
     HarnessCompositeSampler,
     build_default_sampler,
@@ -24,7 +18,10 @@ from harness_od.sampling_mode import (
     ALWAYS_SAMPLED_EVENT_CLASSES,
     is_always_sampled,
 )
-
+from opentelemetry import trace as ot_trace
+from opentelemetry.sdk.trace.sampling import Decision, ParentBased
+from opentelemetry.trace import SpanContext, SpanKind, TraceFlags
+from opentelemetry.trace.span import NonRecordingSpan
 
 # Concrete span names exercising each §9.2 row.
 _LITERAL_ALWAYS_SAMPLED = (

@@ -114,10 +114,7 @@ def test_ring_buffer_eviction_fifo_by_age() -> None:
 # --- acc #6 ----------------------------------------------------------------
 def test_closure_invariant_fresh_on_restart() -> None:
     """`closure_invariant` is the §19.2 fresh-on-restart commitment."""
-    assert (
-        _policy().closure_invariant
-        == "FRESH_ON_RESTART_OPTIONAL_PERSISTENCE_BETWEEN_RESTARTS"
-    )
+    assert _policy().closure_invariant == "FRESH_ON_RESTART_OPTIONAL_PERSISTENCE_BETWEEN_RESTARTS"
 
 
 # --- acc #7 ----------------------------------------------------------------
@@ -250,9 +247,12 @@ def test_tui_implementation_deferred_per_19_3() -> None:
     """The TUI implementation is deferred — query returns the library default."""
     # §19.3 defers the TUI implementation; the library surface is a pure
     # signature with an empty default result until the Phase-2 root wires it.
-    assert query_ring_buffer_via_tui(
-        TuiQuery(primitive_or_signal="cache_hit_rate", query_form="SQL_OVER_RING_BUFFER")
-    ) == []
+    assert (
+        query_ring_buffer_via_tui(
+            TuiQuery(primitive_or_signal="cache_hit_rate", query_form="SQL_OVER_RING_BUFFER")
+        )
+        == []
+    )
 
 
 # --- acc #12 ---------------------------------------------------------------

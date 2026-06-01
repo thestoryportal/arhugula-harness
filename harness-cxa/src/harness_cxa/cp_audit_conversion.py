@@ -118,17 +118,11 @@ def _project_namespace_attrs(cp_entry: CPAuditLedgerEntry) -> dict[str, str]:
         f"{CP_AUDIT_NAMESPACE_PREFIX}.timestamp": cp_entry.timestamp,
     }
     if cp_entry.edited_proposal_hash is not None:
-        attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.edited_proposal_hash"] = (
-            cp_entry.edited_proposal_hash
-        )
+        attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.edited_proposal_hash"] = cp_entry.edited_proposal_hash
     if cp_entry.rejection_reason_hash is not None:
-        attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.rejection_reason_hash"] = (
-            cp_entry.rejection_reason_hash
-        )
+        attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.rejection_reason_hash"] = cp_entry.rejection_reason_hash
     if cp_entry.response_text_hash is not None:
-        attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.response_text_hash"] = (
-            cp_entry.response_text_hash
-        )
+        attrs[f"{CP_AUDIT_NAMESPACE_PREFIX}.response_text_hash"] = cp_entry.response_text_hash
     return attrs
 
 
@@ -234,18 +228,14 @@ def cp_audit_to_od_audit(
         # Existing dispatch / hitl path — preserved verbatim from U-RT-59
         # Fork 2 close. The CP-side action_id already encodes the
         # `dispatch:` or `hitl:` prefix per the producer-side composers.
-        resolved_entry_core = _entry_core_or_default(
-            entry_core, str(cp_entry.action_id)
-        )
+        resolved_entry_core = _entry_core_or_default(entry_core, str(cp_entry.action_id))
         payload = AuditPayload(
             entry_core=resolved_entry_core,
             audit_namespace_attrs=_project_namespace_attrs(cp_entry),
             prior_entry_hash=cp_entry.prior_event_hash,
         )
     elif isinstance(cp_entry, WebhookDeliveryAuditPayload):
-        resolved_entry_core = _entry_core_or_default(
-            entry_core, cp_entry.audit_cp_action_id
-        )
+        resolved_entry_core = _entry_core_or_default(entry_core, cp_entry.audit_cp_action_id)
         payload = AuditPayload(
             entry_core=resolved_entry_core,
             audit_namespace_attrs=_project_producer_namespace_attrs(
@@ -254,9 +244,7 @@ def cp_audit_to_od_audit(
             prior_entry_hash=cp_entry.audit_cp_prior_event_hash,
         )
     elif isinstance(cp_entry, OperatorBurdenAuditPayload):
-        resolved_entry_core = _entry_core_or_default(
-            entry_core, cp_entry.audit_cp_action_id
-        )
+        resolved_entry_core = _entry_core_or_default(entry_core, cp_entry.audit_cp_action_id)
         payload = AuditPayload(
             entry_core=resolved_entry_core,
             audit_namespace_attrs=_project_producer_namespace_attrs(
@@ -265,9 +253,7 @@ def cp_audit_to_od_audit(
             prior_entry_hash=cp_entry.audit_cp_prior_event_hash,
         )
     elif isinstance(cp_entry, ValidatorEscalationAuditPayload):
-        resolved_entry_core = _entry_core_or_default(
-            entry_core, cp_entry.audit_cp_action_id
-        )
+        resolved_entry_core = _entry_core_or_default(entry_core, cp_entry.audit_cp_action_id)
         payload = AuditPayload(
             entry_core=resolved_entry_core,
             audit_namespace_attrs=_project_producer_namespace_attrs(
@@ -276,9 +262,7 @@ def cp_audit_to_od_audit(
             prior_entry_hash=cp_entry.audit_cp_prior_event_hash,
         )
     elif isinstance(cp_entry, TrustEvaluationAuditPayload):
-        resolved_entry_core = _entry_core_or_default(
-            entry_core, cp_entry.audit_cp_action_id
-        )
+        resolved_entry_core = _entry_core_or_default(entry_core, cp_entry.audit_cp_action_id)
         payload = AuditPayload(
             entry_core=resolved_entry_core,
             audit_namespace_attrs=_project_producer_namespace_attrs(
@@ -287,9 +271,7 @@ def cp_audit_to_od_audit(
             prior_entry_hash=cp_entry.audit_cp_prior_event_hash,
         )
     elif isinstance(cp_entry, PauseResumeAuditPayload):
-        resolved_entry_core = _entry_core_or_default(
-            entry_core, cp_entry.audit_cp_action_id
-        )
+        resolved_entry_core = _entry_core_or_default(entry_core, cp_entry.audit_cp_action_id)
         payload = AuditPayload(
             entry_core=resolved_entry_core,
             audit_namespace_attrs=_project_producer_namespace_attrs(
@@ -297,10 +279,8 @@ def cp_audit_to_od_audit(
             ),
             prior_entry_hash=cp_entry.audit_cp_prior_event_hash,
         )
-    elif isinstance(cp_entry, CostRecordAuditPayload):  # noqa: UP040  # type: ignore[reportUnnecessaryIsInstance]
-        resolved_entry_core = _entry_core_or_default(
-            entry_core, cp_entry.audit_cp_action_id
-        )
+    elif isinstance(cp_entry, CostRecordAuditPayload):  # type: ignore[reportUnnecessaryIsInstance]
+        resolved_entry_core = _entry_core_or_default(entry_core, cp_entry.audit_cp_action_id)
         payload = AuditPayload(
             entry_core=resolved_entry_core,
             audit_namespace_attrs=_project_producer_namespace_attrs(

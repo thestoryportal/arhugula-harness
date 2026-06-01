@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 
 async def materialize_skill_activation_emitter_stage(
     config: RuntimeConfig,
-    ctx: "_MutableHarnessContext",
+    ctx: _MutableHarnessContext,
 ) -> SkillActivationSpanEmitter | None:
     """Stage-5 LOOP_INIT factory for ``SkillActivationSpanEmitter``.
 

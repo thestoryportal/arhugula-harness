@@ -68,9 +68,7 @@ def initialize_jsonl_event_ledger(
     empty (`entry_count=0`); a file present is line-counted and returned
     unmodified (acceptance #2/#3/#5).
     """
-    directory = resolver.resolve_path(
-        PathClass.STATE_LEDGER, workflow_class, deployment_surface
-    )
+    directory = resolver.resolve_path(PathClass.STATE_LEDGER, workflow_class, deployment_surface)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / STATE_LEDGER_JSONL_FILENAME
     if not path.exists():

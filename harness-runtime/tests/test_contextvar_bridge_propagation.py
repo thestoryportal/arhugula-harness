@@ -50,9 +50,7 @@ async def _tool_handler_simulant(value: str) -> str | None:
 
 
 @pytest.mark.asyncio
-async def test_contextvar_propagates_through_to_thread_and_run_coro_threadsafe() -> (
-    None
-):
+async def test_contextvar_propagates_through_to_thread_and_run_coro_threadsafe() -> None:
     """Single-task baseline: ContextVar set in the tool handler frame is
     visible to the elicit coroutine after the to_thread + run_coroutine_threadsafe
     bridge."""

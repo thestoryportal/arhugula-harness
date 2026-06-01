@@ -12,7 +12,6 @@ from typing import Any
 import pytest
 from harness_core.deployment_surface import DeploymentSurface
 from harness_cp.topology_pattern import TopologyPattern
-
 from harness_runtime.config_source import (
     RUNTIME_CONFIG_LOAD_FAIL_CLASS,
     RuntimeConfigLoadError,
@@ -104,9 +103,7 @@ def test_cli_overrides_win_over_file_and_env(
 
 
 # AC #6 — precedence: env=X + file=Y (no CLI override of that field) → file wins.
-def test_config_file_wins_over_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_config_file_wins_over_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HARNESS_TENANT_ID", "env-tenant")
     config_file = tmp_path / "harness.toml"
     config_file.write_text('[runtime]\ntenant_id = "file-tenant"\n', encoding="utf-8")
@@ -216,7 +213,7 @@ def test_nested_invalid_field_renders_with_dotted_loc_path(
     config_file = tmp_path / "harness.toml"
     # Endpoint without a `://` scheme triggers OTelConfig's field validator.
     config_file.write_text(
-        "[runtime.otel]\notlp_endpoint = \"no-scheme-host\"\n",
+        '[runtime.otel]\notlp_endpoint = "no-scheme-host"\n',
         encoding="utf-8",
     )
     overrides = _minimum_required_overrides()
@@ -240,7 +237,7 @@ def test_nested_secret_key_in_config_raises_secrets_excluded_error(
 ) -> None:
     config_file = tmp_path / "harness.toml"
     config_file.write_text(
-        "[provider.anthropic]\nsecret_token = \"sk-fake\"\n",
+        '[provider.anthropic]\nsecret_token = "sk-fake"\n',
         encoding="utf-8",
     )
     with pytest.raises(RuntimeConfigLoadError) as excinfo:
@@ -266,12 +263,12 @@ def test_minimal_harness_toml_loads_with_sub_config_defaults(
     `missing` errors at the merged-dict layer."""
     config_file = tmp_path / "harness.toml"
     config_file.write_text(
-        '[runtime]\n'
+        "[runtime]\n"
         'deployment_surface = "local-development"\n'
         f'repository_root = "{tmp_path}"\n'
         'default_topology = "single-threaded-linear"\n'
-        '\n'
-        '[runtime.otel]\n'
+        "\n"
+        "[runtime.otel]\n"
         'otlp_endpoint = "http://localhost:4318"\n',
         encoding="utf-8",
     )
@@ -307,9 +304,7 @@ def test_provider_secrets_sub_table_name_does_not_false_match_detector(
     del overrides["provider_secrets"]
     config_file = tmp_path / "harness.toml"
     config_file.write_text(
-        '[runtime]\n'
-        '[runtime.provider_secrets]\n'
-        'keyring_service = "harness-test"\n',
+        '[runtime]\n[runtime.provider_secrets]\nkeyring_service = "harness-test"\n',
         encoding="utf-8",
     )
     cfg = RuntimeConfigSource.load(
@@ -331,8 +326,7 @@ def test_secret_leaf_inside_provider_secrets_sub_table_still_caught(
     """
     config_file = tmp_path / "harness.toml"
     config_file.write_text(
-        '[runtime.provider_secrets]\n'
-        'api_key = "sk-leaked-via-config-file"\n',
+        '[runtime.provider_secrets]\napi_key = "sk-leaked-via-config-file"\n',
         encoding="utf-8",
     )
     with pytest.raises(RuntimeConfigLoadError) as excinfo:

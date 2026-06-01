@@ -6,15 +6,12 @@ Per `Implementation_Plan_Harness_Runtime_v2_11.md` §1 U-RT-63 + U-RT-64 ACs.
 
 from __future__ import annotations
 
-import pytest
 from contextlib import asynccontextmanager
 
+import pytest
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_as.tool_contract import ToolContract
 from harness_cp.cp_shared_types import MCPTrustTier
-from mcp.server.fastmcp import FastMCP
-from mcp.shared.memory import create_connected_server_and_client_session
-
 from harness_runtime.lifecycle.mcp_client_host import (
     MCPClientHost,
     MCPHostAlreadyStartedError,
@@ -22,7 +19,8 @@ from harness_runtime.lifecycle.mcp_client_host import (
     MCPHostNotStartedError,
     MCPHostStartupError,
 )
-
+from mcp.server.fastmcp import FastMCP
+from mcp.shared.memory import create_connected_server_and_client_session
 
 # ---------- AC #1 — transport literal validation ----------------------------
 
@@ -190,7 +188,7 @@ def _make_tool_contract_converter():
     conservative default (TIER_2 + READ_ONLY) for testing."""
 
     def convert(tool: object) -> ToolContract:
-        name = getattr(tool, "name")
+        name = tool.name
         description = getattr(tool, "description", "")
         input_schema = getattr(tool, "inputSchema", None) or {"type": "object"}
         output_schema = getattr(tool, "outputSchema", None) or {"type": "object"}

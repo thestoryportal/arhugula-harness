@@ -63,44 +63,29 @@ def test_solo_cells_tui_ring_buffer() -> None:
     """Acceptance #3 / #4 — solo-developer cells → TUI ring-buffer query."""
     for cell, binding in PER_CELL_DASHBOARD_BINDINGS.items():
         if cell.persona_tier is PersonaTier.SOLO_DEVELOPER:
-            assert (
-                binding.binding_form
-                is DashboardBindingForm.TUI_TRACE_BROWSER_RING_BUFFER_QUERY
-            )
+            assert binding.binding_form is DashboardBindingForm.TUI_TRACE_BROWSER_RING_BUFFER_QUERY
 
 
 def test_team_cells_named_dashboard() -> None:
     """Acceptance #3 / #4 — team-binding cells → named dashboard query."""
     for cell, binding in PER_CELL_DASHBOARD_BINDINGS.items():
         if cell.persona_tier is PersonaTier.TEAM_BINDING:
-            assert (
-                binding.binding_form
-                is DashboardBindingForm.NAMED_DASHBOARD_QUERY_BACKEND
-            )
+            assert binding.binding_form is DashboardBindingForm.NAMED_DASHBOARD_QUERY_BACKEND
 
 
 def test_multi_tenant_cells_per_tenant_separation() -> None:
     """Acceptance #3 / #4 — multi-tenant cells → per-tenant separation."""
     for cell, binding in PER_CELL_DASHBOARD_BINDINGS.items():
         if cell.persona_tier is PersonaTier.MULTI_TENANT_COMPLIANCE:
-            assert (
-                binding.binding_form
-                is DashboardBindingForm.PER_TENANT_DASHBOARD_SEPARATION
-            )
+            assert binding.binding_form is DashboardBindingForm.PER_TENANT_DASHBOARD_SEPARATION
 
 
 def test_per_cell_alerting_hook_match_spec() -> None:
     """Acceptance #4 — per-cell alerting hook matches §16.1 per cell class."""
     expected = {
-        PersonaTier.SOLO_DEVELOPER: (
-            AlertingHook.OPERATOR_SELF_INSPECTION_TUI_THRESHOLD_OPTIONAL
-        ),
-        PersonaTier.TEAM_BINDING: (
-            AlertingHook.BACKEND_SIDE_ALERTING_PER_CLASS_COST_CEILING
-        ),
-        PersonaTier.MULTI_TENANT_COMPLIANCE: (
-            AlertingHook.PER_TENANT_ALERTING_NO_CROSS_TENANT
-        ),
+        PersonaTier.SOLO_DEVELOPER: (AlertingHook.OPERATOR_SELF_INSPECTION_TUI_THRESHOLD_OPTIONAL),
+        PersonaTier.TEAM_BINDING: (AlertingHook.BACKEND_SIDE_ALERTING_PER_CLASS_COST_CEILING),
+        PersonaTier.MULTI_TENANT_COMPLIANCE: (AlertingHook.PER_TENANT_ALERTING_NO_CROSS_TENANT),
     }
     for cell, binding in PER_CELL_DASHBOARD_BINDINGS.items():
         assert binding.alerting_hook is expected[cell.persona_tier]
@@ -119,18 +104,14 @@ def _threshold(base_rate: float) -> AlertingThresholdComposition:
 def test_alerting_signal_below_threshold() -> None:
     """Acceptance #5 — a scaled estimate below the ceiling → BELOW_THRESHOLD."""
     threshold = _threshold(1.0)
-    signal = compute_alerting_signal(
-        50.0, threshold, WorkloadClass.SOFTWARE_ENGINEERING
-    )
+    signal = compute_alerting_signal(50.0, threshold, WorkloadClass.SOFTWARE_ENGINEERING)
     assert signal is AlertingSignal.BELOW_THRESHOLD
 
 
 def test_alerting_signal_above_threshold() -> None:
     """Acceptance #5 — a scaled estimate above the ceiling → ABOVE_THRESHOLD."""
     threshold = _threshold(1.0)
-    signal = compute_alerting_signal(
-        150.0, threshold, WorkloadClass.SOFTWARE_ENGINEERING
-    )
+    signal = compute_alerting_signal(150.0, threshold, WorkloadClass.SOFTWARE_ENGINEERING)
     assert signal is AlertingSignal.ABOVE_THRESHOLD
 
 
@@ -141,9 +122,7 @@ def test_alerting_scales_by_inverse_base_rate() -> None:
     Without scaling, 20.0 < 100.0 would be BELOW — the scaling flips it.
     """
     threshold = _threshold(0.1)
-    signal = compute_alerting_signal(
-        20.0, threshold, WorkloadClass.SOFTWARE_ENGINEERING
-    )
+    signal = compute_alerting_signal(20.0, threshold, WorkloadClass.SOFTWARE_ENGINEERING)
     assert signal is AlertingSignal.ABOVE_THRESHOLD
 
 
@@ -151,9 +130,7 @@ def test_alerting_base_rate_one_no_scaling() -> None:
     """Acceptance #5 — at base_rate 1.0 the scaling factor is 1.0 (no scaling)."""
     threshold = _threshold(1.0)
     assert threshold.scaled_estimate_factor == 1.0
-    signal = compute_alerting_signal(
-        99.0, threshold, WorkloadClass.SOFTWARE_ENGINEERING
-    )
+    signal = compute_alerting_signal(99.0, threshold, WorkloadClass.SOFTWARE_ENGINEERING)
     assert signal is AlertingSignal.BELOW_THRESHOLD
 
 
@@ -216,10 +193,7 @@ def test_multi_tenant_cross_tenant_aggregation_forbidden() -> None:
     cross-tenant aggregation per C-OD-21)."""
     for cell, binding in PER_CELL_DASHBOARD_BINDINGS.items():
         if cell.persona_tier is PersonaTier.MULTI_TENANT_COMPLIANCE:
-            assert (
-                binding.alerting_hook
-                is AlertingHook.PER_TENANT_ALERTING_NO_CROSS_TENANT
-            )
+            assert binding.alerting_hook is AlertingHook.PER_TENANT_ALERTING_NO_CROSS_TENANT
 
 
 def test_workload_class_resolves_to_harness_core_u_cp_00() -> None:

@@ -65,14 +65,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from harness_od.base_rate_set_and_envelope import PER_CELL_BASE_RATE_ENVELOPE
+from harness_od.composite_sampler import build_default_sampler
+from harness_od.observability_matrix import CellID, reject_excluded_cell
 from opentelemetry import trace as ot_trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.sampling import Sampler
-
-from harness_od.base_rate_set_and_envelope import PER_CELL_BASE_RATE_ENVELOPE
-from harness_od.composite_sampler import build_default_sampler
-from harness_od.observability_matrix import CellID, reject_excluded_cell
 
 from harness_runtime.config.otel_config import (
     build_resource_attributes,
@@ -238,8 +237,7 @@ def materialize_tracer_provider_stage(
         _ = resolve_sampling_mode(config.otel, config.deployment_surface)
     except Exception as exc:
         raise TracerProviderBindError(
-            f"TracerProvider bind failed at resource-attribute build / sampler "
-            f"resolution: {exc}"
+            f"TracerProvider bind failed at resource-attribute build / sampler resolution: {exc}"
         ) from exc
 
     resource = Resource.create(attrs)

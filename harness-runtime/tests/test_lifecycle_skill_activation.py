@@ -9,11 +9,9 @@ Q-set ratification.
 from __future__ import annotations
 
 import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest
-
 from harness_core import SkillID
 from harness_runtime.lifecycle.skill_activation import (
     SkillActivationEmitterStageMaterializeError,
@@ -30,8 +28,8 @@ from harness_runtime.lifecycle.skills import (
     load_skills_from_dir,
 )
 
-
 # --- U-RT-99 carrier substrate tests -----------------------------------------
+
 
 def test_skill_activation_mode_three_values_byte_exact() -> None:
     """AC #1: 3 enum members preserving AS spec v1.7 §14.4 Claude Code
@@ -97,12 +95,16 @@ def test_compute_git_blob_sha_byte_exact_to_git_hash_object() -> None:
     """AC #5: compute_git_blob_sha is byte-exact-identical to
     `git hash-object <path>` output."""
     content = b"hello world\n"
-    expected_sha = subprocess.run(
-        ["git", "hash-object", "--stdin"],
-        input=content,
-        capture_output=True,
-        check=True,
-    ).stdout.decode("ascii").strip()
+    expected_sha = (
+        subprocess.run(
+            ["git", "hash-object", "--stdin"],
+            input=content,
+            capture_output=True,
+            check=True,
+        )
+        .stdout.decode("ascii")
+        .strip()
+    )
     assert compute_git_blob_sha(content) == expected_sha
 
 
@@ -157,7 +159,7 @@ class _FakeTracerProvider:
     def __init__(self) -> None:
         self.tracer = _FakeTracer()
 
-    def get_tracer(self, name: str):  # noqa: ARG002
+    def get_tracer(self, name: str):
         return self.tracer
 
 
@@ -355,7 +357,7 @@ def test_dispatcher_emits_tool_search_span_when_hook_returns_skill() -> None:
 
     # Invoke dispatch — provider resolution will fail, but hook fires first.
     import asyncio
-    from harness_cp.workflow_driver_types import StepExecutionContext
+
     # The hook only needs step_context.workflow_id + step_context.step_index;
     # we use a duck-typed object instead of a full StepExecutionContext.
 
@@ -396,15 +398,18 @@ def test_dispatcher_no_op_when_emitter_or_hook_none() -> None:
 
     # Emitter None
     dispatcher = RuntimeLLMDispatcher(
-        providers={}, tracer_provider=tp,
-        skill_activation_emitter=None, skills={SkillID("x"): _make_skill("x")},
+        providers={},
+        tracer_provider=tp,
+        skill_activation_emitter=None,
+        skills={SkillID("x"): _make_skill("x")},
     )
     assert dispatcher.skill_activation_emitter is None
 
     # Hook None (emitter present but without hook)
     emitter_no_hook = SkillActivationSpanEmitter(tracer_provider=tp, hook=None)
     dispatcher2 = RuntimeLLMDispatcher(
-        providers={}, tracer_provider=tp,
+        providers={},
+        tracer_provider=tp,
         skill_activation_emitter=emitter_no_hook,
         skills={SkillID("x"): _make_skill("x")},
     )

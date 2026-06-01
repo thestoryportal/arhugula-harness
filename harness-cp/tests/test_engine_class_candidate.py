@@ -37,9 +37,7 @@ def test_deployment_surface_cardinality_three() -> None:
 def test_engine_class_candidates_cardinality_three() -> None:
     """#2 — `ENGINE_CLASS_CANDIDATES` declares exactly three entries."""
     assert len(ENGINE_CLASS_CANDIDATES) == 3
-    assert {c.deployment_surface for c in ENGINE_CLASS_CANDIDATES} == set(
-        DeploymentSurface
-    )
+    assert {c.deployment_surface for c in ENGINE_CLASS_CANDIDATES} == set(DeploymentSurface)
 
 
 def test_candidate_sets_match_spec() -> None:
@@ -63,14 +61,8 @@ def test_candidate_sets_match_spec() -> None:
             EngineClass.WAL_SEGMENT,
         }
     )
-    assert (
-        by_surface[DeploymentSurface.SELF_HOSTED_SERVER].candidate_set
-        == expected_durable
-    )
-    assert (
-        by_surface[DeploymentSurface.MANAGED_CLOUD].candidate_set
-        == expected_durable
-    )
+    assert by_surface[DeploymentSurface.SELF_HOSTED_SERVER].candidate_set == expected_durable
+    assert by_surface[DeploymentSurface.MANAGED_CLOUD].candidate_set == expected_durable
 
 
 def test_local_excludes_reconciler() -> None:

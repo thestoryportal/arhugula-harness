@@ -32,8 +32,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
-from harness_core import PersonaTier
 from harness_as.sandbox_tier import SandboxTier
+from harness_core import PersonaTier
 from harness_core.identity import StepID
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class import EngineClass
@@ -65,7 +65,6 @@ from harness_runtime.lifecycle.runtime_tool_dispatcher import (
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-
 
 # ---------------------------------------------------------------------------
 # Fakes.

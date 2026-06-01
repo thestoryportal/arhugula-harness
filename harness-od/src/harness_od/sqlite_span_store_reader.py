@@ -19,9 +19,9 @@ import sqlite3
 from harness_od.sqlite_span_store import SpanInsertRow
 
 __all__ = [
-    "read_spans_by_workflow",
-    "read_spans_by_trace",
     "read_span_by_id",
+    "read_spans_by_trace",
+    "read_spans_by_workflow",
 ]
 
 
@@ -69,24 +69,19 @@ def read_spans_by_workflow(
     return [_row_to_span(r) for r in rows]
 
 
-def read_spans_by_trace(
-    conn: sqlite3.Connection, trace_id: str
-) -> list[SpanInsertRow]:
+def read_spans_by_trace(conn: sqlite3.Connection, trace_id: str) -> list[SpanInsertRow]:
     """Return all spans for a trace, ordered by `start_time_ns` ascending.
 
     Uses the `idx_trace` index per spec §C-OD-27.1.
     """
     rows = conn.execute(
-        f"SELECT {_SELECT_COLUMNS} FROM spans WHERE trace_id = ? "
-        "ORDER BY start_time_ns ASC",
+        f"SELECT {_SELECT_COLUMNS} FROM spans WHERE trace_id = ? ORDER BY start_time_ns ASC",
         (trace_id,),
     ).fetchall()
     return [_row_to_span(r) for r in rows]
 
 
-def read_span_by_id(
-    conn: sqlite3.Connection, span_id: str
-) -> SpanInsertRow | None:
+def read_span_by_id(conn: sqlite3.Connection, span_id: str) -> SpanInsertRow | None:
     """Return the span with the given `span_id`, or `None` if not present.
 
     Uses the primary-key lookup on `spans.span_id`.

@@ -227,10 +227,7 @@ F2_12_CARRY_FORWARD: F2_12_CarryForward = F2_12_CarryForward(
         RevisionStep(
             step_index=3,
             revision_target="ADD v1.2 -> v1.3",
-            rationale=(
-                "reconsolidate engine-class + observability cross-section per "
-                "revised ADRs"
-            ),
+            rationale=("reconsolidate engine-class + observability cross-section per revised ADRs"),
         ),
         RevisionStep(
             step_index=4,

@@ -41,21 +41,13 @@ def test_validator_fail_metadata_match_spec_21_1() -> None:
     """#2 — `VALIDATOR_FAIL_METADATA` declares 5 rows, one per class,
     each carrying Routing + Recovery-path columns."""
     assert len(VALIDATOR_FAIL_METADATA) == 5
-    assert {m.fail_class for m in VALIDATOR_FAIL_METADATA} == set(
-        ValidatorRetryExitClass
-    )
+    assert {m.fail_class for m in VALIDATOR_FAIL_METADATA} == set(ValidatorRetryExitClass)
     by_class = {m.fail_class: m for m in VALIDATOR_FAIL_METADATA}
     # SKIP-STAIRCASE classes name the skip in the Routing column.
-    assert "SKIP STAIRCASE" in by_class[
-        ValidatorRetryExitClass.PERMANENT_FAIL_EXIT
-    ].routing
-    assert "SKIP STAIRCASE" in by_class[
-        ValidatorRetryExitClass.TERMINAL_FAIL_EXIT
-    ].routing
+    assert "SKIP STAIRCASE" in by_class[ValidatorRetryExitClass.PERMANENT_FAIL_EXIT].routing
+    assert "SKIP STAIRCASE" in by_class[ValidatorRetryExitClass.TERMINAL_FAIL_EXIT].routing
     # Staircase classes route to the transient staircase.
-    assert "Transient staircase" in by_class[
-        ValidatorRetryExitClass.TRANSIENT_RETRY
-    ].routing
+    assert "Transient staircase" in by_class[ValidatorRetryExitClass.TRANSIENT_RETRY].routing
     assert all(m.routing and m.recovery_path for m in VALIDATOR_FAIL_METADATA)
 
 
@@ -73,28 +65,16 @@ def test_validator_fail_attributes_match_spec_21_5_verbatim() -> None:
         "validator.fail.permanence",
     }
     assert by_name["validator.fail.class"].cardinality is Cardinality.LOW
-    assert (
-        by_name["validator.fail.cause_attribution"].cardinality
-        is Cardinality.MEDIUM
-    )
+    assert by_name["validator.fail.cause_attribution"].cardinality is Cardinality.MEDIUM
     assert by_name["validator.fail.permanence"].cardinality is Cardinality.LOW
-    assert all(
-        a.value_type is AttributeValueType.ENUM_REF
-        for a in VALIDATOR_FAIL_NAMESPACE_SCHEMA
-    )
+    assert all(a.value_type is AttributeValueType.ENUM_REF for a in VALIDATOR_FAIL_NAMESPACE_SCHEMA)
 
 
 def test_validator_fail_permanence_derived_from_class() -> None:
     """#4 — `permanence` is `permanent` for the two exit classes,
     `transient` otherwise."""
-    assert (
-        validator_fail_permanence(ValidatorRetryExitClass.PERMANENT_FAIL_EXIT)
-        == "permanent"
-    )
-    assert (
-        validator_fail_permanence(ValidatorRetryExitClass.TERMINAL_FAIL_EXIT)
-        == "permanent"
-    )
+    assert validator_fail_permanence(ValidatorRetryExitClass.PERMANENT_FAIL_EXIT) == "permanent"
+    assert validator_fail_permanence(ValidatorRetryExitClass.TERMINAL_FAIL_EXIT) == "permanent"
     for transient in (
         ValidatorRetryExitClass.TRANSIENT_RETRY,
         ValidatorRetryExitClass.REFLEXION_RECOVERABLE,

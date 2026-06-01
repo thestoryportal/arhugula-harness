@@ -85,7 +85,7 @@ def _canonicalize_procedural_tier_payload(
 
 
 def resolve_procedural_tier_snapshot(
-    harness_context: "HarnessContext",
+    harness_context: HarnessContext,
 ) -> Identifier:
     """Compute the procedural-tier snapshot content-hash for ``harness_context``.
 
@@ -141,7 +141,7 @@ def resolve_procedural_tier_snapshot(
 
 
 def make_procedural_tier_snapshot_resolver(
-    harness_context: "HarnessContext",
+    harness_context: HarnessContext,
 ) -> Callable[[], Identifier]:
     """Build a zero-arg resolver closure capturing ``harness_context``.
 

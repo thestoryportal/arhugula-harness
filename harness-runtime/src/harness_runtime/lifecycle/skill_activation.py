@@ -226,9 +226,7 @@ class SkillActivationSpanEmitter:
             span.set_attribute("skill.id", str(skill_id))
             span.set_attribute("skill.name", skill.manifest.name)
             span.set_attribute("skill.version_sha", skill.manifest.version_sha)
-            span.set_attribute(
-                "skill.frontmatter.version", skill.manifest.version
-            )
+            span.set_attribute("skill.frontmatter.version", skill.manifest.version)
             span.set_attribute("skill.body_tokens", skill.manifest.body_tokens)
             span.set_attribute("skill.activation_mode", str(mode))
             # workflow_id is workflow-scope correlation; not an AS spec §14.4

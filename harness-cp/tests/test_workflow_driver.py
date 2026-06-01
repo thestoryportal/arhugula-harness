@@ -163,9 +163,7 @@ class _FakeLedgerReader:
     def __init__(self, materialized_keys: dict[str, int] | None = None) -> None:
         self._keys = materialized_keys or {}
 
-    def read_by_idempotency_key(
-        self, idempotency_key: Any, bounded_window: Any
-    ) -> Any:
+    def read_by_idempotency_key(self, idempotency_key: Any, bounded_window: Any) -> Any:
         _ = bounded_window
         # The driver passes Identifier(hex_string); compare on str form.
         count = self._keys.get(str(idempotency_key), 0)
@@ -215,7 +213,9 @@ class _FakeCtx:
         # U-OD-35 — DriverContext requires tracer_provider per C-OD-25 §25.2.
         # Default to NoOpTracerProvider so happy-path tests don't assert span
         # observables; envelope-specific tests live in test_workflow_driver_envelope.py.
-        self.tracer_provider = tracer_provider if tracer_provider is not None else NoOpTracerProvider()
+        self.tracer_provider = (
+            tracer_provider if tracer_provider is not None else NoOpTracerProvider()
+        )
         # U-CP-61 — optional ValidatorFramework binding; default None (skip hook).
         self.validator_framework = validator_framework
         # tenant_id binding lift — DriverContext.tenant_id surfaced from
@@ -557,9 +557,7 @@ def test_workflow_resumption_emitted_on_save_point_checkpoint_reentry() -> None:
     }
     ledger = _FakeLedger(prior_entries=2)
     emitter = _FakeEmitter()
-    ctx = _FakeCtx(
-        ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader(materialized)
-    )
+    ctx = _FakeCtx(ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader(materialized))
     dispatcher = _EchoDispatcher()
     execute_workflow(
         manifest_entry=manifest,
@@ -594,9 +592,7 @@ def test_resumption_not_emitted_for_unrelated_prior_run() -> None:
     }
     ledger = _FakeLedger(prior_entries=2)
     emitter = _FakeEmitter()
-    ctx = _FakeCtx(
-        ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader(materialized)
-    )
+    ctx = _FakeCtx(ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader(materialized))
     dispatcher = _EchoDispatcher()
     execute_workflow(
         manifest_entry=manifest,
@@ -621,9 +617,7 @@ def test_resumption_skips_already_replayed_steps() -> None:
     }
     ledger = _FakeLedger(prior_entries=3)
     emitter = _FakeEmitter()
-    ctx = _FakeCtx(
-        ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader(materialized)
-    )
+    ctx = _FakeCtx(ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader(materialized))
     dispatcher = _EchoDispatcher()
     execute_workflow(
         manifest_entry=manifest,
@@ -650,9 +644,7 @@ def test_resume_at_advances_over_contiguous_prefix_only() -> None:
     }
     ledger = _FakeLedger(prior_entries=2)
     emitter = _FakeEmitter()
-    ctx = _FakeCtx(
-        ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader(materialized)
-    )
+    ctx = _FakeCtx(ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader(materialized))
     dispatcher = _EchoDispatcher()
     execute_workflow(
         manifest_entry=manifest,
@@ -695,9 +687,7 @@ def test_entry_version_changes_idempotency_key_basis() -> None:
     }
     ledger = _FakeLedger(prior_entries=1)
     emitter = _FakeEmitter()
-    ctx = _FakeCtx(
-        ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader(materialized)
-    )
+    ctx = _FakeCtx(ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader(materialized))
     dispatcher = _EchoDispatcher()
     execute_workflow(
         manifest_entry=manifest_v2,

@@ -173,35 +173,28 @@ async def compose_validator_escalation_gate(
         with tracer.start_as_current_span("hitl.gate.evaluated") as gate_span:
             gate_span.set_attribute("hitl.gate.level", gate_level.value)
             gate_span.set_attribute(
-                "hitl.gate.persona_tier", "unknown"  # impl-discretion v1.22
+                "hitl.gate.persona_tier",
+                "unknown",  # impl-discretion v1.22
             )
             # §14.15.4 invariant 2: escalation by definition requires HITL.
             gate_span.set_attribute("hitl.gate.required", True)
 
             # §14.15.2 step 4 — Open hitl.invocation.opened span.
-            with tracer.start_as_current_span(
-                "hitl.invocation.opened"
-            ) as invocation_span:
+            with tracer.start_as_current_span("hitl.invocation.opened") as invocation_span:
                 invocation_span.set_attribute("hitl.gate.level", gate_level.value)
-                invocation_span.set_attribute(
-                    "hitl.invocation.placement", "validator_escalation"
-                )
+                invocation_span.set_attribute("hitl.invocation.placement", "validator_escalation")
 
                 # §14.15.2 step 5 — Invoke gate via AskUserQuestion.
                 prompt = compose_escalation_prompt(brief, palette)
                 try:
-                    result: AskUserQuestionResult = (
-                        await ask_user_question_surface.ask(
-                            prompt=prompt,
-                            options=sorted(palette, key=lambda r: r.value),
-                            timeout=ESCALATION_TIMEOUT_DEFAULT,
-                        )
+                    result: AskUserQuestionResult = await ask_user_question_surface.ask(
+                        prompt=prompt,
+                        options=sorted(palette, key=lambda r: r.value),
+                        timeout=ESCALATION_TIMEOUT_DEFAULT,
                     )
                 except AskUserQuestionTimeoutError as exc:
                     # §14.15.2 step 6 — Timeout path.
-                    with tracer.start_as_current_span(
-                        "hitl.invocation.timed_out"
-                    ) as timeout_span:
+                    with tracer.start_as_current_span("hitl.invocation.timed_out") as timeout_span:
                         timeout_span.set_attribute(
                             "hitl.timeout.duration_ms",
                             ESCALATION_TIMEOUT_DEFAULT * 1000,
@@ -215,15 +208,9 @@ async def compose_validator_escalation_gate(
                     ) from exc
 
                 # §14.15.2 step 6 — Response received.
-                with tracer.start_as_current_span(
-                    "hitl.invocation.responded"
-                ) as responded_span:
-                    responded_span.set_attribute(
-                        "hitl.response.class", result.response.value
-                    )
-                    responded_span.set_attribute(
-                        "hitl.response.latency_ms", result.latency_ms
-                    )
+                with tracer.start_as_current_span("hitl.invocation.responded") as responded_span:
+                    responded_span.set_attribute("hitl.response.class", result.response.value)
+                    responded_span.set_attribute("hitl.response.latency_ms", result.latency_ms)
 
                 # §14.15.2 step 7 — Audit composition (deferred to follow-on
                 # CP composer arc per scoping doc adjacent observation (d);

@@ -42,18 +42,19 @@ from harness_cp.gate_level_rule import GateLevel
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver_types import StepKind, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
-from harness_runtime.lifecycle.strict_safe_loader import strict_safe_load
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from harness_runtime.lifecycle.strict_safe_loader import strict_safe_load
+
 __all__ = [
+    "MANIFEST_VERSION_V1",
+    "SUPPORTED_MANIFEST_EXTENSIONS",
     "LoadedWorkflow",
     "ManifestAdmissibilityError",
     "ManifestEnumValueError",
     "ManifestParseError",
     "ManifestSchemaError",
     "ManifestStepIDCollisionError",
-    "MANIFEST_VERSION_V1",
-    "SUPPORTED_MANIFEST_EXTENSIONS",
     "UnsupportedManifestFormatError",
     "UnsupportedManifestVersionError",
     "WorkflowManifest",
@@ -296,8 +297,7 @@ class WorkflowManifestLoader:
         # be the literal int 1 per the contract.
         if not isinstance(raw_version, int) or isinstance(raw_version, bool):
             raise UnsupportedManifestVersionError(
-                f"'version' must be the integer {MANIFEST_VERSION_V1}; got "
-                f"{raw_version!r}",
+                f"'version' must be the integer {MANIFEST_VERSION_V1}; got {raw_version!r}",
                 source=source,
             )
         if raw_version != MANIFEST_VERSION_V1:
@@ -309,9 +309,7 @@ class WorkflowManifestLoader:
     # ---------- carrier construction ----------
 
     @classmethod
-    def _build_carrier(
-        cls, document: dict[str, Any], *, source: str
-    ) -> WorkflowManifest:
+    def _build_carrier(cls, document: dict[str, Any], *, source: str) -> WorkflowManifest:
         # Per runtime spec v1.39 §14.19 Reading A: both YAML and TOML loaders
         # preserve native scalar types; no boundary coercion needed. The
         # `_coerce_int_fields` helper present pre-v1.39 was retired with the
@@ -347,9 +345,7 @@ class WorkflowManifestLoader:
     # ---------- step-id uniqueness (invariant 4) ----------
 
     @staticmethod
-    def _check_step_id_uniqueness(
-        manifest: WorkflowManifest, *, source: str
-    ) -> None:
+    def _check_step_id_uniqueness(manifest: WorkflowManifest, *, source: str) -> None:
         seen: dict[str, int] = {}
         for idx, step in enumerate(manifest.steps):
             if step.step_id in seen:
@@ -392,16 +388,13 @@ class WorkflowManifestLoader:
         return cls._project_to_loaded_workflow(manifest, source=str(path))
 
     @staticmethod
-    def _check_step_payloads_json_serializable(
-        manifest: WorkflowManifest, *, source: str
-    ) -> None:
+    def _check_step_payloads_json_serializable(manifest: WorkflowManifest, *, source: str) -> None:
         for idx, step in enumerate(manifest.steps):
             try:
                 json.dumps(step.step_payload)
             except (TypeError, ValueError) as exc:
                 raise ManifestSchemaError(
-                    f"steps[{idx}].step_payload ({step.step_id!r}) is not "
-                    f"JSON-serializable: {exc}",
+                    f"steps[{idx}].step_payload ({step.step_id!r}) is not JSON-serializable: {exc}",
                     source=source,
                 ) from exc
 

@@ -22,9 +22,7 @@ def _make_brief(
     fail_class: ValidatorFailClass | None = None,
     fail_detail_hash: str | None = None,
     escalation_reason: str = "durable_async_cell_synchrony",
-    palette: frozenset[HITLResponse] = frozenset(
-        {HITLResponse.APPROVE, HITLResponse.REJECT}
-    ),
+    palette: frozenset[HITLResponse] = frozenset({HITLResponse.APPROVE, HITLResponse.REJECT}),
 ) -> HITLEscalationBrief:
     return HITLEscalationBrief(
         parent_step_id=parent_step_id,
@@ -68,9 +66,7 @@ def test_projection_serializes_brief_fields_into_payload_body() -> None:
     assert payload.payload_body["fail_class"] == "schema_violation"
     assert payload.payload_body["fail_detail_hash"] == "0" * 64
     # Palette is sorted by enum value for deterministic serialization
-    assert payload.payload_body["proposed_response_palette"] == sorted(
-        ["approve", "reject"]
-    )
+    assert payload.payload_body["proposed_response_palette"] == sorted(["approve", "reject"])
 
 
 def test_projection_handles_none_fail_class_and_hash() -> None:

@@ -133,9 +133,7 @@ def test_append_delegates_to_u_is_11(tmp_path: Path) -> None:
         sibling_agent_identity=ActorIdentity("sib-1"),
         timestamp=datetime(2026, 5, 16, 1, tzinfo=UTC),
     )
-    handle = JsonlLedgerHandle(
-        canonical_path=tmp_path / "state.jsonl", exists=False, entry_count=0
-    )
+    handle = JsonlLedgerHandle(canonical_path=tmp_path / "state.jsonl", exists=False, entry_count=0)
     write_key = WriteKey(
         thread_id=Identifier("T"),
         step_id=Identifier("0"),

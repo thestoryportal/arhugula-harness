@@ -65,18 +65,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from harness_core import SkillID
 from harness_runtime.bootstrap import run_bootstrap
 from harness_runtime.lifecycle.skill_activation import (
     SkillActivationHookConfig,
-    SkillActivationMode,
     SkillActivationSpanEmitter,
 )
 from harness_runtime.types import HarnessContext, RuntimeConfig
 
 from .conftest import WORKLOAD, build_config
-
 
 # --- Operator-supplied fixture hook ------------------------------------------
 
@@ -93,15 +90,15 @@ class _AllSkillsHook:
     def select_for_workflow_init(
         self,
         loaded_skills: Iterable[SkillID],
-        workflow_id: str,  # noqa: ARG002
+        workflow_id: str,
     ) -> Iterable[SkillID]:
         return list(loaded_skills)
 
     def select_for_llm_dispatch(
         self,
         loaded_skills: Iterable[SkillID],
-        workflow_id: str,  # noqa: ARG002
-        step_index: int,  # noqa: ARG002
+        workflow_id: str,
+        step_index: int,
     ) -> Iterable[SkillID]:
         return list(loaded_skills)
 
@@ -233,8 +230,7 @@ async def test_skill_activation_e2e_opt_in_with_hook_branch(
 
     # The fixture skill should have loaded.
     assert skill_id in ctx.skills, (
-        f"fixture skill {skill_id} must be loaded at ctx.skills via "
-        f"stage-2 AS load_skills_from_dir"
+        f"fixture skill {skill_id} must be loaded at ctx.skills via stage-2 AS load_skills_from_dir"
     )
 
     # Verify the skill loaded with computed version_sha + body_tokens.

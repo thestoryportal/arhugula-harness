@@ -33,12 +33,8 @@ def _cell(pt: PersonaTier, ds: DeploymentSurface) -> CellID:
 
 _CELL_1 = _cell(PersonaTier.SOLO_DEVELOPER, DeploymentSurface.LOCAL_DEVELOPMENT)
 _CELL_5 = _cell(PersonaTier.TEAM_BINDING, DeploymentSurface.SELF_HOSTED_SERVER)
-_CELL_7 = _cell(
-    PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.SELF_HOSTED_SERVER
-)
-_CELL_8 = _cell(
-    PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.MANAGED_CLOUD
-)
+_CELL_7 = _cell(PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.SELF_HOSTED_SERVER)
+_CELL_8 = _cell(PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.MANAGED_CLOUD)
 
 #: An empty OTel attribute bag — `SpanAttributes` is a Mapping alias.
 _EMPTY_ATTRS: dict[str, object] = {}
@@ -63,6 +59,7 @@ def _query(cell: CellID, scope: str | None, dims: set[str]) -> DashboardQuery:
 
 # --- acc #1 — forbidden_surfaces cardinality 5 -----------------------------
 
+
 def test_forbidden_surfaces_cardinality_five() -> None:
     """acc #1 — exactly 5 forbidden cross-tenant rollup surfaces per §21.5."""
     assert len(CROSS_TENANT_AGGREGATION_PROHIBITION.forbidden_surfaces) == 5
@@ -83,6 +80,7 @@ def test_forbidden_surface_names_byte_exact() -> None:
 
 # --- acc #2 — enforcement_layer --------------------------------------------
 
+
 def test_enforcement_layer_dashboard_query_time() -> None:
     """acc #2 — enforcement_layer == DASHBOARD_QUERY_CONSTRUCTION_TIME."""
     assert (
@@ -92,6 +90,7 @@ def test_enforcement_layer_dashboard_query_time() -> None:
 
 
 # --- acc #3 / #8 — pre-collector redaction ---------------------------------
+
 
 def test_pre_collector_redaction_at_cell_7_required() -> None:
     """acc #3 — cell-7 with non-eval-grade posture is rejected."""
@@ -139,6 +138,7 @@ def test_pre_collector_redaction_eval_grade_posture_accepted() -> None:
 
 # --- acc #4 / #9 — reject_cross_tenant_query -------------------------------
 
+
 def test_reject_cross_tenant_query_missing_tenant_scope() -> None:
     """acc #4 — a multi-tenant-cell query lacking tenant scope is rejected."""
     with pytest.raises(CrossTenantAggregationViolation):
@@ -153,12 +153,7 @@ def test_reject_cross_tenant_query_multi_tenant_aggregation() -> None:
 
 def test_accept_per_tenant_scoped_query() -> None:
     """acc #4 — a tenant-scoped query without tenant.id aggregation passes."""
-    assert (
-        reject_cross_tenant_query(
-            _query(_CELL_7, "tenant-a", {"gen_ai.operation.name"})
-        )
-        is None
-    )
+    assert reject_cross_tenant_query(_query(_CELL_7, "tenant-a", {"gen_ai.operation.name"})) is None
 
 
 def test_reject_cross_tenant_query_non_multi_tenant_cell_accepts() -> None:
@@ -168,34 +163,24 @@ def test_reject_cross_tenant_query_non_multi_tenant_cell_accepts() -> None:
 
 # --- acc #5 — per-tenant cardinality isolation -----------------------------
 
+
 def test_per_tenant_cardinality_isolation_within_limit() -> None:
     """acc #5 — observed cardinality within the tenant rate limit passes."""
-    assert (
-        assert_per_tenant_cardinality_isolation(
-            "tenant-a", _CELL_7, _counters(500)
-        )
-        is None
-    )
+    assert assert_per_tenant_cardinality_isolation("tenant-a", _CELL_7, _counters(500)) is None
 
 
 def test_per_tenant_cardinality_isolation_exceeds_limit_reject() -> None:
     """acc #5 — observed cardinality above the tenant rate limit is rejected."""
     with pytest.raises(PerTenantCardinalityViolation):
-        assert_per_tenant_cardinality_isolation(
-            "tenant-a", _CELL_8, _counters(5000)
-        )
+        assert_per_tenant_cardinality_isolation("tenant-a", _CELL_8, _counters(5000))
 
 
 # --- acc #6 — per-tenant alerting isolation --------------------------------
 
+
 def test_per_tenant_alerting_with_tenant_id_accept() -> None:
     """acc #6 — an alerting signal with a tenant.id binding passes."""
-    assert (
-        assert_per_tenant_alerting_isolation(
-            AlertingSignal.ABOVE_THRESHOLD, "tenant-a"
-        )
-        is None
-    )
+    assert assert_per_tenant_alerting_isolation(AlertingSignal.ABOVE_THRESHOLD, "tenant-a") is None
 
 
 def test_per_tenant_alerting_without_tenant_id_reject() -> None:
@@ -205,6 +190,7 @@ def test_per_tenant_alerting_without_tenant_id_reject() -> None:
 
 
 # --- acc #7 — composition surfaces -----------------------------------------
+
 
 def test_forbidden_surfaces_cover_three_composition_axes() -> None:
     """acc #7 — cost / eval / alignment-floor / drift rollups all forbidden."""
@@ -217,12 +203,10 @@ def test_forbidden_surfaces_cover_three_composition_axes() -> None:
 
 # --- acc #1 §21.5 surface coverage — the 4 forbidden rollup classes --------
 
+
 def test_cross_tenant_cost_rollup_rejected() -> None:
     """§21.5 — the cross-tenant cost rollup surface is forbidden."""
-    assert (
-        "cost.rollup.cross_tenant"
-        in CROSS_TENANT_AGGREGATION_PROHIBITION.forbidden_surfaces
-    )
+    assert "cost.rollup.cross_tenant" in CROSS_TENANT_AGGREGATION_PROHIBITION.forbidden_surfaces
 
 
 def test_cross_tenant_eval_rollup_rejected() -> None:
@@ -250,6 +234,7 @@ def test_cross_tenant_drift_rollup_rejected() -> None:
 
 
 # --- acc #10 / #11 — in-unit single-consumer records -----------------------
+
 
 def test_dashboard_query_declared_in_unit() -> None:
     """acc #11 — `DashboardQuery` is the in-unit single-consumer record."""

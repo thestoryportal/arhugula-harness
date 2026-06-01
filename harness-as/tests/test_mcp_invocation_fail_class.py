@@ -16,7 +16,6 @@ from harness_as.sandbox_fail_class import (
     project_mcp_to_sandbox_fail_class,
 )
 
-
 # 4 MCP-fail-class identifiers byte-exact per spec §15.8 row 1.
 _SPEC_MCP_FAIL_CLASSES = {
     "transport",
@@ -90,9 +89,7 @@ def test_project_mcp_to_sandbox_total_function_over_enum_domain() -> None:
 
 def test_project_targets_subset_of_sandbox_fail_class_enum() -> None:
     """Projection codomain is a subset of the 7-value F4 enum (§4.1 PRESERVED VERBATIM)."""
-    projected = {
-        project_mcp_to_sandbox_fail_class(m) for m in MCPInvocationFailClass
-    }
+    projected = {project_mcp_to_sandbox_fail_class(m) for m in MCPInvocationFailClass}
     # 3 distinct F4 values reached: exit_nonzero (×2), policy_override, timeout.
     assert projected == {
         SandboxFailClass.EXIT_NONZERO,

@@ -39,9 +39,7 @@ __all__ = [
 
 # --- attribute-name constants (spec §14.10.3) -------------------------------
 
-ATTR_HITL_OPERATOR_BURDEN_CUMULATIVE_INVOCATIONS = (
-    "hitl.operator_burden.cumulative_invocations"
-)
+ATTR_HITL_OPERATOR_BURDEN_CUMULATIVE_INVOCATIONS = "hitl.operator_burden.cumulative_invocations"
 ATTR_HITL_OPERATOR_BURDEN_WINDOW_MS = "hitl.operator_burden.window_ms"
 ATTR_HITL_OPERATOR_BURDEN_PERSONA_TIER = "hitl.operator_burden.persona_tier"
 ATTR_HITL_OPERATOR_BURDEN_DEGRADE = "hitl.operator_burden.degrade"
@@ -122,9 +120,7 @@ counter; default raises on production misconfig.
 """
 
 
-def _default_burden_span_counter(
-    _window: SpanWindow, _persona_tier: PersonaTier
-) -> int:
+def _default_burden_span_counter(_window: SpanWindow, _persona_tier: PersonaTier) -> int:
     raise LookupError(
         "default BurdenSpanCounter invoked — operator must supply a "
         "burden_span_counter at OperatorBurdenEvaluator.__init__ that "
@@ -244,16 +240,12 @@ class OperatorBurdenEvaluator:
         # --- span emission per §14.10.3 + sampling discipline ---------------
         if self._should_emit_span(degrade):
             tracer = (
-                self._tracer_provider.get_tracer(
-                    "harness.runtime.operator_burden"
-                )
+                self._tracer_provider.get_tracer("harness.runtime.operator_burden")
                 if self._tracer_provider is not None
                 else None
             )
             if tracer is not None:
-                with tracer.start_as_current_span(
-                    "hitl.operator_burden.evaluated"
-                ) as span:
+                with tracer.start_as_current_span("hitl.operator_burden.evaluated") as span:
                     span.set_attribute(
                         ATTR_HITL_OPERATOR_BURDEN_CUMULATIVE_INVOCATIONS,
                         score.cumulative_invocations,
@@ -266,9 +258,7 @@ class OperatorBurdenEvaluator:
                         ATTR_HITL_OPERATOR_BURDEN_PERSONA_TIER,
                         score.persona_tier.value,
                     )
-                    span.set_attribute(
-                        ATTR_HITL_OPERATOR_BURDEN_DEGRADE, degrade
-                    )
+                    span.set_attribute(ATTR_HITL_OPERATOR_BURDEN_DEGRADE, degrade)
 
         return DegradationDecision(
             degrade=degrade,

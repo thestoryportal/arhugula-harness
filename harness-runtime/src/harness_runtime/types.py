@@ -63,7 +63,10 @@ from harness_cp.hitl_as_tool_call_rewriting import (
     RewrittenToolCall,
 )
 from harness_cp.hitl_timeout_degradation import TimeoutDegradationKind
-from harness_cp.pause_resume_protocol import ResumeOutcomeKind
+
+# U-RT-87 — PauseResumeProtocol class carrier import (per spec v1.21 §4
+# C-RT-04 field-table extension). Class body landed at U-CP-62 cluster 10-CP-B.
+from harness_cp.pause_resume_protocol import PauseResumeProtocol, ResumeOutcomeKind
 from harness_cp.per_server_trust_types import TrustPolicy
 from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry, StepEffectiveBinding
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass
@@ -106,32 +109,16 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validat
 # U-RT-79 — Memory tool backend config carrier import (per spec v1.17 §3 C-RT-02
 # field-table extension). MemoryToolBackendConfig declared at U-RT-76.
 from harness_runtime.lifecycle.memory_tool_types import MemoryToolBackendConfig
-from harness_runtime.lifecycle.validator_framework_types import (
-    ValidatorFrameworkConfig,
-)
+
 # U-RT-87 — Pause/resume protocol config carrier import (per spec v1.21 §3
 # C-RT-02 field-table extension). PauseResumeProtocolConfig declared at U-RT-87.
 from harness_runtime.lifecycle.pause_resume_protocol_types import (
     PauseResumeProtocolConfig,
 )
-# U-RT-87 — PauseResumeProtocol class carrier import (per spec v1.21 §4
-# C-RT-04 field-table extension). Class body landed at U-CP-62 cluster 10-CP-B.
-from harness_cp.pause_resume_protocol import PauseResumeProtocol
+
 # U-RT-94 — ResumeContextHolder sidecar import (per spec v1.25 §4 C-RT-04
 # NEW field row + §14.8.8.9 carrier definition).
 from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
-# U-RT-96 — WebhookDeliveryComposer config carrier import (per spec v1.26 §3
-# C-RT-02 field-table extension). WebhookDeliveryComposerConfig declared at
-# U-RT-96 in lifecycle/webhook_delivery_composer_types.py.
-from harness_runtime.lifecycle.webhook_delivery_composer_types import (
-    WebhookDeliveryComposerConfig,
-)
-# U-RT-96 — WebhookDeliveryComposer class carrier import (per spec v1.26 §4
-# C-RT-04 field-table extension). Class body landed at U-RT-69 in
-# lifecycle/webhook_delivery_composer.py.
-from harness_runtime.lifecycle.webhook_delivery_composer import (
-    WebhookDeliveryComposer,
-)
 
 # U-RT-99 — SkillActivationHookConfig + SkillActivationSpanEmitter carriers
 # per runtime spec v1.32 §14.17 (NEW C-RT-27). Operator-opt-in MVP shape per
@@ -142,6 +129,23 @@ from harness_runtime.lifecycle.skill_activation import (
     SkillActivationHookConfig,
     SkillActivationSpanEmitter,
     UnknownSkillError,
+)
+from harness_runtime.lifecycle.validator_framework_types import (
+    ValidatorFrameworkConfig,
+)
+
+# U-RT-96 — WebhookDeliveryComposer class carrier import (per spec v1.26 §4
+# C-RT-04 field-table extension). Class body landed at U-RT-69 in
+# lifecycle/webhook_delivery_composer.py.
+from harness_runtime.lifecycle.webhook_delivery_composer import (
+    WebhookDeliveryComposer,
+)
+
+# U-RT-96 — WebhookDeliveryComposer config carrier import (per spec v1.26 §3
+# C-RT-02 field-table extension). WebhookDeliveryComposerConfig declared at
+# U-RT-96 in lifecycle/webhook_delivery_composer_types.py.
+from harness_runtime.lifecycle.webhook_delivery_composer_types import (
+    WebhookDeliveryComposerConfig,
 )
 
 __all__ = [
@@ -832,9 +836,7 @@ class TopologyDispatcher(Protocol):
         """Cross-pattern admissibility per C-CP-10 §10.3 (delegates to CP)."""
         ...
 
-    def is_topology_permitted(
-        self, pattern: TopologyPattern, workload: WorkloadClass
-    ) -> bool:
+    def is_topology_permitted(self, pattern: TopologyPattern, workload: WorkloadClass) -> bool:
         """Primary OR cross-pattern admissibility (C-CP-11 §11.1 ∪ C-CP-10 §10.3).
 
         The correct gate for sub-agent dispatch composer step 4 — see the
@@ -1000,9 +1002,7 @@ class RuntimeConfig(BaseModel):
     false-match on `provider_secrets` (see config_source.py fix (B)) made the
     documented file-loader pathway unreachable from any source."""
 
-    provider_secrets: ProviderSecretsConfig = Field(
-        default_factory=ProviderSecretsConfig
-    )
+    provider_secrets: ProviderSecretsConfig = Field(default_factory=ProviderSecretsConfig)
     """Keyring allowlist *keys* only — no secret values. Enriched at U-RT-06.
 
     Default-factory'd per finding-fix (A) above. Carries ALLOWLIST KEYS only
@@ -1458,8 +1458,6 @@ class HarnessContext(BaseModel):
     # Typed `object | None` mirroring `cp_is_wiring` (arbitrary_types_allowed;
     # consumers call dynamically); `None` = operator opt-out → sidecar `None`.
     procedural_tier_snapshot_resolver: object | None = None
-
-
 
     # U-RT-94 — Runtime-internal sidecar carrier for one-shot ResumeContext
     # delivery across the pause-resume cycle. Bound at stage 5 LOOP_INIT to

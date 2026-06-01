@@ -50,6 +50,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from harness_core.identity import StepID
+
 from harness_cp.validator_framework_types import (
     Validator,
     ValidatorEvaluation,
@@ -59,9 +61,7 @@ from harness_cp.validator_framework_types import (
     ValidatorPostEvaluateHook,
     ValidatorResult,
 )
-from harness_core.identity import StepID
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
-
 
 # ----------------------------------------------------------------------------
 # Typed errors (CP fail classes per §25.6 + AC #3 + AC #4)
@@ -231,9 +231,7 @@ class ConcreteValidatorFramework:
 
         # CP spec v1.24 §28.10.3 post-evaluate hook firing (best-effort).
         if self._post_evaluate_hook is not None:
-            execution_time_ms = (
-                time.monotonic_ns() - start_monotonic_ns
-            ) / 1_000_000.0
+            execution_time_ms = (time.monotonic_ns() - start_monotonic_ns) / 1_000_000.0
             try:
                 await self._post_evaluate_hook.on_post_evaluate(
                     step=step,

@@ -20,9 +20,7 @@ from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
 
-import httpx
 import pytest
-
 from harness_as.sandbox_tier import SandboxTier
 from harness_core.identity import StepID
 from harness_cp.hitl_timeout_degradation import WebhookConfig, WebhookPayload
@@ -35,7 +33,6 @@ from harness_cp.validator_framework_types import (
 from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_od.rate_table_types import RateTable, WebhookRate
-
 from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
 from harness_runtime.lifecycle.cost_attribution_validator_dispatch import (
     CostAttributingValidatorHook,
@@ -147,7 +144,7 @@ async def test_one_validator_plus_one_webhook_produces_two_cost_records() -> Non
         def __init__(self) -> None:
             pass
 
-        async def __aenter__(self) -> "_MockAsyncClient":
+        async def __aenter__(self) -> _MockAsyncClient:
             return self
 
         async def __aexit__(self, *_args: Any) -> None:
@@ -181,9 +178,7 @@ async def test_one_validator_plus_one_webhook_produces_two_cost_records() -> Non
         payload_body={"summary": "approval needed"},
     )
 
-    await composer.deliver_webhook(
-        webhook_config, webhook_payload, idempotency_key="webhook-1"
-    )
+    await composer.deliver_webhook(webhook_config, webhook_payload, idempotency_key="webhook-1")
 
     # --- Assertions ---
     assert len(audit_writer.appended) == 2, (
@@ -196,15 +191,13 @@ async def test_one_validator_plus_one_webhook_produces_two_cost_records() -> Non
     for _tenant_id, audit_entry in audit_writer.appended:
         attrs = audit_entry.payload.audit_namespace_attrs
         assert attrs["audit.cp.action_id"].startswith("cost:"), (
-            f"audit entry must use cost: action_id prefix; got "
-            f"{attrs['audit.cp.action_id']!r}"
+            f"audit entry must use cost: action_id prefix; got {attrs['audit.cp.action_id']!r}"
         )
         assert attrs["audit.cp.response"] == "cost_attributed"
 
     # Verify per-surface action_id correlation:
     action_ids = sorted(
-        e[1].payload.audit_namespace_attrs["audit.cp.action_id"]
-        for e in audit_writer.appended
+        e[1].payload.audit_namespace_attrs["audit.cp.action_id"] for e in audit_writer.appended
     )
     # Validator: cost:wf-integration:workflow:wf-integration:step:0
     # Webhook:   cost:wf-integration:hitl:wf-integration:gate:0
@@ -213,6 +206,5 @@ async def test_one_validator_plus_one_webhook_produces_two_cost_records() -> Non
         f"got action_ids={action_ids}"
     )
     assert any("hitl:" in a for a in action_ids), (
-        f"webhook audit entry expected with hitl: parent_action_id; "
-        f"got action_ids={action_ids}"
+        f"webhook audit entry expected with hitl: parent_action_id; got action_ids={action_ids}"
     )

@@ -11,10 +11,9 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
-
 from harness_runtime.cli import main
 from harness_runtime.cli.app import app
+from typer.testing import CliRunner
 
 runner = CliRunner()
 
@@ -87,9 +86,7 @@ def test_harness_inspect_runs_admin_body_against_real_ledger(
     ledger_path = tmp_path / "state.jsonl"
     ledger_path.write_text(json.dumps(entry) + "\n")
 
-    result = runner.invoke(
-        app, ["inspect", "--ledger-path", str(ledger_path), "--json"]
-    )
+    result = runner.invoke(app, ["inspect", "--ledger-path", str(ledger_path), "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["total_entries"] == 1

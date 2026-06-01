@@ -30,8 +30,8 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 __all__ = [
-    "SPANS_DDL",
     "INDEX_DDL",
+    "SPANS_DDL",
     "SpanInsertRow",
     "initialize_span_store",
     "insert_spans",
@@ -161,9 +161,7 @@ def insert_spans(conn: sqlite3.Connection, rows: Iterable[SpanInsertRow]) -> int
     return cur.rowcount
 
 
-def retention_cleanup_lazy(
-    conn: sqlite3.Connection, retention_days: int, now_ns: int
-) -> int:
+def retention_cleanup_lazy(conn: sqlite3.Connection, retention_days: int, now_ns: int) -> int:
     """Delete rows with `end_time_ns < (now_ns - retention_days * 86_400 * 1e9)`.
 
     Implements OD spec v1.8 §C-OD-27.2 row 3 retention policy under the

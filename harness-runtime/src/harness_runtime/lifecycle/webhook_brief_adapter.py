@@ -38,9 +38,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from harness_core import EntryID
 from harness_cp.hitl_timeout_degradation import WebhookPayload
 from harness_cp.validator_framework_types import HITLEscalationBrief
-from harness_core import EntryID
 from harness_is.state_ledger_entry_schema import Identifier
 
 

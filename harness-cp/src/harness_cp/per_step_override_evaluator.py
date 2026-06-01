@@ -315,9 +315,7 @@ async def emit_override_state_ledger_entry(
     """
     outcome_canonical_bytes = _canonicalize_outcome_bytes(post_override_step_config)
     outcome_hash_hex = hashlib.sha256(outcome_canonical_bytes).hexdigest()
-    idempotency_key = _override_idempotency_key(
-        workflow_id, step_id, outcome_hash_hex
-    )
+    idempotency_key = _override_idempotency_key(workflow_id, step_id, outcome_hash_hex)
     payload = EntryPayload(
         action_id=Identifier(_OVERRIDE_ACTION_ID),
         idempotency_key=Identifier(idempotency_key),

@@ -24,9 +24,7 @@ from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEnt
 from pydantic import ValidationError
 
 _CHAIN = FallbackChain(
-    primary=ProviderCandidate(
-        provider="anthropic", model="m", family=ProviderFamily.ANTHROPIC
-    ),
+    primary=ProviderCandidate(provider="anthropic", model="m", family=ProviderFamily.ANTHROPIC),
     same_family=(),
     cross_family=(),
     terminal=None,

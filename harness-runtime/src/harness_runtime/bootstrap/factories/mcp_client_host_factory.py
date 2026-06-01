@@ -51,9 +51,7 @@ _EMPTY_TRANSPORT_CONFIG: dict[str, Any] = {}
 _STDIO_URL_PREFIX = "stdio://"
 
 
-def _build_transport_config(
-    transport: _MCPTransportLiteral, connection_url: str
-) -> dict[str, Any]:
+def _build_transport_config(transport: _MCPTransportLiteral, connection_url: str) -> dict[str, Any]:
     """Translate MCPClientConfig.connection_url into the transport_config
     shape MCPClientHost consumes per its per-transport context contracts.
 
@@ -124,16 +122,12 @@ async def materialize_mcp_client_host_stage(config: RuntimeConfig) -> MCPClientH
     # is an `harness_as.discriminators.MCPTransport` StrEnum; its `.value`
     # is one of the literal strings the host accepts.
     entry = config.mcp_clients[0]
-    transport_value: _MCPTransportLiteral = cast(
-        _MCPTransportLiteral, entry.transport.value
-    )
+    transport_value: _MCPTransportLiteral = cast(_MCPTransportLiteral, entry.transport.value)
     return MCPClientHost(
         transport=transport_value,
         server_name=entry.client_name,
         trust_tier=_trust_tier_from_level(entry.trust_level),
-        transport_config=_build_transport_config(
-            transport_value, entry.connection_url
-        ),
+        transport_config=_build_transport_config(transport_value, entry.connection_url),
     )
 
 

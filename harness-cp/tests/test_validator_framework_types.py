@@ -16,7 +16,6 @@ from harness_cp.validator_framework_types import (
     ValidatorOutcome,
 )
 
-
 # --- AC #1 ----------------------------------------------------------------
 
 
@@ -134,8 +133,6 @@ from collections.abc import Mapping
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
-
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.validator_framework_types import (
     HITLEscalationBrief,
@@ -145,7 +142,7 @@ from harness_cp.validator_framework_types import (
     ValidatorResult,
 )
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
-
+from pydantic import ValidationError
 
 # --- AC #1 — Validator Protocol signature matches §25.1 -------------------
 

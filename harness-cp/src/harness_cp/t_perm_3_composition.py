@@ -130,9 +130,7 @@ class PerCellReadingKind(StrEnum):
 
     ABOVE_ENGINE_HARNESS_COMPOSES = "above-engine-harness-composes"
     BELOW_ENGINE_HARNESS_AUTHORS_TOPOLOGY = "below-engine-harness-authors-topology"
-    RECONCILER_CONTROL_LOOP_OWNS_RECONVERGENCE = (
-        "reconciler-control-loop-owns-reconvergence"
-    )
+    RECONCILER_CONTROL_LOOP_OWNS_RECONVERGENCE = "reconciler-control-loop-owns-reconvergence"
 
 
 class PerCellTPerm3Reading(BaseModel):
@@ -267,9 +265,7 @@ def compose_t_perm_3(
     )
 
 
-def read_per_cell_t_perm_3(
-    workload: WorkloadClass, engine: EngineClass
-) -> PerCellTPerm3Reading:
+def read_per_cell_t_perm_3(workload: WorkloadClass, engine: EngineClass) -> PerCellTPerm3Reading:
     """Read the §23.2 per-cell T-perm-3 reading for a (workload, engine) cell.
 
     Inherits the U-CP-24 per-engine overlay (acceptance #4); the non-collapsing

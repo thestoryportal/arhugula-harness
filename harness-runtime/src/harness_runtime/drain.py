@@ -171,8 +171,7 @@ def install_signal_handlers(
             loop.add_signal_handler(sig, _on_drain_signal, ctx)
         except NotImplementedError as exc:
             raise DrainPlatformError(
-                f"loop.add_signal_handler({sig.name}) raised NotImplementedError "
-                f"on this platform"
+                f"loop.add_signal_handler({sig.name}) raised NotImplementedError on this platform"
             ) from exc
 
 

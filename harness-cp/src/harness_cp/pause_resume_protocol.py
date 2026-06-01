@@ -103,9 +103,7 @@ class ResumeOutcome(BaseModel):
     resume_audit_entry_id: EntryID | None
 
 
-def capture_pause_snapshot(
-    workflow_id: WorkflowID, pause_reason: PauseReason
-) -> PauseEvent:
+def capture_pause_snapshot(workflow_id: WorkflowID, pause_reason: PauseReason) -> PauseEvent:
     """Capture a pause snapshot for a workflow (C-CP-22 §22.1).
 
     Captures the `StateSummary` snapshot plus the pause-time
@@ -185,7 +183,6 @@ from harness_cp.pause_resume_protocol_types import (
     ResumeResult,
     WorkflowPauseReason,
 )
-
 
 # CP fail class identifiers per CP spec v1.11 §26.5.
 CP_FAIL_PAUSE_SNAPSHOT_CORRUPTION: str = "CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION"
@@ -696,19 +693,6 @@ async def emit_pause_resume_state_ledger_entry(
 # per CP spec v1.11 §26 NEW NOTE 2-layer coexistence — engine-layer emits under
 # `cp.pause-captured` action_id; workflow-layer emits `cp.pause-resume-protocol`.
 
-from collections.abc import Awaitable  # noqa: E402
-from datetime import UTC, datetime  # noqa: E402
-
-from harness_is.state_ledger_entry_schema import (  # noqa: E402
-    Actor,
-    ActorClass,
-    Identifier,
-)
-from harness_is.state_ledger_write import EntryPayload, WriteResult  # noqa: E402
-
-from harness_cp.state_ledger_canonicalization import (  # noqa: E402
-    _canonicalize_outcome_bytes,
-)
 
 _PAUSE_CAPTURED_ACTION_ID = "cp.pause-captured"
 """CP spec v1.26 §16.5.3 row U-CP-49 canonical action_id (engine-layer)."""
@@ -818,19 +802,6 @@ async def emit_pause_captured_state_ledger_entry(
 # coexistence — engine-layer emits `cp.resume-attempted`; workflow-layer emits
 # `cp.pause-resume-protocol`.
 
-from collections.abc import Awaitable  # noqa: E402
-from datetime import UTC, datetime  # noqa: E402
-
-from harness_is.state_ledger_entry_schema import (  # noqa: E402
-    Actor,
-    ActorClass,
-    Identifier,
-)
-from harness_is.state_ledger_write import EntryPayload, WriteResult  # noqa: E402
-
-from harness_cp.state_ledger_canonicalization import (  # noqa: E402
-    _canonicalize_outcome_bytes,
-)
 
 _RESUME_ATTEMPTED_ACTION_ID = "cp.resume-attempted"
 """CP spec v1.26 §16.5.3 row U-CP-50 canonical action_id (engine-layer)."""

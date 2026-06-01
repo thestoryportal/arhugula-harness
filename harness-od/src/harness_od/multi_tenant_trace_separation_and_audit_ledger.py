@@ -79,6 +79,7 @@ __all__ = [
 
 # --- §0.8 inline error arms ------------------------------------------------
 
+
 class HashChainBreach(Exception):  # noqa: N818 — name is the U-OD-30 plan signature verbatim
     """Raised when an `AuditLedger`'s hash chain is broken (C-OD-21 §21.2).
 
@@ -99,6 +100,7 @@ class TenantIdMissingViolation(Exception):  # noqa: N818 — U-OD-30 plan signat
 
 
 # --- §21.1 per-tenant trace separation -------------------------------------
+
 
 class TenantSeparationStrategy(StrEnum):
     """The 2 per-tenant trace-separation strategies (C-OD-21 §21.1, verbatim).
@@ -138,13 +140,9 @@ def _cell(pt: PersonaTier, ds: DeploymentSurface) -> CellID:
 
 
 #: cell-7 — multi-tenant-compliance x self-hosted-server.
-_CELL_7 = _cell(
-    PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.SELF_HOSTED_SERVER
-)
+_CELL_7 = _cell(PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.SELF_HOSTED_SERVER)
 #: cell-8 — multi-tenant-compliance x managed-cloud.
-_CELL_8 = _cell(
-    PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.MANAGED_CLOUD
-)
+_CELL_8 = _cell(PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.MANAGED_CLOUD)
 
 #: Per-tenant separation bindings — exactly 2 entries, cells 7 and 8 only
 #: (C-OD-21 §21.3 multi-tenant cell composition). cell-7 routes per-tenant at

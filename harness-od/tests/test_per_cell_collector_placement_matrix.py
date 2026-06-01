@@ -34,15 +34,12 @@ _CELL_3 = _cell(PersonaTier.SOLO_DEVELOPER, DeploymentSurface.MANAGED_CLOUD)
 _CELL_4 = _cell(PersonaTier.TEAM_BINDING, DeploymentSurface.LOCAL_DEVELOPMENT)
 _CELL_5 = _cell(PersonaTier.TEAM_BINDING, DeploymentSurface.SELF_HOSTED_SERVER)
 _CELL_6 = _cell(PersonaTier.TEAM_BINDING, DeploymentSurface.MANAGED_CLOUD)
-_CELL_7 = _cell(
-    PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.SELF_HOSTED_SERVER
-)
-_CELL_8 = _cell(
-    PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.MANAGED_CLOUD
-)
+_CELL_7 = _cell(PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.SELF_HOSTED_SERVER)
+_CELL_8 = _cell(PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.MANAGED_CLOUD)
 
 
 # --- acc #1 — CollectorPlacement 7-value enum ------------------------------
+
 
 def test_collector_placement_cardinality_seven() -> None:
     """acc #1 — `CollectorPlacement` enumerates exactly 7 values per §20.1."""
@@ -64,6 +61,7 @@ def test_collector_placement_members_byte_exact_per_v1_4_section_20_1() -> None:
 
 # --- acc #2 — PER_CELL_COLLECTOR_PLACEMENT cardinality 8 -------------------
 
+
 def test_per_cell_placement_cardinality_eight() -> None:
     """acc #2 — exactly 8 entries, one per ACTIVE cell."""
     assert len(PER_CELL_COLLECTOR_PLACEMENT) == 8
@@ -72,11 +70,10 @@ def test_per_cell_placement_cardinality_eight() -> None:
 
 # --- acc #3 — per-cell placement_classes byte-exact with §20.1 table -------
 
+
 def test_cell_1_placement_singleton_in_process() -> None:
     """acc #3 — cell-1 -> {IN_PROCESS}."""
-    assert collector_placement(_CELL_1) == frozenset(
-        {CollectorPlacement.IN_PROCESS}
-    )
+    assert collector_placement(_CELL_1) == frozenset({CollectorPlacement.IN_PROCESS})
 
 
 def test_cell_2_placement_alt_route_in_process_or_self_hosted_backend() -> None:
@@ -91,9 +88,7 @@ def test_cell_2_placement_alt_route_in_process_or_self_hosted_backend() -> None:
 
 def test_cell_3_placement_singleton_vendor_pipeline() -> None:
     """acc #3 — cell-3 -> {VENDOR_PIPELINE}."""
-    assert collector_placement(_CELL_3) == frozenset(
-        {CollectorPlacement.VENDOR_PIPELINE}
-    )
+    assert collector_placement(_CELL_3) == frozenset({CollectorPlacement.VENDOR_PIPELINE})
 
 
 def test_cell_4_placement_alt_route_in_process_or_self_hosted_backend() -> None:
@@ -108,16 +103,12 @@ def test_cell_4_placement_alt_route_in_process_or_self_hosted_backend() -> None:
 
 def test_cell_5_placement_singleton_sidecar() -> None:
     """acc #3 — cell-5 -> {SIDECAR}."""
-    assert collector_placement(_CELL_5) == frozenset(
-        {CollectorPlacement.SIDECAR}
-    )
+    assert collector_placement(_CELL_5) == frozenset({CollectorPlacement.SIDECAR})
 
 
 def test_cell_6_placement_singleton_vendor_pipeline() -> None:
     """acc #3 — cell-6 -> {VENDOR_PIPELINE}."""
-    assert collector_placement(_CELL_6) == frozenset(
-        {CollectorPlacement.VENDOR_PIPELINE}
-    )
+    assert collector_placement(_CELL_6) == frozenset({CollectorPlacement.VENDOR_PIPELINE})
 
 
 def test_cell_7_placement_alt_route_sidecar_routing_or_per_tenant_instance() -> None:
@@ -132,9 +123,7 @@ def test_cell_7_placement_alt_route_sidecar_routing_or_per_tenant_instance() -> 
 
 def test_cell_8_placement_singleton_vendor_managed() -> None:
     """acc #3 — cell-8 -> {VENDOR_MANAGED_COLLECTOR}."""
-    assert collector_placement(_CELL_8) == frozenset(
-        {CollectorPlacement.VENDOR_MANAGED_COLLECTOR}
-    )
+    assert collector_placement(_CELL_8) == frozenset({CollectorPlacement.VENDOR_MANAGED_COLLECTOR})
 
 
 def test_placement_classes_set_nonempty_all_cells() -> None:
@@ -154,6 +143,7 @@ def test_placement_classes_cardinality_one_or_two_all_cells() -> None:
 
 # --- acc #4 — emission_mode async universal --------------------------------
 
+
 def test_emission_mode_async_universal() -> None:
     """acc #4 — emission_mode == BATCH_SPAN_PROCESSOR_ASYNC at every entry."""
     for placement in PER_CELL_COLLECTOR_PLACEMENT.values():
@@ -161,6 +151,7 @@ def test_emission_mode_async_universal() -> None:
 
 
 # --- acc #5 — emission window/batch inherit from U-OD-27 -------------------
+
 
 def test_emission_window_inherits_from_u_od_27() -> None:
     """acc #5 — emission_window == U-OD-27 BATCH_SPAN_PROCESSOR_WINDOW_SECONDS."""
@@ -175,6 +166,7 @@ def test_emission_batch_inherits_from_u_od_27() -> None:
 
 
 # --- acc #6 — assert_async_emission_universality ---------------------------
+
 
 def test_assert_async_universality_reject_sync() -> None:
     """acc #6 — Err(EmissionModeViolation) when emission mode deviates.
@@ -201,6 +193,7 @@ def test_assert_async_universality_accept_all_cells() -> None:
 
 # --- acc #7 — vendor endpoint deferred -------------------------------------
 
+
 def test_specific_vendor_endpoint_deferred() -> None:
     """acc #7 — the matrix commits placement class(es), not endpoint URLs.
 
@@ -218,6 +211,7 @@ def test_specific_vendor_endpoint_deferred() -> None:
 
 
 # --- acc #8 — per-tenant placement at cells 7/8 ----------------------------
+
 
 def test_per_tenant_placement_at_cells_7_8() -> None:
     """acc #8 — cells 7/8 encode per-tenant separation at OTLP-collector level."""

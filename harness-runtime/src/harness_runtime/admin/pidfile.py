@@ -101,9 +101,7 @@ def read_pidfile(path: Path) -> int:
     try:
         return int(stripped)
     except ValueError as exc:
-        raise PidfileError(
-            f"pidfile content not an integer: {path}: {stripped!r}"
-        ) from exc
+        raise PidfileError(f"pidfile content not an integer: {path}: {stripped!r}") from exc
 
 
 def remove_pidfile(path: Path) -> None:

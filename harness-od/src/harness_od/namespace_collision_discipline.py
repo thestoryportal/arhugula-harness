@@ -70,9 +70,7 @@ class NamespacePrecedenceRule(StrEnum):
     """§8.1 verbatim — a substrate-anchored namespace takes precedence over a
     CP-side namespace it replaces."""
 
-    AUTHORITATIVE_DECLARER_RESOLVES_COLLISION = (
-        "AUTHORITATIVE_DECLARER_RESOLVES_COLLISION"
-    )
+    AUTHORITATIVE_DECLARER_RESOLVES_COLLISION = "AUTHORITATIVE_DECLARER_RESOLVES_COLLISION"
     """§8.2 secondary rule — the authoritative declarer of a namespace
     resolves the collision at all subsequent ingestion sites."""
 
@@ -123,9 +121,7 @@ class CacheTierSubsetInvariant(BaseModel):
     #: the invariant form (verbatim §8.3).
     invariant_form: str = "cache_creation + cache_read + uncached == input_tokens"
     #: the enforcement site.
-    enforced_at: str = (
-        "U-OD-18 cost formula composition + OTel canonical value verification"
-    )
+    enforced_at: str = "U-OD-18 cost formula composition + OTel canonical value verification"
 
 
 #: The single §8.3 cache-tier subset invariant instance.
@@ -160,10 +156,7 @@ def enforce_otel_canonical_value(span_attrs: SpanAttributes) -> None:
     """
     if span_attrs is None:
         return None
-    present = [
-        k in span_attrs
-        for k in (ATTR_INPUT_TOKENS, ATTR_CACHE_CREATION, ATTR_CACHE_READ)
-    ]
+    present = [k in span_attrs for k in (ATTR_INPUT_TOKENS, ATTR_CACHE_CREATION, ATTR_CACHE_READ)]
     if not any(present):
         # No token attribution on this span — invariant vacuous.
         return None

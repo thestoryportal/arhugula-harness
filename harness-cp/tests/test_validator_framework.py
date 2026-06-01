@@ -15,7 +15,6 @@ from collections.abc import Mapping
 from typing import Any
 
 import pytest
-
 from harness_core.identity import StepID
 from harness_cp.validator_framework import (
     ConcreteValidatorFramework,
@@ -24,7 +23,6 @@ from harness_cp.validator_framework import (
     _map_outcome_to_next_action,
 )
 from harness_cp.validator_framework_types import (
-    Validator,
     ValidatorEvaluation,
     ValidatorFailClass,
     ValidatorFramework,
@@ -33,7 +31,6 @@ from harness_cp.validator_framework_types import (
     ValidatorResult,
 )
 from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
-
 
 # ----------------------------------------------------------------------------
 # Test fixtures
@@ -51,9 +48,9 @@ def _make_step(step_id_str: str = "step-1") -> WorkflowStep:
 def _make_step_context(step_id_str: str = "step-1") -> StepExecutionContext:
     """Minimal StepExecutionContext for framework tests. Validator framework
     doesn't introspect most fields, only passes through to validator.validate()."""
-    from harness_is.state_ledger_entry_schema import Actor, ActorClass
-    from harness_cp.sub_agent_gate_level_descent import GateLevel
     from harness_as.sandbox_tier import SandboxTier
+    from harness_cp.sub_agent_gate_level_descent import GateLevel
+    from harness_is.state_ledger_entry_schema import Actor, ActorClass
 
     return StepExecutionContext(
         workflow_id="wf-test",
@@ -116,7 +113,9 @@ def test_mapping_covers_all_outcomes() -> None:
 
 def test_mapping_not_bijective_on_next_actions() -> None:
     """AC #1 — ESCALATE_HITL is reached from both ESCALATE and OPERATOR_BURDEN_EXCEEDED."""
-    assert _map_outcome_to_next_action(ValidatorOutcome.ESCALATE) == ValidatorNextAction.ESCALATE_HITL
+    assert (
+        _map_outcome_to_next_action(ValidatorOutcome.ESCALATE) == ValidatorNextAction.ESCALATE_HITL
+    )
     assert (
         _map_outcome_to_next_action(ValidatorOutcome.OPERATOR_BURDEN_EXCEEDED)
         == ValidatorNextAction.ESCALATE_HITL
@@ -309,7 +308,9 @@ async def test_convert_revalidate_to_permanent_fail_basic_conversion() -> None:
     assert converted.result.outcome == ValidatorOutcome.PERMANENT_FAIL
     assert converted.result.fail_class == ValidatorFailClass.RESOURCE_CONSTRAINT
     assert converted.next_action == ValidatorNextAction.ABORT
-    assert converted.span_attributes["validator.revalidation.terminal_conversion"] == "permanent_fail"
+    assert (
+        converted.span_attributes["validator.revalidation.terminal_conversion"] == "permanent_fail"
+    )
 
 
 @pytest.mark.asyncio
@@ -329,9 +330,7 @@ async def test_convert_revalidate_rejects_non_revalidate_outcome() -> None:
 async def test_convert_revalidate_preserves_burden_count() -> None:
     """AC #6 — conversion preserves the cumulative burden count (no double-charge)."""
     step = _make_step()
-    validator = _FixedOutcomeValidator(
-        ValidatorResult(outcome=ValidatorOutcome.REVALIDATE)
-    )
+    validator = _FixedOutcomeValidator(ValidatorResult(outcome=ValidatorOutcome.REVALIDATE))
     framework = ConcreteValidatorFramework(validator_registry={step.step_id: validator})
 
     # Three REVALIDATE evaluations before exhaustion-conversion:

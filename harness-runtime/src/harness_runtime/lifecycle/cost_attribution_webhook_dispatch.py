@@ -65,9 +65,7 @@ _DEFAULT_REPLAY_DISPOSITION = ReplayDisposition.NO_REPLAY
 _WEBHOOK_FAMILY_TAG = "webhook"
 
 
-def _compute_webhook_cost(
-    rate_table: RateTable, bytes_sent: int
-) -> Decimal:
+def _compute_webhook_cost(rate_table: RateTable, bytes_sent: int) -> Decimal:
     """Compute webhook-delivery cost per WebhookRate formula.
 
     Per U-OD-40 AC #2:
@@ -176,9 +174,7 @@ def attribute_webhook_dispatch_cost(
         gen_ai_provider_name=f"webhook:{webhook_target}",
         gen_ai_request_model="",
     )
-    attached = cost_chain.attach_idempotency_key(
-        span_id, parent_idempotency_key, cost_record
-    )
+    attached = cost_chain.attach_idempotency_key(span_id, parent_idempotency_key, cost_record)
 
     # Substep 4 + 5 — project to typed CostRecordAuditPayload via the
     # canonical helper; convert via cp_audit_to_od_audit `cost:` action_id

@@ -172,16 +172,12 @@ PERSONA_TIER_AUDIT_EMISSION: tuple[PersonaTierEmissionRow, ...] = (
     ),
     PersonaTierEmissionRow(
         persona_tier=PersonaTier.TEAM_BINDING,
-        emitted_audit_attributes=frozenset(
-            {"audit.actor.id", "audit.signature.prior_hash"}
-        ),
+        emitted_audit_attributes=frozenset({"audit.actor.id", "audit.signature.prior_hash"}),
         optional_audit_attributes=_SIGNATURE_OPTIONAL,
     ),
     PersonaTierEmissionRow(
         persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
-        emitted_audit_attributes=frozenset(
-            a.attribute_name for a in AUDIT_NAMESPACE_SCHEMA
-        ),
+        emitted_audit_attributes=frozenset(a.attribute_name for a in AUDIT_NAMESPACE_SCHEMA),
         optional_audit_attributes=frozenset(),
     ),
 )

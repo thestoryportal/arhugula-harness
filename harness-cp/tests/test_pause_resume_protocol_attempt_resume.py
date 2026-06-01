@@ -96,9 +96,7 @@ def test_corrupt_snapshot_yields_corruption_fail_class() -> None:
     # Corrupt the snapshot by constructing a tampered copy with a bad hash
     corrupted = snapshot.model_copy(update={"snapshot_hash": "f" * 64})
     result = asyncio.run(
-        protocol.attempt_resume(
-            corrupted, material_diff_policy=MaterialDiffPolicy.STRICT
-        )
+        protocol.attempt_resume(corrupted, material_diff_policy=MaterialDiffPolicy.STRICT)
     )
     assert result.resumed is False
     assert result.diff_detected is False
@@ -121,9 +119,7 @@ def test_intact_snapshot_passes_hash_validation() -> None:
 
 def test_no_diff_when_anchor_unchanged_yields_clean_resume() -> None:
     """AC #2 — same anchor at capture + resume → no diff → clean resume."""
-    snapshot, protocol = _capture_then_protocol(
-        capture_anchor="a" * 64, resume_anchor="a" * 64
-    )
+    snapshot, protocol = _capture_then_protocol(capture_anchor="a" * 64, resume_anchor="a" * 64)
     result = asyncio.run(
         protocol.attempt_resume(snapshot, material_diff_policy=MaterialDiffPolicy.STRICT)
     )
@@ -135,9 +131,7 @@ def test_no_diff_when_anchor_unchanged_yields_clean_resume() -> None:
 
 def test_diff_detected_when_anchor_changed() -> None:
     """AC #2 — anchor divergence → diff_detected=True at any policy."""
-    snapshot, protocol = _capture_then_protocol(
-        capture_anchor="a" * 64, resume_anchor="b" * 64
-    )
+    snapshot, protocol = _capture_then_protocol(capture_anchor="a" * 64, resume_anchor="b" * 64)
     result = asyncio.run(
         protocol.attempt_resume(snapshot, material_diff_policy=MaterialDiffPolicy.STRICT)
     )
@@ -149,9 +143,7 @@ def test_diff_detected_when_anchor_changed() -> None:
 
 def test_strict_policy_diff_yields_material_diff_fail_class() -> None:
     """AC #3 — STRICT + diff → CP-FAIL-RESUME-MATERIAL-DIFF-DETECTED."""
-    snapshot, protocol = _capture_then_protocol(
-        capture_anchor="a" * 64, resume_anchor="b" * 64
-    )
+    snapshot, protocol = _capture_then_protocol(capture_anchor="a" * 64, resume_anchor="b" * 64)
     result = asyncio.run(
         protocol.attempt_resume(snapshot, material_diff_policy=MaterialDiffPolicy.STRICT)
     )
@@ -167,9 +159,7 @@ def test_strict_policy_diff_yields_material_diff_fail_class() -> None:
 
 def test_operator_arbitrate_policy_diff_yields_arbitration_fail_class() -> None:
     """AC #4 — OPERATOR_ARBITRATE + diff → CP-FAIL-RESUME-OPERATOR-ARBITRATION-OWED."""
-    snapshot, protocol = _capture_then_protocol(
-        capture_anchor="a" * 64, resume_anchor="b" * 64
-    )
+    snapshot, protocol = _capture_then_protocol(capture_anchor="a" * 64, resume_anchor="b" * 64)
     result = asyncio.run(
         protocol.attempt_resume(
             snapshot,
@@ -190,9 +180,7 @@ def test_lenient_policy_diff_permits_resumption() -> None:
     changing diff abort'; MVP treats all diffs as non-behavior-changing under
     LENIENT). diff_detected=True marker carried for caller awareness; no
     fail-class set."""
-    snapshot, protocol = _capture_then_protocol(
-        capture_anchor="a" * 64, resume_anchor="b" * 64
-    )
+    snapshot, protocol = _capture_then_protocol(capture_anchor="a" * 64, resume_anchor="b" * 64)
     result = asyncio.run(
         protocol.attempt_resume(snapshot, material_diff_policy=MaterialDiffPolicy.LENIENT)
     )
@@ -233,42 +221,26 @@ def test_attempt_resume_does_not_invoke_engine_layer_classify_resume() -> None:
 
 def test_diff_summary_hash_deterministic() -> None:
     """diff_summary_hash deterministic across equal (snapshot_anchor, current_anchor) pairs."""
-    snapshot_a, protocol_a = _capture_then_protocol(
-        capture_anchor="a" * 64, resume_anchor="b" * 64
-    )
-    snapshot_b, protocol_b = _capture_then_protocol(
-        capture_anchor="a" * 64, resume_anchor="b" * 64
-    )
+    snapshot_a, protocol_a = _capture_then_protocol(capture_anchor="a" * 64, resume_anchor="b" * 64)
+    snapshot_b, protocol_b = _capture_then_protocol(capture_anchor="a" * 64, resume_anchor="b" * 64)
     result_a = asyncio.run(
-        protocol_a.attempt_resume(
-            snapshot_a, material_diff_policy=MaterialDiffPolicy.STRICT
-        )
+        protocol_a.attempt_resume(snapshot_a, material_diff_policy=MaterialDiffPolicy.STRICT)
     )
     result_b = asyncio.run(
-        protocol_b.attempt_resume(
-            snapshot_b, material_diff_policy=MaterialDiffPolicy.STRICT
-        )
+        protocol_b.attempt_resume(snapshot_b, material_diff_policy=MaterialDiffPolicy.STRICT)
     )
     assert result_a.diff_summary_hash == result_b.diff_summary_hash
 
 
 def test_diff_summary_hash_changes_with_current_anchor() -> None:
     """diff_summary_hash distinguishes (snapshot_anchor, current_anchor) pairs."""
-    snapshot_a, protocol_a = _capture_then_protocol(
-        capture_anchor="a" * 64, resume_anchor="b" * 64
-    )
-    snapshot_c, protocol_c = _capture_then_protocol(
-        capture_anchor="a" * 64, resume_anchor="c" * 64
-    )
+    snapshot_a, protocol_a = _capture_then_protocol(capture_anchor="a" * 64, resume_anchor="b" * 64)
+    snapshot_c, protocol_c = _capture_then_protocol(capture_anchor="a" * 64, resume_anchor="c" * 64)
     result_a = asyncio.run(
-        protocol_a.attempt_resume(
-            snapshot_a, material_diff_policy=MaterialDiffPolicy.STRICT
-        )
+        protocol_a.attempt_resume(snapshot_a, material_diff_policy=MaterialDiffPolicy.STRICT)
     )
     result_c = asyncio.run(
-        protocol_c.attempt_resume(
-            snapshot_c, material_diff_policy=MaterialDiffPolicy.STRICT
-        )
+        protocol_c.attempt_resume(snapshot_c, material_diff_policy=MaterialDiffPolicy.STRICT)
     )
     assert result_a.diff_summary_hash != result_c.diff_summary_hash
 
@@ -300,9 +272,7 @@ def test_attempt_resume_accepts_resume_context_none_default() -> None:
     pre-v1.16 baseline. Verified against the same clean-resume path covered
     at `test_no_diff_when_anchor_unchanged_yields_clean_resume`.
     """
-    snapshot, protocol = _capture_then_protocol(
-        capture_anchor="a" * 64, resume_anchor="a" * 64
-    )
+    snapshot, protocol = _capture_then_protocol(capture_anchor="a" * 64, resume_anchor="a" * 64)
     result = asyncio.run(
         protocol.attempt_resume(snapshot, material_diff_policy=MaterialDiffPolicy.STRICT)
     )
@@ -312,9 +282,7 @@ def test_attempt_resume_accepts_resume_context_none_default() -> None:
 
 def test_attempt_resume_accepts_explicit_resume_context_none() -> None:
     """AC #6 — `attempt_resume(..., resume_context=None)` is a no-op vs default."""
-    snapshot, protocol = _capture_then_protocol(
-        capture_anchor="a" * 64, resume_anchor="a" * 64
-    )
+    snapshot, protocol = _capture_then_protocol(capture_anchor="a" * 64, resume_anchor="a" * 64)
     result = asyncio.run(
         protocol.attempt_resume(
             snapshot,
@@ -332,13 +300,10 @@ def test_attempt_resume_ingests_populated_resume_context_without_consuming() -> 
     the parameter through; runtime-side is the propagation site.
     """
     from harness_core.identity import EntryID
-
     from harness_cp.hitl_placement import HITLResult
     from harness_cp.hitl_response_palette import HITLResponse
 
-    snapshot, protocol = _capture_then_protocol(
-        capture_anchor="a" * 64, resume_anchor="a" * 64
-    )
+    snapshot, protocol = _capture_then_protocol(capture_anchor="a" * 64, resume_anchor="a" * 64)
     hitl = HITLResult(
         response=HITLResponse.APPROVE,
         timestamp="2026-05-24T00:00:00Z",

@@ -321,10 +321,7 @@ async def test_bootstrap_stage_5_binds_inference_and_sub_agent_dispatchers(
     # (was config.drain_timeout_seconds pre-v1.31; conflated per-step ↔
     # whole-workflow bound resolved at fork doc
     # class_1_fork_step_dispatch_timeout_seconds_field_extension.md).
-    assert (
-        inference_dispatcher.result_timeout_seconds
-        == ctx.config.step_dispatch_timeout_seconds
-    )
+    assert inference_dispatcher.result_timeout_seconds == ctx.config.step_dispatch_timeout_seconds
     # ctx.llm_dispatcher.inner is the PRE_ACTION HITL composer per the wrap chain
     hitl_inference = ctx.llm_dispatcher.inner  # type: ignore[attr-defined]
     assert isinstance(hitl_inference, RuntimeHITLGateComposer)

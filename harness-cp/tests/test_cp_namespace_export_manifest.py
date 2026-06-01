@@ -21,9 +21,7 @@ from harness_cp.cp_namespace_export_manifest import (
 
 
 def _by_name(name: str):
-    return next(
-        e for e in CP_NAMESPACE_EXPORT_MANIFEST if e.namespace_name == name
-    )
+    return next(e for e in CP_NAMESPACE_EXPORT_MANIFEST if e.namespace_name == name)
 
 
 def test_cp_export_manifest_cardinality_eleven() -> None:
@@ -103,17 +101,7 @@ def test_total_attribute_count_sixty_three() -> None:
 def test_harness_breaker_substrate_anchored_outside_cp() -> None:
     """#8 — harness.breaker.* posture is SUBSTRATE_ANCHORED_OUTSIDE_CP per F2-16."""
     breaker = _by_name("harness.breaker.*")
-    assert (
-        breaker.source_authority_posture
-        is SourceAuthorityPosture.SUBSTRATE_ANCHORED_OUTSIDE_CP
-    )
+    assert breaker.source_authority_posture is SourceAuthorityPosture.SUBSTRATE_ANCHORED_OUTSIDE_CP
     # Every other namespace is CP-owned.
-    others = [
-        e
-        for e in CP_NAMESPACE_EXPORT_MANIFEST
-        if e.namespace_name != "harness.breaker.*"
-    ]
-    assert all(
-        e.source_authority_posture is SourceAuthorityPosture.OWNED_BY_CP
-        for e in others
-    )
+    others = [e for e in CP_NAMESPACE_EXPORT_MANIFEST if e.namespace_name != "harness.breaker.*"]
+    assert all(e.source_authority_posture is SourceAuthorityPosture.OWNED_BY_CP for e in others)

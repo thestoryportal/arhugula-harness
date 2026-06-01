@@ -15,17 +15,14 @@ cross-axis-block lift; AC text preserved verbatim from v2.14):
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from harness_core import AttributeValueType, Cardinality
 from harness_od.pause_resume_namespace import (
     PAUSE_RESUME_SPAN_NAMESPACE_SCHEMA,
     SPAN_SITE_PAUSE_CAPTURED,
     SPAN_SITE_RESUME_ATTEMPTED,
-    AttributeSpec,
     PauseResumeAuditPayload,
 )
-
+from pydantic import ValidationError
 
 # ----------------------------------------------------------------------------
 # AC #1 + AC #5 — schema declares 8 attributes; row-by-row match
@@ -55,9 +52,7 @@ def test_schema_has_two_distinct_span_sites() -> None:
 )
 def test_per_site_attribute_count(site: str, expected_count: int) -> None:
     """AC #1 — site-decomposition: 4 / 4 (= 8)."""
-    site_attrs = [
-        a for a in PAUSE_RESUME_SPAN_NAMESPACE_SCHEMA.values() if a.span_site == site
-    ]
+    site_attrs = [a for a in PAUSE_RESUME_SPAN_NAMESPACE_SCHEMA.values() if a.span_site == site]
     assert len(site_attrs) == expected_count
 
 
@@ -87,9 +82,7 @@ def test_pattern_p1_byte_exact_attribute_name(attribute_name: str) -> None:
     producer-side. Schema key equals the attribute_name field equals the
     canonical name string at the spec table."""
     assert attribute_name in PAUSE_RESUME_SPAN_NAMESPACE_SCHEMA
-    assert PAUSE_RESUME_SPAN_NAMESPACE_SCHEMA[attribute_name].attribute_name == (
-        attribute_name
-    )
+    assert PAUSE_RESUME_SPAN_NAMESPACE_SCHEMA[attribute_name].attribute_name == (attribute_name)
 
 
 # ----------------------------------------------------------------------------

@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 from harness_core import PersonaTier
 from harness_core.deployment_surface import DeploymentSurface
-from harness_od.observability_matrix import CellBindingViolation, CellID
+from harness_od.observability_matrix import CellBindingViolation
 from harness_od.redaction_span_processor import (
     MultiTenantOverrideRefusedError,
     RedactionSpanProcessor,
@@ -29,10 +29,9 @@ class TestRuntimeConfigPersonaTierField:
 
     def test_default_is_solo_developer(self) -> None:
         """Default preserves MVP backward-compat (base_rate=1.0 at solo)."""
-        from harness_runtime.types import RuntimeConfig
-
         # Construct minimal RuntimeConfig — defaults at all non-required fields
         from harness_runtime.config.otel_config import OTelConfig
+        from harness_runtime.types import RuntimeConfig
 
         config = RuntimeConfig(
             deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
@@ -88,9 +87,7 @@ class TestRedactionSpanProcessorPersonaTier:
         assert processor.persona_tier == PersonaTier.TEAM_BINDING
 
     def test_explicit_multi_tenant_compliance_persisted(self) -> None:
-        processor = RedactionSpanProcessor(
-            persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE
-        )
+        processor = RedactionSpanProcessor(persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE)
         assert processor.persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE
 
     def test_solo_developer_permits_empty_redacted_attributes(self) -> None:
@@ -121,9 +118,7 @@ class TestRedactionSpanProcessorPersonaTier:
 
     def test_multi_tenant_accepts_default_redacted_attributes(self) -> None:
         """Multi-tenant + spec-canonical default is valid (strip-by-default)."""
-        processor = RedactionSpanProcessor(
-            persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE
-        )
+        processor = RedactionSpanProcessor(persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE)
         assert len(processor.redacted_attributes) > 0
         assert processor.persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE
 
@@ -167,12 +162,8 @@ class TestTracerProviderPersonaTierBaseRate:
         )
 
         reset_runtime_registration_for_tests()
-        config = self._make_config(
-            PersonaTier.SOLO_DEVELOPER, DeploymentSurface.LOCAL_DEVELOPMENT
-        )
-        stage = materialize_tracer_provider_stage(
-            config, register_globally=False
-        )
+        config = self._make_config(PersonaTier.SOLO_DEVELOPER, DeploymentSurface.LOCAL_DEVELOPMENT)
+        stage = materialize_tracer_provider_stage(config, register_globally=False)
         # ParentBased wraps HarnessCompositeSampler; reach inside via _root
         sampler = stage.provider.sampler
         # Unwrap ParentBased to get root sampler
@@ -189,12 +180,8 @@ class TestTracerProviderPersonaTierBaseRate:
         )
 
         reset_runtime_registration_for_tests()
-        config = self._make_config(
-            PersonaTier.TEAM_BINDING, DeploymentSurface.LOCAL_DEVELOPMENT
-        )
-        stage = materialize_tracer_provider_stage(
-            config, register_globally=False
-        )
+        config = self._make_config(PersonaTier.TEAM_BINDING, DeploymentSurface.LOCAL_DEVELOPMENT)
+        stage = materialize_tracer_provider_stage(config, register_globally=False)
         root = stage.provider.sampler._root  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
         assert isinstance(root, HarnessCompositeSampler)
         assert root.base_rate == 0.5
@@ -208,12 +195,8 @@ class TestTracerProviderPersonaTierBaseRate:
         )
 
         reset_runtime_registration_for_tests()
-        config = self._make_config(
-            PersonaTier.TEAM_BINDING, DeploymentSurface.SELF_HOSTED_SERVER
-        )
-        stage = materialize_tracer_provider_stage(
-            config, register_globally=False
-        )
+        config = self._make_config(PersonaTier.TEAM_BINDING, DeploymentSurface.SELF_HOSTED_SERVER)
+        stage = materialize_tracer_provider_stage(config, register_globally=False)
         root = stage.provider.sampler._root  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
         assert isinstance(root, HarnessCompositeSampler)
         assert root.base_rate == 0.1
@@ -230,9 +213,7 @@ class TestTracerProviderPersonaTierBaseRate:
         config = self._make_config(
             PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.MANAGED_CLOUD
         )
-        stage = materialize_tracer_provider_stage(
-            config, register_globally=False
-        )
+        stage = materialize_tracer_provider_stage(config, register_globally=False)
         root = stage.provider.sampler._root  # pyright: ignore[reportPrivateUsage,reportAttributeAccessIssue]
         assert isinstance(root, HarnessCompositeSampler)
         assert root.base_rate == 0.2

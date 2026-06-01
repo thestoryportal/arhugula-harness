@@ -34,26 +34,16 @@ def test_span_hierarchy_parent_child_relationships() -> None:
     assert root.parent_relationship is ParentRelationship.ROOT
     assert root.parent_span_name is None
     assert _node("topology.fanout.opened").parent_span_name == "parent_session"
-    assert (
-        _node("subagent.span[0]").parent_span_name == "topology.fanout.opened"
-    )
+    assert _node("subagent.span[0]").parent_span_name == "topology.fanout.opened"
     siblings = _node("subagent.span[1..N-1]")
     assert siblings.parent_relationship is ParentRelationship.SIBLING_OF
 
 
 def test_span_sampling_per_spec() -> None:
     """#2 — sampling per §14.3: fanout always-sampled; subagent.span base-rate."""
-    assert (
-        _sampling("topology.fanout.opened").head_sampling_rate
-        is SamplingRate.ALWAYS_SAMPLED
-    )
-    assert (
-        _sampling("subagent.span").head_sampling_rate is SamplingRate.BASE_RATE
-    )
-    assert (
-        _sampling("subagent.span.closed").head_sampling_rate
-        is SamplingRate.ALWAYS_SAMPLED
-    )
+    assert _sampling("topology.fanout.opened").head_sampling_rate is SamplingRate.ALWAYS_SAMPLED
+    assert _sampling("subagent.span").head_sampling_rate is SamplingRate.BASE_RATE
+    assert _sampling("subagent.span.closed").head_sampling_rate is SamplingRate.ALWAYS_SAMPLED
 
 
 def test_subagent_tail_keep_on_failed() -> None:

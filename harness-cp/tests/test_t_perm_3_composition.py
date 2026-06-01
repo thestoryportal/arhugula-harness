@@ -124,13 +124,8 @@ def test_pure_pattern_above_engine() -> None:
 
 def test_reconciler_loop_control_loop() -> None:
     """#3 — RECONCILER_LOOP cells → reconciler; owner CONTROL_LOOP."""
-    cell = read_per_cell_t_perm_3(
-        WorkloadClass.PIPELINE_AUTOMATION, EngineClass.RECONCILER_LOOP
-    )
-    assert (
-        cell.t_perm_3_reading
-        is PerCellReadingKind.RECONCILER_CONTROL_LOOP_OWNS_RECONVERGENCE
-    )
+    cell = read_per_cell_t_perm_3(WorkloadClass.PIPELINE_AUTOMATION, EngineClass.RECONCILER_LOOP)
+    assert cell.t_perm_3_reading is PerCellReadingKind.RECONCILER_CONTROL_LOOP_OWNS_RECONVERGENCE
     assert cell.active_layer_owner is LayerOwner.CONTROL_LOOP
 
 

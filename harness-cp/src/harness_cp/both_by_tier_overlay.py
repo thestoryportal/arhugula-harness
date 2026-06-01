@@ -213,9 +213,7 @@ _TIER_3_PLUS: frozenset[BlastRadiusTier] = frozenset(
 )
 
 
-def evaluate_both_by_tier_overlay(
-    tool_tier: ToolTier, cell: HITLMatrixCell
-) -> OverlayResolution:
+def evaluate_both_by_tier_overlay(tool_tier: ToolTier, cell: HITLMatrixCell) -> OverlayResolution:
     """Resolve the §18.3 both-by-tier overlay for a per-tool tier at a cell.
 
     Per acceptance #2: AUTO → `AUTO_NO_GATE` (no gate); ASK →

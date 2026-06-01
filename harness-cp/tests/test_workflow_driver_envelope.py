@@ -60,7 +60,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 from opentelemetry.trace import StatusCode
 
-
 # ---------------------------------------------------------------------------
 # Fixtures — production TracerProvider + in-memory exporter for span assertions.
 # ---------------------------------------------------------------------------
@@ -802,5 +801,7 @@ def test_envelope_child_span_nests_under_envelope_for_each_step(
 
 def _single_envelope(exporter: InMemorySpanExporter) -> ReadableSpan:
     spans = [s for s in exporter.get_finished_spans() if s.name == "workflow.envelope"]
-    assert len(spans) == 1, f"expected 1 envelope, got {len(spans)}: {[s.name for s in exporter.get_finished_spans()]}"
+    assert len(spans) == 1, (
+        f"expected 1 envelope, got {len(spans)}: {[s.name for s in exporter.get_finished_spans()]}"
+    )
     return spans[0]

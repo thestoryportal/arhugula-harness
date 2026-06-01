@@ -80,10 +80,7 @@ def test_team_toggleable_false() -> None:
 
 def test_multi_tenant_toggleable_false() -> None:
     """Acceptance #3 — toggleable is False at the multi-tenant-compliance tier."""
-    assert (
-        PER_PERSONA_TIER_REDACTION[PersonaTier.MULTI_TENANT_COMPLIANCE].toggleable
-        is False
-    )
+    assert PER_PERSONA_TIER_REDACTION[PersonaTier.MULTI_TENANT_COMPLIANCE].toggleable is False
 
 
 def test_pre_collector_pipeline_composes_with_u_od_31() -> None:

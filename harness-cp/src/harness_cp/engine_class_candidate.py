@@ -81,9 +81,7 @@ ENGINE_CLASS_CANDIDATES: tuple[EngineClassCandidate, ...] = (
             }
         ),
         exclusion_reasons={
-            EngineClass.PURE_PATTERN_NO_ENGINE: (
-                "server context requires durability primitive"
-            ),
+            EngineClass.PURE_PATTERN_NO_ENGINE: ("server context requires durability primitive"),
         },
     ),
     EngineClassCandidate(
@@ -97,9 +95,7 @@ ENGINE_CLASS_CANDIDATES: tuple[EngineClassCandidate, ...] = (
             }
         ),
         exclusion_reasons={
-            EngineClass.PURE_PATTERN_NO_ENGINE: (
-                "managed context requires durability primitive"
-            ),
+            EngineClass.PURE_PATTERN_NO_ENGINE: ("managed context requires durability primitive"),
         },
     ),
 )

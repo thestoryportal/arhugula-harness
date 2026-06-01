@@ -25,9 +25,7 @@ _PRIMARY = ProviderCandidate(
 _SAME = ProviderCandidate(
     provider="anthropic", model="claude-haiku", family=ProviderFamily.ANTHROPIC
 )
-_CROSS = ProviderCandidate(
-    provider="openai", model="gpt-4o", family=ProviderFamily.OPENAI
-)
+_CROSS = ProviderCandidate(provider="openai", model="gpt-4o", family=ProviderFamily.OPENAI)
 _TERMINAL = ProviderCandidate(
     provider="ollama", model="llama3", family=ProviderFamily.LOCAL_OPEN_WEIGHT
 )
@@ -100,9 +98,7 @@ def test_cache_state_loss_attribution() -> None:
 def test_composition_delegates_to_u_as_30() -> None:
     # compose_fallback_chain structures AS-resolved candidate tiers into the
     # §4.1 four-field chain; the candidate tiers are caller-supplied (U-AS-30).
-    chain = compose_fallback_chain(
-        primary=_PRIMARY, same_family=(), cross_family=(_CROSS,)
-    )
+    chain = compose_fallback_chain(primary=_PRIMARY, same_family=(), cross_family=(_CROSS,))
     assert chain.primary == _PRIMARY
     assert chain.terminal is None
     assert chain.cross_family == (_CROSS,)

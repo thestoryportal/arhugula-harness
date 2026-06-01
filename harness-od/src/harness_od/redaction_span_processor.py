@@ -140,10 +140,7 @@ class RedactionSpanProcessor(SpanProcessor):
         # non-toggleable; operator cannot disable redaction at this tier.
         # An empty `redacted_attributes` at multi-tenant is a disable attempt.
         posture = PER_PERSONA_TIER_REDACTION[persona_tier]
-        if (
-            persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE
-            and len(redacted_attributes) == 0
-        ):
+        if persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE and len(redacted_attributes) == 0:
             raise MultiTenantOverrideRefusedError(
                 f"persona_tier={persona_tier.value} is non-toggleable per "
                 f"PER_PERSONA_TIER_REDACTION[{persona_tier.value}].toggleable={posture.toggleable} "

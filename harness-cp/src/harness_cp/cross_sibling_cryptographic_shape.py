@@ -71,9 +71,7 @@ def _shape_for(persona_tier: PersonaTier) -> CryptographicShape:
     raise KeyError(f"no U-CP-42 cryptographic-shape row for {persona_tier.value}")
 
 
-CROSS_SIBLING_CRYPTOGRAPHIC_COMPOSITION: tuple[
-    CrossSiblingCryptographicComposition, ...
-] = tuple(
+CROSS_SIBLING_CRYPTOGRAPHIC_COMPOSITION: tuple[CrossSiblingCryptographicComposition, ...] = tuple(
     CrossSiblingCryptographicComposition(
         persona_tier=tier,
         sibling_ledger_entry_cryptographic_shape=_shape_for(tier),

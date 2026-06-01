@@ -75,9 +75,7 @@ BASE_RATE_SAMPLED_EVENT_CLASSES: frozenset[str] = frozenset(
 #: constants by design — the bare-string set model cannot carry the `kind`
 #: discriminator, so the disjointness criterion (acc #2) applies only where
 #: `kind` does not discriminate.
-DUAL_REGIME_EVENT_CLASSES: frozenset[str] = frozenset(
-    {"files.operation", "memory.operation"}
-)
+DUAL_REGIME_EVENT_CLASSES: frozenset[str] = frozenset({"files.operation", "memory.operation"})
 
 
 class PerCellBaseRateEnvelope(BaseModel):

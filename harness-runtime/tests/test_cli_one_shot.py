@@ -15,14 +15,14 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import harness_runtime.cli.app as _ensure_import_side_effect
 import pytest
 from harness_core.deployment_surface import DeploymentSurface
-from typer.testing import CliRunner
-
 from harness_runtime.api import FailureCause, RunResult
 from harness_runtime.cli.app import (
     EXIT_BOOTSTRAP_ERROR,
@@ -32,16 +32,13 @@ from harness_runtime.cli.app import (
     EXIT_WORKFLOW_FAIL,
     app,
 )
-import sys
-
-import harness_runtime.cli.app as _ensure_import_side_effect  # noqa: F401
+from typer.testing import CliRunner
 
 _cli_app_mod = sys.modules["harness_runtime.cli.app"]
 assert _ensure_import_side_effect is not None  # silence reportUnusedImport
-from harness_runtime.config_source import RuntimeConfigLoadError
-from harness_cp.topology_pattern import TopologyPattern
 from harness_core.identity import WorkflowID
-
+from harness_cp.topology_pattern import TopologyPattern
+from harness_runtime.config_source import RuntimeConfigLoadError
 from harness_runtime.types import (
     CollectorConfig,
     OTelConfig,
@@ -89,22 +86,18 @@ def _make_yaml(*, workflow_id: str, engine_class: str) -> str:
         f'  engine_class: "{engine_class}"\n'
         '  topology_pattern: "evaluator-optimizer"\n'
         + _WME_FRAGMENT
-        + 'default_model_binding:\n'
+        + "default_model_binding:\n"
         + '  provider: "anthropic"\n'
         + '  model: "claude-opus-4-7"\n'
-        + 'steps:\n'
+        + "steps:\n"
         + '  - step_id: "s1"\n'
         + '    step_kind: "inference-step"\n'
-        + '    step_payload: {}\n'
+        + "    step_payload: {}\n"
     )
 
 
-_VALID_YAML = _make_yaml(
-    workflow_id="wf-cli-one-shot", engine_class="pure-pattern-no-engine"
-)
-_RECONCILER_YAML = _make_yaml(
-    workflow_id="wf-cli-reconciler", engine_class="reconciler-loop"
-)
+_VALID_YAML = _make_yaml(workflow_id="wf-cli-one-shot", engine_class="pure-pattern-no-engine")
+_RECONCILER_YAML = _make_yaml(workflow_id="wf-cli-reconciler", engine_class="reconciler-loop")
 
 
 def _write_yaml(tmp_path: Path, body: str = _VALID_YAML) -> Path:
@@ -114,7 +107,8 @@ def _write_yaml(tmp_path: Path, body: str = _VALID_YAML) -> Path:
 
 
 def _runtime_config(
-    *, deployment_surface: DeploymentSurface = DeploymentSurface.LOCAL_DEVELOPMENT,
+    *,
+    deployment_surface: DeploymentSurface = DeploymentSurface.LOCAL_DEVELOPMENT,
     tenant_id: str | None = None,
 ) -> RuntimeConfig:
     return RuntimeConfig(
@@ -379,11 +373,7 @@ def test_ac8_config_load_error_exits_three(
     mock_config_load: Callable[..., None],
     mock_api_run: Callable[..., None],
 ) -> None:
-    mock_config_load(
-        raises=RuntimeConfigLoadError(
-            "synthetic test failure", source="test"
-        )
-    )
+    mock_config_load(raises=RuntimeConfigLoadError("synthetic test failure", source="test"))
     mock_api_run()
     manifest = _write_yaml(tmp_path)
     result = runner.invoke(app, ["run", str(manifest)])
@@ -502,9 +492,7 @@ def test_tenant_id_flag_propagates_to_cli_overrides(
     mock_config_load()
     mock_api_run(result=_run_result(status="completed"))
     manifest = _write_yaml(tmp_path)
-    result = runner.invoke(
-        app, ["run", str(manifest), "--tenant-id", "tenant-x"]
-    )
+    result = runner.invoke(app, ["run", str(manifest), "--tenant-id", "tenant-x"])
     assert result.exit_code == EXIT_SUCCESS, result.stdout + result.stderr
     captured = mock_config_load.captured  # type: ignore[attr-defined]
     assert captured["cli_overrides"].get("tenant_id") == "tenant-x"

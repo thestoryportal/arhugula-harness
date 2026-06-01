@@ -124,9 +124,7 @@ HITL_TAIL_KEEP_RULES: tuple[TailKeepRule, ...] = (
 """The 3 HITL-span tail-keep rules, C-CP-21 §21.3."""
 
 
-def compute_operator_burden(
-    workflow_id: WorkflowID, time_window: Duration
-) -> OperatorBurdenEval:
+def compute_operator_burden(workflow_id: WorkflowID, time_window: Duration) -> OperatorBurdenEval:
     """Compute the operator-burden evaluation over a time window (§21.3).
 
     Aggregates HITL invocations + responses + latencies over `time_window`;

@@ -207,9 +207,7 @@ _hitl_required = hitl_required
 `_hitl_required` (C-CP-19 §19.4). Public callers use `hitl_required`."""
 
 
-def assert_cross_persona_monotonicity(
-    from_tier: PersonaTier, to_tier: PersonaTier
-) -> None:
+def assert_cross_persona_monotonicity(from_tier: PersonaTier, to_tier: PersonaTier) -> None:
     """Enforce §19.2 cross-persona-tier monotonicity.
 
     Under bridging-arc traversal across persona tiers, `persona_tier_floor`

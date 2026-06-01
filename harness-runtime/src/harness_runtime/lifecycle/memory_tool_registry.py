@@ -20,6 +20,7 @@ Per L9-octies cluster discipline (runtime plan v2.15 §1):
 from __future__ import annotations
 
 from harness_core.deployment_surface import DeploymentSurface
+
 from harness_runtime.lifecycle.memory_tool_types import (
     MemoryToolStorageBackend,
     MemoryToolStorageBackendProtocol,
@@ -56,7 +57,7 @@ class MemoryToolRegistry:
 
     def resolve_backend(
         self,
-        deployment_surface: DeploymentSurface,  # noqa: ARG002 — retained for API-shape stability per §14.12.1
+        deployment_surface: DeploymentSurface,
     ) -> MemoryToolStorageBackendProtocol:
         """Return the stored storage-backend implementation.
 

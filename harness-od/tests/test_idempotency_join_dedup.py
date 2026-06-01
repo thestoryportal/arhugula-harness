@@ -146,10 +146,7 @@ def test_span_param_resolves_to_u_od_04_carrier() -> None:
     span = _span()
     assert isinstance(span, SpanRef.__value__)
     # the function accepts the U-OD-04-carried handle without re-materializing it
-    assert (
-        attach_idempotency_key_to_cost_record(span, "k", _cost_record()).idempotency_key
-        == "k"
-    )
+    assert attach_idempotency_key_to_cost_record(span, "k", _cost_record()).idempotency_key == "k"
 
 
 def test_propagate_to_subagent_derives_namespaced_key() -> None:
@@ -177,18 +174,14 @@ def test_dedupe_on_replay_deterministic_replay_drops() -> None:
 
 def test_dedupe_deterministic_replay_topology_mismatch_escalates() -> None:
     """Acceptance #3/#13 — `deterministic_replay` with trace/span mismatch escalates."""
-    view = _ingest_view(
-        disposition=ReplayDisposition.DETERMINISTIC_REPLAY, trace_id="other-trace"
-    )
+    view = _ingest_view(disposition=ReplayDisposition.DETERMINISTIC_REPLAY, trace_id="other-trace")
     out = dedupe_on_replay(view, _ledger())
     assert out is DedupOutcome.ESCALATE_REPLAY_SEMANTIC_DIVERGENCE
 
 
 def test_dedupe_deterministic_replay_cause_mismatch_escalates() -> None:
     """Acceptance #13 — `deterministic_replay` cause_attribution mismatch escalates."""
-    view = _ingest_view(
-        disposition=ReplayDisposition.DETERMINISTIC_REPLAY, cause="different_cause"
-    )
+    view = _ingest_view(disposition=ReplayDisposition.DETERMINISTIC_REPLAY, cause="different_cause")
     out = dedupe_on_replay(view, _ledger(cause="rate_limit"))
     assert out is DedupOutcome.ESCALATE_REPLAY_SEMANTIC_DIVERGENCE
 
@@ -223,9 +216,7 @@ def test_dedup_outcome_matrix_covers_all_five_dispositions() -> None:
         # with a ledger entry (re-ingestion path)
         assert isinstance(dedupe_on_replay(view, _ledger()), DedupOutcome)
         # without a ledger entry (first-ingestion path)
-        assert (
-            dedupe_on_replay(view, None) is DedupOutcome.RECORD_FIRST_INGESTION
-        )
+        assert dedupe_on_replay(view, None) is DedupOutcome.RECORD_FIRST_INGESTION
 
 
 @pytest.mark.parametrize("attempt", [1, 2])
@@ -263,18 +254,14 @@ def test_dedup_outcome_matrix_section_14_5_2_cells(
 
 def test_invariance_check_pass_on_match() -> None:
     """Acceptance #13 — `deterministic_replay` cause match → PASS."""
-    view = _ingest_view(
-        disposition=ReplayDisposition.DETERMINISTIC_REPLAY, cause="rate_limit"
-    )
+    view = _ingest_view(disposition=ReplayDisposition.DETERMINISTIC_REPLAY, cause="rate_limit")
     result = cause_attribution_invariance_check(view, _ledger(cause="rate_limit"))
     assert result is InvarianceCheckResult.PASS
 
 
 def test_invariance_check_escalate_on_mismatch() -> None:
     """Acceptance #13 — `deterministic_replay` cause mismatch → ESCALATE."""
-    view = _ingest_view(
-        disposition=ReplayDisposition.DETERMINISTIC_REPLAY, cause="cause_a"
-    )
+    view = _ingest_view(disposition=ReplayDisposition.DETERMINISTIC_REPLAY, cause="cause_a")
     result = cause_attribution_invariance_check(view, _ledger(cause="cause_b"))
     assert result is InvarianceCheckResult.ESCALATE_REPLAY_SEMANTIC_DIVERGENCE
 
@@ -315,12 +302,8 @@ def test_per_attempt_cost_roll_up_sum_invariant() -> None:
     """Acceptance #14 — total cost = Σ per-attempt costs."""
     records = [
         _cost_record(disposition=ReplayDisposition.NO_REPLAY, attempt=1, total_cost=2.0),
-        _cost_record(
-            disposition=ReplayDisposition.CHECKPOINT_RESUME, attempt=2, total_cost=3.0
-        ),
-        _cost_record(
-            disposition=ReplayDisposition.CHECKPOINT_RESUME, attempt=3, total_cost=5.0
-        ),
+        _cost_record(disposition=ReplayDisposition.CHECKPOINT_RESUME, attempt=2, total_cost=3.0),
+        _cost_record(disposition=ReplayDisposition.CHECKPOINT_RESUME, attempt=3, total_cost=5.0),
     ]
     rolled = per_attempt_cost_attribution_roll_up("op-1", records)
     assert rolled.total_cost == 10.0
@@ -380,9 +363,7 @@ def test_f2_12_closure_path_cardinality_nine() -> None:
 
 def test_f2_12_closure_path_all_steps_filed() -> None:
     """Acceptance #8 — all 9 cascade steps are FILED (Close pending)."""
-    assert all(
-        step.filing_status is FilingStatus.FILED for step in F2_12_CLOSURE_PATH
-    )
+    assert all(step.filing_status is FilingStatus.FILED for step in F2_12_CLOSURE_PATH)
 
 
 def test_f2_12_closure_path_step_decomposition() -> None:

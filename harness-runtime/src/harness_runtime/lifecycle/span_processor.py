@@ -150,9 +150,7 @@ class SpanProcessorStage:
         development, delegates directly to BSP.
         """
         if self.tail_keep_processor is not None:
-            return self.tail_keep_processor.force_flush(
-                timeout_millis=timeout_millis
-            )
+            return self.tail_keep_processor.force_flush(timeout_millis=timeout_millis)
         return self.processor.force_flush(timeout_millis=timeout_millis)
 
 
@@ -203,9 +201,7 @@ def materialize_span_processor_stage(
         Wrap-and-re-raise for exporter / BSP construction failures.
     """
     try:
-        assert_otlp_reachable_from_sandbox(
-            _BOOTSTRAP_SANDBOX_TIER, config.collector.placement
-        )
+        assert_otlp_reachable_from_sandbox(_BOOTSTRAP_SANDBOX_TIER, config.collector.placement)
     except ReachabilityViolation as exc:
         raise SpanProcessorReachabilityError(
             f"bootstrap-tier ({_BOOTSTRAP_SANDBOX_TIER.value}) cannot reach "
@@ -214,17 +210,17 @@ def materialize_span_processor_stage(
         ) from exc
 
     try:
-        resolved_exporter: SpanExporter = exporter if exporter is not None else (
-            OTLPSpanExporter(endpoint=config.otel.otlp_endpoint)
+        resolved_exporter: SpanExporter = (
+            exporter
+            if exporter is not None
+            else (OTLPSpanExporter(endpoint=config.otel.otlp_endpoint))
         )
         processor = BatchSpanProcessor(
             resolved_exporter,
             max_export_batch_size=config.collector.batch_size,
             schedule_delay_millis=config.collector.batch_window_seconds * 1000,
         )
-        redaction_processor = RedactionSpanProcessor(
-            persona_tier=config.persona_tier
-        )
+        redaction_processor = RedactionSpanProcessor(persona_tier=config.persona_tier)
     except Exception as exc:
         raise SpanProcessorBindError(
             f"BatchSpanProcessor / OTLPSpanExporter construction failed: {exc}"

@@ -167,9 +167,9 @@ TRANSIENT_STAIRCASE_TRANSITIONS: tuple[StaircaseTransition, ...] = (
 """The §21.2 transient-staircase transition table, keyed on the §21.1
 retry-exit `ValidatorRetryExitClass`."""
 
-_TRANSITION_INDEX: dict[
-    tuple[StaircaseStage, ValidatorRetryExitClass], StaircaseTransition
-] = {(t.from_stage, t.on_cause): t for t in TRANSIENT_STAIRCASE_TRANSITIONS}
+_TRANSITION_INDEX: dict[tuple[StaircaseStage, ValidatorRetryExitClass], StaircaseTransition] = {
+    (t.from_stage, t.on_cause): t for t in TRANSIENT_STAIRCASE_TRANSITIONS
+}
 
 
 # --- §21.3 palette-restriction table ---------------------------------------
@@ -263,9 +263,7 @@ def advance_staircase(
         )
     transition = _TRANSITION_INDEX.get((current, cause))
     if transition is None:
-        raise StaircaseError(
-            f"no §21.2 staircase transition from {current!r} on {cause!r}"
-        )
+        raise StaircaseError(f"no §21.2 staircase transition from {current!r} on {cause!r}")
     return transition
 
 

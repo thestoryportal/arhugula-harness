@@ -43,14 +43,10 @@ def _span() -> SpanRef:
 
 
 def _window() -> ObservationWindow:
-    return ObservationWindow(
-        kind=ObservationWindowKind.SAMPLE_WINDOW, sample_window_count=100
-    )
+    return ObservationWindow(kind=ObservationWindowKind.SAMPLE_WINDOW, sample_window_count=100)
 
 
-def _threshold(
-    primitive: AlignmentFloorPrimitive, value: float
-) -> AlignmentFloorThreshold:
+def _threshold(primitive: AlignmentFloorPrimitive, value: float) -> AlignmentFloorThreshold:
     return AlignmentFloorThreshold(
         primitive=primitive,
         threshold_value=value,
@@ -145,9 +141,7 @@ def test_drift_attribute_names_byte_exact() -> None:
 def test_detect_drift_below_threshold_returns_some() -> None:
     """Acceptance #6 — detect_drift returns event attributes below threshold."""
     threshold = _threshold(AlignmentFloorPrimitive.CACHE_HIT_RATE_ALIGNMENT_FLOOR, 0.8)
-    result = detect_drift(
-        AlignmentFloorPrimitive.CACHE_HIT_RATE_ALIGNMENT_FLOOR, 0.7, threshold
-    )
+    result = detect_drift(AlignmentFloorPrimitive.CACHE_HIT_RATE_ALIGNMENT_FLOOR, 0.7, threshold)
     assert isinstance(result, DriftDetectedEventAttributes)
     assert result.current_value == 0.7
     assert result.threshold == 0.8
@@ -156,18 +150,14 @@ def test_detect_drift_below_threshold_returns_some() -> None:
 def test_detect_drift_above_threshold_returns_none() -> None:
     """Acceptance #6 — detect_drift returns None above threshold."""
     threshold = _threshold(AlignmentFloorPrimitive.CACHE_HIT_RATE_ALIGNMENT_FLOOR, 0.8)
-    result = detect_drift(
-        AlignmentFloorPrimitive.CACHE_HIT_RATE_ALIGNMENT_FLOOR, 0.9, threshold
-    )
+    result = detect_drift(AlignmentFloorPrimitive.CACHE_HIT_RATE_ALIGNMENT_FLOOR, 0.9, threshold)
     assert result is None
 
 
 def test_detect_drift_at_threshold_returns_none() -> None:
     """Acceptance #6 — detect_drift returns None at exactly the threshold."""
     threshold = _threshold(AlignmentFloorPrimitive.CACHE_HIT_RATE_ALIGNMENT_FLOOR, 0.8)
-    result = detect_drift(
-        AlignmentFloorPrimitive.CACHE_HIT_RATE_ALIGNMENT_FLOOR, 0.8, threshold
-    )
+    result = detect_drift(AlignmentFloorPrimitive.CACHE_HIT_RATE_ALIGNMENT_FLOOR, 0.8, threshold)
     assert result is None
 
 
@@ -219,9 +209,7 @@ def test_detect_drift_emits_signal_not_cycle() -> None:
     `DriftDetectedEventAttributes` signal and nothing else.
     """
     threshold = _threshold(AlignmentFloorPrimitive.SANDBOX_TIER_ROUTING_ACCURACY, 0.9)
-    result = detect_drift(
-        AlignmentFloorPrimitive.SANDBOX_TIER_ROUTING_ACCURACY, 0.4, threshold
-    )
+    result = detect_drift(AlignmentFloorPrimitive.SANDBOX_TIER_ROUTING_ACCURACY, 0.4, threshold)
     assert isinstance(result, DriftDetectedEventAttributes)
 
 

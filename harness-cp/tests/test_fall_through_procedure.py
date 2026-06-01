@@ -48,8 +48,7 @@ def test_no_decision_cause_none_silent() -> None:
 
 def test_fall_through_honors_layer_ordering() -> None:
     assert (
-        fall_through(RoutingLayer.DECLARATIVE, None, _REQUEST).next_layer
-        is RoutingLayer.EMBEDDING
+        fall_through(RoutingLayer.DECLARATIVE, None, _REQUEST).next_layer is RoutingLayer.EMBEDDING
     )
     assert (
         fall_through(RoutingLayer.EMBEDDING, None, _REQUEST).next_layer
@@ -58,31 +57,23 @@ def test_fall_through_honors_layer_ordering() -> None:
 
 
 def test_time_budget_exceeded_emits_event() -> None:
-    result = fall_through(
-        RoutingLayer.DECLARATIVE, FallThroughCause.TIME_BUDGET_EXCEEDED, _REQUEST
-    )
+    result = fall_through(RoutingLayer.DECLARATIVE, FallThroughCause.TIME_BUDGET_EXCEEDED, _REQUEST)
     assert result.emit_fallback_event is True
     assert result.cause is FallThroughCause.TIME_BUDGET_EXCEEDED
 
 
 def test_capability_shortfall_emits_event() -> None:
-    result = fall_through(
-        RoutingLayer.EMBEDDING, FallThroughCause.CAPABILITY_SHORTFALL, _REQUEST
-    )
+    result = fall_through(RoutingLayer.EMBEDDING, FallThroughCause.CAPABILITY_SHORTFALL, _REQUEST)
     assert result.emit_fallback_event is True
 
 
 def test_breaker_open_emits_event() -> None:
-    result = fall_through(
-        RoutingLayer.DECLARATIVE, FallThroughCause.BREAKER_OPEN, _REQUEST
-    )
+    result = fall_through(RoutingLayer.DECLARATIVE, FallThroughCause.BREAKER_OPEN, _REQUEST)
     assert result.emit_fallback_event is True
 
 
 def test_rate_limit_storm_emits_event() -> None:
-    result = fall_through(
-        RoutingLayer.EMBEDDING, FallThroughCause.RATE_LIMIT_STORM, _REQUEST
-    )
+    result = fall_through(RoutingLayer.EMBEDDING, FallThroughCause.RATE_LIMIT_STORM, _REQUEST)
     assert result.emit_fallback_event is True
 
 
@@ -92,11 +83,7 @@ def test_final_layer_exhausted() -> None:
 
 
 def test_procedure_deterministic() -> None:
-    a = fall_through(
-        RoutingLayer.DECLARATIVE, FallThroughCause.BREAKER_OPEN, _REQUEST
-    )
-    b = fall_through(
-        RoutingLayer.DECLARATIVE, FallThroughCause.BREAKER_OPEN, _REQUEST
-    )
+    a = fall_through(RoutingLayer.DECLARATIVE, FallThroughCause.BREAKER_OPEN, _REQUEST)
+    b = fall_through(RoutingLayer.DECLARATIVE, FallThroughCause.BREAKER_OPEN, _REQUEST)
     assert a == b
     assert isinstance(a, FallThroughResult)

@@ -41,12 +41,8 @@ def _cell(pt: PersonaTier, ds: DeploymentSurface) -> CellID:
 
 
 _CELL_1 = _cell(PersonaTier.SOLO_DEVELOPER, DeploymentSurface.LOCAL_DEVELOPMENT)
-_CELL_7 = _cell(
-    PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.SELF_HOSTED_SERVER
-)
-_CELL_8 = _cell(
-    PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.MANAGED_CLOUD
-)
+_CELL_7 = _cell(PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.SELF_HOSTED_SERVER)
+_CELL_8 = _cell(PersonaTier.MULTI_TENANT_COMPLIANCE, DeploymentSurface.MANAGED_CLOUD)
 
 
 class _FakeSpan:
@@ -84,12 +80,14 @@ def _entry(prior_hash: str, entry_hash: str) -> AuditLedgerEntry:
 
 # --- acc #1 — TenantSeparationStrategy 2 values ----------------------------
 
+
 def test_tenant_separation_strategy_cardinality_two() -> None:
     """acc #1 — `TenantSeparationStrategy` enumerates exactly 2 values."""
     assert len(list(TenantSeparationStrategy)) == 2
 
 
 # --- acc #2 — PER_TENANT_SEPARATION_BINDINGS only at cells 7/8 -------------
+
 
 def test_per_tenant_separation_only_at_multi_tenant_cells() -> None:
     """acc #2 — exactly 2 entries, cell-7 and cell-8 only."""
@@ -98,6 +96,7 @@ def test_per_tenant_separation_only_at_multi_tenant_cells() -> None:
 
 
 # --- acc #3 — per-cell strategy --------------------------------------------
+
 
 def test_cell_7_self_hosted_strategy() -> None:
     """acc #3 — cell-7 -> PER_TENANT_OTLP_COLLECTOR_ROUTING (self-hosted)."""
@@ -117,6 +116,7 @@ def test_cell_8_managed_cloud_strategy() -> None:
 
 # --- acc #4 — tenant_id_attribute byte-exact -------------------------------
 
+
 def test_tenant_id_attribute_byte_exact() -> None:
     """acc #4 — tenant_id_attribute == 'tenant.id' at every binding."""
     for binding in PER_TENANT_SEPARATION_BINDINGS.values():
@@ -125,6 +125,7 @@ def test_tenant_id_attribute_byte_exact() -> None:
 
 # --- acc #5 — cross_tenant_aggregation_forbidden ---------------------------
 
+
 def test_cross_tenant_aggregation_forbidden() -> None:
     """acc #5 — cross_tenant_aggregation_forbidden == True at every binding."""
     for binding in PER_TENANT_SEPARATION_BINDINGS.values():
@@ -132,6 +133,7 @@ def test_cross_tenant_aggregation_forbidden() -> None:
 
 
 # --- acc #6 — SignatureAlgorithm 3 values (U-OD-00 carrier) ----------------
+
 
 def test_signature_algorithm_cardinality_three() -> None:
     """acc #6 — `SignatureAlgorithm` enumerates exactly 3 values (U-OD-00)."""
@@ -149,6 +151,7 @@ def test_signature_algorithm_names_byte_exact() -> None:
 
 # --- acc #7 — AuditSignatureAttributes 4 attributes (U-OD-00 carrier) ------
 
+
 def test_audit_signature_attributes_cardinality_four() -> None:
     """acc #7 — `AuditSignatureAttributes` declares exactly 4 attributes."""
     assert set(AuditSignatureAttributes.model_fields) == {
@@ -160,6 +163,7 @@ def test_audit_signature_attributes_cardinality_four() -> None:
 
 
 # --- acc #8 — sign_audit_entry ---------------------------------------------
+
 
 def test_sign_audit_entry_complete() -> None:
     """acc #8 — sign_audit_entry produces all 4 fields per algo selection."""
@@ -178,6 +182,7 @@ def test_sign_audit_entry_missing_key_id_reject() -> None:
 
 
 # --- acc #9 — verify_hash_chain_integrity ----------------------------------
+
 
 def test_verify_hash_chain_intact_accept() -> None:
     """acc #9 — verify_hash_chain_integrity returns None for an intact chain."""
@@ -213,6 +218,7 @@ def test_verify_hash_chain_single_entry_accept() -> None:
 
 # --- acc #10 — assert_tenant_id_on_every_span_at_multi_tenant_cells --------
 
+
 def test_assert_tenant_id_present_accept() -> None:
     """acc #10 — a span carrying tenant.id at cell-7 passes."""
     span = _FakeSpan({"tenant.id": "tenant-a"})
@@ -247,12 +253,14 @@ def test_assert_tenant_id_not_required_at_non_multi_tenant_cell() -> None:
 
 # --- §21.2 Tier-5 audit-signature requirement ------------------------------
 
+
 def test_audit_signature_required_at_tier_5_ledger() -> None:
     """§21.2 + C-IS-14 §14.2 — audit-signature attestation required at Tier-5."""
     assert AUDIT_SIGNATURE_REQUIRED_AT_TIER_5_LEDGER is True
 
 
 # --- acc #13 — algorithm selection deferred --------------------------------
+
 
 def test_specific_algorithm_selection_deferred() -> None:
     """acc #13 — operators select within the 3-algorithm admissible set.

@@ -18,8 +18,6 @@ import hashlib
 import json
 
 import pytest
-from pydantic import ValidationError
-
 from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol import PauseResumeProtocol
 from harness_cp.pause_resume_protocol_types import (
@@ -27,6 +25,7 @@ from harness_cp.pause_resume_protocol_types import (
     WorkflowPauseReason,
 )
 from harness_is.state_ledger_entry_schema import Identifier
+from pydantic import ValidationError
 
 
 def _build_state_summary(summary_text: str = "test-state") -> StateSummary:
@@ -299,7 +298,6 @@ def test_u_cp_49_free_function_capture_pause_snapshot_still_raises() -> None:
     strike: line 121 is NOT closed by U-CP-63.
     """
     from harness_core import WorkflowID
-
     from harness_cp.pause_resume_protocol import (
         PauseReason as EngineLayerPauseReason,
     )

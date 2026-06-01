@@ -50,10 +50,7 @@ def test_eval_span_shapes_cardinality_two() -> None:
 def test_inline_gate_shape_per_section_18_3_row_1() -> None:
     """Acceptance #4 — the `INLINE_GATE` shape matches §18.3 row 1."""
     shape = EVAL_SPAN_SHAPES[EvalKindDiscriminator.INLINE_GATE]
-    assert (
-        shape.sampling_posture
-        is SamplingPostureF18.ALWAYS_SAMPLED_IF_FAILURE_BASE_RATE_IF_PASS
-    )
+    assert shape.sampling_posture is SamplingPostureF18.ALWAYS_SAMPLED_IF_FAILURE_BASE_RATE_IF_PASS
     assert shape.source_declaration_ref == "C-CP-21 §21.5"
     assert shape.failure_routing == "C-CP-21 §21.6 + C-AS-04 §4.2"
 
@@ -61,9 +58,7 @@ def test_inline_gate_shape_per_section_18_3_row_1() -> None:
 def test_offline_judge_shape_per_section_18_3_row_2() -> None:
     """Acceptance #5 — the `OFFLINE_JUDGE` shape matches §18.3 row 2."""
     shape = EVAL_SPAN_SHAPES[EvalKindDiscriminator.OFFLINE_JUDGE]
-    assert (
-        shape.sampling_posture is SamplingPostureF18.SEPARATE_CHILD_SPAN_PER_U_OD_23
-    )
+    assert shape.sampling_posture is SamplingPostureF18.SEPARATE_CHILD_SPAN_PER_U_OD_23
     assert shape.source_declaration_ref == "U-OD-23 (C-OD-17 §17.2)"
     assert shape.failure_routing is None
 
@@ -112,12 +107,7 @@ def test_validate_inline_gate_with_validator_fail_accept() -> None:
         has_validator_fail_attributes=True,
         has_operator_burden_eval_reference=False,
     )
-    assert (
-        validate_eval_span_routing(
-            EvalKindDiscriminator.INLINE_GATE, _span(), routing
-        )
-        is None
-    )
+    assert validate_eval_span_routing(EvalKindDiscriminator.INLINE_GATE, _span(), routing) is None
 
 
 def test_validate_inline_gate_as_child_span_reject() -> None:
@@ -149,12 +139,7 @@ def test_validate_offline_judge_as_child_span_accept() -> None:
         has_validator_fail_attributes=False,
         has_operator_burden_eval_reference=True,
     )
-    assert (
-        validate_eval_span_routing(
-            EvalKindDiscriminator.OFFLINE_JUDGE, _span(), routing
-        )
-        is None
-    )
+    assert validate_eval_span_routing(EvalKindDiscriminator.OFFLINE_JUDGE, _span(), routing) is None
 
 
 def test_validate_offline_judge_as_span_event_reject() -> None:
@@ -165,9 +150,7 @@ def test_validate_offline_judge_as_span_event_reject() -> None:
         has_operator_burden_eval_reference=True,
     )
     with pytest.raises(EvalShapeViolation):
-        validate_eval_span_routing(
-            EvalKindDiscriminator.OFFLINE_JUDGE, _span(), routing
-        )
+        validate_eval_span_routing(EvalKindDiscriminator.OFFLINE_JUDGE, _span(), routing)
 
 
 def test_validate_offline_judge_lacking_eval_reference_reject() -> None:
@@ -178,9 +161,7 @@ def test_validate_offline_judge_lacking_eval_reference_reject() -> None:
         has_operator_burden_eval_reference=False,
     )
     with pytest.raises(EvalShapeViolation):
-        validate_eval_span_routing(
-            EvalKindDiscriminator.OFFLINE_JUDGE, _span(), routing
-        )
+        validate_eval_span_routing(EvalKindDiscriminator.OFFLINE_JUDGE, _span(), routing)
 
 
 def test_distinction_non_mergeable() -> None:
@@ -199,15 +180,11 @@ def test_distinction_non_mergeable() -> None:
         inline_ok = True
         offline_ok = True
         try:
-            validate_eval_span_routing(
-                EvalKindDiscriminator.INLINE_GATE, _span(), routing
-            )
+            validate_eval_span_routing(EvalKindDiscriminator.INLINE_GATE, _span(), routing)
         except EvalShapeViolation:
             inline_ok = False
         try:
-            validate_eval_span_routing(
-                EvalKindDiscriminator.OFFLINE_JUDGE, _span(), routing
-            )
+            validate_eval_span_routing(EvalKindDiscriminator.OFFLINE_JUDGE, _span(), routing)
         except EvalShapeViolation:
             offline_ok = False
         assert not (inline_ok and offline_ok)

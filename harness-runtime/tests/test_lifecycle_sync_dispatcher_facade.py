@@ -41,8 +41,8 @@ from typing import Any
 
 import httpx
 import pytest
-from harness_core import PersonaTier
 from harness_as.sandbox_tier import SandboxTier
+from harness_core import PersonaTier
 from harness_core.identity import StepID
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class import EngineClass

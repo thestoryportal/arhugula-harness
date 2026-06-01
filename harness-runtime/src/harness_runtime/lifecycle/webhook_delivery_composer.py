@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-
 from harness_cp.hitl_timeout_degradation import (
     WebhookConfig,
     WebhookPayload,
@@ -147,9 +146,7 @@ class WebhookDeliveryComposer:
         self._retry_max_attempts = retry_max_attempts
         self._retry_base_delay_seconds = retry_base_delay_seconds
         self._tracer_provider = tracer_provider
-        self._http_client_factory = http_client_factory or (
-            lambda: httpx.AsyncClient()
-        )
+        self._http_client_factory = http_client_factory or (lambda: httpx.AsyncClient())
         self._sleep_fn: Callable[[float], Any] = sleep_fn or asyncio.sleep
         # U-OD-40 cost-attribution substrates per OD spec v1.8 §C-OD-26.2
         # row "hitl.webhook.deliver". When ALL of (rate_table, cost_chain,
@@ -237,9 +234,7 @@ class WebhookDeliveryComposer:
                                 url,
                                 json=request_body,
                                 headers=headers,
-                                timeout=_duration_to_seconds(
-                                    webhook_config.timeout
-                                ),
+                                timeout=_duration_to_seconds(webhook_config.timeout),
                             )
                         attempt_status = response.status_code
                         last_status_code = attempt_status
@@ -329,9 +324,7 @@ class WebhookDeliveryComposer:
                 attribute_webhook_dispatch_cost,
             )
 
-            bytes_sent = len(
-                json.dumps(request_body, separators=(",", ":")).encode("utf-8")
-            )
+            bytes_sent = len(json.dumps(request_body, separators=(",", ":")).encode("utf-8"))
             attribute_webhook_dispatch_cost(
                 rate_table=self._rate_table,
                 cost_chain=self._cost_chain,
@@ -405,9 +398,7 @@ class WebhookDeliveryComposer:
         )
 
         payload = project_brief_to_payload(brief, idempotency_key)
-        return await self.deliver_webhook(
-            self._webhook_config, payload, idempotency_key
-        )
+        return await self.deliver_webhook(self._webhook_config, payload, idempotency_key)
 
 
 # --- factory ----------------------------------------------------------------

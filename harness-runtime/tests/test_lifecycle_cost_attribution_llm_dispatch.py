@@ -18,28 +18,21 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from harness_as.sandbox_tier import SandboxTier
+from harness_core import PersonaTier, StepID
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
-from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver_types import (
     StepExecutionContext,
     StepKind,
     WorkflowStep,
 )
-from harness_as.sandbox_tier import SandboxTier
-from harness_core import StepID, PersonaTier
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_od.cost_record_otel_serializer import COST_ATTRIBUTED_DECIMAL_ATTR
 from harness_od.rate_table_resolver import RateTableMissingError
 from harness_od.rate_table_v1 import RATE_TABLE_V1
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-    InMemorySpanExporter,
-)
-
 from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
 from harness_runtime.lifecycle.cost_attribution_llm_dispatch import (
     attribute_llm_dispatch_cost,
@@ -47,7 +40,11 @@ from harness_runtime.lifecycle.cost_attribution_llm_dispatch import (
 from harness_runtime.lifecycle.llm_dispatch import (
     RuntimeLLMDispatcher,
 )
-
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures

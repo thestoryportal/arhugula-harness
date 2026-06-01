@@ -307,9 +307,7 @@ def compose_hitl_action_id(
     return ActionID(f"hitl:{parent_action_id}:{placement_position.value}")
 
 
-def _evaluate_hitl_required_tolerant(
-    *, binding: object, placement: object
-) -> bool:
+def _evaluate_hitl_required_tolerant(*, binding: object, placement: object) -> bool:
     """Reading B v1.22 §14.8.2 step 4c — binding-tolerant 4-axis consumption.
 
     When ``binding`` exposes both ``persona_tier`` and ``blast_radius_tier``,
@@ -385,9 +383,7 @@ def _evaluate_cell_synchrony(
 _evaluate_cell_synchrony_tolerant = _evaluate_cell_synchrony
 
 
-def _compute_effective_palette_tolerant(
-    *, binding: object
-) -> frozenset[HITLResponse]:
+def _compute_effective_palette_tolerant(*, binding: object) -> frozenset[HITLResponse]:
     """Reading B v1.22 §14.8.2 step 4d — binding-tolerant UNION-intersection.
 
     Wrap-time path passes ``validator_escalation_brief=None``. When binding-
@@ -658,8 +654,7 @@ class RuntimeHITLGateComposer:
         # Build a map from span_name → tuple of canonical attribute names per
         # CP carrier HITL_SPAN_NAMESPACE_SCHEMA.
         span_attrs: dict[str, tuple[str, ...]] = {
-            schema.span_name: schema.span_attributes
-            for schema in HITL_SPAN_NAMESPACE_SCHEMA
+            schema.span_name: schema.span_attributes for schema in HITL_SPAN_NAMESPACE_SCHEMA
         }
         object.__setattr__(self, "_hitl_span_attrs", span_attrs)
         object.__setattr__(
@@ -784,9 +779,7 @@ class RuntimeHITLGateComposer:
                 idempotency_key=Identifier(str(hitl_action_id)),
                 actor=step_context.parent_actor,
                 timestamp=datetime.now(UTC),
-                procedural_tier_snapshot_ref=(
-                    self.procedural_tier_snapshot_resolver()
-                ),
+                procedural_tier_snapshot_ref=(self.procedural_tier_snapshot_resolver()),
             )
             f2_key = WriteKey(
                 thread_id=Identifier(f"hitl:{step_context.parent_action_id}"),
@@ -812,8 +805,7 @@ class RuntimeHITLGateComposer:
         except Exception as exc:
             if raise_on_failure:
                 raise HITLGateAuditComposeError(
-                    f"HITL gate audit composition failed for "
-                    f"action_id={hitl_action_id!r}: {exc}"
+                    f"HITL gate audit composition failed for action_id={hitl_action_id!r}: {exc}"
                 ) from exc
             return cp_entry, None
 
@@ -859,14 +851,10 @@ class RuntimeHITLGateComposer:
         # arc per FM-2).
         resume_state = self.resume_context_holder.consume_and_clear()
         if resume_state is not None and resume_state.hitl_response is not None:
-            return await self._dispatch_inner(
-                binding, step, step_context=step_context
-            )
+            return await self._dispatch_inner(binding, step, step_context=step_context)
 
         # --- Step 1: Read placement triggers from step ---------------------
-        placements: tuple[HITLPlacement, ...] = getattr(
-            step, "hitl_placements", ()
-        )
+        placements: tuple[HITLPlacement, ...] = getattr(step, "hitl_placements", ())
         if not placements:
             return await self._dispatch_inner(binding, step, step_context=step_context)
 
@@ -882,10 +870,7 @@ class RuntimeHITLGateComposer:
         # invoked from workflow_driver post-dispatch hook (NOT here at
         # wrap-time composer). The wrap-time composer body ignores
         # VALIDATOR_ESCALATION placements (filtered out of `matching`).
-        matching = [
-            p for p in matching
-            if p.position != HITLPlacementKind.VALIDATOR_ESCALATION
-        ]
+        matching = [p for p in matching if p.position != HITLPlacementKind.VALIDATOR_ESCALATION]
         if not matching:
             return await self._dispatch_inner(binding, step, step_context=step_context)
 
@@ -902,15 +887,11 @@ class RuntimeHITLGateComposer:
             # Matrix-cell resolution at v1.11 MVP still tolerates incomplete
             # binding shapes (binding's persona_tier + engine_class read if
             # present; sentinel fallback for partial-binding test fixtures).
-            handoff_context = _compose_hitl_handoff_context(
-                step_context=step_context, step=step
-            )
+            handoff_context = _compose_hitl_handoff_context(step_context=step_context, step=step)
             persona_tier = getattr(binding, "persona_tier", None)
             engine_class = getattr(binding, "engine_class", None)
             if persona_tier is not None and engine_class is not None:
-                cell = matrix_cell_for(
-                    persona_tier=persona_tier, engine_class=engine_class
-                )
+                cell = matrix_cell_for(persona_tier=persona_tier, engine_class=engine_class)
                 if cell.is_excluded:
                     raise HITLCellExcludedError(
                         f"persona_tier={persona_tier!r} × engine_class="
@@ -932,9 +913,7 @@ class RuntimeHITLGateComposer:
             # available (test-fixture partial-binding case), retain getattr
             # default-True for backward-compatible test behavior; production
             # paths consume the full 4-axis composition per CP-axis surface.
-            hitl_required = _evaluate_hitl_required_tolerant(
-                binding=binding, placement=placement
-            )
+            hitl_required = _evaluate_hitl_required_tolerant(binding=binding, placement=placement)
 
             # --- 4d: Determine effective palette (Reading B v1.22 consumption)
             # Spec v1.22 §14.8.2 step 4d: UNION-intersection of C-CP-19 §19.4
@@ -956,7 +935,9 @@ class RuntimeHITLGateComposer:
                 persona_tier_value = (
                     persona_tier.value
                     if persona_tier is not None and hasattr(persona_tier, "value")
-                    else str(persona_tier) if persona_tier is not None else "unknown"
+                    else str(persona_tier)
+                    if persona_tier is not None
+                    else "unknown"
                 )
                 gate_span.set_attribute("hitl.gate.level", str(gate_level_value))
                 gate_span.set_attribute("hitl.gate.persona_tier", persona_tier_value)
@@ -987,10 +968,7 @@ class RuntimeHITLGateComposer:
                     self.pause_resume_protocol is not None
                     and self.webhook_delivery_composer is not None
                 )
-                if (
-                    joint_binding_present
-                    and _synchrony_attr is SynchronyClass.DURABLE_ASYNC
-                ):
+                if joint_binding_present and _synchrony_attr is SynchronyClass.DURABLE_ASYNC:
                     # §14.8.8.1 step 1: compose HITLEscalationBrief.
                     # fail_class=None per CP spec v1.18 §25.2.X Optional
                     # widening + fail_detail_hash=None per CP spec v1.19
@@ -1046,12 +1024,8 @@ class RuntimeHITLGateComposer:
                 # End of step 4-bis. Fall through to step 4f sync-blocking.
 
                 # --- 4f-bis: Open hitl.invocation.opened span ---------------
-                with tracer.start_as_current_span(
-                    "hitl.invocation.opened"
-                ) as invocation_span:
-                    invocation_span.set_attribute(
-                        "hitl.gate.level", str(gate_level_value)
-                    )
+                with tracer.start_as_current_span("hitl.invocation.opened") as invocation_span:
+                    invocation_span.set_attribute("hitl.gate.level", str(gate_level_value))
                     invocation_span.set_attribute(
                         "hitl.invocation.placement", placement.position.value
                     )
@@ -1064,9 +1038,7 @@ class RuntimeHITLGateComposer:
 
                     # --- 4f: Invoke AskUserQuestion via surface --------------
                     timeout_seconds: float | None = (
-                        placement.timeout / 1000.0
-                        if placement.timeout is not None
-                        else None
+                        placement.timeout / 1000.0 if placement.timeout is not None else None
                     )
                     options: list[HITLResponse] = sorted(palette)
                     try:
@@ -1112,15 +1084,9 @@ class RuntimeHITLGateComposer:
                         ) from timeout_exc
 
                     # --- 4g: Open hitl.invocation.responded span -----------
-                    with tracer.start_as_current_span(
-                        "hitl.invocation.responded"
-                    ) as resp_span:
-                        resp_span.set_attribute(
-                            "hitl.response.class", gate_result.response.value
-                        )
-                        resp_span.set_attribute(
-                            "hitl.response.latency_ms", gate_result.latency_ms
-                        )
+                    with tracer.start_as_current_span("hitl.invocation.responded") as resp_span:
+                        resp_span.set_attribute("hitl.response.class", gate_result.response.value)
+                        resp_span.set_attribute("hitl.response.latency_ms", gate_result.latency_ms)
                         resp_span.set_attribute(
                             "hitl.response.summary_hash",
                             _compute_response_summary_hash(gate_result),
@@ -1130,9 +1096,7 @@ class RuntimeHITLGateComposer:
                     # REJECT path: audit-suppression-on-failure discipline
                     # — audit-compose failures swallowed; HITLGateRejectedError
                     # is primary fault.
-                    raise_on_audit_failure = (
-                        gate_result.response != HITLResponse.REJECT
-                    )
+                    raise_on_audit_failure = gate_result.response != HITLResponse.REJECT
                     try:
                         _, write_result = self._compose_and_persist_audit(
                             parent_action_id=parent_action_id,
@@ -1152,9 +1116,7 @@ class RuntimeHITLGateComposer:
                                 str(hitl_action_id),
                             )
                     except HITLGateAuditComposeError as audit_exc:
-                        gate_span.set_status(
-                            Status(StatusCode.ERROR, "audit-compose-failed")
-                        )
+                        gate_span.set_status(Status(StatusCode.ERROR, "audit-compose-failed"))
                         gate_span.record_exception(audit_exc)
                         raise
 
