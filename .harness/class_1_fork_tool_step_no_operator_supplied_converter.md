@@ -1,9 +1,22 @@
 # Class 1 fork — TOOL_STEP not dispatchable via `api.run`: no operator path to supply `tool_contract_converter`
 
-**Status:** PROPOSING — awaiting operator ratification.
+**Status:** ✅ RATIFIED-AS-READING-B (operator AskUserQuestion 2026-06-01) — apply arc owed (runtime spec amendment + impl). See §0.
 **Filed:** 2026-05-31, during R-100-mvp-real-workflow-execution use-the-product probe (authoring the multi-step + tool-dispatch e2e).
 **Class:** 1 (architectural — the operator-facing tool-dispatch path is structurally unreachable; fix needs a config-surface decision).
 **Blocks:** R-100-mvp-real-workflow-execution AC #2 ("tool dispatch surface exercised ≥1 site") *via the operator `api.run` path*. Does NOT block the tool-dispatch surface at the dispatcher level (U-RT-86 e2e exercises it by hand-constructing the host with a converter).
+
+---
+
+## 0. RATIFICATION (2026-06-01) — Reading B (per-server default policy)
+
+Operator ratified **Reading B** (§3): `MCPClientConfig` gains operator-declared default per-tool sandbox policy; the bootstrap factory builds a converter that stamps every discovered tool from that server with the default. Rationale: MVP-cleanest operator-usable path; minimal operator burden (one tier + blast-radius per MCP server); coarse-but-safe. Rejected: A (per-tool ToolContracts — too much authoring burden), C (plugin path — heaviest + import-security surface), D (defer — leaves AC #2 unreachable via api.run).
+
+**Apply arc owed (mixed-posture bundled-absorption per workspace `CLAUDE.md` §11.4 — needs back-flow docs + clearance marker):**
+1. **Runtime spec amendment** (design-substrate): the §14.9.3 stage-3a `MCPClientHost` factory contract + the MCP-client config contract gain two operator-declared fields `default_minimum_tier: SandboxTier` + `default_blast_radius: BlastRadiusTier` (conservative defaults, e.g. `TIER_2_CONTAINER` / `READ_ONLY`), and `materialize_mcp_client_host_stage` MUST build a default-policy `MCPToolContractConverter` from them. Version bump + change-note + `.harness/clearance/` marker.
+2. **Impl** (harness-runtime): `MCPClientConfig` (`types.py`) +2 fields; `mcp_client_host_factory.py` builds the converter (`lambda tool: ToolContract(name=tool.name, ..., minimum_tier=cfg.default_minimum_tier, blast_radius_tier=cfg.default_blast_radius)`); tests.
+3. **R-100 close** (optional but recommended): extend `test_r100_real_workflow_e2e.py` (or a sibling) with a `TOOL_STEP` against the echo MCP server through `api.run`, closing AC #2 end-to-end via the operator path. Then R-100-mvp-real-workflow-execution → all 4 ACs PASS.
+
+Tracked at roadmap `R-100-tool-step-converter` (ratified; apply arc is the next executable step).
 
 ---
 

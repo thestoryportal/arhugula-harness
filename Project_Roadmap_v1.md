@@ -565,25 +565,30 @@ R-100-mvp-real-workflow-execution:
     RETIRED transits" was stale — both already RETIRED at batches 31-32.
 
 R-100-tool-step-converter:
-  title: TOOL_STEP dispatchable via api.run (operator path for tool_contract_converter)
+  title: TOOL_STEP dispatchable via api.run — per-server default policy converter (Reading B)
   surface: II
-  status: BLOCKED
+  status: ACTIVE   # RATIFIED Reading B 2026-06-01; apply arc (spec amendment + impl) is the next executable step.
   depends_on: []
   blocks: []
-  posture: phase-7
-  scope: { files: [harness-runtime/src/harness_runtime/**, design-substrate/Spec_Harness_Runtime_v1.md], contracts: [C-RT-22, C-RT-30], cross_axis: no }
-  skills: { primary: phase-7-back-flow-routing, secondary: [phase-7-implementation] }
-  advisor_required: yes
+  posture: design-phase   # mixed-posture bundled-absorption: runtime spec amendment + harness-runtime impl (per CLAUDE.md §11.4; needs clearance marker)
+  scope: { files: [design-substrate/Spec_Harness_Runtime_v1.md, harness-runtime/src/harness_runtime/types.py, harness-runtime/src/harness_runtime/bootstrap/factories/mcp_client_host_factory.py, harness-runtime/tests/**, .harness/clearance/**], contracts: [C-RT-22, C-RT-30 §14.9.3], cross_axis: no }
+  skills: { primary: spec-writer, secondary: [phase-7-implementation, verify] }
+  advisor_required: conditional:if the MCPClientConfig field shape diverges from C-RT-22 §14.9.3
   council_required: no
-  verification: { shape: integration, must_pass: ["operator can supply a tool_contract_converter (or per-server ToolContracts) via RuntimeConfig/MCPClientConfig", "a TOOL_STEP dispatches through api.run end-to-end"] }
-  close_shape: { type: PR-merge, artifact: "fix: operator-suppliable MCP tool_contract_converter (or spec amendment)" }
-  next_pointer: R-100-cost-attribution-firing
+  verification: { shape: integration, must_pass: ["MCPClientConfig carries default_minimum_tier + default_blast_radius", "materialize_mcp_client_host_stage builds a default-policy converter from them", "a TOOL_STEP dispatches through api.run end-to-end (echo MCP server)"] }
+  close_shape: { type: PR-merge, artifact: "feat: per-server default tool-contract policy — TOOL_STEP via api.run (Reading B)" }
+  next_pointer: R-001
   notes: >
-    BLOCKED on ratification of `.harness/class_1_fork_tool_step_no_operator_supplied_converter.md`
-    (PROPOSING). Readings: (A) per-server static ToolContract map [RuntimeConfig.tool_contracts
-    may already be the intended path — verify it's consulted at dispatch] / (B) declarative
-    per-server default policy / (C) converter plugin path / (D) spec amendment scoping
-    TOOL_STEP-via-api.run out of MVP. Does not block the MVP (surface exercised at U-RT-86).
+    RATIFIED Reading B (per-server default policy) at operator AskUserQuestion 2026-06-01
+    per `.harness/class_1_fork_tool_step_no_operator_supplied_converter.md` §0. Apply arc:
+    (1) runtime spec amendment — §14.9.3 stage-3a MCPClientHost factory + MCP-client config
+    contract gain `default_minimum_tier: SandboxTier` + `default_blast_radius: BlastRadiusTier`
+    (conservative defaults), factory MUST build a default-policy converter; version bump +
+    change-note + clearance marker. (2) impl — MCPClientConfig +2 fields; mcp_client_host_factory
+    builds the converter; tests. (3) extend test_r100_real_workflow_e2e.py with a TOOL_STEP via
+    api.run → closes R-100-mvp-real-workflow-execution AC #2 (then all 4 ACs PASS).
+    This is a design-phase posture arc (touches design-substrate) — confirm posture before
+    opening per CLAUDE.md §11.6. Does not block the MVP (surface exercised at U-RT-86).
 
 R-100-cost-attribution-firing:
   title: Per-dispatch cost-attribution fires on the real api.run inference path
