@@ -115,19 +115,23 @@ This is the axis that drives the headline reconciliation: it is invisible to the
 
 ### A.6 Reconciled tally
 
+**This table commits to accounting (i)** (canonical CP-21 = drop the CP-axis-local authoring extra `CP-24`; `CP-17` SB-INDEF stays inside the 54). Accounting (i) is preferred because its **pipeline-advanced = 49 matches the one published number that survives** (the published `49/54`). The buckets co-vary with the CP-21-vs-22 choice — so they are stated for *one* accounting here, with the alternative footnoted; the RETIRED *integer* range `46–47` lives in the prose + §C.
+
 | Disposition class | Rows | IDs |
 |---|---|---|
 | substantive-RETIRED | **36** | IS-1/2/5/6/7/8/9 (7); AS-1/2/4/5/8a/8b/8c/8d (8); CP-1/2/3/4/5/6/8/9/10/11/13/14/18/19/20/21/22 (17); OD-2/3/5 (3); CXA-5 (1) |
-| RETIRED-AS-AUTHORING-ONLY | **9** | IS-4, IS-10, AS-9, CP-12, CP-23, CP-24, OD-1, OD-7, OD-8 |
+| RETIRED-AS-AUTHORING-ONLY | **8** | IS-4, IS-10, AS-9, CP-12, CP-23, OD-1, OD-7, OD-8 (CP-24 is the dropped CP-axis-local authoring extra — see note) |
 | RETIRED-AS-BOUNDED-RESIDUAL | **2** | CP-16, OD-6 |
-| **→ Total RETIRED** | **46–47** | (range per the §A.3 CP-21-vs-22 / AS-3↔AS-9 bookkeeping ambiguity) |
+| **→ Total RETIRED** | **46** | (accounting (i); accounting (ii) = 47 — see footnote) |
 | PARTIAL | **3** | OD-4, CXA-1, CXA-4 |
 | STILL-BOUNDED | **2** | CXA-2, CXA-3 |
 | STILL-BOUNDED-INDEFINITELY | **3** | AS-8e, AS-8f, CP-17 |
-| **GRAND TOTAL** | **54** | ✓ |
+| **GRAND TOTAL** | **54** | 36 + 8 + 2 + 3 + 2 + 3 = 54 ✓ |
 
-- **Pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) = 49/54 = 90.7%** — matches the published dashboard figure (RETIRE-READY bucket empty; 46 RETIRED + 3 PARTIAL = 49).
+- **Pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) = 46 + 0 + 3 = 49/54 = 90.7%** — matches the published `49/54`.
 - **Non-pipeline-advanced = 5/54** — `CXA-2`, `CXA-3` (STILL-BOUNDED) + `AS-8e`, `AS-8f`, `CP-17` (STILL-BOUNDED-INDEFINITELY).
+
+> **Footnote — accounting (ii)** (the buckets co-vary; this is the alternative resolution of the §A.3 ambiguity, dropping `CP-17` from the canonical 54 instead of `CP-24`): substantive-RETIRED 36 + authoring-only **9** (adds `CP-24`) + bounded-residual 2 = **47 RETIRED**; PARTIAL 3; STILL-BOUNDED 2; STILL-BOUNDED-INDEFINITELY **2** (`AS-8e`, `AS-8f` — `CP-17` falls outside the 54). `47 + 0 + 3 + 2 + 2 = 54 ✓`; pipeline-advanced **50/54**. Accounting (i) is preferred (its pipeline-advanced matches the published `49`); the honest RETIRED integer is therefore `46–47`, operator to ratify (§C item 1).
 
 ### A.7 The full open set — 8 rows (vs the 3 the per-axis `§4.1` view shows)
 

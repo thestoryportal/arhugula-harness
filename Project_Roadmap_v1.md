@@ -1433,8 +1433,9 @@ R-700-closure-accounting-draft:
     sign-offs (AS-8e/AS-8f/OD-6).
     RESOLVED 2026-06-01: draft landed (Part A 54-row table + Part B 8-entry register). KEY FINDING — the published
     48/54-RETIRED/49-pipeline figure is internally impossible (49 pipeline-advanced ⇒ ≤1 PARTIAL, but OD-4 + CXA-1 +
-    CXA-4 = 3 PARTIAL). Per-row reconciliation = 46–47 RETIRED + 3 PARTIAL + 2 STILL-BOUNDED + 3 SB-INDEF = 54;
-    pipeline-advanced 49–50/54. Root cause: the 5 CXA rows have no per-axis §4.1 + the CXA corrective was never folded
+    CXA-4 = 3 PARTIAL). Per-row reconciliation = 46 RETIRED + 3 PARTIAL + 2 STILL-BOUNDED + 3 SB-INDEF = 54
+    (accounting (i); pipeline-advanced 49 — matches published 49). RETIRED integer is 46–47; the buckets co-vary
+    (accounting (ii) = 47 RETIRED / 2 SB-INDEF / pipeline 50). Root cause: the 5 CXA rows have no per-axis §4.1 + the CXA corrective was never folded
     into the cumulative (ledger §11.1a line 278). True open set = 8 rows (OD-4, CXA-1/2/3/4, AS-8e, AS-8f, CP-17), not 3.
     NOT a regression. 4 flagged Phase-8 ratification items at draft §C (operator owns the final integer; dashboard 48/54
     intentionally NOT overwritten). NEW gap surfaced: CXA-1/2/3/4 + CP-17 have no R-NNN entries — recommend an
