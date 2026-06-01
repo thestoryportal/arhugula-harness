@@ -1088,7 +1088,7 @@ Surface XI = human-facing tooling. Distinct from `.harness/roadmap_status.md` wh
 R-XI-01:
   title: Browser-based operator dashboard MVP — at-a-glance harness development status
   surface: XI
-  status: ACTIVE   # 2026-06-01: trigger met (R-200-ci-pytest RESOLVED); build LANDED (generate.py + roadmap.html + dashboard-deploy.yml) — full RESOLVED gates on operator enabling GitHub Pages (Settings → Pages → Source: GitHub Actions) + first green deploy
+  status: RESOLVED   # 2026-06-01: build LANDED (generate.py + roadmap.html + dashboard-deploy.yml, PR #177); operator made the repo public → Pages enabled (build_type=workflow); dashboard-deploy build+deploy both GREEN (run 26750144964); live at https://thestoryportal.github.io/arhugula-harness/ (HTTP 200). R-XI-02/R-XI-03 (PROPOSED) now unblocked.
   depends_on: [R-200-ci-pytest-pyright-ruff-matrix]
   blocks: [R-XI-02, R-XI-03]
   posture: mode-agnostic
