@@ -108,3 +108,58 @@ jobs:
 
       - name: Pyright (strict; config at root pyproject [tool.pyright])
         run: uv run pyright
+
+  axis-isolation:
+    # R-200-ci-axis-matrix — per-axis test-isolation matrix. Each leg installs
+    # ONLY one library package + its DECLARED workspace deps (`uv sync --package`
+    # prunes the rest), then runs that package's own tests. A test (or src
+    # module) that imports a sibling axis NOT in the package's declared
+    # dependency set fails to import — surfacing cross-axis leaks that the
+    # all-packages `test` job masks (everything is installed there, so an
+    # undeclared sibling import still resolves).
+    #
+    # Test tooling (pytest, pytest-asyncio) lives in the ROOT [dependency-groups]
+    # `dev` group, which `uv sync --package <member>` does not pull (groups are
+    # project-scoped, and a member project declares no `dev` group). We layer it
+    # in via `uv pip install` AFTER the isolated sync — neither package depends
+    # on any harness axis, so the isolation is preserved.
+    #
+    # harness-runtime is intentionally omitted: it depends on every axis, so its
+    # "isolation" is a full install == the blocking `test` job above.
+    #
+    # Enforcement posture (v1): 5 of 6 legs (core / is / as / cp / cxa) are GREEN
+    # in isolation and BLOCKING — a NEW cross-axis leak in any of them fails CI.
+    # The `od` leg is ADVISORY (continue-on-error) because it is RED today: an
+    # undeclared od->cp dependency at
+    #   harness-od/src/harness_od/pause_resume_namespace.py:295
+    #     `from harness_cp.pause_resume_protocol import ...`
+    # plus 4 od test modules import harness_cp, while harness-od declares only
+    # harness-core + harness-as. Tracked at R-200-ci-od-cp-dependency-leak — fix
+    # the dependency-graph drift (declare the dep or relocate the seam), then
+    # drop the `od` advisory carve-out so the whole matrix blocks.
+    name: axis isolation — harness-${{ matrix.axis }}
+    runs-on: ubuntu-latest
+    # Only the known-leaky `od` leg is advisory; the other 5 block on regressions.
+    continue-on-error: ${{ matrix.axis == 'od' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        axis: [core, is, as, cp, od, cxa]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync ONLY harness-${{ matrix.axis }} (+ declared deps; prune siblings)
+        run: uv sync --package harness-${{ matrix.axis }}
+
+      - name: Layer test tooling (no harness deps — isolation preserved)
+        run: uv pip install "pytest>=8.3" "pytest-asyncio>=0.25"
+
+      - name: Pytest harness-${{ matrix.axis }}/tests in isolation (excludes e2e)
+        run: uv run --no-sync pytest harness-${{ matrix.axis }}/tests -m "not e2e"
