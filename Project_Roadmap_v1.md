@@ -1677,20 +1677,21 @@ R-CXA-3-cp-as-seam:
   notes: STILL-BOUNDED per R-700 — no cp_as_wiring.py module (consistent with spec §12); NOT 'N/A' (a real open seam). Neither path in-session-actionable. Register §B-14.
 
 R-CXA-4-od-multi-seam:
-  title: CXA-4 (OD->IS/AS/CP) seam completion — remaining ~21 of 26 edges + production callers
+  title: CXA-4 (OD->IS/AS/CP) seam — GROUNDED-NO-WIREABLE; follow-on is CXA convention-formalization (design-phase)
   surface: I
   status: PROPOSED
   depends_on: []
   blocks: [R-700-phase-8-substitution-accounting]
-  posture: phase-7
-  scope: { files: [harness-runtime/src/harness_runtime/lifecycle/od_is_wiring.py, od_as_wiring.py, od_cp_wiring.py], contracts: [CXA v2.18 §2.3.4-§2.3.6 (26 edges)], cross_axis: yes }
-  skills: { primary: phase-7-cross-axis-composition, secondary: [] }
+  posture: design-phase    # was phase-7; grounding 2026-06-01 found 0 wireable edges → no phase-7 wiring task; the real follow-on is a CXA narrow-scope revision (design-substrate)
+  scope: { files: [design-substrate/Cross_Axis_Composition_Document_vNEXT.md (convention-formalization of stale OD->AS/OD->CP placeholder rows)], contracts: [CXA v2.18 §2.3.5-§2.3.6 (26 OD-outbound edges; §2.5 = 1 genuine + 19 convention + 6 phase-2-runtime)], cross_axis: yes }
+  skills: { primary: spec-writer, secondary: [council-orchestrator] }
   advisor_required: no
-  council_required: no
-  verification: { shape: e2e, must_pass: ["remaining ~21 of 26 edges materialized at the runtime composition layer (OR operator scope-narrowing of the 26-edge enumeration)"] }
-  close_shape: { type: PR-merge, artifact: "feat(cxa): complete OD->multi seam", cascade: [] }
+  council_required: no    # nameable-tension discriminator: no real voice-tension (mirrors v2.18 C3-15 cleanup, a stale-row correction)
+  verification: { shape: grep, must_pass: ["CXA narrow-scope revision deletes/remaps the stale OD->AS/OD->CP placeholder U-AS-NN/U-CP-NN rows (mirroring v2.18 C3-15 OD->IS cleanup); §2.1 OD-outbound count + §2.5 split refreshed; clearance marker filed"] }
+  close_shape: { type: PR-merge, artifact: "back-flow: CXA vNEXT — formalize OD-outbound convention rows", cascade: [workspace CLAUDE.md §1.1 OD-row + §2.4 CXA-row bump] }
   next_pointer: null
-  notes: PARTIAL per R-700 — 3 wiring modules exist + stage into bootstrap; OD audit-write seam exercised (6 callers); only ~5 of 26 edges materialized (batch-42). Register §B-14.
+  notes: |
+    GROUNDING SWEEP 2026-06-01 (R-CXA-4 grounding-first; operator-picked) — the prior "~5 of 26 / ~21 remaining" framing was a STALE-CARRY MIS-FRAMING (CLAUDE.md §10.5). Per CXA §2.5 the 26 OD-outbound edges = 1 genuine typed seam + 19 convention + 6 phase-2-runtime. The lone genuine data-flow edge (U-OD-30->U-IS-11 audit_writer.append) is ALREADY WIRED (4 real producers at cost_attribution_{llm,tool,validator,webhook}_dispatch.py:{246,299,238,198}); the 6 phase-2-runtime edges are ALREADY materialized at bootstrap stage 6 (stage_6_cxa_wiring.py:96/104/108); the 19 convention edges are satisfied by stage-6 verify_* + manifest-resolver and the per-unit OD->AS/OD->CP rows carry STALE U-AS-NN/U-CP-NN placeholders with no manifest carrier (OD aggregate manifest targets only U-IS-17/U-AS-33/U-CP-54/U-CP-55). ZERO unmaterialized edge has a real OD-side producer — the lone non-wired "genuine" seam U-OD-29->U-AS §12.4 is a halted-leaf symbol-import (FF-3 Class 1 fork). THERE IS NO WIRING TASK (0 wireable; mirrors R-CXA-1 producer-discovery outcome [[r-cxa-seam-wiring-is-producer-discovery]], 3rd instance). R-CXA-4 stays PARTIAL; ZERO production code from grounding. Follow-on = CXA convention-formalization (design-substrate, operator-owned). Register §B-14.
 ```
 
 ---
