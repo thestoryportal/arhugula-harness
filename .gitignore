@@ -8,6 +8,8 @@
 .harness/observability.db
 .harness/*.db
 .harness/*.db-journal
+.harness/*.db-wal
+.harness/*.db-shm
 
 # Python build artifacts
 __pycache__/
