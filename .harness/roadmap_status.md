@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `6d92366b678d` |
-| `last_refreshed` | 2026-06-01T09:00:00-06:00 |
-| `git_head` | `29148879` (main) — `workflow v1.14: NEW §7.5 Process-discipline catalogue (#201)` |
+| `workspace_state_hash` | `460b766bedcc` |
+| `last_refreshed` | 2026-06-01T09:30:00-06:00 |
+| `git_head` | `4eaf42ee` (main) — `ops: ratify R-600-v1-14 must_pass[1] N/A (#203)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 43 |
 
@@ -24,13 +24,13 @@
 
 **`R-007` + `R-009` RESOLVED (PR #200 `phase-7: ... batch-51`).** Both flipped BLOCKED → eligible per §4 step 3 once `R-100-mvp-real-workflow-execution` RESOLVED (2026-06-01); a per-substitution X-AL-2 condition-(B) audit (advisor-prompted) split them: **H_T-OD-3 → substantive RETIRED** (`HarnessCompositeSampler` live at MVP via `materialize_tracer_provider_stage`; 7a-scaffold sampler no longer invoked; "tail-keep at OTLP collector" reframed as R-430 feature-validation, NOT a retirement gate — gate-text-stale-vs-production-landings, sub-species 10's 3rd closure); **H_T-OD-6 → RETIRED-AS-BOUNDED-RESIDUAL** (`flush_to_sqlite` dormant at MVP / zero callers → boundary unmoved → substantive RETIRED would be silent absorption; closed bounded-residual per X-AL-2 §5.3 — **FIRST bounded-residual close in the ledger**; gated on R-420/R-421). Workspace RETIRED 46→**48/54 (88.9%)**; OD-axis RETIRE-READY bucket EMPTY; pipeline-advanced unchanged 49/54.
 
-**`R-600-workflow-v1-14-amendment` RESOLVED (PR #201).** `design-substrate/Project_Workflow_v1_14.md` — NEW **§7.5 Process-discipline catalogue** under §7 (sibling to §7.4), following the v1.9 §7.4.7 framework-establishing precedent. 4 disciplines seeded (PD-1 halt-route-split-AC; PD-2 use-the-product-probe; PD-3 verification-shape-grep-vs-e2e w/ §13.1 cross-ref; PD-4 plan-revision-against-not-yet-built-substrate, single-unit-multi-rescope + SUPERSEDES the U-RT-111 v2.36→v2.38 §7.4.7.2-sub-species framing) + OPEN clause + 5 parked candidates. §10.9 adversarial-gate run → CLEAR (0/0/1; F1-01 inline-fixed). **Open item: `must_pass[1]` ("derivation rule canonicalized at workflow doc layer") marked N/A-as-malformed — owed operator confirmation, else a follow-on tweak.**
+**`R-600-workflow-v1-14-amendment` RESOLVED (PR #201).** `design-substrate/Project_Workflow_v1_14.md` — NEW **§7.5 Process-discipline catalogue** under §7 (sibling to §7.4), following the v1.9 §7.4.7 framework-establishing precedent. 4 disciplines seeded (PD-1 halt-route-split-AC; PD-2 use-the-product-probe; PD-3 verification-shape-grep-vs-e2e w/ §13.1 cross-ref; PD-4 plan-revision-against-not-yet-built-substrate, single-unit-multi-rescope + SUPERSEDES the U-RT-111 v2.36→v2.38 §7.4.7.2-sub-species framing) + OPEN clause + 5 parked candidates. §10.9 adversarial-gate run → CLEAR (0/0/1; F1-01 inline-fixed). **`must_pass[1]` ("derivation rule canonicalized at workflow doc layer") N/A — operator-RATIFIED at AskUserQuestion 2026-06-01 (PR #203): a speculative pre-survey criterion inconsistent with the entry's actual §7.5-catalogue scope; the derivation rule's home stays roadmap §4 + CLAUDE.md §12. Entry FULLY CLOSED on must_pass[0]+[2].**
 
 **§4 re-derivation (clean-main, 2026-06-01 post-#201):** §I — IS 9/9 + AS active-9/9 + CP 21/22 + **OD now 7/8 RETIRED + 1 PARTIAL (OD-4)**; the only Claude-executable §I lever left is **R-008** (OD-4 PARTIAL → RETIRE-READY — needs §13.1 per-session toggle (session-control substrate) + §13.2 tokenization; further substrate before transit, not trivially closeable). §II/§III complete; §IV + §V (`R-410..R-440`) infra-gated; §VII R-600 sweep recurring (ACTIVE-SURVEYED). **No auto-derivable Claude-executable ACTIVE row remains.** Remaining work is operator-owned: (a) the operator-gated `R-100-mvp-real-workflow-execution` live inference e2e (RESOLVED at deterministic level; not fired unilaterally per `[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`); (b) `R-700-phase-8-substitution-accounting` (BLOCKED — needs comprehensive operator review; blocker set now shorter: OD-4 PARTIAL + AS-8e/AS-8f DEFERRED-INDEFINITELY); (c) `R-XI-02`/`R-XI-03` (PROPOSED dashboard iteration-2).
 
 **`R-XI-01` (operator dashboard MVP) — RESOLVED + LIVE** at **https://thestoryportal.github.io/arhugula-harness/** (HTTP 200).
 
-**(This PR: terminating refresh post-PR-201 — dashboard-only. PR #201 closed R-600-workflow-v1-14-amendment (§7.5 catalogue). PR #200 closed R-007 + R-009 (OD-3/OD-6 retirement, batch-51). PR #198 ran the fork-doc cadence sweep. PR #196 ran R-600-pattern-bake-in-sweep. PR #194 closed R-400.)**
+**(This PR: terminating refresh post-PR-203 — dashboard-only. PR #203 ratified the R-600-v1-14 must_pass[1] N/A disposition (entry fully closed). PR #201 closed R-600-workflow-v1-14-amendment (§7.5 catalogue). PR #200 closed R-007 + R-009 (OD-3/OD-6 retirement, batch-51). PR #198 ran the fork-doc cadence sweep. PR #196 ran R-600-pattern-bake-in-sweep.)**
 
 ---
 
@@ -38,7 +38,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `ops-roadmap-refresh-post-201` | *(terminating refresh §12.2.1)* | mode-agnostic — records PRs #200 (R-007/R-009) + #201 (R-600-v1-14); `workspace_state_hash` recompute (`4a0e2d4647c0` → `6d92366b678d`) covering both. Dashboard-only (`.harness/roadmap_status.md`); title `ops: roadmap status refresh post-PR-201` → next §12.1 audit sees expected lag-by-one |
+| *(this PR)* | `ops-roadmap-refresh-post-203` | *(terminating refresh §12.2.1)* | mode-agnostic — records PR #203 (R-600-v1-14 must_pass[1] N/A ratification); `workspace_state_hash` recompute (`6d92366b678d` → `460b766bedcc`). Dashboard-only (`.harness/roadmap_status.md`); title `ops: roadmap status refresh post-PR-203` → next §12.1 audit sees expected lag-by-one |
 
 ---
 
