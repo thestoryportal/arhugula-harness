@@ -1121,6 +1121,12 @@ R-600-workflow-v1-14-amendment:
     §2.1 row bump v1.13→v1.14 + §10.2/§10.3 stale-v1.12-cite refresh + clearance marker
     .harness/clearance/Project_Workflow-v1_14-cleared-2026-06-01.md. ZERO cross-axis cascade. See
     design-substrate/Project_Workflow_v1_14.md + .harness/R-600-pattern-bake-in-sweep.md §2.
+    must_pass[1] DISPOSITION — N/A operator-RATIFIED at AskUserQuestion 2026-06-01 (post-#201): the
+    criterion ("next-action derivation rule canonicalized at workflow doc layer") was a speculative
+    pre-survey draft inconsistent with the entry's actual scope (a §7.5 process-discipline catalogue,
+    not a next-action-derivation surface); the derivation rule's canonical home stays roadmap §4 +
+    CLAUDE.md §12 (no second home / no drift). Entry stands RESOLVED on must_pass[0] (§7.5 authored) +
+    must_pass[2] (clearance marker filed); must_pass[1] retired as malformed. Fully closed.
 
 R-600-pattern-bake-in-sweep:
   title: Sweep workspace memory for pattern candidates ready for workflow-doc promotion
