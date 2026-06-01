@@ -1526,7 +1526,7 @@ R-500-multi-tenant-deployment:
 R-800-external-mcp-server:
   title: Real external MCP server connection (host lifecycle wiring)
   surface: IX
-  status: PROPOSED
+  status: RESOLVED
   depends_on: []
   blocks: []
   posture: phase-7
@@ -1537,7 +1537,20 @@ R-800-external-mcp-server:
   verification: { shape: e2e, must_pass: ["bootstrap stage-3a calls host.start() after construction (registry populated)", "host.shutdown() wired at stage-7 teardown", "live e2e against a real external MCP server with operator MCPClientConfig.connection_url"] }
   close_shape: { type: PR-merge, artifact: "feat(mcp): wire external MCP host lifecycle", cascade: [] }
   next_pointer: null
-  notes: Host materialized but host.start() never called at stage-3a (registry empty); host.shutdown() zero callers. Converter (v1.40) + sandbox-resolver (v1.41) landed. Register §B-10.
+  notes: >
+    RESOLVED 2026-06-01 — all 3 must_pass met; verified empirically (no production change owed).
+    must_pass[1] host.start() = DONE at stage_3a_cp_clients.py:59; must_pass[2] host.shutdown() = DONE
+    at shutdown.py:484-489 — BOTH landed earlier at PR #172 (spec v1.41 §14.9.8 Gaps B/F), NOT at a new
+    R-800 arc. must_pass[3] real-external-MCP e2e = SATISFIED by test_u_rt_86 (production factory
+    materialize_mcp_client_host_stage + real stdio subprocess + handshake + list_tools + TOOL_STEP
+    dispatch + 7-attr mcp.* span) — unconditional, no LLM, 9/9 green. The PROPOSED-era "host.start()
+    never called / host.shutdown() zero callers" framing was STALE (authored at PR #209; described
+    pre-#172 state) — a stale-carry-text disposition (CLAUDE.md §10.5). RESIDUAL (out of R-800 scope):
+    the FULL api.run TOOL_STEP path (must_pass[3] strict reading) is Gap D / R-100 AC#2 — bootstrap
+    pings ≥1 provider regardless of step kind, so it is operator-gated by design (not fired
+    unilaterally). A bootstrap-skip-provider-ping-for-inference-free-workflows change is a Class 1
+    fork candidate (C9⊥C11 nameable tension → dyadic-council-eligible per §10.9) if the operator
+    opens it. Register §B-10.
 
 R-810-files-api-integration:
   title: Files API integration (files.* namespace — AS-8e / CP-17)

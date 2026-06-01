@@ -26,15 +26,19 @@
 
 - **Tier A — Phase-8 closure residuals (declare Phase 8 done; operator-owned):** `R-700-phase-8-substitution-accounting` (BLOCKED — ratify the 46–47-vs-48 integer + bounded-residual sign-offs for AS-8e/8f/OD-6); the `harness.toml` config-discovery fork (`R-100-mvp-config-discovery`, BLOCKED).
 - **Tier B — forward activation (the menu):**
-  - **Claude-executable now (impl):** `R-800-external-mcp-server` (wire `host.start()`/`shutdown()` at bootstrap stage-3a/7); `R-830-memory-tool-production-backend` (cloud backend class); `R-300-multi-llm-routing-activation` (bind the `infer()` composition seam); `R-CXA-1`/`R-CXA-2`/`R-CXA-4` seams (mechanical wiring — some gate on engine-layer substrate).
+  - **Claude-executable now (impl):** `R-300-multi-llm-routing-activation` (bind the `infer()` composition seam); `R-830-memory-tool-production-backend` (cloud backend class); `R-CXA-1`/`R-CXA-2`/`R-CXA-4` seams (mechanical wiring — some gate on engine-layer substrate). *(`R-800-external-mcp-server` ✅ RESOLVED 2026-06-01 — was already wired at PR #172; see below.)*
   - **Operator-gated (creds / infra):** `R-300-multi-llm-second-provider` (OpenAI+Ollama creds + mixed-provider fixture); `R-410..R-440` sandbox/deployment/secrets (real container runtime, server, collector, secrets backend); `R-420`/`R-421` SELF_HOSTED/MANAGED_CLOUD e2e; `R-500-multi-tenant-deployment`.
   - **Deferred-by-design (operator-discretion timing at a managed-cloud arc):** `R-810-files-api-integration` (AS-8e/CP-17); `R-820-managed-agents-integration` (AS-8f); `R-CXA-3-cp-as-seam`.
   - **`⚖️ council-eligible` when opened (named two-voice tension):** R-410/411/412 (C10⊥C11), R-440 (C8⊥C11), R-500 (C7+C8⊥C11), R-008 (C7⊥eval-utility), R-300-routing (C5⊥C9⊥capability).
 - **Dashboard iteration-2:** `R-XI-02`/`R-XI-03` (PROPOSED).
 
-**Recommended next Claude-executable step:** `R-800-external-mcp-server` (host-lifecycle wiring is concretely impl-ready and unblocks the operator `api.run` TOOL_STEP path) — *but do not auto-start*; the operator drives which item we close next per "move through them together." The R-100 live e2e remains operator-gated (not fired unilaterally per `[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`).
+**Recommended next Claude-executable step:** `R-300-multi-llm-routing-activation` (bind the `infer()` composition seam — `routing_core_surface.infer()` is a `NotImplementedError` stub with zero non-test callers; the layered-routing *selection* path is unexercised at MVP) — *but do not auto-start*; the operator drives which item we close next per "move through them together." Note `R-300-routing` is `⚖️ council-eligible` (C5⊥C9⊥capability tension). The R-100 live e2e remains operator-gated (not fired unilaterally per `[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`).
 
 **(R-700 context, for reference.)** The R-700 draft (PR #207) found the published `48/54 RETIRED / 49 pipeline` internally impossible (3 PARTIAL: OD-4 + CXA-1 + CXA-4); per-row truth `46 RETIRED + 3 PARTIAL + 2 STILL-BOUNDED + 3 SB-INDEF = 54` (accounting (i); RETIRED integer 46–47, buckets co-vary); true open set 8 rows; root cause = CXA never folded into the cumulative (ledger §11.1a line 278). NOT a regression; the operator-ratified `48/54` is carried forward as a flagged Phase-8 ratification item (draft §C).
+
+---
+
+**`R-800-external-mcp-server` RESOLVED (this session) — verified already complete; no production change.** The operator picked R-800 from the post-Phase-8 menu; pre-substantive empirical grounding found **all 3 must_pass already met**: `host.start()` at `stage_3a_cp_clients.py:59` + `host.shutdown()` at `shutdown.py:484-489` (both landed at **PR #172**, spec v1.41 §14.9.8 Gaps B/F), and a **real external stdio MCP server** exercised CI-green & unconditional at `test_u_rt_86` (production factory + real subprocess + handshake + list_tools + TOOL_STEP dispatch + 7-attr `mcp.*` span; 9/9 pass with `test_ac2_bootstrap_path_wiring`). The PROPOSED-era `notes` + register §B-10 "unwired at bootstrap" framing was **stale** (authored PR #209; described pre-#172 state) — a stale-carry-text disposition (CLAUDE.md §10.5), now refreshed. **Residual (out of R-800 scope):** the full `api.run` TOOL_STEP path is **Gap D / R-100 AC#2** — bootstrap pings ≥1 provider regardless of step kind → operator-gated by design; a bootstrap-skip-provider-ping-for-inference-free-workflows change is a Class 1 fork candidate (C9⊥C11 → dyadic-council-eligible) if opened. ZERO src/spec/test change. Mode-agnostic.
 
 ---
 
@@ -48,7 +52,7 @@
 
 **`R-XI-01` (operator dashboard MVP) — RESOLVED + LIVE** at **https://thestoryportal.github.io/arhugula-harness/** (HTTP 200).
 
-**(This PR: substantive — lands the `R-700-closure-accounting-draft` deliverable + marks the entry RESOLVED + this dashboard narrative. PR #206 was the terminating refresh post-PR-205. PR #205 landed the `R-700-closure-accounting-draft` entry + resume checkpoint. PR #201 closed R-600-workflow-v1-14-amendment. PR #200 closed R-007 + R-009.)**
+**(This PR: substantive — marks `R-800-external-mcp-server` RESOLVED + refreshes the stale "unwired at bootstrap" framing across `Project_Roadmap_v1.md` §5.12 + register §B-10 + this dashboard. Mode-agnostic; ZERO src/spec/test change. A follow-on terminating refresh PR is owed per §12.2.1. PR #210 was the terminating refresh post-PR-209. PR #209 brought post-Phase-8 under the R-NNN discipline. PR #207 landed the R-700 closure-accounting draft.)**
 
 ---
 
@@ -56,7 +60,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `ops-roadmap-refresh-post-209` | *(terminating refresh §12.2.1)* | mode-agnostic — records PR #209 (post-Phase-8 register + 12 R-NNN entries + dashboard panel); `workspace_state_hash` recompute (`e95a2e943993` → `7afa7c5bb308`) + `git_head` → `73839e10` (#209 merge). Dashboard-only (`.harness/roadmap_status.md`); title `ops: roadmap status refresh post-PR-209` → next §12.1 audit sees expected lag-by-one (carve-out §12.1 step 6). |
+| *(this PR)* | `roadmap-r-800-external-mcp-resolved` | `R-800-external-mcp-server` (RESOLVED) | mode-agnostic substantive — marks R-800 RESOLVED (already wired at PR #172) + refreshes stale "unwired at bootstrap" framing at `Project_Roadmap_v1.md` §5.12 + register §B-10 (summary + detail) + dashboard. ZERO src/spec/test change. NOT a terminating refresh (substantive title) → a follow-on `ops: roadmap status refresh` PR is owed per §12.2.1; `workspace_state_hash` recompute deferred to that PR. |
 
 ---
 
@@ -64,11 +68,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #210 (`cd5bf0a`) | 2026-06-01 | **Terminating refresh post-PR-209 (§12.2.1).** Recomputed `workspace_state_hash` `e95a2e943993` → `7afa7c5bb308` + `git_head` → `73839e10` against the #209 merge. Dashboard-only; recursion-stopping fixed point (lag-by-one). |
 | PR #209 (`73839e1`) | 2026-06-01 | **Post-Phase-8 brought under the R-NNN discipline + dashboard section.** `.harness/post-phase-8-forward-register.md` + **12 NEW R-NNN entries** (§5.10–§5.14: R-300 multi-LLM / R-500 multi-tenant / R-800 external / R-900 research / R-CXA-1..4) + §9 IV/VI/IX/X → `decomposed` (closes the no-R-NNN-entry gap R-700 surfaced) + NEW dashboard "Post-Phase-8 forward register" panel (`generate.py` `post_phase_8()`; 20 items, LIVE). Memory: `post-phase-8-forward-tracking`. ruff (lint+format) fixed at follow-on commit. Mode-agnostic. |
 | PR #208 (`01cd0fa`) | 2026-06-01 | **Terminating refresh post-PR-207 (§12.2.1).** Recomputed `workspace_state_hash` `4d3120974cef` → `e95a2e943993` + `git_head` → `d1eaf75b` against the #207 merge (verified by reproducing the prior anchor; PRS empty / FORKS 43 / batch-51). Dashboard-only; recursion-stopping fixed point (lag-by-one). |
 | PR #207 | 2026-06-01 | **R-700-closure-accounting-draft RESOLVED — definitive remaining-to-closure log drafted.** `.harness/R-700-phase-8-closure-accounting-draft.md`: Part A 54-row substitution log (per-row disposition + tally) + Part B 8-entry beyond-substitutions register (R-410..R-440 + R-100-config-discovery; vendor + persona/surface + spec cites). **KEY FINDING:** published `48/54 RETIRED / 49 pipeline` is internally impossible (3 PARTIAL: OD-4 + CXA-1 + CXA-4); per-row truth = `46 RETIRED + 3 PARTIAL + 2 SB + 3 SB-INDEF = 54` (accounting (i); RETIRED integer 46–47, buckets co-vary); true open set = 8 rows (not 3) because CXA has no §4.1 + CXA corrective never folded in (ledger §11.1a line 278). NOT a regression. Dashboard `48/54` NOT overwritten — flagged as Phase-8 ratification item. NEW gap: CXA-1/2/3/4 + CP-17 have no R-NNN entries. Advisor-passed. Mode-agnostic; feeds BLOCKED `R-700-phase-8-substitution-accounting` (operator owns final integer). |
 | PR #201 (`2914887`) | 2026-06-01 | **R-600-workflow-v1-14-amendment RESOLVED — NEW §7.5 Process-discipline catalogue.** `Project_Workflow_v1_14.md`: §7.5 under §7 (sibling to §7.4), v1.9 framework-establishing precedent. 4 disciplines seeded (PD-1 halt-route-split-AC / PD-2 use-the-product-probe / PD-3 verification-shape-grep-vs-e2e / PD-4 plan-revision-against-not-yet-built-substrate, SUPERSEDES the v2.36→v2.38 §7.4.7.2-sub-species framing) + OPEN clause + 5 parked candidates failing the §7.5.1 independence gate. §10.9 adversarial-gate CLEAR (0/0/1; F1-01 inline-fixed). Co-published CLAUDE.md §2.1 v1.13→v1.14 + §10.2/§10.3 refresh + clearance marker. Open: `must_pass[1]` N/A-as-malformed owed operator confirm. Design-phase; ZERO cross-axis cascade. |
-| PR #200 (`a541b32`) | 2026-06-01 | **R-007 + R-009 RESOLVED — OD-3 RETIRED + OD-6 RETIRED-AS-BOUNDED-RESIDUAL (batch-51); 2 R-700 blockers drained.** Per-substitution X-AL-2 condition-(B) audit: OD-3 substantive RETIRED (sampler live at MVP; gate-text-stale-vs-production-landings, sub-species 10's 3rd closure; tail-keep-at-collector = R-430 feature-validation); OD-6 RETIRED-AS-BOUNDED-RESIDUAL (FIRST in ledger; `flush_to_sqlite` dormant at MVP; gated on R-420/R-421). Operator-ratified AUQ. Workspace RETIRED 46→48/54 (88.9%); OD-axis RETIRE-READY bucket EMPTY; pipeline-advanced unchanged 49/54. ZERO src/spec/test change. Phase-7 retirement. |
 
 ---
 
