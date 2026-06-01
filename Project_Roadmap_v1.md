@@ -533,7 +533,7 @@ R-100-mvp-config-discovery:
 R-100-mvp-real-workflow-execution:
   title: Real multi-step workflow at SOLO_DEVELOPER tier against Anthropic provider
   surface: II
-  status: ACTIVE   # 3 of 4 ACs PASS (AC #1 + #3 + #4) via test_r100_real_workflow_e2e.py. AC #4 cost fork RESOLVED-AS-INVALID 2026-06-01 (test-bug). AC #2 (tool dispatch via api.run) NOT CLOSED and NOT one gap away: converter CONFIG SURFACE applied at spec v1.40 (R-100-tool-step-converter RESOLVED), but a pre-merge completeness critic (PR #171) found ≥2 more bootstrap gaps (B: stage-3a never calls host.start() → converter unreachable; C: no sandbox_decision_resolver; D? provider construction). AC #2 closes only via a full-path echo-via-api.run e2e at R-100-tool-step-sandbox-resolver (the AC#2-closing arc).
+  status: RESOLVED   # 4 of 4 ACs PASS. AC #1 + #3 + #4 via test_r100_real_workflow_e2e.py (real Anthropic, prior operator-authorized runs; AC #4 cost fork RESOLVED-AS-INVALID 2026-06-01 test-bug). AC #2 (TOOL_STEP dispatch via api.run) CLOSED 2026-06-01 — test_r100_ac2_tool_step_e2e.py green via live local ollama (free, zero-token reachability ping; echo-MCP TOOL_STEP subprocess, not inference) after PR #181 fixed the test's ollama branch (ProviderFamily.OLLAMA → LOCAL_OPEN_WEIGHT). All 5 bootstrap gaps {B,C,D,E,F} wired at spec v1.41 §14.9.8 (PR #172).
   depends_on: [R-100-mvp-operator-usable-cli-shipped]
   blocks: [R-001, R-004, R-100-mvp-yaml-loader-shipped, R-300-multi-llm-second-provider]
   posture: phase-7
@@ -597,7 +597,7 @@ R-100-tool-step-converter:
 R-100-tool-step-sandbox-resolver:
   title: AC#2-closing arc — wire the full 5-gap bootstrap TOOL_STEP path {D,B,C,E,F} + echo-via-api.run e2e
   surface: II
-  status: APPLIED-PENDING-OPERATOR-E2E   # Reading B ratified + spec v1.41 §14.9.8 + all 5 gaps wired + 18 CI-green tests (PR TBD). AC #2 closes ONLY on the operator's live e2e run (Gap D needs a live provider; skipif-gated; live-green is operator's run — NOT auto-closable).
+  status: RESOLVED   # Reading B ratified + spec v1.41 §14.9.8 + all 5 gaps wired + 18 CI-green tests (PR #172). AC #2 CLOSED 2026-06-01 — the skipif-gated test_r100_ac2_tool_step_e2e.py ran green against a live LOCAL ollama daemon (Gap D constructible provider via a zero-token reachability ping; the dispatch is an echo-MCP TOOL_STEP, not inference — no paid call). PR #181 fixed the test's dead ollama branch (ProviderFamily.OLLAMA → LOCAL_OPEN_WEIGHT) that had blocked the free route; the Anthropic-key route was already viable. Self-verifiable locally for free; no operator-gated paid call required.
   depends_on: [R-100-tool-step-converter]
   blocks: []
   posture: design-phase   # NEW §14.9.x resolver contract (spec amendment) + 4 impl/config fixes + e2e; mixed-posture bundled-absorption
