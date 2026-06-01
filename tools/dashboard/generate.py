@@ -313,6 +313,12 @@ HTML_TEMPLATE = """<!doctype html>
     <div id="status-board" class="space-y-4"></div>
   </section>
 
+  <section class="card p-5" id="pp8-card">
+    <h2 class="text-sm uppercase tracking-wide text-violet-300 mb-2">Post-Phase-8 forward register</h2>
+    <div id="pp8-summary" class="text-xs text-gray-400 mb-3"></div>
+    <div id="pp8-board" class="space-y-3"></div>
+  </section>
+
   <div class="grid md:grid-cols-2 gap-6">
     <section class="card p-5">
       <h2 class="text-sm uppercase tracking-wide text-fuchsia-300 mb-3">In-flight PRs</h2>
@@ -399,6 +405,22 @@ document.getElementById("status-board").innerHTML = Object.keys(bySurface).sort(
   return `<div><div class="text-xs text-gray-400 mb-1">Surface ${{esc(surf)}} <span class="text-gray-600">(${{items.length}})</span></div><div class="flex flex-wrap gap-1.5">${{chips}}</div></div>`;
 }}).join("");
 
+// post-Phase-8 forward register
+const pp8 = DATA.post_phase_8 || {{}};
+const pp8g = pp8.groups || {{}};
+const PP8_NAMES = {{ IV:"Multi-LLM (IV)", V:"Multi-deployment (V)", VI:"Multi-tenant (VI)", IX:"External integrations (IX)", X:"Research (X)", CXA:"Cross-axis seams" }};
+document.getElementById("pp8-summary").innerHTML =
+  `<strong class="text-white">${{pp8.count||0}} forward items</strong> across ${{Object.keys(pp8g).length}} groups — full detail at <code class="text-indigo-200">${{esc(pp8.register||"")}}</code>. ` +
+  `Phase 8 closes the substitution accounting (88.9% RETIRED — legitimate per X-AL-2); these are the <strong class="text-white">activation / deployment / integration</strong> axis, tracked under the same R-NNN discipline (status + memory-on-close + next-action).`;
+document.getElementById("pp8-board").innerHTML = Object.keys(pp8g).sort().map(g => {{
+  const items = pp8g[g].slice().sort((a,b)=>(STATUS_RANK[a.status]??9)-(STATUS_RANK[b.status]??9) || a.id.localeCompare(b.id));
+  const chips = items.map(a => {{
+    const c = STATUS_COLORS[a.status] || "bg-gray-700 text-gray-200";
+    return `<span class="chip ${{c}}" title="${{esc(a.title)}}">${{esc(a.id)}}</span>`;
+  }}).join(" ");
+  return `<div><div class="text-xs text-violet-300 mb-1">${{esc(PP8_NAMES[g]||g)}} <span class="text-gray-600">(${{items.length}})</span></div><div class="flex flex-wrap gap-1.5">${{chips}}</div></div>`;
+}}).join("");
+
 // PRs
 const prs = DATA.open_prs || [];
 document.getElementById("prs").innerHTML = prs.length ? prs.map(p =>
@@ -438,6 +460,34 @@ def render_html(data: dict) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Source 6 — post-Phase-8 forward register (forward surfaces + CXA seams).
+# --------------------------------------------------------------------------- #
+
+_FORWARD_SURFACES = {"IV", "V", "VI", "IX", "X"}
+
+
+def post_phase_8(actions: list[dict]) -> dict:
+    """Forward-activation items: forward surfaces {IV,V,VI,IX,X} + CXA seams.
+
+    Tracks `.harness/post-phase-8-forward-register.md` under the same R-NNN
+    discipline as all prior work — these items flow through next-action
+    derivation + memory-on-close like any other roadmap entry.
+    """
+    items = [
+        a for a in actions if a.get("surface") in _FORWARD_SURFACES or a["id"].startswith("R-CXA")
+    ]
+    groups: dict[str, list[dict]] = {}
+    for a in items:
+        label = "CXA" if a["id"].startswith("R-CXA") else (a.get("surface") or "?")
+        groups.setdefault(label, []).append(a)
+    return {
+        "register": ".harness/post-phase-8-forward-register.md",
+        "count": len(items),
+        "groups": groups,
+    }
+
+
 def build(root: Path) -> dict:
     dash_md = (root / ".harness" / "roadmap_status.md").read_text(encoding="utf-8")
     roadmap_md = (root / "Project_Roadmap_v1.md").read_text(encoding="utf-8")
@@ -450,6 +500,7 @@ def build(root: Path) -> dict:
         "cadence": parse_cadence(root),
         "axis_retirement": parse_axis_retirement(root),
         "operator_gates": operator_gates(actions, dashboard),
+        "post_phase_8": post_phase_8(actions),
     }
 
 

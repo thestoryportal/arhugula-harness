@@ -1458,6 +1458,228 @@ R-700-phase-8-substitution-accounting:
   notes: Phase 7 closure gate. Requires comprehensive operator review.
 ```
 
+### 5.10 Multi-LLM maturity (R-300..R-399) — Surface IV
+
+*Decomposed 2026-06-01 from `.harness/post-phase-8-forward-register.md` §B-1/§B-2 (discharges the §9 decomposition owed for Surface IV). Commitment: ADR-F1 v1.2 + Target_Stack_Commitment §5.1. Providers all constructed + failure-time fallback wired; capability-aware routing-SELECTION stubbed; multi-provider UNEXERCISED at MVP.*
+
+```yaml
+R-300-multi-llm-routing-activation:
+  title: Activate layered capability-aware routing-selection (infer() composition seam)
+  surface: IV
+  status: PROPOSED
+  depends_on: [R-100-mvp-real-workflow-execution]
+  blocks: []
+  posture: phase-7
+  scope: { files: [harness-cp/src/harness_cp/routing_core_surface.py, harness-cp/src/harness_cp/layered_routing_strategy.py, harness-runtime/src/**], contracts: [C-CP-01, C-CP-02, C-CP-03, C-CP-04], cross_axis: yes }
+  skills: { primary: phase-7-implementation, secondary: [phase-7-back-flow-routing] }
+  advisor_required: yes
+  council_required: conditional:nameable-tension   # C5 (cost / cheapest-deterministic-first) vs C9 (reliability / when-to-fallback) vs capability-preservation
+  verification: { shape: e2e, must_pass: ["routing_core_surface.infer() invokes layered_routing_strategy.route() (no longer NotImplementedError)", "InferenceResponse.routing_decision.layer == 'manifest' on a declarative-layer hit", "per-layer LayerBudget bound per C-CP-03"] }
+  close_shape: { type: PR-merge, artifact: "feat(routing): activate layered capability-aware routing", cascade: [] }
+  next_pointer: R-300-multi-llm-second-provider
+  notes: At HEAD infer() raises NotImplementedError (routing_core_surface.py:83/:97); route() has zero non-test callers (verified 2026-06-01). Provider SELECTION is taken statically from the manifest model_binding. Register §B-1.
+
+R-300-multi-llm-second-provider:
+  title: Multi-provider credentials + mixed-provider fallback exercise
+  surface: IV
+  status: PROPOSED
+  depends_on: [R-100-mvp-real-workflow-execution]
+  blocks: []
+  posture: halt-route-to-operator
+  scope: { files: [harness-runtime/tests/integration/**, harness-runtime/config/provider_secrets.py], contracts: [C-CP-04, ADR-F1], cross_axis: no }
+  skills: { primary: phase-7-implementation, secondary: [] }
+  advisor_required: yes
+  council_required: no
+  verification: { shape: e2e, must_pass: ["operator provisions openai_key + ollama host", "a fixture forces primary-provider failure and asserts cross-family advance (anthropic -> openai) with routing.*/fallback.* spans + per-candidate cost", "exercised across >=2 deployment surfaces"] }
+  close_shape: { type: PR-merge, artifact: "test(routing): mixed-provider fallback exercise", cascade: [] }
+  next_pointer: null
+  notes: R-100 ran 3 steps single-provider (Anthropic) with empty fallback chain. retry_breaker_fallback.py (C-RT-16) DOES advance cross-family on failure — but no failure + no cross-family candidate at R-100 = unexercised. Register §B-2.
+```
+
+### 5.11 Multi-tenant (R-500..R-599) — Surface VI
+
+*Decomposed 2026-06-01 from register §B-8 (discharges §9 Surface VI; the §VI trigger fired 2026-06-01 per §5.5). OD-4 per-session-toggle/tokenization is tracked separately at R-008. Fields plumbed (tenant_id + persona_tier); base-rate envelope + multi-tenant non-toggleability live; UNEXERCISED (SOLO×LOCAL only at MVP).*
+
+```yaml
+R-500-multi-tenant-deployment:
+  title: Non-default tenant_id / non-SOLO persona_tier deployment exercise
+  surface: VI
+  status: PROPOSED
+  depends_on: [R-420-self-hosted-server-deployment-e2e]
+  blocks: []
+  posture: halt-route-to-operator
+  scope: { files: [harness-runtime/src/harness_runtime/lifecycle/tracer_provider.py, harness-runtime/src/harness_runtime/lifecycle/span_processor.py, harness-od/src/**], contracts: [C-OD-10 §10.3, C-OD-13 §13.1, ADR-D5, ADR-D6], cross_axis: yes }
+  skills: { primary: phase-7-implementation, secondary: [] }
+  advisor_required: yes
+  council_required: conditional:nameable-tension   # C7 (observability/privacy) + C8 (security/compliance) vs C11 (operator-burden): how much redaction/audit ceremony is mandatory at TEAM vs MULTI_TENANT
+  verification: { shape: e2e, must_pass: ["deploy with non-None tenant_id + non-SOLO persona_tier at a non-LOCAL surface", "§10.3 base_rate envelope + §13.1 redaction gradient behave per spec under real multi-tenant load", "audit-ledger separated by tenant_id"] }
+  close_shape: { type: PR-merge, artifact: "feat(multitenant): non-SOLO persona_tier deployment", cascade: [] }
+  next_pointer: null
+  notes: tenant_id + persona_tier plumbed (types.py); MultiTenantOverrideRefusedError enforces non-toggleability; PER_PERSONA_TIER_REDACTION present-not-driven. Register §B-8.
+```
+
+### 5.12 External integrations (R-800..R-899) — Surface IX
+
+*Decomposed 2026-06-01 from register §B-10..§B-13 (discharges §9 Surface IX). Files API (AS-8e/CP-17) + managed_agents (AS-8f) are STILL-BOUNDED-INDEFINITELY by design — tracked here as DEFERRED for operator-discretion timing at a managed-cloud arc.*
+
+```yaml
+R-800-external-mcp-server:
+  title: Real external MCP server connection (host lifecycle wiring)
+  surface: IX
+  status: PROPOSED
+  depends_on: []
+  blocks: []
+  posture: phase-7
+  scope: { files: [harness-runtime/src/harness_runtime/bootstrap/stage_3a_cp_clients.py, harness-runtime/src/harness_runtime/bootstrap/**], contracts: [runtime spec v1.41 §14.9.3, §14.9.8], cross_axis: no }
+  skills: { primary: phase-7-implementation, secondary: [] }
+  advisor_required: no
+  council_required: no
+  verification: { shape: e2e, must_pass: ["bootstrap stage-3a calls host.start() after construction (registry populated)", "host.shutdown() wired at stage-7 teardown", "live e2e against a real external MCP server with operator MCPClientConfig.connection_url"] }
+  close_shape: { type: PR-merge, artifact: "feat(mcp): wire external MCP host lifecycle", cascade: [] }
+  next_pointer: null
+  notes: Host materialized but host.start() never called at stage-3a (registry empty); host.shutdown() zero callers. Converter (v1.40) + sandbox-resolver (v1.41) landed. Register §B-10.
+
+R-810-files-api-integration:
+  title: Files API integration (files.* namespace — AS-8e / CP-17)
+  surface: IX
+  status: DEFERRED
+  depends_on: [R-421-managed-cloud-deployment-e2e]
+  blocks: []
+  posture: halt-route-to-operator
+  scope: { files: [design-substrate (Files arc design-phase), harness-runtime/src/**], contracts: [runtime spec v1.17 §14.C, C-AS-13 §13.2, ADR-D3], cross_axis: yes }
+  skills: { primary: phase-7-implementation, secondary: [phase-7-back-flow-routing] }
+  advisor_required: yes
+  council_required: no
+  verification: { shape: e2e, must_pass: ["Files arc design-phase opened (runtime plan unit)", "consumer landing at managed-cloud binding", "e2e: upload + reference-by-id + Batch-API discount composition"] }
+  close_shape: { type: PR-merge, artifact: "feat(files): Files API consumption contract", cascade: [] }
+  next_pointer: null
+  notes: STILL-BOUNDED-INDEFINITELY by design (runtime spec v1.17 §14.C Memory-only MVP; AS §13.2 excludes Files at local-development). Closes AS-8e + CP-17 bounded-residuals. Register §B-11.
+
+R-820-managed-agents-integration:
+  title: managed_agents integration (managed_agents.* namespace — AS-8f)
+  surface: IX
+  status: DEFERRED
+  depends_on: [R-421-managed-cloud-deployment-e2e]
+  blocks: []
+  posture: halt-route-to-operator
+  scope: { files: [harness-runtime/src/**], contracts: [runtime spec v1.33 §14.D, C-AS-13 §13.2, ADR-D3], cross_axis: yes }
+  skills: { primary: phase-7-implementation, secondary: [] }
+  advisor_required: yes
+  council_required: no
+  verification: { shape: e2e, must_pass: ["Anthropic managed_agents SDK integration authored", "production-surface managed_agents.* emission observed at managed-cloud"] }
+  close_shape: { type: PR-merge, artifact: "feat(managed-agents): managed_agents integration", cascade: [] }
+  next_pointer: null
+  notes: STILL-BOUNDED-INDEFINITELY by design; AS schema landed (U-AS-31/32), zero runtime producer; criterion-B unexercisable in-CLI. Closes AS-8f bounded-residual. Register §B-12.
+
+R-830-memory-tool-production-backend:
+  title: Memory-tool production backend (cloud-vault / managed-db — CP-16)
+  surface: IX
+  status: PROPOSED
+  depends_on: []
+  blocks: []
+  posture: phase-7
+  scope: { files: [harness-runtime/src/harness_runtime/lifecycle/memory_tool_filesystem.py, harness-runtime/src/harness_runtime/bootstrap/factories/memory_tool_registry_factory.py], contracts: [runtime spec v1.17 §14.12 C-RT-22, ADR-D3], cross_axis: no }
+  skills: { primary: phase-7-implementation, secondary: [] }
+  advisor_required: no
+  council_required: no
+  verification: { shape: e2e, must_pass: ["new backend class implements MemoryToolStorageBackendProtocol", "operator binds via RuntimeConfig.memory_tool_backend_config", "e2e read/write/delete across a workflow lifecycle"] }
+  close_shape: { type: PR-merge, artifact: "feat(memory): cloud Memory-tool backend", cascade: [] }
+  next_pointer: null
+  notes: Local-filesystem backend landed (CP-16 RETIRED-AS-BOUNDED-RESIDUAL batch-44); cloud/db deferred. Override point RuntimeConfig.memory_tool_backend_config exists. Register §B-13.
+```
+
+### 5.13 Existential / research (R-900..R-999) — Surface X
+
+*Decomposed 2026-06-01 from register §B-16 (discharges §9 Surface X — single placeholder; surfaces opportunistically, not actively decomposed).*
+
+```yaml
+R-900-research-arcs:
+  title: Open architectural / speculative arcs + research-corpus extensions
+  surface: X
+  status: PROPOSED
+  depends_on: []
+  blocks: []
+  posture: mode-agnostic
+  scope: { files: [research/**, design-substrate (opportunistic)], contracts: [], cross_axis: no }
+  skills: { primary: systems-architect, secondary: [] }
+  advisor_required: yes
+  council_required: conditional:nameable-tension   # case-by-case, only if a named cross-domain tension surfaces
+  verification: { shape: grep, must_pass: ["a specific research question is crystallized into a sub-entry before work begins"] }
+  close_shape: { type: substrate-amendment, artifact: "research/** or a new R-90N sub-entry", cascade: [] }
+  next_pointer: null
+  notes: Placeholder. Candidates — workflow-doc v1.14+ Phase-8->Phase-9 retirement-criteria evolution (research/agentic-engineeriing-sdlc.md); NotebookLM 28-URL corpus extensions. Register §B-16.
+```
+
+### 5.14 Cross-axis composition seams (R-CXA-NN) — Surface I residual
+
+*Decomposed 2026-06-01 from register §B-14 + closes the no-R-NNN-entry gap R-700 surfaced (draft §C item 2; A-3). Status spine = the R-700 dispositions merged at PR #207. These are mechanical wiring (runtime composer landings + production callers), not cross-domain tensions → council: no.*
+
+```yaml
+R-CXA-1-as-is-seam:
+  title: CXA-1 (AS->IS) seam completion — secret-fetch audit production caller + remaining 12 edges
+  surface: I
+  status: PROPOSED
+  depends_on: []
+  blocks: [R-700-phase-8-substitution-accounting]
+  posture: phase-7
+  scope: { files: [harness-runtime/src/harness_runtime/lifecycle/as_is_wiring.py, harness-as/src/**], contracts: [CXA v2.18 §2.3.1 (13 edges)], cross_axis: yes }
+  skills: { primary: phase-7-cross-axis-composition, secondary: [] }
+  advisor_required: no
+  council_required: no
+  verification: { shape: e2e, must_pass: ["a production caller invokes emit_secret_fetch_audit_entry (AS secret-fetch driver path lands)", "remaining ~12 AS source-unit audit-emission callbacks threaded through AsIsWiring"] }
+  close_shape: { type: PR-merge, artifact: "feat(cxa): complete AS->IS seam", cascade: [] }
+  next_pointer: null
+  notes: PARTIAL per R-700 — composer materialized + 7c-tested; only secret-fetch edge wired; zero production callers. Register §B-14.
+
+R-CXA-2-cp-is-seam:
+  title: CXA-2 (CP->IS) seam completion — runtime caller-site invocations + remaining §12.3 edges
+  surface: I
+  status: PROPOSED
+  depends_on: []
+  blocks: [R-700-phase-8-substitution-accounting]
+  posture: phase-7
+  scope: { files: [harness-runtime/src/harness_runtime/lifecycle/cp_is_wiring.py, harness-runtime/src/**], contracts: [CXA v2.18 §2.3.2, class_1_tension_u_rt_35_cp_is_wiring_gaps.md], cross_axis: yes }
+  skills: { primary: phase-7-cross-axis-composition, secondary: [] }
+  advisor_required: yes
+  council_required: no
+  verification: { shape: e2e, must_pass: ["6 §16.5 composer methods (U-CP-74..79) invoked at their firing sites + e2e", "remaining ~16 of 17 §12.3 edges materialized"] }
+  close_shape: { type: PR-merge, artifact: "feat(cxa): complete CP->IS seam", cascade: [] }
+  next_pointer: null
+  notes: STILL-BOUNDED per R-700 — cp_is_wiring PARTIAL-LAND (1 of 17); U-RT-35 unit landed (batch-46) but full contract STILL-BOUNDED. Register §B-14.
+
+R-CXA-3-cp-as-seam:
+  title: CXA-3 (CP->AS) seam — runtime composer OR Memory-only-scope narrowing
+  surface: I
+  status: DEFERRED
+  depends_on: []
+  blocks: [R-700-phase-8-substitution-accounting]
+  posture: halt-route-to-operator
+  scope: { files: [harness-runtime/src/** (no cp_as_wiring.py at HEAD)], contracts: [CXA v2.18 §2.3.3 (24 edges), ledger §11.1b], cross_axis: yes }
+  skills: { primary: phase-7-cross-axis-composition, secondary: [phase-7-back-flow-routing] }
+  advisor_required: yes
+  council_required: no
+  verification: { shape: grep, must_pass: ["EITHER a CP->AS runtime composer at a Files-arc design-phase opening (α) OR operator AskUserQuestion ratifying Memory-only-scope narrowing (β)"] }
+  close_shape: { type: PR-merge, artifact: "feat(cxa): CP->AS seam (α) OR scope-narrowing (β)", cascade: [] }
+  next_pointer: null
+  notes: STILL-BOUNDED per R-700 — no cp_as_wiring.py module (consistent with spec §12); NOT 'N/A' (a real open seam). Neither path in-session-actionable. Register §B-14.
+
+R-CXA-4-od-multi-seam:
+  title: CXA-4 (OD->IS/AS/CP) seam completion — remaining ~21 of 26 edges + production callers
+  surface: I
+  status: PROPOSED
+  depends_on: []
+  blocks: [R-700-phase-8-substitution-accounting]
+  posture: phase-7
+  scope: { files: [harness-runtime/src/harness_runtime/lifecycle/od_is_wiring.py, od_as_wiring.py, od_cp_wiring.py], contracts: [CXA v2.18 §2.3.4-§2.3.6 (26 edges)], cross_axis: yes }
+  skills: { primary: phase-7-cross-axis-composition, secondary: [] }
+  advisor_required: no
+  council_required: no
+  verification: { shape: e2e, must_pass: ["remaining ~21 of 26 edges materialized at the runtime composition layer (OR operator scope-narrowing of the 26-edge enumeration)"] }
+  close_shape: { type: PR-merge, artifact: "feat(cxa): complete OD->multi seam", cascade: [] }
+  next_pointer: null
+  notes: PARTIAL per R-700 — 3 wiring modules exist + stage into bootstrap; OD audit-write seam exercised (6 callers); only ~5 of 26 edges materialized (batch-42). Register §B-14.
+```
+
 ---
 
 ## 6. Operator gate inventory
@@ -1561,13 +1783,13 @@ Decomposition status per surface. **`decomposed`** means R-NNN entries exist at 
 | I | Phase 7 axis-clean | `partially-decomposed` (R-001..R-004 + R-001-h-t-is-2-retired + R-003) | R-002 execution generates per-row R-NNN |
 | II | MVP-operator-usable | `partially-decomposed` (R-100 series) | Each merged PR generates next R-NNN at this surface |
 | III | CI substrate | `partially-decomposed` (R-200 series) | After R-200-ci-pytest closure, decompose §V multi-deployment dependencies |
-| IV | Multi-LLM maturity | `decomposition-owed` | Triggered by R-100-mvp-real-workflow-execution closure |
+| IV | Multi-LLM maturity | `decomposed` (2026-06-01) | §5.10 R-300-series authored from post-Phase-8 register §B-1/§B-2 |
 | V | Multi-deployment surfaces | `partially-decomposed` (R-400 series, 2026-06-01) | Triggered by R-100-mvp-multi-workflow-fixture-suite closure (PR #190); decomposed at §5.5 — R-400 RESOLVED (PR #194, the one LOCAL-testable row), R-410..R-440 PROPOSED (live/infra-gated) |
-| VI | Multi-tenant | `decomposition-owed` (trigger fired 2026-06-01) | Triggered by R-400 surface decomposition (now fired); R-500-series authoring is a follow-on arc — live-gated |
+| VI | Multi-tenant | `decomposed` (2026-06-01) | §5.11 R-500-multi-tenant-deployment authored from register §B-8; live-gated on R-420. OD-4 at R-008 |
 | VII | Process discipline | `partially-decomposed` (R-600 series + R-IF-roadmap-refresh) | Cadence-driven; sweep every ~10 PRs |
 | VIII | Phase 8 retirement criteria | `placeholder` (R-700-phase-8-substitution-accounting only) | Triggered when §I substitutions ≥45/49 closed |
-| IX | External integrations | `decomposition-owed` | Triggered by R-300 multi-LLM decomposition |
-| X | Existential / research | `decomposition-owed` | Surfaces opportunistically; not actively decomposed |
+| IX | External integrations | `decomposed` (2026-06-01) | §5.12 R-800..R-830 authored from register §B-10..§B-13 (Files/managed_agents DEFERRED-indefinite) |
+| X | Existential / research | `decomposed` (2026-06-01) | §5.13 R-900-research-arcs placeholder from register §B-16; surfaces opportunistically |
 | XI | Operator tooling / observability | `partially-decomposed` (R-XI-01 + R-XI-02 + R-XI-03, all PROPOSED) | Triggered by R-200-ci-pytest-pyright-ruff-matrix closure; R-XI-01 flips PROPOSED → ACTIVE at that point |
 
 **Decomposition-owed marker discipline.** When opening any surface for decomposition, operator AUQ required ONLY if scope is ambiguous; otherwise Claude decomposes per current workspace state. The roadmap is not a contract — it is a discipline.
