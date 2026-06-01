@@ -676,7 +676,7 @@ R-100-cost-attribution-firing:
 R-100-mvp-yaml-loader-shipped:
   title: YAML manifest loader operational (close Class 1 forks PR #79 / PR #80 lineage)
   surface: II
-  status: BLOCKED
+  status: RESOLVED   # 2026-06-01: dep R-100-mvp-real-workflow-execution RESOLVED → unblocked. Both verification criteria green at the Claude-executable/CI level in test_track_b_e2e.py: must_pass[1] (round-trip YAML↔TOML byte-equivalent payload) via test_ac2_yaml_and_toml_manifests_produce_equivalent_loaded_workflow — strengthened to assert step_payload byte-equality + native int max_tokens=8 (the v1.39 StrictSafeLoader parity); must_pass[0] (YAML loads + dispatches identically to TOML) via NEW test_ac2_loaded_yaml_and_toml_dispatch_identically_deterministic — loads both fixtures and runs each through the real bootstrap + execute_workflow with a deterministic dispatcher (no key/ollama/daemon, CI-runnable) → both reach identical SUCCESS. No paid call.
   depends_on: [R-100-mvp-real-workflow-execution]
   blocks: [R-100-mvp-multi-workflow-fixture-suite]
   posture: phase-7
