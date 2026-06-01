@@ -903,7 +903,7 @@ Decomposition authored 2026-06-01 (triggered by `R-100-mvp-multi-workflow-fixtur
 R-400-deployment-surface-conditional-emission-suite:
   title: Cross-surface deployment-conditional OD-emission integration suite (LOCAL / SELF_HOSTED / MANAGED)
   surface: V
-  status: ACTIVE
+  status: RESOLVED
   depends_on: []
   blocks: []
   posture: phase-7   # edits harness-runtime/tests (+ possibly harness-od/tests); deterministic, CI-runnable
@@ -926,6 +926,16 @@ R-400-deployment-surface-conditional-emission-suite:
     caveat: unit coverage of each behavior exists in isolation (test_base_rate_set_and_envelope.py /
     test_redaction_gradient.py / tail-keep tests); the gap closed is the *composed cross-surface* assertion
     driven through the real materialize stages. ZERO src change expected; mirror the #190 deterministic-suite shape.
+    RESOLVED at PR #194 merge `18b2d5d` (2026-06-01). `test_cross_surface_emission_suite.py` (17 tests) drives all
+    four must_pass through the real stage-4 composers: sampler base_rate == envelope default_rate for every ACTIVE
+    cell (8 = 3x3 minus EXCLUDED, read back via ParentBased._root.base_rate — no public .root, verified empirically);
+    tail-keep wrapped IFF non-LOCAL; RedactionSpanProcessor present + persona threads at all 3 surfaces; plus a
+    negative case (EXCLUDED multi-tenant×local-development raises TracerProviderBindError wrapping CellBindingViolation,
+    mirroring #190's negative test). Honest MVP caveat banked: the §13.1 per-persona behavioral toggle is plumbed-not-
+    consumed at the SDK boundary — that differential lives in test_redaction_gradient.py (cited in the suite docstring).
+    ZERO src change; full integration dir 161 passed/10 skipped; ruff+pyright+pytest CI all GREEN. §V multi-deployment
+    remainder (R-410..R-440) is PROPOSED + live/infra-gated; §IV multi-LLM still decomposition-owed (its trigger
+    R-100-mvp-real-workflow-execution is the operator-gated live e2e, not yet closed) — §4 re-derives to §VII cadence.
 
 R-410-sandbox-tier-2-container-execution:
   title: Real TIER_2_CONTAINER sandbox execution — tool calls run in an isolated container, not in-process FastMCP
@@ -1470,7 +1480,7 @@ Decomposition status per surface. **`decomposed`** means R-NNN entries exist at 
 | II | MVP-operator-usable | `partially-decomposed` (R-100 series) | Each merged PR generates next R-NNN at this surface |
 | III | CI substrate | `partially-decomposed` (R-200 series) | After R-200-ci-pytest closure, decompose §V multi-deployment dependencies |
 | IV | Multi-LLM maturity | `decomposition-owed` | Triggered by R-100-mvp-real-workflow-execution closure |
-| V | Multi-deployment surfaces | `partially-decomposed` (R-400 series, 2026-06-01) | Triggered by R-100-mvp-multi-workflow-fixture-suite closure (PR #190); decomposed at §5.5 — R-400 ACTIVE (LOCAL-testable), R-410..R-440 PROPOSED (live/infra-gated) |
+| V | Multi-deployment surfaces | `partially-decomposed` (R-400 series, 2026-06-01) | Triggered by R-100-mvp-multi-workflow-fixture-suite closure (PR #190); decomposed at §5.5 — R-400 RESOLVED (PR #194, the one LOCAL-testable row), R-410..R-440 PROPOSED (live/infra-gated) |
 | VI | Multi-tenant | `decomposition-owed` (trigger fired 2026-06-01) | Triggered by R-400 surface decomposition (now fired); R-500-series authoring is a follow-on arc — live-gated |
 | VII | Process discipline | `partially-decomposed` (R-600 series + R-IF-roadmap-refresh) | Cadence-driven; sweep every ~10 PRs |
 | VIII | Phase 8 retirement criteria | `placeholder` (R-700-phase-8-substitution-accounting only) | Triggered when §I substitutions ≥45/49 closed |
