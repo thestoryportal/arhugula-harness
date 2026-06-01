@@ -4,7 +4,7 @@
 **Filed:** 2026-06-01, at the apply-arc pre-substantive empirical orientation (39th-shape `[[advisor-before-substantive-work-for-cross-axis-blockers]]` application — advisor reconcile call confirmed the gap is real and the ratified converter fix is necessary-but-not-sufficient).
 **Class:** 1 (architectural — a second operator-policy callable on the TOOL_STEP dispatch path is structurally unreachable through the bootstrap; closing it requires a config-surface / discretion decision).
 **Blocks:** R-100-mvp-real-workflow-execution **AC #2** ("tool dispatch surface exercised ≥1 site") *via the operator `api.run` path*. This is the **same AC** the converter fork blocked — converter-only does NOT unblock it. Does NOT block the dispatcher-level surface (U-RT-86 e2e exercises it by hand-supplying both callables).
-**Sibling of:** `.harness/class_1_fork_tool_step_no_operator_supplied_converter.md` (RATIFIED-AS-READING-B, applied at spec v1.40). That fork closed the `tool_contract_converter` half; this fork is the `sandbox_decision_resolver` half.
+**Sibling of:** `.harness/class_1_fork_tool_step_no_operator_supplied_converter.md` (RATIFIED-AS-READING-B, applied at spec v1.40). That fork closed the `tool_contract_converter` config surface (one necessary piece). This fork carries the `sandbox_decision_resolver` design decision. **Do NOT read these as the only two gaps** — §4 lists at least one more open gap (bootstrap never calls `host.start()`) and does not assert the list complete. AC #2 closes only when the full bootstrap TOOL_STEP path is wired AND demonstrated e2e (§4).
 
 ---
 
@@ -47,8 +47,27 @@ So at production HEAD, a TOOL_STEP dispatches only if an operator hand-builds BO
 
 **Parity-with-the-converter reading** (the resolver IS operator policy in principle), implemented via **(A) the identity resolver** as the MVP-cleanest shape: it honors the operator's already-ratified per-server tier declaration (`default_minimum_tier`) without a second config cluster, and it makes the converter-stamped tier authoritative. (B) is the most faithful if the operator wants the resolved tier to be able to *exceed* the tool's declared floor; that is a richer model than the MVP needs. **Flag explicitly:** the §14.9.7 implementer-discretion clause genuinely supports wiring (A) *without* a fork — but the converter precedent (raises-loud, assigns sandbox posture → ratification-required) argues the symmetric callable deserves the same ratification, so this is filed rather than silently wired.
 
-## 4. Impact on R-100-mvp-real-workflow-execution
+## 4. The known-gaps list is NOT asserted complete (the sufficiency claim was undercounted twice)
 
-AC #2 ("tool dispatch surface exercised ≥1 site" via the operator `api.run` path) **remains BLOCKED after spec v1.40** (converter half). It closes only when BOTH the converter (done) and the resolver (this fork) are wired into the bootstrap. The R-100 e2e (`test_r100_real_workflow_e2e.py`) carries a TOOL_STEP-via-`api.run` test authored as **xfail pending this fork** (mirroring how AC #2 + AC #4 were originally filed as blocked-with-fork).
+**Do not read this fork as "converter + resolver = sufficient for AC #2."** That two-gap framing was an undercount, surfaced by a pre-merge completeness critic at the converter PR (#171):
 
-Tracked at roadmap `R-100-tool-step-sandbox-resolver` (NEW entry; sibling to `R-100-tool-step-converter`).
+- **Gap A — converter (CLOSED at spec v1.40).** `MCPClientHost` had no operator-suppliable `tool_contract_converter`.
+- **Gap B — host start() at bootstrap (OPEN; impl, not design).** See §5 — the stage-3a bootstrap body binds the host but never calls `host.start()`, so the registry is never populated and the converter never even runs. This fires at dispatch **step 1** (`RT-FAIL-TOOL-CONTRACT-UNKNOWN`), *before* the trust gate (step 2) and *before* this fork's resolver (step 3). With Gap B open, the v1.40 converter is currently **unreachable through the bootstrap** — green `_FakeTool` unit tests prove the converter function, not the path.
+- **Gap C — `sandbox_decision_resolver` (OPEN; the design decision this fork carries).** §1-§3.
+- **Gap D? — unknown.** Bootstrap provider construction for a tool-only (no-inference) workflow is a live candidate not yet resolved (does `api.run` require an LLM provider/key even when the workflow has only TOOL_STEPs?). There may be others.
+
+**Canonical framing (non-falsifiable by the next gap):** R-100-mvp-real-workflow-execution **AC #2 closes only when the full bootstrap TOOL_STEP path is wired AND demonstrated end-to-end** (one echo-MCP-via-`api.run` workflow that completes a TOOL_STEP). This fork (Gap C) is one necessary piece; Gap B is another; the converter (Gap A, done) is a third. The closing arc proves sufficiency **by execution, not by unit tests** — the e2e is the only artifact that can establish the path is complete.
+
+The R-100 deterministic xfail marker (`test_u_rt_75_runtime_tool_dispatcher_factory.py::test_ac2_bootstrap_dispatcher_resolves_sandbox_decision`) demonstrates Gap C in isolation (it invokes the resolver directly, bypassing Gaps A+B); it is NOT an AC #2 e2e.
+
+## 5. Gap B — bootstrap never starts the MCP host (sibling impl-gap; lands in the same closing arc)
+
+**Evidence (conclusive, HEAD).** `harness-runtime/src/harness_runtime/bootstrap/stage_3a_cp_clients.py:48` — `ctx.mcp_client_host = await materialize_mcp_client_host_stage(config)` is the LAST statement of `execute()`; there is no `host.start()` call. Grep confirms no `mcp_client_host.start()` anywhere under `harness-runtime/src/harness_runtime/bootstrap/` or `api.py`. The factory returns an **unstarted** host (its docstring: "the stage 3a body is responsible for calling `.start()` afterward if `config.mcp_clients` is non-empty"), and spec §14.9.3 stage-3a mandates "subprocess spawn + protocol handshake + `list_tools` registry population happen here." `start()` is fully implemented (`mcp_client_host.py:379` `call_tool`; `:~310` `start`; `MCPHostStartupError` / `RT-FAIL-MCP-HOST-STARTUP` carrier present) — it is simply never invoked from bootstrap. This was latent (no production workflow reached `mcp_clients` because TOOL_STEP-via-`api.run` was unreachable at the converter gap); closing Gap A makes it the next-firing blocker.
+
+**Disposition.** Gap B is an **impl / spec-conformance bug**, not a design decision — so NO separate fork doc. It lands in the **same closing arc** as Gap C, because only together can one e2e prove the chain (`start → list_tools → converter → registry → trust → resolver → call_tool`). Fixing `start()` alone buys zero forward verification (the resolver still raises at step 3) while incurring integration-test fallout (several bootstrap-going tests populate `mcp_clients=[...]` and currently rely on the host never being started — `test_run_smoke`, `test_track_b_e2e`, integration `conftest`, elicitation e2e). That test-safety question is answered **in the closing arc, in context, with the e2e as proof** — not hastily at the converter PR.
+
+**Flag for the closing arc (do NOT resolve now).** `stage_3a_cp_clients.py`'s module docstring claims provider construction "is the only stage entry point in the runtime that performs network I/O at bootstrap time" — in direct tension with spec §14.9.3 placing a subprocess spawn at stage 3a. Default to the spec (eager start at 3a); the closing arc should confirm eager-start is the intent vs. a deliberate lazy-start choice the docstring hints at. That tension is why Gap B is not cleanly "a one-line typo."
+
+## 6. Tracking
+
+Tracked at roadmap `R-100-tool-step-sandbox-resolver` — broadened to the **AC#2-closing arc**: wire the full bootstrap TOOL_STEP path (Gap B host `start()` + Gap C resolver) and prove it with one echo-MCP-via-`api.run` e2e. Sibling to `R-100-tool-step-converter` (Gap A, RESOLVED — converter config surface only).

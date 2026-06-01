@@ -14,22 +14,27 @@ This module covers AC #1 + AC #3 + AC #4 through the operator `api.run` path
 (real Anthropic inference). AC #2 (tool dispatch) is exercised at the dispatcher
 level by `test_u_rt_86_mcp_client_external_server_e2e.py` (passing on main).
 
-AC #2 via the operator `api.run` path remains BLOCKED as of spec v1.40. The
-converter half — `MCPClientHost` had no operator-suppliable
-`tool_contract_converter` — was CLOSED at spec v1.40 Reading B
-(`.harness/class_1_fork_tool_step_no_operator_supplied_converter.md`): the
-stage-3a factory now builds a default-policy converter from per-server
-`MCPClientConfig.{default_minimum_tier, default_blast_radius}`. But a
-**sibling gap** blocks the same path: the bootstrap-built
-`RuntimeToolDispatcher` has no `sandbox_decision_resolver` (defaults-to-raise;
-the factory wires none), so dispatch raises before the tier-floor check — see
-`.harness/class_1_fork_tool_step_no_bootstrap_sandbox_decision_resolver.md`
-(PROPOSING). The deterministic marker for that gap lives at
-`test_u_rt_75_runtime_tool_dispatcher_factory.py`
-(`test_ac2_bootstrap_dispatcher_resolves_sandbox_decision` — xfail pending the
-resolver fork). A full TOOL_STEP-via-`api.run` e2e closing AC #2 is deferred to
-the resolver fork's apply arc (combining it here would require monkeypatching
-the host/dispatcher factory — the `test-bypass-as-runtime-truth` anti-pattern).
+AC #2 via the operator `api.run` path is NOT closed as of spec v1.40, and is
+NOT one gap away. Spec v1.40 Reading B closed ONE necessary piece — the
+converter config surface (`MCPClientConfig.{default_minimum_tier,
+default_blast_radius}`; the stage-3a factory builds a default-policy converter).
+A pre-merge completeness critic (PR #171) found the bootstrap TOOL_STEP path has
+at least two more open gaps, and the list is not asserted complete:
+  - Gap B: the stage-3a bootstrap body never calls `host.start()`
+    (`stage_3a_cp_clients.py:48`), so the registry is empty and the v1.40
+    converter is currently UNREACHABLE through the bootstrap (impl/spec bug).
+  - Gap C: the bootstrap `RuntimeToolDispatcher` wires no
+    `sandbox_decision_resolver` (defaults-to-raise; dispatch raises at step 3
+    before the tier-floor check) — the design decision filed at
+    `.harness/class_1_fork_tool_step_no_bootstrap_sandbox_decision_resolver.md`.
+AC #2 closes only when the full bootstrap path is wired AND demonstrated by one
+echo-MCP-via-`api.run` e2e (proven by execution, not unit tests) — the
+AC#2-closing arc (roadmap R-100-tool-step-sandbox-resolver). The deterministic
+xfail marker for Gap C lives at `test_u_rt_75_runtime_tool_dispatcher_factory.py`
+(`test_ac2_bootstrap_dispatcher_resolves_sandbox_decision`). A full e2e is NOT
+added here (it would require monkeypatching the host/dispatcher factory — the
+`test-bypass-as-runtime-truth` anti-pattern — and would still not run through the
+unwired bootstrap path).
 
 Mechanism β (real Anthropic; gated on ANTHROPIC_API_KEY). Cost discipline:
 3 steps × max_tokens=4 × single-token prompt ≈ 3 cheap haiku calls.
