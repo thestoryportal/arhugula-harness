@@ -475,9 +475,7 @@ def post_phase_8(actions: list[dict]) -> dict:
     derivation + memory-on-close like any other roadmap entry.
     """
     items = [
-        a
-        for a in actions
-        if a.get("surface") in _FORWARD_SURFACES or a["id"].startswith("R-CXA")
+        a for a in actions if a.get("surface") in _FORWARD_SURFACES or a["id"].startswith("R-CXA")
     ]
     groups: dict[str, list[dict]] = {}
     for a in items:
