@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `b0d5c85c1136` (stale — substantive close this PR; authoritative recompute owed at the post-merge terminating refresh per §12.2.1) |
-| `last_refreshed` | 2026-05-31T20:15:00-06:00 |
-| `git_head` | `5d06106` (main) — `ci: coverage reporting (R-200-ci-coverage-gating) (#150)` |
+| `workspace_state_hash` | `e30b9dd81864` |
+| `last_refreshed` | 2026-05-31T20:40:00-06:00 |
+| `git_head` | `51f4131` (main) — `roadmap(R-200-ci-coverage-gating): RESOLVED at PR #150 + dashboard refresh post-#148/#149/#150 (#151)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-50.md` |
 | `open_fork_doc_count` | 39 |
 
@@ -30,7 +30,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `roadmap-r200-coverage-close` | R-200-ci-coverage-gating | mode-agnostic — marks R-200-ci-coverage-gating RESOLVED (PR #150) + dashboard refresh post-#148/#149/#150. Bundled (touches Project_Roadmap_v1.md) → NOT a terminating refresh; follow-on `ops: roadmap status refresh post-PR-NNN` + `workspace_state_hash` recompute owed per §12.2.1 |
+| *(this PR)* | `roadmap-refresh-post-151` | *(terminating refresh §12.2.1)* | mode-agnostic — `workspace_state_hash` recompute (`b0d5c85c1136` → `e30b9dd81864`) + anchor refresh post-PR-151 merge. ONLY `.harness/roadmap_status.md`; title `ops: roadmap status refresh post-PR-151` → next §12.1 audit sees expected lag |
 
 ---
 
@@ -38,12 +38,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #151 (`51f4131`) | 2026-05-31 | **R-200-ci-coverage-gating substantive close** — `Project_Roadmap_v1.md` §5.4 ACTIVE → RESOLVED (PR #150) + dashboard refresh post-#148/#149/#150. Blocking `pytest` green; advisory legs (od axis-isolation, pyright, ruff) red-as-expected. Bundled → NOT a terminating refresh; this terminating refresh is the owed follow-on. |
 | PR #150 (`5d06106`) | 2026-05-31 | **R-200-ci-coverage-gating RESOLVED** — advisory `coverage` job in `ci.yml` (continue-on-error) + `pytest-cov>=6.0` + `[tool.coverage.run]` (branch, 7 packages, tests omitted). Publishes total line/branch coverage to the PR step-summary + uploads `coverage.xml`. CI-verified (job green; coverage-xml 36KB artifact). v1 informational, no `fail_under`. |
 | PR #148 (`22f22ab`) | 2026-05-31 | **Fork-doc Status audit** (hygiene) — refreshed 3 stale Status lines: `cp_16_17` frontmatter PROPOSING→resolved (body was already current), `u_od_40` RATIFIED→APPLIED-AS-READING-B (`dcb0017`), `harness_run_yaml_manifest_schema` RATIFIED→APPLIED (G4/G5/G6 landed). Each verified vs HEAD. |
 | PR #149 (`7d3c830`) | 2026-05-31 | **Terminating refresh post-PR-147** (§12.2.1) — `workspace_state_hash` → `b0d5c85c1136`; only `roadmap_status.md`. |
 | PR #147 (`36d8fad`) | 2026-05-31 | **R-200-ci-axis-matrix RESOLVED** — `axis-isolation` matrix in `ci.yml` (6 legs; `uv sync --package` isolation). core 26/is 133/as 317/cp 813/cxa 28 PASS; **od RED** (undeclared od→cp dep) → ADVISORY; tracked at R-200-ci-od-cp-dependency-leak. |
-| PR #144 (`f06c30a`) | 2026-05-31 | **R-200-ci-pytest-pyright-ruff-matrix RESOLVED** — first substantive CI job. `test` BLOCKING+green; `lint`+`typecheck` ADVISORY (tree not clean — 366 ruff / 894 pyright, incl. dup-`Skill` bug at types.py:1683). |
-| PR #140 (`e55e99b`) | 2026-05-31 | **Hook hardening** — `session-start.sh` behind-origin guard (fixes the Cluster A/B stale-next-action drift: local main 4 behind origin → hook reported stale `next=R-003`). Default-branch-gated, timeout-guarded fetch; can't hang/fail offline |
 
 ---
 
@@ -109,7 +108,9 @@ Sample (highest-leverage open):
 
 | 2026-05-31 | Fifteenth terminating refresh — PR #142 substantive R-001-close merged at `5ca46f5`; §12.2 owed follow-on | Single-file dashboard-only refresh per §12.2.1. Hash `8780c87985f2` → `ec4f50af797b` (state at `5ca46f5`). Next action UNCHANGED at **R-200-ci-pytest-pyright-ruff-matrix**. Recursion-stopping fixed point for the R-001 close: dashboard now lags by exactly one commit (this refresh's own merge), recognized as `lag-expected` by the next §12.1 session-start audit. |
 
-**Audit protocol exercised across 15 terminating-refresh closures + 2 fresh-session reconciliations + 2 substantive closes (R-003, R-001-h-t-is-2-retired).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **R-001-h-t-is-2-retired RESOLVED 2026-05-31 (PR #141 + #142 substantive close + this terminating refresh); H_T-IS-2 RETIRED, IS-axis 9/9 = 100%; deterministic next-action = R-200-ci-pytest-pyright-ruff-matrix (§III CI substrate).**
+| 2026-05-31 | **R-200-ci-coverage-gating RESOLVED** + sixteenth terminating refresh — substantive close PR #151 merged at `51f4131` (blocking `pytest` green; advisory od/pyright/ruff legs red-as-expected); this PR is the owed follow-on terminating refresh per §12.2.1 | Single-file dashboard-only refresh. Hash `b0d5c85c1136` → `e30b9dd81864` (state at `51f4131`). Next action UNCHANGED at **R-200-ci-od-cp-dependency-leak** (re-derived at PR #151; mode-agnostic §III drained → §III phase-7 entries next). Recursion-stopping fixed point: dashboard lags by exactly one commit, recognized as `lag-expected` by the next §12.1 audit. |
+
+**Audit protocol exercised across 16 terminating-refresh closures + 2 fresh-session reconciliations + 3 substantive closes (R-003, R-001-h-t-is-2-retired, R-200-ci-coverage-gating).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **R-200-ci-coverage-gating RESOLVED 2026-05-31 (PR #150 substrate + PR #151 substantive close + this terminating refresh); all mode-agnostic §III CI entries drained; deterministic next-action = R-200-ci-od-cp-dependency-leak (§III phase-7; advisor + cross-axis design call).**
 
 ---
 
