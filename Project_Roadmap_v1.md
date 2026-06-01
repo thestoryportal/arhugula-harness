@@ -474,7 +474,7 @@ R-009-od-6-otlp-retired:
 R-100-mvp-operator-usable-cli-shipped:
   title: harness CLI end-to-end smoke — config load + workflow load + provider dispatch
   surface: II
-  status: ACTIVE
+  status: RESOLVED   # live green verified 2026-05-31 via operator-authorized `just run examples/minimal.toml`: EXIT=0, status=completed, 2 hash-chained ledger entries. PR #164.
   depends_on: []
   blocks: [R-001, R-004, R-100-mvp-real-workflow-execution]
   posture: phase-7
