@@ -8,11 +8,11 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `48e2fffa4434` |
-| `last_refreshed` | 2026-05-31T23:25:00-06:00 |
-| `git_head` | `44c668d` (main) — `mvp: harness CLI smoke + examples/minimal.toml workflow (R-100) (#164)` |
+| `workspace_state_hash` | `0deb499daab5` |
+| `last_refreshed` | 2026-06-01T00:05:00-06:00 |
+| `git_head` | `97c8943` (main) — `mvp: 3-step real-workflow e2e against Anthropic (R-100-mvp-real-workflow-execution, partial) (#166)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-50.md` |
-| `open_fork_doc_count` | 40 |
+| `open_fork_doc_count` | 42 |
 
 **Hash recipe.** `sha256(git_head[:8] + "|" + sorted_open_pr_csv + "|" + open_fork_doc_count + "|" + latest_retirement_batch_path)[:12]`. See `Project_Roadmap_v1.md` §7.1.
 
@@ -20,9 +20,14 @@
 
 ## Next action
 
-**`R-100-mvp-real-workflow-execution`** (status: **ACTIVE**; surface II; **phase-7**; **advisor_required: no**; **cross_axis: no**) — real multi-step (3+) workflow at SOLO_DEVELOPER tier against the Anthropic provider; tool dispatch exercised ≥1 site; audit-ledger emits step-by-step entries; cost-attribution entries present per OD plan v2.25 binding. **§4 derivation:** `R-100-mvp-operator-usable-cli-shipped` RESOLVED at PR #164 (live green verified — `just run examples/minimal.toml` → EXIT=0, status=completed, 2 hash-chained ledger entries against real Anthropic), which unblocks `R-100-mvp-real-workflow-execution` (`depends_on: [R-100-mvp-operator-usable-cli-shipped]` now RESOLVED → ACTIVE). §I + §III drained; §II MVP is the priority tier; this is the next dependency-met ACTIVE entry (rank 4). `R-100-mvp-yaml-loader-shipped` stays gated behind the YAML-loader Class 1 fork (`class_1_fork_yaml_loader_step_payload_scalar_coercion_gap.md` OPEN); the TOML path is what the MVP smoke proved. §VII process-discipline entries are lower priority (rank 5).
+**Operator decision owed — ratify 2 PROPOSING forks (Class 1 back-flow per CLAUDE.md §4.3).** R-100-mvp-real-workflow-execution is delivered partial (PR #166): AC #1 + AC #3 PASS via a live real-Anthropic 3-step `api.run` workflow; AC #2 + AC #4 each gated on a fork the use-the-product probe surfaced. Further §II MVP progress (and the dependent R-100-tool-step-converter + R-100-cost-attribution-firing) is **operator-gated** on ratifying:
 
-**(PR #164 `44c668d` shipped R-100 operator-usable CLI scaffolding — examples/minimal.toml (dispatch-ready) + README quickstart + harness.toml.example fixes (pipeline-automation bindings + NEW [runtime.routing_manifest] fallback_chain + corrected discovery header) + justfile run/daemon `--config harness.toml` + .gitignore harness.toml. Zero src change (advisor: option B recipe-passes-config over a default-discovery src fix). Use-the-product probe surfaced 4 operator-blocking gaps, all fixed. Live green verified via operator-authorized `just run` (keys via the just dotenv recipe). NEW fork `class_1_fork_harness_toml_default_discovery_unimplemented.md` (PROPOSING) + roadmap R-100-mvp-config-discovery: spec §3.7 auto-discovery declared-but-unimplemented; does not block the MVP. Prior: PR #161 pyright 846→0 + typecheck blocking; PR #159 lint half; §III CI substrate complete.)**
+1. `class_1_fork_tool_step_no_operator_supplied_converter.md` (PROPOSING) — TOOL_STEP not dispatchable via `api.run`: no operator config surface for `tool_contract_converter`. Readings A–D. → R-100-tool-step-converter (BLOCKED).
+2. `class_1_fork_llm_cost_attribution_not_firing_on_real_dispatch.md` (PROPOSING) — a real inference run emits ZERO `cost:` entries despite the wiring. **Carries an OD-5 retirement-validity implication** (OD-5 RETIRED on mech-β unit tests; production `api.run` emits no cost — the grep-vs-e2e gap). → R-100-cost-attribution-firing (BLOCKED).
+
+**§4 derivation:** all §II MVP forward entries are now either delivered-partial (this one) or BLOCKED on the 2 forks above + the YAML-loader fork (`class_1_fork_yaml_loader_step_payload_scalar_coercion_gap.md` OPEN, gates R-100-mvp-yaml-loader-shipped). With no §II entry executable without an operator fork-ratification, the executable fallback is §VII process-discipline (rank 5). Recommend the operator ratify the 2 forks (esp. the OD-5 re-validation question) before opening further MVP work.
+
+**(PR #166 `97c8943` — `test_r100_real_workflow_e2e.py`: real 3-step Anthropic `api.run` workflow. AC #1 ✓ (completed) + AC #3 ✓ (3 hash-chained step ledger entries) via 2 live operator-authorized runs; AC #2 fork [converter gap]; AC #4 runtime xfail [cost-not-firing fork]. Zero src change. Prior: PR #164 `44c668d` R-100 operator-usable CLI scaffolding [examples/minimal.toml + harness.toml.example routing_manifest+bindings fixes + .gitignore + justfile --config]; R-100-mvp-operator-usable-cli-shipped RESOLVED. PR #161 §III CI substrate complete [pyright 0 + ruff 0, both blocking].)**
 
 ---
 
@@ -30,7 +35,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `roadmap-refresh-post-164` | *(terminating refresh §12.2.1)* | mode-agnostic — `workspace_state_hash` recompute (`038c75a5245e` → `48e2fffa4434`) + anchor refresh post-PR-164 merge (the owed follow-on for the bundled R-100-close PR #164). ONLY `.harness/roadmap_status.md`; title `ops: roadmap status refresh post-PR-164` → next §12.1 audit sees expected lag-by-one |
+| *(this PR)* | `roadmap-refresh-post-166` | *(terminating refresh §12.2.1)* | mode-agnostic — `workspace_state_hash` recompute (`48e2fffa4434` → `0deb499daab5`) + anchor refresh post-PR-166 merge (the owed follow-on for the substantive R-100-real-workflow PR #166). ONLY `.harness/roadmap_status.md`; title `ops: roadmap status refresh post-PR-166` → next §12.1 audit sees expected lag-by-one |
 
 ---
 
@@ -38,21 +43,24 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #166 (`97c8943`) | 2026-06-01 | **R-100-mvp-real-workflow-execution PARTIAL** — `test_r100_real_workflow_e2e.py`: real 3-step Anthropic `api.run` workflow. **AC #1 ✓** (status=completed) + **AC #3 ✓** (3 hash-chained `workflow:...:step:N` ledger entries) via 2 live operator-authorized runs. **AC #2** (tool dispatch via api.run) BLOCKED — no operator surface for `MCPClientHost.tool_contract_converter`; surface exercised at dispatcher level by U-RT-86; fork `class_1_fork_tool_step_no_operator_supplied_converter.md` → R-100-tool-step-converter. **AC #4** (cost-attribution) runtime `pytest.xfail` — real inference emits ZERO `cost:` entries despite wiring (llm_dispatch.py:517 + stage_5:147-149); fork `class_1_fork_llm_cost_attribution_not_firing_on_real_dispatch.md` → R-100-cost-attribution-firing + **OD-5 retirement-validity question** (grep-vs-e2e). Key-gated test (skips in CI). Zero src change. |
+| PR #165 (`2862e7e`) | 2026-05-31 | Terminating refresh post-PR-164 (dashboard-only; §12.2.1). Hash `48e2fffa4434` (state at `44c668d`). |
 | PR #164 (`44c668d`) | 2026-05-31 | **R-100-mvp-operator-usable-cli-shipped RESOLVED** — harness CLI end-to-end smoke shipped + live green verified. Use-the-product probe surfaced 4 operator-blocking gaps, all fixed (zero src change, advisor option B): `examples/minimal.toml` (dispatch-ready — the buried test fixture lacked `messages`); `examples/README.md` quickstart; `harness.toml.example` (path bindings → pipeline-automation + NEW `[runtime.routing_manifest]` fallback_chain [else stage 3b FallbackChainBindError] + corrected false "discovers by default" header); `justfile` run/daemon pass `--config harness.toml`; `.gitignore` harness.toml. Live green (operator-authorized): `just run examples/minimal.toml` → **EXIT=0, status=completed**, ledger head + **2 hash-chained entries** (audit:_single genesis → workflow:example-minimal:step:0 carrying `procedural_tier_snapshot_ref` — the R-003/IS-2 lift) against **real Anthropic**. Spec-conformance gap split out (does not block MVP): `class_1_fork_harness_toml_default_discovery_unimplemented.md` (PROPOSING) + R-100-mvp-config-discovery — §3.7 auto-discovery declared-but-unimplemented (dead `DEFAULT_CONFIG_FILE_NAME`; positive-control probe confirms). Unblocks R-100-mvp-real-workflow-execution. |
 | PR #163 (`fcfa568`) | 2026-05-31 | Terminating refresh post-PR-162 (dashboard-only; §12.2.1). Hash `c0c447454969` → `038c75a5245e`. |
 | PR #161 (`d904055`) | 2026-05-31 | **R-200-ci-lint-typecheck-blocking RESOLVED (pyright half — entry now fully closed)** — `uv run pyright` 846 → 0 tree-wide; `typecheck` CI job flipped `continue-on-error` → blocking (renamed `pyright (strict) — blocking`), verified **green-as-blocking** in CI alongside all 6 axis-isolation legs + ruff + pytest. Approach: test dirs scoped via `[tool.pyright.executionEnvironments]` (one entry per `harness-*/tests`); src real-fixed incl. the named two-`Skill`-class production bug (empty `types.Skill` stub re-exported as concrete `lifecycle.skills.Skill`; same for `LedgerWriter`; `HarnessMCPServer` kept-as-stub to protect Pydantic forward-refs — mid-flight regression caught + reverted) + `AuditLedgerWriter.append` Protocol completion + mcp `streamablehttp_client`→`streamable_http_client` deprecation rename + targeted narrowing/casts + documented library-boundary ignores. 3543 passed / 0 regression. BOTH lint + typecheck now blocking; §III CI substrate gate complete. |
 | PR #159 (`1b87f08`) | 2026-05-31 | **R-200-ci-lint-typecheck-blocking — LINT HALF CLOSED (entry stayed ACTIVE)** — `ruff check .` 133 → 0 + `ruff format --check .` clean tree-wide; `lint` CI job flipped `continue-on-error` → blocking, verified **green-as-blocking** in CI. Approach: src=fix (E402 import-consolidation ×7, PEP-695 UP047, E501 prose-wraps, intentional-name `# noqa`) / tests=scoped `**/tests/**` per-file-ignore (excludes F-codes) + global ASYNC109 ignore. 3543 passed / 0 regression. |
-| PR #157 (`ce211ee`) | 2026-05-31 | **R-200-ci-lint-typecheck-blocking progress (NOT a close)** — 3 F821 undefined-name **real defects** fixed (missing imports masked by `from __future__ import annotations`): `ValidatorFramework` at `validator_framework.py` + `Any` at `test_api.py`. ruff 136 → 133; **F821 tree-wide now 0**; 43 affected tests pass. |
 
 ---
 
-## Outstanding fork docs (40 total)
+## Outstanding fork docs (42 total)
 
 Sample (highest-leverage open):
 
 | Fork doc | Class | Status |
 |---|---|---|
-| `class_1_fork_harness_toml_default_discovery_unimplemented.md` | Class 1 | PROPOSING (NEW, PR #164) — spec §3.7 auto-discovery declared-but-unimplemented; tracked at R-100-mvp-config-discovery; does NOT block the MVP |
+| `class_1_fork_llm_cost_attribution_not_firing_on_real_dispatch.md` | Class 1 | PROPOSING (NEW, PR #166) — real inference emits no `cost:` entries; OD-5 retirement-validity question; tracked at R-100-cost-attribution-firing |
+| `class_1_fork_tool_step_no_operator_supplied_converter.md` | Class 1 | PROPOSING (NEW, PR #166) — TOOL_STEP not dispatchable via api.run (no operator converter surface); tracked at R-100-tool-step-converter; surface exercised at U-RT-86 |
+| `class_1_fork_harness_toml_default_discovery_unimplemented.md` | Class 1 | PROPOSING (PR #164) — spec §3.7 auto-discovery declared-but-unimplemented; tracked at R-100-mvp-config-discovery; does NOT block the MVP |
 | `class_1_fork_pr_2_workflow_layer_ctx_access_recipe_underspecified.md` | Class 1 | ✅ APPLIED-AS-READING-C (PR #107) — pending file-status refresh |
 | `class_1_fork_yaml_loader_step_payload_scalar_coercion_gap.md` | Class 1 | OPEN — gates R-100-mvp-yaml-loader-shipped |
 | `class_1_fork_topology_admissibility_check_load_time_vs_runtime_asymmetry.md` | Class 1 | OPEN — defer-to-runtime apply |
@@ -129,7 +137,11 @@ Sample (highest-leverage open):
 
 | 2026-05-31 | Twenty-second terminating refresh — PR #164 bundled R-100-close merged at `44c668d`; §12.2 owed follow-on | Single-file dashboard-only refresh per §12.2.1. Hash `038c75a5245e` → `48e2fffa4434` (state at `44c668d`; open_fork_doc_count 39 → 40 for the NEW discovery fork). Next action UNCHANGED at **R-100-mvp-real-workflow-execution**. Recursion-stopping fixed point: dashboard lags by exactly one commit (this refresh's own merge), recognized as `lag-expected` by the next §12.1 session-start audit. |
 
-**Audit protocol exercised across 22 terminating-refresh closures + 2 fresh-session reconciliations + 6 substantive closes (R-003, R-001-h-t-is-2-retired, R-200-ci-coverage-gating, R-200-ci-od-cp-dependency-leak, R-200-ci-lint-typecheck-blocking, R-100-mvp-operator-usable-cli-shipped).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **R-100-mvp-operator-usable-cli-shipped RESOLVED 2026-05-31 (PR #164 — operator-usable CLI scaffolding + operator-authorized live green: `just run examples/minimal.toml` → EXIT=0, status=completed, 2 hash-chained ledger entries against real Anthropic). §III CI substrate gate COMPLETE (PR #159 + #161); §I + §III drained. Deterministic next-action = R-100-mvp-real-workflow-execution (§II MVP — real 3+ step workflow at SOLO_DEVELOPER tier).**
+| 2026-06-01 | **R-100-mvp-real-workflow-execution PARTIAL + 2 forks** — same `/clear`→`continue` session: authored the real multi-step e2e (PR #166 `97c8943`). AC #1 + #3 PASS via 2 live operator-authorized Anthropic runs; AC #2 + #4 surfaced as Class 1 forks (converter gap + cost-not-firing w/ OD-5 retirement-validity question). | Substantive (PR #166 touches Project_Roadmap_v1.md: entry → ACTIVE/partial + NEW R-100-tool-step-converter + R-100-cost-attribution-firing) → NOT a terminating refresh; **follow-on terminating refresh owed**. Hash `48e2fffa4434` → recomputed below. Next action re-derived: **operator ratification of the 2 PROPOSING forks** (all §II forward entries now fork-gated; §VII process-discipline is the executable fallback). |
+
+| 2026-06-01 | Twenty-third terminating refresh — PR #166 substantive R-100-real-workflow PR merged at `97c8943`; §12.2 owed follow-on | Single-file dashboard-only refresh per §12.2.1. Hash `48e2fffa4434` → `0deb499daab5` (state at `97c8943`; open_fork_doc_count 40 → 42 for the 2 NEW R-100 forks). Next action = **operator fork-ratification** (see Next action section). Recursion-stopping fixed point: dashboard lags by exactly one commit (this refresh's own merge), recognized as `lag-expected` by the next §12.1 session-start audit. |
+
+**Audit protocol exercised across 23 terminating-refresh closures + 2 fresh-session reconciliations + 6 substantive closes + 1 substantive partial (R-100-mvp-real-workflow-execution).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **R-100-mvp-real-workflow-execution PARTIAL 2026-06-01 (PR #166 — real 3-step Anthropic api.run workflow; AC #1 + #3 PASS via live operator-authorized runs; AC #2 + #4 surfaced as 2 PROPOSING Class 1 forks).** §I + §III drained; §II MVP forward entries now fork-gated. **Deterministic next-action = operator ratification of `class_1_fork_tool_step_no_operator_supplied_converter.md` + `class_1_fork_llm_cost_attribution_not_firing_on_real_dispatch.md`** (the latter carries an OD-5 retirement-validity question); §VII process-discipline is the executable fallback.**
 
 ---
 
