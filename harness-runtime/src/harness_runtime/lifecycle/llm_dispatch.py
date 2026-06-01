@@ -57,8 +57,22 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, cast, runtime_checkable
 
-from harness_cp.cp_shared_types import ProviderAgnosticPayload
+from harness_core import PersonaTier, WorkloadClass
+from harness_cp.cp_shared_types import (
+    AgentRole,
+    ProviderAgnosticPayload,
+    RoutingDecisionTrace,
+    TraceContext,
+)
+from harness_cp.layer_budget import DEFAULT_LAYER_BUDGETS
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+from harness_cp.routing_core_surface import (
+    InferenceRequest,
+    ProviderDispatchResult,
+    infer,
+)
+from harness_cp.routing_layer import RoutingLayer
+from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 from harness_od.otel_genai_base import HIERARCHY_CORRELATION_KEY, GenAiOperation
 
@@ -210,6 +224,30 @@ def _extract_anthropic_cache_request_attrs(
     return (None, None)
 
 
+# R-300 MVP routing-envelope placeholders. The DECLARATIVE-echo layer decision
+# (see `RuntimeLLMDispatcher.dispatch`) echoes the resolved `binding.model_binding`
+# and ignores the InferenceRequest discriminators, so these are carried-but-not-
+# selection-driving at MVP. `AgentRole` is an open-string newtype and no per-step
+# role is threaded through the execution path at v1.6 (WorkflowStep carries only
+# step_id/step_kind/step_payload) and no conventional default-role key exists in
+# `RoutingManifest.per_role_bindings`; they become load-bearing at
+# R-300-second-provider when `route()` performs real per-discriminator selection.
+_MVP_DEFAULT_AGENT_ROLE = AgentRole("default")
+_MVP_DEFAULT_WORKLOAD_CLASS = WorkloadClass.SOFTWARE_ENGINEERING
+_MVP_PLACEHOLDER_TRACE_CONTEXT = TraceContext(
+    trace_id="0" * 32, span_id="0" * 16, trace_flags=0, trace_state=None
+)
+# Used when `self.routing_manifest` is unset (unit-test ergonomics). The echo
+# decision ignores the manifest, so an empty manifest is behavior-neutral.
+_EMPTY_ROUTING_MANIFEST = RoutingManifest(
+    manifest_version=1,
+    per_role_bindings={},
+    per_workload_overrides={},
+    fallback_chains=(),
+    retry_policies={},
+)
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeLLMDispatcher:
     """Per-step LLM-dispatch composer satisfying `harness_cp.workflow_driver.
@@ -284,6 +322,15 @@ class RuntimeLLMDispatcher:
     # hook silent-skips per §14.17.5 invariant 3.
     skill_activation_emitter: Any = None
     skills: Any = None
+    # R-300 — layered routing-selection substrate. Threaded at bootstrap stage 5
+    # from `ctx.routing_manifest` (stage 3b) + the run `workload_class` +
+    # `config.persona_tier`. All default None for unit-test ergonomics; the
+    # DECLARATIVE-echo path tolerates a None manifest (the echo decision ignores
+    # it; `_EMPTY_ROUTING_MANIFEST` substitutes) and resolves the envelope
+    # discriminators to MVP placeholders when unset.
+    routing_manifest: RoutingManifest | None = None
+    workload_class: WorkloadClass | None = None
+    persona_tier: PersonaTier | None = None
 
     async def dispatch(
         self,
@@ -303,6 +350,19 @@ class RuntimeLLMDispatcher:
         Per C-RT-15 §Specification content steps 1-5. Provider-specific
         dispatch branches are exhaustive over the three providers
         constructed at C-RT-05 stage 3a (anthropic / openai / ollama).
+
+        R-300 (2026-06-01): provider/model SELECTION now flows through the
+        layered routing strategy via `infer`
+        (`harness_cp.routing_core_surface`) rather than reading
+        `binding.model_binding` directly. `infer` composes `route` (U-CP-05)
+        with `_invoke_provider` (this dispatcher's provider-SDK boundary) as
+        its injected dispatch callable. At MVP the DECLARATIVE layer echoes the
+        resolved `binding.model_binding` (== the manifest role binding with
+        per-step overrides applied), so selection is behavior-preserving; the
+        new behavior is the `routing.*` span attribution (C-CP-01 §1.4) on the
+        `llm.inference` span. `infer` runs inside each RetryBreakerFallback
+        attempt; at the echo it is idempotent and cross-family fallback remains
+        the wrapper's responsibility (R-300-second-provider).
 
         Raises
         ------
@@ -349,14 +409,102 @@ class RuntimeLLMDispatcher:
                         skill=self.skills[skill_id],
                     )
 
+        payload = _coerce_payload(step.step_payload)
+
+        # --- R-300: layered routing-selection via infer() ----------------
+        # The DECLARATIVE layer decision echoes the resolved binding (the
+        # manifest role binding with per-step overrides applied) — selection is
+        # behavior-preserving at MVP. `route()`'s `manifest` arg + the envelope
+        # discriminators are carried but not selection-driving until
+        # R-300-second-provider.
+        def _declarative_echo(
+            _payload: ProviderAgnosticPayload, _manifest: RoutingManifest
+        ) -> str | None:
+            return f"{binding.model_binding.provider}:{binding.model_binding.model}"
+
+        # `infer()` requires an InferenceRequest envelope. Its discriminator
+        # fields are carried for the C-CP-01 §1.1 API surface but DISCARDED at
+        # this boundary: the live routing decision is surfaced as `routing.*`
+        # span attrs inside `_invoke_provider`, and the step output is the raw
+        # provider Mapping returned below — NOT the InferenceResponse (which is
+        # likewise discarded). They become load-bearing at R-300-second-provider.
+        envelope = InferenceRequest(
+            agent_role=_MVP_DEFAULT_AGENT_ROLE,
+            workload_class=self.workload_class or _MVP_DEFAULT_WORKLOAD_CLASS,
+            persona_tier=self.persona_tier or PersonaTier.SOLO_DEVELOPER,
+            context_tokens=len(payload.messages),
+            request_payload=payload,
+            trace_context=_MVP_PLACEHOLDER_TRACE_CONTEXT,
+        )
+
+        # The raw provider response Mapping (the step output) is surfaced out of
+        # the `infer()` composition via this holder — `infer()` returns an
+        # InferenceResponse, but the step-output contract is the raw Mapping.
+        raw_response: dict[str, Mapping[str, Any]] = {}
+
+        async def _provider_dispatch(
+            provider: str,
+            model: str,
+            inner_payload: ProviderAgnosticPayload,
+            routing_trace: RoutingDecisionTrace,
+        ) -> ProviderDispatchResult:
+            response = await self._invoke_provider(
+                provider,
+                model,
+                inner_payload,
+                step_context,
+                routing_trace=routing_trace,
+            )
+            raw_response["value"] = response
+            # ProviderDispatchResult is structurally required by `infer()` but
+            # DISCARDED at this boundary: the raw `response` Mapping is the step
+            # output, and gen_ai.usage.* + cost-attribution are already emitted +
+            # persisted inside `_invoke_provider`. Minimal placeholder.
+            return ProviderDispatchResult(
+                response_payload=ProviderAgnosticPayload(messages=(), tools=None, params={}),
+                tokens_in=0,
+                tokens_out=0,
+                cached_tokens_in=0,
+            )
+
+        await infer(
+            envelope,
+            dispatch=_provider_dispatch,
+            manifest=self.routing_manifest or _EMPTY_ROUTING_MANIFEST,
+            layer_decisions={RoutingLayer.DECLARATIVE: _declarative_echo},
+            budgets=DEFAULT_LAYER_BUDGETS,
+        )
+        return raw_response["value"]
+
+    async def _invoke_provider(
+        self,
+        provider_name: str,
+        model: str,
+        payload: ProviderAgnosticPayload,
+        step_context: StepExecutionContext,
+        *,
+        routing_trace: RoutingDecisionTrace,
+    ) -> Mapping[str, Any]:
+        """Provider-SDK dispatch boundary — the injected dispatch callable for
+        `infer()` (R-300). Opens the `llm.inference` span (gen_ai.* + routing.*
+        attribution), dispatches to the routed provider, runs cost-attribution,
+        and returns the raw provider response Mapping (the step output).
+
+        ``provider_name`` + ``model`` are the routing-selected candidate (per
+        `route()` per U-CP-05); ``routing_trace`` carries the routing decision
+        for `routing.*` span attribution per C-CP-01 §1.4.
+
+        Raises
+        ------
+        LLMDispatchProviderUnreachableError
+            ``provider_name`` not in ``self.providers``.
+            Maps to ``RT-FAIL-PROVIDER-UNREACHABLE`` per C-RT-14.
+        """
         # --- Step 1: provider resolution --------------------------------
-        provider_name = binding.model_binding.provider
         if provider_name not in self.providers:
             raise LLMDispatchProviderUnreachableError(provider_name)
 
         adapter = self.providers[provider_name]
-        payload = _coerce_payload(step.step_payload)
-        model = binding.model_binding.model
 
         # --- Step 2: open GenAI-semconv span ----------------------------
         # Span name per OD spec v1.12 §C-OD-04 §4.1 (2-token space-separated):
@@ -410,6 +558,23 @@ class RuntimeLLMDispatcher:
                 span.set_attribute("server.address", server_address)
                 if server_port is not None:
                     span.set_attribute("server.port", server_port)
+
+            # --- routing.* attribution (C-CP-01 §1.4; R-300) ------------
+            # The layered routing decision (`route()` per U-CP-05, composed by
+            # `infer()`) attaches to the `llm.inference` span per §1.4. The full
+            # §1.4 set is emitted so routing visibility is complete on the span
+            # (the canonical routing-visibility surface) — `infer()`'s
+            # InferenceResponse is discarded at the dispatch boundary, so the
+            # span is where routing visibility lives. `routing.binding_rationale`
+            # is the §1.4 optional token; at the MVP DECLARATIVE echo it records
+            # the layer + selected candidate.
+            span.set_attribute("routing.provider", provider_name)
+            span.set_attribute("routing.model", model)
+            span.set_attribute("routing.layer", routing_trace.layer)
+            span.set_attribute(
+                "routing.binding_rationale",
+                f"{routing_trace.layer}:{routing_trace.candidate}",
+            )
 
             # --- Step 3: per-provider dispatch --------------------------
             cache_attrs: _AnthropicCacheAttrs | None
@@ -979,6 +1144,9 @@ def materialize_llm_dispatcher_stage(
     ollama_host: str | None = None,
     skill_activation_emitter: Any = None,
     skills: Any = None,
+    routing_manifest: RoutingManifest | None = None,
+    workload_class: WorkloadClass | None = None,
+    persona_tier: PersonaTier | None = None,
 ) -> RuntimeLLMDispatcher:
     """Stage 5 LOOP_INIT composer factory for the LLM dispatcher (U-RT-52).
 
@@ -1011,6 +1179,9 @@ def materialize_llm_dispatcher_stage(
         ollama_host=ollama_host,
         skill_activation_emitter=skill_activation_emitter,
         skills=skills,
+        routing_manifest=routing_manifest,
+        workload_class=workload_class,
+        persona_tier=persona_tier,
     )
 
 
