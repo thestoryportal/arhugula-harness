@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `c0c447454969` |
-| `last_refreshed` | 2026-05-31T22:33:54-06:00 |
-| `git_head` | `d904055` (main) — `ci: drive pyright to 0 + flip typecheck job blocking (R-200-ci-lint-typecheck-blocking) (#161)` |
+| `workspace_state_hash` | `038c75a5245e` |
+| `last_refreshed` | 2026-05-31T22:40:00-06:00 |
+| `git_head` | `149c9a0` (main) — `ops: close R-200-ci-lint-typecheck-blocking + dashboard refresh post-PR-161 (#162)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-50.md` |
 | `open_fork_doc_count` | 39 |
 
@@ -30,7 +30,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `roadmap-refresh-post-161` | *(bundled close — NOT terminating §12.2.1)* | mode-agnostic — marks `R-200-ci-lint-typecheck-blocking` RESOLVED in `Project_Roadmap_v1.md` §5 + dashboard refresh (`72ce1ef25437` → `c0c447454969`) post-PR-161 merge. Touches both `Project_Roadmap_v1.md` AND `.harness/roadmap_status.md` → substantive, title drops the `ops: roadmap status refresh` prefix; a follow-on terminating refresh is owed for this PR's own merge commit |
+| *(this PR)* | `roadmap-refresh-post-162` | *(terminating refresh §12.2.1)* | mode-agnostic — `workspace_state_hash` recompute (`c0c447454969` → `038c75a5245e`) + anchor refresh post-PR-162 merge (the owed follow-on for the bundled R-200-close PR #162). ONLY `.harness/roadmap_status.md`; title `ops: roadmap status refresh post-PR-162` → next §12.1 audit sees expected lag-by-one |
 
 ---
 
@@ -122,7 +122,9 @@ Sample (highest-leverage open):
 
 | 2026-05-31 | **R-200-ci-lint-typecheck-blocking RESOLVED** (PR #161 pyright-half close, substantive) — `uv run pyright` 846 → 0 tree-wide; `typecheck` job flipped `continue-on-error` → blocking (renamed `pyright (strict) — blocking`), verified green-as-blocking in CI with all 6 axis-isolation legs + ruff + pytest | Bundled (touches `Project_Roadmap_v1.md` §5 status ACTIVE → RESOLVED) → NOT a terminating refresh; follow-on owed. Approach: test dirs scoped via `[tool.pyright.executionEnvironments]`; src real-fixed incl. the named two-`Skill`-class bug (empty `types.Skill` stub re-exported as concrete `lifecycle.skills.Skill`; same `LedgerWriter`; `HarnessMCPServer` kept-as-stub — Pydantic-forward-ref regression caught + reverted mid-flight) + `AuditLedgerWriter.append` Protocol completion + mcp `streamablehttp_client`→`streamable_http_client` deprecation rename. 3543 passed / 0 regression. cp+od axis-isolation legs run locally (813 / 887 passed). Hash `72ce1ef25437` → `c0c447454969` (state at `d904055`, pre-this-PR-merge). **§III CI substrate gate COMPLETE** (both lint + typecheck blocking). Next action re-derived: **R-100-mvp-operator-usable-cli-shipped** (§II MVP rank 4 — §III drained, §I drained, §II is next priority tier with a dependency-met ACTIVE entry). |
 
-**Audit protocol exercised across 20 terminating-refresh closures + 2 fresh-session reconciliations + 5 substantive closes (R-003, R-001-h-t-is-2-retired, R-200-ci-coverage-gating, R-200-ci-od-cp-dependency-leak, R-200-ci-lint-typecheck-blocking).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **R-200-ci-lint-typecheck-blocking FULLY RESOLVED 2026-05-31 (PR #159 lint half + PR #161 pyright half — ruff 0 + pyright 0, both `lint` + `typecheck` jobs blocking); §III CI substrate gate COMPLETE. Deterministic next-action = R-100-mvp-operator-usable-cli-shipped (§II MVP).**
+| 2026-05-31 | Twenty-first terminating refresh — PR #162 bundled R-200-close merged at `149c9a0`; §12.2 owed follow-on | Single-file dashboard-only refresh per §12.2.1. Hash `c0c447454969` → `038c75a5245e` (state at `149c9a0`). Next action UNCHANGED at **R-100-mvp-operator-usable-cli-shipped** (§II MVP — §III CI substrate gate complete). Recursion-stopping fixed point: dashboard lags by exactly one commit (this refresh's own merge), recognized as `lag-expected` by the next §12.1 session-start audit. |
+
+**Audit protocol exercised across 21 terminating-refresh closures + 2 fresh-session reconciliations + 5 substantive closes (R-003, R-001-h-t-is-2-retired, R-200-ci-coverage-gating, R-200-ci-od-cp-dependency-leak, R-200-ci-lint-typecheck-blocking).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **R-200-ci-lint-typecheck-blocking FULLY RESOLVED 2026-05-31 (PR #159 lint half + PR #161 pyright half — ruff 0 + pyright 0, both `lint` + `typecheck` jobs blocking); §III CI substrate gate COMPLETE. Deterministic next-action = R-100-mvp-operator-usable-cli-shipped (§II MVP).**
 
 ---
 
