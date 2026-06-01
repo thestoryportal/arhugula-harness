@@ -8,11 +8,11 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `be74ce84cf0f` |
-| `last_refreshed` | 2026-06-01T03:08:50-06:00 |
-| `git_head` | `492d327` (main) — `feat: AC#2-closing arc — wire full bootstrap TOOL_STEP path {D,B,C,E,F} (spec v1.41 §14.9.8, Reading B) (#172)` |
+| `workspace_state_hash` | `b7767c7cc1c6` |
+| `last_refreshed` | 2026-06-01T03:55:00-06:00 |
+| `git_head` | `60d55ee` (main) — `ops: close R-600-clearance-marker-backfill-survey — terminal-marker-covers-chain exemption (#175)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-50.md` |
-| `open_fork_doc_count` | 39 |
+| `open_fork_doc_count` | 43 |
 
 **Hash recipe.** `sha256(git_head[:8] + "|" + sorted_open_pr_csv + "|" + open_fork_doc_count + "|" + latest_retirement_batch_path)[:12]`. See `Project_Roadmap_v1.md` §7.1.
 
@@ -23,12 +23,13 @@
 **OPERATOR-GATED: R-100 MVP live e2e run (surface II; phase-7 posture).** The R-100 tool-step apply arcs are now LANDED on main — **`R-100-tool-step-converter`** (PR #171, spec v1.40, per-server default tool-contract policy) and **`R-100-tool-step-sandbox-resolver`** (PR #172, spec v1.41 §14.9.8 sandbox-decision-resolver + all 5 bootstrap gaps {D,B,C,E,F} wired + 18 CI-green tests). Both fork docs are RATIFIED-AS-READING-B and APPLIED. **The remaining R-100 MVP closures are operator-gated live runs that I will not fire unilaterally** (`[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`):
 
 - **AC #2 final close** (`R-100-tool-step-sandbox-resolver` → RESOLVED): run the skipif-gated `test_r100_ac2_tool_step_e2e.py` — a TOOL_STEP completes through `api.run` end-to-end (echo MCP). Needs a constructible provider (Gap D); live-green is the operator's run.
-- **`R-100-mvp-operator-usable-cli-shipped`** (ACTIVE, deps []): `just harness-run minimal.toml` exits 0 + non-empty LLM response — live LLM, operator's run.
-- **`R-100-mvp-real-workflow-execution`** (BLOCKED on the CLI smoke): 3-step Anthropic e2e — AC #1/#3/#4 already green via prior operator-authorized runs; AC #2 now apply-complete pending the live TOOL_STEP run above.
+- **`R-100-mvp-real-workflow-execution`** (ACTIVE on clean main; deps RESOLVED — `R-100-mvp-operator-usable-cli-shipped` is RESOLVED): 3-step Anthropic e2e — AC #1/#3/#4 already green via prior operator-authorized runs; AC #2 now apply-complete pending the live TOOL_STEP run above. This is the §4 top candidate and it closes only by a live LLM run.
 
-**§4 derivation:** §I (substitution) drained, §III (CI substrate) fully RESOLVED. The top remaining candidates are §II MVP, all of which close only by a live LLM e2e run. **Recommended operator action:** run the skipif-gated R-100 live e2e (with `ANTHROPIC_API_KEY` set, or live ollama) to close AC #2 + the CLI smoke + real-workflow-execution. **Claude-executable fallback** (if deferring the live run): `R-100-mvp-yaml-loader-shipped` (resolve the OPEN `class_1_fork_yaml_loader_step_payload_scalar_coercion_gap.md`; formally BLOCKED on real-workflow-execution but the loader work is grep/test-driven), or §XI operator-tooling (now unblocked — §III CI baseline complete).
+**§4 derivation (clean-main, 2026-06-01):** §I (substitution) drained; §III (CI substrate) fully RESOLVED; §VII `R-600-clearance-marker-backfill-survey` RESOLVED (PR #175); `R-600-pattern-bake-in-sweep` gated by the deferred Workflow v1.14. Top §II candidate `R-100-mvp-real-workflow-execution` (ACTIVE, deps RESOLVED) closes only by a live LLM e2e → operator-gated. **`R-100-mvp-yaml-loader-shipped` is verified done at the Claude-executable level** — `test_workflow_manifest_loader.py` + `test_track_b_e2e.py` YAML↔TOML equivalence (load + mocked dispatch) = 41 passed / 5 skipped; YAML scalar-coercion fork APPLIED-AS-READING-A (spec v1.39); only its live-dispatch facet shares the §II operator-gate.
 
-**(PR #173 `8b1306c` CLAUDE.md §13 orchestration+effort discipline. PR #171 `75631ee` converter half (Reading B, spec v1.40). PR #172 `492d327` AC#2-closing arc (5 gaps, spec v1.41 §14.9.8). PR #169 `5431ed1` ratified converter fork → Reading B. PR #168 `a9ee48d` closed cost fork as INVALID — cost-attribution fires + writes; OD-5 retirement VALID. PR #161 §III CI substrate complete.)**
+**Genuine next Claude-executable arc = `R-XI-01` (operator dashboard MVP, §XI, mode-agnostic).** Its trigger (R-200-ci-pytest baseline) is met → flip-eligible PROPOSED→ACTIVE. It's a net-new feature build (generator reading roadmap_status.md + roadmap §5 + gh PR API + git log + harness-*/CLAUDE.md §4.1 → single-page `roadmap.html`) **with a GitHub Pages auto-deploy workflow (outward-facing public site)** — teed up pending operator go-ahead on the build + the public-deploy component. **Dominant product next-step remains the operator's live R-100 e2e run** (not auto-fireable).
+
+**(PR #175 `60d55ee` closed R-600-clearance-marker-backfill-survey — terminal-marker-covers-chain exemption; survey gap-free for all spec/ADR/ADD/PRD/CXA/Workflow surfaces. PR #173/#171/#172 = §13 discipline + R-100 tool-step converter + AC#2-closing arc. open_fork_doc_count corrected 39→43 — prior value was a stale/dirty-checkout artifact.)**
 
 ---
 
@@ -36,7 +37,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `roadmap-refresh-post-172` | *(terminating refresh §12.2.1)* | mode-agnostic — `workspace_state_hash` recompute (`35586f56e497` → `be74ce84cf0f`) + anchor refresh covering the #173→#171→#172 merge cluster (CLAUDE.md §13 + R-100 tool-step converter half + AC#2-closing arc). ONLY `.harness/roadmap_status.md`; title `ops: roadmap status refresh post-PR-172` → next §12.1 audit sees expected lag-by-one |
+| *(this PR)* | `roadmap-refresh-post-175` | *(terminating refresh §12.2.1)* | mode-agnostic — `workspace_state_hash` recompute (`be74ce84cf0f` → `b7767c7cc1c6`) covering PR #175 (R-600 close) + `open_fork_doc_count` correction 39→43 (prior value was a stale/dirty-checkout artifact). ONLY `.harness/roadmap_status.md`; title `ops: roadmap status refresh post-PR-175` → next §12.1 audit sees expected lag-by-one |
 
 ---
 
@@ -44,15 +45,15 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #175 (`60d55ee`) | 2026-06-01 | **R-600-clearance-marker-backfill-survey RESOLVED** — surveyed 18 design-substrate amendments since 2026-05-29 vs 17 markers: gap-free for every spec/CXA/Workflow + every terminal plan version; only 10 intermediate superseded plan versions (runtime v2.34–v2.41, CP v2.30, IS v2.4) lack a per-version marker — all covered by their cluster's terminal marker. Codified the terminal-marker-covers-chain exemption (plans only) + survey log at `.harness/clearance/README.md`. No backfill owed. |
 | PR #172 (`492d327`) | 2026-06-01 | **R-100-tool-step-sandbox-resolver APPLIED-PENDING-OPERATOR-E2E** — AC#2-closing arc; spec v1.41 NEW §14.9.8 `SandboxDispatchDecision` + `SandboxDecisionResolver` (Reading B per-server fields; phantom §14.9.7 cites corrected). All 5 bootstrap TOOL_STEP gaps wired {D config-around, B stage-3a `host.start()`, C resolver+fields, E emitter `info_lookup` from host, F `host.shutdown()`}. 18 CI-green tests + skipif-gated echo-MCP-via-`api.run` e2e. Rebased onto main after #171 squash (stacked-PR artifact resolved; §13 + roadmap status taken from main). Clearance marker spec v1.41. AC #2 final close = operator's live e2e run. |
 | PR #171 (`75631ee`) | 2026-06-01 | **R-100-tool-step-converter APPLIED** — Reading B per-server default tool-contract policy; spec v1.39→v1.40 §14.9.3 stage-3a factory builds default-policy `MCPToolContractConverter` from NEW `MCPClientConfig.{default_minimum_tier, default_blast_radius}`. Converter config surface only (one necessary piece; full path closed at #172). 5 converter unit tests; clearance marker spec v1.40. |
 | PR #173 (`8b1306c`) | 2026-06-01 | **CLAUDE.md §13 orchestration + effort discipline** — mode-agnostic; single matrix for solo vs `advisor()`/council/adversarial-reviewer/workflow + always-on verification disciplines. Distilled from the 2026-06-01 ultracode retrospective. CLAUDE.md only. |
 | PR #169 (`5431ed1`) | 2026-06-01 | **Converter fork RATIFIED-AS-READING-B** — operator AskUserQuestion ratified per-server default tool-contract policy (`MCPClientConfig` gains `{default_minimum_tier, default_blast_radius}`; factory builds a default-policy converter → TOOL_STEP dispatchable via `api.run`). Fork doc Status → RATIFIED. |
-| PR #168 (`a9ee48d`) | 2026-06-01 | **Cost fork RESOLVED-AS-INVALID** — cost-attribution DOES fire + write (`WriteResult.APPENDED` ×3); "no `cost:` entries" was a test-observation-layer bug (cost entry lands under the `audit:` thread; `cost:` action_id is in the hashed payload). AC #4 test corrected → PASSES. OD-5 retirement (batch-32) re-validated VALID. |
 
 ---
 
-## Outstanding fork docs (39 total)
+## Outstanding fork docs (43 total)
 
 Sample (highest-leverage open):
 
@@ -62,9 +63,9 @@ Sample (highest-leverage open):
 | `class_1_fork_tool_step_no_bootstrap_sandbox_decision_resolver.md` | Class 1 | ✅ APPLIED-AS-READING-B (PR #172, spec v1.41 §14.9.8) — resolver + 5 bootstrap gaps wired; AC #2 final close = operator live e2e |
 | `class_1_fork_llm_cost_attribution_not_firing_on_real_dispatch.md` | Class 1 | ❌ RESOLVED-AS-INVALID (PR #168) — test-observation bug, not a defect; cost-attribution fires + writes; OD-5 retirement VALID |
 | `class_1_fork_harness_toml_default_discovery_unimplemented.md` | Class 1 | PROPOSING (PR #164) — spec §3.7 auto-discovery declared-but-unimplemented; tracked at R-100-mvp-config-discovery; does NOT block the MVP |
-| `class_1_fork_pr_2_workflow_layer_ctx_access_recipe_underspecified.md` | Class 1 | ✅ APPLIED-AS-READING-C (PR #107) — pending file-status refresh |
-| `class_1_fork_yaml_loader_step_payload_scalar_coercion_gap.md` | Class 1 | OPEN — gates R-100-mvp-yaml-loader-shipped |
-| `class_1_fork_topology_admissibility_check_load_time_vs_runtime_asymmetry.md` | Class 1 | OPEN — defer-to-runtime apply |
+| `class_1_fork_pr_2_workflow_layer_ctx_access_recipe_underspecified.md` | Class 1 | ✅ APPLIED-AS-READING-C (PR #107, spec v1.30) |
+| `class_1_fork_yaml_loader_step_payload_scalar_coercion_gap.md` | Class 1 | ✅ APPLIED-AS-READING-A (spec v1.39, pyyaml StrictSafeLoader) — R-100-mvp-yaml-loader-shipped verified done at non-live level (41 loader/equivalence tests pass) |
+| `class_1_fork_topology_admissibility_check_load_time_vs_runtime_asymmetry.md` | Class 1 | ✅ APPLIED-AS-READING-A (spec v1.38, defer-to-runtime) |
 | `class_2_fork_audit_stub_timestamp_universal_fix_plus_per_tier_annotation.md` | Class 2 | ✅ APPLIED-AS-(D) |
 | *(complete enumeration at `ls .harness/class_*_fork_*.md`)* | — | — |
 
@@ -148,7 +149,9 @@ Sample (highest-leverage open):
 
 | 2026-06-01 | **R-100 tool-step apply cluster landed** — `/clear`→`continue` session: operator approved (AskUserQuestion) merging the 3 ready green PRs in stack order #173 → #171 → #172. #172 (stacked on #171) was rebased onto main after #171's squash-merge diverged its base (standard stacked-PR artifact); 2 doc conflicts (CLAUDE.md runtime-spec row + roadmap status) resolved to #172's superset, §13 preserved. All blocking CI green at each merge. | Three substantive PRs (their own merges); **this is the owed follow-on terminating refresh** (Twenty-fifth) covering #170→#172. Dashboard-only → terminating per §12.2.1. Hash `35586f56e497` → `be74ce84cf0f` (state at `492d327`; fork count 42 → 39 recount). `R-100-tool-step-converter` APPLIED (#171) + `R-100-tool-step-sandbox-resolver` APPLIED-PENDING-OPERATOR-E2E (#172). Next action = **operator-gated R-100 MVP live e2e run** (AC #2 + CLI smoke + real-workflow close only by a live LLM run; not auto-fireable). Recursion-stopping fixed point: dashboard lags by exactly one commit, recognized as `lag-expected` by the next §12.1 audit. |
 
-**Audit protocol exercised across 25 terminating-refresh closures + 2 fresh-session reconciliations + 8 substantive closes + 1 substantive partial + 1 operator-approved 3-PR merge cluster (#173/#171/#172, stacked-PR rebase).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **R-100 tool-step apply arcs LANDED 2026-06-01: `R-100-tool-step-converter` APPLIED (PR #171, spec v1.40), `R-100-tool-step-sandbox-resolver` APPLIED-PENDING-OPERATOR-E2E (PR #172, spec v1.41 §14.9.8, all 5 bootstrap gaps + 18 CI-green tests).** **Deterministic next-action = operator-gated R-100 MVP live e2e run** — AC #2 final close (skipif-gated `test_r100_ac2_tool_step_e2e.py` TOOL_STEP-via-`api.run`), the CLI smoke (`R-100-mvp-operator-usable-cli-shipped`), and `R-100-mvp-real-workflow-execution` all close only by a live LLM run (operator's; not auto-fireable per `[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`). Claude-executable fallback if deferring: `R-100-mvp-yaml-loader-shipped` (OPEN YAML scalar-coercion fork) or §XI operator-tooling (now unblocked).**
+| 2026-06-01 | **R-600-clearance-marker-backfill-survey RESOLVED** (PR #175 `60d55ee`) — same session: with §II MVP operator-gated, corrected the §4 board (dirty-primary-checkout had contaminated the derivation) and executed the highest-priority ungated Claude-executable entry. Survey gap-free for all spec/CXA/Workflow + terminal plan markers; 10 intermediate superseded plan versions exempt (terminal-marker-covers-chain). | Substantive (touched roadmap + clearance README) → **this is the owed follow-on terminating refresh** (Twenty-sixth). Dashboard-only → terminating per §12.2.1. Hash `be74ce84cf0f` → `b7767c7cc1c6` (state at `60d55ee`). **`open_fork_doc_count` corrected 39 → 43** — the 39 in PR #174 was computed in the stale/dirty primary checkout (on b220dd5); the hook-recipe glob on clean main = 43. Clean-main §4 re-derivation: §I drained, §III done, §VII R-600-clearance RESOLVED + R-600-pattern-bake-in gated by deferred Workflow v1.14; `R-100-mvp-yaml-loader-shipped` verified done at non-live level (41 tests). Next Claude-executable arc = **R-XI-01 operator dashboard MVP** (trigger met; flip-eligible; outward-facing Pages deploy → teed up pending operator go-ahead). Dominant product next-step stays the operator's live R-100 e2e. Recursion-stopping fixed point: dashboard lags by exactly one commit, recognized as `lag-expected` by the next §12.1 audit. |
+
+**Audit protocol exercised across 26 terminating-refresh closures + 2 fresh-session reconciliations + 9 substantive closes + 1 substantive partial + 1 operator-approved 3-PR merge cluster (#173/#171/#172, stacked-PR rebase).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **2026-06-01 session: landed the R-100 tool-step apply cluster (#173/#171/#172), then closed R-600-clearance-marker-backfill-survey (#175) as the highest-priority ungated Claude-executable entry.** §II MVP product work is operator-gated (live R-100 e2e); the genuine Claude-executable arc remaining is **R-XI-01 (operator dashboard MVP)** — trigger met, flip-eligible, but a net-new feature build with an outward-facing GitHub Pages deploy → teed up pending operator go-ahead. **Deterministic next-action = either (a) operator runs the live R-100 e2e to close AC #2 + CLI smoke + real-workflow-execution, or (b) operator green-lights the R-XI-01 dashboard build.** Both R-600-pattern-bake-in-sweep (gated by deferred Workflow v1.14) and the downstream §V/VI/IV multi-deployment/tenant/LLM surfaces depend on MVP-shipped (live-gated).
 
 ---
 
