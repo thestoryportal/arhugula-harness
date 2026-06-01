@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `8070fa6466c7` |
-| `last_refreshed` | 2026-05-31T22:15:00-06:00 |
-| `git_head` | `ce211ee` (main) — `fix: 3 F821 undefined-name real defects (R-200-ci-lint-typecheck-blocking) (#157)` |
+| `workspace_state_hash` | `72ce1ef25437` |
+| `last_refreshed` | 2026-05-31T20:57:14-06:00 |
+| `git_head` | `1b87f08` (main) — `ci: drive ruff to 0 + flip lint job blocking (R-200-ci-lint-typecheck-blocking) (#159)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-50.md` |
 | `open_fork_doc_count` | 39 |
 
@@ -20,9 +20,9 @@
 
 ## Next action
 
-**`R-200-ci-lint-typecheck-blocking`** (status: **ACTIVE — in progress**; surface III; **phase-7**; **advisor_required: conditional** — if a fix touches a cross-axis contract or production type; **cross_axis: no**) — drive the tree ruff/pyright-clean, then flip CI `lint` + `typecheck` from advisory (`continue-on-error`) to blocking. **Progress: PR #155 mechanical sweep landed (ruff 366 → 136; `ruff format --check` now clean tree-wide; 3543 passed / 0 regression).** Remaining: **(b-ruff) the 136 manual ruff residual** — E402 ×41, E501 ×40, ASYNC109 ×11, B017 ×10, naming ×15, **F821 ×3 (potential real bugs — investigate first)**, RUF012 ×4, etc. (mix of real fixes + ruff-config per-file-ignores for test-legitimate patterns); **(b-pyright) ~894 pyright** incl. the genuine production bug — two distinct `Skill` classes (`harness_runtime.types.Skill` vs `harness_runtime.lifecycle.skills.Skill`) at `harness-runtime/src/harness_runtime/types.py:1683` (reportArgumentType); **(c)** flip `continue-on-error → false` on the `lint` + `typecheck` jobs (lint can flip once ruff = 0, independent of pyright). scope = `harness-*/**` + `ci.yml`. close_shape = PR-merge; cascade = `R-IF-roadmap-refresh`. **§4 derivation:** sole remaining ACTIVE §III entry (phase-7); outranks §II `R-100-mvp-operator-usable-cli-shipped` (rank 4). §II MVP (live-Anthropic e2e) also remains executable. Pipeline not drained.
+**`R-200-ci-lint-typecheck-blocking`** (status: **ACTIVE — in progress**; surface III; **phase-7**; **advisor_required: conditional** — if a fix touches a cross-axis contract or production type; **cross_axis: no**) — drive the tree ruff/pyright-clean, then flip CI `lint` + `typecheck` from advisory (`continue-on-error`) to blocking. **Progress: LINT HALF CLOSED at PR #159 — `ruff check .` 133 → 0 + `ruff format --check .` clean tree-wide; the `lint` CI job flipped `continue-on-error` → blocking and is verified green-as-blocking in CI; 3543 passed / 0 regression.** (Prior: PR #155 mechanical sweep ruff 366 → 136; PR #157 F821 ×3 real-defect fixes 136 → 133.) Remaining: **(b-pyright) ~894 pyright** incl. the genuine production bug — two distinct `Skill` classes (`harness_runtime.types.Skill` vs `harness_runtime.lifecycle.skills.Skill`) at `harness-runtime/src/harness_runtime/types.py:1683` (reportArgumentType); **(c-typecheck)** flip `continue-on-error → false` on the `typecheck` job (gated on pyright = 0). scope = `harness-*/**` + `ci.yml`. close_shape = PR-merge; cascade = `R-IF-roadmap-refresh`. **§4 derivation:** sole remaining ACTIVE §III entry (phase-7); outranks §II `R-100-mvp-operator-usable-cli-shipped` (rank 4). §II MVP (live-Anthropic e2e) also remains executable. Pipeline not drained.
 
-**(PR #155 ruff mechanical sweep landed `f1f9a52` — ruff 366 → 136, format clean, zero regression. R-200-ci-od-cp-dependency-leak RESOLVED at PR #153. R-200-ci-coverage-gating RESOLVED at PR #150/#151. R-200-ci-axis-matrix RESOLVED at PR #147. R-001-h-t-is-2-retired RESOLVED at PR #141 — IS-axis 9/9 = 100%.)**
+**(PR #159 lint half landed `1b87f08` — ruff 133 → 0 via src fixes + scoped `**/tests/**` per-file-ignores; `lint` job now blocking + green-as-blocking in CI; pyright stays advisory; zero regression. PR #157 F821 ×3 real defects `ce211ee`. PR #155 ruff mechanical sweep `f1f9a52`. R-200-ci-od-cp-dependency-leak RESOLVED at PR #153. R-200-ci-coverage-gating RESOLVED at PR #150/#151. R-200-ci-axis-matrix RESOLVED at PR #147. R-001-h-t-is-2-retired RESOLVED at PR #141 — IS-axis 9/9 = 100%.)**
 
 ---
 
@@ -30,7 +30,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `roadmap-refresh-post-157` | *(terminating refresh §12.2.1)* | mode-agnostic — `workspace_state_hash` recompute (`e077fe676860` → `8070fa6466c7`) + anchor refresh post-PR-157 merge. ONLY `.harness/roadmap_status.md`; title `ops: roadmap status refresh post-PR-157` → next §12.1 audit sees expected lag |
+| *(this PR)* | `roadmap-refresh-post-159` | *(terminating refresh §12.2.1)* | mode-agnostic — `workspace_state_hash` recompute (`8070fa6466c7` → `72ce1ef25437`) + anchor refresh post-PR-159 merge. ONLY `.harness/roadmap_status.md`; title `ops: roadmap status refresh post-PR-159` → next §12.1 audit sees expected lag |
 
 ---
 
@@ -38,11 +38,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #159 (`1b87f08`) | 2026-05-31 | **R-200-ci-lint-typecheck-blocking — LINT HALF CLOSED (entry stays ACTIVE)** — `ruff check .` 133 → 0 + `ruff format --check .` clean tree-wide; `lint` CI job flipped `continue-on-error` → blocking, verified **green-as-blocking** in CI. Approach: src=fix (E402 import-consolidation ×7, PEP-695 UP047, E501 prose-wraps, intentional-name `# noqa`) / tests=scoped `**/tests/**` per-file-ignore (excludes F-codes) + global ASYNC109 ignore (spec-mandated timeout params). 3543 passed / 0 regression. pyright stays advisory; remaining = (b-pyright) ~894 + (c-typecheck) flip. |
 | PR #157 (`ce211ee`) | 2026-05-31 | **R-200-ci-lint-typecheck-blocking progress (NOT a close)** — 3 F821 undefined-name **real defects** fixed (missing imports masked by `from __future__ import annotations`): `ValidatorFramework` at `validator_framework.py` + `Any` at `test_api.py`. ruff 136 → 133; **F821 tree-wide now 0**; 43 affected tests pass. Entry stays ACTIVE. |
 | PR #155 (`f1f9a52`) | 2026-05-31 | **R-200-ci-lint-typecheck-blocking progress (NOT a close)** — mechanical ruff sweep: `ruff check --fix` (safe; 224 fixed) + `ruff format` (210 files). ruff 366 → 136; `ruff format --check` clean tree-wide. 258 files; **3543 passed / 7 skipped, zero regression**. Entry stays ACTIVE — residual 136 manual ruff (incl. F821 ×3) + ~894 pyright + flip-blocking remain. |
 | PR #153 (`4d0914d`) | 2026-05-31 | **R-200-ci-od-cp-dependency-leak RESOLVED** — harness-od declares `harness-cp` (canonical OD→CP §2.3.3 consumer; src reads `ReplayDisposition` from `engine_namespace`) + `harness-is` (OD→IS §2.3.4; test fixtures). Both acyclic-safe. od isolation leg verified green in CI as blocking (887 passed) + `continue-on-error` carve-out dropped → full 6-leg matrix blocks. Corrected the dashboard/CI "reverse-direction / relocate the seam" framing (OD→CP is canonical) at `.harness/class_3_drift_od_cp_undeclared_dependency.md`. Advisor-gated (option (a)). |
 | PR #151 (`51f4131`) | 2026-05-31 | **R-200-ci-coverage-gating substantive close** — `Project_Roadmap_v1.md` §5.4 ACTIVE → RESOLVED (PR #150) + dashboard refresh post-#148/#149/#150. Blocking `pytest` green; advisory legs (od axis-isolation, pyright, ruff) red-as-expected. Bundled → NOT a terminating refresh; this terminating refresh is the owed follow-on. |
-| PR #150 (`5d06106`) | 2026-05-31 | **R-200-ci-coverage-gating RESOLVED** — advisory `coverage` job in `ci.yml` (continue-on-error) + `pytest-cov>=6.0` + `[tool.coverage.run]` (branch, 7 packages, tests omitted). Publishes total line/branch coverage to the PR step-summary + uploads `coverage.xml`. CI-verified (job green; coverage-xml 36KB artifact). v1 informational, no `fail_under`. |
 
 ---
 
@@ -118,7 +118,9 @@ Sample (highest-leverage open):
 
 | 2026-05-31 | Nineteenth terminating refresh — PR #157 F821 real-defect fixes (R-200-ci-lint-typecheck-blocking **progress**, not a close) merged at `ce211ee`; §12.2 owed follow-on | Single-file dashboard-only refresh per §12.2.1. Hash `e077fe676860` → `8070fa6466c7` (state at `ce211ee`). Next action UNCHANGED at **R-200-ci-lint-typecheck-blocking** (entry still ACTIVE — 3 F821 real defects fixed, ruff 136 → 133, F821 tree-wide now 0; 133 manual ruff residual + ~894 pyright + flip-blocking remain). Recursion-stopping fixed point: dashboard lags by exactly one commit, recognized as `lag-expected` by the next §12.1 audit. |
 
-**Audit protocol exercised across 19 terminating-refresh closures + 2 fresh-session reconciliations + 4 substantive closes (R-003, R-001-h-t-is-2-retired, R-200-ci-coverage-gating, R-200-ci-od-cp-dependency-leak) + 1 in-progress entry (R-200-ci-lint-typecheck-blocking — PRs #155 sweep + #157 F821).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **R-200-ci-lint-typecheck-blocking IN PROGRESS 2026-05-31 (PRs #155 + #157 + this terminating refresh); deterministic next-action UNCHANGED = R-200-ci-lint-typecheck-blocking (133 manual ruff residual → ~894 pyright → flip blocking).**
+| 2026-05-31 | Twentieth terminating refresh — PR #159 lint-half close (R-200-ci-lint-typecheck-blocking **lint half closed**, entry stays ACTIVE) merged at `1b87f08`; §12.2 owed follow-on | Single-file dashboard-only refresh per §12.2.1. Hash `8070fa6466c7` → `72ce1ef25437` (state at `1b87f08`). Next action UNCHANGED at **R-200-ci-lint-typecheck-blocking** (entry still ACTIVE — `ruff check .` + `ruff format --check .` clean tree-wide; `lint` CI job flipped to blocking + verified green-as-blocking; ~894 pyright + `typecheck`-flip remain). Recursion-stopping fixed point: dashboard lags by exactly one commit, recognized as `lag-expected` by the next §12.1 audit. |
+
+**Audit protocol exercised across 20 terminating-refresh closures + 2 fresh-session reconciliations + 4 substantive closes (R-003, R-001-h-t-is-2-retired, R-200-ci-coverage-gating, R-200-ci-od-cp-dependency-leak) + 1 in-progress entry (R-200-ci-lint-typecheck-blocking — PRs #155 sweep + #157 F821 + #159 lint-half).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **R-200-ci-lint-typecheck-blocking LINT HALF CLOSED 2026-05-31 (PR #159 — ruff 0 + lint job blocking); deterministic next-action UNCHANGED = R-200-ci-lint-typecheck-blocking (remaining: ~894 pyright → flip `typecheck` blocking).**
 
 ---
 
