@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `03d7322f983b` |
-| `last_refreshed` | 2026-06-01T19:34:00-06:00 |
-| `git_head` | `3885074d` (main) — `back-flow: file Class 1 fork for R-CXA-1 secret-fetch audit bootstrap ordering (#218)` |
+| `workspace_state_hash` | `42239f9ed02a` |
+| `last_refreshed` | 2026-06-01T19:50:00-06:00 |
+| `git_head` | `d77647bf` (main) — `back-flow: R-CXA-1 fork RESOLVED-AS-READING-D (defer; don't wire) (#220)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 44 |
 
@@ -60,8 +60,8 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `apply-cxa-1-secret-fetch-reading-d` | R-CXA-1 (fork resolution) | back-flow / mode-agnostic — resolves the R-CXA-1 fork **APPLIED-AS-READING-D (defer)**: fork doc Status + NEW §2.6 empirical finding + resolution log; roadmap §5 R-CXA-1 note; dashboard. **ZERO production code change** (don't-wire). **Bundled (3 files, no design-substrate touch) → NOT a terminating refresh per §12.2.1 → follow-on terminating refresh owed.** Hash left stale `03d7322f983b` (fork count stays 44 — fork doc APPLIED, not deleted) — recompute owed at the post-merge terminating refresh. |
-| *(none else)* | — | — | open-PR set empty after #218/#219 merged. |
+| *(this PR)* | `ops-roadmap-refresh-post-220` | *(terminating refresh §12.2.1)* | mode-agnostic — records PR #220 (R-CXA-1 fork RESOLVED-AS-READING-D); `workspace_state_hash` recompute (`03d7322f983b` → `42239f9ed02a`, fork count 44) + `git_head` → `d77647bf` (#220 merge). Dashboard-only (`.harness/roadmap_status.md`); title `ops: roadmap status refresh post-PR-220` → next §12.1 audit sees expected lag-by-one (carve-out §12.1 step 6). |
+| *(none else)* | — | — | open-PR set empty after #220 merged. |
 
 ---
 
@@ -207,7 +207,9 @@ The 5 bucket rows below sum to **54** using the draft's per-row **accounting (i)
 
 | 2026-06-01 | **R-CXA-1 fork RESOLVED-AS-READING-D (this PR)** — apply arc opened on first-ratified Reading B; pre-substantive empirical orientation + advisor reconcile found it unwritable-as-previewed (bootstrap fetch = `resolve_bootstrap_value(NAME)`; scope-bearing `resolve()` has ZERO production callers; unsourced-field sentinels collapse the secret fingerprint to f(name); idempotency key timestamp-free = fire-once-forever; `SecretFetchEvent` machinery has no real producer — `emit_secret_fetch_audit` composes-and-discards). Operator re-ratified DON'T-WIRE (Reading D). must_pass #1 DEFERRED; R-CXA-1 PARTIAL; ZERO production code (avoided a vacuous LANDED). | Bundled (fork doc Status + §2.6 finding + roadmap §5 note + dashboard; no design-substrate touch) → NOT a terminating refresh; **follow-on terminating refresh owed** per §12.2.1. `open_fork_doc_count` stays 44 (fork doc APPLIED, not deleted). Hash left stale `03d7322f983b` — recompute owed at the post-merge terminating refresh. Next action: no auto-startable Claude-executable arc remains; R-830 / R-CXA-4 are operator-driven menu picks; live runs + R-300-second-provider creds-gated. **Pattern: advisor-before-substantive-work + use-the-product/grounding caught a vacuous-close before it shipped (2nd "wire-the-caller-is-producer-discovery" instance after U-RT-111).** |
 
-**Audit protocol exercised across 30 terminating-refresh closures + 2 fresh-session reconciliations + 10 substantive closes + 1 substantive partial + 1 Class 1 fork filing + 1 Class 1 fork resolved-as-defer + 1 operator-approved 3-PR merge cluster + R-XI-01 dashboard build + 1 process-discipline sweep (R-600-pattern-bake-in).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **2026-06-01 session: landed the R-100 tool-step apply cluster (#173/#171/#172), closed R-600-clearance-marker-backfill-survey (#175), built+landed R-XI-01 operator dashboard MVP (#177), and ran the first R-600-pattern-bake-in-sweep (ACTIVE-SURVEYED; v1.14 absorption deferred).** **All Claude-executable substantive arcs are drained.** The deterministic next-action is operator-owned: **(a) run the live R-100 e2e**, and/or **(b)** any operator-scoped design-phase arc (e.g. the `R-600-workflow-v1-14-amendment` the sweep now has evidence for). Remaining Claude-executable mode-agnostic work = MEMORY.md hygiene audit + fork-doc Status cadence sweep; §V/VI/IV gated on MVP-shipped / live e2e.
+| 2026-06-01 | Thirty-eighth terminating refresh — PR #220 bundled R-CXA-1-fork-resolution merged at `d77647b`; §12.2 owed follow-on | Single-file dashboard-only refresh per §12.2.1. Hash `03d7322f983b` → `42239f9ed02a` (state at `d77647b`, the #220 merge; PRS empty; fork count 44; batch-51). Next action UNCHANGED — no auto-startable Claude-executable arc remains (R-CXA-1 must_pass #1 deferred-as-Reading-D); R-830 / R-CXA-4 are operator-driven menu picks; live runs + R-300-second-provider creds-gated. Recursion-stopping fixed point: dashboard lags by exactly one commit (this refresh's own merge), recognized as `lag-expected` by the next §12.1 session-start audit. |
+
+**Audit protocol exercised across 31 terminating-refresh closures + 2 fresh-session reconciliations + 10 substantive closes + 1 substantive partial + 1 Class 1 fork filing + 1 Class 1 fork resolved-as-defer + 1 operator-approved 3-PR merge cluster + R-XI-01 dashboard build + 1 process-discipline sweep (R-600-pattern-bake-in).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **2026-06-01 session: landed the R-100 tool-step apply cluster (#173/#171/#172), closed R-600-clearance-marker-backfill-survey (#175), built+landed R-XI-01 operator dashboard MVP (#177), and ran the first R-600-pattern-bake-in-sweep (ACTIVE-SURVEYED; v1.14 absorption deferred).** **All Claude-executable substantive arcs are drained.** The deterministic next-action is operator-owned: **(a) run the live R-100 e2e**, and/or **(b)** any operator-scoped design-phase arc (e.g. the `R-600-workflow-v1-14-amendment` the sweep now has evidence for). Remaining Claude-executable mode-agnostic work = MEMORY.md hygiene audit + fork-doc Status cadence sweep; §V/VI/IV gated on MVP-shipped / live e2e.
 
 ---
 
