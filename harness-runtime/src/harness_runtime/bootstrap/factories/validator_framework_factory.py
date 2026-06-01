@@ -118,8 +118,11 @@ async def materialize_validator_framework_stage(
         post_evaluate_hook=post_evaluate_hook,
     )
 
-    # Spec §14.13.5 invariant 3 — Protocol-conformance enforcement.
-    if not isinstance(framework, ValidatorFramework):
+    # Spec §14.13.5 invariant 3 — Protocol-conformance enforcement. The
+    # isinstance check is statically redundant (the local is annotated
+    # `ValidatorFramework`) but is a spec-mandated runtime @runtime_checkable
+    # verification, so the pyright warning is intentionally suppressed.
+    if not isinstance(framework, ValidatorFramework):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise ValidatorFrameworkStageMaterializeError(
             "RT-FAIL-VALIDATOR-STAGE-MATERIALIZE: constructed validator framework "
             "instance fails @runtime_checkable ValidatorFramework Protocol-conformance "

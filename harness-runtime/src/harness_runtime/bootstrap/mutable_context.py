@@ -34,7 +34,7 @@ from harness_is.worktree_isolation import WorktreeIsolationManager
 from pydantic import BaseModel, ConfigDict
 
 from harness_runtime.lifecycle.llm_dispatch import (
-    RuntimeLLMDispatcher,  # noqa: F401 — schema legacy carrier
+    RuntimeLLMDispatcher,  # noqa: F401  # pyright: ignore[reportUnusedImport] — schema legacy carrier
 )
 from harness_runtime.types import (
     AuditLedgerWriter,
@@ -148,6 +148,15 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "memory_tool_registry",
     "resume_context_holder",
 )
+
+
+def _bound[T](value: T | None) -> T:
+    """Narrow a required mutable-builder field Optional → T for the frozen
+    `HarnessContext` constructor in `freeze()`. The `_REQUIRED_FIELDS` guard
+    has already raised `IncompleteBootstrapError` if any were None; this shim
+    makes that bootstrap-complete invariant visible to the type checker."""
+    assert value is not None
+    return value
 
 
 @dataclass(slots=True)
@@ -346,10 +355,13 @@ class _MutableHarnessContext:
     ``HarnessContext.procedural_tier_snapshot_resolver`` carries it for the CP
     driver's ``_append_step_ledger_entry`` per-step ledger write."""
 
-    # Orchestrator bookkeeping — not part of HarnessContext.
-    completed_stages: list[BootstrapStage] = field(default_factory=list)
-    emitted_bootstrap_events: list[BootstrapStageCompleteEvent] = field(default_factory=list)
-    cxa_stages: dict[str, Any] = field(default_factory=dict)
+    # Orchestrator bookkeeping — not part of HarnessContext. The declared
+    # element types are explicit; pyright's `default_factory=list/dict`
+    # inference reports the bare factory as `list[Unknown]`/`dict[Unknown]`,
+    # so the strict reportUnknownVariableType is suppressed at these three.
+    completed_stages: list[BootstrapStage] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
+    emitted_bootstrap_events: list[BootstrapStageCompleteEvent] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
+    cxa_stages: dict[str, Any] = field(default_factory=dict)  # pyright: ignore[reportUnknownVariableType]
     frozen: HarnessContext | None = None
 
     def freeze(self) -> HarnessContext:
@@ -359,39 +371,39 @@ class _MutableHarnessContext:
             raise IncompleteBootstrapError(missing)
 
         ctx = HarnessContext(
-            config=self.config,
-            drained_flag=self.drained_flag,
-            pause_requested_flag=self.pause_requested_flag,
+            config=_bound(self.config),
+            drained_flag=_bound(self.drained_flag),
+            pause_requested_flag=_bound(self.pause_requested_flag),
             pause_resume_protocol=self.pause_resume_protocol,
-            path_resolver=self.path_resolver,
-            worktree_manager=self.worktree_manager,
+            path_resolver=_bound(self.path_resolver),
+            worktree_manager=_bound(self.worktree_manager),
             shadow_git=self.shadow_git,
-            ledger_writer=self.ledger_writer,
+            ledger_writer=_bound(self.ledger_writer),
             ledger_reader=self.ledger_reader,
             index=self.index,
             cache=self.cache,
-            skills=self.skills,
-            tool_contracts=self.tool_contracts,
+            skills=_bound(self.skills),
+            tool_contracts=_bound(self.tool_contracts),
             mcp_host=self.mcp_host,
-            mcp_clients=self.mcp_clients,
+            mcp_clients=_bound(self.mcp_clients),
             mcp_server=self.mcp_server,
             mcp_client_host=self.mcp_client_host,
             sandbox_dispatch=self.sandbox_dispatch,
-            providers=self.providers,
-            routing_manifest=self.routing_manifest,
-            engine_selector=self.engine_selector,
-            fallback_chain=self.fallback_chain,
-            retry_breaker=self.retry_breaker,
-            hitl_registry=self.hitl_registry,
-            handoff_registry=self.handoff_registry,
+            providers=_bound(self.providers),
+            routing_manifest=_bound(self.routing_manifest),
+            engine_selector=_bound(self.engine_selector),
+            fallback_chain=_bound(self.fallback_chain),
+            retry_breaker=_bound(self.retry_breaker),
+            hitl_registry=_bound(self.hitl_registry),
+            handoff_registry=_bound(self.handoff_registry),
             tracer_provider=self.tracer_provider,
             collector_daemon=self.collector_daemon,
-            cost_chain=self.cost_chain,
-            audit_writer=self.audit_writer,
-            override_evaluator=self.override_evaluator,
-            topology_dispatcher=self.topology_dispatcher,
-            lifecycle_emitter=self.lifecycle_emitter,
-            llm_dispatcher=self.llm_dispatcher,
+            cost_chain=_bound(self.cost_chain),
+            audit_writer=_bound(self.audit_writer),
+            override_evaluator=_bound(self.override_evaluator),
+            topology_dispatcher=_bound(self.topology_dispatcher),
+            lifecycle_emitter=_bound(self.lifecycle_emitter),
+            llm_dispatcher=_bound(self.llm_dispatcher),
             sub_agent_dispatcher=self.sub_agent_dispatcher,
             ask_user_question_surface=self.ask_user_question_surface,
             step_dispatchers=self.step_dispatchers,

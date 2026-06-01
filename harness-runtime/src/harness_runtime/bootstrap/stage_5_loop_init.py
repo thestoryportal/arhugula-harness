@@ -187,13 +187,20 @@ async def execute(
     # consumed by the HITL composer for the 4-substep audit-write at
     # spec §14.8.2 step 4h (same dep set as U-RT-59 sub-agent dispatch
     # per Q3 ratification — shared `cp_audit_to_od_audit` converter).
-    if ctx.ledger_writer is None or ctx.audit_writer is None:
+    # Defensive guard retained for robustness even though the builder fields
+    # are populated by stage 1 / stage 4; pyright proves the audit_writer arm
+    # cannot be None here, so its reportUnnecessaryComparison is suppressed.
+    if ctx.ledger_writer is None or ctx.audit_writer is None:  # pyright: ignore[reportUnnecessaryComparison]
         raise LLMDispatchBindError(
             "ctx.ledger_writer / ctx.audit_writer is None at stage 5 — stage 1 "
             "IS / stage 4 OD must complete before stage 5 HITL gate composer "
             "construction per the runtime spec v1.11 §14.8.2 step 4h "
             "4-substep audit-write composition contract"
         )
+    # pause_requested_flag is bound at stage 0 PREAMBLE (in _REQUIRED_FIELDS),
+    # so it is non-None by stage 5; assert narrows it for the two
+    # RuntimeHITLGateComposer constructions below (param wants `Event`).
+    assert ctx.pause_requested_flag is not None
     if ctx.mcp_host is None:
         raise LLMDispatchBindError(
             "ctx.mcp_host is None at stage 5 — stage 2 AS did not populate "
@@ -217,7 +224,9 @@ async def execute(
     # surface then falls back to the placeholder for defensive failure.
     ask_surface = materialize_mcp_backed_ask_user_question_surface_stage(
         cast(Any, ctx.mcp_host),
-        harness_mcp_server=ctx.mcp_server,
+        # ctx.mcp_server is the empty `HarnessMCPServer` Protocol; the stage
+        # fn wants the concrete — narrow via Any (mirrors mcp_host above).
+        harness_mcp_server=cast(Any, ctx.mcp_server),
     )
     ctx.ask_user_question_surface = ask_surface
 

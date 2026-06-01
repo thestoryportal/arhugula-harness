@@ -695,10 +695,6 @@ async def emit_pause_resume_state_ledger_entry(
 _PAUSE_CAPTURED_ACTION_ID = "cp.pause-captured"
 """CP spec v1.26 §16.5.3 row U-CP-49 canonical action_id (engine-layer)."""
 
-_RECORD_SEPARATOR = b"\x1e"
-"""ASCII 0x1E (record-separator) byte — CP spec v1.26 §16.5.4 canonical-form
-rule shared across §16.5 composers."""
-
 
 def _pause_captured_idempotency_key(
     workflow_id: str,
@@ -803,10 +799,6 @@ async def emit_pause_captured_state_ledger_entry(
 
 _RESUME_ATTEMPTED_ACTION_ID = "cp.resume-attempted"
 """CP spec v1.26 §16.5.3 row U-CP-50 canonical action_id (engine-layer)."""
-
-_RECORD_SEPARATOR = b"\x1e"
-"""ASCII 0x1E (record-separator) byte — CP spec v1.26 §16.5.4 canonical-form
-rule shared across §16.5 composers."""
 
 
 def _resume_attempted_idempotency_key(

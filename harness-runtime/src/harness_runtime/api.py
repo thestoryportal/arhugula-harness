@@ -76,7 +76,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 
 from harness_core.identity import WorkflowID
 from harness_core.workload_class import WorkloadClass
@@ -91,6 +91,11 @@ from harness_od.cross_family_rollup import CrossFamilyCostRollup
 from pydantic import BaseModel, ConfigDict
 
 from harness_runtime.types import RuntimeConfig
+
+if TYPE_CHECKING:
+    from harness_runtime.lifecycle.mcp_server import (
+        HarnessMCPServer as _ConcreteHarnessMCPServer,
+    )
 
 # ---------------------------------------------------------------------------
 # Typed errors (C-RT-08 + C-RT-14).
@@ -298,7 +303,9 @@ async def _refuse_elicitation_in_api_run(context: Any, params: Any) -> Any:
     integration tests.
     """
     _ = (context, params)
-    from mcp.shared.context import RequestContext  # noqa: F401 — type-pin
+    from mcp.shared.context import (
+        RequestContext,  # noqa: F401  # pyright: ignore[reportUnusedImport] — type-pin
+    )
     from mcp.types import ElicitResult
 
     return ElicitResult(
@@ -340,8 +347,11 @@ async def _invoke_run_workflow_via_in_process_mcp(
         # Tool body raised. FastMCP serializes the error text into
         # `content[0].text`; surface as a runtime error (the existing
         # api.run semantics propagate driver-side exceptions).
-        error_text = (
-            tool_result.content[0].text  # type: ignore[union-attr]
+        # `content[0]` is an mcp content union; `.text` exists only on
+        # TextContent. The bare ignore suppresses the union access (mcp types
+        # are loosely typed), leaving the value Unknown — pin it to str.
+        error_text: str = (  # pyright: ignore[reportUnknownVariableType]
+            tool_result.content[0].text  # type: ignore[union-attr]  # pyright: ignore[reportUnknownMemberType]
             if tool_result.content
             else "unknown tool error"
         )
@@ -461,25 +471,30 @@ async def run(
                 "ctx.mcp_server is None post-bootstrap — stage 2 AS did not "
                 "materialize the FastMCP server per U-RT-62 AC #2"
             )
+            # `ctx.mcp_server` is typed via the empty `HarnessMCPServer` Protocol
+            # (the concrete is not re-exported to keep Pydantic forward-refs
+            # clean); narrow to the concrete here to reach its `_state` /
+            # `workflow_registry` / `server` surface.
+            mcp_server = cast("_ConcreteHarnessMCPServer", ctx.mcp_server)
             # Bind the post-bootstrap context on the mutable holder so the
             # `run_workflow` tool body can reach `ctx.step_dispatchers` etc.
-            ctx.mcp_server._state["_harness_ctx"] = ctx
+            mcp_server._state["_harness_ctx"] = ctx  # pyright: ignore[reportPrivateUsage]
             # Register the workflow keyed by workflow_id so the tool body
             # can look it up. WorkflowObject is a runtime-local structural
             # Protocol; not MCP-serializable. The serializable wire is the
             # `workflow_id` string only.
-            ctx.mcp_server.workflow_registry[workflow.workflow_id] = workflow
+            mcp_server.workflow_registry[workflow.workflow_id] = workflow
             try:
                 cp_result = await _invoke_run_workflow_via_in_process_mcp(
-                    ctx.mcp_server.server, workflow.workflow_id
+                    mcp_server.server, workflow.workflow_id
                 )
             finally:
                 # Defensive cleanup — `_run_lock` serializes invocations but
                 # the registry + state holders MUST NOT carry stale entries
                 # across calls (Track B future cached-context entry point;
                 # pytest-asyncio loop reuse).
-                ctx.mcp_server.workflow_registry.pop(workflow.workflow_id, None)
-                ctx.mcp_server._state.pop("_harness_ctx", None)
+                mcp_server.workflow_registry.pop(workflow.workflow_id, None)
+                mcp_server._state.pop("_harness_ctx", None)  # pyright: ignore[reportPrivateUsage]
             # Per AC #5 advisor reconcile pin — `timed_out` derived from the
             # CP result (the tool body absorbed the TimeoutError and emitted
             # a DRAINED CP result with `RT-FAIL-DRAIN-TIMEOUT` fail_class).

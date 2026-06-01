@@ -58,6 +58,7 @@ Authority:
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import cast
 
 from harness_cp.engine_namespace import ReplayDisposition
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
@@ -216,7 +217,13 @@ def attribute_llm_dispatch_cost(
         gen_ai_provider_name=provider_name,
         gen_ai_request_model=model,
     )
-    attached = cost_chain.attach_idempotency_key(span_id, parent_idempotency_key, cost_record)
+    # The chain Protocol returns `object` for OD-typed values per its
+    # documented "consumers narrow at concrete call sites" contract
+    # (types.py CostAttributionChain). The concrete return is a SpanCostRecord.
+    attached = cast(
+        SpanCostRecord,
+        cost_chain.attach_idempotency_key(span_id, parent_idempotency_key, cost_record),
+    )
 
     # Substep 5 — project to typed CostRecordAuditPayload via the canonical
     # helper; convert via the cp_audit_to_od_audit `cost:` action_id prefix

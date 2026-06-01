@@ -431,7 +431,7 @@ create_connected_server_and_client_session`. Production callers leave
             "validation but not handled in _build_connection_context"
         )
 
-    @asynccontextmanager
+    @asynccontextmanager  # pyright: ignore[reportDeprecated]
     async def _stdio_connection_context(self) -> AsyncIterator[Any]:
         """STDIO transport connection context per U-RT-64.
 
@@ -459,7 +459,7 @@ create_connected_server_and_client_session`. Production callers leave
         async with stdio_client(params) as connection:
             yield connection
 
-    @asynccontextmanager
+    @asynccontextmanager  # pyright: ignore[reportDeprecated]
     async def _http_connection_context(self) -> AsyncIterator[Any]:
         """HTTP transport per U-RT-65 — streamable_http via httpx.
 
@@ -476,7 +476,7 @@ create_connected_server_and_client_session`. Production callers leave
         - `timeout`: connection timeout seconds (default 30)
         - `sse_read_timeout`: server-sent-event read timeout (default 300)
         """
-        from mcp.client.streamable_http import streamablehttp_client
+        from mcp.client.streamable_http import streamable_http_client
 
         url = self._transport_config.get("url")
         if not isinstance(url, str) or not url:
@@ -488,10 +488,10 @@ create_connected_server_and_client_session`. Production callers leave
             kwargs["timeout"] = self._transport_config["timeout"]
         if "sse_read_timeout" in self._transport_config:
             kwargs["sse_read_timeout"] = self._transport_config["sse_read_timeout"]
-        async with streamablehttp_client(url, **kwargs) as connection:
+        async with streamable_http_client(url, **kwargs) as connection:
             yield connection
 
-    @asynccontextmanager
+    @asynccontextmanager  # pyright: ignore[reportDeprecated]
     async def _sse_connection_context(self) -> AsyncIterator[Any]:
         """SSE transport per U-RT-66 — server-sent events via httpx.
 
@@ -530,9 +530,9 @@ create_connected_server_and_client_session`. Production callers leave
         elements (e.g., HTTP transport carries a per-session-id callback at
         index 2) are not consumed by the runtime.
         """
-        if not isinstance(connection, tuple) or len(connection) < 2:
+        if not isinstance(connection, tuple) or len(connection) < 2:  # pyright: ignore[reportUnknownArgumentType]
             raise TypeError(
                 f"MCPClientHost connection-context yielded non-tuple or "
-                f"under-length value: {type(connection).__name__}"
+                f"under-length value: {type(connection).__name__}"  # pyright: ignore[reportUnknownArgumentType]
             )
-        return connection[0], connection[1]
+        return connection[0], connection[1]  # pyright: ignore[reportUnknownVariableType]

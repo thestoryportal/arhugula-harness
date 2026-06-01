@@ -53,6 +53,7 @@ Authority:
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import TYPE_CHECKING, cast
 
 from harness_cp.engine_namespace import ReplayDisposition
 from harness_cxa.cp_audit_conversion import cp_audit_to_od_audit
@@ -64,6 +65,13 @@ from harness_od.idempotency_join_dedup import SpanCostRecord
 from harness_od.rate_table_types import RateTable
 
 from harness_runtime.types import AuditLedgerWriter, CostAttributionChain
+
+if TYPE_CHECKING:
+    from harness_cp.validator_framework_types import ValidatorEvaluation
+    from harness_cp.workflow_driver_types import (
+        StepExecutionContext,
+        WorkflowStep,
+    )
 
 #: Canonical signing key id for validator-dispatch cost-attribution audit
 #: entries. Same convention as the LLM-dispatch + tool-dispatch precedents.
@@ -205,7 +213,13 @@ def attribute_validator_dispatch_cost(
         gen_ai_provider_name=f"validator:{validator_id}",
         gen_ai_request_model="",
     )
-    attached = cost_chain.attach_idempotency_key(span_id, parent_idempotency_key, cost_record)
+    # The chain Protocol returns `object` for OD-typed values per its
+    # documented "consumers narrow at concrete call sites" contract
+    # (types.py CostAttributionChain). The concrete return is a SpanCostRecord.
+    attached = cast(
+        SpanCostRecord,
+        cost_chain.attach_idempotency_key(span_id, parent_idempotency_key, cost_record),
+    )
 
     # Substep 4 + 5 — project to typed CostRecordAuditPayload via the
     # canonical helper; convert via cp_audit_to_od_audit `cost:` action_id
@@ -263,9 +277,9 @@ class CostAttributingValidatorHook:
     async def on_post_evaluate(
         self,
         *,
-        step,
-        step_context,
-        evaluation,
+        step: WorkflowStep,
+        step_context: StepExecutionContext,
+        evaluation: ValidatorEvaluation,
         execution_time_ms: float,
     ) -> None:
         """Invoke cost-attribution chain for the completed validator evaluation.

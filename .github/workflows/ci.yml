@@ -19,12 +19,16 @@ name: CI
 #     --check .` (0 findings). The mechanical sweep (PR #155) + F821 real-defect
 #     fixes (PR #157) + this PR's src fixes + test-legitimate per-file-ignores
 #     (root pyproject [tool.ruff.lint.per-file-ignores]) drove the residual to 0.
-#   - pyright is STILL ADVISORY (continue-on-error) at v1. The workspace is NOT
-#     yet clean under `uv run pyright` (~894 strict errors, concentrated in test
-#     modules — reportPrivateUsage / reportUnusedImport — plus one genuine
-#     production bug: two distinct `Skill` classes at types.py). A follow-up
-#     (drive pyright clean, then flip its continue-on-error → false) makes it
-#     blocking. Lint flips independently of pyright per the R-200 derivation.
+#   - pyright IS blocking (flipped at R-200-ci-lint-typecheck-blocking pyright
+#     half). The tree is clean tree-wide under `uv run pyright` (0 errors). The
+#     drive-clean pass: test modules scoped-relaxed via
+#     [tool.pyright.executionEnvironments] (one entry per harness-*/tests — the
+#     analog to the lint half's per-file-ignores); src driven to 0 by real fixes
+#     (incl. the genuine two-`Skill`-class bug at types.py — the empty `Skill`
+#     Protocol stub was re-exported as the concrete `lifecycle.skills.Skill`) +
+#     the `streamablehttp_client` → `streamable_http_client` mcp deprecation
+#     rename + targeted narrowing/casts + a handful of documented library-boundary
+#     ignores. 3543 passed / 0 regression. New findings fail the PR.
 
 on:
   pull_request:
@@ -91,9 +95,11 @@ jobs:
 
   typecheck:
     runs-on: ubuntu-latest
-    name: pyright (strict) — advisory at v1
-    # Advisory until the tree is driven clean — see header note. Does not block merge.
-    continue-on-error: true
+    name: pyright (strict) — blocking
+    # Blocking as of R-200-ci-lint-typecheck-blocking (pyright half) — the tree
+    # is pyright-clean (0 errors) tree-wide. New findings fail the PR. See header
+    # note for the drive-clean approach (test-dir executionEnvironments + src
+    # fixes). Run locally exactly as here: `uv sync --all-packages && uv run pyright`.
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -171,7 +177,8 @@ jobs:
     # to the job step-summary (visible on the PR's Checks tab), and uploads
     # coverage.xml as an artifact for inspection. A `fail_under` threshold +
     # cross-PR trend (codecov/badge) land only once a baseline justifies it —
-    # mirrors the lint/typecheck "advisory until justified" stance.
+    # the same "advisory until justified, then flip blocking" path the lint +
+    # typecheck jobs already walked (both now blocking).
     name: coverage (informational) — advisory at v1
     runs-on: ubuntu-latest
     continue-on-error: true

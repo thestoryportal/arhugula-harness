@@ -137,7 +137,7 @@ def _default_info_lookup(server_name: str) -> MCPServerInfo:
 # ---------------------------------------------------------------------------
 
 
-class _SpanLike:
+class _SpanLike:  # pyright: ignore[reportUnusedClass] — documentation-only span-typing note
     """Structural duck-type alias — any object with `set_attribute(key, value)`
     works as a span at this emitter site.
 

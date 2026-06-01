@@ -999,11 +999,14 @@ class RuntimeHITLGateComposer:
                     # (operator-ratified 2026-05-28). The brief surface
                     # projects to WebhookPayload via webhook_brief_adapter +
                     # invokes the underlying raw 3-arg deliver_webhook.
+                    # Local capture — `joint_binding_present` (line 968) already
+                    # verified non-None, but pyright cannot narrow an instance
+                    # attribute across the captured bool + await boundary.
+                    composer = self.webhook_delivery_composer
+                    assert composer is not None
                     try:
-                        delivery_result = (
-                            await self.webhook_delivery_composer.deliver_webhook_for_brief(
-                                durable_brief, idempotency_key
-                            )
+                        delivery_result = await composer.deliver_webhook_for_brief(
+                            durable_brief, idempotency_key
                         )
                     except WebhookDeliveryExhaustedError:
                         # Step 4: webhook delivery exhausted. NO flag-set;
