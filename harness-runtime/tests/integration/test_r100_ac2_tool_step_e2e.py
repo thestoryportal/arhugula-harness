@@ -151,7 +151,7 @@ async def test_r100_ac2_tool_step_via_api_run(
     else:
         chain = FallbackChain(
             primary=ProviderCandidate(
-                provider="ollama", model="llama3.2", family=ProviderFamily.OLLAMA
+                provider="ollama", model="llama3.2", family=ProviderFamily.LOCAL_OPEN_WEIGHT
             ),
             same_family=(),
             cross_family=(),
