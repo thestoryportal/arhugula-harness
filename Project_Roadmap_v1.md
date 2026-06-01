@@ -1104,7 +1104,18 @@ R-600-pattern-bake-in-sweep:
   verification: { shape: grep, must_pass: ["all `[[pattern-name]]` cardinality ≥2 entries identified", "each promotion candidate evaluated against §7.4.7 catalogues"] }
   close_shape: { type: substrate-amendment, artifact: "Workflow doc revision absorbing N patterns", cascade: [] }
   next_pointer: null
-  notes: Cadence: every ~10 PRs or operator-discretion. NOT every session.
+  resume: .harness/R-600-pattern-bake-in-sweep.md   # ACTIVE-SURVEYED 2026-06-01: both must_pass met (104 cardinality-≥2 tokens identified; promotion set evaluated). Full closure (workflow-doc revision) owed to the DEFERRED R-600-workflow-v1-14-amendment — gated on operator scope authorization. A fresh session reads the survey before that arc; does NOT re-run the sweep until next ~10-PR cadence.
+  notes: >
+    Cadence: every ~10 PRs or operator-discretion. NOT every session. FIRST run 2026-06-01
+    (HEAD d7574b3). Survey at .harness/R-600-pattern-bake-in-sweep.md. Result: ZERO new §7.4.7.2
+    stale-carry-text sub-species owed (strike-revision already promoted at v1.13; species 1/4
+    EMPTY, 3/5 unchanged). Load-bearing finding (3rd independent surfacing after v1.13 §3(a) +
+    v1.14 deferral): the strong disciplines (verification-shape-sharpened-grep-vs-e2e,
+    halt-route-split-AC, plan-revision-against-not-yet-built-substrate,
+    LANDED-substrate-pending-upstream-loop, use-the-product-probe — counts in the survey are
+    [[..]]-citation salience, NOT instance-cardinality; confirm per-candidate at v1.14) are ALL non-§7.4.7-shape →
+    a NEW §7.5 / §7.4.7.X process-discipline catalogue is the correct home, to be seeded at the
+    v1.14 amendment. Memory-hygiene dups flagged (§3 of survey) → route to MEMORY.md audit.
 
 R-600-clearance-marker-backfill-survey:
   title: Survey design-substrate amendments lacking clearance markers
