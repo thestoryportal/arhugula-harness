@@ -94,6 +94,11 @@ mech-beta-ac1: _require-anthropic
 mech-beta-ac3: _require-anthropic
     uv run pytest harness-runtime/tests/integration/test_track_b_e2e.py::test_ac3_daemon_mode_equivalent_to_one_shot_with_real_llm -v
 
+# R-100 live e2e: real 3-step INFERENCE workflow against Anthropic (claude-haiku-4-5)
+# through api.run (AC #1 + #3 + #4). Paid (~a few cents). live-green is the operator's run.
+mvp-r100-real: _require-anthropic
+    uv run pytest harness-runtime/tests/integration/test_r100_real_workflow_e2e.py -v
+
 # ─── mechanism γ — multi-process orchestration (currently deferred) ────────
 #
 # AC #5 (SIGINT drain) + AC #6 (daemon-concurrent two clients) are marked
