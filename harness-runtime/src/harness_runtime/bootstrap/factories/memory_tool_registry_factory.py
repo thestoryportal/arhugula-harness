@@ -35,6 +35,8 @@ registry construction has no shared dependency with the tool dispatcher).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from harness_as.anthropic_graceful_degradation import (
     MemoryToolStorageBackend,
     memory_tool_storage_backend,
@@ -45,6 +47,7 @@ from harness_runtime.lifecycle.memory_tool_filesystem import (
     LocalFilesystemMemoryToolBackend,
 )
 from harness_runtime.lifecycle.memory_tool_registry import MemoryToolRegistry
+from harness_runtime.lifecycle.memory_tool_sqlite import SqliteMemoryToolBackend
 from harness_runtime.lifecycle.memory_tool_types import (
     MemoryBackendResolutionError,
     MemoryToolStorageBackendProtocol,
@@ -52,6 +55,7 @@ from harness_runtime.lifecycle.memory_tool_types import (
 from harness_runtime.types import RuntimeConfig
 
 __all__ = [
+    "MEMORY_TOOL_DATABASE_SUBPATH",
     "MEMORY_TOOL_FILESYSTEM_ROOT_SUBPATH",
     "PROTOCOL_REQUIRED_METHODS",
     "materialize_memory_tool_registry_stage",
@@ -65,6 +69,29 @@ Per spec §14.12.7 implementation discretion + §14.12.3 step 2a suggestion of
 `PathClass.MEMORY_TOOL_BACKEND_ROOT` (PathClass extension deferred). Mirrors
 the `.harness/...` sibling sub-paths used by other runtime carriers
 (`.harness/runtime.pid`, etc.)."""
+
+
+MEMORY_TOOL_DATABASE_SUBPATH = ".harness/memories.db"
+"""Default sub-path under `config.repository_root` for the DATABASE backend
+SQLite file, used when `backend_params['connection_string']` is absent (R-830;
+spec §14.12.3 DATABASE step). Sibling of the FILESYSTEM `.harness/memories`
+root."""
+
+
+def _resolve_database_connection_path(config: RuntimeConfig) -> Path:
+    """Resolve the SQLite database path for the DATABASE backend.
+
+    Per spec §14.12.3 DATABASE step, the connection is supplied via
+    `backend_params['connection_string']`. When that key is absent (or
+    `backend_params` is `None`), fall back to the workspace default
+    `config.repository_root / MEMORY_TOOL_DATABASE_SUBPATH`.
+    """
+    backend_cfg = config.memory_tool_backend_config
+    if backend_cfg is not None and backend_cfg.backend_params is not None:
+        connection_string = backend_cfg.backend_params.get("connection_string")
+        if connection_string:
+            return Path(connection_string)
+    return config.repository_root / MEMORY_TOOL_DATABASE_SUBPATH
 
 
 PROTOCOL_REQUIRED_METHODS: tuple[str, ...] = (
@@ -111,11 +138,20 @@ async def materialize_memory_tool_registry_stage(
         backend: MemoryToolStorageBackendProtocol = LocalFilesystemMemoryToolBackend(
             root=config.repository_root / MEMORY_TOOL_FILESYSTEM_ROOT_SUBPATH,
         )
+    elif configured is MemoryToolStorageBackend.DATABASE:
+        # R-830 SELF_HOSTED_SERVER DATABASE backend (local embedded SQLite).
+        # NOT the MANAGED_CLOUD cloud-vault / managed-db production backend:
+        # S3 / ENCRYPTED_FILESYSTEM / OPERATOR_DEFINED stay deferred (the else
+        # below still raises), and the surface-default path still picks
+        # FILESYSTEM only (DATABASE reaches here via explicit operator override).
+        backend = SqliteMemoryToolBackend(db_path=_resolve_database_connection_path(config))
     else:
         raise MemoryBackendResolutionError(
             f"RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend "
-            f"{configured.value!r} has no implementation landed at v2.15 "
-            f"(deferred to follow-on retirement-batch arc per fork-doc §14.D)"
+            f"{configured.value!r} has no implementation landed "
+            f"(FILESYSTEM + DATABASE landed; S3 / ENCRYPTED_FILESYSTEM / "
+            f"OPERATOR_DEFINED deferred to operator-discretion follow-on arcs "
+            f"per spec §14.D + §16 §6.C v2 C.vii)"
         )
 
     # --- Step 3: Protocol-conformance enforcement per §14.12.5 invariant 2 --

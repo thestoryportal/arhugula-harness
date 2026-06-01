@@ -19,6 +19,7 @@ from harness_as.anthropic_graceful_degradation import MemoryToolStorageBackend
 from harness_core.deployment_surface import DeploymentSurface
 from harness_cp.topology_pattern import TopologyPattern
 from harness_runtime.bootstrap.factories.memory_tool_registry_factory import (
+    MEMORY_TOOL_DATABASE_SUBPATH,
     MEMORY_TOOL_FILESYSTEM_ROOT_SUBPATH,
     materialize_memory_tool_registry_stage,
 )
@@ -27,6 +28,7 @@ from harness_runtime.lifecycle.memory_tool_filesystem import (
     LocalFilesystemMemoryToolBackend,
 )
 from harness_runtime.lifecycle.memory_tool_registry import MemoryToolRegistry
+from harness_runtime.lifecycle.memory_tool_sqlite import SqliteMemoryToolBackend
 from harness_runtime.lifecycle.memory_tool_types import (
     MemoryBackendResolutionError,
     MemoryToolBackendConfig,
@@ -98,8 +100,10 @@ async def test_operator_override_filesystem_honored(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC #3 — operator override: S3 (and other non-FILESYSTEM) raise with
-# RT-FAIL-MEMORY-BACKEND-RESOLUTION + fork-doc §14.D pointer.
+# AC #3 — operator override: still-unimplemented backends (S3 /
+# ENCRYPTED_FILESYSTEM / OPERATOR_DEFINED) raise with
+# RT-FAIL-MEMORY-BACKEND-RESOLUTION + §14.D pointer. DATABASE moved to the
+# acceptance path at R-830 (test below) — the SELF_HOSTED SQLite backend.
 # ---------------------------------------------------------------------------
 
 
@@ -108,7 +112,6 @@ async def test_operator_override_filesystem_honored(tmp_path: Path) -> None:
     "unimplemented_backend",
     [
         MemoryToolStorageBackend.S3,
-        MemoryToolStorageBackend.DATABASE,
         MemoryToolStorageBackend.ENCRYPTED_FILESYSTEM,
         MemoryToolStorageBackend.OPERATOR_DEFINED,
     ],
@@ -132,6 +135,57 @@ async def test_unimplemented_backend_raises_with_fork_doc_pointer(
     # Fork-doc pointer per `[[halt-route-split-AC-pattern]]` carry-forward.
     assert "§14.D" in msg
     assert ctx.memory_tool_registry is None  # never bound on resolution failure
+
+
+# ---------------------------------------------------------------------------
+# AC #3b (R-830) — operator override: DATABASE constructs the SQLite backend
+# (default connection path under repository_root) + honors an explicit
+# backend_params['connection_string'].
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_database_override_constructs_sqlite_backend_default_path(
+    tmp_path: Path,
+) -> None:
+    cfg = _config(
+        memory_tool_backend_config=MemoryToolBackendConfig(
+            backend=MemoryToolStorageBackend.DATABASE,
+        ),
+        repository_root=tmp_path,
+    )
+    ctx = _MutableHarnessContext()
+
+    registry = await materialize_memory_tool_registry_stage(cfg, ctx)
+
+    assert registry.configured_backend is MemoryToolStorageBackend.DATABASE
+    backend = registry.resolve_backend(cfg.deployment_surface)
+    assert isinstance(backend, SqliteMemoryToolBackend)
+    # Default connection path created under repository_root.
+    assert (tmp_path / MEMORY_TOOL_DATABASE_SUBPATH).exists()
+
+
+@pytest.mark.asyncio
+async def test_database_override_honors_connection_string_param(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "custom" / "operator.db"
+    cfg = _config(
+        memory_tool_backend_config=MemoryToolBackendConfig(
+            backend=MemoryToolStorageBackend.DATABASE,
+            backend_params={"connection_string": str(db_path)},
+        ),
+        repository_root=tmp_path,
+    )
+    ctx = _MutableHarnessContext()
+
+    registry = await materialize_memory_tool_registry_stage(cfg, ctx)
+
+    assert registry.configured_backend is MemoryToolStorageBackend.DATABASE
+    assert isinstance(registry.resolve_backend(cfg.deployment_surface), SqliteMemoryToolBackend)
+    # The operator-supplied connection_string path is used, not the default.
+    assert db_path.exists()
+    assert not (tmp_path / MEMORY_TOOL_DATABASE_SUBPATH).exists()
 
 
 # ---------------------------------------------------------------------------
