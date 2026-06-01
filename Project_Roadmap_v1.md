@@ -1642,7 +1642,7 @@ R-CXA-1-as-is-seam:
   verification: { shape: e2e, must_pass: ["a production caller invokes emit_secret_fetch_audit_entry (AS secret-fetch driver path lands)", "remaining ~12 AS source-unit audit-emission callbacks threaded through AsIsWiring"] }
   close_shape: { type: PR-merge, artifact: "feat(cxa): complete AS->IS seam", cascade: [] }
   next_pointer: null
-  notes: PARTIAL per R-700 — composer materialized + 7c-tested; only secret-fetch edge wired; zero production callers. Register §B-14.
+  notes: PARTIAL per R-700 — composer materialized + 7c-tested; only secret-fetch edge wired; zero production callers. Register §B-14. **must_pass #1 fork-filed 2026-06-01** — `.harness/class_1_fork_cxa_1_secret_fetch_audit_bootstrap_ordering.md` (PROPOSING): the live secret-fetch fires eagerly at bootstrap stage 3a, but the AS→IS emitter materializes at stage 6 — firing-site-precedes-wiring-stage (U-RT-111 shape). 4 Readings (A reorder / B emit-at-3a-via-ledger_writer [RECOMMENDED] / C buffer-flush / D reframe); security safe-by-design (SecretFetchEvent metadata-only). Awaits operator ratification before wiring. STAYS PROPOSED.
 
 R-CXA-2-cp-is-seam:
   title: CXA-2 (CP->IS) seam completion — runtime caller-site invocations + remaining §12.3 edges
