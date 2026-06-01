@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Sequence
-from typing import Literal
+from typing import Any, Literal
 
 import harness_runtime
 import harness_runtime.api as _api

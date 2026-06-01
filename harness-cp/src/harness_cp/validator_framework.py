@@ -56,6 +56,7 @@ from harness_cp.validator_framework_types import (
     Validator,
     ValidatorEvaluation,
     ValidatorFailClass,
+    ValidatorFramework,
     ValidatorNextAction,
     ValidatorOutcome,
     ValidatorPostEvaluateHook,
