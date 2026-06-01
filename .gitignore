@@ -32,6 +32,10 @@ env/
 .env
 .env.local
 
+# Operator-local runtime config (copied from harness.toml.example + edited
+# with machine-specific absolute paths). Not committed.
+harness.toml
+
 # IDE / editor
 .vscode/
 .idea/

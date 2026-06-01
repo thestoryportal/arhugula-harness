@@ -43,15 +43,17 @@ check: lint typecheck test
 
 # ─── operator-facing CLI smoke ─────────────────────────────────────────────
 
-# One-shot run of a workflow manifest. Example: just run path/to/workflow.yaml
+# One-shot run of a workflow manifest. Example: just run examples/minimal.toml
+# Passes --config harness.toml (create it: cp harness.toml.example harness.toml).
 run file:
-    uv run harness run {{file}}
+    uv run harness run {{file}} --config harness.toml
 
 # Start the daemon (background MCP server over Unix socket).
 daemon:
-    uv run harness daemon
+    uv run harness daemon --config harness.toml
 
 # Client-side dispatch into a running daemon. Example: just run-daemon workflow.yaml
+# (No --config: the running daemon already holds the loaded RuntimeConfig.)
 run-daemon file:
     uv run harness run {{file}} --daemon
 
