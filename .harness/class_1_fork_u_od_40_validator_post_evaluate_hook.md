@@ -1,7 +1,7 @@
 # Class 1 Fork — U-OD-40 ValidatorPostEvaluateHook Protocol extension
 
 **Filed:** 2026-05-28 at U-OD-40 orientation (this session)
-**Status:** RATIFIED (Q-set pre-ratified at operator AskUserQuestion 2026-05-28)
+**Status:** ✅ APPLIED-AS-READING-B 2026-05-28 (status-line refreshed 2026-05-31) — Q-set ratified at operator AskUserQuestion 2026-05-28; Reading B landed: NEW `ValidatorPostEvaluateHook` Protocol at `harness-cp/src/harness_cp/validator_framework_types.py:231` + consumed at `validator_framework.py` + runtime cost-attributing hook bound at `harness-runtime/src/harness_runtime/bootstrap/stage_4_od.py`; merged at `dcb0017` (U-OD-40 bundled validator + webhook cost-attribution arc). CP spec v1.24 §28.10 + CP plan v2.27 NEW U-CP-73 + OD plan v2.23 + runtime plan v2.29 U-RT-84 +AC #6. H_T-OD-5 PARTIAL → RETIRE-READY at batch-28.
 **Authority anchor:** Workspace `CLAUDE.md` §4.4 X-AL-3 (no silent H_T design extension at Phase 7 execution-time) + Phase 7 back-flow routing per `Project_Workflow_v1_10.md` §2.7.6
 **Mirror precedent:** `.harness/class_1_fork_as_8d_skill_activation_surface_absence.md` Reading B operator-opt-in hook Protocol pattern; runtime spec v1.32 §14.17 `SkillActivationHook`
 
