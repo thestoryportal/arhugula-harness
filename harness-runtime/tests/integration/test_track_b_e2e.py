@@ -422,9 +422,7 @@ async def test_ac2_loaded_yaml_and_toml_dispatch_identically_deterministic(
     )
     assert result_yaml.status == result_toml.status
     # Equivalent terminal shape (SUCCESS → terminal_step_index None, final_state set).
-    assert (result_yaml.terminal_step_index is None) == (
-        result_toml.terminal_step_index is None
-    )
+    assert (result_yaml.terminal_step_index is None) == (result_toml.terminal_step_index is None)
     assert (result_yaml.final_state is None) == (result_toml.final_state is None)
 
 
