@@ -49,12 +49,15 @@ async def execute(
     ctx.fallback_chain = fallback.chain
 
     # 4. Retry/breaker registry.
+    # The concrete registries narrow the Protocol's deliberately `object`-typed
+    # method params (documented decoupling at types.py to avoid import cycles);
+    # assigning concrete → Protocol-typed field is a benign contravariance.
     retry = materialize_retry_breaker_stage(config)
-    ctx.retry_breaker = retry.registry
+    ctx.retry_breaker = retry.registry  # pyright: ignore[reportAttributeAccessIssue]
 
     # 5. HITL placement registry.
     hitl = materialize_hitl_placement_stage(config)
-    ctx.hitl_registry = hitl.registry
+    ctx.hitl_registry = hitl.registry  # pyright: ignore[reportAttributeAccessIssue]
 
     # 6. Sub-agent handoff registry.
     handoff = materialize_handoff_stage(config)

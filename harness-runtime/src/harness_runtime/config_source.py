@@ -272,7 +272,7 @@ class RuntimeConfigSource:
         matches on schema field names whose values are themselves tables.
         """
         if isinstance(node, dict):
-            for key, value in cast(dict[Any, Any], node).items():
+            for key, value in cast(dict[object, object], node).items():
                 if not isinstance(key, str):
                     continue
                 if not isinstance(value, dict) and _SECRET_KEY_PATTERN.search(key):
@@ -283,7 +283,9 @@ class RuntimeConfigSource:
                         "(see RuntimeConfig.provider_secrets)",
                         source=source,
                     )
-                cls._reject_plaintext_secrets(value, source, f"{path}.{key}" if path else key)
+                cls._reject_plaintext_secrets(
+                    cast(object, value), source, f"{path}.{key}" if path else key
+                )
         elif isinstance(node, list):
             for idx, item in enumerate(cast(list[Any], node)):
                 cls._reject_plaintext_secrets(item, source, f"{path}[{idx}]")

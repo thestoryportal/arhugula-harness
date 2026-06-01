@@ -37,13 +37,17 @@ import asyncio
 import hashlib
 from collections.abc import Coroutine, Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from harness_as.sandbox_tier import SandboxTier
 from harness_core.identity import ActionID
 from harness_core.workflow_event_class import WorkflowEventClass
 from harness_is.state_ledger_entry_schema import Actor
-from opentelemetry.trace import Status, StatusCode
+from opentelemetry.trace import Status, StatusCode, TracerProvider
+
+if TYPE_CHECKING:
+    from harness_cp.validator_framework import SyncValidatorFrameworkFacade
+    from harness_cp.validator_framework_types import ValidatorEvaluation
 
 from harness_cp.cp_shared_types import ActorIdentity, ModelBinding
 from harness_cp.engine_class import EngineClass
@@ -623,9 +627,7 @@ def execute_workflow(
     # envelope per §25.4 invariant 1. The prior envelope was closed at
     # pause-snapshot capture per C-CP-26 §26. State-ledger anchoring across
     # envelopes via workflow.run_id + workflow.idempotency_key attributes.
-    tracer = ctx.tracer_provider.get_tracer(  # type: ignore[attr-defined]
-        "harness.cp.workflow_driver"
-    )
+    tracer = cast(TracerProvider, ctx.tracer_provider).get_tracer("harness.cp.workflow_driver")
     with tracer.start_as_current_span("workflow.envelope") as span:
         # C-OD-25 §25.1 — populate the 8 envelope-open attributes from
         # manifest_entry + run identity (workflow.id / run_id / idempotency_key
@@ -1038,10 +1040,14 @@ def _execute_workflow_body(
         #               §C-OD-29.1 row 10 + F2-02 absorption.
         #   ABORT     → return RunResult(FAILED) with CP-FAIL-VALIDATOR-PERMANENT
         if ctx.validator_framework is not None:
-            tracer = ctx.tracer_provider.get_tracer("harness.cp.workflow_driver")  # type: ignore[attr-defined]
+            tracer = cast(TracerProvider, ctx.tracer_provider).get_tracer(
+                "harness.cp.workflow_driver"
+            )
             with tracer.start_as_current_span("validator.evaluate") as evaluate_span:
                 try:
-                    evaluation = ctx.validator_framework.evaluate(  # type: ignore[attr-defined]
+                    evaluation: ValidatorEvaluation = cast(
+                        "SyncValidatorFrameworkFacade", ctx.validator_framework
+                    ).evaluate(
                         step,
                         step_output,
                         step_context=step_context,

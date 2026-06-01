@@ -38,7 +38,7 @@ import asyncio
 from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
-from typing import Any, NewType, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, NewType, Protocol, runtime_checkable
 
 # ----------------------------------------------------------------------------
 # Concrete axis-type imports (the 6 names that resolve at HEAD).
@@ -130,6 +130,14 @@ from harness_runtime.lifecycle.skill_activation import (
     SkillActivationSpanEmitter,
     UnknownSkillError,
 )
+
+# Concrete carriers re-exported as the canonical field types (realizations of
+# the former empty `Protocol` stubs at U-RT-12 / U-RT-13). The empty Protocols
+# broke assignment between the concrete (what the loaders/wiring return) and the
+# Protocol-typed fields; their modules do not import this module nor reference
+# api-level types, so the runtime re-export is cycle-free and Pydantic-safe.
+from harness_runtime.lifecycle.skills import Skill
+from harness_runtime.lifecycle.state_ledger import LedgerWriter
 from harness_runtime.lifecycle.validator_framework_types import (
     ValidatorFrameworkConfig,
 )
@@ -147,6 +155,10 @@ from harness_runtime.lifecycle.webhook_delivery_composer import (
 from harness_runtime.lifecycle.webhook_delivery_composer_types import (
     WebhookDeliveryComposerConfig,
 )
+
+if TYPE_CHECKING:
+    from harness_is.state_ledger_write import WriteResult
+    from harness_od.audit_ledger_types import AuditLedgerEntry
 
 __all__ = [
     "AuditLedgerWriter",
@@ -462,11 +474,6 @@ class ShadowGitSupervisor(Protocol):
 
 
 @runtime_checkable
-class LedgerWriter(Protocol):
-    """Runtime-defined wrapper around IS state-ledger. Concretized at U-RT-12."""
-
-
-@runtime_checkable
 class LedgerReader(Protocol):
     """Runtime-defined read-side wrapper around IS state-ledger.
 
@@ -479,7 +486,21 @@ class LedgerReader(Protocol):
 
 @runtime_checkable
 class AuditLedgerWriter(Protocol):
-    """Runtime-defined wrapper around IS+OD audit-ledger. Concretized at U-RT-32."""
+    """Runtime-defined wrapper around IS+OD audit-ledger. Concretized at U-RT-32.
+
+    Narrowed to declare the writer's reference-time surface (the `append`
+    method `RuntimeAuditLedgerWriter` implements at U-RT-32) so consumers —
+    the cost-attribution dispatch hooks + the CP audit-write seam — compose
+    against a documented API instead of an empty Protocol body.
+    """
+
+    def append(
+        self,
+        tenant_id: str | None,
+        audit_entry: AuditLedgerEntry,
+    ) -> WriteResult:
+        """Persist one pre-signed `AuditLedgerEntry` into the IS hash chain."""
+        ...
 
 
 @runtime_checkable
@@ -543,11 +564,6 @@ class SemanticCache(Protocol):
 
 
 @runtime_checkable
-class Skill(Protocol):
-    """Composed at U-RT-13 from landed AS skill-loading primitives."""
-
-
-@runtime_checkable
 class MCPHost(Protocol):
     """Composed at U-RT-15 wrapping `mcp` (FastMCP) host runtime."""
 
@@ -567,7 +583,11 @@ class HarnessMCPServer(Protocol):
     MCP roles coexist on `HarnessContext` post-bootstrap per Q4 sibling-
     primitive ratification at the C-RT-18 v1.12 fork.
 
-    Concretized by `harness_runtime.lifecycle.mcp_server.HarnessMCPServer`.
+    Kept as an empty structural Protocol (NOT re-exported as the concrete
+    `harness_runtime.lifecycle.mcp_server.HarnessMCPServer`) because the
+    concrete references `WorkflowObject` (api.py), which would break Pydantic
+    forward-ref resolution of `HarnessContext`. Consumers that need the
+    concrete surface (`api.py`) narrow via `cast` at the call site.
     """
 
 

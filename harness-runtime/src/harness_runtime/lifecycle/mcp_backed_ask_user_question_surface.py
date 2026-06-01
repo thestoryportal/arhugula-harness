@@ -56,7 +56,7 @@ from __future__ import annotations
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from harness_cp.hitl_response_palette import HITLResponse
 from pydantic import BaseModel, ConfigDict
@@ -68,6 +68,8 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
 from harness_runtime.lifecycle.mcp_host import MCPHost
 
 if TYPE_CHECKING:
+    from mcp.server.elicitation import AcceptedElicitation
+
     from harness_runtime.lifecycle.mcp_server import HarnessMCPServer
 
 __all__ = [
@@ -288,7 +290,12 @@ class ServerCtxElicitCallback:
 
         action = elicit_result.action
         if action == "accept":
-            data = elicit_result.data
+            # `ctx.elicit` returns a generic union discriminated by `action` at
+            # runtime; cast (not isinstance) so test doubles + any non-nominal
+            # object with the AcceptedElicitation shape still flow through, and
+            # the cast recovers the schema type from the generic `data` field.
+            accepted = cast("AcceptedElicitation[AskUserQuestionElicitationSchema]", elicit_result)
+            data = cast("AskUserQuestionElicitationSchema | None", accepted.data)
             if data is None:
                 raise MCPSurfaceCallbackNotBoundError(
                     "ctx.elicit returned action='accept' but data is None — "

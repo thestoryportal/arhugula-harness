@@ -44,18 +44,11 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from harness_is.state_ledger_entry_schema import Identifier
 
 if TYPE_CHECKING:
-    # The concrete ``Skill`` dataclass (with the ``manifest`` field) lives at
-    # ``harness_runtime.lifecycle.skills``. ``HarnessContext.skills`` is typed
-    # as ``dict[SkillID, Skill]`` where ``Skill`` is an empty Protocol at
-    # ``harness_runtime.types``; we import the concrete type here for
-    # type-narrowing the iteration in ``resolve_procedural_tier_snapshot``
-    # (mirrors the workspace pattern at ``skill_activation.py``).
-    from harness_runtime.lifecycle.skills import Skill as _ConcreteSkill
     from harness_runtime.types import HarnessContext
 
 
@@ -105,14 +98,9 @@ def resolve_procedural_tier_snapshot(
     #    Each Skill's version_sha lives at skill.manifest.version_sha per
     #    harness-runtime/lifecycle/skills.py:60 (NEW at U-RT-99 / v1.32).
     #    ``HarnessContext.skills`` is typed as ``dict[SkillID, Skill]`` where
-    #    Skill is an empty Protocol; narrow each value to the concrete
-    #    ``_ConcreteSkill`` dataclass to type-resolve ``.manifest.version_sha``.
     # 2. Sort ascending lexicographic + dedup per AC #4.
     active_skills_versions = sorted(
-        {
-            cast("_ConcreteSkill", skill).manifest.version_sha
-            for skill in harness_context.skills.values()
-        },
+        {skill.manifest.version_sha for skill in harness_context.skills.values()},
     )
 
     # 3. Derive routing_manifest_sha via canonical-JSON-bytes SHA-256 per

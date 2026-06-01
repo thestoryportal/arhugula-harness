@@ -29,6 +29,12 @@ identical native-typed shapes.
 
 from __future__ import annotations
 
+# This module is a thin subclass over pyyaml's loosely-typed Loader internals
+# (`construct_object` / `check_event` / `peek_event` return untyped values, and
+# the overridden constructors receive already-typed node args). Suppress the
+# yaml-boundary "unknown"/"unnecessary-isinstance" noise file-wide; real issues
+# surface via the other strict rules, which stay enabled.
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnnecessaryIsInstance=false
 import yaml
 from yaml.constructor import ConstructorError
 from yaml.nodes import MappingNode, SequenceNode

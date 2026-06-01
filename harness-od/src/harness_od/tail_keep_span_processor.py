@@ -160,11 +160,13 @@ class TailKeepSpanProcessor(SpanProcessor):
             # are both in §9.2 AND in §10.2) so tree-siblings buffered
             # under the same trace get preserved at root close.
             ctx = span.get_span_context()
+            assert ctx is not None  # a span reaching on_end always has a context
             if is_classification_trigger(span):
                 self._keep[ctx.trace_id] = True
             return
 
         ctx = span.get_span_context()
+        assert ctx is not None  # a span reaching on_end always has a context
         trace_id = ctx.trace_id
 
         self._buffer.setdefault(trace_id, []).append(span)

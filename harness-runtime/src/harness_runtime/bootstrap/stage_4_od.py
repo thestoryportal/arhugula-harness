@@ -74,9 +74,11 @@ async def execute(
     # Like the span processor, the ring buffer's lifetime is tied to the
     # daemon supervisor; HarnessContext exposes the daemon, not the buffer.
 
-    # 6. Cost attribution chain.
+    # 6. Cost attribution chain. The concrete chain narrows the Protocol's
+    # deliberately `object`-typed method params (documented decoupling at
+    # types.py); concrete → Protocol-typed field is a benign contravariance.
     cost = materialize_cost_attribution_stage(config)
-    ctx.cost_chain = cost.chain
+    ctx.cost_chain = cost.chain  # pyright: ignore[reportAttributeAccessIssue]
 
     # 7. Audit-ledger writer (depends on stage 1 ledger writer).
     audit = materialize_audit_writer_stage(config, ctx.ledger_writer)

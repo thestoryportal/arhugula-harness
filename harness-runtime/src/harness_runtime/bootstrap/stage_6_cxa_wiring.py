@@ -46,6 +46,7 @@ from harness_runtime.lifecycle.procedural_tier_snapshot import (
 from harness_runtime.types import RuntimeConfig
 
 if TYPE_CHECKING:
+    from harness_runtime.lifecycle.audit_writer import RuntimeAuditLedgerWriter
     from harness_runtime.types import HarnessContext
 
 __all__ = ["execute"]
@@ -94,7 +95,10 @@ async def execute(
     )
     ctx.cxa_stages["od_is_wiring"] = materialize_od_is_wiring_stage(
         config,
-        ctx.audit_writer,
+        # ctx.audit_writer is the concrete RuntimeAuditLedgerWriter at runtime
+        # (bound at stage 4); the field is typed via the AuditLedgerWriter
+        # Protocol, so narrow at this concrete call site per the workspace idiom.
+        cast("RuntimeAuditLedgerWriter", ctx.audit_writer),
         od_manifest,
     )
     ctx.cxa_stages["od_as_wiring"] = materialize_od_as_wiring_stage(

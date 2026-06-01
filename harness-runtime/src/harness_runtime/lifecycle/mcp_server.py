@@ -127,7 +127,7 @@ class HarnessMCPServer:
     on tool registration failure, the stage raises and the
     constructed `HarnessMCPServer(started=False)` is discarded."""
 
-    workflow_registry: dict[str, WorkflowObject] = field(default_factory=dict)
+    workflow_registry: dict[str, WorkflowObject] = field(default_factory=dict)  # pyright: ignore[reportUnknownVariableType]
     """Workflow lookup table keyed by `workflow.workflow_id`.
 
     `api.run()` writes the operator-supplied `WorkflowObject` here
@@ -137,7 +137,7 @@ class HarnessMCPServer:
     the dict's contents are not.
     """
 
-    _state: dict[str, Any] = field(default_factory=dict)
+    _state: dict[str, Any] = field(default_factory=dict)  # pyright: ignore[reportUnknownVariableType]
     """Post-bootstrap state holder. Written once by `api.run()` before
     invoking the `run_workflow` tool; read by the tool handler body.
 
@@ -231,7 +231,9 @@ def materialize_mcp_server_stage(
     state: dict[str, Any] = {}
 
     @fastmcp.tool()
-    async def run_workflow(workflow_id: str, ctx: Context[Any, Any]) -> dict[str, Any]:
+    async def run_workflow(  # pyright: ignore[reportUnusedFunction] — registered via @fastmcp.tool() decorator
+        workflow_id: str, ctx: Context[Any, Any]
+    ) -> dict[str, Any]:
         """Execute one workflow per the v1.12 H_T-as-MCP-server topology.
 
         The workflow body executes inside this tool handler's `ctx` per the
@@ -327,13 +329,13 @@ def materialize_mcp_server_stage(
                     workflow.manifest_entry,
                     workflow.steps,
                     run_id,
-                    cast(Any, harness_ctx),
+                    harness_ctx,
                     default_model_binding=workflow.default_model_binding,
                     step_dispatchers=cast(Any, effective_step_dispatchers),
                 ),
                 timeout=drain_timeout_seconds,
             )
-            return cast(dict[str, Any], cp_result.model_dump(mode="json"))
+            return cp_result.model_dump(mode="json")
         except TimeoutError:
             # `RT-FAIL-DRAIN-TIMEOUT` projection per U-RT-44 AC #2;
             # the api.run caller per AC #5 unmarshals and re-builds the
@@ -354,7 +356,7 @@ def materialize_mcp_server_stage(
                 final_state=None,
                 fail_class="RT-FAIL-DRAIN-TIMEOUT",
             )
-            return cast(dict[str, Any], drained.model_dump(mode="json"))
+            return drained.model_dump(mode="json")
         finally:
             _CURRENT_TOOL_CTX.reset(ctx_token)
 

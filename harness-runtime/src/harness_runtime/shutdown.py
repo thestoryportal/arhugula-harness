@@ -68,8 +68,6 @@ from weakref import WeakValueDictionary
 
 from pydantic import BaseModel, ConfigDict
 
-from harness_runtime.lifecycle.state_ledger import LedgerWriter as _ConcreteLedgerWriter
-
 if TYPE_CHECKING:
     from harness_runtime.types import HarnessContext
 
@@ -199,7 +197,7 @@ async def flush_observability(
     # `handle: JsonlLedgerHandle`). Cast to the concrete to read
     # `handle.canonical_path`.
     try:
-        ledger = cast(_ConcreteLedgerWriter, ctx.ledger_writer)
+        ledger = ctx.ledger_writer
         ledger_path = ledger.handle.canonical_path
         # Read-only fd is sufficient — fsync flushes the file's write-back
         # buffer via the inode regardless of access mode.
