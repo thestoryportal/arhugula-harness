@@ -533,18 +533,79 @@ R-100-mvp-config-discovery:
 R-100-mvp-real-workflow-execution:
   title: Real multi-step workflow at SOLO_DEVELOPER tier against Anthropic provider
   surface: II
-  status: BLOCKED
+  status: ACTIVE   # unblocked by R-100-mvp-operator-usable-cli-shipped RESOLVED (PR #164). 2 of 4 ACs delivered; AC #2 + #4 gated on the two forks below.
   depends_on: [R-100-mvp-operator-usable-cli-shipped]
   blocks: [R-001, R-004, R-100-mvp-yaml-loader-shipped, R-300-multi-llm-second-provider]
   posture: phase-7
   scope: { files: [harness-runtime/tests/integration/**, examples/**], contracts: [], cross_axis: no }
   skills: { primary: phase-7-implementation, secondary: [verify, run] }
-  advisor_required: no
+  advisor_required: satisfied:2026-05-31   # advisor reframed AC #4 to the landed per-dispatch cost: writes (not the U-OD-21-blocked RunResult aggregate) + cheap-tool-path bet. Re-run only on a NEW cross-axis question.
   council_required: no
-  verification: { shape: e2e, must_pass: ["3+ step workflow executes", "tool dispatch surface exercised ≥1 site", "audit-ledger emits step-by-step entries", "cost-attribution entries present per OD plan v2.25 binding"] }
-  close_shape: { type: PR-merge, artifact: "mvp: 3-step workflow e2e against Anthropic", cascade: [] }
+  verification: { shape: e2e, must_pass: ["3+ step workflow executes", "tool dispatch surface exercised ≥1 site", "audit-ledger emits step-by-step entries", "cost-attribution entries present (landed per-dispatch cost: writes per U-OD-39/41 seam — NOT the U-OD-21-blocked RunResult.cost_attribution aggregate)"] }
+  close_shape: { type: PR-merge, artifact: "mvp: 3-step real-workflow e2e against Anthropic", cascade: [] }
   next_pointer: R-001
-  notes: Unblocks AS-8d + OD-5 RETIRED transits.
+  notes: >
+    PARTIAL via PR (branch r-100-real-workflow-e2e): `test_r100_real_workflow_e2e.py`
+    runs a real 3-step Anthropic INFERENCE workflow through api.run. **AC #1 ✓**
+    (status=completed) + **AC #3 ✓** (3 hash-chained `workflow:...:step:N` ledger
+    entries read from disk) verified by a live operator-authorized run. **AC #2 + #4
+    gated on two forks the use-the-product probe surfaced:**
+    (a) `class_1_fork_tool_step_no_operator_supplied_converter.md` (PROPOSING) —
+    TOOL_STEP not dispatchable via api.run: no operator config surface for
+    `tool_contract_converter`; the bootstrap host uses a default-that-raises. AC #2's
+    surface IS exercised at the dispatcher level by `test_u_rt_86` (passing on main),
+    but not inside an operator api.run workflow. → R-100-tool-step-converter.
+    (b) `class_1_fork_llm_cost_attribution_not_firing_on_real_dispatch.md` (PROPOSING) —
+    a real inference run emits ZERO `cost:` entries despite the wiring at
+    llm_dispatch.py:517 + substrate bound at stage_5_loop_init.py:147-149. AC #4 is a
+    runtime `pytest.xfail` in the test citing the fork (auto-converts to a regression
+    guard once fixed). **Carries an OD-5 retirement-validity implication** (OD-5 was
+    RETIRED on mech-β unit tests; production api.run emits no cost — the grep-vs-e2e
+    gap). → R-100-cost-attribution-firing. The note's prior "Unblocks AS-8d + OD-5
+    RETIRED transits" was stale — both already RETIRED at batches 31-32.
+
+R-100-tool-step-converter:
+  title: TOOL_STEP dispatchable via api.run (operator path for tool_contract_converter)
+  surface: II
+  status: BLOCKED
+  depends_on: []
+  blocks: []
+  posture: phase-7
+  scope: { files: [harness-runtime/src/harness_runtime/**, design-substrate/Spec_Harness_Runtime_v1.md], contracts: [C-RT-22, C-RT-30], cross_axis: no }
+  skills: { primary: phase-7-back-flow-routing, secondary: [phase-7-implementation] }
+  advisor_required: yes
+  council_required: no
+  verification: { shape: integration, must_pass: ["operator can supply a tool_contract_converter (or per-server ToolContracts) via RuntimeConfig/MCPClientConfig", "a TOOL_STEP dispatches through api.run end-to-end"] }
+  close_shape: { type: PR-merge, artifact: "fix: operator-suppliable MCP tool_contract_converter (or spec amendment)" }
+  next_pointer: R-100-cost-attribution-firing
+  notes: >
+    BLOCKED on ratification of `.harness/class_1_fork_tool_step_no_operator_supplied_converter.md`
+    (PROPOSING). Readings: (A) per-server static ToolContract map [RuntimeConfig.tool_contracts
+    may already be the intended path — verify it's consulted at dispatch] / (B) declarative
+    per-server default policy / (C) converter plugin path / (D) spec amendment scoping
+    TOOL_STEP-via-api.run out of MVP. Does not block the MVP (surface exercised at U-RT-86).
+
+R-100-cost-attribution-firing:
+  title: Per-dispatch cost-attribution fires on the real api.run inference path
+  surface: II
+  status: BLOCKED
+  depends_on: []
+  blocks: []
+  posture: phase-7
+  scope: { files: [harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py, harness-runtime/tests/integration/**], contracts: [C-OD-26], cross_axis: yes }
+  skills: { primary: phase-7-implementation, secondary: [phase-7-substitution-retirement] }
+  advisor_required: yes
+  council_required: no
+  verification: { shape: e2e, must_pass: ["a real inference run writes ≥1 cost: ledger entry", "the xfail in test_r100_real_workflow_e2e.py converts to a pass", "OD-5 retirement re-validated against the production cost-emission path"] }
+  close_shape: { type: PR-merge, artifact: "fix: LLM cost-attribution fires on real dispatch + OD-5 re-validation" }
+  next_pointer: R-001
+  notes: >
+    BLOCKED on ratification + debug of `.harness/class_1_fork_llm_cost_attribution_not_firing_on_real_dispatch.md`
+    (PROPOSING). Empirically confirmed: a live 3-step Anthropic run wrote zero `cost:`
+    entries. Candidate causes (llm_dispatch.py:930-959): usage tokens None / dispatch
+    method routing past the line-517 cost block / swallowed exception. Carries an OD-5
+    retirement-validity question (grep-vs-e2e). Cross-axis: OD cost surface consumed at
+    the runtime LLM dispatch site.
 
 R-100-mvp-yaml-loader-shipped:
   title: YAML manifest loader operational (close Class 1 forks PR #79 / PR #80 lineage)
