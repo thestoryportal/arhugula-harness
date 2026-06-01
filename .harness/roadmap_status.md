@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `039ab95024f0` |
-| `last_refreshed` | 2026-06-01T18:54:00-06:00 |
-| `git_head` | `c047aa2c` (main) — `feat(routing): activate layered capability-aware routing (R-300) (#213)` |
+| `workspace_state_hash` | `8fb5be5f6f46` |
+| `last_refreshed` | 2026-06-01T19:02:00-06:00 |
+| `git_head` | `7a8802b6` (main) — `roadmap: R-300 RESOLVED finalize (#213) + status refresh (#214)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 43 |
 
@@ -60,8 +60,8 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `roadmap-refresh-post-213` | R-300 (post-merge audit) | mode-agnostic — post-#213 §12.2 audit: §5 R-300 `(PR pending)` → `(PR #213, c047aa2)` finalize + dashboard `workspace_state_hash` recompute (`7646d1d29e5f` → `039ab95024f0`) + `git_head` → `c047aa2c`. **Bundled (2 files) → non-terminating per §12.2.1 → follow-on terminating refresh owed.** |
-| *(none else)* | — | — | open-PR set empty after #213 merged. |
+| *(this PR)* | `ops-roadmap-refresh-post-214` | *(terminating refresh §12.2.1)* | mode-agnostic — records PR #214 (R-300 RESOLVED finalize + status refresh); `workspace_state_hash` recompute (`039ab95024f0` → `8fb5be5f6f46`) + `git_head` → `7a8802b6` (#214 merge). Dashboard-only (`.harness/roadmap_status.md`); title `ops: roadmap status refresh post-PR-214` → next §12.1 audit sees expected lag-by-one (carve-out §12.1 step 6). |
+| *(none else)* | — | — | open-PR set empty after #213/#214 merged. |
 
 ---
 
@@ -197,7 +197,9 @@ The 5 bucket rows below sum to **54** using the draft's per-row **accounting (i)
 
 | 2026-06-01 | **R-300-multi-llm-routing-activation RESOLVED (PR #213 `c047aa2`), then this audit.** Fresh `/clear`→`continue` session: §12.1 audit oriented (worktree on `r-300-routing-activation`, 3 commits ahead of origin/main; the implementation + memory had already been authored this branch and PR #213 was open + all-green). Merged PR #213 (squash, all 10 checks pass, CLEAN/MERGEABLE) — `infer()` composition seam activated (C-CP-01 §1.1, U-CP-03): CP-pure `route()`+injected-async-dispatch composition + live INFERENCE_STEP routing through `infer()` + full `routing.*` span attribution; DECLARATIVE-echo behavior-preserving at MVP; council gate NOT met this arc (fires at R-300-second-provider). This audit finalizes the §5 `(PR pending)` → `(PR #213, c047aa2)` note + refreshes the dashboard. | Substantive (Project_Roadmap_v1.md §5 + dashboard) → **NOT a terminating refresh; follow-on terminating refresh owed** per §12.2.1. Hash `7646d1d29e5f` → `039ab95024f0` (state at `c047aa2`; PRS empty; fork count 43 unchanged; batch-51 latest). Next action re-derived: R-300-routing RESOLVED drains the top Claude-executable post-Phase-8 impl lever; remaining Claude-executable-now = `R-830-memory-tool-production-backend` + `R-CXA-1/2/4` seams (operator-driven menu picks). Dominant product step stays operator-gated (live R-100 e2e; R-300-second-provider creds). |
 
-**Audit protocol exercised across 27 terminating-refresh closures + 2 fresh-session reconciliations + 10 substantive closes + 1 substantive partial + 1 operator-approved 3-PR merge cluster + R-XI-01 dashboard build + 1 process-discipline sweep (R-600-pattern-bake-in).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **2026-06-01 session: landed the R-100 tool-step apply cluster (#173/#171/#172), closed R-600-clearance-marker-backfill-survey (#175), built+landed R-XI-01 operator dashboard MVP (#177), and ran the first R-600-pattern-bake-in-sweep (ACTIVE-SURVEYED; v1.14 absorption deferred).** **All Claude-executable substantive arcs are drained.** The deterministic next-action is operator-owned: **(a) run the live R-100 e2e**, and/or **(b)** any operator-scoped design-phase arc (e.g. the `R-600-workflow-v1-14-amendment` the sweep now has evidence for). Remaining Claude-executable mode-agnostic work = MEMORY.md hygiene audit + fork-doc Status cadence sweep; §V/VI/IV gated on MVP-shipped / live e2e.
+| 2026-06-01 | Thirty-fifth terminating refresh — PR #214 substantive R-300-close audit merged at `7a8802b`; §12.2 owed follow-on | Single-file dashboard-only refresh per §12.2.1. Hash `039ab95024f0` → `8fb5be5f6f46` (state at `7a8802b`, the #214 merge; PRS empty; fork count 43; batch-51). Next action UNCHANGED — R-300-routing RESOLVED; remaining Claude-executable-now = `R-830` + `R-CXA-1/2/4` (operator-driven menu); dominant product step = operator-gated live R-100 e2e + R-300-second-provider creds. Recursion-stopping fixed point: dashboard lags by exactly one commit (this refresh's own merge), recognized as `lag-expected` by the next §12.1 session-start audit. |
+
+**Audit protocol exercised across 28 terminating-refresh closures + 2 fresh-session reconciliations + 10 substantive closes + 1 substantive partial + 1 operator-approved 3-PR merge cluster + R-XI-01 dashboard build + 1 process-discipline sweep (R-600-pattern-bake-in).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **2026-06-01 session: landed the R-100 tool-step apply cluster (#173/#171/#172), closed R-600-clearance-marker-backfill-survey (#175), built+landed R-XI-01 operator dashboard MVP (#177), and ran the first R-600-pattern-bake-in-sweep (ACTIVE-SURVEYED; v1.14 absorption deferred).** **All Claude-executable substantive arcs are drained.** The deterministic next-action is operator-owned: **(a) run the live R-100 e2e**, and/or **(b)** any operator-scoped design-phase arc (e.g. the `R-600-workflow-v1-14-amendment` the sweep now has evidence for). Remaining Claude-executable mode-agnostic work = MEMORY.md hygiene audit + fork-doc Status cadence sweep; §V/VI/IV gated on MVP-shipped / live e2e.
 
 ---
 
