@@ -1,6 +1,6 @@
 # Class 1 fork — CXA-1 (AS→IS): secret-fetch audit production caller fires at a bootstrap stage that precedes the AS→IS wiring stage
 
-**Status:** PROPOSING (operator AskUserQuestion owed). Filed at the R-CXA-1 pre-substantive empirical orientation.
+**Status:** ✅ APPLIED-AS-READING-D (operator AskUserQuestion 2026-06-01) — **don't wire; defer.** The apply-arc empirical orientation (advisor-prompted, §2.6) found the bootstrap-value fetch path does not fit this `resolve()`-shaped event AND the entire `SecretFetchEvent` machinery has **zero production producer** — wiring bootstrap-value with sentinels would be a hollow seam (vacuous-close / `test-bypass-as-runtime-truth`). R-CXA-1 must_pass #1 stays **deferred / PARTIAL**; no production code change. must_pass #1 re-opens when a real scoped-`resolve()` producer exists OR the `SecretFetchEvent` contract is reshaped for the name-only bootstrap path (Reading C, a design-substrate amendment). Originally filed PROPOSING; Reading B was first ratified but found unwritable-as-previewed at the apply arc (§2.6).
 **Filed:** 2026-06-01, during the post-R-300 / post-R-100 "continue" derivation. The roadmap's top Claude-executable post-Phase-8 lever (`R-CXA-1-as-is-seam`) was grounded before opening; must_pass #1 ("a production caller invokes `emit_secret_fetch_audit_entry`") surfaces a bootstrap-ordering / substrate-lifecycle mismatch — the same shape as the U-RT-111 saga — so it routes to back-flow rather than being silently wired.
 **Class:** 1 (architectural — closing the seam's first edge requires a bootstrap stage-ordering / resolver-signature decision; wiring it without ratification would be a silent X-AL-3 design extension to the bootstrap contract).
 **Blocks:** `R-CXA-1-as-is-seam` must_pass #1 (the secret-fetch production-caller edge). Transitively gates `R-700-phase-8-substitution-accounting` (CXA-1 is one of the open non-RETIRED rows). Does NOT block must_pass #2 (the remaining ~12 AS source-unit edges) directly — those are a separate, larger sub-arc that may surface their own per-edge firing-site questions.
@@ -36,6 +36,18 @@ To wire must_pass #1 you must either move the emitter earlier, emit at stage 3a 
 ### 2.5 Bootstrap-scoped identifiers
 `emit_secret_fetch_audit_entry` builds a `WriteKey(thread_id=event.thread_id, step_id=event.step_id, ...)` (`as_is_wiring.py:120-124`). Secret-fetch fires at bootstrap, outside any workflow/step — the code already anticipates this (`as_is_wiring.py:110-113`: "Secret-fetch audit entries fire at bootstrap / provider-construction — outside an active workflow context — so the D-derivative sidecar does not apply"; `procedural_tier_snapshot_ref` left `None`-canonical). So bootstrap-sentinel identifiers (e.g., `Identifier("bootstrap")` / `Identifier("secret-fetch:<provider>")`) are the natural choice — a sub-decision of whichever Reading is chosen.
 
+### 2.6 Apply-arc finding — Reading B is unwritable as previewed; the event has no real producer (verified at HEAD `9936dfc`)
+
+The ratified Reading B preview showed `secret_scope=ref.scope` and `secret_last_rotated_at=meta.rotated_at`. **Neither `ref` nor `meta` exists at the emit site:**
+
+1. **Bootstrap path is value-not-ref.** `construct_anthropic_adapter` / `construct_openai_adapter` (`providers.py:328` / `:438`) call `resolver.resolve_bootstrap_value(NAME)` → a bare `str`. The scoped `KeyringSecretResolver.resolve(name, scope, tier) -> SecretRef` (`provider_secrets.py:131`) — the only path that produces a scope-bearing `SecretRef` — is **never called in production** (the sole `.resolve(` hits in `src/` are `pathlib.Path.resolve()`). So at the fetch site there is no scope and no `SecretRef`.
+2. **`secret_last_rotated_at` has no production source at all.** Keyring exposes no rotation metadata; `rotated_at` appears in `src/` only as the field definition + the fingerprint-hash consumer. Nothing can populate it truthfully.
+3. **Sentinels are material, not cosmetic.** Both `secret_scope` and `secret_last_rotated_at` feed `canonicalize_concat_secret_fingerprint(secret_name, secret_scope, secret_last_rotated_at)` (`secret_outputs_hash.py:83`). Sentinel both → the fingerprint collapses to `f(secret_name)`, so it can never detect a rotation or scope change — the entire reason the fields exist.
+4. **Fire-once-forever idempotency.** `_idempotency_key = sha256(thread_id, step_id, secret_name, secret_scope.name)` (`secret_fetch_audit.py`) — no timestamp. Constant bootstrap-sentinel identifiers → the same key every boot → one ledger entry per provider **ever**; every subsequent bootstrap is an `IDEMPOTENT_NOOP`. The "audit" would not record per-boot fetches.
+5. **No real producer anywhere.** `RuntimeAsIsWiring.emit_secret_fetch_audit_entry` has zero production callers; `harness_as.secret_fetch_emission.emit_secret_fetch_audit` (`:102`) *composes-and-discards* (drops the composed entry). Nothing threads a real secret fetch into this machinery. It is speculative substrate.
+
+**Conclusion:** wiring bootstrap-value into this `resolve()`-shaped event with sentinels satisfies the *letter* of must_pass #1 (a production caller invokes the emitter) while producing a hollow, fingerprint-defeated, fire-once seam — the vacuous-close anti-pattern. Operator ratified **Reading D** (defer) on this finding.
+
 ## 3. The decision
 
 The bootstrap-ordering choice is a single-axis runtime/bootstrap-contract decision (no cross-domain value tension; security is safe per §2.4 → **not council-eligible**). It does need ratification because each Reading changes the bootstrap contract.
@@ -58,4 +70,8 @@ This fork is about **must_pass #1** (the secret-fetch production-caller edge + i
 
 ## 5. Resolution log
 
-*(empty — awaiting operator AskUserQuestion ratification of a Reading.)*
+- **2026-06-01 — Reading B first ratified** (operator AskUserQuestion, side-by-side preview). Apply arc opened.
+- **2026-06-01 — apply-arc empirical orientation (§2.6) + advisor reconcile** found Reading B unwritable-as-previewed and the event producerless. Re-surfaced the corrected picture.
+- **2026-06-01 — Reading D ratified** (operator AskUserQuestion): don't wire; defer. R-CXA-1 must_pass #1 stays PARTIAL; ZERO production code change. Re-opens on a real scoped-`resolve()` producer OR a Reading-C contract reshape. Recorded here; roadmap §5 R-CXA-1 + dashboard refreshed.
+
+**Note for a future arc:** before R-CXA-1 must_pass #1 can land non-vacuously, the upstream question is "what is the *real* producer of a secret-fetch audit?" — i.e., does any workflow-time path call the scoped `resolve()` with a genuine scope, and should that (not bootstrap-value provider construction) be the emit site? That is a producer-discovery question, not a bootstrap-ordering one. The bootstrap-ordering blocker this fork named is real but secondary — it only bites once a real producer exists.
