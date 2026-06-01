@@ -651,7 +651,8 @@ R-200-ci-coverage-gating:
 R-200-ci-lint-typecheck-blocking:
   title: Drive the tree ruff/pyright-clean, then flip CI lint + typecheck from advisory to blocking
   surface: III
-  status: ACTIVE
+  status: RESOLVED
+  resolved_at: "PR #161 (d904055) 2026-05-31 — pyright half: 846 → 0; typecheck job flipped blocking (renamed `pyright (strict) — blocking`); verified green-as-blocking in CI alongside all 6 axis-isolation legs. Lint half was PR #159. BOTH lint + typecheck now blocking; surface III CI substrate gate complete."
   depends_on: [R-200-ci-pytest-pyright-ruff-matrix]
   blocks: []
   posture: phase-7
