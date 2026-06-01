@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `c9584b27103d` |
-| `last_refreshed` | 2026-05-31T18:05:00-06:00 |
-| `git_head` | `f06c30a` (main) — `ci: pytest + pyright + ruff matrix (#144)` |
+| `workspace_state_hash` | `7abd92ea0952` |
+| `last_refreshed` | 2026-05-31T18:30:00-06:00 |
+| `git_head` | `3223ab9` (main) — `roadmap(R-200): RESOLVED at PR #144 + flip §III dependents ACTIVE + add lint/typecheck-blocking follow-up (#145)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-50.md` |
 | `open_fork_doc_count` | 39 |
 
