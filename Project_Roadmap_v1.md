@@ -211,7 +211,7 @@ def next_action(roadmap, workspace_state, session_posture):
 
 ## 5. R-NNN action catalog
 
-**Populated entries: 26.** Decomposition-owed markers per §9 for §IV–§VI + §VIII–§X.
+**Populated entries: 27.** Decomposition-owed markers per §9 for §IV–§VI + §VIII–§X.
 
 ### 5.1 Mode-agnostic infrastructure (R-IF-NNN)
 
@@ -565,7 +565,7 @@ R-200-ci-pytest-pyright-ruff-matrix:
 R-200-ci-axis-matrix:
   title: Per-axis test isolation matrix
   surface: III
-  status: ACTIVE   # unblocked by R-200-ci-pytest-pyright-ruff-matrix RESOLVED (PR #144)
+  status: RESOLVED   # PR #147 — axis-isolation matrix added to ci.yml
   depends_on: [R-200-ci-pytest-pyright-ruff-matrix]
   blocks: []
   posture: mode-agnostic
@@ -575,8 +575,48 @@ R-200-ci-axis-matrix:
   council_required: no
   verification: { shape: integration, must_pass: ["each axis runs in isolation (no harness-cp leak into harness-is run)", "matrix completes in <10min"] }
   close_shape: { type: PR-merge, artifact: "ci: per-axis isolation matrix", cascade: [] }
+  next_pointer: R-200-ci-od-cp-dependency-leak
+  notes: >
+    RESOLVED at PR #147. NEW `axis-isolation` matrix job in `.github/workflows/ci.yml`:
+    6 legs (core / is / as / cp / od / cxa), `fail-fast: false`. Each leg `uv sync --package
+    harness-<axis>` (installs only that package + its DECLARED workspace deps; uv prunes
+    siblings), layers `pytest`+`pytest-asyncio` via `uv pip install` (the root `dev` group is
+    not pulled by `--package`; neither tool depends on a harness axis so isolation holds), then
+    `uv run --no-sync pytest harness-<axis>/tests -m "not e2e"`. A test or src module importing
+    an undeclared sibling axis fails to import — the leak the all-packages `test` job masks.
+    harness-runtime omitted (depends on every axis → its isolation == the all-packages `test`
+    job). Empirically verified at authoring: core 26 / is 133 / as 317 / cp 813 / cxa 28 PASS in
+    isolation; **od RED** — undeclared od->cp dependency at
+    `harness-od/src/harness_od/pause_resume_namespace.py:295` (`from harness_cp.pause_resume_protocol
+    import ...`) + 4 od test modules import harness_cp while harness-od declares only core+as.
+    Posture: 5 clean legs BLOCKING (catch NEW leaks); `od` leg ADVISORY via
+    `continue-on-error: ${{ matrix.axis == 'od' }}`. Each leg installs/tests a single small
+    package subset in parallel → well under the <10min budget. od fix tracked at
+    R-200-ci-od-cp-dependency-leak.
+
+R-200-ci-od-cp-dependency-leak:
+  title: Resolve the undeclared harness-od -> harness-cp dependency, then make the od isolation leg blocking
+  surface: III
+  status: ACTIVE   # surfaced by the axis-isolation matrix (R-200-ci-axis-matrix, PR #147)
+  depends_on: [R-200-ci-axis-matrix]
+  blocks: []
+  posture: phase-7   # touches harness-od/pyproject.toml + possibly src/test relocation — design call on the dep graph
+  scope: { files: [harness-od/pyproject.toml, harness-od/src/**, harness-od/tests/**, .github/workflows/ci.yml], contracts: [], cross_axis: yes }
+  skills: { primary: phase-7-back-flow-routing, secondary: [phase-7-implementation] }
+  advisor_required: yes   # cross-axis dependency-graph change; may be a Class 3 cross-axis-import-drift fork
+  council_required: no
+  verification: { shape: integration, must_pass: ["harness-od tests pass under `uv sync --package harness-od` isolation", "od leg drops the continue-on-error carve-out in ci.yml", "no new dependency cycle (cp must not depend on od)"] }
+  close_shape: { type: PR-merge, artifact: "fix(od): declare harness-cp dependency / relocate CP->OD seam; flip od isolation leg blocking", cascade: [] }
   next_pointer: null
-  notes: Reveals cross-axis import leaks early.
+  notes: >
+    harness-od/src/harness_od/pause_resume_namespace.py:295 imports `harness_cp.pause_resume_protocol`
+    (CP->OD audit-projection seam), and 4 od test modules import harness_cp, but harness-od declares only
+    harness-core + harness-as in its [project.dependencies]. The all-packages CI `test` job masks this
+    (everything installed); the axis-isolation matrix surfaces it. Resolution is a design call: either (a)
+    declare `harness-cp` as a harness-od dependency (acyclic-safe — cp depends on as, not od), or (b)
+    relocate the CP->OD seam consumer to a package that already declares cp (harness-cxa / harness-runtime)
+    per the CXA cross-axis-edge architecture. Likely warrants a Class 3 cross-axis-import-drift observation.
+    Once resolved, drop `continue-on-error: ${{ matrix.axis == 'od' }}` from the axis-isolation job.
 
 R-200-ci-coverage-gating:
   title: Coverage gating at PR (informational at first; enforce later)

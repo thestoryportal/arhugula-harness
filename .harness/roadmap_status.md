@@ -8,8 +8,8 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `7abd92ea0952` |
-| `last_refreshed` | 2026-05-31T18:30:00-06:00 |
+| `workspace_state_hash` | `7abd92ea0952` (narrative-refresh only this PR; authoritative recompute owed at the post-merge terminating refresh per §12.2.1) |
+| `last_refreshed` | 2026-05-31T19:30:00-06:00 |
 | `git_head` | `3223ab9` (main) — `roadmap(R-200): RESOLVED at PR #144 + flip §III dependents ACTIVE + add lint/typecheck-blocking follow-up (#145)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-50.md` |
 | `open_fork_doc_count` | 39 |
@@ -20,9 +20,9 @@
 
 ## Next action
 
-**`R-200-ci-axis-matrix`** (status: **ACTIVE**; surface III CI substrate; mode-agnostic; cross_axis: no) — per-axis test-isolation matrix in CI (each axis runs without sibling-package import leak; matrix < 10 min), now unblocked by **R-200-ci-pytest-pyright-ruff-matrix RESOLVED at PR #144 `f06c30a`** (`.github/workflows/ci.yml`: `test` blocking+green; `lint`+`typecheck` advisory because the tree isn't clean — see R-200-ci-lint-typecheck-blocking). Also newly ACTIVE in §III: `R-200-ci-coverage-gating` + `R-200-ci-lint-typecheck-blocking`. Original R-200-ci-pytest scope below is retained for history. scope = `.github/workflows/ci.yml` + `pyproject.toml`; verification (integration) = CI runs on every PR; all 5 axis packages tested; pyright strict + ruff pass. close_shape = PR-merge; `advisor_required: no`. **§4 derivation:** with R-001-h-t-is-2-retired RESOLVED, §I has no ACTIVE candidate; rank-1 mode-agnostic R-IF entries (108–111) are RESOLVED (reconciled this PR) and R-IF-roadmap-refresh is the perennial refresh mechanism (satisfied by this refresh); so the top candidate is **§III CI substrate (rank 3)** — which outranks §II MVP-operator-usable (rank 4: `R-100-mvp-operator-usable-cli-shipped`, also ACTIVE). The pipeline is **not** drained — Surface II/III multipliers remain executable.
+**`R-200-ci-coverage-gating`** (status: **ACTIVE**; surface III CI substrate; mode-agnostic; cross_axis: no) — coverage reporting at PR (informational at v1; don't enforce a threshold — gather data first). scope = `.github/workflows/ci.yml` + `pyproject.toml`; verification (integration) = coverage report uploaded to PR + trend visible across last 5 PRs. close_shape = PR-merge; `advisor_required: no`. **§4 derivation:** with R-200-ci-axis-matrix RESOLVED at PR #147, the remaining ACTIVE §III entries are `R-200-ci-coverage-gating` (mode-agnostic), `R-200-ci-lint-typecheck-blocking` (phase-7 — drive the tree clean), and the NEW `R-200-ci-od-cp-dependency-leak` (phase-7 — surfaced by the axis-isolation matrix). Mode-agnostic outranks phase-7 within a surface, so **R-200-ci-coverage-gating** is next; both phase-7 §III entries and §II `R-100-mvp-operator-usable-cli-shipped` (rank 4) remain executable. Pipeline not drained.
 
-**(R-001-h-t-is-2-retired RESOLVED at PR #141 merge `4a0aa1d` 2026-05-31 — H_T-IS-2 PARTIAL → RETIRED, batch-50; IS-axis 9/9 RETIRED = 100%, FIRST axis fully RETIRED at the strict view. R-003 RESOLVED at #136+#137+#138. Hook hardened against the local-behind-origin drift at PR #140 `e55e99b`.)**
+**(R-200-ci-axis-matrix RESOLVED at PR #147 — `axis-isolation` matrix added to `ci.yml`; 5 of 6 legs blocking + green, `od` advisory pending the undeclared od→cp dependency fix tracked at R-200-ci-od-cp-dependency-leak. R-001-h-t-is-2-retired RESOLVED at PR #141 `4a0aa1d` — IS-axis 9/9 RETIRED = 100%. R-003 RESOLVED at #136+#137+#138. Hook hardened at PR #140 `e55e99b`.)**
 
 ---
 
@@ -30,8 +30,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(none — #144 merged `f06c30a` 2026-05-31; #136–#143 all merged)* | — | — | — |
-| *(this PR)* | `roadmap-r200-close` | *(self — substantive R-200 close: marks R-200-ci-pytest RESOLVED + flips §III dependents ACTIVE + adds R-200-ci-lint-typecheck-blocking + dashboard refresh. NOT a terminating refresh → follow-on terminating refresh owed per §12.2.1)* | mode-agnostic |
+| *(this PR)* | `r200-ci-axis-isolation-matrix` | R-200-ci-axis-matrix | mode-agnostic — adds `axis-isolation` matrix to `ci.yml`, marks R-200-ci-axis-matrix RESOLVED, adds R-200-ci-od-cp-dependency-leak follow-up, dashboard narrative refresh. NOT a terminating refresh → follow-on terminating refresh + `workspace_state_hash` recompute owed post-merge per §12.2.1 |
 
 ---
 
@@ -39,12 +38,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #147 (this) | 2026-05-31 | **R-200-ci-axis-matrix RESOLVED** — NEW `axis-isolation` matrix job in `ci.yml`. 6 legs (core/is/as/cp/od/cxa), `uv sync --package` isolation + layered pytest tooling. Empirically verified: core 26 / is 133 / as 317 / cp 813 / cxa 28 PASS isolated; **od RED** (undeclared od→cp dep at `pause_resume_namespace.py:295` + 4 od tests import harness_cp). 5 clean legs BLOCKING, `od` ADVISORY via `continue-on-error: ${{ matrix.axis == 'od' }}`. od fix → NEW R-200-ci-od-cp-dependency-leak. |
 | PR #144 (`f06c30a`) | 2026-05-31 | **R-200-ci-pytest-pyright-ruff-matrix RESOLVED** — first substantive CI job. `.github/workflows/ci.yml`: `test` (`pytest -m "not e2e"`) BLOCKING + green (3543 passed); `lint`+`typecheck` ADVISORY (tree not ruff/pyright-clean — 366 ruff / 894 pyright, incl. a real dup-`Skill` bug at types.py:1683). §III dependents flipped ACTIVE; follow-up `R-200-ci-lint-typecheck-blocking` added. |
 | PR #142 (`5ca46f5`) | 2026-05-31 | **R-001-h-t-is-2-retired RESOLVED** (substantive close) — marks R-001 RESOLVED + reconciles stale-ACTIVE R-IF-108/109/110/111 → RESOLVED + dashboard refresh (next-action re-derived to R-200-ci §III); logs the Cluster A/B drift + #140 hardening |
 | PR #141 (`4a0aa1d`) | 2026-05-31 | **R-001-h-t-is-2-retired RESOLVED** — batch-50: H_T-IS-2 PARTIAL → RETIRED (substantive substitution-retirement). All 13 producer sites handled; X-AL-2 both conjuncts MET. IS-axis 9/9 RETIRED = 100% (FIRST axis fully RETIRED at strict view). harness-is/CLAUDE.md §4.1 + ledger v2 §11.4h |
 | PR #140 (`e55e99b`) | 2026-05-31 | **Hook hardening** — `session-start.sh` behind-origin guard (fixes the Cluster A/B stale-next-action drift: local main 4 behind origin → hook reported stale `next=R-003`). Default-branch-gated, timeout-guarded fetch; can't hang/fail offline |
-| PR #138 (`a943caf`) | 2026-05-31 | **R-003 RESOLVED** substantive roadmap refresh — R-003 → RESOLVED + R-001-h-t-is-2-retired BLOCKED → ACTIVE |
-| PR #137 (`c339728`) | 2026-05-31 | **R-003 Cluster B** — CP-axis producer-site lifts: `construct_sibling_ledger_entry` + `workflow_driver._append_step_ledger_entry`; + 3 None-canonical doc-comments. 2281 pass |
 
 ---
 
