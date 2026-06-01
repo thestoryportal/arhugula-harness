@@ -389,7 +389,7 @@ def _read_audit_head_hash(ctx: HarnessContext) -> str | None:
 async def shutdown(
     ctx: HarnessContext,
     *,
-    timeout: float = 30.0,  # noqa: ASYNC109 — spec §10 mandates this signature
+    timeout: float = 30.0,
 ) -> ShutdownReport:
     """Execute the C-RT-10 reverse-stage shutdown sequence.
 

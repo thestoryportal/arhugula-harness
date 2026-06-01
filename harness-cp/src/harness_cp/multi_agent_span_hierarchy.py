@@ -81,7 +81,9 @@ MULTI_AGENT_SPAN_HIERARCHY: tuple[SpanHierarchyNode, ...] = (
         parent_relationship=ParentRelationship.CHILD_OF,
         parent_span_name="topology.fanout.opened",
         ordered_children=(
-            "the LLM inference span[]",  # alias per AS spec v1.7 §14.1; runtime span-name format owned by OD spec v1.12 §C-OD-04 §4.1
+            # alias per AS spec v1.7 §14.1; runtime span-name format owned by
+            # OD spec v1.12 §C-OD-04 §4.1.
+            "the LLM inference span[]",
             "sandbox.enter",
             "tool.call[]",
             "sandbox.exit",

@@ -769,7 +769,8 @@ class RuntimeHITLGateComposer:
             rejection_reason_hash=rejection_hash,
             response_text_hash=response_text_hash,
             timestamp=timestamp,
-            prior_event_hash=_empty_summary_hash(),  # placeholder per spec §14.8 partial-entry shape
+            # placeholder per spec §14.8 partial-entry shape
+            prior_event_hash=_empty_summary_hash(),
         )
 
         try:

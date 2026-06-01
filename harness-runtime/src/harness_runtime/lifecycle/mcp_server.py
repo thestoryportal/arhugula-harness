@@ -56,6 +56,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from mcp.server.fastmcp import Context, FastMCP
+
 _MANIFEST_PATH_SUFFIXES: frozenset[str] = frozenset({".yaml", ".yml", ".toml"})
 
 
@@ -73,8 +75,6 @@ def _looks_like_manifest_path(workflow_id: str) -> bool:
     lower = workflow_id.lower()
     return any(lower.endswith(suffix) for suffix in _MANIFEST_PATH_SUFFIXES)
 
-
-from mcp.server.fastmcp import Context, FastMCP
 
 if TYPE_CHECKING:
     from harness_runtime.api import WorkflowObject

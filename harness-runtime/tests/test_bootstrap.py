@@ -589,7 +589,7 @@ def test_freeze_raises_incomplete_when_required_field_none() -> None:
 
 def test_bootstrap_stage_complete_event_is_frozen() -> None:
     event = BootstrapStageCompleteEvent(stage=BootstrapStage.PREAMBLE)
-    with pytest.raises(Exception):  # noqa: B017 — Pydantic frozen-violation
+    with pytest.raises(Exception):
         event.stage = BootstrapStage.IS  # type: ignore[misc]
 
 
@@ -810,7 +810,7 @@ async def test_api_run_passes_workload_class_into_bootstrap(
             final_state={},
         )
 
-    async def _fake_shutdown(ctx: Any, *, timeout: float = 5.0) -> Any:  # noqa: ASYNC109 — mirrors real signature
+    async def _fake_shutdown(ctx: Any, *, timeout: float = 5.0) -> Any:
         _ = ctx, timeout
         return _shutdown_mod.ShutdownReport(
             already_shutdown=False,

@@ -45,7 +45,8 @@ class IngestionTarget(StrEnum):
     """F3 lifecycle-event attributes."""
 
     OD_PLAN_SESSION_4_D6_SECTION_1_5 = "od-plan-session-4-d6-section-1-5"
-    """Inheritance from the parent LLM inference span (per AS spec v1.7 §14.1 alias-term; runtime span-name format owned by OD spec v1.12 §C-OD-04 §4.1)."""
+    """Inheritance from the parent LLM inference span (per AS spec v1.7 §14.1
+    alias-term; runtime span-name format owned by OD spec v1.12 §C-OD-04 §4.1)."""
 
 
 class NamespaceExport(BaseModel):

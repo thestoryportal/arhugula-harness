@@ -14,16 +14,17 @@ name: CI
 # v1 enforcement posture (IMPORTANT — read before tightening):
 #   - pytest IS blocking. `uv run pytest -m "not e2e"` is green tree-wide
 #     (3543 passed / 7 skipped as of the R-200 authoring commit).
-#   - ruff + pyright are ADVISORY (continue-on-error) at v1. The workspace is
-#     NOT yet clean tree-wide under `uv run ruff check .` (366 findings, mostly
-#     import-organization in test files) or `uv run pyright` (894 strict errors,
-#     concentrated in test modules — reportPrivateUsage / reportUnusedImport).
-#     The dashboard's historical "ruff+pyright clean vs main" referred to
-#     per-PR diffs introducing no NEW errors, not an absolute-zero tree.
-#     Making these blocking on day one would render CI permanently red and
-#     useless. They run here so the signal is visible on every PR; a follow-up
-#     (drive the tree clean, then flip continue-on-error → false) makes them
-#     blocking. Mirrors R-200-ci-coverage-gating's "gather data first" stance.
+#   - ruff IS blocking (flipped at R-200-ci-lint-typecheck-blocking). The tree
+#     is clean tree-wide under `uv run ruff check .` AND `uv run ruff format
+#     --check .` (0 findings). The mechanical sweep (PR #155) + F821 real-defect
+#     fixes (PR #157) + this PR's src fixes + test-legitimate per-file-ignores
+#     (root pyproject [tool.ruff.lint.per-file-ignores]) drove the residual to 0.
+#   - pyright is STILL ADVISORY (continue-on-error) at v1. The workspace is NOT
+#     yet clean under `uv run pyright` (~894 strict errors, concentrated in test
+#     modules — reportPrivateUsage / reportUnusedImport — plus one genuine
+#     production bug: two distinct `Skill` classes at types.py). A follow-up
+#     (drive pyright clean, then flip its continue-on-error → false) makes it
+#     blocking. Lint flips independently of pyright per the R-200 derivation.
 
 on:
   pull_request:
@@ -66,9 +67,9 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
-    name: ruff (lint + format) — advisory at v1
-    # Advisory until the tree is driven clean — see header note. Does not block merge.
-    continue-on-error: true
+    name: ruff (lint + format) — blocking
+    # Blocking as of R-200-ci-lint-typecheck-blocking — the tree is ruff-clean
+    # (check + format) tree-wide. New findings fail the PR. See header note.
     steps:
       - name: Checkout
         uses: actions/checkout@v4

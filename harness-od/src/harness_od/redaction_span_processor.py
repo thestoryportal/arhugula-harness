@@ -109,7 +109,8 @@ __all__ = [
 class MultiTenantOverrideRefusedError(Exception):
     """Raised when an empty `redacted_attributes` is supplied at multi-tenant.
 
-    Per OD spec §C-OD-13 §13.1 row 3 + `PER_PERSONA_TIER_REDACTION[MULTI_TENANT_COMPLIANCE].toggleable=False`:
+    Per OD spec §C-OD-13 §13.1 row 3 +
+    `PER_PERSONA_TIER_REDACTION[MULTI_TENANT_COMPLIANCE].toggleable=False`:
     multi-tenant-compliance is non-toggleable; operator cannot disable
     redaction at this tier. Surfaces at processor construction; never at
     runtime.

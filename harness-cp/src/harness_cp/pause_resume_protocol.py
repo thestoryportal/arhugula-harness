@@ -23,7 +23,11 @@ ADR-D5 v1.3 §1.11.
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Callable
 from enum import StrEnum
+from typing import Any
 
 from harness_core import EntryID, WorkflowID
 from pydantic import BaseModel, ConfigDict
@@ -31,6 +35,13 @@ from pydantic import BaseModel, ConfigDict
 from harness_cp.cp_shared_types import ActorIdentity
 from harness_cp.handoff_context import ExternalReference, StateSummary
 from harness_cp.material_diff_detection import MaterialDiff
+from harness_cp.pause_resume_protocol_types import (
+    MaterialDiffPolicy,
+    PauseSnapshot,
+    ResumeContext,
+    ResumeResult,
+    WorkflowPauseReason,
+)
 
 
 class PauseReason(StrEnum):
@@ -170,19 +181,6 @@ def classify_resume(
 # distinct architectural primitives at distinct layers — engine-layer
 # replay-pause (above) vs workflow-layer explicit-pause (below).
 # ---------------------------------------------------------------------------
-
-import hashlib
-import json
-from collections.abc import Callable
-from typing import Any
-
-from harness_cp.pause_resume_protocol_types import (
-    MaterialDiffPolicy,
-    PauseSnapshot,
-    ResumeContext,
-    ResumeResult,
-    WorkflowPauseReason,
-)
 
 # CP fail class identifiers per CP spec v1.11 §26.5.
 CP_FAIL_PAUSE_SNAPSHOT_CORRUPTION: str = "CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION"

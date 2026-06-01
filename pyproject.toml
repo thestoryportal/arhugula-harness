@@ -108,14 +108,57 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "ASYNC", "RUF"]
 # intentionally in docstrings, string literals, and comments (e.g., "persona × engine"
 # matrices, "5–7 attempts" ranges). Ruff's RUF001/002/003 flag these as ambiguous
 # against ASCII lookalikes; in this codebase they are domain notation, not typos.
-ignore = ["RUF001", "RUF002", "RUF003"]
+#
+# ASYNC109: the harness deliberately exposes `timeout` parameters on its HITL
+# surfaces (the canonical §17.4 HITL gate signature per CP spec C-CP-17 §17.4 +
+# the AskUserQuestion surfaces) and its dispatch surfaces (step_dispatch_timeout_seconds
+# per runtime spec C-RT-03). The timeout-as-parameter pattern is intentional,
+# spec-mandated API design — not the accidental-blocking shape ASYNC109 targets;
+# rewriting to `asyncio.timeout()` context managers would break the spec signatures.
+ignore = ["RUF001", "RUF002", "RUF003", "ASYNC109"]
 
 [tool.ruff.lint.per-file-ignores]
-# CP test files carry docstring AC-coverage tables with hand-aligned columns where
-# wrapping would destroy the alignment. The lines exceed 100 cols by a few chars.
-"harness-cp/tests/test_gate_level_rule.py" = ["E501"]
-"harness-cp/tests/test_per_step_override_evaluator.py" = ["E501"]
-"harness-cp/tests/test_validator_fail_transient_staircase.py" = ["E501"]
+# Two src modules carry hand-aligned markdown tables inside docstrings (the
+# classification-trigger table + the audit-payload path-disjointness table) where
+# wrapping would destroy the column alignment — same rationale as the CP test
+# docstring tables historically carved out below.
+"harness-od/src/harness_od/tail_keep_classification.py" = ["E501"]
+"harness-od/src/harness_od/pause_resume_namespace.py" = ["E501"]
+
+# Test files carry idioms that are legitimate in test context but flagged by the
+# production-grade lint profile. Scoped to tests/ only (never src/), and excludes
+# all F-codes so real undefined-name / unused-import bugs still surface:
+#   E402  — imports after monkeypatch / sys.modules setup or sys.path fixup
+#   E501  — AC-coverage docstring tables + long inline JSON / manifest fixtures
+#   B017  — pytest.raises(Exception) as a deliberate "any-error" assertion
+#   B007  — intentionally-unused loop variables in enumeration assertions
+#   B018  — bare attribute/expression access exercised for its raise/no-raise
+#   N801/N806/N814/N817/N818 — test-fixture class/var naming + imported-constant
+#            aliases + Fail/Signal exception names mirroring production identifiers
+#   RUF006 — fire-and-forget trigger tasks whose lifetime is the test's own await
+#   RUF012/RUF015/RUF022/RUF043/RUF059 — test-fixture mutable attrs + minor style
+#   ASYNC110/ASYNC240 — faithful mocks of polling servers + module-source
+#            introspection reads (blocking is correct in the test double)
+"**/tests/**/*.py" = [
+    "E402",
+    "E501",
+    "B017",
+    "B007",
+    "B018",
+    "N801",
+    "N806",
+    "N814",
+    "N817",
+    "N818",
+    "RUF006",
+    "RUF012",
+    "RUF015",
+    "RUF022",
+    "RUF043",
+    "RUF059",
+    "ASYNC110",
+    "ASYNC240",
+]
 
 [tool.ruff.format]
 docstring-code-format = true

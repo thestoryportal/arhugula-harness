@@ -169,7 +169,7 @@ def test_result_frozen() -> None:
             PersonaTier.SOLO_DEVELOPER,
         )
     )
-    with pytest.raises(Exception):  # noqa: B017 - pydantic frozen violation
+    with pytest.raises(Exception):
         result.selected_class = EngineClass.WAL_SEGMENT  # type: ignore[misc]
 
 

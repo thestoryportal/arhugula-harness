@@ -41,7 +41,9 @@ ANTHROPIC_PRIMITIVE_SAMPLING_POLICY: Mapping[str, AnthropicPrimitiveSamplingPost
             # inference span is owned at OD spec v1.12 §C-OD-04 §4.1 (actual
             # runtime span-name `{operation} {model}`); spec-side cite uses
             # the alias term, not the literal runtime span name.
-            "the LLM inference span": AnthropicPrimitiveSamplingPosture.HEAD_BASED_DEV_TAIL_BASED_PROD,
+            "the LLM inference span": (
+                AnthropicPrimitiveSamplingPosture.HEAD_BASED_DEV_TAIL_BASED_PROD
+            ),
             "skill.activation": (
                 AnthropicPrimitiveSamplingPosture.HEAD_1_0_DESIGN_TIME_BASE_RATE_PROD
             ),

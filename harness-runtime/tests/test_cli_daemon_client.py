@@ -31,7 +31,7 @@ from typer.testing import CliRunner
 _cli_app_mod = sys.modules["harness_runtime.cli.app"]
 assert _ensure_import is not None
 
-from harness_runtime.cli.app import (  # noqa: E402
+from harness_runtime.cli.app import (
     EXIT_BOOTSTRAP_ERROR,
     EXIT_SUCCESS,
     EXIT_WORKFLOW_FAIL,

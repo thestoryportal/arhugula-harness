@@ -19,7 +19,8 @@ table's value-name column.
 homed at `harness_cp.validator_fail_taxonomy.ValidatorRetryExitClass`. The
 two enums occupy different semantic domains: C-CP-21 = post-fail retry-exit
 classification (which staircase to run); C-CP-25 = pre-emit fail categorization
-(why validation failed). Per workspace `.harness/class_1_fork_u_cp_58_validator_fail_class_collision.md`
+(why validation failed). Per workspace
+`.harness/class_1_fork_u_cp_58_validator_fail_class_collision.md`
 operator-ratified path β.
 
 Authority: CP spec v1.10 §25.2 (NEW C-CP-25 ValidatorFramework); plan unit

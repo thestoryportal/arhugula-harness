@@ -86,7 +86,11 @@ class MultipleValidatorsError(Exception):
         self.count = count
 
 
-class CPFailValidatorPermanent(Exception):
+# N818 suppressed below: the name mirrors the canonical CP fail-class identifier
+# `CP-FAIL-VALIDATOR-PERMANENT` (per §25.6); the `Fail` stem is spec vocabulary,
+# not an accidental missing `Error` suffix. Renaming would diverge from the
+# contract identifier and ripple through 7 call sites.
+class CPFailValidatorPermanent(Exception):  # noqa: N818
     """Raised when a Validator returns PERMANENT_FAIL (CP fail class
     `CP-FAIL-VALIDATOR-PERMANENT` per §25.6 + AC #4).
 

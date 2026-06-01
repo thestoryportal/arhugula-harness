@@ -48,17 +48,17 @@ from typer.testing import CliRunner
 _cli_app_mod = sys.modules["harness_runtime.cli.app"]
 assert _ensure_import is not None
 
-from harness_runtime.cli.app import (  # noqa: E402
+from harness_runtime.cli.app import (
     EXIT_CONFIG_ERROR,
     DaemonStartupError,
     _default_daemon_socket_path,  # pyright: ignore[reportPrivateUsage]
     app,
 )
-from harness_runtime.config_source import RuntimeConfigLoadError  # noqa: E402
-from harness_runtime.lifecycle.mcp_server import (  # noqa: E402
+from harness_runtime.config_source import RuntimeConfigLoadError
+from harness_runtime.lifecycle.mcp_server import (
     _looks_like_manifest_path,  # pyright: ignore[reportPrivateUsage]
 )
-from harness_runtime.types import (  # noqa: E402
+from harness_runtime.types import (
     CollectorConfig,
     OTelConfig,
     PathBindingConfig,

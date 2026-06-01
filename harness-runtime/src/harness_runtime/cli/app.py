@@ -462,9 +462,12 @@ async def _daemon_main(
             raise DaemonStartupError(f"failed to bind Unix-socket {socket_path}: {exc}") from exc
     finally:
         await _shutdown(ctx)
-        # Best-effort cleanup of the socket file.
+        # Best-effort cleanup of the socket file. A single non-retried unlink on
+        # the shutdown path; the harness commits to asyncio (not trio/anyio) per
+        # Target Stack Commitment §5.1, so the ASYNC240 trio.Path/anyio.path
+        # remedy is out-of-stack and the blocking cost here is negligible.
         try:
-            socket_path.unlink(missing_ok=True)
+            socket_path.unlink(missing_ok=True)  # noqa: ASYNC240
         except OSError:
             pass
 

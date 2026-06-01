@@ -182,7 +182,7 @@ def test_run_result_is_frozen() -> None:
         trace_ids=(),
         cost_attribution=(),
     )
-    with pytest.raises(Exception):  # noqa: B017 — frozen-violation typing varies
+    with pytest.raises(Exception):
         result.status = "failed"  # type: ignore[misc]
 
 
@@ -222,7 +222,7 @@ def test_run_result_status_literal_three_values() -> None:
 
 
 def test_run_result_rejects_unknown_status() -> None:
-    with pytest.raises(Exception):  # noqa: B017
+    with pytest.raises(Exception):
         RunResult(
             status="unknown",  # type: ignore[arg-type]
             workflow_id=WorkflowID("wf-1"),
@@ -363,7 +363,7 @@ async def test_valid_run_executes_via_driver_and_returns_run_result(
             final_state={},
         )
 
-    async def _fake_shutdown(ctx, *, timeout=5.0):  # type: ignore[no-untyped-def]  # noqa: ASYNC109 — mirrors real signature
+    async def _fake_shutdown(ctx, *, timeout=5.0):  # type: ignore[no-untyped-def]
         _ = ctx, timeout
         return _shutdown_mod.ShutdownReport(
             already_shutdown=False,
@@ -431,7 +431,7 @@ async def test_run_releases_lock_after_completion(monkeypatch: pytest.MonkeyPatc
             final_state={},
         )
 
-    async def _fake_shutdown(ctx, *, timeout=5.0):  # type: ignore[no-untyped-def]  # noqa: ASYNC109 — mirrors real signature
+    async def _fake_shutdown(ctx, *, timeout=5.0):  # type: ignore[no-untyped-def]
         _ = ctx, timeout
         return _shutdown_mod.ShutdownReport(
             already_shutdown=False,
