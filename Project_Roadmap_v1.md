@@ -478,14 +478,57 @@ R-100-mvp-operator-usable-cli-shipped:
   depends_on: []
   blocks: [R-001, R-004, R-100-mvp-real-workflow-execution]
   posture: phase-7
-  scope: { files: [harness-runtime/src/harness_runtime/cli/**, harness.toml.example, .env.example, justfile], contracts: [C-RT-29, C-RT-30], cross_axis: no }
+  scope: { files: [examples/**, harness.toml.example, .env.example, justfile, .gitignore], contracts: [C-RT-29, C-RT-30], cross_axis: no }
   skills: { primary: phase-7-implementation, secondary: [verify, run] }
-  advisor_required: conditional:if CLI dispatch surface diverges from C-RT-29 §13.4
+  advisor_required: satisfied:2026-05-31   # advisor 2x this arc: don't fire the paid call / cross the .env boundary unilaterally (live green = operator's run); use recipe-passes-`--config` (option B) over a src default-discovery fix; substantiate the discovery gap before asserting it. Re-run only on a NEW cross-axis question.
   council_required: no
-  verification: { shape: e2e, must_pass: ["`just harness-run minimal.toml` exits 0", "audit-ledger entry written to .harness/state.jsonl", "non-empty LLM response observed at stdout"] }
-  close_shape: { type: PR-merge, artifact: "mvp: harness CLI smoke + minimal.toml workflow", cascade: [R-100-mvp-real-workflow-execution] }
+  verification: { shape: e2e, must_pass: ["`just run examples/minimal.toml` exits 0", "audit-ledger entry written to bound STATE_LEDGER (.harness/state.jsonl)", "non-empty LLM response observed at stdout"] }
+  close_shape: { type: PR-merge, artifact: "mvp: harness CLI smoke + examples/minimal.toml workflow", cascade: [R-100-mvp-real-workflow-execution] }
   next_pointer: R-100-mvp-real-workflow-execution
-  notes: Builds on PRs #82-#86 + #84 CLI parent-app subcommand pattern. Use-the-product probe pattern (workspace memory) is the discipline here.
+  notes: >
+    Builds on PRs #82-#86 + #84 CLI parent-app subcommand pattern. Use-the-product
+    probe (workspace memory) is the discipline here, and it surfaced four gaps that
+    block an operator running the smoke. Scaffolding + fixes shipped (branch
+    r-100-mvp-cli-smoke): (1) examples/minimal.toml — operator-discoverable,
+    dispatch-ready manifest (the buried test fixture lacked `messages`, so it could
+    not dispatch); (2) examples/README.md quickstart; (3) harness.toml.example —
+    path bindings aligned to pipeline-automation (matched the shipped example) + NEW
+    [runtime.routing_manifest] with ≥1 fallback_chain (without it, stage 3b CP_ROUTING
+    raises FallbackChainBindError) + corrected the false "discovers this file by
+    default" header; (4) justfile `run`/`daemon` pass `--config harness.toml`
+    (option B per advisor — zero src change); (5) `.gitignore` now ignores
+    `harness.toml` (operator-local config with machine paths). Verified at config-load
+    + dispatch-boundary (all stages pre-inference pass). Entry stays ACTIVE: the live
+    green (the final paid inference dispatch) is the operator's `just run` with their
+    own ANTHROPIC_API_KEY — a background agent does not fire the paid call / relocate
+    secrets across the worktree boundary. Recipe-name drift fixed in must_pass
+    (`just harness-run` → `just run`). Discovery gap (spec §3.7 auto-discovery
+    unimplemented) split out to R-100-mvp-config-discovery — does not block this entry.
+
+R-100-mvp-config-discovery:
+  title: Implement spec §3.7 `harness.toml` auto-discovery at workspace root (or amend the spec)
+  surface: II
+  status: BLOCKED
+  depends_on: []
+  blocks: []
+  posture: phase-7
+  scope: { files: [harness-runtime/src/harness_runtime/cli/**, harness-runtime/src/harness_runtime/config_source.py, design-substrate/Spec_Harness_Runtime_v1.md], contracts: [C-RT-30 §3.7, C-RT-29 §14.18.1], cross_axis: no }
+  skills: { primary: phase-7-back-flow-routing, secondary: [phase-7-implementation] }
+  advisor_required: yes
+  council_required: no
+  verification: { shape: integration, must_pass: ["with harness.toml at CWD and no --config, `harness run <manifest>` discovers it", "no-file case preserves env+CLI-only behavior", "dead DEFAULT_CONFIG_FILE_NAME constant wired or retired"] }
+  close_shape: { type: PR-merge, artifact: "fix: harness.toml default discovery per spec §3.7 (or spec amendment)" }
+  next_pointer: R-100-mvp-real-workflow-execution
+  notes: >
+    BLOCKED on operator ratification of `.harness/class_1_fork_harness_toml_default_discovery_unimplemented.md`
+    (PROPOSING). Spec §3.7 (line 391) + §14.18.1 declare `harness.toml` is discovered at
+    workspace root "by default"; the impl never wired it — `DEFAULT_CONFIG_FILE_NAME`
+    (config_source.py:43) is a dead constant and a positive-control probe (file present at
+    CWD, no --config) still fails "missing required fields". "Workspace root" is undefined
+    for discovery (CWD vs the config's own repository_root — circular), so the fix shape is a
+    Class 1 fork: Reading (A) CWD discovery / (B) upward search / (C) spec amendment dropping
+    the clause. Worked around in R-100 via the `just run` recipe passing `--config` (option B
+    at the recipe layer); this entry is the spec-conforming closure. Does not block the MVP.
 
 R-100-mvp-real-workflow-execution:
   title: Real multi-step workflow at SOLO_DEVELOPER tier against Anthropic provider
