@@ -163,46 +163,59 @@ async def test_factory_does_not_bind_tool_dispatcher_directly() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R-100 AC #2 — TOOL_STEP dispatchable via the bootstrap (operator `api.run`).
-#
-# Deterministic marker for the SIBLING resolver gap (the converter half closed
-# at spec v1.40). The bootstrap-produced dispatcher's `sandbox_decision_resolver`
-# is the raise-on-call default — dispatch raises at `runtime_tool_dispatcher.py`
-# line 449 (`self._sandbox_resolver(contract, step)`) BEFORE the tier-floor
-# check. xfail(strict=True) pending
-# `.harness/class_1_fork_tool_step_no_bootstrap_sandbox_decision_resolver.md`:
-# when that fork lands a real resolver, this test xpasses → strict-fail →
-# forces removal of the marker (the "remove me when fixed" self-documenting
-# pattern). NO subprocess / NO ANTHROPIC_API_KEY — pins the exact gap.
+# spec v1.41 §14.9.8 Reading B (Gap C) — the bootstrap factory wires a
+# per-server default-policy sandbox_decision_resolver + (Gap E) the emitter
+# info_lookup, for a configured server. (Replaces the former AC#2 xfail marker
+# at this site — the resolver landed at v1.41.)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-@pytest.mark.xfail(
-    raises=LookupError,
-    strict=True,
-    reason=(
-        "AC #2 BLOCKED: bootstrap wires no sandbox_decision_resolver — "
-        "class_1_fork_tool_step_no_bootstrap_sandbox_decision_resolver.md "
-        "(converter half closed at spec v1.40). Remove when the resolver "
-        "fork lands."
-    ),
-)
-async def test_ac2_bootstrap_dispatcher_resolves_sandbox_decision() -> None:
+def _config_with_server(
+    *,
+    sandbox_tier: object = None,
+) -> RuntimeConfig:
+    from harness_as.discriminators import MCPTransport
     from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
+    from harness_as.sandbox_tier_floor import MCPServerTrustLevel
+    from harness_core import ClientName
+    from harness_runtime.types import MCPClientConfig
+
+    tier = sandbox_tier if sandbox_tier is not None else SandboxTier.TIER_1_PROCESS
+    return RuntimeConfig(
+        deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
+        repository_root=Path("/tmp"),
+        path_bindings=PathBindingConfig(),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+        collector=CollectorConfig(),
+        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        mcp_clients=[
+            MCPClientConfig(
+                client_name=ClientName("echo-server"),
+                transport=MCPTransport.STDIO,
+                trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
+                blast_radius=BlastRadiusTier.READ_ONLY,
+                connection_url="stdio:///bin/echo",
+                default_minimum_tier=tier,  # type: ignore[arg-type]
+                default_sandbox_tier=tier,  # type: ignore[arg-type]
+                default_sandbox_tech="host-process",
+                default_sandbox_provider="host",
+            )
+        ],
+    )
+
+
+def _tool_contract_and_step(minimum_tier: object) -> tuple[object, object]:
+    from harness_as.sandbox_tier import BlastRadiusTier
     from harness_as.tool_contract import ToolContract
     from harness_cp.workflow_driver_types import StepKind, WorkflowStep
-
-    cfg = _config()
-    builder = await _post_stage_3a_builder(cfg)
-    wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
 
     contract = ToolContract(
         name="echo",
         description="echo a string",
         input_schema={"type": "object"},
         output_schema={"type": "object"},
-        minimum_tier=SandboxTier.TIER_1_PROCESS,
+        minimum_tier=minimum_tier,  # type: ignore[arg-type]
         blast_radius_tier=BlastRadiusTier.READ_ONLY,
     )
     step = WorkflowStep(
@@ -210,10 +223,67 @@ async def test_ac2_bootstrap_dispatcher_resolves_sandbox_decision() -> None:
         step_kind=StepKind.TOOL_STEP,
         step_payload={"tool_id": "echo", "tool_args": {"text": "hi"}},
     )
+    return contract, step
 
-    # The bootstrap-produced wrapper delegates to the bare RuntimeToolDispatcher
-    # (`wrapper.inner`); its `_sandbox_resolver` is what dispatch invokes. With a
-    # wired resolver this returns a SandboxDispatchDecision; at HEAD it raises
-    # LookupError (the default stub) — the AC #2 blocker.
+
+@pytest.mark.asyncio
+async def test_factory_wires_per_server_default_policy_resolver() -> None:
+    """v1.41 Gap C — a configured server's bootstrap dispatcher carries a
+    NON-raising sandbox_decision_resolver returning the per-server default."""
+    from harness_as.sandbox_tier import SandboxTier
+
+    cfg = _config_with_server(sandbox_tier=SandboxTier.TIER_1_PROCESS)
+    builder = await _post_stage_3a_builder(cfg)
+    wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
+
+    contract, step = _tool_contract_and_step(SandboxTier.TIER_1_PROCESS)
     decision = wrapper.inner._sandbox_resolver(contract, step)  # type: ignore[attr-defined]
-    assert decision.tier is not None
+    assert decision.tier is SandboxTier.TIER_1_PROCESS
+    assert decision.tech == "host-process"
+    assert decision.provider == "host"
+    assert decision.assigned_tier_reason == "per-server-default-sandbox-policy"
+
+
+@pytest.mark.asyncio
+async def test_resolver_tier_floor_consistency_passes_when_equal() -> None:
+    """v1.41 Gap C — when default_sandbox_tier == default_minimum_tier the
+    §14.9.4 floor (resolved.tier >= contract.minimum_tier) is satisfied."""
+    from harness_as.sandbox_tier import SandboxTier
+    from harness_runtime.lifecycle.runtime_tool_dispatcher import _SANDBOX_TIER_RANK
+
+    cfg = _config_with_server(sandbox_tier=SandboxTier.TIER_1_PROCESS)
+    builder = await _post_stage_3a_builder(cfg)
+    wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
+    contract, step = _tool_contract_and_step(SandboxTier.TIER_1_PROCESS)
+    decision = wrapper.inner._sandbox_resolver(contract, step)  # type: ignore[attr-defined]
+    # Floor passes: resolved tier is NOT below the tool's minimum.
+    assert _SANDBOX_TIER_RANK[decision.tier] >= _SANDBOX_TIER_RANK[contract.minimum_tier]
+
+
+@pytest.mark.asyncio
+async def test_factory_wires_emitter_info_lookup_for_configured_server() -> None:
+    """v1.41 Gap E — the emitter's info_lookup is wired from the host (does not
+    raise on the dispatch step-7 path) for a configured server."""
+    cfg = _config_with_server()
+    builder = await _post_stage_3a_builder(cfg)
+    await materialize_runtime_tool_dispatcher_stage(builder, cfg)
+    info = builder.mcp_namespace_emitter._info_lookup("echo-server")  # type: ignore[attr-defined]
+    assert info.transport == "stdio"
+    assert info.auth_present is False
+
+
+@pytest.mark.asyncio
+async def test_empty_server_set_leaves_resolver_and_info_lookup_default() -> None:
+    """v1.41 — with NO configured server, the resolver + info_lookup stay the
+    raise-on-call defaults (unreachable: dispatch step 1 raises first on the
+    empty registry)."""
+    from harness_as.sandbox_tier import SandboxTier
+
+    cfg = _config()  # empty mcp_clients
+    builder = await _post_stage_3a_builder(cfg)
+    wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
+    contract, step = _tool_contract_and_step(SandboxTier.TIER_1_PROCESS)
+    with pytest.raises(LookupError):
+        wrapper.inner._sandbox_resolver(contract, step)  # type: ignore[attr-defined]
+    with pytest.raises(LookupError):
+        builder.mcp_namespace_emitter._info_lookup("nope")  # type: ignore[attr-defined]

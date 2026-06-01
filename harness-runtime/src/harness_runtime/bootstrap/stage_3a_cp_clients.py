@@ -46,3 +46,14 @@ async def execute(
 
     # U-RT-73: stage 3a now also materializes the H_T-as-MCP-client host.
     ctx.mcp_client_host = await materialize_mcp_client_host_stage(config)
+
+    # spec v1.41 §14.9.8 arc (Gap B): start the host HERE per §14.9.3 stage-3a
+    # ("subprocess spawn + protocol handshake + list_tools registry population
+    # happen here") + §14.9.6 inv 1 ("stage 3a starts"). Without this the
+    # registry is empty and a TOOL_STEP raises RT-FAIL-TOOL-CONTRACT-UNKNOWN at
+    # dispatch step 1. Guarded on a configured server: the empty-sentinel host
+    # (0 servers) is intentionally never started. `start()` failure raises
+    # MCPHostStartupError (RT-FAIL-MCP-HOST-STARTUP) → propagates to the
+    # bootstrap orchestrator → fail-closed abort per ADR-F4 v1.1 §Consequences (c).
+    if config.mcp_clients:
+        await ctx.mcp_client_host.start()
