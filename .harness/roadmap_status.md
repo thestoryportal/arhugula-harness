@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `5fc4e18f41cd` |
-| `last_refreshed` | 2026-06-01T22:00:00-06:00 |
-| `git_head` | `3d82ac75` (main) — `feat(memory): SELF_HOSTED DATABASE Memory-tool backend (SQLite) — R-830 (#224)` |
+| `workspace_state_hash` | `046fdd6aaba4` |
+| `last_refreshed` | 2026-06-01T23:30:00-06:00 |
+| `git_head` | `5daf2757` (main) — `back-flow: CXA v2.19 corrects v2.18 erroneous §2.1 matrix + R-CXA-4 framing (#226)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 44 |
 
@@ -52,7 +52,7 @@
 
 **`R-XI-01` (operator dashboard MVP) — RESOLVED + LIVE** at **https://thestoryportal.github.io/arhugula-harness/** (HTTP 200).
 
-**(This PR: post-#213 audit (§12.2) — R-300-multi-llm-routing-activation RESOLVED at PR #213 (`c047aa2`). Finalizes the §5 entry's stale `(PR pending)` note → `(PR #213, merged c047aa2)` + recomputes `workspace_state_hash` `7646d1d29e5f` → `039ab95024f0` + `git_head` → `c047aa2c` (PRS empty / FORKS 43 / batch-51). **Bundled** (Project_Roadmap_v1.md §5 + dashboard) → NOT a terminating refresh per §12.2.1 → a follow-on `ops: roadmap status refresh post-PR-NN` is owed after this merges. PR #211 was the prior R-800 RESOLVED arc.)**
+**(This PR: terminating refresh §12.2.1 — records PR #226 (CXA v2.19 corrects v2.18's erroneous §2.1 matrix, aggregate 105→107; R-CXA-4 phantom follow-on withdrawn). Recomputes `workspace_state_hash` `5fc4e18f41cd` → `046fdd6aaba4` + `git_head` → `5daf2757` (PRS empty / FORKS 44 / batch-51). Dashboard-only → terminating; the next §12.1 audit recognizes the expected lag-by-one (carve-out step 6) and does NOT spawn a new refresh. §4 re-derivation UNCHANGED: no auto-derivable Claude-executable ACTIVE row remains — R-CXA-4 was the last grounding-discoverable lever and is now closed-as-corrected (0 wireable, no cleanup task). Remaining work is operator-owned: R-700 (BLOCKED), R-XI-02/03 (PROPOSED), and the creds/infra-gated R-300-second-provider / R-410..R-440 / R-500. Prior arc: PR #224 R-830 SQLite backend.)**
 
 ---
 
@@ -60,8 +60,8 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `r-cxa-4-cxa-convention-formalization` | R-CXA-4 / CXA v2.19 | **design-phase** (bundled-absorption per CLAUDE.md §11.4; clearance marker satisfies X-AL-3 guard). R-CXA-4 probe found (A) the "stale placeholder cleanup" follow-on is a PHANTOM (placeholders resolved at CXA v2.3 + OD plan v2.11) and (B) a real defect in **v2.18** (re-absorbed already-done C3-15 OD→IS cleanup; corrupted §2.1 matrix; aggregate 105 vs correct 107). Authors **CXA v2.19** (matrix + aggregate restored to 107 / 37+48+22) + clearance marker + CLAUDE.md §1.1/§2.4 + register §B-14 + roadmap §5 R-CXA-4 corrections. NOT a terminating refresh (touches design-substrate + roadmap §5) → follow-on `ops: roadmap status refresh post-PR-NN` owed; `workspace_state_hash` recompute owed at that post-merge refresh. |
-| *(none else)* | — | — | — |
+| *(this PR)* | `ops-roadmap-refresh-post-226` | *(terminating refresh §12.2.1)* | mode-agnostic — records PR #226 (CXA v2.19 corrects v2.18's erroneous §2.1 matrix; aggregate 105→107; R-CXA-4 phantom follow-on withdrawn); `workspace_state_hash` recompute (`5fc4e18f41cd` → `046fdd6aaba4`) + `git_head` → `5daf2757` (#226 merge). Dashboard-only (`.harness/roadmap_status.md`); title `ops: roadmap status refresh post-PR-226` → next §12.1 audit sees expected lag-by-one (carve-out §12.1 step 6). |
+| *(none else)* | — | — | open-PR set empty after #226 merged. |
 
 ---
 
@@ -69,11 +69,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #226 (`5daf275`) | 2026-06-01 | **CXA v2.19 corrects v2.18's erroneous §2.1 matrix + withdraws the R-CXA-4 phantom follow-on.** The operator-picked R-CXA-4 "convention-formalization cleanup" probe falsified its own premise: the OD→AS/OD→CP `U-AS-NN`/`U-CP-NN` placeholders were resolved at **CXA v2.3 + OD plan v2.11** (no cleanup task). Probing surfaced a real defect in cleared **v2.18**: it re-absorbed the C3-15 OD→IS cleanup already done at v2.3 (wrong-version-read of the v2.1 baseline), corrupting the §2.1 matrix (AS→IS 13→11, CP→OD 0→8, OD→CP 8→12) and publishing aggregate **105** (cells summed to 97; correct **107**) + a fabricated 37/48/20 sub-split. v2.18's OD→IS=4/OD-outbound=26 end-state was already correct since v2.3 and is preserved; "CXA-OD-IS-EDGE-DRIFT" Item 11 was a phantom drift. v2.19 restores **107 / 37+48+22** + clearance marker + CLAUDE.md §1.1/§2.4 + register §B-14 + roadmap §5 R-CXA-4. Fidelity-pure (zero production-code/contract change); X-AL-3 guard + pyright + pytest + ruff green. advisor-confirmed (107 cell-sum). New memory `[[wrong-version-read-delta-only-baseline]]` (cardinality ≥2). R-CXA-4 stays PARTIAL. |
 | PR #224 (`3d82ac7`) | 2026-06-01 | **R-830 SELF_HOSTED DATABASE Memory-tool backend (SQLite) LANDED (R-830 stays PROPOSED — cloud remainder).** Operator-picked grounding-first → grounding found R-830 is Claude-closeable without cloud creds via a stdlib SQLite `DATABASE` backend (not dead-code). `SqliteMemoryToolBackend` (lifecycle/memory_tool_sqlite.py) implements the already-spec'd `MemoryToolStorageBackend.DATABASE` enum (§14.12.3 `connection_string`); semantics byte-mirror FILESYSTEM; factory DATABASE branch (rejection→acceptance flip); no-LLM e2e through the real dispatch seam. **Closed HONESTLY per advisor (no §10.5 overclaim):** SELF_HOSTED_SERVER SQL sibling of FILESYSTEM — NOT the MANAGED_CLOUD cloud-vault/managed-db the title names (S3/managed-DB + creds stay operator-gated; MANAGED_CLOUD without explicit override still raises) → R-830 entry stays `PROPOSED` tracking that cloud remainder. NOT X-AL-3 (declared enum value; no design-substrate). 1423 harness-runtime tests pass +11 skipped; pyright strict + ruff clean. Phase-7 impl + roadmap §5 + register §B-13 + dashboard. |
 | PR #222 (`315b2c4`) | 2026-06-01 | **R-CXA-4-od-multi-seam GROUNDED → 0 wireable edges; ZERO production code.** Operator-picked grounding-first. A general-purpose producer-discovery sweep (verified 3 ways: edge-2 already wired w/ 4 producers; OD aggregate manifest carries only terminal targets; CXA §2.5 = 1 genuine seam) found the prior "~5 of 26 / ~21 remaining" framing was a **stale-carry mis-framing** (§10.5): the 26 OD-outbound edges = 1 genuine (already wired) + 6 phase-2-runtime (already at stage 6) + 19 convention (stage-6 `verify_*` + stale `U-AS-NN`/`U-CP-NN` placeholders, no producer). **There is no wiring task.** Follow-on = CXA convention-formalization revision (design-substrate, operator-owned; mirror v2.18 C3-15). R-CXA-4 stays PARTIAL. Mirrors R-CXA-1 (`[[r-cxa-seam-wiring-is-producer-discovery]]`, 3rd instance). Corrects register §B-14 + roadmap §5 + dashboard. advisor-confirmed. |
 | PR #220 (`d77647b`) | 2026-06-01 | **R-CXA-1 must_pass #1 fork RESOLVED-AS-READING-D (defer; don't wire).** Apply arc opened on the first-ratified Reading B; pre-substantive empirical orientation + advisor reconcile found it unwritable-as-previewed: bootstrap fetch is `resolve_bootstrap_value(NAME)` (name only — the scope-bearing `resolve()` path has ZERO production callers); unsourced-field sentinels are MATERIAL; idempotency key timestamp-free; `SecretFetchEvent` machinery has no real producer. Operator re-ratified DON'T-WIRE. must_pass #1 DEFERRED; R-CXA-1 PARTIAL; **ZERO production code**. (Refresh recorded at PR #221.) |
 | PR #218 (`3885074`) | 2026-06-01 | **R-CXA-1 must_pass #1 fork FILED** (`class_1_fork_cxa_1_secret_fetch_audit_bootstrap_ordering.md`). Grounded the top Claude-executable post-Phase-8 lever before opening; the secret-fetch caller fires at bootstrap stage 3a while the AS→IS emitter materializes at stage 6 (firing-site-precedes-wiring; U-RT-111 shape) → Class 1 back-flow. fork count 43→44. A filing, not a closure. |
-| PR #216 (`ed2e827`) | 2026-06-01 | **`just mvp-r100-real` recipe added — R-100 live e2e is now a one-liner.** justfile-only (mirrors `mech-beta-*`; `_require-anthropic` dep + dotenv-load). Runs the real 3-step Anthropic INFERENCE workflow e2e (`test_r100_real_workflow_e2e.py`, AC #1/#3/#4) through `api.run`. Both R-100 live e2e halves verified green this session: AC#2 TOOL_STEP via live ollama (free) + AC#1/#3/#4 real Anthropic `claude-haiku-4-5` (paid, operator-authorized). `R-100-mvp-real-workflow-execution` re-validated live (already RESOLVED 4/4; no state change). Mode-agnostic; ZERO src/spec/roadmap-state change. |
 
 ---
 
