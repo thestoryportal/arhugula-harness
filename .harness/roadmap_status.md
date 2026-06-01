@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `ca30acdc6032` |
-| `last_refreshed` | 2026-06-01T05:33:30-06:00 |
-| `git_head` | `e3f99a8` (main) — `feat(test): close R-100-mvp-yaml-loader-shipped — YAML↔TOML load+dispatch equivalence (#188)` |
+| `workspace_state_hash` | `7298e00f926c` |
+| `last_refreshed` | 2026-06-01T06:13:25-06:00 |
+| `git_head` | `efd7834` (main) — `mvp: 6-topology fixture suite (close R-100-mvp-multi-workflow-fixture-suite) (#190)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-50.md` |
 | `open_fork_doc_count` | 43 |
 
@@ -20,19 +20,19 @@
 
 ## Next action
 
-**CANDIDATE: `R-100-mvp-multi-workflow-fixture-suite` (surface II; phase-7 posture) — now ACTIVE.** `R-100-mvp-yaml-loader-shipped` is **RESOLVED** (PR #188): both verification criteria green at the CI/deterministic level in `test_track_b_e2e.py` — must_pass[1] (round-trip YAML↔TOML byte-equivalent payload, incl. native int `max_tokens=8` parity) + must_pass[0] (loads + dispatches identically: both fixtures run through the real bootstrap + `execute_workflow` to identical SUCCESS via a deterministic dispatcher — no key/ollama/daemon). With it resolved, the **entire §II R-100 MVP surface is RESOLVED** (CLI + real-workflow + tool-step + yaml-loader). `R-100-mvp-multi-workflow-fixture-suite` (workflow fixtures across topology patterns) flips BLOCKED → ACTIVE as the next §II candidate — note MVP materializes only `SINGLE_THREADED_LINEAR`, so the "all 6 topologies" scope is partly gated on later topology materialization (worth scoping before opening).
+**§II R-100 MVP surface is now FULLY RESOLVED** (CLI + real-workflow + tool-step + yaml-loader + **multi-workflow-fixture-suite**). `R-100-mvp-multi-workflow-fixture-suite` is **RESOLVED** (PR #190): 6 operator-facing example manifests at `examples/workflows/topology/*.yaml` (one per `TopologyPattern`) + a 26-test deterministic suite that runs each parent fixture through the CP `execute_workflow` driver loop to terminal `RunStatus.SUCCESS` and fires the `is_topology_permitted` admissibility gate for each pattern (no key/ollama/daemon; CI-runnable). Honest scope: at MVP topology has NO distinct per-pattern orchestration — the suite is regression coverage of the `PER_WORKLOAD_CLASS_TOPOLOGY` admissibility matrix + dispatch-composer + telemetry, NOT distinct orchestration semantics (unbuilt; CP-axis contract work via Class 1 back-flow).
 
-**§4 re-derivation (clean-main, 2026-06-01 post-#182):** §I drained; §III (CI substrate) RESOLVED; §VII `R-600-clearance-marker-backfill-survey` RESOLVED; R-100 MVP real-workflow + tool-step RESOLVED. **`R-100-mvp-yaml-loader-shipped` flips BLOCKED → ACTIVE** (its only dep, `R-100-mvp-real-workflow-execution`, is now RESOLVED). It is already **verified done at the Claude-executable / non-live level** (`test_workflow_manifest_loader.py` + `test_track_b_e2e.py` YAML↔TOML equivalence, load + mocked dispatch = 41 passed / 5 skipped; YAML scalar-coercion fork APPLIED-AS-READING-A spec v1.39). Its remaining facet is the **live YAML↔TOML dispatch-equivalence e2e**, which today is gated on the paid Anthropic path (`test_track_b_e2e.py` is `INFERENCE`-only, no ollama branch). **Claude-executable next arc:** add a free local-ollama route to the track-B e2e (mirroring the AC#2 fix), then run the YAML↔TOML dispatch-equivalence green for free → closes the entry. Absent that enhancement, its live facet shares the §II paid operator-gate.
+**§4 re-derivation (clean-main, 2026-06-01 post-#190):** the §4 candidate queue is **empty of ACTIVE phase-7 entries** — §I drained; §II R-100 MVP fully RESOLVED; §III CI substrate RESOLVED; §VII process-discipline RESOLVED. Closing `R-100-mvp-multi-workflow-fixture-suite` **triggers surface V (Multi-deployment) decomposition** per the §9 workstream catalog, but surface V (`R-400..R-499`: LOCAL_DEVELOPMENT → SELF_HOSTED_SERVER → MANAGED_CLOUD; sandbox-tier wiring per ADR-D2 / ADR-F4) is **live/infra-gated** and **`decomposition-owed`** (no `R-400` §5 entry authored yet). Surfaces IV (multi-LLM) + VI (multi-tenant) are likewise `decomposition-owed` and live-gated.
 
-**`R-XI-01` (operator dashboard MVP) — RESOLVED + LIVE.** Operator made the repo public → Pages enabled (`build_type=workflow`); `dashboard-deploy` build+deploy both GREEN (run `26750144964`); the dashboard is live at **https://thestoryportal.github.io/arhugula-harness/** (HTTP 200). `R-XI-02` (dep-graph viz) + `R-XI-03` (live-update) are now unblocked but remain `PROPOSED` (iteration-2; not triggered). Local view added (PR #186): `just dashboard` (generate + open) / `just dashboard-serve [port]` (generate + serve on localhost).
+**`R-XI-01` (operator dashboard MVP) — RESOLVED + LIVE** at **https://thestoryportal.github.io/arhugula-harness/** (HTTP 200). `R-XI-02` (dep-graph viz) + `R-XI-03` (live-update) are unblocked but remain `PROPOSED` (iteration-2; not triggered).
 
-**Claude-executable next-action board:**
-- **`R-100-mvp-multi-workflow-fixture-suite`** (ACTIVE) — **top §II candidate** (yaml-loader RESOLVED at PR #188 → the whole §II R-100 MVP surface is RESOLVED). Workflow fixtures across topology patterns; scope first — MVP materializes only `SINGLE_THREADED_LINEAR`, so "all 6 topologies" may be partly gated.
-- **`R-XI-02` / `R-XI-03`** (PROPOSED, now unblocked) — iteration-2 dashboard enhancements; Claude-executable when triggered.
-- **Operator-gated (paid LLM, optional):** re-running the 3-step `test_r100_real_workflow_e2e.py` against real Anthropic is NOT required for closure (AC#1/#3/#4 already green via prior runs; AC#2 green via ollama).
-- **Blocked/deferred:** `R-600-pattern-bake-in-sweep` (deferred Workflow v1.14); §V/VI/IV multi-deployment/tenant/LLM (live-gated).
+**Claude-executable next-action board (no auto-ACTIVE candidate; pick requires a decomposition/trigger decision):**
+- **Surface V decomposition** (`R-400` multi-deployment) — TRIGGERED by this closure but largely live/infra-gated (real SELF_HOSTED_SERVER / MANAGED_CLOUD surfaces). Claude can author the §5 `R-400..` decomposition per workspace state (no AUQ unless scope ambiguous); execution of most rows is operator/infra-gated.
+- **`R-XI-02` / `R-XI-03`** (PROPOSED → flip to ACTIVE if triggered) — iteration-2 dashboard enhancements; fully Claude-executable (mode-agnostic tooling).
+- **`R-600`-series process discipline** — cadence-driven (fork-doc Status sweep / memory audit every ~5-10 PRs); Claude-executable.
+- **Operator-gated (paid LLM, optional):** any live multi-deployment / multi-tenant / multi-LLM facet shares the paid/infra operator-gate.
 
-**(PR #188 `e3f99a8` closed R-100-mvp-yaml-loader-shipped → §II R-100 MVP surface fully RESOLVED. PR #186 `da45c29` `just dashboard` recipes. PR #184 `5984cda` closed R-XI-01 — dashboard live on Pages. PR #182 closed R-100 AC#2. This session: 6 substantive merges (#179/#181/#182/#184/#186/#188) + terminating refreshes.)**
+**(PR #190 `efd7834` closed R-100-mvp-multi-workflow-fixture-suite → §II R-100 MVP surface FULLY RESOLVED; surface V decomposition triggered. PR #188 closed R-100-mvp-yaml-loader-shipped. PR #186 `just dashboard` recipes. PR #184 closed R-XI-01. This session: 1 substantive merge (#190) + terminating refresh.)**
 
 ---
 
@@ -40,7 +40,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `roadmap-refresh-post-188` | *(terminating refresh §12.2.1)* | mode-agnostic — `workspace_state_hash` recompute (`b93c17d379dc` → `ca30acdc6032`) covering PR #188 (R-100 yaml-loader close). ONLY `.harness/roadmap_status.md`; title `ops: roadmap status refresh post-PR-188` → next §12.1 audit sees expected lag-by-one |
+| *(this PR)* | `roadmap-refresh-post-190` | *(terminating refresh §12.2.1)* | mode-agnostic — `workspace_state_hash` recompute (`ca30acdc6032` → `7298e00f926c`) covering PR #190 (R-100 multi-workflow-fixture-suite close). ONLY `.harness/roadmap_status.md`; title `ops: roadmap status refresh post-PR-190` → next §12.1 audit sees expected lag-by-one |
 
 ---
 
@@ -48,11 +48,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #190 (`efd7834`) | 2026-06-01 | **R-100-mvp-multi-workflow-fixture-suite RESOLVED → §II R-100 MVP surface FULLY RESOLVED.** 6 example manifests at `examples/workflows/topology/*.yaml` (one per `TopologyPattern`, child paired with an admissible workload per `is_topology_permitted`) + 26-test suite `test_topology_fixture_suite.py`: driver-level e2e (each fixture through `execute_workflow` → `RunStatus.SUCCESS`, real `run_bootstrap` + faked provider/OD, deterministic child) + per-fixture gate-fires + topology.* span attrs + ≥1 audit-ledger entry + completeness guard + negative admissibility test. Honest caveat: regression coverage of `PER_WORKLOAD_CLASS_TOPOLOGY` admissibility + dispatch-composer + telemetry, NOT distinct per-pattern orchestration (unbuilt). ZERO src change; 26 passed; ruff+pyright clean. Phase-7 + roadmap §5. |
 | PR #188 (`e3f99a8`) | 2026-06-01 | **R-100-mvp-yaml-loader-shipped RESOLVED → §II R-100 MVP surface fully RESOLVED.** Both verification criteria green at the CI/deterministic level in `test_track_b_e2e.py`: must_pass[1] byte-equivalent payload (native int `max_tokens=8` parity) via strengthened load test; must_pass[0] loads+dispatches-identically via NEW `test_ac2_loaded_yaml_and_toml_dispatch_identically_deterministic` (both fixtures → real bootstrap + `execute_workflow` → identical SUCCESS, deterministic dispatcher, no key/ollama/daemon). 10 passed/5 skipped; ruff+pyright clean. Phase-7 + roadmap §5. |
 | PR #186 (`da45c29`) | 2026-06-01 | **`just dashboard` + `just dashboard-serve` recipes** — local view of the operator dashboard complementing the hosted Pages copy. `just dashboard` (generate + open) / `just dashboard-serve [port]` (generate + serve on localhost, default 8787). Writes to gitignored `tools/dashboard/public/`. Verified: generator clean + `http.server` serves HTTP 200. Mode-agnostic; justfile only. |
 | PR #184 (`5984cda`) | 2026-06-01 | **R-XI-01 RESOLVED — operator dashboard LIVE on GitHub Pages.** Operator made the repo public → Pages enabled (`build_type=workflow`); `dashboard-deploy` build+deploy both green (run `26750144964`); live at https://thestoryportal.github.io/arhugula-harness/ (HTTP 200). R-XI-02/R-XI-03 unblocked (stay PROPOSED). Mode-agnostic (roadmap §5). |
 | PR #182 (`8529a45`) | 2026-06-01 | **R-100 AC#2 CLOSED → `R-100-mvp-real-workflow-execution` (4/4) + `R-100-tool-step-sandbox-resolver` RESOLVED.** AC#2 (TOOL_STEP via operator `api.run`) verified green against a live LOCAL ollama daemon (zero-token reachability ping; echo-MCP TOOL_STEP subprocess, not inference — no paid call, no secrets). §5 statuses flipped + resolver fork-doc Status refreshed. Mode-agnostic (roadmap §5 + `.harness` fork doc). |
-| PR #181 (`39fdcbf`) | 2026-06-01 | **fix(test): R-100 AC#2 e2e ollama branch** — `ProviderFamily.OLLAMA` (non-existent) → `LOCAL_OPEN_WEIGHT` (ollama's family per C-CP-04 §4.1). The branch was dead (CI skips; prior runs used the Anthropic-key path), so the `AttributeError` only surfaced on the free local-ollama route (use-the-product-probe). Unblocks the free AC#2 close; verified `test_r100_ac2_tool_step_via_api_run PASSED`. Phase-7; test-only. |
 
 ---
 
