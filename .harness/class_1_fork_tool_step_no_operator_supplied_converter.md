@@ -1,6 +1,6 @@
 # Class 1 fork — TOOL_STEP not dispatchable via `api.run`: no operator path to supply `tool_contract_converter`
 
-**Status:** ✅ RATIFIED-AS-READING-B (operator AskUserQuestion 2026-06-01) — apply arc owed (runtime spec amendment + impl). See §0.
+**Status:** ✅ APPLIED-AS-READING-B (2026-06-01) — runtime spec v1.40 §14.9.3 stage-3a converter-build clause + `MCPClientConfig` +2 fields (`default_minimum_tier` / `default_blast_radius`) + factory impl (`_build_default_policy_converter`) + 5 converter unit tests. **Converter half closed.** AC #2 still BLOCKED by the sibling resolver gap (`class_1_fork_tool_step_no_bootstrap_sandbox_decision_resolver.md`, surfaced + filed at this apply arc). See §0.
 **Filed:** 2026-05-31, during R-100-mvp-real-workflow-execution use-the-product probe (authoring the multi-step + tool-dispatch e2e).
 **Class:** 1 (architectural — the operator-facing tool-dispatch path is structurally unreachable; fix needs a config-surface decision).
 **Blocks:** R-100-mvp-real-workflow-execution AC #2 ("tool dispatch surface exercised ≥1 site") *via the operator `api.run` path*. Does NOT block the tool-dispatch surface at the dispatcher level (U-RT-86 e2e exercises it by hand-constructing the host with a converter).

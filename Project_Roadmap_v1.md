@@ -533,7 +533,7 @@ R-100-mvp-config-discovery:
 R-100-mvp-real-workflow-execution:
   title: Real multi-step workflow at SOLO_DEVELOPER tier against Anthropic provider
   surface: II
-  status: ACTIVE   # 3 of 4 ACs PASS (AC #1 + #3 + #4) via test_r100_real_workflow_e2e.py. AC #4 cost fork RESOLVED-AS-INVALID 2026-06-01 (test-bug, not a defect). Only AC #2 (tool dispatch via api.run) remains — R-100-tool-step-converter fork.
+  status: ACTIVE   # 3 of 4 ACs PASS (AC #1 + #3 + #4) via test_r100_real_workflow_e2e.py. AC #4 cost fork RESOLVED-AS-INVALID 2026-06-01 (test-bug, not a defect). AC #2 (tool dispatch via api.run) STILL BLOCKED: converter half applied at spec v1.40 (R-100-tool-step-converter RESOLVED), but a sibling gap (bootstrap wires no sandbox_decision_resolver) now blocks AC #2 → R-100-tool-step-sandbox-resolver (Class 1 fork PROPOSING).
   depends_on: [R-100-mvp-operator-usable-cli-shipped]
   blocks: [R-001, R-004, R-100-mvp-yaml-loader-shipped, R-300-multi-llm-second-provider]
   posture: phase-7
@@ -567,7 +567,7 @@ R-100-mvp-real-workflow-execution:
 R-100-tool-step-converter:
   title: TOOL_STEP dispatchable via api.run — per-server default policy converter (Reading B)
   surface: II
-  status: ACTIVE   # RATIFIED Reading B 2026-06-01; apply arc (spec amendment + impl) is the next executable step.
+  status: RESOLVED   # converter half applied at spec v1.40 (PR TBD). AC #2 NOT closed — blocked by sibling resolver fork (R-100-tool-step-sandbox-resolver).
   depends_on: []
   blocks: []
   posture: design-phase   # mixed-posture bundled-absorption: runtime spec amendment + harness-runtime impl (per CLAUDE.md §11.4; needs clearance marker)
@@ -575,20 +575,51 @@ R-100-tool-step-converter:
   skills: { primary: spec-writer, secondary: [phase-7-implementation, verify] }
   advisor_required: conditional:if the MCPClientConfig field shape diverges from C-RT-22 §14.9.3
   council_required: no
-  verification: { shape: integration, must_pass: ["MCPClientConfig carries default_minimum_tier + default_blast_radius", "materialize_mcp_client_host_stage builds a default-policy converter from them", "a TOOL_STEP dispatches through api.run end-to-end (echo MCP server)"] }
-  close_shape: { type: PR-merge, artifact: "feat: per-server default tool-contract policy — TOOL_STEP via api.run (Reading B)" }
+  verification: { shape: integration, must_pass: ["MCPClientConfig carries default_minimum_tier + default_blast_radius — DONE", "materialize_mcp_client_host_stage builds a default-policy converter from them — DONE", "a TOOL_STEP dispatches through api.run end-to-end — NOT MET; blocked by R-100-tool-step-sandbox-resolver"] }
+  close_shape: { type: PR-merge, artifact: "feat: per-server default tool-contract policy — TOOL_STEP via api.run converter half (Reading B)" }
+  next_pointer: R-100-tool-step-sandbox-resolver
+  notes: >
+    RESOLVED (converter half) 2026-06-01 — spec v1.40 §14.9.3 stage-3a Reading B clause +
+    MCPClientConfig +2 fields (default_minimum_tier / default_blast_radius) +
+    mcp_client_host_factory._build_default_policy_converter + 5 converter unit tests +
+    clearance marker `.harness/clearance/Spec_Harness_Runtime-v1_40-cleared-2026-06-01.md`.
+    Field count +2 as ratified per fork §3 (NOT re-decided to +1 despite the pre-existing
+    unconsumed `blast_radius` overlap — logged as Class 3 finding). 1344/1344 harness-runtime
+    non-e2e tests pass; pyright strict + ruff clean.
+    **AC #2 NOT closed.** Pre-substantive empirical orientation surfaced a sibling gap the
+    converter fork did not cover: the bootstrap-built RuntimeToolDispatcher wires no
+    `sandbox_decision_resolver` (defaults-to-raise; dispatch raises at
+    runtime_tool_dispatcher.py:449 BEFORE the tier-floor check). Converter is necessary but
+    NOT sufficient. Filed as R-100-tool-step-sandbox-resolver / sibling Class 1 fork. R-100
+    AC #2 closes only when BOTH halves wire. Deterministic xfail marker at
+    test_u_rt_75_runtime_tool_dispatcher_factory.py::test_ac2_bootstrap_dispatcher_resolves_sandbox_decision.
+
+R-100-tool-step-sandbox-resolver:
+  title: TOOL_STEP dispatchable via api.run — bootstrap-supplied sandbox_decision_resolver (sibling of the converter)
+  surface: II
+  status: PROPOSING   # Class 1 fork filed 2026-06-01; needs operator AskUserQuestion (implementer-discretion §14.9.7 vs operator-policy parity-with-converter).
+  depends_on: [R-100-tool-step-converter]
+  blocks: []
+  posture: design-phase   # likely a §14.9.3 stage-5 factory amendment + impl; mixed-posture bundled-absorption
+  scope: { files: [design-substrate/Spec_Harness_Runtime_v1.md, harness-runtime/src/harness_runtime/bootstrap/factories/runtime_tool_dispatcher_factory.py, harness-runtime/src/harness_runtime/lifecycle/runtime_tool_dispatcher.py, harness-runtime/tests/**, .harness/clearance/**], contracts: [C-RT-19 §14.9.1, C-RT-30 §14.9.3 stage-5], cross_axis: no }
+  skills: { primary: phase-7-back-flow-routing, secondary: [spec-writer, phase-7-implementation] }
+  advisor_required: yes   # design-surface ratification (the resolver assigns a sandbox posture; converter precedent treated the symmetric callable as ratification-required)
+  council_required: no
+  verification: { shape: integration, must_pass: ["bootstrap-produced RuntimeToolDispatcher has a non-raising sandbox_decision_resolver", "a TOOL_STEP dispatches through api.run end-to-end (echo MCP) — closes R-100 AC #2", "test_u_rt_75 AC#2 xfail marker removed (xpass → strict-fail forces removal)"] }
+  close_shape: { type: PR-merge, artifact: "feat: bootstrap sandbox_decision_resolver — TOOL_STEP via api.run (closes R-100 AC #2)" }
   next_pointer: R-001
   notes: >
-    RATIFIED Reading B (per-server default policy) at operator AskUserQuestion 2026-06-01
-    per `.harness/class_1_fork_tool_step_no_operator_supplied_converter.md` §0. Apply arc:
-    (1) runtime spec amendment — §14.9.3 stage-3a MCPClientHost factory + MCP-client config
-    contract gain `default_minimum_tier: SandboxTier` + `default_blast_radius: BlastRadiusTier`
-    (conservative defaults), factory MUST build a default-policy converter; version bump +
-    change-note + clearance marker. (2) impl — MCPClientConfig +2 fields; mcp_client_host_factory
-    builds the converter; tests. (3) extend test_r100_real_workflow_e2e.py with a TOOL_STEP via
-    api.run → closes R-100-mvp-real-workflow-execution AC #2 (then all 4 ACs PASS).
-    This is a design-phase posture arc (touches design-substrate) — confirm posture before
-    opening per CLAUDE.md §11.6. Does not block the MVP (surface exercised at U-RT-86).
+    Class 1 fork `.harness/class_1_fork_tool_step_no_bootstrap_sandbox_decision_resolver.md`
+    (PROPOSING). Surfaced at the R-100-tool-step-converter apply arc: the bootstrap-built
+    RuntimeToolDispatcher requires an operator-supplied sandbox_decision_resolver
+    ((ToolContract, WorkflowStep) → SandboxDispatchDecision) and the factory wires none
+    (defaults-to-raise). Dispatch raises BEFORE the tier-floor check, so the converter half
+    (spec v1.40) is necessary but not sufficient for AC #2 via api.run. U-RT-86 hand-supplies
+    BOTH callables. The sharp question: implementer-discretion (§14.9.7 "deferred to
+    implementation discretion") vs operator-policy (parity with the converter — raises-loud,
+    assigns sandbox posture). Fork offers (A) identity resolver (tier = contract.minimum_tier;
+    no new config; MVP-cleanest) / (B) per-server default sandbox-mechanism fields / (C) defer.
+    Recommendation: parity reading via (A). Needs operator AskUserQuestion before apply.
 
 R-100-cost-attribution-firing:
   title: Per-dispatch cost-attribution fires on the real api.run inference path

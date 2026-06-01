@@ -34,10 +34,15 @@ from __future__ import annotations
 import shlex
 from typing import Any, Literal, cast
 
+from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
+from harness_as.tool_contract import ToolContract
 from harness_cp.cp_shared_types import MCPTrustTier
 
-from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
-from harness_runtime.types import RuntimeConfig
+from harness_runtime.lifecycle.mcp_client_host import (
+    MCPClientHost,
+    MCPToolContractConverter,
+)
+from harness_runtime.types import MCPClientConfig, RuntimeConfig
 
 # Re-declare the Literal type so this module is self-contained for the
 # transport cast (the same Literal is declared at lifecycle.mcp_client_host).
@@ -92,6 +97,40 @@ def _build_transport_config(transport: _MCPTransportLiteral, connection_url: str
     return {"url": connection_url}
 
 
+def _build_default_policy_converter(entry: MCPClientConfig) -> MCPToolContractConverter:
+    """Build a Reading-B default-policy `MCPToolContractConverter` (spec v1.40
+    §14.9.3).
+
+    The converter stamps every tool discovered from this server with the
+    operator-declared per-server defaults (`entry.default_minimum_tier` +
+    `entry.default_blast_radius`), mapping an advertised MCP `Tool`
+    (name / description / inputSchema) → AS `ToolContract`. This replaces the
+    raise-on-every-call `_default_tool_contract_converter` that the host would
+    otherwise use, making a TOOL_STEP dispatchable through the operator
+    `api.run` path (closes `.harness/class_1_fork_tool_step_no_operator_supplied_converter.md`
+    Reading B).
+
+    The `tool` argument is an `mcp.types.Tool` (typed `Any` per the
+    `MCPToolContractConverter = Callable[[Any], ToolContract]` alias);
+    `description` may be `None` and `inputSchema` is a JSON-schema dict.
+    """
+    minimum_tier: SandboxTier = entry.default_minimum_tier
+    blast_radius_tier: BlastRadiusTier = entry.default_blast_radius
+
+    def convert(tool: Any) -> ToolContract:
+        input_schema: dict[str, object] = tool.inputSchema or {"type": "object"}
+        return ToolContract(
+            name=tool.name,
+            description=tool.description or "",
+            input_schema=input_schema,
+            output_schema={"type": "object"},
+            minimum_tier=minimum_tier,
+            blast_radius_tier=blast_radius_tier,
+        )
+
+    return convert
+
+
 async def materialize_mcp_client_host_stage(config: RuntimeConfig) -> MCPClientHost:
     """Construct the stage 3a `MCPClientHost` from operator-supplied config.
 
@@ -128,6 +167,7 @@ async def materialize_mcp_client_host_stage(config: RuntimeConfig) -> MCPClientH
         server_name=entry.client_name,
         trust_tier=_trust_tier_from_level(entry.trust_level),
         transport_config=_build_transport_config(transport_value, entry.connection_url),
+        tool_contract_converter=_build_default_policy_converter(entry),
     )
 
 

@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 from harness_as.discriminators import MCPTransport
-from harness_as.sandbox_tier import BlastRadiusTier
+from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_as.sandbox_tier_floor import MCPServerTrustLevel
 from harness_core import ClientName
 from harness_core.deployment_surface import DeploymentSurface
@@ -133,3 +133,103 @@ async def test_per_server_transport_heterogeneity_first_entry_wins_at_mvp() -> N
     )
     host = await materialize_mcp_client_host_stage(cfg)
     assert host.server_name == "first-server"
+
+
+# ---------------------------------------------------------------------------
+# spec v1.40 Reading B — stage-3a factory builds a default-policy converter
+# per `.harness/class_1_fork_tool_step_no_operator_supplied_converter.md`.
+# ---------------------------------------------------------------------------
+
+
+class _FakeTool:
+    """Minimal `mcp.types.Tool` stand-in for converter unit tests."""
+
+    def __init__(
+        self,
+        name: str,
+        description: str | None,
+        input_schema: dict[str, object] | None,
+    ) -> None:
+        self.name = name
+        self.description = description
+        self.inputSchema = input_schema  # mirrors mcp.types.Tool field name
+
+
+def _policy_client(
+    *,
+    name: str = "policy-server",
+    minimum_tier: SandboxTier = SandboxTier.TIER_2_CONTAINER,
+    blast_radius: BlastRadiusTier = BlastRadiusTier.READ_ONLY,
+) -> MCPClientConfig:
+    return MCPClientConfig(
+        client_name=ClientName(name),
+        transport=MCPTransport.STDIO,
+        trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
+        blast_radius=BlastRadiusTier.READ_ONLY,
+        connection_url="stdio:///bin/echo",
+        default_minimum_tier=minimum_tier,
+        default_blast_radius=blast_radius,
+    )
+
+
+@pytest.mark.asyncio
+async def test_factory_wires_non_default_converter() -> None:
+    """v1.40 — a configured server's host carries a real converter, NOT the
+    raise-on-every-call default stub."""
+    cfg = _config([_policy_client()])
+    host = await materialize_mcp_client_host_stage(cfg)
+    converter = host._tool_contract_converter  # type: ignore[attr-defined]
+    contract = converter(_FakeTool("echo", "echo a string", {"type": "object"}))
+    assert contract.name == "echo"
+
+
+@pytest.mark.asyncio
+async def test_converter_stamps_per_server_default_policy() -> None:
+    """v1.40 — converter stamps the entry's default tier + blast radius onto
+    every discovered tool's `ToolContract`."""
+    cfg = _config(
+        [
+            _policy_client(
+                minimum_tier=SandboxTier.TIER_1_PROCESS,
+                blast_radius=BlastRadiusTier.LOCAL_MUTATION,
+            )
+        ]
+    )
+    host = await materialize_mcp_client_host_stage(cfg)
+    converter = host._tool_contract_converter  # type: ignore[attr-defined]
+    contract = converter(_FakeTool("write_file", "writes a file", {"type": "object"}))
+    assert contract.minimum_tier is SandboxTier.TIER_1_PROCESS
+    assert contract.blast_radius_tier is BlastRadiusTier.LOCAL_MUTATION
+    assert contract.description == "writes a file"
+
+
+@pytest.mark.asyncio
+async def test_converter_tolerates_none_description_and_schema() -> None:
+    """v1.40 — `mcp.types.Tool.description` may be None and `inputSchema` may
+    be absent; the converter substitutes safe defaults."""
+    cfg = _config([_policy_client()])
+    host = await materialize_mcp_client_host_stage(cfg)
+    converter = host._tool_contract_converter  # type: ignore[attr-defined]
+    contract = converter(_FakeTool("noisy", None, None))
+    assert contract.description == ""
+    assert contract.input_schema == {"type": "object"}
+
+
+@pytest.mark.asyncio
+async def test_default_policy_field_defaults_are_conservative() -> None:
+    """v1.40 — a client that omits the policy fields gets the conservative
+    Pydantic defaults (TIER_2_CONTAINER / READ_ONLY) per fork §0."""
+    entry = _stdio_client()
+    assert entry.default_minimum_tier is SandboxTier.TIER_2_CONTAINER
+    assert entry.default_blast_radius is BlastRadiusTier.READ_ONLY
+
+
+@pytest.mark.asyncio
+async def test_empty_sentinel_host_keeps_raise_on_call_converter() -> None:
+    """v1.40 — the 0-server empty-sentinel host wires no converter (no tools
+    to convert); its default stub still raises on invocation."""
+    cfg = _config([])
+    host = await materialize_mcp_client_host_stage(cfg)
+    converter = host._tool_contract_converter  # type: ignore[attr-defined]
+    with pytest.raises(LookupError):
+        converter(_FakeTool("x", "x", {"type": "object"}))

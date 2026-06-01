@@ -12,13 +12,24 @@ at SOLO_DEVELOPER tier against the Anthropic provider." Acceptance conditions:
 
 This module covers AC #1 + AC #3 + AC #4 through the operator `api.run` path
 (real Anthropic inference). AC #2 (tool dispatch) is exercised at the dispatcher
-level by `test_u_rt_86_mcp_client_external_server_e2e.py` (passing on main);
-it is NOT reachable via `api.run` at HEAD because the bootstrap-built
-`MCPClientHost` has no operator-suppliable `tool_contract_converter` — see
-`.harness/class_1_fork_tool_step_no_operator_supplied_converter.md`. Combining a
-TOOL_STEP into this `api.run` workflow would require either resolving that fork
-or a test-only monkeypatch of the host factory (the `test-bypass-as-runtime-truth`
-anti-pattern), so it is deliberately not done here.
+level by `test_u_rt_86_mcp_client_external_server_e2e.py` (passing on main).
+
+AC #2 via the operator `api.run` path remains BLOCKED as of spec v1.40. The
+converter half — `MCPClientHost` had no operator-suppliable
+`tool_contract_converter` — was CLOSED at spec v1.40 Reading B
+(`.harness/class_1_fork_tool_step_no_operator_supplied_converter.md`): the
+stage-3a factory now builds a default-policy converter from per-server
+`MCPClientConfig.{default_minimum_tier, default_blast_radius}`. But a
+**sibling gap** blocks the same path: the bootstrap-built
+`RuntimeToolDispatcher` has no `sandbox_decision_resolver` (defaults-to-raise;
+the factory wires none), so dispatch raises before the tier-floor check — see
+`.harness/class_1_fork_tool_step_no_bootstrap_sandbox_decision_resolver.md`
+(PROPOSING). The deterministic marker for that gap lives at
+`test_u_rt_75_runtime_tool_dispatcher_factory.py`
+(`test_ac2_bootstrap_dispatcher_resolves_sandbox_decision` — xfail pending the
+resolver fork). A full TOOL_STEP-via-`api.run` e2e closing AC #2 is deferred to
+the resolver fork's apply arc (combining it here would require monkeypatching
+the host/dispatcher factory — the `test-bypass-as-runtime-truth` anti-pattern).
 
 Mechanism β (real Anthropic; gated on ANTHROPIC_API_KEY). Cost discipline:
 3 steps × max_tokens=4 × single-token prompt ≈ 3 cheap haiku calls.
