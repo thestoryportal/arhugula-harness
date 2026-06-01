@@ -163,3 +163,57 @@ jobs:
 
       - name: Pytest harness-${{ matrix.axis }}/tests in isolation (excludes e2e)
         run: uv run --no-sync pytest harness-${{ matrix.axis }}/tests -m "not e2e"
+
+  coverage:
+    # R-200-ci-coverage-gating — INFORMATIONAL coverage at PR. v1 posture: NO
+    # threshold ("gather data first" per the roadmap entry); advisory
+    # (continue-on-error) so a coverage hiccup never blocks merge. Re-runs the
+    # non-e2e suite under coverage (config at root pyproject [tool.coverage.run]:
+    # source = the 7 import packages, tests omitted), publishes a one-line total
+    # to the job step-summary (visible on the PR's Checks tab), and uploads
+    # coverage.xml as an artifact for inspection. A `fail_under` threshold +
+    # cross-PR trend (codecov/badge) land only once a baseline justifies it —
+    # mirrors the lint/typecheck "advisory until justified" stance.
+    name: coverage (informational) — advisory at v1
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync workspace (all members)
+        run: uv sync --all-packages
+
+      - name: Pytest with coverage (excludes e2e)
+        run: uv run pytest -m "not e2e" --cov --cov-report=term-missing --cov-report=xml --cov-report=json
+
+      - name: Publish coverage total to job summary
+        if: always()
+        run: |
+          uv run python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          p = pathlib.Path("coverage.json")
+          if not p.exists():
+              print("### Coverage\n\n_coverage.json not produced — see the pytest step._")
+          else:
+              t = json.loads(p.read_text())["totals"]
+              print("### Coverage (informational — v1, no threshold)\n")
+              print(f"**Total line coverage: {t['percent_covered_display']}%** "
+                    f"({t['covered_lines']}/{t['num_statements']} statements; "
+                    f"branch coverage enabled).\n")
+              print("Threshold enforcement deferred (`fail_under`) until a baseline trend justifies it.")
+          PY
+
+      - name: Upload coverage.xml artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: warn
