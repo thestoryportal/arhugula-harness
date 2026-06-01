@@ -1097,18 +1097,30 @@ R-440-tier-level-secrets-backend:
 R-600-workflow-v1-14-amendment:
   title: Workflow v1.13 → v1.14 — roadmap-driven discipline catalogue
   surface: VII
-  status: PROPOSED
+  status: RESOLVED   # Workflow v1.14 authored 2026-06-01 — NEW §7.5 Process-discipline catalogue (4 disciplines seeded PD-1..PD-4 + OPEN clause)
   depends_on: [PR-merge-of-this-roadmap]
   blocks: []
   posture: design-phase
   scope: { files: [design-substrate/Project_Workflow_*.md], contracts: [Workflow §7.4, §7.5 NEW], cross_axis: no }
   skills: { primary: spec-writer, secondary: [harness-adversarial-reviewer] }
-  advisor_required: yes
-  council_required: conditional:nameable-tension
+  advisor_required: satisfied:2026-06-01   # advisor reshaped the candidate set: per-candidate independence gate; v1.9 framework-precedent; PD-4 supersession + cardinality honesty; 2 candidates parked; landed-substrate exclusion confirmed
+  council_required: no   # nameable-tension discriminator (§13) — no cross-axis tension in a process-discipline catalogue; routed single-author + advisor per §10.9
   verification: { shape: grep, must_pass: ["§7.5 NEW roadmap-discipline section authored", "next-action derivation rule canonicalized at workflow doc layer", "clearance marker filed"] }
   close_shape: { type: substrate-amendment, artifact: "Workflow v1.13 → v1.14", cascade: [R-IF-roadmap-refresh] }
   next_pointer: null
-  notes: Sibling arc to this roadmap PR per scoping decision. Operator-discretion timing.
+  notes: >
+    RESOLVED 2026-06-01 — design-substrate/Project_Workflow_v1_14.md authored: NEW §7.5 Process-discipline
+    catalogue under §7 (sibling to §7.4 fidelity-grammar), following the v1.9 §7.4.7 framework-establishing
+    precedent. 4 disciplines seeded (PD-1 halt-route-split-AC; PD-2 use-the-product-probe; PD-3
+    verification-shape-grep-vs-e2e w/ CLAUDE.md §13.1 cross-ref; PD-4 plan-revision-against-not-yet-built-substrate,
+    single-unit-multi-rescope + SUPERSEDES the U-RT-111 v2.36 §7.4.7.2-sub-species framing) + OPEN accumulation
+    clause + 5 parked candidates failing the §7.5.1 independence gate. The must_pass[1] "next-action derivation
+    rule canonicalized at workflow doc layer" is N/A as written (the derivation rule lives at Project_Roadmap §4 +
+    CLAUDE.md §12, not the workflow doc; §7.5 is a process-discipline catalogue, not a next-action-derivation
+    surface) — the substantive close is the §7.5 catalogue + clearance marker. Co-published: workspace CLAUDE.md
+    §2.1 row bump v1.13→v1.14 + §10.2/§10.3 stale-v1.12-cite refresh + clearance marker
+    .harness/clearance/Project_Workflow-v1_14-cleared-2026-06-01.md. ZERO cross-axis cascade. See
+    design-substrate/Project_Workflow_v1_14.md + .harness/R-600-pattern-bake-in-sweep.md §2.
 
 R-600-pattern-bake-in-sweep:
   title: Sweep workspace memory for pattern candidates ready for workflow-doc promotion
