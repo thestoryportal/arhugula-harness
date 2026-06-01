@@ -422,18 +422,28 @@ R-006-as-8f-managed-agents-indefinite:
 R-007-od-3-sampler-retired:
   title: H_T-OD-3 (Composite Sampler) RETIRE-READY → RETIRED transit
   surface: I
-  status: BLOCKED
+  status: RESOLVED   # H_T-OD-3 substantive RETIRED at batch-51 (2026-06-01); flipped BLOCKED → eligible once R-100-mvp-real-workflow-execution RESOLVED, then closed
   depends_on: [R-100-mvp-real-workflow-execution]
   blocks: [R-700-phase-8-substitution-accounting]
-  posture: halt-route-to-operator
+  posture: phase-7
   scope: { files: [.harness/phase-7d-retirement-events-batch-NN.md], contracts: [], cross_axis: no }
   skills: { primary: phase-7-substitution-retirement, secondary: [] }
-  advisor_required: yes
+  advisor_required: satisfied:2026-06-01   # advisor caught the bounded-residual pre-commit + named the condition-(B) discriminator that produced the OD-3 (substantive) vs OD-6 (bounded-residual) split
   council_required: no
   verification: { shape: e2e, must_pass: ["HarnessCompositeSampler + TailKeepSpanProcessor exercised at a production-surface deployment (non-LOCAL_DEVELOPMENT)", "X-AL-2 second conjunct — head-based sampler substitution no longer the active path at production OTel pipeline"] }
-  close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-NN.md", cascade: [R-IF-roadmap-refresh] }
+  close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-51.md", cascade: [R-IF-roadmap-refresh] }
   next_pointer: R-009-od-6-otlp-retired
-  notes: RETIRE-READY at batch-36 (both gates closed — §9.1 tail-keep + §10.3 base_rate envelope). Like OD-5/OD-6, RETIRED transit needs the X-AL-2 second conjunct at a real deployment; or operator-AUQ Reading α RETIRED-AS-BOUNDED-RESIDUAL. Sibling-arc candidate with OD-6 (joint same-arc tier advancement precedent batches 33-34).
+  notes: >
+    RESOLVED 2026-06-01 at batch-51 — H_T-OD-3 RETIRE-READY → RETIRED (substantive) via the
+    gate-text-stale-vs-production-landings audit (workflow v1.12 §7.4.7.2 sub-species 10, THIRD closure).
+    Condition-(B) audit: HarnessCompositeSampler is the live root sampler at materialize_tracer_provider_stage
+    (the R-100-mvp-real-workflow-execution e2e exercised the production tracer provider with real spans);
+    the H_E 7a-scaffold sampler is no longer invoked. The must_pass framing above (TailKeepSpanProcessor at a
+    non-LOCAL deployment) was a production-FEATURE-validation over-reach — tail-keep is bypassed at LOCAL by
+    design (§9.1) and observing §10.2 preservation at a real collector is roadmap R-430 (infra-gated), NOT an
+    X-AL-2 retirement gate; the condition-(B) audit corrected this. Operator-ratified AskUserQuestion 2026-06-01
+    (substantive RETIRED over bounded-residual). Drains an R-700 blocker. See
+    .harness/phase-7d-retirement-events-batch-51.md §1 + ledger-v2 §11.4i.
 
 R-008-od-4-redaction-partial:
   title: H_T-OD-4 (Pre-Collector redaction SpanProcessor) PARTIAL → RETIRE-READY gate closures
@@ -454,18 +464,28 @@ R-008-od-4-redaction-partial:
 R-009-od-6-otlp-retired:
   title: H_T-OD-6 (Local-first OTLP ingestion) RETIRE-READY → RETIRED transit
   surface: I
-  status: BLOCKED
+  status: RESOLVED   # H_T-OD-6 RETIRED-AS-BOUNDED-RESIDUAL at batch-51 (2026-06-01); FIRST bounded-residual close in the ledger
   depends_on: [R-100-mvp-real-workflow-execution]
   blocks: [R-700-phase-8-substitution-accounting]
-  posture: halt-route-to-operator
+  posture: phase-7
   scope: { files: [.harness/phase-7d-retirement-events-batch-NN.md], contracts: [], cross_axis: no }
   skills: { primary: phase-7-substitution-retirement, secondary: [] }
-  advisor_required: yes
+  advisor_required: satisfied:2026-06-01   # advisor named the condition-(B) discriminator (live vs dormant primitive) that split OD-3 (substantive) from OD-6 (bounded-residual)
   council_required: no
   verification: { shape: e2e, must_pass: ["4-OD-B SqliteWritePath ingestion exercised against real spans at a deployment", "X-AL-2 second conjunct — local-first OTLP substitution surface no longer invoked at production"] }
-  close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-NN.md", cascade: [R-IF-roadmap-refresh] }
+  close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-51.md", cascade: [R-IF-roadmap-refresh] }
   next_pointer: R-001-h-t-is-2-retired
-  notes: RETIRE-READY at batch-33 ("Terminal in-CLI state"); substrate U-OD-42..U-OD-45 LANDED (PR #18). RETIRED transit needs X-AL-2 second conjunct at a real deployment; or operator-AUQ Reading α RETIRED-AS-BOUNDED-RESIDUAL. Sibling-arc candidate with OD-3.
+  notes: >
+    RESOLVED 2026-06-01 at batch-51 — H_T-OD-6 RETIRE-READY → RETIRED-AS-BOUNDED-RESIDUAL (FIRST bounded-residual
+    close in the ledger) per X-AL-2 §5.3. Condition-(B) audit: 4-OD-B SqliteWritePath substrate LANDED
+    (U-OD-42..U-OD-45 / PR #18) but RuntimeRingBuffer.flush_to_sqlite is dormant at MVP (zero production callers;
+    the collector→sqlite loop is not wired into the run path) → the boundary has not moved → substantive RETIRED
+    is not honestly available at MVP (recording it would be silent-X-AL-3-absorption: a wired surface that is
+    actually un-invoked). The must_pass above (ingestion exercised at a deployment) is exactly the residual:
+    substantive RETIRED is gated on an operator deployment wiring the collector daemon (future milestone roadmap
+    R-420/R-421, infra-gated). Operator-ratified AskUserQuestion 2026-06-01 (bounded-residual over
+    keep-RETIRE-READY), a Class 2 in-execution decision per phase-7-substitution-retirement §5.3. Drains an
+    R-700 blocker as bounded-residual. See .harness/phase-7d-retirement-events-batch-51.md §2 + ledger-v2 §11.4j.
 ```
 
 ### 5.3 MVP-operator-usable (R-100..R-199)
