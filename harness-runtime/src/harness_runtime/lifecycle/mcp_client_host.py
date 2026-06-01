@@ -246,6 +246,20 @@ create_connected_server_and_client_session`. Production callers leave
         return self._trust_tier
 
     @property
+    def protocol_version(self) -> str:
+        """MCP protocol version negotiated at `start()` (empty string pre-start).
+
+        Exposed for the stage-5 emitter `info_lookup` wiring (spec v1.41 §14.9.8
+        arc, Gap E) — the sync `MCPServerInfoLookup` reads it without the async
+        `health_check()`."""
+        return self._protocol_version
+
+    @property
+    def auth_present(self) -> bool:
+        """Whether the transport carries auth credentials (emitter `info_lookup`)."""
+        return self._auth_present
+
+    @property
     def started(self) -> bool:
         return self._started
 

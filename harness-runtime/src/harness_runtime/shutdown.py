@@ -475,7 +475,18 @@ async def shutdown(
         except Exception:
             failures.append(f"provider:{name}")
 
-    # Step 4 — MCP clients + host: no-op at HEAD (U-RT-22 placeholders).
+    # Step 4 — MCP client host (spec v1.41 §14.9.8 arc, Gap F): drain the
+    # per-server subprocess / connection per §14.9.6 inv 1 ("stage 7 SHUTDOWN
+    # drains"). Runs in the same task as run_bootstrap (api.py) so the host's
+    # anyio cancel scope closes in its owning task (the success-path teardown
+    # crash without this). Guarded on a started host — the empty-sentinel /
+    # unstarted host has nothing to drain. Per-resource exception isolation.
+    host = getattr(ctx, "mcp_client_host", None)
+    if host is not None and getattr(host, "started", False):
+        try:
+            await host.shutdown()
+        except Exception:
+            failures.append("mcp_client_host")
     # Step 5 — ledger/index/cache/worktree: covered by step 2 / no close surface.
 
     if time.monotonic() > deadline:

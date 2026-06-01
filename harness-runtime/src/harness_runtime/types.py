@@ -478,6 +478,26 @@ class MCPClientConfig(BaseModel):
     `blast_radius` field above; consolidation owed at a future hygiene arc
     (requires operator ratification per X-AL-3)."""
 
+    default_sandbox_tier: SandboxTier = SandboxTier.TIER_2_CONTAINER
+    """Operator-declared per-server default *resolved* sandbox tier (Reading B,
+    spec v1.41 §14.9.8). The stage-5 factory builds a per-server default-policy
+    `SandboxDecisionResolver` that returns this tier for every TOOL_STEP dispatch
+    against this server. Distinct from `default_minimum_tier` (the tool's REQUIRED
+    floor): the §14.9.4 tier-floor check compares resolved `default_sandbox_tier`
+    >= `default_minimum_tier`. Declare both consistently (e.g. both
+    `TIER_1_PROCESS` for a process-level local deployment); `default_sandbox_tier
+    < default_minimum_tier` is a deliberate floor violation. Default matches
+    `default_minimum_tier`'s default so the floor passes out of the box."""
+
+    default_sandbox_tech: str = "container"
+    """Operator-declared per-server default sandbox mechanism (Reading B, spec
+    v1.41 §14.9.8) — emitted on the `sandbox.enter` span per §14.9.4. Declare to
+    match `default_sandbox_tier` (e.g. `"host-process"` for `TIER_1_PROCESS`)."""
+
+    default_sandbox_provider: str = "host"
+    """Operator-declared per-server default sandbox provider (Reading B, spec
+    v1.41 §14.9.8) — emitted on the `sandbox.enter` span per §14.9.4."""
+
 
 # ----------------------------------------------------------------------------
 # Protocol stubs - spec-acknowledged runtime-defined types (C-RT-04).

@@ -1,4 +1,18 @@
-# Specification — Harness Runtime v1.40
+# Specification — Harness Runtime v1.41
+
+## Change-note (v1.40 → v1.41)
+
+**Status posture (PROPOSED 2026-06-01).** v1.41 is the AC#2-closing arc spec amendment per `.harness/class_1_fork_tool_step_no_bootstrap_sandbox_decision_resolver.md` operator-ratified 2026-06-01 (**Gap C → Reading B**, per-server sandbox-mechanism fields; e2e config-around / skipif-gated). It authors the **NEW §14.9.8** sandbox-decision-resolver contract — the missing spec anchor for the `SandboxDispatchDecision` carrier + `SandboxDecisionResolver` callable that the runtime has carried since v1.13 with **phantom §14.9.7 cites** (an execution-backed completeness investigation verified §14.9.7 defers only emitter-mutation / idempotency-key / health-check — NOT the resolver). The bootstrap stage-5 factory MUST build a per-server default-policy resolver; the bare-dispatcher default stays raise-on-call for hand-built dispatchers. This closes the **design half (Gap C)** of the AC#2 bootstrap TOOL_STEP path; the impl-conformance gaps (B host `start()`, E emitter `info_lookup`, F host `shutdown()`) land in the same arc per §14.9.6 inv 1 (already mandated; no amendment owed). v1.40 + earlier lineage PRESERVED VERBATIM per delta-only-spec-file convention.
+
+**Source of fix.** Fork doc §3 (Reading B ratified; §14.9.7 phantom verified — ratification + spec amendment required regardless of Reading) + §4 (5-gap execution-confirmed set). The per-server default sandbox-policy fields (`default_sandbox_tier: SandboxTier` + `default_sandbox_tech: str` + `default_sandbox_provider: str`) are impl-declared at `MCPClientConfig` (the spec refers to it opaquely, per the v1.40 convention); §14.9.8 declares the resolver contract + the factory's obligation.
+
+**Amendments.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§14.9.8 (NEW)** | Authors the sandbox-decision-resolver contract: `SandboxDispatchDecision` 5-field frozen carrier (`tier: SandboxTier` / `tech: str` / `provider: str` / `assigned_tier_reason: str` / `cost_tier_overhead_ms: int`) + `SandboxDecisionResolver = Callable[[ToolContract, WorkflowStep], SandboxDispatchDecision]`. The stage-5 `materialize_runtime_tool_dispatcher_stage` factory MUST build a per-server default-policy resolver from `MCPClientConfig.{default_sandbox_tier, default_sandbox_tech, default_sandbox_provider}` and pass it as `sandbox_decision_resolver=`. Tier-floor interaction is LIVE under Reading B. Per-server-uniform (per-tool granularity is future). Supersedes the phantom §14.9.7 cites at `runtime_tool_dispatcher.py:85,:98` (corrected at impl). | Reading B ratification |
+
+**Scope discipline.** v1.41 amends ONLY §14.9.8 (new). §14.9.7 itself is PRESERVED VERBATIM (it correctly defers emitter-mutation / idempotency / health-check — the phantom is the code's mis-cite *to* it, fixed at impl, not the section). §14.9.1–§14.9.7, §14.10+, and all prior lineage PRESERVED VERBATIM. The AC #2 end-to-end gate is **not closed by v1.41** — it closes only when the full bootstrap TOOL_STEP path (Gaps B+C+D+E+F) is wired AND demonstrated by one echo-MCP-via-`api.run` e2e (skipif-gated; live-green is the operator's run per Gap D's live-provider precondition). Deterministic xfail marker at `test_u_rt_75_runtime_tool_dispatcher_factory.py::test_ac2_bootstrap_dispatcher_resolves_sandbox_decision` self-removes (xpass → strict-fail) when the resolver lands.
 
 ## Change-note (v1.39 → v1.40)
 
@@ -3501,6 +3515,36 @@ Spans emitted per dispatch (nested, in order):
 - **Subprocess health-check cadence config.** v1 MVP fires `health_check()` per dispatch. Operator may configure probe-interval-with-cache via `MCPClientHost` bootstrap config; cache TTL bounded by `TrustPolicy.audit_required_below_tier` revocation semantics.
 
 ---
+
+### §14.9.8 Sandbox-decision-resolver contract (new at v1.41 — Reading B)
+
+**Provenance.** AC#2-closing-arc Gap C, `.harness/class_1_fork_tool_step_no_bootstrap_sandbox_decision_resolver.md` operator-ratified 2026-06-01 (Reading B). This sub-section is the canonical spec home for the sandbox-decision derivation that the runtime has carried since v1.13 with phantom §14.9.7 cites; §14.9.7 never deferred the resolver (it defers only emitter-mutation / idempotency-key / health-check).
+
+**Carrier — `SandboxDispatchDecision`** (frozen, 5 fields; grounded against `harness-runtime/.../lifecycle/runtime_tool_dispatcher.py`):
+
+| Field | Type | Role |
+|---|---|---|
+| `tier` | `SandboxTier` | The resolved sandbox isolation tier for this dispatch. Compared against `ToolContract.minimum_tier` at the §14.9.4 tier-floor check. |
+| `tech` | `str` | Isolation mechanism (e.g. `"host-process"` / `"linux-namespaces"` / `"docker"`). Emitted on the `sandbox.enter` span per §14.9.4 + C-AS-15 §15. |
+| `provider` | `str` | Sandbox provider (e.g. `"host"` / `"container-d"`). Emitted per §14.9.4. |
+| `assigned_tier_reason` | `str` | Human-readable cause of the tier assignment. |
+| `cost_tier_overhead_ms` | `int` | Estimated per-tier startup overhead (telemetry only; not load-bearing for dispatch or the floor). |
+
+**Resolver type.** `SandboxDecisionResolver = Callable[[ToolContract, WorkflowStep], SandboxDispatchDecision]`. The dispatcher (§14.9.1) ENFORCES invariants (the §14.9.4 tier-floor); the resolver DERIVES the decision. The bare-dispatcher default resolver RAISES on invocation (`LookupError`, loud-on-misconfig per the U-CP-68/69 discipline) — it is the correct posture for an operator hand-building a `RuntimeToolDispatcher` without a policy. The **bootstrap stage-5 factory MUST supply** a per-server default-policy resolver so the operator `api.run` path is reachable.
+
+**Per-server default-policy resolver (the factory's obligation).** `materialize_runtime_tool_dispatcher_stage` (§14.9.3 stage 5) MUST construct a resolver from the per-server `MCPClientConfig` operator fields `default_sandbox_tier: SandboxTier` + `default_sandbox_tech: str` + `default_sandbox_provider: str` (impl-declared at `MCPClientConfig`, sibling to the v1.40 `default_minimum_tier` / `default_blast_radius`) and pass it as `sandbox_decision_resolver=` to the bare `RuntimeToolDispatcher`. The resolver returns, for every `(contract, step)`:
+`SandboxDispatchDecision(tier=cfg.default_sandbox_tier, tech=cfg.default_sandbox_tech, provider=cfg.default_sandbox_provider, assigned_tier_reason="per-server-default-sandbox-policy", cost_tier_overhead_ms=0)`.
+
+**Tier-floor interaction (LIVE under Reading B).** Because the resolved `tier` (`= default_sandbox_tier`) is INDEPENDENT of the converter-stamped `contract.minimum_tier` (`= default_minimum_tier` per v1.40), the §14.9.4 tier-floor check `resolved.tier >= contract.minimum_tier` is **meaningful** (unlike a degenerate identity resolver where it would be vacuous). The operator MUST declare `default_sandbox_tier` and `default_minimum_tier` consistently: a deployment that provides only process-level isolation declares both `TIER_1_PROCESS`; declaring `default_sandbox_tier < default_minimum_tier` is a deliberate floor violation (`RT-FAIL-SANDBOX-TIER-FLOOR-VIOLATION` per §14.9.5) signalling "this server's tools require stronger isolation than this deployment provides."
+
+**Per-server-uniform (scope honesty).** The per-server default policy returns the SAME decision for every tool discovered from a server — exactly as the v1.40 converter stamps every tool with the same `minimum_tier`. A read-only and a destructive tool on one server share one floor. Per-tool sandbox granularity is a future arc (would route to a per-tool `ToolContract` policy map, fork Reading A-of-the-converter-fork shape); NOT in scope at the MVP.
+
+**Invariants.**
+1. The bootstrap-produced `ctx.tool_dispatcher` (the §14.11 retry wrapper around the bare `RuntimeToolDispatcher`) has a NON-raising `sandbox_decision_resolver` whenever `config.mcp_clients` is non-empty.
+2. The resolver is pure `(ToolContract, WorkflowStep) → SandboxDispatchDecision`; no I/O, no caching at v1.
+3. The tier-floor is enforced by the dispatcher (§14.9.4), NOT the resolver — the resolver MAY return any tier; the floor decides admissibility.
+
+**Deferred to implementation discretion.** `assigned_tier_reason` exact string; whether `cost_tier_overhead_ms` is operator-tunable (v1: hardcoded 0 — no `MCPClientConfig` overhead field authored, per faithful-minimal field-set discipline). Per-tool granularity (above). Multi-server resolver composition (v1 MVP is single-server per §14.9.3 factory).
 
 ## §14.10 C-RT-20 — WebhookDeliveryComposer + OperatorBurdenEvaluator (new at v1.13)
 

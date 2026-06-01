@@ -82,7 +82,9 @@ class SandboxDispatchDecision:
 
     The dispatcher enforces tier-floor (`tier >= contract.minimum_tier`) and
     emits the 7 attributes from this carrier; it does NOT derive the
-    decision. Per spec §14.9.7 deferral to implementation discretion.
+    decision. The derivation is the `SandboxDecisionResolver` contract at
+    spec §14.9.8 (NOT §14.9.7 — that section defers only emitter-mutation /
+    idempotency / health-check; phantom cite corrected at v1.41).
     """
 
     tier: SandboxTier
@@ -95,11 +97,12 @@ class SandboxDispatchDecision:
 SandboxDecisionResolver = Callable[[ToolContract, WorkflowStep], SandboxDispatchDecision]
 """Operator-supplied resolver mapping (contract, step) → dispatch decision.
 
-Per spec §14.9.7 implementation-discretion: the runtime dispatcher
-enforces invariants; the resolver carries the deployment-specific tier-
-assignment policy. Default resolver raises on production misconfig
-(mirrors U-CP-68 `_default_tier_resolver` + U-CP-69
-`_default_info_lookup` loud-on-misconfig discipline).
+Per spec §14.9.8 (Reading B, v1.41): the runtime dispatcher enforces
+invariants; the resolver carries the deployment-specific tier-assignment
+policy. The bootstrap stage-5 factory supplies a per-server default-policy
+resolver; the default resolver here raises on production misconfig for
+operator-hand-built dispatchers (mirrors U-CP-68 `_default_tier_resolver` +
+U-CP-69 `_default_info_lookup` loud-on-misconfig discipline).
 """
 
 

@@ -32,24 +32,83 @@ from __future__ import annotations
 
 from typing import Any
 
+from harness_as.tool_contract import ToolContract
 from harness_core import SandboxDecisionPolicy
 from harness_cp.cp_shared_types import MCPTrustTier
-from harness_cp.mcp_client_namespace_emitter import MCPClientNamespaceEmitter
+from harness_cp.mcp_client_namespace_emitter import (
+    MCPClientNamespaceEmitter,
+    MCPServerInfo,
+    MCPServerInfoLookup,
+)
 from harness_cp.per_server_trust_evaluator import PerServerTrustEvaluator
 from harness_cp.per_server_trust_types import (
     TierDerivationRule,
     TrustPolicy,
 )
+from harness_cp.workflow_driver_types import WorkflowStep
 
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
 from harness_runtime.lifecycle.retry_breaker_tool import RetryBreakerToolDispatcher
-from harness_runtime.lifecycle.runtime_tool_dispatcher import RuntimeToolDispatcher
-from harness_runtime.types import RuntimeConfig
+from harness_runtime.lifecycle.runtime_tool_dispatcher import (
+    RuntimeToolDispatcher,
+    SandboxDecisionResolver,
+    SandboxDispatchDecision,
+)
+from harness_runtime.types import MCPClientConfig, RuntimeConfig
 
 __all__ = [
     "DEFAULT_TRUST_POLICY",
     "materialize_runtime_tool_dispatcher_stage",
 ]
+
+
+def _build_default_policy_sandbox_resolver(entry: MCPClientConfig) -> SandboxDecisionResolver:
+    """Build a Reading-B per-server default-policy `SandboxDecisionResolver`
+    (spec v1.41 §14.9.8, Gap C).
+
+    Returns the operator-declared per-server sandbox decision for EVERY
+    `(contract, step)` on this server (per-server-uniform per §14.9.8). The
+    resolved `tier` is compared against `contract.minimum_tier` at the §14.9.4
+    tier-floor check — so the operator must declare `default_sandbox_tier`
+    consistently with `default_minimum_tier`.
+    """
+    tier = entry.default_sandbox_tier
+    tech = entry.default_sandbox_tech
+    provider = entry.default_sandbox_provider
+
+    def resolve(_contract: ToolContract, _step: WorkflowStep) -> SandboxDispatchDecision:
+        return SandboxDispatchDecision(
+            tier=tier,
+            tech=tech,
+            provider=provider,
+            assigned_tier_reason="per-server-default-sandbox-policy",
+            cost_tier_overhead_ms=0,
+        )
+
+    return resolve
+
+
+def _build_host_info_lookup(host: MCPClientHost) -> MCPServerInfoLookup:
+    """Build a sync `MCPServerInfoLookup` from a started `MCPClientHost`
+    (spec v1.41 §14.9.8 arc, Gap E).
+
+    The emitter's `info_lookup` is sync and fires per dispatch (step 7); it
+    reads the host's already-resolved fields (no async `health_check`). All
+    four `MCPServerInfo` fields are host-derivable. The lookup ignores its
+    `server_name` argument at the v1 single-server MVP (one host per bootstrap
+    per §14.9.6 inv 1).
+    """
+
+    def lookup(_server_name: str) -> MCPServerInfo:
+        return MCPServerInfo(
+            transport=host.transport,
+            protocol_version=host.protocol_version,
+            auth_present=host.auth_present,
+            trust_tier=host.trust_tier,
+        )
+
+    return lookup
 
 
 DEFAULT_TRUST_POLICY = TrustPolicy(
@@ -105,9 +164,28 @@ async def materialize_runtime_tool_dispatcher_stage(
     per_server_trust_evaluator = PerServerTrustEvaluator()
     ctx.per_server_trust_evaluator = per_server_trust_evaluator
 
-    # --- Step 2: MCP namespace emitter ---------------------------------------
-    mcp_namespace_emitter = MCPClientNamespaceEmitter()
+    # --- Step 2: MCP namespace emitter (Gap E — info_lookup from host) -------
+    # spec v1.41 §14.9.8 arc: the emitter's per-dispatch step-7 info_lookup is
+    # wired from ctx.mcp_client_host so it does not raise on the operator
+    # api.run path. Bare `MCPClientNamespaceEmitter()` (default-raise lookup)
+    # is preserved only when no host is configured (empty-sentinel; dispatch
+    # never reaches step 7 because step 1 raises TOOL-CONTRACT-UNKNOWN first).
+    info_lookup: MCPServerInfoLookup | None = (
+        _build_host_info_lookup(ctx.mcp_client_host) if config.mcp_clients else None
+    )
+    mcp_namespace_emitter = MCPClientNamespaceEmitter(info_lookup=info_lookup)
     ctx.mcp_namespace_emitter = mcp_namespace_emitter
+
+    # --- Step 2b: per-server default-policy sandbox resolver (Gap C) ----------
+    # spec v1.41 §14.9.8 Reading B: build the resolver from the first server's
+    # operator-declared per-server sandbox policy. None when no server is
+    # configured (the bare dispatcher's default-raise resolver is unreachable
+    # at step 3 because step 1 raises first on the empty registry).
+    sandbox_decision_resolver: SandboxDecisionResolver | None = (
+        _build_default_policy_sandbox_resolver(config.mcp_clients[0])
+        if config.mcp_clients
+        else None
+    )
 
     # --- Step 3: bare RuntimeToolDispatcher (C-RT-19) ------------------------
     # U-OD-39: thread cost-attribution substrate (cost_chain + audit_writer
@@ -119,6 +197,7 @@ async def materialize_runtime_tool_dispatcher_stage(
         per_server_trust_evaluator=per_server_trust_evaluator,
         mcp_namespace_emitter=mcp_namespace_emitter,
         trust_policy=trust_policy,
+        sandbox_decision_resolver=sandbox_decision_resolver,
         tracer_provider=ctx.tracer_provider,
         cost_chain=ctx.cost_chain,
         audit_writer=ctx.audit_writer,

@@ -597,7 +597,7 @@ R-100-tool-step-converter:
 R-100-tool-step-sandbox-resolver:
   title: AC#2-closing arc — wire the full 5-gap bootstrap TOOL_STEP path {D,B,C,E,F} + echo-via-api.run e2e
   surface: II
-  status: PROPOSING   # Gap C (resolver) is a design decision needing operator AskUserQuestion + a spec amendment; B/E/F are impl, D is config. Class 1 fork filed 2026-06-01; gap set execution-confirmed (5 gaps) 2026-06-01.
+  status: APPLIED-PENDING-OPERATOR-E2E   # Reading B ratified + spec v1.41 §14.9.8 + all 5 gaps wired + 18 CI-green tests (PR TBD). AC #2 closes ONLY on the operator's live e2e run (Gap D needs a live provider; skipif-gated; live-green is operator's run — NOT auto-closable).
   depends_on: [R-100-tool-step-converter]
   blocks: []
   posture: design-phase   # NEW §14.9.x resolver contract (spec amendment) + 4 impl/config fixes + e2e; mixed-posture bundled-absorption
