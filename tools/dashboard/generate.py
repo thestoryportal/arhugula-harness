@@ -544,159 +544,246 @@ HTML_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Harness roadmap — operator dashboard</title>
-<meta name="description" content="Multi-LLM agent harness — development closure, retirement ledger, and R-NNN roadmap at a glance."/>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232B2620'/%3E%3Crect x='8' y='8' width='14' height='14' rx='2' fill='%23E0A82E'/%3E%3C/svg%3E"/>
+<title>Harness roadmap — operator console</title>
+<meta name="description" content="Multi-LLM agent harness — development closure, retirement ledger, and R-NNN roadmap. Instrument-ledger console."/>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='3' fill='%2315120d'/%3E%3Crect x='7' y='7' width='8' height='8' fill='%23f0a830'/%3E%3Crect x='17' y='7' width='8' height='8' fill='none' stroke='%233a342a'/%3E%3Crect x='7' y='17' width='8' height='8' fill='none' stroke='%233a342a'/%3E%3Crect x='17' y='17' width='8' height='8' fill='%23d8542f'/%3E%3C/svg%3E"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet"/>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
   :root{{
-    --mustard:#E0A82E; --paper:#F4EFE3; --paper-hi:#FBF8F1; --sand:#D8CFBC;
-    --terracotta:#C25B3A; --ink:#2B2620; --ink-soft:#6B6354; --ink-faint:#9A8E76;
-    --serif:Canela,Georgia,'Times New Roman',serif;
-    --sans:Inter,'Helvetica Neue',Arial,sans-serif;
-    --radius:10px; --shadow:6px 6px 0 var(--mustard); --shadow-sm:4px 4px 0 var(--mustard);
+    --ground:#15120d;        /* warm near-black ~oklch(0.19 0.02 70) */
+    --panel:#1c1812;
+    --panel-hi:#221d16;
+    --bone:#e8e0cf;          /* primary text ~11:1 on ground */
+    --bone-soft:#b3a98f;     /* >=5.5:1 */
+    --bone-faint:#7d745f;    /* labels/meta, large/secondary only */
+    --amber:#f0a830;         /* single signal accent */
+    --amber-glow:#ffc14d;
+    --ember:#d8542f;         /* alert / partial ONLY */
+    --hair:#3a342a;          /* hairline rules + grid */
+    --hair-soft:#2a251e;
+    --radius:2px;            /* single corner-radius scale */
+    --disp:'Big Shoulders Display','Arial Narrow',sans-serif;
+    --body:'IBM Plex Sans','Helvetica Neue',sans-serif;
+    --mono:'JetBrains Mono','SFMono-Regular',ui-monospace,monospace;
   }}
   *{{box-sizing:border-box;margin:0;padding:0;}}
   html{{scroll-behavior:smooth;}}
-  body{{background:#E7E0D0;font-family:var(--sans);color:var(--ink);line-height:1.5;
-    font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;}}
-  .wrap{{max-width:1160px;margin:0 auto;padding:0 24px 64px;}}
-  .serif{{font-family:var(--serif);}}
-  a{{color:inherit;}}
+  body{{
+    background:var(--ground);color:var(--bone);font-family:var(--body);
+    line-height:1.55;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums;
+    background-image:
+      linear-gradient(var(--hair-soft) 1px,transparent 1px),
+      linear-gradient(90deg,var(--hair-soft) 1px,transparent 1px);
+    background-size:46px 46px;background-position:-1px -1px;
+  }}
+  @media(prefers-reduced-motion:no-preference){{
+    body>.wrap>main>*{{animation:rise .5s cubic-bezier(.22,.61,.36,1) both;}}
+    main>*:nth-child(2){{animation-delay:.05s;}} main>*:nth-child(3){{animation-delay:.1s;}}
+    main>*:nth-child(4){{animation-delay:.15s;}} main>*:nth-child(5){{animation-delay:.2s;}}
+  }}
+  @keyframes rise{{from{{opacity:0;transform:translateY(10px);}}to{{opacity:1;transform:none;}}}}
 
-  /* topbar — ink ground, mustard type (premium/closing ground) */
-  .topbar{{background:var(--ink);color:var(--mustard);}}
-  .topbar .inner{{max-width:1160px;margin:0 auto;padding:18px 24px;display:flex;
-    justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:10px;}}
-  .topbar .brand{{font-family:var(--serif);font-size:22px;font-weight:500;letter-spacing:.3px;}}
-  .topbar .brand em{{font-style:italic;color:#F0C766;}}
-  .topbar .anchor{{font-size:11px;letter-spacing:1px;color:#C8941E;}}
-  .topbar .anchor code{{color:#F0C766;}}
+  .wrap{{max-width:1180px;margin:0 auto;padding:0 26px 72px;}}
+  .mono{{font-family:var(--mono);}}
+  a{{color:var(--amber);text-decoration:none;}}
+  a:hover{{text-decoration:underline;text-underline-offset:2px;}}
+  code{{font-family:var(--mono);font-size:.84em;color:var(--amber-glow);
+    background:var(--hair-soft);border:1px solid var(--hair);border-radius:var(--radius);padding:.5px 4px;}}
+  strong{{color:var(--bone);font-weight:600;}}
 
-  /* numbered serif section header + hairline rule (signature motif D) */
-  section{{margin-top:40px;}}
-  .shead{{display:flex;align-items:baseline;gap:14px;margin-bottom:18px;}}
-  .shead .num{{font-family:var(--serif);font-size:30px;font-weight:500;color:var(--mustard);line-height:1;}}
-  .shead .htxt{{font-family:var(--serif);font-size:24px;font-weight:500;color:var(--ink);line-height:1;}}
-  .shead .rule{{flex:1;border-top:1.5px solid var(--sand);transform:translateY(-6px);}}
-  .label{{font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:var(--ink-faint);font-weight:700;}}
+  /* masthead — the instrument header band */
+  .top{{border-bottom:1px solid var(--hair);background:
+    linear-gradient(180deg,rgba(240,168,48,.05),transparent 60%);}}
+  .top .inner{{max-width:1180px;margin:0 auto;padding:22px 26px 18px;}}
+  .top .row1{{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px;}}
+  .brand{{font-family:var(--disp);font-weight:700;font-size:34px;letter-spacing:.5px;
+    line-height:.9;text-transform:uppercase;color:var(--bone);}}
+  .brand .sig{{color:var(--amber);}}
+  .brand .sub{{display:block;font-family:var(--mono);font-weight:400;font-size:11px;
+    letter-spacing:3px;color:var(--bone-faint);margin-top:7px;text-transform:none;}}
+  .readout{{font-family:var(--mono);font-size:10.5px;line-height:1.7;color:var(--bone-soft);
+    text-align:right;max-width:560px;}}
+  .readout .lab{{color:var(--bone-faint);}}
+  .readout .v{{color:var(--amber);}}
+  .top .ticks{{display:flex;gap:0;margin-top:16px;border-top:1px solid var(--hair-soft);
+    border-bottom:1px solid var(--hair-soft);}}
+  .tick{{flex:1;padding:9px 0;font-family:var(--mono);font-size:10px;letter-spacing:1.5px;
+    text-transform:uppercase;color:var(--bone-faint);border-right:1px solid var(--hair-soft);}}
+  .tick:last-child{{border-right:none;}}
+  .tick b{{display:block;font-family:var(--disp);font-weight:700;font-size:20px;letter-spacing:.5px;
+    color:var(--bone);margin-top:2px;}}
+  .tick.sig b{{color:var(--amber);}} .tick.ember b{{color:var(--ember);}}
 
-  /* cards — paper-on-paper + mustard offset shadow; dark variant inverts */
-  .card{{background:var(--paper-hi);border:1px solid var(--sand);border-radius:var(--radius);
-    box-shadow:var(--shadow);padding:22px;}}
-  .card.dark{{background:var(--ink);color:var(--paper);box-shadow:var(--shadow);}}
-  .grid2{{display:grid;grid-template-columns:1fr 1fr;gap:22px;}}
-  .grid-hero{{display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:stretch;}}
+  /* numbered section header — quiet, integrated */
+  section{{margin-top:46px;}}
+  .shead{{display:flex;align-items:baseline;gap:13px;margin-bottom:18px;}}
+  .shead .num{{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--amber);
+    letter-spacing:1px;flex-shrink:0;}}
+  .shead .htxt{{font-family:var(--disp);font-weight:600;font-size:23px;letter-spacing:.6px;
+    text-transform:uppercase;color:var(--bone);line-height:1;}}
+  .shead .rule{{flex:1;border-top:1px solid var(--hair);transform:translateY(-5px);}}
 
-  /* stat cards (closure hero) */
-  .stat .k{{font-size:11px;letter-spacing:2px;text-transform:uppercase;font-weight:700;margin-bottom:8px;}}
-  .stat.build .k{{color:#7a5a12;}}
-  .stat .big{{font-family:var(--serif);font-size:46px;font-weight:500;line-height:.95;}}
-  .stat .big .unit{{font-size:18px;color:var(--ink-soft);font-family:var(--sans);font-weight:600;}}
-  .stat .sub{{font-size:12.5px;color:var(--ink-soft);margin-top:8px;line-height:1.6;}}
-  .stat .sub strong{{color:var(--ink);}}
-  .bar{{height:8px;border-radius:6px;background:var(--sand);margin-top:12px;overflow:hidden;}}
-  .bar > span{{display:block;height:100%;background:var(--mustard);}}
-  .pull{{font-family:var(--serif);font-style:italic;font-size:16px;color:var(--terracotta);
-    margin-top:10px;line-height:1.3;}}
+  /* panels — hairline border + inset glow, NO drop shadow */
+  .panel{{background:var(--panel);border:1px solid var(--hair);border-radius:var(--radius);padding:24px;}}
+  .panel.lit{{box-shadow:inset 0 0 0 1px rgba(240,168,48,.08),inset 0 1px 22px rgba(240,168,48,.05);
+    border-color:#4a4030;}}
+  .grid2{{display:grid;grid-template-columns:1fr 1fr;gap:20px;}}
+  .gridHero{{display:grid;grid-template-columns:1.25fr 1fr;gap:20px;align-items:stretch;}}
 
-  /* waffle — 54 substitution cells, fraction-of-whole-filled (ui-ux-pro-max rec) */
-  .waffle{{display:grid;grid-template-columns:repeat(18,1fr);gap:4px;margin-top:6px;max-width:520px;}}
-  .cell{{aspect-ratio:1;border-radius:3px;background:var(--sand);}}
-  .cell.retired{{background:var(--mustard);}}
-  .cell.partial{{background:var(--terracotta);}}
-  .cell.bounded{{background:var(--ink-soft);}}
-  .cell.indef{{background:var(--sand);border:1px dashed var(--ink-faint);}}
-  .legend{{display:flex;flex-wrap:wrap;gap:14px;margin-top:14px;font-size:11.5px;color:var(--ink-soft);}}
-  .legend i{{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:6px;
-    vertical-align:middle;}}
+  .label{{font-family:var(--mono);font-size:10px;letter-spacing:2px;text-transform:uppercase;
+    color:var(--bone-faint);font-weight:500;}}
 
-  /* item rows — strike(closed)/open/status word + plain-english why (never color-alone) */
-  .surf{{margin-bottom:18px;}}
-  .surf .stitle{{font-size:11px;letter-spacing:2px;text-transform:uppercase;font-weight:700;
-    color:var(--ink-faint);margin-bottom:6px;}}
-  .rows{{border-left:2px solid var(--sand);}}
-  .row{{display:flex;align-items:flex-start;gap:10px;padding:7px 0 7px 14px;
-    transition:background .18s ease,border-color .18s ease;border-left:2px solid transparent;
-    margin-left:-2px;}}
-  .row:hover{{background:var(--paper-hi);border-left-color:var(--mustard);}}
-  .row .rid{{font-size:11px;color:var(--ink-soft);font-weight:600;flex-shrink:0;min-width:0;}}
-  .row .rmain{{flex:1;min-width:0;}}
-  .row .rt{{font-size:13.5px;color:var(--ink);}}
-  .row.closed .rt{{text-decoration:line-through;text-decoration-color:var(--ink-faint);color:var(--ink-faint);}}
-  .row .rwhy{{font-size:11.5px;color:var(--ink-soft);margin-top:2px;line-height:1.5;}}
+  /* closure readouts */
+  .meter .k{{font-family:var(--mono);font-size:10px;letter-spacing:2px;text-transform:uppercase;
+    color:var(--bone-soft);margin-bottom:10px;}}
+  .meter .big{{font-family:var(--disp);font-weight:700;font-size:62px;line-height:.85;
+    color:var(--amber);letter-spacing:1px;}}
+  .meter .big .u{{font-size:22px;color:var(--bone-soft);font-family:var(--mono);font-weight:500;letter-spacing:0;}}
+  .meter.cold .big{{color:var(--bone);}}
+  .meter .sub{{font-size:13px;color:var(--bone-soft);margin-top:12px;line-height:1.65;}}
+  .gaugebar{{height:7px;background:var(--hair-soft);border:1px solid var(--hair);border-radius:var(--radius);
+    margin-top:14px;overflow:hidden;position:relative;}}
+  .gaugebar > span{{display:block;height:100%;background:linear-gradient(90deg,var(--amber),var(--amber-glow));
+    box-shadow:0 0 8px rgba(255,193,77,.4);}}
+  .quote{{font-family:var(--disp);font-weight:500;font-size:19px;letter-spacing:.3px;line-height:1.15;
+    color:var(--bone);margin-top:18px;padding-left:14px;border-left:2px solid var(--amber);}}
 
-  /* status chips — warm palette, status word always present (color is reinforcement) */
-  .chip{{font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;
-    padding:3px 8px;border-radius:4px;flex-shrink:0;white-space:nowrap;}}
-  .chip.closed{{background:var(--sand);color:#6b6354;}}
-  .chip.open{{background:var(--mustard);color:var(--ink);}}
-  .chip.blocked{{background:var(--terracotta);color:var(--paper);}}
-  .chip.other{{background:transparent;color:var(--ink-soft);border:1.5px solid var(--sand);}}
-  .chip.build{{background:var(--mustard);color:var(--ink);}}
-  .chip.activation{{background:transparent;color:var(--ink-soft);border:1.5px solid var(--ink-soft);}}
-  .chip.state{{background:transparent;border:1.5px solid var(--terracotta);color:var(--terracotta);}}
+  /* THE HERO: 54-cell waffle of glowing amber cells on dark ground */
+  .waffle{{display:grid;grid-template-columns:repeat(18,1fr);gap:5px;margin-top:14px;max-width:520px;}}
+  .cell{{aspect-ratio:1;border-radius:1px;background:transparent;border:1px solid var(--hair);}}
+  .cell.retired{{background:var(--amber);border-color:var(--amber-glow);
+    box-shadow:0 0 5px rgba(255,193,77,.55),inset 0 0 3px rgba(255,225,160,.6);}}
+  .cell.partial{{background:var(--ember);border-color:#f06a45;
+    box-shadow:0 0 5px rgba(216,84,47,.6);}}
+  .cell.bounded{{background:var(--bone-faint);border-color:var(--bone-soft);}}
+  .cell.indef{{background:transparent;border:1px dashed var(--bone-faint);}}
+  .legend{{display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:16px;font-family:var(--mono);
+    font-size:11px;color:var(--bone-soft);}}
+  .legend span{{display:inline-flex;align-items:center;gap:7px;}}
+  .legend i{{width:11px;height:11px;border-radius:1px;flex-shrink:0;display:inline-block;}}
+  .legend .n{{color:var(--bone);font-weight:700;}}
 
-  /* unretired ledger + remaining list */
-  .led{{padding:12px 0;border-bottom:1px solid var(--sand);}}
+  /* ledger rows — status word always present; strike for closed */
+  .led{{padding:13px 0;border-bottom:1px solid var(--hair-soft);}}
   .led:last-child{{border-bottom:none;}}
-  .led .lh{{display:flex;align-items:center;gap:9px;flex-wrap:wrap;}}
-  .led .lid{{font-family:var(--serif);font-size:17px;color:var(--ink);}}
-  .led .lwhy{{font-size:12px;color:var(--ink-soft);margin-top:5px;line-height:1.55;}}
-  .led .lretire{{font-size:12px;margin-top:5px;line-height:1.55;}}
-  .led .lretire b{{font-weight:700;font-size:10px;letter-spacing:1px;text-transform:uppercase;
-    color:var(--terracotta);margin-right:6px;}}
+  .led .lh{{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}}
+  .led .lid{{font-family:var(--disp);font-weight:700;font-size:18px;letter-spacing:.5px;color:var(--bone);}}
+  .led .lwhy{{font-size:12.5px;color:var(--bone-soft);margin-top:6px;line-height:1.6;}}
+  .led .lret{{font-size:12.5px;margin-top:5px;line-height:1.6;color:var(--bone-soft);}}
+  .led .lret b{{font-family:var(--mono);font-weight:700;font-size:9.5px;letter-spacing:1.5px;
+    text-transform:uppercase;color:var(--amber);margin-right:7px;}}
 
-  .rem{{display:flex;align-items:flex-start;gap:12px;padding:9px 0;border-bottom:1px solid var(--sand);}}
+  /* status chips — shape + label + hue (never hue alone) */
+  .chip{{font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;
+    padding:3px 8px;border-radius:var(--radius);flex-shrink:0;white-space:nowrap;border:1px solid transparent;}}
+  .chip.partial{{background:rgba(216,84,47,.14);color:#f5805a;border-color:var(--ember);}}      /* alert hue */
+  .chip.bounded{{background:transparent;color:var(--bone-soft);border-color:var(--bone-faint);}}  /* outline */
+  .chip.indef{{background:transparent;color:var(--bone-faint);border-style:dashed;border-color:var(--bone-faint);}} /* dashed = deferred */
+  .chip.build{{background:var(--amber);color:var(--ground);border-color:var(--amber-glow);}}        /* filled amber */
+  .chip.activation{{background:transparent;color:var(--amber);border-color:var(--amber);}}           /* amber outline */
+  .chip.closed{{background:var(--hair-soft);color:var(--bone-faint);border-color:var(--hair);}}
+  .chip.open{{background:var(--amber);color:var(--ground);border-color:var(--amber-glow);}}
+  .chip.proposed{{background:transparent;color:var(--bone-soft);border-color:var(--hair);}}
+  .chip.deferred{{background:transparent;color:var(--bone-faint);border-style:dashed;border-color:var(--bone-faint);}}
+  .chip.blocked{{background:rgba(216,84,47,.14);color:#f5805a;border-color:var(--ember);}}
+  .chip.other{{background:transparent;color:var(--bone-soft);border-color:var(--hair);}}
+  .chip.state{{background:transparent;color:var(--bone-soft);border-color:var(--bone-faint);}}
+
+  /* remaining-to-complete ordered list */
+  .rem{{display:flex;align-items:flex-start;gap:14px;padding:11px 0;border-bottom:1px solid var(--hair-soft);}}
   .rem:last-child{{border-bottom:none;}}
-  .rem .rn{{font-family:var(--serif);font-size:22px;color:var(--mustard);width:30px;text-align:right;
-    flex-shrink:0;line-height:1.1;}}
-  .rem .rbody{{flex:1;}}
-  .rem .rlabel{{font-size:14px;font-weight:600;color:var(--ink);}}
-  .rem .rgate{{font-size:12px;color:var(--ink-soft);margin-top:2px;line-height:1.5;}}
-  .rem .rmeta{{font-size:10.5px;color:var(--ink-soft);margin-top:2px;}}
+  .rem .rn{{font-family:var(--mono);font-weight:700;font-size:13px;color:var(--amber);width:26px;
+    text-align:right;flex-shrink:0;padding-top:2px;}}
+  .rem .rbody{{flex:1;min-width:0;}}
+  .rem .rt{{display:flex;align-items:center;gap:9px;flex-wrap:wrap;}}
+  .rem .rlabel{{font-size:14px;font-weight:600;color:var(--bone);}}
+  .rem .rgate{{font-size:12px;color:var(--bone-soft);margin-top:4px;line-height:1.55;}}
+  .rem .rmeta{{font-family:var(--mono);font-size:10.5px;color:var(--bone-faint);margin-top:4px;}}
 
-  /* misc lists */
-  .pr{{display:flex;align-items:baseline;gap:8px;padding:5px 0;font-size:13px;}}
-  .pr .dot{{font-size:9px;}}
-  .pr .dot.passing{{color:#5a7a2e;}} .pr .dot.running{{color:var(--mustard);}}
-  .pr .dot.failing{{color:var(--terracotta);}} .pr .dot.none{{color:var(--ink-faint);}}
-  .recent{{padding:9px 0;border-bottom:1px solid var(--sand);}}
-  .recent:last-child{{border-bottom:none;}}
-  .recent .rh{{font-family:var(--serif);font-size:14px;color:var(--ink);}}
-  .recent .rd{{font-size:11px;color:var(--ink-soft);}}
-  .recent .rn2{{font-size:12px;color:var(--ink-soft);margin-top:3px;line-height:1.55;}}
-  .gate{{padding:7px 0;font-size:13px;border-bottom:1px solid var(--sand);}}
+  /* status-board surfaces */
+  .surf{{margin-bottom:20px;}}
+  .surf .stitle{{font-family:var(--disp);font-weight:600;font-size:15px;letter-spacing:.7px;
+    text-transform:uppercase;color:var(--bone);margin-bottom:8px;display:flex;align-items:baseline;gap:8px;}}
+  .surf .stitle .ct{{font-family:var(--mono);font-size:10px;color:var(--bone-faint);font-weight:400;letter-spacing:1px;}}
+  .rows{{border-left:1px solid var(--hair);}}
+  .r{{display:flex;align-items:flex-start;gap:11px;padding:8px 0 8px 14px;border-left:2px solid transparent;
+    margin-left:-1px;transition:border-color .16s ease,background .16s ease;}}
+  .r:hover{{background:var(--panel-hi);border-left-color:var(--amber);}}
+  .r .rmain{{flex:1;min-width:0;}}
+  .r .rt2{{font-size:13px;color:var(--bone);}}
+  .r.closed .rt2{{text-decoration:line-through;text-decoration-color:var(--bone-faint);color:var(--bone-faint);}}
+  .r .rwhy{{font-size:11.5px;color:var(--bone-soft);margin-top:3px;line-height:1.5;}}
+
+  /* prose blocks */
+  .prose{{font-size:13px;color:var(--bone-soft);line-height:1.75;}}
+  .prose strong{{color:var(--bone);}}
+  .prose li{{margin-left:20px;list-style:square;margin-top:4px;}}
+  .prose li::marker{{color:var(--amber);}}
+
+  /* small lists */
+  .pr{{display:flex;align-items:baseline;gap:9px;padding:7px 0;font-size:13px;color:var(--bone-soft);
+    border-bottom:1px solid var(--hair-soft);}}
+  .pr:last-child{{border-bottom:none;}}
+  .pr .num{{font-family:var(--mono);font-size:11px;color:var(--bone-faint);}}
+  .pr .dot{{font-size:9px;line-height:1;}}
+  .pr .dot.passing{{color:var(--amber);}} .pr .dot.running{{color:var(--amber-glow);}}
+  .pr .dot.failing{{color:var(--ember);}} .pr .dot.none{{color:var(--bone-faint);}}
+  .gate{{padding:9px 0;font-size:13px;border-bottom:1px solid var(--hair-soft);color:var(--bone-soft);}}
   .gate:last-child{{border-bottom:none;}}
-  .gate b{{font-weight:700;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--terracotta);}}
-  .muted{{color:var(--ink-soft);font-size:12.5px;}}
-  .prose{{font-size:13.5px;color:var(--ink-soft);line-height:1.7;}}
-  .prose strong{{color:var(--ink);font-weight:600;}}
-  .prose code{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86em;
-    background:var(--paper);border:1px solid var(--sand);border-radius:3px;padding:.5px 4px;color:#7a5a12;}}
-  .prose li{{margin-left:18px;list-style:disc;}}
+  .gate b{{font-family:var(--mono);font-weight:700;font-size:9.5px;letter-spacing:1.5px;
+    text-transform:uppercase;color:var(--amber);}}
+  .recent{{padding:13px 0;border-bottom:1px solid var(--hair-soft);}}
+  .recent:last-child{{border-bottom:none;}}
+  .recent .rh{{font-family:var(--disp);font-weight:700;font-size:16px;letter-spacing:.4px;color:var(--bone);}}
+  .recent .rd{{font-family:var(--mono);font-size:10.5px;color:var(--bone-faint);margin-left:8px;}}
+  .recent .rn2{{font-size:12px;color:var(--bone-soft);margin-top:5px;line-height:1.6;}}
+  .muted{{color:var(--bone-faint);font-family:var(--mono);font-size:11px;}}
+  .chartnote{{padding:28px;text-align:center;color:var(--bone-faint);font-family:var(--mono);
+    font-size:11.5px;letter-spacing:.5px;border:1px dashed var(--hair);border-radius:var(--radius);}}
 
-  footer{{margin-top:48px;padding-top:18px;border-top:1.5px solid var(--sand);
-    font-size:11px;color:var(--ink-soft);letter-spacing:.3px;}}
-  footer code{{color:var(--ink-soft);}}
+  footer{{margin-top:54px;padding-top:18px;border-top:1px solid var(--hair);
+    font-family:var(--mono);font-size:10.5px;color:var(--bone-faint);letter-spacing:.5px;line-height:1.8;}}
+  footer code{{color:var(--bone-soft);background:transparent;border:none;padding:0;}}
 
-  :focus-visible{{outline:2.5px solid var(--mustard);outline-offset:2px;border-radius:3px;}}
+  :focus-visible{{outline:2px solid var(--amber);outline-offset:2px;border-radius:var(--radius);}}
 
-  @media(max-width:760px){{
-    .grid2,.grid-hero{{grid-template-columns:1fr;}}
+  @media(max-width:768px){{
+    .grid2,.gridHero{{grid-template-columns:1fr;}}
     .waffle{{grid-template-columns:repeat(12,1fr);}}
-    .shead .htxt{{font-size:20px;}} .stat .big{{font-size:38px;}}
+    .brand{{font-size:27px;}} .meter .big{{font-size:50px;}}
+    .readout{{text-align:left;}} .top .row1{{align-items:flex-start;}}
+    .tick b{{font-size:17px;}}
   }}
   @media(prefers-reduced-motion:reduce){{
-    html{{scroll-behavior:auto;}} .row{{transition:none;}}
+    html{{scroll-behavior:auto;}} .r{{transition:none;}}
+    body>.wrap>main>*{{animation:none;}}
   }}
 </style>
 </head>
 <body>
-<header class="topbar">
+<header class="top">
   <div class="inner">
-    <span class="brand">Harness roadmap <em>— operator dashboard</em></span>
-    <span class="anchor" id="anchor"></span>
+    <div class="row1">
+      <div class="brand">Harness <span class="sig">Roadmap</span>
+        <span class="sub">OPERATOR CONSOLE / INSTRUMENT LEDGER</span>
+      </div>
+      <div class="readout mono">
+        <div><span class="lab">HEAD</span> <span class="v" id="ro-head"></span> (main)</div>
+        <div><span class="lab">LAST</span> <span id="ro-last"></span></div>
+        <div><span class="lab">HASH</span> <span class="v" id="ro-hash"></span> <span class="lab">/</span> <span id="ro-when"></span></div>
+        <div><span class="lab">OPEN FORKS</span> <span class="v" id="ro-forks"></span></div>
+      </div>
+    </div>
+    <div class="ticks">
+      <div class="tick sig">build closure <b id="tk-build"></b></div>
+      <div class="tick">retired <b id="tk-retired"></b></div>
+      <div class="tick ember">unretired <b id="tk-unret"></b></div>
+      <div class="tick">activation <b id="tk-activation"></b></div>
+      <div class="tick">drift events <b id="tk-drift"></b></div>
+    </div>
   </div>
 </header>
 
@@ -709,45 +796,45 @@ HTML_TEMPLATE = """<!doctype html>
 
     <section>
       <div class="shead"><span class="num">02</span><span class="htxt">Next action</span><span class="rule"></span></div>
-      <div class="card"><div id="next-action" class="prose"></div></div>
+      <div class="panel lit"><div id="next-action" class="prose"></div></div>
     </section>
 
     <section>
       <div class="shead"><span class="num">03</span><span class="htxt">R-NNN status board</span><span class="rule"></span></div>
-      <div class="card"><div id="status-board"></div></div>
+      <div class="panel"><div id="status-board"></div></div>
     </section>
 
     <section id="pp8-card">
       <div class="shead"><span class="num">04</span><span class="htxt">Post-Phase-8 forward register</span><span class="rule"></span></div>
-      <div class="card"><div id="pp8-summary" class="prose" style="margin-bottom:14px"></div><div id="pp8-board"></div></div>
+      <div class="panel"><div id="pp8-summary" class="prose" style="margin-bottom:16px"></div><div id="pp8-board"></div></div>
     </section>
 
     <div class="grid2">
       <section style="margin-top:0">
         <div class="shead"><span class="num">05</span><span class="htxt">In-flight PRs</span><span class="rule"></span></div>
-        <div class="card"><div id="prs"></div></div>
+        <div class="panel"><div id="prs"></div></div>
       </section>
       <section style="margin-top:0">
         <div class="shead"><span class="num">06</span><span class="htxt">Operator gates</span><span class="rule"></span></div>
-        <div class="card"><div id="gates"></div></div>
+        <div class="panel"><div id="gates"></div></div>
       </section>
     </div>
 
     <div class="grid2">
       <section style="margin-top:0">
         <div class="shead"><span class="num">07</span><span class="htxt">Commit cadence</span><span class="rule"></span></div>
-        <div class="card"><canvas id="cadence" height="120"></canvas></div>
+        <div class="panel"><canvas id="cadence" height="120"></canvas></div>
       </section>
       <section style="margin-top:0">
         <div class="shead"><span class="num">08</span><span class="htxt">Recently completed</span><span class="rule"></span></div>
-        <div class="card"><div id="recent"></div></div>
+        <div class="panel"><div id="recent"></div></div>
       </section>
     </div>
 
     <footer>
-      Drift-log events: <span id="drift-count"></span> ·
-      generated by <code>tools/dashboard/generate.py</code> (R-XI-01) ·
-      design: Mustard Editorial (dashboard-design/DESIGN.md) ·
+      Drift-log events: <span class="mono" style="color:var(--amber)" id="drift-count"></span> &nbsp;/&nbsp;
+      generated by <code>tools/dashboard/generate.py</code> (R-XI-01) &nbsp;/&nbsp;
+      design: Almanac Noir / instrument ledger (candidate B) &nbsp;/&nbsp;
       static read-only snapshot — refresh via the generator / Pages deploy.
     </footer>
   </main>
@@ -765,10 +852,23 @@ function mdLite(s) {{
   return h;
 }}
 
-// anchor
+// masthead readout + ticks (instrument-ledger header)
 const d = DATA.dashboard || {{}};
-document.getElementById("anchor").innerHTML =
-  `head <code>${{esc(d.git_head)}}</code> · hash <code>${{esc(d.hash)}}</code> · ${{esc(d.last_refreshed)}} · ${{esc(d.fork_count)}} open forks`;
+(function() {{
+  const cl = DATA.closure || {{}}, b = cl.build || {{}}, ac = cl.activation || {{}}, w = b.waffle || {{}};
+  const set = (id, html) => {{ const el = document.getElementById(id); if (el) el.innerHTML = html; }};
+  const rc0 = (d.recently_completed || [])[0] || null;
+  set("ro-head", esc(d.git_head));
+  set("ro-last", rc0 ? `${{esc(rc0.pr)}} — ${{esc(rc0.note).slice(0,90)}}${{rc0.note && rc0.note.length>90?'…':''}}` : "—");
+  set("ro-hash", esc(d.hash));
+  set("ro-when", esc(d.last_refreshed));
+  set("ro-forks", esc(d.fork_count));
+  set("tk-build", `${{b.pct_lo}}–${{b.pct_hi}}%`);
+  set("tk-retired", `${{w.retired||0}} / ${{w.total||b.total||0}}`);
+  set("tk-unret", `${{(b.nonretired||[]).length}} rows`);
+  set("tk-activation", `${{ac.exercised_pct||0}}% exercised`);
+  set("tk-drift", `${{d.drift_log_count ?? 0}}`);
+}})();
 
 // next action
 document.getElementById("next-action").innerHTML = mdLite(d.next_action);
@@ -777,6 +877,7 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
 (function() {{
   const cl = DATA.closure || {{}}, b = cl.build || {{}}, ac = cl.activation || {{}}, w = b.waffle || {{}};
   const stateClass = {{ "PARTIAL":"partial", "STILL-BOUNDED":"bounded", "STILL-BOUNDED-INDEFINITELY":"indef" }};
+  const pad2 = (n) => String(n).padStart(2, "0");
   // waffle cells
   let cells = "";
   for (let i=0;i<(w.retired||0);i++) cells += '<div class="cell retired"></div>';
@@ -784,54 +885,51 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
   for (let i=0;i<(w.still_bounded||0);i++) cells += '<div class="cell bounded"></div>';
   for (let i=0;i<(w.sb_indef||0);i++) cells += '<div class="cell indef"></div>';
   const legend =
-    `<span><i style="background:var(--mustard)"></i>retired ${{w.retired||0}}</span>` +
-    `<span><i style="background:var(--terracotta)"></i>partial ${{w.partial||0}}</span>` +
-    `<span><i style="background:var(--ink-soft)"></i>still-bounded ${{w.still_bounded||0}}</span>` +
-    `<span><i style="background:var(--sand);border:1px dashed var(--ink-faint)"></i>indefinite ${{w.sb_indef||0}}</span>`;
+    `<span><i style="background:var(--amber)"></i>retired <span class="n">${{w.retired||0}}</span></span>` +
+    `<span><i style="background:var(--ember)"></i>partial <span class="n">${{w.partial||0}}</span></span>` +
+    `<span><i style="background:var(--bone-faint)"></i>still-bounded <span class="n">${{w.still_bounded||0}}</span></span>` +
+    `<span><i style="background:transparent;border:1px dashed var(--bone-faint)"></i>indefinite <span class="n">${{w.sb_indef||0}}</span></span>`;
 
   const nonret = (b.nonretired||[]).map(r => `
     <div class="led">
       <div class="lh"><span class="lid">${{esc(r.id)}}</span>
-        <span class="chip state">${{esc(r.state)}}</span>
+        <span class="chip ${{stateClass[r.state]||'bounded'}}">${{esc(r.state)}}</span>
         <span class="muted">${{esc(r.rnnn)}}</span></div>
       <div class="lwhy">${{esc(r.why)}}</div>
-      <div class="lretire"><b>retire?</b>${{esc(r.retire)}}</div>
+      <div class="lret"><b>retire?</b>${{esc(r.retire)}}</div>
     </div>`).join("");
 
   const rem = (cl.remaining||[]).map(r => `
-    <div class="rem">
-      <span class="rn">${{r.n}}</span>
-      <div class="rbody">
-        <div><span class="rlabel">${{esc(r.label)}}</span> <span class="chip ${{r.layer==='build'?'build':'activation'}}">${{esc(r.layer)}}</span></div>
-        <div class="rgate">${{esc(r.gate)}}</div>
-        <div class="rmeta">${{esc(r.id)}}</div>
-      </div>
-    </div>`).join("");
+    <div class="rem"><span class="rn">${{pad2(r.n)}}</span><div class="rbody">
+      <div class="rt"><span class="rlabel">${{esc(r.label)}}</span> <span class="chip ${{r.layer==='build'?'build':'activation'}}">${{esc(r.layer)}}</span></div>
+      <div class="rgate">${{esc(r.gate)}}</div>
+      <div class="rmeta">${{esc(r.id)}}</div>
+    </div></div>`).join("");
 
   document.getElementById("closure").innerHTML = `
-    <div class="grid-hero">
-      <div class="card stat build">
-        <div class="k">Build closure — is the harness built?</div>
-        <div class="big">${{b.pct_lo}}<span class="unit">–${{b.pct_hi}}%</span></div>
-        <div class="sub"><strong>${{b.lo}}–${{b.hi}} of ${{b.total}}</strong> substitutions retired. A range, not a single number, because the final count is unratified — <strong>R-700, your sign-off</strong> (46/47/48). The 8 rows below are what remain.</div>
-        <div class="bar"><span style="width:${{b.pct_lo}}%"></span></div>
-        <div class="waffle" role="img" aria-label="${{w.retired}} of ${{w.total}} substitutions retired — ${{w.partial}} partial, ${{w.still_bounded}} still-bounded, ${{w.sb_indef}} indefinite">${{cells}}</div>
+    <div class="gridHero">
+      <div class="panel lit meter">
+        <div class="k">Build closure / is the harness built?</div>
+        <div class="big">${{b.pct_lo}}<span class="u">–${{b.pct_hi}}%</span></div>
+        <div class="sub"><strong>${{b.lo}}–${{b.hi}} of ${{b.total}}</strong> substitutions retired. A range, not a single number, because the final count is unratified: <strong>R-700, your sign-off</strong> (46/47/48). The 8 rows below are what remain.</div>
+        <div class="gaugebar"><span style="width:${{b.pct_lo}}%"></span></div>
+        <div class="waffle" role="img" aria-label="${{w.total}} substitution cells: ${{w.retired}} retired, ${{w.partial}} partial, ${{w.still_bounded}} still-bounded, ${{w.sb_indef}} indefinite">${{cells}}</div>
         <div class="legend">${{legend}}</div>
       </div>
-      <div class="card stat">
+      <div class="panel meter cold">
         <div class="k">Activation / deployment closure</div>
-        <div class="big">0<span class="unit">% exercised</span></div>
-        <div class="sub"><strong>${{ac.open}} of ${{ac.total}}</strong> forward items open. This is <strong>not remaining build work</strong> — it is operator-gated (credentials + infrastructure that cannot run in this workspace) and bounded-residual by design.</div>
-        <div class="pull">"The harness is built; this axis switches on at a real deployment."</div>
+        <div class="sub">Operator-gated: credentials + infrastructure that cannot run in this workspace. The <strong>${{ac.open}} of ${{ac.total}}</strong> open forward items are bounded-residual by design, <strong>not remaining build work</strong>.</div>
+        <div class="big">${{ac.exercised_pct||0}}<span class="u">% exercised</span></div>
+        <div class="quote">"The harness is built; this axis switches on at a real deployment."</div>
       </div>
     </div>
-    <div class="grid2" style="margin-top:22px">
-      <div class="card">
-        <div class="label" style="margin-bottom:12px">Unretired substitutions (8) — state · why · can we retire?</div>
+    <div class="grid2" style="margin-top:20px">
+      <div class="panel">
+        <div class="label" style="margin-bottom:14px">Unretired substitutions (${{(b.nonretired||[]).length}}) / state, why, can we retire?</div>
         ${{nonret}}
       </div>
-      <div class="card">
-        <div class="label" style="margin-bottom:12px">Remaining to complete — ordered by logical flow</div>
+      <div class="panel">
+        <div class="label" style="margin-bottom:14px">Remaining to complete / ordered by logical flow</div>
         ${{rem}}
       </div>
     </div>`;
@@ -839,20 +937,20 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
 
 // ---- item row (R-NNN board + register) ----
 function itemRow(a) {{
-  const title = `<span class="rid">${{esc(a.id)}}</span>`;
   if (a.rkind === "closed") {{
-    return `<div class="row closed"><div class="rmain"><span class="rt">${{esc(a.title)}}</span></div><span class="chip closed">closed</span></div>`;
+    return `<div class="r closed"><div class="rmain"><span class="rt2">${{esc(a.title)}}</span></div><span class="chip closed">closed</span></div>`;
   }}
   if (a.rkind === "open") {{
-    return `<div class="row"><div class="rmain"><span class="rt">${{esc(a.title)}}</span></div><span class="chip open">open</span></div>`;
+    return `<div class="r"><div class="rmain"><span class="rt2">${{esc(a.title)}}</span></div><span class="chip open">open</span></div>`;
   }}
-  const chipClass = a.status === "BLOCKED" ? "blocked" : "other";
+  const CHIP = {{ BLOCKED:"blocked", DEFERRED:"deferred", PROPOSED:"proposed" }};
+  const chipClass = CHIP[a.status] || "other";
   const why = a.why ? `<div class="rwhy">${{esc(a.why)}}</div>` : "";
-  return `<div class="row"><div class="rmain"><span class="rt">${{esc(a.title)}}</span>${{why}}</div><span class="chip ${{chipClass}}">${{esc(a.rword)}}</span></div>`;
+  return `<div class="r"><div class="rmain"><span class="rt2">${{esc(a.title)}}</span>${{why}}</div><span class="chip ${{chipClass}}">${{esc(a.rword)}}</span></div>`;
 }}
 const STATUS_RANK = {{ ACTIVE:0, "APPLIED-PENDING-OPERATOR-E2E":1, PROPOSED:2, BLOCKED:3, DEFERRED:4, RESOLVED:5, CANCELLED:6 }};
 function rowsFor(items) {{
-  return items.slice().sort((a,b)=>(STATUS_RANK[a.status]??9)-(STATUS_RANK[b.status]??9) || a.id.localeCompare(b.id)).map(a=>`<div class="row-id-wrap">${{itemRow(a)}}</div>`).join("");
+  return items.slice().sort((a,b)=>(STATUS_RANK[a.status]??9)-(STATUS_RANK[b.status]??9) || a.id.localeCompare(b.id)).map(a=>itemRow(a)).join("");
 }}
 
 // status board grouped by surface
@@ -860,46 +958,46 @@ const bySurface = {{}};
 for (const a of (DATA.actions||[])) {{ (bySurface[a.surface || "?"] ||= []).push(a); }}
 document.getElementById("status-board").innerHTML = Object.keys(bySurface).sort().map(surf => {{
   const items = bySurface[surf];
-  return `<div class="surf"><div class="stitle">Surface ${{esc(surf)}} <span class="muted">(${{items.length}})</span></div><div class="rows">${{rowsFor(items)}}</div></div>`;
+  return `<div class="surf"><div class="stitle">Surface ${{esc(surf)}} <span class="ct">(${{items.length}})</span></div><div class="rows">${{rowsFor(items)}}</div></div>`;
 }}).join("");
 
 // post-Phase-8 register
 const pp8 = DATA.post_phase_8 || {{}}, pp8g = pp8.groups || {{}};
 const PP8_NAMES = {{ IV:"Multi-LLM (IV)", V:"Multi-deployment (V)", VI:"Multi-tenant (VI)", IX:"External integrations (IX)", X:"Research (X)", CXA:"Cross-axis seams" }};
 document.getElementById("pp8-summary").innerHTML =
-  `<strong>${{pp8.count||0}} forward items</strong> across ${{Object.keys(pp8g).length}} groups — full detail at <code>${{esc(pp8.register||"")}}</code>. Phase 8 closed the substitution accounting; these are the activation / deployment / integration axis, tracked under the same R-NNN discipline.`;
+  `<strong>${{pp8.count||0}} forward items</strong> across ${{Object.keys(pp8g).length}} groups, full detail at <code>${{esc(pp8.register||"")}}</code>. Phase 8 closed the substitution accounting; these are the activation / deployment / integration axis, tracked under the same R-NNN discipline.`;
 document.getElementById("pp8-board").innerHTML = Object.keys(pp8g).sort().map(g => {{
   const items = pp8g[g];
-  return `<div class="surf"><div class="stitle">${{esc(PP8_NAMES[g]||g)}} <span class="muted">(${{items.length}})</span></div><div class="rows">${{rowsFor(items)}}</div></div>`;
+  return `<div class="surf"><div class="stitle">${{esc(PP8_NAMES[g]||g)}} <span class="ct">(${{items.length}})</span></div><div class="rows">${{rowsFor(items)}}</div></div>`;
 }}).join("");
 
 // PRs
 const prs = DATA.open_prs || [];
 document.getElementById("prs").innerHTML = prs.length ? prs.map(p =>
-  `<div class="pr"><span class="muted">#${{p.number}}</span><span class="dot ${{p.ci}}">●</span><span>${{esc(p.title)}} ${{p.draft?'<span class="muted">(draft)</span>':''}}</span></div>`
+  `<div class="pr"><span class="num">#${{p.number}}</span><span class="dot ${{p.ci}}">●</span><span>${{esc(p.title)}} ${{p.draft?'<span class="muted">(draft)</span>':''}}</span></div>`
 ).join("") : '<div class="muted">none open</div>';
 
 // gates
 const gates = DATA.operator_gates || [];
 document.getElementById("gates").innerHTML = gates.length ? gates.map(g =>
-  `<div class="gate"><b>${{esc(g.id)}}</b> — ${{mdLite(g.gate)}}</div>`
+  `<div class="gate"><b>${{esc(g.id)}}</b> &nbsp; ${{mdLite(g.gate)}}</div>`
 ).join("") : '<div class="muted">none</div>';
 
 // recently completed
 document.getElementById("recent").innerHTML = (d.recently_completed || []).map(rc =>
-  `<div class="recent"><span class="rh">${{esc(rc.pr)}}</span> <span class="rd">${{esc(rc.date)}}</span><div class="rn2">${{mdLite(rc.note)}}</div></div>`
+  `<div class="recent"><span class="rh">${{esc(rc.pr)}}</span><span class="rd mono">${{esc(rc.date)}}</span><div class="rn2">${{mdLite(rc.note)}}</div></div>`
 ).join("");
 
 document.getElementById("drift-count").textContent = d.drift_log_count ?? 0;
 
-// cadence — warm restyle
+// cadence — instrument-ledger restyle (amber bars on dark ground)
 const cad = DATA.cadence || [];
 new Chart(document.getElementById("cadence"), {{
   type: "bar",
-  data: {{ labels: cad.map(x=>x.date.slice(5)), datasets:[{{ data: cad.map(x=>x.count), backgroundColor:"#E0A82E", borderRadius:2 }}] }},
+  data: {{ labels: cad.map(x=>x.date.slice(5)), datasets:[{{ data: cad.map(x=>x.count), backgroundColor:"#f0a830", borderRadius:1 }}] }},
   options: {{ plugins:{{legend:{{display:false}}}}, animation:false,
-    scales:{{ x:{{ ticks:{{color:"#9A8E76",maxTicksLimit:8,font:{{size:9}}}},grid:{{display:false}} }},
-              y:{{ ticks:{{color:"#9A8E76",precision:0}},grid:{{color:"#D8CFBC"}} }} }} }}
+    scales:{{ x:{{ ticks:{{color:"#7d745f",maxTicksLimit:8,font:{{size:9,family:"'JetBrains Mono',monospace"}}}},grid:{{display:false}} }},
+              y:{{ ticks:{{color:"#7d745f",precision:0,font:{{family:"'JetBrains Mono',monospace"}}}},grid:{{color:"#2a251e"}} }} }} }}
 }});
 </script>
 </body>
