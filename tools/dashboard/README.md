@@ -2,7 +2,13 @@
 
 A single-page, at-a-glance view of harness development status, generated from the
 roadmap substrate. No build step, no bundler — `generate.py` emits one
-self-contained `roadmap.html` (Tailwind + Chart.js via CDN).
+self-contained `roadmap.html` (hand-authored CSS + Chart.js via CDN).
+
+**Canonical design: Almanac Noir / instrument ledger** (candidate B). Visual
+design changes go through the **4-skill autonomous loop**, not hand-edits —
+see `../../dashboard-design/DISCIPLINE.md` (the rule) + `live-auto/RUNBOOK.md`
+(the how-to). A persistent live copy runs at **http://localhost:8137/** (launchd
+service, regenerated from live data on every page load).
 
 ## What it surfaces
 
@@ -45,7 +51,18 @@ a fresh copy on deploy. `tools/dashboard/public/` is the ephemeral Pages build d
 Until then the workflow's `deploy` job fails (expected); the `build` job still validates the
 generator. Once enabled, the dashboard lives at `https://thestoryportal.github.io/arhugula-harness/`.
 
+## Design discipline
+
+Visual design is **not** hand-edited. Any change to the dashboard's look goes
+through the **4-skill autonomous loop** (`impeccable` + `design-taste-frontend` +
+`ui-ux-pro-max` + `frontend-design`) at `live-auto/`. Data/functional wiring in
+`generate.py` (new sections, series, parsing) is authored directly; the visual
+elevation of those elements is produced by the loop. See
+`../../dashboard-design/DISCIPLINE.md` + `live-auto/RUNBOOK.md`.
+
 ## Roadmap
 
-R-XI-01 = this MVP. R-XI-02 (dependency-graph viz via Mermaid + richer sparklines) and
-R-XI-03 (live-update mode) are follow-on iterations.
+R-XI-01 = the MVP. R-XI-04/05/06 = closure section + Mustard redesign + polish
+(superseded by the Almanac Noir canonical). R-XI-02 (dependency-graph viz via
+Mermaid + richer sparklines) and R-XI-03 (live-update mode) are follow-on
+iterations.
