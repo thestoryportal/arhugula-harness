@@ -335,6 +335,7 @@ def parse_roadmap_actions(text: str) -> list[dict]:
     """Parse the R-NNN entries from the roadmap §5 catalog (YAML-ish blocks)."""
     actions: list[dict] = []
     cur: dict | None = None
+    in_mustpass = False  # collecting the verification.must_pass YAML list
     for line in text.split("\n"):
         m = re.match(r"^([A-Za-z0-9-]*R-[A-Za-z0-9-]+):\s*$", line)
         if m:
@@ -344,22 +345,40 @@ def parse_roadmap_actions(text: str) -> list[dict]:
                 "surface": "",
                 "status": "",
                 "depends_on": [],
+                "blocks": [],
                 "posture": "",
+                "advisor_required": "",
+                "council_required": "",
+                "must_pass": [],
             }
             actions.append(cur)
+            in_mustpass = False
             continue
         if cur is None:
             continue
-        for key in ("title", "surface", "posture"):
+        # must_pass is a nested YAML list under `verification:` — collect its
+        # `- "..."` items until the next key / blank-terminated dedent.
+        if in_mustpass:
+            if re.match(r"^\s+-\s+", line):
+                cur["must_pass"].append(re.sub(r"^\s+-\s+", "", line).strip().strip('"'))
+                continue
+            if line.strip() == "":
+                continue
+            in_mustpass = False  # fall through to parse this line normally
+        if re.match(r"^\s+must_pass:\s*$", line):
+            in_mustpass = True
+            continue
+        for key in ("title", "surface", "posture", "advisor_required", "council_required"):
             mm = re.match(rf"^\s+{key}:\s*(.+?)\s*(#.*)?$", line)
             if mm and not cur[key]:
                 cur[key] = mm.group(1).strip().strip('"')
         ms = re.match(r"^\s+status:\s*(.+?)\s*(#.*)?$", line)
         if ms and not cur["status"]:
             cur["status"] = ms.group(1).split()[0].strip('"').upper()
-        md = re.match(r"^\s+depends_on:\s*\[(.*)\]", line)
-        if md and not cur["depends_on"]:
-            cur["depends_on"] = [d.strip() for d in md.group(1).split(",") if d.strip()]
+        for key in ("depends_on", "blocks"):
+            md = re.match(rf"^\s+{key}:\s*\[(.*)\]", line)
+            if md and not cur[key]:
+                cur[key] = [d.strip() for d in md.group(1).split(",") if d.strip()]
     # drop the schema-enum pseudo-entry if present
     return [a for a in actions if not a["status"].startswith("<")]
 
@@ -502,6 +521,156 @@ def parse_cadence(root: Path, days: int = 30) -> list[dict]:
 
 
 # --------------------------------------------------------------------------- #
+# Source 4b — PR-merge cadence (R-XI-02): daily count of merged PRs, last 30d.
+# --------------------------------------------------------------------------- #
+def parse_pr_cadence(root: Path, days: int = 30) -> list[dict]:
+    """Daily count of merged PRs — commits whose subject ends `(#NN)`."""
+    raw = _run(
+        ["git", "log", f"--since={days}.days", "--date=short", "--pretty=format:%ad %s"],
+        cwd=root,
+    )
+    counts: dict[str, int] = {}
+    for line in raw.split("\n"):
+        mm = re.match(r"^(\d{4}-\d{2}-\d{2})\s+.*\(#\d+\)\s*$", line)
+        if mm:
+            counts[mm.group(1)] = counts.get(mm.group(1), 0) + 1
+    try:
+        today = date.fromisoformat(max(counts)) if counts else date.today()
+    except ValueError:
+        today = date.today()
+    series = []
+    for i in range(days - 1, -1, -1):
+        d = (today - timedelta(days=i)).isoformat()
+        series.append({"date": d, "count": counts.get(d, 0)})
+    return series
+
+
+# --------------------------------------------------------------------------- #
+# Source 4c — RETIRED-count trend (R-XI-02): cumulative retirement over time.
+# Each `phase-7d-retirement-events-batch-N.md` carries an `N/54`-style cumulative
+# fraction; date each file by its first commit, take the max plausible numerator
+# (denominator 49-54), carried forward monotonically. Degrades to batch-ordinal
+# x with empty dates when git history is shallow/unavailable.
+# --------------------------------------------------------------------------- #
+def parse_retired_trend(root: Path) -> list[dict]:
+    bdir = root / ".harness"
+    if not bdir.is_dir():
+        return []
+
+    def _batch_no(p: Path) -> int:
+        mb = re.search(r"batch-(\d+)", p.name)
+        return int(mb.group(1)) if mb else 0
+
+    files = sorted(bdir.glob("phase-7d-retirement-events-batch-*.md"), key=_batch_no)
+    series: list[dict] = []
+    running = 0
+    for p in files:
+        added = (
+            _run(
+                [
+                    "git",
+                    "log",
+                    "--diff-filter=A",
+                    "--reverse",
+                    "--format=%ad",
+                    "--date=short",
+                    "--",
+                    str(p.relative_to(root)),
+                ],
+                cwd=root,
+            )
+            .split("\n")[0]
+            .strip()
+        )
+        try:
+            body = p.read_text(encoding="utf-8")
+        except OSError:
+            body = ""
+        # Parse the cumulative RETIRED count, tied specifically to the word
+        # "RETIRED" — NOT any `/5x` fraction (batch prose also carries
+        # "pipeline-advanced 49/54", "RETIRE-READY 2/54", etc.). Two canonical
+        # phrasings: a transition arrow ("RETIRED 46/54 -> 48/54", post-arrow is
+        # the new cumulative) and a headline ("48/54 RETIRED").
+        cands = [
+            int(x)
+            for x in re.findall(
+                r"RETIRED[^.\n]{0,40}?\d+\s*/\s*5[0-4]\s*(?:→|->)\s*\*{0,2}(\d+)\s*/\s*5[0-4]",
+                body,
+            )
+        ]
+        cands += [int(x) for x in re.findall(r"(\d+)\s*/\s*5[0-4]\s+RETIRED\b", body)]
+        if cands:
+            running = max(running, max(cands))
+        series.append({"batch": _batch_no(p), "date": added, "retired": running})
+    return series
+
+
+# --------------------------------------------------------------------------- #
+# Dependency graph (R-XI-02): Mermaid flowchart + per-node schema for the
+# click-to-inspect panel. Edges run prerequisite -> dependent (depends_on),
+# restricted to known nodes so no phantom nodes are auto-created.
+# --------------------------------------------------------------------------- #
+_DEPGRAPH_STATUS_CLASS = {
+    "RESOLVED": "resolved",
+    "CANCELLED": "resolved",
+    "ACTIVE": "active",
+    "APPLIED-PENDING-OPERATOR-E2E": "active",
+    "BLOCKED": "blocked",
+    "PROPOSED": "proposed",
+    "DEFERRED": "deferred",
+}
+
+
+def _short_id(rid: str) -> str:
+    """R-300-multi-llm-... -> R-300 ; R-CXA-1-as-is -> R-CXA-1 ; R-XI-02 -> R-XI-02."""
+    parts = rid.split("-")
+    if len(parts) >= 2 and parts[0] == "R":
+        if parts[1].isdigit():
+            return f"R-{parts[1]}"
+        if len(parts) >= 3 and parts[2].isdigit():
+            return f"R-{parts[1]}-{parts[2]}"
+        return f"R-{parts[1]}"
+    return rid
+
+
+def build_depgraph(actions: list[dict]) -> dict:
+    idmap = {a["id"]: f"n{k}" for k, a in enumerate(actions)}
+    lines = ["graph LR"]
+    lines += [
+        "  classDef resolved fill:#221d16,stroke:#3a342a,color:#7d745f;",
+        "  classDef active fill:#f0a830,stroke:#ffc14d,color:#15120d;",
+        "  classDef blocked fill:#3a1f17,stroke:#d8542f,color:#e8e0cf;",
+        "  classDef proposed fill:#1c1812,stroke:#7d745f,color:#b3a98f;",
+        "  classDef deferred fill:#1c1812,stroke:#3a342a,color:#7d745f,stroke-dasharray:3 3;",
+    ]
+    schema: dict[str, dict] = {}
+    for a in actions:
+        nid = idmap[a["id"]]
+        lines.append(f'  {nid}["{_short_id(a["id"])}"]')
+        schema[nid] = {
+            "id": a["id"],
+            "title": a["title"],
+            "status": a["status"],
+            "surface": a["surface"],
+            "posture": a["posture"],
+            "depends_on": a["depends_on"],
+            "blocks": a["blocks"],
+            "must_pass": a["must_pass"],
+            "advisor": a["advisor_required"],
+            "council": a["council_required"],
+        }
+    for a in actions:
+        for dep in a["depends_on"]:
+            if dep in idmap:
+                lines.append(f"  {idmap[dep]} --> {idmap[a['id']]}")
+    for a in actions:
+        nid = idmap[a["id"]]
+        lines.append(f"  class {nid} {_DEPGRAPH_STATUS_CLASS.get(a['status'], 'proposed')};")
+        lines.append(f"  click {nid} nodeClick")
+    return {"mermaid": "\n".join(lines), "schema": schema}
+
+
+# --------------------------------------------------------------------------- #
 # Source 5 — per-axis retirement enumeration from harness-*/CLAUDE.md §4.1.
 # --------------------------------------------------------------------------- #
 def parse_axis_retirement(root: Path) -> list[dict]:
@@ -551,6 +720,7 @@ HTML_TEMPLATE = """<!doctype html>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet"/>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <style>
   :root{{
     --ground:#15120d;        /* warm near-black ~oklch(0.19 0.02 70) */
@@ -750,6 +920,20 @@ HTML_TEMPLATE = """<!doctype html>
 
   :focus-visible{{outline:2px solid var(--amber);outline-offset:2px;border-radius:var(--radius);}}
 
+  /* R-XI-02 — dependency graph + click-to-inspect panel (scaffold; loop elevates) */
+  .depgraph-wrap{{overflow:auto;border:1px solid var(--hair);border-radius:var(--radius);background:var(--ground);padding:12px;max-height:600px;}}
+  .mermaid-host{{min-width:640px;}}
+  .mermaid-host svg{{max-width:none;height:auto;}}
+  .dep-panel{{margin-top:14px;border:1px solid var(--hair);border-left:2px solid var(--amber);border-radius:var(--radius);background:var(--panel-hi);padding:14px 16px;}}
+  .dep-panel .dp-head{{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}}
+  .dep-panel .dp-id{{font-family:var(--mono);font-size:13px;color:var(--amber);}}
+  .dep-panel .dp-title{{font-family:var(--disp);font-size:18px;color:var(--bone);margin-top:6px;}}
+  .dep-panel .dp-grid{{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;margin-top:10px;font-size:12.5px;color:var(--bone-soft);}}
+  .dep-panel .lab{{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--bone-faint);font-weight:700;margin-right:6px;}}
+  .dep-panel ul.mp{{margin:4px 0 0 0;}}
+  .dep-panel ul.mp li{{margin-left:18px;list-style:square;font-size:12.5px;color:var(--bone-soft);line-height:1.55;}}
+  .dep-panel code{{font-family:var(--mono);font-size:11px;color:var(--amber-glow);background:var(--ground);border:1px solid var(--hair);border-radius:2px;padding:1px 4px;}}
+
   @media(max-width:768px){{
     .grid2,.gridHero{{grid-template-columns:1fr;}}
     .waffle{{grid-template-columns:repeat(12,1fr);}}
@@ -828,6 +1012,26 @@ HTML_TEMPLATE = """<!doctype html>
       <section style="margin-top:0">
         <div class="shead"><span class="num">08</span><span class="htxt">Recently completed</span><span class="rule"></span></div>
         <div class="panel"><div id="recent"></div></div>
+      </section>
+    </div>
+
+    <section id="depgraph-card">
+      <div class="shead"><span class="num">09</span><span class="htxt">Dependency graph</span><span class="rule"></span></div>
+      <div class="panel">
+        <div class="label" style="margin-bottom:12px">R-NNN dependency flow / prerequisite &rarr; dependent &nbsp;·&nbsp; click a node to inspect its discipline schema</div>
+        <div class="depgraph-wrap"><div id="depgraph" class="mermaid-host"></div></div>
+        <div id="dep-panel" class="dep-panel" hidden></div>
+      </div>
+    </section>
+
+    <div class="grid2">
+      <section style="margin-top:0">
+        <div class="shead"><span class="num">10</span><span class="htxt">PR cadence</span><span class="rule"></span></div>
+        <div class="panel"><canvas id="pr-cadence" height="120"></canvas></div>
+      </section>
+      <section style="margin-top:0">
+        <div class="shead"><span class="num">11</span><span class="htxt">Retired trend</span><span class="rule"></span></div>
+        <div class="panel"><canvas id="retired-trend" height="120"></canvas></div>
       </section>
     </div>
 
@@ -999,6 +1203,85 @@ new Chart(document.getElementById("cadence"), {{
     scales:{{ x:{{ ticks:{{color:"#7d745f",maxTicksLimit:8,font:{{size:9,family:"'JetBrains Mono',monospace"}}}},grid:{{display:false}} }},
               y:{{ ticks:{{color:"#7d745f",precision:0,font:{{family:"'JetBrains Mono',monospace"}}}},grid:{{color:"#2a251e"}} }} }} }}
 }});
+
+// ---- R-XI-02: dependency graph (Mermaid) + click-to-inspect schema panel ----
+(function() {{
+  const dg = DATA.depgraph || {{}};
+  const host = document.getElementById("depgraph");
+  const panel = document.getElementById("dep-panel");
+  if (!host || !dg.mermaid || typeof mermaid === "undefined") {{
+    if (host) host.innerHTML = '<div class="muted">dependency graph unavailable</div>';
+    return;
+  }}
+  const CHIPMAP = {{ RESOLVED:"closed", CANCELLED:"closed", ACTIVE:"open", BLOCKED:"blocked", DEFERRED:"deferred", PROPOSED:"proposed", "APPLIED-PENDING-OPERATOR-E2E":"open" }};
+  // Mermaid securityLevel:'loose' callback — arg is the node id ("nK").
+  window.nodeClick = function(nid) {{
+    const s = (dg.schema || {{}})[nid];
+    if (!s || !panel) return;
+    const list = (arr) => (arr && arr.length) ? arr.map(x=>`<code>${{esc(x)}}</code>`).join(" ") : '<span class="muted">none</span>';
+    const mp = (s.must_pass && s.must_pass.length)
+      ? `<ul class="mp">${{s.must_pass.map(x=>`<li>${{esc(x)}}</li>`).join("")}}</ul>`
+      : '<span class="muted">none listed</span>';
+    panel.hidden = false;
+    // Markup hierarchy authored by the 4-skill elevation loop (R-XI-02):
+    // lead with the human-readable title; demote the R-NNN id + status to
+    // metadata below it. Carbonize-safe — reuses existing classes, no new CSS.
+    panel.innerHTML = `
+      <div class="dp-title">${{esc(s.title)}}</div>
+      <div class="dp-head"><span class="dp-id">${{esc(s.id)}}</span>
+        <span class="chip ${{CHIPMAP[s.status]||'other'}}">${{esc(s.status||'')}}</span>
+        <span class="muted">Surface ${{esc(s.surface||'?')}} · ${{esc(s.posture||'')}}</span></div>
+      <div class="dp-grid">
+        <div><span class="lab">depends on</span> ${{list(s.depends_on)}}</div>
+        <div><span class="lab">blocks</span> ${{list(s.blocks)}}</div>
+        <div><span class="lab">advisor</span> ${{s.advisor ? esc(s.advisor) : '<span class="muted">no</span>'}}</div>
+        <div><span class="lab">council</span> ${{s.council ? esc(s.council) : '<span class="muted">no</span>'}}</div>
+      </div>
+      <div class="lab">must pass</div>${{mp}}`;
+    panel.scrollIntoView({{ behavior:"smooth", block:"nearest" }});
+  }};
+  try {{
+    mermaid.initialize({{ startOnLoad:false, securityLevel:"loose", theme:"dark",
+      themeVariables:{{ fontFamily:"'JetBrains Mono', monospace", fontSize:"12px",
+        lineColor:"#3a342a", primaryColor:"#1c1812", primaryTextColor:"#b3a98f" }} }});
+    host.textContent = dg.mermaid;
+    host.classList.add("mermaid");
+    Promise.resolve(mermaid.run({{ nodes:[host] }})).catch(() => {{
+      host.innerHTML = '<div class="muted">dependency graph unavailable</div>';
+    }});
+  }} catch (e) {{
+    host.innerHTML = '<div class="muted">dependency graph unavailable</div>';
+  }}
+}})();
+
+// ---- R-XI-02: PR-merge cadence (last 30 days) ----
+(function() {{
+  const el = document.getElementById("pr-cadence"); if (!el) return;
+  const pc = DATA.pr_cadence || [];
+  new Chart(el, {{
+    type: "bar",
+    data: {{ labels: pc.map(x=>x.date.slice(5)), datasets:[{{ data: pc.map(x=>x.count), backgroundColor:"#f0a830", borderRadius:1 }}] }},
+    options: {{ plugins:{{legend:{{display:false}}}}, animation:false,
+      scales:{{ x:{{ ticks:{{color:"#7d745f",maxTicksLimit:8,font:{{size:9,family:"'JetBrains Mono',monospace"}}}},grid:{{display:false}} }},
+                y:{{ ticks:{{color:"#7d745f",precision:0,font:{{family:"'JetBrains Mono',monospace"}}}},grid:{{color:"#2a251e"}} }} }} }}
+  }});
+}})();
+
+// ---- R-XI-02: RETIRED-count trend (cumulative, from retirement-batch files) ----
+(function() {{
+  const el = document.getElementById("retired-trend"); if (!el) return;
+  const rt = DATA.retired_trend || [];
+  new Chart(el, {{
+    type: "line",
+    data: {{ labels: rt.map(x=>"b"+x.batch), datasets:[{{ data: rt.map(x=>x.retired),
+      borderColor:"#f0a830", backgroundColor:"rgba(240,168,48,0.12)", fill:true, tension:0.25, pointRadius:0, borderWidth:2 }}] }},
+    options: {{ plugins:{{ legend:{{display:false}},
+      tooltip:{{ callbacks:{{ title:(it)=>{{ const p=rt[it[0].dataIndex]||{{}}; return `batch ${{p.batch}} · ${{p.date||'—'}}`; }}, label:(it)=>`retired ${{it.raw}}/54` }} }} }},
+      animation:false,
+      scales:{{ x:{{ ticks:{{color:"#7d745f",maxTicksLimit:10,font:{{size:9,family:"'JetBrains Mono',monospace"}}}},grid:{{display:false}} }},
+                y:{{ ticks:{{color:"#7d745f",precision:0,font:{{family:"'JetBrains Mono',monospace"}}}},grid:{{color:"#2a251e"}},suggestedMin:0,suggestedMax:54 }} }} }}
+  }});
+}})();
 </script>
 </body>
 </html>
@@ -1062,6 +1345,9 @@ def build(root: Path) -> dict:
         "actions": actions,
         "open_prs": parse_open_prs(root),
         "cadence": parse_cadence(root),
+        "pr_cadence": parse_pr_cadence(root),
+        "retired_trend": parse_retired_trend(root),
+        "depgraph": build_depgraph(actions),
         "axis_retirement": parse_axis_retirement(root),
         "operator_gates": operator_gates(actions, dashboard),
         "post_phase_8": post_phase_8(actions),
