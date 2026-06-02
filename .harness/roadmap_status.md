@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `6f843f43ddf4` |
-| `last_refreshed` | 2026-06-02T15:13:42-06:00 |
-| `git_head` | `9cce7717` (main) — `dashboard: R-XI-02 dependency graph + sparklines (#235)` |
+| `workspace_state_hash` | `fb0f95c78fac` |
+| `last_refreshed` | 2026-06-02T15:50:17-06:00 |
+| `git_head` | `23b80aef` (main) — `dashboard: R-XI-03 live-update mode (short-poll) (#237)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 44 |
 
@@ -52,7 +52,7 @@
 
 **`R-XI-01` (operator dashboard MVP) — RESOLVED + LIVE** at **https://thestoryportal.github.io/arhugula-harness/** (HTTP 200).
 
-**(This PR — substantive (§12.2.1: carries an R-NNN status flip, so NOT the `ops: roadmap status refresh` prefix). Records the dashboard arc that landed after the #233 refresh: PR #234 (Almanac Noir generator as canonical + the 4-skill loop discipline + `dashboard-design/DISCIPLINE.md`; :8137 re-pointed) + PR #235 (R-XI-02 dependency-graph + sparklines + 3 operator readability passes). Flips R-XI-02 PROPOSED → RESOLVED at §5. Recomputes `workspace_state_hash` `069ecf7bec45` → `6f843f43ddf4` + `git_head` → `9cce7717` (PRS empty / FORKS 44 / batch-51). §4 re-derivation UNCHANGED: no auto-derivable Claude-executable ACTIVE row remains; next dashboard lever is R-XI-03 (PROPOSED, operator-opt-in). A follow-on terminating refresh recording THIS merge is owed; the next §12.1 audit reconciles the lag-by-one. Prior arc: PR #233 refresh.)**
+**(This PR — substantive (§12.2.1: carries an R-NNN flip, so NOT the `ops: roadmap status refresh` prefix). Flips **R-XI-03 PROPOSED → RESOLVED** at §5 (client-side short-poll live-update; PR #237) and marks **Surface XI COMPLETE** (R-XI-01 + R-XI-02 + R-XI-03 all RESOLVED; no open XI levers). Recomputes `workspace_state_hash` `6f843f43ddf4` → `fb0f95c78fac` + `git_head` → `23b80aef` (PRS empty / FORKS 44 / batch-51). §4 re-derivation UNCHANGED: no auto-derivable Claude-executable ACTIVE row remains; remaining work is operator-owned (R-700 ratification; creds/infra-gated R-300-second-provider / R-410..R-440 / R-500). A follow-on terminating refresh recording THIS merge is reconciled by the next §12.1 audit. Prior arc: PR #236 (R-XI-02 RESOLVED + refresh).)**
 
 ---
 
@@ -60,8 +60,8 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(this PR)* | `ops-roadmap-rxi02-resolved` | R-XI-02 | mode-agnostic — records PR #234 (Almanac canonical + 4-skill loop discipline) + PR #235 (R-XI-02 dep-graph + sparklines + readability passes); flips **R-XI-02 → RESOLVED** at §5; `workspace_state_hash` `069ecf7bec45` → `6f843f43ddf4` + `git_head` → `9cce7717`. Substantive (R-NNN flip) so NOT the refresh-prefix title; a follow-on terminating refresh is owed. |
-| *(none else)* | — | — | open-PR set empty after #235 merged. |
+| *(this PR)* | `ops-roadmap-rxi03-resolved` | R-XI-03 | mode-agnostic — flips **R-XI-03 → RESOLVED** at §5 (live-update mode, PR #237) + marks Surface XI complete; `workspace_state_hash` `6f843f43ddf4` → `fb0f95c78fac` + `git_head` → `23b80aef`. Substantive (R-NNN flip); follow-on terminating refresh reconciled by next §12.1 audit. |
+| *(none else)* | — | — | open-PR set empty after #237 merged. |
 
 ---
 
@@ -69,11 +69,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #237 (`23b80ae`) | 2026-06-02 | **R-XI-03 live-update mode (RESOLVED) — Surface XI COMPLETE.** Client-side short-poll: `generate.py` embeds the real generation-time git HEAD as `<meta dashboard-live-head>`; a 45s poll of the page's own URL detects a change (DOMParser) and soft-reloads (scroll preserved; background tabs skipped); `LIVE ●` masthead indicator. No webhook/backend → static-deploy-friendly (works on Pages + :8137). must_pass #1 met at mechanism level (end-to-end latency bounded upstream: ~1-2min CI on Pages / ≤5min local-main sync on :8137). Runtime-verified headless (reload fired on change; no reload unchanged). ruff + node --check clean. Last Surface XI lever → dashboard surface complete. |
 | PR #235 (`9cce771`) | 2026-06-02 | **R-XI-02 dependency graph + sparklines (RESOLVED).** Built on the Almanac Noir canonical. Mermaid R-NNN dep-graph (61 nodes, click → discipline-schema panel) + PR-cadence sparkline + RETIRED-count trend (parsed off the "RETIRED N/54" phrasings so pipeline-advanced 49/54 doesn't inflate it; endpoint 48 = headline). Data wiring authored directly; the one loop-elevatable element (dep-panel) polished via the **genuine 4-skill loop** (all 4 skills fired — impeccable / design-taste-frontend / ui-ux-pro-max / frontend-design); added the `dashboard-elevate` just recipe. Boundary documented in DISCIPLINE.md (element-level loop can't style runtime viz / new CSS — that's code-level). Runtime-verified in headless Chrome (mermaid renders, click populates panel, 3 canvases). + 3 operator readability passes (type scale up; full-viewport-width responsive; dim tokens lightened for contrast; `.rem`/`.led`/`.prose`/`.r`/`.pr`/`.rn2` → 16px/#ddd5bd, strong preserved). ruff + node --check clean. |
 | PR #234 (`4b5cca6`) | 2026-06-02 | **Almanac Noir canonical + 4-skill loop discipline.** Brought the loop-produced redesign (already live at :8137) into the repo as the canonical dashboard generator + the **4-skill autonomous loop** (`tools/dashboard/live-auto/`) + `dashboard-design/DISCIPLINE.md` (visual design goes through the loop; data wiring authored directly). gitignored the ~88MB vendored design-skill copies + scratch; dropped the superseded Mustard `DESIGN.md`/kit. Public Pages deploy + launchd :8137 service re-pointed to Almanac. Mode-agnostic. |
 | PR #232 (`8d94485`) | 2026-06-01 | **Operator dashboard: impeccable polish pass (R-XI-06).** Visual/UX refinement of the live operator dashboard (the `impeccable` skill pass). Operator-directed dashboard iteration; not an auto-derived roadmap row. Dashboard tooling (`tools/dashboard/`) + live site redeploy. Merged ahead of its §12.2 follow-on refresh — recorded here. |
 | PR #230 (`ce47409`) | 2026-06-01 | **Operator dashboard: redesign in Mustard Editorial + skill-driven IA (R-XI-05).** Restyles the live operator dashboard (Mustard Editorial visual language) and restructures its information architecture around the skill set. Operator-directed dashboard iteration; not an auto-derived roadmap row. Merged ahead of its §12.2 follow-on refresh — recorded here together with #232 at this terminating refresh. |
-| PR #228 (`d37b676`) | 2026-06-01 | **Operator dashboard: closure section + at-a-glance state annotations (R-XI-04).** The R-NNN status board + Post-Phase-8 register now render **strike-through** for closed items, an `open` label for active ones, and a **status word + one-line plain-English explanation** for the rest. NEW **"Harness development closure"** section (operator picked "Both, layered"): **build closure 85.2–88.9%** (46–48/54 retired, a range pending R-700) + **activation/deployment 0% exercised** (operator-gated + bounded-residual by design, *not* remaining build work) + the **8 unretired ledger rows** (state · why · can-we-retire) + a **dependency-graph-ordered** remaining-to-complete list. Definitive-state fix: `R-700-OD-IS-EDGE-DRIFT` + `R-700-OD-INTERNAL-FORMALIZATION` flipped stale-BLOCKED → RESOLVED (PR #110/#111 merged). Register front table annotated. Verified (generate.py runs; JSON parses; `node --check` JS valid; ruff clean; pyright out of CI scope). Auto-redeploys the live site. |
 
 ---
 

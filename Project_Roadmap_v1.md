@@ -1379,7 +1379,7 @@ R-XI-02:
 R-XI-03:
   title: Live-update mode — webhook or short-poll
   surface: XI
-  status: PROPOSED
+  status: RESOLVED   # 2026-06-02 (PR #237, 23b80ae): short-poll path. generate.py embeds the real generation-time git HEAD as <meta dashboard-live-head>; a 45s client-side poll of the page's own URL detects a change (DOMParser) and soft-reloads (scroll preserved, background tabs skipped); LIVE indicator in masthead. No webhook/backend → static-deploy-friendly (must_pass #2); works on Pages + :8137. must_pass #1 met at mechanism level (detects within poll interval; end-to-end latency bounded upstream by CI deploy ~1-2min / local-main sync <=5min). Runtime-verified headless (reload fired on change; no reload when unchanged). advisor N/A (only webhook path was infra-gated). LAST Surface XI lever (next_pointer null) → Surface XI COMPLETE.
   depends_on: [R-XI-01]
   blocks: []
   posture: mode-agnostic
@@ -1817,7 +1817,7 @@ Decomposition status per surface. **`decomposed`** means R-NNN entries exist at 
 | VIII | Phase 8 retirement criteria | `placeholder` (R-700-phase-8-substitution-accounting only) | Triggered when §I substitutions ≥45/49 closed |
 | IX | External integrations | `decomposed` (2026-06-01) | §5.12 R-800..R-830 authored from register §B-10..§B-13 (Files/managed_agents DEFERRED-indefinite) |
 | X | Existential / research | `decomposed` (2026-06-01) | §5.13 R-900-research-arcs placeholder from register §B-16; surfaces opportunistically |
-| XI | Operator tooling / observability | `partially-decomposed` (R-XI-01 + R-XI-02 + R-XI-03, all PROPOSED) | Triggered by R-200-ci-pytest-pyright-ruff-matrix closure; R-XI-01 flips PROPOSED → ACTIVE at that point |
+| XI | Operator tooling / observability | `complete` (R-XI-01 + R-XI-02 + R-XI-03 all RESOLVED; 2026-06-02) | Live operator dashboard: Almanac Noir, dependency-graph + sparklines, client-side live-update. Public Pages + launchd :8137 (auto-syncing). No open XI levers. |
 
 **Decomposition-owed marker discipline.** When opening any surface for decomposition, operator AUQ required ONLY if scope is ambiguous; otherwise Claude decomposes per current workspace state. The roadmap is not a contract — it is a discipline.
 
