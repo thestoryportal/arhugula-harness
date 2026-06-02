@@ -139,3 +139,13 @@ dashboard-serve port='8787':
     uv run python tools/dashboard/generate.py --root . --out tools/dashboard/public/index.html
     @echo "Dashboard at http://localhost:{{port}}/  (Ctrl-C to stop)"
     cd tools/dashboard/public && python3 -m http.server {{port}}
+
+# Run the 4-skill design-elevation loop on a target HTML file (R-XI-02 discipline).
+# PAID: spawns a headless `claude` agent per move (sonnet-4-6, ~$0.04/move) that
+# invokes the 4 design skills (impeccable / design-taste-frontend / ui-ux-pro-max
+# / frontend-design) and authors in-identity variants. dotenv-load supplies the
+# Anthropic creds. See dashboard-design/DISCIPLINE.md + live-auto/RUNBOOK.md.
+dashboard-elevate file plan:
+    node tools/dashboard/live-auto/orchestrator.mjs \
+      --file="{{file}}" --plan="{{plan}}" \
+      --producer=tools/dashboard/live-auto/producer-skillchain.mjs --no-inject

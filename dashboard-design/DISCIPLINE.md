@@ -20,6 +20,20 @@ The split:
 | Data plumbing, new functional sections, parsing, charts' data | Authored directly in `generate.py` (Python) |
 | Visual design — styling, hierarchy, color, motion, polish of HTML elements | The **4-skill loop** (`tools/dashboard/live-auto/`) |
 
+### Scope boundary (learned at R-XI-02)
+
+The loop re-authors **one element's static markup, reusing existing CSS classes,
+emitting no new CSS** (the producer prompt forbids new class names / new CSS;
+it returns `scopedCss:''`). So it can polish *markup hierarchy* of a concrete
+element — e.g. it re-ordered the dependency-graph inspect panel to lead with the
+title and demote the R-NNN id (R-XI-02). It **cannot** design runtime-rendered
+viz (Mermaid SVG, Chart.js canvases) or author the new CSS classes a new section
+needs. That styling is **necessarily code-level**, authored in `generate.py`'s
+`<style>`/JS to match the Almanac Noir tokens — it is *not* a loop-skippable
+hand-edit, it is simply outside what this element-level carbonize-safe loop can
+produce. Run the loop where it fits (static, content-rich elements); author
+viz/new-class styling in code against the existing token system.
+
 ## The 4 skills
 
 The loop's variant producer (`tools/dashboard/live-auto/producer-skillchain.mjs`)
