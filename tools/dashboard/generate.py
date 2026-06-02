@@ -2,7 +2,7 @@
 """Operator dashboard generator (R-XI-01).
 
 Reads the workspace roadmap substrate from five sources and emits a single
-self-contained static `roadmap.html` (Tailwind CDN + Chart.js CDN + vanilla JS).
+self-contained static `roadmap.html` (Mustard Editorial CSS + Chart.js CDN + vanilla JS).
 No build step, no bundler — pure static output suitable for GitHub Pages.
 
 Sources
@@ -286,6 +286,11 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
         if (a.get("surface") in {"IV", "V", "VI", "IX", "X"} or a["id"].startswith("R-CXA"))
     ]
     fwd_open = [a for a in fwd if a["status"] not in ("RESOLVED", "CANCELLED")]
+    # waffle-grid breakdown (ui-ux-pro-max chart rec: fraction-of-whole filled).
+    # retired = conservative low (46); the 8 non-retired split by state → total 54.
+    n_partial = sum(1 for r in NONRETIRED_LEDGER if r["state"] == "PARTIAL")
+    n_sb = sum(1 for r in NONRETIRED_LEDGER if r["state"] == "STILL-BOUNDED")
+    n_sbi = sum(1 for r in NONRETIRED_LEDGER if r["state"] == "STILL-BOUNDED-INDEFINITELY")
     return {
         "build": {
             "lo": retired_lo,
@@ -295,6 +300,13 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
             "pct_hi": round(100 * retired_hi / total, 1),
             "contested": True,
             "nonretired": NONRETIRED_LEDGER,
+            "waffle": {
+                "retired": retired_lo,
+                "partial": n_partial,
+                "still_bounded": n_sb,
+                "sb_indef": n_sbi,
+                "total": total,
+            },
         },
         "activation": {
             "total": len(fwd),
@@ -533,227 +545,362 @@ HTML_TEMPLATE = """<!doctype html>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Harness roadmap — operator dashboard</title>
-<script src="https://cdn.tailwindcss.com"></script>
+<meta name="description" content="Multi-LLM agent harness — development closure, retirement ledger, and R-NNN roadmap at a glance."/>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232B2620'/%3E%3Crect x='8' y='8' width='14' height='14' rx='2' fill='%23E0A82E'/%3E%3C/svg%3E"/>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
-  body {{ background:#0b0f17; color:#e5e7eb; }}
-  .card {{ background:#111827; border:1px solid #1f2937; border-radius:0.75rem; }}
-  .chip {{ font-size:0.7rem; padding:0.1rem 0.5rem; border-radius:9999px; font-weight:600; }}
+  :root{{
+    --mustard:#E0A82E; --paper:#F4EFE3; --paper-hi:#FBF8F1; --sand:#D8CFBC;
+    --terracotta:#C25B3A; --ink:#2B2620; --ink-soft:#6B6354; --ink-faint:#9A8E76;
+    --serif:Canela,Georgia,'Times New Roman',serif;
+    --sans:Inter,'Helvetica Neue',Arial,sans-serif;
+    --radius:10px; --shadow:6px 6px 0 var(--mustard); --shadow-sm:4px 4px 0 var(--mustard);
+  }}
+  *{{box-sizing:border-box;margin:0;padding:0;}}
+  html{{scroll-behavior:smooth;}}
+  body{{background:#E7E0D0;font-family:var(--sans);color:var(--ink);line-height:1.5;
+    font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;}}
+  .wrap{{max-width:1160px;margin:0 auto;padding:0 24px 64px;}}
+  .serif{{font-family:var(--serif);}}
+  a{{color:inherit;}}
+
+  /* topbar — ink ground, mustard type (premium/closing ground) */
+  .topbar{{background:var(--ink);color:var(--mustard);}}
+  .topbar .inner{{max-width:1160px;margin:0 auto;padding:18px 24px;display:flex;
+    justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:10px;}}
+  .topbar .brand{{font-family:var(--serif);font-size:22px;font-weight:500;letter-spacing:.3px;}}
+  .topbar .brand em{{font-style:italic;color:#F0C766;}}
+  .topbar .anchor{{font-size:11px;letter-spacing:1px;color:#C8941E;}}
+  .topbar .anchor code{{color:#F0C766;}}
+
+  /* numbered serif section header + hairline rule (signature motif D) */
+  section{{margin-top:40px;}}
+  .shead{{display:flex;align-items:baseline;gap:14px;margin-bottom:18px;}}
+  .shead .num{{font-family:var(--serif);font-size:30px;font-weight:500;color:var(--mustard);line-height:1;}}
+  .shead .htxt{{font-family:var(--serif);font-size:24px;font-weight:500;color:var(--ink);line-height:1;}}
+  .shead .rule{{flex:1;border-top:1.5px solid var(--sand);transform:translateY(-6px);}}
+  .label{{font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:var(--ink-faint);font-weight:700;}}
+
+  /* cards — paper-on-paper + mustard offset shadow; dark variant inverts */
+  .card{{background:var(--paper-hi);border:1px solid var(--sand);border-radius:var(--radius);
+    box-shadow:var(--shadow);padding:22px;}}
+  .card.dark{{background:var(--ink);color:var(--paper);box-shadow:var(--shadow);}}
+  .grid2{{display:grid;grid-template-columns:1fr 1fr;gap:22px;}}
+  .grid-hero{{display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:stretch;}}
+
+  /* stat cards (closure hero) */
+  .stat .k{{font-size:11px;letter-spacing:2px;text-transform:uppercase;font-weight:700;margin-bottom:8px;}}
+  .stat.build .k{{color:#7a5a12;}}
+  .stat .big{{font-family:var(--serif);font-size:46px;font-weight:500;line-height:.95;}}
+  .stat .big .unit{{font-size:18px;color:var(--ink-soft);font-family:var(--sans);font-weight:600;}}
+  .stat .sub{{font-size:12.5px;color:var(--ink-soft);margin-top:8px;line-height:1.6;}}
+  .stat .sub strong{{color:var(--ink);}}
+  .bar{{height:8px;border-radius:6px;background:var(--sand);margin-top:12px;overflow:hidden;}}
+  .bar > span{{display:block;height:100%;background:var(--mustard);}}
+  .pull{{font-family:var(--serif);font-style:italic;font-size:16px;color:var(--terracotta);
+    margin-top:10px;line-height:1.3;}}
+
+  /* waffle — 54 substitution cells, fraction-of-whole-filled (ui-ux-pro-max rec) */
+  .waffle{{display:grid;grid-template-columns:repeat(18,1fr);gap:4px;margin-top:6px;max-width:520px;}}
+  .cell{{aspect-ratio:1;border-radius:3px;background:var(--sand);}}
+  .cell.retired{{background:var(--mustard);}}
+  .cell.partial{{background:var(--terracotta);}}
+  .cell.bounded{{background:var(--ink-soft);}}
+  .cell.indef{{background:var(--sand);border:1px dashed var(--ink-faint);}}
+  .legend{{display:flex;flex-wrap:wrap;gap:14px;margin-top:14px;font-size:11.5px;color:var(--ink-soft);}}
+  .legend i{{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:6px;
+    vertical-align:middle;}}
+
+  /* item rows — strike(closed)/open/status word + plain-english why (never color-alone) */
+  .surf{{margin-bottom:18px;}}
+  .surf .stitle{{font-size:11px;letter-spacing:2px;text-transform:uppercase;font-weight:700;
+    color:var(--ink-faint);margin-bottom:6px;}}
+  .rows{{border-left:2px solid var(--sand);}}
+  .row{{display:flex;align-items:flex-start;gap:10px;padding:7px 0 7px 14px;
+    transition:background .18s ease,border-color .18s ease;border-left:2px solid transparent;
+    margin-left:-2px;}}
+  .row:hover{{background:var(--paper-hi);border-left-color:var(--mustard);}}
+  .row .rid{{font-size:11px;color:var(--ink-faint);font-weight:600;flex-shrink:0;min-width:0;}}
+  .row .rmain{{flex:1;min-width:0;}}
+  .row .rt{{font-size:13.5px;color:var(--ink);}}
+  .row.closed .rt{{text-decoration:line-through;text-decoration-color:var(--ink-faint);color:var(--ink-faint);}}
+  .row .rwhy{{font-size:11.5px;color:var(--ink-soft);margin-top:2px;line-height:1.5;}}
+
+  /* status chips — warm palette, status word always present (color is reinforcement) */
+  .chip{{font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;
+    padding:3px 8px;border-radius:4px;flex-shrink:0;white-space:nowrap;}}
+  .chip.closed{{background:var(--sand);color:#6b6354;}}
+  .chip.open{{background:var(--mustard);color:var(--ink);}}
+  .chip.blocked{{background:var(--terracotta);color:var(--paper);}}
+  .chip.other{{background:transparent;color:var(--ink-soft);border:1.5px solid var(--sand);}}
+  .chip.build{{background:var(--mustard);color:var(--ink);}}
+  .chip.activation{{background:transparent;color:var(--ink-soft);border:1.5px solid var(--ink-soft);}}
+  .chip.state{{background:transparent;border:1.5px solid var(--terracotta);color:var(--terracotta);}}
+
+  /* unretired ledger + remaining list */
+  .led{{padding:12px 0;border-bottom:1px solid var(--sand);}}
+  .led:last-child{{border-bottom:none;}}
+  .led .lh{{display:flex;align-items:center;gap:9px;flex-wrap:wrap;}}
+  .led .lid{{font-family:var(--serif);font-size:17px;color:var(--ink);}}
+  .led .lwhy{{font-size:12px;color:var(--ink-soft);margin-top:5px;line-height:1.55;}}
+  .led .lretire{{font-size:12px;margin-top:5px;line-height:1.55;}}
+  .led .lretire b{{font-family:var(--serif);font-style:italic;font-weight:500;color:var(--terracotta);
+    font-size:13px;margin-right:4px;}}
+
+  .rem{{display:flex;align-items:flex-start;gap:12px;padding:9px 0;border-bottom:1px solid var(--sand);}}
+  .rem:last-child{{border-bottom:none;}}
+  .rem .rn{{font-family:var(--serif);font-size:22px;color:var(--mustard);width:30px;text-align:right;
+    flex-shrink:0;line-height:1.1;}}
+  .rem .rbody{{flex:1;}}
+  .rem .rlabel{{font-size:14px;font-weight:600;color:var(--ink);}}
+  .rem .rgate{{font-size:12px;color:var(--ink-soft);margin-top:2px;line-height:1.5;}}
+  .rem .rmeta{{font-size:10.5px;color:var(--ink-faint);margin-top:2px;}}
+
+  /* misc lists */
+  .pr{{display:flex;align-items:baseline;gap:8px;padding:5px 0;font-size:13px;}}
+  .pr .dot{{font-size:9px;}}
+  .pr .dot.passing{{color:#5a7a2e;}} .pr .dot.running{{color:var(--mustard);}}
+  .pr .dot.failing{{color:var(--terracotta);}} .pr .dot.none{{color:var(--ink-faint);}}
+  .recent{{padding:9px 0;border-bottom:1px solid var(--sand);}}
+  .recent:last-child{{border-bottom:none;}}
+  .recent .rh{{font-family:var(--serif);font-size:14px;color:var(--ink);}}
+  .recent .rd{{font-size:11px;color:var(--ink-faint);}}
+  .recent .rn2{{font-size:12px;color:var(--ink-soft);margin-top:3px;line-height:1.55;}}
+  .gate{{padding:7px 0;font-size:13px;border-bottom:1px solid var(--sand);}}
+  .gate:last-child{{border-bottom:none;}}
+  .gate b{{font-family:var(--serif);font-style:italic;font-weight:500;color:var(--terracotta);}}
+  .muted{{color:var(--ink-faint);font-size:12.5px;}}
+  .prose{{font-size:13.5px;color:var(--ink-soft);line-height:1.7;}}
+  .prose strong{{color:var(--ink);font-weight:600;}}
+  .prose code{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86em;
+    background:var(--paper);border:1px solid var(--sand);border-radius:3px;padding:.5px 4px;color:#7a5a12;}}
+  .prose li{{margin-left:18px;list-style:disc;}}
+
+  footer{{margin-top:48px;padding-top:18px;border-top:1.5px solid var(--sand);
+    font-size:11px;color:var(--ink-faint);letter-spacing:.3px;}}
+  footer code{{color:var(--ink-soft);}}
+
+  :focus-visible{{outline:2.5px solid var(--mustard);outline-offset:2px;border-radius:3px;}}
+
+  @media(max-width:760px){{
+    .grid2,.grid-hero{{grid-template-columns:1fr;}}
+    .waffle{{grid-template-columns:repeat(12,1fr);}}
+    .shead .htxt{{font-size:20px;}} .stat .big{{font-size:38px;}}
+  }}
+  @media(prefers-reduced-motion:reduce){{
+    html{{scroll-behavior:auto;}} .row{{transition:none;}}
+  }}
 </style>
 </head>
-<body class="min-h-screen">
-<div class="max-w-6xl mx-auto p-6 space-y-6">
-  <header class="flex items-baseline justify-between flex-wrap gap-2">
-    <h1 class="text-2xl font-bold text-white">Harness roadmap</h1>
-    <div class="text-xs text-gray-400" id="anchor"></div>
-  </header>
-
-  <section class="card p-5" id="next-action-card">
-    <h2 class="text-sm uppercase tracking-wide text-indigo-300 mb-2">Next action</h2>
-    <div id="next-action" class="prose prose-invert max-w-none text-sm leading-relaxed"></div>
-  </section>
-
-  <section class="card p-5" id="closure-card">
-    <h2 class="text-sm uppercase tracking-wide text-emerald-300 mb-3">Harness development closure</h2>
-    <div id="closure" class="text-sm leading-relaxed"></div>
-  </section>
-
-  <div class="grid md:grid-cols-2 gap-6">
-    <section class="card p-5">
-      <h2 class="text-sm uppercase tracking-wide text-emerald-300 mb-3">Phase 7 retirement</h2>
-      <div id="retire-bar"></div>
-      <div id="retire-buckets" class="mt-3 space-y-1 text-xs text-gray-300"></div>
-    </section>
-    <section class="card p-5">
-      <h2 class="text-sm uppercase tracking-wide text-sky-300 mb-3">Commit cadence (30d)</h2>
-      <canvas id="cadence" height="90"></canvas>
-    </section>
+<body>
+<header class="topbar">
+  <div class="inner">
+    <span class="brand">Harness roadmap <em>— operator dashboard</em></span>
+    <span class="anchor" id="anchor"></span>
   </div>
+</header>
 
-  <section class="card p-5">
-    <h2 class="text-sm uppercase tracking-wide text-amber-300 mb-3">R-NNN status board</h2>
-    <div id="status-board" class="space-y-4"></div>
-  </section>
-
-  <section class="card p-5" id="pp8-card">
-    <h2 class="text-sm uppercase tracking-wide text-violet-300 mb-2">Post-Phase-8 forward register</h2>
-    <div id="pp8-summary" class="text-xs text-gray-400 mb-3"></div>
-    <div id="pp8-board" class="space-y-3"></div>
-  </section>
-
-  <div class="grid md:grid-cols-2 gap-6">
-    <section class="card p-5">
-      <h2 class="text-sm uppercase tracking-wide text-fuchsia-300 mb-3">In-flight PRs</h2>
-      <div id="prs" class="space-y-2 text-sm"></div>
+<div class="wrap">
+  <main>
+    <section id="closure-card">
+      <div class="shead"><span class="num">01</span><span class="htxt">Development closure</span><span class="rule"></span></div>
+      <div id="closure"></div>
     </section>
-    <section class="card p-5">
-      <h2 class="text-sm uppercase tracking-wide text-rose-300 mb-3">Operator gates</h2>
-      <div id="gates" class="space-y-2 text-sm"></div>
+
+    <section>
+      <div class="shead"><span class="num">02</span><span class="htxt">Next action</span><span class="rule"></span></div>
+      <div class="card"><div id="next-action" class="prose"></div></div>
     </section>
-  </div>
 
-  <section class="card p-5">
-    <h2 class="text-sm uppercase tracking-wide text-teal-300 mb-3">Recently completed</h2>
-    <div id="recent" class="space-y-2 text-sm"></div>
-  </section>
+    <section>
+      <div class="shead"><span class="num">03</span><span class="htxt">R-NNN status board</span><span class="rule"></span></div>
+      <div class="card"><div id="status-board"></div></div>
+    </section>
 
-  <footer class="text-xs text-gray-500 pt-2">
-    Drift-log events: <span id="drift-count"></span> ·
-    Generated by <code>tools/dashboard/generate.py</code> (R-XI-01) ·
-    static read-only snapshot — refresh by re-running the generator / GitHub Pages deploy.
-  </footer>
+    <section id="pp8-card">
+      <div class="shead"><span class="num">04</span><span class="htxt">Post-Phase-8 forward register</span><span class="rule"></span></div>
+      <div class="card"><div id="pp8-summary" class="prose" style="margin-bottom:14px"></div><div id="pp8-board"></div></div>
+    </section>
+
+    <div class="grid2">
+      <section style="margin-top:0">
+        <div class="shead"><span class="num">05</span><span class="htxt">In-flight PRs</span><span class="rule"></span></div>
+        <div class="card"><div id="prs"></div></div>
+      </section>
+      <section style="margin-top:0">
+        <div class="shead"><span class="num">06</span><span class="htxt">Operator gates</span><span class="rule"></span></div>
+        <div class="card"><div id="gates"></div></div>
+      </section>
+    </div>
+
+    <div class="grid2">
+      <section style="margin-top:0">
+        <div class="shead"><span class="num">07</span><span class="htxt">Commit cadence</span><span class="rule"></span></div>
+        <div class="card"><canvas id="cadence" height="120"></canvas></div>
+      </section>
+      <section style="margin-top:0">
+        <div class="shead"><span class="num">08</span><span class="htxt">Recently completed</span><span class="rule"></span></div>
+        <div class="card"><div id="recent"></div></div>
+      </section>
+    </div>
+
+    <footer>
+      Drift-log events: <span id="drift-count"></span> ·
+      generated by <code>tools/dashboard/generate.py</code> (R-XI-01) ·
+      design: Mustard Editorial (dashboard-design/DESIGN.md) ·
+      static read-only snapshot — refresh via the generator / Pages deploy.
+    </footer>
+  </main>
 </div>
 
 <script>
 const DATA = __DATA__;
-
-const STATUS_COLORS = {{
-  ACTIVE: "bg-blue-600 text-white",
-  "APPLIED-PENDING-OPERATOR-E2E": "bg-purple-600 text-white",
-  PROPOSED: "bg-amber-500 text-black",
-  BLOCKED: "bg-gray-600 text-gray-100",
-  DEFERRED: "bg-slate-700 text-gray-300",
-  RESOLVED: "bg-emerald-700 text-emerald-100",
-  CANCELLED: "bg-red-800 text-red-100",
-}};
-const CI_COLORS = {{ passing:"text-emerald-400", running:"text-amber-400", failing:"text-red-400", none:"text-gray-500" }};
 const esc = (s) => (s ?? "").replace(/[&<>]/g, c => ({{'&':'&amp;','<':'&lt;','>':'&gt;'}}[c]));
-
-// anchor
-document.getElementById("anchor").innerHTML =
-  `head <code class="text-gray-300">${{esc(DATA.dashboard.git_head)}}</code> · hash <code>${{esc(DATA.dashboard.hash)}}</code> · ${{esc(DATA.dashboard.last_refreshed)}} · ${{esc(DATA.dashboard.fork_count)}} open forks`;
-
-// next action (markdown-lite: keep as escaped text with bold + code)
 function mdLite(s) {{
   let h = esc(s);
-  h = h.replace(/`([^`]+)`/g, '<code class="text-indigo-200">$1</code>');
-  h = h.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong class="text-white">$1</strong>');
-  h = h.replace(/^- (.*)$/gm, '<li class="ml-4 list-disc">$1</li>');
+  h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
+  h = h.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
+  h = h.replace(/^- (.*)$/gm, '<li>$1</li>');
   h = h.replace(/\\n\\n/g, '<br/><br/>');
   return h;
 }}
-document.getElementById("next-action").innerHTML = mdLite(DATA.dashboard.next_action);
 
-// one item row: strike-through if closed; "open" label; else status word + plain-English why
-function itemRow(a) {{
-  const title = `<span class="text-gray-500">${{esc(a.id)}}</span> ${{esc(a.title)}}`;
-  if (a.rkind === "closed") {{
-    return `<div class="flex items-start gap-2 py-0.5"><s class="text-gray-600 flex-1">${{title}}</s><span class="chip bg-emerald-900 text-emerald-300">closed</span></div>`;
-  }}
-  if (a.rkind === "open") {{
-    return `<div class="flex items-start gap-2 py-0.5"><span class="flex-1 text-gray-200">${{title}}</span><span class="chip bg-blue-600 text-white">open</span></div>`;
-  }}
-  const c = STATUS_COLORS[a.status] || "bg-gray-700 text-gray-200";
-  const why = a.why ? `<div class="text-xs text-gray-500 ml-1 mt-0.5">— ${{esc(a.why)}}</div>` : "";
-  return `<div class="py-0.5"><div class="flex items-start gap-2"><span class="flex-1 text-gray-200">${{title}}</span><span class="chip ${{c}}">${{esc(a.rword)}}</span></div>${{why}}</div>`;
-}}
+// anchor
+const d = DATA.dashboard || {{}};
+document.getElementById("anchor").innerHTML =
+  `head <code>${{esc(d.git_head)}}</code> · hash <code>${{esc(d.hash)}}</code> · ${{esc(d.last_refreshed)}} · ${{esc(d.fork_count)}} open forks`;
 
-// harness development closure — two layered views + unretired rows + ordered remaining
+// next action
+document.getElementById("next-action").innerHTML = mdLite(d.next_action);
+
+// ---- closure hero ----
 (function() {{
-  const cl = DATA.closure || {{}};
-  const b = cl.build || {{}}, ac = cl.activation || {{}};
-  const stateColor = {{ "PARTIAL":"text-amber-300", "STILL-BOUNDED":"text-orange-400", "STILL-BOUNDED-INDEFINITELY":"text-slate-400" }};
-  const nonret = (b.nonretired || []).map(r =>
-    `<div class="py-1 border-b border-gray-800/60">
-       <span class="font-semibold text-gray-200">${{esc(r.id)}}</span>
-       <span class="chip bg-gray-800 ${{stateColor[r.state] || 'text-gray-400'}}">${{esc(r.state)}}</span>
-       <span class="text-gray-600 text-xs">${{esc(r.rnnn)}}</span>
-       <div class="text-xs text-gray-400 mt-0.5">${{esc(r.why)}}</div>
-       <div class="text-xs mt-0.5"><span class="text-gray-500">retire? </span><span class="text-emerald-300/90">${{esc(r.retire)}}</span></div>
-     </div>`).join("");
-  const rem = (cl.remaining || []).map(r =>
-    `<div class="flex items-start gap-2 py-0.5">
-       <span class="text-gray-600 w-5 text-right shrink-0">${{r.n}}</span>
-       <span class="chip shrink-0 ${{r.layer === 'build' ? 'bg-emerald-900 text-emerald-300' : 'bg-sky-900 text-sky-300'}}">${{esc(r.layer)}}</span>
-       <span class="flex-1"><span class="text-gray-200">${{esc(r.label)}}</span> <span class="text-gray-600 text-xs">${{esc(r.id)}}</span><div class="text-xs text-gray-500">${{esc(r.gate)}}</div></span>
-     </div>`).join("");
-  const el = document.getElementById("closure");
-  if (!el) return;
-  el.innerHTML = `
-    <div class="grid md:grid-cols-2 gap-4 mb-4">
-      <div class="bg-gray-900/40 rounded-lg p-3">
-        <div class="text-xs uppercase tracking-wide text-emerald-300 mb-1">Build closure — is the harness built?</div>
-        <div class="text-2xl font-bold text-white">${{b.pct_lo}}–${{b.pct_hi}}%</div>
-        <div class="text-xs text-gray-400 mt-1">${{b.lo}}–${{b.hi}} of ${{b.total}} substitutions retired. A <strong class="text-gray-300">range</strong> because the final count is unratified (R-700 — your sign-off). 8 rows remain, listed below.</div>
-        <div class="w-full bg-gray-800 rounded-full h-2 mt-2"><div class="bg-emerald-500 h-2 rounded-full" style="width:${{b.pct_lo}}%"></div></div>
+  const cl = DATA.closure || {{}}, b = cl.build || {{}}, ac = cl.activation || {{}}, w = b.waffle || {{}};
+  const stateClass = {{ "PARTIAL":"partial", "STILL-BOUNDED":"bounded", "STILL-BOUNDED-INDEFINITELY":"indef" }};
+  // waffle cells
+  let cells = "";
+  for (let i=0;i<(w.retired||0);i++) cells += '<div class="cell retired"></div>';
+  for (let i=0;i<(w.partial||0);i++) cells += '<div class="cell partial"></div>';
+  for (let i=0;i<(w.still_bounded||0);i++) cells += '<div class="cell bounded"></div>';
+  for (let i=0;i<(w.sb_indef||0);i++) cells += '<div class="cell indef"></div>';
+  const legend =
+    `<span><i style="background:var(--mustard)"></i>retired ${{w.retired||0}}</span>` +
+    `<span><i style="background:var(--terracotta)"></i>partial ${{w.partial||0}}</span>` +
+    `<span><i style="background:var(--ink-soft)"></i>still-bounded ${{w.still_bounded||0}}</span>` +
+    `<span><i style="background:var(--sand);border:1px dashed var(--ink-faint)"></i>indefinite ${{w.sb_indef||0}}</span>`;
+
+  const nonret = (b.nonretired||[]).map(r => `
+    <div class="led">
+      <div class="lh"><span class="lid">${{esc(r.id)}}</span>
+        <span class="chip state">${{esc(r.state)}}</span>
+        <span class="muted">${{esc(r.rnnn)}}</span></div>
+      <div class="lwhy">${{esc(r.why)}}</div>
+      <div class="lretire"><b>retire?</b>${{esc(r.retire)}}</div>
+    </div>`).join("");
+
+  const rem = (cl.remaining||[]).map(r => `
+    <div class="rem">
+      <span class="rn">${{r.n}}</span>
+      <div class="rbody">
+        <div><span class="rlabel">${{esc(r.label)}}</span> <span class="chip ${{r.layer==='build'?'build':'activation'}}">${{esc(r.layer)}}</span></div>
+        <div class="rgate">${{esc(r.gate)}}</div>
+        <div class="rmeta">${{esc(r.id)}}</div>
       </div>
-      <div class="bg-gray-900/40 rounded-lg p-3">
-        <div class="text-xs uppercase tracking-wide text-sky-300 mb-1">Activation / deployment closure</div>
-        <div class="text-2xl font-bold text-white">0%<span class="text-sm font-normal text-gray-400"> exercised</span></div>
-        <div class="text-xs text-gray-400 mt-1">${{ac.open}} of ${{ac.total}} forward items open. <strong class="text-amber-300">This is NOT remaining build work</strong> — it is operator-gated (credentials + infrastructure that cannot run in this workspace) and bounded-residual by design. The harness is built; this axis is "switched on" only at a real deployment.</div>
+    </div>`).join("");
+
+  document.getElementById("closure").innerHTML = `
+    <div class="grid-hero">
+      <div class="card stat build">
+        <div class="k">Build closure — is the harness built?</div>
+        <div class="big">${{b.pct_lo}}<span class="unit">–${{b.pct_hi}}%</span></div>
+        <div class="sub"><strong>${{b.lo}}–${{b.hi}} of ${{b.total}}</strong> substitutions retired. A range, not a single number, because the final count is unratified — <strong>R-700, your sign-off</strong> (46/47/48). The 8 rows below are what remain.</div>
+        <div class="bar"><span style="width:${{b.pct_lo}}%"></span></div>
+        <div class="waffle">${{cells}}</div>
+        <div class="legend">${{legend}}</div>
+      </div>
+      <div class="card stat">
+        <div class="k">Activation / deployment closure</div>
+        <div class="big">0<span class="unit">% exercised</span></div>
+        <div class="sub"><strong>${{ac.open}} of ${{ac.total}}</strong> forward items open. This is <strong>not remaining build work</strong> — it is operator-gated (credentials + infrastructure that cannot run in this workspace) and bounded-residual by design.</div>
+        <div class="pull">"The harness is built; this axis switches on at a real deployment."</div>
       </div>
     </div>
-    <div class="mb-4">
-      <div class="text-xs uppercase tracking-wide text-amber-300 mb-2">Unretired substitution rows (8) — state · why · can we retire?</div>
-      <div>${{nonret}}</div>
-    </div>
-    <div>
-      <div class="text-xs uppercase tracking-wide text-indigo-300 mb-2">Remaining to complete — ordered by logical flow (dependency-graph-derived)</div>
-      <div class="space-y-0.5">${{rem}}</div>
+    <div class="grid2" style="margin-top:22px">
+      <div class="card">
+        <div class="label" style="margin-bottom:12px">Unretired substitutions (8) — state · why · can we retire?</div>
+        ${{nonret}}
+      </div>
+      <div class="card">
+        <div class="label" style="margin-bottom:12px">Remaining to complete — ordered by logical flow</div>
+        ${{rem}}
+      </div>
     </div>`;
 }})();
 
-// retirement bar
-const r = DATA.dashboard.retirement || {{}};
-if (r.total) {{
-  const pct = r.pct ?? Math.round(1000*r.retired/r.total)/10;
-  document.getElementById("retire-bar").innerHTML =
-    `<div class="flex justify-between text-xs mb-1"><span>${{r.retired}}/${{r.total}} RETIRED</span><span class="text-emerald-300 font-semibold">${{pct}}%</span></div>
-     <div class="w-full bg-gray-800 rounded-full h-3"><div class="bg-emerald-500 h-3 rounded-full" style="width:${{pct}}%"></div></div>`;
+// ---- item row (R-NNN board + register) ----
+function itemRow(a) {{
+  const title = `<span class="rid">${{esc(a.id)}}</span>`;
+  if (a.rkind === "closed") {{
+    return `<div class="row closed"><div class="rmain"><span class="rt">${{esc(a.title)}}</span></div><span class="chip closed">closed</span></div>`;
+  }}
+  if (a.rkind === "open") {{
+    return `<div class="row"><div class="rmain"><span class="rt">${{esc(a.title)}}</span></div><span class="chip open">open</span></div>`;
+  }}
+  const chipClass = a.status === "BLOCKED" ? "blocked" : "other";
+  const why = a.why ? `<div class="rwhy">${{esc(a.why)}}</div>` : "";
+  return `<div class="row"><div class="rmain"><span class="rt">${{esc(a.title)}}</span>${{why}}</div><span class="chip ${{chipClass}}">${{esc(a.rword)}}</span></div>`;
 }}
-document.getElementById("retire-buckets").innerHTML =
-  Object.entries(r.buckets || {{}}).filter(([k])=>!/^RETIRED$/.test(k))
-    .map(([k,v]) => `<div><span class="text-gray-400">${{esc(k)}}:</span> ${{mdLite(v)}}</div>`).join("");
-
-// cadence sparkline
-const cad = DATA.cadence || [];
-new Chart(document.getElementById("cadence"), {{
-  type: "bar",
-  data: {{ labels: cad.map(d=>d.date.slice(5)), datasets:[{{ data: cad.map(d=>d.count), backgroundColor:"#38bdf8" }}] }},
-  options: {{ plugins:{{legend:{{display:false}}}}, scales:{{ x:{{ ticks:{{color:"#6b7280",maxTicksLimit:8,font:{{size:9}}}},grid:{{display:false}} }}, y:{{ ticks:{{color:"#6b7280",precision:0}},grid:{{color:"#1f2937"}} }} }} }}
-}});
+const STATUS_RANK = {{ ACTIVE:0, "APPLIED-PENDING-OPERATOR-E2E":1, PROPOSED:2, BLOCKED:3, DEFERRED:4, RESOLVED:5, CANCELLED:6 }};
+function rowsFor(items) {{
+  return items.slice().sort((a,b)=>(STATUS_RANK[a.status]??9)-(STATUS_RANK[b.status]??9) || a.id.localeCompare(b.id)).map(a=>`<div class="row-id-wrap">${{itemRow(a)}}</div>`).join("");
+}}
 
 // status board grouped by surface
 const bySurface = {{}};
-for (const a of DATA.actions) {{ (bySurface[a.surface || "?"] ||= []).push(a); }}
-const STATUS_RANK = {{ ACTIVE:0, "APPLIED-PENDING-OPERATOR-E2E":1, PROPOSED:2, BLOCKED:3, DEFERRED:4, RESOLVED:5, CANCELLED:6 }};
+for (const a of (DATA.actions||[])) {{ (bySurface[a.surface || "?"] ||= []).push(a); }}
 document.getElementById("status-board").innerHTML = Object.keys(bySurface).sort().map(surf => {{
-  const items = bySurface[surf].sort((a,b)=>(STATUS_RANK[a.status]??9)-(STATUS_RANK[b.status]??9) || a.id.localeCompare(b.id));
-  return `<div><div class="text-xs text-amber-300/80 mb-1 font-semibold">Surface ${{esc(surf)}} <span class="text-gray-600">(${{items.length}})</span></div><div class="border-l border-gray-800 pl-3">${{items.map(itemRow).join("")}}</div></div>`;
+  const items = bySurface[surf];
+  return `<div class="surf"><div class="stitle">Surface ${{esc(surf)}} <span class="muted">(${{items.length}})</span></div><div class="rows">${{rowsFor(items)}}</div></div>`;
 }}).join("");
 
-// post-Phase-8 forward register
-const pp8 = DATA.post_phase_8 || {{}};
-const pp8g = pp8.groups || {{}};
+// post-Phase-8 register
+const pp8 = DATA.post_phase_8 || {{}}, pp8g = pp8.groups || {{}};
 const PP8_NAMES = {{ IV:"Multi-LLM (IV)", V:"Multi-deployment (V)", VI:"Multi-tenant (VI)", IX:"External integrations (IX)", X:"Research (X)", CXA:"Cross-axis seams" }};
 document.getElementById("pp8-summary").innerHTML =
-  `<strong class="text-white">${{pp8.count||0}} forward items</strong> across ${{Object.keys(pp8g).length}} groups — full detail at <code class="text-indigo-200">${{esc(pp8.register||"")}}</code>. ` +
-  `Phase 8 closes the substitution accounting (88.9% RETIRED — legitimate per X-AL-2); these are the <strong class="text-white">activation / deployment / integration</strong> axis, tracked under the same R-NNN discipline (status + memory-on-close + next-action).`;
+  `<strong>${{pp8.count||0}} forward items</strong> across ${{Object.keys(pp8g).length}} groups — full detail at <code>${{esc(pp8.register||"")}}</code>. Phase 8 closed the substitution accounting; these are the activation / deployment / integration axis, tracked under the same R-NNN discipline.`;
 document.getElementById("pp8-board").innerHTML = Object.keys(pp8g).sort().map(g => {{
-  const items = pp8g[g].slice().sort((a,b)=>(STATUS_RANK[a.status]??9)-(STATUS_RANK[b.status]??9) || a.id.localeCompare(b.id));
-  return `<div><div class="text-xs text-violet-300 mb-1 font-semibold">${{esc(PP8_NAMES[g]||g)}} <span class="text-gray-600">(${{items.length}})</span></div><div class="border-l border-gray-800 pl-3">${{items.map(itemRow).join("")}}</div></div>`;
+  const items = pp8g[g];
+  return `<div class="surf"><div class="stitle">${{esc(PP8_NAMES[g]||g)}} <span class="muted">(${{items.length}})</span></div><div class="rows">${{rowsFor(items)}}</div></div>`;
 }}).join("");
 
 // PRs
 const prs = DATA.open_prs || [];
 document.getElementById("prs").innerHTML = prs.length ? prs.map(p =>
-  `<div class="flex items-start gap-2"><span class="text-gray-500">#${{p.number}}</span>
-   <span class="${{CI_COLORS[p.ci]}}">●</span>
-   <span class="flex-1">${{esc(p.title)}} ${{p.draft?'<span class="text-gray-600">(draft)</span>':''}}</span></div>`
-).join("") : '<div class="text-gray-500">none open</div>';
+  `<div class="pr"><span class="muted">#${{p.number}}</span><span class="dot ${{p.ci}}">●</span><span>${{esc(p.title)}} ${{p.draft?'<span class="muted">(draft)</span>':''}}</span></div>`
+).join("") : '<div class="muted">none open</div>';
 
-// operator gates
+// gates
 const gates = DATA.operator_gates || [];
 document.getElementById("gates").innerHTML = gates.length ? gates.map(g =>
-  `<div><span class="text-rose-300 font-semibold">${{esc(g.id)}}</span> — ${{mdLite(g.gate)}}</div>`
-).join("") : '<div class="text-gray-500">none</div>';
+  `<div class="gate"><b>${{esc(g.id)}}</b> — ${{mdLite(g.gate)}}</div>`
+).join("") : '<div class="muted">none</div>';
 
 // recently completed
-document.getElementById("recent").innerHTML = (DATA.dashboard.recently_completed || []).map(rc =>
-  `<div><span class="text-teal-300 font-semibold">${{esc(rc.pr)}}</span> <span class="text-gray-500">${{esc(rc.date)}}</span><div class="text-gray-300 text-xs mt-0.5">${{mdLite(rc.note)}}</div></div>`
+document.getElementById("recent").innerHTML = (d.recently_completed || []).map(rc =>
+  `<div class="recent"><span class="rh">${{esc(rc.pr)}}</span> <span class="rd">${{esc(rc.date)}}</span><div class="rn2">${{mdLite(rc.note)}}</div></div>`
 ).join("");
 
-document.getElementById("drift-count").textContent = DATA.dashboard.drift_log_count ?? 0;
+document.getElementById("drift-count").textContent = d.drift_log_count ?? 0;
+
+// cadence — warm restyle
+const cad = DATA.cadence || [];
+new Chart(document.getElementById("cadence"), {{
+  type: "bar",
+  data: {{ labels: cad.map(x=>x.date.slice(5)), datasets:[{{ data: cad.map(x=>x.count), backgroundColor:"#E0A82E", borderRadius:2 }}] }},
+  options: {{ plugins:{{legend:{{display:false}}}}, animation:false,
+    scales:{{ x:{{ ticks:{{color:"#9A8E76",maxTicksLimit:8,font:{{size:9}}}},grid:{{display:false}} }},
+              y:{{ ticks:{{color:"#9A8E76",precision:0}},grid:{{color:"#D8CFBC"}} }} }} }}
+}});
 </script>
 </body>
 </html>
