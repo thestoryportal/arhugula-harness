@@ -715,6 +715,7 @@ HTML_TEMPLATE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Harness roadmap — operator console</title>
 <meta name="description" content="Multi-LLM agent harness — development closure, retirement ledger, and R-NNN roadmap. Instrument-ledger console."/>
+<meta name="dashboard-live-head" content="__LIVE_HEAD__"/>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='3' fill='%2315120d'/%3E%3Crect x='7' y='7' width='8' height='8' fill='%23f0a830'/%3E%3Crect x='17' y='7' width='8' height='8' fill='none' stroke='%233a342a'/%3E%3Crect x='7' y='17' width='8' height='8' fill='none' stroke='%233a342a'/%3E%3Crect x='17' y='17' width='8' height='8' fill='%23d8542f'/%3E%3C/svg%3E"/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
@@ -942,6 +943,12 @@ HTML_TEMPLATE = """<!doctype html>
   .r .rt2, .r .rwhy, .led .lwhy, .led .lret, .rem .rlabel, .rem .rgate{{
     font-size:16px;color:#ddd5bd;}}
 
+  /* R-XI-03 live-update indicator */
+  .live-ind{{font-family:var(--mono);}}
+  .live-ind.on{{color:var(--amber);}}
+  .live-ind.upd{{color:var(--amber-glow);}}
+  .live-ind.off{{color:var(--bone-faint);}}
+
   @media(max-width:768px){{
     .grid2,.gridHero{{grid-template-columns:1fr;}}
     .waffle{{grid-template-columns:repeat(12,1fr);}}
@@ -967,6 +974,7 @@ HTML_TEMPLATE = """<!doctype html>
         <div><span class="lab">LAST</span> <span id="ro-last"></span></div>
         <div><span class="lab">HASH</span> <span class="v" id="ro-hash"></span> <span class="lab">/</span> <span id="ro-when"></span></div>
         <div><span class="lab">OPEN FORKS</span> <span class="v" id="ro-forks"></span></div>
+        <div><span class="lab">LIVE</span> <span id="ro-live" class="live-ind">● —</span></div>
       </div>
     </div>
     <div class="ticks">
@@ -1290,6 +1298,43 @@ new Chart(document.getElementById("cadence"), {{
                 y:{{ ticks:{{color:"#7d745f",precision:0,font:{{family:"'JetBrains Mono',monospace"}}}},grid:{{color:"#2a251e"}},suggestedMin:0,suggestedMax:54 }} }} }}
   }});
 }})();
+
+// ---- R-XI-03: live-update mode (short-poll; static-deploy-friendly) ----
+(function() {{
+  const ind = document.getElementById("ro-live");
+  const meta = document.querySelector('meta[name="dashboard-live-head"]');
+  const cur = meta ? (meta.getAttribute("content") || "") : "";
+  const POLL_MS = 45000;
+  const pad = (n) => String(n).padStart(2, "0");
+  const stamp = () => {{ const t = new Date(); return pad(t.getHours()) + ":" + pad(t.getMinutes()) + ":" + pad(t.getSeconds()); }};
+  const setInd = (txt, cls) => {{ if (ind) {{ ind.textContent = txt; ind.className = "live-ind " + (cls || ""); }} }};
+  try {{
+    if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+    const y = sessionStorage.getItem("dash-scroll");
+    if (y !== null) {{ window.scrollTo(0, parseInt(y, 10) || 0); sessionStorage.removeItem("dash-scroll"); }}
+  }} catch (e) {{}}
+  if (!cur || !ind) {{ setInd("● off", "off"); return; }}
+  setInd("● live · " + stamp(), "on");
+  async function check() {{
+    if (document.hidden) return;
+    try {{
+      const r = await fetch(location.pathname + "?_lc=" + Date.now(), {{ cache: "no-store" }});
+      const txt = await r.text();
+      const fm = new DOMParser().parseFromString(txt, "text/html").querySelector('meta[name="dashboard-live-head"]');
+      const fresh = fm ? (fm.getAttribute("content") || "") : "";
+      if (fresh && fresh !== cur) {{
+        setInd("↻ new data · refreshing", "upd");
+        try {{ sessionStorage.setItem("dash-scroll", String(window.scrollY | 0)); }} catch (e) {{}}
+        setTimeout(() => location.reload(), 600);
+      }} else {{
+        setInd("● live · " + stamp(), "on");
+      }}
+    }} catch (e) {{
+      setInd("● live · retry", "on");
+    }}
+  }}
+  setInterval(check, POLL_MS);
+}})();
 </script>
 </body>
 </html>
@@ -1305,6 +1350,7 @@ def render_html(data: dict) -> str:
     # payload's own JSON braces are never disturbed. (We render via .replace, not
     # str.format, so no real escaping is needed — this is a pure de-double.)
     tmpl = HTML_TEMPLATE.replace("{{", "{").replace("}}", "}")
+    tmpl = tmpl.replace("__LIVE_HEAD__", str(data.get("live_head", "")))
     return tmpl.replace("__DATA__", payload)
 
 
@@ -1349,6 +1395,7 @@ def build(root: Path) -> dict:
         a["why"] = ANNOTATIONS.get(a["id"], "")
     dashboard = parse_dashboard(dash_md)
     return {
+        "live_head": _run(["git", "rev-parse", "--short=12", "HEAD"], cwd=root).strip(),
         "dashboard": dashboard,
         "actions": actions,
         "open_prs": parse_open_prs(root),
