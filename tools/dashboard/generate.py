@@ -620,7 +620,7 @@ HTML_TEMPLATE = """<!doctype html>
     transition:background .18s ease,border-color .18s ease;border-left:2px solid transparent;
     margin-left:-2px;}}
   .row:hover{{background:var(--paper-hi);border-left-color:var(--mustard);}}
-  .row .rid{{font-size:11px;color:var(--ink-faint);font-weight:600;flex-shrink:0;min-width:0;}}
+  .row .rid{{font-size:11px;color:var(--ink-soft);font-weight:600;flex-shrink:0;min-width:0;}}
   .row .rmain{{flex:1;min-width:0;}}
   .row .rt{{font-size:13.5px;color:var(--ink);}}
   .row.closed .rt{{text-decoration:line-through;text-decoration-color:var(--ink-faint);color:var(--ink-faint);}}
@@ -644,8 +644,8 @@ HTML_TEMPLATE = """<!doctype html>
   .led .lid{{font-family:var(--serif);font-size:17px;color:var(--ink);}}
   .led .lwhy{{font-size:12px;color:var(--ink-soft);margin-top:5px;line-height:1.55;}}
   .led .lretire{{font-size:12px;margin-top:5px;line-height:1.55;}}
-  .led .lretire b{{font-family:var(--serif);font-style:italic;font-weight:500;color:var(--terracotta);
-    font-size:13px;margin-right:4px;}}
+  .led .lretire b{{font-weight:700;font-size:10px;letter-spacing:1px;text-transform:uppercase;
+    color:var(--terracotta);margin-right:6px;}}
 
   .rem{{display:flex;align-items:flex-start;gap:12px;padding:9px 0;border-bottom:1px solid var(--sand);}}
   .rem:last-child{{border-bottom:none;}}
@@ -654,7 +654,7 @@ HTML_TEMPLATE = """<!doctype html>
   .rem .rbody{{flex:1;}}
   .rem .rlabel{{font-size:14px;font-weight:600;color:var(--ink);}}
   .rem .rgate{{font-size:12px;color:var(--ink-soft);margin-top:2px;line-height:1.5;}}
-  .rem .rmeta{{font-size:10.5px;color:var(--ink-faint);margin-top:2px;}}
+  .rem .rmeta{{font-size:10.5px;color:var(--ink-soft);margin-top:2px;}}
 
   /* misc lists */
   .pr{{display:flex;align-items:baseline;gap:8px;padding:5px 0;font-size:13px;}}
@@ -664,12 +664,12 @@ HTML_TEMPLATE = """<!doctype html>
   .recent{{padding:9px 0;border-bottom:1px solid var(--sand);}}
   .recent:last-child{{border-bottom:none;}}
   .recent .rh{{font-family:var(--serif);font-size:14px;color:var(--ink);}}
-  .recent .rd{{font-size:11px;color:var(--ink-faint);}}
+  .recent .rd{{font-size:11px;color:var(--ink-soft);}}
   .recent .rn2{{font-size:12px;color:var(--ink-soft);margin-top:3px;line-height:1.55;}}
   .gate{{padding:7px 0;font-size:13px;border-bottom:1px solid var(--sand);}}
   .gate:last-child{{border-bottom:none;}}
-  .gate b{{font-family:var(--serif);font-style:italic;font-weight:500;color:var(--terracotta);}}
-  .muted{{color:var(--ink-faint);font-size:12.5px;}}
+  .gate b{{font-weight:700;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--terracotta);}}
+  .muted{{color:var(--ink-soft);font-size:12.5px;}}
   .prose{{font-size:13.5px;color:var(--ink-soft);line-height:1.7;}}
   .prose strong{{color:var(--ink);font-weight:600;}}
   .prose code{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86em;
@@ -677,7 +677,7 @@ HTML_TEMPLATE = """<!doctype html>
   .prose li{{margin-left:18px;list-style:disc;}}
 
   footer{{margin-top:48px;padding-top:18px;border-top:1.5px solid var(--sand);
-    font-size:11px;color:var(--ink-faint);letter-spacing:.3px;}}
+    font-size:11px;color:var(--ink-soft);letter-spacing:.3px;}}
   footer code{{color:var(--ink-soft);}}
 
   :focus-visible{{outline:2.5px solid var(--mustard);outline-offset:2px;border-radius:3px;}}
@@ -815,7 +815,7 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
         <div class="big">${{b.pct_lo}}<span class="unit">–${{b.pct_hi}}%</span></div>
         <div class="sub"><strong>${{b.lo}}–${{b.hi}} of ${{b.total}}</strong> substitutions retired. A range, not a single number, because the final count is unratified — <strong>R-700, your sign-off</strong> (46/47/48). The 8 rows below are what remain.</div>
         <div class="bar"><span style="width:${{b.pct_lo}}%"></span></div>
-        <div class="waffle">${{cells}}</div>
+        <div class="waffle" role="img" aria-label="${{w.retired}} of ${{w.total}} substitutions retired — ${{w.partial}} partial, ${{w.still_bounded}} still-bounded, ${{w.sb_indef}} indefinite">${{cells}}</div>
         <div class="legend">${{legend}}</div>
       </div>
       <div class="card stat">
