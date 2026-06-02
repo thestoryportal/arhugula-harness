@@ -224,6 +224,14 @@
   .dep-panel ul.mp li{margin-left:18px;list-style:square;font-size:14.5px;color:var(--bone-soft);line-height:1.55;}
   .dep-panel code{font-family:var(--mono);font-size:14.5px;color:var(--amber-glow);background:var(--ground);border:1px solid var(--hair);border-radius:2px;padding:1px 4px;}
 
+  /* operator readability pass (preview feedback): primary text in these
+     blocks -> 16px / #ddd5bd. <strong> keeps var(--bone) via the global
+     strong rule; amber numbers, chips, status dots, mono-meta and display
+     headers keep their accent colors. */
+  .rem, .led, .prose, .r, .pr, .recent .rn2,
+  .r .rt2, .r .rwhy, .led .lwhy, .led .lret, .rem .rlabel, .rem .rgate{
+    font-size:16px;color:#ddd5bd;}
+
   @media(max-width:768px){
     .grid2,.gridHero{grid-template-columns:1fr;}
     .waffle{grid-template-columns:repeat(12,1fr);}
