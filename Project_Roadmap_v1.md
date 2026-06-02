@@ -1351,7 +1351,7 @@ R-XI-01:
 R-XI-02:
   title: Dashboard dependency-graph viz + sparklines (iteration 2)
   surface: XI
-  status: PROPOSED
+  status: RESOLVED   # 2026-06-02 (PR #235, 9cce771): built on the Almanac Noir canonical (PR #234). Mermaid dep-graph (61 nodes, click->discipline-schema panel) + PR-cadence sparkline + RETIRED-count trend (parsed off "RETIRED N/54" phrasings; endpoint 48 = headline). Data wiring authored directly; the one loop-elevatable element (dep-panel) polished via the genuine 4-skill loop (all 4 fired). Runtime-verified in headless Chrome (mermaid renders, click populates panel, 3 canvases). + 3 operator readability passes (type scale up, full-viewport-width responsive, dim tokens lightened for contrast, .rem/.led/.prose/.r/.pr/.rn2 -> 16px/#ddd5bd). NEXT: R-XI-03.
   depends_on: [R-XI-01]
   blocks: []
   posture: mode-agnostic
