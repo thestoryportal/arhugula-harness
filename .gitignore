@@ -87,3 +87,6 @@ tools/dashboard/candidates/
 
 # Hook-written local checkpoints (U-HK-05 pre-compaction snapshots)
 .harness/.checkpoints/
+
+# Hook-written session issue log (U-HK-07)
+.harness/session-issues.jsonl
