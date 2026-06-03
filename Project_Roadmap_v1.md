@@ -1379,6 +1379,56 @@ R-600-notebooklm-skill-setup:
     interactive corpus for the trigger events above. Memory entry [[notebooklm-harness-corpus-url]]
     refreshed in same PR. RESOLVED in one arc (skipped PROPOSED → ACTIVE) since setup +
     verification + documentation all closed at this PR's merge.
+
+R-600-substitution-ledger-schema:
+  title: Extract the 54-row substitution ledger to a schema-backed source + derive the counts (kill the count-drift / stale-carry defect class for the accounting surface)
+  surface: VII
+  status: PROPOSED   # scoped 2026-06-02 (operator-requested, post-R-700 close); not yet authorized to execute
+  depends_on: [R-700-phase-8-substitution-accounting]   # RESOLVED 2026-06-02 — the canonical 46/54 disposition set (.harness/phase-8-graduation.md §3) is the schema's seed data
+  blocks: []
+  posture: mode-agnostic
+  scope:
+    files:
+      - .harness/substitutions.yaml            # NEW — one typed row per substitution (source of truth)
+      - tools/dashboard/generate.py            # derive counts; stop regex-scraping "RETIRED N/54" prose
+      - .github/workflows/**                    # NEW tally-validation gate (impossible bucket sum = CI fail)
+      - .harness/roadmap_status.md             # cite the derived number, don't hand-maintain
+      - .harness/phase-7d-retirement-ledger-v2.md
+      - harness-cp/CLAUDE.md
+      - harness-od/CLAUDE.md
+      - CLAUDE.md
+    contracts: []
+    cross_axis: no
+  skills: { primary: null, secondary: [] }
+  advisor_required: conditional:if the disposition-enum design or the forward-only-append model touches a load-bearing accounting invariant
+  council_required: no
+  verification:
+    shape: integration
+    must_pass:
+      - "NEW .harness/substitutions.yaml holds 54 typed rows {id, axis, disposition (enum), counted_in_retired (bool), canonical (bool — resolves the CP-21-vs-22 / AS-3↔AS-9 accounting ambiguity explicitly), rationale, r_pointer, batch}"
+      - "a generator derives the buckets + integers; output == phase-8-graduation.md §3 canonical (46/54 RETIRED + 49/54 pipeline-advanced) — the schema reproduces the hand-reconciled truth exactly"
+      - "an impossible tally (e.g. RETIRED=48 with 3 PARTIAL) is a CI failure, not a months-later draft discovery"
+      - "label != count-membership enforced structurally — disposition label is orthogonal to counted_in_retired; a RETIRED-AS-X label with counted_in_retired=false is legal + tested (the R-700 OD-4/OD-6 case)"
+      - "the 5 prose copies (dashboard / ledger §11.x / harness-cp+od CLAUDE.md / root CLAUDE.md) CITE the derived number instead of hand-maintaining it; dashboard trend reads structured data, not regex"
+      - "forward-only audit trail preserved (append/supersede; never silently rewrite a historical row — mirrors ledger §0.5)"
+  close_shape:
+    type: PR-merge
+    artifact: "feat(tooling): schema-backed substitution ledger + derived counts + tally CI gate"
+    cascade: []
+  next_pointer: null
+  notes: >
+    Motivated by the R-700 Phase-8 close (2026-06-02): `48/54` was internally impossible (48 RETIRED but
+    3 PARTIAL ⇒ ≤1 possible) and survived ~51 batch footers + 5 hand-maintained files before a draft
+    caught it; the 46-vs-47 ambiguity + the label≠count-membership rule had to be reasoned out with
+    advisor. A typed one-row-per-substitution source + generator makes the buckets DERIVED and an
+    impossible tally a CI failure — killing the workspace #1 defect class (stale-carry-text, CLAUDE.md
+    §10.9) for the accounting surface. SCOPE DISCIPLINE: schema-fy ONLY the counted/derived state (the
+    ledger). Prose REASONING (change-notes, fork Readings, council, the "why") stays prose — schema
+    flattens the epistemic nuance (§10.4) and buys validation, not readability. Mirror precedent: the
+    roadmap R-NNN entries are already schema-backed (§3 + tools/dashboard/generate.py + the session-start
+    hash hook); this extends the same pattern to the substitution ledger. CI-gate component relates to
+    Surface III (R-200) but the dominant character is process-discipline anti-drift. Minimal first step,
+    NOT a migration — the prose docs reference the derived numbers.
 ```
 
 ### 5.7 Halt-doc routings (2026-05-31 carries)
