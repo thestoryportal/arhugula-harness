@@ -169,6 +169,15 @@ OUT=$(run_on "$(jq -nc --arg p "$REPO/nb.ipynb" '{"hook_event_name":"PreToolUse"
 OUT=$(run_on "$(jq -nc '{"hook_event_name":"PreToolUse","tool_name":"NotebookEdit","tool_input":{"notebook_path":"/etc/x.ipynb"}}')")
 [ -z "$OUT" ] && ok "outside NotebookEdit → ask" || bad "outside notebook auto-decided: $OUT"
 
+# 5m) Round-6 adversarial bypasses must NOT auto-allow (codex P1/P2).
+for c in "cat '/etc/passwd'" "echo \$ANTHROPIC_API_KEY" "awk 'BEGIN{system(\"git push origin main\")}'" "git branch -d feature" "git branch --delete --force x" "printf %s \$OPENAI_API_KEY"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
+done
+# git branch (list/create) still allowed
+OUT=$(run_on "$(pl Bash 'git branch' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git branch (list) → allow" || bad "git branch list not allowed: $OUT"
+
 # 6) PermissionRequest event uses the decision.behavior schema.
 OUT=$(run_on "$(pl Bash 'git status' '' PermissionRequest)")
 [ "$(beh "$OUT")" = "allow" ] && ok "PermissionRequest allow schema" || bad "PR allow schema wrong: $OUT"

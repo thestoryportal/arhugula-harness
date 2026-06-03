@@ -64,6 +64,29 @@ CLAUDE_PROJECT_DIR="$REPO" bash "$RUN" --max abc >/dev/null 2>&1; [ $? -eq 2 ] &
 ( CLAUDE_PROJECT_DIR="$REPO" bash "$RUN" --max >/dev/null 2>&1 ); [ $? -eq 2 ] && ok "--max with no value → exit 2" || bad "--max no-value not rejected"
 ( CLAUDE_PROJECT_DIR="$REPO" bash "$RUN" --prompt >/dev/null 2>&1 ); [ $? -eq 2 ] && ok "--prompt with no value → exit 2" || bad "--prompt no-value not rejected"
 
+# 4c) --max is passed to the child as HARNESS_LOOP_MAX (codex P2). Fake claude records env.
+rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness/claude_calls.log" "$REPO/.harness/HALT_ON" "$REPO/.harness/child_env.log"
+cat > "$REPO/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+echo "called" >> "$CLAUDE_PROJECT_DIR/.harness/claude_calls.log"
+echo "HARNESS_LOOP_MAX=${HARNESS_LOOP_MAX:-unset}" >> "$CLAUDE_PROJECT_DIR/.harness/child_env.log"
+EOF
+chmod +x "$REPO/bin/claude"
+CLAUDE_PROJECT_DIR="$REPO" PATH="$REPO/bin:$PATH" bash "$RUN" --max 3 >/dev/null 2>&1
+grep -q 'HARNESS_LOOP_MAX=3' "$REPO/.harness/child_env.log" && ok "--max passed to child as HARNESS_LOOP_MAX" || bad "child env: $(cat "$REPO/.harness/child_env.log" 2>/dev/null)"
+
+# 4d) HARNESS_LOOP_PROMPT env is honored as the prompt source (codex P3 multi-word path).
+rm -f "$REPO/.harness/child_env.log" "$REPO/.harness/claude_calls.log"
+cat > "$REPO/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+echo "called" >> "$CLAUDE_PROJECT_DIR/.harness/claude_calls.log"
+# $2 is the prompt (claude -p "<prompt>" ...)
+echo "PROMPT=$2" >> "$CLAUDE_PROJECT_DIR/.harness/child_env.log"
+EOF
+chmod +x "$REPO/bin/claude"
+HARNESS_LOOP_PROMPT="do alpha then beta" CLAUDE_PROJECT_DIR="$REPO" PATH="$REPO/bin:$PATH" bash "$RUN" --max 1 >/dev/null 2>&1
+grep -q 'PROMPT=do alpha then beta' "$REPO/.harness/child_env.log" && ok "HARNESS_LOOP_PROMPT honored (multi-word)" || bad "prompt env: $(cat "$REPO/.harness/child_env.log" 2>/dev/null)"
+
 # 5) SIGTERM mid-run → the EXIT/signal trap clears the .loop-active marker (codex P2:
 #    an interrupted runner must not leak loop mode into the next interactive session).
 rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness/claude_calls.log" "$REPO/.harness/HALT_ON" "$REPO/.harness/.loop-active"

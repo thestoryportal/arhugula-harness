@@ -70,11 +70,16 @@ _safe_path() {
 # `cat .env` / `grep TOKEN ~/.ssh/id_rsa` / `touch ~/.ssh/authorized_keys` would auto-allow.
 # Returns 0 safe.
 _bash_args_safe() {
-  local cmd="$1" tok
+  local cmd="$1" stripped tok
   printf '%s' "$cmd" | grep -Eq '(\.env|credentials|\.pem|id_rsa|id_ed25519|keyring|secret|\.key|\.ssh|authorized_keys)' && return 1
   printf '%s' "$cmd" | grep -Eq '(~|\$HOME|\.\.)' && return 1
+  # Secret env-var expansions (e.g. `echo $ANTHROPIC_API_KEY` would print creds).
+  printf '%s' "$cmd" | grep -Eq '\$\{?[A-Za-z_]*(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|APIKEY|_API_)' && return 1
+  # Absolute paths outside the worktree. Strip quotes first so `cat '/etc/passwd'`
+  # (token starts with a quote, not /) is still caught.
+  stripped=$(printf '%s' "$cmd" | tr -d "\"'")
   set -f
-  for tok in $cmd; do
+  for tok in $stripped; do
     case "$tok" in
       /*) case "$tok" in "$PROJECT_DIR"|"$PROJECT_DIR"/*) ;; *) set +f; return 1 ;; esac ;;
     esac
@@ -119,7 +124,7 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
     && emit_deny "force-push"
   printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+(reset[[:space:]]+--hard|rebase|filter-branch|filter-repo)' \
     && emit_deny "git history rewrite"
-  printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+branch[[:space:]]+-D|git[[:space:]]+push[[:space:]]+[^[:space:]]+[[:space:]]+:' \
+  printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+branch[[:space:]]+(-d|-D|--delete)|git[[:space:]]+push[[:space:]]+[^[:space:]]+[[:space:]]+:' \
     && emit_deny "branch deletion / remote ref delete"
   # Secret / credential relocation.
   printf '%s' "$CMD" | grep -Eq '(mv|cp|scp|rsync|install)[[:space:]].*(\.env|credentials|\.pem|id_rsa|id_ed25519|keyring|secret)' \
@@ -179,7 +184,7 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
     :  # chained / nested / redirected / destructive submode (incl. git commit --amend) → ask
   else
     TRIM=$(printf '%s' "$CMD" | sed 's/^[[:space:]]*//')
-    if printf '%s' "$TRIM" | grep -Eq '^(ls|cat|head|tail|wc|echo|printf|pwd|cd|which|command[[:space:]]+-v|grep|rg|find|sed[[:space:]]+-n|sort|uniq|awk|diff|jq|mkdir|chmod[[:space:]]+\+x|touch|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|codex-review)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|worktree[[:space:]]+list)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment|merge)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
+    if printf '%s' "$TRIM" | grep -Eq '^(ls|cat|head|tail|wc|echo|printf|pwd|cd|which|command[[:space:]]+-v|grep|rg|find|sort|uniq|diff|jq|mkdir|chmod[[:space:]]+\+x|touch|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|codex-review)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|worktree[[:space:]]+list)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment|merge)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
        && _bash_args_safe "$CMD"; then
       emit_allow
     fi

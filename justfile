@@ -197,5 +197,7 @@ codex-review-uncommitted: _require-codex-subscription
 # Approvals flow through the U-HK-12 permission guard (no --dangerously-skip-permissions).
 # `just loop` runs for real; `just loop --dry-run` exercises the loop without calling claude;
 # `just loop --max 10` caps iterations. Review .harness/loop_status.md after a run.
+# Custom multi-word prompt: use the env var (just variadic args don't preserve quoting):
+#   HARNESS_LOOP_PROMPT="do X then Y" just loop
 loop *ARGS:
     bash tools/loop/run.sh {{ARGS}}
