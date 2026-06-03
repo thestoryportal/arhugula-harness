@@ -35,6 +35,12 @@ printf '%s' "$SKIP" | grep -q "R-410" && printf '%s' "$SKIP" | grep -q "R-300" \
 # 3) defer.sh with no args → usage error (exit 2), no malformed row.
 CLAUDE_PROJECT_DIR="$REPO" bash "$DEFER" >/dev/null 2>&1 && bad "no-arg defer.sh did not error" || ok "no-arg defer.sh exits nonzero"
 
+# 3b) defer.sh with an item but NO reason → error + no row (a reason-less deferral would
+#     skip the item while giving the operator nothing actionable at SessionStart).
+CLAUDE_PROJECT_DIR="$REPO" bash "$DEFER" R-555 >/dev/null 2>&1 && bad "reason-less defer.sh accepted" || ok "reason-less defer.sh exits nonzero"
+CLAUDE_PROJECT_DIR="$REPO" bash "$DEFER" R-555 "" >/dev/null 2>&1 && bad "empty-reason defer.sh accepted" || ok "empty-reason defer.sh exits nonzero"
+grep -q "R-555" "$LEDGER" && bad "reason-less R-555 row was written" || ok "no reason-less row written"
+
 # 4) halt.sh raises the halt marker + logs a STOP row.
 CLAUDE_PROJECT_DIR="$REPO" bash "$HALT" "forward menu exhausted — 2 awaiting input" >/dev/null 2>&1
 [ -f "$REPO/.harness/.loop-halt" ] && ok "halt.sh raises .loop-halt" || bad ".loop-halt not raised"

@@ -16,6 +16,11 @@ _H="$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks" && pwd)"
 . "$_H/lib.sh"
 # shellcheck source=../hooks/loop_lib.sh
 . "$_H/loop_lib.sh"
-[ "$#" -ge 1 ] || { echo "usage: defer.sh <item-id> <what input is needed>" >&2; exit 2; }
-loop_defer "$@"
-echo "[loop] deferred $1 (logged to loop_status.md; advancing to the next forward item)"
+# Require an item-id AND a non-empty reason: a reason-less deferral would skip the item
+# from the skip-set while giving the operator nothing actionable at SessionStart.
+[ "$#" -ge 2 ] || { echo "usage: defer.sh <item-id> <what operator input is needed>" >&2; exit 2; }
+_item="$1"; shift
+_reason="$*"
+[ -n "${_reason//[[:space:]]/}" ] || { echo "defer.sh: a non-empty reason is required (what input the operator must provide)" >&2; exit 2; }
+loop_defer "$_item" "$_reason"
+echo "[loop] deferred ${_item} (logged to loop_status.md; advancing to the next forward item)"

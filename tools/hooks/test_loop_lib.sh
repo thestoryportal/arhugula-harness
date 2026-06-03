@@ -92,6 +92,14 @@ loop_defer R-410 "blocked until R-300 vendor decision is made"
 SKIP=$(loop_skip_set)
 [ "$SKIP" = "R-410" ] && ok "skip-set = leading id only (R-300 in reason excluded)" || bad "over-matched reason id: [$SKIP]"
 
+# 14) kind matched by COLUMN, not whole-row substring — a reason CONTAINING "ACTIVATE"
+#     must not reset the run boundary and drop deferrals (would let the loop retry a gate).
+: > "$(loop_status_path)"; loop_activate "kind-column test" >/dev/null
+loop_defer R-410 "needs operator to ACTIVATE GitHub Pages"
+loop_defer R-300 "needs creds"
+SKIP=$(loop_skip_set)
+[ "$SKIP" = "R-300 R-410" ] && ok "'ACTIVATE' in a reason does not drop deferrals ($SKIP)" || bad "kind whole-row match dropped a deferral: [$SKIP]"
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -105,9 +105,12 @@ loop_skip_set() {
   # "<item> — <reason>"). Scanning the whole detail would wrongly skip an item merely
   # MENTIONED in a reason, e.g. `loop_defer R-410 "blocked until R-300 decides"` must skip
   # R-410 only, never R-300.
+  # Match the KIND COLUMN ($3) exactly — a whole-row regex would let a reason CONTAINING
+  # the word "ACTIVATE"/"DEFERRED-HIL" reset the run boundary and drop real deferrals.
   awk -F'|' '
-    / ACTIVATE /      { act = NR }
-    / DEFERRED-HIL /  { d[NR] = $4 }
+    { k = $3; gsub(/^[ \t]+|[ \t]+$/, "", k) }
+    k == "ACTIVATE"     { act = NR }
+    k == "DEFERRED-HIL" { d[NR] = $4 }
     END { for (n in d) if (n > act) { s=d[n]; sub(/^[ \t]+/, "", s); split(s, a, /[ \t]/); print a[1] } }
   ' "$p" 2>/dev/null | grep -E '^R-[A-Za-z0-9._-]+$' | sort -u | tr '\n' ' ' | sed 's/ $//'
 }
@@ -120,9 +123,10 @@ loop_pending_hil_summary() {
   [ -f "$p" ] || return 0
   local rows n
   rows=$(awk -F'|' '
-    / ACTIVATE /     { act = NR }
-    / DEFERRED-HIL / { d[NR] = $4 }
-    END { for (k = 1; k <= NR; k++) if (k in d && k > act) { s=d[k]; gsub(/^ +| +$/, "", s); print s } }
+    { kind = $3; gsub(/^[ \t]+|[ \t]+$/, "", kind) }
+    kind == "ACTIVATE"     { act = NR }
+    kind == "DEFERRED-HIL" { d[NR] = $4 }
+    END { for (j = 1; j <= NR; j++) if (j in d && j > act) { s=d[j]; gsub(/^ +| +$/, "", s); print s } }
   ' "$p" 2>/dev/null)
   [ -z "$rows" ] && return 0
   n=$(printf '%s\n' "$rows" | grep -c .)
