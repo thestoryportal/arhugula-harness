@@ -14,7 +14,10 @@ auto-driven.
 
 1. Creates the `.harness/.loop-active` marker (detected by `loop_mode_active()` in
    `tools/hooks/lib.sh`) and logs an `ACTIVATE` row to `.harness/loop_status.md`.
-2. From now until `/loop-stop`, the autonomy hooks fire: safe non-destructive tools
+2. Reaps stale merged worktrees (U-HK-26 `loop_gc_worktrees`) — the in-session
+   activation case the SessionStart hook can't cover (it already ran with loop mode
+   off). Worktrees only, merged+clean+non-current; logged to the ledger.
+3. From now until `/loop-stop`, the autonomy hooks fire: safe non-destructive tools
    auto-approve; the hard-stop deny-list still blocks paid calls / secret relocation /
    destructive git / missing creds and **logs them to the ledger to work around**.
 
@@ -22,6 +25,7 @@ auto-driven.
 
 ```bash
 source tools/hooks/lib.sh && source tools/hooks/loop_lib.sh && loop_activate "operator /loop-start"
+loop_gc_worktrees reap   # U-HK-26: collect stale merged worktrees left by prior sessions
 echo "loop mode: $(loop_mode_active && echo ON || echo OFF)"
 ```
 
