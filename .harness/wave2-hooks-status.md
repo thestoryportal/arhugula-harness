@@ -61,3 +61,37 @@ autonomy infrastructure is operator-gated by design, not agent-self-serve.
 `.harness/loop_status.md` after any run — `DEFERRED-HIL` / `DENY` / `RESOLVE-SPLIT` rows
 are the things that wanted a human. The fully-autonomous loop remains an explicit,
 reviewable, bounded opt-in.
+
+## Pre-merge hardening (out-of-family Codex review)
+
+PR #268 was driven through the `just codex-review` (gpt-5.5, out-of-family) gate to
+practical convergence — **12 rounds, ~30 genuine bypasses fixed**, almost all on the
+auto-approve guard (`permission-guard.sh`, the highest-blast-radius unit). The guard
+ended up: tri-state (deny-list → allowlist → ask) and inert off loop-mode; allowlisting
+only commands that are safe *regardless of arguments* (dev/git arc + pure builtins),
+dropping content-readers + path-mutators (the loop uses the structured Read/Edit/Grep/Glob
+tools, which enforce `_safe_path` with physical symlink-chain resolution); deny-list
+covering force-push / history-rewrite / branch-delete+force-move / recursive-rm / secret
+relocation / paid provider calls / `gh pr merge --admin` / `git commit --amend`; secret/
+worktree/`.git`/traversal/env-expansion arg rejection; bounded loop (cap + halt marker +
+signal trap with TERM→KILL escalation).
+
+### Known residuals (operator-accepted 2026-06-03, AskUserQuestion)
+
+Three round-12 findings were accepted rather than fixed, because their guard-level fixes
+would gut core loop function while the risks are already mitigated. All only matter *in
+loop mode* (an explicit opt-in):
+
+1. **Broad `Grep` / `git diff` could surface an in-tree secret.** Mitigated: the Grep tool
+   is ripgrep (respects `.gitignore`) and `git diff` only shows *tracked* files — so
+   gitignored secrets (this repo's convention) are never surfaced. Residual = a *committed
+   plaintext secret*, which is a repo-hygiene failure outside the guard's scope.
+2. **`pytest` / `just test` can make real provider calls** if a key is in the env and the
+   repo's e2e tests run. Mitigated/accepted: the loop's own `claude -p` is paid by design,
+   so enabling loop mode IS a paid opt-in; the only guard-level fix is "don't auto-run
+   tests," which defeats verify-before-commit. Operators who want zero incidental calls can
+   run the loop without a provider key in env (e2e tests then skip).
+
+These are documented residuals, not silent gaps. Tightening them further is a follow-on
+option (remove pytest/git-diff/grep from auto-allow) if an operator prefers maximum
+restriction over loop autonomy.
