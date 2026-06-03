@@ -1383,7 +1383,7 @@ R-600-notebooklm-skill-setup:
 R-600-substitution-ledger-schema:
   title: Extract the 54-row substitution ledger to a schema-backed source + derive the counts (kill the count-drift / stale-carry defect class for the accounting surface)
   surface: VII
-  status: PROPOSED   # scoped 2026-06-02 (operator-requested, post-R-700 close); not yet authorized to execute
+  status: RESOLVED   # 2026-06-02 — built (operator authorized). .harness/substitutions.yaml (55 rows = 54 canonical + CP-24) + tools/substitution_ledger.py (derive/validate, --check CI gate) + tools/test_substitution_ledger.py (canonical pin 46/49/54 + both per-axis breakdowns + label≠count + 4 negative tests) + ci.yml substitution-ledger blocking job + generate.py consumes the derivation (killed NONRETIRED_LEDGER counts + 46-48 range prose) + 4 prose pointers. Derivation reproduces graduation §3 exactly (46/49/54).
   depends_on: [R-700-phase-8-substitution-accounting]   # RESOLVED 2026-06-02 — the canonical 46/54 disposition set (.harness/phase-8-graduation.md §3) is the schema's seed data
   blocks: []
   posture: mode-agnostic

@@ -1,0 +1,104 @@
+# Substitution ledger — single source of truth for the H_E → H_T substitution accounting.
+#
+# Authored R-600-substitution-ledger-schema (2026-06-02), seeded from the operator-ratified
+# Phase-8 graduation (.harness/phase-8-graduation.md §3/§4 = R-700, accounting (i)).
+# The buckets + integers are DERIVED from this file by tools/substitution_ledger.py — the prose
+# docs (dashboard, ledger §11.x, harness-cp/od CLAUDE.md, root CLAUDE.md) CITE that derivation
+# instead of hand-maintaining counts. This kills the count-drift / stale-carry defect class
+# (workspace #1, CLAUDE.md §10.9) on the accounting surface: an impossible tally is a CI failure.
+#
+# ───────────────────────────────────────────────────────────────────────────────────────────
+# ROW COUNT: 55 entries = 54 canonical + 1 non-canonical (CP-24, the accounting-(i)-excluded
+# CP-axis-local authoring extra). The generator asserts exactly 54 `canonical: true` rows. The
+# `canonical` flag is what resolves the CP-21-vs-22 / AS-3↔AS-9 bookkeeping ambiguity explicitly
+# (accounting (i): drop CP-24, keep CP-17 SB-INDEF inside the 54 → RETIRED = 46).
+#
+# DISPOSITION enum (the count-bucket — drives counted_in_retired):
+#   SUBSTANTIVE_RETIRED     — counted in RETIRED
+#   AUTHORING_ONLY          — counted in RETIRED (the typed declaration IS the H_T contract; sub-species 10)
+#   BOUNDED_RESIDUAL        — counted in RETIRED (substrate dormant at MVP; X-AL-2 §5.3)
+#   PARTIAL                 — NOT counted; in pipeline-advanced
+#   STILL_BOUNDED           — NOT counted; not pipeline-advanced
+#   SB_INDEFINITE           — NOT counted; not pipeline-advanced (deferred-by-design)
+#
+# LABEL ≠ COUNT-MEMBERSHIP (the load-bearing invariant — the exact defect R-700 existed to kill):
+#   `counted_in_retired` is DERIVED from `disposition`, NEVER from string-matching `sign_off_label`.
+#   `sign_off_label` is the terminal graduation disposition for the 8 non-substantive rows and MAY
+#   contain the word "RETIRED" (e.g. OD-4 = RETIRED-AS-CROSS-AXIS-DEFERRED) while the row is NOT
+#   counted (disposition: PARTIAL). A future editor must NOT promote a label into a count.
+#
+# FORWARD-ONLY: a real retirement-event transit edits the row's `disposition` AND bumps the
+# snapshot pin in tools/test_substitution_ledger.py in the SAME commit. Never silently flip a row.
+# ───────────────────────────────────────────────────────────────────────────────────────────
+
+snapshot:
+  retired: 46          # canonical RETIRED integer (Phase-8 graduation, accounting (i))
+  pipeline_advanced: 49
+  total_canonical: 54
+  source: ".harness/phase-8-graduation.md §3"
+
+substitutions:
+  # ── IS axis — 9 canonical rows · 9 RETIRED ──────────────────────────────────────────────
+  - { id: H_T-IS-1,  axis: IS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-1,  r_pointer: null, rationale: "Path-class registry / workflow-canonical resolver; stage_1_is materialize_path_registry" }
+  - { id: H_T-IS-2,  axis: IS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-50, r_pointer: R-001-h-t-is-2-retired, rationale: "Artifact-tier registry; procedural_tier_snapshot_ref sidecar at every producer site (R-003 cascade)" }
+  - { id: H_T-IS-4,  axis: IS, disposition: AUTHORING_ONLY,      canonical: true, batch: batch-39, r_pointer: null, rationale: "Atomic-deploy primitive; categorical-mismatch — operator Bash(git) IS canonical deploy per ADR-F2 (sub-species 10)" }
+  - { id: H_T-IS-5,  axis: IS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-1,  r_pointer: null, rationale: "State-ledger entry shape (6-field); lifecycle/state_ledger driver-invoked" }
+  - { id: H_T-IS-6,  axis: IS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-1,  r_pointer: null, rationale: "Hash-chain integrity (SHA-256/JCS); entry_hash in-process hashlib" }
+  - { id: H_T-IS-7,  axis: IS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-1,  r_pointer: null, rationale: "F2 read/write JSONL pair; state_ledger_write + state_ledger_read at bootstrap" }
+  - { id: H_T-IS-8,  axis: IS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-1,  r_pointer: null, rationale: "Shadow-Git checkpoint cadence; shadow_git_checkpoint manifest-driven gate" }
+  - { id: H_T-IS-9,  axis: IS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-1,  r_pointer: null, rationale: "Worktree isolation (workload-opt-in); manifest-driven opt-in + concurrency-cap" }
+  - { id: H_T-IS-10, axis: IS, disposition: AUTHORING_ONLY,      canonical: true, batch: "v1 §1",  r_pointer: null, rationale: "Substrate seam exports manifest; per-axis authoring artifact" }
+
+  # ── AS axis — 11 canonical rows · 9 RETIRED + 2 SB-INDEFINITE ────────────────────────────
+  - { id: H_T-AS-1,  axis: AS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-20, r_pointer: null, rationale: "SandboxTier 4-tier + monotonicity; lifecycle/sandbox_dispatch 6-provider×tier table" }
+  - { id: H_T-AS-2,  axis: AS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-16, r_pointer: null, rationale: "Tool-contract schema; joint close with CP-18; ToolContract enforced at RuntimeToolDispatcher" }
+  - { id: H_T-AS-4,  axis: AS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-19, r_pointer: null, rationale: "sandbox.* 7-attr namespace; Reading B arc 2; _emit_sandbox_violation dual fail-class span" }
+  - { id: H_T-AS-5,  axis: AS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-23, r_pointer: null, rationale: "Sandbox-event idempotency-key; gate-text reframe → idempotency-key attr on sandbox.violation span" }
+  - { id: H_T-AS-8a, axis: AS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-24, r_pointer: null, rationale: "anthropic.* 10-attr namespace; LANDED at llm_dispatch gen_ai span" }
+  - { id: H_T-AS-8b, axis: AS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-24, r_pointer: null, rationale: "mcp.* 7-attr namespace; LANDED at runtime_tool_dispatcher" }
+  - { id: H_T-AS-8c, axis: AS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-24, r_pointer: null, rationale: "memory.* 6-attr namespace; LANDED at memory_tool_dispatch" }
+  - { id: H_T-AS-8d, axis: AS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-31, r_pointer: null, rationale: "skill.* 6-attr namespace; mech-β deployment-time-opt-in-gate; runtime spec v1.32 C-RT-27" }
+  - { id: H_T-AS-8e, axis: AS, disposition: SB_INDEFINITE,       canonical: true, batch: null,     r_pointer: R-005, sign_off_label: accepted-indefinite-defer, rationale: "files.* 8-attr namespace; Files arc DEFERRED INDEFINITELY per runtime spec v1.17 §14.C Memory-only MVP" }
+  - { id: H_T-AS-8f, axis: AS, disposition: SB_INDEFINITE,       canonical: true, batch: null,     r_pointer: R-006, sign_off_label: accepted-indefinite-defer, rationale: "managed_agents.* 3-attr namespace; DEFER INDEFINITELY per class_1_fork_as_8f Q1=(C) production-only exclusion" }
+  - { id: H_T-AS-9,  axis: AS, disposition: AUTHORING_ONLY,      canonical: true, batch: "v1 §1",  r_pointer: null, rationale: "Substrate seam exports manifest; per-axis authoring artifact (live table uses AS-9 over Meta-Arch AS-3 — documentation seam, not a count change)" }
+
+  # ── CP axis — 21 canonical rows · 20 RETIRED + 1 SB-INDEFINITE (+ CP-24 non-canonical) ───
+  - { id: H_T-CP-1,  axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-1,  r_pointer: null, rationale: "Routing core + ProviderCapabilities (multi-LLM); LLM call site at lifecycle/llm_dispatch per C-RT-15" }
+  - { id: H_T-CP-2,  axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: "early",  r_pointer: null, rationale: "Layered routing strategy; composer landed" }
+  - { id: H_T-CP-3,  axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: "early",  r_pointer: null, rationale: "Per-layer time-budget + retry.*; retry_breaker" }
+  - { id: H_T-CP-4,  axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: "early",  r_pointer: null, rationale: "Fallback chain + cross-family fallback; fallback_chain" }
+  - { id: H_T-CP-5,  axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: "early",  r_pointer: null, rationale: "Routing attr namespaces + sampling; routing namespace" }
+  - { id: H_T-CP-6,  axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-2,  r_pointer: null, rationale: "Workflow-manifest schema + per-step override + audit; resolve_step_binding per-step" }
+  - { id: H_T-CP-8,  axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-47, r_pointer: null, rationale: "F2-substrate-join contract; sub-species 7e (composer-library-complete-no-H_E-surface)" }
+  - { id: H_T-CP-9,  axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-48, r_pointer: null, rationale: "ResumptionKind 5-class + engine.*; sub-species 7a; CP spec v1.6 §25.5 v1.4 carve-out" }
+  - { id: H_T-CP-10, axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: "per §4.1", r_pointer: null, rationale: "TopologyPattern 6-class + admissibility; SINGLE_THREADED_LINEAR MVP slice" }
+  - { id: H_T-CP-11, axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-30, r_pointer: null, rationale: "Per-workload commitment table + D4 tunable; sub-species 7a; v1.6 MVP cascade_policy carve-out" }
+  - { id: H_T-CP-12, axis: CP, disposition: AUTHORING_ONLY,      canonical: true, batch: batch-40, r_pointer: null, rationale: "Sandbox-tier dispatch (cross-deployment monotonicity); sub-species 10 categorical-mismatch" }
+  - { id: H_T-CP-13, axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: "per §4.1", r_pointer: null, rationale: "Sub-agent handoff schemas; RuntimeHandoffRegistry" }
+  - { id: H_T-CP-14, axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-29, r_pointer: null, rationale: "Multi-agent span hierarchy + topology.*/subagent.*; sub-species 7a; v1.6 MVP single-sub-agent slice" }
+  - { id: H_T-CP-16, axis: CP, disposition: BOUNDED_RESIDUAL,    canonical: true, batch: batch-44, r_pointer: null, rationale: "Memory primitives + memory.* consumption; indefinite-defer per sub-species 7g; gated on Files-API surface (counted per X-AL-2 §5.3)" }
+  - { id: H_T-CP-17, axis: CP, disposition: SB_INDEFINITE,       canonical: true, batch: null,     r_pointer: R-010, sign_off_label: accepted-indefinite-defer, rationale: "Files primitives + files.* consumption; reclassified batch-44 per runtime spec v1.17 §14.C Files-arc scope" }
+  - { id: H_T-CP-18, axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-16, r_pointer: null, rationale: "MCP integration + per-server trust + mcp.*; joint close with AS-2" }
+  - { id: H_T-CP-19, axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-22, r_pointer: null, rationale: "D5 cross-deployment monotonicity; first sub-species 7 close; Layer-3 e2e reframed scope" }
+  - { id: H_T-CP-20, axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-8,  r_pointer: null, rationale: "HITL primitive + 4-response palette + hitl.*/audit.*; RuntimeHITLGateComposer invokes ask_user_question_surface" }
+  - { id: H_T-CP-21, axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-17, r_pointer: null, rationale: "ValidatorFailClass 5-class + operator-burden eval; corrective close (restored batch-15 DOWN-classification)" }
+  - { id: H_T-CP-22, axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-18, r_pointer: null, rationale: "Pause/resume protocol + state-summary + material-diff; workflow-layer composer close" }
+  - { id: H_T-CP-23, axis: CP, disposition: AUTHORING_ONLY,      canonical: true, batch: batch-41, r_pointer: null, rationale: "Bridging-arc composition (F1+D1+D4); sub-species 10 categorical-mismatch" }
+  - { id: H_T-CP-24, axis: CP, disposition: AUTHORING_ONLY,      canonical: false, batch: "v1 §1", r_pointer: null, rationale: "Substrate seam exports / authoring artifact (CP-axis-local 22nd row); EXCLUDED from canonical 54 per accounting (i) — the natural drop that resolves 55→54 / Meta-Arch CP=21" }
+
+  # ── OD axis — 8 canonical rows · 7 RETIRED + 1 PARTIAL ──────────────────────────────────
+  - { id: H_T-OD-1,  axis: OD, disposition: AUTHORING_ONLY,      canonical: true, batch: batch-37, r_pointer: null, rationale: "Deferral envelope; sub-species 10 categorical-mismatch (zero runtime callers)" }
+  - { id: H_T-OD-2,  axis: OD, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-2,  r_pointer: null, rationale: "OTel SDK base + GenAI semconv binding; RuntimeLLMDispatcher.dispatch gen_ai span" }
+  - { id: H_T-OD-3,  axis: OD, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-51, r_pointer: R-007, rationale: "Composite Sampler; HarnessCompositeSampler live at MVP via materialize_tracer_provider_stage (gate-text-stale audit)" }
+  - { id: H_T-OD-4,  axis: OD, disposition: PARTIAL,             canonical: true, batch: batch-35, r_pointer: R-008, sign_off_label: RETIRED-AS-CROSS-AXIS-DEFERRED, rationale: "Pre-Collector redaction SpanProcessor; gate (a) §13.1 CLOSED (#244); gate (b) §13.2 tokenization is cross-axis (c10-action-safety/Phase-6+) — never OD-axis-Claude-closeable" }
+  - { id: H_T-OD-5,  axis: OD, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-32, r_pointer: null, rationale: "Cost-attribution 5-step chain; mech-β AC #8; U-OD-40 validator+webhook LANDED" }
+  - { id: H_T-OD-6,  axis: OD, disposition: BOUNDED_RESIDUAL,    canonical: true, batch: batch-51, r_pointer: R-009, rationale: "Local-first OTLP ingestion (in-process collector + sqlite); FIRST bounded-residual close; flush_to_sqlite dormant at MVP → X-AL-2 §5.3; gated on R-420/R-421 (counted)" }
+  - { id: H_T-OD-7,  axis: OD, disposition: AUTHORING_ONLY,      canonical: true, batch: batch-38, r_pointer: null, rationale: "Preservation invariants (5-dimension); sub-species 10 (static deferral-signature contract)" }
+  - { id: H_T-OD-8,  axis: OD, disposition: AUTHORING_ONLY,      canonical: true, batch: "v1 §1",  r_pointer: null, rationale: "Aggregate manifest + Stage 3b inversion; per-axis authoring artifact" }
+
+  # ── CXA axis — 5 canonical rows · 1 RETIRED + 2 PARTIAL + 2 STILL-BOUNDED ────────────────
+  - { id: H_T-CXA-1, axis: CXA, disposition: PARTIAL,            canonical: true, batch: null,     r_pointer: R-CXA-1, sign_off_label: phase-2-runtime-deferred, rationale: "AS→IS consumption (13 edges); as_is_wiring materialized + 7c-tested → IS append; zero production callers of emit_secret_fetch_audit_entry (AS secret-fetch driver absent)" }
+  - { id: H_T-CXA-2, axis: CXA, disposition: STILL_BOUNDED,      canonical: true, batch: null,     r_pointer: R-CXA-2, sign_off_label: phase-2-runtime-deferred, rationale: "CP→IS consumption (36 edges); cp_is_wiring PARTIAL-LAND (1 of 17 §12.3 edges; 16 deferred per class_1_tension_u_rt_35); zero production callers" }
+  - { id: H_T-CXA-3, axis: CXA, disposition: STILL_BOUNDED,      canonical: true, batch: null,     r_pointer: R-CXA-3, sign_off_label: phase-2-runtime-deferred, rationale: "CP→AS consumption (24 edges); no cp_as_wiring module (consistent with spec §12 — no CP→AS stage); typed-edge import surface only" }
+  - { id: H_T-CXA-4, axis: CXA, disposition: PARTIAL,            canonical: true, batch: batch-42, r_pointer: R-CXA-4, sign_off_label: phase-2-runtime-deferred, rationale: "OD→IS/AS/CP consumption (26 edges); 3 composer stages fire at bootstrap; OD audit-write seam fully exercised (6 audit_writer.append callers); ~5 of 26 edges materialized" }
+  - { id: H_T-CXA-5, axis: CXA, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-3, r_pointer: null, rationale: "OD→CP inversion (harness.breaker.*); production emission at retry_breaker_fallback (U-RT-58); belatedly recognized at ledger §11.1a (38-batch stale-carry)" }

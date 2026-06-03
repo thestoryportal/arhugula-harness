@@ -73,7 +73,7 @@ ANNOTATIONS = {
     # BLOCKED
     "R-008-od-4-redaction-partial": "Telemetry redaction is half-wired; the per-session on/off switch and token-masking pieces aren't built yet.",
     "R-100-mvp-config-discovery": "Waiting on a small decision: auto-find the config file at the project root, or drop that behavior from the spec.",
-    "R-700-phase-8-substitution-accounting": "Waiting on your sign-off of the final 'how many pieces are retired' count (46/47/48) to formally declare the build phase done.",
+    "R-700-phase-8-substitution-accounting": "RESOLVED — you ratified the count and Phase 8 is declared CLOSED: 46/54 retired (derived from the substitution ledger). The build phase is done.",
     # DEFERRED (parked by design)
     "R-005-as-8e-files-indefinite": "File-telemetry support is parked by design until a cloud deployment needs it — not part of the core build.",
     "R-006-as-8f-managed-agents-indefinite": "Managed-agents telemetry is parked by design until a cloud deployment needs it — not part of the core build.",
@@ -154,12 +154,27 @@ NONRETIRED_LEDGER = [
     },
     {
         "id": "CP-17",
-        "rnnn": "(none yet)",
+        "rnnn": "R-010",
         "state": "STILL-BOUNDED-INDEFINITELY",
         "why": "files-primitives control-plane row (tied to the Files arc, same as AS-8e).",
-        "retire": "Deferred by design. Also a tracking gap — it has no R-NNN entry yet.",
+        "retire": "Deferred by design (R-010 tracks it).",
     },
 ]
+
+# Substitution-ledger derivation (R-600-substitution-ledger-schema). The canonical RETIRED /
+# pipeline-advanced integers + bucket counts are DERIVED from `.harness/substitutions.yaml`
+# via `tools/substitution_ledger.py` — NOT hand-maintained here. Defensive: the dashboard must
+# still render if the ledger is missing, so this degrades to None and the build card falls back.
+_SUB_DERIVATION: dict | None = None
+try:
+    import sys as _sys
+
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import substitution_ledger as _subledger
+
+    _SUB_DERIVATION = _subledger.derive(_subledger.load())
+except Exception:  # defensive — never crash the dashboard on a ledger read/import issue
+    _SUB_DERIVATION = None
 
 # Ordered "remaining to complete", graph-derived from depends_on/blocks then layered.
 # layer ∈ {build, activation}. `gate` = what unblocks it / why it's where it is.
@@ -170,7 +185,7 @@ REMAINING_ORDERED = [
         "layer": "build",
         "id": "R-700-phase-8-substitution-accounting",
         "label": "Ratify the final retirement count",
-        "gate": "Your sign-off (46/47/48) — declares the build phase done. The 8 rows below all feed this.",
+        "gate": "RESOLVED — Phase 8 declared CLOSED at 46/54 (ratified). The 8 rows below carry terminal sign-off dispositions.",
     },
     {
         "n": 2,
@@ -271,14 +286,27 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
     """Two layered closure views (operator picked 'Both, layered').
 
     build      — substitution-ledger retirement (the canonical 'is H_T built'
-                 metric). A RANGE 46-48/54 because R-700 (the integer) is
-                 unratified; rendered as a range, never a fake-precise number.
+                 metric). DERIVED from `.harness/substitutions.yaml` (R-600);
+                 R-700 ratified the integer at the Phase-8 graduation (46/54).
     activation — the post-Phase-8 forward axis (deployment / integration);
                  0 exercised, but that is operator-gated infra + bounded-residual
                  by design, NOT remaining build work. The renderer says so loudly.
     """
-    total = 54
-    retired_lo, retired_hi = 46, 48
+    # Canonical counts derived from the substitution ledger (R-600); fall back to the
+    # Phase-8-graduation literals only if the ledger is unreadable (defensive).
+    if _SUB_DERIVATION is not None:
+        total = _SUB_DERIVATION["total_canonical"]
+        retired = _SUB_DERIVATION["retired"]
+        _bd = _SUB_DERIVATION["by_disposition"]
+        n_partial = _bd.get("PARTIAL", 0)
+        n_sb = _bd.get("STILL_BOUNDED", 0)
+        n_sbi = _bd.get("SB_INDEFINITE", 0)
+    else:
+        total = 54
+        retired = 46
+        n_partial = sum(1 for r in NONRETIRED_LEDGER if r["state"] == "PARTIAL")
+        n_sb = sum(1 for r in NONRETIRED_LEDGER if r["state"] == "STILL-BOUNDED")
+        n_sbi = sum(1 for r in NONRETIRED_LEDGER if r["state"] == "STILL-BOUNDED-INDEFINITELY")
     # forward-axis items = post-Phase-8 surfaces + CXA seams (open ones only)
     fwd = [
         a
@@ -287,21 +315,18 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
     ]
     fwd_open = [a for a in fwd if a["status"] not in ("RESOLVED", "CANCELLED")]
     # waffle-grid breakdown (ui-ux-pro-max chart rec: fraction-of-whole filled).
-    # retired = conservative low (46); the 8 non-retired split by state → total 54.
-    n_partial = sum(1 for r in NONRETIRED_LEDGER if r["state"] == "PARTIAL")
-    n_sb = sum(1 for r in NONRETIRED_LEDGER if r["state"] == "STILL-BOUNDED")
-    n_sbi = sum(1 for r in NONRETIRED_LEDGER if r["state"] == "STILL-BOUNDED-INDEFINITELY")
+    # `retired` + the 8 non-retired split by state → total 54 (derived above; R-600).
     return {
         "build": {
-            "lo": retired_lo,
-            "hi": retired_hi,
+            "lo": retired,
+            "hi": retired,
             "total": total,
-            "pct_lo": round(100 * retired_lo / total, 1),
-            "pct_hi": round(100 * retired_hi / total, 1),
-            "contested": True,
+            "pct_lo": round(100 * retired / total, 1),
+            "pct_hi": round(100 * retired / total, 1),
+            "contested": False,
             "nonretired": NONRETIRED_LEDGER,
             "waffle": {
-                "retired": retired_lo,
+                "retired": retired,
                 "partial": n_partial,
                 "still_bounded": n_sb,
                 "sb_indef": n_sbi,
@@ -602,6 +627,12 @@ def parse_retired_trend(root: Path) -> list[dict]:
         if cands:
             running = max(running, max(cands))
         series.append({"batch": _batch_no(p), "date": added, "retired": running})
+    # Reconcile the endpoint to the canonical derivation (R-600). The historical points
+    # are parsed from batch prose (no structured per-batch source exists), but batch-51's
+    # published `48` was superseded to the graduation canonical `46` at R-700 — pin the
+    # final point so the trend ends on the same number the headline derives, not stale prose.
+    if series and _SUB_DERIVATION is not None:
+        series[-1] = {**series[-1], "retired": _SUB_DERIVATION["retired"]}
     return series
 
 
@@ -1083,7 +1114,7 @@ const d = DATA.dashboard || {{}};
   set("ro-hash", esc(d.hash));
   set("ro-when", esc(d.last_refreshed));
   set("ro-forks", esc(d.fork_count));
-  set("tk-build", `${{b.pct_lo}}–${{b.pct_hi}}%`);
+  set("tk-build", `${{b.pct_lo}}%`);
   set("tk-retired", `${{w.retired||0}} / ${{w.total||b.total||0}}`);
   set("tk-unret", `${{(b.nonretired||[]).length}} rows`);
   set("tk-activation", `${{ac.exercised_pct||0}}% exercised`);
@@ -1130,8 +1161,8 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
     <div class="gridHero">
       <div class="panel lit meter">
         <div class="k">Build closure / is the harness built?</div>
-        <div class="big">${{b.pct_lo}}<span class="u">–${{b.pct_hi}}%</span></div>
-        <div class="sub"><strong>${{b.lo}}–${{b.hi}} of ${{b.total}}</strong> substitutions retired. A range, not a single number, because the final count is unratified: <strong>R-700, your sign-off</strong> (46/47/48). The 8 rows below are what remain.</div>
+        <div class="big">${{b.pct_lo}}<span class="u">%</span></div>
+        <div class="sub"><strong>${{b.lo}} of ${{b.total}}</strong> substitutions retired — the canonical count, derived from the substitution ledger and ratified at the <strong>Phase-8 graduation (R-700)</strong>. The 8 rows below carry terminal sign-off dispositions.</div>
         <div class="gaugebar"><span style="width:${{b.pct_lo}}%"></span></div>
         <div class="waffle" role="img" aria-label="${{w.total}} substitution cells: ${{w.retired}} retired, ${{w.partial}} partial, ${{w.still_bounded}} still-bounded, ${{w.sb_indef}} indefinite">${{cells}}</div>
         <div class="legend">${{legend}}</div>

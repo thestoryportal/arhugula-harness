@@ -482,6 +482,8 @@ The `harness-od/CLAUDE.md` §4.1 OD-6 RETIRE-READY classification (batch-33) is 
 
 **Phase 8: substitution accounting CLOSED.**
 
+**Canonical source going forward (R-600-substitution-ledger-schema):** the per-row dispositions + the 46/49/54 integers are now DERIVED from `.harness/substitutions.yaml` via `tools/substitution_ledger.py` (`--summary` for live counts; `--check` is the CI tally gate that fails on an impossible tally). These prose figures CITE that derivation — they are no longer hand-maintained. A real retirement-event transit edits the row's `disposition` + the yaml `snapshot:` block (forward-only); this §11.7 text stands verbatim.
+
 ---
 
 *End of phase-7d-retirement-ledger v2 (second pass against Phase 2 runtime closure) + 2026-05-27 supersession refresh + 2026-06-02 Phase-8 graduation supersession (§11.7).*
