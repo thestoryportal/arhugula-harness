@@ -149,3 +149,39 @@ dashboard-elevate file plan:
     node tools/dashboard/live-auto/orchestrator.mjs \
       --file="{{file}}" --plan="{{plan}}" \
       --producer=tools/dashboard/live-auto/producer-skillchain.mjs --no-inject
+
+# ─── out-of-family review — Codex CLI (pilot) ──────────────────────────────
+#
+# Decorrelated second opinion alongside Claude's advisor(). advisor = Claude
+# reviewing Claude = correlated blind spots; Codex (OpenAI, out-of-family) gives
+# DECORRELATED errors. The strongest signal is DISAGREEMENT between the two —
+# surface that to the operator. See CLAUDE.md §10.9 (pre-merge adversarial gate).
+#
+# COST: runs on the operator's ChatGPT SUBSCRIPTION, not metered API. The guard
+# below verifies "Logged in using ChatGPT" before any call; the flags force
+# subscription auth even though dotenv-load injects OPENAI_API_KEY:
+#   - `env -u OPENAI_API_KEY` hides the env key from codex
+#   - `-c preferred_auth_method="chatgpt"` pins subscription auth
+# If the OAuth login is ever absent/stale, the guard FAILS LOUD rather than
+# letting codex silently fall back to a metered key. (Codex tool = H_E dev
+# tooling, NOT H_T's OpenAI provider, which is metered-API per ADR-F1 / R-300.)
+
+# Guard: refuse to run unless codex is logged in via the ChatGPT subscription.
+_require-codex-subscription:
+    @if ! command -v codex >/dev/null 2>&1; then \
+        echo "ERROR: codex CLI not found on PATH."; exit 1; \
+    fi
+    @if ! env -u OPENAI_API_KEY codex login status -c preferred_auth_method="chatgpt" 2>&1 | grep -qi "ChatGPT"; then \
+        echo "ERROR: codex is not logged in via ChatGPT subscription."; \
+        echo "  Run 'codex login' (OAuth) to use the subscription, not metered API."; \
+        echo "  (Refusing to run: a stale login could silently bill the API key.)"; \
+        exit 1; \
+    fi
+
+# Out-of-family review of the current branch vs BASE (default main), subscription auth.
+codex-review base='main': _require-codex-subscription
+    env -u OPENAI_API_KEY codex review -c preferred_auth_method="chatgpt" --base {{base}}
+
+# Out-of-family review of staged + unstaged + untracked changes, subscription auth.
+codex-review-uncommitted: _require-codex-subscription
+    env -u OPENAI_API_KEY codex review -c preferred_auth_method="chatgpt" --uncommitted
