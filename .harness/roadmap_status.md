@@ -8,11 +8,11 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `9cd2b8ba6b36` |
-| `last_refreshed` | 2026-06-02T21:05:00-06:00 |
-| `git_head` | `b19d26d1` (main) — `ops(roadmap): ground R-CXA-2 + R-300; fix stale Surface-XI banner (#254)` |
+| `workspace_state_hash` | `9a1fff34a930` |
+| `last_refreshed` | 2026-06-02T22:10:00-06:00 |
+| `git_head` | `501acfc8` (main) — `ops: roadmap status refresh post-#254` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
-| `open_fork_doc_count` | 44 |
+| `open_fork_doc_count` | 44 (anchor at pre-this-PR-merge commit `501acfc`; this PR files fork #45 → follow-on terminating refresh owed per §12.2.1) |
 
 **Hash recipe.** `sha256(git_head[:8] + "|" + sorted_open_pr_csv + "|" + open_fork_doc_count + "|" + latest_retirement_batch_path)[:12]`. See `Project_Roadmap_v1.md` §7.1.
 
@@ -21,6 +21,8 @@
 ## Next action
 
 > **🚦 STANDING DIRECTIVE — operator-labeled items are Claude-driven; NO parking (2026-06-02; CLAUDE.md §12.4.1, `[[feedback-operator-labels-are-claude-driven-no-parking]]`).** "No auto-derivable Claude-executable ACTIVE row remains" is **NOT** a stop condition. The operator executes NOTHING manually — Claude does all the work. When the auto-`ACTIVE` queue is empty, **pick the highest-value forward item** (drivable now: `R-410..R-440` sandbox/deploy/secrets slices, `R-300-multi-llm-second-provider` scaffolding, `R-CXA-2` engine-substrate, `R-810/820` files/managed-agents — each has a Claude-executable slice grounding reveals), **ground it, build its slice to the genuine gate**, and surface only a real decision / credential / paid-call / irreversible action (batched, minimal). Honor *held* operator decisions (R-700's declaration is HELD — don't override). Don't re-stop here citing "operator-owned."
+
+**(This session — 2026-06-02 `/clear`→continue, post-#254 fixed-point. Filed the R-410 execution-driver Class 1 fork — the design slice #254 missed.)** The §12.1 audit recognized the expected lag-by-one (carve-out step 6; HEAD `501acfc`, no open PRs). The hook's next `R-010-cp-17-files-indefinite` has no Claude slice (RATIFIED sign-off folded into HELD R-700). Per the no-parking directive (§12.4.1) I drove the highest-value un-blocked forward item — **R-410-sandbox-tier-2-container-execution** (`depends_on: []`; the only forward row both un-blocked AND with an un-built Claude slice). **Grounding (advisor-confirmed, R-410 `advisor_required: yes`) found a genuine, distinct, un-filed design gap:** the resolved `SandboxDispatchDecision` drives ONLY tier-floor enforcement (`runtime_tool_dispatcher.py:454`) + `sandbox.enter/exit` span attributes (`:475/:477`); execution at `:519` is `call_tool` → in-process MCP session **regardless of resolved tier/provider/tech** — no branch maps a tier to a real isolation mechanism (verified: `grep` for container/microvm/firecracker/gvisor/isolat returns only field-docstring examples + the tier-rank int map). Runtime spec v1.41 §14.9.8 (the sole sandbox spec anchor) authors only the *resolver* (decides a tier + floor) and is **silent on tier→mechanism enforcement**. The two applied sibling forks (`..._no_bootstrap_sandbox_decision_resolver` v1.41 §14.9.8; `..._sandbox_decision_policy_phantom_cite`) cover the resolver + the empty-marker policy — **neither covers the execution driver.** **Building** the driver would be X-AL-3 silent design extension (I-2) → **filing the fork is the X-AL-3-clean slice**, and R-410's own notes predicted it ("Almost certainly opens a Class 1 fork"). **FILED:** `.harness/class_1_fork_sandbox_tier_no_execution_driver_contract.md` (PROPOSING) — gap → Readings A (tier→provider-class registry) / B (per-mechanism execution-driver Protocol) / C (defer-indefinitely, bounded-residual = honest MVP end-state) → routes to design-phase; names the **C10⊥C11** tension (action-safety wants real isolation vs operator-loop wants minimal provisioning — CLAUDE.md §13.4 "the council that was missed"), council-eligible at the resolution arc. **No AskUserQuestion fired** — the e2e close co-gates on a real container runtime (R-410 infra), so resolving A/B/C now unblocks nothing buildable; "default to doing + reporting" (§12.4.1). The DESIGN half is orthogonal to R-410's INFRA gate — this advances R-410 without infra. One-time fork; R-411/R-412 inherit the same driver contract. PR is `.harness/`-only + roadmap note + dashboard → X-AL-3 guard trivially satisfied; mode-agnostic. **Conclusion: this is the no-parking-compliant slice #254 lumped into "infra-gated" and missed.** After this: the forward menu's remaining un-built no-creds slices are genuinely exhausted (every other item gates on operator creds/infra, a HELD R-700 decision, or STRUCK U-RT-111 substrate per R-CXA-2).
 
 **➡️ POST-PHASE-8 NOW TRACKED UNDER THE R-NNN DISCIPLINE (PR #209).** The forward register `.harness/post-phase-8-forward-register.md` is decomposed into **12 NEW roadmap `R-NNN` entries** (§5.10–§5.14) — so every post-Phase-8 item flows through the same machinery as all prior work: **dashboard surface** (NEW "Post-Phase-8 forward register" panel), **next-action derivation** (§4), **memory-on-close** (§12.5.3), and **status/state refresh** as items close. This also **discharges the roadmap §9 decomposition** owed for Surfaces IV/VI/IX/X and closes the no-`R-NNN`-entry gap R-700 surfaced (CXA-1/2/3/4 → R-CXA-1..4; CP-17 folded into R-810). **Thesis:** Phase 8 closes the *substitution accounting* (88.9% RETIRED — **legitimate per X-AL-2**; production exercise was never an X-AL-2 condition); post-Phase-8 is the **activation / deployment / integration** axis (many capabilities are library-complete but unexercised).
 
@@ -84,12 +86,13 @@
 
 ---
 
-## Outstanding fork docs (44 total)
+## Outstanding fork docs (45 total — this PR files #45)
 
 Sample (highest-leverage open):
 
 | Fork doc | Class | Status |
 |---|---|---|
+| `class_1_fork_sandbox_tier_no_execution_driver_contract.md` | Class 1 | PROPOSING (this PR) — resolved sandbox tier never enforced; no tier→mechanism execution driver. Deferred-far; routes to design-phase at the R-410 resolution arc (C10⊥C11). Unblocks nothing buildable at MVP (Reading C bounded-residual). |
 | `class_1_fork_tool_step_no_operator_supplied_converter.md` | Class 1 | ✅ APPLIED (PR #171, spec v1.40) — converter config surface landed (Reading B) |
 | `class_1_fork_tool_step_no_bootstrap_sandbox_decision_resolver.md` | Class 1 | ✅ APPLIED-AS-READING-B (PR #172, spec v1.41 §14.9.8) — resolver + 5 bootstrap gaps wired; AC #2 final close = operator live e2e |
 | `class_1_fork_llm_cost_attribution_not_firing_on_real_dispatch.md` | Class 1 | ❌ RESOLVED-AS-INVALID (PR #168) — test-observation bug, not a defect; cost-attribution fires + writes; OD-5 retirement VALID |

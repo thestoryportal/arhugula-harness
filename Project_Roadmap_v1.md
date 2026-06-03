@@ -1034,8 +1034,13 @@ R-410-sandbox-tier-2-container-execution:
   notes: >
     The honest heart of Surface V. At HEAD the sandbox tier/provider are observability + policy annotations only
     (mcp_client_host.call_tool always uses in-process FastMCP stdio regardless of tier). Building a real container
-    provider is the first step toward executable isolation. Almost certainly opens a Class 1 fork: the execution-driver
-    contract (how a resolved tier maps to an actual sandbox mechanism) is unspecified beyond spec v1.41 §14.9.8 resolver.
+    provider is the first step toward executable isolation. The predicted Class 1 fork is FILED (2026-06-02):
+    `.harness/class_1_fork_sandbox_tier_no_execution_driver_contract.md` (PROPOSING) — the execution-driver contract
+    (how a resolved tier maps to an actual sandbox mechanism) is unspecified beyond spec v1.41 §14.9.8 resolver;
+    grounding confirmed the dispatcher uses the resolved tier only for tier-floor + span attributes, executing every
+    TOOL_STEP in-process regardless of tier. The DESIGN half (the fork, Readings A/B/C, C10⊥C11) is orthogonal to this
+    row's container-runtime INFRA gate; the fork routes to design-phase and is deferred-far (Reading C = honest MVP
+    end-state per X-AL-2 bounded-residual). R-411/R-412 inherit the same driver contract — one fork, not per-tier.
 
 R-411-sandbox-tier-3-microvm-execution:
   title: Real TIER_3 microVM sandbox execution (gVisor / Kata / shared-kernel container)
