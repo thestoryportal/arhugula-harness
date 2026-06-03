@@ -207,6 +207,8 @@ def next_action(roadmap, workspace_state, session_posture):
 
 **When to depart from the rule.** Operator AUQ overrides at any step. Class 1 fork detection (§4.3 of CLAUDE.md) halts the rule and routes to design-phase back-flow. Drift detection halts immediately. The rule is not a contract — it is a discipline that fails loudly.
 
+**`NO_ACTIVE_CANDIDATES` does NOT terminate the session (anti-parking — CLAUDE.md §12.4.1, operator directive 2026-06-02).** Step-4 `HALT("NO_ACTIVE_CANDIDATES")` means "no item is *auto-`ACTIVE`*", NOT "no Claude work remains." The `not r.operator_halt_marker` filter and the `PROPOSED`/`DEFERRED`/`infra-gated` statuses exclude items from the *auto* queue — they do **not** make those items the operator's to execute. The operator executes nothing manually. When the auto-queue is empty, **do not stop**: pick the highest-value forward item per the priority order above, **ground it**, and **drive its Claude-executable slice to the genuine gate** (build the stdlib/mockable slice + scaffolding + the recipe the operator runs), then surface only the genuine gate — a real decision, a credential, paid-call authorization, or an irreversible action — batched and minimal (the paid-call/secret boundary stays per `[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`; a *held* operator decision is honored, not overridden). See CLAUDE.md §12.4.1 + `[[feedback-operator-labels-are-claude-driven-no-parking]]`.
+
 ---
 
 ## 5. R-NNN action catalog
