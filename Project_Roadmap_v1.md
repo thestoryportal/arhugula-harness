@@ -1552,7 +1552,7 @@ R-700-closure-accounting-draft:
 R-700-phase-8-substitution-accounting:
   title: All 49 substitutions accounted for — RETIRED or RETIRED-AS-BOUNDED-RESIDUAL with rationale
   surface: VIII
-  status: BLOCKED
+  status: RESOLVED   # 2026-06-02 — operator lifted the HELD declaration ("kick off"); formal close authored at .harness/phase-8-graduation.md. Canonical: 46/54 RETIRED (85.2%) + 49/54 pipeline-advanced (90.7%); 8 rows carry ratified terminal sign-off dispositions; zero un-dispositioned open substitutions. PHASE 8 CLOSED.
   depends_on: [R-002, R-001, R-001-h-t-is-2-retired, R-004]
   blocks: []
   posture: halt-route-to-operator
@@ -1564,7 +1564,17 @@ R-700-phase-8-substitution-accounting:
   close_shape: { type: substrate-amendment, artifact: ".harness/phase-8-graduation.md", cascade: [] }
   next_pointer: null
   notes: >
-    Phase 7 closure gate. Requires comprehensive operator review. **Status: BLOCKED — 3 of 4 PART C rulings
+    Phase 7 closure gate. **RESOLVED 2026-06-02 — operator lifted the held declaration ("kick off the
+    declaration"); formal close authored at `.harness/phase-8-graduation.md`.** Item 4 executed: canonical
+    **46/54 RETIRED (85.2%) + 49/54 pipeline-advanced (90.7%)** (operator-ratified accounting (i)); the 48→46
+    supersession applied forward at ledger §11.7 + harness-cp/CLAUDE.md + dashboard (prior batch records stand
+    verbatim per forward-only discipline); bucket dispositions flipped (OD-4 → RETIRED-AS-CROSS-AXIS-DEFERRED;
+    AS-8e/8f/CP-17 → accepted-indefinite-defer sign-off — labels do NOT re-tally into the 46; CXA-1..4 →
+    Phase-2-runtime-deferred). Advisor confirmed 46 is the forced reading of the joint item-1+item-3
+    ratification (the OD-6-in-both-lists tell). Council convene SKIPPED-justified (accounting ratified; the one
+    live C10⊥C11 tension at OD-4 was dispositioned at R-008). must_pass SATISFIED (all 49 §5 rows accounted;
+    each RETIRED-AS-BOUNDED-RESIDUAL has rationale). **PHASE 8 CLOSED.** — historical HELD-state notes follow. —
+    **Prior status: BLOCKED — 3 of 4 PART C rulings
     RATIFIED 2026-06-02 (AskUserQuestion); the formal Phase-8 declaration is HELD by operator choice.**
     Ratifications (see `.harness/R-700-phase-8-closure-accounting-draft.md` PART C): **(1) RETIRED integer =
     46** (accounting (i); pipeline-advanced 49/54). **Cascade DEFERRED** by operator choice — the published
