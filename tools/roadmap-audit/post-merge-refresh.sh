@@ -17,10 +17,18 @@
 # §12.2 + §12.2.1.
 #
 # Always exit 0; encode any failure as silence to avoid blocking the tool flow.
+# Shared conventions (emit, stdin parse, bounded fetch, default branch, hash recipe)
+# live in tools/hooks/lib.sh — sourced below. Tested by test_post_merge_refresh.sh.
 
 set -uo pipefail
 
-PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+# Source the shared hook library; if missing, no-op rather than block the tool flow.
+_LIB="$(dirname "${BASH_SOURCE[0]}")/../hooks/lib.sh"
+[ -f "$_LIB" ] || exit 0
+# shellcheck source=../hooks/lib.sh
+. "$_LIB"
+
+PROJECT_DIR=$(hook_project_dir)
 [ -z "$PROJECT_DIR" ] && exit 0
 cd "$PROJECT_DIR" || exit 0
 
@@ -29,47 +37,23 @@ DASHBOARD=".harness/roadmap_status.md"
 
 # --- Read the tool command from PostToolUse stdin JSON. -----------------------
 # PostToolUse delivers {"tool_name":"Bash","tool_input":{"command":"..."},...}.
-PAYLOAD=$(cat 2>/dev/null || echo "")
-CMD=$(printf '%s' "$PAYLOAD" | jq -r '.tool_input.command // empty' 2>/dev/null || echo "")
+PAYLOAD=$(hook_read_stdin)
+CMD=$(hook_json "$PAYLOAD" '.tool_input.command')
 
 # Early-exit unless this Bash call was a PR merge.
 printf '%s' "$CMD" | grep -qE 'gh +pr +merge' || exit 0
 
-emit() {
-  # PostToolUse additionalContext injection (mirrors the SessionStart hook shape).
-  jq -nc --arg ctx "$1" \
-    '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":$ctx}}'
-  exit 0
-}
+# Single-line additionalContext for the PostToolUse event (wraps the lib helper).
+emit() { hook_emit "PostToolUse" "$1"; }
 
-# --- Determine the default branch + best-effort fetch (timeout-guarded). -------
-DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
-[ -z "$DEFAULT_BRANCH" ] && DEFAULT_BRANCH=main
-
-# Portable bounded runner: kill a child that outlives SECS. Used so the post-merge
-# fetch can NEVER hang the PostToolUse turn — even on a stock macOS that ships
-# neither `timeout` nor `gtimeout`. (PostToolUse runs after the tool; an unbounded
-# git hang would otherwise hold the turn up to Claude Code's hook timeout.)
-_bounded() { # _bounded SECS cmd...
-  local secs="$1"; shift
-  "$@" & local p=$!
-  ( sleep "$secs"; kill -0 "$p" 2>/dev/null && kill "$p" 2>/dev/null ) >/dev/null 2>&1 & local w=$!
-  wait "$p" 2>/dev/null; local rc=$?
-  kill "$w" 2>/dev/null; wait "$w" 2>/dev/null
-  return "$rc"
-}
+# --- Determine the default branch + best-effort fetch (bounded). ---------------
+DEFAULT_BRANCH=$(hook_default_branch)
 
 # Fetch ALWAYS (origin doesn't advance locally on `gh pr merge`; skipping it makes
-# the hook inert), but ALWAYS bounded (prefer GNU timeout; else the pure-bash
-# watchdog) so it can't hang the turn.
-TIMEOUT_BIN=""
-command -v timeout  >/dev/null 2>&1 && TIMEOUT_BIN="timeout 6"
-command -v gtimeout >/dev/null 2>&1 && TIMEOUT_BIN="gtimeout 6"
-if [ -n "$TIMEOUT_BIN" ]; then
-  $TIMEOUT_BIN git fetch --quiet --no-tags origin "$DEFAULT_BRANCH" >/dev/null 2>&1 || true
-else
-  _bounded 6 git fetch --quiet --no-tags origin "$DEFAULT_BRANCH" >/dev/null 2>&1 || true
-fi
+# the hook inert), but ALWAYS bounded so it can't hang the PostToolUse turn — even
+# on a stock macOS without GNU timeout (hook_bounded falls back to a pure-bash
+# watchdog).
+hook_bounded 6 git fetch --quiet --no-tags origin "$DEFAULT_BRANCH" >/dev/null 2>&1 || true
 
 # --- Did origin actually advance past the dashboard's pinned head? -------------
 # `gh pr merge` advances the REMOTE; the local checkout lags until pulled, so we
@@ -113,6 +97,6 @@ PRS=$(gh pr list --state open --json number,headRefName \
 # format, so the two hashes agree when the trees agree.
 FORKS=$(git ls-tree --name-only "$COMPARE_REF" .harness/ 2>/dev/null | grep -cE '/class_[12]_fork_.*\.md$')
 BATCH=$(git ls-tree --name-only "$COMPARE_REF" .harness/ 2>/dev/null | grep -E '/phase-7d-retirement-events-batch-.*\.md$' | sort -V | tail -1)
-COMPUTED=$(printf '%s|%s|%s|%s' "$ORIGIN_HEAD" "$PRS" "$FORKS" "$BATCH" | shasum -a 256 | head -c 12)
+COMPUTED=$(hook_state_hash "$ORIGIN_HEAD" "$PRS" "$FORKS" "$BATCH")
 
 emit "[ROADMAP] substantive merge detected (origin/${DEFAULT_BRANCH} @ ${ORIGIN_HEAD}: \"${ORIGIN_TITLE}\"). A terminating refresh is owed per §12.2 (Hook A will NOT catch its own merge). Steps: (1) git -C \"$PROJECT_DIR\" fetch && git merge --ff-only origin/${DEFAULT_BRANCH}; (2) update ${DASHBOARD}: workspace_state_hash=${COMPUTED}, git_head=${ORIGIN_HEAD}, last_refreshed=now, prepend recently_completed, re-derive next_action; (3) commit title prefix 'ops: roadmap status refresh ' (dashboard-only → §12.2.1 fixed point, no recursion)."
