@@ -1613,7 +1613,25 @@ R-300-multi-llm-second-provider:
   verification: { shape: e2e, must_pass: ["operator provisions openai_key + ollama host", "a fixture forces primary-provider failure and asserts cross-family advance (anthropic -> openai) with routing.*/fallback.* spans + per-candidate cost", "exercised across >=2 deployment surfaces"] }
   close_shape: { type: PR-merge, artifact: "test(routing): mixed-provider fallback exercise", cascade: [] }
   next_pointer: null
-  notes: R-100 ran 3 steps single-provider (Anthropic) with empty fallback chain. retry_breaker_fallback.py (C-RT-16) DOES advance cross-family on failure — but no failure + no cross-family candidate at R-100 = unexercised. Register §B-2.
+  notes: >
+    R-100 ran 3 steps single-provider (Anthropic) with empty fallback chain. retry_breaker_fallback.py
+    (C-RT-16) DOES advance cross-family on failure — but no failure + no cross-family candidate at R-100 =
+    unexercised at the LIVE level. **GROUNDED 2026-06-02 (no-parking slice check per advisor —
+    [[grounding-reveals-claude-closeable-slice-close-honestly]] inverse: the slice was already built):**
+    the creds-separable half of must_pass[2] (the mixed-provider fixture forcing primary failure → cross-
+    family advance) is ALREADY EXERCISED at the composer-unit level with injected mock dispatchers — zero
+    creds. `test_lifecycle_retry_breaker_fallback.py::test_iterates_three_candidates_until_success` forces
+    anthropic primary failure and asserts `seen_providers == ["anthropic","anthropic","openai"]` (cross-
+    family advance); `test_lifecycle_fallback_chain.py::test_advance_or_raise_marks_cross_family_at_boundary`
+    asserts the C-CP-04 §4.3 cross-family attribution flag; the CP suite
+    (`harness-cp/tests/test_cross_family_fallback_chain.py`) carries exhaustive flag coverage; `fallback.*`
+    spans covered by `test_fallback_exhausted_emits_and_raises_typed`; per-candidate cost is emitted by the
+    inner `cost_attribution_llm_dispatch.py` wrapper per-dispatch (own suite); `routing.*` is the upstream
+    route() seam (R-300-multi-llm-routing-activation RESOLVED PR #213). So the mock fixture is NOT a
+    buildable-unbuilt slice — it exists. R-300's REMAINING work is genuinely live-creds-gated (operator
+    provisions openai_key + ollama host → real primary failure → real cross-family advance with real per-
+    candidate cost across >=2 deployment surfaces). NOT fired unilaterally per
+    [[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]. Register §B-2.
 ```
 
 ### 5.11 Multi-tenant (R-500..R-599) — Surface VI
@@ -1789,7 +1807,25 @@ R-CXA-2-cp-is-seam:
   verification: { shape: e2e, must_pass: ["6 §16.5 composer methods (U-CP-74..79) invoked at their firing sites + e2e", "remaining ~16 of 17 §12.3 edges materialized"] }
   close_shape: { type: PR-merge, artifact: "feat(cxa): complete CP->IS seam", cascade: [] }
   next_pointer: null
-  notes: STILL-BOUNDED per R-700 — cp_is_wiring PARTIAL-LAND (1 of 17); U-RT-35 unit landed (batch-46) but full contract STILL-BOUNDED. Register §B-14.
+  notes: >
+    STILL-BOUNDED per R-700 — cp_is_wiring PARTIAL-LAND; U-RT-35 unit landed (batch-46) but full contract
+    STILL-BOUNDED. **GROUNDED 2026-06-02 (producer-discovery, [[r-cxa-seam-wiring-is-producer-discovery]] —
+    3rd CXA seam grounded after R-CXA-1/R-CXA-4):** of the 6 §16.5 composer methods on
+    `cp_is_wiring.py`, only 2 have production firing sites — `emit_pause_resume_state_ledger_entry`
+    (workflow_driver.py:582/:808/:965) + `emit_override_state_ledger_entry` (workflow_driver.py:859).
+    The other 4 are blocked by deliberately-STRUCK X-AL-3 gaps from the U-RT-111 saga, NOT by a missing
+    firing site: (a) `emit_workload_class_selection` → AC #2 STRUCK (v2.38) substrate-lifecycle-mismatch —
+    `ctx.cp_is_wiring` is unset at bootstrap stage 3b (built at stage 6); wiring requires a bootstrap
+    stage-ordering spec amendment; (b) `emit_hitl_tool_call_rewriting` → AC #4/#11 STRUCK — HITL
+    disambiguator (`semantic_variant_binding_id`) spec-silent + `rewrite_tool_call` has 6 test callers /
+    0 production callers; (c)+(d) `emit_pause_captured` + `emit_resume_attempted` → engine-layer producers
+    `capture_pause_snapshot` + `attempt_resume` are genuine `NotImplementedError` stubs
+    (pause_resume_protocol.py:130/:152). So R-CXA-2 = the same shape as R-CXA-1 (DEFER) + R-CXA-4 (0
+    wireable): **2/6 fired, 4/6 gate on design-phase engine-layer substrate + spec amendments that were
+    intentionally NOT built** (wiring them = the silent X-AL-3 extension the U-RT-111 saga forbade). NO
+    clean Claude-executable wiring slice exists. R-CXA-2 stays PARTIAL/STILL-BOUNDED; full RETIRED gated on
+    the engine-layer substrate design arc (dispositioned at R-700 STILL-BOUNDED — operator chose
+    Memory-only-MVP scope; NOT re-surfaced as a fresh decision). Register §B-14.
 
 R-CXA-3-cp-as-seam:
   title: CXA-3 (CP->AS) seam — runtime composer OR Memory-only-scope narrowing
