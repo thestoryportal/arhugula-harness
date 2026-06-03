@@ -33,7 +33,6 @@ cd "$PROJECT_DIR" || exit 1
 DRY=0
 MAX=${HARNESS_LOOP_MAX:-25}
 PROMPT='Continue the roadmap. Run the §12.1 audit, derive the next-action per CLAUDE.md §4, then drive it: ground empirically → implement with tests → PR → CI-green → merge → fixed-point refresh. Use /resolve for reversible forks. At a genuine gate (paid call / secret / destructive / missing cred) create .harness/.loop-halt, log a DEFERRED-HIL row, and stop.'
-ALLOWED="Bash Edit Write Read Grep Glob Task TodoWrite NotebookEdit"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -46,6 +45,11 @@ done
 [[ "$MAX" =~ ^[0-9]+$ ]] || { echo "[loop] --max must be an integer" >&2; exit 2; }
 
 loop_activate "headless runner (just loop), max ${MAX}${DRY:+ (dry-run)}"
+# Clear loop mode on EVERY exit path (normal, error, Ctrl-C, SIGTERM) so an interrupted
+# run never leaks the .loop-active marker into the next interactive session — which would
+# silently leave the auto-approve hooks armed. Idempotent.
+_loop_cleanup() { loop_deactivate "headless runner exit"; echo "[loop] loop mode OFF."; }
+trap _loop_cleanup EXIT INT TERM
 echo "[loop] loop mode ON; max ${MAX} iterations; dry-run=${DRY}"
 
 i=0
@@ -58,18 +62,22 @@ while [ "$i" -lt "$MAX" ]; do
     break
   fi
   if [ "$DRY" = "1" ]; then
-    echo "[loop][dry-run] iter ${i}/${MAX}: claude -p <prompt> --permission-mode default --allowedTools ${ALLOWED}"
+    echo "[loop][dry-run] iter ${i}/${MAX}: claude -p <prompt> --permission-mode default"
     loop_log COMPLETED "dry-run iteration ${i}"
     [ "$i" -ge "${DRY_ITERS:-1}" ] && break
     continue
   fi
   echo "[loop] iteration ${i}/${MAX} → claude -p"
-  # Loop mode on for the child so the in-session hooks fire; bounded per turn.
+  # Loop mode on for the child so the in-session hooks fire; bounded per turn. NOTE: no
+  # --allowedTools — every tool flows through the U-HK-12 permission guard (allow safe /
+  # deny dangerous / ask→deny-in-headless unknown). Passing bare `Bash` here would
+  # pre-approve EVERY command and bypass the guard. NO --dangerously-skip-permissions.
   HARNESS_LOOP=1 hook_bounded "${HARNESS_LOOP_TURN_TIMEOUT:-1800}" \
-    claude -p "$PROMPT" --permission-mode default --allowedTools "$ALLOWED" || \
+    claude -p "$PROMPT" --permission-mode default || \
     loop_log COMPLETED "iteration ${i} claude exited nonzero/bounded"
 done
 
-loop_deactivate "headless runner exit after ${i} iteration(s)"
-echo "[loop] loop mode OFF. Ledger tail:"
+# Loop mode is cleared by the EXIT trap (_loop_cleanup) on every path; print the ledger
+# tail first so the operator sees what the run did.
+echo "[loop] run finished after ${i} iteration(s). Ledger tail:"
 [ -f "$(loop_status_path)" ] && tail -n 15 "$(loop_status_path)"

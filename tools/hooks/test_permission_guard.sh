@@ -71,6 +71,25 @@ OUT=$(run_on "$(pl Edit '' '/repo/design-substrate/Spec_X.md')")
 OUT=$(run_on "$(pl Bash 'python scripts/migrate.py --wipe' '')")
 [ -z "$OUT" ] && ok "unknown bash → ask" || bad "unknown bash auto-decided: $OUT"
 
+# 5b) CHAINED/NESTED command with a safe PREFIX must NOT auto-allow (codex P1). A safe
+#     prefix fronting a dangerous follow-on falls through to ask.
+OUT=$(run_on "$(pl Bash 'git status && python scripts/migrate.py --wipe' '')")
+[ -z "$OUT" ] && ok "safe-prefix && danger → ask (no chained auto-allow)" || bad "chained cmd auto-decided: $OUT"
+OUT=$(run_on "$(pl Bash 'uv run python scripts/migrate.py --wipe' '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "uv run python wipe → not auto-allowed" || bad "uv-run-python auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'cat secrets.txt | sh' '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "piped cat | sh → not auto-allowed" || bad "pipe auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'git log $(rm -rf /)' '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "command substitution → not auto-allowed" || bad "cmd-subst auto-allowed: $OUT"
+
+# 5c) Edit/Write to a secret file must NOT auto-allow (codex P1) — falls through to ask.
+OUT=$(run_on "$(pl Edit '' '/repo/.env')")
+[ -z "$OUT" ] && ok ".env Edit → ask (no auto-approve)" || bad ".env edit auto-decided: $OUT"
+OUT=$(run_on "$(pl Write '' '/repo/config/credentials.json')")
+[ -z "$OUT" ] && ok "credentials Write → ask" || bad "credentials write auto-decided: $OUT"
+OUT=$(run_on "$(pl Write '' '/home/u/.ssh/id_rsa')")
+[ -z "$OUT" ] && ok "id_rsa Write → ask" || bad "id_rsa write auto-decided: $OUT"
+
 # 6) PermissionRequest event uses the decision.behavior schema.
 OUT=$(run_on "$(pl Bash 'git status' '' PermissionRequest)")
 [ "$(beh "$OUT")" = "allow" ] && ok "PermissionRequest allow schema" || bad "PR allow schema wrong: $OUT"

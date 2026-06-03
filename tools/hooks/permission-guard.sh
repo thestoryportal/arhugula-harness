@@ -99,10 +99,12 @@ fi
 case "$TOOL" in
   Read|Grep|Glob|NotebookRead|TodoWrite|Task) emit_allow ;;
   Edit|Write|MultiEdit|NotebookEdit)
-    # File edits are reversible in git. Auto-allow EXCEPT design-substrate (X-AL-3
-    # back-flow discipline) — those fall through to ask.
+    # File edits are reversible in git. Auto-allow EXCEPT (a) design-substrate (X-AL-3
+    # back-flow discipline) and (b) secret/credential files — both fall through to ask.
+    # Editing a secret in-repo is the kind of change that must always get human eyes.
     case "$FPATH" in
       */design-substrate/*) : ;;  # ask
+      *.env|*.env.*|*/.env|*credentials*|*.pem|*id_rsa*|*id_ed25519*|*keyring*|*secret*|*.key) : ;;  # secret → ask
       *) emit_allow ;;
     esac
     ;;
@@ -110,10 +112,22 @@ esac
 
 # Safe Bash prefixes (read-only + the normal git/dev arc; force/destructive already
 # denied above). Anchored at the START of the (trimmed) command.
+#
+# CRITICAL: auto-allow ONLY a single clean invocation. A prefix match alone is unsafe —
+# a safe prefix can front a dangerous follow-on via shell chaining/nesting/redirection
+# (`git status && python scripts/migrate.py --wipe`, `uv run python wipe.py`,
+# `cat x | sh`). So if the command contains any control operator (; & | < > ` $( ) or a
+# newline), it is NOT eligible for auto-allow — it falls through to ask. Conservative on
+# purpose: a safe-but-chained command costs one approval prompt; the alternative is a
+# silent bypass of the whole deny path.
 if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
-  TRIM=$(printf '%s' "$CMD" | sed 's/^[[:space:]]*//')
-  if printf '%s' "$TRIM" | grep -Eq '^(ls|cat|head|tail|wc|echo|printf|pwd|cd|which|command[[:space:]]+-v|grep|rg|find|sed[[:space:]]+-n|sort|uniq|awk|diff|jq|mkdir|chmod[[:space:]]+\+x|touch|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*|ruff|pytest|uv[[:space:]]+run|uv[[:space:]]+sync|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|codex-review)|git[[:space:]]+(status|diff|log|show|branch|add|commit|checkout|fetch|stash|restore|rev-parse|symbolic-ref|ls-files|worktree[[:space:]]+list)|gh[[:space:]]+(pr|run|api|repo[[:space:]]+view))([[:space:]]|$)'; then
-    emit_allow
+  if printf '%s' "$CMD" | grep -q '[;&|<>`]' || [[ "$CMD" == *'$('* ]] || [[ "$CMD" == *$'\n'* ]]; then
+    :  # chained / nested / redirected → fall through to ask (do not auto-allow)
+  else
+    TRIM=$(printf '%s' "$CMD" | sed 's/^[[:space:]]*//')
+    if printf '%s' "$TRIM" | grep -Eq '^(ls|cat|head|tail|wc|echo|printf|pwd|cd|which|command[[:space:]]+-v|grep|rg|find|sed[[:space:]]+-n|sort|uniq|awk|diff|jq|mkdir|chmod[[:space:]]+\+x|touch|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|codex-review)|git[[:space:]]+(status|diff|log|show|branch|add|commit|checkout|fetch|stash|restore|rev-parse|symbolic-ref|ls-files|worktree[[:space:]]+list)|gh[[:space:]]+(pr|run|api|repo[[:space:]]+view))([[:space:]]|$)'; then
+      emit_allow
+    fi
   fi
 fi
 

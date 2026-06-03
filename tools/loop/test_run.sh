@@ -60,6 +60,21 @@ grep -q '| STOP | headless: halt marker' "$REPO/.harness/loop_status.md" && ok "
 # 4) Bad --max rejected.
 CLAUDE_PROJECT_DIR="$REPO" bash "$RUN" --max abc >/dev/null 2>&1; [ $? -eq 2 ] && ok "non-integer --max rejected" || bad "bad --max not rejected"
 
+# 5) SIGTERM mid-run → the EXIT/signal trap clears the .loop-active marker (codex P2:
+#    an interrupted runner must not leak loop mode into the next interactive session).
+rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness/claude_calls.log" "$REPO/.harness/HALT_ON" "$REPO/.harness/.loop-active"
+cat > "$REPO/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+sleep 5
+EOF
+chmod +x "$REPO/bin/claude"
+CLAUDE_PROJECT_DIR="$REPO" PATH="$REPO/bin:$PATH" bash "$RUN" --max 5 >/dev/null 2>&1 &
+RUNPID=$!
+for _ in $(seq 1 20); do [ -f "$REPO/.harness/.loop-active" ] && break; sleep 0.3; done
+kill -TERM "$RUNPID" 2>/dev/null
+wait "$RUNPID" 2>/dev/null
+[ ! -f "$REPO/.harness/.loop-active" ] && ok "SIGTERM mid-run → marker cleared (trap)" || bad "marker leaked after SIGTERM"
+
 echo "----"
 echo "loop_run: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
