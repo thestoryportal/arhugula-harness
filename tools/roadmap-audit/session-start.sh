@@ -65,17 +65,24 @@ if [ "$COMPUTED" = "$DASHBOARD_HASH" ]; then
   emit "[ROADMAP] hash=ok next=${NEXT:-?} in_flight=${PR_COUNT} forks=${FORKS}"
 fi
 
-# Hash mismatch — check §12.2.1 fixed-point carve-out.
-# The carve-out keys on the commit-title PREFIX "ops: roadmap status refresh",
-# format-agnostic on the post-NNN suffix — refreshes have been titled both
-# `post-PR-NNN` (early) and `post-#NNN` / `post-#NNN/#NNN` / `post-#NNN (...)`
-# (later). Matching the prefix (not a specific NNN format) keeps the lag-expected
-# fixed point robust to either convention so a one-commit-behind dashboard after
-# any refresh is never mis-flagged as drift.
+# Hash mismatch — check §12.2.1 fixed-point carve-out. A terminating refresh requires
+# BOTH (a) the reserved commit-title prefix "ops: roadmap status refresh " AND (b) the
+# ONLY changed file is the dashboard. The title is format-agnostic on the post-NNN
+# suffix — refreshes have been titled `post-PR-NNN` (early) and `post-#NNN` /
+# `post-#NNN/#NNN` / `post-#NNN (...)` (later) — so we match the prefix, not a specific
+# NNN format, keeping the lag-expected fixed point robust to either convention. The
+# dashboard-only conjunct is load-bearing: keying on the title alone would let a
+# substantive commit mis-titled with the reserved prefix suppress a genuine drift
+# halt (the false negative post-merge-refresh.sh + prompt-context.sh also guard).
 LAST_TITLE=$(git log -1 --format=%s 2>/dev/null)
 if echo "$LAST_TITLE" | grep -qE '^ops: roadmap status refresh '; then
-  emit "[ROADMAP] hash=lag-expected next=${NEXT:-?} (post-refresh fixed-point §12.2.1)"
+  CHANGED_FILES=$(git show --name-only --pretty=format: HEAD 2>/dev/null | grep -v '^$' | sort -u)
+  if [ "$CHANGED_FILES" = ".harness/roadmap_status.md" ]; then
+    emit "[ROADMAP] hash=lag-expected next=${NEXT:-?} (post-refresh fixed-point §12.2.1)"
+  fi
 fi
 
-# Genuine drift — surface for §12.3 halt-and-reconcile.
+# Genuine drift — surface for §12.3 halt-and-reconcile. Reached when the hash mismatches
+# AND the tip is not a dashboard-only terminating refresh (incl. a mis-titled substantive
+# commit — which now correctly halts here rather than passing as lag-expected).
 emit "[ROADMAP DRIFT] dashboard=${DASHBOARD_HASH:-none} computed=${COMPUTED} next=${NEXT:-?} action=§12.3"

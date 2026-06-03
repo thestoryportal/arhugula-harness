@@ -54,14 +54,25 @@ write_dashboard "000000000000"
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "ROADMAP DRIFT" && ok "drift branch ($OUT)" || bad "expected DRIFT, got: $OUT"
 
-# 3) lag-expected — wrong hash, but the last commit is a terminating refresh.
+# 3) lag-expected — wrong hash, last commit is a GENUINE terminating refresh: the
+#    reserved title prefix AND the only changed file is the dashboard (§12.2.1 both
+#    conditions). write_dashboard rewrites only .harness/roadmap_status.md, so staging
+#    just that file makes a dashboard-only commit.
 write_dashboard "000000000000"
-echo more > "$REPO/.harness/seed"; git -C "$REPO" add -A
+git -C "$REPO" add .harness/roadmap_status.md
 git -C "$REPO" commit -qm "ops: roadmap status refresh post-#1 (#2)"
-# Recompute expected (HEAD changed) is irrelevant — the dashboard is wrong on purpose;
-# the refresh-prefix carve-out should fire before the drift branch.
 OUT=$(run)
-printf '%s' "$OUT" | grep -q "lag-expected" && ok "lag-expected branch ($OUT)" || bad "expected lag-expected, got: $OUT"
+printf '%s' "$OUT" | grep -q "lag-expected" && ok "lag-expected on dashboard-only refresh ($OUT)" || bad "expected lag-expected, got: $OUT"
+
+# 4) DRIFT despite refresh title — last commit carries the reserved prefix but ALSO
+#    changes a non-dashboard file, so it is NOT a terminating refresh under §12.2.1.
+#    Title-only matching would mis-pass this as lag-expected (the false negative).
+write_dashboard "000000000000"
+echo more > "$REPO/.harness/seed"
+git -C "$REPO" add .harness/roadmap_status.md .harness/seed
+git -C "$REPO" commit -qm "ops: roadmap status refresh post-#3 (#4)"
+OUT=$(run)
+printf '%s' "$OUT" | grep -q "ROADMAP DRIFT" && ok "mis-titled substantive commit halts as DRIFT ($OUT)" || bad "expected DRIFT (title-only false negative), got: $OUT"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
