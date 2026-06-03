@@ -1139,10 +1139,10 @@ R-600-pattern-bake-in-sweep:
   skills: { primary: null, secondary: [] }
   advisor_required: no
   council_required: no
-  verification: { shape: grep, must_pass: ["all `[[pattern-name]]` cardinality ≥2 entries identified", "each promotion candidate evaluated against §7.4.7 catalogues"] }
+  verification: { shape: grep, must_pass: ["all `[[pattern-name]]` cardinality ≥2 entries identified", "each promotion candidate evaluated against the §7.4.7 + §7.5 catalogues"] }   # must_pass[1] refreshed at cadence-2: pre-v1.14 text said "§7.4.7" only; §7.5 now exists and is where process-disciplines land
   close_shape: { type: substrate-amendment, artifact: "Workflow doc revision absorbing N patterns", cascade: [] }
   next_pointer: null
-  resume: .harness/R-600-pattern-bake-in-sweep.md   # ACTIVE-SURVEYED 2026-06-01: both must_pass met (104 cardinality-≥2 tokens identified; promotion set evaluated). Full closure (workflow-doc revision) owed to the DEFERRED R-600-workflow-v1-14-amendment — gated on operator scope authorization. A fresh session reads the survey before that arc; does NOT re-run the sweep until next ~10-PR cadence.
+  resume: .harness/R-600-pattern-bake-in-sweep.md   # ACTIVE-SURVEYED (cadence-2) 2026-06-02 HEAD 2e60741: both must_pass met. Cadence-1's gating dep R-600-workflow-v1-14-amendment is now RESOLVED (v1.14 §7.5 absorbed cadence-1's strong set as PD-1..PD-4) → the cadence-1 cycle is DISCHARGED. Cadence-2 surfaced ONE new §7.5 PD-5 candidate (r-cxa-seam-wiring-is-producer-discovery, cardinality-QUALIFIED — same-session multi-seam + likely U-RT-111 double-count with PD-4; needs a 2nd genuinely-independent arc) + a card-1 grounding-first family. ZERO new §7.4.7 owed. PD-5 promotion owed to a FUTURE v1.15/v1.16 amendment (operator-discretion, NOT yet opened). A fresh session reads the survey before that arc; does NOT re-run the sweep until next ~10-PR cadence.
   notes: >
     Cadence: every ~10 PRs or operator-discretion. NOT every session. FIRST run 2026-06-01
     (HEAD d7574b3). Survey at .harness/R-600-pattern-bake-in-sweep.md. Result: ZERO new §7.4.7.2
@@ -1154,6 +1154,49 @@ R-600-pattern-bake-in-sweep:
     [[..]]-citation salience, NOT instance-cardinality; confirm per-candidate at v1.14) are ALL non-§7.4.7-shape →
     a NEW §7.5 / §7.4.7.X process-discipline catalogue is the correct home, to be seeded at the
     v1.14 amendment. Memory-hygiene dups flagged (§3 of survey) → route to MEMORY.md audit.
+    CADENCE-2 (2026-06-02, HEAD 2e60741, post-PR-242; survey "Cadence-2 run" section): the v1.14
+    amendment LANDED (PR #201) and absorbed cadence-1's strong set (PD-1 halt-route-split-AC /
+    PD-2 use-the-product-probe / PD-3 verification-shape / PD-4 plan-revision-against-not-yet-built-substrate;
+    LANDED-substrate routed to .harness/ 7d; carrier-home + spec-prose-drift PARKED at §7.5.3) →
+    cadence-1 cycle DISCHARGED. Fresh enumeration (161 files / 166 tokens / 104 at card≥2, unchanged):
+    ONE new §7.5 candidate PD-5 = r-cxa-seam-wiring-is-producer-discovery (card 3), cardinality-QUALIFIED
+    per the PD-4 honesty precedent (R-CXA-1/R-CXA-4 same-session multi-seam; U-RT-111 likely shared with
+    PD-4's lineage) — needs a 2nd genuinely-independent arc + a home/consolidation decision (standalone vs
+    cite-under-PD-2/3 vs head of the consolidating card-1 grounding-first family: closeable-slice-honest-close,
+    wrong-version-read-delta-only-baseline, porting-old-wip-superseded, verify-observation-layer). ZERO new
+    §7.4.7 owed (4th surfacing). must_pass[1] text refreshed (§7.4.7 → §7.4.7 + §7.5). PD-5 promotion is a
+    FUTURE v1.15/v1.16 design-phase arc (spec-writer + advisor; operator-discretion; NOT opened by this sweep).
+    Memory-hygiene dups → FILED as R-600-memory-hygiene-normalization (below) and RESOLVED same arc (2026-06-02).
+
+R-600-memory-hygiene-normalization:
+  title: Normalize duplicate/case-split [[..]] wiki-link tokens in the auto-memory store
+  surface: VII
+  status: RESOLVED   # 2026-06-02 — 39 refs across 30 files normalized to canonical slugs; total refs unchanged (579); backed up pre-edit
+  depends_on: []
+  blocks: []
+  posture: mode-agnostic
+  scope: { files: ["memory/** (auto-memory store; NOT version-controlled in this repo)"], contracts: [], cross_axis: no }
+  skills: { primary: null, secondary: [] }
+  advisor_required: no
+  council_required: no
+  verification: { shape: grep, must_pass: ["each dup/case-split token has a verified canonical own-file before rename", "old tokens → 0 refs; canonical tokens absorb the counts; total [[..]] ref-count unchanged", "only [[..]] tokens changed (no other content drift); pre-edit backup taken"] }
+  close_shape: { type: memory-store-edit, artifact: "5 token renames across the auto-memory store", cascade: [] }
+  next_pointer: null
+  notes: >
+    RESOLVED 2026-06-02 (R-600 cadence-2 follow-on; operator-approved). The 5 dup/case-split
+    [[..]] tokens flagged at the cadence-1 §3 + cadence-2 C2-§3 survey were normalized to their
+    canonical own-file slugs via literal bracketed-token replacement (Python; pre-edit backup):
+    [[halt-route-split-AC-pattern]]→[[halt-route-split-ac-pattern]] (25); [[use-the-product-probe]]
+    →[[use-the-product-probe-pattern]] (6); [[fork-u-rt-44]]→[[fork-u-rt-44-workflow-loop-drain]] (3);
+    [[LANDED-substrate-pending-upstream-loop-substrate]]→[[landed-substrate-pending-upstream-loop-substrate-sub-species]]
+    (4); [[h-t-cp-19-default-gate-level-spec-extension]]→[[fork-h-t-cp-19-default-gate-level-spec-extension]] (1).
+    Verified: all 5 old tokens → 0; canonicals absorbed every count (e.g. ac-pattern 12→37); total
+    refs unchanged at 579 (pure rename); 30 files differ from backup, token-only. Improves memory
+    recall (links now resolve to real files). The store is NOT in this repo, so this is a memory-store
+    edit, not a repo diff — the roadmap entry + the survey C2-§3 close-out are the durable record.
+    SCOPE NOTE: the survey also flagged MEMORY.md index near-cap (24,297 B vs ~24.4 KB); index
+    PRUNING is deliberately OUT of scope (judgment-heavy; loses recall pointers; under cap at close)
+    → left as a watch item, not pruned.
 
 R-600-clearance-marker-backfill-survey:
   title: Survey design-substrate amendments lacking clearance markers
