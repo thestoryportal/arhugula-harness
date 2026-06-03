@@ -456,10 +456,26 @@ R-008-od-4-redaction-partial:
   skills: { primary: phase-7-implementation, secondary: [phase-7-substitution-retirement] }
   advisor_required: conditional:if a gate closure touches a cross-axis contract
   council_required: no
-  verification: { shape: integration, must_pass: ["§13.1 per-session redaction toggle mechanism authored (deferred at PR #25 apply arc)", "§13.2 opaque-token tokenization mode (strip-not-tokenize MVP scope-lock lifted)"] }
+  verification: { shape: integration, must_pass: ["§13.1 per-session redaction toggle mechanism authored (deferred at PR #25 apply arc) — ✅ MET 2026-06-02 (gate a)", "§13.2 opaque-token tokenization mode (strip-not-tokenize MVP scope-lock lifted) — ⛔ cross-axis-BLOCKED (gate b; c10-action-safety, Phase-6+)"] }
   close_shape: { type: PR-merge, artifact: "PR closing the remaining OD-4 gates → PARTIAL → RETIRE-READY", cascade: [R-IF-roadmap-refresh] }
   next_pointer: R-007-od-3-sampler-retired
-  notes: PARTIAL (refined) at batch-35; gate (a) partially closed at PR #25 (deployment-level persona_tier + multi-tenant non-toggleability). Remaining — per-session toggle (needs session-control substrate) + §13.2 tokenization. NOT yet RETIRE-READY; further substrate before a retirement transit.
+  notes: >
+    PARTIAL (refined) at batch-35; gate (a) partially closed at PR #25 (deployment-level persona_tier +
+    multi-tenant non-toggleability). **Gate (a) FULLY CLOSED 2026-06-02 (this arc): solo-developer §13.1
+    per-session redaction toggle** — `session_content_capture()` ContextVar mechanism at
+    `harness-od/redaction_span_processor.py`, honored only at solo-developer (`toggleable=True`); team-binding +
+    multi-tenant ignore it (§13.3 downgrade-rejection). Grounding-first finding: the fork-doc-framed
+    "session-control-substrate arc" was already satisfied by the existing per-session ContextVar idiom
+    (`_CURRENT_TOOL_CTX`) — no heavy substrate owed (`[[grounding-reveals-claude-closeable-slice-close-honestly]]`).
+    X-AL-3-clean (spec'd mechanism; §13.3 defers only the UX); 10 new tests incl. async-boundary propagation
+    (create_task + to_thread); pyright/ruff clean; 898 harness-od green. **Gate (b) §13.2 opaque-token
+    tokenization is the SOLE remaining blocker and is CROSS-AXIS** — the canonical §13.1 table (OD spec v1.2
+    line 749) + §13.3 deferral route it to `c10-action-safety` SKILL.md eval-grade redaction pipeline producing
+    semantic tokens (`[REDACTED:PII]`), a Phase-6+ cross-cutting concern OUT of OD-axis reach (NOT a stdlib
+    slice — semantic classification required). So R-008 stays **BLOCKED** on a cross-axis dependency, NOT
+    "further OD substrate"; RETIRE-READY is not Claude-closeable at the OD axis. This is a within-PARTIAL
+    refinement (gate a), not a tier transit — OD-4 remains 1/8 PARTIAL; pipeline-advanced unchanged.
+    R-700 accounting: OD-4's open residual narrows from {gate a + gate b} to {gate b cross-axis} only.
 
 R-009-od-6-otlp-retired:
   title: H_T-OD-6 (Local-first OTLP ingestion) RETIRE-READY → RETIRED transit
