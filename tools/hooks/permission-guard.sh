@@ -174,8 +174,12 @@ case "$TOOL" in
     # .env / SSH keys / out-of-worktree files would leak past the approval boundary.
     _safe_path "$FPATH" && emit_allow ;;
   Grep)
-    # Boundary on the search root (content-mode grep can surface secret contents); the
-    # `pattern` is a regex, not a path, so it's not path-checked.
+    # Auto-allow only a NARROW, checked search root (a specific in-worktree file/subdir).
+    # An empty path or the repo root = a broad recursive read that could surface a
+    # descendant secret file (content-mode grep returns matching lines) → ask.
+    case "$GPATH" in
+      ""|"."|"./"|"$PROJECT_DIR"|"$PROJECT_DIR"/) exit 0 ;;
+    esac
     _safe_path "$GPATH" && emit_allow ;;
   Glob)
     # Glob's `pattern` IS a path-glob — reject an absolute or traversing pattern even when
@@ -222,13 +226,15 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
   else
     TRIM=$(printf '%s' "$CMD" | sed 's/^[[:space:]]*//')
     # Allowlist = commands that are safe REGARDLESS of their arguments (the dev/git arc
-    # + pure no-file builtins). File CONTENT readers / programmable filters
-    # (cat/head/tail/grep/rg/find/jq/sed/awk/sort/uniq/diff/wc) are deliberately NOT here:
-    # their safety depends on path/glob/env args that can't be validated from the command
-    # string (glob `cat .*`→.env, `jq -n env` dumps the environment, symlink follows). For
-    # file access the loop uses the structured Read/Grep/Glob tools, which DO go through
-    # _safe_path. This structurally removes the recurring "verb X has an unsafe arg" class.
-    if printf '%s' "$TRIM" | grep -Eq '^(ls|echo|printf|pwd|cd|which|command[[:space:]]+-v|mkdir|chmod[[:space:]]+\+x|touch|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|codex-review)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|worktree[[:space:]]+list)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment|merge)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
+    # + pure builtins with no filesystem reach). Deliberately NOT here:
+    #  - content readers / programmable filters (cat/head/tail/grep/rg/find/jq/sed/awk/
+    #    sort/uniq/diff/wc) — safety depends on unvalidatable path/glob/env args;
+    #  - path mutators / listers (mkdir/chmod/touch/ls) — a relative arg can run through an
+    #    in-worktree symlink (`mkdir out/dir` where `out -> /tmp`) and escape the worktree.
+    # For file create/read the loop uses the structured Write/Edit/Read/Grep/Glob tools,
+    # which resolve symlinks via _safe_path. This removes the recurring "verb X has an
+    # unsafe arg" class structurally rather than patching each verb.
+    if printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|codex-review)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|worktree[[:space:]]+list)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment|merge)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
        && _bash_args_safe "$CMD"; then
       emit_allow
     fi

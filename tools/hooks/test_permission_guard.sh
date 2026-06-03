@@ -227,6 +227,20 @@ done
 OUT=$(run_on "$(jq -nc '{"hook_event_name":"PreToolUse","tool_name":"Glob","tool_input":{"pattern":"**/*.py"}}')")
 [ "$(dec "$OUT")" = "allow" ] && ok "Glob relative pattern → allow" || bad "relative Glob not allowed: $OUT"
 
+# 5s) Round-11: path mutators/listers dropped from Bash allow (symlink-through escape); broad
+#     recursive Grep gated (descendant-secret read). codex P1×2.
+for c in "mkdir out/dir" "touch out/file" "chmod +x out/x" "ls out"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed (mutator dropped)" || bad "'$c' auto-allowed: $OUT"
+done
+# broad Grep (no path, or repo root) → ask; specific in-worktree subpath still allows
+OUT=$(run_on "$(jq -nc '{"hook_event_name":"PreToolUse","tool_name":"Grep","tool_input":{"pattern":"TODO"}}')")
+[ -z "$OUT" ] && ok "broad Grep (no path) → ask" || bad "broad Grep auto-decided: $OUT"
+OUT=$(run_on "$(jq -nc --arg p "$REPO" '{"hook_event_name":"PreToolUse","tool_name":"Grep","tool_input":{"path":$p}}')")
+[ -z "$OUT" ] && ok "Grep at repo root → ask" || bad "root Grep auto-decided: $OUT"
+OUT=$(run_on "$(jq -nc --arg p "$REPO/src" '{"hook_event_name":"PreToolUse","tool_name":"Grep","tool_input":{"path":$p}}')")
+[ "$(dec "$OUT")" = "allow" ] && ok "Grep at specific subpath → still allow" || bad "subpath Grep not allowed: $OUT"
+
 # 6) PermissionRequest event uses the decision.behavior schema.
 OUT=$(run_on "$(pl Bash 'git status' '' PermissionRequest)")
 [ "$(beh "$OUT")" = "allow" ] && ok "PermissionRequest allow schema" || bad "PR allow schema wrong: $OUT"
