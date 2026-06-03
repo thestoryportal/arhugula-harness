@@ -59,14 +59,17 @@ _safe_path() {
   # Resolve symlinks PHYSICALLY before the containment check: an in-worktree symlink to an
   # outside/secret file would otherwise pass the string-prefix test while the OS follows it
   # out. Resolve the dir via `pwd -P`, and one level of a symlinked final component.
-  local dir base rp tgt
+  local dir base rp tgt hops=0
   dir=$(dirname "$abs"); base=$(basename "$abs")
-  if rp=$(cd "$dir" 2>/dev/null && pwd -P); then
-    abs="$rp/$base"
-    if [ -L "$abs" ] && tgt=$(readlink "$abs" 2>/dev/null); then
-      case "$tgt" in /*) abs="$tgt" ;; *) abs="$rp/$tgt" ;; esac
-    fi
-  fi
+  if rp=$(cd "$dir" 2>/dev/null && pwd -P); then abs="$rp/$base"; fi
+  # Follow the symlink CHAIN physically (bounded) — a link to a link to outside the repo
+  # would otherwise keep `abs` under $root after only one hop.
+  while [ -L "$abs" ] && [ "$hops" -lt 16 ]; do
+    tgt=$(readlink "$abs" 2>/dev/null) || break
+    case "$tgt" in /*) abs="$tgt" ;; *) abs="$(dirname "$abs")/$tgt" ;; esac
+    if rp=$(cd "$(dirname "$abs")" 2>/dev/null && pwd -P); then abs="$rp/$(basename "$abs")"; fi
+    hops=$((hops + 1))
+  done
   # Re-check secret patterns on the resolved target too.
   case "$abs" in
     *.env|*.env.*|*/.env|*credentials*|*.pem|*id_rsa*|*id_ed25519*|*keyring*|*secret*|*.key) return 1 ;;
@@ -207,7 +210,14 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
     :  # chained / nested / redirected / destructive submode (incl. git commit --amend) → ask
   else
     TRIM=$(printf '%s' "$CMD" | sed 's/^[[:space:]]*//')
-    if printf '%s' "$TRIM" | grep -Eq '^(ls|cat|head|tail|wc|echo|printf|pwd|cd|which|command[[:space:]]+-v|grep|rg|find|sort|uniq|diff|jq|mkdir|chmod[[:space:]]+\+x|touch|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|codex-review)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|worktree[[:space:]]+list)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment|merge)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
+    # Allowlist = commands that are safe REGARDLESS of their arguments (the dev/git arc
+    # + pure no-file builtins). File CONTENT readers / programmable filters
+    # (cat/head/tail/grep/rg/find/jq/sed/awk/sort/uniq/diff/wc) are deliberately NOT here:
+    # their safety depends on path/glob/env args that can't be validated from the command
+    # string (glob `cat .*`→.env, `jq -n env` dumps the environment, symlink follows). For
+    # file access the loop uses the structured Read/Grep/Glob tools, which DO go through
+    # _safe_path. This structurally removes the recurring "verb X has an unsafe arg" class.
+    if printf '%s' "$TRIM" | grep -Eq '^(ls|echo|printf|pwd|cd|which|command[[:space:]]+-v|mkdir|chmod[[:space:]]+\+x|touch|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|codex-review)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|worktree[[:space:]]+list)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment|merge)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
        && _bash_args_safe "$CMD"; then
       emit_allow
     fi

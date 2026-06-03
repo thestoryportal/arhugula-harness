@@ -107,9 +107,9 @@ OUT=$(run_on "$(pl Bash 'gh api -X DELETE repos/o/r/issues/1' '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "gh api -X DELETE → not auto-allowed" || bad "gh api delete auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'uv run python wipe.py' '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "uv run python → not auto-allowed" || bad "uv-run-python auto-allowed: $OUT"
-# read-only forms of the same verbs still auto-allow
+# content-reader / programmable-filter verbs are NOT auto-allowed (arg safety unvalidatable)
 OUT=$(run_on "$(pl Bash 'find . -name *.py' '')")
-[ "$(dec "$OUT")" = "allow" ] && ok "find -name (read-only) → allow" || bad "read-only find not allowed: $OUT"
+[ "$(dec "$OUT")" != "allow" ] && ok "find → ask (content verbs dropped)" || bad "find auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'gh api repos/o/r' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "gh api GET → allow" || bad "gh api GET not allowed: $OUT"
 
@@ -155,7 +155,7 @@ for c in "cat .env" "grep TOKEN ~/.ssh/id_rsa" "touch ~/.ssh/authorized_keys" "c
   [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
 done
 OUT=$(run_on "$(pl Bash 'cat README.md' '')")
-[ "$(dec "$OUT")" = "allow" ] && ok "cat README.md (in-worktree) → allow" || bad "safe cat not allowed: $OUT"
+[ "$(dec "$OUT")" != "allow" ] && ok "cat → ask (content verbs dropped; use Read tool)" || bad "cat auto-allowed: $OUT"
 
 # 5k) git commit --amend (history rewrite) → ask (codex P2).
 OUT=$(run_on "$(pl Bash 'git commit --amend --no-edit' '')")
@@ -191,9 +191,9 @@ for c in "cat .git/config" "touch .git/hooks/pre-commit" "chmod +x .git/hooks/pr
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
 done
-# .github (not .git) and normal merge still allow
-OUT=$(run_on "$(pl Bash 'cat .github/workflows/ci.yml' '')")
-[ "$(dec "$OUT")" = "allow" ] && ok "cat .github/... → allow (not .git)" || bad ".github cat not allowed: $OUT"
+# .github (not .git) is not mistaken for git internals (use a kept verb: git diff)
+OUT=$(run_on "$(pl Bash 'git diff .github/workflows/ci.yml' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git diff .github/... → allow (not .git)" || bad ".github path rejected as .git: $OUT"
 OUT=$(run_on "$(pl Bash 'gh pr merge 1 --squash' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "gh pr merge --squash → still allow" || bad "normal merge not allowed: $OUT"
 # in-worktree symlink to an outside file → Read must ask (OS would follow the link out)
@@ -201,6 +201,18 @@ ln -sf /etc/passwd "$REPO/secretlink" 2>/dev/null
 OUT=$(run_on "$(pl Read '' "$REPO/secretlink")")
 [ -z "$OUT" ] && ok "symlink escaping worktree → ask" || bad "symlink-escape Read auto-decided: $OUT"
 rm -f "$REPO/secretlink"
+
+# 5p) Round-9: jq env dump + glob content-read → ask (content verbs dropped, codex P1).
+for c in "jq -n env" "cat .*" "grep -r TOKEN config/*" "jq -n \$ENV"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
+done
+# 5q) symlink CHAIN (link → link → outside) → Read must ask (codex P2 multi-hop).
+ln -sf /etc/hosts "$REPO/chain2" 2>/dev/null
+ln -sf "$REPO/chain2" "$REPO/chain1" 2>/dev/null
+OUT=$(run_on "$(pl Read '' "$REPO/chain1")")
+[ -z "$OUT" ] && ok "symlink chain escaping worktree → ask" || bad "symlink-chain Read auto-decided: $OUT"
+rm -f "$REPO/chain1" "$REPO/chain2"
 
 # 6) PermissionRequest event uses the decision.behavior schema.
 OUT=$(run_on "$(pl Bash 'git status' '' PermissionRequest)")
