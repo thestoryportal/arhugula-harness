@@ -95,3 +95,5 @@ tools/dashboard/candidates/
 # are transient per-run state, written only while loop mode is on. Never tracked.
 .harness/.loop-active
 .harness/loop_status.md
+.harness/.loop-iter
+.harness/.loop-halt

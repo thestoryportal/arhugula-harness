@@ -26,6 +26,20 @@ loop_status_path() {
   [ -n "$d" ] && printf '%s' "$d/.harness/loop_status.md"
 }
 
+# Path to the Stop-continue iteration counter (U-HK-14 bound). Presence + integer
+# value cap the number of auto-continued turns per run.
+loop_iter_path() {
+  local d; d=$(hook_project_dir)
+  [ -n "$d" ] && printf '%s' "$d/.harness/.loop-iter"
+}
+
+# Path to the halt marker (U-HK-14). When present, the next Stop stops the loop — the
+# explicit "we hit a genuine gate, stand down" signal Claude/skills drop at a gate.
+loop_halt_path() {
+  local d; d=$(hook_project_dir)
+  [ -n "$d" ] && printf '%s' "$d/.harness/.loop-halt"
+}
+
 # A UTC ISO-8601 timestamp (second precision). Isolated so tests can stub it.
 loop_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -74,6 +88,8 @@ loop_activate() {
   [ -z "$mp" ] && return 1
   mkdir -p "$(dirname "$mp")" 2>/dev/null
   : > "$mp" 2>/dev/null || return 1
+  # Fresh run: clear any stale iteration counter / halt marker from a prior run.
+  rm -f "$(loop_iter_path)" "$(loop_halt_path)" 2>/dev/null
   loop_log ACTIVATE "${1:-loop mode on}"
 }
 
@@ -83,6 +99,6 @@ loop_activate() {
 loop_deactivate() {
   local mp; mp=$(loop_marker_path)
   [ -z "$mp" ] && return 1
-  rm -f "$mp" 2>/dev/null
+  rm -f "$mp" "$(loop_iter_path)" "$(loop_halt_path)" 2>/dev/null
   loop_log DEACTIVATE "${1:-loop mode off}"
 }
