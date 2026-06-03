@@ -476,6 +476,19 @@ R-008-od-4-redaction-partial:
     "further OD substrate"; RETIRE-READY is not Claude-closeable at the OD axis. This is a within-PARTIAL
     refinement (gate a), not a tier transit — OD-4 remains 1/8 PARTIAL; pipeline-advanced unchanged.
     R-700 accounting: OD-4's open residual narrows from {gate a + gate b} to {gate b cross-axis} only.
+    **R-700 forward-pointer (operator decision):** with gate (b) established as cross-axis/Phase-6+,
+    OD-4 can NEVER reach RETIRE-READY via Claude → it `blocks: [R-700]` indefinitely. This is the
+    OD-6/R-009 shape from the prior session (drained via an operator-ratified bounded-residual close) —
+    BUT the disposition differs: gate (b) is "not-built-cross-axis" (c10-action-safety owns it), NOT
+    OD-6's "built-but-dormant", so a literal bounded-residual may not fit; a RETIRED-AS-CROSS-AXIS-DEFERRED
+    (or equivalent) operator ruling is the candidate to unblock R-700. Surfaced for operator decision; NOT
+    self-resolved (`[[r-007-r-009-od-retirement-condition-b-discriminator]]`).
+    **Propagation scope (honest bound):** the gate (a) tests verify language-primitive ContextVar
+    propagation (create_task / to_thread); they do NOT drive the operator trigger path
+    `with session_content_capture(): api.run(wf)`, which crosses the in-process MCP transport
+    (server-task-dispatched run_workflow). That trigger hop is part of the §13.3-deferred toggle UX and
+    may need an internal set-point inside the run_workflow handler — settled at the UX arc, not this
+    mechanism close. must_pass[0] ("mechanism authored") is honestly MET; the trigger UX is §13.3-deferred.
 
 R-009-od-6-otlp-retired:
   title: H_T-OD-6 (Local-first OTLP ingestion) RETIRE-READY → RETIRED transit

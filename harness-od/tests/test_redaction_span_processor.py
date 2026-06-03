@@ -265,9 +265,22 @@ def test_custom_strip_set_actually_strips() -> None:
 # honored ONLY at solo-developer. team-binding + multi-tenant-compliance are
 # non-toggleable (§13.3 monotonic-tightening / downgrade-rejection). The
 # propagation tests below emit the span across an asyncio task / thread boundary
-# (mirroring the production `run_workflow` task + `asyncio.to_thread` bridge) so
-# a same-frame hollow pass cannot satisfy them — the toggle must genuinely reach
-# `on_end` in the span-emitting context (PD-3 grep-presence != verified-working).
+# so a same-frame hollow pass cannot satisfy them — the toggle must genuinely
+# reach `on_end` in the span-emitting context (PD-3 grep-presence !=
+# verified-working).
+#
+# SCOPE (honest bound). These verify the LANGUAGE-LEVEL primitive propagation:
+# `asyncio.create_task` / `asyncio.to_thread` copy the ContextVar into the
+# child task/thread. They do NOT drive the operator trigger path
+# `with session_content_capture(): api.run(wf)`, which crosses the in-process
+# MCP transport (api.run -> session.call_tool -> server-task-dispatched
+# run_workflow -> execute_workflow spans). Whether the toggle reaches those
+# server-side spans depends on the MCP helper's context-copy at server-task
+# creation — that hop is part of the §13.3-deferred toggle UX (the specific
+# operator surfacing of the toggle) and is intentionally NOT exercised here. It
+# may turn out the production trigger must be set INSIDE the run_workflow
+# handler rather than around api.run; that is a decision for the UX arc, not
+# this mechanism close.
 
 
 def _provider_for(persona_tier: PersonaTier) -> tuple[InMemorySpanExporter, TracerProvider]:
