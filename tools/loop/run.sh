@@ -9,8 +9,11 @@
 #
 # Safety:
 #   - bounded by --max (default HARNESS_LOOP_MAX or 25) — never an unbounded run;
-#   - stops immediately when .harness/.loop-halt appears (a genuine gate: paid call /
-#     secret / destructive / missing cred — written by the loop when it defers);
+#   - stops when .harness/.loop-halt appears — raised ONLY on a TRUE stand-down (the
+#     forward menu is exhausted: every forward item deferred) or an operator stop, NOT at
+#     a single gated item. A gated item is DEFERRED + worked around (the loop advances to
+#     the next forward item per §12.4.1); the persistent ledger skip-set survives across
+#     these fresh `claude -p` children so no item is re-attempted;
 #   - does NOT pass --dangerously-skip-permissions; approvals flow through the
 #     permission guard (unknown tools fall through to deny in headless, the safe default);
 #   - --dry-run prints the planned invocation + exercises the loop WITHOUT calling claude.
@@ -34,7 +37,7 @@ DRY=0
 MAX=${HARNESS_LOOP_MAX:-25}
 # Default prompt; HARNESS_LOOP_PROMPT env overrides it (the robust path for multi-word
 # prompts, since `just`'s variadic args don't preserve quoting — see the justfile note).
-PROMPT="${HARNESS_LOOP_PROMPT:-Continue the roadmap. Run the §12.1 audit, derive the next-action per CLAUDE.md §4, then drive it: ground empirically → implement with tests → PR → CI-green → merge → fixed-point refresh. Use /resolve for reversible forks. At a genuine gate (paid call / secret / destructive / missing cred) create .harness/.loop-halt, log a DEFERRED-HIL row, and stop.}"
+PROMPT="${HARNESS_LOOP_PROMPT:-Continue the roadmap. Run the §12.1 audit, then pick the highest-priority forward item per CLAUDE.md §12.4.1 that is NOT already a DEFERRED-HIL row in .harness/loop_status.md since the last ACTIVATE (run: source tools/hooks/lib.sh tools/hooks/loop_lib.sh && loop_skip_set — do NOT re-attempt those). Drive it: ground empirically → build the slice that does NOT need any gated input → implement with tests → PR → CI-green → merge → fixed-point refresh. Use /resolve for reversible forks. If the item is GATED (paid call / secret / vendor selection / missing credential / infra): do NOT force it and do NOT raise .loop-halt — build whatever slice is possible without the gated input, then run loop_defer <ITEM-ID> '<exactly what operator input is needed> — built without it: <slice or none>' and ADVANCE to the next forward item. ONLY when EVERY forward item per §12.4.1 is already deferred (loop_skip_set covers them all, nothing buildable remains) raise the stand-down: loop_log STOP 'forward menu exhausted — N awaiting operator input' && : > .harness/.loop-halt.}"
 
 while [ $# -gt 0 ]; do
   case "$1" in

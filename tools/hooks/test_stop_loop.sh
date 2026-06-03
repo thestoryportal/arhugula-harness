@@ -61,6 +61,30 @@ printf '30' > "$REPO/.harness/.loop-iter"
 OUT=$(printf '{}' | HARNESS_LOOP=1 HARNESS_LOOP_MAX=abc CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
 [ -z "$OUT" ] && ok "non-numeric MAX → defaults to 25, counter 30 stops" || bad "invalid MAX kept blocking: $OUT"
 
+# 7) Skip-set injection (the defer-and-ADVANCE mechanism — the load-bearing fix). With a
+#    ledger carrying DEFERRED-HIL rows SINCE the last ACTIVATE, the continue-reason must
+#    carry those item-IDs (so a fresh headless `claude -p` child skips them off the static
+#    pointer) and must instruct defer-and-advance, NOT halt-at-gate. A DEFERRED-HIL row
+#    BEFORE the ACTIVATE is a prior run's — it must NOT leak into this run's skip-set.
+rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-halt"
+cat > "$REPO/.harness/loop_status.md" <<'EOF'
+# ledger
+| ts | kind | detail |
+|---|---|---|
+| t0 | DEFERRED-HIL | R-999 — prior run, must be excluded |
+| t1 | ACTIVATE | this run |
+| t2 | DEFERRED-HIL | R-410 — needs container runtime |
+| t3 | DEFERRED-HIL | R-300 — needs OpenAI creds |
+EOF
+OUT=$(run_on)
+echo "$OUT" | jq -e '.reason | test("ALREADY DEFERRED")'         >/dev/null 2>&1 && ok "reason carries the skip-set header" || bad "no skip-set header: $OUT"
+echo "$OUT" | jq -e '.reason | test("R-410")'                    >/dev/null 2>&1 && ok "skip-set includes R-410 (this run)" || bad "R-410 missing from skip-set"
+echo "$OUT" | jq -e '.reason | test("R-300")'                    >/dev/null 2>&1 && ok "skip-set includes R-300 (this run)" || bad "R-300 missing from skip-set"
+echo "$OUT" | jq -e '.reason | test("R-999") | not'              >/dev/null 2>&1 && ok "skip-set EXCLUDES R-999 (pre-ACTIVATE)" || bad "R-999 leaked into skip-set: $OUT"
+echo "$OUT" | jq -e '.reason | test("do NOT raise .loop-halt")'  >/dev/null 2>&1 && ok "instructs defer-NOT-halt at a gate" || bad "missing defer-not-halt guidance"
+echo "$OUT" | jq -e '.reason | test("loop_defer")'               >/dev/null 2>&1 && ok "instructs loop_defer <item-id>" || bad "missing loop_defer guidance"
+echo "$OUT" | jq -e '.reason | test("exhausted")'                >/dev/null 2>&1 && ok "exhaustion is the ONLY .loop-halt condition" || bad "missing exhaustion condition"
+
 echo "----"
 echo "stop_loop: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

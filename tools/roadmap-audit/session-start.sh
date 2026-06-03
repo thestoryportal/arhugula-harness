@@ -17,6 +17,10 @@ _LIB="$(dirname "${BASH_SOURCE[0]}")/../hooks/lib.sh"
 [ -f "$_LIB" ] || exit 0
 # shellcheck source=../hooks/lib.sh
 . "$_LIB"
+# Loop ledger lib (optional) — used only to surface pending DEFERRED-HIL at engagement.
+_LOOPLIB="$(dirname "${BASH_SOURCE[0]}")/../hooks/loop_lib.sh"
+# shellcheck source=../hooks/loop_lib.sh
+[ -f "$_LOOPLIB" ] && . "$_LOOPLIB"
 
 PROJECT_DIR=$(hook_project_dir)
 [ -z "$PROJECT_DIR" ] && exit 0
@@ -25,8 +29,19 @@ cd "$PROJECT_DIR" || exit 0
 DASHBOARD=".harness/roadmap_status.md"
 ROADMAP="Project_Roadmap_v1.md"
 
-# Single-line additionalContext for the SessionStart event (wraps the lib helper).
-emit() { hook_emit "SessionStart" "$1"; }
+# Pending operator-input summary from the last loop run (empty when none / no ledger).
+# Appended to EVERY emit() so the deferrals are "clearly presented when the operator
+# engages next", regardless of which audit branch (match / lag-expected / drift) fires.
+_HIL=""
+if command -v loop_pending_hil_summary >/dev/null 2>&1; then
+  _h=$(loop_pending_hil_summary 2>/dev/null)
+  [ -n "$_h" ] && _HIL=" $_h"
+fi
+
+# Single-line additionalContext for the SessionStart event (wraps the lib helper). The
+# pending-HIL summary is appended so an operator opening a fresh session always sees what
+# the last unattended loop run deferred for them.
+emit() { hook_emit "SessionStart" "$1${_HIL}"; }
 
 [ -f "$DASHBOARD" ] || emit "[ROADMAP] absent — see Project_Roadmap_v1.md §7"
 [ -f "$ROADMAP" ] || emit "[ROADMAP] dashboard exists but roadmap absent"
