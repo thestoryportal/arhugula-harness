@@ -71,6 +71,10 @@ OUT=$(run_on "$(pl Bash "tools/loop/halt.sh 'forward menu exhausted — 3 awaiti
 [ "$(dec "$OUT")" = "allow" ] && ok "allow halt.sh wrapper (stand-down)" || bad "halt.sh not allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'source tools/hooks/lib.sh && loop_defer R-1 x' '')")
 [ -z "$(dec "$OUT")" ] && ok "chained source+loop_defer NOT auto-allowed (falls to ask — the denied/malformed original)" || bad "chained source auto-allowed: $OUT"
+# 4c) Wrapper with an env-var expansion must NOT auto-allow (the shell would expand the
+#     secret VALUE into the ledger). Literal "credentials" is fine (4b); `$VAR` is not.
+OUT=$(run_on "$(pl Bash 'tools/loop/defer.sh R-300 $OPENAI_API_KEY' '')")
+[ -z "$(dec "$OUT")" ] && ok "defer.sh with \$VAR expansion NOT auto-allowed (no secret leak)" || bad "defer.sh \$VAR auto-allowed (secret-leak vector): $OUT"
 OUT=$(run_on "$(pl Bash 'bash tools/hooks/test_loop_lib.sh' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "allow hermetic test run" || bad "test run not allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'gh pr create --fill' '')")

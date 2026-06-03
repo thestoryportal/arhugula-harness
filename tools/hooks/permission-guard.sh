@@ -233,7 +233,11 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
     # reaches here. These are the executable, allowlisted path the loop's defer-and-continue
     # mechanism depends on (a raw `source … && loop_defer …` is denied + malformed).
     if printf '%s' "$TRIM" | grep -Eq '^(bash[[:space:]]+)?tools/loop/(defer|halt)\.sh([[:space:]]|$)'; then
-      emit_allow
+      # ...but STILL reject env-var expansion: `defer.sh R-1 "$OPENAI_API_KEY"` would let
+      # the shell expand the secret and the wrapper would write its VALUE into the ledger.
+      # `$(...)` is already rejected by the control-operator check above; this blocks a
+      # plain `$VAR` / `${VAR}` while still permitting the literal word "credentials".
+      printf '%s' "$CMD" | grep -Eq '\$\{?[A-Za-z_]' || emit_allow
     fi
     # Allowlist = commands that are safe REGARDLESS of their arguments (the dev/git arc
     # + pure builtins with no filesystem reach). Deliberately NOT here:

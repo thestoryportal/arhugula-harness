@@ -101,11 +101,15 @@ loop_defer() {
 loop_skip_set() {
   local p; p=$(loop_status_path)
   [ -f "$p" ] || return 0
+  # Extract ONLY the LEADING item token of each DEFERRED-HIL detail (loop_defer writes
+  # "<item> — <reason>"). Scanning the whole detail would wrongly skip an item merely
+  # MENTIONED in a reason, e.g. `loop_defer R-410 "blocked until R-300 decides"` must skip
+  # R-410 only, never R-300.
   awk -F'|' '
     / ACTIVATE /      { act = NR }
     / DEFERRED-HIL /  { d[NR] = $4 }
-    END { for (n in d) if (n > act) print d[n] }
-  ' "$p" 2>/dev/null | grep -oE 'R-[A-Za-z0-9._-]+' | sort -u | tr '\n' ' ' | sed 's/ $//'
+    END { for (n in d) if (n > act) { s=d[n]; sub(/^[ \t]+/, "", s); split(s, a, /[ \t]/); print a[1] } }
+  ' "$p" 2>/dev/null | grep -E '^R-[A-Za-z0-9._-]+$' | sort -u | tr '\n' ' ' | sed 's/ $//'
 }
 
 # Operator-facing summary of the LAST run's deferrals, for SessionStart surfacing ("clearly

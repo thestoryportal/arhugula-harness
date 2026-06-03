@@ -85,6 +85,13 @@ printf '%s' "$SUM" | grep -q "R-815" && printf '%s' "$SUM" | grep -q "await your
 : > "$(loop_status_path)"; loop_activate "clean run" >/dev/null
 [ -z "$(loop_pending_hil_summary)" ] && ok "pending summary empty when no deferrals" || bad "pending summary not empty when clean"
 
+# 13) skip-set extracts ONLY the leading item-id — an item merely MENTIONED in a reason
+#     must NOT enter the skip-set (else the loop skips an item that was never deferred).
+: > "$(loop_status_path)"; loop_activate "mention test" >/dev/null
+loop_defer R-410 "blocked until R-300 vendor decision is made"
+SKIP=$(loop_skip_set)
+[ "$SKIP" = "R-410" ] && ok "skip-set = leading id only (R-300 in reason excluded)" || bad "over-matched reason id: [$SKIP]"
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
