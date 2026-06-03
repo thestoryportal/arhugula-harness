@@ -36,14 +36,33 @@ agents bug cost doctor exit login logout mcp memory permissions pr-comments rele
 status terminal-setup vim ide hooks export rewind usage code-review security-review verify \
 run loop schedule simplify library graphify resolve loop-start loop-stop fewer-permission-prompts "
 
-# Collect known skill names from project + user skill directories.
+# Collect known skill names from project + user skill directories. Skills can be NESTED
+# (e.g. .claude/skills/council/<voice>/SKILL.md), so walk recursively for every SKILL.md
+# and take its INVOKABLE name = the frontmatter `name:` (canonical), falling back to the
+# parent-dir basename. An immediate-children-only scan would miss the council voices and
+# silently fail to hint on a typo of them.
+# Skills live at <skills>/<name>/SKILL.md or <skills>/<group>/<name>/SKILL.md, so
+# `-maxdepth 3` reaches both WITHOUT descending into each skill's node_modules /
+# references / evals (an unbounded recurse over the user skills tree cost ~5s/prompt —
+# unacceptable on a per-prompt hook). Name extraction is pure-bash (no awk/sed/basename
+# subprocess per file) so the whole scan stays well under the budget even for ~70 skills.
 _skill_dirs=("$PROJECT_DIR/.claude/skills" "$HOME/.claude/skills")
 _known=""
 for sd in "${_skill_dirs[@]}"; do
   [ -d "$sd" ] || continue
-  while IFS= read -r d; do
-    [ -f "$sd/$d/SKILL.md" ] && _known="$_known $d "
-  done < <(ls -1 "$sd" 2>/dev/null)
+  while IFS= read -r f; do
+    nm=""
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        name:*) nm="${line#name:}"; break;;
+      esac
+    done < "$f"
+    nm="${nm#"${nm%%[![:space:]]*}"}"   # strip leading whitespace
+    nm="${nm%%[[:space:]]*}"            # keep only the first token (drop trailing ws/desc)
+    nm="${nm//\"/}"; nm="${nm//\'/}"; nm="${nm//$'\r'/}"
+    if [ -z "$nm" ]; then nm="${f%/SKILL.md}"; nm="${nm##*/}"; fi
+    [ -n "$nm" ] && _known="$_known $nm "
+  done < <(find "$sd" -maxdepth 3 -type f -name SKILL.md 2>/dev/null)
 done
 
 # Extract leading-token slash-commands from the prompt. A skill invocation is a `/name`
@@ -55,15 +74,19 @@ _cmds=$(printf '%s' "$PROMPT" \
   | sed -E 's#^[[:space:]]*/##' | sort -u)
 [ -z "$_cmds" ] && exit 0
 
-# near-match: does $1 share a >=4-char common prefix with, or is a substring of (or
-# superstring of), any known skill name? Echoes the first matching known name.
+# near-match: is $1 a PREFIX-ANCHORED near-miss of a known skill name? Echoes the first
+# match. Prefix-anchored + a >=4-char floor on the query is the silent-when-correct
+# guard: an arbitrary-substring match made short commands noisy (`/pr`->`/ship-pr`,
+# `/pla`->`/implementation-planner`, `/opt`->`/optimize-claude-md` — all false hints). A
+# real mistype shares a leading prefix (`/resolv`->resolve, `/counci`->council), so we
+# require either a prefix relationship (q is a prefix of k, or k of q) or a >=4-char
+# shared leading prefix, and never guess for a query shorter than 4 chars.
 _near() {
   local q="$1" k pfx
+  [ "${#q}" -ge 4 ] || return 1
   for k in $_known; do
-    # substring either direction (typo by truncation / extra suffix)
-    case "$k" in *"$q"*) printf '%s' "$k"; return 0;; esac
-    case "$q" in *"$k"*) printf '%s' "$k"; return 0;; esac
-    # >=4-char shared prefix
+    case "$k" in "$q"*) printf '%s' "$k"; return 0;; esac   # q is a prefix of k (truncation typo)
+    case "$q" in "$k"*) printf '%s' "$k"; return 0;; esac   # k is a prefix of q (extra-suffix typo)
     pfx=$(printf '%s\n%s\n' "$q" "$k" | sed -e 'N;s/\(.*\).*\n\1.*/\1/')
     [ "${#pfx}" -ge 4 ] && { printf '%s' "$k"; return 0; }
   done
