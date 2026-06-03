@@ -25,6 +25,18 @@
         ]
       }
     ],
+    "PostCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/postcompact-reinject.sh",
+            "statusMessage": "Restoring context..."
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "*",
