@@ -65,8 +65,14 @@ if [ "$COMPUTED" = "$DASHBOARD_HASH" ]; then
 fi
 
 # Hash mismatch — check §12.2.1 fixed-point carve-out.
+# The carve-out keys on the commit-title PREFIX "ops: roadmap status refresh",
+# format-agnostic on the post-NNN suffix — refreshes have been titled both
+# `post-PR-NNN` (early) and `post-#NNN` / `post-#NNN/#NNN` / `post-#NNN (...)`
+# (later). Matching the prefix (not a specific NNN format) keeps the lag-expected
+# fixed point robust to either convention so a one-commit-behind dashboard after
+# any refresh is never mis-flagged as drift.
 LAST_TITLE=$(git log -1 --format=%s 2>/dev/null)
-if echo "$LAST_TITLE" | grep -qE '^ops: roadmap status refresh post-PR-[0-9]+'; then
+if echo "$LAST_TITLE" | grep -qE '^ops: roadmap status refresh '; then
   emit "[ROADMAP] hash=lag-expected next=${NEXT:-?} (post-refresh fixed-point §12.2.1)"
 fi
 
