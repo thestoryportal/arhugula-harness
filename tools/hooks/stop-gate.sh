@@ -51,11 +51,13 @@ while IFS= read -r _f; do [ -n "$_f" ] && CHANGED+=("$_f"); done < <(
 # than a silent fall-through that disables the gate on a fresh/unsynced machine.
 ERRF=$(mktemp 2>/dev/null) || ERRF=""
 LINT=$(hook_bounded 30 bash -c '
-  if command -v ruff >/dev/null 2>&1; then
-    ruff check --quiet --output-format=concise "$@"
-  else
-    uv run --quiet ruff check --output-format=concise "$@"
-  fi
+  if command -v ruff >/dev/null 2>&1; then RUFF=(ruff); else RUFF=(uv run --quiet ruff); fi
+  "${RUFF[@]}" check --quiet --output-format=concise "$@"; chk=$?
+  "${RUFF[@]}" format --check "$@" 2>/dev/null | grep -i "would be reformatted" | sed "s/^/format: /"
+  # Propagate ONLY a ruff CHECK that could not run (exit >1: missing tool / internal
+  # error) so the RC branch below still detects an absent runner; "issues found" (exit 1)
+  # and the format-grep no-match are NOT runner failures — their findings ride in LINT.
+  [ "$chk" -gt 1 ] && exit "$chk" || exit 0
 ' _ "${CHANGED[@]}" 2>"${ERRF:-/dev/null}")
 RC=$?
 ERR=""; [ -n "$ERRF" ] && { ERR=$(cat "$ERRF" 2>/dev/null); rm -f "$ERRF"; }

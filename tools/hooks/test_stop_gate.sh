@@ -21,6 +21,15 @@ git -C "$REPO" init -q -b main; git -C "$REPO" config user.email t@t.t; git -C "
 mkdir -p "$REPO/bin"
 cat > "$REPO/bin/ruff" <<'EOF'
 #!/usr/bin/env bash
+# Dispatch on the subcommand: `format --check` reports `# FMT_BAD` files as
+# would-be-reformatted; `check` keeps the lint behavior.
+sub="$1"; shift
+if [ "$sub" = "format" ]; then
+  n=0
+  for f in "$@"; do [ -f "$f" ] || continue; grep -q '# FMT_BAD' "$f" 2>/dev/null && n=$((n+1)); done
+  [ "$n" -gt 0 ] && { echo "$n file would be reformatted"; exit 1; }
+  echo "$n files already formatted"; exit 0
+fi
 rc=0
 for f in "$@"; do
   [ -f "$f" ] || continue
@@ -88,6 +97,13 @@ printf 'import os  # LINT_BAD\n' > "$REPO/bad name.py"
 OUT=$(run false)
 echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "path with space reaches ruff (blocks)" || bad "space-path word-split (P3): $OUT"
 rm -f "$REPO/bad name.py"
+
+# 9) lint-CLEAN but FORMAT-dirty .py → block on the format finding (U-HK-28 R-12).
+printf 'z = 3  # FMT_BAD\n' > "$REPO/mod.py"
+OUT=$(run false)
+echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "blocks on format-dirty .py" || bad "format-dirty .py bypassed gate: $OUT"
+echo "$OUT" | jq -e '.reason | test("format:")' >/dev/null 2>&1 && ok "block reason names the format finding" || bad "reason missing format text: $OUT"
+git -C "$REPO" checkout -q -- mod.py
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
