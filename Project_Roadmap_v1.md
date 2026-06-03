@@ -419,6 +419,31 @@ R-006-as-8f-managed-agents-indefinite:
   next_pointer: null
   notes: STILL-BOUNDED-INDEFINITELY per `.harness/class_1_fork_as_8f_managed_agents_namespace_production_only_exclusion.md` Q1=(C) + runtime spec v1.33 + AS spec v1.7 §14.5 footer (mirror AS-8e). Not executable in-CLI; gated on managed_agents beta SDK + managed-cloud surface. X-AL-2 bounded-residual carry.
 
+R-010-cp-17-files-indefinite:
+  title: H_T-CP-17 (files.* primitives consumption) — INDEFINITE deferral accounting
+  surface: I
+  status: DEFERRED
+  depends_on: []
+  blocks: [R-700-phase-8-substitution-accounting]
+  posture: halt-route-to-operator
+  scope: { files: [.harness/phase-7d-retirement-events-batch-NN.md], contracts: [], cross_axis: no }
+  skills: { primary: phase-7-substitution-retirement, secondary: [] }
+  advisor_required: no
+  council_required: no
+  verification: { shape: none, must_pass: ["operator decision to author the Files-arc surface OR carry as RETIRED-AS-BOUNDED-RESIDUAL at Phase 8"] }
+  close_shape: { type: retirement-event, artifact: "Phase 8 substitution accounting (R-700) OR a future Files-arc retirement event", cascade: [] }
+  next_pointer: null
+  notes: >
+    Authored 2026-06-02 per R-700 ratification (operator chose "Author R-NNN entries" at AskUserQuestion) —
+    closes the R-700 draft §C item 2 coverage gap for CP-17, the last of the 5 flagged rows lacking a
+    dedicated entry (CXA-1/2/3/4 already covered by R-CXA-1..4, authored at PR #209; the draft's "no R-entry"
+    framing for those was stale — compiled post-#206, before #209). CP-17 = the Files-primitives sibling of
+    AS-8e (R-005); reclassified STILL-BOUNDED-INDEFINITELY at batch-44 per runtime spec v1.17 §14.C
+    (Files-arc ratified Memory-only-MVP scope). Implementation-bundled into `R-810-files-api-integration`
+    (AS-8e/CP-17); this entry gives CP-17 standalone substitution-accounting tracking parallel to R-005/R-006.
+    Not executable in-CLI; gated on the operator Files-API surface-authoring decision. X-AL-2 bounded-residual
+    carry; dispositioned at the R-700 Phase-8 accounting (sign-off RATIFIED 2026-06-02; formal declaration HELD).
+
 R-007-od-3-sampler-retired:
   title: H_T-OD-3 (Composite Sampler) RETIRE-READY → RETIRED transit
   surface: I
@@ -483,6 +508,10 @@ R-008-od-4-redaction-partial:
     OD-6's "built-but-dormant", so a literal bounded-residual may not fit; a RETIRED-AS-CROSS-AXIS-DEFERRED
     (or equivalent) operator ruling is the candidate to unblock R-700. Surfaced for operator decision; NOT
     self-resolved (`[[r-007-r-009-od-retirement-condition-b-discriminator]]`).
+    **✅ RATIFIED 2026-06-02 (R-700 AskUserQuestion):** operator accepted OD-4's `RETIRED-AS-CROSS-AXIS-DEFERRED`
+    disposition as a Phase-8 sign-off (R-700 PART C item 3) — but **HELD the formal declaration** (PART C item 4),
+    so the bucket flip (OD-4 PARTIAL → CROSS-AXIS-DEFERRED) executes at the eventual `phase-8-graduation.md` close,
+    not now. R-008's Claude-executable work is COMPLETE (gate (a) done; gate (b) is cross-axis, not OD-axis-reachable).
     **Propagation scope (honest bound):** the gate (a) tests verify language-primitive ContextVar
     propagation (create_task / to_thread); they do NOT drive the operator trigger path
     `with session_content_capture(): api.run(wf)`, which crosses the in-process MCP transport
@@ -1527,7 +1556,24 @@ R-700-phase-8-substitution-accounting:
   verification: { shape: grep, must_pass: ["all 49 rows of Meta-Architecture §5 accounted", "each RETIRED-AS-BOUNDED-RESIDUAL has documented operator rationale"] }
   close_shape: { type: substrate-amendment, artifact: ".harness/phase-8-graduation.md", cascade: [] }
   next_pointer: null
-  notes: Phase 7 closure gate. Requires comprehensive operator review.
+  notes: >
+    Phase 7 closure gate. Requires comprehensive operator review. **Status: BLOCKED — 3 of 4 PART C rulings
+    RATIFIED 2026-06-02 (AskUserQuestion); the formal Phase-8 declaration is HELD by operator choice.**
+    Ratifications (see `.harness/R-700-phase-8-closure-accounting-draft.md` PART C): **(1) RETIRED integer =
+    46** (accounting (i); pipeline-advanced 49/54). **Cascade DEFERRED** by operator choice — the published
+    `48/54` is NOT yet rewritten in the ledger / `harness-cp/CLAUDE.md` / dashboard; `46` is the ratified
+    canonical going forward and the wide 48→46 count rewrite lands at the formal declaration (owed-at-declaration).
+    **(2) CXA + CP-17 R-NNN coverage CLOSED** — operator chose "author entries"; grounding found CXA-1/2/3/4
+    already covered by `R-CXA-1..4` (authored #209, post-dating the draft) + NEW `R-010-cp-17-files-indefinite`
+    authored this arc → all 5 flagged rows now have dedicated entries. **(3) Bounded-residual / deferred
+    sign-offs RATIFIED** — `AS-8e` (R-005), `AS-8f` (R-006), `CP-17` (R-010), `OD-6` (batch-51 bounded-residual),
+    and **`OD-4` (R-008) as a NEW `RETIRED-AS-CROSS-AXIS-DEFERRED` disposition** (gate (a) closed #244; gate (b)
+    §13.2 cross-axis at c10-action-safety/Phase-6+ → never OD-axis-Claude-closeable). **(4) HELD** — operator
+    accepts the dispositions but defers the formal "Phase-8 substitution accounting CLOSED" declaration pending
+    further review; R-700 stays BLOCKED. When lifted, the formal close authors `.harness/phase-8-graduation.md`
+    + executes the deferred 48→46 cascade + flips the dispositioned buckets (OD-4 PARTIAL → CROSS-AXIS-DEFERRED;
+    AS-8e/8f/CP-17 SB-INDEF → bounded-residual). The `blocks:[R-700]` gating set (R-005/006/008/010 + R-CXA-1..4)
+    is now all dispositioned-or-ratified; only the held operator declaration remains.
 ```
 
 ### 5.10 Multi-LLM maturity (R-300..R-399) — Surface IV
