@@ -149,6 +149,26 @@ OUT=$(run_on "$(pl Bash 'bash tools/hooks/test_lib.sh' '')")
 OUT=$(run_on "$(pl Bash 'bash tools/loop/run.sh' '')")
 [ -z "$OUT" ] && ok "bash tools non-test script → ask" || bad "arbitrary tools script auto-decided: $OUT"
 
+# 5j) Bash allowlist verbs must not auto-allow secret/home/outside ARGS (codex P1).
+for c in "cat .env" "grep TOKEN ~/.ssh/id_rsa" "touch ~/.ssh/authorized_keys" "cat /etc/passwd" "head ../outside.txt"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
+done
+OUT=$(run_on "$(pl Bash 'cat README.md' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "cat README.md (in-worktree) → allow" || bad "safe cat not allowed: $OUT"
+
+# 5k) git commit --amend (history rewrite) → ask (codex P2).
+OUT=$(run_on "$(pl Bash 'git commit --amend --no-edit' '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "git commit --amend → not auto-allowed" || bad "amend auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'git commit -m wip' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "plain git commit → still allow" || bad "plain commit not allowed: $OUT"
+
+# 5l) Notebook tools use notebook_path, not file_path (codex P2).
+OUT=$(run_on "$(jq -nc --arg p "$REPO/nb.ipynb" '{"hook_event_name":"PreToolUse","tool_name":"NotebookEdit","tool_input":{"notebook_path":$p}}')")
+[ "$(dec "$OUT")" = "allow" ] && ok "in-worktree NotebookEdit → allow" || bad "in-worktree notebook not allowed: $OUT"
+OUT=$(run_on "$(jq -nc '{"hook_event_name":"PreToolUse","tool_name":"NotebookEdit","tool_input":{"notebook_path":"/etc/x.ipynb"}}')")
+[ -z "$OUT" ] && ok "outside NotebookEdit → ask" || bad "outside notebook auto-decided: $OUT"
+
 # 6) PermissionRequest event uses the decision.behavior schema.
 OUT=$(run_on "$(pl Bash 'git status' '' PermissionRequest)")
 [ "$(beh "$OUT")" = "allow" ] && ok "PermissionRequest allow schema" || bad "PR allow schema wrong: $OUT"

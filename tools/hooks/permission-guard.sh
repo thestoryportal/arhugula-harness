@@ -42,6 +42,8 @@ TOOL=$(hook_json "$PAYLOAD" '.tool_name')
 CMD=$(hook_json "$PAYLOAD" '.tool_input.command')
 FPATH=$(hook_json "$PAYLOAD" '.tool_input.file_path')
 GPATH=$(hook_json "$PAYLOAD" '.tool_input.path')   # Grep/Glob search root
+NPATH=$(hook_json "$PAYLOAD" '.tool_input.notebook_path')  # Notebook tools
+[ -z "$FPATH" ] && FPATH="$NPATH"   # notebook tools carry the path here, not file_path
 
 # A path is safe to auto-allow iff it is NOT a secret/credential file, is INSIDE the
 # worktree (not .git/, no `..` traversal). Empty = no explicit path (defaults to cwd =
@@ -60,6 +62,25 @@ _safe_path() {
     "$PROJECT_DIR"|"$PROJECT_DIR"/*) return 0 ;;
     *) return 1 ;;                    # outside worktree
   esac
+}
+
+# A Bash command is arg-safe to auto-allow iff it does not reference a secret/credential,
+# home/SSH, traversal, or an absolute path OUTSIDE the worktree. The allowlist verbs
+# (cat/grep/touch/...) take free-form path args that _safe_path never sees, so without this
+# `cat .env` / `grep TOKEN ~/.ssh/id_rsa` / `touch ~/.ssh/authorized_keys` would auto-allow.
+# Returns 0 safe.
+_bash_args_safe() {
+  local cmd="$1" tok
+  printf '%s' "$cmd" | grep -Eq '(\.env|credentials|\.pem|id_rsa|id_ed25519|keyring|secret|\.key|\.ssh|authorized_keys)' && return 1
+  printf '%s' "$cmd" | grep -Eq '(~|\$HOME|\.\.)' && return 1
+  set -f
+  for tok in $cmd; do
+    case "$tok" in
+      /*) case "$tok" in "$PROJECT_DIR"|"$PROJECT_DIR"/*) ;; *) set +f; return 1 ;; esac ;;
+    esac
+  done
+  set +f
+  return 0
 }
 
 # Emit an allow/deny decision in the schema for the firing event, then exit.
@@ -153,11 +174,13 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
   # are auto-allowed only in their read-only forms.
   if printf '%s' "$CMD" | grep -q '[;&|<>`]' || [[ "$CMD" == *'$('* ]] || [[ "$CMD" == *$'\n'* ]] \
      || printf '%s' "$CMD" | grep -Eq 'find[[:space:]].*-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)\b' \
-     || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+api[[:space:]].*(-X|--method|--field|--raw-field|--input|-f[[:space:]]|-F[[:space:]])'; then
-    :  # chained / nested / redirected / destructive submode → fall through to ask
+     || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+api[[:space:]].*(-X|--method|--field|--raw-field|--input|-f[[:space:]]|-F[[:space:]])' \
+     || printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+commit.*--amend'; then
+    :  # chained / nested / redirected / destructive submode (incl. git commit --amend) → ask
   else
     TRIM=$(printf '%s' "$CMD" | sed 's/^[[:space:]]*//')
-    if printf '%s' "$TRIM" | grep -Eq '^(ls|cat|head|tail|wc|echo|printf|pwd|cd|which|command[[:space:]]+-v|grep|rg|find|sed[[:space:]]+-n|sort|uniq|awk|diff|jq|mkdir|chmod[[:space:]]+\+x|touch|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|codex-review)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|worktree[[:space:]]+list)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment|merge)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)'; then
+    if printf '%s' "$TRIM" | grep -Eq '^(ls|cat|head|tail|wc|echo|printf|pwd|cd|which|command[[:space:]]+-v|grep|rg|find|sed[[:space:]]+-n|sort|uniq|awk|diff|jq|mkdir|chmod[[:space:]]+\+x|touch|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|codex-review)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|worktree[[:space:]]+list)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment|merge)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
+       && _bash_args_safe "$CMD"; then
       emit_allow
     fi
   fi

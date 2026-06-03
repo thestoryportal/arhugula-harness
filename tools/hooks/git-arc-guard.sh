@@ -42,10 +42,15 @@ if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null \
   NOTES+=("uncommitted or untracked changes present on '${BRANCH}' — commit before the arc closes")
 fi
 
-# 2) Committed-but-unpushed: only meaningful when an upstream is configured.
+# 2) Committed-but-unpushed. With an upstream: count commits ahead of it. WITHOUT an
+#    upstream (a fresh feature branch that was never pushed): commits exist but no PR can
+#    see them — warn rather than silently skip (the no-upstream blind spot).
 if UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null); then
   AHEAD=$(git rev-list --count "${UPSTREAM}..HEAD" 2>/dev/null || echo 0)
   [ "${AHEAD:-0}" -gt 0 ] 2>/dev/null && NOTES+=("${AHEAD} commit(s) on '${BRANCH}' not pushed to ${UPSTREAM}")
+elif [ "$BRANCH" != "$DEFAULT" ] && git rev-parse --verify --quiet "origin/${DEFAULT}" >/dev/null 2>&1; then
+  LOCAL=$(git rev-list --count "origin/${DEFAULT}..HEAD" 2>/dev/null || echo 0)
+  [ "${LOCAL:-0}" -gt 0 ] 2>/dev/null && NOTES+=("'${BRANCH}' has ${LOCAL} commit(s) with no upstream — push to open a PR")
 fi
 
 # 3) Local default branch behind origin (stale-main drift). Uses a no-network read of

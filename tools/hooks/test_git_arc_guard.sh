@@ -52,6 +52,13 @@ OUT=$(run '{"stop_hook_active":false}')
 echo "$(msg "$OUT")" | grep -q "untracked" && ok "flags untracked-only new file" || bad "no untracked flag: $OUT"
 rm -f "$REPO/untracked_new.py"
 
+# 4c) Branch with commits but NO upstream → warns (codex P2: no-upstream blind spot).
+git -C "$REPO" checkout -q -b feat/noup
+printf 'feat\n' >> "$REPO/f.txt"; git -C "$REPO" add -A; git -C "$REPO" commit -qm feat
+OUT=$(run '{"stop_hook_active":false}')
+echo "$(msg "$OUT")" | grep -q "no upstream" && ok "flags no-upstream branch with commits" || bad "no no-upstream flag: $OUT"
+git -C "$REPO" checkout -q main; git -C "$REPO" branch -q -D feat/noup 2>/dev/null
+
 # 5) Behind-origin main → flags stale-main. Advance origin via a second clone, then
 #    refetch into REPO so origin/main is ahead of local main.
 git -C "$REPO" reset -q --hard origin/main   # clean local to match origin
