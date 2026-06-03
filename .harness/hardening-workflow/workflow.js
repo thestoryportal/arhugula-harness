@@ -20,6 +20,7 @@ const READ_FIRST = [
   `${PKG}/inventory-hooks-skills-disciplines.md`,
   `${PKG}/session-evidence.md`,
   `${PKG}/references/claude-code-hooks.md`,
+  `${PKG}/references/insights-report-2026-06-03.md`,
 ].join(', ')
 
 const CONSTRAINTS = `HARD CONSTRAINTS (from BRIEF.md §5):
@@ -37,7 +38,7 @@ const PREAMBLE = `You are one agent in the "harden-loop-hil" dynamic workflow. F
 // ids match session-evidence.md (D1..D13).
 // ---------------------------------------------------------------------------
 const DISCIPLINES = [
-  { id: 'D1', title: 'codex-review as the default pre-merge out-of-family reviewer (CLAUDE.md §13.1/§13.2)', note: 'SKIPPED on both merged PRs this session (timed out 2x, then skipped). Consider a PreToolUse deny on `gh pr merge` until a per-branch codex-review marker exists; consider scoping codex to the diff to avoid the monorepo-exploration timeout.' },
+  { id: 'D1', title: 'codex-review as the default pre-merge out-of-family reviewer (CLAUDE.md §13.1/§13.2)', note: 'SKIPPED on both merged PRs this session (timed out 2x, then skipped). RECURRING across 201 sessions per insights-report (stalled 12+ min, used WRONG MODEL gpt-5.4 via a profile override shadowing the model flag, never returned a verdict). Design the enforcement to: (a) a PreToolUse deny on `gh pr merge` until a per-branch codex-review-passed marker exists; (b) ECHO/verify the resolved model+config before launch (guard the profile-override-shadows-flag bug); (c) an explicit timeout; (d) DIFF-SCOPE codex so it is fast enough to actually run (the monorepo-exploration is the adoption blocker); (e) a defined kill-and-proceed-with-noted-caveat fallback so a stall does not silently skip the review entirely.' },
   { id: 'D2', title: 'advisor() at every decision-fork + pre-done (CLAUDE.md §13.1)', note: 'Called ONCE this session, not per-fork/pre-done. Can a hook detect a "decision-fork" or a "declaring done" Stop and nudge/limit?' },
   { id: 'D3', title: '/resolve (Codex+advisor dual-reviewer) for reversible in-repo forks in loop mode (skills/resolve, U-HK-13)', note: 'NEVER invoked this session; forks decided solo.' },
   { id: 'D4', title: 'never-halt-unless-zero-units (CLAUDE.md §12.4.1 + the loop)', note: 'Violated: treated a single deferred item as a stop point. stop-loop.sh (U-HK-14) is the enforcement surface — does it actually prevent a premature halt in an interactive /loop-start session (vs only headless run.sh)?' },
@@ -50,6 +51,7 @@ const DISCIPLINES = [
   { id: 'D11', title: 'memory hygiene (CLAUDE.md §12.5): save patterns at cardinality>=2, save feedback symmetrically, MEMORY.md 24,400-byte cap, verify-before-acting', note: 'MANUAL. The capture-failure hook nudges on recurrence; is the broader memory discipline enforceable, and is the MEMORY.md cap auto-guarded? (It is currently OVER cap.)' },
   { id: 'D12', title: 'completeness-check-by-execution before claiming "sufficient"/"done" (CLAUDE.md §13.1)', note: 'MANUAL. Run the path/e2e, not just unit tests. Can a Stop hook ask "did you verify by execution?"' },
   { id: 'D13', title: 'empirical cite-grounding + cross-spec drift grep (CLAUDE.md §13.1/§10.4)', note: 'MANUAL. Likely stays manual, but assess.' },
+  { id: 'D14', title: 'output-token-limit resilience / loop durability (insights-report; CLAUDE.md §14.4/§14.5)', note: 'NEW from the insights report: 6+ autonomous-loop sessions were LOST to repeated output-token-limit errors (responses exceeding the cap → context summarized away → work unrecoverable). The hardened loop must survive truncation: bias toward concise responses + FREQUENT durable per-step file checkpoints (the U-HK-05/27 checkpoint substrate exists — is it triggered often enough mid-loop? does the loop write per-step progress to a file?); §14.5 chunk large writes. Assess whether capture-failure (U-HK-07, StopFailure) recovers from a mid-loop output-cap truncation. Likely the single most impactful durability fix for UNATTENDED runs.' },
 ]
 
 // ---------------------------------------------------------------------------

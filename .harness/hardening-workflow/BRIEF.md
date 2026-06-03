@@ -188,7 +188,8 @@ capability-verified plan. Implementation is a separate authorized pass.
 | `inventory-hooks-skills-disciplines.md` | The full map: every hook (ENFORCING/ADVISORY), every skill, every CLAUDE.md §12/§13/§14 discipline + its AUTO-vs-MANUAL enforcement classification + intended enforcement point. **The primary audit target.** |
 | `session-evidence.md` | This session's concrete lapses (the ground-truth test set), each tied to the discipline that failed and why the current mechanism didn't catch it. |
 | `references/claude-code-hooks.md` | Authoritative Claude Code + Agent SDK hooks reference (every event, the allow/deny/block/inject protocol, settings shape, autonomous-loop + auto-approve guidance). **The capability ground truth** — every proposed hook must be expressible here. |
-| `workflow.js` | The pre-authored dynamic-workflow script the `begin-workflow` skill launches. |
+| `references/insights-report-2026-06-03.md` | **Cross-session corroboration** (201 sessions / 26 days): D6 (defer-paid-when-creds-available), D1 (codex stalls + wrong model), D7 (cwd-bleed) are RECURRING, not one-off — plus concrete fixes and the NEW **D14** (output-token-limit / loop-durability) failure mode. High weight. |
+| `workflow.js` | The pre-authored dynamic-workflow script the `begin-workflow` skill launches (audits D1..D14). |
 
 External (in the main repo root, untracked): `research/dynamic-workflows.md`
 (the workflow-pattern model), `research/sessionend-clear-automated-loop-gemini.md`
