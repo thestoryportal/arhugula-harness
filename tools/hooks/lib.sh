@@ -56,12 +56,15 @@ hook_bounded() {
   # `-k 2`: GNU timeout sends SIGTERM at SECS, then SIGKILL 2s later if the child
   # ignored TERM (without -k, `timeout` only sends TERM and WAITS — a TERM-ignoring
   # git-over-SSH would hang the hook). Both native paths and the pure-bash fallback
-  # below escalate to KILL, so this is a genuine hard bound everywhere.
-  local tb=""
-  command -v timeout  >/dev/null 2>&1 && tb="timeout -k 2 $secs"
-  command -v gtimeout >/dev/null 2>&1 && tb="gtimeout -k 2 $secs"
-  if [ -n "$tb" ]; then
-    $tb "$@"
+  # escalate to KILL, so this is a genuine hard bound everywhere. Invoke the binary
+  # EXPLICITLY (not via an unquoted "$prefix $@" that relies on word-splitting — zsh
+  # does not split unquoted vars, which would turn the prefix into one bogus argv0).
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 2 "$secs" "$@"
+    return $?
+  fi
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout -k 2 "$secs" "$@"
     return $?
   fi
   "$@" & local p=$!
