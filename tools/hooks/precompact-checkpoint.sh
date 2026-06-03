@@ -21,28 +21,9 @@ PROJECT_DIR=$(hook_project_dir)
 [ -z "$PROJECT_DIR" ] && exit 0
 cd "$PROJECT_DIR" || exit 0
 
-CKDIR=".harness/.checkpoints"
-mkdir -p "$CKDIR" 2>/dev/null || exit 0
-
 PAYLOAD=$(hook_read_stdin)
 TRIGGER=$(hook_json "$PAYLOAD" '.trigger')
-TS=$(date -u +%Y%m%d-%H%M%S 2>/dev/null || echo now)
-HEAD=$(git rev-parse --short HEAD 2>/dev/null || echo "?")
-BRANCH=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "?")
-NEXT=$(hook_roadmap_next .harness/roadmap_status.md)
-PRS=$(hook_bounded 5 gh pr list --state open --json number,title --jq '.[]|"#\(.number) \(.title)"' 2>/dev/null | head -10)
-DIRTY=$(git status --short 2>/dev/null | head -30)
-
-OUT="$CKDIR/precompact-${TS}.md"
-{
-  echo "# Pre-compaction snapshot ${TS} (trigger=${TRIGGER:-?})"
-  echo
-  echo "- HEAD: \`${HEAD}\` on \`${BRANCH}\`"
-  echo "- roadmap next-action: ${NEXT:-?}"
-  echo "- open PRs:"
-  printf '%s\n' "${PRS:-  (none)}" | sed 's/^/  - /'
-  echo "- uncommitted:"
-  printf '%s\n' "${DIRTY:-  (clean)}" | sed 's/^/  /'
-} > "$OUT" 2>/dev/null || exit 0
-cp "$OUT" "$CKDIR/precompact-latest.md" 2>/dev/null || true
+# Snapshot via the shared writer (U-HK-27 extracted this). At compaction we are NOT on a
+# hot path, so include the open-PRs gh lookup (no skip_gh).
+hook_write_checkpoint "Pre-compaction snapshot (trigger=${TRIGGER:-?})"
 exit 0

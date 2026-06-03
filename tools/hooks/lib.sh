@@ -101,6 +101,42 @@ hook_roadmap_next() {
     | grep -oE '`R-[A-Za-z0-9._-]+`' 2>/dev/null | head -1 | tr -d '`'
 }
 
+# Write a lightweight state snapshot to .harness/.checkpoints/precompact-<ts>.md +
+# precompact-latest.md (the file U-HK-06 postcompact-reinject reads; session-end-cleanup
+# keep-10-prunes `precompact-2*.md`). Shared by precompact-checkpoint.sh (U-HK-05, at
+# compaction) and the context-recovery statusline (U-HK-27, as context fills). Best-effort
+# (never errors the caller). Args: <label> [skip_gh]. With skip_gh non-empty the open-PRs
+# `gh` call is omitted — the statusline is a per-turn hot path and must stay fast + offline.
+hook_write_checkpoint() {
+  local label="$1" skip_gh="${2:-}"
+  local d; d=$(hook_project_dir); [ -n "$d" ] || return 0
+  local ckdir="$d/.harness/.checkpoints"
+  mkdir -p "$ckdir" 2>/dev/null || return 0
+  local ts head branch next prs dirty
+  ts=$(date -u +%Y%m%d-%H%M%S 2>/dev/null || echo now)
+  head=$(git -C "$d" rev-parse --short HEAD 2>/dev/null || echo "?")
+  branch=$(git -C "$d" symbolic-ref --quiet --short HEAD 2>/dev/null || echo "?")
+  next=$(hook_roadmap_next "$d/.harness/roadmap_status.md")
+  if [ -z "$skip_gh" ]; then
+    prs=$(hook_bounded 5 gh pr list --state open --json number,title --jq '.[]|"#\(.number) \(.title)"' 2>/dev/null | head -10)
+  else
+    prs="(skipped — fast path)"
+  fi
+  dirty=$(git -C "$d" status --short 2>/dev/null | head -30)
+  local out="$ckdir/precompact-${ts}.md"
+  {
+    echo "# ${label} ${ts}"
+    echo
+    echo "- HEAD: \`${head}\` on \`${branch}\`"
+    echo "- roadmap next-action: ${next:-?}"
+    echo "- open PRs:"
+    printf '%s\n' "${prs:-  (none)}" | sed 's/^/  - /'
+    echo "- uncommitted:"
+    printf '%s\n' "${dirty:-  (clean)}" | sed 's/^/  /'
+  } > "$out" 2>/dev/null || return 0
+  cp "$out" "$ckdir/precompact-latest.md" 2>/dev/null || true
+}
+
 # Loop-mode detection (Wave 2 autonomy gate). Returns 0 (true) when the autonomous
 # loop is active. OFF by default — the autonomy hooks (auto-approve permissions,
 # Stop-continue) MUST be inert unless this returns true, so normal interactive

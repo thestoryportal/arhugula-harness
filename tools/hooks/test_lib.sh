@@ -85,5 +85,13 @@ mkdir -p "$REPO/.harness"; : > "$REPO/.harness/.loop-active"
 ( cd "$REPO"; unset HARNESS_LOOP; CLAUDE_PROJECT_DIR="$REPO" loop_mode_active ) \
   && ok "loop_mode_active on via marker file" || bad "loop_mode_active marker ignored"
 
+# hook_write_checkpoint (U-HK-27 shared snapshot writer): writes precompact-latest.md with
+# the label; skip_gh omits the open-PRs gh lookup (fast path — no network in this test).
+CLAUDE_PROJECT_DIR="$REPO" hook_write_checkpoint "Test snapshot" skip_gh
+LATEST="$REPO/.harness/.checkpoints/precompact-latest.md"
+[ -f "$LATEST" ] && ok "hook_write_checkpoint wrote precompact-latest.md" || bad "no checkpoint file"
+grep -q "Test snapshot" "$LATEST" 2>/dev/null && ok "checkpoint carries the label" || bad "label missing"
+grep -q "skipped — fast path" "$LATEST" 2>/dev/null && ok "skip_gh omits gh PR lookup" || bad "skip_gh not honored"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
