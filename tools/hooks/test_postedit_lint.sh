@@ -19,7 +19,12 @@ trap 'rm -rf "$REPO"' EXIT
 mkdir -p "$REPO/bin"
 cat > "$REPO/bin/ruff" <<'EOF'
 #!/usr/bin/env bash
-f="${@: -1}"   # last arg = the file path
+sub="$1"; shift          # `check` or `format`
+f="${@: -1}"             # last arg = the file path
+if [ "$sub" = "format" ]; then
+  grep -q '# FMT_BAD' "$f" 2>/dev/null && echo "1 file would be reformatted"
+  exit 0
+fi
 if grep -q '# LINT_BAD' "$f" 2>/dev/null; then
   echo "$f:1:1: F401 fake unused import"
 fi
@@ -52,6 +57,12 @@ OUT=$(run "$REPO/notes.txt")
 # 4) a missing file → silent.
 OUT=$(run "$REPO/nonexistent.py")
 [ -z "$OUT" ] && ok "silent for missing file" || bad "emitted for missing file: '$OUT'"
+
+# 5) a lint-CLEAN but FORMAT-dirty .py → emits a format finding (U-HK-28 R-12).
+printf 'z = 3  # FMT_BAD\n' > "$REPO/fmt.py"
+OUT=$(run "$REPO/fmt.py")
+printf '%s' "$OUT" | grep -q "format:" && printf '%s' "$OUT" | grep -q "fmt.py" \
+  && ok "emits a format finding for an unformatted .py" || bad "no format finding: '$OUT'"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

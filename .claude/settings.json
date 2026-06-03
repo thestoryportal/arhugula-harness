@@ -100,15 +100,18 @@
           {
             "type": "command",
             "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/stop-gate.sh",
-            "statusMessage": "Lint gate before stop..."
+            "statusMessage": "Lint gate before stop...",
+            "timeout": 45
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/git-arc-guard.sh"
+            "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/git-arc-guard.sh",
+            "timeout": 20
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/stop-loop.sh"
+            "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/stop-loop.sh",
+            "timeout": 20
           }
         ]
       }
@@ -140,15 +143,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/prompt-context.sh"
+            "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/prompt-context.sh",
+            "timeout": 12
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/skill-activation-check.sh"
+            "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/skill-activation-check.sh",
+            "timeout": 12
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/prompt-lint.sh"
+            "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/prompt-lint.sh",
+            "timeout": 12
           }
         ]
       }
