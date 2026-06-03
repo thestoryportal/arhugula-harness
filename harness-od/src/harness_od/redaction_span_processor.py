@@ -23,18 +23,26 @@ content-bearing attributes are default-off at all 9 cells. OD spec v1.2
 "BEFORE the BatchSpanProcessor buffer" at multi-tenant-compliance cells; this
 processor is the canonical wiring of that mandate at the substrate layer.
 
-**Default-off at all tiers (MVP scope-lock).** The MVP enforces the §12.1
-default-off discipline at all 3 persona tiers — solo-developer, team-binding,
-multi-tenant-compliance. The §C-OD-13 §13.1 per-persona-tier override gradient
-(solo-developer toggleable per session; team-binding non-toggleable;
-multi-tenant-compliance pre-collector eval-grade pipeline) is captured at
-`harness-od/src/harness_od/redaction_gradient.py:PER_PERSONA_TIER_REDACTION`
-but NOT consumed at the SDK boundary at MVP. Per-persona-tier toggle is a
-follow-on arc per OD spec v1.2 §C-OD-13 §13.1 acceptance #3 toggleable-only-at-
-solo-developer + content-capture audit-ledger emission discipline. The
-RedactionSpanProcessor at HEAD treats default-off as a hard substrate
-invariant; future per-tier toggle plumbs `persona_tier` + a per-session
-override flag through `RuntimeConfig` to this processor's ctor.
+**Default-off, with a solo-developer per-session toggle (§13.1 gate (a)).** The
+processor enforces the §12.1 default-off discipline at all 3 persona tiers —
+content-bearing attributes are stripped at `on_end` unless an override is in
+scope. The §C-OD-13 §13.1 per-persona-tier override gradient (solo-developer
+toggleable per session; team-binding non-toggleable; multi-tenant-compliance
+pre-collector eval-grade pipeline) is captured at
+`harness-od/src/harness_od/redaction_gradient.py:PER_PERSONA_TIER_REDACTION`.
+The **solo-developer per-session toggle** (§13.1 "Per-session toggle at the
+in-process collector configuration; default-off") is wired here via the
+module-level `_SESSION_CONTENT_CAPTURE` ContextVar + the `session_content_capture()`
+context manager: at `PersonaTier.SOLO_DEVELOPER` (`toggleable=True`) an operator
+enables raw content capture for a session by wrapping the run; `on_end` then
+skips the strip for spans ended in that context. team-binding +
+multi-tenant-compliance (`toggleable=False`) IGNORE the override per §13.3
+monotonic-tightening / downgrade-rejection — a stray enable can never relax
+redaction at a tightened tier. The deployment-binding-time `persona_tier`
+threads through `RuntimeConfig` to this processor's ctor (runtime spec v1.37 §3
+C-RT-03); the per-session toggle is runtime/session-scoped, distinct from the
+deployment-binding persona_tier per OD spec v1.26 §1.1. The specific toggle UX
+(CLI flag vs config-file) is deferred to implementation discretion per §13.3.
 
 **Strip-not-tokenize (MVP scope-lock).** OD spec v1.2 §C-OD-13 §13.2 declares
 "any span emitted from the harness at a multi-tenant-compliance cell MUST have
@@ -88,6 +96,8 @@ canonical declaration site of `DEFAULT_OFF_CONTENT_ATTRIBUTES`.
 
 from __future__ import annotations
 
+import contextvars
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 from harness_core import PersonaTier
@@ -98,12 +108,73 @@ from harness_od.content_structure_discipline import DEFAULT_OFF_CONTENT_ATTRIBUT
 from harness_od.redaction_gradient import PER_PERSONA_TIER_REDACTION
 
 if TYPE_CHECKING:
-    pass
+    from collections.abc import Generator
 
 __all__ = [
     "MultiTenantOverrideRefusedError",
     "RedactionSpanProcessor",
+    "session_content_capture",
+    "session_content_capture_enabled",
 ]
+
+
+#: Per-session content-capture override (C-OD-13 §13.1 solo-developer row).
+#: `default=False` encodes the §13.1 "default-off" posture — content capture is
+#: OFF by default, so redaction applies. An operator ENABLES content capture for
+#: a session by setting this `True` (via `session_content_capture`), honored
+#: ONLY at the solo-developer tier (`toggleable=True`); team-binding +
+#: multi-tenant-compliance IGNORE it (non-toggleable per §13.3 monotonic-
+#: tightening / downgrade-rejection). Mirrors the per-session ContextVar
+#: isolation idiom at `harness-runtime/.../lifecycle/mcp_server.py`
+#: (`_CURRENT_TOOL_CTX`); propagates into the span-emitting task/context where
+#: `on_end` fires synchronously at `span.end()`.
+_SESSION_CONTENT_CAPTURE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "harness.od.session_content_capture",
+    default=False,
+)
+
+
+@contextmanager
+def session_content_capture(*, enabled: bool = True) -> Generator[None]:
+    """Per-session content-capture toggle (C-OD-13 §13.1 solo-developer).
+
+    The operator-facing mechanism for §13.1's "Per-session toggle at the
+    in-process collector configuration; default-off" override at the
+    solo-developer tier. Wrap a workflow run to ENABLE raw content capture
+    (skip the §12.1 default-off strip) for that session::
+
+        with session_content_capture():
+            api.run(workflow)  # spans this run keep content at solo-developer
+
+    On exit the prior value is restored (`ContextVar.reset`). The toggle is
+    honored ONLY at `PersonaTier.SOLO_DEVELOPER`
+    (`PER_PERSONA_TIER_REDACTION[...].toggleable=True`); team-binding +
+    multi-tenant-compliance deployments IGNORE it and always redact, so a stray
+    enable can never relax redaction at a non-toggleable tier (§13.3
+    downgrade-rejection).
+
+    The set propagates into the span-emitting execution context (same task, or
+    a context-copied child task / `asyncio.to_thread`), so `on_end` — which
+    fires synchronously at `span.end()` in that context — observes it.
+
+    The specific surfacing of this toggle (CLI flag vs config-file) is the
+    §13.3-deferred toggle UX; this context manager is the underlying mechanism
+    over which any such UX composes.
+    """
+    token = _SESSION_CONTENT_CAPTURE.set(enabled)
+    try:
+        yield
+    finally:
+        _SESSION_CONTENT_CAPTURE.reset(token)
+
+
+def session_content_capture_enabled() -> bool:
+    """Return the current session's content-capture override (default `False`).
+
+    Introspection helper reading the same `ContextVar` the processor consults
+    at `on_end`. `True` only inside a `session_content_capture()` scope.
+    """
+    return _SESSION_CONTENT_CAPTURE.get()
 
 
 class MultiTenantOverrideRefusedError(Exception):
@@ -185,6 +256,17 @@ class RedactionSpanProcessor(SpanProcessor):
         exception here would disrupt downstream processors in the
         MultiSpanProcessor chain).
         """
+        # §C-OD-13 §13.1 per-session content-capture toggle (solo-developer
+        # ONLY). `PER_PERSONA_TIER_REDACTION[SOLO_DEVELOPER].toggleable=True`:
+        # an operator may enable raw content capture per session via
+        # `session_content_capture()`. team-binding + multi-tenant-compliance
+        # are non-toggleable (§13.3 monotonic-tightening / downgrade-rejection)
+        # — the override is IGNORED at those tiers, so a stray enable can never
+        # relax redaction at a tightened tier. Default-off (`ContextVar`
+        # default `False`) preserves the strip-at-all-tiers MVP behavior when
+        # no override is in scope.
+        if self._persona_tier == PersonaTier.SOLO_DEVELOPER and _SESSION_CONTENT_CAPTURE.get():
+            return
         # OTel-Python exposes the span's attribute bag as `_attributes`, a
         # `BoundedAttributes` (`MutableMapping`) that is mutable when the span
         # is non-immutable. There is no public mutation surface on
