@@ -170,9 +170,11 @@ class RuntimeConfigSource:
         Parameters
         ----------
         config_file:
-            Path to a TOML config file. When ``None``, the config-file layer
-            contributes nothing (the precedence reduces to env + CLI).
-            When set, the file MUST exist and parse as TOML.
+            Path to a TOML config file. When ``None``, auto-discover
+            ``DEFAULT_CONFIG_FILE_NAME`` (``harness.toml``) in the process CWD per
+            spec §3.7 (Reading A); if absent, the config-file layer contributes
+            nothing (precedence reduces to env + CLI). When set explicitly, the
+            file MUST exist and parse as TOML.
         cli_overrides:
             Per-invocation dict of CLI-flag overrides. Highest priority.
 
@@ -185,7 +187,14 @@ class RuntimeConfigSource:
               mismatch, missing required field, unknown field).
         """
         env_values = cls._load_env_values()
-        file_values = cls._load_file_values(config_file) if config_file is not None else {}
+        # §3.7 auto-discovery (Reading A): an omitted --config falls back to a
+        # CWD-local harness.toml; absent → env+CLI-only (today's no-file behavior).
+        resolved_config_file = (
+            config_file if config_file is not None else cls._discover_default_config()
+        )
+        file_values = (
+            cls._load_file_values(resolved_config_file) if resolved_config_file is not None else {}
+        )
         cli_values = dict(cli_overrides or {})
 
         merged: dict[str, Any] = {}
@@ -200,6 +209,22 @@ class RuntimeConfigSource:
                 _format_validation_error(exc),
                 source="merged",
             ) from exc
+
+    @staticmethod
+    def _discover_default_config() -> Path | None:
+        """§3.7 auto-discovery (Reading A — CWD).
+
+        When ``--config`` is omitted, look for ``DEFAULT_CONFIG_FILE_NAME``
+        (``harness.toml``) in the process working directory. Returns the path if
+        it is an existing file, else ``None`` (preserving the env+CLI-only
+        behavior for the no-file case). This wires the previously-dead
+        ``DEFAULT_CONFIG_FILE_NAME`` constant and closes the spec §3.7 gap
+        (declared-but-unimplemented). "Workspace root" is read as the CWD: the
+        true ``repository_root`` lives *inside* harness.toml, so discovery cannot
+        key on it without circularity.
+        """
+        candidate = Path.cwd() / DEFAULT_CONFIG_FILE_NAME
+        return candidate if candidate.is_file() else None
 
     @staticmethod
     def _load_env_values() -> dict[str, Any]:
