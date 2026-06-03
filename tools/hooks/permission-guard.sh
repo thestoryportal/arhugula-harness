@@ -173,9 +173,19 @@ case "$TOOL" in
     # Reads are auto-allowed only for non-secret, in-worktree paths — otherwise a read of
     # .env / SSH keys / out-of-worktree files would leak past the approval boundary.
     _safe_path "$FPATH" && emit_allow ;;
-  Grep|Glob)
-    # Same boundary on the search root (content-mode grep can surface secret contents).
+  Grep)
+    # Boundary on the search root (content-mode grep can surface secret contents); the
+    # `pattern` is a regex, not a path, so it's not path-checked.
     _safe_path "$GPATH" && emit_allow ;;
+  Glob)
+    # Glob's `pattern` IS a path-glob — reject an absolute or traversing pattern even when
+    # `path` is empty (`/etc/*`, `../*.pem` would escape the worktree).
+    _safe_path "$GPATH" || exit 0
+    case "$(hook_json "$PAYLOAD" '.tool_input.pattern')" in
+      /*|*..*) : ;;            # absolute / traversal glob → ask
+      *) emit_allow ;;
+    esac
+    ;;
   Edit|Write|MultiEdit|NotebookEdit)
     # Edits are git-reversible ONLY inside the worktree. Auto-allow EXCEPT design-substrate
     # (X-AL-3 back-flow) — those, plus secret/outside/.git/traversal paths (via _safe_path),
@@ -206,7 +216,8 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
      || printf '%s' "$CMD" | grep -Eq 'find[[:space:]].*-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)\b' \
      || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+api[[:space:]].*(-X|--method|--field|--raw-field|--input|-f[[:space:]]|-F[[:space:]])' \
      || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+pr[[:space:]]+merge.*--admin' \
-     || printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+commit.*--amend'; then
+     || printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+commit.*--amend' \
+     || printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+branch[[:space:]]+(-f|--force|-m|-M|--move|-c|-C|--copy)'; then
     :  # chained / nested / redirected / destructive submode (incl. git commit --amend) → ask
   else
     TRIM=$(printf '%s' "$CMD" | sed 's/^[[:space:]]*//')

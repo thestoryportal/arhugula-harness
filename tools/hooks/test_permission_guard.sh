@@ -214,6 +214,19 @@ OUT=$(run_on "$(pl Read '' "$REPO/chain1")")
 [ -z "$OUT" ] && ok "symlink chain escaping worktree → ask" || bad "symlink-chain Read auto-decided: $OUT"
 rm -f "$REPO/chain1" "$REPO/chain2"
 
+# 5r) Round-10: git branch force/move → ask; Glob abs/traversal pattern → ask (codex P1/P2).
+for c in "git branch -f main HEAD~1" "git branch -m old new" "git branch -C a b"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
+done
+for pat in "/etc/*" "../*.pem"; do
+  OUT=$(run_on "$(jq -nc --arg p "$pat" '{"hook_event_name":"PreToolUse","tool_name":"Glob","tool_input":{"pattern":$p}}')")
+  [ -z "$OUT" ] && ok "Glob pattern '$pat' → ask" || bad "Glob '$pat' auto-decided: $OUT"
+done
+# in-worktree Glob (relative pattern, no path) still allows
+OUT=$(run_on "$(jq -nc '{"hook_event_name":"PreToolUse","tool_name":"Glob","tool_input":{"pattern":"**/*.py"}}')")
+[ "$(dec "$OUT")" = "allow" ] && ok "Glob relative pattern → allow" || bad "relative Glob not allowed: $OUT"
+
 # 6) PermissionRequest event uses the decision.behavior schema.
 OUT=$(run_on "$(pl Bash 'git status' '' PermissionRequest)")
 [ "$(beh "$OUT")" = "allow" ] && ok "PermissionRequest allow schema" || bad "PR allow schema wrong: $OUT"
