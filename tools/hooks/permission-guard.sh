@@ -139,6 +139,22 @@ case "$TOOL" in
   *route_llm_call*|*llm_dispatch*) emit_deny "paid LLM inference call — surface, do not auto-fire" ;;
 esac
 
+# Loop-control wrappers short-circuit to ALLOW *before* the free-text deny scan. defer.sh
+# / halt.sh only append a ledger row / touch the halt marker — they perform no dangerous
+# action regardless of args, and their REASON text naturally names operator actions ("gh
+# secret set …", ".env", "credentials") that the deny-list scans for as substrings. Without
+# this exemption a safe deferral whose reason names the gate would be DENIED, no DEFERRED-HIL
+# row would be written, and the headless loop would retry the same gated item to the cap.
+# Strictly bounded to a SINGLE CLEAN invocation: wrapper prefix + NO control operators (so it
+# can't chain a real dangerous command) + NO $VAR expansion (so it can't expand a secret VALUE
+# into the ledger). $(...) and newlines are control-operator-rejected here too.
+if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ] \
+   && printf '%s' "$CMD" | grep -Eq '^[[:space:]]*(bash[[:space:]]+)?tools/loop/(defer|halt)\.sh([[:space:]]|$)' \
+   && ! printf '%s' "$CMD" | grep -q '[;&|<>`]' && [ "$CMD" = "${CMD%%\$(*}" ] && [ "$CMD" = "${CMD//$'\n'/}" ] \
+   && ! printf '%s' "$CMD" | grep -Eq '\$\{?[A-Za-z_]'; then
+  emit_allow
+fi
+
 # Bash command deny patterns (case-sensitive). Conservative: a match hard-stops.
 if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
   # Recursive/forced delete.
@@ -225,20 +241,9 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
     :  # chained / nested / redirected / destructive submode (incl. git commit --amend) → ask
   else
     TRIM=$(printf '%s' "$CMD" | sed 's/^[[:space:]]*//')
-    # Loop-control wrappers (U-HK-14/15): defer.sh / halt.sh are safe REGARDLESS of args —
-    # they only append a ledger row / touch .loop-halt and never resolve an arg as a path,
-    # so they bypass _bash_args_safe (whose secret/credentials keyword reject would
-    # otherwise block a perfectly safe deferral REASON like "needs OpenAI credentials").
-    # The control-operator rejection above still applies, so only a single clean invocation
-    # reaches here. These are the executable, allowlisted path the loop's defer-and-continue
-    # mechanism depends on (a raw `source … && loop_defer …` is denied + malformed).
-    if printf '%s' "$TRIM" | grep -Eq '^(bash[[:space:]]+)?tools/loop/(defer|halt)\.sh([[:space:]]|$)'; then
-      # ...but STILL reject env-var expansion: `defer.sh R-1 "$OPENAI_API_KEY"` would let
-      # the shell expand the secret and the wrapper would write its VALUE into the ledger.
-      # `$(...)` is already rejected by the control-operator check above; this blocks a
-      # plain `$VAR` / `${VAR}` while still permitting the literal word "credentials".
-      printf '%s' "$CMD" | grep -Eq '\$\{?[A-Za-z_]' || emit_allow
-    fi
+    # (Loop-control wrappers defer.sh/halt.sh are auto-allowed earlier — at the top of the
+    # deny block — so a deferral reason naming an operator action isn't tripped by the
+    # free-text deny scan. See the short-circuit in §2.)
     # Allowlist = commands that are safe REGARDLESS of their arguments (the dev/git arc
     # + pure builtins with no filesystem reach). Deliberately NOT here:
     #  - content readers / programmable filters (cat/head/tail/grep/rg/find/jq/sed/awk/
