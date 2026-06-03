@@ -1429,6 +1429,65 @@ R-600-substitution-ledger-schema:
     hash hook); this extends the same pattern to the substitution ledger. CI-gate component relates to
     Surface III (R-200) but the dominant character is process-discipline anti-drift. Minimal first step,
     NOT a migration — the prose docs reference the derived numbers.
+
+R-600-post-merge-refresh-hook:
+  title: PostToolUse hook — auto-detect "terminating refresh owed" after a gh pr merge
+  surface: VII
+  status: RESOLVED   # built + hermetic-tested this PR; goes live NEXT session (settings.json loads at session start)
+  depends_on: []
+  blocks: []
+  posture: mode-agnostic
+  scope: { files: [tools/roadmap-audit/post-merge-refresh.sh, tools/roadmap-audit/test_post_merge_refresh.sh, .claude/settings.json], contracts: [], cross_axis: no }
+  skills: { primary: null, secondary: [] }
+  advisor_required: satisfied:2026-06-03   # advisor: PostToolUse > Stop (noise); hook can't self-activate this session (test by direct invocation); gate on a REAL origin advance
+  council_required: no
+  verification: { shape: integration, must_pass: ["hermetic test 4/4 (non-merge / no-advance / refresh-tip stay silent; substantive-advance emits + pre-computes hash)", "PostToolUse wired in .claude/settings.json matcher=Bash", "advisory only — exit 0, additionalContext injection, never blocks the tool flow"] }
+  close_shape: { type: tooling, artifact: "post-merge-refresh.sh + settings.json PostToolUse + hermetic test", cascade: [] }
+  next_pointer: null
+  notes: >
+    Hook A from the 2026-06-02 hooks/codex exploration. Automates the §12.2 post-merge refresh toil
+    (hand-computing the sha256 anchor ~4×/session). PostToolUse matcher=Bash; the script early-exits
+    unless the command matched `gh pr merge`, then (timeout-guarded fetch) emits ONLY when
+    origin/<default> advanced past the dashboard's pinned git_head to a commit whose title does NOT
+    match `^ops: roadmap status refresh ` — one condition covering failed merges + refresh-PR merges
+    (no false positives; the criterion that keeps advisory hooks alive). Pre-computes the new
+    workspace_state_hash + emits the §12.2 checklist. ADVISORY, not blocking (keep-advisory per
+    CLAUDE.md §13.2; CI gates are the hard layer). Cannot self-activate (settings.json loads at session
+    start) → tested by direct synthetic-stdin invocation; the hermetic test builds its own fixture repo
+    so it never rots against the live dashboard. POST_MERGE_REFRESH_REF env override = test seam only.
+    PILOT: observe whether it fires accurately + stays quiet over coming sessions; expand to sibling
+    hooks (just check pre-push / posture-guard / substitutions --check) only if the ergonomics hold.
+
+R-600-codex-out-of-family-review:
+  title: Codex CLI as a decorrelated out-of-family reviewer (subscription auth) — pilot
+  surface: VII
+  status: ACTIVE   # wiring built + smoke-tested this PR; the decorrelation A/B runs over the next 3-4 high-stakes forks
+  depends_on: []
+  blocks: []
+  posture: mode-agnostic
+  scope: { files: [justfile], contracts: [], cross_axis: no }
+  skills: { primary: null, secondary: [harness-adversarial-reviewer] }
+  advisor_required: satisfied:2026-06-03   # advisor: VERIFY subscription auth empirically (don't reason about precedence); smoke-test ≠ epistemic A/B
+  council_required: no
+  verification: { shape: integration, must_pass: ["just codex-review runs `codex review --base` on subscription auth (codex login status = ChatGPT; $0 metered)", "guard _require-codex-subscription FAILS LOUD if not logged in via ChatGPT (no silent metered fallback)", "first run validates the pipe (wiring); the decorrelation A/B is the ongoing observation, NOT this PR"] }
+  close_shape: { type: tooling, artifact: "justfile codex-review + codex-review-uncommitted + _require-codex-subscription guard", cascade: [] }
+  next_pointer: null
+  notes: >
+    Codex (B) from the 2026-06-02 exploration. Out-of-family (OpenAI) reviewer complementing Claude
+    advisor() — advisor = Claude reviewing Claude = correlated blind spots; Codex gives DECORRELATED
+    errors; the strongest signal is DISAGREEMENT between the two (surface to operator). COST: runs on
+    the operator's ChatGPT SUBSCRIPTION, not metered API — empirically verified (codex 0.132.0 `login
+    status` = "Logged in using ChatGPT" under all env conditions incl. OPENAI_API_KEY present from
+    dotenv-load). The recipe forces subscription: `env -u OPENAI_API_KEY` + `-c
+    preferred_auth_method=chatgpt`; the _require-codex-subscription guard FAILS LOUD if login is
+    absent/stale so codex never silently bills the metered key. ROLE BOUNDARY (X-AL-1): Codex = H_E DEV
+    TOOLING, NOT H_T's OpenAI provider (metered-API per ADR-F1 / R-300-multi-llm-second-provider) — the
+    subscription can't be hit programmatically by the harness SDK, only by the Codex CLI tool. PILOT:
+    the self-referential first run (Codex reviews this PR's diff) is a WIRING SMOKE TEST, not the
+    decorrelation A/B. The real A/B = run Codex alongside advisor on the next 3-4 high-stakes forks, log
+    what each uniquely catches, let DATA decide keep/expand/drop. Disclosed self-bias: Claude assessing a
+    Claude alternative → keep the A/B mechanical (log verbatim, don't self-grade). ACTIVE until the A/B
+    produces enough data to decide scope.
 ```
 
 ### 5.7 Halt-doc routings (2026-05-31 carries)
