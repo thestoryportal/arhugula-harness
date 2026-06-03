@@ -222,3 +222,36 @@ jobs:
           name: coverage-xml
           path: coverage.xml
           if-no-files-found: warn
+
+  substitution-ledger:
+    # R-600-substitution-ledger-schema — the tally-validation gate. Derives the
+    # bucket counts + canonical integers from `.harness/substitutions.yaml` (the
+    # single source of truth) and FAILS on an impossible tally: a bucket sum != 54,
+    # a pipeline-advanced that isn't RETIRED+RETIRE_READY+PARTIAL (the exact 48-vs-49
+    # inconsistency the R-700 close caught), a sign_off_label silently promoted into
+    # the count, or a row changed without a snapshot bump. The pytest leg pins the
+    # canonical 46/49/54 + the two distinct per-axis breakdowns + the label≠count rule.
+    # pyyaml comes from harness-runtime via the all-packages sync (the tools/ test
+    # module lives outside the 7 testpaths packages, so the blocking `test` job above
+    # does not collect it — this job is its home).
+    runs-on: ubuntu-latest
+    name: substitution ledger (tally gate) — blocking
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync workspace (all members; provides pyyaml via harness-runtime)
+        run: uv sync --all-packages
+
+      - name: Validate the substitution ledger (impossible tally = CI failure)
+        run: uv run python tools/substitution_ledger.py --check
+
+      - name: Substitution-ledger tests (canonical pin + invariants + negative tests)
+        working-directory: tools
+        run: uv run python -m pytest test_substitution_ledger.py -q
