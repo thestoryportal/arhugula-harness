@@ -144,6 +144,12 @@ loop_activate() {
   # Fresh run: clear any stale iteration counter / halt marker from a prior run.
   rm -f "$(loop_iter_path)" "$(loop_halt_path)" 2>/dev/null
   loop_log ACTIVATE "${1:-loop mode on}"
+  # NOTE: worktree GC is intentionally NOT called here. `tools/loop/run.sh` installs its
+  # `.loop-active`-cleanup EXIT/INT/TERM trap only AFTER loop_activate returns, so a slow
+  # gh/GC step here would open a pre-trap interruption window that could leave loop mode
+  # armed on Ctrl-C (codex P2). GC fires from the SessionStart hook (loop-gc.sh, covering
+  # headless children + live re-opens + /clear) and from the /loop-start skill (covering
+  # in-session activation) — both outside the runner's pre-trap path.
 }
 
 # Turn loop mode OFF: remove the marker + log the deactivation. Usage: loop_deactivate [reason]
@@ -154,4 +160,140 @@ loop_deactivate() {
   [ -z "$mp" ] && return 1
   rm -f "$mp" "$(loop_iter_path)" "$(loop_halt_path)" 2>/dev/null
   loop_log DEACTIVATE "${1:-loop mode off}"
+}
+
+# ── Worktree garbage collection (U-HK-26) ─────────────────────────────────────
+# The autonomous loop ships PRs whose worktrees go stale after merge, and nothing
+# reaps them (git-arc-guard checks commits/branches; session-end-cleanup is
+# advisory-only; a hook can't remove the worktree it runs INSIDE). loop_gc_worktrees
+# collects them at the next session's start, self-excluding the current worktree.
+#
+# WORKTREES ONLY — never `git branch -d/-D`. `git worktree remove` on a clean tree is
+# REVERSIBLE (branch + commits persist; `git worktree add` re-creates it); a merged
+# branch ref is ~41 harmless bytes; and the irreversible force-delete that squash-merge
+# would require (`-D`, because `git branch -d` does not recognize squash-merged work)
+# is left to the operator via the advisory report.
+
+# gh-availability probe: 0 iff `gh` can list merged PRs (installed + authed + reachable).
+# A single upfront probe lets the GC distinguish "gh down → do nothing (fail-safe)" from
+# per-branch "this branch is genuinely unmerged", and avoids N futile queries when offline.
+# Runs gh INSIDE the repo dir ($1) — `gh` infers the repo from cwd, and the hook's cwd is
+# not guaranteed to be the project root (codex P2 + [[bash-cwd-reverts-to-project-root]]).
+_loop_gc_gh_ok() {
+  command -v gh >/dev/null 2>&1 || return 1
+  ( cd "$1" 2>/dev/null || exit 1
+    hook_bounded 6 gh pr list --state merged --limit 1 --json number >/dev/null 2>&1 )
+}
+
+# The exact merged head SHA for ONE branch (empty if the branch has no merged PR).
+# Queried PER-BRANCH via `--head` rather than a bounded recent list, so an OLD stale
+# worktree whose PR is beyond the latest N merges is still found (codex P2). headRefOid
+# is the pre-squash head SHA → an exact-SHA match is both precise and squash-merge-safe.
+# Args: <branch> <repo_dir>. Runs gh inside <repo_dir> so the lookup targets THIS repo,
+# not the caller's cwd (codex P2). Isolated so tests can stub it.
+_loop_gc_merged_oid() {
+  ( cd "$2" 2>/dev/null || exit 0
+    hook_bounded 6 gh pr list --state merged --head "$1" --limit 5 --json headRefOid \
+      --jq '.[0].headRefOid // empty' 2>/dev/null )
+}
+
+# Ignored entries matching this REGENERABLE allowlist are safe to delete when reaping
+# (`git worktree remove` deletes ignored files — verified). ANYTHING else — tracked
+# changes, untracked files, OR a non-allowlisted ignored entry (.env / harness.toml /
+# a stray scratch file) — counts as real local state → the worktree is skipped +
+# surfaced, never silently deleted. (Codex P2, 2026-06-03: the porcelain clean-check
+# omitted ignored state.) `.claude/settings.local.json` IS allowlisted on purpose: in a
+# worktree it is that worktree's OWN gitignored permission cache (the operator's primary
+# copy lives in the main checkout and is never touched), and a reaped worktree is merged
+# /done, so its cache has no forward value — unlike .env/harness.toml. Keep roughly in
+# sync with the regenerable section of .gitignore.
+_LOOP_GC_REGEN_IGNORED='^!! (.*/)?(\.harness/|__pycache__/|.*\.py[co]|.*\.egg-info/|\.pytest_cache/|\.ruff_cache/|\.pyright/|\.mypy_cache/|\.venv/|venv/|env/|dist/|build/|htmlcov/|coverage\.xml|\.coverage|\.DS_Store|.*\.swp|\.vscode/|\.idea/|node_modules/)|^!! (\.claude/(skills/|settings\.local\.json|scheduled_tasks\.lock)|tools/dashboard/|dashboard-design/|\.impeccable/)'
+
+# Echo a worktree's reap-BLOCKING local state (empty = safe to reap). `--ignored`
+# surfaces ignored entries (`!! ` prefix) that `git worktree remove` would delete; we
+# strip only the regenerable-allowlisted ones, leaving tracked/untracked changes AND
+# any precious ignored file as residue. One check covers both dirtiness and the
+# ignored-delete hazard.
+_loop_gc_local_state() {
+  git -C "$1" status --porcelain --ignored 2>/dev/null \
+    | grep -vE "$_LOOP_GC_REGEN_IGNORED" \
+    | grep -vE '^[[:space:]]*$'
+}
+
+# Decide the disposition of ONE worktree and act per MODE.
+# Args: <path> <branch> <current_toplevel> <default_branch> <mode> <root>
+#   mode=reap   → `git worktree remove` + log to the ledger (loop mode).
+#   mode=report → echo "<path> (<branch>)" for a reapable candidate (HIL, read-only).
+# Safe-subset gate (ALL must hold): not the current worktree; has a branch (not
+# detached); not the default branch; branch's PR merged at the worktree's exact HEAD
+# SHA; clean working tree (ignored-aware).
+_loop_gc_consider() {
+  local path="$1" branch="$2" current="$3" default="$4" mode="$5" root="$6"
+  [ -n "$path" ] || return 0
+  # Canonicalize the candidate the same way as `current` before the self-exclude compare
+  # (codex P2). git ops below use the ORIGINAL $path (as git recorded it).
+  local cpath; cpath=$(cd "$path" 2>/dev/null && pwd -P || printf '%s' "$path")
+  [ "$cpath" = "$current" ] && return 0                      # never the current worktree
+  [ -n "$branch" ] || return 0                               # detached HEAD → skip
+  [ "$branch" = "$default" ] && return 0                     # never the default branch
+  # Branch must be merged AND the worktree HEAD must equal the EXACT SHA that was merged.
+  # Name-only matching would reap a reused/renamed clean branch whose new commits were
+  # never merged (codex P2). headRefOid ties identity to the merged commit; squash-safe.
+  local want_oid; want_oid=$(_loop_gc_merged_oid "$branch" "$root")
+  [ -n "$want_oid" ] || return 0                             # branch has no merged PR → skip
+  local head_oid; head_oid=$(git -C "$path" rev-parse HEAD 2>/dev/null)
+  if [ "$head_oid" != "$want_oid" ]; then                    # local branch advanced/reused → not this PR
+    [ "$mode" = "reap" ] && loop_log GC "skipped $path ($branch) — HEAD ${head_oid:0:8} != merged ${want_oid:0:8} (name collision/reuse)"
+    return 0
+  fi
+  local residue; residue=$(_loop_gc_local_state "$path")     # dirty / untracked / precious-ignored
+  if [ -n "$residue" ]; then
+    [ "$mode" = "reap" ] && loop_log GC "skipped $path ($branch) — has local state: $(printf '%s' "$residue" | tr '\n' ',' | sed 's/^,//;s/,$//' | cut -c1-160)"
+    return 0
+  fi
+  if [ "$mode" = "report" ]; then
+    printf '%s (%s)\n' "$path" "$branch"
+    return 0
+  fi
+  if git -C "$root" worktree remove "$path" 2>/dev/null; then
+    loop_log GC "reaped worktree $path (branch $branch merged+clean; branch ref left for operator)"
+  else
+    loop_log GC "skipped $path ($branch) — git worktree remove refused (locked/untracked)"
+  fi
+}
+
+# Garbage-collect stale worktrees. WORKTREES ONLY; fail-safe to zero removals when the
+# merged set is unavailable. Deterministic bash (NOT a Claude tool call) → bypasses
+# permission-guard; the safe-subset gate above is the backstop. Always returns 0.
+#   mode=reap   (default) → remove + log each disposition.
+#   mode=report           → echo "<path> (<branch>)" per reapable candidate (read-only).
+# Usage: loop_gc_worktrees [reap|report]
+loop_gc_worktrees() {
+  local mode="${1:-reap}"
+  command -v git >/dev/null 2>&1 || return 0
+  local root; root=$(hook_project_dir); [ -n "$root" ] || return 0
+  # Fail-safe: if gh can't reach the API (offline/unauth), do nothing rather than treat
+  # every branch as unmerged-vs-merged ambiguously. One upfront probe, not N.
+  if ! _loop_gc_gh_ok "$root"; then
+    [ "$mode" = "reap" ] && loop_log GC "skipped — gh unavailable (offline/unauth/not-installed); zero removals"
+    return 0
+  fi
+  local current default
+  current=$(git -C "$root" rev-parse --show-toplevel 2>/dev/null)
+  # Canonicalize to a physical path so self-exclusion can't be defeated by a symlink /
+  # /var-vs-/private/var spelling difference between rev-parse and `worktree list`
+  # (codex P2: a mismatch would let the CURRENT worktree be reaped).
+  current=$(cd "$current" 2>/dev/null && pwd -P || printf '%s' "$current")
+  default=$(hook_default_branch)
+  local path="" branch=""
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) path="${line#worktree }" ;;
+      "branch refs/heads/"*) branch="${line#branch refs/heads/}" ;;
+      "") _loop_gc_consider "$path" "$branch" "$current" "$default" "$mode" "$root"; path=""; branch="" ;;
+    esac
+  done < <(git -C "$root" worktree list --porcelain 2>/dev/null)
+  # Trailing record safety-net (porcelain normally ends with a blank line).
+  [ -n "$path" ] && _loop_gc_consider "$path" "$branch" "$current" "$default" "$mode" "$root"
+  return 0
 }

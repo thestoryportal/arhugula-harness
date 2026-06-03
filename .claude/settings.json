@@ -157,6 +157,11 @@
             "type": "command",
             "command": "${CLAUDE_PROJECT_DIR}/tools/roadmap-audit/session-start.sh",
             "statusMessage": "Loading roadmap audit..."
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/loop-gc.sh",
+            "statusMessage": "Worktree hygiene..."
           }
         ]
       }
