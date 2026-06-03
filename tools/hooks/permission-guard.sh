@@ -99,13 +99,23 @@ fi
 case "$TOOL" in
   Read|Grep|Glob|NotebookRead|TodoWrite|Task) emit_allow ;;
   Edit|Write|MultiEdit|NotebookEdit)
-    # File edits are reversible in git. Auto-allow EXCEPT (a) design-substrate (X-AL-3
-    # back-flow discipline) and (b) secret/credential files — both fall through to ask.
-    # Editing a secret in-repo is the kind of change that must always get human eyes.
+    # File edits are reversible in git ONLY if they land inside the tracked worktree.
+    # Auto-allow EXCEPT: (a) design-substrate (X-AL-3 back-flow), (b) secret/credential
+    # files, (c) anything OUTSIDE the worktree (e.g. $HOME/.claude/settings.json — which
+    # could rewrite this very guard) or inside .git/ (unversioned control), (d) any path
+    # with `..` traversal. All of those fall through to ask.
     case "$FPATH" in
       */design-substrate/*) : ;;  # ask
       *.env|*.env.*|*/.env|*credentials*|*.pem|*id_rsa*|*id_ed25519*|*keyring*|*secret*|*.key) : ;;  # secret → ask
-      *) emit_allow ;;
+      *)
+        case "$FPATH" in /*) _abs="$FPATH" ;; *) _abs="$PROJECT_DIR/$FPATH" ;; esac
+        case "$_abs" in
+          *..*) : ;;                     # path traversal → ask
+          */.git/*|*/.git) : ;;          # git internals → ask
+          "$PROJECT_DIR"/*) emit_allow ;;  # inside the worktree → allow
+          *) : ;;                        # outside the worktree → ask
+        esac
+        ;;
     esac
     ;;
 esac
@@ -121,8 +131,14 @@ esac
 # purpose: a safe-but-chained command costs one approval prompt; the alternative is a
 # silent bypass of the whole deny path.
 if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
-  if printf '%s' "$CMD" | grep -q '[;&|<>`]' || [[ "$CMD" == *'$('* ]] || [[ "$CMD" == *$'\n'* ]]; then
-    :  # chained / nested / redirected → fall through to ask (do not auto-allow)
+  # Reject (→ ask) if the command (a) chains/nests/redirects, OR (b) uses a destructive
+  # SUBMODE of an otherwise-allowlisted verb that the deny-list doesn't cover —
+  # `find ... -delete/-exec`, `gh api -X DELETE/POST/...` (mutating). Allowlisted verbs
+  # are auto-allowed only in their read-only forms.
+  if printf '%s' "$CMD" | grep -q '[;&|<>`]' || [[ "$CMD" == *'$('* ]] || [[ "$CMD" == *$'\n'* ]] \
+     || printf '%s' "$CMD" | grep -Eq 'find[[:space:]].*-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)\b' \
+     || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+api[[:space:]].*(-X|--method|--field|--input|-f[[:space:]])'; then
+    :  # chained / nested / redirected / destructive submode → fall through to ask
   else
     TRIM=$(printf '%s' "$CMD" | sed 's/^[[:space:]]*//')
     if printf '%s' "$TRIM" | grep -Eq '^(ls|cat|head|tail|wc|echo|printf|pwd|cd|which|command[[:space:]]+-v|grep|rg|find|sed[[:space:]]+-n|sort|uniq|awk|diff|jq|mkdir|chmod[[:space:]]+\+x|touch|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|codex-review)|git[[:space:]]+(status|diff|log|show|branch|add|commit|checkout|fetch|stash|restore|rev-parse|symbolic-ref|ls-files|worktree[[:space:]]+list)|gh[[:space:]]+(pr|run|api|repo[[:space:]]+view))([[:space:]]|$)'; then

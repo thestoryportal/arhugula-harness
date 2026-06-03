@@ -37,8 +37,8 @@ PROMPT='Continue the roadmap. Run the §12.1 audit, derive the next-action per C
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY=1; shift ;;
-    --max) MAX="${2:-$MAX}"; shift 2 ;;
-    --prompt) PROMPT="${2:-$PROMPT}"; shift 2 ;;
+    --max) [ $# -ge 2 ] || { echo "[loop] --max needs a value" >&2; exit 2; }; MAX="$2"; shift 2 ;;
+    --prompt) [ $# -ge 2 ] || { echo "[loop] --prompt needs a value" >&2; exit 2; }; PROMPT="$2"; shift 2 ;;
     *) echo "[loop] unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -47,9 +47,13 @@ done
 loop_activate "headless runner (just loop), max ${MAX}${DRY:+ (dry-run)}"
 # Clear loop mode on EVERY exit path (normal, error, Ctrl-C, SIGTERM) so an interrupted
 # run never leaks the .loop-active marker into the next interactive session — which would
-# silently leave the auto-approve hooks armed. Idempotent.
-_loop_cleanup() { loop_deactivate "headless runner exit"; echo "[loop] loop mode OFF."; }
-trap _loop_cleanup EXIT INT TERM
+# silently leave the auto-approve hooks armed. Run-once (idempotent). On INT/TERM we must
+# also EXIT: a bare signal trap returns to the while loop and would launch more children.
+_CLEANED=0
+_loop_cleanup() { [ "$_CLEANED" = 1 ] && return 0; _CLEANED=1; loop_deactivate "headless runner exit"; echo "[loop] loop mode OFF."; }
+trap _loop_cleanup EXIT
+trap '_loop_cleanup; exit 130' INT
+trap '_loop_cleanup; exit 143' TERM
 echo "[loop] loop mode ON; max ${MAX} iterations; dry-run=${DRY}"
 
 i=0

@@ -83,12 +83,35 @@ OUT=$(run_on "$(pl Bash 'git log $(rm -rf /)' '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "command substitution → not auto-allowed" || bad "cmd-subst auto-allowed: $OUT"
 
 # 5c) Edit/Write to a secret file must NOT auto-allow (codex P1) — falls through to ask.
-OUT=$(run_on "$(pl Edit '' '/repo/.env')")
+OUT=$(run_on "$(pl Edit '' "$REPO/.env")")
 [ -z "$OUT" ] && ok ".env Edit → ask (no auto-approve)" || bad ".env edit auto-decided: $OUT"
-OUT=$(run_on "$(pl Write '' '/repo/config/credentials.json')")
+OUT=$(run_on "$(pl Write '' "$REPO/config/credentials.json")")
 [ -z "$OUT" ] && ok "credentials Write → ask" || bad "credentials write auto-decided: $OUT"
 OUT=$(run_on "$(pl Write '' '/home/u/.ssh/id_rsa')")
 [ -z "$OUT" ] && ok "id_rsa Write → ask" || bad "id_rsa write auto-decided: $OUT"
+
+# 5d) Edit OUTSIDE the worktree / into .git / via traversal must NOT auto-allow (codex P1).
+OUT=$(run_on "$(pl Edit '' "$HOME/.claude/settings.json")")
+[ -z "$OUT" ] && ok "edit outside worktree → ask" || bad "outside-worktree edit auto-decided: $OUT"
+OUT=$(run_on "$(pl Write '' "$REPO/.git/config")")
+[ -z "$OUT" ] && ok "edit into .git → ask" || bad ".git edit auto-decided: $OUT"
+OUT=$(run_on "$(pl Edit '' "$REPO/../escape.txt")")
+[ -z "$OUT" ] && ok "path traversal → ask" || bad "traversal edit auto-decided: $OUT"
+OUT=$(run_on "$(pl Edit '' "$REPO/src/mod.py")")
+[ "$(dec "$OUT")" = "allow" ] && ok "in-worktree edit → allow" || bad "in-worktree edit not allowed: $OUT"
+
+# 5e) Destructive SUBMODES of allowlisted verbs must NOT auto-allow (codex P1).
+OUT=$(run_on "$(pl Bash 'find . -name node_modules -delete' '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "find -delete → not auto-allowed" || bad "find -delete auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'gh api -X DELETE repos/o/r/issues/1' '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "gh api -X DELETE → not auto-allowed" || bad "gh api delete auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'uv run python wipe.py' '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "uv run python → not auto-allowed" || bad "uv-run-python auto-allowed: $OUT"
+# read-only forms of the same verbs still auto-allow
+OUT=$(run_on "$(pl Bash 'find . -name *.py' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "find -name (read-only) → allow" || bad "read-only find not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'gh api repos/o/r' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "gh api GET → allow" || bad "gh api GET not allowed: $OUT"
 
 # 6) PermissionRequest event uses the decision.behavior schema.
 OUT=$(run_on "$(pl Bash 'git status' '' PermissionRequest)")

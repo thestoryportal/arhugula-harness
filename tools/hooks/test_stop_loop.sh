@@ -51,6 +51,12 @@ OUT=$(run_on)
 [ ! -f "$REPO/.harness/.loop-halt" ] && ok "halt marker cleared" || bad "halt marker not cleared"
 grep -q '| STOP | halt marker' "$REPO/.harness/loop_status.md" && ok "halt logged to ledger" || bad "halt not logged"
 
+# 6) Non-numeric HARNESS_LOOP_MAX must not break the cap (codex P2): falls back to 25,
+#    so a counter ≥ 25 still stops instead of blocking forever.
+printf '30' > "$REPO/.harness/.loop-iter"
+OUT=$(printf '{}' | HARNESS_LOOP=1 HARNESS_LOOP_MAX=abc CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
+[ -z "$OUT" ] && ok "non-numeric MAX → defaults to 25, counter 30 stops" || bad "invalid MAX kept blocking: $OUT"
+
 echo "----"
 echo "stop_loop: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

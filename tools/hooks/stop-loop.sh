@@ -40,6 +40,9 @@ cd "$PROJECT_DIR" || exit 0
 HALT=$(loop_halt_path)
 ITERF=$(loop_iter_path)
 MAX=${HARNESS_LOOP_MAX:-25}
+# Validate the cap: a non-numeric HARNESS_LOOP_MAX would make the `-ge` test below error
+# out (→ false), so the loop would never hit the cap. Fall back to the safe default.
+[[ "$MAX" =~ ^[0-9]+$ ]] || MAX=25
 
 # 2) Genuine-gate halt marker → stand down (clear it so the next /loop-start is clean).
 if [ -n "$HALT" ] && [ -f "$HALT" ]; then

@@ -34,9 +34,12 @@ BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 DEFAULT=$(hook_default_branch)
 declare -a NOTES=()
 
-# 1) Uncommitted tracked changes (a dirty tree at turn end = unsaved work).
-if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
-  NOTES+=("uncommitted changes present on '${BRANCH}' — commit before the arc closes")
+# 1) Uncommitted tracked changes OR untracked (non-ignored) new files — both are unsaved
+#    work that can be orphaned. The untracked arm matters because a freshly-written module
+#    isn't in `git diff` until staged (same gap the stop-gate's ls-files arm covers).
+if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null \
+   || [ -n "$(git ls-files --others --exclude-standard 2>/dev/null)" ]; then
+  NOTES+=("uncommitted or untracked changes present on '${BRANCH}' — commit before the arc closes")
 fi
 
 # 2) Committed-but-unpushed: only meaningful when an upstream is configured.

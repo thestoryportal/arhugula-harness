@@ -60,11 +60,16 @@ grep -q '| STOP | headless: halt marker' "$REPO/.harness/loop_status.md" && ok "
 # 4) Bad --max rejected.
 CLAUDE_PROJECT_DIR="$REPO" bash "$RUN" --max abc >/dev/null 2>&1; [ $? -eq 2 ] && ok "non-integer --max rejected" || bad "bad --max not rejected"
 
+# 4b) --max / --prompt with NO value → exit 2, not an infinite arg-parse loop (codex P3).
+( CLAUDE_PROJECT_DIR="$REPO" bash "$RUN" --max >/dev/null 2>&1 ); [ $? -eq 2 ] && ok "--max with no value → exit 2" || bad "--max no-value not rejected"
+( CLAUDE_PROJECT_DIR="$REPO" bash "$RUN" --prompt >/dev/null 2>&1 ); [ $? -eq 2 ] && ok "--prompt with no value → exit 2" || bad "--prompt no-value not rejected"
+
 # 5) SIGTERM mid-run → the EXIT/signal trap clears the .loop-active marker (codex P2:
 #    an interrupted runner must not leak loop mode into the next interactive session).
 rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness/claude_calls.log" "$REPO/.harness/HALT_ON" "$REPO/.harness/.loop-active"
 cat > "$REPO/bin/claude" <<'EOF'
 #!/usr/bin/env bash
+echo "called" >> "$CLAUDE_PROJECT_DIR/.harness/claude_calls.log"
 sleep 5
 EOF
 chmod +x "$REPO/bin/claude"
@@ -74,6 +79,9 @@ for _ in $(seq 1 20); do [ -f "$REPO/.harness/.loop-active" ] && break; sleep 0.
 kill -TERM "$RUNPID" 2>/dev/null
 wait "$RUNPID" 2>/dev/null
 [ ! -f "$REPO/.harness/.loop-active" ] && ok "SIGTERM mid-run → marker cleared (trap)" || bad "marker leaked after SIGTERM"
+# And the loop must NOT continue after the signal (codex P1): only the in-flight call ran.
+sleep 1
+[ "$(calls)" = "1" ] && ok "SIGTERM stops the loop (no further claude calls)" || bad "loop continued after SIGTERM: $(calls) calls"
 
 echo "----"
 echo "loop_run: $PASS passed, $FAIL failed"

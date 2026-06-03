@@ -45,6 +45,13 @@ printf 'z\n' >> "$REPO/f.txt"
 OUT=$(run '{"stop_hook_active":true}')
 [ -z "$OUT" ] && ok "stop_hook_active guard → silent" || bad "spoke despite active flag: $OUT"
 
+# 4b) Untracked-only new file (clean tracked tree) → still flags (codex P2: orphan risk).
+git -C "$REPO" reset -q --hard origin/main 2>/dev/null || git -C "$REPO" checkout -q -- .
+printf 'new\n' > "$REPO/untracked_new.py"
+OUT=$(run '{"stop_hook_active":false}')
+echo "$(msg "$OUT")" | grep -q "untracked" && ok "flags untracked-only new file" || bad "no untracked flag: $OUT"
+rm -f "$REPO/untracked_new.py"
+
 # 5) Behind-origin main → flags stale-main. Advance origin via a second clone, then
 #    refetch into REPO so origin/main is ahead of local main.
 git -C "$REPO" reset -q --hard origin/main   # clean local to match origin
