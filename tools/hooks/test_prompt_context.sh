@@ -56,5 +56,14 @@ git -C "$REPO" commit -q -m "ops: roadmap status refresh post-#3 (#4)"
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "possible drift" && ok "mis-titled substantive commit still flags drift" || bad "drift suppressed on title-only match (P3 regression): $OUT"
 
+# 5) On a NON-default branch, HEAD always differs from the main-pinned dashboard
+#    git_head — the drift proxy must NOT false-positive (default-branch guard).
+git -C "$REPO" checkout -q -b feature/work
+dash "deadbeef"   # mismatch vs local HEAD, but we are off the default branch
+OUT=$(run)
+printf '%s' "$OUT" | grep -q "drift" && bad "false drift on feature branch (P2 regression): $OUT" || ok "no drift proxy off the default branch"
+printf '%s' "$OUT" | grep -q "next=" && ok "next-action still injected off default branch" || bad "next-action dropped off default branch: $OUT"
+git -C "$REPO" checkout -q main
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

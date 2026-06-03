@@ -33,26 +33,30 @@ ACTIVE=$(hook_json "$PAYLOAD" '.stop_hook_active')
 # Changed .py files vs HEAD: tracked (staged + unstaged, exclude deletions) PLUS
 # untracked-but-not-ignored. A new .py Claude just wrote isn't in `git diff HEAD`
 # until staged, so without the ls-files arm the most common edit path (create a
-# fresh module) would bypass the lint-before-stop gate entirely.
-CHANGED=$( {
-  git diff --name-only --diff-filter=d HEAD 2>/dev/null
-  git ls-files --others --exclude-standard 2>/dev/null
-} | grep -E '\.py$' | sort -u || true)
-[ -z "$CHANGED" ] && exit 0   # no python changes → allow stop
+# fresh module) would bypass the lint-before-stop gate entirely. Collect into an
+# ARRAY (read line-by-line) so paths with spaces / glob chars survive intact — the
+# subsequent ruff invocation passes "${CHANGED[@]}", never an unquoted word-split.
+declare -a CHANGED=()
+while IFS= read -r _f; do [ -n "$_f" ] && CHANGED+=("$_f"); done < <(
+  {
+    git diff --name-only --diff-filter=d HEAD 2>/dev/null
+    git ls-files --others --exclude-standard 2>/dev/null
+  } | grep -E '\.py$' | sort -u
+)
+[ "${#CHANGED[@]}" -eq 0 ] && exit 0   # no python changes → allow stop
 
 # Lint just the changed files (fast). Bounded. Prefer ruff on PATH, else uv run ruff.
 # Capture stderr + exit status so a runner that CANNOT run (ruff+uv both absent, or
 # ruff exits on an internal error / timeout) is surfaced as a VISIBLE block rather
 # than a silent fall-through that disables the gate on a fresh/unsynced machine.
 ERRF=$(mktemp 2>/dev/null) || ERRF=""
-# shellcheck disable=SC2086
 LINT=$(hook_bounded 30 bash -c '
   if command -v ruff >/dev/null 2>&1; then
     ruff check --quiet --output-format=concise "$@"
   else
     uv run --quiet ruff check --output-format=concise "$@"
   fi
-' _ $CHANGED 2>"${ERRF:-/dev/null}")
+' _ "${CHANGED[@]}" 2>"${ERRF:-/dev/null}")
 RC=$?
 ERR=""; [ -n "$ERRF" ] && { ERR=$(cat "$ERRF" 2>/dev/null); rm -f "$ERRF"; }
 

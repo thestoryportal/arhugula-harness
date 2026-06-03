@@ -82,5 +82,12 @@ echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "runner failure â
 echo "$OUT" | jq -e '.reason | test("could not run the lint gate")' >/dev/null 2>&1 && ok "block reason names the runner failure" || bad "reason missing runner-failure text: $OUT"
 git -C "$REPO" checkout -q -- mod.py
 
+# 8) changed .py path with a SPACE â†’ must reach ruff intact and block (P3 regression:
+#    unquoted word-split would pass "bad" and "name.py" as two non-existent paths).
+printf 'import os  # LINT_BAD\n' > "$REPO/bad name.py"
+OUT=$(run false)
+echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "path with space reaches ruff (blocks)" || bad "space-path word-split (P3): $OUT"
+rm -f "$REPO/bad name.py"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
