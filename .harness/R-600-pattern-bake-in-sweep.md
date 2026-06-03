@@ -173,7 +173,9 @@ Run against the §7.5.1 inclusion gate (all three must hold; verified per-candid
 - `[[fork-u-rt-44]]` (3) vs `fork-u-rt-44-workflow-loop-drain.md` — slug split.
 - `[[LANDED-substrate-pending-upstream-loop-substrate]]` (4) vs `landed-substrate-pending-upstream-loop-substrate-sub-species.md` (2) — case + slug split.
 
-**MEMORY.md index size:** 24,297 bytes (167 lines) — just under the ~24.4 KB cap flagged at cadence-1, but still near-limit and growing. *(This run does NOT edit memory files — normalizing `[[..]]` references / pruning the index is a separate, operator-visible memory-store edit. Recommendation: file an R-NNN (e.g. `R-600-memory-hygiene-normalization`, mode-agnostic) to own the dup-normalization + index-cap pruning, or handle at operator discretion. Flagged only.)*
+**MEMORY.md index size:** 24,297 bytes (167 lines) — just under the ~24.4 KB cap flagged at cadence-1, but still near-limit and growing.
+
+> **CLOSE-OUT (2026-06-02, operator-approved follow-on — filed as roadmap `R-600-memory-hygiene-normalization`, RESOLVED).** The dup-normalization was *executed* this arc: the 5 dup/case-split tokens above were renamed to their canonical own-file slugs via literal bracketed-token replacement (pre-edit backup taken). Verified: all 5 old tokens → 0; canonicals absorbed every count (`halt-route-split-ac-pattern` 12→37, `use-the-product-probe-pattern` 4→10, `fork-u-rt-44-workflow-loop-drain` 7→10, `landed-…-sub-species` 2→6, `fork-h-t-cp-19-…` 12→13); total `[[..]]` ref-count unchanged at 579 (pure rename, recall improved); 30 files token-only. **NOTE for the next cadence:** post-normalization the store is **161 distinct tokens / 100 at card≥2** (was 166 / 104 — five dup tokens eliminated, four of them card≥2) — the *pre*-normalization 166/104 figures above are the accurate point-in-time snapshot at the cadence-2 sweep HEAD and are preserved as such. Index-cap **pruning** was deliberately left OUT of scope (judgment-heavy; under cap at close) → watch item, not done.
 
 ---
 

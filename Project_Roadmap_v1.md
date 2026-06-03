@@ -1166,7 +1166,37 @@ R-600-pattern-bake-in-sweep:
     wrong-version-read-delta-only-baseline, porting-old-wip-superseded, verify-observation-layer). ZERO new
     §7.4.7 owed (4th surfacing). must_pass[1] text refreshed (§7.4.7 → §7.4.7 + §7.5). PD-5 promotion is a
     FUTURE v1.15/v1.16 design-phase arc (spec-writer + advisor; operator-discretion; NOT opened by this sweep).
-    Memory-hygiene dups STILL un-owned (no R-NNN) → recommend filing R-600-memory-hygiene-normalization.
+    Memory-hygiene dups → FILED as R-600-memory-hygiene-normalization (below) and RESOLVED same arc (2026-06-02).
+
+R-600-memory-hygiene-normalization:
+  title: Normalize duplicate/case-split [[..]] wiki-link tokens in the auto-memory store
+  surface: VII
+  status: RESOLVED   # 2026-06-02 — 39 refs across 30 files normalized to canonical slugs; total refs unchanged (579); backed up pre-edit
+  depends_on: []
+  blocks: []
+  posture: mode-agnostic
+  scope: { files: ["memory/** (auto-memory store; NOT version-controlled in this repo)"], contracts: [], cross_axis: no }
+  skills: { primary: null, secondary: [] }
+  advisor_required: no
+  council_required: no
+  verification: { shape: grep, must_pass: ["each dup/case-split token has a verified canonical own-file before rename", "old tokens → 0 refs; canonical tokens absorb the counts; total [[..]] ref-count unchanged", "only [[..]] tokens changed (no other content drift); pre-edit backup taken"] }
+  close_shape: { type: memory-store-edit, artifact: "5 token renames across the auto-memory store", cascade: [] }
+  next_pointer: null
+  notes: >
+    RESOLVED 2026-06-02 (R-600 cadence-2 follow-on; operator-approved). The 5 dup/case-split
+    [[..]] tokens flagged at the cadence-1 §3 + cadence-2 C2-§3 survey were normalized to their
+    canonical own-file slugs via literal bracketed-token replacement (Python; pre-edit backup):
+    [[halt-route-split-AC-pattern]]→[[halt-route-split-ac-pattern]] (25); [[use-the-product-probe]]
+    →[[use-the-product-probe-pattern]] (6); [[fork-u-rt-44]]→[[fork-u-rt-44-workflow-loop-drain]] (3);
+    [[LANDED-substrate-pending-upstream-loop-substrate]]→[[landed-substrate-pending-upstream-loop-substrate-sub-species]]
+    (4); [[h-t-cp-19-default-gate-level-spec-extension]]→[[fork-h-t-cp-19-default-gate-level-spec-extension]] (1).
+    Verified: all 5 old tokens → 0; canonicals absorbed every count (e.g. ac-pattern 12→37); total
+    refs unchanged at 579 (pure rename); 30 files differ from backup, token-only. Improves memory
+    recall (links now resolve to real files). The store is NOT in this repo, so this is a memory-store
+    edit, not a repo diff — the roadmap entry + the survey C2-§3 close-out are the durable record.
+    SCOPE NOTE: the survey also flagged MEMORY.md index near-cap (24,297 B vs ~24.4 KB); index
+    PRUNING is deliberately OUT of scope (judgment-heavy; loses recall pointers; under cap at close)
+    → left as a watch item, not pruned.
 
 R-600-clearance-marker-backfill-survey:
   title: Survey design-substrate amendments lacking clearance markers
