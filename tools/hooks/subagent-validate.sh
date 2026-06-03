@@ -38,7 +38,19 @@ fi
 # SubagentStop. Loop guard first.
 [ "$(hook_json "$PAYLOAD" '.stop_hook_active')" = "true" ] && exit 0
 
-TRANSCRIPT=$(hook_json "$PAYLOAD" '.transcript_path')
+# Prefer the direct final-message field if the runtime provides it (SubagentStop may expose
+# `last_assistant_message`); else read the SUBAGENT transcript (`agent_transcript_path`),
+# falling back to `transcript_path`. This avoids validating the parent session's transcript.
+LASTMSG=$(hook_json "$PAYLOAD" '.last_assistant_message')
+if [ -n "$LASTMSG" ]; then
+  if [ -z "$(printf '%s' "$LASTMSG" | tr -d '[:space:]')" ]; then
+    jq -nc '{"decision":"block","reason":"[subagent-validate] your final turn was empty — return a concrete non-empty result; your last message is the value handed to the caller."}'
+  fi
+  exit 0
+fi
+
+TRANSCRIPT=$(hook_json "$PAYLOAD" '.agent_transcript_path')
+[ -z "$TRANSCRIPT" ] && TRANSCRIPT=$(hook_json "$PAYLOAD" '.transcript_path')
 [ -z "$TRANSCRIPT" ] || [ ! -f "$TRANSCRIPT" ] && exit 0   # no transcript → fail-open
 
 # Count assistant turns. None at all → unknown shape → fail open (silent).

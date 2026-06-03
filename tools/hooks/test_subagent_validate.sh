@@ -62,6 +62,18 @@ T="$TMP/weird.jsonl"; echo '{"some":"other","schema":true}' > "$T"
 OUT=$(run "$(pl_stop "$T")")
 [ -z "$OUT" ] && ok "unknown shape → fail open" || bad "blocked on unknown shape: $OUT"
 
+# 8) last_assistant_message provided directly → used without a transcript read.
+OUT=$(run '{"hook_event_name":"SubagentStop","last_assistant_message":"here is the result"}')
+[ -z "$OUT" ] && ok "non-empty last_assistant_message → no block" || bad "blocked good direct msg: $OUT"
+OUT=$(run '{"hook_event_name":"SubagentStop","last_assistant_message":"   "}')
+echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "empty last_assistant_message → block" || bad "did not block empty direct msg: $OUT"
+
+# 9) agent_transcript_path is preferred over transcript_path (subagent vs parent).
+T="$TMP/agent.jsonl"; echo '{"message":{"role":"assistant","content":"   "}}' > "$T"
+P="$TMP/parent.jsonl"; echo '{"message":{"role":"assistant","content":"parent ok"}}' > "$P"
+OUT=$(printf '%s' "$(jq -nc --arg a "$T" --arg p "$P" '{"hook_event_name":"SubagentStop","agent_transcript_path":$a,"transcript_path":$p}')" | bash "$HOOK")
+echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "uses agent_transcript_path (subagent), not parent" || bad "validated wrong transcript: $OUT"
+
 echo "----"
 echo "subagent_validate: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
