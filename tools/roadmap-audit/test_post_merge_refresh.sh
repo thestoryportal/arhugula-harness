@@ -30,11 +30,17 @@ C1=$(git -C "$REPO" rev-parse HEAD | head -c 8)
 echo b >> "$REPO/.harness/seed"; git -C "$REPO" add -A; git -C "$REPO" commit -qm "feat(x): a substantive change (#101)"
 C2=$(git -C "$REPO" rev-parse HEAD | head -c 8)
 
-# commit 3 — a terminating refresh (matches the §12.2.1 prefix)
-echo c >> "$REPO/.harness/seed"; git -C "$REPO" add -A; git -C "$REPO" commit -qm "ops: roadmap status refresh post-#101 (#102)"
+# commit 3 — a GENUINE terminating refresh: §12.2.1 prefix AND dashboard-only
+printf '# dash\n' > "$REPO/.harness/roadmap_status.md"; git -C "$REPO" add -A; git -C "$REPO" commit -qm "ops: roadmap status refresh post-#101 (#102)"
 C3=$(git -C "$REPO" rev-parse HEAD | head -c 8)
 
-# fixture dashboard pinning C1 as git_head
+# commit 4 — a MIS-TITLED refresh: §12.2.1 prefix BUT touches a non-dashboard file
+#            (P2-a: must NOT be suppressed — a substantive PR wearing the prefix)
+echo d >> "$REPO/.harness/seed"; git -C "$REPO" add -A; git -C "$REPO" commit -qm "ops: roadmap status refresh post-#102 (#104) [also code]"
+C_MIS=$(git -C "$REPO" rev-parse HEAD | head -c 8)
+
+# fixture dashboard pinning C1 as git_head (uncommitted working-tree override —
+# the hook reads DASHBOARD_HEAD from the working tree, not from a commit)
 cat > "$REPO/.harness/roadmap_status.md" <<EOF
 # Roadmap status dashboard
 | Field | Value |
@@ -66,9 +72,9 @@ OUT=$(run "$NONMERGE_CMD" "$C2")
 OUT=$(run "$MERGE_CMD" "$C1")
 [ -z "$OUT" ] && ok "no-advance stays silent" || bad "no-advance emitted: $OUT"
 
-# 3) merge command, tip IS a refresh → silent (no follow-on owed)
+# 3) merge command, tip IS a genuine (dashboard-only) refresh → silent
 OUT=$(run "$MERGE_CMD" "$C3")
-[ -z "$OUT" ] && ok "refresh-tip stays silent" || bad "refresh-tip emitted: $OUT"
+[ -z "$OUT" ] && ok "dashboard-only refresh-tip stays silent" || bad "refresh-tip emitted: $OUT"
 
 # 4) merge command, advanced to a substantive (non-refresh) commit → EMIT
 OUT=$(run "$MERGE_CMD" "$C2")
@@ -86,17 +92,26 @@ fi
 #    i.e. equals the hash recomputed from C4's tree — and is NOT the FORKS=0 hash.
 echo "x" > "$REPO/.harness/class_1_fork_regression.md"
 git -C "$REPO" add -A; git -C "$REPO" commit -qm "feat(y): add a fork doc (#103)"
-C4=$(git -C "$REPO" rev-parse HEAD | head -c 8)
+C_FORK=$(git -C "$REPO" rev-parse HEAD | head -c 8)
 # Expected hash with the recipe `ORIGIN_HEAD|PRS|FORKS|BATCH` — fixture has no
 # GitHub remote (PRS empty) and no batch files (BATCH empty); FORKS must be 1.
-EXP_OK=$(printf '%s|%s|%s|%s'  "$C4" "" "1" "" | shasum -a 256 | head -c 12)
-EXP_BAD=$(printf '%s|%s|%s|%s' "$C4" "" "0" "" | shasum -a 256 | head -c 12)
-OUT=$(run "$MERGE_CMD" "$C4")
+EXP_OK=$(printf '%s|%s|%s|%s'  "$C_FORK" "" "1" "" | shasum -a 256 | head -c 12)
+EXP_BAD=$(printf '%s|%s|%s|%s' "$C_FORK" "" "0" "" | shasum -a 256 | head -c 12)
+OUT=$(run "$MERGE_CMD" "$C_FORK")
 GOT=$(printf '%s' "$OUT" | grep -oE 'workspace_state_hash=[a-f0-9]{12}' | head -1 | cut -d= -f2)
 if [ "$GOT" = "$EXP_OK" ] && [ "$GOT" != "$EXP_BAD" ]; then
   ok "hash reads FORKS from the merged ref (P1 fix: got=$GOT == merged-ref hash, != pre-merge hash)"
 else
   bad "P1 regression: got=$GOT expected=$EXP_OK (pre-merge-would-be=$EXP_BAD)"
+fi
+
+# 6) [P2-a regression — Codex finding] a commit with the refresh title prefix but
+#    that touches a NON-dashboard file is NOT a §12.2.1 terminating refresh → must EMIT.
+OUT=$(run "$MERGE_CMD" "$C_MIS")
+if printf '%s' "$OUT" | grep -q "substantive merge detected"; then
+  ok "mis-titled refresh (prefix but not dashboard-only) still emits (P2-a fix)"
+else
+  bad "P2-a regression: mis-titled refresh was wrongly suppressed: '$OUT'"
 fi
 
 echo "---"

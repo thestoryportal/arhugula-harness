@@ -46,16 +46,30 @@ emit() {
 DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
 [ -z "$DEFAULT_BRANCH" ] && DEFAULT_BRANCH=main
 
+# Portable bounded runner: kill a child that outlives SECS. Used so the post-merge
+# fetch can NEVER hang the PostToolUse turn — even on a stock macOS that ships
+# neither `timeout` nor `gtimeout`. (PostToolUse runs after the tool; an unbounded
+# git hang would otherwise hold the turn up to Claude Code's hook timeout.)
+_bounded() { # _bounded SECS cmd...
+  local secs="$1"; shift
+  "$@" & local p=$!
+  ( sleep "$secs"; kill -0 "$p" 2>/dev/null && kill "$p" 2>/dev/null ) >/dev/null 2>&1 & local w=$!
+  wait "$p" 2>/dev/null; local rc=$?
+  kill "$w" 2>/dev/null; wait "$w" 2>/dev/null
+  return "$rc"
+}
+
+# Fetch ALWAYS (origin doesn't advance locally on `gh pr merge`; skipping it makes
+# the hook inert), but ALWAYS bounded (prefer GNU timeout; else the pure-bash
+# watchdog) so it can't hang the turn.
 TIMEOUT_BIN=""
 command -v timeout  >/dev/null 2>&1 && TIMEOUT_BIN="timeout 6"
 command -v gtimeout >/dev/null 2>&1 && TIMEOUT_BIN="gtimeout 6"
-# Fetch ALWAYS — even without a timeout binary (stock macOS ships neither `timeout`
-# nor `gtimeout`). `gh pr merge` advances GitHub but not the local origin ref, so
-# skipping the fetch leaves ORIGIN_HEAD at the pre-merge SHA and the hook never
-# fires (inert). The wrapper is used when available; when $TIMEOUT_BIN is empty it
-# expands to a plain `git fetch`. (Bounded by git's own connect timeout; the prior
-# `gh pr merge` already required network, so a fresh hang here is unlikely.)
-$TIMEOUT_BIN git fetch --quiet --no-tags origin "$DEFAULT_BRANCH" >/dev/null 2>&1 || true
+if [ -n "$TIMEOUT_BIN" ]; then
+  $TIMEOUT_BIN git fetch --quiet --no-tags origin "$DEFAULT_BRANCH" >/dev/null 2>&1 || true
+else
+  _bounded 6 git fetch --quiet --no-tags origin "$DEFAULT_BRANCH" >/dev/null 2>&1 || true
+fi
 
 # --- Did origin actually advance past the dashboard's pinned head? -------------
 # `gh pr merge` advances the REMOTE; the local checkout lags until pulled, so we
@@ -72,10 +86,17 @@ DASHBOARD_HEAD=$(grep -E '\| *`git_head`' "$DASHBOARD" 2>/dev/null | head -1 | g
 # No advance → failed/no-op merge → stay silent.
 [ "$ORIGIN_HEAD" = "$DASHBOARD_HEAD" ] && exit 0
 
-# The merged tip is itself a refresh → no follow-on owed → stay silent.
+# The merged tip is itself a terminating refresh → no follow-on owed → stay silent.
+# §12.2.1 defines a terminating refresh as BOTH (a) the title prefix AND (b) the
+# ONLY changed file is the dashboard. Checking the title alone would wrongly
+# suppress the owed reminder for a substantive PR mis-titled with the reserved
+# prefix (or a merge whose tip is a refresh over substantive commits). Require both.
 ORIGIN_TITLE=$(git log -1 --format=%s "$COMPARE_REF" 2>/dev/null)
 if printf '%s' "$ORIGIN_TITLE" | grep -qE '^ops: roadmap status refresh '; then
-  exit 0
+  CHANGED=$(git show --name-only --pretty=format: "$COMPARE_REF" 2>/dev/null | grep -v '^$' | sort -u)
+  if [ "$CHANGED" = ".harness/roadmap_status.md" ]; then
+    exit 0   # genuine dashboard-only terminating refresh → no follow-on owed
+  fi
 fi
 
 # --- Substantive merge confirmed: pre-compute the new anchor + remind. ---------
