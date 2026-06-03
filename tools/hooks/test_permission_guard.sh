@@ -60,8 +60,8 @@ OUT=$(run_on "$(pl Bash 'bash tools/hooks/test_loop_lib.sh' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "allow hermetic test run" || bad "test run not allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'gh pr create --fill' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "allow gh pr create" || bad "gh pr not allowed: $OUT"
-OUT=$(run_on "$(pl Read '' '/x/y.py')")
-[ "$(dec "$OUT")" = "allow" ] && ok "allow Read tool" || bad "Read not allowed: $OUT"
+OUT=$(run_on "$(pl Read '' "$REPO/src/y.py")")
+[ "$(dec "$OUT")" = "allow" ] && ok "allow in-worktree Read" || bad "in-worktree Read not allowed: $OUT"
 OUT=$(run_on "$(pl Edit '' "$REPO/tools/hooks/foo.sh")")
 [ "$(dec "$OUT")" = "allow" ] && ok "allow Edit to normal path" || bad "Edit not allowed: $OUT"
 
@@ -122,6 +122,32 @@ done
 # but git checkout -b (branch creation, never discards) still auto-allows
 OUT=$(run_on "$(pl Bash 'git checkout -b feature/x' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "git checkout -b → allow" || bad "git checkout -b not allowed: $OUT"
+
+# 5g) Read tools get the same secret/worktree boundary as edits (codex P1).
+OUT=$(run_on "$(pl Read '' "$REPO/.env")")
+[ -z "$OUT" ] && ok "Read .env → ask" || bad "Read .env auto-decided: $OUT"
+OUT=$(run_on "$(pl Read '' '/etc/passwd')")
+[ -z "$OUT" ] && ok "Read outside-worktree → ask" || bad "outside Read auto-decided: $OUT"
+OUT=$(run_on "$(jq -nc --arg p "$REPO/src" '{"hook_event_name":"PreToolUse","tool_name":"Grep","tool_input":{"path":$p}}')")
+[ "$(dec "$OUT")" = "allow" ] && ok "Grep in-worktree → allow" || bad "in-worktree Grep not allowed: $OUT"
+OUT=$(run_on "$(jq -nc '{"hook_event_name":"PreToolUse","tool_name":"Grep","tool_input":{"path":"/etc"}}')")
+[ -z "$OUT" ] && ok "Grep outside-worktree → ask" || bad "outside Grep auto-decided: $OUT"
+
+# 5h) gh: only enumerated read/safe subcommands auto-allow; mutating ones fall to ask (codex P1).
+OUT=$(run_on "$(pl Bash 'gh pr merge 268 --squash --delete-branch' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "gh pr merge → allow (intended arc)" || bad "gh pr merge not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'gh run view 5' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "gh run view → allow" || bad "gh run view not allowed: $OUT"
+for c in "gh pr close 123 --delete-branch" "gh run cancel 5" "gh api repos/o/r --raw-field x=y" "gh pr edit 1 --title z"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
+done
+
+# 5i) bash tools/ is restricted to test_*.sh entrypoints (codex P2).
+OUT=$(run_on "$(pl Bash 'bash tools/hooks/test_lib.sh' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "bash tools test_*.sh → allow" || bad "test script not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'bash tools/loop/run.sh' '')")
+[ -z "$OUT" ] && ok "bash tools non-test script → ask" || bad "arbitrary tools script auto-decided: $OUT"
 
 # 6) PermissionRequest event uses the decision.behavior schema.
 OUT=$(run_on "$(pl Bash 'git status' '' PermissionRequest)")

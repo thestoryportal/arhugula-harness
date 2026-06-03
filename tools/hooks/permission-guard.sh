@@ -41,6 +41,26 @@ EVENT=$(hook_json "$PAYLOAD" '.hook_event_name'); EVENT=${EVENT:-PreToolUse}
 TOOL=$(hook_json "$PAYLOAD" '.tool_name')
 CMD=$(hook_json "$PAYLOAD" '.tool_input.command')
 FPATH=$(hook_json "$PAYLOAD" '.tool_input.file_path')
+GPATH=$(hook_json "$PAYLOAD" '.tool_input.path')   # Grep/Glob search root
+
+# A path is safe to auto-allow iff it is NOT a secret/credential file, is INSIDE the
+# worktree (not .git/, no `..` traversal). Empty = no explicit path (defaults to cwd =
+# worktree) = safe. Used for both read tools (Read/Grep/Glob) and edit tools, so reads of
+# .env / SSH keys / out-of-worktree paths get the same boundary as writes. Returns 0 safe.
+_safe_path() {
+  local p="$1"
+  [ -z "$p" ] && return 0
+  case "$p" in
+    *.env|*.env.*|*/.env|*credentials*|*.pem|*id_rsa*|*id_ed25519*|*keyring*|*secret*|*.key) return 1 ;;
+  esac
+  local abs; case "$p" in /*) abs="$p" ;; *) abs="$PROJECT_DIR/$p" ;; esac
+  case "$abs" in
+    *..*) return 1 ;;                 # traversal
+    */.git/*|*/.git) return 1 ;;      # git internals
+    "$PROJECT_DIR"|"$PROJECT_DIR"/*) return 0 ;;
+    *) return 1 ;;                    # outside worktree
+  esac
+}
 
 # Emit an allow/deny decision in the schema for the firing event, then exit.
 emit_allow() {
@@ -95,27 +115,23 @@ fi
 
 # ─── 3) ALLOWLIST (auto-approve known-safe) ───────────────────────────────────
 
-# Non-destructive built-in tools (read-only or git-reversible file edits).
+# Non-destructive built-in tools.
 case "$TOOL" in
-  Read|Grep|Glob|NotebookRead|TodoWrite|Task) emit_allow ;;
+  TodoWrite|Task) emit_allow ;;  # no filesystem reach (Task subagent re-enters the hook)
+  Read|NotebookRead)
+    # Reads are auto-allowed only for non-secret, in-worktree paths — otherwise a read of
+    # .env / SSH keys / out-of-worktree files would leak past the approval boundary.
+    _safe_path "$FPATH" && emit_allow ;;
+  Grep|Glob)
+    # Same boundary on the search root (content-mode grep can surface secret contents).
+    _safe_path "$GPATH" && emit_allow ;;
   Edit|Write|MultiEdit|NotebookEdit)
-    # File edits are reversible in git ONLY if they land inside the tracked worktree.
-    # Auto-allow EXCEPT: (a) design-substrate (X-AL-3 back-flow), (b) secret/credential
-    # files, (c) anything OUTSIDE the worktree (e.g. $HOME/.claude/settings.json — which
-    # could rewrite this very guard) or inside .git/ (unversioned control), (d) any path
-    # with `..` traversal. All of those fall through to ask.
+    # Edits are git-reversible ONLY inside the worktree. Auto-allow EXCEPT design-substrate
+    # (X-AL-3 back-flow) — those, plus secret/outside/.git/traversal paths (via _safe_path),
+    # fall through to ask.
     case "$FPATH" in
       */design-substrate/*) : ;;  # ask
-      *.env|*.env.*|*/.env|*credentials*|*.pem|*id_rsa*|*id_ed25519*|*keyring*|*secret*|*.key) : ;;  # secret → ask
-      *)
-        case "$FPATH" in /*) _abs="$FPATH" ;; *) _abs="$PROJECT_DIR/$FPATH" ;; esac
-        case "$_abs" in
-          *..*) : ;;                     # path traversal → ask
-          */.git/*|*/.git) : ;;          # git internals → ask
-          "$PROJECT_DIR"/*) emit_allow ;;  # inside the worktree → allow
-          *) : ;;                        # outside the worktree → ask
-        esac
-        ;;
+      *) _safe_path "$FPATH" && emit_allow ;;
     esac
     ;;
 esac
@@ -137,11 +153,11 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
   # are auto-allowed only in their read-only forms.
   if printf '%s' "$CMD" | grep -q '[;&|<>`]' || [[ "$CMD" == *'$('* ]] || [[ "$CMD" == *$'\n'* ]] \
      || printf '%s' "$CMD" | grep -Eq 'find[[:space:]].*-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)\b' \
-     || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+api[[:space:]].*(-X|--method|--field|--input|-f[[:space:]])'; then
+     || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+api[[:space:]].*(-X|--method|--field|--raw-field|--input|-f[[:space:]]|-F[[:space:]])'; then
     :  # chained / nested / redirected / destructive submode → fall through to ask
   else
     TRIM=$(printf '%s' "$CMD" | sed 's/^[[:space:]]*//')
-    if printf '%s' "$TRIM" | grep -Eq '^(ls|cat|head|tail|wc|echo|printf|pwd|cd|which|command[[:space:]]+-v|grep|rg|find|sed[[:space:]]+-n|sort|uniq|awk|diff|jq|mkdir|chmod[[:space:]]+\+x|touch|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|codex-review)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|worktree[[:space:]]+list)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr|run|api|repo[[:space:]]+view))([[:space:]]|$)'; then
+    if printf '%s' "$TRIM" | grep -Eq '^(ls|cat|head|tail|wc|echo|printf|pwd|cd|which|command[[:space:]]+-v|grep|rg|find|sed[[:space:]]+-n|sort|uniq|awk|diff|jq|mkdir|chmod[[:space:]]+\+x|touch|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|codex-review)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|worktree[[:space:]]+list)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment|merge)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)'; then
       emit_allow
     fi
   fi
