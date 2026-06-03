@@ -99,6 +99,22 @@ mech-beta-ac3: _require-anthropic
 mvp-r100-real: _require-anthropic
     uv run pytest harness-runtime/tests/integration/test_r100_real_workflow_e2e.py -v
 
+# Requires OPENAI_API_KEY (dotenv-loaded from .env), same shape as _require-anthropic.
+_require-openai:
+    @if [ -z "${OPENAI_API_KEY:-}" ]; then \
+        echo "ERROR: OPENAI_API_KEY not set."; \
+        echo "  Add it to .env (copy from .env.example) or export it in your shell."; \
+        exit 1; \
+    fi
+
+# R-300 (B-2) live cross-family fallback: primary anthropic invalid-model -> real
+# openai (gpt-4o-mini) through api.run. Proves the production RetryBreakerFallback
+# dispatcher advances across provider families to a real second provider. Paid
+# (~a few cents on openai; the 3 anthropic 404 attempts are unbilled). The
+# deterministic counterpart (no creds) runs in CI; this is the live confirmation.
+mvp-r300-cross-family: _require-anthropic _require-openai
+    uv run pytest harness-runtime/tests/integration/test_r300_cross_family_fallback_e2e.py::test_r300_live_cross_family_fallback_against_real_providers -v
+
 # ─── mechanism γ — multi-process orchestration (currently deferred) ────────
 #
 # AC #5 (SIGINT drain) + AC #6 (daemon-concurrent two clients) are marked

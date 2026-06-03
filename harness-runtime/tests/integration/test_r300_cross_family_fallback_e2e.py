@@ -1,0 +1,497 @@
+"""R-300-multi-llm-second-provider (B-2) — cross-family fallback exercise.
+
+Roadmap forward-register B-2 (`.harness/post-phase-8-forward-register.md`):
+"Multi-provider credentials + mixed-provider exercise — only Anthropic exercised
+at R-100; needs OpenAI/Ollama creds + fixture." This module supplies the missing
+*mixed-provider* exercise of the production cross-family fallback path.
+
+Production path under test (grounded 2026-06-03):
+  ``api.run`` -> ``workflow_driver`` step dispatch -> ``ctx.llm_dispatcher``
+  (= ``RetryBreakerFallbackDispatcher``, C-RT-16 / U-RT-58, bound at
+  ``stage_5_loop_init.py:279`` to ``ctx.fallback_chain`` =
+  ``config.routing_manifest.fallback_chains[0]``). On a primary-provider failure
+  the composer walks the C-CP-04 §4.2 traversal order
+  (primary -> same-family -> cross-family -> terminal) via ``advance_or_raise``,
+  rebinding the per-candidate ``(provider, model)``. The bare inner C-RT-15
+  dispatcher's GenAI-semconv span carries ``gen_ai.provider.name`` per OD spec
+  v1.19 §1.1 — the discriminating observable that proves *which* provider
+  answered (fallback-fired vs. anthropic-just-worked).
+
+Two tests:
+
+  - ``test_r300_deterministic_cross_family_fallback_through_production_path``
+    (CI-green, no creds): fakes ONLY the SDK leaf clients (anthropic raises ->
+    openai returns a canned success) at the stage-3a
+    ``materialize_provider_clients_stage`` seam — keeping chain / classification /
+    advance / bootstrap / dispatcher REAL — and proves the cross-family fallback
+    *plumbing* end-to-end through ``api.run``. Faking provider *leaves* (not the
+    dispatcher/host wiring under test) is standard, NOT the
+    ``test-bypass-as-runtime-truth`` anti-pattern.
+
+  - ``test_r300_live_cross_family_fallback_against_real_providers`` (skipif on
+    ANTHROPIC_API_KEY + OPENAI_API_KEY): the real-provider confirmation — primary
+    anthropic invalid-model (real 404 -> transient -> retry-exhaust -> advance) ->
+    real openai. Run via ``just mvp-r300-cross-family`` (operator-authorized paid
+    run; ~1 cheap openai call + 3 unbilled anthropic 404s).
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
+
+import pytest
+from harness_runtime.api import RunResult
+from harness_runtime.bootstrap import stage_4_od as _stage_4_od_mod
+from harness_runtime.types import (
+    CollectorConfig,
+    OTelConfig,
+    PathBindingConfig,
+    ProviderSecretsConfig,
+    RuntimeConfig,
+)
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
+
+# An anthropic model that does not exist -> the real Messages API returns a 404
+# `not_found_error` (unbilled). Used only by the live test; the deterministic
+# test fakes the leaf client and ignores the model string.
+_INVALID_ANTHROPIC_MODEL = "claude-nonexistent-model-r300-fallback-probe"
+_OPENAI_FALLBACK_MODEL = "gpt-4o-mini"
+
+
+# ---------------------------------------------------------------------------
+# Shared config + workflow (mirror of test_r100_real_workflow_e2e).
+# ---------------------------------------------------------------------------
+
+
+def _build_chain(primary_model: str) -> Any:
+    """Cross-family chain: primary anthropic -> cross-family openai."""
+    from harness_cp.cross_family_fallback_chain import (
+        FallbackChain,
+        ProviderCandidate,
+        ProviderFamily,
+    )
+
+    return FallbackChain(
+        primary=ProviderCandidate(
+            provider="anthropic",
+            model=primary_model,
+            family=ProviderFamily.ANTHROPIC,
+        ),
+        same_family=(),
+        cross_family=(
+            ProviderCandidate(
+                provider="openai",
+                model=_OPENAI_FALLBACK_MODEL,
+                family=ProviderFamily.OPENAI,
+            ),
+        ),
+        terminal=None,
+    )
+
+
+def _build_config(tmp_path: Path, chain: Any) -> RuntimeConfig:
+    from harness_core.deployment_surface import DeploymentSurface
+    from harness_core.workload_class import WorkloadClass
+    from harness_cp.routing_manifest_residence import RoutingManifest
+    from harness_cp.topology_pattern import TopologyPattern
+    from harness_is.path_class_registry import PathClass
+
+    surface = DeploymentSurface.LOCAL_DEVELOPMENT
+    workload = WorkloadClass.SOFTWARE_ENGINEERING
+    state_ledger_root = tmp_path / "state_ledger"
+    path_bindings = PathBindingConfig(
+        raw_entries=tuple(
+            {
+                "path_class": pc,
+                "workflow_class": workload,
+                "deployment_surface": surface,
+                "path": str(
+                    state_ledger_root
+                    if pc is PathClass.STATE_LEDGER
+                    else tmp_path / pc.value.lower()
+                ),
+            }
+            for pc in PathClass
+        ),
+    )
+    return RuntimeConfig(
+        deployment_surface=surface,
+        repository_root=tmp_path,
+        path_bindings=path_bindings,
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+        collector=CollectorConfig(),
+        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        mcp_clients=[],
+        openai_optional=True,
+        ollama_optional=True,
+        routing_manifest=RoutingManifest(
+            manifest_version=1,
+            per_role_bindings={},
+            per_workload_overrides={},
+            fallback_chains=(chain,),
+            retry_policies={},
+        ),
+    )
+
+
+def _make_workflow(chain: Any) -> Any:
+    from harness_core.identity import StepID
+    from harness_core.persona_tier import PersonaTier
+    from harness_core.workload_class import WorkloadClass
+    from harness_cp.cp_shared_types import ModelBinding
+    from harness_cp.engine_class import EngineClass
+    from harness_cp.topology_pattern import TopologyPattern
+    from harness_cp.workflow_driver_types import StepKind, WorkflowStep
+    from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+
+    workload = WorkloadClass.SOFTWARE_ENGINEERING
+
+    class _Workflow:
+        @property
+        def workflow_id(self) -> str:
+            return "wf-r300-cross-family"
+
+        @property
+        def workload_class(self) -> WorkloadClass:
+            return workload
+
+        @property
+        def manifest_entry(self) -> WorkflowManifestEntry:
+            return WorkflowManifestEntry(
+                workflow_id="wf-r300-cross-family",
+                workload_class=workload,
+                persona_tier=PersonaTier.TEAM_BINDING,
+                engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+                topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+                layer_budgets=(),
+                fallback_chain=chain,
+                hitl_placements=(),
+                per_step_overrides={},
+            )
+
+        @property
+        def steps(self) -> Sequence[WorkflowStep]:
+            return (
+                WorkflowStep(
+                    step_id=StepID("step-0"),
+                    step_kind=StepKind.INFERENCE_STEP,
+                    step_payload={
+                        "messages": [{"role": "user", "content": "Say 'a'"}],
+                        "tools": [],
+                        "params": {"max_tokens": 4},
+                    },
+                ),
+            )
+
+        @property
+        def step_dispatchers(self) -> Any:
+            return None
+
+        @property
+        def default_model_binding(self) -> ModelBinding:
+            # The dispatcher rebinds per candidate starting at chain.primary, so
+            # this initial binding is overridden; it points at the primary for
+            # consistency with the chain.
+            return ModelBinding(provider="anthropic", model=chain.primary.model)
+
+    return _Workflow()
+
+
+class _FakeDaemon:
+    """Stand-in for the OTLP collector daemon (mirror of ``test_run_smoke``).
+
+    Stage-4 OD calls ``daemon.start()`` during bootstrap and ``daemon.stop()``
+    at shutdown; both are async no-ops here so the OTLP collector path does not
+    open a real socket/thread.
+    """
+
+    def __init__(self) -> None:
+        self.stopped = False
+
+    async def start(self) -> None:
+        return None
+
+    async def stop(self, *, timeout_seconds: float = 5.0) -> None:
+        _ = timeout_seconds
+        self.stopped = True
+
+
+def _install_fake_od_stage4(monkeypatch: pytest.MonkeyPatch) -> InMemorySpanExporter:
+    """Replace the four stage-4 OD materializers with in-process fakes.
+
+    The tracer is a real ``TracerProvider`` whose spans land in an
+    ``InMemorySpanExporter`` we read back (R-100 used a NoOp tracer; this test's
+    whole point is to read ``gen_ai.provider.name`` off the dispatch spans). The
+    collector daemon is an async no-op, and the ring-buffer / span-processor
+    stages are no-op'd so the OTLP path does not interfere. The provider is NOT
+    registered globally — it is used only as ``ctx.tracer_provider`` for the run.
+    """
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    class _TracerStage:
+        def __init__(self, p: TracerProvider) -> None:
+            self.provider = p
+            self.registered_globally = False
+
+    class _CollectorStage:
+        def __init__(self, d: _FakeDaemon) -> None:
+            self.daemon = d
+
+    monkeypatch.setattr(
+        _stage_4_od_mod,
+        "materialize_tracer_provider_stage",
+        lambda config, **_kw: _TracerStage(provider),
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod,
+        "materialize_span_processor_stage",
+        lambda config, _p, **_kw: None,
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod,
+        "materialize_collector_daemon_stage",
+        lambda config, **_kw: _CollectorStage(_FakeDaemon()),
+    )
+    monkeypatch.setattr(
+        _stage_4_od_mod,
+        "materialize_ring_buffer_stage",
+        lambda config, _d, **_kw: None,
+    )
+    return exporter
+
+
+def _gen_ai_provider_names(spans: Sequence[ReadableSpan]) -> list[str]:
+    """Collect ``gen_ai.provider.name`` values across the captured spans."""
+    names: list[str] = []
+    for span in spans:
+        attrs = span.attributes or {}
+        value = attrs.get("gen_ai.provider.name")
+        if isinstance(value, str):
+            names.append(value)
+    return names
+
+
+# ---------------------------------------------------------------------------
+# Deterministic fakes (leaf SDK clients only).
+# ---------------------------------------------------------------------------
+
+
+class _RaisingAnthropicMessages:
+    async def create(self, *, model: str, **_kwargs: Any) -> Any:
+        # Simulate a real anthropic Messages-API failure (e.g. invalid model).
+        # A plain Exception classifies as TRANSIENT_RETRY -> the composer
+        # exhausts the per-candidate retry loop and advances to cross-family.
+        raise RuntimeError(
+            f"simulated anthropic dispatch failure for model {model!r} "
+            "(deterministic cross-family fallback probe)"
+        )
+
+
+class _RaisingAnthropicClient:
+    def __init__(self) -> None:
+        self.messages = _RaisingAnthropicMessages()
+
+
+class _FakeOpenAIUsage:
+    prompt_tokens = 3
+    completion_tokens = 1
+
+
+class _FakeOpenAIResponse:
+    def __init__(self, model: str) -> None:
+        self.id = "chatcmpl-fake-r300"
+        self.model = model
+        self.usage = _FakeOpenAIUsage()
+
+    def model_dump(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "model": self.model,
+            "choices": [{"message": {"role": "assistant", "content": "a"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1},
+        }
+
+
+class _SucceedingOpenAICompletions:
+    async def create(self, *, model: str, **_kwargs: Any) -> _FakeOpenAIResponse:
+        return _FakeOpenAIResponse(model)
+
+
+class _SucceedingOpenAIChat:
+    def __init__(self) -> None:
+        self.completions = _SucceedingOpenAICompletions()
+
+
+class _SucceedingOpenAIClient:
+    def __init__(self) -> None:
+        self.chat = _SucceedingOpenAIChat()
+
+
+class _FakeAdapter:
+    """Provider adapter shape consumed by the C-RT-15 bare dispatcher.
+
+    The dispatcher reads ``adapter.client`` and calls the provider-specific leaf
+    (``client.messages.create`` / ``client.chat.completions.create``); shutdown
+    calls ``aclose()``. Mirrors the ``_FakeProvider`` shape in
+    ``test_run_smoke.py`` plus the ``.client`` the dispatch path requires.
+    """
+
+    def __init__(self, name: str, client: Any) -> None:
+        self.name = name
+        self.client = client
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_r300_deterministic_cross_family_fallback_through_production_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cross-family fallback fires through the real ``api.run`` production path.
+
+    Fakes ONLY the SDK leaf clients (anthropic raises -> openai returns a canned
+    success) at the stage-3a ``materialize_provider_clients_stage`` seam. The
+    fallback chain, exception classification, ``advance_or_raise`` traversal,
+    bootstrap, and ``RetryBreakerFallbackDispatcher`` are all REAL. Asserts the
+    workflow completes via openai and that both providers appear on the captured
+    GenAI spans (anthropic errored on the primary, openai succeeded on the
+    cross-family candidate).
+    """
+    from harness_runtime.api import run as _run
+    from harness_runtime.lifecycle.providers import ProviderClientsStage
+
+    providers = {
+        "anthropic": _FakeAdapter("anthropic", _RaisingAnthropicClient()),
+        "openai": _FakeAdapter("openai", _SucceedingOpenAIClient()),
+    }
+
+    async def _fake_clients(*_args: object, **_kwargs: object) -> ProviderClientsStage:
+        return ProviderClientsStage(providers=dict(providers))
+
+    monkeypatch.setattr(
+        "harness_runtime.bootstrap.stage_3a_cp_clients.materialize_provider_clients_stage",
+        _fake_clients,
+    )
+    # Stage-4 OD: capture spans in-memory (fake daemon / no-op processors).
+    exporter = _install_fake_od_stage4(monkeypatch)
+
+    chain = _build_chain(primary_model="claude-haiku-4-5")
+    config = _build_config(tmp_path, chain)
+    monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
+
+    result = await _run(_make_workflow(chain), config=config)
+
+    # The workflow completes — which is only possible if the primary
+    # (anthropic, always-raising) was abandoned and the cross-family candidate
+    # (openai, canned success) produced the step output.
+    assert isinstance(result, RunResult), f"got {type(result).__name__}"
+    assert result.status == "completed", (
+        f"expected status=completed via cross-family fallback; got "
+        f"status={result.status!r} failure_cause="
+        f"{getattr(result, 'failure_cause', None)!r}"
+    )
+
+    spans = exporter.get_finished_spans()
+    provider_names = _gen_ai_provider_names(spans)
+    assert "anthropic" in provider_names, (
+        f"expected ≥1 anthropic GenAI span (the failed primary attempt); "
+        f"observed provider.name values: {provider_names!r}"
+    )
+    assert "openai" in provider_names, (
+        f"expected ≥1 openai GenAI span (the cross-family success); "
+        f"observed provider.name values: {provider_names!r}"
+    )
+
+    # The anthropic primary span recorded the dispatch failure (ERROR status);
+    # this discriminates "fallback fired" from "both providers somehow worked".
+    anthropic_errored = [
+        s
+        for s in spans
+        if (s.attributes or {}).get("gen_ai.provider.name") == "anthropic"
+        and s.status.status_code is StatusCode.ERROR
+    ]
+    assert anthropic_errored, "expected the anthropic primary span to record an ERROR status"
+
+    # The outer composer span carries the §4.2 chain length (≥2: primary +
+    # cross-family) — proof the dispatch went through the fallback composer.
+    fallback_spans = [s for s in spans if s.name == "harness.runtime.retry_breaker_fallback"]
+    assert fallback_spans, "expected a harness.runtime.retry_breaker_fallback outer span"
+    assert any(
+        int((s.attributes or {}).get("fallback.chain_length", 0)) >= 2 for s in fallback_spans
+    ), "expected the outer fallback span to carry fallback.chain_length ≥ 2"
+
+
+# ---------------------------------------------------------------------------
+# Live confirmation (real providers; gated on both keys).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not (os.environ.get("ANTHROPIC_API_KEY") and os.environ.get("OPENAI_API_KEY")),
+    reason="live cross-family fallback e2e requires ANTHROPIC_API_KEY + OPENAI_API_KEY",
+)
+@pytest.mark.asyncio
+async def test_r300_live_cross_family_fallback_against_real_providers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real-provider confirmation: primary anthropic invalid-model -> real openai.
+
+    Configures the chain primary = ``anthropic`` with a deliberately-invalid
+    model (real 404 ``not_found_error``; unbilled) and cross-family = real
+    ``openai`` (``gpt-4o-mini``). The production ``RetryBreakerFallbackDispatcher``
+    exhausts the primary's retry loop and advances to openai, which answers. The
+    captured GenAI spans must show ``gen_ai.provider.name == "openai"`` on the
+    successful dispatch. Paid (~a few cents on openai); run via
+    ``just mvp-r300-cross-family``.
+    """
+    from harness_runtime.api import run as _run
+
+    anthropic_key = os.environ["ANTHROPIC_API_KEY"]
+    openai_key = os.environ["OPENAI_API_KEY"]
+
+    def _fake_get_password(service: str, name: str) -> str | None:
+        _ = service
+        if name == "anthropic_key":
+            return anthropic_key
+        if name == "openai_key":
+            return openai_key
+        return None
+
+    monkeypatch.setattr(
+        "harness_runtime.config.provider_secrets.keyring.get_password",
+        _fake_get_password,
+    )
+
+    exporter = _install_fake_od_stage4(monkeypatch)
+
+    chain = _build_chain(primary_model=_INVALID_ANTHROPIC_MODEL)
+    config = _build_config(tmp_path, chain)
+    monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
+
+    result = await _run(_make_workflow(chain), config=config)
+
+    assert isinstance(result, RunResult), f"got {type(result).__name__}"
+    assert result.status == "completed", (
+        f"expected status=completed via cross-family fallback to openai; got "
+        f"status={result.status!r} failure_cause="
+        f"{getattr(result, 'failure_cause', None)!r}"
+    )
+
+    provider_names = _gen_ai_provider_names(exporter.get_finished_spans())
+    assert "openai" in provider_names, (
+        f"expected the cross-family openai provider to answer; observed "
+        f"provider.name values: {provider_names!r}"
+    )
