@@ -446,7 +446,7 @@ The `harness-od/CLAUDE.md` §4.1 OD-6 RETIRE-READY classification (batch-33) is 
 | | Live source |
 |---|---|
 | Latest filed batch | `batch-51` (2026-06-01, H_T-OD-3 RETIRE-READY → RETIRED substantive + H_T-OD-6 RETIRE-READY → RETIRED-AS-BOUNDED-RESIDUAL — closes roadmap R-007 + R-009; **OD-axis RETIRE-READY bucket EMPTY; FIRST bounded-residual close in the ledger**; see §11.4i + §11.4j). Prior: `batch-50` (2026-05-31, H_T-IS-2 PARTIAL → RETIRED; IS-axis 9/9 = 100%). |
-| Cumulative RETIRED count (raw ledger) | 48/54 (88.9%) per batch-51 §0 (IS-axis 9/9 = 100%; CP-axis 21/22 = 95.5%; OD-axis 7/8 = 87.5% incl. 1 RETIRED-AS-BOUNDED-RESIDUAL = OD-6) |
+| Cumulative RETIRED count (raw ledger) | 48/54 (88.9%) per batch-51 §0 (IS-axis 9/9 = 100%; CP-axis 21/22 = 95.5%; OD-axis 7/8 = 87.5% incl. 1 RETIRED-AS-BOUNDED-RESIDUAL = OD-6). **→ SUPERSEDED FORWARD to Phase-8-graduation canonical `46/54 (85.2%)` per `.harness/phase-8-graduation.md` (2026-06-02).** The raw-ledger 48 over-counted by 2 (un-folded CXA accounting §11.1a line 278 + CP-17 SB-INDEF reclassification + CP-21-vs-22 / AS-3↔AS-9 bookkeeping ambiguities); operator-ratified accounting (i) at PR #246. Prior batch records stand verbatim per §0.5; see §11.7. |
 | Cumulative pipeline-advanced (RETIRED + RETIRE-READY + PARTIAL) | 49/54 (90.7%) per batch-51 §0 (UNCHANGED at batch-51 — OD-3 + OD-6 within-pipeline-advanced RETIRE-READY → RETIRED transits) |
 | Per-axis live status | `harness-{is,as,cp,od}/CLAUDE.md` §4.1 |
 | Cross-axis cascade live status | §6.3.1 + §6.3.2 cascade re-evaluations at the batch in which the gating retirement filed (see batch-2 §3 + batch-3 referenced from `harness-od/CLAUDE.md`) |
@@ -463,4 +463,25 @@ The `harness-od/CLAUDE.md` §4.1 OD-6 RETIRE-READY classification (batch-33) is 
 
 ---
 
-*End of phase-7d-retirement-ledger v2 (second pass against Phase 2 runtime closure) + 2026-05-27 supersession refresh.*
+### §11.7 Phase-8 graduation canonical-count supersession (2026-06-02)
+
+**Trigger.** Operator lifted the HELD R-700 Phase-8 declaration ("kick off the declaration"). The formal close is recorded at `.harness/phase-8-graduation.md`; this section is the ledger-side forward supersession per §0.5 forward-only discipline (prior batch records + §11.5 raw-ledger figures stand verbatim).
+
+**Canonical Phase-8 accounting (supersedes the raw-ledger 48 going forward):**
+
+| Metric | Canonical | Prior raw-ledger |
+|---|---|---|
+| RETIRED | **46/54 (85.2%)** | 48/54 (88.9%) |
+| Pipeline-advanced | **49/54 (90.7%)** | 49/54 (UNCHANGED) |
+
+**Disposition (operator-ratified accounting (i), PR #246 + graduation doc §3):** 36 substantive-RETIRED + 8 RETIRED-AS-AUTHORING-ONLY + 2 RETIRED-AS-BOUNDED-RESIDUAL (CP-16, OD-6) = **46 RETIRED**; + 3 PARTIAL (OD-4, CXA-1, CXA-4) + 2 STILL-BOUNDED (CXA-2, CXA-3) + 3 STILL-BOUNDED-INDEFINITELY (AS-8e, AS-8f, CP-17) = 54 ✓.
+
+**8 terminal sign-off dispositions (graduation doc §4) — labels do NOT re-tally into the 46:** OD-4 → `RETIRED-AS-CROSS-AXIS-DEFERRED` (NEW class; pipeline-advanced PARTIAL, not in the 46); AS-8e/AS-8f/CP-17 → accepted-indefinite-defer (NOT counted; distinct from the *counted* RETIRED-AS-BOUNDED-RESIDUAL of CP-16/OD-6); CXA-1/2/3/4 → Phase-2-runtime-deferred.
+
+**Retirement-count delta vs §11.5 raw ledger:** −2 RETIRED (48 → 46) — a bookkeeping reconciliation, NOT a regression. No substitution re-opened. The 48 over-counted the un-folded CXA accounting (§11.1a line 278) + the CP-17 SB-INDEF reclassification.
+
+**Phase 8: substitution accounting CLOSED.**
+
+---
+
+*End of phase-7d-retirement-ledger v2 (second pass against Phase 2 runtime closure) + 2026-05-27 supersession refresh + 2026-06-02 Phase-8 graduation supersession (§11.7).*
