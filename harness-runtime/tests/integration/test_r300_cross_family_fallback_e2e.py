@@ -95,7 +95,14 @@ def _build_chain(primary_model: str) -> Any:
     )
 
 
-def _build_config(tmp_path: Path, chain: Any) -> RuntimeConfig:
+def _build_config(
+    tmp_path: Path,
+    chain: Any,
+    *,
+    anthropic_optional: bool = False,
+    openai_optional: bool = True,
+    ollama_optional: bool = True,
+) -> RuntimeConfig:
     from harness_core.deployment_surface import DeploymentSurface
     from harness_core.workload_class import WorkloadClass
     from harness_cp.routing_manifest_residence import RoutingManifest
@@ -129,8 +136,9 @@ def _build_config(tmp_path: Path, chain: Any) -> RuntimeConfig:
         collector=CollectorConfig(),
         default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
         mcp_clients=[],
-        openai_optional=True,
-        ollama_optional=True,
+        anthropic_optional=anthropic_optional,
+        openai_optional=openai_optional,
+        ollama_optional=ollama_optional,
         routing_manifest=RoutingManifest(
             manifest_version=1,
             per_role_bindings={},
@@ -141,7 +149,7 @@ def _build_config(tmp_path: Path, chain: Any) -> RuntimeConfig:
     )
 
 
-def _make_workflow(chain: Any) -> Any:
+def _make_workflow(chain: Any, *, params: dict[str, Any] | None = None) -> Any:
     from harness_core.identity import StepID
     from harness_core.persona_tier import PersonaTier
     from harness_core.workload_class import WorkloadClass
@@ -152,6 +160,10 @@ def _make_workflow(chain: Any) -> Any:
     from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 
     workload = WorkloadClass.SOFTWARE_ENGINEERING
+    # `ProviderAgnosticPayload.params` is verbatim provider-specific pass-through
+    # (not normalized): anthropic/openai take `max_tokens`, ollama takes
+    # `options={"num_predict": ...}`. Default to the anthropic/openai shape.
+    step_params: dict[str, Any] = params if params is not None else {"max_tokens": 4}
 
     class _Workflow:
         @property
@@ -185,7 +197,7 @@ def _make_workflow(chain: Any) -> Any:
                     step_payload={
                         "messages": [{"role": "user", "content": "Say 'a'"}],
                         "tools": [],
-                        "params": {"max_tokens": 4},
+                        "params": step_params,
                     },
                 ),
             )
@@ -199,7 +211,7 @@ def _make_workflow(chain: Any) -> Any:
             # The dispatcher rebinds per candidate starting at chain.primary, so
             # this initial binding is overridden; it points at the primary for
             # consistency with the chain.
-            return ModelBinding(provider="anthropic", model=chain.primary.model)
+            return ModelBinding(provider=chain.primary.provider, model=chain.primary.model)
 
     return _Workflow()
 
@@ -494,4 +506,117 @@ async def test_r300_live_cross_family_fallback_against_real_providers(
     assert "openai" in provider_names, (
         f"expected the cross-family openai provider to answer; observed "
         f"provider.name values: {provider_names!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Live Ollama exercise (free local daemon; gated on reachability, no creds).
+# ---------------------------------------------------------------------------
+
+_OLLAMA_HOST = "127.0.0.1"
+_OLLAMA_PORT = 11434
+_OLLAMA_VALID_MODEL = "llama3.2:3b"
+_INVALID_OLLAMA_MODEL = "llama-nonexistent-model-r300-fallback-probe"
+
+
+def _ollama_reachable() -> bool:
+    """True iff the local ollama daemon answers on 127.0.0.1:11434.
+
+    A free, zero-secret local provider. Used as the skipif gate so CI (no
+    daemon) skips and a machine with ollama running exercises the real provider.
+    """
+    import socket
+
+    try:
+        with socket.create_connection((_OLLAMA_HOST, _OLLAMA_PORT), timeout=1.0):
+            return True
+    except OSError:
+        return False
+
+
+def _build_ollama_chain() -> Any:
+    """Same-family ollama chain: primary invalid-model -> valid llama3.2.
+
+    Exercises the ollama provider end-to-end through the production fallback
+    path (the primary's invalid model fails -> the same-family valid candidate
+    answers) — the local-open-weight provider that R-100 + the cross-family arc
+    never exercised. LOCAL_OPEN_WEIGHT family throughout (no cross-vendor / paid
+    call).
+    """
+    from harness_cp.cross_family_fallback_chain import (
+        FallbackChain,
+        ProviderCandidate,
+        ProviderFamily,
+    )
+
+    return FallbackChain(
+        primary=ProviderCandidate(
+            provider="ollama",
+            model=_INVALID_OLLAMA_MODEL,
+            family=ProviderFamily.LOCAL_OPEN_WEIGHT,
+        ),
+        same_family=(
+            ProviderCandidate(
+                provider="ollama",
+                model=_OLLAMA_VALID_MODEL,
+                family=ProviderFamily.LOCAL_OPEN_WEIGHT,
+            ),
+        ),
+        cross_family=(),
+        terminal=None,
+    )
+
+
+@pytest.mark.skipif(
+    not _ollama_reachable(),
+    reason="live ollama provider exercise requires a local ollama daemon on 127.0.0.1:11434",
+)
+@pytest.mark.asyncio
+async def test_r300_live_ollama_provider_fallback_exercise(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the OLLAMA provider end-to-end via the production fallback path.
+
+    The local-open-weight provider that R-100 + the cross-family arc never
+    exercised. Chain: primary ollama(invalid-model) -> same-family
+    ollama(llama3.2:3b). The production `RetryBreakerFallbackDispatcher`
+    exhausts the invalid primary and advances to the valid same-family
+    candidate, which answers from the local daemon. Free (zero-token,
+    zero-secret); anthropic + openai degrade-optional (no keys). Run via
+    `just mvp-r300-ollama`. Closes the "Ollama exercise" half of
+    forward-register B-2.
+    """
+    from harness_runtime.api import run as _run
+
+    exporter = _install_fake_od_stage4(monkeypatch)
+
+    chain = _build_ollama_chain()
+    # anthropic + openai degrade gracefully without keys (optional); ollama is
+    # the required, constructed provider (local daemon reachable).
+    config = _build_config(
+        tmp_path,
+        chain,
+        anthropic_optional=True,
+        openai_optional=True,
+        ollama_optional=False,
+    )
+    monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
+
+    # ollama params shape: `options={"num_predict": ...}` (not `max_tokens`).
+    result = await _run(
+        _make_workflow(chain, params={"options": {"num_predict": 4}}), config=config
+    )
+
+    assert isinstance(result, RunResult), f"got {type(result).__name__}"
+    assert result.status == "completed", (
+        f"expected status=completed via same-family ollama fallback; got "
+        f"status={result.status!r} failure_cause="
+        f"{getattr(result, 'failure_cause', None)!r}"
+    )
+
+    provider_names = _gen_ai_provider_names(exporter.get_finished_spans())
+    assert "ollama" in provider_names, (
+        f"expected the ollama provider to answer via the production dispatch "
+        f"path; observed provider.name values: {provider_names!r}"
     )
