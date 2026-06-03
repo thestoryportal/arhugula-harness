@@ -741,4 +741,18 @@ The resolver Reading A-vs-B decision (identity resolver / *vacuous* floor **vs**
 
 ---
 
-*End of root `CLAUDE.md`. Per-axis subdirectory `CLAUDE.md` files at `harness-{is,as,cp,od}/`. Skills at `.claude/skills/`. Sub-agent boundary at `Sub_Agent_Boundary_Specification_v1.md`. Design-phase council at `.claude/skills/council/`. X-AL-3 enforcement triad: §4.4 (CI guard) + §4.5 (clearance markers) + §11 (posture declaration). Roadmap discipline at §12. Orchestration + effort discipline at §13.*
+## 14. Execution + interaction conventions
+
+*Distilled from the 2026-06-02 Claude Code insights report (the recurring friction points it surfaced across 197 sessions). Always-on, mode-agnostic. Each is a cheap habit that prevents a known round-trip.*
+
+| Convention | Rule | Why |
+|---|---|---|
+| **14.1 Roadmap protocol is canonical** | When the user says "continue", derive + execute the next-action per §12 (audit → ground empirically → implement with tests → PR → merge → fixed-point refresh). Don't re-derive the loop ad hoc. | The "continue" loop recurs across dozens of sessions; §12 IS the codification. |
+| **14.2 AskUserQuestion, never `[y/n]`** | Use the AskUserQuestion interactive menu for every choice/ratification. Never text `[y/n]` prompts or plaintext parameter lists. | Corrected in-session before; the menu is the expected primitive. |
+| **14.3 Clear caches before concluding from no-output** | Before ratifying a fork/diagnosis from empty or no-output results, clear stale caches (`rm -rf **/__pycache__ *.pyc`, fresh build) and re-run. A stale `.pyc` once nearly drove a wrong fork conclusion. | Rule out environment artifacts before logic conclusions (composes with §13.1 empirical grounding + the U-HK-03 cache-clear hook). |
+| **14.4 Large writes go incrementally to file** | For large docs/JSON, write incrementally with the Write/Edit tools (or chunked appends), not heredoc/base64 Bash writes — those truncate on large files. | Heredoc/base64 truncation forced rework. |
+| **14.5 Chunk large outputs** | When emitting large JSON/docs, stream to a file in chunks rather than one giant response; confirm each chunk landed. Keeps transcripts intact and dodges the output-token cap (the report's #1 friction). | Output-cap truncation caused API errors + unreconstructable handoffs. |
+
+---
+
+*End of root `CLAUDE.md`. Per-axis subdirectory `CLAUDE.md` files at `harness-{is,as,cp,od}/`. Skills at `.claude/skills/`. Sub-agent boundary at `Sub_Agent_Boundary_Specification_v1.md`. Design-phase council at `.claude/skills/council/`. X-AL-3 enforcement triad: §4.4 (CI guard) + §4.5 (clearance markers) + §11 (posture declaration). Roadmap discipline at §12. Orchestration + effort discipline at §13. Execution + interaction conventions at §14.*

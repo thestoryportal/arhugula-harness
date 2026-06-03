@@ -15,6 +15,7 @@ HOOK="$SCRIPT_DIR/post-merge-refresh.sh"
 [ -x "$HOOK" ] || { echo "FAIL: hook not executable at $HOOK"; exit 1; }
 
 REPO="$(mktemp -d)"
+{ [ -n "$REPO" ] && [ -d "$REPO" ]; } || { echo "FATAL: mktemp -d failed"; exit 1; }
 trap 'rm -rf "$REPO"' EXIT
 
 git -C "$REPO" init -q -b main

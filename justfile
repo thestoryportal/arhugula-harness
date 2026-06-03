@@ -178,6 +178,12 @@ _require-codex-subscription:
         exit 1; \
     fi
 
+# Reviewer model = gpt-5.5, set as the default in ~/.codex/config.toml (top-level +
+# active profile) per operator direction 2026-06-03. NOTE: `codex review` ignores a
+# per-invocation `-c model=` when a profile is active (the profile's model wins), so
+# the model is governed by config.toml, not pinned here. The run banner prints the
+# effective `model:` — confirm it reads `gpt-5.5`.
+
 # Out-of-family review of the current branch vs BASE (default main), subscription auth.
 codex-review base='main': _require-codex-subscription
     env -u OPENAI_API_KEY codex review -c preferred_auth_method="chatgpt" --base {{base}}
