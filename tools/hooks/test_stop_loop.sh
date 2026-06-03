@@ -42,7 +42,9 @@ run_on >/dev/null; run_on >/dev/null
 OUT=$(printf '{}' | HARNESS_LOOP=1 HARNESS_LOOP_MAX=2 CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
 [ -z "$OUT" ] && ok "iteration cap → allows stop" || bad "blocked past cap: $OUT"
 [ ! -f "$REPO/.harness/.loop-iter" ] && ok "counter reset at cap" || bad "counter not reset"
+[ -f "$REPO/.harness/.loop-halt" ] && ok "cap raises halt marker (real boundary)" || bad "cap did not raise halt marker"
 grep -q '| STOP | iteration cap' "$REPO/.harness/loop_status.md" && ok "cap logged to ledger" || bad "cap not logged"
+rm -f "$REPO/.harness/.loop-halt"
 
 # 5) Halt marker → stand down (allow stop) + marker PRESERVED for the runner (codex P1:
 #    the in-session hook must not consume the gate signal the outer runner needs to see).

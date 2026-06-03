@@ -61,6 +61,10 @@ ITER=$(cat "$ITERF" 2>/dev/null || echo 0)
 [[ "$ITER" =~ ^[0-9]+$ ]] || ITER=0
 if [ "$ITER" -ge "$MAX" ]; then
   loop_log STOP "iteration cap ${MAX} reached — loop stopping (run /loop-start to resume)"
+  # Raise the halt marker so the cap is a REAL boundary: without it the next Stop would
+  # start a fresh counter (marker-based mode) and the headless runner, seeing no halt,
+  # would launch another claude -p. The halt makes both stand down. /loop-start clears it.
+  [ -n "$HALT" ] && : > "$HALT" 2>/dev/null
   rm -f "$ITERF" 2>/dev/null
   exit 0
 fi

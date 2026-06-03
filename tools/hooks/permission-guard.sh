@@ -72,9 +72,11 @@ _safe_path() {
 _bash_args_safe() {
   local cmd="$1" stripped tok
   printf '%s' "$cmd" | grep -Eq '(\.env|credentials|\.pem|id_rsa|id_ed25519|keyring|secret|\.key|\.ssh|authorized_keys)' && return 1
-  printf '%s' "$cmd" | grep -Eq '(~|\$HOME|\.\.)' && return 1
-  # Secret env-var expansions (e.g. `echo $ANTHROPIC_API_KEY` would print creds).
-  printf '%s' "$cmd" | grep -Eq '\$\{?[A-Za-z_]*(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|APIKEY|_API_)' && return 1
+  printf '%s' "$cmd" | grep -Eq '(~|\.\.)' && return 1
+  # ANY uppercase env-var expansion ($HOME, ${HOME}, $ANTHROPIC_API_KEY, $TMPDIR, ...),
+  # braced or not — it can resolve to an out-of-worktree path or print a credential, and
+  # the hook cannot evaluate it. Conservative: such commands fall through to ask.
+  printf '%s' "$cmd" | grep -Eq '\$\{?[A-Z]' && return 1
   # Absolute paths outside the worktree. Strip quotes first so `cat '/etc/passwd'`
   # (token starts with a quote, not /) is still caught.
   stripped=$(printf '%s' "$cmd" | tr -d "\"'")
@@ -156,7 +158,7 @@ case "$TOOL" in
     # (X-AL-3 back-flow) — those, plus secret/outside/.git/traversal paths (via _safe_path),
     # fall through to ask.
     case "$FPATH" in
-      */design-substrate/*) : ;;  # ask
+      */design-substrate/*|design-substrate/*) : ;;  # ask (absolute OR relative path)
       *) _safe_path "$FPATH" && emit_allow ;;
     esac
     ;;
