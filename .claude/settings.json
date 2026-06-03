@@ -70,6 +70,18 @@
         ]
       }
     ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/stop-gate.sh",
+            "statusMessage": "Lint gate before stop..."
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
