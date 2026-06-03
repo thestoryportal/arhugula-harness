@@ -90,3 +90,8 @@ tools/dashboard/candidates/
 
 # Hook-written session issue log (U-HK-07)
 .harness/session-issues.jsonl
+
+# Loop-mode runtime artifacts (U-HK-11): the active-marker + append-only ledger
+# are transient per-run state, written only while loop mode is on. Never tracked.
+.harness/.loop-active
+.harness/loop_status.md
