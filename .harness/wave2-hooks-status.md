@@ -36,8 +36,11 @@ runtime artifacts.
   provider network calls, creds-requiring recipes — denied + logged, never auto-fired.
   Preserves `[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`.
 - **Bounded** (U-HK-14/15): the Stop-continue loop caps at `HARNESS_LOOP_MAX` (default
-  25) turns; the headless runner caps iterations; both stand down on a
-  `.harness/.loop-halt` gate marker.
+  25) turns; the headless runner caps iterations; both stand down when `.harness/.loop-halt`
+  appears — raised ONLY on a TRUE stand-down (forward menu exhausted) or an operator stop.
+- **Defer-and-continue at a gate** (corrected 2026-06-03 — see "Gate handling" below): a
+  single gated item does NOT halt the run; it is deferred + worked around, and the loop
+  advances to the next forward item.
 - **Default = ask.** Unknown tools fall through to the normal approval prompt (deny in
   headless). Fail-safe by construction.
 - **Reversible-only auto-decisions** (U-HK-13): `/resolve` auto-decides only reversible
@@ -61,6 +64,29 @@ autonomy infrastructure is operator-gated by design, not agent-self-serve.
 `.harness/loop_status.md` after any run — `DEFERRED-HIL` / `DENY` / `RESOLVE-SPLIT` rows
 are the things that wanted a human. The fully-autonomous loop remains an explicit,
 reviewable, bounded opt-in.
+
+## Gate handling (corrected 2026-06-03)
+
+The ratified design (plan decision #1: "missing creds/vendor → log to loop-status, **keep
+working around**") is **defer-and-continue**, not halt-at-first-gate:
+
+1. On a gated item (paid call / secret / vendor selection / missing credential / infra),
+   the loop builds whatever slice does NOT need the gated input, then logs a clearly-stated
+   deferral via `loop_defer <item-id> '<what operator input is needed> — built without it: …'`
+   and **advances to the next forward item** per CLAUDE.md §12.4.1.
+2. The persistent `loop_status.md` DEFERRED-HIL rows are the run-scoped **skip-set**
+   (`loop_skip_set`); `stop-loop.sh` + the headless prompt inject it so a fresh `claude -p`
+   child never re-attempts an already-deferred item off the static dashboard pointer.
+3. `.harness/.loop-halt` (whole-run stand-down) is raised **only** when EVERY forward item
+   is deferred (nothing buildable remains) or the operator stops it — never for one gate.
+4. Pending deferrals are surfaced back at the next SessionStart (`loop_pending_hil_summary`)
+   so they are clearly presented when the operator next engages.
+
+The original Wave-2 cut wrongly instructed Claude to raise `.loop-halt` at the first gate
+(an internal contradiction — the `/loop-start` + `/resolve` skill docs already said "keep
+working on other items"). Fixed at the `stop-loop.sh` reason + `run.sh` prompt + a
+mechanical skip-set + SessionStart surfacing, with regression tests
+(`test_stop_loop.sh` skip-set case, `test_loop_lib.sh` `loop_defer`/`loop_skip_set`).
 
 ## Pre-merge hardening (out-of-family Codex review)
 

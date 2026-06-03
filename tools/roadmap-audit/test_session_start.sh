@@ -74,5 +74,22 @@ git -C "$REPO" commit -qm "ops: roadmap status refresh post-#3 (#4)"
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "ROADMAP DRIFT" && ok "mis-titled substantive commit halts as DRIFT ($OUT)" || bad "expected DRIFT (title-only false negative), got: $OUT"
 
+# 5) Pending-HIL surfacing — when the loop ledger carries post-ACTIVATE DEFERRED-HIL
+#    rows, EVERY emit branch appends the operator-facing summary (so the last unattended
+#    run's deferrals are "clearly presented when the operator engages next"). Absent when
+#    there is no ledger. Branch-agnostic: the suffix rides whatever audit verdict fires.
+cat > "$REPO/.harness/loop_status.md" <<'EOF'
+| ts | kind | detail |
+|---|---|---|
+| t1 | ACTIVATE | run |
+| t2 | DEFERRED-HIL | R-410 — needs container runtime |
+EOF
+OUT=$(run)
+printf '%s' "$OUT" | grep -q "await your input" && printf '%s' "$OUT" | grep -q "R-410" \
+  && ok "pending-HIL summary appended to SessionStart ($OUT)" || bad "no pending-HIL suffix: $OUT"
+rm -f "$REPO/.harness/loop_status.md"
+OUT=$(run)
+printf '%s' "$OUT" | grep -q "await your input" && bad "pending-HIL suffix present with no ledger: $OUT" || ok "no pending-HIL suffix when no ledger"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

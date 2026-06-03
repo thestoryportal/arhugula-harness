@@ -59,6 +59,47 @@ grep -q '| DEACTIVATE | test off |' "$REPO/.harness/loop_status.md" && ok "DEACT
 # 7) HARNESS_LOOP=1 forces loop mode on even with no marker.
 HARNESS_LOOP=1 loop_mode_active && ok "HARNESS_LOOP=1 forces on" || bad "env override failed"
 
+# 8) loop_defer writes a parseable DEFERRED-HIL row with the item-id as the leading token.
+: > "$(loop_status_path)"
+loop_activate "skip-set test" >/dev/null
+loop_defer R-410 "needs container runtime — built: design half"
+grep -qE '\| DEFERRED-HIL \| R-410 — needs container' "$(loop_status_path)" && ok "loop_defer writes item-id-leading DEFERRED-HIL row" || bad "loop_defer row malformed"
+
+# 9) loop_skip_set = sorted-unique item-ids deferred SINCE the last ACTIVATE.
+loop_defer R-300 "needs OpenAI creds"
+SKIP=$(loop_skip_set)
+[ "$SKIP" = "R-300 R-410" ] && ok "loop_skip_set lists current-run deferrals ($SKIP)" || bad "skip_set wrong: [$SKIP]"
+
+# 10) A new ACTIVATE scopes the skip-set to the NEW run (prior deferrals excluded).
+loop_activate "second run" >/dev/null
+loop_defer R-815 "needs vendor pick"
+SKIP=$(loop_skip_set)
+[ "$SKIP" = "R-815" ] && ok "skip-set scoped to current run (excludes pre-ACTIVATE)" || bad "scoping wrong: [$SKIP]"
+
+# 11) loop_pending_hil_summary: populated (with item + count) when deferrals exist.
+SUM=$(loop_pending_hil_summary)
+printf '%s' "$SUM" | grep -q "R-815" && printf '%s' "$SUM" | grep -q "await your input" \
+  && ok "pending summary lists current-run deferral" || bad "pending summary missing/malformed: $SUM"
+
+# 12) loop_pending_hil_summary empty when the current run has no deferrals.
+: > "$(loop_status_path)"; loop_activate "clean run" >/dev/null
+[ -z "$(loop_pending_hil_summary)" ] && ok "pending summary empty when no deferrals" || bad "pending summary not empty when clean"
+
+# 13) skip-set extracts ONLY the leading item-id — an item merely MENTIONED in a reason
+#     must NOT enter the skip-set (else the loop skips an item that was never deferred).
+: > "$(loop_status_path)"; loop_activate "mention test" >/dev/null
+loop_defer R-410 "blocked until R-300 vendor decision is made"
+SKIP=$(loop_skip_set)
+[ "$SKIP" = "R-410" ] && ok "skip-set = leading id only (R-300 in reason excluded)" || bad "over-matched reason id: [$SKIP]"
+
+# 14) kind matched by COLUMN, not whole-row substring — a reason CONTAINING "ACTIVATE"
+#     must not reset the run boundary and drop deferrals (would let the loop retry a gate).
+: > "$(loop_status_path)"; loop_activate "kind-column test" >/dev/null
+loop_defer R-410 "needs operator to ACTIVATE GitHub Pages"
+loop_defer R-300 "needs creds"
+SKIP=$(loop_skip_set)
+[ "$SKIP" = "R-300 R-410" ] && ok "'ACTIVATE' in a reason does not drop deferrals ($SKIP)" || bad "kind whole-row match dropped a deferral: [$SKIP]"
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

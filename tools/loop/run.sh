@@ -9,8 +9,11 @@
 #
 # Safety:
 #   - bounded by --max (default HARNESS_LOOP_MAX or 25) — never an unbounded run;
-#   - stops immediately when .harness/.loop-halt appears (a genuine gate: paid call /
-#     secret / destructive / missing cred — written by the loop when it defers);
+#   - stops when .harness/.loop-halt appears — raised ONLY on a TRUE stand-down (the
+#     forward menu is exhausted: every forward item deferred) or an operator stop, NOT at
+#     a single gated item. A gated item is DEFERRED + worked around (the loop advances to
+#     the next forward item per §12.4.1); the persistent ledger skip-set survives across
+#     these fresh `claude -p` children so no item is re-attempted;
 #   - does NOT pass --dangerously-skip-permissions; approvals flow through the
 #     permission guard (unknown tools fall through to deny in headless, the safe default);
 #   - --dry-run prints the planned invocation + exercises the loop WITHOUT calling claude.
@@ -34,7 +37,12 @@ DRY=0
 MAX=${HARNESS_LOOP_MAX:-25}
 # Default prompt; HARNESS_LOOP_PROMPT env overrides it (the robust path for multi-word
 # prompts, since `just`'s variadic args don't preserve quoting — see the justfile note).
-PROMPT="${HARNESS_LOOP_PROMPT:-Continue the roadmap. Run the §12.1 audit, derive the next-action per CLAUDE.md §4, then drive it: ground empirically → implement with tests → PR → CI-green → merge → fixed-point refresh. Use /resolve for reversible forks. At a genuine gate (paid call / secret / destructive / missing cred) create .harness/.loop-halt, log a DEFERRED-HIL row, and stop.}"
+# NOTE: the runner computes the run-scoped skip-set itself (loop_skip_set) and appends it
+# to the prompt PER ITERATION below — the fresh `claude -p` child cannot run loop_skip_set
+# (it is a chained/sourced command the permission guard denies in headless). The child
+# records new deferrals + stand-down ONLY via the allowlisted wrappers tools/loop/defer.sh
+# and tools/loop/halt.sh (a raw `source … && loop_defer …` is denied + malformed).
+PROMPT="${HARNESS_LOOP_PROMPT:-Continue the roadmap. Run the §12.1 audit, then pick the highest-priority forward item per CLAUDE.md §12.4.1 that is NOT in the 'already deferred this run' list below. Drive it: ground empirically → build the slice that does NOT need any gated input → implement with tests → PR → CI-green → merge → fixed-point refresh. Use /resolve for reversible forks. If the item is GATED (paid call / secret / vendor selection / missing credential / infra): do NOT force it and do NOT raise the halt marker — build whatever slice is possible without the gated input, then run the single command 'tools/loop/defer.sh <ITEM-ID> \"what operator input is needed (plain text) — built without it: slice or none\"' and ADVANCE to the next forward item. ONLY when EVERY forward item per §12.4.1 is already deferred (nothing buildable remains) run 'tools/loop/halt.sh \"forward menu exhausted — N awaiting operator input\"' to stand the run down.}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -90,7 +98,12 @@ while [ "$i" -lt "$MAX" ]; do
     [ "$i" -ge "${DRY_ITERS:-1}" ] && break
     continue
   fi
-  echo "[loop] iteration ${i}/${MAX} → claude -p"
+  # Compute the run-scoped skip-set HERE (the fresh child cannot — loop_skip_set is a
+  # chained/sourced command the guard denies) and append it to the prompt so the child
+  # advances past already-deferred items instead of re-attempting the static next-action.
+  SKIP=$(loop_skip_set); SKIP=${SKIP:-none}
+  ITER_PROMPT="${PROMPT} [already deferred this run — do NOT re-attempt: ${SKIP}]"
+  echo "[loop] iteration ${i}/${MAX} → claude -p (deferred so far: ${SKIP})"
   # Loop mode on for the child so the in-session hooks fire; bounded per turn. NOTE: no
   # --allowedTools — every tool flows through the U-HK-12 permission guard (allow safe /
   # deny dangerous / ask→deny-in-headless unknown). Passing bare `Bash` here would
@@ -101,7 +114,7 @@ while [ "$i" -lt "$MAX" ]; do
   # Pass the cap to the child too, so the in-session Stop-continue (stop-loop.sh) honors
   # the same --max instead of defaulting to 25 in-session turns.
   HARNESS_LOOP=1 HARNESS_LOOP_MAX="$MAX" hook_bounded "${HARNESS_LOOP_TURN_TIMEOUT:-1800}" \
-    claude -p "$PROMPT" --permission-mode default &
+    claude -p "$ITER_PROMPT" --permission-mode default &
   CHILD=$!
   wait "$CHILD" || loop_log COMPLETED "iteration ${i} claude exited nonzero/bounded"
   CHILD=""
