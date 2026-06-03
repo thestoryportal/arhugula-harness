@@ -191,3 +191,13 @@ codex-review base='main': _require-codex-subscription
 # Out-of-family review of staged + unstaged + untracked changes, subscription auth.
 codex-review-uncommitted: _require-codex-subscription
     env -u OPENAI_API_KEY codex review -c preferred_auth_method="chatgpt" --uncommitted
+
+# Headless overnight autonomous runner (U-HK-15). Turns loop mode ON, then re-invokes
+# `claude -p` in a BOUNDED loop until a genuine gate (halt marker) or the iteration cap.
+# Approvals flow through the U-HK-12 permission guard (no --dangerously-skip-permissions).
+# `just loop` runs for real; `just loop --dry-run` exercises the loop without calling claude;
+# `just loop --max 10` caps iterations. Review .harness/loop_status.md after a run.
+# Custom multi-word prompt: use the env var (just variadic args don't preserve quoting):
+#   HARNESS_LOOP_PROMPT="do X then Y" just loop
+loop *ARGS:
+    bash tools/loop/run.sh {{ARGS}}
