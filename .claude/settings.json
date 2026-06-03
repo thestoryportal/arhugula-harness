@@ -137,6 +137,14 @@
           {
             "type": "command",
             "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/prompt-context.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/skill-activation-check.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/prompt-lint.sh"
           }
         ]
       }

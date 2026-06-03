@@ -113,6 +113,22 @@ If the disagreement engages one of these, surface the tension's *Status* as `pro
 
 If the operator subsequently asks for resolution of a surfaced (Layer 1) tension, run Layer 2 escalation per `references/output-templates.md`.
 
+### 5b. Optional out-of-family Codex decorator (U-HK-19)
+
+After a tension is surfaced (or a single-voice recommendation is emitted), you MAY append a **Codex decorator** — a single out-of-family cross-check, **NOT a 12th deliberating voice**. The council is Claude-reviewing-Claude (correlated blind spots); `just codex-review` (gpt-5.5, ChatGPT subscription, $0, X-AL-1 H_E tooling) gives a **decorrelated** read of the same artifact/tension. It composes with the §13.1 division of labor: council + advisor are the in-family reviewers; Codex is the out-of-family one.
+
+**When to append it (opt-in, encouraged on high-blast-radius design):** the convened decision touches a concrete artifact or diff (a spec amendment, a contract shape, an impl seam), the tension is high-stakes, loop mode is active, or the operator asks ("add the Codex read"). **Skip it** for a pure preference call, a settled-routing question, or when there is no artifact for Codex to read.
+
+**How:** frame the convened tension + the candidate resolutions as a crisp prompt; run `just codex-review` against the relevant diff, or `resolve_codex "<tension + options + context>"` (from `tools/hooks/resolve_lib.sh`) when there is no diff yet. Then emit a compact **Codex decorator** block after the TENSION block:
+
+```
+**Codex decorator (out-of-family cross-check)** — `concur` | `flag-gap`
+- Verdict: <concur with the surfaced resolution | flags a gap the voices missed>
+- Note: <one-to-three sentences; verbatim-ish from Codex, not re-spun>
+```
+
+`concur` strengthens confidence; `flag-gap` is the high-signal case — surface it to the operator (it is the decorrelated catch the in-family reviewers structurally miss). The decorator never auto-overrides the council; it is evidence the operator weighs. Paid/secret/destructive forks are still the operator's per `[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]` — Codex (subscription dev tooling) is not a paid harness call, but it does not authorize one.
+
 ### 6. Audit your own response before emitting
 
 Before sending, check:
