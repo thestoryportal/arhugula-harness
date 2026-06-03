@@ -606,6 +606,19 @@ When drift is detected at session-start audit OR when an R-NNN entry's `depends_
 
 **Is not.** Design-substrate (no X-AL-3 guard). Not authoritative against contradicting design-substrate cites (design-substrate wins per §1.3 authority chain). Not retroactive — pre-roadmap PRs are not back-filed.
 
+#### 12.4.1 Operator-labeled items are Claude-driven (no parking)
+
+**Standing operator directive (2026-06-02; `[[feedback-operator-labels-are-claude-driven-no-parking]]`).** The labels `posture: halt-route-to-operator`, "operator-owned", "operator-gated", `infra-gated`, `PROPOSED`, and `DEFERRED` do **NOT** mean "the operator executes this." **The operator executes nothing manually — Claude does all the work.** They mean **"Claude drives this to its genuine gate, then the operator answers the gate."**
+
+A session must **NOT** conclude `NO_ACTIVE_CANDIDATES → idle/done` and stop while the forward register is non-empty. When the §4 auto-`ACTIVE` queue is empty:
+
+1. **Pick** the highest-value forward item per the §4 priority order (`R-700` close, `R-410..R-440`, `R-300-second-provider`, `R-CXA-2/3`, `R-810/820`, …).
+2. **Ground it first** (`[[r-cxa-seam-wiring-is-producer-discovery]]`, `[[grounding-reveals-claude-closeable-slice-close-honestly]]`) — a nominally "operator-gated" item usually has a real Claude-closeable slice grounding reveals.
+3. **Build its Claude-executable slice** — stdlib/mockable slices, scaffolding, the recipe the operator runs, the whole non-live substance — driving up to the genuine gate.
+4. **Surface only the genuine gate, batched + minimal:** (a) a real architectural/scoping decision, (b) a credential/secret, (c) paid-call authorization, (d) an irreversible/outward-facing action. One `AskUserQuestion`, not drip-fed; never ask for what has a sensible default or what you can decide and note.
+
+**The paid-call / secret boundary is unchanged** (`[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`): drive to the dispatch / cred boundary, surface it, do not auto-fire a paid call or relocate secrets. The two rules compose — this one kills *parking*; that one governs the *one genuine outward-facing step*. **A held operator decision (e.g. R-700's HELD declaration) is a real answer the operator gave, not a parking-label — honor it; do not override a hold.** **Default to doing + reporting over asking — approval fatigue is the failure mode to avoid.**
+
 ### 12.5 Memory hygiene + checkpointing integration
 
 The roadmap is one of three durable persistence mechanisms; this section names how all three compose. Without this integration, memory + checkpoints drift away from roadmap state and the audit protocol catches dashboard drift but misses memory/checkpoint drift.
