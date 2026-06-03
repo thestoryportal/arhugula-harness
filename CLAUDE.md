@@ -674,7 +674,7 @@ After any R-NNN closes (PR merge), the post-merge audit at §12.2 MUST also:
 
 1. **Memory check** — if the R-NNN's close surfaced a new pattern at cardinality ≥2, write memory entry + MEMORY.md line in the same PR (or follow-on PR if scope tightness requires).
 2. **Memory refresh** — if the close superseded an existing memory entry (e.g., a pattern's status changed, a finding closed), update the entry in the same PR.
-3. **Checkpoint clean** — checkpoints whose `Remaining Work` is now fully addressed should be archived (move to `checkpoints/archive/`) at next session-start audit.
+3. **Checkpoint clean** — a checkpoint is **"resolved"** when its `branch:` is in the merged set (the squash-merge-safe `gh pr list --state merged` head-ref cross-ref, per `[[squash-merge-branch-prune-recipe]]`) — a machine-checkable test, not a free-text "Remaining Work fully addressed" judgment. As-built (U-HK-26..29 reconciliation, review-doc §10 R-2): the **PreCompact snapshots** at `.harness/.checkpoints/` are *thin temporal* records — `session-end-cleanup.sh`'s keep-10 prune is their correct lifecycle (archival adds no value). The richer **gstack `/context-save`** checkpoints at `~/.gstack/.../checkpoints/` are append-only history by default; archiving resolved ones to a `checkpoints/archive/` subdir is *optional* low-value hygiene — not a standing requirement, and deliberately **not** automated (no two-system resolved-detection machinery was built).
 
 #### 12.5.4 Pre-substantive memory + checkpoint discipline
 

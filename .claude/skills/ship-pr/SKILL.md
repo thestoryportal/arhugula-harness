@@ -51,7 +51,9 @@ This is the step most often done wrong. After the PR merges:
 
 On a closed R-NNN: if the close surfaced a `[[pattern]]` at cardinality ≥2, write the memory
 entry + `MEMORY.md` line in the same (or a follow-on) PR; if it superseded an existing entry,
-refresh it; archive checkpoints whose Remaining Work is now addressed.
+refresh it. (Checkpoint hygiene per §12.5.3: a checkpoint is "resolved" when its `branch:` is
+merged; PreCompact snapshots are keep-10-pruned by `session-end-cleanup.sh`; resolved-checkpoint
+archival is optional and not automated — no standing "archive Remaining-Work-addressed" step.)
 
 ## Notes
 
