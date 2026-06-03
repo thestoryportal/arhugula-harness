@@ -46,19 +46,32 @@ hook_default_branch() {
 
 # Portable bounded runner: run a command, kill it if it outlives SECS — even on a
 # stock macOS that ships neither GNU `timeout` nor `gtimeout`. Prefers the native
-# binary when present; otherwise a pure-bash watchdog. Returns the command's exit
-# code (or the kill's). Usage: hook_bounded SECS cmd args...
+# binary when present; otherwise a pure-bash watchdog that ESCALATES SIGTERM →
+# SIGKILL after a short grace, so a child stuck in an SSH / credential-helper path
+# that ignores TERM is still force-killed (SIGKILL is uncatchable). `wait` then
+# returns within SECS + grace — a genuine hard bound, never an indefinite hang.
+# Returns the command's exit code (or the kill's). Usage: hook_bounded SECS cmd...
 hook_bounded() {
   local secs="$1"; shift
+  # `-k 2`: GNU timeout sends SIGTERM at SECS, then SIGKILL 2s later if the child
+  # ignored TERM (without -k, `timeout` only sends TERM and WAITS — a TERM-ignoring
+  # git-over-SSH would hang the hook). Both native paths and the pure-bash fallback
+  # below escalate to KILL, so this is a genuine hard bound everywhere.
   local tb=""
-  command -v timeout  >/dev/null 2>&1 && tb="timeout $secs"
-  command -v gtimeout >/dev/null 2>&1 && tb="gtimeout $secs"
+  command -v timeout  >/dev/null 2>&1 && tb="timeout -k 2 $secs"
+  command -v gtimeout >/dev/null 2>&1 && tb="gtimeout -k 2 $secs"
   if [ -n "$tb" ]; then
     $tb "$@"
     return $?
   fi
   "$@" & local p=$!
-  ( sleep "$secs"; kill -0 "$p" 2>/dev/null && kill "$p" 2>/dev/null ) >/dev/null 2>&1 & local w=$!
+  (
+    sleep "$secs"
+    kill -0 "$p" 2>/dev/null || exit 0
+    kill -TERM "$p" 2>/dev/null
+    sleep 2
+    kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null
+  ) >/dev/null 2>&1 & local w=$!
   wait "$p" 2>/dev/null; local rc=$?
   kill "$w" 2>/dev/null; wait "$w" 2>/dev/null
   return "$rc"

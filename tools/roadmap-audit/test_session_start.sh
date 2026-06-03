@@ -11,7 +11,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/session-start.sh"
 . "$SCRIPT_DIR/../hooks/lib.sh"   # for hook_state_hash to compute the expected value
 
-REPO="$(mktemp -d)"; trap 'rm -rf "$REPO"' EXIT
+REPO="$(mktemp -d)"
+{ [ -n "$REPO" ] && [ -d "$REPO" ]; } || { echo "FATAL: mktemp -d failed"; exit 1; }
+trap 'rm -rf "$REPO"' EXIT
 git -C "$REPO" init -q -b main; git -C "$REPO" config user.email t@t.t; git -C "$REPO" config user.name t
 mkdir -p "$REPO/.harness"
 : > "$REPO/Project_Roadmap_v1.md"

@@ -40,8 +40,17 @@ EL=$SECONDS
 # hook_project_dir — honors CLAUDE_PROJECT_DIR override.
 eq "hook_project_dir honors env" "$(CLAUDE_PROJECT_DIR=/tmp/xyz hook_project_dir)" "/tmp/xyz"
 
+# hook_bounded — force-kills a TERM-ignoring command within the bound (escalation).
+SECONDS=0
+hook_bounded 1 bash -c 'trap "" TERM; sleep 30' >/dev/null 2>&1; RC2=$?
+EL2=$SECONDS
+{ [ "$EL2" -lt 8 ] && [ "$RC2" -ne 0 ]; } && ok "hook_bounded escalates TERM->KILL (~${EL2}s, rc=$RC2)" \
+  || bad "hook_bounded did not force-kill TERM-ignorer: elapsed=${EL2}s rc=$RC2"
+
 # Temp repo for default-branch + loop-mode marker tests.
-REPO="$(mktemp -d)"; trap 'rm -rf "$REPO"' EXIT
+REPO="$(mktemp -d)"
+{ [ -n "$REPO" ] && [ -d "$REPO" ]; } || { echo "FATAL: mktemp -d failed"; exit 1; }
+trap 'rm -rf "$REPO"' EXIT
 git -C "$REPO" init -q -b main; git -C "$REPO" config user.email t@t.t; git -C "$REPO" config user.name t
 ( cd "$REPO" && echo x > f && git add -A && git commit -qm base )
 
