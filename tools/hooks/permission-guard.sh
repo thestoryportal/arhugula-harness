@@ -56,9 +56,26 @@ _safe_path() {
     *.env|*.env.*|*/.env|*credentials*|*.pem|*id_rsa*|*id_ed25519*|*keyring*|*secret*|*.key) return 1 ;;
   esac
   local abs; case "$p" in /*) abs="$p" ;; *) abs="$PROJECT_DIR/$p" ;; esac
+  # Resolve symlinks PHYSICALLY before the containment check: an in-worktree symlink to an
+  # outside/secret file would otherwise pass the string-prefix test while the OS follows it
+  # out. Resolve the dir via `pwd -P`, and one level of a symlinked final component.
+  local dir base rp tgt
+  dir=$(dirname "$abs"); base=$(basename "$abs")
+  if rp=$(cd "$dir" 2>/dev/null && pwd -P); then
+    abs="$rp/$base"
+    if [ -L "$abs" ] && tgt=$(readlink "$abs" 2>/dev/null); then
+      case "$tgt" in /*) abs="$tgt" ;; *) abs="$rp/$tgt" ;; esac
+    fi
+  fi
+  # Re-check secret patterns on the resolved target too.
+  case "$abs" in
+    *.env|*.env.*|*/.env|*credentials*|*.pem|*id_rsa*|*id_ed25519*|*keyring*|*secret*|*.key) return 1 ;;
+  esac
+  local root; root=$(cd "$PROJECT_DIR" 2>/dev/null && pwd -P) || root="$PROJECT_DIR"
   case "$abs" in
     *..*) return 1 ;;                 # traversal
     */.git/*|*/.git) return 1 ;;      # git internals
+    "$root"|"$root"/*) return 0 ;;
     "$PROJECT_DIR"|"$PROJECT_DIR"/*) return 0 ;;
     *) return 1 ;;                    # outside worktree
   esac
@@ -73,6 +90,9 @@ _bash_args_safe() {
   local cmd="$1" stripped tok
   printf '%s' "$cmd" | grep -Eq '(\.env|credentials|\.pem|id_rsa|id_ed25519|keyring|secret|\.key|\.ssh|authorized_keys)' && return 1
   printf '%s' "$cmd" | grep -Eq '(~|\.\.)' && return 1
+  # .git internals (config holds token-bearing remote URLs; hooks/ run on every commit).
+  # `\.git/` won't match `.github/` (that's .git + 'hub').
+  printf '%s' "$cmd" | grep -Eq '\.git/|(^|[[:space:]])\.git([[:space:]]|$)' && return 1
   # ANY uppercase env-var expansion ($HOME, ${HOME}, $ANTHROPIC_API_KEY, $TMPDIR, ...),
   # braced or not — it can resolve to an out-of-worktree path or print a credential, and
   # the hook cannot evaluate it. Conservative: such commands fall through to ask.
@@ -182,6 +202,7 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
   if printf '%s' "$CMD" | grep -q '[;&|<>`]' || [[ "$CMD" == *'$('* ]] || [[ "$CMD" == *$'\n'* ]] \
      || printf '%s' "$CMD" | grep -Eq 'find[[:space:]].*-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)\b' \
      || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+api[[:space:]].*(-X|--method|--field|--raw-field|--input|-f[[:space:]]|-F[[:space:]])' \
+     || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+pr[[:space:]]+merge.*--admin' \
      || printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+commit.*--amend'; then
     :  # chained / nested / redirected / destructive submode (incl. git commit --amend) → ask
   else

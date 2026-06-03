@@ -186,6 +186,22 @@ done
 OUT=$(run_on "$(pl Edit '' 'design-substrate/Spec_X.md')")
 [ -z "$OUT" ] && ok "relative design-substrate Edit → ask" || bad "relative design-substrate auto-decided: $OUT"
 
+# 5o) Round-8: .git internals, admin merge, symlink escape (codex P1/P2).
+for c in "cat .git/config" "touch .git/hooks/pre-commit" "chmod +x .git/hooks/pre-commit" "gh pr merge 1 --admin"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
+done
+# .github (not .git) and normal merge still allow
+OUT=$(run_on "$(pl Bash 'cat .github/workflows/ci.yml' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "cat .github/... → allow (not .git)" || bad ".github cat not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'gh pr merge 1 --squash' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "gh pr merge --squash → still allow" || bad "normal merge not allowed: $OUT"
+# in-worktree symlink to an outside file → Read must ask (OS would follow the link out)
+ln -sf /etc/passwd "$REPO/secretlink" 2>/dev/null
+OUT=$(run_on "$(pl Read '' "$REPO/secretlink")")
+[ -z "$OUT" ] && ok "symlink escaping worktree → ask" || bad "symlink-escape Read auto-decided: $OUT"
+rm -f "$REPO/secretlink"
+
 # 6) PermissionRequest event uses the decision.behavior schema.
 OUT=$(run_on "$(pl Bash 'git status' '' PermissionRequest)")
 [ "$(beh "$OUT")" = "allow" ] && ok "PermissionRequest allow schema" || bad "PR allow schema wrong: $OUT"
