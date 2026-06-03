@@ -555,7 +555,7 @@ Before the first substantive edit in any session, Claude MUST:
    - (b) revert workspace to dashboard state (only if drift is uncommitted)
    - (c) operator manually resolves
 5. **Match → proceed** to next-action derivation per `Project_Roadmap_v1.md` §4.
-6. **Fixed-point carve-out** (per §12.2.1). If the dashboard's `workspace_state_hash` does NOT match current state, but the most recent merge commit on main is a terminating refresh PR (title matches `ops: roadmap status refresh post-PR-NN`), AND the dashboard hash matches `compute(state at merge_commit~1)` (the state immediately before that refresh-merge), the drift is the expected lag-by-one-commit per §12.2.1. Treat as MATCH; silently recompute and update the dashboard's stored hash against current HEAD; proceed. Do NOT spawn a new refresh PR.
+6. **Fixed-point carve-out** (per §12.2.1). If the dashboard's `workspace_state_hash` does NOT match current state, but the most recent merge commit on main is a terminating refresh PR (title **begins with** `ops: roadmap status refresh ` — suffix format-agnostic per §12.2.1), AND the dashboard hash matches `compute(state at merge_commit~1)` (the state immediately before that refresh-merge), the drift is the expected lag-by-one-commit per §12.2.1. Treat as MATCH; silently recompute and update the dashboard's stored hash against current HEAD; proceed. Do NOT spawn a new refresh PR.
 
 This audit is the load-bearing discipline. Skipping it = silent drift = the failure mode the roadmap was authored to prevent.
 
@@ -571,15 +571,15 @@ After any PR merges to main (whether merged by Claude or operator):
    - `in_flight` → remove merged PR, add any newly-opened PRs
    - `next_action` → re-derive per `Project_Roadmap_v1.md` §4
 3. If any R-NNN entry at `Project_Roadmap_v1.md` §5 closed at this PR, mark it `RESOLVED` and refresh `next_pointer` propagation.
-4. Commit as `ops: roadmap status refresh post-PR-NN`. Push.
+4. Commit with a title beginning `ops: roadmap status refresh ` (e.g. `…post-PR-NN` or `…post-#NN`; the §12.2.1 carve-out keys on the prefix, suffix format-free). Push.
 
 #### 12.2.1 Refresh PR termination clause (recursion-stopping fixed point)
 
 The §12.2 protocol applied naively recurses: a refresh PR (step 4) is itself a PR merge that triggers another §12.2 audit. This clause defines the fixed point.
 
 **Terminating refresh PR.** A PR is a terminating refresh iff:
-- Title matches the pattern `ops: roadmap status refresh post-PR-NN` exactly (no additional substantive verbs in the title), AND
-- The ONLY file changed is `.harness/roadmap_status.md`.
+- Title **begins with** `ops: roadmap status refresh ` — the `post-<NNN>` suffix format is FREE (`post-PR-NN`, `post-#NN`, `post-#NN/#NN`, optionally a short parenthetical). The §12.1 step-6 carve-out + the session-start hook key on this **prefix**, NOT a specific suffix format (so a one-commit-behind dashboard after any refresh is never mis-flagged as drift), AND
+- The ONLY file changed is `.harness/roadmap_status.md` (this content rule — not title-verb-purity — is what guarantees the PR is dashboard-only).
 
 **Termination semantics.**
 - Merging a terminating refresh PR does NOT trigger another §12.2 refresh PR.

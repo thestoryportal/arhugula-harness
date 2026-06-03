@@ -1873,7 +1873,7 @@ Actions where genuine human decision is required (not Claude judgment). Flagged 
    - `recently_completed` → prepend (R-NNN, PR-link)
    - `in_flight` → remove merged PR, add new opened PRs
    - `next_action` → recompute via §4 rule
-3. Commit the dashboard refresh as `ops: roadmap status refresh post-PR-NN`.
+3. Commit the dashboard refresh with a title beginning `ops: roadmap status refresh ` (e.g. `…post-PR-NN` or `…post-#NN`; the §12.2.1 carve-out + session-start hook key on the prefix, suffix format-free).
 4. Push.
 
 ### 7.3 Drift sources (catalogued so future-Claude recognizes them)
