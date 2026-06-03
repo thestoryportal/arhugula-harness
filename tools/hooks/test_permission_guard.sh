@@ -56,6 +56,21 @@ OUT=$(run_on "$(pl Bash 'git status' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "allow git status" || bad "git status not allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'git commit -m wip' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "allow git commit" || bad "git commit not allowed: $OUT"
+
+# 4b) Loop-control wrappers (U-HK-14/15) — the P1 regression. The defer-and-continue
+#     mechanism's RECORD step must be runnable in loop mode REGARDLESS of args, including a
+#     deferral REASON mentioning credentials/secret (the wrapper only appends a ledger row;
+#     it bypasses _bash_args_safe). If denied, the headless skip-set never populates and the
+#     loop re-attempts the same gated item every iteration. A raw chained `source … &&
+#     loop_defer …` (malformed + denied) must still NOT auto-allow.
+OUT=$(run_on "$(pl Bash "tools/loop/defer.sh R-300 'needs OpenAI credentials — built without it: mock fixture'" '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "allow defer.sh wrapper (even with 'credentials' in the reason)" || bad "defer.sh not allowed: $OUT"
+OUT=$(run_on "$(pl Bash "bash tools/loop/defer.sh R-410 'needs container runtime'" '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "allow 'bash tools/loop/defer.sh ...'" || bad "bash defer.sh not allowed: $OUT"
+OUT=$(run_on "$(pl Bash "tools/loop/halt.sh 'forward menu exhausted — 3 awaiting input'" '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "allow halt.sh wrapper (stand-down)" || bad "halt.sh not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'source tools/hooks/lib.sh && loop_defer R-1 x' '')")
+[ -z "$(dec "$OUT")" ] && ok "chained source+loop_defer NOT auto-allowed (falls to ask — the denied/malformed original)" || bad "chained source auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'bash tools/hooks/test_loop_lib.sh' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "allow hermetic test run" || bad "test run not allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'gh pr create --fill' '')")

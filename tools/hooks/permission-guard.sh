@@ -225,6 +225,16 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
     :  # chained / nested / redirected / destructive submode (incl. git commit --amend) → ask
   else
     TRIM=$(printf '%s' "$CMD" | sed 's/^[[:space:]]*//')
+    # Loop-control wrappers (U-HK-14/15): defer.sh / halt.sh are safe REGARDLESS of args —
+    # they only append a ledger row / touch .loop-halt and never resolve an arg as a path,
+    # so they bypass _bash_args_safe (whose secret/credentials keyword reject would
+    # otherwise block a perfectly safe deferral REASON like "needs OpenAI credentials").
+    # The control-operator rejection above still applies, so only a single clean invocation
+    # reaches here. These are the executable, allowlisted path the loop's defer-and-continue
+    # mechanism depends on (a raw `source … && loop_defer …` is denied + malformed).
+    if printf '%s' "$TRIM" | grep -Eq '^(bash[[:space:]]+)?tools/loop/(defer|halt)\.sh([[:space:]]|$)'; then
+      emit_allow
+    fi
     # Allowlist = commands that are safe REGARDLESS of their arguments (the dev/git arc
     # + pure builtins with no filesystem reach). Deliberately NOT here:
     #  - content readers / programmable filters (cat/head/tail/grep/rg/find/jq/sed/awk/
