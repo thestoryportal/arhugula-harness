@@ -113,6 +113,16 @@ OUT=$(run_on "$(pl Bash 'find . -name *.py' '')")
 OUT=$(run_on "$(pl Bash 'gh api repos/o/r' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "gh api GET → allow" || bad "gh api GET not allowed: $OUT"
 
+# 5f) Workspace-DISCARDING git commands must NOT auto-allow (codex P1) — they can erase
+#     uncommitted work and the deny-list only catches reset/rebase/force-push.
+for c in "git restore ." "git restore src/mod.py" "git checkout -- ." "git checkout -f main" "git checkout main"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
+done
+# but git checkout -b (branch creation, never discards) still auto-allows
+OUT=$(run_on "$(pl Bash 'git checkout -b feature/x' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git checkout -b → allow" || bad "git checkout -b not allowed: $OUT"
+
 # 6) PermissionRequest event uses the decision.behavior schema.
 OUT=$(run_on "$(pl Bash 'git status' '' PermissionRequest)")
 [ "$(beh "$OUT")" = "allow" ] && ok "PermissionRequest allow schema" || bad "PR allow schema wrong: $OUT"

@@ -49,8 +49,23 @@ loop_activate "headless runner (just loop), max ${MAX}${DRY:+ (dry-run)}"
 # run never leaks the .loop-active marker into the next interactive session — which would
 # silently leave the auto-approve hooks armed. Run-once (idempotent). On INT/TERM we must
 # also EXIT: a bare signal trap returns to the while loop and would launch more children.
+# Recursively SIGTERM a process and all its descendants. On a signal we MUST tear down
+# the in-flight `claude -p` child (launched with HARNESS_LOOP=1) and its subtree —
+# otherwise it keeps running unattended with auto-approval armed until its own timeout.
+_kill_tree() {
+  local p="$1" c
+  [ -n "$p" ] || return 0
+  for c in $(pgrep -P "$p" 2>/dev/null); do _kill_tree "$c"; done
+  kill -TERM "$p" 2>/dev/null
+}
 _CLEANED=0
-_loop_cleanup() { [ "$_CLEANED" = 1 ] && return 0; _CLEANED=1; loop_deactivate "headless runner exit"; echo "[loop] loop mode OFF."; }
+CHILD=""
+_loop_cleanup() {
+  [ "$_CLEANED" = 1 ] && return 0; _CLEANED=1
+  [ -n "$CHILD" ] && _kill_tree "$CHILD"
+  loop_deactivate "headless runner exit"
+  echo "[loop] loop mode OFF."
+}
 trap _loop_cleanup EXIT
 trap '_loop_cleanup; exit 130' INT
 trap '_loop_cleanup; exit 143' TERM
@@ -76,9 +91,14 @@ while [ "$i" -lt "$MAX" ]; do
   # --allowedTools — every tool flows through the U-HK-12 permission guard (allow safe /
   # deny dangerous / ask→deny-in-headless unknown). Passing bare `Bash` here would
   # pre-approve EVERY command and bypass the guard. NO --dangerously-skip-permissions.
+  # Run in the background + record the PID so a signal can kill the whole subtree
+  # (see _loop_cleanup / _kill_tree). `wait` is interruptible: a SIGINT/SIGTERM during
+  # the turn fires the trap, which kills CHILD and exits.
   HARNESS_LOOP=1 hook_bounded "${HARNESS_LOOP_TURN_TIMEOUT:-1800}" \
-    claude -p "$PROMPT" --permission-mode default || \
-    loop_log COMPLETED "iteration ${i} claude exited nonzero/bounded"
+    claude -p "$PROMPT" --permission-mode default &
+  CHILD=$!
+  wait "$CHILD" || loop_log COMPLETED "iteration ${i} claude exited nonzero/bounded"
+  CHILD=""
 done
 
 # Loop mode is cleared by the EXIT trap (_loop_cleanup) on every path; print the ledger

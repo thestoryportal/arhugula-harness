@@ -44,12 +44,14 @@ OUT=$(printf '{}' | HARNESS_LOOP=1 HARNESS_LOOP_MAX=2 CLAUDE_PROJECT_DIR="$REPO"
 [ ! -f "$REPO/.harness/.loop-iter" ] && ok "counter reset at cap" || bad "counter not reset"
 grep -q '| STOP | iteration cap' "$REPO/.harness/loop_status.md" && ok "cap logged to ledger" || bad "cap not logged"
 
-# 5) Halt marker → stand down (allow stop) + marker cleared.
+# 5) Halt marker → stand down (allow stop) + marker PRESERVED for the runner (codex P1:
+#    the in-session hook must not consume the gate signal the outer runner needs to see).
 : > "$REPO/.harness/.loop-halt"
 OUT=$(run_on)
 [ -z "$OUT" ] && ok "halt marker → allows stop" || bad "blocked despite halt: $OUT"
-[ ! -f "$REPO/.harness/.loop-halt" ] && ok "halt marker cleared" || bad "halt marker not cleared"
+[ -f "$REPO/.harness/.loop-halt" ] && ok "halt marker preserved for runner" || bad "halt marker was consumed"
 grep -q '| STOP | halt marker' "$REPO/.harness/loop_status.md" && ok "halt logged to ledger" || bad "halt not logged"
+rm -f "$REPO/.harness/.loop-halt"
 
 # 6) Non-numeric HARNESS_LOOP_MAX must not break the cap (codex P2): falls back to 25,
 #    so a counter ≥ 25 still stops instead of blocking forever.

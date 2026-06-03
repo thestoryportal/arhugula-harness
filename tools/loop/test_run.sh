@@ -82,6 +82,10 @@ wait "$RUNPID" 2>/dev/null
 # And the loop must NOT continue after the signal (codex P1): only the in-flight call ran.
 sleep 1
 [ "$(calls)" = "1" ] && ok "SIGTERM stops the loop (no further claude calls)" || bad "loop continued after SIGTERM: $(calls) calls"
+# And the in-flight claude child must be KILLED, not orphaned (codex P2: no loop-enabled
+# process left running with auto-approval armed).
+LEFT=$(pgrep -f "$REPO/bin/claude" 2>/dev/null | wc -l | tr -d ' ')
+[ "${LEFT:-0}" = "0" ] && ok "in-flight claude child killed on signal (no orphan)" || bad "orphaned claude child after signal: $LEFT"
 
 echo "----"
 echo "loop_run: $PASS passed, $FAIL failed"

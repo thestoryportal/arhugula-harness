@@ -44,10 +44,15 @@ MAX=${HARNESS_LOOP_MAX:-25}
 # out (→ false), so the loop would never hit the cap. Fall back to the safe default.
 [[ "$MAX" =~ ^[0-9]+$ ]] || MAX=25
 
-# 2) Genuine-gate halt marker → stand down (clear it so the next /loop-start is clean).
+# 2) Genuine-gate halt marker → stand down. LEAVE the marker in place: under the headless
+#    runner (U-HK-15), .loop-halt is created inside a `claude -p` child and the OUTER
+#    runner only observes it at its next iteration top. If this in-session hook deleted
+#    it, the runner would never see the gate and would keep launching sessions. The
+#    runner (or /loop-stop / the next /loop-start) clears it; here we only reset the
+#    turn counter and allow the stop.
 if [ -n "$HALT" ] && [ -f "$HALT" ]; then
-  loop_log STOP "halt marker present — loop standing down at a genuine gate"
-  rm -f "$HALT" "$ITERF" 2>/dev/null
+  loop_log STOP "halt marker present — standing down at a genuine gate (marker left for the runner)"
+  rm -f "$ITERF" 2>/dev/null
   exit 0
 fi
 
