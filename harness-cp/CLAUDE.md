@@ -16,8 +16,8 @@ CP posture per `Cross_Axis_Composition_Document_v2_17.md` §2.4: **largest cross
 
 | Artifact | Version | Role |
 |---|---|---|
-| `Spec_Control_Plane_v1_3.md` | v1.3 | Contract authority — 24 contracts C-CP-01 through C-CP-24 |
-| `Implementation_Plan_Control_Plane_v2_10.md` | v2.10 (7c-prerequisite status-reconciliation delta over v2.9; `RoleRoutingBinding` / `WorkloadRoutingOverride` Class 1 RESOLVED — operator-ratified R-2/W-2 schemas; U-CP-04 `RoutingManifest` upgraded PARTIAL-LAND → FULL-LAND. No signature, contract, or DAG change since v2.6) | Execution authority — 58 atomic units across 9 clusters and 9 topological levels (L0–L8) |
+| `Spec_Control_Plane_v1_30.md` | **v1.30 — canonical HEAD** (delta-only chain; this row's prior `v1.3` was the Phase-6.5 authoring-era pin, pre-dating the Phase-7 v1.4→v1.30 deltas — latest delta = §16.5.12 composer-signature collapse per Reading C. Per delta-only convention each version is canonical-at-authoring for its scope; the chain head is the current contract authority) | Contract authority — 24 contracts C-CP-01 through C-CP-24 *(authoring-era count; later deltas may have grown the enumeration — see the canonical spec)* |
+| `Implementation_Plan_Control_Plane_v2_31.md` | **v2.31 — canonical HEAD** (delta over v2.30; this row's prior `v2.10` was the authoring-era pin) | Execution authority — 58 atomic units across 9 clusters and 9 topological levels (L0–L8) *(authoring-era figures; see the canonical plan)* |
 
 ### 1.3 Scope inclusion — 9 clusters
 

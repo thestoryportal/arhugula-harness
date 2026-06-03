@@ -16,8 +16,8 @@ OD posture per `Cross_Axis_Composition_Document_v2_1.md` §2.1 (baseline) + `Cro
 
 | Artifact | Version | Role |
 |---|---|---|
-| `Spec_Operational_Discipline_v1_4.md` | v1.4 (delta over v1.3; v1.4 formalizes the C-OD-20 §20.1 `CollectorPlacement` 7-value enum + grows the §1.2 enum 6→7 — FF-2 resolution) | Contract authority — 23 contracts C-OD-01 through C-OD-23 |
-| `Implementation_Plan_Operational_Discipline_v2_11.md` | v2.11 (delta chain over v2.10/v2.9/v2.8/v2.7/v2.6; v2.8 = five Class 1 defects + F3 pinning; v2.9 = FF-2 U-OD-28; v2.10 = FF-3 U-OD-29 `SandboxTier` conformance; v2.11 = 7c-prereq Form A — OD-outbound cross-axis placeholder carrier IDs resolved) | Execution authority — 35 atomic units across 8 clusters (+ U-OD-00 pre-cluster) and 10 topological levels (L0–L9) |
+| `Spec_Operational_Discipline_v1_27.md` | **v1.27 — canonical HEAD** (delta-only chain; this row's prior `v1.4` was the Phase-6.5 authoring-era pin, pre-dating the Phase-7 v1.5→v1.27 deltas — latest delta = Phase-7 7b OD-3 gate-(a) closure. Per delta-only convention each version is canonical-at-authoring for its scope; the chain head is the current contract authority. The §4.1 body below already tracks v1.25–v1.27) | Contract authority — 23 contracts C-OD-01 through C-OD-23 *(authoring-era count; later deltas may have grown the enumeration — see the canonical spec)* |
+| `Implementation_Plan_Operational_Discipline_v2_27.md` | **v2.27 — canonical HEAD** (delta-only chain; this row's prior `v2.11` was the authoring-era pin) | Execution authority — 35 atomic units across 8 clusters (+ U-OD-00 pre-cluster) and 10 topological levels (L0–L9) *(authoring-era figures; see the canonical plan)* |
 
 ### 1.3 Scope inclusion
 
