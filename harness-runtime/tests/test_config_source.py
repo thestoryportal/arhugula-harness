@@ -43,11 +43,17 @@ def _minimum_required_overrides() -> dict[str, Any]:
 
 
 @pytest.fixture(autouse=True)
-def _clear_harness_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Strip every ``HARNESS_*`` var so a leaked dev-shell value can't pollute."""
+def _clear_harness_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Strip every ``HARNESS_*`` var so a leaked dev-shell value can't pollute, and
+    isolate CWD to a clean dir so an ambient ``harness.toml`` at the invocation
+    directory can't be auto-discovered (§3.7, Reading A) and pollute the no-config
+    tests. Tests that need a specific CWD ``monkeypatch.chdir`` again explicitly."""
     for key in list(os.environ):
         if key.startswith("HARNESS_"):
             monkeypatch.delenv(key, raising=False)
+    cwd_iso = tmp_path / "_cwd"
+    cwd_iso.mkdir()
+    monkeypatch.chdir(cwd_iso)
 
 
 # AC #1 — no env / no file / no CLI overrides composes to Pydantic defaults.
@@ -336,3 +342,49 @@ def test_secret_leaf_inside_provider_secrets_sub_table_still_caught(
         )
     assert "api_key" in str(excinfo.value)
     assert "ADR-F5" in str(excinfo.value)
+
+
+# §3.7 auto-discovery (Reading A — CWD). Closes the declared-but-unimplemented gap at
+# `.harness/class_1_fork_harness_toml_default_discovery_unimplemented.md` (A-4, Reading A).
+def test_discovers_cwd_harness_toml_when_config_omitted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "harness.toml").write_text(
+        '[runtime]\ntenant_id = "discovered"\n', encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    cfg = RuntimeConfigSource.load(cli_overrides=_minimum_required_overrides())
+    assert cfg.tenant_id == "discovered"
+
+
+def test_no_cwd_harness_toml_falls_back_to_env_and_cli(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # No harness.toml at CWD → discovery returns None → env+CLI-only (today's behavior).
+    monkeypatch.chdir(tmp_path)
+    cfg = RuntimeConfigSource.load(
+        cli_overrides=_minimum_required_overrides() | {"tenant_id": "cli-only"}
+    )
+    assert cfg.tenant_id == "cli-only"
+
+
+def test_explicit_config_takes_precedence_over_cwd_discovery(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "harness.toml").write_text('[runtime]\ntenant_id = "cwd"\n', encoding="utf-8")
+    explicit = tmp_path / "other.toml"
+    explicit.write_text('[runtime]\ntenant_id = "explicit"\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    cfg = RuntimeConfigSource.load(
+        config_file=explicit, cli_overrides=_minimum_required_overrides()
+    )
+    assert cfg.tenant_id == "explicit"
+
+
+def test_discover_default_config_helper(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert RuntimeConfigSource._discover_default_config() is None
+    (tmp_path / "harness.toml").write_text("[runtime]\n", encoding="utf-8")
+    found = RuntimeConfigSource._discover_default_config()
+    assert found is not None
+    assert found.name == "harness.toml"
