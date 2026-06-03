@@ -115,6 +115,14 @@ _require-openai:
 mvp-r300-cross-family: _require-anthropic _require-openai
     uv run pytest harness-runtime/tests/integration/test_r300_cross_family_fallback_e2e.py::test_r300_live_cross_family_fallback_against_real_providers -v
 
+# R-300 (B-2) live OLLAMA exercise: same-family ollama fallback (invalid-model ->
+# llama3.2:3b) through api.run, exercising the local-open-weight provider end to
+# end. FREE — zero-token, zero-secret (local ollama daemon at 127.0.0.1:11434;
+# `ollama list` auto-starts it). Skips cleanly if the daemon is unreachable. No
+# key required (anthropic + openai degrade-optional).
+mvp-r300-ollama:
+    uv run pytest harness-runtime/tests/integration/test_r300_cross_family_fallback_e2e.py::test_r300_live_ollama_provider_fallback_exercise -v
+
 # ─── mechanism γ — multi-process orchestration (currently deferred) ────────
 #
 # AC #5 (SIGINT drain) + AC #6 (daemon-concurrent two clients) are marked
