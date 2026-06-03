@@ -23,7 +23,7 @@ cd "$PROJECT_DIR" || exit 0
 DASH=".harness/roadmap_status.md"
 [ -f "$DASH" ] || exit 0
 
-NEXT=$(grep -oE '\*\*`R-[A-Za-z0-9-]+`\*\*' "$DASH" 2>/dev/null | head -1 | tr -d '`*')
+NEXT=$(hook_roadmap_next "$DASH")
 
 # Cheap local drift proxy (no network): dashboard's pinned git_head vs local HEAD.
 DHEAD=$(grep -E '\| *`git_head`' "$DASH" 2>/dev/null | head -1 | grep -oE '[a-f0-9]{8}' | head -1)

@@ -15,14 +15,19 @@ REPO="$(mktemp -d)"
 trap 'rm -rf "$REPO"' EXIT
 git -C "$REPO" init -q -b main; git -C "$REPO" config user.email t@t.t; git -C "$REPO" config user.name t
 
-# Fake ruff: emits a finding for files containing # LINT_BAD.
+# Fake ruff: emits a finding (stdout, exit 1) for files containing # LINT_BAD; for
+# files containing # RUFF_DIES it simulates a runner that cannot run (stderr, exit 2,
+# NO stdout) — the fail-open case. Clean files → exit 0.
 mkdir -p "$REPO/bin"
 cat > "$REPO/bin/ruff" <<'EOF'
 #!/usr/bin/env bash
+rc=0
 for f in "$@"; do
-  [ -f "$f" ] && grep -q '# LINT_BAD' "$f" 2>/dev/null && echo "$f:1:1: F401 fake finding"
+  [ -f "$f" ] || continue
+  if grep -q '# RUFF_DIES' "$f" 2>/dev/null; then echo "ruff: internal error" >&2; exit 2; fi
+  if grep -q '# LINT_BAD' "$f" 2>/dev/null; then echo "$f:1:1: F401 fake finding"; rc=1; fi
 done
-exit 0
+exit $rc
 EOF
 chmod +x "$REPO/bin/ruff"
 
@@ -68,6 +73,14 @@ mkdir -p "$REPO/venv"; printf 'import os  # LINT_BAD\n' > "$REPO/venv/ignored.py
 OUT=$(run false)
 [ -z "$OUT" ] && ok "git-ignored .py excluded from gate" || bad "ignored .py linted: $OUT"
 rm -rf "$REPO/venv" "$REPO/.gitignore"
+
+# 7) lint runner ERRORS with no findings (exit 2, empty stdout) → block VISIBLY,
+#    not a silent fail-open (P2 regression). The gate must surface "could not run".
+printf 'import os  # RUFF_DIES\n' > "$REPO/mod.py"
+OUT=$(run false)
+echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "runner failure → blocks (no fail-open)" || bad "runner failure fell open (P2): $OUT"
+echo "$OUT" | jq -e '.reason | test("could not run the lint gate")' >/dev/null 2>&1 && ok "block reason names the runner failure" || bad "reason missing runner-failure text: $OUT"
+git -C "$REPO" checkout -q -- mod.py
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

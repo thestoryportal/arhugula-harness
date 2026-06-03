@@ -40,7 +40,7 @@ COMPUTED=$(hook_state_hash "$HEAD" "$PRS" "$FORKS" "$BATCH")
 
 # Extract stored hash + next_action from dashboard.
 DASHBOARD_HASH=$(grep '`workspace_state_hash`' "$DASHBOARD" 2>/dev/null | head -1 | grep -oE '[a-f0-9]{12}' | head -1)
-NEXT=$(grep -oE '\*\*`R-[A-Za-z0-9-]+`\*\*' "$DASHBOARD" 2>/dev/null | head -1 | tr -d '`*')
+NEXT=$(hook_roadmap_next "$DASHBOARD")
 
 PR_COUNT=$([ -z "$PRS" ] && echo 0 || echo "$PRS" | tr ',' '\n' | grep -c .)
 

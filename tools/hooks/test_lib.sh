@@ -57,6 +57,26 @@ git -C "$REPO" init -q -b main; git -C "$REPO" config user.email t@t.t; git -C "
 # hook_default_branch — falls back to main when no origin/HEAD symref.
 eq "hook_default_branch fallback main" "$(cd "$REPO" && hook_default_branch)" "main"
 
+# hook_roadmap_next — scopes to the `## Next action` section, so a STALE bolded R-id
+# in a later narrative section does NOT shadow the live pointer (the whole-file
+# head -1 bug). Fixture mirrors the real dashboard: a backticked live pointer in the
+# section + a strict `**`R-OLD`**` token AFTER the `---` rule.
+DASHF="$REPO/dash.md"
+cat > "$DASHF" <<'EOF'
+# dash
+| `git_head` | `abc12345` (main) |
+## Next action
+> directive prose; pick the highest-value item `R-410..R-440` then `R-300-x`.
+---
+## Recently completed
+**`R-OLD-stale-narrative`** was closed earlier (must NOT be picked).
+EOF
+eq "hook_roadmap_next picks live section pointer" "$(hook_roadmap_next "$DASHF")" "R-410..R-440"
+# Absent section / file → empty (callers default to '?').
+eq "hook_roadmap_next empty on missing file" "$(hook_roadmap_next "$REPO/nope.md")" ""
+printf '# d\nno next-action heading here\n' > "$DASHF"
+eq "hook_roadmap_next empty when no section" "$(hook_roadmap_next "$DASHF")" ""
+
 # loop_mode_active — off by default; on via env; on via marker file.
 ( cd "$REPO"; unset HARNESS_LOOP; CLAUDE_PROJECT_DIR="$REPO" loop_mode_active ) \
   && bad "loop_mode_active true with no gate" || ok "loop_mode_active off by default"

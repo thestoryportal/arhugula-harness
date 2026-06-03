@@ -29,7 +29,7 @@ TRIGGER=$(hook_json "$PAYLOAD" '.trigger')
 TS=$(date -u +%Y%m%d-%H%M%S 2>/dev/null || echo now)
 HEAD=$(git rev-parse --short HEAD 2>/dev/null || echo "?")
 BRANCH=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "?")
-NEXT=$(grep -oE '\*\*`R-[A-Za-z0-9-]+`\*\*' .harness/roadmap_status.md 2>/dev/null | head -1 | tr -d '`*')
+NEXT=$(hook_roadmap_next .harness/roadmap_status.md)
 PRS=$(hook_bounded 5 gh pr list --state open --json number,title --jq '.[]|"#\(.number) \(.title)"' 2>/dev/null | head -10)
 DIRTY=$(git status --short 2>/dev/null | head -30)
 

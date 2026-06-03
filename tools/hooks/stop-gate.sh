@@ -41,6 +41,10 @@ CHANGED=$( {
 [ -z "$CHANGED" ] && exit 0   # no python changes → allow stop
 
 # Lint just the changed files (fast). Bounded. Prefer ruff on PATH, else uv run ruff.
+# Capture stderr + exit status so a runner that CANNOT run (ruff+uv both absent, or
+# ruff exits on an internal error / timeout) is surfaced as a VISIBLE block rather
+# than a silent fall-through that disables the gate on a fresh/unsynced machine.
+ERRF=$(mktemp 2>/dev/null) || ERRF=""
 # shellcheck disable=SC2086
 LINT=$(hook_bounded 30 bash -c '
   if command -v ruff >/dev/null 2>&1; then
@@ -48,11 +52,22 @@ LINT=$(hook_bounded 30 bash -c '
   else
     uv run --quiet ruff check --output-format=concise "$@"
   fi
-' _ $CHANGED 2>/dev/null)
+' _ $CHANGED 2>"${ERRF:-/dev/null}")
+RC=$?
+ERR=""; [ -n "$ERRF" ] && { ERR=$(cat "$ERRF" 2>/dev/null); rm -f "$ERRF"; }
 
-[ -z "$LINT" ] && exit 0   # clean → allow stop
+if [ -n "$LINT" ]; then
+  # Findings present (any exit code) → block so Claude fixes the lint before stopping.
+  REASON="[stop-gate] ruff lint failed on changed files — fix before stopping:
+${LINT}"
+elif [ "${RC:-0}" -ne 0 ]; then
+  # No findings but the runner failed to execute → surface it (don't fail open: the
+  # gate silently vanishing on a machine without ruff/uv is the failure mode here).
+  REASON="[stop-gate] could not run the lint gate (exit ${RC}; ruff/uv may be unavailable or the run timed out). Install ruff or run \`uv sync\` so lint-before-stop is active.${ERR:+ stderr: ${ERR}}"
+else
+  exit 0   # clean (ran, zero exit, no findings) → allow stop
+fi
 
-# Block the stop so Claude fixes the lint before finishing (continues the turn).
-jq -nc --arg r "[stop-gate] ruff lint failed on changed files — fix before stopping:
-${LINT}" '{"decision":"block","reason":$r}'
+# Block the stop (continues the turn so Claude resolves the lint / runner issue).
+jq -nc --arg r "$REASON" '{"decision":"block","reason":$r}'
 exit 0

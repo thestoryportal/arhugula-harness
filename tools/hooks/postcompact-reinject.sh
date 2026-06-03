@@ -21,7 +21,7 @@ PROJECT_DIR=$(hook_project_dir)
 [ -z "$PROJECT_DIR" ] && exit 0
 cd "$PROJECT_DIR" || exit 0
 
-NEXT=$(grep -oE '\*\*`R-[A-Za-z0-9-]+`\*\*' .harness/roadmap_status.md 2>/dev/null | head -1 | tr -d '`*')
+NEXT=$(hook_roadmap_next .harness/roadmap_status.md)
 HEAD=$(git rev-parse --short HEAD 2>/dev/null || echo "?")
 BRANCH=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "?")
 
