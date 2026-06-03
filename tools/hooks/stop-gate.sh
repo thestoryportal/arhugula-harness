@@ -30,8 +30,14 @@ PAYLOAD=$(hook_read_stdin)
 ACTIVE=$(hook_json "$PAYLOAD" '.stop_hook_active')
 [ "$ACTIVE" = "true" ] && exit 0
 
-# Changed .py files vs HEAD (staged + unstaged; exclude deletions).
-CHANGED=$(git diff --name-only --diff-filter=d HEAD 2>/dev/null | grep -E '\.py$' || true)
+# Changed .py files vs HEAD: tracked (staged + unstaged, exclude deletions) PLUS
+# untracked-but-not-ignored. A new .py Claude just wrote isn't in `git diff HEAD`
+# until staged, so without the ls-files arm the most common edit path (create a
+# fresh module) would bypass the lint-before-stop gate entirely.
+CHANGED=$( {
+  git diff --name-only --diff-filter=d HEAD 2>/dev/null
+  git ls-files --others --exclude-standard 2>/dev/null
+} | grep -E '\.py$' | sort -u || true)
 [ -z "$CHANGED" ] && exit 0   # no python changes → allow stop
 
 # Lint just the changed files (fast). Bounded. Prefer ruff on PATH, else uv run ruff.

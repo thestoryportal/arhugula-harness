@@ -39,11 +39,22 @@ dash "deadbeef"
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "possible drift" && ok "flags drift on HEAD mismatch" || bad "no drift flag: $OUT"
 
-# 3) HEAD mismatch but last commit is a terminating refresh → no drift (§12.2.1).
-git -C "$REPO" commit -q --allow-empty -m "ops: roadmap status refresh post-#1 (#2)"
+# 3) HEAD mismatch but last commit is a GENUINE terminating refresh (refresh title
+#    AND dashboard-only changed file) → no drift (§12.2.1 both-conditions).
 dash "deadbeef"
+git -C "$REPO" add .harness/roadmap_status.md
+git -C "$REPO" commit -q -m "ops: roadmap status refresh post-#1 (#2)"
 OUT=$(run)
-printf '%s' "$OUT" | grep -q "drift" && bad "drift flagged despite refresh commit" || ok "refresh commit exempt from drift"
+printf '%s' "$OUT" | grep -q "drift" && bad "drift flagged despite genuine dashboard-only refresh" || ok "genuine dashboard-only refresh exempt from drift"
+
+# 4) Refresh-TITLED commit that ALSO touches a non-dashboard file → NOT exempt
+#    (§12.2.1 requires dashboard-only; title-only matching would be a false negative).
+dash "deadbeef"
+echo "x" > "$REPO/other.txt"
+git -C "$REPO" add .harness/roadmap_status.md other.txt
+git -C "$REPO" commit -q -m "ops: roadmap status refresh post-#3 (#4)"
+OUT=$(run)
+printf '%s' "$OUT" | grep -q "possible drift" && ok "mis-titled substantive commit still flags drift" || bad "drift suppressed on title-only match (P3 regression): $OUT"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

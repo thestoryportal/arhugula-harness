@@ -54,5 +54,20 @@ git -C "$REPO" checkout -q -- mod.py
 OUT=$(run false)
 [ -z "$OUT" ] && ok "no change → allows stop" || bad "blocked with no change: $OUT"
 
+# 5) UNTRACKED (never git-added) .py with a lint error → block (P1 regression:
+#    git diff HEAD misses untracked files; ls-files --others arm must catch them).
+printf 'import sys  # LINT_BAD\n' > "$REPO/fresh.py"
+OUT=$(run false)
+echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "blocks on untracked .py lint failure" || bad "untracked .py bypassed gate (P1): $OUT"
+rm -f "$REPO/fresh.py"
+
+# 6) untracked but git-ignored .py → not linted (ls-files --others --exclude-standard
+#    respects .gitignore), so a clean tree allows stop.
+printf 'venv/\n' > "$REPO/.gitignore"
+mkdir -p "$REPO/venv"; printf 'import os  # LINT_BAD\n' > "$REPO/venv/ignored.py"
+OUT=$(run false)
+[ -z "$OUT" ] && ok "git-ignored .py excluded from gate" || bad "ignored .py linted: $OUT"
+rm -rf "$REPO/venv" "$REPO/.gitignore"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

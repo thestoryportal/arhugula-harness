@@ -39,5 +39,17 @@ grep -q "max_output_tokens" "$LOG" && ok "StopFailure token-cap logged" || bad "
 while IFS= read -r line; do echo "$line" | jq -e . >/dev/null || { bad "invalid JSON row: $line"; break; }; done < "$LOG"
 ok "all log rows valid JSON"
 
+# 5) session-scoped recurrence (P3 regression): the same sig in a NEW session must
+#    NOT inherit the prior session's count. Fresh log; two distinct session_ids.
+: > "$LOG"
+S1='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"e","session_id":"sess-A"}'
+S2='{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error_type":"e","session_id":"sess-B"}'
+run "$S1" >/dev/null                       # sess-A count=1
+OUT=$(run "$S2")                           # sess-B first occurrence → count=1, no nudge
+printf '%s' "$OUT" | grep -q "recurring" && bad "cross-session count leaked (P3): $OUT" || ok "new session does not inherit prior count"
+OUT=$(run "$S2")                           # sess-B second occurrence → count=2 → nudge
+printf '%s' "$OUT" | grep -q "recurring failure (2x" && ok "same-session recurrence still nudges at 2" || bad "same-session nudge missing: $OUT"
+[ "$(grep -c '"session":"sess-B"' "$LOG")" = "2" ] && ok "rows tagged with session_id" || bad "session_id not recorded"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

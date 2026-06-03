@@ -30,10 +30,19 @@ DHEAD=$(grep -E '\| *`git_head`' "$DASH" 2>/dev/null | head -1 | grep -oE '[a-f0
 LHEAD=$(git rev-parse HEAD 2>/dev/null | head -c 8)
 DFLAG=""
 if [ -n "$DHEAD" ] && [ -n "$LHEAD" ] && [ "$DHEAD" != "$LHEAD" ]; then
+  # A terminating refresh commit makes a one-ahead local HEAD expected (§12.2.1) — not
+  # drift. §12.2.1 requires BOTH (a) the reserved title prefix AND (b) the ONLY changed
+  # file is the dashboard. Keying on the title alone (as before) would let a substantive
+  # commit mis-titled with the reserved prefix silently suppress a real drift warning —
+  # the exact false-negative post-merge-refresh.sh guards against. Require both here too.
   LAST=$(git log -1 --format=%s 2>/dev/null)
-  # A terminating refresh commit makes a one-ahead local HEAD expected (§12.2.1) — not drift.
-  echo "$LAST" | grep -qE '^ops: roadmap status refresh ' \
-    || DFLAG=" [possible drift: local HEAD ${LHEAD} != dashboard ${DHEAD}; run the §12.1 audit]"
+  EXEMPT=""
+  if echo "$LAST" | grep -qE '^ops: roadmap status refresh '; then
+    CHANGED_FILES=$(git show --name-only --pretty=format: HEAD 2>/dev/null | grep -v '^$' | sort -u)
+    [ "$CHANGED_FILES" = ".harness/roadmap_status.md" ] && EXEMPT="1"
+  fi
+  [ -z "$EXEMPT" ] \
+    && DFLAG=" [possible drift: local HEAD ${LHEAD} != dashboard ${DHEAD}; run the §12.1 audit]"
 fi
 
 hook_emit "UserPromptSubmit" "[roadmap] next=${NEXT:-?}${DFLAG}"

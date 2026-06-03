@@ -2,8 +2,11 @@
 # PreCompact checkpoint — fires before context compaction. Writes a lightweight
 # state snapshot to .harness/.checkpoints/ so the essentials survive compaction
 # (U-HK-06 re-injects it after). A safety-net complement to the richer /context-save
-# skill, not a replacement. Gitignored — never dirties the tree. Wired with
-# "async": true so it never blocks compaction.
+# skill, not a replacement. Gitignored — never dirties the tree. Wired SYNCHRONOUSLY
+# (not async): PostCompact reinject reads precompact-latest.md, so the write must
+# finish before compaction completes or the snapshot races its own reader and the
+# in-flight context is lost. The one slow call (gh pr list) is hook_bounded 5, so
+# the synchronous cost is capped at a few seconds.
 #
 # Trigger: PreCompact, matcher "manual"|"auto" (distinguishes /compact from auto).
 

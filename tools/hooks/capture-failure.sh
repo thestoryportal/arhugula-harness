@@ -26,15 +26,21 @@ PAYLOAD=$(hook_read_stdin)
 EVENT=$(hook_json "$PAYLOAD" '.hook_event_name')
 TOOL=$(hook_json "$PAYLOAD" '.tool_name')
 ERRTYPE=$(hook_json "$PAYLOAD" '.error_type')
+SESSION=$(hook_json "$PAYLOAD" '.session_id')
+[ -z "$SESSION" ] && SESSION="unknown"
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
-SIG="${EVENT}:${TOOL}:${ERRTYPE}"   # recurrence key
+SIG="${EVENT}:${TOOL}:${ERRTYPE}"   # recurrence key (semantic, for display)
 
-ROW=$(jq -nc --arg ts "$TS" --arg ev "$EVENT" --arg tool "$TOOL" --arg et "$ERRTYPE" --arg sig "$SIG" \
-  '{ts:$ts,event:$ev,tool:$tool,error_type:$et,sig:$sig}' 2>/dev/null) || exit 0
+ROW=$(jq -nc --arg ts "$TS" --arg ev "$EVENT" --arg tool "$TOOL" --arg et "$ERRTYPE" --arg sig "$SIG" --arg sess "$SESSION" \
+  '{ts:$ts,event:$ev,tool:$tool,error_type:$et,sig:$sig,session:$sess}' 2>/dev/null) || exit 0
 printf '%s\n' "$ROW" >> "$LOG" 2>/dev/null || exit 0
 
-# Recurrence: count rows with this signature. >=2 (cardinality, per §12.5.1) → nudge.
-COUNT=$(grep -cF "\"sig\":\"$SIG\"" "$LOG" 2>/dev/null || echo 0)
+# Recurrence: count rows with this signature WITHIN THE CURRENT SESSION. The log is a
+# gitignored append-only file that persists across sessions in the same worktree, so
+# an unscoped count would report the first repeat of an old failure as "2x this
+# session" on a fresh open. Scoping on session_id keeps the "this session" claim true.
+# >=2 (cardinality, per §12.5.1) → nudge.
+COUNT=$(grep -F "\"sig\":\"$SIG\"" "$LOG" 2>/dev/null | grep -cF "\"session\":\"$SESSION\"" || echo 0)
 if [ "$EVENT" = "PostToolUseFailure" ] && [ "${COUNT:-0}" -ge 2 ]; then
   hook_emit "PostToolUseFailure" "[session-learning] recurring failure (${COUNT}x this session): ${SIG}. Per CLAUDE.md §12.5.1 (cardinality >=2) consider a memory entry or a fix — see .harness/session-issues.jsonl."
 fi
