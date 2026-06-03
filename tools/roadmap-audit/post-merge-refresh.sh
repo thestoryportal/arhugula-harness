@@ -49,7 +49,13 @@ DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/de
 TIMEOUT_BIN=""
 command -v timeout  >/dev/null 2>&1 && TIMEOUT_BIN="timeout 6"
 command -v gtimeout >/dev/null 2>&1 && TIMEOUT_BIN="gtimeout 6"
-[ -n "$TIMEOUT_BIN" ] && $TIMEOUT_BIN git fetch --quiet --no-tags origin "$DEFAULT_BRANCH" >/dev/null 2>&1 || true
+# Fetch ALWAYS — even without a timeout binary (stock macOS ships neither `timeout`
+# nor `gtimeout`). `gh pr merge` advances GitHub but not the local origin ref, so
+# skipping the fetch leaves ORIGIN_HEAD at the pre-merge SHA and the hook never
+# fires (inert). The wrapper is used when available; when $TIMEOUT_BIN is empty it
+# expands to a plain `git fetch`. (Bounded by git's own connect timeout; the prior
+# `gh pr merge` already required network, so a fresh hang here is unlikely.)
+$TIMEOUT_BIN git fetch --quiet --no-tags origin "$DEFAULT_BRANCH" >/dev/null 2>&1 || true
 
 # --- Did origin actually advance past the dashboard's pinned head? -------------
 # `gh pr merge` advances the REMOTE; the local checkout lags until pulled, so we
@@ -77,8 +83,15 @@ fi
 # value is correct before the local checkout is fast-forwarded.
 PRS=$(gh pr list --state open --json number,headRefName \
         --jq '. | sort_by(.number) | map("\(.number):\(.headRefName)") | join(",")' 2>/dev/null || echo "")
-FORKS=$(ls .harness/class_1_fork_*.md .harness/class_2_fork_*.md 2>/dev/null | wc -l | tr -d ' ')
-BATCH=$(ls .harness/phase-7d-retirement-events-batch-*.md 2>/dev/null | sort -V | tail -1)
+# Read FORKS + BATCH from the MERGED ref, not the pre-merge local working tree.
+# `gh pr merge` advances the remote but not the local checkout, so reading these
+# inputs via `ls` would pair pre-merge fork/batch state with the post-merge
+# ORIGIN_HEAD — yielding a hash that won't match the next SessionStart audit
+# (which reads them post-fast-forward), producing a false drift report. The
+# git-ls-tree path format (`.harness/<name>`) matches the SessionStart `ls` path
+# format, so the two hashes agree when the trees agree.
+FORKS=$(git ls-tree --name-only "$COMPARE_REF" .harness/ 2>/dev/null | grep -cE '/class_[12]_fork_.*\.md$')
+BATCH=$(git ls-tree --name-only "$COMPARE_REF" .harness/ 2>/dev/null | grep -E '/phase-7d-retirement-events-batch-.*\.md$' | sort -V | tail -1)
 COMPUTED=$(printf '%s|%s|%s|%s' "$ORIGIN_HEAD" "$PRS" "$FORKS" "$BATCH" | shasum -a 256 | head -c 12)
 
 emit "[ROADMAP] substantive merge detected (origin/${DEFAULT_BRANCH} @ ${ORIGIN_HEAD}: \"${ORIGIN_TITLE}\"). A terminating refresh is owed per §12.2 (Hook A will NOT catch its own merge). Steps: (1) git -C \"$PROJECT_DIR\" fetch && git merge --ff-only origin/${DEFAULT_BRANCH}; (2) update ${DASHBOARD}: workspace_state_hash=${COMPUTED}, git_head=${ORIGIN_HEAD}, last_refreshed=now, prepend recently_completed, re-derive next_action; (3) commit title prefix 'ops: roadmap status refresh ' (dashboard-only → §12.2.1 fixed point, no recursion)."

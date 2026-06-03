@@ -80,6 +80,25 @@ else
   bad "substantive advance did not emit expected reminder: $OUT"
 fi
 
+# 5) [P1 regression — Codex finding] hash inputs (FORKS/BATCH) must come from the
+#    MERGED ref, not the pre-merge local tree. Add a fork doc in a NEW commit C4
+#    (absent at the dashboard pin C1) and assert the emitted hash counts it (FORKS=1),
+#    i.e. equals the hash recomputed from C4's tree — and is NOT the FORKS=0 hash.
+echo "x" > "$REPO/.harness/class_1_fork_regression.md"
+git -C "$REPO" add -A; git -C "$REPO" commit -qm "feat(y): add a fork doc (#103)"
+C4=$(git -C "$REPO" rev-parse HEAD | head -c 8)
+# Expected hash with the recipe `ORIGIN_HEAD|PRS|FORKS|BATCH` — fixture has no
+# GitHub remote (PRS empty) and no batch files (BATCH empty); FORKS must be 1.
+EXP_OK=$(printf '%s|%s|%s|%s'  "$C4" "" "1" "" | shasum -a 256 | head -c 12)
+EXP_BAD=$(printf '%s|%s|%s|%s' "$C4" "" "0" "" | shasum -a 256 | head -c 12)
+OUT=$(run "$MERGE_CMD" "$C4")
+GOT=$(printf '%s' "$OUT" | grep -oE 'workspace_state_hash=[a-f0-9]{12}' | head -1 | cut -d= -f2)
+if [ "$GOT" = "$EXP_OK" ] && [ "$GOT" != "$EXP_BAD" ]; then
+  ok "hash reads FORKS from the merged ref (P1 fix: got=$GOT == merged-ref hash, != pre-merge hash)"
+else
+  bad "P1 regression: got=$GOT expected=$EXP_OK (pre-merge-would-be=$EXP_BAD)"
+fi
+
 echo "---"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
