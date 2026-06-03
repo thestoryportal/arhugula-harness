@@ -12,6 +12,19 @@
         ]
       }
     ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/precompact-checkpoint.sh",
+            "async": true,
+            "statusMessage": "Checkpointing before compaction..."
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "*",

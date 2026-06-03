@@ -84,3 +84,6 @@ dashboard-design/frontend-design/
 # 4-skill loop run logs + generated design-candidate HTML (regenerable outputs).
 tools/dashboard/live-auto/_skillchain-logs/
 tools/dashboard/candidates/
+
+# Hook-written local checkpoints (U-HK-05 pre-compaction snapshots)
+.harness/.checkpoints/
