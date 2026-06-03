@@ -707,7 +707,8 @@ Before authoring against a memory or checkpoint claim:
 
 | Discipline | When |
 |---|---|
-| **`advisor()` at decision-forks + pre-done** | Before committing to an interpretation/approach, and before declaring done. Single stronger reviewer on the full transcript; value is front-loaded. Skip on mechanical steps + repeated calls on a settled path. |
+| **`advisor()` at decision-forks + pre-done** (transcript-aware half) | Before committing to an interpretation/approach, and before declaring done. Single stronger reviewer on the **full transcript** — the one reviewer that sees the whole session context; value is front-loaded. Skip on mechanical steps + repeated calls on a settled path. Pairs with Codex below: the two are **decorrelated** (advisor = Claude-on-the-transcript; Codex = out-of-family on the artifact) — the strongest signal is when they **disagree** (surface it). |
+| **`just codex-review` as the default out-of-family code/diff reviewer** (artifact half) | The default reviewer for a concrete diff/artifact pre-merge — `just codex-review` (gpt-5.5 on the operator's ChatGPT subscription, $0 metered, X-AL-1 H_E dev tooling, NOT H_T's OpenAI provider). It does NOT replace `advisor()` — it complements it (R-600 division of labor): Codex catches what Claude-reviewing-Claude misses (decorrelated blind spots) but has **no transcript**, so it cannot judge the session-context decisions advisor owns. Drive a high-blast-radius diff (hooks, permission guard, governance docs) through it to convergence; it earned its keep on Wave 1/2 (`[[hooks-codex-pilots-decorrelation-validated]]`). `_require-codex-subscription` fails loud on a stale login — no silent metered fallback. |
 | **Completeness check before claiming "sufficient"** | Whenever about to assert "X closes/satisfies Y" — *especially* "this is the last gap." Verify **by execution** (run the path / e2e), not unit tests. (The 2026-06-01 AC#2 arc undercounted the gap set TWICE here: a green-unit-tested converter was unreachable through the bootstrap; the "two-gap" model was really five.) |
 | **Pre-merge adversarial review** | Any `design-substrate/**` amendment or Phase 7 impl arc against cleared spec/plan → red-team it BEFORE merge (per §10.9), not after. |
 | **Empirical cite-grounding** | Every cite (file:line, §section, symbol) verified at session-time — never recall. (§10.4.) A phantom cite I *authored* this session (§14.9.7 deferring the resolver) was caught only by re-grounding. |
@@ -718,7 +719,8 @@ Before authoring against a memory or checkpoint claim:
 | Mechanism | Use when | NOT for | Cost |
 |---|---|---|---|
 | **Solo** (just Claude) | Mechanical / linear work (spec authoring, impl edits, test writing, back-flow docs); single-fact lookups; follow-ups dictated by tool output | High-stakes design forks; broad audits | cheapest |
-| **`advisor()`** | Decision-forks; stuck; change-of-approach; pre-done sanity (§13.1) | Mechanical steps; repeat calls on a settled path | cheap (one call) |
+| **`advisor()`** | Decision-forks; stuck; change-of-approach; pre-done sanity (§13.1). The **transcript-aware** reviewer | Mechanical steps; repeat calls on a settled path | cheap (one call) |
+| **`just codex-review`** (out-of-family Codex; §13.1) | **Default reviewer for a concrete diff/artifact** pre-merge — high-blast-radius changes (hooks, guards, governance docs). Decorrelated from advisor; pairs with it, does not replace it. Subscription auth, $0 | Pure design/strategy forks with no diff yet (use advisor/council); anything needing transcript context | cheap ($0 subscription; ~1 call/round) |
 | **Council** (design-phase; §10.7 + §10.9) | A **design** decision (authoring/revising ADR/spec/plan) with a **nameable multi-domain tension** between 2+ voices (security / blast-radius / observability / cost / reliability / eval-ability / HITL-local-first). Convene **dyadic (2 voices)** by default | Phase 7 impl; single-axis decisions; tensions you can't name in advance (→ single voice + `advisor()`) | moderate (one model call) |
 | **Adversarial reviewer** (skill; §10.9) | Pre-merge red-team of a *completed* design-substrate amendment or impl arc | In-flight authoring | moderate |
 | **Workflow** (multi-agent fan-out; **opt-in** per the Workflow tool rule) | Broad parallelizable audits/sweeps; exhaustive discovery; independent verification of a high-stakes finding; large migrations | Linear/interdependent impl; mechanical edits; anything one context can hold | highest (latency + tokens) — **flag + get a green-light before deploying** |
@@ -734,7 +736,8 @@ The resolver Reading A-vs-B decision (identity resolver / *vacuous* floor **vs**
 
 ### 13.5 Cross-references
 
-- Council activation + standing posture: §10.7 + §10.9. Voices at `.claude/skills/council/c1..c11` + `council-orchestrator`.
+- Council activation + standing posture: §10.7 + §10.9. Voices at `.claude/skills/council/c1..c11` + `council-orchestrator`. Optional out-of-family **Codex decorator** on a convened tension (U-HK-19).
+- Out-of-family review: `just codex-review` / `just codex-review-uncommitted` (justfile); pilot record `R-600-codex-out-of-family-review`; division-of-labor-with-advisor ratified 2026-06-03 (U-HK-18); `[[hooks-codex-pilots-decorrelation-validated]]`.
 - `advisor()` / memory / checkpoint composition: §12.5.
 - Posture (design-phase / Phase 7 / mode-agnostic): §11.
 - Workflow tool opt-in rule + quality patterns: the Workflow tool description.
