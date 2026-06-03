@@ -34,6 +34,16 @@
             "statusMessage": "Checking roadmap refresh..."
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/postedit-lint.sh",
+            "statusMessage": "Linting edited file..."
+          }
+        ]
       }
     ]
   }
