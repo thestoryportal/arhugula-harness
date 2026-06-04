@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `4c1b94277809` |
-| `last_refreshed` | 2026-06-04T07:04:45-06:00 |
-| `git_head` | `560afa3f` (main) — `feat(tools): semantic overlay — spec ↔ code ↔ CXA-seam ↔ substitution (R-IF-112) (#291)` |
+| `workspace_state_hash` | `6b5e40c263fe` |
+| `last_refreshed` | 2026-06-04T07:12:00-06:00 |
+| `git_head` | `ea3fa989` (main) — `ops(dashboard): regenerate roadmap.html post-#291 refresh` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -96,7 +96,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(none)* | — | — | open-PR set empty after #285 merged. |
+| #292 | `worktree-council-context-memory` | (council arc) | `ops(council): context-memory grounding — Round 5 evidence-enrichment (DESIGN.md v2)` — opened concurrently; sibling design-development arc (interpretable-context/memory), distinct from R-IF-112. |
 
 ---
 
