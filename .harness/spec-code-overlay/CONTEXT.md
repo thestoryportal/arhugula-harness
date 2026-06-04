@@ -28,6 +28,7 @@ folder remains the development ledger; the shipped code lives in `tools/`.
 | `stages/01-exploration/` | ground the premise: is the traceability layer real, machine-extractable, worth overlaying? assess the tool. | ✅ complete |
 | `stages/02-design/` | overlay JSON schema + the cross-reference linter contract; linter-only vs +visualization; fork-vs-sidecar | ✅ resolved (advisor framing): **one UA-format graph artifact, three consumers** (query CLI / dashboard-enrich / `--check`); sidecar not fork; CXA from code-resident `PATTERN_P1_SEAMS`, not delta-only markdown |
 | `stages/03-build/` | the linter lands as code in **`tools/`** (not here); freshness hook; gate-vs-advisory | ✅ shipped at `tools/semantic_overlay/` — `overlay.py` (build/summary/check/query/json/enrich-ua) + `test_overlay.py` (12 tests) + `README.md`; CI gate `semantic-overlay`; `query`/`summary` always fresh, committed `overlay.json` `--check`-guarded |
+| stage-04 (agent-workflow integration) | document *when* in the agent loop to reach for the overlay; route agents to the query CLI by reflex | ✅ doc + light wiring: NEW `.claude/skills/overlay-query/SKILL.md` (query-mode → workflow-moment map; query CLI focus) + CLAUDE.md §13.1 (named instrument for empirical cite-grounding + cross-spec drift grep) + §13.5 cross-ref + `roadmap-continue` step-3 grounding clause + memory `[[overlay-query-agent-workflow]]`. No new R-IF arc (doc+wiring scope per operator). |
 
 ## Outputs (arc-level deliverables)
 
