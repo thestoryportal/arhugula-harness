@@ -41,6 +41,27 @@ fmt:
 # Full pre-merge gate: lint + typecheck + tests.
 check: lint typecheck test
 
+# ─── semantic overlay (R-IF-112) — spec ↔ code ↔ CXA-seam ↔ substitution ────
+# A deterministic, no-LLM overlay over the code graph. The agent-facing reference
+# tool: "what code implements C-IS-08", "who cites U-RT-112", "show me the orphans".
+
+# Human-readable counts + orphan report (always fresh from HEAD).
+overlay:
+    uv run python tools/semantic_overlay/overlay.py summary
+
+# Re-derive + write the committed overlay.json artifact (the dashboard/enrich consumer).
+overlay-build:
+    uv run python tools/semantic_overlay/overlay.py build
+
+# CI gate: HARD drift = a CXA seam whose producer/consumer symbol no longer resolves,
+# or a stale committed overlay.json. Exit 1 on either.
+overlay-check:
+    uv run python tools/semantic_overlay/overlay.py check
+
+# Agent reference lookup, e.g.: just overlay-query --contract C-IS-08
+overlay-query *ARGS:
+    uv run python tools/semantic_overlay/overlay.py query {{ARGS}}
+
 # ─── operator-facing CLI smoke ─────────────────────────────────────────────
 
 # One-shot run of a workflow manifest. Example: just run examples/minimal.toml

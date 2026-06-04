@@ -97,3 +97,15 @@ tools/dashboard/candidates/
 .harness/loop_status.md
 .harness/.loop-iter
 .harness/.loop-halt
+
+# Reference docs (vendored clones + agent-knowledge corpora, third-party licenses) —
+# read-only learning material, not tracked in harness history (also keeps them out of lint).
+ai-docs/
+
+# Generated knowledge-graph artifacts from the understand-anything plugin (regenerable).
+.understand-anything/
+**/.understand-anything/
+
+# R-IF-112 semantic overlay (tools/semantic_overlay) — regenerable build artifacts, not tracked.
+tools/semantic_overlay/overlay.json
+**/.understand-anything/*.overlay.json
