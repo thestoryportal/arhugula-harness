@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `fa5910d260d5` |
-| `last_refreshed` | 2026-06-04T08:22:07-06:00 |
-| `git_head` | `ab5b9467` (main) — `ops(dashboard): regenerate roadmap.html post-#293/#295 refresh` |
+| `workspace_state_hash` | `99f5e956ad86` |
+| `last_refreshed` | 2026-06-04T13:57:22-06:00 |
+| `git_head` | `bd8b028b` (main) — Merge of #296 (hooks: never remove a worktree with a live Claude session) + `ca2bc34` (ICM alignment audit + BMAD-METHOD import) |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 45 |
 
