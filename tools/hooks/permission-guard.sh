@@ -29,10 +29,8 @@ _LIB="$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # shellcheck source=loop_lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/loop_lib.sh"
 
-# 1) INERT unless loop mode on. This is the whole safety story: a normal interactive
-#    session never sees an auto-decision.
-loop_mode_active || exit 0
-
+# Read the payload UP FRONT (before the loop-mode inert gate) so the §0 worktree-live-
+# session guard below can fire in BOTH interactive and loop mode. stdin is consumed once.
 PROJECT_DIR=$(hook_project_dir)
 [ -n "$PROJECT_DIR" ] && cd "$PROJECT_DIR" 2>/dev/null
 
@@ -44,6 +42,34 @@ FPATH=$(hook_json "$PAYLOAD" '.tool_input.file_path')
 GPATH=$(hook_json "$PAYLOAD" '.tool_input.path')   # Grep/Glob search root
 NPATH=$(hook_json "$PAYLOAD" '.tool_input.notebook_path')  # Notebook tools
 [ -z "$FPATH" ] && FPATH="$NPATH"   # notebook tools carry the path here, not file_path
+
+# ─── 0) ALWAYS-ON: never remove a worktree that has a LIVE Claude session ───────
+# Hoisted ABOVE the loop-mode inert gate — the ONLY auto-decision this guard makes in an
+# interactive session, and it is a DENY (never an approve), so the "no interactive auto-
+# APPROVAL" contract holds. Removing a worktree out from under a live session orphans it:
+# the session's Edit/Write tools stay pinned to the deleted worktree root and reject every
+# shared-checkout path (operator hit this 2026-06-04). Liveness = a Claude transcript for
+# that worktree touched within the window (lib.sh worktree_has_live_session). Fail-open:
+# unknown target / no recent transcript → no-op → falls through to the normal flow below.
+# Escape hatch: HARNESS_ALLOW_LIVE_WORKTREE_REMOVE=1.
+if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ] && [ "${HARNESS_ALLOW_LIVE_WORKTREE_REMOVE:-}" != "1" ] \
+   && printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+worktree[[:space:]]+remove'; then
+  # Last non-flag token after `worktree remove` = the target path.
+  _WT=$(printf '%s' "$CMD" | sed -E 's/.*worktree[[:space:]]+remove//' | tr ' \t' '\n' | grep -vE '^(-.*)?$' | tail -n1)
+  if [ -n "$_WT" ] && worktree_has_live_session "$_WT"; then
+    loop_log DENY "Bash: live-session worktree removal blocked :: $CMD"
+    if [ "$EVENT" = "PermissionRequest" ]; then
+      jq -nc '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}'
+    else
+      jq -nc '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"[permission-guard] HARD-STOP: target worktree has a live Claude session — removing it would orphan that session. Close the session first, or override with HARNESS_ALLOW_LIVE_WORKTREE_REMOVE=1."}}'
+    fi
+    exit 0
+  fi
+fi
+
+# 1) INERT unless loop mode on. This is the whole safety story: a normal interactive
+#    session never sees an auto-decision (other than the §0 hard-DENY above).
+loop_mode_active || exit 0
 
 # A path is safe to auto-allow iff it is NOT a secret/credential file, is INSIDE the
 # worktree (not .git/, no `..` traversal). Empty = no explicit path (defaults to cwd =
