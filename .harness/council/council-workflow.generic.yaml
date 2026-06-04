@@ -1,0 +1,115 @@
+# Council Workflow — GENERIC (fully council-skill-agnostic) variant
+# ============================================================================
+# The SAME shape and flow as council-workflow.harness-aware.yaml, but with NO
+# harness-specific layer->voices map. The voice roster is PARAMETERIZED: the
+# caller declares the perspectives relevant to the task and assigns the primary
+# vs consultant split. Use this for ANY design/planning/decision task suitable
+# for multi-perspective deliberation (inside or outside this harness; with the
+# cN council skills, a different voice set, or ad-hoc role-prompted agents).
+#
+# Provenance + HIL gates: identical to the harness-aware variant (distilled from
+# roadmap R-IF-council-context-memory / PR #292). Prose: COUNCIL-WORKFLOW.md
+# /command: /council-generic  (.claude/commands/council-generic.md)
+version: 1
+kind: generic
+
+applicability:
+  use_when: "A decision/design/plan has a NAMEABLE tension between two or more distinct perspectives, and decorrelated multi-voice deliberation + adversarial + out-of-family review materially de-risks it."
+  do_not_use_when: "The task is linear/mechanical, single-perspective, or has one obvious approach — route to a single voice/agent + advisor() instead. A council with no nameable tension collapses to one voice + cosmetic consultants."
+
+# --- 0. Pre-convening (define the roster — the only part the caller supplies) -
+pre_convening:
+  nameable_tension_gate:
+    rule: "Convene ONLY if a cross-perspective tension can be named in advance; else single voice + advisor()."
+    on_fail: route_single_voice_plus_advisor
+  voice_roster:               # <-- PARAMETERIZE THIS per task (the agnostic seam)
+    how_to_build:
+      - "List the distinct PERSPECTIVES the task genuinely spans (domains, stakes, lenses)."
+      - "PRIMARIES = the 1-3 perspectives at the task's CENTER (the question is theirs)."
+      - "CONSULTANTS = the cross-cutting perspectives that must surface-tension or refine (security, cost, reliability, observability, eval-ability, UX, ... — task-specific)."
+      - "Cap PRIMARIES at ~2-3; cap total voices at ~5 unless a genuine N-axis topic justifies more (justify any override — primary-collapse guard)."
+      - "Each voice may be a skill, a role-prompt, or a persona — the workflow is agnostic to which."
+    schema:
+      primaries: ["<perspective-or-skill-id>", "..."]
+      consultants: ["<perspective-or-skill-id>", "..."]
+      cross_cutting_concerns: "{ <concern>: <owning-voice>, ... }  # the CCR"
+  set_spine_tension:
+    rule: "Name the convening spine-tension (the round's center) up front."
+  charter:
+    rule: "Open a charter + ledger tree (charter / deliberation / adversarial / codex-advisor / reconciliation / DELIVERABLE). Additive-only."
+
+# --- the loop (identical stages to the harness-aware variant) ---------------
+# Mechanism for EVERY pass: GENUINE invocation — a dedicated agent that FIRST
+# adopts its voice (skill/role-prompt), then acts. Never core-agent ventriloquism.
+stages:
+  - id: E1
+    name: Council deliberation
+    full_council_convening: true
+    sub_phases:
+      - id: A1
+        name: primaries (independent)
+        mode: "isolated / blind-to-each-other (decorrelated; anti-primary-collapse)"
+      - id: A2
+        name: consultants react to primaries
+        mode: "each reads the primaries' REAL output + reacts (surface-tension OR propose-refinement); formulaic concurrence REJECTED; blind to other consultants"
+      - id: B
+        name: cross-cutting cross-read DEBATE
+        mode: "seam-routed — each voice RECEIVES named peer positions and engages them BY NAME (COHERE / flag-CONFLICT / refine); then primary confirm-back. This is where the council genuinely debates."
+    gate: reconciled-to-internal-zero
+  - id: E2
+    name: Adversarial review #1
+    who: "a genuine adversarial/red-team agent (this harness = harness-adversarial-reviewer; generally = any out-of-role skeptic)"
+    does: "red-team the reconciled deliberation; finding-classified (Class 1 halt / Class 2 in-arc revision / Class 3 informational); cite-verify; hunt missed cross-cutting tensions"
+  - id: E2b
+    name: Adversarial <-> council reconcile-to-zero
+    full_council_convening: true
+    gate: "reconciled-to-zero (BEFORE the out-of-family handoff)"
+  - id: E3
+    name: Decorrelated evaluators (out-of-family + transcript-aware)
+    who:
+      out_of_family: "Codex / a different model family — fed a DESCRIPTIVE primer ONLY (never the council's conclusions or the adversarial findings)"
+      transcript_aware: "advisor() — sees the whole arc"
+    decorrelation_discipline: "The signal is where the out-of-family reviewer DISAGREES with the transcript-aware one or the adversarial. Converge -> ship; diverge -> dig."
+  - id: E3b
+    name: evaluators <-> council reconcile-to-zero
+    full_council_convening: true
+    gate: reconciled-to-zero
+  - id: E4
+    name: Adversarial review #2 (the gate)
+    who: "a single bounded adversarial pass (NOT a fan-out)"
+    does: "residual sweep + re-verify load-bearing claims against ground truth (not the artifact's own word)"
+    verdict: "CLEAR-TO-COMMIT | CLEAR-WITH-FOLD | LOOP-BACK"
+  - id: close
+    name: Close + hand off
+    steps:
+      - "fold CLEAR-WITH-FOLD residuals; re-verify"
+      - "deliverable = a conscious versioned move (vN + change-note), not a silent overwrite"
+      - "record the arc where completed work is tracked; commit; review/merge per the owner's call"
+
+reorder_options:
+  consolidated_reconcile:
+    rule: "The owner may collapse E2b + E3b into ONE consolidated reconcile after ALL reviewer input is gathered (preserves reconcile-to-zero; fewer full-council convenings)."
+
+# --- HIL guidance — the gates that keep it on track (identical) -------------
+hil_gates:
+  - id: halt-before-full-council-convening
+    rule: "HALT for owner go-ahead before EACH full_council_convening stage (E1, E2b, E3b/consolidated). Single-reviewer stages (E2, E3-out-of-family, E4) do not trip this."
+  - id: phase-separation
+    rule: "Separate workflow invocations per phase with a checkpoint between; do not bundle isolated deliberation + cross-read in one run."
+  - id: convening-sequence
+    rule: "primaries (independent) -> consultants (react to primaries) -> cross-read debate; NOT all-voices-blind-parallel."
+  - id: decorrelated-reviewer-wiring
+    rule: "out-of-family reviewer gets a descriptive primer only; transcript-aware reviewer sees all; weight divergence."
+  - id: reconcile-to-zero-per-gate
+    rule: "close each reviewer<->council gate to zero before advancing."
+  - id: genuine-invocation
+    rule: "every voice/reviewer = a dedicated agent adopting its role; never core-agent reference-reads."
+  - id: proportionality-when-applicable
+    rule: "if the spine is proportionality-vs-canon, triage each input decision-moving / citation-enriching / confirmatory; enrichments must earn their place; don't fold all citations."
+  - id: autonomy-override
+    rule: "the owner may waive the HIL gates explicitly ('without HIL') — then run autonomously, but still stop at genuine destructive / irreversible / outward-facing boundaries."
+
+operational_discipline:
+  rate_limit: "fan out gently — small sequential waves (peak <= 2-3 concurrent) + retry wrapper; avoid the burst-ceiling all-fail."
+  ledger_writes: "orchestrator writes the ledger from returned agent markdown (no parallel-write races)."
+  do_not_race_contended_state: "don't run a competing refresh on state a concurrent actor owns; let self-healing protocols reconcile."
