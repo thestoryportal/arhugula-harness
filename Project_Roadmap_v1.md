@@ -282,6 +282,30 @@ R-IF-111:
   next_pointer: null
   notes: RESOLVED at PR #111 merge `fdf120b` (2026-05-31). Stale-ACTIVE status reconciled at the R-001 close refresh.
 
+R-IF-112:
+  title: spec-code-overlay arc — overlay spec↔code↔CXA↔substitution semantic layer onto the code graph (drift-detection)
+  surface: VII
+  status: PROPOSED
+  depends_on: []
+  blocks: []
+  posture: mode-agnostic
+  scope: { files: [.harness/spec-code-overlay/**, tools/**], contracts: [], cross_axis: no }
+  skills: { primary: null, secondary: [] }
+  advisor_required: no
+  council_required: no
+  verification: { shape: e2e, must_pass: ["deterministic cross-reference linter flags orphans (code w/o cite · contract w/o landed code · CXA seam w/o producer · substitution w/o carrier)", "runs parse-only per-merge — no LLM pass"] }
+  close_shape: { type: PR-merge, artifact: "tools/ spec↔code cross-reference linter", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: null
+  notes: >
+    Seeded 2026-06-04 at PR #288 (canonical-ICM workspace `.harness/spec-code-overlay/` per
+    `RinDig/Interpreted-Context-Methdology`; stage-01 exploration LANDED). Premise: understand-anything
+    models code↔code only; this repo's load-bearing relationship is spec-contract ↔ code ↔ CXA-edge ↔
+    substitution. Stage-01 probe: ~99.6% (277/278) of source files carry a parseable authority cite →
+    the traceability layer is deterministically extractable (no LLM pass). MVP = a `tools/` orphan-linter
+    (sibling to `substitution_ledger.py`), built before any visualization. Forward stages: 02-design
+    (overlay JSON schema + linter contract; fork-vs-sidecar) · 03-build (`tools/` linter + freshness hook;
+    gate-vs-advisory). Composes with the council context-memory arc (interpretable-context); does not duplicate it.
+
 R-IF-roadmap-refresh:
   title: Refresh roadmap status dashboard after PR merge
   surface: VII
