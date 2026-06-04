@@ -290,7 +290,10 @@ reportUnusedVariable = "none"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = [".harness", ".venv", "design-substrate"]
+# `_bmad` is vendored third-party tooling (BMAD-METHOD resolve_customization.py,
+# MIT, kept verbatim for clean upstream re-pulls); excluded from our lint/format
+# profile like `.harness` and `design-substrate`.
+extend-exclude = [".harness", ".venv", "design-substrate", "_bmad"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "ASYNC", "RUF"]

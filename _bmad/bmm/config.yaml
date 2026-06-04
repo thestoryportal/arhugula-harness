@@ -1,0 +1,34 @@
+# BMad runtime config for the arhugula-v2 workspace.
+#
+# Read directly by the bmad-* skills at activation (Step "Load Config").
+# This is NOT consumed by resolve_customization.py (that script only merges
+# the customize.toml override chain). The values below answer the
+# {placeholder} tokens the skills reference at runtime.
+#
+# Canonical source for these values. Per-skill behaviour overrides live in
+# _bmad/custom/<skill-name>.toml (team) and <skill-name>.user.toml (personal).
+
+# Greeting + language. The skills greet by {user_name} and stay in
+# {communication_language} for the whole run; documents are written in
+# {document_output_language}.
+user_name: Robert
+communication_language: English
+document_output_language: English
+
+# Project identity. Used in artifact filenames and resume detection
+# (e.g. prfaq-{project_name}.md).
+project_name: arhugula-v2
+
+# Output + scanning roots, repo-relative (skills run with cwd at repo root).
+# planning_artifacts is where briefs, PRFAQs, PRDs, and research reports land,
+# and the folder skills scan for prior runs. project_knowledge is extra
+# context the skills may scan. Both point at the contained BMad artifacts dir
+# so BMad output stays separate from the harness design-substrate discipline.
+# Repoint either value here if you want BMad output elsewhere.
+planning_artifacts: _bmad/artifacts
+project_knowledge: _bmad/artifacts
+
+# {date} is resolved at runtime to the current date by the agent.
+# It is intentionally NOT pinned here; a static value would freeze every
+# generated filename. Left as a documented runtime token.
+# date: <resolved at runtime>

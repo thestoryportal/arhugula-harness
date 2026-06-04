@@ -1,0 +1,5 @@
+# Run outputs (briefs, PRFAQs, PRDs, research) land here.
+# Per ICM discipline, generated artifacts are not committed.
+*
+!.gitkeep
+!.gitignore
