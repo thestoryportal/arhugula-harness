@@ -85,8 +85,9 @@
 | D11 | memory hygiene (cardinality≥2, cap, verify) | §12.5 | **MANUAL** (cap is a hard file limit) | Claude recall; capture-failure nudges recurrence |
 | D12 | completeness-by-execution before "done" | §13.1 | **MANUAL** | Claude recall |
 | D13 | empirical cite-grounding + cross-spec drift grep | §13.1/§10.4 | **MANUAL** | Claude recall |
+| D14 | output-token-limit resilience / loop durability (insights-report) | §14.4/§14.5 | **MANUAL** | Claude recall; U-HK-05/27 checkpoint substrate exists but may not trigger often enough mid-loop |
 | — | §14.2 AskUserQuestion not [y/n]; §14.4/14.5 incremental/chunked writes | §14 | **MANUAL** | Claude recall |
 
-**The pattern:** ~5 disciplines are AUTO (hook-enforced and reliable). **~13 are
-MANUAL** (D1, D2, D3, D4, D5, D6-conflicted, D7, D8, D10, D11, D12, D13, + §14
+**The pattern:** ~5 disciplines are AUTO (hook-enforced and reliable). **~14 are
+MANUAL** (D1, D2, D3, D4, D5, D6-conflicted, D7, D8, D10, D11, D12, D13, D14, + §14
 conventions) — these are what lapse, and what the hardening plan must address.
