@@ -2,7 +2,10 @@
 
 **Arc:** overlay the harness's **spec ↔ code ↔ CXA-edge ↔ substitution** semantic layer onto the code-structure graph, so drift between design-substrate and code is *visible and machine-checkable*.
 
-**Status:** seeded 2026-06-04 (stage 01 complete). Stages 02+ not yet opened.
+**Status:** stages 01–03 complete (2026-06-04). The deterministic overlay shipped to
+`tools/semantic_overlay/` (extractor + query CLI + drift linter + UA-KG enrichment), CI-gated
+(`semantic-overlay` job) + justfile recipes (`just overlay{,-build,-check,-query}`). This
+folder remains the development ledger; the shipped code lives in `tools/`.
 
 **Layout:** canonical ICM (`RinDig/Interpreted-Context-Methdology`). Root `CONTEXT.md` routes; numbered `stages/NN-*/` each carry their own `CONTEXT.md` (Inputs/Process/Outputs), `references/`, `output/`. Empty layers (`_config/`, `shared/`, `skills/`, `setup/`) are **not** pre-stubbed — they materialize when a stage needs them (anti-bloat).
 
@@ -23,8 +26,8 @@
 | Stage | Purpose | Status |
 |---|---|---|
 | `stages/01-exploration/` | ground the premise: is the traceability layer real, machine-extractable, worth overlaying? assess the tool. | ✅ complete |
-| `stages/02-design/` | overlay JSON schema + the cross-reference linter contract; linter-only vs +visualization; fork-vs-sidecar | planned |
-| `stages/03-build/` | the linter lands as code in **`tools/`** (not here); freshness hook; gate-vs-advisory | planned |
+| `stages/02-design/` | overlay JSON schema + the cross-reference linter contract; linter-only vs +visualization; fork-vs-sidecar | ✅ resolved (advisor framing): **one UA-format graph artifact, three consumers** (query CLI / dashboard-enrich / `--check`); sidecar not fork; CXA from code-resident `PATTERN_P1_SEAMS`, not delta-only markdown |
+| `stages/03-build/` | the linter lands as code in **`tools/`** (not here); freshness hook; gate-vs-advisory | ✅ shipped at `tools/semantic_overlay/` — `overlay.py` (build/summary/check/query/json/enrich-ua) + `test_overlay.py` (12 tests) + `README.md`; CI gate `semantic-overlay`; `query`/`summary` always fresh, committed `overlay.json` `--check`-guarded |
 
 ## Outputs (arc-level deliverables)
 

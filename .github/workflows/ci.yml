@@ -255,3 +255,35 @@ jobs:
       - name: Substitution-ledger tests (canonical pin + invariants + negative tests)
         working-directory: tools
         run: uv run python -m pytest test_substitution_ledger.py -q
+
+  semantic-overlay:
+    # R-IF-112 — the spec ↔ code ↔ CXA-seam ↔ substitution overlay drift gate.
+    # Deterministically re-derives the overlay from HEAD (parseable docstring cites +
+    # the code-resident PATTERN_P1_SEAMS enumeration + substitutions.yaml) and FAILS on
+    # HARD drift: a genuine CXA seam whose producer/consumer symbol no longer resolves to
+    # a source file (PATTERN_P1_SEAMS vs code drift). overlay.json is a gitignored build
+    # artifact (query/summary/check all derive fresh from HEAD), so there is no committed
+    # snapshot to go stale — the drift this manufactures is what stage-01 finding #2 warns of.
+    # Like the substitution-ledger job, the tools/ test module lives outside the 7 testpaths
+    # packages, so the blocking `test` job does not collect it — this job is its home.
+    runs-on: ubuntu-latest
+    name: semantic overlay (drift gate) — blocking
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync workspace (all members; provides pyyaml via harness-runtime)
+        run: uv sync --all-packages
+
+      - name: Validate the semantic overlay (seam drift / stale artifact = CI failure)
+        run: uv run python tools/semantic_overlay/overlay.py check
+
+      - name: Semantic-overlay tests (cite extraction + seam resolution + gate)
+        working-directory: tools
+        run: uv run python -m pytest semantic_overlay/test_overlay.py -q
