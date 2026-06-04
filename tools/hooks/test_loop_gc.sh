@@ -114,6 +114,28 @@ ln -s "$BASE/wt-merged" "$BASE/sym-merged"
 _loop_gc_consider "$BASE/sym-merged" feat-merged "$BASE/wt-merged" main reap "$BASE/main"
 wt_present wt-merged && ok "self-exclusion canonicalizes path vs current (symlink-proof)" || bad "reaped current worktree via symlinked path spelling"
 
+# ── 6) live-session guard: a merged+clean worktree with a RECENT transcript is kept ──
+# (the council-context-memory orphaning, 2026-06-04). Override HOME so the synthetic
+# transcript lands under a throwaway projects dir, not the real ~/.claude.
+build_fixture
+FH="$BASE/fakehome"
+ENC=$(printf '%s' "$(cd "$BASE/wt-merged" && pwd -P)" | tr -c '[:alnum:]' '-')
+mkdir -p "$FH/.claude/projects/$ENC"; : > "$FH/.claude/projects/$ENC/live.jsonl"   # fresh = live
+OLDHOME="$HOME"; export HOME="$FH"
+loop_gc_worktrees reap
+export HOME="$OLDHOME"
+wt_present wt-merged && ok "live-session worktree kept (not reaped despite merged+clean)" || bad "reaped a worktree with a live session"
+
+# stale transcript (older than the window) must NOT block the reap
+build_fixture
+ENC=$(printf '%s' "$(cd "$BASE/wt-merged" && pwd -P)" | tr -c '[:alnum:]' '-')
+mkdir -p "$FH/.claude/projects/$ENC"; : > "$FH/.claude/projects/$ENC/old.jsonl"
+touch -t 202001010000 "$FH/.claude/projects/$ENC/old.jsonl"
+export HOME="$FH"
+loop_gc_worktrees reap
+export HOME="$OLDHOME"
+wt_present wt-merged && bad "stale transcript wrongly blocked the reap" || ok "stale-transcript worktree still reaped (window-bounded)"
+
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
