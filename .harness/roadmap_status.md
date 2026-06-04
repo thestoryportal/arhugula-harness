@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `1d51a3f859cb` |
-| `last_refreshed` | 2026-06-04T06:05:18-06:00 |
-| `git_head` | `89c20bb5` (main) — `ops(spec-code-overlay): seed overlay arc — ICM workspace + stage-01 exploration (#288)` |
+| `workspace_state_hash` | `9c98ef3d500e` |
+| `last_refreshed` | 2026-06-04T06:15:41-06:00 |
+| `git_head` | `5bb980d8` (main) — `ops(roadmap): register R-IF-112 spec-code-overlay arc + refresh post-#288 (#289)` |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -102,6 +102,7 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| **R-IF-112 refresh / PR #289** (`5bb980d`) | 2026-06-04 | Registered **R-IF-112** in `Project_Roadmap_v1.md` §5.1 (Surface VII, PROPOSED) + dashboard refresh post-#288 + regenerated the `tools/dashboard/roadmap.html` snapshot (67 R-NNN actions). Substantive (new R-NNN) → this terminating refresh closes the §12.2.1 fixed point. Mode-agnostic. |
 | **R-IF-112 seed / PR #288** (`89c20bb`) | 2026-06-04 | **Seeded the spec-code-overlay arc** — overlay the spec↔code↔CXA↔substitution semantic layer onto the code graph (drift-detection). Canonical-ICM workspace at `.harness/spec-code-overlay/` (root `CONTEXT.md` → `stages/01-exploration/{CONTEXT.md, output/}`; layout grounded on `RinDig/Interpreted-Context-Methdology`). Stage-01 exploration: understand-anything tool assessment (GUI wrong for in-loop agents; staleness = the drift we fight; models code↔code only) + cross-axis spec-cite probe (**277/278 ≈ 99.6%** of source files carry a parseable authority cite; 286 `U-*` IDs; full `C-*-NN` keyspace → deterministically extractable) + linter-MVP shape (orphan-detector sibling to `substitution_ledger.py`, before any viz). Registered **R-IF-112** (Surface VII, PROPOSED; forward stages 02-design + 03-build). Mode-agnostic; process-substrate only. |
 | **Hardening-workflow package / PR #285** (`4a786a8`) | 2026-06-03 | **Prepared the loop/HIL HARDENING dynamic-workflow context package + `begin-workflow` trigger** (operator-requested; run from a fresh session via `begin workflow`). The operator probed whether the loop's hook/skill/advisor disciplines are actually run — audit found ~13 are MANUAL (Claude-recall), only ~5 hook-AUTOMATIC, which is why this session lapsed. Package at `.harness/hardening-workflow/`: BRIEF + inventory (AUTO-vs-MANUAL, cited) + session-evidence (lapses = test set) + references/claude-code-hooks.md (live capability ref) + references/insights-report-2026-06-03.md (201-session corroboration; NEW D14 output-token-limit) + workflow.js (audit→adversarial-verify→synthesize→critic over D1..D14 → HARDENING_PLAN.md). Assembled via 4 parallel collectors + live fetch + adversarial verify (PACKAGE-ACCURATE; D6 paid-call deny-vs-proceed contradiction confirmed). NEXT: `/clear` → `begin workflow`. Scope: U-HK process machinery only. Mode-agnostic; no prod code. |
 | **R-300 B-2 Ollama / PR #283** (`e436252`) | 2026-06-03 | **Live Ollama provider exercise — closes the "Ollama" half of B-2 (R-300 now FULLY exercised).** Operator corrected the loop discipline (creds/deps available → PROCEED, don't defer-and-halt): ran the R-300 OpenAI live test (`just mvp-r300-cross-family` → PASS 4.55s, real anthropic 404→openai), then closed Ollama — NOT HIL-gated after all: the local ollama daemon (`127.0.0.1:11434`, `llama3.2:3b`) is FREE. `test_r300_live_ollama_provider_fallback_exercise` (skipif on daemon reachability): same-family ollama fallback (invalid-model → `llama3.2:3b`) through real `api.run`, **LIVE PASS 4.17s**, zero-token/zero-secret; asserts `gen_ai.provider.name=ollama`. Incidental: `ProviderAgnosticPayload.params` is verbatim provider pass-through (ollama needs `options={num_predict}`, not `max_tokens`) — test-only, not a prod bug. +`mvp-r300-ollama` recipe (no key). pyright 0/0/0; ruff clean; no prod code. Mode: Phase-7 impl + ops. |
