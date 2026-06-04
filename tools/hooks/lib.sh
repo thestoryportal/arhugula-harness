@@ -147,3 +147,27 @@ loop_mode_active() {
   local d; d=$(hook_project_dir)
   [ -n "$d" ] && [ -f "$d/.harness/.loop-active" ]
 }
+
+# Live-session detection for a git worktree. Removing a worktree out from under a live
+# Claude session orphans it — the session's Edit/Write tools stay pinned to the deleted
+# worktree root and reject every shared-checkout path (operator hit this 2026-06-04).
+# Claude keys a session transcript by the worktree's ABSOLUTE physical path with every
+# non-alphanumeric char mapped to '-', at ~/.claude/projects/<encoded>/<session>.jsonl
+# (verified against the real dir). A transcript touched within the liveness window ⇒ a
+# session is active there. Window default 30 min; override via env. Consumed by the
+# permission-guard §0 deny AND loop-gc's reap gate.
+#
+# worktree_has_live_session <worktree_path>  → 0 (true) iff a live session is detected.
+# Fail-SAFE to FALSE (1) on any uncertainty (no path / no transcript dir / find missing)
+# so normal stale-worktree removal is never blocked; the window is the only safety margin.
+_WORKTREE_SESSION_WINDOW_MIN="${HARNESS_WORKTREE_SESSION_WINDOW_MIN:-30}"
+worktree_has_live_session() {
+  local wt="$1"
+  [ -n "$wt" ] || return 1
+  command -v find >/dev/null 2>&1 || return 1
+  local abs; abs=$(cd "$wt" 2>/dev/null && pwd -P) || abs="$wt"
+  local enc; enc=$(printf '%s' "$abs" | tr -c '[:alnum:]' '-')
+  local sdir="$HOME/.claude/projects/$enc"
+  [ -d "$sdir" ] || return 1
+  [ -n "$(find "$sdir" -maxdepth 1 -name '*.jsonl' -mmin "-${_WORKTREE_SESSION_WINDOW_MIN}" 2>/dev/null | head -n1)" ]
+}

@@ -278,6 +278,31 @@ OUT=$(run_on "$(pl Bash 'git status' '' PermissionRequest)")
 OUT=$(run_on "$(pl Bash 'rm -rf /' '' PermissionRequest)")
 [ "$(beh "$OUT")" = "deny" ] && ok "PermissionRequest deny schema" || bad "PR deny schema wrong: $OUT"
 
+# 7) §0 worktree-live-session guard — hoisted ABOVE the inert gate, so it DENIES a
+#    `git worktree remove` of a worktree with a live session in BOTH loop on/off.
+WTL="$REPO/wt-live"; mkdir -p "$WTL"
+FH="$REPO/home"
+# Encode a worktree path EXACTLY as lib.sh's worktree_has_live_session does (printf '%s'
+# strips the trailing newline so the newline is never mapped to a stray '-').
+encof() { printf '%s' "$(cd "$1" && pwd -P)" | tr -c '[:alnum:]' '-'; }
+SD="$FH/.claude/projects/$(encof "$WTL")"; mkdir -p "$SD"; : > "$SD/s.jsonl"   # fresh = live
+runh() { printf '%s' "$1" | env HOME="$FH" CLAUDE_PROJECT_DIR="$REPO" ${2:-} bash "$HOOK"; }
+OUT=$(runh "$(pl Bash "git worktree remove $WTL" '')")                       # loop OFF
+[ "$(dec "$OUT")" = "deny" ] && ok "live-session worktree remove → deny (loop OFF, hoisted)" || bad "live remove not denied off-mode: $OUT"
+OUT=$(runh "$(pl Bash "git worktree remove --force $WTL" '')" HARNESS_LOOP=1)  # loop ON, --force
+[ "$(dec "$OUT")" = "deny" ] && ok "live-session worktree remove --force → deny (loop ON)" || bad "live --force not denied: $OUT"
+OUT=$(runh "$(pl Bash "git worktree remove $WTL" '')" HARNESS_ALLOW_LIVE_WORKTREE_REMOVE=1)
+[ "$(dec "$OUT")" != "deny" ] && ok "override env → not denied" || bad "override still denied: $OUT"
+# stale transcript (older than window) → not a live session → not denied (inert off-mode → no output)
+WTS="$REPO/wt-stale"; mkdir -p "$WTS"; SDS="$FH/.claude/projects/$(encof "$WTS")"; mkdir -p "$SDS"
+: > "$SDS/old.jsonl"; touch -t 202001010000 "$SDS/old.jsonl"
+OUT=$(runh "$(pl Bash "git worktree remove $WTS" '')")
+[ -z "$OUT" ] && ok "stale-transcript worktree remove → not denied" || bad "stale worktree decided: $OUT"
+# no transcript dir at all → not denied
+WTN="$REPO/wt-none"; mkdir -p "$WTN"
+OUT=$(runh "$(pl Bash "git worktree remove $WTN" '')")
+[ -z "$OUT" ] && ok "no-transcript worktree remove → not denied" || bad "no-transcript decided: $OUT"
+
 echo "----"
 echo "permission_guard: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

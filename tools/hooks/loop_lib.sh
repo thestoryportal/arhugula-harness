@@ -251,6 +251,12 @@ _loop_gc_consider() {
     [ "$mode" = "reap" ] && loop_log GC "skipped $path ($branch) — has local state: $(printf '%s' "$residue" | tr '\n' ',' | sed 's/^,//;s/,$//' | cut -c1-160)"
     return 0
   fi
+  # A merged+clean worktree can still have a LIVE session attached — reaping it would
+  # orphan that session (Edit/Write pinned to the deleted root). Never reap a live one.
+  if worktree_has_live_session "$cpath"; then
+    [ "$mode" = "reap" ] && loop_log GC "skipped $path ($branch) — live Claude session (recent transcript)"
+    return 0
+  fi
   if [ "$mode" = "report" ]; then
     printf '%s (%s)\n' "$path" "$branch"
     return 0
