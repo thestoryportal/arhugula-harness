@@ -22,8 +22,9 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    pick the highest-value forward item, do NOT stop citing "operator-owned."
 3. **Ground first.** Before authoring, empirically verify the item's premise at HEAD
    (`[[r-cxa-seam-wiring-is-producer-discovery]]`, `[[grounding-reveals-claude-closeable-slice-close-honestly]]`). Grounding usually reveals a real Claude-closeable slice inside a
-   nominally "gated" item — or reveals the genuine gate. Call `advisor()` before substantive
-   cross-axis work (§13.1).
+   nominally "gated" item — or reveals the genuine gate. When the premise involves a
+   `C-*`/`U-*`/seam/`H_T-*` cite, resolve it with `just overlay-query` (the `overlay-query`
+   skill, R-IF-112) before ad-hoc grep. Call `advisor()` before substantive cross-axis work (§13.1).
 4. **Implement with tests.** Posture-correct edits (§11). Hermetic test per new unit;
    `just check`; out-of-family `just codex-review` to convergence (§13.1).
 5. **Surface only the genuine gate.** Per §12.4.1: a real architectural/scoping decision, a
