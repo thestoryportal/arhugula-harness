@@ -321,6 +321,51 @@ R-IF-roadmap-refresh:
   close_shape: { type: PR-merge, artifact: "ops: roadmap status refresh post-PR-NN", cascade: [] }
   next_pointer: null
   notes: Triggered automatically per CLAUDE.md §12 post-merge hook. Manual fallback if hook absent.
+
+R-IF-council-context-memory:
+  title: Context & memory layer grounding — domain council arc (the FIRST of the charter's planned domain-council series)
+  surface: VII
+  status: RESOLVED
+  depends_on: []
+  blocks: []
+  posture: mode-agnostic
+  scope: { files: [.harness/council/context-memory-grounding/**], contracts: [], cross_axis: no }
+  skills: { primary: council-orchestrator, secondary: [c2, c3, c1, c5, c7, c8, c9, harness-adversarial-reviewer] }
+  advisor_required: yes
+  council_required: yes
+  verification: { shape: none, must_pass: ["every pairwise reviewer gate reconciled-to-zero", "adversarial #2 gate CLEAR / CLEAR-WITH-FOLD", "deliverable DESIGN.md committed + merged"] }
+  close_shape: { type: PR-merge, artifact: "DESIGN.md v2 (context+memory grounding + alignment plan)", cascade: [R-IF-council-workflow] }
+  next_pointer: R-IF-council-workflow
+  notes: >
+    RESOLVED at PR #292 merge `2b19d4e` (2026-06-04). The FIRST domain council per the charter's "planned series
+    of domain councils." Genuinely-invoked 7-voice council (C2/C3 primaries + C1/C5/C7/C9 + C8 consultants) →
+    adversarial #1 → Codex (out-of-family gpt-5.5) + advisor (in-family) → consolidated council reconcile →
+    adversarial #2 gate (CLEAR-WITH-FOLD). Every reviewer/voice genuinely invoked (skills adopted by dedicated
+    agents, debating by name); every pairwise gate reconciled-to-zero. Deliverable = DESIGN.md v2 (a falsifiable
+    WS-0-drift-gated plan to ground the harness's own context/memory governance layer). Ledger at
+    `.harness/council/context-memory-grounding/`. Spine held: zero new MVP workstreams; one new mechanism (G-LINK)
+    deferred. Reusable workflow codified at R-IF-council-workflow. (Dashboard hash-refresh for #292 = the
+    SessionStart-audit / §12.2.1 fixed point — NOT this entry.)
+
+R-IF-council-workflow:
+  title: Council workflow productization — codify the genuinely-invoked council -> adversarial -> Codex/advisor reconcile-to-zero loop as reusable YAML + /commands
+  surface: VII
+  status: ACTIVE
+  depends_on: [R-IF-council-context-memory]
+  blocks: []
+  posture: mode-agnostic
+  scope: { files: [.harness/council/**, .claude/commands/**], contracts: [], cross_axis: no }
+  skills: { primary: null, secondary: [] }
+  advisor_required: yes
+  council_required: no
+  verification: { shape: none, must_pass: ["two YAMLs of the same shape/flow — (1) harness-layer-aware council-skill router (council-skill-agnostic pre-invocation; invokes the relevant cN voices per the harness layer/axis), (2) fully council-skill-agnostic for any future council/task", "the HIL gates that kept the context-memory arc on track captured (halt-before-each-full-council-convening / primaries->consultants->cross-read / decorrelated-reviewer wiring [Codex cold + advisor transcript-aware] / reconcile-to-zero per pairwise gate)", "a /command invokes each YAML"] }
+  close_shape: { type: PR-merge, artifact: "council-workflow YAMLs + /commands + workflow doc", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: null
+  notes: >
+    Operator-directed 2026-06-04 immediately after R-IF-council-context-memory closed. Synthesizes the lived
+    workflow into a documented, reusable shape (surface VII process-discipline tooling, sibling to the council
+    skills at `.claude/skills/council/`). Deliverable of THIS arc.
+
 ```
 
 ### 5.2 Phase 7 axis-clean (R-001..R-099)
