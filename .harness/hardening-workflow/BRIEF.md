@@ -1,12 +1,16 @@
 # Hardening Workflow — Master Brief
 
-> **You are reading the anchor context for the "loop/HIL hardening" dynamic workflow.**
+> **You are reading the anchor context for the "loop/HIL hardening" assessment.**
 > This brief + the four files it references ARE the complete context. Do not go
 > hunting elsewhere first — read these, then act. Every claim here is cited to a
 > real file/line or an authoritative URL; verify before extending, never invent.
 
-**Run it:** in a fresh session, prompt **`begin workflow`** (or `/begin-workflow`).
-The `begin-workflow` skill loads this package and launches `workflow.js`.
+**How this is used:** this package is the *context* a **dynamically-prompted** Claude
+Workflow consumes. In a fresh session the operator hands the Workflow feature the
+kickoff prompt at `PROMPT.md` (a natural-language prompt, not a script); the workflow
+then authors its own multi-agent structure from that prompt + these files. This
+package supplies the **goal, evidence, capabilities, and constraints** — it does NOT
+prescribe the workflow's internal structure (no fixed phases / no script).
 
 ---
 
@@ -131,32 +135,26 @@ D8 (refresh). The hardened loop should make D1–D8 self-enforcing.
 
 ---
 
-## 4. THE WORKFLOW DESIGN (implemented in `workflow.js`)
+## 4. THE DISCIPLINES TO ASSESS + THE DELIVERABLE
 
-Patterns drawn from `research/dynamic-workflows.md` (memory/rule-adherence:
-"one verifier agent per rule"; adversarial verification; fan-out-and-synthesize;
-completeness critic):
+This package does **not** prescribe how the workflow organizes itself (the
+prompt-driven Workflow decides that). It supplies the *what*:
 
-- **Phase 1 — Per-discipline gap audit (fan-out + adversarial verify).** One agent
-  per discipline (D1..Dn from the inventory). Each: (a) classify AUTO vs MANUAL;
-  (b) cite whether/how it lapsed this session; (c) judge whether it CAN be
-  hook-enforced given `references/claude-code-hooks.md`; (d) propose the concrete
-  enforcement mechanism (hook event + matcher + check + allow/deny/block/inject,
-  or skill-side change). An **adversarial partner** then refutes each proposal:
-  does the hook event actually support this? new failure modes? false-positive /
-  infinite-loop risk? does it loosen a safety guard? (deny>ask>allow; Stop-block
-  8× cap; PermissionRequest absent in `-p`; etc.).
-- **Phase 2 — Synthesis (barrier).** Fold surviving proposals into a single,
-  prioritized hardening plan: per discipline, the concrete change (file, event,
-  logic), ranked by leverage (lapses prevented) × inverse risk. Plus a dedicated
-  **git/worktree/cwd hygiene autonomy** design (the D7 cluster) and a **never-halt
-  correctness** trace of `tools/loop/run.sh` + `stop-loop.sh`.
-- **Phase 3 — Completeness critic.** "What discipline / lapse / hook-capability is
-  unaddressed?" + verify NO proposal relies on a hook capability that does not
-  exist in `references/claude-code-hooks.md`.
-
-**Deliverable:** `.harness/hardening-workflow/HARDENING_PLAN.md` — the definitive,
-capability-verified plan. Implementation is a separate authorized pass.
+- **The disciplines** the loop is supposed to follow are enumerated **D1–D14** in
+  `inventory-hooks-skills-disciplines.md` §D (with each one's AUTO-vs-MANUAL
+  classification + intended enforcement point), with this session's lapses detailed
+  per-discipline in `session-evidence.md` and cross-session corroboration + the new
+  D14 in `references/insights-report-2026-06-03.md`. The lapsed cluster (D1 codex,
+  D2 advisor, D3 /resolve, D4/D5/D6 never-halt/defer/paid-call, D7 git+cwd, D8
+  refresh, D14 output-limit) is where the leverage is.
+- **The capability ground truth** for any proposed hook is
+  `references/claude-code-hooks.md` — a proposal that relies on a hook event or
+  control output not in that reference is invalid.
+- **The deliverable** is a definitive, prioritized, capability-verified **hardening
+  plan** (`HARDENING_PLAN.md`) that makes each currently-manual discipline
+  self-enforcing where possible, with an ordered implementation sequence and any
+  operator-decisions flagged (notably the D6 paid-call reconciliation). The plan is
+  the deliverable; implementing it is a separate authorized pass.
 
 ---
 
@@ -189,7 +187,7 @@ capability-verified plan. Implementation is a separate authorized pass.
 | `session-evidence.md` | This session's concrete lapses (the ground-truth test set), each tied to the discipline that failed and why the current mechanism didn't catch it. |
 | `references/claude-code-hooks.md` | Authoritative Claude Code + Agent SDK hooks reference (every event, the allow/deny/block/inject protocol, settings shape, autonomous-loop + auto-approve guidance). **The capability ground truth** — every proposed hook must be expressible here. |
 | `references/insights-report-2026-06-03.md` | **Cross-session corroboration** (201 sessions / 26 days): D6 (defer-paid-when-creds-available), D1 (codex stalls + wrong model), D7 (cwd-bleed) are RECURRING, not one-off — plus concrete fixes and the NEW **D14** (output-token-limit / loop-durability) failure mode. High weight. |
-| `workflow.js` | The pre-authored dynamic-workflow script the `begin-workflow` skill launches (audits D1..D14). |
+| `PROMPT.md` | The kickoff prompt the operator hands the Workflow feature in a fresh session (the natural-language prompt that authors + runs the assessment). |
 
 External (in the main repo root, untracked): `research/dynamic-workflows.md`
 (the workflow-pattern model), `research/sessionend-clear-automated-loop-gemini.md`
