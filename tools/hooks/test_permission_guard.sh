@@ -63,29 +63,29 @@ OUT=$(run_on "$(pl Bash 'git commit -m wip' '')")
 #     it bypasses _bash_args_safe). If denied, the headless skip-set never populates and the
 #     loop re-attempts the same gated item every iteration. A raw chained `source … &&
 #     loop_defer …` (malformed + denied) must still NOT auto-allow.
-OUT=$(run_on "$(pl Bash "tools/loop/defer.sh R-300 'needs OpenAI credentials — built without it: mock fixture'" '')")
+OUT=$(run_on "$(pl Bash "tools/04-loop/defer.sh R-300 'needs OpenAI credentials — built without it: mock fixture'" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "allow defer.sh wrapper (even with 'credentials' in the reason)" || bad "defer.sh not allowed: $OUT"
-OUT=$(run_on "$(pl Bash "bash tools/loop/defer.sh R-410 'needs container runtime'" '')")
-[ "$(dec "$OUT")" = "allow" ] && ok "allow 'bash tools/loop/defer.sh ...'" || bad "bash defer.sh not allowed: $OUT"
-OUT=$(run_on "$(pl Bash "tools/loop/halt.sh 'forward menu exhausted — 3 awaiting input'" '')")
+OUT=$(run_on "$(pl Bash "bash tools/04-loop/defer.sh R-410 'needs container runtime'" '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "allow 'bash tools/04-loop/defer.sh ...'" || bad "bash defer.sh not allowed: $OUT"
+OUT=$(run_on "$(pl Bash "tools/04-loop/halt.sh 'forward menu exhausted — 3 awaiting input'" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "allow halt.sh wrapper (stand-down)" || bad "halt.sh not allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'source tools/hooks/lib.sh && loop_defer R-1 x' '')")
 [ -z "$(dec "$OUT")" ] && ok "chained source+loop_defer NOT auto-allowed (falls to ask — the denied/malformed original)" || bad "chained source auto-allowed: $OUT"
 # 4c) Wrapper with an env-var expansion must NOT auto-allow (the shell would expand the
 #     secret VALUE into the ledger). Literal "credentials" is fine (4b); `$VAR` is not.
-OUT=$(run_on "$(pl Bash 'tools/loop/defer.sh R-300 $OPENAI_API_KEY' '')")
+OUT=$(run_on "$(pl Bash 'tools/04-loop/defer.sh R-300 $OPENAI_API_KEY' '')")
 [ -z "$(dec "$OUT")" ] && ok "defer.sh with \$VAR expansion NOT auto-allowed (no secret leak)" || bad "defer.sh \$VAR auto-allowed (secret-leak vector): $OUT"
 # 4d) A deferral REASON that names an operator action (gh secret / .env) must ALLOW — the
 #     wrapper short-circuits BEFORE the free-text deny scan, else the deferral is denied,
 #     no ledger row is written, and the headless loop retries the gated item to the cap.
-OUT=$(run_on "$(pl Bash "tools/loop/defer.sh R-300 'operator must run gh secret set OPENAI_API_KEY'" '')")
+OUT=$(run_on "$(pl Bash "tools/04-loop/defer.sh R-300 'operator must run gh secret set OPENAI_API_KEY'" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "defer.sh reason naming 'gh secret' ALLOWED (deny-scan exempt)" || bad "defer.sh reason tripped deny-list: $OUT"
 # 4e) ...but a real `gh secret set` command (not the wrapper) is STILL hard-stopped, and a
 #     wrapper with a chained dangerous follow-on is STILL denied (control-op stops the
 #     short-circuit → falls through to the deny-list).
 OUT=$(run_on "$(pl Bash 'gh secret set FOO' '')")
 [ "$(dec "$OUT")" = "deny" ] && ok "real 'gh secret set' still denied (short-circuit is wrapper-only)" || bad "gh secret leaked through: $OUT"
-OUT=$(run_on "$(pl Bash 'tools/loop/defer.sh R-1 x; rm -rf /' '')")
+OUT=$(run_on "$(pl Bash 'tools/04-loop/defer.sh R-1 x; rm -rf /' '')")
 [ "$(dec "$OUT")" = "deny" ] && ok "wrapper + chained 'rm -rf' still denied (control-op → deny-list)" || bad "chained rm-rf via wrapper not denied: $OUT"
 OUT=$(run_on "$(pl Bash 'bash tools/hooks/test_loop_lib.sh' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "allow hermetic test run" || bad "test run not allowed: $OUT"
@@ -177,7 +177,7 @@ done
 # 5i) bash tools/ is restricted to test_*.sh entrypoints (codex P2).
 OUT=$(run_on "$(pl Bash 'bash tools/hooks/test_lib.sh' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "bash tools test_*.sh → allow" || bad "test script not allowed: $OUT"
-OUT=$(run_on "$(pl Bash 'bash tools/loop/run.sh' '')")
+OUT=$(run_on "$(pl Bash 'bash tools/04-loop/run.sh' '')")
 [ -z "$OUT" ] && ok "bash tools non-test script → ask" || bad "arbitrary tools script auto-decided: $OUT"
 
 # 5j) Bash allowlist verbs must not auto-allow secret/home/outside ARGS (codex P1).

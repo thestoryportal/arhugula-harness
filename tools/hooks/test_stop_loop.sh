@@ -82,8 +82,8 @@ echo "$OUT" | jq -e '.reason | test("R-410")'                    >/dev/null 2>&1
 echo "$OUT" | jq -e '.reason | test("R-300")'                    >/dev/null 2>&1 && ok "skip-set includes R-300 (this run)" || bad "R-300 missing from skip-set"
 echo "$OUT" | jq -e '.reason | test("R-999") | not'              >/dev/null 2>&1 && ok "skip-set EXCLUDES R-999 (pre-ACTIVATE)" || bad "R-999 leaked into skip-set: $OUT"
 echo "$OUT" | jq -e '.reason | test("do NOT raise .loop-halt")'  >/dev/null 2>&1 && ok "instructs defer-NOT-halt at a gate" || bad "missing defer-not-halt guidance"
-echo "$OUT" | jq -e '.reason | test("tools/loop/defer.sh")'      >/dev/null 2>&1 && ok "instructs the allowlisted defer.sh wrapper (not a denied raw source)" || bad "missing defer.sh wrapper guidance"
-echo "$OUT" | jq -e '.reason | test("tools/loop/halt.sh")'       >/dev/null 2>&1 && ok "instructs the allowlisted halt.sh wrapper for stand-down" || bad "missing halt.sh wrapper guidance"
+echo "$OUT" | jq -e '.reason | test("tools/04-loop/defer.sh")'      >/dev/null 2>&1 && ok "instructs the allowlisted defer.sh wrapper (not a denied raw source)" || bad "missing defer.sh wrapper guidance"
+echo "$OUT" | jq -e '.reason | test("tools/04-loop/halt.sh")'       >/dev/null 2>&1 && ok "instructs the allowlisted halt.sh wrapper for stand-down" || bad "missing halt.sh wrapper guidance"
 echo "$OUT" | jq -e '.reason | test("exhausted")'                >/dev/null 2>&1 && ok "exhaustion is the ONLY stand-down condition" || bad "missing exhaustion condition"
 
 echo "----"

@@ -144,7 +144,7 @@ loop_activate() {
   # Fresh run: clear any stale iteration counter / halt marker from a prior run.
   rm -f "$(loop_iter_path)" "$(loop_halt_path)" 2>/dev/null
   loop_log ACTIVATE "${1:-loop mode on}"
-  # NOTE: worktree GC is intentionally NOT called here. `tools/loop/run.sh` installs its
+  # NOTE: worktree GC is intentionally NOT called here. `tools/04-loop/run.sh` installs its
   # `.loop-active`-cleanup EXIT/INT/TERM trap only AFTER loop_activate returns, so a slow
   # gh/GC step here would open a pre-trap interruption window that could leave loop mode
   # armed on Ctrl-C (codex P2). GC fires from the SessionStart hook (loop-gc.sh, covering

@@ -175,7 +175,7 @@ esac
 # can't chain a real dangerous command) + NO $VAR expansion (so it can't expand a secret VALUE
 # into the ledger). $(...) and newlines are control-operator-rejected here too.
 if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ] \
-   && printf '%s' "$CMD" | grep -Eq '^[[:space:]]*(bash[[:space:]]+)?tools/loop/(defer|halt)\.sh([[:space:]]|$)' \
+   && printf '%s' "$CMD" | grep -Eq '^[[:space:]]*(bash[[:space:]]+)?tools/04-loop/(defer|halt)\.sh([[:space:]]|$)' \
    && ! printf '%s' "$CMD" | grep -q '[;&|<>`]' && [ "$CMD" = "${CMD%%\$(*}" ] && [ "$CMD" = "${CMD//$'\n'/}" ] \
    && ! printf '%s' "$CMD" | grep -Eq '\$\{?[A-Za-z_]'; then
   emit_allow

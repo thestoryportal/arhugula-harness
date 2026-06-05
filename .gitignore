@@ -109,3 +109,6 @@ ai-docs/
 # R-IF-112 semantic overlay (tools/semantic_overlay) — regenerable build artifacts, not tracked.
 tools/semantic_overlay/overlay.json
 **/.understand-anything/*.overlay.json
+
+# TTS audio cache (ephemeral; not part of the reorg)
+.claude/audio/

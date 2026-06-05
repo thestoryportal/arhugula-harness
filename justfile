@@ -245,4 +245,4 @@ codex-review-uncommitted: _require-codex-subscription
 # Custom multi-word prompt: use the env var (just variadic args don't preserve quoting):
 #   HARNESS_LOOP_PROMPT="do X then Y" just loop
 loop *ARGS:
-    bash tools/loop/run.sh {{ARGS}}
+    bash tools/04-loop/run.sh {{ARGS}}
