@@ -41,6 +41,17 @@ TRACKING_SURFACES = {
 }
 CHECKPOINT_DIR = Path(".harness/.checkpoints")
 CHECKPOINT_FILE = "codex-context-latest.json"
+CREDENTIAL_GATE_LEDGER = Path(".harness/codex_credential_gates.jsonl")
+CREDENTIAL_TRACKING_SURFACES = {
+    ".harness/roadmap_status.md",
+    "Project_Roadmap_v1.md",
+}
+SECRET_VALUE_RE = re.compile(
+    r"(?i)\b("
+    r"ANTHROPIC_API_KEY|OPENAI_API_KEY|"
+    r"[A-Z0-9_]*(?:SECRET|TOKEN|CREDENTIAL|PASSWORD|AUTH)[A-Z0-9_]*"
+    r")=([^\s]+)"
+)
 
 
 @dataclass(frozen=True)
@@ -263,6 +274,48 @@ def write_checkpoint(state: GuardState, *, label: str, findings: list[Finding]) 
     return path
 
 
+def redact_secret_values(value: str) -> str:
+    return SECRET_VALUE_RE.sub(lambda m: f"{m.group(1)}=<redacted>", value)
+
+
+def append_credential_gate(
+    state: GuardState,
+    *,
+    unit: str,
+    gate: str,
+    forward_closed: str,
+    resume: str,
+    command: str = "",
+) -> Path:
+    required = {
+        "unit": unit,
+        "gate": gate,
+        "forward_closed": forward_closed,
+        "resume": resume,
+    }
+    missing = [name for name, value in required.items() if not value.strip()]
+    if missing:
+        raise ValueError("credential gate log requires: " + ", ".join(missing))
+
+    path = state.root / CREDENTIAL_GATE_LEDGER
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "written_at": datetime.now(timezone.utc).isoformat(),  # noqa: UP017 - /usr/bin/python3 is 3.9.
+        "unit": unit.strip(),
+        "gate": redact_secret_values(gate.strip()),
+        "forward_closed": redact_secret_values(forward_closed.strip()),
+        "resume": redact_secret_values(resume.strip()),
+        "command": redact_secret_values(command.strip()),
+        "branch": state.branch,
+        "head8": state.head8,
+        "context_fingerprint": state_fingerprint(state),
+        "status": "human_review_pending",
+    }
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, sort_keys=True) + "\n")
+    return path
+
+
 def _lag_expected(root: Path) -> bool:
     title = _out(["git", "log", "-1", "--format=%s"], cwd=root)
     if not title.startswith("ops: roadmap status refresh "):
@@ -343,6 +396,14 @@ def _has_tracking_changes(files: list[str]) -> bool:
     return bool(
         set(files) & TRACKING_SURFACES or any(f.startswith(".harness/phase-7d-") for f in files)
     )
+
+
+def _has_credential_gate_ledger_change(files: list[str]) -> bool:
+    return CREDENTIAL_GATE_LEDGER.as_posix() in files
+
+
+def _has_credential_gate_tracking_change(files: list[str]) -> bool:
+    return bool(set(files) & CREDENTIAL_TRACKING_SURFACES)
 
 
 def validate(
@@ -430,6 +491,20 @@ def validate(
                     "Dashboard sources changed, but snapshot comparison could not run.",
                 )
             )
+
+    if (
+        mode in {"closeout", "check"}
+        and _has_credential_gate_ledger_change(state.changed_files)
+        and not _has_credential_gate_tracking_change(state.changed_files)
+    ):
+        findings.append(
+            Finding(
+                "hard",
+                "CREDENTIAL_GATE_TRACKING_REQUIRED",
+                "Credential-gated work was logged, but no human-facing roadmap/status "
+                "surface changed. Surface the pending gate before proceeding.",
+            )
+        )
 
     if (
         mode in {"closeout", "check"}
@@ -537,7 +612,10 @@ def _json_report(state: GuardState, findings: list[Finding]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Codex deterministic context guard.")
-    parser.add_argument("mode", choices=["preflight", "closeout", "check", "checkpoint"])
+    parser.add_argument(
+        "mode",
+        choices=["preflight", "closeout", "check", "checkpoint", "credential-gate"],
+    )
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     parser.add_argument(
         "--label",
@@ -554,9 +632,44 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="downgrade dashboard hash drift to a warning; intended only for CI smoke",
     )
+    parser.add_argument("--unit", default="", help="unit or roadmap id for mode=credential-gate")
+    parser.add_argument(
+        "--gate", default="", help="credential gate summary for mode=credential-gate"
+    )
+    parser.add_argument(
+        "--forward-closed",
+        default="",
+        help="evidence that all non-credential forward actions are closed",
+    )
+    parser.add_argument(
+        "--resume",
+        default="",
+        help="human-review resume instruction for mode=credential-gate",
+    )
+    parser.add_argument(
+        "--command",
+        default="",
+        help="optional blocked command, secret values are redacted before logging",
+    )
     args = parser.parse_args(argv)
 
     state = derive()
+    if args.mode == "credential-gate":
+        try:
+            path = append_credential_gate(
+                state,
+                unit=args.unit,
+                gate=args.gate,
+                forward_closed=args.forward_closed,
+                resume=args.resume,
+                command=args.command,
+            )
+        except ValueError as exc:
+            print(f"credential_gate_error: {exc}", file=sys.stderr)
+            return 2
+        print(f"credential_gate_logged: {path}")
+        return 0
+
     findings = validate(
         state,
         mode=args.mode,

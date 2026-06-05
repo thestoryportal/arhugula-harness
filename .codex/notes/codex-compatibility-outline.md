@@ -22,6 +22,11 @@ This note codifies the operator-approved Codex setup direction for this reposito
    truth for context-rot prevention; run `just codex-preflight` before work,
    `just codex-checkpoint <label>` at mid-arc re-grounding points, and
    `just codex-closeout` before final response, commit, or PR.
+   - Credential-gated units advance to the credential boundary first. When no
+     HIL/operator-approval surface is available, log the gate with
+     `just codex-credential-gate ...`, update a human-facing tracking surface,
+     and continue to the next implementable unit once non-credential work is
+     proven closed.
 7. Run substantive Codex work in isolated worktrees and land changes through reviewable PRs with strict CI.
 8. Validate instruction discovery with `codex --ask-for-approval never "Summarize the current instructions."` and nested `--cd` checks.
 

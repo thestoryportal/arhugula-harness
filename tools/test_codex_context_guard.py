@@ -165,3 +165,53 @@ def test_stale_checkpoint_is_hard_failure(tmp_path: Path) -> None:
     findings = cg.validate(new_state, mode="check", require_fresh_checkpoint=True)
 
     assert any(f.code == "CONTEXT_CHECKPOINT_STALE" and f.severity == "hard" for f in findings)
+
+
+def test_credential_gate_log_redacts_secret_like_values(tmp_path: Path) -> None:
+    state = _state(root=tmp_path, head8="deadbeef")
+
+    path = cg.append_credential_gate(
+        state,
+        unit="R-1840",
+        gate="OPENAI_API_KEY required for mixed-provider exercise",
+        forward_closed="mock/provider-free tests passed; only live provider call remains",
+        resume="ask operator for OPENAI_API_KEY authorization, then run live e2e",
+        command="OPENAI_API_KEY=sk-secret uv run pytest live_test.py",
+    )
+
+    assert path == tmp_path / ".harness" / "codex_credential_gates.jsonl"
+    raw = path.read_text(encoding="utf-8")
+    assert "sk-secret" not in raw
+    assert "OPENAI_API_KEY=<redacted>" in raw
+    assert '"unit": "R-1840"' in raw
+
+
+def test_credential_gate_log_requires_forward_closed_evidence(tmp_path: Path) -> None:
+    state = _state(root=tmp_path)
+
+    try:
+        cg.append_credential_gate(
+            state,
+            unit="R-1840",
+            gate="OPENAI_API_KEY required",
+            forward_closed="",
+            resume="ask operator for OPENAI_API_KEY authorization",
+            command="uv run pytest live_test.py",
+        )
+    except ValueError as exc:
+        assert "forward_closed" in str(exc)
+    else:
+        raise AssertionError("append_credential_gate should require forward_closed evidence")
+
+
+def test_credential_gate_ledger_change_requires_tracking_surface() -> None:
+    state = _state(
+        status_entries=[" M .harness/codex_credential_gates.jsonl"],
+        changed_files=[".harness/codex_credential_gates.jsonl"],
+    )
+
+    findings = cg.validate(state, mode="closeout")
+
+    assert any(
+        f.code == "CREDENTIAL_GATE_TRACKING_REQUIRED" and f.severity == "hard" for f in findings
+    )

@@ -61,6 +61,10 @@ codex-context-check:
     /usr/bin/python3 tools/codex_context_guard.py checkpoint --label local-check
     /usr/bin/python3 tools/codex_context_guard.py check --require-fresh-checkpoint
 
+# Log a credential-gated unit after all non-credential work is closed.
+codex-credential-gate *args:
+    /usr/bin/python3 tools/codex_context_guard.py credential-gate {{args}}
+
 # ─── semantic overlay (R-IF-112) — spec ↔ code ↔ CXA-seam ↔ substitution ────
 # A deterministic, no-LLM overlay over the code graph. The agent-facing reference
 # tool: "what code implements C-IS-08", "who cites U-RT-112", "show me the orphans".

@@ -14,6 +14,7 @@ This repository is developed primarily with Claude Code CLI. For Codex, this fil
 - Use isolated worktrees for substantive edits. Prefer external or ignored worktree directories; `.codex-worktrees/` is ignored for operator-created local worktrees.
 - Do not edit `design-substrate/**`, specs, plans, ADRs, or fork docs in the same arc as implementation files unless the task is explicitly a design-phase/back-flow arc.
 - Do not run paid provider calls, credential-moving commands, destructive git commands, or network-dependent actions without explicit operator authorization.
+- For credential-gated units, build to the exact credential boundary, prove all non-credential forward actions are closed, then log the gate with `just codex-credential-gate --unit ... --gate ... --forward-closed ... --resume ...` if no HIL/operator-approval surface is available. Update a human-facing tracking surface so the pending gate is visible on the next human engagement, then proceed to the next implementable unit.
 - Preserve user work. Do not revert unrelated changes.
 - Re-run `just codex-preflight` after long work, merges, rebases, resumes, or compaction; memory/checkpoints are advisory until re-grounded against HEAD. Use `just codex-checkpoint <label>` for explicit mid-arc context checkpoints.
 
