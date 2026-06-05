@@ -41,6 +41,20 @@ fmt:
 # Full pre-merge gate: lint + typecheck + tests.
 check: lint typecheck test
 
+# ─── Codex deterministic context guard ─────────────────────────────────────
+
+# Materialize repo/worktree/roadmap state before substantive Codex work.
+codex-preflight:
+    /usr/bin/python3 tools/codex_context_guard.py preflight
+
+# Materialize closeout obligations before final response, commit, or PR.
+codex-closeout:
+    /usr/bin/python3 tools/codex_context_guard.py closeout
+
+# Combined local hard gate for context rot / drift / tracking omissions.
+codex-context-check:
+    /usr/bin/python3 tools/codex_context_guard.py check
+
 # ─── semantic overlay (R-IF-112) — spec ↔ code ↔ CXA-seam ↔ substitution ────
 # A deterministic, no-LLM overlay over the code graph. The agent-facing reference
 # tool: "what code implements C-IS-08", "who cites U-RT-112", "show me the orphans".

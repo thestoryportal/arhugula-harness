@@ -287,3 +287,30 @@ jobs:
       - name: Semantic-overlay tests (cite extraction + seam resolution + gate)
         working-directory: tools
         run: uv run python -m pytest semantic_overlay/test_overlay.py -q
+
+  codex-context-guard:
+    # R-600-codex-context-guard — Codex-side context-rot gate. The guard is stdlib-only
+    # so the runtime check uses /usr/bin/python3; pytest still runs under uv for the
+    # repo's pinned Python/test environment. Hard failures include root-checkout edits,
+    # design+implementation mixing, default-branch dashboard drift, and stale dashboard
+    # snapshots when dashboard sources changed.
+    runs-on: ubuntu-latest
+    name: Codex context guard (anti-rot gate) — blocking
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync workspace
+        run: uv sync --all-packages
+
+      - name: Codex context guard runtime check
+        run: /usr/bin/python3 tools/codex_context_guard.py check --allow-dashboard-drift
+
+      - name: Codex context guard tests
+        run: uv run python -m pytest tools/test_codex_context_guard.py -q
