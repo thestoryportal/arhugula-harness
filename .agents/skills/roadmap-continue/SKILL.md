@@ -1,6 +1,6 @@
 ---
 name: roadmap-continue
-description: Use when the operator says /roadmap-continue, continue, next action, drive the roadmap, or otherwise asks Codex to advance the next arhugula-v2 roadmap item end to end.
+description: "Use when the operator says /roadmap-continue, continue, next action, drive the roadmap, or otherwise asks Codex to advance the next arhugula-v2 roadmap item end to end."
 ---
 
 # Roadmap Continue

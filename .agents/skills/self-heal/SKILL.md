@@ -1,6 +1,6 @@
 ---
 name: self-heal
-description: Use when the operator says /self-heal, get the suite green, fix the build, tests are flaky, or asks Codex to restore a verified green state for arhugula-v2.
+description: "Use when the operator says /self-heal, get the suite green, fix the build, tests are flaky, or asks Codex to restore a verified green state for arhugula-v2."
 ---
 
 # Self Heal

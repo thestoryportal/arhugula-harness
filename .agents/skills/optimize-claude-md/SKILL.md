@@ -1,6 +1,6 @@
 ---
 name: optimize-claude-md
-description: Use when the operator asks to optimize, prune, trim, shrink, declutter, or context-budget audit arhugula-v2 CLAUDE.md governance files, including /optimize-claude-md.
+description: "Use when the operator asks to optimize, prune, trim, shrink, declutter, or context-budget audit arhugula-v2 CLAUDE.md governance files, including /optimize-claude-md."
 ---
 
 # Optimize CLAUDE.md

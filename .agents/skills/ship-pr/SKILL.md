@@ -1,6 +1,6 @@
 ---
 name: ship-pr
-description: Use when the operator says /ship-pr, ship it, open the PR, land this, or asks Codex to package an already-built arhugula-v2 change for review and CI.
+description: "Use when the operator says /ship-pr, ship it, open the PR, land this, or asks Codex to package an already-built arhugula-v2 change for review and CI."
 ---
 
 # Ship PR
