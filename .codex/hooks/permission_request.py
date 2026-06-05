@@ -63,7 +63,10 @@ if hits:
     print(
         "Codex permission posture: request touches "
         + ", ".join(hits)
-        + ". Confirm explicit operator authorization and least scope.",
+        + ". Confirm explicit operator authorization and least scope. "
+        "If no HIL/approval surface is available, build to the gate, then run "
+        "`just codex-credential-gate --unit ... --gate ... --forward-closed ... --resume ...` "
+        "and update Project_Roadmap_v1.md or .harness/roadmap_status.md.",
         file=sys.stderr,
     )
 

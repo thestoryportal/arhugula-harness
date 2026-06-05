@@ -1527,6 +1527,63 @@ R-600-post-merge-refresh-hook:
     PILOT: observe whether it fires accurately + stays quiet over coming sessions; expand to sibling
     hooks (just check pre-push / posture-guard / substitutions --check) only if the ergonomics hold.
 
+R-600-codex-context-guard:
+  title: Codex deterministic context guard — source-of-truth workflow + preflight/closeout tooling
+  surface: VII
+  status: ACTIVE   # 2026-06-05 — authored in PR draft and strengthened same arc: .codex/notes/deterministic-context-workflow.md + tools/codex_context_guard.py + just recipes + hard-failing Codex hook integration + local checkpoint artifacting. Resolves on merge after focused tests + guard self-check pass.
+  depends_on: []
+  blocks: []
+  posture: mode-agnostic
+  scope:
+    files:
+      - .codex/notes/deterministic-context-workflow.md
+      - tools/codex_context_guard.py
+      - tools/test_codex_context_guard.py
+      - AGENTS.md
+      - justfile
+      - .codex/hooks.json
+      - .codex/hooks/README.md
+      - .codex/hooks/permission_request.py
+      - .codex/hooks/session_start.py
+      - .codex/hooks/stop_gate.py
+      - .codex/notes/codex-compatibility-outline.md
+      - .harness/codex_credential_gates.jsonl
+      - .github/workflows/ci.yml
+      - tools/dashboard/roadmap.html
+    contracts: []
+    cross_axis: no
+  skills: { primary: null, secondary: [] }
+  advisor_required: no
+  council_required: no
+  verification:
+    shape: integration
+    must_pass:
+      - "preflight materializes cwd/root/branch/HEAD/worktree status/dashboard hash/fork count/latest batch from HEAD"
+      - "closeout fails hard on edits in the root checkout, design+implementation mixing, default-branch dashboard drift, and stale committed human-dashboard snapshot"
+      - "closeout warns on cite-bearing changes needing overlay-check and on missing tracking-surface review"
+      - "Codex SessionStart and Stop hooks invoke the guard and propagate hard guard findings as hook failures"
+      - "preflight/checkpoint/closeout write an ignored local checkpoint artifact; closeout/local check require the current checkpoint to match HEAD/status/dashboard"
+      - "credential-gated units can be logged only with unit/gate/resume/forward-closed evidence; secret-looking command values are redacted; closeout hard-fails when a credential-gate ledger change is not surfaced in roadmap/status"
+      - "CI runs the guard runtime smoke with explicit post-merge dashboard-drift allowance plus focused guard tests as a blocking tools job"
+      - "focused tests prove each hard failure class, checkpoint freshness behavior, plus overlay/tracking warnings"
+  close_shape:
+    type: PR-merge
+    artifact: "ops: Codex deterministic context workflow + guard CLI"
+    cascade: []
+  next_pointer: null
+  notes: >
+    Operator-surfaced defect class 2026-06-05: the Codex compatibility layer had reminders but no
+    deterministic context-rot control. A remembered checklist is itself a drift surface. This arc
+    promotes the missing discipline into a checked-in source-of-truth note plus a pure Python guard
+    with objective findings. Same-arc operator challenge tightened two gaps: hook-invoked guard
+    failures now propagate nonzero instead of only printing, and context checkpoints are concrete
+    ignored artifacts under .harness/.checkpoints/ with freshness checks at closeout/local check.
+    Follow-on operator clarification added credential-gate continuation semantics: Codex builds to the
+    exact credential boundary, proves non-credential work closed, logs `.harness/codex_credential_gates.jsonl`
+    when no HIL surface is available, surfaces it through roadmap/status, and then proceeds to the next
+    implementable unit.
+    This complements, not replaces, Claude's richer native hooks.
+
 R-600-codex-out-of-family-review:
   title: Codex CLI as a decorrelated out-of-family reviewer (subscription auth) — pilot
   surface: VII

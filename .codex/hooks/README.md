@@ -9,4 +9,9 @@ They are intentionally conservative:
 - `permission_request.py` surfaces paid-provider, credential, destructive, and network-sensitive requests for operator review.
 - `stop_gate.py` reports worktree and verification posture without claiming success.
 
+Credential-gated work should advance to the exact credential boundary first. If
+no HIL/operator-approval surface is available, log the pending gate with
+`just codex-credential-gate ...`, update a human-facing roadmap/status surface,
+and proceed only after the non-credential work is proven closed.
+
 Claude remains the canonical source for the original hook set. These scripts map the load-bearing checks into Codex lifecycle events without depending on Claude-specific environment variables.
