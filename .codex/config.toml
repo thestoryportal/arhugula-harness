@@ -1,0 +1,8 @@
+# Project-scoped Codex configuration for arhugula-v2.
+# Provider/auth/profile/telemetry settings stay user-level by Codex policy.
+
+project_doc_fallback_filenames = ["CLAUDE.md"]
+project_doc_max_bytes = 131072
+
+[features]
+hooks = true
