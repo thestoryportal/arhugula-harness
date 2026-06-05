@@ -1,6 +1,6 @@
 ---
 name: overlay-query
-description: Use for arhugula-v2 semantic-overlay cite grounding: resolving C-*, U-*, H_T-*, ADR-*, CXA, or section cites to implementation files, checking seam producer/consumer grounding, or verifying cross-spec drift before claims.
+description: "Use for arhugula-v2 semantic-overlay cite grounding: resolving C-*, U-*, H_T-*, ADR-*, CXA, or section cites to implementation files, checking seam producer/consumer grounding, or verifying cross-spec drift before claims."
 ---
 
 # Overlay Query
