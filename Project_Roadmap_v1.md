@@ -1530,7 +1530,7 @@ R-600-post-merge-refresh-hook:
 R-600-codex-context-guard:
   title: Codex deterministic context guard — source-of-truth workflow + preflight/closeout tooling
   surface: VII
-  status: ACTIVE   # 2026-06-05 — authored in PR draft: .codex/notes/deterministic-context-workflow.md + tools/codex_context_guard.py + just recipes + Codex hook integration. Resolves on merge after focused tests + guard self-check pass.
+  status: ACTIVE   # 2026-06-05 — authored in PR draft and strengthened same arc: .codex/notes/deterministic-context-workflow.md + tools/codex_context_guard.py + just recipes + hard-failing Codex hook integration + local checkpoint artifacting. Resolves on merge after focused tests + guard self-check pass.
   depends_on: []
   blocks: []
   posture: mode-agnostic
@@ -1541,6 +1541,7 @@ R-600-codex-context-guard:
       - tools/test_codex_context_guard.py
       - AGENTS.md
       - justfile
+      - .codex/hooks.json
       - .codex/hooks/session_start.py
       - .codex/hooks/stop_gate.py
       - .codex/notes/codex-compatibility-outline.md
@@ -1557,9 +1558,10 @@ R-600-codex-context-guard:
       - "preflight materializes cwd/root/branch/HEAD/worktree status/dashboard hash/fork count/latest batch from HEAD"
       - "closeout fails hard on edits in the root checkout, design+implementation mixing, default-branch dashboard drift, and stale committed human-dashboard snapshot"
       - "closeout warns on cite-bearing changes needing overlay-check and on missing tracking-surface review"
-      - "Codex SessionStart and Stop hooks invoke the guard instead of relying on remembered checklist state"
+      - "Codex SessionStart and Stop hooks invoke the guard and propagate hard guard findings as hook failures"
+      - "preflight/checkpoint/closeout write an ignored local checkpoint artifact; closeout/local check require the current checkpoint to match HEAD/status/dashboard"
       - "CI runs the guard runtime smoke with explicit post-merge dashboard-drift allowance plus focused guard tests as a blocking tools job"
-      - "focused tests prove each hard failure class plus overlay/tracking warnings"
+      - "focused tests prove each hard failure class, checkpoint freshness behavior, plus overlay/tracking warnings"
   close_shape:
     type: PR-merge
     artifact: "ops: Codex deterministic context workflow + guard CLI"
@@ -1569,10 +1571,10 @@ R-600-codex-context-guard:
     Operator-surfaced defect class 2026-06-05: the Codex compatibility layer had reminders but no
     deterministic context-rot control. A remembered checklist is itself a drift surface. This arc
     promotes the missing discipline into a checked-in source-of-truth note plus a pure Python guard
-    with objective findings. The hook integration is intentionally conservative: it prints the
-    materialized guard report at Codex startup/stop, while the just recipes provide the explicit
-    preflight/closeout commands Codex must run and cite. This complements, not replaces, Claude's
-    richer native hooks.
+    with objective findings. Same-arc operator challenge tightened two gaps: hook-invoked guard
+    failures now propagate nonzero instead of only printing, and context checkpoints are concrete
+    ignored artifacts under .harness/.checkpoints/ with freshness checks at closeout/local check.
+    This complements, not replaces, Claude's richer native hooks.
 
 R-600-codex-out-of-family-review:
   title: Codex CLI as a decorrelated out-of-family reviewer (subscription auth) — pilot

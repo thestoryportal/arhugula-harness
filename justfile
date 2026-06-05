@@ -47,13 +47,19 @@ check: lint typecheck test
 codex-preflight:
     /usr/bin/python3 tools/codex_context_guard.py preflight
 
+# Write a deterministic local context checkpoint.
+codex-checkpoint label="manual":
+    /usr/bin/python3 tools/codex_context_guard.py checkpoint --label {{label}}
+
 # Materialize closeout obligations before final response, commit, or PR.
 codex-closeout:
-    /usr/bin/python3 tools/codex_context_guard.py closeout
+    /usr/bin/python3 tools/codex_context_guard.py checkpoint --label pre-closeout
+    /usr/bin/python3 tools/codex_context_guard.py closeout --require-fresh-checkpoint
 
 # Combined local hard gate for context rot / drift / tracking omissions.
 codex-context-check:
-    /usr/bin/python3 tools/codex_context_guard.py check
+    /usr/bin/python3 tools/codex_context_guard.py checkpoint --label local-check
+    /usr/bin/python3 tools/codex_context_guard.py check --require-fresh-checkpoint
 
 # ─── semantic overlay (R-IF-112) — spec ↔ code ↔ CXA-seam ↔ substitution ────
 # A deterministic, no-LLM overlay over the code graph. The agent-facing reference

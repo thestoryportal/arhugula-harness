@@ -138,3 +138,30 @@ def test_cite_bearing_changes_require_overlay_check_evidence() -> None:
     findings = cg.validate(state, mode="closeout")
 
     assert any(f.code == "OVERLAY_CHECK_REQUIRED" for f in findings)
+
+
+def test_missing_required_checkpoint_is_hard_failure(tmp_path: Path) -> None:
+    state = _state(root=tmp_path)
+
+    findings = cg.validate(state, mode="check", require_fresh_checkpoint=True)
+
+    assert any(f.code == "CONTEXT_CHECKPOINT_MISSING" and f.severity == "hard" for f in findings)
+
+
+def test_fresh_checkpoint_satisfies_required_checkpoint(tmp_path: Path) -> None:
+    state = _state(root=tmp_path, changed_files=["AGENTS.md"], status_entries=[" M AGENTS.md"])
+    cg.write_checkpoint(state, label="test", findings=[])
+
+    findings = cg.validate(state, mode="check", require_fresh_checkpoint=True)
+
+    assert not any(f.code.startswith("CONTEXT_CHECKPOINT_") for f in findings)
+
+
+def test_stale_checkpoint_is_hard_failure(tmp_path: Path) -> None:
+    old_state = _state(root=tmp_path, changed_files=["AGENTS.md"], status_entries=[" M AGENTS.md"])
+    new_state = _state(root=tmp_path, changed_files=["justfile"], status_entries=[" M justfile"])
+    cg.write_checkpoint(old_state, label="test", findings=[])
+
+    findings = cg.validate(new_state, mode="check", require_fresh_checkpoint=True)
+
+    assert any(f.code == "CONTEXT_CHECKPOINT_STALE" and f.severity == "hard" for f in findings)

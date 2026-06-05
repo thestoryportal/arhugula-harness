@@ -10,6 +10,10 @@ Every substantive Codex arc materializes state from repository instruments at
 defined gates. Memory, checkpoints, prior chat, and dashboard prose are
 orientation only until re-grounded against HEAD.
 
+The `just` recipes are the mandatory command surface. Direct
+`tools/codex_context_guard.py` invocation is equivalent only when it uses the
+same mode and flags.
+
 ## Required Gates
 
 ### 1. Preflight
@@ -27,6 +31,7 @@ The preflight materializes:
 - roadmap dashboard hash versus computed workspace hash
 - open fork-doc count and latest retirement batch
 - dashboard snapshot freshness when dashboard sources changed
+- a local checkpoint artifact at `.harness/.checkpoints/codex-context-latest.json`
 
 Hard failures stop work until resolved.
 
@@ -60,6 +65,16 @@ just codex-preflight
 Treat memory/checkpoint "remaining work" as advisory until rechecked against
 the current dashboard, git state, and source files.
 
+For an explicit mid-arc checkpoint:
+
+```bash
+just codex-checkpoint mid-arc
+```
+
+The checkpoint records the current context fingerprint, HEAD, branch, changed
+files, status entries, dashboard state, and findings. It is ignored by git and
+exists to make context-refresh moments inspectable rather than remembered.
+
 ### 5. Closeout
 
 Run before final response, commit, or PR:
@@ -76,6 +91,11 @@ Closeout checks:
 - stale committed human dashboard snapshot when dashboard sources changed
 - cite-bearing changes that require `just overlay-check`
 - missing tracking-surface review
+- fresh checkpoint match against current HEAD/status/dashboard
+
+The closeout recipe first writes a `pre-closeout` checkpoint, then runs the
+closeout guard with `--require-fresh-checkpoint`. A stale or missing checkpoint
+is a hard failure when freshness is required.
 
 ### 6. Tracking Surface Audit
 
@@ -101,9 +121,15 @@ tracking updates, and any owed follow-on refresh.
 
 ```bash
 just codex-preflight
+just codex-checkpoint <label>
 just codex-closeout
 just codex-context-check
 ```
 
 `codex-context-check` is the combined hard gate for local validation. It exits
-nonzero on hard violations.
+nonzero on hard violations and requires a fresh checkpoint. CI runs the guard
+directly without local checkpoint freshness because `.harness/.checkpoints/` is
+intentionally untracked.
+
+The Codex `SessionStart` and `Stop` hooks invoke the same guard. Hook failures
+propagate nonzero when the guard reports a hard finding or cannot run.

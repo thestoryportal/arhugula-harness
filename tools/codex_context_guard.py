@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 DESIGN_RE = re.compile(
@@ -38,6 +39,8 @@ TRACKING_SURFACES = {
     "tools/dashboard/roadmap.html",
     ".harness/substitutions.yaml",
 }
+CHECKPOINT_DIR = Path(".harness/.checkpoints")
+CHECKPOINT_FILE = "codex-context-latest.json"
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,17 @@ class Finding:
     severity: str  # hard | warn | info
     code: str
     message: str
+
+
+@dataclass(frozen=True)
+class Checkpoint:
+    label: str
+    fingerprint: str
+    head8: str
+    branch: str
+    changed_files: list[str]
+    status_entries: list[str]
+    written_at: str
 
 
 def _run(args: list[str], *, cwd: Path, timeout: int = 20) -> subprocess.CompletedProcess[str]:
@@ -183,6 +197,72 @@ def state_hash(head8: str, prs: str, forks: int, batch: str) -> str:
     return hashlib.sha256(raw).hexdigest()[:12]
 
 
+def state_fingerprint(state: GuardState) -> str:
+    payload = {
+        "branch": state.branch,
+        "changed_files": state.changed_files,
+        "computed_hash": state.computed_hash,
+        "dashboard_hash": state.dashboard.hash,
+        "head8": state.head8,
+        "status_entries": state.status_entries,
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def checkpoint_path(root: Path) -> Path:
+    return root / CHECKPOINT_DIR / CHECKPOINT_FILE
+
+
+def load_checkpoint(root: Path) -> Checkpoint | None:
+    path = checkpoint_path(root)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    try:
+        return Checkpoint(
+            label=str(raw["label"]),
+            fingerprint=str(raw["fingerprint"]),
+            head8=str(raw["head8"]),
+            branch=str(raw["branch"]),
+            changed_files=[str(f) for f in raw["changed_files"]],
+            status_entries=[str(s) for s in raw["status_entries"]],
+            written_at=str(raw["written_at"]),
+        )
+    except (KeyError, TypeError):
+        return None
+
+
+def write_checkpoint(state: GuardState, *, label: str, findings: list[Finding]) -> Path:
+    path = checkpoint_path(state.root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "label": label,
+        "written_at": datetime.now(timezone.utc).isoformat(),  # noqa: UP017 - /usr/bin/python3 is 3.9.
+        "fingerprint": state_fingerprint(state),
+        "root": str(state.root),
+        "cwd": str(state.cwd),
+        "branch": state.branch,
+        "default_branch": state.default_branch,
+        "head8": state.head8,
+        "git_dir": state.git_dir,
+        "is_linked_worktree": state.is_linked_worktree,
+        "status_entries": state.status_entries,
+        "changed_files": state.changed_files,
+        "dashboard": state.dashboard.__dict__,
+        "computed_hash": state.computed_hash,
+        "open_prs": state.open_prs,
+        "fork_doc_count": state.fork_doc_count,
+        "latest_retirement_batch": state.latest_retirement_batch,
+        "lag_expected": state.lag_expected,
+        "dashboard_snapshot_current": state.dashboard_snapshot_current,
+        "findings": [f.__dict__ for f in findings],
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
 def _lag_expected(root: Path) -> bool:
     title = _out(["git", "log", "-1", "--format=%s"], cwd=root)
     if not title.startswith("ops: roadmap status refresh "):
@@ -265,7 +345,13 @@ def _has_tracking_changes(files: list[str]) -> bool:
     )
 
 
-def validate(state: GuardState, *, mode: str, allow_dashboard_drift: bool = False) -> list[Finding]:
+def validate(
+    state: GuardState,
+    *,
+    mode: str,
+    allow_dashboard_drift: bool = False,
+    require_fresh_checkpoint: bool = False,
+) -> list[Finding]:
     findings: list[Finding] = []
 
     if state.status_entries and not state.is_linked_worktree:
@@ -359,6 +445,28 @@ def validate(state: GuardState, *, mode: str, allow_dashboard_drift: bool = Fals
             )
         )
 
+    if require_fresh_checkpoint:
+        checkpoint = load_checkpoint(state.root)
+        current_fingerprint = state_fingerprint(state)
+        if checkpoint is None:
+            findings.append(
+                Finding(
+                    "hard",
+                    "CONTEXT_CHECKPOINT_MISSING",
+                    "No deterministic context checkpoint exists. Run "
+                    "`just codex-checkpoint <label>` or the closeout recipe.",
+                )
+            )
+        elif checkpoint.fingerprint != current_fingerprint:
+            findings.append(
+                Finding(
+                    "hard",
+                    "CONTEXT_CHECKPOINT_STALE",
+                    "Latest context checkpoint does not match current HEAD/status/dashboard "
+                    f"(checkpoint label={checkpoint.label}, written_at={checkpoint.written_at}).",
+                )
+            )
+
     return findings
 
 
@@ -385,6 +493,7 @@ def _text_report(state: GuardState, findings: list[Finding]) -> str:
             f"dashboard_hash: {state.dashboard.hash or '<missing>'}",
             f"computed_hash: {state.computed_hash}",
             f"dashboard_git_head: {state.dashboard.git_head or '<missing>'}",
+            f"context_fingerprint: {state_fingerprint(state)}",
             f"latest_retirement_batch: {state.latest_retirement_batch or '<none>'}",
             f"open_fork_doc_count: {state.fork_doc_count}",
             f"dashboard_snapshot_current: {state.dashboard_snapshot_current}",
@@ -414,6 +523,7 @@ def _json_report(state: GuardState, findings: list[Finding]) -> str:
             "changed_files": state.changed_files,
             "dashboard": state.dashboard.__dict__,
             "computed_hash": state.computed_hash,
+            "context_fingerprint": state_fingerprint(state),
             "open_prs": state.open_prs,
             "fork_doc_count": state.fork_doc_count,
             "latest_retirement_batch": state.latest_retirement_batch,
@@ -427,8 +537,18 @@ def _json_report(state: GuardState, findings: list[Finding]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Codex deterministic context guard.")
-    parser.add_argument("mode", choices=["preflight", "closeout", "check"])
+    parser.add_argument("mode", choices=["preflight", "closeout", "check", "checkpoint"])
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    parser.add_argument(
+        "--label",
+        default="manual",
+        help="checkpoint label when mode=checkpoint",
+    )
+    parser.add_argument(
+        "--require-fresh-checkpoint",
+        action="store_true",
+        help="fail if the latest checkpoint does not match current HEAD/status/dashboard",
+    )
     parser.add_argument(
         "--allow-dashboard-drift",
         action="store_true",
@@ -441,8 +561,14 @@ def main(argv: list[str] | None = None) -> int:
         state,
         mode=args.mode,
         allow_dashboard_drift=args.allow_dashboard_drift,
+        require_fresh_checkpoint=args.require_fresh_checkpoint,
     )
     print(_json_report(state, findings) if args.json else _text_report(state, findings))
+    if args.mode in {"preflight", "checkpoint"}:
+        path = write_checkpoint(
+            state, label=args.label if args.mode == "checkpoint" else "preflight", findings=findings
+        )
+        print(f"checkpoint_written: {path}")
     return 1 if any(f.severity == "hard" for f in findings) else 0
 
 

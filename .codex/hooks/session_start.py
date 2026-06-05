@@ -4,28 +4,38 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def exists(path: str) -> str:
-    return "present" if Path(path).exists() else "missing"
+    return "present" if (ROOT / path).exists() else "missing"
 
 
 def run_guard() -> str:
-    script = Path("tools/codex_context_guard.py")
+    script = ROOT / "tools/codex_context_guard.py"
     if not script.exists():
-        return "<codex context guard missing>"
+        raise SystemExit("<codex context guard missing>")
     try:
         proc = subprocess.run(
             ["/usr/bin/python3", str(script), "preflight"],
+            cwd=ROOT,
             capture_output=True,
             text=True,
             check=False,
-            timeout=20,
+            timeout=75,
         )
     except Exception as exc:  # pragma: no cover - hook defensive path
-        return f"<codex context guard unavailable: {exc}>"
-    return proc.stdout.strip() or proc.stderr.strip() or "<codex context guard produced no output>"
+        raise SystemExit(f"<codex context guard unavailable: {exc}>") from exc
+    output = (
+        proc.stdout.strip() or proc.stderr.strip() or "<codex context guard produced no output>"
+    )
+    if proc.returncode != 0:
+        print(output)
+        sys.exit(proc.returncode)
+    return output
 
 
 print("Codex project posture for arhugula-v2:")
