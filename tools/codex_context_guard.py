@@ -164,9 +164,7 @@ def _fork_doc_count(root: Path) -> int:
     harness = root / ".harness"
     if not harness.is_dir():
         return 0
-    return len(
-        list(harness.glob("class_1_fork_*.md")) + list(harness.glob("class_2_fork_*.md"))
-    )
+    return len(list(harness.glob("class_1_fork_*.md")) + list(harness.glob("class_2_fork_*.md")))
 
 
 def _latest_retirement_batch(root: Path) -> str:
@@ -263,14 +261,11 @@ def _has_dashboard_source_changes(files: list[str]) -> bool:
 
 def _has_tracking_changes(files: list[str]) -> bool:
     return bool(
-        set(files) & TRACKING_SURFACES
-        or any(f.startswith(".harness/phase-7d-") for f in files)
+        set(files) & TRACKING_SURFACES or any(f.startswith(".harness/phase-7d-") for f in files)
     )
 
 
-def validate(
-    state: GuardState, *, mode: str, allow_dashboard_drift: bool = False
-) -> list[Finding]:
+def validate(state: GuardState, *, mode: str, allow_dashboard_drift: bool = False) -> list[Finding]:
     findings: list[Finding] = []
 
     if state.status_entries and not state.is_linked_worktree:
@@ -315,12 +310,12 @@ def validate(
         else:
             findings.append(
                 Finding(
-                "warn",
-                "ROADMAP_DASHBOARD_BRANCH_DIVERGED",
-                "Dashboard hash differs from this branch; this is expected "
-                "in feature worktrees but must be reconciled after merge.",
+                    "warn",
+                    "ROADMAP_DASHBOARD_BRANCH_DIVERGED",
+                    "Dashboard hash differs from this branch; this is expected "
+                    "in feature worktrees but must be reconciled after merge.",
+                )
             )
-        )
 
     if mode in {"closeout", "check"} and _has_cite_bearing_changes(state.changed_files):
         findings.append(
@@ -350,8 +345,10 @@ def validate(
                 )
             )
 
-    if mode in {"closeout", "check"} and state.changed_files and not _has_tracking_changes(
-        state.changed_files
+    if (
+        mode in {"closeout", "check"}
+        and state.changed_files
+        and not _has_tracking_changes(state.changed_files)
     ):
         findings.append(
             Finding(
