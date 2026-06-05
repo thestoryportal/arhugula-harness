@@ -1530,7 +1530,7 @@ R-600-post-merge-refresh-hook:
 R-600-codex-context-guard:
   title: Codex deterministic context guard — source-of-truth workflow + preflight/closeout tooling
   surface: VII
-  status: ACTIVE   # 2026-06-05 — authored in PR draft and strengthened same arc: .codex/notes/deterministic-context-workflow.md + tools/codex_context_guard.py + just recipes + hard-failing Codex hook integration + local checkpoint artifacting. Resolves on merge after focused tests + guard self-check pass.
+  status: RESOLVED   # 2026-06-05 — PR #301 merged. Codex preflight/checkpoint/closeout guard, hard-failing hooks, local checkpoint artifacting, and credential-gate ledger semantics are live.
   depends_on: []
   blocks: []
   posture: mode-agnostic
@@ -1582,7 +1582,8 @@ R-600-codex-context-guard:
     exact credential boundary, proves non-credential work closed, logs `.harness/codex_credential_gates.jsonl`
     when no HIL surface is available, surfaces it through roadmap/status, and then proceeds to the next
     implementable unit.
-    This complements, not replaces, Claude's richer native hooks.
+    PR #301 merged 2026-06-05 with all blocking CI green. This complements, not replaces,
+    Claude's richer native hooks.
 
 R-600-codex-out-of-family-review:
   title: Codex CLI as a decorrelated out-of-family reviewer (subscription auth) — pilot
