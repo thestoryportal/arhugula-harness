@@ -161,9 +161,19 @@ just codex-context-check
 ```
 
 `codex-context-check` is the combined hard gate for local validation. It exits
-nonzero on hard violations and requires a fresh checkpoint. CI runs the guard
-directly without local checkpoint freshness because `.harness/.checkpoints/` is
-intentionally untracked.
+nonzero on hard violations and requires a fresh checkpoint. The local closeout
+and context-check recipes pass `--include-branch-diff`, so a clean feature
+worktree is still checked against committed changes since the merge-base with
+the default branch.
+
+CI runs the guard directly without local checkpoint freshness because
+`.harness/.checkpoints/` is intentionally untracked. The CI invocation passes
+explicit `--base-ref` / `--head-ref` values from the GitHub event so the guard
+checks the committed PR range instead of an empty clean-checkout status.
+`--allow-dashboard-drift` only downgrades non-default-branch drift; it cannot
+mask default-branch dashboard drift. When `gh pr list` is unavailable, the guard
+emits `OPEN_PRS_UNAVAILABLE` instead of silently treating the open-PR set as
+authoritative.
 
 The Codex `SessionStart` and `Stop` hooks invoke the same guard. Hook failures
 propagate nonzero when the guard reports a hard finding or cannot run.

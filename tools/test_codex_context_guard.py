@@ -7,6 +7,7 @@ checks instead of remembered process.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -33,12 +34,49 @@ def _state(**overrides) -> cg.GuardState:
         ),
         computed_hash="abc",
         open_prs="",
+        open_prs_available=True,
         fork_doc_count=0,
         latest_retirement_batch=".harness/phase-7d-retirement-events-batch-51.md",
         lag_expected=False,
         dashboard_snapshot_current=True,
     )
     return cg.GuardState(**{**base.__dict__, **overrides})
+
+
+def _git(cwd: Path, *args: str) -> str:
+    proc = subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return proc.stdout.strip()
+
+
+def _init_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "codex@example.test")
+    _git(repo, "config", "user.name", "Codex Test")
+    (repo / ".harness").mkdir()
+    (repo / ".harness" / "roadmap_status.md").write_text(
+        "\n".join(
+            [
+                "| Field | Value |",
+                "|---|---|",
+                "| `workspace_state_hash` | `000000000000` |",
+                "| `git_head` | `00000000` |",
+                "| `last_refreshed` | 2026-06-05T00:00:00-06:00 |",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "baseline")
+    return repo
 
 
 def test_root_checkout_edits_are_hard_failure() -> None:
@@ -79,6 +117,73 @@ def test_design_and_implementation_mix_is_hard_failure() -> None:
     assert any(f.code == "DESIGN_IMPL_MIX" and f.severity == "hard" for f in findings)
 
 
+def test_design_and_codex_tooling_mix_is_hard_failure() -> None:
+    state = _state(
+        status_entries=[
+            " M .harness/class_3_drift_codex_guard.md",
+            " M tools/codex_context_guard.py",
+        ],
+        changed_files=[
+            ".harness/class_3_drift_codex_guard.md",
+            "tools/codex_context_guard.py",
+        ],
+    )
+
+    findings = cg.validate(state, mode="closeout")
+
+    assert any(f.code == "DESIGN_IMPL_MIX" and f.severity == "hard" for f in findings)
+
+
+def test_committed_diff_range_drives_guard_changed_files(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "Project_Roadmap_v1.md").write_text("# roadmap\n", encoding="utf-8")
+    (repo / "tools").mkdir()
+    (repo / "tools" / "codex_context_guard.py").write_text("# guard\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "guard change")
+    head = _git(repo, "rev-parse", "HEAD")
+
+    state = cg.derive(repo, base_ref=base, head_ref=head)
+
+    assert state.changed_files == ["Project_Roadmap_v1.md", "tools/codex_context_guard.py"]
+
+
+def test_committed_diff_range_enforces_design_impl_mix_in_clean_checkout(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / ".harness" / "class_3_drift_codex_guard.md").write_text("drift\n", encoding="utf-8")
+    (repo / ".codex").mkdir()
+    (repo / ".codex" / "hooks").mkdir()
+    (repo / ".codex" / "hooks" / "stop_gate.py").write_text("# hook\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "mixed committed change")
+    head = _git(repo, "rev-parse", "HEAD")
+
+    state = cg.derive(repo, base_ref=base, head_ref=head)
+    findings = cg.validate(state, mode="check")
+
+    assert state.status_entries == []
+    assert any(f.code == "DESIGN_IMPL_MIX" and f.severity == "hard" for f in findings)
+
+
+def test_branch_diff_mode_uses_merge_base_when_worktree_is_clean(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    _git(repo, "branch", "-m", "main")
+    _git(repo, "checkout", "-b", "feature")
+    (repo / ".harness" / "class_3_drift_codex_guard.md").write_text("drift\n", encoding="utf-8")
+    (repo / "justfile").write_text("codex-context-check:\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "mixed committed branch change")
+
+    state = cg.derive(repo, include_branch_diff=True)
+    findings = cg.validate(state, mode="check")
+
+    assert state.status_entries == []
+    assert state.changed_files == [".harness/class_3_drift_codex_guard.md", "justfile"]
+    assert any(f.code == "DESIGN_IMPL_MIX" and f.severity == "hard" for f in findings)
+
+
 def test_dashboard_drift_on_default_branch_is_hard_failure() -> None:
     state = _state(
         branch="main",
@@ -93,7 +198,7 @@ def test_dashboard_drift_on_default_branch_is_hard_failure() -> None:
     assert any(f.code == "ROADMAP_DASHBOARD_DRIFT" and f.severity == "hard" for f in findings)
 
 
-def test_dashboard_drift_can_be_downgraded_for_ci_runtime_smoke() -> None:
+def test_dashboard_drift_allowance_does_not_downgrade_default_branch() -> None:
     state = _state(
         branch="main",
         git_dir=".git",
@@ -104,8 +209,19 @@ def test_dashboard_drift_can_be_downgraded_for_ci_runtime_smoke() -> None:
 
     findings = cg.validate(state, mode="preflight", allow_dashboard_drift=True)
 
-    assert any(f.code == "ROADMAP_DASHBOARD_DRIFT_ALLOWED" for f in findings)
-    assert not any(f.code == "ROADMAP_DASHBOARD_DRIFT" for f in findings)
+    assert any(f.code == "ROADMAP_DASHBOARD_DRIFT" and f.severity == "hard" for f in findings)
+    assert not any(f.code == "ROADMAP_DASHBOARD_DRIFT_ALLOWED" for f in findings)
+
+
+def test_lag_expected_dashboard_drift_has_specific_warning_code() -> None:
+    state = _state(branch="main", computed_hash="newhash", lag_expected=True)
+
+    findings = cg.validate(state, mode="preflight")
+
+    assert any(
+        f.code == "ROADMAP_DASHBOARD_LAG_EXPECTED" and f.severity == "warn" for f in findings
+    )
+    assert not any(f.code == "ROADMAP_DASHBOARD_BRANCH_DIVERGED" for f in findings)
 
 
 def test_dashboard_drift_off_default_branch_is_advisory() -> None:
@@ -215,3 +331,11 @@ def test_credential_gate_ledger_change_requires_tracking_surface() -> None:
     assert any(
         f.code == "CREDENTIAL_GATE_TRACKING_REQUIRED" and f.severity == "hard" for f in findings
     )
+
+
+def test_unavailable_open_prs_are_explicit_warning() -> None:
+    state = _state(open_prs="", open_prs_available=False)
+
+    findings = cg.validate(state, mode="preflight")
+
+    assert any(f.code == "OPEN_PRS_UNAVAILABLE" and f.severity == "warn" for f in findings)
