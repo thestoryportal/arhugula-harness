@@ -343,7 +343,10 @@ def _lag_expected(root: Path) -> bool:
         return False
     changed = _out(["git", "show", "--name-only", "--pretty=format:", "HEAD"], cwd=root)
     files = sorted(line.strip() for line in changed.splitlines() if line.strip())
-    return files == [".harness/roadmap_status.md"]
+    return files in (
+        [".harness/roadmap_status.md"],
+        [".harness/roadmap_status.md", DASHBOARD_SNAPSHOT],
+    )
 
 
 def _dashboard_snapshot_current(
