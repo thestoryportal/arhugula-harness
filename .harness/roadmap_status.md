@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `d994d417dc01` |
-| `last_refreshed` | 2026-06-06T15:45:04-06:00 |
-| `git_head` | `642bfb17` (main) — post-PR #310 dashboard/status refresh generated. |
+| `workspace_state_hash` | `ff22b0aea83c` |
+| `last_refreshed` | 2026-06-06T16:54:44-06:00 |
+| `git_head` | `11e338f9` (main) — post-PR #312 hook next-action range-token fix. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -23,6 +23,8 @@
 > **🚦 STANDING DIRECTIVE — operator-labeled items are Claude-driven; NO parking (2026-06-02; CLAUDE.md §12.4.1, `[[feedback-operator-labels-are-claude-driven-no-parking]]`).** "No auto-derivable Claude-executable ACTIVE row remains" is **NOT** a stop condition. The operator executes NOTHING manually — Claude does all the work. When the auto-`ACTIVE` queue is empty, **pick the highest-value forward item** (drivable now: `R-410..R-440` sandbox/deploy/secrets slices, `R-CXA-2` engine-substrate, `R-810/820` files/managed-agents, `R-830` memory backend — each has a Claude-executable slice grounding reveals), **ground it, build its slice to the genuine gate**, and surface only a real decision / credential / paid-call / irreversible action (batched, minimal). Don't re-stop here citing "operator-owned." *(R-700's declaration was HELD; the operator LIFTED the hold 2026-06-02 — Phase 8 is now CLOSED, see banner below. `R-300-multi-llm-second-provider` B-2 is now fully closed by PRs #281 + #283.)*
 
 > **🎓 PHASE 8 CLOSED — substitution accounting DECLARED 2026-06-02 (`.harness/phase-8-graduation.md`).** The operator lifted the HELD R-700 declaration ("kick off the declaration"); item 4 executed. **Canonical: 46/54 RETIRED (85.2%) + 49/54 pipeline-advanced (90.7%)** (operator-ratified accounting (i)). The deferred 48→46 supersession is applied forward (ledger §11.7 + harness-cp/CLAUDE.md + this dashboard; prior batch records stand verbatim). 8 rows carry ratified terminal sign-off dispositions (OD-4 `RETIRED-AS-CROSS-AXIS-DEFERRED`; AS-8e/8f/CP-17 accepted-indefinite-defer; CXA-1..4 Phase-2-runtime-deferred) — **labels do NOT re-tally into the 46** (the OD-6-in-both-lists tell). `R-700` → RESOLVED. Phase 7 (substitution-retirement execution) is complete; the workspace is now wholly on the **post-Phase-8 activation/deployment/integration axis** (Surfaces IV/V/VI). **The forward menu's un-built no-creds slices are exhausted** (R-410 design half filed PR #256; everything else gates on operator creds/infra, or a dispositioned design arc) — per §12.4.1 a future session drives the highest-value forward item to its genuine gate.
+
+**(This session — 2026-06-06. PR #312 MERGED.)** Closed the concrete loop-hardening bug surfaced by the post-#311 re-grounding: `hook_roadmap_next` no longer treats roadmap range/menu tokens such as `R-410..R-440` as actionable next units. It now scopes to `## Next action`, strips backticks, skips `..` range tokens, and returns the first concrete `R-*` token. Regression test flipped red first (`R-410..R-440` incorrectly returned), then green after the fix. This prevents SessionStart / prompt-context / stop-loop from injecting a broad gated range as the next item and re-entering the false forward-menu loop. PR #312 CI was fully green.
 
 **(This session — 2026-06-06. PRs #306 + #307 MERGED.)** PR #306 fixed the dashboard generator so exact-ID `RESOLVED` / `CANCELLED` roadmap actions no longer linger in the manual "remaining" list. PR #307 then closed stale R-300 tracking: `R-300-multi-llm-second-provider` / forward-register B-2 is now marked RESOLVED from the already-merged PR #281 deterministic + live OpenAI evidence and PR #283 live Ollama evidence. The dashboard remaining list no longer includes R-300; no paid live provider recipe was rerun in this refresh. This is the owed post-merge terminating refresh recording those two PRs.
 
