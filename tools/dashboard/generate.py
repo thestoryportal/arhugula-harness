@@ -314,6 +314,8 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
         if (a.get("surface") in {"IV", "V", "VI", "IX", "X"} or a["id"].startswith("R-CXA"))
     ]
     fwd_open = [a for a in fwd if a["status"] not in ("RESOLVED", "CANCELLED")]
+    closed_action_ids = {a["id"] for a in actions if a["status"] in ("RESOLVED", "CANCELLED")}
+    remaining = [item for item in REMAINING_ORDERED if item["id"] not in closed_action_ids]
     # waffle-grid breakdown (ui-ux-pro-max chart rec: fraction-of-whole filled).
     # `retired` + the 8 non-retired split by state → total 54 (derived above; R-600).
     return {
@@ -338,7 +340,7 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
             "open": len(fwd_open),
             "exercised_pct": 0,
         },
-        "remaining": REMAINING_ORDERED,
+        "remaining": remaining,
     }
 
 

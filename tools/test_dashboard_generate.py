@@ -40,3 +40,22 @@ substitutions: []
     trend = generate.parse_retired_trend(tmp_path)
 
     assert trend[-1]["retired"] == 46
+
+
+def test_resolved_actions_are_omitted_from_remaining_order(monkeypatch):
+    generate = _load_generate_module()
+    monkeypatch.setattr(generate, "_SUB_DERIVATION", None)
+
+    closure = generate.compute_closure(
+        [
+            {
+                "id": "R-300-multi-llm-second-provider",
+                "surface": "IV",
+                "status": "RESOLVED",
+            },
+        ],
+        {"retirement": {}},
+    )
+
+    remaining_ids = {item["id"] for item in closure["remaining"]}
+    assert "R-300-multi-llm-second-provider" not in remaining_ids
