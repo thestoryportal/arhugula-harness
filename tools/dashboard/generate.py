@@ -353,6 +353,30 @@ def _run(cmd: list[str], *, cwd: Path, timeout: int = 30) -> str:
         return ""
 
 
+def _substitution_snapshot(root: Path) -> dict[str, int] | None:
+    """Parse the ledger snapshot block without PyYAML.
+
+    `tools/substitution_ledger.py` remains the canonical full derivation when PyYAML is
+    available. This tiny fallback is only for system-Python dashboard regeneration in
+    Codex guards, where the committed snapshot still needs the canonical R-600 pins.
+    """
+    try:
+        text = (root / ".harness" / "substitutions.yaml").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(r"^snapshot:\s*$(.*?)(?=^\S|\Z)", text, re.MULTILINE | re.DOTALL)
+    if not match:
+        return None
+    block = match.group(1)
+    out: dict[str, int] = {}
+    for key in ("retired", "pipeline_advanced", "total_canonical"):
+        field = re.search(rf"^\s+{re.escape(key)}:\s*(\d+)\b", block, re.MULTILINE)
+        if not field:
+            return None
+        out[key] = int(field.group(1))
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Source 2 — Project_Roadmap_v1.md §5 R-NNN catalog.
 # --------------------------------------------------------------------------- #
@@ -631,8 +655,10 @@ def parse_retired_trend(root: Path) -> list[dict]:
     # are parsed from batch prose (no structured per-batch source exists), but batch-51's
     # published `48` was superseded to the graduation canonical `46` at R-700 — pin the
     # final point so the trend ends on the same number the headline derives, not stale prose.
-    if series and _SUB_DERIVATION is not None:
-        series[-1] = {**series[-1], "retired": _SUB_DERIVATION["retired"]}
+    if series:
+        snapshot = _SUB_DERIVATION or _substitution_snapshot(root)
+        if snapshot is not None:
+            series[-1] = {**series[-1], "retired": snapshot["retired"]}
     return series
 
 
