@@ -39,7 +39,7 @@ The register has **two tiers**, kept distinct:
 | # | Status | Surface | Item | Current state | Close-out class | Council? |
 |---|---|---|---|---|---|---|
 | B-1 | ~~closed~~ | IV Multi-LLM | ~~Layered capability-aware routing activation~~ | **routing activation RESOLVED (R-300-multi-llm-routing-activation, PR #213)** — declarative layer live; the multi-provider *exercise* is B-2 | impl + operator creds | ⚖️ yes |
-| B-2 | **[proposed]** | IV Multi-LLM | Multi-provider credentials + mixed-provider exercise | only Anthropic exercised at R-100; needs OpenAI/Ollama creds | operator creds + fixture | no |
+| B-2 | ~~closed~~ | IV Multi-LLM | ~~Multi-provider credentials + mixed-provider exercise~~ | **R-300 second-provider exercise RESOLVED** — deterministic fallback + live Anthropic→OpenAI (#281) + live Ollama (#283) | PR #281 + PR #283 | no |
 | B-3 | **[proposed]** | V Deployment | Real TIER_2 container sandbox execution (R-410) | tier/provider are annotations-only; in-process FastMCP regardless of tier | impl + infra (Class-1 likely) | ⚖️ yes |
 | B-4 | **[proposed]** | V Deployment | TIER_3 microVM + TIER_4 full-VM execution (R-411/R-412) | not built | impl + infra | ⚖️ yes |
 | B-5 | **[proposed]** | V Deployment | SELF_HOSTED_SERVER + MANAGED_CLOUD e2e (R-420/R-421) | LOCAL-only exercised | operator infra | ⚖️ (R-421) |
@@ -92,8 +92,8 @@ The register has **two tiers**, kept distinct:
 - **`⚖️ Council (C5 ⊥ C9 ⊥ capability-preservation).`** Designing the routing-selection policy is a genuine tension: **cost** (cheapest-deterministic-first) vs **reliability/recovery** (when to fall back / breaker thresholds) vs **capability-preservation** (don't route a thinking-required step to a non-thinking model to save cost). Convene a dyad (cost-voice + reliability-voice) when this arc opens.
 
 ### B-2 · Multi-provider credentials + mixed-provider exercise
-- **Current state.** R-100 e2e ran a **3-step single-provider** workflow (Anthropic Haiku) with an **empty** fallback chain (`primary=anthropic, same_family=(), cross_family=()`). OpenAI/Ollama never invoked; no failure → no fallback traversal.
-- **Close-out steps.** (1) **Operator:** provision OpenAI key (`openai_key` in keyring / `OPENAI_API_KEY` env) + Ollama host; (2) author a mixed-provider fixture that forces a primary-provider failure and asserts cross-family advance (Anthropic → OpenAI) with `routing.*`/`fallback.*` span attributes + cost tracking per candidate; (3) verify across deployment surfaces (Ollama at LOCAL, hosted at SELF_HOSTED/MANAGED). **Council: no** (operator setup + test authoring).
+- **Status.** CLOSED 2026-06-03. The R-100 gap was closed by PR #281 (`2dc25e6`) and PR #283 (`e436252`).
+- **Closure.** PR #281 added the deterministic production-path cross-family fallback fixture and the live Anthropic invalid-model → OpenAI `gpt-4o-mini` exercise (`just mvp-r300-cross-family`, live PASS 4.55s). PR #283 added the free local Ollama fallback exercise (invalid model → `llama3.2:3b`, live PASS 4.17s through `api.run`). Deterministic CI coverage remains for non-credentialed runs; the live provider halves are recorded in `.harness/roadmap_status.md`. **Council: no**.
 
 ---
 
