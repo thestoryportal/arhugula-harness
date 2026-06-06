@@ -1,9 +1,9 @@
-# Class 1 fork — `harness.toml` default-discovery declared by spec §3.7 but unimplemented
+# Class 1 fork — `harness.toml` default-discovery declared by spec §3.7
 
-**Status:** PROPOSING — awaiting operator ratification (Reading + "workspace root" semantics).
+**Status:** ✅ APPLIED-AS-READING-A — CWD discovery ratified by operator 2026-06-06; implementation already shipped at PR #279 (`a394032`).
 **Filed:** 2026-05-31, during R-100 (`R-100-mvp-operator-usable-cli-shipped`) use-the-product probe.
 **Class:** 1 (architectural — the fix shape is non-obvious; "workspace root" is undefined for discovery).
-**Blocks:** nothing for R-100 (worked around via option (B) — the `just run` recipe passes `--config harness.toml`). This fork governs the spec-conforming closure.
+**Blocks:** nothing for R-100 (worked around initially via option (B) — the `just run` recipe passes `--config harness.toml`). This fork governed the spec-conforming closure.
 
 ---
 
@@ -15,15 +15,17 @@ Runtime spec v1.39 §3.7 (line 391) declares:
 
 and §14.18.1 (line 241) declares `--config <path>` as "Override **default** `harness.toml` config-file path."
 
-Both assert that `harness.toml` is discovered automatically at the workspace root when `--config` is omitted. **The implementation does not do this.**
+Both assert that `harness.toml` is discovered automatically at the workspace root when `--config` is omitted. At filing time, **the implementation did not do this.**
 
-## 2. Evidence (empirically substantiated this arc)
+**Closure:** Reading A was implemented at PR #279 (`a394032`) before this fork doc was refreshed: `RuntimeConfigSource.load(config_file=None)` now discovers `Path.cwd() / DEFAULT_CONFIG_FILE_NAME` when that file exists, and otherwise preserves env+CLI-only behavior.
 
-1. **Dead constant.** `DEFAULT_CONFIG_FILE_NAME = "harness.toml"` is defined and exported in `__all__` at `harness-runtime/src/harness_runtime/config_source.py:43`, but a workspace-wide grep finds **no use site** — only its definition + the `__all__` entry. The default-path constant was declared and never wired.
+## 2. Filing evidence (historical; now closed)
 
-2. **`load(config_file=None)` skips the file layer.** `RuntimeConfigSource.load` docstring (config_source.py:173): "When `None`, the config-file layer contributes nothing (the precedence reduces to env + CLI)." The CLI `run`/`daemon` commands pass `config_file=config` where `config` is the `--config` flag value (default `None`). So with no `--config`, no file is consulted.
+1. **Dead constant.** At filing time, `DEFAULT_CONFIG_FILE_NAME = "harness.toml"` was defined and exported in `__all__` at `harness-runtime/src/harness_runtime/config_source.py:43`, but a workspace-wide grep found **no use site** — only its definition + the `__all__` entry. PR #279 wired it through `_discover_default_config()`.
 
-3. **Positive-control probe.** With a complete, valid `harness.toml` present at CWD, `uv run harness run <manifest>` (no `--config`) **still** fails:
+2. **`load(config_file=None)` skipped the file layer.** At filing time, `RuntimeConfigSource.load` documented that when `config_file` was `None`, the config-file layer contributed nothing. PR #279 changed this to CWD-local discovery while retaining the no-file fallback.
+
+3. **Positive-control probe.** At filing time, with a complete, valid `harness.toml` present at CWD, `uv run harness run <manifest>` (no `--config`) **still** failed:
 
    ```
    RT-FAIL-CLI-CONFIG-LOAD: Missing required fields:
@@ -33,7 +35,7 @@ Both assert that `harness.toml` is discovered automatically at the workspace roo
      - default_topology
    ```
 
-   The file present at CWD is not discovered. Discovery is definitively unimplemented (not merely a missing-file failure).
+   The file present at CWD was not discovered. PR #279 added regression coverage for the positive path, no-file fallback, explicit-config precedence, and the discovery helper.
 
 ## 3. The non-obvious part — "workspace root" is undefined
 
@@ -43,15 +45,19 @@ The spec says discover `harness.toml` "at workspace root." But the workspace roo
 - **(B) Upward search.** Walk up from CWD to the filesystem root looking for the first `harness.toml` (git-style). More forgiving of subdir invocation; more surprising.
 - **(C) Keep explicit-only.** Treat §3.7 "by default" as aspirational; require `--config` (or the `just` recipe that supplies it) and amend the spec to drop the auto-discovery clause. This is what option (B) for R-100 effectively does at the recipe layer.
 
-Reading (A) is the recommended default (simplest, least surprising, matches the `just run` CWD assumption). Reading (C) is a spec amendment, not an impl fix.
+Reading (A) was the recommended default (simplest, least surprising, matches the `just run` CWD assumption). The operator ratified Reading A on 2026-06-06; implementation had already landed at PR #279.
 
-## 4. Resolution path
+## 4. Resolution
 
-- If (A)/(B): implement discovery at the CLI/config-source layer (when `--config` is None, attempt `DEFAULT_CONFIG_FILE_NAME` at CWD [+ optional upward search]); fall back to env+CLI-only when absent (preserve today's behavior for the no-file case). Spec-**conforming** — closes the §3.7 gap, no X-AL-3 extension. Needs tests.
-- If (C): spec amendment at §3.7 + §14.18.1 dropping/softening the "by default" clause; retire the dead `DEFAULT_CONFIG_FILE_NAME` constant.
+Reading A applies:
 
-ZERO of these block R-100 — the MVP smoke is operator-usable today via `just run` (which passes `--config harness.toml`).
+- `RuntimeConfigSource.load(config_file=None)` attempts CWD-local `harness.toml` discovery via `DEFAULT_CONFIG_FILE_NAME`.
+- If the file is absent, the config-file layer contributes nothing, preserving env+CLI-only behavior.
+- Explicit `config_file=...` continues to bypass discovery and wins over the CWD default.
+- No spec amendment is owed; this is the spec-conforming closure of §3.7 + §14.18.1.
+
+Verification on 2026-06-06: `uv run pytest harness-runtime/tests/test_config_source.py -q` → 19 passed.
 
 ## 5. Tracking
 
-Roadmap entry `R-100-mvp-config-discovery` (BLOCKED on this fork's ratification). The misleading "discovers this file by default" claim in `harness.toml.example` was corrected to describe the actual `--config`-passing flow + a pointer to this doc.
+Roadmap entry `R-100-mvp-config-discovery` is RESOLVED by PR #279 + this fork-doc status refresh. The misleading "discovers this file by default" claim in `harness.toml.example` was corrected before the implementation; after PR #279 the claim is true under Reading A's CWD semantics.
