@@ -244,6 +244,28 @@ def test_lag_expected_dashboard_drift_has_specific_warning_code() -> None:
     assert not any(f.code == "ROADMAP_DASHBOARD_BRANCH_DIVERGED" for f in findings)
 
 
+def test_status_refresh_with_dashboard_snapshot_counts_as_expected_lag(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    (repo / "tools").mkdir()
+    (repo / "tools" / "dashboard").mkdir()
+    (repo / "tools" / "dashboard" / "roadmap.html").write_text("snapshot\n", encoding="utf-8")
+    (repo / ".harness" / "roadmap_status.md").write_text("refreshed\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
+
+    assert cg._lag_expected(repo)
+
+
+def test_status_refresh_with_unrelated_file_is_not_expected_lag(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    (repo / "Project_Roadmap_v1.md").write_text("roadmap\n", encoding="utf-8")
+    (repo / ".harness" / "roadmap_status.md").write_text("refreshed\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "ops: roadmap status refresh post-test")
+
+    assert not cg._lag_expected(repo)
+
+
 def test_dashboard_drift_off_default_branch_is_advisory() -> None:
     state = _state(computed_hash="newhash")
 
