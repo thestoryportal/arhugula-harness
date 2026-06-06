@@ -134,6 +134,26 @@ def test_design_and_codex_tooling_mix_is_hard_failure() -> None:
     assert any(f.code == "DESIGN_IMPL_MIX" and f.severity == "hard" for f in findings)
 
 
+def test_dashboard_snapshot_does_not_count_as_design_impl_mix() -> None:
+    state = _state(
+        status_entries=[
+            " M .harness/class_1_fork_harness_toml_default_discovery_unimplemented.md",
+            " M Project_Roadmap_v1.md",
+            " M tools/dashboard/roadmap.html",
+        ],
+        changed_files=[
+            ".harness/class_1_fork_harness_toml_default_discovery_unimplemented.md",
+            "Project_Roadmap_v1.md",
+            "tools/dashboard/roadmap.html",
+        ],
+        dashboard_snapshot_current=True,
+    )
+
+    findings = cg.validate(state, mode="closeout")
+
+    assert not any(f.code == "DESIGN_IMPL_MIX" for f in findings)
+
+
 def test_committed_diff_range_drives_guard_changed_files(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     base = _git(repo, "rev-parse", "HEAD")
