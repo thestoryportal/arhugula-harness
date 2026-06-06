@@ -91,14 +91,18 @@ hook_state_hash() {
 # and returns the FIRST backticked `R-NNN` token there. Scoping is the fix for the
 # old whole-file `head -1` bug: the dashboard carries historical + narrative `R-*`
 # references that precede the live pointer in document order (e.g. an `**`R-010`**`
-# deep in the R-700 banner), so an unscoped match surfaced a stale item. Echoes the
-# R-id (may contain `.` / `-`, e.g. `R-410..R-440`), empty if absent (callers
-# default). Usage: NEXT=$(hook_roadmap_next "$DASHBOARD")
+# deep in the R-700 banner), so an unscoped match surfaced a stale item. Range
+# tokens such as `R-410..R-440` are menus, not actionable units, so they are
+# ignored. Echoes the R-id, empty if absent (callers default). Usage:
+# NEXT=$(hook_roadmap_next "$DASHBOARD")
 hook_roadmap_next() {
   local dash="$1"
   [ -f "$dash" ] || return 0
   awk '/^## Next action/{f=1; next} f && /^---$/{exit} f' "$dash" 2>/dev/null \
-    | grep -oE '`R-[A-Za-z0-9._-]+`' 2>/dev/null | head -1 | tr -d '`'
+    | grep -oE '`R-[A-Za-z0-9._-]+`' 2>/dev/null \
+    | tr -d '`' \
+    | grep -v '\.\.' \
+    | head -1
 }
 
 # Write a lightweight state snapshot to .harness/.checkpoints/precompact-<ts>.md +

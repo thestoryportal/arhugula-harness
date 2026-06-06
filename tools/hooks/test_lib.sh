@@ -59,8 +59,10 @@ eq "hook_default_branch fallback main" "$(cd "$REPO" && hook_default_branch)" "m
 
 # hook_roadmap_next — scopes to the `## Next action` section, so a STALE bolded R-id
 # in a later narrative section does NOT shadow the live pointer (the whole-file
-# head -1 bug). Fixture mirrors the real dashboard: a backticked live pointer in the
-# section + a strict `**`R-OLD`**` token AFTER the `---` rule.
+# head -1 bug). It also ignores range/banner tokens like `R-410..R-440`; those are
+# menus, not actionable roadmap units. Fixture mirrors the real dashboard: a
+# backticked range banner + a backticked concrete pointer in the section + a strict
+# `**`R-OLD`**` token AFTER the `---` rule.
 DASHF="$REPO/dash.md"
 cat > "$DASHF" <<'EOF'
 # dash
@@ -71,7 +73,7 @@ cat > "$DASHF" <<'EOF'
 ## Recently completed
 **`R-OLD-stale-narrative`** was closed earlier (must NOT be picked).
 EOF
-eq "hook_roadmap_next picks live section pointer" "$(hook_roadmap_next "$DASHF")" "R-410..R-440"
+eq "hook_roadmap_next skips range token and picks concrete pointer" "$(hook_roadmap_next "$DASHF")" "R-300-x"
 # Absent section / file → empty (callers default to '?').
 eq "hook_roadmap_next empty on missing file" "$(hook_roadmap_next "$REPO/nope.md")" ""
 printf '# d\nno next-action heading here\n' > "$DASHF"
