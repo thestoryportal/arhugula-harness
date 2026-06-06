@@ -20,10 +20,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 DESIGN_RE = re.compile(
-    r"^(design-substrate/|\.harness/class_[12]_fork_|.*Spec_[A-Za-z_]+_v\d|"
-    r".*Implementation_Plan_[A-Za-z_]+_v\d|.*ADR-[FD]\d)"
+    r"^(design-substrate/|\.harness/class_[123]_|\.harness/architect_recommendation_|"
+    r".*Spec_[A-Za-z_]+_v\d|.*Implementation_Plan_[A-Za-z_]+_v\d|.*ADR-[FD]\d)"
 )
-IMPL_RE = re.compile(r"^(harness-[a-z]+/(src|tests)/|tests/)")
+IMPL_RE = re.compile(
+    r"^(harness-[a-z]+/(src|tests)/|tests/|tools/|\.codex/hooks/|\.github/workflows/|"
+    r"justfile$)"
+)
 CITE_RE = re.compile(r"^(harness-[a-z]+/src/|harness-[a-z]+/tests/|tools/semantic_overlay/)")
 DASHBOARD_SOURCES = {
     ".harness/roadmap_status.md",
@@ -75,6 +78,7 @@ class GuardState:
     dashboard: DashboardState
     computed_hash: str
     open_prs: str
+    open_prs_available: bool
     fork_doc_count: int
     latest_retirement_batch: str
     lag_expected: bool
@@ -154,7 +158,11 @@ def _status_entries(root: Path) -> list[str]:
     return [line for line in out.splitlines() if line.strip()]
 
 
-def _changed_files(root: Path) -> list[str]:
+def _changed_files(root: Path, *, base_ref: str = "", head_ref: str = "") -> list[str]:
+    if base_ref and head_ref:
+        out = _out(["git", "diff", "--name-only", base_ref, head_ref], cwd=root)
+        return sorted(line.strip() for line in out.splitlines() if line.strip())
+
     files: set[str] = set()
     for args in (
         ["git", "diff", "--name-only"],
@@ -166,8 +174,20 @@ def _changed_files(root: Path) -> list[str]:
     return sorted(files)
 
 
-def _open_prs(root: Path) -> str:
-    out = _out(
+def _branch_diff_files(root: Path, *, branch: str, default_branch: str) -> list[str]:
+    if branch == default_branch or branch == "DETACHED":
+        return []
+    base_candidates = [default_branch, f"origin/{default_branch}"]
+    for candidate in base_candidates:
+        merge_base = _out(["git", "merge-base", candidate, "HEAD"], cwd=root)
+        if merge_base:
+            out = _out(["git", "diff", "--name-only", merge_base, "HEAD"], cwd=root)
+            return sorted(line.strip() for line in out.splitlines() if line.strip())
+    return []
+
+
+def _open_prs(root: Path) -> tuple[str, bool]:
+    proc = _run(
         [
             "gh",
             "pr",
@@ -182,7 +202,7 @@ def _open_prs(root: Path) -> str:
         cwd=root,
         timeout=15,
     )
-    return out
+    return (proc.stdout.strip(), True) if proc.returncode == 0 else ("", False)
 
 
 def _fork_doc_count(root: Path) -> int:
@@ -325,14 +345,17 @@ def _lag_expected(root: Path) -> bool:
     return files == [".harness/roadmap_status.md"]
 
 
-def _dashboard_snapshot_current(root: Path) -> bool | None:
+def _dashboard_snapshot_current(
+    root: Path, *, changed_files: list[str] | None = None
+) -> bool | None:
     snapshot = root / "tools" / "dashboard" / "roadmap.html"
     generator = root / "tools" / "dashboard" / "generate.py"
     if not snapshot.exists() or not generator.exists():
         return None
     # Cheap short-circuit: if none of the source files changed in this worktree,
     # do not make closeout depend on a heavy HTML regeneration.
-    if not (set(_changed_files(root)) & DASHBOARD_SOURCES):
+    files = changed_files if changed_files is not None else _changed_files(root)
+    if not (set(files) & DASHBOARD_SOURCES):
         return True
     with tempfile.TemporaryDirectory(prefix="codex-dashboard-") as td:
         out = Path(td) / "roadmap.html"
@@ -346,16 +369,28 @@ def _dashboard_snapshot_current(root: Path) -> bool | None:
         return snapshot.read_bytes() == out.read_bytes()
 
 
-def derive(root: Path | None = None) -> GuardState:
+def derive(
+    root: Path | None = None,
+    *,
+    base_ref: str = "",
+    head_ref: str = "",
+    include_branch_diff: bool = False,
+) -> GuardState:
     root = repo_root(root or Path.cwd())
     head8 = _out(["git", "rev-parse", "--short=8", "HEAD"], cwd=root)
     git_dir = _out(["git", "rev-parse", "--git-dir"], cwd=root)
     branch = _out(["git", "symbolic-ref", "--quiet", "--short", "HEAD"], cwd=root) or "DETACHED"
     default_branch = _default_branch(root)
-    prs = _open_prs(root)
+    prs, prs_available = _open_prs(root)
     forks = _fork_doc_count(root)
     batch = _latest_retirement_batch(root)
     dashboard = _dashboard(root)
+    changed_files = _changed_files(root, base_ref=base_ref, head_ref=head_ref)
+    if include_branch_diff and not (base_ref and head_ref):
+        changed_files = sorted(
+            set(changed_files)
+            | set(_branch_diff_files(root, branch=branch, default_branch=default_branch))
+        )
     return GuardState(
         root=root,
         cwd=Path.cwd().resolve(),
@@ -365,14 +400,15 @@ def derive(root: Path | None = None) -> GuardState:
         git_dir=git_dir,
         is_linked_worktree=".git/worktrees/" in git_dir or git_dir.startswith("../.git/worktrees/"),
         status_entries=_status_entries(root),
-        changed_files=_changed_files(root),
+        changed_files=changed_files,
         dashboard=dashboard,
         computed_hash=state_hash(head8, prs, forks, batch),
         open_prs=prs,
+        open_prs_available=prs_available,
         fork_doc_count=forks,
         latest_retirement_batch=batch,
         lag_expected=_lag_expected(root),
-        dashboard_snapshot_current=_dashboard_snapshot_current(root),
+        dashboard_snapshot_current=_dashboard_snapshot_current(root, changed_files=changed_files),
     )
 
 
@@ -435,23 +471,41 @@ def validate(
             )
         )
 
-    if state.computed_hash != state.dashboard.hash:
-        if allow_dashboard_drift:
-            findings.append(
-                Finding(
-                    "warn",
-                    "ROADMAP_DASHBOARD_DRIFT_ALLOWED",
-                    "Dashboard hash differs, but the caller explicitly allowed drift. "
-                    "Use only for CI runtime smoke during the post-merge refresh window.",
-                )
+    if not state.open_prs_available:
+        findings.append(
+            Finding(
+                "warn",
+                "OPEN_PRS_UNAVAILABLE",
+                "`gh pr list` was unavailable; computed context hash used an empty open-PR set.",
             )
-        elif state.branch == state.default_branch and not state.lag_expected:
+        )
+
+    if state.computed_hash != state.dashboard.hash:
+        if state.branch == state.default_branch and not state.lag_expected:
             findings.append(
                 Finding(
                     "hard",
                     "ROADMAP_DASHBOARD_DRIFT",
                     f"Dashboard hash {state.dashboard.hash or '<missing>'} "
                     f"does not match computed {state.computed_hash}.",
+                )
+            )
+        elif state.lag_expected:
+            findings.append(
+                Finding(
+                    "warn",
+                    "ROADMAP_DASHBOARD_LAG_EXPECTED",
+                    "Dashboard hash differs because HEAD is a roadmap-status-only refresh; "
+                    "the next terminating refresh should reconcile the lag.",
+                )
+            )
+        elif allow_dashboard_drift:
+            findings.append(
+                Finding(
+                    "warn",
+                    "ROADMAP_DASHBOARD_DRIFT_ALLOWED",
+                    "Dashboard hash differs, but the caller explicitly allowed drift. "
+                    "Use only for CI runtime smoke during the post-merge refresh window.",
                 )
             )
         else:
@@ -600,6 +654,7 @@ def _json_report(state: GuardState, findings: list[Finding]) -> str:
             "computed_hash": state.computed_hash,
             "context_fingerprint": state_fingerprint(state),
             "open_prs": state.open_prs,
+            "open_prs_available": state.open_prs_available,
             "fork_doc_count": state.fork_doc_count,
             "latest_retirement_batch": state.latest_retirement_batch,
             "lag_expected": state.lag_expected,
@@ -630,7 +685,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--allow-dashboard-drift",
         action="store_true",
-        help="downgrade dashboard hash drift to a warning; intended only for CI smoke",
+        help="downgrade non-default-branch dashboard hash drift to a warning",
+    )
+    parser.add_argument(
+        "--base-ref",
+        default="",
+        help="base git ref for committed-range diff checks, typically the PR base SHA",
+    )
+    parser.add_argument(
+        "--head-ref",
+        default="",
+        help="head git ref for committed-range diff checks, typically the PR head SHA",
+    )
+    parser.add_argument(
+        "--include-branch-diff",
+        action="store_true",
+        help="include committed branch changes since the merge-base with the default branch",
     )
     parser.add_argument("--unit", default="", help="unit or roadmap id for mode=credential-gate")
     parser.add_argument(
@@ -653,7 +723,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    state = derive()
+    state = derive(
+        base_ref=args.base_ref,
+        head_ref=args.head_ref,
+        include_branch_diff=args.include_branch_diff,
+    )
     if args.mode == "credential-gate":
         try:
             path = append_credential_gate(

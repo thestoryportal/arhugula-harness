@@ -77,6 +77,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install uv + Python 3.12
         uses: astral-sh/setup-uv@v5
@@ -310,7 +312,11 @@ jobs:
         run: uv sync --all-packages
 
       - name: Codex context guard runtime check
-        run: /usr/bin/python3 tools/codex_context_guard.py check --allow-dashboard-drift
+        run: >
+          /usr/bin/python3 tools/codex_context_guard.py check
+          --base-ref "${{ github.event.pull_request.base.sha || github.event.before }}"
+          --head-ref "${{ github.event.pull_request.head.sha || github.sha }}"
+          --allow-dashboard-drift
 
       - name: Codex context guard tests
         run: uv run python -m pytest tools/test_codex_context_guard.py -q

@@ -53,13 +53,13 @@ codex-checkpoint label="manual":
 
 # Materialize closeout obligations before final response, commit, or PR.
 codex-closeout:
-    /usr/bin/python3 tools/codex_context_guard.py checkpoint --label pre-closeout
-    /usr/bin/python3 tools/codex_context_guard.py closeout --require-fresh-checkpoint
+    /usr/bin/python3 tools/codex_context_guard.py checkpoint --label pre-closeout --include-branch-diff
+    /usr/bin/python3 tools/codex_context_guard.py closeout --require-fresh-checkpoint --include-branch-diff
 
 # Combined local hard gate for context rot / drift / tracking omissions.
 codex-context-check:
-    /usr/bin/python3 tools/codex_context_guard.py checkpoint --label local-check
-    /usr/bin/python3 tools/codex_context_guard.py check --require-fresh-checkpoint
+    /usr/bin/python3 tools/codex_context_guard.py checkpoint --label local-check --include-branch-diff
+    /usr/bin/python3 tools/codex_context_guard.py check --require-fresh-checkpoint --include-branch-diff
 
 # Log a credential-gated unit after all non-credential work is closed.
 codex-credential-gate *args:
