@@ -655,9 +655,9 @@ R-100-mvp-operator-usable-cli-shipped:
     unimplemented) split out to R-100-mvp-config-discovery — does not block this entry.
 
 R-100-mvp-config-discovery:
-  title: Implement spec §3.7 `harness.toml` auto-discovery at workspace root (or amend the spec)
+  title: Implement spec §3.7 `harness.toml` auto-discovery at workspace root
   surface: II
-  status: BLOCKED
+  status: RESOLVED   # Reading A CWD discovery shipped at PR #279 (`a394032`); fork doc status refreshed 2026-06-06.
   depends_on: []
   blocks: []
   posture: phase-7
@@ -666,18 +666,16 @@ R-100-mvp-config-discovery:
   advisor_required: yes
   council_required: no
   verification: { shape: integration, must_pass: ["with harness.toml at CWD and no --config, `harness run <manifest>` discovers it", "no-file case preserves env+CLI-only behavior", "dead DEFAULT_CONFIG_FILE_NAME constant wired or retired"] }
-  close_shape: { type: PR-merge, artifact: "fix: harness.toml default discovery per spec §3.7 (or spec amendment)" }
+  close_shape: { type: PR-merge, artifact: "PR #279 `a394032` — fix: harness.toml default discovery per spec §3.7" }
   next_pointer: R-100-mvp-real-workflow-execution
   notes: >
-    BLOCKED on operator ratification of `.harness/class_1_fork_harness_toml_default_discovery_unimplemented.md`
-    (PROPOSING). Spec §3.7 (line 391) + §14.18.1 declare `harness.toml` is discovered at
-    workspace root "by default"; the impl never wired it — `DEFAULT_CONFIG_FILE_NAME`
-    (config_source.py:43) is a dead constant and a positive-control probe (file present at
-    CWD, no --config) still fails "missing required fields". "Workspace root" is undefined
-    for discovery (CWD vs the config's own repository_root — circular), so the fix shape is a
-    Class 1 fork: Reading (A) CWD discovery / (B) upward search / (C) spec amendment dropping
-    the clause. Worked around in R-100 via the `just run` recipe passing `--config` (option B
-    at the recipe layer); this entry is the spec-conforming closure. Does not block the MVP.
+    RESOLVED. The operator ratified `.harness/class_1_fork_harness_toml_default_discovery_unimplemented.md`
+    Reading A (CWD discovery) on 2026-06-06; empirical grounding found the implementation had
+    already shipped at PR #279 (`a394032`). `RuntimeConfigSource.load(config_file=None)` now
+    discovers `Path.cwd() / DEFAULT_CONFIG_FILE_NAME` when present, preserves env+CLI-only
+    behavior when absent, and lets explicit `--config` bypass discovery. Targeted verification
+    on 2026-06-06: `uv run pytest harness-runtime/tests/test_config_source.py -q` -> 19 passed.
+    No spec amendment is owed.
 
 R-100-mvp-real-workflow-execution:
   title: Real multi-step workflow at SOLO_DEVELOPER tier against Anthropic provider

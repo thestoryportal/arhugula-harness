@@ -32,7 +32,7 @@ The register has **two tiers**, kept distinct:
 | A-1 | **[blocked]** | R-700 Phase-8 substitution review + final integer ratification | Review the R-700 draft; ratify 46–47-vs-48 + bounded-residual sign-offs | `R-700-phase-8-substitution-accounting` (BLOCKED) | no (AUQ) |
 | A-2 | **[open]** | Bounded-residual sign-offs (AS-8e, AS-8f, OD-6) | Operator signs the 3 deferred-by-design closes | X-AL-2 §5.3; Surface VIII | no (AUQ) |
 | A-3 | **[open]** | `R-NNN` coverage for the 5 invisible open rows (CXA-1/2/3/4 + CP-17) | Authorize an R-002-style Surface-I pass | R-700 draft §C item 2 | no |
-| A-4 | **[blocked]** | `harness.toml` auto-discovery fork ratification | Ratify Reading A/B/C of the config-discovery fork | `class_1_fork_harness_toml_default_discovery_unimplemented.md` | no (AUQ) |
+| A-4 | ~~closed~~ | ~~`harness.toml` auto-discovery fork ratification~~ | Reading A ratified 2026-06-06; implementation had already shipped at PR #279 | `R-100-mvp-config-discovery` RESOLVED | no |
 
 ### Tier B — Post-Phase-8 forward activation
 
@@ -74,8 +74,8 @@ The register has **two tiers**, kept distinct:
 - **Close-out steps.** Authorize an `R-002`-style decomposition pass over CXA + CP-17 → seed `R-NNN` entries (these map to B-14 forward work). **Note:** this register's B-14 + §0 already supplies the substance; the action is to formalize them as roadmap entries. **Council: no.**
 
 ## A-4 · `harness.toml` auto-discovery fork ratification
-- **What it is.** Spec §3.7 (`C-RT-30`) declares `harness.toml` is discovered at "workspace root" by default; the impl never wired it (`DEFAULT_CONFIG_FILE_NAME` at `config_source.py:43` is a dead constant; "workspace root" is undefined — CWD vs the config's own `repository_root`, circular). **Does NOT block the MVP** (worked around via `just run --config`).
-- **Close-out steps.** Ratify one reading of `class_1_fork_harness_toml_default_discovery_unimplemented.md` (PROPOSING): **(A)** CWD discovery / **(B)** upward search / **(C)** spec amendment dropping the clause. Then a small impl arc (Claude-executable once ratified). Tracked at `R-100-mvp-config-discovery` (BLOCKED). **Council: no** (AskUserQuestion).
+- **Status.** CLOSED. The operator ratified Reading **(A)** CWD discovery on 2026-06-06; empirical grounding found PR #279 (`a394032`) had already implemented that reading.
+- **Closure.** `RuntimeConfigSource.load(config_file=None)` now discovers CWD-local `harness.toml`, preserves env+CLI-only behavior when absent, and lets explicit `--config` take precedence over discovery. `R-100-mvp-config-discovery` is RESOLVED; no spec amendment is owed. **Council: no** (AskUserQuestion was the only gate).
 
 ---
 
