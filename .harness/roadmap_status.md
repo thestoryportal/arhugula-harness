@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `3e69b0f398f2` |
-| `last_refreshed` | 2026-06-06T12:01:12-06:00 |
-| `git_head` | `a038c148` (main) — post-PR #302 Codex context guard hardening merged. Synced with origin pending this refresh push. |
+| `workspace_state_hash` | `fcf0d2c981e2` |
+| `last_refreshed` | 2026-06-06T12:02:43-06:00 |
+| `git_head` | `f5340a22` (main) — post-PR #302 dashboard/status refresh generated. Synced with origin pending this refresh push. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 45 |
 
