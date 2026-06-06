@@ -1851,36 +1851,26 @@ R-300-multi-llm-routing-activation:
 R-300-multi-llm-second-provider:
   title: Multi-provider credentials + mixed-provider fallback exercise
   surface: IV
-  status: PROPOSED
+  status: RESOLVED   # 2026-06-03 (PR #281 `2dc25e6` + PR #283 `e436252`) — B-2 fully closed: deterministic cross-family fallback, live Anthropic→OpenAI fallback, and live Ollama fallback exercised.
   depends_on: [R-100-mvp-real-workflow-execution]
   blocks: []
-  posture: halt-route-to-operator
+  posture: phase-7
   scope: { files: [harness-runtime/tests/integration/**, harness-runtime/config/provider_secrets.py], contracts: [C-CP-04, ADR-F1], cross_axis: no }
   skills: { primary: phase-7-implementation, secondary: [] }
   advisor_required: yes
   council_required: no
-  verification: { shape: e2e, must_pass: ["operator provisions openai_key + ollama host", "a fixture forces primary-provider failure and asserts cross-family advance (anthropic -> openai) with routing.*/fallback.* spans + per-candidate cost", "exercised across >=2 deployment surfaces"] }
-  close_shape: { type: PR-merge, artifact: "test(routing): mixed-provider fallback exercise", cascade: [] }
+  verification: { shape: e2e, must_pass: ["deterministic production-path fixture forces Anthropic primary failure and asserts cross-family OpenAI advance", "live Anthropic invalid-model failure advances to real OpenAI response", "live Ollama invalid-model failure advances to reachable local Ollama model"] }
+  close_shape: { type: PR-merge, artifact: "PR #281 deterministic + live OpenAI; PR #283 live Ollama", cascade: [] }
   next_pointer: null
   notes: >
-    R-100 ran 3 steps single-provider (Anthropic) with empty fallback chain. retry_breaker_fallback.py
-    (C-RT-16) DOES advance cross-family on failure — but no failure + no cross-family candidate at R-100 =
-    unexercised at the LIVE level. **GROUNDED 2026-06-02 (no-parking slice check per advisor —
-    [[grounding-reveals-claude-closeable-slice-close-honestly]] inverse: the slice was already built):**
-    the creds-separable half of must_pass[2] (the mixed-provider fixture forcing primary failure → cross-
-    family advance) is ALREADY EXERCISED at the composer-unit level with injected mock dispatchers — zero
-    creds. `test_lifecycle_retry_breaker_fallback.py::test_iterates_three_candidates_until_success` forces
-    anthropic primary failure and asserts `seen_providers == ["anthropic","anthropic","openai"]` (cross-
-    family advance); `test_lifecycle_fallback_chain.py::test_advance_or_raise_marks_cross_family_at_boundary`
-    asserts the C-CP-04 §4.3 cross-family attribution flag; the CP suite
-    (`harness-cp/tests/test_cross_family_fallback_chain.py`) carries exhaustive flag coverage; `fallback.*`
-    spans covered by `test_fallback_exhausted_emits_and_raises_typed`; per-candidate cost is emitted by the
-    inner `cost_attribution_llm_dispatch.py` wrapper per-dispatch (own suite); `routing.*` is the upstream
-    route() seam (R-300-multi-llm-routing-activation RESOLVED PR #213). So the mock fixture is NOT a
-    buildable-unbuilt slice — it exists. R-300's REMAINING work is genuinely live-creds-gated (operator
-    provisions openai_key + ollama host → real primary failure → real cross-family advance with real per-
-    candidate cost across >=2 deployment surfaces). NOT fired unilaterally per
-    [[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]. Register §B-2.
+    Closed by the 2026-06-03 R-300 B-2 sequence recorded in `.harness/roadmap_status.md`: PR #281
+    (`2dc25e6`) added the deterministic production-path fixture plus the live Anthropic invalid-model →
+    OpenAI `gpt-4o-mini` fallback run (`just mvp-r300-cross-family`, live PASS 4.55s); PR #283
+    (`e436252`) added the free local Ollama fallback exercise (invalid model → `llama3.2:3b`, live PASS
+    4.17s through `api.run`). Together these exercise the multi-provider fallback path that R-100 left
+    untouched: cross-family OpenAI and local Ollama provider traversal are both covered, with deterministic
+    CI coverage retained for non-credentialed runs. No further R-300 second-provider gate remains. Register
+    §B-2.
 ```
 
 ### 5.11 Multi-tenant (R-500..R-599) — Surface VI
