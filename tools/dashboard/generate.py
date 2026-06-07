@@ -83,10 +83,10 @@ ANNOTATIONS = {
     # PROPOSED (queued; most need credentials or infrastructure only you can provide)
     "R-300-multi-llm-second-provider": "Ready to start, but needs OpenAI/Ollama credentials and a mixed-provider test you'd run.",
     "R-410-sandbox-tier-2-container-execution": "Resolved by the local-only Docker execution driver and live TIER_2 container e2e.",
-    "R-411-sandbox-tier-3-microvm-execution": "Host-fit gate is explicit: the current macOS x86_64 host cannot close the reviewed gVisor/Kata/Shuru/Microsandbox/libkrun R-411 paths.",
+    "R-411-sandbox-tier-3-microvm-execution": "Host-fit gate is explicit: first selected path is Linux + Docker + gVisor/runsc; E2B stays managed/remote, not local R-411.",
     "R-412-sandbox-tier-4-full-vm-execution": "Deferred until managed cloud exists; Firecracker and QEMU microvm need a Linux KVM host with /dev/kvm.",
     "R-420-self-hosted-server-deployment-e2e": "Resolved by the local single-node self-hosted daemon + collector + keyring live e2e.",
-    "R-421-managed-cloud-deployment-e2e": "Managed-cloud readiness/probe surface is built; closure still needs a cloud secret backend, managed collector, and approved usage-billed E2B run if selected.",
+    "R-421-managed-cloud-deployment-e2e": "Selected first path: E2B + GCP Secret Manager + Google Cloud OTel collector; code still needs the cloud secret backend and managed collector e2e.",
     "R-430-otlp-collector-tail-keep-preservation": "Resolved by the R-420 local real-collector tail-keep live proof.",
     "R-440-tier-level-secrets-backend": "Resolved by the self-hosted-keyring selector; R-420 proved it live through the local keyring sentinel.",
     "R-500-multi-tenant-deployment": "Resolved by the local self-hosted multi-tenant proof: tenant.id resource separation, non-toggleable redaction, and tenant-scoped audit reads.",
