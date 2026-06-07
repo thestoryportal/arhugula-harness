@@ -11,6 +11,7 @@
 set dotenv-load := true
 set dotenv-required := false
 set positional-arguments := true
+export UV_CACHE_DIR := env_var_or_default("UV_CACHE_DIR", "/tmp/arhugula-uv-cache")
 
 # Default recipe: list everything.
 default:
@@ -41,6 +42,18 @@ fmt:
 # Full pre-merge gate: lint + typecheck + tests.
 check: lint typecheck test
 
+# Codex provider-free pytest lane. Strips live provider env and mirrors CI's non-e2e gate.
+codex-test *args:
+    env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u E2B_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT uv run pytest -m "not e2e" {{args}}
+
+# Synchronize all workspace packages before the Codex PR-ready gate.
+codex-sync:
+    uv sync --all-packages
+
+# Codex PR-ready local gate without live provider credentials.
+codex-check: codex-sync lint typecheck
+    env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u E2B_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT uv run pytest -m "not e2e"
+
 # ─── Codex deterministic context guard ─────────────────────────────────────
 
 # Materialize repo/worktree/roadmap state before substantive Codex work.
@@ -64,6 +77,10 @@ codex-context-check:
 # Log a credential-gated unit after all non-credential work is closed.
 codex-credential-gate *args:
     /usr/bin/python3 tools/codex_context_guard.py credential-gate {{args}}
+
+# Dry-run safe stale-worktree cleanup. Use --reap to remove only clean merged candidates.
+codex-worktree-gc *args:
+    /usr/bin/python3 tools/codex_worktree_gc.py {{args}}
 
 # ─── semantic overlay (R-IF-112) — spec ↔ code ↔ CXA-seam ↔ substitution ────
 # A deterministic, no-LLM overlay over the code graph. The agent-facing reference
