@@ -256,6 +256,28 @@ def test_status_refresh_with_dashboard_snapshot_counts_as_expected_lag(tmp_path:
     assert cg._lag_expected(repo)
 
 
+def test_dashboard_snapshot_normalization_ignores_only_live_head() -> None:
+    base = (
+        b'<meta name="dashboard-live-head" content="abc123"/>'
+        b'const DATA = {"live_head": "abc123", "actions": [1]};'
+    )
+    same_except_head = (
+        b'<meta name="dashboard-live-head" content="def456"/>'
+        b'const DATA = {"live_head": "def456", "actions": [1]};'
+    )
+    changed_payload = (
+        b'<meta name="dashboard-live-head" content="def456"/>'
+        b'const DATA = {"live_head": "def456", "actions": [2]};'
+    )
+
+    assert cg._normalize_dashboard_snapshot(base) == (
+        cg._normalize_dashboard_snapshot(same_except_head)
+    )
+    assert cg._normalize_dashboard_snapshot(base) != (
+        cg._normalize_dashboard_snapshot(changed_payload)
+    )
+
+
 def test_status_refresh_with_unrelated_file_is_not_expected_lag(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "Project_Roadmap_v1.md").write_text("roadmap\n", encoding="utf-8")

@@ -1081,13 +1081,13 @@ R-400-deployment-surface-conditional-emission-suite:
     mirroring #190's negative test). Honest MVP caveat banked: the §13.1 per-persona behavioral toggle is plumbed-not-
     consumed at the SDK boundary — that differential lives in test_redaction_gradient.py (cited in the suite docstring).
     ZERO src change; full integration dir 161 passed/10 skipped; ruff+pyright+pytest CI all GREEN. §V multi-deployment
-    remainder (R-410..R-440) is PROPOSED + live/infra-gated; §IV multi-LLM still decomposition-owed (its trigger
+    remainder now starts at R-411/R-420 after R-410's local Docker provider slice; §IV multi-LLM still decomposition-owed (its trigger
     R-100-mvp-real-workflow-execution is the operator-gated live e2e, not yet closed) — §4 re-derives to §VII cadence.
 
 R-410-sandbox-tier-2-container-execution:
   title: Real TIER_2_CONTAINER sandbox execution — tool calls run in an isolated container, not in-process FastMCP
   surface: V
-  status: PROPOSED   # live/infra-gated — requires a real container runtime; makes the tier model executable (today it is metadata-only)
+  status: RESOLVED   # this PR: local-only Docker driver + live TIER_2 TOOL_STEP e2e make the tier executable
   depends_on: []
   blocks: [R-411-sandbox-tier-3-microvm-execution]
   posture: phase-7
@@ -1099,17 +1099,17 @@ R-410-sandbox-tier-2-container-execution:
   close_shape: { type: PR-merge, artifact: "feat(sandbox): TIER_2 container execution provider", cascade: [R-411-sandbox-tier-3-microvm-execution] }
   next_pointer: R-411-sandbox-tier-3-microvm-execution
   notes: >
-    The honest heart of Surface V. At HEAD the sandbox tier/provider are observability + policy annotations only
-    (mcp_client_host.call_tool always uses in-process FastMCP stdio regardless of tier). Building a real container
-    provider is the first step toward executable isolation. The predicted Class 1 fork is FILED (2026-06-02):
-    `.harness/class_1_fork_sandbox_tier_no_execution_driver_contract.md` (PROPOSING) — the execution-driver contract
-    (how a resolved tier maps to an actual sandbox mechanism) is unspecified beyond spec v1.41 §14.9.8 resolver;
-    grounding confirmed the dispatcher uses the resolved tier only for tier-floor + span attributes, executing every
-    TOOL_STEP in-process regardless of tier. The DESIGN half (the fork, Readings A/B/C, C10⊥C11) is orthogonal to this
-    row's container-runtime INFRA gate; the fork routes to design-phase and is deferred-far (Reading C = honest MVP
-    end-state per X-AL-2 bounded-residual). R-411/R-412 inherit the same driver contract — one fork, not per-tier.
-    Codex gate logged 2026-06-07: non-infra/no-credential forward actions are closed by PR #256; resume by resolving
-    the execution-driver Reading, provisioning the selected container runtime, then running the TIER_2 TOOL_STEP e2e.
+    RESOLVED by the local Docker execution-provider slice. The dispatcher now delegates post-policy tool execution
+    through a `ToolExecutionDriver` seam: the default `MCPHostToolExecutionDriver` preserves prior in-process FastMCP
+    behavior, while `DockerToolRunnerExecutionDriver` requires `TIER_2_CONTAINER`, resolves the configured image via
+    local `docker inspect`, runs the immutable image id with `--network none`, and exchanges one JSON request/response
+    over stdin/stdout. The live R-410 e2e uses an operator-provided local Docker runtime + local `python:3.11-slim`
+    image only (no pull, no credentials, no paid provider call): a TOOL_STEP resolved to TIER_2 returns from inside the
+    container, confirms outbound network is blocked, and confirms the host worktree path is not visible. Existing
+    dispatcher tests continue to cover tier-floor rejection and sandbox.enter/exit provider/tech span attribution.
+    Bootstrap/config selection for a production provider registry can be a future hardening slice; the roadmap's first
+    executable TIER_2 container boundary is now built, and R-411/R-412 inherit the driver pattern as provider-class
+    extensions rather than a new execution-contract fork.
 
 R-411-sandbox-tier-3-microvm-execution:
   title: Real TIER_3 microVM sandbox execution (gVisor / Kata / shared-kernel container)
