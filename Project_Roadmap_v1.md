@@ -552,7 +552,7 @@ R-008-od-4-redaction-partial:
   skills: { primary: phase-7-implementation, secondary: [phase-7-substitution-retirement] }
   advisor_required: conditional:if a gate closure touches a cross-axis contract
   council_required: no
-  verification: { shape: integration, must_pass: ["§13.1 per-session redaction toggle mechanism authored (deferred at PR #25 apply arc) — ✅ MET 2026-06-02 (gate a)", "§13.2 opaque-token tokenization substrate — ✅ OD provider-free substrate authored 2026-06-07; durable audit-ledger token-map persistence — ✅ authored 2026-06-07; ⛔ eval-grade semantic classifier remains cross-axis-gated"] }
+  verification: { shape: integration, must_pass: ["§13.1 per-session redaction toggle mechanism authored (deferred at PR #25 apply arc) — ✅ MET 2026-06-02 (gate a)", "§13.2 opaque-token tokenization substrate — ✅ OD provider-free substrate authored 2026-06-07; durable audit-ledger token-map persistence — ✅ authored 2026-06-07; provider-free category-token classifier seam — ✅ authored 2026-06-07; ⛔ eval-grade semantic classifier remains cross-axis-gated"] }
   close_shape: { type: PR-merge, artifact: "PR closing the remaining OD-4 gates → PARTIAL → RETIRE-READY", cascade: [R-IF-roadmap-refresh] }
   next_pointer: R-007-od-3-sampler-retired
   notes: >
@@ -575,11 +575,15 @@ R-008-od-4-redaction-partial:
     composes one signed OD `AuditLedgerEntry` per `RedactionTokenRecord`, and
     `harness_runtime.lifecycle.redaction_token_audit_map.AuditLedgerRedactionTokenMap` lets
     `OpaqueRedactionTokenizer` persist token→raw mappings through the runtime `AuditLedgerWriter` while exported
-    spans still carry only opaque tokens. **Remaining gate (b) is now narrower but still real:** an eval-grade
-    semantic classifier that can emit category-specific tokens such as `[REDACTED:PII]` remains cross-axis work.
-    So R-008 stays **BLOCKED** on the eval-grade cross-axis dependency; the OD stdlib substrate and durable
-    audit-ledger token-map path are no longer the blockers. This is a within-PARTIAL refinement, not a tier transit —
-    OD-4 remains 1/8 PARTIAL; pipeline-advanced unchanged.
+    spans still carry only opaque tokens. **Category-token seam advanced 2026-06-07:** `RedactionAttributeClassifier`
+    / `RedactionAttributeClassification` plus `DeterministicRedactionClassifier` let the same token path emit
+    conservative provider-free category placeholders such as `[REDACTED:PII:<id>]` and `[REDACTED:MCP_ARG:<id>]`,
+    and the signed audit token-map entry now persists `audit.redaction_token.semantic_category`. **Remaining gate
+    (b) is narrower but still real:** the deterministic classifier is not the eval-grade semantic classifier required
+    for full OD-4 RETIRE-READY; that remains cross-axis work. So R-008 stays **BLOCKED** on the eval-grade cross-axis
+    dependency; the OD stdlib substrate, durable audit-ledger token-map path, and category-token interface are no
+    longer the blockers. This is a within-PARTIAL refinement, not a tier transit — OD-4 remains 1/8 PARTIAL;
+    pipeline-advanced unchanged.
     R-700 accounting: OD-4's open residual narrows from {gate a + gate b} to {gate b cross-axis} only.
     **R-700 forward-pointer (operator decision):** with gate (b) established as cross-axis/Phase-6+,
     OD-4 can NEVER reach RETIRE-READY via Claude → it `blocks: [R-700]` indefinitely. This is the
