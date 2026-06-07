@@ -1108,6 +1108,8 @@ R-410-sandbox-tier-2-container-execution:
     TOOL_STEP in-process regardless of tier. The DESIGN half (the fork, Readings A/B/C, C10⊥C11) is orthogonal to this
     row's container-runtime INFRA gate; the fork routes to design-phase and is deferred-far (Reading C = honest MVP
     end-state per X-AL-2 bounded-residual). R-411/R-412 inherit the same driver contract — one fork, not per-tier.
+    Codex gate logged 2026-06-07: non-infra/no-credential forward actions are closed by PR #256; resume by resolving
+    the execution-driver Reading, provisioning the selected container runtime, then running the TIER_2 TOOL_STEP e2e.
 
 R-411-sandbox-tier-3-microvm-execution:
   title: Real TIER_3 microVM sandbox execution (gVisor / Kata / shared-kernel container)
