@@ -1128,11 +1128,19 @@ R-411-sandbox-tier-3-microvm-execution:
   notes: >
     Extends R-410 up the tier ladder. Inherits the same execution-driver contract question; once R-410 settles the
     pattern, R-411 + R-412 are provider-class additions (CONTAINER -> gVisor/Kata at TIER_3 per deployment_matrix.py).
+    Host-readiness prep now distinguishes the R-411 provider path from Firecracker: `r411-gvisor` points at
+    `google/gvisor` (`runsc` + Docker), and `r411-kata` points at `kata-containers/kata-containers`
+    (`kata-runtime`, with KVM access for the VM-backed path). `r411-shuru` (`superhq-ai/shuru`) and
+    `r411-microsandbox` (`superradcompany/microsandbox`) are local-first microVM candidates worth evaluating on
+    compatible hosts; both require Apple Silicon on macOS, while their Linux paths require KVM. Firecracker belongs
+    to R-412. `just sandbox-host-check <provider>` is the non-mutating probe for the exact runtime boundary before
+    opening the provider implementation. Current operator host grounding (macOS x86_64, no `/dev/kvm`) means no
+    local R-411 provider e2e can honestly close here without a compatible sandbox host/runtime.
 
 R-412-sandbox-tier-4-full-vm-execution:
   title: Real TIER_4 full-VM / firecracker sandbox execution (MANAGED_CLOUD-only provider class)
   surface: V
-  status: PROPOSED   # live/infra-gated — firecracker/full-VM; MANAGED_CLOUD per deployment_matrix.py
+  status: DEFERRED   # operator 2026-06-07: no managed cloud setup; firecracker/full-VM remains R-421-gated
   depends_on: [R-411-sandbox-tier-3-microvm-execution, R-421-managed-cloud-deployment-e2e]
   blocks: []
   posture: phase-7
@@ -1146,6 +1154,13 @@ R-412-sandbox-tier-4-full-vm-execution:
   notes: >
     Top of the tier ladder. The 12-cell deployment_matrix.py reserves FULL_VM exclusively for MANAGED_CLOUD; this
     row therefore co-gates on R-421 (a real MANAGED_CLOUD surface). Deferred-far per ADR-D2 graduated-isolation.
+    Firecracker is the correct setup direction for this FULL_VM lane, not for R-411. Upstream Firecracker requires
+    a Linux host with KVM and read/write `/dev/kvm`; the current macOS host has no `/dev/kvm`, and the operator has
+    no managed-cloud surface yet. The repo now carries `just sandbox-host-check r412-firecracker` so a future Linux
+    KVM / managed-cloud host can be verified before implementing the provider. E2B (`e2b-dev/e2b`) is a plausible
+    managed-cloud sandbox candidate for R-421/R-412 investigation, but it is not a local R-411 runtime; it requires
+    an operator-approved `E2B_API_KEY` and remote cloud execution (`just sandbox-host-check r421-e2b` records only
+    local SDK/key readiness, with no network call).
 
 R-420-self-hosted-server-deployment-e2e:
   title: Exercise the harness at the SELF_HOSTED_SERVER deployment surface (real server + OTLP collector + tier secrets)
@@ -1183,6 +1198,10 @@ R-421-managed-cloud-deployment-e2e:
   notes: >
     The terminal deployment surface. Co-gates R-412 (FULL_VM provider class is MANAGED_CLOUD-only per deployment_matrix.py).
     Heaviest infra dependency; deferred-far. ADR-F5 tier-aware secret-fetch (in-sandbox encrypted-filesystem at this tier).
+    E2B (`e2b-dev/e2b`) is a candidate managed-cloud sandbox provider to evaluate if the operator wants a hosted
+    sandbox instead of provisioning the cloud substrate directly. It remains credential/remote-execution gated:
+    `E2B_API_KEY` + Python SDK readiness can be checked locally with `just sandbox-host-check r421-e2b`, but no E2B
+    sandbox call should run without explicit approval.
 
 R-430-otlp-collector-tail-keep-preservation:
   title: Verify tail-keep-on-classification preservation at a real OTLP collector boundary
