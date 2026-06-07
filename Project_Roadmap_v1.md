@@ -1246,7 +1246,7 @@ R-421-managed-cloud-deployment-e2e:
     YAML as Secret Manager entry `r421-otel-collector-config`, and proved static readiness plus redacted
     `e2b-secret` resolution against project `project-ba535aa4-f08d-46b2-ba6`. Approved E2B sandbox calls ran
     the deterministic command before the full e2e hit the runtime OTLP materialization gate. The 2026-06-07
-    runtime/design follow-on resolves that static mismatch by adding
+    runtime/design follow-on (PR #344) resolves that static mismatch by adding
     `CollectorConfig.bootstrap_sandbox_tier`: the default remains `TIER_1_PROCESS` for LOCAL/self-hosted
     host-process bootstrap, while the E2B/FULL_VM managed-cloud template declares `tier-4-full-vm` so
     C-OD-20 reachability is checked against the actual network-capable bootstrap tier instead of weakening

@@ -86,7 +86,7 @@ ANNOTATIONS = {
     "R-411-sandbox-tier-3-microvm-execution": "Host-fit gate is explicit: first selected path is Linux + Docker + gVisor/runsc; E2B stays managed/remote, not local R-411.",
     "R-412-sandbox-tier-4-full-vm-execution": "Deferred until managed cloud exists; Firecracker and QEMU microvm need a Linux KVM host with /dev/kvm.",
     "R-420-self-hosted-server-deployment-e2e": "Resolved by the local single-node self-hosted daemon + collector + keyring live e2e.",
-    "R-421-managed-cloud-deployment-e2e": "Selected first path: E2B + GCP Secret Manager + authenticated Google Cloud Run OTel collector. GCP secrets, collector provisioning, and E2B live command are proved; full closure now gates on the runtime bootstrap reachability mismatch for solo MANAGED_CLOUD VENDOR_PIPELINE.",
+    "R-421-managed-cloud-deployment-e2e": "Selected first path: E2B + GCP Secret Manager + authenticated Google Cloud Run OTel collector. GCP secrets, collector provisioning, E2B deterministic command, and static bootstrap reachability are proved; full closure now gates on rerunning the approved live e2e through authenticated OTLP export and Cloud Trace visibility.",
     "R-430-otlp-collector-tail-keep-preservation": "Resolved by the R-420 local real-collector tail-keep live proof.",
     "R-440-tier-level-secrets-backend": "Resolved by the self-hosted-keyring selector; R-420 proved it live through the local keyring sentinel.",
     "R-500-multi-tenant-deployment": "Resolved by the local self-hosted multi-tenant proof: tenant.id resource separation, non-toggleable redaction, and tenant-scoped audit reads.",
@@ -249,7 +249,7 @@ REMAINING_ORDERED = [
         "layer": "activation",
         "id": "R-421 → R-412",
         "label": "Managed cloud → full-VM",
-        "gate": "Managed cloud infra is provisioned and live-secret/E2B probes pass; full e2e still needs runtime bootstrap reachability for solo MANAGED_CLOUD VENDOR_PIPELINE resolved.",
+        "gate": "Managed cloud infra is provisioned and live-secret/E2B probes pass; full e2e still needs an approved rerun through authenticated OTLP export and Cloud Trace visibility.",
     },
     {
         "n": 11,
