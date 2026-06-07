@@ -135,6 +135,4 @@ def test_r420_harness_template_matches_static_self_hosted_readiness_gate() -> No
     mcp_client = runtime["mcp_clients"][0]
     assert mcp_client["client_name"] == "r420-echo"
     assert mcp_client["transport"] == "stdio"
-    assert mcp_client["connection_url"].endswith(
-        "/deploy/self-hosted-local/mcp_echo_server.py"
-    )
+    assert mcp_client["connection_url"].endswith("/deploy/self-hosted-local/mcp_echo_server.py")
