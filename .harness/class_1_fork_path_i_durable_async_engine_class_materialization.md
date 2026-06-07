@@ -3,7 +3,7 @@
 **Filed**: 2026-05-25
 **Workspace HEAD at filing**: `bd50cd6` (post-Reading A path 1 arc close; `main` = `origin/main`)
 **Routing class**: Class 1 (halt-execution; design-phase back-flow required per X-AL-3)
-**Status**: CLOSED-DEFERRED 2026-05-25 — operator routed to §4 option (E) "Defer indefinitely + fix §3(a) doc-drift"; §3(a) doc-drift patched at skip-reason text this arc; un-skip gates on future DURABLE_ASYNC engine class materialization via full design-phase back-flow
+**Status:** CLOSED-DEFERRED 2026-05-25 — operator routed to §4 option (E) "Defer indefinitely + fix §3(a) doc-drift"; §3(a) doc-drift patched at skip-reason text this arc; un-skip gates on future DURABLE_ASYNC engine class materialization via full design-phase back-flow
 
 ---
 
