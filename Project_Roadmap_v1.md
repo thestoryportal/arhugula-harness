@@ -1186,7 +1186,10 @@ R-420-self-hosted-server-deployment-e2e:
   notes: >
     The first real non-LOCAL surface. Unblocks the tail-keep preservation (R-430) + tier secrets (R-440) rows whose
     semantics only exist on a real collector / real secrets backend. Daemon mode (C-RT-29 §14.18, FastMCP Unix-socket
-    server) is the entrypoint; the operator provisions the server + collector + secrets backend.
+    server) is the entrypoint; the operator provisions the server + collector + secrets backend. The
+    non-mutating `just self-hosted-readiness --config <harness.toml>` probe now validates the static pre-e2e
+    gates (SELF_HOSTED_SERVER config, real collector placement, OTLP endpoint, provider allowlist, tier backend
+    selector) without starting the daemon or making network/secret calls.
 
 R-421-managed-cloud-deployment-e2e:
   title: Exercise the harness at the MANAGED_CLOUD deployment surface (cloud secrets + FULL_VM provider class + managed collector)
@@ -1247,6 +1250,8 @@ R-440-tier-level-secrets-backend:
     At HEAD provider_secrets.py documents tier-level (SELF_HOSTED) vs in-sandbox (MANAGED_CLOUD) backends but ships only
     the LOCAL keyring + env-fallback path (per PR #16 binding-fix). This row implements a real tier-level backend per
     ADR-F5 tier-aware secret-fetch. Mirror precedent: keyring env-fallback at [[pr-16-keyring-env-fallback-adr-f5]].
+    `just self-hosted-readiness --config <harness.toml>` now makes the unresolved backend-selector gate explicit:
+    `ProviderSecretsConfig` has no tier-level backend selector yet, so the runtime remains keyring/env-fallback only.
 ```
 
 **Surface VI (multi-tenant) trigger fired.** Per §9, authoring this R-400 decomposition triggers §VI (Multi-tenant) decomposition. §VI remains `decomposition-owed` + live-gated (real multi-tenant deployment required); R-500-series authoring is a follow-on arc — not bundled here.

@@ -198,6 +198,11 @@ skips:
 sandbox-host-check provider='r411-gvisor':
     /usr/bin/python3 tools/sandbox_host_readiness.py --provider {{provider}}
 
+# Check static readiness for the R-420/R-440 SELF_HOSTED_SERVER deployment gate.
+# Non-mutating: does not start the daemon, contact OTLP, or fetch secrets.
+self-hosted-readiness *args:
+    uv run python tools/self_hosted_readiness.py {{args}}
+
 # ─── operator dashboard (R-XI-01) ──────────────────────────────────────────
 #
 # Local view of the operator roadmap dashboard. Output goes to the gitignored
