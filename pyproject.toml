@@ -25,6 +25,7 @@ dependencies = [
     "ollama>=0.4",             # Multi-LLM SDK — local tier
     "mcp>=1.2",                # MCP host + client — official modelcontextprotocol/python-sdk (FastMCP)
     "keyring>=25.5",           # Secrets — python-keyring OS-keyring abstraction (ADR-F5 v1.1)
+    "google-cloud-secret-manager>=2.0",  # Secrets — GCP Secret Manager backend for MANAGED_CLOUD
 ]
 
 [dependency-groups]
