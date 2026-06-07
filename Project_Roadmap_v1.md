@@ -1222,11 +1222,11 @@ R-421-managed-cloud-deployment-e2e:
 R-430-otlp-collector-tail-keep-preservation:
   title: Verify tail-keep-on-classification preservation at a real OTLP collector boundary
   surface: V
-  status: PROPOSED   # infra-gated — the TailKeepSpanProcessor buffer logic exists; the drop/keep preservation semantic is collector-side
+  status: RESOLVED   # local R-420 collector stack exercised the tail-keep preservation semantic end-to-end
   depends_on: [R-420-self-hosted-server-deployment-e2e]
   blocks: []
   posture: phase-7
-  scope: { files: [harness-od/**, deploy/**], contracts: [C-OD-09 §9.1, §9.2], cross_axis: no }
+  scope: { files: [harness-od/**, deploy/**, tools/**, justfile], contracts: [C-OD-09 §9.1, §9.2], cross_axis: no }
   skills: { primary: phase-7-implementation, secondary: [verify] }
   advisor_required: no
   council_required: no
@@ -1234,9 +1234,13 @@ R-430-otlp-collector-tail-keep-preservation:
   close_shape: { type: PR-merge, artifact: "test(od): tail-keep preservation at real OTLP collector", cascade: [] }
   next_pointer: null
   notes: >
-    The TailKeepSpanProcessor (tail_keep_span_processor.py) buffers per-trace + replays at root close; the actual
-    keep-vs-drop preservation is downstream at a real collector parsing is_classification_trigger. CI cannot deploy a
-    real collector — this row verifies the end-to-end preservation that the LOCAL suite (R-400) structurally cannot.
+    The TailKeepSpanProcessor (tail_keep_span_processor.py) buffers per-trace + replays at root close; the R-420
+    local collector stack now provides the real OTLP/Tempo substrate that LOCAL suite R-400 structurally could not.
+    Closure evidence 2026-06-07: `just r430-tail-keep-live-e2e harness.selfhosted.local.toml` emitted a
+    `sandbox.violation` trace and a non-triggering trace through the real OTLP exporter/collector. Tempo exposed
+    trigger trace `4972258a693b5d34c32c89ecd30749bc` with spans `r430.trigger.root` + `sandbox.violation`, while
+    plain trace `364f9516e5f95cae58f4b44219981626` stayed absent through the negative window
+    (`trigger-trace-preserved=true`, `non-trigger-trace-exported=false`, `cost=0`, `hosted-provider-calls=0`).
 
 R-440-tier-level-secrets-backend:
   title: Wire a SELF_HOSTED_SERVER tier-level secrets backend (currently operator-supplied / env-fallback only)

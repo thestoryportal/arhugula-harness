@@ -226,6 +226,11 @@ r420-self-hosted-readiness config:
 r420-self-hosted-live-e2e config:
     uv run python tools/r420_self_hosted_live_e2e.py {{config}}
 
+# Live R-430 collector proof. Requires the R-420 backend stack running locally.
+# Emits no hosted-provider calls; only OTLP/Tempo localhost traffic.
+r430-tail-keep-live-e2e config:
+    uv run --package harness-runtime python tools/r430_tail_keep_collector_live_e2e.py {{config}}
+
 # ─── operator dashboard (R-XI-01) ──────────────────────────────────────────
 #
 # Local view of the operator roadmap dashboard. Output goes to the gitignored
