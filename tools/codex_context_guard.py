@@ -56,6 +56,8 @@ SECRET_VALUE_RE = re.compile(
     r"[A-Z0-9_]*(?:SECRET|TOKEN|CREDENTIAL|PASSWORD|AUTH)[A-Z0-9_]*"
     r")=([^\s]+)"
 )
+DASHBOARD_JSON_LIVE_HEAD_RE = re.compile(rb'("live_head":\s*")[^"]*(")')
+DASHBOARD_META_LIVE_HEAD_RE = re.compile(rb'(<meta name="dashboard-live-head" content=")[^"]*(")')
 
 
 @dataclass(frozen=True)
@@ -370,7 +372,15 @@ def _dashboard_snapshot_current(
         )
         if proc.returncode != 0 or not out.exists():
             return None
-        return snapshot.read_bytes() == out.read_bytes()
+        return _normalize_dashboard_snapshot(snapshot.read_bytes()) == (
+            _normalize_dashboard_snapshot(out.read_bytes())
+        )
+
+
+def _normalize_dashboard_snapshot(raw: bytes) -> bytes:
+    """Ignore volatile HEAD display text in committed dashboard snapshots."""
+    raw = DASHBOARD_JSON_LIVE_HEAD_RE.sub(rb"\1<LIVE_HEAD>\2", raw, count=1)
+    return DASHBOARD_META_LIVE_HEAD_RE.sub(rb"\1<LIVE_HEAD>\2", raw, count=1)
 
 
 def derive(

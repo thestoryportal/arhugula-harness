@@ -33,7 +33,7 @@ import hashlib
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 import jsonschema
 from harness_as.sandbox_fail_class import (
@@ -65,6 +65,7 @@ __all__ = [
     "SandboxDispatchDecision",
     "SandboxTierFloorViolationError",
     "ToolContractUnknownError",
+    "ToolExecutionDriver",
     "ToolInvocationProtocolError",
     "ToolInvocationSchemaViolationError",
     "ToolInvocationTimeoutError",
@@ -116,6 +117,45 @@ def _default_sandbox_decision_resolver(
         "the per-deployment tier + tech + provider + assigned_tier_reason + "
         "cost_tier_overhead_ms per C-AS-15 §15"
     )
+
+
+class ToolExecutionDriver(Protocol):
+    """Per-dispatch tool execution mechanism selected after sandbox policy.
+
+    The dispatcher owns contract/trust checks, sandbox span emission, and
+    response validation. The execution driver owns the actual mechanism that
+    runs the tool call. The default driver preserves the pre-R-410 behavior by
+    delegating to `MCPClientHost.call_tool`; container/microVM/full-VM drivers
+    can replace that mechanism without changing the dispatcher surface.
+    """
+
+    async def call_tool(
+        self,
+        *,
+        mcp_client_host: MCPClientHost,
+        sandbox_decision: SandboxDispatchDecision,
+        tool_id: str,
+        tool_args: Mapping[str, Any],
+        idempotency_key: str,
+    ) -> Mapping[str, Any]:
+        """Execute one tool call and return the dispatcher response mapping."""
+        ...
+
+
+class MCPHostToolExecutionDriver:
+    """Default tool execution driver: existing MCP host call path."""
+
+    async def call_tool(
+        self,
+        *,
+        mcp_client_host: MCPClientHost,
+        sandbox_decision: SandboxDispatchDecision,
+        tool_id: str,
+        tool_args: Mapping[str, Any],
+        idempotency_key: str,
+    ) -> Mapping[str, Any]:
+        _ = sandbox_decision
+        return await mcp_client_host.call_tool(tool_id, tool_args, idempotency_key)
 
 
 # --- Typed fail classes (spec §14.9.5) -------------------------------------
@@ -226,6 +266,7 @@ class RuntimeToolDispatcher:
         cost_chain: Any = None,
         audit_writer: Any = None,
         rate_table: Any = None,
+        tool_execution_driver: ToolExecutionDriver | None = None,
     ) -> None:
         """Construct dispatcher with the cross-axis dependencies.
 
@@ -281,6 +322,7 @@ class RuntimeToolDispatcher:
         self._cost_chain = cost_chain
         self._audit_writer = audit_writer
         self._rate_table = rate_table
+        self._tool_execution_driver = tool_execution_driver or MCPHostToolExecutionDriver()
 
     def _attribute_tool_cost_best_effort(
         self,
@@ -516,8 +558,12 @@ class RuntimeToolDispatcher:
                             MCPPrimitive.TOOL,
                             signature_hash,
                         )
-                    response = await self._mcp_client_host.call_tool(
-                        tool_id, tool_args, idempotency_key
+                    response = await self._tool_execution_driver.call_tool(
+                        mcp_client_host=self._mcp_client_host,
+                        sandbox_decision=sandbox_decision,
+                        tool_id=tool_id,
+                        tool_args=tool_args,
+                        idempotency_key=idempotency_key,
                     )
             except ToolInvocationTimeoutError:
                 self._emit_sandbox_violation(

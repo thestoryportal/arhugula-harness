@@ -82,7 +82,7 @@ ANNOTATIONS = {
     "R-820-managed-agents-integration": "The real managed-agents integration; deferred by design to a managed-cloud stage.",
     # PROPOSED (queued; most need credentials or infrastructure only you can provide)
     "R-300-multi-llm-second-provider": "Ready to start, but needs OpenAI/Ollama credentials and a mixed-provider test you'd run.",
-    "R-410-sandbox-tier-2-container-execution": "Run tool calls inside a real isolated container instead of in-process; needs a container runtime you'd provide.",
+    "R-410-sandbox-tier-2-container-execution": "Resolved by the local-only Docker execution driver and live TIER_2 container e2e.",
     "R-411-sandbox-tier-3-microvm-execution": "Run tool calls in a microVM; needs that runtime and follows the container tier.",
     "R-412-sandbox-tier-4-full-vm-execution": "Run tool calls in a full VM; cloud-only, and follows the microVM + managed-cloud stages.",
     "R-420-self-hosted-server-deployment-e2e": "Run the harness on a real server with a collector + secrets; needs that infrastructure stood up.",
@@ -247,9 +247,9 @@ REMAINING_ORDERED = [
     {
         "n": 10,
         "layer": "activation",
-        "id": "R-410 → R-411",
-        "label": "Real sandboxes: container → microVM",
-        "gate": "Needs container/microVM runtimes you'd provide.",
+        "id": "R-411 → R-412",
+        "label": "Higher-tier sandboxes: microVM → full VM",
+        "gate": "Needs microVM/full-VM runtimes and, for TIER_4, managed-cloud infrastructure.",
     },
     {
         "n": 11,

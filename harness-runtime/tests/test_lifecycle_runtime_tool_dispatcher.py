@@ -10,7 +10,9 @@ Per `Implementation_Plan_Harness_Runtime_v2_11.md` §1 U-RT-67 (5 ACs):
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
+from typing import Any
 
 import pytest
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
@@ -42,6 +44,7 @@ from harness_runtime.lifecycle.runtime_tool_dispatcher import (
     SandboxDispatchDecision,
     SandboxTierFloorViolationError,
     ToolContractUnknownError,
+    ToolExecutionDriver,
     ToolInvocationProtocolError,
     ToolInvocationSchemaViolationError,
     ToolInvocationTimeoutError,
@@ -187,6 +190,27 @@ def _low_tier_sandbox_resolver(_contract, _step):
         assigned_tier_reason="tier-1-pinned",
         cost_tier_overhead_ms=10,
     )
+
+
+class _InjectedExecutionDriver:
+    def __init__(self) -> None:
+        self.calls: list[tuple[SandboxDispatchDecision, str, dict, str]] = []
+
+    async def call_tool(
+        self,
+        *,
+        mcp_client_host: MCPClientHost,
+        sandbox_decision: SandboxDispatchDecision,
+        tool_id: str,
+        tool_args: Mapping[str, Any],
+        idempotency_key: str,
+    ) -> Mapping[str, Any]:
+        self.calls.append((sandbox_decision, tool_id, dict(tool_args), idempotency_key))
+        return {
+            "content": [{"type": "text", "text": f"driver:{tool_args['message']}"}],
+            "isError": False,
+            "structuredContent": {"provider": sandbox_decision.provider},
+        }
 
 
 # ---------- AC #1 — tool-contract resolution + unknown failure -------------
@@ -445,6 +469,42 @@ async def test_dispatch_happy_path_returns_step_output() -> None:
         # Idempotency key is deterministic over (parent_key, step_id, tool_id).
         assert isinstance(result["idempotency_key"], str)
         assert len(result["idempotency_key"]) == 64  # sha256 hex
+    finally:
+        await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_uses_injected_tool_execution_driver() -> None:
+    """R-410 seam: after sandbox decision resolution, execution is delegated
+    to the configured driver instead of being hard-wired to MCPClientHost."""
+    host = await _build_started_host()
+    driver: ToolExecutionDriver = _InjectedExecutionDriver()
+    dispatcher = RuntimeToolDispatcher(
+        mcp_client_host=host,
+        per_server_trust_evaluator=PerServerTrustEvaluator(),
+        mcp_namespace_emitter=_make_emitter(),
+        trust_policy=_make_trust_policy(),
+        sandbox_decision_resolver=_good_sandbox_resolver,
+        tool_execution_driver=driver,
+    )
+    try:
+        result = await dispatcher.dispatch(
+            _make_binding(),
+            _make_step("echo", {"message": "via-driver"}),
+            step_context=_make_step_context(),
+        )
+        response = result["response"]
+        assert response["content"][0]["text"] == "driver:via-driver"
+
+        assert isinstance(driver, _InjectedExecutionDriver)
+        assert len(driver.calls) == 1
+        sandbox_decision, tool_id, tool_args, idempotency_key = driver.calls[0]
+        assert sandbox_decision.tier is SandboxTier.TIER_2_CONTAINER
+        assert sandbox_decision.provider == "container-d"
+        assert tool_id == "echo"
+        assert tool_args == {"message": "via-driver"}
+        assert isinstance(idempotency_key, str)
+        assert len(idempotency_key) == 64
     finally:
         await host.shutdown()
 
