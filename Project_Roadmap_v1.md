@@ -1241,6 +1241,17 @@ R-421-managed-cloud-deployment-e2e:
     closure slice is a gated live e2e only after the operator provisions GCP credentials, the
     `google-cloud-secret-manager` SDK, the named Secret Manager entries following the `servicename-secret`
     convention (starting with `e2b-secret`), a non-loopback managed OTLP endpoint, and a cost-approved collector.
+    The 2026-06-07 live R-421 collector pass provisioned an authenticated Google Cloud Run OTel collector at
+    `https://arhugula-r421-otel-collector-543404640214.us-central1.run.app`, stored the non-secret collector
+    YAML as Secret Manager entry `r421-otel-collector-config`, and proved static readiness plus redacted
+    `e2b-secret` resolution against project `project-ba535aa4-f08d-46b2-ba6`. Approved E2B sandbox calls ran
+    the deterministic command before the full e2e hit the runtime OTLP materialization gate. R-421 remains
+    PROPOSED because `materialize_span_processor_stage` still checks the bootstrap process as
+    `TIER_1_PROCESS`, while the solo MANAGED_CLOUD cell is canonically `VENDOR_PIPELINE`; C-OD-20 permits
+    Tier-1 bootstrap reachability only to `IN_PROCESS` / `SELF_HOSTED_BACKEND_COLLECTOR`. The live e2e now
+    fails fast on that reachability mismatch before creating another E2B sandbox. The temporary
+    `roles/iam.serviceAccountTokenCreator` grant used for ID-token diagnosis was removed after the failed
+    authenticated OTLP attempt.
 
 R-430-otlp-collector-tail-keep-preservation:
   title: Verify tail-keep-on-classification preservation at a real OTLP collector boundary
