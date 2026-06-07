@@ -35,7 +35,9 @@ registry construction has no shared dependency with the tool dispatcher).
 
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
+from typing import Any, cast
 
 from harness_as.anthropic_graceful_degradation import (
     MemoryToolStorageBackend,
@@ -47,9 +49,11 @@ from harness_runtime.lifecycle.memory_tool_filesystem import (
     LocalFilesystemMemoryToolBackend,
 )
 from harness_runtime.lifecycle.memory_tool_registry import MemoryToolRegistry
+from harness_runtime.lifecycle.memory_tool_s3 import S3ClientProtocol, S3MemoryToolBackend
 from harness_runtime.lifecycle.memory_tool_sqlite import SqliteMemoryToolBackend
 from harness_runtime.lifecycle.memory_tool_types import (
     MemoryBackendResolutionError,
+    MemoryToolBackendConfig,
     MemoryToolStorageBackendProtocol,
 )
 from harness_runtime.types import RuntimeConfig
@@ -92,6 +96,67 @@ def _resolve_database_connection_path(config: RuntimeConfig) -> Path:
         if connection_string:
             return Path(connection_string)
     return config.repository_root / MEMORY_TOOL_DATABASE_SUBPATH
+
+
+def _require_backend_params(
+    backend_cfg: MemoryToolBackendConfig | None,
+    *,
+    backend: MemoryToolStorageBackend,
+) -> dict[str, str]:
+    if backend_cfg is None or backend_cfg.backend_params is None:
+        raise MemoryBackendResolutionError(
+            f"RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend {backend.value!r} "
+            f"requires memory_tool_backend_config.backend_params"
+        )
+    return dict(backend_cfg.backend_params)
+
+
+def _create_s3_client_from_backend_params(params: dict[str, str]) -> S3ClientProtocol:
+    """Lazily construct a boto3 S3 client from operator backend params.
+
+    boto3 is intentionally optional: provider-free CI monkeypatches this
+    function, while live MANAGED_CLOUD use requires the operator to install the
+    dependency and provide ambient AWS credentials or equivalent boto3 config.
+    """
+    try:
+        boto3 = importlib.import_module("boto3")
+    except ImportError as exc:
+        raise MemoryBackendResolutionError(
+            "RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend 's3' requires optional "
+            "dependency boto3 for live client construction; provider-free tests "
+            "may monkeypatch _create_s3_client_from_backend_params"
+        ) from exc
+
+    client_kwargs: dict[str, str] = {}
+    for key in ("region_name", "endpoint_url", "profile_name"):
+        value = params.get(key)
+        if value:
+            client_kwargs[key] = value
+
+    boto3_module = cast(Any, boto3)
+    if "profile_name" in client_kwargs:
+        profile_name = client_kwargs.pop("profile_name")
+        session = boto3_module.Session(profile_name=profile_name)
+        return cast(S3ClientProtocol, session.client("s3", **client_kwargs))
+    return cast(S3ClientProtocol, boto3_module.client("s3", **client_kwargs))
+
+
+def _construct_s3_backend(config: RuntimeConfig) -> S3MemoryToolBackend:
+    params = _require_backend_params(
+        config.memory_tool_backend_config,
+        backend=MemoryToolStorageBackend.S3,
+    )
+    bucket = params.get("bucket")
+    if not bucket:
+        raise MemoryBackendResolutionError(
+            "RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend 's3' requires backend_params['bucket']"
+        )
+    client = _create_s3_client_from_backend_params(params)
+    return S3MemoryToolBackend(
+        bucket=bucket,
+        key_prefix=params.get("key_prefix", ""),
+        client=client,
+    )
 
 
 PROTOCOL_REQUIRED_METHODS: tuple[str, ...] = (
@@ -145,11 +210,16 @@ async def materialize_memory_tool_registry_stage(
         # below still raises), and the surface-default path still picks
         # FILESYSTEM only (DATABASE reaches here via explicit operator override).
         backend = SqliteMemoryToolBackend(db_path=_resolve_database_connection_path(config))
+    elif configured is MemoryToolStorageBackend.S3:
+        # R-830 MANAGED_CLOUD cloud-vault backend. Provider-free construction
+        # reaches this path through a monkeypatched client factory; live use
+        # requires boto3 + operator-provided credentials and bucket params.
+        backend = _construct_s3_backend(config)
     else:
         raise MemoryBackendResolutionError(
             f"RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend "
             f"{configured.value!r} has no implementation landed "
-            f"(FILESYSTEM + DATABASE landed; S3 / ENCRYPTED_FILESYSTEM / "
+            f"(FILESYSTEM + DATABASE + S3 landed; ENCRYPTED_FILESYSTEM / "
             f"OPERATOR_DEFINED deferred to operator-discretion follow-on arcs "
             f"per spec §14.D + §16 §6.C v2 C.vii)"
         )

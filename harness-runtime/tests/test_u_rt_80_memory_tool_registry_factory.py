@@ -28,6 +28,7 @@ from harness_runtime.lifecycle.memory_tool_filesystem import (
     LocalFilesystemMemoryToolBackend,
 )
 from harness_runtime.lifecycle.memory_tool_registry import MemoryToolRegistry
+from harness_runtime.lifecycle.memory_tool_s3 import S3MemoryToolBackend
 from harness_runtime.lifecycle.memory_tool_sqlite import SqliteMemoryToolBackend
 from harness_runtime.lifecycle.memory_tool_types import (
     MemoryBackendResolutionError,
@@ -100,10 +101,11 @@ async def test_operator_override_filesystem_honored(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC #3 — operator override: still-unimplemented backends (S3 /
-# ENCRYPTED_FILESYSTEM / OPERATOR_DEFINED) raise with
+# AC #3 — operator override: still-unimplemented backends
+# (ENCRYPTED_FILESYSTEM / OPERATOR_DEFINED) raise with
 # RT-FAIL-MEMORY-BACKEND-RESOLUTION + §14.D pointer. DATABASE moved to the
-# acceptance path at R-830 (test below) — the SELF_HOSTED SQLite backend.
+# acceptance path at R-830 (SELF_HOSTED SQLite); S3 moves to the mockable
+# cloud-vault acceptance path in this R-830 slice.
 # ---------------------------------------------------------------------------
 
 
@@ -111,7 +113,6 @@ async def test_operator_override_filesystem_honored(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "unimplemented_backend",
     [
-        MemoryToolStorageBackend.S3,
         MemoryToolStorageBackend.ENCRYPTED_FILESYSTEM,
         MemoryToolStorageBackend.OPERATOR_DEFINED,
     ],
@@ -135,6 +136,72 @@ async def test_unimplemented_backend_raises_with_fork_doc_pointer(
     # Fork-doc pointer per `[[halt-route-split-AC-pattern]]` carry-forward.
     assert "§14.D" in msg
     assert ctx.memory_tool_registry is None  # never bound on resolution failure
+
+
+# ---------------------------------------------------------------------------
+# AC #3a (R-830) — operator override: S3 constructs the cloud-vault backend
+# when bucket params are present. Provider-free test monkeypatches the S3
+# client constructor; live AWS credentials remain an operator-gated e2e.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_s3_override_constructs_s3_backend_with_bucket_params(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeS3Client:
+        def put_object(self, **kwargs: object) -> None:
+            return None
+
+        def get_object(self, **kwargs: object) -> dict[str, object]:
+            return {"Body": b""}
+
+        def delete_object(self, **kwargs: object) -> None:
+            return None
+
+    fake_client = FakeS3Client()
+
+    monkeypatch.setattr(
+        "harness_runtime.bootstrap.factories.memory_tool_registry_factory."
+        "_create_s3_client_from_backend_params",
+        lambda params: fake_client,
+    )
+
+    cfg = _config(
+        memory_tool_backend_config=MemoryToolBackendConfig(
+            backend=MemoryToolStorageBackend.S3,
+            backend_params={"bucket": "memory-bucket", "key_prefix": "tenant-a"},
+        ),
+        repository_root=tmp_path,
+        deployment_surface=DeploymentSurface.MANAGED_CLOUD,
+    )
+    ctx = _MutableHarnessContext()
+
+    registry = await materialize_memory_tool_registry_stage(cfg, ctx)
+
+    assert registry.configured_backend is MemoryToolStorageBackend.S3
+    backend = registry.resolve_backend(cfg.deployment_surface)
+    assert isinstance(backend, S3MemoryToolBackend)
+    assert backend.bucket == "memory-bucket"
+    assert backend.key_prefix == "tenant-a"
+
+
+@pytest.mark.asyncio
+async def test_s3_override_requires_bucket_param(tmp_path: Path) -> None:
+    cfg = _config(
+        memory_tool_backend_config=MemoryToolBackendConfig(
+            backend=MemoryToolStorageBackend.S3,
+            backend_params={"key_prefix": "tenant-a"},
+        ),
+        repository_root=tmp_path,
+    )
+    ctx = _MutableHarnessContext()
+
+    with pytest.raises(MemoryBackendResolutionError, match="bucket"):
+        await materialize_memory_tool_registry_stage(cfg, ctx)
+
+    assert ctx.memory_tool_registry is None
 
 
 # ---------------------------------------------------------------------------

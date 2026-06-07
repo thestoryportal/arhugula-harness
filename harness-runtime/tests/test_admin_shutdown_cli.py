@@ -268,16 +268,22 @@ def test_shutdown_cli_signals_real_subprocess(tmp_path: Path) -> None:
     monkeypatched os.kill.
     """
     pidfile = tmp_path / "runtime.pid"
+    ready_file = tmp_path / "handler.ready"
     script = (
-        "import signal, time, sys; "
+        "import pathlib, signal, time, sys; "
         "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); "
+        f"pathlib.Path({str(ready_file)!r}).write_text('ready'); "
         "time.sleep(10)"
     )
     proc = subprocess.Popen([sys.executable, "-c", script])
     try:
         write_pidfile(pidfile, proc.pid)
-        # Give Python time to install the handler before sending SIGTERM.
-        time.sleep(0.2)
+        deadline = time.monotonic() + 2.0
+        while not ready_file.exists() and time.monotonic() < deadline:
+            if proc.poll() is not None:
+                break
+            time.sleep(0.01)
+        assert ready_file.exists(), "subprocess did not install SIGTERM handler"
 
         # No --wait: signal-delivery only.
         code = main(["--pidfile-path", str(pidfile)])

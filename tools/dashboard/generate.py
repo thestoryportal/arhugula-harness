@@ -90,7 +90,7 @@ ANNOTATIONS = {
     "R-430-otlp-collector-tail-keep-preservation": "Resolved by the R-420 local real-collector tail-keep live proof.",
     "R-440-tier-level-secrets-backend": "Resolved by the self-hosted-keyring selector; R-420 proved it live through the local keyring sentinel.",
     "R-500-multi-tenant-deployment": "Resolved by the local self-hosted multi-tenant proof: tenant.id resource separation, non-toggleable redaction, and tenant-scoped audit reads.",
-    "R-830-memory-tool-production-backend": "The local SQLite slice is done; the cloud-vault / managed-DB remainder needs cloud credentials you'd provide.",
+    "R-830-memory-tool-production-backend": "The local SQLite and provider-free S3 slices are done; live S3 and any managed-DB remainder need cloud credentials you'd provide.",
     "R-900-research-arcs": "Open-ended research / exploration; no fixed scope — pulled in as you choose.",
     "R-CXA-1-as-is-seam": "The one remaining wire (a secret-fetch audit caller) has no real source yet, so wiring it would be hollow; deferred until one exists.",
     "R-CXA-2-cp-is-seam": "The materialized pause/resume caller sites are covered; remaining CP→IS work needs engine-layer producers and the unresolved stage-ordering/spec-disambiguator gaps.",
