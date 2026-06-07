@@ -153,25 +153,30 @@ Claude-centered managed-agents surface. The current harness roadmap keeps
 multi-provider runtime/provider-secret behavior load-bearing, and `R-820` is
 the deferred managed-agents integration row.
 
-## Next Implementation Slice
+## Implementation Status
 
-1. Add a managed-cloud secret backend enum member, starting with
-   `gcp-secret-manager`.
-2. Implement a mockable GCP Secret Manager resolver behind
-   `ProviderSecretsConfig`, preserving current LOCAL env fallback and
-   SELF_HOSTED keyring-only behavior.
-3. Update `tools/managed_cloud_readiness.py` so `cloud-secret-backend` passes
-   only for the landed managed-cloud selector.
-4. Add a managed-cloud config template for the selected GCP stack with
-   `backend = "gcp-secret-manager"`, `placement = "VENDOR_PIPELINE"` or
-   `VENDOR_MANAGED_COLLECTOR` as required by persona tier, and non-loopback OTLP.
-5. Add provider-free tests for secret resolution, readiness pass/fail, and
-   collector placement.
-6. When the operator has provisioned GCP credentials and confirms the cost gate,
-   run the R-421 live e2e that fetches `E2B_API_KEY` from GCP Secret Manager,
-   creates an E2B sandbox, emits OTLP to the managed collector, and reports
-   hosted-provider calls and cost posture.
+The first no-live-call R-421 code slice adds the `gcp-secret-manager`
+`ProviderSecretBackend`, a mockable GCP Secret Manager resolver behind
+`ProviderSecretsConfig`, provider-free resolver/readiness coverage, and an
+E2B + GCP managed-cloud config template. Static readiness now passes for the
+selected shape without starting the daemon, probing OTLP, fetching secrets,
+installing SDKs, or making managed-cloud provider calls.
+
+## Remaining Live Closure Slice
+
+1. Provision GCP credentials with Secret Manager access.
+2. Run the live R-421 path in a Python environment that provides
+   `google-cloud-secret-manager`.
+3. Create the named Secret Manager entries, starting with `e2b_api_key` under
+   the configured GCP project.
+4. Provision a non-loopback managed OTLP endpoint, using the Google-built
+   OpenTelemetry Collector on Cloud Run path unless the operator chooses an
+   alternate managed collector.
+5. Confirm the cost gate, then run the R-421 live e2e that fetches
+   `E2B_API_KEY` from GCP Secret Manager, creates an E2B sandbox, emits OTLP to
+   the managed collector, and reports hosted-provider calls and cost posture.
 
 R-411 can proceed in parallel only after a compatible Linux host/runtime or
 Apple Silicon host is available. Without that host, the honest next local work
-is R-421 managed-cloud secret backend implementation to the mock/static gate.
+is the R-421 live managed-cloud e2e once the operator-provisioned GCP/OTLP
+inputs exist.

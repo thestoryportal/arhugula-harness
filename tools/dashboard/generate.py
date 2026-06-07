@@ -86,7 +86,7 @@ ANNOTATIONS = {
     "R-411-sandbox-tier-3-microvm-execution": "Host-fit gate is explicit: first selected path is Linux + Docker + gVisor/runsc; E2B stays managed/remote, not local R-411.",
     "R-412-sandbox-tier-4-full-vm-execution": "Deferred until managed cloud exists; Firecracker and QEMU microvm need a Linux KVM host with /dev/kvm.",
     "R-420-self-hosted-server-deployment-e2e": "Resolved by the local single-node self-hosted daemon + collector + keyring live e2e.",
-    "R-421-managed-cloud-deployment-e2e": "Selected first path: E2B + GCP Secret Manager + Google Cloud OTel collector; code still needs the cloud secret backend and managed collector e2e.",
+    "R-421-managed-cloud-deployment-e2e": "Selected first path: E2B + GCP Secret Manager + Google Cloud OTel collector; static GCP backend is landed, live e2e still needs GCP credentials, secrets, managed OTLP, and approval.",
     "R-430-otlp-collector-tail-keep-preservation": "Resolved by the R-420 local real-collector tail-keep live proof.",
     "R-440-tier-level-secrets-backend": "Resolved by the self-hosted-keyring selector; R-420 proved it live through the local keyring sentinel.",
     "R-500-multi-tenant-deployment": "Resolved by the local self-hosted multi-tenant proof: tenant.id resource separation, non-toggleable redaction, and tenant-scoped audit reads.",
@@ -249,7 +249,7 @@ REMAINING_ORDERED = [
         "layer": "activation",
         "id": "R-421 → R-412",
         "label": "Managed cloud → full-VM",
-        "gate": "Needs managed-cloud infrastructure plus a cloud secret backend; static readiness and the approved-only E2B live probe command are now in place.",
+        "gate": "Needs managed-cloud infrastructure: GCP credentials, named Secret Manager entries, non-loopback managed OTLP, and approved live E2B/GCP calls.",
     },
     {
         "n": 11,

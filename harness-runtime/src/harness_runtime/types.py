@@ -38,7 +38,7 @@ import asyncio
 from collections.abc import Mapping
 from enum import Enum, StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NewType, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, NewType, Protocol, Self, runtime_checkable
 
 # ----------------------------------------------------------------------------
 # Concrete axis-type imports (the 6 names that resolve at HEAD).
@@ -104,7 +104,7 @@ from harness_od.local_first_otlp_collector import (
 from harness_od.otel_genai_base import EventEmission, SpanRef
 from harness_od.per_cell_collector_placement_matrix import CollectorPlacement
 from harness_od.sampling_mode import SamplingMode
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 # U-RT-79 — Memory tool backend config carrier import (per spec v1.17 §3 C-RT-02
 # field-table extension). MemoryToolBackendConfig declared at U-RT-76.
@@ -316,6 +316,7 @@ class ProviderSecretBackend(StrEnum):
 
     LOCAL_KEYRING_ENV_FALLBACK = "local-keyring-env-fallback"
     SELF_HOSTED_KEYRING = "self-hosted-keyring"
+    GCP_SECRET_MANAGER = "gcp-secret-manager"
 
 
 class ProviderSecretsConfig(BaseModel):
@@ -340,6 +341,12 @@ class ProviderSecretsConfig(BaseModel):
     keyring_service: str = "harness"
     """OS-keyring service-name identifier (python-keyring `service` arg)."""
 
+    gcp_project_id: str | None = None
+    """GCP project id for the `gcp-secret-manager` backend."""
+
+    gcp_secret_version: str = "latest"
+    """GCP Secret Manager version selector used for provider-secret names."""
+
     operator_allowlist: tuple[SecretAllowlistEntry, ...] = ()
     """Operator-policy allowlist (C-AS-06 §6.2 override set).
 
@@ -348,6 +355,23 @@ class ProviderSecretsConfig(BaseModel):
     Empty default means no operator-allowlisted secrets — every fetch is
     DENIED_NOT_IN_OPERATOR_POLICY_OVERRIDE until populated.
     """
+
+    @field_validator("gcp_secret_version")
+    @classmethod
+    def _gcp_secret_version_non_empty(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("gcp_secret_version must be non-empty")
+        return stripped
+
+    @model_validator(mode="after")
+    def _require_gcp_project_for_gcp_backend(self) -> Self:
+        if (
+            self.backend is ProviderSecretBackend.GCP_SECRET_MANAGER
+            and not (self.gcp_project_id or "").strip()
+        ):
+            raise ValueError("gcp_project_id is required when backend is gcp-secret-manager")
+        return self
 
 
 class OTelConfig(BaseModel):

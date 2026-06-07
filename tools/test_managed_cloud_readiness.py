@@ -8,6 +8,7 @@ from harness_od.per_cell_collector_placement_matrix import CollectorPlacement
 from harness_runtime.types import (
     CollectorConfig,
     OTelConfig,
+    ProviderSecretBackend,
     ProviderSecretsConfig,
     RuntimeConfig,
 )
@@ -45,7 +46,7 @@ def _checks_by_name(config: RuntimeConfig, *, hosted_sandbox_provider: str | Non
     return {check.name: check for check in report.checks}
 
 
-def test_managed_cloud_static_readiness_blocks_on_unlanded_cloud_secret_backend(
+def test_managed_cloud_static_readiness_blocks_on_local_secret_backend(
     tmp_path: Path,
 ) -> None:
     report = evaluate_config(_config(tmp_path), hosted_sandbox_provider="e2b")
@@ -58,10 +59,24 @@ def test_managed_cloud_static_readiness_blocks_on_unlanded_cloud_secret_backend(
     assert checks["provider-secret-allowlist"].ok is True
     assert checks["hosted-sandbox-provider"].ok is True
     assert checks["cloud-secret-backend"].ok is False
-    assert (
-        "no managed-cloud provider-secret backend has landed"
-        in checks["cloud-secret-backend"].detail
+    assert "local-keyring-env-fallback" in checks["cloud-secret-backend"].detail
+
+
+def test_managed_cloud_static_readiness_passes_with_gcp_backend(tmp_path: Path) -> None:
+    report = evaluate_config(
+        _config(
+            tmp_path,
+            provider_secrets=ProviderSecretsConfig(
+                backend=ProviderSecretBackend.GCP_SECRET_MANAGER,
+                gcp_project_id="harness-test-project",
+                operator_allowlist=(e2b_secret_allowlist_entry(),),
+            ),
+        ),
+        hosted_sandbox_provider="e2b",
     )
+
+    assert report.ready is True
+    assert {check.name for check in report.checks if not check.ok} == set()
 
 
 def test_local_development_surface_fails_r421_gate(tmp_path: Path) -> None:
@@ -136,6 +151,8 @@ otlp_endpoint = "https://collector.vendor.example/v1/traces"
 placement = "VENDOR_PIPELINE"
 
 [runtime.provider_secrets]
+backend = "gcp-secret-manager"
+gcp_project_id = "harness-test-project"
 keyring_service = "harness"
 
 [[runtime.provider_secrets.operator_allowlist]]
@@ -147,5 +164,5 @@ scope = {{ name = "r421-managed-cloud" }}
 
     report = load_report(config_file, hosted_sandbox_provider="e2b")
 
-    assert report.ready is False
-    assert {check.name for check in report.checks if not check.ok} == {"cloud-secret-backend"}
+    assert report.ready is True
+    assert {check.name for check in report.checks if not check.ok} == set()
