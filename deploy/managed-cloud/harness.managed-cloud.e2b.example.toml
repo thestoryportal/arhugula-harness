@@ -1,0 +1,35 @@
+# R-421 MANAGED_CLOUD runtime template for the E2B hosted-sandbox candidate.
+#
+# Replace `/absolute/path/to/arhugula-v2` and the OTLP endpoint with real
+# managed-cloud values before running readiness. This template is intentionally
+# expected to fail the cloud-secret-backend readiness check until a managed
+# provider-secret backend lands in the runtime.
+
+[runtime]
+deployment_surface = "managed-cloud"
+repository_root = "/absolute/path/to/arhugula-v2"
+default_topology = "single-threaded-linear"
+
+anthropic_optional = true
+openai_optional = true
+ollama_optional = true
+
+[runtime.provider_secrets]
+keyring_service = "harness"
+
+[[runtime.provider_secrets.operator_allowlist]]
+name = "e2b_api_key"
+scope = { name = "r421-managed-cloud" }
+
+[runtime.otel]
+otlp_endpoint = "https://collector.vendor.example/v1/traces"
+
+[runtime.collector]
+placement = "VENDOR_PIPELINE"
+
+[runtime.routing_manifest]
+manifest_version = 1
+per_role_bindings = {}
+per_workload_overrides = {}
+retry_policies = {}
+fallback_chains = []
