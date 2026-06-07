@@ -33,7 +33,7 @@ from harness_runtime.config.provider_secrets import (
     SecretResolutionError,
     make_keyring_resolver,
 )
-from harness_runtime.types import ProviderSecretsConfig
+from harness_runtime.types import ProviderSecretBackend, ProviderSecretsConfig
 from keyring.backend import KeyringBackend
 
 
@@ -94,6 +94,7 @@ def _tool_with_allowed_secrets(
 def test_provider_secrets_config_defaults() -> None:
     """Empty config: default keyring_service='harness', empty operator allowlist."""
     config = ProviderSecretsConfig()
+    assert config.backend is ProviderSecretBackend.LOCAL_KEYRING_ENV_FALLBACK
     assert config.keyring_service == "harness"
     assert config.operator_allowlist == ()
 
@@ -355,6 +356,37 @@ def test_resolve_bootstrap_value_neither_keyring_nor_env_raises(
     with pytest.raises(SecretResolutionError) as excinfo:
         resolver.resolve_bootstrap_value("anthropic_key")
     assert excinfo.value.fail_class is SecretFailClass.SECRET_UNKNOWN
+
+
+def test_self_hosted_keyring_backend_does_not_fall_back_to_env_var(
+    fake_keyring: _FakeKeyring,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-440: SELF_HOSTED backend must not silently use LOCAL env fallback."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-from-env")
+    resolver = make_keyring_resolver(
+        ProviderSecretsConfig(backend=ProviderSecretBackend.SELF_HOSTED_KEYRING)
+    )
+
+    with pytest.raises(SecretResolutionError) as excinfo:
+        resolver.resolve_bootstrap_value("anthropic_key")
+
+    assert excinfo.value.fail_class is SecretFailClass.SECRET_UNKNOWN
+    assert excinfo.value.name == "anthropic_key"
+
+
+def test_self_hosted_keyring_backend_resolves_keyring_value(
+    fake_keyring: _FakeKeyring,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-440: SELF_HOSTED backend resolves from keyring when the key exists."""
+    keyring.set_password("harness", "anthropic_key", "sk-ant-from-keyring")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-from-env")
+    resolver = make_keyring_resolver(
+        ProviderSecretsConfig(backend=ProviderSecretBackend.SELF_HOSTED_KEYRING)
+    )
+
+    assert resolver.resolve_bootstrap_value("anthropic_key") == "sk-ant-from-keyring"
 
 
 def test_resolve_env_var_fallback_honors_allowlist(

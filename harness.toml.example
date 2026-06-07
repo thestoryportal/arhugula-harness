@@ -63,6 +63,19 @@ ollama_optional = true
 # ollama_host = "http://localhost:11434"
 
 
+# Provider secret backend selection. This table carries selector metadata
+# only. Do not put API keys, tokens, passwords, or other secret values here.
+[runtime.provider_secrets]
+# LOCAL default: keyring first, vendor env-var fallback second.
+backend = "local-keyring-env-fallback"
+
+# SELF_HOSTED_SERVER: keyring only; env fallback disabled.
+# backend = "self-hosted-keyring"
+
+# Optional OS-keyring service name. Default: "harness".
+keyring_service = "harness"
+
+
 # REQUIRED. OTel exporter configuration.
 [runtime.otel]
 # REQUIRED. OTLP endpoint URL; must include a `://` scheme.

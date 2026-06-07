@@ -1,4 +1,4 @@
-"""U-RT-06 — keyring-backed secret resolver driver.
+"""U-RT-06 — keyring-backed provider-secret resolver driver.
 
 Per `Spec_Harness_Runtime_v1.md` v1.1 §3 (C-RT-03 `provider_secrets` field)
 and Phase 2 Session 3 plan v2.1 §2 L1, this module:
@@ -8,6 +8,8 @@ and Phase 2 Session 3 plan v2.1 §2 L1, this module:
   supplied at fetch time.
 - Maps keyring misses to typed `SecretResolutionError` carrying the C-AS-07
   `SecretFailClass` for downstream C5/C9 routing.
+- Selects whether vendor env-var fallback is allowed from
+  `ProviderSecretsConfig.backend`.
 
 Implementation-discretion choices (per AS spec C-AS-05 §5.4):
 - Keyring library: `python-keyring` (committed at `Target_Stack_Commitment_v1`
@@ -46,7 +48,7 @@ from harness_as.secret_fail_class import SecretFailClass
 from harness_as.secret_fetch import SecretRef, SecretScope
 from harness_as.tool_contract import ToolContract
 
-from harness_runtime.types import ProviderSecretsConfig
+from harness_runtime.types import ProviderSecretBackend, ProviderSecretsConfig
 
 __all__ = [
     "KeyringSecretResolver",
@@ -89,7 +91,7 @@ class SecretAllowlistDeniedError(Exception):
 
 @dataclass(frozen=True)
 class KeyringSecretResolver:
-    """Runtime keyring-backed secret resolver.
+    """Runtime keyring-backed provider-secret resolver.
 
     Construct via `make_keyring_resolver(config)`. The resolver is frozen
     (dataclass `frozen=True`); reconfiguration requires building a new
@@ -97,6 +99,7 @@ class KeyringSecretResolver:
     """
 
     keyring_service: str
+    allow_env_fallback: bool
     operator_allowlist: frozenset[object]
     """Stored as `frozenset[object]` to dodge `SecretAllowlistEntry` hashability
     fragility (Pydantic v2 frozen models are hashable only with `frozen=True`
@@ -121,7 +124,7 @@ class KeyringSecretResolver:
         if value is not None:
             return value
         env_var = _KEYRING_TO_ENV_VAR.get(name)
-        if env_var is not None:
+        if self.allow_env_fallback and env_var is not None:
             return os.environ.get(env_var)
         return None
 
@@ -219,5 +222,6 @@ def make_keyring_resolver(config: ProviderSecretsConfig) -> KeyringSecretResolve
     """Build a `KeyringSecretResolver` from a `ProviderSecretsConfig`."""
     return KeyringSecretResolver(
         keyring_service=config.keyring_service,
+        allow_env_fallback=config.backend is ProviderSecretBackend.LOCAL_KEYRING_ENV_FALLBACK,
         operator_allowlist=frozenset(config.operator_allowlist),
     )

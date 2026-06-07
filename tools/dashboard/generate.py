@@ -88,7 +88,7 @@ ANNOTATIONS = {
     "R-420-self-hosted-server-deployment-e2e": "Run the harness on a real server with a collector + secrets; needs that infrastructure stood up.",
     "R-421-managed-cloud-deployment-e2e": "Managed cloud is deferred; E2B is a possible hosted sandbox candidate but needs an approved API key.",
     "R-430-otlp-collector-tail-keep-preservation": "Confirm the telemetry keep-rule works against a real collector; needs that collector running.",
-    "R-440-tier-level-secrets-backend": "Wire a real secrets store for a self-hosted server (today it's env-vars / operator-supplied).",
+    "R-440-tier-level-secrets-backend": "Resolved by the self-hosted-keyring selector; the live server/collector/keyring-entry exercise stays with R-420.",
     "R-500-multi-tenant-deployment": "Exercise the harness with multiple tenants / a non-solo profile; needs a multi-tenant deployment.",
     "R-830-memory-tool-production-backend": "The local SQLite slice is done; the cloud-vault / managed-DB remainder needs cloud credentials you'd provide.",
     "R-900-research-arcs": "Open-ended research / exploration; no fixed scope — pulled in as you choose.",
@@ -240,9 +240,9 @@ REMAINING_ORDERED = [
     {
         "n": 9,
         "layer": "activation",
-        "id": "R-440 → R-420 → R-430",
-        "label": "Self-hosted server: secrets → server → collector",
-        "gate": "Needs a real server + secrets backend + OTLP collector you'd stand up.",
+        "id": "R-420 → R-430",
+        "label": "Self-hosted server: server → collector",
+        "gate": "Needs a real server, actual keyring entries, and an OTLP collector you'd stand up.",
     },
     {
         "n": 10,
