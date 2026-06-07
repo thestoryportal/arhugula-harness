@@ -92,9 +92,7 @@ def _assert_static_ready(config_file: Path) -> None:
     report = load_report(config_file, hosted_sandbox_provider="e2b")
     if report.ready:
         return
-    failures = "; ".join(
-        f"{check.name}: {check.detail}" for check in report.checks if not check.ok
-    )
+    failures = "; ".join(f"{check.name}: {check.detail}" for check in report.checks if not check.ok)
     raise R421LiveE2EError(f"static managed-cloud readiness failed: {failures}")
 
 
@@ -129,8 +127,7 @@ def _assert_runtime_bootstrap_can_reach_collector(config: Any) -> None:
         )
     except ReachabilityViolation as exc:
         raise R421LiveE2EError(
-            "runtime bootstrap OTLP reachability failed before E2B sandbox creation: "
-            f"{exc}"
+            f"runtime bootstrap OTLP reachability failed before E2B sandbox creation: {exc}"
         ) from exc
 
 
@@ -164,9 +161,7 @@ def _run_hosted_e2b_probe(
             os.environ["E2B_API_KEY"] = previous_key
 
     if stdout != "r421-e2b-ok":
-        raise R421LiveE2EError(
-            f"unexpected E2B stdout {stdout!r}; expected 'r421-e2b-ok'"
-        )
+        raise R421LiveE2EError(f"unexpected E2B stdout {stdout!r}; expected 'r421-e2b-ok'")
 
 
 def _emit_trigger_trace(config: Any, *, flush_timeout_millis: int) -> str:
@@ -326,10 +321,7 @@ def _cloud_trace_payload(
 ) -> dict[str, Any] | None:
     encoded_project = quote(project_id, safe="")
     encoded_trace = quote(trace_id, safe="")
-    url = (
-        "https://cloudtrace.googleapis.com/v1/projects/"
-        f"{encoded_project}/traces/{encoded_trace}"
-    )
+    url = f"https://cloudtrace.googleapis.com/v1/projects/{encoded_project}/traces/{encoded_trace}"
     request = Request(
         url,
         headers={"Authorization": f"Bearer {_cloud_trace_token()}"},

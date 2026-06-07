@@ -105,9 +105,7 @@ def test_trace_span_names_extracts_cloud_trace_v1_shape() -> None:
         ],
     }
 
-    assert _trace_span_names(payload) == frozenset(
-        {"r421.managed_cloud.root", "sandbox.violation"}
-    )
+    assert _trace_span_names(payload) == frozenset({"r421.managed_cloud.root", "sandbox.violation"})
 
 
 def test_run_hosted_e2b_probe_restores_environment(
