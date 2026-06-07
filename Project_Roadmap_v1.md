@@ -552,7 +552,7 @@ R-008-od-4-redaction-partial:
   skills: { primary: phase-7-implementation, secondary: [phase-7-substitution-retirement] }
   advisor_required: conditional:if a gate closure touches a cross-axis contract
   council_required: no
-  verification: { shape: integration, must_pass: ["§13.1 per-session redaction toggle mechanism authored (deferred at PR #25 apply arc) — ✅ MET 2026-06-02 (gate a)", "§13.2 opaque-token tokenization substrate — ✅ OD provider-free substrate authored 2026-06-07; ⛔ durable audit-ledger mapping + eval-grade semantic classifier remain cross-axis-gated"] }
+  verification: { shape: integration, must_pass: ["§13.1 per-session redaction toggle mechanism authored (deferred at PR #25 apply arc) — ✅ MET 2026-06-02 (gate a)", "§13.2 opaque-token tokenization substrate — ✅ OD provider-free substrate authored 2026-06-07; durable audit-ledger token-map persistence — ✅ authored 2026-06-07; ⛔ eval-grade semantic classifier remains cross-axis-gated"] }
   close_shape: { type: PR-merge, artifact: "PR closing the remaining OD-4 gates → PARTIAL → RETIRE-READY", cascade: [R-IF-roadmap-refresh] }
   next_pointer: R-007-od-3-sampler-retired
   notes: >
@@ -571,10 +571,14 @@ R-008-od-4-redaction-partial:
     span attributes with `[REDACTED:CONTENT:<id>]` placeholders while storing raw values only behind the
     token-map sink. Default strip-not-tokenize behavior remains unchanged unless a tokenizer is injected, and
     the solo-developer `session_content_capture()` override still bypasses tokenization only at the toggleable
-    tier. **Remaining gate (b) is now narrower but still real:** durable audit-ledger persistence for the token
-    map plus an eval-grade semantic classifier that can emit category-specific tokens such as `[REDACTED:PII]`
-    remain cross-axis work. So R-008 stays **BLOCKED** on the durable/eval-grade cross-axis dependency; the
-    OD stdlib substrate is no longer the blocker. This is a within-PARTIAL refinement, not a tier transit —
+    tier. **Durable audit-ledger token-map persistence advanced 2026-06-07:** `harness_od.redaction_token_audit`
+    composes one signed OD `AuditLedgerEntry` per `RedactionTokenRecord`, and
+    `harness_runtime.lifecycle.redaction_token_audit_map.AuditLedgerRedactionTokenMap` lets
+    `OpaqueRedactionTokenizer` persist token→raw mappings through the runtime `AuditLedgerWriter` while exported
+    spans still carry only opaque tokens. **Remaining gate (b) is now narrower but still real:** an eval-grade
+    semantic classifier that can emit category-specific tokens such as `[REDACTED:PII]` remains cross-axis work.
+    So R-008 stays **BLOCKED** on the eval-grade cross-axis dependency; the OD stdlib substrate and durable
+    audit-ledger token-map path are no longer the blockers. This is a within-PARTIAL refinement, not a tier transit —
     OD-4 remains 1/8 PARTIAL; pipeline-advanced unchanged.
     R-700 accounting: OD-4's open residual narrows from {gate a + gate b} to {gate b cross-axis} only.
     **R-700 forward-pointer (operator decision):** with gate (b) established as cross-axis/Phase-6+,
@@ -587,7 +591,8 @@ R-008-od-4-redaction-partial:
     **✅ RATIFIED 2026-06-02 (R-700 AskUserQuestion):** operator accepted OD-4's `RETIRED-AS-CROSS-AXIS-DEFERRED`
     disposition as a Phase-8 sign-off (R-700 PART C item 3) — but **HELD the formal declaration** (PART C item 4),
     so the bucket flip (OD-4 PARTIAL → CROSS-AXIS-DEFERRED) executes at the eventual `phase-8-graduation.md` close,
-    not now. R-008's Claude-executable work is COMPLETE (gate (a) done; gate (b) is cross-axis, not OD-axis-reachable).
+    not now. R-008's remaining unclosed work is the eval-grade semantic classifier/category pipeline, not another
+    OD-owned token-map substrate.
     **Propagation scope (honest bound):** the gate (a) tests verify language-primitive ContextVar
     propagation (create_task / to_thread); they do NOT drive the operator trigger path
     `with session_content_capture(): api.run(wf)`, which crosses the in-process MCP transport
