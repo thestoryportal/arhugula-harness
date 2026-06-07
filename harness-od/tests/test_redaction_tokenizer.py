@@ -8,7 +8,12 @@ remain separate cross-axis work.
 
 from __future__ import annotations
 
-from harness_od.redaction_tokenizer import InMemoryRedactionTokenMap, OpaqueRedactionTokenizer
+from harness_od.redaction_token_audit import compose_redaction_token_audit_entry
+from harness_od.redaction_tokenizer import (
+    InMemoryRedactionTokenMap,
+    OpaqueRedactionTokenizer,
+    RedactionTokenRecord,
+)
 
 
 def test_opaque_tokenizer_replaces_value_without_leaking_raw_content() -> None:
@@ -54,3 +59,26 @@ def test_opaque_tokenizer_assigns_distinct_tokens_per_record() -> None:
 
     assert first != second
     assert [record.token for record in token_map.records] == [first, second]
+
+
+def test_redaction_token_record_composes_signed_audit_entry() -> None:
+    record = RedactionTokenRecord(
+        token="[REDACTED:CONTENT:000000000001]",
+        attribute_key="gen_ai.input.messages",
+        raw_value="customer ssn 123-45-6789",
+        trace_id="trace-1",
+        span_id="span-1",
+    )
+
+    entry = compose_redaction_token_audit_entry(record, key_id="redaction-test-key")
+
+    attrs = entry.payload.audit_namespace_attrs
+    assert attrs["audit.redaction_token.action_id"].startswith("redaction_token:")
+    assert attrs["audit.redaction_token.response"] == "token_mapped"
+    assert attrs["audit.redaction_token.token"] == "[REDACTED:CONTENT:000000000001]"
+    assert attrs["audit.redaction_token.attribute_key"] == "gen_ai.input.messages"
+    assert attrs["audit.redaction_token.raw_value"] == "customer ssn 123-45-6789"
+    assert attrs["audit.redaction_token.trace_id"] == "trace-1"
+    assert attrs["audit.redaction_token.span_id"] == "span-1"
+    assert len(attrs["audit.redaction_token.raw_value_sha256"]) == 64
+    assert entry.signature_attrs.audit_signature_key_id == "redaction-test-key"
