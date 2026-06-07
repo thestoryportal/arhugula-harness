@@ -118,11 +118,9 @@ def _assert_deterministic_managed_cell(config: Any) -> None:
 
 
 def _assert_runtime_bootstrap_can_reach_collector(config: Any) -> None:
-    from harness_as.sandbox_tier import SandboxTier
-
     try:
         assert_otlp_reachable_from_sandbox(
-            SandboxTier.TIER_1_PROCESS,
+            config.collector.bootstrap_sandbox_tier,
             config.collector.placement,
         )
     except ReachabilityViolation as exc:

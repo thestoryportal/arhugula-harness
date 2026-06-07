@@ -33,6 +33,10 @@ otlp_endpoint = "https://collector.vendor.example"
 
 [runtime.collector]
 placement = "VENDOR_PIPELINE"
+# The R-421 E2B path represents a managed-cloud FULL_VM bootstrap/runtime
+# rather than a local host-process bootstrap. Keep Tier-1 strict; bind this
+# template to the network-capable C-OD-20 tier that can reach a vendor pipeline.
+bootstrap_sandbox_tier = "tier-4-full-vm"
 
 [runtime.routing_manifest]
 manifest_version = 1

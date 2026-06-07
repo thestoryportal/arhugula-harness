@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from harness_as.sandbox_tier import SandboxTier
 from harness_core import DeploymentSurface, PersonaTier
 from harness_cp.topology_pattern import TopologyPattern
 from harness_od.per_cell_collector_placement_matrix import CollectorPlacement
@@ -32,6 +33,7 @@ def _config(
     *,
     deployment_surface: DeploymentSurface = DeploymentSurface.MANAGED_CLOUD,
     persona_tier: PersonaTier = PersonaTier.SOLO_DEVELOPER,
+    bootstrap_sandbox_tier: SandboxTier = SandboxTier.TIER_4_FULL_VM,
     otlp_endpoint: str = "https://collector.example.run.app",
 ) -> RuntimeConfig:
     return RuntimeConfig(
@@ -44,7 +46,10 @@ def _config(
             operator_allowlist=(e2b_secret_allowlist_entry(),),
         ),
         otel=OTelConfig(otlp_endpoint=otlp_endpoint),
-        collector=CollectorConfig(placement=CollectorPlacement.VENDOR_PIPELINE),
+        collector=CollectorConfig(
+            placement=CollectorPlacement.VENDOR_PIPELINE,
+            bootstrap_sandbox_tier=bootstrap_sandbox_tier,
+        ),
         default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
     )
 
@@ -84,11 +89,19 @@ def test_deterministic_config_requires_solo_managed_cloud(tmp_path: Path) -> Non
             raise AssertionError("expected non-deterministic/non-managed config to fail")
 
 
-def test_runtime_bootstrap_reachability_fails_before_live_sandbox_for_vendor_pipeline(
+def test_runtime_bootstrap_reachability_allows_managed_vendor_pipeline_with_full_vm_tier(
+    tmp_path: Path,
+) -> None:
+    _assert_runtime_bootstrap_can_reach_collector(_config(tmp_path))
+
+
+def test_runtime_bootstrap_reachability_fails_before_live_sandbox_for_tier1_vendor_pipeline(
     tmp_path: Path,
 ) -> None:
     try:
-        _assert_runtime_bootstrap_can_reach_collector(_config(tmp_path))
+        _assert_runtime_bootstrap_can_reach_collector(
+            _config(tmp_path, bootstrap_sandbox_tier=SandboxTier.TIER_1_PROCESS)
+        )
     except R421LiveE2EError as exc:
         assert "failed before E2B sandbox creation" in str(exc)
         assert "VENDOR_PIPELINE" in str(exc)

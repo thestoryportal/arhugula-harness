@@ -9,6 +9,7 @@ ACs per Phase 2 Session 3 plan v2.1 §2 L1:
 from __future__ import annotations
 
 import pytest
+from harness_as.sandbox_tier import SandboxTier
 from harness_od.local_first_otlp_collector import (
     BATCH_SPAN_PROCESSOR_BATCH_SIZE,
     BATCH_SPAN_PROCESSOR_WINDOW_SECONDS,
@@ -33,6 +34,19 @@ def test_all_seven_placement_classes_acceptable() -> None:
     for placement in CollectorPlacement:
         cfg = CollectorConfig(placement=placement)
         assert cfg.placement is placement
+
+
+def test_bootstrap_sandbox_tier_defaults_tier1_process() -> None:
+    """Default bootstrap reachability preserves host-process runtime semantics."""
+    cfg = CollectorConfig()
+    assert cfg.bootstrap_sandbox_tier is SandboxTier.TIER_1_PROCESS
+
+
+def test_all_bootstrap_sandbox_tiers_acceptable() -> None:
+    """Deployment bindings can declare the actual bootstrap sandbox tier."""
+    for sandbox_tier in SandboxTier:
+        cfg = CollectorConfig(bootstrap_sandbox_tier=sandbox_tier)
+        assert cfg.bootstrap_sandbox_tier is sandbox_tier
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +151,7 @@ def test_collector_config_round_trips() -> None:
     """`CollectorConfig` survives model_dump/model_validate byte-equal."""
     original = CollectorConfig(
         placement=CollectorPlacement.SIDECAR,
+        bootstrap_sandbox_tier=SandboxTier.TIER_4_FULL_VM,
         ring_buffer_size=8192,
         batch_size=256,
     )
