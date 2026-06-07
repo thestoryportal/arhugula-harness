@@ -16,6 +16,9 @@ same mode and flags.
 
 ## Required Gates
 
+For speed-oriented command choices that preserve these gates, use
+`.codex/notes/codex-workflow-optimization.md`.
+
 ### 1. Preflight
 
 Run before substantive work:
@@ -158,6 +161,15 @@ just codex-checkpoint <label>
 just codex-credential-gate --unit ... --gate ... --forward-closed ... --resume ...
 just codex-closeout
 just codex-context-check
+```
+
+Related Codex-local optimization commands:
+
+```bash
+just codex-worktree-gc          # dry-run safe stale-worktree cleanup
+just codex-worktree-gc --reap   # remove only clean merged worktree candidates
+just codex-test                 # provider-free non-e2e pytest lane
+just codex-check                # sync + lint + typecheck + provider-free non-e2e pytest
 ```
 
 `codex-context-check` is the combined hard gate for local validation. It exits
