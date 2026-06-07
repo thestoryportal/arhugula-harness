@@ -37,10 +37,7 @@ def test_r420_compose_declares_local_collector_tempo_grafana_stack() -> None:
     assert "4317:4317" in collector["ports"]
     assert "4318:4318" in collector["ports"]
     assert collector["depends_on"] == {"tempo": {"condition": "service_started"}}
-    assert (
-        "./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro"
-        in collector["volumes"]
-    )
+    assert "./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro" in collector["volumes"]
 
     tempo = services["tempo"]
     assert tempo["image"].startswith("${R420_TEMPO_IMAGE:-grafana/tempo:")
@@ -81,13 +78,9 @@ def test_r420_tempo_binds_otlp_receivers_for_container_network() -> None:
 
 
 def test_r420_grafana_datasource_points_at_tempo_service() -> None:
-    datasource = _load_yaml(
-        STACK_DIR / "grafana" / "provisioning" / "datasources" / "tempo.yaml"
-    )
+    datasource = _load_yaml(STACK_DIR / "grafana" / "provisioning" / "datasources" / "tempo.yaml")
 
-    tempo_sources = [
-        entry for entry in datasource["datasources"] if entry["type"] == "tempo"
-    ]
+    tempo_sources = [entry for entry in datasource["datasources"] if entry["type"] == "tempo"]
     assert len(tempo_sources) == 1
     assert tempo_sources[0]["name"] == "Tempo"
     assert tempo_sources[0]["url"] == "http://tempo:3200"
@@ -109,6 +102,4 @@ def test_r420_harness_template_matches_static_self_hosted_readiness_gate() -> No
 
     path_bindings = runtime["path_bindings"]["raw_entries"]
     assert len(path_bindings) == 4
-    assert {entry["deployment_surface"] for entry in path_bindings} == {
-        "self-hosted-server"
-    }
+    assert {entry["deployment_surface"] for entry in path_bindings} == {"self-hosted-server"}
