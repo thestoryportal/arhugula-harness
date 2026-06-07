@@ -63,3 +63,28 @@ For each `.harness/class_*_fork_*.md`:
 | `class_2_fork_tool_invocation_composer_scope.md` | `DEFERRED` (bounded-residual, 2026-05-20) | CP-axis tool-invocation-composer scope decision still owed at operator timing; distinct surface from the PR #171/#172 runtime dispatch path. Aging, not stale. |
 
 **Conclusion.** Fork-doc Status corpus is **current — ZERO stale Status lines / cross-references this pass** (the 1 stale cross-ref from the #178 pass was fixed at #179). 43/43 accurate (41 terminal + 2 accurately-open). No edit required. Next audit cadence: ~5 PRs or operator-discretion.
+
+---
+
+## 2026-06-07 — audit pass (operator-requested; post-PR-#330)
+
+**Anchor.** Workspace HEAD `edf7fdc` (origin/main at audit time; PR #330 status refresh merged); 45 open fork docs; latest retirement batch `.harness/phase-7d-retirement-events-batch-51.md`; merged PRs through #330; zero open PRs at audit.
+
+**Scope.** All 45 `.harness/class_*_fork_*.md` docs. Cadence-driven and operator-discretion-driven after R-410 closed the local container execution-driver slice.
+
+**Pre-edit findings.** The sweep found one genuinely stale fork-doc headline verdict, one fork-doc extractor-format miss, and one stale tracking-surface sample row:
+
+| Surface | Finding | Disposition |
+|---|---|---|
+| `class_1_fork_sandbox_tier_no_execution_driver_contract.md` | Headline still `PROPOSING`, but R-410 PR #317 landed the bounded execution-driver seam plus local Docker provider. | Refreshed to `APPLIED-AS-BOUNDED-READING-B`; R-411/R-412 residuals remain provider-class/runtime gates. |
+| `class_1_fork_path_i_durable_async_engine_class_materialization.md` | Semantics were current (`CLOSED-DEFERRED`), but the leading token used `**Status**:` rather than the audit-standard `**Status:**`. | Normalized the token only; no semantic change. |
+| `.harness/roadmap_status.md` Outstanding fork docs sample row for `class_1_fork_harness_toml_default_discovery_unimplemented.md` | Tracking sample still described the fork as `PROPOSING`, but the fork doc itself was already refreshed to `APPLIED-AS-READING-A` by PR #305 after PR #279 shipped CWD discovery. | Refreshed the sample row only; no fork-doc semantic change. |
+
+**Spot-verified accurate rows (no fork-doc edit):**
+
+| Fork doc | Verdict | Verification |
+|---|---|---|
+| `class_1_fork_harness_toml_default_discovery_unimplemented.md` | `APPLIED-AS-READING-A` | Fork doc was already current; only the roadmap sample table was stale. |
+| `class_2_fork_tool_invocation_composer_scope.md` | `DEFERRED` | CP-axis composer-scope decision remains distinct from the runtime dispatch driver work. Aging, not stale. |
+
+**Conclusion.** Fork-doc Status corpus is current after two focused fork-doc edits and one roadmap sample-row correction: one stale headline status refreshed, one leading-status token normalized, and one stale visible sample row corrected. Next audit cadence: ~5 PRs or operator-discretion.

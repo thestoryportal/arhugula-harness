@@ -1,9 +1,9 @@
 # Class 1 fork — resolved sandbox tier is never enforced: no execution-driver contract (tier → isolation mechanism)
 
-**Status:** PROPOSING (filed 2026-06-02). Deferred-far; routes to design-phase. **No AskUserQuestion fired** — resolving the Reading now unblocks nothing buildable (the e2e close co-gates on a real container runtime = R-410 infra). This fork *characterizes and tracks* the gap so it is teed up when Surface-V infra opens; it does not unblock buildable Claude work.
+**Status:** ✅ APPLIED-AS-BOUNDED-READING-B (status-line refreshed 2026-06-07). R-410 local container enforcement landed in PR #317: `RuntimeToolDispatcher` delegates through `ToolExecutionDriver`, the default `MCPHostToolExecutionDriver` preserves in-process behavior, and `DockerToolRunnerExecutionDriver` enforces the `TIER_2_CONTAINER` local-Docker path. The original R-410 tier→mechanism gap is closed for LOCAL/TIER_2_CONTAINER; R-411/R-412 remain provider-class/runtime gates, not this fork's still-open blocker.
 **Filed:** 2026-06-02, grounding the highest-value un-blocked forward item (R-410) per the no-parking directive (CLAUDE.md §12.4.1). Empirical orientation + advisor (R-410 `advisor_required: yes`) confirmed the gap is real, distinct from the two applied sibling forks, and that *building* a driver would violate X-AL-3 → **filing is the X-AL-3-clean slice.**
 **Class:** 1 (architectural — the H_T sandbox-tier model promises graduated isolation (ADR-F4 / ADR-D2), but at HEAD a resolved tier maps to NO execution mechanism; closing it requires a NEW design contract for the tier→mechanism execution driver, which is a design-phase artifact, not a Phase-7 impl decision).
-**Blocks:** `R-410-sandbox-tier-2-container-execution` (the design half — orthogonal to R-410's infra gate). Also the design root of `R-411-sandbox-tier-3-microvm-execution` + `R-412-sandbox-tier-4-full-vm-execution` (they inherit the same execution-driver question; **this is a one-time fork, not a fork-per-tier** — once the driver contract lands, R-411/R-412 are provider-class additions, not new forks).
+**Blocks:** none for R-410 after PR #317. R-411/R-412 remain provider-class/runtime-infrastructure gates on compatible local or managed-cloud infrastructure; they inherit the driver pattern but are not blocked by this fork's original missing contract.
 **Sibling of (distinct from):**
 - `.harness/class_1_fork_tool_step_no_bootstrap_sandbox_decision_resolver.md` (✅ APPLIED-AS-READING-B, spec v1.41 §14.9.8) — wires the *resolver* (decides a tier + builds a per-server default). This fork is about what happens *after* a tier is decided.
 - `.harness/class_1_fork_sandbox_decision_policy_phantom_cite.md` (✅ APPLIED) — re-homes the empty-marker `SandboxDecisionPolicy` carrier. Unrelated to execution.
@@ -53,7 +53,23 @@ These do not resolve against each other from inside the spec — the resolution 
 
 ---
 
-## 5. Routing
+## 5. 2026-06-07 status refresh
+
+The fork's original R-410 blocker has been discharged by the bounded implementation path. PR #317 did not author a full sandbox-provider registry or remote-provider abstraction, but it did land the operational driver seam required for the local container tier:
+
+- `RuntimeToolDispatcher` delegates execution through a `ToolExecutionDriver`.
+- `MCPHostToolExecutionDriver` preserves the previous in-process MCP-host behavior as the default.
+- `DockerToolRunnerExecutionDriver` requires `TIER_2_CONTAINER`, resolves a local immutable image id, runs with `--network none`, and uses JSON stdin/stdout.
+- The R-410 live e2e is recorded in the roadmap status / forward register as local-only: no image pull, no credentials, no paid provider call.
+
+Residuals:
+
+- R-411/R-412 are provider-class additions on top of the driver seam, gated by host/runtime fit.
+- No design-substrate back-flow or full provider registry was performed by this audit.
+
+---
+
+## 6. Routing
 
 | Field | Value |
 |---|---|
