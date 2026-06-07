@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `9eedb088efe2` |
-| `last_refreshed` | 2026-06-07T09:30:16-06:00 |
-| `git_head` | `972533a6` (main) — PR #344 R-421 runtime/design mismatch fix merged. |
+| `workspace_state_hash` | `28fa5fb789eb` |
+| `last_refreshed` | 2026-06-07T09:59:36-06:00 |
+| `git_head` | `e7a7be0c` (main) — PR #345 post-#344 roadmap/status refresh merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -23,6 +23,8 @@
 > **🚦 STANDING DIRECTIVE — operator-labeled items are Claude-driven; NO parking (2026-06-02; CLAUDE.md §12.4.1, `[[feedback-operator-labels-are-claude-driven-no-parking]]`).** "No auto-derivable Claude-executable ACTIVE row remains" is **NOT** a stop condition. The operator executes NOTHING manually — Claude does all the work. When the auto-`ACTIVE` queue is empty, **pick the highest-value forward item** (drivable now after R-410 closure: `R-411..R-440` sandbox/deploy/secrets slices, `R-CXA-2` engine-substrate, `R-810/820` files/managed-agents, `R-830` memory backend — each has a Claude-executable slice grounding reveals), **ground it, build its slice to the genuine gate**, and surface only a real decision / credential / paid-call / irreversible action (batched, minimal). Don't re-stop here citing "operator-owned." *(R-700's declaration was HELD; the operator LIFTED the hold 2026-06-02 — Phase 8 is now CLOSED, see banner below. `R-300-multi-llm-second-provider` B-2 is now fully closed by PRs #281 + #283.)*
 
 > **🎓 PHASE 8 CLOSED — substitution accounting DECLARED 2026-06-02 (`.harness/phase-8-graduation.md`).** The operator lifted the HELD R-700 declaration ("kick off the declaration"); item 4 executed. **Canonical: 46/54 RETIRED (85.2%) + 49/54 pipeline-advanced (90.7%)** (operator-ratified accounting (i)). The deferred 48→46 supersession is applied forward (ledger §11.7 + harness-cp/CLAUDE.md + this dashboard; prior batch records stand verbatim). 8 rows carry ratified terminal sign-off dispositions (OD-4 `RETIRED-AS-CROSS-AXIS-DEFERRED`; AS-8e/8f/CP-17 accepted-indefinite-defer; CXA-1..4 Phase-2-runtime-deferred) — **labels do NOT re-tally into the 46** (the OD-6-in-both-lists tell). `R-700` → RESOLVED. Phase 7 (substitution-retirement execution) is complete; the workspace is now wholly on the **post-Phase-8 activation/deployment/integration axis** (Surfaces IV/V/VI). **R-410's local container slice is now closed; remaining forward activation starts at higher-tier sandboxes / deployment / secrets / cloud integration gates** — per §12.4.1 a future session drives the highest-value forward item to its genuine gate.
+
+**(This session — 2026-06-07. PR #345 MERGED.)** Closed the post-#344 roadmap/status refresh. This follow-up anchors the dashboard hash to PR #345's merge state itself; no R-NNN status changed and no implementation surface changed.
 
 **(This session — 2026-06-07. PR #344 MERGED.)** Resolved the static R-421 managed-cloud bootstrap reachability mismatch without relaxing C-OD-20 Tier-1 semantics. `CollectorConfig.bootstrap_sandbox_tier` now defaults to `TIER_1_PROCESS`; `materialize_span_processor_stage`, static readiness, and the live e2e gate consume that configured tier; and the E2B/FULL_VM managed-cloud template declares `bootstrap_sandbox_tier = "tier-4-full-vm"` alongside `placement = "VENDOR_PIPELINE"`. A stale Tier-1 + `VENDOR_PIPELINE` binding still fails before any E2B sandbox creation. R-421 remains PROPOSED until the approved live e2e is rerun against the provisioned GCP/E2B/Cloud Run collector path and proves hosted execution + authenticated OTLP export + Cloud Trace visibility.
 
