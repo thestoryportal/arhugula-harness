@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -38,7 +39,7 @@ def context_guard() -> str:
         )
         if checkpoint.returncode != 0:
             output = checkpoint.stdout.strip() or checkpoint.stderr.strip()
-            print(output or "<codex checkpoint failed>")
+            print(output or "<codex checkpoint failed>", file=sys.stderr)
             sys.exit(checkpoint.returncode)
         proc = subprocess.run(
             [
@@ -60,14 +61,19 @@ def context_guard() -> str:
         proc.stdout.strip() or proc.stderr.strip() or "<codex context guard produced no output>"
     )
     if proc.returncode != 0:
-        print(output)
+        print(output, file=sys.stderr)
         sys.exit(proc.returncode)
     return output
 
 
 status = run(["git", "status", "--short", "--branch"])
-print("Codex stop posture:")
-print(status or "<git status unavailable>")
-print("- Before claiming completion, report exact verification commands and results.")
-print("- For PR-ready work, ensure a branch, commit, PR, and CI status are explicit.")
-print(context_guard())
+message = "\n".join(
+    [
+        "Codex stop posture:",
+        status or "<git status unavailable>",
+        "- Before claiming completion, report exact verification commands and results.",
+        "- For PR-ready work, ensure a branch, commit, PR, and CI status are explicit.",
+        context_guard(),
+    ]
+)
+print(json.dumps({"continue": True, "systemMessage": message}, separators=(",", ":")))
