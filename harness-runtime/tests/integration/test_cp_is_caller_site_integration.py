@@ -5,8 +5,8 @@ STRIKE at fork doc §11 NEW):
 
 - AC #3: `workflow_driver.execute_workflow` invokes
   `ctx.cp_is_wiring.emit_pause_resume_state_ledger_entry(...)` at the 3
-  pause-resume firing sites (`:559` RESUME_ATTEMPTED + `:769`
-  PAUSE_CAPTURED drain-flag + `:894` PAUSE_CAPTURED HITL-signal).
+  pause-resume firing sites (`:559` RESUME_ATTEMPTED + `:808`
+  PAUSE_CAPTURED drain-flag + `:965` PAUSE_CAPTURED HITL-signal).
   Defensive `getattr(ctx, "cp_is_wiring", None)` access pattern; when
   None, silent-skip (operator-opt-in).
 - AC #10: 1-site full chain e2e — pause + resume cycle through
@@ -44,7 +44,9 @@ from harness_cp.cross_family_fallback_chain import (
     ProviderFamily,
 )
 from harness_cp.engine_class import EngineClass
+from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.topology_pattern import TopologyPattern
+from harness_cp.validator_framework_types import HITLEscalationBrief
 from harness_cp.workflow_driver import execute_workflow
 from harness_cp.workflow_driver_types import (
     RunStatus,
@@ -55,9 +57,11 @@ from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEnt
 from harness_is.chain_verification import VerificationStatus, verify_chain
 from harness_is.state_ledger_write import read_ledger
 from harness_runtime.bootstrap import run_bootstrap
+from harness_runtime.lifecycle.hitl_gate_composer import HITLPauseRequestedSignal
 from harness_runtime.lifecycle.pause_resume_protocol_types import (
     PauseResumeProtocolConfig,
 )
+from harness_runtime.lifecycle.webhook_delivery_composer import WebhookDeliveryResult
 from harness_runtime.types import RuntimeConfig
 
 from .conftest import WORKLOAD, build_config
@@ -142,6 +146,38 @@ class _SingleKindRegistry:
     def lookup(self, step_kind: Any) -> Any:
         _ = step_kind
         return self._dispatcher
+
+
+class _HitlPauseSignalDispatcher:
+    def __init__(self, pause_requested_flag: Any) -> None:
+        self._pause_requested_flag = pause_requested_flag
+
+    def dispatch(
+        self,
+        binding: Any,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> None:
+        _ = binding, step_context
+        self._pause_requested_flag.set()
+        raise HITLPauseRequestedSignal(
+            brief=HITLEscalationBrief(
+                parent_step_id=str(step.step_id),
+                parent_action_id="workflow:wf-hitl-signal-site:step:0",
+                fail_class=None,
+                fail_detail_hash=None,
+                escalation_reason="durable_async_cell_synchrony",
+                proposed_response_palette=frozenset({HITLResponse.APPROVE}),
+            ),
+            delivery_result=WebhookDeliveryResult(
+                delivered=True,
+                status_code=200,
+                response_idempotency_key="hitl:workflow:wf-hitl-signal-site:step:0:pre_action",
+                delivery_attempts=1,
+                final_attempt_at=1_700_000_000_000,
+            ),
+        )
 
 
 def _read_pause_resume_entries(ctx: Any) -> list[Any]:
@@ -254,19 +290,40 @@ async def test_caller_site_pause_resume_protocol_emission_pause_captured_drain_f
     assert str(entries[0].action_id) == _PAUSE_RESUME_ACTION_ID
 
 
-# Site `:894` PAUSE_CAPTURED HITL-signal path coverage DEFERRED to a
-# follow-on integration arc. The HITLPauseRequestedSignal constructor
-# requires non-trivial `brief` + `delivery_result` Pydantic models per
-# `hitl_gate_composer.py:277-285` whose construction at unit-test scope
-# duplicates the validator_framework + webhook_delivery composer surface
-# already exercised at `test_validator_framework_types.py`. The emission
-# code at `workflow_driver.py:937-953` mirrors site `:769` (drain-flag)
-# structurally — same `_cp_is_wiring is not None` guard, same composer
-# kwargs, `event_kind_index=2` vs `=1`. Logical coverage of site `:894`
-# is implied by the drain-flag site test plus the symmetric code shape.
-# A future arc that exercises the full HITL gate composer path (e.g.,
-# via `test_u_od_40_validator_webhook_integration.py` pattern) will
-# directly exercise site `:894` as a side-effect.
+@pytest.mark.asyncio
+async def test_caller_site_pause_resume_protocol_emission_pause_captured_hitl_signal(
+    tmp_path: Path,
+    patched_runtime: dict[str, Any],
+) -> None:
+    """Site `:965` PAUSE_CAPTURED HITL-signal path — entry persisted via wiring."""
+    _ = patched_runtime
+    config = _config_with_pause_resume_opt_in(tmp_path)
+    ctx = await run_bootstrap(config, workload_class=WORKLOAD)
+    _attach_get_tracer_to_ctx(ctx)
+    assert ctx.cp_is_wiring is not None
+
+    manifest = _minimal_manifest("wf-hitl-signal-site")
+    steps = _single_inference_step()
+    dispatchers = _SingleKindRegistry(_HitlPauseSignalDispatcher(ctx.pause_requested_flag))
+
+    result = await asyncio.to_thread(
+        partial(
+            execute_workflow,
+            manifest_entry=manifest,
+            steps=steps,
+            run_id="run-hitl-signal-pause",
+            ctx=ctx,  # type: ignore[arg-type]
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=dispatchers,  # type: ignore[arg-type]
+        )
+    )
+    assert result.status == RunStatus.PAUSED
+    assert result.pause_snapshot is not None
+    assert result.pause_snapshot.pause_reason.value == "hitl_pending"
+
+    entries = _read_pause_resume_entries(ctx)
+    assert len(entries) == 1
+    assert str(entries[0].action_id) == _PAUSE_RESUME_ACTION_ID
 
 
 # ---------------------------------------------------------------------------

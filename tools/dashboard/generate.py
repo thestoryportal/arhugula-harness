@@ -93,7 +93,7 @@ ANNOTATIONS = {
     "R-830-memory-tool-production-backend": "The local SQLite slice is done; the cloud-vault / managed-DB remainder needs cloud credentials you'd provide.",
     "R-900-research-arcs": "Open-ended research / exploration; no fixed scope — pulled in as you choose.",
     "R-CXA-1-as-is-seam": "The one remaining wire (a secret-fetch audit caller) has no real source yet, so wiring it would be hollow; deferred until one exists.",
-    "R-CXA-2-cp-is-seam": "Needs the control-plane engine code (pause/resume) built first; that piece doesn't exist yet.",
+    "R-CXA-2-cp-is-seam": "The materialized pause/resume caller sites are covered; remaining CP→IS work needs engine-layer producers and the unresolved stage-ordering/spec-disambiguator gaps.",
     "R-CXA-4-od-multi-seam": "Already checked — nothing left to wire (the old placeholders were resolved long ago); stays PARTIAL only for bookkeeping.",
     "R-XI-02": "Dashboard polish — dependency-graph view + sparklines; nice-to-have, nothing blocking it.",
     "R-XI-03": "Dashboard live-update mode; nice-to-have, nothing blocking it.",
@@ -128,8 +128,8 @@ NONRETIRED_LEDGER = [
         "id": "CXA-2",
         "rnnn": "R-CXA-2",
         "state": "STILL-BOUNDED",
-        "why": "The CP→IS seam has 1 of 17 edges wired.",
-        "retire": "Not yet — needs the control-plane engine (pause/resume) substrate built. This is the one genuinely buildable remaining seam.",
+        "why": "The CP→IS seam is still bounded; the materialized pause/resume caller sites are covered, but the broader §12.3 edge set is not.",
+        "retire": "Not yet — needs engine-layer pause/resume producers plus the unresolved stage-ordering and HITL-disambiguator gaps.",
     },
     {
         "id": "CXA-3",
@@ -192,7 +192,7 @@ REMAINING_ORDERED = [
         "layer": "build",
         "id": "R-CXA-2-cp-is-seam",
         "label": "Build the CP→IS engine-layer seam",
-        "gate": "The one genuinely buildable remaining seam — but needs the pause/resume engine substrate built first.",
+        "gate": "The pause/resume workflow-driver caller-site coverage is complete; remaining work needs engine-layer producers plus stage-ordering and HITL-disambiguator substrate.",
     },
     {
         "n": 3,
