@@ -1132,10 +1132,15 @@ R-411-sandbox-tier-3-microvm-execution:
     `google/gvisor` (`runsc` + Docker), and `r411-kata` points at `kata-containers/kata-containers`
     (`kata-runtime`, with KVM access for the VM-backed path). `r411-shuru` (`superhq-ai/shuru`) and
     `r411-microsandbox` (`superradcompany/microsandbox`) are local-first microVM candidates worth evaluating on
-    compatible hosts; both require Apple Silicon on macOS, while their Linux paths require KVM. Firecracker belongs
-    to R-412. `just sandbox-host-check <provider>` is the non-mutating probe for the exact runtime boundary before
-    opening the provider implementation. Current operator host grounding (macOS x86_64, no `/dev/kvm`) means no
-    local R-411 provider e2e can honestly close here without a compatible sandbox host/runtime.
+    compatible hosts; both require Apple Silicon on macOS, while their Linux paths require KVM. `r411-libkrun`
+    (`containers/libkrun`) is now tracked as an embeddable virtualization/process-isolation substrate candidate:
+    Linux requires KVM, macOS requires Apple Silicon/HVF, and the upstream security model means host OS isolation
+    around the VMM remains part of any implementation. Firecracker and QEMU `microvm` belong to R-412. `mvm-sh/mvm`
+    was reviewed and intentionally not registered as a sandbox provider: it is a Go bytecode VM/interpreter, not
+    an OS/hardware isolation runtime for arbitrary TOOL_STEP execution. `just sandbox-host-check <provider>` is
+    the non-mutating probe for the exact runtime boundary before opening the provider implementation. Current
+    operator host grounding (macOS x86_64, no `/dev/kvm`) means no local R-411 provider e2e can honestly close
+    here without a compatible sandbox host/runtime.
 
 R-412-sandbox-tier-4-full-vm-execution:
   title: Real TIER_4 full-VM / firecracker sandbox execution (MANAGED_CLOUD-only provider class)
@@ -1156,11 +1161,13 @@ R-412-sandbox-tier-4-full-vm-execution:
     row therefore co-gates on R-421 (a real MANAGED_CLOUD surface). Deferred-far per ADR-D2 graduated-isolation.
     Firecracker is the correct setup direction for this FULL_VM lane, not for R-411. Upstream Firecracker requires
     a Linux host with KVM and read/write `/dev/kvm`; the current macOS host has no `/dev/kvm`, and the operator has
-    no managed-cloud surface yet. The repo now carries `just sandbox-host-check r412-firecracker` so a future Linux
-    KVM / managed-cloud host can be verified before implementing the provider. E2B (`e2b-dev/e2b`) is a plausible
-    managed-cloud sandbox candidate for R-421/R-412 investigation, but it is not a local R-411 runtime; it requires
-    an operator-approved `E2B_API_KEY` and remote cloud execution (`just sandbox-host-check r421-e2b` records only
-    local SDK/key readiness, with no network call).
+    no managed-cloud surface yet. QEMU's `microvm` machine type is also tracked here as `r412-qemu-microvm`: it is
+    Firecracker-inspired, minimalist, and host-gated on Linux x86_64 + KVM + `qemu-system-x86_64`, with per-run
+    kernel/rootfs artifacts still required beyond the host probe. The repo now carries `just sandbox-host-check
+    r412-firecracker|r412-qemu-microvm` so a future Linux KVM / managed-cloud host can be verified before
+    implementing the provider. E2B (`e2b-dev/e2b`) is a plausible managed-cloud sandbox candidate for R-421/R-412
+    investigation, but it is not a local R-411 runtime; it requires an operator-approved `E2B_API_KEY` and remote
+    cloud execution (`just sandbox-host-check r421-e2b` records only local SDK/key readiness, with no network call).
 
 R-420-self-hosted-server-deployment-e2e:
   title: Exercise the harness at the SELF_HOSTED_SERVER deployment surface (real server + OTLP collector + tier secrets)

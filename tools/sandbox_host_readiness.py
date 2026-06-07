@@ -9,6 +9,7 @@ already satisfies the minimum preconditions for a provider implementation/e2e.
 from __future__ import annotations
 
 import argparse
+import ctypes.util
 import importlib.util
 import json
 import os
@@ -41,6 +42,7 @@ class ProviderSpec:
     required_binaries: tuple[str, ...]
     required_env_vars: tuple[str, ...]
     required_python_modules: tuple[str, ...]
+    required_libraries: tuple[str, ...]
     host_modes: tuple[HostMode, ...]
     source_url: str
     note: str
@@ -56,6 +58,7 @@ class HostProbe:
     stat_path: Callable[[Path], os.stat_result] = Path.stat
     env_present: Callable[[str], bool] = _env_present
     find_module: Callable[[str], object | None] = importlib.util.find_spec
+    find_library: Callable[[str], str | None] = ctypes.util.find_library
 
 
 @dataclass(frozen=True)
@@ -84,6 +87,7 @@ PROVIDERS: Mapping[str, ProviderSpec] = {
         required_binaries=("runsc", "docker"),
         required_env_vars=(),
         required_python_modules=(),
+        required_libraries=(),
         host_modes=(
             HostMode(
                 system="Linux",
@@ -102,6 +106,7 @@ PROVIDERS: Mapping[str, ProviderSpec] = {
         required_binaries=("kata-runtime",),
         required_env_vars=(),
         required_python_modules=(),
+        required_libraries=(),
         host_modes=(
             HostMode(
                 system="Linux",
@@ -120,6 +125,7 @@ PROVIDERS: Mapping[str, ProviderSpec] = {
         required_binaries=("shuru",),
         required_env_vars=(),
         required_python_modules=(),
+        required_libraries=(),
         host_modes=(
             HostMode(
                 system="Darwin",
@@ -144,6 +150,7 @@ PROVIDERS: Mapping[str, ProviderSpec] = {
         required_binaries=("msb",),
         required_env_vars=(),
         required_python_modules=(),
+        required_libraries=(),
         host_modes=(
             HostMode(
                 system="Darwin",
@@ -161,6 +168,34 @@ PROVIDERS: Mapping[str, ProviderSpec] = {
         source_url="https://github.com/superradcompany/microsandbox",
         note="R-411 candidate: local-first embeddable microVM sandbox.",
     ),
+    "r411-libkrun": ProviderSpec(
+        provider="r411-libkrun",
+        roadmap_item="R-411-sandbox-tier-3-microvm-execution",
+        sandbox_tier="tier-3-microvm",
+        required_binaries=(),
+        required_env_vars=(),
+        required_python_modules=(),
+        required_libraries=("krun",),
+        host_modes=(
+            HostMode(
+                system="Darwin",
+                architectures=("aarch64",),
+                requires_kvm=False,
+                detail="macOS 14+ on Apple Silicon with HVF and libkrun",
+            ),
+            HostMode(
+                system="Linux",
+                architectures=("x86_64", "aarch64"),
+                requires_kvm=True,
+                detail="Linux x86_64/aarch64 with KVM and libkrun",
+            ),
+        ),
+        source_url="https://github.com/containers/libkrun",
+        note=(
+            "R-411 substrate candidate: embeddable virtualization-based process "
+            "isolation library; host OS isolation is still required around the VMM."
+        ),
+    ),
     "r412-firecracker": ProviderSpec(
         provider="r412-firecracker",
         roadmap_item="R-412-sandbox-tier-4-full-vm-execution",
@@ -168,6 +203,7 @@ PROVIDERS: Mapping[str, ProviderSpec] = {
         required_binaries=("firecracker",),
         required_env_vars=(),
         required_python_modules=(),
+        required_libraries=(),
         host_modes=(
             HostMode(
                 system="Linux",
@@ -179,6 +215,28 @@ PROVIDERS: Mapping[str, ProviderSpec] = {
         source_url="https://github.com/firecracker-microvm/firecracker",
         note="R-412 candidate: Firecracker hardware-virtualized microVM/full-VM provider.",
     ),
+    "r412-qemu-microvm": ProviderSpec(
+        provider="r412-qemu-microvm",
+        roadmap_item="R-412-sandbox-tier-4-full-vm-execution",
+        sandbox_tier="tier-4-full-vm",
+        required_binaries=("qemu-system-x86_64",),
+        required_env_vars=(),
+        required_python_modules=(),
+        required_libraries=(),
+        host_modes=(
+            HostMode(
+                system="Linux",
+                architectures=("x86_64",),
+                requires_kvm=True,
+                detail="Linux x86_64 with KVM and qemu-system-x86_64 microvm",
+            ),
+        ),
+        source_url="https://github.com/bonzini/qemu/blob/master/docs/system/i386/microvm.rst",
+        note=(
+            "R-412 candidate: QEMU's Firecracker-inspired microvm machine type; "
+            "requires per-run kernel/rootfs artifacts in addition to this host probe."
+        ),
+    ),
     "r421-e2b": ProviderSpec(
         provider="r421-e2b",
         roadmap_item="R-421-managed-cloud-deployment-e2e",
@@ -186,6 +244,7 @@ PROVIDERS: Mapping[str, ProviderSpec] = {
         required_binaries=(),
         required_env_vars=("E2B_API_KEY",),
         required_python_modules=("e2b",),
+        required_libraries=(),
         host_modes=(),
         source_url="https://github.com/e2b-dev/e2b",
         note=(
@@ -201,7 +260,10 @@ ALIASES = {
     "shuru": "r411-shuru",
     "microsandbox": "r411-microsandbox",
     "msb": "r411-microsandbox",
+    "libkrun": "r411-libkrun",
     "firecracker": "r412-firecracker",
+    "qemu-microvm": "r412-qemu-microvm",
+    "microvm": "r412-qemu-microvm",
     "e2b": "r421-e2b",
 }
 
@@ -291,6 +353,20 @@ def check_provider(provider: str, *, probe: HostProbe | None = None) -> Readines
             )
         )
 
+    for library in spec.required_libraries:
+        library_path = probe.find_library(library)
+        checks.append(
+            CheckResult(
+                name=f"library:{library}",
+                ok=library_path is not None,
+                detail=(
+                    f"Library {library!r} found as {library_path}"
+                    if library_path
+                    else f"Library {library!r} is not discoverable"
+                ),
+            )
+        )
+
     requires_kvm = False
     if spec.host_modes:
         requires_kvm = (
@@ -356,7 +432,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--provider",
         default="r411-gvisor",
-        help="Provider key: r411-gvisor, r411-kata, r412-firecracker, or alias.",
+        help=(
+            "Provider key: r411-gvisor, r411-kata, r411-libkrun, "
+            "r412-firecracker, r412-qemu-microvm, or alias."
+        ),
     )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     args = parser.parse_args(argv)
