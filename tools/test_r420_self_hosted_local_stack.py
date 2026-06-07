@@ -6,6 +6,8 @@ from typing import Any
 
 import yaml
 
+from tools.r420_self_hosted_live_e2e import _status_is_successful
+
 ROOT = Path(__file__).resolve().parents[1]
 STACK_DIR = ROOT / "deploy" / "self-hosted-local"
 
@@ -47,6 +49,25 @@ def test_r420_compose_declares_local_collector_tempo_grafana_stack() -> None:
     assert grafana["image"].startswith("${R420_GRAFANA_IMAGE:-grafana/grafana:")
     assert "3000:3000" in grafana["ports"]
     assert grafana["depends_on"] == {"tempo": {"condition": "service_started"}}
+
+
+def test_r420_live_echo_assets_exist() -> None:
+    echo_server = STACK_DIR / "mcp_echo_server.py"
+    workflow = STACK_DIR / "r420-tool-echo.toml"
+
+    assert echo_server.is_file()
+    workflow_config = _load_toml(workflow)
+    step = workflow_config["steps"][0]
+    assert workflow_config["workflow"]["workflow_id"] == "r420-self-hosted-tool-echo"
+    assert workflow_config["default_model_binding"]["provider"] == "ollama"
+    assert step["step_kind"] == "tool-step"
+    assert step["step_payload"]["tool_id"] == "echo"
+
+
+def test_r420_live_e2e_accepts_runtime_and_daemon_success_statuses() -> None:
+    assert _status_is_successful({"status": "completed"})
+    assert _status_is_successful({"status": "success"})
+    assert not _status_is_successful({"status": "failed"})
 
 
 def test_r420_collector_receives_otlp_and_exports_traces_to_tempo() -> None:
@@ -96,10 +117,24 @@ def test_r420_harness_template_matches_static_self_hosted_readiness_gate() -> No
     assert runtime["collector"]["placement"] == "SELF_HOSTED_BACKEND_COLLECTOR"
     assert runtime["provider_secrets"]["backend"] == "self-hosted-keyring"
     assert runtime["provider_secrets"]["keyring_service"] == "harness"
+    assert runtime["anthropic_optional"] is True
+    assert runtime["ollama_optional"] is False
+    assert runtime["ollama_host"] == "http://127.0.0.1:11434"
     assert runtime["provider_secrets"]["operator_allowlist"] == [
-        {"name": "anthropic_key", "scope": {"name": "default"}}
+        {"name": "r420_probe_key", "scope": {"name": "r420-live"}}
     ]
 
     path_bindings = runtime["path_bindings"]["raw_entries"]
-    assert len(path_bindings) == 4
+    assert len(path_bindings) == 8
     assert {entry["deployment_surface"] for entry in path_bindings} == {"self-hosted-server"}
+    assert {entry["workflow_class"] for entry in path_bindings} == {
+        "pipeline-automation",
+        "software-engineering",
+    }
+
+    mcp_client = runtime["mcp_clients"][0]
+    assert mcp_client["client_name"] == "r420-echo"
+    assert mcp_client["transport"] == "stdio"
+    assert mcp_client["connection_url"].endswith(
+        "/deploy/self-hosted-local/mcp_echo_server.py"
+    )

@@ -125,13 +125,15 @@ def test_assert_reachable_tier_1_in_process_accept() -> None:
     )
 
 
-def test_assert_reachable_tier_1_lacks_localhost_socket_reject() -> None:
-    """acc #4 — Tier-1 process without an in-process collector is a violation."""
-    with pytest.raises(ReachabilityViolation):
+def test_assert_reachable_tier_1_self_hosted_backend_accept() -> None:
+    """acc #4 — Tier-1 process reaches an operator-bound backend collector."""
+    assert (
         assert_otlp_reachable_from_sandbox(
             SandboxTier.TIER_1_PROCESS,
             CollectorPlacement.SELF_HOSTED_BACKEND_COLLECTOR,
         )
+        is None
+    )
 
 
 def test_assert_reachable_tier_2_container_explicit_network_accept() -> None:

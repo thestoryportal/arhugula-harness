@@ -140,6 +140,9 @@ def _print_fail_class(fail_class: str, detail: str) -> None:
     typer.echo(f"{fail_class}: {detail}", err=True)
 
 
+_DAEMON_CLIENT_STREAMABLE_HTTP_URL = "http://127.0.0.1/mcp"
+
+
 async def _daemon_client_dispatch(
     *,
     workflow_file: Path,
@@ -155,8 +158,9 @@ async def _daemon_client_dispatch(
 
     Transport: MCP streamable-HTTP over Unix-socket via a custom httpx
     client factory injecting :class:`httpx.AsyncHTTPTransport(uds=...)`. The
-    URL hostname is irrelevant when uds is bound at the transport; the path
-    component matches FastMCP's default ``streamable_http_path = "/mcp"``.
+    Unix-socket transport controls the connection path; the nominal URL uses a
+    loopback host so ASGI host validation accepts the HTTP ``Host`` header. The
+    path component matches FastMCP's default ``streamable_http_path = "/mcp"``.
 
     Returns
     -------
@@ -173,7 +177,7 @@ async def _daemon_client_dispatch(
 
     try:
         async with streamable_http_client(
-            "http://harness-daemon/mcp",
+            _DAEMON_CLIENT_STREAMABLE_HTTP_URL,
             http_client=http_client,
         ) as (read_stream, write_stream, _get_session_id):
             async with ClientSession(read_stream, write_stream) as session:

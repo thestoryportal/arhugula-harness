@@ -221,6 +221,11 @@ r420-self-hosted-stack-status:
 r420-self-hosted-readiness config:
     uv run python tools/self_hosted_readiness.py --config {{config}}
 
+# Live R-420 local e2e. Requires Docker stack up, local Ollama, and keyring
+# entries. No hosted-provider inference is performed by the default workflow.
+r420-self-hosted-live-e2e config:
+    uv run python tools/r420_self_hosted_live_e2e.py {{config}}
+
 # ─── operator dashboard (R-XI-01) ──────────────────────────────────────────
 #
 # Local view of the operator roadmap dashboard. Output goes to the gitignored

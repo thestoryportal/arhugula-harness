@@ -5,11 +5,13 @@
 # Runtime state — .harness/ is created at runtime by Bash append-write
 # (Meta-Architecture §10.1.3); state ledger + observability DB must not be committed.
 .harness/state.jsonl
+.harness/index.json
 .harness/observability.db
 .harness/*.db
 .harness/*.db-journal
 .harness/*.db-wal
 .harness/*.db-shm
+routing_manifest/
 
 # Python build artifacts
 __pycache__/

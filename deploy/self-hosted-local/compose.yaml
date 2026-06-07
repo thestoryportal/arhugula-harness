@@ -28,7 +28,7 @@ services:
         condition: service_started
 
   grafana:
-    image: ${R420_GRAFANA_IMAGE:-grafana/grafana:13.0.0}
+    image: ${R420_GRAFANA_IMAGE:-grafana/grafana:12.2.0}
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
