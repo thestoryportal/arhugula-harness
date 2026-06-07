@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `a42490bc0a27` |
-| `last_refreshed` | 2026-06-06T22:35:47-06:00 |
-| `git_head` | `c866a5d9` (main) — PR #320 R-420/R-440 self-hosted readiness gate merged. |
+| `workspace_state_hash` | `eb80ce7ba610` |
+| `last_refreshed` | 2026-06-07T02:02:49-06:00 |
+| `git_head` | `b8241480` (main) — PR #323 R-420 self-hosted live e2e merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -24,7 +24,7 @@
 
 > **🎓 PHASE 8 CLOSED — substitution accounting DECLARED 2026-06-02 (`.harness/phase-8-graduation.md`).** The operator lifted the HELD R-700 declaration ("kick off the declaration"); item 4 executed. **Canonical: 46/54 RETIRED (85.2%) + 49/54 pipeline-advanced (90.7%)** (operator-ratified accounting (i)). The deferred 48→46 supersession is applied forward (ledger §11.7 + harness-cp/CLAUDE.md + this dashboard; prior batch records stand verbatim). 8 rows carry ratified terminal sign-off dispositions (OD-4 `RETIRED-AS-CROSS-AXIS-DEFERRED`; AS-8e/8f/CP-17 accepted-indefinite-defer; CXA-1..4 Phase-2-runtime-deferred) — **labels do NOT re-tally into the 46** (the OD-6-in-both-lists tell). `R-700` → RESOLVED. Phase 7 (substitution-retirement execution) is complete; the workspace is now wholly on the **post-Phase-8 activation/deployment/integration axis** (Surfaces IV/V/VI). **R-410's local container slice is now closed; remaining forward activation starts at higher-tier sandboxes / deployment / secrets / cloud integration gates** — per §12.4.1 a future session drives the highest-value forward item to its genuine gate.
 
-**(This session — 2026-06-07. R-420 live self-hosted close PR.)** Closed the SELF_HOSTED_SERVER live gate on the operator's Mac without hosted-provider spend. Added `deploy/self-hosted-local/` as the approved single-node SELF_HOSTED_SERVER bootstrap: the harness daemon remains a host process while Docker Compose runs OTel Collector Contrib, Grafana Tempo, and Grafana. The committed template `harness.selfhosted.local.example.toml` selects `deployment_surface = "self-hosted-server"`, `collector.placement = "SELF_HOSTED_BACKEND_COLLECTOR"`, OTLP gRPC `http://127.0.0.1:4317`, provider allowlist `r420_probe_key`, and `backend = "self-hosted-keyring"`. Added a no-paid MCP echo workflow plus `just r420-self-hosted-live-e2e <config>`, fixed the OD bootstrap reachability rule so a host-process daemon may reach the self-hosted backend collector, and fixed the daemon FastMCP Unix-socket Host-header allowance. Closure evidence: Docker stack started, `just r420-self-hosted-readiness harness.selfhosted.local.toml` passed, and `just r420-self-hosted-live-e2e harness.selfhosted.local.toml` passed with workflow `r420-self-hosted-tool-echo`, daemon status `success`, cost `0`, hosted-provider-calls `0`. `Project_Roadmap_v1.md` marks `R-420-self-hosted-server-deployment-e2e` RESOLVED; `R-430` is now the next local collector-validation follow-on, while `R-421` remains managed-cloud/operator-gated.
+**(This session — 2026-06-07. PR #323 MERGED.)** Closed the SELF_HOSTED_SERVER live gate on the operator's Mac without hosted-provider spend. Added `deploy/self-hosted-local/` as the approved single-node SELF_HOSTED_SERVER bootstrap: the harness daemon remains a host process while Docker Compose runs OTel Collector Contrib, Grafana Tempo, and Grafana. The committed template `harness.selfhosted.local.example.toml` selects `deployment_surface = "self-hosted-server"`, `collector.placement = "SELF_HOSTED_BACKEND_COLLECTOR"`, OTLP gRPC `http://127.0.0.1:4317`, provider allowlist `r420_probe_key`, and `backend = "self-hosted-keyring"`. Added a no-paid MCP echo workflow plus `just r420-self-hosted-live-e2e <config>`, fixed the OD bootstrap reachability rule so a host-process daemon may reach the self-hosted backend collector, and fixed the daemon FastMCP Unix-socket Host-header allowance. Closure evidence: Docker stack started, `just r420-self-hosted-readiness harness.selfhosted.local.toml` passed, and `just r420-self-hosted-live-e2e harness.selfhosted.local.toml` passed with workflow `r420-self-hosted-tool-echo`, daemon status `success`, cost `0`, hosted-provider-calls `0`. `Project_Roadmap_v1.md` marks `R-420-self-hosted-server-deployment-e2e` RESOLVED; `R-430` is now the next local collector-validation follow-on, while `R-421` remains managed-cloud/operator-gated.
 
 **(This session — 2026-06-07. PR #321 MERGED.)** Added `ProviderSecretBackend` and `[runtime.provider_secrets] backend = "self-hosted-keyring"` so SELF_HOSTED provider secrets resolve through keyring only and do not silently use LOCAL env fallback. The default `local-keyring-env-fallback` path is preserved for LOCAL_DEVELOPMENT/headless use. `just self-hosted-readiness --config <harness.toml>` now passes the static R-440 gate when SELF_HOSTED_SERVER config, real collector placement, OTLP endpoint, allowlist, and `self-hosted-keyring` selector are present; it still performs no daemon start, OTLP probe, secret fetch, backend call, credential use, or paid provider call. PR #321 was CI-green before merge and closes the code/static R-440 selector gate. Next genuine gate is R-420 live SELF_HOSTED_SERVER exercise with operator-provisioned server, collector, and actual keyring entries.
 
@@ -126,7 +126,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| — | — | — | (none open; #292–#296 all MERGED 2026-06-04..05) |
+| [#324](https://github.com/thestoryportal/arhugula-harness/pull/324) | `codex/notebooklm-mcp-audit` | NotebookLM MCP setup/audit | mode-agnostic |
 
 ---
 
@@ -134,6 +134,7 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| **R-420 self-hosted live e2e / PR #323** (`b824148`) | 2026-06-07 | **SELF_HOSTED_SERVER live gate closed.** Merged the local single-node daemon + OTel Collector/Tempo/Grafana stack, keyring sentinel, no-paid MCP echo workflow, runtime UDS/FastMCP host fixes, and `just r420-self-hosted-live-e2e <config>`. Local proof passed readiness and live e2e with workflow `r420-self-hosted-tool-echo`, status `success`, cost `0`, hosted-provider-calls `0`; PR CI was green. R-420 is RESOLVED and R-430 is now the next local collector-validation follow-on. |
 | **R-420/R-440 readiness gate / PR #320** (`c866a5d`) | 2026-06-07 | **Self-hosted deployment/secrets readiness gate shipped.** Added `just self-hosted-readiness --config <harness.toml>` as a non-mutating static gate for SELF_HOSTED_SERVER config, collector placement, OTLP endpoint shape, provider allowlist, and the missing tier-level secrets backend selector. CI was green before merge; no daemon start, OTLP probe, secret fetch, credential use, or paid provider call was run. |
 | **R-100 config discovery tracking / PR #305** (`b8c4671`) | 2026-06-06 | **Tracking closure after operator-ratified Reading A.** CWD `harness.toml` discovery already shipped in PR #279 (`a394032`); refreshed the fork doc to APPLIED-AS-READING-A, marked `R-100-mvp-config-discovery` RESOLVED, closed forward-register A-4, and regenerated the dashboard snapshot. No runtime code changed in #305. |
 | **dashboard generator / PR #304** (`0765237`) | 2026-06-06 | **System-Python dashboard regeneration fixed.** Added a PyYAML-free parser for the `.harness/substitutions.yaml` `snapshot:` pins so Codex guard regeneration keeps the retired-trend endpoint at the canonical 46 rather than stale batch prose 48; added a regression test and refreshed the dashboard snapshot. |
