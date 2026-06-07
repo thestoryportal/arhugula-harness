@@ -1,0 +1,64 @@
+# R-420 SELF_HOSTED_SERVER runtime template.
+#
+# Copy to `harness.selfhosted.local.toml` at the workspace root and replace
+# `/absolute/path/to/arhugula-v2` with the actual root path. Do not commit the
+# copied local file if it contains machine-specific paths.
+
+[runtime]
+deployment_surface = "self-hosted-server"
+repository_root = "/absolute/path/to/arhugula-v2"
+default_topology = "single-threaded-linear"
+
+# Keep unused providers optional until their keyring entries are present.
+anthropic_optional = false
+openai_optional = true
+ollama_optional = true
+
+[runtime.provider_secrets]
+backend = "self-hosted-keyring"
+keyring_service = "harness"
+
+[[runtime.provider_secrets.operator_allowlist]]
+name = "anthropic_key"
+scope = { name = "default" }
+
+[runtime.otel]
+# Runtime currently uses the OTLP gRPC exporter; the local collector exposes
+# gRPC on 4317 and HTTP on 4318.
+otlp_endpoint = "http://127.0.0.1:4317"
+
+[runtime.collector]
+placement = "SELF_HOSTED_BACKEND_COLLECTOR"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "SKILLS"
+workflow_class = "pipeline-automation"
+deployment_surface = "self-hosted-server"
+path = "/absolute/path/to/arhugula-v2/.agents/skills"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "PROMPTS"
+workflow_class = "pipeline-automation"
+deployment_surface = "self-hosted-server"
+path = "/absolute/path/to/arhugula-v2/prompts"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "ROUTING_MANIFEST"
+workflow_class = "pipeline-automation"
+deployment_surface = "self-hosted-server"
+path = "/absolute/path/to/arhugula-v2/routing_manifest"
+
+[[runtime.path_bindings.raw_entries]]
+path_class = "STATE_LEDGER"
+workflow_class = "pipeline-automation"
+deployment_surface = "self-hosted-server"
+path = "/absolute/path/to/arhugula-v2/.harness/state.jsonl"
+
+[runtime.routing_manifest]
+manifest_version = 1
+per_role_bindings = {}
+per_workload_overrides = {}
+retry_policies = {}
+fallback_chains = [
+  { primary = { provider = "anthropic", model = "claude-haiku-4-5", family = "anthropic" }, same_family = [], cross_family = [] },
+]

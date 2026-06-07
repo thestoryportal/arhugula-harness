@@ -85,7 +85,7 @@ ANNOTATIONS = {
     "R-410-sandbox-tier-2-container-execution": "Resolved by the local-only Docker execution driver and live TIER_2 container e2e.",
     "R-411-sandbox-tier-3-microvm-execution": "Next sandbox lane is host-fit provider selection: gVisor/Kata/Shuru/Microsandbox/libkrun readiness probes decide what can run.",
     "R-412-sandbox-tier-4-full-vm-execution": "Deferred until managed cloud exists; Firecracker and QEMU microvm need a Linux KVM host with /dev/kvm.",
-    "R-420-self-hosted-server-deployment-e2e": "Run the harness on a real server with a collector + secrets; needs that infrastructure stood up.",
+    "R-420-self-hosted-server-deployment-e2e": "Local Compose stack + config template exist; still needs Docker started, keyring entries, readiness, and the daemon e2e.",
     "R-421-managed-cloud-deployment-e2e": "Managed cloud is deferred; E2B is a possible hosted sandbox candidate but needs an approved API key.",
     "R-430-otlp-collector-tail-keep-preservation": "Confirm the telemetry keep-rule works against a real collector; needs that collector running.",
     "R-440-tier-level-secrets-backend": "Resolved by the self-hosted-keyring selector; the live server/collector/keyring-entry exercise stays with R-420.",

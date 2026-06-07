@@ -1193,7 +1193,13 @@ R-420-self-hosted-server-deployment-e2e:
     selector; the remaining R-420 gate is live infrastructure + actual secret material in the selected backend.
     Codex gate logged 2026-06-07: resume with a SELF_HOSTED_SERVER `harness.toml`, non-IN_PROCESS collector
     placement, OTLP endpoint, provider allowlist, `backend = "self-hosted-keyring"`, and real keyring entries;
-    then run readiness and the daemon e2e.
+    then run readiness and the daemon e2e. The local single-node self-hosted bootstrap now lives at
+    `deploy/self-hosted-local/`: Docker Compose provisions OTel Collector Contrib + Tempo + Grafana, the
+    harness daemon stays host-run, `harness.selfhosted.local.example.toml` selects
+    `SELF_HOSTED_BACKEND_COLLECTOR` + `self-hosted-keyring`, and `just r420-self-hosted-stack-*` /
+    `just r420-self-hosted-readiness <config>` provide the operator command surface. This advances the
+    infrastructure definition to a runnable local gate but does not close R-420 until the stack is actually started
+    with keyring entries and the live daemon e2e passes.
 
 R-421-managed-cloud-deployment-e2e:
   title: Exercise the harness at the MANAGED_CLOUD deployment surface (cloud secrets + FULL_VM provider class + managed collector)
