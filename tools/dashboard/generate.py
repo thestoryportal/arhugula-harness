@@ -89,7 +89,7 @@ ANNOTATIONS = {
     "R-421-managed-cloud-deployment-e2e": "Managed cloud is deferred; E2B is a possible hosted sandbox candidate but needs an approved API key.",
     "R-430-otlp-collector-tail-keep-preservation": "Resolved by the R-420 local real-collector tail-keep live proof.",
     "R-440-tier-level-secrets-backend": "Resolved by the self-hosted-keyring selector; R-420 proved it live through the local keyring sentinel.",
-    "R-500-multi-tenant-deployment": "Exercise the harness with multiple tenants / a non-solo profile; needs a multi-tenant deployment.",
+    "R-500-multi-tenant-deployment": "Resolved by the local self-hosted multi-tenant proof: tenant.id resource separation, non-toggleable redaction, and tenant-scoped audit reads.",
     "R-830-memory-tool-production-backend": "The local SQLite slice is done; the cloud-vault / managed-DB remainder needs cloud credentials you'd provide.",
     "R-900-research-arcs": "Open-ended research / exploration; no fixed scope — pulled in as you choose.",
     "R-CXA-1-as-is-seam": "The one remaining wire (a secret-fetch audit caller) has no real source yet, so wiring it would be hollow; deferred until one exists.",
@@ -247,9 +247,9 @@ REMAINING_ORDERED = [
     {
         "n": 10,
         "layer": "activation",
-        "id": "R-421 → R-412 → R-500",
-        "label": "Managed cloud → full-VM → multi-tenant",
-        "gate": "Needs cloud infrastructure; follows the self-hosted server.",
+        "id": "R-421 → R-412",
+        "label": "Managed cloud → full-VM",
+        "gate": "Needs cloud infrastructure; R-500's self-hosted multi-tenant exercise is closed.",
     },
     {
         "n": 11,

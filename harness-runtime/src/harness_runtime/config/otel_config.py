@@ -51,6 +51,7 @@ def resolve_sampling_mode(
 def build_resource_attributes(
     otel: OTelConfig,
     deployment_surface: DeploymentSurface,
+    tenant_id: str | None = None,
 ) -> dict[str, str]:
     """Build the OTel resource-attribute dict.
 
@@ -60,7 +61,10 @@ def build_resource_attributes(
     2. One `namespace.<prefix>.declared = "true"` attribute per row of the
        15-row `NAMESPACE_MAP` (C-OD-05 §5.1). Provides runtime declaration
        coverage attestation.
-    3. Operator-supplied `additional_resource_attrs` override (kwargs > defaults).
+    3. Operator-supplied `additional_resource_attrs` override default attrs.
+    4. `tenant.id` is added from `RuntimeConfig.tenant_id` when present and
+       wins over operator-supplied attrs; it is the C-OD-21 §21.1 tenant
+       separation key, not an arbitrary deployment label.
 
     Total rows attested: `1 + len(NAMESPACE_MAP) + len(additional_resource_attrs)`.
     """
@@ -71,4 +75,6 @@ def build_resource_attributes(
         attrs[f"namespace.{row.namespace_prefix}declared"] = "true"
     for key, value in otel.additional_resource_attrs:
         attrs[key] = value
+    if tenant_id:
+        attrs["tenant.id"] = tenant_id
     return attrs
