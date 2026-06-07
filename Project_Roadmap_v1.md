@@ -1144,7 +1144,11 @@ R-411-sandbox-tier-3-microvm-execution:
     `r411-kata`, `r411-shuru`, `r411-microsandbox`, and `r411-libkrun` all fail their host/runtime readiness
     gates (`Darwin x86_64`; no runsc/kata/shuru/msb/libkrun; no `/dev/kvm`). The next genuine R-411 closure
     path requires the operator to provide either a Linux host with the selected runtime/KVM where applicable,
-    or an Apple Silicon macOS host for Shuru/Microsandbox/libkrun-class evaluation.
+    or an Apple Silicon macOS host for Shuru/Microsandbox/libkrun-class evaluation. The 2026-06-07 NotebookLM +
+    official-source infrastructure selection is recorded at `deploy/managed-cloud/r411-r421-infrastructure-selection.md`:
+    first no-taxonomy-change R-411 recommendation is Linux + Docker + gVisor/runsc; Kata is the stronger follow-on
+    when Linux KVM is available. E2B remains a managed/remote R-421/R-412 candidate, not a local R-411 closure path,
+    unless the roadmap taxonomy is intentionally changed.
 
 R-412-sandbox-tier-4-full-vm-execution:
   title: Real TIER_4 full-VM / firecracker sandbox execution (MANAGED_CLOUD-only provider class)
@@ -1228,6 +1232,13 @@ R-421-managed-cloud-deployment-e2e:
     managed-cloud provider-secret backend (`ProviderSecretBackend` still exposes only local/env-fallback and
     self-hosted-keyring selectors). The E2B live probe is ready to run once explicitly approved, but it only proves
     the hosted sandbox candidate; it does not close the cloud-secret backend or managed collector requirements.
+    Operator-present NotebookLM + official-source research on 2026-06-07 selected the fastest honest first closure
+    path as E2B hosted sandbox + GCP Secret Manager + Google-built OpenTelemetry Collector on Cloud Run, with
+    Langfuse/Arize/AWS alternatives documented at `deploy/managed-cloud/r411-r421-infrastructure-selection.md`.
+    The approved E2B live probe passed this session; the next code slice is to add a mockable
+    `gcp-secret-manager` managed-cloud `ProviderSecretBackend`, update `r421-managed-cloud-readiness`, and then
+    run a gated live e2e only after the operator provisions GCP credentials, a non-loopback OTLP endpoint, and a
+    cost-approved collector.
 
 R-430-otlp-collector-tail-keep-preservation:
   title: Verify tail-keep-on-classification preservation at a real OTLP collector boundary

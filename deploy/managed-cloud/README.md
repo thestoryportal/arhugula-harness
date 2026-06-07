@@ -9,6 +9,14 @@ sandbox provider are selected. The current codebase still lacks the
 managed-cloud provider-secret backend implementation, so static readiness is
 expected to fail on `cloud-secret-backend` until that substrate lands.
 
+The current infrastructure selection is recorded in
+[`r411-r421-infrastructure-selection.md`](r411-r421-infrastructure-selection.md).
+Recommended first R-421 closure path: E2B hosted sandbox, GCP Secret Manager as
+the first managed-cloud provider-secret backend, and the Google-built
+OpenTelemetry Collector on Cloud Run exporting to Google Cloud Observability.
+R-411 remains a separate host/runtime gate; E2B is not counted as a local R-411
+runtime under the current roadmap taxonomy.
+
 After copying the template and replacing placeholders, run:
 
 ```bash
