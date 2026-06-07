@@ -84,9 +84,9 @@ ANNOTATIONS = {
     "R-300-multi-llm-second-provider": "Ready to start, but needs OpenAI/Ollama credentials and a mixed-provider test you'd run.",
     "R-410-sandbox-tier-2-container-execution": "Resolved by the local-only Docker execution driver and live TIER_2 container e2e.",
     "R-411-sandbox-tier-3-microvm-execution": "Host-fit gate is explicit: first selected path is Linux + Docker + gVisor/runsc; E2B stays managed/remote, not local R-411.",
-    "R-412-sandbox-tier-4-full-vm-execution": "Deferred until managed cloud exists; Firecracker and QEMU microvm need a Linux KVM host with /dev/kvm.",
+    "R-412-sandbox-tier-4-full-vm-execution": "Deferred until R-411/provider host fit and a full-VM provider implementation exist; R-421 now proves the managed-cloud surface.",
     "R-420-self-hosted-server-deployment-e2e": "Resolved by the local single-node self-hosted daemon + collector + keyring live e2e.",
-    "R-421-managed-cloud-deployment-e2e": "Selected first path: E2B + GCP Secret Manager + authenticated Google Cloud Run OTel collector. GCP secrets, collector provisioning, E2B deterministic command, and static bootstrap reachability are proved; full closure now gates on rerunning the approved live e2e through authenticated OTLP export and Cloud Trace visibility.",
+    "R-421-managed-cloud-deployment-e2e": "Resolved by the approved E2B + GCP Secret Manager + authenticated Cloud Run collector live e2e; Cloud Trace observed the managed-cloud classification trace.",
     "R-430-otlp-collector-tail-keep-preservation": "Resolved by the R-420 local real-collector tail-keep live proof.",
     "R-440-tier-level-secrets-backend": "Resolved by the self-hosted-keyring selector; R-420 proved it live through the local keyring sentinel.",
     "R-500-multi-tenant-deployment": "Resolved by the local self-hosted multi-tenant proof: tenant.id resource separation, non-toggleable redaction, and tenant-scoped audit reads.",
@@ -247,26 +247,19 @@ REMAINING_ORDERED = [
     {
         "n": 10,
         "layer": "activation",
-        "id": "R-421 → R-412",
-        "label": "Managed cloud → full-VM",
-        "gate": "Managed cloud infra is provisioned and live-secret/E2B probes pass; full e2e still needs an approved rerun through authenticated OTLP export and Cloud Trace visibility.",
-    },
-    {
-        "n": 11,
-        "layer": "activation",
         "id": "R-300-multi-llm-second-provider",
         "label": "Second LLM provider",
         "gate": "Needs OpenAI/Ollama credentials + a mixed-provider test.",
     },
     {
-        "n": 12,
+        "n": 11,
         "layer": "activation",
         "id": "R-830 / R-810 / R-820",
         "label": "Cloud memory + Files + managed-agents integrations",
         "gate": "Need cloud credentials; deferred-by-design integrations.",
     },
     {
-        "n": 13,
+        "n": 12,
         "layer": "activation",
         "id": "R-XI-02 / R-XI-03 / R-900",
         "label": "Dashboard polish + research arcs",
@@ -282,8 +275,7 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
                  metric). DERIVED from `.harness/substitutions.yaml` (R-600);
                  R-700 ratified the integer at the Phase-8 graduation (46/54).
     activation — the post-Phase-8 forward axis (deployment / integration);
-                 0 exercised, but that is operator-gated infra + bounded-residual
-                 by design, NOT remaining build work. The renderer says so loudly.
+                 exercised items are tracked separately from remaining build work.
     """
     # Canonical counts derived from the substitution ledger (R-600); fall back to the
     # Phase-8-graduation literals only if the ledger is unreadable (defensive).

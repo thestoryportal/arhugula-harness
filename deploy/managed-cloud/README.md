@@ -26,8 +26,8 @@ The Cloud Run collector deployment surface is in
 `collector.yaml` from Secret Manager, enables HTTP/2 for OTLP gRPC, and keeps
 `min-instances=0` for a low-idle-cost proof. The safer default is authenticated
 Cloud Run ingress: the live e2e can fetch a short-lived identity token with
-`gcloud auth print-identity-token` and attach it as the OTLP Authorization
-header.
+`gcloud auth print-identity-token` and attach it to the OTLP gRPC call as call
+credentials.
 
 After copying the template and replacing placeholders, run:
 
@@ -94,7 +94,9 @@ The readiness and live e2e commands check this configured tier before creating
 an E2B sandbox, so a stale Tier-1/VENDOR_PIPELINE binding fails without a paid
 hosted-sandbox call.
 
-Full R-421 closure still requires operator-provisioned GCP credentials with
-Secret Manager access, the named secret entries, a non-loopback managed OTLP
-endpoint, a Python environment that provides `google-cloud-secret-manager`,
-and explicit approval for live GCP/E2B calls.
+R-421 closed on 2026-06-07 with the operator-provisioned E2B + GCP path. The
+live command resolved `e2b-secret` through Secret Manager, created a hosted E2B
+sandbox for the deterministic command, exported authenticated OTLP to the Cloud
+Run collector, and observed Cloud Trace trace
+`d848a4da6622f42407a5e58c507513c5` with spans
+`r421.managed_cloud.root` and `sandbox.violation`.

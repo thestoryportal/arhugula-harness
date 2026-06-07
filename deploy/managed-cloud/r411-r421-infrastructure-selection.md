@@ -44,11 +44,11 @@ Darwin x86_64 fail all reviewed local R-411 providers:
 - `r411-microsandbox`: needs Apple Silicon macOS or Linux/KVM.
 - `r411-libkrun`: needs Apple Silicon/HVF or Linux/KVM plus libkrun.
 
-R-421 remains a managed-cloud gate. PR #334 landed the static readiness and E2B
-probe surfaces, and the approved E2B live probe passed this session with a
-deterministic hosted sandbox command. The remaining hard gaps are a landed
-managed-cloud `ProviderSecretBackend` selector/resolver and a provisioned
-managed collector/OTLP endpoint.
+R-421 is closed at the selected managed-cloud path. PRs #338/#340/#342/#344
+landed the GCP Secret Manager backend, resolve-only E2B secret path, Cloud Run
+collector, and managed-cloud bootstrap tier binding. The 2026-06-07 approved
+live e2e then resolved `e2b-secret`, created the hosted E2B sandbox, exported
+authenticated OTLP to Cloud Run, and observed the trace in Cloud Trace.
 
 ## Recommended Path
 
@@ -183,9 +183,9 @@ managed-cloud provider calls.
    without creating an E2B sandbox.
 6. Confirm the cost gate, then run the R-421 live e2e that creates an E2B
    sandbox, emits OTLP to the managed collector, and reports hosted-provider
-   calls and cost posture.
+   calls and cost posture. This path closed on 2026-06-07 with trace
+   `d848a4da6622f42407a5e58c507513c5`.
 
-R-411 can proceed in parallel only after a compatible Linux host/runtime or
-Apple Silicon host is available. Without that host, the honest next local work
-is the R-421 live managed-cloud e2e once the operator-provisioned GCP/OTLP
-inputs exist.
+R-411 can proceed only after a compatible Linux host/runtime or Apple Silicon
+host is available. With R-421 closed, R-412 remains deferred on that separate
+higher-tier provider/runtime path.
