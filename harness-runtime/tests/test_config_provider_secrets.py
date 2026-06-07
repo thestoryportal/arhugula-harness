@@ -35,6 +35,7 @@ from harness_runtime.config.provider_secrets import (
 )
 from harness_runtime.types import ProviderSecretBackend, ProviderSecretsConfig
 from keyring.backend import KeyringBackend
+from pydantic import ValidationError
 
 
 class _FakeKeyring(KeyringBackend):
@@ -115,6 +116,14 @@ def test_provider_secrets_config_no_secret_values() -> None:
     assert not (field_names & forbidden)
 
 
+def test_gcp_secret_manager_backend_requires_project_id() -> None:
+    """R-421: GCP Secret Manager configs must name the GCP project."""
+    with pytest.raises(ValidationError) as excinfo:
+        ProviderSecretsConfig(backend=ProviderSecretBackend.GCP_SECRET_MANAGER)
+
+    assert "gcp_project_id is required" in str(excinfo.value)
+
+
 # ---------------------------------------------------------------------------
 # Resolver construction.
 # ---------------------------------------------------------------------------
@@ -126,6 +135,29 @@ def test_make_keyring_resolver_returns_resolver() -> None:
     resolver = make_keyring_resolver(config)
     assert isinstance(resolver, KeyringSecretResolver)
     assert resolver.keyring_service == "test-service"
+
+
+def test_make_keyring_resolver_returns_gcp_resolver_for_gcp_backend() -> None:
+    """R-421: the provider-secret factory dispatches to the GCP resolver."""
+    calls: list[str] = []
+
+    def accessor(resource_name: str) -> str:
+        calls.append(resource_name)
+        return "sk-gcp-from-secret-manager"
+
+    resolver = make_keyring_resolver(
+        ProviderSecretsConfig(
+            backend=ProviderSecretBackend.GCP_SECRET_MANAGER,
+            gcp_project_id="harness-test-project",
+        ),
+        gcp_secret_accessor=accessor,
+    )
+
+    assert type(resolver).__name__ == "GcpSecretManagerResolver"
+    assert resolver.resolve_bootstrap_value("anthropic_key") == "sk-gcp-from-secret-manager"
+    assert calls == [
+        "projects/harness-test-project/secrets/anthropic_key/versions/latest",
+    ]
 
 
 def test_keyring_resolver_is_frozen() -> None:
@@ -387,6 +419,57 @@ def test_self_hosted_keyring_backend_resolves_keyring_value(
     )
 
     assert resolver.resolve_bootstrap_value("anthropic_key") == "sk-ant-from-keyring"
+
+
+def test_gcp_secret_manager_backend_does_not_fall_back_to_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-421: MANAGED_CLOUD backend must not silently use LOCAL env fallback."""
+
+    def unavailable_accessor(resource_name: str) -> str:
+        raise RuntimeError(f"unavailable: {resource_name}")
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-from-env")
+    resolver = make_keyring_resolver(
+        ProviderSecretsConfig(
+            backend=ProviderSecretBackend.GCP_SECRET_MANAGER,
+            gcp_project_id="harness-test-project",
+        ),
+        gcp_secret_accessor=unavailable_accessor,
+    )
+
+    with pytest.raises(SecretResolutionError) as excinfo:
+        resolver.resolve_bootstrap_value("anthropic_key")
+
+    assert excinfo.value.fail_class is SecretFailClass.SECRET_UNAVAILABLE
+    assert excinfo.value.name == "anthropic_key"
+
+
+def test_gcp_secret_manager_resolve_honors_allowlist() -> None:
+    """R-421: GCP-backed SecretRef resolution preserves AS allowlist checks."""
+
+    def accessor(resource_name: str) -> str:
+        assert resource_name == "projects/harness-test-project/secrets/e2b_api_key/versions/5"
+        return "e2b-secret-value"
+
+    scope = _scope("r421-managed-cloud")
+    entry = SecretAllowlistEntry(name="e2b_api_key", scope=scope)
+    resolver = make_keyring_resolver(
+        ProviderSecretsConfig(
+            backend=ProviderSecretBackend.GCP_SECRET_MANAGER,
+            gcp_project_id="harness-test-project",
+            gcp_secret_version="5",
+            operator_allowlist=(entry,),
+        ),
+        gcp_secret_accessor=accessor,
+    )
+    tool = _tool_with_allowed_secrets(entry)
+
+    ref = resolver.resolve("e2b_api_key", scope, SandboxTier.TIER_2_CONTAINER, tool=tool)
+
+    assert ref.name == "e2b_api_key"
+    assert ref.scope == scope
+    assert ref.tier is SandboxTier.TIER_2_CONTAINER
 
 
 def test_resolve_env_var_fallback_honors_allowlist(

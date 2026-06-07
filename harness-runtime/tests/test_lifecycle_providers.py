@@ -34,7 +34,7 @@ from anthropic import (
 from harness_core.deployment_surface import DeploymentSurface
 from harness_cp.topology_pattern import TopologyPattern
 from harness_runtime.config.provider_secrets import (
-    KeyringSecretResolver,
+    ProviderSecretResolver,
     make_keyring_resolver,
 )
 from harness_runtime.lifecycle.providers import (
@@ -154,7 +154,7 @@ def _runtime_config(tmp_path: Path) -> RuntimeConfig:
     )
 
 
-def _resolver_with_anthropic_key(value: str = "sk-ant-fake-test") -> KeyringSecretResolver:
+def _resolver_with_anthropic_key(value: str = "sk-ant-fake-test") -> ProviderSecretResolver:
     """Seed a keyring entry for `anthropic_key` and return a resolver.
 
     Caller must hold the `fake_keyring` fixture so the backend is installed.
@@ -219,7 +219,7 @@ def _openai_factory(records: list[str]) -> Callable[[str], AsyncOpenAI]:
     return factory
 
 
-def _seed_openai_key(value: str = "sk-openai-fake-test") -> KeyringSecretResolver:
+def _seed_openai_key(value: str = "sk-openai-fake-test") -> ProviderSecretResolver:
     keyring.set_password("harness", OPENAI_KEYRING_NAME, value)
     return make_keyring_resolver(ProviderSecretsConfig())
 

@@ -38,8 +38,10 @@ NOT in scope for U-RT-06 (deferred):
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Final
+from importlib import import_module
+from typing import Any, Final, Protocol, runtime_checkable
 
 import keyring
 from harness_as.sandbox_tier import SandboxTier
@@ -51,10 +53,15 @@ from harness_as.tool_contract import ToolContract
 from harness_runtime.types import ProviderSecretBackend, ProviderSecretsConfig
 
 __all__ = [
+    "GcpSecretAccessor",
+    "GcpSecretManagerResolver",
     "KeyringSecretResolver",
+    "ProviderSecretResolver",
     "SecretAllowlistDeniedError",
+    "SecretBackendUnavailableError",
     "SecretResolutionError",
     "make_keyring_resolver",
+    "make_provider_secret_resolver",
 ]
 
 _KEYRING_TO_ENV_VAR: Final[dict[str, str]] = {
@@ -87,6 +94,53 @@ class SecretAllowlistDeniedError(Exception):
         self.decision = decision
         self.name = name
         self.scope = scope
+
+
+class SecretBackendUnavailableError(Exception):
+    """Raised by backend adapters when the secret backend cannot be reached."""
+
+
+GcpSecretAccessor = Callable[[str], str]
+"""Test-injectable accessor for one fully-qualified GCP Secret Manager resource."""
+
+
+@runtime_checkable
+class ProviderSecretResolver(Protocol):
+    """Shared provider-secret resolver surface consumed by runtime bootstrap."""
+
+    def resolve(
+        self,
+        name: str,
+        scope: SecretScope,
+        tier: SandboxTier,
+        *,
+        tool: ToolContract | None = None,
+    ) -> SecretRef:
+        """Resolve a secret reference, enforcing allowlist when a tool is supplied."""
+        ...
+
+    def resolve_bootstrap_value(self, name: str) -> str:
+        """Resolve the literal provider-secret value for SDK construction."""
+        ...
+
+
+def _enforce_allowlist(
+    *,
+    operator_allowlist: frozenset[object],
+    name: str,
+    scope: SecretScope,
+    tool: ToolContract | None,
+) -> None:
+    if tool is None:
+        return
+    decision = check_secret_allowlist(
+        tool=tool,
+        requested_name=name,
+        requested_scope=scope,
+        operator_policy_override=operator_allowlist,  # type: ignore[arg-type]
+    )
+    if decision is not AllowlistDecision.PERMITTED:
+        raise SecretAllowlistDeniedError(decision, name, scope)
 
 
 @dataclass(frozen=True)
@@ -163,15 +217,12 @@ class KeyringSecretResolver:
         SecretResolutionError
             Keyring returned `None` for `(keyring_service, name)`.
         """
-        if tool is not None:
-            decision = check_secret_allowlist(
-                tool=tool,
-                requested_name=name,
-                requested_scope=scope,
-                operator_policy_override=self.operator_allowlist,  # type: ignore[arg-type]
-            )
-            if decision is not AllowlistDecision.PERMITTED:
-                raise SecretAllowlistDeniedError(decision, name, scope)
+        _enforce_allowlist(
+            operator_allowlist=self.operator_allowlist,
+            name=name,
+            scope=scope,
+            tool=tool,
+        )
 
         value = self._lookup(name)
         if value is None:
@@ -218,10 +269,112 @@ class KeyringSecretResolver:
         return value
 
 
-def make_keyring_resolver(config: ProviderSecretsConfig) -> KeyringSecretResolver:
-    """Build a `KeyringSecretResolver` from a `ProviderSecretsConfig`."""
+def _default_gcp_secret_accessor(resource_name: str) -> str:
+    """Read one GCP Secret Manager secret version via the optional Google SDK."""
+    try:
+        secretmanager = import_module("google.cloud.secretmanager")
+    except ModuleNotFoundError as exc:
+        raise SecretBackendUnavailableError("google-cloud-secret-manager is not installed") from exc
+
+    try:
+        client_factory: Any = secretmanager.SecretManagerServiceClient
+        client: Any = client_factory()
+        response: Any = client.access_secret_version(request={"name": resource_name})
+        raw_data: object = response.payload.data
+    except Exception as exc:
+        raise SecretBackendUnavailableError(
+            f"GCP Secret Manager access failed for {resource_name}"
+        ) from exc
+
+    if isinstance(raw_data, bytes):
+        try:
+            return raw_data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise SecretBackendUnavailableError(
+                f"GCP Secret Manager returned non-UTF-8 payload for {resource_name}"
+            ) from exc
+    if isinstance(raw_data, str):
+        return raw_data
+    raise SecretBackendUnavailableError(
+        f"GCP Secret Manager returned unsupported payload type for {resource_name}"
+    )
+
+
+@dataclass(frozen=True)
+class GcpSecretManagerResolver:
+    """GCP Secret Manager backed provider-secret resolver for R-421."""
+
+    project_id: str
+    secret_version: str
+    operator_allowlist: frozenset[object]
+    secret_accessor: GcpSecretAccessor = _default_gcp_secret_accessor
+
+    def _resource_name(self, name: str) -> str:
+        if not name or "/" in name:
+            raise SecretResolutionError(SecretFailClass.SECRET_UNKNOWN, name)
+        return f"projects/{self.project_id}/secrets/{name}/versions/{self.secret_version}"
+
+    def _lookup(self, name: str) -> str:
+        resource_name = self._resource_name(name)
+        try:
+            return self.secret_accessor(resource_name)
+        except SecretResolutionError:
+            raise
+        except Exception as exc:
+            raise SecretResolutionError(SecretFailClass.SECRET_UNAVAILABLE, name) from exc
+
+    def resolve(
+        self,
+        name: str,
+        scope: SecretScope,
+        tier: SandboxTier,
+        *,
+        tool: ToolContract | None = None,
+    ) -> SecretRef:
+        """Resolve a managed-cloud secret reference after allowlist enforcement."""
+        _enforce_allowlist(
+            operator_allowlist=self.operator_allowlist,
+            name=name,
+            scope=scope,
+            tool=tool,
+        )
+        self._lookup(name)
+        return SecretRef(name=name, scope=scope, tier=tier)
+
+    def resolve_bootstrap_value(self, name: str) -> str:
+        """Resolve the literal managed-cloud secret value for SDK construction."""
+        return self._lookup(name)
+
+
+def make_provider_secret_resolver(
+    config: ProviderSecretsConfig,
+    *,
+    gcp_secret_accessor: GcpSecretAccessor | None = None,
+) -> ProviderSecretResolver:
+    """Build the backend-specific provider-secret resolver from config."""
+    if config.backend is ProviderSecretBackend.GCP_SECRET_MANAGER:
+        assert config.gcp_project_id is not None
+        return GcpSecretManagerResolver(
+            project_id=config.gcp_project_id.strip(),
+            secret_version=config.gcp_secret_version,
+            operator_allowlist=frozenset(config.operator_allowlist),
+            secret_accessor=gcp_secret_accessor or _default_gcp_secret_accessor,
+        )
     return KeyringSecretResolver(
         keyring_service=config.keyring_service,
         allow_env_fallback=config.backend is ProviderSecretBackend.LOCAL_KEYRING_ENV_FALLBACK,
         operator_allowlist=frozenset(config.operator_allowlist),
     )
+
+
+def make_keyring_resolver(
+    config: ProviderSecretsConfig,
+    *,
+    gcp_secret_accessor: GcpSecretAccessor | None = None,
+) -> ProviderSecretResolver:
+    """Build the configured provider-secret resolver.
+
+    The historical function name is retained for bootstrap compatibility; for
+    new code prefer `make_provider_secret_resolver`.
+    """
+    return make_provider_secret_resolver(config, gcp_secret_accessor=gcp_secret_accessor)

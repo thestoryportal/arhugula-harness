@@ -172,7 +172,7 @@ class _MutableHarnessContext:
     PREAMBLE alongside `drained_flag`. Required on the frozen HarnessContext
     per spec v1.21 §4 C-RT-04."""
     actor: Any = None  # harness_is.Actor — runtime identity; threaded into stage 1
-    keyring_resolver: Any = None  # KeyringSecretResolver — threaded into stage 3a
+    keyring_resolver: Any = None  # ProviderSecretResolver — threaded into stage 3a
 
     # Stage 1 IS.
     path_resolver: PathResolver | None = None

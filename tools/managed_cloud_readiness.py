@@ -45,8 +45,10 @@ class ReadinessReport:
 
 ROADMAP_ITEMS = ("R-421-managed-cloud-deployment-e2e",)
 LOOPBACK_OTLP_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
-MANAGED_CLOUD_SECRET_BACKENDS: frozenset[ProviderSecretBackend] = frozenset()
-"""No provider-secret backend enum member currently implements cloud secrets."""
+MANAGED_CLOUD_SECRET_BACKENDS: frozenset[ProviderSecretBackend] = frozenset(
+    {ProviderSecretBackend.GCP_SECRET_MANAGER}
+)
+"""Provider-secret backend enum members that implement cloud secret resolution."""
 
 
 def _format_allowed(values: Iterable[CollectorPlacement]) -> str:
@@ -133,8 +135,8 @@ def _cloud_secret_backend_check(config: RuntimeConfig) -> CheckResult:
             f"provider-secret backend {backend.value} is managed-cloud capable"
             if ok
             else (
-                "no managed-cloud provider-secret backend has landed; "
-                f"observed {backend.value}; currently landed selectors: {landed}"
+                f"provider-secret backend {backend.value} is not managed-cloud capable; "
+                f"currently landed selectors: {landed}"
             )
         ),
     )

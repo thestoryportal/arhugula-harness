@@ -1228,17 +1228,19 @@ R-421-managed-cloud-deployment-e2e:
     sandbox call should run without explicit approval. The 2026-06-07 R-421 closure pass added
     `just r421-managed-cloud-readiness <config> --hosted-sandbox-provider e2b`, an operator copy/edit template at
     `deploy/managed-cloud/harness.managed-cloud.e2b.example.toml`, and a separate `just r421-e2b-live-probe`
-    command. Static readiness now proves the remaining hard gap precisely: the runtime has no landed
-    managed-cloud provider-secret backend (`ProviderSecretBackend` still exposes only local/env-fallback and
-    self-hosted-keyring selectors). The E2B live probe is ready to run once explicitly approved, but it only proves
-    the hosted sandbox candidate; it does not close the cloud-secret backend or managed collector requirements.
+    command. The 2026-06-07 GCP backend slice adds `ProviderSecretBackend.GCP_SECRET_MANAGER`,
+    `ProviderSecretsConfig.gcp_project_id`, a mockable `GcpSecretManagerResolver`, and a static-ready template
+    with `backend = "gcp-secret-manager"`. The E2B live probe is ready to run once explicitly approved, but it
+    only proves the hosted sandbox candidate; it does not close the provisioned cloud-secret entries or managed
+    collector requirements.
     Operator-present NotebookLM + official-source research on 2026-06-07 selected the fastest honest first closure
     path as E2B hosted sandbox + GCP Secret Manager + Google-built OpenTelemetry Collector on Cloud Run, with
     Langfuse/Arize/AWS alternatives documented at `deploy/managed-cloud/r411-r421-infrastructure-selection.md`.
-    The approved E2B live probe passed this session; the next code slice is to add a mockable
-    `gcp-secret-manager` managed-cloud `ProviderSecretBackend`, update `r421-managed-cloud-readiness`, and then
-    run a gated live e2e only after the operator provisions GCP credentials, a non-loopback OTLP endpoint, and a
-    cost-approved collector.
+    The approved E2B live probe passed this session, and static readiness now passes for the selected GCP backend
+    shape without daemon start, OTLP probe, secret fetch, SDK install, or managed-cloud provider call. The next
+    closure slice is a gated live e2e only after the operator provisions GCP credentials, the
+    `google-cloud-secret-manager` SDK, the named Secret Manager entries, a non-loopback managed OTLP endpoint,
+    and a cost-approved collector.
 
 R-430-otlp-collector-tail-keep-preservation:
   title: Verify tail-keep-on-classification preservation at a real OTLP collector boundary

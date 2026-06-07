@@ -66,7 +66,7 @@ from ollama import AsyncClient as AsyncOllamaClient
 from openai import AsyncOpenAI
 
 from harness_runtime.config.provider_secrets import (
-    KeyringSecretResolver,
+    ProviderSecretResolver,
     SecretResolutionError,
 )
 from harness_runtime.types import ProviderClient, RuntimeConfig
@@ -274,7 +274,7 @@ def _classify_anthropic_ping_failure(exc: BaseException) -> Exception:
 
 async def construct_anthropic_adapter(
     config: RuntimeConfig,
-    resolver: KeyringSecretResolver,
+    resolver: ProviderSecretResolver,
     *,
     ping_override: AsyncPing | None = None,
     client_factory: Callable[[str], AsyncAnthropic] | None = None,
@@ -282,7 +282,7 @@ async def construct_anthropic_adapter(
     """Construct + ping-verify an `AnthropicAdapter` for stage 3a.
 
     Steps:
-    1. Resolve the Anthropic API key via the keyring (bootstrap path).
+    1. Resolve the Anthropic API key via the provider-secret resolver.
     2. Construct `AsyncAnthropic(api_key=...)`.
     3. Invoke the (injected or default) async ping. Auth-class exception →
        `ProviderAuthError`; anything else → `ProviderTransientError`.
@@ -297,7 +297,7 @@ async def construct_anthropic_adapter(
         `construct_openai_adapter` / `construct_ollama_adapter` (U-RT-18/19,
         which read `ollama_host` / `ollama_optional`).
     resolver :
-        `KeyringSecretResolver` built at stage 0 PREAMBLE (U-RT-06).
+        `ProviderSecretResolver` built at stage 0 PREAMBLE (U-RT-06/R-421).
         Provides the bootstrap-only `resolve_bootstrap_value` path.
     ping_override :
         Test-injection point. When `None`, the default ping calls
@@ -412,7 +412,7 @@ def _classify_openai_ping_failure(exc: BaseException) -> Exception:
 
 async def construct_openai_adapter(
     config: RuntimeConfig,
-    resolver: KeyringSecretResolver,
+    resolver: ProviderSecretResolver,
     *,
     ping_override: AsyncPing | None = None,
     client_factory: Callable[[str], AsyncOpenAI] | None = None,
@@ -514,7 +514,7 @@ def _classify_ollama_ping_failure(exc: BaseException) -> Exception:
 
 async def construct_ollama_adapter(
     config: RuntimeConfig,
-    resolver: KeyringSecretResolver | None = None,
+    resolver: ProviderSecretResolver | None = None,
     *,
     ping_override: AsyncPing | None = None,
     client_factory: Callable[[str | None], AsyncOllamaClient] | None = None,
@@ -629,7 +629,7 @@ async def _attempt_with_bounded_retry(
 
 async def materialize_provider_clients_stage(
     config: RuntimeConfig,
-    resolver: KeyringSecretResolver,
+    resolver: ProviderSecretResolver,
     *,
     anthropic_construct: Callable[[], Awaitable[ProviderClient]] | None = None,
     openai_construct: Callable[[], Awaitable[ProviderClient]] | None = None,
@@ -658,7 +658,7 @@ async def materialize_provider_clients_stage(
     config :
         Frozen `RuntimeConfig`. Drives `ollama_host` + `ollama_optional`.
     resolver :
-        Stage-0 `KeyringSecretResolver` (U-RT-06). Anthropic + OpenAI
+        Stage-0 `ProviderSecretResolver` (U-RT-06/R-421). Anthropic + OpenAI
         adapters consume it for the bootstrap-value path.
     anthropic_construct, openai_construct, ollama_construct :
         Test injection. When `None`, default to the per-provider construct
