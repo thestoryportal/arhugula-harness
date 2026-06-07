@@ -20,7 +20,11 @@ from harness_od.redaction_span_processor import (
     session_content_capture,
     session_content_capture_enabled,
 )
-from harness_od.redaction_tokenizer import InMemoryRedactionTokenMap, OpaqueRedactionTokenizer
+from harness_od.redaction_tokenizer import (
+    DeterministicRedactionClassifier,
+    InMemoryRedactionTokenMap,
+    OpaqueRedactionTokenizer,
+)
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
     SimpleSpanProcessor,
@@ -150,6 +154,35 @@ def test_on_end_tokenizes_content_attributes_when_tokenizer_configured() -> None
     assert record.raw_value == "PII content"
     assert record.trace_id == exported.context.trace_id.to_bytes(16, "big").hex()
     assert record.span_id == exported.context.span_id.to_bytes(8, "big").hex()
+
+
+def test_on_end_can_emit_category_specific_tokens() -> None:
+    """R-008 gate (b): classifier-backed token mode emits category labels."""
+    token_map = InMemoryRedactionTokenMap()
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(
+        RedactionSpanProcessor(
+            tokenizer=OpaqueRedactionTokenizer(
+                token_map=token_map,
+                classifier=DeterministicRedactionClassifier(),
+            )
+        )
+    )
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+    span = tracer.start_span("s")
+    span.set_attribute("gen_ai.input.messages", "customer ssn 123-45-6789")
+    span.end()
+
+    [exported] = exporter.get_finished_spans()
+    token = exported.attributes["gen_ai.input.messages"]
+    assert isinstance(token, str)
+    assert token.startswith("[REDACTED:PII:")
+    assert "123-45-6789" not in token
+
+    [record] = token_map.records
+    assert record.semantic_category == "PII"
 
 
 def test_solo_developer_capture_toggle_bypasses_tokenization() -> None:

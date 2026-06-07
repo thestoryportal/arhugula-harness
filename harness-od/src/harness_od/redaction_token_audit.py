@@ -50,6 +50,7 @@ def _redaction_token_attrs(record: RedactionTokenRecord, *, timestamp: str) -> d
         f"{REDACTION_TOKEN_AUDIT_NAMESPACE_PREFIX}.response": "token_mapped",
         f"{REDACTION_TOKEN_AUDIT_NAMESPACE_PREFIX}.timestamp": timestamp,
         f"{REDACTION_TOKEN_AUDIT_NAMESPACE_PREFIX}.token": record.token,
+        f"{REDACTION_TOKEN_AUDIT_NAMESPACE_PREFIX}.semantic_category": record.semantic_category,
         f"{REDACTION_TOKEN_AUDIT_NAMESPACE_PREFIX}.attribute_key": record.attribute_key,
         f"{REDACTION_TOKEN_AUDIT_NAMESPACE_PREFIX}.raw_value": raw_value,
         f"{REDACTION_TOKEN_AUDIT_NAMESPACE_PREFIX}.raw_value_sha256": hashlib.sha256(
