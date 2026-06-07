@@ -1172,10 +1172,10 @@ R-412-sandbox-tier-4-full-vm-execution:
 R-420-self-hosted-server-deployment-e2e:
   title: Exercise the harness at the SELF_HOSTED_SERVER deployment surface (real server + OTLP collector + tier secrets)
   surface: V
-  status: PROPOSED   # operator/infra-gated — requires a real long-running server, a real OTLP collector, and real keyring entries
+  status: RESOLVED   # closed by the local single-node SELF_HOSTED_SERVER daemon + collector + keyring live e2e
   depends_on: []
   blocks: [R-421-managed-cloud-deployment-e2e, R-430-otlp-collector-tail-keep-preservation]
-  posture: halt-route-to-operator   # needs operator infra provisioning before any execution
+  posture: phase-7
   scope: { files: [harness-runtime/**, deploy/**], contracts: [C-RT-29 §14.18 daemon mode, C-OD-09 §9.1], cross_axis: yes }
   skills: { primary: phase-7-implementation, secondary: [verify] }
   advisor_required: yes
@@ -1190,10 +1190,12 @@ R-420-self-hosted-server-deployment-e2e:
     non-mutating `just self-hosted-readiness --config <harness.toml>` probe now validates the static pre-e2e
     gates (SELF_HOSTED_SERVER config, real collector placement, OTLP endpoint, provider allowlist, tier backend
     selector) without starting the daemon or making network/secret calls. R-440 supplies the `self-hosted-keyring`
-    selector; the remaining R-420 gate is live infrastructure + actual secret material in the selected backend.
-    Codex gate logged 2026-06-07: resume with a SELF_HOSTED_SERVER `harness.toml`, non-IN_PROCESS collector
-    placement, OTLP endpoint, provider allowlist, `backend = "self-hosted-keyring"`, and real keyring entries;
-    then run readiness and the daemon e2e.
+    selector. Closed 2026-06-07 by the local single-node self-hosted bootstrap at `deploy/self-hosted-local/`:
+    Docker Compose runs OTel Collector Contrib + Tempo + Grafana, the harness daemon stays host-run,
+    `harness.selfhosted.local.example.toml` selects `SELF_HOSTED_BACKEND_COLLECTOR` + `self-hosted-keyring`,
+    the no-paid live workflow uses local Ollama plus a non-secret `r420_probe_key` sentinel in OS keyring, and
+    `just r420-self-hosted-live-e2e harness.selfhosted.local.toml` passed with workflow
+    `r420-self-hosted-tool-echo`, daemon status `success`, cost `0`, hosted-provider-calls `0`.
 
 R-421-managed-cloud-deployment-e2e:
   title: Exercise the harness at the MANAGED_CLOUD deployment surface (cloud secrets + FULL_VM provider class + managed collector)

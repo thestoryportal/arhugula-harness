@@ -152,6 +152,23 @@ def test_materialize_mcp_server_stage_returns_started_server() -> None:
     assert server._state == {}
 
 
+def test_materialize_mcp_server_stage_allows_uds_host_header() -> None:
+    """Daemon UDS transport arrives at FastMCP with Host `0.0.0.0`; keep DNS
+    rebinding protection enabled while allowing that local socket request."""
+    from harness_runtime.lifecycle.mcp_server import materialize_mcp_server_stage
+
+    server = materialize_mcp_server_stage(drain_timeout_seconds=30.0)
+    security = server.server.settings.transport_security
+
+    assert security.enable_dns_rebinding_protection is True
+    assert "127.0.0.1" in security.allowed_hosts
+    assert "0.0.0.0" in security.allowed_hosts
+    assert "0.0.0.0:*" in security.allowed_hosts
+    assert "127.0.0.1:*" in security.allowed_hosts
+    assert "localhost" in security.allowed_hosts
+    assert "localhost:*" in security.allowed_hosts
+
+
 def test_materialize_mcp_server_stage_registers_run_workflow_tool() -> None:
     """AC #3: the `run_workflow` MCP tool is discoverable on the FastMCP
     server after `materialize_mcp_server_stage()` completes.

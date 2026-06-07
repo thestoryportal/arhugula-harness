@@ -7,6 +7,7 @@ ACs per Phase 2 Session 3 Track A atomic decomposition §L6 U-RT-28:
      -> test_processor_uses_collector_config_batch_size_and_window
   #2 reachability matrix enforced.
      -> test_bootstrap_in_process_placement_passes_reachability
+     -> test_bootstrap_self_hosted_backend_collector_passes_reachability
      -> test_bootstrap_sidecar_placement_raises_reachability_error
      -> test_bootstrap_vendor_pipeline_placement_raises_reachability_error
      -> test_assert_otlp_reachable_table_covers_4_sandbox_tiers (canonical check)
@@ -137,6 +138,19 @@ def test_bootstrap_in_process_placement_passes_reachability(tmp_path: Path) -> N
     (TIER_1_PROCESS) per C-OD-20 §20.3 — materialize completes."""
     stage = materialize_span_processor_stage(
         _config(tmp_path, placement=CollectorPlacement.IN_PROCESS),
+        _provider(),
+        exporter=InMemorySpanExporter(),
+    )
+    assert isinstance(stage, SpanProcessorStage)
+
+
+def test_bootstrap_self_hosted_backend_collector_passes_reachability(
+    tmp_path: Path,
+) -> None:
+    """`SELF_HOSTED_BACKEND_COLLECTOR` is reachable from the host bootstrap
+    tier when the collector endpoint is operator-bound on host loopback."""
+    stage = materialize_span_processor_stage(
+        _config(tmp_path, placement=CollectorPlacement.SELF_HOSTED_BACKEND_COLLECTOR),
         _provider(),
         exporter=InMemorySpanExporter(),
     )

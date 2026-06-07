@@ -256,22 +256,25 @@ def test_status_refresh_with_dashboard_snapshot_counts_as_expected_lag(tmp_path:
     assert cg._lag_expected(repo)
 
 
-def test_dashboard_snapshot_normalization_ignores_only_live_head() -> None:
+def test_dashboard_snapshot_normalization_ignores_volatile_dashboard_fields() -> None:
     base = (
         b'<meta name="dashboard-live-head" content="abc123"/>'
-        b'const DATA = {"live_head": "abc123", "actions": [1]};'
+        b'const DATA = {"live_head": "abc123", "actions": [1], '
+        b'"cadence": [{"date": "2026-06-07", "count": 2}], "pr_cadence": []};'
     )
-    same_except_head = (
+    same_except_volatile = (
         b'<meta name="dashboard-live-head" content="def456"/>'
-        b'const DATA = {"live_head": "def456", "actions": [1]};'
+        b'const DATA = {"live_head": "def456", "actions": [1], '
+        b'"cadence": [{"date": "2026-06-07", "count": 3}], "pr_cadence": []};'
     )
     changed_payload = (
         b'<meta name="dashboard-live-head" content="def456"/>'
-        b'const DATA = {"live_head": "def456", "actions": [2]};'
+        b'const DATA = {"live_head": "def456", "actions": [2], '
+        b'"cadence": [{"date": "2026-06-07", "count": 3}], "pr_cadence": []};'
     )
 
     assert cg._normalize_dashboard_snapshot(base) == (
-        cg._normalize_dashboard_snapshot(same_except_head)
+        cg._normalize_dashboard_snapshot(same_except_volatile)
     )
     assert cg._normalize_dashboard_snapshot(base) != (
         cg._normalize_dashboard_snapshot(changed_payload)

@@ -4,7 +4,8 @@ Implements C-OD-20 §20.3 (per-sandbox-tier OTLP reachability per ADR-F4 v1.1
 §Consequences (b)(iv)). Each of the four 1-indexed sandbox-isolation tiers must
 reach the OTLP collector; the §20.3 reachability shape differs per tier:
 
-- ``TIER_1_PROCESS``  -> ``LOCALHOST_SOCKET``                       (in-process collector)
+- ``TIER_1_PROCESS``  -> ``LOCALHOST_SOCKET``                       (in-process
+  collector or operator-bound self-hosted backend collector on host loopback)
 - ``TIER_2_CONTAINER`` -> ``EXPLICIT_NETWORK_CONFIG``               (localhost socket OR
   ``host.docker.internal`` / sidecar)
 - ``TIER_3_MICROVM``  -> ``PER_MICROVM_AGENT_OR_EGRESS_ALLOWLIST``  (per-microVM agent
@@ -94,8 +95,8 @@ class OtlpReachabilityClass(StrEnum):
     """
 
     LOCALHOST_SOCKET = "LOCALHOST_SOCKET"
-    """§20.3 — Tier-1 process: in-process collector reached via localhost
-    socket; no per-tier egress required."""
+    """§20.3 — Tier-1 process: collector reached via localhost socket;
+    no per-tier sandbox egress required."""
 
     EXPLICIT_NETWORK_CONFIG = "EXPLICIT_NETWORK_CONFIG"
     """§20.3 — Tier-2 container: localhost socket OR explicit network-config
@@ -201,10 +202,20 @@ assert set(PER_SANDBOX_TIER_REACHABILITY) == set(SandboxTier), (
 
 
 #: The §20.3 collector placements that satisfy localhost-socket reachability for
-#: an in-process collector — Tier-1 process reaches an in-process collector via
-#: localhost socket (`IN_PROCESS`).
+#: an in-process collector.
 _LOCALHOST_SOCKET_PLACEMENTS: frozenset[CollectorPlacement] = frozenset(
     {CollectorPlacement.IN_PROCESS}
+)
+
+#: The §20.3 collector placements reachable by the Tier-1 bootstrap process
+#: without per-tier sandbox egress. In addition to an in-process collector, a
+#: solo self-hosted server deployment may bind the self-hosted backend collector
+#: on the host loopback interface (U-OD-28 cell-2 alternant).
+_TIER_1_PROCESS_REACHABLE_PLACEMENTS: frozenset[CollectorPlacement] = frozenset(
+    {
+        CollectorPlacement.IN_PROCESS,
+        CollectorPlacement.SELF_HOSTED_BACKEND_COLLECTOR,
+    }
 )
 
 #: The §20.3 collector placements reachable by an isolated container/VM tier —
@@ -246,8 +257,9 @@ def assert_otlp_reachable_from_sandbox(
     Reachability semantics per §20.3:
 
     - `TIER_1_PROCESS` requires localhost-socket reachability to an in-process
-      collector (`IN_PROCESS`); any other placement is an `IN_PROCESS`-absent
-      violation.
+      collector (`IN_PROCESS`) or to an operator-bound self-hosted backend
+      collector endpoint on host loopback; any other placement is a Tier-1
+      reachability violation.
     - `TIER_2_CONTAINER` / `TIER_3_MICROVM` / `TIER_4_FULL_VM` require network
       reachability to a non-in-process collector; `IN_PROCESS` placement alone
       does not give an isolated tier network reachability — that is a violation.
@@ -256,11 +268,12 @@ def assert_otlp_reachable_from_sandbox(
       to a private / vendor-managed collector endpoint (acc #6).
     """
     if sandbox_tier == SandboxTier.TIER_1_PROCESS:
-        if cell_placement not in _LOCALHOST_SOCKET_PLACEMENTS:
+        if cell_placement not in _TIER_1_PROCESS_REACHABLE_PLACEMENTS:
             raise ReachabilityViolation(
                 f"§20.3 reachability violated: {sandbox_tier} requires "
                 f"localhost-socket reachability to an in-process collector "
-                f"(CollectorPlacement.IN_PROCESS); cell placement is "
+                f"(CollectorPlacement.IN_PROCESS) or operator-bound self-hosted "
+                f"backend collector; cell placement is "
                 f"{cell_placement!r} (C-OD-20 §20.3)"
             )
         return None

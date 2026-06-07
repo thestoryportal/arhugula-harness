@@ -203,6 +203,29 @@ sandbox-host-check provider='r411-gvisor':
 self-hosted-readiness *args:
     uv run python tools/self_hosted_readiness.py {{args}}
 
+# Start the local R-420 SELF_HOSTED_SERVER telemetry backend:
+# OTel Collector Contrib + Tempo + Grafana. Requires Docker Desktop/daemon.
+r420-self-hosted-stack-up:
+    docker compose -f deploy/self-hosted-local/compose.yaml up -d
+
+# Stop and remove the local R-420 backend containers/network.
+r420-self-hosted-stack-down:
+    docker compose -f deploy/self-hosted-local/compose.yaml down
+
+# Show local R-420 backend container status.
+r420-self-hosted-stack-status:
+    docker compose -f deploy/self-hosted-local/compose.yaml ps
+
+# Static R-420 readiness for a copied self-hosted config. Does not start Docker,
+# the daemon, an OTLP probe, a secret fetch, or a provider call.
+r420-self-hosted-readiness config:
+    uv run python tools/self_hosted_readiness.py --config {{config}}
+
+# Live R-420 local e2e. Requires Docker stack up, local Ollama, and keyring
+# entries. No hosted-provider inference is performed by the default workflow.
+r420-self-hosted-live-e2e config:
+    uv run python tools/r420_self_hosted_live_e2e.py {{config}}
+
 # ─── operator dashboard (R-XI-01) ──────────────────────────────────────────
 #
 # Local view of the operator roadmap dashboard. Output goes to the gitignored

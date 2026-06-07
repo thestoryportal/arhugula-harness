@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import harness_runtime.cli.app as _ensure_import
@@ -148,6 +149,79 @@ def test_ac2_socket_path_override_threads_through(
     )
     assert result.exit_code == EXIT_SUCCESS
     assert captured["socket_path"] == socket_path
+
+
+@pytest.mark.asyncio
+async def test_dispatch_uses_loopback_nominal_url_for_uds_transport(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The UDS transport is the real connection path; the URL must still carry
+    an ASGI-accepted Host header to avoid HTTP 421 from the daemon app."""
+    import mcp
+    import mcp.client.streamable_http as streamable_http_mod
+
+    captured: dict[str, Any] = {}
+
+    class _FakeStreamableHTTPClient:
+        async def __aenter__(self) -> tuple[object, object, Any]:
+            return object(), object(), lambda: None
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    def _fake_streamable_http_client(
+        url: str,
+        *,
+        http_client: Any = None,
+        terminate_on_close: bool = True,
+    ) -> _FakeStreamableHTTPClient:
+        captured["url"] = url
+        captured["http_client"] = http_client
+        captured["terminate_on_close"] = terminate_on_close
+        return _FakeStreamableHTTPClient()
+
+    class _FakeClientSession:
+        def __init__(self, read_stream: object, write_stream: object) -> None:
+            captured["session_streams"] = (read_stream, write_stream)
+
+        async def __aenter__(self) -> _FakeClientSession:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def initialize(self) -> None:
+            captured["initialized"] = True
+
+        async def call_tool(self, name: str, arguments: dict[str, str]) -> Any:
+            captured["tool_name"] = name
+            captured["tool_arguments"] = arguments
+            return SimpleNamespace(
+                isError=False,
+                content=[SimpleNamespace(text='{"status":"success","workflow_id":"wf"}')],
+            )
+
+    monkeypatch.setattr(
+        streamable_http_mod,
+        "streamable_http_client",
+        _fake_streamable_http_client,
+    )
+    monkeypatch.setattr(mcp, "ClientSession", _FakeClientSession)
+
+    workflow = _write_yaml(tmp_path)
+    socket_path = tmp_path / "daemon.sock"
+    payload = await _cli_app_mod._daemon_client_dispatch(
+        workflow_file=workflow,
+        socket_path=socket_path,
+    )
+
+    assert payload["status"] == "success"
+    assert captured["url"] == _cli_app_mod._DAEMON_CLIENT_STREAMABLE_HTTP_URL
+    assert captured["url"] == "http://127.0.0.1/mcp"
+    assert captured["http_client"] is not None
+    assert captured["tool_name"] == "run_workflow"
+    assert captured["tool_arguments"] == {"workflow_id": str(workflow)}
 
 
 # ---------------------------------------------------------------------------

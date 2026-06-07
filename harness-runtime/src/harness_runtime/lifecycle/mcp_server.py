@@ -57,8 +57,24 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 _MANIFEST_PATH_SUFFIXES: frozenset[str] = frozenset({".yaml", ".yml", ".toml"})
+_HARNESS_MCP_ALLOWED_HOSTS: tuple[str, ...] = (
+    "127.0.0.1",
+    "127.0.0.1:*",
+    "localhost",
+    "localhost:*",
+    "[::1]",
+    "[::1]:*",
+    "0.0.0.0",
+    "0.0.0.0:*",
+)
+_HARNESS_MCP_ALLOWED_ORIGINS: tuple[str, ...] = (
+    "http://127.0.0.1:*",
+    "http://localhost:*",
+    "http://[::1]:*",
+)
 
 
 def _looks_like_manifest_path(workflow_id: str) -> bool:
@@ -226,7 +242,14 @@ def materialize_mcp_server_stage(
     # the closure lookup).
     from harness_cp.workflow_driver import execute_workflow as _execute_workflow
 
-    fastmcp = FastMCP(name="harness-runtime")
+    fastmcp = FastMCP(
+        name="harness-runtime",
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=list(_HARNESS_MCP_ALLOWED_HOSTS),
+            allowed_origins=list(_HARNESS_MCP_ALLOWED_ORIGINS),
+        ),
+    )
     workflow_registry: dict[str, Any] = {}
     state: dict[str, Any] = {}
 
