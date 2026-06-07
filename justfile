@@ -221,6 +221,18 @@ r420-self-hosted-stack-status:
 r420-self-hosted-readiness config:
     uv run python tools/self_hosted_readiness.py --config {{config}}
 
+# Static R-421 MANAGED_CLOUD readiness for an operator-provisioned cloud config.
+# Non-mutating: does not start the daemon, probe OTLP, fetch secrets, install
+# SDKs, or call managed-cloud/E2B APIs.
+r421-managed-cloud-readiness config *args:
+    uv run python tools/managed_cloud_readiness.py --config {{config}} {{args}}
+
+# Live R-421 hosted-sandbox candidate probe. Requires E2B_API_KEY and creates a
+# usage-billed E2B sandbox. Codex must get explicit operator approval before
+# running this command.
+r421-e2b-live-probe *args:
+    uv run --with e2b python tools/r421_e2b_live_probe.py {{args}}
+
 # Live R-420 local e2e. Requires Docker stack up, local Ollama, and keyring
 # entries. No hosted-provider inference is performed by the default workflow.
 r420-self-hosted-live-e2e config:

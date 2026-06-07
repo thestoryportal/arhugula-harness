@@ -1140,7 +1140,11 @@ R-411-sandbox-tier-3-microvm-execution:
     an OS/hardware isolation runtime for arbitrary TOOL_STEP execution. `just sandbox-host-check <provider>` is
     the non-mutating probe for the exact runtime boundary before opening the provider implementation. Current
     operator host grounding (macOS x86_64, no `/dev/kvm`) means no local R-411 provider e2e can honestly close
-    here without a compatible sandbox host/runtime.
+    here without a compatible sandbox host/runtime. Rechecked 2026-06-07 on this host: `r411-gvisor`,
+    `r411-kata`, `r411-shuru`, `r411-microsandbox`, and `r411-libkrun` all fail their host/runtime readiness
+    gates (`Darwin x86_64`; no runsc/kata/shuru/msb/libkrun; no `/dev/kvm`). The next genuine R-411 closure
+    path requires the operator to provide either a Linux host with the selected runtime/KVM where applicable,
+    or an Apple Silicon macOS host for Shuru/Microsandbox/libkrun-class evaluation.
 
 R-412-sandbox-tier-4-full-vm-execution:
   title: Real TIER_4 full-VM / firecracker sandbox execution (MANAGED_CLOUD-only provider class)
@@ -1217,7 +1221,13 @@ R-421-managed-cloud-deployment-e2e:
     E2B (`e2b-dev/e2b`) is a candidate managed-cloud sandbox provider to evaluate if the operator wants a hosted
     sandbox instead of provisioning the cloud substrate directly. It remains credential/remote-execution gated:
     `E2B_API_KEY` + Python SDK readiness can be checked locally with `just sandbox-host-check r421-e2b`, but no E2B
-    sandbox call should run without explicit approval.
+    sandbox call should run without explicit approval. The 2026-06-07 R-421 closure pass added
+    `just r421-managed-cloud-readiness <config> --hosted-sandbox-provider e2b`, an operator copy/edit template at
+    `deploy/managed-cloud/harness.managed-cloud.e2b.example.toml`, and a separate `just r421-e2b-live-probe`
+    command. Static readiness now proves the remaining hard gap precisely: the runtime has no landed
+    managed-cloud provider-secret backend (`ProviderSecretBackend` still exposes only local/env-fallback and
+    self-hosted-keyring selectors). The E2B live probe is ready to run once explicitly approved, but it only proves
+    the hosted sandbox candidate; it does not close the cloud-secret backend or managed collector requirements.
 
 R-430-otlp-collector-tail-keep-preservation:
   title: Verify tail-keep-on-classification preservation at a real OTLP collector boundary
