@@ -58,6 +58,7 @@ SECRET_VALUE_RE = re.compile(
 )
 DASHBOARD_JSON_LIVE_HEAD_RE = re.compile(rb'("live_head":\s*")[^"]*(")')
 DASHBOARD_META_LIVE_HEAD_RE = re.compile(rb'(<meta name="dashboard-live-head" content=")[^"]*(")')
+DASHBOARD_JSON_COMMIT_CADENCE_RE = re.compile(rb'("cadence":\s*)\[[^\]]*\](,\s*"pr_cadence")')
 
 
 @dataclass(frozen=True)
@@ -378,9 +379,10 @@ def _dashboard_snapshot_current(
 
 
 def _normalize_dashboard_snapshot(raw: bytes) -> bytes:
-    """Ignore volatile HEAD display text in committed dashboard snapshots."""
+    """Ignore volatile commit-derived instrumentation in dashboard snapshots."""
     raw = DASHBOARD_JSON_LIVE_HEAD_RE.sub(rb"\1<LIVE_HEAD>\2", raw, count=1)
-    return DASHBOARD_META_LIVE_HEAD_RE.sub(rb"\1<LIVE_HEAD>\2", raw, count=1)
+    raw = DASHBOARD_META_LIVE_HEAD_RE.sub(rb"\1<LIVE_HEAD>\2", raw, count=1)
+    return DASHBOARD_JSON_COMMIT_CADENCE_RE.sub(rb'\1[{"date":"<CADENCE>","count":0}]\2', raw)
 
 
 def derive(
