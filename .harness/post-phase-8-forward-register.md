@@ -119,8 +119,9 @@ The register has **two tiers**, kept distinct:
 
 ### B-6 · OTLP tail-keep preservation validation (R-430)
 - **What it is.** Verify the `§10.2` classification-trigger preservation semantic against a **real** OTLP collector (the drop/keep decision is collector-side).
-- **Current state.** `TailKeepSpanProcessor` buffer logic is in-process + bypassed at LOCAL by design (§9.1 head-based mandate); collector-side preservation is unverified. **This is the surface the OD-3 batch-51 audit reclassified *out* of the OD-3 retirement gate** (production-feature-validation, not an X-AL-2 criterion). R-420 now provides a local real-collector substrate for this validation.
-- **Close-out steps.** Against the R-420 local collector stack, assert classification-trigger spans survive tail-drop. **Council: no** (validation).
+- **Status.** CLOSED by this PR. `TailKeepSpanProcessor` buffer logic remains in-process + bypassed at LOCAL by design (§9.1 head-based mandate), but the preservation semantic is now exercised against the R-420 local real-collector substrate.
+- **Closure evidence.** `just r430-tail-keep-live-e2e harness.selfhosted.local.toml` passed against the local OTel Collector/Tempo stack: trigger trace `4972258a693b5d34c32c89ecd30749bc` exposed `r430.trigger.root` + `sandbox.violation` in Tempo, plain trace `364f9516e5f95cae58f4b44219981626` stayed absent through the negative window, and the command reported `trigger-trace-preserved=true`, `non-trigger-trace-exported=false`, `cost=0`, `hosted-provider-calls=0`.
+- **Residual.** None for R-430. Managed-cloud collector posture remains R-421 scope; multi-tenant/non-SOLO telemetry posture remains R-500 scope.
 
 ### B-7 · Tier-level self-hosted secrets backend selector (R-440)
 - **Status.** CLOSED by this PR. `ProviderSecretsConfig` now carries a `ProviderSecretBackend` selector. The default LOCAL path remains keyring + env fallback; `self-hosted-keyring` resolves through keyring only and disables ambient env fallback.

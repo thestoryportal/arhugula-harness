@@ -57,7 +57,17 @@ non-secret sentinel keyring entry, so it makes no hosted-provider call.
    just r420-self-hosted-live-e2e harness.selfhosted.local.toml
    ```
 
-9. Open Grafana at `http://127.0.0.1:3000`.
+9. Run the R-430 tail-keep collector proof against the same local stack:
+
+   ```sh
+   just r430-tail-keep-live-e2e harness.selfhosted.local.toml
+   ```
+
+   The command emits one `sandbox.violation` trace and one non-triggering
+   trace through the real OTLP collector. Passing output ends with
+   `trigger-trace-preserved=true` and `non-trigger-trace-exported=false`.
+
+10. Open Grafana at `http://127.0.0.1:3000`.
 
 Stop the backend with:
 
@@ -75,4 +85,6 @@ inference.
 
 This local stack is sufficient to close R-420 on a single operator machine
 when `just r420-self-hosted-live-e2e harness.selfhosted.local.toml` passes. It
-is not the R-421 managed-cloud substrate.
+also provides the local real-collector substrate for R-430 when
+`just r430-tail-keep-live-e2e harness.selfhosted.local.toml` passes. It is not
+the R-421 managed-cloud substrate.
