@@ -20,6 +20,7 @@ from tools.r421_managed_cloud_live_e2e import (
     R421LiveE2EError,
     _assert_deterministic_managed_cell,
     _assert_runtime_bootstrap_can_reach_collector,
+    _cloud_run_grpc_credentials,
     _fetch_cloud_run_id_token,
     _probe_endpoint,
     _run_hosted_e2b_probe,
@@ -183,3 +184,33 @@ def test_fetch_cloud_run_id_token_uses_gcloud_without_printing_token(monkeypatch
             "--impersonate-service-account=collector@example.iam.gserviceaccount.com",
         ]
     ]
+
+
+def test_cloud_run_grpc_credentials_attach_authorization_metadata(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "tools.r421_managed_cloud_live_e2e.grpc.ssl_channel_credentials",
+        lambda: "ssl-creds",
+    )
+
+    def fake_metadata_call_credentials(callback):  # type: ignore[no-untyped-def]
+        captured["callback"] = callback
+        return "call-creds"
+
+    monkeypatch.setattr(
+        "tools.r421_managed_cloud_live_e2e.grpc.metadata_call_credentials",
+        fake_metadata_call_credentials,
+    )
+    monkeypatch.setattr(
+        "tools.r421_managed_cloud_live_e2e.grpc.composite_channel_credentials",
+        lambda *creds: ("composite", creds),
+    )
+
+    credentials = _cloud_run_grpc_credentials("redacted-token")
+
+    assert credentials == ("composite", ("ssl-creds", "call-creds"))
+    callback = captured["callback"]
+    observed: list[object] = []
+    callback(None, lambda metadata, error: observed.append((metadata, error)))
+    assert observed == [((("authorization", "Bearer redacted-token"),), None)]

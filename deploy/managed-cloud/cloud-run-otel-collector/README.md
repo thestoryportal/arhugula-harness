@@ -29,7 +29,7 @@ CONFIG_SECRET=r421-otel-collector-config
 PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
 RUN_SA="$PROJECT_NUMBER-compute@developer.gserviceaccount.com"
 
-gcloud services enable run.googleapis.com secretmanager.googleapis.com cloudtrace.googleapis.com \
+gcloud services enable run.googleapis.com secretmanager.googleapis.com cloudtrace.googleapis.com iamcredentials.googleapis.com \
   --project="$PROJECT_ID"
 ```
 
@@ -62,6 +62,10 @@ gcloud iam service-accounts add-iam-policy-binding "$RUN_SA" \
   --project="$PROJECT_ID"
 ```
 
+For local proof runs, treat the Service Account Token Creator binding as
+temporary and remove it after the run if ongoing local impersonation is not
+needed.
+
 Deploy the authenticated collector:
 
 ```bash
@@ -82,12 +86,18 @@ gcloud run deploy "$SERVICE" \
   --project="$PROJECT_ID"
 ```
 
-Grant the active operator account permission to invoke the authenticated
-collector:
+Grant the active operator account and the impersonated runtime service account
+permission to invoke the authenticated collector:
 
 ```bash
 gcloud run services add-iam-policy-binding "$SERVICE" \
   --member=user:storyportalrobert@gmail.com \
+  --role=roles/run.invoker \
+  --region="$REGION" \
+  --project="$PROJECT_ID"
+
+gcloud run services add-iam-policy-binding "$SERVICE" \
+  --member="serviceAccount:$RUN_SA" \
   --role=roles/run.invoker \
   --region="$REGION" \
   --project="$PROJECT_ID"

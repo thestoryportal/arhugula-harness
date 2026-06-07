@@ -29,6 +29,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
+import grpc
 from harness_core import DeploymentSurface, PersonaTier
 from harness_od.base_rate_set_and_envelope import PER_CELL_BASE_RATE_ENVELOPE
 from harness_od.observability_matrix import CellID
@@ -220,6 +221,16 @@ def _fetch_cloud_run_id_token(
     return token
 
 
+def _cloud_run_grpc_credentials(token: str) -> grpc.ChannelCredentials:
+    def metadata_callback(_context: Any, callback: Any) -> None:
+        callback((("authorization", f"Bearer {token}"),), None)
+
+    return grpc.composite_channel_credentials(
+        grpc.ssl_channel_credentials(),
+        grpc.metadata_call_credentials(metadata_callback),
+    )
+
+
 def _emit_authenticated_trigger_trace(
     config: Any,
     *,
@@ -240,7 +251,7 @@ def _emit_authenticated_trigger_trace(
     provider_stage = materialize_tracer_provider_stage(config, register_globally=False)
     exporter = OTLPSpanExporter(
         endpoint=config.otel.otlp_endpoint,
-        headers={"authorization": f"Bearer {token}"},
+        credentials=_cloud_run_grpc_credentials(token),
     )
     processor_stage = materialize_span_processor_stage(
         config,

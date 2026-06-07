@@ -1153,7 +1153,7 @@ R-411-sandbox-tier-3-microvm-execution:
 R-412-sandbox-tier-4-full-vm-execution:
   title: Real TIER_4 full-VM / firecracker sandbox execution (MANAGED_CLOUD-only provider class)
   surface: V
-  status: DEFERRED   # operator 2026-06-07: no managed cloud setup; firecracker/full-VM remains R-421-gated
+  status: DEFERRED   # R-421 managed cloud is proven; full-VM provider execution still gates on R-411/provider host fit
   depends_on: [R-411-sandbox-tier-3-microvm-execution, R-421-managed-cloud-deployment-e2e]
   blocks: []
   posture: phase-7
@@ -1168,8 +1168,9 @@ R-412-sandbox-tier-4-full-vm-execution:
     Top of the tier ladder. The 12-cell deployment_matrix.py reserves FULL_VM exclusively for MANAGED_CLOUD; this
     row therefore co-gates on R-421 (a real MANAGED_CLOUD surface). Deferred-far per ADR-D2 graduated-isolation.
     Firecracker is the correct setup direction for this FULL_VM lane, not for R-411. Upstream Firecracker requires
-    a Linux host with KVM and read/write `/dev/kvm`; the current macOS host has no `/dev/kvm`, and the operator has
-    no managed-cloud surface yet. QEMU's `microvm` machine type is also tracked here as `r412-qemu-microvm`: it is
+    a Linux host with KVM and read/write `/dev/kvm`; the current macOS host has no `/dev/kvm`. R-421 now proves the
+    selected managed-cloud deployment surface, but this row still needs a full-VM provider implementation/runtime
+    path. QEMU's `microvm` machine type is also tracked here as `r412-qemu-microvm`: it is
     Firecracker-inspired, minimalist, and host-gated on Linux x86_64 + KVM + `qemu-system-x86_64`, with per-run
     kernel/rootfs artifacts still required beyond the host probe. The repo now carries `just sandbox-host-check
     r412-firecracker|r412-qemu-microvm` so a future Linux KVM / managed-cloud host can be verified before
@@ -1208,7 +1209,7 @@ R-420-self-hosted-server-deployment-e2e:
 R-421-managed-cloud-deployment-e2e:
   title: Exercise the harness at the MANAGED_CLOUD deployment surface (cloud secrets + FULL_VM provider class + managed collector)
   surface: V
-  status: PROPOSED   # operator/infra-gated — requires a real managed-cloud environment
+  status: RESOLVED   # closed by approved E2B + GCP Secret Manager + Cloud Run collector live e2e
   depends_on: [R-420-self-hosted-server-deployment-e2e]
   blocks: [R-412-sandbox-tier-4-full-vm-execution]
   posture: halt-route-to-operator
@@ -1251,10 +1252,17 @@ R-421-managed-cloud-deployment-e2e:
     host-process bootstrap, while the E2B/FULL_VM managed-cloud template declares `tier-4-full-vm` so
     C-OD-20 reachability is checked against the actual network-capable bootstrap tier instead of weakening
     Tier-1. The readiness and live e2e gates now fail fast on stale Tier-1 + `VENDOR_PIPELINE` bindings before
-    creating another E2B sandbox. R-421 remains PROPOSED until the approved live e2e is rerun and proves
-    hosted E2B execution, authenticated managed OTLP export, and Cloud Trace visibility end to end. The temporary
-    `roles/iam.serviceAccountTokenCreator` grant used for ID-token diagnosis was removed after the prior failed
-    authenticated OTLP attempt.
+    creating another E2B sandbox. Closed 2026-06-07 by the approved live e2e against
+    `/private/tmp/r421-managed-cloud.live.toml`: static readiness passed after binding
+    `bootstrap_sandbox_tier = "tier-4-full-vm"`; `e2b-secret` resolved through GCP Secret Manager without printing
+    the secret; the hosted E2B sandbox ran the deterministic `r421-e2b-ok` command; authenticated OTLP export to
+    Cloud Run used a short-lived impersonated service-account ID token carried as gRPC call credentials; and
+    Cloud Trace observed trace `d848a4da6622f42407a5e58c507513c5` with spans `r421.managed_cloud.root` and
+    `sandbox.violation`. The R-421 closure also enabled `iamcredentials.googleapis.com`, granted the impersonated
+    compute service account Cloud Run Invoker on the collector service, and fixed the live e2e tool so future
+    authenticated gRPC exports do not drop the Authorization metadata. The temporary local
+    `roles/iam.serviceAccountTokenCreator` binding used for the proof was removed and verified absent after the
+    live run. R-412 remains deferred on the separate full-VM/provider host-fit implementation path.
 
 R-430-otlp-collector-tail-keep-preservation:
   title: Verify tail-keep-on-classification preservation at a real OTLP collector boundary
