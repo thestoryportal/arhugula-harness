@@ -1239,8 +1239,8 @@ R-421-managed-cloud-deployment-e2e:
     The approved E2B live probe passed this session, and static readiness now passes for the selected GCP backend
     shape without daemon start, OTLP probe, secret fetch, SDK install, or managed-cloud provider call. The next
     closure slice is a gated live e2e only after the operator provisions GCP credentials, the
-    `google-cloud-secret-manager` SDK, the named Secret Manager entries, a non-loopback managed OTLP endpoint,
-    and a cost-approved collector.
+    `google-cloud-secret-manager` SDK, the named Secret Manager entries following the `servicename-secret`
+    convention (starting with `e2b-secret`), a non-loopback managed OTLP endpoint, and a cost-approved collector.
 
 R-430-otlp-collector-tail-keep-preservation:
   title: Verify tail-keep-on-classification preservation at a real OTLP collector boundary

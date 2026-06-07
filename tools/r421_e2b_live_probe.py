@@ -13,7 +13,16 @@ import importlib
 import os
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
+
+from harness_runtime.config.provider_secrets import (
+    SecretResolutionError,
+    make_provider_secret_resolver,
+)
+from harness_runtime.config_source import RuntimeConfigLoadError, RuntimeConfigSource
+
+E2B_SECRET_NAME = "e2b-secret"
 
 
 class LiveProbeError(RuntimeError):
@@ -36,6 +45,26 @@ def _load_sandbox_class() -> Any:
     if sandbox_cls is None:
         raise LiveProbeError("Python module 'e2b' does not expose Sandbox")
     return sandbox_cls
+
+
+def resolve_e2b_secret_from_config(config_file: Path, *, secret_name: str) -> str:
+    """Resolve the E2B API key through the configured provider-secret backend."""
+    try:
+        config = RuntimeConfigSource.load(config_file=config_file)
+        resolver = make_provider_secret_resolver(config.provider_secrets)
+        value = resolver.resolve_bootstrap_value(secret_name)
+    except RuntimeConfigLoadError as exc:
+        raise LiveProbeError(f"runtime config load failed: {exc}") from exc
+    except SecretResolutionError as exc:
+        raise LiveProbeError(f"provider-secret resolution failed: {exc}") from exc
+    except Exception as exc:  # pragma: no cover - backend SDK/runtime boundary
+        raise LiveProbeError(
+            f"provider-secret backend failed for {secret_name!r}: {type(exc).__name__}"
+        ) from exc
+
+    if not value:
+        raise LiveProbeError(f"provider-secret backend returned an empty value for {secret_name!r}")
+    return value
 
 
 def _result_stdout(result: Any) -> str:
@@ -71,11 +100,54 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--sandbox-timeout", type=int, default=60)
     parser.add_argument("--command-timeout", type=int, default=15)
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help=(
+            "Runtime config whose provider_secrets backend should supply E2B_API_KEY "
+            "when the environment variable is absent."
+        ),
+    )
+    parser.add_argument(
+        "--secret-name",
+        default=E2B_SECRET_NAME,
+        help=f"Provider-secret name to resolve from --config. Defaults to {E2B_SECRET_NAME}.",
+    )
+    parser.add_argument(
+        "--resolve-only",
+        action="store_true",
+        help=(
+            "Resolve the E2B API key from the configured backend, then exit "
+            "without creating an E2B sandbox."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not os.environ.get("E2B_API_KEY"):
-        print("R-421 E2B live probe failed: E2B_API_KEY is not set", file=sys.stderr)
-        return 1
+        if args.config is None:
+            print(
+                "R-421 E2B live probe failed: E2B_API_KEY is not set and --config was not provided",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            os.environ["E2B_API_KEY"] = resolve_e2b_secret_from_config(
+                args.config,
+                secret_name=args.secret_name,
+            )
+        except LiveProbeError as exc:
+            print(f"R-421 E2B live probe failed: {exc}", file=sys.stderr)
+            return 1
+        _print_step(
+            f"resolved {args.secret_name} from configured provider-secret backend (redacted)"
+        )
+    else:
+        _print_step("using E2B_API_KEY from environment")
+
+    if args.resolve_only:
+        _print_step("resolve-only completed: no hosted E2B sandbox was created")
+        return 0
 
     try:
         sandbox_cls = _load_sandbox_class()

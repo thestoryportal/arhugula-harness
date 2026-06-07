@@ -35,6 +35,7 @@ What this module ships at L0:
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Mapping
 from enum import Enum, StrEnum
 from pathlib import Path
@@ -319,6 +320,9 @@ class ProviderSecretBackend(StrEnum):
     GCP_SECRET_MANAGER = "gcp-secret-manager"
 
 
+_GCP_PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
+
+
 class ProviderSecretsConfig(BaseModel):
     """Provider-secret config — U-RT-06 (L1).
 
@@ -363,6 +367,21 @@ class ProviderSecretsConfig(BaseModel):
         if not stripped:
             raise ValueError("gcp_secret_version must be non-empty")
         return stripped
+
+    @field_validator("gcp_project_id")
+    @classmethod
+    def _gcp_project_id_is_resource_identifier(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            return stripped
+        if stripped.isdecimal() or _GCP_PROJECT_ID_RE.fullmatch(stripped):
+            return stripped
+        raise ValueError(
+            "gcp_project_id must be a Google Cloud project ID or numeric project number; "
+            "do not use the display name such as 'My First Project'"
+        )
 
     @model_validator(mode="after")
     def _require_gcp_project_for_gcp_backend(self) -> Self:

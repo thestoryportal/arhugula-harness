@@ -124,6 +124,32 @@ def test_gcp_secret_manager_backend_requires_project_id() -> None:
     assert "gcp_project_id is required" in str(excinfo.value)
 
 
+def test_gcp_secret_manager_backend_rejects_project_display_name() -> None:
+    """R-421: use the GCP project ID/number, not the display name."""
+    with pytest.raises(ValidationError) as excinfo:
+        ProviderSecretsConfig(
+            backend=ProviderSecretBackend.GCP_SECRET_MANAGER,
+            gcp_project_id="My First Project",
+        )
+
+    assert "project ID or numeric project number" in str(excinfo.value)
+
+
+def test_gcp_secret_manager_backend_accepts_project_id_and_number() -> None:
+    """R-421: Secret Manager resource paths accept IDs or project numbers."""
+    by_id = ProviderSecretsConfig(
+        backend=ProviderSecretBackend.GCP_SECRET_MANAGER,
+        gcp_project_id="project-ba535aa4-f08d-46b2-ba6",
+    )
+    by_number = ProviderSecretsConfig(
+        backend=ProviderSecretBackend.GCP_SECRET_MANAGER,
+        gcp_project_id="123456789012",
+    )
+
+    assert by_id.gcp_project_id == "project-ba535aa4-f08d-46b2-ba6"
+    assert by_number.gcp_project_id == "123456789012"
+
+
 # ---------------------------------------------------------------------------
 # Resolver construction.
 # ---------------------------------------------------------------------------
@@ -449,11 +475,11 @@ def test_gcp_secret_manager_resolve_honors_allowlist() -> None:
     """R-421: GCP-backed SecretRef resolution preserves AS allowlist checks."""
 
     def accessor(resource_name: str) -> str:
-        assert resource_name == "projects/harness-test-project/secrets/e2b_api_key/versions/5"
+        assert resource_name == "projects/harness-test-project/secrets/e2b-secret/versions/5"
         return "e2b-secret-value"
 
     scope = _scope("r421-managed-cloud")
-    entry = SecretAllowlistEntry(name="e2b_api_key", scope=scope)
+    entry = SecretAllowlistEntry(name="e2b-secret", scope=scope)
     resolver = make_keyring_resolver(
         ProviderSecretsConfig(
             backend=ProviderSecretBackend.GCP_SECRET_MANAGER,
@@ -465,9 +491,9 @@ def test_gcp_secret_manager_resolve_honors_allowlist() -> None:
     )
     tool = _tool_with_allowed_secrets(entry)
 
-    ref = resolver.resolve("e2b_api_key", scope, SandboxTier.TIER_2_CONTAINER, tool=tool)
+    ref = resolver.resolve("e2b-secret", scope, SandboxTier.TIER_2_CONTAINER, tool=tool)
 
-    assert ref.name == "e2b_api_key"
+    assert ref.name == "e2b-secret"
     assert ref.scope == scope
     assert ref.tier is SandboxTier.TIER_2_CONTAINER
 

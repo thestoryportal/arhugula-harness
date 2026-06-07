@@ -1,8 +1,11 @@
 # R-421 MANAGED_CLOUD runtime template for the E2B + GCP candidate.
 #
-# Replace `/absolute/path/to/arhugula-v2`, `your-gcp-project-id`, and the OTLP
-# endpoint with real managed-cloud values before running readiness. Static
-# readiness does not fetch secrets, create an E2B sandbox, or probe OTLP.
+# Replace `/absolute/path/to/arhugula-v2`, `your-gcp-project-id-or-number`,
+# and the OTLP endpoint with real managed-cloud values before running
+# readiness. Use the canonical Google Cloud project ID or numeric project
+# number, not the display name shown in the console (for example, not
+# "My First Project"). Static readiness does not fetch secrets, create an E2B
+# sandbox, or probe OTLP.
 
 [runtime]
 deployment_surface = "managed-cloud"
@@ -15,12 +18,12 @@ ollama_optional = true
 
 [runtime.provider_secrets]
 backend = "gcp-secret-manager"
-gcp_project_id = "your-gcp-project-id"
+gcp_project_id = "your-gcp-project-id-or-number"
 gcp_secret_version = "latest"
 keyring_service = "harness"
 
 [[runtime.provider_secrets.operator_allowlist]]
-name = "e2b_api_key"
+name = "e2b-secret"
 scope = { name = "r421-managed-cloud" }
 
 [runtime.otel]

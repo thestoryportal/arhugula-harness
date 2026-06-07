@@ -27,6 +27,8 @@ from harness_od.per_cell_collector_placement_matrix import (
 from harness_runtime.config_source import RuntimeConfigLoadError, RuntimeConfigSource
 from harness_runtime.types import ProviderSecretBackend, RuntimeConfig
 
+E2B_SECRET_NAME = "e2b-secret"
+
 
 @dataclass(frozen=True)
 class CheckResult:
@@ -160,15 +162,15 @@ def _e2b_candidate_check(config: RuntimeConfig, *, provider: str | None) -> Chec
         )
 
     has_key = any(
-        entry.name == "e2b_api_key" for entry in config.provider_secrets.operator_allowlist
+        entry.name == E2B_SECRET_NAME for entry in config.provider_secrets.operator_allowlist
     )
     return CheckResult(
         name="hosted-sandbox-provider",
         ok=has_key,
         detail=(
-            "E2B selected and provider_secrets.operator_allowlist includes e2b_api_key"
+            f"E2B selected and provider_secrets.operator_allowlist includes {E2B_SECRET_NAME}"
             if has_key
-            else "E2B selected but provider_secrets.operator_allowlist lacks e2b_api_key"
+            else f"E2B selected but provider_secrets.operator_allowlist lacks {E2B_SECRET_NAME}"
         ),
     )
 
@@ -256,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def e2b_secret_allowlist_entry() -> SecretAllowlistEntry:
     """Return the convention used by the R-421 E2B config template/tests."""
-    return SecretAllowlistEntry(name="e2b_api_key", scope=SecretScope(name="r421-managed-cloud"))
+    return SecretAllowlistEntry(name=E2B_SECRET_NAME, scope=SecretScope(name="r421-managed-cloud"))
 
 
 if __name__ == "__main__":

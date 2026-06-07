@@ -36,6 +36,8 @@ dependencies = [
     "mcp>=1.2",
     # OS keyring (ADR-F5 v1.1). Resolver driver lands at U-RT-06.
     "keyring>=25.5",
+    # GCP Secret Manager backend for R-421 MANAGED_CLOUD provider secrets.
+    "google-cloud-secret-manager>=2.0",
     # OTel — TracerProvider + BSP + OTLP exporter lifecycle at L6 (U-RT-27/28/29).
     "opentelemetry-api>=1.30",
     "opentelemetry-sdk>=1.30",

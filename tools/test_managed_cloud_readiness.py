@@ -132,7 +132,7 @@ def test_e2b_candidate_requires_named_allowlist_entry(tmp_path: Path) -> None:
 
     assert checks["provider-secret-allowlist"].ok is False
     assert checks["hosted-sandbox-provider"].ok is False
-    assert "e2b_api_key" in checks["hosted-sandbox-provider"].detail
+    assert "e2b-secret" in checks["hosted-sandbox-provider"].detail
 
 
 def test_managed_cloud_readiness_loads_config_file(tmp_path: Path) -> None:
@@ -156,7 +156,7 @@ gcp_project_id = "harness-test-project"
 keyring_service = "harness"
 
 [[runtime.provider_secrets.operator_allowlist]]
-name = "e2b_api_key"
+name = "e2b-secret"
 scope = {{ name = "r421-managed-cloud" }}
 """.strip(),
         encoding="utf-8",
