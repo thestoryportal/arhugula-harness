@@ -1918,16 +1918,16 @@ R-300-multi-llm-second-provider:
 
 ### 5.11 Multi-tenant (R-500..R-599) — Surface VI
 
-*Decomposed 2026-06-01 from register §B-8 (discharges §9 Surface VI; the §VI trigger fired 2026-06-01 per §5.5). OD-4 per-session-toggle/tokenization is tracked separately at R-008. Fields plumbed (tenant_id + persona_tier); base-rate envelope + multi-tenant non-toggleability live; UNEXERCISED (SOLO×LOCAL only at MVP).*
+*Decomposed 2026-06-01 from register §B-8 (discharges §9 Surface VI; the §VI trigger fired 2026-06-01 per §5.5). OD-4 per-session-toggle/tokenization is tracked separately at R-008. Fields plumbed (tenant_id + persona_tier); base-rate envelope + multi-tenant non-toggleability live; exercised at SELF_HOSTED_SERVER by the R-500 local multi-tenant proof.*
 
 ```yaml
 R-500-multi-tenant-deployment:
   title: Non-default tenant_id / non-SOLO persona_tier deployment exercise
   surface: VI
-  status: PROPOSED
+  status: RESOLVED
   depends_on: [R-420-self-hosted-server-deployment-e2e]
   blocks: []
-  posture: halt-route-to-operator
+  posture: phase-7
   scope: { files: [harness-runtime/src/harness_runtime/lifecycle/tracer_provider.py, harness-runtime/src/harness_runtime/lifecycle/span_processor.py, harness-od/src/**], contracts: [C-OD-10 §10.3, C-OD-13 §13.1, ADR-D5, ADR-D6], cross_axis: yes }
   skills: { primary: phase-7-implementation, secondary: [] }
   advisor_required: yes
@@ -1935,7 +1935,17 @@ R-500-multi-tenant-deployment:
   verification: { shape: e2e, must_pass: ["deploy with non-None tenant_id + non-SOLO persona_tier at a non-LOCAL surface", "§10.3 base_rate envelope + §13.1 redaction gradient behave per spec under real multi-tenant load", "audit-ledger separated by tenant_id"] }
   close_shape: { type: PR-merge, artifact: "feat(multitenant): non-SOLO persona_tier deployment", cascade: [] }
   next_pointer: null
-  notes: tenant_id + persona_tier plumbed (types.py); MultiTenantOverrideRefusedError enforces non-toggleability; PER_PERSONA_TIER_REDACTION present-not-driven. Register §B-8.
+  notes: >
+    Closed by the R-500 self-hosted live proof against the R-420 local OTel Collector/Tempo stack.
+    RuntimeConfig.tenant_id now materializes as authoritative tenant.id OTel resource attr;
+    `just r500-multitenant-live-e2e harness.selfhosted.local.toml` overlays two non-default tenants
+    with `multi-tenant-compliance`, verifies base_rate=0.2, confirms non-toggleable redaction
+    strips content before Tempo while preserving structure attributes, and proves
+    `RuntimeAuditLedgerWriter.read_for_tenant()` separation. Closure evidence 2026-06-07:
+    tenant A trace `5c0e5916bf84933296323f2038c6680b`, tenant B trace
+    `a847370bbc76adc41b85e3328d3279aa`, `tenant-resource-separated=true`,
+    `content-redacted=true`, `audit-ledger-separated=true`, `cost=0`, `hosted-provider-calls=0`.
+    Register §B-8.
 ```
 
 ### 5.12 External integrations (R-800..R-899) — Surface IX

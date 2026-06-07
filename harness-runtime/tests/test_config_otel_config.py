@@ -118,6 +118,24 @@ def test_resource_attrs_include_operator_additions() -> None:
     assert attrs["service.version"] == "0.0.0"
 
 
+def test_resource_attrs_include_tenant_id_when_present() -> None:
+    """`tenant.id` carries the deployment tenant key for multi-tenant cells."""
+    cfg = OTelConfig(otlp_endpoint="http://localhost:4318")
+    attrs = build_resource_attributes(
+        cfg,
+        DeploymentSurface.SELF_HOSTED_SERVER,
+        tenant_id="tenant-a",
+    )
+    assert attrs["tenant.id"] == "tenant-a"
+
+
+def test_resource_attrs_omit_tenant_id_when_absent() -> None:
+    """Single-tenant deployments do not emit a synthetic `tenant.id`."""
+    cfg = OTelConfig(otlp_endpoint="http://localhost:4318")
+    attrs = build_resource_attributes(cfg, DeploymentSurface.SELF_HOSTED_SERVER)
+    assert "tenant.id" not in attrs
+
+
 def test_operator_additions_override_defaults() -> None:
     """Operator-supplied `deployment.surface` overrides the derived default."""
     cfg = OTelConfig(
@@ -126,6 +144,20 @@ def test_operator_additions_override_defaults() -> None:
     )
     attrs = build_resource_attributes(cfg, DeploymentSurface.LOCAL_DEVELOPMENT)
     assert attrs["deployment.surface"] == "operator-override"
+
+
+def test_runtime_tenant_id_overrides_operator_tenant_attr() -> None:
+    """`RuntimeConfig.tenant_id` is authoritative over extra resource attrs."""
+    cfg = OTelConfig(
+        otlp_endpoint="http://localhost:4318",
+        additional_resource_attrs=(("tenant.id", "operator-override"),),
+    )
+    attrs = build_resource_attributes(
+        cfg,
+        DeploymentSurface.SELF_HOSTED_SERVER,
+        tenant_id="runtime-tenant",
+    )
+    assert attrs["tenant.id"] == "runtime-tenant"
 
 
 def test_resource_attrs_row_count() -> None:

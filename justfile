@@ -231,6 +231,11 @@ r420-self-hosted-live-e2e config:
 r430-tail-keep-live-e2e config:
     uv run --package harness-runtime python tools/r430_tail_keep_collector_live_e2e.py {{config}}
 
+# Live R-500 multi-tenant self-hosted proof. Requires the R-420 backend stack.
+# Emits no hosted-provider calls; only OTLP/Tempo localhost traffic and a temp ledger.
+r500-multitenant-live-e2e config:
+    uv run --package harness-runtime python tools/r500_multitenant_selfhosted_live_e2e.py {{config}}
+
 # ─── operator dashboard (R-XI-01) ──────────────────────────────────────────
 #
 # Local view of the operator roadmap dashboard. Output goes to the gitignored

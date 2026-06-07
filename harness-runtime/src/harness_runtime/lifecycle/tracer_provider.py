@@ -213,7 +213,11 @@ def materialize_tracer_provider_stage(
     global _registered_by_runtime
 
     try:
-        attrs = build_resource_attributes(config.otel, config.deployment_surface)
+        attrs = build_resource_attributes(
+            config.otel,
+            config.deployment_surface,
+            tenant_id=config.tenant_id,
+        )
         if sampler is not None:
             resolved_sampler = sampler
         else:

@@ -67,7 +67,19 @@ non-secret sentinel keyring entry, so it makes no hosted-provider call.
    trace through the real OTLP collector. Passing output ends with
    `trigger-trace-preserved=true` and `non-trigger-trace-exported=false`.
 
-10. Open Grafana at `http://127.0.0.1:3000`.
+10. Run the R-500 multi-tenant self-hosted proof against the same local stack:
+
+   ```sh
+   just r500-multitenant-live-e2e harness.selfhosted.local.toml
+   ```
+
+   The command overlays two non-default `tenant_id` values and
+   `multi-tenant-compliance` onto the config, emits `audit.*` traces through
+   the real OTLP collector, and exercises a temporary tenant-scoped audit
+   ledger. Passing output ends with `tenant-resource-separated=true`,
+   `content-redacted=true`, and `audit-ledger-separated=true`.
+
+11. Open Grafana at `http://127.0.0.1:3000`.
 
 Stop the backend with:
 
@@ -86,5 +98,6 @@ inference.
 This local stack is sufficient to close R-420 on a single operator machine
 when `just r420-self-hosted-live-e2e harness.selfhosted.local.toml` passes. It
 also provides the local real-collector substrate for R-430 when
-`just r430-tail-keep-live-e2e harness.selfhosted.local.toml` passes. It is not
-the R-421 managed-cloud substrate.
+`just r430-tail-keep-live-e2e harness.selfhosted.local.toml` passes, and for
+R-500 when `just r500-multitenant-live-e2e harness.selfhosted.local.toml`
+passes. It is not the R-421 managed-cloud substrate.

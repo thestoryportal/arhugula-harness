@@ -29,7 +29,7 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
-from harness_core import DeploymentSurface
+from harness_core import DeploymentSurface, PersonaTier
 from harness_cp.topology_pattern import TopologyPattern
 from harness_runtime.lifecycle.tracer_provider import (
     TracerProviderConcurrentRegistrationError,
@@ -63,11 +63,15 @@ def _config(
     tmp_path: Path,
     *,
     deployment_surface: DeploymentSurface = DeploymentSurface.LOCAL_DEVELOPMENT,
+    persona_tier: PersonaTier = PersonaTier.SOLO_DEVELOPER,
+    tenant_id: str | None = None,
     additional_attrs: tuple[tuple[str, str], ...] = (),
 ) -> RuntimeConfig:
     """Build a minimal `RuntimeConfig` for materialize tests."""
     return RuntimeConfig(
         deployment_surface=deployment_surface,
+        tenant_id=tenant_id,
+        persona_tier=persona_tier,
         repository_root=tmp_path,
         path_bindings=PathBindingConfig(),
         provider_secrets=ProviderSecretsConfig(),
@@ -146,6 +150,34 @@ def test_provider_resource_honors_additional_resource_attrs(tmp_path: Path) -> N
     attrs = stage.provider.resource.attributes
     assert attrs.get("service.name") == "test-harness"
     assert attrs.get("service.version") == "0.1.0-test"
+
+
+def test_provider_resource_carries_runtime_tenant_id(tmp_path: Path) -> None:
+    """A configured tenant is emitted as the C-OD-21 `tenant.id` resource attr."""
+    stage = materialize_tracer_provider_stage(
+        _config(
+            tmp_path,
+            deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER,
+            tenant_id="tenant-a",
+        ),
+        register_globally=False,
+    )
+    attrs = stage.provider.resource.attributes
+    assert attrs.get("tenant.id") == "tenant-a"
+
+
+def test_provider_uses_multi_tenant_self_hosted_base_rate(tmp_path: Path) -> None:
+    """MTC x SELF_HOSTED materialization binds the §10.3 default base_rate."""
+    stage = materialize_tracer_provider_stage(
+        _config(
+            tmp_path,
+            deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER,
+            persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+            tenant_id="tenant-a",
+        ),
+        register_globally=False,
+    )
+    assert "base_rate=0.2" in stage.provider.sampler.get_description()
 
 
 # ---------------------------------------------------------------------------
