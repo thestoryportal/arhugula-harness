@@ -42,9 +42,9 @@ The register has **two tiers**, kept distinct:
 | B-2 | ~~closed~~ | IV Multi-LLM | ~~Multi-provider credentials + mixed-provider exercise~~ | **R-300 second-provider exercise RESOLVED** — deterministic fallback + live Anthropic→OpenAI (#281) + live Ollama (#283) | PR #281 + PR #283 | no |
 | B-3 | ~~closed~~ | V Deployment | ~~Real TIER_2 container sandbox execution (R-410)~~ | **R-410 RESOLVED by local Docker execution driver + live TIER_2 container e2e** | this PR | ⚖️ yes |
 | B-4 | **[proposed]** | V Deployment | TIER_3 microVM + TIER_4 full-VM execution (R-411/R-412) | not built | impl + infra | ⚖️ yes |
-| B-5 | **[proposed]** | V Deployment | SELF_HOSTED_SERVER + MANAGED_CLOUD e2e (R-420/R-421) | LOCAL-only exercised | operator infra | ⚖️ (R-421) |
+| B-5 | **[proposed]** | V Deployment | SELF_HOSTED_SERVER + MANAGED_CLOUD e2e (R-420/R-421) | LOCAL-only exercised; self-hosted keyring selector built | operator infra | ⚖️ (R-421) |
 | B-6 | **[proposed]** | V Deployment | OTLP tail-keep collector-side validation (R-430) | buffer logic in-process; collector-side unverified | operator infra | no |
-| B-7 | **[proposed]** | V Deployment | Tier-level + cloud secrets backend (R-440) | LOCAL keyring + env-fallback only | impl + operator infra | ⚖️ yes |
+| B-7 | ~~closed~~ | V Deployment | ~~Tier-level self-hosted secrets backend selector (R-440)~~ | **SELF_HOSTED keyring-only selector landed; cloud bootstrap-token remains R-421** | this PR | no |
 | B-8 | **[proposed]** | VI Multi-tenant | Non-default `tenant_id` / non-SOLO `persona_tier` deployment | fields plumbed; non-toggleability enforced; base-rate envelope live | operator deploy + impl | ⚖️ yes |
 | B-9 | **[blocked]** | VI Multi-tenant | OD-4: per-session redaction toggle (§13.1) + opaque-token tokenization (§13.2) | strip-not-tokenize MVP; toggle deferred — needs session-control substrate (R-008) | impl (R-008) | ⚖️ yes |
 | B-10 | ~~closed~~ | IX External | ~~Real external MCP server connection~~ | **✅ R-800 RESOLVED (2026-06-01)** — `start()`/`shutdown()` wired at PR #172 (spec v1.41 §14.9.8 Gaps B/F); real external stdio e2e green & unconditional at `test_u_rt_86`. Full `api.run` path = Gap D (R-100 AC#2, operator-gated) | impl | no |
@@ -114,19 +114,18 @@ The register has **two tiers**, kept distinct:
 
 ### B-5 · SELF_HOSTED_SERVER + MANAGED_CLOUD deployment e2e (R-420 / R-421)
 - **What it is.** First real non-LOCAL surfaces. **R-420 (SELF_HOSTED_SERVER):** harness daemon (`C-RT-29 §14.18`, FastMCP Unix-socket) against a **real OTLP collector** + tier-level secrets; tail-keep wrapping active (non-LOCAL); per-cell sampler `base_rate` = the SELF_HOSTED cell. **R-421 (MANAGED_CLOUD):** cloud env + cloud secrets + FULL_VM + managed collector; in-sandbox encrypted-fs secrets per ADR-F5; MANAGED_CLOUD per-cell sampler + redaction posture (`C-OD-13 §13.1`).
-- **Current state.** Only LOCAL exercised. **Operator/infra-gated** (`halt-route-to-operator`) — needs operator to provision the server, collector, and secrets backend before any execution. `just self-hosted-readiness --config <harness.toml>` now checks the static SELF_HOSTED_SERVER preconditions without starting the daemon, probing OTLP, or fetching secrets.
-- **Close-out steps.** (R-420) run `just self-hosted-readiness --config <self-hosted harness.toml>` until only live execution remains, then operator provisions server + collector + secrets → run the daemon e2e with the must_pass set; (R-421, dep R-420) provision cloud env. R-420 **unblocks R-421 + R-430 + R-440**. **`⚖️ Council (R-421 only)`** — MANAGED_CLOUD posture (C8 security ⊥ C11 deployment simplicity) when that arc opens; R-420 is operator-infra, not a design tension.
+- **Current state.** Only LOCAL exercised. **Operator/infra-gated** (`halt-route-to-operator`) — needs operator to provision the server, collector, and real keyring entries before any execution. `just self-hosted-readiness --config <harness.toml>` now checks the static SELF_HOSTED_SERVER preconditions without starting the daemon, probing OTLP, or fetching secrets.
+- **Close-out steps.** (R-420) run `just self-hosted-readiness --config <self-hosted harness.toml>` until only live execution remains, then operator provisions server + collector + keyring entries → run the daemon e2e with the must_pass set; (R-421, dep R-420) provision cloud env. R-420 **unblocks R-421 + R-430**. **`⚖️ Council (R-421 only)`** — MANAGED_CLOUD posture (C8 security ⊥ C11 deployment simplicity) when that arc opens; R-420 is operator-infra, not a design tension.
 
 ### B-6 · OTLP tail-keep preservation validation (R-430)
 - **What it is.** Verify the `§10.2` classification-trigger preservation semantic against a **real** OTLP collector (the drop/keep decision is collector-side).
 - **Current state.** `TailKeepSpanProcessor` buffer logic is in-process + bypassed at LOCAL by design (§9.1 head-based mandate); collector-side preservation is unverified. **This is the surface the OD-3 batch-51 audit reclassified *out* of the OD-3 retirement gate** (production-feature-validation, not an X-AL-2 criterion).
 - **Close-out steps.** With a real collector (dep R-420), assert classification-trigger spans survive tail-drop. **Council: no** (validation). Infra-gated.
 
-### B-7 · Tier-level + cloud secrets backend (R-440) `⚖️ council-eligible`
-- **What it is.** A real tier-level secrets backend beyond the shipped LOCAL keyring + env-fallback. Per ADR-F5: TIER_1 process-tier = env/keyring snapshot; TIER_3/4 = in-sandbox fresh-fetch over network with a bootstrap token. `C-AS-05 §5.1` `fetch_secret(name, scope, tier)`.
-- **Current state.** `provider_secrets.py` (`KeyringSecretResolver`) ships **only LOCAL keyring + env-fallback** (PR #16). Allowlist enforcement + `SecretFetchEvent` audit carrier are live; **MANAGED_CLOUD bootstrap-token protocol is DEFERRED** (prod-tech selection owed). The advanced fail-classes (`SECRET_UNAVAILABLE` breaker / `SECRET_EXPIRED` refresh-and-retry / `SECRET_LOCKED`+`SECRET_REVOKED` HITL) are carrier-declared but their behaviors are deferred. `just self-hosted-readiness` now fails explicitly on the missing tier-level backend selector.
-- **Close-out steps.** (1) Operator selects prod-tech (Vault / AWS Secrets Manager / Azure Key Vault / GCP Secret Manager / Doppler / 1Password Connect) — owed at a deployment-surface D-ADR; (2) implement the tier-specific bootstrap-token protocol + in-sandbox HTTP fetch (TIER_3/4); (3) per-`{backend, scope}` breaker (C9); (4) refresh-and-retry with idempotency-key preservation (SECRET_EXPIRED); (5) HITL composition for LOCKED/REVOKED (C4).
-- **`⚖️ Council (C8 ⊥ C11).`** Secrets-backend selection is a security (C8) vs deployment-simplicity/operator-burden (C11) tension; convene when R-440 opens.
+### B-7 · Tier-level self-hosted secrets backend selector (R-440)
+- **Status.** CLOSED by this PR. `ProviderSecretsConfig` now carries a `ProviderSecretBackend` selector. The default LOCAL path remains keyring + env fallback; `self-hosted-keyring` resolves through keyring only and disables ambient env fallback.
+- **Closure evidence.** Focused tests prove `self-hosted-keyring` raises `SECRET_UNKNOWN` when only `ANTHROPIC_API_KEY` is set, resolves when the keyring entry exists, preserves LOCAL env fallback, and makes `just self-hosted-readiness` pass its static R-440 gate from TOML config.
+- **Residual.** Live server/collector/keyring-entry exercise remains R-420. MANAGED_CLOUD bootstrap-token / in-sandbox HTTP fetch remains R-421 managed-cloud scope.
 
 ---
 

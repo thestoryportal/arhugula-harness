@@ -1172,24 +1172,25 @@ R-412-sandbox-tier-4-full-vm-execution:
 R-420-self-hosted-server-deployment-e2e:
   title: Exercise the harness at the SELF_HOSTED_SERVER deployment surface (real server + OTLP collector + tier secrets)
   surface: V
-  status: PROPOSED   # operator/infra-gated — requires a real long-running server, a real OTLP collector, a tier-level secrets backend
+  status: PROPOSED   # operator/infra-gated — requires a real long-running server, a real OTLP collector, and real keyring entries
   depends_on: []
-  blocks: [R-421-managed-cloud-deployment-e2e, R-430-otlp-collector-tail-keep-preservation, R-440-tier-level-secrets-backend]
+  blocks: [R-421-managed-cloud-deployment-e2e, R-430-otlp-collector-tail-keep-preservation]
   posture: halt-route-to-operator   # needs operator infra provisioning before any execution
   scope: { files: [harness-runtime/**, deploy/**], contracts: [C-RT-29 §14.18 daemon mode, C-OD-09 §9.1], cross_axis: yes }
   skills: { primary: phase-7-implementation, secondary: [verify] }
   advisor_required: yes
   council_required: conditional:nameable-tension
-  verification: { shape: e2e, must_pass: ["harness daemon runs at SELF_HOSTED_SERVER surface against a real OTLP collector", "tail-keep wrapping active (deployment_surface != LOCAL)", "per-cell base_rate matches the SELF_HOSTED cell", "secrets resolve via a tier-level backend (not env fallback)"] }
+  verification: { shape: e2e, must_pass: ["harness daemon runs at SELF_HOSTED_SERVER surface against a real OTLP collector", "tail-keep wrapping active (deployment_surface != LOCAL)", "per-cell base_rate matches the SELF_HOSTED cell", "secrets resolve through self-hosted-keyring (not env fallback)"] }
   close_shape: { type: PR-merge, artifact: "feat(deploy): SELF_HOSTED_SERVER deployment e2e", cascade: [R-421-managed-cloud-deployment-e2e] }
   next_pointer: R-421-managed-cloud-deployment-e2e
   notes: >
-    The first real non-LOCAL surface. Unblocks the tail-keep preservation (R-430) + tier secrets (R-440) rows whose
-    semantics only exist on a real collector / real secrets backend. Daemon mode (C-RT-29 §14.18, FastMCP Unix-socket
-    server) is the entrypoint; the operator provisions the server + collector + secrets backend. The
+    The first real non-LOCAL surface. Unblocks the tail-keep preservation (R-430) row whose
+    semantics only exist on a real collector. Daemon mode (C-RT-29 §14.18, FastMCP Unix-socket
+    server) is the entrypoint; the operator provisions the server + collector + keyring entries. The
     non-mutating `just self-hosted-readiness --config <harness.toml>` probe now validates the static pre-e2e
     gates (SELF_HOSTED_SERVER config, real collector placement, OTLP endpoint, provider allowlist, tier backend
-    selector) without starting the daemon or making network/secret calls.
+    selector) without starting the daemon or making network/secret calls. R-440 supplies the `self-hosted-keyring`
+    selector; the remaining R-420 gate is live infrastructure + actual secret material in the selected backend.
 
 R-421-managed-cloud-deployment-e2e:
   title: Exercise the harness at the MANAGED_CLOUD deployment surface (cloud secrets + FULL_VM provider class + managed collector)
@@ -1235,8 +1236,8 @@ R-430-otlp-collector-tail-keep-preservation:
 R-440-tier-level-secrets-backend:
   title: Wire a SELF_HOSTED_SERVER tier-level secrets backend (currently operator-supplied / env-fallback only)
   surface: V
-  status: PROPOSED   # infra-gated — real secrets backend (Vault / cloud secrets manager); harness does not implement a provider today
-  depends_on: [R-420-self-hosted-server-deployment-e2e]
+  status: RESOLVED   # self-hosted-keyring selector + keyring-only resolver path landed; live exercise folds into R-420
+  depends_on: []
   blocks: []
   posture: phase-7
   scope: { files: [harness-runtime/src/harness_runtime/config/**], contracts: [ADR-F5 §1, C-AS-05 §5.1 fetch_secret], cross_axis: no }
@@ -1247,11 +1248,11 @@ R-440-tier-level-secrets-backend:
   close_shape: { type: PR-merge, artifact: "feat(secrets): SELF_HOSTED tier-level secrets backend", cascade: [] }
   next_pointer: null
   notes: >
-    At HEAD provider_secrets.py documents tier-level (SELF_HOSTED) vs in-sandbox (MANAGED_CLOUD) backends but ships only
-    the LOCAL keyring + env-fallback path (per PR #16 binding-fix). This row implements a real tier-level backend per
-    ADR-F5 tier-aware secret-fetch. Mirror precedent: keyring env-fallback at [[pr-16-keyring-env-fallback-adr-f5]].
-    `just self-hosted-readiness --config <harness.toml>` now makes the unresolved backend-selector gate explicit:
-    `ProviderSecretsConfig` has no tier-level backend selector yet, so the runtime remains keyring/env-fallback only.
+    This row is closed by adding `ProviderSecretBackend` and the `self-hosted-keyring` selector on
+    `ProviderSecretsConfig`. The default LOCAL path remains keyring + env fallback; the SELF_HOSTED path resolves
+    from keyring only and refuses ambient env fallback. `just self-hosted-readiness --config <harness.toml>` now passes
+    the R-440 static gate when `[runtime.provider_secrets] backend = "self-hosted-keyring"` is configured. The live
+    server/collector/keyring-entry exercise remains R-420; MANAGED_CLOUD bootstrap-token / cloud secrets remains R-421.
 ```
 
 **Surface VI (multi-tenant) trigger fired.** Per §9, authoring this R-400 decomposition triggers §VI (Multi-tenant) decomposition. §VI remains `decomposition-owed` + live-gated (real multi-tenant deployment required); R-500-series authoring is a follow-on arc — not bundled here.

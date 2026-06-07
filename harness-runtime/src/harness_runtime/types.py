@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NewType, Protocol, runtime_checkable
 
@@ -184,6 +184,7 @@ __all__ = [
     "PathBindingConfig",
     "PerStepOverrideEvaluator",
     "ProviderClient",
+    "ProviderSecretBackend",
     "ProviderSecretsConfig",
     "RetryBreakerRegistry",
     "RuntimeConfig",
@@ -310,6 +311,13 @@ class PathBindingConfig(BaseModel):
     """
 
 
+class ProviderSecretBackend(StrEnum):
+    """Provider-secret backend selector."""
+
+    LOCAL_KEYRING_ENV_FALLBACK = "local-keyring-env-fallback"
+    SELF_HOSTED_KEYRING = "self-hosted-keyring"
+
+
 class ProviderSecretsConfig(BaseModel):
     """Provider-secret config — U-RT-06 (L1).
 
@@ -325,6 +333,9 @@ class ProviderSecretsConfig(BaseModel):
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    backend: ProviderSecretBackend = ProviderSecretBackend.LOCAL_KEYRING_ENV_FALLBACK
+    """Backend selector for provider-secret resolution."""
 
     keyring_service: str = "harness"
     """OS-keyring service-name identifier (python-keyring `service` arg)."""

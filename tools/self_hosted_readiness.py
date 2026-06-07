@@ -24,7 +24,7 @@ from harness_od.per_cell_collector_placement_matrix import (
     collector_placement,
 )
 from harness_runtime.config_source import RuntimeConfigLoadError, RuntimeConfigSource
-from harness_runtime.types import ProviderSecretsConfig, RuntimeConfig
+from harness_runtime.types import ProviderSecretBackend, ProviderSecretsConfig, RuntimeConfig
 
 
 @dataclass(frozen=True)
@@ -48,16 +48,6 @@ ROADMAP_ITEMS = (
 )
 _SELF_HOSTED_REAL_COLLECTOR_PLACEMENTS = frozenset(
     placement for placement in CollectorPlacement if placement is not CollectorPlacement.IN_PROCESS
-)
-_LIKELY_BACKEND_SELECTOR_FIELDS = frozenset(
-    {
-        "backend",
-        "backend_kind",
-        "resolver_kind",
-        "secret_backend",
-        "tier_backend",
-        "tier_backend_kind",
-    }
 )
 
 
@@ -130,33 +120,15 @@ def _secret_allowlist_check(config: RuntimeConfig) -> CheckResult:
 
 
 def _tier_secret_backend_check(provider_secrets: ProviderSecretsConfig) -> CheckResult:
-    fields = set(type(provider_secrets).model_fields)
-    selector_fields = sorted(fields & _LIKELY_BACKEND_SELECTOR_FIELDS)
-    if not selector_fields:
-        return CheckResult(
-            name="tier-secrets-backend",
-            ok=False,
-            detail=(
-                "no tier-level backend selector exists on ProviderSecretsConfig; "
-                "current runtime remains keyring/env-fallback only"
-            ),
-        )
-
-    populated = [
-        field
-        for field in selector_fields
-        if getattr(provider_secrets, field, None) not in (None, "")
-    ]
-    empty_detail = (
-        f"tier-level backend selector fields exist but are empty: {', '.join(selector_fields)}"
-    )
+    backend = provider_secrets.backend
+    ok = backend is ProviderSecretBackend.SELF_HOSTED_KEYRING
     return CheckResult(
         name="tier-secrets-backend",
-        ok=bool(populated),
+        ok=ok,
         detail=(
-            f"tier-level backend selector populated: {', '.join(populated)}"
-            if populated
-            else empty_detail
+            f"tier-level backend selector is {backend.value}"
+            if ok
+            else f"expected self-hosted-keyring; observed {backend.value}"
         ),
     )
 

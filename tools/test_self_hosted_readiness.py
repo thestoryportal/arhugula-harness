@@ -10,11 +10,12 @@ from harness_od.per_cell_collector_placement_matrix import CollectorPlacement
 from harness_runtime.types import (
     CollectorConfig,
     OTelConfig,
+    ProviderSecretBackend,
     ProviderSecretsConfig,
     RuntimeConfig,
 )
 
-from tools.self_hosted_readiness import evaluate_config
+from tools.self_hosted_readiness import evaluate_config, load_report
 
 
 def _allowlist_entry() -> SecretAllowlistEntry:
@@ -47,8 +48,10 @@ def _checks_by_name(config: RuntimeConfig) -> dict[str, bool]:
     return {check.name: check.ok for check in report.checks}
 
 
-def test_self_hosted_config_surfaces_missing_tier_secret_backend(tmp_path: Path) -> None:
-    """A plausible R-420 config passes static gates but still blocks on R-440."""
+def test_self_hosted_config_without_backend_selector_still_blocks_on_r440(
+    tmp_path: Path,
+) -> None:
+    """A plausible R-420 config still blocks until R-440 selects SELF_HOSTED backend."""
     report = evaluate_config(_config(tmp_path))
 
     assert report.ready is False
@@ -58,7 +61,57 @@ def test_self_hosted_config_surfaces_missing_tier_secret_backend(tmp_path: Path)
     assert checks["otlp-endpoint"].ok is True
     assert checks["provider-secret-allowlist"].ok is True
     assert checks["tier-secrets-backend"].ok is False
-    assert "no tier-level backend selector" in checks["tier-secrets-backend"].detail
+    assert "expected self-hosted-keyring" in checks["tier-secrets-backend"].detail
+
+
+def test_self_hosted_backend_selector_closes_static_r440_gate(tmp_path: Path) -> None:
+    """R-440 selected: all static SELF_HOSTED readiness gates pass."""
+    report = evaluate_config(
+        _config(
+            tmp_path,
+            provider_secrets=ProviderSecretsConfig(
+                backend=ProviderSecretBackend.SELF_HOSTED_KEYRING,
+                operator_allowlist=(_allowlist_entry(),),
+            ),
+        )
+    )
+
+    checks = {check.name: check for check in report.checks}
+    assert report.ready is True
+    assert checks["tier-secrets-backend"].ok is True
+    assert "self-hosted-keyring" in checks["tier-secrets-backend"].detail
+
+
+def test_self_hosted_backend_selector_loads_from_config_file(tmp_path: Path) -> None:
+    """The operator-facing readiness command sees the R-440 selector in TOML."""
+    config_file = tmp_path / "harness.toml"
+    config_file.write_text(
+        f"""
+[runtime]
+deployment_surface = "self-hosted-server"
+repository_root = "{tmp_path}"
+default_topology = "single-threaded-linear"
+
+[runtime.otel]
+otlp_endpoint = "http://collector.internal:4317"
+
+[runtime.collector]
+placement = "SELF_HOSTED_BACKEND_COLLECTOR"
+
+[runtime.provider_secrets]
+backend = "self-hosted-keyring"
+keyring_service = "harness"
+
+[[runtime.provider_secrets.operator_allowlist]]
+name = "anthropic_key"
+scope = {{ name = "default" }}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    report = load_report(config_file)
+
+    assert report.ready is True
 
 
 def test_local_development_surface_fails_r420_gate(tmp_path: Path) -> None:
