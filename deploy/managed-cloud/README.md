@@ -78,13 +78,21 @@ This command creates a hosted E2B sandbox, emits a `sandbox.violation` trace to
 the managed OTLP endpoint, and polls Cloud Trace for the emitted trace ID. It
 prints only redacted secret status and trace IDs.
 
-Current runtime caveat: `materialize_span_processor_stage` still models the
-bootstrap process as `TIER_1_PROCESS`, and C-OD-20 permits that bootstrap tier
-to reach only `IN_PROCESS` or `SELF_HOSTED_BACKEND_COLLECTOR` placements.
-Therefore the live e2e checks this reachability gate before creating an E2B
-sandbox. The selected solo MANAGED_CLOUD `VENDOR_PIPELINE` shape needs a
-follow-on runtime/design resolution before the full R-421 e2e can honestly
-materialize the runtime span processor.
+Runtime bootstrap reachability is explicit in `[runtime.collector]`. The
+default `bootstrap_sandbox_tier` is `tier-1-process`, which keeps local and
+self-hosted host-process bootstrap constrained to `IN_PROCESS` or
+`SELF_HOSTED_BACKEND_COLLECTOR` placements. The E2B/FULL_VM managed-cloud
+template sets:
+
+```toml
+[runtime.collector]
+placement = "VENDOR_PIPELINE"
+bootstrap_sandbox_tier = "tier-4-full-vm"
+```
+
+The readiness and live e2e commands check this configured tier before creating
+an E2B sandbox, so a stale Tier-1/VENDOR_PIPELINE binding fails without a paid
+hosted-sandbox call.
 
 Full R-421 closure still requires operator-provisioned GCP credentials with
 Secret Manager access, the named secret entries, a non-loopback managed OTLP

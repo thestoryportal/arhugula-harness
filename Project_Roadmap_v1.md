@@ -1245,12 +1245,15 @@ R-421-managed-cloud-deployment-e2e:
     `https://arhugula-r421-otel-collector-543404640214.us-central1.run.app`, stored the non-secret collector
     YAML as Secret Manager entry `r421-otel-collector-config`, and proved static readiness plus redacted
     `e2b-secret` resolution against project `project-ba535aa4-f08d-46b2-ba6`. Approved E2B sandbox calls ran
-    the deterministic command before the full e2e hit the runtime OTLP materialization gate. R-421 remains
-    PROPOSED because `materialize_span_processor_stage` still checks the bootstrap process as
-    `TIER_1_PROCESS`, while the solo MANAGED_CLOUD cell is canonically `VENDOR_PIPELINE`; C-OD-20 permits
-    Tier-1 bootstrap reachability only to `IN_PROCESS` / `SELF_HOSTED_BACKEND_COLLECTOR`. The live e2e now
-    fails fast on that reachability mismatch before creating another E2B sandbox. The temporary
-    `roles/iam.serviceAccountTokenCreator` grant used for ID-token diagnosis was removed after the failed
+    the deterministic command before the full e2e hit the runtime OTLP materialization gate. The 2026-06-07
+    runtime/design follow-on resolves that static mismatch by adding
+    `CollectorConfig.bootstrap_sandbox_tier`: the default remains `TIER_1_PROCESS` for LOCAL/self-hosted
+    host-process bootstrap, while the E2B/FULL_VM managed-cloud template declares `tier-4-full-vm` so
+    C-OD-20 reachability is checked against the actual network-capable bootstrap tier instead of weakening
+    Tier-1. The readiness and live e2e gates now fail fast on stale Tier-1 + `VENDOR_PIPELINE` bindings before
+    creating another E2B sandbox. R-421 remains PROPOSED until the approved live e2e is rerun and proves
+    hosted E2B execution, authenticated managed OTLP export, and Cloud Trace visibility end to end. The temporary
+    `roles/iam.serviceAccountTokenCreator` grant used for ID-token diagnosis was removed after the prior failed
     authenticated OTLP attempt.
 
 R-430-otlp-collector-tail-keep-preservation:

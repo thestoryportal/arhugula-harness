@@ -59,6 +59,7 @@ def _config(
     tmp_path: Path,
     *,
     placement: CollectorPlacement = CollectorPlacement.IN_PROCESS,
+    bootstrap_sandbox_tier: SandboxTier = SandboxTier.TIER_1_PROCESS,
     batch_size: int = 512,
     batch_window_seconds: int = 5,
 ) -> RuntimeConfig:
@@ -71,6 +72,7 @@ def _config(
         otel=OTelConfig(otlp_endpoint="http://localhost:4317"),
         collector=CollectorConfig(
             placement=placement,
+            bootstrap_sandbox_tier=bootstrap_sandbox_tier,
             batch_size=batch_size,
             batch_window_seconds=batch_window_seconds,
         ),
@@ -181,6 +183,26 @@ def test_bootstrap_vendor_pipeline_placement_raises_reachability_error(
             _provider(),
             exporter=InMemorySpanExporter(),
         )
+
+
+def test_bootstrap_vendor_pipeline_with_full_vm_tier_passes_reachability(
+    tmp_path: Path,
+) -> None:
+    """A managed-cloud/full-VM bootstrap tier may reach a vendor pipeline.
+
+    This preserves the default Tier-1 localhost guard while allowing R-421's
+    explicit managed-cloud FULL_VM binding to materialize the span processor.
+    """
+    stage = materialize_span_processor_stage(
+        _config(
+            tmp_path,
+            placement=CollectorPlacement.VENDOR_PIPELINE,
+            bootstrap_sandbox_tier=SandboxTier.TIER_4_FULL_VM,
+        ),
+        _provider(),
+        exporter=InMemorySpanExporter(),
+    )
+    assert isinstance(stage, SpanProcessorStage)
 
 
 def test_assert_otlp_reachable_table_covers_4_sandbox_tiers() -> None:

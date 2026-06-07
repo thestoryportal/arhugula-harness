@@ -34,19 +34,19 @@ dispatched call must reach the configured collector placement). The
 registry exposes `assert_reachable(sandbox_tier)` so consumer-side dispatch
 code (U-RT-15 sandbox table, future U-RT-40 topology dispatcher) can
 enforce the §20.3 matrix at the dispatch site. The composer itself runs a
-single check: the BOOTSTRAP runtime's own sandbox-tier (Tier-1 process) MUST
-reach the configured `CollectorConfig.placement` — a violation at bootstrap
-raises `SpanProcessorReachabilityError`. The runtime bootstraps inside the
-host process (Tier-1) per F-P2-5; this floor is non-operator-tunable at
-bootstrap.
+single check: `CollectorConfig.bootstrap_sandbox_tier` MUST reach the
+configured `CollectorConfig.placement` — a violation at bootstrap raises
+`SpanProcessorReachabilityError`. The default remains Tier-1 process per
+F-P2-5; managed-cloud/FULL_VM bindings can opt into a network-capable
+bootstrap tier without weakening the Tier-1 matrix.
 
 Per-component landing posture:
 
 - `SpanProcessorBindError` — bootstrap-time bind failure (RT-FAIL-BOOTSTRAP)
   for malformed exporter/processor construction.
 - `SpanProcessorReachabilityError` — bootstrap-time reachability failure
-  (RT-FAIL-BOOTSTRAP) when the bootstrap-tier (Tier-1 process) cannot reach
-  the configured `CollectorPlacement` per the §20.3 matrix.
+  (RT-FAIL-BOOTSTRAP) when the configured bootstrap tier cannot reach the
+  configured `CollectorPlacement` per the §20.3 matrix.
 - `SpanProcessorStage` — frozen materialization stage carrying the
   attached processor + exporter handles + a `flush(timeout_millis)` method
   delegating to `processor.force_flush(timeout_millis)`.
@@ -63,7 +63,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from harness_as.sandbox_tier import SandboxTier
 from harness_core import DeploymentSurface
 from harness_od.per_sandbox_tier_otlp_reachability import (
     ReachabilityViolation,
@@ -85,12 +84,6 @@ __all__ = [
 ]
 
 
-#: Bootstrap-time sandbox tier of the runtime process itself. The runtime
-#: bootstraps in the host process at Tier-1 (no isolation around the runtime
-#: itself); per-tool dispatches at U-RT-15 enforce their own tier reachability.
-_BOOTSTRAP_SANDBOX_TIER: SandboxTier = SandboxTier.TIER_1_PROCESS
-
-
 class SpanProcessorBindError(Exception):
     """Bootstrap-time BSP/exporter bind failure (RT-FAIL-BOOTSTRAP).
 
@@ -102,8 +95,8 @@ class SpanProcessorBindError(Exception):
 class SpanProcessorReachabilityError(Exception):
     """Bootstrap-time reachability failure (RT-FAIL-BOOTSTRAP).
 
-    Raised when the bootstrap-tier (Tier-1 process per F-P2-5) cannot reach
-    the configured `CollectorPlacement` per the C-OD-20 §20.3 matrix. Wraps
+    Raised when `CollectorConfig.bootstrap_sandbox_tier` cannot reach the
+    configured `CollectorPlacement` per the C-OD-20 §20.3 matrix. Wraps
     the OD-canonical `ReachabilityViolation` to keep the runtime-side
     bootstrap-failure surface typed."""
 
@@ -165,8 +158,8 @@ def materialize_span_processor_stage(
     Stage 4 composer (C-RT-06 step 3). Construction sequence:
 
     1. Bootstrap-tier reachability check: `assert_otlp_reachable_from_sandbox(
-       TIER_1_PROCESS, config.collector.placement)`. A violation raises
-       `SpanProcessorReachabilityError`.
+       config.collector.bootstrap_sandbox_tier, config.collector.placement)`.
+       A violation raises `SpanProcessorReachabilityError`.
     2. Construct the OTLP exporter from `config.otel.otlp_endpoint`
        (gRPC at HEAD). Tests pass an `exporter` keyword override (commonly
        `InMemorySpanExporter`) to avoid network construction.
@@ -195,16 +188,17 @@ def materialize_span_processor_stage(
     Raises
     ------
     SpanProcessorReachabilityError
-        When the bootstrap tier (Tier-1 process) cannot reach
+        When `config.collector.bootstrap_sandbox_tier` cannot reach
         `config.collector.placement` per C-OD-20 §20.3.
     SpanProcessorBindError
         Wrap-and-re-raise for exporter / BSP construction failures.
     """
+    bootstrap_sandbox_tier = config.collector.bootstrap_sandbox_tier
     try:
-        assert_otlp_reachable_from_sandbox(_BOOTSTRAP_SANDBOX_TIER, config.collector.placement)
+        assert_otlp_reachable_from_sandbox(bootstrap_sandbox_tier, config.collector.placement)
     except ReachabilityViolation as exc:
         raise SpanProcessorReachabilityError(
-            f"bootstrap-tier ({_BOOTSTRAP_SANDBOX_TIER.value}) cannot reach "
+            f"bootstrap-tier ({bootstrap_sandbox_tier.value}) cannot reach "
             f"configured CollectorPlacement ({config.collector.placement.value}) "
             f"per C-OD-20 §20.3: {exc}"
         ) from exc

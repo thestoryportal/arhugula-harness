@@ -439,6 +439,7 @@ class CollectorConfig(BaseModel):
     """In-process collector daemon config — U-RT-08 (L1).
 
     Carries the placement selection (architectural class per C-OD-20 §20.1),
+    the runtime bootstrap sandbox tier used for C-OD-20 reachability checks,
     ring-buffer size, sqlite rotation thresholds, and BatchSpanProcessor
     cadence inherited from C-OD-19 §19.1 defaults. The collector daemon
     supervisor at U-RT-29 (F-P2-5) consumes these settings.
@@ -453,6 +454,15 @@ class CollectorConfig(BaseModel):
     placement: CollectorPlacement = CollectorPlacement.IN_PROCESS
     """Architectural collector placement (C-OD-20 §20.1). Defaults to
     `IN_PROCESS` per F-P2-5 (runtime owns the in-process collector daemon)."""
+
+    bootstrap_sandbox_tier: SandboxTier = SandboxTier.TIER_1_PROCESS
+    """Sandbox tier that materializes the runtime bootstrap span processor.
+
+    The default preserves LOCAL/self-hosted host-process bootstrap behavior.
+    MANAGED_CLOUD/FULL_VM deployment bindings may set `TIER_4_FULL_VM` so
+    bootstrap OTLP reachability is checked against the actual network-capable
+    runtime tier instead of weakening the Tier-1 matrix.
+    """
 
     ring_buffer_size: int = 4096
     """Span ring-buffer capacity for the collector daemon (bounded > 0)."""

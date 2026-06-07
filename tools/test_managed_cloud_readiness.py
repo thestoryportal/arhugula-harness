@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from harness_as.sandbox_tier import SandboxTier
 from harness_core import DeploymentSurface, PersonaTier
 from harness_cp.topology_pattern import TopologyPattern
 from harness_od.per_cell_collector_placement_matrix import CollectorPlacement
@@ -26,6 +27,7 @@ def _config(
     deployment_surface: DeploymentSurface = DeploymentSurface.MANAGED_CLOUD,
     persona_tier: PersonaTier = PersonaTier.SOLO_DEVELOPER,
     placement: CollectorPlacement = CollectorPlacement.VENDOR_PIPELINE,
+    bootstrap_sandbox_tier: SandboxTier = SandboxTier.TIER_4_FULL_VM,
     otlp_endpoint: str = "https://collector.vendor.example/v1/traces",
     provider_secrets: ProviderSecretsConfig | None = None,
 ) -> RuntimeConfig:
@@ -36,7 +38,10 @@ def _config(
         provider_secrets=provider_secrets
         or ProviderSecretsConfig(operator_allowlist=(e2b_secret_allowlist_entry(),)),
         otel=OTelConfig(otlp_endpoint=otlp_endpoint),
-        collector=CollectorConfig(placement=placement),
+        collector=CollectorConfig(
+            placement=placement,
+            bootstrap_sandbox_tier=bootstrap_sandbox_tier,
+        ),
         default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
     )
 
@@ -56,6 +61,7 @@ def test_managed_cloud_static_readiness_blocks_on_local_secret_backend(
     assert checks["deployment-surface"].ok is True
     assert checks["collector-placement"].ok is True
     assert checks["managed-otlp-endpoint"].ok is True
+    assert checks["bootstrap-reachability"].ok is True
     assert checks["provider-secret-allowlist"].ok is True
     assert checks["hosted-sandbox-provider"].ok is True
     assert checks["cloud-secret-backend"].ok is False
@@ -77,6 +83,19 @@ def test_managed_cloud_static_readiness_passes_with_gcp_backend(tmp_path: Path) 
 
     assert report.ready is True
     assert {check.name for check in report.checks if not check.ok} == set()
+
+
+def test_managed_cloud_readiness_rejects_tier1_bootstrap_to_vendor_pipeline(
+    tmp_path: Path,
+) -> None:
+    checks = _checks_by_name(
+        _config(tmp_path, bootstrap_sandbox_tier=SandboxTier.TIER_1_PROCESS),
+        hosted_sandbox_provider="e2b",
+    )
+
+    assert checks["bootstrap-reachability"].ok is False
+    assert "tier-1-process" in checks["bootstrap-reachability"].detail
+    assert "VENDOR_PIPELINE" in checks["bootstrap-reachability"].detail
 
 
 def test_local_development_surface_fails_r421_gate(tmp_path: Path) -> None:
@@ -149,6 +168,7 @@ otlp_endpoint = "https://collector.vendor.example/v1/traces"
 
 [runtime.collector]
 placement = "VENDOR_PIPELINE"
+bootstrap_sandbox_tier = "tier-4-full-vm"
 
 [runtime.provider_secrets]
 backend = "gcp-secret-manager"

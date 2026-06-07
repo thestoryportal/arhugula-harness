@@ -24,6 +24,10 @@ from harness_od.per_cell_collector_placement_matrix import (
     CollectorPlacement,
     collector_placement,
 )
+from harness_od.per_sandbox_tier_otlp_reachability import (
+    ReachabilityViolation,
+    assert_otlp_reachable_from_sandbox,
+)
 from harness_runtime.config_source import RuntimeConfigLoadError, RuntimeConfigSource
 from harness_runtime.types import ProviderSecretBackend, RuntimeConfig
 
@@ -113,6 +117,29 @@ def _managed_otlp_endpoint_check(config: RuntimeConfig) -> CheckResult:
     )
 
 
+def _bootstrap_reachability_check(config: RuntimeConfig) -> CheckResult:
+    tier = config.collector.bootstrap_sandbox_tier
+    placement = config.collector.placement
+    try:
+        assert_otlp_reachable_from_sandbox(tier, placement)
+    except ReachabilityViolation as exc:
+        return CheckResult(
+            name="bootstrap-reachability",
+            ok=False,
+            detail=(
+                f"bootstrap_sandbox_tier {tier.value} cannot reach collector placement "
+                f"{placement.value}: {exc}"
+            ),
+        )
+    return CheckResult(
+        name="bootstrap-reachability",
+        ok=True,
+        detail=(
+            f"bootstrap_sandbox_tier {tier.value} can reach collector placement {placement.value}"
+        ),
+    )
+
+
 def _secret_allowlist_check(config: RuntimeConfig) -> CheckResult:
     count = len(config.provider_secrets.operator_allowlist)
     return CheckResult(
@@ -185,6 +212,7 @@ def evaluate_config(
         _deployment_surface_check(config),
         _collector_placement_check(config),
         _managed_otlp_endpoint_check(config),
+        _bootstrap_reachability_check(config),
         _secret_allowlist_check(config),
         _cloud_secret_backend_check(config),
         _e2b_candidate_check(config, provider=hosted_sandbox_provider),
