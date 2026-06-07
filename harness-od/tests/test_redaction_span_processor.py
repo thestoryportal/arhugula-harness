@@ -20,6 +20,7 @@ from harness_od.redaction_span_processor import (
     session_content_capture,
     session_content_capture_enabled,
 )
+from harness_od.redaction_tokenizer import InMemoryRedactionTokenMap, OpaqueRedactionTokenizer
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
     SimpleSpanProcessor,
@@ -119,6 +120,57 @@ def test_on_end_strips_all_13_content_attributes(
     for key in DEFAULT_OFF_CONTENT_ATTRIBUTES:
         assert key not in exported.attributes, f"redaction failed to strip {key}"
     assert exported.attributes["gen_ai.operation.name"] == "preserved"
+
+
+def test_on_end_tokenizes_content_attributes_when_tokenizer_configured() -> None:
+    """R-008 gate (b) substrate: token mode keeps shape, not raw content."""
+    token_map = InMemoryRedactionTokenMap()
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(
+        RedactionSpanProcessor(tokenizer=OpaqueRedactionTokenizer(token_map=token_map))
+    )
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+    span = tracer.start_span("s")
+    span.set_attribute("gen_ai.input.messages", "PII content")
+    span.set_attribute("gen_ai.operation.name", "chat")
+    span.end()
+
+    [exported] = exporter.get_finished_spans()
+    token = exported.attributes["gen_ai.input.messages"]
+    assert isinstance(token, str)
+    assert token.startswith("[REDACTED:CONTENT:")
+    assert "PII content" not in token
+    assert exported.attributes["gen_ai.operation.name"] == "chat"
+
+    [record] = token_map.records
+    assert record.token == token
+    assert record.attribute_key == "gen_ai.input.messages"
+    assert record.raw_value == "PII content"
+    assert record.trace_id == exported.context.trace_id.to_bytes(16, "big").hex()
+    assert record.span_id == exported.context.span_id.to_bytes(8, "big").hex()
+
+
+def test_solo_developer_capture_toggle_bypasses_tokenization() -> None:
+    """Existing solo capture semantics win over opt-in tokenization."""
+    token_map = InMemoryRedactionTokenMap()
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(
+        RedactionSpanProcessor(tokenizer=OpaqueRedactionTokenizer(token_map=token_map))
+    )
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+
+    with session_content_capture():
+        span = tracer.start_span("s")
+        span.set_attribute("gen_ai.input.messages", "operator-approved raw")
+        span.end()
+
+    [exported] = exporter.get_finished_spans()
+    assert exported.attributes["gen_ai.input.messages"] == "operator-approved raw"
+    assert token_map.records == ()
 
 
 def test_on_end_preserves_structure_attributes(

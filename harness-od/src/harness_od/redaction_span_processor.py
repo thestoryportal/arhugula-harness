@@ -106,6 +106,7 @@ from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
 
 from harness_od.content_structure_discipline import DEFAULT_OFF_CONTENT_ATTRIBUTES
 from harness_od.redaction_gradient import PER_PERSONA_TIER_REDACTION
+from harness_od.redaction_tokenizer import RedactionAttributeTokenizer
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -207,6 +208,7 @@ class RedactionSpanProcessor(SpanProcessor):
         *,
         persona_tier: PersonaTier = PersonaTier.SOLO_DEVELOPER,
         redacted_attributes: frozenset[str] = DEFAULT_OFF_CONTENT_ATTRIBUTES,
+        tokenizer: RedactionAttributeTokenizer | None = None,
     ) -> None:
         # OD spec §C-OD-13 §13.1 row 3 — multi-tenant-compliance is
         # non-toggleable; operator cannot disable redaction at this tier.
@@ -222,6 +224,7 @@ class RedactionSpanProcessor(SpanProcessor):
             )
         self._persona_tier: PersonaTier = persona_tier
         self._redacted: frozenset[str] = redacted_attributes
+        self._tokenizer = tokenizer
 
     @property
     def redacted_attributes(self) -> frozenset[str]:
@@ -277,10 +280,21 @@ class RedactionSpanProcessor(SpanProcessor):
         attrs = span._attributes  # pyright: ignore[reportPrivateUsage]
         if attrs is None:
             return
+        span_context = span.context
+        trace_id = span_context.trace_id.to_bytes(16, "big").hex() if span_context else None
+        span_id = span_context.span_id.to_bytes(8, "big").hex() if span_context else None
         for key in list(attrs.keys()):
             if key in self._redacted:
                 try:
-                    del attrs[key]  # pyright: ignore[reportIndexIssue]
+                    if self._tokenizer is None:
+                        del attrs[key]  # pyright: ignore[reportIndexIssue]
+                    else:
+                        attrs[key] = self._tokenizer.tokenize(  # pyright: ignore[reportIndexIssue]
+                            attribute_key=key,
+                            raw_value=attrs[key],
+                            trace_id=trace_id,
+                            span_id=span_id,
+                        )
                 except (KeyError, TypeError):
                     # Immutable-bag fallback: span already frozen; skip
                     # silently rather than raise into the TracerProvider
