@@ -1191,6 +1191,9 @@ R-420-self-hosted-server-deployment-e2e:
     gates (SELF_HOSTED_SERVER config, real collector placement, OTLP endpoint, provider allowlist, tier backend
     selector) without starting the daemon or making network/secret calls. R-440 supplies the `self-hosted-keyring`
     selector; the remaining R-420 gate is live infrastructure + actual secret material in the selected backend.
+    Codex gate logged 2026-06-07: resume with a SELF_HOSTED_SERVER `harness.toml`, non-IN_PROCESS collector
+    placement, OTLP endpoint, provider allowlist, `backend = "self-hosted-keyring"`, and real keyring entries;
+    then run readiness and the daemon e2e.
 
 R-421-managed-cloud-deployment-e2e:
   title: Exercise the harness at the MANAGED_CLOUD deployment surface (cloud secrets + FULL_VM provider class + managed collector)

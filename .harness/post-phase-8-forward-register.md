@@ -42,7 +42,7 @@ The register has **two tiers**, kept distinct:
 | B-2 | ~~closed~~ | IV Multi-LLM | ~~Multi-provider credentials + mixed-provider exercise~~ | **R-300 second-provider exercise RESOLVED** — deterministic fallback + live Anthropic→OpenAI (#281) + live Ollama (#283) | PR #281 + PR #283 | no |
 | B-3 | ~~closed~~ | V Deployment | ~~Real TIER_2 container sandbox execution (R-410)~~ | **R-410 RESOLVED by local Docker execution driver + live TIER_2 container e2e** | this PR | ⚖️ yes |
 | B-4 | **[proposed]** | V Deployment | TIER_3 microVM + TIER_4 full-VM execution (R-411/R-412) | not built | impl + infra | ⚖️ yes |
-| B-5 | **[proposed]** | V Deployment | SELF_HOSTED_SERVER + MANAGED_CLOUD e2e (R-420/R-421) | LOCAL-only exercised; self-hosted keyring selector built | operator infra | ⚖️ (R-421) |
+| B-5 | **[proposed]** | V Deployment | SELF_HOSTED_SERVER + MANAGED_CLOUD e2e (R-420/R-421) | LOCAL-only exercised; self-hosted keyring selector built; R-420 live gate logged | operator infra | ⚖️ (R-421) |
 | B-6 | **[proposed]** | V Deployment | OTLP tail-keep collector-side validation (R-430) | buffer logic in-process; collector-side unverified | operator infra | no |
 | B-7 | ~~closed~~ | V Deployment | ~~Tier-level self-hosted secrets backend selector (R-440)~~ | **SELF_HOSTED keyring-only selector landed; cloud bootstrap-token remains R-421** | this PR | no |
 | B-8 | **[proposed]** | VI Multi-tenant | Non-default `tenant_id` / non-SOLO `persona_tier` deployment | fields plumbed; non-toggleability enforced; base-rate envelope live | operator deploy + impl | ⚖️ yes |
@@ -114,7 +114,7 @@ The register has **two tiers**, kept distinct:
 
 ### B-5 · SELF_HOSTED_SERVER + MANAGED_CLOUD deployment e2e (R-420 / R-421)
 - **What it is.** First real non-LOCAL surfaces. **R-420 (SELF_HOSTED_SERVER):** harness daemon (`C-RT-29 §14.18`, FastMCP Unix-socket) against a **real OTLP collector** + tier-level secrets; tail-keep wrapping active (non-LOCAL); per-cell sampler `base_rate` = the SELF_HOSTED cell. **R-421 (MANAGED_CLOUD):** cloud env + cloud secrets + FULL_VM + managed collector; in-sandbox encrypted-fs secrets per ADR-F5; MANAGED_CLOUD per-cell sampler + redaction posture (`C-OD-13 §13.1`).
-- **Current state.** Only LOCAL exercised. **Operator/infra-gated** (`halt-route-to-operator`) — needs operator to provision the server, collector, and real keyring entries before any execution. `just self-hosted-readiness --config <harness.toml>` now checks the static SELF_HOSTED_SERVER preconditions without starting the daemon, probing OTLP, or fetching secrets.
+- **Current state.** Only LOCAL exercised. **Operator/infra-gated** (`halt-route-to-operator`) — needs operator to provision the server, collector, and real keyring entries before any execution. `just self-hosted-readiness --config <harness.toml>` now checks the static SELF_HOSTED_SERVER preconditions without starting the daemon, probing OTLP, or fetching secrets. Codex gate logged 2026-06-07 for the remaining live R-420 boundary.
 - **Close-out steps.** (R-420) run `just self-hosted-readiness --config <self-hosted harness.toml>` until only live execution remains, then operator provisions server + collector + keyring entries → run the daemon e2e with the must_pass set; (R-421, dep R-420) provision cloud env. R-420 **unblocks R-421 + R-430**. **`⚖️ Council (R-421 only)`** — MANAGED_CLOUD posture (C8 security ⊥ C11 deployment simplicity) when that arc opens; R-420 is operator-infra, not a design tension.
 
 ### B-6 · OTLP tail-keep preservation validation (R-430)
