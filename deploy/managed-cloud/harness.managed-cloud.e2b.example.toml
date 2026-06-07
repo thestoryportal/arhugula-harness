@@ -27,7 +27,9 @@ name = "e2b-secret"
 scope = { name = "r421-managed-cloud" }
 
 [runtime.otel]
-otlp_endpoint = "https://collector.vendor.example/v1/traces"
+# Runtime uses the OTLP gRPC exporter. For the Cloud Run collector path, use
+# the Cloud Run service URL only, without a /v1/traces suffix.
+otlp_endpoint = "https://collector.vendor.example"
 
 [runtime.collector]
 placement = "VENDOR_PIPELINE"

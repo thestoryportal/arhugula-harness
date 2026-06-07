@@ -233,6 +233,12 @@ r421-managed-cloud-readiness config *args:
 r421-e2b-live-probe *args:
     uv run --with e2b python tools/r421_e2b_live_probe.py {{args}}
 
+# Live R-421 managed-cloud e2e. Requires GCP Secret Manager access, a real
+# non-loopback managed OTLP endpoint, and creates a usage-billed E2B sandbox.
+# Codex must get explicit operator approval before running this command.
+r421-managed-cloud-live-e2e config *args:
+    uv run --with e2b python tools/r421_managed_cloud_live_e2e.py {{config}} {{args}}
+
 # Live R-420 local e2e. Requires Docker stack up, local Ollama, and keyring
 # entries. No hosted-provider inference is performed by the default workflow.
 r420-self-hosted-live-e2e config:
