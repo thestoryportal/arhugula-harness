@@ -85,10 +85,7 @@ def _collector_placement_check(config: RuntimeConfig) -> CheckResult:
     )
     allowed = collector_placement(cell) & _SELF_HOSTED_REAL_COLLECTOR_PLACEMENTS
     observed = config.collector.placement
-    ok = (
-        config.deployment_surface is DeploymentSurface.SELF_HOSTED_SERVER
-        and observed in allowed
-    )
+    ok = config.deployment_surface is DeploymentSurface.SELF_HOSTED_SERVER and observed in allowed
     return CheckResult(
         name="collector-placement",
         ok=ok,
@@ -151,8 +148,7 @@ def _tier_secret_backend_check(provider_secrets: ProviderSecretsConfig) -> Check
         if getattr(provider_secrets, field, None) not in (None, "")
     ]
     empty_detail = (
-        "tier-level backend selector fields exist but are empty: "
-        f"{', '.join(selector_fields)}"
+        f"tier-level backend selector fields exist but are empty: {', '.join(selector_fields)}"
     )
     return CheckResult(
         name="tier-secrets-backend",
