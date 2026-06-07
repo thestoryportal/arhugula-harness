@@ -190,6 +190,14 @@ markers:
 skips:
     uv run pytest --collect-only -q -rs | grep -E "^SKIP" || echo "(no skips)"
 
+# Check non-mutating host readiness for sandbox/cloud providers.
+# Providers: r411-gvisor, r411-kata, r411-shuru, r411-microsandbox, r411-libkrun,
+# r412-firecracker, r412-qemu-microvm, r421-e2b.
+# Aliases: gvisor, kata, shuru, microsandbox, msb, libkrun, firecracker, qemu-microvm, microvm, e2b.
+# Reviewed non-provider: mvm-sh/mvm is a Go bytecode VM, not an isolation sandbox.
+sandbox-host-check provider='r411-gvisor':
+    /usr/bin/python3 tools/sandbox_host_readiness.py --provider {{provider}}
+
 # ─── operator dashboard (R-XI-01) ──────────────────────────────────────────
 #
 # Local view of the operator roadmap dashboard. Output goes to the gitignored

@@ -83,10 +83,10 @@ ANNOTATIONS = {
     # PROPOSED (queued; most need credentials or infrastructure only you can provide)
     "R-300-multi-llm-second-provider": "Ready to start, but needs OpenAI/Ollama credentials and a mixed-provider test you'd run.",
     "R-410-sandbox-tier-2-container-execution": "Resolved by the local-only Docker execution driver and live TIER_2 container e2e.",
-    "R-411-sandbox-tier-3-microvm-execution": "Run tool calls in a microVM; needs that runtime and follows the container tier.",
-    "R-412-sandbox-tier-4-full-vm-execution": "Run tool calls in a full VM; cloud-only, and follows the microVM + managed-cloud stages.",
+    "R-411-sandbox-tier-3-microvm-execution": "Next sandbox lane is host-fit provider selection: gVisor/Kata/Shuru/Microsandbox/libkrun readiness probes decide what can run.",
+    "R-412-sandbox-tier-4-full-vm-execution": "Deferred until managed cloud exists; Firecracker and QEMU microvm need a Linux KVM host with /dev/kvm.",
     "R-420-self-hosted-server-deployment-e2e": "Run the harness on a real server with a collector + secrets; needs that infrastructure stood up.",
-    "R-421-managed-cloud-deployment-e2e": "Run the harness in managed cloud (cloud secrets + full VM + managed collector); needs cloud infrastructure.",
+    "R-421-managed-cloud-deployment-e2e": "Managed cloud is deferred; E2B is a possible hosted sandbox candidate but needs an approved API key.",
     "R-430-otlp-collector-tail-keep-preservation": "Confirm the telemetry keep-rule works against a real collector; needs that collector running.",
     "R-440-tier-level-secrets-backend": "Wire a real secrets store for a self-hosted server (today it's env-vars / operator-supplied).",
     "R-500-multi-tenant-deployment": "Exercise the harness with multiple tenants / a non-solo profile; needs a multi-tenant deployment.",
@@ -249,7 +249,7 @@ REMAINING_ORDERED = [
         "layer": "activation",
         "id": "R-411 → R-412",
         "label": "Higher-tier sandboxes: microVM → full VM",
-        "gate": "Needs microVM/full-VM runtimes and, for TIER_4, managed-cloud infrastructure.",
+        "gate": "R-411 needs a compatible local sandbox runtime; this macOS x86_64 host does not satisfy the current gVisor/Kata/Shuru/Microsandbox/libkrun candidates.",
     },
     {
         "n": 11,
