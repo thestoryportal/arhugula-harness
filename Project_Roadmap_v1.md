@@ -2153,8 +2153,13 @@ R-CXA-2-cp-is-seam:
     STILL-BOUNDED per R-700 — cp_is_wiring PARTIAL-LAND; U-RT-35 unit landed (batch-46) but full contract
     STILL-BOUNDED. **GROUNDED 2026-06-02 (producer-discovery, [[r-cxa-seam-wiring-is-producer-discovery]] —
     3rd CXA seam grounded after R-CXA-1/R-CXA-4):** of the 6 §16.5 composer methods on
-    `cp_is_wiring.py`, only 2 have production firing sites — `emit_pause_resume_state_ledger_entry`
+    `cp_is_wiring.py`, only 2 have production firing methods — `emit_pause_resume_state_ledger_entry`
     (workflow_driver.py:582/:808/:965) + `emit_override_state_ledger_entry` (workflow_driver.py:859).
+    **Advanced 2026-06-07:** the previously deferred `workflow_driver.py:965` HITL-signal caller-site now has
+    direct integration coverage via
+    `test_caller_site_pause_resume_protocol_emission_pause_captured_hitl_signal`; the test raises the real
+    `HITLPauseRequestedSignal`, verifies `RunStatus.PAUSED`, `pause_reason=hitl_pending`, and persists the
+    `cp.pause-resume-protocol` CP→IS ledger entry through `ctx.cp_is_wiring`.
     The other 4 are blocked by deliberately-STRUCK X-AL-3 gaps from the U-RT-111 saga, NOT by a missing
     firing site: (a) `emit_workload_class_selection` → AC #2 STRUCK (v2.38) substrate-lifecycle-mismatch —
     `ctx.cp_is_wiring` is unset at bootstrap stage 3b (built at stage 6); wiring requires a bootstrap
