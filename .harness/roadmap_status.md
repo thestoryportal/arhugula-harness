@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `b4ea5e307671` |
-| `last_refreshed` | 2026-06-07T13:29:36-06:00 |
-| `git_head` | `e150f45f` (main) — PR #358 R-008 category-token classifier seam merged. |
+| `workspace_state_hash` | `c71f94cd1e59` |
+| `last_refreshed` | 2026-06-07T14:11:13-06:00 |
+| `git_head` | `f8cb91dd` (main) — PR #361 post-#360 roadmap/dashboard refresh merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -394,6 +394,7 @@ The 6 bucket rows below sum to **54** under the ratified **accounting (i)** (RET
 | 2026-06-07 | **Post-#358 terminating refresh — PR #358 R-008 category-token classifier seam merged at `e150f45`; §12.2 owed follow-on.** | Hash `c8cdc6d2f708` → `b4ea5e307671` (state at `e150f45f`, PRS empty, fork count 45, batch-51). **Next action:** R-008 remains BLOCKED/PARTIAL on the full eval-grade semantic classifier; the provider-free category-token seam is no longer the blocker. This refresh branch is the owed fixed-point follow-on. |
 | 2026-06-07 | **Substantive R-830 S3 memory backend branch opened from `384371d`; §12.2 owed follow-on after merge.** | Added provider-free S3 backend implementation and explicit S3 factory binding up to the live cloud boundary. **Next action:** R-830 remains PROPOSED/gated on real S3 bucket/credentials plus operator-approved live read/write/delete e2e; managed-DB remains a future variant. |
 | 2026-06-07 | **Post-#360 terminating refresh — PR #360 R-830 S3 memory backend merged at `10de3b1`; §12.2 owed follow-on.** | Hash `b4ea5e307671` → `3df68d3b3a2d` (state at `10de3b1`, PRS empty, fork count 45, batch-51). **Next action:** R-830 remains PROPOSED/gated on live S3 bucket/credentials plus operator-approved cloud e2e; the provider-free S3 slice is no longer the blocker. |
+| 2026-06-07 | **Post-#361 corrective fixed-point refresh — PR #361 merged at `f8cb91d`; §12.2 anchor re-pin completed.** | Hash `3df68d3b3a2d` → `c71f94cd1e59` (state at `f8cb91dd`, PRS empty, fork count 45, batch-51). **Next action unchanged:** R-830 remains PROPOSED/gated on live S3 bucket/credentials plus operator-approved cloud e2e; managed-DB remains a future variant. This status-only refresh corrects the anchor table after #361 refreshed the narrative/dashboard snapshot. |
 
 **Audit protocol exercised across 31 terminating-refresh closures + 2 fresh-session reconciliations + 10 substantive closes + 1 substantive partial + 1 Class 1 fork filing + 1 Class 1 fork resolved-as-defer + 1 operator-approved 3-PR merge cluster + R-XI-01 dashboard build + 1 process-discipline sweep (R-600-pattern-bake-in).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **2026-06-01 session: landed the R-100 tool-step apply cluster (#173/#171/#172), closed R-600-clearance-marker-backfill-survey (#175), built+landed R-XI-01 operator dashboard MVP (#177), and ran the first R-600-pattern-bake-in-sweep (ACTIVE-SURVEYED; v1.14 absorption deferred).** **All Claude-executable substantive arcs are drained.** The deterministic next-action is operator-owned: **(a) run the live R-100 e2e**, and/or **(b)** any operator-scoped design-phase arc (e.g. the `R-600-workflow-v1-14-amendment` the sweep now has evidence for). Remaining Claude-executable mode-agnostic work = MEMORY.md hygiene audit + fork-doc Status cadence sweep; §V/VI/IV gated on MVP-shipped / live e2e.
 
