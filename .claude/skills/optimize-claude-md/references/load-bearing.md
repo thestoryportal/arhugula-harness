@@ -10,8 +10,23 @@ classify it.
 **Load-bearing (KEEP).** Content that changes what the agent *does* — invariants, boundaries,
 authority, protocols. You may tighten wording, dedupe a thrice-stated rule, or shorten an
 example. You may **not** remove the rule, weaken its force (an imperative must not become a
-suggestion), or relocate it somewhere it won't be loaded when it's needed. When unsure whether
-something is load-bearing, treat it as load-bearing and flag the question instead of cutting.
+suggestion), **drop a qualifier or exception clause** (see below), or relocate it somewhere it
+won't be loaded when it's needed. When unsure whether something is load-bearing, treat it as
+load-bearing and flag the question instead of cutting.
+
+> **A qualifier is part of the rule — don't compress it away.** A guardrail often carries a
+> conditional or exception: "never X — *except* Y, which routes to Z." The crisp imperative ("never
+> X") is *not* a tighter version of that rule — it is a *different, stronger* rule that changes
+> behavior: drop the exception and a legitimate Y is wrongly blocked; keep "never X" but drop the
+> "routes to Z" and the safe handling for the exceptional case is lost. The verbose conditional is
+> the most tempting "this §section could be tighter" target precisely because the qualifier reads as
+> wordiness — but the qualifier is *where the behavior lives*. (And the routing target of an
+> exception is a common sole-home for an anchor — "routes through the Posture gate" may be the only
+> place `Posture`/`secret`/`advisor()` appears; compressing it out drops the anchor and
+> `guardrails_preserved` hard-fails.) Tighten the *prose* of a conditional rule if it is genuinely
+> verbose, but every branch — the prohibition, each exception, and each exception's routing/handling
+> — must survive the edit intact. When in doubt, keep the whole conditional verbatim and win your
+> bytes from genuine reference bulk instead.
 
 > **Diff before you dedupe.** Two sections that *look* like restatements of each other — a
 > "general statement" and an "operative restatement", a summary and its detail — are the trap:
