@@ -1176,7 +1176,7 @@ R-411-sandbox-tier-3-microvm-execution:
 R-412-sandbox-tier-4-full-vm-execution:
   title: Real TIER_4 full-VM / firecracker sandbox execution (MANAGED_CLOUD-only provider class)
   surface: V
-  status: DEFERRED   # R-421 managed cloud is proven; full-VM provider execution still gates on R-411/provider host fit
+  status: RESOLVED   # closed by the managed E2B full-VM ToolExecutionDriver + live Tier-4 dispatcher e2e
   depends_on: [R-411-sandbox-tier-3-microvm-execution, R-421-managed-cloud-deployment-e2e]
   blocks: []
   posture: phase-7
@@ -1189,17 +1189,16 @@ R-412-sandbox-tier-4-full-vm-execution:
   next_pointer: null
   notes: >
     Top of the tier ladder. The 12-cell deployment_matrix.py reserves FULL_VM exclusively for MANAGED_CLOUD; this
-    row therefore co-gates on R-421 (a real MANAGED_CLOUD surface). Deferred-far per ADR-D2 graduated-isolation.
-    Firecracker is the correct setup direction for this FULL_VM lane, not for R-411. Upstream Firecracker requires
-    a Linux host with KVM and read/write `/dev/kvm`; the current macOS host has no `/dev/kvm`. R-421 now proves the
-    selected managed-cloud deployment surface, but this row still needs a full-VM provider implementation/runtime
-    path. QEMU's `microvm` machine type is also tracked here as `r412-qemu-microvm`: it is
-    Firecracker-inspired, minimalist, and host-gated on Linux x86_64 + KVM + `qemu-system-x86_64`, with per-run
-    kernel/rootfs artifacts still required beyond the host probe. The repo now carries `just sandbox-host-check
-    r412-firecracker|r412-qemu-microvm` so a future Linux KVM / managed-cloud host can be verified before
-    implementing the provider. E2B (`e2b-dev/e2b`) is a plausible managed-cloud sandbox candidate for R-421/R-412
-    investigation, but it is not a local R-411 runtime; it requires an operator-approved `E2B_API_KEY` and remote
-    cloud execution (`just sandbox-host-check r421-e2b` records only local SDK/key readiness, with no network call).
+    row therefore co-gates on R-421 (a real MANAGED_CLOUD surface). Closed by the operator-approved managed E2B
+    path after local Intel macOS + Lima probing confirmed no `/dev/kvm` is exposed in the R-411 VM. The
+    `E2BManagedFullVMToolRunnerExecutionDriver` now plugs into the existing `ToolExecutionDriver` seam, requires
+    `SandboxTier.TIER_4_FULL_VM`, creates an E2B managed sandbox with outbound internet disabled by default, and
+    exchanges the same stable JSON request/response shape used by the local Docker/gVisor runners. Live proof:
+    `just r412-e2b-full-vm-live-e2e` passed on 2026-06-08 with one usage-billed E2B sandbox; the dispatcher
+    resolved `tier-4-full-vm`, provider `e2b-managed`, tech `e2b-firecracker`, and the hosted runner returned
+    `e2b:hello-r412`. Local Firecracker and QEMU `microvm` remain valid future self-managed variants, but not
+    R-412 blockers: upstream Firecracker requires Linux KVM + read/write `/dev/kvm`, and QEMU `microvm` is
+    host-gated on Linux x86_64 + KVM + `qemu-system-x86_64` for the canonical KVM path.
 
 R-420-self-hosted-server-deployment-e2e:
   title: Exercise the harness at the SELF_HOSTED_SERVER deployment surface (real server + OTLP collector + tier secrets)
@@ -1285,7 +1284,7 @@ R-421-managed-cloud-deployment-e2e:
     compute service account Cloud Run Invoker on the collector service, and fixed the live e2e tool so future
     authenticated gRPC exports do not drop the Authorization metadata. The temporary local
     `roles/iam.serviceAccountTokenCreator` binding used for the proof was removed and verified absent after the
-    live run. R-412 remains deferred on the separate full-VM/provider host-fit implementation path.
+    live run. R-412 later closed on the selected managed E2B full-VM provider path.
 
 R-430-otlp-collector-tail-keep-preservation:
   title: Verify tail-keep-on-classification preservation at a real OTLP collector boundary

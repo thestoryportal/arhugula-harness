@@ -85,7 +85,7 @@ ANNOTATIONS = {
     "R-300-multi-llm-second-provider": "Resolved by deterministic fallback plus live Anthropic→OpenAI and local Ollama fallback exercises.",
     "R-410-sandbox-tier-2-container-execution": "Resolved by the local-only Docker execution driver and live TIER_2 container e2e.",
     "R-411-sandbox-tier-3-microvm-execution": "Resolved by Docker + gVisor/runsc ToolExecutionDriver on the operator-provisioned Lima Linux VM.",
-    "R-412-sandbox-tier-4-full-vm-execution": "Deferred until a full-VM provider implementation exists; R-411 now proves the Tier-3 gVisor path and R-421 proves the managed-cloud surface.",
+    "R-412-sandbox-tier-4-full-vm-execution": "Resolved by the managed E2B full-VM ToolExecutionDriver and live Tier-4 dispatcher e2e.",
     "R-420-self-hosted-server-deployment-e2e": "Resolved by the local single-node self-hosted daemon + collector + keyring live e2e.",
     "R-421-managed-cloud-deployment-e2e": "Resolved by the approved E2B + GCP Secret Manager + authenticated Cloud Run collector live e2e; Cloud Trace observed the managed-cloud classification trace.",
     "R-430-otlp-collector-tail-keep-preservation": "Resolved by the R-420 local real-collector tail-keep live proof.",
@@ -187,7 +187,7 @@ REMAINING_ORDERED = [
         "layer": "activation",
         "id": "R-411 → R-412",
         "label": "Higher-tier sandboxes: microVM → full VM",
-        "gate": "R-411 is resolved by the selected Docker + gVisor/runsc path on the provisioned Lima Linux VM; R-412 remains the full-VM provider lane.",
+        "gate": "R-411 is resolved by Docker + gVisor/runsc on the provisioned Lima Linux VM; R-412 is resolved by the managed E2B full-VM provider path.",
     },
     {
         "n": 10,

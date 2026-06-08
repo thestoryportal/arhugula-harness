@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `20676cee37c3` |
-| `last_refreshed` | 2026-06-08T05:25:12-06:00 |
-| `git_head` | `3383fb28` (main) — PR #404 R-830 memory-backend comment refresh merged. |
+| `workspace_state_hash` | `2219da02aece` |
+| `last_refreshed` | 2026-06-08T06:34:45-06:00 |
+| `git_head` | `3971ef9b` (main) — PR #407 dashboard-maintenance guard fix merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-53.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -31,11 +31,10 @@
 - `R-CXA-1` - AS->IS secret-fetch audit seam. Proceed only if a real AS secret-fetch producer or scope-bearing caller exists; otherwise record the producer gap and move on.
 - `R-CXA-2` - CP->IS future HITL rewrite / engine recovery-loop producers. Proceed only if a real upstream producer exists; avoid placeholder caller wiring.
 - `R-CXA-3` - CP->AS seam. Needs a CP->AS runtime composer or a scope-narrowing decision.
-- `R-412` - full-VM provider lane. Deferred until full-VM provider infrastructure or selection exists.
 - `R-830` - optional managed-DB backend. Only if the operator chooses managed-DB scope beyond the completed SQLite/S3 slices.
 - `R-XI-02` / `R-XI-03` / `R-900` - dashboard/research arcs by operator discretion.
 
-**Do not re-open as next action.** `R-411`, `R-420`, `R-421`, `R-430`, `R-500`, `R-810`, `R-820`, `R-008` / OD-4, and `R-CXA-4` are already closed or back-flowed.
+**Do not re-open as next action.** `R-411`, `R-412`, `R-420`, `R-421`, `R-430`, `R-500`, `R-810`, `R-820`, `R-008` / OD-4, and `R-CXA-4` are already closed or back-flowed.
 
 ---
 
@@ -51,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #407 (`3971ef9b`) | 2026-06-08 | **Dashboard-maintenance guard fix merged.** Codex closeout now treats dashboard generator/test maintenance as part of status refreshes, while unrelated `tools/` changes still trigger the design/implementation mix guard. |
+| PR #406 (`34269d27`) | 2026-06-08 | **R-412 managed full-VM provider merged.** Added `E2BManagedFullVMToolRunnerExecutionDriver`, an opt-in `just r412-e2b-full-vm-live-e2e` gate, and live evidence that a Tier-4 TOOL_STEP executed through a managed E2B sandbox with provider `e2b-managed` / tech `e2b-firecracker`. |
 | PR #404 (`3383fb28`) | 2026-06-08 | **R-830 memory-backend comment refresh merged.** Runtime comments/docstrings now align with the landed SQLite and S3 Memory backend slices; managed-DB remains future optional scope. No behavior or roadmap state changed. |
 | PR #403 (`b07c6a91`) | 2026-06-08 | **Post-#402 roadmap refresh merged.** Re-pinned the roadmap/dashboard fixed point after the R-CXA-2 bounded-status refresh. |
 | PR #402 (`7c2b5dda`) | 2026-06-08 | **R-CXA-2 bounded-status refresh merged.** Roadmap, forward register, status, dashboard generator, and dashboard snapshot now report the current 3/6 CP→IS posture: workload selection fires through production callers; remaining closure waits on a real HITL rewrite caller and engine recovery-loop producers. |
-| PR #401 (`03abfad3`) | 2026-06-08 | **Post-#400 roadmap refresh merged.** Re-pinned the roadmap/dashboard fixed point after the dashboard currentness discipline update. |
-| PR #400 (`35ffce41`) | 2026-06-08 | **Dashboard currentness discipline merged.** `generate.py` now derives visible `HEAD` / `LAST` / `HASH` / `OPEN FORKS` plus closure copy counts from live git/filesystem/roadmap inputs; Codex and Claude context now surface the generator-owned refresh rule. |
 
 ---
 
@@ -65,7 +64,7 @@ Sample (highest-leverage open):
 
 | Fork doc | Class | Status |
 |---|---|---|
-| `class_1_fork_sandbox_tier_no_execution_driver_contract.md` | Class 1 | ✅ APPLIED-AS-BOUNDED-READING-B (status-line refreshed 2026-06-07) — R-410 PR #317 supplied `ToolExecutionDriver` + local Docker provider; R-411/R-412 remain provider-class/runtime gates. |
+| `class_1_fork_sandbox_tier_no_execution_driver_contract.md` | Class 1 | ✅ APPLIED-AS-BOUNDED-READING-B (status-line refreshed 2026-06-08) — R-410 supplied `ToolExecutionDriver` + local Docker provider; R-411 added gVisor/runsc; R-412 adds managed E2B full-VM. |
 | `class_1_fork_tool_step_no_operator_supplied_converter.md` | Class 1 | ✅ APPLIED (PR #171, spec v1.40) — converter config surface landed (Reading B) |
 | `class_1_fork_tool_step_no_bootstrap_sandbox_decision_resolver.md` | Class 1 | ✅ APPLIED-AS-READING-B (PR #172, spec v1.41 §14.9.8) — resolver + 5 bootstrap gaps wired; AC #2 final close = operator live e2e |
 | `class_1_fork_llm_cost_attribution_not_firing_on_real_dispatch.md` | Class 1 | ❌ RESOLVED-AS-INVALID (PR #168) — test-observation bug, not a defect; cost-attribution fires + writes; OD-5 retirement VALID |
@@ -261,8 +260,10 @@ The 5 bucket rows below sum to **54** under the batch-53 live ledger (RETIRED 51
 | 2026-06-08 | **Post-#385 roadmap status refresh — PR #385 R-411 gVisor/runsc execution provider merged at `300009e`; §12.2 owed follow-on.** | R-411 is RESOLVED by the selected Docker + gVisor/runsc path on the operator-provisioned Lima Linux VM. The normal fixed-point refresh updates the status banner from PR TBD to PR #385 and re-pins the dashboard to the merged R-411 closure state. **Next action:** R-412 remains deferred on a separate full-VM/Firecracker provider path; remaining high-value open work returns to accounting/back-flow items and any operator-selected future integration arc. |
 | 2026-06-08 | **Post-#402 roadmap status refresh — PR #402 R-CXA-2 bounded-status refresh merged at `7c2b5dda`; §12.2 owed follow-on.** | Hash `8c027fc8b21e` → `b0db307f9ac8` (state at `7c2b5dda`, PRS empty/unavailable, fork count 45, batch-53). **Next action unchanged:** R-CXA-1 remains producer-gated, R-CXA-2 remains STILL-BOUNDED on future HITL rewrite / engine recovery-loop producers, R-CXA-3 remains composer/scope gated, and activation/research options remain R-412, R-830, R-XI-02/R-XI-03/R-900 by operator discretion. |
 | 2026-06-08 | **Post-#404 roadmap status refresh — PR #404 R-830 memory-backend comment refresh merged at `3383fb28`; §12.2 owed follow-on.** | Hash `b0db307f9ac8` → `20676cee37c3` (state at `3383fb28`, PRS empty/unavailable, fork count 45, batch-53). **Next action unchanged:** #404 was runtime comment/docstring hygiene only; R-CXA-1/R-CXA-2/R-CXA-3 remain producer/composer/upstream-loop gated, R-412 remains deferred, and R-830 managed-DB remains future optional scope by operator choice. |
+| 2026-06-08 | **Post-#406 roadmap status refresh — PR #406 R-412 E2B full-VM provider merged at `34269d27`; §12.2 owed follow-on.** | Hash `20676cee37c3` → `d5e13dae565c` (state at `34269d27`, PRS empty/unavailable, fork count 45, batch-53). R-412 is RESOLVED by `E2BManagedFullVMToolRunnerExecutionDriver` on the existing dispatcher `ToolExecutionDriver` seam plus the operator-approved live Tier-4 E2B dispatcher e2e. **Next action:** R-CXA-1/R-CXA-2/R-CXA-3 remain the only non-retired substitution rows; R-830 managed-DB and R-XI-02/R-XI-03/R-900 remain optional operator-selected arcs. |
+| 2026-06-08 | **Post-#407 corrective roadmap status refresh — PR #407 dashboard-maintenance guard fix merged at `3971ef9b`; §12.2 owed follow-on.** | Hash `d5e13dae565c` → `2219da02aece` (state at `3971ef9b`, PRS empty/unavailable, fork count 45, batch-53). No roadmap item changed in #407; this refresh carries the R-412 back-flow on top of the corrected Codex closeout guard. **Next action unchanged:** R-CXA-1/R-CXA-2/R-CXA-3 remain the only non-retired substitution rows; R-830 managed-DB and R-XI-02/R-XI-03/R-900 remain optional operator-selected arcs. |
 
-**Audit protocol exercised across 31 terminating-refresh closures + 2 fresh-session reconciliations + 10 substantive closes + 1 substantive partial + 1 Class 1 fork filing + 1 Class 1 fork resolved-as-defer + 1 operator-approved 3-PR merge cluster + R-XI-01 dashboard build + 1 process-discipline sweep (R-600-pattern-bake-in).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **2026-06-01 session: landed the R-100 tool-step apply cluster (#173/#171/#172), closed R-600-clearance-marker-backfill-survey (#175), built+landed R-XI-01 operator dashboard MVP (#177), and ran the first R-600-pattern-bake-in-sweep (ACTIVE-SURVEYED; v1.14 absorption deferred).** **All Claude-executable substantive arcs are drained.** The deterministic next-action is operator-owned: **(a) run the live R-100 e2e**, and/or **(b)** any operator-scoped design-phase arc (e.g. the `R-600-workflow-v1-14-amendment` the sweep now has evidence for). Remaining Claude-executable mode-agnostic work = MEMORY.md hygiene audit + fork-doc Status cadence sweep; §V/VI/IV gated on MVP-shipped / live e2e.
+**Audit protocol exercised across 31 terminating-refresh closures + 2 fresh-session reconciliations + 11 substantive closes + 1 substantive partial + 1 Class 1 fork filing + 1 Class 1 fork resolved-as-defer + 1 operator-approved 3-PR merge cluster + R-XI-01 dashboard build + 1 process-discipline sweep (R-600-pattern-bake-in).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **2026-06-01 session: landed the R-100 tool-step apply cluster (#173/#171/#172), closed R-600-clearance-marker-backfill-survey (#175), built+landed R-XI-01 operator dashboard MVP (#177), and ran the first R-600-pattern-bake-in-sweep (ACTIVE-SURVEYED; v1.14 absorption deferred).** **All Claude-executable substantive arcs are drained.** The deterministic next-action is operator-owned: **(a) run the live R-100 e2e**, and/or **(b)** any operator-scoped design-phase arc (e.g. the `R-600-workflow-v1-14-amendment` the sweep now has evidence for). Remaining Claude-executable mode-agnostic work = MEMORY.md hygiene audit + fork-doc Status cadence sweep; §V/VI/IV gated on MVP-shipped / live e2e.
 
 ---
 
