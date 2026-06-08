@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | ✅ RATIFIED-AS-READING-D (bounded-defer per X-AL-2; structurally-unfireable-at-MVP) — 2026-05-29 |
+| Status | ✅ RATIFIED-AS-READING-D (bounded-defer per X-AL-2; substrate-landed-but-production-firing-site-absent) — 2026-05-29; reaffirmed 2026-06-07 |
 | Filed | 2026-05-29 |
 | Filed by | Operator + Claude (post-PR-#68 close, design-phase posture) |
 | Class | 1 (architectural; LANDED-substrate-pending-upstream-loop-substrate; THIRD instance of this sub-species pattern in 24 hours after PR #67 HITL `rewrite_tool_call` + sibling-ledger `emit_sibling_ledger_entry`) |
@@ -187,8 +187,8 @@ Both ratifications are mechanical given empirical clarity. Once ratified, H_T-RT
 
 | Element | Status |
 |---|---|
-| Engine-layer `capture_pause_snapshot` (free) | ❌ STUB (NotImplementedError) |
-| Engine-layer `attempt_resume` (free) | ❌ STUB (NotImplementedError) |
+| Engine-layer `capture_pause_snapshot` (free) | ✅ FAIL-CLOSED BINDABLE SUBSTRATE (PR #369); production callers absent |
+| Engine-layer `attempt_resume` (free) | ✅ FAIL-CLOSED BINDABLE SUBSTRATE (PR #369); production callers absent |
 | Engine-layer `classify_resume` (free) | ✅ LANDED concrete impl |
 | Workflow-layer `PauseResumeProtocol` (class) | ✅ LANDED + production-active |
 | U-CP-50 material-diff detection | ✅ LANDED concrete impl (correction to prior framing) |
@@ -234,6 +234,27 @@ THIRD instance of `LANDED-substrate-pending-upstream-loop-substrate` in 24 hours
 ### H_T-RT-35 transit posture impact
 
 This ratification closes 1 of 2 remaining ratification arcs gating H_T-RT-35 PARTIAL → RETIRE-READY transit. PR #68 bootstrap-emission-substrate fork remains gated on fresh-session rescope (firing-site sourcing Q-set per PR #68 §8 addendum). RETIRE-READY transit awaits PR #68 ratification.
+
+## §11 Re-grounding (2026-06-07; after PR #369 substrate land)
+
+PR #369 changed the engine-layer free functions from pure `NotImplementedError` stubs into a fail-closed, bindable `EnginePauseResumeSubstrate` surface with a deterministic provider-free substrate. That removes the old "stub body" blocker, but it does not create a production firing site.
+
+Current state:
+
+| Surface | Current state |
+|---|---|
+| `capture_pause_snapshot(...)` free function | Delegates to a bound engine substrate; unbound calls fail closed with `EnginePauseResumeSubstrateNotBoundError` |
+| `attempt_resume(...)` free function | Delegates to a bound engine substrate; unbound calls fail closed with `EnginePauseResumeSubstrateNotBoundError` |
+| Deterministic engine substrate | LANDED and provider-free |
+| Production callers of engine-layer free functions | **ABSENT** |
+| Engine-layer crash-recovery / timeout recovery loop | **NOT BUILT** |
+| Workflow-layer `PauseResumeProtocol` class | Still production-active and distinct |
+
+There is no current production site that can honestly call the free functions. A static or workflow-layer caller would conflate the already-active C-CP-26 `PauseResumeProtocol` path with the distinct C-CP-22 engine-layer crash/timeout recovery surface.
+
+One additional type-boundary mismatch remains material for future work: the U-CP-78 `emit_pause_captured_state_ledger_entry(...)` composer consumes a workflow-layer `PauseSnapshot`, while the engine-layer free `capture_pause_snapshot(...)` returns a `PauseEvent`. This audit does not synthesize a conversion or emit a ledger entry from the wrong model. A real production connection should either be authored with the recovery loop (Reading B shape) or be preceded by an explicit spec/back-flow decision if the engine-layer contract is reframed.
+
+Reading D remains ratified for the current MVP boundary: substrate is now landed, but production firing-site connection is still structurally blocked by the absent recovery loop.
 
 ---
 

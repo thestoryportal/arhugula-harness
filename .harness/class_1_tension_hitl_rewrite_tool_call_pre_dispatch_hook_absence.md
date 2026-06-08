@@ -144,6 +144,14 @@ The LLM inner tool-call interception loop does NOT exist at MVP. Authoring a fir
 - ZERO clearance marker (per CLAUDE.md §4.5 — bounded-defer dispositions without design-substrate edits do not require clearance markers).
 - ZERO MEMORY.md retirement-event filing (no retirement-tier transit).
 
+## §9 Re-grounding (2026-06-07; R-CXA-2 firing-site disambiguation)
+
+Re-opened for audit only after the R-CXA-2 engine-substrate and workload-selection investigations. No posture change.
+
+The current production `RuntimeToolDispatcher` remains a static manifest `TOOL_STEP` dispatcher: it receives a predeclared `WorkflowStep` payload containing `tool_id` and `tool_args`. That surface is not the intended dynamic LLM-produced `ProposedAction` interception boundary for `rewrite_tool_call`. Wiring `ctx.hitl_registry.rewrite_tool_call(...)` there would at best emit a `cp.hitl-tool-call-rewriting` ledger entry while the original static tool dispatch still proceeds unchanged; that would be a false firing-site, not production HITL rewrite behavior.
+
+The CP→IS stage-ordering work therefore does not create the missing LLM inner tool-call loop. Reading D remains ratified. The re-litigation trigger is unchanged: re-open this fork when an actual LLM inner tool-call interception loop is authored, then choose the firing-site reading in that loop's context.
+
 ---
 
 *End of fork doc.*
