@@ -14,6 +14,17 @@ pure pointer-plus-lineage.
 
 1. **Identify the target** with `measure.py`: a section or set of long lines that is heavy AND
    classified relocatable (history / lineage / pointer-bulk), not load-bearing discipline.
+1a. **Scan the block for embedded rules BEFORE you move it.** "Relocatable" is a property of
+   *content*, not of a *section name*. A section that looks like pure provenance — an
+   "Appendix", "historical notes", a "change-log", a lineage table — can have a load-bearing rule
+   buried in it (a stray `CP-AL-1`/`X-AL-3` reminder, a paid-call/secret boundary, an invariant)
+   that appears *only* there. The keep-list in `load-bearing.md` is organized by section name, so
+   a rule hiding in an off-name section is exactly the one a section-matching pass misses. Before
+   relocating any bulk block, read it line-by-line against the keep-list *rules* (not section
+   names) and **extract every embedded load-bearing line to stay in the slimmed file** (re-home it
+   under its proper section, byte-for-byte). Move only what is left — the genuine provenance. A
+   whole-section sweep that carries an embedded guardrail into the home is a dropped guardrail, not
+   a relocation; `guardrails_preserved` hard-fails it.
 2. **Pick a home** — a doc OUTSIDE the always-loaded set but reachable on demand. Good homes:
    a sibling index like `.harness/artifact-pointers.md`, or the canonical files themselves (the
    spec/plan files already carry their own change-notes). **Never** relocate *into*
