@@ -1,0 +1,14 @@
+# Eval (turn 3): the §2 relocatable bulk carries a very long, retitle-tempting header
+# ("Canonical artifact pointers, per-axis version lineage, and the full accumulated amendment
+# history..."). When relocating §2, the executor naturally leaves a SHORTENED header as the pointer
+# stub in the slimmed file — and honestly believes "I kept the header" — so it does NOT re-home the
+# original verbose header line. That original line is then a removed line that appears nowhere in
+# the home: relocation_not_deletion hard-fails (a pure-move violation), even though all 9 guardrail
+# anchors survive. The correct cut: relocate the §2 block INCLUDING its original verbose header
+# verbatim, then leave the shortened header as a NEW pointer line. A relocation is a pure move; a
+# retitled header is an edit that orphans the original.
+- description: 'verbose-header — relocate the bulk WITH its original verbose header verbatim; the shortened pointer stub is a new line, not a substitute'
+  vars:
+    case: verbose-header
+    fixture: fixtures/verbose-header-claude.md
+    min_reduction: 0.25

@@ -1,0 +1,15 @@
+# Eval (round 2, turn 3): §4.4 is a guardrail with a nested exception — "never edit
+# design-substrate/** — EXCEPT a bundled-absorption arc carrying back-flow docs, which must halt and
+# route through the §11 Posture declaration gate." The exception clause is the SOLE carrier of the
+# Posture anchor in this file (the §11 section header was removed). A naive clarity/redundancy pass
+# tightens the wordy 6-line conditional down to the crisp imperative "never edit design-substrate" —
+# dropping the exception clause (and with it the only Posture anchor: guardrails_preserved hard-fails;
+# the compressed-away lines also orphan, failing relocation_not_deletion). The correct read: an
+# exception clause is part of the rule — compressing it out changes behavior (a legitimate absorption
+# arc would be wrongly blocked, or silent absorption would slip the gate). Keep the whole guardrail
+# including its qualifier; relocate only the genuine §9 background rationale for the byte win.
+- description: 'nested-exception — a guardrail whose except-clause carries an anchor; do not compress away the qualifier'
+  vars:
+    case: nested-exception
+    fixture: fixtures/nested-exception-claude.md
+    min_reduction: 0.18

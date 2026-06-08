@@ -71,7 +71,11 @@ def looks_like_path(tok: str) -> bool:
 
 def norm_path(tok: str) -> str:
     """Strip markdown/glob noise to a filesystem-checkable path."""
-    tok = tok.strip().strip(".,;:)( ")
+    # Strip surrounding markdown/sentence punctuation, but NEVER a leading dot:
+    # `.harness/`, `.claude/`, `.github/` are real dotpaths, not punctuation. Stripping the
+    # leading `.` (the old `.strip(".,;:)( ")`) made every `.harness/<file>` token unresolvable.
+    tok = tok.strip().strip(",;:)( ")
+    tok = tok.rstrip(".")  # trailing sentence period only; leading dot preserved
     tok = re.split(r"[#:]", tok, maxsplit=1)[0]  # drop #anchor / :line
     tok = tok.replace("/**", "").replace("/*", "")
     if tok.startswith("./"):

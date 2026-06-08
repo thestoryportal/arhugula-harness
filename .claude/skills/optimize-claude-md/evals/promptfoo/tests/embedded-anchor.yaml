@@ -1,0 +1,11 @@
+# Eval (turn 1): a load-bearing anchor (CP-AL-1 sub-agent boundary) is EMBEDDED inside a
+# relocatable-looking "Appendix B — historical operating notes" bulk section, appearing ONLY
+# there — NOT in a section named "Sub-agent boundary". Naive whole-appendix relocation drops
+# CP-AL-1 from the slimmed file (guardrails_preserved hard-fails) unless the executor scans the
+# relocatable bulk for embedded rules BEFORE moving it. The correct cut: relocate the pure
+# provenance bullets, keep the CP-AL-1 rule in the slimmed file, leave a resolving pointer.
+- description: 'embedded-anchor — relocate the appendix provenance, but KEEP the CP-AL-1 rule buried in it'
+  vars:
+    case: embedded-anchor
+    fixture: fixtures/embedded-anchor-claude.md
+    min_reduction: 0.25

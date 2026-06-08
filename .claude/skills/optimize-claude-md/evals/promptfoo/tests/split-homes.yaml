@@ -1,0 +1,16 @@
+# Eval (round 2, turn 4): two SEPARATE pure-provenance archives — §14 artifact lineage and §15
+# substitution-retirement log — both legitimately relocatable (neither carries an anchor). §14's
+# body cross-references §15 ("the retirement events … logged separately in the retirement archive at
+# §15"). The trap is asymmetric stub hygiene: a naive executor relocates both, leaves a NUMBERED §14
+# stub whose condensed prose CARRIES the "§15" cross-ref along, but fully absorbs §15 into the home
+# with no numbered stub — so "§15" leaves the file and the §14 stub's cross-ref dangles
+# (pointers_resolve hard-fails). This is NOT the turn-1 case (a retained RULE referencing a moved
+# block, caught by step 1b): here a relocation STUB inherits the moved section's internal cross-ref
+# to a SIBLING that was also relocated. The correct discipline: a relocation stub references its
+# home by PATH; it must not carry the moved section's §-cross-refs to other relocated sections — drop
+# the inherited "§15" from the stub (the cross-ref's target now lives in the home, reachable there).
+- description: 'split-homes — two provenance streams relocated; a stub must not inherit a moved sibling §-cross-ref'
+  vars:
+    case: split-homes
+    fixture: fixtures/split-homes-claude.md
+    min_reduction: 0.20

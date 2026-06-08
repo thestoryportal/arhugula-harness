@@ -1,0 +1,15 @@
+# Eval (turn 5, hardest classification): §14 is a verbose "Worked examples" section — illustration,
+# NOT provenance/lineage/pointer-bulk. The relocatable bulk does not look like the categories the
+# SKILL names, so the executor reasons "examples just illustrate rules stated elsewhere" and
+# relocates §14 wholesale. The trap: two examples are the SOLE statement of a rule — 14.2 carries
+# the only paid-call/secret boundary, 14.3 the only advisor()+decorrelated-review rule — while
+# 14.1/14.4/14.5 merely illustrate rules canonical elsewhere (§12, §4.4) and ARE freely relocatable.
+# A whole-§14 sweep drops advisor/paid/secret (guardrails hard-fails). The gap distinct from prior
+# turns: the relocatable classification enumerates only provenance; a worked EXAMPLE can be the only
+# home of a rule. The correct cut keeps the rule-bearing examples (14.2, 14.3) verbatim and relocates
+# only the purely-illustrative ones. (min_reduction 0.20: keeping two examples relocates less.)
+- description: 'examples — relocate pure-illustration walkthroughs but KEEP the two that are the sole statement of a rule'
+  vars:
+    case: examples
+    fixture: fixtures/examples-claude.md
+    min_reduction: 0.20

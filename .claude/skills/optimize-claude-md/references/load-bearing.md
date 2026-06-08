@@ -10,15 +10,50 @@ classify it.
 **Load-bearing (KEEP).** Content that changes what the agent *does* — invariants, boundaries,
 authority, protocols. You may tighten wording, dedupe a thrice-stated rule, or shorten an
 example. You may **not** remove the rule, weaken its force (an imperative must not become a
-suggestion), or relocate it somewhere it won't be loaded when it's needed. When unsure whether
-something is load-bearing, treat it as load-bearing and flag the question instead of cutting.
+suggestion), **drop a qualifier or exception clause** (see below), or relocate it somewhere it
+won't be loaded when it's needed. When unsure whether something is load-bearing, treat it as
+load-bearing and flag the question instead of cutting.
+
+> **A qualifier is part of the rule — don't compress it away.** A guardrail often carries a
+> conditional or exception: "never X — *except* Y, which routes to Z." The crisp imperative ("never
+> X") is *not* a tighter version of that rule — it is a *different, stronger* rule that changes
+> behavior: drop the exception and a legitimate Y is wrongly blocked; keep "never X" but drop the
+> "routes to Z" and the safe handling for the exceptional case is lost. The verbose conditional is
+> the most tempting "this §section could be tighter" target precisely because the qualifier reads as
+> wordiness — but the qualifier is *where the behavior lives*. (And the routing target of an
+> exception is a common sole-home for an anchor — "routes through the Posture gate" may be the only
+> place `Posture`/`secret`/`advisor()` appears; compressing it out drops the anchor and
+> `guardrails_preserved` hard-fails.) Tighten the *prose* of a conditional rule if it is genuinely
+> verbose, but every branch — the prohibition, each exception, and each exception's routing/handling
+> — must survive the edit intact. When in doubt, keep the whole conditional verbatim and win your
+> bytes from genuine reference bulk instead.
+
+> **Diff before you dedupe.** Two sections that *look* like restatements of each other — a
+> "general statement" and an "operative restatement", a summary and its detail — are the trap:
+> deduping by keeping the canonical-looking one and dropping the "redundant" one silently deletes
+> any clause the dropped section carried *alone*. Before merging near-duplicates, diff them
+> line-by-line and confirm every load-bearing clause unique to *either* survives the merge. The
+> classic loss is a unique guardrail (a paid-call/secret boundary, an extra invariant) that
+> appears only in the section you were about to call redundant. Dedup the genuinely-shared prose;
+> never drop a section wholesale until you've verified it adds nothing the keeper already states.
 
 **Relocatable (MOVE / COMPRESS).** *Reference* content — version-history lineage, change-note
-chains, redundant restatement, pointer tables that mostly carry provenance. Provenance lives in
-git; a CLAUDE.md does not need to carry the saga. This is where the bytes are (`measure.py`
-shows §2 "Canonical artifact pointers" ≈ 81% of the root file) and where optimization should
-concentrate. Relocate via `relocation-pattern.md` — never just delete a pointer; re-home it and
-leave a resolving reference.
+chains, redundant restatement, pointer tables that mostly carry provenance, **and verbose worked
+examples / walkthroughs** (illustration a fluent session no longer needs spelled out). Provenance
+lives in git; a CLAUDE.md does not need to carry the saga, and it does not need every discipline
+dramatized at length. This is where the bytes are (`measure.py` shows §2 "Canonical artifact
+pointers" ≈ 81% of the root file) and where optimization should concentrate. Relocate via
+`relocation-pattern.md` — never just delete a pointer; re-home it and leave a resolving reference.
+
+> **An example can be a rule's only home.** Worked examples are *usually* illustration of a rule
+> stated canonically elsewhere — relocate those freely. But an example sometimes carries the **sole
+> statement** of a rule (a "here's what happens when a background run reaches a metered call"
+> walkthrough may be the *only* place the paid-call/secret boundary is written down). Framing as an
+> "example" does not make the rule optional. Before relocating an illustration/example block, check
+> each example: is the rule it demonstrates stated as a rule *somewhere that stays loaded*? If yes,
+> the example is pure illustration → relocate it. If the example is the only place that rule lives,
+> it is load-bearing → keep it (or restate the rule in a section that stays). Relocating a worked
+> example that is a rule's sole home drops the rule; `guardrails_preserved` hard-fails it.
 
 The happy coincidence in this repo: the **heavy** content is mostly **relocatable** (pointer
 tables + lineage), and the **load-bearing** content is mostly in the **short** sections. So the

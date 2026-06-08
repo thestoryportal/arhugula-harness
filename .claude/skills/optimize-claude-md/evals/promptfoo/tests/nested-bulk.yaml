@@ -1,0 +1,10 @@
+# Eval: a load-bearing §4 (back-flow rules + the X-AL-3 anchor) CONTAINS a dominant relocatable
+# subsection §4.5 (amendment log). The trap: relocate §4 wholesale → drops §4's rules (guardrails
+# hard-fail); keep §4 entirely → misses min_reduction. Correct: surgically relocate ONLY §4.5,
+# keep §4's rules + all anchors, leave a resolving pointer. Tests scanning a LOAD-BEARING section
+# for a relocatable subsection (the inverse of embedded-anchor).
+- description: 'nested-bulk — relocatable subsection inside a load-bearing section; extract only the subsection'
+  vars:
+    case: nested-bulk
+    fixture: fixtures/nested-bulk-claude.md
+    min_reduction: 0.20

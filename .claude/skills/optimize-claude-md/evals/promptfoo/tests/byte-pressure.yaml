@@ -1,0 +1,13 @@
+# Eval (round 2, turn 5): byte-pressure. §16 (credential-handling) is 67% of the file and the ONLY
+# substantial relocatable bulk — the head sections §1-13 are already lean, so min_reduction (0.30)
+# is unreachable without relocating §16. But §16 interleaves pure provenance with one embedded
+# STANDING RULE line that is the SOLE carrier of the paid-call anchor. Cutting that rule to win the
+# most bytes drops the paid anchor (guardrails hard-fails); keeping all of §16 to protect the rule
+# misses min_reduction (bytes soft-fails). The only output that clears BOTH is: extract the STANDING
+# RULE byte-for-byte to stay in the slim file, relocate the provenance saga around it. This is the
+# embedded-rule discipline under genuine byte pressure (no slack to keep the whole section).
+- description: 'byte-pressure — the only relocatable bulk hides a guardrail; extract it, don''t cut it for bytes'
+  vars:
+    case: byte-pressure
+    fixture: fixtures/byte-pressure-claude.md
+    min_reduction: 0.30
