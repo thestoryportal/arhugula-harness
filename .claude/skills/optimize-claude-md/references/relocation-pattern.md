@@ -82,6 +82,18 @@ pure pointer-plus-lineage.
    pointer-shaped line is the rule's sole home → keep the operative clause in the slimmed file
    (relocate only the genuine provenance it also references). Same operativeness-not-framing test as
    the dated-bullet and worked-example traps, applied to citation-shaped lines.
+
+   **Stub hygiene: a stub references its HOME by path — not the moved block's old §-cross-refs.** A
+   relocated section often contained `§`-cross-references to *other* sections ("…detail logged at
+   §15"). When you condense that section into a numbered stub, do not carry those internal
+   cross-refs into the stub. The trap appears when two sibling provenance streams (§14 lineage and
+   §15 retirement-log) both relocate but asymmetrically: you leave a numbered §14 stub that inherits
+   §14's "see §15", while §15 is fully absorbed into a home and loses its section number — now the
+   stub's `§15` dangles (`pointers_resolve` hard-fails). A stub points at *its home by path* and
+   nothing else; if the reader needs the §15 material, it travels with the relocated content into
+   the home, where the cross-ref still resolves in context. Before finalizing any stub, grep it for
+   `§`-refs and confirm each target is still a section in the slimmed file — drop (don't inherit) any
+   ref to a sibling you also relocated.
 5. **Verify the move lost nothing**, then verify resolution (below), before proposing the diff.
    The pure-move check is mechanical: diff the slimmed file against the original and confirm
    **every removed line — header, prose, and data alike — appears byte-for-byte in some new home**.
