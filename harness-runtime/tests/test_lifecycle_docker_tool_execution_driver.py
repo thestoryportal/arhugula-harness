@@ -10,6 +10,7 @@ import pytest
 from harness_as.sandbox_tier import SandboxTier
 from harness_runtime.lifecycle.docker_tool_execution_driver import (
     DockerToolRunnerExecutionDriver,
+    GVisorRunscToolRunnerExecutionDriver,
 )
 from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
 from harness_runtime.lifecycle.runtime_tool_dispatcher import (
@@ -47,6 +48,16 @@ def _decision(tier: SandboxTier = SandboxTier.TIER_2_CONTAINER) -> SandboxDispat
         tier=tier,
         tech="docker",
         provider="local-docker",
+        assigned_tier_reason="test",
+        cost_tier_overhead_ms=0,
+    )
+
+
+def _gvisor_decision(tier: SandboxTier = SandboxTier.TIER_3_MICROVM) -> SandboxDispatchDecision:
+    return SandboxDispatchDecision(
+        tier=tier,
+        tech="gvisor-runsc",
+        provider="local-gvisor",
         assigned_tier_reason="test",
         cost_tier_overhead_ms=0,
     )
@@ -125,6 +136,116 @@ async def test_docker_driver_runs_resolved_local_image_id(monkeypatch: pytest.Mo
             },
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_gvisor_driver_runs_with_runsc_runtime_and_tier3(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[Sequence[str]] = []
+    run_payloads: list[dict[str, Any]] = []
+
+    async def fake_exec(*argv: str, **_kwargs: Any) -> _FakeProcess:
+        calls.append(argv)
+        if argv[:3] == ("env", "LIMA_HOME=/tmp/lima", "limactl"):
+            if argv[7] == "inspect":
+                return _FakeProcess(stdout=b"sha256:gvisor-image\n")
+            assert argv[7] == "run"
+
+            class _RunProcess(_FakeProcess):
+                async def communicate(self, stdin_payload: bytes) -> tuple[bytes, bytes]:
+                    run_payloads.append(json.loads(stdin_payload.decode("utf-8")))
+                    return await super().communicate(stdin_payload)
+
+            return _RunProcess(
+                stdout=json.dumps(
+                    {
+                        "content": [{"type": "text", "text": "gvisor:ok"}],
+                        "isError": False,
+                    }
+                ).encode("utf-8")
+            )
+        raise AssertionError(f"unexpected argv: {argv!r}")
+
+    monkeypatch.setattr(
+        "harness_runtime.lifecycle.docker_tool_execution_driver.asyncio.create_subprocess_exec",
+        fake_exec,
+    )
+    driver = GVisorRunscToolRunnerExecutionDriver(
+        image="alpine:3.20",
+        command=("sh", "-c", "runner"),
+        docker_command=(
+            "env",
+            "LIMA_HOME=/tmp/lima",
+            "limactl",
+            "shell",
+            "r411-gvisor",
+            "sudo",
+            "docker",
+        ),
+    )
+
+    response = await driver.call_tool(
+        mcp_client_host=cast(MCPClientHost, object()),
+        sandbox_decision=_gvisor_decision(),
+        tool_id="echo",
+        tool_args={"message": "hello"},
+        idempotency_key="idem",
+    )
+
+    assert response["content"][0]["text"] == "gvisor:ok"
+    assert calls[0] == (
+        "env",
+        "LIMA_HOME=/tmp/lima",
+        "limactl",
+        "shell",
+        "r411-gvisor",
+        "sudo",
+        "docker",
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        "alpine:3.20",
+    )
+    assert calls[1][:14] == (
+        "env",
+        "LIMA_HOME=/tmp/lima",
+        "limactl",
+        "shell",
+        "r411-gvisor",
+        "sudo",
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--runtime",
+        "runsc",
+        "-i",
+    )
+    assert run_payloads[0]["sandbox"] == {
+        "tier": "tier-3-microvm",
+        "tech": "gvisor-runsc",
+        "provider": "local-gvisor",
+        "assigned_tier_reason": "test",
+    }
+
+
+@pytest.mark.asyncio
+async def test_gvisor_driver_rejects_non_tier3_decision() -> None:
+    driver = GVisorRunscToolRunnerExecutionDriver(
+        image="alpine:3.20",
+        command=("sh", "-c", "runner"),
+    )
+
+    with pytest.raises(ToolInvocationProtocolError, match="tier-3-microvm"):
+        await driver.call_tool(
+            mcp_client_host=cast(MCPClientHost, object()),
+            sandbox_decision=_gvisor_decision(SandboxTier.TIER_2_CONTAINER),
+            tool_id="echo",
+            tool_args={},
+            idempotency_key="idem",
+        )
 
 
 @pytest.mark.asyncio

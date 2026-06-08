@@ -1133,7 +1133,7 @@ R-410-sandbox-tier-2-container-execution:
 R-411-sandbox-tier-3-microvm-execution:
   title: Real TIER_3 microVM sandbox execution (gVisor / Kata / shared-kernel container)
   surface: V
-  status: PROPOSED   # live/infra-gated — requires gVisor/Kata runtime
+  status: RESOLVED   # closed by Docker + gVisor/runsc ToolExecutionDriver on the provisioned Linux VM
   depends_on: [R-410-sandbox-tier-2-container-execution]
   blocks: [R-412-sandbox-tier-4-full-vm-execution]
   posture: phase-7
@@ -1142,7 +1142,7 @@ R-411-sandbox-tier-3-microvm-execution:
   advisor_required: yes
   council_required: conditional:nameable-tension
   verification: { shape: e2e, must_pass: ["TIER_3-resolved TOOL_STEP executes under a microVM/gVisor boundary", "EXTERNAL_REVERSIBLE blast-radius enforced"] }
-  close_shape: { type: PR-merge, artifact: "feat(sandbox): TIER_3 microVM execution provider", cascade: [R-412-sandbox-tier-4-full-vm-execution] }
+  close_shape: { type: PR-merge, artifact: "feat(sandbox): TIER_3 gVisor/runsc execution provider", cascade: [R-412-sandbox-tier-4-full-vm-execution] }
   next_pointer: R-412-sandbox-tier-4-full-vm-execution
   notes: >
     Extends R-410 up the tier ladder. Inherits the same execution-driver contract question; once R-410 settles the
@@ -1157,17 +1157,16 @@ R-411-sandbox-tier-3-microvm-execution:
     around the VMM remains part of any implementation. Firecracker and QEMU `microvm` belong to R-412. `mvm-sh/mvm`
     was reviewed and intentionally not registered as a sandbox provider: it is a Go bytecode VM/interpreter, not
     an OS/hardware isolation runtime for arbitrary TOOL_STEP execution. `just sandbox-host-check <provider>` is
-    the non-mutating probe for the exact runtime boundary before opening the provider implementation. Current
-    operator host grounding (macOS x86_64, no `/dev/kvm`) means no local R-411 provider e2e can honestly close
-    here without a compatible sandbox host/runtime. Rechecked 2026-06-07 on this host: `r411-gvisor`,
-    `r411-kata`, `r411-shuru`, `r411-microsandbox`, and `r411-libkrun` all fail their host/runtime readiness
-    gates (`Darwin x86_64`; no runsc/kata/shuru/msb/libkrun; no `/dev/kvm`). The next genuine R-411 closure
-    path requires the operator to provide either a Linux host with the selected runtime/KVM where applicable,
-    or an Apple Silicon macOS host for Shuru/Microsandbox/libkrun-class evaluation. The 2026-06-07 NotebookLM +
-    official-source infrastructure selection is recorded at `deploy/managed-cloud/r411-r421-infrastructure-selection.md`:
-    first no-taxonomy-change R-411 recommendation is Linux + Docker + gVisor/runsc; Kata is the stronger follow-on
-    when Linux KVM is available. E2B remains a managed/remote R-421/R-412 candidate, not a local R-411 closure path,
-    unless the roadmap taxonomy is intentionally changed.
+    the non-mutating probe for the exact runtime boundary before opening the provider implementation. The 2026-06-07
+    NotebookLM + official-source infrastructure selection is recorded at
+    `deploy/managed-cloud/r411-r421-infrastructure-selection.md`: first no-taxonomy-change R-411 recommendation is
+    Linux + Docker + gVisor/runsc; Kata is the stronger follow-on when Linux KVM is available. The operator
+    provisioned that compatible Linux host abstraction as a Lima Ubuntu VM on the external SSD, and this row is now
+    closed by `GVisorRunscToolRunnerExecutionDriver` plus `just r411-gvisor-live-e2e` targeting the VM rootful Docker
+    daemon with `R411_GVISOR_DOCKER_COMMAND`. The live proof passed: R-411 host readiness reported `ready: yes`; a
+    TOOL_STEP resolved at `tier-3-microvm` executed under Docker `--runtime=runsc`; network egress was blocked with
+    `--network=none`; and the host repo path was not visible from the sandbox. E2B remains a managed/remote
+    R-421/R-412 candidate, not the local R-411 closure path.
 
 R-412-sandbox-tier-4-full-vm-execution:
   title: Real TIER_4 full-VM / firecracker sandbox execution (MANAGED_CLOUD-only provider class)
