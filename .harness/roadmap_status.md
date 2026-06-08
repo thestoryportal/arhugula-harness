@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `ed9db727a1db` |
-| `last_refreshed` | 2026-06-08T09:39:01-06:00 |
-| `git_head` | `48a047e9` (main) — PR #420 R-CXA-3 CP→AS runtime composer merged. |
+| `workspace_state_hash` | `caf7be78ea0b` |
+| `last_refreshed` | 2026-06-08T09:46:00-06:00 |
+| `git_head` | `883a991a` (main) — PR #421 post-#420 fixed-point refresh merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-54.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -28,9 +28,10 @@
 
 **Ordered frontier.**
 
-- `R-CXA-1` - AS->IS secret-fetch audit seam. Proceed only if a real AS secret-fetch producer or scope-bearing caller exists; otherwise record the producer gap and move on.
 - `R-CXA-2` - CP->IS future HITL rewrite / engine recovery-loop producers. Proceed only if a real upstream producer exists; avoid placeholder caller wiring.
 - `R-XI-02` / `R-XI-03` / `R-900` - dashboard/research arcs by operator discretion.
+
+**Producer-gated watch item.** `R-CXA-1` was re-audited at HEAD `883a991a`: no production AS secret-fetch producer or scope-bearing runtime caller exists. Do not re-run it as the immediate next action until a real scoped `ProviderSecretResolver.resolve(...)` caller, an AS secret-fetch driver path, or a design/back-flow amendment appears.
 
 **Do not re-open as next action.** `R-411`, `R-412`, `R-420`, `R-421`, `R-430`, `R-500`, `R-810`, `R-820`, `R-830`, `R-008` / OD-4, `R-CXA-3`, and `R-CXA-4` are already closed or back-flowed.
 
@@ -48,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| R-CXA-1 (`audit`) | 2026-06-08 | **AS→IS producer audit recorded.** No production caller invokes `RuntimeAsIsWiring.emit_secret_fetch_audit_entry(...)`; bootstrap provider-key fetches still use name-only `resolve_bootstrap_value(...)`, and the only production `fetch_secret(...)` consumer is CP F5 signing-key resolution, not an AS→IS producer. |
 | PR #420 (`48a047e9`) | 2026-06-08 | **R-CXA-3 CP→AS runtime composer merged.** `RuntimeCpAsWiring` binds CP-consumed AS terminal seam exports at bootstrap stage 6 and exposes `HarnessContext.cp_as_wiring`; batch-54 moves H_T-CXA-3 to `SUBSTANTIVE_RETIRED`. |
 | PR #418 (`10bb3d51`) | 2026-06-08 | **Post-#417 fixed-point refresh merged.** Re-pinned roadmap status/dashboard after the R-830 managed-DB closure; R-830 is now in the closed/do-not-reopen set and the ordered frontier returns to CXA producer/composer gates plus optional research/dashboard arcs. |
 | PR #417 (`601d32ce`) | 2026-06-08 | **R-830 managed-DB backend merged.** Added `ManagedSqlMemoryToolBackend`, PostgreSQL factory binding, provider-free coverage, the live e2e recipe/test, and recorded the operator-approved Neon PostgreSQL create/view/str_replace/insert/delete proof. |
 | PR #413 (`b4531d31`) | 2026-06-08 | **R-830 roadmap/status back-flow merged.** R-830 no longer carries a pending S3/cloud-vault blocker; completed filesystem, SQLite, and S3 slices remain recorded, and only optional managed-DB remains future scope. |
-| PR #411 (`7e972f27`) | 2026-06-08 | **Post-#410 fixed-point refresh merged.** Refreshed the roadmap status/dashboard after the R-411/R-412 remaining-card correction and re-established the expected lag-by-one fixed point. |
 
 ---
 
@@ -265,6 +266,7 @@ The 5 bucket rows below sum to **54** under the batch-54 live ledger (RETIRED 52
 | 2026-06-08 | **Post-#413 fixed-point refresh — PR #413 R-830 roadmap/status back-flow merged at `b4531d31`; §12.2 owed follow-on.** | Hash `27ebc427c0d7` → `558e3a835221` (state at `b4531d31`, PRS empty/unavailable, fork count 45, batch-53). R-830 no longer carries a pending S3/cloud-vault blocker; the completed filesystem, SQLite, and S3 Memory-tool backend slices remain recorded, and only optional managed-DB remains future scope. **Next action unchanged:** R-CXA-1/R-CXA-2/R-CXA-3 remain the only non-retired substitution rows; R-830 managed-DB and R-XI-02/R-XI-03/R-900 remain optional operator-selected arcs. |
 | 2026-06-08 | **Substantive R-830 managed-DB live proof branch — PR #417 follow-up; §12.2 owed after merge.** | Operator initialized Neon auth/project access and approved the live side-effecting DB proof. The branch now records `ManagedSqlMemoryToolBackend` as live-proven against the Neon `Arhugula` PostgreSQL project: `just r830-managed-db-live-e2e` passed create/view/str_replace/insert/delete through the Memory tool dispatch seam with cleanup. **Next action after merge:** R-CXA-1/R-CXA-2/R-CXA-3 remain the only non-retired substitution rows; R-XI-02/R-XI-03/R-900 remain optional operator-selected arcs. |
 | 2026-06-08 | **Post-#420 roadmap status refresh — PR #420 R-CXA-3 CP→AS runtime composer merged at `48a047e9`; §12.2 owed follow-on.** | Hash `819760575631` → `ed9db727a1db` (state at `48a047e9`, PRS empty/unavailable, fork count 45, batch-54). R-CXA-3 is RESOLVED by the stage-6 `RuntimeCpAsWiring` composer and batch-54 retirement accounting. **Next action:** only CXA-1 and CXA-2 remain non-retired; proceed to a real AS→IS secret-fetch producer audit if one exists, otherwise CP→IS remains bounded on future HITL rewrite and engine recovery-loop producers. Optional operator-selected arcs remain R-XI-02/R-XI-03/R-900. |
+| 2026-06-08 | **R-CXA-1 producer audit branch opened from `883a991a`; §12.2 owed after merge.** | Fresh grounding found no wireable AS→IS producer: `emit_secret_fetch_audit_entry` remains definition/test-only, bootstrap provider-key resolution still uses `resolve_bootstrap_value(...)`, and the only production `fetch_secret(...)` consumer is CP F5 signing-key resolution. R-CXA-1 remains PARTIAL/producer-gated; the immediate selector moves to R-CXA-2 unless a real AS secret-fetch producer or scoped runtime caller appears. |
 
 **Audit protocol exercised across terminating-refresh closures, fresh-session reconciliations, substantive closes, accounting back-flow, live-provider gates, and dashboard-discipline sweeps.** Discipline + enforcement layers are operational; the current selector is the `Next action` section above, not stale historical footer prose. After PR #420, the non-retired substitution ledger is narrowed to CXA-1 and CXA-2; future `/roadmap continue` sessions should ground those producer/upstream-loop gates against current code before opening optional dashboard/research arcs.
 
