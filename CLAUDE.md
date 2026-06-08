@@ -41,7 +41,9 @@ Earlier artifacts in the chain are canonical for later artifacts. Conflicts rout
 
 All canonical design artifacts live in `design-substrate/`; root `CLAUDE.md` is the always-loaded orientation and should not carry per-version lineage inline. The full pre-optimization §2 pointer table and change-note lineage were relocated byte-preservingly to `claude-artifact-pointers.md` in `.harness`. Load that file only when exact artifact-history detail is needed.
 
-Citation discipline remains unchanged: when this file cites a canonical artifact, consult the design-phase substrate copy and preserve byte-exact citation discipline per `Project_Workflow_v1_14.md` §7.4.2.
+Citation discipline remains unchanged: when this file cites a canonical artifact, consult the design-phase substrate copy and preserve byte-exact citation discipline per `Project_Workflow_v1_8.md` §7.4.2.
+
+**Delta-baseline §-cite convention.** `Project_Workflow` is a delta chain — `Project_Workflow_v1_8.md` is the full baseline; v1.9–v1.14 are deltas that preserve prior bodies verbatim (current head v1.14, recorded at this file's §2.1). A `§`-cite therefore names the version of **last substantive definition** of that section, which is often older than the head: §7.4.2 byte-exact-citation discipline + §2.7.6 back-flow routing live at v1.8; §7.4.7.3 stale-carry audit at v1.13. These older-version §-cites are **intentional and resolve byte-exact — not stale** (a cite to `v1.14 §7.4.2` would in fact *fail* byte-exact, since §7.4.2 is not re-tabled in the v1.14 delta).
 
 ### 2.1 Governance + Execution Discipline
 
