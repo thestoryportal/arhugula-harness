@@ -11,6 +11,7 @@ from __future__ import annotations
 from harness_od.redaction_token_audit import compose_redaction_token_audit_entry
 from harness_od.redaction_tokenizer import (
     DeterministicRedactionClassifier,
+    EvalGradeSemanticRedactionClassifier,
     InMemoryRedactionTokenMap,
     OpaqueRedactionTokenizer,
     RedactionTokenRecord,
@@ -102,6 +103,28 @@ def test_classifier_uses_attribute_shape_for_mcp_argument_tokens() -> None:
 
     [record] = token_map.records
     assert record.semantic_category == "MCP_ARG"
+
+
+def test_eval_grade_classifier_preserves_genai_prompt_category_without_pii() -> None:
+    classifier = EvalGradeSemanticRedactionClassifier()
+
+    classification = classifier.classify(
+        attribute_key="gen_ai.input.messages",
+        raw_value="summarize the public changelog",
+    )
+
+    assert classification.category == "GENAI_PROMPT"
+
+
+def test_eval_grade_classifier_uses_tool_result_category() -> None:
+    classifier = EvalGradeSemanticRedactionClassifier()
+
+    classification = classifier.classify(
+        attribute_key="gen_ai.tool.call.result",
+        raw_value='{"status":"ok"}',
+    )
+
+    assert classification.category == "TOOL_RESULT"
 
 
 def test_redaction_token_record_composes_signed_audit_entry() -> None:
