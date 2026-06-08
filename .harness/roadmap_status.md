@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `b1096a24415e` |
-| `last_refreshed` | 2026-06-08T02:14:47-06:00 |
-| `git_head` | `7d41671d` (main) — PR #386 post-#385 roadmap status refresh merged; this audit refresh corrects stale reporting labels. |
+| `workspace_state_hash` | `09b795167490` |
+| `last_refreshed` | 2026-06-08T02:25:30-06:00 |
+| `git_head` | `60222a13` (main) — PR #387 roadmap reporting audit merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -25,6 +25,8 @@
 > **🎓 PHASE 8 CLOSED — substitution accounting DECLARED 2026-06-02 (`.harness/phase-8-graduation.md`).** The operator lifted the HELD R-700 declaration ("kick off the declaration"); item 4 executed. **Canonical: 46/54 RETIRED (85.2%) + 49/54 pipeline-advanced (90.7%)** (operator-ratified accounting (i)). The deferred 48→46 supersession is applied forward (ledger §11.7 + harness-cp/CLAUDE.md + this dashboard; prior batch records stand verbatim). 8 rows carry ratified terminal sign-off dispositions (OD-4 `RETIRED-AS-CROSS-AXIS-DEFERRED`; AS-8e/8f/CP-17 accepted-indefinite-defer; CXA-1..4 Phase-2-runtime-deferred) — **labels do NOT re-tally into the 46** (the OD-6-in-both-lists tell). `R-700` → RESOLVED. Phase 7 (substitution-retirement execution) is complete; the workspace is now wholly on the **post-Phase-8 activation/deployment/integration axis**. The remaining honest frontier is narrower now: R-412 full-VM execution, bounded CXA/accounting follow-ons, optional R-830 managed-DB scope, and discretionary dashboard/research arcs.
 
 **(This audit — 2026-06-08.)** Audited roadmap reporting surfaces after PR #386. Found no contrary implementation state in `Project_Roadmap_v1.md` for the recent closures, but the forward register and dashboard-derived summary text still carried stale labels for Phase-8 residuals, R-430, R-500, R-820, R-008, and R-830. Corrected the register so closed items are no longer advertised as open/deferred, clarified that R-008's remaining movement is accounting/back-flow rather than another runtime gate, and clarified that R-830's S3 cloud-vault path is live-proven while managed-DB remains optional future scope. Regenerated `tools/dashboard/roadmap.html` from the corrected status/register surfaces.
+
+**(This refresh — 2026-06-08. PR TBD.)** Re-pinned the roadmap status/dashboard to the post-#387 merge commit. No R-NNN state changed beyond the reporting corrections already recorded by #387; this refresh exists so the next default-branch audit sees the current `workspace_state_hash` at `60222a13`.
 
 **(This session — 2026-06-08. PR #385 MERGED.)** Closed R-411 against the operator-provisioned Linux sandbox host abstraction. Added `GVisorRunscToolRunnerExecutionDriver`, a Tier-3 `ToolExecutionDriver` provider-class addition that reuses the local Docker runner substrate while requiring `SandboxTier.TIER_3_MICROVM` and invoking Docker with `--runtime=runsc`. Added `just r411-gvisor-live-e2e`, which targets any Docker host via `R411_GVISOR_DOCKER_COMMAND`; the approved live proof ran against the external-SSD Lima VM (`/Volumes/Development/arhugula-r411/lima-home`, Ubuntu 24.04, Docker rootful daemon, gVisor `runsc --platform=systrap`). Evidence: `tools/sandbox_host_readiness.py --provider r411-gvisor` reported `ready: yes`; the dispatcher e2e executed a `TOOL_STEP` under `runsc`, returned `sandbox_tier=tier-3-microvm`, confirmed network egress blocked with `--network=none`, and confirmed the host repo path was not visible. `R-411-sandbox-tier-3-microvm-execution` is now RESOLVED for the selected no-taxonomy-change gVisor path; R-412 remains the separate full-VM/Firecracker lane.
 
