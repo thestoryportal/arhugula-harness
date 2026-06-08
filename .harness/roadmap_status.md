@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `558e3a835221` |
-| `last_refreshed` | 2026-06-08T07:23:53-06:00 |
-| `git_head` | `b4531d31` (main) — PR #413 narrowed the R-830 remainder to optional managed-DB scope. |
+| `workspace_state_hash` | `ff7326d55edf` |
+| `last_refreshed` | 2026-06-08T08:44:01-06:00 |
+| `git_head` | `601d32ce` (main) — PR #417 closed R-830 with the managed-DB implementation and live Neon PostgreSQL e2e proof. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-53.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -31,10 +31,9 @@
 - `R-CXA-1` - AS->IS secret-fetch audit seam. Proceed only if a real AS secret-fetch producer or scope-bearing caller exists; otherwise record the producer gap and move on.
 - `R-CXA-2` - CP->IS future HITL rewrite / engine recovery-loop producers. Proceed only if a real upstream producer exists; avoid placeholder caller wiring.
 - `R-CXA-3` - CP->AS seam. Needs a CP->AS runtime composer or a scope-narrowing decision.
-- `R-830` - managed-DB backend implementation is now live-proven in this branch via the operator-approved Neon PostgreSQL e2e.
 - `R-XI-02` / `R-XI-03` / `R-900` - dashboard/research arcs by operator discretion.
 
-**Do not re-open as next action.** `R-411`, `R-412`, `R-420`, `R-421`, `R-430`, `R-500`, `R-810`, `R-820`, `R-008` / OD-4, and `R-CXA-4` are already closed or back-flowed.
+**Do not re-open as next action.** `R-411`, `R-412`, `R-420`, `R-421`, `R-430`, `R-500`, `R-810`, `R-820`, `R-830`, `R-008` / OD-4, and `R-CXA-4` are already closed or back-flowed.
 
 ---
 
@@ -50,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #417 (`601d32ce`) | 2026-06-08 | **R-830 managed-DB backend merged.** Added `ManagedSqlMemoryToolBackend`, PostgreSQL factory binding, provider-free coverage, the live e2e recipe/test, and recorded the operator-approved Neon PostgreSQL create/view/str_replace/insert/delete proof. |
 | PR #413 (`b4531d31`) | 2026-06-08 | **R-830 roadmap/status back-flow merged.** R-830 no longer carries a pending S3/cloud-vault blocker; completed filesystem, SQLite, and S3 slices remain recorded, and only optional managed-DB remains future scope. |
 | PR #411 (`7e972f27`) | 2026-06-08 | **Post-#410 fixed-point refresh merged.** Refreshed the roadmap status/dashboard after the R-411/R-412 remaining-card correction and re-established the expected lag-by-one fixed point. |
 | PR #410 (`c57da7f7`) | 2026-06-08 | **Dashboard remaining-card correction merged.** Removed the hard-coded `R-411 → R-412` card from `closure.remaining`, regenerated the dashboard, and added a regression proving resolved R-411/R-412 text cannot appear in the remaining cards. |
 | PR #408 (`83082090`) | 2026-06-08 | **R-412 roadmap/status/dashboard back-flow merged.** R-412 is no longer a next-action candidate; the roadmap, forward register, fork doc, dashboard generator, dashboard snapshot, and activation count now report the managed E2B full-VM closure. |
-| PR #407 (`3971ef9b`) | 2026-06-08 | **Dashboard-maintenance guard fix merged.** Codex closeout now treats dashboard generator/test maintenance as part of status refreshes, while unrelated `tools/` changes still trigger the design/implementation mix guard. |
 
 ---
 
