@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `065112c996ca` |
-| `last_refreshed` | 2026-06-08T03:53:25-06:00 |
-| `git_head` | `6777be8b` (main) — PR #394 post-#393 roadmap status refresh merged. |
+| `workspace_state_hash` | `fab75db42c2c` |
+| `last_refreshed` | 2026-06-08T04:13:45-06:00 |
+| `git_head` | `5534008c` (main) — PR #396 dashboard status filters merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-53.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -51,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #396 (`5534008`) | 2026-06-08 | **Dashboard status filters merged.** Sections 03 and 04 now have independent status-toggle controls; `closed` defaults hidden while other status labels default visible. Regenerated the dashboard snapshot and added focused generator coverage. |
+| PR #395 (`a9293c5`) | 2026-06-08 | **Next-action section refresh merged.** Section 02 was pruned from a chronological archive into a compact forward-work selector; section 08 was refreshed to current latest-five reporting. |
 | PR #394 (`6777be8`) | 2026-06-08 | **Post-#393 roadmap refresh merged.** Re-pinned roadmap status/dashboard after the section-08 reporting refresh and restored the guard-recognized terminating-refresh prefix. No R-NNN state changed beyond #393. |
 | PR #393 (`01e7094`) | 2026-06-08 | **Recently completed section refresh merged.** Section 08 now reflects the latest batch-52/batch-53 accounting and roadmap-refresh PRs instead of the stale #380/#374/#340-era entries. No R-NNN state changed. |
 | PR #392 (`9ad2dd4`) | 2026-06-08 | **Post-#391 roadmap refresh merged.** Re-pinned roadmap status/dashboard to the #391 merge state (`58ead217`) and regenerated the dashboard snapshot. No R-NNN state changed beyond the batch-53 accounting/back-flow recorded by #391. |
-| PR #391 (`58ead21`) | 2026-06-08 | **Batch-53 accounting/back-flow merged.** OD-4 moved from `PARTIAL` / historical `RETIRED-AS-CROSS-AXIS-DEFERRED` to `SUBSTANTIVE_RETIRED`; CXA-4 moved from bookkeeping-only `PARTIAL` to `SUBSTANTIVE_RETIRED`. Live ledger now reports 51/54 RETIRED and 52/54 pipeline-advanced; remaining non-RETIRED rows are CXA-1, CXA-2, and CXA-3. |
-| PR #390 (`25aa67b`) | 2026-06-08 | **Post-#389 roadmap refresh merged.** Re-pinned roadmap status/dashboard after the batch-52 accounting/back-flow merge. No R-NNN state changed beyond #389. |
 
 ---
 
