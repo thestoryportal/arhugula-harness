@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `5edbe37cada6` |
-| `last_refreshed` | 2026-06-08T06:00:00-06:00 |
-| `git_head` | `66a03e81` (main) — PR #399 roadmap status refresh post-398 merged. |
+| `workspace_state_hash` | `8c027fc8b21e` |
+| `last_refreshed` | 2026-06-08T04:51:14-06:00 |
+| `git_head` | `35ffce41` (main) — PR #400 dashboard currentness discipline merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-53.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -51,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #400 (`35ffce4`) | 2026-06-08 | **Dashboard currentness discipline merged.** `generate.py` now derives visible `HEAD` / `LAST` / `HASH` / `OPEN FORKS` plus closure copy counts from live git/filesystem/roadmap inputs; Codex and Claude context now surface the generator-owned refresh rule. |
 | PR #398 (`f3324e7`) | 2026-06-08 | **Dashboard copy/count fix merged.** Build-closure copy now derives the non-retired row count instead of carrying stale `8 rows below` text; activation count remains derived from the forward catalog and is covered at 6/20. |
 | PR #397 (`9569bfa`) | 2026-06-08 | **Post-#396 roadmap refresh merged.** Re-pinned roadmap status/dashboard after the section-03/04 status-filter feature and refreshed latest-five reporting. No R-NNN state changed beyond #396. |
 | PR #396 (`5534008`) | 2026-06-08 | **Dashboard status filters merged.** Sections 03 and 04 now have independent status-toggle controls; `closed` defaults hidden while other status labels default visible. Regenerated the dashboard snapshot and added focused generator coverage. |
 | PR #395 (`a9293c5`) | 2026-06-08 | **Next-action section refresh merged.** Section 02 was pruned from a chronological archive into a compact forward-work selector; section 08 was refreshed to current latest-five reporting. |
-| PR #394 (`6777be8`) | 2026-06-08 | **Post-#393 roadmap refresh merged.** Re-pinned roadmap status/dashboard after the section-08 reporting refresh and restored the guard-recognized terminating-refresh prefix. No R-NNN state changed beyond #393. |
 
 ---
 
