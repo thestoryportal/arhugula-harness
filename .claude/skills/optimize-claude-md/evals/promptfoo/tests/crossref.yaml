@@ -1,0 +1,12 @@
+# Eval (round 2, turn 1): §1.2's tie-breaker rule has no content of its own — it defers entirely
+# to §2.3, which lives INSIDE the heavy relocatable §2 "Canonical artifact pointers" bulk. §2.3 is
+# where the precedence rule (and the only statement of the canonical authority chain) actually lives.
+# A naive whole-§2 relocation moves §2.3 to the home: it (a) drops the canonical-authority-chain
+# anchor from the slimmed file and (b) leaves §1.2's "per §2.3" reference dangling. The correct cut:
+# relocate the §2.1 version-lineage bulk + the §2 intro prose, but keep §2.3 (the depended-on rule)
+# in the slimmed file so the reference resolves and the anchor survives.
+- description: 'crossref — relocate the §2 lineage bulk, but §1.2 depends on §2.3; keep what it points to'
+  vars:
+    case: crossref
+    fixture: fixtures/crossref-claude.md
+    min_reduction: 0.20
