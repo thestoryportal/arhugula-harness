@@ -1,6 +1,6 @@
 ---
 title: R-CXA-1 / R-CXA-2 Producer-Seam Design Spec
-status: design-brief (awaiting fork ratification)
+status: design-brief (forks ratified 2026-06-08; implementation planning/back-flow remains separate)
 created: 2026-06-08
 posture: design-phase (`.harness/**` only — NO design-substrate edits in this arc)
 roadmap: R-CXA-1-as-is-seam, R-CXA-2-cp-is-seam (both stay OPEN)
@@ -12,7 +12,7 @@ forks_filed:
 
 # R-CXA-1 / R-CXA-2 Producer-Seam Design Spec
 
-*Faithfully specs the missing **producers** (firing sites) that gate `R-CXA-1` (AS→IS secret-fetch audit) and `R-CXA-2` (CP→IS HITL-rewrite + engine-layer pause/resume) so a future implementation arc can close the seams without hollow ledger emission. Authored under design-phase posture per workspace `CLAUDE.md` §4.3 + §11; this arc files the brief + fork docs only and defers all `design-substrate/**` spec/plan amendments, any ADR, and the full implementation plan to **post-ratification** (per the handoff decision rule "add an impl plan only after the design/ADR settles the contracts").*
+*Faithfully specs the missing **producers** (firing sites) that gate `R-CXA-1` (AS→IS secret-fetch audit) and `R-CXA-2` (CP→IS HITL-rewrite + engine-layer pause/resume) so a future implementation arc can close the seams without hollow ledger emission. Authored under design-phase posture per workspace `CLAUDE.md` §4.3 + §11; the filing arc produced this brief + fork docs only. The 2026-06-08 ratification arc resolved the fork decisions but still defers all `design-substrate/**` spec/plan amendments and runtime implementation to a separate implementation/back-flow arc.*
 
 ---
 
@@ -265,7 +265,7 @@ Per the handoff decision rule:
 
 - **No new top-level ADR.** This workspace's ADRs are *foundational* (F1–F5 / D1–D6). The producer decisions here are spec/plan-granularity. The HITL-rewrite-before-dispatch (ADR-D5 §1.3.2 / C-CP-17 §17.2), pause/resume (ADR-D5 §1.11), and EngineClass/ResumptionKind (ADR-D1) primitives are **already design-committed** — what is missing is *runtime-lifecycle wiring + producer-loop ownership*, which is a runtime-spec/plan + fork-doc concern, not a foundational-ADR concern. The workspace's native mechanism for "new H_T primitive / ownership choice surfaced at execution time" is the **Class 1/2 fork doc** (§4.3), which this arc files. (Should ratification of DP-1/DP-2 conclude that the inner loop / engine recovery loop rises to a *foundational* commitment, a fork→ADR escalation is the documented route — but that is a ratification outcome, not a precondition for this brief.)
 - **No PRD.** Internal cross-axis runtime architecture; no operator-facing approval/recovery workflow is introduced (the HITL/pause/resume *surfaces* already exist; this arc specs their *producers*).
-- **Impl plan deferred to post-ratification.** Per the handoff ("add an impl plan only after the design/ADR settles the contracts"), the B3 forks (DP-1/DP-2/DP-3 + the Class 1 type impedance) must be ratified before the impl plan can be authored without inventing contracts (X-AL-3). The B1 R-CXA-1 producer is impl-plannable now; it is bundled into the same staged impl arc for cohesion (one CXA producer-arc), but R-CXA-1 alone could proceed if the operator wants to decouple it.
+- **Impl plan/back-flow deferred to post-ratification — now unblocked.** The B3 forks were ratified on 2026-06-08: U-CP-78 Reading A; R-CXA-2 DP-1(c), DP-2(c), and DP-3(a). The next arc may author the concrete implementation/back-flow plan without inventing contracts. R-CXA-1 remains the buildable producer slice; R-CXA-2 remains bounded on future HITL inner-loop / engine recovery-loop authoring, with the U-CP-78 type fix authorized as a future precondition if the engine producer re-opens.
 
 This keeps the arc in clean design-phase posture: **`.harness/**` only**, no `design-substrate/**` edit, no X-AL-3 guard trip, no clearance marker owed (`[[halt-route-split-ac-pattern]]`: partial-land the brief, route the unsettled).
 
@@ -285,12 +285,12 @@ This keeps the arc in clean design-phase posture: **`.harness/**` only**, no `de
 ## §7. Closeout
 
 - **R-CXA-1** and **R-CXA-2** stay **OPEN** (PROPOSED/PARTIAL, STILL-BOUNDED respectively). Producer gaps are now **SPECIFIED, not implemented**.
-- **Forks filed** (ratification owed before the impl arc):
-  - `class_1_fork_u_cp_78_pause_captured_type_impedance.md` (Class 1 defect).
-  - `class_2_fork_r_cxa_2_producer_loop_ownership.md` (Class 2 — DP-1 inner-loop firing site; DP-2 engine recovery-loop ownership; DP-3 pause/resume disambiguator derivation).
+- **Forks ratified** (implementation/back-flow still separate):
+  - `class_1_fork_u_cp_78_pause_captured_type_impedance.md` — Reading A ratified; implementation still owed before any engine-layer producer can call `cp.pause-captured`.
+  - `class_2_fork_r_cxa_2_producer_loop_ownership.md` — DP-1(c) and DP-2(c) bounded-residual defer; DP-3(a) future recovery-loop-context identities.
 - **Settled, cited (not re-derived):** HITL `semantic_variant_binding_id = variant.value` (v2.39 Reading B); bootstrap secret-fetch exclusion (Reading-D 2026-06-01).
 - **Cross-references (extends, does not duplicate):** `class_1_tension_u_rt_35_cp_is_wiring_gaps.md` (CLOSED; firing-site-layer continuation), runtime plan v2.39 §0.3/§0.4, v2.34 AC #8, `r-cxa-1-producer-audit-2026-06-08.md`, `r-cxa-2-producer-audit-2026-06-08.md`.
-- **Roadmap/status:** R-CXA-1/R-CXA-2 entry notes updated to point at this brief + the forks; dashboard fork-count + drift-log refreshed. A terminating `ops: roadmap status refresh` is owed post-merge per §12.2.1.
+- **Roadmap/status:** R-CXA-1/R-CXA-2 entry notes updated to point at this brief + ratified forks; dashboard regenerated from source. A terminating `ops: roadmap status refresh` is owed post-merge per §12.2.1.
 
 ## §8. See also
 
