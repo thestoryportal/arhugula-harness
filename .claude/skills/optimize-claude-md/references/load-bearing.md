@@ -13,6 +13,15 @@ example. You may **not** remove the rule, weaken its force (an imperative must n
 suggestion), or relocate it somewhere it won't be loaded when it's needed. When unsure whether
 something is load-bearing, treat it as load-bearing and flag the question instead of cutting.
 
+> **Diff before you dedupe.** Two sections that *look* like restatements of each other — a
+> "general statement" and an "operative restatement", a summary and its detail — are the trap:
+> deduping by keeping the canonical-looking one and dropping the "redundant" one silently deletes
+> any clause the dropped section carried *alone*. Before merging near-duplicates, diff them
+> line-by-line and confirm every load-bearing clause unique to *either* survives the merge. The
+> classic loss is a unique guardrail (a paid-call/secret boundary, an extra invariant) that
+> appears only in the section you were about to call redundant. Dedup the genuinely-shared prose;
+> never drop a section wholesale until you've verified it adds nothing the keeper already states.
+
 **Relocatable (MOVE / COMPRESS).** *Reference* content — version-history lineage, change-note
 chains, redundant restatement, pointer tables that mostly carry provenance. Provenance lives in
 git; a CLAUDE.md does not need to carry the saga. This is where the bytes are (`measure.py`
