@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `0bc3ffc19a00` |
-| `last_refreshed` | 2026-06-08T13:02:13-06:00 |
-| `git_head` | `e61778b` (main) — PR #437 R-CXA producer-loop fork ratification merged. |
+| `workspace_state_hash` | `abecc765168a` |
+| `last_refreshed` | 2026-06-08T15:25:15-06:00 |
+| `git_head` | `98f9d90` (main) — optimize-claude-md F1–F7 governance remediation merged (PRs #439, #441–#446). |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-54.md` |
 | `open_fork_doc_count` | 47 |
 
@@ -41,7 +41,8 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| _(none)_ | n/a | n/a | n/a |
+| #440 | `r-cxa-2-post-mvp-producer-brief` | R-CXA-2 | design-brief (concurrent session) |
+| #447 | `bmad-config-to-main` | R-IF / ops | bmad runtime config restore (concurrent) |
 
 ---
 
@@ -49,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PRs #439, #441–#446 (`98f9d90`) | 2026-06-08 | **optimize-claude-md F1–F7 governance remediation (7 PRs).** Fixed stale plan/spec pointers (OD plan v2_26→v2_27; IS plan v2_3→v2_5 + IS spec v1.2→v1.3; broken `_v1.md` cites → canonical heads), trimmed inline byte-bloat (root §1.1 CXA lineage → pointer; harness-od §4.1 ledger −26.7 KB), documented the Workflow delta-baseline §-cite convention, refreshed axis CXA posture to v2.19 + reconciled IS numbers. Mode-agnostic governance hygiene; no `design-substrate/**` touched (X-AL-3 trivial). **Surfaced, not fixed:** root §4.2 hardcodes `46/54` while the ledger derives `52/54` (G-9 candidate); AS spec file is internally v1.7 but `harness-as:19` claims v1.8. |
 | PR #437 (`e61778b`) | 2026-06-08 | **R-CXA producer-loop forks ratified.** U-CP-78 is Reading A; R-CXA-2 is DP-1(c), DP-2(c), DP-3(a). The selector now moves to the buildable R-CXA-1 scoped secret-fetch producer slice while R-CXA-2 remains bounded on future upstream-loop authoring. |
 | PR #435 (`e3162c6`) | 2026-06-08 | **optimize-claude-md self-improvement loop hardening merged.** The skill eval corpus now covers 14 escalating fixture classes plus pointer-check support; this landed after the R-CXA producer-seam spec and is included in the current main refresh anchor. |
 | PR #434 (`83ae8f2`) | 2026-06-08 | **R-CXA-1/2 producer seams specified, not implemented.** Filed `.harness/r-cxa-1-2-producer-seam-spec.md` and two fork docs for `U-CP-78` pause impedance and R-CXA-2 DP-1/2/3 ownership; implementation planning remains deferred until fork ratification. |
 | PR #432 (`a0a8393`) | 2026-06-08 | **R-IF-council-workflow productized.** The existing `/council-workflow` and `/council-generic` commands now resolve to committed `.harness/council/` artifacts: the harness-layer-aware workflow YAML, a generic same-shape workflow YAML, the workflow prose companion, and the context-memory grounding provenance pointer. |
-| PR #430 (`263c2d78`) | 2026-06-08 | **R-901 research-path hygiene merged.** The Phase-9 retirement criteria brief now lives in the reorganized harness research corpus under `.harness/01-planning/01-harness-planning/00-harness-research/`; R-900/R-901, R-600 NotebookLM extract notes, and the dashboard point at the current corpus path. |
 
 ---
 
