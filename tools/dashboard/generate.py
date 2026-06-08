@@ -93,7 +93,7 @@ ANNOTATIONS = {
     "R-500-multi-tenant-deployment": "Resolved by the local self-hosted multi-tenant proof: tenant.id resource separation, non-toggleable redaction, and tenant-scoped audit reads.",
     "R-830-memory-tool-production-backend": "Resolved by filesystem, SQLite, live S3 cloud-vault, and live Neon PostgreSQL managed-DB Memory-tool backend proofs.",
     "R-900-research-arcs": "Resolved by decomposing the placeholder into R-901.",
-    "R-901-phase-9-retirement-criteria": "Research brief for whether the post-Phase-8 live-ledger and bounded-residual discipline needs a Phase-9 retirement model.",
+    "R-901-phase-9-retirement-criteria": "Resolved by the Phase-9 retirement criteria brief: research-only selector guidance, no design-substrate back-flow.",
     "R-CXA-1-as-is-seam": "The one remaining wire (a secret-fetch audit caller) has no real source yet, so wiring it would be hollow; deferred until one exists.",
     "R-CXA-2-cp-is-seam": "Three CP→IS composer methods now fire through production callers; the 2026-06-08 audit found no remaining wireable producer until a real HITL rewrite caller or engine recovery-loop exists.",
     "R-CXA-4-od-multi-seam": "Resolved by batch-53: grounding found 0 remaining wireable edges and the bookkeeping-only PARTIAL row was retired.",
@@ -150,16 +150,16 @@ REMAINING_ORDERED = [
     {
         "n": 2,
         "layer": "build",
-        "id": "R-CXA-1-as-is-seam",
-        "label": "Account/close the AS→IS seam",
-        "gate": "Deferred until a real secret-fetch producer exists; otherwise hollow.",
+        "id": "R-CXA-2-cp-is-seam",
+        "label": "Build the CP→IS engine-layer seam",
+        "gate": "Three CP→IS composer methods now fire through production callers; no remaining wireable producer exists until future HITL rewrite or engine recovery-loop authoring.",
     },
     {
         "n": 3,
         "layer": "build",
-        "id": "R-CXA-2-cp-is-seam",
-        "label": "Build the CP→IS engine-layer seam",
-        "gate": "Three CP→IS composer methods now fire through production callers; no remaining wireable producer exists until future HITL rewrite or engine recovery-loop authoring.",
+        "id": "R-CXA-1-as-is-seam",
+        "label": "Account/close the AS→IS seam",
+        "gate": "Deferred until a real secret-fetch producer exists; otherwise hollow.",
     },
     {
         "n": 4,
@@ -182,13 +182,6 @@ REMAINING_ORDERED = [
         "id": "R-300-multi-llm-second-provider",
         "label": "Second LLM provider",
         "gate": "Needs OpenAI/Ollama credentials + a mixed-provider test.",
-    },
-    {
-        "n": 12,
-        "layer": "activation",
-        "id": "R-901-phase-9-retirement-criteria",
-        "label": "Phase-9 retirement criteria research",
-        "gate": "Crystallize the research question and ground it in the harness research corpus before any substrate amendment.",
     },
 ]
 
@@ -1211,7 +1204,7 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
       </div>
       <div class="panel meter cold">
         <div class="k">Activation / deployment closure</div>
-        <div class="sub">Operator-gated: credentials + infrastructure that cannot run in this workspace. The <strong>${{ac.open}} of ${{ac.total}}</strong> open forward items are bounded-residual by design, <strong>not remaining build work</strong>.</div>
+        <div class="sub">Forward-axis items include deployment, integration, research, and CXA seams. The <strong>${{ac.open}} of ${{ac.total}}</strong> open forward items are producer-gated residuals; do not wire placeholders just to move counts.</div>
         <div class="big">${{ac.exercised_pct||0}}<span class="u">% exercised</span></div>
         <div class="quote">"The harness is built; this axis switches on at a real deployment."</div>
       </div>

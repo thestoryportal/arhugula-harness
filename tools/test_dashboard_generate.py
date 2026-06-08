@@ -94,11 +94,11 @@ def test_activation_open_count_matches_current_forward_catalog():
 
     closure = generate.compute_closure(actions, {"retirement": {}})
 
-    assert closure["activation"]["open"] == 3
+    assert closure["activation"]["open"] == 2
     assert closure["activation"]["total"] == 21
 
 
-def test_closed_xi_items_do_not_appear_in_remaining_cards():
+def test_closed_xi_and_r901_items_do_not_appear_in_remaining_cards():
     generate = _load_generate_module()
     roadmap = (Path(__file__).parents[1] / "Project_Roadmap_v1.md").read_text(encoding="utf-8")
     actions = generate.parse_roadmap_actions(roadmap)
@@ -110,7 +110,7 @@ def test_closed_xi_items_do_not_appear_in_remaining_cards():
     )
     assert "R-XI-02" not in remaining_text
     assert "R-XI-03" not in remaining_text
-    assert "R-901" in remaining_text
+    assert "R-901" not in remaining_text
 
 
 def test_resolved_r411_r412_do_not_appear_in_remaining_cards():
