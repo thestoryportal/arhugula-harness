@@ -1,8 +1,6 @@
-# CLAUDE.md — representative governance fixture (eval input, NOT the live file)
+# CLAUDE.md
 
-*Mirrors the real root CLAUDE.md shape: short load-bearing sections + a dominant §2
-version-lineage section that is relocatable bulk. The optimization target: relocate §2 to a
-referenced home, keep every load-bearing rule, break no pointer. Frozen for reproducible scoring.*
+*Workspace governance. Loaded at every session start.*
 
 ## 1. Project framing
 
@@ -11,11 +9,11 @@ referenced home, keep every load-bearing rule, break no pointer. Frozen for repr
 ADR → ADD → PRD → per-axis spec → per-axis plan → implementation. Earlier artifacts outrank
 later ones; when artifacts disagree, the earlier wins. Conflicts route to back-flow per §4.3.
 
-## 2. Canonical artifact pointers (version lineage — the relocatable bulk)
+## 2. Canonical artifact pointers
 
-*This section is provenance. It carries which version of each artifact is canonical plus the
-full amendment saga. Provenance lives in git; a CLAUDE.md does not need to carry the saga — this
-is the bytes, and the relocation target (leave a resolving pointer; move the lineage to a home).*
+This section records which version of each artifact is canonical, with the full per-artifact
+amendment history so a reader can trace how each one reached its current head. It is the longest
+section in the file and grows every time any artifact is revised.
 
 | Artifact | Version | Lineage |
 |---|---|---|
@@ -36,8 +34,8 @@ the operator; Class 3 are logged. Silent absorption of a design defect is the wo
 
 ### 4.4 NO silent H_T design extension at Phase 7
 
-New H_T primitives surfaced at execution-time route to back-flow before implementation. The skill
-must never edit `design-substrate/**` — that would be a silent design extension (the X-AL-3 line).
+New H_T primitives surfaced at execution-time route to back-flow before implementation. Never edit
+`design-substrate/**` from an execution session — that would be a silent design extension (the X-AL-3 line).
 
 ## 5. Sub-agent boundary
 
