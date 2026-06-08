@@ -1,0 +1,10 @@
+# Eval: the heuristic-buster. The HEAVIEST section (§13) is verbose but fully OPERATIVE (carries the
+# advisor/paid/secret rules at length); the only true relocatable bulk is the small §2 pointer table
+# + §16 stale-notes appendix. The trap: the skill's "heavy content is mostly relocatable" heuristic +
+# an aggressive-trim prompt tempt relocating §13 (the biggest section) -> drops advisor/paid/secret
+# (guardrails hard-fail). Correct: keep §13 verbatim (operative despite verbose), relocate §2 + §16.
+- description: 'heavy-load-bearing — the heaviest section is operative; relocate the small reference bulk, not the big rules'
+  vars:
+    case: heavy-load-bearing
+    fixture: fixtures/heavy-load-bearing-claude.md
+    min_reduction: 0.18
