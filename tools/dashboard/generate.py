@@ -92,7 +92,8 @@ ANNOTATIONS = {
     "R-440-tier-level-secrets-backend": "Resolved by the self-hosted-keyring selector; R-420 proved it live through the local keyring sentinel.",
     "R-500-multi-tenant-deployment": "Resolved by the local self-hosted multi-tenant proof: tenant.id resource separation, non-toggleable redaction, and tenant-scoped audit reads.",
     "R-830-memory-tool-production-backend": "Resolved by filesystem, SQLite, live S3 cloud-vault, and live Neon PostgreSQL managed-DB Memory-tool backend proofs.",
-    "R-900-research-arcs": "Open-ended research / exploration; no fixed scope — pulled in as you choose.",
+    "R-900-research-arcs": "Resolved by decomposing the placeholder into R-901.",
+    "R-901-phase-9-retirement-criteria": "Research brief for whether the post-Phase-8 live-ledger and bounded-residual discipline needs a Phase-9 retirement model.",
     "R-CXA-1-as-is-seam": "The one remaining wire (a secret-fetch audit caller) has no real source yet, so wiring it would be hollow; deferred until one exists.",
     "R-CXA-2-cp-is-seam": "Three CP→IS composer methods now fire through production callers; the 2026-06-08 audit found no remaining wireable producer until a real HITL rewrite caller or engine recovery-loop exists.",
     "R-CXA-4-od-multi-seam": "Resolved by batch-53: grounding found 0 remaining wireable edges and the bookkeeping-only PARTIAL row was retired.",
@@ -185,9 +186,9 @@ REMAINING_ORDERED = [
     {
         "n": 12,
         "layer": "activation",
-        "id": "R-XI-02 / R-XI-03 / R-900",
-        "label": "Dashboard polish + research arcs",
-        "gate": "Nice-to-have; no blockers, pulled in at discretion.",
+        "id": "R-901-phase-9-retirement-criteria",
+        "label": "Phase-9 retirement criteria research",
+        "gate": "Crystallize the research question and ground it in the harness research corpus before any substrate amendment.",
     },
 ]
 

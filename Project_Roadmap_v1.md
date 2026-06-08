@@ -2134,7 +2134,7 @@ R-830-memory-tool-production-backend:
 R-900-research-arcs:
   title: Open architectural / speculative arcs + research-corpus extensions
   surface: X
-  status: PROPOSED
+  status: RESOLVED   # 2026-06-08: decomposed the placeholder into R-901; R-XI-02/R-XI-03 were already RESOLVED, so Surface X now carries the next explicit non-credential frontier.
   depends_on: []
   blocks: []
   posture: mode-agnostic
@@ -2143,9 +2143,30 @@ R-900-research-arcs:
   advisor_required: yes
   council_required: conditional:nameable-tension   # case-by-case, only if a named cross-domain tension surfaces
   verification: { shape: grep, must_pass: ["a specific research question is crystallized into a sub-entry before work begins"] }
-  close_shape: { type: substrate-amendment, artifact: "research/** or a new R-90N sub-entry", cascade: [] }
+  close_shape: { type: substrate-amendment, artifact: "research/** or a new R-90N sub-entry", cascade: [R-901] }
+  next_pointer: R-901-phase-9-retirement-criteria
+  notes: Placeholder decomposed 2026-06-08 into R-901. R-XI-02/R-XI-03 are already RESOLVED, so the selector should not keep advertising dashboard iteration work as open.
+
+R-901-phase-9-retirement-criteria:
+  title: Phase-9 retirement criteria research brief
+  surface: X
+  status: PROPOSED
+  depends_on: []
+  blocks: []
+  posture: mode-agnostic
+  scope: { files: [research/**, Project_Roadmap_v1.md], contracts: [], cross_axis: no }
+  skills: { primary: systems-architect, secondary: [notebooklm] }
+  advisor_required: yes
+  council_required: conditional:nameable-tension
+  verification:
+    shape: grep
+    must_pass:
+      - "crystallize the Phase-9 retirement-criteria research question before any substrate amendment"
+      - "ground the brief in the existing harness research corpus and cite source documents used"
+      - "record whether the result is research-only, roadmap-only, or design-substrate back-flow"
+  close_shape: { type: PR-merge, artifact: "research/phase-9-retirement-criteria*.md or roadmap-only disposition", cascade: [] }
   next_pointer: null
-  notes: Placeholder. Candidates — workflow-doc v1.14+ Phase-8->Phase-9 retirement-criteria evolution (research/agentic-engineeriing-sdlc.md); NotebookLM 28-URL corpus extensions. Register §B-16.
+  notes: Candidate carried forward from the R-900 placeholder: workflow-doc v1.14+ Phase-8->Phase-9 retirement-criteria evolution, including whether the post-Phase-8 live-ledger / bounded-residual discipline needs a Phase-9 closure model. NotebookLM corpus queries are preferred when available; supplementary research is allowed if the corpus is insufficient.
 ```
 
 ### 5.14 Cross-axis composition seams (R-CXA-NN) — Surface I residual
@@ -2362,7 +2383,7 @@ Decomposition status per surface. **`decomposed`** means R-NNN entries exist at 
 | VII | Process discipline | `partially-decomposed` (R-600 series + R-IF-roadmap-refresh) | Cadence-driven; sweep every ~10 PRs |
 | VIII | Phase 8 retirement criteria | `placeholder` (R-700-phase-8-substitution-accounting only) | Triggered when §I substitutions ≥45/49 closed |
 | IX | External integrations | `decomposed` (2026-06-01) | §5.12 R-800..R-830 authored from register §B-10..§B-13 (Files/managed_agents DEFERRED-indefinite) |
-| X | Existential / research | `decomposed` (2026-06-01) | §5.13 R-900-research-arcs placeholder from register §B-16; surfaces opportunistically |
+| X | Existential / research | `decomposed` (2026-06-08) | §5.13 R-900 placeholder decomposed into R-901 Phase-9 retirement criteria research brief |
 | XI | Operator tooling / observability | `complete` (R-XI-01 + R-XI-02 + R-XI-03 all RESOLVED; 2026-06-02) | Live operator dashboard: Almanac Noir, dependency-graph + sparklines, client-side live-update. Public Pages + launchd :8137 (auto-syncing). No open XI levers. |
 
 **Decomposition-owed marker discipline.** When opening any surface for decomposition, operator AUQ required ONLY if scope is ambiguous; otherwise Claude decomposes per current workspace state. The roadmap is not a contract — it is a discipline.
