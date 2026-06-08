@@ -16,8 +16,8 @@ IS is the **consumer-most-upstream axis** per `Cross_Axis_Composition_Document_v
 
 | Artifact | Version | Role |
 |---|---|---|
-| `Spec_Information_Substrate_v1.md` | v1.2 (per ADD v1.3 attestation) | Contract authority — 10 contracts C-IS-01 through C-IS-10 |
-| `Implementation_Plan_Information_Substrate_v2_3.md` | v2.3 (R2 materializability conformance over v2.2) | Execution authority — 17 atomic units across 6 clusters and 6 topological levels (L0–L5) |
+| `Spec_Information_Substrate_v1.md` | **v1.3** (Phase 7 H_T-IS-2 apply-pass 2026-05-30 — additive NEW §5.1 `procedural_tier_snapshot_ref` sidecar + §5.2 resolver under C-IS-05; C-IS-02 §line-170 traceability canonical-reading patch; F-layer six-field shape §5 + §6 hash-chain + §7 read/write + §10 seam exports PRESERVED VERBATIM) | Contract authority — 10 contracts C-IS-01 through C-IS-10 |
+| `Implementation_Plan_Information_Substrate_v2_5.md` | **v2.5 — canonical HEAD** (delta-only chain; this row's prior `v2.3` was the authoring-era pin — v2.4 absorbed IS spec v1.3 §5.1/§5.2 sidecar+resolver, v2.5 closed H_T-IS-2 by relocating U-IS-18 → U-RT-112 at runtime plan v2.42) | Execution authority — 17 atomic units across 6 clusters and 6 topological levels (L0–L5) (count cycled 17→18→17: v2.4 added U-IS-18, v2.5 retired it to U-RT-112) |
 
 ### 1.3 Scope inclusion (per IS plan v2.1 §4 coverage matrix; preserved verbatim at v2.3)
 
