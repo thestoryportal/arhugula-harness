@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `59ece3c52b50` |
-| `last_refreshed` | 2026-06-08T10:52:21-06:00 |
-| `git_head` | `04348e3a` (main) — PR #428 R-901 retirement-criteria brief merged. |
+| `workspace_state_hash` | `747d5b1264e8` |
+| `last_refreshed` | 2026-06-08T11:08:13-06:00 |
+| `git_head` | `263c2d78` (main) — PR #430 R-901 research-path hygiene merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-54.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -49,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #430 (`263c2d78`) | 2026-06-08 | **R-901 research-path hygiene merged.** The Phase-9 retirement criteria brief now lives in the reorganized harness research corpus under `.harness/01-planning/01-harness-planning/00-harness-research/`; R-900/R-901, R-600 NotebookLM extract notes, and the dashboard point at the current corpus path. |
 | PR #428 (`04348e3a`) | 2026-06-08 | **R-901 Phase-9 retirement criteria research brief merged.** The brief uses the local Phase-8/retirement-batch corpus, NotebookLM corpus-boundary query, and a supplemental Perplexity query; it recommends research-only closure and returns the selector to genuine producer-gated CXA residuals. |
 | PR #426 (`c223de07`) | 2026-06-08 | **R-900 research placeholder decomposed into R-901.** R-XI-02/R-XI-03 were already RESOLVED, so the selector now points at the explicit Phase-9 retirement criteria research brief; the PR also fixed the SQLite memory backend writer-lock race surfaced by CI. |
 | PR #424 (`3c576f4f`) | 2026-06-08 | **R-CXA-2 CP→IS producer audit merged.** No production caller exists for the remaining HITL rewrite or engine-layer recovery-loop methods; existing workflow-driver pause/resume sites correctly emit `cp.pause-resume-protocol`, not the engine-layer `cp.pause-captured` / `cp.resume-attempted` actions. |
 | PR #422 (`79929bbd`) | 2026-06-08 | **R-CXA-1 AS→IS producer audit merged.** No production caller invokes `RuntimeAsIsWiring.emit_secret_fetch_audit_entry(...)`; bootstrap provider-key fetches still use name-only `resolve_bootstrap_value(...)`, and the only production `fetch_secret(...)` consumer is CP F5 signing-key resolution, not an AS→IS producer. |
-| PR #420 (`48a047e9`) | 2026-06-08 | **R-CXA-3 CP→AS runtime composer merged.** `RuntimeCpAsWiring` binds CP-consumed AS terminal seam exports at bootstrap stage 6 and exposes `HarnessContext.cp_as_wiring`; batch-54 moves H_T-CXA-3 to `SUBSTANTIVE_RETIRED`. |
 
 ---
 
@@ -101,6 +101,7 @@ The 5 bucket rows below sum to **54** under the batch-54 live ledger (RETIRED 52
 
 | Date | Source | Resolution |
 |---|---|---|
+| 2026-06-08 | **Post-#430 terminating refresh — PR #430 R-901 research-path hygiene merged at `263c2d78`; §12.2 owed follow-on.** Same session: corrected the R-901 brief location from the obsolete top-level `research/` path into `.harness/01-planning/01-harness-planning/00-harness-research/`, updated R-900/R-901 metadata, and fixed R-600 NotebookLM extract pointers. | Single-file status/dashboard refresh per §12.2.1. Hash `59ece3c52b50` → `747d5b1264e8` (state at `263c2d78`; PRS empty; fork count 45; batch-54). Next action unchanged: `R-CXA-2` then `R-CXA-1`, both producer-gated and not safely wireable until real upstream producers or design/back-flow amendments appear. |
 | 2026-06-08 | **Post-#428 terminating refresh — PR #428 R-901 retirement-criteria brief merged at `04348e3`; §12.2 owed follow-on.** Same session: R-901 filed the Phase-9 brief, marked Surface X research-only resolved, removed R-901 from remaining dashboard cards, and returned the selector to genuine producer-gated CXA residuals. | Single-file status/dashboard refresh per §12.2.1. Hash `ed3d997f21f7` → `59ece3c52b50` (state at `04348e3a`; PRS empty; fork count 45; batch-54). Follow-up path hygiene moved the brief into `.harness/01-planning/01-harness-planning/00-harness-research/` to match the reorganized harness research corpus. Next action: `R-CXA-2` then `R-CXA-1`, both producer-gated and not safely wireable until real upstream producers or design/back-flow amendments appear. |
 | 2026-05-31 | Dashboard creation (v1 origin) | n/a |
 | 2026-05-31 | First post-merge refresh — PR #112 merged at `7f3e6ce`; dashboard hash recomputed `9c31e4978c3d` → `5a077d17765f` | Refreshed via PR #113 per CLAUDE.md §12.2. |
