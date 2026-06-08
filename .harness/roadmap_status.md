@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `b6b3654a4d20` |
-| `last_refreshed` | 2026-06-08T07:02:15-06:00 |
-| `git_head` | `c57da7f7` (main) — PR #410 removed the stale R-411/R-412 remaining-card. |
+| `workspace_state_hash` | `27ebc427c0d7` |
+| `last_refreshed` | 2026-06-08T07:16:28-06:00 |
+| `git_head` | `7e972f27` (main) — PR #411 refreshed the roadmap status after the R-411/R-412 dashboard remaining-card correction. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-53.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #411 (`7e972f27`) | 2026-06-08 | **Post-#410 fixed-point refresh merged.** Refreshed the roadmap status/dashboard after the R-411/R-412 remaining-card correction and re-established the expected lag-by-one fixed point. |
 | PR #410 (`c57da7f7`) | 2026-06-08 | **Dashboard remaining-card correction merged.** Removed the hard-coded `R-411 → R-412` card from `closure.remaining`, regenerated the dashboard, and added a regression proving resolved R-411/R-412 text cannot appear in the remaining cards. |
 | PR #408 (`83082090`) | 2026-06-08 | **R-412 roadmap/status/dashboard back-flow merged.** R-412 is no longer a next-action candidate; the roadmap, forward register, fork doc, dashboard generator, dashboard snapshot, and activation count now report the managed E2B full-VM closure. |
 | PR #407 (`3971ef9b`) | 2026-06-08 | **Dashboard-maintenance guard fix merged.** Codex closeout now treats dashboard generator/test maintenance as part of status refreshes, while unrelated `tools/` changes still trigger the design/implementation mix guard. |
 | PR #406 (`34269d27`) | 2026-06-08 | **R-412 managed full-VM provider merged.** Added `E2BManagedFullVMToolRunnerExecutionDriver`, an opt-in `just r412-e2b-full-vm-live-e2e` gate, and live evidence that a Tier-4 TOOL_STEP executed through a managed E2B sandbox with provider `e2b-managed` / tech `e2b-firecracker`. |
-| PR #404 (`3383fb28`) | 2026-06-08 | **R-830 memory-backend comment refresh merged.** Runtime comments/docstrings now align with the landed SQLite and S3 Memory backend slices; managed-DB remains future optional scope. No behavior or roadmap state changed. |
 
 ---
 
