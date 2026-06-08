@@ -1,5 +1,11 @@
 # Run outputs (briefs, PRFAQs, PRDs, research) land here.
 # Per ICM discipline, generated artifacts are not committed.
+#
+# Exception: the epics & stories deliverable (epics.md) + its
+# implementation-readiness report are tracked so they can be reviewed via PR.
+# Inputs (briefs/PRD/architecture/council logs) remain local-only.
 *
 !.gitkeep
 !.gitignore
+!05-epics-and-stories/
+!05-epics-and-stories/**
