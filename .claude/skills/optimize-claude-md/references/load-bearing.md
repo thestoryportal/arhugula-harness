@@ -23,11 +23,22 @@ something is load-bearing, treat it as load-bearing and flag the question instea
 > never drop a section wholesale until you've verified it adds nothing the keeper already states.
 
 **Relocatable (MOVE / COMPRESS).** *Reference* content — version-history lineage, change-note
-chains, redundant restatement, pointer tables that mostly carry provenance. Provenance lives in
-git; a CLAUDE.md does not need to carry the saga. This is where the bytes are (`measure.py`
-shows §2 "Canonical artifact pointers" ≈ 81% of the root file) and where optimization should
-concentrate. Relocate via `relocation-pattern.md` — never just delete a pointer; re-home it and
-leave a resolving reference.
+chains, redundant restatement, pointer tables that mostly carry provenance, **and verbose worked
+examples / walkthroughs** (illustration a fluent session no longer needs spelled out). Provenance
+lives in git; a CLAUDE.md does not need to carry the saga, and it does not need every discipline
+dramatized at length. This is where the bytes are (`measure.py` shows §2 "Canonical artifact
+pointers" ≈ 81% of the root file) and where optimization should concentrate. Relocate via
+`relocation-pattern.md` — never just delete a pointer; re-home it and leave a resolving reference.
+
+> **An example can be a rule's only home.** Worked examples are *usually* illustration of a rule
+> stated canonically elsewhere — relocate those freely. But an example sometimes carries the **sole
+> statement** of a rule (a "here's what happens when a background run reaches a metered call"
+> walkthrough may be the *only* place the paid-call/secret boundary is written down). Framing as an
+> "example" does not make the rule optional. Before relocating an illustration/example block, check
+> each example: is the rule it demonstrates stated as a rule *somewhere that stays loaded*? If yes,
+> the example is pure illustration → relocate it. If the example is the only place that rule lives,
+> it is load-bearing → keep it (or restate the rule in a section that stays). Relocating a worked
+> example that is a rule's sole home drops the rule; `guardrails_preserved` hard-fails it.
 
 The happy coincidence in this repo: the **heavy** content is mostly **relocatable** (pointer
 tables + lineage), and the **load-bearing** content is mostly in the **short** sections. So the
