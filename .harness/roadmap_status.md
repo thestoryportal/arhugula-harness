@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `ed3d997f21f7` |
-| `last_refreshed` | 2026-06-08T10:40:53-06:00 |
-| `git_head` | `32ba1132` (main) — PR #427 post-#426 roadmap status refresh merged. |
+| `workspace_state_hash` | `59ece3c52b50` |
+| `last_refreshed` | 2026-06-08T10:52:21-06:00 |
+| `git_head` | `04348e3a` (main) — PR #428 R-901 retirement-criteria brief merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-54.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -49,7 +49,7 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| R-901 (this PR) | 2026-06-08 | **Phase-9 retirement criteria research brief filed.** The brief uses the local Phase-8/retirement-batch corpus, NotebookLM corpus-boundary query, and a supplemental Perplexity query; it recommends research-only closure and returns the selector to genuine producer-gated CXA residuals. |
+| PR #428 (`04348e3a`) | 2026-06-08 | **R-901 Phase-9 retirement criteria research brief merged.** The brief uses the local Phase-8/retirement-batch corpus, NotebookLM corpus-boundary query, and a supplemental Perplexity query; it recommends research-only closure and returns the selector to genuine producer-gated CXA residuals. |
 | PR #426 (`c223de07`) | 2026-06-08 | **R-900 research placeholder decomposed into R-901.** R-XI-02/R-XI-03 were already RESOLVED, so the selector now points at the explicit Phase-9 retirement criteria research brief; the PR also fixed the SQLite memory backend writer-lock race surfaced by CI. |
 | PR #424 (`3c576f4f`) | 2026-06-08 | **R-CXA-2 CP→IS producer audit merged.** No production caller exists for the remaining HITL rewrite or engine-layer recovery-loop methods; existing workflow-driver pause/resume sites correctly emit `cp.pause-resume-protocol`, not the engine-layer `cp.pause-captured` / `cp.resume-attempted` actions. |
 | PR #422 (`79929bbd`) | 2026-06-08 | **R-CXA-1 AS→IS producer audit merged.** No production caller invokes `RuntimeAsIsWiring.emit_secret_fetch_audit_entry(...)`; bootstrap provider-key fetches still use name-only `resolve_bootstrap_value(...)`, and the only production `fetch_secret(...)` consumer is CP F5 signing-key resolution, not an AS→IS producer. |
@@ -101,6 +101,7 @@ The 5 bucket rows below sum to **54** under the batch-54 live ledger (RETIRED 52
 
 | Date | Source | Resolution |
 |---|---|---|
+| 2026-06-08 | **Post-#428 terminating refresh — PR #428 R-901 retirement-criteria brief merged at `04348e3`; §12.2 owed follow-on.** Same session: R-901 filed `research/phase-9-retirement-criteria.md`, marked Surface X research-only resolved, removed R-901 from remaining dashboard cards, and returned the selector to genuine producer-gated CXA residuals. | Single-file status/dashboard refresh per §12.2.1. Hash `ed3d997f21f7` → `59ece3c52b50` (state at `04348e3a`; PRS empty; fork count 45; batch-54). Next action: `R-CXA-2` then `R-CXA-1`, both producer-gated and not safely wireable until real upstream producers or design/back-flow amendments appear. |
 | 2026-05-31 | Dashboard creation (v1 origin) | n/a |
 | 2026-05-31 | First post-merge refresh — PR #112 merged at `7f3e6ce`; dashboard hash recomputed `9c31e4978c3d` → `5a077d17765f` | Refreshed via PR #113 per CLAUDE.md §12.2. |
 | 2026-05-31 | Recursion-stop discipline gap surfaced — PR #113 merge left dashboard stale by 1 commit; §12.2 as written would recurse | Codified at PR #114 via §12.2.1 termination clause + §12.1 step 6 carve-out. |
