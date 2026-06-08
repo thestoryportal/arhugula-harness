@@ -1,0 +1,197 @@
+# Council Workflow - GENERIC variant
+# ============================================================================
+# A reusable, council-skill-agnostic workflow for running a genuine
+# multi-perspective council -> adversarial -> out-of-family/advisor
+# reconcile-to-zero loop over any design/planning decision with a nameable
+# cross-perspective tension.
+#
+# This variant deliberately has no harness layer router. The caller supplies or
+# proposes the voice roster at invocation time. Voices may be local skills,
+# named role prompts, domain personas, external reviewers, or human reviewers.
+# Companion prose: .harness/council/COUNCIL-WORKFLOW.md
+# /command: /council-generic
+version: 1
+kind: generic
+
+# --- 0. Pre-convening --------------------------------------------------------
+pre_convening:
+  nameable_tension_gate:
+    rule: >
+      Convene a council ONLY if a tension between two or more perspectives can
+      be NAMED in advance. If no cross-perspective tension exists, route to a
+      single responsible voice plus advisor/reviewer instead.
+    on_fail: route_single_voice_plus_advisor
+  build_voice_roster:
+    question: Which distinct perspectives must deliberate this task?
+    drives: voice_roster
+    rule: >
+      Choose 1-3 primaries at the center of the decision and a bounded set of
+      consultants for cross-cutting concerns. Each entry must name its
+      responsibility and whether it is backed by a skill, role prompt, persona,
+      external reviewer, or human reviewer.
+  set_spine_tension:
+    rule: >
+      Name the convening spine-tension up front so the council adjudicates a
+      real decision, not a general discussion or citation dump.
+  charter:
+    rule: >
+      Open/append a charter and ledger tree for the arc, with separate folders
+      for council contributions, adversarial review, decorrelated review,
+      reconciliation, and the deliverable. Keep the workflow additive and
+      handoff-friendly.
+
+# --- caller-supplied roster contract ----------------------------------------
+voice_roster_contract:
+  primaries:
+    cardinality: 1-3
+    required_fields: [id, name, responsibility, invocation]
+    rule: >
+      Primaries are the center of gravity for the decision. They deliberate
+      independently before consultants see their output.
+  consultants:
+    cardinality: bounded-by-task
+    required_fields: [id, name, responsibility, invocation]
+    rule: >
+      Consultants react to the primaries' real output and surface tension,
+      missed constraints, or refinements. Formulaic concurrence is rejected.
+  common_concerns:
+    examples: [security, privacy, cost, reliability, recovery, observability, evaluation, UX, operations, legal, migration, maintainability]
+    rule: >
+      Add only concerns that could move the decision. Promote a consultant to
+      primary only when the evidence is squarely in that concern's domain.
+  invocation_types:
+    allowed: [local_skill, role_prompt, persona, external_reviewer, human_reviewer]
+    rule: >
+      Every non-human voice must be genuinely invoked in its role. The
+      orchestrator may compose context and ledger entries, but must not
+      ventriloquize a voice's contribution.
+
+# --- the loop (same shape as the harness-aware variant) ----------------------
+stages:
+
+  - id: E1
+    name: Council deliberation
+    full_council_convening: true
+    sub_phases:
+      - id: A1
+        name: primaries independent
+        who: voice_roster.primaries
+        mode: isolated / blind-to-each-other
+        out: per-primary contribution, captured verbatim
+      - id: A2
+        name: consultants react to primaries
+        who: voice_roster.consultants
+        mode: >
+          Each consultant reads the primaries' real output and reacts by
+          surfacing tension, missed constraints, risk, or refinement. Blind to
+          other consultants unless the operator explicitly changes the order.
+        out: per-consultant reaction, captured verbatim
+      - id: B
+        name: cross-read debate
+        who: primaries plus relevant consultants
+        mode: >
+          Voices receive named peer positions and engage them by name: cohere,
+          flag conflict, refine, or request evidence. Primaries then confirm
+          back the integrated disposition.
+        out: reconciled council disposition and deliverable shape
+    orchestrator_role: compose the envelope and write the ledger; do not speak for the voices
+    gate: E1 reconciled-to-internal-zero
+
+  - id: E2
+    name: Adversarial review #1
+    who: genuine adversarial reviewer selected for the domain
+    does: >
+      Red-team the reconciled E1 result and classify findings as halt,
+      in-arc revision, or informational according to the local project policy.
+      Verify citations and empirical claims against current sources.
+    out: adversarial review finding set
+
+  - id: E2b
+    name: Adversarial <-> council reconcile-to-zero
+    full_council_convening: true
+    who: council voices respond to each adversarial finding
+    rule: loop until every finding is accepted, revised, rebutted, or explicitly carried as a bounded residual
+    gate: reconciled-to-zero before decorrelated review handoff
+
+  - id: E3
+    name: Out-of-family + advisor review
+    who:
+      out_of_family:
+        role: reviewer that did not see the council transcript
+        context: descriptive primer only
+      advisor:
+        role: transcript-aware reviewer
+        context: full transcript or fullest available local record
+    decorrelation_discipline:
+      - The out-of-family reviewer gets a descriptive primer only: no council conclusions, adversarial findings, or advisor evaluation.
+      - The advisor is transcript-aware and checks continuity, hidden assumptions, and local-policy fit.
+      - Divergence between reviewers is signal; convergence is supporting evidence, not proof.
+    out: decorrelated review finding set
+
+  - id: E3b
+    name: Decorrelated review <-> council reconcile-to-zero
+    full_council_convening: true
+    who: council voices respond to the out-of-family and advisor findings
+    gate: reconciled-to-zero
+
+  - id: E4
+    name: Adversarial review #2 gate
+    who: single bounded adversarial reviewer
+    does: residual sweep on the candidate deliverable and re-verification of empirical claims at current state
+    verdict: CLEAR-TO-COMMIT | CLEAR-WITH-FOLD | LOOP-BACK
+    on_loop_back: return to the relevant reconcile stage
+
+  - id: close
+    name: Close + hand off
+    steps:
+      - fold CLEAR-WITH-FOLD residuals and re-verify at current state
+      - produce a conscious versioned deliverable with a change note
+      - record where completed work is tracked
+      - commit, review, and merge according to the owner's workflow
+
+# --- reorder note ------------------------------------------------------------
+reorder_options:
+  consolidated_reconcile:
+    rule: >
+      The operator may collapse E2b and E3b into one consolidated reconcile
+      after all reviewer input has been gathered. This preserves
+      reconcile-to-zero while reducing full-council convenings.
+
+# --- HIL guidance ------------------------------------------------------------
+hil_gates:
+  - id: halt-before-full-council-convening
+    rule: >
+      HALT before each full_council_convening stage unless the owner explicitly
+      waives HIL. Surface the prior phase's result and await go-ahead.
+  - id: phase-separation
+    rule: >
+      Run phases as separate invocations with an orchestrator checkpoint between
+      them. Do not bundle isolated deliberation and cross-read debate.
+  - id: convening-sequence
+    rule: >
+      Primaries independent -> consultants react to primaries -> cross-read
+      debate. Do not run all voices blind-parallel when consultant reaction to
+      primaries is required.
+  - id: decorrelated-reviewer-wiring
+    rule: >
+      Out-of-family reviewer gets a cold descriptive primer; advisor is
+      transcript-aware; divergence receives extra weight.
+  - id: reconcile-to-zero-per-gate
+    rule: Close each reviewer<->council gate before advancing.
+  - id: genuine-invocation
+    rule: Every voice or reviewer is genuinely invoked in role; never substitute orchestrator summary for a voice contribution.
+  - id: destructive-boundary
+    rule: >
+      Even when HIL is waived, stop before destructive, irreversible,
+      credentialed, paid, or outward-facing actions unless already authorized.
+
+# --- operational discipline --------------------------------------------------
+operational_discipline:
+  rate_limit: >
+    Fan out gently in small waves. Avoid large bursts of concurrent reviewers
+    that fail together or overload shared context.
+  do_not_race_contended_files: >
+    Do not race another session over shared roadmap, dashboard, or release
+    artifacts.
+  ledger_writes: orchestrator writes the ledger from returned reviewer material; reviewers do not concurrently mutate shared ledgers.
+  posture: additive by default; preserve existing owner work and local governance.
