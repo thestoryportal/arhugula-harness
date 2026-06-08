@@ -59,3 +59,28 @@ def test_resolved_actions_are_omitted_from_remaining_order(monkeypatch):
 
     remaining_ids = {item["id"] for item in closure["remaining"]}
     assert "R-300-multi-llm-second-provider" not in remaining_ids
+
+
+def test_dashboard_status_filters_default_closed_off():
+    generate = _load_generate_module()
+
+    html = generate.render_html(
+        {
+            "live_head": "abc123",
+            "dashboard": {},
+            "actions": [],
+            "open_prs": [],
+            "cadence": [],
+            "pr_cadence": [],
+            "retired_trend": [],
+            "depgraph": {},
+            "axis_retirement": [],
+            "operator_gates": [],
+            "post_phase_8": {},
+            "closure": {},
+        }
+    )
+
+    assert 'id="status-board-filters"' in html
+    assert 'id="pp8-board-filters"' in html
+    assert 'label !== "closed"' in html

@@ -845,6 +845,15 @@ HTML_TEMPLATE = """<!doctype html>
   .chip.other{{background:transparent;color:var(--bone-soft);border-color:var(--hair);}}
   .chip.state{{background:transparent;color:var(--bone-soft);border-color:var(--bone-faint);}}
 
+  /* status filters */
+  .status-filters{{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:16px;}}
+  .status-filters .ftitle{{font-family:var(--mono);font-size:13px;letter-spacing:1.5px;text-transform:uppercase;
+    color:var(--bone-faint);margin-right:2px;}}
+  .filter-btn{{cursor:pointer;background:transparent;}}
+  .filter-btn[aria-pressed="false"]{{opacity:.42;}}
+  .filter-btn[aria-pressed="false"]::after{{content:" off";font-weight:500;color:var(--bone-faint);}}
+  .filter-empty{{padding:12px 0;color:var(--bone-faint);font-family:var(--mono);font-size:14.5px;}}
+
   /* remaining-to-complete ordered list */
   .rem{{display:flex;align-items:flex-start;gap:14px;padding:11px 0;border-bottom:1px solid var(--hair-soft);}}
   .rem:last-child{{border-bottom:none;}}
@@ -983,12 +992,12 @@ HTML_TEMPLATE = """<!doctype html>
 
     <section>
       <div class="shead"><span class="num">03</span><span class="htxt">R-NNN status board</span><span class="rule"></span></div>
-      <div class="panel"><div id="status-board"></div></div>
+      <div class="panel"><div id="status-board-filters" class="status-filters"></div><div id="status-board"></div></div>
     </section>
 
     <section id="pp8-card">
       <div class="shead"><span class="num">04</span><span class="htxt">Post-Phase-8 forward register</span><span class="rule"></span></div>
-      <div class="panel"><div id="pp8-summary" class="prose" style="margin-bottom:16px"></div><div id="pp8-board"></div></div>
+      <div class="panel"><div id="pp8-board-filters" class="status-filters"></div><div id="pp8-summary" class="prose" style="margin-bottom:16px"></div><div id="pp8-board"></div></div>
     </section>
 
     <div class="grid2">
@@ -1151,27 +1160,68 @@ function itemRow(a) {{
   return `<div class="r"><div class="rmain"><span class="rt2">${{esc(a.title)}}</span>${{why}}</div><span class="chip ${{chipClass}}">${{esc(a.rword)}}</span></div>`;
 }}
 const STATUS_RANK = {{ ACTIVE:0, "APPLIED-PENDING-OPERATOR-E2E":1, PROPOSED:2, BLOCKED:3, DEFERRED:4, RESOLVED:5, CANCELLED:6 }};
-function rowsFor(items) {{
-  return items.slice().sort((a,b)=>(STATUS_RANK[a.status]??9)-(STATUS_RANK[b.status]??9) || a.id.localeCompare(b.id)).map(a=>itemRow(a)).join("");
+const CHIP_BY_WORD = {{ closed:"closed", open:"open", proposed:"proposed", deferred:"deferred", blocked:"blocked", "awaiting operator e2e":"open" }};
+function sortedItems(items) {{
+  return items.slice().sort((a,b)=>(STATUS_RANK[a.status]??9)-(STATUS_RANK[b.status]??9) || a.id.localeCompare(b.id));
+}}
+function statusWord(a) {{
+  return a.rword || (a.rkind === "closed" ? "closed" : (a.status || "").toLowerCase());
+}}
+function statusLabelsFor(groups) {{
+  const labels = new Set();
+  Object.values(groups || {{}}).forEach(items => (items || []).forEach(a => labels.add(statusWord(a))));
+  return Array.from(labels).sort((a,b) => (a === "closed") - (b === "closed") || a.localeCompare(b));
+}}
+function initStatusFilter(controlId, labels) {{
+  const visible = new Set(labels.filter(label => label !== "closed"));
+  const el = document.getElementById(controlId);
+  const render = (onChange) => {{
+    if (!el) return;
+    el.innerHTML = `<span class="ftitle">show</span>` + labels.map(label => {{
+      const pressed = visible.has(label);
+      const chip = CHIP_BY_WORD[label] || "other";
+      return `<button type="button" class="chip filter-btn ${{chip}}" data-status="${{esc(label)}}" aria-pressed="${{pressed ? "true" : "false"}}">${{esc(label)}}</button>`;
+    }}).join("");
+    el.querySelectorAll("button[data-status]").forEach(btn => {{
+      btn.addEventListener("click", () => {{
+        const label = btn.getAttribute("data-status") || "";
+        if (visible.has(label)) visible.delete(label); else visible.add(label);
+        render(onChange);
+        onChange();
+      }});
+    }});
+  }};
+  render(() => {{}});
+  return {{ visible, rerender: render }};
+}}
+function renderGroupedBoard(targetId, groups, visibleStatuses, names) {{
+  const html = Object.keys(groups).sort().map(g => {{
+    const items = groups[g] || [];
+    const visibleItems = sortedItems(items).filter(a => visibleStatuses.has(statusWord(a)));
+    if (!visibleItems.length) return "";
+    const label = names ? (names[g] || g) : `Surface ${{g}}`;
+    return `<div class="surf"><div class="stitle">${{esc(label)}} <span class="ct">(${{visibleItems.length}}/${{items.length}})</span></div><div class="rows">${{visibleItems.map(a=>itemRow(a)).join("")}}</div></div>`;
+  }}).join("");
+  document.getElementById(targetId).innerHTML = html || '<div class="filter-empty">no items match the selected statuses</div>';
 }}
 
 // status board grouped by surface
 const bySurface = {{}};
 for (const a of (DATA.actions||[])) {{ (bySurface[a.surface || "?"] ||= []).push(a); }}
-document.getElementById("status-board").innerHTML = Object.keys(bySurface).sort().map(surf => {{
-  const items = bySurface[surf];
-  return `<div class="surf"><div class="stitle">Surface ${{esc(surf)}} <span class="ct">(${{items.length}})</span></div><div class="rows">${{rowsFor(items)}}</div></div>`;
-}}).join("");
+const statusFilter = initStatusFilter("status-board-filters", statusLabelsFor(bySurface));
+function renderStatusBoard() {{ renderGroupedBoard("status-board", bySurface, statusFilter.visible); }}
+statusFilter.rerender(renderStatusBoard);
+renderStatusBoard();
 
 // post-Phase-8 register
 const pp8 = DATA.post_phase_8 || {{}}, pp8g = pp8.groups || {{}};
 const PP8_NAMES = {{ IV:"Multi-LLM (IV)", V:"Multi-deployment (V)", VI:"Multi-tenant (VI)", IX:"External integrations (IX)", X:"Research (X)", CXA:"Cross-axis seams" }};
 document.getElementById("pp8-summary").innerHTML =
   `<strong>${{pp8.count||0}} forward items</strong> across ${{Object.keys(pp8g).length}} groups, full detail at <code>${{esc(pp8.register||"")}}</code>. Phase 8 closed the substitution accounting; these are the activation / deployment / integration axis, tracked under the same R-NNN discipline.`;
-document.getElementById("pp8-board").innerHTML = Object.keys(pp8g).sort().map(g => {{
-  const items = pp8g[g];
-  return `<div class="surf"><div class="stitle">${{esc(PP8_NAMES[g]||g)}} <span class="ct">(${{items.length}})</span></div><div class="rows">${{rowsFor(items)}}</div></div>`;
-}}).join("");
+const pp8Filter = initStatusFilter("pp8-board-filters", statusLabelsFor(pp8g));
+function renderPp8Board() {{ renderGroupedBoard("pp8-board", pp8g, pp8Filter.visible, PP8_NAMES); }}
+pp8Filter.rerender(renderPp8Board);
+renderPp8Board();
 
 // PRs
 const prs = DATA.open_prs || [];
