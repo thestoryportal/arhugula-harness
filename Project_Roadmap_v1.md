@@ -545,7 +545,7 @@ R-007-od-3-sampler-retired:
 R-008-od-4-redaction-partial:
   title: H_T-OD-4 (Pre-Collector redaction SpanProcessor) PARTIAL → RETIRE-READY gate closures
   surface: I
-  status: BLOCKED
+  status: RESOLVED   # batch-53: runtime residual closed by prior R-008 slices; OD-4 back-flowed into SUBSTANTIVE_RETIRED
   depends_on: []
   blocks: [R-700-phase-8-substitution-accounting]
   posture: phase-7
@@ -553,8 +553,8 @@ R-008-od-4-redaction-partial:
   skills: { primary: phase-7-implementation, secondary: [phase-7-substitution-retirement] }
   advisor_required: conditional:if a gate closure touches a cross-axis contract
   council_required: no
-  verification: { shape: integration, must_pass: ["§13.1 per-session redaction toggle mechanism authored (deferred at PR #25 apply arc) — ✅ MET 2026-06-02 (gate a)", "§13.2 opaque-token tokenization substrate — ✅ OD provider-free substrate authored 2026-06-07; durable audit-ledger token-map persistence — ✅ authored 2026-06-07; provider-free category-token classifier seam — ✅ authored 2026-06-07; eval-grade semantic classifier + runtime multi-tenant audit-backed tokenization — ✅ authored 2026-06-07"] }
-  close_shape: { type: PR-merge, artifact: "PR closing the remaining OD-4 gates → PARTIAL → RETIRE-READY", cascade: [R-IF-roadmap-refresh] }
+  verification: { shape: integration, must_pass: ["§13.1 per-session redaction toggle mechanism authored (deferred at PR #25 apply arc) — ✅ MET 2026-06-02 (gate a)", "§13.2 opaque-token tokenization substrate — ✅ OD provider-free substrate authored 2026-06-07; durable audit-ledger token-map persistence — ✅ authored 2026-06-07; provider-free category-token classifier seam — ✅ authored 2026-06-07; eval-grade semantic classifier + runtime multi-tenant audit-backed tokenization — ✅ authored 2026-06-07", "batch-53 accounting/back-flow moves OD-4 from PARTIAL to SUBSTANTIVE_RETIRED"] }
+  close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-53.md", cascade: [R-IF-roadmap-refresh] }
   next_pointer: R-007-od-3-sampler-retired
   notes: >
     PARTIAL (refined) at batch-35; gate (a) partially closed at PR #25 (deployment-level persona_tier +
@@ -609,6 +609,10 @@ R-008-od-4-redaction-partial:
     (server-task-dispatched run_workflow). That trigger hop is part of the §13.3-deferred toggle UX and
     may need an internal set-point inside the run_workflow handler — settled at the UX arc, not this
     mechanism close. must_pass[0] ("mechanism authored") is honestly MET; the trigger UX is §13.3-deferred.
+    **RESOLVED 2026-06-08 at batch-53:** the later R-008 runtime slices closed the §13.2 tokenization/classifier
+    residual that made the R-700 `RETIRED-AS-CROSS-AXIS-DEFERRED` label appropriate at Phase-8 declaration time.
+    Batch-53 removes that active sign-off label from the live structured ledger and moves OD-4 from `PARTIAL` to
+    `SUBSTANTIVE_RETIRED`. Historical Phase-8 prose remains historical.
 
 R-009-od-6-otlp-retired:
   title: H_T-OD-6 (Local-first OTLP ingestion) RETIRE-READY → RETIRED transit
@@ -2207,7 +2211,7 @@ R-CXA-3-cp-as-seam:
 R-CXA-4-od-multi-seam:
   title: CXA-4 (OD->IS/AS/CP) seam — GROUNDED-NO-WIREABLE; NO cleanup task (placeholders resolved at v2.3/v2.11); probe surfaced+fixed v2.18 matrix defect (CXA v2.19)
   surface: I
-  status: PROPOSED
+  status: RESOLVED   # batch-53: bookkeeping-only PARTIAL row back-flowed to SUBSTANTIVE_RETIRED
   depends_on: []
   blocks: [R-700-phase-8-substitution-accounting]
   posture: design-phase    # the convention-formalization follow-on was a PHANTOM (placeholders already resolved at v2.3/v2.11); the design-phase work that DID surface was the CXA v2.19 correction of v2.18's erroneous matrix
@@ -2215,13 +2219,13 @@ R-CXA-4-od-multi-seam:
   skills: { primary: spec-writer, secondary: [council-orchestrator] }
   advisor_required: no
   council_required: no    # nameable-tension discriminator: no real voice-tension; fidelity-pure count-correction
-  verification: { shape: grep, must_pass: ["NO cleanup task remains — the U-AS-NN/U-CP-NN placeholders were resolved at CXA v2.3 + OD plan v2.11; the probe of the phantom follow-on instead surfaced+corrected v2.18's erroneous §2.1 matrix (CXA v2.19, aggregate 105->107); R-CXA-4 stays PARTIAL (0 wireable), no further Claude-executable follow-on"] }
-  close_shape: { type: PR-merge, artifact: "back-flow: CXA v2.19 — correct v2.18 erroneous matrix + R-CXA-4 framing", cascade: [workspace CLAUDE.md §1.1 CXA-row + §2.4 CXA-row bump; dashboard; register §B-14] }
+  verification: { shape: grep, must_pass: ["NO cleanup task remains — the U-AS-NN/U-CP-NN placeholders were resolved at CXA v2.3 + OD plan v2.11; the probe of the phantom follow-on instead surfaced+corrected v2.18's erroneous §2.1 matrix (CXA v2.19, aggregate 105->107); batch-53 accounting/back-flow moves the 0-wireable bookkeeping row to SUBSTANTIVE_RETIRED"] }
+  close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-53.md", cascade: [dashboard; register §B-14] }
   next_pointer: null
   notes: |
     CORRECTED 2026-06-01 (probe of the R-CXA-4 follow-on, operator-picked "Also probe the v2.18 §2.4 defect"). The prior framing ("stale U-AS-NN/U-CP-NN placeholders; CXA convention-formalization revision owed, mirroring v2.18 C3-15") was ITSELF a wrong-version-read mis-framing (CLAUDE.md §10.5): the OD->AS/OD->CP placeholders were RESOLVED to real producer unit IDs at CXA v2.3 (2026-05-17; e.g. U-OD-17->U-AS-14, U-OD-29->U-AS-15(G), U-OD-23->U-CP-46) and at OD plan v2.11 (2026-05-16, Form A; resolution table .harness/cxa_7c_placeholder_resolution.md). The §2.3.5/§2.3.6 row-table headers appear only in v2.1/v2.2/v2.3 → v2.3 is canonical HEAD; every v2.4-v2.18 delta preserves them verbatim. THERE IS NO CLEANUP TASK at CXA or the OD plan; the prior register/roadmap framing read the v2.1 baseline.
     The probe of that phantom follow-on surfaced a real defect in v2.18: it re-absorbed the C3-15 OD->IS cleanup already done at v2.3 (same wrong-version-read), corrupting the §2.1 matrix (AS->IS 13->11, CP->OD 0->8, OD->CP 8->12) and publishing aggregate 105 (correct = 107) + a downstream-fabricated 37/48/20 sub-split (correct = 37/48/22). v2.18's OD->IS=4 / OD-outbound=26 end-state was already correct since v2.3 and is preserved. Fixed at CXA v2.19 (this PR) + CLAUDE.md §1.1/§2.4 + clearance marker. "CXA-OD-IS-EDGE-DRIFT" halt-doc Item 11 was a PHANTOM drift (CXA already conformed at v2.3).
-    SUBSTANTIVE conclusion preserved: R-CXA-4 = 0 wireable edges (1 genuine OD->IS seam already wired at 4 producers; 6 phase-2-runtime already at bootstrap stage 6; convention edges discharged by §3 Pattern P1 + stage-6 verify_*). R-CXA-4 stays PARTIAL; ZERO production code. No further Claude-executable follow-on; full RETIRED gated on R-700 substitution-accounting + R-CXA-2 engine-layer substrate. Register §B-14. Mirrors R-CXA-1 producer-discovery [[r-cxa-seam-wiring-is-producer-discovery]] + the wrong-version-read lesson [[wrong-version-read-delta-only-baseline]].
+    SUBSTANTIVE conclusion preserved: R-CXA-4 = 0 wireable edges (1 genuine OD->IS seam already wired at 4 producers; 6 phase-2-runtime already at bootstrap stage 6; convention edges discharged by §3 Pattern P1 + stage-6 verify_*). ZERO production code. No further Claude-executable follow-on remained; batch-53 consumes the bookkeeping/accounting residual and moves R-CXA-4 to `SUBSTANTIVE_RETIRED`. Register §B-14. Mirrors R-CXA-1 producer-discovery [[r-cxa-seam-wiring-is-producer-discovery]] + the wrong-version-read lesson [[wrong-version-read-delta-only-baseline]].
 ```
 
 ---

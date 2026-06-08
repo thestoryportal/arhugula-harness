@@ -122,4 +122,4 @@ This document remains the historical Phase-8 declaration. A later post-Phase-8 a
 - R-810: AS-8e + CP-17 Files API / `files.*`
 - R-820: AS-8f Managed Agents / `managed_agents.*`
 
-Batch-52 (`.harness/phase-7d-retirement-events-batch-52.md`) moves those three rows from `SB_INDEFINITE` to `SUBSTANTIVE_RETIRED`. The live substitution ledger therefore advances to **49/54 RETIRED** and **52/54 pipeline-advanced**. The Phase-8 close above is not rewritten; it is superseded forward for live counts by batch-52 and `.harness/substitutions.yaml`.
+Batch-52 (`.harness/phase-7d-retirement-events-batch-52.md`) moves those three rows from `SB_INDEFINITE` to `SUBSTANTIVE_RETIRED`. Batch-53 (`.harness/phase-7d-retirement-events-batch-53.md`) then moves OD-4 and CXA-4 from `PARTIAL` to `SUBSTANTIVE_RETIRED` after their runtime/bookkeeping residuals closed. The live substitution ledger therefore advances to **51/54 RETIRED** and **52/54 pipeline-advanced**. The Phase-8 close above is not rewritten; it is superseded forward for live counts by the post-Phase-8 retirement batches and `.harness/substitutions.yaml`.

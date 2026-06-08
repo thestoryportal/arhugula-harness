@@ -11,8 +11,8 @@
 # ROW COUNT: 55 entries = 54 canonical + 1 non-canonical (CP-24, the accounting-(i)-excluded
 # CP-axis-local authoring extra). The generator asserts exactly 54 `canonical: true` rows. The
 # `canonical` flag is what resolves the CP-21-vs-22 / AS-3↔AS-9 bookkeeping ambiguity explicitly
-# (accounting (i): drop CP-24; post-R-810/R-820 back-flow moves AS-8e/AS-8f/CP-17
-# from SB-INDEFINITE to substantive retired → RETIRED = 49).
+# (accounting (i): drop CP-24; post-R-810/R-820 and OD-4/CXA-4 back-flows move the
+# live ledger to RETIRED = 51).
 #
 # DISPOSITION enum (the count-bucket — drives counted_in_retired):
 #   SUBSTANTIVE_RETIRED     — counted in RETIRED
@@ -34,10 +34,10 @@
 # ───────────────────────────────────────────────────────────────────────────────────────────
 
 snapshot:
-  retired: 49          # post-Phase-8 back-flow after R-810/R-820 live proofs
+  retired: 51          # post-Phase-8 back-flow after R-810/R-820 + OD-4/CXA-4
   pipeline_advanced: 52
   total_canonical: 54
-  source: ".harness/phase-7d-retirement-events-batch-52.md"
+  source: ".harness/phase-7d-retirement-events-batch-53.md"
 
 substitutions:
   # ── IS axis — 9 canonical rows · 9 RETIRED ──────────────────────────────────────────────
@@ -88,19 +88,19 @@ substitutions:
   - { id: H_T-CP-23, axis: CP, disposition: AUTHORING_ONLY,      canonical: true, batch: batch-41, r_pointer: null, rationale: "Bridging-arc composition (F1+D1+D4); sub-species 10 categorical-mismatch" }
   - { id: H_T-CP-24, axis: CP, disposition: AUTHORING_ONLY,      canonical: false, batch: "v1 §1", r_pointer: null, rationale: "Substrate seam exports / authoring artifact (CP-axis-local 22nd row); EXCLUDED from canonical 54 per accounting (i) — the natural drop that resolves 55→54 / Meta-Arch CP=21" }
 
-  # ── OD axis — 8 canonical rows · 7 RETIRED + 1 PARTIAL ──────────────────────────────────
+  # ── OD axis — 8 canonical rows · 8 RETIRED ──────────────────────────────────────────────
   - { id: H_T-OD-1,  axis: OD, disposition: AUTHORING_ONLY,      canonical: true, batch: batch-37, r_pointer: null, rationale: "Deferral envelope; sub-species 10 categorical-mismatch (zero runtime callers)" }
   - { id: H_T-OD-2,  axis: OD, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-2,  r_pointer: null, rationale: "OTel SDK base + GenAI semconv binding; RuntimeLLMDispatcher.dispatch gen_ai span" }
   - { id: H_T-OD-3,  axis: OD, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-51, r_pointer: R-007, rationale: "Composite Sampler; HarnessCompositeSampler live at MVP via materialize_tracer_provider_stage (gate-text-stale audit)" }
-  - { id: H_T-OD-4,  axis: OD, disposition: PARTIAL,             canonical: true, batch: batch-35, r_pointer: R-008, sign_off_label: RETIRED-AS-CROSS-AXIS-DEFERRED, rationale: "Pre-Collector redaction SpanProcessor; gate (a) §13.1 CLOSED (#244); OD opaque-token substrate + durable audit-ledger token map + provider-free category-token classifier seam added 2026-06-07; eval-grade classifier + runtime multi-tenant audit-backed tokenization added 2026-06-07; ratified bounded label/count unchanged in this implementation slice" }
+  - { id: H_T-OD-4,  axis: OD, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-53, r_pointer: R-008, rationale: "Pre-Collector redaction SpanProcessor; gate (a) §13.1 CLOSED (#244); gate (b) OD opaque-token substrate + durable audit-ledger token map + provider-free category classifier + eval-grade runtime multi-tenant audit-backed tokenization all landed by 2026-06-07; batch-53 back-flows the former RETIRED-AS-CROSS-AXIS-DEFERRED sign-off into counted retirement after the runtime residual closed" }
   - { id: H_T-OD-5,  axis: OD, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-32, r_pointer: null, rationale: "Cost-attribution 5-step chain; mech-β AC #8; U-OD-40 validator+webhook LANDED" }
   - { id: H_T-OD-6,  axis: OD, disposition: BOUNDED_RESIDUAL,    canonical: true, batch: batch-51, r_pointer: R-009, rationale: "Local-first OTLP ingestion (in-process collector + sqlite); FIRST bounded-residual close; flush_to_sqlite dormant at MVP → X-AL-2 §5.3; gated on R-420/R-421 (counted)" }
   - { id: H_T-OD-7,  axis: OD, disposition: AUTHORING_ONLY,      canonical: true, batch: batch-38, r_pointer: null, rationale: "Preservation invariants (5-dimension); sub-species 10 (static deferral-signature contract)" }
   - { id: H_T-OD-8,  axis: OD, disposition: AUTHORING_ONLY,      canonical: true, batch: "v1 §1",  r_pointer: null, rationale: "Aggregate manifest + Stage 3b inversion; per-axis authoring artifact" }
 
-  # ── CXA axis — 5 canonical rows · 1 RETIRED + 2 PARTIAL + 2 STILL-BOUNDED ────────────────
+  # ── CXA axis — 5 canonical rows · 2 RETIRED + 1 PARTIAL + 2 STILL-BOUNDED ────────────────
   - { id: H_T-CXA-1, axis: CXA, disposition: PARTIAL,            canonical: true, batch: null,     r_pointer: R-CXA-1, sign_off_label: phase-2-runtime-deferred, rationale: "AS→IS consumption (13 edges); as_is_wiring materialized + 7c-tested → IS append; zero production callers of emit_secret_fetch_audit_entry (AS secret-fetch driver absent)" }
   - { id: H_T-CXA-2, axis: CXA, disposition: STILL_BOUNDED,      canonical: true, batch: null,     r_pointer: R-CXA-2, sign_off_label: phase-2-runtime-deferred, rationale: "CP→IS consumption (36 edges); 3 of 6 §16.5 composer methods now fire through production callers (override, pause/resume, workload selection); remaining HITL rewriting and engine free-function production firing sites are bounded-defer per ratified Class 1 docs because required upstream loops are absent" }
   - { id: H_T-CXA-3, axis: CXA, disposition: STILL_BOUNDED,      canonical: true, batch: null,     r_pointer: R-CXA-3, sign_off_label: phase-2-runtime-deferred, rationale: "CP→AS consumption (24 edges); no cp_as_wiring module (consistent with spec §12 — no CP→AS stage); typed-edge import surface only" }
-  - { id: H_T-CXA-4, axis: CXA, disposition: PARTIAL,            canonical: true, batch: batch-42, r_pointer: R-CXA-4, sign_off_label: phase-2-runtime-deferred, rationale: "OD→IS/AS/CP consumption (26 edges); 3 composer stages fire at bootstrap; OD audit-write seam fully exercised (6 audit_writer.append callers); ~5 of 26 edges materialized" }
+  - { id: H_T-CXA-4, axis: CXA, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-53, r_pointer: R-CXA-4, rationale: "OD→IS/AS/CP consumption (26 edges); grounding found 0 remaining wireable edges: lone genuine OD audit-write data-flow already wired with production producers, phase-2 runtime composers materialized at stage 6, convention edges satisfied by manifest/namespace checks; batch-53 retires the former bookkeeping-only PARTIAL row" }
   - { id: H_T-CXA-5, axis: CXA, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-3, r_pointer: null, rationale: "OD→CP inversion (harness.breaker.*); production emission at retry_breaker_fallback (U-RT-58); belatedly recognized at ledger §11.1a (38-batch stale-carry)" }

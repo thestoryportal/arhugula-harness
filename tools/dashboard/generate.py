@@ -71,9 +71,9 @@ ANNOTATIONS = {
     "R-600-pattern-bake-in-sweep": "Recurring housekeeping: sweep memory for repeating patterns worth writing down.",
     "R-IF-roadmap-refresh": "Recurring housekeeping: refresh this dashboard after every merge.",
     # BLOCKED
-    "R-008-od-4-redaction-partial": "Telemetry redaction is advanced: the per-session toggle, OD opaque-token substrate, durable audit-ledger token map, eval-grade classifier, and multi-tenant audit-backed tokenization path exist; accounting label unchanged.",
+    "R-008-od-4-redaction-partial": "Resolved by batch-53: the runtime redaction residual is closed and OD-4 is back-flowed into the live substitution ledger.",
     "R-100-mvp-config-discovery": "Waiting on a small decision: auto-find the config file at the project root, or drop that behavior from the spec.",
-    "R-700-phase-8-substitution-accounting": "RESOLVED — Phase 8 declared CLOSED at 46/54, then post-R-810/R-820 back-flow advanced the live ledger to 49/54 retired.",
+    "R-700-phase-8-substitution-accounting": "RESOLVED — Phase 8 declared CLOSED at 46/54, then post-R-810/R-820 plus OD-4/CXA-4 back-flow advanced the live ledger to 51/54 retired.",
     # DEFERRED (parked by design)
     "R-005-as-8e-files-indefinite": "Resolved by R-810 and back-flowed into the substitution ledger at batch-52.",
     "R-006-as-8f-managed-agents-indefinite": "Resolved by R-820 and back-flowed into the substitution ledger at batch-52.",
@@ -94,35 +94,21 @@ ANNOTATIONS = {
     "R-900-research-arcs": "Open-ended research / exploration; no fixed scope — pulled in as you choose.",
     "R-CXA-1-as-is-seam": "The one remaining wire (a secret-fetch audit caller) has no real source yet, so wiring it would be hollow; deferred until one exists.",
     "R-CXA-2-cp-is-seam": "The materialized pause/resume caller sites are covered; remaining CP→IS work needs engine-layer producers and the unresolved stage-ordering/spec-disambiguator gaps.",
-    "R-CXA-4-od-multi-seam": "Already checked — nothing left to wire (the old placeholders were resolved long ago); stays PARTIAL only for bookkeeping.",
+    "R-CXA-4-od-multi-seam": "Resolved by batch-53: grounding found 0 remaining wireable edges and the bookkeeping-only PARTIAL row was retired.",
     "R-XI-02": "Dashboard polish — dependency-graph view + sparklines; nice-to-have, nothing blocking it.",
     "R-XI-03": "Dashboard live-update mode; nice-to-have, nothing blocking it.",
 }
 
-# The 5 non-RETIRED substitution-ledger rows (the "is the harness built" view).
+# The 3 non-RETIRED substitution-ledger rows (the "is the harness built" view).
 # state ∈ {PARTIAL, STILL-BOUNDED, STILL-BOUNDED-INDEFINITELY}. `retire` = can/should we
 # proceed to retire it, in plain terms.
 NONRETIRED_LEDGER = [
-    {
-        "id": "OD-4",
-        "rnnn": "R-008",
-        "state": "PARTIAL",
-        "why": "Pre-collector redaction, the per-session toggle, OD opaque-token substrate, durable token-map persistence, provider-free eval-grade classifier, and runtime multi-tenant audit-backed tokenization are wired; ratified accounting label remains.",
-        "retire": "Not in this implementation slice — OD-4 keeps its R-700 ratified bounded label unless a separate accounting/back-flow reclassifies it.",
-    },
     {
         "id": "CXA-1",
         "rnnn": "R-CXA-1",
         "state": "PARTIAL",
         "why": "The AS→IS secret-fetch audit edge has no production caller to fire it.",
         "retire": "Not safely — wiring it now would be a hollow seam (no real source). Worth it only once a real secret-fetch path exists.",
-    },
-    {
-        "id": "CXA-4",
-        "rnnn": "R-CXA-4",
-        "state": "PARTIAL",
-        "why": "Grounded this session — 0 wireable edges; everything genuine is already wired.",
-        "retire": "Effectively done; stays PARTIAL only because the ledger's CXA rows were never folded into the cumulative. Any movement is accounting/back-flow, not a production wiring task.",
     },
     {
         "id": "CXA-2",
@@ -164,38 +150,24 @@ REMAINING_ORDERED = [
         "layer": "build",
         "id": "R-700-phase-8-substitution-accounting",
         "label": "Ratify the final retirement count",
-        "gate": "RESOLVED — Phase 8 declared CLOSED at 46/54; batch-52 back-flow now reports 49/54 retired.",
+        "gate": "RESOLVED — Phase 8 declared CLOSED at 46/54; batch-53 back-flow now reports 51/54 retired.",
     },
     {
         "n": 2,
-        "layer": "build",
-        "id": "R-CXA-2-cp-is-seam",
-        "label": "Build the CP→IS engine-layer seam",
-        "gate": "The pause/resume workflow-driver caller-site coverage is complete; remaining work needs engine-layer producers plus stage-ordering and HITL-disambiguator substrate.",
-    },
-    {
-        "n": 3,
-        "layer": "build",
-        "id": "R-008-od-4-redaction-partial",
-        "label": "Finish redaction (OD-4)",
-        "gate": "Runtime classifier/tokenization code gate is closed; any remaining movement is accounting/back-flow for the R-700 ratified OD-4 label.",
-    },
-    {
-        "n": 4,
         "layer": "build",
         "id": "R-CXA-1-as-is-seam",
         "label": "Account/close the AS→IS seam",
         "gate": "Deferred until a real secret-fetch producer exists; otherwise hollow.",
     },
     {
-        "n": 5,
+        "n": 3,
         "layer": "build",
-        "id": "R-CXA-4-od-multi-seam",
-        "label": "Account the OD→multi seam (bookkeeping)",
-        "gate": "0 wireable — already done in substance; any movement is accounting/back-flow only.",
+        "id": "R-CXA-2-cp-is-seam",
+        "label": "Build the CP→IS engine-layer seam",
+        "gate": "The pause/resume workflow-driver caller-site coverage is complete; remaining work needs engine-layer producers plus stage-ordering and HITL-disambiguator substrate.",
     },
     {
-        "n": 6,
+        "n": 4,
         "layer": "build",
         "id": "R-CXA-3-cp-as-seam",
         "label": "CP→AS seam — build or narrow",
@@ -238,8 +210,8 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
 
     build      — substitution-ledger retirement (the canonical 'is H_T built'
                  metric). DERIVED from `.harness/substitutions.yaml` (R-600);
-                 R-700 ratified the Phase-8 integer (46/54); batch-52
-                 back-flow advances the live ledger to 49/54.
+                 R-700 ratified the Phase-8 integer (46/54); batch-53
+                 back-flow advances the live ledger to 51/54.
     activation — the post-Phase-8 forward axis (deployment / integration);
                  exercised items are tracked separately from remaining build work.
     """
@@ -254,7 +226,7 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
         n_sbi = _bd.get("SB_INDEFINITE", 0)
     else:
         total = 54
-        retired = 49
+        retired = 51
         n_partial = sum(1 for r in NONRETIRED_LEDGER if r["state"] == "PARTIAL")
         n_sb = sum(1 for r in NONRETIRED_LEDGER if r["state"] == "STILL-BOUNDED")
         n_sbi = sum(1 for r in NONRETIRED_LEDGER if r["state"] == "STILL-BOUNDED-INDEFINITELY")
