@@ -2,10 +2,20 @@
 
 **Filed at:** R-CXA-2 producer-seam design arc (2026-06-08), HEAD `7ae493d`
 **Locus:** the absent production producers for `cp.hitl-tool-call-rewriting`, `cp.pause-captured`, `cp.resume-attempted` (runtime composers LANDED + tested; no firing site)
-**Status:** **OPEN — three decision points (DP-1/DP-2/DP-3), recommended readings attached, NOT resolved.**
+**Status:** ✅ RATIFIED 2026-06-08 — DP-1(c) bounded-residual defer for HITL model-driven inner loop; DP-2(c) bounded-residual defer for engine recovery loop; DP-3(a) recovery-loop-context-supplied opaque identities when a real recovery loop exists. No code/spec substrate change landed in this ratification arc.
 **Routing:** runtime-axis OR CP-axis design-phase per runtime plan v2.39 §0.4 NEW row (which already routed the HITL firing-site-absence "recommend sibling-bundle with U-CP-34 firing-site arc").
 **Parent lineage:** `class_1_tension_u_rt_35_cp_is_wiring_gaps.md` (CLOSED — firing-site-layer continuation, line 355). Companion design brief: `r-cxa-1-2-producer-seam-spec.md` §3–§4. Sibling defect fork: `class_1_fork_u_cp_78_pause_captured_type_impedance.md`.
 **Precedent:** `[[r-cxa-seam-wiring-is-producer-discovery]]` · `[[grounding-reveals-claude-closeable-slice-close-honestly]]` · v2.34 AC #8/#9 risk flags · CP-AL-1 (sub-agent topology ≠ H_T CP primitives).
+
+## 0. Ratification (2026-06-08)
+
+The operator approved the recommendations as an honest MVP-bounded disposition:
+
+- **DP-1 = Reading (c), bounded-residual defer.** The current MVP runtime has no model-driven multi-tool inner loop. Do not satisfy `cp.hitl-tool-call-rewriting` with a hollow single-dispatch caller. Re-open only when an actual model-emitted tool-call loop is in scope.
+- **DP-2 = Reading (c), bounded-residual defer.** The current MVP runtime has no multi-`EngineClass` recovery loop. Do not extend `workflow_driver.py` to impersonate the engine layer. Re-open when a real event-sourced replay, reconciler, WAL-segment, or engine-native-pause recovery loop lands.
+- **DP-3 = Reading (a), contingent future rule.** When DP-2 re-opens with a real recovery loop, the loop supplies stable opaque `pause_event_id` / `resume_event_id` values and a replay-safe `resume_attempt_count`; no type-field extension is authorized by this ratification.
+
+**Closeout posture:** the fork is ratified, not applied to runtime code. R-CXA-2 remains STILL-BOUNDED on future upstream-loop authoring; the ratification prevents hollow wiring and defines the re-open triggers.
 
 ## Why Class 2 (not Class 1)
 

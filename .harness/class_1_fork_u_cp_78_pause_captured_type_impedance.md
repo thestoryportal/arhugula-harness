@@ -2,10 +2,23 @@
 
 **Filed at:** R-CXA-2 producer-seam design arc (2026-06-08), HEAD `7ae493d`
 **Locus:** `harness-cp/src/harness_cp/pause_resume_protocol.py:864` (`emit_pause_captured_state_ledger_entry`) vs the engine-layer producer `capture_pause_snapshot` (`:252`)
-**Status:** **OPEN — surfaced, recommended reading attached, NOT resolved (X-AL-3: do not pick a reading in-spec without ratification).**
+**Status:** ✅ RATIFIED-AS-READING-A 2026-06-08 — operator approved the recommendation: align the engine-layer `cp.pause-captured` composer to consume the `PauseEvent` emitted by the engine-layer producer. Implementation remains owed; no code/spec substrate change landed in this ratification arc.
 **Routing:** CP-axis design-phase (CP spec §16.5 / C-CP-22 / C-CP-26) — choose the type-seam reading, then cascade to runtime plan producer arc.
 **Parent lineage:** `class_1_tension_u_rt_35_cp_is_wiring_gaps.md` (CLOSED; this is a firing-site-layer continuation per its line-355 re-verifiability clause). Companion design brief: `r-cxa-1-2-producer-seam-spec.md` §4.6.
 **Precedent:** `[[carrier-home-defect-pattern]]` (cross-axis type seam) · `[[halt-route-split-ac-pattern]]` · v2.34 AC #8 disambiguator-availability flag.
+
+## 0. Ratification (2026-06-08)
+
+**Reading A is ratified.** The engine-layer composer must accept the engine-layer producer's output type (`PauseEvent`) rather than requiring the workflow-layer `PauseSnapshot`.
+
+**Implementation contract now authorized:**
+
+- Re-type `emit_pause_captured_state_ledger_entry(..., pause_event: PauseEvent, ...)`.
+- Re-derive the idempotency suffix from canonical `PauseEvent` bytes plus `pause_audit_entry_id` instead of `PauseSnapshot.snapshot_hash`.
+- Add `test_pause_captured_consumes_real_engine_output` proving the engine free-function output can flow into the composer without runtime-axis field synthesis.
+- Preserve the C-CP-22 / C-CP-26 two-layer distinction; do not collapse `PauseReason` into `WorkflowPauseReason`, and do not introduce a lossy adapter.
+
+**Closeout posture:** this fork is ratified but not applied. It remains an implementation precondition for any future R-CXA-2 engine recovery-loop producer.
 
 ## The defect
 
