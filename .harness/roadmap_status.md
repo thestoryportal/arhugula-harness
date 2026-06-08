@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `75490b0ac699` |
-| `last_refreshed` | 2026-06-08T10:03:18-06:00 |
-| `git_head` | `4baefe0b` (main) — PR #423 post-#422 roadmap status refresh merged. |
+| `workspace_state_hash` | `2353a8d1e707` |
+| `last_refreshed` | 2026-06-08T10:10:21-06:00 |
+| `git_head` | `3c576f4f` (main) — PR #424 R-CXA-2 producer audit merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-54.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -50,7 +50,7 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| R-CXA-2 audit (`4baefe0b`) | 2026-06-08 | **R-CXA-2 CP→IS producer audit recorded.** No production caller exists for the remaining HITL rewrite or engine-layer recovery-loop methods; existing workflow-driver pause/resume sites correctly emit `cp.pause-resume-protocol`, not the engine-layer `cp.pause-captured` / `cp.resume-attempted` actions. |
+| PR #424 (`3c576f4f`) | 2026-06-08 | **R-CXA-2 CP→IS producer audit merged.** No production caller exists for the remaining HITL rewrite or engine-layer recovery-loop methods; existing workflow-driver pause/resume sites correctly emit `cp.pause-resume-protocol`, not the engine-layer `cp.pause-captured` / `cp.resume-attempted` actions. |
 | PR #422 (`79929bbd`) | 2026-06-08 | **R-CXA-1 AS→IS producer audit merged.** No production caller invokes `RuntimeAsIsWiring.emit_secret_fetch_audit_entry(...)`; bootstrap provider-key fetches still use name-only `resolve_bootstrap_value(...)`, and the only production `fetch_secret(...)` consumer is CP F5 signing-key resolution, not an AS→IS producer. |
 | PR #420 (`48a047e9`) | 2026-06-08 | **R-CXA-3 CP→AS runtime composer merged.** `RuntimeCpAsWiring` binds CP-consumed AS terminal seam exports at bootstrap stage 6 and exposes `HarnessContext.cp_as_wiring`; batch-54 moves H_T-CXA-3 to `SUBSTANTIVE_RETIRED`. |
 | PR #418 (`10bb3d51`) | 2026-06-08 | **Post-#417 fixed-point refresh merged.** Re-pinned roadmap status/dashboard after the R-830 managed-DB closure; R-830 is now in the closed/do-not-reopen set and the ordered frontier returns to CXA producer/composer gates plus optional research/dashboard arcs. |
@@ -270,6 +270,7 @@ The 5 bucket rows below sum to **54** under the batch-54 live ledger (RETIRED 52
 | 2026-06-08 | **R-CXA-1 producer audit branch opened from `883a991a`; §12.2 owed after merge.** | Fresh grounding found no wireable AS→IS producer: `emit_secret_fetch_audit_entry` remains definition/test-only, bootstrap provider-key resolution still uses `resolve_bootstrap_value(...)`, and the only production `fetch_secret(...)` consumer is CP F5 signing-key resolution. R-CXA-1 remains PARTIAL/producer-gated; the immediate selector moves to R-CXA-2 unless a real AS secret-fetch producer or scoped runtime caller appears. |
 | 2026-06-08 | **Post-#422 roadmap status refresh — PR #422 R-CXA-1 producer audit merged at `79929bbd`; §12.2 owed follow-on.** | Hash `caf7be78ea0b` → `5cc61fedc67d` (state at `79929bbd`, PRS empty/unavailable, fork count 45, batch-54). No runtime code changed; R-CXA-1 remains PARTIAL/producer-gated with evidence recorded. **Next action:** proceed to R-CXA-2 producer/upstream-loop grounding. |
 | 2026-06-08 | **R-CXA-2 producer audit branch opened from `4baefe0b`; §12.2 owed after merge.** | Fresh grounding found no wireable CP→IS producer for the remaining methods: HITL tool-call rewriting still lacks a production caller/spec disambiguator, workflow-driver pause/resume sites already emit the workflow-layer `cp.pause-resume-protocol` action, and engine-layer `cp.pause-captured` / `cp.resume-attempted` still require future recovery-loop producers. R-CXA-2 remains STILL-BOUNDED; immediate forward work shifts to optional R-XI-02/R-XI-03/R-900 or a future producer/design-amendment trigger. |
+| 2026-06-08 | **Post-#424 roadmap status refresh — PR #424 R-CXA-2 producer audit merged at `3c576f4f`; §12.2 owed follow-on.** | Hash `75490b0ac699` → `2353a8d1e707` (state at `3c576f4f`, PRS empty/unavailable, fork count 45, batch-54). No runtime code changed; R-CXA-2 remains STILL-BOUNDED/producer-gated with evidence recorded. **Next action:** optional R-XI-02/R-XI-03/R-900 by operator discretion, or future CXA producer/design-amendment trigger. |
 
 **Audit protocol exercised across terminating-refresh closures, fresh-session reconciliations, substantive closes, accounting back-flow, live-provider gates, and dashboard-discipline sweeps.** Discipline + enforcement layers are operational; the current selector is the `Next action` section above, not stale historical footer prose. After PR #420, the non-retired substitution ledger is narrowed to CXA-1 and CXA-2; future `/roadmap continue` sessions should ground those producer/upstream-loop gates against current code before opening optional dashboard/research arcs.
 
