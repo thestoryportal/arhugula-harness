@@ -2208,20 +2208,25 @@ R-CXA-2-cp-is-seam:
     gates on future upstream-loop authoring. Register §B-14.
 
 R-CXA-3-cp-as-seam:
-  title: CXA-3 (CP->AS) seam — runtime composer OR Memory-only-scope narrowing
+  title: CXA-3 (CP->AS) seam — runtime composer
   surface: I
-  status: DEFERRED
+  status: RESOLVED   # batch-54: CP->AS runtime composer landed and H_T-CXA-3 retired
   depends_on: []
   blocks: [R-700-phase-8-substitution-accounting]
-  posture: halt-route-to-operator
-  scope: { files: [harness-runtime/src/** (no cp_as_wiring.py at HEAD)], contracts: [CXA v2.18 §2.3.3 (24 edges), ledger §11.1b], cross_axis: yes }
-  skills: { primary: phase-7-cross-axis-composition, secondary: [phase-7-back-flow-routing] }
+  posture: phase-7
+  scope: { files: [harness-runtime/src/harness_runtime/lifecycle/cp_as_wiring.py, harness-runtime/src/harness_runtime/bootstrap/stage_6_cxa_wiring.py, harness-runtime/src/harness_runtime/bootstrap/mutable_context.py, harness-runtime/src/harness_runtime/types.py], contracts: [CXA v2.18 §2.3.3 (24 edges), ledger §11.1b], cross_axis: yes }
+  skills: { primary: phase-7-cross-axis-composition, secondary: [] }
   advisor_required: yes
   council_required: no
-  verification: { shape: grep, must_pass: ["EITHER a CP->AS runtime composer at a Files-arc design-phase opening (α) OR operator AskUserQuestion ratifying Memory-only-scope narrowing (β)"] }
-  close_shape: { type: PR-merge, artifact: "feat(cxa): CP->AS seam (α) OR scope-narrowing (β)", cascade: [] }
+  verification: { shape: pytest, must_pass: ["RuntimeCpAsWiring materializes CP-consumed AS terminal seam exports", "stage 6 binds cp_as_wiring", "HarnessContext exposes cp_as_wiring", "batch-54 moves H_T-CXA-3 to SUBSTANTIVE_RETIRED"] }
+  close_shape: { type: PR-merge, artifact: "feat(cxa): add CP->AS runtime composer", cascade: [dashboard; register §B-14; substitution-ledger batch-54] }
   next_pointer: null
-  notes: STILL-BOUNDED per R-700 — no cp_as_wiring.py module (consistent with spec §12); NOT 'N/A' (a real open seam). Neither path in-session-actionable. Register §B-14.
+  notes: >
+    RESOLVED 2026-06-08 at batch-54. Operator explicitly rejected MVP scope narrowing and directed the runtime-composer path.
+    `RuntimeCpAsWiring` now materializes the CP-consumed AS terminal seam export registry at bootstrap stage 6,
+    fail-closes on AS manifest coverage drift, and is exposed as `HarnessContext.cp_as_wiring`. Focused lifecycle
+    and bootstrap tests prove the composer shape, identity binding, coverage check, and frozen-context exposure.
+    H_T-CXA-3 moves from STILL_BOUNDED to SUBSTANTIVE_RETIRED; remaining non-retired CXA rows are CXA-1 and CXA-2.
 
 R-CXA-4-od-multi-seam:
   title: CXA-4 (OD->IS/AS/CP) seam — GROUNDED-NO-WIREABLE; NO cleanup task (placeholders resolved at v2.3/v2.11); probe surfaced+fixed v2.18 matrix defect (CXA v2.19)

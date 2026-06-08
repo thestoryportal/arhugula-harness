@@ -1567,6 +1567,11 @@ class HarnessContext(BaseModel):
     # `model_config`; consumers cast).
     cp_is_wiring: object | None = None
 
+    # R-CXA-3 — `RuntimeCpAsWiring` carrier. Exposes the stage-6 CP -> AS
+    # runtime registry that binds CP-consumed AS terminal seam exports. Typed
+    # `object` to avoid importing the lifecycle module into the L0 schema.
+    cp_as_wiring: object | None = None
+
     # R-003 producer-site lift — zero-arg resolver returning the
     # `procedural_tier_snapshot_ref` Identifier D-derivative sidecar per IS
     # spec v1.3 §C-IS-05 §5.1. Bound at bootstrap stage 6 (CXA_WIRING) to the

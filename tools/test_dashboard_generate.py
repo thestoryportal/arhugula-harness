@@ -94,7 +94,7 @@ def test_activation_open_count_matches_current_forward_catalog():
 
     closure = generate.compute_closure(actions, {"retirement": {}})
 
-    assert closure["activation"]["open"] == 4
+    assert closure["activation"]["open"] == 3
     assert closure["activation"]["total"] == 20
 
 
@@ -119,8 +119,8 @@ def test_live_anchor_derives_masthead_values_from_git_and_filesystem(tmp_path):
     harness.mkdir()
     (harness / "class_1_fork_example.md").write_text("status\n", encoding="utf-8")
     (harness / "class_3_fork_example.md").write_text("status\n", encoding="utf-8")
-    (harness / "phase-7d-retirement-events-batch-52.md").write_text("old\n", encoding="utf-8")
-    latest = harness / "phase-7d-retirement-events-batch-53.md"
+    (harness / "phase-7d-retirement-events-batch-53.md").write_text("old\n", encoding="utf-8")
+    latest = harness / "phase-7d-retirement-events-batch-54.md"
     latest.write_text("new\n", encoding="utf-8")
 
     subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
@@ -143,13 +143,13 @@ def test_live_anchor_derives_masthead_values_from_git_and_filesystem(tmp_path):
 
     assert anchor["git_head"]
     assert anchor["fork_count"] == "2"
-    assert anchor["latest_retirement_batch"] == ".harness/phase-7d-retirement-events-batch-53.md"
+    assert anchor["latest_retirement_batch"] == ".harness/phase-7d-retirement-events-batch-54.md"
     assert anchor["recent_prs"][0]["pr"].startswith("PR #399")
     assert anchor["hash"] == generate.compute_workspace_state_hash(
         git_head=anchor["git_head"],
         open_prs=[{"number": 7, "branch": "codex/example"}],
         open_fork_doc_count=2,
-        latest_retirement_batch_path=".harness/phase-7d-retirement-events-batch-53.md",
+        latest_retirement_batch_path=".harness/phase-7d-retirement-events-batch-54.md",
     )
 
 

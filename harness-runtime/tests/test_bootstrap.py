@@ -212,6 +212,7 @@ async def test_bootstrap_returns_frozen_harness_context(
     ctx = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
     assert isinstance(ctx, HarnessContext)
     assert ctx.model_config["frozen"] is True
+    assert ctx.cp_as_wiring is not None
 
 
 @pytest.mark.asyncio

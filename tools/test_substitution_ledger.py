@@ -27,8 +27,8 @@ def data() -> dict:
 
 def test_canonical_integers(data):
     d = sl.derive(data)
-    assert d["retired"] == 51, "post-batch-53 back-flow RETIRED"
-    assert d["pipeline_advanced"] == 52
+    assert d["retired"] == 52, "post-batch-54 back-flow RETIRED"
+    assert d["pipeline_advanced"] == 53
     assert d["total_canonical"] == 54
     assert d["non_canonical"] == 1  # CP-24
 
@@ -36,11 +36,11 @@ def test_canonical_integers(data):
 def test_bucket_breakdown(data):
     d = sl.derive(data)
     assert d["by_disposition"] == {
-        "SUBSTANTIVE_RETIRED": 41,
+        "SUBSTANTIVE_RETIRED": 42,
         "AUTHORING_ONLY": 8,
         "BOUNDED_RESIDUAL": 2,
         "PARTIAL": 1,
-        "STILL_BOUNDED": 2,
+        "STILL_BOUNDED": 1,
     }
 
 
@@ -58,8 +58,8 @@ def test_axis_rowcount(data):
 
 def test_axis_retired_contribution(data):
     d = sl.derive(data)
-    assert d["axis_retired"] == {"IS": 9, "AS": 11, "CP": 21, "OD": 8, "CXA": 2}
-    assert sum(d["axis_retired"].values()) == 51
+    assert d["axis_retired"] == {"IS": 9, "AS": 11, "CP": 21, "OD": 8, "CXA": 3}
+    assert sum(d["axis_retired"].values()) == 52
 
 
 # ── label ≠ count-membership (the rule the R-700 close turned on) ───────────────────────
@@ -104,6 +104,13 @@ def test_batch_53_backflow_rows_are_retired(data):
         assert "sign_off_label" not in rows[row_id]
 
 
+def test_batch_54_backflow_rows_are_retired(data):
+    rows = {r["id"]: r for r in data["substitutions"]}
+    assert rows["H_T-CXA-3"]["disposition"] == "SUBSTANTIVE_RETIRED"
+    assert rows["H_T-CXA-3"]["batch"] == "batch-54"
+    assert "sign_off_label" not in rows["H_T-CXA-3"]
+
+
 # ── The live ledger validates clean ────────────────────────────────────────────────────
 
 
@@ -115,7 +122,7 @@ def test_live_ledger_passes_validation(data):
 
 
 def test_silent_disposition_flip_is_caught(data):
-    # CXA-1 PARTIAL → SUBSTANTIVE_RETIRED: RETIRED 51→52, pipeline-advanced unchanged at 52,
+    # CXA-1 PARTIAL → SUBSTANTIVE_RETIRED: RETIRED 52→53, pipeline-advanced unchanged at 53,
     # Axis row counts and bucket sum still pass — only the snapshot pin catches it.
     # pin catches it. This is the exact class the original 48/54 bug lived in.
     bad = copy.deepcopy(data)
