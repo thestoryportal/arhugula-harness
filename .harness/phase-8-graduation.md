@@ -112,3 +112,14 @@ These are not substitution rows and were never X-AL-2 conditions.
 | Advisor pass (declaration arc) | confirmed 46 is the forced reading of the joint item-1+item-3 ratification (OD-6-in-both-lists tell); directed the label-vs-count-membership table + forward-only supersession |
 
 **Phase 8: substitution accounting CLOSED. 46/54 RETIRED (85.2%), 49/54 pipeline-advanced (90.7%); 8 rows carry ratified terminal sign-off dispositions; zero un-dispositioned open substitutions.**
+
+---
+
+## §7 Forward supersession note (2026-06-08)
+
+This document remains the historical Phase-8 declaration. A later post-Phase-8 accounting/back-flow arc opened the previously accepted-indefinite-defer Files and Managed Agents rows and live-proved them:
+
+- R-810: AS-8e + CP-17 Files API / `files.*`
+- R-820: AS-8f Managed Agents / `managed_agents.*`
+
+Batch-52 (`.harness/phase-7d-retirement-events-batch-52.md`) moves those three rows from `SB_INDEFINITE` to `SUBSTANTIVE_RETIRED`. The live substitution ledger therefore advances to **49/54 RETIRED** and **52/54 pipeline-advanced**. The Phase-8 close above is not rewritten; it is superseded forward for live counts by batch-52 and `.harness/substitutions.yaml`.

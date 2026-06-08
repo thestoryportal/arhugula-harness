@@ -73,10 +73,10 @@ ANNOTATIONS = {
     # BLOCKED
     "R-008-od-4-redaction-partial": "Telemetry redaction is advanced: the per-session toggle, OD opaque-token substrate, durable audit-ledger token map, eval-grade classifier, and multi-tenant audit-backed tokenization path exist; accounting label unchanged.",
     "R-100-mvp-config-discovery": "Waiting on a small decision: auto-find the config file at the project root, or drop that behavior from the spec.",
-    "R-700-phase-8-substitution-accounting": "RESOLVED — you ratified the count and Phase 8 is declared CLOSED: 46/54 retired (derived from the substitution ledger). The build phase is done.",
+    "R-700-phase-8-substitution-accounting": "RESOLVED — Phase 8 declared CLOSED at 46/54, then post-R-810/R-820 back-flow advanced the live ledger to 49/54 retired.",
     # DEFERRED (parked by design)
-    "R-005-as-8e-files-indefinite": "Files telemetry is live-proven by R-810; any Phase-8 tally movement remains a separate accounting/back-flow action.",
-    "R-006-as-8f-managed-agents-indefinite": "Managed-agents telemetry is live-proven by R-820; any Phase-8 tally movement remains a separate accounting/back-flow action.",
+    "R-005-as-8e-files-indefinite": "Resolved by R-810 and back-flowed into the substitution ledger at batch-52.",
+    "R-006-as-8f-managed-agents-indefinite": "Resolved by R-820 and back-flowed into the substitution ledger at batch-52.",
     "R-CXA-3-cp-as-seam": "Parked until either a real CP→AS runtime composer is authored or you narrow its scope; no in-workspace producer exists now.",
     "R-810-files-api-integration": "Resolved by the real Anthropic Files upload/reference/delete path plus managed-cloud files.operation Cloud Trace proof.",
     "R-820-managed-agents-integration": "Resolved by the real Anthropic Managed Agents SDK/session integration plus managed-cloud managed_agents.* Cloud Trace proof.",
@@ -99,7 +99,7 @@ ANNOTATIONS = {
     "R-XI-03": "Dashboard live-update mode; nice-to-have, nothing blocking it.",
 }
 
-# The 8 non-RETIRED substitution-ledger rows (the "is the harness built" view).
+# The 5 non-RETIRED substitution-ledger rows (the "is the harness built" view).
 # state ∈ {PARTIAL, STILL-BOUNDED, STILL-BOUNDED-INDEFINITELY}. `retire` = can/should we
 # proceed to retire it, in plain terms.
 NONRETIRED_LEDGER = [
@@ -138,27 +138,6 @@ NONRETIRED_LEDGER = [
         "why": "The CP→AS seam has no runtime composer.",
         "retire": "Not without either building one (a Files arc) or narrowing its scope. Low priority — operator discretion.",
     },
-    {
-        "id": "AS-8e",
-        "rnnn": "R-005",
-        "state": "STILL-BOUNDED-INDEFINITELY",
-        "why": "files.* telemetry namespace. R-810 now live-proves the Files API upload/reference/delete path and managed-cloud files.operation export.",
-        "retire": "Implementation gate is closed by R-810; retain the ledger row until a dedicated accounting/back-flow action changes the canonical tally.",
-    },
-    {
-        "id": "AS-8f",
-        "rnnn": "R-006",
-        "state": "STILL-BOUNDED-INDEFINITELY",
-        "why": "managed_agents.* telemetry namespace. R-820 now live-proves the runtime/integration path; Phase-8 tally movement is separate accounting/back-flow.",
-        "retire": "Implementation gate is closed by R-820; retain the ledger row until a dedicated accounting action changes the canonical tally.",
-    },
-    {
-        "id": "CP-17",
-        "rnnn": "R-010",
-        "state": "STILL-BOUNDED-INDEFINITELY",
-        "why": "files-primitives control-plane row. R-810 live-proves the runtime Files API path that consumed the Files arc.",
-        "retire": "Implementation gate is closed by R-810; retain the ledger row until a dedicated accounting/back-flow action changes the canonical tally.",
-    },
 ]
 
 # Substitution-ledger derivation (R-600-substitution-ledger-schema). The canonical RETIRED /
@@ -185,7 +164,7 @@ REMAINING_ORDERED = [
         "layer": "build",
         "id": "R-700-phase-8-substitution-accounting",
         "label": "Ratify the final retirement count",
-        "gate": "RESOLVED — Phase 8 declared CLOSED at 46/54 (ratified). The 8 rows below carry terminal sign-off dispositions.",
+        "gate": "RESOLVED — Phase 8 declared CLOSED at 46/54; batch-52 back-flow now reports 49/54 retired.",
     },
     {
         "n": 2,
@@ -221,13 +200,6 @@ REMAINING_ORDERED = [
         "id": "R-CXA-3-cp-as-seam",
         "label": "CP→AS seam — build or narrow",
         "gate": "Needs a real CP→AS runtime composer or a scope-narrowing decision.",
-    },
-    {
-        "n": 7,
-        "layer": "build",
-        "id": "R-005 / R-006 / CP-17",
-        "label": "Files namespace + AS-8f accounting",
-        "gate": "Files and AS-8f implementation gates are closed by R-810/R-820; any tally movement is separate accounting/back-flow.",
     },
     # --- Activation layer: operator-gated (creds + infra), deployment-ordered ---
     {
@@ -266,7 +238,8 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
 
     build      — substitution-ledger retirement (the canonical 'is H_T built'
                  metric). DERIVED from `.harness/substitutions.yaml` (R-600);
-                 R-700 ratified the integer at the Phase-8 graduation (46/54).
+                 R-700 ratified the Phase-8 integer (46/54); batch-52
+                 back-flow advances the live ledger to 49/54.
     activation — the post-Phase-8 forward axis (deployment / integration);
                  exercised items are tracked separately from remaining build work.
     """
@@ -281,7 +254,7 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
         n_sbi = _bd.get("SB_INDEFINITE", 0)
     else:
         total = 54
-        retired = 46
+        retired = 49
         n_partial = sum(1 for r in NONRETIRED_LEDGER if r["state"] == "PARTIAL")
         n_sb = sum(1 for r in NONRETIRED_LEDGER if r["state"] == "STILL-BOUNDED")
         n_sbi = sum(1 for r in NONRETIRED_LEDGER if r["state"] == "STILL-BOUNDED-INDEFINITELY")
@@ -295,7 +268,7 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
     closed_action_ids = {a["id"] for a in actions if a["status"] in ("RESOLVED", "CANCELLED")}
     remaining = [item for item in REMAINING_ORDERED if item["id"] not in closed_action_ids]
     # waffle-grid breakdown (ui-ux-pro-max chart rec: fraction-of-whole filled).
-    # `retired` + the 8 non-retired split by state → total 54 (derived above; R-600).
+    # `retired` + the non-retired split by state → total 54 (derived above; R-600).
     return {
         "build": {
             "lo": retired,

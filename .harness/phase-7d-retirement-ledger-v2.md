@@ -482,8 +482,25 @@ The `harness-od/CLAUDE.md` §4.1 OD-6 RETIRE-READY classification (batch-33) is 
 
 **Phase 8: substitution accounting CLOSED.**
 
-**Canonical source going forward (R-600-substitution-ledger-schema):** the per-row dispositions + the 46/49/54 integers are now DERIVED from `.harness/substitutions.yaml` via `tools/substitution_ledger.py` (`--summary` for live counts; `--check` is the CI tally gate that fails on an impossible tally). These prose figures CITE that derivation — they are no longer hand-maintained. A real retirement-event transit edits the row's `disposition` + the yaml `snapshot:` block (forward-only); this §11.7 text stands verbatim.
+**Canonical source from the Phase-8 declaration until the next real transit (R-600-substitution-ledger-schema):** the per-row dispositions + the 46/49/54 integers were DERIVED from `.harness/substitutions.yaml` via `tools/substitution_ledger.py` (`--summary` for live counts; `--check` is the CI tally gate that fails on an impossible tally). These prose figures CITE that derivation — they are no longer hand-maintained. A real retirement-event transit edits the row's `disposition` + the yaml `snapshot:` block (forward-only); §11.8 / batch-52 is that next transit and supersedes these integers for the live ledger.
 
 ---
 
-*End of phase-7d-retirement-ledger v2 (second pass against Phase 2 runtime closure) + 2026-05-27 supersession refresh + 2026-06-02 Phase-8 graduation supersession (§11.7).*
+### §11.8 Post-Phase-8 Files / Managed Agents back-flow (2026-06-08)
+
+**Trigger.** The operator opened the previously deferred Files and Managed Agents arcs after Phase 8 closed. R-810 live-proved Anthropic Files upload/reference/delete and managed-cloud `files.operation` export; R-820 live-proved Anthropic Managed Agents SDK/session integration and managed-cloud `managed_agents.*` export. Batch-52 records the forward-only accounting transit.
+
+**Live ledger accounting after batch-52:**
+
+| Metric | Live ledger | Phase-8 declaration |
+|---|---|---|
+| RETIRED | **49/54 (90.7%)** | 46/54 (85.2%) |
+| Pipeline-advanced | **52/54 (96.3%)** | 49/54 (90.7%) |
+
+**Disposition delta:** AS-8e, AS-8f, and CP-17 move from `SB_INDEFINITE` to `SUBSTANTIVE_RETIRED`; SB-INDEFINITE is now **0/54**. The remaining non-RETIRED rows are OD-4, CXA-1, CXA-2, CXA-3, and CXA-4.
+
+**Historical boundary.** §11.7 and `.harness/phase-8-graduation.md` remain the historical Phase-8 declaration. This §11.8 is a post-Phase-8 back-flow supersession for the live ledger only.
+
+---
+
+*End of phase-7d-retirement-ledger v2 (second pass against Phase 2 runtime closure) + 2026-05-27 supersession refresh + 2026-06-02 Phase-8 graduation supersession (§11.7) + 2026-06-08 post-Phase-8 back-flow (§11.8).*

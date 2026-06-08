@@ -461,7 +461,7 @@ R-004:
 R-005-as-8e-files-indefinite:
   title: H_T-AS-8e (files.* namespace) — INDEFINITE deferral accounting
   surface: I
-  status: DEFERRED
+  status: RESOLVED   # batch-52: R-810 live Files proof back-flowed AS-8e into SUBSTANTIVE_RETIRED
   depends_on: []
   blocks: [R-700-phase-8-substitution-accounting]
   posture: halt-route-to-operator
@@ -469,15 +469,15 @@ R-005-as-8e-files-indefinite:
   skills: { primary: phase-7-substitution-retirement, secondary: [] }
   advisor_required: no
   council_required: no
-  verification: { shape: none, must_pass: ["operator decision to author Files API surface OR carry as RETIRED-AS-BOUNDED-RESIDUAL at Phase 8"] }
-  close_shape: { type: retirement-event, artifact: "Phase 8 substitution accounting (R-700) OR a future Files-arc retirement event", cascade: [] }
+  verification: { shape: e2e, must_pass: ["R-810 live Anthropic Files upload/reference/delete", "managed-cloud files.operation trace carries files.* attributes"] }
+  close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-52.md", cascade: [] }
   next_pointer: null
-  notes: STILL-BOUNDED-INDEFINITELY per runtime spec v1.17 §14.C (Files arc DEFERRED INDEFINITELY, Memory-only MVP scope). Not executable in-CLI; gated on operator Files-API surface-authoring decision. X-AL-2 bounded-residual carry; resolves at R-700 Phase 8 accounting if not authored.
+  notes: RESOLVED at batch-52. The original R-005 entry tracked the accepted-indefinite-defer state for AS-8e while the Files arc was not opened. The operator later opened R-810; the real Anthropic Files adapter uploaded/referenced/deleted a live file, exported `files.operation` through the authenticated managed collector, and Cloud Trace `bfd28fa8fc8ecc3ba973d1e405cdb865` carried `files.*` attrs. Batch-52 back-flows AS-8e from `SB_INDEFINITE` to `SUBSTANTIVE_RETIRED`.
 
 R-006-as-8f-managed-agents-indefinite:
   title: H_T-AS-8f (managed_agents.* namespace) — INDEFINITE deferral accounting
   surface: I
-  status: DEFERRED
+  status: RESOLVED   # batch-52: R-820 live Managed Agents proof back-flowed AS-8f into SUBSTANTIVE_RETIRED
   depends_on: []
   blocks: [R-700-phase-8-substitution-accounting]
   posture: halt-route-to-operator
@@ -485,15 +485,15 @@ R-006-as-8f-managed-agents-indefinite:
   skills: { primary: phase-7-substitution-retirement, secondary: [] }
   advisor_required: no
   council_required: no
-  verification: { shape: none, must_pass: ["operator decision on Anthropic managed_agents beta SDK integration + managed-cloud deployment OR carry as RETIRED-AS-BOUNDED-RESIDUAL at Phase 8"] }
-  close_shape: { type: retirement-event, artifact: "Phase 8 substitution accounting (R-700) OR a future managed_agents retirement event", cascade: [] }
+  verification: { shape: e2e, must_pass: ["R-820 real Anthropic Managed Agents SDK/session integration", "managed-cloud managed_agents.runtime trace carries managed_agents.* attributes"] }
+  close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-52.md", cascade: [] }
   next_pointer: null
-  notes: STILL-BOUNDED-INDEFINITELY per `.harness/class_1_fork_as_8f_managed_agents_namespace_production_only_exclusion.md` Q1=(C) + runtime spec v1.33 + AS spec v1.7 §14.5 footer (mirror AS-8e). Not executable in-CLI; gated on managed_agents beta SDK + managed-cloud surface. X-AL-2 bounded-residual carry.
+  notes: RESOLVED at batch-52. The original R-006 entry tracked the accepted-indefinite-defer state for AS-8f while the managed_agents integration was production-only / managed-cloud gated. R-820 later added the real Anthropic Managed Agents SDK/session adapter, observed session `sesn_019aMgaF8sAW2cXhhpMTYij4` reach `session.status_idle`, exported `managed_agents.runtime`, and confirmed Cloud Trace `009d7716b19c75e4ad7edb93e78f8d2b` carried `managed_agents.*` attrs. Batch-52 back-flows AS-8f from `SB_INDEFINITE` to `SUBSTANTIVE_RETIRED`.
 
 R-010-cp-17-files-indefinite:
   title: H_T-CP-17 (files.* primitives consumption) — INDEFINITE deferral accounting
   surface: I
-  status: DEFERRED
+  status: RESOLVED   # batch-52: R-810 live Files proof back-flowed CP-17 into SUBSTANTIVE_RETIRED
   depends_on: []
   blocks: [R-700-phase-8-substitution-accounting]
   posture: halt-route-to-operator
@@ -501,8 +501,8 @@ R-010-cp-17-files-indefinite:
   skills: { primary: phase-7-substitution-retirement, secondary: [] }
   advisor_required: no
   council_required: no
-  verification: { shape: none, must_pass: ["operator decision to author the Files-arc surface OR carry as RETIRED-AS-BOUNDED-RESIDUAL at Phase 8"] }
-  close_shape: { type: retirement-event, artifact: "Phase 8 substitution accounting (R-700) OR a future Files-arc retirement event", cascade: [] }
+  verification: { shape: e2e, must_pass: ["R-810 live Anthropic Files API adapter/reference composition", "managed-cloud files.operation trace carries files.* attrs"] }
+  close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-52.md", cascade: [] }
   next_pointer: null
   notes: >
     Authored 2026-06-02 per R-700 ratification (operator chose "Author R-NNN entries" at AskUserQuestion) —
@@ -512,8 +512,9 @@ R-010-cp-17-files-indefinite:
     AS-8e (R-005); reclassified STILL-BOUNDED-INDEFINITELY at batch-44 per runtime spec v1.17 §14.C
     (Files-arc ratified Memory-only-MVP scope). Implementation-bundled into `R-810-files-api-integration`
     (AS-8e/CP-17); this entry gives CP-17 standalone substitution-accounting tracking parallel to R-005/R-006.
-    Not executable in-CLI; gated on the operator Files-API surface-authoring decision. X-AL-2 bounded-residual
-    carry; dispositioned at the R-700 Phase-8 accounting (sign-off RATIFIED 2026-06-02; formal declaration HELD).
+    The operator later opened R-810; the live Anthropic Files API adapter/reference composition and managed-cloud
+    `files.operation` proof consumed the Files arc. Batch-52 back-flows CP-17 from `SB_INDEFINITE` to
+    `SUBSTANTIVE_RETIRED`.
 
 R-007-od-3-sampler-retired:
   title: H_T-OD-3 (Composite Sampler) RETIRE-READY → RETIRED transit
@@ -1556,7 +1557,7 @@ R-600-notebooklm-skill-setup:
 R-600-substitution-ledger-schema:
   title: Extract the 54-row substitution ledger to a schema-backed source + derive the counts (kill the count-drift / stale-carry defect class for the accounting surface)
   surface: VII
-  status: RESOLVED   # 2026-06-02 — built (operator authorized). .harness/substitutions.yaml (55 rows = 54 canonical + CP-24) + tools/substitution_ledger.py (derive/validate, --check CI gate) + tools/test_substitution_ledger.py (canonical pin 46/49/54 + both per-axis breakdowns + label≠count + 4 negative tests) + ci.yml substitution-ledger blocking job + generate.py consumes the derivation (killed NONRETIRED_LEDGER counts + 46-48 range prose) + 4 prose pointers. Derivation reproduces graduation §3 exactly (46/49/54).
+  status: RESOLVED   # 2026-06-02 — built (operator authorized). .harness/substitutions.yaml (55 rows = 54 canonical + CP-24) + tools/substitution_ledger.py (derive/validate, --check CI gate) + tools/test_substitution_ledger.py (live canonical pin 49/52/54 after batch-52 + historical Phase-8 seed 46/49/54 + both per-axis breakdowns + label≠count + 4 negative tests) + ci.yml substitution-ledger blocking job + generate.py consumes the derivation (killed NONRETIRED_LEDGER counts + 46-48 range prose) + prose pointers. Derivation reproduced graduation §3 exactly at seed time (46/49/54), and batch-52 now advances the live ledger to 49/52/54.
   depends_on: [R-700-phase-8-substitution-accounting]   # RESOLVED 2026-06-02 — the canonical 46/54 disposition set (.harness/phase-8-graduation.md §3) is the schema's seed data
   blocks: []
   posture: mode-agnostic
@@ -1579,7 +1580,7 @@ R-600-substitution-ledger-schema:
     shape: integration
     must_pass:
       - "NEW .harness/substitutions.yaml holds 54 typed rows {id, axis, disposition (enum), counted_in_retired (bool), canonical (bool — resolves the CP-21-vs-22 / AS-3↔AS-9 accounting ambiguity explicitly), rationale, r_pointer, batch}"
-      - "a generator derives the buckets + integers; output == phase-8-graduation.md §3 canonical (46/54 RETIRED + 49/54 pipeline-advanced) — the schema reproduces the hand-reconciled truth exactly"
+      - "a generator derives the buckets + integers; seed output == phase-8-graduation.md §3 canonical (46/54 RETIRED + 49/54 pipeline-advanced), and forward retirement batches update the live integers structurally (batch-52: 49/54 + 52/54)"
       - "an impossible tally (e.g. RETIRED=48 with 3 PARTIAL) is a CI failure, not a months-later draft discovery"
       - "label != count-membership enforced structurally — disposition label is orthogonal to counted_in_retired; a RETIRED-AS-X label with counted_in_retired=false is legal + tested (the R-700 OD-4/OD-6 case)"
       - "the 5 prose copies (dashboard / ledger §11.x / harness-cp+od CLAUDE.md / root CLAUDE.md) CITE the derived number instead of hand-maintaining it; dashboard trend reads structured data, not regex"
@@ -2013,7 +2014,7 @@ R-500-multi-tenant-deployment:
 
 ### 5.12 External integrations (R-800..R-899) — Surface IX
 
-*Decomposed 2026-06-01 from register §B-10..§B-13 (discharges §9 Surface IX). Files API (AS-8e/CP-17) remains STILL-BOUNDED-INDEFINITELY by design and tracked as DEFERRED for operator-discretion timing at a managed-cloud arc. managed_agents (AS-8f) is live-proven and closed by R-820; any substitution-tally movement remains separate accounting/back-flow.*
+*Decomposed 2026-06-01 from register §B-10..§B-13 (discharges §9 Surface IX). Files API (AS-8e/CP-17) is live-proven and closed by R-810; managed_agents (AS-8f) is live-proven and closed by R-820. Batch-52 back-flows AS-8e/AS-8f/CP-17 into the substitution ledger as substantive retired rows.*
 
 ```yaml
 R-800-external-mcp-server:
