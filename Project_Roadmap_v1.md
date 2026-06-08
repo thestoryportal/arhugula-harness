@@ -2082,9 +2082,9 @@ R-820-managed-agents-integration:
   notes: RESOLVED 2026-06-07 by PR #380. Added the real Anthropic Managed Agents SDK/session adapter plus live managed-cloud e2e proof that created session `sesn_019aMgaF8sAW2cXhhpMTYij4`, observed `session.status_idle`, exported `managed_agents.runtime`, and confirmed Cloud Trace trace `009d7716b19c75e4ad7edb93e78f8d2b` carried `managed_agents.*` attributes. Temporary Cloud Run Token Creator IAM used only for the live proof was removed and verified absent after the run. This closes the R-820 runtime/integration gate; Phase-8 AS-8f substitution-tally movement, if any, remains a separate accounting/back-flow action.
 
 R-830-memory-tool-production-backend:
-  title: Memory-tool MANAGED_CLOUD production backend (cloud-vault / managed-db — CP-16) — managed-DB implemented, live e2e gated
+  title: Memory-tool MANAGED_CLOUD production backend (cloud-vault / managed-db — CP-16) — managed-DB live-proven
   surface: IX
-  status: APPLIED-PENDING-OPERATOR-E2E    # provider-free managed-DB implementation + live proof harness are present; closure waits on operator-provided PostgreSQL-compatible DSN and explicit approval for side-effecting e2e
+  status: RESOLVED    # managed-DB implementation + operator-approved Neon PostgreSQL live e2e passed
   depends_on: []
   blocks: []
   posture: phase-7    # optional managed-DB remainder is operator-gated (real service/creds/infra)
@@ -2112,17 +2112,18 @@ R-830-memory-tool-production-backend:
 
     R-830 therefore no longer carries a pending S3/cloud-vault blocker.
 
-    MANAGED_CLOUD managed-DB backend implementation ADDED in this branch:
+    MANAGED_CLOUD managed-DB backend implementation ADDED and live-proven:
     ManagedSqlMemoryToolBackend implements MemoryToolStorageBackend.DATABASE
     for PostgreSQL-compatible managed databases; the factory selects it for
     postgres:// or postgresql:// backend_params['connection_string'] values,
     with optional psycopg construction isolated behind the factory. Provider-free
     unit coverage proves protocol conformance, path discipline, persistence,
-    update semantics, and factory binding. A skip-gated live e2e plus
-    `just r830-managed-db-live-e2e` now exercises create/view/str_replace/insert/
-    delete through the Memory tool dispatch seam once the operator supplies
-    R830_MANAGED_DB_CONNECTION_STRING and explicitly approves side-effecting DB
-    writes. Gate logged at `.harness/codex_credential_gates.jsonl`. Register §B-13.
+    update semantics, and factory binding. The operator-approved live e2e bound
+    R830_MANAGED_DB_CONNECTION_STRING to the Neon `Arhugula` PostgreSQL project
+    and `just r830-managed-db-live-e2e` passed, exercising create/view/
+    str_replace/insert/delete through the Memory tool dispatch seam with cleanup.
+    Gate closure is logged at `.harness/codex_credential_gates.jsonl`.
+    Register §B-13.
 ```
 
 ### 5.13 Existential / research (R-900..R-999) — Surface X

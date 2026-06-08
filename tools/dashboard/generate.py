@@ -91,7 +91,7 @@ ANNOTATIONS = {
     "R-430-otlp-collector-tail-keep-preservation": "Resolved by the R-420 local real-collector tail-keep live proof.",
     "R-440-tier-level-secrets-backend": "Resolved by the self-hosted-keyring selector; R-420 proved it live through the local keyring sentinel.",
     "R-500-multi-tenant-deployment": "Resolved by the local self-hosted multi-tenant proof: tenant.id resource separation, non-toggleable redaction, and tenant-scoped audit reads.",
-    "R-830-memory-tool-production-backend": "Managed-DB implementation and safe recipe are present; closure waits on an operator-provided PostgreSQL-compatible DSN and approved live e2e.",
+    "R-830-memory-tool-production-backend": "Resolved by filesystem, SQLite, live S3 cloud-vault, and live Neon PostgreSQL managed-DB Memory-tool backend proofs.",
     "R-900-research-arcs": "Open-ended research / exploration; no fixed scope — pulled in as you choose.",
     "R-CXA-1-as-is-seam": "The one remaining wire (a secret-fetch audit caller) has no real source yet, so wiring it would be hollow; deferred until one exists.",
     "R-CXA-2-cp-is-seam": "Three CP→IS composer methods now fire through production callers; remaining work waits on a real HITL rewrite caller and engine recovery-loop producers.",
