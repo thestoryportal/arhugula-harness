@@ -48,6 +48,10 @@ from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.lifecycle.memory_tool_filesystem import (
     LocalFilesystemMemoryToolBackend,
 )
+from harness_runtime.lifecycle.memory_tool_managed_db import (
+    ManagedSqlConnect,
+    ManagedSqlMemoryToolBackend,
+)
 from harness_runtime.lifecycle.memory_tool_registry import MemoryToolRegistry
 from harness_runtime.lifecycle.memory_tool_s3 import S3ClientProtocol, S3MemoryToolBackend
 from harness_runtime.lifecycle.memory_tool_sqlite import SqliteMemoryToolBackend
@@ -96,6 +100,24 @@ def _resolve_database_connection_path(config: RuntimeConfig) -> Path:
         if connection_string:
             return Path(connection_string)
     return config.repository_root / MEMORY_TOOL_DATABASE_SUBPATH
+
+
+def _resolve_database_connection_string(config: RuntimeConfig) -> str | None:
+    """Return the operator DATABASE connection string, when supplied."""
+    backend_cfg = config.memory_tool_backend_config
+    if backend_cfg is not None and backend_cfg.backend_params is not None:
+        connection_string = backend_cfg.backend_params.get("connection_string")
+        if connection_string:
+            return connection_string
+    return None
+
+
+def _is_managed_database_connection_string(connection_string: str | None) -> bool:
+    """True for PostgreSQL-compatible managed DB connection strings."""
+    if connection_string is None:
+        return False
+    lowered = connection_string.lower()
+    return lowered.startswith(("postgres://", "postgresql://"))
 
 
 def _require_backend_params(
@@ -159,6 +181,38 @@ def _construct_s3_backend(config: RuntimeConfig) -> S3MemoryToolBackend:
     )
 
 
+def _create_managed_sql_connect_from_backend_params(params: dict[str, str]) -> ManagedSqlConnect:
+    """Lazily construct a psycopg connect callable for managed SQL backends."""
+    try:
+        psycopg = importlib.import_module("psycopg")
+    except ImportError as exc:
+        raise MemoryBackendResolutionError(
+            "RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend 'database' with a "
+            "postgres:// or postgresql:// connection_string requires optional "
+            "dependency psycopg for live managed-DB construction; provider-free "
+            "tests may monkeypatch _create_managed_sql_connect_from_backend_params"
+        ) from exc
+
+    psycopg_module = cast(Any, psycopg)
+    return cast(ManagedSqlConnect, psycopg_module.connect)
+
+
+def _construct_database_backend(config: RuntimeConfig) -> MemoryToolStorageBackendProtocol:
+    connection_string = _resolve_database_connection_string(config)
+    if _is_managed_database_connection_string(connection_string):
+        params = _require_backend_params(
+            config.memory_tool_backend_config,
+            backend=MemoryToolStorageBackend.DATABASE,
+        )
+        connect = _create_managed_sql_connect_from_backend_params(params)
+        assert connection_string is not None
+        return ManagedSqlMemoryToolBackend(
+            connection_string=connection_string,
+            connect=connect,
+        )
+    return SqliteMemoryToolBackend(db_path=_resolve_database_connection_path(config))
+
+
 PROTOCOL_REQUIRED_METHODS: tuple[str, ...] = (
     "view",
     "create",
@@ -204,12 +258,10 @@ async def materialize_memory_tool_registry_stage(
             root=config.repository_root / MEMORY_TOOL_FILESYSTEM_ROOT_SUBPATH,
         )
     elif configured is MemoryToolStorageBackend.DATABASE:
-        # R-830 SELF_HOSTED_SERVER DATABASE backend (local embedded SQLite).
-        # NOT the remaining optional MANAGED_CLOUD managed-DB backend. S3 is
-        # implemented separately below; ENCRYPTED_FILESYSTEM / OPERATOR_DEFINED
-        # still raise, and the surface-default path still picks FILESYSTEM only
-        # when admitted (DATABASE reaches here via explicit operator override).
-        backend = SqliteMemoryToolBackend(db_path=_resolve_database_connection_path(config))
+        # R-830 DATABASE backend. Plain/local connection strings route to the
+        # existing SQLite implementation; postgres:// and postgresql:// route
+        # to the optional managed-DB implementation.
+        backend = _construct_database_backend(config)
     elif configured is MemoryToolStorageBackend.S3:
         # R-830 MANAGED_CLOUD cloud-vault backend. Provider-free construction
         # reaches this path through a monkeypatched client factory; live use

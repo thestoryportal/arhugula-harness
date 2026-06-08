@@ -7,14 +7,13 @@ via the stdlib ``sqlite3`` module — a local embedded SQL store. ``DATABASE`` i
 admissible at SELF_HOSTED_SERVER + MANAGED_CLOUD per the graceful-degradation
 resolver (``harness_as.anthropic_graceful_degradation._MEMORY_BACKENDS``).
 
-**Scope (honest framing).** This is a *SELF_HOSTED_SERVER* ``DATABASE`` backend:
-a local embedded SQLite file, the SQL sibling of ``LocalFilesystemMemoryToolBackend``.
-It is **not** the MANAGED_CLOUD cloud-vault / managed-database production backend
-named at R-830's title. The S3 cloud-vault variant is implemented and live-proven;
-the remaining future optional cloud database shape is a real managed-DB backend.
-The factory still raises for ``ENCRYPTED_FILESYSTEM`` / ``OPERATOR_DEFINED``, and
-MANAGED_CLOUD without an explicit ``memory_tool_backend_config`` override still
-raises.
+**Scope (honest framing).** This is the embedded *SELF_HOSTED_SERVER*
+``DATABASE`` backend: a local SQLite file, the SQL sibling of
+``LocalFilesystemMemoryToolBackend``. MANAGED_CLOUD ``DATABASE`` is implemented
+separately by ``ManagedSqlMemoryToolBackend`` for PostgreSQL-compatible managed
+databases, and S3 covers the cloud-vault path. The factory still raises for
+``ENCRYPTED_FILESYSTEM`` / ``OPERATOR_DEFINED``, and MANAGED_CLOUD without an
+explicit ``memory_tool_backend_config`` override still raises.
 
 **Semantics byte-mirror ``LocalFilesystemMemoryToolBackend``** per the shared
 ``MemoryToolStorageBackendProtocol`` contract:

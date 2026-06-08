@@ -6,7 +6,8 @@ fake client; the factory may lazily construct a real boto3 S3 client when the
 operator supplies credentials and the optional dependency is installed.
 
 This closes the cloud-vault backend path together with the live R-830 S3 e2e
-proof. Managed-DB remains future optional scope.
+proof. MANAGED_CLOUD ``DATABASE`` is implemented separately by
+``ManagedSqlMemoryToolBackend`` for PostgreSQL-compatible managed databases.
 """
 
 from __future__ import annotations
