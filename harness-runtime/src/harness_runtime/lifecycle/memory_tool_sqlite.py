@@ -28,13 +28,14 @@ explicit ``memory_tool_backend_config`` override still raises.
 - ``insert`` is 1-indexed (``line=1`` → top; ``line=len+1`` → append);
 - no retry inside the callback per §14.12.2 invariant 4.
 
-Concurrency mirrors the filesystem backend: a per-path ``asyncio.Lock`` keyed on
-the raw ``/memories/...`` path string serializes read-modify-write on the same
-path; blocking ``sqlite3`` work runs under ``asyncio.to_thread``. A fresh
+Concurrency mirrors the filesystem backend for same-path operations: a per-path
+``asyncio.Lock`` keyed on the raw ``/memories/...`` path string serializes
+read-modify-write on the same path. SQLite also has one writer per database
+file, so writes are additionally serialized through a backend-level write lock;
+blocking ``sqlite3`` work still runs under ``asyncio.to_thread``. A fresh
 connection is opened per operation (``contextlib.closing`` — the ``sqlite3``
 connection ``with``-form manages only the transaction, not the close), which
-sidesteps cross-thread connection sharing under ``to_thread`` and relies on
-SQLite's own file-level locking for inter-connection safety.
+sidesteps cross-thread connection sharing under ``to_thread``.
 """
 
 from __future__ import annotations
@@ -76,6 +77,7 @@ class SqliteMemoryToolBackend:
         """
         self._db_path = db_path
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._write_lock = asyncio.Lock()
         db_path.parent.mkdir(parents=True, exist_ok=True)
         with contextlib.closing(sqlite3.connect(db_path)) as conn:
             conn.execute(
@@ -164,7 +166,8 @@ class SqliteMemoryToolBackend:
         key = self._validate_path(path)
         async with self._locks[path]:
             try:
-                await asyncio.to_thread(self._db_write, key, content)
+                async with self._write_lock:
+                    await asyncio.to_thread(self._db_write, key, content)
             except sqlite3.Error as exc:
                 raise MemoryCallbackIOError(f"create({path!r}) failed: {exc}") from exc
 
@@ -173,7 +176,8 @@ class SqliteMemoryToolBackend:
         key = self._validate_path(path)
         async with self._locks[path]:
             try:
-                await asyncio.to_thread(self._db_delete, key)
+                async with self._write_lock:
+                    await asyncio.to_thread(self._db_delete, key)
             except sqlite3.Error as exc:
                 raise MemoryCallbackIOError(f"delete({path!r}) failed: {exc}") from exc
 
@@ -198,7 +202,8 @@ class SqliteMemoryToolBackend:
 
             replaced = text.replace(old, new).encode("utf-8")
             try:
-                await asyncio.to_thread(self._db_write, key, replaced)
+                async with self._write_lock:
+                    await asyncio.to_thread(self._db_write, key, replaced)
             except sqlite3.Error as exc:
                 raise MemoryCallbackIOError(f"str_replace({path!r}) write failed: {exc}") from exc
 
@@ -227,6 +232,7 @@ class SqliteMemoryToolBackend:
             lines.insert(line - 1, content)
             replaced = "".join(lines).encode("utf-8")
             try:
-                await asyncio.to_thread(self._db_write, key, replaced)
+                async with self._write_lock:
+                    await asyncio.to_thread(self._db_write, key, replaced)
             except sqlite3.Error as exc:
                 raise MemoryCallbackIOError(f"insert({path!r}) write failed: {exc}") from exc
