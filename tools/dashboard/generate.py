@@ -94,7 +94,7 @@ ANNOTATIONS = {
     "R-830-memory-tool-production-backend": "Resolved by filesystem, SQLite, live S3 cloud-vault, and live Neon PostgreSQL managed-DB Memory-tool backend proofs.",
     "R-900-research-arcs": "Open-ended research / exploration; no fixed scope — pulled in as you choose.",
     "R-CXA-1-as-is-seam": "The one remaining wire (a secret-fetch audit caller) has no real source yet, so wiring it would be hollow; deferred until one exists.",
-    "R-CXA-2-cp-is-seam": "Three CP→IS composer methods now fire through production callers; remaining work waits on a real HITL rewrite caller and engine recovery-loop producers.",
+    "R-CXA-2-cp-is-seam": "Three CP→IS composer methods now fire through production callers; the 2026-06-08 audit found no remaining wireable producer until a real HITL rewrite caller or engine recovery-loop exists.",
     "R-CXA-4-od-multi-seam": "Resolved by batch-53: grounding found 0 remaining wireable edges and the bookkeeping-only PARTIAL row was retired.",
     "R-XI-02": "Dashboard polish — dependency-graph view + sparklines; nice-to-have, nothing blocking it.",
     "R-XI-03": "Dashboard live-update mode; nice-to-have, nothing blocking it.",
@@ -115,8 +115,8 @@ NONRETIRED_LEDGER = [
         "id": "CXA-2",
         "rnnn": "R-CXA-2",
         "state": "STILL-BOUNDED",
-        "why": "The CP→IS seam is still bounded; the materialized pause/resume caller sites are covered, but the broader §12.3 edge set is not.",
-        "retire": "Not yet — needs a real HITL rewrite production caller plus engine recovery-loop producers for pause capture/resume attempt.",
+        "why": "The CP→IS seam is still bounded; current code has no production producer for HITL rewrite or engine-layer recovery-loop emissions.",
+        "retire": "Not safely — needs a real HITL rewrite production caller plus engine recovery-loop producers for pause capture/resume attempt.",
     },
 ]
 
@@ -158,7 +158,7 @@ REMAINING_ORDERED = [
         "layer": "build",
         "id": "R-CXA-2-cp-is-seam",
         "label": "Build the CP→IS engine-layer seam",
-        "gate": "Three CP→IS composer methods now fire through production callers; remaining work waits on future HITL rewrite and engine recovery-loop producers.",
+        "gate": "Three CP→IS composer methods now fire through production callers; no remaining wireable producer exists until future HITL rewrite or engine recovery-loop authoring.",
     },
     {
         "n": 4,
