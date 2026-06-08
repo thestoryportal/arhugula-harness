@@ -27,7 +27,7 @@ def data() -> dict:
 
 def test_canonical_integers(data):
     d = sl.derive(data)
-    assert d["retired"] == 49, "post-R-810/R-820 back-flow RETIRED"
+    assert d["retired"] == 51, "post-batch-53 back-flow RETIRED"
     assert d["pipeline_advanced"] == 52
     assert d["total_canonical"] == 54
     assert d["non_canonical"] == 1  # CP-24
@@ -36,10 +36,10 @@ def test_canonical_integers(data):
 def test_bucket_breakdown(data):
     d = sl.derive(data)
     assert d["by_disposition"] == {
-        "SUBSTANTIVE_RETIRED": 39,
+        "SUBSTANTIVE_RETIRED": 41,
         "AUTHORING_ONLY": 8,
         "BOUNDED_RESIDUAL": 2,
-        "PARTIAL": 3,
+        "PARTIAL": 1,
         "STILL_BOUNDED": 2,
     }
 
@@ -58,21 +58,23 @@ def test_axis_rowcount(data):
 
 def test_axis_retired_contribution(data):
     d = sl.derive(data)
-    assert d["axis_retired"] == {"IS": 9, "AS": 11, "CP": 21, "OD": 7, "CXA": 1}
-    assert sum(d["axis_retired"].values()) == 49
+    assert d["axis_retired"] == {"IS": 9, "AS": 11, "CP": 21, "OD": 8, "CXA": 2}
+    assert sum(d["axis_retired"].values()) == 51
 
 
 # ── label ≠ count-membership (the rule the R-700 close turned on) ───────────────────────
 
 
-def test_od4_label_does_not_retally(data):
-    rows = {r["id"]: r for r in data["substitutions"]}
-    od4 = rows["H_T-OD-4"]
-    assert od4["sign_off_label"] == "RETIRED-AS-CROSS-AXIS-DEFERRED"
-    assert od4["disposition"] == "PARTIAL"
-    # The "RETIRED-AS-X" label must NOT make OD-4 counted.
-    assert "H_T-OD-4" not in {
-        s["id"] for s in sl.derive(data)["sign_offs"] if s["counted_in_retired"]
+def test_retired_as_label_does_not_retally(data):
+    bad = copy.deepcopy(data)
+    for r in bad["substitutions"]:
+        if r["id"] == "H_T-CXA-1":
+            r["sign_off_label"] = "RETIRED-AS-SYNTHETIC-DEFERRED"
+            r["disposition"] = "PARTIAL"
+            break
+    # The "RETIRED-AS-X" label must NOT make an otherwise PARTIAL row counted.
+    assert "H_T-CXA-1" not in {
+        s["id"] for s in sl.derive(bad)["sign_offs"] if s["counted_in_retired"]
     }
 
 
@@ -81,9 +83,9 @@ def test_od6_in_signoff_list_yet_counted(data):
     # RETIRED — proving "appears with a sign-off" is orthogonal to "counted in RETIRED".
     rows = {r["id"]: r for r in data["substitutions"]}
     assert rows["H_T-OD-6"]["disposition"] == "BOUNDED_RESIDUAL"  # counted
-    od4_counted = rows["H_T-OD-4"]["disposition"] in sl.RETIRED_DISPOSITIONS
+    cxa1_counted = rows["H_T-CXA-1"]["disposition"] in sl.RETIRED_DISPOSITIONS
     od6_counted = rows["H_T-OD-6"]["disposition"] in sl.RETIRED_DISPOSITIONS
-    assert od6_counted and not od4_counted
+    assert od6_counted and not cxa1_counted
 
 
 def test_batch_52_backflow_rows_are_retired(data):
@@ -92,6 +94,14 @@ def test_batch_52_backflow_rows_are_retired(data):
         assert rows[row_id]["disposition"] == "SUBSTANTIVE_RETIRED"
         assert rows[row_id]["batch"] == "batch-52"
     assert "SB_INDEFINITE" not in sl.derive(data)["by_disposition"]
+
+
+def test_batch_53_backflow_rows_are_retired(data):
+    rows = {r["id"]: r for r in data["substitutions"]}
+    for row_id in ("H_T-OD-4", "H_T-CXA-4"):
+        assert rows[row_id]["disposition"] == "SUBSTANTIVE_RETIRED"
+        assert rows[row_id]["batch"] == "batch-53"
+        assert "sign_off_label" not in rows[row_id]
 
 
 # ── The live ledger validates clean ────────────────────────────────────────────────────
@@ -105,12 +115,12 @@ def test_live_ledger_passes_validation(data):
 
 
 def test_silent_disposition_flip_is_caught(data):
-    # OD-4 PARTIAL → SUBSTANTIVE_RETIRED: RETIRED 49→50, pipeline-advanced unchanged at 52,
-    # OD still 8 rows, sum still 54 — every STRUCTURAL invariant passes. Only the snapshot
+    # CXA-1 PARTIAL → SUBSTANTIVE_RETIRED: RETIRED 51→52, pipeline-advanced unchanged at 52,
+    # Axis row counts and bucket sum still pass — only the snapshot pin catches it.
     # pin catches it. This is the exact class the original 48/54 bug lived in.
     bad = copy.deepcopy(data)
     for r in bad["substitutions"]:
-        if r["id"] == "H_T-OD-4":
+        if r["id"] == "H_T-CXA-1":
             r["disposition"] = "SUBSTANTIVE_RETIRED"
     violations = sl.validate(bad)
     assert any("snapshot" in v for v in violations), violations
@@ -119,16 +129,17 @@ def test_silent_disposition_flip_is_caught(data):
 def test_impossible_pipeline_pair_is_caught(data):
     # Force an impossible pair: alter the snapshot without changing the rows.
     bad = copy.deepcopy(data)
-    bad["snapshot"]["retired"] = 48  # claim 48 while rows derive 49
+    bad["snapshot"]["retired"] = 50  # claim 50 while rows derive 51
     violations = sl.validate(bad)
     assert any("snapshot.retired" in v for v in violations), violations
 
 
 def test_label_promoted_to_count_is_caught(data):
-    # A future editor flips OD-4 to a counted bucket but keeps the RETIRED-AS-X label.
+    # A future editor flips a labelled PARTIAL row to a counted bucket but keeps RETIRED-AS-X.
     bad = copy.deepcopy(data)
     for r in bad["substitutions"]:
-        if r["id"] == "H_T-OD-4":
+        if r["id"] == "H_T-CXA-1":
+            r["sign_off_label"] = "RETIRED-AS-SYNTHETIC-DEFERRED"
             r["disposition"] = "BOUNDED_RESIDUAL"  # now counted, label still RETIRED-AS-X
     violations = sl.validate(bad)
     assert any("must NOT drive the count" in v for v in violations), violations

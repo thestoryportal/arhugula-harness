@@ -503,4 +503,21 @@ The `harness-od/CLAUDE.md` §4.1 OD-6 RETIRE-READY classification (batch-33) is 
 
 ---
 
-*End of phase-7d-retirement-ledger v2 (second pass against Phase 2 runtime closure) + 2026-05-27 supersession refresh + 2026-06-02 Phase-8 graduation supersession (§11.7) + 2026-06-08 post-Phase-8 back-flow (§11.8).*
+### §11.9 Post-Phase-8 OD-4 / CXA-4 accounting back-flow (2026-06-08)
+
+**Trigger.** A later accounting/back-flow pass audited the remaining rows after batch-52 in logical dependency order. R-008's runtime residual was closed by the already-landed §13.1 redaction toggle plus the §13.2 opaque-token, durable audit-ledger token-map, provider-free category-classifier, and eval-grade runtime tokenization slices. R-CXA-4's grounding record found 0 remaining wireable edges: the lone genuine OD audit-write data-flow was already wired with production producers, phase-2 runtime composers were already materialized at bootstrap stage 6, and convention edges were already satisfied by manifest/namespace checks. Batch-53 records the forward-only accounting transit.
+
+**Live ledger accounting after batch-53:**
+
+| Metric | Live ledger | Phase-8 declaration |
+|---|---|---|
+| RETIRED | **51/54 (94.4%)** | 46/54 (85.2%) |
+| Pipeline-advanced | **52/54 (96.3%)** | 49/54 (90.7%) |
+
+**Disposition delta:** OD-4 and CXA-4 move from `PARTIAL` to `SUBSTANTIVE_RETIRED`. The remaining non-RETIRED rows are CXA-1 (`PARTIAL`), CXA-2 (`STILL_BOUNDED`), and CXA-3 (`STILL_BOUNDED`).
+
+**Historical boundary.** §11.7 and `.harness/phase-8-graduation.md` remain the historical Phase-8 declaration; §11.8 remains the batch-52 back-flow record. This §11.9 is a post-Phase-8 back-flow supersession for the live ledger only.
+
+---
+
+*End of phase-7d-retirement-ledger v2 (second pass against Phase 2 runtime closure) + 2026-05-27 supersession refresh + 2026-06-02 Phase-8 graduation supersession (§11.7) + 2026-06-08 post-Phase-8 back-flow (§11.8) + 2026-06-08 OD-4/CXA-4 back-flow (§11.9).*
