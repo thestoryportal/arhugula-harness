@@ -1,29 +1,32 @@
-"""R-810 provider-free Files API contract helpers.
+"""R-810 Files API runtime helpers.
 
-This module opens the runtime-side Files API boundary without constructing a
-provider SDK client or making managed-cloud calls. It supplies:
+This module owns the runtime-side Files API boundary and Anthropic adapter. It
+supplies:
 
 - a small provider-neutral file metadata record,
-- a protocol for future Anthropic Files API adapters, and
+- a protocol plus Anthropic Files API adapter,
+- Messages and Batch API file reference helpers, and
 - a `files.operation` span helper carrying the AS `files.*` namespace.
-
-The live upload/reference e2e remains gated on the R-810 managed-cloud arc.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, BinaryIO, Protocol
+from typing import Any, BinaryIO, Protocol, cast
 
 __all__ = [
     "ANTHROPIC_FILES_API_BETA",
+    "AnthropicFilesApiClient",
     "FilesApiClientProtocol",
     "FilesApiFile",
     "FilesOperationKind",
     "container_upload_block",
+    "document_file_block",
+    "files_message_batch_request",
     "files_operation_span",
 ]
 
@@ -54,7 +57,7 @@ class FilesApiFile:
 
 
 class FilesApiClientProtocol(Protocol):
-    """Minimal async port for a future provider-backed Files API adapter."""
+    """Minimal async port for a provider-backed Files API adapter."""
 
     async def upload(
         self,
@@ -71,6 +74,78 @@ class FilesApiClientProtocol(Protocol):
     async def delete(self, *, file_id: str) -> None: ...
 
 
+def _read_field(value: Any, field: str, default: Any = None) -> Any:
+    if isinstance(value, Mapping):
+        mapping = cast(Mapping[str, Any], value)
+        return mapping.get(field, default)
+    return getattr(value, field, default)
+
+
+def _file_from_anthropic(value: Any) -> FilesApiFile:
+    return FilesApiFile(
+        file_id=str(_read_field(value, "id", "")),
+        filename=str(_read_field(value, "filename", "")),
+        mime_type=str(_read_field(value, "mime_type", "")),
+        size_bytes=int(_read_field(value, "size_bytes", 0) or 0),
+        workspace_id=str(_read_field(value, "workspace_id", "")),
+    )
+
+
+class AnthropicFilesApiClient:
+    """Async wrapper around Anthropic's beta Files API.
+
+    The lockfile SDK exposes synchronous Files API methods, so this adapter
+    runs provider calls in a worker thread while preserving the async runtime
+    port used by the harness.
+    """
+
+    def __init__(self, *, client: Any) -> None:
+        self._client = client
+
+    async def upload(
+        self,
+        *,
+        file: BinaryIO,
+        filename: str,
+        mime_type: str,
+    ) -> FilesApiFile:
+        def _upload() -> Any:
+            return self._client.beta.files.upload(
+                file=(filename, file, mime_type),
+                betas=[ANTHROPIC_FILES_API_BETA],
+            )
+
+        return _file_from_anthropic(await asyncio.to_thread(_upload))
+
+    async def list_files(self) -> tuple[FilesApiFile, ...]:
+        def _list() -> Any:
+            return self._client.beta.files.list(betas=[ANTHROPIC_FILES_API_BETA])
+
+        page = await asyncio.to_thread(_list)
+        data = _read_field(page, "data", page)
+        if isinstance(data, list):
+            return tuple(_file_from_anthropic(item) for item in cast(list[Any], data))
+        return tuple(_file_from_anthropic(item) for item in data)
+
+    async def retrieve_metadata(self, *, file_id: str) -> FilesApiFile:
+        def _retrieve() -> Any:
+            return self._client.beta.files.retrieve_metadata(
+                file_id,
+                betas=[ANTHROPIC_FILES_API_BETA],
+            )
+
+        return _file_from_anthropic(await asyncio.to_thread(_retrieve))
+
+    async def delete(self, *, file_id: str) -> None:
+        def _delete() -> Any:
+            return self._client.beta.files.delete(
+                file_id,
+                betas=[ANTHROPIC_FILES_API_BETA],
+            )
+
+        await asyncio.to_thread(_delete)
+
+
 def container_upload_block(file_id: str) -> Mapping[str, str]:
     """Return the Anthropic code-execution content block for `file_id`.
 
@@ -79,6 +154,60 @@ def container_upload_block(file_id: str) -> Mapping[str, str]:
     """
 
     return {"type": "container_upload", "file_id": file_id}
+
+
+def document_file_block(
+    file_id: str,
+    *,
+    title: str | None = None,
+    context: str | None = None,
+) -> Mapping[str, Any]:
+    """Return a Messages document block that references an uploaded file."""
+
+    block: dict[str, Any] = {
+        "type": "document",
+        "source": {
+            "type": "file",
+            "file_id": file_id,
+        },
+    }
+    if title is not None:
+        block["title"] = title
+    if context is not None:
+        block["context"] = context
+    return block
+
+
+def files_message_batch_request(
+    *,
+    custom_id: str,
+    model: str,
+    max_tokens: int,
+    file_id: str,
+    prompt: str,
+) -> Mapping[str, Any]:
+    """Build a Message Batches request that references a Files API file.
+
+    The returned shape is provider data only; submitting it remains a caller
+    decision because Message Batches are asynchronous and usage-billed.
+    """
+
+    return {
+        "custom_id": custom_id,
+        "params": {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        document_file_block(file_id),
+                    ],
+                }
+            ],
+        },
+    }
 
 
 @asynccontextmanager

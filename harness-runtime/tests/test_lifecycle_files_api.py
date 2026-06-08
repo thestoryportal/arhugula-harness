@@ -8,10 +8,13 @@ from typing import BinaryIO
 import pytest
 from harness_runtime.lifecycle.files_api import (
     ANTHROPIC_FILES_API_BETA,
+    AnthropicFilesApiClient,
     FilesApiClientProtocol,
     FilesApiFile,
     FilesOperationKind,
     container_upload_block,
+    document_file_block,
+    files_message_batch_request,
     files_operation_span,
 )
 from opentelemetry.sdk.trace import TracerProvider
@@ -65,6 +68,60 @@ class FakeFilesApiClient:
         self.deleted.append(file_id)
 
 
+class _SdkFile:
+    def __init__(
+        self,
+        *,
+        file_id: str,
+        filename: str = "data.csv",
+        mime_type: str = "text/csv",
+        size_bytes: int = 8,
+        workspace_id: str = "workspace_test",
+    ) -> None:
+        self.id = file_id
+        self.filename = filename
+        self.mime_type = mime_type
+        self.size_bytes = size_bytes
+        self.workspace_id = workspace_id
+
+
+class _FakeSdkFiles:
+    def __init__(self) -> None:
+        self.upload_calls: list[tuple[object, list[str]]] = []
+        self.list_betas: list[list[str]] = []
+        self.retrieve_calls: list[tuple[str, list[str]]] = []
+        self.deleted: list[tuple[str, list[str]]] = []
+
+    def upload(self, *, file: object, betas: list[str]) -> _SdkFile:
+        self.upload_calls.append((file, betas))
+        return _SdkFile(file_id="file_uploaded")
+
+    def list(self, *, betas: list[str]) -> object:
+        self.list_betas.append(betas)
+
+        class Page:
+            data = [_SdkFile(file_id="file_uploaded")]
+
+        return Page()
+
+    def retrieve_metadata(self, file_id: str, *, betas: list[str]) -> _SdkFile:
+        self.retrieve_calls.append((file_id, betas))
+        return _SdkFile(file_id=file_id)
+
+    def delete(self, file_id: str, *, betas: list[str]) -> None:
+        self.deleted.append((file_id, betas))
+
+
+class _FakeSdkBeta:
+    def __init__(self) -> None:
+        self.files = _FakeSdkFiles()
+
+
+class _FakeSdkClient:
+    def __init__(self) -> None:
+        self.beta = _FakeSdkBeta()
+
+
 @pytest.fixture
 def tracer_with_exporter() -> tuple[TracerProvider, InMemorySpanExporter]:
     provider = TracerProvider()
@@ -81,6 +138,51 @@ def test_container_upload_block_shapes_reference_content() -> None:
     assert container_upload_block("file_123") == {
         "type": "container_upload",
         "file_id": "file_123",
+    }
+
+
+def test_document_file_block_shapes_reference_content() -> None:
+    assert document_file_block("file_123", title="Fixture", context="R-810") == {
+        "type": "document",
+        "source": {
+            "type": "file",
+            "file_id": "file_123",
+        },
+        "title": "Fixture",
+        "context": "R-810",
+    }
+
+
+def test_files_message_batch_request_reuses_file_id() -> None:
+    request = files_message_batch_request(
+        custom_id="r810-live",
+        model="claude-haiku-4-5",
+        max_tokens=16,
+        file_id="file_123",
+        prompt="Read the fixture.",
+    )
+
+    assert request == {
+        "custom_id": "r810-live",
+        "params": {
+            "model": "claude-haiku-4-5",
+            "max_tokens": 16,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Read the fixture."},
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "file",
+                                "file_id": "file_123",
+                            },
+                        },
+                    ],
+                }
+            ],
+        },
     }
 
 
@@ -106,6 +208,38 @@ async def test_files_api_protocol_is_provider_free() -> None:
     assert await client.retrieve_metadata(file_id="file_test") == listed[0]
     await client.delete(file_id="file_test")
     assert client.deleted == ["file_test"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_files_api_client_maps_sdk_and_sets_beta() -> None:
+    sdk_client = _FakeSdkClient()
+    client = AnthropicFilesApiClient(client=sdk_client)
+    content = BytesIO(b"a,b\n1,2\n")
+
+    uploaded = await client.upload(
+        file=content,
+        filename="data.csv",
+        mime_type="text/csv",
+    )
+    listed = await client.list_files()
+    retrieved = await client.retrieve_metadata(file_id="file_uploaded")
+    await client.delete(file_id="file_uploaded")
+
+    assert uploaded == FilesApiFile(
+        file_id="file_uploaded",
+        filename="data.csv",
+        mime_type="text/csv",
+        size_bytes=8,
+        workspace_id="workspace_test",
+    )
+    assert listed == (uploaded,)
+    assert retrieved == uploaded
+    upload_file, upload_betas = sdk_client.beta.files.upload_calls[0]
+    assert upload_file == ("data.csv", content, "text/csv")
+    assert upload_betas == [ANTHROPIC_FILES_API_BETA]
+    assert sdk_client.beta.files.list_betas == [[ANTHROPIC_FILES_API_BETA]]
+    assert sdk_client.beta.files.retrieve_calls == [("file_uploaded", [ANTHROPIC_FILES_API_BETA])]
+    assert sdk_client.beta.files.deleted == [("file_uploaded", [ANTHROPIC_FILES_API_BETA])]
 
 
 @pytest.mark.asyncio

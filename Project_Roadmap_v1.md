@@ -2049,10 +2049,10 @@ R-800-external-mcp-server:
 R-810-files-api-integration:
   title: Files API integration (files.* namespace — AS-8e / CP-17)
   surface: IX
-  status: DEFERRED
+  status: RESOLVED
   depends_on: [R-421-managed-cloud-deployment-e2e]
   blocks: []
-  posture: halt-route-to-operator
+  posture: phase-7
   scope: { files: [design-substrate (Files arc design-phase), harness-runtime/src/**], contracts: [runtime spec v1.17 §14.C, C-AS-13 §13.2, ADR-D3], cross_axis: yes }
   skills: { primary: phase-7-implementation, secondary: [phase-7-back-flow-routing] }
   advisor_required: yes
@@ -2060,7 +2060,7 @@ R-810-files-api-integration:
   verification: { shape: e2e, must_pass: ["Files arc design-phase opened (runtime plan unit)", "consumer landing at managed-cloud binding", "e2e: upload + reference-by-id + Batch-API discount composition"] }
   close_shape: { type: PR-merge, artifact: "feat(files): Files API consumption contract", cascade: [] }
   next_pointer: null
-  notes: STILL-BOUNDED-INDEFINITELY by design (runtime spec v1.17 §14.C Memory-only MVP; AS §13.2 excludes Files at local-development). Closes AS-8e + CP-17 bounded-residuals. Register §B-11.
+  notes: Operator opened the previously deferred Files arc on 2026-06-08. The design-phase shape is grounded in `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §13.6.C (FilesAPIClient protocol + adapter, file_id reference composition, files.* emission) and implemented by the R-810 provider-free runtime port plus the real Anthropic Files adapter. Live managed-cloud proof uploaded plaintext file `file_011CbqJqTs21yENfK4xfEpqp`, referenced it by file_id, composed a Batch API request shape, exported `files.operation` through the authenticated managed collector, and observed Cloud Trace `bfd28fa8fc8ecc3ba973d1e405cdb865` with files.* attrs. The uploaded file is gone (cleanup retry returned Anthropic 404); temporary GCP TokenCreator IAM was removed. Closes AS-8e + CP-17 bounded-residuals. Register §B-11.
 
 R-820-managed-agents-integration:
   title: managed_agents integration (managed_agents.* namespace — AS-8f)
