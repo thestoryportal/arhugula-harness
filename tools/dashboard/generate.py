@@ -28,6 +28,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -276,6 +277,97 @@ def _run(cmd: list[str], *, cwd: Path, timeout: int = 30) -> str:
         return out.stdout if out.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):
         return ""
+
+
+def count_open_fork_docs(root: Path) -> int:
+    """Count the open fork-doc corpus from the filesystem, not copied prose."""
+    harness = root / ".harness"
+    return sum(
+        1
+        for pattern in (
+            "class_1_fork_*.md",
+            "class_2_fork_*.md",
+            "class_3_fork_*.md",
+        )
+        for _ in harness.glob(pattern)
+    )
+
+
+def latest_retirement_batch(root: Path) -> str:
+    """Return the latest retirement-batch path in the same shape as the status anchor."""
+    batches = sorted(
+        (root / ".harness").glob("phase-7d-retirement-events-batch-*.md"),
+        key=lambda p: [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", p.name)],
+    )
+    if not batches:
+        return ""
+    return str(batches[-1].relative_to(root))
+
+
+def compute_workspace_state_hash(
+    *,
+    git_head: str,
+    open_prs: list[dict],
+    open_fork_doc_count: int,
+    latest_retirement_batch_path: str,
+) -> str:
+    """Compute the roadmap workspace hash from the live generator inputs.
+
+    This mirrors `Project_Roadmap_v1.md` §7.1 / `CLAUDE.md` §12.1. `open_prs`
+    is the already-parsed `gh pr list` result, so the dashboard and the hash use
+    the same network-degrading PR view.
+    """
+    pr_csv = ",".join(
+        f"{p.get('number')}:{p.get('branch', '')}"
+        for p in sorted(open_prs, key=lambda p: int(p.get("number") or 0))
+    )
+    raw = f"{git_head[:8]}|{pr_csv}|{open_fork_doc_count}|{latest_retirement_batch_path}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def parse_recent_git_prs(root: Path, limit: int = 5) -> list[dict]:
+    """Derive recent PR merge subjects from git so the masthead cannot lag.
+
+    Curated notes still live in `.harness/roadmap_status.md`; this is a compact
+    live source for volatile "LAST" readout data.
+    """
+    raw = _run(
+        ["git", "log", "--date=short", "--pretty=format:%h%x09%ad%x09%s", "-n", "80"],
+        cwd=root,
+    )
+    out: list[dict] = []
+    for line in raw.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) != 3:
+            continue
+        short, day, subject = parts
+        match = re.search(r"\(#(\d+)\)\s*$", subject)
+        if not match:
+            continue
+        note = re.sub(r"\s*\(#\d+\)\s*$", "", subject).strip()
+        out.append({"pr": f"PR #{match.group(1)} (`{short}`)", "date": day, "note": note})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def build_live_anchor(root: Path, open_prs: list[dict]) -> dict:
+    """Live masthead values that should never be hand-maintained in prose."""
+    git_head = _run(["git", "rev-parse", "--short=12", "HEAD"], cwd=root).strip()
+    fork_count = count_open_fork_docs(root)
+    batch = latest_retirement_batch(root)
+    return {
+        "git_head": git_head,
+        "hash": compute_workspace_state_hash(
+            git_head=git_head,
+            open_prs=open_prs,
+            open_fork_doc_count=fork_count,
+            latest_retirement_batch_path=batch,
+        ),
+        "fork_count": str(fork_count),
+        "latest_retirement_batch": batch,
+        "recent_prs": parse_recent_git_prs(root),
+    }
 
 
 def _substitution_snapshot(root: Path) -> dict[str, int] | None:
@@ -1067,13 +1159,14 @@ function mdLite(s) {{
 const d = DATA.dashboard || {{}};
 (function() {{
   const cl = DATA.closure || {{}}, b = cl.build || {{}}, ac = cl.activation || {{}}, w = b.waffle || {{}};
+  const live = DATA.live_anchor || {{}};
   const set = (id, html) => {{ const el = document.getElementById(id); if (el) el.innerHTML = html; }};
-  const rc0 = (d.recently_completed || [])[0] || null;
-  set("ro-head", esc(d.git_head));
+  const rc0 = (live.recent_prs || [])[0] || (d.recently_completed || [])[0] || null;
+  set("ro-head", esc(live.git_head || DATA.live_head || d.git_head));
   set("ro-last", rc0 ? `${{esc(rc0.pr)}} — ${{esc(rc0.note).slice(0,90)}}${{rc0.note && rc0.note.length>90?'…':''}}` : "—");
-  set("ro-hash", esc(d.hash));
+  set("ro-hash", esc(live.hash || d.hash));
   set("ro-when", esc(d.last_refreshed));
-  set("ro-forks", esc(d.fork_count));
+  set("ro-forks", esc(live.fork_count || d.fork_count));
   set("tk-build", `${{b.pct_lo}}%`);
   set("tk-retired", `${{w.retired||0}} / ${{w.total||b.total||0}}`);
   set("tk-unret", `${{(b.nonretired||[]).length}} rows`);
@@ -1428,11 +1521,14 @@ def build(root: Path) -> dict:
         a["rword"] = disp["word"]
         a["why"] = ANNOTATIONS.get(a["id"], "")
     dashboard = parse_dashboard(dash_md)
+    open_prs = parse_open_prs(root)
+    live_anchor = build_live_anchor(root, open_prs)
     return {
-        "live_head": _run(["git", "rev-parse", "--short=12", "HEAD"], cwd=root).strip(),
+        "live_head": live_anchor["git_head"],
+        "live_anchor": live_anchor,
         "dashboard": dashboard,
         "actions": actions,
-        "open_prs": parse_open_prs(root),
+        "open_prs": open_prs,
         "cadence": parse_cadence(root),
         "pr_cadence": parse_pr_cadence(root),
         "retired_trend": parse_retired_trend(root),

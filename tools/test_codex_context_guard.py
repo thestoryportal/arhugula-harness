@@ -259,17 +259,23 @@ def test_status_refresh_with_dashboard_snapshot_counts_as_expected_lag(tmp_path:
 def test_dashboard_snapshot_normalization_ignores_volatile_dashboard_fields() -> None:
     base = (
         b'<meta name="dashboard-live-head" content="abc123"/>'
-        b'const DATA = {"live_head": "abc123", "actions": [1], '
+        b'const DATA = {"live_head": "abc123", '
+        b'"live_anchor": {"git_head": "abc123", "hash": "aaa111", "fork_count": "45"}, '
+        b'"actions": [1], '
         b'"cadence": [{"date": "2026-06-07", "count": 2}], "pr_cadence": []};'
     )
     same_except_volatile = (
         b'<meta name="dashboard-live-head" content="def456"/>'
-        b'const DATA = {"live_head": "def456", "actions": [1], '
+        b'const DATA = {"live_head": "def456", '
+        b'"live_anchor": {"git_head": "def456", "hash": "bbb222", "fork_count": "45"}, '
+        b'"actions": [1], '
         b'"cadence": [{"date": "2026-06-07", "count": 3}], "pr_cadence": []};'
     )
     changed_payload = (
         b'<meta name="dashboard-live-head" content="def456"/>'
-        b'const DATA = {"live_head": "def456", "actions": [2], '
+        b'const DATA = {"live_head": "def456", '
+        b'"live_anchor": {"git_head": "def456", "hash": "bbb222", "fork_count": "45"}, '
+        b'"actions": [2], '
         b'"cadence": [{"date": "2026-06-07", "count": 3}], "pr_cadence": []};'
     )
 

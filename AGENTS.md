@@ -30,6 +30,7 @@ This repository is developed primarily with Claude Code CLI. For Codex, this fil
 - Start with the narrowest meaningful test or static check.
 - For PR-ready code or governance changes, run `just check` unless the change is documentation-only and a narrower documented gate is sufficient.
 - For governance/context changes, also verify instruction discovery or pointer integrity when applicable.
+- For dashboard/status changes, update `.harness/roadmap_status.md` first, regenerate `tools/dashboard/roadmap.html` only through `tools/dashboard/generate.py`, and do not hand-maintain volatile masthead facts or counts in the HTML. The generator owns live `HEAD` / `LAST` / `HASH` / `OPEN FORKS` display values plus derived closure counts.
 - Run `just codex-closeout` before final response, commit, or PR; it writes a fresh pre-closeout checkpoint and hard-fails if the guard cannot verify it. Resolve hard findings and report warnings explicitly.
 - Before claiming green, report exactly which checks ran and which did not.
 

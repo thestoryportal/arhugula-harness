@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
 
 
@@ -95,3 +96,53 @@ def test_activation_open_count_matches_current_forward_catalog():
 
     assert closure["activation"]["open"] == 6
     assert closure["activation"]["total"] == 20
+
+
+def test_live_anchor_derives_masthead_values_from_git_and_filesystem(tmp_path):
+    generate = _load_generate_module()
+
+    harness = tmp_path / ".harness"
+    harness.mkdir()
+    (harness / "class_1_fork_example.md").write_text("status\n", encoding="utf-8")
+    (harness / "class_3_fork_example.md").write_text("status\n", encoding="utf-8")
+    (harness / "phase-7d-retirement-events-batch-52.md").write_text("old\n", encoding="utf-8")
+    latest = harness / "phase-7d-retirement-events-batch-53.md"
+    latest.write_text("new\n", encoding="utf-8")
+
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    (tmp_path / "tracked.txt").write_text("x\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "ops: roadmap status refresh post-test (#399)"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    anchor = generate.build_live_anchor(
+        tmp_path,
+        [{"number": 7, "branch": "codex/example"}],
+    )
+
+    assert anchor["git_head"]
+    assert anchor["fork_count"] == "2"
+    assert anchor["latest_retirement_batch"] == ".harness/phase-7d-retirement-events-batch-53.md"
+    assert anchor["recent_prs"][0]["pr"].startswith("PR #399")
+    assert anchor["hash"] == generate.compute_workspace_state_hash(
+        git_head=anchor["git_head"],
+        open_prs=[{"number": 7, "branch": "codex/example"}],
+        open_fork_doc_count=2,
+        latest_retirement_batch_path=".harness/phase-7d-retirement-events-batch-53.md",
+    )
+
+
+def test_dashboard_template_has_no_literal_currentness_counts():
+    generate = _load_generate_module()
+
+    assert "8 rows below" not in generate.HTML_TEMPLATE
+    assert "6 of 20" not in generate.HTML_TEMPLATE
+    assert "const live = DATA.live_anchor" in generate.HTML_TEMPLATE
+    assert "live.fork_count || d.fork_count" in generate.HTML_TEMPLATE

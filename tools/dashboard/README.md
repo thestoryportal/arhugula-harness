@@ -33,12 +33,27 @@ service, regenerated from live data on every page load).
 
 All parsing is defensive — a missing/malformed source yields an empty section, never a crash.
 
+## Currentness discipline
+
+`generate.py` owns the dashboard's volatile facts. The visible masthead values
+(`HEAD`, `LAST`, `HASH`, and `OPEN FORKS`) are derived from current git,
+filesystem, and open-PR inputs at generation time; closure and activation copy
+uses computed counts, not copied prose. Do not hand-edit
+`tools/dashboard/roadmap.html` or hard-code current counts in the template.
+
+Refresh order:
+
+1. Update `.harness/roadmap_status.md` from the current roadmap protocol.
+2. Run `python3 tools/dashboard/generate.py --root .`.
+3. Verify with `uv run pytest tools/test_dashboard_generate.py` and the Codex
+   closeout/context guard for the arc.
+
 ## Run locally
 
 ```bash
-python tools/dashboard/generate.py --root .
+python3 tools/dashboard/generate.py --root .
 # then open tools/dashboard/roadmap.html (or serve it):
-python -m http.server -d tools/dashboard 8777   # http://localhost:8777/roadmap.html
+python3 -m http.server -d tools/dashboard 8777   # http://localhost:8777/roadmap.html
 ```
 
 `tools/dashboard/roadmap.html` is a committed snapshot for local viewing; CI regenerates
