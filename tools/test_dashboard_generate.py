@@ -84,3 +84,14 @@ def test_dashboard_status_filters_default_closed_off():
     assert 'id="status-board-filters"' in html
     assert 'id="pp8-board-filters"' in html
     assert 'label !== "closed"' in html
+
+
+def test_activation_open_count_matches_current_forward_catalog():
+    generate = _load_generate_module()
+    roadmap = (Path(__file__).parents[1] / "Project_Roadmap_v1.md").read_text(encoding="utf-8")
+    actions = generate.parse_roadmap_actions(roadmap)
+
+    closure = generate.compute_closure(actions, {"retirement": {}})
+
+    assert closure["activation"]["open"] == 6
+    assert closure["activation"]["total"] == 20

@@ -1089,6 +1089,8 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
   const cl = DATA.closure || {{}}, b = cl.build || {{}}, ac = cl.activation || {{}}, w = b.waffle || {{}};
   const stateClass = {{ "PARTIAL":"partial", "STILL-BOUNDED":"bounded", "STILL-BOUNDED-INDEFINITELY":"indef" }};
   const pad2 = (n) => String(n).padStart(2, "0");
+  const nonretiredCount = (b.nonretired||[]).length;
+  const signoffNoun = nonretiredCount === 1 ? "disposition" : "dispositions";
   // waffle cells
   let cells = "";
   for (let i=0;i<(w.retired||0);i++) cells += '<div class="cell retired"></div>';
@@ -1122,7 +1124,7 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
       <div class="panel lit meter">
         <div class="k">Build closure / is the harness built?</div>
         <div class="big">${{b.pct_lo}}<span class="u">%</span></div>
-        <div class="sub"><strong>${{b.lo}} of ${{b.total}}</strong> substitutions retired — the canonical count, derived from the substitution ledger and ratified at the <strong>Phase-8 graduation (R-700)</strong>. The 8 rows below carry terminal sign-off dispositions.</div>
+        <div class="sub"><strong>${{b.lo}} of ${{b.total}}</strong> substitutions retired — the canonical count, derived from the substitution ledger and ratified at the <strong>Phase-8 graduation (R-700)</strong>. The <strong>${{nonretiredCount}}</strong> rows below carry terminal sign-off ${{signoffNoun}}.</div>
         <div class="gaugebar"><span style="width:${{b.pct_lo}}%"></span></div>
         <div class="waffle" role="img" aria-label="${{w.total}} substitution cells: ${{w.retired}} retired, ${{w.partial}} partial, ${{w.still_bounded}} still-bounded, ${{w.sb_indef}} indefinite">${{cells}}</div>
         <div class="legend">${{legend}}</div>
