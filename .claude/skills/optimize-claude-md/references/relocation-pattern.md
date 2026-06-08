@@ -38,8 +38,19 @@ pure pointer-plus-lineage.
    failure: it reads as a deletion, not a move, and loses the context that explained why the data
    mattered. If a line is worth removing from the always-loaded file, it is worth re-homing.
 4. **Leave a resolving pointer** where it was — one line naming the new location and what's
-   there, so anyone who needs the detail knows exactly where to look.
-5. **Verify resolution** (below) before proposing the diff.
+   there, so anyone who needs the detail knows exactly where to look. The pointer stub is a *new*
+   line you write; it does NOT substitute for re-homing the original. In particular, the section's
+   **original header counts as content** — if you shorten or retitle the heading for the stub (a
+   verbose "## 2. Canonical artifact pointers, per-axis version lineage, and the full amendment
+   history…" becomes "## 2. Canonical artifact pointers"), the original long header is a *removed*
+   line and must land in the home verbatim too. "I kept the header" is the trap: a retitled header
+   is an edit, not a kept line, and it orphans the original.
+5. **Verify the move lost nothing**, then verify resolution (below), before proposing the diff.
+   The pure-move check is mechanical: diff the slimmed file against the original and confirm
+   **every removed line — header, prose, and data alike — appears byte-for-byte in some new home**.
+   A removed line that is in neither the slimmed file nor a home is a silent deletion, not a
+   relocation, no matter how innocuous it looks (a shortened header is the classic miss). If a line
+   left the always-loaded file, it must be re-homed verbatim.
 
 ## Worked example (root §2.4)
 
