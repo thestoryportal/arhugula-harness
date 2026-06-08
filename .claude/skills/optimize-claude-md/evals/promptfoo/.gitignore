@@ -1,0 +1,4 @@
+# Per-iteration ephemera produced by the loop — regenerated every cycle, never committed.
+outputs/
+out.json
+*.promptfoo-cache

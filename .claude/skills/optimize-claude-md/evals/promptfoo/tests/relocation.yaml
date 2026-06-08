@@ -1,0 +1,7 @@
+# Eval: relocate the dominant §2 version-lineage bulk; keep every guardrail; break no pointer.
+# The agent produces outputs/relocation.json by running optimize-claude-md on the fixture below.
+- description: 'relocation — §2 lineage bulk relocated, guardrails kept, pointers resolve'
+  vars:
+    case: relocation
+    fixture: fixtures/representative-claude.md
+    min_reduction: 0.25
