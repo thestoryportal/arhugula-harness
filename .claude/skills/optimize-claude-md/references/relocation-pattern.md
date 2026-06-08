@@ -21,7 +21,11 @@ pure pointer-plus-lineage.
    files, since they are already the canonical home for spec/plan lineage. The CLAUDE.md should
    reference that lineage, not duplicate it.
 3. **Move the content verbatim** — byte-for-byte into the new home. A relocation is a pure move,
-   not an edit; provenance must survive intact.
+   not an edit; provenance must survive intact. *Every* line you remove from the section lands in
+   the home — including the section's descriptive / connective prose, not only the data rows.
+   Dropping the framing sentences as "fluff" while moving the table is the most common relocation
+   failure: it reads as a deletion, not a move, and loses the context that explained why the data
+   mattered. If a line is worth removing from the always-loaded file, it is worth re-homing.
 4. **Leave a resolving pointer** where it was — one line naming the new location and what's
    there, so anyone who needs the detail knows exactly where to look.
 5. **Verify resolution** (below) before proposing the diff.
