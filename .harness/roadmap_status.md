@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `27ebc427c0d7` |
-| `last_refreshed` | 2026-06-08T07:16:28-06:00 |
-| `git_head` | `7e972f27` (main) — PR #411 refreshed the roadmap status after the R-411/R-412 dashboard remaining-card correction. |
+| `workspace_state_hash` | `558e3a835221` |
+| `last_refreshed` | 2026-06-08T07:23:53-06:00 |
+| `git_head` | `b4531d31` (main) — PR #413 narrowed the R-830 remainder to optional managed-DB scope. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-53.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #413 (`b4531d31`) | 2026-06-08 | **R-830 roadmap/status back-flow merged.** R-830 no longer carries a pending S3/cloud-vault blocker; completed filesystem, SQLite, and S3 slices remain recorded, and only optional managed-DB remains future scope. |
 | PR #411 (`7e972f27`) | 2026-06-08 | **Post-#410 fixed-point refresh merged.** Refreshed the roadmap status/dashboard after the R-411/R-412 remaining-card correction and re-established the expected lag-by-one fixed point. |
 | PR #410 (`c57da7f7`) | 2026-06-08 | **Dashboard remaining-card correction merged.** Removed the hard-coded `R-411 → R-412` card from `closure.remaining`, regenerated the dashboard, and added a regression proving resolved R-411/R-412 text cannot appear in the remaining cards. |
 | PR #408 (`83082090`) | 2026-06-08 | **R-412 roadmap/status/dashboard back-flow merged.** R-412 is no longer a next-action candidate; the roadmap, forward register, fork doc, dashboard generator, dashboard snapshot, and activation count now report the managed E2B full-VM closure. |
 | PR #407 (`3971ef9b`) | 2026-06-08 | **Dashboard-maintenance guard fix merged.** Codex closeout now treats dashboard generator/test maintenance as part of status refreshes, while unrelated `tools/` changes still trigger the design/implementation mix guard. |
-| PR #406 (`34269d27`) | 2026-06-08 | **R-412 managed full-VM provider merged.** Added `E2BManagedFullVMToolRunnerExecutionDriver`, an opt-in `just r412-e2b-full-vm-live-e2e` gate, and live evidence that a Tier-4 TOOL_STEP executed through a managed E2B sandbox with provider `e2b-managed` / tech `e2b-firecracker`. |
 
 ---
 
@@ -264,6 +264,7 @@ The 5 bucket rows below sum to **54** under the batch-53 live ledger (RETIRED 51
 | 2026-06-08 | **Post-#407 corrective roadmap status refresh — PR #407 dashboard-maintenance guard fix merged at `3971ef9b`; §12.2 owed follow-on.** | Hash `d5e13dae565c` → `2219da02aece` (state at `3971ef9b`, PRS empty/unavailable, fork count 45, batch-53). No roadmap item changed in #407; this refresh carries the R-412 back-flow on top of the corrected Codex closeout guard. **Next action unchanged:** R-CXA-1/R-CXA-2/R-CXA-3 remain the only non-retired substitution rows; R-830 managed-DB and R-XI-02/R-XI-03/R-900 remain optional operator-selected arcs. |
 | 2026-06-08 | **Post-#408 fixed-point refresh — PR #408 R-412 roadmap/status/dashboard back-flow merged at `83082090`; §12.2 owed follow-on.** | Hash `2219da02aece` → `d369d13eb6a8` (state at `83082090`, PRS empty/unavailable, fork count 45, batch-53). No roadmap item changed beyond the already-merged R-412 closure back-flow; this terminating refresh only re-pins the dashboard/status fixed point to #408. **Next action unchanged:** R-CXA-1/R-CXA-2/R-CXA-3 remain the only non-retired substitution rows; R-830 managed-DB and R-XI-02/R-XI-03/R-900 remain optional operator-selected arcs. |
 | 2026-06-08 | **Post-#410 fixed-point refresh — PR #410 dashboard remaining-card correction merged at `c57da7f7`; §12.2 owed follow-on.** | Hash `d369d13eb6a8` → `b6b3654a4d20` (state at `c57da7f7`, PRS empty/unavailable, fork count 45, batch-53). No roadmap item changed; this refresh re-pins the dashboard/status fixed point after removing the stale closed R-411/R-412 remaining-card. **Next action unchanged:** R-CXA-1/R-CXA-2/R-CXA-3 remain the only non-retired substitution rows; R-830 managed-DB and R-XI-02/R-XI-03/R-900 remain optional operator-selected arcs. |
+| 2026-06-08 | **Post-#413 fixed-point refresh — PR #413 R-830 roadmap/status back-flow merged at `b4531d31`; §12.2 owed follow-on.** | Hash `27ebc427c0d7` → `558e3a835221` (state at `b4531d31`, PRS empty/unavailable, fork count 45, batch-53). R-830 no longer carries a pending S3/cloud-vault blocker; the completed filesystem, SQLite, and S3 Memory-tool backend slices remain recorded, and only optional managed-DB remains future scope. **Next action unchanged:** R-CXA-1/R-CXA-2/R-CXA-3 remain the only non-retired substitution rows; R-830 managed-DB and R-XI-02/R-XI-03/R-900 remain optional operator-selected arcs. |
 
 **Audit protocol exercised across 31 terminating-refresh closures + 2 fresh-session reconciliations + 11 substantive closes + 1 substantive partial + 1 Class 1 fork filing + 1 Class 1 fork resolved-as-defer + 1 operator-approved 3-PR merge cluster + R-XI-01 dashboard build + 1 process-discipline sweep (R-600-pattern-bake-in).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **2026-06-01 session: landed the R-100 tool-step apply cluster (#173/#171/#172), closed R-600-clearance-marker-backfill-survey (#175), built+landed R-XI-01 operator dashboard MVP (#177), and ran the first R-600-pattern-bake-in-sweep (ACTIVE-SURVEYED; v1.14 absorption deferred).** **All Claude-executable substantive arcs are drained.** The deterministic next-action is operator-owned: **(a) run the live R-100 e2e**, and/or **(b)** any operator-scoped design-phase arc (e.g. the `R-600-workflow-v1-14-amendment` the sweep now has evidence for). Remaining Claude-executable mode-agnostic work = MEMORY.md hygiene audit + fork-doc Status cadence sweep; §V/VI/IV gated on MVP-shipped / live e2e.
 
