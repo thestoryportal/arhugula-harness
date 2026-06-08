@@ -25,6 +25,17 @@ pure pointer-plus-lineage.
    under its proper section, byte-for-byte). Move only what is left — the genuine provenance. A
    whole-section sweep that carries an embedded guardrail into the home is a dropped guardrail, not
    a relocation; `guardrails_preserved` hard-fails it.
+
+   **Classify by operativeness, not by framing.** Provenance *form* is not the test — a still-in-force
+   rule is load-bearing no matter how it's dressed. A dated, past-tense, narrated bullet
+   ("On 2026-05-20, after a long thread, the conclusion still in force is that … `CP-AL-1` forbids
+   collapsing the boundary") reads as change-history but carries a live rule in its tail. Ask of each
+   line: *is this still a rule the agent must obey?* — not *does this look like history?* The trap is
+   exactly the bullet that opens as a date and closes as a guardrail. When a rule is **fused into** a
+   provenance sentence and can't be cleanly lifted as its own line, treat the **whole mixed unit as
+   load-bearing and keep it verbatim** — the rule's presence wins; don't reword to split it (that
+   orphans the original line and fails `relocation_not_deletion`). Relocate only the bullets that are
+   *pure* provenance — the ones that assert no rule the project must still obey.
 2. **Pick a home** — a doc OUTSIDE the always-loaded set but reachable on demand. Good homes:
    a sibling index like `.harness/artifact-pointers.md`, or the canonical files themselves (the
    spec/plan files already carry their own change-notes). **Never** relocate *into*
