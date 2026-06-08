@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `819760575631` |
-| `last_refreshed` | 2026-06-08T09:11:15-06:00 |
-| `git_head` | `86e6e3e0` (main) — R-CXA-3 CP→AS runtime-composer branch base after PR #419. |
+| `workspace_state_hash` | `ed9db727a1db` |
+| `last_refreshed` | 2026-06-08T09:39:01-06:00 |
+| `git_head` | `48a047e9` (main) — PR #420 R-CXA-3 CP→AS runtime composer merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-54.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -48,7 +48,7 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| R-CXA-3 (`batch-54`) | 2026-06-08 | **CP→AS runtime composer branch in progress.** `RuntimeCpAsWiring` binds CP-consumed AS terminal seam exports at bootstrap stage 6 and exposes `HarnessContext.cp_as_wiring`; batch-54 moves H_T-CXA-3 to `SUBSTANTIVE_RETIRED`. |
+| PR #420 (`48a047e9`) | 2026-06-08 | **R-CXA-3 CP→AS runtime composer merged.** `RuntimeCpAsWiring` binds CP-consumed AS terminal seam exports at bootstrap stage 6 and exposes `HarnessContext.cp_as_wiring`; batch-54 moves H_T-CXA-3 to `SUBSTANTIVE_RETIRED`. |
 | PR #418 (`10bb3d51`) | 2026-06-08 | **Post-#417 fixed-point refresh merged.** Re-pinned roadmap status/dashboard after the R-830 managed-DB closure; R-830 is now in the closed/do-not-reopen set and the ordered frontier returns to CXA producer/composer gates plus optional research/dashboard arcs. |
 | PR #417 (`601d32ce`) | 2026-06-08 | **R-830 managed-DB backend merged.** Added `ManagedSqlMemoryToolBackend`, PostgreSQL factory binding, provider-free coverage, the live e2e recipe/test, and recorded the operator-approved Neon PostgreSQL create/view/str_replace/insert/delete proof. |
 | PR #413 (`b4531d31`) | 2026-06-08 | **R-830 roadmap/status back-flow merged.** R-830 no longer carries a pending S3/cloud-vault blocker; completed filesystem, SQLite, and S3 slices remain recorded, and only optional managed-DB remains future scope. |
@@ -264,8 +264,9 @@ The 5 bucket rows below sum to **54** under the batch-54 live ledger (RETIRED 52
 | 2026-06-08 | **Post-#410 fixed-point refresh — PR #410 dashboard remaining-card correction merged at `c57da7f7`; §12.2 owed follow-on.** | Hash `d369d13eb6a8` → `b6b3654a4d20` (state at `c57da7f7`, PRS empty/unavailable, fork count 45, batch-53). No roadmap item changed; this refresh re-pins the dashboard/status fixed point after removing the stale closed R-411/R-412 remaining-card. **Next action unchanged:** R-CXA-1/R-CXA-2/R-CXA-3 remain the only non-retired substitution rows; R-830 managed-DB and R-XI-02/R-XI-03/R-900 remain optional operator-selected arcs. |
 | 2026-06-08 | **Post-#413 fixed-point refresh — PR #413 R-830 roadmap/status back-flow merged at `b4531d31`; §12.2 owed follow-on.** | Hash `27ebc427c0d7` → `558e3a835221` (state at `b4531d31`, PRS empty/unavailable, fork count 45, batch-53). R-830 no longer carries a pending S3/cloud-vault blocker; the completed filesystem, SQLite, and S3 Memory-tool backend slices remain recorded, and only optional managed-DB remains future scope. **Next action unchanged:** R-CXA-1/R-CXA-2/R-CXA-3 remain the only non-retired substitution rows; R-830 managed-DB and R-XI-02/R-XI-03/R-900 remain optional operator-selected arcs. |
 | 2026-06-08 | **Substantive R-830 managed-DB live proof branch — PR #417 follow-up; §12.2 owed after merge.** | Operator initialized Neon auth/project access and approved the live side-effecting DB proof. The branch now records `ManagedSqlMemoryToolBackend` as live-proven against the Neon `Arhugula` PostgreSQL project: `just r830-managed-db-live-e2e` passed create/view/str_replace/insert/delete through the Memory tool dispatch seam with cleanup. **Next action after merge:** R-CXA-1/R-CXA-2/R-CXA-3 remain the only non-retired substitution rows; R-XI-02/R-XI-03/R-900 remain optional operator-selected arcs. |
+| 2026-06-08 | **Post-#420 roadmap status refresh — PR #420 R-CXA-3 CP→AS runtime composer merged at `48a047e9`; §12.2 owed follow-on.** | Hash `819760575631` → `ed9db727a1db` (state at `48a047e9`, PRS empty/unavailable, fork count 45, batch-54). R-CXA-3 is RESOLVED by the stage-6 `RuntimeCpAsWiring` composer and batch-54 retirement accounting. **Next action:** only CXA-1 and CXA-2 remain non-retired; proceed to a real AS→IS secret-fetch producer audit if one exists, otherwise CP→IS remains bounded on future HITL rewrite and engine recovery-loop producers. Optional operator-selected arcs remain R-XI-02/R-XI-03/R-900. |
 
-**Audit protocol exercised across 31 terminating-refresh closures + 2 fresh-session reconciliations + 11 substantive closes + 1 substantive partial + 1 Class 1 fork filing + 1 Class 1 fork resolved-as-defer + 1 operator-approved 3-PR merge cluster + R-XI-01 dashboard build + 1 process-discipline sweep (R-600-pattern-bake-in).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **2026-06-01 session: landed the R-100 tool-step apply cluster (#173/#171/#172), closed R-600-clearance-marker-backfill-survey (#175), built+landed R-XI-01 operator dashboard MVP (#177), and ran the first R-600-pattern-bake-in-sweep (ACTIVE-SURVEYED; v1.14 absorption deferred).** **All Claude-executable substantive arcs are drained.** The deterministic next-action is operator-owned: **(a) run the live R-100 e2e**, and/or **(b)** any operator-scoped design-phase arc (e.g. the `R-600-workflow-v1-14-amendment` the sweep now has evidence for). Remaining Claude-executable mode-agnostic work = MEMORY.md hygiene audit + fork-doc Status cadence sweep; §V/VI/IV gated on MVP-shipped / live e2e.
+**Audit protocol exercised across terminating-refresh closures, fresh-session reconciliations, substantive closes, accounting back-flow, live-provider gates, and dashboard-discipline sweeps.** Discipline + enforcement layers are operational; the current selector is the `Next action` section above, not stale historical footer prose. After PR #420, the non-retired substitution ledger is narrowed to CXA-1 and CXA-2; future `/roadmap continue` sessions should ground those producer/upstream-loop gates against current code before opening optional dashboard/research arcs.
 
 ---
 
