@@ -709,7 +709,7 @@ The resolver Reading A-vs-B decision (identity resolver / *vacuous* floor **vs**
 
 ## 14. Execution + interaction conventions
 
-*Distilled from the 2026-06-02 Claude Code insights report (the recurring friction points it surfaced across 197 sessions). Always-on, mode-agnostic. Each is a cheap habit that prevents a known round-trip.*
+*14.1–14.5 distilled from the 2026-06-02 Claude Code insights report (recurring friction across 197 sessions); 14.6 from Karpathy's coding guidelines. Always-on, mode-agnostic. Each is a cheap habit that prevents a known round-trip.*
 
 | Convention | Rule | Why |
 |---|---|---|
@@ -718,6 +718,7 @@ The resolver Reading A-vs-B decision (identity resolver / *vacuous* floor **vs**
 | **14.3 Clear caches before concluding from no-output** | Before ratifying a fork/diagnosis from empty or no-output results, clear stale caches (`rm -rf **/__pycache__ *.pyc`, fresh build) and re-run. A stale `.pyc` once nearly drove a wrong fork conclusion. | Rule out environment artifacts before logic conclusions (composes with §13.1 empirical grounding + the U-HK-03 cache-clear hook). |
 | **14.4 Large writes go incrementally to file** | For large docs/JSON, write incrementally with the Write/Edit tools (or chunked appends), not heredoc/base64 Bash writes — those truncate on large files. | Heredoc/base64 truncation forced rework. |
 | **14.5 Chunk large outputs** | When emitting large JSON/docs, stream to a file in chunks rather than one giant response; confirm each chunk landed. Keeps transcripts intact and dodges the output-token cap (the report's #1 friction). | Output-cap truncation caused API errors + unreconstructable handoffs. |
+| **14.6 Code-craft discipline (Karpathy)** | Four always-on coding habits beneath the process disciplines above (from Karpathy's coding guidelines, https://github.com/multica-ai/andrej-karpathy-skills): **(1) think before coding** — state assumptions, surface tradeoffs, present competing interpretations instead of picking silently, ask on *genuine* ambiguity (composes with §13.1 advisor + §14.2 AskUserQuestion; does NOT override §12.4.1 no-parking / default-to-doing — asking on real ambiguity ≠ parking on an operator-label); **(2) simplicity first** — the minimum that solves the ask, nothing speculative ("would a senior engineer call this overcomplicated?" — the code-level sibling of the §3.2 framework-pull discipline); **(3) surgical changes** — touch only what the request needs, match existing style, don't refactor the untouched, every changed line traces to the ask; **(4) goal-driven execution** — define a verifiable success criterion and loop to it (§13.1 "verify by execution" at code scale). | Anti-slop coding hygiene; fewer unnecessary diff lines, fewer overcomplication-rewrites, clarifying questions before mistakes (Karpathy's "working if" test). Cross-refs dedup against the process disciplines rather than restating them. |
 
 ---
 
