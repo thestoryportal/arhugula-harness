@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `472c4d3cb516` |
-| `last_refreshed` | 2026-06-08T10:27:06-06:00 |
-| `git_head` | `c223de07` (main) — PR #426 R-900 decomposition + SQLite writer-lock fix merged. |
+| `workspace_state_hash` | `ed3d997f21f7` |
+| `last_refreshed` | 2026-06-08T10:40:53-06:00 |
+| `git_head` | `32ba1132` (main) — PR #427 post-#426 roadmap status refresh merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-54.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -28,11 +28,10 @@
 
 **Ordered frontier.**
 
-- `R-901` - Phase-9 retirement criteria research brief. Crystallize the research question and ground it in the harness research corpus before any substrate amendment.
+- `R-CXA-2` - CP→IS producer-gated seam. Highest-value remaining build row, but not safely wireable until a real HITL rewrite production caller, engine recovery-loop producer, or design/back-flow amendment exists.
+- `R-CXA-1` - AS→IS producer-gated seam. Next remaining build row, but not safely wireable until a real scoped AS secret-fetch producer or design/back-flow amendment exists.
 
-**Producer-gated watch item.** `R-CXA-2` was re-audited at HEAD `4baefe0b`: no production HITL rewrite caller or engine-layer recovery-loop producer exists for the remaining `cp.hitl-tool-call-rewriting`, `cp.pause-captured`, or `cp.resume-attempted` methods. Workflow-driver pause/resume sites already emit the workflow-layer `cp.pause-resume-protocol` action; do not re-run R-CXA-2 as the immediate next action until a real upstream producer or design/back-flow amendment appears.
-
-**Producer-gated watch item.** `R-CXA-1` was re-audited at HEAD `79929bbd`: no production AS secret-fetch producer or scope-bearing runtime caller exists. Do not re-run it as the immediate next action until a real scoped `ProviderSecretResolver.resolve(...)` caller, an AS secret-fetch driver path, or a design/back-flow amendment appears.
+**Research frontier closed.** `R-901` filed `research/phase-9-retirement-criteria.md`: Phase 9 is a lightweight post-closure decision model for bounded-residual promotion, live-ledger back-flow, and producer-gated seams. Result is research-only + selector guidance; no design-substrate back-flow is owed.
 
 **Do not re-open as next action.** `R-411`, `R-412`, `R-420`, `R-421`, `R-430`, `R-500`, `R-810`, `R-820`, `R-830`, `R-008` / OD-4, `R-CXA-3`, and `R-CXA-4` are already closed or back-flowed.
 
@@ -50,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| R-901 (this PR) | 2026-06-08 | **Phase-9 retirement criteria research brief filed.** The brief uses the local Phase-8/retirement-batch corpus, NotebookLM corpus-boundary query, and a supplemental Perplexity query; it recommends research-only closure and returns the selector to genuine producer-gated CXA residuals. |
 | PR #426 (`c223de07`) | 2026-06-08 | **R-900 research placeholder decomposed into R-901.** R-XI-02/R-XI-03 were already RESOLVED, so the selector now points at the explicit Phase-9 retirement criteria research brief; the PR also fixed the SQLite memory backend writer-lock race surfaced by CI. |
 | PR #424 (`3c576f4f`) | 2026-06-08 | **R-CXA-2 CP→IS producer audit merged.** No production caller exists for the remaining HITL rewrite or engine-layer recovery-loop methods; existing workflow-driver pause/resume sites correctly emit `cp.pause-resume-protocol`, not the engine-layer `cp.pause-captured` / `cp.resume-attempted` actions. |
 | PR #422 (`79929bbd`) | 2026-06-08 | **R-CXA-1 AS→IS producer audit merged.** No production caller invokes `RuntimeAsIsWiring.emit_secret_fetch_audit_entry(...)`; bootstrap provider-key fetches still use name-only `resolve_bootstrap_value(...)`, and the only production `fetch_secret(...)` consumer is CP F5 signing-key resolution, not an AS→IS producer. |
 | PR #420 (`48a047e9`) | 2026-06-08 | **R-CXA-3 CP→AS runtime composer merged.** `RuntimeCpAsWiring` binds CP-consumed AS terminal seam exports at bootstrap stage 6 and exposes `HarnessContext.cp_as_wiring`; batch-54 moves H_T-CXA-3 to `SUBSTANTIVE_RETIRED`. |
-| PR #418 (`10bb3d51`) | 2026-06-08 | **Post-#417 fixed-point refresh merged.** Re-pinned roadmap status/dashboard after the R-830 managed-DB closure; R-830 is now in the closed/do-not-reopen set and the ordered frontier returns to CXA producer/composer gates plus optional research/dashboard arcs. |
 
 ---
 

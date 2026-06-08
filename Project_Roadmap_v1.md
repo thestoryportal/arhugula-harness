@@ -2150,7 +2150,7 @@ R-900-research-arcs:
 R-901-phase-9-retirement-criteria:
   title: Phase-9 retirement criteria research brief
   surface: X
-  status: PROPOSED
+  status: RESOLVED   # 2026-06-08 — research brief filed at research/phase-9-retirement-criteria.md; result is research-only + roadmap selector guidance, no design-substrate back-flow.
   depends_on: []
   blocks: []
   posture: mode-agnostic
@@ -2166,7 +2166,16 @@ R-901-phase-9-retirement-criteria:
       - "record whether the result is research-only, roadmap-only, or design-substrate back-flow"
   close_shape: { type: PR-merge, artifact: "research/phase-9-retirement-criteria*.md or roadmap-only disposition", cascade: [] }
   next_pointer: null
-  notes: Candidate carried forward from the R-900 placeholder: workflow-doc v1.14+ Phase-8->Phase-9 retirement-criteria evolution, including whether the post-Phase-8 live-ledger / bounded-residual discipline needs a Phase-9 closure model. NotebookLM corpus queries are preferred when available; supplementary research is allowed if the corpus is insufficient.
+  notes: >
+    RESOLVED 2026-06-08: research brief filed at `research/phase-9-retirement-criteria.md`.
+    Research question crystallized as a post-Phase-8 decision model: how to route bounded-residual
+    promotion, live-ledger back-flow, and producer-gated CXA seams without rewriting the historical
+    Phase-8 accounting declaration. Grounding sources: Phase-8 graduation, R-700 accounting draft,
+    batches 51-54, retirement-event-pattern catalogue, NotebookLM Agent Harness Engineering query,
+    and a supplemental Perplexity query. Result disposition: research-only + roadmap selector guidance;
+    no design-substrate back-flow owed. Next selector returns to genuine producer-gated residuals
+    (`R-CXA-2`, then `R-CXA-1`) unless a future `R-902` is explicitly opened for Phase-9 workflow
+    mechanics or corpus ingestion.
 ```
 
 ### 5.14 Cross-axis composition seams (R-CXA-NN) — Surface I residual
