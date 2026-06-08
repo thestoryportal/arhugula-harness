@@ -2082,9 +2082,9 @@ R-820-managed-agents-integration:
   notes: RESOLVED 2026-06-07 by PR #380. Added the real Anthropic Managed Agents SDK/session adapter plus live managed-cloud e2e proof that created session `sesn_019aMgaF8sAW2cXhhpMTYij4`, observed `session.status_idle`, exported `managed_agents.runtime`, and confirmed Cloud Trace trace `009d7716b19c75e4ad7edb93e78f8d2b` carried `managed_agents.*` attributes. Temporary Cloud Run Token Creator IAM used only for the live proof was removed and verified absent after the run. This closes the R-820 runtime/integration gate; Phase-8 AS-8f substitution-tally movement, if any, remains a separate accounting/back-flow action.
 
 R-830-memory-tool-production-backend:
-  title: Memory-tool MANAGED_CLOUD production backend (cloud-vault / managed-db — CP-16) — SQLite + S3 slices LANDED
+  title: Memory-tool MANAGED_CLOUD production backend (cloud-vault / managed-db — CP-16) — managed-DB implemented, live e2e gated
   surface: IX
-  status: PROPOSED    # this entry now tracks only the optional MANAGED_CLOUD managed-DB remainder; SELF_HOSTED SQLite + MANAGED_CLOUD S3 cloud-vault are landed/live-proven. PROPOSED is the recognized status vocabulary (generate.py STATUS_ORDER); no PARTIAL value exists
+  status: APPLIED-PENDING-OPERATOR-E2E    # provider-free managed-DB implementation + live proof harness are present; closure waits on operator-provided PostgreSQL-compatible DSN and explicit approval for side-effecting e2e
   depends_on: []
   blocks: []
   posture: phase-7    # optional managed-DB remainder is operator-gated (real service/creds/infra)
@@ -2110,10 +2110,19 @@ R-830-memory-tool-production-backend:
     dispatch seam. FILESYSTEM backend landed earlier (CP-16
     RETIRED-AS-BOUNDED-RESIDUAL batch-44).
 
-    R-830 therefore no longer carries a pending S3/cloud-vault blocker. The
-    only remaining R-830 scope is an optional MANAGED_CLOUD managed-DB backend,
-    if the operator chooses to add one beyond the completed filesystem,
-    SQLite, and S3 backends. Register §B-13.
+    R-830 therefore no longer carries a pending S3/cloud-vault blocker.
+
+    MANAGED_CLOUD managed-DB backend implementation ADDED in this branch:
+    ManagedSqlMemoryToolBackend implements MemoryToolStorageBackend.DATABASE
+    for PostgreSQL-compatible managed databases; the factory selects it for
+    postgres:// or postgresql:// backend_params['connection_string'] values,
+    with optional psycopg construction isolated behind the factory. Provider-free
+    unit coverage proves protocol conformance, path discipline, persistence,
+    update semantics, and factory binding. A skip-gated live e2e plus
+    `just r830-managed-db-live-e2e` now exercises create/view/str_replace/insert/
+    delete through the Memory tool dispatch seam once the operator supplies
+    R830_MANAGED_DB_CONNECTION_STRING and explicitly approves side-effecting DB
+    writes. Gate logged at `.harness/codex_credential_gates.jsonl`. Register §B-13.
 ```
 
 ### 5.13 Existential / research (R-900..R-999) — Surface X

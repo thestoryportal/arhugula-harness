@@ -145,10 +145,9 @@ class MemoryBackendResolutionError(Exception):
     v1.17 §14.12.4 fail-class taxonomy. Raised at U-RT-80 factory body when:
 
     - Operator-supplied `MemoryToolStorageBackend` enum value has no
-      implementation landed at v2.15 (only `FILESYSTEM` materialized per
-      §14.D operator ratification; `S3` / `ENCRYPTED_FILESYSTEM` /
-      `DATABASE` / `OPERATOR_DEFINED` deferred to follow-on
-      retirement-batch arcs).
+      implementation. `FILESYSTEM`, embedded SQLite `DATABASE`, S3, and
+      PostgreSQL-compatible managed `DATABASE` are implemented; remaining
+      values such as `ENCRYPTED_FILESYSTEM` / `OPERATOR_DEFINED` are deferred.
     - Default-path resolver returns a frozenset whose intersection with the
       v2.15 implemented set is empty.
     - Constructed backend object fails `MemoryToolStorageBackendProtocol`

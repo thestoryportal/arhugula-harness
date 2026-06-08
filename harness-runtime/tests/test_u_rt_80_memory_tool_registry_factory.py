@@ -27,6 +27,11 @@ from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.lifecycle.memory_tool_filesystem import (
     LocalFilesystemMemoryToolBackend,
 )
+from harness_runtime.lifecycle.memory_tool_managed_db import (
+    ManagedSqlConnection,
+    ManagedSqlCursor,
+    ManagedSqlMemoryToolBackend,
+)
 from harness_runtime.lifecycle.memory_tool_registry import MemoryToolRegistry
 from harness_runtime.lifecycle.memory_tool_s3 import S3MemoryToolBackend
 from harness_runtime.lifecycle.memory_tool_sqlite import SqliteMemoryToolBackend
@@ -41,6 +46,23 @@ from harness_runtime.types import (
     ProviderSecretsConfig,
     RuntimeConfig,
 )
+
+
+class _ManagedDbCursor:
+    def fetchone(self) -> tuple[object, ...] | None:
+        return None
+
+
+class _ManagedDbConnection:
+    def execute(self, query: str, params: tuple[object, ...] = ()) -> ManagedSqlCursor:
+        _ = (query, params)
+        return _ManagedDbCursor()
+
+    def commit(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
 
 
 def _config(
@@ -252,6 +274,46 @@ async def test_database_override_honors_connection_string_param(
     assert isinstance(registry.resolve_backend(cfg.deployment_surface), SqliteMemoryToolBackend)
     # The operator-supplied connection_string path is used, not the default.
     assert db_path.exists()
+    assert not (tmp_path / MEMORY_TOOL_DATABASE_SUBPATH).exists()
+
+
+@pytest.mark.asyncio
+async def test_database_override_postgres_connection_string_constructs_managed_db_backend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection_string = "postgresql://db.example.invalid/harness"
+    seen_params: list[dict[str, str]] = []
+
+    def fake_connect_factory(params: dict[str, str]):
+        seen_params.append(params)
+
+        def connect(_connection_string: str) -> ManagedSqlConnection:
+            assert _connection_string == connection_string
+            return _ManagedDbConnection()
+
+        return connect
+
+    monkeypatch.setattr(
+        "harness_runtime.bootstrap.factories.memory_tool_registry_factory."
+        "_create_managed_sql_connect_from_backend_params",
+        fake_connect_factory,
+    )
+    cfg = _config(
+        memory_tool_backend_config=MemoryToolBackendConfig(
+            backend=MemoryToolStorageBackend.DATABASE,
+            backend_params={"connection_string": connection_string},
+        ),
+        deployment_surface=DeploymentSurface.MANAGED_CLOUD,
+        repository_root=tmp_path,
+    )
+    ctx = _MutableHarnessContext()
+
+    registry = await materialize_memory_tool_registry_stage(cfg, ctx)
+
+    assert registry.configured_backend is MemoryToolStorageBackend.DATABASE
+    assert isinstance(registry.resolve_backend(cfg.deployment_surface), ManagedSqlMemoryToolBackend)
+    assert seen_params == [{"connection_string": connection_string}]
     assert not (tmp_path / MEMORY_TOOL_DATABASE_SUBPATH).exists()
 
 

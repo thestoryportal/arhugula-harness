@@ -289,6 +289,13 @@ r500-multitenant-live-e2e config:
 r830-s3-live-e2e:
     uv run --with boto3 --with 'botocore[crt]' pytest harness-runtime/tests/integration/test_r830_memory_tool_s3_live_e2e.py -v
 
+# Live R-830 managed-DB memory backend proof. Requires
+# R830_MANAGED_DB_CONNECTION_STRING for a PostgreSQL-compatible managed DB.
+# Performs real create/view/update/delete against a unique /memories path and
+# cleans it up.
+r830-managed-db-live-e2e:
+    uv run --with 'psycopg[binary]' pytest harness-runtime/tests/integration/test_r830_memory_tool_managed_db_live_e2e.py -v
+
 # Live R-810 Files API proof. Requires ANTHROPIC_API_KEY plus a real
 # non-loopback managed OTLP endpoint. Uploads, references, and deletes one
 # Anthropic Files API file, then emits files.* telemetry through the managed

@@ -31,7 +31,7 @@
 - `R-CXA-1` - AS->IS secret-fetch audit seam. Proceed only if a real AS secret-fetch producer or scope-bearing caller exists; otherwise record the producer gap and move on.
 - `R-CXA-2` - CP->IS future HITL rewrite / engine recovery-loop producers. Proceed only if a real upstream producer exists; avoid placeholder caller wiring.
 - `R-CXA-3` - CP->AS seam. Needs a CP->AS runtime composer or a scope-narrowing decision.
-- `R-830` - optional managed-DB backend. Only if the operator chooses managed-DB scope beyond the completed SQLite/S3 slices.
+- `R-830` - managed-DB backend implementation is now in this branch; closure waits on an operator-provided PostgreSQL-compatible DSN plus explicit approval for the side-effecting live e2e.
 - `R-XI-02` / `R-XI-03` / `R-900` - dashboard/research arcs by operator discretion.
 
 **Do not re-open as next action.** `R-411`, `R-412`, `R-420`, `R-421`, `R-430`, `R-500`, `R-810`, `R-820`, `R-008` / OD-4, and `R-CXA-4` are already closed or back-flowed.
