@@ -2171,26 +2171,25 @@ R-CXA-2-cp-is-seam:
     STILL-BOUNDED per R-700 — cp_is_wiring PARTIAL-LAND; U-RT-35 unit landed (batch-46) but full contract
     STILL-BOUNDED. **GROUNDED 2026-06-02 (producer-discovery, [[r-cxa-seam-wiring-is-producer-discovery]] —
     3rd CXA seam grounded after R-CXA-1/R-CXA-4):** of the 6 §16.5 composer methods on
-    `cp_is_wiring.py`, only 2 have production firing methods — `emit_pause_resume_state_ledger_entry`
-    (workflow_driver.py:582/:808/:965) + `emit_override_state_ledger_entry` (workflow_driver.py:859).
+    `cp_is_wiring.py`, 3 now have production firing methods — `emit_pause_resume_state_ledger_entry`
+    (workflow_driver.py:582/:808/:965), `emit_override_state_ledger_entry` (workflow_driver.py:859),
+    and `emit_workload_class_selection` after the early CP→IS wiring / stage-3b workload-selection slice
+    landed.
     **Advanced 2026-06-07:** the previously deferred `workflow_driver.py:965` HITL-signal caller-site now has
     direct integration coverage via
     `test_caller_site_pause_resume_protocol_emission_pause_captured_hitl_signal`; the test raises the real
     `HITLPauseRequestedSignal`, verifies `RunStatus.PAUSED`, `pause_reason=hitl_pending`, and persists the
     `cp.pause-resume-protocol` CP→IS ledger entry through `ctx.cp_is_wiring`.
-    The other 4 are blocked by deliberately-STRUCK X-AL-3 gaps from the U-RT-111 saga, NOT by a missing
-    firing site: (a) `emit_workload_class_selection` → AC #2 STRUCK (v2.38) substrate-lifecycle-mismatch —
-    `ctx.cp_is_wiring` is unset at bootstrap stage 3b (built at stage 6); wiring requires a bootstrap
-    stage-ordering spec amendment; (b) `emit_hitl_tool_call_rewriting` → AC #4/#11 STRUCK — HITL
-    disambiguator (`semantic_variant_binding_id`) spec-silent + `rewrite_tool_call` has 6 test callers /
-    0 production callers; (c)+(d) `emit_pause_captured` + `emit_resume_attempted` → engine-layer producers
-    `capture_pause_snapshot` + `attempt_resume` are genuine `NotImplementedError` stubs
-    (pause_resume_protocol.py:130/:152). So R-CXA-2 = the same shape as R-CXA-1 (DEFER) + R-CXA-4 (0
-    wireable): **2/6 fired, 4/6 gate on design-phase engine-layer substrate + spec amendments that were
-    intentionally NOT built** (wiring them = the silent X-AL-3 extension the U-RT-111 saga forbade). NO
-    clean Claude-executable wiring slice exists. R-CXA-2 stays PARTIAL/STILL-BOUNDED; full RETIRED gated on
-    the engine-layer substrate design arc (dispositioned at R-700 STILL-BOUNDED — operator chose
-    Memory-only-MVP scope; NOT re-surfaced as a fresh decision). Register §B-14.
+    The remaining 3 are blocked by deliberately ratified upstream-loop gaps, NOT by missing placeholder
+    ledger calls: (a) `emit_hitl_tool_call_rewriting` remains bounded because HITL disambiguator semantics
+    (`semantic_variant_binding_id`) are spec-silent and `rewrite_tool_call` still has test callers only /
+    0 production callers; (b)+(c) `emit_pause_captured` + `emit_resume_attempted` require production
+    engine-layer recovery loops for `capture_pause_snapshot` + `attempt_resume`. So R-CXA-2 remains the
+    same producer-discovery shape as R-CXA-1 (DEFER) + R-CXA-4 (0 wireable): **3/6 fired, 3/6 gated on
+    future HITL rewrite / engine recovery-loop producers**. Wiring static tool-dispatch or ledger-only
+    placeholders would be the silent X-AL-3 extension the U-RT-111 saga forbade. NO clean
+    Claude-executable wiring slice exists at current MVP scope. R-CXA-2 stays STILL-BOUNDED; full RETIRED
+    gates on future upstream-loop authoring. Register §B-14.
 
 R-CXA-3-cp-as-seam:
   title: CXA-3 (CP->AS) seam — runtime composer OR Memory-only-scope narrowing
