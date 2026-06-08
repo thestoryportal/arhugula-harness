@@ -24,6 +24,7 @@ from typing import Any
 
 import pytest
 from harness_core.deployment_surface import DeploymentSurface
+from harness_core.persona_tier import PersonaTier
 from harness_core.workload_class import WorkloadClass
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
@@ -33,6 +34,7 @@ from harness_cp.cross_family_fallback_chain import (
 from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_cp.topology_pattern import TopologyPattern
 from harness_is.path_class_registry import PathClass
+from harness_is.state_ledger_write import read_ledger
 from harness_runtime.bootstrap import (
     BootstrapFailure,
     BootstrapStageCompleteEvent,
@@ -59,6 +61,7 @@ from harness_runtime.types import (
 
 _WORKLOAD = WorkloadClass.SOFTWARE_ENGINEERING
 _SURFACE = DeploymentSurface.LOCAL_DEVELOPMENT
+_WORKLOAD_SELECTION_ACTION_ID = "cp.workload-binding-class-selection"
 
 
 def _path_bindings(tmp_path: Path) -> PathBindingConfig:
@@ -247,6 +250,62 @@ async def test_bootstrap_populates_every_required_harness_context_field(
     assert ctx.routing_manifest is not None  # stage 3b
     assert ctx.audit_writer is not None  # stage 4
     assert ctx.lifecycle_emitter is not None  # stage 5
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_binds_cp_is_wiring_during_cp_routing_before_od(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_providers(monkeypatch)
+    observed: dict[str, bool] = {}
+
+    async def _fail_od(
+        ctx: _MutableHarnessContext,
+        config: RuntimeConfig,
+        workload_class: WorkloadClass,
+    ) -> None:
+        _ = config, workload_class
+        observed["cp_is_wiring"] = "cp_is_wiring" in ctx.cxa_stages
+        observed["procedural_tier_snapshot_resolver"] = (
+            ctx.procedural_tier_snapshot_resolver is not None
+        )
+        observed["audit_writer"] = ctx.audit_writer is not None
+        raise RuntimeError("stop before OD materialization")
+
+    monkeypatch.setattr(_stage_4_od_mod, "execute", _fail_od)
+
+    with pytest.raises(BootstrapFailure) as exc_info:
+        await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
+
+    assert exc_info.value.failed_stage is BootstrapStage.OD
+    assert observed == {
+        "cp_is_wiring": True,
+        "procedural_tier_snapshot_resolver": True,
+        "audit_writer": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_emits_engine_selection_state_ledger_entries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    ctx = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
+
+    selection_entries = [
+        entry
+        for entry in read_ledger(ctx.ledger_writer.handle)
+        if str(entry.action_id) == _WORKLOAD_SELECTION_ACTION_ID
+    ]
+    assert len(selection_entries) == len(WorkloadClass) * len(PersonaTier)
+    assert {str(entry.actor.actor_id) for entry in selection_entries} == {
+        str(ctx.ledger_writer.actor.actor_id),
+    }
+    assert all(entry.procedural_tier_snapshot_ref is not None for entry in selection_entries)
 
 
 @pytest.mark.asyncio
