@@ -11,7 +11,8 @@
 # ROW COUNT: 55 entries = 54 canonical + 1 non-canonical (CP-24, the accounting-(i)-excluded
 # CP-axis-local authoring extra). The generator asserts exactly 54 `canonical: true` rows. The
 # `canonical` flag is what resolves the CP-21-vs-22 / AS-3↔AS-9 bookkeeping ambiguity explicitly
-# (accounting (i): drop CP-24, keep CP-17 SB-INDEF inside the 54 → RETIRED = 46).
+# (accounting (i): drop CP-24; post-R-810/R-820 back-flow moves AS-8e/AS-8f/CP-17
+# from SB-INDEFINITE to substantive retired → RETIRED = 49).
 #
 # DISPOSITION enum (the count-bucket — drives counted_in_retired):
 #   SUBSTANTIVE_RETIRED     — counted in RETIRED
@@ -27,15 +28,16 @@
 #   contain the word "RETIRED" (e.g. OD-4 = RETIRED-AS-CROSS-AXIS-DEFERRED) while the row is NOT
 #   counted (disposition: PARTIAL). A future editor must NOT promote a label into a count.
 #
-# FORWARD-ONLY: a real retirement-event transit edits the row's `disposition` AND bumps the
-# snapshot pin in tools/test_substitution_ledger.py in the SAME commit. Never silently flip a row.
+# FORWARD-ONLY: a real retirement-event transit edits the row's `disposition`, files a retirement
+# batch, AND bumps the snapshot pin in tools/test_substitution_ledger.py in the SAME commit.
+# Never silently flip a row.
 # ───────────────────────────────────────────────────────────────────────────────────────────
 
 snapshot:
-  retired: 46          # canonical RETIRED integer (Phase-8 graduation, accounting (i))
-  pipeline_advanced: 49
+  retired: 49          # post-Phase-8 back-flow after R-810/R-820 live proofs
+  pipeline_advanced: 52
   total_canonical: 54
-  source: ".harness/phase-8-graduation.md §3"
+  source: ".harness/phase-7d-retirement-events-batch-52.md"
 
 substitutions:
   # ── IS axis — 9 canonical rows · 9 RETIRED ──────────────────────────────────────────────
@@ -49,7 +51,7 @@ substitutions:
   - { id: H_T-IS-9,  axis: IS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-1,  r_pointer: null, rationale: "Worktree isolation (workload-opt-in); manifest-driven opt-in + concurrency-cap" }
   - { id: H_T-IS-10, axis: IS, disposition: AUTHORING_ONLY,      canonical: true, batch: "v1 §1",  r_pointer: null, rationale: "Substrate seam exports manifest; per-axis authoring artifact" }
 
-  # ── AS axis — 11 canonical rows · 9 RETIRED + 2 SB-INDEFINITE ────────────────────────────
+  # ── AS axis — 11 canonical rows · 11 RETIRED ─────────────────────────────────────────────
   - { id: H_T-AS-1,  axis: AS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-20, r_pointer: null, rationale: "SandboxTier 4-tier + monotonicity; lifecycle/sandbox_dispatch 6-provider×tier table" }
   - { id: H_T-AS-2,  axis: AS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-16, r_pointer: null, rationale: "Tool-contract schema; joint close with CP-18; ToolContract enforced at RuntimeToolDispatcher" }
   - { id: H_T-AS-4,  axis: AS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-19, r_pointer: null, rationale: "sandbox.* 7-attr namespace; Reading B arc 2; _emit_sandbox_violation dual fail-class span" }
@@ -58,11 +60,11 @@ substitutions:
   - { id: H_T-AS-8b, axis: AS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-24, r_pointer: null, rationale: "mcp.* 7-attr namespace; LANDED at runtime_tool_dispatcher" }
   - { id: H_T-AS-8c, axis: AS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-24, r_pointer: null, rationale: "memory.* 6-attr namespace; LANDED at memory_tool_dispatch" }
   - { id: H_T-AS-8d, axis: AS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-31, r_pointer: null, rationale: "skill.* 6-attr namespace; mech-β deployment-time-opt-in-gate; runtime spec v1.32 C-RT-27" }
-  - { id: H_T-AS-8e, axis: AS, disposition: SB_INDEFINITE,       canonical: true, batch: null,     r_pointer: R-005, sign_off_label: accepted-indefinite-defer, rationale: "files.* 8-attr namespace; Files arc DEFERRED INDEFINITELY per runtime spec v1.17 §14.C Memory-only MVP" }
-  - { id: H_T-AS-8f, axis: AS, disposition: SB_INDEFINITE,       canonical: true, batch: null,     r_pointer: R-006, sign_off_label: accepted-indefinite-defer, rationale: "managed_agents.* 3-attr namespace; DEFER INDEFINITELY per class_1_fork_as_8f Q1=(C) production-only exclusion" }
+  - { id: H_T-AS-8e, axis: AS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-52, r_pointer: R-005, rationale: "files.* 8-attr namespace; R-810 real Anthropic Files upload/reference/delete + managed-cloud files.operation Cloud Trace proof closed the former accepted-indefinite-defer row" }
+  - { id: H_T-AS-8f, axis: AS, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-52, r_pointer: R-006, rationale: "managed_agents.* 3-attr namespace; R-820 real Anthropic Managed Agents SDK/session + managed-cloud managed_agents.* Cloud Trace proof closed the former accepted-indefinite-defer row" }
   - { id: H_T-AS-9,  axis: AS, disposition: AUTHORING_ONLY,      canonical: true, batch: "v1 §1",  r_pointer: null, rationale: "Substrate seam exports manifest; per-axis authoring artifact (live table uses AS-9 over Meta-Arch AS-3 — documentation seam, not a count change)" }
 
-  # ── CP axis — 21 canonical rows · 20 RETIRED + 1 SB-INDEFINITE (+ CP-24 non-canonical) ───
+  # ── CP axis — 21 canonical rows · 21 RETIRED (+ CP-24 non-canonical) ────────────────────
   - { id: H_T-CP-1,  axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-1,  r_pointer: null, rationale: "Routing core + ProviderCapabilities (multi-LLM); LLM call site at lifecycle/llm_dispatch per C-RT-15" }
   - { id: H_T-CP-2,  axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: "early",  r_pointer: null, rationale: "Layered routing strategy; composer landed" }
   - { id: H_T-CP-3,  axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: "early",  r_pointer: null, rationale: "Per-layer time-budget + retry.*; retry_breaker" }
@@ -77,7 +79,7 @@ substitutions:
   - { id: H_T-CP-13, axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: "per §4.1", r_pointer: null, rationale: "Sub-agent handoff schemas; RuntimeHandoffRegistry" }
   - { id: H_T-CP-14, axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-29, r_pointer: null, rationale: "Multi-agent span hierarchy + topology.*/subagent.*; sub-species 7a; v1.6 MVP single-sub-agent slice" }
   - { id: H_T-CP-16, axis: CP, disposition: BOUNDED_RESIDUAL,    canonical: true, batch: batch-44, r_pointer: null, rationale: "Memory primitives + memory.* consumption; indefinite-defer per sub-species 7g; gated on Files-API surface (counted per X-AL-2 §5.3)" }
-  - { id: H_T-CP-17, axis: CP, disposition: SB_INDEFINITE,       canonical: true, batch: null,     r_pointer: R-010, sign_off_label: accepted-indefinite-defer, rationale: "Files primitives + files.* consumption; reclassified batch-44 per runtime spec v1.17 §14.C Files-arc scope" }
+  - { id: H_T-CP-17, axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-52, r_pointer: R-010, rationale: "Files primitives + files.* consumption; R-810 real Anthropic Files API adapter/reference composition + managed-cloud files.operation proof closed the former accepted-indefinite-defer row" }
   - { id: H_T-CP-18, axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-16, r_pointer: null, rationale: "MCP integration + per-server trust + mcp.*; joint close with AS-2" }
   - { id: H_T-CP-19, axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-22, r_pointer: null, rationale: "D5 cross-deployment monotonicity; first sub-species 7 close; Layer-3 e2e reframed scope" }
   - { id: H_T-CP-20, axis: CP, disposition: SUBSTANTIVE_RETIRED, canonical: true, batch: batch-8,  r_pointer: null, rationale: "HITL primitive + 4-response palette + hitl.*/audit.*; RuntimeHITLGateComposer invokes ask_user_question_surface" }
