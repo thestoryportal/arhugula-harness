@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `747d5b1264e8` |
-| `last_refreshed` | 2026-06-08T11:08:13-06:00 |
-| `git_head` | `263c2d78` (main) — PR #430 R-901 research-path hygiene merged. |
+| `workspace_state_hash` | `b05aae3c1d4c` |
+| `last_refreshed` | 2026-06-08T11:34:02-06:00 |
+| `git_head` | `a0a8393` (main) — PR #432 R-IF-council-workflow productized. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-54.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -31,8 +31,6 @@
 - `R-CXA-2` - CP→IS producer-gated seam. Highest-value remaining build row, but not safely wireable until a real HITL rewrite production caller, engine recovery-loop producer, or design/back-flow amendment exists.
 - `R-CXA-1` - AS→IS producer-gated seam. Next remaining build row, but not safely wireable until a real scoped AS secret-fetch producer or design/back-flow amendment exists.
 
-**Process-tooling closure staged.** `R-IF-council-workflow` is closed in this PR by materializing the `.harness/council/` targets already referenced by `/council-workflow` and `/council-generic`: harness-aware YAML, generic same-shape YAML, prose companion, and context-memory grounding provenance pointer.
-
 **Research frontier closed.** `R-901` filed `.harness/01-planning/01-harness-planning/00-harness-research/phase-9-retirement-criteria.md`: Phase 9 is a lightweight post-closure decision model for bounded-residual promotion, live-ledger back-flow, and producer-gated seams. Result is research-only + selector guidance; no design-substrate back-flow is owed.
 
 **Do not re-open as next action.** `R-411`, `R-412`, `R-420`, `R-421`, `R-430`, `R-500`, `R-810`, `R-820`, `R-830`, `R-008` / OD-4, `R-CXA-3`, and `R-CXA-4` are already closed or back-flowed.
@@ -51,7 +49,7 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| This PR | 2026-06-08 | **R-IF-council-workflow productized.** The existing `/council-workflow` and `/council-generic` commands now resolve to committed `.harness/council/` artifacts: the harness-layer-aware workflow YAML, a generic same-shape workflow YAML, the workflow prose companion, and the context-memory grounding provenance pointer. |
+| PR #432 (`a0a8393`) | 2026-06-08 | **R-IF-council-workflow productized.** The existing `/council-workflow` and `/council-generic` commands now resolve to committed `.harness/council/` artifacts: the harness-layer-aware workflow YAML, a generic same-shape workflow YAML, the workflow prose companion, and the context-memory grounding provenance pointer. |
 | PR #430 (`263c2d78`) | 2026-06-08 | **R-901 research-path hygiene merged.** The Phase-9 retirement criteria brief now lives in the reorganized harness research corpus under `.harness/01-planning/01-harness-planning/00-harness-research/`; R-900/R-901, R-600 NotebookLM extract notes, and the dashboard point at the current corpus path. |
 | PR #428 (`04348e3a`) | 2026-06-08 | **R-901 Phase-9 retirement criteria research brief merged.** The brief uses the local Phase-8/retirement-batch corpus, NotebookLM corpus-boundary query, and a supplemental Perplexity query; it recommends research-only closure and returns the selector to genuine producer-gated CXA residuals. |
 | PR #426 (`c223de07`) | 2026-06-08 | **R-900 research placeholder decomposed into R-901.** R-XI-02/R-XI-03 were already RESOLVED, so the selector now points at the explicit Phase-9 retirement criteria research brief; the PR also fixed the SQLite memory backend writer-lock race surfaced by CI. |
@@ -103,6 +101,7 @@ The 5 bucket rows below sum to **54** under the batch-54 live ledger (RETIRED 52
 
 | Date | Source | Resolution |
 |---|---|---|
+| 2026-06-08 | **Post-#432 terminating refresh — PR #432 R-IF-council-workflow productization merged at `a0a8393`; §12.2 owed follow-on.** Same session: materialized the `.harness/council/` command targets, added the generic same-shape YAML, refreshed the harness-aware YAML/prose companion, and marked the roadmap row resolved. | Single-file status/dashboard refresh per §12.2.1. Hash `747d5b1264e8` → `b05aae3c1d4c` (state at `a0a8393`, PRS empty/unavailable, fork count 45, batch-54). Next action unchanged: `R-CXA-2` then `R-CXA-1`, both producer-gated and not safely wireable until real upstream producers or design/back-flow amendments appear. |
 | 2026-06-08 | **Post-#430 terminating refresh — PR #430 R-901 research-path hygiene merged at `263c2d78`; §12.2 owed follow-on.** Same session: corrected the R-901 brief location from the obsolete top-level `research/` path into `.harness/01-planning/01-harness-planning/00-harness-research/`, updated R-900/R-901 metadata, and fixed R-600 NotebookLM extract pointers. | Single-file status/dashboard refresh per §12.2.1. Hash `59ece3c52b50` → `747d5b1264e8` (state at `263c2d78`; PRS empty; fork count 45; batch-54). Next action unchanged: `R-CXA-2` then `R-CXA-1`, both producer-gated and not safely wireable until real upstream producers or design/back-flow amendments appear. |
 | 2026-06-08 | **Post-#428 terminating refresh — PR #428 R-901 retirement-criteria brief merged at `04348e3`; §12.2 owed follow-on.** Same session: R-901 filed the Phase-9 brief, marked Surface X research-only resolved, removed R-901 from remaining dashboard cards, and returned the selector to genuine producer-gated CXA residuals. | Single-file status/dashboard refresh per §12.2.1. Hash `ed3d997f21f7` → `59ece3c52b50` (state at `04348e3a`; PRS empty; fork count 45; batch-54). Follow-up path hygiene moved the brief into `.harness/01-planning/01-harness-planning/00-harness-research/` to match the reorganized harness research corpus. Next action: `R-CXA-2` then `R-CXA-1`, both producer-gated and not safely wireable until real upstream producers or design/back-flow amendments appear. |
 | 2026-05-31 | Dashboard creation (v1 origin) | n/a |
