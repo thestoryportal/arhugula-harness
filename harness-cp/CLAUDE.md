@@ -21,7 +21,7 @@ CP posture per `Cross_Axis_Composition_Document_v2_17.md` §2.4: **largest cross
 
 ### 1.3 Scope inclusion — 9 clusters
 
-Per `Implementation_Plan_Control_Plane_v1.md` §3.3 cluster table (preserved verbatim at v2.10 §3):
+Per the canonical CP plan 9-cluster table (head `Implementation_Plan_Control_Plane_v2_31.md`; the `_v1.md` §3.3 origin was superseded by the delta-only v2.x chain — cluster structure summarized inline below):
 
 | Cluster | Scope | Carrier units | Anchor contracts |
 |---|---|---|---|
@@ -103,7 +103,7 @@ CP terminal aggregate exporters: U-CP-54 + U-CP-55 (per C-CP-24 §24). 12 OD→C
 
 ## 3. Topological entry-points (Level 0)
 
-Per `Implementation_Plan_Control_Plane_v1.md` §3.2 topological levels (preserved verbatim at v2.10):
+Per the canonical CP plan topological levels (head `Implementation_Plan_Control_Plane_v2_31.md`; the `_v1.md` §3.2 origin was superseded by the delta-only v2.x chain — levels summarized inline below):
 
 | L0 unit | Scope | Cluster |
 |---|---|---|

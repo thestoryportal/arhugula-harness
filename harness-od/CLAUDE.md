@@ -85,7 +85,7 @@ Per `Implementation_Plan_Operational_Discipline_v2_6.md` §0.7 + §0.9: sqlite s
 
 ## 3. Topological entry-points (Level 0)
 
-Per `Implementation_Plan_Operational_Discipline_v1.md` §0.2 plan-level invariants (preserved at v2.6):
+Per the canonical OD plan plan-level invariants (head `Implementation_Plan_Operational_Discipline_v2_27.md`; the `_v1.md` §0.2 origin was superseded by the delta-only v2.x chain — invariants summarized inline below):
 
 | L0 unit | Scope | Cluster |
 |---|---|---|
