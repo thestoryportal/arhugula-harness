@@ -25,9 +25,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
 from harness_core import EntryID, WorkflowID
 from pydantic import BaseModel, ConfigDict
@@ -114,6 +116,139 @@ class ResumeOutcome(BaseModel):
     resume_audit_entry_id: EntryID | None
 
 
+class EnginePauseResumeSubstrateNotBoundError(NotImplementedError):
+    """Raised when the engine-layer free-function substrate is not bound."""
+
+
+class EnginePauseResumeSubstrate(Protocol):
+    """Provider for the legacy C-CP-22 engine-layer free functions.
+
+    The free functions remain distinct from the C-CP-26 workflow-layer
+    ``PauseResumeProtocol`` class. Runtime composition binds an implementation
+    explicitly when an engine needs the older replay-pause surface.
+    """
+
+    def capture_pause_snapshot(
+        self, workflow_id: WorkflowID, pause_reason: PauseReason
+    ) -> PauseEvent: ...
+
+    def attempt_resume(self, attempt: ResumeAttempt) -> ResumeOutcome: ...
+
+
+type EngineDiffProvider = Callable[[PauseEvent, ResumeAttempt], tuple[MaterialDiff, ...]]
+type EngineRevalidationPolicy = Callable[[ResumeAttempt, tuple[MaterialDiff, ...]], bool]
+
+
+def _empty_engine_diff(_event: PauseEvent, _attempt: ResumeAttempt) -> tuple[MaterialDiff, ...]:
+    return ()
+
+
+def _engine_revalidation_succeeds(_attempt: ResumeAttempt, _diff: tuple[MaterialDiff, ...]) -> bool:
+    return True
+
+
+_engine_pause_resume_substrate: EnginePauseResumeSubstrate | None = None
+
+
+@contextmanager
+def bind_engine_pause_resume_substrate(
+    substrate: EnginePauseResumeSubstrate,
+) -> Generator[None, None, None]:
+    """Temporarily bind the engine-layer free-function substrate.
+
+    The binding is process-local and scoped for tests or runtime composition.
+    Unbound calls fail closed with ``EnginePauseResumeSubstrateNotBoundError``.
+    """
+    global _engine_pause_resume_substrate
+    previous = _engine_pause_resume_substrate
+    _engine_pause_resume_substrate = substrate
+    try:
+        yield
+    finally:
+        _engine_pause_resume_substrate = previous
+
+
+class DeterministicEnginePauseResumeSubstrate:
+    """Provider-free C-CP-22 engine-layer pause/resume substrate.
+
+    This intentionally does not replace the C-CP-26 workflow-layer class. It
+    gives the legacy engine free functions a deterministic, injectable body:
+    capture stores a pause event keyed by workflow id; resume reads that stored
+    event, consumes an injected material-diff set, and classifies the outcome
+    through ``classify_resume``.
+    """
+
+    def __init__(
+        self,
+        *,
+        state_summary_provider: Callable[[], StateSummary],
+        diff_provider: EngineDiffProvider | None = None,
+        revalidation_succeeded: EngineRevalidationPolicy | None = None,
+        pause_audit_entry_id_provider: Callable[[WorkflowID, PauseReason], EntryID] | None = None,
+        resume_audit_entry_id_provider: Callable[[ResumeAttempt, ResumeOutcomeKind], EntryID | None]
+        | None = None,
+    ) -> None:
+        self._state_summary_provider = state_summary_provider
+        self._diff_provider = diff_provider or _empty_engine_diff
+        self._revalidation_succeeded = revalidation_succeeded or _engine_revalidation_succeeds
+        self._pause_audit_entry_id_provider = pause_audit_entry_id_provider
+        self._resume_audit_entry_id_provider = resume_audit_entry_id_provider
+        self._pause_events: dict[str, PauseEvent] = {}
+
+    def capture_pause_snapshot(
+        self, workflow_id: WorkflowID, pause_reason: PauseReason
+    ) -> PauseEvent:
+        state_summary = self._state_summary_provider()
+        pause_audit_entry_id = (
+            self._pause_audit_entry_id_provider(workflow_id, pause_reason)
+            if self._pause_audit_entry_id_provider is not None
+            else EntryID(
+                hashlib.sha256(
+                    b"\x1e".join(
+                        (
+                            str(workflow_id).encode("utf-8"),
+                            pause_reason.value.encode("utf-8"),
+                            state_summary.summary_hash.encode("utf-8"),
+                        )
+                    )
+                ).hexdigest()
+            )
+        )
+        event = PauseEvent(
+            paused_at=datetime.now(UTC).isoformat(),
+            pause_reason=pause_reason,
+            state_summary_snapshot=state_summary,
+            external_refs_captured=state_summary.external_references,
+            pause_audit_entry_id=pause_audit_entry_id,
+        )
+        self._pause_events[str(workflow_id)] = event
+        return event
+
+    def attempt_resume(self, attempt: ResumeAttempt) -> ResumeOutcome:
+        event = self._pause_events.get(str(attempt.paused_workflow_id))
+        if event is None:
+            return ResumeOutcome(
+                outcome_kind=ResumeOutcomeKind.ABORT_SNAPSHOT_CORRUPTED,
+                material_diff=(),
+                context_revalidated=False,
+                resume_audit_entry_id=None,
+            )
+        diff = self._diff_provider(event, attempt)
+        revalidated = self._revalidation_succeeded(attempt, diff)
+        outcome_kind = classify_resume(diff, revalidation_succeeded=revalidated)
+        resume_audit_entry_id = (
+            self._resume_audit_entry_id_provider(attempt, outcome_kind)
+            if self._resume_audit_entry_id_provider is not None
+            else None
+        )
+        return ResumeOutcome(
+            outcome_kind=outcome_kind,
+            material_diff=diff,
+            context_revalidated=(outcome_kind is ResumeOutcomeKind.RESUME_AFTER_REVALIDATION),
+            resume_audit_entry_id=resume_audit_entry_id,
+        )
+
+
 def capture_pause_snapshot(workflow_id: WorkflowID, pause_reason: PauseReason) -> PauseEvent:
     """Capture a pause snapshot for a workflow (C-CP-22 §22.1).
 
@@ -126,12 +261,12 @@ def capture_pause_snapshot(workflow_id: WorkflowID, pause_reason: PauseReason) -
     time; the snapshot serialization format is deferred to implementation
     discretion per §22.1 (acceptance #9).
     """
-    _ = (workflow_id, pause_reason)
-    raise NotImplementedError(
-        "capture_pause_snapshot composes the U-IS-11 F2 append + snapshot "
-        "serialization; the CP plan U-CP-49 unit declares the pause-protocol "
-        "surface (C-CP-22 §22.1)."
-    )
+    if _engine_pause_resume_substrate is None:
+        raise EnginePauseResumeSubstrateNotBoundError(
+            "capture_pause_snapshot requires a bound engine-layer substrate "
+            "for the C-CP-22 free-function surface."
+        )
+    return _engine_pause_resume_substrate.capture_pause_snapshot(workflow_id, pause_reason)
 
 
 def attempt_resume(attempt: ResumeAttempt) -> ResumeOutcome:
@@ -148,12 +283,12 @@ def attempt_resume(attempt: ResumeAttempt) -> ResumeOutcome:
     The resume protocol is deterministic given (pause_snapshot, current_state,
     material_diff) — no inference path (acceptance #10).
     """
-    _ = attempt
-    raise NotImplementedError(
-        "attempt_resume composes the U-IS-12 bounded-read + U-IS-09 chain "
-        "verification + U-CP-50 material-diff consumption; the CP plan "
-        "U-CP-49 unit declares the resume-protocol surface (C-CP-22 §22.1)."
-    )
+    if _engine_pause_resume_substrate is None:
+        raise EnginePauseResumeSubstrateNotBoundError(
+            "attempt_resume requires a bound engine-layer substrate for the "
+            "C-CP-22 free-function surface."
+        )
+    return _engine_pause_resume_substrate.attempt_resume(attempt)
 
 
 def classify_resume(
@@ -565,7 +700,6 @@ ResumeContext.model_rebuild(_types_namespace={"HITLResult": _HITLResult})
 # `cp.resume-attempted` at U-CP-78/U-CP-79).
 
 from collections.abc import Awaitable, Mapping  # noqa: E402
-from datetime import UTC, datetime  # noqa: E402
 
 from harness_is.state_ledger_entry_schema import (  # noqa: E402
     Actor,

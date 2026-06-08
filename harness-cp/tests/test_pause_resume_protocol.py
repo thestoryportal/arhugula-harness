@@ -24,11 +24,14 @@ from harness_cp.handoff_context import (
 )
 from harness_cp.material_diff_detection import MaterialDiff
 from harness_cp.pause_resume_protocol import (
+    DeterministicEnginePauseResumeSubstrate,
+    EnginePauseResumeSubstrateNotBoundError,
     PauseEvent,
     PauseReason,
     ResumeAttempt,
     ResumeOutcomeKind,
     attempt_resume,
+    bind_engine_pause_resume_substrate,
     capture_pause_snapshot,
     classify_resume,
 )
@@ -87,20 +90,96 @@ def test_pause_reason_cardinality_four() -> None:
 
 
 def test_capture_pause_snapshot_surface() -> None:
-    """#4 — capture_pause_snapshot declares the pause-protocol surface."""
-    with pytest.raises(NotImplementedError):
+    """#4 — capture_pause_snapshot fails closed until a substrate is bound."""
+    with pytest.raises(EnginePauseResumeSubstrateNotBoundError):
         capture_pause_snapshot(WorkflowID("w0"), PauseReason.OPERATOR_INITIATED_PAUSE)
 
 
 def test_attempt_resume_surface() -> None:
-    """#5 — attempt_resume declares the resume-protocol surface."""
+    """#5 — attempt_resume fails closed until a substrate is bound."""
     attempt = ResumeAttempt(
         paused_workflow_id=WorkflowID("w0"),
         resume_at="2026-05-16T01:00:00Z",
         resume_request_actor=ActorIdentity("operator"),
     )
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(EnginePauseResumeSubstrateNotBoundError):
         attempt_resume(attempt)
+
+
+def test_engine_substrate_capture_pause_snapshot_returns_event() -> None:
+    """#4 — a bound engine substrate materializes the free-function surface."""
+    substrate = DeterministicEnginePauseResumeSubstrate(
+        state_summary_provider=_state_summary,
+        pause_audit_entry_id_provider=lambda _workflow_id, _pause_reason: EntryID("pause-entry-1"),
+    )
+    with bind_engine_pause_resume_substrate(substrate):
+        event = capture_pause_snapshot(WorkflowID("w0"), PauseReason.OPERATOR_INITIATED_PAUSE)
+
+    assert event.pause_reason is PauseReason.OPERATOR_INITIATED_PAUSE
+    assert event.state_summary_snapshot == _state_summary()
+    assert event.external_refs_captured == (_ref(),)
+    assert event.pause_audit_entry_id == "pause-entry-1"
+
+
+def test_engine_substrate_attempt_resume_clean_after_capture() -> None:
+    """#5/#7 — bound substrate reads the captured pause event and classifies clean resume."""
+    substrate = DeterministicEnginePauseResumeSubstrate(
+        state_summary_provider=_state_summary,
+    )
+    attempt = ResumeAttempt(
+        paused_workflow_id=WorkflowID("w0"),
+        resume_at="2026-05-16T01:00:00Z",
+        resume_request_actor=ActorIdentity("operator"),
+    )
+
+    with bind_engine_pause_resume_substrate(substrate):
+        capture_pause_snapshot(WorkflowID("w0"), PauseReason.OPERATOR_INITIATED_PAUSE)
+        outcome = attempt_resume(attempt)
+
+    assert outcome.outcome_kind is ResumeOutcomeKind.RESUME_CLEAN
+    assert outcome.material_diff == ()
+    assert outcome.context_revalidated is False
+
+
+def test_engine_substrate_attempt_resume_after_revalidation_with_diff() -> None:
+    """#7 — material diff with successful revalidation resumes after revalidation."""
+    substrate = DeterministicEnginePauseResumeSubstrate(
+        state_summary_provider=_state_summary,
+        diff_provider=lambda _event, _attempt: (_material(True),),
+        revalidation_succeeded=lambda _attempt, _diff: True,
+    )
+    attempt = ResumeAttempt(
+        paused_workflow_id=WorkflowID("w0"),
+        resume_at="2026-05-16T01:00:00Z",
+        resume_request_actor=ActorIdentity("operator"),
+    )
+
+    with bind_engine_pause_resume_substrate(substrate):
+        capture_pause_snapshot(WorkflowID("w0"), PauseReason.OPERATOR_INITIATED_PAUSE)
+        outcome = attempt_resume(attempt)
+
+    assert outcome.outcome_kind is ResumeOutcomeKind.RESUME_AFTER_REVALIDATION
+    assert len(outcome.material_diff) == 1
+    assert outcome.context_revalidated is True
+
+
+def test_engine_substrate_attempt_resume_aborts_without_captured_snapshot() -> None:
+    """#5 — bounded-read miss is surfaced as snapshot-corruption abort."""
+    substrate = DeterministicEnginePauseResumeSubstrate(
+        state_summary_provider=_state_summary,
+    )
+    attempt = ResumeAttempt(
+        paused_workflow_id=WorkflowID("missing"),
+        resume_at="2026-05-16T01:00:00Z",
+        resume_request_actor=ActorIdentity("operator"),
+    )
+
+    with bind_engine_pause_resume_substrate(substrate):
+        outcome = attempt_resume(attempt)
+
+    assert outcome.outcome_kind is ResumeOutcomeKind.ABORT_SNAPSHOT_CORRUPTED
+    assert outcome.material_diff == ()
+    assert outcome.context_revalidated is False
 
 
 def test_resume_outcome_cardinality_four() -> None:
