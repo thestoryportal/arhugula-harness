@@ -71,7 +71,7 @@ ANNOTATIONS = {
     "R-600-pattern-bake-in-sweep": "Recurring housekeeping: sweep memory for repeating patterns worth writing down.",
     "R-IF-roadmap-refresh": "Recurring housekeeping: refresh this dashboard after every merge.",
     # BLOCKED
-    "R-008-od-4-redaction-partial": "Telemetry redaction is advanced: the per-session toggle, OD opaque-token substrate, durable audit-ledger token map, and category-token classifier seam exist; eval-grade classification remains.",
+    "R-008-od-4-redaction-partial": "Telemetry redaction is advanced: the per-session toggle, OD opaque-token substrate, durable audit-ledger token map, eval-grade classifier, and multi-tenant audit-backed tokenization path exist; accounting label unchanged.",
     "R-100-mvp-config-discovery": "Waiting on a small decision: auto-find the config file at the project root, or drop that behavior from the spec.",
     "R-700-phase-8-substitution-accounting": "RESOLVED — you ratified the count and Phase 8 is declared CLOSED: 46/54 retired (derived from the substitution ledger). The build phase is done.",
     # DEFERRED (parked by design)
@@ -107,8 +107,8 @@ NONRETIRED_LEDGER = [
         "id": "OD-4",
         "rnnn": "R-008",
         "state": "PARTIAL",
-        "why": "Pre-collector redaction, the per-session toggle, the OD opaque-token substrate, durable token-map persistence, and provider-free category-token seam are wired; eval-grade classifier remains.",
-        "retire": "Not yet — needs the eval-grade semantic classifier/category pipeline.",
+        "why": "Pre-collector redaction, the per-session toggle, OD opaque-token substrate, durable token-map persistence, provider-free eval-grade classifier, and runtime multi-tenant audit-backed tokenization are wired; ratified accounting label remains.",
+        "retire": "Not in this implementation slice — OD-4 keeps its R-700 ratified bounded label unless a separate accounting/back-flow reclassifies it.",
     },
     {
         "id": "CXA-1",
@@ -199,7 +199,7 @@ REMAINING_ORDERED = [
         "layer": "build",
         "id": "R-008-od-4-redaction-partial",
         "label": "Finish redaction (OD-4)",
-        "gate": "Needs the eval-grade semantic classifier; the OD opaque-token substrate, durable audit-ledger token-map path, and provider-free category-token seam are now present.",
+        "gate": "Runtime classifier/tokenization code gate is closed; any remaining movement is accounting/back-flow for the R-700 ratified OD-4 label.",
     },
     {
         "n": 4,

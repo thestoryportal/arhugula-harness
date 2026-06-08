@@ -63,18 +63,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from harness_core import DeploymentSurface
+from harness_core import DeploymentSurface, PersonaTier
 from harness_od.per_sandbox_tier_otlp_reachability import (
     ReachabilityViolation,
     assert_otlp_reachable_from_sandbox,
 )
 from harness_od.redaction_span_processor import RedactionSpanProcessor
+from harness_od.redaction_tokenizer import (
+    EvalGradeSemanticRedactionClassifier,
+    OpaqueRedactionTokenizer,
+)
 from harness_od.tail_keep_span_processor import TailKeepSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 
-from harness_runtime.types import RuntimeConfig
+from harness_runtime.lifecycle.redaction_token_audit_map import AuditLedgerRedactionTokenMap
+from harness_runtime.types import AuditLedgerWriter, RuntimeConfig
 
 __all__ = [
     "SpanProcessorBindError",
@@ -152,6 +157,7 @@ def materialize_span_processor_stage(
     provider: TracerProvider,
     *,
     exporter: SpanExporter | None = None,
+    audit_writer: AuditLedgerWriter | None = None,
 ) -> SpanProcessorStage:
     """Attach a `BatchSpanProcessor(OTLPSpanExporter(...))` to `provider`.
 
@@ -214,7 +220,20 @@ def materialize_span_processor_stage(
             max_export_batch_size=config.collector.batch_size,
             schedule_delay_millis=config.collector.batch_window_seconds * 1000,
         )
-        redaction_processor = RedactionSpanProcessor(persona_tier=config.persona_tier)
+        tokenizer = None
+        if config.persona_tier == PersonaTier.MULTI_TENANT_COMPLIANCE and audit_writer is not None:
+            tokenizer = OpaqueRedactionTokenizer(
+                token_map=AuditLedgerRedactionTokenMap(
+                    audit_writer=audit_writer,
+                    tenant_id=config.tenant_id,
+                    signing_key_id="harness-runtime-redaction-token",
+                ),
+                classifier=EvalGradeSemanticRedactionClassifier(),
+            )
+        redaction_processor = RedactionSpanProcessor(
+            persona_tier=config.persona_tier,
+            tokenizer=tokenizer,
+        )
     except Exception as exc:
         raise SpanProcessorBindError(
             f"BatchSpanProcessor / OTLPSpanExporter construction failed: {exc}"

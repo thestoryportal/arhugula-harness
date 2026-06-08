@@ -242,6 +242,11 @@ class RedactionSpanProcessor(SpanProcessor):
         """
         return self._persona_tier
 
+    @property
+    def tokenizer_enabled(self) -> bool:
+        """Whether content attributes are tokenized instead of deleted."""
+        return self._tokenizer is not None
+
     def on_start(
         self,
         span: Span,

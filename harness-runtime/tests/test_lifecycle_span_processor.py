@@ -23,10 +23,11 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from typing import Any
 
 import pytest
 from harness_as.sandbox_tier import SandboxTier
-from harness_core import DeploymentSurface
+from harness_core import DeploymentSurface, PersonaTier
 from harness_cp.topology_pattern import TopologyPattern
 from harness_od.per_cell_collector_placement_matrix import CollectorPlacement
 from harness_od.per_sandbox_tier_otlp_reachability import (
@@ -62,6 +63,8 @@ def _config(
     bootstrap_sandbox_tier: SandboxTier = SandboxTier.TIER_1_PROCESS,
     batch_size: int = 512,
     batch_window_seconds: int = 5,
+    persona_tier: PersonaTier = PersonaTier.SOLO_DEVELOPER,
+    tenant_id: str | None = None,
 ) -> RuntimeConfig:
     """Build a minimal `RuntimeConfig` for U-RT-28 tests."""
     return RuntimeConfig(
@@ -77,12 +80,23 @@ def _config(
             batch_window_seconds=batch_window_seconds,
         ),
         default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        persona_tier=persona_tier,
+        tenant_id=tenant_id,
     )
 
 
 def _provider() -> TracerProvider:
     """Build a bare `TracerProvider` for tests (does not register globally)."""
     return TracerProvider()
+
+
+class _RecordingAuditWriter:
+    def __init__(self) -> None:
+        self.appended: list[tuple[str | None, object]] = []
+
+    def append(self, tenant_id: str | None, audit_entry: object) -> Any:
+        self.appended.append((tenant_id, audit_entry))
+        return "appended"
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +291,73 @@ def test_materialize_strips_all_13_content_attributes_at_export(
     for key in DEFAULT_OFF_CONTENT_ATTRIBUTES:
         assert key not in exported.attributes, f"runtime wiring leaked {key}"
     assert exported.attributes["sandbox.tier"] == "tier_1_process"
+
+
+def test_materialize_multi_tenant_tokenizes_content_with_audit_map(
+    tmp_path: Path,
+) -> None:
+    """R-008 gate (b): multi-tenant runtime redaction uses eval-grade tokens.
+
+    The exported span receives an opaque semantic category token, while the raw
+    value is persisted only through the signed redaction-token audit map.
+    """
+    audit_writer = _RecordingAuditWriter()
+    in_memory = InMemorySpanExporter()
+    provider = _provider()
+    stage = materialize_span_processor_stage(
+        _config(
+            tmp_path,
+            persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+            tenant_id="tenant-r008",
+        ),
+        provider,
+        exporter=in_memory,
+        audit_writer=audit_writer,
+    )
+    assert stage.redaction_processor.tokenizer_enabled is True
+
+    tracer = provider.get_tracer("redaction-token-wire-test")
+    with tracer.start_as_current_span("anthropic.messages.create") as span:
+        span.set_attribute("gen_ai.input.messages", "customer ssn 123-45-6789")
+        span.set_attribute("gen_ai.operation.name", "chat")
+    stage.flush(timeout_millis=5000)
+
+    [exported] = in_memory.get_finished_spans()
+    token = exported.attributes["gen_ai.input.messages"]
+    assert isinstance(token, str)
+    assert token.startswith("[REDACTED:PII:")
+    assert "123-45-6789" not in token
+    assert exported.attributes["gen_ai.operation.name"] == "chat"
+
+    [(tenant_id, audit_entry)] = audit_writer.appended
+    assert tenant_id == "tenant-r008"
+    attrs = audit_entry.payload.audit_namespace_attrs
+    assert attrs["audit.redaction_token.token"] == token
+    assert attrs["audit.redaction_token.semantic_category"] == "PII"
+    assert attrs["audit.redaction_token.raw_value"] == "customer ssn 123-45-6789"
+    assert audit_entry.signature_attrs.audit_signature_key_id == "harness-runtime-redaction-token"
+
+
+def test_materialize_multi_tenant_without_audit_writer_preserves_strip_mode(
+    tmp_path: Path,
+) -> None:
+    """Without the audit sink, multi-tenant remains fail-closed by stripping."""
+    in_memory = InMemorySpanExporter()
+    provider = _provider()
+    stage = materialize_span_processor_stage(
+        _config(tmp_path, persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE),
+        provider,
+        exporter=in_memory,
+    )
+    assert stage.redaction_processor.tokenizer_enabled is False
+
+    tracer = provider.get_tracer("redaction-strip-fallback-test")
+    with tracer.start_as_current_span("anthropic.messages.create") as span:
+        span.set_attribute("gen_ai.input.messages", "customer ssn 123-45-6789")
+    stage.flush(timeout_millis=5000)
+
+    [exported] = in_memory.get_finished_spans()
+    assert "gen_ai.input.messages" not in exported.attributes
 
 
 def test_materialize_attaches_processor_to_provider(tmp_path: Path) -> None:

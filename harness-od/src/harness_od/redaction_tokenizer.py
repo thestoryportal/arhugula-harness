@@ -4,10 +4,9 @@ This module provides the provider-free OD substrate for the tokenization arm of
 C-OD-13 §13.2: content-bearing span attributes can be replaced with opaque
 tokens while the raw value is held behind a token-map sink interface.
 
-The default tokenizer remains category-neutral (`CONTENT`). Callers may opt
-into the provider-free deterministic classifier for conservative category
-labels such as `PII` or `MCP_ARG`; a full eval-grade classifier can implement
-the same protocol without changing the SpanProcessor/token-map seam.
+The default tokenizer remains category-neutral (`CONTENT`). Runtime callers may
+opt into the provider-free eval-grade classifier for category labels such as
+`PII`, `MCP_ARG`, and `GENAI_PROMPT` without making provider calls.
 """
 
 from __future__ import annotations
@@ -20,6 +19,7 @@ from typing import Protocol
 
 __all__ = [
     "DeterministicRedactionClassifier",
+    "EvalGradeSemanticRedactionClassifier",
     "InMemoryRedactionTokenMap",
     "OpaqueRedactionTokenizer",
     "RedactionAttributeClassification",
@@ -76,12 +76,29 @@ def _normalize_category(category: str) -> str:
 
 
 class DeterministicRedactionClassifier:
-    """Provider-free conservative classifier for category-specific tokens.
+    """Backward-compatible alias for the provider-free eval-grade classifier."""
+
+    def __init__(self) -> None:
+        self._classifier = EvalGradeSemanticRedactionClassifier()
+
+    def classify(
+        self,
+        *,
+        attribute_key: str,
+        raw_value: object,
+    ) -> RedactionAttributeClassification:
+        """Classify by explicit attribute shape first, then content cues."""
+        return self._classifier.classify(attribute_key=attribute_key, raw_value=raw_value)
+
+
+class EvalGradeSemanticRedactionClassifier:
+    """Provider-free eval-grade classifier for category-specific tokens.
 
     This is deliberately small and auditable. It is not a replacement for a
-    future eval-grade semantic classifier, but it gives the tokenization seam a
-    concrete category contract and covers obvious high-signal cases without
-    provider calls.
+    provider model; it is the runtime-safe eval classifier used at the
+    pre-collector redaction boundary. Attribute semantics win over raw-content
+    cues so sensitive tool/file/memory surfaces keep stable category labels
+    even when the raw payload is unstructured.
     """
 
     def classify(
@@ -91,21 +108,37 @@ class DeterministicRedactionClassifier:
         raw_value: object,
     ) -> RedactionAttributeClassification:
         """Classify by explicit attribute shape first, then simple content cues."""
-        if attribute_key in {"mcp.tool.call.arguments", "mcp.tool.call.result"}:
+        if attribute_key in {"mcp.tool.call.arguments", "gen_ai.tool.call.arguments"}:
             return RedactionAttributeClassification("MCP_ARG")
+        if attribute_key in {"mcp.tool.call.result", "gen_ai.tool.call.result"}:
+            return RedactionAttributeClassification("TOOL_RESULT")
         if attribute_key == "files.content":
             return RedactionAttributeClassification("FILE")
         if attribute_key == "memory.content":
             return RedactionAttributeClassification("MEMORY")
         if attribute_key == "skill.body_content":
             return RedactionAttributeClassification("SKILL")
+        if attribute_key in {"gen_ai.input.messages", "gen_ai.system_instructions"}:
+            return self._classify_text(raw_value, fallback="GENAI_PROMPT")
+        if attribute_key == "gen_ai.output.messages":
+            return self._classify_text(raw_value, fallback="GENAI_RESPONSE")
+        if attribute_key in {"gen_ai.retrieval.documents", "gen_ai.retrieval.query.text"}:
+            return self._classify_text(raw_value, fallback="RETRIEVAL_CONTENT")
+        return self._classify_text(raw_value, fallback="CONTENT")
 
+    def _classify_text(
+        self,
+        raw_value: object,
+        *,
+        fallback: str,
+    ) -> RedactionAttributeClassification:
+        """Classify raw text cues while preserving a semantic fallback."""
         raw_text = str(raw_value)
         if _SECRET_PATTERN.search(raw_text):
             return RedactionAttributeClassification("SECRET")
         if _SSN_PATTERN.search(raw_text) or _EMAIL_PATTERN.search(raw_text):
             return RedactionAttributeClassification("PII")
-        return RedactionAttributeClassification("CONTENT")
+        return RedactionAttributeClassification(fallback)
 
 
 class RedactionTokenMap(Protocol):
