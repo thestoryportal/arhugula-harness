@@ -552,7 +552,7 @@ R-008-od-4-redaction-partial:
   skills: { primary: phase-7-implementation, secondary: [phase-7-substitution-retirement] }
   advisor_required: conditional:if a gate closure touches a cross-axis contract
   council_required: no
-  verification: { shape: integration, must_pass: ["§13.1 per-session redaction toggle mechanism authored (deferred at PR #25 apply arc) — ✅ MET 2026-06-02 (gate a)", "§13.2 opaque-token tokenization substrate — ✅ OD provider-free substrate authored 2026-06-07; durable audit-ledger token-map persistence — ✅ authored 2026-06-07; provider-free category-token classifier seam — ✅ authored 2026-06-07; eval-grade semantic classifier + runtime multi-tenant audit-backed tokenization — ✅ authored 2026-06-08"] }
+  verification: { shape: integration, must_pass: ["§13.1 per-session redaction toggle mechanism authored (deferred at PR #25 apply arc) — ✅ MET 2026-06-02 (gate a)", "§13.2 opaque-token tokenization substrate — ✅ OD provider-free substrate authored 2026-06-07; durable audit-ledger token-map persistence — ✅ authored 2026-06-07; provider-free category-token classifier seam — ✅ authored 2026-06-07; eval-grade semantic classifier + runtime multi-tenant audit-backed tokenization — ✅ authored 2026-06-07"] }
   close_shape: { type: PR-merge, artifact: "PR closing the remaining OD-4 gates → PARTIAL → RETIRE-READY", cascade: [R-IF-roadmap-refresh] }
   next_pointer: R-007-od-3-sampler-retired
   notes: >
@@ -579,7 +579,7 @@ R-008-od-4-redaction-partial:
     / `RedactionAttributeClassification` plus `DeterministicRedactionClassifier` let the same token path emit
     conservative provider-free category placeholders such as `[REDACTED:PII:<id>]` and `[REDACTED:MCP_ARG:<id>]`,
     and the signed audit token-map entry now persists `audit.redaction_token.semantic_category`. **Runtime classifier
-    + materialization advanced 2026-06-08:** `EvalGradeSemanticRedactionClassifier` now extends the category seam
+    + materialization advanced 2026-06-07:** `EvalGradeSemanticRedactionClassifier` now extends the category seam
     with provider-free attribute-semantic categories (`GENAI_PROMPT`, `GENAI_RESPONSE`, `TOOL_RESULT`,
     `RETRIEVAL_CONTENT`) plus high-signal `PII` / `SECRET` content cues, and stage 4 OD materialization wires
     `MULTI_TENANT_COMPLIANCE` redaction through `OpaqueRedactionTokenizer` + `AuditLedgerRedactionTokenMap` when
