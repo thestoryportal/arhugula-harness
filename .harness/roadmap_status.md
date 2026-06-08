@@ -8,11 +8,11 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `b05aae3c1d4c` |
-| `last_refreshed` | 2026-06-08T11:34:02-06:00 |
-| `git_head` | `a0a8393` (main) — PR #432 R-IF-council-workflow productized. |
+| `workspace_state_hash` | `0896853874a1` |
+| `last_refreshed` | 2026-06-08T12:47:43-06:00 |
+| `git_head` | `e3162c6` (main) — PR #435 optimize-claude-md eval hardening merged after PR #434 R-CXA-1/2 producer-seam spec. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-54.md` |
-| `open_fork_doc_count` | 45 |
+| `open_fork_doc_count` | 47 |
 
 **Hash recipe.** `sha256(git_head[:8] + "|" + sorted_open_pr_csv + "|" + open_fork_doc_count + "|" + latest_retirement_batch_path)[:12]`. See `Project_Roadmap_v1.md` §7.1.
 
@@ -49,15 +49,15 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #435 (`e3162c6`) | 2026-06-08 | **optimize-claude-md self-improvement loop hardening merged.** The skill eval corpus now covers 14 escalating fixture classes plus pointer-check support; this landed after the R-CXA producer-seam spec and is included in the current main refresh anchor. |
+| PR #434 (`83ae8f2`) | 2026-06-08 | **R-CXA-1/2 producer seams specified, not implemented.** Filed `.harness/r-cxa-1-2-producer-seam-spec.md` and two fork docs for `U-CP-78` pause impedance and R-CXA-2 DP-1/2/3 ownership; implementation planning remains deferred until fork ratification. |
 | PR #432 (`a0a8393`) | 2026-06-08 | **R-IF-council-workflow productized.** The existing `/council-workflow` and `/council-generic` commands now resolve to committed `.harness/council/` artifacts: the harness-layer-aware workflow YAML, a generic same-shape workflow YAML, the workflow prose companion, and the context-memory grounding provenance pointer. |
 | PR #430 (`263c2d78`) | 2026-06-08 | **R-901 research-path hygiene merged.** The Phase-9 retirement criteria brief now lives in the reorganized harness research corpus under `.harness/01-planning/01-harness-planning/00-harness-research/`; R-900/R-901, R-600 NotebookLM extract notes, and the dashboard point at the current corpus path. |
 | PR #428 (`04348e3a`) | 2026-06-08 | **R-901 Phase-9 retirement criteria research brief merged.** The brief uses the local Phase-8/retirement-batch corpus, NotebookLM corpus-boundary query, and a supplemental Perplexity query; it recommends research-only closure and returns the selector to genuine producer-gated CXA residuals. |
-| PR #426 (`c223de07`) | 2026-06-08 | **R-900 research placeholder decomposed into R-901.** R-XI-02/R-XI-03 were already RESOLVED, so the selector now points at the explicit Phase-9 retirement criteria research brief; the PR also fixed the SQLite memory backend writer-lock race surfaced by CI. |
-| PR #424 (`3c576f4f`) | 2026-06-08 | **R-CXA-2 CP→IS producer audit merged.** No production caller exists for the remaining HITL rewrite or engine-layer recovery-loop methods; existing workflow-driver pause/resume sites correctly emit `cp.pause-resume-protocol`, not the engine-layer `cp.pause-captured` / `cp.resume-attempted` actions. |
 
 ---
 
-## Outstanding fork docs (45 total — this PR files #45)
+## Outstanding fork docs (47 total — latest additions filed by PR #434)
 
 Sample (highest-leverage open):
 
@@ -101,6 +101,7 @@ The 5 bucket rows below sum to **54** under the batch-54 live ledger (RETIRED 52
 
 | Date | Source | Resolution |
 |---|---|---|
+| 2026-06-08 | **Post-#434/#435 terminating refresh — PR #434 R-CXA-1/2 producer-seam spec merged at `83ae8f2`; PR #435 optimize-claude-md eval hardening merged at `e3162c6`; §12.2 owed follow-on.** | Single-file status/dashboard refresh per §12.2.1. Hash `b05aae3c1d4c` → `0896853874a1` (state at `e3162c6`, PRS empty/unavailable, fork count 47, batch-54). Next action unchanged: `R-CXA-2` then `R-CXA-1`, now gated on ratifying the two new producer-loop fork docs before implementation planning. |
 | 2026-06-08 | **R-CXA-1/2 producer-seam DESIGN/back-flow arc (substantive; NOT a terminating refresh).** Filed `.harness/r-cxa-1-2-producer-seam-spec.md` (3 producer families bucket-classified) + 2 forks (`class_1_fork_u_cp_78_pause_captured_type_impedance.md` Class 1 defect; `class_2_fork_r_cxa_2_producer_loop_ownership.md` Class 2 DP-1/2/3). Producer gaps SPECIFIED-not-implemented; R-CXA-1/2 stay OPEN. Design-phase posture (`.harness/**` + `Project_Roadmap_v1.md` only; zero `design-substrate/**` / `harness-*/src/**`). | Substantive PR → §12.2 owes a follow-on **terminating** `ops: roadmap status refresh`: recompute hash, bump `open_fork_doc_count` 45 → 47, regenerate `tools/dashboard/roadmap.html`. Next action unchanged (`R-CXA-2` then `R-CXA-1`) — now gated on **fork ratification** rather than producer discovery. |
 | 2026-06-08 | **Post-#432 terminating refresh — PR #432 R-IF-council-workflow productization merged at `a0a8393`; §12.2 owed follow-on.** Same session: materialized the `.harness/council/` command targets, added the generic same-shape YAML, refreshed the harness-aware YAML/prose companion, and marked the roadmap row resolved. | Single-file status/dashboard refresh per §12.2.1. Hash `747d5b1264e8` → `b05aae3c1d4c` (state at `a0a8393`, PRS empty/unavailable, fork count 45, batch-54). Next action unchanged: `R-CXA-2` then `R-CXA-1`, both producer-gated and not safely wireable until real upstream producers or design/back-flow amendments appear. |
 | 2026-06-08 | **Post-#430 terminating refresh — PR #430 R-901 research-path hygiene merged at `263c2d78`; §12.2 owed follow-on.** Same session: corrected the R-901 brief location from the obsolete top-level `research/` path into `.harness/01-planning/01-harness-planning/00-harness-research/`, updated R-900/R-901 metadata, and fixed R-600 NotebookLM extract pointers. | Single-file status/dashboard refresh per §12.2.1. Hash `59ece3c52b50` → `747d5b1264e8` (state at `263c2d78`; PRS empty; fork count 45; batch-54). Next action unchanged: `R-CXA-2` then `R-CXA-1`, both producer-gated and not safely wireable until real upstream producers or design/back-flow amendments appear. |
