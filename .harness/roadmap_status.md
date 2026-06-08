@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `7e818d662c54` |
-| `last_refreshed` | 2026-06-07T20:01:20-06:00 |
-| `git_head` | `71140480` (main) — PR #366 R-008 eval-grade redaction tokenization merged. |
+| `workspace_state_hash` | `15eaac9e4017` |
+| `last_refreshed` | 2026-06-07T20:07:02-06:00 |
+| `git_head` | `4bf1989f` (main) — PR #367 post-366 roadmap refresh merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-51.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -404,6 +404,7 @@ The 6 bucket rows below sum to **54** under the ratified **accounting (i)** (RET
 | 2026-06-07 | **Post-#364 roadmap status refresh — PR #364 R-830 live S3 e2e merged at `d19a263`; §12.2 owed follow-on.** | Hash `a8d6d2b6ca5a` → `8762408faaf8` (state at `d19a263f`, PRS empty, fork count 45, batch-51). **Next action:** R-830 S3 cloud-vault path is live-proven; managed-DB remains future optional scope. Other high-value forward work returns to R-411 host/runtime selection, R-CXA-2 engine substrate, R-008 eval-grade classifier, and R-810/R-820 managed integrations. |
 | 2026-06-07 | **Substantive R-008 eval-grade runtime tokenization branch opened from `185567b`; §12.2 owed follow-on after merge.** | Added provider-free `EvalGradeSemanticRedactionClassifier` and wired multi-tenant runtime redaction to audit-backed opaque tokens when an audit sink is available, with fail-closed strip mode preserved otherwise. **Next action:** R-008's runtime code residual is closed; OD-4 accounting label/tally remains unchanged here pending any separate accounting/back-flow decision. Other high-value forward work returns to R-411 host/runtime selection, R-CXA-2 engine substrate, and R-810/R-820 managed integrations. |
 | 2026-06-07 | **Post-#366 roadmap status refresh — PR #366 R-008 eval-grade redaction tokenization merged at `7114048`; §12.2 owed follow-on.** | Hash `8762408faaf8` → `7e818d662c54` (state at `71140480`, PRS empty, fork count 45, batch-51). **Next action:** R-008 runtime code residual is closed; OD-4 remains under its R-700 ratified accounting label unless a separate accounting/back-flow action reclassifies it. Other high-value forward work returns to R-411 host/runtime selection, R-CXA-2 engine substrate, and R-810/R-820 managed integrations. |
+| 2026-06-07 | **Post-#367 corrective fixed-point refresh — PR #367 merged at `4bf1989`; §12.2 anchor re-pin completed.** | Hash `7e818d662c54` → `15eaac9e4017` (state at `4bf1989f`, PRS empty, fork count 45, batch-51). **Next action unchanged:** R-008 runtime code residual is closed; remaining movement is accounting/back-flow only. Other high-value forward work returns to R-411 host/runtime selection, R-CXA-2 engine substrate, and R-810/R-820 managed integrations. |
 
 **Audit protocol exercised across 31 terminating-refresh closures + 2 fresh-session reconciliations + 10 substantive closes + 1 substantive partial + 1 Class 1 fork filing + 1 Class 1 fork resolved-as-defer + 1 operator-approved 3-PR merge cluster + R-XI-01 dashboard build + 1 process-discipline sweep (R-600-pattern-bake-in).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **2026-06-01 session: landed the R-100 tool-step apply cluster (#173/#171/#172), closed R-600-clearance-marker-backfill-survey (#175), built+landed R-XI-01 operator dashboard MVP (#177), and ran the first R-600-pattern-bake-in-sweep (ACTIVE-SURVEYED; v1.14 absorption deferred).** **All Claude-executable substantive arcs are drained.** The deterministic next-action is operator-owned: **(a) run the live R-100 e2e**, and/or **(b)** any operator-scoped design-phase arc (e.g. the `R-600-workflow-v1-14-amendment` the sweep now has evidence for). Remaining Claude-executable mode-agnostic work = MEMORY.md hygiene audit + fork-doc Status cadence sweep; §V/VI/IV gated on MVP-shipped / live e2e.
 
