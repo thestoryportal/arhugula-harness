@@ -277,6 +277,14 @@ r500-multitenant-live-e2e config:
 r830-s3-live-e2e:
     uv run --with boto3 --with 'botocore[crt]' pytest harness-runtime/tests/integration/test_r830_memory_tool_s3_live_e2e.py -v
 
+# Live R-820 Managed Agents proof. Requires ANTHROPIC_API_KEY plus a real
+# non-loopback managed OTLP endpoint. Creates one short usage-billed Anthropic
+# Managed Agents session and emits managed_agents.* telemetry through the
+# managed-cloud collector. Codex must get explicit operator approval before
+# running this command.
+r820-managed-agents-live-e2e config *args:
+    uv run python tools/r820_managed_agents_live_e2e.py {{config}} {{args}}
+
 # ─── operator dashboard (R-XI-01) ──────────────────────────────────────────
 #
 # Local view of the operator roadmap dashboard. Output goes to the gitignored
