@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `8c027fc8b21e` |
-| `last_refreshed` | 2026-06-08T04:51:14-06:00 |
-| `git_head` | `35ffce41` (main) — PR #400 dashboard currentness discipline merged. |
+| `workspace_state_hash` | `b0db307f9ac8` |
+| `last_refreshed` | 2026-06-08T05:07:06-06:00 |
+| `git_head` | `7c2b5dda` (main) — PR #402 R-CXA-2 bounded-status refresh merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-53.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -51,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| PR #400 (`35ffce4`) | 2026-06-08 | **Dashboard currentness discipline merged.** `generate.py` now derives visible `HEAD` / `LAST` / `HASH` / `OPEN FORKS` plus closure copy counts from live git/filesystem/roadmap inputs; Codex and Claude context now surface the generator-owned refresh rule. |
-| PR #398 (`f3324e7`) | 2026-06-08 | **Dashboard copy/count fix merged.** Build-closure copy now derives the non-retired row count instead of carrying stale `8 rows below` text; activation count remains derived from the forward catalog and is covered at 6/20. |
-| PR #397 (`9569bfa`) | 2026-06-08 | **Post-#396 roadmap refresh merged.** Re-pinned roadmap status/dashboard after the section-03/04 status-filter feature and refreshed latest-five reporting. No R-NNN state changed beyond #396. |
-| PR #396 (`5534008`) | 2026-06-08 | **Dashboard status filters merged.** Sections 03 and 04 now have independent status-toggle controls; `closed` defaults hidden while other status labels default visible. Regenerated the dashboard snapshot and added focused generator coverage. |
-| PR #395 (`a9293c5`) | 2026-06-08 | **Next-action section refresh merged.** Section 02 was pruned from a chronological archive into a compact forward-work selector; section 08 was refreshed to current latest-five reporting. |
+| PR #402 (`7c2b5dda`) | 2026-06-08 | **R-CXA-2 bounded-status refresh merged.** Roadmap, forward register, status, dashboard generator, and dashboard snapshot now report the current 3/6 CP→IS posture: workload selection fires through production callers; remaining closure waits on a real HITL rewrite caller and engine recovery-loop producers. |
+| PR #401 (`03abfad3`) | 2026-06-08 | **Post-#400 roadmap refresh merged.** Re-pinned the roadmap/dashboard fixed point after the dashboard currentness discipline update. |
+| PR #400 (`35ffce41`) | 2026-06-08 | **Dashboard currentness discipline merged.** `generate.py` now derives visible `HEAD` / `LAST` / `HASH` / `OPEN FORKS` plus closure copy counts from live git/filesystem/roadmap inputs; Codex and Claude context now surface the generator-owned refresh rule. |
+| PR #399 (`66a03e81`) | 2026-06-08 | **Post-#398 roadmap refresh merged.** Re-pinned the roadmap/dashboard after the derived closure-copy count fix. |
+| PR #398 (`f3324e7b`) | 2026-06-08 | **Dashboard copy/count fix merged.** Build-closure copy now derives the non-retired row count instead of carrying stale `8 rows below` text; activation count remains derived from the forward catalog and is covered at 6/20. |
 
 ---
 
@@ -259,6 +259,7 @@ The 5 bucket rows below sum to **54** under the batch-53 live ledger (RETIRED 51
 | 2026-06-08 | **Substantive R-810 real Anthropic Files API closure branch opened from `c47bfb67`; §12.2 owed follow-on after merge.** | Added the real Anthropic Files API SDK adapter, Messages document-file reference helper, Batch request composition helper, and live managed-cloud e2e command. Operator-approved live proof passed: uploaded `file_011CbqJqTs21yENfK4xfEpqp`, referenced it by file_id with sentinel response, composed Batch request shape, exported `files.operation` to the authenticated managed collector, and observed Cloud Trace `bfd28fa8fc8ecc3ba973d1e405cdb865` with `files.*` attrs. Cleanup retry returned Anthropic 404, so the file is gone; temporary GCP TokenCreator IAM was removed. **Next action:** after merge, run the normal status/dashboard fixed-point refresh; R-411 remains host-gated on a compatible Linux sandbox host/runtime selected as Linux + Docker + gVisor/runsc first, Kata on Linux/KVM next. |
 | 2026-06-08 | **Post-#383 roadmap status refresh — PR #383 R-810 real Anthropic Files integration merged at `eaeff26`; §12.2 owed follow-on.** | Hash `6f171e13d3f7` → `e18ae354b8f0` (state at `eaeff26f`, PRS empty/unavailable, fork count 45, batch-51). **Next action:** R-810 is RESOLVED by the live Anthropic Files upload/reference/delete path plus managed-cloud `files.operation` Cloud Trace proof. R-411 remains host-gated on a compatible Linux sandbox host/runtime; the selected no-taxonomy-change stack is Linux + Docker + gVisor/runsc first, Kata on Linux/KVM next. If no compatible Linux host is available, continue to the next implementable integration/deployment arc rather than re-litigating Intel macOS R-411 closure. |
 | 2026-06-08 | **Post-#385 roadmap status refresh — PR #385 R-411 gVisor/runsc execution provider merged at `300009e`; §12.2 owed follow-on.** | R-411 is RESOLVED by the selected Docker + gVisor/runsc path on the operator-provisioned Lima Linux VM. The normal fixed-point refresh updates the status banner from PR TBD to PR #385 and re-pins the dashboard to the merged R-411 closure state. **Next action:** R-412 remains deferred on a separate full-VM/Firecracker provider path; remaining high-value open work returns to accounting/back-flow items and any operator-selected future integration arc. |
+| 2026-06-08 | **Post-#402 roadmap status refresh — PR #402 R-CXA-2 bounded-status refresh merged at `7c2b5dda`; §12.2 owed follow-on.** | Hash `8c027fc8b21e` → `b0db307f9ac8` (state at `7c2b5dda`, PRS empty/unavailable, fork count 45, batch-53). **Next action unchanged:** R-CXA-1 remains producer-gated, R-CXA-2 remains STILL-BOUNDED on future HITL rewrite / engine recovery-loop producers, R-CXA-3 remains composer/scope gated, and activation/research options remain R-412, R-830, R-XI-02/R-XI-03/R-900 by operator discretion. |
 
 **Audit protocol exercised across 31 terminating-refresh closures + 2 fresh-session reconciliations + 10 substantive closes + 1 substantive partial + 1 Class 1 fork filing + 1 Class 1 fork resolved-as-defer + 1 operator-approved 3-PR merge cluster + R-XI-01 dashboard build + 1 process-discipline sweep (R-600-pattern-bake-in).** Discipline + enforcement layers operational; hook hardened against the local-behind-origin drift class at PR #140. **2026-06-01 session: landed the R-100 tool-step apply cluster (#173/#171/#172), closed R-600-clearance-marker-backfill-survey (#175), built+landed R-XI-01 operator dashboard MVP (#177), and ran the first R-600-pattern-bake-in-sweep (ACTIVE-SURVEYED; v1.14 absorption deferred).** **All Claude-executable substantive arcs are drained.** The deterministic next-action is operator-owned: **(a) run the live R-100 e2e**, and/or **(b)** any operator-scoped design-phase arc (e.g. the `R-600-workflow-v1-14-amendment` the sweep now has evidence for). Remaining Claude-executable mode-agnostic work = MEMORY.md hygiene audit + fork-doc Status cadence sweep; §V/VI/IV gated on MVP-shipped / live e2e.
 
