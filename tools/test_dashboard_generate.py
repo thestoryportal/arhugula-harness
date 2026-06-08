@@ -98,6 +98,20 @@ def test_activation_open_count_matches_current_forward_catalog():
     assert closure["activation"]["total"] == 20
 
 
+def test_resolved_r411_r412_do_not_appear_in_remaining_cards():
+    generate = _load_generate_module()
+    roadmap = (Path(__file__).parents[1] / "Project_Roadmap_v1.md").read_text(encoding="utf-8")
+    actions = generate.parse_roadmap_actions(roadmap)
+
+    closure = generate.compute_closure(actions, {"retirement": {}})
+
+    remaining_text = "\n".join(
+        f"{item['id']} {item['label']} {item['gate']}" for item in closure["remaining"]
+    )
+    assert "R-411" not in remaining_text
+    assert "R-412" not in remaining_text
+
+
 def test_live_anchor_derives_masthead_values_from_git_and_filesystem(tmp_path):
     generate = _load_generate_module()
 

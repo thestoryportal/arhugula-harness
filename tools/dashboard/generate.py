@@ -183,13 +183,6 @@ REMAINING_ORDERED = [
         "gate": "Small spec decision — independent.",
     },
     {
-        "n": 9,
-        "layer": "activation",
-        "id": "R-411 → R-412",
-        "label": "Higher-tier sandboxes: microVM → full VM",
-        "gate": "R-411 is resolved by Docker + gVisor/runsc on the provisioned Lima Linux VM; R-412 is resolved by the managed E2B full-VM provider path.",
-    },
-    {
         "n": 10,
         "layer": "activation",
         "id": "R-300-multi-llm-second-provider",
