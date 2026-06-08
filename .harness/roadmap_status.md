@@ -29,7 +29,7 @@
 **Ordered frontier.**
 
 - `R-CXA-1` - AS->IS secret-fetch audit seam. Proceed only if a real AS secret-fetch producer or scope-bearing caller exists; otherwise record the producer gap and move on.
-- `R-CXA-2` - CP->IS engine/HITL seam. Proceed only where upstream engine or HITL loops exist; avoid placeholder caller wiring.
+- `R-CXA-2` - CP->IS future HITL rewrite / engine recovery-loop producers. Proceed only if a real upstream producer exists; avoid placeholder caller wiring.
 - `R-CXA-3` - CP->AS seam. Needs a CP->AS runtime composer or a scope-narrowing decision.
 - `R-412` - full-VM provider lane. Deferred until full-VM provider infrastructure or selection exists.
 - `R-830` - optional managed-DB backend. Only if the operator chooses managed-DB scope beyond the completed SQLite/S3 slices.
@@ -91,7 +91,7 @@ The 5 bucket rows below sum to **54** under the batch-53 live ledger (RETIRED 51
 | RETIRED | **51/54 (94.4%)** live (batch-53) | 41 substantive + 8 authoring-only + 2 bounded-residual (CP-16, OD-6). IS 9/9; AS 11/11; CP 21/21; OD 8/8; CXA 2/5. Phase-8 historical declaration remains 46/54; batch-52 added AS-8e, AS-8f, and CP-17 after R-810/R-820 live proofs; batch-53 adds OD-4 and CXA-4 after accounting/back-flow. |
 | RETIRE-READY | **0 active (bucket EMPTY post-batch-51)** | OD-3 + OD-6 transited RETIRE-READY → RETIRED at batch-51 (PR #200). |
 | PARTIAL | **1 — CXA-1** (pipeline-advanced; NOT in the 51) | CXA-1 remains PARTIAL because the AS→IS secret-fetch/audit seam still has no real production producer / scope-bearing caller. OD-4 and CXA-4 moved to RETIRED at batch-53; their prior labels remain historical provenance only. |
-| STILL-BOUNDED | **2 — CXA-2 + CXA-3** (Phase-2-runtime-deferred) | CP→IS (R-CXA-2, gates on STRUCK engine substrate) + CP→AS (R-CXA-3, no runtime composer). |
+| STILL-BOUNDED | **2 — CXA-2 + CXA-3** (Phase-2-runtime-deferred) | CP→IS (R-CXA-2, gates on future HITL rewrite / engine recovery-loop producers) + CP→AS (R-CXA-3, no runtime composer). |
 | RETIRED-AS-AUTHORING-ONLY | **8** (of the 51 RETIRED) | accounting (i): IS-4, IS-10, AS-9, CP-12, CP-23, OD-1, OD-7, OD-8 (accounting (ii) = 9, adds CP-24). The H_T contract is the typed declaration itself; no runtime behavior (sub-species 10 categorical-mismatch). |
 | RETIRED-AS-BOUNDED-RESIDUAL | **2** (of the 51 RETIRED — *counted*) | CP-16 (memory, batch-44) + OD-6 (OTLP, batch-51 — FIRST in ledger). Production substrate dormant at MVP; substantive close deferred to a real deployment surface (X-AL-2 §5.3). |
 
