@@ -520,4 +520,21 @@ The `harness-od/CLAUDE.md` §4.1 OD-6 RETIRE-READY classification (batch-33) is 
 
 ---
 
-*End of phase-7d-retirement-ledger v2 (second pass against Phase 2 runtime closure) + 2026-05-27 supersession refresh + 2026-06-02 Phase-8 graduation supersession (§11.7) + 2026-06-08 post-Phase-8 back-flow (§11.8) + 2026-06-08 OD-4/CXA-4 back-flow (§11.9).*
+### §11.10 Post-Phase-8 CXA-3 runtime-composer back-flow (2026-06-08)
+
+**Trigger.** The operator rejected Memory-only/current-MVP scope narrowing for R-CXA-3 and directed the CP→AS runtime-composer path. The implementation lands `RuntimeCpAsWiring`, binds it during stage 6, and exposes it as `HarnessContext.cp_as_wiring`. Batch-54 records the forward-only accounting transit.
+
+**Live ledger accounting after batch-54:**
+
+| Metric | Live ledger | Phase-8 declaration |
+|---|---|---|
+| RETIRED | **52/54 (96.3%)** | 46/54 (85.2%) |
+| Pipeline-advanced | **53/54 (98.1%)** | 49/54 (90.7%) |
+
+**Disposition delta:** CXA-3 moves from `STILL_BOUNDED` to `SUBSTANTIVE_RETIRED`. The remaining non-RETIRED rows are CXA-1 (`PARTIAL`) and CXA-2 (`STILL_BOUNDED`).
+
+**Historical boundary.** §11.7 and `.harness/phase-8-graduation.md` remain the historical Phase-8 declaration; §11.8 and §11.9 remain the batch-52 and batch-53 back-flow records. This §11.10 is a post-Phase-8 runtime-composer supersession for the live ledger only.
+
+---
+
+*End of phase-7d-retirement-ledger v2 (second pass against Phase 2 runtime closure) + 2026-05-27 supersession refresh + 2026-06-02 Phase-8 graduation supersession (§11.7) + 2026-06-08 post-Phase-8 back-flow (§11.8) + 2026-06-08 OD-4/CXA-4 back-flow (§11.9) + 2026-06-08 CXA-3 runtime-composer back-flow (§11.10).*

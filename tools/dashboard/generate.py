@@ -74,11 +74,11 @@ ANNOTATIONS = {
     # BLOCKED
     "R-008-od-4-redaction-partial": "Resolved by batch-53: the runtime redaction residual is closed and OD-4 is back-flowed into the live substitution ledger.",
     "R-100-mvp-config-discovery": "Waiting on a small decision: auto-find the config file at the project root, or drop that behavior from the spec.",
-    "R-700-phase-8-substitution-accounting": "RESOLVED — Phase 8 declared CLOSED at 46/54, then post-R-810/R-820 plus OD-4/CXA-4 back-flow advanced the live ledger to 51/54 retired.",
+    "R-700-phase-8-substitution-accounting": "RESOLVED — Phase 8 declared CLOSED at 46/54, then post-R-810/R-820 plus OD-4/CXA-4 and CXA-3 back-flow advanced the live ledger to 52/54 retired.",
     # DEFERRED (parked by design)
     "R-005-as-8e-files-indefinite": "Resolved by R-810 and back-flowed into the substitution ledger at batch-52.",
     "R-006-as-8f-managed-agents-indefinite": "Resolved by R-820 and back-flowed into the substitution ledger at batch-52.",
-    "R-CXA-3-cp-as-seam": "Parked until either a real CP→AS runtime composer is authored or you narrow its scope; no in-workspace producer exists now.",
+    "R-CXA-3-cp-as-seam": "Resolved by batch-54: the CP→AS runtime composer now binds CP-consumed AS terminal seam exports at stage 6.",
     "R-810-files-api-integration": "Resolved by the real Anthropic Files upload/reference/delete path plus managed-cloud files.operation Cloud Trace proof.",
     "R-820-managed-agents-integration": "Resolved by the real Anthropic Managed Agents SDK/session integration plus managed-cloud managed_agents.* Cloud Trace proof.",
     # PROPOSED (queued; most need credentials or infrastructure only you can provide)
@@ -100,7 +100,7 @@ ANNOTATIONS = {
     "R-XI-03": "Dashboard live-update mode; nice-to-have, nothing blocking it.",
 }
 
-# The 3 non-RETIRED substitution-ledger rows (the "is the harness built" view).
+# The 2 non-RETIRED substitution-ledger rows (the "is the harness built" view).
 # state ∈ {PARTIAL, STILL-BOUNDED, STILL-BOUNDED-INDEFINITELY}. `retire` = can/should we
 # proceed to retire it, in plain terms.
 NONRETIRED_LEDGER = [
@@ -117,13 +117,6 @@ NONRETIRED_LEDGER = [
         "state": "STILL-BOUNDED",
         "why": "The CP→IS seam is still bounded; the materialized pause/resume caller sites are covered, but the broader §12.3 edge set is not.",
         "retire": "Not yet — needs a real HITL rewrite production caller plus engine recovery-loop producers for pause capture/resume attempt.",
-    },
-    {
-        "id": "CXA-3",
-        "rnnn": "R-CXA-3",
-        "state": "STILL-BOUNDED",
-        "why": "The CP→AS seam has no runtime composer.",
-        "retire": "Not without either building one (a Files arc) or narrowing its scope. Low priority — operator discretion.",
     },
 ]
 
@@ -151,7 +144,7 @@ REMAINING_ORDERED = [
         "layer": "build",
         "id": "R-700-phase-8-substitution-accounting",
         "label": "Ratify the final retirement count",
-        "gate": "RESOLVED — Phase 8 declared CLOSED at 46/54; batch-53 back-flow now reports 51/54 retired.",
+        "gate": "RESOLVED — Phase 8 declared CLOSED at 46/54; batch-54 back-flow now reports 52/54 retired.",
     },
     {
         "n": 2,
@@ -204,8 +197,8 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
 
     build      — substitution-ledger retirement (the canonical 'is H_T built'
                  metric). DERIVED from `.harness/substitutions.yaml` (R-600);
-                 R-700 ratified the Phase-8 integer (46/54); batch-53
-                 back-flow advances the live ledger to 51/54.
+                 R-700 ratified the Phase-8 integer (46/54); batch-54
+                 back-flow advances the live ledger to 52/54.
     activation — the post-Phase-8 forward axis (deployment / integration);
                  exercised items are tracked separately from remaining build work.
     """
@@ -220,10 +213,10 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
         n_sbi = _bd.get("SB_INDEFINITE", 0)
     else:
         total = 54
-        retired = 51
         n_partial = sum(1 for r in NONRETIRED_LEDGER if r["state"] == "PARTIAL")
         n_sb = sum(1 for r in NONRETIRED_LEDGER if r["state"] == "STILL-BOUNDED")
         n_sbi = sum(1 for r in NONRETIRED_LEDGER if r["state"] == "STILL-BOUNDED-INDEFINITELY")
+        retired = total - n_partial - n_sb - n_sbi
     # forward-axis items = post-Phase-8 surfaces + CXA seams (open ones only)
     fwd = [
         a

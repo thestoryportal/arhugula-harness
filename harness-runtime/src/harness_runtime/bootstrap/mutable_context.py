@@ -420,6 +420,11 @@ class _MutableHarnessContext:
                 if "cp_is_wiring" in self.cxa_stages
                 else None
             ),
+            cp_as_wiring=(
+                self.cxa_stages["cp_as_wiring"].wiring
+                if "cp_as_wiring" in self.cxa_stages
+                else None
+            ),
             procedural_tier_snapshot_resolver=self.procedural_tier_snapshot_resolver,
         )
         self.frozen = ctx

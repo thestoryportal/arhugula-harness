@@ -8,10 +8,10 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `2bfceec9d20f` |
-| `last_refreshed` | 2026-06-08T08:53:49-06:00 |
-| `git_head` | `10bb3d51` (main) — PR #418 re-pinned the post-#417 roadmap/status/dashboard fixed point. |
-| `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-53.md` |
+| `workspace_state_hash` | `819760575631` |
+| `last_refreshed` | 2026-06-08T09:11:15-06:00 |
+| `git_head` | `86e6e3e0` (main) — R-CXA-3 CP→AS runtime-composer branch base after PR #419. |
+| `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-54.md` |
 | `open_fork_doc_count` | 45 |
 
 **Hash recipe.** `sha256(git_head[:8] + "|" + sorted_open_pr_csv + "|" + open_fork_doc_count + "|" + latest_retirement_batch_path)[:12]`. See `Project_Roadmap_v1.md` §7.1.
@@ -22,7 +22,7 @@
 
 **Purpose.** Section 02 is the immediate forward-work selector. It should name the next Claude/Codex-executable frontier after the latest status refresh; completion history belongs in `Recently completed`, the drift log, the forward register, and the retirement ledger.
 
-**Current state.** Phase 8 substitution accounting is closed. The live ledger is 51/54 `RETIRED` and 52/54 pipeline-advanced. The only non-`RETIRED` substitution rows are `CXA-1`, `CXA-2`, and `CXA-3`.
+**Current state.** Phase 8 substitution accounting is closed. The live ledger is 52/54 `RETIRED` and 53/54 pipeline-advanced. The only non-`RETIRED` substitution rows are `CXA-1` and `CXA-2`.
 
 **Selection rule.** If no exact `ACTIVE` row is derivable, do not park. Choose the highest-value forward item below, ground it against current code/spec state, build to the genuine gate, and stop only for a real decision, credential, paid call, or irreversible action.
 
@@ -30,10 +30,9 @@
 
 - `R-CXA-1` - AS->IS secret-fetch audit seam. Proceed only if a real AS secret-fetch producer or scope-bearing caller exists; otherwise record the producer gap and move on.
 - `R-CXA-2` - CP->IS future HITL rewrite / engine recovery-loop producers. Proceed only if a real upstream producer exists; avoid placeholder caller wiring.
-- `R-CXA-3` - CP->AS seam. Needs a CP->AS runtime composer or a scope-narrowing decision.
 - `R-XI-02` / `R-XI-03` / `R-900` - dashboard/research arcs by operator discretion.
 
-**Do not re-open as next action.** `R-411`, `R-412`, `R-420`, `R-421`, `R-430`, `R-500`, `R-810`, `R-820`, `R-830`, `R-008` / OD-4, and `R-CXA-4` are already closed or back-flowed.
+**Do not re-open as next action.** `R-411`, `R-412`, `R-420`, `R-421`, `R-430`, `R-500`, `R-810`, `R-820`, `R-830`, `R-008` / OD-4, `R-CXA-3`, and `R-CXA-4` are already closed or back-flowed.
 
 ---
 
@@ -49,11 +48,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| R-CXA-3 (`batch-54`) | 2026-06-08 | **CP→AS runtime composer branch in progress.** `RuntimeCpAsWiring` binds CP-consumed AS terminal seam exports at bootstrap stage 6 and exposes `HarnessContext.cp_as_wiring`; batch-54 moves H_T-CXA-3 to `SUBSTANTIVE_RETIRED`. |
 | PR #418 (`10bb3d51`) | 2026-06-08 | **Post-#417 fixed-point refresh merged.** Re-pinned roadmap status/dashboard after the R-830 managed-DB closure; R-830 is now in the closed/do-not-reopen set and the ordered frontier returns to CXA producer/composer gates plus optional research/dashboard arcs. |
 | PR #417 (`601d32ce`) | 2026-06-08 | **R-830 managed-DB backend merged.** Added `ManagedSqlMemoryToolBackend`, PostgreSQL factory binding, provider-free coverage, the live e2e recipe/test, and recorded the operator-approved Neon PostgreSQL create/view/str_replace/insert/delete proof. |
 | PR #413 (`b4531d31`) | 2026-06-08 | **R-830 roadmap/status back-flow merged.** R-830 no longer carries a pending S3/cloud-vault blocker; completed filesystem, SQLite, and S3 slices remain recorded, and only optional managed-DB remains future scope. |
 | PR #411 (`7e972f27`) | 2026-06-08 | **Post-#410 fixed-point refresh merged.** Refreshed the roadmap status/dashboard after the R-411/R-412 remaining-card correction and re-established the expected lag-by-one fixed point. |
-| PR #410 (`c57da7f7`) | 2026-06-08 | **Dashboard remaining-card correction merged.** Removed the hard-coded `R-411 → R-412` card from `closure.remaining`, regenerated the dashboard, and added a regression proving resolved R-411/R-412 text cannot appear in the remaining cards. |
 
 ---
 
@@ -80,16 +79,16 @@ Sample (highest-leverage open):
 
 ## Phase 7 retirement progress
 
-> **🎓 PHASE-8 GRADUATION + BATCH-53 LIVE LEDGER.** The R-700 reconciliation is CLOSED — the operator ratified **accounting (i)** (PR #246) and lifted the declaration hold. Historical declaration: **RETIRED 46/54 (85.2%) + pipeline-advanced 49/54 (90.7%)**. Batch-52 back-flowed the live R-810/R-820 evidence for AS-8e, AS-8f, and CP-17; batch-53 back-flows the OD-4 runtime residual and the 0-wireable CXA-4 bookkeeping row: **live ledger RETIRED 51/54 (94.4%) + pipeline-advanced 52/54 (96.3%)**. Prior batch records stand verbatim; this section reports the current live 54-row set derived from `.harness/substitutions.yaml`.
+> **🎓 PHASE-8 GRADUATION + BATCH-54 LIVE LEDGER.** The R-700 reconciliation is CLOSED — the operator ratified **accounting (i)** (PR #246) and lifted the declaration hold. Historical declaration: **RETIRED 46/54 (85.2%) + pipeline-advanced 49/54 (90.7%)**. Batch-52 back-flowed the live R-810/R-820 evidence for AS-8e, AS-8f, and CP-17; batch-53 back-flows the OD-4 runtime residual and the 0-wireable CXA-4 bookkeeping row; batch-54 lands the CP→AS runtime composer: **live ledger RETIRED 52/54 (96.3%) + pipeline-advanced 53/54 (98.1%)**. Prior batch records stand verbatim; this section reports the current live 54-row set derived from `.harness/substitutions.yaml`.
 
-The 5 bucket rows below sum to **54** under the batch-53 live ledger (RETIRED 51).
+The 5 bucket rows below sum to **54** under the batch-54 live ledger (RETIRED 52).
 
 | Bucket | Count | Notes |
 |---|---|---|
-| RETIRED | **51/54 (94.4%)** live (batch-53) | 41 substantive + 8 authoring-only + 2 bounded-residual (CP-16, OD-6). IS 9/9; AS 11/11; CP 21/21; OD 8/8; CXA 2/5. Phase-8 historical declaration remains 46/54; batch-52 added AS-8e, AS-8f, and CP-17 after R-810/R-820 live proofs; batch-53 adds OD-4 and CXA-4 after accounting/back-flow. |
+| RETIRED | **52/54 (96.3%)** live (batch-54) | 42 substantive + 8 authoring-only + 2 bounded-residual (CP-16, OD-6). IS 9/9; AS 11/11; CP 21/21; OD 8/8; CXA 3/5. Phase-8 historical declaration remains 46/54; batch-52 added AS-8e, AS-8f, and CP-17 after R-810/R-820 live proofs; batch-53 adds OD-4 and CXA-4 after accounting/back-flow; batch-54 adds CXA-3 after the CP→AS runtime composer landed. |
 | RETIRE-READY | **0 active (bucket EMPTY post-batch-51)** | OD-3 + OD-6 transited RETIRE-READY → RETIRED at batch-51 (PR #200). |
-| PARTIAL | **1 — CXA-1** (pipeline-advanced; NOT in the 51) | CXA-1 remains PARTIAL because the AS→IS secret-fetch/audit seam still has no real production producer / scope-bearing caller. OD-4 and CXA-4 moved to RETIRED at batch-53; their prior labels remain historical provenance only. |
-| STILL-BOUNDED | **2 — CXA-2 + CXA-3** (Phase-2-runtime-deferred) | CP→IS (R-CXA-2, gates on future HITL rewrite / engine recovery-loop producers) + CP→AS (R-CXA-3, no runtime composer). |
+| PARTIAL | **1 — CXA-1** (pipeline-advanced; NOT in the 52) | CXA-1 remains PARTIAL because the AS→IS secret-fetch/audit seam still has no real production producer / scope-bearing caller. OD-4 and CXA-4 moved to RETIRED at batch-53; CXA-3 moved to RETIRED at batch-54. |
+| STILL-BOUNDED | **1 — CXA-2** (Phase-2-runtime-deferred) | CP→IS (R-CXA-2) gates on future HITL rewrite / engine recovery-loop producers. |
 | RETIRED-AS-AUTHORING-ONLY | **8** (of the 51 RETIRED) | accounting (i): IS-4, IS-10, AS-9, CP-12, CP-23, OD-1, OD-7, OD-8 (accounting (ii) = 9, adds CP-24). The H_T contract is the typed declaration itself; no runtime behavior (sub-species 10 categorical-mismatch). |
 | RETIRED-AS-BOUNDED-RESIDUAL | **2** (of the 51 RETIRED — *counted*) | CP-16 (memory, batch-44) + OD-6 (OTLP, batch-51 — FIRST in ledger). Production substrate dormant at MVP; substantive close deferred to a real deployment surface (X-AL-2 §5.3). |
 

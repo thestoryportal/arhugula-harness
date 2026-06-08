@@ -1,4 +1,4 @@
-"""Stage 6 CXA_WIRING — terminal manifest import + 5 cross-axis wiring composers.
+"""Stage 6 CXA_WIRING — terminal manifest import + cross-axis wiring composers.
 
 Per `Spec_Harness_Runtime_v1.md` v1.1 §2 stage 6 post-conditions: all 5
 terminal exporter manifests imported; all 24 phase-2-runtime edges wired
@@ -13,7 +13,8 @@ Composer call order:
 4. `materialize_od_is_wiring_stage(config, audit_writer, od_manifest)` — OD→IS
    (2 edges).
 5. `materialize_od_as_wiring_stage(config, od_manifest)` — OD→AS (1 edge).
-6. `materialize_od_cp_wiring_stage(config, od_manifest)` — OD→CP (3 edges,
+6. `materialize_cp_as_wiring_stage(config)` — CP→AS runtime registry.
+7. `materialize_od_cp_wiring_stage(config, od_manifest)` — OD→CP (3 edges,
    includes F-CP-01 Stage 3b inversion verification).
 
 The 5 wiring composers' returned `*Stage` records are stashed on
@@ -33,6 +34,7 @@ from harness_od.substrate_seam_exports_aggregate_manifest import (
 
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.lifecycle.as_is_wiring import materialize_as_is_wiring_stage
+from harness_runtime.lifecycle.cp_as_wiring import materialize_cp_as_wiring_stage
 from harness_runtime.lifecycle.cp_is_wiring import materialize_cp_is_wiring_stage
 from harness_runtime.lifecycle.cxa_terminal_imports import (
     materialize_cxa_terminal_imports_stage,
@@ -96,6 +98,7 @@ async def execute(
         config,
         od_manifest,
     )
+    ctx.cxa_stages["cp_as_wiring"] = materialize_cp_as_wiring_stage(config)
     ctx.cxa_stages["od_cp_wiring"] = materialize_od_cp_wiring_stage(
         config,
         od_manifest,

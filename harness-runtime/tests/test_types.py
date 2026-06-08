@@ -194,6 +194,9 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         # `object | None` to avoid CP-axis dependency on harness-runtime
         # (workspace dep-graph discipline).
         "cp_is_wiring",
+        # R-CXA-3 — RuntimeCpAsWiring stage-6 binding for CP-consumed AS
+        # terminal seam exports. Typed `object | None` mirroring cp_is_wiring.
+        "cp_as_wiring",
         # R-003 Cluster B — procedural-tier resolver binding surface. Bound at
         # bootstrap stage 6 to make_procedural_tier_snapshot_resolver(ctx);
         # consumed by the CP driver's _append_step_ledger_entry per-step ledger
