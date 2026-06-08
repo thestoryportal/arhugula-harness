@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `e1ad205569f7` |
-| `last_refreshed` | 2026-06-08T02:47:27-06:00 |
-| `git_head` | `4ac06388` (branch base) — PR #388 fixed-point refresh merged. |
+| `workspace_state_hash` | `3cc1a7046dde` |
+| `last_refreshed` | 2026-06-08T02:53:44-06:00 |
+| `git_head` | `03553798` (main) — PR #389 accounting/back-flow merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-52.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -25,6 +25,8 @@
 > **🎓 PHASE 8 CLOSED — substitution accounting DECLARED 2026-06-02 (`.harness/phase-8-graduation.md`).** The operator lifted the HELD R-700 declaration ("kick off the declaration"); item 4 executed. **Historical declaration: 46/54 RETIRED (85.2%) + 49/54 pipeline-advanced (90.7%)** (operator-ratified accounting (i)). The deferred 48→46 supersession was applied forward (ledger §11.7 + harness-cp/CLAUDE.md + this dashboard; prior batch records stand verbatim). **Batch-52 then back-flowed R-810/R-820 live evidence for AS-8e, AS-8f, and CP-17, so the live ledger is now 49/54 RETIRED (90.7%) + 52/54 pipeline-advanced (96.3%).** `R-700` remains RESOLVED; Phase 7's historical declaration is not rewritten. The remaining honest frontier is now the five non-RETIRED rows: OD-4, CXA-1, CXA-2, CXA-3, and CXA-4.
 
 **(This session — 2026-06-08. PR TBD.)** Filed batch-52 and completed the accounting/back-flow for the three formerly accepted-indefinite-defer rows now backed by live integration evidence. R-810's real Anthropic Files upload/reference/delete + managed-cloud `files.operation` Cloud Trace proof moves AS-8e and CP-17 to `SUBSTANTIVE_RETIRED`; R-820's real Managed Agents SDK/session + managed-cloud `managed_agents.*` Cloud Trace proof moves AS-8f to `SUBSTANTIVE_RETIRED`. Live ledger delta: RETIRED 46/54 → 49/54, pipeline-advanced 49/54 → 52/54, `SB_INDEFINITE` 3/54 → 0/54. The Phase-8 declaration remains historical at 46/49; `.harness/substitutions.yaml` + `.harness/phase-7d-retirement-events-batch-52.md` are the forward live-count authority.
+
+**(This refresh — 2026-06-08. PR TBD.)** Re-pinned the roadmap status/dashboard to the post-#389 merge commit. No R-NNN state changed beyond the batch-52 accounting/back-flow already recorded by #389; this refresh exists so the next default-branch audit sees the current `workspace_state_hash` at `03553798`.
 
 **(This audit — 2026-06-08.)** Audited roadmap reporting surfaces after PR #386. Found no contrary implementation state in `Project_Roadmap_v1.md` for the recent closures, but the forward register and dashboard-derived summary text still carried stale labels for Phase-8 residuals, R-430, R-500, R-820, R-008, and R-830. Corrected the register so closed items are no longer advertised as open/deferred, clarified that R-008's remaining movement is accounting/back-flow rather than another runtime gate, and clarified that R-830's S3 cloud-vault path is live-proven while managed-DB remains optional future scope. Regenerated `tools/dashboard/roadmap.html` from the corrected status/register surfaces.
 
