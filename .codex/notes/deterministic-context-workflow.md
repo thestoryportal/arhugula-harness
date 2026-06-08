@@ -148,6 +148,13 @@ explicitly reported as not applicable:
 - clearance markers for design/spec/plan amendments
 - memory entries when a pattern reaches the memory threshold
 
+Dashboard snapshots have a stricter currentness rule: `.harness/roadmap_status.md`
+is refreshed first, then `tools/dashboard/roadmap.html` is regenerated only with
+`python3 tools/dashboard/generate.py --root .`. Do not hand-edit the snapshot or
+copy volatile masthead values into it. `generate.py` derives visible `HEAD`,
+`LAST`, `HASH`, `OPEN FORKS`, closure counts, and status-filter state from live
+git/filesystem/roadmap inputs so stale count prose does not become durable UI.
+
 The PR body or final response must report implementation status, verification,
 tracking updates, and any owed follow-on refresh.
 

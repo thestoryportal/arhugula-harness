@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `c3801ec8f4e6` |
-| `last_refreshed` | 2026-06-08T04:25:56-06:00 |
-| `git_head` | `f3324e7b` (main) — PR #398 dashboard copy/count fix merged. |
+| `workspace_state_hash` | `5edbe37cada6` |
+| `last_refreshed` | 2026-06-08T06:00:00-06:00 |
+| `git_head` | `66a03e81` (main) — PR #399 roadmap status refresh post-398 merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-53.md` |
 | `open_fork_doc_count` | 45 |
 
