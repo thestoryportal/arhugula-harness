@@ -43,6 +43,15 @@ These are **choose-between-substantive-alternatives** decisions, not defects. Th
 
 **Recommendation:** **(c)** is the honest MVP disposition unless the operator confirms multi-EngineClass recovery is in scope, in which case **(a)**. **Do not (b).** This mirrors the producer-discovery lesson (`[[r-cxa-seam-wiring-is-producer-discovery]]`): the absence of a producer is often correct, not a gap to paper over.
 
+**External precedent to consult at ratification (operator-named in the R-CXA-2 handoff; NOT independently retrieved this session — see deferral note below).** The engine recovery-loop ownership question is structurally "durable wait/resume coordinated by external state change," which three production systems model and which Reading (a) should be designed against:
+- **OpenAI Agents SDK HITL** — approval-interruption + durable `RunState` resume (the run serializes its state at the interrupt and resumes from it). Maps to: how the recovery loop persists + rehydrates pause state (cf. `PauseSnapshot.snapshot_hash` integrity).
+- **AWS Step Functions callback task token** — durable wait/resume by an external callback delivering a token. Maps to: the `pause_event_id` / `resume_event_id` as the durable correlation token (DP-3 (a)).
+- **Temporal signals / updates / wait-conditions** — external state changes + workflow recovery coordination. Maps to: the engine-native-pause + reconciler `EngineClass` recovery semantics and `resume_attempt_count` retry coordination.
+
+These reinforce DP-3 (a) (recovery-loop-context-supplied opaque correlation ids are the standard durable-resume pattern) and DP-2 (a)'s loop shape. **Per `CLAUDE.md` §10.4, specific API/URL citations are NOT asserted here because the vendor docs were not retrieved in this session** — they are flagged for retrieval at the ratification arc.
+
+> **Deferral note (silent-scope-narrowing guard, `CLAUDE.md` §10.5).** The handoff's "Required startup" listed a NotebookLM / harness-research-corpus query for producer-seam / HITL pause-resume / secret-fetch / runtime recovery-loop precedent. That corpus query was **not run this session** (this is a background job; the NotebookLM MCP is interactively-authenticated and may be absent headless, per `[[notebooklm-harness-corpus-url]]`). The producer-seam *design* is fully determined by the workspace's own ratified contracts (two-layer pause/resume, engine-substrate binding discipline, idempotency-key recipes, v2.39 Reading B, Reading-D) + the operator-named external patterns above, so the deferral does not block the brief. **Continuation contract:** a NotebookLM corpus query + vendor-doc retrieval for the three patterns above is owed at the ratification arc to ground Reading (a) implementation, if DP-2 ratifies a real recovery loop.
+
 ---
 
 ## DP-3 — pause/resume disambiguator derivation (`pause_event_id`, `resume_event_id`, `resume_attempt_count`)
