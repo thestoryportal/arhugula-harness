@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `63bef8c3635a` |
-| `last_refreshed` | 2026-06-08T03:35:01-06:00 |
-| `git_head` | `9ad2dd44` (main) — PR #392 post-#391 refresh merged; recently-completed section refreshed. |
+| `workspace_state_hash` | `1b5771143c44` |
+| `last_refreshed` | 2026-06-08T03:41:11-06:00 |
+| `git_head` | `01e70946` (main) — PR #393 recently-completed section refresh merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-53.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -29,6 +29,8 @@
 **(This refresh — 2026-06-08. PR TBD.)** Re-pinned the roadmap status/dashboard to the post-#391 merge commit. No R-NNN state changed beyond the batch-53 accounting/back-flow already recorded by #391; this refresh exists so the next default-branch audit sees the current `workspace_state_hash` at `58ead217`.
 
 **(This refresh — 2026-06-08. PR TBD.)** Audited and refreshed dashboard section 08 / `Recently completed` after the batch-52 and batch-53 accounting/back-flow PRs. The section now reflects the actual latest five merged PRs (#392, #391, #390, #389, #388) instead of the stale #380/#374/#340-era entries. No R-NNN state changed; this is a status/dashboard hygiene refresh.
+
+**(This refresh — 2026-06-08. PR TBD.)** Re-pinned the roadmap status/dashboard to the post-#393 merge commit. No R-NNN state changed beyond the section-08 reporting refresh already recorded by #393; this refresh exists because #393 did not use the exact `ops: roadmap status refresh ` prefix and therefore requires a terminating fixed-point refresh.
 
 **(This session — 2026-06-08. PR TBD.)** Filed batch-52 and completed the accounting/back-flow for the three formerly accepted-indefinite-defer rows now backed by live integration evidence. R-810's real Anthropic Files upload/reference/delete + managed-cloud `files.operation` Cloud Trace proof moves AS-8e and CP-17 to `SUBSTANTIVE_RETIRED`; R-820's real Managed Agents SDK/session + managed-cloud `managed_agents.*` Cloud Trace proof moves AS-8f to `SUBSTANTIVE_RETIRED`. Live ledger delta: RETIRED 46/54 → 49/54, pipeline-advanced 49/54 → 52/54, `SB_INDEFINITE` 3/54 → 0/54. The Phase-8 declaration remains historical at 46/49; `.harness/substitutions.yaml` + `.harness/phase-7d-retirement-events-batch-52.md` are the forward live-count authority.
 
