@@ -31,6 +31,8 @@
 - `R-CXA-2` - CP→IS producer-gated seam. Highest-value remaining build row, but not safely wireable until a real HITL rewrite production caller, engine recovery-loop producer, or design/back-flow amendment exists.
 - `R-CXA-1` - AS→IS producer-gated seam. Next remaining build row, but not safely wireable until a real scoped AS secret-fetch producer or design/back-flow amendment exists.
 
+**Process-tooling closure staged.** `R-IF-council-workflow` is closed in this PR by materializing the `.harness/council/` targets already referenced by `/council-workflow` and `/council-generic`: harness-aware YAML, generic same-shape YAML, prose companion, and context-memory grounding provenance pointer.
+
 **Research frontier closed.** `R-901` filed `.harness/01-planning/01-harness-planning/00-harness-research/phase-9-retirement-criteria.md`: Phase 9 is a lightweight post-closure decision model for bounded-residual promotion, live-ledger back-flow, and producer-gated seams. Result is research-only + selector guidance; no design-substrate back-flow is owed.
 
 **Do not re-open as next action.** `R-411`, `R-412`, `R-420`, `R-421`, `R-430`, `R-500`, `R-810`, `R-820`, `R-830`, `R-008` / OD-4, `R-CXA-3`, and `R-CXA-4` are already closed or back-flowed.
@@ -49,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| This PR | 2026-06-08 | **R-IF-council-workflow productized.** The existing `/council-workflow` and `/council-generic` commands now resolve to committed `.harness/council/` artifacts: the harness-layer-aware workflow YAML, a generic same-shape workflow YAML, the workflow prose companion, and the context-memory grounding provenance pointer. |
 | PR #430 (`263c2d78`) | 2026-06-08 | **R-901 research-path hygiene merged.** The Phase-9 retirement criteria brief now lives in the reorganized harness research corpus under `.harness/01-planning/01-harness-planning/00-harness-research/`; R-900/R-901, R-600 NotebookLM extract notes, and the dashboard point at the current corpus path. |
 | PR #428 (`04348e3a`) | 2026-06-08 | **R-901 Phase-9 retirement criteria research brief merged.** The brief uses the local Phase-8/retirement-batch corpus, NotebookLM corpus-boundary query, and a supplemental Perplexity query; it recommends research-only closure and returns the selector to genuine producer-gated CXA residuals. |
 | PR #426 (`c223de07`) | 2026-06-08 | **R-900 research placeholder decomposed into R-901.** R-XI-02/R-XI-03 were already RESOLVED, so the selector now points at the explicit Phase-9 retirement criteria research brief; the PR also fixed the SQLite memory backend writer-lock race surfaced by CI. |
 | PR #424 (`3c576f4f`) | 2026-06-08 | **R-CXA-2 CP→IS producer audit merged.** No production caller exists for the remaining HITL rewrite or engine-layer recovery-loop methods; existing workflow-driver pause/resume sites correctly emit `cp.pause-resume-protocol`, not the engine-layer `cp.pause-captured` / `cp.resume-attempted` actions. |
-| PR #422 (`79929bbd`) | 2026-06-08 | **R-CXA-1 AS→IS producer audit merged.** No production caller invokes `RuntimeAsIsWiring.emit_secret_fetch_audit_entry(...)`; bootstrap provider-key fetches still use name-only `resolve_bootstrap_value(...)`, and the only production `fetch_secret(...)` consumer is CP F5 signing-key resolution, not an AS→IS producer. |
 
 ---
 

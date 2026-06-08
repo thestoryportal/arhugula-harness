@@ -9,7 +9,7 @@ Run the **harness-layer-aware council workflow** for this question:
 
 **Spec (follow it exactly):** `.harness/council/council-workflow.harness-aware.yaml`
 **Prose companion:** `.harness/council/COUNCIL-WORKFLOW.md`
-**Lived precedent (read for shape):** `.harness/council/context-memory-grounding/`
+**Lived-precedent provenance pointer:** `.harness/council/context-memory-grounding/`
 
 Procedure:
 1. **Pre-convene** — apply the nameable-tension gate (if no cross-domain tension can be named in advance, STOP and route to a single voice + `advisor()` instead). Identify which harness layer/axis the question touches, and convene the voices from the spec's `layer_voice_map` (primaries = the layer's domain center; consultants = cross-cutting). Name the convening spine-tension. Open a charter + ledger tree.

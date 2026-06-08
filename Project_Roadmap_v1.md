@@ -350,7 +350,7 @@ R-IF-council-context-memory:
 R-IF-council-workflow:
   title: Council workflow productization — codify the genuinely-invoked council -> adversarial -> Codex/advisor reconcile-to-zero loop as reusable YAML + /commands
   surface: VII
-  status: ACTIVE
+  status: RESOLVED
   depends_on: [R-IF-council-context-memory]
   blocks: []
   posture: mode-agnostic
@@ -364,7 +364,10 @@ R-IF-council-workflow:
   notes: >
     Operator-directed 2026-06-04 immediately after R-IF-council-context-memory closed. Synthesizes the lived
     workflow into a documented, reusable shape (surface VII process-discipline tooling, sibling to the council
-    skills at `.claude/skills/council/`). Deliverable of THIS arc.
+    skills at `.claude/skills/council/`). Resolved 2026-06-08 by materializing the command targets under
+    `.harness/council/`: the harness-layer-aware YAML, the generic same-shape YAML, the prose companion, and the
+    context-memory grounding provenance pointer. The existing `/council-workflow` and `/council-generic` commands
+    now invoke real specs rather than missing paths.
 
 ```
 
