@@ -10,10 +10,11 @@ resolver (``harness_as.anthropic_graceful_degradation._MEMORY_BACKENDS``).
 **Scope (honest framing).** This is a *SELF_HOSTED_SERVER* ``DATABASE`` backend:
 a local embedded SQLite file, the SQL sibling of ``LocalFilesystemMemoryToolBackend``.
 It is **not** the MANAGED_CLOUD cloud-vault / managed-database production backend
-named at R-830's title — the ``S3`` and managed-DB variants (real cloud creds /
-infra) remain operator-gated. The factory still raises for ``S3`` /
-``ENCRYPTED_FILESYSTEM`` / ``OPERATOR_DEFINED``, and MANAGED_CLOUD without an
-explicit ``memory_tool_backend_config`` override still raises.
+named at R-830's title. The S3 cloud-vault variant is implemented and live-proven;
+the remaining future optional cloud database shape is a real managed-DB backend.
+The factory still raises for ``ENCRYPTED_FILESYSTEM`` / ``OPERATOR_DEFINED``, and
+MANAGED_CLOUD without an explicit ``memory_tool_backend_config`` override still
+raises.
 
 **Semantics byte-mirror ``LocalFilesystemMemoryToolBackend``** per the shared
 ``MemoryToolStorageBackendProtocol`` contract:

@@ -205,10 +205,10 @@ async def materialize_memory_tool_registry_stage(
         )
     elif configured is MemoryToolStorageBackend.DATABASE:
         # R-830 SELF_HOSTED_SERVER DATABASE backend (local embedded SQLite).
-        # NOT the MANAGED_CLOUD cloud-vault / managed-db production backend:
-        # S3 / ENCRYPTED_FILESYSTEM / OPERATOR_DEFINED stay deferred (the else
-        # below still raises), and the surface-default path still picks
-        # FILESYSTEM only (DATABASE reaches here via explicit operator override).
+        # NOT the remaining optional MANAGED_CLOUD managed-DB backend. S3 is
+        # implemented separately below; ENCRYPTED_FILESYSTEM / OPERATOR_DEFINED
+        # still raise, and the surface-default path still picks FILESYSTEM only
+        # when admitted (DATABASE reaches here via explicit operator override).
         backend = SqliteMemoryToolBackend(db_path=_resolve_database_connection_path(config))
     elif configured is MemoryToolStorageBackend.S3:
         # R-830 MANAGED_CLOUD cloud-vault backend. Provider-free construction

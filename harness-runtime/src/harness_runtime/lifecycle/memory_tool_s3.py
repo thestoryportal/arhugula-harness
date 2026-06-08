@@ -5,8 +5,8 @@ The backend itself is provider-SDK-neutral and provider-free tests inject a
 fake client; the factory may lazily construct a real boto3 S3 client when the
 operator supplies credentials and the optional dependency is installed.
 
-This closes only the non-live implementation seam for the cloud-vault backend.
-Live cloud read/write/delete remains credential- and infrastructure-gated.
+This closes the cloud-vault backend path together with the live R-830 S3 e2e
+proof. Managed-DB remains future optional scope.
 """
 
 from __future__ import annotations

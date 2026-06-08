@@ -8,9 +8,9 @@ callback) + §14.12.5 invariants 3 (path discipline enforced at backend BEFORE I
 
 Per L9-octies cluster discipline (runtime plan v2.15 §1):
 - L1 within-cluster (←U-RT-76).
-- §14.D operator-ratified scope: filesystem-only backend at v2.14/v2.15 arc; other
-  enum values (S3 / ENCRYPTED_FILESYSTEM / DATABASE / OPERATOR_DEFINED) deferred
-  to operator-discretion follow-on retirement-batch arcs per §16 §6.C v2 C.vii.
+- §14.D operator-ratified scope at the v2.14/v2.15 arc was filesystem-only.
+  Later R-830 slices added DATABASE (SQLite) and S3; ENCRYPTED_FILESYSTEM /
+  OPERATOR_DEFINED remain operator-discretion follow-on arcs per §16 §6.C v2 C.vii.
 """
 
 from __future__ import annotations
