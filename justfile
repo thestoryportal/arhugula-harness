@@ -271,6 +271,12 @@ r430-tail-keep-live-e2e config:
 r500-multitenant-live-e2e config:
     uv run --package harness-runtime python tools/r500_multitenant_selfhosted_live_e2e.py {{config}}
 
+# Live R-830 S3 memory backend proof. Requires R830_S3_BUCKET plus ambient
+# boto3-compatible AWS/S3 credentials. Performs real S3 create/view/update/delete
+# against a unique object key and cleans it up.
+r830-s3-live-e2e:
+    uv run --with boto3 --with 'botocore[crt]' pytest harness-runtime/tests/integration/test_r830_memory_tool_s3_live_e2e.py -v
+
 # ─── operator dashboard (R-XI-01) ──────────────────────────────────────────
 #
 # Local view of the operator roadmap dashboard. Output goes to the gitignored
