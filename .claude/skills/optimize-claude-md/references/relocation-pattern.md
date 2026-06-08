@@ -36,6 +36,19 @@ pure pointer-plus-lineage.
    load-bearing and keep it verbatim** — the rule's presence wins; don't reword to split it (that
    orphans the original line and fails `relocation_not_deletion`). Relocate only the bullets that are
    *pure* provenance — the ones that assert no rule the project must still obey.
+1b. **Check what still points INTO the block before you move it.** A block is not relocatable
+   just because *it* is reference-heavy — another *retained* rule may depend on it. Before
+   relocating any section, grep the slimmed-file content you are keeping for `§`-references (and
+   "see §N", "per §N", "defers to §N") whose target is *inside* the block you are about to move.
+   A kept rule that says "resolve the conflict by the precedence in §2.3" is **load-bearing on
+   §2.3's continued existence at that number**: relocate §2.3 wholesale and the reference dangles
+   (`pointers_resolve` hard-fails) — and if §2.3 was also the *only* place an anchor rule was
+   stated, the anchor vanishes too (`guardrails_preserved` hard-fails). When a retained rule
+   points into a relocation target, **keep the pointed-at subsection (its number, header, and
+   body) in the slimmed file** and relocate the rest of the block around it; do not rewrite the
+   dependent rule to re-point at the home (that edits a load-bearing line and orphans the original).
+   The dependent rule and its target travel together — either both stay, or you have not finished
+   the relocation.
 2. **Pick a home** — a doc OUTSIDE the always-loaded set but reachable on demand. Good homes:
    a sibling index like `.harness/artifact-pointers.md`, or the canonical files themselves (the
    spec/plan files already carry their own change-notes). **Never** relocate *into*
