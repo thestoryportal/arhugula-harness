@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -111,7 +112,7 @@ def pointers_resolve(output, context=None) -> dict:
         after_p.write_text(d["after"], encoding="utf-8")
         proc = subprocess.run(
             [
-                "python",
+                sys.executable,
                 str(_CHECK_POINTERS),
                 str(after_p),
                 "--baseline",
@@ -147,7 +148,7 @@ def guardrails_preserved(output, context=None) -> dict:
 def relocation_not_deletion(output, context=None) -> dict:
     """HARD GATE. Heavy content removed from CLAUDE.md must be RELOCATED (present verbatim in a
     new_files home), not silently deleted (architecture.md AD-7 / NFR-8: eviction is a navigation
-    move, never deletion). Heuristic: every substantial removed line must appear in some new_file."""
+    move, never deletion). Heuristic: every substantial removed line must be in a new_file."""
     d = _parse(output)
     before_lines = {ln.strip() for ln in d["before"].splitlines() if len(ln.strip()) >= 40}
     after_lines = {ln.strip() for ln in d["after"].splitlines()}
@@ -198,8 +199,8 @@ if __name__ == "__main__":
             "Call advisor() before substantive work.",
             "Never fire a paid provider call or relocate a secret unilaterally.",
             "## 11 Posture declaration — design-phase vs Phase 7.",
-            "## 2 lineage line A that is long enough to count as substantial provenance bulk here.",
-            "## 2 lineage line B that is long enough to count as substantial provenance bulk here.",
+            "## 2 lineage A — substantial relocatable provenance bulk row.",
+            "## 2 lineage B — substantial relocatable provenance bulk row.",
         ]
     )
     _after_good = "\n".join(
@@ -215,14 +216,15 @@ if __name__ == "__main__":
             "## 2 lineage relocated -> see lineage.md",
         ]
     )
+    _bulk = (
+        "## 2 lineage A — substantial relocatable provenance bulk row.\n"
+        "## 2 lineage B — substantial relocatable provenance bulk row."
+    )
     good = json.dumps(
         {
             "before": _before,
             "after": _after_good,
-            "new_files": {
-                ".harness/lineage.md": "## 2 lineage line A that is long enough to count as substantial provenance bulk here.\n"
-                "## 2 lineage line B that is long enough to count as substantial provenance bulk here."
-            },
+            "new_files": {".harness/lineage.md": _bulk},
             "touched_paths": ["CLAUDE.md", ".harness/lineage.md"],
         }
     )

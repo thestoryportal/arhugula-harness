@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: optimize-claude-md self-improvement fitness (deterministic, no-API)
+
+# The provider reads the agent-produced slim from outputs/<case>.json — no model is called.
+# The prompt is irrelevant to grading; the `case` var selects the output file.
+prompts:
+  - '{{case}}'
+
+providers:
+  - file://provider.py
+
+# Hard gates dominate (weight 5) so the loop can NEVER raise its score by gutting a guardrail
+# (anti-Goodhart). `bytes_reduced` is the only soft signal (weight 1) — a reported indicator,
+# never the gate (architecture.md AD-9/R6). NO llm-rubric => zero model calls; the prose-clarity
+# judgment is the in-session agent's, logged outside promptfoo.
+defaultTest:
+  assert:
+    - type: python
+      value: file://assertions.py:guardrails_preserved
+      weight: 5
+      metric: guardrails
+    - type: python
+      value: file://assertions.py:pointers_resolve
+      weight: 5
+      metric: pointers
+    - type: python
+      value: file://assertions.py:scope_only_governance
+      weight: 5
+      metric: scope
+    - type: python
+      value: file://assertions.py:relocation_not_deletion
+      weight: 3
+      metric: relocation
+    - type: python
+      value: file://assertions.py:bytes_reduced
+      weight: 1
+      metric: bytes
+
+tests: file://tests/*.yaml
