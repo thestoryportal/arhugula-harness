@@ -221,6 +221,12 @@ sandbox-host-check provider='r411-gvisor':
 r411-gvisor-live-e2e *args:
     uv run pytest harness-runtime/tests/integration/test_r411_gvisor_tool_execution_e2e.py -q {{args}}
 
+# Live R-412 managed full-VM e2e. Requires E2B_API_KEY and creates one
+# usage-billed E2B sandbox with outbound internet disabled.
+# Codex must get explicit operator approval before running this command.
+r412-e2b-full-vm-live-e2e *args:
+    uv run --with e2b --package harness-runtime pytest harness-runtime/tests/integration/test_r412_e2b_full_vm_tool_execution_e2e.py -q {{args}}
+
 # Check static readiness for the R-420/R-440 SELF_HOSTED_SERVER deployment gate.
 # Non-mutating: does not start the daemon, contact OTLP, or fetch secrets.
 self-hosted-readiness *args:
