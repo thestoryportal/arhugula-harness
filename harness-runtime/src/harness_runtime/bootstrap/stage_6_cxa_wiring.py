@@ -8,8 +8,8 @@ Composer call order:
 1. `materialize_cxa_terminal_imports_stage` — realizes the 5 manifest imports
    (side-effect import; Pattern P1 typed-seam binding).
 2. `materialize_as_is_wiring_stage(config, ledger_writer)` — AS→IS (1 edge).
-3. `materialize_cp_is_wiring_stage(config, ledger_writer)` — CP→IS (1 of 17
-   edges per U-RT-35 PARTIAL-LAND; `[[fork-cp-is-wiring-gaps]]` Class 1 open).
+3. CP→IS wiring — materialized earlier in stage 3b when present; stage 6
+   reuses it or binds it as a compatibility fallback.
 4. `materialize_od_is_wiring_stage(config, audit_writer, od_manifest)` — OD→IS
    (2 edges).
 5. `materialize_od_as_wiring_stage(config, od_manifest)` — OD→AS (1 edge).
@@ -71,28 +71,19 @@ async def execute(
         config,
         ctx.ledger_writer,
     )
-    # CP spec v1.30 §1.4: build the procedural-tier-snapshot resolver-closure
-    # at stage 6 entry where ctx.skills (stage 2) + ctx.routing_manifest
-    # (stage 3b) are populated. The resolver captures `ctx` (the mutable
-    # context being finalized at stage 6); at composer invocation time the
-    # closure re-resolves against the same captured ctx per U-RT-112 AC #8
-    # direct-compute discipline. The _MutableHarnessContext exposes the same
-    # `.skills` + `.routing_manifest` attribute surfaces as HarnessContext;
-    # cast is structural per the resolver's narrow consumption.
-    procedural_tier_snapshot_resolver = make_procedural_tier_snapshot_resolver(
-        cast("HarnessContext", ctx),
-    )
-    # R-003 producer-site lift — expose the resolver on the frozen
-    # HarnessContext so the CP driver's `_append_step_ledger_entry` per-step
-    # ledger write (§25.3.3.7, a workflow-context emission) can populate the
-    # `procedural_tier_snapshot_ref` D-derivative sidecar per IS spec v1.3
-    # §C-IS-05 §5.1. Same closure that wires the §16.5 CP composers below.
-    ctx.procedural_tier_snapshot_resolver = procedural_tier_snapshot_resolver
-    ctx.cxa_stages["cp_is_wiring"] = materialize_cp_is_wiring_stage(
-        config,
-        ctx.ledger_writer,
-        procedural_tier_snapshot_resolver,
-    )
+    # CP spec v1.30 §1.4: the procedural-tier-snapshot resolver-closure now
+    # binds at stage 3b for CP binding-time producer sites. Stage 6 preserves
+    # compatibility for direct stage invocation and older partial bootstraps.
+    if ctx.procedural_tier_snapshot_resolver is None:
+        ctx.procedural_tier_snapshot_resolver = make_procedural_tier_snapshot_resolver(
+            cast("HarnessContext", ctx),
+        )
+    if "cp_is_wiring" not in ctx.cxa_stages:
+        ctx.cxa_stages["cp_is_wiring"] = materialize_cp_is_wiring_stage(
+            config,
+            ctx.ledger_writer,
+            ctx.procedural_tier_snapshot_resolver,
+        )
     ctx.cxa_stages["od_is_wiring"] = materialize_od_is_wiring_stage(
         config,
         # ctx.audit_writer is the concrete RuntimeAuditLedgerWriter at runtime

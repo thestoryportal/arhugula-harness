@@ -44,6 +44,7 @@ from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_cp.workload_binding_engine_class_selection import (
     WorkloadBindingError,
     WorkloadBindingSelectionInput,
+    WorkloadBindingSelectionResult,
     select_engine_class,
 )
 
@@ -99,6 +100,7 @@ class RuntimeEngineSelector:
     """
 
     bindings: dict[tuple[WorkloadClass, PersonaTier], EngineClass]
+    selection_results: dict[tuple[WorkloadClass, PersonaTier], WorkloadBindingSelectionResult]
     overrides: dict[WorkloadClass, EngineClass]
 
     def select(
@@ -138,6 +140,7 @@ def materialize_engine_selector(config: RuntimeConfig) -> RuntimeEngineSelector:
     consistent and overriding shouldn't hide a CP-side binding regression.
     """
     bindings: dict[tuple[WorkloadClass, PersonaTier], EngineClass] = {}
+    selection_results: dict[tuple[WorkloadClass, PersonaTier], WorkloadBindingSelectionResult] = {}
     failures: list[tuple[WorkloadClass, PersonaTier, str]] = []
 
     for workload_class, persona_tier in _ALL_COMBINATIONS:
@@ -152,13 +155,19 @@ def materialize_engine_selector(config: RuntimeConfig) -> RuntimeEngineSelector:
         except WorkloadBindingError as exc:
             failures.append((workload_class, persona_tier, str(exc)))
             continue
-        bindings[(workload_class, persona_tier)] = result.selected_class
+        key = (workload_class, persona_tier)
+        bindings[key] = result.selected_class
+        selection_results[key] = result
 
     if failures:
         raise EngineSelectorBindError(tuple(failures))
 
     overrides = _extract_overrides(config.routing_manifest)
-    return RuntimeEngineSelector(bindings=bindings, overrides=overrides)
+    return RuntimeEngineSelector(
+        bindings=bindings,
+        selection_results=selection_results,
+        overrides=overrides,
+    )
 
 
 def _extract_overrides(manifest: RoutingManifest) -> dict[WorkloadClass, EngineClass]:
