@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `b9a21d9a2d3d` |
-| `last_refreshed` | 2026-06-08T10:17:18-06:00 |
-| `git_head` | `4523a857` (main) — PR #425 post-#424 roadmap status refresh merged. |
+| `workspace_state_hash` | `472c4d3cb516` |
+| `last_refreshed` | 2026-06-08T10:27:06-06:00 |
+| `git_head` | `c223de07` (main) — PR #426 R-900 decomposition + SQLite writer-lock fix merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-54.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -50,7 +50,7 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| R-900 decomposition (`4523a857`) | 2026-06-08 | **R-900 research placeholder decomposed into R-901.** R-XI-02/R-XI-03 were already RESOLVED, so the selector now points at the explicit Phase-9 retirement criteria research brief instead of closed dashboard work. |
+| PR #426 (`c223de07`) | 2026-06-08 | **R-900 research placeholder decomposed into R-901.** R-XI-02/R-XI-03 were already RESOLVED, so the selector now points at the explicit Phase-9 retirement criteria research brief; the PR also fixed the SQLite memory backend writer-lock race surfaced by CI. |
 | PR #424 (`3c576f4f`) | 2026-06-08 | **R-CXA-2 CP→IS producer audit merged.** No production caller exists for the remaining HITL rewrite or engine-layer recovery-loop methods; existing workflow-driver pause/resume sites correctly emit `cp.pause-resume-protocol`, not the engine-layer `cp.pause-captured` / `cp.resume-attempted` actions. |
 | PR #422 (`79929bbd`) | 2026-06-08 | **R-CXA-1 AS→IS producer audit merged.** No production caller invokes `RuntimeAsIsWiring.emit_secret_fetch_audit_entry(...)`; bootstrap provider-key fetches still use name-only `resolve_bootstrap_value(...)`, and the only production `fetch_secret(...)` consumer is CP F5 signing-key resolution, not an AS→IS producer. |
 | PR #420 (`48a047e9`) | 2026-06-08 | **R-CXA-3 CP→AS runtime composer merged.** `RuntimeCpAsWiring` binds CP-consumed AS terminal seam exports at bootstrap stage 6 and exposes `HarnessContext.cp_as_wiring`; batch-54 moves H_T-CXA-3 to `SUBSTANTIVE_RETIRED`. |
@@ -272,6 +272,7 @@ The 5 bucket rows below sum to **54** under the batch-54 live ledger (RETIRED 52
 | 2026-06-08 | **R-CXA-2 producer audit branch opened from `4baefe0b`; §12.2 owed after merge.** | Fresh grounding found no wireable CP→IS producer for the remaining methods: HITL tool-call rewriting still lacks a production caller/spec disambiguator, workflow-driver pause/resume sites already emit the workflow-layer `cp.pause-resume-protocol` action, and engine-layer `cp.pause-captured` / `cp.resume-attempted` still require future recovery-loop producers. R-CXA-2 remains STILL-BOUNDED; immediate forward work shifts to optional R-XI-02/R-XI-03/R-900 or a future producer/design-amendment trigger. |
 | 2026-06-08 | **Post-#424 roadmap status refresh — PR #424 R-CXA-2 producer audit merged at `3c576f4f`; §12.2 owed follow-on.** | Hash `75490b0ac699` → `2353a8d1e707` (state at `3c576f4f`, PRS empty/unavailable, fork count 45, batch-54). No runtime code changed; R-CXA-2 remains STILL-BOUNDED/producer-gated with evidence recorded. **Next action:** optional R-XI-02/R-XI-03/R-900 by operator discretion, or future CXA producer/design-amendment trigger. |
 | 2026-06-08 | **R-900 decomposition branch opened from `4523a857`; §12.2 owed after merge.** | Fresh grounding found the advertised R-XI-02/R-XI-03 options are already RESOLVED in `Project_Roadmap_v1.md` and implemented in `tools/dashboard/generate.py`; R-900's own must-pass requires crystallizing a specific research question before work begins. This branch resolves the placeholder by adding `R-901-phase-9-retirement-criteria` as the next explicit research frontier. |
+| 2026-06-08 | **Post-#426 roadmap status refresh — PR #426 R-900 decomposition merged at `c223de07`; §12.2 owed follow-on.** | Hash `b9a21d9a2d3d` → `472c4d3cb516` (state at `c223de07`, PRS empty/unavailable, fork count 45, batch-54). R-900 is RESOLVED by decomposition into R-901, and the SQLite writer-lock fix keeps the PR pytest gate green. **Next action:** R-901 Phase-9 retirement criteria research brief. |
 
 **Audit protocol exercised across terminating-refresh closures, fresh-session reconciliations, substantive closes, accounting back-flow, live-provider gates, and dashboard-discipline sweeps.** Discipline + enforcement layers are operational; the current selector is the `Next action` section above, not stale historical footer prose. After PR #420, the non-retired substitution ledger is narrowed to CXA-1 and CXA-2; future `/roadmap continue` sessions should ground those producer/upstream-loop gates against current code before opening optional dashboard/research arcs.
 
