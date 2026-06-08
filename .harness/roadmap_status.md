@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `3c2f97df1e1b` |
-| `last_refreshed` | 2026-06-08T03:12:29-06:00 |
-| `git_head` | `25aa67b5` (main) — PR #390 fixed-point refresh merged; batch-53 accounting/back-flow in this branch. |
+| `workspace_state_hash` | `b0b6a5f70dd6` |
+| `last_refreshed` | 2026-06-08T03:22:33-06:00 |
+| `git_head` | `58ead217` (main) — PR #391 batch-53 accounting/back-flow merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-53.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -25,6 +25,8 @@
 > **🎓 PHASE 8 CLOSED — substitution accounting DECLARED 2026-06-02 (`.harness/phase-8-graduation.md`).** The operator lifted the HELD R-700 declaration ("kick off the declaration"); item 4 executed. **Historical declaration: 46/54 RETIRED (85.2%) + 49/54 pipeline-advanced (90.7%)** (operator-ratified accounting (i)). The deferred 48→46 supersession was applied forward (ledger §11.7 + harness-cp/CLAUDE.md + this dashboard; prior batch records stand verbatim). **Batch-52 back-flowed R-810/R-820 live evidence for AS-8e, AS-8f, and CP-17; batch-53 then back-flowed the closed OD-4 runtime residual and the 0-wireable CXA-4 bookkeeping row. The live ledger is now 51/54 RETIRED (94.4%) + 52/54 pipeline-advanced (96.3%).** `R-700` remains RESOLVED; Phase 7's historical declaration is not rewritten. The remaining honest frontier is now the three non-RETIRED rows: CXA-1, CXA-2, and CXA-3.
 
 **(This session — 2026-06-08. PR TBD.)** Filed batch-53 and completed the next accounting/back-flow pass in logical order. OD-4 moves from `PARTIAL` / historical `RETIRED-AS-CROSS-AXIS-DEFERRED` to `SUBSTANTIVE_RETIRED` because the later R-008 runtime slices closed the §13.1 toggle and §13.2 opaque-token/audit-ledger/category-classifier/eval-grade runtime residual. CXA-4 moves from `PARTIAL` to `SUBSTANTIVE_RETIRED` because the grounding sweep found 0 remaining wireable edges: the lone genuine OD audit-write data-flow is already wired with production producers, phase-2 runtime edges are materialized at bootstrap stage 6, and convention edges are satisfied by manifest/namespace checks. Live ledger delta: RETIRED 49/54 → 51/54; pipeline-advanced remains 52/54; remaining non-RETIRED rows are CXA-1 (PARTIAL), CXA-2 (STILL-BOUNDED), and CXA-3 (STILL-BOUNDED).
+
+**(This refresh — 2026-06-08. PR TBD.)** Re-pinned the roadmap status/dashboard to the post-#391 merge commit. No R-NNN state changed beyond the batch-53 accounting/back-flow already recorded by #391; this refresh exists so the next default-branch audit sees the current `workspace_state_hash` at `58ead217`.
 
 **(This session — 2026-06-08. PR TBD.)** Filed batch-52 and completed the accounting/back-flow for the three formerly accepted-indefinite-defer rows now backed by live integration evidence. R-810's real Anthropic Files upload/reference/delete + managed-cloud `files.operation` Cloud Trace proof moves AS-8e and CP-17 to `SUBSTANTIVE_RETIRED`; R-820's real Managed Agents SDK/session + managed-cloud `managed_agents.*` Cloud Trace proof moves AS-8f to `SUBSTANTIVE_RETIRED`. Live ledger delta: RETIRED 46/54 → 49/54, pipeline-advanced 49/54 → 52/54, `SB_INDEFINITE` 3/54 → 0/54. The Phase-8 declaration remains historical at 46/49; `.harness/substitutions.yaml` + `.harness/phase-7d-retirement-events-batch-52.md` are the forward live-count authority.
 
