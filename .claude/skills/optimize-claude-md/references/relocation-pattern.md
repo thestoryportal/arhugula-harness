@@ -69,6 +69,19 @@ pure pointer-plus-lineage.
    history…" becomes "## 2. Canonical artifact pointers"), the original long header is a *removed*
    line and must land in the home verbatim too. "I kept the header" is the trap: a retitled header
    is an edit, not a kept line, and it orphans the original.
+
+   **A line shaped like a pointer can BE the rule, not point to one.** "Re-home the pointer, leave a
+   resolving reference" is the move for a *genuine* pointer — a line whose whole job is to send the
+   reader to relocatable content stated in full elsewhere. But a sentence can wear pointer clothing
+   ("For the paid-call / secret-relocation boundary, see the operator-feedback record: … never fire
+   the paid call or relocate the secret without operator authorization") while its tail is the *only*
+   place that rule is operatively stated. Relocating it as a "mere citation" drops the rule
+   (`guardrails_preserved` hard-fails on the anchor that lived only there). The test is not the "see
+   X" framing — it is **does the rule it states live, in force, anywhere that stays loaded?** If yes,
+   the line is a true pointer → relocate it. If the operative clause lives nowhere else, the
+   pointer-shaped line is the rule's sole home → keep the operative clause in the slimmed file
+   (relocate only the genuine provenance it also references). Same operativeness-not-framing test as
+   the dated-bullet and worked-example traps, applied to citation-shaped lines.
 5. **Verify the move lost nothing**, then verify resolution (below), before proposing the diff.
    The pure-move check is mechanical: diff the slimmed file against the original and confirm
    **every removed line — header, prose, and data alike — appears byte-for-byte in some new home**.
