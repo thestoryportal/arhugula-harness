@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `ff7326d55edf` |
-| `last_refreshed` | 2026-06-08T08:44:01-06:00 |
-| `git_head` | `601d32ce` (main) — PR #417 closed R-830 with the managed-DB implementation and live Neon PostgreSQL e2e proof. |
+| `workspace_state_hash` | `2bfceec9d20f` |
+| `last_refreshed` | 2026-06-08T08:53:49-06:00 |
+| `git_head` | `10bb3d51` (main) — PR #418 re-pinned the post-#417 roadmap/status/dashboard fixed point. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-53.md` |
 | `open_fork_doc_count` | 45 |
 
@@ -49,11 +49,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #418 (`10bb3d51`) | 2026-06-08 | **Post-#417 fixed-point refresh merged.** Re-pinned roadmap status/dashboard after the R-830 managed-DB closure; R-830 is now in the closed/do-not-reopen set and the ordered frontier returns to CXA producer/composer gates plus optional research/dashboard arcs. |
 | PR #417 (`601d32ce`) | 2026-06-08 | **R-830 managed-DB backend merged.** Added `ManagedSqlMemoryToolBackend`, PostgreSQL factory binding, provider-free coverage, the live e2e recipe/test, and recorded the operator-approved Neon PostgreSQL create/view/str_replace/insert/delete proof. |
 | PR #413 (`b4531d31`) | 2026-06-08 | **R-830 roadmap/status back-flow merged.** R-830 no longer carries a pending S3/cloud-vault blocker; completed filesystem, SQLite, and S3 slices remain recorded, and only optional managed-DB remains future scope. |
 | PR #411 (`7e972f27`) | 2026-06-08 | **Post-#410 fixed-point refresh merged.** Refreshed the roadmap status/dashboard after the R-411/R-412 remaining-card correction and re-established the expected lag-by-one fixed point. |
 | PR #410 (`c57da7f7`) | 2026-06-08 | **Dashboard remaining-card correction merged.** Removed the hard-coded `R-411 → R-412` card from `closure.remaining`, regenerated the dashboard, and added a regression proving resolved R-411/R-412 text cannot appear in the remaining cards. |
-| PR #408 (`83082090`) | 2026-06-08 | **R-412 roadmap/status/dashboard back-flow merged.** R-412 is no longer a next-action candidate; the roadmap, forward register, fork doc, dashboard generator, dashboard snapshot, and activation count now report the managed E2B full-VM closure. |
 
 ---
 
