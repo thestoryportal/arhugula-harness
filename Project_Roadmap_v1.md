@@ -1536,7 +1536,7 @@ R-600-notebooklm-skill-setup:
       - "Auth via Chrome cookie extraction (zero OAuth flow); status=ok + token_fetch=true"
       - "Claude Code skill at ~/.claude/skills/notebooklm/ + Agent skill at ~/.agents/skills/notebooklm/"
       - "Notebook 57b8d946-... pinned as default"
-      - "Test query against URL-scrape corpus returns content NOT in static research/notebooks/ extracts"
+      - "Test query against URL-scrape corpus returns content NOT in static .harness/01-planning/01-harness-planning/00-harness-research/02-notebooklm-queries/ extracts"
   close_shape:
     type: PR-merge
     artifact: "ops: notebooklm-py skill installed + auth via chrome cookies + test query passed"
@@ -1552,7 +1552,7 @@ R-600-notebooklm-skill-setup:
     Framing correction at setup: integration is skill-based via teng-lin/notebooklm-py,
     NOT MCP-server-based as the prior memory entry framed it. Repo provides Python CLI +
     Playwright browser automation + Claude Code skill via `notebooklm skill install`.
-    Static extracts at research/notebooks/ remain load-bearing for ~95% of queries;
+    Static extracts at .harness/01-planning/01-harness-planning/00-harness-research/02-notebooklm-queries/ remain load-bearing for ~95% of queries;
     interactive corpus for the trigger events above. Memory entry [[notebooklm-harness-corpus-url]]
     refreshed in same PR. RESOLVED in one arc (skipped PROPOSED → ACTIVE) since setup +
     verification + documentation all closed at this PR's merge.
@@ -2138,23 +2138,23 @@ R-900-research-arcs:
   depends_on: []
   blocks: []
   posture: mode-agnostic
-  scope: { files: [research/**, design-substrate (opportunistic)], contracts: [], cross_axis: no }
+  scope: { files: [.harness/01-planning/01-harness-planning/00-harness-research/**, design-substrate (opportunistic)], contracts: [], cross_axis: no }
   skills: { primary: systems-architect, secondary: [] }
   advisor_required: yes
   council_required: conditional:nameable-tension   # case-by-case, only if a named cross-domain tension surfaces
   verification: { shape: grep, must_pass: ["a specific research question is crystallized into a sub-entry before work begins"] }
-  close_shape: { type: substrate-amendment, artifact: "research/** or a new R-90N sub-entry", cascade: [R-901] }
+  close_shape: { type: substrate-amendment, artifact: ".harness/01-planning/01-harness-planning/00-harness-research/** or a new R-90N sub-entry", cascade: [R-901] }
   next_pointer: R-901-phase-9-retirement-criteria
   notes: Placeholder decomposed 2026-06-08 into R-901. R-XI-02/R-XI-03 are already RESOLVED, so the selector should not keep advertising dashboard iteration work as open.
 
 R-901-phase-9-retirement-criteria:
   title: Phase-9 retirement criteria research brief
   surface: X
-  status: RESOLVED   # 2026-06-08 — research brief filed at research/phase-9-retirement-criteria.md; result is research-only + roadmap selector guidance, no design-substrate back-flow.
+  status: RESOLVED   # 2026-06-08 — research brief filed in the harness research corpus; result is research-only + roadmap selector guidance, no design-substrate back-flow.
   depends_on: []
   blocks: []
   posture: mode-agnostic
-  scope: { files: [research/**, Project_Roadmap_v1.md], contracts: [], cross_axis: no }
+  scope: { files: [.harness/01-planning/01-harness-planning/00-harness-research/**, Project_Roadmap_v1.md], contracts: [], cross_axis: no }
   skills: { primary: systems-architect, secondary: [notebooklm] }
   advisor_required: yes
   council_required: conditional:nameable-tension
@@ -2164,10 +2164,10 @@ R-901-phase-9-retirement-criteria:
       - "crystallize the Phase-9 retirement-criteria research question before any substrate amendment"
       - "ground the brief in the existing harness research corpus and cite source documents used"
       - "record whether the result is research-only, roadmap-only, or design-substrate back-flow"
-  close_shape: { type: PR-merge, artifact: "research/phase-9-retirement-criteria*.md or roadmap-only disposition", cascade: [] }
+  close_shape: { type: PR-merge, artifact: ".harness/01-planning/01-harness-planning/00-harness-research/phase-9-retirement-criteria.md or roadmap-only disposition", cascade: [] }
   next_pointer: null
   notes: >
-    RESOLVED 2026-06-08: research brief filed at `research/phase-9-retirement-criteria.md`.
+    RESOLVED 2026-06-08: research brief filed at `.harness/01-planning/01-harness-planning/00-harness-research/phase-9-retirement-criteria.md`.
     Research question crystallized as a post-Phase-8 decision model: how to route bounded-residual
     promotion, live-ledger back-flow, and producer-gated CXA seams without rewriting the historical
     Phase-8 accounting declaration. Grounding sources: Phase-8 graduation, R-700 accounting draft,

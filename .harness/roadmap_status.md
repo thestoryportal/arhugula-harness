@@ -31,7 +31,7 @@
 - `R-CXA-2` - CP→IS producer-gated seam. Highest-value remaining build row, but not safely wireable until a real HITL rewrite production caller, engine recovery-loop producer, or design/back-flow amendment exists.
 - `R-CXA-1` - AS→IS producer-gated seam. Next remaining build row, but not safely wireable until a real scoped AS secret-fetch producer or design/back-flow amendment exists.
 
-**Research frontier closed.** `R-901` filed `research/phase-9-retirement-criteria.md`: Phase 9 is a lightweight post-closure decision model for bounded-residual promotion, live-ledger back-flow, and producer-gated seams. Result is research-only + selector guidance; no design-substrate back-flow is owed.
+**Research frontier closed.** `R-901` filed `.harness/01-planning/01-harness-planning/00-harness-research/phase-9-retirement-criteria.md`: Phase 9 is a lightweight post-closure decision model for bounded-residual promotion, live-ledger back-flow, and producer-gated seams. Result is research-only + selector guidance; no design-substrate back-flow is owed.
 
 **Do not re-open as next action.** `R-411`, `R-412`, `R-420`, `R-421`, `R-430`, `R-500`, `R-810`, `R-820`, `R-830`, `R-008` / OD-4, `R-CXA-3`, and `R-CXA-4` are already closed or back-flowed.
 
@@ -101,7 +101,7 @@ The 5 bucket rows below sum to **54** under the batch-54 live ledger (RETIRED 52
 
 | Date | Source | Resolution |
 |---|---|---|
-| 2026-06-08 | **Post-#428 terminating refresh — PR #428 R-901 retirement-criteria brief merged at `04348e3`; §12.2 owed follow-on.** Same session: R-901 filed `research/phase-9-retirement-criteria.md`, marked Surface X research-only resolved, removed R-901 from remaining dashboard cards, and returned the selector to genuine producer-gated CXA residuals. | Single-file status/dashboard refresh per §12.2.1. Hash `ed3d997f21f7` → `59ece3c52b50` (state at `04348e3a`; PRS empty; fork count 45; batch-54). Next action: `R-CXA-2` then `R-CXA-1`, both producer-gated and not safely wireable until real upstream producers or design/back-flow amendments appear. |
+| 2026-06-08 | **Post-#428 terminating refresh — PR #428 R-901 retirement-criteria brief merged at `04348e3`; §12.2 owed follow-on.** Same session: R-901 filed the Phase-9 brief, marked Surface X research-only resolved, removed R-901 from remaining dashboard cards, and returned the selector to genuine producer-gated CXA residuals. | Single-file status/dashboard refresh per §12.2.1. Hash `ed3d997f21f7` → `59ece3c52b50` (state at `04348e3a`; PRS empty; fork count 45; batch-54). Follow-up path hygiene moved the brief into `.harness/01-planning/01-harness-planning/00-harness-research/` to match the reorganized harness research corpus. Next action: `R-CXA-2` then `R-CXA-1`, both producer-gated and not safely wireable until real upstream producers or design/back-flow amendments appear. |
 | 2026-05-31 | Dashboard creation (v1 origin) | n/a |
 | 2026-05-31 | First post-merge refresh — PR #112 merged at `7f3e6ce`; dashboard hash recomputed `9c31e4978c3d` → `5a077d17765f` | Refreshed via PR #113 per CLAUDE.md §12.2. |
 | 2026-05-31 | Recursion-stop discipline gap surfaced — PR #113 merge left dashboard stale by 1 commit; §12.2 as written would recurse | Codified at PR #114 via §12.2.1 termination clause + §12.1 step 6 carve-out. |
