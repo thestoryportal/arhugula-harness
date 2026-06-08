@@ -161,8 +161,8 @@ The register has **two tiers**, kept distinct:
 
 ### B-12 · managed_agents integration (deferred per AS-8f)
 - **What it is.** Anthropic managed_agents primitive + the `managed_agents.*` 3-attribute namespace.
-- **Current state.** **STILL-BOUNDED-INDEFINITELY by design** — AS-side schema landed (U-AS-31/32), but **zero runtime producer**; AS spec §13.2 excludes managed_agents at local-development; retirement criterion-B (production-surface observation) is unexercisable in-CLI (`class_1_fork_as_8f_...` Q1=C, runtime spec v1.33 §14.D).
-- **Close-out steps.** Operator-discretion timing at a future MANAGED_CLOUD arc, gated on Anthropic managed_agents SDK availability + a stable integration contract. **Council: no.**
+- **Current state.** **RESOLVED for the R-820 runtime/integration gate** — PR #380 added the real Anthropic Managed Agents SDK/session adapter and live managed-cloud e2e proof. Evidence: session `sesn_019aMgaF8sAW2cXhhpMTYij4` reached `session.status_idle`; `managed_agents.runtime` exported to the managed collector; Cloud Trace trace `009d7716b19c75e4ad7edb93e78f8d2b` carried `managed_agents.*` attributes. Temporary Cloud Run Token Creator IAM used for the proof was removed and verified absent.
+- **Close-out steps.** R-820 is closed. Any AS-8f substitution-tally movement remains a separate accounting/back-flow action because the Phase-8 ledger still records the accepted-indefinite-defer disposition. **Council: no.**
 
 ### B-13 · Memory-tool production backend (CP-16)
 - **What it is.** A production storage backend for the Memory tool beyond local-filesystem. ADR-D3 #11 (Memory tool is client-side; harness implements the backend). `C-RT-22` `MemoryToolRegistry` + `MemoryToolStorageBackendProtocol`.

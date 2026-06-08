@@ -34,7 +34,7 @@ Ten surfaces of remaining work between current state and Phase 7 closure + Phase
 | VI | Multi-tenant | R-500..R-599 | `RuntimeConfig.tenant_id` non-default deployments; `persona_tier` non-SOLO_DEVELOPER deployments; redaction policy per §C-OD-13 §13.1 |
 | VII | Process discipline | R-600..R-699 | Workflow doc evolution; species/sub-species catalogue; pattern bake-in; clearance marker maturity |
 | VIII | Phase 8 retirement criteria | R-700..R-799 | All 49 substitutions either RETIRED or RETIRED-AS-BOUNDED-RESIDUAL with documented rationale per X-AL-2 |
-| IX | External integrations | R-800..R-899 | Real external MCP servers; managed_agents primitive (deferred per AS-8f); Files API (deferred per AS-8e) |
+| IX | External integrations | R-800..R-899 | Real external MCP servers; managed_agents primitive (closed by R-820); Files API (deferred per AS-8e) |
 | X | Existential / research | R-900..R-999 | Open architectural questions; speculative arcs; research-corpus extensions |
 | XI | Operator tooling / observability | R-XI-NN | Human-facing dashboards, status pages, CI-deployed observability surfaces; NOT for Claude consumption (Claude reads `.harness/roadmap_status.md` directly) |
 
@@ -2014,7 +2014,7 @@ R-500-multi-tenant-deployment:
 
 ### 5.12 External integrations (R-800..R-899) — Surface IX
 
-*Decomposed 2026-06-01 from register §B-10..§B-13 (discharges §9 Surface IX). Files API (AS-8e/CP-17) + managed_agents (AS-8f) are STILL-BOUNDED-INDEFINITELY by design — tracked here as DEFERRED for operator-discretion timing at a managed-cloud arc.*
+*Decomposed 2026-06-01 from register §B-10..§B-13 (discharges §9 Surface IX). Files API (AS-8e/CP-17) remains STILL-BOUNDED-INDEFINITELY by design and tracked as DEFERRED for operator-discretion timing at a managed-cloud arc. managed_agents (AS-8f) is live-proven and closed by R-820; any substitution-tally movement remains separate accounting/back-flow.*
 
 ```yaml
 R-800-external-mcp-server:
@@ -2065,10 +2065,10 @@ R-810-files-api-integration:
 R-820-managed-agents-integration:
   title: managed_agents integration (managed_agents.* namespace — AS-8f)
   surface: IX
-  status: DEFERRED
+  status: RESOLVED
   depends_on: [R-421-managed-cloud-deployment-e2e]
   blocks: []
-  posture: halt-route-to-operator
+  posture: phase-7
   scope: { files: [harness-runtime/src/**], contracts: [runtime spec v1.33 §14.D, C-AS-13 §13.2, ADR-D3], cross_axis: yes }
   skills: { primary: phase-7-implementation, secondary: [] }
   advisor_required: yes
@@ -2076,7 +2076,7 @@ R-820-managed-agents-integration:
   verification: { shape: e2e, must_pass: ["Anthropic managed_agents SDK integration authored", "production-surface managed_agents.* emission observed at managed-cloud"] }
   close_shape: { type: PR-merge, artifact: "feat(managed-agents): managed_agents integration", cascade: [] }
   next_pointer: null
-  notes: STILL-BOUNDED-INDEFINITELY by design; AS schema landed (U-AS-31/32), zero runtime producer; criterion-B unexercisable in-CLI. Closes AS-8f bounded-residual. Register §B-12.
+  notes: RESOLVED 2026-06-07 by PR #380. Added the real Anthropic Managed Agents SDK/session adapter plus live managed-cloud e2e proof that created session `sesn_019aMgaF8sAW2cXhhpMTYij4`, observed `session.status_idle`, exported `managed_agents.runtime`, and confirmed Cloud Trace trace `009d7716b19c75e4ad7edb93e78f8d2b` carried `managed_agents.*` attributes. Temporary Cloud Run Token Creator IAM used only for the live proof was removed and verified absent after the run. This closes the R-820 runtime/integration gate; Phase-8 AS-8f substitution-tally movement, if any, remains a separate accounting/back-flow action.
 
 R-830-memory-tool-production-backend:
   title: Memory-tool MANAGED_CLOUD production backend (cloud-vault / managed-db, S3 — CP-16) — SELF_HOSTED DATABASE (SQLite) slice LANDED

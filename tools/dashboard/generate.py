@@ -76,10 +76,10 @@ ANNOTATIONS = {
     "R-700-phase-8-substitution-accounting": "RESOLVED — you ratified the count and Phase 8 is declared CLOSED: 46/54 retired (derived from the substitution ledger). The build phase is done.",
     # DEFERRED (parked by design)
     "R-005-as-8e-files-indefinite": "File-telemetry support is parked by design until a cloud deployment needs it — not part of the core build.",
-    "R-006-as-8f-managed-agents-indefinite": "Managed-agents telemetry is parked by design until a cloud deployment needs it — not part of the core build.",
+    "R-006-as-8f-managed-agents-indefinite": "Managed-agents telemetry is live-proven by R-820; any Phase-8 tally movement remains a separate accounting/back-flow action.",
     "R-CXA-3-cp-as-seam": "Parked until either a cloud 'Files' arc opens or you narrow its scope; no in-workspace work available now.",
     "R-810-files-api-integration": "The real Files-API integration; deferred by design to a managed-cloud stage.",
-    "R-820-managed-agents-integration": "The real managed-agents integration; deferred by design to a managed-cloud stage.",
+    "R-820-managed-agents-integration": "Resolved by the real Anthropic Managed Agents SDK/session integration plus managed-cloud managed_agents.* Cloud Trace proof.",
     # PROPOSED (queued; most need credentials or infrastructure only you can provide)
     "R-300-multi-llm-second-provider": "Ready to start, but needs OpenAI/Ollama credentials and a mixed-provider test you'd run.",
     "R-410-sandbox-tier-2-container-execution": "Resolved by the local-only Docker execution driver and live TIER_2 container e2e.",
@@ -149,8 +149,8 @@ NONRETIRED_LEDGER = [
         "id": "AS-8f",
         "rnnn": "R-006",
         "state": "STILL-BOUNDED-INDEFINITELY",
-        "why": "managed_agents.* telemetry namespace.",
-        "retire": "Only when managed-agents integration happens. Deferred by design — bounded residual.",
+        "why": "managed_agents.* telemetry namespace. R-820 now live-proves the runtime/integration path; Phase-8 tally movement is separate accounting/back-flow.",
+        "retire": "Implementation gate is closed by R-820; retain the ledger row until a dedicated accounting action changes the canonical tally.",
     },
     {
         "id": "CP-17",
@@ -226,8 +226,8 @@ REMAINING_ORDERED = [
         "n": 7,
         "layer": "build",
         "id": "R-005 / R-006 / CP-17",
-        "label": "Files + managed-agents namespaces",
-        "gate": "Deferred by design — bounded residual; close only at the Files / managed-cloud arc.",
+        "label": "Files namespace + AS-8f accounting",
+        "gate": "Files remains deferred by design; AS-8f implementation is closed by R-820 but tally movement is separate accounting/back-flow.",
     },
     # --- Activation layer: operator-gated (creds + infra), deployment-ordered ---
     {
@@ -254,9 +254,9 @@ REMAINING_ORDERED = [
     {
         "n": 11,
         "layer": "activation",
-        "id": "R-830 / R-810 / R-820",
-        "label": "Cloud memory + Files + managed-agents integrations",
-        "gate": "Need cloud credentials; deferred-by-design integrations.",
+        "id": "R-810",
+        "label": "Files API integration",
+        "gate": "Need Files design-phase opening plus managed-cloud upload/reference e2e.",
     },
     {
         "n": 12,
