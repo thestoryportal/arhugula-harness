@@ -1,0 +1,15 @@
+# Eval (turn 4): §9 interleaves still-operative rules with pure provenance, but every bullet OPENS
+# as a dated, past-tense change-history row ("On 2026-05-20, after a thread…, the conclusion was X").
+# The load-bearing rules (CP-AL-1, advisor(), the paid-call/secret boundary) are the grammatical TAIL
+# of a narrated historical sentence — no "(LIVE)" signpost, no clean rule line to lift out. A faithful
+# executor applying the turn-1 "scan the bulk for embedded rules" step still reads each dated bullet
+# as a provenance row and relocates §9 wholesale, dropping 4 anchors (guardrails_preserved hard-fails).
+# The gap step-1a does not cover: history-framing is not not-a-rule. Classify by whether the rule is
+# still OPERATIVE, not by whether the bullet is framed as history. The correct cut is keep-whole — a
+# mixed bullet (provenance + operative rule) counts as load-bearing in full and stays verbatim in §9;
+# only the pure-provenance bullets relocate. (min_reduction 0.20: keep-whole relocates less.)
+- description: 'interleaved — keep operative rules whole even when framed as dated history; relocate only pure-provenance rows'
+  vars:
+    case: interleaved
+    fixture: fixtures/interleaved-claude.md
+    min_reduction: 0.20
