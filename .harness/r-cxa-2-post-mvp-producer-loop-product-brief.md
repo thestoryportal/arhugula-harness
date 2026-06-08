@@ -113,7 +113,7 @@ while response has tool_use content blocks:
 | (f) | When the composer fires | Only when `rewritten.hitl_required is True` (a real rewrite). `semantic_variant_binding_id = rewritten.variant.value` (StrEnum value; **B2-settled, runtime plan v2.39 Reading B** — do not re-derive). |
 | (g) | No-op semantics | `hitl_required is False` → `rewrite_tool_call_to_hitl` returns the call unchanged (`variant=None`, `response_palette=None`, `hitl_as_tool_call_rewriting.py:185-192`) → **NO §16.5 emission**. The loop dispatches the tool directly. |
 | (h) | Replay / idempotency | §2.3. |
-| (i) | Approval/HITL gate × tool dispatch | `hitl_gate(...)` (`hitl_placement.py:204`, `HITLGateResult`) opens **before** `RuntimeToolDispatcher.dispatch`. The 4-response palette decides dispatch: APPROVE→dispatch; EDIT→dispatch `edited_proposal`; REJECT→skip (record rejection); RESPOND→feed `response_text` back to the model. `DURABLE_ASYNC` variants pause the workflow (HITL_INVOCATION_PENDING) and resume via `ResumeContext.hitl_response` (one-shot per §14.8.8). |
+| (i) | Approval/HITL gate × tool dispatch | The gate opens **before** `RuntimeToolDispatcher.dispatch`. **Production gate body = the runtime `RuntimeHITLGateComposer`** (`Spec_Harness_Runtime_v1.md` §14.8) — *not* the CP-side `hitl_gate(...)` signature (`harness-cp/.../hitl_placement.py:204`, `HITLGateResult`), which is a **pure-signature surface closing the historical `NotImplementedError`** and delegates its body to the runtime composer (review finding S-2: wire `RuntimeHITLGateComposer`, not the CP signature). The 4-response palette decides dispatch: APPROVE→dispatch; EDIT→dispatch `edited_proposal`; REJECT→skip (record rejection); RESPOND→feed `response_text` back to the model. `DURABLE_ASYNC` variants pause the workflow (HITL_INVOCATION_PENDING) and resume via `ResumeContext.hitl_response` (one-shot per §14.8.8). |
 | (j) | Test/e2e proof shape | §2.4. |
 
 ### §2.3 Stable tool-call IDs, replay, idempotency `[HIGH]`
@@ -230,7 +230,9 @@ Tests (beyond the composer-unit `test_pause_resume_workflow_layer_state_ledger_e
 
 **Question (handoff #4):** does post-MVP R-CXA-2 require a product brief only / runtime-CP spec amendment / impl plan / ADR escalation / combination? **Be explicit.**
 
-**Answer: a COMBINATION — (this) design brief + CP spec amendment + runtime plan amendment + implementation plan; NO new foundational ADR, with one named escalation gate.**
+**Answer: a COMBINATION — (this) design brief + CP spec amendment + runtime plan amendment + implementation plan; NO new foundational ADR — *conditionally*, with one named escalation gate.**
+
+> **Conditional, not settled (review finding S-4).** The "no new ADR" conclusion rests **entirely** on the premise that §14.12's *memory-CRUD* inner loop legitimately generalizes to *arbitrary* model-driven tool use. **That premise IS the §5.1 E2 risk** — so the verdict is **"conditionally sound": no ADR *iff* the §5.1 (E1)/(E2) gate clears at impl-planning (OQ-3).** If the generalization is judged a foundational execution-model shift (E2), the answer flips to "fork → ADR." Read §5.1 as load-bearing, not a footnote.
 
 | Vehicle | Needed? | Why |
 |---|---|---|
@@ -308,6 +310,9 @@ Each producer stage closes only on an **e2e producer test** (drive the real path
 - **OQ-2** — whether `pause_event_id` collapses into `pause_event.pause_audit_entry_id` under Reading A (§3.4) — a DP-3(a)-consistent simplification to evaluate, not re-litigate.
 - **OQ-3** — (E1)/(E2) escalation check (§5.1): does the general model-driven loop fit the INFERENCE_STEP inner-loop framing, or need a new `StepKind` / a foundational execution-model ADR? Make the call explicitly at S2 before building.
 - **OQ-4** — the §14.12 inner-loop *mechanism* (α SDK-internal / β harness-authored / γ sibling-composer) for the HITL loop — impl discretion, but should align with whatever the memory-tool C-RT-22 arc chooses, to avoid two divergent inner-loop mechanisms.
+- **OQ-5 (loop concern — review S-3a)** — **`tool_call_id` ⊥ idempotency under cross-family fallback on a *live* (non-replay) turn.** §2.3 establishes replay-safety needs the turn journaled; but a *fallback* re-dispatch to a different provider (C-CP-04) re-samples the model → **new** provider `tool_call_id`s, so the HITL-rewrite idempotency key won't dedup across the fallback boundary. Specify whether a fallback turn is a fresh turn (new ids, expected) or must preserve ids — at S2.
+- **OQ-6 (loop concern — review S-3b)** — **HITL gate timeout / degradation in-loop.** A `DURABLE_ASYNC` gate that times out hits the C-CP-21 §21.6 per-persona-tier `on_hitl_timeout` degradation (`TimeoutDegradationKind`: SOLO→CONTINUE_AS_REJECT / TEAM→ESCALATE / MULTI_TENANT→ABORT). The inner loop must consume that outcome (REJECT-path / abort) — not covered in §2.2. Specify at S2.
+- **OQ-7 (loop concern — review S-3c)** — **mid-loop breaker trip vs journaled-replay state.** If the retry/breaker wrapper (C-RT-16/21) trips mid-turn (after some tool calls dispatched + emitted), how does replay reconcile the partially-journaled turn? Specify the interaction of breaker-open with the journaled-turn replay invariant (§2.3) — at S2/S3.
 
 ---
 
