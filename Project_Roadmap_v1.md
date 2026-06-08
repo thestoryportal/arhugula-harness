@@ -2204,8 +2204,13 @@ R-CXA-2-cp-is-seam:
     same producer-discovery shape as R-CXA-1 (DEFER) + R-CXA-4 (0 wireable): **3/6 fired, 3/6 gated on
     future HITL rewrite / engine recovery-loop producers**. Wiring static tool-dispatch or ledger-only
     placeholders would be the silent X-AL-3 extension the U-RT-111 saga forbade. NO clean
-    Claude-executable wiring slice exists at current MVP scope. R-CXA-2 stays STILL-BOUNDED; full RETIRED
-    gates on future upstream-loop authoring. Register §B-14.
+    Claude-executable wiring slice exists at current MVP scope. **2026-06-08 refresh audit at HEAD
+    `4baefe0b` reaffirmed the producer gate:** `rewrite_tool_call(...)` still has no production
+    LLM/tool inner-loop caller, workflow-driver pause/resume sites already emit the workflow-layer
+    `cp.pause-resume-protocol` action rather than the engine-layer `cp.pause-captured` /
+    `cp.resume-attempted` actions, and the free-function engine-layer surfaces remain substrate APIs
+    without a recovery-loop producer. Evidence: `.harness/r-cxa-2-producer-audit-2026-06-08.md`.
+    R-CXA-2 stays STILL-BOUNDED; full RETIRED gates on future upstream-loop authoring. Register §B-14.
 
 R-CXA-3-cp-as-seam:
   title: CXA-3 (CP->AS) seam — runtime composer
