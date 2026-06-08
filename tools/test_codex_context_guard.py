@@ -154,6 +154,50 @@ def test_dashboard_snapshot_does_not_count_as_design_impl_mix() -> None:
     assert not any(f.code == "DESIGN_IMPL_MIX" for f in findings)
 
 
+def test_dashboard_generator_maintenance_does_not_count_as_design_impl_mix() -> None:
+    state = _state(
+        status_entries=[
+            " M .harness/class_1_fork_harness_toml_default_discovery_unimplemented.md",
+            " M Project_Roadmap_v1.md",
+            " M tools/dashboard/generate.py",
+            " M tools/dashboard/roadmap.html",
+            " M tools/test_dashboard_generate.py",
+        ],
+        changed_files=[
+            ".harness/class_1_fork_harness_toml_default_discovery_unimplemented.md",
+            "Project_Roadmap_v1.md",
+            "tools/dashboard/generate.py",
+            "tools/dashboard/roadmap.html",
+            "tools/test_dashboard_generate.py",
+        ],
+        dashboard_snapshot_current=True,
+    )
+
+    findings = cg.validate(state, mode="closeout")
+
+    assert not any(f.code == "DESIGN_IMPL_MIX" for f in findings)
+
+
+def test_dashboard_maintenance_exemption_does_not_cover_other_tools() -> None:
+    state = _state(
+        status_entries=[
+            " M .harness/class_1_fork_harness_toml_default_discovery_unimplemented.md",
+            " M tools/dashboard/generate.py",
+            " M tools/codex_context_guard.py",
+        ],
+        changed_files=[
+            ".harness/class_1_fork_harness_toml_default_discovery_unimplemented.md",
+            "tools/dashboard/generate.py",
+            "tools/codex_context_guard.py",
+        ],
+        dashboard_snapshot_current=True,
+    )
+
+    findings = cg.validate(state, mode="closeout")
+
+    assert any(f.code == "DESIGN_IMPL_MIX" and f.severity == "hard" for f in findings)
+
+
 def test_committed_diff_range_drives_guard_changed_files(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     base = _git(repo, "rev-parse", "HEAD")

@@ -43,6 +43,12 @@ TRACKING_SURFACES = {
     ".harness/substitutions.yaml",
 }
 DASHBOARD_SNAPSHOT = "tools/dashboard/roadmap.html"
+DASHBOARD_MIX_EXEMPT_IMPL = {
+    "tools/dashboard/generate.py",
+    "tools/dashboard/README.md",
+    "tools/dashboard/roadmap.html",
+    "tools/test_dashboard_generate.py",
+}
 CHECKPOINT_DIR = Path(".harness/.checkpoints")
 CHECKPOINT_FILE = "codex-context-latest.json"
 CREDENTIAL_GATE_LEDGER = Path(".harness/codex_credential_gates.jsonl")
@@ -433,7 +439,7 @@ def derive(
 
 
 def _has_design_impl_mix(files: list[str]) -> bool:
-    impl_files = [f for f in files if f != DASHBOARD_SNAPSHOT]
+    impl_files = [f for f in files if f not in DASHBOARD_MIX_EXEMPT_IMPL]
     return any(DESIGN_RE.search(f) for f in files) and any(IMPL_RE.search(f) for f in impl_files)
 
 
