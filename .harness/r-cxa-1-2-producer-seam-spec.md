@@ -37,6 +37,8 @@ For contrast, the **already-wired** CP→IS composers (do NOT confuse with the a
 
 > **Producer-discovery discipline** (`[[r-cxa-seam-wiring-is-producer-discovery]]`): "wire a production caller" first requires grepping the seam's REAL producer; the answer is often DEFER-don't-wire (hollow). This brief applies that lens per-seam, classifying each gap before recommending action.
 
+> **Post-MVP loop architecture → sibling brief.** This file is the *compact decision anchor* (why R-CXA-2 must not be hollow-wired; per-seam B1/B2/B3 disposition). The larger **post-MVP producer-loop architecture** — how to actually build the HITL model-driven tool loop (DP-1(a)) and the engine recovery loop (DP-2(a)+DP-3(a)), the staged path to an impl plan, and the sharpened governance/escalation determination — lives at **`r-cxa-2-post-mvp-producer-loop-product-brief.md`** (conditioned on operator post-MVP build authorization; R-CXA-2 stays `STILL-BOUNDED` until then). Read this anchor for the *decisions*; read the sibling for the *architecture*.
+
 ---
 
 ## §1. The organizing principle — three buckets per gap
@@ -294,6 +296,7 @@ This keeps the arc in clean design-phase posture: **`.harness/**` only**, no `de
 
 ## §8. See also
 
+- **`r-cxa-2-post-mvp-producer-loop-product-brief.md`** — the post-MVP producer-loop architecture deep-dive (HITL inner loop DP-1(a) + engine recovery loop DP-2(a)/DP-3(a) + U-CP-78 Reading A apply surface + staged impl-plan path + governance/escalation determination).
 - `[[r-cxa-seam-wiring-is-producer-discovery]]` · `[[grounding-reveals-claude-closeable-slice-close-honestly]]` · `[[halt-route-split-ac-pattern]]` · `[[spec-prose-plan-body-drift-pattern]]`
 - `class_1_tension_u_rt_35_cp_is_wiring_gaps.md` (CLOSED parent lineage)
 - `Phase_7_Meta_Architecture_v1.md` §7.7 X-AL-3 (no silent design extension)
