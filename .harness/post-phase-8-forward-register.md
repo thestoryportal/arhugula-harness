@@ -6,13 +6,13 @@
 
 ## 0. Thesis — what "post-Phase-8" means for this harness
 
-**Phase 8 closes the *substitution accounting*, not the *capability activation*.** Per the roadmap §1 + X-AL-2 (Meta-Architecture §7.7), a substitution RETIRES when (A) its cited units land **and** (B) the H_E scaffold surface is no longer invoked at the substitution site. **X-AL-2 never required the underlying capability to be exercised in production** — only that the hand-built H_T substrate displaced the Claude-Code scaffold. So the 88.9% RETIRED headline is **legitimate and not undercut by this register.**
+**Phase 8 closed the *substitution accounting*, not the *capability activation*.** Per the roadmap §1 + X-AL-2 (Meta-Architecture §7.7), a substitution RETIRES when (A) its cited units land **and** (B) the H_E scaffold surface is no longer invoked at the substitution site. **X-AL-2 never required the underlying capability to be exercised in production** — only that the hand-built H_T substrate displaced the Claude-Code scaffold. The ratified Phase-8 accounting is **46/54 RETIRED (85.2%) + 49/54 pipeline-advanced (90.7%)**; terminal bounded-residual labels do not re-tally into the 46.
 
 What remains is a **different axis of work**: *activation, deployment, scale, and external integration* of capabilities that are, in many cases, **library-complete / structurally present but not yet exercised at runtime** (multi-LLM routing, real sandbox isolation, non-LOCAL deployment surfaces, multi-tenant redaction, MANAGED_CLOUD secrets, external MCP/Files/managed_agents integrations). This is **not "fixing incomplete retirements"** — it is building the production frontier the MVP deliberately stopped short of.
 
 The register has **two tiers**, kept distinct:
 
-- **Tier A — Phase-8 closure residuals.** Operator-owned actions needed to *declare Phase 8 done* (bounded-residual sign-offs, the R-700 review, the no-`R-NNN`-entry gap, the config-discovery fork). These are *closure* items, not forward activation.
+- **Tier A — Phase-8 closure residuals.** These have now been dispositioned: the R-700 review declared Phase 8 closed, bounded-residual sign-offs were ratified, the invisible-row `R-NNN` coverage was authored, and the config-discovery fork was ratified. Historical detail remains below for provenance.
 - **Tier B — Post-Phase-8 forward activation.** The genuinely-forward surfaces (Multi-LLM IV / Multi-deployment V / Multi-tenant VI / External-integrations IX / Research X / Operator-tooling XI) + the CXA composition seams.
 
 **This register also discharges a roadmap obligation.** Roadmap §1 marks Surfaces IV / VI / VIII–X as `decomposition-owed` (§9). This document **is** that decomposition for IV / VI / IX / X — its items can seed `R-300` / `R-500` / `R-800` / `R-900` entries, which also closes the **no-`R-NNN`-entry gap** R-700 surfaced for `CXA-1/2/3/4` + `CP-17`.
@@ -29,9 +29,9 @@ The register has **two tiers**, kept distinct:
 
 | # | Status | Item | Owner action | Spec/source | Council? |
 |---|---|---|---|---|---|
-| A-1 | **[blocked]** | R-700 Phase-8 substitution review + final integer ratification | Review the R-700 draft; ratify 46–47-vs-48 + bounded-residual sign-offs | `R-700-phase-8-substitution-accounting` (BLOCKED) | no (AUQ) |
-| A-2 | **[open]** | Bounded-residual sign-offs (AS-8e, AS-8f, OD-6) | Operator signs the 3 deferred-by-design closes | X-AL-2 §5.3; Surface VIII | no (AUQ) |
-| A-3 | **[open]** | `R-NNN` coverage for the 5 invisible open rows (CXA-1/2/3/4 + CP-17) | Authorize an R-002-style Surface-I pass | R-700 draft §C item 2 | no |
+| A-1 | ~~closed~~ | ~~R-700 Phase-8 substitution review + final integer ratification~~ | Phase 8 declared closed at 46/54 retired + 49/54 pipeline-advanced | `R-700-phase-8-substitution-accounting` RESOLVED | no (AUQ) |
+| A-2 | ~~closed~~ | ~~Bounded-residual sign-offs (AS-8e, AS-8f, OD-6)~~ | Operator ratified terminal bounded-residual dispositions | X-AL-2 §5.3; Surface VIII | no (AUQ) |
+| A-3 | ~~closed~~ | ~~`R-NNN` coverage for the 5 invisible open rows (CXA-1/2/3/4 + CP-17)~~ | CXA-1/2/3/4 and CP-17 now have roadmap entries | R-700 draft §C item 2 | no |
 | A-4 | ~~closed~~ | ~~`harness.toml` auto-discovery fork ratification~~ | Reading A ratified 2026-06-06; implementation had already shipped at PR #279 | `R-100-mvp-config-discovery` RESOLVED | no |
 
 ### Tier B — Post-Phase-8 forward activation
@@ -43,14 +43,14 @@ The register has **two tiers**, kept distinct:
 | B-3 | ~~closed~~ | V Deployment | ~~Real TIER_2 container sandbox execution (R-410)~~ | **R-410 RESOLVED by local Docker execution driver + live TIER_2 container e2e** | this PR | ⚖️ yes |
 | B-4 | **[partial: R-411 closed / R-412 deferred]** | V Deployment | TIER_3 microVM + TIER_4 full-VM execution (R-411/R-412) | **R-411 RESOLVED** by Docker + gVisor/runsc ToolExecutionDriver on the operator-provisioned Lima Linux VM; R-412 remains the separate full-VM/Firecracker lane | impl + infra | ⚖️ yes |
 | B-5 | ~~closed~~ | V Deployment | ~~SELF_HOSTED_SERVER + MANAGED_CLOUD e2e (R-420/R-421)~~ | **R-420 RESOLVED by local single-node self-hosted daemon + collector + keyring live e2e; R-421 RESOLVED by approved E2B + GCP Secret Manager + authenticated Cloud Run collector live e2e** | this PR | ⚖️ closed |
-| B-6 | **[proposed]** | V Deployment | OTLP tail-keep collector-side validation (R-430) | buffer logic in-process; collector-side validation can now use the R-420 local collector stack | impl + local infra | no |
+| B-6 | ~~closed~~ | V Deployment | ~~OTLP tail-keep collector-side validation (R-430)~~ | **R-430 RESOLVED** by the R-420 local real-collector tail-keep live proof | PR #326 | no |
 | B-7 | ~~closed~~ | V Deployment | ~~Tier-level self-hosted secrets backend selector (R-440)~~ | **SELF_HOSTED keyring-only selector landed; cloud bootstrap-token remains R-421** | this PR | no |
-| B-8 | **[proposed]** | VI Multi-tenant | Non-default `tenant_id` / non-SOLO `persona_tier` deployment | fields plumbed; non-toggleability enforced; base-rate envelope live | operator deploy + impl | ⚖️ yes |
-| B-9 | **[blocked]** | VI Multi-tenant | OD-4: per-session redaction toggle (§13.1) + opaque-token tokenization (§13.2) | §13.1 toggle closed; OD opaque-token substrate + durable audit-ledger token map + provider-free category-token classifier seam present; eval-grade classifier remains cross-axis-gated (R-008) | cross-axis classifier | ⚖️ yes |
+| B-8 | ~~closed~~ | VI Multi-tenant | ~~Non-default `tenant_id` / non-SOLO `persona_tier` deployment~~ | **R-500 RESOLVED** by the local self-hosted multi-tenant live proof | PR #328 | ⚖️ closed |
+| B-9 | **[bounded/accounting]** | VI Multi-tenant | OD-4: per-session redaction toggle (§13.1) + opaque-token tokenization (§13.2) | Runtime code residual is closed; OD-4 keeps its R-700 ratified accounting label unless a separate back-flow reclassifies it | accounting/back-flow | ⚖️ yes |
 | B-10 | ~~closed~~ | IX External | ~~Real external MCP server connection~~ | **✅ R-800 RESOLVED (2026-06-01)** — `start()`/`shutdown()` wired at PR #172 (spec v1.41 §14.9.8 Gaps B/F); real external stdio e2e green & unconditional at `test_u_rt_86`. Full `api.run` path = Gap D (R-100 AC#2, operator-gated) | impl | no |
 | B-11 | ~~closed~~ | IX External | ~~Files API integration (AS-8e / CP-17)~~ | **R-810 RESOLVED by real Anthropic Files upload/reference/delete plus managed-cloud `files.operation` Cloud Trace proof** | this PR | no |
-| B-12 | **[deferred]** | IX External | managed_agents integration (AS-8f) | STILL-BOUNDED-INDEFINITELY by design (managed-cloud arc) | design-phase + impl | no |
-| B-13 | **[proposed]** | IX External | Memory-tool production backend (CP-16) | SELF_HOSTED SQLite slice landed (PR #224); cloud-vault/managed-DB remainder deferred (creds) | impl | no |
+| B-12 | ~~closed~~ | IX External | ~~managed_agents integration (AS-8f)~~ | **R-820 RESOLVED** by the real Anthropic Managed Agents SDK/session integration plus managed-cloud `managed_agents.*` proof | PR #380 | no |
+| B-13 | **[proposed]** | IX External | Memory-tool production backend (CP-16) | SELF_HOSTED SQLite, provider-free S3, and live S3 cloud-vault slices are done; managed-DB remains future optional scope | impl | no |
 | B-14 | **[partial]** | CXA | Cross-axis seam completion (CXA-1/2/3/4) | CXA-1 PARTIAL (no producer), CXA-2 STILL-BOUNDED (engine substrate), CXA-3 STILL-BOUNDED (no composer), CXA-4 PARTIAL (0-wireable, bookkeeping) — **placeholders resolved at v2.3/v2.11; v2.18 matrix defect fixed at v2.19/PR #226** | impl (mechanical) | no |
 | B-15 | **[proposed]** | XI Tooling | Dashboard iteration-2 (R-XI-02/R-XI-03) | MVP live; iteration-2 nice-to-have | impl | no |
 | B-16 | **[proposed]** | X Research | Open architectural / speculative arcs | not decomposed | research | no |
@@ -62,16 +62,16 @@ The register has **two tiers**, kept distinct:
 
 ## A-1 · R-700 Phase-8 substitution review + final-integer ratification
 - **What it is.** The operator-owned Phase-8 review (`R-700-phase-8-substitution-accounting`, BLOCKED) that consumes the R-700 draft and declares all 54 substitutions RETIRED or RETIRED-AS-BOUNDED-RESIDUAL with rationale (Surface VIII closure criterion, roadmap §1).
-- **Current state.** The Claude-executable draft is landed (PR #207). It found the published `48/54` over-counts by 1–2 (per-row truth `46–47`); pipeline-advanced `49/54` is solid.
-- **Close-out steps.** (1) Read `.harness/R-700-phase-8-closure-accounting-draft.md`; (2) ratify the substantive-RETIRED integer (46 / 47 / keep 48 with carve-out — §C item 1); (3) sign the bounded-residual closes (A-2); (4) mark `R-700-phase-8-substitution-accounting` RESOLVED. **Council: no** — this is a ratification (advisor + AskUserQuestion), not a multi-voice design tension.
+- **Current state.** CLOSED. The operator lifted the hold and Phase 8 was declared closed on 2026-06-02. Canonical accounting is 46/54 RETIRED and 49/54 pipeline-advanced.
+- **Close-out steps.** None. **Council: no** — this was a ratification (advisor + AskUserQuestion), not a multi-voice design tension.
 
 ## A-2 · Bounded-residual sign-offs (AS-8e, AS-8f, OD-6)
 - **What it is.** Three substitutions closed as deferred-by-design / dormant-at-MVP that need an explicit operator Phase-8 sign-off per X-AL-2 §5.3: **AS-8e** (`files.*` namespace, Files-arc Memory-only MVP scope, runtime spec v1.17 §14.C); **AS-8f** (`managed_agents.*`, production-only exclusion, `class_1_fork_as_8f_...` Q1=C); **OD-6** (local-first OTLP sqlite ingestion — `flush_to_sqlite` dormant at MVP, FIRST bounded-residual close in the ledger, batch-51).
-- **Close-out steps.** Operator confirms each bounded-residual disposition is the intended Phase-8 end-state (vs. requiring substantive close before Phase-8 graduation). **Council: no** (sign-off).
+- **Close-out steps.** None for Phase-8 accounting. The operator ratified the terminal bounded-residual dispositions; later implementation proofs for Files and managed_agents are tracked by R-810/R-820 and do not automatically change the canonical Phase-8 tally. **Council: no** (sign-off).
 
 ## A-3 · `R-NNN` coverage for the 5 invisible open rows
 - **What it is.** R-700 surfaced that `CXA-1/2/3/4` + `CP-17` have **no roadmap `R-NNN` entries** — the R-002 Surface-I decomposition surveyed only the per-axis `§4.1`, which excludes the CXA axis (no `§4.1` file) and didn't frame CP-17's batch-44 SB-INDEF reclassification as open.
-- **Close-out steps.** Authorize an `R-002`-style decomposition pass over CXA + CP-17 → seed `R-NNN` entries (these map to B-14 forward work). **Note:** this register's B-14 + §0 already supplies the substance; the action is to formalize them as roadmap entries. **Council: no.**
+- **Close-out steps.** None. CP-17 is tracked by R-010/R-810, and CXA-1/2/3/4 are tracked by R-CXA-1..4. **Council: no.**
 
 ## A-4 · `harness.toml` auto-discovery fork ratification
 - **Status.** CLOSED. The operator ratified Reading **(A)** CWD discovery on 2026-06-06; empirical grounding found PR #279 (`a394032`) had already implemented that reading.
@@ -139,9 +139,9 @@ The register has **two tiers**, kept distinct:
 - **`⚖️ Council (C7 + C8 ⊥ C11).`** Observability/privacy (C7) + security/compliance (C8) vs operator-burden (C11): how much redaction/audit ceremony is mandatory at TEAM vs MULTI_TENANT. Convene when the multi-tenant arc opens.
 
 ### B-9 · OD-4: per-session redaction toggle (§13.1) + opaque-token tokenization (§13.2) `⚖️ council-eligible`
-- **What it is.** The **one genuinely-open MVP-surface substitution** (`H_T-OD-4` PARTIAL, roadmap `R-008`). Two deferred gates: (a) §13.1 per-session redaction toggle (solo-developer operator-runtime control to opt into raw capture, auditably) — needs a **session-control substrate**; (b) §13.2 opaque-token tokenization (replace strip-not-tokenize MVP with `[REDACTED:PII]`-style placeholders + audit-ledger-only token→value mapping) — an **eval-grade pipeline**.
-- **Current state.** The §13.1 solo-developer per-session toggle is closed. The 2026-06-07 R-008 slices add an OD-owned provider-free opaque-token substrate plus durable audit-ledger token-map persistence: `RedactionSpanProcessor(tokenizer=OpaqueRedactionTokenizer(...))` can replace default-off content attributes with opaque `[REDACTED:CONTENT:<id>]` placeholders, and `AuditLedgerRedactionTokenMap` persists token→raw mappings through the runtime audit writer. The token path now also has a provider-free classifier seam: `DeterministicRedactionClassifier` can emit conservative category placeholders such as `[REDACTED:PII:<id>]` / `[REDACTED:MCP_ARG:<id>]`, and the signed audit token-map entry stores `audit.redaction_token.semantic_category`. Default strip-not-tokenize behavior remains unchanged when no tokenizer is injected.
-- **Close-out steps.** (1) Replace/extend the deterministic classifier seam with the eval-grade semantic classifier/category pipeline; (2) advance OD-4 PARTIAL → RETIRE-READY only after that cross-axis gate is proven.
+- **What it is.** The OD-4 substitution row remains `PARTIAL` / `RETIRED-AS-CROSS-AXIS-DEFERRED` in the Phase-8 accounting, but the previously open runtime gates have now been implemented. This section records the distinction between runtime closure and accounting label movement.
+- **Current state.** The §13.1 solo-developer per-session toggle is closed. The 2026-06-07 R-008 slices added an OD-owned opaque-token substrate, durable audit-ledger token-map persistence, provider-free category labeling, and the runtime `EvalGradeSemanticRedactionClassifier` path for GenAI prompt/response, tool argument/result, retrieval, file, memory, skill, PII, and secret surfaces. Stage 4 now wires `MULTI_TENANT_COMPLIANCE` redaction through `OpaqueRedactionTokenizer` + `AuditLedgerRedactionTokenMap` when an audit sink is available; without an audit sink, it preserves fail-closed strip mode.
+- **Close-out steps.** No additional runtime code gate is currently recorded here. OD-4 remains `PARTIAL` / `RETIRED-AS-CROSS-AXIS-DEFERRED` because that label was ratified by R-700; any movement is a separate accounting/back-flow decision, not another implementation prerequisite.
 - **`⚖️ Council (C7 ⊥ eval-utility/C11).`** Privacy-default-off (C7) vs eval-grade content-shape-reconstruction utility: tokenize vs strip is a real two-voice call. Convene when R-008 opens.
 
 ---
@@ -154,20 +154,20 @@ The register has **two tiers**, kept distinct:
 - **Original close-out steps (all met).** (1) `host.start()` at stage-3a — ✅ `stage_3a_cp_clients.py:59`; (2) `host.shutdown()` at teardown — ✅ `shutdown.py:484-489`; (3) operator `MCPClientConfig.connection_url` + per-server defaults — ✅ surface landed (spec v1.40/v1.41); (4) live e2e against a real external server — ✅ `test_u_rt_86` (real subprocess). **Council: no** (mechanical; confirmed not needed).
 - **Residual (out of R-800 scope).** The **full `api.run` bootstrap TOOL_STEP path** (must_pass[3] strict reading) is **Gap D / R-100 AC#2** — the bootstrap pings ≥1 provider regardless of step kind, so the `api.run` echo-MCP e2e (`test_r100_ac2_tool_step_e2e`) is skipif-gated on a live provider (ollama OR `ANTHROPIC_API_KEY`) and is **operator-gated by design** (not fired unilaterally). Making the provider ping conditional on an inference step is a **Class 1 fork candidate** carrying a nameable **C9⊥C11** tension (fail-fast reliability ⊥ tool-only-workflow ergonomics) → **dyadic-council-eligible** per CLAUDE.md §10.9 if the operator opens it.
 
-### B-11 · Files API integration (deferred per AS-8e / CP-17)
+### B-11 · Files API integration (AS-8e / CP-17)
 - **What it is.** Anthropic Files API (`/v1/files` upload/list/metadata/delete; `file_id` reference in message content) — ADR-D3 primitive #10; the `files.*` observability namespace (AS-8e) + the CP-16/17 Files-primitive consumption.
 - **✅ RESOLVED 2026-06-08 (R-810).** Operator opened the previously deferred Files arc. The runtime design shape is the already-ratified FilesAPIClient/adapter + file_id-reference-composition path from `.harness/class_1_fork_h_t_cp_16_17_executable_consumer_absence.md` §13.6.C, landed by the R-810 runtime port and real Anthropic Files adapter.
 - **Close-out steps (all met).** (1) **Design-phase:** Files arc opened at operator-discretion timing with the §13.6.C runtime unit shape; (2) **impl:** managed-cloud Anthropic Files client adapter + document file-reference and Batch request composition landed; (3) **e2e:** live Anthropic upload + reference-by-id + delete path passed, and `files.operation` exported through the authenticated managed collector was observed in Cloud Trace `bfd28fa8fc8ecc3ba973d1e405cdb865` with `files.*` attrs. The uploaded live file is no longer present (cleanup retry returned Anthropic 404). Temporary GCP TokenCreator IAM used for Cloud Run ID-token minting was removed.
 
-### B-12 · managed_agents integration (deferred per AS-8f)
+### B-12 · managed_agents integration (AS-8f)
 - **What it is.** Anthropic managed_agents primitive + the `managed_agents.*` 3-attribute namespace.
 - **Current state.** **RESOLVED for the R-820 runtime/integration gate** — PR #380 added the real Anthropic Managed Agents SDK/session adapter and live managed-cloud e2e proof. Evidence: session `sesn_019aMgaF8sAW2cXhhpMTYij4` reached `session.status_idle`; `managed_agents.runtime` exported to the managed collector; Cloud Trace trace `009d7716b19c75e4ad7edb93e78f8d2b` carried `managed_agents.*` attributes. Temporary Cloud Run Token Creator IAM used for the proof was removed and verified absent.
 - **Close-out steps.** R-820 is closed. Any AS-8f substitution-tally movement remains a separate accounting/back-flow action because the Phase-8 ledger still records the accepted-indefinite-defer disposition. **Council: no.**
 
 ### B-13 · Memory-tool production backend (CP-16)
 - **What it is.** A production storage backend for the Memory tool beyond local-filesystem. ADR-D3 #11 (Memory tool is client-side; harness implements the backend). `C-RT-22` `MemoryToolRegistry` + `MemoryToolStorageBackendProtocol`.
-- **Current state.** Registry + **FILESYSTEM backend landed** (`LocalFilesystemMemoryToolBackend`; `CP-16` closed RETIRED-AS-BOUNDED-RESIDUAL batch-44) + **SELF_HOSTED_SERVER `DATABASE` backend landed** (`SqliteMemoryToolBackend`, stdlib sqlite3, R-830 this arc — implements the spec'd `MemoryToolStorageBackend.DATABASE` per §14.12.3 `connection_string`; operator binds via `memory_tool_backend_config`; full read/write/delete e2e, no creds). The **MANAGED_CLOUD cloud-vault / managed-database** backend (`S3` / real managed DB with creds) is **NOT** this — it stays **deferred / operator-gated** (`MANAGED_CLOUD` without an explicit `DATABASE` override still raises). The override point `RuntimeConfig.memory_tool_backend_config` already exists; `S3` / `ENCRYPTED_FILESYSTEM` / `OPERATOR_DEFINED` still raise at the factory.
-- **Close-out steps (cloud remainder).** (1) New backend class implementing `MemoryToolStorageBackendProtocol` for a real cloud-vault / managed-db (`S3` / managed DB); (2) operator binds it via `memory_tool_backend_config` with real `connection_string` / creds; (3) e2e read/write/delete against the real cloud backend (operator-gated on creds/infra). **Council: no** (impl). *(The SQLite `DATABASE` slice landed at R-830; this remainder is the cloud production backend the B-13 title names.)*
+- **Current state.** Registry + **FILESYSTEM backend landed** (`LocalFilesystemMemoryToolBackend`; `CP-16` closed RETIRED-AS-BOUNDED-RESIDUAL batch-44), **SELF_HOSTED_SERVER `DATABASE` backend landed** (`SqliteMemoryToolBackend`, stdlib sqlite3), and **MANAGED_CLOUD S3 cloud-vault backend live-proven**. The approved live S3 e2e bound `MemoryToolStorageBackend.S3` on `DeploymentSurface.MANAGED_CLOUD`, used AWS CLI login profile credentials, and exercised create/view/str_replace/insert/delete through the Memory tool dispatch seam.
+- **Close-out steps (optional cloud remainder).** A managed-DB backend remains future optional scope rather than the blocker for the S3 cloud-vault path. **Council: no** (impl).
 
 ---
 

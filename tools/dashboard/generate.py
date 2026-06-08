@@ -75,13 +75,13 @@ ANNOTATIONS = {
     "R-100-mvp-config-discovery": "Waiting on a small decision: auto-find the config file at the project root, or drop that behavior from the spec.",
     "R-700-phase-8-substitution-accounting": "RESOLVED — you ratified the count and Phase 8 is declared CLOSED: 46/54 retired (derived from the substitution ledger). The build phase is done.",
     # DEFERRED (parked by design)
-    "R-005-as-8e-files-indefinite": "File-telemetry support is parked by design until a cloud deployment needs it — not part of the core build.",
+    "R-005-as-8e-files-indefinite": "Files telemetry is live-proven by R-810; any Phase-8 tally movement remains a separate accounting/back-flow action.",
     "R-006-as-8f-managed-agents-indefinite": "Managed-agents telemetry is live-proven by R-820; any Phase-8 tally movement remains a separate accounting/back-flow action.",
-    "R-CXA-3-cp-as-seam": "Parked until either a cloud 'Files' arc opens or you narrow its scope; no in-workspace work available now.",
-    "R-810-files-api-integration": "The real Files-API integration; deferred by design to a managed-cloud stage.",
+    "R-CXA-3-cp-as-seam": "Parked until either a real CP→AS runtime composer is authored or you narrow its scope; no in-workspace producer exists now.",
+    "R-810-files-api-integration": "Resolved by the real Anthropic Files upload/reference/delete path plus managed-cloud files.operation Cloud Trace proof.",
     "R-820-managed-agents-integration": "Resolved by the real Anthropic Managed Agents SDK/session integration plus managed-cloud managed_agents.* Cloud Trace proof.",
     # PROPOSED (queued; most need credentials or infrastructure only you can provide)
-    "R-300-multi-llm-second-provider": "Ready to start, but needs OpenAI/Ollama credentials and a mixed-provider test you'd run.",
+    "R-300-multi-llm-second-provider": "Resolved by deterministic fallback plus live Anthropic→OpenAI and local Ollama fallback exercises.",
     "R-410-sandbox-tier-2-container-execution": "Resolved by the local-only Docker execution driver and live TIER_2 container e2e.",
     "R-411-sandbox-tier-3-microvm-execution": "Resolved by Docker + gVisor/runsc ToolExecutionDriver on the operator-provisioned Lima Linux VM.",
     "R-412-sandbox-tier-4-full-vm-execution": "Deferred until a full-VM provider implementation exists; R-411 now proves the Tier-3 gVisor path and R-421 proves the managed-cloud surface.",
@@ -122,7 +122,7 @@ NONRETIRED_LEDGER = [
         "rnnn": "R-CXA-4",
         "state": "PARTIAL",
         "why": "Grounded this session — 0 wireable edges; everything genuine is already wired.",
-        "retire": "Effectively done; stays PARTIAL only because the ledger's CXA rows were never folded into the cumulative. Closes at R-700 — low effort, bookkeeping.",
+        "retire": "Effectively done; stays PARTIAL only because the ledger's CXA rows were never folded into the cumulative. Any movement is accounting/back-flow, not a production wiring task.",
     },
     {
         "id": "CXA-2",
@@ -142,8 +142,8 @@ NONRETIRED_LEDGER = [
         "id": "AS-8e",
         "rnnn": "R-005",
         "state": "STILL-BOUNDED-INDEFINITELY",
-        "why": "files.* telemetry namespace.",
-        "retire": "Only when Files-API integration happens (cloud). Deferred by design — bounded residual, not core build.",
+        "why": "files.* telemetry namespace. R-810 now live-proves the Files API upload/reference/delete path and managed-cloud files.operation export.",
+        "retire": "Implementation gate is closed by R-810; retain the ledger row until a dedicated accounting/back-flow action changes the canonical tally.",
     },
     {
         "id": "AS-8f",
@@ -156,8 +156,8 @@ NONRETIRED_LEDGER = [
         "id": "CP-17",
         "rnnn": "R-010",
         "state": "STILL-BOUNDED-INDEFINITELY",
-        "why": "files-primitives control-plane row (tied to the Files arc, same as AS-8e).",
-        "retire": "Deferred by design (R-010 tracks it).",
+        "why": "files-primitives control-plane row. R-810 live-proves the runtime Files API path that consumed the Files arc.",
+        "retire": "Implementation gate is closed by R-810; retain the ledger row until a dedicated accounting/back-flow action changes the canonical tally.",
     },
 ]
 
@@ -213,21 +213,21 @@ REMAINING_ORDERED = [
         "layer": "build",
         "id": "R-CXA-4-od-multi-seam",
         "label": "Account the OD→multi seam (bookkeeping)",
-        "gate": "0 wireable — already done in substance; folds into the R-700 count.",
+        "gate": "0 wireable — already done in substance; any movement is accounting/back-flow only.",
     },
     {
         "n": 6,
         "layer": "build",
         "id": "R-CXA-3-cp-as-seam",
         "label": "CP→AS seam — build or narrow",
-        "gate": "Needs a runtime composer (Files arc) or a scope-narrowing decision.",
+        "gate": "Needs a real CP→AS runtime composer or a scope-narrowing decision.",
     },
     {
         "n": 7,
         "layer": "build",
         "id": "R-005 / R-006 / CP-17",
         "label": "Files namespace + AS-8f accounting",
-        "gate": "Files remains deferred by design; AS-8f implementation is closed by R-820 but tally movement is separate accounting/back-flow.",
+        "gate": "Files and AS-8f implementation gates are closed by R-810/R-820; any tally movement is separate accounting/back-flow.",
     },
     # --- Activation layer: operator-gated (creds + infra), deployment-ordered ---
     {
@@ -250,13 +250,6 @@ REMAINING_ORDERED = [
         "id": "R-300-multi-llm-second-provider",
         "label": "Second LLM provider",
         "gate": "Needs OpenAI/Ollama credentials + a mixed-provider test.",
-    },
-    {
-        "n": 11,
-        "layer": "activation",
-        "id": "R-810",
-        "label": "Files API integration",
-        "gate": "Need Files design-phase opening plus managed-cloud upload/reference e2e.",
     },
     {
         "n": 12,
