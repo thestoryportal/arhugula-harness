@@ -291,11 +291,12 @@ def test_ac4_capture_then_verify_hash_then_verify_immutability() -> None:
 # --- Coexistence regression: U-CP-49 free-function surface preserved -------
 
 
-def test_u_cp_49_free_function_capture_pause_snapshot_still_raises() -> None:
+def test_u_cp_49_free_function_capture_pause_snapshot_requires_engine_substrate() -> None:
     """Coexistence regression: CP spec v1.11 §26 NEW NOTE — the OLD
-    U-CP-49 free-function `capture_pause_snapshot` at line 121 is preserved
-    verbatim and still raises NotImplementedError. Per the v2.17 plan AC #4
-    strike: line 121 is NOT closed by U-CP-63.
+    U-CP-49 free-function `capture_pause_snapshot` remains distinct from
+    the C-CP-26 workflow-layer class and fails closed when no engine substrate
+    is bound. Per the v2.17 plan AC #4 strike: line 121 is NOT closed by
+    U-CP-63.
     """
     from harness_core import WorkflowID
     from harness_cp.pause_resume_protocol import (
