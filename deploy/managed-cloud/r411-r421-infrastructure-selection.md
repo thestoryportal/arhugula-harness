@@ -33,6 +33,55 @@ local through its SDK, but execution happens remotely, so it should not be
 counted as a local R-411 runtime unless the roadmap taxonomy is deliberately
 changed.
 
+## 2026-06-07 R-411 Research Refresh
+
+This refresh re-queried the Agent Harness Engineering NotebookLM and ran an
+operator-approved Perplexity `sonar-pro` research query using the
+environment-provided `PERPLEXITY_API_KEY`. The Perplexity call was a one-shot
+API request from the sourced repo environment; no persistent Codex MCP server
+was installed and the key was not written to Codex config. The API response
+reported total cost of `$0.094` for the research query.
+
+Both research paths converged on the same boundary:
+
+- A direct Intel macOS R-411 closure is not available under the current
+  taxonomy. Firecracker, Kata, libkrun, microsandbox, and shuru require
+  Linux/KVM for their microVM paths. gVisor/runsc is Linux-oriented and is a
+  userspace-kernel boundary rather than a dedicated-kernel microVM.
+- Apple `seatbelt`, `sandbox-exec`, Hypervisor.framework, and
+  Virtualization.framework can improve local isolation or host a Linux guest,
+  but they do not by themselves make a local R-411 microVM/runtime closure.
+  Treating QEMU `microvm` or Apple Virtualization.framework as R-411 would be a
+  taxonomy change because they are VM substrate paths in this repo.
+- E2B, Modal, Daytona, Runloop, Blaxel, and similar hosted sandboxes are viable
+  managed execution integrations, but they stay in the R-421/R-810/R-820
+  managed-integration family unless the roadmap deliberately reclassifies
+  managed remote execution as local R-411.
+
+The selected no-taxonomy-change R-411 path is therefore a Linux sandbox-host
+abstraction:
+
+1. For the first implementation, provision or point the harness at a Linux
+   x86_64/ARM64 host with Docker plus gVisor `runsc`. This is the lowest
+   integration-cost step from the existing R-410 Docker execution-driver seam.
+2. If a KVM-capable Linux host is available, add Kata Containers as the
+   stronger R-411 runtime candidate because it provides VM-backed containers
+   while preserving OCI/container packaging ergonomics.
+3. Keep Firecracker and QEMU `microvm` in the R-412/FULL_VM lane unless the
+   roadmap explicitly changes the tier taxonomy.
+4. If the operator wants progress without provisioning a Linux host, route work
+   to R-810/R-820 managed integrations or to the already-proven R-421 E2B/GCP
+   managed-cloud surface rather than claiming R-411 closure.
+
+Perplexity search evidence used for this refresh included current public agent
+sandboxing guidance and runtime surveys:
+[Augment Code agent execution sandbox](https://www.augmentcode.com/guides/agent-execution-sandbox),
+[awesome-agent-runtime-security](https://github.com/bureado/awesome-agent-runtime-security),
+[Northflank AI agent sandboxing](https://northflank.com/blog/how-to-sandbox-ai-agents),
+[AWS Builder Center secure agent sandboxes on EKS](https://builder.aws.com/content/3ADDWTtyI2gevtzY9d2vzULAxzS/secure-agent-sandboxes-on-eks),
+and
+[NVIDIA practical security guidance for sandboxing agentic workflows](https://developer.nvidia.com/blog/practical-security-guidance-for-sandboxing-agentic-workflows-and-managing-execution-risk/).
+
 ## Repo-Grounded Boundary
 
 R-411 remains a local/provider runtime gate. Current operator host checks on
@@ -54,11 +103,13 @@ authenticated OTLP to Cloud Run, and observed the trace in Cloud Trace.
 
 ### R-411: Linux + gVisor first
 
-Select a Linux x86_64 or ARM64 host with Docker and gVisor `runsc` for the first
-R-411 provider implementation. This is the smallest no-taxonomy-change route:
-it extends the R-410 Docker execution-driver shape while increasing isolation
-with gVisor. The official gVisor install docs support Linux x86_64/ARM64 and
-show Docker runtime setup with `runsc install`:
+Select a Linux x86_64 or ARM64 sandbox host with Docker and gVisor `runsc` for
+the first R-411 provider implementation. This is the smallest
+no-taxonomy-change route: it extends the R-410 Docker execution-driver shape
+while increasing isolation with gVisor. On the operator's Intel macOS machine,
+this means R-411 remains host-gated until a Linux host or Linux VM substrate is
+available; do not claim direct macOS closure. The official gVisor install docs
+support Linux x86_64/ARM64 and show Docker runtime setup with `runsc install`:
 [gvisor.dev/docs/user_guide/install](https://gvisor.dev/docs/user_guide/install/).
 
 Kata is the stronger second R-411 candidate when a Linux KVM host is available.
@@ -71,6 +122,11 @@ Do not spend more time trying to install Firecracker on this Mac for R-411.
 Firecracker and QEMU `microvm` belong to R-412/FULL_VM in this repo's current
 taxonomy. They need Linux/KVM, and R-412 also gates on a real managed-cloud
 surface.
+
+If a local-only developer experience is required before a separate Linux host
+exists, the honest bridge is a local Linux VM substrate on the Mac and then
+gVisor/Kata inside that Linux guest. The substrate itself is not the R-411
+closure; it is the host mechanism that makes the Linux R-411 runtime available.
 
 ### R-421: E2B + GCP Secret Manager + Google Cloud OTel Collector
 
@@ -186,6 +242,9 @@ managed-cloud provider calls.
    calls and cost posture. This path closed on 2026-06-07 with trace
    `d848a4da6622f42407a5e58c507513c5`.
 
-R-411 can proceed only after a compatible Linux host/runtime or Apple Silicon
-host is available. With R-421 closed, R-412 remains deferred on that separate
-higher-tier provider/runtime path.
+R-411 can proceed only after a compatible Linux host/runtime, Linux VM
+substrate, or Apple Silicon-compatible runtime path is available. With R-421
+closed, R-412 remains deferred on that separate higher-tier provider/runtime
+path. If no Linux host will be provisioned in the near term, the next forward
+activation should move to R-810/R-820 managed integrations rather than
+re-litigating direct Intel macOS R-411 closure.
