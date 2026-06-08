@@ -215,6 +215,12 @@ skips:
 sandbox-host-check provider='r411-gvisor':
     /usr/bin/python3 tools/sandbox_host_readiness.py --provider {{provider}}
 
+# Live e2e for R-411 local TIER_3_MICROVM execution via Docker + gVisor/runsc.
+# Uses only an already-local Docker image; set R411_GVISOR_DOCKER_COMMAND to
+# target a non-default Docker host, e.g. a Lima VM rootful daemon.
+r411-gvisor-live-e2e *args:
+    uv run pytest harness-runtime/tests/integration/test_r411_gvisor_tool_execution_e2e.py -q {{args}}
+
 # Check static readiness for the R-420/R-440 SELF_HOSTED_SERVER deployment gate.
 # Non-mutating: does not start the daemon, contact OTLP, or fetch secrets.
 self-hosted-readiness *args:
