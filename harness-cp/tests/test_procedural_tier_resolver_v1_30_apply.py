@@ -27,6 +27,8 @@ from harness_cp.hitl_as_tool_call_rewriting import (
 )
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.pause_resume_protocol import (
+    PauseEvent,
+    PauseReason,
     PauseResumeProtocolEventKind,
     ResumeOutcome,
     ResumeOutcomeKind,
@@ -35,9 +37,7 @@ from harness_cp.pause_resume_protocol import (
     emit_resume_attempted_state_ledger_entry,
 )
 from harness_cp.pause_resume_protocol_types import (
-    PauseSnapshot,
     StateSummary,
-    WorkflowPauseReason,
 )
 from harness_cp.per_step_override_evaluator import emit_override_state_ledger_entry
 from harness_cp.workload_binding_engine_class_selection import (
@@ -77,16 +77,13 @@ def _state_summary() -> StateSummary:
     )
 
 
-def _pause_snapshot() -> PauseSnapshot:
-    return PauseSnapshot(
-        workflow_id="wf-1",
-        run_id="run-1",
-        step_index=7,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-        state_summary=_state_summary(),
-        snapshot_hash=hashlib.sha256(b"snap-1").hexdigest(),
-        created_at=1_700_000_000_000,
-        state_ledger_anchor="entry-1",
+def _pause_event() -> PauseEvent:
+    return PauseEvent(
+        paused_at="2023-11-14T22:13:20+00:00",
+        pause_reason=PauseReason.OPERATOR_INITIATED_PAUSE,
+        state_summary_snapshot=_state_summary(),
+        external_refs_captured=(),
+        pause_audit_entry_id=Identifier("pause-1"),
     )
 
 
@@ -210,8 +207,7 @@ def test_u_cp_49_pause_captured_engine_layer_populates_sidecar() -> None:
         emit_pause_captured_state_ledger_entry(
             workflow_id="wf-1",
             step_id="step-7",
-            pause_event_id="pause-1",
-            pause_snapshot=_pause_snapshot(),
+            pause_event=_pause_event(),
             actor=ActorIdentity("engine"),
             ledger_writer=writer,
             procedural_tier_snapshot_resolver=_resolver,
@@ -279,8 +275,7 @@ def test_u_cp_49_pause_captured_halts_on_resolver_raise() -> None:
             emit_pause_captured_state_ledger_entry(
                 workflow_id="wf-1",
                 step_id="step-7",
-                pause_event_id="pause-1",
-                pause_snapshot=_pause_snapshot(),
+                pause_event=_pause_event(),
                 actor=ActorIdentity("engine"),
                 ledger_writer=writer,
                 procedural_tier_snapshot_resolver=_raising_resolver,

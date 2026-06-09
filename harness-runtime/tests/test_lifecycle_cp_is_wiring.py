@@ -297,20 +297,18 @@ import asyncio
 import hashlib
 
 from harness_cp.engine_class import EngineClass
-from harness_cp.handoff_context import StateSummary
+from harness_cp.handoff_context import ExternalReference, ReferenceClass, StateSummary
 from harness_cp.hitl_as_tool_call_rewriting import (
     HITLSemanticVariant,
     RewrittenToolCall,
 )
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.pause_resume_protocol import (
+    PauseEvent,
+    PauseReason,
     PauseResumeProtocolEventKind,
     ResumeOutcome,
     ResumeOutcomeKind,
-)
-from harness_cp.pause_resume_protocol_types import (
-    PauseSnapshot,
-    WorkflowPauseReason,
 )
 from harness_cp.workload_binding_engine_class_selection import (
     WorkloadBindingSelectionResult,
@@ -324,26 +322,27 @@ def _state_summary(version: str = "v1") -> StateSummary:
         summary_text=version,
         summary_hash=hashlib.sha256(version.encode()).hexdigest(),
         idempotency_key=Identifier("idem-" + version),
-        external_references=(),
+        external_references=(
+            ExternalReference(
+                reference_class=ReferenceClass.FILESYSTEM_STATE,
+                reference_id="state-" + version,
+                snapshot_capture_at_pause=b"snapshot-" + version.encode("utf-8"),
+            ),
+        ),
     )
 
 
-def _pause_snapshot(
+def _pause_event(
     *,
-    workflow_id: str = "wf-1",
-    run_id: str = "run-1",
-    step_index: int = 7,
-    seed: str = "alpha",
-) -> PauseSnapshot:
-    return PauseSnapshot(
-        workflow_id=workflow_id,
-        run_id=run_id,
-        step_index=step_index,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-        state_summary=_state_summary(),
-        snapshot_hash=hashlib.sha256(seed.encode()).hexdigest(),
-        created_at=1_700_000_000_000,
-        state_ledger_anchor="entry-" + seed,
+    audit_entry_id: str = "pause-audit-1",
+) -> PauseEvent:
+    state_summary = _state_summary()
+    return PauseEvent(
+        paused_at="2023-11-14T22:13:20+00:00",
+        pause_reason=PauseReason.OPERATOR_INITIATED_PAUSE,
+        state_summary_snapshot=state_summary,
+        external_refs_captured=state_summary.external_references,
+        pause_audit_entry_id=Identifier(audit_entry_id),
     )
 
 
@@ -467,8 +466,7 @@ def test_emit_pause_captured_state_ledger_entry_writes_canonical_entry(
         wiring.emit_pause_captured_state_ledger_entry(
             workflow_id="wf-1",
             step_id="step-1",
-            pause_event_id="pause-evt-1",
-            pause_snapshot=_pause_snapshot(),
+            pause_event=_pause_event(),
             actor=_ACTOR,
         )
     )
@@ -544,8 +542,7 @@ def _invoke_six_methods(
             wiring.emit_pause_captured_state_ledger_entry(
                 workflow_id=f"{workflow_prefix}-pcapt",
                 step_id="step-1",
-                pause_event_id="pause-evt-1",
-                pause_snapshot=_pause_snapshot(),
+                pause_event=_pause_event(),
                 actor=_ACTOR,
             )
         ),
