@@ -95,7 +95,7 @@ ANNOTATIONS = {
     "R-900-research-arcs": "Resolved by decomposing the placeholder into R-901.",
     "R-901-phase-9-retirement-criteria": "Resolved by the Phase-9 retirement criteria brief: research-only selector guidance, no design-substrate back-flow.",
     "R-CXA-1-as-is-seam": "The one remaining wire (a secret-fetch audit caller) has no real source yet, so wiring it would be hollow; deferred until one exists.",
-    "R-CXA-2-cp-is-seam": "Three CP→IS composer methods now fire through production callers; the 2026-06-08 audit found no remaining wireable producer until a real HITL rewrite caller or engine recovery-loop exists.",
+    "R-CXA-2-cp-is-seam": "Producer primitives now exist for HITL rewrite and engine recovery; remaining work is stage-5/bootstrap composition plus e2e producer proof.",
     "R-CXA-4-od-multi-seam": "Resolved by batch-53: grounding found 0 remaining wireable edges and the bookkeeping-only PARTIAL row was retired.",
     "R-XI-02": "Dashboard polish — dependency-graph view + sparklines; nice-to-have, nothing blocking it.",
     "R-XI-03": "Dashboard live-update mode; nice-to-have, nothing blocking it.",
@@ -116,8 +116,8 @@ NONRETIRED_LEDGER = [
         "id": "CXA-2",
         "rnnn": "R-CXA-2",
         "state": "STILL-BOUNDED",
-        "why": "The CP→IS seam is still bounded; current code has no production producer for HITL rewrite or engine-layer recovery-loop emissions.",
-        "retire": "Not safely — needs a real HITL rewrite production caller plus engine recovery-loop producers for pause capture/resume attempt.",
+        "why": "The CP→IS seam is still bounded; PR #449 added producer primitives, but they are not yet bound into stage-5/bootstrap composition.",
+        "retire": "Not safely — bind the primitives into the runtime loop and prove real CP→IS producer emissions e2e first.",
     },
 ]
 
@@ -152,7 +152,7 @@ REMAINING_ORDERED = [
         "layer": "build",
         "id": "R-CXA-2-cp-is-seam",
         "label": "Build the CP→IS engine-layer seam",
-        "gate": "Three CP→IS composer methods now fire through production callers; no remaining wireable producer exists until future HITL rewrite or engine recovery-loop authoring.",
+        "gate": "Producer primitives landed in PR #449; next closeout is stage-5/bootstrap composition plus e2e producer proof.",
     },
     {
         "n": 3,
@@ -497,6 +497,34 @@ def parse_dashboard(md: str) -> dict:
 # --------------------------------------------------------------------------- #
 # Source 3 — open PRs + CI rollup via gh.
 # --------------------------------------------------------------------------- #
+def parse_status_open_prs(root: Path) -> list[dict]:
+    """Fallback to the status-file in-flight table when GitHub is unavailable."""
+    status = root / ".harness" / "roadmap_status.md"
+    if not status.exists():
+        return []
+    section = _section(status.read_text(encoding="utf-8"), "In-flight (open PRs)")
+    result: list[dict] = []
+    for raw_pr, branch, _rnnn, posture in re.findall(
+        r"^\|\s*(#[0-9]+)\s*\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*$",
+        section,
+        re.MULTILINE,
+    ):
+        try:
+            number = int(raw_pr.lstrip("#"))
+        except ValueError:
+            continue
+        result.append(
+            {
+                "number": number,
+                "title": posture.strip(),
+                "branch": branch.strip(),
+                "draft": False,
+                "ci": "unknown",
+            }
+        )
+    return result
+
+
 def parse_open_prs(root: Path) -> list[dict]:
     raw = _run(
         [
@@ -513,11 +541,11 @@ def parse_open_prs(root: Path) -> list[dict]:
         cwd=root,
     )
     if not raw:
-        return []
+        return parse_status_open_prs(root)
     try:
         prs = json.loads(raw)
     except json.JSONDecodeError:
-        return []
+        return parse_status_open_prs(root)
     result = []
     for pr in sorted(prs, key=lambda p: p.get("number", 0)):
         checks = pr.get("statusCheckRollup") or []
