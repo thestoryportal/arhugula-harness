@@ -1,4 +1,8 @@
-"""Runtime model-driven HITL tool-loop producer for R-CXA-2."""
+"""Runtime model-driven HITL tool-loop producer for R-CXA-2.
+
+Authority: C-CP-17 HITL placement / tool-call rewriting and U-CP-77
+`cp.hitl-tool-call-rewriting`.
+"""
 
 from __future__ import annotations
 
@@ -191,4 +195,3 @@ def _proposed_action_from_tool_call(call: ModelToolCall) -> ProposedAction:
         },
         brief=None,
     )
-

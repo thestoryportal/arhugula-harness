@@ -160,7 +160,9 @@ def _call(tool_call_id: str, *, tool: str = "search") -> ModelToolCall:
 def test_hitl_tool_loop_emits_only_when_hitl_required(tmp_path: Path) -> None:
     loop, gate, dispatcher = _loop(tmp_path, hitl_required_ids=frozenset({"call-hitl"}))
 
-    results = asyncio.run(loop.run_tool_calls([_call("call-hitl"), _call("call-direct")], _context()))
+    results = asyncio.run(
+        loop.run_tool_calls([_call("call-hitl"), _call("call-direct")], _context())
+    )
 
     assert [result.tool_call_id for result in results] == ["call-hitl", "call-direct"]
     assert results[0].rewrite_write_result is WriteResult.APPENDED
@@ -199,4 +201,3 @@ def test_hitl_tool_loop_reject_skips_dispatch(tmp_path: Path) -> None:
     assert dispatcher.calls == []
     entries = read_ledger(loop.wiring.ledger_writer.handle)
     assert [entry.action_id for entry in entries] == ["cp.hitl-tool-call-rewriting"]
-

@@ -1,4 +1,8 @@
-"""Runtime engine recovery loop producer for R-CXA-2."""
+"""Runtime engine recovery loop producer for R-CXA-2.
+
+Authority: C-CP-22 engine-layer pause/resume free functions, U-CP-78
+`cp.pause-captured`, and U-CP-79 `cp.resume-attempted`.
+"""
 
 from __future__ import annotations
 
@@ -98,4 +102,3 @@ class RuntimeEngineRecoveryLoop:
             resume_outcome=resume_outcome,
             write_result=write_result,
         )
-
