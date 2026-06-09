@@ -833,29 +833,21 @@ _PAUSE_CAPTURED_ACTION_ID = "cp.pause-captured"
 def _pause_captured_idempotency_key(
     workflow_id: str,
     step_id: str,
-    pause_event_id: str,
-    snapshot_hash: str,
+    pause_audit_entry_id: str,
     outcome_hash_hex: str,
 ) -> str:
     """Compose the U-CP-49 idempotency-key per CP spec v1.26 §16.5.4 row 5.
 
-    Bytes are the 0x1E-separated 5-tuple `(workflow_id, step_id, pause_event_id,
-    snapshot_hash, sha256(outcome_canonical_bytes).hex())`; SHA-256-hashed;
-    hex-64 encoded.
-
-    The `snapshot_hash` segment (position 4) is the pre-computed
-    `PauseSnapshot.snapshot_hash` field per `_compute_snapshot_hash` (line 399);
-    v1.25 disambiguator preserved verbatim per Q-β.i-1(a). The outcome-hash
-    suffix segment (position 5) is INDEPENDENTLY computed via
-    `_canonicalize_outcome_bytes` over the full `PauseSnapshot` canonical JSON
-    bytes — distinct value from `snapshot_hash` field, distinct semantic per
-    Q5(a) "hash-over-outcome-bytes".
+    U-CP-78 Reading A consumes the engine-layer `PauseEvent`. The stable
+    disambiguator is `PauseEvent.pause_audit_entry_id`, reused for both the
+    event id and the former snapshot-hash segment because engine-layer
+    `PauseEvent` has no workflow-layer `PauseSnapshot.snapshot_hash`.
     """
     segments = [
         workflow_id.encode("utf-8"),
         step_id.encode("utf-8"),
-        pause_event_id.encode("utf-8"),
-        snapshot_hash.encode("utf-8"),
+        pause_audit_entry_id.encode("utf-8"),
+        pause_audit_entry_id.encode("utf-8"),
         outcome_hash_hex.encode("utf-8"),
     ]
     return hashlib.sha256(_RECORD_SEPARATOR.join(segments)).hexdigest()
@@ -865,8 +857,7 @@ async def emit_pause_captured_state_ledger_entry(
     *,
     workflow_id: str,
     step_id: str,
-    pause_event_id: str,
-    pause_snapshot: PauseSnapshot,
+    pause_event: PauseEvent,
     actor: ActorIdentity,
     ledger_writer: Callable[[EntryPayload], Awaitable[WriteResult]],
     procedural_tier_snapshot_resolver: Callable[[], Identifier],
@@ -877,34 +868,27 @@ async def emit_pause_captured_state_ledger_entry(
     `(action_id, idempotency_key, actor, timestamp)`. `response_hash` and
     `prior_event_hash` are IS-internal — composer does NOT control them
     (C-IS-06 §6.2 + C-IS-13 §13.5). The outcome-bytes semantic at §16.5.5 row
-    U-CP-49 (`PauseSnapshot` canonical JSON bytes) is carried at the
+    U-CP-49 (`PauseEvent` canonical JSON bytes) is carried at the
     `idempotency_key` discriminator per §16.5.4 + Q-β.i-1(a).
 
     Fires AFTER `capture_pause_snapshot(...)` at line 106 returns the
-    `PauseSnapshot` and BEFORE the snapshot returns to the caller per §16.5.7.
+    engine-layer `PauseEvent` and BEFORE the event returns to the caller per §16.5.7.
     Engine-layer surface; ZERO `CPAuditLedgerEntry` is constructed per §16.5.9
     invariant 5. Orthogonal to U-CP-76 workflow-layer emission per CP spec
     v1.11 §26 NEW NOTE 2-layer coexistence (distinct action_id namespaces;
     this composer emits `cp.pause-captured`; workflow-layer emits
     `cp.pause-resume-protocol`).
 
-    Note: `pause_snapshot.snapshot_hash` (position 4) and the outcome-hash
-    suffix (position 5) are DISTINCT — the snapshot_hash field is pre-computed
-    at capture time via `_compute_snapshot_hash` over a restricted canonical
-    bytes form (`workflow_id` + `run_id` + `step_index` + `state_summary` per
-    line 399); the outcome-hash suffix is independently computed over the FULL
-    `PauseSnapshot` canonical JSON bytes via `_canonicalize_outcome_bytes`.
-
     Composer awaits `ledger_writer(payload)` return per §16.5.9 invariant 4;
     does NOT condition on `WriteResult` variant.
     """
-    outcome_canonical_bytes = _canonicalize_outcome_bytes(pause_snapshot)
+    outcome_canonical_bytes = _canonicalize_outcome_bytes(pause_event)
     outcome_hash_hex = hashlib.sha256(outcome_canonical_bytes).hexdigest()
+    pause_audit_entry_id = str(pause_event.pause_audit_entry_id)
     idempotency_key = _pause_captured_idempotency_key(
         workflow_id,
         step_id,
-        pause_event_id,
-        pause_snapshot.snapshot_hash,
+        pause_audit_entry_id,
         outcome_hash_hex,
     )
     payload = EntryPayload(

@@ -10,11 +10,11 @@ import hashlib
 from typing import Any
 
 from harness_cp.cp_shared_types import ActorIdentity
-from harness_cp.handoff_context import StateSummary
-from harness_cp.pause_resume_protocol import emit_pause_captured_state_ledger_entry
-from harness_cp.pause_resume_protocol_types import (
-    PauseSnapshot,
-    WorkflowPauseReason,
+from harness_cp.handoff_context import ExternalReference, ReferenceClass, StateSummary
+from harness_cp.pause_resume_protocol import (
+    PauseEvent,
+    PauseReason,
+    emit_pause_captured_state_ledger_entry,
 )
 from harness_cp.state_ledger_canonicalization import _canonicalize_outcome_bytes
 from harness_is.state_ledger_entry_schema import ActorClass, Identifier
@@ -46,27 +46,28 @@ def _state_summary(*, version: str = "v1") -> StateSummary:
         summary_text=version,
         summary_hash=hashlib.sha256(version.encode()).hexdigest(),
         idempotency_key=Identifier("idem-" + version),
-        external_references=(),
+        external_references=(
+            ExternalReference(
+                reference_class=ReferenceClass.FILESYSTEM_STATE,
+                reference_id="state-" + version,
+                snapshot_capture_at_pause=b"snapshot-" + version.encode("utf-8"),
+            ),
+        ),
     )
 
 
-def _snapshot(
+def _pause_event(
     *,
-    workflow_id: str = "wf-1",
-    run_id: str = "run-1",
-    step_index: int = 7,
-    snapshot_hash_seed: str = "alpha",
+    audit_entry_id: str = "pause-audit-001",
     state_summary_version: str = "v1",
-) -> PauseSnapshot:
-    return PauseSnapshot(
-        workflow_id=workflow_id,
-        run_id=run_id,
-        step_index=step_index,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-        state_summary=_state_summary(version=state_summary_version),
-        snapshot_hash=hashlib.sha256(snapshot_hash_seed.encode()).hexdigest(),
-        created_at=1_700_000_000_000,
-        state_ledger_anchor="entry-" + snapshot_hash_seed,
+) -> PauseEvent:
+    state_summary = _state_summary(version=state_summary_version)
+    return PauseEvent(
+        paused_at="2023-11-14T22:13:20+00:00",
+        pause_reason=PauseReason.OPERATOR_INITIATED_PAUSE,
+        state_summary_snapshot=state_summary,
+        external_refs_captured=state_summary.external_references,
+        pause_audit_entry_id=Identifier(audit_entry_id),
     )
 
 
@@ -74,8 +75,7 @@ def _kwargs(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "workflow_id": "wf-1",
         "step_id": "step-7",
-        "pause_event_id": "pause-evt-001",
-        "pause_snapshot": _snapshot(),
+        "pause_event": _pause_event(),
         "actor": ActorIdentity("control-plane"),
         "procedural_tier_snapshot_resolver": _pt_resolver,
     }
@@ -101,16 +101,16 @@ def test_emit_pause_captured_action_id() -> None:
 
 
 def test_emit_pause_captured_idempotency_key_per_q_beta_i_1a() -> None:
-    """idempotency_key bytes follow §16.5.4 row U-CP-49 5-tuple (v1.26 with outcome-hash suffix)."""
-    snapshot = _snapshot()
-    outcome_hash = hashlib.sha256(_canonicalize_outcome_bytes(snapshot)).hexdigest()
+    """idempotency_key bytes use PauseEvent.pause_audit_entry_id and PauseEvent outcome bytes."""
+    pause_event = _pause_event()
+    outcome_hash = hashlib.sha256(_canonicalize_outcome_bytes(pause_event)).hexdigest()
     expected = hashlib.sha256(
         b"\x1e".join(
             (
                 b"wf-1",
                 b"step-7",
-                b"pause-evt-001",
-                snapshot.snapshot_hash.encode("utf-8"),
+                b"pause-audit-001",
+                b"pause-audit-001",
                 outcome_hash.encode("utf-8"),
             )
         )
@@ -118,99 +118,73 @@ def test_emit_pause_captured_idempotency_key_per_q_beta_i_1a() -> None:
     writer = _CapturingLedgerWriter()
     _run(
         emit_pause_captured_state_ledger_entry(
-            **_kwargs(pause_snapshot=snapshot), ledger_writer=writer
+            **_kwargs(pause_event=pause_event), ledger_writer=writer
         )
     )
     assert writer.captured[0].idempotency_key == expected
 
 
-def test_emit_pause_captured_idempotency_key_includes_snapshot_hash() -> None:
-    """Different snapshot_hash at otherwise-identical inputs → different keys."""
+def test_emit_pause_captured_idempotency_key_includes_pause_audit_entry_id() -> None:
+    """Different PauseEvent.pause_audit_entry_id at otherwise-identical inputs → different keys."""
     writer_a = _CapturingLedgerWriter()
     writer_b = _CapturingLedgerWriter()
     _run(
         emit_pause_captured_state_ledger_entry(
-            **_kwargs(pause_snapshot=_snapshot(snapshot_hash_seed="alpha")),
+            **_kwargs(pause_event=_pause_event(audit_entry_id="pause-audit-A")),
             ledger_writer=writer_a,
         )
     )
     _run(
         emit_pause_captured_state_ledger_entry(
-            **_kwargs(pause_snapshot=_snapshot(snapshot_hash_seed="beta")),
+            **_kwargs(pause_event=_pause_event(audit_entry_id="pause-audit-B")),
             ledger_writer=writer_b,
         )
     )
     assert writer_a.captured[0].idempotency_key != writer_b.captured[0].idempotency_key
 
 
-def test_emit_pause_captured_idempotency_key_includes_pause_event_id() -> None:
-    """Different pause_event_id at otherwise-identical inputs → different keys."""
-    writer_a = _CapturingLedgerWriter()
-    writer_b = _CapturingLedgerWriter()
-    _run(
-        emit_pause_captured_state_ledger_entry(
-            **_kwargs(pause_event_id="evt-A"), ledger_writer=writer_a
-        )
-    )
-    _run(
-        emit_pause_captured_state_ledger_entry(
-            **_kwargs(pause_event_id="evt-B"), ledger_writer=writer_b
-        )
-    )
-    assert writer_a.captured[0].idempotency_key != writer_b.captured[0].idempotency_key
-
-
 def test_emit_pause_captured_idempotency_key_includes_outcome_hash_suffix() -> None:
-    """Q-β.i-1(a): different outcome canonical bytes at SAME snapshot_hash → different keys.
-
-    Demonstrates snapshot_hash (segment 4) and outcome-hash (segment 5) are
-    DISTINCT discriminators — varying state_summary changes the outcome canonical
-    bytes (and outcome-hash suffix) while we hold the snapshot_hash field fixed.
-    """
-    # Two snapshots with the same snapshot_hash field value but different
-    # canonical bytes (different state_summary → different full-snapshot bytes).
-    snap_a = _snapshot(snapshot_hash_seed="fixed", state_summary_version="v1")
-    snap_b = _snapshot(snapshot_hash_seed="fixed", state_summary_version="v2")
-    assert snap_a.snapshot_hash == snap_b.snapshot_hash  # invariant of fixture
-    assert _canonicalize_outcome_bytes(snap_a) != _canonicalize_outcome_bytes(snap_b)
+    """Different PauseEvent canonical bytes at SAME audit id → different keys."""
+    event_a = _pause_event(audit_entry_id="pause-audit-fixed", state_summary_version="v1")
+    event_b = _pause_event(audit_entry_id="pause-audit-fixed", state_summary_version="v2")
+    assert event_a.pause_audit_entry_id == event_b.pause_audit_entry_id
+    assert _canonicalize_outcome_bytes(event_a) != _canonicalize_outcome_bytes(event_b)
 
     writer_a = _CapturingLedgerWriter()
     writer_b = _CapturingLedgerWriter()
     _run(
         emit_pause_captured_state_ledger_entry(
-            **_kwargs(pause_snapshot=snap_a), ledger_writer=writer_a
+            **_kwargs(pause_event=event_a), ledger_writer=writer_a
         )
     )
     _run(
         emit_pause_captured_state_ledger_entry(
-            **_kwargs(pause_snapshot=snap_b), ledger_writer=writer_b
+            **_kwargs(pause_event=event_b), ledger_writer=writer_b
         )
     )
     assert writer_a.captured[0].idempotency_key != writer_b.captured[0].idempotency_key
 
 
-def test_emit_pause_captured_snapshot_hash_and_outcome_hash_are_distinct() -> None:
-    """snapshot_hash field (segment 4) and sha256(outcome_canonical_bytes) (segment 5) differ.
-
-    Per CP plan v2.29 §1 U-CP-78 AC #2: snapshot_hash is the pre-computed
-    PauseSnapshot.snapshot_hash field per `_compute_snapshot_hash` (restricted
-    canonical bytes — workflow_id + run_id + step_index + state_summary); the
-    outcome-hash suffix is INDEPENDENTLY computed over the FULL PauseSnapshot
-    canonical JSON bytes via `_canonicalize_outcome_bytes`. Distinct values.
-    """
-    snapshot = _snapshot()
-    outcome_hash = hashlib.sha256(_canonicalize_outcome_bytes(snapshot)).hexdigest()
-    assert snapshot.snapshot_hash != outcome_hash
+def test_emit_pause_captured_consumes_real_engine_output() -> None:
+    """U-CP-78 Reading A: composer consumes PauseEvent, the engine free-function output."""
+    writer = _CapturingLedgerWriter()
+    _run(
+        emit_pause_captured_state_ledger_entry(
+            **_kwargs(pause_event=_pause_event(audit_entry_id="engine-pause-1")),
+            ledger_writer=writer,
+        )
+    )
+    assert len(writer.captured) == 1
 
 
 # --- AC #3 ---
 
 
 def test_emit_pause_captured_fires_post_capture_pre_return() -> None:
-    """AC #3: composer takes the PauseSnapshot and emits a single payload.
+    """AC #3: composer takes the PauseEvent and emits a single payload.
 
     Documents firing-site discipline per §16.5.7: invoked once AFTER engine-
-    layer `capture_pause_snapshot(...)` returns the snapshot, BEFORE returning
+    layer `capture_pause_snapshot(...)` returns the pause event, BEFORE returning
     to caller. Single-invocation → single payload.
     """
     writer = _CapturingLedgerWriter()

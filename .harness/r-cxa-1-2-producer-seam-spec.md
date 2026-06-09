@@ -37,6 +37,8 @@ For contrast, the **already-wired** CP→IS composers (do NOT confuse with the a
 
 > **Producer-discovery discipline** (`[[r-cxa-seam-wiring-is-producer-discovery]]`): "wire a production caller" first requires grepping the seam's REAL producer; the answer is often DEFER-don't-wire (hollow). This brief applies that lens per-seam, classifying each gap before recommending action.
 
+> **Post-MVP loop architecture → sibling brief.** This file is the *compact decision anchor* (why R-CXA-2 must not be hollow-wired; per-seam B1/B2/B3 disposition). The larger **post-MVP producer-loop architecture** — how to actually build the HITL model-driven tool loop (DP-1(a)) and the engine recovery loop (DP-2(a)+DP-3(a)), the staged path to an impl plan, and the sharpened governance/escalation determination — lives at **`r-cxa-2-post-mvp-producer-loop-product-brief.md`** (conditioned on operator post-MVP build authorization; R-CXA-2 stays `STILL-BOUNDED` until then). Read this anchor for the *decisions*; read the sibling for the *architecture*.
+
 ---
 
 ## §1. The organizing principle — three buckets per gap
@@ -125,6 +127,10 @@ A known spec-prose-vs-plan-body drift exists and is already documented at `as_is
 4. Replay of the same 4-tuple returns `IDEMPOTENT_NOOP` (no duplicate ledger growth).
 5. Bootstrap provider-key fetches remain **unwired** (Reading-D preserved).
 6. C-AS-05 §5 "sole resolution path" honored — no secret reaches a sandbox by any non-`fetch_secret` path.
+7. **The producer site co-emits the `secret.fetch` span alongside the ledger entry** per **C-AS-08 §8.4** ("Span emission alongside ledger entry"); span attributes `secret.name` / `secret.scope` / `secret.backend` / `secret.fail.class` / `secret.cache.tier_overhead_ms` / `secret.policy.access_decision_reason` per **C-AS-15 + ADR-F5 v1.1 §Consequences (c)**; **structure-not-content** (no secret value in span attributes, §5.3 negative-observation invariant).
+8. **The failed-fetch path emits a distinct audit record** per **C-AS-08 §8.4** ("one ledger entry per failed fetch") carrying `secret.fail.class` per **C-AS-07**'s 5-class taxonomy. (AC #2 covers only the *success* path.)
+
+> **§8.4 is two-part — coverage-gap fix (review finding B-1/S-1, 2026-06-08).** ACs #1–#6 (prior version) covered only the AS→IS **ledger** half of C-AS-08 §8.4's per-fetch discipline; §8.4 *also* mandates a co-emitted `secret.fetch` **span** (the AS→OD *observability* half) and a *failed-fetch* record carrying `secret.fail.class`. ACs #7–#8 close that gap. **Scoping:** the span fires at the **same producer/fetch site** as the ledger entry ("alongside" per §8.4), so the R-CXA-1 producer emits both — but the span's *attribute schema* lives on the AS-observability surface (C-AS-15 / ADR-F5). Note also that `SecretFetchEvent` (7-field) has **no** `fail.class` field, so the failed-fetch `secret.fail.class` rides the **span** (per AC #7), not the event; if the composer/event model cannot represent a failed-fetch ledger entry, that is an AS-axis contract gap to **surface (not silently drop)**.
 
 ### §2.8 Tests required to prove a real producer exists (R-CXA-1)
 
@@ -134,6 +140,8 @@ Beyond the existing composer unit tests (which prove the *composer*, not a *prod
 - **`test_secret_fetch_event_fields_non_hollow`** — assert `secret_scope.name` + `secret_last_rotated_at` are real (resolver-supplied), not sentinels; assert `response_hash` differs across two secrets with different rotation metadata.
 - **`test_secret_fetch_replay_idempotent_noop`** — second fetch of same 4-tuple → `IDEMPOTENT_NOOP`; ledger length unchanged; chain verify passes.
 - **`test_bootstrap_fetch_does_not_emit`** — assert the bootstrap provider-key path produces **zero** `SecretFetchEvent` entries (Reading-D guard).
+- **`test_secret_fetch_span_co_emitted`** (AC #7 / B-1) — assert a `secret.fetch` span fires **alongside** the ledger entry at the producer site, carrying the C-AS-15/ADR-F5 attribute set; assert **no secret value** appears in any span attribute (structure-not-content).
+- **`test_failed_fetch_emits_fail_class`** (AC #8 / S-1) — drive a failing fetch; assert the failed-fetch record fires with `secret.fail.class` per C-AS-07 (on the span per §8.4, since `SecretFetchEvent` has no fail-class field); structure-not-content preserved.
 
 ---
 
@@ -294,6 +302,7 @@ This keeps the arc in clean design-phase posture: **`.harness/**` only**, no `de
 
 ## §8. See also
 
+- **`r-cxa-2-post-mvp-producer-loop-product-brief.md`** — the post-MVP producer-loop architecture deep-dive (HITL inner loop DP-1(a) + engine recovery loop DP-2(a)/DP-3(a) + U-CP-78 Reading A apply surface + staged impl-plan path + governance/escalation determination).
 - `[[r-cxa-seam-wiring-is-producer-discovery]]` · `[[grounding-reveals-claude-closeable-slice-close-honestly]]` · `[[halt-route-split-ac-pattern]]` · `[[spec-prose-plan-body-drift-pattern]]`
 - `class_1_tension_u_rt_35_cp_is_wiring_gaps.md` (CLOSED parent lineage)
 - `Phase_7_Meta_Architecture_v1.md` §7.7 X-AL-3 (no silent design extension)

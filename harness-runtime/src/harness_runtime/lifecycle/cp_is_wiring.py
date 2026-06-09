@@ -65,13 +65,13 @@ from harness_cp.hitl_as_tool_call_rewriting import (
     emit_hitl_tool_call_rewriting_state_ledger_entry,
 )
 from harness_cp.pause_resume_protocol import (
+    PauseEvent,
     PauseResumeProtocolEventKind,
     ResumeOutcome,
     emit_pause_captured_state_ledger_entry,
     emit_pause_resume_state_ledger_entry,
     emit_resume_attempted_state_ledger_entry,
 )
-from harness_cp.pause_resume_protocol_types import PauseSnapshot
 from harness_cp.per_step_override_evaluator import emit_override_state_ledger_entry
 from harness_cp.sibling_ledger_entry_composition import (
     construct_sibling_ledger_entry,
@@ -310,8 +310,7 @@ class RuntimeCpIsWiring:
         *,
         workflow_id: str,
         step_id: str,
-        pause_event_id: str,
-        pause_snapshot: PauseSnapshot,
+        pause_event: PauseEvent,
         actor: ActorIdentity,
     ) -> WriteResult:
         """Wire U-CP-78 emit_pause_captured_state_ledger_entry (engine-layer).
@@ -330,8 +329,7 @@ class RuntimeCpIsWiring:
         return await emit_pause_captured_state_ledger_entry(
             workflow_id=workflow_id,
             step_id=step_id,
-            pause_event_id=pause_event_id,
-            pause_snapshot=pause_snapshot,
+            pause_event=pause_event,
             actor=actor,
             ledger_writer=_adapter,
             procedural_tier_snapshot_resolver=self.procedural_tier_snapshot_resolver,
