@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `b322673a66df` |
-| `last_refreshed` | 2026-06-09T02:07:44-06:00 |
-| `git_head` | `60b52ba` (main) — PR #449 R-CXA-2 producer primitives merged. |
+| `workspace_state_hash` | `d847e1c6e657` |
+| `last_refreshed` | 2026-06-09T04:28:19-06:00 |
+| `git_head` | `05ca1f7` (main) — PR #450 post-#449 roadmap/dashboard refresh merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-54.md` |
 | `open_fork_doc_count` | 47 |
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #450 (`05ca1f7`) | 2026-06-09 | **Post-#449 roadmap/dashboard refresh merged.** Re-pinned the dashboard after PR #449, recorded R-CXA-2 as advanced-but-not-retired, updated the substitution rationale, and hardened `generate.py` so offline dashboard generation preserves the status-file in-flight PR set. |
 | PR #449 (`60b52ba`) | 2026-06-09 | **R-CXA-2 producer primitives merged.** Applied U-CP-78 Reading A so `cp.pause-captured` consumes real `PauseEvent`, added the runtime engine recovery-loop primitive, and added the provider-neutral HITL tool-loop primitive that gates and emits `cp.hitl-tool-call-rewriting` before dispatch. R-CXA-2 remains STILL-BOUNDED until stage-5/bootstrap composition binds those producers and e2e proof supports closeout/accounting. |
 | PRs #439, #441–#446 (`98f9d90`) | 2026-06-08 | **optimize-claude-md F1–F7 governance remediation (7 PRs).** Fixed stale plan/spec pointers (OD plan v2_26→v2_27; IS plan v2_3→v2_5 + IS spec v1.2→v1.3; broken `_v1.md` cites → canonical heads), trimmed inline byte-bloat (root §1.1 CXA lineage → pointer; harness-od §4.1 ledger −26.7 KB), documented the Workflow delta-baseline §-cite convention, refreshed axis CXA posture to v2.19 + reconciled IS numbers. Mode-agnostic governance hygiene; no `design-substrate/**` touched (X-AL-3 trivial). **Surfaced, not fixed:** root §4.2 hardcodes `46/54` while the ledger derives `52/54` (G-9 candidate); AS spec file is internally v1.7 but `harness-as:19` claims v1.8. |
 | PR #437 (`e61778b`) | 2026-06-08 | **R-CXA producer-loop forks ratified.** U-CP-78 is Reading A; R-CXA-2 is DP-1(c), DP-2(c), DP-3(a). The selector now moves to the buildable R-CXA-1 scoped secret-fetch producer slice while R-CXA-2 remains bounded on future upstream-loop authoring. |
 | PR #435 (`e3162c6`) | 2026-06-08 | **optimize-claude-md self-improvement loop hardening merged.** The skill eval corpus now covers 14 escalating fixture classes plus pointer-check support; this landed after the R-CXA producer-seam spec and is included in the current main refresh anchor. |
-| PR #434 (`83ae8f2`) | 2026-06-08 | **R-CXA-1/2 producer seams specified, not implemented.** Filed `.harness/r-cxa-1-2-producer-seam-spec.md` and two fork docs for `U-CP-78` pause impedance and R-CXA-2 DP-1/2/3 ownership; implementation planning remains deferred until fork ratification. |
 
 ---
 
@@ -102,6 +102,7 @@ The 5 bucket rows below sum to **54** under the batch-54 live ledger (RETIRED 52
 
 | Date | Source | Resolution |
 |---|---|---|
+| 2026-06-09 | **Post-#450 fixed-point refresh — PR #450 post-#449 roadmap/dashboard refresh merged at `05ca1f7`; §12.2 owed follow-on.** | Single-source status/dashboard refresh per §12.2. Hash `b322673a66df` → `d847e1c6e657` (state at `05ca1f7`, open PRs #440/#447, fork count 47, batch-54). No roadmap selector change beyond #450: next action remains R-CXA-2 Slice 4/5 composition/closeout, then R-CXA-1 scoped secret-fetch producer. |
 | 2026-06-09 | **Post-#449 terminating refresh — PR #449 R-CXA-2 producer primitives merged at `60b52ba`; §12.2 owed follow-on.** | Status/dashboard refresh records the new R-CXA-2 boundary. Hash `abecc765168a` → `b322673a66df` (state at `60b52ba`, open PRs #440/#447, fork count 47, batch-54). R-CXA-2 is advanced by U-CP-78 Reading A plus HITL tool-loop and engine recovery-loop runtime primitives, but remains STILL-BOUNDED until stage-5/bootstrap composition binds the producers and e2e closeout evidence supports accounting. Next action: R-CXA-2 Slice 4/5 composition/closeout, then R-CXA-1 scoped secret-fetch producer. |
 | 2026-06-08 | **Post-#437 terminating refresh — PR #437 R-CXA producer-loop fork ratification merged at `e61778b`; §12.2 owed follow-on.** | Single-file status/dashboard refresh per §12.2.1. Hash `0896853874a1` → `0bc3ffc19a00` (state at `e61778b`, PRS empty/unavailable, fork count 47, batch-54). Next action unchanged from the ratification merge: R-CXA-1 scoped secret-fetch producer implementation planning/build; R-CXA-2 remains STILL-BOUNDED with hollow wiring disallowed. |
 | 2026-06-08 | **R-CXA-1/2 producer fork ratification arc (substantive; NOT a terminating refresh).** Ratified `class_1_fork_u_cp_78_pause_captured_type_impedance.md` as Reading A and `class_2_fork_r_cxa_2_producer_loop_ownership.md` as DP-1(c), DP-2(c), DP-3(a). Updated `.harness/r-cxa-1-2-producer-seam-spec.md` from awaiting-ratification to ratified-decisions. | Substantive PR → §12.2 owes a follow-on terminating `ops: roadmap status refresh`. Next action changes from fork ratification to R-CXA-1 scoped secret-fetch producer implementation planning/build, while R-CXA-2 remains STILL-BOUNDED on future upstream loop authoring with hollow wiring explicitly disallowed. |
