@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `11d46fa9769d` |
-| `last_refreshed` | 2026-06-10T15:13:28-06:00 |
-| `git_head` | `1b2b5f10` (main) — R-411 gVisor local sandbox proven against recovered Lima VM (RC report corrected). |
+| `workspace_state_hash` | `09ed31f7a8dd` |
+| `last_refreshed` | 2026-06-10T15:27:16-06:00 |
+| `git_head` | `064064b6` (main) — R-830 S3 live e2e passing after operator SSO re-auth; last unexercised managed surface closed. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 47 |
 
@@ -28,8 +28,8 @@
 
 **Ordered frontier.**
 
-- The release-candidate deployment-readiness arc is **COMPLETE** (2026-06-10, commit `e51d952e`) — verdict **GO**. See `.harness/release-candidate-deployment-readiness-report-2026-06-10.md`. All three deployment tiers proven live with zero harness code changes, including the managed-cloud OTLP→Cloud Trace path (R-421/R-810/R-820); Phase-D advisory traceability audit at `.harness/overlay-advisory-traceability-audit-2026-06-10.md` (buckets stable, none escalated).
-- Two operator-environment items remain (NOT harness defects; not Claude-closeable without operator creds/infra): (1) AWS SSO re-auth (`aws login`) then re-run `just r830-s3-live-e2e`; (2) provision self-hosted `prompts/` + `routing_manifest/` dirs then re-run `just r420-self-hosted-live-e2e`. The 2 managed-cloud IAM grants are dispositioned (token-creator revoked, run.invoker retained on the collector).
+- The release-candidate deployment-readiness arc is **COMPLETE** (2026-06-10) — verdict **GO**. See `.harness/release-candidate-deployment-readiness-report-2026-06-10.md`. **Every functional surface across all three tiers is proven live** with zero harness code changes: provider-free gate; self-hosted telemetry + multitenant + gVisor sandbox (R-411); managed-cloud E2B (probe + full-VM), GCP Secret Manager, Neon, Files API, Managed Agents, OTLP→Cloud Trace (R-421/R-810/R-820), and S3 (R-830). Phase-D advisory audit at `.harness/overlay-advisory-traceability-audit-2026-06-10.md` (buckets stable, none escalated).
+- One item remains unexercised: the **R-420 self-hosted daemon e2e** needs operator-provisioned `prompts/` + `routing_manifest/` dirs (a Claude-closeable scaffolding slice if pursued; its sibling self-hosted paths already pass). The 2 managed-cloud IAM grants are dispositioned (token-creator revoked, run.invoker retained on the collector). Optional-polish menu (runbook §8) is the post-RC forward surface.
 - Active recurring lanes remain `R-600-pattern-bake-in-sweep`, `R-600-codex-out-of-family-review`, and `R-IF-roadmap-refresh`; run them only when the cadence or a concrete review target is present.
 
 **Resolved by PR #456.** `R-CXA-2` is batch-55 `RETIRED-AS-BOUNDED-RESIDUAL`: PR #452 bound the HITL/recovery producer loops at stage 5, PR #454 wired Anthropic provider-turn HITL continuation, and the remaining durable/journaled recovery-loop evidence is explicitly recorded as post-MVP hardening with a re-open trigger for a real event-sourced/reconciler/WAL recovery loop.
@@ -52,11 +52,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| local commit (`064064b6`) | 2026-06-10 | **R-830 S3 PROVEN — last unexercised managed surface closed (RC follow-up).** The `r830`-profile SSO session had expired; operator re-ran `aws sso login --profile r830`, then `just r830-s3-live-e2e` PASSED (real S3 CRUD + cleanup, 1.89s). Every functional surface across all three tiers is now proven live; only the R-420 self-hosted daemon e2e (operator-provisioned `prompts/`+`routing_manifest/` dirs) remains unexercised. |
 | local commit (`1b2b5f10`) | 2026-06-10 | **R-411 gVisor local sandbox PROVEN (RC follow-up).** Operator surfaced the provisioned Lima VM at `/Volumes/Development/arhugula-r411/` that the initial arc skipped as "host-unavailable"; recovered the `Broken` VM (start → containerd → docker; `runsc` registered) and R-411 passed (TOOL_STEP under `runsc`, network egress blocked, host repo path not visible). RC report Phase B corrected. VM left Running. |
 | local commit (`e51d952e`) | 2026-06-10 | **RC deployment-readiness arc executed — verdict GO.** All 3 deployment tiers proven live with zero harness code changes, incl. managed-cloud OTLP→Cloud Trace (R-421/R-810/R-820, after collector discovery + 2 operator-authorized IAM grants; token-creator since revoked, run.invoker retained). Closure report + Phase-D advisory audit + runbook §5 doc-fix. Remaining = operator-env only (AWS SSO re-auth for S3; self-hosted `prompts/`+`routing_manifest/` dirs). |
 | local merge (`a5215dde`) | 2026-06-10 | **Claude release-candidate handoff authored.** Added `.harness/release-candidate-deployment-readiness-runbook.md` plus root Claude/context pointers so Claude Code can pick up the provider-free readiness, live smoke, traceability cleanup, and optional-polish gate without re-deriving. |
 | local merge (`d4b6b4e3`) | 2026-06-10 | **Overlay-check ignored-artifact fix merged.** `overlay-check` now ignores stale gitignored `tools/semantic_overlay/overlay.json` artifacts while still failing on stale tracked snapshots; the `justfile` wording now matches the R-IF-112 README. |
-| PR #473 (`5eb71c18`) | 2026-06-10 | **Documentation hygiene merged.** Historical root Markdown review/tension/skill artifacts moved under `.harness/archive/root-historical/`, live references retargeted, and `.harness`/`design-substrate` retention READMEs added. |
 
 ---
 
