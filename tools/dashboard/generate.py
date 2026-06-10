@@ -74,7 +74,7 @@ ANNOTATIONS = {
     # BLOCKED
     "R-008-od-4-redaction-partial": "Resolved by batch-53: the runtime redaction residual is closed and OD-4 is back-flowed into the live substitution ledger.",
     "R-100-mvp-config-discovery": "Waiting on a small decision: auto-find the config file at the project root, or drop that behavior from the spec.",
-    "R-700-phase-8-substitution-accounting": "RESOLVED — Phase 8 declared CLOSED at 46/54, then post-R-810/R-820 plus OD-4/CXA-4 and CXA-3 back-flow advanced the live ledger to 52/54 retired.",
+    "R-700-phase-8-substitution-accounting": "RESOLVED — Phase 8 declared CLOSED at 46/54, then post-R-810/R-820 plus OD-4/CXA-4, CXA-3, and CXA-2 back-flow advanced the live ledger to 53/54 retired.",
     # DEFERRED (parked by design)
     "R-005-as-8e-files-indefinite": "Resolved by R-810 and back-flowed into the substitution ledger at batch-52.",
     "R-006-as-8f-managed-agents-indefinite": "Resolved by R-820 and back-flowed into the substitution ledger at batch-52.",
@@ -95,13 +95,13 @@ ANNOTATIONS = {
     "R-900-research-arcs": "Resolved by decomposing the placeholder into R-901.",
     "R-901-phase-9-retirement-criteria": "Resolved by the Phase-9 retirement criteria brief: research-only selector guidance, no design-substrate back-flow.",
     "R-CXA-1-as-is-seam": "The one remaining wire (a secret-fetch audit caller) has no real source yet, so wiring it would be hollow; deferred until one exists.",
-    "R-CXA-2-cp-is-seam": "Producer loops are bound at stage 5 and Anthropic provider-turn HITL continuation is wired; remaining work is durable/journaled recovery evidence.",
+    "R-CXA-2-cp-is-seam": "Resolved by batch-55 as a counted bounded residual: MVP-safe CP→IS producers are wired, while durable recovery-loop hardening keeps its explicit re-open trigger.",
     "R-CXA-4-od-multi-seam": "Resolved by batch-53: grounding found 0 remaining wireable edges and the bookkeeping-only PARTIAL row was retired.",
     "R-XI-02": "Dashboard polish — dependency-graph view + sparklines; nice-to-have, nothing blocking it.",
     "R-XI-03": "Dashboard live-update mode; nice-to-have, nothing blocking it.",
 }
 
-# The 2 non-RETIRED substitution-ledger rows (the "is the harness built" view).
+# The non-RETIRED substitution-ledger rows (the "is the harness built" view).
 # state ∈ {PARTIAL, STILL-BOUNDED, STILL-BOUNDED-INDEFINITELY}. `retire` = can/should we
 # proceed to retire it, in plain terms.
 NONRETIRED_LEDGER = [
@@ -111,13 +111,6 @@ NONRETIRED_LEDGER = [
         "state": "PARTIAL",
         "why": "The AS→IS secret-fetch audit edge has no production caller to fire it.",
         "retire": "Not safely — wiring it now would be a hollow seam (no real source). Worth it only once a real secret-fetch path exists.",
-    },
-    {
-        "id": "CXA-2",
-        "rnnn": "R-CXA-2",
-        "state": "STILL-BOUNDED",
-        "why": "The CP→IS seam is still bounded; producer loops bind at stage 5, emit directly, and provider-turn Anthropic tool-use continuation now runs through `ctx.hitl_tool_loop`, but durable recovery caller evidence is not yet proven.",
-        "retire": "Not safely — first prove recovery from durable/journaled state rather than only the bound deterministic loop, or ratify that evidence as a bounded-residual deployment-hardening concern.",
     },
 ]
 
@@ -145,14 +138,7 @@ REMAINING_ORDERED = [
         "layer": "build",
         "id": "R-700-phase-8-substitution-accounting",
         "label": "Ratify the final retirement count",
-        "gate": "RESOLVED — Phase 8 declared CLOSED at 46/54; batch-54 back-flow now reports 52/54 retired.",
-    },
-    {
-        "n": 2,
-        "layer": "build",
-        "id": "R-CXA-2-cp-is-seam",
-        "label": "Build the CP→IS engine-layer seam",
-        "gate": "Stage-5 bound loops now prove direct CP→IS emissions and Anthropic provider-turn HITL continuation; remaining closeout is durable/journaled recovery caller evidence or bounded-residual disposition.",
+        "gate": "RESOLVED — Phase 8 declared CLOSED at 46/54; batch-55 back-flow now reports 53/54 retired.",
     },
     {
         "n": 3,
@@ -191,8 +177,8 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
 
     build      — substitution-ledger retirement (the canonical 'is H_T built'
                  metric). DERIVED from `.harness/substitutions.yaml` (R-600);
-                 R-700 ratified the Phase-8 integer (46/54); batch-54
-                 back-flow advances the live ledger to 52/54.
+                 R-700 ratified the Phase-8 integer (46/54); batch-55
+                 back-flow advances the live ledger to 53/54.
     activation — the post-Phase-8 forward axis (deployment / integration);
                  exercised items are tracked separately from remaining build work.
     """

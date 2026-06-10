@@ -27,8 +27,8 @@ def data() -> dict:
 
 def test_canonical_integers(data):
     d = sl.derive(data)
-    assert d["retired"] == 52, "post-batch-54 back-flow RETIRED"
-    assert d["pipeline_advanced"] == 53
+    assert d["retired"] == 53, "post-batch-55 bounded-residual back-flow RETIRED"
+    assert d["pipeline_advanced"] == 54
     assert d["total_canonical"] == 54
     assert d["non_canonical"] == 1  # CP-24
 
@@ -38,9 +38,8 @@ def test_bucket_breakdown(data):
     assert d["by_disposition"] == {
         "SUBSTANTIVE_RETIRED": 42,
         "AUTHORING_ONLY": 8,
-        "BOUNDED_RESIDUAL": 2,
+        "BOUNDED_RESIDUAL": 3,
         "PARTIAL": 1,
-        "STILL_BOUNDED": 1,
     }
 
 
@@ -58,8 +57,8 @@ def test_axis_rowcount(data):
 
 def test_axis_retired_contribution(data):
     d = sl.derive(data)
-    assert d["axis_retired"] == {"IS": 9, "AS": 11, "CP": 21, "OD": 8, "CXA": 3}
-    assert sum(d["axis_retired"].values()) == 52
+    assert d["axis_retired"] == {"IS": 9, "AS": 11, "CP": 21, "OD": 8, "CXA": 4}
+    assert sum(d["axis_retired"].values()) == 53
 
 
 # ── label ≠ count-membership (the rule the R-700 close turned on) ───────────────────────
@@ -111,6 +110,13 @@ def test_batch_54_backflow_rows_are_retired(data):
     assert "sign_off_label" not in rows["H_T-CXA-3"]
 
 
+def test_batch_55_backflow_rows_are_retired(data):
+    rows = {r["id"]: r for r in data["substitutions"]}
+    assert rows["H_T-CXA-2"]["disposition"] == "BOUNDED_RESIDUAL"
+    assert rows["H_T-CXA-2"]["batch"] == "batch-55"
+    assert "sign_off_label" not in rows["H_T-CXA-2"]
+
+
 # ── The live ledger validates clean ────────────────────────────────────────────────────
 
 
@@ -122,7 +128,7 @@ def test_live_ledger_passes_validation(data):
 
 
 def test_silent_disposition_flip_is_caught(data):
-    # CXA-1 PARTIAL → SUBSTANTIVE_RETIRED: RETIRED 52→53, pipeline-advanced unchanged at 53,
+    # CXA-1 PARTIAL → SUBSTANTIVE_RETIRED: RETIRED 53→54, pipeline-advanced unchanged at 54,
     # Axis row counts and bucket sum still pass — only the snapshot pin catches it.
     # pin catches it. This is the exact class the original 48/54 bug lived in.
     bad = copy.deepcopy(data)
@@ -136,7 +142,7 @@ def test_silent_disposition_flip_is_caught(data):
 def test_impossible_pipeline_pair_is_caught(data):
     # Force an impossible pair: alter the snapshot without changing the rows.
     bad = copy.deepcopy(data)
-    bad["snapshot"]["retired"] = 50  # claim 50 while rows derive 51
+    bad["snapshot"]["retired"] = 50  # claim 50 while rows derive 53
     violations = sl.validate(bad)
     assert any("snapshot.retired" in v for v in violations), violations
 
