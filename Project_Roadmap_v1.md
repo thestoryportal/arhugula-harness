@@ -2333,6 +2333,224 @@ R-CXA-4-od-multi-seam:
 
 ---
 
+### 5.15 Post-MVP full closure track (R-CL-NN) — the spec-closure spine
+
+> Authored 2026-06-10 per operator directive "develop the full harness to closure." The execution spine is `.harness/post-mvp-full-closure-plan-v1.md`; the P0 scope-lock (verified against HEAD `37b7c80`) is `.harness/closure-p0-scope-lock.md`. These 13 entries register the plan's phases. **Operator override** (§4): the closure track is the directed active work; `next_action` points into it. Quality phases (Q/D/C) gate on the capability phases (P) per the plan §7 graph.
+
+```yaml
+R-CL-P0:
+  title: Phase 0 — ground + scope-lock + file design-gated forks
+  surface: I-closure
+  status: ACTIVE       # being closed by the scope-lock PR
+  depends_on: []
+  blocks: [R-CL-P1, R-CL-P2, R-CL-P3, R-CL-P4, R-CL-P5, R-CL-P6]
+  posture: mode-agnostic
+  scope: { files: [.harness/closure-p0-scope-lock.md, .harness/class_1_fork_prompts_management_surface_active_prompt_version.md, .harness/class_1_fork_keying_tuple_entry_shape_d_adr.md], contracts: [], cross_axis: no }
+  skills: { primary: null, secondary: [] }
+  advisor_required: yes
+  council_required: no
+  verification: { shape: e2e, must_pass: ["every Cat-1..4 surface re-verified vs HEAD incl. the register's CLOSED claims; 2 design-gated forks filed; scope frozen in closure-p0-scope-lock.md"] }
+  close_shape: { type: PR-merge, artifact: "scope-lock PR", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: R-CL-P1
+  notes: |
+    Verified 2 material register corrections: (C-1) sandbox Docker/gVisor/E2B drivers exist+e2e but are NOT selected by the production dispatcher (factory omits tool_execution_driver=) → NEW item folded into P2; (C-2) routing is Cat-1 PURE IMPL (C-CP-02 §2.1 specifies shape; params impl-discretion) → no fork. Exit gate: operator ratifies the frozen scope + the 2 forks.
+
+R-CL-P1:
+  title: Phase P1 — routing intelligence (EMBEDDING + LLM_AS_ROUTER layers + capability-shortfall fallback)
+  surface: IV
+  status: BLOCKED
+  depends_on: [R-CL-P0]
+  blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
+  posture: phase-7
+  scope: { files: [harness-cp/src/.../layered_routing_strategy.py, harness-runtime/src/.../llm_dispatch.py], contracts: [C-CP-02, C-CP-03, C-CP-04], cross_axis: no }
+  skills: { primary: phase-7-implementation, secondary: [harness-adversarial-reviewer] }
+  advisor_required: yes
+  council_required: conditional:nameable-tension   # cost ⊥ reliability ⊥ capability-preservation (dyadic)
+  verification: { shape: e2e, must_pass: ["a capability-requiring step routes to a capable provider before failing; an EMBEDDING/LLM_AS_ROUTER escalation fires on an ambiguous route; per-layer LayerBudget bounds each layer; no LCD capability flattening"] }
+  close_shape: { type: PR-merge, artifact: "routing-intelligence PR(s)", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: null
+  notes: PURE PHASE-7 IMPL (P0 verified C-CP-02 §2.1 shape spec'd at Spec_CP_v1_2.md:286-327; params impl-discretion per :327 + ADR-F1). Only RoutingLayer.DECLARATIVE-echo bound today (llm_dispatch.py:489).
+
+R-CL-P2:
+  title: Phase P2 — engine-recovery activation + sandbox driver→dispatch wiring + external-engine seam
+  surface: V
+  status: BLOCKED
+  depends_on: [R-CL-P0]
+  blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
+  posture: phase-7
+  scope: { files: [harness-runtime/src/.../runtime_tool_dispatcher_factory.py, harness-runtime/src/.../engine_recovery_loop.py, harness-runtime/src/.../journal_pause_resume_substrate.py (PR #475)], contracts: [C-CP-07, C-CP-08, C-CP-22], cross_axis: yes }
+  skills: { primary: phase-7-implementation, secondary: [harness-adversarial-reviewer] }
+  advisor_required: yes
+  council_required: conditional:nameable-tension   # C10 blast-radius ⊥ C11 operator-burden
+  verification: { shape: e2e, must_pass: ["a production TOOL_STEP resolved to TIER_2/3/4 actually executes in the Docker/gVisor/E2B driver (tier→driver selection seam wired); the engine recovery loop drives the bound durable F2 substrate through capture→restart→resume; SAVE_POINT reference adapter passes its deterministic contract test"] }
+  close_shape: { type: PR-merge, artifact: "recovery+sandbox-wiring PR(s)", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: null
+  notes: |
+    Folds NEW item C-1 (sandbox drivers built+e2e but production dispatcher defaults to MCPHostToolExecutionDriver; no tier→driver seam). Engine recovery loop dormant (PR #475 substrate unwired). External-engine adapters = build-seam-defer-live-proof (D-2; I-6 no-vendor).
+
+R-CL-P3:
+  title: Phase P3 — persona-tier TEAM_BINDING breadth (e2e proof of the bridging-arc middle tier)
+  surface: VI
+  status: BLOCKED
+  depends_on: [R-CL-P0]
+  blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
+  posture: phase-7
+  scope: { files: [harness-cp/src, harness-od/src, harness-as/src (TEAM_BINDING branch-points)], contracts: [C-CP-19, C-OD-10, C-OD-13], cross_axis: yes }
+  skills: { primary: phase-7-implementation, secondary: [harness-adversarial-reviewer] }
+  advisor_required: yes
+  council_required: conditional:nameable-tension   # C7 observability + C8 security ⊥ C11 operator-burden
+  verification: { shape: e2e, must_pass: ["a TEAM_BINDING workflow exhibits the correct HITL-gate/redaction/sampler/cost posture distinct from SOLO and MULTI_TENANT; reconcile root CLAUDE.md §10.2 persona drift"] }
+  close_shape: { type: PR-merge, artifact: "team-binding proof PR", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: null
+  notes: BUILD-NOT-FORK (P0 verified TEAM_BINDING specified + src-branch-cased across all 4 behaviors; owed = e2e proof, the un-proven middle tier).
+
+R-CL-P4:
+  title: Phase P4 — spec-completion deferrals (prompts surface + 3rd hash component; keying-tuple D-ADR; OD buffer bounds)
+  surface: I-closure
+  status: BLOCKED
+  depends_on: [R-CL-P0]   # AND the 2 P0 forks ratified (design-before-build)
+  blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
+  posture: design-phase   # then bundled-absorption into phase-7 (clearance markers)
+  scope: { files: [design-substrate/Spec_Information_Substrate_v1.x, harness-runtime/src (prompts carrier), harness-od/src (buffer bounds)], contracts: [C-IS-05 §5.2, C-IS-07 §7.4, C-OD-09 §9.3], cross_axis: yes }
+  skills: { primary: spec-writer, secondary: [systems-architect, implementation-planner] }
+  advisor_required: yes
+  council_required: no
+  verification: { shape: e2e, must_pass: ["procedural-tier snapshot includes the prompt-version 3rd hash component; keying-tuple↔entry-shape reading ratified + §7.4 cite refreshed; tail-keep buffer bounded under a pathological producer; clearance markers filed"] }
+  close_shape: { type: PR-merge, artifact: "spec-completion PR(s) + clearance markers", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: null
+  notes: BLOCKED on ratification of class_1_fork_prompts_management_surface_active_prompt_version.md + class_1_fork_keying_tuple_entry_shape_d_adr.md. Building before ratification = X-AL-3.
+
+R-CL-P5:
+  title: Phase P5 — CXA phase-2 edge verification + cost-model rate tables + validator thresholds
+  surface: I-closure
+  status: BLOCKED
+  depends_on: [R-CL-P0]
+  blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
+  posture: phase-7
+  scope: { files: [harness-runtime/src/.../stage_6_cxa_wiring.py, harness-od/src (cost), harness-as/src (validator)], contracts: [CXA v2.19 §2.3.x, C-OD-17, ADR-D2 §1.9], cross_axis: yes }
+  skills: { primary: phase-7-implementation, secondary: [phase-7-cross-axis-composition] }
+  advisor_required: no
+  council_required: no
+  verification: { shape: e2e, must_pass: ["each GENUINE phase-2 edge has an executed producer-emit proof (0-wireable ones recorded honestly, NOT padded); cost attribution produces correct non-zero figures on a real dispatch; a validator fires at its tier threshold; stage_6_cxa_wiring.py:4 doc-drift 24→22 fixed"] }
+  close_shape: { type: PR-merge, artifact: "cxa-verify+cost+validator PR", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: null
+  notes: P0 found the 22 CXA phase-2 edges are runtime-behavior (composers wired at stage-6), NOT compile-time wiring — mostly verify-emit, not build (CXA-4 0-wireable precedent). Cost/validator = bind params + default tables.
+
+R-CL-P6:
+  title: Phase P6 — spec-prose ↔ impl hygiene (reconcile stale spec footers to landed reality)
+  surface: VII
+  status: BLOCKED
+  depends_on: [R-CL-P0]
+  blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
+  posture: design-phase
+  scope: { files: [design-substrate/Spec_Action_Surface_v1.x (C-AS-14 §14.5/§14.6)], contracts: [C-AS-14], cross_axis: no }
+  skills: { primary: spec-writer, secondary: [harness-adversarial-reviewer] }
+  advisor_required: no
+  council_required: no
+  verification: { shape: grep, must_pass: ["AS Files/managed-agents 'deferred indefinitely' footers refreshed to landed R-810/R-820 reality; overlay-check clean (no stale tracked snapshots, no HARD seam-missing-endpoint); cross-spec rg clean; clearance markers filed"] }
+  close_shape: { type: PR-merge, artifact: "spec-prose-hygiene PR + clearance markers", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: null
+  notes: The [[spec-prose-plan-body-drift-pattern]] class. Files/managed-agents specs still say "deferred indefinitely" but R-810/R-820 landed them.
+
+R-CL-Q1:
+  title: Phase Q1 — DevEx + whole-codebase code-review & simplification sweep
+  surface: VII
+  status: BLOCKED
+  depends_on: [R-CL-P1, R-CL-P2, R-CL-P3, R-CL-P4, R-CL-P5, R-CL-P6]
+  blocks: [R-CL-Q4]
+  posture: phase-7
+  scope: { files: [harness-*/src, justfile, harness.toml, tools/], contracts: [], cross_axis: yes }
+  skills: { primary: harness-adversarial-reviewer, secondary: [] }
+  advisor_required: yes
+  council_required: no
+  verification: { shape: e2e, must_pass: ["per-package review pass (codex + /code-review + /simplify) with all findings closed; clean-checkout-to-green DevEx walkthrough; just check green at a verified fixed point"] }
+  close_shape: { type: PR-merge, artifact: "code-review/devex sweep PR(s)", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: null
+  notes: Workflow candidate (broad parallel audit) if operator opts in. Clean/simple/commented code; no dead code, no over-abstraction.
+
+R-CL-Q2:
+  title: Phase Q2 — security testing + review
+  surface: VII
+  status: BLOCKED
+  depends_on: [R-CL-P1, R-CL-P2, R-CL-P3, R-CL-P4, R-CL-P5, R-CL-P6]
+  blocks: [R-CL-Q4]
+  posture: phase-7
+  scope: { files: [harness-*/src, uv.lock], contracts: [], cross_axis: yes }
+  skills: { primary: null, secondary: [harness-adversarial-reviewer] }
+  advisor_required: yes
+  council_required: conditional:nameable-tension   # C8 security ⊥ C11 operator-burden
+  verification: { shape: e2e, must_pass: ["threat-model doc + per-surface test (sandbox isolation/secrets/MCP-trust/redaction/audit-integrity/supply-chain); /security-review; every finding fixed-or-risk-accepted; no secret/PII in any telemetry/ledger artifact (proven by probe)"] }
+  close_shape: { type: PR-merge, artifact: "security audit PR + threat-model doc", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: null
+  notes: Pen-style probes against the 4-tier sandbox + secret backends; dependency audit composes with I-6.
+
+R-CL-Q3:
+  title: Phase Q3 — QA + 100%-evidence closure
+  surface: III
+  status: BLOCKED
+  depends_on: [R-CL-P1, R-CL-P2, R-CL-P3, R-CL-P4, R-CL-P5, R-CL-P6]
+  blocks: [R-CL-Q4]
+  posture: phase-7
+  scope: { files: [harness-*/tests, harness-*/src], contracts: [all C-*], cross_axis: yes }
+  skills: { primary: null, secondary: [] }
+  advisor_required: no
+  council_required: no
+  verification: { shape: e2e, must_pass: ["full suite green at a verified fixed point (/self-heal, env-artifact reds distinguished); every C-* contract has ≥1 executed-path proof (coverage/evidence matrix); tri-tier use-the-product probes pass; flaky tests eliminated"] }
+  close_shape: { type: PR-merge, artifact: "QA/evidence PR + coverage matrix", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: null
+  notes: 100% = executed-path proof for buildable surfaces; deployment-gated get reference/deterministic now + operator-gated live-proof later (D-2). Workflow candidate for the broad coverage audit.
+
+R-CL-Q4:
+  title: Phase Q4 — portable packaging + deployment
+  surface: V
+  status: BLOCKED
+  depends_on: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
+  blocks: [R-CL-D1]
+  posture: phase-7
+  scope: { files: [pyproject.toml, deploy/, Dockerfiles, justfile], contracts: [C-RT-29], cross_axis: no }
+  skills: { primary: null, secondary: [] }
+  advisor_required: yes
+  council_required: no
+  verification: { shape: e2e, must_pass: ["uv build wheels + pinned reproducible install; per-tier images (self-hosted daemon + managed-cloud + sandbox runners); one-command bring-up per tier reaches readiness-green from a fresh environment"] }
+  close_shape: { type: PR-merge, artifact: "packaging PR + deploy artifacts", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: null
+  notes: Extend the RC just r4xx-*-readiness recipes into a packaged installer; reproducibility proof from a clean environment.
+
+R-CL-D1:
+  title: Phase D1 — documentation suite
+  surface: XI
+  status: BLOCKED
+  depends_on: [R-CL-Q4]
+  blocks: [R-CL-C1]
+  posture: mode-agnostic
+  scope: { files: [docs/, README, .harness/], contracts: [all C-*], cross_axis: yes }
+  skills: { primary: null, secondary: [] }   # /document-generate + /document-release
+  advisor_required: no
+  council_required: no
+  verification: { shape: e2e, must_pass: ["feature/functionality + dependency + user/operator + deployment + architecture/API docs authored; every claim cite-grounded vs HEAD (no fabricated cites); docs-completeness check (every public surface + every audience); operator readthrough"] }
+  close_shape: { type: PR-merge, artifact: "docs suite PR", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: R-CL-C1
+  notes: Includes the substitution/retirement story, the 4-axis+CXA concept map, contributor guide, troubleshooting.
+
+R-CL-C1:
+  title: Phase C1 — full-spec closure certification + ship
+  surface: VIII
+  status: BLOCKED
+  depends_on: [R-CL-D1]
+  blocks: []
+  posture: mode-agnostic
+  scope: { files: [.harness/closure-certification.md, Project_Roadmap_v1.md, .harness/roadmap_status.md], contracts: [all C-*], cross_axis: yes }
+  skills: { primary: harness-adversarial-reviewer, secondary: [council-orchestrator] }
+  advisor_required: yes
+  council_required: no
+  verification: { shape: e2e, must_pass: ["coverage matrix 100% (every C-* + CXA seam + ADR: built∧activated∧tested∧reviewed∧documented); final adversarial+council completeness critic; phase-9 promotion model applied to remaining bounded-residuals; shipped release"] }
+  close_shape: { type: PR-merge, artifact: "closure-certification PR + shipped release", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: null
+  notes: The completeness critic — "what's missing: a surface not built, a claim unverified, a doc not written?" Apply phase-9-retirement-criteria.md for bounded-residual promotion. /ship.
+```
+
+---
+
 ## 6. Operator gate inventory
 
 Actions where genuine human decision is required (not Claude judgment). Flagged via `posture: halt-route-to-operator` in §5; enumerated here for fast scan.
