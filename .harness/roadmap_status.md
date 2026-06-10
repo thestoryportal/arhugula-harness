@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `f9c6f1ebe73d` |
-| `last_refreshed` | 2026-06-10T00:08:12-06:00 |
-| `git_head` | `9cf968d2` (main) — PR #447 BMad runtime config restore merged. |
+| `workspace_state_hash` | `a2e35ff7f236` |
+| `last_refreshed` | 2026-06-10T00:24:04-06:00 |
+| `git_head` | `a7f7d1f4` (main) — PR #466 post-#447 roadmap/status refresh merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 47 |
 
@@ -28,8 +28,8 @@
 
 **Ordered frontier.**
 
-- Ship this post-#447 terminating roadmap/status/dashboard refresh. It pins the BMad runtime config restore merge and clears the in-flight table after #447 merged.
-- After this refresh merges, no additional non-recurring substantive candidate is currently selected. The active recurring lanes remain `R-600-pattern-bake-in-sweep`, `R-600-codex-out-of-family-review`, and `R-IF-roadmap-refresh`; run them only when the cadence or a concrete review target is present.
+- Ship this R-600 cadence-3 workflow update. It promotes the cadence-2 PD-5 candidate into `Project_Workflow_v1_15.md` as **PD-5 grounding-first producer/slice discovery**, files the clearance marker, and refreshes the roadmap/status/dashboard pointers.
+- After this R-600 PR merges, no additional non-recurring substantive candidate is currently selected. The active recurring lanes remain `R-600-pattern-bake-in-sweep`, `R-600-codex-out-of-family-review`, and `R-IF-roadmap-refresh`; run them only when the cadence or a concrete review target is present.
 
 **Resolved by PR #456.** `R-CXA-2` is batch-55 `RETIRED-AS-BOUNDED-RESIDUAL`: PR #452 bound the HITL/recovery producer loops at stage 5, PR #454 wired Anthropic provider-turn HITL continuation, and the remaining durable/journaled recovery-loop evidence is explicitly recorded as post-MVP hardening with a re-open trigger for a real event-sourced/reconciler/WAL recovery loop.
 
@@ -51,10 +51,10 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| R-600 cadence-3 (`this PR`) | 2026-06-10 | **Workflow v1.15 authored.** R-600 memory sweep found the cadence-2 producer-discovery candidate matured into independent grounding-first producer/slice evidence; `Project_Workflow_v1_15.md` adds PD-5 and `.harness/clearance/Project_Workflow-v1_15-cleared-2026-06-10.md` clears it. |
 | PR #447 (`9cf968d2`) | 2026-06-10 | **BMad runtime config restore merged.** `_bmad/bmm/config.yaml` is restored on main so bmad-* skills can resolve `{user_name}`, language, project identity, and artifact roots natively at activation. Config-only; no design-substrate or runtime code touched. |
 | PR #465 (`78415c91`) | 2026-06-09 | **Post-#464 / PR #440 supersession refresh merged.** The refresh removed stale #440 from the in-flight surface after it was closed as superseded by later R-CXA-2 implementation/back-flow work, leaving only #447 open at that point. |
 | PR #464 (`d24dcf57`) | 2026-06-09 | **Post-#463 roadmap/status/dashboard refresh merged.** The refresh pinned the R-IF-112 closeout state and regenerated the dashboard snapshot from the post-#463 status source. |
-| PR #463 (`925f021a`) | 2026-06-09 | **R-IF-112 semantic overlay closeout merged.** The deterministic overlay now derives source authority cites, the design-substrate `C-*` contract keyspace, code-resident CXA seam endpoints, and substitution-carrier joins without LLM calls. Hard CI drift remains CXA endpoint/stale-artifact drift; advisory orphan reporting now covers code-without-cite, contract-without-code, and substitution-without-carrier. |
 
 ---
 
