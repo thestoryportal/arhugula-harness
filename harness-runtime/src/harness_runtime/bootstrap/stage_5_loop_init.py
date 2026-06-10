@@ -35,6 +35,9 @@ from harness_runtime.bootstrap.factories.memory_tool_registry_factory import (
 from harness_runtime.bootstrap.factories.pause_resume_protocol_factory import (
     materialize_pause_resume_protocol_stage,
 )
+from harness_runtime.bootstrap.factories.r_cxa_2_producer_loop_factory import (
+    materialize_r_cxa_2_producer_loop_stage,
+)
 from harness_runtime.bootstrap.factories.runtime_tool_dispatcher_factory import (
     materialize_runtime_tool_dispatcher_stage,
 )
@@ -404,6 +407,7 @@ async def execute(
     ctx.tool_dispatcher = await materialize_runtime_tool_dispatcher_stage(
         ctx, config, rate_table=RATE_TABLE_V1
     )
+    materialize_r_cxa_2_producer_loop_stage(ctx, config)
     tool_step_dispatcher = materialize_sync_dispatcher_facade(
         ctx.tool_dispatcher,
         result_timeout_seconds=config.step_dispatch_timeout_seconds,
