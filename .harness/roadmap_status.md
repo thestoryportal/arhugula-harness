@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `53da62ac5c58` |
-| `last_refreshed` | 2026-06-09T20:51:14-06:00 |
-| `git_head` | `423730fb` (main) — PR #456 R-CXA-2 bounded-residual back-flow merged. |
+| `workspace_state_hash` | `ffe9044984c8` |
+| `last_refreshed` | 2026-06-09T21:49:28-06:00 |
+| `git_head` | `d2364808` (main) — PR #458 R-CXA-1 scoped secret-fetch producer merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-55.md` |
 | `open_fork_doc_count` | 47 |
 
@@ -28,7 +28,7 @@
 
 **Ordered frontier.**
 
-- `R-CXA-1` - AS→IS producer-gated seam. The workflow-time scoped secret-fetch producer is now implemented at the active `TOOL_STEP` dispatch site and emits through `RuntimeAsIsWiring`; bootstrap exclusion remains Reading-D. This closes must_pass #1 without changing the live ledger count. CXA-1 stays PROPOSED/PARTIAL until the separate must_pass #2 / AS→IS edge-scope back-flow audit resolves the remaining AS source-unit audit-emission callbacks.
+- `R-CXA-1` - AS→IS producer-gated seam. PR #458 merged the workflow-time scoped secret-fetch producer at the active `TOOL_STEP` dispatch site and emits through `RuntimeAsIsWiring`; bootstrap exclusion remains Reading-D. This closes must_pass #1 without changing the live ledger count. CXA-1 stays PROPOSED/PARTIAL until the separate must_pass #2 / AS→IS edge-scope back-flow audit resolves the remaining AS source-unit audit-emission callbacks.
 
 **Resolved by PR #456.** `R-CXA-2` is batch-55 `RETIRED-AS-BOUNDED-RESIDUAL`: PR #452 bound the HITL/recovery producer loops at stage 5, PR #454 wired Anthropic provider-turn HITL continuation, and the remaining durable/journaled recovery-loop evidence is explicitly recorded as post-MVP hardening with a re-open trigger for a real event-sourced/reconciler/WAL recovery loop.
 
@@ -51,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #458 (`d236480`) | 2026-06-09 | **R-CXA-1 scoped secret-fetch producer merged.** `ToolContract.required_secrets` now resolves during active `TOOL_STEP` dispatch and emits metadata-only `SecretFetchEvent` records through `RuntimeAsIsWiring`; GCP Secret Manager supplies non-hollow rotation metadata while keyring/env fail closed for audit metadata. CXA-1 remains PARTIAL pending must_pass #2 / AS→IS edge-scope back-flow audit. |
 | PR #456 (`423730f`) | 2026-06-09 | **R-CXA-2 bounded-residual back-flow merged.** H_T-CXA-2 moves from STILL-BOUNDED to counted BOUNDED_RESIDUAL after bound producer-loop evidence and provider-turn HITL continuation; durable recovery from journaled state remains a named post-MVP re-open trigger. |
 | PR #454 (`daf5d42`) | 2026-06-09 | **R-CXA-2 provider-turn HITL continuation merged.** Anthropic non-memory `tool_use` responses now run through the stage-5-bound `ctx.hitl_tool_loop` and return `tool_result` continuation messages to the provider; stage 5 constructs the ask surface, TOOL_STEP dispatcher, and R-CXA-2 producer loop before the frozen LLM dispatcher. R-CXA-2 remained STILL-BOUNDED pending durable/journaled recovery caller evidence or bounded-residual disposition until batch-55 recorded that disposition. |
 | PR #452 (`c8f47d7`) | 2026-06-09 | **R-CXA-2 stage-5 producer-loop composition merged.** Bound `RuntimeHITLToolLoop` and `RuntimeEngineRecoveryLoop` into bootstrap LOOP_INIT and exposed both on `HarnessContext`; focused tests prove direct CP→IS emissions for `cp.hitl-tool-call-rewriting`, `cp.pause-captured`, and `cp.resume-attempted`. This was pre-batch-55 evidence for the later bounded-residual close. |
 | PR #450 (`05ca1f7`) | 2026-06-09 | **Post-#449 roadmap/dashboard refresh merged.** Re-pinned the dashboard after PR #449, recorded R-CXA-2 as advanced-but-not-retired, updated the substitution rationale, and hardened `generate.py` so offline dashboard generation preserves the status-file in-flight PR set. |
-| PR #449 (`60b52ba`) | 2026-06-09 | **R-CXA-2 producer primitives merged.** Applied U-CP-78 Reading A so `cp.pause-captured` consumes real `PauseEvent`, added the runtime engine recovery-loop primitive, and added the provider-neutral HITL tool-loop primitive that gates and emits `cp.hitl-tool-call-rewriting` before dispatch. This was the primitive layer later composed by PR #452 and dispositioned by batch-55. |
 
 ---
 
@@ -103,6 +103,7 @@ The bucket rows below sum to **54** under the batch-55 live ledger (RETIRED 53).
 
 | Date | Source | Resolution |
 |---|---|---|
+| 2026-06-09 | **Post-#458 terminating refresh — PR #458 R-CXA-1 scoped secret-fetch producer merged at `d236480`; §12.2 owed follow-on.** | Hash `53da62ac5c58` → `ffe9044984c8` (state at `d2364808`, open PRs #440/#447, fork count 47, batch-55). R-CXA-1 must_pass #1 is closed by the workflow-time secret-fetch producer; H_T-CXA-1 remains PARTIAL pending must_pass #2 / AS→IS edge-scope back-flow audit. |
 | 2026-06-09 | **Substantive R-CXA-1 scoped secret-fetch producer branch opened from `b7719262`; §12.2 owed after merge.** | Added a workflow-time `ToolContract.required_secrets` producer at `RuntimeToolDispatcher`, injected the production AS→IS emitter through stage-5 factory construction, and made GCP Secret Manager the non-hollow rotation-metadata source while keyring/env audit metadata fails closed. Focused runtime/config/bootstrap tests pass. This closes R-CXA-1 must_pass #1; H_T-CXA-1 remains PARTIAL pending the separate must_pass #2 / AS→IS edge-scope back-flow audit. |
 | 2026-06-09 | **Post-#456 terminating refresh — PR #456 R-CXA-2 bounded-residual back-flow merged at `423730f`; §12.2 owed follow-on.** | Hash `fd41807f1782` → `53da62ac5c58` (state at `423730f`, open PRs #440/#447, fork count 47, batch-55). R-CXA-2 is closed as counted bounded residual; durable/journaled recovery remains an explicit post-MVP re-open trigger. Next action is R-CXA-1 scoped secret-fetch producer grounding/build. |
 | 2026-06-09 | **Substantive R-CXA-2 bounded-residual back-flow branch opened from `597ffb96`; §12.2 owed after merge.** | Filed batch-55, moved H_T-CXA-2 from STILL_BOUNDED to counted BOUNDED_RESIDUAL, updated the substitution ledger/tests/dashboard/register, and set the selector to R-CXA-1. Durable/journaled recovery remains an explicit post-MVP re-open trigger, not a claimed substantive production loop. |
