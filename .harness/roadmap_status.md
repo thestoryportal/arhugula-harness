@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `ebb6d51193e6` |
-| `last_refreshed` | 2026-06-09T23:24:43-06:00 |
-| `git_head` | `62f9a327` (main) — PR #462 post-#461 corrective fixed-point refresh merged. |
+| `workspace_state_hash` | `78617c29740a` |
+| `last_refreshed` | 2026-06-09T23:36:21-06:00 |
+| `git_head` | `925f021a` (main) — PR #463 R-IF-112 semantic overlay closeout merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 47 |
 
@@ -28,9 +28,8 @@
 
 **Ordered frontier.**
 
-- This branch is the substantive `R-IF-112` implementation closeout. The semantic overlay linter already existed; this slice closes the formal roadmap gap by adding the missing design-substrate contract-without-code orphan class, documenting the gate/advisory split, and moving `R-IF-112` to resolved in the roadmap source.
-- After this branch merges, ship the owed post-R-IF-112 terminating roadmap/status/dashboard refresh.
-- No additional non-recurring substantive candidate is currently selected. The active recurring lanes remain `R-600-pattern-bake-in-sweep`, `R-600-codex-out-of-family-review`, and `R-IF-roadmap-refresh`; run them only when the cadence or a concrete review target is present.
+- Ship this post-#463 terminating roadmap/status/dashboard refresh. It pins the R-IF-112 merge commit/hash and clears the stale branch-open selector.
+- After this refresh merges, no additional non-recurring substantive candidate is currently selected. The active recurring lanes remain `R-600-pattern-bake-in-sweep`, `R-600-codex-out-of-family-review`, and `R-IF-roadmap-refresh`; run them only when the cadence or a concrete review target is present.
 
 **Resolved by PR #456.** `R-CXA-2` is batch-55 `RETIRED-AS-BOUNDED-RESIDUAL`: PR #452 bound the HITL/recovery producer loops at stage 5, PR #454 wired Anthropic provider-turn HITL continuation, and the remaining durable/journaled recovery-loop evidence is explicitly recorded as post-MVP hardening with a re-open trigger for a real event-sourced/reconciler/WAL recovery loop.
 
@@ -53,11 +52,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #463 (`925f021a`) | 2026-06-09 | **R-IF-112 semantic overlay closeout merged.** The deterministic overlay now derives source authority cites, the design-substrate `C-*` contract keyspace, code-resident CXA seam endpoints, and substitution-carrier joins without LLM calls. Hard CI drift remains CXA endpoint/stale-artifact drift; advisory orphan reporting now covers code-without-cite, contract-without-code, and substitution-without-carrier. |
 | PR #461 (`41297c2a`) | 2026-06-09 | **Post-#460 roadmap/status/dashboard refresh merged.** The refresh pinned the R-CXA-1 closeout merge, the 54/54 live substitution ledger, and the post-substitution selector. Because it also carried a dashboard test expectation update, this corrective fixed-point refresh re-pins the anchor so the next guard sees the intended roadmap-refresh lag shape. |
 | PR #460 (`b9a9ec87`) | 2026-06-09 | **R-CXA-1 AS→IS edge-scope closeout merged.** The audit narrows the stale remaining-callback wording to the current AS→IS overlay inventory, `RuntimeAsIsWiring` now writes `procedural_tier_snapshot_ref` when the stage-5 resolver is bound, batch-56 moves H_T-CXA-1 to `SUBSTANTIVE_RETIRED` for a 54/54 live ledger, and the LOCAL keyring/env bootstrap fallback is hardened for headless keyring backend errors. |
 | PR #458 (`d236480`) | 2026-06-09 | **R-CXA-1 scoped secret-fetch producer merged.** `ToolContract.required_secrets` now resolves during active `TOOL_STEP` dispatch and emits metadata-only `SecretFetchEvent` records through `RuntimeAsIsWiring`; GCP Secret Manager supplies non-hollow rotation metadata while keyring/env fail closed for audit metadata. CXA-1 remains PARTIAL pending must_pass #2 / AS→IS edge-scope back-flow audit. |
 | PR #456 (`423730f`) | 2026-06-09 | **R-CXA-2 bounded-residual back-flow merged.** H_T-CXA-2 moves from STILL-BOUNDED to counted BOUNDED_RESIDUAL after bound producer-loop evidence and provider-turn HITL continuation; durable recovery from journaled state remains a named post-MVP re-open trigger. |
-| PR #454 (`daf5d42`) | 2026-06-09 | **R-CXA-2 provider-turn HITL continuation merged.** Anthropic non-memory `tool_use` responses now run through the stage-5-bound `ctx.hitl_tool_loop` and return `tool_result` continuation messages to the provider; stage 5 constructs the ask surface, TOOL_STEP dispatcher, and R-CXA-2 producer loop before the frozen LLM dispatcher. R-CXA-2 remained STILL-BOUNDED pending durable/journaled recovery caller evidence or bounded-residual disposition until batch-55 recorded that disposition. |
 
 ---
 
@@ -105,6 +104,7 @@ The bucket rows below sum to **54** under the batch-56 live ledger (RETIRED 54).
 
 | Date | Source | Resolution |
 |---|---|---|
+| 2026-06-09 | **Post-#463 terminating refresh — PR #463 R-IF-112 semantic overlay closeout merged at `925f021a`; §12.2 owed follow-on.** | Hash `ebb6d51193e6` → `78617c29740a` (state at `925f021a`, open PRs #440/#447, fork count 47, batch-56). R-IF-112 is now RESOLVED: `tools/semantic_overlay` derives the design-substrate contract keyspace, source cite layer, CXA seam endpoint graph, and substitution join; CI gates hard CXA/stale-artifact drift and reports advisory code/contract/substitution orphan classes. Next selector moves to this terminating refresh, then recurring R-600/R-IF lanes unless the operator selects a new non-recurring frontier. |
 | 2026-06-09 | **Substantive R-IF-112 implementation closeout branch opened from `62f9a327`; §12.2 owed after merge.** | Hash `a0ddc2154026` → `ebb6d51193e6` (branch base `62f9a327`, open PRs #440/#447, fork count 47, batch-56). The existing semantic overlay linter is completed against the roadmap must-pass by adding design-substrate `C-*` keyspace scanning and advisory `contract_without_code` orphan reporting, alongside the existing code-without-cite, CXA missing-endpoint, and substitution-without-carrier classes. `R-IF-112` is moved to RESOLVED on this branch; a terminating refresh is owed after merge to pin the final merge commit/dashboard hash. |
 | 2026-06-09 | **Post-#461 corrective fixed-point refresh — PR #461 post-#460 roadmap/status/dashboard refresh merged at `41297c2a`; §12.2 anchor re-pin.** | Hash `b958e3438c97` → `a0ddc2154026` (state at `41297c2a`, open PRs #440/#447, fork count 47, batch-56). PR #461 completed the post-#460 refresh but included a dashboard test update, so the default-branch guard could not classify the merge as the expected status/dashboard-only lag. This two-file refresh restores the fixed-point shape and keeps the selector on `R-IF-112` plus recurring R-600/R-IF lanes. |
 | 2026-06-09 | **Post-#460 terminating refresh — PR #460 R-CXA-1 AS→IS edge-scope/sidecar closeout merged at `b9a9ec87`; §12.2 owed follow-on.** | Hash `39009757fd12` → `b958e3438c97` (state at `b9a9ec87`, open PRs #440/#447, fork count 47, batch-56). R-CXA-1 is now merged closed; the live substitution ledger is 54/54 RETIRED and 54/54 pipeline-advanced. Next selector moves off CXA build-close work to this terminating refresh, then the post-substitution governance/process frontier (`R-IF-112` if operator selects a new substantive arc; recurring R-600/R-IF lanes by cadence). |
