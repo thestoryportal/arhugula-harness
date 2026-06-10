@@ -155,7 +155,7 @@ Live smoke commands, each requiring explicit approval:
 
 ```bash
 just r421-e2b-live-probe
-just r421-managed-cloud-live-e2e harness.managed-cloud.e2b.toml --hosted-sandbox-provider e2b
+just r421-managed-cloud-live-e2e harness.managed-cloud.e2b.toml
 just r412-e2b-full-vm-live-e2e
 just r810-files-live-e2e harness.managed-cloud.e2b.toml
 just r820-managed-agents-live-e2e harness.managed-cloud.e2b.toml
