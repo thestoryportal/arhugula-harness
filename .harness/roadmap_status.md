@@ -12,7 +12,7 @@
 | `last_refreshed` | 2026-06-10T15:37:13-06:00 |
 | `git_head` | `a6d2f318` (main) — R-420 self-hosted daemon e2e exercised + passing; every RC surface now exercised. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
-| `open_fork_doc_count` | 47 |
+| `open_fork_doc_count` | 49 |
 
 **Hash recipe.** `sha256(git_head[:8] + "|" + sorted_open_pr_csv + "|" + open_fork_doc_count + "|" + latest_retirement_batch_path)[:12]`. See `Project_Roadmap_v1.md` §7.1.
 
@@ -22,15 +22,16 @@
 
 **Purpose.** Section 02 is the immediate forward-work selector. It should name the next Claude/Codex-executable frontier after the latest status refresh; completion history belongs in `Recently completed`, the drift log, the forward register, and the retirement ledger.
 
-**Current state.** Phase 8 substitution accounting is closed. Batch-56 is now merged on `main`: the live ledger is 54/54 `RETIRED` and 54/54 pipeline-advanced. No canonical substitution row remains outside a counted `RETIRED` disposition.
+**Current state.** Operator directed (2026-06-10) **full harness-spec closure (post-MVP)**. The closure spine is `.harness/post-mvp-full-closure-plan-v1.md` (merged, PR #476); the 13-phase **R-CL-\*** track is now registered at `Project_Roadmap_v1.md` §5.15. **Phase 0 (R-CL-P0) is closing via this PR**: every surface re-verified vs HEAD `37b7c80` (scope-lock at `.harness/closure-p0-scope-lock.md`) and the 2 design-gated forks filed. Phase 8 substitution accounting remains closed (54/54 RETIRED).
 
-**Selection rule.** If no exact `ACTIVE` row is derivable, do not park. Choose the highest-value forward item below, ground it against current code/spec state, build to the genuine gate, and stop only for a real decision, credential, paid call, or irreversible action.
+**Selection rule.** The closure track is the directed active frontier (operator override per §4). Drive each phase per the plan; quality phases (Q/D/C) gate on the capability phases (P).
 
-**Ordered frontier.**
+**Ordered frontier (the R-CL-\* track).**
 
-- The release-candidate deployment-readiness arc is **COMPLETE** (2026-06-10) — verdict **GO**, and **every RC surface is now exercised** (nothing left unexercised). See `.harness/release-candidate-deployment-readiness-report-2026-06-10.md`. Zero harness code changes: provider-free gate; self-hosted **daemon e2e (R-420)** + telemetry (R-430) + multitenant (R-500) + gVisor sandbox (R-411); managed-cloud E2B (probe + full-VM), GCP Secret Manager, Neon, Files API, Managed Agents, OTLP→Cloud Trace (R-421/R-810/R-820), and S3 (R-830). Phase-D advisory audit at `.harness/overlay-advisory-traceability-audit-2026-06-10.md` (buckets stable, none escalated).
-- No RC items remain. Post-RC forward surface is the **optional-polish menu** (runbook §8: dashboard iteration-2, ICM governance adoption, CXA-2 durable recovery hardening, additional providers/deployment, external-user docs) — operator-selected. Standing disposition: the 2 managed-cloud IAM grants (token-creator revoked, run.invoker retained on the collector) and the recovered R-411 Lima VM (left Running). All session commits are local/unpushed (network push blocked this session).
-- Active recurring lanes remain `R-600-pattern-bake-in-sweep`, `R-600-codex-out-of-family-review`, and `R-IF-roadmap-refresh`; run them only when the cadence or a concrete review target is present.
+- **R-CL-P0 — closing via this PR** (ground + scope-lock + forks filed). Exit gate: operator ratifies the frozen scope + the 2 forks.
+- **Next: R-CL-P1 routing intelligence** (the #1 gap — only `DECLARATIVE`-echo bound; P0 verified it's pure Phase-7 impl, no fork). Then **R-CL-P2** (engine-recovery driver + sandbox driver→dispatch wiring [NEW — register's "B-3/B-4 RESOLVED" overstated] + external-engine seam), **R-CL-P3** (TEAM_BINDING e2e), **R-CL-P5** (CXA verify + cost + validator + OD buffer), **R-CL-P6** (spec-prose hygiene). **R-CL-P4** (prompts surface + keying-tuple) is **blocked on the 2 forks' ratification**.
+- Then quality: **R-CL-Q1** (DevEx + code-review sweep), **Q2** (security), **Q3** (QA + 100%-evidence), **Q4** (packaging), **R-CL-D1** (docs), **R-CL-C1** (closure cert + ship).
+- Recurring lanes (`R-600-*`, `R-IF-roadmap-refresh`) run on cadence alongside.
 
 **Resolved by PR #456.** `R-CXA-2` is batch-55 `RETIRED-AS-BOUNDED-RESIDUAL`: PR #452 bound the HITL/recovery producer loops at stage 5, PR #454 wired Anthropic provider-turn HITL continuation, and the remaining durable/journaled recovery-loop evidence is explicitly recorded as post-MVP hardening with a re-open trigger for a real event-sourced/reconciler/WAL recovery loop.
 
@@ -44,7 +45,8 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(none)* | — | — | — |
+| #475 | `r-cxa-2-durable-f2-recovery-substrate` | (P2 input) | Phase 7 — durable F2 recovery substrate (capability-ahead-of-driver) |
+| (this PR) | `closure-track-register-p0` | R-CL-P0 | mode-agnostic — closure-track registration + P0 scope-lock + 2 forks |
 
 ---
 
@@ -52,6 +54,7 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #476 | 2026-06-10 | **Post-MVP full harness closure plan v1 authored + merged** (`.harness/post-mvp-full-closure-plan-v1.md`). 13-phase spine (P0 ground → P1-P6 capabilities → Q1-Q4 hardening → D1 docs → C1 cert). Reframe: MVP+RC closed most activation; this closes the residual frontier + adds the full testing/DevEx/QA/security/code-review/packaging/docs apparatus. Two revisable structural decisions (§0.3). |
 | local commit (`a6d2f318`) | 2026-06-10 | **R-420 self-hosted daemon e2e EXERCISED + PASSING — every RC surface now exercised (RC follow-up).** On operator request: `mkdir`'d empty `prompts/`+`routing_manifest/`, repointed STATE_LEDGER to a throwaway path (IS-1 wants a fresh ledger; the pre-existing 113-entry `.harness/state.jsonl` left untouched), brought the OTLP stack up → `workflow=r420-self-hosted-tool-echo status=success cost=0 hosted-provider-calls=0` (daemon socket-bind + keyring `r420_probe_key` + OTLP + Ollama + MCP echo TOOL_STEP). Scaffolding cleaned up; stack torn down. Nothing in the RC arc remains unexercised. |
 | local commit (`064064b6`) | 2026-06-10 | **R-830 S3 PROVEN — last unexercised managed surface closed (RC follow-up).** The `r830`-profile SSO session had expired; operator re-ran `aws sso login --profile r830`, then `just r830-s3-live-e2e` PASSED (real S3 CRUD + cleanup, 1.89s). Every functional surface across all three tiers is now proven live; only the R-420 self-hosted daemon e2e (operator-provisioned `prompts/`+`routing_manifest/` dirs) remains unexercised. |
 | local commit (`1b2b5f10`) | 2026-06-10 | **R-411 gVisor local sandbox PROVEN (RC follow-up).** Operator surfaced the provisioned Lima VM at `/Volumes/Development/arhugula-r411/` that the initial arc skipped as "host-unavailable"; recovered the `Broken` VM (start → containerd → docker; `runsc` registered) and R-411 passed (TOOL_STEP under `runsc`, network egress blocked, host repo path not visible). RC report Phase B corrected. VM left Running. |
