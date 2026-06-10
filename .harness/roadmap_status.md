@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `39009757fd12` |
-| `last_refreshed` | 2026-06-09T22:20:47-06:00 |
-| `git_head` | `22d7d537` (main) — branch base after PR #459 post-#458 status refresh. |
+| `workspace_state_hash` | `b958e3438c97` |
+| `last_refreshed` | 2026-06-09T22:51:57-06:00 |
+| `git_head` | `b9a9ec87` (main) — PR #460 R-CXA-1 AS→IS edge-scope/sidecar closeout merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 47 |
 
@@ -22,19 +22,20 @@
 
 **Purpose.** Section 02 is the immediate forward-work selector. It should name the next Claude/Codex-executable frontier after the latest status refresh; completion history belongs in `Recently completed`, the drift log, the forward register, and the retirement ledger.
 
-**Current state.** Phase 8 substitution accounting is closed. On this substantive R-CXA-1 branch, batch-56 moves the live ledger to 54/54 `RETIRED` and 54/54 pipeline-advanced. No canonical substitution row remains outside a counted `RETIRED` disposition.
+**Current state.** Phase 8 substitution accounting is closed. Batch-56 is now merged on `main`: the live ledger is 54/54 `RETIRED` and 54/54 pipeline-advanced. No canonical substitution row remains outside a counted `RETIRED` disposition.
 
 **Selection rule.** If no exact `ACTIVE` row is derivable, do not park. Choose the highest-value forward item below, ground it against current code/spec state, build to the genuine gate, and stop only for a real decision, credential, paid call, or irreversible action.
 
 **Ordered frontier.**
 
-- Ship this `R-CXA-1` AS→IS edge-scope/sidecar branch. It closes must_pass #2, files batch-56, and resolves the final non-retired substitution row. After merge, run the normal terminating roadmap/status/dashboard refresh before deriving the next implementation frontier.
+- Ship this post-#460 terminating roadmap/status/dashboard refresh. It pins the merge commit/hash after the final substitution-ledger closeout and clears the stale "ship this R-CXA-1 branch" selector.
+- After this refresh merges, the next non-recurring substantive candidate is `R-IF-112` (spec-code-overlay arc) if the operator wants a new implementation/design frontier. The active recurring lanes remain `R-600-pattern-bake-in-sweep`, `R-600-codex-out-of-family-review`, and `R-IF-roadmap-refresh`; run them only when the cadence or a concrete review target is present.
 
 **Resolved by PR #456.** `R-CXA-2` is batch-55 `RETIRED-AS-BOUNDED-RESIDUAL`: PR #452 bound the HITL/recovery producer loops at stage 5, PR #454 wired Anthropic provider-turn HITL continuation, and the remaining durable/journaled recovery-loop evidence is explicitly recorded as post-MVP hardening with a re-open trigger for a real event-sourced/reconciler/WAL recovery loop.
 
 **Research frontier closed.** `R-901` filed `.harness/01-planning/01-harness-planning/00-harness-research/phase-9-retirement-criteria.md`: Phase 9 is a lightweight post-closure decision model for bounded-residual promotion, live-ledger back-flow, and producer-gated seams. Result is research-only + selector guidance; no design-substrate back-flow is owed.
 
-**Do not re-open as next action.** `R-411`, `R-412`, `R-420`, `R-421`, `R-430`, `R-500`, `R-810`, `R-820`, `R-830`, `R-008` / OD-4, `R-CXA-1`, `R-CXA-2`, `R-CXA-3`, and `R-CXA-4` are already closed or back-flowed on this branch.
+**Do not re-open as next action.** `R-411`, `R-412`, `R-420`, `R-421`, `R-430`, `R-500`, `R-810`, `R-820`, `R-830`, `R-008` / OD-4, `R-CXA-1`, `R-CXA-2`, `R-CXA-3`, and `R-CXA-4` are already closed or back-flowed on `main`.
 
 ---
 
@@ -51,7 +52,7 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| This branch (`codex/r-cxa-1-as-is-edge-audit`) | 2026-06-09 | **R-CXA-1 AS→IS edge-scope closeout.** The audit narrows the stale remaining-callback wording to the current AS→IS overlay inventory, `RuntimeAsIsWiring` now writes `procedural_tier_snapshot_ref` when the stage-5 resolver is bound, and batch-56 moves H_T-CXA-1 to `SUBSTANTIVE_RETIRED` for a 54/54 live ledger. |
+| PR #460 (`b9a9ec87`) | 2026-06-09 | **R-CXA-1 AS→IS edge-scope closeout merged.** The audit narrows the stale remaining-callback wording to the current AS→IS overlay inventory, `RuntimeAsIsWiring` now writes `procedural_tier_snapshot_ref` when the stage-5 resolver is bound, batch-56 moves H_T-CXA-1 to `SUBSTANTIVE_RETIRED` for a 54/54 live ledger, and the LOCAL keyring/env bootstrap fallback is hardened for headless keyring backend errors. |
 | PR #458 (`d236480`) | 2026-06-09 | **R-CXA-1 scoped secret-fetch producer merged.** `ToolContract.required_secrets` now resolves during active `TOOL_STEP` dispatch and emits metadata-only `SecretFetchEvent` records through `RuntimeAsIsWiring`; GCP Secret Manager supplies non-hollow rotation metadata while keyring/env fail closed for audit metadata. CXA-1 remains PARTIAL pending must_pass #2 / AS→IS edge-scope back-flow audit. |
 | PR #456 (`423730f`) | 2026-06-09 | **R-CXA-2 bounded-residual back-flow merged.** H_T-CXA-2 moves from STILL-BOUNDED to counted BOUNDED_RESIDUAL after bound producer-loop evidence and provider-turn HITL continuation; durable recovery from journaled state remains a named post-MVP re-open trigger. |
 | PR #454 (`daf5d42`) | 2026-06-09 | **R-CXA-2 provider-turn HITL continuation merged.** Anthropic non-memory `tool_use` responses now run through the stage-5-bound `ctx.hitl_tool_loop` and return `tool_result` continuation messages to the provider; stage 5 constructs the ask surface, TOOL_STEP dispatcher, and R-CXA-2 producer loop before the frozen LLM dispatcher. R-CXA-2 remained STILL-BOUNDED pending durable/journaled recovery caller evidence or bounded-residual disposition until batch-55 recorded that disposition. |
@@ -103,6 +104,7 @@ The bucket rows below sum to **54** under the batch-56 live ledger (RETIRED 54).
 
 | Date | Source | Resolution |
 |---|---|---|
+| 2026-06-09 | **Post-#460 terminating refresh — PR #460 R-CXA-1 AS→IS edge-scope/sidecar closeout merged at `b9a9ec87`; §12.2 owed follow-on.** | Hash `39009757fd12` → `b958e3438c97` (state at `b9a9ec87`, open PRs #440/#447, fork count 47, batch-56). R-CXA-1 is now merged closed; the live substitution ledger is 54/54 RETIRED and 54/54 pipeline-advanced. Next selector moves off CXA build-close work to this terminating refresh, then the post-substitution governance/process frontier (`R-IF-112` if operator selects a new substantive arc; recurring R-600/R-IF lanes by cadence). |
 | 2026-06-09 | **Substantive R-CXA-1 AS→IS edge-scope/sidecar branch opened from `22d7d53`; §12.2 owed after merge.** | Hash `ffe9044984c8` → `39009757fd12` (branch base `22d7d53`, open PRs #440/#447, fork count 47, batch-56). Filed `.harness/r-cxa-1-as-is-edge-audit-2026-06-09.md`, threaded the stage-5 procedural-tier resolver into the production `RuntimeAsIsWiring` secret-fetch callback, and moved H_T-CXA-1 from PARTIAL to SUBSTANTIVE_RETIRED. Live ledger is now 54/54 RETIRED on this branch; a terminating refresh is owed after merge to pin the final merge commit/dashboard hash. |
 | 2026-06-09 | **Post-#458 terminating refresh — PR #458 R-CXA-1 scoped secret-fetch producer merged at `d236480`; §12.2 owed follow-on.** | Hash `53da62ac5c58` → `ffe9044984c8` (state at `d2364808`, open PRs #440/#447, fork count 47, batch-55). R-CXA-1 must_pass #1 is closed by the workflow-time secret-fetch producer; H_T-CXA-1 remains PARTIAL pending must_pass #2 / AS→IS edge-scope back-flow audit. |
 | 2026-06-09 | **Substantive R-CXA-1 scoped secret-fetch producer branch opened from `b7719262`; §12.2 owed after merge.** | Added a workflow-time `ToolContract.required_secrets` producer at `RuntimeToolDispatcher`, injected the production AS→IS emitter through stage-5 factory construction, and made GCP Secret Manager the non-hollow rotation-metadata source while keyring/env audit metadata fails closed. Focused runtime/config/bootstrap tests pass. This closes R-CXA-1 must_pass #1; H_T-CXA-1 remains PARTIAL pending the separate must_pass #2 / AS→IS edge-scope back-flow audit. |
@@ -293,7 +295,7 @@ The bucket rows below sum to **54** under the batch-56 live ledger (RETIRED 54).
 | 2026-06-08 | **R-900 decomposition branch opened from `4523a857`; §12.2 owed after merge.** | Fresh grounding found the advertised R-XI-02/R-XI-03 options are already RESOLVED in `Project_Roadmap_v1.md` and implemented in `tools/dashboard/generate.py`; R-900's own must-pass requires crystallizing a specific research question before work begins. This branch resolves the placeholder by adding `R-901-phase-9-retirement-criteria` as the next explicit research frontier. |
 | 2026-06-08 | **Post-#426 roadmap status refresh — PR #426 R-900 decomposition merged at `c223de07`; §12.2 owed follow-on.** | Hash `b9a21d9a2d3d` → `472c4d3cb516` (state at `c223de07`, PRS empty/unavailable, fork count 45, batch-54). R-900 is RESOLVED by decomposition into R-901, and the SQLite writer-lock fix keeps the PR pytest gate green. **Next action:** R-901 Phase-9 retirement criteria research brief. |
 
-**Audit protocol exercised across terminating-refresh closures, fresh-session reconciliations, substantive closes, accounting back-flow, live-provider gates, and dashboard-discipline sweeps.** Discipline + enforcement layers are operational; the current selector is the `Next action` section above, not stale historical footer prose. After batch-56 on this branch, no canonical substitution-ledger row remains non-retired; future `/roadmap continue` sessions should ship this PR, run the terminating refresh, then re-derive any post-substitution activation or hardening frontier from current HEAD.
+**Audit protocol exercised across terminating-refresh closures, fresh-session reconciliations, substantive closes, accounting back-flow, live-provider gates, and dashboard-discipline sweeps.** Discipline + enforcement layers are operational; the current selector is the `Next action` section above, not stale historical footer prose. After batch-56 on `main`, no canonical substitution-ledger row remains non-retired; future `/roadmap continue` sessions should derive any post-substitution activation or hardening frontier from current HEAD.
 
 ---
 

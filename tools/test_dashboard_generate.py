@@ -94,7 +94,7 @@ def test_activation_open_count_matches_current_forward_catalog():
 
     closure = generate.compute_closure(actions, {"retirement": {}})
 
-    assert closure["activation"]["open"] == 1
+    assert closure["activation"]["open"] == 0
     assert closure["activation"]["total"] == 21
 
 
