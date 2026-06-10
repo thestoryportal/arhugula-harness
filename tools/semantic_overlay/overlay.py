@@ -63,6 +63,7 @@ import argparse
 import ast
 import json
 import re
+import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -499,7 +500,7 @@ def validate(graph: dict[str, Any]) -> list[str]:
     # HARD: the committed overlay.json (if present) must match the fresh derivation —
     # a stale committed artifact manufactures drift (stage-01 finding #2). Mirrors the
     # substitution-ledger snapshot-pin discipline.
-    if OVERLAY_JSON.exists():
+    if OVERLAY_JSON.exists() and _overlay_json_is_tracked():
         committed = json.loads(OVERLAY_JSON.read_text(encoding="utf-8"))
         if committed.get("stats") != graph["stats"]:
             violations.append(
@@ -507,6 +508,24 @@ def validate(graph: dict[str, Any]) -> list[str]:
                 "`overlay.py build` and commit (a stale overlay manufactures drift)."
             )
     return violations
+
+
+def _overlay_json_is_tracked() -> bool:
+    """Return True only when overlay.json is part of the git index."""
+    try:
+        rel = OVERLAY_JSON.relative_to(REPO_ROOT)
+    except ValueError:
+        return False
+
+    result = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", str(rel)],
+        cwd=REPO_ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        text=True,
+    )
+    return result.returncode == 0
 
 
 # --------------------------------------------------------------------------- #

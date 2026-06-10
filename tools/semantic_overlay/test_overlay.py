@@ -162,6 +162,28 @@ def test_validate_clean_on_head(graph: dict) -> None:
     assert seam_violations == []
 
 
+def test_validate_ignores_stale_untracked_overlay_json(
+    graph: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stale = tmp_path / "overlay.json"
+    stale.write_text('{"stats": {"source_files": -1}}', encoding="utf-8")
+    monkeypatch.setattr(overlay, "OVERLAY_JSON", stale)
+    monkeypatch.setattr(overlay, "_overlay_json_is_tracked", lambda: False)
+
+    assert overlay.validate(graph) == []
+
+
+def test_validate_flags_stale_tracked_overlay_json(
+    graph: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stale = tmp_path / "overlay.json"
+    stale.write_text('{"stats": {"source_files": -1}}', encoding="utf-8")
+    monkeypatch.setattr(overlay, "OVERLAY_JSON", stale)
+    monkeypatch.setattr(overlay, "_overlay_json_is_tracked", lambda: True)
+
+    assert any("Committed overlay.json stats are stale" in v for v in overlay.validate(graph))
+
+
 def test_validate_flags_a_dangling_seam(graph: dict) -> None:
     poisoned = dict(graph)
     poisoned["orphans"] = dict(graph["orphans"])

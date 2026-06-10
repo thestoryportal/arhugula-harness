@@ -90,12 +90,12 @@ codex-worktree-gc *args:
 overlay:
     uv run python tools/semantic_overlay/overlay.py summary
 
-# Re-derive + write the committed overlay.json artifact (the dashboard/enrich consumer).
+# Re-derive + write the gitignored overlay.json artifact (the dashboard/enrich consumer).
 overlay-build:
     uv run python tools/semantic_overlay/overlay.py build
 
 # CI gate: HARD drift = a CXA seam whose producer/consumer symbol no longer resolves,
-# or a stale committed overlay.json. Exit 1 on either.
+# or a stale tracked overlay.json. Exit 1 on either.
 overlay-check:
     uv run python tools/semantic_overlay/overlay.py check
 
