@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `fd41807f1782` |
-| `last_refreshed` | 2026-06-09T20:29:41-06:00 |
-| `git_head` | `597ffb96` (main) — PR #455 post-#454 refresh base; this branch files R-CXA-2 batch-55 back-flow. |
+| `workspace_state_hash` | `53da62ac5c58` |
+| `last_refreshed` | 2026-06-09T20:51:14-06:00 |
+| `git_head` | `423730fb` (main) — PR #456 R-CXA-2 bounded-residual back-flow merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-55.md` |
 | `open_fork_doc_count` | 47 |
 
@@ -30,7 +30,7 @@
 
 - `R-CXA-1` - AS→IS producer-gated seam. The workflow-time scoped secret-fetch producer is SPECIFIED at `.harness/r-cxa-1-2-producer-seam-spec.md` §2 and has no open fork; bootstrap exclusion remains Reading-D. Author/execute the implementation plan for this scoped producer only if current code has, or the implementation arc can add, a real scoped secret-fetch producer; otherwise keep the seam gated rather than wiring bootstrap secret resolution as a hollow substitute. Stays PROPOSED/PARTIAL until a real scoped producer fires.
 
-**Resolved in this branch.** `R-CXA-2` is batch-55 `RETIRED-AS-BOUNDED-RESIDUAL`: PR #452 bound the HITL/recovery producer loops at stage 5, PR #454 wired Anthropic provider-turn HITL continuation, and the remaining durable/journaled recovery-loop evidence is explicitly recorded as post-MVP hardening with a re-open trigger for a real event-sourced/reconciler/WAL recovery loop.
+**Resolved by PR #456.** `R-CXA-2` is batch-55 `RETIRED-AS-BOUNDED-RESIDUAL`: PR #452 bound the HITL/recovery producer loops at stage 5, PR #454 wired Anthropic provider-turn HITL continuation, and the remaining durable/journaled recovery-loop evidence is explicitly recorded as post-MVP hardening with a re-open trigger for a real event-sourced/reconciler/WAL recovery loop.
 
 **Research frontier closed.** `R-901` filed `.harness/01-planning/01-harness-planning/00-harness-research/phase-9-retirement-criteria.md`: Phase 9 is a lightweight post-closure decision model for bounded-residual promotion, live-ledger back-flow, and producer-gated seams. Result is research-only + selector guidance; no design-substrate back-flow is owed.
 
@@ -51,7 +51,7 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| batch-55 (`TBD`) | 2026-06-09 | **R-CXA-2 bounded-residual back-flow filed.** H_T-CXA-2 moves from STILL-BOUNDED to counted BOUNDED_RESIDUAL after bound producer-loop evidence and provider-turn HITL continuation; durable recovery from journaled state remains a named post-MVP re-open trigger. |
+| PR #456 (`423730f`) | 2026-06-09 | **R-CXA-2 bounded-residual back-flow merged.** H_T-CXA-2 moves from STILL-BOUNDED to counted BOUNDED_RESIDUAL after bound producer-loop evidence and provider-turn HITL continuation; durable recovery from journaled state remains a named post-MVP re-open trigger. |
 | PR #454 (`daf5d42`) | 2026-06-09 | **R-CXA-2 provider-turn HITL continuation merged.** Anthropic non-memory `tool_use` responses now run through the stage-5-bound `ctx.hitl_tool_loop` and return `tool_result` continuation messages to the provider; stage 5 constructs the ask surface, TOOL_STEP dispatcher, and R-CXA-2 producer loop before the frozen LLM dispatcher. R-CXA-2 remained STILL-BOUNDED pending durable/journaled recovery caller evidence or bounded-residual disposition until batch-55 recorded that disposition. |
 | PR #452 (`c8f47d7`) | 2026-06-09 | **R-CXA-2 stage-5 producer-loop composition merged.** Bound `RuntimeHITLToolLoop` and `RuntimeEngineRecoveryLoop` into bootstrap LOOP_INIT and exposed both on `HarnessContext`; focused tests prove direct CP→IS emissions for `cp.hitl-tool-call-rewriting`, `cp.pause-captured`, and `cp.resume-attempted`. This was pre-batch-55 evidence for the later bounded-residual close. |
 | PR #450 (`05ca1f7`) | 2026-06-09 | **Post-#449 roadmap/dashboard refresh merged.** Re-pinned the dashboard after PR #449, recorded R-CXA-2 as advanced-but-not-retired, updated the substitution rationale, and hardened `generate.py` so offline dashboard generation preserves the status-file in-flight PR set. |
@@ -103,6 +103,7 @@ The bucket rows below sum to **54** under the batch-55 live ledger (RETIRED 53).
 
 | Date | Source | Resolution |
 |---|---|---|
+| 2026-06-09 | **Post-#456 terminating refresh — PR #456 R-CXA-2 bounded-residual back-flow merged at `423730f`; §12.2 owed follow-on.** | Hash `fd41807f1782` → `53da62ac5c58` (state at `423730f`, open PRs #440/#447, fork count 47, batch-55). R-CXA-2 is closed as counted bounded residual; durable/journaled recovery remains an explicit post-MVP re-open trigger. Next action is R-CXA-1 scoped secret-fetch producer grounding/build. |
 | 2026-06-09 | **Substantive R-CXA-2 bounded-residual back-flow branch opened from `597ffb96`; §12.2 owed after merge.** | Filed batch-55, moved H_T-CXA-2 from STILL_BOUNDED to counted BOUNDED_RESIDUAL, updated the substitution ledger/tests/dashboard/register, and set the selector to R-CXA-1. Durable/journaled recovery remains an explicit post-MVP re-open trigger, not a claimed substantive production loop. |
 | 2026-06-09 | **Post-#454 terminating refresh — PR #454 R-CXA-2 provider-turn HITL continuation merged at `daf5d42`; §12.2 owed follow-on.** | Hash `1ffec49abd91` → `fd41807f1782` (state at `daf5d42`, open PRs #440/#447, fork count 47, batch-54). R-CXA-2 advanced by production-bound Anthropic non-memory provider-turn HITL continuation through `ctx.hitl_tool_loop`, but remains STILL-BOUNDED until durable/journaled recovery caller evidence supports retirement accounting or receives a bounded-residual disposition. Next action remains R-CXA-2 durable recovery evidence/gate, then R-CXA-1 scoped secret-fetch producer. |
 | 2026-06-09 | **Substantive R-CXA-2 provider-turn HITL continuation branch opened from `c9e9dc7`; §12.2 owed after merge.** | Wired Anthropic non-memory `tool_use` responses through the bound stage-5 `ctx.hitl_tool_loop`, then returned `tool_result` continuation messages to the provider. Stage 5 now constructs the ask surface, TOOL_STEP dispatcher, and R-CXA-2 producer loop before the frozen LLM dispatcher so the production firing site is bound at construction. Focused tests prove dispatcher continuation, R-CXA-2 loop factory behavior, memory-tool path preservation, and bootstrap smoke. R-CXA-2 remains STILL-BOUNDED pending durable/journaled recovery caller evidence or a bounded-residual disposition. |
