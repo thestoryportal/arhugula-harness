@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `48f9537038cf` |
-| `last_refreshed` | 2026-06-09T23:54:00-06:00 |
-| `git_head` | `d24dcf57` (main) — PR #464 post-#463 roadmap/status/dashboard refresh merged. |
+| `workspace_state_hash` | `f9c6f1ebe73d` |
+| `last_refreshed` | 2026-06-10T00:08:12-06:00 |
+| `git_head` | `9cf968d2` (main) — PR #447 BMad runtime config restore merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 47 |
 
@@ -28,7 +28,7 @@
 
 **Ordered frontier.**
 
-- Ship this post-#464 / PR #440 supersession refresh. It pins the current main head, clears the stale #440 in-flight row after that PR was closed as superseded by later R-CXA-2 implementation/back-flow work, and leaves only #447 as an open concurrent ops PR.
+- Ship this post-#447 terminating roadmap/status/dashboard refresh. It pins the BMad runtime config restore merge and clears the in-flight table after #447 merged.
 - After this refresh merges, no additional non-recurring substantive candidate is currently selected. The active recurring lanes remain `R-600-pattern-bake-in-sweep`, `R-600-codex-out-of-family-review`, and `R-IF-roadmap-refresh`; run them only when the cadence or a concrete review target is present.
 
 **Resolved by PR #456.** `R-CXA-2` is batch-55 `RETIRED-AS-BOUNDED-RESIDUAL`: PR #452 bound the HITL/recovery producer loops at stage 5, PR #454 wired Anthropic provider-turn HITL continuation, and the remaining durable/journaled recovery-loop evidence is explicitly recorded as post-MVP hardening with a re-open trigger for a real event-sourced/reconciler/WAL recovery loop.
@@ -43,7 +43,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| #447 | `bmad-config-to-main` | R-IF / ops | bmad runtime config restore (concurrent) |
+| *(none)* | — | — | — |
 
 ---
 
@@ -51,11 +51,10 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #447 (`9cf968d2`) | 2026-06-10 | **BMad runtime config restore merged.** `_bmad/bmm/config.yaml` is restored on main so bmad-* skills can resolve `{user_name}`, language, project identity, and artifact roots natively at activation. Config-only; no design-substrate or runtime code touched. |
+| PR #465 (`78415c91`) | 2026-06-09 | **Post-#464 / PR #440 supersession refresh merged.** The refresh removed stale #440 from the in-flight surface after it was closed as superseded by later R-CXA-2 implementation/back-flow work, leaving only #447 open at that point. |
 | PR #464 (`d24dcf57`) | 2026-06-09 | **Post-#463 roadmap/status/dashboard refresh merged.** The refresh pinned the R-IF-112 closeout state and regenerated the dashboard snapshot from the post-#463 status source. |
 | PR #463 (`925f021a`) | 2026-06-09 | **R-IF-112 semantic overlay closeout merged.** The deterministic overlay now derives source authority cites, the design-substrate `C-*` contract keyspace, code-resident CXA seam endpoints, and substitution-carrier joins without LLM calls. Hard CI drift remains CXA endpoint/stale-artifact drift; advisory orphan reporting now covers code-without-cite, contract-without-code, and substitution-without-carrier. |
-| PR #462 (`62f9a32`) | 2026-06-09 | **Post-#461 corrective fixed-point refresh merged.** The status/dashboard anchor was re-pinned after the post-#460 refresh carried a dashboard test update, preserving the intended lag shape for the next guard. |
-| PR #461 (`41297c2a`) | 2026-06-09 | **Post-#460 roadmap/status/dashboard refresh merged.** The refresh pinned the R-CXA-1 closeout merge, the 54/54 live substitution ledger, and the post-substitution selector. Because it also carried a dashboard test expectation update, this corrective fixed-point refresh re-pins the anchor so the next guard sees the intended roadmap-refresh lag shape. |
-| PR #460 (`b9a9ec87`) | 2026-06-09 | **R-CXA-1 AS→IS edge-scope closeout merged.** The audit narrows the stale remaining-callback wording to the current AS→IS overlay inventory, `RuntimeAsIsWiring` now writes `procedural_tier_snapshot_ref` when the stage-5 resolver is bound, batch-56 moves H_T-CXA-1 to `SUBSTANTIVE_RETIRED` for a 54/54 live ledger, and the LOCAL keyring/env bootstrap fallback is hardened for headless keyring backend errors. |
 
 ---
 
@@ -103,6 +102,7 @@ The bucket rows below sum to **54** under the batch-56 live ledger (RETIRED 54).
 
 | Date | Source | Resolution |
 |---|---|---|
+| 2026-06-10 | **Post-#447 terminating refresh — PR #447 BMad runtime config restore merged at `9cf968d2`; §12.2 owed follow-on.** | Hash `48f9537038cf` → `f9c6f1ebe73d` (state at `9cf968d2`, open PRs empty, fork count 47, batch-56). `_bmad/bmm/config.yaml` is restored on main; no roadmap item status changes beyond clearing the last in-flight PR. Next selector remains recurring R-600/R-IF lanes unless the operator selects a new non-recurring frontier. |
 | 2026-06-09 | **PR #440 supersession / post-#464 open-PR refresh branch opened from `d24dcf57`.** | Hash `78617c29740a` → `48f9537038cf` (state at `d24dcf57`, open PRs #447 only, fork count 47, batch-56). #440 was closed as superseded: it was conflicting, predated the later R-CXA-2 implementation/back-flow sequence, and a current-main comparison showed it would remove later R-CXA-2 implementation, tests, batch records, and dashboard/overlay updates if merged. Next selector remains recurring R-600/R-IF lanes unless the operator selects a new non-recurring frontier. |
 | 2026-06-09 | **Post-#463 terminating refresh — PR #463 R-IF-112 semantic overlay closeout merged at `925f021a`; §12.2 owed follow-on.** | Hash `ebb6d51193e6` → `78617c29740a` (state at `925f021a`, open PRs #440/#447, fork count 47, batch-56). R-IF-112 is now RESOLVED: `tools/semantic_overlay` derives the design-substrate contract keyspace, source cite layer, CXA seam endpoint graph, and substitution join; CI gates hard CXA/stale-artifact drift and reports advisory code/contract/substitution orphan classes. Next selector moves to this terminating refresh, then recurring R-600/R-IF lanes unless the operator selects a new non-recurring frontier. |
 | 2026-06-09 | **Substantive R-IF-112 implementation closeout branch opened from `62f9a327`; §12.2 owed after merge.** | Hash `a0ddc2154026` → `ebb6d51193e6` (branch base `62f9a327`, open PRs #440/#447, fork count 47, batch-56). The existing semantic overlay linter is completed against the roadmap must-pass by adding design-substrate `C-*` keyspace scanning and advisory `contract_without_code` orphan reporting, alongside the existing code-without-cite, CXA missing-endpoint, and substitution-without-carrier classes. `R-IF-112` is moved to RESOLVED on this branch; a terminating refresh is owed after merge to pin the final merge commit/dashboard hash. |
