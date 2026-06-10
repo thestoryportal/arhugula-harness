@@ -2,11 +2,11 @@
 
 ## Change-note (v2.14 → v2.15)
 
-**Scope of revision.** P6-CK adversarial-review absorption pass per `Adversarial_Review_06_Runtime_v2_14.md` (commit `3206093` on `worktree-cp-16-17-impl-planner-arc`). Absorbs 4 Class 2 findings + 3 Class 1 inline fixes surfaced by the harness-adversarial-reviewer Phase-7 pre-implementation review of v2.14. All 7 findings resolve at plan-body revision; ZERO upstream-phase artifact revision required; NO `Project_Workflow_v1_8.md` §2.7.6 Phase-7 fork triggered.
+**Scope of revision.** P6-CK adversarial-review absorption pass per `.harness/archive/root-historical/Adversarial_Review_06_Runtime_v2_14.md` (commit `3206093` on `worktree-cp-16-17-impl-planner-arc`). Absorbs 4 Class 2 findings + 3 Class 1 inline fixes surfaced by the harness-adversarial-reviewer Phase-7 pre-implementation review of v2.14. All 7 findings resolve at plan-body revision; ZERO upstream-phase artifact revision required; NO `Project_Workflow_v1_8.md` §2.7.6 Phase-7 fork triggered.
 
 **F2-04 grep-resolution outcome (cluster-opening gate).** `C-CP-25 §25.3.3.4` cite at U-RT-81 + adjacent-defect (iii) — **CITE RESOLVES**. Empirical verification: §25.3.3.4 ("dispatch step body amendment") authored at `Spec_Control_Plane_v1_7.md:13`; preserved verbatim through v1.8 / v1.9 / v1.10 / v1.11 per the delta-only spec-file pattern (each later version is a focused amendment file; preservation guarantee in §"Sections preserved verbatim" clauses). Per `Project_Workflow_v1_8.md` §7.4 use-latest-version body-citation-alignment clause: cite to "CP spec v1.11 §25.3.3.4" is correct (v1.11 is the current effective version). The grep-against-v1.11-alone returning empty surfaces a delta-only-spec-file discoverability pattern, NOT a plan defect. F2-04 thereby DOWNGRADED from "potential Class 3 escalation" to Class 1 (cite-discoverability note absorbed below). **L9-octies cluster-opening gate CLEARED.**
 
-**Source of fix.** `Adversarial_Review_06_Runtime_v2_14.md` disposition: Clearance with current-phase revision per §4.1.2. 4 Class 2 + 3 Class 1 findings:
+**Source of fix.** `.harness/archive/root-historical/Adversarial_Review_06_Runtime_v2_14.md` disposition: Clearance with current-phase revision per §4.1.2. 4 Class 2 + 3 Class 1 findings:
 - **F2-01** Change-note internal contradiction — adjacent-defect (ii) framed as "NOT patched per FM-2" while U-RT-81 AC #3 locks the callback→kind enum mapping (the lock IS a plan-body patch per `[[spec-prose-plan-body-drift-pattern]]`; framing inconsistent).
 - **F2-02** U-RT-81 missing direct dependency on U-RT-76 (Protocol type + typed-exception declarations per §7 no-transitive-omission discipline).
 - **F2-03** AS spec §14.7 vs §14.8 sampling-row cite drift (memory.operation sampling lives at §14.8, not §14.7; plan absorbed AS spec footer-note's incorrect self-claim).
@@ -160,7 +160,7 @@ Only the §14.12.5 row updated; all other v2.14 coverage matrix rows preserved v
 |---|---|
 | Artifact | `Implementation_Plan_Harness_Runtime_v2_15.md` |
 | Version | v2.15 |
-| Filing event | P6-CK adversarial-review absorption pass per `Adversarial_Review_06_Runtime_v2_14.md` (commit `3206093`); 4 Class 2 + 3 Class 1 findings absorbed; F2-04 downgraded to Class 1 after grep-resolution; 2026-05-23 |
+| Filing event | P6-CK adversarial-review absorption pass per `.harness/archive/root-historical/Adversarial_Review_06_Runtime_v2_14.md` (commit `3206093`); 4 Class 2 + 3 Class 1 findings absorbed; F2-04 downgraded to Class 1 after grep-resolution; 2026-05-23 |
 | Predecessor | `Implementation_Plan_Harness_Runtime_v2_14.md` (v2.14 substantive content preserved verbatim outside the 7 surgical edit sites enumerated at change-note "Plan shape preserved") |
 | New units | 0 (no unit added; no unit removed; no unit re-decomposition) |
 | Revised units | 4 — U-RT-76 (Implements cite-shape fix per F1-01), U-RT-77 (NEW AC #9 per F1-02), U-RT-80 (no revision at v2.15 — listed for completeness; v2.14 ACs preserved), U-RT-81 (Implements + Depends on + ACs #3 + #4 per F2-02 + F2-03 + F2-04 absorptions) |

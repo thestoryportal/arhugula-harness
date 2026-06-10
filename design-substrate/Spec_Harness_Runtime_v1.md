@@ -1145,9 +1145,9 @@ The driver SETS but does NOT consume — the runtime composer consumes. This pre
 
 ## Change-note (v1.19 → v1.20)
 
-**Scope of revision.** AdvReview 07 Class 1 finding F1-01 inline doc-drift fix per `Adversarial_Review_07_Runtime_v1_18_+_v2_17.md` §"F1-01 — Spec §14.13.3 stage-4 sub-ordering self-contradiction". §14.13.3 prose at line 2601 (v1.19 numbering) enumerated a strict four-position total order (`tracer_provider` → `audit_writer` → `cost_chain` → `collector_daemon` → `materialize_validator_framework_stage`) while the same revision's change-note adjacent observation (v) at line 86 explicitly disclaimed sub-ordering pin. The two readings were mutually inconsistent. v1.20 resolves the drift via AdvReview-recommended path: explicit partial-order phrasing — validator framework after all four siblings; intermediate sibling order unconstrained. Plan U-RT-84 AC #4 partial-order phrasing already harmonizes with this fix.
+**Scope of revision.** AdvReview 07 Class 1 finding F1-01 inline doc-drift fix per `.harness/archive/root-historical/Adversarial_Review_07_Runtime_v1_18_+_v2_17.md` §"F1-01 — Spec §14.13.3 stage-4 sub-ordering self-contradiction". §14.13.3 prose at line 2601 (v1.19 numbering) enumerated a strict four-position total order (`tracer_provider` → `audit_writer` → `cost_chain` → `collector_daemon` → `materialize_validator_framework_stage`) while the same revision's change-note adjacent observation (v) at line 86 explicitly disclaimed sub-ordering pin. The two readings were mutually inconsistent. v1.20 resolves the drift via AdvReview-recommended path: explicit partial-order phrasing — validator framework after all four siblings; intermediate sibling order unconstrained. Plan U-RT-84 AC #4 partial-order phrasing already harmonizes with this fix.
 
-**Source of fix.** `Adversarial_Review_07_Runtime_v1_18_+_v2_17.md` Class 1 F1-01 (cleared with inline fixes per disposition).
+**Source of fix.** `.harness/archive/root-historical/Adversarial_Review_07_Runtime_v1_18_+_v2_17.md` Class 1 F1-01 (cleared with inline fixes per disposition).
 
 **Amendments.**
 

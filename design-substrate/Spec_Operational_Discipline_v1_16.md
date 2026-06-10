@@ -89,7 +89,7 @@ The framing was partially-correct: amendment was indeed owed to §4.2/§4.3 sect
 
 ## §3 Tension 004 §7 reconciliation pass supersession (D-2 + D-3 rows)
 
-The 2026-05-26 reconciliation pass at `Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` §7 closed D-2/D-3/D-4 as "RESOLVED at OD plan v2.5 plan-conforms-to-spec." The reconciliation pass did NOT re-perform the §4 step 3 tiebreaker check against the cited external authority (OTel 1.41.0 archived text). This v1.16 re-litigation supersedes the §7.1 D-2 + D-3 rows per the doc's own §4 step 3 framing.
+The 2026-05-26 reconciliation pass at `.harness/archive/root-historical/Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` §7 closed D-2/D-3/D-4 as "RESOLVED at OD plan v2.5 plan-conforms-to-spec." The reconciliation pass did NOT re-perform the §4 step 3 tiebreaker check against the cited external authority (OTel 1.41.0 archived text). This v1.16 re-litigation supersedes the §7.1 D-2 + D-3 rows per the doc's own §4 step 3 framing.
 
 **Per-divergence post-v1.16 state:**
 
@@ -101,7 +101,7 @@ The 2026-05-26 reconciliation pass at `Phase_7_Class_1_Tension_004_OD04_Span_Sch
 | **D-3b** §4.3 tier assignment | input/output tokens at Recommended (Development); `gen_ai.response.id` absent from §4.3 base layer | PRESERVED VERBATIM at v1.16 §1.3 (assignment is separate concern from cardinality) | Stable post-v2.5; future audit owed against 4-tier table |
 | **D-4** §4.5 base metric | `gen_ai.client.operation.duration` matching spec verbatim — RESOLVED at OD plan v2.5 | UNCHANGED at v1.16 (verified MATCH against OTel 1.41.0 archived text per change-note empirical posture) | Single-stage: plan-conforms-to-spec at v2.5; spec was already conformant to external authority |
 
-**Tension 004 doc update owed.** The `Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` §7.1 D-2 + D-3 rows + §7.5 pattern catalogue are stale post-v1.16. Co-publication owed at apply-pass arc: append NEW §7.6 "D-2 + D-3 re-litigation supersession 2026-05-26" reflecting the v1.16 amendment. This is the **SECOND tension re-litigation** in workspace history (D-1 was the first at this morning's R2 arc). The §7.5 catalogued pattern `[[tension-record-status-field-reconciliation-discipline]]` is reinforced: reconciliation passes that close divergences against internal authority without re-performing named tiebreaker checks against external authority CAN silently absorb the same defect twice.
+**Tension 004 doc update owed.** The `.harness/archive/root-historical/Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` §7.1 D-2 + D-3 rows + §7.5 pattern catalogue are stale post-v1.16. Co-publication owed at apply-pass arc: append NEW §7.6 "D-2 + D-3 re-litigation supersession 2026-05-26" reflecting the v1.16 amendment. This is the **SECOND tension re-litigation** in workspace history (D-1 was the first at this morning's R2 arc). The §7.5 catalogued pattern `[[tension-record-status-field-reconciliation-discipline]]` is reinforced: reconciliation passes that close divergences against internal authority without re-performing named tiebreaker checks against external authority CAN silently absorb the same defect twice.
 
 ---
 
@@ -148,7 +148,7 @@ Per delta-only-spec-file convention + FM-2 no-extension discipline + single-focu
 | OD helper `harness-od/src/harness_od/otel_genai_base.py` | `GenAiOperation` StrEnum 7 → 9 members (add `INVOKE_WORKFLOW` + `RETRIEVAL`); `AttributeTier` StrEnum 3 → 4 members (add `CONDITIONALLY_REQUIRED`); existing tests updated; new coverage added | This session apply-pass arc |
 | OD helper tests | Update existing enum-membership assertions; add new coverage for `INVOKE_WORKFLOW`, `RETRIEVAL`, `CONDITIONALLY_REQUIRED` | This session apply-pass arc |
 | Production callers (grep audit) | If any exhaustive `match` statement against `GenAiOperation` or `AttributeTier` exists, add cases for new members. Verified at apply-pass §6 production verification task. | This session apply-pass arc |
-| Tension 004 doc `Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` | Append NEW §7.6 "D-2 + D-3 re-litigation supersession 2026-05-26" (SECOND tension re-litigation in workspace history) | This session apply-pass arc |
+| Tension 004 doc `.harness/archive/root-historical/Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` | Append NEW §7.6 "D-2 + D-3 re-litigation supersession 2026-05-26" (SECOND tension re-litigation in workspace history) | This session apply-pass arc |
 | `harness-od/CLAUDE.md` | NO change owed — v1.16 is helper-shape change at harness-od layer; no cross-axis citation table touched. Helper update absorbed at impl arc. | n/a |
 | CXA v2.12 | NO change owed — §1 canonical-reading amendment is OD-internal cardinality refresh; no CXA cite affected. | n/a |
 | AS spec v1.7 | NO change owed — AS spec is unrelated to OD §C-OD-04 GenAI semconv. | n/a |

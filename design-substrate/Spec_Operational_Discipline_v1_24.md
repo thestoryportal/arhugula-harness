@@ -65,7 +65,7 @@ Carry removed from v1.24 §"Adjacent observations" carry-set. v1.23 file body PR
 | `harness-od/src/harness_od/otel_genai_base.py` | `AttributeTier` enum (lines 113–116) + BASE_LAYER_ATTRIBUTES references + docstring cites of derivative names | **CO-PUBLISHED this arc** — identifier rename + string-value rename + docstring refresh |
 | `harness-od/tests/test_otel_genai_base.py` | 43-site enum-name reference set + per-tier value-set assertion (lines 152–155) | **CO-PUBLISHED this arc** — rename + value-assertion refresh |
 | `harness-od/src/harness_od/harness_breaker_schema.py` | Enum-name cite | **CO-PUBLISHED this arc** — rename |
-| `design-substrate/Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` | Pre-v1.24 derivative-name cites | NO change owed — file-resident text immutability per workspace `CLAUDE.md` §4.3; readers apply v1.24 §1.2 substitution table |
+| `.harness/archive/root-historical/Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` | Pre-v1.24 derivative-name cites | NO change owed — file-resident text immutability per workspace `CLAUDE.md` §4.3; readers apply v1.24 §1.2 substitution table |
 | `design-substrate/Implementation_Plan_Operational_Discipline_v2_5.md` | Pre-v1.24 derivative-name cites | NO change owed — delta-only-spec-file convention; readers apply v1.24 §1.2 substitution table |
 | `design-substrate/Implementation_Plan_Operational_Discipline_v2_20.md` | Pre-v1.24 derivative-name cites | NO change owed — delta-only-spec-file convention; readers apply v1.24 §1.2 substitution table |
 | `design-substrate/Implementation_Plan_Operational_Discipline_v2_22.md` | Pre-v1.24 derivative-name cites | NO change owed — delta-only-spec-file convention; readers apply v1.24 §1.2 substitution table |

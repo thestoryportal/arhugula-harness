@@ -2,13 +2,13 @@
 
 ## Change-note (v2.18 → v2.19)
 
-**Scope of revision.** AdvReview 07 Class 1 findings F1-02 + F1-03 inline doc-drift absorption per `Adversarial_Review_07_Runtime_v1_18_+_v2_17.md`. Two surgical fixes at U-RT-83 unit body authored at canonical v2.17 plan file:
+**Scope of revision.** AdvReview 07 Class 1 findings F1-02 + F1-03 inline doc-drift absorption per `.harness/archive/root-historical/Adversarial_Review_07_Runtime_v1_18_+_v2_17.md`. Two surgical fixes at U-RT-83 unit body authored at canonical v2.17 plan file:
 - **F1-02:** AC #4 mis-attributes Pydantic v2 frozen-model validation to `ValidatorFrameworkConfig` (which is `@dataclass(frozen=True)` per spec §14.13.1 line 2469, NOT Pydantic v2). Validation discipline applies to outer `RuntimeConfig`. AC #4 reword absorbed at v2.19.
 - **F1-03:** Files section recommended path `harness-runtime/src/harness_runtime/validator_framework_config.py` (top-level) characterized as parallel to §14.12 `MemoryToolBackendConfig` precedent. Empirical inventory at HEAD shows §14.12 precedent at `harness-runtime/src/harness_runtime/lifecycle/memory_tool_types.py:93` (lifecycle/ subdirectory, types-aggregation file). Implementer-discretion clause at AC #3 absorbed the resolution: actual landing at `harness-runtime/src/harness_runtime/lifecycle/validator_framework_types.py:29` IS parallel to the cited precedent. v2.19 retags the recommended path to the empirically-landed location (which the implementer correctly resolved against the parallel-to claim).
 
 **v2.18 substantive content preserved verbatim.** All v2.18 content (the L9-decies cluster canonical-reading amendment for §25/C-CP-25 cite-cascade absorption + 87-unit axis-led structure + DAG topology + coverage matrix + cluster table) preserved unchanged outside the F1-02 + F1-03 canonical-reading amendments enumerated at §1 below. The v2.17 + v2.16 + ... + v2 chain all preserved.
 
-**Source of fix.** `Adversarial_Review_07_Runtime_v1_18_+_v2_17.md` Class 1 F1-02 + F1-03 (cleared with inline fixes per disposition).
+**Source of fix.** `.harness/archive/root-historical/Adversarial_Review_07_Runtime_v1_18_+_v2_17.md` Class 1 F1-02 + F1-03 (cleared with inline fixes per disposition).
 
 **Amendments.**
 
@@ -90,7 +90,7 @@
 | Authoring authority | `implementation-planner` skill AdvReview-absorption revision-pass per AdvReview 07 disposition (Class 1 inline fixes at next plan touch) |
 | Predecessor authoring | `Implementation_Plan_Harness_Runtime_v2_18.md` (v2.18 substantive content preserved verbatim outside U-RT-83 AC #4 + Files section canonical-reading absorption) |
 | Successor consumption | Workspace `CLAUDE.md` §2.4 row bump + AdvReview 07 closure note (this session) |
-| Source review | `Adversarial_Review_07_Runtime_v1_18_+_v2_17.md` Class 1 F1-02 + F1-03 (CLEARED with inline fixes per disposition §"Disposition") |
+| Source review | `.harness/archive/root-historical/Adversarial_Review_07_Runtime_v1_18_+_v2_17.md` Class 1 F1-02 + F1-03 (CLEARED with inline fixes per disposition §"Disposition") |
 | Co-published this session | Runtime spec v1.19 → v1.20 (F1-01 absorption) |
 
 ---

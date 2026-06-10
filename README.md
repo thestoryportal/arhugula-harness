@@ -15,6 +15,7 @@ boundary lives at the MCP server process (X-AL-1).
 - `./Phase_7_Session_1_Entry_Directive_v1.md` — Phase 7 Session 1 entry context.
 - `./Sub_Agent_Boundary_Specification_v1.md` — sub-agent topology + scope boundaries.
 - `./design-substrate/` — canonical design-phase artifacts (locally co-resident).
+- `./.harness/` — roadmap, fork, retirement, audit, and historical archive surfaces.
 
 ## Design-phase substrate
 
@@ -24,6 +25,10 @@ Meta-Architecture v1 — resides in `./design-substrate/`. (Originally a separat
 design-phase Claude.ai project; transferred local per
 `Phase_7_Workspace_Design_Substrate_Manifest_v1.md` because Claude Code CLI
 cannot reach the design-phase knowledge base.)
+
+Historical root review/tension/scaffolding artifacts are archived at
+`.harness/archive/root-historical/`; active governance entrypoints remain at the
+repository root.
 
 ## Repo layout
 

@@ -2,7 +2,7 @@
 
 ## Change-note (v1.11 → v1.12)
 
-**Scope of revision.** GenAI span-name format Class 1 fork resolution apply pass per `.harness/class_1_fork_genai_span_name_four_way_drift.md` §7.4.1 (operator-ratified 2026-05-26). NEW §C-OD-04 §4.1 canonical-reading amendment superseding the v1.2-lineage 3-token form preserved verbatim through v1.11. The v1.12 amendment conforms §4.1 byte-exact to the **actual OTel GenAI semantic conventions 1.41.0 text** cited at ADR-D6 v1.2 §1.2 [HIGH] as the cross-vendor floor. Re-litigates `Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` (2026-05-15) ratification — that ratification absorbed the v1.2 3-token reading without performing the §4 tiebreaker check against the actual 1.41.0 archived text. The fork performed the check (WebFetch 2026-05-26 of `github.com/open-telemetry/semantic-conventions/blob/v1.41.0/docs/gen-ai/gen-ai-spans.md`); the check failed; Tension 004 ratification is superseded.
+**Scope of revision.** GenAI span-name format Class 1 fork resolution apply pass per `.harness/class_1_fork_genai_span_name_four_way_drift.md` §7.4.1 (operator-ratified 2026-05-26). NEW §C-OD-04 §4.1 canonical-reading amendment superseding the v1.2-lineage 3-token form preserved verbatim through v1.11. The v1.12 amendment conforms §4.1 byte-exact to the **actual OTel GenAI semantic conventions 1.41.0 text** cited at ADR-D6 v1.2 §1.2 [HIGH] as the cross-vendor floor. Re-litigates `.harness/archive/root-historical/Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` (2026-05-15) ratification — that ratification absorbed the v1.2 3-token reading without performing the §4 tiebreaker check against the actual 1.41.0 archived text. The fork performed the check (WebFetch 2026-05-26 of `github.com/open-telemetry/semantic-conventions/blob/v1.41.0/docs/gen-ai/gen-ai-spans.md`); the check failed; Tension 004 ratification is superseded.
 
 **Narrow-scope framing (explicit).** The arc lands ONLY the §4.1 span-name format amendment. §4.2 operations enum (Tension 004 D-2: plan-vs-spec 6-vs-7 divergence) and §4.3 attribute tiers (Tension 004 D-3: 4-vs-3 divergence) are PRESERVED VERBATIM at v1.12 — those divergences are out-of-scope per FM-2 no-extension discipline. Separate apply-pass arcs owed at operator discretion.
 
@@ -38,7 +38,7 @@ The `gen_ai.provider.name` component is REMOVED from the span name format. `gen_
 
 ### Tension 004 supersedence
 
-`Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` (filed 2026-05-15) §4 step 3 named the required tiebreaker check verbatim:
+`.harness/archive/root-historical/Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` (filed 2026-05-15) §4 step 3 named the required tiebreaker check verbatim:
 
 > Tiebreaker check the operator should make: confirm ADR-D6 has no revision later than v1.2 that re-anchors the base layer, and confirm OTel GenAI semconv 1.41.0 itself (the cited external standard) matches the spec §4.x reading — the spec cites 1.41.0 as a [HIGH] external anchor; if the actual 1.41.0 convention differs from §4.x, that is a separate spec defect.
 
@@ -69,7 +69,7 @@ Per FM-2 no-extension discipline, the v1.12 amendment touches ONLY §4.1 span-na
 
 (c) **§C-OD-04 §4.5 base metric cite-shape.** Tension 004 §2 D-4 surfaced a plan-vs-spec divergence at base metric (plan U-OD-04 had `gen_ai.client.token.usage`; spec C-OD-04 §4.5 has `gen_ai.client.operation.duration` histogram). The divergence persists at v1.12; this v1.12 amendment does NOT touch §4.5. Owed at a separate apply-pass arc per FM-2.
 
-(d) **`Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` status field.** Currently labeled *"OPEN — awaiting operator resolution decision"*. Empirically the v1.2/v1.3 absorption arc resolved the 2026-05-15 reading (against the unverified citation per (a)–(c) above); the status field has been stale by ~12 months. The v1.12 amendment supersedes the 2026-05-15 reading of D-1 span-name format only — (a)/(b)/(c) above remain unsuperseded. The status-field update is OPERATOR DISCRETION; not patched at this arc per FM-2.
+(d) **`.harness/archive/root-historical/Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` status field.** Currently labeled *"OPEN — awaiting operator resolution decision"*. Empirically the v1.2/v1.3 absorption arc resolved the 2026-05-15 reading (against the unverified citation per (a)–(c) above); the status field has been stale by ~12 months. The v1.12 amendment supersedes the 2026-05-15 reading of D-1 span-name format only — (a)/(b)/(c) above remain unsuperseded. The status-field update is OPERATOR DISCRETION; not patched at this arc per FM-2.
 
 (e) **Runtime spec v1.x line 2033 deferral suggestion.** Per fork doc §7.5a — runtime spec contains an informal deferral-section suggestion `gen_ai.{provider}.{model_or_method}` that production followed. This is the lineage of production divergence. Runtime spec amendment owed at the R1 apply-pass arc (separate scope per fork §7.4.2).
 
@@ -101,7 +101,7 @@ Cross-file back-references (per spec-writer skill §5) — flagged for downstrea
 |---|---|
 | Version | v1.12 (canonical-reading amendment to v1.2 §C-OD-04 §4.1; v1.2 file PRESERVED VERBATIM per delta-only-spec-file convention) |
 | Trigger | `.harness/class_1_fork_genai_span_name_four_way_drift.md` §7.4.1 (operator-ratified 2026-05-26 option (A) full acceptance) |
-| Supersedes | `Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` D-1 reading (2026-05-15); 3-token form preserved at v1.2-v1.11 |
+| Supersedes | `.harness/archive/root-historical/Phase_7_Class_1_Tension_004_OD04_Span_Schema_Divergence.md` D-1 reading (2026-05-15); 3-token form preserved at v1.2-v1.11 |
 | Scope of revision | NARROW: §C-OD-04 §4.1 span-name format ONLY |
 | Sections revised | §C-OD-04 §4.1 (canonical-reading amendment — 3-token → 2-token byte-exact to OTel 1.41.0 archived text) |
 | Sections preserved verbatim | §C-OD-04 §4.2 / §4.3 / §4.4 / §4.5; §C-OD-05..§C-OD-33; all v1.3-v1.11 substantive amendments |
