@@ -2174,10 +2174,10 @@ R-901-phase-9-retirement-criteria:
     Research question crystallized as a post-Phase-8 decision model: how to route bounded-residual
     promotion, live-ledger back-flow, and producer-gated CXA seams without rewriting the historical
     Phase-8 accounting declaration. Grounding sources: Phase-8 graduation, R-700 accounting draft,
-    batches 51-54, retirement-event-pattern catalogue, NotebookLM Agent Harness Engineering query,
+    batches 51-55, retirement-event-pattern catalogue, NotebookLM Agent Harness Engineering query,
     and a supplemental Perplexity query. Result disposition: research-only + roadmap selector guidance;
-    no design-substrate back-flow owed. Next selector returns to genuine producer-gated residuals
-    (`R-CXA-2`, then `R-CXA-1`) unless a future `R-902` is explicitly opened for Phase-9 workflow
+    no design-substrate back-flow owed. Next selector returns to the remaining genuine producer-gated residual
+    (`R-CXA-1`) unless a future `R-902` is explicitly opened for Phase-9 workflow
     mechanics or corpus ingestion.
 ```
 
@@ -2205,7 +2205,7 @@ R-CXA-1-as-is-seam:
 R-CXA-2-cp-is-seam:
   title: CXA-2 (CP->IS) seam completion — runtime caller-site invocations + remaining §12.3 edges
   surface: I
-  status: PROPOSED
+  status: RESOLVED   # batch-55: CP->IS producer surface closed as counted bounded residual
   depends_on: []
   blocks: [R-700-phase-8-substitution-accounting]
   posture: phase-7
@@ -2214,7 +2214,7 @@ R-CXA-2-cp-is-seam:
   advisor_required: yes
   council_required: no
   verification: { shape: e2e, must_pass: ["6 §16.5 composer methods (U-CP-74..79) invoked at their firing sites + e2e", "remaining ~16 of 17 §12.3 edges materialized"] }
-  close_shape: { type: PR-merge, artifact: "feat(cxa): complete CP->IS seam", cascade: [] }
+  close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-55.md", cascade: [dashboard; register §B-14] }
   next_pointer: null
   notes: >
     STILL-BOUNDED per R-700 — cp_is_wiring PARTIAL-LAND; U-RT-35 unit landed (batch-46) but full contract
@@ -2233,7 +2233,7 @@ R-CXA-2-cp-is-seam:
     ledger calls: (a) `emit_hitl_tool_call_rewriting` remains bounded because HITL disambiguator semantics
     (`semantic_variant_binding_id`) are spec-silent and `rewrite_tool_call` still has test callers only /
     0 production callers; (b)+(c) `emit_pause_captured` + `emit_resume_attempted` require production
-    engine-layer recovery loops for `capture_pause_snapshot` + `attempt_resume`. So R-CXA-2 remains the
+    engine-layer recovery loops for `capture_pause_snapshot` + `attempt_resume`. At that point R-CXA-2 had the
     same producer-discovery shape as R-CXA-1 (DEFER) + R-CXA-4 (0 wireable): **3/6 fired, 3/6 gated on
     future HITL rewrite / engine recovery-loop producers**. Wiring static tool-dispatch or ledger-only
     placeholders would be the silent X-AL-3 extension the U-RT-111 saga forbade. NO clean
@@ -2243,7 +2243,8 @@ R-CXA-2-cp-is-seam:
     `cp.pause-resume-protocol` action rather than the engine-layer `cp.pause-captured` /
     `cp.resume-attempted` actions, and the free-function engine-layer surfaces remain substrate APIs
     without a recovery-loop producer. Evidence: `.harness/r-cxa-2-producer-audit-2026-06-08.md`.
-    R-CXA-2 stays STILL-BOUNDED; full RETIRED gates on future upstream-loop authoring. Register §B-14.
+    This pre-PR-449 state was superseded by the producer primitives, stage-5 composition, provider-turn HITL
+    continuation, and batch-55 bounded-residual close recorded below. Register §B-14.
     **2026-06-08 producer-seam DESIGN SPEC filed and ratified** — `.harness/r-cxa-1-2-producer-seam-spec.md` §3–§4 specs the
     3 producers + files 2 forks: `class_1_fork_u_cp_78_pause_captured_type_impedance.md` (Class 1 DEFECT — the
     engine-layer `cp.pause-captured` composer consumes the workflow-layer `PauseSnapshot` while its named producer
@@ -2259,12 +2260,14 @@ R-CXA-2-cp-is-seam:
     **2026-06-09 PR #449 advanced the post-MVP build:** U-CP-78 Reading A is applied in CP/runtime code so
     `cp.pause-captured` consumes engine-layer `PauseEvent`; runtime now has provider-neutral
     `RuntimeHITLToolLoop` and `RuntimeEngineRecoveryLoop` producer primitives with focused CP/runtime tests and green
-    overlay/CI. **2026-06-09 stage-5 composition branch advances Slice 4/5:** bootstrap LOOP_INIT now binds both
+    overlay/CI. **2026-06-09 PR #452 advanced Slice 4/5:** bootstrap LOOP_INIT now binds both
     primitives onto `HarnessContext` and focused tests prove direct CP→IS producer emissions through the bound
-    runtime context (`cp.hitl-tool-call-rewriting`, `cp.pause-captured`, `cp.resume-attempted`). This still does **not**
-    retire R-CXA-2: substitution-ledger/accounting flip remains gated on generic provider-turn HITL continuation +
-    journaling evidence and durable recovery caller evidence, or a ratified bounded-residual disposition for those
-    deployment-hardening concerns. STAYS STILL-BOUNDED.
+    runtime context (`cp.hitl-tool-call-rewriting`, `cp.pause-captured`, `cp.resume-attempted`). **2026-06-09
+    PR #454 closed the provider-turn HITL producer:** Anthropic non-memory `tool_use` continuation now runs through
+    `ctx.hitl_tool_loop` and returns `tool_result` continuation messages. **2026-06-09 batch-55 closes the live-ledger
+    residual as bounded residual:** R-CXA-2 is RESOLVED-AS-BOUNDED-RESIDUAL. The durable/journaled recovery loop is
+    still not claimed as substantive production evidence; it remains an explicit re-open trigger for a future
+    event-sourced replay, reconciler-loop, WAL-segment, or engine-native-pause recovery implementation.
 
 R-CXA-3-cp-as-seam:
   title: CXA-3 (CP->AS) seam — runtime composer
@@ -2285,7 +2288,8 @@ R-CXA-3-cp-as-seam:
     `RuntimeCpAsWiring` now materializes the CP-consumed AS terminal seam export registry at bootstrap stage 6,
     fail-closes on AS manifest coverage drift, and is exposed as `HarnessContext.cp_as_wiring`. Focused lifecycle
     and bootstrap tests prove the composer shape, identity binding, coverage check, and frozen-context exposure.
-    H_T-CXA-3 moves from STILL_BOUNDED to SUBSTANTIVE_RETIRED; remaining non-retired CXA rows are CXA-1 and CXA-2.
+    H_T-CXA-3 moves from STILL_BOUNDED to SUBSTANTIVE_RETIRED. Batch-55 later moves CXA-2 to
+    BOUNDED_RESIDUAL, leaving CXA-1 as the only non-retired CXA row.
 
 R-CXA-4-od-multi-seam:
   title: CXA-4 (OD->IS/AS/CP) seam — GROUNDED-NO-WIREABLE; NO cleanup task (placeholders resolved at v2.3/v2.11); probe surfaced+fixed v2.18 matrix defect (CXA v2.19)

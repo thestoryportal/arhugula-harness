@@ -537,4 +537,21 @@ The `harness-od/CLAUDE.md` §4.1 OD-6 RETIRE-READY classification (batch-33) is 
 
 ---
 
-*End of phase-7d-retirement-ledger v2 (second pass against Phase 2 runtime closure) + 2026-05-27 supersession refresh + 2026-06-02 Phase-8 graduation supersession (§11.7) + 2026-06-08 post-Phase-8 back-flow (§11.8) + 2026-06-08 OD-4/CXA-4 back-flow (§11.9) + 2026-06-08 CXA-3 runtime-composer back-flow (§11.10).*
+### §11.11 Post-Phase-8 CXA-2 bounded-residual back-flow (2026-06-09)
+
+**Trigger.** R-CXA-2's MVP-safe CP->IS producer surface advanced after batch-54: U-CP-78 Reading A landed, provider-neutral HITL and engine recovery producer loops were bound at stage 5, direct CP->IS emissions were proved through the bound runtime context, and Anthropic non-memory provider-turn `tool_use` continuation now runs through `ctx.hitl_tool_loop`. The remaining durable recovery concern is post-MVP deployment hardening: the ratified DP-2 decision forbids extending `workflow_driver.py` to impersonate an engine recovery loop and re-opens only when a real event-sourced replay, reconciler, WAL-segment, or engine-native-pause recovery loop lands. Batch-55 records that bounded-residual transit.
+
+**Live ledger accounting after batch-55:**
+
+| Metric | Live ledger | Phase-8 declaration |
+|---|---|---|
+| RETIRED | **53/54 (98.1%)** | 46/54 (85.2%) |
+| Pipeline-advanced | **54/54 (100.0%)** | 49/54 (90.7%) |
+
+**Disposition delta:** CXA-2 moves from `STILL_BOUNDED` to `BOUNDED_RESIDUAL`. The only remaining non-RETIRED row is CXA-1 (`PARTIAL`).
+
+**Historical boundary.** §11.7 and `.harness/phase-8-graduation.md` remain the historical Phase-8 declaration; §11.8, §11.9, and §11.10 remain the batch-52, batch-53, and batch-54 back-flow records. This §11.11 is a post-Phase-8 bounded-residual supersession for the live ledger only.
+
+---
+
+*End of phase-7d-retirement-ledger v2 (second pass against Phase 2 runtime closure) + 2026-05-27 supersession refresh + 2026-06-02 Phase-8 graduation supersession (§11.7) + 2026-06-08 post-Phase-8 back-flow (§11.8) + 2026-06-08 OD-4/CXA-4 back-flow (§11.9) + 2026-06-08 CXA-3 runtime-composer back-flow (§11.10) + 2026-06-09 CXA-2 bounded-residual back-flow (§11.11).*

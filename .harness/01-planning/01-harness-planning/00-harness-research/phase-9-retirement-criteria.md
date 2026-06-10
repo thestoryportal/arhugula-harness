@@ -55,15 +55,16 @@ Batches 52, 53, and 54 establish a disciplined back-flow pattern:
 - Batch 52: R-810/R-820 live provider evidence moved AS-8e, AS-8f, and CP-17 to substantive retirement.
 - Batch 53: OD-4 runtime residual and CXA-4 bookkeeping residual moved to substantive retirement.
 - Batch 54: the CP->AS runtime composer moved CXA-3 to substantive retirement.
+- Batch 55: the CP->IS seam moved CXA-2 to counted bounded residual after provider-turn HITL continuation landed and durable recovery-loop evidence was kept as explicit post-MVP hardening.
 
 In each case, the new record names the prior state, evidence, transit, non-transits, and co-published artifacts. That is enough for Phase 9; it does not require a new substrate layer unless future findings change contracts or invariants.
 
 ### 4. Producer-gated seams should stay gated until a real producer exists
 
-The remaining live non-retired rows are CXA-1 and CXA-2. Their current status is not "forgotten work"; it is a safety property.
+At filing time the remaining live non-retired rows were CXA-1 and CXA-2. Their status was not "forgotten work"; it was a safety property.
 
 - CXA-1 still lacks a production AS secret-fetch producer.
-- CXA-2 still lacks production HITL rewrite and engine recovery-loop producers for the remaining CP->IS methods.
+- CXA-2 lacked production HITL rewrite and engine recovery-loop producers for the remaining CP->IS methods. Batch-55 later closed CXA-2 as a counted bounded residual after the HITL provider-turn producer landed and the durable recovery-loop condition was recorded as explicit post-MVP hardening with a re-open trigger.
 
 The dashboard/status discipline is correct to prevent hollow wiring. Phase 9 should encode this as a decision rule: a seam is not closable merely because a consumer API exists; it needs a real upstream producer, a design narrowing, or a documented back-flow decision.
 
@@ -110,7 +111,7 @@ Roadmap-only:
 Implementation/back-flow:
 
 - Use when live evidence or a real producer exists and the current substrate can be advanced without changing the contract.
-- Examples already shipped: batches 52, 53, and 54.
+- Examples already shipped: batches 52, 53, 54, and 55.
 
 Design-substrate amendment:
 
@@ -119,9 +120,8 @@ Design-substrate amendment:
 
 ## Recommendation
 
-Close R-901 as research-only. Keep Phase 9 as a lightweight post-closure decision model rather than a new mandatory lifecycle phase. The current next-action selector should return to the genuine remaining gates:
+Close R-901 as research-only. Keep Phase 9 as a lightweight post-closure decision model rather than a new mandatory lifecycle phase. The current next-action selector should return to the genuine remaining gate:
 
-1. R-CXA-2 if a real HITL rewrite or engine recovery-loop producer appears, or if a design/back-flow amendment changes the producer requirement.
-2. R-CXA-1 if a real scoped AS secret-fetch producer appears, or if a design/back-flow amendment changes the seam scope.
+1. R-CXA-1 if a real scoped AS secret-fetch producer appears, or if a design/back-flow amendment changes the seam scope.
 
 Do not create a design-substrate amendment from R-901 alone. The project already has the necessary forward-only machinery: roadmap entries, retirement batches, substitution ledger, dashboard generator, and producer-gated watch discipline.
