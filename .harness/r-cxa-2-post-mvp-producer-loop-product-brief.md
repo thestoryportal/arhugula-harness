@@ -93,8 +93,9 @@ while response has tool_use content blocks:
                 workflow_id, step_id, tool_call_id,
                 semantic_variant_binding_id=rewritten.variant.value,    # (settled: v2.39 Reading B)
                 rewritten_tool_call=rewritten, actor=…)
-            gate = RuntimeHITLGateComposer(...).dispatch(              # (i) runtime composer body — OPENS before dispatch
-                binding, step, step_context=step_context)
+            gate = RuntimeHITLGateComposer.open_gate(                  # (i) production gate body; CP hitl_gate is signature-only
+                placement, step, step_context, surface=…,
+                palette=rewritten.response_palette)
             apply gate.response  # APPROVE→dispatch; EDIT→dispatch edited_proposal; REJECT→skip; RESPOND→feed text back
         else:
             pass                                                        # (g) NO §16.5 emission — the no-op
