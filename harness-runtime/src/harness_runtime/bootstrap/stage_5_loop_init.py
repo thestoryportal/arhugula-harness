@@ -143,6 +143,46 @@ async def execute(
     # can be threaded into RuntimeLLMDispatcher construction.
     ctx.skill_activation_emitter = await materialize_skill_activation_emitter_stage(config, ctx)
 
+    retry_breaker = ctx.retry_breaker
+    if retry_breaker is None:
+        raise LLMDispatchBindError(
+            "ctx.retry_breaker is None at stage 5 — stage 3b CP_ROUTING "
+            "did not populate the retry/breaker registry (U-RT-58 wrapper "
+            "construction requires it per C-RT-16 §14.6 D6)"
+        )
+    fallback_chain = ctx.fallback_chain
+    if fallback_chain is None:
+        raise LLMDispatchBindError(
+            "ctx.fallback_chain is None at stage 5 — stage 3b CP_ROUTING "
+            "did not populate the fallback chain (U-RT-58 wrapper "
+            "construction requires it per C-RT-16 §14.6 D6)"
+        )
+    if ctx.mcp_host is None:
+        raise LLMDispatchBindError(
+            "ctx.mcp_host is None at stage 5 — stage 2 AS did not populate "
+            "the MCP host (U-RT-60 AskUserQuestionSurface construction "
+            "requires it per spec §14.8.3 v1.11 binding pin)"
+        )
+
+    # The ask-user surface and TOOL_STEP dispatcher are stage-5 siblings, but
+    # R-CXA-2's provider-turn HITL loop needs both before the frozen LLM
+    # dispatcher is constructed.
+    ask_surface = materialize_mcp_backed_ask_user_question_surface_stage(
+        cast(Any, ctx.mcp_host),
+        # ctx.mcp_server is the empty `HarnessMCPServer` Protocol; the stage
+        # fn wants the concrete — narrow via Any (mirrors mcp_host above).
+        harness_mcp_server=cast(Any, ctx.mcp_server),
+    )
+    ctx.ask_user_question_surface = ask_surface
+
+    # U-RT-68 / R-CXA-2: bind the retry-wrapped TOOL_STEP dispatcher before
+    # the LLM dispatcher so provider-turn model tool calls can continue through
+    # the same C-RT-19 dispatch surface.
+    ctx.tool_dispatcher = await materialize_runtime_tool_dispatcher_stage(
+        ctx, config, rate_table=RATE_TABLE_V1
+    )
+    materialize_r_cxa_2_producer_loop_stage(ctx, config)
+
     bare_dispatcher = materialize_llm_dispatcher_stage(
         providers,
         cast(Any, tracer_provider),
@@ -151,6 +191,7 @@ async def execute(
         rate_table=RATE_TABLE_V1,
         memory_tool_registry=ctx.memory_tool_registry,
         deployment_surface=config.deployment_surface,
+        hitl_tool_loop=ctx.hitl_tool_loop,
         ollama_host=config.ollama_host,
         skill_activation_emitter=ctx.skill_activation_emitter,
         skills=ctx.skills,
@@ -167,20 +208,6 @@ async def execute(
     # wrapper. The driver call site at `workflow_driver.py:379` is unchanged
     # — the wrapper satisfies the same ``StepDispatcher`` Protocol. The bare
     # dispatcher becomes a private constructor arg of the wrapper.
-    retry_breaker = ctx.retry_breaker
-    if retry_breaker is None:
-        raise LLMDispatchBindError(
-            "ctx.retry_breaker is None at stage 5 — stage 3b CP_ROUTING "
-            "did not populate the retry/breaker registry (U-RT-58 wrapper "
-            "construction requires it per C-RT-16 §14.6 D6)"
-        )
-    fallback_chain = ctx.fallback_chain
-    if fallback_chain is None:
-        raise LLMDispatchBindError(
-            "ctx.fallback_chain is None at stage 5 — stage 3b CP_ROUTING "
-            "did not populate the fallback chain (U-RT-58 wrapper "
-            "construction requires it per C-RT-16 §14.6 D6)"
-        )
     # ---------------------------------------------------------------------
     # U-RT-60 (C-RT-18 §14.8) wrap-asymmetry fork APPLIED — row 1 chain:
     #   bare (async C-RT-15)
@@ -209,12 +236,6 @@ async def execute(
     # so it is non-None by stage 5; assert narrows it for the two
     # RuntimeHITLGateComposer constructions below (param wants `Event`).
     assert ctx.pause_requested_flag is not None
-    if ctx.mcp_host is None:
-        raise LLMDispatchBindError(
-            "ctx.mcp_host is None at stage 5 — stage 2 AS did not populate "
-            "the MCP host (U-RT-60 AskUserQuestionSurface construction "
-            "requires it per spec §14.8.3 v1.11 binding pin)"
-        )
     # `ctx.mcp_host` is typed against the schema-level Protocol at
     # `harness_runtime.types.MCPHost`; the concrete dataclass at
     # `harness_runtime.lifecycle.mcp_host.MCPHost` is what stage 2 bound
@@ -230,13 +251,6 @@ async def execute(
     # pin (Reading α CC-initiates). Test substrates that do not exercise
     # the MCP server path may leave `ctx.mcp_server = None` — the
     # surface then falls back to the placeholder for defensive failure.
-    ask_surface = materialize_mcp_backed_ask_user_question_surface_stage(
-        cast(Any, ctx.mcp_host),
-        # ctx.mcp_server is the empty `HarnessMCPServer` Protocol; the stage
-        # fn wants the concrete — narrow via Any (mirrors mcp_host above).
-        harness_mcp_server=cast(Any, ctx.mcp_server),
-    )
-    ctx.ask_user_question_surface = ask_surface
 
     # U-RT-94 (v2.25 §7.2 AC #11/#12/#14): materialize pause/webhook/resume
     # bindings BEFORE the HITL composer construction so the composer can
@@ -404,10 +418,7 @@ async def execute(
     # "tool.dispatch". ctx.cost_chain + ctx.audit_writer were already
     # validated non-None above (U-OD-38 enforcement at the LLM-dispatch
     # bind block); the same substrate flows through.
-    ctx.tool_dispatcher = await materialize_runtime_tool_dispatcher_stage(
-        ctx, config, rate_table=RATE_TABLE_V1
-    )
-    materialize_r_cxa_2_producer_loop_stage(ctx, config)
+    assert ctx.tool_dispatcher is not None
     tool_step_dispatcher = materialize_sync_dispatcher_facade(
         ctx.tool_dispatcher,
         result_timeout_seconds=config.step_dispatch_timeout_seconds,

@@ -53,12 +53,14 @@ L5..L8 stage shape established at U-RT-21..U-RT-41.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, cast, runtime_checkable
 
 from harness_core import PersonaTier, WorkloadClass
 from harness_cp.cp_shared_types import (
+    ActorIdentity,
     AgentRole,
     ProviderAgnosticPayload,
     RoutingDecisionTrace,
@@ -66,6 +68,7 @@ from harness_cp.cp_shared_types import (
 )
 from harness_cp.layer_budget import DEFAULT_LAYER_BUDGETS
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+from harness_cp.persona_engine_hitl_matrix import SynchronyClass
 from harness_cp.routing_core_surface import (
     InferenceRequest,
     ProviderDispatchResult,
@@ -73,9 +76,15 @@ from harness_cp.routing_core_surface import (
 )
 from harness_cp.routing_layer import RoutingLayer
 from harness_cp.routing_manifest_residence import RoutingManifest
+from harness_cp.validator_fail_transient_staircase import CrossTrustBoundaryState
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 from harness_od.otel_genai_base import HIERARCHY_CORRELATION_KEY, GenAiOperation
 
+from harness_runtime.lifecycle.hitl_tool_loop import (
+    HITLToolLoopContext,
+    ModelToolCall,
+    RuntimeHITLToolLoop,
+)
 from harness_runtime.lifecycle.memory_tool_dispatch import (
     derive_context_editing_active,
     execute_with_memory_callbacks,
@@ -307,6 +316,11 @@ class RuntimeLLMDispatcher:
     # llm_dispatcher_stage` kwargs.
     memory_tool_registry: Any = None
     deployment_surface: Any = None
+    # R-CXA-2 — provider-turn model-emitted tool calls can run through the
+    # bound RuntimeHITLToolLoop before Anthropic continuation. None preserves
+    # the historical one-shot provider dispatch path for unit tests and
+    # bootstrap states where the R-CXA-2 producer loop is unavailable.
+    hitl_tool_loop: RuntimeHITLToolLoop | None = None
     # OD spec v1.20 §C-OD-04 §4.3 `server.address` / `server.port` resolution
     # for the ollama provider (operator-configurable endpoint). Threaded from
     # `RuntimeConfig.ollama_host` at stage 5 per `[[fork-od-spec-declared-but-
@@ -453,6 +467,7 @@ class RuntimeLLMDispatcher:
                 model,
                 inner_payload,
                 step_context,
+                step_id=str(step.step_id),
                 routing_trace=routing_trace,
             )
             raw_response["value"] = response
@@ -483,6 +498,7 @@ class RuntimeLLMDispatcher:
         payload: ProviderAgnosticPayload,
         step_context: StepExecutionContext,
         *,
+        step_id: str,
         routing_trace: RoutingDecisionTrace,
     ) -> Mapping[str, Any]:
         """Provider-SDK dispatch boundary — the injected dispatch callable for
@@ -606,6 +622,25 @@ class RuntimeLLMDispatcher:
                         registry=self.memory_tool_registry,
                         deployment_surface=self.deployment_surface,
                         tracer=tracer,
+                    )
+                elif (
+                    self.hitl_tool_loop is not None
+                    and payload.tools is not None
+                    and not step_has_memory_tool(payload.tools)
+                ):
+                    (
+                        response,
+                        usage_attrs,
+                        cache_attrs,
+                        request_attrs,
+                    ) = await _dispatch_anthropic_with_hitl_tool_loop(
+                        adapter,
+                        model,
+                        payload,
+                        hitl_tool_loop=self.hitl_tool_loop,
+                        step_context=step_context,
+                        step_id=step_id,
+                        persona_tier=self.persona_tier or PersonaTier.SOLO_DEVELOPER,
                     )
                 else:
                     (
@@ -911,6 +946,233 @@ def _payload_to_ollama_kwargs(payload: ProviderAgnosticPayload) -> dict[str, Any
     return kwargs
 
 
+_ANTHROPIC_HITL_MAX_TOOL_TURNS = 16
+
+
+def _anthropic_attr(value: Any, name: str) -> Any:
+    if isinstance(value, Mapping):
+        return cast(Mapping[str, Any], value).get(name)
+    return getattr(value, name, None)
+
+
+def _anthropic_content_blocks(response: Any) -> tuple[Any, ...]:
+    content = _anthropic_attr(response, "content")
+    if isinstance(content, Sequence) and not isinstance(content, (str, bytes, bytearray)):
+        return tuple(cast(Sequence[Any], content))
+    return ()
+
+
+def _anthropic_stop_reason(response: Any) -> str | None:
+    value = _anthropic_attr(response, "stop_reason")
+    return value if isinstance(value, str) else None
+
+
+def _anthropic_block_mapping(block: Any) -> Mapping[str, Any]:
+    if isinstance(block, Mapping):
+        return dict(cast(Mapping[str, Any], block))
+    dump = getattr(block, "model_dump", None)
+    if callable(dump):
+        dumped = dump()
+        if isinstance(dumped, Mapping):
+            return dict(cast(Mapping[str, Any], dumped))
+    projected: dict[str, Any] = {}
+    for name in ("type", "id", "name", "input", "text"):
+        value = getattr(block, name, None)
+        if value is not None:
+            projected[name] = value
+    return projected
+
+
+def _anthropic_tool_use_blocks(response: Any) -> tuple[Any, ...]:
+    if _anthropic_stop_reason(response) != "tool_use":
+        return ()
+    return tuple(
+        block
+        for block in _anthropic_content_blocks(response)
+        if _anthropic_attr(block, "type") == "tool_use"
+    )
+
+
+def _anthropic_tool_server_for_name(
+    payload: ProviderAgnosticPayload,
+    tool_name: str,
+) -> str:
+    for tool in payload.tools or ():
+        tool_mapping = _anthropic_block_mapping(tool)
+        if tool_mapping.get("name") != tool_name:
+            continue
+        for key in ("server", "mcp_server", "server_name", "mcp_server_name"):
+            value = tool_mapping.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return "anthropic"
+
+
+def _model_tool_call_from_anthropic_block(
+    block: Any,
+    *,
+    payload: ProviderAgnosticPayload,
+    provider: str,
+    model: str,
+) -> ModelToolCall:
+    tool_call_id = _anthropic_attr(block, "id")
+    tool_name = _anthropic_attr(block, "name")
+    arguments = _anthropic_attr(block, "input")
+    if not isinstance(tool_call_id, str) or not isinstance(tool_name, str):
+        raise LLMDispatchPayloadShapeError(
+            "Anthropic tool_use block missing string id/name for R-CXA-2 HITL loop"
+        )
+    if not isinstance(arguments, Mapping):
+        arguments = {}
+    return ModelToolCall(
+        tool_call_id=tool_call_id,
+        tool=tool_name,
+        server=_anthropic_tool_server_for_name(payload, tool_name),
+        arguments=cast(Mapping[str, Any], arguments),
+        provider=provider,
+        model=model,
+    )
+
+
+def _hitl_loop_context_from_step(
+    step_context: StepExecutionContext,
+    *,
+    step_id: str,
+    persona_tier: PersonaTier,
+) -> HITLToolLoopContext:
+    actor_id = getattr(step_context.parent_actor, "actor_id", "harness-runtime")
+    return HITLToolLoopContext(
+        workflow_id=step_context.workflow_id,
+        step_id=step_id,
+        persona_tier=persona_tier,
+        cell_synchrony_class=SynchronyClass.SYNC_BLOCKING,
+        cross_trust_boundary_state=CrossTrustBoundaryState.NONE,
+        actor=ActorIdentity(str(actor_id)),
+    )
+
+
+def _anthropic_tool_result_content(result: Any) -> str:
+    if result is None:
+        return "HITL tool loop did not return a result for this tool call."
+    dispatch_result = getattr(result, "dispatch_result", None)
+    if not isinstance(dispatch_result, Mapping):
+        return "HITL rejected or skipped this tool call."
+    dispatch_mapping = cast(Mapping[str, Any], dispatch_result)
+    response_text = dispatch_mapping.get("response_text")
+    if isinstance(response_text, str):
+        return response_text
+    return json.dumps(dict(dispatch_mapping), sort_keys=True, default=str)
+
+
+def _anthropic_tool_result_block(tool_use_block: Any, result: Any) -> dict[str, Any]:
+    tool_call_id = _anthropic_attr(tool_use_block, "id")
+    if not isinstance(tool_call_id, str):
+        raise LLMDispatchPayloadShapeError(
+            "Anthropic tool_use block missing string id for tool_result continuation"
+        )
+    block: dict[str, Any] = {
+        "type": "tool_result",
+        "tool_use_id": tool_call_id,
+        "content": _anthropic_tool_result_content(result),
+    }
+    if result is None or getattr(result, "dispatch_result", None) is None:
+        block["is_error"] = True
+    return block
+
+
+def _anthropic_response_bundle(
+    response: Any,
+    payload: ProviderAgnosticPayload,
+    model: str,
+) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
+    usage = getattr(response, "usage", None)
+    usage_attrs = _UsageAttrs(
+        input_tokens=getattr(usage, "input_tokens", None),
+        output_tokens=getattr(usage, "output_tokens", None),
+        response_id=getattr(response, "id", None),
+    )
+    cache_breakpoint_id, cache_ttl_seconds = _extract_anthropic_cache_request_attrs(payload)
+    cache_attrs = _AnthropicCacheAttrs(
+        cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", None),
+        cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", None),
+        cache_breakpoint_id=cache_breakpoint_id,
+        cache_ttl_seconds=cache_ttl_seconds,
+    )
+    request_attrs = _extract_anthropic_request_attrs(payload, model)
+    return (_response_to_mapping(response), usage_attrs, cache_attrs, request_attrs)
+
+
+async def _dispatch_anthropic_with_hitl_tool_loop(
+    adapter: Any,
+    model: str,
+    payload: ProviderAgnosticPayload,
+    *,
+    hitl_tool_loop: RuntimeHITLToolLoop,
+    step_context: StepExecutionContext,
+    step_id: str,
+    persona_tier: PersonaTier,
+) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
+    """Anthropic provider branch with generic R-CXA-2 HITL tool continuation.
+
+    Non-memory Anthropic ``tool_use`` blocks are adapted into provider-neutral
+    ``ModelToolCall`` values, processed by the bound ``RuntimeHITLToolLoop``,
+    and then returned to Anthropic as ``tool_result`` blocks for continuation.
+    """
+    kwargs = _payload_to_anthropic_kwargs(payload)
+    messages = list(payload.messages)
+    kwargs["messages"] = messages
+    context = _hitl_loop_context_from_step(
+        step_context,
+        step_id=step_id,
+        persona_tier=persona_tier,
+    )
+
+    for _turn_index in range(_ANTHROPIC_HITL_MAX_TOOL_TURNS):
+        response = await adapter.client.messages.create(model=model, **kwargs)
+        tool_use_blocks = _anthropic_tool_use_blocks(response)
+        if not tool_use_blocks:
+            return _anthropic_response_bundle(response, payload, model)
+
+        calls = tuple(
+            _model_tool_call_from_anthropic_block(
+                block,
+                payload=payload,
+                provider="anthropic",
+                model=model,
+            )
+            for block in tool_use_blocks
+        )
+        results = await hitl_tool_loop.run_tool_calls(calls, context)
+        result_by_id = {result.tool_call_id: result for result in results}
+
+        messages.append(
+            {
+                "role": "assistant",
+                "content": [
+                    dict(_anthropic_block_mapping(block))
+                    for block in _anthropic_content_blocks(response)
+                ],
+            }
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    _anthropic_tool_result_block(
+                        block,
+                        result_by_id.get(cast(str, _anthropic_attr(block, "id"))),
+                    )
+                    for block in tool_use_blocks
+                ],
+            }
+        )
+
+    raise RuntimeError(
+        "Anthropic R-CXA-2 HITL tool loop exceeded "
+        f"{_ANTHROPIC_HITL_MAX_TOOL_TURNS} continuation turns"
+    )
+
+
 async def _dispatch_anthropic_with_memory(
     adapter: Any,
     model: str,
@@ -947,21 +1209,7 @@ async def _dispatch_anthropic_with_memory(
         context_editing_active=context_editing_active,
     )
 
-    usage = getattr(response, "usage", None)
-    usage_attrs = _UsageAttrs(
-        input_tokens=getattr(usage, "input_tokens", None),
-        output_tokens=getattr(usage, "output_tokens", None),
-        response_id=getattr(response, "id", None),
-    )
-    cache_breakpoint_id, cache_ttl_seconds = _extract_anthropic_cache_request_attrs(payload)
-    cache_attrs = _AnthropicCacheAttrs(
-        cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", None),
-        cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", None),
-        cache_breakpoint_id=cache_breakpoint_id,
-        cache_ttl_seconds=cache_ttl_seconds,
-    )
-    request_attrs = _extract_anthropic_request_attrs(payload, model)
-    return (_response_to_mapping(response), usage_attrs, cache_attrs, request_attrs)
+    return _anthropic_response_bundle(response, payload, model)
 
 
 async def _dispatch_anthropic(
@@ -973,22 +1221,7 @@ async def _dispatch_anthropic(
     kwargs = _payload_to_anthropic_kwargs(payload)
     response = await adapter.client.messages.create(model=model, **kwargs)
 
-    usage = getattr(response, "usage", None)
-    usage_attrs = _UsageAttrs(
-        input_tokens=getattr(usage, "input_tokens", None),
-        output_tokens=getattr(usage, "output_tokens", None),
-        response_id=getattr(response, "id", None),
-    )
-    cache_breakpoint_id, cache_ttl_seconds = _extract_anthropic_cache_request_attrs(payload)
-    cache_attrs = _AnthropicCacheAttrs(
-        cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", None),
-        cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", None),
-        cache_breakpoint_id=cache_breakpoint_id,
-        cache_ttl_seconds=cache_ttl_seconds,
-    )
-    request_attrs = _extract_anthropic_request_attrs(payload, model)
-
-    return (_response_to_mapping(response), usage_attrs, cache_attrs, request_attrs)
+    return _anthropic_response_bundle(response, payload, model)
 
 
 async def _dispatch_openai(
@@ -1141,6 +1374,7 @@ def materialize_llm_dispatcher_stage(
     rate_table: Any = None,
     memory_tool_registry: Any = None,
     deployment_surface: Any = None,
+    hitl_tool_loop: RuntimeHITLToolLoop | None = None,
     ollama_host: str | None = None,
     skill_activation_emitter: Any = None,
     skills: Any = None,
@@ -1176,6 +1410,7 @@ def materialize_llm_dispatcher_stage(
         rate_table=rate_table,
         memory_tool_registry=memory_tool_registry,
         deployment_surface=deployment_surface,
+        hitl_tool_loop=hitl_tool_loop,
         ollama_host=ollama_host,
         skill_activation_emitter=skill_activation_emitter,
         skills=skills,
