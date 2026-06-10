@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `94a46dcab20a` |
-| `last_refreshed` | 2026-06-10T14:29:14-06:00 |
-| `git_head` | `e51d952e` (main) — RC deployment-readiness report + advisory audit + runbook §5 fix committed. |
+| `workspace_state_hash` | `11d46fa9769d` |
+| `last_refreshed` | 2026-06-10T15:13:28-06:00 |
+| `git_head` | `1b2b5f10` (main) — R-411 gVisor local sandbox proven against recovered Lima VM (RC report corrected). |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 47 |
 
@@ -52,11 +52,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| local commit (`1b2b5f10`) | 2026-06-10 | **R-411 gVisor local sandbox PROVEN (RC follow-up).** Operator surfaced the provisioned Lima VM at `/Volumes/Development/arhugula-r411/` that the initial arc skipped as "host-unavailable"; recovered the `Broken` VM (start → containerd → docker; `runsc` registered) and R-411 passed (TOOL_STEP under `runsc`, network egress blocked, host repo path not visible). RC report Phase B corrected. VM left Running. |
 | local commit (`e51d952e`) | 2026-06-10 | **RC deployment-readiness arc executed — verdict GO.** All 3 deployment tiers proven live with zero harness code changes, incl. managed-cloud OTLP→Cloud Trace (R-421/R-810/R-820, after collector discovery + 2 operator-authorized IAM grants; token-creator since revoked, run.invoker retained). Closure report + Phase-D advisory audit + runbook §5 doc-fix. Remaining = operator-env only (AWS SSO re-auth for S3; self-hosted `prompts/`+`routing_manifest/` dirs). |
 | local merge (`a5215dde`) | 2026-06-10 | **Claude release-candidate handoff authored.** Added `.harness/release-candidate-deployment-readiness-runbook.md` plus root Claude/context pointers so Claude Code can pick up the provider-free readiness, live smoke, traceability cleanup, and optional-polish gate without re-deriving. |
 | local merge (`d4b6b4e3`) | 2026-06-10 | **Overlay-check ignored-artifact fix merged.** `overlay-check` now ignores stale gitignored `tools/semantic_overlay/overlay.json` artifacts while still failing on stale tracked snapshots; the `justfile` wording now matches the R-IF-112 README. |
 | PR #473 (`5eb71c18`) | 2026-06-10 | **Documentation hygiene merged.** Historical root Markdown review/tension/skill artifacts moved under `.harness/archive/root-historical/`, live references retargeted, and `.harness`/`design-substrate` retention READMEs added. |
-| PR #471 (`c8da9292`) | 2026-06-10 | **Substitution-accounting guidance clarified.** `CLAUDE.md` now distinguishes the frozen Phase-8 close snapshot from the live substitution ledger derived from `.harness/substitutions.yaml`, avoiding stale inline live-count claims. |
 
 ---
 
