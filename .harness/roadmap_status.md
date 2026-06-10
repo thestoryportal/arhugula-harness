@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `1ffec49abd91` |
-| `last_refreshed` | 2026-06-09T19:29:36-06:00 |
-| `git_head` | `c8f47d7` (main) — PR #452 R-CXA-2 stage-5 producer-loop composition merged. |
+| `workspace_state_hash` | `fd41807f1782` |
+| `last_refreshed` | 2026-06-09T19:58:54-06:00 |
+| `git_head` | `daf5d42` (main) — PR #454 R-CXA-2 provider-turn HITL continuation merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-54.md` |
 | `open_fork_doc_count` | 47 |
 
@@ -28,7 +28,7 @@
 
 **Ordered frontier.**
 
-- `R-CXA-2` - CP→IS producer-gated seam. PR #452 executed the Slice 4/5 composition proof by binding the HITL tool loop and engine recovery loop into stage-5/bootstrap and proving direct CP→IS producer emissions through the bound runtime context. This branch wires Anthropic non-memory provider-turn `tool_use` continuation through the bound `ctx.hitl_tool_loop` and returns `tool_result` messages for the next provider turn. It is still not a ledger-retirement flip: remaining R-CXA-2 work is durable/journaled recovery caller evidence, or a ratified decision to keep that as bounded-residual deployment hardening.
+- `R-CXA-2` - CP→IS producer-gated seam. PR #452 executed the Slice 4/5 composition proof by binding the HITL tool loop and engine recovery loop into stage-5/bootstrap and proving direct CP→IS producer emissions through the bound runtime context. PR #454 wired Anthropic non-memory provider-turn `tool_use` continuation through the bound `ctx.hitl_tool_loop` and returns `tool_result` messages for the next provider turn. It is still not a ledger-retirement flip: remaining R-CXA-2 work is durable/journaled recovery caller evidence, or a ratified decision to keep that as bounded-residual deployment hardening.
 - `R-CXA-1` - AS→IS producer-gated seam. The workflow-time scoped secret-fetch producer is SPECIFIED at `.harness/r-cxa-1-2-producer-seam-spec.md` §2 and has no open fork; bootstrap exclusion remains Reading-D. After the remaining R-CXA-2 caller boundary is either closed or genuinely gated, author/execute the implementation plan for this scoped producer. Stays PROPOSED/PARTIAL until a real scoped producer fires.
 
 **Research frontier closed.** `R-901` filed `.harness/01-planning/01-harness-planning/00-harness-research/phase-9-retirement-criteria.md`: Phase 9 is a lightweight post-closure decision model for bounded-residual promotion, live-ledger back-flow, and producer-gated seams. Result is research-only + selector guidance; no design-substrate back-flow is owed.
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #454 (`daf5d42`) | 2026-06-09 | **R-CXA-2 provider-turn HITL continuation merged.** Anthropic non-memory `tool_use` responses now run through the stage-5-bound `ctx.hitl_tool_loop` and return `tool_result` continuation messages to the provider; stage 5 constructs the ask surface, TOOL_STEP dispatcher, and R-CXA-2 producer loop before the frozen LLM dispatcher. R-CXA-2 remains STILL-BOUNDED pending durable/journaled recovery caller evidence or bounded-residual disposition. |
 | PR #452 (`c8f47d7`) | 2026-06-09 | **R-CXA-2 stage-5 producer-loop composition merged.** Bound `RuntimeHITLToolLoop` and `RuntimeEngineRecoveryLoop` into bootstrap LOOP_INIT and exposed both on `HarnessContext`; focused tests prove direct CP→IS emissions for `cp.hitl-tool-call-rewriting`, `cp.pause-captured`, and `cp.resume-attempted`. R-CXA-2 remains STILL-BOUNDED pending generic provider-turn HITL continuation/journaling plus durable recovery caller evidence, or a bounded-residual decision for those deployment-hardening concerns. |
 | PR #450 (`05ca1f7`) | 2026-06-09 | **Post-#449 roadmap/dashboard refresh merged.** Re-pinned the dashboard after PR #449, recorded R-CXA-2 as advanced-but-not-retired, updated the substitution rationale, and hardened `generate.py` so offline dashboard generation preserves the status-file in-flight PR set. |
 | PR #449 (`60b52ba`) | 2026-06-09 | **R-CXA-2 producer primitives merged.** Applied U-CP-78 Reading A so `cp.pause-captured` consumes real `PauseEvent`, added the runtime engine recovery-loop primitive, and added the provider-neutral HITL tool-loop primitive that gates and emits `cp.hitl-tool-call-rewriting` before dispatch. R-CXA-2 remains STILL-BOUNDED until stage-5/bootstrap composition binds those producers and e2e proof supports closeout/accounting. |
 | PRs #439, #441–#446 (`98f9d90`) | 2026-06-08 | **optimize-claude-md F1–F7 governance remediation (7 PRs).** Fixed stale plan/spec pointers (OD plan v2_26→v2_27; IS plan v2_3→v2_5 + IS spec v1.2→v1.3; broken `_v1.md` cites → canonical heads), trimmed inline byte-bloat (root §1.1 CXA lineage → pointer; harness-od §4.1 ledger −26.7 KB), documented the Workflow delta-baseline §-cite convention, refreshed axis CXA posture to v2.19 + reconciled IS numbers. Mode-agnostic governance hygiene; no `design-substrate/**` touched (X-AL-3 trivial). **Surfaced, not fixed:** root §4.2 hardcodes `46/54` while the ledger derives `52/54` (G-9 candidate); AS spec file is internally v1.7 but `harness-as:19` claims v1.8. |
-| PR #437 (`e61778b`) | 2026-06-08 | **R-CXA producer-loop forks ratified.** U-CP-78 is Reading A; R-CXA-2 is DP-1(c), DP-2(c), DP-3(a). The selector now moves to the buildable R-CXA-1 scoped secret-fetch producer slice while R-CXA-2 remains bounded on future upstream-loop authoring. |
 
 ---
 
@@ -102,6 +102,7 @@ The 5 bucket rows below sum to **54** under the batch-54 live ledger (RETIRED 52
 
 | Date | Source | Resolution |
 |---|---|---|
+| 2026-06-09 | **Post-#454 terminating refresh — PR #454 R-CXA-2 provider-turn HITL continuation merged at `daf5d42`; §12.2 owed follow-on.** | Hash `1ffec49abd91` → `fd41807f1782` (state at `daf5d42`, open PRs #440/#447, fork count 47, batch-54). R-CXA-2 advanced by production-bound Anthropic non-memory provider-turn HITL continuation through `ctx.hitl_tool_loop`, but remains STILL-BOUNDED until durable/journaled recovery caller evidence supports retirement accounting or receives a bounded-residual disposition. Next action remains R-CXA-2 durable recovery evidence/gate, then R-CXA-1 scoped secret-fetch producer. |
 | 2026-06-09 | **Substantive R-CXA-2 provider-turn HITL continuation branch opened from `c9e9dc7`; §12.2 owed after merge.** | Wired Anthropic non-memory `tool_use` responses through the bound stage-5 `ctx.hitl_tool_loop`, then returned `tool_result` continuation messages to the provider. Stage 5 now constructs the ask surface, TOOL_STEP dispatcher, and R-CXA-2 producer loop before the frozen LLM dispatcher so the production firing site is bound at construction. Focused tests prove dispatcher continuation, R-CXA-2 loop factory behavior, memory-tool path preservation, and bootstrap smoke. R-CXA-2 remains STILL-BOUNDED pending durable/journaled recovery caller evidence or a bounded-residual disposition. |
 | 2026-06-09 | **Post-#452 terminating refresh — PR #452 R-CXA-2 stage-5 producer-loop composition merged at `c8f47d7`; §12.2 owed follow-on.** | Hash `d847e1c6e657` → `1ffec49abd91` (state at `c8f47d7`, open PRs #440/#447, fork count 47, batch-54). R-CXA-2 advanced by bound stage-5 HITL/recovery producer loops and direct CP→IS emission proof, but remains STILL-BOUNDED until generic provider-turn HITL continuation/journaling and durable recovery caller evidence support retirement accounting, or those concerns receive a bounded-residual disposition. Next action remains R-CXA-2 caller-boundary closure/gate, then R-CXA-1 scoped secret-fetch producer. |
 | 2026-06-09 | **Substantive R-CXA-2 stage-5 producer-loop composition branch opened from `9e9b1bb`; §12.2 owed after merge.** | Bound `RuntimeHITLToolLoop` and `RuntimeEngineRecoveryLoop` into stage-5/bootstrap via `HarnessContext`; proved direct CP→IS emissions through the bound runtime context (`cp.hitl-tool-call-rewriting`, `cp.pause-captured`, `cp.resume-attempted`) plus full bootstrap field coverage. R-CXA-2 remains STILL-BOUNDED until generic provider-turn HITL continuation/journaling and durable recovery caller evidence support retirement accounting. |
