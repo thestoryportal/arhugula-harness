@@ -345,6 +345,16 @@ def test_ac1_e2e_daemon_subprocess_binds_socket_and_shuts_down(
         "[runtime.otel]\n"
         'otlp_endpoint = "http://localhost:4318"\n'
         "\n"
+        "[runtime.routing_manifest]\n"
+        "manifest_version = 1\n"
+        "per_role_bindings = {}\n"
+        "per_workload_overrides = {}\n"
+        "retry_policies = {}\n"
+        "fallback_chains = [\n"
+        '  { primary = { provider = "anthropic", model = "claude-haiku-4-5", '
+        'family = "anthropic" }, same_family = [], cross_family = [] },\n'
+        "]\n"
+        "\n"
         + _binding("SKILLS", skills_dir)
         + _binding("PROMPTS", prompts_dir)
         + _binding("ROUTING_MANIFEST", routing_manifest)
@@ -355,7 +365,9 @@ def test_ac1_e2e_daemon_subprocess_binds_socket_and_shuts_down(
         "HARNESS_DEPLOYMENT_SURFACE": "local-development",
         "HARNESS_REPOSITORY_ROOT": str(repo_root),
         "HARNESS_DEFAULT_TOPOLOGY": "single-threaded-linear",
+        "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring",
     }
+    env.pop("OPENAI_API_KEY", None)
     cmd = [
         sys.executable,
         "-m",

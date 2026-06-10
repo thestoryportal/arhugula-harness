@@ -261,3 +261,27 @@ def test_actor_preserved_from_event(tmp_path: Path) -> None:
     wiring.emit_secret_fetch_audit_entry(event)
     [persisted] = read_ledger(wiring.ledger_writer.handle)
     assert persisted.actor == event.actor
+
+
+def test_emit_leaves_procedural_tier_snapshot_ref_none_without_resolver(
+    tmp_path: Path,
+) -> None:
+    """Direct/bootstrap AS→IS wiring without a resolver preserves None-canonical sidecar."""
+    wiring = _wiring(tmp_path)
+    wiring.emit_secret_fetch_audit_entry(_event())
+    [persisted] = read_ledger(wiring.ledger_writer.handle)
+    assert persisted.procedural_tier_snapshot_ref is None
+
+
+def test_emit_populates_procedural_tier_snapshot_ref_when_resolver_bound(
+    tmp_path: Path,
+) -> None:
+    """Workflow-context AS→IS secret-fetch writes carry the R-003 sidecar."""
+    snapshot = Identifier("b" * 64)
+    wiring = RuntimeAsIsWiring(
+        ledger_writer=_ledger_writer(tmp_path),
+        procedural_tier_snapshot_resolver=lambda: snapshot,
+    )
+    wiring.emit_secret_fetch_audit_entry(_event())
+    [persisted] = read_ledger(wiring.ledger_writer.handle)
+    assert persisted.procedural_tier_snapshot_ref == snapshot

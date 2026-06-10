@@ -8,10 +8,10 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `ffe9044984c8` |
-| `last_refreshed` | 2026-06-09T21:49:28-06:00 |
-| `git_head` | `d2364808` (main) — PR #458 R-CXA-1 scoped secret-fetch producer merged. |
-| `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-55.md` |
+| `workspace_state_hash` | `39009757fd12` |
+| `last_refreshed` | 2026-06-09T22:20:47-06:00 |
+| `git_head` | `22d7d537` (main) — branch base after PR #459 post-#458 status refresh. |
+| `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 47 |
 
 **Hash recipe.** `sha256(git_head[:8] + "|" + sorted_open_pr_csv + "|" + open_fork_doc_count + "|" + latest_retirement_batch_path)[:12]`. See `Project_Roadmap_v1.md` §7.1.
@@ -22,19 +22,19 @@
 
 **Purpose.** Section 02 is the immediate forward-work selector. It should name the next Claude/Codex-executable frontier after the latest status refresh; completion history belongs in `Recently completed`, the drift log, the forward register, and the retirement ledger.
 
-**Current state.** Phase 8 substitution accounting is closed. The live ledger is 53/54 `RETIRED` and 54/54 pipeline-advanced after batch-55. The only non-`RETIRED` substitution row is `CXA-1`.
+**Current state.** Phase 8 substitution accounting is closed. On this substantive R-CXA-1 branch, batch-56 moves the live ledger to 54/54 `RETIRED` and 54/54 pipeline-advanced. No canonical substitution row remains outside a counted `RETIRED` disposition.
 
 **Selection rule.** If no exact `ACTIVE` row is derivable, do not park. Choose the highest-value forward item below, ground it against current code/spec state, build to the genuine gate, and stop only for a real decision, credential, paid call, or irreversible action.
 
 **Ordered frontier.**
 
-- `R-CXA-1` - AS→IS producer-gated seam. PR #458 merged the workflow-time scoped secret-fetch producer at the active `TOOL_STEP` dispatch site and emits through `RuntimeAsIsWiring`; bootstrap exclusion remains Reading-D. This closes must_pass #1 without changing the live ledger count. CXA-1 stays PROPOSED/PARTIAL until the separate must_pass #2 / AS→IS edge-scope back-flow audit resolves the remaining AS source-unit audit-emission callbacks.
+- Ship this `R-CXA-1` AS→IS edge-scope/sidecar branch. It closes must_pass #2, files batch-56, and resolves the final non-retired substitution row. After merge, run the normal terminating roadmap/status/dashboard refresh before deriving the next implementation frontier.
 
 **Resolved by PR #456.** `R-CXA-2` is batch-55 `RETIRED-AS-BOUNDED-RESIDUAL`: PR #452 bound the HITL/recovery producer loops at stage 5, PR #454 wired Anthropic provider-turn HITL continuation, and the remaining durable/journaled recovery-loop evidence is explicitly recorded as post-MVP hardening with a re-open trigger for a real event-sourced/reconciler/WAL recovery loop.
 
 **Research frontier closed.** `R-901` filed `.harness/01-planning/01-harness-planning/00-harness-research/phase-9-retirement-criteria.md`: Phase 9 is a lightweight post-closure decision model for bounded-residual promotion, live-ledger back-flow, and producer-gated seams. Result is research-only + selector guidance; no design-substrate back-flow is owed.
 
-**Do not re-open as next action.** `R-411`, `R-412`, `R-420`, `R-421`, `R-430`, `R-500`, `R-810`, `R-820`, `R-830`, `R-008` / OD-4, `R-CXA-2`, `R-CXA-3`, and `R-CXA-4` are already closed or back-flowed.
+**Do not re-open as next action.** `R-411`, `R-412`, `R-420`, `R-421`, `R-430`, `R-500`, `R-810`, `R-820`, `R-830`, `R-008` / OD-4, `R-CXA-1`, `R-CXA-2`, `R-CXA-3`, and `R-CXA-4` are already closed or back-flowed on this branch.
 
 ---
 
@@ -51,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| This branch (`codex/r-cxa-1-as-is-edge-audit`) | 2026-06-09 | **R-CXA-1 AS→IS edge-scope closeout.** The audit narrows the stale remaining-callback wording to the current AS→IS overlay inventory, `RuntimeAsIsWiring` now writes `procedural_tier_snapshot_ref` when the stage-5 resolver is bound, and batch-56 moves H_T-CXA-1 to `SUBSTANTIVE_RETIRED` for a 54/54 live ledger. |
 | PR #458 (`d236480`) | 2026-06-09 | **R-CXA-1 scoped secret-fetch producer merged.** `ToolContract.required_secrets` now resolves during active `TOOL_STEP` dispatch and emits metadata-only `SecretFetchEvent` records through `RuntimeAsIsWiring`; GCP Secret Manager supplies non-hollow rotation metadata while keyring/env fail closed for audit metadata. CXA-1 remains PARTIAL pending must_pass #2 / AS→IS edge-scope back-flow audit. |
 | PR #456 (`423730f`) | 2026-06-09 | **R-CXA-2 bounded-residual back-flow merged.** H_T-CXA-2 moves from STILL-BOUNDED to counted BOUNDED_RESIDUAL after bound producer-loop evidence and provider-turn HITL continuation; durable recovery from journaled state remains a named post-MVP re-open trigger. |
 | PR #454 (`daf5d42`) | 2026-06-09 | **R-CXA-2 provider-turn HITL continuation merged.** Anthropic non-memory `tool_use` responses now run through the stage-5-bound `ctx.hitl_tool_loop` and return `tool_result` continuation messages to the provider; stage 5 constructs the ask surface, TOOL_STEP dispatcher, and R-CXA-2 producer loop before the frozen LLM dispatcher. R-CXA-2 remained STILL-BOUNDED pending durable/journaled recovery caller evidence or bounded-residual disposition until batch-55 recorded that disposition. |
 | PR #452 (`c8f47d7`) | 2026-06-09 | **R-CXA-2 stage-5 producer-loop composition merged.** Bound `RuntimeHITLToolLoop` and `RuntimeEngineRecoveryLoop` into bootstrap LOOP_INIT and exposed both on `HarnessContext`; focused tests prove direct CP→IS emissions for `cp.hitl-tool-call-rewriting`, `cp.pause-captured`, and `cp.resume-attempted`. This was pre-batch-55 evidence for the later bounded-residual close. |
-| PR #450 (`05ca1f7`) | 2026-06-09 | **Post-#449 roadmap/dashboard refresh merged.** Re-pinned the dashboard after PR #449, recorded R-CXA-2 as advanced-but-not-retired, updated the substitution rationale, and hardened `generate.py` so offline dashboard generation preserves the status-file in-flight PR set. |
 
 ---
 
@@ -82,18 +82,18 @@ Sample (highest-leverage open):
 
 ## Phase 7 retirement progress
 
-> **🎓 PHASE-8 GRADUATION + BATCH-55 LIVE LEDGER.** The R-700 reconciliation is CLOSED — the operator ratified **accounting (i)** (PR #246) and lifted the declaration hold. Historical declaration: **RETIRED 46/54 (85.2%) + pipeline-advanced 49/54 (90.7%)**. Batch-52 back-flowed the live R-810/R-820 evidence for AS-8e, AS-8f, and CP-17; batch-53 back-flows the OD-4 runtime residual and the 0-wireable CXA-4 bookkeeping row; batch-54 lands the CP→AS runtime composer; batch-55 records CXA-2 as a counted bounded residual: **live ledger RETIRED 53/54 (98.1%) + pipeline-advanced 54/54 (100.0%)**. Prior batch records stand verbatim; this section reports the current live 54-row set derived from `.harness/substitutions.yaml`.
+> **🎓 PHASE-8 GRADUATION + BATCH-56 LIVE LEDGER.** The R-700 reconciliation is CLOSED — the operator ratified **accounting (i)** (PR #246) and lifted the declaration hold. Historical declaration: **RETIRED 46/54 (85.2%) + pipeline-advanced 49/54 (90.7%)**. Batch-52 back-flowed the live R-810/R-820 evidence for AS-8e, AS-8f, and CP-17; batch-53 back-flows the OD-4 runtime residual and the 0-wireable CXA-4 bookkeeping row; batch-54 lands the CP→AS runtime composer; batch-55 records CXA-2 as a counted bounded residual; batch-56 records CXA-1 as substantively retired after the AS→IS producer and edge-scope audit: **live ledger RETIRED 54/54 (100.0%) + pipeline-advanced 54/54 (100.0%)**. Prior batch records stand verbatim; this section reports the current live 54-row set derived from `.harness/substitutions.yaml`.
 
-The bucket rows below sum to **54** under the batch-55 live ledger (RETIRED 53).
+The bucket rows below sum to **54** under the batch-56 live ledger (RETIRED 54).
 
 | Bucket | Count | Notes |
 |---|---|---|
-| RETIRED | **53/54 (98.1%)** live (batch-55) | 42 substantive + 8 authoring-only + 3 bounded-residual (CP-16, OD-6, CXA-2). IS 9/9; AS 11/11; CP 21/21; OD 8/8; CXA 4/5. Phase-8 historical declaration remains 46/54; batch-52 added AS-8e, AS-8f, and CP-17 after R-810/R-820 live proofs; batch-53 adds OD-4 and CXA-4 after accounting/back-flow; batch-54 adds CXA-3 after the CP→AS runtime composer landed; batch-55 adds CXA-2 as bounded residual after producer-loop evidence landed. |
+| RETIRED | **54/54 (100.0%)** live (batch-56) | 43 substantive + 8 authoring-only + 3 bounded-residual (CP-16, OD-6, CXA-2). IS 9/9; AS 11/11; CP 21/21; OD 8/8; CXA 5/5. Phase-8 historical declaration remains 46/54; batch-52 added AS-8e, AS-8f, and CP-17 after R-810/R-820 live proofs; batch-53 adds OD-4 and CXA-4 after accounting/back-flow; batch-54 adds CXA-3 after the CP→AS runtime composer landed; batch-55 adds CXA-2 as bounded residual after producer-loop evidence landed; batch-56 adds CXA-1 after the AS→IS producer and edge-scope audit landed. |
 | RETIRE-READY | **0 active (bucket EMPTY post-batch-51)** | OD-3 + OD-6 transited RETIRE-READY → RETIRED at batch-51 (PR #200). |
-| PARTIAL | **1 — CXA-1** (pipeline-advanced; NOT in the 53) | CXA-1 remains PARTIAL after the scoped secret-fetch producer lands because the separate must_pass #2 / AS→IS edge-scope audit for the remaining AS source-unit callbacks is still open. OD-4 and CXA-4 moved to RETIRED at batch-53; CXA-3 moved to RETIRED at batch-54; CXA-2 moved to bounded-residual RETIRED at batch-55. |
-| STILL-BOUNDED | **0** | Empty after batch-55. |
-| RETIRED-AS-AUTHORING-ONLY | **8** (of the 53 RETIRED) | accounting (i): IS-4, IS-10, AS-9, CP-12, CP-23, OD-1, OD-7, OD-8 (accounting (ii) = 9, adds CP-24). The H_T contract is the typed declaration itself; no runtime behavior (sub-species 10 categorical-mismatch). |
-| RETIRED-AS-BOUNDED-RESIDUAL | **3** (of the 53 RETIRED — *counted*) | CP-16 (memory, batch-44) + OD-6 (OTLP, batch-51 — FIRST in ledger) + CXA-2 (CP→IS durable recovery, batch-55). Production substrate dormant or post-MVP at MVP; substantive close deferred to a real deployment/recovery surface (X-AL-2 §5.3). |
+| PARTIAL | **0** | Empty after batch-56. CXA-1 moved to SUBSTANTIVE_RETIRED after the AS→IS edge-scope audit and resolver-bound secret-fetch write landed. |
+| STILL-BOUNDED | **0** | Empty after batch-55 and remains empty after batch-56. |
+| RETIRED-AS-AUTHORING-ONLY | **8** (of the 54 RETIRED) | accounting (i): IS-4, IS-10, AS-9, CP-12, CP-23, OD-1, OD-7, OD-8 (accounting (ii) = 9, adds CP-24). The H_T contract is the typed declaration itself; no runtime behavior (sub-species 10 categorical-mismatch). |
+| RETIRED-AS-BOUNDED-RESIDUAL | **3** (of the 54 RETIRED — *counted*) | CP-16 (memory, batch-44) + OD-6 (OTLP, batch-51 — FIRST in ledger) + CXA-2 (CP→IS durable recovery, batch-55). Production substrate dormant or post-MVP at MVP; substantive close deferred to a real deployment/recovery surface (X-AL-2 §5.3). |
 
 **Decomposition status (R-002 RESOLVED 2026-05-31) + R-700 draft correction (2026-06-01):** R-002 mapped all non-RETIRED rows *in the per-axis `§4.1` view* to R-NNN entries — IS-2 (R-003 + R-001-h-t-is-2-retired), OD-3 (R-007), OD-4 (R-008), OD-6 (R-009), AS-8e (R-005), AS-8f (R-006); R-001 (OD-5) + R-004 (AS-8d) reconciled stale BLOCKED → RESOLVED. **The R-700 draft surfaced that the R-002 survey covered only `§4.1`, which excludes the CXA axis (no `§4.1` file) + CP-17's SB-INDEF reclassification — so 5 non-RETIRED rows (`CXA-1`/`CXA-2`/`CXA-3`/`CXA-4` + `CP-17`) have NO `R-NNN` entries.** Recommended follow-on (draft §C item 2): an `R-002`-style Surface-I decomposition pass over CXA + CP-17. **→ CLOSED at PR #246 (R-700 PART C item 2):** grounding found CXA-1/2/3/4 already had `R-CXA-1..4` (authored #209); NEW `R-010-cp-17-files-indefinite` authored for CP-17 → all 5 flagged rows now have dedicated entries. Ratified at the Phase-8 graduation (2026-06-02).
 
@@ -103,6 +103,7 @@ The bucket rows below sum to **54** under the batch-55 live ledger (RETIRED 53).
 
 | Date | Source | Resolution |
 |---|---|---|
+| 2026-06-09 | **Substantive R-CXA-1 AS→IS edge-scope/sidecar branch opened from `22d7d53`; §12.2 owed after merge.** | Hash `ffe9044984c8` → `39009757fd12` (branch base `22d7d53`, open PRs #440/#447, fork count 47, batch-56). Filed `.harness/r-cxa-1-as-is-edge-audit-2026-06-09.md`, threaded the stage-5 procedural-tier resolver into the production `RuntimeAsIsWiring` secret-fetch callback, and moved H_T-CXA-1 from PARTIAL to SUBSTANTIVE_RETIRED. Live ledger is now 54/54 RETIRED on this branch; a terminating refresh is owed after merge to pin the final merge commit/dashboard hash. |
 | 2026-06-09 | **Post-#458 terminating refresh — PR #458 R-CXA-1 scoped secret-fetch producer merged at `d236480`; §12.2 owed follow-on.** | Hash `53da62ac5c58` → `ffe9044984c8` (state at `d2364808`, open PRs #440/#447, fork count 47, batch-55). R-CXA-1 must_pass #1 is closed by the workflow-time secret-fetch producer; H_T-CXA-1 remains PARTIAL pending must_pass #2 / AS→IS edge-scope back-flow audit. |
 | 2026-06-09 | **Substantive R-CXA-1 scoped secret-fetch producer branch opened from `b7719262`; §12.2 owed after merge.** | Added a workflow-time `ToolContract.required_secrets` producer at `RuntimeToolDispatcher`, injected the production AS→IS emitter through stage-5 factory construction, and made GCP Secret Manager the non-hollow rotation-metadata source while keyring/env audit metadata fails closed. Focused runtime/config/bootstrap tests pass. This closes R-CXA-1 must_pass #1; H_T-CXA-1 remains PARTIAL pending the separate must_pass #2 / AS→IS edge-scope back-flow audit. |
 | 2026-06-09 | **Post-#456 terminating refresh — PR #456 R-CXA-2 bounded-residual back-flow merged at `423730f`; §12.2 owed follow-on.** | Hash `fd41807f1782` → `53da62ac5c58` (state at `423730f`, open PRs #440/#447, fork count 47, batch-55). R-CXA-2 is closed as counted bounded residual; durable/journaled recovery remains an explicit post-MVP re-open trigger. Next action is R-CXA-1 scoped secret-fetch producer grounding/build. |
@@ -292,7 +293,7 @@ The bucket rows below sum to **54** under the batch-55 live ledger (RETIRED 53).
 | 2026-06-08 | **R-900 decomposition branch opened from `4523a857`; §12.2 owed after merge.** | Fresh grounding found the advertised R-XI-02/R-XI-03 options are already RESOLVED in `Project_Roadmap_v1.md` and implemented in `tools/dashboard/generate.py`; R-900's own must-pass requires crystallizing a specific research question before work begins. This branch resolves the placeholder by adding `R-901-phase-9-retirement-criteria` as the next explicit research frontier. |
 | 2026-06-08 | **Post-#426 roadmap status refresh — PR #426 R-900 decomposition merged at `c223de07`; §12.2 owed follow-on.** | Hash `b9a21d9a2d3d` → `472c4d3cb516` (state at `c223de07`, PRS empty/unavailable, fork count 45, batch-54). R-900 is RESOLVED by decomposition into R-901, and the SQLite writer-lock fix keeps the PR pytest gate green. **Next action:** R-901 Phase-9 retirement criteria research brief. |
 
-**Audit protocol exercised across terminating-refresh closures, fresh-session reconciliations, substantive closes, accounting back-flow, live-provider gates, and dashboard-discipline sweeps.** Discipline + enforcement layers are operational; the current selector is the `Next action` section above, not stale historical footer prose. After batch-55, the non-retired substitution ledger is narrowed to CXA-1; future `/roadmap continue` sessions should ground the scoped AS secret-fetch producer gate against current code before opening optional dashboard/research arcs.
+**Audit protocol exercised across terminating-refresh closures, fresh-session reconciliations, substantive closes, accounting back-flow, live-provider gates, and dashboard-discipline sweeps.** Discipline + enforcement layers are operational; the current selector is the `Next action` section above, not stale historical footer prose. After batch-56 on this branch, no canonical substitution-ledger row remains non-retired; future `/roadmap continue` sessions should ship this PR, run the terminating refresh, then re-derive any post-substitution activation or hardening frontier from current HEAD.
 
 ---
 

@@ -17,6 +17,7 @@ from harness_cp.mcp_client_namespace_emitter import MCPClientNamespaceEmitter
 from harness_cp.per_server_trust_evaluator import PerServerTrustEvaluator
 from harness_cp.routing_manifest_residence import RetryPolicy
 from harness_cp.topology_pattern import TopologyPattern
+from harness_is.state_ledger_entry_schema import Identifier
 from harness_runtime.bootstrap.factories.mcp_client_host_factory import (
     materialize_mcp_client_host_stage,
 )
@@ -25,6 +26,7 @@ from harness_runtime.bootstrap.factories.runtime_tool_dispatcher_factory import 
     materialize_runtime_tool_dispatcher_stage,
 )
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+from harness_runtime.lifecycle.as_is_wiring import RuntimeAsIsWiring
 from harness_runtime.lifecycle.retry_breaker import (
     DEFAULT_RETRY_POLICY,
     RuntimeRetryBreaker,
@@ -171,6 +173,24 @@ async def test_factory_does_not_bind_tool_dispatcher_directly() -> None:
     await materialize_runtime_tool_dispatcher_stage(builder, cfg)
     # Factory does NOT bind tool_dispatcher; only intermediate carriers.
     assert builder.tool_dispatcher is None
+
+
+@pytest.mark.asyncio
+async def test_factory_threads_procedural_snapshot_resolver_to_secret_audit_emitter() -> None:
+    """R-CXA-1 — TOOL_STEP secret-fetch audit emission receives the R-003 resolver."""
+    cfg = _config()
+    builder = await _post_stage_3a_builder(cfg)
+
+    def _resolve() -> Identifier:
+        return Identifier("b" * 64)
+
+    builder.procedural_tier_snapshot_resolver = _resolve
+    wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
+    emitter = wrapper.inner._secret_fetch_audit_emitter  # type: ignore[attr-defined]
+    owner = getattr(emitter, "__self__", None)
+
+    assert isinstance(owner, RuntimeAsIsWiring)
+    assert owner.procedural_tier_snapshot_resolver is _resolve
 
 
 # ---------------------------------------------------------------------------

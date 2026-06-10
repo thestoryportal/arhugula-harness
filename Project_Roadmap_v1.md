@@ -2187,9 +2187,9 @@ R-901-phase-9-retirement-criteria:
 
 ```yaml
 R-CXA-1-as-is-seam:
-  title: CXA-1 (AS->IS) seam completion — secret-fetch audit production caller + remaining 12 edges
+  title: CXA-1 (AS->IS) seam completion — scoped secret-fetch producer + edge-scope audit
   surface: I
-  status: PROPOSED
+  status: RESOLVED   # batch-56: AS->IS producer-gated seam substantively retired
   depends_on: []
   blocks: [R-700-phase-8-substitution-accounting]
   posture: phase-7
@@ -2197,10 +2197,20 @@ R-CXA-1-as-is-seam:
   skills: { primary: phase-7-cross-axis-composition, secondary: [] }
   advisor_required: no
   council_required: no
-  verification: { shape: e2e, must_pass: ["workflow-time scoped secret-fetch production caller invokes emit_secret_fetch_audit_entry with non-hollow metadata", "remaining ~12 AS source-unit audit-emission callbacks threaded through AsIsWiring or narrowed/back-flowed by edge-scope audit"] }
-  close_shape: { type: PR-merge, artifact: "feat(cxa): complete AS->IS seam", cascade: [] }
+  verification: { shape: integration+overlay-audit, must_pass: ["workflow-time scoped secret-fetch production caller invokes emit_secret_fetch_audit_entry with non-hollow metadata — ✅ closed by PR #458", "remaining ~12 AS source-unit audit-emission callbacks threaded through AsIsWiring or narrowed/back-flowed by edge-scope audit — ✅ closed by .harness/r-cxa-1-as-is-edge-audit-2026-06-09.md + batch-56 sidecar wiring"] }
+  close_shape: { type: retirement-event, artifact: ".harness/phase-7d-retirement-events-batch-56.md", cascade: [dashboard; register §B-14] }
   next_pointer: null
-  notes: PARTIAL per R-700 — composer materialized + 7c-tested; historical baseline had only the secret-fetch edge wired with zero production callers. Register §B-14. **must_pass #1 fork RESOLVED-AS-READING-D (defer) 2026-06-01** — `.harness/class_1_fork_cxa_1_secret_fetch_audit_bootstrap_ordering.md` (✅ APPLIED-AS-READING-D). Apply-arc empirical orientation (advisor-prompted, fork §2.6) found Reading B unwritable-as-previewed: the bootstrap fetch uses `resolve_bootstrap_value(NAME)` (name only — no scope, no rotation; the scope-bearing `resolve()` path had ZERO production callers), sentinels for `secret_scope`/`secret_last_rotated_at` are MATERIAL (collapse the secret fingerprint to f(name)), the idempotency key is timestamp-free (fire-once-forever), and the whole `SecretFetchEvent` machinery had no real producer (`emit_secret_fetch_audit` composes-and-discards). Wiring bootstrap-value = a hollow seam → operator ratified DON'T-WIRE. **2026-06-08 refresh audit at HEAD `883a991a` reaffirmed the producer gap:** production references to `emit_secret_fetch_audit_entry` / `SecretFetchEvent` remain definition-only, runtime provider bootstrap still uses `resolve_bootstrap_value(...)`, and the only production `fetch_secret(...)` consumer is CP F5 signing-key resolution (CP→AS, not AS→IS). Evidence: `.harness/r-cxa-1-producer-audit-2026-06-08.md`. must_pass #1 re-opened on the later real scoped workflow-time producer path, not on bootstrap-value. **2026-06-08 producer-seam DESIGN SPEC filed and ratified** — `.harness/r-cxa-1-2-producer-seam-spec.md` §2 specs the workflow-time scoped secret-fetch producer (bucket B1: spec'd-but-unbuilt; firing site = per-fetch `fetch_secret(name,scope,tier)` at workflow-step context per C-AS-08 §8.4); bootstrap exclusion preserved (Reading-D). **2026-06-09 implementation branch:** `RuntimeToolDispatcher` now resolves `ToolContract.required_secrets` at active `TOOL_STEP` dispatch, requires backend rotation metadata, emits `SecretFetchEvent` through `RuntimeAsIsWiring`, and co-emits structure-only `secret.fetch` spans; keyring/env audit metadata fails closed instead of inventing sentinels. This closes must_pass #1. STAYS PROPOSED / PARTIAL until the separate must_pass #2 / AS→IS edge-scope back-flow audit resolves the remaining AS source-unit callback wording.
+  notes: >
+    Formerly PARTIAL per R-700: the AS->IS composer existed, but the scoped secret-fetch producer had no real
+    workflow-time caller and the legacy CXA prose still implied "remaining ~12" callback sites. The bootstrap-value
+    secret path remains excluded under the 2026-06-01 Reading-D decision in
+    `.harness/class_1_fork_cxa_1_secret_fetch_audit_bootstrap_ordering.md`; wiring that path would still be hollow
+    because it has name-only secret resolution and no scope/rotation metadata. PR #458 closed must_pass #1 by moving
+    scoped secret-fetch audit production to `RuntimeToolDispatcher` at active `TOOL_STEP` dispatch with non-hollow
+    scope and backend rotation metadata. Batch-56 closes must_pass #2: the edge-scope audit narrows current direct
+    AS->IS obligations to U-AS-19/U-AS-28 read-only IS carrier imports plus the U-AS-26/U-AS-27 secret-fetch audit
+    producer family, and this arc threads the R-003 procedural-tier sidecar through the production
+    `RuntimeAsIsWiring` write. H_T-CXA-1 moves to `SUBSTANTIVE_RETIRED`; no non-retired substitution row remains.
 
 R-CXA-2-cp-is-seam:
   title: CXA-2 (CP->IS) seam completion — runtime caller-site invocations + remaining §12.3 edges

@@ -554,4 +554,21 @@ The `harness-od/CLAUDE.md` §4.1 OD-6 RETIRE-READY classification (batch-33) is 
 
 ---
 
-*End of phase-7d-retirement-ledger v2 (second pass against Phase 2 runtime closure) + 2026-05-27 supersession refresh + 2026-06-02 Phase-8 graduation supersession (§11.7) + 2026-06-08 post-Phase-8 back-flow (§11.8) + 2026-06-08 OD-4/CXA-4 back-flow (§11.9) + 2026-06-08 CXA-3 runtime-composer back-flow (§11.10) + 2026-06-09 CXA-2 bounded-residual back-flow (§11.11).*
+### §11.12 Post-Phase-8 CXA-1 AS->IS edge-scope back-flow (2026-06-09)
+
+**Trigger.** R-CXA-1's AS->IS producer-gated seam advanced after batch-55. PR #458 moved scoped secret-fetch audit production to the active `TOOL_STEP` dispatch site. The follow-on edge-scope audit found that the legacy "remaining ~12 callbacks" wording no longer matched the current direct AS->IS overlay inventory: U-AS-19 and U-AS-28 are read-only IS carrier consumers, while U-AS-26/U-AS-27 are the secret-fetch audit compose/write family. This branch threads the R-003 procedural-tier resolver into the production `RuntimeAsIsWiring` write and batch-56 records the substantive transit.
+
+**Live ledger accounting after batch-56:**
+
+| Metric | Live ledger | Phase-8 declaration |
+|---|---|---|
+| RETIRED | **54/54 (100.0%)** | 46/54 (85.2%) |
+| Pipeline-advanced | **54/54 (100.0%)** | 49/54 (90.7%) |
+
+**Disposition delta:** CXA-1 moves from `PARTIAL` to `SUBSTANTIVE_RETIRED`. No canonical substitution row remains outside a counted RETIRED disposition.
+
+**Historical boundary.** §11.7 and `.harness/phase-8-graduation.md` remain the historical Phase-8 declaration; §11.8, §11.9, §11.10, and §11.11 remain the batch-52, batch-53, batch-54, and batch-55 back-flow records. This §11.12 is a post-Phase-8 AS->IS seam supersession for the live ledger only.
+
+---
+
+*End of phase-7d-retirement-ledger v2 (second pass against Phase 2 runtime closure) + 2026-05-27 supersession refresh + 2026-06-02 Phase-8 graduation supersession (§11.7) + 2026-06-08 post-Phase-8 back-flow (§11.8) + 2026-06-08 OD-4/CXA-4 back-flow (§11.9) + 2026-06-08 CXA-3 runtime-composer back-flow (§11.10) + 2026-06-09 CXA-2 bounded-residual back-flow (§11.11) + 2026-06-09 CXA-1 AS->IS back-flow (§11.12).*

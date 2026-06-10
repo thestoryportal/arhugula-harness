@@ -36,6 +36,7 @@ from harness_runtime.config.provider_secrets import (
 )
 from harness_runtime.types import ProviderSecretBackend, ProviderSecretsConfig
 from keyring.backend import KeyringBackend
+from keyring.errors import KeyringError
 from pydantic import ValidationError
 
 
@@ -55,6 +56,21 @@ class _FakeKeyring(KeyringBackend):
 
     def delete_password(self, service: str, username: str) -> None:
         self.store.pop((service, username), None)
+
+
+class _FailingKeyring(KeyringBackend):
+    """Keyring backend that simulates headless/subprocess backend failure."""
+
+    priority = 1  # type: ignore[assignment]
+
+    def get_password(self, service: str, username: str) -> str | None:
+        raise KeyringError("backend unavailable")
+
+    def set_password(self, service: str, username: str, password: str) -> None:
+        raise KeyringError("backend unavailable")
+
+    def delete_password(self, service: str, username: str) -> None:
+        raise KeyringError("backend unavailable")
 
 
 @pytest.fixture
@@ -373,6 +389,21 @@ def test_resolve_bootstrap_value_env_var_openai(
     assert value == "sk-oa-from-env"
 
 
+def test_resolve_bootstrap_value_falls_back_when_keyring_backend_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LOCAL keyring backend error + mapped env var still reaches headless fallback."""
+    original = keyring.get_keyring()
+    keyring.set_keyring(_FailingKeyring())
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-from-env")
+    try:
+        resolver = make_keyring_resolver(ProviderSecretsConfig())
+        value = resolver.resolve_bootstrap_value("anthropic_key")
+        assert value == "sk-ant-from-env"
+    finally:
+        keyring.set_keyring(original)
+
+
 def test_resolve_bootstrap_value_keyring_wins_over_env_var(
     fake_keyring: _FakeKeyring,
     monkeypatch: pytest.MonkeyPatch,
@@ -403,6 +434,25 @@ def test_resolve_bootstrap_value_no_mapping_no_fallback(
         resolver.resolve_bootstrap_value("unmapped-name")
     assert excinfo.value.fail_class is SecretFailClass.SECRET_UNKNOWN
     assert excinfo.value.name == "unmapped-name"
+
+
+def test_resolve_bootstrap_value_keyring_backend_error_without_fallback_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SELF_HOSTED keyring-only backend does not use env when keyring errors."""
+    original = keyring.get_keyring()
+    keyring.set_keyring(_FailingKeyring())
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-from-env")
+    try:
+        resolver = make_keyring_resolver(
+            ProviderSecretsConfig(backend=ProviderSecretBackend.SELF_HOSTED_KEYRING)
+        )
+        with pytest.raises(SecretResolutionError) as excinfo:
+            resolver.resolve_bootstrap_value("anthropic_key")
+        assert excinfo.value.fail_class is SecretFailClass.SECRET_UNAVAILABLE
+        assert excinfo.value.name == "anthropic_key"
+    finally:
+        keyring.set_keyring(original)
 
 
 def test_resolve_bootstrap_value_neither_keyring_nor_env_raises(

@@ -208,7 +208,8 @@ async def materialize_runtime_tool_dispatcher_stage(
         rate_table=rate_table,
         provider_secret_resolver=ctx.keyring_resolver,
         secret_fetch_audit_emitter=RuntimeAsIsWiring(
-            ctx.ledger_writer
+            ctx.ledger_writer,
+            procedural_tier_snapshot_resolver=ctx.procedural_tier_snapshot_resolver,
         ).emit_secret_fetch_audit_entry,
         secret_fetch_backend=config.provider_secrets.backend.value,
     )
