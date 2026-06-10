@@ -135,6 +135,17 @@ def test_most_files_carry_a_cite(graph: dict) -> None:
     assert s["files_with_cite"] / s["source_files"] > 0.95
 
 
+def test_contract_without_code_orphans_are_derived_from_spec_keyspace(graph: dict) -> None:
+    orphans = graph["orphans"]["contract_without_code"]
+    cited_contracts = set(graph["indices"]["contract_to_files"])
+
+    assert graph["stats"]["spec_contracts_total"] >= graph["stats"]["distinct_contracts"]
+    for orphan in orphans:
+        assert set(orphan) == {"id", "spec_files"}
+        assert orphan["id"] not in cited_contracts
+        assert orphan["spec_files"]
+
+
 def test_edges_have_known_types(graph: dict) -> None:
     types = {e["type"] for e in graph["edges"]}
     assert types <= {"cxa_seam", "substitution_carrier"}
