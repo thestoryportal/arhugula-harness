@@ -21,8 +21,9 @@ synchronous flushing under test.
 from __future__ import annotations
 
 import inspect
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from harness_as.sandbox_tier import SandboxTier
@@ -39,6 +40,7 @@ from harness_cp.workflow_driver_types import (
     WorkflowStep,
 )
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_runtime.lifecycle.hitl_tool_loop import HITLToolLoopContext, ModelToolCall
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchBindError,
     LLMDispatchPayloadShapeError,
@@ -96,7 +98,9 @@ class _AnthropicMessages:
 
     def __init__(self) -> None:
         self.last_kwargs: dict[str, Any] | None = None
-        self.canned_response = _ProviderResponse(
+        self.calls: list[dict[str, Any]] = []
+        self.responses: list[Any] = []
+        self.canned_response: Any = _ProviderResponse(
             id="msg_test_001",
             usage=_Usage(
                 input_tokens=10,
@@ -107,8 +111,11 @@ class _AnthropicMessages:
             _dump={"id": "msg_test_001", "content": [{"text": "ok"}]},
         )
 
-    async def create(self, **kwargs: Any) -> _ProviderResponse:
+    async def create(self, **kwargs: Any) -> Any:
         self.last_kwargs = kwargs
+        self.calls.append(kwargs)
+        if self.responses:
+            return self.responses.pop(0)
         return self.canned_response
 
 
@@ -120,6 +127,48 @@ class _AnthropicClient:
 @dataclass
 class _AnthropicFakeAdapter:
     client: _AnthropicClient
+
+
+@dataclass
+class _AnthropicToolTurnResponse:
+    id: str
+    content: list[dict[str, Any]]
+    stop_reason: str
+    usage: _Usage
+
+    def model_dump(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "content": self.content,
+            "stop_reason": self.stop_reason,
+        }
+
+
+@dataclass(frozen=True)
+class _FakeHITLLoopResult:
+    tool_call_id: str
+    dispatch_result: Mapping[str, Any] | None
+
+
+class _FakeHITLToolLoop:
+    def __init__(self, dispatch_results: Mapping[str, Mapping[str, Any]]) -> None:
+        self.dispatch_results = dispatch_results
+        self.calls: list[tuple[tuple[ModelToolCall, ...], HITLToolLoopContext]] = []
+
+    async def run_tool_calls(
+        self,
+        calls: Sequence[ModelToolCall],
+        context: HITLToolLoopContext,
+    ) -> tuple[_FakeHITLLoopResult, ...]:
+        call_tuple = tuple(calls)
+        self.calls.append((call_tuple, context))
+        return tuple(
+            _FakeHITLLoopResult(
+                tool_call_id=call.tool_call_id,
+                dispatch_result=self.dispatch_results.get(call.tool_call_id),
+            )
+            for call in call_tuple
+        )
 
 
 class _OpenAICompletions:
@@ -263,6 +312,93 @@ async def test_dispatch_anthropic_round_trip() -> None:
     assert adapter.client.messages.last_kwargs["messages"] == [{"role": "user", "content": "hi"}]
     assert adapter.client.messages.last_kwargs["max_tokens"] == 100
     assert result["id"] == "msg_test_001"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_anthropic_tool_use_runs_hitl_loop_and_continues() -> None:
+    """R-CXA-2 provider-turn tool_use blocks flow through the bound HITL loop."""
+    client = _AnthropicClient()
+    client.messages.responses = [
+        _AnthropicToolTurnResponse(
+            id="msg_tool",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "toolu_001",
+                    "name": "search_docs",
+                    "input": {"query": "runtime HITL"},
+                }
+            ],
+            stop_reason="tool_use",
+            usage=_Usage(input_tokens=11, output_tokens=6),
+        ),
+        _AnthropicToolTurnResponse(
+            id="msg_final",
+            content=[{"type": "text", "text": "done"}],
+            stop_reason="end_turn",
+            usage=_Usage(input_tokens=12, output_tokens=4),
+        ),
+    ]
+    adapter = _AnthropicFakeAdapter(client)
+    hitl_loop = _FakeHITLToolLoop({"toolu_001": {"ok": True}})
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        hitl_tool_loop=cast(Any, hitl_loop),
+    )
+
+    result = await dispatcher.dispatch(
+        _binding("anthropic", model="claude-test"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "search"}],
+                "tools": [
+                    {
+                        "name": "search_docs",
+                        "server": "docs-mcp",
+                        "input_schema": {"type": "object"},
+                    }
+                ],
+                "params": {"max_tokens": 100},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    assert result["id"] == "msg_final"
+    assert len(client.messages.calls) == 2
+    call, context = hitl_loop.calls[0]
+    assert call[0].tool_call_id == "toolu_001"
+    assert call[0].tool == "search_docs"
+    assert call[0].server == "docs-mcp"
+    assert call[0].arguments == {"query": "runtime HITL"}
+    assert context.workflow_id == "test-wf"
+    assert context.step_id == "step-001"
+    assert str(context.actor) == "test-runtime"
+
+    continuation_messages = client.messages.calls[1]["messages"]
+    assert continuation_messages[-2] == {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_001",
+                "name": "search_docs",
+                "input": {"query": "runtime HITL"},
+            }
+        ],
+    }
+    assert continuation_messages[-1] == {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_001",
+                "content": '{"ok": true}',
+            }
+        ],
+    }
 
 
 @pytest.mark.asyncio
