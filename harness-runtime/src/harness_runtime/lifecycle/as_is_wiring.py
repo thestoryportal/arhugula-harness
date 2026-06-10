@@ -48,6 +48,12 @@ event identity; a replay of the same `SecretFetchEvent` yields the same
 key and the IS append returns `IDEMPOTENT_NOOP` (C-IS-07 §7.1
 acceptance #4). This satisfies U-AS-27 AC #5 — "duplicate writes no-op".
 
+**Procedural-tier sidecar.** Active workflow-context AS→IS emissions receive
+the R-003 procedural-tier snapshot resolver at bootstrap composition time and
+populate `EntryPayload.procedural_tier_snapshot_ref`. Legacy/direct bootstrap
+or unit-test wiring may omit the resolver; those non-workflow contexts retain
+the prior `None`-canonical sidecar.
+
 **Module convention.** One module per unit.
 `materialize_as_is_wiring_stage` composer returns a frozen
 `AsIsWiringStage` dataclass with `slots=True`. Typed `AsIsWiringBindError`
@@ -57,13 +63,14 @@ at U-RT-27..33.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from harness_as.secret_fetch_audit import (
     SecretFetchEvent,
     compose_secret_fetch_audit_entry,
 )
-from harness_is.state_ledger_entry_schema import StateLedgerEntry
+from harness_is.state_ledger_entry_schema import Identifier, StateLedgerEntry
 from harness_is.state_ledger_write import (
     EntryPayload,
     WriteKey,
@@ -93,6 +100,9 @@ class RuntimeAsIsWiring:
     ledger_writer: LedgerWriter
     """IS state-ledger writer (U-RT-12) — durable substrate for AS audit entries."""
 
+    procedural_tier_snapshot_resolver: Callable[[], Identifier] | None = None
+    """Optional R-003 procedural-tier resolver for workflow-context emissions."""
+
     def emit_secret_fetch_audit_entry(
         self,
         event: SecretFetchEvent,
@@ -107,15 +117,17 @@ class RuntimeAsIsWiring:
         re-computes it per C-IS-07 §7.1 acceptance #8.
         """
         composed = compose_secret_fetch_audit_entry(event, prior_entry)
-        # R-003: `procedural_tier_snapshot_ref` is left `None`-canonical here
-        # (IS spec v1.3 §C-IS-05 §5.1). Secret-fetch audit entries fire at
-        # bootstrap / provider-construction — outside an active workflow
-        # context — so the D-derivative sidecar does not apply.
+        procedural_tier_snapshot_ref = (
+            self.procedural_tier_snapshot_resolver()
+            if self.procedural_tier_snapshot_resolver is not None
+            else None
+        )
         payload = EntryPayload(
             action_id=composed.action_id,
             idempotency_key=composed.idempotency_key,
             actor=composed.actor,
             timestamp=composed.timestamp,
+            procedural_tier_snapshot_ref=procedural_tier_snapshot_ref,
         )
         write_key = WriteKey(
             thread_id=event.thread_id,
@@ -140,6 +152,7 @@ class AsIsWiringStage:
 def materialize_as_is_wiring_stage(
     config: RuntimeConfig,
     ledger_writer: LedgerWriter,
+    procedural_tier_snapshot_resolver: Callable[[], Identifier] | None = None,
 ) -> AsIsWiringStage:
     """Build the stage 6 AS → IS wiring registry.
 
@@ -153,5 +166,8 @@ def materialize_as_is_wiring_stage(
     """
     _ = config
     return AsIsWiringStage(
-        wiring=RuntimeAsIsWiring(ledger_writer=ledger_writer),
+        wiring=RuntimeAsIsWiring(
+            ledger_writer=ledger_writer,
+            procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
+        ),
     )

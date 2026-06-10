@@ -7,7 +7,7 @@ terminal exporter manifests imported; all 24 phase-2-runtime edges wired
 Composer call order:
 1. `materialize_cxa_terminal_imports_stage` — realizes the 5 manifest imports
    (side-effect import; Pattern P1 typed-seam binding).
-2. `materialize_as_is_wiring_stage(config, ledger_writer)` — AS→IS (1 edge).
+2. `materialize_as_is_wiring_stage(config, ledger_writer, resolver)` — AS→IS (1 edge).
 3. CP→IS wiring — materialized earlier in stage 3b when present; stage 6
    reuses it or binds it as a compatibility fallback.
 4. `materialize_od_is_wiring_stage(config, audit_writer, od_manifest)` — OD→IS
@@ -69,17 +69,18 @@ async def execute(
     ctx.cxa_stages["cxa_terminal_imports"] = materialize_cxa_terminal_imports_stage(
         config,
     )
-    ctx.cxa_stages["as_is_wiring"] = materialize_as_is_wiring_stage(
-        config,
-        ctx.ledger_writer,
-    )
-    # CP spec v1.30 §1.4: the procedural-tier-snapshot resolver-closure now
-    # binds at stage 3b for CP binding-time producer sites. Stage 6 preserves
+    # CP spec v1.30 §1.4 / R-CXA-1: the procedural-tier-snapshot resolver
+    # binds at stage 5 for workflow-context producer sites. Stage 6 preserves
     # compatibility for direct stage invocation and older partial bootstraps.
     if ctx.procedural_tier_snapshot_resolver is None:
         ctx.procedural_tier_snapshot_resolver = make_procedural_tier_snapshot_resolver(
             cast("HarnessContext", ctx),
         )
+    ctx.cxa_stages["as_is_wiring"] = materialize_as_is_wiring_stage(
+        config,
+        ctx.ledger_writer,
+        ctx.procedural_tier_snapshot_resolver,
+    )
     if "cp_is_wiring" not in ctx.cxa_stages:
         ctx.cxa_stages["cp_is_wiring"] = materialize_cp_is_wiring_stage(
             config,

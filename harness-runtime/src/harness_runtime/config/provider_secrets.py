@@ -50,6 +50,7 @@ from harness_as.secret_allowlist import AllowlistDecision, check_secret_allowlis
 from harness_as.secret_fail_class import SecretFailClass
 from harness_as.secret_fetch import SecretRef, SecretScope
 from harness_as.tool_contract import ToolContract
+from keyring.errors import KeyringError
 
 from harness_runtime.types import ProviderSecretBackend, ProviderSecretsConfig
 
@@ -207,7 +208,15 @@ class KeyringSecretResolver:
 
         Names without an env-var mapping fall through to keyring-only.
         """
-        value = keyring.get_password(self.keyring_service, name)
+        try:
+            value = keyring.get_password(self.keyring_service, name)
+        except KeyringError as exc:
+            env_var = _KEYRING_TO_ENV_VAR.get(name)
+            if self.allow_env_fallback and env_var is not None:
+                value = os.environ.get(env_var)
+                if value is not None:
+                    return value
+            raise SecretResolutionError(SecretFailClass.SECRET_UNAVAILABLE, name) from exc
         if value is not None:
             return value
         env_var = _KEYRING_TO_ENV_VAR.get(name)

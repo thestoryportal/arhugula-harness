@@ -27,7 +27,7 @@ def data() -> dict:
 
 def test_canonical_integers(data):
     d = sl.derive(data)
-    assert d["retired"] == 53, "post-batch-55 bounded-residual back-flow RETIRED"
+    assert d["retired"] == 54, "post-batch-56 CXA-1 back-flow RETIRED"
     assert d["pipeline_advanced"] == 54
     assert d["total_canonical"] == 54
     assert d["non_canonical"] == 1  # CP-24
@@ -36,10 +36,9 @@ def test_canonical_integers(data):
 def test_bucket_breakdown(data):
     d = sl.derive(data)
     assert d["by_disposition"] == {
-        "SUBSTANTIVE_RETIRED": 42,
+        "SUBSTANTIVE_RETIRED": 43,
         "AUTHORING_ONLY": 8,
         "BOUNDED_RESIDUAL": 3,
-        "PARTIAL": 1,
     }
 
 
@@ -57,8 +56,8 @@ def test_axis_rowcount(data):
 
 def test_axis_retired_contribution(data):
     d = sl.derive(data)
-    assert d["axis_retired"] == {"IS": 9, "AS": 11, "CP": 21, "OD": 8, "CXA": 4}
-    assert sum(d["axis_retired"].values()) == 53
+    assert d["axis_retired"] == {"IS": 9, "AS": 11, "CP": 21, "OD": 8, "CXA": 5}
+    assert sum(d["axis_retired"].values()) == 54
 
 
 # ── label ≠ count-membership (the rule the R-700 close turned on) ───────────────────────
@@ -77,14 +76,14 @@ def test_retired_as_label_does_not_retally(data):
     }
 
 
-def test_od6_in_signoff_list_yet_counted(data):
+def test_bounded_residual_rows_are_counted(data):
     # The tell from the R-700 close: OD-6 carries a terminal disposition AND is counted in
-    # RETIRED — proving "appears with a sign-off" is orthogonal to "counted in RETIRED".
+    # RETIRED — proving bounded-residual rows are terminal count-members.
     rows = {r["id"]: r for r in data["substitutions"]}
     assert rows["H_T-OD-6"]["disposition"] == "BOUNDED_RESIDUAL"  # counted
-    cxa1_counted = rows["H_T-CXA-1"]["disposition"] in sl.RETIRED_DISPOSITIONS
     od6_counted = rows["H_T-OD-6"]["disposition"] in sl.RETIRED_DISPOSITIONS
-    assert od6_counted and not cxa1_counted
+    cxa2_counted = rows["H_T-CXA-2"]["disposition"] in sl.RETIRED_DISPOSITIONS
+    assert od6_counted and cxa2_counted
 
 
 def test_batch_52_backflow_rows_are_retired(data):
@@ -117,6 +116,13 @@ def test_batch_55_backflow_rows_are_retired(data):
     assert "sign_off_label" not in rows["H_T-CXA-2"]
 
 
+def test_batch_56_backflow_rows_are_retired(data):
+    rows = {r["id"]: r for r in data["substitutions"]}
+    assert rows["H_T-CXA-1"]["disposition"] == "SUBSTANTIVE_RETIRED"
+    assert rows["H_T-CXA-1"]["batch"] == "batch-56"
+    assert "sign_off_label" not in rows["H_T-CXA-1"]
+
+
 # ── The live ledger validates clean ────────────────────────────────────────────────────
 
 
@@ -128,13 +134,13 @@ def test_live_ledger_passes_validation(data):
 
 
 def test_silent_disposition_flip_is_caught(data):
-    # CXA-1 PARTIAL → SUBSTANTIVE_RETIRED: RETIRED 53→54, pipeline-advanced unchanged at 54,
+    # CXA-1 SUBSTANTIVE_RETIRED → PARTIAL: RETIRED 54→53, pipeline-advanced unchanged at 54,
     # Axis row counts and bucket sum still pass — only the snapshot pin catches it.
     # pin catches it. This is the exact class the original 48/54 bug lived in.
     bad = copy.deepcopy(data)
     for r in bad["substitutions"]:
         if r["id"] == "H_T-CXA-1":
-            r["disposition"] = "SUBSTANTIVE_RETIRED"
+            r["disposition"] = "PARTIAL"
     violations = sl.validate(bad)
     assert any("snapshot" in v for v in violations), violations
 
@@ -142,7 +148,7 @@ def test_silent_disposition_flip_is_caught(data):
 def test_impossible_pipeline_pair_is_caught(data):
     # Force an impossible pair: alter the snapshot without changing the rows.
     bad = copy.deepcopy(data)
-    bad["snapshot"]["retired"] = 50  # claim 50 while rows derive 53
+    bad["snapshot"]["retired"] = 50  # claim 50 while rows derive 54
     violations = sl.validate(bad)
     assert any("snapshot.retired" in v for v in violations), violations
 

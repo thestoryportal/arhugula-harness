@@ -164,6 +164,17 @@ async def execute(
             "requires it per spec §14.8.3 v1.11 binding pin)"
         )
 
+    # R-003 / R-CXA-1 producer-site lift — bind the procedural-tier resolver
+    # before TOOL_STEP dispatcher construction so workflow-context secret-fetch
+    # AS→IS audit writes carry `procedural_tier_snapshot_ref`. The resolver
+    # needs only ctx.skills (stage 2) + ctx.routing_manifest (stage 3b), both
+    # available before LOOP_INIT reaches dispatcher composition.
+    if ctx.procedural_tier_snapshot_resolver is None:
+        ctx.procedural_tier_snapshot_resolver = make_procedural_tier_snapshot_resolver(
+            cast(HarnessContext, ctx),
+        )
+    procedural_tier_snapshot_resolver = ctx.procedural_tier_snapshot_resolver
+
     # The ask-user surface and TOOL_STEP dispatcher are stage-5 siblings, but
     # R-CXA-2's provider-turn HITL loop needs both before the frozen LLM
     # dispatcher is constructed.
@@ -263,20 +274,6 @@ async def execute(
     ctx.pause_resume_protocol = await materialize_pause_resume_protocol_stage(config, ctx)
     ctx.webhook_delivery_composer = await materialize_webhook_delivery_composer_stage(config, ctx)
     ctx.resume_context_holder = ResumeContextHolder()
-
-    # R-003 producer-site lift — build the procedural-tier resolver closure
-    # HERE at stage 5 (LOOP_INIT) and thread it into the dispatcher/composer
-    # ctors below, so their 8b / 8b-HITL F2-write `EntryPayload(...)` can
-    # populate `procedural_tier_snapshot_ref` per IS spec v1.3 §C-IS-05 §5.1
-    # (workflow-context emissions MUST populate the sidecar). The factory only
-    # needs `ctx.skills` (stage 2) + `ctx.routing_manifest` (stage 3b), both
-    # populated by stage 5 — so building here is safe even though the
-    # `cp_is_wiring` sibling builds an equivalent closure at stage 6
-    # (CXA_WIRING). Two closures over the same `ctx` are observationally
-    # equivalent per U-RT-112 AC #8 direct-compute discipline.
-    procedural_tier_snapshot_resolver = make_procedural_tier_snapshot_resolver(
-        cast(HarnessContext, ctx),
-    )
 
     hitl_inference = RuntimeHITLGateComposer(
         inner=bare_dispatcher,
