@@ -1391,7 +1391,7 @@ R-600-pattern-bake-in-sweep:
   verification: { shape: grep, must_pass: ["all `[[pattern-name]]` cardinality ≥2 entries identified", "each promotion candidate evaluated against the §7.4.7 + §7.5 catalogues"] }   # must_pass[1] refreshed at cadence-2: pre-v1.14 text said "§7.4.7" only; §7.5 now exists and is where process-disciplines land
   close_shape: { type: substrate-amendment, artifact: "Workflow doc revision absorbing N patterns", cascade: [] }
   next_pointer: null
-  resume: .harness/R-600-pattern-bake-in-sweep.md   # ACTIVE-SURVEYED (cadence-2) 2026-06-02 HEAD 2e60741: both must_pass met. Cadence-1's gating dep R-600-workflow-v1-14-amendment is now RESOLVED (v1.14 §7.5 absorbed cadence-1's strong set as PD-1..PD-4) → the cadence-1 cycle is DISCHARGED. Cadence-2 surfaced ONE new §7.5 PD-5 candidate (r-cxa-seam-wiring-is-producer-discovery, cardinality-QUALIFIED — same-session multi-seam + likely U-RT-111 double-count with PD-4; needs a 2nd genuinely-independent arc) + a card-1 grounding-first family. ZERO new §7.4.7 owed. PD-5 promotion owed to a FUTURE v1.15/v1.16 amendment (operator-discretion, NOT yet opened). A fresh session reads the survey before that arc; does NOT re-run the sweep until next ~10-PR cadence.
+  resume: .harness/R-600-pattern-bake-in-sweep.md   # ACTIVE-SURVEYED (cadence-3) 2026-06-10 HEAD a7f7d1f4: both must_pass met. Cadence-2's PD-5 candidate matured via independent grounding-first arcs and was promoted at workflow v1.15 as PD-5 grounding-first producer/slice discovery. ZERO new §7.4.7 owed. Next run only after the cadence trips again (~10 PRs) or a concrete new candidate reaches independent instance-cardinality >=2.
   notes: >
     Cadence: every ~10 PRs or operator-discretion. NOT every session. FIRST run 2026-06-01
     (HEAD d7574b3). Survey at .harness/R-600-pattern-bake-in-sweep.md. Result: ZERO new §7.4.7.2
@@ -1414,8 +1414,14 @@ R-600-pattern-bake-in-sweep:
     cite-under-PD-2/3 vs head of the consolidating card-1 grounding-first family: closeable-slice-honest-close,
     wrong-version-read-delta-only-baseline, porting-old-wip-superseded, verify-observation-layer). ZERO new
     §7.4.7 owed (4th surfacing). must_pass[1] text refreshed (§7.4.7 → §7.4.7 + §7.5). PD-5 promotion is a
-    FUTURE v1.15/v1.16 design-phase arc (spec-writer + advisor; operator-discretion; NOT opened by this sweep).
+    FUTURE v1.15/v1.16 design-phase arc (spec-writer + advisor; operator-discretion; discharged at CADENCE-3 below).
     Memory-hygiene dups → FILED as R-600-memory-hygiene-normalization (below) and RESOLVED same arc (2026-06-02).
+    CADENCE-3 (2026-06-10, HEAD a7f7d1f4, post-PR-466; survey "Cadence-3 run" section): cadence trigger met
+    (248 commits since cadence-2; 199 memory files / 713 refs / 192 tokens / 124 at card>=2). The cadence-2 PD-5
+    candidate matured as a broader grounding-first producer/slice discovery discipline: R-CXA seam producer discovery,
+    R-830 backend-slice honesty, R-410/R-411/R-412 infra feasibility grounding, and post-Phase-8 roadmap re-grounding
+    provide independent instances. Workflow v1.15 authored PD-5; clearance marker filed; CLAUDE pointers updated.
+    ZERO new §7.4.7 owed. R-600 remains recurring, but the v1.15 promotion debt is discharged.
 
 R-600-memory-hygiene-normalization:
   title: Normalize duplicate/case-split [[..]] wiki-link tokens in the auto-memory store

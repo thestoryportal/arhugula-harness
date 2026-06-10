@@ -1,8 +1,8 @@
 # R-600-pattern-bake-in-sweep — survey artifact
 
 **Entry:** `R-600-pattern-bake-in-sweep` (roadmap §5.6) — *Sweep workspace memory for pattern candidates ready for workflow-doc promotion.*
-**Posture:** mode-agnostic. **Sweep run:** 2026-06-01 (HEAD `d7574b3`, post-PR-195). **Cadence:** ~every 10 PRs (first execution; entry was ACTIVE-unstarted).
-**Status after this run:** **ACTIVE-SURVEYED** — survey complete (both `must_pass` met); absorption into the workflow doc is owed to the **deferred** `R-600-workflow-v1-14-amendment` (PROPOSED, design-phase, operator-discretion timing per `[[workflow-v1-14-deferred-2026-05-29]]`). The sweep does **not** author design-substrate; it produces the candidate evidence base for the next v1.14/v1.15 amendment arc.
+**Posture:** mode-agnostic recurring sweep; design-substrate amendment only when a candidate clears the §7.5 gate. **Cadence:** ~every 10 PRs or operator-discretion.
+**Latest status:** **ACTIVE-SURVEYED (cadence-3, 2026-06-10)** — cadence-3 survey complete (both `must_pass` met); cadence-2's PD-5 candidate was promoted in `design-substrate/Project_Workflow_v1_15.md` as **PD-5 grounding-first producer/slice discovery** with clearance marker `.harness/clearance/Project_Workflow-v1_15-cleared-2026-06-10.md`. R-600 remains a recurring lane; next run only after the cadence trips again or a concrete new candidate reaches independent instance-cardinality >=2.
 
 **Method.** Read-only enumeration of the auto-memory store at `/Users/robertrhu/.claude/projects/-Users-robertrhu-Projects-arhugula-v2/memory/` (152 files): grep raw `[[wiki-link]]` tokens across all file bodies; count per-token cardinality (total refs + distinct referencing files). 569 total refs / 155 distinct tokens → **104 at cardinality ≥2**, 51 at cardinality 1.
 
@@ -186,3 +186,47 @@ Run against the §7.5.1 inclusion gate (all three must hold; verified per-candid
 - **Entry status:** **ACTIVE-SURVEYED (cadence-2).** Cadence-1's gating dependency (`R-600-workflow-v1-14-amendment`) is RESOLVED, so the *prior* cycle is fully discharged. The cadence-2 candidate (PD-5) is owed to a **future v1.15/v1.16 workflow-doc amendment** — a design-phase, operator-discretion, spec-writer + advisor arc (NOT yet opened; needs a 2nd genuinely-independent producer-discovery arc to clear the §7.5.1 cardinality gate).
 - **No design-substrate edit, no clearance marker** (mode-agnostic process-substrate only). The roadmap §5.6 entry resume note is reconciled (stale "owed to DEFERRED amendment" → cadence-2 state) in the same PR.
 - **Next cadence run:** ~10 PRs out, or when a 2nd producer-discovery arc (or any grounding-first-family member) crosses instance-cardinality 2.
+
+---
+---
+
+# Cadence-3 run — 2026-06-10 (HEAD `a7f7d1f4`, post-PR-466)
+
+**Cadence trigger.** 248 commits merged since the cadence-2 sweep (`2e60741` → `a7f7d1f4`) — well past the ~10-PR interval. The merged interval includes the R-411/R-412 host/runtime and managed sandbox work, R-810/R-820/R-830 managed integration arcs, R-CXA-1/R-CXA-2 implementation/back-flow, R-IF-112 overlay closeout, dashboard currentness discipline, and the post-#447 terminating refresh.
+
+**Method.** Read-only `[[wiki-link]]` enumeration of the auto-memory store at `/Users/robertrhu/.claude/projects/-Users-robertrhu-Projects-arhugula-v2/memory/` (**199 files**): **713 total refs / 192 distinct tokens → 124 at cardinality >=2**. As in cadence-1 and cadence-2, these are citation-counts, not promotion-cardinality; promotion decisions below use per-candidate independence and home checks.
+
+## C3-§1 — `must_pass` #1: cardinality>=2 frontier identified
+
+Top unchanged already-homed signals remain dominant: `advisor-before-substantive-work-for-cross-axis-blockers` (87), `halt-route-split-ac-pattern` (41), and `verification-shape-sharpened-grep-vs-e2e` (40). The frontier change relevant to workflow promotion is the grounding-first family:
+
+| pattern | refs / files | cadence-2 disposition | cadence-3 disposition |
+|---|---:|---|---|
+| `r-cxa-seam-wiring-is-producer-discovery` | 9 / 8 | PD-5 candidate, parked for independence/home decision | Promoted as part of PD-5 grounding-first producer/slice discovery |
+| `grounding-reveals-claude-closeable-slice-close-honestly` | 8 / 8 | card-1 family member below frontier | Promoted into the same PD-5 decision tree |
+| `wrong-version-read-delta-only-baseline` | 3 / 3 | card-1 family member below frontier | Cite-under-PD-5; not a standalone PD |
+| `post-phase-8-forward-tracking` | 5 / 4 | not a cadence-2 PD candidate | Cite-under-PD-5 for stale-authored-row grounding |
+
+Other high-salience cadence-3 candidates were evaluated but not promoted:
+
+- `hooks-codex-pilots-decorrelation-validated` / `codex-out-of-family-reviewer`: already have a workspace home in CLAUDE.md §13.1 and Codex review tooling; cite-don't-relocate.
+- `promptfoo-no-api-skill-eval-loop` / `eval-harness-refused-as-governance-gate`: dev-tool/eval-governance surfaces, not workflow §7.5.
+- `gitignored-work-belongs-in-main-not-reapable-worktree` / `bmad-runtime-gitignore-config-gotchas`: operational worktree/config hygiene; not broad enough for workflow-grammar promotion this cadence.
+
+## C3-§2 — `must_pass` #2: candidates evaluated against §7.4.7 and §7.5
+
+**§7.4.7:** ZERO new stale-carry-text disposition species surfaced. The cadence-1 and cadence-2 finding remains corroborated.
+
+**§7.5:** The cadence-2 PD-5 candidate now clears the v1.14 §7.5.1 gate when framed as **grounding-first producer/slice discovery** rather than seam wiring alone:
+
+1. **Instance-cardinality >=2 of independent arcs — PASS.** R-CXA seam producer discovery prevented hollow production-caller wiring; R-830 separated a declared backend slice from live-cloud gates; R-410/R-411/R-412 grounded sandbox/runtime provider feasibility before closure claims; post-Phase-8 roadmap/status refreshes repeatedly re-derived live closeable work from HEAD rather than trusting stale authored rows.
+2. **Genuinely §7.5-shaped — PASS.** The rule is sequencing/discovery/verification: ground first, then classify the lever as already-built, buildable-slice, back-flow/defer, or exact live gate.
+3. **No canonical home elsewhere — PASS with cite-don't-relocate.** PD-2 and PD-3 are adjacent but do not cover the full pre-authoring decision tree. CLAUDE.md §12 prevents parking; PD-5 prevents overclaiming and manufactured work.
+
+**Promotion applied this arc:** `design-substrate/Project_Workflow_v1_15.md` adds **PD-5 grounding-first producer/slice discovery**. Clearance marker filed at `.harness/clearance/Project_Workflow-v1_15-cleared-2026-06-10.md`. Root `CLAUDE.md` and `.harness/claude-artifact-pointers.md` now point to workflow head v1.15.
+
+## C3-§3 — Closure disposition (cadence-3)
+
+- **`must_pass` #1** (cardinality>=2 frontier identified): ✅ C3-§1.
+- **`must_pass` #2** (candidates evaluated against §7.4.7 + §7.5): ✅ C3-§2 — result: ZERO new §7.4.7 owed; one §7.5 PD-5 promoted at workflow v1.15.
+- **Entry status:** **ACTIVE-SURVEYED (cadence-3)**. Cadence-2's PD-5 promotion debt is discharged. R-600 remains an ACTIVE recurring lane; next run only after the cadence trips again (~10 PRs) or a concrete new candidate reaches independent instance-cardinality >=2.

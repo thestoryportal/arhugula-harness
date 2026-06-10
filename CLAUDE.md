@@ -43,11 +43,11 @@ All canonical design artifacts live in `design-substrate/`; root `CLAUDE.md` is 
 
 Citation discipline remains unchanged: when this file cites a canonical artifact, consult the design-phase substrate copy and preserve byte-exact citation discipline per `Project_Workflow_v1_8.md` §7.4.2.
 
-**Delta-baseline §-cite convention.** `Project_Workflow` is a delta chain — `Project_Workflow_v1_8.md` is the full baseline; v1.9–v1.14 are deltas that preserve prior bodies verbatim (current head v1.14, recorded at this file's §2.1). A `§`-cite therefore names the version of **last substantive definition** of that section, which is often older than the head: §7.4.2 byte-exact-citation discipline + §2.7.6 back-flow routing live at v1.8; §7.4.7.3 stale-carry audit at v1.13. These older-version §-cites are **intentional and resolve byte-exact — not stale** (a cite to `v1.14 §7.4.2` would in fact *fail* byte-exact, since §7.4.2 is not re-tabled in the v1.14 delta).
+**Delta-baseline §-cite convention.** `Project_Workflow` is a delta chain — `Project_Workflow_v1_8.md` is the full baseline; v1.9–v1.15 are deltas that preserve prior bodies verbatim (current head v1.15, recorded at this file's §2.1). A `§`-cite therefore names the version of **last substantive definition** of that section, which is often older than the head: §7.4.2 byte-exact-citation discipline + §2.7.6 back-flow routing live at v1.8; §7.4.7.3 stale-carry audit at v1.13; §7.5.2 PD-5 lives at v1.15. These older-version §-cites are **intentional and resolve byte-exact — not stale** (a cite to `v1.15 §7.4.2` would in fact *fail* byte-exact, since §7.4.2 is not re-tabled in the v1.15 delta).
 
 ### 2.1 Governance + Execution Discipline
 
-Current governance anchors: `Project_Workflow_v1_14.md`, `Phase_7_Meta_Architecture_v1.md`, `Phase_7_Kickoff_Prompt.md`, `Target_Stack_Commitment_v1.md`, `Plan_Executability_Audit_v1.md`, and `Canonical_Substrate_Inventory.md`. Full roles and lineage are indexed at `claude-artifact-pointers.md` §2.1 in `.harness`.
+Current governance anchors: `Project_Workflow_v1_15.md`, `Phase_7_Meta_Architecture_v1.md`, `Phase_7_Kickoff_Prompt.md`, `Target_Stack_Commitment_v1.md`, `Plan_Executability_Audit_v1.md`, and `Canonical_Substrate_Inventory.md`. Full roles and lineage are indexed at `claude-artifact-pointers.md` §2.1 in `.harness`.
 
 ### 2.2 ADR + ADD + PRD
 
@@ -314,7 +314,7 @@ The X-AL-3 silent-absorption rule (§4.4) is the hard boundary: Phase 7 sessions
 | PRD | v1.1 | §2.2 |
 | Per-axis specs | All P5-CK cleared at v1+ | §2.3 |
 | Per-axis plans | All P6-CK cleared at v2+ | §2.4 |
-| Workflow doc | v1.14 (active discipline including §7.4 fidelity-grammar + §7.5 process-discipline catalogue) | §2.1 |
+| Workflow doc | v1.15 (active discipline including §7.4 fidelity-grammar + §7.5 process-discipline catalogue; PD-5 grounding-first producer/slice discovery) | §2.1 |
 | Six topology patterns | 6-class enum locked at ADR-D4 v1.1 | §1.1 row CP |
 | Permanent tensions | T-perm-1 (C4↔C10), T-perm-2 (C2↔C3), T-perm-3 (C1↔C9) resolved at canonical artifacts | §10.7 council voice-roster |
 
@@ -327,7 +327,7 @@ The X-AL-3 silent-absorption rule (§4.4) is the hard boundary: Phase 7 sessions
 | In-flight per-axis spec revisions | Open per filed fork docs at `.harness/class_*_fork_*.md` | Operator ratification → spec-writer apply pass per §4.3 |
 | In-flight per-axis plan revisions | Open per filed fork docs | implementation-planner revision absorption per §4.3 |
 | CXA forward-tracking | Per `Cross_Axis_Composition_Document_v2_17.md` §0.4 marker CLOSED 2026-05-31 (6 PENDING → 6 ABSORBED at v2.17 §2.3.2 rows 38-43); future-PENDING marker now EMPTY | Per-CP-unit landing + CXA narrow-scope revision arcs (closed at v2.17 for the U-CP-74..U-CP-79 cohort) |
-| Operating-principles refinements | Workflow v1.14 §7.4 + §7.5 lineage actively extends | Workflow doc revision per §7 of Workflow doc |
+| Operating-principles refinements | Workflow v1.15 §7.4 + §7.5 lineage actively extends | Workflow doc revision per §7 of Workflow doc |
 
 Anything not committed at §10.2 and not in §10.3 may require fresh design-phase work — surface to operator before authoring against absence.
 
