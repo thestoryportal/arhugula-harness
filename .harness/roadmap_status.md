@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `c28613a1f0a3` |
-| `last_refreshed` | 2026-06-10T01:43:45-06:00 |
-| `git_head` | `5eb71c18` (main) — PR #473 documentation hygiene merged. |
+| `workspace_state_hash` | `e13d42d7874c` |
+| `last_refreshed` | 2026-06-10T02:19:30-06:00 |
+| `git_head` | `d4b6b4e3` (main) — overlay-check ignored-artifact fix merged locally. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 47 |
 
@@ -28,8 +28,8 @@
 
 **Ordered frontier.**
 
-- Ship this post-#473 terminating roadmap/status/dashboard refresh. It pins the documentation hygiene archive and clears the dashboard drift after #473 merged.
-- After this refresh merges, no additional non-recurring substantive candidate is currently selected. The active recurring lanes remain `R-600-pattern-bake-in-sweep`, `R-600-codex-out-of-family-review`, and `R-IF-roadmap-refresh`; run them only when the cadence or a concrete review target is present.
+- Complete this post-overlay-fix roadmap/status/dashboard refresh. It pins the overlay-check ignored-artifact fix and clears the dashboard drift after `d4b6b4e3`.
+- HIL gate: discuss and select the release-candidate deployment-readiness arc scope before opening new implementation. The active recurring lanes remain `R-600-pattern-bake-in-sweep`, `R-600-codex-out-of-family-review`, and `R-IF-roadmap-refresh`; run them only when the cadence or a concrete review target is present.
 
 **Resolved by PR #456.** `R-CXA-2` is batch-55 `RETIRED-AS-BOUNDED-RESIDUAL`: PR #452 bound the HITL/recovery producer loops at stage 5, PR #454 wired Anthropic provider-turn HITL continuation, and the remaining durable/journaled recovery-loop evidence is explicitly recorded as post-MVP hardening with a re-open trigger for a real event-sourced/reconciler/WAL recovery loop.
 
@@ -51,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| local merge (`d4b6b4e3`) | 2026-06-10 | **Overlay-check ignored-artifact fix merged.** `overlay-check` now ignores stale gitignored `tools/semantic_overlay/overlay.json` artifacts while still failing on stale tracked snapshots; the `justfile` wording now matches the R-IF-112 README. |
 | PR #473 (`5eb71c18`) | 2026-06-10 | **Documentation hygiene merged.** Historical root Markdown review/tension/skill artifacts moved under `.harness/archive/root-historical/`, live references retargeted, and `.harness`/`design-substrate` retention READMEs added. |
 | PR #471 (`c8da9292`) | 2026-06-10 | **Substitution-accounting guidance clarified.** `CLAUDE.md` now distinguishes the frozen Phase-8 close snapshot from the live substitution ledger derived from `.harness/substitutions.yaml`, avoiding stale inline live-count claims. |
 | PR #469 (`6632ef5e`) | 2026-06-10 | **R-CXA-2 post-MVP brief pseudocode corrected.** Preserved the one useful root-checkout dirty change: the HITL loop pseudocode now names `RuntimeHITLGateComposer.open_gate(...)` instead of the stale dispatch-shaped placeholder. Stale untracked R-CXA planning/audit leftovers were not landed. |
 | PR #467 (`b08ddbcb`) | 2026-06-10 | **R-600 cadence-3 workflow v1.15 merged.** The memory sweep found the cadence-2 producer-discovery candidate matured into independent grounding-first producer/slice evidence; `Project_Workflow_v1_15.md` adds PD-5 and `.harness/clearance/Project_Workflow-v1_15-cleared-2026-06-10.md` clears it. |
-| PR #447 (`9cf968d2`) | 2026-06-10 | **BMad runtime config restore merged.** `_bmad/bmm/config.yaml` is restored on main so bmad-* skills can resolve `{user_name}`, language, project identity, and artifact roots natively at activation. Config-only; no design-substrate or runtime code touched. |
 
 ---
 
@@ -103,6 +103,7 @@ The bucket rows below sum to **54** under the batch-56 live ledger (RETIRED 54).
 
 | Date | Source | Resolution |
 |---|---|---|
+| 2026-06-10 | **Overlay-check ignored-artifact fix merged locally at `d4b6b4e3`; post-merge refresh.** | Hash `c28613a1f0a3` → `e13d42d7874c` (state at `d4b6b4e3`, open PRs unavailable/empty, fork count 47, batch-56). `overlay-check` now ignores stale gitignored `tools/semantic_overlay/overlay.json` artifacts while preserving the hard gate for stale tracked snapshots. Next selector moves to an HIL release-candidate deployment-readiness scope discussion before opening new implementation. |
 | 2026-06-10 | **Post-#447 terminating refresh — PR #447 BMad runtime config restore merged at `9cf968d2`; §12.2 owed follow-on.** | Hash `48f9537038cf` → `f9c6f1ebe73d` (state at `9cf968d2`, open PRs empty, fork count 47, batch-56). `_bmad/bmm/config.yaml` is restored on main; no roadmap item status changes beyond clearing the last in-flight PR. Next selector remains recurring R-600/R-IF lanes unless the operator selects a new non-recurring frontier. |
 | 2026-06-09 | **PR #440 supersession / post-#464 open-PR refresh branch opened from `d24dcf57`.** | Hash `78617c29740a` → `48f9537038cf` (state at `d24dcf57`, open PRs #447 only, fork count 47, batch-56). #440 was closed as superseded: it was conflicting, predated the later R-CXA-2 implementation/back-flow sequence, and a current-main comparison showed it would remove later R-CXA-2 implementation, tests, batch records, and dashboard/overlay updates if merged. Next selector remains recurring R-600/R-IF lanes unless the operator selects a new non-recurring frontier. |
 | 2026-06-09 | **Post-#463 terminating refresh — PR #463 R-IF-112 semantic overlay closeout merged at `925f021a`; §12.2 owed follow-on.** | Hash `ebb6d51193e6` → `78617c29740a` (state at `925f021a`, open PRs #440/#447, fork count 47, batch-56). R-IF-112 is now RESOLVED: `tools/semantic_overlay` derives the design-substrate contract keyspace, source cite layer, CXA seam endpoint graph, and substitution join; CI gates hard CXA/stale-artifact drift and reports advisory code/contract/substitution orphan classes. Next selector moves to this terminating refresh, then recurring R-600/R-IF lanes unless the operator selects a new non-recurring frontier. |
