@@ -48,6 +48,7 @@ from harness_cp.per_server_trust_types import (
 from harness_cp.workflow_driver_types import WorkflowStep
 
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+from harness_runtime.lifecycle.as_is_wiring import RuntimeAsIsWiring
 from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
 from harness_runtime.lifecycle.retry_breaker_tool import RetryBreakerToolDispatcher
 from harness_runtime.lifecycle.runtime_tool_dispatcher import (
@@ -145,6 +146,9 @@ async def materialize_runtime_tool_dispatcher_stage(
     assert ctx.retry_breaker is not None, (
         "stage 3b (U-RT-24) must populate ctx.retry_breaker before stage 5"
     )
+    assert ctx.ledger_writer is not None, (
+        "stage 1 IS must populate ctx.ledger_writer before stage 5 TOOL_STEP dispatch"
+    )
 
     trust_policy = config.trust_policy if config.trust_policy is not None else DEFAULT_TRUST_POLICY
     sandbox_decision_policy = (
@@ -202,6 +206,11 @@ async def materialize_runtime_tool_dispatcher_stage(
         cost_chain=ctx.cost_chain,
         audit_writer=ctx.audit_writer,
         rate_table=rate_table,
+        provider_secret_resolver=ctx.keyring_resolver,
+        secret_fetch_audit_emitter=RuntimeAsIsWiring(
+            ctx.ledger_writer
+        ).emit_secret_fetch_audit_entry,
+        secret_fetch_backend=config.provider_secrets.backend.value,
     )
 
     # --- Step 4: RetryBreakerToolDispatcher (C-RT-21 §14.11) -----------------
