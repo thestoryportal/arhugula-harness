@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `09ed31f7a8dd` |
-| `last_refreshed` | 2026-06-10T15:27:16-06:00 |
-| `git_head` | `064064b6` (main) — R-830 S3 live e2e passing after operator SSO re-auth; last unexercised managed surface closed. |
+| `workspace_state_hash` | `9f1422b9ce41` |
+| `last_refreshed` | 2026-06-10T15:37:13-06:00 |
+| `git_head` | `a6d2f318` (main) — R-420 self-hosted daemon e2e exercised + passing; every RC surface now exercised. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 47 |
 
@@ -28,8 +28,8 @@
 
 **Ordered frontier.**
 
-- The release-candidate deployment-readiness arc is **COMPLETE** (2026-06-10) — verdict **GO**. See `.harness/release-candidate-deployment-readiness-report-2026-06-10.md`. **Every functional surface across all three tiers is proven live** with zero harness code changes: provider-free gate; self-hosted telemetry + multitenant + gVisor sandbox (R-411); managed-cloud E2B (probe + full-VM), GCP Secret Manager, Neon, Files API, Managed Agents, OTLP→Cloud Trace (R-421/R-810/R-820), and S3 (R-830). Phase-D advisory audit at `.harness/overlay-advisory-traceability-audit-2026-06-10.md` (buckets stable, none escalated).
-- One item remains unexercised: the **R-420 self-hosted daemon e2e** needs operator-provisioned `prompts/` + `routing_manifest/` dirs (a Claude-closeable scaffolding slice if pursued; its sibling self-hosted paths already pass). The 2 managed-cloud IAM grants are dispositioned (token-creator revoked, run.invoker retained on the collector). Optional-polish menu (runbook §8) is the post-RC forward surface.
+- The release-candidate deployment-readiness arc is **COMPLETE** (2026-06-10) — verdict **GO**, and **every RC surface is now exercised** (nothing left unexercised). See `.harness/release-candidate-deployment-readiness-report-2026-06-10.md`. Zero harness code changes: provider-free gate; self-hosted **daemon e2e (R-420)** + telemetry (R-430) + multitenant (R-500) + gVisor sandbox (R-411); managed-cloud E2B (probe + full-VM), GCP Secret Manager, Neon, Files API, Managed Agents, OTLP→Cloud Trace (R-421/R-810/R-820), and S3 (R-830). Phase-D advisory audit at `.harness/overlay-advisory-traceability-audit-2026-06-10.md` (buckets stable, none escalated).
+- No RC items remain. Post-RC forward surface is the **optional-polish menu** (runbook §8: dashboard iteration-2, ICM governance adoption, CXA-2 durable recovery hardening, additional providers/deployment, external-user docs) — operator-selected. Standing disposition: the 2 managed-cloud IAM grants (token-creator revoked, run.invoker retained on the collector) and the recovered R-411 Lima VM (left Running). All session commits are local/unpushed (network push blocked this session).
 - Active recurring lanes remain `R-600-pattern-bake-in-sweep`, `R-600-codex-out-of-family-review`, and `R-IF-roadmap-refresh`; run them only when the cadence or a concrete review target is present.
 
 **Resolved by PR #456.** `R-CXA-2` is batch-55 `RETIRED-AS-BOUNDED-RESIDUAL`: PR #452 bound the HITL/recovery producer loops at stage 5, PR #454 wired Anthropic provider-turn HITL continuation, and the remaining durable/journaled recovery-loop evidence is explicitly recorded as post-MVP hardening with a re-open trigger for a real event-sourced/reconciler/WAL recovery loop.
@@ -52,11 +52,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| local commit (`a6d2f318`) | 2026-06-10 | **R-420 self-hosted daemon e2e EXERCISED + PASSING — every RC surface now exercised (RC follow-up).** On operator request: `mkdir`'d empty `prompts/`+`routing_manifest/`, repointed STATE_LEDGER to a throwaway path (IS-1 wants a fresh ledger; the pre-existing 113-entry `.harness/state.jsonl` left untouched), brought the OTLP stack up → `workflow=r420-self-hosted-tool-echo status=success cost=0 hosted-provider-calls=0` (daemon socket-bind + keyring `r420_probe_key` + OTLP + Ollama + MCP echo TOOL_STEP). Scaffolding cleaned up; stack torn down. Nothing in the RC arc remains unexercised. |
 | local commit (`064064b6`) | 2026-06-10 | **R-830 S3 PROVEN — last unexercised managed surface closed (RC follow-up).** The `r830`-profile SSO session had expired; operator re-ran `aws sso login --profile r830`, then `just r830-s3-live-e2e` PASSED (real S3 CRUD + cleanup, 1.89s). Every functional surface across all three tiers is now proven live; only the R-420 self-hosted daemon e2e (operator-provisioned `prompts/`+`routing_manifest/` dirs) remains unexercised. |
 | local commit (`1b2b5f10`) | 2026-06-10 | **R-411 gVisor local sandbox PROVEN (RC follow-up).** Operator surfaced the provisioned Lima VM at `/Volumes/Development/arhugula-r411/` that the initial arc skipped as "host-unavailable"; recovered the `Broken` VM (start → containerd → docker; `runsc` registered) and R-411 passed (TOOL_STEP under `runsc`, network egress blocked, host repo path not visible). RC report Phase B corrected. VM left Running. |
 | local commit (`e51d952e`) | 2026-06-10 | **RC deployment-readiness arc executed — verdict GO.** All 3 deployment tiers proven live with zero harness code changes, incl. managed-cloud OTLP→Cloud Trace (R-421/R-810/R-820, after collector discovery + 2 operator-authorized IAM grants; token-creator since revoked, run.invoker retained). Closure report + Phase-D advisory audit + runbook §5 doc-fix. Remaining = operator-env only (AWS SSO re-auth for S3; self-hosted `prompts/`+`routing_manifest/` dirs). |
 | local merge (`a5215dde`) | 2026-06-10 | **Claude release-candidate handoff authored.** Added `.harness/release-candidate-deployment-readiness-runbook.md` plus root Claude/context pointers so Claude Code can pick up the provider-free readiness, live smoke, traceability cleanup, and optional-polish gate without re-deriving. |
-| local merge (`d4b6b4e3`) | 2026-06-10 | **Overlay-check ignored-artifact fix merged.** `overlay-check` now ignores stale gitignored `tools/semantic_overlay/overlay.json` artifacts while still failing on stale tracked snapshots; the `justfile` wording now matches the R-IF-112 README. |
 
 ---
 
