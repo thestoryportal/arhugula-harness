@@ -22,13 +22,13 @@
 
 Lint + types + all logic tests pass. **Provider-free acceptance: met.**
 
-## Phase B — Local/self-hosted deployment smoke: telemetry + multitenant + gVisor sandbox proven; daemon e2e needs operator config
+## Phase B — Local/self-hosted deployment smoke: ALL surfaces proven (daemon e2e, telemetry, multitenant, gVisor sandbox)
 
 | Command | Outcome |
 |---|---|
 | `just r420-self-hosted-readiness` | ✅ `ready: yes`, all 5 static checks pass |
 | `just r420-self-hosted-stack-up` / `…-status` | ✅ healthy: grafana :3000, otel-collector :4317-4318, tempo :3200 |
-| `just r420-self-hosted-live-e2e` | ❌ **classified setup failure**: `OSError: [Errno 30] Read-only file system: '/absolute'`. The shipped example config has `/absolute/path/to/arhugula-v2` placeholders; after substituting the repo root, `prompts/` and `routing_manifest/` dirs are still **missing from the checkout** (operator-provisioned for real self-hosted use). Not a harness regression. |
+| `just r420-self-hosted-live-e2e` | ✅ **PASS** (exercised on operator request) — `workflow=r420-self-hosted-tool-echo status=success cost=0 hosted-provider-calls=0`. Daemon bound socket → bootstrapped (keyring `r420_probe_key` + OTLP probe + Ollama) → dispatched the MCP echo TOOL_STEP → success. Setup: substituted the template's `/absolute/…` repo-root, `mkdir`'d empty `prompts/`+`routing_manifest/` (the bootstrap needs only the dirs; routing data lives in `[runtime.routing_manifest]`), and repointed STATE_LEDGER to a throwaway path (IS-1 wants a fresh ledger; the pre-existing 113-entry `.harness/state.jsonl` was left untouched). All scaffolding cleaned up after. |
 | `just r430-tail-keep-live-e2e` | ✅ PASS — trigger-trace-preserved=true, cost=0, hosted-provider-calls=0 |
 | `just r500-multitenant-live-e2e` | ✅ PASS — tenant-resource-separated, content-redacted, audit-ledger-separated, cost=0 |
 | `just r411-gvisor-live-e2e` | ✅ **PASS** against the operator-provisioned Lima VM (after recovery — see note). TOOL_STEP executed under `runsc` (tier-3-microvm), network egress blocked, host repo path not visible. |
@@ -103,14 +103,14 @@ Full audit: `.harness/overlay-advisory-traceability-audit-2026-06-10.md`. Counts
 
 ## Recommendation: **GO for release candidate**
 
-The harness is **release-candidate ready.** Every functional surface across all three deployment tiers is **proven live with zero harness code changes**: provider-free gate green; local self-hosted telemetry + multitenant; managed-cloud E2B (probe + full VM), GCP Secret Manager, Neon managed-DB, Anthropic Files API, Anthropic Managed Agents, **and the full managed-cloud OTLP→Cloud Trace telemetry-verification path** — R-421 / R-810 / R-820 all **PASS** with traces observed in Cloud Trace.
+The harness is **release-candidate ready.** **Every RC surface is now exercised and passing — zero harness code changes:** provider-free gate; self-hosted **daemon e2e (R-420)** + telemetry (R-430) + multitenant (R-500) + **gVisor sandbox (R-411)**; managed-cloud E2B (probe + full VM), GCP Secret Manager, Neon managed-DB, Files API, Managed Agents, **the full OTLP→Cloud Trace path** (R-421/R-810/R-820, traces observed in Cloud Trace), and **S3** (R-830).
 
-Remaining items are operator-environment-side, not harness defects:
-- **AWS S3** (R-830-s3): ✅ **closed** — operator re-authed the `r830` SSO session; real S3 CRUD + cleanup passed (was the last unexercised managed surface).
-- **Self-hosted daemon e2e** (R-420): the one item not exercised — needs operator-provisioned `prompts/` + `routing_manifest/` dirs for the template config; the self-hosted telemetry + multitenant + gVisor-sandbox (R-411) paths are already proven.
-- **2 IAM grants now persist** (token-creator on the SA + run.invoker on the collector) — retain for repeatable RC runs, or revoke for least-privilege (operator's call; see Cleanup).
+**Nothing remains unexercised.** Both earlier-open items closed this session:
+- **AWS S3** (R-830-s3): ✅ closed after operator SSO re-auth — real S3 CRUD + cleanup.
+- **Self-hosted daemon e2e** (R-420): ✅ closed — exercised on operator request (minimal `prompts/`+`routing_manifest/` dirs + throwaway state ledger; the real `.harness/state.jsonl` left untouched; scaffolding cleaned up).
+- **IAM disposition:** token-creator revoked, run.invoker retained on the collector (operator decision; see Cleanup). The recovered R-411 Lima VM was left Running.
 
-**Verdict: deploy-ready.** Every functional surface across all three tiers is proven live with zero harness code changes — including AWS S3 and the full managed-cloud telemetry path. The only item not exercised is the R-420 self-hosted *daemon* e2e (operator-provisioned `prompts/`+`routing_manifest/` dirs); its sibling self-hosted paths (telemetry, multitenant, gVisor sandbox) all pass. No further harness work indicated.
+**Verdict: deploy-ready.** Every RC surface across all three tiers — provider-free, self-hosted (daemon + telemetry + multitenant + gVisor sandbox), and managed-cloud (E2B, GCP Secret Manager, Neon, Files API, Managed Agents, OTLP→Cloud Trace, S3) — is exercised and passing with zero harness code changes. Nothing remains unexercised. No further harness work indicated.
 
 ## Optional-polish menu (runbook §8)
 
