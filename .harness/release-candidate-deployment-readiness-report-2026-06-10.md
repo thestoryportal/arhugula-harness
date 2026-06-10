@@ -22,7 +22,7 @@
 
 Lint + types + all logic tests pass. **Provider-free acceptance: met.**
 
-## Phase B — Local/self-hosted deployment smoke: telemetry/multitenant proven; daemon e2e needs operator config
+## Phase B — Local/self-hosted deployment smoke: telemetry + multitenant + gVisor sandbox proven; daemon e2e needs operator config
 
 | Command | Outcome |
 |---|---|
@@ -31,10 +31,12 @@ Lint + types + all logic tests pass. **Provider-free acceptance: met.**
 | `just r420-self-hosted-live-e2e` | ❌ **classified setup failure**: `OSError: [Errno 30] Read-only file system: '/absolute'`. The shipped example config has `/absolute/path/to/arhugula-v2` placeholders; after substituting the repo root, `prompts/` and `routing_manifest/` dirs are still **missing from the checkout** (operator-provisioned for real self-hosted use). Not a harness regression. |
 | `just r430-tail-keep-live-e2e` | ✅ PASS — trigger-trace-preserved=true, cost=0, hosted-provider-calls=0 |
 | `just r500-multitenant-live-e2e` | ✅ PASS — tenant-resource-separated, content-redacted, audit-ledger-separated, cost=0 |
-| `just r411-gvisor-live-e2e` | ⊘ SKIPPED — gVisor/runsc host-unavailable on macOS (classified host-unavailable, per advisor; not chased) |
+| `just r411-gvisor-live-e2e` | ✅ **PASS** against the operator-provisioned Lima VM (after recovery — see note). TOOL_STEP executed under `runsc` (tier-3-microvm), network egress blocked, host repo path not visible. |
 | `just r420-self-hosted-stack-down` | ✅ guaranteed teardown (EXIT trap) — all containers + network removed |
 
 Phase B made **0 hosted-provider calls, $0**.
+
+**R-411 correction (operator-prompted).** My first pass skipped R-411 as "gVisor host-unavailable on macOS" using the default `docker` socket — a miss: I didn't probe the provisioned gVisor surface the runbook §4 + forward register point to (`R411_GVISOR_DOCKER_COMMAND` → Lima VM `r411-gvisor` at `/Volumes/Development/arhugula-r411/`). On re-check the VM was in a `Broken` state; recovered it: force-stop → `limactl start` (→ Running), then started its internal `containerd` (was `inactive`/unit-removed after the unclean shutdown — root cause of dockerd's crash-loop: `dial …containerd.sock: timeout`) → `dockerd` came up with `runsc` registered (`--platform=systrap`). R-411 then **PASSED** (`just r411-gvisor-live-e2e` with `R411_GVISOR_DOCKER_COMMAND="env LIMA_HOME=/Volumes/Development/arhugula-r411/lima-home limactl shell r411-gvisor sudo docker"`, 1 passed in 7.06s). Docker Desktop (host) is unrelated — gVisor is Linux-only and lives only in the VM. **VM left Running** (recovered from Broken); stop with `LIMA_HOME=/Volumes/Development/arhugula-r411/lima-home limactl stop r411-gvisor` if not needed.
 
 ## Phase C — Managed-cloud deployment smoke: E2B + GCP Secret Manager + Neon proven live; OTLP + S3 blocked on environment
 
