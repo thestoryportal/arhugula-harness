@@ -12,7 +12,7 @@
 
 **Authority chain:** `Project_Workflow_v1_8.md` §7.4 fidelity-grammar; `implementation-planner` SKILL.md §8 revision-pass sub-mode; `CLAUDE.md` §1.3 authority chain.
 
-**Entry authorization:** Operator decision 2026-05-15 — `Phase_7_Class_1_Tension_003_WorkloadClass_Undeclared.md` §6 RESOLVED (declare `WorkloadClass` in `harness-core` via new foundational unit U-CP-00).
+**Entry authorization:** Operator decision 2026-05-15 — `.harness/archive/root-historical/Phase_7_Class_1_Tension_003_WorkloadClass_Undeclared.md` §6 RESOLVED (declare `WorkloadClass` in `harness-core` via new foundational unit U-CP-00).
 
 ---
 
