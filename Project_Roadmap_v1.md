@@ -285,7 +285,7 @@ R-IF-111:
 R-IF-112:
   title: spec-code-overlay arc — overlay spec↔code↔CXA↔substitution semantic layer onto the code graph (drift-detection)
   surface: VII
-  status: PROPOSED
+  status: RESOLVED
   depends_on: []
   blocks: []
   posture: mode-agnostic
@@ -305,6 +305,10 @@ R-IF-112:
     (sibling to `substitution_ledger.py`), built before any visualization. Forward stages: 02-design
     (overlay JSON schema + linter contract; fork-vs-sidecar) · 03-build (`tools/` linter + freshness hook;
     gate-vs-advisory). Composes with the council context-memory arc (interpretable-context); does not duplicate it.
+    Resolved by the R-IF-112 implementation closeout: `tools/semantic_overlay/overlay.py` now derives the
+    code cite layer, design-substrate `C-*` keyspace, CXA seam endpoint graph, and substitution ledger join
+    without LLM calls; `overlay.py check` is CI-gated for hard CXA/stale-artifact drift; advisory orphan
+    reporting covers code without cite, contract without code cite, and substitution without direct carrier.
 
 R-IF-roadmap-refresh:
   title: Refresh roadmap status dashboard after PR merge

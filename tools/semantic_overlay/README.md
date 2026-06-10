@@ -14,6 +14,8 @@ artifact**, so a single `overlay.json` serves three consumers:
 
 1. **spec cites** — `C-{IS,AS,CP,OD,RT}-NN` contracts, `U-{…}-NN` units, `ADR-{F,D}N`,
    `§N.M` sections, parsed from docstrings/comments. ~99 % of source files carry one.
+   The tool also scans `design-substrate/**/*.md` for the `C-*` keyspace so it can flag
+   design contracts that no source file cites.
 2. **CXA seams** — the 31 genuine typed cross-axis seams, read **code-resident** from
    `harness-runtime/tests/integration/test_cxa_pattern_p1.py` (`PATTERN_P1_SEAMS`), **not**
    the delta-only CXA markdown (`Cross_Axis_Composition_Document_v2_19.md` holds **0**
@@ -57,12 +59,13 @@ uv run python tools/semantic_overlay/overlay.py enrich-ua harness-is/.understand
 | Class | Reliability | Meaning |
 |---|---|---|
 | `code_without_cite` | **reliable** | a source file with no `C-*`/`U-*`/`ADR-*`/`H_T-*` cite (excludes `__init__.py` aggregators). |
+| `contract_without_code` | **advisory** | a `C-*` id present in `design-substrate/**/*.md` with no source-file cite. Absence of a cite is a drift candidate, not proof that the contract is unimplemented. |
 | `cxa_seam_missing_endpoint` | **reliable — HARD gate** | a `PATTERN_P1_SEAMS` producer/consumer module that no longer resolves to a file (cross-axis drift). |
 | `substitution_without_carrier` | **advisory** | an `H_T-*` id with no docstring-citing file (expected to be large — most carriers are in `rationale`). |
 
 Only `cxa_seam_missing_endpoint` and a stale committed `overlay.json` are **HARD** (`check`
-exits 1). The code-without-cite count and substitution thinness reflect genuine repo state,
-not a regression — they are reported, not failed.
+exits 1). The code-without-cite count, contract-without-code count, and substitution thinness
+reflect genuine repo state, not necessarily a regression — they are reported, not failed.
 
 ## Freshness
 

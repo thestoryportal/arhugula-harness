@@ -19,7 +19,9 @@ single `overlay.json` serves three consumers (advisor framing, R-IF-112):
 
 The four layers:
   1. **spec cites**     — `C-{IS,AS,CP,OD,RT}-NN` contracts, `U-{...}-NN` units, `ADR-{F,D}N`,
-                          `§N.M` sections, parsed from docstrings/comments.
+                          `§N.M` sections, parsed from docstrings/comments, plus the
+                          design-substrate `C-*` keyspace for contract-without-code
+                          orphan reporting.
   2. **CXA seams**      — the 31 genuine typed cross-axis seams, read code-resident from
                           `harness-runtime/tests/integration/test_cxa_pattern_p1.py`
                           (`PATTERN_P1_SEAMS`) — NOT the delta-only CXA markdown (v2.19 holds
@@ -76,6 +78,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SUBSTITUTIONS_YAML = REPO_ROOT / ".harness" / "substitutions.yaml"
 CXA_SEAMS_TEST = REPO_ROOT / "harness-runtime" / "tests" / "integration" / "test_cxa_pattern_p1.py"
 OVERLAY_JSON = REPO_ROOT / "tools" / "semantic_overlay" / "overlay.json"
+DESIGN_SUBSTRATE = REPO_ROOT / "design-substrate"
 
 # The 7 workspace packages (axis subdirs + shared core + runtime).
 PACKAGES = (
@@ -180,6 +183,25 @@ def load_cxa_seams(path: Path = CXA_SEAMS_TEST) -> list[dict[str, str]]:
     return seams
 
 
+def load_spec_contracts(path: Path = DESIGN_SUBSTRATE) -> dict[str, list[str]]:
+    """Return the design-substrate C-* contract keyspace with source files.
+
+    This is the deterministic source for the advisory "contract without landed code"
+    orphan class. It scans prose only; implementation correctness remains outside scope.
+    """
+    contracts: dict[str, set[str]] = defaultdict(set)
+    if not path.is_dir():
+        return {}
+    for spec_file in sorted(path.rglob("*.md")):
+        try:
+            text = spec_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for contract in RE_CONTRACT.findall(text):
+            contracts[contract].add(_rel(spec_file))
+    return {k: sorted(v) for k, v in sorted(contracts.items())}
+
+
 # --------------------------------------------------------------------------- #
 # Module ↔ file path resolution
 # --------------------------------------------------------------------------- #
@@ -253,6 +275,7 @@ def derive() -> dict[str, Any]:
     files = _iter_source_files()
     substitutions = load_substitutions()
     seams = load_cxa_seams()
+    spec_contracts = load_spec_contracts()
     module_index = _build_module_index(files)
 
     # ---- nodes ---------------------------------------------------------- #
@@ -397,9 +420,14 @@ def derive() -> dict[str, Any]:
         if s["id"] not in carried
     ]
     # (3) cxa-seam-with-missing-producer-or-consumer-file — RELIABLE (already collected)
-    # (4) contract-keyspace coverage — ADVISORY (we only see contracts that ARE cited;
-    #     a contract with zero landed code is invisible to a code-only scan, so this is a
-    #     summary of the *cited* keyspace, not a true "contract-without-code" orphan set).
+    # (4) contract-keyspace coverage — ADVISORY. A C-* id in design-substrate with no
+    #     source-file cite may be a real implementation gap, an authoring-only contract,
+    #     or an obsolete prose row. The linter flags it but does not fail the build.
+    contract_without_code = [
+        {"id": contract, "spec_files": files}
+        for contract, files in sorted(spec_contracts.items())
+        if contract not in contract_to_files
+    ]
 
     # ---- assemble --------------------------------------------------------- #
     graph: dict[str, Any] = {
@@ -419,15 +447,18 @@ def derive() -> dict[str, Any]:
             "adr_to_files": {k: sorted(v) for k, v in sorted(adr_to_files.items())},
             "substitution_to_files": {k: sorted(v) for k, v in sorted(subst_to_files.items())},
             "seam_by_label": {r["edge_label"]: r for r in seam_records},
+            "spec_contract_to_files": spec_contracts,
         },
         "orphans": {
             "code_without_cite": sorted(uncited),
+            "contract_without_code": contract_without_code,
             "substitution_without_carrier": substitution_no_carrier,
             "cxa_seam_missing_endpoint": seam_orphans,
         },
         "stats": {
             "source_files": len(nodes),
             "files_with_cite": len(nodes) - len(uncited),
+            "spec_contracts_total": len(spec_contracts),
             "distinct_contracts": len(contract_to_files),
             "distinct_units": len(unit_to_files),
             "distinct_adrs": len(adr_to_files),
@@ -493,6 +524,7 @@ def _print_summary(graph: dict[str, Any]) -> None:
         f"({100 * s['files_with_cite'] / max(s['source_files'], 1):.1f} %)"
     )
     print(f"  distinct contracts cited: {s['distinct_contracts']}")
+    print(f"  spec contracts scanned  : {s['spec_contracts_total']}")
     print(f"  distinct units cited    : {s['distinct_units']}")
     print(f"  distinct ADRs cited     : {s['distinct_adrs']}")
     print(
@@ -510,6 +542,12 @@ def _print_summary(graph: dict[str, Any]) -> None:
     print(f"  CXA seam missing an endpoint : {len(o['cxa_seam_missing_endpoint'])} (HARD if >0)")
     for so in o["cxa_seam_missing_endpoint"]:
         print(f"      · {so['edge_label']} ({so['symbol']})")
+    print(
+        f"  contract w/o code cite      : {len(o['contract_without_code'])} "
+        "(advisory — source cite absence is not proof of non-implementation)"
+    )
+    for co in o["contract_without_code"]:
+        print(f"      · {co['id']} ({', '.join(co['spec_files'])})")
     print(
         f"  substitution w/o carrier file: {len(o['substitution_without_carrier'])} "
         "(advisory — most carriers are named in rationale, not docstrings)"

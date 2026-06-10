@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `a0ddc2154026` |
-| `last_refreshed` | 2026-06-09T23:05:39-06:00 |
-| `git_head` | `41297c2a` (main) — PR #461 post-#460 roadmap/status/dashboard refresh merged. |
+| `workspace_state_hash` | `ebb6d51193e6` |
+| `last_refreshed` | 2026-06-09T23:24:43-06:00 |
+| `git_head` | `62f9a327` (main) — PR #462 post-#461 corrective fixed-point refresh merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 47 |
 
@@ -28,8 +28,9 @@
 
 **Ordered frontier.**
 
-- The next non-recurring substantive candidate is `R-IF-112` (spec-code-overlay arc) if the operator wants a new implementation/design frontier.
-- The active recurring lanes remain `R-600-pattern-bake-in-sweep`, `R-600-codex-out-of-family-review`, and `R-IF-roadmap-refresh`; run them only when the cadence or a concrete review target is present.
+- This branch is the substantive `R-IF-112` implementation closeout. The semantic overlay linter already existed; this slice closes the formal roadmap gap by adding the missing design-substrate contract-without-code orphan class, documenting the gate/advisory split, and moving `R-IF-112` to resolved in the roadmap source.
+- After this branch merges, ship the owed post-R-IF-112 terminating roadmap/status/dashboard refresh.
+- No additional non-recurring substantive candidate is currently selected. The active recurring lanes remain `R-600-pattern-bake-in-sweep`, `R-600-codex-out-of-family-review`, and `R-IF-roadmap-refresh`; run them only when the cadence or a concrete review target is present.
 
 **Resolved by PR #456.** `R-CXA-2` is batch-55 `RETIRED-AS-BOUNDED-RESIDUAL`: PR #452 bound the HITL/recovery producer loops at stage 5, PR #454 wired Anthropic provider-turn HITL continuation, and the remaining durable/journaled recovery-loop evidence is explicitly recorded as post-MVP hardening with a re-open trigger for a real event-sourced/reconciler/WAL recovery loop.
 
@@ -104,6 +105,7 @@ The bucket rows below sum to **54** under the batch-56 live ledger (RETIRED 54).
 
 | Date | Source | Resolution |
 |---|---|---|
+| 2026-06-09 | **Substantive R-IF-112 implementation closeout branch opened from `62f9a327`; §12.2 owed after merge.** | Hash `a0ddc2154026` → `ebb6d51193e6` (branch base `62f9a327`, open PRs #440/#447, fork count 47, batch-56). The existing semantic overlay linter is completed against the roadmap must-pass by adding design-substrate `C-*` keyspace scanning and advisory `contract_without_code` orphan reporting, alongside the existing code-without-cite, CXA missing-endpoint, and substitution-without-carrier classes. `R-IF-112` is moved to RESOLVED on this branch; a terminating refresh is owed after merge to pin the final merge commit/dashboard hash. |
 | 2026-06-09 | **Post-#461 corrective fixed-point refresh — PR #461 post-#460 roadmap/status/dashboard refresh merged at `41297c2a`; §12.2 anchor re-pin.** | Hash `b958e3438c97` → `a0ddc2154026` (state at `41297c2a`, open PRs #440/#447, fork count 47, batch-56). PR #461 completed the post-#460 refresh but included a dashboard test update, so the default-branch guard could not classify the merge as the expected status/dashboard-only lag. This two-file refresh restores the fixed-point shape and keeps the selector on `R-IF-112` plus recurring R-600/R-IF lanes. |
 | 2026-06-09 | **Post-#460 terminating refresh — PR #460 R-CXA-1 AS→IS edge-scope/sidecar closeout merged at `b9a9ec87`; §12.2 owed follow-on.** | Hash `39009757fd12` → `b958e3438c97` (state at `b9a9ec87`, open PRs #440/#447, fork count 47, batch-56). R-CXA-1 is now merged closed; the live substitution ledger is 54/54 RETIRED and 54/54 pipeline-advanced. Next selector moves off CXA build-close work to this terminating refresh, then the post-substitution governance/process frontier (`R-IF-112` if operator selects a new substantive arc; recurring R-600/R-IF lanes by cadence). |
 | 2026-06-09 | **Substantive R-CXA-1 AS→IS edge-scope/sidecar branch opened from `22d7d53`; §12.2 owed after merge.** | Hash `ffe9044984c8` → `39009757fd12` (branch base `22d7d53`, open PRs #440/#447, fork count 47, batch-56). Filed `.harness/r-cxa-1-as-is-edge-audit-2026-06-09.md`, threaded the stage-5 procedural-tier resolver into the production `RuntimeAsIsWiring` secret-fetch callback, and moved H_T-CXA-1 from PARTIAL to SUBSTANTIVE_RETIRED. Live ledger is now 54/54 RETIRED on this branch; a terminating refresh is owed after merge to pin the final merge commit/dashboard hash. |
