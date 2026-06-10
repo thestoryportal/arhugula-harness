@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `71a35327aa3c` |
-| `last_refreshed` | 2026-06-10T00:57:43-06:00 |
-| `git_head` | `c8da9292` (main) — PR #471 substitution-accounting snapshot guidance merged. |
+| `workspace_state_hash` | `c28613a1f0a3` |
+| `last_refreshed` | 2026-06-10T01:43:45-06:00 |
+| `git_head` | `5eb71c18` (main) — PR #473 documentation hygiene merged. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 47 |
 
@@ -28,7 +28,7 @@
 
 **Ordered frontier.**
 
-- Ship this post-#471 terminating roadmap/status/dashboard refresh. It pins the CLAUDE.md substitution-accounting snapshot clarification and clears the in-flight table after #471 merged.
+- Ship this post-#473 terminating roadmap/status/dashboard refresh. It pins the documentation hygiene archive and clears the dashboard drift after #473 merged.
 - After this refresh merges, no additional non-recurring substantive candidate is currently selected. The active recurring lanes remain `R-600-pattern-bake-in-sweep`, `R-600-codex-out-of-family-review`, and `R-IF-roadmap-refresh`; run them only when the cadence or a concrete review target is present.
 
 **Resolved by PR #456.** `R-CXA-2` is batch-55 `RETIRED-AS-BOUNDED-RESIDUAL`: PR #452 bound the HITL/recovery producer loops at stage 5, PR #454 wired Anthropic provider-turn HITL continuation, and the remaining durable/journaled recovery-loop evidence is explicitly recorded as post-MVP hardening with a re-open trigger for a real event-sourced/reconciler/WAL recovery loop.
@@ -51,6 +51,7 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #473 (`5eb71c18`) | 2026-06-10 | **Documentation hygiene merged.** Historical root Markdown review/tension/skill artifacts moved under `.harness/archive/root-historical/`, live references retargeted, and `.harness`/`design-substrate` retention READMEs added. |
 | PR #471 (`c8da9292`) | 2026-06-10 | **Substitution-accounting guidance clarified.** `CLAUDE.md` now distinguishes the frozen Phase-8 close snapshot from the live substitution ledger derived from `.harness/substitutions.yaml`, avoiding stale inline live-count claims. |
 | PR #469 (`6632ef5e`) | 2026-06-10 | **R-CXA-2 post-MVP brief pseudocode corrected.** Preserved the one useful root-checkout dirty change: the HITL loop pseudocode now names `RuntimeHITLGateComposer.open_gate(...)` instead of the stale dispatch-shaped placeholder. Stale untracked R-CXA planning/audit leftovers were not landed. |
 | PR #467 (`b08ddbcb`) | 2026-06-10 | **R-600 cadence-3 workflow v1.15 merged.** The memory sweep found the cadence-2 producer-discovery candidate matured into independent grounding-first producer/slice evidence; `Project_Workflow_v1_15.md` adds PD-5 and `.harness/clearance/Project_Workflow-v1_15-cleared-2026-06-10.md` clears it. |
