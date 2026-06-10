@@ -1674,6 +1674,26 @@ class HarnessContext(BaseModel):
     avoid the `lifecycle.retry_breaker_tool → types` import cycle.
     """
 
+    hitl_tool_loop: Any
+    """R-CXA-2 model-driven HITL tool-loop producer.
+
+    Materialized at stage 5 LOOP_INIT by
+    `harness_runtime.bootstrap.factories.r_cxa_2_producer_loop_factory
+    .materialize_r_cxa_2_producer_loop_stage`. Exposes the runtime primitive
+    that rewrites model-emitted tool calls through C-CP-17 and emits the
+    `cp.hitl-tool-call-rewriting` CP→IS state-ledger row before dispatch.
+    Typed `Any` to keep the schema layer free of lifecycle-module imports.
+    """
+
+    engine_recovery_loop: Any
+    """R-CXA-2 engine-layer pause/resume recovery-loop producer.
+
+    Materialized at stage 5 LOOP_INIT by the same R-CXA-2 producer factory.
+    Exposes the runtime primitive that binds an engine-layer substrate and
+    emits `cp.pause-captured` / `cp.resume-attempted` through CP→IS wiring.
+    Typed `Any` to keep the schema layer free of lifecycle-module imports.
+    """
+
     per_server_trust_evaluator: Any
     """CP-axis per-server trust evaluator (U-CP-68 — concretized by
     `harness_cp.per_server_trust_evaluator.PerServerTrustEvaluator`).

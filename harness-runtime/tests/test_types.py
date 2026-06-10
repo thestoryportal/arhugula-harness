@@ -167,6 +167,8 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         "step_dispatchers",  # U-RT-59 — C-RT-17 §14.7.1 + §14.7.7 step-kind routing registry
         "validator_framework",  # U-CP-61 — optional ValidatorFramework binding (Decision 2.D3 RATIFIED)
         "tool_dispatcher",  # U-RT-72 — C-RT-04 §4 v1.16 retry-wrapped TOOL_STEP dispatcher (U-RT-75 populates)
+        "hitl_tool_loop",  # R-CXA-2 — model-driven HITL tool-loop producer
+        "engine_recovery_loop",  # R-CXA-2 — engine pause/resume recovery-loop producer
         "per_server_trust_evaluator",  # U-RT-72 — C-RT-04 §4 v1.16 (U-RT-75 populates)
         "mcp_namespace_emitter",  # U-RT-72 — C-RT-04 §4 v1.16 (U-RT-75 populates)
         "memory_tool_registry",  # U-RT-79 — C-RT-04 §4 v1.17 Memory tool storage-backend registry (U-RT-80 populates)

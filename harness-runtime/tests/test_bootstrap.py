@@ -213,6 +213,8 @@ async def test_bootstrap_returns_frozen_harness_context(
     assert isinstance(ctx, HarnessContext)
     assert ctx.model_config["frozen"] is True
     assert ctx.cp_as_wiring is not None
+    assert ctx.hitl_tool_loop is not None
+    assert ctx.engine_recovery_loop is not None
 
 
 @pytest.mark.asyncio
@@ -251,6 +253,8 @@ async def test_bootstrap_populates_every_required_harness_context_field(
     assert ctx.routing_manifest is not None  # stage 3b
     assert ctx.audit_writer is not None  # stage 4
     assert ctx.lifecycle_emitter is not None  # stage 5
+    assert ctx.hitl_tool_loop is not None  # stage 5 (R-CXA-2)
+    assert ctx.engine_recovery_loop is not None  # stage 5 (R-CXA-2)
 
 
 @pytest.mark.asyncio
@@ -348,9 +352,11 @@ async def test_bootstrap_stage_5_binds_inference_and_sub_agent_dispatchers(
     """
     from harness_cp.hitl_placement import HITLPlacementKind
     from harness_cp.workflow_driver_types import StepKind
+    from harness_runtime.lifecycle.engine_recovery_loop import RuntimeEngineRecoveryLoop
     from harness_runtime.lifecycle.hitl_gate_composer import (
         RuntimeHITLGateComposer,
     )
+    from harness_runtime.lifecycle.hitl_tool_loop import RuntimeHITLToolLoop
     from harness_runtime.lifecycle.mcp_backed_ask_user_question_surface import (
         MCPBackedAskUserQuestionSurface,
     )
@@ -405,6 +411,8 @@ async def test_bootstrap_stage_5_binds_inference_and_sub_agent_dispatchers(
     tool_step = ctx.step_dispatchers.lookup(StepKind.TOOL_STEP)
     assert isinstance(tool_step, SyncDispatcherFacade)
     assert tool_step.inner is ctx.tool_dispatcher
+    assert isinstance(ctx.hitl_tool_loop, RuntimeHITLToolLoop)
+    assert isinstance(ctx.engine_recovery_loop, RuntimeEngineRecoveryLoop)
     for unbound in (StepKind.HITL_STEP, StepKind.DECLARATIVE_STEP):
         with pytest.raises(StepKindDispatcherNotBoundError):
             ctx.step_dispatchers.lookup(unbound)
@@ -623,7 +631,7 @@ def test_freeze_raises_incomplete_when_required_field_none() -> None:
     ctx = _MutableHarnessContext()
     with pytest.raises(IncompleteBootstrapError) as excinfo:
         ctx.freeze()
-    # All 37 required fields are missing (U-RT-52 +1 for `llm_dispatcher`;
+    # All 41 required fields are missing (U-RT-52 +1 for `llm_dispatcher`;
     # U-RT-59 +2 for `sub_agent_dispatcher` + `step_dispatchers`;
     # U-RT-60 +1 for `ask_user_question_surface`; U-RT-72 +4 for
     # `mcp_client_host` + `tool_dispatcher` + `per_server_trust_evaluator`
@@ -639,12 +647,14 @@ def test_freeze_raises_incomplete_when_required_field_none() -> None:
     assert "ask_user_question_surface" in excinfo.value.missing_fields
     assert "mcp_client_host" in excinfo.value.missing_fields
     assert "tool_dispatcher" in excinfo.value.missing_fields
+    assert "hitl_tool_loop" in excinfo.value.missing_fields
+    assert "engine_recovery_loop" in excinfo.value.missing_fields
     assert "per_server_trust_evaluator" in excinfo.value.missing_fields
     assert "mcp_namespace_emitter" in excinfo.value.missing_fields
     assert "memory_tool_registry" in excinfo.value.missing_fields
     assert "pause_requested_flag" in excinfo.value.missing_fields
     assert "resume_context_holder" in excinfo.value.missing_fields
-    assert len(excinfo.value.missing_fields) == 39
+    assert len(excinfo.value.missing_fields) == 41
 
 
 def test_bootstrap_stage_complete_event_is_frozen() -> None:

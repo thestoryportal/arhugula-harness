@@ -106,7 +106,12 @@ class _Dispatcher:
     def __init__(self) -> None:
         self.calls: list[ModelToolCall] = []
 
-    async def dispatch(self, call: ModelToolCall) -> dict[str, Any]:
+    async def dispatch(
+        self,
+        call: ModelToolCall,
+        context: HITLToolLoopContext,
+    ) -> dict[str, Any]:
+        _ = context
         self.calls.append(call)
         return {"tool_call_id": call.tool_call_id, "ok": True}
 

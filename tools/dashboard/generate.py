@@ -95,7 +95,7 @@ ANNOTATIONS = {
     "R-900-research-arcs": "Resolved by decomposing the placeholder into R-901.",
     "R-901-phase-9-retirement-criteria": "Resolved by the Phase-9 retirement criteria brief: research-only selector guidance, no design-substrate back-flow.",
     "R-CXA-1-as-is-seam": "The one remaining wire (a secret-fetch audit caller) has no real source yet, so wiring it would be hollow; deferred until one exists.",
-    "R-CXA-2-cp-is-seam": "Producer primitives now exist for HITL rewrite and engine recovery; remaining work is stage-5/bootstrap composition plus e2e producer proof.",
+    "R-CXA-2-cp-is-seam": "Producer loops are now bound at stage 5 with direct CP→IS proof; remaining work is generic provider-turn HITL continuation plus durable recovery evidence.",
     "R-CXA-4-od-multi-seam": "Resolved by batch-53: grounding found 0 remaining wireable edges and the bookkeeping-only PARTIAL row was retired.",
     "R-XI-02": "Dashboard polish — dependency-graph view + sparklines; nice-to-have, nothing blocking it.",
     "R-XI-03": "Dashboard live-update mode; nice-to-have, nothing blocking it.",
@@ -116,8 +116,8 @@ NONRETIRED_LEDGER = [
         "id": "CXA-2",
         "rnnn": "R-CXA-2",
         "state": "STILL-BOUNDED",
-        "why": "The CP→IS seam is still bounded; PR #449 added producer primitives, but they are not yet bound into stage-5/bootstrap composition.",
-        "retire": "Not safely — bind the primitives into the runtime loop and prove real CP→IS producer emissions e2e first.",
+        "why": "The CP→IS seam is still bounded; producer loops now bind at stage 5 and emit directly, but the generic provider-turn continuation and durable recovery caller evidence are not yet proven.",
+        "retire": "Not safely — first prove the provider inference loop feeds model-emitted tool calls through `ctx.hitl_tool_loop`, and prove recovery from durable/journaled state rather than only the bound deterministic loop.",
     },
 ]
 
@@ -152,7 +152,7 @@ REMAINING_ORDERED = [
         "layer": "build",
         "id": "R-CXA-2-cp-is-seam",
         "label": "Build the CP→IS engine-layer seam",
-        "gate": "Producer primitives landed in PR #449; next closeout is stage-5/bootstrap composition plus e2e producer proof.",
+        "gate": "Stage-5 bound loops now prove direct CP→IS emissions; remaining closeout is provider-turn HITL continuation/journaling plus durable recovery caller evidence.",
     },
     {
         "n": 3,

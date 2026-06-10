@@ -234,6 +234,7 @@ def _fully_populated_builder(
     builder = _MutableHarnessContext()
     builder.config = RuntimeConfig(**_minimal_runtime_config_kwargs(tmp_path))
     builder.drained_flag = asyncio.Event()
+    builder.pause_requested_flag = asyncio.Event()
 
     sentinel: Any = object()
     builder.path_resolver = sentinel
@@ -268,8 +269,11 @@ def _fully_populated_builder(
     builder.ask_user_question_surface = sentinel
     builder.step_dispatchers = sentinel
     builder.tool_dispatcher = sentinel
+    builder.hitl_tool_loop = sentinel
+    builder.engine_recovery_loop = sentinel
     builder.per_server_trust_evaluator = sentinel
     builder.mcp_namespace_emitter = sentinel
     builder.memory_tool_registry = memory_tool_registry
+    builder.resume_context_holder = sentinel
 
     return builder

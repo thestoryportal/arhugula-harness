@@ -71,7 +71,11 @@ class HITLToolLoopCallResult:
 class HITLToolDispatcher(Protocol):
     """Dispatch surface for an approved model tool call."""
 
-    async def dispatch(self, call: ModelToolCall) -> Mapping[str, Any]: ...
+    async def dispatch(
+        self,
+        call: ModelToolCall,
+        context: HITLToolLoopContext,
+    ) -> Mapping[str, Any]: ...
 
 
 class HITLGateAdapter(Protocol):
@@ -168,7 +172,7 @@ class RuntimeHITLToolLoop:
                     )
                     continue
 
-            dispatch_result = await self.dispatcher.dispatch(dispatch_call)
+            dispatch_result = await self.dispatcher.dispatch(dispatch_call, context)
             results.append(
                 HITLToolLoopCallResult(
                     tool_call_id=call.tool_call_id,

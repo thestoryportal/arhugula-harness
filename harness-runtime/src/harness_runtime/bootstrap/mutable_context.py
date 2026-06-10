@@ -143,6 +143,8 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "ask_user_question_surface",
     "step_dispatchers",
     "tool_dispatcher",
+    "hitl_tool_loop",
+    "engine_recovery_loop",
     "per_server_trust_evaluator",
     "mcp_namespace_emitter",
     "memory_tool_registry",
@@ -264,6 +266,21 @@ class _MutableHarnessContext:
     ``RuntimeToolDispatcher`` is private to the wrapper (constructor arg
     per spec §14.9.6 inv 6). Required on the frozen HarnessContext per
     spec v1.16 §4 C-RT-04."""
+
+    hitl_tool_loop: Any = None
+    """R-CXA-2 — model-driven HITL tool-loop producer. Bound at stage 5
+    LOOP_INIT by ``materialize_r_cxa_2_producer_loop_stage`` after
+    ``ctx.tool_dispatcher`` is available. Required on the frozen
+    ``HarnessContext`` so runtime model-turn code can invoke the
+    CP→IS ``cp.hitl-tool-call-rewriting`` producer without manufacturing a
+    new workflow step kind."""
+
+    engine_recovery_loop: Any = None
+    """R-CXA-2 — engine-layer pause/resume recovery-loop producer. Bound at
+    stage 5 LOOP_INIT by ``materialize_r_cxa_2_producer_loop_stage`` against
+    the stage-3b CP→IS wiring. Required on the frozen ``HarnessContext`` so
+    engine recovery code can invoke ``cp.pause-captured`` and
+    ``cp.resume-attempted`` through a concrete runtime primitive."""
 
     per_server_trust_evaluator: Any = None
     """U-RT-72; U-CP-68 PerServerTrustEvaluator. Bound at stage 5 within
@@ -408,6 +425,8 @@ class _MutableHarnessContext:
             ask_user_question_surface=self.ask_user_question_surface,
             step_dispatchers=self.step_dispatchers,
             tool_dispatcher=self.tool_dispatcher,
+            hitl_tool_loop=self.hitl_tool_loop,
+            engine_recovery_loop=self.engine_recovery_loop,
             per_server_trust_evaluator=self.per_server_trust_evaluator,
             mcp_namespace_emitter=self.mcp_namespace_emitter,
             memory_tool_registry=self.memory_tool_registry,

@@ -2259,9 +2259,12 @@ R-CXA-2-cp-is-seam:
     **2026-06-09 PR #449 advanced the post-MVP build:** U-CP-78 Reading A is applied in CP/runtime code so
     `cp.pause-captured` consumes engine-layer `PauseEvent`; runtime now has provider-neutral
     `RuntimeHITLToolLoop` and `RuntimeEngineRecoveryLoop` producer primitives with focused CP/runtime tests and green
-    overlay/CI. This does **not** retire R-CXA-2 yet: `.harness/r-cxa-2-implementation-plan.md` Slice 4/5 remains owed
-    to bind the primitives at stage-5/bootstrap composition and prove the real CP→IS producer emissions e2e before
-    any substitution-ledger/accounting flip. STAYS STILL-BOUNDED.
+    overlay/CI. **2026-06-09 stage-5 composition branch advances Slice 4/5:** bootstrap LOOP_INIT now binds both
+    primitives onto `HarnessContext` and focused tests prove direct CP→IS producer emissions through the bound
+    runtime context (`cp.hitl-tool-call-rewriting`, `cp.pause-captured`, `cp.resume-attempted`). This still does **not**
+    retire R-CXA-2: substitution-ledger/accounting flip remains gated on generic provider-turn HITL continuation +
+    journaling evidence and durable recovery caller evidence, or a ratified bounded-residual disposition for those
+    deployment-hardening concerns. STAYS STILL-BOUNDED.
 
 R-CXA-3-cp-as-seam:
   title: CXA-3 (CP->AS) seam — runtime composer
