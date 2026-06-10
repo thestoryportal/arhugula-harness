@@ -40,8 +40,9 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from importlib import import_module
-from typing import Any, Final, Protocol, runtime_checkable
+from typing import Any, Final, Protocol, cast, runtime_checkable
 
 import keyring
 from harness_as.sandbox_tier import SandboxTier
@@ -53,12 +54,14 @@ from harness_as.tool_contract import ToolContract
 from harness_runtime.types import ProviderSecretBackend, ProviderSecretsConfig
 
 __all__ = [
+    "GcpSecretAccessResult",
     "GcpSecretAccessor",
     "GcpSecretManagerResolver",
     "KeyringSecretResolver",
     "ProviderSecretResolver",
     "SecretAllowlistDeniedError",
     "SecretBackendUnavailableError",
+    "SecretResolutionAuditResult",
     "SecretResolutionError",
     "make_keyring_resolver",
     "make_provider_secret_resolver",
@@ -100,7 +103,26 @@ class SecretBackendUnavailableError(Exception):
     """Raised by backend adapters when the secret backend cannot be reached."""
 
 
-GcpSecretAccessor = Callable[[str], str]
+@dataclass(frozen=True)
+class GcpSecretAccessResult:
+    """GCP Secret Manager access result with payload plus version metadata."""
+
+    value: str
+    last_rotated_at: str
+
+
+@dataclass(frozen=True)
+class SecretResolutionAuditResult:
+    """Metadata-bearing scoped secret resolution result for R-CXA-1 emission."""
+
+    ref: SecretRef
+    secret_last_rotated_at: str
+    backend: str
+    cache_tier_overhead_ms: int = 0
+    policy_access_decision_reason: str = "permitted"
+
+
+GcpSecretAccessor = Callable[[str], str | GcpSecretAccessResult]
 """Test-injectable accessor for one fully-qualified GCP Secret Manager resource."""
 
 
@@ -121,6 +143,17 @@ class ProviderSecretResolver(Protocol):
 
     def resolve_bootstrap_value(self, name: str) -> str:
         """Resolve the literal provider-secret value for SDK construction."""
+        ...
+
+    def resolve_with_audit_metadata(
+        self,
+        name: str,
+        scope: SecretScope,
+        tier: SandboxTier,
+        *,
+        tool: ToolContract | None = None,
+    ) -> SecretResolutionAuditResult:
+        """Resolve a scoped secret and return backend rotation metadata."""
         ...
 
 
@@ -230,6 +263,32 @@ class KeyringSecretResolver:
 
         return SecretRef(name=name, scope=scope, tier=tier)
 
+    def resolve_with_audit_metadata(
+        self,
+        name: str,
+        scope: SecretScope,
+        tier: SandboxTier,
+        *,
+        tool: ToolContract | None = None,
+    ) -> SecretResolutionAuditResult:
+        """Keyring has no truthful rotation/version metadata; fail closed.
+
+        R-CXA-1 requires `secret_last_rotated_at` to be a real backend version
+        attribute. Local keyring/env fallback can prove existence of a value
+        but does not expose such metadata through this binding, so using a
+        sentinel would hollow the AS→IS fingerprint.
+        """
+        _enforce_allowlist(
+            operator_allowlist=self.operator_allowlist,
+            name=name,
+            scope=scope,
+            tool=tool,
+        )
+        value = self._lookup(name)
+        if value is None:
+            raise SecretResolutionError(SecretFailClass.SECRET_UNKNOWN, name)
+        raise SecretResolutionError(SecretFailClass.SECRET_UNAVAILABLE, name)
+
     def resolve_bootstrap_value(self, name: str) -> str:
         """Resolve a secret to its literal value for stage-3a SDK construction.
 
@@ -269,23 +328,7 @@ class KeyringSecretResolver:
         return value
 
 
-def _default_gcp_secret_accessor(resource_name: str) -> str:
-    """Read one GCP Secret Manager secret version via the optional Google SDK."""
-    try:
-        secretmanager = import_module("google.cloud.secretmanager")
-    except ModuleNotFoundError as exc:
-        raise SecretBackendUnavailableError("google-cloud-secret-manager is not installed") from exc
-
-    try:
-        client_factory: Any = secretmanager.SecretManagerServiceClient
-        client: Any = client_factory()
-        response: Any = client.access_secret_version(request={"name": resource_name})
-        raw_data: object = response.payload.data
-    except Exception as exc:
-        raise SecretBackendUnavailableError(
-            f"GCP Secret Manager access failed for {resource_name}"
-        ) from exc
-
+def _decode_gcp_secret_payload(raw_data: object, resource_name: str) -> str:
     if isinstance(raw_data, bytes):
         try:
             return raw_data.decode("utf-8")
@@ -297,6 +340,59 @@ def _default_gcp_secret_accessor(resource_name: str) -> str:
         return raw_data
     raise SecretBackendUnavailableError(
         f"GCP Secret Manager returned unsupported payload type for {resource_name}"
+    )
+
+
+def _format_gcp_timestamp(value: object, resource_name: str) -> str:
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        return dt.astimezone(UTC).isoformat()
+    to_datetime = getattr(value, "ToDatetime", None)
+    if callable(to_datetime):
+        to_datetime_fn = cast(Callable[..., datetime], to_datetime)
+        try:
+            dt = to_datetime_fn(tzinfo=UTC)
+        except TypeError:
+            dt = to_datetime_fn()
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC).isoformat()
+    raise SecretBackendUnavailableError(
+        f"GCP Secret Manager version metadata missing create_time for {resource_name}"
+    )
+
+
+def _coerce_gcp_access_result(result: str | GcpSecretAccessResult) -> GcpSecretAccessResult:
+    if isinstance(result, GcpSecretAccessResult):
+        return result
+    return GcpSecretAccessResult(value=result, last_rotated_at="")
+
+
+def _default_gcp_secret_accessor(resource_name: str) -> GcpSecretAccessResult:
+    """Read one GCP Secret Manager secret version via the optional Google SDK."""
+    try:
+        secretmanager = import_module("google.cloud.secretmanager")
+    except ModuleNotFoundError as exc:
+        raise SecretBackendUnavailableError("google-cloud-secret-manager is not installed") from exc
+
+    try:
+        client_factory: Any = secretmanager.SecretManagerServiceClient
+        client: Any = client_factory()
+        response: Any = client.access_secret_version(request={"name": resource_name})
+        raw_data: object = response.payload.data
+        version_name = getattr(response, "name", resource_name)
+        version_metadata: Any = client.get_secret_version(request={"name": version_name})
+    except Exception as exc:
+        raise SecretBackendUnavailableError(
+            f"GCP Secret Manager access failed for {resource_name}"
+        ) from exc
+
+    return GcpSecretAccessResult(
+        value=_decode_gcp_secret_payload(raw_data, resource_name),
+        last_rotated_at=_format_gcp_timestamp(
+            getattr(version_metadata, "create_time", None),
+            resource_name,
+        ),
     )
 
 
@@ -314,14 +410,17 @@ class GcpSecretManagerResolver:
             raise SecretResolutionError(SecretFailClass.SECRET_UNKNOWN, name)
         return f"projects/{self.project_id}/secrets/{name}/versions/{self.secret_version}"
 
-    def _lookup(self, name: str) -> str:
+    def _lookup_record(self, name: str) -> GcpSecretAccessResult:
         resource_name = self._resource_name(name)
         try:
-            return self.secret_accessor(resource_name)
+            return _coerce_gcp_access_result(self.secret_accessor(resource_name))
         except SecretResolutionError:
             raise
         except Exception as exc:
             raise SecretResolutionError(SecretFailClass.SECRET_UNAVAILABLE, name) from exc
+
+    def _lookup(self, name: str) -> str:
+        return self._lookup_record(name).value
 
     def resolve(
         self,
@@ -340,6 +439,32 @@ class GcpSecretManagerResolver:
         )
         self._lookup(name)
         return SecretRef(name=name, scope=scope, tier=tier)
+
+    def resolve_with_audit_metadata(
+        self,
+        name: str,
+        scope: SecretScope,
+        tier: SandboxTier,
+        *,
+        tool: ToolContract | None = None,
+    ) -> SecretResolutionAuditResult:
+        """Resolve a managed-cloud secret reference with version metadata."""
+        _enforce_allowlist(
+            operator_allowlist=self.operator_allowlist,
+            name=name,
+            scope=scope,
+            tool=tool,
+        )
+        record = self._lookup_record(name)
+        if not record.last_rotated_at.strip():
+            raise SecretResolutionError(SecretFailClass.SECRET_UNAVAILABLE, name)
+        return SecretResolutionAuditResult(
+            ref=SecretRef(name=name, scope=scope, tier=tier),
+            secret_last_rotated_at=record.last_rotated_at,
+            backend=ProviderSecretBackend.GCP_SECRET_MANAGER.value,
+            cache_tier_overhead_ms=0,
+            policy_access_decision_reason="permitted",
+        )
 
     def resolve_bootstrap_value(self, name: str) -> str:
         """Resolve the literal managed-cloud secret value for SDK construction."""

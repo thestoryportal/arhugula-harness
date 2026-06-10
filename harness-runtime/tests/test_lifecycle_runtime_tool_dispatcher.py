@@ -12,11 +12,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
-from harness_as.tool_contract import ToolContract
+from harness_as.secret_fail_class import SecretFailClass
+from harness_as.secret_fetch import SecretRef, SecretScope
+from harness_as.secret_fetch_audit import SecretFetchEvent, compose_secret_fetch_audit_entry
+from harness_as.tool_contract import SecretAllowlistEntry, ToolContract
 from harness_core import PersonaTier
 from harness_cp.cp_shared_types import MCPTrustTier, ModelBinding
 from harness_cp.engine_class import EngineClass
@@ -37,6 +41,8 @@ from harness_cp.workflow_driver_types import (
     WorkflowStep,
 )
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_is.state_ledger_write import WriteResult
+from harness_runtime.config.provider_secrets import SecretResolutionError
 from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
 from harness_runtime.lifecycle.runtime_tool_dispatcher import (
     MCPHostUnreachableError,
@@ -97,6 +103,21 @@ def _make_tool_converter():
     return convert
 
 
+def _make_secret_tool_converter(*required_secrets: SecretAllowlistEntry):
+    def convert(tool):
+        return ToolContract(
+            name=tool.name,
+            description=tool.description or "",
+            input_schema=tool.inputSchema or {"type": "object"},
+            output_schema={"type": "object"},
+            minimum_tier=SandboxTier.TIER_1_PROCESS,
+            blast_radius_tier=BlastRadiusTier.READ_ONLY,
+            required_secrets=required_secrets,
+        )
+
+    return convert
+
+
 async def _build_started_host(register_echo: bool = True) -> MCPClientHost:
     server = _build_fastmcp_server(register_echo=register_echo)
     host = MCPClientHost(
@@ -105,6 +126,21 @@ async def _build_started_host(register_echo: bool = True) -> MCPClientHost:
         trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
         transport_config={"command": "unused"},
         tool_contract_converter=_make_tool_converter(),
+        session_context_factory=_build_session_factory(server),
+        auth_present=False,
+    )
+    await host.start()
+    return host
+
+
+async def _build_started_secret_host(*required_secrets: SecretAllowlistEntry) -> MCPClientHost:
+    server = _build_fastmcp_server(register_echo=True)
+    host = MCPClientHost(
+        transport="stdio",
+        server_name="dispatcher-test-srv",
+        trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
+        transport_config={"command": "unused"},
+        tool_contract_converter=_make_secret_tool_converter(*required_secrets),
         session_context_factory=_build_session_factory(server),
         auth_present=False,
     )
@@ -211,6 +247,299 @@ class _InjectedExecutionDriver:
             "isError": False,
             "structuredContent": {"provider": sandbox_decision.provider},
         }
+
+
+@dataclass(frozen=True)
+class _ResolvedSecretForAudit:
+    ref: SecretRef
+    secret_last_rotated_at: str
+    backend: str = "test-secret-backend"
+    cache_tier_overhead_ms: int = 7
+    policy_access_decision_reason: str = "permitted"
+
+
+class _MetadataSecretResolver:
+    def __init__(self, *results: _ResolvedSecretForAudit) -> None:
+        self._results = {result.ref.name: result for result in results}
+        self.calls: list[tuple[str, SecretScope, SandboxTier, ToolContract | None]] = []
+
+    def resolve_with_audit_metadata(
+        self,
+        name: str,
+        scope: SecretScope,
+        tier: SandboxTier,
+        *,
+        tool: ToolContract | None = None,
+    ) -> _ResolvedSecretForAudit:
+        self.calls.append((name, scope, tier, tool))
+        return self._results[name]
+
+
+class _FailingSecretResolver:
+    def resolve_with_audit_metadata(
+        self,
+        name: str,
+        scope: SecretScope,
+        tier: SandboxTier,
+        *,
+        tool: ToolContract | None = None,
+    ) -> _ResolvedSecretForAudit:
+        _ = scope, tier, tool
+        raise SecretResolutionError(SecretFailClass.SECRET_UNAVAILABLE, name)
+
+
+class _CapturingSecretAuditEmitter:
+    def __init__(self) -> None:
+        self.events: list[SecretFetchEvent] = []
+
+    def emit(self, event: SecretFetchEvent) -> WriteResult:
+        self.events.append(event)
+        return WriteResult.APPENDED
+
+
+class _DedupSecretAuditEmitter:
+    def __init__(self) -> None:
+        self.events: list[SecretFetchEvent] = []
+        self._seen_idempotency_keys: set[str] = set()
+
+    def emit(self, event: SecretFetchEvent) -> WriteResult:
+        entry = compose_secret_fetch_audit_entry(event, None)
+        if entry.idempotency_key in self._seen_idempotency_keys:
+            return WriteResult.IDEMPOTENT_NOOP
+        self._seen_idempotency_keys.add(entry.idempotency_key)
+        self.events.append(event)
+        return WriteResult.APPENDED
+
+
+# ---------- R-CXA-1 — workflow-time secret-fetch AS→IS producer ------------
+
+
+@pytest.mark.asyncio
+async def test_secret_fetch_producer_fires_at_workflow_step() -> None:
+    """R-CXA-1: required_secrets resolve at TOOL_STEP time and emit AS→IS audit."""
+    scope = SecretScope(name="prod")
+    required = SecretAllowlistEntry(name="api-token", scope=scope)
+    ref = SecretRef(name="api-token", scope=scope, tier=SandboxTier.TIER_2_CONTAINER)
+    resolver = _MetadataSecretResolver(
+        _ResolvedSecretForAudit(
+            ref=ref,
+            secret_last_rotated_at="2026-06-08T00:00:00+00:00",
+        )
+    )
+    audit = _CapturingSecretAuditEmitter()
+    host = await _build_started_secret_host(required)
+    dispatcher = RuntimeToolDispatcher(
+        mcp_client_host=host,
+        per_server_trust_evaluator=PerServerTrustEvaluator(),
+        mcp_namespace_emitter=_make_emitter(),
+        trust_policy=_make_trust_policy(),
+        sandbox_decision_resolver=_good_sandbox_resolver,
+        provider_secret_resolver=resolver,
+        secret_fetch_audit_emitter=audit.emit,
+    )
+
+    try:
+        result = await dispatcher.dispatch(
+            _make_binding(),
+            _make_step("echo", {"message": "secret"}),
+            step_context=_make_step_context(),
+        )
+    finally:
+        await host.shutdown()
+
+    assert result["tool_id"] == "echo"
+    assert len(resolver.calls) == 1
+    name, resolved_scope, resolved_tier, tool = resolver.calls[0]
+    assert name == "api-token"
+    assert resolved_scope == scope
+    assert resolved_tier is SandboxTier.TIER_2_CONTAINER
+    assert tool is not None
+    assert tool.required_secrets == (required,)
+
+    assert len(audit.events) == 1
+    event = audit.events[0]
+    assert event.thread_id == "wf-1"
+    assert event.step_id == "step-1"
+    assert event.actor == _make_step_context().parent_actor
+    assert event.secret_name == "api-token"
+    assert event.secret_scope == scope
+    assert event.secret_last_rotated_at == "2026-06-08T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_secret_fetch_event_fields_non_hollow() -> None:
+    """R-CXA-1: rotation metadata changes the structure-not-content fingerprint."""
+    scope = SecretScope(name="prod")
+    required = SecretAllowlistEntry(name="api-token", scope=scope)
+    audit = _CapturingSecretAuditEmitter()
+    resolver = _MetadataSecretResolver(
+        _ResolvedSecretForAudit(
+            ref=SecretRef(
+                name="api-token",
+                scope=scope,
+                tier=SandboxTier.TIER_2_CONTAINER,
+            ),
+            secret_last_rotated_at="2026-06-08T00:00:00+00:00",
+        )
+    )
+    host = await _build_started_secret_host(required)
+    dispatcher = RuntimeToolDispatcher(
+        mcp_client_host=host,
+        per_server_trust_evaluator=PerServerTrustEvaluator(),
+        mcp_namespace_emitter=_make_emitter(),
+        trust_policy=_make_trust_policy(),
+        sandbox_decision_resolver=_good_sandbox_resolver,
+        provider_secret_resolver=resolver,
+        secret_fetch_audit_emitter=audit.emit,
+    )
+
+    try:
+        await dispatcher.dispatch(
+            _make_binding(),
+            _make_step("echo", {"message": "first"}),
+            step_context=_make_step_context(),
+        )
+    finally:
+        await host.shutdown()
+
+    event = audit.events[0]
+    assert event.secret_scope.name == "prod"
+    assert event.secret_last_rotated_at != ""
+    same_secret_rotated = event.model_copy(
+        update={"secret_last_rotated_at": "2026-06-09T00:00:00+00:00"}
+    )
+    first_entry = compose_secret_fetch_audit_entry(event, None)
+    second_entry = compose_secret_fetch_audit_entry(same_secret_rotated, None)
+    assert first_entry.response_hash != second_entry.response_hash
+
+
+@pytest.mark.asyncio
+async def test_secret_fetch_replay_idempotent_noop() -> None:
+    """R-CXA-1: replay of the same workflow-step secret fetch does not duplicate."""
+    scope = SecretScope(name="prod")
+    required = SecretAllowlistEntry(name="api-token", scope=scope)
+    resolver = _MetadataSecretResolver(
+        _ResolvedSecretForAudit(
+            ref=SecretRef(
+                name="api-token",
+                scope=scope,
+                tier=SandboxTier.TIER_2_CONTAINER,
+            ),
+            secret_last_rotated_at="2026-06-08T00:00:00+00:00",
+        )
+    )
+    audit = _DedupSecretAuditEmitter()
+    host = await _build_started_secret_host(required)
+    dispatcher = RuntimeToolDispatcher(
+        mcp_client_host=host,
+        per_server_trust_evaluator=PerServerTrustEvaluator(),
+        mcp_namespace_emitter=_make_emitter(),
+        trust_policy=_make_trust_policy(),
+        sandbox_decision_resolver=_good_sandbox_resolver,
+        provider_secret_resolver=resolver,
+        secret_fetch_audit_emitter=audit.emit,
+    )
+
+    try:
+        for message in ("first", "replay"):
+            await dispatcher.dispatch(
+                _make_binding(),
+                _make_step("echo", {"message": message}),
+                step_context=_make_step_context(),
+            )
+    finally:
+        await host.shutdown()
+
+    assert len(resolver.calls) == 2
+    assert len(audit.events) == 1
+
+
+@pytest.mark.asyncio
+async def test_secret_fetch_span_co_emitted() -> None:
+    """R-CXA-1: successful fetch emits the structure-only secret.fetch span."""
+    scope = SecretScope(name="prod")
+    required = SecretAllowlistEntry(name="api-token", scope=scope)
+    resolver = _MetadataSecretResolver(
+        _ResolvedSecretForAudit(
+            ref=SecretRef(
+                name="api-token",
+                scope=scope,
+                tier=SandboxTier.TIER_2_CONTAINER,
+            ),
+            secret_last_rotated_at="2026-06-08T00:00:00+00:00",
+            backend="gcp-secret-manager",
+            cache_tier_overhead_ms=11,
+            policy_access_decision_reason="permitted",
+        )
+    )
+    audit = _CapturingSecretAuditEmitter()
+    exporter, provider = _otel_setup()
+    host = await _build_started_secret_host(required)
+    dispatcher = RuntimeToolDispatcher(
+        mcp_client_host=host,
+        per_server_trust_evaluator=PerServerTrustEvaluator(),
+        mcp_namespace_emitter=_make_emitter(),
+        trust_policy=_make_trust_policy(),
+        sandbox_decision_resolver=_good_sandbox_resolver,
+        provider_secret_resolver=resolver,
+        secret_fetch_audit_emitter=audit.emit,
+        tracer_provider=provider,
+    )
+
+    try:
+        await dispatcher.dispatch(
+            _make_binding(),
+            _make_step("echo", {"message": "span"}),
+            step_context=_make_step_context(),
+        )
+    finally:
+        await host.shutdown()
+
+    secret_span = next(s for s in exporter.get_finished_spans() if s.name == "secret.fetch")
+    attrs = dict(secret_span.attributes or {})
+    assert attrs["secret.name"] == "api-token"
+    assert attrs["secret.scope"] == "prod"
+    assert attrs["secret.backend"] == "gcp-secret-manager"
+    assert attrs["secret.cache.tier_overhead_ms"] == 11
+    assert attrs["secret.policy.access_decision_reason"] == "permitted"
+    assert "secret.fail.class" not in attrs
+    assert not any("sk-" in str(value) for value in attrs.values())
+
+
+@pytest.mark.asyncio
+async def test_failed_fetch_emits_fail_class() -> None:
+    """R-CXA-1: failed fetch emits secret.fail.class on secret.fetch span."""
+    scope = SecretScope(name="prod")
+    required = SecretAllowlistEntry(name="api-token", scope=scope)
+    exporter, provider = _otel_setup()
+    host = await _build_started_secret_host(required)
+    dispatcher = RuntimeToolDispatcher(
+        mcp_client_host=host,
+        per_server_trust_evaluator=PerServerTrustEvaluator(),
+        mcp_namespace_emitter=_make_emitter(),
+        trust_policy=_make_trust_policy(),
+        sandbox_decision_resolver=_good_sandbox_resolver,
+        provider_secret_resolver=_FailingSecretResolver(),
+        secret_fetch_audit_emitter=_CapturingSecretAuditEmitter().emit,
+        tracer_provider=provider,
+    )
+
+    try:
+        with pytest.raises(SecretResolutionError):
+            await dispatcher.dispatch(
+                _make_binding(),
+                _make_step("echo", {"message": "fail"}),
+                step_context=_make_step_context(),
+            )
+    finally:
+        await host.shutdown()
+
+    secret_span = next(s for s in exporter.get_finished_spans() if s.name == "secret.fetch")
+    attrs = dict(secret_span.attributes or {})
+    assert attrs["secret.name"] == "api-token"
+    assert attrs["secret.scope"] == "prod"
+    assert attrs["secret.fail.class"] == "secret_unavailable"
+    assert not any("sk-" in str(value) for value in attrs.values())
 
 
 # ---------- AC #1 — tool-contract resolution + unknown failure -------------

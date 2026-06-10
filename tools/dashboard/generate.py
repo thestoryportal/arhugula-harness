@@ -94,7 +94,7 @@ ANNOTATIONS = {
     "R-830-memory-tool-production-backend": "Resolved by filesystem, SQLite, live S3 cloud-vault, and live Neon PostgreSQL managed-DB Memory-tool backend proofs.",
     "R-900-research-arcs": "Resolved by decomposing the placeholder into R-901.",
     "R-901-phase-9-retirement-criteria": "Resolved by the Phase-9 retirement criteria brief: research-only selector guidance, no design-substrate back-flow.",
-    "R-CXA-1-as-is-seam": "The one remaining wire (a secret-fetch audit caller) has no real source yet, so wiring it would be hollow; deferred until one exists.",
+    "R-CXA-1-as-is-seam": "Scoped secret-fetch now has a real workflow-time producer; CXA-1 remains partial until the remaining AS→IS edge-scope audit is resolved.",
     "R-CXA-2-cp-is-seam": "Resolved by batch-55 as a counted bounded residual: MVP-safe CP→IS producers are wired, while durable recovery-loop hardening keeps its explicit re-open trigger.",
     "R-CXA-4-od-multi-seam": "Resolved by batch-53: grounding found 0 remaining wireable edges and the bookkeeping-only PARTIAL row was retired.",
     "R-XI-02": "Dashboard polish — dependency-graph view + sparklines; nice-to-have, nothing blocking it.",
@@ -109,8 +109,8 @@ NONRETIRED_LEDGER = [
         "id": "CXA-1",
         "rnnn": "R-CXA-1",
         "state": "PARTIAL",
-        "why": "The AS→IS secret-fetch audit edge has no production caller to fire it.",
-        "retire": "Not safely — wiring it now would be a hollow seam (no real source). Worth it only once a real secret-fetch path exists.",
+        "why": "The scoped secret-fetch producer is wired, but the remaining AS→IS source-unit callback scope is not settled.",
+        "retire": "Not yet — must_pass #1 is closed, but must_pass #2 still needs the AS→IS edge-scope/back-flow audit.",
     },
 ]
 
@@ -145,7 +145,7 @@ REMAINING_ORDERED = [
         "layer": "build",
         "id": "R-CXA-1-as-is-seam",
         "label": "Account/close the AS→IS seam",
-        "gate": "Deferred until a real secret-fetch producer exists; otherwise hollow.",
+        "gate": "must_pass #1 producer implemented; remaining gate is must_pass #2 AS→IS edge-scope/back-flow audit.",
     },
     {
         "n": 4,

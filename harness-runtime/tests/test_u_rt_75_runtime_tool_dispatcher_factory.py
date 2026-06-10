@@ -8,6 +8,7 @@ factory contract + §14.11 C-RT-21.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from harness_core import SandboxDecisionPolicy
@@ -42,6 +43,15 @@ from harness_runtime.types import (
 from opentelemetry.sdk.trace import TracerProvider
 
 
+class _MockLedgerWriter:
+    def __init__(self) -> None:
+        self.appends: list[tuple[Any, Any]] = []
+
+    def append(self, payload: Any, write_key: Any) -> object:
+        self.appends.append((payload, write_key))
+        return object()
+
+
 def _config() -> RuntimeConfig:
     return RuntimeConfig(
         deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
@@ -71,6 +81,7 @@ async def _post_stage_3a_builder(cfg: RuntimeConfig) -> _MutableHarnessContext:
         delay_cap_seconds=0.01,
     )
     builder.tracer_provider = TracerProvider()
+    builder.ledger_writer = _MockLedgerWriter()
     return builder
 
 

@@ -28,6 +28,7 @@ from harness_as.secret_fail_class import SecretFailClass
 from harness_as.secret_fetch import SecretRef, SecretScope
 from harness_as.tool_contract import SecretAllowlistEntry, ToolContract
 from harness_runtime.config.provider_secrets import (
+    GcpSecretAccessResult,
     KeyringSecretResolver,
     SecretAllowlistDeniedError,
     SecretResolutionError,
@@ -496,6 +497,94 @@ def test_gcp_secret_manager_resolve_honors_allowlist() -> None:
     assert ref.name == "e2b-secret"
     assert ref.scope == scope
     assert ref.tier is SandboxTier.TIER_2_CONTAINER
+
+
+def test_gcp_secret_manager_resolve_with_audit_metadata_returns_rotation_metadata() -> None:
+    """R-CXA-1: managed-cloud scoped fetch supplies non-hollow audit metadata."""
+
+    def accessor(resource_name: str) -> GcpSecretAccessResult:
+        assert resource_name == "projects/harness-test-project/secrets/e2b-secret/versions/5"
+        return GcpSecretAccessResult(
+            value="e2b-secret-value",
+            last_rotated_at="2026-06-08T00:00:00+00:00",
+        )
+
+    scope = _scope("r421-managed-cloud")
+    entry = SecretAllowlistEntry(name="e2b-secret", scope=scope)
+    resolver = make_keyring_resolver(
+        ProviderSecretsConfig(
+            backend=ProviderSecretBackend.GCP_SECRET_MANAGER,
+            gcp_project_id="harness-test-project",
+            gcp_secret_version="5",
+            operator_allowlist=(entry,),
+        ),
+        gcp_secret_accessor=accessor,
+    )
+    tool = _tool_with_allowed_secrets(entry)
+
+    result = resolver.resolve_with_audit_metadata(
+        "e2b-secret",
+        scope,
+        SandboxTier.TIER_2_CONTAINER,
+        tool=tool,
+    )
+
+    assert result.ref.name == "e2b-secret"
+    assert result.ref.scope == scope
+    assert result.ref.tier is SandboxTier.TIER_2_CONTAINER
+    assert result.secret_last_rotated_at == "2026-06-08T00:00:00+00:00"
+    assert result.backend == "gcp-secret-manager"
+    assert result.policy_access_decision_reason == "permitted"
+
+
+def test_gcp_secret_manager_audit_metadata_requires_backend_rotation_metadata() -> None:
+    """String-only accessors are accepted for resolve(), but not audit closure."""
+
+    def accessor(_resource_name: str) -> str:
+        return "e2b-secret-value"
+
+    scope = _scope("r421-managed-cloud")
+    entry = SecretAllowlistEntry(name="e2b-secret", scope=scope)
+    resolver = make_keyring_resolver(
+        ProviderSecretsConfig(
+            backend=ProviderSecretBackend.GCP_SECRET_MANAGER,
+            gcp_project_id="harness-test-project",
+            operator_allowlist=(entry,),
+        ),
+        gcp_secret_accessor=accessor,
+    )
+    tool = _tool_with_allowed_secrets(entry)
+
+    with pytest.raises(SecretResolutionError) as excinfo:
+        resolver.resolve_with_audit_metadata(
+            "e2b-secret",
+            scope,
+            SandboxTier.TIER_2_CONTAINER,
+            tool=tool,
+        )
+
+    assert excinfo.value.fail_class is SecretFailClass.SECRET_UNAVAILABLE
+
+
+def test_keyring_audit_metadata_is_unavailable_without_rotation_source(
+    fake_keyring: _FakeKeyring,
+) -> None:
+    """R-CXA-1 avoids keyring sentinels when the backend has no rotation metadata."""
+    keyring.set_password("harness", "local-secret", "value")
+    scope = _scope("local")
+    entry = SecretAllowlistEntry(name="local-secret", scope=scope)
+    resolver = make_keyring_resolver(ProviderSecretsConfig(operator_allowlist=(entry,)))
+    tool = _tool_with_allowed_secrets(entry)
+
+    with pytest.raises(SecretResolutionError) as excinfo:
+        resolver.resolve_with_audit_metadata(
+            "local-secret",
+            scope,
+            SandboxTier.TIER_1_PROCESS,
+            tool=tool,
+        )
+
+    assert excinfo.value.fail_class is SecretFailClass.SECRET_UNAVAILABLE
 
 
 def test_resolve_env_var_fallback_honors_allowlist(

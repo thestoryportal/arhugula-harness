@@ -33,6 +33,7 @@ import hashlib
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
 import jsonschema
@@ -41,7 +42,9 @@ from harness_as.sandbox_fail_class import (
     project_mcp_to_sandbox_fail_class,
 )
 from harness_as.sandbox_tier import SandboxTier
-from harness_as.tool_contract import ToolContract
+from harness_as.secret_fail_class import SecretFailClass
+from harness_as.secret_fetch_audit import SecretFetchEvent
+from harness_as.tool_contract import SecretAllowlistEntry, ToolContract
 from harness_cp.mcp_client_namespace_emitter import (
     MCPClientNamespaceEmitter,
 )
@@ -55,7 +58,12 @@ from harness_cp.workflow_driver_types import (
     StepExecutionContext,
     WorkflowStep,
 )
+from harness_is.state_ledger_entry_schema import Identifier
 
+from harness_runtime.config.provider_secrets import (
+    SecretAllowlistDeniedError,
+    SecretResolutionError,
+)
 from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
 
 __all__ = [
@@ -232,6 +240,13 @@ ATTR_TOOL_CONTRACT_NAME = "tool.contract.name"
 ATTR_STEP_ID = "step.id"
 ATTR_STEP_KIND = "step.step_kind"
 
+ATTR_SECRET_NAME = "secret.name"
+ATTR_SECRET_SCOPE = "secret.scope"
+ATTR_SECRET_BACKEND = "secret.backend"
+ATTR_SECRET_FAIL_CLASS = "secret.fail.class"
+ATTR_SECRET_CACHE_TIER_OVERHEAD_MS = "secret.cache.tier_overhead_ms"
+ATTR_SECRET_POLICY_ACCESS_DECISION_REASON = "secret.policy.access_decision_reason"
+
 
 _SANDBOX_TIER_RANK: Mapping[SandboxTier, int] = {
     SandboxTier.TIER_1_PROCESS: 1,
@@ -267,6 +282,9 @@ class RuntimeToolDispatcher:
         audit_writer: Any = None,
         rate_table: Any = None,
         tool_execution_driver: ToolExecutionDriver | None = None,
+        provider_secret_resolver: Any = None,
+        secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
+        secret_fetch_backend: str = "provider-secret-resolver",
     ) -> None:
         """Construct dispatcher with the cross-axis dependencies.
 
@@ -323,6 +341,9 @@ class RuntimeToolDispatcher:
         self._audit_writer = audit_writer
         self._rate_table = rate_table
         self._tool_execution_driver = tool_execution_driver or MCPHostToolExecutionDriver()
+        self._provider_secret_resolver = provider_secret_resolver
+        self._secret_fetch_audit_emitter = secret_fetch_audit_emitter
+        self._secret_fetch_backend = secret_fetch_backend
 
     def _attribute_tool_cost_best_effort(
         self,
@@ -419,6 +440,125 @@ class RuntimeToolDispatcher:
             _set(span, ATTR_MCP_FAIL_CLASS, mcp_fail_class.value)
             _set(span, ATTR_SANDBOX_FAIL_CLASS, projected.value)
             _set(span, ATTR_IDEMPOTENCY_KEY, idempotency_key)
+
+    def _emit_secret_fetch_span(
+        self,
+        tracer: Any,
+        *,
+        required_secret: SecretAllowlistEntry,
+        backend: str,
+        cache_tier_overhead_ms: int,
+        policy_access_decision_reason: str,
+        fail_class: SecretFailClass | None = None,
+    ) -> None:
+        """Open the structure-only `secret.fetch` span for one required secret."""
+        if tracer is None:
+            return
+        with tracer.start_as_current_span("secret.fetch") as span:
+            _set(span, ATTR_SECRET_NAME, required_secret.name)
+            _set(span, ATTR_SECRET_SCOPE, required_secret.scope.name)
+            _set(span, ATTR_SECRET_BACKEND, backend)
+            _set(span, ATTR_SECRET_CACHE_TIER_OVERHEAD_MS, cache_tier_overhead_ms)
+            _set(
+                span,
+                ATTR_SECRET_POLICY_ACCESS_DECISION_REASON,
+                policy_access_decision_reason,
+            )
+            if fail_class is not None:
+                _set(span, ATTR_SECRET_FAIL_CLASS, fail_class.value)
+
+    def _resolve_and_emit_required_secrets(
+        self,
+        *,
+        contract: ToolContract,
+        sandbox_decision: SandboxDispatchDecision,
+        step: WorkflowStep,
+        step_context: StepExecutionContext,
+        tracer: Any,
+    ) -> None:
+        """Resolve `ToolContract.required_secrets` at the workflow TOOL_STEP site.
+
+        R-CXA-1 producer: the dispatcher has the active workflow/step identity
+        and the resolved sandbox tier, so this is the first non-hollow
+        production call site for AS secret-fetch audit emission.
+        """
+        if not contract.required_secrets:
+            return
+        if self._provider_secret_resolver is None:
+            raise SecretResolutionError(
+                SecretFailClass.SECRET_UNAVAILABLE,
+                "provider-secret-resolver",
+            )
+        if self._secret_fetch_audit_emitter is None:
+            raise RuntimeError(
+                "required_secrets cannot be resolved without secret_fetch_audit_emitter"
+            )
+        resolve_with_metadata = getattr(
+            self._provider_secret_resolver,
+            "resolve_with_audit_metadata",
+            None,
+        )
+        if resolve_with_metadata is None:
+            raise SecretResolutionError(
+                SecretFailClass.SECRET_UNAVAILABLE,
+                "provider-secret-resolver",
+            )
+
+        for required_secret in contract.required_secrets:
+            try:
+                resolved = resolve_with_metadata(
+                    required_secret.name,
+                    required_secret.scope,
+                    sandbox_decision.tier,
+                    tool=contract,
+                )
+                last_rotated_at = getattr(resolved, "secret_last_rotated_at", None)
+                if not isinstance(last_rotated_at, str) or not last_rotated_at.strip():
+                    raise SecretResolutionError(
+                        SecretFailClass.SECRET_UNAVAILABLE,
+                        required_secret.name,
+                    )
+            except SecretResolutionError as exc:
+                self._emit_secret_fetch_span(
+                    tracer,
+                    required_secret=required_secret,
+                    backend=self._secret_fetch_backend,
+                    cache_tier_overhead_ms=0,
+                    policy_access_decision_reason="resolution_failed",
+                    fail_class=exc.fail_class,
+                )
+                raise
+            except SecretAllowlistDeniedError as exc:
+                self._emit_secret_fetch_span(
+                    tracer,
+                    required_secret=required_secret,
+                    backend=self._secret_fetch_backend,
+                    cache_tier_overhead_ms=0,
+                    policy_access_decision_reason=exc.decision.value,
+                    fail_class=SecretFailClass.SECRET_LOCKED,
+                )
+                raise
+
+            event = SecretFetchEvent(
+                secret_name=required_secret.name,
+                secret_scope=required_secret.scope,
+                secret_last_rotated_at=last_rotated_at,
+                actor=step_context.parent_actor,
+                timestamp=datetime.now(UTC),
+                thread_id=Identifier(step_context.workflow_id),
+                step_id=Identifier(step.step_id),
+            )
+            self._secret_fetch_audit_emitter(event)
+            self._emit_secret_fetch_span(
+                tracer,
+                required_secret=required_secret,
+                backend=str(getattr(resolved, "backend", self._secret_fetch_backend)),
+                cache_tier_overhead_ms=int(getattr(resolved, "cache_tier_overhead_ms", 0)),
+                policy_access_decision_reason=str(
+                    getattr(resolved, "policy_access_decision_reason", "permitted")
+                ),
+                fail_class=None,
+            )
 
     async def dispatch(
         self,
@@ -528,6 +668,14 @@ class RuntimeToolDispatcher:
                     sandbox_decision.cost_tier_overhead_ms,
                 )
                 _set(sandbox_enter_span, ATTR_SANDBOX_FAIL_CLASS, "")
+
+            self._resolve_and_emit_required_secrets(
+                contract=contract,
+                sandbox_decision=sandbox_decision,
+                step=step,
+                step_context=step_context,
+                tracer=tracer,
+            )
 
             # --- Step 6: compose idempotency key (per parent step) ----------
             idempotency_key = _compose_idempotency_key(

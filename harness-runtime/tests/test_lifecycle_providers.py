@@ -124,11 +124,13 @@ class _FakeKeyring(KeyringBackend):
 
 
 @pytest.fixture
-def fake_keyring() -> Iterator[_FakeKeyring]:
+def fake_keyring(monkeypatch: pytest.MonkeyPatch) -> Iterator[_FakeKeyring]:
     """Install an in-memory keyring for the duration of one test."""
     backend = _FakeKeyring()
     original = keyring.get_keyring()
     keyring.set_keyring(backend)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     try:
         yield backend
     finally:
