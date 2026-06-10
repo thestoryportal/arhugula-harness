@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `dbfe6623fc76` |
-| `last_refreshed` | 2026-06-10T02:50:00-06:00 |
-| `git_head` | `a5215dde` (main) — Claude release-candidate handoff authored. |
+| `workspace_state_hash` | `94a46dcab20a` |
+| `last_refreshed` | 2026-06-10T14:29:14-06:00 |
+| `git_head` | `e51d952e` (main) — RC deployment-readiness report + advisory audit + runbook §5 fix committed. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 47 |
 
@@ -28,8 +28,9 @@
 
 **Ordered frontier.**
 
-- Complete this post-handoff roadmap/status/dashboard refresh. It pins `.harness/release-candidate-deployment-readiness-runbook.md` and clears the dashboard drift after `a5215dde`.
-- On the next Claude Code session: read `.harness/release-candidate-deployment-readiness-runbook.md`, present the HIL release-candidate scope gate, then begin with provider-free readiness before any live deployment smoke. The active recurring lanes remain `R-600-pattern-bake-in-sweep`, `R-600-codex-out-of-family-review`, and `R-IF-roadmap-refresh`; run them only when the cadence or a concrete review target is present.
+- The release-candidate deployment-readiness arc is **COMPLETE** (2026-06-10, commit `e51d952e`) — verdict **GO**. See `.harness/release-candidate-deployment-readiness-report-2026-06-10.md`. All three deployment tiers proven live with zero harness code changes, including the managed-cloud OTLP→Cloud Trace path (R-421/R-810/R-820); Phase-D advisory traceability audit at `.harness/overlay-advisory-traceability-audit-2026-06-10.md` (buckets stable, none escalated).
+- Two operator-environment items remain (NOT harness defects; not Claude-closeable without operator creds/infra): (1) AWS SSO re-auth (`aws login`) then re-run `just r830-s3-live-e2e`; (2) provision self-hosted `prompts/` + `routing_manifest/` dirs then re-run `just r420-self-hosted-live-e2e`. The 2 managed-cloud IAM grants are dispositioned (token-creator revoked, run.invoker retained on the collector).
+- Active recurring lanes remain `R-600-pattern-bake-in-sweep`, `R-600-codex-out-of-family-review`, and `R-IF-roadmap-refresh`; run them only when the cadence or a concrete review target is present.
 
 **Resolved by PR #456.** `R-CXA-2` is batch-55 `RETIRED-AS-BOUNDED-RESIDUAL`: PR #452 bound the HITL/recovery producer loops at stage 5, PR #454 wired Anthropic provider-turn HITL continuation, and the remaining durable/journaled recovery-loop evidence is explicitly recorded as post-MVP hardening with a re-open trigger for a real event-sourced/reconciler/WAL recovery loop.
 
@@ -51,11 +52,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| local commit (`e51d952e`) | 2026-06-10 | **RC deployment-readiness arc executed — verdict GO.** All 3 deployment tiers proven live with zero harness code changes, incl. managed-cloud OTLP→Cloud Trace (R-421/R-810/R-820, after collector discovery + 2 operator-authorized IAM grants; token-creator since revoked, run.invoker retained). Closure report + Phase-D advisory audit + runbook §5 doc-fix. Remaining = operator-env only (AWS SSO re-auth for S3; self-hosted `prompts/`+`routing_manifest/` dirs). |
 | local merge (`a5215dde`) | 2026-06-10 | **Claude release-candidate handoff authored.** Added `.harness/release-candidate-deployment-readiness-runbook.md` plus root Claude/context pointers so Claude Code can pick up the provider-free readiness, live smoke, traceability cleanup, and optional-polish gate without re-deriving. |
 | local merge (`d4b6b4e3`) | 2026-06-10 | **Overlay-check ignored-artifact fix merged.** `overlay-check` now ignores stale gitignored `tools/semantic_overlay/overlay.json` artifacts while still failing on stale tracked snapshots; the `justfile` wording now matches the R-IF-112 README. |
 | PR #473 (`5eb71c18`) | 2026-06-10 | **Documentation hygiene merged.** Historical root Markdown review/tension/skill artifacts moved under `.harness/archive/root-historical/`, live references retargeted, and `.harness`/`design-substrate` retention READMEs added. |
 | PR #471 (`c8da9292`) | 2026-06-10 | **Substitution-accounting guidance clarified.** `CLAUDE.md` now distinguishes the frozen Phase-8 close snapshot from the live substitution ledger derived from `.harness/substitutions.yaml`, avoiding stale inline live-count claims. |
-| PR #469 (`6632ef5e`) | 2026-06-10 | **R-CXA-2 post-MVP brief pseudocode corrected.** Preserved the one useful root-checkout dirty change: the HITL loop pseudocode now names `RuntimeHITLGateComposer.open_gate(...)` instead of the stale dispatch-shaped placeholder. Stale untracked R-CXA planning/audit leftovers were not landed. |
 
 ---
 
