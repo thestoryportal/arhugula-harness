@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `9f1422b9ce41` |
-| `last_refreshed` | 2026-06-10T15:37:13-06:00 |
-| `git_head` | `a6d2f318` (main) — R-420 self-hosted daemon e2e exercised + passing; every RC surface now exercised. |
+| `workspace_state_hash` | `6fa6e9903cf4` |
+| `last_refreshed` | 2026-06-10T17:46:54-06:00 |
+| `git_head` | `b6ef8e41` (main) — post-MVP closure track (R-CL-*) registered + Phase 0 scope-lock + 2 design forks merged (#477). |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 49 |
 
@@ -22,14 +22,14 @@
 
 **Purpose.** Section 02 is the immediate forward-work selector. It should name the next Claude/Codex-executable frontier after the latest status refresh; completion history belongs in `Recently completed`, the drift log, the forward register, and the retirement ledger.
 
-**Current state.** Operator directed (2026-06-10) **full harness-spec closure (post-MVP)**. The closure spine is `.harness/post-mvp-full-closure-plan-v1.md` (merged, PR #476); the 13-phase **R-CL-\*** track is now registered at `Project_Roadmap_v1.md` §5.15. **Phase 0 (R-CL-P0) is closing via this PR**: every surface re-verified vs HEAD `37b7c80` (scope-lock at `.harness/closure-p0-scope-lock.md`) and the 2 design-gated forks filed. Phase 8 substitution accounting remains closed (54/54 RETIRED).
+**Current state.** Operator directed (2026-06-10) **full harness-spec closure (post-MVP)**. The closure spine is `.harness/post-mvp-full-closure-plan-v1.md` (merged, PR #476); the 13-phase **R-CL-\*** track is registered at `Project_Roadmap_v1.md` §5.15. **Phase 0 (R-CL-P0) is CLOSED** (#477): every surface re-verified vs HEAD `37b7c80` (scope-lock at `.harness/closure-p0-scope-lock.md`), the 2 design-gated forks filed, and the frozen scope **operator-ratified** (operator chose merge-and-proceed). Phase 8 substitution accounting remains closed (54/54 RETIRED).
 
 **Selection rule.** The closure track is the directed active frontier (operator override per §4). Drive each phase per the plan; quality phases (Q/D/C) gate on the capability phases (P).
 
 **Ordered frontier (the R-CL-\* track).**
 
-- **R-CL-P0 — closing via this PR** (ground + scope-lock + forks filed). Exit gate: operator ratifies the frozen scope + the 2 forks.
-- **Next: R-CL-P1 routing intelligence** (the #1 gap — only `DECLARATIVE`-echo bound; P0 verified it's pure Phase-7 impl, no fork). Then **R-CL-P2** (engine-recovery driver + sandbox driver→dispatch wiring [NEW — register's "B-3/B-4 RESOLVED" overstated] + external-engine seam), **R-CL-P3** (TEAM_BINDING e2e), **R-CL-P5** (CXA verify + cost + validator + OD buffer), **R-CL-P6** (spec-prose hygiene). **R-CL-P4** (prompts surface + keying-tuple) is **blocked on the 2 forks' ratification**.
+- **R-CL-P0 — CLOSED** (#477; scope ratified). Capability phases P1/P2/P3/P5/P6 are now unblocked; P4 remains blocked on the 2 forks' design-phase resolution.
+- **NEXT: R-CL-P1 routing intelligence** (the #1 gap — only `DECLARATIVE`-echo bound; P0 verified pure Phase-7 impl, no fork). Build EMBEDDING + LLM_AS_ROUTER decision-fns + capability-shortfall fallback (C-CP-02/03/04). `⚖️` council-eligible (cost ⊥ reliability ⊥ capability-preservation) at policy design. Then **R-CL-P2** (engine-recovery driver + sandbox driver→dispatch wiring [NEW] + external-engine seam), **R-CL-P3** (TEAM_BINDING e2e), **R-CL-P5** (CXA verify + cost + validator + OD buffer), **R-CL-P6** (spec-prose hygiene). **R-CL-P4** (prompts surface + keying-tuple) is **blocked on the 2 forks' ratification**.
 - Then quality: **R-CL-Q1** (DevEx + code-review sweep), **Q2** (security), **Q3** (QA + 100%-evidence), **Q4** (packaging), **R-CL-D1** (docs), **R-CL-C1** (closure cert + ship).
 - Recurring lanes (`R-600-*`, `R-IF-roadmap-refresh`) run on cadence alongside.
 
