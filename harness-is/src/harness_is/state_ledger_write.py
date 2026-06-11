@@ -12,14 +12,16 @@ ledger line is the JSON object `{action_id, idempotency_key, actor:
 the 32-byte digests), `timestamp` as ISO-8601. This is the format U-IS-12's
 read contract pairs with.
 
-**§7.4 deferral — WriteKey ↔ entry shape.** Per the C-IS-07 §7.4 deferral
-(F2-12 carry-forward), the relationship between the `(thread_id, step_id,
-idempotency_key)` keying tuple and the persisted six-field entry is left to
-the implementer. Here: the durable idempotency-dedup key is the persisted
-`idempotency_key` (the Stripe-style idempotency mechanism — C-IS-05 §5);
-`thread_id` / `step_id` are caller-supplied scoping context, validated for
-consistency but not separately persisted (acceptance #10 — WriteKey source
-not committed).
+**§7.5 ratified (reading (iii)) — WriteKey ↔ entry shape.** The relationship
+between the `(thread_id, step_id, idempotency_key)` keying tuple and the
+persisted six-field entry is **reading (iii)**, ratified at IS spec v1.4 §7.5
+(this was the C-IS-07 §7.4 / F2-12 deferral, resolved at post-MVP closure
+R-CL-P4): the durable idempotency-dedup key is the persisted `idempotency_key`
+(the Stripe-style idempotency mechanism — C-IS-05 §5); `thread_id` / `step_id`
+are caller-supplied scoping context, validated for consistency but **not
+separately persisted** as entry fields (acceptance #10 — WriteKey source not
+committed). This matches the landed behavior below; the C-IS-05 §5 six-field
+shape is inviolate (IS-AL-3).
 
 Concurrent-writer serialization (acceptance #7) is by a module-level lock
 around the read-prior-then-append critical section — an implementation-grade

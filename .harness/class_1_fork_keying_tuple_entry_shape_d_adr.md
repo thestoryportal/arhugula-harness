@@ -2,7 +2,7 @@
 
 **Filed at:** Post-MVP closure Phase 0 scope-lock (2026-06-10), HEAD `37b7c80`
 **Locus:** `design-substrate/Spec_Information_Substrate_v1.md` C-IS-07 §7.4 (line ~489; §7 body authored at v1.1, preserved verbatim through v1.3 HEAD) + `design-substrate/ADR-F2.md` §Consequences (c) (lines ~63-64, the named-but-unauthored "D-ADR on ledger entry schema fields" + "D-ADR on ledger entry idempotency-key composition fields").
-**Status:** 🔵 OPEN — filed by closure-plan P0; routes to design-phase before P4 builds anything depending on the reconciliation. Gates the §7.4 portion of `R-CL-P4`.
+**Status:** ✅ RATIFIED-AS-READING-(iii) — operator AskUserQuestion 2026-06-10, re-confirmed 2026-06-11 (the prior-session ratification was captured in-conversation but never applied; re-confirmed against the OPEN fork doc + code at HEAD). Applied at **IS spec v1.4** (NEW §7.5 ratifies reading (iii) + §7.4 deferral→resolution flip + stale F2-12 forward-cite refresh); clearance marker `.harness/clearance/Spec_Information_Substrate-v1_4-cleared-2026-06-11.md`. No behavior/contract change (the landed code already implements reading (iii) — `WriteKey` carries `thread_id`/`step_id`; `StateLedgerEntry` persists only the six fields + the v1.3 sidecar); the one src touch is doc-only — the `state_ledger_write.py` docstring's "§7.4 deferral / left to implementer" framing reconciled to the ratified reading (Codex review finding). The §7.4 portion of `R-CL-P4` is now UNBLOCKED.
 **Routing:** IS-axis design-phase — **Class 1/2 fork → `.harness/` resolution, NOT a foundational ADR** per `[[adr-vs-fork-spec-plan-granularity]]` (this is a spec/plan-granularity reconciliation, not an F1–F5/D1–D6 foundational decision). Resolution cascades to an IS spec v1.x §7.4 amendment.
 **Precedent:** `[[adr-vs-fork-spec-plan-granularity]]` · `[[stale-carry-text-disposition]]` (the §7.4 F2-12 cite is itself stale — see below) · `[[grounding-reveals-claude-closeable-slice-close-honestly]]`.
 
@@ -33,4 +33,6 @@ File this as a Class 1/2 fork; resolve by **ratifying reading (iii)** (code-conf
 
 ## Closeout posture
 
-Filed, not resolved. No code change is owed (the code already implements a reading); the work is **ratify-and-document** + the cite refresh. The §7.4 portion of `R-CL-P4` is **blocked** on this fork's ratification.
+~~Filed, not resolved. No code change is owed (the code already implements a reading); the work is **ratify-and-document** + the cite refresh. The §7.4 portion of `R-CL-P4` is **blocked** on this fork's ratification.~~
+
+**RESOLVED 2026-06-11.** Operator ratified reading (iii) (re-confirmed against the conflicting OPEN fork doc per the memory↔artifact reconcile). Applied as a design-phase bundled-absorption arc: IS spec v1.3 → v1.4 (NEW §7.5 + §7.4 flip + F2-12 cite refresh), pointer bumps (root §2.3 references IS by filename so no bump; `harness-is/CLAUDE.md` §1.2 + `claude-artifact-pointers.md` §2.3 bumped to v1.4), this Status line, and the clearance marker. DP-1 (reading iii) + DP-2 (per-class (iv) coexistence admissible) applied; DP-3 (canonicalization-lib sibling D-ADR) left out of scope as recommended. No behavior/contract change (code already implements (iii)); one doc-only docstring reconciliation at `state_ledger_write.py` (Codex review finding).

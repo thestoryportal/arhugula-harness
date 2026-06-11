@@ -2435,11 +2435,16 @@ R-CL-P4:
     Claude-closeable per closure-plan line 45) — CLOSED: OD spec v1.28 records the §2(a)
     carve-out closure; CollectorConfig.tail_keep_max_buffered_traces + tail_keep_max_spans_per_trace
     (drop-oldest + per-trace overflow drop, both counted); pathological-producer e2e green;
-    clearance marker filed (Spec_Operational_Discipline-v1_28-cleared-2026-06-10). The two
-    IS-axis sub-parts (prompts/active_prompt_version 3rd hash component + keying-tuple D-ADR)
-    remain BLOCKED on ratification of class_1_fork_prompts_management_surface_active_prompt_version.md
-    + class_1_fork_keying_tuple_entry_shape_d_adr.md (both grounded ratification-ready 2026-06-10;
-    gate surfaced to operator). Building the IS sub-parts before ratification = X-AL-3.
+    clearance marker filed (Spec_Operational_Discipline-v1_28-cleared-2026-06-10). Of the two
+    IS-axis sub-parts: keying-tuple D-ADR (C-IS-07 §7.4) — RATIFIED reading (iii) + APPLIED at
+    IS spec v1.4 (§7.4→§7.5 + stale F2-12 cite refresh; clearance marker filed; no behavior/contract
+    change — doc-only src docstring reconciliation); fork class_1_fork_keying_tuple_entry_shape_d_adr.md
+    RESOLVED 2026-06-11. The remaining sub-part — prompts/active_prompt_version 3rd hash component
+    (C-IS-05 §5.2) — was ratified at FULL prompts-management scope (operator 2026-06-10, re-confirmed
+    2026-06-11), which EXPANDS beyond the fork's minimal-binding recommendation into an unsketched
+    versioning/selection surface = a separate larger design-authoring arc (systems-architect/council),
+    tracked at class_1_fork_prompts_management_surface_active_prompt_version.md. R-CL-P4 stays BLOCKED
+    on that Fork-1 arc; building it before the design lands = X-AL-3.
 
 R-CL-P5:
   title: Phase P5 — CXA phase-2 edge verification + cost-model rate tables + validator thresholds
