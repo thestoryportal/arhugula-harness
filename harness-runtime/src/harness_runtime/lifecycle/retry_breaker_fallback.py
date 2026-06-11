@@ -62,12 +62,18 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import FallbackChain, ProviderCandidate
 from harness_cp.engine_namespace import REPLAY_DISPOSITION_MAPPING
+from harness_cp.fall_through_procedure import FallThroughCause
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+from harness_cp.provider_capabilities import (
+    ProviderCapability,
+    provider_supports,
+    reflect_provider_capabilities,
+)
 from harness_cp.routing_manifest_residence import RetryPolicy
 from harness_cp.validator_fail_taxonomy import ValidatorRetryExitClass
 from harness_cp.validator_fail_transient_staircase import StaircaseStage
@@ -149,6 +155,39 @@ def _rebind_to_candidate(
     return binding.model_copy(
         update={"model_binding": ModelBinding(provider=candidate.provider, model=candidate.model)}
     )
+
+
+def _required_capabilities(step: WorkflowStep) -> frozenset[ProviderCapability]:
+    """Derive the ``ProviderCapability`` set a step's payload requires — the
+    C-CP-03 §3.3 ``capability_required`` derivation.
+
+    §3.3 ``on_capability_shortfall(provider, model, capability_required)`` takes
+    ``capability_required`` as a given; this is the impl-discretion mapping
+    (``Spec_Control_Plane_v1_2.md`` §2.4 / §3.27 deferral) from the C-CP-01 §1.1
+    ``(messages, tools, params)`` payload to the C-CP-01 §1.2
+    ``ProviderCapability`` discriminators. The runtime owns this mapping (not CP):
+    CP keeps ``params`` an opaque mapping per C-CP-01 §1.4, while the runtime
+    already reads the ``params["thinking"]`` convention at
+    ``llm_dispatch.py`` ``_extract_request_attrs``.
+
+    - non-empty ``tools`` -> ``TOOLS`` (the call uses tool-use).
+    - ``params["thinking"]`` set -> ``THINKING`` (extended-thinking request;
+      the capability-preservation axis — a thinking step must not route to a
+      non-thinking model).
+
+    Deterministic; a mis-shaped ``params`` value (not a mapping) yields no
+    THINKING requirement, leaving payload-shape failures to the inner C-RT-15
+    dispatcher's typed ``LLMDispatchPayloadShapeError`` rather than pre-empting
+    them here.
+    """
+    payload = step.step_payload
+    required: set[ProviderCapability] = set()
+    if payload.get("tools"):
+        required.add(ProviderCapability.TOOLS)
+    params = payload.get("params")
+    if isinstance(params, Mapping) and cast("Mapping[str, Any]", params).get("thinking"):
+        required.add(ProviderCapability.THINKING)
+    return frozenset(required)
 
 
 def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass | None:
@@ -250,8 +289,52 @@ class RetryBreakerFallbackDispatcher:
             last_failure_class: str | None = None
             chain_length = _chain_length(self.fallback_chain)
             outer_span.set_attribute("fallback.chain_length", chain_length)
+            # C-CP-03 §3.3 ``capability_required`` — constant across the chain
+            # traversal (it is a property of the call-site payload, not the
+            # candidate). Empty for the common case (no tools, no thinking) ->
+            # the §3.3 pre-check below is a no-op.
+            required_caps = _required_capabilities(step)
 
             while True:
+                # --- C-CP-03 §3.3 capability-shortfall pre-check ----------
+                # If the current candidate cannot serve a capability the call
+                # requires, emit ``fallback.triggered`` (cause =
+                # capability_shortfall) and advance to the next provider BEFORE
+                # the error path (the breaker pre-check + provider call). All
+                # candidates short -> the chain exhausts ->
+                # ``RetryBreakerFallbackExhaustedError`` (§3.2 step 3 fail-closed:
+                # a thinking step with no thinking-capable provider fails rather
+                # than silently receiving a non-thinking response — the
+                # capability-preservation guarantee).
+                missing_caps = frozenset(
+                    cap
+                    for cap in required_caps
+                    if not provider_supports(
+                        cap, reflect_provider_capabilities(candidate.provider, candidate.model)
+                    )
+                )
+                if missing_caps:
+                    outer_span.add_event(
+                        "fallback.triggered",
+                        attributes={
+                            "fallback.from_provider": candidate.provider,
+                            "fallback.from_model": candidate.model,
+                            "fallback.cause": FallThroughCause.CAPABILITY_SHORTFALL.value,
+                            "fallback.required_capability": ",".join(
+                                sorted(cap.value for cap in missing_caps)
+                            ),
+                        },
+                    )
+                    last_failure_class = "capability-shortfall"
+                    candidate = self._advance_or_exhaust(
+                        candidate,
+                        outer_span,
+                        last_failure_class,
+                        chain_length,
+                        exhaustion_cause="capability-shortfall",
+                    )
+                    continue
+
                 # --- Step 3: breaker pre-check ----------------------------
                 breaker_identifier = f"{candidate.provider}:{candidate.model}"
                 breaker_obj = self.retry_breaker.get_breaker(
@@ -307,11 +390,17 @@ class RetryBreakerFallbackDispatcher:
         outer_span: Any,
         last_failure_class: str | None,
         chain_length: int,
+        *,
+        exhaustion_cause: str = "per-candidate-retry-exhaustion",
     ) -> ProviderCandidate:
         """Advance to the next candidate or raise on exhaustion (Step 5).
 
-        Emits ``fallback.exhausted`` on the outer span before raising the
-        typed ``RetryBreakerFallbackExhaustedError``.
+        Emits ``fallback.exhausted`` on the outer span before raising the typed
+        ``RetryBreakerFallbackExhaustedError``. ``exhaustion_cause`` attributes
+        the terminal event: the default reflects per-candidate retry exhaustion;
+        the C-CP-03 §3.3 capability-shortfall pre-check passes
+        ``"capability-shortfall"`` so an all-candidates-incapable chain is not
+        mis-classified as retry exhaustion (no provider attempt ran in that case).
         """
         try:
             next_candidate, _result = advance_or_raise(self.fallback_chain, failed)
@@ -321,7 +410,7 @@ class RetryBreakerFallbackDispatcher:
                 attributes={
                     "fallback.chain_length": chain_length,
                     "fallback.last_failure_class": last_failure_class or "unknown",
-                    "fallback.exhaustion_cause": "per-candidate-retry-exhaustion",
+                    "fallback.exhaustion_cause": exhaustion_cause,
                 },
             )
             raise RetryBreakerFallbackExhaustedError(failed) from exc

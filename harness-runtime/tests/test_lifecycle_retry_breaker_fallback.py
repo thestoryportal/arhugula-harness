@@ -41,6 +41,7 @@ from harness_cp.cross_family_fallback_chain import (
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+from harness_cp.provider_capabilities import ProviderCapability
 from harness_cp.routing_manifest_residence import (
     ReservedToolNameError,
     RetryPolicy,
@@ -72,6 +73,7 @@ from harness_runtime.lifecycle.retry_breaker_fallback import (
     RESERVED_LLM_DISPATCH_KEY,
     RetryBreakerFallbackDispatcher,
     RetryBreakerFallbackExhaustedError,
+    _required_capabilities,
     materialize_retry_breaker_fallback_dispatcher_stage,
 )
 from opentelemetry.sdk.trace import TracerProvider
@@ -767,3 +769,170 @@ def _runtime_config(manifest: RoutingManifest) -> Any:
         routing_manifest: RoutingManifest
 
     return _MinimalConfig(routing_manifest=manifest)
+
+
+# ---------------------------------------------------------------------------
+# R-CL-P1 — C-CP-03 §3.3 capability-shortfall fallback (capability-preservation).
+# ---------------------------------------------------------------------------
+
+
+def _thinking_step() -> WorkflowStep:
+    """An INFERENCE_STEP whose payload requests extended thinking.
+
+    ``params["thinking"]`` set -> the call requires the ``THINKING`` provider
+    capability per ``_required_capabilities`` (C-CP-03 §3.3 derivation)."""
+    return WorkflowStep(
+        step_id=StepID("step-001"),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={
+            "messages": [{"role": "user", "content": "think hard"}],
+            "tools": None,
+            "params": {"thinking": {"type": "enabled", "budget_tokens": 4096}},
+        },
+    )
+
+
+def test_required_capabilities_derivation() -> None:
+    """``_required_capabilities`` maps the payload to the C-CP-01 §1.2 capability
+    discriminators: ``tools`` -> TOOLS, ``params['thinking']`` -> THINKING."""
+    # Neither tools nor thinking -> empty (the common path; pre-check no-op).
+    assert _required_capabilities(_step()) == frozenset()
+    # thinking param -> THINKING.
+    assert _required_capabilities(_thinking_step()) == frozenset({ProviderCapability.THINKING})
+    # tools present -> TOOLS.
+    tools_step = WorkflowStep(
+        step_id=StepID("step-001"),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={
+            "messages": [{"role": "user", "content": "use a tool"}],
+            "tools": [{"name": "calc"}],
+            "params": {},
+        },
+    )
+    assert _required_capabilities(tools_step) == frozenset({ProviderCapability.TOOLS})
+    # both -> {TOOLS, THINKING}.
+    both_step = WorkflowStep(
+        step_id=StepID("step-001"),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={
+            "messages": [{"role": "user", "content": "x"}],
+            "tools": [{"name": "calc"}],
+            "params": {"thinking": {"type": "enabled"}},
+        },
+    )
+    assert _required_capabilities(both_step) == frozenset(
+        {ProviderCapability.TOOLS, ProviderCapability.THINKING}
+    )
+
+
+@pytest.mark.asyncio
+async def test_capability_shortfall_skips_incapable_primary_before_provider_call() -> None:
+    """A thinking step at a non-thinking primary advances to a thinking-capable
+    cross-family candidate WITHOUT calling the incapable provider (C-CP-03 §3.3
+    advance-before-error). Uses the *real* runtime model-ID shape
+    ``claude-opus-4-7`` (the Anthropic extended-thinking tier per
+    ``reflect_provider_capabilities.supports_thinking``) — not the short §13.4
+    token — so the test exercises the format runtime bindings actually carry."""
+    primary = _candidate("openai", "gpt-test-1")  # supports_thinking == False
+    cross_family = (_candidate("anthropic", "claude-opus-4-7"),)  # supports_thinking == True
+    chain = _chain(primary, cross_family=cross_family)
+    breaker = _retry_breaker_with_llm_policy(max_attempts=1)
+    # One inner call expected — the capable anthropic candidate. The incapable
+    # openai primary must be skipped before any provider dispatch.
+    inner = _MockInnerDispatcher(outcomes=[{"result": "thinking-ok"}])
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    result = await wrapper.dispatch(_binding(), _thinking_step(), step_context=_step_context())
+    assert result == {"result": "thinking-ok"}
+
+    # The incapable primary was NEVER dispatched; only the capable candidate.
+    assert len(inner.calls) == 1
+    assert inner.calls[0][0].model_binding.provider == "anthropic"
+    assert inner.calls[0][0].model_binding.model == "claude-opus-4-7"
+
+    # Outer span carries the §3.3 fallback.triggered (capability_shortfall) event.
+    spans = exporter.get_finished_spans()
+    outer = next(s for s in spans if s.name == "harness.runtime.retry_breaker_fallback")
+    triggered = [e for e in outer.events if e.name == "fallback.triggered"]
+    assert len(triggered) == 1
+    attrs = triggered[0].attributes
+    assert attrs is not None
+    assert attrs["fallback.cause"] == "capability_shortfall"
+    assert attrs["fallback.from_provider"] == "openai"
+    assert attrs["fallback.from_model"] == "gpt-test-1"
+    assert attrs["fallback.required_capability"] == "thinking"
+
+
+@pytest.mark.asyncio
+async def test_capability_shortfall_exhausts_when_no_capable_candidate() -> None:
+    """A thinking step with no thinking-capable candidate fails-closed
+    (``RetryBreakerFallbackExhaustedError``) WITHOUT any provider call — the
+    capability-preservation guarantee: better to fail than silently serve a
+    thinking step on a non-thinking model (§3.2 step 3 / §3.3)."""
+    primary = _candidate("openai", "gpt-test-1")  # no thinking
+    cross_family = (_candidate("ollama", "llama-test-1"),)  # no thinking
+    chain = _chain(primary, cross_family=cross_family)
+    breaker = _retry_breaker_with_llm_policy(max_attempts=1)
+    inner = _MockInnerDispatcher(outcomes=[])  # must never be called
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    with pytest.raises(RetryBreakerFallbackExhaustedError):
+        await wrapper.dispatch(_binding(), _thinking_step(), step_context=_step_context())
+
+    # No provider was ever dispatched (both candidates skipped pre-call).
+    assert len(inner.calls) == 0
+    # Two capability_shortfall triggers + a terminal fallback.exhausted.
+    spans = exporter.get_finished_spans()
+    outer = next(s for s in spans if s.name == "harness.runtime.retry_breaker_fallback")
+    triggered = [e for e in outer.events if e.name == "fallback.triggered"]
+    assert len(triggered) == 2
+    assert all(e.attributes["fallback.cause"] == "capability_shortfall" for e in triggered)
+    # The terminal fallback.exhausted attributes the shortfall cause, NOT
+    # retry-exhaustion (no provider attempt ran) — accurate failure-mode telemetry.
+    exhausted = next(e for e in outer.events if e.name == "fallback.exhausted")
+    assert exhausted.attributes is not None
+    assert exhausted.attributes["fallback.exhaustion_cause"] == "capability-shortfall"
+    assert exhausted.attributes["fallback.last_failure_class"] == "capability-shortfall"
+
+
+@pytest.mark.asyncio
+async def test_no_capability_requirement_is_behavior_neutral() -> None:
+    """A step with no tools + no thinking param derives an empty capability set;
+    the §3.3 pre-check is a no-op and the primary dispatches normally — the
+    no-regression guard for the common path (existing fixtures use
+    ``params:{max_tokens:…}``)."""
+    primary = _candidate("openai", "gpt-test-1")  # would shortfall IF thinking required
+    chain = _chain(primary)
+    breaker = _retry_breaker_with_llm_policy(max_attempts=1)
+    inner = _MockInnerDispatcher(outcomes=[{"result": "ok"}])
+    tp, exporter = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=breaker,
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    result = await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert result == {"result": "ok"}
+    assert len(inner.calls) == 1
+    assert inner.calls[0][0].model_binding.provider == "openai"
+    # No capability-shortfall event emitted.
+    spans = exporter.get_finished_spans()
+    outer = next(s for s in spans if s.name == "harness.runtime.retry_breaker_fallback")
+    assert "fallback.triggered" not in [e.name for e in outer.events]

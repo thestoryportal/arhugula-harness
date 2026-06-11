@@ -83,6 +83,26 @@ def test_supports_thinking_anthropic_model_catalog() -> None:
         assert caps.supports_thinking == expected
 
 
+def test_supports_thinking_real_runtime_model_ids() -> None:
+    """Acceptance #4 — the reflection identifies extended-thinking tiers from the
+    *real* runtime ``ModelBinding.model`` shape, not just the short §13.4 tokens.
+
+    Runtime bindings carry the full Anthropic API IDs (``claude-`` prefix +
+    optional ``-YYYYMMDD`` snapshot suffix) — e.g. ``claude-opus-4-7`` and
+    ``claude-haiku-4-5`` appear across the runtime tests/e2e. Regression guard
+    for the capability-shortfall consumer (R-CL-P1): a bare-token equality check
+    would mis-classify these real thinking models as non-thinking and skip them.
+    """
+    # Prefixed real IDs — thinking tiers.
+    assert reflect_provider_capabilities("anthropic", "claude-opus-4-7").supports_thinking
+    assert reflect_provider_capabilities("anthropic", "claude-sonnet-4-6").supports_thinking
+    assert reflect_provider_capabilities("anthropic", "claude-opus-4-6").supports_thinking
+    # Snapshot-suffixed real ID — still a thinking tier.
+    assert reflect_provider_capabilities("anthropic", "claude-opus-4-7-20250101").supports_thinking
+    # Prefixed real non-thinking ID — false.
+    assert not reflect_provider_capabilities("anthropic", "claude-haiku-4-5").supports_thinking
+
+
 def test_provider_capability_cardinality_four() -> None:
     """`ProviderCapability` declares exactly four classes per §1.2."""
     assert len(ProviderCapability) == 4
