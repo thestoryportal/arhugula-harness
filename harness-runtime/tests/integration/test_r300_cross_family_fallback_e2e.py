@@ -510,6 +510,136 @@ async def test_r300_live_cross_family_fallback_against_real_providers(
 
 
 # ---------------------------------------------------------------------------
+# R-PM-1 paid live-injection confirmation (real Anthropic + OpenAI; gated on
+# each provider's key). Operator-authorized 2026-06-11. Cheap models + small
+# max_tokens → a few cents. Proves the injected system prompt is honored by the
+# real PAID providers, not only local Ollama / mocks.
+# ---------------------------------------------------------------------------
+
+_PM1_SENTINEL = "PINEAPPLE-PM1-OK"
+_PM1_SYSTEM_PROMPT = (
+    "You are a deterministic test fixture. Ignore the content of the user "
+    f"message. Reply with exactly this text and nothing else: {_PM1_SENTINEL}"
+)
+
+
+def _single_provider_chain(provider: str, model: str, family: Any) -> Any:
+    from harness_cp.cross_family_fallback_chain import FallbackChain, ProviderCandidate
+
+    return FallbackChain(
+        primary=ProviderCandidate(provider=provider, model=model, family=family),
+        same_family=(),
+        cross_family=(),
+        terminal=None,
+    )
+
+
+def _prompt_manifest_config(tmp_path: Path, chain: Any, **opts: Any) -> Any:
+    from harness_is.prompt_manifest import PromptManifest, PromptVersion
+
+    return _build_config(tmp_path, chain, **opts).model_copy(
+        update={
+            "prompt_manifest": PromptManifest(
+                manifest_version=1,
+                active_prompt_version=PromptVersion.from_content(_PM1_SYSTEM_PROMPT),
+            ),
+        },
+    )
+
+
+@pytest.mark.skipif(
+    not os.environ.get("ANTHROPIC_API_KEY"),
+    reason="paid live-injection confirmation requires ANTHROPIC_API_KEY",
+)
+@pytest.mark.asyncio
+async def test_r_pm_1_active_prompt_injection_honored_by_live_anthropic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-PM-1 PR #1 — paid live confirmation: a real Anthropic model honors the
+    injected `system=` prompt (the sentinel exists only in the system prompt).
+    Operator-authorized; ~a cent on claude-haiku-4-5 with max_tokens=16."""
+    from harness_cp.cross_family_fallback_chain import ProviderFamily
+    from harness_runtime.api import run as _run
+
+    anthropic_key = os.environ["ANTHROPIC_API_KEY"]
+
+    def _fake_get_password(service: str, name: str) -> str | None:
+        _ = service
+        return anthropic_key if name == "anthropic_key" else None
+
+    monkeypatch.setattr(
+        "harness_runtime.config.provider_secrets.keyring.get_password",
+        _fake_get_password,
+    )
+    _install_fake_od_stage4(monkeypatch)
+
+    chain = _single_provider_chain("anthropic", "claude-haiku-4-5", ProviderFamily.ANTHROPIC)
+    config = _prompt_manifest_config(tmp_path, chain, anthropic_optional=False)
+    monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
+
+    result = await _run(_make_workflow(chain, params={"max_tokens": 16}), config=config)
+
+    assert isinstance(result, RunResult), f"got {type(result).__name__}"
+    assert result.status == "completed", (
+        f"injected active prompt must not break the real anthropic dispatch; got "
+        f"status={result.status!r} failure_cause={getattr(result, 'failure_cause', None)!r}"
+    )
+    haystack = str(result.terminal_state).upper()
+    assert _PM1_SENTINEL.split("-")[0] in haystack, (
+        f"expected the injected system prompt honored by live anthropic (sentinel "
+        f"{_PM1_SENTINEL!r}); terminal_state={result.terminal_state!r}"
+    )
+
+
+@pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="paid live-injection confirmation requires OPENAI_API_KEY",
+)
+@pytest.mark.asyncio
+async def test_r_pm_1_active_prompt_injection_honored_by_live_openai(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-PM-1 PR #1 — paid live confirmation: a real OpenAI model honors the
+    injected leading `role:"system"` message (the sentinel exists only in the
+    system prompt). Operator-authorized; ~a cent on gpt-4o-mini, max_tokens=16."""
+    from harness_cp.cross_family_fallback_chain import ProviderFamily
+    from harness_runtime.api import run as _run
+
+    openai_key = os.environ["OPENAI_API_KEY"]
+
+    def _fake_get_password(service: str, name: str) -> str | None:
+        _ = service
+        return openai_key if name == "openai_key" else None
+
+    monkeypatch.setattr(
+        "harness_runtime.config.provider_secrets.keyring.get_password",
+        _fake_get_password,
+    )
+    _install_fake_od_stage4(monkeypatch)
+
+    chain = _single_provider_chain("openai", _OPENAI_FALLBACK_MODEL, ProviderFamily.OPENAI)
+    config = _prompt_manifest_config(
+        tmp_path, chain, anthropic_optional=True, openai_optional=False
+    )
+    monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
+
+    result = await _run(_make_workflow(chain, params={"max_tokens": 16}), config=config)
+
+    assert isinstance(result, RunResult), f"got {type(result).__name__}"
+    assert result.status == "completed", (
+        f"injected active prompt must not break the real openai dispatch; got "
+        f"status={result.status!r} failure_cause={getattr(result, 'failure_cause', None)!r}"
+    )
+    haystack = str(result.terminal_state).upper()
+    assert _PM1_SENTINEL.split("-")[0] in haystack, (
+        f"expected the injected system prompt honored by live openai (sentinel "
+        f"{_PM1_SENTINEL!r}); terminal_state={result.terminal_state!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Live Ollama exercise (free local daemon; gated on reachability, no creds).
 # ---------------------------------------------------------------------------
 
