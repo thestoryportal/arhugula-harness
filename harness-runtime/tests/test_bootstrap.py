@@ -31,6 +31,7 @@ from harness_cp.cross_family_fallback_chain import (
     ProviderCandidate,
     ProviderFamily,
 )
+from harness_cp.prompt_selection_manifest import PromptBinding, PromptSelectionManifest
 from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_cp.topology_pattern import TopologyPattern
 from harness_is.path_class_registry import PathClass
@@ -47,6 +48,7 @@ from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.lifecycle.procedural_tier_snapshot import (
     resolve_procedural_tier_snapshot,
 )
+from harness_runtime.lifecycle.prompt_selection import PromptSelectionUnauthoredError
 from harness_runtime.lifecycle.providers import ProviderClientsStage
 from harness_runtime.types import (
     BootstrapStage,
@@ -296,6 +298,129 @@ async def test_bootstrap_resolves_active_prompt_content_onto_llm_dispatcher(
     ctx_empty = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
     bare_empty = ctx_empty.llm_dispatcher.inner.inner  # type: ignore[attr-defined]
     assert bare_empty.active_system_prompt is None
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_workload_selection_drives_active_prompt_and_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-PM-1 cascade PR #3 — the load-bearing e2e: a CP `per_workload_overrides`
+    binding (keyed on the REAL run workload) drives WHICH authored prompt version
+    is active through the real bootstrap. The store (PR #2) gains its consumer:
+    selection → sha → store content → injection. AND the C-IS-05 §5.2
+    procedural-tier hash reflects the SAME selected version (coherence — both the
+    injection reader and the hash reader move together)."""
+    from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
+
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    # An authored versioned store with two members; 'default inline' is the
+    # standing active. Selection will override it to 'se-workload prompt'.
+    store = PromptManifest.from_contents(
+        manifest_version=1,
+        contents=["se-workload prompt", "default inline"],
+        active="default inline",
+    )
+    selection = PromptSelectionManifest(
+        manifest_version=1,
+        per_workload_overrides={
+            _WORKLOAD: PromptBinding(version_sha=prompt_version_sha("se-workload prompt")),
+        },
+    )
+    populated = _config(tmp_path).model_copy(
+        update={"prompt_manifest": store, "prompt_selection_manifest": selection},
+    )
+    ctx = await run_bootstrap(populated, workload_class=_WORKLOAD)
+
+    # Selection reconciled the active version away from the standing 'default inline'.
+    assert ctx.prompt_manifest.active_prompt_version.content == "se-workload prompt"
+    assert ctx.prompt_manifest.active_prompt_version.version_sha == prompt_version_sha(
+        "se-workload prompt"
+    )
+    # Injection reader (the bare dispatcher) sees the selected content.
+    bare = ctx.llm_dispatcher.inner.inner  # type: ignore[attr-defined]
+    assert isinstance(bare, RuntimeLLMDispatcher)
+    assert bare.active_system_prompt == "se-workload prompt"
+
+    # The §5.2 procedural-tier hash moved WITH selection: the selection-driven ctx
+    # differs from a no-selection baseline (which keeps 'default inline' active).
+    ctx_inline = await run_bootstrap(
+        _config(tmp_path).model_copy(update={"prompt_manifest": store}),
+        workload_class=_WORKLOAD,
+    )
+    assert ctx_inline.prompt_manifest.active_prompt_version.content == "default inline"
+    assert resolve_procedural_tier_snapshot(ctx) != resolve_procedural_tier_snapshot(ctx_inline)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_selection_no_match_falls_through_to_inline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A selection manifest that binds neither the MVP-default role nor the run
+    workload → fall-through to the standing inline active prompt (the #496/PR-#1
+    behavior; selection only ADDS resolution, never gates dispatch)."""
+    from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
+
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    store = PromptManifest.from_contents(
+        manifest_version=1,
+        contents=["other-workload prompt", "inline active"],
+        active="inline active",
+    )
+    # Override is for a DIFFERENT workload than the run workload (_WORKLOAD = SE).
+    selection = PromptSelectionManifest(
+        manifest_version=1,
+        per_workload_overrides={
+            WorkloadClass.RESEARCH: PromptBinding(
+                version_sha=prompt_version_sha("other-workload prompt")
+            ),
+        },
+    )
+    populated = _config(tmp_path).model_copy(
+        update={"prompt_manifest": store, "prompt_selection_manifest": selection},
+    )
+    ctx = await run_bootstrap(populated, workload_class=_WORKLOAD)
+
+    assert ctx.prompt_manifest.active_prompt_version.content == "inline active"
+    bare = ctx.llm_dispatcher.inner.inner  # type: ignore[attr-defined]
+    assert isinstance(bare, RuntimeLLMDispatcher)
+    assert bare.active_system_prompt == "inline active"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_selection_unauthored_sha_fails_loud(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A selection binding to a `version_sha` not authored in the store is
+    fail-loud (detect-then-refuse) — it surfaces as a `BootstrapFailure` whose
+    cause is `PromptSelectionUnauthoredError`, never a silent fall-through."""
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    store = PromptManifest.from_contents(
+        manifest_version=1,
+        contents=["only authored"],
+        active=None,
+    )
+    selection = PromptSelectionManifest(
+        manifest_version=1,
+        per_workload_overrides={
+            _WORKLOAD: PromptBinding(version_sha="cafebabe" * 8),  # not in the store
+        },
+    )
+    populated = _config(tmp_path).model_copy(
+        update={"prompt_manifest": store, "prompt_selection_manifest": selection},
+    )
+    with pytest.raises(BootstrapFailure) as excinfo:
+        await run_bootstrap(populated, workload_class=_WORKLOAD)
+    assert isinstance(excinfo.value.cause, PromptSelectionUnauthoredError)
+    assert excinfo.value.failed_stage is BootstrapStage.LOOP_INIT
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,41 @@
+---
+artifact: design-substrate/Spec_Control_Plane_v1_31.md
+version: v1.31
+cleared_at: 2026-06-11T23:55:00-06:00
+clearance_type: Phase-7-absorbed-via-cascade-design (bundled-absorption — design-substrate + harness-cp/src + harness-cp tests + harness-runtime/src + harness-runtime tests + harness-cp/CLAUDE.md pointer)
+back_reference:
+  - .harness/r-pm-1-prompts-management-design-v1.md §4.2 / §6 row #3 (R-PM-1 4-layer design — cascade PR #3; the CP selection layer)
+  - .harness/class_1_fork_prompts_management_surface_active_prompt_version.md DP-4 (the prompts-management fork, multi-version + selection surface)
+  - Project_Roadmap_v1.md §5.16 R-PM-1 + §5.17 R-CC-1 (capability-completion arc #2 — the active frontier)
+  - design-substrate/Spec_Information_Substrate_v1.md v1.7 §5.3 (the IS `PromptManifest.versions` store this selection layer indexes into — the store gains its consumer here)
+  - design-substrate/Spec_Harness_Runtime_v1.md v1.44 §14.5.2 (the PR #1 translate-time injection seam the runtime consumer composes with)
+  - PR (pending — this arc)
+merge_commit: (pending)
+reviewer_chain:
+  - advisor() pre-substantive decision-fork (settled the A-vs-B scope fork → B scoped to the workload dimension; surfaced the load-bearing hash/injection-coherence correctness fix — selection must DRIVE active_prompt_version via model_copy onto the selected store member, NOT merely redirect the injection reader, else injection reads version V while the C-IS-05 §5.2 procedural-tier hash still reports the static version = the exact content↔hash drift PR #1's derive-invariant closed, reintroduced one layer up; named the workload-real-vs-MVP-default tie-breaker; directed CP-side validator structural-only + runtime-deferred fail-loud membership)
+  - impl-time grounding pass (HEAD): verified `_MVP_DEFAULT_AGENT_ROLE` discards the role discriminator at `llm_dispatch.py:489-496`; `grep 'per_role_bindings['` → empty (routing's own per-role bindings have NO runtime indexer → carrying per-role-MVP-default is faithful to the precedent, not a shortcut); `run_bootstrap(config, *, workload_class)` takes workload_class as a required parameter (genuine runtime dimension, not MVP-default → the A-vs-B tie-breaker resolves to B); `resolve_procedural_tier_snapshot` reads version_sha lazily at call-time (early stage-5 reconciliation is seen by both readers)
+  - out-of-family Codex review (decorrelated, pre-merge — PENDING)
+  - harness-adversarial-reviewer Phase-7 pre-merge review (dedicated-agent invocation per `[[feedback-genuine-skill-invocation-dedicated-agent]]` — PENDING)
+supersedes:
+superseded_by:
+---
+
+# Clearance — `Spec_Control_Plane v1.31`
+
+CP spec v1.31 authors NEW §29 / C-CP-29 — `PromptSelectionManifest`, the CP-axis prompt-selection contract (R-PM-1 cascade PR #3). The per-role / per-workload prompt-version selection surface resolves `(role, workload) → version_sha`, mirroring the C-CP-01 §1.3 `RoutingManifest` per-role/workload binding shape (`RoleRoutingBinding` C-CP-03 §3.5 / `WorkloadRoutingOverride` C-CP-04 §4.1). This is the CP half of the R-PM-1 selection-ownership split (tension (i), IS ⊥ CP): authoring/versioning is IS (`PromptManifest.versions`, IS spec v1.7 §5.3); selection-binding is CP. The resolver yields a `version_sha`; the IS store resolves `version_sha → content`; the runtime consumer injects via the runtime spec v1.44 §14.5.2 seam. **This is where the PR #2 versioned store gains its consumer** — selection→sha→content→injection is now behavior-provable e2e.
+
+Clearance covers: §29.1 canonical signatures (`PromptBinding` + `PromptSelectionManifest` + `resolve_active_prompt_version_sha` + `validate_prompt_selection_manifest`) + §29.2 resolution precedence (workload override > role binding > fall-through) + §29.3 cross-axis store-membership runtime-deferred (CP validator structural-only) + §29.4 runtime consumer-site obligation (reconcile `active_prompt_version` onto the selected store member so injection + the §5.2 hash are coherent; fail-loud `RT-FAIL-PROMPT-SELECTION-UNAUTHORED`) + §29.5 failure-mode taxonomy + §29.6 invariants + §29.7 deferred-to-discretion. §29 is **purely additive**; §1/§16.5.x + §25–§28 PRESERVED VERBATIM.
+
+**No new ADR** — the injection mechanism's ADR-F1 fidelity was settled at PR #1 (`ProviderAgnosticPayload` stays frozen); §29 is a CP spec-granularity surface under the cleared R-PM-1 design (PR #505).
+
+Caveats / bounded residuals (all documented, re-open triggers at the R-PM-1 design OQs):
+- **Per-role runtime indexing deferred** to R-300-second-provider — the runtime has no per-step agent role at MVP (`_MVP_DEFAULT_AGENT_ROLE`); per-role bindings are carried + resolved against the default role. Per-workload selection (the genuine runtime dimension) is behavior-driving today. NOT a hollow wire (`[[r-cxa-seam-wiring-is-producer-discovery]]`).
+- **CXA seam registration owed at PR #5** — the CP→IS store-consultation seam (selection sha → store member) is composed at the runtime consumer site (§29.4); its `Cross_Axis_Composition_Document` registration is the cascade PR #5 deliverable (after the producers exist).
+- **Per-step prompt override** (vs per-role/per-workload) — design OQ-3, deferred to a bounded follow-on iff a workload exercises it.
+- **No dedicated `PathClass` residence** for the selection manifest — operator-supplied on `RuntimeConfig.prompt_selection_manifest`; the inline supply path suffices for the capability landing (§29.7).
+
+## Notes
+
+- Phase 7 consumers may rely on v1.31 §29 as canonical for the prompt-selection contract until a successor marker is filed.
+- Verification shape: CP-pure unit tests (`harness-cp/tests/test_prompt_selection_manifest.py`, 7 tests — resolver precedence, structural validation, frozen/extra-forbid, empty-default fall-through) + runtime reconciler unit tests (`harness-runtime/tests/test_prompt_selection.py`, 6 tests — fall-through, workload-selection coherence, MVP-default-role binding, fail-loud unauthored, empty-store fail-loud) + bootstrap e2e (`harness-runtime/tests/test_bootstrap.py`, 3 tests — per_workload_overrides drives `active_system_prompt` + the §5.2 hash through real `run_bootstrap`; no-match fall-through; unauthored-sha `BootstrapFailure`). The e2e path proves the selection→sha→content→injection capability + the hash/injection coherence property (`[[verification-shape-sharpened-grep-vs-e2e]]`).
+- See `.harness/clearance/README.md` for marker discipline.

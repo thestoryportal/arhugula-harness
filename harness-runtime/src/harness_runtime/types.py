@@ -71,6 +71,7 @@ from harness_cp.pause_resume_protocol import PauseResumeProtocol, ResumeOutcomeK
 from harness_cp.per_server_trust_types import TrustPolicy
 from harness_cp.per_step_override_evaluator import CPAuditLedgerEntry, StepEffectiveBinding
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass
+from harness_cp.prompt_selection_manifest import PromptSelectionManifest
 from harness_cp.routing_manifest_residence import RetryPolicy, RoutingManifest
 from harness_cp.sub_agent_brief import SubAgentBrief
 from harness_cp.sub_agent_gate_level_descent import (
@@ -1400,6 +1401,24 @@ class RuntimeConfig(BaseModel):
     → no active prompt), so operators that do not version prompts carry zero
     config burden. The fuller prompts-management surface (multi-prompt
     versioning + selection) is a separate forward arc per the §5.2 fork DP-4.
+    """
+
+    prompt_selection_manifest: PromptSelectionManifest | None = None
+    """Operator-supplied CP prompt-selection manifest (R-PM-1 cascade PR #3; CP
+    spec v1.31 §29).
+
+    Resolves *which* authored prompt version (by `version_sha`) is active for a
+    `(role, workload)`, mirroring `routing_manifest`'s per-role/workload binding
+    shape. `None` (the default) → no selection → the bootstrap falls through to
+    `prompt_manifest.active_prompt_version` (the #496/PR-#1 inline active prompt;
+    zero config burden, the local-first default). When supplied, bootstrap stage
+    5 reconciles `prompt_manifest.active_prompt_version` to the selected store
+    member (per-workload selection keys on the REAL run `workload_class`;
+    per-role on the MVP-default role until real per-role dispatch) via
+    `reconcile_active_prompt_via_selection`, so BOTH the injected system prompt
+    and the C-IS-05 §5.2 procedural-tier hash read the selected version. A
+    binding to an unauthored `version_sha` is fail-loud
+    (`RT-FAIL-PROMPT-SELECTION-UNAUTHORED`).
     """
 
     trust_policy: TrustPolicy | None = None
