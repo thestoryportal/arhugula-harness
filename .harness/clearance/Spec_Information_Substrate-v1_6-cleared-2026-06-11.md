@@ -12,8 +12,8 @@ back_reference:
 merge_commit: (pending)
 reviewer_chain:
   - advisor() pre-substantive decision-fork (approved the cleared design's impl approach; required the prompt_version_sha("")=="" empty-sentinel + after-validator preserving all 3 existing version_sha="" constructors; confirmed provenance-tightening framing — recipe shape unchanged, only version_sha's provenance tightens, so no hash-consumer cascade)
-  - out-of-family Codex review (pending this arc — the decorrelated diff reviewer)
-  - harness-adversarial-reviewer Phase-7 pre-merge review (pending this arc)
+  - out-of-family Codex review (2 rounds to convergence — caught the declarative-path bug: `version_sha` was required, so an operator supplying only `content` via TOML/JSON `RuntimeConfig.prompt_manifest` couldn't construct `PromptVersion` without precomputing the digest, contradicting "the sha is not an independent operator-set field"; fixed via a mode="before" derive + the after-validator still detect-then-refuses an explicit mismatch. Final round: "no discrete correctness issues")
+  - harness-adversarial-reviewer Phase-7 pre-merge review (APPROVE — no Class 1 halt; verified the §5.2 "recipe SHAPE unchanged" claim holds against every consumer (`procedural_tier_snapshot.py:27,113`); whitespace-only → real digest + non-ASCII → valid UTF-8 digest probed; F3-02 model_copy bypass noted latent for PR #2)
   - empirical code-grounding (3 PromptVersion constructors at HEAD are all empty-sentinel → content: str = "" forward-compatible; procedural_tier_snapshot.py reads active_prompt_version.version_sha → the derive-invariant closes the silent-drift gap; verify-by-execution: harness-is 140 + harness-runtime 1584 green, pyright 0, ruff clean, overlay 31/31)
   - design-phase bundled-absorption posture (workspace CLAUDE.md §11.4; X-AL-3 guard satisfied by the paired fork doc + this design artifact)
 supersedes: design-substrate/Spec_Information_Substrate_v1.md v1.5
