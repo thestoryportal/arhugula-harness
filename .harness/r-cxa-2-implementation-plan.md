@@ -154,6 +154,31 @@ Tests first:
 - replay with stable ids returns `IDEMPOTENT_NOOP`;
 - recovery state is not represented by a workflow-layer `PauseSnapshot`.
 
+**Durable-substrate decision (landed 2026-06-10, operator-ratified).** The
+in-memory `DeterministicEnginePauseResumeSubstrate` is a test fixture, not
+crash-survivable, which is why the bound recovery loop was recorded as a
+counted bounded-residual. The harness-owned **`PURE_PATTERN_NO_ENGINE` /
+`JOURNAL_RESUME` / F2** durable substrate landed as
+`harness_runtime.lifecycle.journal_pause_resume_substrate.JournalEnginePauseResumeSubstrate`.
+
+Resolved decisions (so a later spec↔code drift check does not re-flag them):
+
+- **Content store = per-workflow filesystem journal, NOT the IS state ledger.**
+  C-CP-22 §22.1 acceptance #5 prose says resume reads "via the U-IS-12
+  bounded-read keyed on `paused_workflow_id`", but U-IS-12's `NavigationQuery`
+  has no `workflow_id` selector and `StateLedgerEntry` stores a `response_hash`,
+  not the `PauseEvent` body — the ledger is an integrity *anchor*, not a content
+  store. The durable `PauseEvent` content therefore lives in a filesystem
+  journal (`<dir>/<sha256(workflow_id)>.jsonl`); the `cp.pause-captured` /
+  `cp.resume-attempted` ledger entries the loop emits remain the integrity
+  anchors. Snapshot serialization is impl-discretion per acceptance #9. This is
+  a build (operator-ratified 2026-06-10), not a U-IS-12 spec amendment.
+- **Does NOT close R-CXA-2.** The engine recovery loop still has no production
+  *driver*; the factory still binds `Deterministic`. The durable substrate is a
+  committed-but-unwired capability. CXA-2 stays `BOUNDED_RESIDUAL`; wiring (and
+  the journal-path / IS-path-class placement decision) is deferred until a real
+  recovery driver exists. No substitution-ledger count change.
+
 ### Slice 3 — HITL model-driven tool loop producer
 
 Goal: add the provider-neutral model tool loop that fires
