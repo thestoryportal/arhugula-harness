@@ -51,12 +51,15 @@ def _routing_manifest(manifest_version: int = 1) -> RoutingManifest:
     )
 
 
-def _prompt_manifest(version_sha: str = "") -> PromptManifest:
-    """Minimal PromptManifest fixture (empty-defaultable; ``version_sha=""`` →
-    no active prompt, the empty-carrier default)."""
+def _prompt_manifest(content: str = "") -> PromptManifest:
+    """Minimal PromptManifest fixture (empty-defaultable; ``content=""`` →
+    ``version_sha=""`` → no active prompt, the empty-carrier default).
+
+    R-PM-1 PR #1 — the ``version_sha`` is content-derived (``from_content``);
+    distinct content → distinct sha → distinct snapshot (the test intent)."""
     return PromptManifest(
         manifest_version=1,
-        active_prompt_version=PromptVersion(version_sha=version_sha),
+        active_prompt_version=PromptVersion.from_content(content),
     )
 
 
@@ -177,8 +180,8 @@ def test_resolve_different_prompt_version_different_hash() -> None:
     """AC #5 (v1.5): the 3rd component PARTICIPATES — differing
     ``active_prompt_version`` produces different hashes (proves the prompts
     component is wired into the recipe, not merely declared)."""
-    ctx_a = _ctx(prompt_manifest=_prompt_manifest(version_sha="prompt-v-1"))
-    ctx_b = _ctx(prompt_manifest=_prompt_manifest(version_sha="prompt-v-2"))
+    ctx_a = _ctx(prompt_manifest=_prompt_manifest(content="prompt-v-1"))
+    ctx_b = _ctx(prompt_manifest=_prompt_manifest(content="prompt-v-2"))
     assert resolve_procedural_tier_snapshot(ctx_a) != resolve_procedural_tier_snapshot(  # type: ignore[arg-type]
         ctx_b,  # type: ignore[arg-type]
     )
@@ -187,8 +190,8 @@ def test_resolve_different_prompt_version_different_hash() -> None:
 def test_resolve_same_prompt_version_same_hash() -> None:
     """AC #6 (v1.5): identical ``active_prompt_version`` ⇒ identical hash
     (the prompts component holds the snapshot constant when unchanged)."""
-    ctx_a = _ctx(prompt_manifest=_prompt_manifest(version_sha="prompt-v-stable"))
-    ctx_b = _ctx(prompt_manifest=_prompt_manifest(version_sha="prompt-v-stable"))
+    ctx_a = _ctx(prompt_manifest=_prompt_manifest(content="prompt-v-stable"))
+    ctx_b = _ctx(prompt_manifest=_prompt_manifest(content="prompt-v-stable"))
     assert resolve_procedural_tier_snapshot(ctx_a) == resolve_procedural_tier_snapshot(  # type: ignore[arg-type]
         ctx_b,  # type: ignore[arg-type]
     )

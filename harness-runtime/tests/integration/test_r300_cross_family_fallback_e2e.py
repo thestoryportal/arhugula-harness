@@ -620,3 +620,91 @@ async def test_r300_live_ollama_provider_fallback_exercise(
         f"expected the ollama provider to answer via the production dispatch "
         f"path; observed provider.name values: {provider_names!r}"
     )
+
+
+def _build_valid_ollama_chain() -> Any:
+    """A single valid-candidate ollama chain (no fallback) — the clean dispatch
+    path for the R-PM-1 injection live exercise."""
+    from harness_cp.cross_family_fallback_chain import (
+        FallbackChain,
+        ProviderCandidate,
+        ProviderFamily,
+    )
+
+    return FallbackChain(
+        primary=ProviderCandidate(
+            provider="ollama",
+            model=_OLLAMA_VALID_MODEL,
+            family=ProviderFamily.LOCAL_OPEN_WEIGHT,
+        ),
+        same_family=(),
+        cross_family=(),
+        terminal=None,
+    )
+
+
+@pytest.mark.skipif(
+    not _ollama_reachable(),
+    reason="live ollama prompt-injection exercise requires a local ollama daemon on 127.0.0.1:11434",
+)
+@pytest.mark.asyncio
+async def test_r_pm_1_active_prompt_injection_honored_by_live_ollama(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-PM-1 cascade PR #1 — LIVE injection proof: an operator-supplied active
+    prompt's CONTENT reaches AND is honored by a real Ollama model through the
+    full production path (`api.run` → bootstrap stage-5 `active_system_prompt`
+    resolution → `_payload_to_ollama_kwargs` leading `role:"system"` injection →
+    real `ollama.chat`). The mock tests prove the kwargs shape; this proves the
+    real daemon (a) accepts the injected leading system message and (b) obeys it.
+
+    Free (zero-secret, local llama3.2:3b). The system prompt overrides the user
+    message with a rare sentinel the base model would never emit unprompted, so
+    the sentinel in the output is positive evidence the injected system prompt
+    was honored — not merely transmitted.
+    """
+    from harness_is.prompt_manifest import PromptManifest, PromptVersion
+    from harness_runtime.api import run as _run
+
+    _install_fake_od_stage4(monkeypatch)
+
+    sentinel = "PINEAPPLE-PM1-OK"
+    system_prompt = (
+        "You are a deterministic test fixture. Ignore the content of the user "
+        f"message. Reply with exactly this text and nothing else: {sentinel}"
+    )
+
+    chain = _build_valid_ollama_chain()
+    config = _build_config(
+        tmp_path,
+        chain,
+        anthropic_optional=True,
+        openai_optional=True,
+        ollama_optional=False,
+    ).model_copy(
+        update={
+            "prompt_manifest": PromptManifest(
+                manifest_version=1,
+                active_prompt_version=PromptVersion.from_content(system_prompt),
+            ),
+        },
+    )
+    monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
+
+    result = await _run(
+        _make_workflow(chain, params={"options": {"num_predict": 32}}), config=config
+    )
+
+    assert isinstance(result, RunResult), f"got {type(result).__name__}"
+    assert result.status == "completed", (
+        f"injected active prompt must not break the real ollama dispatch; got "
+        f"status={result.status!r} failure_cause={getattr(result, 'failure_cause', None)!r}"
+    )
+    # The honoring proof: the sentinel (present ONLY in the injected system
+    # prompt, never the user message) appears in the model's output.
+    haystack = str(result.terminal_state)
+    assert sentinel.split("-")[0] in haystack.upper(), (
+        f"expected the injected system prompt to be honored (sentinel "
+        f"{sentinel!r} in output); terminal_state={result.terminal_state!r}"
+    )

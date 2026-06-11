@@ -212,6 +212,13 @@ async def execute(
         routing_manifest=ctx.routing_manifest,
         workload_class=workload_class,
         persona_tier=config.persona_tier,
+        # R-PM-1 cascade PR #1 — resolve the active prompt's inline content from
+        # the stage-0-copied `ctx.prompt_manifest` (operator-supplied via
+        # `RuntimeConfig.prompt_manifest`). Empty content → None → no injection
+        # (byte-identical to pre-R-PM-1 dispatch). This is the load-bearing
+        # bootstrap seam: the dispatcher injects the active prompt as a system
+        # prompt at translate-time per runtime spec v1.44 §14.5.
+        active_system_prompt=ctx.prompt_manifest.active_prompt_version.content or None,
     )
 
     # U-RT-58 (C-RT-16 §14.6 D6): rebind ``ctx.llm_dispatcher`` from the

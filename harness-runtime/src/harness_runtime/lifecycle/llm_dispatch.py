@@ -129,6 +129,43 @@ class LLMDispatchPayloadShapeError(Exception):
         super().__init__(f"RT-FAIL-PAYLOAD-SHAPE: {reason}")
 
 
+class PromptInjectionConflictError(Exception):
+    """Raised when a configured active prompt collides with a payload-carried
+    system source at translate-time (R-PM-1 cascade PR #1).
+
+    The active prompt (``HarnessContext.prompt_manifest.active_prompt_version
+    .content``, bound on the dispatcher as ``active_system_prompt``) is the
+    harness-owned base system prompt. If an active prompt is configured AND the
+    payload already carries a competing system source — an Anthropic
+    ``params["system"]`` (the opaque escape hatch) or an OpenAI/Ollama leading
+    ``{"role":"system"}`` message — the two-source ambiguity is **fail-loud /
+    detect-then-refuse**, never silently merged or dropped (consistent with the
+    arc-#1 ``RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE`` posture).
+
+    Maps to ``RT-FAIL-PROMPT-INJECTION-CONFLICT`` per
+    `Spec_Harness_Runtime_v1.md` §C-RT-15 (v1.44 amendment). Step-level (per
+    dispatch), like ``RT-FAIL-PROVIDER-UNREACHABLE``: propagates through the
+    driver ``except`` boundary at `workflow_driver.py` as a step-failure; does
+    NOT abort bootstrap.
+
+    Known operational consequence: for OpenAI/Ollama a leading
+    ``{"role":"system"}`` message is the idiomatic way a workflow step supplies
+    its own system prompt, so configuring an active prompt will hard-error any
+    workflow that already carries its own system message — this is the intended
+    v1 contract (surface the collision, do not silently pick). The escape valve
+    is a future explicit merge/replace policy (runtime spec §14.5 OQ-5).
+    """
+
+    def __init__(self, provider: str, source: str) -> None:
+        self.provider = provider
+        self.source = source
+        super().__init__(
+            "RT-FAIL-PROMPT-INJECTION-CONFLICT: active prompt configured but "
+            f"{provider!r} payload already carries a system source ({source}); "
+            "fail-loud rather than silently merge/replace"
+        )
+
+
 @runtime_checkable
 class _ProvidersLike(Protocol):
     """Minimal ``ctx.providers`` substrate the composer consumes.
@@ -345,6 +382,13 @@ class RuntimeLLMDispatcher:
     routing_manifest: RoutingManifest | None = None
     workload_class: WorkloadClass | None = None
     persona_tier: PersonaTier | None = None
+    # R-PM-1 cascade PR #1 — the active prompt's resolved system-prompt content
+    # (`ctx.prompt_manifest.active_prompt_version.content or None`), bound at
+    # bootstrap stage 5. None / "" → no injection (byte-identical to pre-R-PM-1
+    # dispatch; the local-first default). Per-provider injection happens at the
+    # translate fns (`system=` kwarg for anthropic; leading `role:"system"`
+    # message for openai/ollama); `ProviderAgnosticPayload` stays frozen.
+    active_system_prompt: str | None = None
 
     async def dispatch(
         self,
@@ -622,6 +666,7 @@ class RuntimeLLMDispatcher:
                         registry=self.memory_tool_registry,
                         deployment_surface=self.deployment_surface,
                         tracer=tracer,
+                        system=self.active_system_prompt,
                     )
                 elif (
                     self.hitl_tool_loop is not None
@@ -641,6 +686,7 @@ class RuntimeLLMDispatcher:
                         step_context=step_context,
                         step_id=step_id,
                         persona_tier=self.persona_tier or PersonaTier.SOLO_DEVELOPER,
+                        system=self.active_system_prompt,
                     )
                 else:
                     (
@@ -648,13 +694,19 @@ class RuntimeLLMDispatcher:
                         usage_attrs,
                         cache_attrs,
                         request_attrs,
-                    ) = await _dispatch_anthropic(adapter, model, payload)
+                    ) = await _dispatch_anthropic(
+                        adapter, model, payload, system=self.active_system_prompt
+                    )
             elif provider_name == "openai":
-                response, usage_attrs = await _dispatch_openai(adapter, model, payload)
+                response, usage_attrs = await _dispatch_openai(
+                    adapter, model, payload, system=self.active_system_prompt
+                )
                 cache_attrs = None
                 request_attrs = None
             else:  # provider_name == "ollama" (only remaining branch)
-                response, usage_attrs = await _dispatch_ollama(adapter, model, payload)
+                response, usage_attrs = await _dispatch_ollama(
+                    adapter, model, payload, system=self.active_system_prompt
+                )
                 cache_attrs = None
                 request_attrs = None
 
@@ -914,35 +966,88 @@ def _extract_anthropic_request_attrs(
     )
 
 
-def _payload_to_anthropic_kwargs(payload: ProviderAgnosticPayload) -> dict[str, Any]:
+def _payload_to_anthropic_kwargs(
+    payload: ProviderAgnosticPayload, system: str | None = None
+) -> dict[str, Any]:
     """Translate `ProviderAgnosticPayload` → ``messages.create`` kwargs.
 
     Anthropic's ``messages.create`` requires ``max_tokens``; the
     provider-neutral payload carries it in ``params``. Tools are passed
     through when present; ``params`` keys merge into the call kwargs.
+
+    R-PM-1 PR #1 — when ``system`` (the active prompt content) is supplied,
+    inject it as Anthropic's **top-level ``system=`` kwarg** (the base-system-
+    prompt route per the `claude-api` reference; a ``role:"system"`` message
+    entry is NOT honored as a base prompt by Anthropic). ``ProviderAgnosticPayload``
+    stays frozen — the system content rides the dispatcher, never the payload —
+    so cost-attribution + ``_extract_anthropic_request_attrs`` are untouched
+    (ADR-F1-faithful: per-provider feature use at the call site, no provider-
+    specific field lifted into the neutral record). Fail-loud if ``params``
+    already carries a competing ``system`` (the opaque escape hatch).
     """
     kwargs: dict[str, Any] = {"messages": list(payload.messages)}
     if payload.tools is not None:
         kwargs["tools"] = list(payload.tools)
     kwargs.update(payload.params)
+    if system:
+        if "system" in kwargs:
+            raise PromptInjectionConflictError("anthropic", 'params["system"]')
+        kwargs["system"] = system
     return kwargs
 
 
-def _payload_to_openai_kwargs(payload: ProviderAgnosticPayload) -> dict[str, Any]:
-    """Translate `ProviderAgnosticPayload` → ``chat.completions.create`` kwargs."""
+def _inject_leading_system_message(
+    kwargs: dict[str, Any], system: str | None, provider: str
+) -> None:
+    """Prepend a ``{"role":"system"}`` entry to the OpenAI/Ollama messages
+    (the base-system-prompt route for these providers) when ``system`` is
+    supplied — R-PM-1 PR #1. Operates on the **post-`params`-merge** ``kwargs``
+    so the injection cannot be clobbered by, and any competing system source
+    cannot be hidden in, a ``params["messages"]`` escape-hatch override (Codex
+    review). Fail-loud (`detect-then-refuse`) if the effective messages already
+    lead with a ``role:"system"`` entry (the idiomatic per-step system prompt).
+    """
+    if not system:
+        return
+    messages: list[Mapping[str, Any]] = list(kwargs.get("messages", ()))
+    if messages and messages[0].get("role") == "system":
+        raise PromptInjectionConflictError(provider, 'messages[0] role:"system"')
+    kwargs["messages"] = [{"role": "system", "content": system}, *messages]
+
+
+def _payload_to_openai_kwargs(
+    payload: ProviderAgnosticPayload, system: str | None = None
+) -> dict[str, Any]:
+    """Translate `ProviderAgnosticPayload` → ``chat.completions.create`` kwargs.
+
+    R-PM-1 PR #1 — ``system`` (active prompt content) injects as a leading
+    ``{"role":"system","content":...}`` message (the OpenAI base-prompt route),
+    **after** the ``params`` merge so a ``params["messages"]`` override cannot
+    silently drop it.
+    """
     kwargs: dict[str, Any] = {"messages": list(payload.messages)}
     if payload.tools is not None:
         kwargs["tools"] = list(payload.tools)
     kwargs.update(payload.params)
+    _inject_leading_system_message(kwargs, system, "openai")
     return kwargs
 
 
-def _payload_to_ollama_kwargs(payload: ProviderAgnosticPayload) -> dict[str, Any]:
-    """Translate `ProviderAgnosticPayload` → ``ollama.chat`` kwargs."""
+def _payload_to_ollama_kwargs(
+    payload: ProviderAgnosticPayload, system: str | None = None
+) -> dict[str, Any]:
+    """Translate `ProviderAgnosticPayload` → ``ollama.chat`` kwargs.
+
+    R-PM-1 PR #1 — ``system`` (active prompt content) injects as a leading
+    ``{"role":"system","content":...}`` message (the Ollama base-prompt route),
+    **after** the ``params`` merge so a ``params["messages"]`` override cannot
+    silently drop it.
+    """
     kwargs: dict[str, Any] = {"messages": list(payload.messages)}
     if payload.tools is not None:
         kwargs["tools"] = list(payload.tools)
     kwargs.update(payload.params)
+    _inject_leading_system_message(kwargs, system, "ollama")
     return kwargs
 
 
@@ -1111,14 +1216,20 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
     step_context: StepExecutionContext,
     step_id: str,
     persona_tier: PersonaTier,
+    system: str | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch with generic R-CXA-2 HITL tool continuation.
 
     Non-memory Anthropic ``tool_use`` blocks are adapted into provider-neutral
     ``ModelToolCall`` values, processed by the bound ``RuntimeHITLToolLoop``,
     and then returned to Anthropic as ``tool_result`` blocks for continuation.
+
+    R-PM-1 PR #1 — ``system`` (active prompt content) injects as the Anthropic
+    ``system=`` top-level kwarg; it persists across continuation turns (the
+    mutable ``messages`` list is rebuilt per turn, but ``system`` is a separate
+    kwarg).
     """
-    kwargs = _payload_to_anthropic_kwargs(payload)
+    kwargs = _payload_to_anthropic_kwargs(payload, system)
     messages = list(payload.messages)
     kwargs["messages"] = messages
     context = _hitl_loop_context_from_step(
@@ -1181,6 +1292,7 @@ async def _dispatch_anthropic_with_memory(
     registry: Any,
     deployment_surface: Any,
     tracer: Any,
+    system: str | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch with Memory tool inner loop (U-RT-81).
 
@@ -1197,7 +1309,7 @@ async def _dispatch_anthropic_with_memory(
     backend = registry.resolve_backend(deployment_surface)
     configured_backend = registry.configured_backend
     context_editing_active = derive_context_editing_active(payload.params)
-    kwargs = _payload_to_anthropic_kwargs(payload)
+    kwargs = _payload_to_anthropic_kwargs(payload, system)
 
     response = await execute_with_memory_callbacks(
         adapter=adapter,
@@ -1216,9 +1328,11 @@ async def _dispatch_anthropic(
     adapter: Any,
     model: str,
     payload: ProviderAgnosticPayload,
+    *,
+    system: str | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch — ``client.messages.create(...)``."""
-    kwargs = _payload_to_anthropic_kwargs(payload)
+    kwargs = _payload_to_anthropic_kwargs(payload, system)
     response = await adapter.client.messages.create(model=model, **kwargs)
 
     return _anthropic_response_bundle(response, payload, model)
@@ -1228,9 +1342,11 @@ async def _dispatch_openai(
     adapter: Any,
     model: str,
     payload: ProviderAgnosticPayload,
+    *,
+    system: str | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs]:
     """OpenAI provider branch — ``client.chat.completions.create(...)``."""
-    kwargs = _payload_to_openai_kwargs(payload)
+    kwargs = _payload_to_openai_kwargs(payload, system)
     response = await adapter.client.chat.completions.create(model=model, **kwargs)
 
     usage = getattr(response, "usage", None)
@@ -1246,13 +1362,15 @@ async def _dispatch_ollama(
     adapter: Any,
     model: str,
     payload: ProviderAgnosticPayload,
+    *,
+    system: str | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs]:
     """Ollama provider branch — ``client.chat(...)``.
 
     Ollama's ``ChatResponse`` exposes ``prompt_eval_count`` / ``eval_count``
     instead of a nested ``usage`` object; no ``response_id``.
     """
-    kwargs = _payload_to_ollama_kwargs(payload)
+    kwargs = _payload_to_ollama_kwargs(payload, system)
     response = await adapter.client.chat(model=model, **kwargs)
 
     usage_attrs = _UsageAttrs(
@@ -1381,6 +1499,7 @@ def materialize_llm_dispatcher_stage(
     routing_manifest: RoutingManifest | None = None,
     workload_class: WorkloadClass | None = None,
     persona_tier: PersonaTier | None = None,
+    active_system_prompt: str | None = None,
 ) -> RuntimeLLMDispatcher:
     """Stage 5 LOOP_INIT composer factory for the LLM dispatcher (U-RT-52).
 
@@ -1417,6 +1536,7 @@ def materialize_llm_dispatcher_stage(
         routing_manifest=routing_manifest,
         workload_class=workload_class,
         persona_tier=persona_tier,
+        active_system_prompt=active_system_prompt,
     )
 
 
@@ -1424,6 +1544,7 @@ __all__ = [
     "LLMDispatchBindError",
     "LLMDispatchPayloadShapeError",
     "LLMDispatchProviderUnreachableError",
+    "PromptInjectionConflictError",
     "RuntimeLLMDispatcher",
     "materialize_llm_dispatcher_stage",
 ]
