@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `b45811a5e304` |
-| `last_refreshed` | 2026-06-10T20:18:00-06:00 |
-| `git_head` | `40b34c4f` (main) — R-CL-P3 TEAM_BINDING posture proof landed (#481, partial); → APPLIED-PENDING-OPERATOR-E2E (infra-free sampler+gate distinctness proven; full-workflow live e2e operator-gated). §10.2 reconciled. R-CL-P5 BLOCKED→ACTIVE = next frontier. |
+| `workspace_state_hash` | `d35d2162be3d` |
+| `last_refreshed` | 2026-06-10T20:24:00-06:00 |
+| `git_head` | `02b74eb2` (main) — R-CL-P3 → APPLIED-PENDING-OPERATOR-E2E + R-CL-P5 ACTIVE registered (#482). R-CL-P3 TEAM_BINDING posture proof landed (#481, partial); §10.2 reconciled. R-CL-P5 (CXA verify + cost + validator) = next frontier. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 49 |
 
