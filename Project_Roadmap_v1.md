@@ -2358,7 +2358,7 @@ R-CL-P0:
 R-CL-P1:
   title: Phase P1 — routing intelligence (EMBEDDING + LLM_AS_ROUTER layers + capability-shortfall fallback)
   surface: IV
-  status: PARTIAL      # #479: capability-shortfall landed; EMBEDDING + LLM_AS_ROUTER deferred (substrate-blocked)
+  status: DEFERRED     # PARTIAL is not in STATUS_ORDER (would mis-bucket). #479 capability-shortfall LANDED (the substantive routing-intelligence advance); EMBEDDING + LLM_AS_ROUTER remainder deferred-bounded-residual (see notes + re-open triggers)
   depends_on: [R-CL-P0]
   blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
   posture: phase-7
