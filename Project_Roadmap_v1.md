@@ -2591,7 +2591,7 @@ R-CL-C1:
 R-PM-1:
   title: Full prompts-management surface — injection + selection + versioning/authoring + per-tier governance
   surface: I-prompts
-  status: BLOCKED     # operator-confirmed (2026-06-11 AUQ) FULL-STACK-UPFRONT scope. RE-SEQUENCED 2026-06-11 (same session): the "after R-CL-Q1" ordering is SUPERSEDED by the capability-complete-before-quality directive — as a CAPABILITY, R-PM-1 now lands BEFORE Q1, as arc #2 of the R-CC-1 program (§5.17). Gated on R-CC-1 arc #1. First deliverable = design-phase spec/ADR, then phase-7 impl after clearance.
+  status: RESOLVED     # ✅ all 5 cascade PRs landed (#506 injection / #508 store / #509 selection / #510 governance / #511 CXA seam), 2026-06-12. The distributed per-axis cascade (runtime v1.44 / IS v1.7 / CP v1.31 / OD v1.29 / CXA v2.20 §2.3.8) delivered all 4 layers (injection + selection + versioning/authoring + per-tier governance); no new ADR (ADR-F1-faithful). Was BLOCKED (capability arc #2 of the R-CC-1 program §5.17, FULL-STACK-UPFRONT per 2026-06-11 AUQ).
   depends_on: [R-CC-1]   # was [R-CL-Q1] — inverted by the capability-first directive; R-PM-1 is a capability arc IN the R-CC-1 program (sequenced #2), no longer after Q1.
   blocks: []
   posture: design-phase   # spec/ADR authoring first; then bundled-absorption into phase-7 (clearance markers)
@@ -2655,7 +2655,7 @@ R-CC-1:
   council_required: conditional:nameable-tension   # several arcs carry forks (tier→driver C10⊥C11; prompts selection IS⊥CP + injection blast-radius; api.run C9⊥C11)
   verification: { shape: e2e, must_pass: ["every inventory unit is landed (built+tested) OR dispositioned as a documented bounded-residual with a re-open trigger", "the 2 operator-gate residuals recorded (Gate A=hand-roll engine-recovery → BUILT; Gate B=embedding → DEFERRED-documented)", "only THEN does R-CL-Q1 open on the complete harness"] }
   close_shape: { type: program, artifact: "per-arc PRs (design forks + impl) tracked in the inventory", cascade: [R-IF-roadmap-refresh] }
-  next_pointer: R-PM-1
+  next_pointer: R-CC-1-arc-3-cascade-step-2   # R-PM-1 RESOLVED (arc #2 done — 5 cascade PRs #506-#511). Program now on arc #3 (workflow-layer durable-resume, RE-AIMED from engine-layer per the Class-2 scoping fork): cascade step 1 (api.resume + C-RT-30, runtime v1.45) LANDED #513; step 2 = harness-owned JournalWorkflowPauseStore (durable PauseSnapshot persistence).
   notes: |
     OPERATOR STRATEGIC DIRECTIVE 2026-06-11 — capability-complete-BEFORE-quality. Rationale: running the
     DevEx/review/simplification sweep (R-CL-Q1) on incomplete code means re-running it once capabilities land =
@@ -2671,11 +2671,13 @@ R-CC-1:
       with a real `api.run` resume-from-journal caller (avoids the fake-producer trap). Design-first (X-AL-3).
     - Gate B (EMBEDDING corpus) → **DEFER** (documented bounded-residual; re-open trigger = real routing traffic +
       operator-supplied embedding model; the layer correctly falls through today — no behavior missing).
-    SEQUENCE (inventory §4): arc #1 sandbox tier→driver selection contract (design-fork → factory registry; the
-    real security gap, drivers exist) → #2 R-PM-1 full prompts → #3 engine-layer durable-resume (Gate A) → #4
-    api.run provider-ping fork → P3 live multi-tier e2e (free Ollama) → #5 LLM_AS_ROUTER async-widening fork → #6
-    P5 CXA edges → #7 Claude-closeable cleanups (P3 redaction proof, cost rollup, HITL OQ-6, CXA doc count) → THEN
-    R-CL-Q1.
+    SEQUENCE (inventory §4): arc #1 sandbox tier→driver selection contract ✅DONE #503 → #2 R-PM-1 full prompts
+    ✅DONE (#506-#511) → #3 **workflow-layer** durable-resume (RE-AIMED from engine-layer per the Class-2 scoping
+    fork class_2_fork_engine_durable_resume_no_production_producer.md — Gate A's hand-roll intent preserved, line 181
+    unviolated since the engine-layer loop has no production producer; cascade step 1 = api.resume + C-RT-30 (runtime
+    v1.45) ✅DONE #513, step 2 = harness-owned JournalWorkflowPauseStore) → #4 api.run provider-ping fork → P3 live
+    multi-tier e2e (free Ollama) → #5 LLM_AS_ROUTER async-widening fork → #6 P5 CXA edges → #7 Claude-closeable
+    cleanups (P3 redaction proof, cost rollup, HITL OQ-6, CXA doc count) → THEN R-CL-Q1.
     RE-SEQUENCING APPLIED: R-CL-Q1 ACTIVE→BLOCKED (depends_on +R-CC-1,+R-PM-1); R-PM-1 depends_on [R-CL-Q1]→[R-CC-1]
     (capability, now BEFORE Q1). R-CL-P1/P2/P3 grounding docs carry the per-unit detail; their dispositions are
     superseded by the inventory (P1 embedding=defer/llm-router=design-fork; P2 engine-recovery=hand-roll BUILD +
