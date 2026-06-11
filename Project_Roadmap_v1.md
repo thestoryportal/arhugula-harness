@@ -2419,7 +2419,7 @@ R-CL-P3:
 R-CL-P4:
   title: Phase P4 — spec-completion deferrals (prompts surface + 3rd hash component; keying-tuple D-ADR; OD buffer bounds)
   surface: I-closure
-  status: BLOCKED
+  status: RESOLVED     # all 3 sub-parts closed: OD tail-keep buffer (#490, OD v1.28) + keying-tuple reading-(iii) (#492, IS v1.4) + prompts/active_prompt_version 3rd hash component (#496, IS v1.5 + runtime v1.42, APPLIED-AS-MINIMAL-BINDING). The Q/D/C quality track is now UNBLOCKED.
   depends_on: [R-CL-P0]   # AND the 2 P0 forks ratified (design-before-build)
   blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
   posture: design-phase   # then bundled-absorption into phase-7 (clearance markers)
@@ -2429,22 +2429,24 @@ R-CL-P4:
   council_required: no
   verification: { shape: e2e, must_pass: ["procedural-tier snapshot includes the prompt-version 3rd hash component; keying-tuple↔entry-shape reading ratified + §7.4 cite refreshed; tail-keep buffer bounded under a pathological producer; clearance markers filed"] }
   close_shape: { type: PR-merge, artifact: "spec-completion PR(s) + clearance markers", cascade: [R-IF-roadmap-refresh] }
-  next_pointer: null
+  next_pointer: R-CL-Q1
   notes: >
-    PARTIAL. Sub-part 3 of 3 — OD tail-keep bounded-buffer (C-OD-09 §9.3, Category-1
-    Claude-closeable per closure-plan line 45) — CLOSED: OD spec v1.28 records the §2(a)
-    carve-out closure; CollectorConfig.tail_keep_max_buffered_traces + tail_keep_max_spans_per_trace
-    (drop-oldest + per-trace overflow drop, both counted); pathological-producer e2e green;
-    clearance marker filed (Spec_Operational_Discipline-v1_28-cleared-2026-06-10). Of the two
-    IS-axis sub-parts: keying-tuple D-ADR (C-IS-07 §7.4) — RATIFIED reading (iii) + APPLIED at
-    IS spec v1.4 (§7.4→§7.5 + stale F2-12 cite refresh; clearance marker filed; no behavior/contract
-    change — doc-only src docstring reconciliation); fork class_1_fork_keying_tuple_entry_shape_d_adr.md
-    RESOLVED 2026-06-11. The remaining sub-part — prompts/active_prompt_version 3rd hash component
-    (C-IS-05 §5.2) — was ratified at FULL prompts-management scope (operator 2026-06-10, re-confirmed
-    2026-06-11), which EXPANDS beyond the fork's minimal-binding recommendation into an unsketched
-    versioning/selection surface = a separate larger design-authoring arc (systems-architect/council),
-    tracked at class_1_fork_prompts_management_surface_active_prompt_version.md. R-CL-P4 stays BLOCKED
-    on that Fork-1 arc; building it before the design lands = X-AL-3.
+    RESOLVED 2026-06-11 — all 3 sub-parts closed. (1) OD tail-keep bounded-buffer (C-OD-09 §9.3,
+    Category-1 Claude-closeable) — #490, OD spec v1.28: CollectorConfig.tail_keep_max_buffered_traces +
+    tail_keep_max_spans_per_trace (drop-oldest + per-trace overflow drop, both counted); clearance
+    marker Spec_Operational_Discipline-v1_28-cleared-2026-06-10. (2) keying-tuple D-ADR (C-IS-07 §7.4) —
+    #492, IS spec v1.4: RATIFIED reading (iii) + §7.4→§7.5 flip + stale F2-12 cite refresh; doc-only
+    docstring reconciliation; fork class_1_fork_keying_tuple_entry_shape_d_adr.md RESOLVED. (3) prompts /
+    active_prompt_version 3rd hash component (C-IS-05 §5.2) — #496, APPLIED-AS-MINIMAL-BINDING: IS spec
+    v1.5 (recipe 2→3-component) + runtime spec v1.42 (prompt_manifest at §3 RuntimeConfig + §4
+    HarnessContext + stage-0 copy) + harness_is.prompt_manifest carriers (mirror RoutingManifest);
+    clearance markers Spec_Information_Substrate-v1_5 + Spec_Harness_Runtime-v1_42-cleared-2026-06-11;
+    fork class_1_fork_prompts_management_surface_active_prompt_version.md APPLIED.
+    SCOPE-RECONCILE: this entry had carried "FULL prompts-management scope" — a never-applied prior-session
+    memory capture; the P0-ratified closure-plan scope (#477) + fork DP-4 both pin MINIMAL binding, and the
+    operator's 2026-06-11 AUQ chose minimal → closed at minimal (mirror RoutingManifest, close the §5.2
+    deferral); fuller versioning/selection surface deferred per DP-4 (re-openable). The Q/D/C quality track
+    (R-CL-Q1..C1) is now unblocked.
 
 R-CL-P5:
   title: Phase P5 — CXA phase-2 edge verification + cost-model rate tables + validator thresholds
@@ -2485,7 +2487,7 @@ R-CL-P6:
 R-CL-Q1:
   title: Phase Q1 — DevEx + whole-codebase code-review & simplification sweep
   surface: VII
-  status: BLOCKED
+  status: ACTIVE     # promoted 2026-06-11 (post-#496): all 6 capability P-phases dispositioned — P4/P5/P6 RESOLVED, P1/P2 DEFERRED (parked-by-design, re-open triggers documented), P3 APPLIED-PENDING-OPERATOR-E2E. The quality track reviews the as-built code; deferred capabilities don't gate it. Q1 is the live frontier.
   depends_on: [R-CL-P1, R-CL-P2, R-CL-P3, R-CL-P4, R-CL-P5, R-CL-P6]
   blocks: [R-CL-Q4]
   posture: phase-7
