@@ -1,4 +1,18 @@
-# Specification — Harness Runtime v1.44
+# Specification — Harness Runtime v1.45
+
+## Change-note (v1.44 → v1.45)
+
+**Status posture (PROPOSED 2026-06-12).** v1.45 authors the **workflow-layer durable-resume public surface** — R-CC-1 arc #3 cascade step 1 (`Project_Roadmap_v1.md` §5.17; design `.harness/r-cc-1-arc-3-workflow-durable-resume-design-v1.md`; scoping fork `.harness/class_2_fork_engine_durable_resume_no_production_producer.md` → operator Option 1). Closes the "a paused workflow cannot be surfaced or resumed through the public API" gap: `run()` (C-RT-08 §8) projects a CP `RunStatus.PAUSED` through nothing today (`_CP_TO_RT_STATUS` had no PAUSED entry — a latent KeyError), and there was no resume entry-point. Two amendments: **(1)** C-RT-09 §9 `RunResult` gains a `'paused'` status literal (type-widen — minor bump) + an optional `pause_snapshot: PauseSnapshot | None = None` field (optional-with-default — minor bump), so `run()` surfaces a captured workflow-layer pause; **(2) NEW §30 C-RT-30** authors `resume(workflow, *, pause_snapshot, resume_context=None, config=None) -> RunResult` — the Track-A sibling of `run()` that continues a paused workflow from a caller-supplied `PauseSnapshot` after a fresh bootstrap (a process restart). **C-RT-08 §8 `run()` signature is PRESERVED VERBATIM** (additive `resume` sibling, not a widened `run()` — the minimal cleared-contract blast radius, design D1-A). v1.44 + earlier lineage PRESERVED VERBATIM per the delta-only-spec-file convention except the additive C-RT-09 §9 extension (minor bump per the §9 version-evolution invariant).
+
+**Source of fix.** Design §1 (the gap) + §2 (the durable-resume semantic) + §3 (D1-A additive `resume`; D2-A ledger-as-anchor / journal-as-body) + §7a (the grounded impl plan). The workflow-layer pause/resume *mechanism* already exists at the driver level (`execute_workflow(pause_snapshot_input=...)` + entry-point resume detection, C-RT-24 §14.14.3); cascade step 1 surfaces it through the public Track-A API + restores resume position from `pause_snapshot.step_index`. **Position-only resume is correct** because the MVP execution model is data-stateless between steps (design §1.1) — no working-state rehydration is required. **Resume-admission anchor-validation is DEFERRED** (the MVP `pause_context_reader` returns a constant sentinel → `attempt_resume` detects no material diff → STRICT admits across a fresh bootstrap; the real anchor-reachability predicate is the U-CP-22 arc). Harness-owned durable persistence of the snapshot (so the caller need not persist it) is cascade step 2 (`JournalWorkflowPauseStore`); cascade step 1 is caller-supplied-snapshot. Decorrelated review: advisor caught (i) the resume-admission gate (resolved — MVP placeholder admits) + (ii) the state-vs-position assumption (resolved — data-stateless model).
+
+**Amendments.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§9 C-RT-09 `RunResult`** | ADD `'paused'` to the `status` `Literal` (type-widen, minor) + ADD `pause_snapshot: PauseSnapshot \| None = None` (optional, minor). Invariant: `pause_snapshot is not None` iff `status == 'paused'`. | Design §1/§7a; minor-bump per §9 version-evolution invariant |
+| **NEW §30 C-RT-30 `resume()`** | NEW Track-A operator-facing API: `async def resume(workflow, *, pause_snapshot, resume_context=None, config=None) -> RunResult`. Bootstrap-per-call; entry-point resume detection drives `resume_at_step_index` from `pause_snapshot.step_index`. Failure taxonomy: `RT-FAIL-INVALID-WORKFLOW` / `RT-FAIL-CONCURRENT-RUN` / `RT-FAIL-BOOTSTRAP` (reused) + `RT-FAIL-RESUME-SNAPSHOT-CORRUPTION` / `RT-FAIL-RESUME-MATERIAL-DIFF` (driver returns FAILED before any step runs, carrying the CP fail-class). | Design §2/§3/§7a; C-RT-08 sibling |
+| **C-RT-08 §8 `run()`** | PRESERVED VERBATIM — `resume` is an additive sibling, not a widened `run()`. | Design D1-A |
 
 ## Change-note (v1.43 → v1.44)
 
@@ -2320,18 +2334,20 @@ The choice is made at U-RT-42 landing time, not now. The contract here is the *s
 
 | Field | Type | Semantic |
 |---|---|---|
-| `status` | `Literal['completed', 'drained', 'failed']` | Terminal status of the workflow execution |
+| `status` | `Literal['completed', 'drained', 'failed', 'paused']` | Terminal status of the workflow execution. `'paused'` (v1.45, C-RT-30) is a non-terminal, resumable outcome — a workflow-layer pause (DURABLE_ASYNC HITL gate / explicit-operator) was captured; `pause_snapshot` is populated |
 | `workflow_id` | `harness_core.identity.WorkflowID` | Identity of the executed workflow |
 | `terminal_state` | `dict[str, Any]` | Workflow's terminal state object per CP lifecycle loop contract |
 | `audit_ledger_head_hash` | `str` (hex) | Post-execution audit-ledger head hash for verification |
 | `trace_ids` | `list[str]` | Root span trace IDs emitted by the workflow execution |
 | `cost_attribution` | `CostAttribution` (OD type) | Aggregated 5-step cost-attribution rollup |
 | `failure_cause` | `FailureCause | None` | None unless `status == 'failed'` |
+| `pause_snapshot` | `PauseSnapshot | None` | (NEW v1.45, C-RT-30) The captured workflow-layer `PauseSnapshot` when `status == 'paused'`; `None` otherwise. The caller persists it and passes it to `resume(...)` (C-RT-30) to continue after a process restart. Optional with default — minor bump |
 
 **Invariants.**
 
 - `model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)`.
 - `status == 'failed'` implies `failure_cause is not None`.
+- (NEW v1.45) `pause_snapshot is not None` iff `status == 'paused'` (C-RT-30).
 - `status == 'drained'` indicates `drained_flag` was set during execution and CP loop responded at next lifecycle boundary.
 - `audit_ledger_head_hash` always present; `terminal_state` may be `{}` for trivial workflows.
 - **Version evolution (added at v1.1).** `RunResult` is part of the operator-facing API surface. Adding an *optional* field is a minor bump; adding a *required* field (i.e., one without a default) breaks consumers that construct `RunResult` from kwargs and is a major bump. Removing a field is always a major bump. Renaming is a major bump. Type-widening of an existing field is minor; type-narrowing is major.
@@ -2339,6 +2355,67 @@ The choice is made at U-RT-42 landing time, not now. The contract here is the *s
 **Failure-mode taxonomy.** `RunResult` is a return value, not an operation; it doesn't fail. Failure modes attach to the workflow execution that produces it (see C-RT-08, C-RT-14, CP lifecycle loop contracts).
 
 **Deferred to implementation discretion.** Exact `FailureCause` enumeration (suggest mirror of CP `validator_fail_taxonomy` 5-class set + a 6th `BootstrapFailure` for pre-execution failures; alternatively reuse C-RT-14 runtime-local fail-class set).
+
+---
+
+## §30 C-RT-30 (NEW at v1.45) — `resume()` Python API contract (workflow-layer durable-resume)
+
+**Contract surface.** Signature contract — the Track-A operator-facing sibling of `run()` (§8 C-RT-08).
+
+**PRD enablement.** Enables workflow-layer durable-resume / crash-recovery — a paused workflow (DURABLE_ASYNC HITL gate / explicit-operator pause) is continued after a process restart (R-CC-1 arc #3; capability-completion program §5.17).
+
+**ADR commitment(s) honored.** ADR-F4 v1.1 §Decision (run() hands to CP lifecycle loop — `resume()` re-enters the same loop with a resume snapshot); ADR-D1 v1.2 (the `PURE_PATTERN_NO_ENGINE` / `JOURNAL_RESUME` resumption class — the one recovery class the harness owns with **zero external framework**, I-6-clean). **No new ADR** (the workflow-layer pause/resume mechanism is C-CP-26 / C-RT-24, already cleared).
+
+**Fork-resolution provenance.** Class-2 scoping fork `.harness/class_2_fork_engine_durable_resume_no_production_producer.md` (2026-06-12) — operator chose **Option 1** (re-aim arc #3 from the engine-layer recovery loop, which has no production producer and is forbidden by forward-register line 181 from being faked, to the **workflow-layer** durable-resume gap whose producer fires today). Design `.harness/r-cc-1-arc-3-workflow-durable-resume-design-v1.md`.
+
+**Specification content.**
+
+A second async function exposed at the `harness_runtime` package root:
+
+```python
+async def resume(
+    workflow: WorkflowObject,
+    *,
+    pause_snapshot: PauseSnapshot,
+    resume_context: ResumeContext | None = None,
+    config: RuntimeConfig | None = None,
+) -> RunResult:
+    ...
+```
+
+`run()` surfaces `RunResult(status='paused', pause_snapshot=...)` when a workflow-layer pause fires; the caller persists that `PauseSnapshot` and, after a process restart, passes it to `resume()` to continue the workflow from the paused step.
+
+**Invariants.**
+
+- **Async-only sibling.** Same Track-A posture as `run()` — async-only, single-`WorkflowObject` input, `config=None` → defaults per C-RT-03.
+- **Bootstrap-per-call.** `resume()` performs a fresh bootstrap → re-enter `execute_workflow(..., pause_snapshot_input=pause_snapshot)` → shutdown, exactly like `run()`. The fresh `HarnessContext` is what makes resume cross a process boundary (the operator's durable-resume / crash-recovery intent).
+- **Position from the snapshot; state-stateless.** Resume position is restored from `pause_snapshot.step_index` via the driver's entry-point resume detection (C-RT-24 §14.14.3 → `resume_at_step_index` override, mutually exclusive with prefix-replay). The MVP execution model is **data-stateless between steps** (a step's input is its declared payload + manifest binding; no inter-step working-state carry), so position-only resume is faithful — no working-state rehydration is required.
+- **run_id continuity.** The resumed run reuses `pause_snapshot.run_id` (audit/ledger coherence), NOT a fresh run identifier. (Position comes from `step_index`, not `run_id`.)
+- **Resume-context one-shot delivery.** `resume_context` (e.g. the HITL response the paused gate awaits) is delivered one-shot to the resumed-step gate via the `ResumeContextHolder` sidecar (§14.8.8.9 / CP §26.8.5). `None` (default) → the resumed step re-evaluates its gate.
+- **Pause/resume opt-in required (detect-then-refuse).** `config` MUST opt into the pause/resume protocol (`pause_resume_protocol_config`) — the same opt-in that produced the pause. With no opt-in, `resume()` **FAILS FAST** with `ResumeProtocolNotBoundError` (`RT-FAIL-RESUME-PROTOCOL-NOT-BOUND`) **pre-bootstrap**, rather than silently re-running from step 0 (which would re-execute completed prefix steps + their side effects). Decorrelated-review-caught (out-of-family Codex, this arc).
+- **Snapshot-workflow match (detect-then-refuse).** `pause_snapshot.workflow_id` MUST equal `workflow.workflow_id`; a mismatch raises `ResumeWorkflowMismatchError` (`RT-FAIL-RESUME-WORKFLOW-MISMATCH`) pre-bootstrap. A snapshot's `snapshot_hash` validates against its OWN embedded fields, so a cross-workflow snapshot would otherwise apply the wrong `run_id`/`step_index` to this workflow's steps. Decorrelated-review-caught (Codex, this arc).
+- **Snapshot step-index in range (detect-then-refuse).** `pause_snapshot.step_index` MUST be in `[0, len(workflow.steps))`; otherwise `ResumeStepIndexOutOfRangeError` (`RT-FAIL-RESUME-STEP-INDEX-OUT-OF-RANGE`) pre-bootstrap. A changed/shorter workflow would otherwise slice `steps[resume_at:]` to empty → a successful completed run that executed nothing (silent false-success). Decorrelated-review-caught (Codex, this arc).
+- **`run()` PRESERVED VERBATIM.** `resume()` is an additive sibling; the C-RT-08 §8 `run()` signature is byte-unchanged.
+
+**Resume-admission posture (anchor-validation DEFERRED).** The driver's entry-point resume detection invokes `attempt_resume(pause_snapshot, MaterialDiffPolicy.STRICT)`. Material-diff detection compares `pause_snapshot.state_ledger_anchor` to the current anchor from the bound `pause_context_reader`. At MVP the `pause_context_reader` returns a **constant sentinel** at both capture and resume → no material diff → STRICT **admits** the resume across a fresh bootstrap. The real anchor-reachability predicate (does the pause-time ledger anchor remain reachable from the current entry chain?) is **deferred to the U-CP-22 arc** (CP `_anchor_reachable_predicate` seam). This contract does NOT yet enforce cross-restart ledger-anchor reachability; a future arc that wires the real predicate composes with harness-owned durable persistence (cascade step 2).
+
+**Failure-mode taxonomy.** Per C-RT-14:
+
+| Fail class | Trigger | Behavior |
+|---|---|---|
+| `RT-FAIL-INVALID-WORKFLOW` (permanent) | `InvalidWorkflowError` | Pre-bootstrap rejection; no `HarnessContext` constructed |
+| `RT-FAIL-CONCURRENT-RUN` (permanent) | A `run()`/`resume()` call is in flight | Fail fast; existing in-flight call unaffected |
+| `RT-FAIL-RESUME-PROTOCOL-NOT-BOUND` (permanent) | `resume()` with no `config.pause_resume_protocol_config` | Pre-bootstrap `ResumeProtocolNotBoundError` — detect-then-refuse rather than silently re-run from step 0 |
+| `RT-FAIL-RESUME-WORKFLOW-MISMATCH` (permanent) | `pause_snapshot.workflow_id != workflow.workflow_id` | Pre-bootstrap `ResumeWorkflowMismatchError` — a snapshot may only resume its own workflow |
+| `RT-FAIL-RESUME-STEP-INDEX-OUT-OF-RANGE` (permanent) | `pause_snapshot.step_index` not in `[0, len(workflow.steps))` | Pre-bootstrap `ResumeStepIndexOutOfRangeError` — else `steps[resume_at:]` is empty → silent false-success |
+| `RT-FAIL-BOOTSTRAP` (permanent) | Bootstrap failure (any stage) | Per C-RT-02 rollback |
+| `RT-FAIL-RESUME-SNAPSHOT-CORRUPTION` (permanent) | `pause_snapshot.snapshot_hash` mismatch at `attempt_resume` (AC #1) | Driver returns `RunResult(status='failed')` carrying CP `CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION` on `failure_cause.validator_fail_class`; no step runs |
+| `RT-FAIL-RESUME-MATERIAL-DIFF` (permanent) | STRICT + material diff at `attempt_resume` (AC #3) | FAILED carrying `CP-FAIL-RESUME-MATERIAL-DIFF-DETECTED`; no step runs (latent at MVP — the constant-sentinel reader never reports a diff) |
+| (downstream) | Post-resume workflow-execution failures | Per CP lifecycle loop contracts; surfaced through `RunResult` |
+
+**Scope (cascade step 1).** Caller-supplied `PauseSnapshot` only. Harness-owned durable persistence (a `JournalWorkflowPauseStore` so the caller need not serialize the snapshot itself — applying the crash-survivable journal pattern of the engine-layer #475 substrate to the workflow-layer `PauseSnapshot` type, **reused by pattern, not bound**; the engine-layer recovery loop stays the line-181 bounded-residual) is **cascade step 2**.
+
+**Deferred to implementation discretion.** Snapshot serialization format the caller uses for persistence (Pydantic JSON is the natural shape); the resume-context propagation depth beyond the one-shot HITL response; the `JournalWorkflowPauseStore` path-class placement (cascade step 2, resolved with the store).
 
 ---
 

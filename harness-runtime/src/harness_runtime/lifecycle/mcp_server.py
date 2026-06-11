@@ -325,7 +325,23 @@ def materialize_mcp_server_stage(
                     f"invoking the `run_workflow` tool per AC #5."
                 )
 
-        run_id = uuid.uuid4().hex
+        # C-RT-30 (R-CC-1 arc #3) resume path. `api.resume()` binds an
+        # in-process `_resume_pause_snapshot` on `_state` (NOT over the MCP
+        # wire — mirrors `_harness_ctx`). When present, this invocation is a
+        # resume: reuse the snapshot's `run_id` for audit/ledger coherence
+        # (resume *position* comes from `snapshot.step_index` via the driver's
+        # entry-point override, not from run_id) + thread the snapshot to the
+        # driver as `pause_snapshot_input=` so entry-point resume detection
+        # (`workflow_driver.py` C-RT-24 §14.14.3) fires.
+        _resume_snapshot = state.get("_resume_pause_snapshot")
+        run_id = _resume_snapshot.run_id if _resume_snapshot is not None else uuid.uuid4().hex
+        # One-shot resume-context delivery to the resumed-step HITL gate
+        # (CP spec v1.16 §26.8.5 → runtime ResumeContextHolder sidecar).
+        _resume_context = state.get("_resume_context")
+        if _resume_context is not None:
+            _holder = getattr(harness_ctx, "resume_context_holder", None)
+            if _holder is not None:
+                _holder.set(_resume_context)
         # Bind the in-flight tool ctx for the duration of the workflow
         # execution per spec v1.36 §14.18 chapeau per-session ctx isolation.
         # `ServerCtxElicitCallback` (per AC #4) reads via the module-level
@@ -355,6 +371,7 @@ def materialize_mcp_server_stage(
                     harness_ctx,
                     default_model_binding=workflow.default_model_binding,
                     step_dispatchers=cast(Any, effective_step_dispatchers),
+                    pause_snapshot_input=_resume_snapshot,
                 ),
                 timeout=drain_timeout_seconds,
             )
