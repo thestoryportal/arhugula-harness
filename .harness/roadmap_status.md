@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `1d3f0e97f388` |
-| `last_refreshed` | 2026-06-10T19:25:59-06:00 |
-| `git_head` | `946558b6` (main) — §5.15 register reconciled post-#479 (R-CL-P0 RESOLVED, P1 DEFERRED-bounded-residual, P2 ACTIVE); R-CL-P1 capability-shortfall fallback landed (#479). |
+| `workspace_state_hash` | `262ee2d7f972` |
+| `last_refreshed` | 2026-06-10T20:01:51-06:00 |
+| `git_head` | `349d5a31` (main) — R-CL-P2 engine-recovery activation DEFERRED at entry-grounding (#480; advisor-confirmed; buildable Phase-7 slice empty); sandbox C-1 unbundled → R-410-family; R-CL-P3 BLOCKED→ACTIVE = next frontier. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 49 |
 
@@ -55,11 +55,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #480 | 2026-06-10 | **R-CL-P2 engine-recovery activation → DEFERRED (entry-grounding, advisor-confirmed).** Grounding found the buildable non-hollow Phase-7 slice empty: engine-recovery driver = ratified batch-55 bounded-residual (register line 181 forbids faking it; I-6 no-vendor; loop has no production caller); SAVE_POINT adapter speculative (zero consumers); HITL OQ-5/7 hollow, OQ-6 thin-latent. Do NOT bind #475 into the factory (cosmetic; would force a closed-`PathClass` extension). Roadmap-hygiene: unbundled the mis-bundled sandbox C-1 → R-410-family finding (production tier→driver selection unwired; enforcement test-injection-only; design-adjacent → file-don't-build). `.harness/r-cl-p2-engine-recovery-grounding.md`. R-CL-P3 BLOCKED→ACTIVE = NEXT. |
 | PR #479 | 2026-06-10 | **R-CL-P1 routing intelligence — capability-shortfall fallback landed (PARTIAL).** C-CP-03 §3.3 pre-dispatch capability check wired into `RetryBreakerFallbackDispatcher` (derive `capability_required` from the payload → reflect candidate caps → advance the C-CP-04 chain *before* the error path; fail-closed on all-incapable). The capability-preservation axis ("don't route a thinking-step to a non-thinking model"). Codex (decorrelated) caught a P1 + P2: `reflect_provider_capabilities` exact-matched short tier tokens but runtime bindings carry full IDs (`claude-opus-4-7`) — root-fixed + regression-pinned; capability-shortfall exhaustion now attributes the correct cause. EMBEDDING + LLM_AS_ROUTER deferred (substrate-blocked; documented re-open triggers). 822 CP + 1555 runtime tests pass. |
 | PR #475 | 2026-06-10 | **Durable F2 engine pause/resume substrate merged — R-CXA-2 S3 (R-CL-P2 input).** `JournalEnginePauseResumeSubstrate` (`harness-runtime/.../lifecycle/journal_pause_resume_substrate.py`): per-workflow fsync'd filesystem journal, fail-closed corruption handling. Codex review converged clean over 7 passes (6 real durability bugs fixed); 13/13 CI green. Honest scope: does NOT close R-CXA-2 (no production driver → stays bounded-residual) — it is the capability substrate the R-CL-P2 engine-recovery driver binds. |
 | PR #477 | 2026-06-10 | **R-CL-\* closure track registered + Phase 0 CLOSED + 2 design forks filed.** 13-phase post-MVP closure spine registered at `Project_Roadmap_v1.md` §5.15; P0 re-verified every surface vs HEAD (scope-lock `.harness/closure-p0-scope-lock.md`), operator-ratified merge-and-proceed. Caught 2 stale-optimistic register claims (sandbox drivers built+tested but NOT prod-dispatcher-selected; routing `DECLARATIVE`-echo-only). 2 IS forks filed (`prompts_management_surface_active_prompt_version` + `keying_tuple_entry_shape_d_adr`) — block R-CL-P4 only. |
 | PR #476 | 2026-06-10 | **Post-MVP full harness closure plan v1 authored + merged** (`.harness/post-mvp-full-closure-plan-v1.md`). 13-phase spine (P0 ground → P1-P6 capabilities → Q1-Q4 hardening → D1 docs → C1 cert). Reframe: MVP+RC closed most activation; this closes the residual frontier + adds the full testing/DevEx/QA/security/code-review/packaging/docs apparatus. Two revisable structural decisions (§0.3). |
-| local commit (`a6d2f318`) | 2026-06-10 | **R-420 self-hosted daemon e2e EXERCISED + PASSING — every RC surface now exercised (RC follow-up).** On operator request: `mkdir`'d empty `prompts/`+`routing_manifest/`, repointed STATE_LEDGER to a throwaway path (IS-1 wants a fresh ledger; the pre-existing 113-entry `.harness/state.jsonl` left untouched), brought the OTLP stack up → `workflow=r420-self-hosted-tool-echo status=success cost=0 hosted-provider-calls=0` (daemon socket-bind + keyring `r420_probe_key` + OTLP + Ollama + MCP echo TOOL_STEP). Scaffolding cleaned up; stack torn down. Nothing in the RC arc remains unexercised. |
 
 ---
 
