@@ -114,6 +114,8 @@ Dependency-ordered. Capability phases (P) → cross-cutting hardening (Q) → do
 
 ### Phase P2 — Engine-recovery activation  `⚖️ council (C10 blast-radius ⊥ C11 operator-burden)`
 
+> **STATUS: DEFERRED (entry-grounding 2026-06-10, advisor-confirmed — `.harness/r-cl-p2-engine-recovery-grounding.md`).** Grounding found the buildable, non-hollow Phase-7 slice empty. The engine-recovery **driver** is a *ratified* batch-55 bounded-residual (forward-register line 181 forbids faking it; I-6 forbids vendoring the engines that would produce engine-layer pauses) — not an open build. The **SAVE_POINT** adapter is speculative (zero consumers — the loop is dormant). **HITL OQ-5/7** are hollow (no fallback/breaker × loop composition; no per-tool-call turn journal); **OQ-6** is thin-latent (no timeout config path → captured as a Q-phase robustness latent gap). Do **not** bind the #475 Journal substrate into the factory (cosmetic; would force a closed-`PathClass`-enum extension = IS-AL-1). The roadmap entry's bundled "sandbox driver→dispatch wiring (C-1)" is **unbundled** to an R-410-family finding (production tier→driver selection is unwired — enforcement is test-injection-only; design-adjacent → file-don't-build). Re-open per the batch-55 DP-2 trigger. **Next phase = P3.**
+
 **Goal.** Make the engine recovery loop non-dormant (closes CXA-2's re-open trigger to the buildable extent) + lay the external-engine seam.
 
 **Work.**
