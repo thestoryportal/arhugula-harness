@@ -34,6 +34,7 @@ from harness_cp.cross_family_fallback_chain import (
 from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_cp.topology_pattern import TopologyPattern
 from harness_is.path_class_registry import PathClass
+from harness_is.prompt_manifest import PromptManifest, PromptVersion
 from harness_is.state_ledger_write import read_ledger
 from harness_runtime.bootstrap import (
     BootstrapFailure,
@@ -43,6 +44,9 @@ from harness_runtime.bootstrap import (
 )
 from harness_runtime.bootstrap import stage_4_od as _stage_4_od_mod
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+from harness_runtime.lifecycle.procedural_tier_snapshot import (
+    resolve_procedural_tier_snapshot,
+)
 from harness_runtime.lifecycle.providers import ProviderClientsStage
 from harness_runtime.types import (
     BootstrapStage,
@@ -215,6 +219,40 @@ async def test_bootstrap_returns_frozen_harness_context(
     assert ctx.cp_as_wiring is not None
     assert ctx.hitl_tool_loop is not None
     assert ctx.engine_recovery_loop is not None
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_threads_operator_supplied_prompt_manifest_into_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-CL-P4 production path: an operator-supplied `config.prompt_manifest`
+    flows through the real bootstrap (stage 0 copy) onto the frozen ctx AND
+    participates in the procedural-tier snapshot — i.e. the third hash
+    component is reachable through the normal bootstrap, not only at
+    direct test-constructed contexts (Codex review finding)."""
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    populated = _config(tmp_path).model_copy(
+        update={
+            "prompt_manifest": PromptManifest(
+                manifest_version=1,
+                active_prompt_version=PromptVersion(version_sha="prompt-v-operator"),
+            ),
+        },
+    )
+    ctx_populated = await run_bootstrap(populated, workload_class=_WORKLOAD)
+    # Stage-0 copy landed the operator-supplied carrier on the frozen ctx.
+    assert ctx_populated.prompt_manifest.active_prompt_version.version_sha == "prompt-v-operator"
+
+    # The snapshot through the production path reflects it: a default
+    # (empty) prompt_manifest yields a different snapshot ref.
+    ctx_empty = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
+    assert ctx_empty.prompt_manifest.active_prompt_version.version_sha == ""
+    assert resolve_procedural_tier_snapshot(ctx_populated) != resolve_procedural_tier_snapshot(
+        ctx_empty,
+    )
 
 
 @pytest.mark.asyncio

@@ -18,6 +18,7 @@ from types import SimpleNamespace
 
 from harness_core import SkillID
 from harness_cp.routing_manifest_residence import RoutingManifest
+from harness_is.prompt_manifest import PromptManifest, PromptVersion
 from harness_runtime.lifecycle.procedural_tier_snapshot import (
     _canonicalize_procedural_tier_payload,
     make_procedural_tier_snapshot_resolver,
@@ -50,15 +51,27 @@ def _routing_manifest(manifest_version: int = 1) -> RoutingManifest:
     )
 
 
+def _prompt_manifest(version_sha: str = "") -> PromptManifest:
+    """Minimal PromptManifest fixture (empty-defaultable; ``version_sha=""`` →
+    no active prompt, the empty-carrier default)."""
+    return PromptManifest(
+        manifest_version=1,
+        active_prompt_version=PromptVersion(version_sha=version_sha),
+    )
+
+
 def _ctx(
     skills: dict[SkillID, Skill] | None = None,
     routing_manifest: RoutingManifest | None = None,
+    prompt_manifest: PromptManifest | None = None,
 ) -> SimpleNamespace:
     """Build a minimal duck-typed HarnessContext-shape exposing just the
-    fields the resolver reads (``skills`` + ``routing_manifest``)."""
+    fields the resolver reads (``skills`` + ``routing_manifest`` +
+    ``prompt_manifest``)."""
     return SimpleNamespace(
         skills=skills if skills is not None else {},
         routing_manifest=routing_manifest if routing_manifest is not None else _routing_manifest(),
+        prompt_manifest=prompt_manifest if prompt_manifest is not None else _prompt_manifest(),
     )
 
 
@@ -76,19 +89,23 @@ def test_resolve_returns_64_char_lowercase_hex() -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC #3 — alphabetical key ordering (2 components at v1.3).
+# AC #3 — alphabetical key ordering (3 components at v1.5).
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_canonical_payload_alphabetical_keys_2_components_at_v1_3() -> None:
-    """AC #3 + #11: Canonical payload has 2 keys alphabetically ordered."""
+def test_resolve_canonical_payload_alphabetical_keys_3_components_at_v1_5() -> None:
+    """AC #3: Canonical payload has 3 keys alphabetically ordered (v1.5)."""
     payload_bytes = _canonicalize_procedural_tier_payload(
+        active_prompt_version="p" * 64,
         active_skills_versions=["a"],
         routing_manifest_sha="b" * 64,
     )
     payload = json.loads(payload_bytes.decode("utf-8"))
-    assert list(payload.keys()) == ["active_skills_versions", "routing_manifest_sha"]
-    assert "active_prompt_version" not in payload
+    assert list(payload.keys()) == [
+        "active_prompt_version",
+        "active_skills_versions",
+        "routing_manifest_sha",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +129,11 @@ def test_resolve_skills_versions_sorted_ascending() -> None:
         ).encode("utf-8"),
     ).hexdigest()
     oracle = hashlib.sha256(
-        _canonicalize_procedural_tier_payload(expected_versions, routing_sha),
+        _canonicalize_procedural_tier_payload(
+            active_prompt_version="",
+            active_skills_versions=expected_versions,
+            routing_manifest_sha=routing_sha,
+        ),
     ).hexdigest()
     assert resolve_procedural_tier_snapshot(ctx) == oracle  # type: ignore[arg-type]
 
@@ -148,6 +169,27 @@ def test_resolve_different_routing_manifest_different_hash() -> None:
     ctx_a = _ctx(routing_manifest=_routing_manifest(manifest_version=1))
     ctx_b = _ctx(routing_manifest=_routing_manifest(manifest_version=2))
     assert resolve_procedural_tier_snapshot(ctx_a) != resolve_procedural_tier_snapshot(  # type: ignore[arg-type]
+        ctx_b,  # type: ignore[arg-type]
+    )
+
+
+def test_resolve_different_prompt_version_different_hash() -> None:
+    """AC #5 (v1.5): the 3rd component PARTICIPATES — differing
+    ``active_prompt_version`` produces different hashes (proves the prompts
+    component is wired into the recipe, not merely declared)."""
+    ctx_a = _ctx(prompt_manifest=_prompt_manifest(version_sha="prompt-v-1"))
+    ctx_b = _ctx(prompt_manifest=_prompt_manifest(version_sha="prompt-v-2"))
+    assert resolve_procedural_tier_snapshot(ctx_a) != resolve_procedural_tier_snapshot(  # type: ignore[arg-type]
+        ctx_b,  # type: ignore[arg-type]
+    )
+
+
+def test_resolve_same_prompt_version_same_hash() -> None:
+    """AC #6 (v1.5): identical ``active_prompt_version`` ⇒ identical hash
+    (the prompts component holds the snapshot constant when unchanged)."""
+    ctx_a = _ctx(prompt_manifest=_prompt_manifest(version_sha="prompt-v-stable"))
+    ctx_b = _ctx(prompt_manifest=_prompt_manifest(version_sha="prompt-v-stable"))
+    assert resolve_procedural_tier_snapshot(ctx_a) == resolve_procedural_tier_snapshot(  # type: ignore[arg-type]
         ctx_b,  # type: ignore[arg-type]
     )
 
@@ -219,19 +261,24 @@ def test_resolve_empty_skills_set_handled() -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC #11 — prompts component deferral.
+# AC #11 (v1.5) — prompts component bound (was deferred at v1.3).
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_canonical_payload_omits_prompts_key_at_v1_3() -> None:
-    """AC #11: canonical payload contains exactly 2 keys at v1.3; no prompts."""
+def test_resolve_canonical_payload_includes_prompts_key_at_v1_5() -> None:
+    """AC #11 (v1.5): canonical payload contains exactly 3 keys; prompts bound."""
     payload_bytes = _canonicalize_procedural_tier_payload(
+        active_prompt_version="",
         active_skills_versions=[],
         routing_manifest_sha="0" * 64,
     )
     payload = json.loads(payload_bytes.decode("utf-8"))
-    assert set(payload.keys()) == {"active_skills_versions", "routing_manifest_sha"}
-    assert len(payload) == 2
+    assert set(payload.keys()) == {
+        "active_prompt_version",
+        "active_skills_versions",
+        "routing_manifest_sha",
+    }
+    assert len(payload) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +304,7 @@ def test_resolve_routing_manifest_sha_derivation_byte_exact() -> None:
         ).encode("utf-8"),
     ).hexdigest()
     expected_payload = _canonicalize_procedural_tier_payload(
+        active_prompt_version="",
         active_skills_versions=[],
         routing_manifest_sha=expected_routing_sha,
     )

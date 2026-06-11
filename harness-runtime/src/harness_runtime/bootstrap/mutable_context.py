@@ -30,6 +30,7 @@ from harness_core import ClientName, SkillID
 from harness_cp.cross_family_fallback_chain import FallbackChain
 from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_is.path_resolver import PathResolver
+from harness_is.prompt_manifest import PromptManifest, PromptVersion
 from harness_is.worktree_isolation import WorktreeIsolationManager
 from pydantic import BaseModel, ConfigDict
 
@@ -212,6 +213,21 @@ class _MutableHarnessContext:
     retry_breaker: RetryBreakerRegistry | None = None
     hitl_registry: HITLPlacementRegistry | None = None
     handoff_registry: HandoffRegistry | None = None
+
+    # Operator-supplied ambient substrate (NOT stage-enriched): the prompts-
+    # management carrier read by `resolve_procedural_tier_snapshot` from stage
+    # 3b producer sites onward (IS spec v1.5 §5.2 third hash component). Mirrors
+    # `routing_manifest` but defaults to an empty manifest (`version_sha=""` →
+    # no active prompt) rather than `None`, so the resolver always reads a valid
+    # carrier during bootstrap. Not in `_REQUIRED_FIELDS` (never None). The
+    # fuller operator-supply path (a prompts materialization stage) is a
+    # separate forward arc per the §5.2 fork DP-4.
+    prompt_manifest: PromptManifest = field(
+        default_factory=lambda: PromptManifest(
+            manifest_version=1,
+            active_prompt_version=PromptVersion(version_sha=""),
+        ),
+    )
 
     # Stage 4 OD.
     tracer_provider: object | None = None
@@ -409,6 +425,7 @@ class _MutableHarnessContext:
             sandbox_dispatch=self.sandbox_dispatch,
             providers=_bound(self.providers),
             routing_manifest=_bound(self.routing_manifest),
+            prompt_manifest=self.prompt_manifest,
             engine_selector=_bound(self.engine_selector),
             fallback_chain=_bound(self.fallback_chain),
             retry_breaker=_bound(self.retry_breaker),

@@ -90,6 +90,7 @@ from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_cp.workload_binding_engine_class_selection import HITLInvocation
 from harness_is.path_resolver import PathResolver
+from harness_is.prompt_manifest import PromptManifest, PromptVersion
 from harness_is.workload_manifest_opt_in_schema import WorkloadManifestOptIns
 from harness_is.worktree_isolation import WorktreeIsolationManager
 from harness_od.harness_breaker_schema import BreakerScope
@@ -1316,6 +1317,25 @@ class RuntimeConfig(BaseModel):
     is persisted to `PathClass.ROUTING_MANIFEST` at stage 3b per C-CP-01 §1.3.
     """
 
+    prompt_manifest: PromptManifest = Field(
+        default_factory=lambda: PromptManifest(
+            manifest_version=1,
+            active_prompt_version=PromptVersion(version_sha=""),
+        ),
+    )
+    """Operator-supplied prompts-management carrier (IS spec v1.5 §5.2 third
+    procedural-tier hash component).
+
+    The operator-supply surface (mirroring `routing_manifest`): a populated
+    manifest supplied via kwarg at runtime construction is copied to
+    `HarnessContext.prompt_manifest` at bootstrap stage 0 PREAMBLE and read by
+    `resolve_procedural_tier_snapshot` as the `active_prompt_version` hash
+    component. Default is an empty manifest (`active_prompt_version.version_sha=""`
+    → no active prompt), so operators that do not version prompts carry zero
+    config burden. The fuller prompts-management surface (multi-prompt
+    versioning + selection) is a separate forward arc per the §5.2 fork DP-4.
+    """
+
     trust_policy: TrustPolicy | None = None
     """Operator-supplied per-server trust policy (CP spec v1.11 §27.2 carrier).
 
@@ -1530,6 +1550,28 @@ class HarnessContext(BaseModel):
     retry_breaker: RetryBreakerRegistry
     hitl_registry: HITLPlacementRegistry
     handoff_registry: HandoffRegistry
+
+    prompt_manifest: PromptManifest = Field(
+        default_factory=lambda: PromptManifest(
+            manifest_version=1,
+            active_prompt_version=PromptVersion(version_sha=""),
+        ),
+    )
+    """Operator-supplied prompts-management carrier (IS spec v1.5 §5.2 third
+    procedural-tier hash component).
+
+    Mirrors `routing_manifest` (a frozen operator-supplied carrier on the
+    context; the resolver reads a derived value at write-time). Unlike
+    `routing_manifest` (stage-3b-enriched, required), `prompt_manifest` has no
+    enrichment stage — it defaults to an empty manifest
+    (`active_prompt_version.version_sha=""` → no active prompt), so operators
+    that do not version prompts carry zero config burden.
+    `resolve_procedural_tier_snapshot` reads `active_prompt_version.version_sha`
+    as the `active_prompt_version` recipe component per IS spec v1.5 §C-IS-05
+    §5.2. The fuller prompts-management surface (multi-prompt versioning +
+    selection, with a materialization stage) is a separate forward arc per the
+    §5.2 fork DP-4.
+    """
 
     # Stage 4 OD.
     # `tracer_provider` is informational per C-RT-04 — consumers call
