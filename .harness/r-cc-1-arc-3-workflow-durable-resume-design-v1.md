@@ -1,0 +1,105 @@
+# R-CC-1 arc #3 — Workflow-layer durable-resume design v1
+
+**Authored:** 2026-06-12 · **Posture:** mode-agnostic (design doc under `.harness/`; grounds `harness-*/src` + `design-substrate/` at HEAD `f369e21`; authors only this `.harness/` file — no `design-substrate/**` or `harness-*/src` edit). **Authority:** operator Gate A (2026-06-11, hand-roll) + the Option-1 scoping decision (2026-06-12, `.harness/class_2_fork_engine_durable_resume_no_production_producer.md`). **Precedent:** R-PM-1 arc-#2 (`.harness/r-pm-1-prompts-management-design-v1.md`) — design doc under `.harness/` first → per-axis spec cascade → impl.
+**Grounded at HEAD by direct read this session — cites resolved, not recalled.**
+
+---
+
+## 0. What this design serves
+
+The Option-1 scoping decision re-aimed arc #3 from the **engine-layer** `engine_recovery_loop` (no production producer; line-181-forbidden to fake) to the **workflow-layer** durable-resume gap. This doc defines that gap's semantic + the `api.run` resume surface + the per-axis amendment plan, to be reviewed (advisor + out-of-family Codex) before the spec cascade opens. **It is design-phase; it authors no contract.** The engine-layer `engine_recovery_loop` + the #475 `JournalEnginePauseResumeSubstrate` stay the ratified CXA-2 bounded-residual (line 181 unviolated — NOT the build target; only its crash-survivable *journal pattern* is reused, §4).
+
+## 1. Grounded state — what exists, what's missing
+
+**The workflow-layer resume mechanism already exists at the driver level.** `execute_workflow(...)` (`harness-cp/.../workflow_driver.py:448`) accepts `pause_snapshot: PauseSnapshot | None = None` (line 456) and, when supplied with a bound `ctx.pause_resume_protocol`, runs entry-point resume detection (U-RT-89 / C-RT-24 §14.14.3, `workflow_driver.py:554-605`): it calls `protocol.attempt_resume(...)`, and on a clean resume sets `resume_at_step_index`, which drives the body's `for step_index, step in enumerate(steps[resume_at:], start=resume_at)` (resume re-runs from the paused step).
+
+**The pause payload is already a complete, durable-ready envelope.** `PauseSnapshot` (CP spec v1.11 §26.2, `pause_resume_protocol_types.py:92`) is 8 frozen fields: `workflow_id` / `run_id` / `step_index` / `pause_reason` (`WorkflowPauseReason` 5-class) / `state_summary` (`StateSummary`) / `snapshot_hash` (sha256 over `workflow_id+run_id+step_index+state_summary`) / `created_at` (epoch ms) / `state_ledger_anchor` (C-IS-05 §5 `entry_hash` at the pause point). It is self-validating: resume must verify `snapshot_hash` (§26.6 invariant 2) and the anchor's reachability (invariant 3).
+
+**The production producer fires today.** A DURABLE_ASYNC HITL gate produces a workflow-layer pause via `protocol.capture_pause_snapshot(...)` at `workflow_driver.py:796` + `:952` (the `hitl_gate_composer.py` §14.8.8.1 durable-async branch). This is a *real* production caller — unlike the engine-layer loop. The CP→IS `cp.pause-captured` ledger entry is emitted alongside (the integrity anchor).
+
+**The two missing pieces (the whole gap):**
+
+| # | Gap | Evidence at HEAD |
+|---|---|---|
+| **G1** | **The `PauseSnapshot` is not durably persisted by the harness across a process restart.** On capture, only the `cp.pause-captured` *ledger anchor* (a hash, not the body) is written; the `PauseSnapshot` envelope is returned to the caller in `RunResult.pause_snapshot` (`workflow_driver.py:827`) but the **harness persists no copy** — if the caller's process dies holding the `RunResult`, the snapshot is gone. The IS state ledger **cannot rehydrate** the snapshot body (it holds an anchor hash, not the snapshot — `journal_pause_resume_substrate.py:30-37` states this for the sibling engine-layer `PauseEvent`; identical for `PauseSnapshot`). |
+| **G2** | **`api.run` exposes no resume entry-point.** `api.run(workflow, *, config)` (`api.py:389`) is bootstrap-per-call under `_run_lock`; it never reaches `execute_workflow`'s `pause_snapshot` param. A restart = a fresh full re-execution from step 0, not a resume. The driver-level resume is reachable only by an in-process caller that already holds the `PauseSnapshot` — which no public surface provides. |
+
+So a DURABLE_ASYNC pause today is **durable in name only**: the harness owns no durable copy across a restart (G1) and exposes no public resume entry even when the caller does (G2).
+
+### 1.1 The MVP execution model is data-stateless between steps (why position-only resume is correct, not hollow)
+
+The load-bearing fact that makes durable-resume *correct* — grounded, not assumed: **a workflow step's input is fully determined by its own declared payload + the manifest binding; steps do not read prior-step working state.** At `workflow_driver.py:920-923` the dispatch is `step_dispatchers.lookup(step.step_kind).dispatch(binding, step, step_context=step_context)` — the three inputs are `binding` (resolved from `manifest_entry` + `step_index`), `step` (the declared `WorkflowStep`), and `step_context` (composed at `:900-910` from `manifest_entry` / `step_index` / idempotency / tenant — **never from `accumulated`**). The in-process `accumulated: dict` (`:764`) is initialized **empty** and is written only into `partial_state`/`final_state` for *reporting* (`:778`/`:824`/`:930`); no step ever consumes it as input.
+
+Consequence: re-executing step `k` with an empty `accumulated` is **semantically identical** to the original execution reaching step `k`, because step `k` never had `accumulated` as input. Therefore **resume needs only (the workflow object, the paused `step_index`)** — both available from `api.resume(workflow, ...)` + the rehydrated `PauseSnapshot.step_index`. No working-state rehydration is required. The `PauseSnapshot.state_summary` + `state_ledger_anchor` serve **material-diff detection** (U-CP-64 anchor-reachability, `pause_resume_protocol_types.py:99-101/129-131`), NOT state restoration. So the MVP `pause_context_reader`'s empty `StateSummary` (`pause_resume_protocol_factory.py:85-100`) is a *diff-detection-fidelity* concern under non-STRICT `MaterialDiffPolicy`, **not** a resume-correctness gap — it drops from MVP scope (§6).
+
+**Honest re-open trigger (§6):** if a future execution model adds inter-step working-state data-dependencies (steps reading prior-step outputs from a carried context), position-only resume becomes insufficient and durable-resume would need a state-restoration story + a durable store carrying more than the `PauseSnapshot`. The arc is bounded to the current data-stateless model and documents this explicitly.
+
+## 2. The durable-resume semantic (the contract to author)
+
+**Definition.** A *durable resume* is: a workflow paused at step `k` (DURABLE_ASYNC HITL gate, `WorkflowPauseReason.HITL_PENDING`, or any §26.2 pause reason) → the process exits → a **fresh process** reconstructs the `PauseSnapshot` from a durable store keyed by `(workflow_id, run_id)` → validates `snapshot_hash` + anchor reachability → drives `execute_workflow(..., pause_snapshot=<rehydrated>, resume_context=<operator response>)` → the workflow continues from step `k`.
+
+This is the `ResumptionKind.JOURNAL_RESUME` mechanism (the `EngineClass.PURE_PATTERN_NO_ENGINE` class, `resumption_kind.py:64`) — **the one recovery class the harness owns end-to-end with zero external framework** (I-6-clean). It is NOT engine-native replay/reconciler/WAL (those bind external engines, I-6-forbidden, line-181-deferred).
+
+**Boundaries (what stays out):**
+- **No engine-layer touch.** `ctx.engine_recovery_loop` + #475 are untouched (line 181). Only #475's *journal pattern* (§4) is reused for the workflow-layer type.
+- **No new pause producer.** Two workflow-layer producers already fire in production — `HITL_PENDING` (durable-async HITL signal, `workflow_driver.py:948-985`) and `EXPLICIT_OPERATOR` (`pause_requested_flag`, `:793-828`); both return `RunStatus.PAUSED` with a real `PauseSnapshot`. We durabilize what they already capture. (No wiring of `workflow_driver.py` as a fake engine loop — these are the *real* workflow-layer producers.)
+- **MVP scope = both production-firing paths** (`HITL_PENDING` + `EXPLICIT_OPERATOR`). The other 3 `WorkflowPauseReason`s (VALIDATOR_ESCALATION / TIMEOUT_BOUNDARY / EXTERNAL_DEPENDENCY) ride the same durable store but have no production trigger at MVP (documented residual, re-open when a producer lands).
+
+## 3. The two contract decisions
+
+### D1 — Public API surface: extend `api.run` vs new `api.resume`
+
+| Option | Shape | Trade |
+|---|---|---|
+| **D1-A (recommended): new `api.resume(...)`** | `async def resume(workflow, *, resume_handle, resume_context=None, config=None) -> RunResult`. A sibling Track-A entry-point; bootstraps fresh, rehydrates the `PauseSnapshot` from the durable store via `resume_handle` (= `(workflow_id, run_id)` or an opaque token), drives `execute_workflow(pause_snapshot=...)`. | Keeps the cleared C-RT-08 `run()` contract **byte-unchanged** (additive sibling, not a widened signature) → smaller X-AL-3 blast radius. Mirrors the `run()`/Track-B split precedent. |
+| D1-B: extend `api.run(..., resume_handle=None)` | Add an optional resume param to `run()`. | Widens the cleared C-RT-08 `run()` signature → larger spec-amendment + clearance surface; conflates "start" and "resume" semantics on one entry. |
+
+**Recommendation D1-A.** A net-new additive `api.resume` sibling is the minimal-blast-radius surface; `run()` stays verbatim. Both are net-new public Track-A API → **runtime-spec amendment + clearance precede impl (X-AL-3)** regardless of A/B.
+
+### D2 — Durable store for the `PauseSnapshot` body
+
+| Option | Shape | Trade |
+|---|---|---|
+| **D2-A (recommended): a workflow-layer `PauseSnapshot` journal** (apply #475's pattern) | A new `JournalWorkflowPauseStore` reusing the #475 crash-survivable pattern — per-`(workflow_id, run_id)` JSONL file, `fsync` + dir-fsync, latest-record semantics, fail-closed-on-corruption — but storing the **workflow-layer `PauseSnapshot`** (not the engine-layer `PauseEvent`). Written on DURABLE_ASYNC capture; read on `api.resume`. | I-6-clean (hand-rolled, no framework). Reuses a *proven, tested* durability pattern. Honest: the engine-layer #475 stays untouched; this is its sibling for the workflow layer. The `PathClass` placement decision (D2-bis) is real but bounded. |
+| D2-B: serialize the snapshot into the IS state ledger | Extend the `cp.pause-captured` entry to carry the full `PauseSnapshot` body. | Conflates the ledger's *integrity-anchor* role with *content storage* — the ledger is a 6-field hash-chained anchor by design (C-IS-05 §5), not a content store (`journal_pause_resume_substrate.py:30-37`). Would distort the cleared IS contract. **Rejected.** |
+
+**Recommendation D2-A.** The ledger stays the anchor (already wired); the journal stores the body. *(Why a harness-owned store at all, given the caller already receives `RunResult.pause_snapshot` at `workflow_driver.py:827`? Minimal resume needs only that snapshot — but Gate A's **crash-recovery** intent is precisely that the **harness** owns the durability, so resume survives even when the caller's process died without serializing the `RunResult`. That is the value D2-A adds over "the caller persists the snapshot itself.")* **D2-bis (open):** where does the journal directory live? The journal path needs a `PathClass` (closed 4-class enum, `path_class_registry.py`; IS-AL-1 forecloses inventing one). Candidate: the existing recovery/journal path-class if one fits, else a Class-1 IS fork to place it. **This sub-decision is resolved *with* the consuming store in the impl arc (not pre-emptively)** — and it is the one place this arc may surface a second small fork.
+
+## 4. Why #475 is reused-by-pattern, not bound
+
+#475 `JournalEnginePauseResumeSubstrate` is an **engine-layer** `EnginePauseResumeSubstrate` storing engine-layer `PauseEvent`s. The workflow layer needs to persist `PauseSnapshot` (a *different* 8-field type). So #475 is not directly bindable — but its durability mechanism (per-workflow JSONL, fsync, fail-closed, latest-record) is exactly right and **already tested** (`test_journal_pause_resume_substrate.py`). D2-A factors that pattern into a workflow-layer sibling. This is the honest reading of "the durable substrate (#475) exists; the missing piece is the real durable-resume semantic + caller" (capability-inventory item #6): #475 proved the *pattern*; arc #3 applies it where a *real producer + real caller* exist.
+
+## 5. Per-axis amendment plan (the cascade, post-review)
+
+Ordered; each is a bundled-absorption arc (spec + impl + tests + clearance) or design-fork-first where it touches a cleared contract:
+
+1. **Runtime spec — `api.resume` Track-A surface (C-RT-08 sibling).** NEW section: `api.resume(...)` signature + failure taxonomy (`RT-FAIL-RESUME-SNAPSHOT-CORRUPTION` / `RT-FAIL-RESUME-HANDLE-UNKNOWN` / reuse `RT-FAIL-BOOTSTRAP`) + the bootstrap→rehydrate→`execute_workflow(pause_snapshot=)` flow. *Net-new public API → clearance marker.* `run()` byte-unchanged.
+2. **Runtime spec — durable `PauseSnapshot` store + capture wiring (C-RT-24 area).** The `JournalWorkflowPauseStore` factory + the DURABLE_ASYNC-capture write hook + the resume-side read. The MVP `pause_context_reader` upgrade to capture a genuinely-resumable `StateSummary` (close the G1 empty-digest half) — bounded to the HITL_PENDING path.
+3. **IS — `PathClass` placement for the journal dir (D2-bis).** Either fits an existing path-class (doc-only reconciliation) or a Class-1 IS fork to place it (the one possible second fork). Resolved *with* the store, not before.
+4. **CP — none expected.** The `PauseSnapshot` / `PauseResumeProtocol` / `attempt_resume` / `ResumeContext` surfaces already exist (CP spec v1.11/v1.16 §26). The arc consumes them; no CP contract change anticipated (verify at cascade entry).
+5. **CXA / OD — none expected.** No new cross-axis edge (the CP→IS `cp.pause-captured`/`cp.resume-attempted` seams already exist); OD audit payloads (`PauseResumeAuditPayload`, §C-OD-30.4) already compose. Verify at entry; file if grounding falsifies.
+
+## 6. MVP scope vs documented residuals
+
+**In MVP:** G1 (harness-owned durable `PauseSnapshot` persistence on the two production-firing capture paths — `HITL_PENDING` + `EXPLICIT_OPERATOR`) + G2 (`api.resume` public surface) + e2e proof (pause a workflow → simulate restart with a fresh bootstrap + fresh store instance over the same journal dir → `api.resume` continues from the paused step; free local Ollama or a mock provider for the inference steps). **Position-only resume is correct by §1.1** (data-stateless execution model) — no working-state rehydration in MVP.
+
+**Documented residuals (re-open triggers, X-AL-3-clean):**
+- The 3 non-producing `WorkflowPauseReason`s (VALIDATOR_ESCALATION / TIMEOUT_BOUNDARY / EXTERNAL_DEPENDENCY) — same durable store, no production trigger at MVP.
+- **The `pause_context_reader` empty-`StateSummary` upgrade** — *diff-detection fidelity only* (§1.1); needed only under non-STRICT `MaterialDiffPolicy` (itself a residual). NOT a resume-correctness gap; dropped from MVP.
+- **Inter-step working-state restoration** — only if a future execution model adds data-dependencies between steps (§1.1 re-open trigger); the current model is data-stateless, so position-only resume suffices.
+- Engine-layer durable-resume (ENGINE_REPLAY / RECONCILER_CONVERGE / SEGMENT_REPLAY) — stays line-181-deferred (external engines, I-6).
+- `MaterialDiffPolicy` LENIENT/OPERATOR_ARBITRATE resume paths beyond the STRICT default.
+
+## 7. Open questions for review (advisor + Codex)
+
+1. **D1-A vs D1-B** — is the additive `api.resume` sibling the right minimal surface, or is a `run(resume_handle=)` extension preferred for caller ergonomics? (Recommend A: smaller cleared-contract blast radius.)
+2. **D2-bis PathClass** — can the journal dir fit an existing `PathClass`, or is a Class-1 IS fork owed? (Resolve with the store; flag if it forces an enum extension.)
+3. **Resume handle shape** — `(workflow_id, run_id)` tuple vs an opaque token returned in `RunResult` on pause? (A `RunResult` that paused should carry the handle the caller passes to `api.resume`.)
+4. **Restart-proof e2e shape** — is a fresh-`run_bootstrap` + fresh-store-instance over the same journal dir a faithful "process restart" proof (mirrors #475's `test_recovery_state_persists_across_process`), or is an actual subprocess boundary owed for the acceptance bar?
+5. ~~Is the empty-`StateSummary` upgrade in-scope?~~ **RESOLVED by §1.1 grounding** (advisor-prompted, 2026-06-12): the execution model is data-stateless between steps, so position-only resume is correct and the empty `StateSummary` is diff-detection-fidelity only — **dropped from MVP**, not a resume-correctness gap. (The earlier "empty digest makes resume vacuous" framing was the misread the grounding corrected.)
+
+## 8. Disposition
+
+- **REVIEWED (advisor) → ready for cascade.** advisor reviewed the approach twice: affirmed the core design (workflow-layer not engine-layer; #475 reused-by-pattern not bound; ledger-as-anchor / D2-B rejected; additive `api.resume` / D1-A) and raised one blocking concern — *does resume restore state or just position?* — now **resolved by §1.1 grounding** (data-stateless execution model → position-only resume is correct; the empty-`StateSummary` "gap" was a misread, dropped from MVP). advisor's guidance: out-of-family **Codex is deferred to the cascade's concrete spec/impl diffs** (decorrelated value on code, wrong fit for a design-doc draft).
+- **Next:** open cascade step 1 — runtime-spec amendment for the `api.resume` Track-A surface (design-fork-first; net-new public API → clearance marker). OQ1/OQ3/OQ4 (recommendations in §3/§7) resolve at that entry; OQ2 (D2-bis PathClass) resolves with the store in step 2/3.
+- No code/spec edit authored by this doc.
