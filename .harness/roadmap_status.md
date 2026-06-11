@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `37a2a9f0c9eb` |
-| `last_refreshed` | 2026-06-10T18:12:29-06:00 |
-| `git_head` | `b7bcbc04` (main) — durable F2 engine pause/resume substrate (R-CXA-2 S3) merged (#475); R-CL-P2 input landed. |
+| `workspace_state_hash` | `940230d81247` |
+| `last_refreshed` | 2026-06-10T19:05:55-06:00 |
+| `git_head` | `ead51e9f` (main) — R-CL-P1 capability-shortfall fallback (C-CP-03 §3.3) landed (#479); routing-intelligence partial-close. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 49 |
 
@@ -29,7 +29,8 @@
 **Ordered frontier (the R-CL-\* track).**
 
 - **R-CL-P0 — CLOSED** (#477; scope ratified). Capability phases P1/P2/P3/P5/P6 are now unblocked; P4 remains blocked on the 2 forks' design-phase resolution.
-- **NEXT: R-CL-P1 routing intelligence** (the #1 gap — only `DECLARATIVE`-echo bound; P0 verified pure Phase-7 impl, no fork). Build EMBEDDING + LLM_AS_ROUTER decision-fns + capability-shortfall fallback (C-CP-02/03/04). `⚖️` council-eligible (cost ⊥ reliability ⊥ capability-preservation) at policy design. Then **R-CL-P2** (engine-recovery driver + sandbox driver→dispatch wiring [NEW] + external-engine seam), **R-CL-P3** (TEAM_BINDING e2e), **R-CL-P5** (CXA verify + cost + validator + OD buffer), **R-CL-P6** (spec-prose hygiene). **R-CL-P4** (prompts surface + keying-tuple) is **blocked on the 2 forks' ratification**.
+- **R-CL-P1 routing intelligence — PARTIAL (#479).** Grounding falsified the `⚖️` council-eligible flag (policy spec-pinned at C-CP-02 §2.1/§2.2 + C-CP-03 §3.2/§3.3; operator chose build-direct) and showed 2 of 3 deliverables substrate-blocked. **LANDED:** C-CP-03 §3.3 **capability-shortfall fallback** — the capability-preservation axis ("don't route a thinking-step to a non-thinking model"); pre-dispatch check in `RetryBreakerFallbackDispatcher` + a Codex-caught root fix to `reflect_provider_capabilities` (real Anthropic model-ID matching). **DEFERRED (documented, X-AL-3, re-open triggers at `.harness/r-cl-p1-routing-intelligence-plan.md`):** `EMBEDDING` decision-fn (no trained corpus/embedding model; §2.2 fall-through is spec-correct until a corpus exists) + `LLM_AS_ROUTER` decision-fn (a faithful async router-model call would widen the cleared sync U-CP-03/U-CP-05 contracts — not silently absorbable).
+- **NEXT: R-CL-P2** (engine-recovery driver — bind the PR #475 `JournalEnginePauseResumeSubstrate` + sandbox driver→dispatch wiring [NEW] + external-engine SAVE_POINT reference adapter). Then **R-CL-P3** (TEAM_BINDING e2e), **R-CL-P5** (CXA verify + cost + validator + OD buffer), **R-CL-P6** (spec-prose hygiene). **R-CL-P4** (prompts surface + keying-tuple) is **blocked on the 2 forks' ratification**. The R-CL-P1 `EMBEDDING`/`LLM_AS_ROUTER` deferrals carry forward as bounded-residual with the documented re-open triggers.
 - Then quality: **R-CL-Q1** (DevEx + code-review sweep), **Q2** (security), **Q3** (QA + 100%-evidence), **Q4** (packaging), **R-CL-D1** (docs), **R-CL-C1** (closure cert + ship).
 - Recurring lanes (`R-600-*`, `R-IF-roadmap-refresh`) run on cadence alongside.
 
@@ -53,11 +54,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #479 | 2026-06-10 | **R-CL-P1 routing intelligence — capability-shortfall fallback landed (PARTIAL).** C-CP-03 §3.3 pre-dispatch capability check wired into `RetryBreakerFallbackDispatcher` (derive `capability_required` from the payload → reflect candidate caps → advance the C-CP-04 chain *before* the error path; fail-closed on all-incapable). The capability-preservation axis ("don't route a thinking-step to a non-thinking model"). Codex (decorrelated) caught a P1 + P2: `reflect_provider_capabilities` exact-matched short tier tokens but runtime bindings carry full IDs (`claude-opus-4-7`) — root-fixed + regression-pinned; capability-shortfall exhaustion now attributes the correct cause. EMBEDDING + LLM_AS_ROUTER deferred (substrate-blocked; documented re-open triggers). 822 CP + 1555 runtime tests pass. |
 | PR #475 | 2026-06-10 | **Durable F2 engine pause/resume substrate merged — R-CXA-2 S3 (R-CL-P2 input).** `JournalEnginePauseResumeSubstrate` (`harness-runtime/.../lifecycle/journal_pause_resume_substrate.py`): per-workflow fsync'd filesystem journal, fail-closed corruption handling. Codex review converged clean over 7 passes (6 real durability bugs fixed); 13/13 CI green. Honest scope: does NOT close R-CXA-2 (no production driver → stays bounded-residual) — it is the capability substrate the R-CL-P2 engine-recovery driver binds. |
 | PR #477 | 2026-06-10 | **R-CL-\* closure track registered + Phase 0 CLOSED + 2 design forks filed.** 13-phase post-MVP closure spine registered at `Project_Roadmap_v1.md` §5.15; P0 re-verified every surface vs HEAD (scope-lock `.harness/closure-p0-scope-lock.md`), operator-ratified merge-and-proceed. Caught 2 stale-optimistic register claims (sandbox drivers built+tested but NOT prod-dispatcher-selected; routing `DECLARATIVE`-echo-only). 2 IS forks filed (`prompts_management_surface_active_prompt_version` + `keying_tuple_entry_shape_d_adr`) — block R-CL-P4 only. |
 | PR #476 | 2026-06-10 | **Post-MVP full harness closure plan v1 authored + merged** (`.harness/post-mvp-full-closure-plan-v1.md`). 13-phase spine (P0 ground → P1-P6 capabilities → Q1-Q4 hardening → D1 docs → C1 cert). Reframe: MVP+RC closed most activation; this closes the residual frontier + adds the full testing/DevEx/QA/security/code-review/packaging/docs apparatus. Two revisable structural decisions (§0.3). |
 | local commit (`a6d2f318`) | 2026-06-10 | **R-420 self-hosted daemon e2e EXERCISED + PASSING — every RC surface now exercised (RC follow-up).** On operator request: `mkdir`'d empty `prompts/`+`routing_manifest/`, repointed STATE_LEDGER to a throwaway path (IS-1 wants a fresh ledger; the pre-existing 113-entry `.harness/state.jsonl` left untouched), brought the OTLP stack up → `workflow=r420-self-hosted-tool-echo status=success cost=0 hosted-provider-calls=0` (daemon socket-bind + keyring `r420_probe_key` + OTLP + Ollama + MCP echo TOOL_STEP). Scaffolding cleaned up; stack torn down. Nothing in the RC arc remains unexercised. |
-| local commit (`064064b6`) | 2026-06-10 | **R-830 S3 PROVEN — last unexercised managed surface closed (RC follow-up).** The `r830`-profile SSO session had expired; operator re-ran `aws sso login --profile r830`, then `just r830-s3-live-e2e` PASSED (real S3 CRUD + cleanup, 1.89s). Every functional surface across all three tiers is now proven live; only the R-420 self-hosted daemon e2e (operator-provisioned `prompts/`+`routing_manifest/` dirs) remains unexercised. |
 
 ---
 
