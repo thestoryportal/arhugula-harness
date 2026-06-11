@@ -484,6 +484,26 @@ class CollectorConfig(BaseModel):
     row 3 (operator-configurable; default 7 days). U-OD-44 lazy-on-write
     cleanup applies this at every `RuntimeRingBuffer.flush_to_sqlite` call."""
 
+    tail_keep_max_buffered_traces: int = 4096
+    """Operator-tunable ceiling on the number of traces the production
+    `TailKeepSpanProcessor` buffers pending root-close, per OD spec §C-OD-09
+    §9.3 (the implementer-discretion bounded-buffer follow-on closed at OD spec
+    v1.28). A pathological producer that opens roots without ever closing them
+    would otherwise accumulate without bound (v1.27 §2(a) carve-out). When the
+    ceiling is reached, the oldest buffered trace is evicted (drop-oldest) and
+    counted at `TailKeepSpanProcessor.dropped_trace_count`. Default 4096 matches
+    the ring-buffer scale; only pathological producers reach it (legitimate
+    traces close fast and free their slot)."""
+
+    tail_keep_max_spans_per_trace: int = 4096
+    """Operator-tunable ceiling on the number of non-always-sampled spans the
+    production `TailKeepSpanProcessor` buffers for a single trace pending
+    root-close, per OD spec §C-OD-09 §9.3 (v1.28 closure). Bounds a single
+    never-closing trace from accumulating spans without limit. Overflow
+    non-root spans are dropped and counted at
+    `TailKeepSpanProcessor.dropped_span_count`; the root-close span always
+    processes so the trace can materialize and free its slot."""
+
     @field_validator(
         "ring_buffer_size",
         "sqlite_rotation_max_rows",
@@ -491,6 +511,8 @@ class CollectorConfig(BaseModel):
         "batch_window_seconds",
         "batch_size",
         "sqlite_retention_days",
+        "tail_keep_max_buffered_traces",
+        "tail_keep_max_spans_per_trace",
     )
     @classmethod
     def _positive(cls, value: int) -> int:

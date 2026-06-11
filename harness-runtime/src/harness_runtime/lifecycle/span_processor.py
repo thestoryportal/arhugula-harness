@@ -248,7 +248,13 @@ def materialize_span_processor_stage(
     tail_keep_processor: TailKeepSpanProcessor | None = None
     bsp_chain_terminal: SpanProcessor = processor
     if config.deployment_surface != DeploymentSurface.LOCAL_DEVELOPMENT:
-        tail_keep_processor = TailKeepSpanProcessor(downstream=processor)
+        # OD spec v1.28 §9.3: production passes the operator-tunable bounded-
+        # buffer ceilings from `CollectorConfig` (bounded-by-default).
+        tail_keep_processor = TailKeepSpanProcessor(
+            downstream=processor,
+            max_buffered_traces=config.collector.tail_keep_max_buffered_traces,
+            max_spans_per_trace=config.collector.tail_keep_max_spans_per_trace,
+        )
         bsp_chain_terminal = tail_keep_processor
 
     # Redaction MUST register BEFORE the BSP — the synchronous OTLP exporter

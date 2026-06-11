@@ -82,6 +82,13 @@ def test_sqlite_rotation_defaults_sensible() -> None:
     assert cfg.sqlite_rotation_max_bytes == 100_000_000
 
 
+def test_tail_keep_buffer_bounds_default_sensible() -> None:
+    """OD spec v1.28 §9.3 tail-keep buffer ceilings default bounded + sensible."""
+    cfg = CollectorConfig()
+    assert cfg.tail_keep_max_buffered_traces == 4096
+    assert cfg.tail_keep_max_spans_per_trace == 4096
+
+
 # ---------------------------------------------------------------------------
 # Thresholds bounded > 0 (plan AC).
 # ---------------------------------------------------------------------------
@@ -95,6 +102,8 @@ def test_sqlite_rotation_defaults_sensible() -> None:
         "sqlite_rotation_max_bytes",
         "batch_window_seconds",
         "batch_size",
+        "tail_keep_max_buffered_traces",
+        "tail_keep_max_spans_per_trace",
     ],
 )
 def test_threshold_rejects_zero(field_name: str) -> None:
@@ -111,6 +120,8 @@ def test_threshold_rejects_zero(field_name: str) -> None:
         "sqlite_rotation_max_bytes",
         "batch_window_seconds",
         "batch_size",
+        "tail_keep_max_buffered_traces",
+        "tail_keep_max_spans_per_trace",
     ],
 )
 def test_threshold_rejects_negative(field_name: str) -> None:

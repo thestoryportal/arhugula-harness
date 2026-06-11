@@ -2430,7 +2430,16 @@ R-CL-P4:
   verification: { shape: e2e, must_pass: ["procedural-tier snapshot includes the prompt-version 3rd hash component; keying-tuple↔entry-shape reading ratified + §7.4 cite refreshed; tail-keep buffer bounded under a pathological producer; clearance markers filed"] }
   close_shape: { type: PR-merge, artifact: "spec-completion PR(s) + clearance markers", cascade: [R-IF-roadmap-refresh] }
   next_pointer: null
-  notes: BLOCKED on ratification of class_1_fork_prompts_management_surface_active_prompt_version.md + class_1_fork_keying_tuple_entry_shape_d_adr.md. Building before ratification = X-AL-3.
+  notes: >
+    PARTIAL. Sub-part 3 of 3 — OD tail-keep bounded-buffer (C-OD-09 §9.3, Category-1
+    Claude-closeable per closure-plan line 45) — CLOSED: OD spec v1.28 records the §2(a)
+    carve-out closure; CollectorConfig.tail_keep_max_buffered_traces + tail_keep_max_spans_per_trace
+    (drop-oldest + per-trace overflow drop, both counted); pathological-producer e2e green;
+    clearance marker filed (Spec_Operational_Discipline-v1_28-cleared-2026-06-10). The two
+    IS-axis sub-parts (prompts/active_prompt_version 3rd hash component + keying-tuple D-ADR)
+    remain BLOCKED on ratification of class_1_fork_prompts_management_surface_active_prompt_version.md
+    + class_1_fork_keying_tuple_entry_shape_d_adr.md (both grounded ratification-ready 2026-06-10;
+    gate surfaced to operator). Building the IS sub-parts before ratification = X-AL-3.
 
 R-CL-P5:
   title: Phase P5 — CXA phase-2 edge verification + cost-model rate tables + validator thresholds

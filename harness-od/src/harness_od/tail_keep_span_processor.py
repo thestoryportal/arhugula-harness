@@ -63,11 +63,44 @@ them. The keep semantics here apply to spans the sampler RECORDED — for
 those, classification triggers ensure trace-tree preservation across the
 batch-export boundary.
 
-**Bounded-buffer carve-out (MVP scope-lock).** This MVP does NOT bound
-buffer size by trace count or by per-trace span count. A pathological
-producer that opens 10^6 traces without ever closing a root would
-accumulate without bound. Future operator-tunable bounds at
-`CollectorConfig` are a follow-on arc per §9.3 implementer-discretion.
+**Bounded-buffer bounds (OD spec v1.28 — §9.3 implementer-discretion).**
+The v1.27 §2(a) carve-out (MVP did NOT bound buffer size) is CLOSED at OD
+spec v1.28: the processor now accepts two optional operator-tunable
+ceilings, supplied in production from `CollectorConfig`:
+
+- ``max_buffered_traces`` — ceiling on the number of distinct traces
+  buffered pending root-close. When a NEW trace that will REMAIN pending
+  would exceed the ceiling, the **oldest buffered trace is evicted**
+  (drop-oldest / insertion-order FIFO) and counted at
+  ``dropped_trace_count``. This directly bounds the pathological case (a
+  producer that opens 10^6 roots without closing them): the stale
+  never-closing traces are the oldest, so they are shed first to make room.
+  A new trace whose FIRST observed span is already its root-close
+  materializes + frees its slot in the same ``on_end`` (no steady-state
+  buffer pressure), so it does NOT trigger eviction.
+- ``max_spans_per_trace`` — ceiling on the non-always-sampled spans
+  buffered for a single trace. Overflow **non-root** spans are dropped and
+  counted at ``dropped_span_count``; the root-close span ALWAYS processes
+  (so the trace materializes and frees its slot rather than leaking).
+
+Both default to ``None`` (unbounded — preserves the v1.27 MVP behavior for
+direct construction; the production materializer always passes the
+``CollectorConfig`` ceilings, so production is bounded by default).
+
+**Eviction fidelity tradeoff (documented choice).** Drop-oldest may evict
+a *keep-flagged* trace (one whose §10.2 classification trigger fired)
+under buffer pressure. This is an accepted, bounded loss: the trigger span
+itself is in the §9.2 always-sampled set and so was **forwarded
+immediately** at ``on_end`` (it bypasses the buffer) — the failure
+*signal* survives eviction; only the buffered tree-*context* (sibling
+spans the sampler recorded) is shed. This is consistent with the
+processor's "trust-sampler-on-base-rate, best-effort preservation"
+posture. A keep-flag-preferential eviction (evict non-keep traces first)
+is a documented future refinement; drop-oldest is chosen for O(1)
+eviction and because the failure signal is already preserved. Alternative
+considered: drop-NEW (reject the incoming trace) — rejected because it
+lets stale never-closing traces hog the buffer indefinitely, the opposite
+of the pathology the bound exists to contain.
 
 **Spec authority.** OD spec v1.2 §C-OD-09 §9.1 (per-deployment-surface
 sampling mode) + §9.2 (always-sampled exception set) + §9.3 (sampling-
@@ -113,14 +146,30 @@ class TailKeepSpanProcessor(SpanProcessor):
     this processor is the registered processor on the `TracerProvider`.
     """
 
-    def __init__(self, *, downstream: SpanProcessor) -> None:
+    def __init__(
+        self,
+        *,
+        downstream: SpanProcessor,
+        max_buffered_traces: int | None = None,
+        max_spans_per_trace: int | None = None,
+    ) -> None:
         self._downstream: SpanProcessor = downstream
         # Per-trace_id buffer of non-always-sampled spans pending root-close
-        # keep decision. Keyed by the int form of OTel trace_id.
+        # keep decision. Keyed by the int form of OTel trace_id. Python dict
+        # insertion order makes `next(iter(...))` the oldest trace (FIFO
+        # drop-oldest eviction under `max_buffered_traces` pressure).
         self._buffer: dict[int, list[ReadableSpan]] = {}
         # Per-trace_id keep flag — True iff any span in the trace carried a
         # §10.2 classification trigger. OR-merged at on_end.
         self._keep: dict[int, bool] = {}
+        # OD spec v1.28 §9.3 operator-tunable bounded-buffer ceilings. None =
+        # unbounded (v1.27 MVP behavior); the production materializer passes
+        # the `CollectorConfig` ceilings so production is bounded by default.
+        self._max_buffered_traces: int | None = max_buffered_traces
+        self._max_spans_per_trace: int | None = max_spans_per_trace
+        # Drop counters (observability + test introspection).
+        self._dropped_trace_count: int = 0
+        self._dropped_span_count: int = 0
 
     @property
     def downstream(self) -> SpanProcessor:
@@ -131,6 +180,16 @@ class TailKeepSpanProcessor(SpanProcessor):
     def buffered_trace_count(self) -> int:
         """Number of traces currently buffered (test introspection)."""
         return len(self._buffer)
+
+    @property
+    def dropped_trace_count(self) -> int:
+        """Traces evicted (drop-oldest) under the `max_buffered_traces` ceiling."""
+        return self._dropped_trace_count
+
+    @property
+    def dropped_span_count(self) -> int:
+        """Non-root spans dropped under the `max_spans_per_trace` ceiling."""
+        return self._dropped_span_count
 
     def on_start(
         self,
@@ -168,16 +227,57 @@ class TailKeepSpanProcessor(SpanProcessor):
         ctx = span.get_span_context()
         assert ctx is not None  # a span reaching on_end always has a context
         trace_id = ctx.trace_id
+        is_root_close = span.parent is None
 
-        self._buffer.setdefault(trace_id, []).append(span)
+        # OD spec v1.28 §9.3 max-buffered-traces ceiling: a NEW trace that will
+        # REMAIN pending evicts the oldest buffered trace (drop-oldest FIFO).
+        # Gate on `not is_root_close`: a root-close-first trace materializes +
+        # frees its slot in this same on_end (no steady-state buffer pressure),
+        # so it must NOT shed an existing pending trace's context.
+        if (
+            not is_root_close
+            and trace_id not in self._buffer
+            and self._max_buffered_traces is not None
+            and len(self._buffer) >= self._max_buffered_traces
+        ):
+            self._evict_oldest_trace()
+
+        bucket = self._buffer.setdefault(trace_id, [])
+        # OD spec v1.28 §9.3 max-spans-per-trace ceiling: drop overflow
+        # non-root spans (the root-close span always processes below so the
+        # trace materializes and frees its slot rather than leaking).
+        if (
+            not is_root_close
+            and self._max_spans_per_trace is not None
+            and len(bucket) >= self._max_spans_per_trace
+        ):
+            self._dropped_span_count += 1
+        else:
+            bucket.append(span)
+
         if is_classification_trigger(span):
             self._keep[trace_id] = True
 
         # Root close detection: parent SpanContext is None means this span
         # has no parent in the recorded trace (it is the local-root). At
         # span-end, OTel `ReadableSpan.parent` is `None` for the root.
-        if span.parent is None:
+        if is_root_close:
             self._materialize_trace_decision(trace_id)
+
+    def _evict_oldest_trace(self) -> None:
+        """Drop the oldest buffered trace (FIFO) under the max-traces ceiling.
+
+        Python dict preserves insertion order, so `next(iter(self._buffer))`
+        is the oldest-inserted trace_id. Its buffered spans are dropped
+        (memory freed) and the trace is counted at `dropped_trace_count`. See
+        the module docstring "Eviction fidelity tradeoff" for the rationale
+        (drop-oldest may shed a keep-flagged trace's buffered context, but its
+        always-sampled trigger span was already forwarded immediately).
+        """
+        oldest_trace_id = next(iter(self._buffer))
+        self._buffer.pop(oldest_trace_id, None)
+        self._keep.pop(oldest_trace_id, None)
+        self._dropped_trace_count += 1
 
     def _materialize_trace_decision(self, trace_id: int) -> None:
         """Flush or drop the buffered spans for `trace_id` per the keep flag."""
