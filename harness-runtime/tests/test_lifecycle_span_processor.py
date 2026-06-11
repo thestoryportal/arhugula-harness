@@ -450,6 +450,42 @@ def test_managed_cloud_surface_wraps_with_tail_keep(tmp_path: Path) -> None:
     assert stage.tail_keep_processor.downstream is stage.processor
 
 
+def test_production_surface_threads_collector_buffer_bounds(tmp_path: Path) -> None:
+    """OD spec v1.28 §9.3: CollectorConfig tail-keep ceilings thread through + enforce.
+
+    Behavioral end-to-end check (config → materializer → processor): a tiny
+    operator-configured ceiling bounds a pathological producer that opens
+    traces without ever closing their roots.
+    """
+    from opentelemetry import trace as otel_trace
+
+    provider = _provider()
+    config = RuntimeConfig(
+        deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER,
+        repository_root=tmp_path,
+        path_bindings=PathBindingConfig(),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4317"),
+        collector=CollectorConfig(
+            placement=CollectorPlacement.IN_PROCESS,
+            tail_keep_max_buffered_traces=4,
+        ),
+        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+    )
+    stage = materialize_span_processor_stage(config, provider, exporter=InMemorySpanExporter())
+    assert stage.tail_keep_processor is not None
+    tracer = provider.get_tracer("v1-28-bounds-threading-test")
+    roots = []
+    for _ in range(20):  # 20 >> 4 ceiling: pathological producer
+        root = tracer.start_span("workflow.envelope.pathological")
+        child = tracer.start_span("inner.work", context=otel_trace.set_span_in_context(root))
+        child.end()
+        roots.append(root)
+    assert stage.tail_keep_processor.buffered_trace_count == 4  # bounded
+    assert stage.tail_keep_processor.dropped_trace_count == 16  # threaded + enforced
+    assert len(roots) == 20
+
+
 def test_production_surface_drops_unclassified_trace_at_export(
     tmp_path: Path,
 ) -> None:

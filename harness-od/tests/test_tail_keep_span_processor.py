@@ -19,6 +19,7 @@ from harness_od.tail_keep_classification import (
     is_classification_trigger,
 )
 from harness_od.tail_keep_span_processor import TailKeepSpanProcessor
+from opentelemetry import trace as otel_trace
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -293,3 +294,96 @@ def test_in_memory_export_via_tail_keep_chain_drops_unclassified_trace() -> None
             pass
     exported_names = {s.name for s in exporter.get_finished_spans()}
     assert exported_names == set()
+
+
+# --- OD spec v1.28 §9.3 operator-tunable bounded-buffer ceilings -------------
+
+
+def _buffer_one_unclosed_trace(tracer: otel_trace.Tracer) -> Span:
+    """Buffer exactly one trace that never materializes a root-close.
+
+    Starts a fresh root span (unique trace_id, NOT ended → never triggers a
+    root-close materialize) and ends a single child under it (the child's
+    `parent` is the root → it buffers under the root's trace_id). Returns the
+    open root so the caller can keep a reference (un-ended) — this is the
+    pathological-producer shape the v1.28 bounds exist to contain.
+    """
+    root = tracer.start_span("workflow.envelope.pathological")
+    child = tracer.start_span("inner.work", context=otel_trace.set_span_in_context(root))
+    child.end()
+    return root
+
+
+def test_max_buffered_traces_evicts_oldest_under_pathological_producer() -> None:
+    """v1.28: a producer opening >ceiling never-closing traces stays bounded (drop-oldest)."""
+    recorder = _RecordingProcessor()
+    proc = TailKeepSpanProcessor(downstream=recorder, max_buffered_traces=8)
+    provider = TracerProvider()
+    provider.add_span_processor(proc)
+    tracer = provider.get_tracer(__name__)
+    # 100 >> 8: a pathological producer opening roots without closing them.
+    roots = [_buffer_one_unclosed_trace(tracer) for _ in range(100)]
+    assert proc.buffered_trace_count == 8  # bounded at the ceiling
+    assert proc.dropped_trace_count == 92  # 100 - 8 evicted (drop-oldest)
+    assert len(roots) == 100  # references retained → roots genuinely un-ended
+
+
+def test_max_spans_per_trace_drops_overflow_non_root_spans() -> None:
+    """v1.28: a single never-closing trace cannot accumulate spans without bound."""
+    recorder = _RecordingProcessor()
+    proc = TailKeepSpanProcessor(downstream=recorder, max_spans_per_trace=4)
+    provider = TracerProvider()
+    provider.add_span_processor(proc)
+    tracer = provider.get_tracer(__name__)
+    root = tracer.start_span("workflow.envelope")  # un-ended (no root-close yet)
+    ctx = otel_trace.set_span_in_context(root)
+    for i in range(20):  # 20 >> 4: overflow children
+        child = tracer.start_span(f"inner.{i}", context=ctx)
+        child.end()
+    assert proc.dropped_span_count == 16  # 20 - 4 buffered
+    assert proc.buffered_trace_count == 1  # the one trace, capped at 4 spans
+    # Root-close ALWAYS processes even at the per-trace cap → trace frees its slot.
+    root.end()
+    assert proc.buffered_trace_count == 0
+
+
+def test_bounds_do_not_affect_legitimate_classified_trace() -> None:
+    """v1.28: with bounds set high enough, keep-semantics + zero drops are preserved."""
+    recorder = _RecordingProcessor()
+    proc = TailKeepSpanProcessor(downstream=recorder, max_buffered_traces=8, max_spans_per_trace=8)
+    provider = TracerProvider()
+    provider.add_span_processor(proc)
+    tracer = provider.get_tracer(__name__)
+    with tracer.start_as_current_span("workflow.envelope"):
+        with tracer.start_as_current_span(SANDBOX_VIOLATION_SPAN_NAME):
+            pass
+        with tracer.start_as_current_span("sibling.work"):
+            pass
+    forwarded = {s.name for s in recorder.on_end_calls}
+    assert SANDBOX_VIOLATION_SPAN_NAME in forwarded
+    assert "workflow.envelope" in forwarded
+    assert "sibling.work" in forwarded
+    assert proc.dropped_trace_count == 0
+    assert proc.dropped_span_count == 0
+
+
+def test_root_close_only_trace_does_not_evict_at_saturation() -> None:
+    """v1.28 (Codex review): a root-close-only new trace adds no steady-state buffer
+    pressure → it must NOT shed a pending trace's context at saturation."""
+    recorder = _RecordingProcessor()
+    proc = TailKeepSpanProcessor(downstream=recorder, max_buffered_traces=2)
+    provider = TracerProvider()
+    provider.add_span_processor(proc)
+    tracer = provider.get_tracer(__name__)
+    # Saturate the buffer with 2 pending (never-closing-root) traces.
+    roots = [_buffer_one_unclosed_trace(tracer) for _ in range(2)]
+    assert proc.buffered_trace_count == 2
+    assert proc.dropped_trace_count == 0
+    # A short trace whose first observed span IS its root close (no children):
+    # it materializes + frees its slot in the same on_end, so the 2 pending
+    # traces must be preserved (NO eviction, NO drop count increment).
+    with tracer.start_as_current_span("workflow.envelope.short"):
+        pass
+    assert proc.buffered_trace_count == 2
+    assert proc.dropped_trace_count == 0
+    assert len(roots) == 2
