@@ -21,6 +21,7 @@ from harness_is.state_ledger_entry_schema import Actor, ActorClass
 
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.config.provider_secrets import make_provider_secret_resolver
+from harness_runtime.lifecycle.prompt_selection import reconcile_active_prompt_via_selection
 from harness_runtime.types import RuntimeConfig
 
 __all__ = ["execute"]
@@ -32,7 +33,6 @@ async def execute(
     workload_class: WorkloadClass,
 ) -> None:
     """Populate the stage 0 PREAMBLE fields on `ctx`."""
-    _ = workload_class  # unused at stage 0; threaded for uniformity
     ctx.config = config
     ctx.drained_flag = asyncio.Event()
     # U-RT-87 — `pause_requested_flag` sibling-pattern to `drained_flag` per
@@ -50,3 +50,18 @@ async def execute(
     # snapshot reflects an operator-selected prompt version when one is supplied;
     # defaults to the empty manifest otherwise.
     ctx.prompt_manifest = config.prompt_manifest
+    # R-PM-1 cascade PR #3 — reconcile the effective active prompt via the CP
+    # prompt-selection layer HERE at stage 0, BEFORE the first procedural-tier
+    # snapshot is computed (the stage-3b CP producer sites) and before the stage-5
+    # injection reader. Reconciling at stage 0 (not stage 5) guarantees EVERY
+    # downstream procedural-tier emission AND the injection reader read the SAME
+    # selected version — coherent audit hashes across ALL stages (Codex P2-1).
+    # Per-workload selection keys on the REAL run `workload_class`; per-role on the
+    # MVP-default role. None / no-match → unchanged (the #496/PR-#1 inline active
+    # prompt). An invalid manifest or a binding to an unauthored sha is fail-loud.
+    # Per CP spec v1.31 §29.4.
+    ctx.prompt_manifest = reconcile_active_prompt_via_selection(
+        ctx.prompt_manifest,
+        config.prompt_selection_manifest,
+        workload_class=workload_class,
+    )

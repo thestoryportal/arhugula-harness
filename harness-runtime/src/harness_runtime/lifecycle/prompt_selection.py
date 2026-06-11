@@ -51,10 +51,12 @@ from harness_cp.cp_shared_types import AgentRole
 from harness_cp.prompt_selection_manifest import (
     PromptSelectionManifest,
     resolve_active_prompt_version_sha,
+    validate_prompt_selection_manifest,
 )
 from harness_is.prompt_manifest import PromptManifest
 
 __all__ = [
+    "InvalidPromptSelectionManifestError",
     "PromptSelectionUnauthoredError",
     "reconcile_active_prompt_via_selection",
 ]
@@ -79,10 +81,11 @@ class PromptSelectionUnauthoredError(Exception):
     ``RT-FAIL-PROMPT-INJECTION-CONFLICT`` postures + ``[[conformance-validator-disciplines]]``).
 
     Maps to ``RT-FAIL-PROMPT-SELECTION-UNAUTHORED`` per CP spec v1.31 §29.4.
-    Raised at bootstrap stage 5 reconciliation (before the dispatcher is
-    constructed) → surfaces as a ``BootstrapFailure`` — a config/authoring error
-    the operator must correct (you cannot select a version that was never
-    authored), unlike the per-dispatch step-level ``RT-FAIL-PROMPT-INJECTION-CONFLICT``.
+    Raised at bootstrap stage 0 reconciliation (before any procedural-tier
+    snapshot is computed + before the dispatcher is constructed) → surfaces as a
+    ``BootstrapFailure`` — a config/authoring error the operator must correct (you
+    cannot select a version that was never authored), unlike the per-dispatch
+    step-level ``RT-FAIL-PROMPT-INJECTION-CONFLICT``.
     """
 
     def __init__(self, version_sha: str) -> None:
@@ -93,6 +96,23 @@ class PromptSelectionUnauthoredError(Exception):
             "PromptManifest.versions store; fail-loud (a version must be authored "
             "in the store before it can be selected)"
         )
+
+
+class InvalidPromptSelectionManifestError(Exception):
+    """Raised when the operator-supplied ``PromptSelectionManifest`` fails the CP
+    structural validator (``validate_prompt_selection_manifest``) at the runtime
+    consumer site (R-PM-1 PR #3).
+
+    Mirrors ``build_routing_manifest``'s ``InvalidRoutingManifestError`` — the CP
+    structural manifest contract (e.g. ``manifest_version >= 1``) is enforced at
+    bootstrap rather than silently bypassed (Codex P2-2). Raised at stage 0
+    reconciliation → surfaces as a ``BootstrapFailure``. Maps to CP spec v1.31
+    §29.5 (the ``manifest_version < 1`` row).
+    """
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(f"invalid prompt-selection manifest: {reason}")
 
 
 def reconcile_active_prompt_via_selection(
@@ -115,9 +135,15 @@ def reconcile_active_prompt_via_selection(
     ``prompt_manifest.versions``; the manifest is returned with
     ``active_prompt_version`` set to that member (so injection + the §5.2 hash
     both read it). A selected sha with no store member raises
-    :class:`PromptSelectionUnauthoredError` (fail-loud)."""
+    :class:`PromptSelectionUnauthoredError` (fail-loud). An operator-supplied
+    manifest that fails the CP structural validator raises
+    :class:`InvalidPromptSelectionManifestError` (fail-loud — parity with
+    ``build_routing_manifest``'s bootstrap validation; Codex P2-2)."""
     if selection_manifest is None:
         return prompt_manifest
+    validation_error = validate_prompt_selection_manifest(selection_manifest)
+    if validation_error is not None:
+        raise InvalidPromptSelectionManifestError(validation_error.reason)
     selected_sha = resolve_active_prompt_version_sha(
         selection_manifest, role=role, workload=workload_class
     )

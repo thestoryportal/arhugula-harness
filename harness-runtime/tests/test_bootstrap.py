@@ -420,7 +420,9 @@ async def test_bootstrap_selection_unauthored_sha_fails_loud(
     with pytest.raises(BootstrapFailure) as excinfo:
         await run_bootstrap(populated, workload_class=_WORKLOAD)
     assert isinstance(excinfo.value.cause, PromptSelectionUnauthoredError)
-    assert excinfo.value.failed_stage is BootstrapStage.LOOP_INIT
+    # Reconciliation runs at stage 0 PREAMBLE (before the first procedural-tier
+    # snapshot at the stage-3b producer sites) so audit hashes stay coherent.
+    assert excinfo.value.failed_stage is BootstrapStage.PREAMBLE
 
 
 @pytest.mark.asyncio

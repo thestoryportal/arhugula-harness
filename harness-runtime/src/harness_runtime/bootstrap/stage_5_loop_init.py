@@ -62,9 +62,6 @@ from harness_runtime.lifecycle.override_evaluator import materialize_override_ev
 from harness_runtime.lifecycle.procedural_tier_snapshot import (
     make_procedural_tier_snapshot_resolver,
 )
-from harness_runtime.lifecycle.prompt_selection import (
-    reconcile_active_prompt_via_selection,
-)
 from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
 from harness_runtime.lifecycle.retry_breaker_fallback import (
     materialize_retry_breaker_fallback_dispatcher_stage,
@@ -86,23 +83,6 @@ async def execute(
     workload_class: WorkloadClass,
 ) -> None:
     """Populate stage 5 LOOP_INIT fields on `ctx`."""
-
-    # R-PM-1 cascade PR #3 — reconcile the effective active prompt via the CP
-    # prompt-selection layer BEFORE the procedural-tier snapshot resolver and the
-    # LLM dispatcher are constructed, so BOTH the C-IS-05 §5.2 hash component
-    # (`active_prompt_version.version_sha`) and the §14.5.2 injection reader
-    # (`active_prompt_version.content`) read the SAME selected version (coherent
-    # by construction). Per-workload selection keys on the REAL run `workload_class`;
-    # per-role on the MVP-default role (the routing precedent — no per-step role at
-    # MVP). `None`/no-match → unchanged (the #496/PR-#1 inline active prompt). A
-    # binding to an unauthored `version_sha` is fail-loud at this seam (surfaces as
-    # a BootstrapFailure). Per CP spec v1.31 §29.4 (runtime consumer-site
-    # obligation), composing with the §14.5.2 translate-time injection seam.
-    ctx.prompt_manifest = reconcile_active_prompt_via_selection(
-        ctx.prompt_manifest,
-        config.prompt_selection_manifest,
-        workload_class=workload_class,
-    )
 
     override = materialize_override_evaluator_stage(config)
     ctx.override_evaluator = override.evaluator

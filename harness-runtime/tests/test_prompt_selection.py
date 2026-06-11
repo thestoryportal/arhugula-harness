@@ -18,6 +18,7 @@ from harness_cp.cp_shared_types import AgentRole
 from harness_cp.prompt_selection_manifest import PromptBinding, PromptSelectionManifest
 from harness_is.prompt_manifest import PromptManifest, prompt_version_sha
 from harness_runtime.lifecycle.prompt_selection import (
+    InvalidPromptSelectionManifestError,
     PromptSelectionUnauthoredError,
     reconcile_active_prompt_via_selection,
 )
@@ -99,6 +100,20 @@ def test_reconcile_unauthored_sha_fails_loud() -> None:
     )
     with pytest.raises(PromptSelectionUnauthoredError, match="RT-FAIL-PROMPT-SELECTION-UNAUTHORED"):
         reconcile_active_prompt_via_selection(pm, selection, workload_class=_SE)
+
+
+def test_reconcile_invalid_manifest_fails_loud() -> None:
+    """An operator-supplied manifest that fails the structural validator
+    (`manifest_version < 1`) is fail-loud at the consumer site — parity with
+    `build_routing_manifest`'s bootstrap validation (the validator is not left
+    unwired)."""
+    pm = _store_manifest()
+    invalid = PromptSelectionManifest(
+        manifest_version=0,
+        per_workload_overrides={_SE: PromptBinding(version_sha=prompt_version_sha("A body"))},
+    )
+    with pytest.raises(InvalidPromptSelectionManifestError, match="manifest_version"):
+        reconcile_active_prompt_via_selection(pm, invalid, workload_class=_SE)
 
 
 def test_reconcile_empty_store_with_selection_fails_loud() -> None:

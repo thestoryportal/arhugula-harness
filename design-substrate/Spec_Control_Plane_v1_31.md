@@ -12,6 +12,8 @@ v1.30 §1 canonical-reading amendment + §16.5.12.X lineage + v1.29 §16.5.12 + 
 
 **No new ADR.** §29 is a CP-axis contract authored under the cleared R-PM-1 design (PR #505); it touches no foundational ADR (the injection mechanism's ADR-F1 fidelity was settled at PR #1 — `ProviderAgnosticPayload` stays frozen). Per `[[adr-vs-fork-spec-plan-granularity]]` a spec-granularity surface uses a spec amendment, not an ADR.
 
+**Cite convention (adversarial review F3-01).** The §29 mirror-cites `C-CP-01 §1.3` (RoutingManifest) / `C-CP-03 §3.5` (RoleRoutingBinding) / `C-CP-04 §4.1` (WorkloadRoutingOverride) are **factor-out-domain-cites** — they name the parent contracts under which `RoleRoutingBinding` / `WorkloadRoutingOverride` were operator-ratified FACTOR-OUTs (`.harness/class_1_tension_role_routing_binding_underspec.md`, R-2/W-2 schemas, CP plan v2.10). The factored-out field shapes are not byte-tabled in a spec section; these cites name the domain authority, not a byte-resolving section. This is the identical convention the cleared `harness-cp/src/harness_cp/routing_manifest_residence.py` already uses for the same types; §29 propagates it.
+
 ---
 
 ## §29 (NEW) C-CP-29 — PromptSelectionManifest
@@ -63,21 +65,23 @@ A bound `version_sha` MUST be an authored member of the IS `PromptManifest.versi
 
 ### §29.4 Runtime consumer-site obligation
 
-The runtime is the consumer site that composes the CP resolver (§29.2) with the IS store (IS spec v1.7 §5.3) and the §14.5.2 injection seam. At bootstrap stage 5 LOOP_INIT, **before** the procedural-tier snapshot resolver and the LLM dispatcher are constructed, the runtime MUST:
+The runtime is the consumer site that composes the CP resolver (§29.2) with the IS store (IS spec v1.7 §5.3) and the §14.5.2 injection seam. The reconciliation MUST run at bootstrap **stage 0 PREAMBLE** — after `ctx.prompt_manifest` is copied from `RuntimeConfig` and **before the first procedural-tier snapshot is computed** (the stage-3b CP producer sites create the snapshot resolver and emit snapshot-bearing ledger entries) and before the stage-5 LLM-dispatcher injection reader. (Reconciling at stage 0 rather than stage 5 is load-bearing: a later reconciliation would leave the stage-3b producer-site `procedural_tier_snapshot_ref` entries computed against the *un-reconciled* `active_prompt_version` while the dispatcher reads the selected version — inconsistent audit hashes.) The runtime MUST:
 
-1. resolve the selected sha via `resolve_active_prompt_version_sha(selection, role=_MVP_DEFAULT_AGENT_ROLE, workload=<run workload_class>)` (per-workload keyed on the genuine run workload; per-role on the MVP-default role — the runtime has no per-step role at MVP, faithful to routing's own un-indexed `per_role_bindings`);
-2. on `None` (no selection configured, or no match) → leave `active_prompt_version` unchanged (the #496/PR-#1 inline active prompt);
-3. on a selected sha → reconcile `prompt_manifest.active_prompt_version` **onto the matching store member** (not merely redirect the injection reader), so BOTH the §14.5.2 injection reader (`active_prompt_version.content`) and the C-IS-05 §5.2 procedural-tier hash reader (`active_prompt_version.version_sha`) read the SAME selected version — **content/hash coherence by construction** (a redirect-injection-only design would reintroduce the content↔hash drift that the IS spec v1.6 §5.2 `version_sha == prompt_version_sha(content)` derive-invariant closed, one layer up);
-4. on a selected sha with **no matching store member** → **fail-loud / detect-then-refuse**: raise `RT-FAIL-PROMPT-SELECTION-UNAUTHORED` (a version must be authored in the store before it can be selected). Never silently fall through to the inline prompt.
+1. **validate the manifest structurally** — `validate_prompt_selection_manifest` (§29.3); on a non-`None` result **fail-loud** (`InvalidPromptSelectionManifestError`, parity with `build_routing_manifest`'s `InvalidRoutingManifestError`), never apply an invalid manifest;
+2. resolve the selected sha via `resolve_active_prompt_version_sha(selection, role=_MVP_DEFAULT_AGENT_ROLE, workload=<run workload_class>)` (per-workload keyed on the genuine run workload; per-role on the MVP-default role — the runtime has no per-step role at MVP, faithful to routing's own un-indexed `per_role_bindings`);
+3. on `None` (no selection configured, or no match) → leave `active_prompt_version` unchanged (the #496/PR-#1 inline active prompt);
+4. on a selected sha → reconcile `prompt_manifest.active_prompt_version` **onto the matching store member** (not merely redirect the injection reader), so BOTH the §14.5.2 injection reader (`active_prompt_version.content`) and the C-IS-05 §5.2 procedural-tier hash reader (`active_prompt_version.version_sha`) read the SAME selected version — **content/hash coherence by construction** (a redirect-injection-only design would reintroduce the content↔hash drift that the IS spec v1.6 §5.2 `version_sha == prompt_version_sha(content)` derive-invariant closed, one layer up);
+5. on a selected sha with **no matching store member** → **fail-loud / detect-then-refuse**: raise `RT-FAIL-PROMPT-SELECTION-UNAUTHORED` (a version must be authored in the store before it can be selected). Never silently fall through to the inline prompt.
 
-Residence: `harness-runtime/src/harness_runtime/lifecycle/prompt_selection.py` (`reconcile_active_prompt_via_selection` + `PromptSelectionUnauthoredError`), invoked at `stage_5_loop_init.execute`. The reconciliation uses `model_copy(update={"active_prompt_version": <member>})`; the selected member is already an authored store member satisfying the IS content↔sha + membership invariants, so the copy (which skips `PromptManifest`'s `mode="after"` validator) is invariant-preserving.
+Residence: `harness-runtime/src/harness_runtime/lifecycle/prompt_selection.py` (`reconcile_active_prompt_via_selection` + `PromptSelectionUnauthoredError` + `InvalidPromptSelectionManifestError`), invoked at `stage_0_preamble.execute`. The reconciliation uses `model_copy(update={"active_prompt_version": <member>})`; the selected member is already an authored store member satisfying the IS content↔sha + membership invariants, so the copy (which skips `PromptManifest`'s `mode="after"` validator) is invariant-preserving.
 
 ### §29.5 Failure-mode taxonomy
 
 | Failure | Surface | Posture |
 |---|---|---|
-| `manifest_version < 1` | `validate_prompt_selection_manifest` → `PromptSelectionManifestValidationError(reason=...)` | Returned (recoverable validation result; mirrors `RoutingManifestValidationError`) |
-| Bound `version_sha` not an authored store member | `RT-FAIL-PROMPT-SELECTION-UNAUTHORED` (`PromptSelectionUnauthoredError`) at stage-5 reconciliation | **Raised** (detect-then-refuse; surfaces as a `BootstrapFailure` at `BootstrapStage.LOOP_INIT` — a config/authoring error the operator must correct). Distinct from the per-dispatch step-level `RT-FAIL-PROMPT-INJECTION-CONFLICT` (§14.5.2). |
+| `manifest_version < 1` (validator contract) | `validate_prompt_selection_manifest` → `PromptSelectionManifestValidationError(reason=...)` | Returned (recoverable validation result; mirrors `RoutingManifestValidationError`) |
+| `manifest_version < 1` (consumer site) | `InvalidPromptSelectionManifestError` at stage-0 reconciliation | **Raised** (the runtime consumer enforces the structural contract — parity with `build_routing_manifest`'s `InvalidRoutingManifestError`; surfaces as a `BootstrapFailure` at `BootstrapStage.PREAMBLE`) |
+| Bound `version_sha` not an authored store member | `RT-FAIL-PROMPT-SELECTION-UNAUTHORED` (`PromptSelectionUnauthoredError`) at stage-0 reconciliation | **Raised** (detect-then-refuse; surfaces as a `BootstrapFailure` at `BootstrapStage.PREAMBLE` — a config/authoring error the operator must correct). Distinct from the per-dispatch step-level `RT-FAIL-PROMPT-INJECTION-CONFLICT` (§14.5.2). |
 
 ### §29.6 Invariants
 
