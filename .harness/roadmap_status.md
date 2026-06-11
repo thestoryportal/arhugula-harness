@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `6fa6e9903cf4` |
-| `last_refreshed` | 2026-06-10T17:46:54-06:00 |
-| `git_head` | `b6ef8e41` (main) — post-MVP closure track (R-CL-*) registered + Phase 0 scope-lock + 2 design forks merged (#477). |
+| `workspace_state_hash` | `37a2a9f0c9eb` |
+| `last_refreshed` | 2026-06-10T18:12:29-06:00 |
+| `git_head` | `b7bcbc04` (main) — durable F2 engine pause/resume substrate (R-CXA-2 S3) merged (#475); R-CL-P2 input landed. |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 49 |
 
@@ -45,8 +45,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| #475 | `r-cxa-2-durable-f2-recovery-substrate` | (P2 input) | Phase 7 — durable F2 recovery substrate (capability-ahead-of-driver) |
-| (this PR) | `closure-track-register-p0` | R-CL-P0 | mode-agnostic — closure-track registration + P0 scope-lock + 2 forks |
+| (none) | — | — | No open PRs. Next frontier: R-CL-P1 routing intelligence (council-then-build). |
 
 ---
 
@@ -54,12 +53,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #475 | 2026-06-10 | **Durable F2 engine pause/resume substrate merged — R-CXA-2 S3 (R-CL-P2 input).** `JournalEnginePauseResumeSubstrate` (`harness-runtime/.../lifecycle/journal_pause_resume_substrate.py`): per-workflow fsync'd filesystem journal, fail-closed corruption handling. Codex review converged clean over 7 passes (6 real durability bugs fixed); 13/13 CI green. Honest scope: does NOT close R-CXA-2 (no production driver → stays bounded-residual) — it is the capability substrate the R-CL-P2 engine-recovery driver binds. |
+| PR #477 | 2026-06-10 | **R-CL-\* closure track registered + Phase 0 CLOSED + 2 design forks filed.** 13-phase post-MVP closure spine registered at `Project_Roadmap_v1.md` §5.15; P0 re-verified every surface vs HEAD (scope-lock `.harness/closure-p0-scope-lock.md`), operator-ratified merge-and-proceed. Caught 2 stale-optimistic register claims (sandbox drivers built+tested but NOT prod-dispatcher-selected; routing `DECLARATIVE`-echo-only). 2 IS forks filed (`prompts_management_surface_active_prompt_version` + `keying_tuple_entry_shape_d_adr`) — block R-CL-P4 only. |
 | PR #476 | 2026-06-10 | **Post-MVP full harness closure plan v1 authored + merged** (`.harness/post-mvp-full-closure-plan-v1.md`). 13-phase spine (P0 ground → P1-P6 capabilities → Q1-Q4 hardening → D1 docs → C1 cert). Reframe: MVP+RC closed most activation; this closes the residual frontier + adds the full testing/DevEx/QA/security/code-review/packaging/docs apparatus. Two revisable structural decisions (§0.3). |
 | local commit (`a6d2f318`) | 2026-06-10 | **R-420 self-hosted daemon e2e EXERCISED + PASSING — every RC surface now exercised (RC follow-up).** On operator request: `mkdir`'d empty `prompts/`+`routing_manifest/`, repointed STATE_LEDGER to a throwaway path (IS-1 wants a fresh ledger; the pre-existing 113-entry `.harness/state.jsonl` left untouched), brought the OTLP stack up → `workflow=r420-self-hosted-tool-echo status=success cost=0 hosted-provider-calls=0` (daemon socket-bind + keyring `r420_probe_key` + OTLP + Ollama + MCP echo TOOL_STEP). Scaffolding cleaned up; stack torn down. Nothing in the RC arc remains unexercised. |
 | local commit (`064064b6`) | 2026-06-10 | **R-830 S3 PROVEN — last unexercised managed surface closed (RC follow-up).** The `r830`-profile SSO session had expired; operator re-ran `aws sso login --profile r830`, then `just r830-s3-live-e2e` PASSED (real S3 CRUD + cleanup, 1.89s). Every functional surface across all three tiers is now proven live; only the R-420 self-hosted daemon e2e (operator-provisioned `prompts/`+`routing_manifest/` dirs) remains unexercised. |
-| local commit (`1b2b5f10`) | 2026-06-10 | **R-411 gVisor local sandbox PROVEN (RC follow-up).** Operator surfaced the provisioned Lima VM at `/Volumes/Development/arhugula-r411/` that the initial arc skipped as "host-unavailable"; recovered the `Broken` VM (start → containerd → docker; `runsc` registered) and R-411 passed (TOOL_STEP under `runsc`, network egress blocked, host repo path not visible). RC report Phase B corrected. VM left Running. |
-| local commit (`e51d952e`) | 2026-06-10 | **RC deployment-readiness arc executed — verdict GO.** All 3 deployment tiers proven live with zero harness code changes, incl. managed-cloud OTLP→Cloud Trace (R-421/R-810/R-820, after collector discovery + 2 operator-authorized IAM grants; token-creator since revoked, run.invoker retained). Closure report + Phase-D advisory audit + runbook §5 doc-fix. Remaining = operator-env only (AWS SSO re-auth for S3; self-hosted `prompts/`+`routing_manifest/` dirs). |
-| local merge (`a5215dde`) | 2026-06-10 | **Claude release-candidate handoff authored.** Added `.harness/release-candidate-deployment-readiness-runbook.md` plus root Claude/context pointers so Claude Code can pick up the provider-free readiness, live smoke, traceability cleanup, and optional-polish gate without re-deriving. |
 
 ---
 
