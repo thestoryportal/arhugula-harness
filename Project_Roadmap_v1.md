@@ -2583,6 +2583,60 @@ R-CL-C1:
 
 ---
 
+### 5.16 Prompts management — full surface (R-PM-NN) — net-new forward capability
+
+> Authored 2026-06-11 per operator directive "I do ultimately want full prompts management" + the AskUserQuestion that ratified **FULL-STACK-UPFRONT** scope, sequenced **after R-CL-Q1**. This is a net-new forward capability beyond the 13-phase closure plan (§5.15), born from R-CL-P4's DP-4 deferral. The MINIMAL binding (#496) — active-prompt *version identity* in the procedural-tier hash — is the foundation; this arc builds the surface that makes prompts actually *function*. First deliverable is a design-phase spec/ADR (X-AL-3), then phase-7 impl after clearance.
+
+```yaml
+R-PM-1:
+  title: Full prompts-management surface — injection + selection + versioning/authoring + per-tier governance
+  surface: I-prompts
+  status: BLOCKED     # operator-confirmed (2026-06-11 AUQ) FULL-STACK-UPFRONT scope; sequencing-gated AFTER R-CL-Q1 (operator choice, NOT a technical dependency). First deliverable = design-phase spec/ADR, then phase-7 impl after clearance.
+  depends_on: [R-CL-Q1]   # OPERATOR-SEQUENCING choice ("after R-CL-Q1"), NOT technical — Q1 does not logically block prompts design; re-prioritizable.
+  blocks: []
+  posture: design-phase   # spec/ADR authoring first; then bundled-absorption into phase-7 (clearance markers)
+  scope: { files: [design-substrate/ (new prompts-management spec/ADR), harness-is/src (prompt versioning/authoring + PROMPTS path-class), harness-cp/src (selection — routing-style per-role binding), harness-runtime/src (dispatch injection seam), harness-od/src (per-tier governance)], contracts: [C-IS-05 §5.2 (existing version-identity binding), C-IS-01 (PROMPTS path-class), ADR-F1 (ProviderAgnosticPayload — injection-mechanism touch), C-CP-02 (routing per-role precedent for selection), C-RT-15 (LLM dispatch composer)], cross_axis: yes }
+  skills: { primary: systems-architect, secondary: [spec-writer, implementation-planner, council-orchestrator, harness-adversarial-reviewer] }
+  advisor_required: yes
+  council_required: conditional:nameable-tension   # (i) selection-ownership IS⊥CP; (ii) injection-mechanism blast-radius (bounded HarnessContext channel vs foundational ADR-F1 ProviderAgnosticPayload change — C10 action-safety/contract-stability)
+  verification: { shape: e2e, must_pass: ["a comprehensive prompts-management spec/ADR covers all 4 layers (injection + selection + versioning/authoring + per-tier governance), cleared (clearance marker)", "the active prompt's CONTENT reaches the provider as a system prompt on a real dispatch (injection proven e2e — not just version-identity in the ledger hash)", "selection resolves which prompt is active per role/step/workload", "per-tier (persona) prompt-governance posture distinct across SOLO/TEAM_BINDING/MULTI_TENANT"] }
+  close_shape: { type: design-then-impl, artifact: "prompts-management spec/ADR + clearance markers, then phase-7 impl PR(s)", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: null
+  notes: |
+    OPERATOR-CONFIRMED 2026-06-11 (AskUserQuestion): FULL prompts management, scope = FULL-STACK-UPFRONT (all
+    four layers designed in one comprehensive spec/ADR before any impl), sequenced AFTER R-CL-Q1. (The operator
+    OVERRODE the injection-first-MVP recommendation in favor of full-stack — record faithfully: all 4 layers are
+    in-scope for the upfront design.) Re-opens R-CL-P4's DP-4 deferral
+    (fork class_1_fork_prompts_management_surface_active_prompt_version.md) at FULL scope; the #496 MINIMAL
+    binding (IS spec v1.5 §C-IS-05 §5.2) — active-prompt VERSION IDENTITY in the procedural-tier hash — is the
+    correct foundation, NOT a redo.
+    THE FOUR LAYERS (all in-scope, design upfront): (a) INJECTION — the active prompt's CONTENT reaches the
+    provider as a system prompt at LLM dispatch (the missing load-bearing piece; today nothing reaches the model);
+    (b) SELECTION — which prompt is active for which role/step/workload (mirrors CP routing's per-role bindings,
+    C-CP-02); (c) VERSIONING/AUTHORING — multiple prompt versions on the PROMPTS path-class (C-IS-01) + authoring
+    discipline; (d) PER-TIER GOVERNANCE — persona-tier-aware prompt policy (redaction/approval) composing with the
+    bridging-arc SOLO→TEAM_BINDING→MULTI_TENANT tiers.
+    GROUNDING PRESERVED (the expensive 2026-06-11 finding — do NOT re-excavate after Q1): there is NO system-prompt
+    route at the dispatch layer today. All 3 provider-translate functions (_payload_to_anthropic/openai/ollama_kwargs,
+    harness-runtime/.../llm_dispatch.py:917-946) build kwargs from exactly messages+tools+params; ProviderAgnosticPayload
+    (harness-cp/.../cp_shared_types.py:89, frozen, extra=forbid, ADR-F1) has NO `system` field and is only ever
+    constructed in production as an empty placeholder (llm_dispatch.py:479 — the real payload is supplied by the
+    caller / workflow step). So injection is NET-NEW H_T design (X-AL-3) → first deliverable is a design-phase
+    spec/ADR, then impl after clearance.
+    TWO CANDIDATE INJECTION MECHANISMS (the live arc-fork to resolve at arc-open): (1) translate-time channel on
+    HarnessContext (carry active-prompt content like prompt_manifest already is; inject at translate time — prepend
+    a role=system message for OpenAI/Ollama, add a system= kwarg for Anthropic) = BOUNDED, no ADR change; vs (2) add
+    `system` to the frozen ProviderAgnosticPayload contract = FOUNDATIONAL ADR-F1 touch → Class 1 back-flow.
+    COUNCIL (conditional:nameable-tension, surface both at arc-open): (i) SELECTION-OWNERSHIP IS⊥CP — prompt
+    authoring/versioning is IS-native, but per-role/step binding mirrors CP routing; who owns the selection surface?
+    (the routing per-role-binding precedent may pre-resolve this). (ii) INJECTION-MECHANISM BLAST-RADIUS — bounded
+    HarnessContext channel vs foundational ADR-F1 ProviderAgnosticPayload change (C10 action-safety / contract-stability).
+    Cross-ref: forward register .harness/post-phase-8-forward-register.md (2026-06-01 snapshot; R-PM-1 is a net-new
+    capability beyond it — not back-filed into that historical doc).
+```
+
+---
+
 ## 6. Operator gate inventory
 
 Actions where genuine human decision is required (not Claude judgment). Flagged via `posture: halt-route-to-operator` in §5; enumerated here for fast scan.
