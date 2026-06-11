@@ -2376,9 +2376,9 @@ R-CL-P1:
     FOLLOW-UPS: params['thinking']=={"type":"disabled"} would false-positive the THINKING derivation (latent — no current emitter found; 2-line guard); capability-shortfall is unit-verified only (mock inner + hand-built chain) — e2e/production-config reachability → R-CL-Q3.
 
 R-CL-P2:
-  title: Phase P2 — engine-recovery activation + sandbox driver→dispatch wiring + external-engine seam
+  title: Phase P2 — engine-recovery activation + external-engine seam (sandbox C-1 unbundled → R-410-family)
   surface: V
-  status: ACTIVE       # next frontier (P0 RESOLVED; PR #475 JournalEnginePauseResumeSubstrate merged as the input)
+  status: DEFERRED     # entry-grounding (.harness/r-cl-p2-engine-recovery-grounding.md) found the buildable Phase-7 slice empty: engine-recovery driver = ratified batch-55 bounded-residual (register line 181, "do not fake"); SAVE_POINT speculative (zero consumers); HITL OQ-5/7 hollow, OQ-6 thin-latent. Mis-bundled sandbox C-1 unbundled (design-adjacent, file-don't-build). Not a build candidate; re-open per the batch-55 DP-2 trigger.
   depends_on: [R-CL-P0]
   blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
   posture: phase-7
@@ -2387,15 +2387,19 @@ R-CL-P2:
   advisor_required: yes
   council_required: conditional:nameable-tension   # C10 blast-radius ⊥ C11 operator-burden
   verification: { shape: e2e, must_pass: ["a production TOOL_STEP resolved to TIER_2/3/4 actually executes in the Docker/gVisor/E2B driver (tier→driver selection seam wired); the engine recovery loop drives the bound durable F2 substrate through capture→restart→resume; SAVE_POINT reference adapter passes its deterministic contract test"] }
-  close_shape: { type: PR-merge, artifact: "recovery+sandbox-wiring PR(s)", cascade: [R-IF-roadmap-refresh] }
-  next_pointer: null
+  close_shape: { type: re-open-on-DP-2-trigger, artifact: "n/a (DEFERRED)", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: R-CL-P3
   notes: |
-    Folds NEW item C-1 (sandbox drivers built+e2e but production dispatcher defaults to MCPHostToolExecutionDriver; no tier→driver seam). Engine recovery loop dormant (PR #475 substrate unwired). External-engine adapters = build-seam-defer-live-proof (D-2; I-6 no-vendor).
+    DEFERRED at entry-grounding 2026-06-10 (`.harness/r-cl-p2-engine-recovery-grounding.md`; advisor-confirmed). The buildable, non-hollow Phase-7 slice is empty:
+    - Engine-recovery DRIVER: producer-discovery-empty by RATIFIED disposition — forward-register line 181 (CXA-2 = RETIRED-AS-BOUNDED-RESIDUAL, batch-55): "do not wire workflow_driver.py as a fake engine recovery loop; re-open only when a real event-sourced-replay / reconciler-loop / WAL-segment / engine-native-pause loop lands." Engine-layer loop has NO production caller (only tests); the engines that would emit engine-layer pauses are I-6 no-vendor. Building = fake-producer anti-pattern + X-AL-3. Do NOT bind #475 Journal substrate into the factory (cosmetic — nothing calls ctx.engine_recovery_loop; would force PathClass enum extension = IS-AL-1 violation, for zero production benefit).
+    - SAVE_POINT reference adapter: speculative (its only consumer is the dormant recovery loop → zero consumers); live-proof deployment-gated per D-2.
+    - HITL OQ-5/7: hollow (retry_breaker_fallback/retry_breaker do not compose with hitl_tool_loop; no per-tool-call turn journal; no production scenario fires fallback/breaker mid-HITL-turn). OQ-6 timeout degradation: thin-latent (factory passes timeout_seconds=None, no config path → branch never fires) — captured as a Q-phase robustness latent gap.
+    ROADMAP-HYGIENE: the prior title bundled "sandbox driver→dispatch wiring (C-1)", which closure-plan §P2 does NOT contain. UNBUNDLED → R-410-family finding: production tier→driver SELECTION is unwired (factory omits tool_execution_driver=; no tier/tech/provider→driver registry; every TOOL_STEP runs in-process regardless of resolved TIER_2/3/4 — enforcement is test-injection-only, a real security-posture gap). Design-adjacent: the R-410 fork (APPLIED-AS-BOUNDED-READING-B) frames tier→mechanism as a design-phase contract; spec v1.41 §14.9.8 dangles consumption as "future-arc"; R-410/411/412 deliberately closed with injected-driver e2e. file-don't-build (X-AL-1-clean).
 
 R-CL-P3:
   title: Phase P3 — persona-tier TEAM_BINDING breadth (e2e proof of the bridging-arc middle tier)
   surface: VI
-  status: BLOCKED
+  status: ACTIVE       # promoted from BLOCKED 2026-06-10: depends_on R-CL-P0 is RESOLVED + R-CL-P2 DEFERRED → P3 is the next frontier. Note is BUILD-NOT-FORK (design done; owed = e2e proof). Entry-triage owed: §10.2 design-substrate reconciliation (clearance marker) + possible infra-gated live-multi-tier-e2e.
   depends_on: [R-CL-P0]
   blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
   posture: phase-7
