@@ -1421,6 +1421,23 @@ class RuntimeConfig(BaseModel):
     (`RT-FAIL-PROMPT-SELECTION-UNAUTHORED`).
     """
 
+    approved_prompt_version_shas: frozenset[str] = frozenset()
+    """Operator-attested approved prompt `version_sha`s for binding-tier prompt
+    governance (R-PM-1 cascade PR #4; OD spec C-OD-34).
+
+    At a binding persona tier (team-binding / multi-tenant-compliance, where
+    `resolve_prompt_governance(persona_tier).approval_required` is `True`) a
+    *selection-driven* active prompt version is a governed artifact: its
+    `version_sha` MUST appear in this set, else bootstrap fails loud
+    (`RT-FAIL-PROMPT-VERSION-UNAPPROVED`). At the solo-developer tier the gate is
+    inert (local-first, no approval burden — the default `frozenset()` carries zero
+    burden, so all existing fixtures are unaffected). The gate governs only the
+    versions the CP selection layer *drives* (a supplied `prompt_selection_manifest`
+    resolving a `version_sha` for the run's `(role, workload)`); an inline-only
+    deployment (no selection manifest) is unaffected. Enforced at bootstrap stage 0
+    by `enforce_prompt_version_approval` (lifecycle/prompt_selection.py).
+    """
+
     trust_policy: TrustPolicy | None = None
     """Operator-supplied per-server trust policy (CP spec v1.11 §27.2 carrier).
 

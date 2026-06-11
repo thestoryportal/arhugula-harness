@@ -21,7 +21,10 @@ from harness_is.state_ledger_entry_schema import Actor, ActorClass
 
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.config.provider_secrets import make_provider_secret_resolver
-from harness_runtime.lifecycle.prompt_selection import reconcile_active_prompt_via_selection
+from harness_runtime.lifecycle.prompt_selection import (
+    enforce_prompt_version_approval,
+    reconcile_active_prompt_via_selection,
+)
 from harness_runtime.types import RuntimeConfig
 
 __all__ = ["execute"]
@@ -63,5 +66,20 @@ async def execute(
     ctx.prompt_manifest = reconcile_active_prompt_via_selection(
         ctx.prompt_manifest,
         config.prompt_selection_manifest,
+        workload_class=workload_class,
+    )
+    # R-PM-1 cascade PR #4 — per-persona-tier prompt governance (OD spec C-OD-34).
+    # AFTER reconciliation (so the manifest is structurally valid + the selected sha
+    # is already a verified store member): at a binding persona tier
+    # (team-binding / multi-tenant-compliance) a selection-DRIVEN active prompt
+    # version is a governed artifact whose sha must be operator-approved
+    # (`approved_prompt_version_shas`), else fail-loud RT-FAIL-PROMPT-VERSION-
+    # UNAPPROVED. Inert at solo-developer (local-first) + for inline-only / no-match
+    # deployments (nothing selection-driven). The OD posture is consumed here per
+    # the PER_PERSONA_TIER_REDACTION ⊳ RedactionSpanProcessor posture/consumer split.
+    enforce_prompt_version_approval(
+        persona_tier=config.persona_tier,
+        selection_manifest=config.prompt_selection_manifest,
+        approved_prompt_version_shas=config.approved_prompt_version_shas,
         workload_class=workload_class,
     )

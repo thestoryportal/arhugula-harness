@@ -48,7 +48,10 @@ from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.lifecycle.procedural_tier_snapshot import (
     resolve_procedural_tier_snapshot,
 )
-from harness_runtime.lifecycle.prompt_selection import PromptSelectionUnauthoredError
+from harness_runtime.lifecycle.prompt_selection import (
+    PromptSelectionUnauthoredError,
+    PromptVersionUnapprovedError,
+)
 from harness_runtime.lifecycle.providers import ProviderClientsStage
 from harness_runtime.types import (
     BootstrapStage,
@@ -423,6 +426,86 @@ async def test_bootstrap_selection_unauthored_sha_fails_loud(
     # Reconciliation runs at stage 0 PREAMBLE (before the first procedural-tier
     # snapshot at the stage-3b producer sites) so audit hashes stay coherent.
     assert excinfo.value.failed_stage is BootstrapStage.PREAMBLE
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_binding_tier_unapproved_selection_fails_loud(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-PM-1 cascade PR #4 — at a binding persona tier (team-binding), a selection
+    that DRIVES an active prompt version whose sha is NOT operator-approved is
+    fail-loud through the real bootstrap: `BootstrapFailure` (cause
+    `PromptVersionUnapprovedError`) at stage 0 PREAMBLE — never a silent activation
+    of an unapproved prompt at a binding tier (OD spec C-OD-34)."""
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    store = PromptManifest.from_contents(
+        manifest_version=1,
+        contents=["governed prompt", "inline active"],
+        active="inline active",
+    )
+    selection = PromptSelectionManifest(
+        manifest_version=1,
+        per_workload_overrides={
+            _WORKLOAD: PromptBinding(version_sha=prompt_version_sha("governed prompt")),
+        },
+    )
+    # team-binding requires approval; approved set is EMPTY → the driven sha is unapproved.
+    populated = _config(tmp_path).model_copy(
+        update={
+            "prompt_manifest": store,
+            "prompt_selection_manifest": selection,
+            "persona_tier": PersonaTier.TEAM_BINDING,
+        },
+    )
+    with pytest.raises(BootstrapFailure) as excinfo:
+        await run_bootstrap(populated, workload_class=_WORKLOAD)
+    assert isinstance(excinfo.value.cause, PromptVersionUnapprovedError)
+    assert excinfo.value.failed_stage is BootstrapStage.PREAMBLE
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_binding_tier_approved_selection_passes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-PM-1 cascade PR #4 — at a binding tier, an APPROVED selection-driven version
+    activates normally: the gate has teeth (it fails the unapproved case above) yet
+    does not block a deployment that has attested the version (OD spec C-OD-34).
+    Multi-tenant-compliance proves the redaction-bearing tier still activates once
+    approved."""
+    from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
+
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    store = PromptManifest.from_contents(
+        manifest_version=1,
+        contents=["governed prompt", "inline active"],
+        active="inline active",
+    )
+    governed_sha = prompt_version_sha("governed prompt")
+    selection = PromptSelectionManifest(
+        manifest_version=1,
+        per_workload_overrides={_WORKLOAD: PromptBinding(version_sha=governed_sha)},
+    )
+    populated = _config(tmp_path).model_copy(
+        update={
+            "prompt_manifest": store,
+            "prompt_selection_manifest": selection,
+            "persona_tier": PersonaTier.MULTI_TENANT_COMPLIANCE,
+            "approved_prompt_version_shas": frozenset({governed_sha}),
+        },
+    )
+    ctx = await run_bootstrap(populated, workload_class=_WORKLOAD)
+
+    # Approved → selection activates as normal (the gate did not block it).
+    assert ctx.prompt_manifest.active_prompt_version.content == "governed prompt"
+    bare = ctx.llm_dispatcher.inner.inner  # type: ignore[attr-defined]
+    assert isinstance(bare, RuntimeLLMDispatcher)
+    assert bare.active_system_prompt == "governed prompt"
 
 
 @pytest.mark.asyncio

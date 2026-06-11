@@ -46,7 +46,7 @@ spec v1.7 §5.3 (the `versions` store this consumes); R-PM-1 design §4.2.
 
 from __future__ import annotations
 
-from harness_core import WorkloadClass
+from harness_core import PersonaTier, WorkloadClass
 from harness_cp.cp_shared_types import AgentRole
 from harness_cp.prompt_selection_manifest import (
     PromptSelectionManifest,
@@ -54,10 +54,13 @@ from harness_cp.prompt_selection_manifest import (
     validate_prompt_selection_manifest,
 )
 from harness_is.prompt_manifest import PromptManifest
+from harness_od.prompt_governance_gradient import resolve_prompt_governance
 
 __all__ = [
     "InvalidPromptSelectionManifestError",
     "PromptSelectionUnauthoredError",
+    "PromptVersionUnapprovedError",
+    "enforce_prompt_version_approval",
     "reconcile_active_prompt_via_selection",
 ]
 
@@ -153,3 +156,86 @@ def reconcile_active_prompt_via_selection(
         if version.version_sha == selected_sha:
             return prompt_manifest.model_copy(update={"active_prompt_version": version})
     raise PromptSelectionUnauthoredError(selected_sha)
+
+
+class PromptVersionUnapprovedError(Exception):
+    """Raised when a binding-tier deployment activates a *selection-driven* prompt
+    version whose ``version_sha`` the operator has not approved (R-PM-1 PR #4).
+
+    The per-persona-tier prompt-governance posture (OD spec C-OD-34,
+    ``harness_od.prompt_governance_gradient.resolve_prompt_governance``) requires
+    approval at team-binding + multi-tenant-compliance: a shared / tenant prompt is
+    a governed artifact. When a supplied ``PromptSelectionManifest`` *drives* an
+    active version at such a tier, that version's ``version_sha`` MUST be a member
+    of ``RuntimeConfig.approved_prompt_version_shas``; otherwise this fail-loud /
+    detect-then-refuse error fires — never silently activate an unapproved prompt
+    version at a binding tier (consistent with the PR-#3
+    ``RT-FAIL-PROMPT-SELECTION-UNAUTHORED`` + PR-#1 ``RT-FAIL-PROMPT-INJECTION-CONFLICT``
+    + arc-#1 ``RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE`` postures;
+    ``[[conformance-validator-disciplines]]``).
+
+    Maps to ``RT-FAIL-PROMPT-VERSION-UNAPPROVED`` per OD spec C-OD-34. Raised at
+    bootstrap stage 0 (after selection reconciliation, before any procedural-tier
+    snapshot) → surfaces as a ``BootstrapFailure`` — a governance/config error the
+    operator corrects by attesting the version (add its sha to
+    ``approved_prompt_version_shas``) or not selecting it at a binding tier.
+    """
+
+    def __init__(self, *, persona_tier: PersonaTier, version_sha: str) -> None:
+        self.persona_tier = persona_tier
+        self.version_sha = version_sha
+        super().__init__(
+            "RT-FAIL-PROMPT-VERSION-UNAPPROVED: selection drove prompt "
+            f"version_sha={version_sha!r} active at persona_tier="
+            f"{persona_tier.value!r} (a binding tier requiring approval), but it is "
+            "not a member of RuntimeConfig.approved_prompt_version_shas; fail-loud "
+            "(a binding-tier prompt version must be operator-approved before it can "
+            "be activated via selection)"
+        )
+
+
+def enforce_prompt_version_approval(
+    *,
+    persona_tier: PersonaTier,
+    selection_manifest: PromptSelectionManifest | None,
+    approved_prompt_version_shas: frozenset[str],
+    workload_class: WorkloadClass,
+    role: AgentRole = _MVP_DEFAULT_AGENT_ROLE,
+) -> None:
+    """Fail-loud if a binding-tier deployment activates an unapproved
+    *selection-driven* prompt version (OD spec C-OD-34 per-tier prompt governance).
+
+    No-op (the gate is inert) when any of:
+
+    * the tier's posture does not require approval
+      (``resolve_prompt_governance(persona_tier).approval_required`` is ``False`` —
+      the solo-developer / local-first tier), or
+    * no selection manifest is configured (``selection_manifest is None`` — an
+      inline-only deployment has nothing *selection-driven* to govern), or
+    * selection falls through for the run's ``(role, workload)``
+      (``resolve_active_prompt_version_sha`` → ``None`` — the active prompt is the
+      inline default, not selection-driven).
+
+    Otherwise the selection-driven ``version_sha`` MUST be a member of
+    ``approved_prompt_version_shas``; if not, raises
+    :class:`PromptVersionUnapprovedError` (``RT-FAIL-PROMPT-VERSION-UNAPPROVED``).
+
+    Called at bootstrap stage 0 *after* :func:`reconcile_active_prompt_via_selection`
+    (so the manifest is already structurally validated + the selected sha is already
+    a verified store member); this re-resolves the same pure CP resolver to identify
+    the selection-driven sha without depending on the reconciler's internals. The
+    posture is owned by OD (``harness_od``); this runtime site is its enforcement
+    consumer — mirroring the ``PER_PERSONA_TIER_REDACTION`` ⊳ ``RedactionSpanProcessor``
+    posture-vs-consumer split.
+    """
+    if not resolve_prompt_governance(persona_tier).approval_required:
+        return
+    if selection_manifest is None:
+        return
+    selected_sha = resolve_active_prompt_version_sha(
+        selection_manifest, role=role, workload=workload_class
+    )
+    if selected_sha is None:
+        return
+    if selected_sha not in approved_prompt_version_shas:
+        raise PromptVersionUnapprovedError(persona_tier=persona_tier, version_sha=selected_sha)
