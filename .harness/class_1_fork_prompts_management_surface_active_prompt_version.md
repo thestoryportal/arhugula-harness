@@ -38,3 +38,23 @@ Author the minimal runtime-binding-extension arc: runtime-spec `active_prompt_ve
 ~~Filed, not resolved. P4 (`R-CL-P4`) is **blocked** on this fork's ratification. No code/spec change lands in this filing arc (P0 is scope-lock only).~~
 
 **RESOLVED 2026-06-11 (APPLIED-AS-MINIMAL-BINDING).** Operator ratified the minimal-binding Recommendation (DP-1..DP-4; mirror `RoutingManifest`). The bundled-absorption arc landed: IS spec v1.4 → v1.5 (§5.2 recipe 2→3-component) + runtime spec v1.41 → v1.42 (§4 C-RT-04 `prompt_manifest` field) + impl (`harness_is.prompt_manifest` carriers; `HarnessContext.prompt_manifest`; 3-component resolver; `MutableHarnessContext` ambient carrier) + tests (participation: snapshot varies with `active_prompt_version`, holds otherwise) + 2 clearance markers + pointer cascade. **R-CL-P4 is now unblocked** (this was the last of its three sub-parts; OD buffer #490, keying-tuple #492 already closed). The fuller prompts-management surface (multi-prompt versioning + selection + a materialization stage) is a separate forward arc per DP-4.
+
+---
+
+## Full-surface forward arc — `R-PM-1` (DP-4 re-opened at FULL scope, 2026-06-11)
+
+**Status:** 🟡 DESIGN-AUTHORED (2026-06-11, HEAD `a73744b`) — `R-PM-1` is arc #2 of the `R-CC-1` capability-completion program (`Project_Roadmap_v1.md` §5.16 + §5.17). Operator confirmed (2026-06-11 AUQ) **FULL-STACK-UPFRONT** scope, re-sequenced **before** R-CL-Q1 (as a capability). The DP-4 deferral above is now re-opened at full scope; the minimal binding (#496) is the **foundation, not a redo**.
+
+**Design artifact:** `.harness/r-pm-1-prompts-management-design-v1.md` (the comprehensive 4-layer design). It resolves the two nameable tensions and sets the distributed-amendment cascade. This fork doc tracks the arc; the design doc carries the decisions.
+
+**The four layers (full scope):** (a) **injection** (runtime — the load-bearing gap; nothing reaches the model today), (b) **selection** (CP — per-role/workload binding mirroring `RoutingManifest`), (c) **versioning/authoring** (IS — extend `PromptManifest`/`PromptVersion` identity → content + versioned store on the PROMPTS path-class), (d) **per-tier governance** (OD — SOLO/TEAM_BINDING/MULTI_TENANT prompt policy).
+
+**Full-surface decision points (resolved in the design doc; named here for the ledger):**
+- **DP-5 — injection mechanism.** RESOLVED → **bounded `HarnessContext` channel + translate-time per-provider injection** (Anthropic `system=` kwarg; OpenAI/Ollama `role:"system"` prepend). NOT a change to the frozen `ProviderAgnosticPayload` → **ADR-F1 preserved → no new ADR**. Probe-resolved on primary-source grounds (system is not uniformly representable in the neutral 3-tuple). Resolves tension (ii) C10⊥C11.
+- **DP-6 — selection-ownership (IS⊥CP).** RESOLVED → **authoring/versioning = IS; per-role/step/workload selection-binding = CP** (mirrors Skills∘routing; pre-resolved by the `RoutingManifest.per_role_bindings` precedent). Resolves tension (i).
+- **DP-7 — artifact structure.** RESOLVED → **distributed per-axis spec amendments** (runtime → IS → CP → OD → CXA), segmented by layer, runtime-injection first. **No new standalone spec, no new ADR** (house style = #496 + the per-axis cost-attribution chain).
+- **DP-8 — structured/cached system content + mid-conversation system messages.** DEFERRED (OQ-1/OQ-4 in the design doc) → string-only base prompt at v1; structured/`cache_control` and the `mid-conversation-system` beta are bounded follow-ons.
+
+**Cascade (the owed PR sequence):** #1 runtime injection **+ a minimal inline `content` carrier** (load-bearing, standalone-valuable, **self-provable e2e** — the inline content source ships in #1 so injection is provable before the versioned store lands; per-provider injection + **fail-loud conflict precedence** when an active prompt ⊕ a payload-carried system source collide) → #2 IS versioning/authoring (generalizes #1's inline content into the versioned PROMPTS store) → #3 CP selection → #4 OD per-tier governance → #5 CXA seam registration. Each = bundled-absorption arc (spec amendment + impl + tests + clearance) + adversarial + Codex + advisor review. *(PR #1 self-containment + fail-loud conflict precedence = decorrelated Codex review findings, applied to the design v1.)*
+
+**Precedent:** `[[adr-vs-fork-spec-plan-granularity]]` (fork+distributed-spec, not new ADR) · `[[r-cxa-seam-wiring-is-producer-discovery]]` (seam after producers exist) · `[[verification-shape-sharpened-grep-vs-e2e]]` (injection proven e2e, not grep).
