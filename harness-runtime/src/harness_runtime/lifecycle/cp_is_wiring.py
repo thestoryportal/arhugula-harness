@@ -8,21 +8,23 @@ U-CP-49, U-CP-50, U-CP-52. Spec authorizes split per the wording:
 "Plan v2 U-RT-35 (split-allowed per the plan if signature divergence
 surfaces at any source unit)."
 
-**PARTIAL-LAND posture (1 of 17 edges).** Risk-gate at U-RT-35 landing
-surfaced two materializability gaps + the spec's authorization to split.
-This unit lands the **1 of 9 source units** that is fully materialized;
-the other 8 source units (carrying the remaining 16 edges) are routed to
-the Class 1 record at
-`.harness/class_1_tension_u_rt_35_cp_is_wiring_gaps.md`.
+**PARTIAL-LAND posture (7 of 9 source units; 14 of 17 edges).** Risk-gate
+at U-RT-35 landing surfaced two materializability gaps; the original
+`.harness/class_1_tension_u_rt_35_cp_is_wiring_gaps.md` back-flow was then
+resolved via the **CP plan v2.28 U-CP-74..79 §16.5 greenfield composers**.
+2 source units (3 edges) remain deferred. Per-edge disposition at
+`.harness/r-cl-p5-cxa-cost-validator-verification.md` §1.2.
 
-- U-CP-34 (`sibling_ledger_entry_composition`) — LANDED. Composer +
-  IS append wrapper materialized; wired here.
-- U-CP-14 (`per_step_override_evaluator`) — DEFERRED. Composer returns
-  `CPAuditLedgerEntry` (placeholder timestamp / no `idempotency_key` /
-  no `actor` on output); bridging at runtime would be X-AL-3 silent
-  design extension.
-- U-CP-12, 27, 30, 37, 49, 50, 52 — DEFERRED. No ledger-emission
-  composer module at HEAD.
+- U-CP-34 (`sibling_ledger_entry_composition`) — LANDED (original
+  materialized seam). Composer + IS append wrapper; wired here.
+- U-CP-14 / 27 / 30 / 37 / 49 / 50 — LANDED via the U-CP-74..79 §16.5
+  `emit_*_state_ledger_entry` composers (imported below; consumed by
+  `workflow_driver` + `stage_3b_cp_routing` producer sites). U-CP-74
+  (override) closed the prior Gap-B `CPAuditLedgerEntry` shape divergence.
+- U-CP-12, 52 — DEFERRED. No ledger-emission composer module at HEAD
+  (`per_class_attribute_composition.py` / `hitl_timeout_degradation.py` /
+  `hitl_placement.py`); authoring one at the runtime layer would be X-AL-3
+  per the U-RT-35 tension record.
 
 **Materialized seam (U-CP-34 → U-IS-11).** `sibling_ledger_entry_composition`
 exports `construct_sibling_ledger_entry` (returns `EntryPayload` per
@@ -33,7 +35,7 @@ callback `emit_sibling_ledger_entry` composes via the CP surface, builds
 the `WriteKey` from the structural identity fields (parent_action_id,
 sibling_thread_id, step_index, tool, canonical_args), and delegates to
 `ctx.ledger_writer.append`. Per-edge contract per spec §12.3 satisfied
-for this one edge; the post-wiring invariant (chain_verification passes
+for the U-CP-34 seam; the post-wiring invariant (chain_verification passes
 post-emission) is verified in tests.
 
 **Spec callable-signature drift (Class 3 weight).** Spec §12.3 declares
@@ -100,10 +102,11 @@ class RuntimeCpIsWiring:
     """Runtime CP → IS callback-registration surface (C-RT-12 §12.3, PARTIAL).
 
     Wraps the IS `LedgerWriter` (U-RT-12). Exposes one method per
-    materialized CP source unit; at HEAD only the U-CP-34 sibling-ledger
-    seam is materialized (1 of 9 source units; 1 of 17 edges per spec
-    §12.3). The remaining 16 edges are tracked at the Class 1 record
-    `.harness/class_1_tension_u_rt_35_cp_is_wiring_gaps.md`.
+    materialized CP source unit: the U-CP-34 sibling-ledger seam plus the
+    6 U-CP-74..79 §16.5 composers (7 of 9 source units; 14 of 17 §12.3
+    edges). U-CP-12 + U-CP-52 (3 edges) remain deferred — see
+    `.harness/class_1_tension_u_rt_35_cp_is_wiring_gaps.md` +
+    `.harness/r-cl-p5-cxa-cost-validator-verification.md` §1.2.
     """
 
     ledger_writer: LedgerWriter
@@ -131,8 +134,9 @@ class RuntimeCpIsWiring:
     ) -> WriteResult:
         """Compose + persist one per-sibling ledger entry via the IS chain.
 
-        Wires the U-CP-34 → U-IS-11 seam (the 1 of 17 §12.3 edges that is
-        materialized at HEAD). Returns the IS `WriteResult` — `APPENDED`
+        Wires the U-CP-34 → U-IS-11 sibling-ledger seam (1 of the 7
+        materialized §12.3 source units; the U-CP-74..79 §16.5 composers
+        below wire the other 6). Returns the IS `WriteResult` — `APPENDED`
         on a fresh sibling, `IDEMPOTENT_NOOP` on a replay with the same
         `(parent_action_id, sibling_thread_id, step_index, tool,
         canonical_args)` 5-tuple per C-CP-15.1 + C-IS-07 §7.1.
