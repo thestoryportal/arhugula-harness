@@ -2501,7 +2501,9 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
         *,
         default_model_binding: Any = None,
         step_dispatchers: Any = None,
+        pause_snapshot_input: Any = None,
     ) -> _CpRunResult:
+        _ = pause_snapshot_input  # C-RT-30 resume threading — None on the run path.
         wf_id = manifest_entry.workflow_id
         # The worker thread inherits the tool handler task's contextvars
         # context via `asyncio.to_thread`'s `copy_context().run`. Reading via

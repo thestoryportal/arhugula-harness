@@ -196,14 +196,19 @@ def test_run_result_all_required_fields_per_c_rt_09() -> None:
         "trace_ids",
         "cost_attribution",
         "failure_cause",
+        # NEW v1.45 (C-RT-30, R-CC-1 arc #3) — optional pause-snapshot surface.
+        "pause_snapshot",
     }
 
 
-def test_run_result_status_literal_three_values() -> None:
-    """`status: Literal['completed', 'drained', 'failed']` per C-RT-09."""
+def test_run_result_status_literal_values() -> None:
+    """`status: Literal['completed', 'drained', 'failed', 'paused']` per C-RT-09
+    (v1.45 added 'paused' for C-RT-30 resume). The `pause_snapshot is not None
+    iff status=='paused'` invariant is documented, not model-enforced — same
+    posture as the `status=='failed' -> failure_cause` sibling invariant."""
     field = RunResult.model_fields["status"]
-    # Pydantic v2 stores Literal in field annotation; round-trip both literals.
-    for value in ("completed", "drained", "failed"):
+    # Pydantic v2 stores Literal in field annotation; round-trip every literal.
+    for value in ("completed", "drained", "failed", "paused"):
         result = RunResult(
             status=value,  # type: ignore[arg-type]
             workflow_id=WorkflowID("wf-1"),

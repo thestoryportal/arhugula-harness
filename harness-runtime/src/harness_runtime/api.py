@@ -81,6 +81,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkabl
 from harness_core.identity import WorkflowID
 from harness_core.workload_class import WorkloadClass
 from harness_cp.cp_shared_types import ModelBinding
+from harness_cp.pause_resume_protocol_types import PauseSnapshot, ResumeContext
 from harness_cp.workflow_driver_types import RunResult as _CpRunResult
 from harness_cp.workflow_driver_types import (
     RunStatus as _CpRunStatus,
@@ -122,6 +123,41 @@ class HarnessDraining(Exception):  # noqa: N818 — domain-anchored name
     Raised pre-bootstrap before the module-level `_run_lock` is acquired
     so a drained process surfaces the typed error without constructing a
     new `HarnessContext`.
+    """
+
+
+class ResumeProtocolNotBoundError(Exception):
+    """`RT-FAIL-RESUME-PROTOCOL-NOT-BOUND` — `resume()` called without the
+    pause/resume protocol opted in (C-RT-30).
+
+    Resume requires `config.pause_resume_protocol_config` (the same opt-in
+    that produced the pause). Without it the driver's entry-point resume
+    detection is inert and the workflow would **silently re-run from step 0**
+    — re-executing already-completed prefix steps + their side effects.
+    Detect-then-refuse: `resume()` fails fast rather than silently re-running.
+    """
+
+
+class ResumeWorkflowMismatchError(Exception):
+    """`RT-FAIL-RESUME-WORKFLOW-MISMATCH` — `pause_snapshot.workflow_id` does
+    not match the resumed `workflow.workflow_id` (C-RT-30).
+
+    A snapshot's `snapshot_hash` validates against its OWN embedded fields, so
+    a snapshot from workflow A would otherwise be applied (A's `run_id` +
+    `step_index`) against workflow B's steps — skipping B's prefix or reporting
+    success for the wrong workflow. Detect-then-refuse before bootstrap.
+    """
+
+
+class ResumeStepIndexOutOfRangeError(Exception):
+    """`RT-FAIL-RESUME-STEP-INDEX-OUT-OF-RANGE` — `pause_snapshot.step_index`
+    is not a valid step of the resumed `workflow` (C-RT-30).
+
+    If the supplied workflow changed since the pause so `step_index` is `< 0`
+    or `>= len(workflow.steps)`, the driver's `resume_at_step_index` would slice
+    `steps[resume_at:]` to empty and return a **successful completed run that
+    executed nothing** — a silent false-success. Detect-then-refuse before
+    bootstrap.
     """
 
 
@@ -240,8 +276,13 @@ class RunResult(BaseModel):
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
-    status: Literal["completed", "drained", "failed"]
-    """Terminal status of the workflow execution."""
+    status: Literal["completed", "drained", "failed", "paused"]
+    """Terminal status of the workflow execution.
+
+    `'paused'` (C-RT-30, R-CC-1 arc #3) is a non-terminal outcome: a
+    workflow-layer pause (DURABLE_ASYNC HITL gate / EXPLICIT_OPERATOR) was
+    captured; `pause_snapshot` is populated for `harness_runtime.resume(...)`.
+    Type-widen of the existing Literal — minor bump per C-RT-09 §9."""
 
     workflow_id: WorkflowID
     """Identity of the executed workflow."""
@@ -269,6 +310,13 @@ class RunResult(BaseModel):
 
     failure_cause: FailureCause | None = None
     """`None` unless `status == 'failed'` (C-RT-09 invariant)."""
+
+    pause_snapshot: PauseSnapshot | None = None
+    """The captured workflow-layer `PauseSnapshot` when `status == 'paused'`
+    (C-RT-30, R-CC-1 arc #3); `None` otherwise. The caller persists it and
+    passes it to `harness_runtime.resume(workflow, pause_snapshot=...)` to
+    continue the workflow after a process restart (workflow-layer
+    durable-resume). Optional field with default — minor bump per C-RT-09 §9."""
 
 
 # ---------------------------------------------------------------------------
@@ -510,15 +558,172 @@ async def run(
         return _build_run_result(cp_result, shutdown_report, timed_out=timed_out)
 
 
+async def resume(
+    workflow: WorkflowObject,
+    *,
+    pause_snapshot: PauseSnapshot,
+    resume_context: ResumeContext | None = None,
+    config: RuntimeConfig | None = None,
+) -> RunResult:
+    """Resume a paused workflow from a caller-supplied `PauseSnapshot` (C-RT-30).
+
+    The workflow-layer durable-resume Track-A sibling of `run()` (R-CC-1
+    arc #3). `run()` surfaces `RunResult(status='paused', pause_snapshot=...)`
+    when a workflow-layer pause fires (DURABLE_ASYNC HITL gate / explicit
+    operator pause). The caller persists that `PauseSnapshot` and, after a
+    process restart, passes it here to continue the workflow from the paused
+    step. Resume position is restored from `pause_snapshot.step_index`; the
+    MVP execution model is data-stateless between steps, so no working-state
+    rehydration is required (R-CC-1 design §1.1).
+
+    Like `run()`, this is bootstrap-per-call (a fresh `HarnessContext`): the
+    fresh process re-bootstraps, the driver's entry-point resume detection
+    (C-RT-24 §14.14.3 / `workflow_driver.py`) validates the snapshot via
+    `attempt_resume(...)` and overrides `resume_at_step_index`, and execution
+    continues. Resume admission anchor-validation is deferred (the MVP
+    `pause_context_reader` returns a constant sentinel → no material diff →
+    STRICT admits; the real anchor-reachability check is the U-CP-22 arc).
+
+    Caller-supplied snapshot only at cascade step 1 — harness-owned durable
+    persistence (so the caller need not persist) is cascade step 2
+    (`JournalWorkflowPauseStore`).
+
+    Parameters
+    ----------
+    workflow
+        The same `WorkflowObject` that produced the pause (re-supplied; the
+        snapshot carries position, the workflow carries the steps).
+    pause_snapshot
+        The `PauseSnapshot` returned in a prior `RunResult.pause_snapshot`.
+    resume_context
+        Operator-supplied resume-time context (e.g. the HITL response the
+        paused gate awaits); delivered one-shot to the resumed-step gate.
+    config
+        Runtime config; `None` → defaults + env per C-RT-03. MUST opt into
+        the pause/resume protocol (`pause_resume_protocol_config`) — the same
+        config that produced the pause.
+
+    Raises
+    ------
+    InvalidWorkflowError
+        `RT-FAIL-INVALID-WORKFLOW` — `workflow` is not a `WorkflowObject`.
+    ConcurrentRunNotSupported
+        `RT-FAIL-CONCURRENT-RUN` — a `run()`/`resume()` call is in flight.
+    harness_runtime.bootstrap.BootstrapFailure
+        `RT-FAIL-BOOTSTRAP` — a bootstrap stage raised.
+
+    Notes
+    -----
+    A corrupt snapshot (snapshot_hash mismatch) or a material-diff abort
+    surfaces as `RunResult(status='failed')` with the CP fail-class
+    (`CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION` / `CP-FAIL-RESUME-MATERIAL-DIFF-
+    DETECTED`) on `failure_cause.validator_fail_class` — the driver returns
+    FAILED before any step runs (`RT-FAIL-RESUME-*` family, C-RT-30).
+    """
+    from harness_runtime.drain import is_process_drained
+
+    if is_process_drained():
+        raise HarnessDraining(
+            "process-level drain flag set in a prior `run()`/`resume()` "
+            "invocation; spec §11 invariant: the flag is one-way for process "
+            "lifetime — a new invocation requires process restart."
+        )
+    if not isinstance(workflow, WorkflowObject):  # pyright: ignore[reportUnnecessaryIsInstance]
+        raise InvalidWorkflowError(
+            f"`resume()` requires a `WorkflowObject`; got {type(workflow).__name__!r}"
+        )
+    # Detect-then-refuse: a snapshot's hash validates against its own embedded
+    # fields, so a snapshot from another workflow would otherwise be applied
+    # (its run_id + step_index) against THIS workflow's steps. C-RT-30.
+    if pause_snapshot.workflow_id != workflow.workflow_id:
+        raise ResumeWorkflowMismatchError(
+            f"pause_snapshot.workflow_id={pause_snapshot.workflow_id!r} != "
+            f"workflow.workflow_id={workflow.workflow_id!r}; a snapshot may only "
+            f"resume its own workflow (C-RT-30)."
+        )
+    # Detect-then-refuse: a step_index outside the supplied workflow's steps
+    # (the workflow changed since the pause) would slice `steps[resume_at:]`
+    # to empty → a silent SUCCESS that executed nothing. C-RT-30.
+    _step_count = len(workflow.steps)
+    if not (0 <= pause_snapshot.step_index < _step_count):
+        raise ResumeStepIndexOutOfRangeError(
+            f"pause_snapshot.step_index={pause_snapshot.step_index} is not a "
+            f"valid step of the resumed workflow (0 <= i < {_step_count}); the "
+            f"workflow may have changed since the pause (C-RT-30)."
+        )
+    if _run_lock.locked():
+        raise ConcurrentRunNotSupported(
+            "a `run()`/`resume()` invocation is already in flight in this "
+            "process; Track A is bootstrap-per-call. Serialize calls."
+        )
+
+    # Detect-then-refuse: resume REQUIRES the pause/resume opt-in (the same
+    # config that produced the pause). Without it the driver's entry-point
+    # resume detection is inert and the workflow would SILENTLY re-run from
+    # step 0 — re-executing completed prefix steps + side effects. Fail fast
+    # (pre-bootstrap) rather than silently re-run. C-RT-30.
+    resolved_config = config if config is not None else _default_config()
+    if resolved_config.pause_resume_protocol_config is None:
+        raise ResumeProtocolNotBoundError(
+            "resume() requires config.pause_resume_protocol_config (the "
+            "pause/resume opt-in that produced the pause); without it the "
+            "driver's resume detection is inert and the workflow would "
+            "silently re-run from step 0 (C-RT-30 detect-then-refuse)."
+        )
+
+    from harness_runtime.bootstrap import run_bootstrap
+    from harness_runtime.shutdown import shutdown as _shutdown
+
+    async with _run_lock:
+        ctx = await run_bootstrap(
+            resolved_config,
+            workload_class=workflow.workload_class,
+        )
+        try:
+            assert ctx.mcp_server is not None, (
+                "ctx.mcp_server is None post-bootstrap — stage 2 AS did not "
+                "materialize the FastMCP server per U-RT-62 AC #2"
+            )
+            mcp_server = cast("_ConcreteHarnessMCPServer", ctx.mcp_server)
+            mcp_server._state["_harness_ctx"] = ctx  # pyright: ignore[reportPrivateUsage]
+            # In-process resume handoff (NOT over the MCP wire) — the
+            # `run_workflow` tool reads these from `_state`, mirroring how
+            # `_harness_ctx` is passed. Presence of `_resume_pause_snapshot`
+            # switches the tool to the resume path (snapshot.run_id continuity
+            # + `pause_snapshot_input=` to the driver). C-RT-30.
+            mcp_server._state["_resume_pause_snapshot"] = pause_snapshot  # pyright: ignore[reportPrivateUsage]
+            mcp_server._state["_resume_context"] = resume_context  # pyright: ignore[reportPrivateUsage]
+            mcp_server.workflow_registry[workflow.workflow_id] = workflow
+            try:
+                cp_result = await _invoke_run_workflow_via_in_process_mcp(
+                    mcp_server.server, workflow.workflow_id
+                )
+            finally:
+                mcp_server.workflow_registry.pop(workflow.workflow_id, None)
+                mcp_server._state.pop("_harness_ctx", None)  # pyright: ignore[reportPrivateUsage]
+                mcp_server._state.pop("_resume_pause_snapshot", None)  # pyright: ignore[reportPrivateUsage]
+                mcp_server._state.pop("_resume_context", None)  # pyright: ignore[reportPrivateUsage]
+            timed_out = (
+                cp_result.status == _CpRunStatus.DRAINED
+                and cp_result.fail_class == "RT-FAIL-DRAIN-TIMEOUT"
+            )
+        finally:
+            shutdown_report = await _shutdown(ctx)
+        return _build_run_result(cp_result, shutdown_report, timed_out=timed_out)
+
+
 # ---------------------------------------------------------------------------
 # CP RunResult → runtime RunResult conversion (C-RT-09 + C-CP-25 §25.2).
 # ---------------------------------------------------------------------------
 
 
-_CP_TO_RT_STATUS: dict[_CpRunStatus, Literal["completed", "drained", "failed"]] = {
+_CP_TO_RT_STATUS: dict[_CpRunStatus, Literal["completed", "drained", "failed", "paused"]] = {
     _CpRunStatus.SUCCESS: "completed",
     _CpRunStatus.DRAINED: "drained",
     _CpRunStatus.FAILED: "failed",
+    # PAUSED (C-RT-30, R-CC-1 arc #3) — a workflow-layer pause was captured;
+    # `pause_snapshot` is carried through `_build_run_result` for `resume()`.
+    _CpRunStatus.PAUSED: "paused",
     # PARTIAL is reserved at C-CP-25 §25.2 for future multi-step error modes;
     # at v1.4 the driver never returns PARTIAL. Map to "failed" defensively
     # so the runtime-side Literal type narrows cleanly.
@@ -601,6 +806,10 @@ def _build_run_result(
         trace_ids=(),
         cost_attribution=(),
         failure_cause=failure_cause,
+        # C-RT-30 (R-CC-1 arc #3) — surface the captured PauseSnapshot on a
+        # 'paused' outcome so the caller can persist it + resume(). None on
+        # every terminal outcome (the CP driver only populates it on PAUSED).
+        pause_snapshot=cp_result.pause_snapshot if status == "paused" else None,
     )
 
 
