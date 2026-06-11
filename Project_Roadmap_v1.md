@@ -2487,8 +2487,8 @@ R-CL-P6:
 R-CL-Q1:
   title: Phase Q1 — DevEx + whole-codebase code-review & simplification sweep
   surface: VII
-  status: ACTIVE     # promoted 2026-06-11 (post-#496): all 6 capability P-phases dispositioned — P4/P5/P6 RESOLVED, P1/P2 DEFERRED (parked-by-design, re-open triggers documented), P3 APPLIED-PENDING-OPERATOR-E2E. The quality track reviews the as-built code; deferred capabilities don't gate it. Q1 is the live frontier.
-  depends_on: [R-CL-P1, R-CL-P2, R-CL-P3, R-CL-P4, R-CL-P5, R-CL-P6]
+  status: BLOCKED     # RE-SEQUENCED 2026-06-11 (operator strategic directive): capability-complete-BEFORE-quality. Running the DevEx/review/simplification sweep on incomplete code means re-running it later (double token cost the operator declined). Q1 now runs LAST, once, on the fully-developed harness. Gated on the R-CC-1 capability-completion program (§5.17) + R-PM-1. [was: ACTIVE/live-frontier post-#496.]
+  depends_on: [R-CL-P1, R-CL-P2, R-CL-P3, R-CL-P4, R-CL-P5, R-CL-P6, R-CC-1, R-PM-1]
   blocks: [R-CL-Q4]
   posture: phase-7
   scope: { files: [harness-*/src, justfile, harness.toml, tools/], contracts: [], cross_axis: yes }
@@ -2591,8 +2591,8 @@ R-CL-C1:
 R-PM-1:
   title: Full prompts-management surface — injection + selection + versioning/authoring + per-tier governance
   surface: I-prompts
-  status: BLOCKED     # operator-confirmed (2026-06-11 AUQ) FULL-STACK-UPFRONT scope; sequencing-gated AFTER R-CL-Q1 (operator choice, NOT a technical dependency). First deliverable = design-phase spec/ADR, then phase-7 impl after clearance.
-  depends_on: [R-CL-Q1]   # OPERATOR-SEQUENCING choice ("after R-CL-Q1"), NOT technical — Q1 does not logically block prompts design; re-prioritizable.
+  status: BLOCKED     # operator-confirmed (2026-06-11 AUQ) FULL-STACK-UPFRONT scope. RE-SEQUENCED 2026-06-11 (same session): the "after R-CL-Q1" ordering is SUPERSEDED by the capability-complete-before-quality directive — as a CAPABILITY, R-PM-1 now lands BEFORE Q1, as arc #2 of the R-CC-1 program (§5.17). Gated on R-CC-1 arc #1. First deliverable = design-phase spec/ADR, then phase-7 impl after clearance.
+  depends_on: [R-CC-1]   # was [R-CL-Q1] — inverted by the capability-first directive; R-PM-1 is a capability arc IN the R-CC-1 program (sequenced #2), no longer after Q1.
   blocks: []
   posture: design-phase   # spec/ADR authoring first; then bundled-absorption into phase-7 (clearance markers)
   scope: { files: [design-substrate/ (new prompts-management spec/ADR), harness-is/src (prompt versioning/authoring + PROMPTS path-class), harness-cp/src (selection — routing-style per-role binding), harness-runtime/src (dispatch injection seam), harness-od/src (per-tier governance)], contracts: [C-IS-05 §5.2 (existing version-identity binding), C-IS-01 (PROMPTS path-class), ADR-F1 (ProviderAgnosticPayload — injection-mechanism touch), C-CP-02 (routing per-role precedent for selection), C-RT-15 (LLM dispatch composer)], cross_axis: yes }
@@ -2633,6 +2633,58 @@ R-PM-1:
     HarnessContext channel vs foundational ADR-F1 ProviderAgnosticPayload change (C10 action-safety / contract-stability).
     Cross-ref: forward register .harness/post-phase-8-forward-register.md (2026-06-01 snapshot; R-PM-1 is a net-new
     capability beyond it — not back-filed into that historical doc).
+```
+
+---
+
+### 5.17 Capability-completion program (R-CC-NN) — land all open units before the quality sweep
+
+> Authored 2026-06-11 per operator strategic directive: *"work through all blocked and deferred units even if this requires planning sweeps to make decisions for their producer, disciplines, vendors, corpus/embedding models or run e2e tests … now to land all units fully. Then run the devex, code review and simplification pass on the fully developed harness."* The execution spine is `.harness/capability-completion-inventory-v1.md` (the grounded per-unit inventory, verified at HEAD `9c38b91`). This re-sequences the closure track: **R-CL-Q1 (DevEx/review/simplification) moves to LAST**, run once on the complete harness; **R-PM-1 moves before Q1** (it is a capability). Grounding finding: the open set is **small** — nearly every forward surface (sandbox tiers, deployment, multi-tenant, external integrations, memory backends) is already live-proven; the genuine open set is ~11 units enumerated in the inventory.
+
+```yaml
+R-CC-1:
+  title: Capability-completion program — land all open capability units (inventory spine) before R-CL-Q1
+  surface: I-capability
+  status: ACTIVE     # the new live frontier (operator-directed 2026-06-11). Drives the inventory sequence; R-CL-Q1 is gated on it.
+  depends_on: [R-CL-P0]
+  blocks: [R-CL-Q1, R-PM-1]
+  posture: design-phase   # design-forks first (X-AL-3), then phase-7 impl as bundled-absorption arcs per fork
+  scope: { files: [.harness/capability-completion-inventory-v1.md (spine), design-substrate/** (forks/specs), harness-*/src/**], contracts: [C-CP-02/03/04, C-IS-01/05, ADR-F1, C-RT-15, C-AS-15], cross_axis: yes }
+  skills: { primary: systems-architect, secondary: [spec-writer, implementation-planner, phase-7-implementation, harness-adversarial-reviewer, council-orchestrator] }
+  advisor_required: yes
+  council_required: conditional:nameable-tension   # several arcs carry forks (tier→driver C10⊥C11; prompts selection IS⊥CP + injection blast-radius; api.run C9⊥C11)
+  verification: { shape: e2e, must_pass: ["every inventory unit is landed (built+tested) OR dispositioned as a documented bounded-residual with a re-open trigger", "the 2 operator-gate residuals recorded (Gate A=hand-roll engine-recovery → BUILT; Gate B=embedding → DEFERRED-documented)", "only THEN does R-CL-Q1 open on the complete harness"] }
+  close_shape: { type: program, artifact: "per-arc PRs (design forks + impl) tracked in the inventory", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: R-PM-1
+  notes: |
+    OPERATOR STRATEGIC DIRECTIVE 2026-06-11 — capability-complete-BEFORE-quality. Rationale: running the
+    DevEx/review/simplification sweep (R-CL-Q1) on incomplete code means re-running it once capabilities land =
+    double token cost the operator declined. So: land all open capability units first, THEN run Q1 once on the
+    fully-developed harness.
+    SPINE: `.harness/capability-completion-inventory-v1.md` (grounded per-unit inventory, HEAD `9c38b91`). The
+    ~11 open units + their categories ([C-now] / [design] / [wall] / [vendor] / [hollow]) + the recommended
+    sequence live there; this entry is the roadmap umbrella.
+    TWO OPERATOR GATES ANSWERED (2026-06-11 AskUserQuestion):
+    - Gate A (engine-recovery vs I-6) → **HAND-ROLL** (operator overrode the accept-residual recommendation).
+      Build a real in-house event-sourced/journal recovery substrate — preserving I-6 (NO vendored engine) —
+      reframed as durable-resume/crash-recovery (resume a workflow from the #475 journal after a process restart)
+      with a real `api.run` resume-from-journal caller (avoids the fake-producer trap). Design-first (X-AL-3).
+    - Gate B (EMBEDDING corpus) → **DEFER** (documented bounded-residual; re-open trigger = real routing traffic +
+      operator-supplied embedding model; the layer correctly falls through today — no behavior missing).
+    SEQUENCE (inventory §4): arc #1 sandbox tier→driver selection contract (design-fork → factory registry; the
+    real security gap, drivers exist) → #2 R-PM-1 full prompts → #3 engine-layer durable-resume (Gate A) → #4
+    api.run provider-ping fork → P3 live multi-tier e2e (free Ollama) → #5 LLM_AS_ROUTER async-widening fork → #6
+    P5 CXA edges → #7 Claude-closeable cleanups (P3 redaction proof, cost rollup, HITL OQ-6, CXA doc count) → THEN
+    R-CL-Q1.
+    RE-SEQUENCING APPLIED: R-CL-Q1 ACTIVE→BLOCKED (depends_on +R-CC-1,+R-PM-1); R-PM-1 depends_on [R-CL-Q1]→[R-CC-1]
+    (capability, now BEFORE Q1). R-CL-P1/P2/P3 grounding docs carry the per-unit detail; their dispositions are
+    superseded by the inventory (P1 embedding=defer/llm-router=design-fork; P2 engine-recovery=hand-roll BUILD +
+    tier→driver=design-build + OQ-6=build/OQ-5/7=hollow-residual; P3 residuals=build).
+    HONEST RESIDUALS (post-Gate): only EMBEDDING (Gate B defer) + P2 OQ-5/7 (genuinely hollow — no composition
+    scenario) remain bounded-residuals; everything else is buildable. So Q1 runs on a capability-complete harness
+    modulo one deferred optimization (nothing to optimize yet) — accounted for at the C1 completeness-critic.
+    NEXT: arc #1 — sandbox tier→driver selection contract (design-phase, X-AL-3). Workflow is an option for the
+    broad design-fork cluster (operator opt-in), not gated on it.
 ```
 
 ---
