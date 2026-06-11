@@ -299,7 +299,7 @@ def test_in_memory_export_via_tail_keep_chain_drops_unclassified_trace() -> None
 # --- OD spec v1.28 §9.3 operator-tunable bounded-buffer ceilings -------------
 
 
-def _buffer_one_unclosed_trace(tracer: otel_trace.Tracer) -> Span:
+def _buffer_one_unclosed_trace(tracer: otel_trace.Tracer) -> otel_trace.Span:
     """Buffer exactly one trace that never materializes a root-close.
 
     Starts a fresh root span (unique trace_id, NOT ended → never triggers a
