@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `940230d81247` |
-| `last_refreshed` | 2026-06-10T19:05:55-06:00 |
-| `git_head` | `ead51e9f` (main) — R-CL-P1 capability-shortfall fallback (C-CP-03 §3.3) landed (#479); routing-intelligence partial-close. |
+| `workspace_state_hash` | `6f9bd1a62878` |
+| `last_refreshed` | 2026-06-10T19:17:47-06:00 |
+| `git_head` | `7a93f384` (main) — §5.15 register reconciled post-#479 (R-CL-P0 RESOLVED, P1 PARTIAL, P2 ACTIVE); R-CL-P1 capability-shortfall fallback landed (#479). |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 49 |
 
