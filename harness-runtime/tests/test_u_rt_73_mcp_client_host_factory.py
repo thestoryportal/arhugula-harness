@@ -216,11 +216,15 @@ async def test_converter_tolerates_none_description_and_schema() -> None:
 
 
 @pytest.mark.asyncio
-async def test_default_policy_field_defaults_are_conservative() -> None:
-    """v1.40 — a client that omits the policy fields gets the conservative
-    Pydantic defaults (TIER_2_CONTAINER / READ_ONLY) per fork §0."""
+async def test_default_policy_field_defaults_defer_to_surface_policy() -> None:
+    """v1.43 §14.9.9 / fork §7.1 (Reading A+) — a client that omits the per-server
+    sandbox tier fields leaves them None (deferred to the deployment-surface-aware
+    default policy resolved at the factory). `default_blast_radius` keeps the
+    conservative READ_ONLY default (unchanged). Supersedes the v1.40 static-TIER_2
+    default (operator-ratified 2026-06-11)."""
     entry = _stdio_client()
-    assert entry.default_minimum_tier is SandboxTier.TIER_2_CONTAINER
+    assert entry.default_minimum_tier is None
+    assert entry.default_sandbox_tier is None
     assert entry.default_blast_radius is BlastRadiusTier.READ_ONLY
 
 

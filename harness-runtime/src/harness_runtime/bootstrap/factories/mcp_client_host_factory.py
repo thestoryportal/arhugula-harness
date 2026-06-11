@@ -36,8 +36,10 @@ from typing import Any, Literal, cast
 
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_as.tool_contract import ToolContract
+from harness_core.deployment_surface import DeploymentSurface
 from harness_cp.cp_shared_types import MCPTrustTier
 
+from harness_runtime.config.sandbox_defaults import resolve_effective_sandbox_defaults
 from harness_runtime.lifecycle.mcp_client_host import (
     MCPClientHost,
     MCPToolContractConverter,
@@ -97,7 +99,9 @@ def _build_transport_config(transport: _MCPTransportLiteral, connection_url: str
     return {"url": connection_url}
 
 
-def _build_default_policy_converter(entry: MCPClientConfig) -> MCPToolContractConverter:
+def _build_default_policy_converter(
+    entry: MCPClientConfig, deployment_surface: DeploymentSurface
+) -> MCPToolContractConverter:
     """Build a Reading-B default-policy `MCPToolContractConverter` (spec v1.40
     §14.9.3).
 
@@ -114,7 +118,13 @@ def _build_default_policy_converter(entry: MCPClientConfig) -> MCPToolContractCo
     `MCPToolContractConverter = Callable[[Any], ToolContract]` alias);
     `description` may be `None` and `inputSchema` is a JSON-schema dict.
     """
-    minimum_tier: SandboxTier = entry.default_minimum_tier
+    # Reconcile the per-server minimum_tier through the deployment-surface-aware
+    # default policy (runtime spec v1.43 §14.9.9 + fork §7.1) so a bare config's
+    # minimum_tier stays coherent with the stage-5 resolved sandbox_tier — the
+    # §14.9.4 tier-floor never spuriously violates (three-field reconciliation).
+    minimum_tier: SandboxTier = resolve_effective_sandbox_defaults(
+        entry, deployment_surface
+    ).minimum_tier
     blast_radius_tier: BlastRadiusTier = entry.default_blast_radius
 
     def convert(tool: Any) -> ToolContract:
@@ -167,7 +177,7 @@ async def materialize_mcp_client_host_stage(config: RuntimeConfig) -> MCPClientH
         server_name=entry.client_name,
         trust_tier=_trust_tier_from_level(entry.trust_level),
         transport_config=_build_transport_config(transport_value, entry.connection_url),
-        tool_contract_converter=_build_default_policy_converter(entry),
+        tool_contract_converter=_build_default_policy_converter(entry, config.deployment_surface),
     )
 
 
