@@ -2455,7 +2455,7 @@ R-CL-P5:
 R-CL-P6:
   title: Phase P6 — spec-prose ↔ impl hygiene (reconcile stale spec footers to landed reality)
   surface: VII
-  status: ACTIVE       # promoted from BLOCKED 2026-06-10: depends_on R-CL-P0 RESOLVED + R-CL-P5 RESOLVED → P6 is the next frontier (R-CL-P5 next_pointer). Design-phase posture (AS spec C-AS-14 §14.5/§14.6 footer refresh to landed R-810/R-820 reality). R-CL-P4 stays BLOCKED-on-forks.
+  status: RESOLVED     # closed 2026-06-10 by AS spec v1.8→v1.9 footer reconciliation + clearance marker (`.harness/clearance/Spec_Action_Surface-v1_9-cleared-2026-06-10.md`). §14.5 managed_agents footer gained a leading Supersession(v1.9) banner; §14.6 files.* producer-site footer authored; stale v1.7 title → v1.9; overlay-check clean; cross-spec rg negative confirmed (sibling hits all frozen change-note blocks). harness-as/CLAUDE.md narrative drift (Phase-7 posture) filed as R-CL-Q1 follow-on, NOT bundled (§11.4). [was: ACTIVE, promoted from BLOCKED, depends_on R-CL-P0+P5 RESOLVED.] R-CL-P4 stays BLOCKED-on-forks; the Q/D/C quality track gates on P4.
   depends_on: [R-CL-P0]
   blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
   posture: design-phase
@@ -2466,7 +2466,7 @@ R-CL-P6:
   verification: { shape: grep, must_pass: ["AS Files/managed-agents 'deferred indefinitely' footers refreshed to landed R-810/R-820 reality; overlay-check clean (no stale tracked snapshots, no HARD seam-missing-endpoint); cross-spec rg clean; clearance markers filed"] }
   close_shape: { type: PR-merge, artifact: "spec-prose-hygiene PR + clearance markers", cascade: [R-IF-roadmap-refresh] }
   next_pointer: null
-  notes: The [[spec-prose-plan-body-drift-pattern]] class. Files/managed-agents specs still say "deferred indefinitely" but R-810/R-820 landed them.
+  notes: The [[spec-prose-plan-body-drift-pattern]] class. RECONCILED — Files/managed-agents footers refreshed from "deferred indefinitely" to the landed R-810/R-820 reality (substitutions.yaml AS-8e/8f/CP-17 = SUBSTANTIVE_RETIRED batch-52). Verified premise TRUE before touching prose (authoritative ledger, not the roadmap's own cite). Frozen historical change-note blocks preserved per stale-carry-text disposition (rg hits remain by construction). Producer-sites are code adapters (files_api.py / managed_agents.py), no phantom C-RT-NN footer cite.
 
 R-CL-Q1:
   title: Phase Q1 — DevEx + whole-codebase code-review & simplification sweep
@@ -2482,7 +2482,7 @@ R-CL-Q1:
   verification: { shape: e2e, must_pass: ["per-package review pass (codex + /code-review + /simplify) with all findings closed; clean-checkout-to-green DevEx walkthrough; just check green at a verified fixed point"] }
   close_shape: { type: PR-merge, artifact: "code-review/devex sweep PR(s)", cascade: [R-IF-roadmap-refresh] }
   next_pointer: null
-  notes: Workflow candidate (broad parallel audit) if operator opts in. Clean/simple/commented code; no dead code, no over-abstraction.
+  notes: Workflow candidate (broad parallel audit) if operator opts in. Clean/simple/commented code; no dead code, no over-abstraction. FOLLOW-ON owed (surfaced by R-CL-P6, Phase-7 posture so NOT bundled into the design-phase P6 PR per §11.4 + P6 design-substrate-only scope; recorded at `.harness/clearance/Spec_Action_Surface-v1_9-cleared-2026-06-10.md`): `harness-as/CLAUDE.md` narrative drift vs authoritative `substitutions.yaml` — line 19 spec-version pointer (`v1.8`→`v1.9`), lines 175/176 (AS-8e/8f still narrated STILL-BOUNDED-INDEFINITELY, both now SUBSTANTIVE_RETIRED batch-52), line 179 tally (`2/11 STILL-BOUNDED-INDEFINITELY`). Preferred fix per R-600 spirit: repoint the tally at the derived `substitution_ledger.py` source rather than hand-refresh a count that will drift again.
 
 R-CL-Q2:
   title: Phase Q2 — security testing + review
