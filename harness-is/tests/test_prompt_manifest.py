@@ -53,6 +53,20 @@ def test_prompt_version_derive_invariant_rejects_mismatched_sha() -> None:
         PromptVersion(version_sha="orphan-sha", content="")
 
 
+def test_prompt_version_content_only_derives_sha() -> None:
+    """The operator-supplied declarative path (Codex review): supplying only
+    ``content`` (e.g. from TOML/JSON `RuntimeConfig.prompt_manifest`) derives
+    ``version_sha`` — the operator does not precompute the digest."""
+    pv = PromptVersion(content="declarative prompt body")
+    assert pv.version_sha == prompt_version_sha("declarative prompt body")
+    assert pv.content == "declarative prompt body"
+    # Mirrors the explicit from_content helper.
+    assert pv == PromptVersion.from_content("declarative prompt body")
+    # Empty / fully-defaulted construction stays the empty sentinel.
+    assert PromptVersion().version_sha == ""
+    assert PromptVersion(content="").version_sha == ""
+
+
 def test_prompt_version_empty_carrier_sentinel() -> None:
     """The empty-carrier shape (`version_sha=""`, `content=""`) is the
     no-active-prompt default and satisfies the invariant."""

@@ -53,6 +53,7 @@ disagree about what content is active.
 from __future__ import annotations
 
 import hashlib
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -99,19 +100,39 @@ class PromptVersion(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    version_sha: str
+    version_sha: str = ""
     """Content digest of the active prompt version; ``""`` = no active prompt.
 
-    MUST equal ``prompt_version_sha(content)`` (enforced at construction)."""
+    Derived from ``content`` — operators supply ``content`` (e.g. declaratively
+    via TOML/JSON ``RuntimeConfig.prompt_manifest``) and the sha is filled in
+    (the sha is not an independent operator-set field). An *explicitly-supplied*
+    non-empty ``version_sha`` MUST equal ``prompt_version_sha(content)``
+    (detect-then-refuse at construction)."""
 
     content: str = ""
     """Inline system-prompt content (R-PM-1 PR #1 minimal carrier). ``""`` = no
     active prompt (the empty-carrier sentinel; forward-compatible with the
     #496 identity-only construction ``PromptVersion(version_sha="")``)."""
 
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_sha_when_absent(cls, data: Any) -> Any:
+        """Fill ``version_sha`` from ``content`` when it is absent/empty — the
+        operator-supplied declarative path (`PromptVersion(content="...")` /
+        TOML/JSON), where the operator naturally supplies content but not a
+        precomputed digest. An *explicit* non-empty ``version_sha`` is left
+        untouched so the after-validator can detect-then-refuse a mismatch.
+        """
+        if not isinstance(data, dict):
+            return data
+        raw: dict[str, Any] = dict(cast("dict[str, Any]", data))
+        if not raw.get("version_sha"):
+            raw["version_sha"] = prompt_version_sha(str(raw.get("content") or ""))
+        return raw
+
     @model_validator(mode="after")
     def _enforce_content_sha_invariant(self) -> PromptVersion:
-        """Detect-then-refuse the ``version_sha == digest(content)`` derive-invariant."""
+        """Detect-then-refuse a mismatched explicit ``version_sha``."""
         expected = prompt_version_sha(self.content)
         if self.version_sha != expected:
             raise ValueError(

@@ -521,6 +521,61 @@ async def test_active_system_prompt_injects_through_anthropic_hitl_variant() -> 
 
 
 @pytest.mark.asyncio
+async def test_active_system_prompt_injects_through_anthropic_memory_variant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The memory-tool anthropic variant (`_dispatch_anthropic_with_memory`) also
+    injects ``system=`` — closes the "all 5 helpers" invariant at test level
+    (adversarial review F3-01; the 5th helper, previously asserted-not-tested)."""
+    recorded: dict[str, Any] = {}
+
+    async def _fake_execute_with_memory_callbacks(
+        *, messages_create_kwargs: dict[str, Any], **_kw: Any
+    ) -> Any:
+        recorded.update(messages_create_kwargs)
+        return _ProviderResponse(
+            id="msg_mem_001",
+            usage=_Usage(input_tokens=1, output_tokens=1),
+            _dump={"id": "msg_mem_001", "content": [{"text": "ok"}]},
+        )
+
+    monkeypatch.setattr(
+        "harness_runtime.lifecycle.llm_dispatch.execute_with_memory_callbacks",
+        _fake_execute_with_memory_callbacks,
+    )
+
+    class _FakeMemRegistry:
+        configured_backend = "sqlite"
+
+        def resolve_backend(self, _surface: Any) -> Any:
+            return object()
+
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        memory_tool_registry=_FakeMemRegistry(),
+        deployment_surface="local-development",
+        active_system_prompt=_SYS,
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [{"type": "memory_20250818", "name": "memory"}],
+                "params": {"max_tokens": 100},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    assert recorded.get("system") == _SYS
+
+
+@pytest.mark.asyncio
 async def test_active_system_prompt_injects_openai_leading_system_message() -> None:
     """OpenAI dispatch injects the active prompt as a leading ``role:"system"``
     message (the OpenAI base-prompt route)."""
@@ -633,6 +688,71 @@ async def test_active_prompt_conflict_openai_leading_system_message_fails_loud()
                     ],
                     "tools": None,
                     "params": {"max_tokens": 100},
+                }
+            ),
+            step_context=_step_context(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_active_prompt_injects_after_params_messages_override() -> None:
+    """Codex regression — `params["messages"]` (the opaque escape hatch) must NOT
+    silently clobber the injected system message. Injection happens after the
+    params merge, so the system is prepended to the EFFECTIVE messages."""
+    adapter = _OpenAIFakeAdapter(_OpenAIClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": adapter},
+        tracer_provider=tp,
+        active_system_prompt=_SYS,
+    )
+
+    await dispatcher.dispatch(
+        _binding("openai"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "ignored-top-level"}],
+                "tools": None,
+                "params": {
+                    "max_tokens": 100,
+                    "messages": [{"role": "user", "content": "from-params"}],
+                },
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    msgs = adapter.client.chat.completions.last_kwargs["messages"]  # type: ignore[index]
+    assert msgs[0] == {"role": "system", "content": _SYS}
+    assert msgs[1] == {"role": "user", "content": "from-params"}
+
+
+@pytest.mark.asyncio
+async def test_active_prompt_conflict_hidden_in_params_messages_fails_loud() -> None:
+    """Codex regression — a competing system source hidden in `params["messages"]`
+    is detected (the conflict check runs on the post-merge effective messages)."""
+    adapter = _OpenAIFakeAdapter(_OpenAIClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": adapter},
+        tracer_provider=tp,
+        active_system_prompt=_SYS,
+    )
+
+    with pytest.raises(PromptInjectionConflictError):
+        await dispatcher.dispatch(
+            _binding("openai"),
+            _step(
+                {
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "tools": None,
+                    "params": {
+                        "max_tokens": 100,
+                        "messages": [
+                            {"role": "system", "content": "hidden-in-params"},
+                            {"role": "user", "content": "hi"},
+                        ],
+                    },
                 }
             ),
             step_context=_step_context(),

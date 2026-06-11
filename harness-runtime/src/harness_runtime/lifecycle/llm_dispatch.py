@@ -996,20 +996,23 @@ def _payload_to_anthropic_kwargs(
     return kwargs
 
 
-def _prepend_system_message(
-    payload: ProviderAgnosticPayload, system: str | None, provider: str
-) -> list[Mapping[str, Any]]:
-    """Build the OpenAI/Ollama messages list, prepending a ``role:"system"``
-    entry when ``system`` is supplied (the base-system-prompt route for these
-    providers). Fail-loud if a leading ``role:"system"`` message is already
-    present (the idiomatic per-step system prompt) — R-PM-1 PR #1.
+def _inject_leading_system_message(
+    kwargs: dict[str, Any], system: str | None, provider: str
+) -> None:
+    """Prepend a ``{"role":"system"}`` entry to the OpenAI/Ollama messages
+    (the base-system-prompt route for these providers) when ``system`` is
+    supplied — R-PM-1 PR #1. Operates on the **post-`params`-merge** ``kwargs``
+    so the injection cannot be clobbered by, and any competing system source
+    cannot be hidden in, a ``params["messages"]`` escape-hatch override (Codex
+    review). Fail-loud (`detect-then-refuse`) if the effective messages already
+    lead with a ``role:"system"`` entry (the idiomatic per-step system prompt).
     """
-    messages: list[Mapping[str, Any]] = list(payload.messages)
-    if system:
-        if messages and messages[0].get("role") == "system":
-            raise PromptInjectionConflictError(provider, 'messages[0] role:"system"')
-        messages = [{"role": "system", "content": system}, *messages]
-    return messages
+    if not system:
+        return
+    messages: list[Mapping[str, Any]] = list(kwargs.get("messages", ()))
+    if messages and messages[0].get("role") == "system":
+        raise PromptInjectionConflictError(provider, 'messages[0] role:"system"')
+    kwargs["messages"] = [{"role": "system", "content": system}, *messages]
 
 
 def _payload_to_openai_kwargs(
@@ -1018,12 +1021,15 @@ def _payload_to_openai_kwargs(
     """Translate `ProviderAgnosticPayload` → ``chat.completions.create`` kwargs.
 
     R-PM-1 PR #1 — ``system`` (active prompt content) injects as a leading
-    ``{"role":"system","content":...}`` message (the OpenAI base-prompt route).
+    ``{"role":"system","content":...}`` message (the OpenAI base-prompt route),
+    **after** the ``params`` merge so a ``params["messages"]`` override cannot
+    silently drop it.
     """
-    kwargs: dict[str, Any] = {"messages": _prepend_system_message(payload, system, "openai")}
+    kwargs: dict[str, Any] = {"messages": list(payload.messages)}
     if payload.tools is not None:
         kwargs["tools"] = list(payload.tools)
     kwargs.update(payload.params)
+    _inject_leading_system_message(kwargs, system, "openai")
     return kwargs
 
 
@@ -1033,12 +1039,15 @@ def _payload_to_ollama_kwargs(
     """Translate `ProviderAgnosticPayload` → ``ollama.chat`` kwargs.
 
     R-PM-1 PR #1 — ``system`` (active prompt content) injects as a leading
-    ``{"role":"system","content":...}`` message (the Ollama base-prompt route).
+    ``{"role":"system","content":...}`` message (the Ollama base-prompt route),
+    **after** the ``params`` merge so a ``params["messages"]`` override cannot
+    silently drop it.
     """
-    kwargs: dict[str, Any] = {"messages": _prepend_system_message(payload, system, "ollama")}
+    kwargs: dict[str, Any] = {"messages": list(payload.messages)}
     if payload.tools is not None:
         kwargs["tools"] = list(payload.tools)
     kwargs.update(payload.params)
+    _inject_leading_system_message(kwargs, system, "ollama")
     return kwargs
 
 
