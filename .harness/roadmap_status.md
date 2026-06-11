@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `d35d2162be3d` |
-| `last_refreshed` | 2026-06-10T20:24:00-06:00 |
-| `git_head` | `02b74eb2` (main) + R-CL-P5 verify-emit close (this PR; hash pinned at terminating refresh post-merge). R-CL-P5 (CXA phase-2 + cost + validator) RESOLVED verify-emit; R-CL-P6 spec-prose hygiene promoted BLOCKED→ACTIVE = next frontier. |
+| `workspace_state_hash` | `3d4a2597b397` |
+| `last_refreshed` | 2026-06-10T22:10:00-06:00 |
+| `git_head` | `c41b195c` (main) — R-CL-P5 (CXA phase-2 + cost + validator) RESOLVED verify-emit (#483); R-CL-P6 spec-prose hygiene promoted BLOCKED→ACTIVE = next frontier (design-phase posture). |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-56.md` |
 | `open_fork_doc_count` | 49 |
 
