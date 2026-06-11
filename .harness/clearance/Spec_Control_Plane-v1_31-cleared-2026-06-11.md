@@ -33,6 +33,7 @@ Caveats / bounded residuals (all documented, re-open triggers at the R-PM-1 desi
 - **CXA seam registration owed at PR #5** — the CP→IS store-consultation seam (selection sha → store member) is composed at the runtime consumer site (§29.4); its `Cross_Axis_Composition_Document` registration is the cascade PR #5 deliverable (after the producers exist).
 - **Per-step prompt override** (vs per-role/per-workload) — design OQ-3, deferred to a bounded follow-on iff a workload exercises it.
 - **No dedicated `PathClass` residence** for the selection manifest — operator-supplied on `RuntimeConfig.prompt_selection_manifest`; the inline supply path suffices for the capability landing (§29.7).
+- **`_MVP_DEFAULT_AGENT_ROLE` is duplicated** in `prompt_selection.py` + `llm_dispatch.py` (both inert today — role discarded until R-300). A coupling test (`test_mvp_default_role_matches_dispatch_default`) pins them equal so a future divergence when R-300 lands real per-role dispatch fails loud rather than silently keying prompt-selection on a different role than routing (advisor one-source-of-truth seam; R-300 re-open trigger to unify the constant).
 
 ## Notes
 

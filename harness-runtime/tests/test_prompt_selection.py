@@ -102,6 +102,22 @@ def test_reconcile_unauthored_sha_fails_loud() -> None:
         reconcile_active_prompt_via_selection(pm, selection, workload_class=_SE)
 
 
+def test_mvp_default_role_matches_dispatch_default() -> None:
+    """One-source-of-truth seam (advisor): prompt-selection's MVP-default role
+    MUST equal the dispatch MVP-default role. Today both default/discard the role
+    so it is inert, but when R-300-second-provider lands real per-role dispatch a
+    divergence would silently key prompt-selection on a different role than
+    routing. This pins the coupling (enforced, not comment-documented)."""
+    from harness_runtime.lifecycle.llm_dispatch import (
+        _MVP_DEFAULT_AGENT_ROLE as _DISPATCH_DEFAULT_ROLE,
+    )
+    from harness_runtime.lifecycle.prompt_selection import (
+        _MVP_DEFAULT_AGENT_ROLE as _SELECTION_DEFAULT_ROLE,
+    )
+
+    assert _SELECTION_DEFAULT_ROLE == _DISPATCH_DEFAULT_ROLE
+
+
 def test_reconcile_invalid_manifest_fails_loud() -> None:
     """An operator-supplied manifest that fails the structural validator
     (`manifest_version < 1`) is fail-loud at the consumer site — parity with
