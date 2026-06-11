@@ -2399,7 +2399,7 @@ R-CL-P2:
 R-CL-P3:
   title: Phase P3 — persona-tier TEAM_BINDING breadth (e2e proof of the bridging-arc middle tier)
   surface: VI
-  status: ACTIVE       # promoted from BLOCKED 2026-06-10: depends_on R-CL-P0 is RESOLVED + R-CL-P2 DEFERRED → P3 is the next frontier. Note is BUILD-NOT-FORK (design done; owed = e2e proof). Entry-triage owed: §10.2 design-substrate reconciliation (clearance marker) + possible infra-gated live-multi-tier-e2e.
+  status: APPLIED-PENDING-OPERATOR-E2E   # #481 (2026-06-10): infra-free run-observable posture proofs LANDED (sampler full config→bootstrap flow + gate runtime-resolver, TEAM distinct from both neighbours, non-vacuous); §10.2 reconciled (mode-agnostic, NOT design-substrate — Persona_Document un-drifted). PENDING operator-gated sub-step: full-workflow live multi-tier e2e (api.run echo-MCP is skipif-gated/infra) + the redaction collector-boundary proof (deployment, not in-process) + cost (U-RT-49 struck). Partial-land per D-2 build-seam-defer-live-proof.
   depends_on: [R-CL-P0]
   blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
   posture: phase-7
@@ -2408,9 +2408,13 @@ R-CL-P3:
   advisor_required: yes
   council_required: conditional:nameable-tension   # C7 observability + C8 security ⊥ C11 operator-burden
   verification: { shape: e2e, must_pass: ["a TEAM_BINDING workflow exhibits the correct HITL-gate/redaction/sampler/cost posture distinct from SOLO and MULTI_TENANT; reconcile root CLAUDE.md §10.2 persona drift"] }
-  close_shape: { type: PR-merge, artifact: "team-binding proof PR", cascade: [R-IF-roadmap-refresh] }
-  next_pointer: null
-  notes: BUILD-NOT-FORK (P0 verified TEAM_BINDING specified + src-branch-cased across all 4 behaviors; owed = e2e proof, the un-proven middle tier).
+  close_shape: { type: PR-merge, artifact: "#481 team-binding posture proof", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: R-CL-P5
+  notes: |
+    PARTIAL-LAND (#481, advisor-confirmed; harness-runtime/tests/test_r_cl_p3_persona_tier_posture.py — 9 tests). BUILD-NOT-FORK confirmed (TEAM_BINDING branches across all 4 axes). Grounding refined the deliverable: of the 4 §P3 behaviours, only 2 are in-process run-observable, and they ARE proven tier-distinct (TEAM ≠ both neighbours, non-vacuous):
+    - SAMPLER (OD obs): SELF_HOSTED base-rate 1.0/0.1/0.2 via the REAL bootstrap (config.persona_tier → materialize_tracer_provider_stage → bound HarnessCompositeSampler) — full config→runtime flow.
+    - GATE (CP HITL): SAVE_POINT_CHECKPOINT synchrony SYNC_BLOCKING/BOTH_BY_TIER/DURABLE_ASYNC via the runtime _evaluate_cell_synchrony resolver (binding-layer proof).
+    PENDING (operator-gated / not-in-process, per D-2): full-workflow live multi-tier e2e (api.run echo-MCP skipif-gated/infra) + full config→binding→gate flow (CP step-binding path, infra-free but unbuilt) ; REDACTION = OTLP-collector-boundary deployment posture (not in-process-observable) ; COST = U-RT-49-struck (RunResult.cost_attribution empty). §10.2 root-CLAUDE.md persona drift RECONCILED (mode-agnostic; Persona_Document verified un-drifted → no clearance marker).
 
 R-CL-P4:
   title: Phase P4 — spec-completion deferrals (prompts surface + 3rd hash component; keying-tuple D-ADR; OD buffer bounds)
@@ -2431,7 +2435,7 @@ R-CL-P4:
 R-CL-P5:
   title: Phase P5 — CXA phase-2 edge verification + cost-model rate tables + validator thresholds
   surface: I-closure
-  status: BLOCKED
+  status: ACTIVE       # promoted from BLOCKED 2026-06-10: depends_on R-CL-P0 RESOLVED; R-CL-P2 DEFERRED + P3 APPLIED-PENDING-OPERATOR-E2E + P4 blocked-on-forks → P5 is the next ACTIVE frontier. Note: 22 CXA phase-2 edges likely-mostly-0-wireable (verify-emit, CXA-4 precedent) + cost/validator = bind params/default tables. Entry-ground per §1.
   depends_on: [R-CL-P0]
   blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
   posture: phase-7
