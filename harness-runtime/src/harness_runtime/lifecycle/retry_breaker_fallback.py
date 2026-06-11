@@ -327,7 +327,11 @@ class RetryBreakerFallbackDispatcher:
                     )
                     last_failure_class = "capability-shortfall"
                     candidate = self._advance_or_exhaust(
-                        candidate, outer_span, last_failure_class, chain_length
+                        candidate,
+                        outer_span,
+                        last_failure_class,
+                        chain_length,
+                        exhaustion_cause="capability-shortfall",
                     )
                     continue
 
@@ -386,11 +390,17 @@ class RetryBreakerFallbackDispatcher:
         outer_span: Any,
         last_failure_class: str | None,
         chain_length: int,
+        *,
+        exhaustion_cause: str = "per-candidate-retry-exhaustion",
     ) -> ProviderCandidate:
         """Advance to the next candidate or raise on exhaustion (Step 5).
 
-        Emits ``fallback.exhausted`` on the outer span before raising the
-        typed ``RetryBreakerFallbackExhaustedError``.
+        Emits ``fallback.exhausted`` on the outer span before raising the typed
+        ``RetryBreakerFallbackExhaustedError``. ``exhaustion_cause`` attributes
+        the terminal event: the default reflects per-candidate retry exhaustion;
+        the C-CP-03 §3.3 capability-shortfall pre-check passes
+        ``"capability-shortfall"`` so an all-candidates-incapable chain is not
+        mis-classified as retry exhaustion (no provider attempt ran in that case).
         """
         try:
             next_candidate, _result = advance_or_raise(self.fallback_chain, failed)
@@ -400,7 +410,7 @@ class RetryBreakerFallbackDispatcher:
                 attributes={
                     "fallback.chain_length": chain_length,
                     "fallback.last_failure_class": last_failure_class or "unknown",
-                    "fallback.exhaustion_cause": "per-candidate-retry-exhaustion",
+                    "fallback.exhaustion_cause": exhaustion_cause,
                 },
             )
             raise RetryBreakerFallbackExhaustedError(failed) from exc

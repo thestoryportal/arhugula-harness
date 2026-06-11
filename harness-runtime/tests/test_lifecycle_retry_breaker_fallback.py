@@ -901,7 +901,12 @@ async def test_capability_shortfall_exhausts_when_no_capable_candidate() -> None
     triggered = [e for e in outer.events if e.name == "fallback.triggered"]
     assert len(triggered) == 2
     assert all(e.attributes["fallback.cause"] == "capability_shortfall" for e in triggered)
-    assert "fallback.exhausted" in [e.name for e in outer.events]
+    # The terminal fallback.exhausted attributes the shortfall cause, NOT
+    # retry-exhaustion (no provider attempt ran) — accurate failure-mode telemetry.
+    exhausted = next(e for e in outer.events if e.name == "fallback.exhausted")
+    assert exhausted.attributes is not None
+    assert exhausted.attributes["fallback.exhaustion_cause"] == "capability-shortfall"
+    assert exhausted.attributes["fallback.last_failure_class"] == "capability-shortfall"
 
 
 @pytest.mark.asyncio
