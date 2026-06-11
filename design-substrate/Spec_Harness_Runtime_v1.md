@@ -1,4 +1,18 @@
-# Specification — Harness Runtime v1.43
+# Specification — Harness Runtime v1.44
+
+## Change-note (v1.43 → v1.44)
+
+**Status posture (PROPOSED 2026-06-11).** v1.44 authors the **prompts-management injection contract** — the load-bearing R-PM-1 cascade PR #1 piece (`Project_Roadmap_v1.md` §5.16 / §5.17 R-CC-1 arc #2; design `.harness/r-pm-1-prompts-management-design-v1.md` §4.1; fork `.harness/class_1_fork_prompts_management_surface_active_prompt_version.md` DP-5). Closes the "nothing reaches the model" gap: v1.42 bound the prompts carrier onto `HarnessContext`, but no path routed an active prompt to any provider as a system prompt. NEW **§14.5.2** authors **translate-time per-provider system injection** within the C-RT-15 dispatch composer: the resolved active-prompt *content* is injected as Anthropic's top-level `system=` kwarg / an OpenAI-Ollama leading `role:"system"` message, with a **fail-loud conflict-precedence** contract (`detect-then-refuse` — never silently merge/drop two competing system sources) declaring the NEW `RT-FAIL-PROMPT-INJECTION-CONFLICT` fail class (step-level, like `RT-FAIL-PROVIDER-UNREACHABLE` — propagates as step-failure; does NOT abort bootstrap). v1.43 + earlier lineage PRESERVED VERBATIM per the delta-only-spec-file convention.
+
+**Source of fix.** Design §4.1 (the injection-mechanism resolution: Option 1 — bounded `HarnessContext` channel + translate-time per-provider injection, **ADR-F1-faithful**: `ProviderAgnosticPayload` stays **frozen**, the system content rides the dispatcher, not the payload — per-provider feature use at the call site, no provider-divergent `system` field lifted into the neutral record). The provider-asymmetry is the linchpin (primary source: the `claude-api` reference): a system prompt is **not uniformly representable** in the neutral 3-tuple — Anthropic takes a top-level `system=` kwarg; OpenAI/Ollama take a `role:"system"` message-list entry (a `role:"system"` array entry is NOT Anthropic's base-prompt route) — so the per-provider translate functions are the correct seam. Keeping the payload frozen is *why* cost-attribution + `_extract_anthropic_request_attrs` (§14.2) stay untouched. The minimal inline `PromptVersion.content` content source + the `version_sha == prompt_version_sha(content)` derive-invariant are co-published at **IS spec v1.6 §5.2** (the carrier side; provenance-tightening). Decorrelated review: out-of-family Codex required the self-contained inline content carrier (so PR #1 proves injection e2e) + the fail-loud conflict precedence; advisor required two reachability proofs (dispatch-composition + the stage-5 bootstrap seam, the exact seam #496 left inert).
+
+**Amendments.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§14.5.2 (NEW)** | Authors **translate-time per-provider system injection**: (1) the dispatcher resolves the active-prompt content (`ctx.prompt_manifest.active_prompt_version.content or None`) at bootstrap stage 5 onto a new `active_system_prompt: str \| None` dispatcher binding (empty/None → no injection, byte-identical to v1.43); (2) the three `_payload_to_{anthropic,openai,ollama}_kwargs` translate fns gain a `system` parameter, injecting per-provider (Anthropic `system=` kwarg; OpenAI/Ollama leading `role:"system"` message); (3) FR — conflict precedence is **fail-loud** (`detect-then-refuse`): an active prompt + a payload-carried competing system source (Anthropic `params["system"]`; OpenAI/Ollama leading `role:"system"`) RAISES `RT-FAIL-PROMPT-INJECTION-CONFLICT`, never silently merged/dropped; (4) the new fail class extends the §14.5 Failure-mode taxonomy (step-level, propagates to the driver except-boundary). `ProviderAgnosticPayload` stays frozen (ADR-F1). | Design §4.1 + fork DP-5 + Codex/advisor review |
+
+**Scope discipline.** v1.44 authors ONLY §14.5.2 (new, within C-RT-15) + its fail-class extension. The §14.5 step-4 prose, the §14.5 Payload-shape contract, §14.5.1, §14.6+, and all prior lineage PRESERVED VERBATIM. The minimal inline `content` carrier + derive-invariant are IS-axis-owned (IS spec v1.6 §5.2; co-published this arc). The fuller prompts surface (multi-version `PROMPTS`-path-class store, CP per-role/workload selection, OD per-tier governance) is the PR #2/#3/#4 cascade per the R-PM-1 design — NOT this arc.
 
 ## Change-note (v1.42 → v1.43)
 
@@ -2738,6 +2752,43 @@ Implementation discretion at C-RT-22 landing arc per FM-2 no-extension disciplin
 - Span name convention: per OD spec v1.12 §C-OD-04 §4.1 — `{gen_ai.operation.name} {gen_ai.request.model}` 2-token space-separated, byte-exact to OTel GenAI semantic conventions 1.41.0. Span-name format is OD-axis-owned per axis-ownership convention; runtime spec does NOT carry an authoring or suggestion at this surface beyond cross-reference to OD §4.1. (v1.27 STRIKE per `.harness/class_1_fork_genai_span_name_four_way_drift.md` §7.5a R1 — v1.26-and-earlier informal suggestion `gen_ai.{provider}.{model_or_method}` removed.)
 - Whether provider-specific dispatch branches live in `llm_dispatch.py` directly or in per-provider sub-modules (`llm_dispatch_anthropic.py` etc.) — defer to module-size discretion at implementation.
 - Test mock strategy: suggest a `MockProviderClient` fixture per provider that records dispatched calls + returns canned responses; pytest-asyncio for async surface.
+
+### §14.5.2 Prompts-management injection — translate-time per-provider system prompt (new at v1.44)
+
+**Provenance.** R-PM-1 cascade PR #1 (`.harness/r-pm-1-prompts-management-design-v1.md` §4.1; fork `.harness/class_1_fork_prompts_management_surface_active_prompt_version.md` DP-5). This sub-section is the canonical spec home for **how an active prompt reaches a provider as a system prompt**. v1.42 bound the prompts carrier onto `RuntimeConfig`/`HarnessContext` (the procedural-tier *hash* component); until v1.44 no path injected the prompt's *content* into any provider call. The C-RT-15 step-4 prose (per-provider helpers translate `ProviderAgnosticPayload` → SDK kwargs) is the seam this extends.
+
+**The mechanism this enforces (ADR-F1-faithful).** A system prompt is **not uniformly representable** in the provider-neutral 3-tuple `(messages, tools, params)`: Anthropic takes a **top-level `system=` kwarg**; OpenAI/Ollama take a **`role:"system"` entry in `messages`** (a `role:"system"` array entry is NOT Anthropic's base-prompt route — it is a model-gated beta). Therefore the system content is injected at the **per-provider translate functions** (the call site), and `ProviderAgnosticPayload` stays **frozen and unchanged** — the active prompt content rides the dispatcher/context, never the neutral payload. This is "per-provider feature use at every call site" per ADR-F1 §Decision + §Consequences (a); lifting a provider-divergent `system` field into the neutral record is the LCD-union feature-erasure move ADR-F1 §Rationale (b) forecloses. Because the payload is untouched, cost-attribution + the §14.2 `anthropic.*` request-attr extraction are unaffected.
+
+**FR-1 — content resolution + dispatcher binding.** The dispatcher carries a new `active_system_prompt: str | None` binding. At bootstrap stage 5 (LOOP_INIT), the factory resolves it from the stage-0-copied carrier: `active_system_prompt = ctx.prompt_manifest.active_prompt_version.content or None`. The active-prompt *content* is the minimal inline `PromptVersion.content` field co-authored at IS spec v1.6 §5.2 (PR #1's self-contained content source; the multi-version `PROMPTS`-path-class store + per-role/workload CP selection are the PR #2/#3 cascade). Empty/None → **no injection** (byte-identical to v1.43 dispatch — the local-first default).
+
+**FR-2 — per-provider injection at the translate functions.** When `active_system_prompt` is non-empty, the three translate functions inject per-provider:
+- **Anthropic** (`_payload_to_anthropic_kwargs`) → set the top-level `system=` kwarg.
+- **OpenAI / Ollama** (`_payload_to_openai_kwargs` / `_payload_to_ollama_kwargs`) → prepend `{"role": "system", "content": <content>}` to the `messages` list.
+
+The injection threads through **all** dispatch helpers (plain anthropic, the memory-tool variant, the HITL-tool-loop variant, openai, ollama) — for the HITL variant the `system=` kwarg persists across continuation turns (it is a separate kwarg from the per-turn-rebuilt `messages` list).
+
+**FR-3 — conflict precedence is fail-loud (`detect-then-refuse`).** The active prompt is the harness-owned **base** system prompt. If an active prompt is configured **AND** the payload already carries a competing system source — an Anthropic `params["system"]` (the opaque escape hatch) OR an OpenAI/Ollama leading `{"role":"system"}` message — the two-source ambiguity RAISES `RT-FAIL-PROMPT-INJECTION-CONFLICT`. v1.44 does **not** silently merge or replace (silently dropping either the operator's payload system source or the configured active prompt is the failure mode). This mirrors the arc-#1 `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE` posture and the `[[conformance-validator-disciplines]]` detect-then-refuse pattern.
+
+> **Known operational consequence — framed honestly.** For OpenAI/Ollama a leading `{"role":"system"}` message is the **idiomatic** way a workflow step supplies its own system prompt, so this is **not** a rare edge case: configuring an active prompt will hard-error any workflow that already carries its own system message. That is the *intended* v1 contract (surface the collision, do not silently pick). The escape valve — a configurable `merge`/`replace` policy — is OQ-5 in the R-PM-1 design, a bounded follow-on iff a real workload needs both sources simultaneously. With **no** active prompt configured, existing payload system messages pass through untouched (byte-identical to v1.43).
+
+**Fail-class extension to the §14.5 Failure-mode taxonomy.**
+
+| Fail class | Trigger | Behavior |
+|---|---|---|
+| `RT-FAIL-PROMPT-INJECTION-CONFLICT` (permanent, new at v1.44) | An active prompt is configured AND the payload carries a competing system source (Anthropic `params["system"]`; OpenAI/Ollama leading `role:"system"` message) | Raise (`PromptInjectionConflictError`); **step-level** — propagates to the driver `try / except` boundary; driver fails the step with `step-failure: RT-FAIL-PROMPT-INJECTION-CONFLICT: ...`. Does NOT abort bootstrap (it is per-dispatch, like `RT-FAIL-PROVIDER-UNREACHABLE`). |
+
+**Invariants.**
+- `ProviderAgnosticPayload` stays frozen + `extra="forbid"` (ADR-F1 preserved). The system content rides the dispatcher (`active_system_prompt`), never the payload.
+- Empty/None `active_system_prompt` → zero behavior change vs v1.43 (no `system` kwarg for anthropic; no leading system message for openai/ollama).
+- Injection is threaded through every provider dispatch helper (no helper silently skipped).
+- The injected content's `version_sha` is content-derived (`== prompt_version_sha(content)`, IS spec v1.6 §5.2) so the §5.2 procedural-tier hash cannot report "unchanged" while injected content changes.
+
+**Acceptance (the load-bearing must_pass).** On a real dispatch with an active prompt configured, the active prompt's **content** arrives at the provider as a system prompt: Anthropic `messages.create` kwargs contain `system=<content>`; OpenAI/Ollama `messages[0] == {"role":"system","content":<content>}`. With no active prompt, kwargs are byte-identical to v1.43. Verifiable **e2e** (recording-mock dispatcher asserting the provider-client kwargs through the real `dispatch(...)` path, and the bootstrap seam asserting `active_system_prompt == content` through the real stage-5 wiring) — not grep.
+
+**Deferred to implementation discretion.**
+- Structured/multi-block system content (Anthropic's `system` array with `cache_control` breakpoints) — string-only at v1.44 (R-PM-1 design OQ-1).
+- Prompt-caching interaction (a stable injected system prompt is an ideal cache prefix) — perf follow-on (OQ-2).
+- The configurable `merge`/`replace` conflict policy (OQ-5).
 
 ---
 

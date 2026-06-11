@@ -40,32 +40,91 @@ Authority: ``Spec_Information_Substrate_v1.md`` v1.5 §C-IS-05 §5.2 (NEW
 3-component recipe + preconditions (1)-(3)); ``Spec_Harness_Runtime_v1.md``
 §14.18 (``active_prompt_version`` runtime binding); ADR-F2 §Consequences (c)
 (D-derivative entry-shape extension authorization, inherited via §5.1 sidecar).
+
+R-PM-1 cascade PR #1 (IS spec v1.6 §C-IS-05 §5.2 provenance-tightening): the
+minimal inline ``PromptVersion.content`` carrier + the ``version_sha ==
+prompt_version_sha(content)`` derive-invariant. The §5.2 recipe *shape* is
+unchanged (still 3-component, still reads ``active_prompt_version.version_sha``);
+only ``version_sha``'s *provenance* tightens to a content-derived digest so
+runtime injection (runtime spec v1.44) and the procedural-tier hash cannot
+disagree about what content is active.
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+import hashlib
+
+from pydantic import BaseModel, ConfigDict, model_validator
 
 __all__ = [
     "PromptManifest",
     "PromptVersion",
+    "prompt_version_sha",
 ]
 
 
+def prompt_version_sha(content: str) -> str:
+    """Content-addressed digest of a prompt version — the single source of the sha.
+
+    R-PM-1 cascade PR #1 (runtime injection). The active prompt's
+    ``version_sha`` MUST be derived from its ``content`` so the C-IS-05 §5.2
+    procedural-tier content hash cannot report "unchanged" while injected
+    content changes (a silent provenance/replay-integrity gap). Empty content
+    maps to the empty-carrier sentinel ``""`` (no active prompt → no injection
+    → a stable empty value in the §5.2 recipe — the #496 behavior preserved
+    verbatim). Non-empty content maps to its hex SHA-256 digest.
+    """
+    if not content:
+        return ""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
 class PromptVersion(BaseModel):
-    """The active prompt version identity — the §5.2 third hash-component input.
+    """The active prompt version — identity (``version_sha``) + inline ``content``.
 
     Mirrors the per-Skill ``version_sha`` shape that feeds ``active_skills_versions``:
     a single content digest naming the active prompt version in scope at an
     entry's write-time. ``version_sha=""`` is the empty-carrier sentinel (no
     active prompt; the default-constructed manifest), contributing a stable
     empty value to the recipe.
+
+    R-PM-1 cascade PR #1 adds the minimal inline ``content`` carrier so a single
+    operator-supplied active prompt injects + proves e2e within PR #1 (the
+    self-contained content source; PR #2 generalizes this to the multi-version
+    ``PROMPTS``-path-class store). The ``content`` ↔ ``version_sha`` derive-
+    invariant (``version_sha == prompt_version_sha(content)``) is enforced at
+    construction (detect-then-refuse): the sha is not an independent operator-set
+    field. Use :meth:`from_content` for ergonomic authoring.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     version_sha: str
-    """Content digest of the active prompt version; ``""`` = no active prompt."""
+    """Content digest of the active prompt version; ``""`` = no active prompt.
+
+    MUST equal ``prompt_version_sha(content)`` (enforced at construction)."""
+
+    content: str = ""
+    """Inline system-prompt content (R-PM-1 PR #1 minimal carrier). ``""`` = no
+    active prompt (the empty-carrier sentinel; forward-compatible with the
+    #496 identity-only construction ``PromptVersion(version_sha="")``)."""
+
+    @model_validator(mode="after")
+    def _enforce_content_sha_invariant(self) -> PromptVersion:
+        """Detect-then-refuse the ``version_sha == digest(content)`` derive-invariant."""
+        expected = prompt_version_sha(self.content)
+        if self.version_sha != expected:
+            raise ValueError(
+                "PromptVersion.version_sha must equal prompt_version_sha(content) "
+                f"(got version_sha={self.version_sha!r}, "
+                f"expected {expected!r} for the supplied content)"
+            )
+        return self
+
+    @classmethod
+    def from_content(cls, content: str) -> PromptVersion:
+        """Construct from content alone, deriving ``version_sha`` (authoring helper)."""
+        return cls(version_sha=prompt_version_sha(content), content=content)
 
 
 class PromptManifest(BaseModel):

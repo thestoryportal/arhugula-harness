@@ -34,7 +34,7 @@ from harness_cp.cross_family_fallback_chain import (
 from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_cp.topology_pattern import TopologyPattern
 from harness_is.path_class_registry import PathClass
-from harness_is.prompt_manifest import PromptManifest, PromptVersion
+from harness_is.prompt_manifest import PromptManifest, PromptVersion, prompt_version_sha
 from harness_is.state_ledger_write import read_ledger
 from harness_runtime.bootstrap import (
     BootstrapFailure,
@@ -238,13 +238,18 @@ async def test_bootstrap_threads_operator_supplied_prompt_manifest_into_snapshot
         update={
             "prompt_manifest": PromptManifest(
                 manifest_version=1,
-                active_prompt_version=PromptVersion(version_sha="prompt-v-operator"),
+                # R-PM-1 PR #1 — content-bearing carrier; version_sha derives
+                # from content (the derive-invariant).
+                active_prompt_version=PromptVersion.from_content("operator system prompt"),
             ),
         },
     )
     ctx_populated = await run_bootstrap(populated, workload_class=_WORKLOAD)
     # Stage-0 copy landed the operator-supplied carrier on the frozen ctx.
-    assert ctx_populated.prompt_manifest.active_prompt_version.version_sha == "prompt-v-operator"
+    assert ctx_populated.prompt_manifest.active_prompt_version.content == "operator system prompt"
+    assert ctx_populated.prompt_manifest.active_prompt_version.version_sha == prompt_version_sha(
+        "operator system prompt"
+    )
 
     # The snapshot through the production path reflects it: a default
     # (empty) prompt_manifest yields a different snapshot ref.
@@ -253,6 +258,44 @@ async def test_bootstrap_threads_operator_supplied_prompt_manifest_into_snapshot
     assert resolve_procedural_tier_snapshot(ctx_populated) != resolve_procedural_tier_snapshot(
         ctx_empty,
     )
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_resolves_active_prompt_content_onto_llm_dispatcher(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-PM-1 cascade PR #1 — bootstrap reachability (proof (b)): the active
+    prompt's CONTENT resolves through the real stage-5 wiring onto the bare
+    `RuntimeLLMDispatcher.active_system_prompt`. This is the exact seam #496
+    left inert (a content-bearing carrier that never reached the dispatch path);
+    asserting the bare dispatcher's field — not just the snapshot — proves the
+    `stage_5_loop_init` resolution line, not only the factory pass-through."""
+    from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
+
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    populated = _config(tmp_path).model_copy(
+        update={
+            "prompt_manifest": PromptManifest(
+                manifest_version=1,
+                active_prompt_version=PromptVersion.from_content("operator system prompt"),
+            ),
+        },
+    )
+    ctx = await run_bootstrap(populated, workload_class=_WORKLOAD)
+
+    # Wrap chain: ctx.llm_dispatcher (C-RT-16 retry) → .inner (PRE_ACTION HITL
+    # composer) → .inner (bare C-RT-15 RuntimeLLMDispatcher).
+    bare = ctx.llm_dispatcher.inner.inner  # type: ignore[attr-defined]
+    assert isinstance(bare, RuntimeLLMDispatcher)
+    assert bare.active_system_prompt == "operator system prompt"
+
+    # No active prompt → None (the no-injection default; byte-identical dispatch).
+    ctx_empty = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
+    bare_empty = ctx_empty.llm_dispatcher.inner.inner  # type: ignore[attr-defined]
+    assert bare_empty.active_system_prompt is None
 
 
 @pytest.mark.asyncio
