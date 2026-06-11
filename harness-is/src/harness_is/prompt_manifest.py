@@ -132,7 +132,15 @@ class PromptVersion(BaseModel):
 
     @model_validator(mode="after")
     def _enforce_content_sha_invariant(self) -> PromptVersion:
-        """Detect-then-refuse a mismatched explicit ``version_sha``."""
+        """Detect-then-refuse a mismatched explicit ``version_sha``.
+
+        Construction-time only — Pydantic does not re-run ``mode="after"`` on
+        ``model_copy(update=...)``, so a caller that ``model_copy``s a
+        ``PromptVersion`` to mutate ``content`` would bypass the invariant. No
+        current caller does this (the carrier is frozen + empty-defaultable, and
+        configs copy the *config*, not the carrier); the PR #2 versioning store
+        is where any mutation path would be introduced and must re-derive.
+        """
         expected = prompt_version_sha(self.content)
         if self.version_sha != expected:
             raise ValueError(
