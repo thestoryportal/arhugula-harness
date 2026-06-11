@@ -7,13 +7,14 @@ and completes. Proves the chain BY EXECUTION:
     host.start() → list_tools → converter → registry → trust → resolver →
     floor → call_tool → result.
 
-**This test is skipif-gated and live-green is the operator's run.** Gap D: the
-bootstrap constructs + pings ≥1 provider regardless of step kind, so the e2e
-needs a live provider. It accepts a live ollama daemon (local, zero-token) OR
-`ANTHROPIC_API_KEY` (the Anthropic ping is `models.list()` — non-inference,
-zero-token). Neither exists in CI → the test skips. The harness does NOT fire a
-paid call autonomously; AC #2 is NOT marked closed until this goes green on an
-operator's live run.
+**Provider-free + unconditional (runtime spec v1.47 §2.1 — R-CC-1 arc #4).**
+Gap D (the bootstrap pinged ≥1 provider regardless of step kind, so this e2e was
+`skipif`-gated on a live provider it never used) is CLOSED. This workflow is
+tool-only (a single `TOOL_STEP`, no inference), so the `run()` predicate derives
+`requires_inference == False` and the bootstrap requires NO provider: the config
+marks all providers optional, stage 3a tolerates an empty `ctx.providers`, and
+stage 5 omits the `INFERENCE_STEP` / `SUB_AGENT_DISPATCH` registry rows. The test
+runs in CI with no live provider + no paid call.
 
 Tier-floor consistency (spec v1.41 §14.9.8): the echo server declares both
 `default_minimum_tier` (the v1.40 converter stamp) AND `default_sandbox_tier`
@@ -23,10 +24,7 @@ Tier-floor consistency (spec v1.41 §14.9.8): the echo server declares both
 
 from __future__ import annotations
 
-import os
 import sys
-import urllib.error
-import urllib.request
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -34,28 +32,6 @@ from typing import Any
 import pytest
 
 _ECHO_FIXTURE = (Path(__file__).parent / "fixtures" / "mcp_echo_server.py").resolve()
-
-
-def _ollama_up() -> bool:
-    try:
-        with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=1.0):
-            return True
-    except (urllib.error.URLError, OSError):
-        return False
-
-
-def _anthropic() -> bool:
-    return bool(os.environ.get("ANTHROPIC_API_KEY"))
-
-
-pytestmark = pytest.mark.skipif(
-    not (_anthropic() or _ollama_up()),
-    reason=(
-        "AC #2 TOOL_STEP-via-api.run e2e needs a live provider for bootstrap "
-        "(Gap D): a running ollama daemon OR ANTHROPIC_API_KEY. live-green is "
-        "the operator's run."
-    ),
-)
 
 
 def _read_ledger(state_ledger_root: Path) -> list[dict[str, Any]]:
@@ -126,43 +102,28 @@ async def test_r100_ac2_tool_step_via_api_run(
         ),
     )
 
-    # --- provider config (Gap D): prefer anthropic when keyed, else ollama. ---
-    if _anthropic():
-        api_key = os.environ["ANTHROPIC_API_KEY"]
-
-        def _fake_get_password(service: str, name: str) -> str | None:
-            _ = service
-            return api_key if name == "anthropic_key" else None
-
-        monkeypatch.setattr(
-            "harness_runtime.config.provider_secrets.keyring.get_password",
-            _fake_get_password,
-        )
-        chain = FallbackChain(
-            primary=ProviderCandidate(
-                provider="anthropic", model="claude-haiku-4-5", family=ProviderFamily.ANTHROPIC
-            ),
-            same_family=(),
-            cross_family=(),
-            terminal=None,
-        )
-        binding = ModelBinding(provider="anthropic", model="claude-haiku-4-5")
-        provider_flags: dict[str, Any] = {"openai_optional": True, "ollama_optional": True}
-    else:
-        chain = FallbackChain(
-            primary=ProviderCandidate(
-                provider="ollama", model="llama3.2", family=ProviderFamily.LOCAL_OPEN_WEIGHT
-            ),
-            same_family=(),
-            cross_family=(),
-            terminal=None,
-        )
-        binding = ModelBinding(provider="ollama", model="llama3.2")
-        provider_flags = {
-            "anthropic_optional": True,
-            "openai_optional": True,
-            "ollama_host": "http://localhost:11434",
-        }
+    # --- provider-free config (runtime spec v1.47 §2.1). The workflow is
+    # tool-only (no inference) → `requires_inference == False` → stage 3a SKIPS
+    # provider construction entirely (no keyring/network work, no per-provider
+    # failure can abort the bootstrap), yielding an empty `ctx.providers`; stage
+    # 5 omits the INFERENCE_STEP / SUB_AGENT_DISPATCH rows. The nominal ollama
+    # binding/chain + `*_optional` flags below only satisfy the config schema —
+    # none is read (the composer is never invoked). No live provider, no paid
+    # call, no credentials needed. ---
+    chain = FallbackChain(
+        primary=ProviderCandidate(
+            provider="ollama", model="llama3.2", family=ProviderFamily.LOCAL_OPEN_WEIGHT
+        ),
+        same_family=(),
+        cross_family=(),
+        terminal=None,
+    )
+    binding = ModelBinding(provider="ollama", model="llama3.2")
+    provider_flags: dict[str, Any] = {
+        "anthropic_optional": True,
+        "openai_optional": True,
+        "ollama_optional": True,
+    }
 
     # NoOp tracer (this AC asserts dispatch + ledger, not spans).
     class _FakeTracerProvider:

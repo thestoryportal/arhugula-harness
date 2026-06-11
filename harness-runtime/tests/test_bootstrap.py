@@ -1114,8 +1114,11 @@ async def test_api_run_passes_workload_class_into_bootstrap(
     """`run(workflow)` extracts `workflow.workload_class` and threads to bootstrap."""
     captured: dict[str, Any] = {}
 
-    async def _fake_bootstrap(config: Any, *, workload_class: Any) -> None:
+    async def _fake_bootstrap(
+        config: Any, *, workload_class: Any, requires_inference: bool = True
+    ) -> None:
         captured["workload_class"] = workload_class
+        captured["requires_inference"] = requires_inference
         return None
 
     monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _fake_bootstrap)
@@ -1143,8 +1146,12 @@ async def test_api_run_passes_workload_class_into_bootstrap(
     # we preserve that behavior by re-using the same captured dict).
     _original_fake_bootstrap = _fake_bootstrap
 
-    async def _wrapped_fake_bootstrap(config: Any, *, workload_class: Any) -> Any:
-        await _original_fake_bootstrap(config, workload_class=workload_class)
+    async def _wrapped_fake_bootstrap(
+        config: Any, *, workload_class: Any, requires_inference: bool = True
+    ) -> Any:
+        await _original_fake_bootstrap(
+            config, workload_class=workload_class, requires_inference=requires_inference
+        )
         return SimpleNamespace(
             mcp_server=SimpleNamespace(
                 server=object(),
@@ -1270,3 +1277,68 @@ async def test_orchestrator_stages_complete_in_canonical_order(
 
 
 _ = Awaitable, Callable  # silence unused-import; reserved for future helper types
+
+
+# ---------------------------------------------------------------------------
+# R-CC-1 arc #4 (runtime spec v1.47 §2.1) — inference-conditional provider
+# materialization at the full-bootstrap level.
+# ---------------------------------------------------------------------------
+
+
+def _patch_providers_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace stage-3a provider construction with a provider-free result
+    (empty `ctx.providers`), simulating a tool-only / non-inference bootstrap."""
+
+    async def _none(*_args: object, **_kwargs: object) -> ProviderClientsStage:
+        return ProviderClientsStage(providers={})
+
+    monkeypatch.setattr(
+        "harness_runtime.bootstrap.stage_3a_cp_clients.materialize_provider_clients_stage",
+        _none,
+    )
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_non_inference_omits_inference_dispatcher_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runtime spec v1.47 §2.1 — a non-inference (tool-only) bootstrap
+    (`requires_inference=False`) with NO providers OMITS the INFERENCE_STEP /
+    SUB_AGENT_DISPATCH step-dispatcher rows (fail-loud
+    `StepKindDispatcherNotBoundError` backstop) while TOOL_STEP stays bound.
+    `ctx.providers` is empty (provider-free bootstrap)."""
+    from harness_cp.workflow_driver_types import StepKind
+    from harness_runtime.lifecycle.step_dispatchers import StepKindDispatcherNotBoundError
+
+    # No provider patch — stage 3a SKIPS provider construction entirely for a
+    # non-inference workflow (v1.47 §2.1), so the real skip path is exercised
+    # (the default `_config` does not mark providers optional; the skip is what
+    # makes this succeed provider-free).
+    _patch_collector(monkeypatch)
+
+    ctx = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD, requires_inference=False)
+
+    assert ctx.providers == {}
+    # TOOL_STEP bound; INFERENCE_STEP + SUB_AGENT_DISPATCH omitted → lookup raises.
+    assert ctx.step_dispatchers.lookup(StepKind.TOOL_STEP) is not None
+    with pytest.raises(StepKindDispatcherNotBoundError):
+        ctx.step_dispatchers.lookup(StepKind.INFERENCE_STEP)
+    with pytest.raises(StepKindDispatcherNotBoundError):
+        ctx.step_dispatchers.lookup(StepKind.SUB_AGENT_DISPATCH)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_inference_with_no_providers_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C9 preservation (runtime spec v1.47 §2.1) — an inference-bearing
+    bootstrap (`requires_inference=True`) with NO providers FAILS; it never
+    silently proceeds provider-less. The contrasting baseline to the tool-only
+    provider-free success above."""
+    _patch_providers_empty(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    with pytest.raises(BootstrapFailure):
+        await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD, requires_inference=True)

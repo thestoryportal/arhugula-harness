@@ -1,4 +1,20 @@
-# Specification — Harness Runtime v1.46
+# Specification — Harness Runtime v1.47
+
+## Change-note (v1.46 → v1.47)
+
+**Status posture (PROPOSED 2026-06-12).** v1.47 makes the **bootstrap provider requirement conditional on the workflow being inference-bearing** — R-CC-1 capability-completion **arc #4** (`Project_Roadmap_v1.md` §5.17; inventory `.harness/capability-completion-inventory-v1.md` item #4 / B-10 / R-100 AC#2). Per `.harness/class_1_fork_api_run_unconditional_provider_ping_for_tool_only_workflows.md` (operator-ratified **Reading B** 2026-06-12). Closes the gap that a tool-only `api.run` workflow (no inference) cannot bootstrap provider-free: stage 3a constructs + pings ≥1 provider regardless of step kind (the ping is zero-token — Anthropic `models.list()` / Ollama `GET /api/tags` daemon check — but a reachable provider is still *required*), so the R-100 AC#2 tool-only e2e is `skipif`-gated on a live provider it never uses. The C9⊥C11 tension (fail-fast reliability ⊥ tool-only/local-first ergonomics) is **probe-resolved**: inference-need is *exactly* statically determinable from `workflow.steps` (only `INFERENCE_STEP` + `SUB_AGENT_DISPATCH` reach a provider; dispatch is statically keyed via the frozen `{StepKind → StepDispatcher}` registry; no TOOL→inference escalation), so conditioning the requirement on that predicate preserves C9 fail-fast fully (inference-bearing workflows still require ≥1 provider at bootstrap) while freeing C11 (tool-only workflows bootstrap provider-free). NEW **§2.1** authors the predicate + the inference-conditional provider/dispatcher materialization contract + the fail-loud backstop. v1.46 + earlier lineage PRESERVED VERBATIM per the delta-only-spec-file convention except the additive §2.1 + the two C-RT-02 post-condition qualifications enumerated below.
+
+**Source of fix.** Fork doc §2 (the static-determinability probe) + §5 (Reading B recommendation). The predicate `requires_inference = any(s.step_kind ∈ {INFERENCE_STEP, SUB_AGENT_DISPATCH} for s in workflow.steps)` is **exact** — it reads the same `workflow.steps` the driver dispatches via the frozen `{StepKind → StepDispatcher}` registry (CP `workflow_driver.py:921`), so it cannot under-count an inference need (no false negatives). The fail-loud backstop is **free**: when `requires_inference` is `False` the stage-5 LLM + sub-agent dispatcher registry rows stay unbound → an `INFERENCE_STEP`/`SUB_AGENT_DISPATCH` ever dispatched raises the existing `StepKindDispatcherNotBoundError` (unreachable by construction; a detect-then-refuse backstop, not a fail-fast regression).
+
+**Amendments.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§2 C-RT-02 stage-3a post-condition** | The "`ctx.providers` … each client passes an async ping" post-condition is QUALIFIED: it holds for inference-bearing workflows; for non-inference workflows stage 3a skips provider construction and `ctx.providers` is empty (no provider is constructed, pinged, or required). | Fork Reading B |
+| **§2 C-RT-02 stage-5 post-condition** | The LLM dispatcher (`ctx.llm_dispatcher`, C-RT-15) + sub-agent dispatcher (`ctx.sub_agent_dispatcher`, C-RT-17) bind only when `requires_inference`; for non-inference workflows those `StepKindDispatcherRegistry` rows stay unbound. | Fork Reading B |
+| **NEW §2.1** | Authors the `requires_inference` predicate (`run()`/`resume()`-derived, threaded into `run_bootstrap`), the inference-conditional stage-3a provider construction (skipped entirely when not `requires_inference`) + stage-5 binding, and the `StepKindDispatcherNotBoundError` fail-loud backstop. | Fork §5 |
+
+**Scope discipline.** v1.47 authors ONLY §2.1 (new) + the two C-RT-02 post-condition qualifications. C-RT-04 / C-RT-05 / C-RT-15 / C-RT-17 contract bodies, §14.x, and all prior lineage PRESERVED VERBATIM. The provider *ping* mechanism (C-RT-05) is unchanged — only *whether ≥1 is required* becomes conditional. Closure is demonstrated by a contrasting-baseline test (tool-only workflow + zero providers → bootstrap SUCCEEDS + the TOOL_STEP dispatches; inference workflow + zero providers → bootstrap RAISES `RT-FAIL-BOOTSTRAP`) plus the R-100 AC#2 e2e dropping its `skipif` on the tool-only path.
 
 ## Change-note (v1.45 → v1.46)
 
@@ -2002,16 +2018,46 @@ The orchestrator (`harness_runtime.bootstrap.__init__`) executes the 9 stages fr
 | 0 PREAMBLE | `ctx.config: RuntimeConfig` populated; sub-configs (path bindings, secrets, OTel, collector) materialized |
 | 1 IS | `ctx.path_resolver`, `ctx.worktree_manager`, `ctx.shadow_git`, `ctx.ledger_writer`, `ctx.index`, `ctx.cache` all non-None; ledger chain reattached and verified |
 | 2 AS | `ctx.skills`, `ctx.tool_contracts`, `ctx.mcp_host`, `ctx.mcp_clients`, `ctx.sandbox_dispatch` all non-None; MCP clients in READY state |
-| 3a CP_CLIENTS | `ctx.providers: dict[str, ProviderClient]` has entries for `anthropic`, `openai`, `ollama`; each client passes an async ping (see C-RT-05 for `ProviderClient` Protocol) |
+| 3a CP_CLIENTS | `ctx.providers: dict[str, ProviderClient]` has entries for `anthropic`, `openai`, `ollama`; each client passes an async ping (see C-RT-05 for `ProviderClient` Protocol). **(v1.47 §2.1)** This post-condition holds for inference-bearing workflows (`requires_inference`); for non-inference workflows stage 3a skips provider construction and `ctx.providers` is empty (no provider constructed, pinged, or required). |
 | 3b CP_ROUTING | `ctx.routing_manifest`, `ctx.engine_selector`, `ctx.fallback_chain`, `ctx.retry_breaker`, `ctx.hitl_registry`, `ctx.handoff_registry` all non-None |
 | 4 OD | `opentelemetry.trace.get_tracer_provider()` returns the runtime-registered provider; `ctx.collector_daemon` is running (health-check ok); `ctx.cost_chain`, `ctx.audit_writer` non-None |
-| 5 LOOP_INIT | `ctx.override_evaluator`, `ctx.topology_dispatcher`, `ctx.lifecycle_emitter` all non-None |
+| 5 LOOP_INIT | `ctx.override_evaluator`, `ctx.topology_dispatcher`, `ctx.lifecycle_emitter` all non-None. **(v1.47 §2.1)** `ctx.llm_dispatcher` (C-RT-15) + `ctx.sub_agent_dispatcher` (C-RT-17) bind only when `requires_inference`; for non-inference workflows those `StepKindDispatcherRegistry` rows stay unbound (fail-loud backstop per §2.1). |
 | 6 CXA_WIRING | All 5 terminal exporter manifests imported; all 24 phase-2-runtime edges wired (test fixture exercises each) |
 | 7 INGRESS_ACCEPT | `ctx` frozen; `harness_runtime.run` accepts a `WorkflowObject` and dispatches |
 
 **Failure-mode taxonomy.** Per the runtime-local fail-class set at C-RT-14. The orchestrator surfaces stage failures via `RT-FAIL-BOOTSTRAP` (permanent; cause-attribution identifies the specific stage) or `RT-FAIL-PARTIAL-ROLLBACK-REQUIRED` (stage N+1 fails after stage N completed; rollback executes reverse-order shutdown for stages 0..N). Stage-internal transient failures use `RT-FAIL-TRANSIENT` (bounded retry; persistent escalates to `RT-FAIL-BOOTSTRAP`).
 
 **Deferred to implementation discretion.** Retry intervals at stage-internal bounded retry (suggest 200ms × 2^attempt); structured-error type hierarchy (suggest one exception class per stage with `BootstrapStage` field); concurrent stage execution within an axis (e.g., parallel client construction at stage 3a) is implementation-discretion as long as the post-conditions hold.
+
+### §2.1 C-RT-02 — Inference-conditional provider materialization (new at v1.47)
+
+**Contract surface.** Bootstrap-orchestration refinement (qualifies the §2 stage-3a + stage-5 post-conditions).
+
+**ADR commitment(s) honored.** ADR-F1 v1.2 §Decision (multi-LLM provider abstraction — provider *construction* stays per-provider SDK; this contract governs *whether a provider is required*, not how it is built; the multi-LLM commitment is untouched); ADR-F4 v1.1 §Consequences (c) (fail-closed — a provider genuinely required but unreachable still aborts bootstrap).
+
+**Fork-resolution provenance.** `.harness/class_1_fork_api_run_unconditional_provider_ping_for_tool_only_workflows.md` — **Reading B**, operator-ratified 2026-06-12.
+
+**Specification content.**
+
+The bootstrap provider requirement is conditional on the workflow being **inference-bearing**.
+
+1. **The predicate.** A workflow is inference-bearing iff it contains a step whose `StepKind` reaches an LLM provider:
+
+   `requires_inference := any(step.step_kind in {StepKind.INFERENCE_STEP, StepKind.SUB_AGENT_DISPATCH} for step in workflow.steps)`
+
+   `INFERENCE_STEP` dispatches via `ctx.llm_dispatcher` (C-RT-15); `SUB_AGENT_DISPATCH` via `ctx.sub_agent_dispatcher` (C-RT-17), itself constructed from `ctx.providers`. The other three step kinds (`DECLARATIVE_STEP`, `TOOL_STEP`, `HITL_STEP`) never reach a provider. The predicate is **exact**: it reads the same `workflow.steps` the driver dispatches through the frozen `{StepKind → StepDispatcher}` registry (CP `workflow_driver.py`), so it cannot under-count an inference need (no false negatives).
+
+2. **Derivation + threading.** `requires_inference` is derived by the Track-A entry points (`run()` per C-RT-08 §8 and `resume()` per C-RT-30 §30 — both hold the `WorkflowObject`) and threaded into `run_bootstrap` as a keyword argument alongside `workload_class`. The bootstrap orchestrator is otherwise workflow-agnostic; this is the one workflow-shape signal it consumes.
+
+3. **Inference-bearing (`requires_inference == True`) — behavior PRESERVED VERBATIM.** The §2 stage-3a post-condition holds unchanged: ≥1 provider client is constructed and passes an async ping, else the stage-3a composer (`materialize_provider_clients_stage`) raises `ProviderNoneConfiguredError` (→ `RT-FAIL-PROVIDER-NONE-CONFIGURED` / `RT-FAIL-BOOTSTRAP`, fail-closed per ADR-F4). Stage 5 binds `ctx.llm_dispatcher` + `ctx.sub_agent_dispatcher` and their `{StepKind → StepDispatcher}` registry rows.
+
+4. **Non-inference (`requires_inference == False`) — provider-free bootstrap.** Stage 3a **skips provider construction entirely** — `ctx.providers` is empty, and **no per-provider construction failure** (missing secret / unreachable / auth) can abort the bootstrap, regardless of the operator's `*_optional` flags (a tool-only workflow needs no provider, so none is constructed or pinged). Stage 5 binds a **fail-loud null-object sentinel as the LLM-dispatch core** (in place of the provider-backed `materialize_llm_dispatcher_stage` dispatcher, which is the only stage-5 surface that consumes `ctx.providers`); the HITL/retry wrappers around that core and the sub-agent dispatch chain are still materialized (cheap, provider-free) but the `{StepKind → StepDispatcher}` registry **omits the `INFERENCE_STEP` + `SUB_AGENT_DISPATCH` rows**, so neither is reachable. This keeps the non-optional C-RT-04 carrier fields (`ctx.llm_dispatcher`, `ctx.sub_agent_dispatcher`) + `_REQUIRED_FIELDS` invariant satisfied **without widening the cleared C-RT-04 field types** (a no-op-binding skip-mechanism per the §2 "deferred to implementation discretion" clause).
+
+5. **Fail-loud backstop.** Because those registry rows are omitted under (4), a dispatch of `INFERENCE_STEP`/`SUB_AGENT_DISPATCH` in a workflow derived as non-inference raises the existing `StepKindDispatcherNotBoundError` (CP `workflow_driver.py`) → step-failure (the sentinel core's own raise is a deeper defensive backstop, never reached through the registry). This path is **unreachable by construction** (the predicate reads the dispatched steps); it is a detect-then-refuse backstop — never a silent in-process downgrade, never a fail-fast regression for genuine inference workflows (those take branch 3).
+
+**Invariant (C9 preservation).** Every workflow that *can* dispatch an inference/sub-agent step requires ≥1 reachable provider at bootstrap (branch 3); no workflow that *cannot* does (branch 4). By predicate exactness there is no workflow for which branch (4) is taken yet an inference step dispatches — so fail-fast reliability is preserved exactly where it is load-bearing.
+
+**Deferred to implementation discretion.** The keyword name for the threaded signal (`requires_inference` / `requires_provider`); the exact stage-5 skip mechanism (conditional factory call vs. a no-op sentinel binding). (The MVP skips provider construction entirely under branch (4); a future warm-cache / diagnostics path MAY construct a configured-and-reachable provider best-effort so long as it is never *required* and no construction failure aborts the bootstrap — out of scope here.)
 
 ---
 
