@@ -309,7 +309,7 @@ The X-AL-3 silent-absorption rule (§4.4) is the hard boundary: Phase 7 sessions
 
 | Surface | Committed state | Source |
 |---|---|---|
-| Persona | Solo developer | Phase 2 persona surfacing (workspace history) |
+| Persona | Bridging-arc — `solo-developer` (design-time default) → `team-binding` → `multi-tenant-compliance`; `PersonaTier` is first-class (tier-distinct HITL-gate / redaction / sampler posture, exercised at R-CL-P3) | `Persona_Document_v1.md` §1/§2.1 (bridging-arc); Phase 2 persona surfacing |
 | Stack | Python 3.12+ / Pydantic v2 / asyncio / uv / pyright strict / ruff / pytest | `Target_Stack_Commitment_v1.md` §5.1 (§3 of this doc) |
 | Deployment surfaces | 3-tier: local-development / self-hosted-server / managed-cloud | ADR-D2 v1.2; ADR-F4 v1.1 |
 | Multi-LLM | Anthropic + OpenAI + Ollama per-provider SDKs under capability-aware abstraction | ADR-F1 v1.2 |
