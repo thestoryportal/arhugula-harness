@@ -41,3 +41,12 @@ async def execute(
     ctx.pause_requested_flag = asyncio.Event()
     ctx.keyring_resolver = make_provider_secret_resolver(config.provider_secrets)
     ctx.actor = Actor(actor_class=ActorClass.AGENT, actor_id="harness-runtime")
+    # R-CL-P4 — operator-supplied prompts-management carrier (IS spec v1.5 §5.2
+    # third procedural-tier hash component). Ambient substrate copied from
+    # `RuntimeConfig.prompt_manifest` here at stage 0 (mirroring how
+    # `routing_manifest` flows config → ctx, but without a dedicated
+    # materialization stage — no enrichment is needed). Set before the first
+    # `resolve_procedural_tier_snapshot` call (stage 3b producer sites) so the
+    # snapshot reflects an operator-selected prompt version when one is supplied;
+    # defaults to the empty manifest otherwise.
+    ctx.prompt_manifest = config.prompt_manifest

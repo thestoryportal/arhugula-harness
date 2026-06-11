@@ -205,6 +205,12 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         # write to populate procedural_tier_snapshot_ref (IS spec v1.3 §5.1).
         # Typed `object | None` mirroring cp_is_wiring (no CP-axis import coupling).
         "procedural_tier_snapshot_resolver",
+        # R-CL-P4 (runtime spec v1.x §4 C-RT-04 NEW field row) — prompts-
+        # management carrier read by resolve_procedural_tier_snapshot as the
+        # third procedural-tier hash component (IS spec v1.5 §C-IS-05 §5.2;
+        # fork class_1_fork_prompts_management_surface_active_prompt_version.md).
+        # Empty-defaultable PromptManifest mirroring routing_manifest.
+        "prompt_manifest",
     }
     actual = set(HarnessContext.model_fields.keys())
     assert actual == expected, f"missing: {expected - actual}; extra: {actual - expected}"

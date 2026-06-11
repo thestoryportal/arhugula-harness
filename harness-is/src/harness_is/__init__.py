@@ -34,6 +34,7 @@ from harness_is.path_class_registry import (
     VisibilitySurface,
 )
 from harness_is.path_resolver import PathBindingMissingError, PathResolver
+from harness_is.prompt_manifest import PromptManifest, PromptVersion
 from harness_is.state_ledger_entry_schema import Identifier
 
 __all__ = [
@@ -55,6 +56,8 @@ __all__ = [
     "PathClass",
     "PathClassMetadata",
     "PathResolver",
+    "PromptManifest",
+    "PromptVersion",
     "ResidenceContract",
     "StabilityInvariant",
     "SubRolePosture",

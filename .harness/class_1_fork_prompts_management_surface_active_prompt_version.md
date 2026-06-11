@@ -2,7 +2,7 @@
 
 **Filed at:** Post-MVP closure Phase 0 scope-lock (2026-06-10), HEAD `37b7c80`
 **Locus:** `harness-runtime/src/harness_runtime/lifecycle/procedural_tier_snapshot.py:10-16` (2-component recipe; no `active_prompt_version` field / no `PromptManifest` carrier) vs `design-substrate/Spec_Information_Substrate_v1.md` v1.3 §5.2 "Prompts component deferred" footer (line ~349).
-**Status:** 🔵 OPEN — filed by closure-plan P0; routes to design-phase before P4 builds. Gates `R-CL-P4`.
+**Status:** ✅ APPLIED-AS-MINIMAL-BINDING (2026-06-11) — operator-ratified "Ratify — build minimal binding" (DP-1..DP-4 as recommended; mirror `RoutingManifest`). Bound at **IS spec v1.5 §5.2** (recipe widened 2→3-component) + **runtime spec v1.42 §4 C-RT-04** (`HarnessContext.prompt_manifest` field). Carriers at `harness_is.prompt_manifest`; resolver reads `ctx.prompt_manifest.active_prompt_version.version_sha`. Clearance markers `Spec_Information_Substrate-v1_5-cleared-2026-06-11.md` + `Spec_Harness_Runtime-v1_42-cleared-2026-06-11.md`. **R-CL-P4 UNBLOCKED** (this was the last open P4 blocker). The fuller prompts-management surface (multi-prompt versioning + selection) is a separate forward arc per DP-4.
 **Routing:** IS-axis design-phase — runtime-spec field authoring (`active_prompt_version: PromptVersion` on `HarnessContext`) + IS spec v1.x amendment adding the third hash component, per the three §5.2 preconditions. The spec itself frames this as **"a runtime-binding-extension arc, not a spec-extension-from-scratch arc"** (§5.2).
 **Precedent:** `[[grounding-reveals-claude-closeable-slice-close-honestly]]` (spec'd-but-unbuilt vs UNSPECIFIED-contract discriminator) · `[[halt-route-split-ac-pattern]]` · X-AL-3 (no silent design extension).
 
@@ -35,4 +35,6 @@ Author the minimal runtime-binding-extension arc: runtime-spec `active_prompt_ve
 
 ## Closeout posture
 
-Filed, not resolved. P4 (`R-CL-P4`) is **blocked** on this fork's ratification. No code/spec change lands in this filing arc (P0 is scope-lock only).
+~~Filed, not resolved. P4 (`R-CL-P4`) is **blocked** on this fork's ratification. No code/spec change lands in this filing arc (P0 is scope-lock only).~~
+
+**RESOLVED 2026-06-11 (APPLIED-AS-MINIMAL-BINDING).** Operator ratified the minimal-binding Recommendation (DP-1..DP-4; mirror `RoutingManifest`). The bundled-absorption arc landed: IS spec v1.4 → v1.5 (§5.2 recipe 2→3-component) + runtime spec v1.41 → v1.42 (§4 C-RT-04 `prompt_manifest` field) + impl (`harness_is.prompt_manifest` carriers; `HarnessContext.prompt_manifest`; 3-component resolver; `MutableHarnessContext` ambient carrier) + tests (participation: snapshot varies with `active_prompt_version`, holds otherwise) + 2 clearance markers + pointer cascade. **R-CL-P4 is now unblocked** (this was the last of its three sub-parts; OD buffer #490, keying-tuple #492 already closed). The fuller prompts-management surface (multi-prompt versioning + selection + a materialization stage) is a separate forward arc per DP-4.

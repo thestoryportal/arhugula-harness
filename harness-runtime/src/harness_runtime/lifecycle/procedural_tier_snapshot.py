@@ -7,17 +7,24 @@ contract). Plan-unit ownership at ``Implementation_Plan_Harness_Runtime_v2_42.md
 §11.4). Supersedes IS plan v2.4 U-IS-18 residence-deferred placeholder; IS plan
 v2.5 retires U-IS-18 (RELOCATED-TO-U-RT-112).
 
-The resolver implements the spec v1.3 §5.2 content-hash recipe over the two
-presently-bound procedural-tier components at HEAD (`active_skills_versions` +
-`routing_manifest_sha`). The third spec-named component (`active_prompt_version`)
-is deferred at v1.3 per spec §5.2 Deferral footer (no runtime binding at HEAD;
-``HarnessContext`` has no ``active_prompt_version`` field; no ``PromptManifest``
-carrier anywhere); recipe widens to 3-component at a future v1.x amendment when
-the runtime spec authors the prompts binding.
+The resolver implements the spec §5.2 content-hash recipe over the three
+procedural-tier components (`active_prompt_version` + `active_skills_versions`
++ `routing_manifest_sha`). The prompts component (`active_prompt_version`) was
+deferred at v1.3 per spec §5.2 Deferral footer and is bound at **v1.5**
+(post-MVP closure R-CL-P4; fork
+`.harness/class_1_fork_prompts_management_surface_active_prompt_version.md`,
+operator-ratified 2026-06-11): the runtime ``HarnessContext.prompt_manifest:
+PromptManifest`` carrier (``harness_is.prompt_manifest``) homes the active
+prompt version, mirroring the ``routing_manifest`` precedent (empty-defaultable
+operator-supplied frozen carrier read at write-time). Hash rebasing at v1.5 is
+expected per spec §5.2 (any recipe-component change yields different output over
+identical procedural state; snapshot-ref equality is scoped within a single
+recipe-version generation; forward-only — no migration of historical entries).
 
-Recipe (v1.3 — 2-component scope):
+Recipe (v1.5 — 3-component scope):
 
     sha256(canonical_json({
+        "active_prompt_version": ctx.prompt_manifest.active_prompt_version.version_sha,
         "active_skills_versions": sorted(
             set(skill.manifest.version_sha for skill in ctx.skills.values())
         ),
@@ -59,6 +66,7 @@ __all__ = [
 
 
 def _canonicalize_procedural_tier_payload(
+    active_prompt_version: str,
     active_skills_versions: list[str],
     routing_manifest_sha: str,
 ) -> bytes:
@@ -67,12 +75,14 @@ def _canonicalize_procedural_tier_payload(
     Internal helper exposed for testing per U-RT-112 AC #3 (alphabetical key
     ordering) + AC #4 (skills-versions list canonicalization).
 
-    The payload dict is built with the two presently-bound v1.3 components
-    ordered alphabetically by key; ``json.dumps`` is invoked with
-    ``sort_keys=True`` + ``separators=(",", ":")`` to produce a deterministic
-    canonical byte form independent of Python dict insertion order.
+    The payload dict is built with the three v1.5 components ordered
+    alphabetically by key (``active_prompt_version`` NEW at IS spec v1.5 §5.2);
+    ``json.dumps`` is invoked with ``sort_keys=True`` + ``separators=(",", ":")``
+    to produce a deterministic canonical byte form independent of Python dict
+    insertion order.
     """
     payload = {
+        "active_prompt_version": active_prompt_version,
         "active_skills_versions": active_skills_versions,
         "routing_manifest_sha": routing_manifest_sha,
     }
@@ -91,9 +101,17 @@ def resolve_procedural_tier_snapshot(
     ``harness_context`` mutation per AC #9.
 
     Returns a lowercase 64-character hex SHA-256 digest per AC #2 (content-hash
-    recipe byte-exact). Two-component scope at v1.3 per AC #11 (prompts
-    component deferred per spec §5.2 Deferral footer).
+    recipe byte-exact). Three-component scope at v1.5: the prompts component
+    (``active_prompt_version``) was deferred at v1.3 per spec §5.2 Deferral
+    footer and is bound at v1.5 (post-MVP closure R-CL-P4) — read from
+    ``harness_context.prompt_manifest.active_prompt_version.version_sha``.
     """
+    # 0. Extract the active prompt version (NEW v1.5 third component) from the
+    #    PromptManifest carrier on harness_context. Empty-defaultable
+    #    (`version_sha=""` when no active prompt); mirrors routing_manifest as
+    #    an operator-supplied frozen carrier read at write-time per spec §5.2.
+    active_prompt_version = harness_context.prompt_manifest.active_prompt_version.version_sha
+
     # 1. Extract active skills versions from harness_context.skills.
     #    Each Skill's version_sha lives at skill.manifest.version_sha per
     #    harness-runtime/lifecycle/skills.py:60 (NEW at U-RT-99 / v1.32).
@@ -124,6 +142,7 @@ def resolve_procedural_tier_snapshot(
     # 4 + 5. Build canonical payload + serialize via helper (alphabetical key
     #        ordering + sort_keys + compact separators per AC #2 + #3).
     canonical_bytes = _canonicalize_procedural_tier_payload(
+        active_prompt_version=active_prompt_version,
         active_skills_versions=active_skills_versions,
         routing_manifest_sha=routing_manifest_sha,
     )
