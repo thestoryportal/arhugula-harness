@@ -474,3 +474,349 @@ async def test_api_resume_step_index_out_of_range_fails_loud(tmp_path: Path) -> 
             pause_snapshot=_snapshot_for(_WORKFLOW_ID, step_index=5),
             config=config,
         )
+
+
+# ===========================================================================
+# Cascade step 2 — harness-owned durable JournalWorkflowPauseStore.
+# (R-CC-1 arc #3 cascade step 2; design §7b.)
+# ===========================================================================
+
+
+def _config_durable(tmp_path: Path) -> RuntimeConfig:
+    """`_config_opt_in` but with the DURABLE snapshot-store opt-in — the stage-5
+    factory wraps the CP protocol in `DurablePauseResumeProtocol`."""
+    return _config_opt_in(tmp_path).model_copy(
+        update={"pause_resume_protocol_config": PauseResumeProtocolConfig(durable=True)}
+    )
+
+
+# ---- Store unit tests (no bootstrap) --------------------------------------
+
+
+def test_durable_store_capture_read_round_trip(tmp_path: Path) -> None:
+    """`capture` then `read_latest` returns the same `PauseSnapshot`."""
+    from harness_runtime.lifecycle.journal_workflow_pause_store import (
+        JournalWorkflowPauseStore,
+    )
+
+    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj")
+    snap = _snapshot_for(_WORKFLOW_ID)
+    store.capture(snap)
+    assert store.read_latest(_WORKFLOW_ID) == snap
+
+
+def test_durable_store_latest_record_wins(tmp_path: Path) -> None:
+    """Two captures for one workflow → `read_latest` returns the LAST (a torn
+    or stale earlier append must never be resumed in place of the latest)."""
+    from harness_runtime.lifecycle.journal_workflow_pause_store import (
+        JournalWorkflowPauseStore,
+    )
+
+    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj")
+    first = _snapshot_for(_WORKFLOW_ID, step_index=0)
+    second = _snapshot_for(_WORKFLOW_ID, step_index=0).model_copy(
+        update={"run_id": "run-second", "created_at": 999}
+    )
+    store.capture(first)
+    store.capture(second)
+    latest = store.read_latest(_WORKFLOW_ID)
+    assert latest is not None
+    assert latest.run_id == "run-second"
+
+
+def test_durable_store_missing_workflow_returns_none(tmp_path: Path) -> None:
+    """No journal file for the workflow → `read_latest` returns `None`."""
+    from harness_runtime.lifecycle.journal_workflow_pause_store import (
+        JournalWorkflowPauseStore,
+    )
+
+    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj")
+    assert store.read_latest("never-captured") is None
+
+
+def test_durable_store_corrupt_latest_fails_closed(tmp_path: Path) -> None:
+    """A torn/garbage TRAILING line → `read_latest` fails closed (`None`) rather
+    than resuming an older snapshot or raising. (A crash mid-append leaves a torn
+    last line; only the latest record is consulted.)"""
+    import hashlib
+
+    from harness_runtime.lifecycle.journal_workflow_pause_store import (
+        JournalWorkflowPauseStore,
+    )
+
+    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj")
+    store.capture(_snapshot_for(_WORKFLOW_ID))
+    # Append a torn trailing line directly to the workflow's journal file.
+    digest = hashlib.sha256(_WORKFLOW_ID.encode("utf-8")).hexdigest()
+    journal_file = tmp_path / "pj" / f"{digest}.jsonl"
+    with journal_file.open("a", encoding="utf-8") as handle:
+        handle.write('{"workflow_id": "wf", "pause_snapshot": {INCOMPLE\n')
+    assert store.read_latest(_WORKFLOW_ID) is None
+
+
+def test_durable_store_recovers_from_torn_unterminated_append(tmp_path: Path) -> None:
+    """A crash mid-append can leave a partial trailing line with NO terminating
+    newline. The next `capture()` must NOT concatenate onto that fragment (which
+    would brick `read_latest` permanently). The store writes a leading newline so
+    the fragment becomes its own (ignored) line and the new record is the clean
+    latest line → resume self-heals. Codex-caught (round 3)."""
+    import hashlib
+
+    from harness_runtime.lifecycle.journal_workflow_pause_store import (
+        JournalWorkflowPauseStore,
+    )
+
+    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj")
+    store.capture(_snapshot_for(_WORKFLOW_ID))
+    # Simulate a crash mid-append: a partial record with NO trailing newline.
+    digest = hashlib.sha256(_WORKFLOW_ID.encode("utf-8")).hexdigest()
+    journal_file = tmp_path / "pj" / f"{digest}.jsonl"
+    with journal_file.open("a", encoding="utf-8") as handle:
+        handle.write('{"workflow_id": "wf", "pause_snapshot": {TORN-NO-NEWLINE')
+    # A valid capture after the torn append must be cleanly recoverable.
+    recovered = _snapshot_for(_WORKFLOW_ID).model_copy(update={"run_id": "run-after-torn"})
+    store.capture(recovered)
+    latest = store.read_latest(_WORKFLOW_ID)
+    assert latest is not None, "torn append must not brick future resumes"
+    assert latest.run_id == "run-after-torn"
+
+
+def test_durable_store_per_workflow_isolation(tmp_path: Path) -> None:
+    """Each workflow's pauses live in a dedicated file; a read for one workflow
+    never returns another's snapshot."""
+    from harness_runtime.lifecycle.journal_workflow_pause_store import (
+        JournalWorkflowPauseStore,
+    )
+
+    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj")
+    snap_a = _snapshot_for("wf-a")
+    snap_b = _snapshot_for("wf-b")
+    store.capture(snap_a)
+    store.capture(snap_b)
+    assert store.read_latest("wf-a") == snap_a
+    assert store.read_latest("wf-b") == snap_b
+
+
+# ---- Durable wrapper unit (capture persists + returns; read_latest delegates) ----
+
+
+@pytest.mark.asyncio
+async def test_durable_wrapper_persists_on_capture(tmp_path: Path) -> None:
+    """`DurablePauseResumeProtocol.capture_pause_snapshot` composes the snapshot
+    via the parent AND persists it to the store; a fresh store over the same dir
+    reads it back (durable across instances — the cross-restart guarantee)."""
+    from harness_runtime.lifecycle.durable_pause_resume_protocol import (
+        DurablePauseResumeProtocol,
+    )
+    from harness_runtime.lifecycle.journal_workflow_pause_store import (
+        JournalWorkflowPauseStore,
+    )
+
+    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj")
+    protocol = DurablePauseResumeProtocol(
+        state_ledger_writer=object(),
+        state_ledger_reader=object(),
+        pause_context_reader=lambda: (_minimal_state_summary(), "0" * 64),
+        store=store,
+    )
+
+    returned = await protocol.capture_pause_snapshot(
+        _WORKFLOW_ID, "run-x", 0, WorkflowPauseReason.EXPLICIT_OPERATOR
+    )
+    assert returned.workflow_id == _WORKFLOW_ID
+    assert returned.run_id == "run-x"
+    # A fresh store over the same dir reads it back (durable across instances —
+    # the same path api.resume uses post-restart, not the in-process protocol).
+    assert (
+        JournalWorkflowPauseStore(journal_dir=tmp_path / "pj").read_latest(_WORKFLOW_ID) == returned
+    )
+
+
+# ---- Restart-proof e2e via the harness-owned store (resume_handle) ----------
+
+
+@pytest.mark.asyncio
+async def test_api_resume_durable_handle_restart_proof(
+    tmp_path: Path,
+    _patched_runtime: None,
+) -> None:
+    """The harness-owned durability path: capture through a DURABLE-bootstrapped
+    protocol persists the snapshot to disk; a *fresh* bootstrap +
+    `api.resume(workflow, resume_handle=workflow_id)` reads it back from the
+    journal under the resolved STATE_LEDGER dir and drives the workflow to
+    SUCCESS — the caller never persisted the snapshot itself (crash-recovery)."""
+    from harness_runtime.lifecycle.journal_workflow_pause_store import (
+        JournalWorkflowPauseStore,
+        pause_journal_dir_for,
+    )
+
+    _ = _patched_runtime
+    config = _config_durable(tmp_path)
+
+    # ---- "Pause" — capture via the DURABLE protocol → persists to the journal.
+    capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
+    assert capture_ctx.pause_resume_protocol is not None
+    snapshot = await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
+        workflow_id=_WORKFLOW_ID,
+        run_id="run-durable-e2e",
+        step_index=0,
+        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+    )
+
+    # ---- The harness owns the durable copy (NOT the caller). A fresh store over
+    # the resolved STATE_LEDGER pause-journal dir reads it back across instances.
+    state_ledger_dir = tmp_path / PathClass.STATE_LEDGER.value.lower()
+    durable = JournalWorkflowPauseStore(
+        journal_dir=pause_journal_dir_for(state_ledger_dir)
+    ).read_latest(_WORKFLOW_ID)
+    assert durable == snapshot
+
+    # ---- "Resume" by HANDLE — fresh bootstrap reads the snapshot itself.
+    result = await resume(_Workflow(), resume_handle=_WORKFLOW_ID, config=config)
+
+    assert isinstance(result, RunResult)
+    assert result.status == "completed", (
+        f"expected completed resume, got {result.status}; failure_cause={result.failure_cause}"
+    )
+    assert result.workflow_id == _WORKFLOW_ID
+    assert result.pause_snapshot is None
+
+
+@pytest.mark.asyncio
+async def test_api_resume_durable_handle_skips_completed_prefix(
+    tmp_path: Path,
+    _patched_runtime: None,
+) -> None:
+    """Position-only resume through the durable handle SKIPS the completed prefix.
+
+    A 2-step workflow durably paused at `step_index=1` resumes via `resume_handle`
+    and dispatches ONLY step-1 — step-0 (the completed prefix) is NOT re-executed,
+    so its side effects do not re-fire. This proves the core resume guarantee
+    (continue from step k without re-running 0..k-1) end-to-end, which a 1-step
+    pause-at-0 e2e cannot distinguish from a fresh run."""
+    _ = _patched_runtime
+    config = _config_durable(tmp_path)
+
+    dispatched: list[str] = []
+
+    class _RecordingDispatcher:
+        def dispatch(
+            self, binding: Any, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            _ = binding, step_context
+            dispatched.append(str(step.step_id))
+            return {"step_id": str(step.step_id), "ok": True}
+
+    class _TwoStepWorkflow(_Workflow):
+        @property
+        def steps(self) -> Sequence[WorkflowStep]:
+            return (
+                WorkflowStep(
+                    step_id=StepID("step-0"),
+                    step_kind=StepKind.INFERENCE_STEP,
+                    step_payload={"index": 0},
+                ),
+                WorkflowStep(
+                    step_id=StepID("step-1"),
+                    step_kind=StepKind.INFERENCE_STEP,
+                    step_payload={"index": 1},
+                ),
+            )
+
+        @property
+        def step_dispatchers(self) -> Any:
+            return _single_kind_registry(_RecordingDispatcher())
+
+    workflow = _TwoStepWorkflow()
+
+    # ---- "Pause" at step_index=1 — capture via the DURABLE protocol → journaled.
+    capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
+    assert capture_ctx.pause_resume_protocol is not None
+    await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
+        workflow_id=_WORKFLOW_ID,
+        run_id="run-prefix-skip",
+        step_index=1,
+        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+    )
+
+    # ---- "Resume" by HANDLE — fresh bootstrap; only step-1 runs.
+    result = await resume(workflow, resume_handle=_WORKFLOW_ID, config=config)
+
+    assert result.status == "completed", (
+        f"expected completed, got {result.status}; failure_cause={result.failure_cause}"
+    )
+    # The completed prefix (step-0) is NOT re-dispatched; only step-1 runs.
+    assert dispatched == ["step-1"], (
+        f"resume must skip the completed prefix (step-0); dispatched={dispatched}"
+    )
+
+
+# ---- api.resume arg guards (detect-then-refuse) -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_api_resume_both_sources_fails_loud(tmp_path: Path) -> None:
+    """Supplying BOTH `pause_snapshot` and `resume_handle` → `ResumeArgsError`
+    (ambiguous source) pre-bootstrap."""
+    from harness_runtime.api import ResumeArgsError
+
+    config = _config_durable(tmp_path)
+    with pytest.raises(ResumeArgsError):
+        await resume(
+            _Workflow(),
+            pause_snapshot=_snapshot_for(_WORKFLOW_ID),
+            resume_handle=_WORKFLOW_ID,
+            config=config,
+        )
+
+
+@pytest.mark.asyncio
+async def test_api_resume_neither_source_fails_loud(tmp_path: Path) -> None:
+    """Supplying NEITHER source → `ResumeArgsError` (nothing to resume)."""
+    from harness_runtime.api import ResumeArgsError
+
+    config = _config_durable(tmp_path)
+    with pytest.raises(ResumeArgsError):
+        await resume(_Workflow(), config=config)
+
+
+@pytest.mark.asyncio
+async def test_api_resume_handle_without_durable_fails_loud(tmp_path: Path) -> None:
+    """`resume_handle` without the durable opt-in → `ResumeArgsError`: there is
+    no harness-owned store to read from."""
+    from harness_runtime.api import ResumeArgsError
+
+    config = _config_opt_in(tmp_path)  # opted into pause/resume, but durable=False
+    with pytest.raises(ResumeArgsError):
+        await resume(_Workflow(), resume_handle=_WORKFLOW_ID, config=config)
+
+
+@pytest.mark.asyncio
+async def test_api_resume_unknown_handle_fails_loud(tmp_path: Path) -> None:
+    """`resume_handle` for a workflow with no journaled pause → fail fast
+    (`ResumeHandleUnknownError`) pre-bootstrap rather than silently re-run from
+    step 0. No capture happened, so the store read returns `None`."""
+    from harness_runtime.api import ResumeHandleUnknownError
+
+    config = _config_durable(tmp_path)
+    with pytest.raises(ResumeHandleUnknownError):
+        await resume(_Workflow(), resume_handle="never-paused", config=config)
+
+
+@pytest.mark.asyncio
+async def test_api_resume_handle_concurrency_guard_precedes_store_read(
+    tmp_path: Path,
+) -> None:
+    """With a `run()`/`resume()` in flight (the run lock held), a `resume_handle`
+    call surfaces `ConcurrentRunNotSupported` — NOT a spurious
+    `ResumeHandleUnknownError` from reading the shared journal mid-flight. The
+    concurrency guard must precede the durable-store read. Codex-caught ordering
+    (round 4): here NO snapshot is journaled, so without the guard-first ordering
+    the store read would return `None` → `ResumeHandleUnknownError`; the held lock
+    must win instead."""
+    from harness_runtime.api import ConcurrentRunNotSupported, _run_lock
+
+    config = _config_durable(tmp_path)
+    async with _run_lock:  # simulate an in-flight run/resume holding the lock
+        with pytest.raises(ConcurrentRunNotSupported):
+            await resume(_Workflow(), resume_handle="never-paused", config=config)

@@ -36,6 +36,13 @@ from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol import PauseContextReader, PauseResumeProtocol
 from harness_is.state_ledger_entry_schema import Identifier
 
+from harness_runtime.lifecycle.durable_pause_resume_protocol import (
+    DurablePauseResumeProtocol,
+)
+from harness_runtime.lifecycle.journal_workflow_pause_store import (
+    JournalWorkflowPauseStore,
+    pause_journal_dir_for,
+)
 from harness_runtime.types import RuntimeConfig
 
 if TYPE_CHECKING:
@@ -107,7 +114,7 @@ async def materialize_pause_resume_protocol_stage(
     ctx: _MutableHarnessContext,
     *,
     pause_context_reader: Callable[[], tuple[StateSummary, str]] | None = None,
-) -> PauseResumeProtocol | None:
+) -> PauseResumeProtocol | DurablePauseResumeProtocol | None:
     """Construct the stage-5 `PauseResumeProtocol` instance from operator-supplied
     config, or return `None` when the operator has not opted in.
 
@@ -140,7 +147,12 @@ async def materialize_pause_resume_protocol_stage(
         Non-`None` when the operator has supplied a `PauseResumeProtocolConfig`
         instance — Reading A scope returns the CP-canonical
         `PauseResumeProtocol` class bound to `ctx.ledger_writer` +
-        `ctx.ledger_reader` + the composed `pause_context_reader`.
+        `ctx.ledger_reader` + the composed `pause_context_reader`. When
+        `config.pause_resume_protocol_config.durable` is `True` (runtime spec
+        v1.46, R-CC-1 arc #3 cascade step 2), that protocol is wrapped in a
+        `DurablePauseResumeProtocol` backed by a `JournalWorkflowPauseStore`
+        co-located under the resolved `STATE_LEDGER` directory, so captured
+        snapshots survive a process restart for `api.resume(resume_handle=...)`.
 
     Raises
     ------
@@ -175,6 +187,24 @@ async def materialize_pause_resume_protocol_stage(
         if pause_context_reader is not None
         else _make_default_pause_context_reader(ctx)
     )
+
+    # Durable opt-in (runtime spec v1.46 §14.14, R-CC-1 arc #3 cascade step 2):
+    # return the DURABLE subclass so captured snapshots persist to a harness-owned
+    # journal co-located under the resolved STATE_LEDGER dir (design §7b D2-bis
+    # — `<state_ledger_dir>/pause-journal`). The STATE_LEDGER directory is
+    # `ctx.ledger_writer.handle.canonical_path.parent` (the parent of the resolved
+    # `state.jsonl` file). `DurablePauseResumeProtocol` IS-A `PauseResumeProtocol`,
+    # so the frozen HarnessContext + the driver consume it unchanged. Non-durable
+    # opt-in returns the bare CP protocol (v1.21 behavior preserved).
+    if config.pause_resume_protocol_config.durable:
+        state_ledger_dir = ctx.ledger_writer.handle.canonical_path.parent
+        store = JournalWorkflowPauseStore(journal_dir=pause_journal_dir_for(state_ledger_dir))
+        return DurablePauseResumeProtocol(
+            state_ledger_writer=ctx.ledger_writer,
+            state_ledger_reader=ctx.ledger_reader,
+            pause_context_reader=reader,
+            store=store,
+        )
 
     # Construct the CP-canonical PauseResumeProtocol per spec §14.14.5
     # invariant 3 (CP-canonical class satisfaction).
