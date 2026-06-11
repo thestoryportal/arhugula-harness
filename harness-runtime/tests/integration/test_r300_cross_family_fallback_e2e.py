@@ -838,3 +838,91 @@ async def test_r_pm_1_active_prompt_injection_honored_by_live_ollama(
         f"expected the injected system prompt to be honored (sentinel "
         f"{sentinel!r} in output); terminal_state={result.terminal_state!r}"
     )
+
+
+@pytest.mark.skipif(
+    not _ollama_reachable(),
+    reason="live ollama prompt-selection exercise requires a local ollama daemon on 127.0.0.1:11434",
+)
+@pytest.mark.asyncio
+async def test_r_pm_1_workload_selection_drives_live_ollama_injection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-PM-1 cascade PR #3 — LIVE selection→injection proof: a CP
+    ``per_workload_overrides`` binding SELECTS which authored prompt version's
+    content is injected, and a real Ollama model honors it through the full
+    production path (``api.run`` → stage-0 selection reconciliation → stage-5
+    ``active_system_prompt`` → ``_payload_to_ollama_kwargs`` leading
+    ``role:"system"`` → real ``ollama.chat``).
+
+    The store is authored with ``active=None`` (so NOTHING injects WITHOUT
+    selection) plus two versions — a decoy and the sentinel prompt. The selection
+    manifest's ``per_workload_overrides[SOFTWARE_ENGINEERING]`` (the genuine run
+    workload) → the sentinel version's sha drives it active. The sentinel
+    (present ONLY in the SELECTED system prompt — never the user message nor the
+    decoy) appearing in the output is positive evidence the SELECTION-chosen
+    prompt was injected + honored. This proves the full
+    selection→sha→content→injection chain live (PR #3) — not merely the injection
+    leg (PR #1's live proof). Free (zero-secret, local llama3.2:3b).
+    """
+    from harness_core.workload_class import WorkloadClass
+    from harness_cp.prompt_selection_manifest import PromptBinding, PromptSelectionManifest
+    from harness_is.prompt_manifest import PromptManifest, prompt_version_sha
+    from harness_runtime.api import run as _run
+
+    _install_fake_od_stage4(monkeypatch)
+
+    sentinel = "ELDERBERRY-PM3-OK"
+    selected_prompt = (
+        "You are a deterministic test fixture. Ignore the content of the user "
+        f"message. Reply with exactly this text and nothing else: {sentinel}"
+    )
+    decoy_prompt = "You are an unrelated decoy fixture. Never mention any fruit."
+
+    # Authored store with NO active selection — without the CP selection layer,
+    # nothing would inject (active_prompt_version.content == "").
+    store = PromptManifest.from_contents(
+        manifest_version=1,
+        contents=[decoy_prompt, selected_prompt],
+        active=None,
+    )
+    # Selection keyed on the REAL run workload (SOFTWARE_ENGINEERING) → the
+    # sentinel version. This is the PR #3 surface driving the active prompt.
+    selection = PromptSelectionManifest(
+        manifest_version=1,
+        per_workload_overrides={
+            WorkloadClass.SOFTWARE_ENGINEERING: PromptBinding(
+                version_sha=prompt_version_sha(selected_prompt)
+            ),
+        },
+    )
+
+    chain = _build_valid_ollama_chain()
+    config = _build_config(
+        tmp_path,
+        chain,
+        anthropic_optional=True,
+        openai_optional=True,
+        ollama_optional=False,
+    ).model_copy(
+        update={"prompt_manifest": store, "prompt_selection_manifest": selection},
+    )
+    monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
+
+    result = await _run(
+        _make_workflow(chain, params={"options": {"num_predict": 32}}), config=config
+    )
+
+    assert isinstance(result, RunResult), f"got {type(result).__name__}"
+    assert result.status == "completed", (
+        f"selection-driven active prompt must not break the real ollama dispatch; got "
+        f"status={result.status!r} failure_cause={getattr(result, 'failure_cause', None)!r}"
+    )
+    # The honoring proof: the sentinel (present ONLY in the SELECTED system
+    # prompt, never the user message nor the decoy) appears in the model output.
+    haystack = str(result.terminal_state).upper()
+    assert sentinel.split("-")[0] in haystack, (
+        f"expected the SELECTION-driven system prompt to be honored by live ollama "
+        f"(sentinel {sentinel!r} in output); terminal_state={result.terminal_state!r}"
+    )
