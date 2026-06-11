@@ -71,6 +71,7 @@ __all__ = [
     "RuntimeToolDispatcher",
     "SandboxDecisionResolver",
     "SandboxDispatchDecision",
+    "SandboxDriverUnavailableError",
     "SandboxTierFloorViolationError",
     "ToolContractUnknownError",
     "ToolExecutionDriver",
@@ -222,6 +223,18 @@ class SandboxTierFloorViolationError(RuntimeError):
 
     Raised when the resolved `SandboxDispatchDecision.tier` is below the
     `ToolContract.minimum_tier`. Permanent (policy breach).
+    """
+
+
+class SandboxDriverUnavailableError(RuntimeError):
+    """`RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE` typed carrier per spec §14.9.9 (FR-2(i)).
+
+    Raised at the stage-5 factory when the resolved per-server sandbox tier is
+    `> TIER_1_PROCESS` but no execution driver is configured/registrable for it
+    (`MCPClientConfig.sandbox_driver` absent, or missing a field the tier's driver
+    requires). Permanent — bootstrap aborts. The factory MUST NOT fall through to
+    the in-process `MCPHostToolExecutionDriver` (the silent-in-process defect this
+    closes); a claimed isolation tier that cannot be delivered fails loud.
     """
 
 

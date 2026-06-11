@@ -318,3 +318,92 @@ async def test_empty_server_set_leaves_resolver_and_info_lookup_default() -> Non
         wrapper.inner._sandbox_resolver(contract, step)  # type: ignore[attr-defined]
     with pytest.raises(LookupError):
         builder.mcp_namespace_emitter._info_lookup("nope")  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# v1.43 §14.9.9 — tier→driver selection wired through the real materialize path.
+# ---------------------------------------------------------------------------
+
+
+def _bare_server_config(
+    surface: DeploymentSurface, *, sandbox_driver: object = None
+) -> RuntimeConfig:
+    """A configured-server RuntimeConfig that leaves the per-server sandbox tier
+    UNSET (None) so the deployment-surface-aware default policy applies."""
+    from harness_as.discriminators import MCPTransport
+    from harness_as.sandbox_tier import BlastRadiusTier
+    from harness_as.sandbox_tier_floor import MCPServerTrustLevel
+    from harness_core import ClientName
+    from harness_runtime.types import MCPClientConfig
+
+    return RuntimeConfig(
+        deployment_surface=surface,
+        repository_root=Path("/tmp"),
+        path_bindings=PathBindingConfig(),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+        collector=CollectorConfig(),
+        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        mcp_clients=[
+            MCPClientConfig(
+                client_name=ClientName("echo-server"),
+                transport=MCPTransport.STDIO,
+                trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
+                blast_radius=BlastRadiusTier.READ_ONLY,
+                connection_url="stdio:///bin/echo",
+                sandbox_driver=sandbox_driver,  # type: ignore[arg-type]
+            )
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_bare_local_dev_server_wires_in_process_driver() -> None:
+    """v1.43 §14.9.9 — a bare local-development server resolves to honest
+    TIER_1_PROCESS and the real factory wires the in-process host driver
+    (no fail-loud, runs out-of-box)."""
+    from harness_runtime.lifecycle.runtime_tool_dispatcher import MCPHostToolExecutionDriver
+
+    cfg = _bare_server_config(DeploymentSurface.LOCAL_DEVELOPMENT)
+    builder = await _post_stage_3a_builder(cfg)
+    wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
+    assert isinstance(
+        wrapper.inner._tool_execution_driver,  # type: ignore[attr-defined]
+        MCPHostToolExecutionDriver,
+    )
+
+
+@pytest.mark.asyncio
+async def test_bare_managed_cloud_server_fails_loud_not_in_process() -> None:
+    """v1.43 §14.9.9 FR-2(i) — THE security fix, end-to-end through the real
+    bootstrap factory: a bare managed-cloud server resolves fail-safe-high
+    TIER_2_CONTAINER and, with no driver configured, the factory RAISES
+    `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE` rather than silently executing in-process."""
+    from harness_runtime.lifecycle.runtime_tool_dispatcher import SandboxDriverUnavailableError
+
+    cfg = _bare_server_config(DeploymentSurface.MANAGED_CLOUD)
+    builder = await _post_stage_3a_builder(cfg)
+    with pytest.raises(SandboxDriverUnavailableError):
+        await materialize_runtime_tool_dispatcher_stage(builder, cfg)
+
+
+@pytest.mark.asyncio
+async def test_managed_cloud_server_with_container_driver_wires_docker() -> None:
+    """v1.43 §14.9.9 FR-1 — a managed-cloud server with a configured container
+    driver wires the Docker driver through the real factory (delivers the
+    fail-safe-high TIER_2_CONTAINER it claims)."""
+    from harness_runtime.lifecycle.docker_tool_execution_driver import (
+        DockerToolRunnerExecutionDriver,
+    )
+    from harness_runtime.types import SandboxDriverConfig
+
+    cfg = _bare_server_config(
+        DeploymentSurface.MANAGED_CLOUD,
+        sandbox_driver=SandboxDriverConfig(command=("python", "runner.py"), image="echo:latest"),
+    )
+    builder = await _post_stage_3a_builder(cfg)
+    wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
+    assert isinstance(
+        wrapper.inner._tool_execution_driver,  # type: ignore[attr-defined]
+        DockerToolRunnerExecutionDriver,
+    )

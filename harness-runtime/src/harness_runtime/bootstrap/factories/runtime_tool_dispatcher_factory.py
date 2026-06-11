@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from harness_as.sandbox_tier import SandboxTier
 from harness_as.tool_contract import ToolContract
 from harness_core import SandboxDecisionPolicy
 from harness_cp.cp_shared_types import MCPTrustTier
@@ -48,15 +49,29 @@ from harness_cp.per_server_trust_types import (
 from harness_cp.workflow_driver_types import WorkflowStep
 
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+from harness_runtime.config.sandbox_defaults import (
+    EffectiveSandboxDefaults,
+    resolve_effective_sandbox_defaults,
+)
 from harness_runtime.lifecycle.as_is_wiring import RuntimeAsIsWiring
+from harness_runtime.lifecycle.docker_tool_execution_driver import (
+    DockerToolRunnerExecutionDriver,
+    GVisorRunscToolRunnerExecutionDriver,
+)
+from harness_runtime.lifecycle.e2b_tool_execution_driver import (
+    E2BManagedFullVMToolRunnerExecutionDriver,
+)
 from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
 from harness_runtime.lifecycle.retry_breaker_tool import RetryBreakerToolDispatcher
 from harness_runtime.lifecycle.runtime_tool_dispatcher import (
+    MCPHostToolExecutionDriver,
     RuntimeToolDispatcher,
     SandboxDecisionResolver,
     SandboxDispatchDecision,
+    SandboxDriverUnavailableError,
+    ToolExecutionDriver,
 )
-from harness_runtime.types import MCPClientConfig, RuntimeConfig
+from harness_runtime.types import RuntimeConfig, SandboxDriverConfig
 
 __all__ = [
     "DEFAULT_TRUST_POLICY",
@@ -64,30 +79,90 @@ __all__ = [
 ]
 
 
-def _build_default_policy_sandbox_resolver(entry: MCPClientConfig) -> SandboxDecisionResolver:
-    """Build a Reading-B per-server default-policy `SandboxDecisionResolver`
-    (spec v1.41 §14.9.8, Gap C).
+def _build_default_policy_sandbox_resolver(
+    effective: EffectiveSandboxDefaults,
+) -> SandboxDecisionResolver:
+    """Build a per-server default-policy `SandboxDecisionResolver` (spec §14.9.8)
+    from the surface-aware reconciled defaults (spec v1.43 §14.9.9 + fork §7.1).
 
-    Returns the operator-declared per-server sandbox decision for EVERY
-    `(contract, step)` on this server (per-server-uniform per §14.9.8). The
-    resolved `tier` is compared against `contract.minimum_tier` at the §14.9.4
-    tier-floor check — so the operator must declare `default_sandbox_tier`
-    consistently with `default_minimum_tier`.
+    Returns the same decision for EVERY `(contract, step)` on this server
+    (per-server-uniform per §14.9.8). The resolved `tier` is compared against
+    `contract.minimum_tier` at the §14.9.4 tier-floor check; the helper keeps the
+    two coherent so a bare config never spuriously violates the floor.
     """
-    tier = entry.default_sandbox_tier
-    tech = entry.default_sandbox_tech
-    provider = entry.default_sandbox_provider
 
     def resolve(_contract: ToolContract, _step: WorkflowStep) -> SandboxDispatchDecision:
         return SandboxDispatchDecision(
-            tier=tier,
-            tech=tech,
-            provider=provider,
+            tier=effective.sandbox_tier,
+            tech=effective.sandbox_tech,
+            provider=effective.sandbox_provider,
             assigned_tier_reason="per-server-default-sandbox-policy",
             cost_tier_overhead_ms=0,
         )
 
     return resolve
+
+
+def _select_tool_execution_driver(
+    *, tier: SandboxTier, driver_config: SandboxDriverConfig | None
+) -> ToolExecutionDriver:
+    """Select the `ToolExecutionDriver` delivering `tier` — spec v1.43 §14.9.9 FR-1/FR-2.
+
+    `TIER_1_PROCESS` → the in-process host driver (no substrate; the
+    local-development out-of-box default). Higher tiers require a `sandbox_driver`
+    config; its absence — or a missing field the tier's driver requires — is
+    fail-loud `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE` (FR-2(i)). The factory NEVER
+    falls through to in-process for a `> TIER_1_PROCESS` claim (the silent-in-process
+    defect this closes); invariant: delivered-tier ≥ resolved-tier, no silent downgrade.
+    """
+    if tier is SandboxTier.TIER_1_PROCESS:
+        return MCPHostToolExecutionDriver()
+
+    if driver_config is None:
+        raise SandboxDriverUnavailableError(
+            f"resolved sandbox tier {tier.value!r} requires an execution driver but "
+            f"MCPClientConfig.sandbox_driver is not configured — configure a driver or set "
+            f"the per-server sandbox tier to TIER_1_PROCESS (runtime spec v1.43 §14.9.9 FR-2(i))"
+        )
+
+    if tier is SandboxTier.TIER_2_CONTAINER:
+        if driver_config.image is None:
+            raise SandboxDriverUnavailableError(
+                f"resolved tier {tier.value!r} (container) requires sandbox_driver.image"
+            )
+        return DockerToolRunnerExecutionDriver(
+            image=driver_config.image,
+            command=driver_config.command,
+            docker_binary=driver_config.docker_binary,
+            timeout_seconds=driver_config.timeout_seconds,
+            network=driver_config.network,
+        )
+
+    if tier is SandboxTier.TIER_3_MICROVM:
+        if driver_config.image is None:
+            raise SandboxDriverUnavailableError(
+                f"resolved tier {tier.value!r} (microVM/gVisor) requires sandbox_driver.image"
+            )
+        return GVisorRunscToolRunnerExecutionDriver(
+            image=driver_config.image,
+            command=driver_config.command,
+            docker_binary=driver_config.docker_binary,
+            timeout_seconds=driver_config.timeout_seconds,
+            network=driver_config.network,
+        )
+
+    if tier is SandboxTier.TIER_4_FULL_VM:
+        return E2BManagedFullVMToolRunnerExecutionDriver(
+            command=driver_config.command,
+            timeout_seconds=int(driver_config.timeout_seconds),
+            sandbox_timeout_seconds=driver_config.sandbox_timeout_seconds,
+            allow_internet_access=driver_config.allow_internet_access,
+        )
+
+    # Exhaustive over the closed 4-value SandboxTier enum — defensive only.
+    raise SandboxDriverUnavailableError(  # pragma: no cover
+        f"no execution driver registered for resolved tier {tier.value!r}"
+    )
 
 
 def _build_host_info_lookup(host: MCPClientHost) -> MCPServerInfoLookup:
@@ -180,14 +255,32 @@ async def materialize_runtime_tool_dispatcher_stage(
     mcp_namespace_emitter = MCPClientNamespaceEmitter(info_lookup=info_lookup)
     ctx.mcp_namespace_emitter = mcp_namespace_emitter
 
-    # --- Step 2b: per-server default-policy sandbox resolver (Gap C) ----------
-    # spec v1.41 §14.9.8 Reading B: build the resolver from the first server's
-    # operator-declared per-server sandbox policy. None when no server is
-    # configured (the bare dispatcher's default-raise resolver is unreachable
-    # at step 3 because step 1 raises first on the empty registry).
-    sandbox_decision_resolver: SandboxDecisionResolver | None = (
-        _build_default_policy_sandbox_resolver(config.mcp_clients[0])
+    # --- Step 2b: surface-aware sandbox defaults + resolver + driver (v1.43 §14.9.9) ---
+    # Resolve the per-server sandbox defaults through the deployment-surface-aware
+    # policy (Reading A+: local-development → honest TIER_1_PROCESS; production
+    # surfaces → fail-safe-high TIER_2_CONTAINER), build the per-server-uniform
+    # resolver from the reconciled tier/tech/provider (spec §14.9.8), and select the
+    # execution driver delivering that tier (FR-1) — fail-loud
+    # RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE if a > TIER_1_PROCESS tier has no driver
+    # configured (FR-2(i); never a silent in-process fall-through). None for both
+    # when no server is configured (the empty registry raises TOOL-CONTRACT-UNKNOWN
+    # at dispatch step 1 before either is reached).
+    effective_sandbox: EffectiveSandboxDefaults | None = (
+        resolve_effective_sandbox_defaults(config.mcp_clients[0], config.deployment_surface)
         if config.mcp_clients
+        else None
+    )
+    sandbox_decision_resolver: SandboxDecisionResolver | None = (
+        _build_default_policy_sandbox_resolver(effective_sandbox)
+        if effective_sandbox is not None
+        else None
+    )
+    tool_execution_driver: ToolExecutionDriver | None = (
+        _select_tool_execution_driver(
+            tier=effective_sandbox.sandbox_tier,
+            driver_config=config.mcp_clients[0].sandbox_driver,
+        )
+        if effective_sandbox is not None
         else None
     )
 
@@ -202,6 +295,7 @@ async def materialize_runtime_tool_dispatcher_stage(
         mcp_namespace_emitter=mcp_namespace_emitter,
         trust_policy=trust_policy,
         sandbox_decision_resolver=sandbox_decision_resolver,
+        tool_execution_driver=tool_execution_driver,
         tracer_provider=ctx.tracer_provider,
         cost_chain=ctx.cost_chain,
         audit_writer=ctx.audit_writer,

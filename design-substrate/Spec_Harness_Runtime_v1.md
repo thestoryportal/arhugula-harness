@@ -1,4 +1,18 @@
-# Specification — Harness Runtime v1.42
+# Specification — Harness Runtime v1.43
+
+## Change-note (v1.42 → v1.43)
+
+**Status posture (PROPOSED 2026-06-11).** v1.43 authors the **tool-execution-driver selection contract** — the missing binding between the resolved sandbox **tier** (§14.9.8 resolver) and the actual execution **mechanism**. Per `.harness/class_1_fork_sandbox_tier_driver_selection_silent_in_process.md` (operator-ratified 2026-06-11; **Reading A+** deployment-surface-aware default). Closes a security/observability gap (R-CC-1 capability-completion arc #1): the runtime resolved + floor-enforced + span-emitted a tier (e.g. `TIER_2_CONTAINER`) while the stage-5 factory bound **no** `tool_execution_driver`, so execution silently fell through to the in-process `MCPHostToolExecutionDriver` (TIER_1) — a tool demanding container isolation received none, yet the tier-floor check passed and `sandbox.tier=container` was emitted. This violates the F4/D2 blast-radius **guarantee** posture (ADR-F4 §Decision graduated-isolation; ADR-D2 §1.1/§1.3 "sandbox is the only boundary; container-tier minimum prevents kernel-CVE-class escape into host filesystem"). NEW **§14.9.9** authors the factory's driver-selection obligation (FR-1) + a fail-loud two-branch delivery contract (FR-2, `detect-then-refuse` — never silent in-process) + the new `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE` fail class. v1.42 + earlier lineage PRESERVED VERBATIM per the delta-only-spec-file convention.
+
+**Source of fix.** Fork doc §4 (FR-1/FR-2 forced by the guarantee posture, probe-verified at §2) + §7 (Reading A+ realization, floor-verified against the ADR-D2 **§1.1** deployment-surface × blast-radius matrix: those cells are raise-only **floors**, so a deployment-surface-keyed default composes safely with the §1.1 cell-floor and the `resolved.tier >= contract.minimum_tier` check is the safety net). **Scope of the "consistent with C-AS-09" claim:** it covers the ADR-D2 **§1.1 cell-floor only**. The independent ADR-D2 **§1.3 STDIO `tier-3-microvm` transport-floor** (and the rest of the full `sandbox_tier_floor` per-cell composition) is NOT enforced by the §14.9.8 flat per-server-uniform MVP resolver this arc consumes — a bare STDIO local-development server resolves to `TIER_1_PROCESS`, below the §1.3 floor. That non-enforcement is the pre-existing §14.9.8 composition gap, carried forward and explicitly carved out at the §14.9.9 Scope boundary (distinct future arc); v1.43 neither closes nor widens it. The four execution drivers already exist and are e2e-proven (`MCPHostToolExecutionDriver` TIER_1 / `DockerToolRunnerExecutionDriver` TIER_2 / `GVisorRunscToolRunnerExecutionDriver` TIER_3 / `E2BManagedFullVMToolRunnerExecutionDriver` TIER_4) with **no production caller** — v1.43 specifies the factory obligation that wires them. The `MCPClientConfig` per-server driver-config fields + the deployment-surface-aware default-tier policy are `MCPClientConfig` impl-discretion (spec refers to it opaquely per the v1.40 convention) — recorded at fork doc §7.1, not authored as new spec contract.
+
+**Amendments.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§14.9.9 (NEW)** | Authors the **tool-execution-driver selection contract**: FR-1 (the stage-5 factory MUST select a `ToolExecutionDriver` whose delivered isolation tier ≥ the resolved per-server `SandboxDispatchDecision.tier` and pass it as `tool_execution_driver=`; per-server-uniform, per-tool is future) + FR-2 (fail-loud two branches: (i) selection-time — resolved tier > `TIER_1_PROCESS` with no configured driver → factory RAISES `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE`, MUST NOT fall through to in-process; (ii) dispatch-time — driver selected but substrate absent → dispatch RAISES, MUST NOT downgrade) + the `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE` fail class extending §14.9.5 + the delivered-tier-≥-resolved-tier + no-silent-downgrade invariants. Binds the EXISTING §14.9.8 resolved tier to a delivering driver; does NOT alter tier derivation (the §14.9.8 per-server-uniform Reading-B resolver is unchanged — widening it to the full `sandbox_tier_floor` per-cell composition is a distinct future arc). | Fork Reading A+ ratification |
+
+**Scope discipline.** v1.43 authors ONLY §14.9.9 (new). §14.9.1–§14.9.8, §14.9.5 fail-class taxonomy ("8 new fail classes" count PRESERVED VERBATIM — the new class is declared at §14.9.9 as an extension), §14.10+, and all prior lineage PRESERVED VERBATIM. The closure of the silent-in-process defect is demonstrated by a contrasting-baseline test (resolved `TIER_2_CONTAINER` + no driver configured → `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE` RAISED, NOT silently in-process) plus a factory test (TIER_2 config + driver config → container driver selected). v1.42 + v1.41 + earlier lineage PRESERVED VERBATIM.
 
 ## Change-note (v1.41 → v1.42)
 
@@ -3564,6 +3578,46 @@ Spans emitted per dispatch (nested, in order):
 3. The tier-floor is enforced by the dispatcher (§14.9.4), NOT the resolver — the resolver MAY return any tier; the floor decides admissibility.
 
 **Deferred to implementation discretion.** `assigned_tier_reason` exact string; whether `cost_tier_overhead_ms` is operator-tunable (v1: hardcoded 0 — no `MCPClientConfig` overhead field authored, per faithful-minimal field-set discipline). Per-tool granularity (above). Multi-server resolver composition (v1 MVP is single-server per §14.9.3 factory).
+
+---
+
+### §14.9.9 Tool-execution-driver selection contract (new at v1.43 — Reading A+)
+
+**Provenance.** `.harness/class_1_fork_sandbox_tier_driver_selection_silent_in_process.md` operator-ratified 2026-06-11 (Reading A+, deployment-surface-aware default). R-CC-1 capability-completion arc #1. This sub-section is the canonical spec home for the binding between the resolved sandbox **tier** (§14.9.8) and the actual execution **mechanism** (`ToolExecutionDriver`). §14.9.8 derives + the §14.9.4 floor enforces + the §14.9.4 span emits the tier; until v1.43 nothing bound the tier to the driver, so the stage-5 factory's omission of `tool_execution_driver=` silently executed every dispatch in-process (TIER_1) regardless of the resolved tier.
+
+**The guarantee posture this enforces.** The four-tier blast radius is a **guarantee**, not advisory: ADR-F4 §Decision (graduated-isolation; per-tier capability requirements); ADR-D2 §1.1/§1.3 ("sandbox is the only boundary; container-tier minimum prevents kernel-CVE-class escape into host filesystem"); C-AS-09 §9.1. A resolved tier that is floor-passed and span-reported but not delivered by the execution mechanism is a flat violation of that guarantee. §14.9.9 makes the delivered mechanism conform to the resolved tier, or fail loud.
+
+**FR-1 — Driver-selection obligation.** The stage-5 factory `materialize_runtime_tool_dispatcher_stage` (§14.9.3) MUST select a `ToolExecutionDriver` whose **delivered isolation tier ≥ the resolved per-server `SandboxDispatchDecision.tier`** (§14.9.8) and pass it as `tool_execution_driver=` to the bare `RuntimeToolDispatcher`. Per-server-uniform — the selection is computed once at stage-5 construction from the per-server decision, matching §14.9.8 resolver granularity (per-tool driver selection is a future arc). Selection registry (resolved tier → delivering-driver **family**; the specific driver class per family is impl-discretion):
+
+| Resolved `SandboxDispatchDecision.tier` | Delivering-driver family | Per-server config required |
+|---|---|---|
+| `TIER_1_PROCESS` | in-process host driver (no external substrate) | none — runs out-of-box |
+| `TIER_2_CONTAINER` | shared-kernel container driver (e.g. Docker-on-OCI) | container image + command |
+| `TIER_3_MICROVM` | user-space-kernel / microVM-backed container driver (e.g. gVisor `runsc`) | container image + command + microVM runtime |
+| `TIER_4_FULL_VM` | microVM / full-VM driver (e.g. Firecracker / E2B) | template/command + provider credential |
+
+**FR-2 — Delivery fail-loud (`detect-then-refuse`; NEVER silent in-process).** Two branches, both raise:
+
+1. **(i) Selection-time (bootstrap).** If the resolved tier is `> TIER_1_PROCESS` and **no driver is configured/registrable** for it, the factory MUST RAISE `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE` (permanent; bootstrap aborts). It MUST NOT fall through to the in-process `MCPHostToolExecutionDriver`. *This branch closes the v1.42-and-prior defect (factory passed no driver → silent in-process default).*
+2. **(ii) Dispatch-time.** If a driver is selected but its substrate is absent at call-time (container daemon down / provider credential absent / template missing), the dispatch MUST RAISE (`RT-FAIL-TOOL-INVOCATION-PROTOCOL-ERROR` per §14.9.5, or a deployment-specific substrate-unavailable carrier); the driver MUST NOT downgrade to in-process execution. The existing container / full-VM drivers already self-guard `decision.tier == required_tier` and map a non-zero substrate exit to a protocol error — this invariant ratifies that posture as contract.
+
+**New fail class (extends §14.9.5 taxonomy — the §14.9.5 "8 new fail classes" count is PRESERVED VERBATIM; this is the 9th, declared here):**
+
+| Fail class | Trigger | Permanent? |
+|---|---|---|
+| `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE` | Resolved `SandboxDispatchDecision.tier > TIER_1_PROCESS` but no execution driver is configured/registrable for that tier at the stage-5 factory | YES (bootstrap aborts) |
+
+**Invariants.**
+1. **Delivered-tier ≥ resolved-tier (enforced at the bootstrap-produced dispatcher).** The stage-5 factory MUST select a driver whose delivered isolation tier is ≥ the resolved `SandboxDispatchDecision.tier`; the bootstrap-produced `ctx.tool_dispatcher` (the §14.11 wrapper around the bare dispatcher) therefore never executes a `> TIER_1_PROCESS` dispatch through the in-process driver. Enforcement lives at the factory boundary (mirroring §14.9.6 inv 1's "bootstrap-produced" framing): the in-process `MCPHostToolExecutionDriver` is tier-agnostic, so an operator hand-constructing a `RuntimeToolDispatcher` directly with a `> TIER_1_PROCESS` resolver and no driver is the hand-built case (per §14.9.8) and the operator's responsibility — the contract binds the factory, not a hand-built dispatcher.
+2. **No silent downgrade.** The only legal response to "the resolved tier cannot be delivered" — at factory selection-time OR dispatch-time — is to RAISE. Falling through to a weaker mechanism is forbidden.
+3. **Per-server-uniform, construction-time.** The driver is selected once at stage-5 construction (matching §14.9.8) and bound for the dispatcher's lifetime.
+
+**Deferred to implementation discretion.**
+- The exact `MCPClientConfig` per-server driver-config field set (container image/command; microVM/full-VM template + provider-credential reference) — impl-declared, sibling to the v1.41 `default_sandbox_*` fields (the spec refers to `MCPClientConfig` opaquely per the v1.40 convention).
+- The **deployment-surface-aware default-tier policy** (which tier a bare per-server config defaults to, keyed on `RuntimeConfig.deployment_surface`) — Reading A+ per fork §7.1: `local-development → TIER_1_PROCESS` (honest in-process out-of-box); `self-hosted-server` / `managed-cloud → fail-safe-high` (a tier requiring a driver → FR-2(i) fail-loud if none configured). This is impl-discretion; the §14.9.9 FR-2 fail-loud floor makes any default safe — a low default never *silently* under-sandboxes (the §14.9.4 tier-floor check raises `RT-FAIL-SANDBOX-TIER-FLOOR-VIOLATION` if a tool's `minimum_tier` exceeds the resolved tier).
+- The specific driver class per tier family (the registry above names families, not classes).
+
+**Scope boundary.** §14.9.9 binds the EXISTING resolved tier (§14.9.8) to a delivering driver. It does NOT alter how the tier is derived — the §14.9.8 per-server-uniform Reading-B resolver is unchanged; widening it to the full `sandbox_tier_floor(tool, deployment_surface, blast_radius_tier, mcp_transport, mcp_server)` per-cell composition (C-AS-02 / ADR-D2 §1.5.1) is a distinct future arc.
 
 ## §14.10 C-RT-20 — WebhookDeliveryComposer + OperatorBurdenEvaluator (new at v1.13)
 

@@ -24,6 +24,7 @@ from harness_core import ClientName
 from harness_core.deployment_surface import DeploymentSurface
 from harness_core.workload_class import WorkloadClass
 from harness_cp.topology_pattern import TopologyPattern
+from harness_runtime.config.sandbox_defaults import resolve_effective_sandbox_defaults
 from harness_runtime.types import (
     CollectorConfig,
     MCPClientConfig,
@@ -64,14 +65,25 @@ def _config(mcp_clients: list[MCPClientConfig]) -> RuntimeConfig:
 # ---------------------------------------------------------------------------
 
 
-def test_sandbox_policy_field_defaults_are_consistent_with_minimum_tier() -> None:
-    """v1.41 — the default_sandbox_tier default matches default_minimum_tier's
-    default (both TIER_2_CONTAINER) so the §14.9.4 floor passes out of the box."""
+def test_sandbox_policy_field_defaults_are_none_and_resolve_surface_aware() -> None:
+    """v1.43 §14.9.9 / fork §7.1 (Reading A+) — the per-server sandbox-default fields
+    default to None and resolve through the deployment-surface-aware policy. A bare
+    local-development config resolves to honest TIER_1_PROCESS with coherent
+    minimum_tier + sandbox_tier (no spurious §14.9.4 floor violation); the in-process
+    out-of-box default. (Supersedes the v1.41 static-TIER_2 default — operator-ratified
+    2026-06-11 Reading A+.)"""
     c = _client()
-    assert c.default_sandbox_tier is SandboxTier.TIER_2_CONTAINER
-    assert c.default_minimum_tier is SandboxTier.TIER_2_CONTAINER
-    assert c.default_sandbox_tech == "container"
-    assert c.default_sandbox_provider == "host"
+    assert c.default_sandbox_tier is None
+    assert c.default_minimum_tier is None
+    assert c.default_sandbox_tech is None
+    assert c.default_sandbox_provider is None
+    assert c.sandbox_driver is None
+
+    eff = resolve_effective_sandbox_defaults(c, DeploymentSurface.LOCAL_DEVELOPMENT)
+    assert eff.sandbox_tier is SandboxTier.TIER_1_PROCESS
+    assert eff.minimum_tier is SandboxTier.TIER_1_PROCESS
+    assert eff.sandbox_tech == "host-process"
+    assert eff.sandbox_provider == "host"
 
 
 def test_sandbox_policy_fields_operator_overridable() -> None:

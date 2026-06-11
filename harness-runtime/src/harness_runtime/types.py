@@ -523,6 +523,49 @@ class CollectorConfig(BaseModel):
         return value
 
 
+class SandboxDriverConfig(BaseModel):
+    """Per-server tool-execution-driver config — runtime spec v1.43 §14.9.9 (FR-1).
+
+    Carries the operator-supplied parameters needed to construct the sandboxed
+    `ToolExecutionDriver` selected for a server's resolved sandbox tier
+    (`> TIER_1_PROCESS`). `TIER_1_PROCESS` needs no config (in-process host
+    driver). For `TIER_2_CONTAINER` / `TIER_3_MICROVM`, `image` + `command` are
+    required (the in-container JSON runner). For `TIER_4_FULL_VM` (E2B),
+    `command` is required (the in-sandbox JSON runner; the E2B provider
+    credential is env-sourced by the `e2b` SDK, not carried here).
+
+    Absence of this config when the resolved tier is `> TIER_1_PROCESS` is
+    `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE` (FR-2(i), fail-loud at bootstrap) — the
+    factory never silently falls through to in-process execution.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    command: tuple[str, ...]
+    """In-sandbox JSON tool-runner argv (reads one JSON object from stdin, writes
+    one JSON object to stdout). Required for every non-`TIER_1_PROCESS` driver."""
+
+    image: str | None = None
+    """Container image for `TIER_2_CONTAINER` / `TIER_3_MICROVM` drivers. Required
+    for those tiers (absence → `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE`); ignored for
+    `TIER_4_FULL_VM` (E2B uses an env-configured template)."""
+
+    network: str = "none"
+    """Container network mode (`TIER_2`/`TIER_3`). Defaults to `"none"` (egress-off)."""
+
+    docker_binary: str = "docker"
+    """Container CLI binary (`TIER_2`/`TIER_3`)."""
+
+    timeout_seconds: float = 30.0
+    """Per-call execution timeout."""
+
+    sandbox_timeout_seconds: int = 60
+    """`TIER_4_FULL_VM` (E2B) sandbox lifetime ceiling."""
+
+    allow_internet_access: bool = False
+    """`TIER_4_FULL_VM` (E2B) network-egress toggle. Defaults to egress-off."""
+
+
 class MCPClientConfig(BaseModel):
     """MCP client connection config — U-RT-15 (L3).
 
@@ -550,11 +593,19 @@ class MCPClientConfig(BaseModel):
     connection_url: str
     """Stdio command-line OR remote HTTP URL (per `transport`)."""
 
-    default_minimum_tier: SandboxTier = SandboxTier.TIER_2_CONTAINER
+    default_minimum_tier: SandboxTier | None = None
     """Operator-declared per-server default sandbox tier (Reading B, spec v1.40
     §14.9.3). The stage-3a factory builds a default-policy
     `MCPToolContractConverter` that stamps every tool discovered from this
-    server with this `minimum_tier`. Conservative default per fork §0."""
+    server with this `minimum_tier`.
+
+    `None` (the default) defers to the **deployment-surface-aware default policy**
+    (runtime spec v1.43 §14.9.9 + fork §7.1, Reading A+): resolved at the factory
+    from `RuntimeConfig.deployment_surface` via
+    `harness_runtime.config.sandbox_defaults.resolve_effective_sandbox_defaults`
+    (`local-development → TIER_1_PROCESS`; `self-hosted-server`/`managed-cloud →
+    TIER_2_CONTAINER`). Reconciled with `default_sandbox_tier` by the same helper
+    so the §14.9.4 tier-floor never spuriously violates on a bare config."""
 
     default_blast_radius: BlastRadiusTier = BlastRadiusTier.READ_ONLY
     """Operator-declared per-server default blast radius (Reading B, spec v1.40
@@ -565,25 +616,40 @@ class MCPClientConfig(BaseModel):
     `blast_radius` field above; consolidation owed at a future hygiene arc
     (requires operator ratification per X-AL-3)."""
 
-    default_sandbox_tier: SandboxTier = SandboxTier.TIER_2_CONTAINER
+    default_sandbox_tier: SandboxTier | None = None
     """Operator-declared per-server default *resolved* sandbox tier (Reading B,
     spec v1.41 §14.9.8). The stage-5 factory builds a per-server default-policy
     `SandboxDecisionResolver` that returns this tier for every TOOL_STEP dispatch
     against this server. Distinct from `default_minimum_tier` (the tool's REQUIRED
     floor): the §14.9.4 tier-floor check compares resolved `default_sandbox_tier`
-    >= `default_minimum_tier`. Declare both consistently (e.g. both
-    `TIER_1_PROCESS` for a process-level local deployment); `default_sandbox_tier
-    < default_minimum_tier` is a deliberate floor violation. Default matches
-    `default_minimum_tier`'s default so the floor passes out of the box."""
+    >= `default_minimum_tier`.
 
-    default_sandbox_tech: str = "container"
+    `None` (the default) defers to the deployment-surface-aware default policy
+    (runtime spec v1.43 §14.9.9 + fork §7.1, Reading A+) — see
+    `default_minimum_tier`. The helper reconciles both to the same surface-derived
+    tier so a bare local-development config is honest `TIER_1_PROCESS` in-process
+    (no lie, no spurious floor violation), and production surfaces default to
+    `TIER_2_CONTAINER` (FR-2(i) fail-loud unless a `sandbox_driver` is configured).
+    An explicit value overrides the policy."""
+
+    default_sandbox_tech: str | None = None
     """Operator-declared per-server default sandbox mechanism (Reading B, spec
-    v1.41 §14.9.8) — emitted on the `sandbox.enter` span per §14.9.4. Declare to
-    match `default_sandbox_tier` (e.g. `"host-process"` for `TIER_1_PROCESS`)."""
+    v1.41 §14.9.8) — emitted on the `sandbox.enter` span per §14.9.4. `None`
+    defers to the surface-aware default policy (derived to match the effective
+    `default_sandbox_tier`, e.g. `"host-process"` for `TIER_1_PROCESS`)."""
 
-    default_sandbox_provider: str = "host"
+    default_sandbox_provider: str | None = None
     """Operator-declared per-server default sandbox provider (Reading B, spec
-    v1.41 §14.9.8) — emitted on the `sandbox.enter` span per §14.9.4."""
+    v1.41 §14.9.8) — emitted on the `sandbox.enter` span per §14.9.4. `None`
+    defers to the surface-aware default policy (derived to match the effective
+    `default_sandbox_tier`)."""
+
+    sandbox_driver: SandboxDriverConfig | None = None
+    """Per-server tool-execution-driver config (runtime spec v1.43 §14.9.9 FR-1).
+    Required when the resolved sandbox tier is `> TIER_1_PROCESS` — absence is
+    `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE` (FR-2(i), fail-loud at the stage-5
+    factory). `None` is valid only when the resolved tier is `TIER_1_PROCESS`
+    (in-process host driver; the local-development out-of-box default)."""
 
 
 # ----------------------------------------------------------------------------
