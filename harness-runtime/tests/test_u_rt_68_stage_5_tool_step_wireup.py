@@ -72,9 +72,12 @@ def test_stage_5_extends_step_dispatcher_table_with_tool_step() -> None:
 
     assert stage_5_loop_init.__file__ is not None
     stage_src = Path(stage_5_loop_init.__file__).read_text(encoding="utf-8")
+    # TOOL_STEP is bound unconditionally; INFERENCE_STEP / SUB_AGENT_DISPATCH
+    # are bound conditionally on `requires_inference` (runtime spec v1.47 §2.1 —
+    # a non-inference / tool-only workflow omits these rows).
     assert "StepKind.TOOL_STEP: tool_step_dispatcher" in stage_src
-    assert "StepKind.INFERENCE_STEP: inference_step_dispatcher" in stage_src
-    assert "StepKind.SUB_AGENT_DISPATCH: sub_agent_step_dispatcher" in stage_src
+    assert "dispatchers[StepKind.INFERENCE_STEP] = inference_step_dispatcher" in stage_src
+    assert "dispatchers[StepKind.SUB_AGENT_DISPATCH] = sub_agent_step_dispatcher" in stage_src
 
 
 def test_end_to_end_ac5_covered_by_extended_bootstrap_fixture() -> None:

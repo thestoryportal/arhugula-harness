@@ -758,6 +758,9 @@ async def materialize_provider_clients_stage(
     # If every provider was optional + degraded, surface the typed
     # `RT-FAIL-PROVIDER-NONE-CONFIGURED` here at the construction site rather
     # than letting it bubble to stage 5 as an opaque `LLMDispatchBindError`.
+    # (Runtime spec v1.47 §2.1: this composer is only invoked for an
+    # inference-bearing workflow — stage 3a skips it entirely for a tool-only
+    # / non-inference workflow, which needs no provider.)
     if len(providers) == 0:
         raise ProviderNoneConfiguredError()
 

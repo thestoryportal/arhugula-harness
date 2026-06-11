@@ -385,8 +385,12 @@ async def test_e2e_run_executes_workflow_via_cp_driver(
 
     real_run_bootstrap = run_bootstrap
 
-    async def _wrapped_bootstrap(cfg: RuntimeConfig, *, workload_class: WorkloadClass) -> _Any:
-        ctx = await real_run_bootstrap(cfg, workload_class=workload_class)
+    async def _wrapped_bootstrap(
+        cfg: RuntimeConfig, *, workload_class: WorkloadClass, requires_inference: bool = True
+    ) -> _Any:
+        ctx = await real_run_bootstrap(
+            cfg, workload_class=workload_class, requires_inference=requires_inference
+        )
         original_append = ctx.ledger_writer.append
 
         def _capture_append(payload: _Any, write_key: _Any) -> _Any:
@@ -497,8 +501,12 @@ async def test_e2e_run_returns_drained_when_flag_set_before_execute(
 
     real_run_bootstrap = run_bootstrap
 
-    async def _wrapped_bootstrap(cfg: RuntimeConfig, *, workload_class: WorkloadClass) -> Any:
-        ctx = await real_run_bootstrap(cfg, workload_class=workload_class)
+    async def _wrapped_bootstrap(
+        cfg: RuntimeConfig, *, workload_class: WorkloadClass, requires_inference: bool = True
+    ) -> Any:
+        ctx = await real_run_bootstrap(
+            cfg, workload_class=workload_class, requires_inference=requires_inference
+        )
         # Set drained_flag pre-execute → driver returns DRAINED at entry.
         ctx.drained_flag.set()
         return ctx
@@ -743,8 +751,12 @@ async def test_e2e_run_step_body_fires_cost_attribution_chain(
 
     real_run_bootstrap = run_bootstrap
 
-    async def _wrapped_bootstrap(cfg: RuntimeConfig, *, workload_class: WorkloadClass) -> _Any:
-        ctx = await real_run_bootstrap(cfg, workload_class=workload_class)
+    async def _wrapped_bootstrap(
+        cfg: RuntimeConfig, *, workload_class: WorkloadClass, requires_inference: bool = True
+    ) -> _Any:
+        ctx = await real_run_bootstrap(
+            cfg, workload_class=workload_class, requires_inference=requires_inference
+        )
         ctx_holder["ctx"] = ctx
         return ctx
 

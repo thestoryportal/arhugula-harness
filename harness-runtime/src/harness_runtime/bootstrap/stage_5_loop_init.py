@@ -21,6 +21,7 @@ freshly-materialized emitter.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -75,6 +76,37 @@ from harness_runtime.lifecycle.topology_dispatcher import materialize_topology_d
 from harness_runtime.types import HarnessContext, RuntimeConfig
 
 __all__ = ["execute"]
+
+
+class _NoInferenceDispatcher:
+    """Fail-loud null-object bound as the LLM-dispatch core for a non-inference
+    (tool-only) workflow per runtime spec v1.47 §2.1.
+
+    A non-inference workflow bootstraps provider-free (`ctx.providers` may be
+    empty), so the provider-backed `materialize_llm_dispatcher_stage` — the only
+    stage-5 surface that consumes `ctx.providers` — is not constructed. This
+    sentinel takes its place as the bare dispatch core, satisfying the
+    non-optional C-RT-04 `ctx.llm_dispatcher` carrier (+ `_REQUIRED_FIELDS`)
+    without widening the cleared field type. It is **unreachable**: stage 5
+    omits the `INFERENCE_STEP` / `SUB_AGENT_DISPATCH` rows from the
+    step-dispatcher registry, so the CP driver raises
+    `StepKindDispatcherNotBoundError` before ever reaching this object. The
+    raise here is a deeper defensive backstop.
+    """
+
+    async def dispatch(self, binding: Any, step: Any, *, step_context: Any) -> Mapping[str, Any]:
+        _ = (binding, step, step_context)
+        raise LLMDispatchBindError(
+            "INFERENCE dispatch reached the non-inference sentinel — the "
+            "workflow bootstrapped provider-free (runtime spec v1.47 §2.1, "
+            "requires_inference=False) yet an INFERENCE_STEP / "
+            "SUB_AGENT_DISPATCH was dispatched. Unreachable through the "
+            "step-dispatcher registry (those rows are omitted); reaching it "
+            "indicates a registry-binding defect."
+        )
+
+
+_NO_INFERENCE_DISPATCHER = _NoInferenceDispatcher()
 
 
 async def execute(
@@ -194,32 +226,44 @@ async def execute(
     )
     materialize_r_cxa_2_producer_loop_stage(ctx, config)
 
-    bare_dispatcher = materialize_llm_dispatcher_stage(
-        providers,
-        cast(Any, tracer_provider),
-        cost_chain=cast(Any, ctx.cost_chain),
-        audit_writer=cast(Any, ctx.audit_writer),
-        rate_table=RATE_TABLE_V1,
-        memory_tool_registry=ctx.memory_tool_registry,
-        deployment_surface=config.deployment_surface,
-        hitl_tool_loop=ctx.hitl_tool_loop,
-        ollama_host=config.ollama_host,
-        skill_activation_emitter=ctx.skill_activation_emitter,
-        skills=ctx.skills,
-        # R-300 — layered routing-selection substrate. routing_manifest from
-        # stage 3b CP_ROUTING; workload_class is the run workload; persona_tier
-        # from RuntimeConfig. The DECLARATIVE-echo path is behavior-preserving.
-        routing_manifest=ctx.routing_manifest,
-        workload_class=workload_class,
-        persona_tier=config.persona_tier,
-        # R-PM-1 cascade PR #1 — resolve the active prompt's inline content from
-        # the stage-0-copied `ctx.prompt_manifest` (operator-supplied via
-        # `RuntimeConfig.prompt_manifest`). Empty content → None → no injection
-        # (byte-identical to pre-R-PM-1 dispatch). This is the load-bearing
-        # bootstrap seam: the dispatcher injects the active prompt as a system
-        # prompt at translate-time per runtime spec v1.44 §14.5.
-        active_system_prompt=ctx.prompt_manifest.active_prompt_version.content or None,
-    )
+    # Runtime spec v1.47 §2.1 — inference-conditional LLM-dispatch core. A
+    # non-inference (tool-only) workflow bootstraps provider-free (`providers`
+    # may be empty), so the provider-backed `materialize_llm_dispatcher_stage`
+    # (the ONLY stage-5 surface that consumes `ctx.providers`) is not
+    # constructed; a fail-loud sentinel takes its place as the bare core. The
+    # HITL/retry wrappers around it + the sub-agent chain below still
+    # materialize (provider-free, cheap) but the step-dispatcher registry omits
+    # the INFERENCE_STEP / SUB_AGENT_DISPATCH rows, so neither is reachable
+    # (StepKindDispatcherNotBoundError backstop). Keeps the non-optional
+    # C-RT-04 carrier fields + `_REQUIRED_FIELDS` byte-unchanged.
+    bare_dispatcher: Any = _NO_INFERENCE_DISPATCHER
+    if ctx.requires_inference:
+        bare_dispatcher = materialize_llm_dispatcher_stage(
+            providers,
+            cast(Any, tracer_provider),
+            cost_chain=cast(Any, ctx.cost_chain),
+            audit_writer=cast(Any, ctx.audit_writer),
+            rate_table=RATE_TABLE_V1,
+            memory_tool_registry=ctx.memory_tool_registry,
+            deployment_surface=config.deployment_surface,
+            hitl_tool_loop=ctx.hitl_tool_loop,
+            ollama_host=config.ollama_host,
+            skill_activation_emitter=ctx.skill_activation_emitter,
+            skills=ctx.skills,
+            # R-300 — layered routing-selection substrate. routing_manifest from
+            # stage 3b CP_ROUTING; workload_class is the run workload; persona_tier
+            # from RuntimeConfig. The DECLARATIVE-echo path is behavior-preserving.
+            routing_manifest=ctx.routing_manifest,
+            workload_class=workload_class,
+            persona_tier=config.persona_tier,
+            # R-PM-1 cascade PR #1 — resolve the active prompt's inline content from
+            # the stage-0-copied `ctx.prompt_manifest` (operator-supplied via
+            # `RuntimeConfig.prompt_manifest`). Empty content → None → no injection
+            # (byte-identical to pre-R-PM-1 dispatch). This is the load-bearing
+            # bootstrap seam: the dispatcher injects the active prompt as a system
+            # prompt at translate-time per runtime spec v1.44 §14.5.
+            active_system_prompt=ctx.prompt_manifest.active_prompt_version.content or None,
+        )
 
     # U-RT-58 (C-RT-16 §14.6 D6): rebind ``ctx.llm_dispatcher`` from the
     # bare ``RuntimeLLMDispatcher`` to the ``RetryBreakerFallbackDispatcher``
@@ -428,13 +472,17 @@ async def execute(
         result_timeout_seconds=config.step_dispatch_timeout_seconds,
     )
 
-    ctx.step_dispatchers = StepKindDispatcherRegistry(
-        dispatchers={
-            StepKind.INFERENCE_STEP: inference_step_dispatcher,
-            StepKind.SUB_AGENT_DISPATCH: sub_agent_step_dispatcher,
-            StepKind.TOOL_STEP: tool_step_dispatcher,
-        },
-    )
+    # Runtime spec v1.47 §2.1 — a non-inference (tool-only) workflow OMITS the
+    # INFERENCE_STEP / SUB_AGENT_DISPATCH rows (it bootstrapped provider-free,
+    # so their dispatch cores are the fail-loud sentinel / built-but-unreachable
+    # chain). The CP driver then raises StepKindDispatcherNotBoundError if such a
+    # step is ever dispatched — unreachable, because the `requires_inference`
+    # predicate reads these same `workflow.steps`.
+    dispatchers: dict[StepKind, Any] = {StepKind.TOOL_STEP: tool_step_dispatcher}
+    if ctx.requires_inference:
+        dispatchers[StepKind.INFERENCE_STEP] = inference_step_dispatcher
+        dispatchers[StepKind.SUB_AGENT_DISPATCH] = sub_agent_step_dispatcher
+    ctx.step_dispatchers = StepKindDispatcherRegistry(dispatchers=dispatchers)
 
     # U-RT-88 (C-RT-24 §14.14) + U-RT-97 (C-RT-26 §14.16) + U-RT-94 (v1.25
     # §14.8.8.9): pause_resume_protocol + webhook_delivery_composer +

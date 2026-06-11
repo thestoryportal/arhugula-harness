@@ -176,6 +176,15 @@ class _MutableHarnessContext:
     per spec v1.21 §4 C-RT-04."""
     actor: Any = None  # harness_is.Actor — runtime identity; threaded into stage 1
     keyring_resolver: Any = None  # ProviderSecretResolver — threaded into stage 3a
+    requires_inference: bool = True
+    """Runtime spec v1.47 §2.1 — bootstrap-time inference-need signal (NOT a
+    frozen `HarnessContext` field; not in `_REQUIRED_FIELDS`). Set by
+    `run_bootstrap` from the `run()`/`resume()`-derived predicate
+    `any(step.step_kind in {INFERENCE_STEP, SUB_AGENT_DISPATCH})`. When
+    `False`, stage 3a tolerates an empty `providers` dict and stage 5 binds
+    fail-loud sentinels for the LLM/sub-agent dispatchers + omits their
+    `{StepKind → StepDispatcher}` registry rows. Defaults `True`
+    (behavior-preserving for any caller that does not derive the predicate)."""
 
     # Stage 1 IS.
     path_resolver: PathResolver | None = None

@@ -86,7 +86,7 @@ from harness_cp.workflow_driver_types import RunResult as _CpRunResult
 from harness_cp.workflow_driver_types import (
     RunStatus as _CpRunStatus,
 )
-from harness_cp.workflow_driver_types import WorkflowStep
+from harness_cp.workflow_driver_types import StepKind, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_od.cross_family_rollup import CrossFamilyCostRollup
 from pydantic import BaseModel, ConfigDict
@@ -457,6 +457,25 @@ async def _invoke_run_workflow_via_in_process_mcp(
 # `run()` entry point (C-RT-08).
 # ---------------------------------------------------------------------------
 
+# Runtime spec v1.47 §2.1 — the inference-need step kinds (the only two that
+# reach an LLM provider): INFERENCE_STEP → ctx.llm_dispatcher,
+# SUB_AGENT_DISPATCH → ctx.sub_agent_dispatcher.
+_INFERENCE_STEP_KINDS = frozenset({StepKind.INFERENCE_STEP, StepKind.SUB_AGENT_DISPATCH})
+
+
+def _workflow_requires_inference(workflow: WorkflowObject) -> bool:
+    """Runtime spec v1.47 §2.1 inference-need predicate.
+
+    A workflow is inference-bearing iff it contains a step whose `StepKind`
+    reaches an LLM provider (`INFERENCE_STEP` / `SUB_AGENT_DISPATCH`).
+    `DECLARATIVE_STEP` / `TOOL_STEP` / `HITL_STEP` never reach a provider. The
+    predicate is **exact** — it reads the same `workflow.steps` the CP driver
+    dispatches through the frozen `{StepKind → StepDispatcher}` registry, so it
+    cannot under-count an inference need (no false negatives). When `False`, the
+    bootstrap requires no provider (tool-only workflows run provider-free).
+    """
+    return any(step.step_kind in _INFERENCE_STEP_KINDS for step in workflow.steps)
+
 
 async def run(
     workflow: WorkflowObject,
@@ -521,6 +540,7 @@ async def run(
         ctx = await run_bootstrap(
             resolved_config,
             workload_class=workflow.workload_class,
+            requires_inference=_workflow_requires_inference(workflow),
         )
         try:
             # U-RT-62 AC #5 — thin-wrapper reframe per spec v1.12 §14.8.3
@@ -799,6 +819,7 @@ async def resume(
         ctx = await run_bootstrap(
             resolved_config,
             workload_class=workflow.workload_class,
+            requires_inference=_workflow_requires_inference(workflow),
         )
         try:
             assert ctx.mcp_server is not None, (

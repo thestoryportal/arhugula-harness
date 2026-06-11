@@ -347,7 +347,7 @@ async def test_valid_run_executes_via_driver_and_returns_run_result(
     )
     fake_ctx = SimpleNamespace(mcp_server=fake_mcp_server)
 
-    async def _fake_bootstrap(config, *, workload_class):  # type: ignore[no-untyped-def]
+    async def _fake_bootstrap(config, *, workload_class, requires_inference=True):  # type: ignore[no-untyped-def]
         _ = config
         _ = workload_class
         return fake_ctx
@@ -415,7 +415,7 @@ async def test_run_releases_lock_after_completion(monkeypatch: pytest.MonkeyPatc
             )
         )
 
-    async def _fake_bootstrap(config, *, workload_class):  # type: ignore[no-untyped-def]
+    async def _fake_bootstrap(config, *, workload_class, requires_inference=True):  # type: ignore[no-untyped-def]
         _ = config
         _ = workload_class
         return _make_fake_ctx()

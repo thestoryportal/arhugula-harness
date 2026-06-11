@@ -41,8 +41,20 @@ async def execute(
     _ = workload_class
     assert ctx.keyring_resolver is not None, "stage 0 must construct ctx.keyring_resolver"
 
-    stage = await materialize_provider_clients_stage(config, ctx.keyring_resolver)
-    ctx.providers = dict(stage.providers)
+    # Runtime spec v1.47 §2.1: provider construction is conditional on the
+    # workflow being inference-bearing. A tool-only (non-inference) workflow
+    # needs NO provider, so stage 3a skips construction entirely — no
+    # network/keyring work, and no per-provider construction failure (missing
+    # secret / unreachable / auth) can abort the bootstrap, regardless of the
+    # `*_optional` flags. `ctx.providers` stays empty; stage 5 binds the
+    # fail-loud sentinel as the LLM-dispatch core + omits the INFERENCE_STEP /
+    # SUB_AGENT_DISPATCH registry rows. Inference-bearing workflows take the
+    # unchanged ≥1-provider path (C9 fail-fast preserved).
+    if ctx.requires_inference:
+        stage = await materialize_provider_clients_stage(config, ctx.keyring_resolver)
+        ctx.providers = dict(stage.providers)
+    else:
+        ctx.providers = {}
 
     # U-RT-73: stage 3a now also materializes the H_T-as-MCP-client host.
     ctx.mcp_client_host = await materialize_mcp_client_host_stage(config)

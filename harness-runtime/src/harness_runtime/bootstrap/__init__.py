@@ -232,6 +232,7 @@ async def run_bootstrap(
     config: RuntimeConfig,
     *,
     workload_class: WorkloadClass,
+    requires_inference: bool = True,
 ) -> HarnessContext:
     """Execute the 9-stage bootstrap; return frozen `HarnessContext`.
 
@@ -249,6 +250,14 @@ async def run_bootstrap(
     workload_class :
         The runtime's current workload class (typically `workflow.workload_class`
         from the caller-supplied `WorkflowObject`).
+    requires_inference :
+        Runtime spec v1.47 §2.1 — whether the workflow is inference-bearing
+        (contains an `INFERENCE_STEP` / `SUB_AGENT_DISPATCH` step). Derived by
+        `run()`/`resume()` from `workflow.steps`. When `False`, stage 3a
+        tolerates an empty `providers` dict (no `ProviderNoneConfiguredError`)
+        and stage 5 binds fail-loud sentinels for the LLM/sub-agent dispatchers
+        + omits their step-dispatcher registry rows, so a tool-only workflow
+        bootstraps provider-free. Defaults `True` (behavior-preserving).
 
     Raises
     ------
@@ -256,6 +265,7 @@ async def run_bootstrap(
         Stage N raised; stages 0..N-1 rolled back in reverse order.
     """
     ctx = _MutableHarnessContext()
+    ctx.requires_inference = requires_inference
     pending_events: list[BootstrapStageCompleteEvent] = []
 
     for stage, module in _STAGE_MODULES:
