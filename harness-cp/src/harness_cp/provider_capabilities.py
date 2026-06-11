@@ -77,8 +77,30 @@ class ProviderCapabilities(BaseModel):
 # `AnthropicModel` enum (Sonnet 4.6 / Opus 4.6 / Opus 4.7); Haiku 4.5 is the
 # non-thinking Anthropic model and is excluded.
 _ANTHROPIC_THINKING_MODELS: frozenset[str] = frozenset({"sonnet-4-6", "opus-4-6", "opus-4-7"})
-"""The Anthropic models with extended-thinking support (C-CP-01 §1.2 +
-AS C-AS-13 §13.4). String values are the §13.4 model-tier identifiers."""
+"""The Anthropic extended-thinking model tiers (C-CP-01 §1.2 + AS C-AS-13 §13.4).
+String values are the §13.4 model-tier identifiers (the same vocabulary the
+U-AS-29 ``AnthropicModel`` enum carries — `engine_class_composition.AnthropicModel`)."""
+
+
+def _is_anthropic_thinking_model(model: str) -> bool:
+    """Whether ``model`` is an Anthropic extended-thinking tier, tolerant of the
+    real runtime model-ID shape.
+
+    The reflection's tier catalog uses the AS §13.4 short tier tokens
+    (``opus-4-7``), but runtime ``ModelBinding.model`` strings carry the full
+    Anthropic API IDs — the ``claude-`` prefix and an optional ``-YYYYMMDD``
+    snapshot suffix (e.g. ``claude-opus-4-7`` / ``claude-opus-4-7-20250101``).
+    A bare-token equality check would mis-classify those real IDs as
+    non-thinking. The concrete provider catalog + ID-format matching is
+    deferred to implementation discretion per §1.2; this normalization strips
+    the ``claude-`` prefix and matches a tier token exactly or as the
+    snapshot-suffixed ``{tier}-`` prefix.
+    """
+    normalized = model.removeprefix("claude-")
+    return any(
+        normalized == tier or normalized.startswith(f"{tier}-")
+        for tier in _ANTHROPIC_THINKING_MODELS
+    )
 
 
 def reflect_provider_capabilities(provider: str, model: str) -> ProviderCapabilities:
@@ -104,7 +126,7 @@ def reflect_provider_capabilities(provider: str, model: str) -> ProviderCapabili
         max_context_tokens=0,
         supports_tools=True,
         supports_caching=is_anthropic,
-        supports_thinking=is_anthropic and model in _ANTHROPIC_THINKING_MODELS,
+        supports_thinking=is_anthropic and _is_anthropic_thinking_model(model),
         supports_batch=is_anthropic,
         cost_per_input_token=0.0,
         cost_per_output_token=0.0,
