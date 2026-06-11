@@ -16,7 +16,7 @@ OD posture per `Cross_Axis_Composition_Document_v2_1.md` §2.1 (baseline) + `Cro
 
 | Artifact | Version | Role |
 |---|---|---|
-| `Spec_Operational_Discipline_v1_28.md` | **v1.28 — canonical HEAD** (delta-only chain; this row's prior `v1.4` was the Phase-6.5 authoring-era pin, pre-dating the Phase-7 v1.5→v1.28 deltas — latest delta = R-CL-P4 OD tail-keep bounded-buffer §9.3 implementer-discretion closure; prior delta v1.27 = Phase-7 7b OD-3 gate-(a) closure. Per delta-only convention each version is canonical-at-authoring for its scope; the chain head is the current contract authority) | Contract authority — 23 contracts C-OD-01 through C-OD-23 *(authoring-era count; later deltas may have grown the enumeration — see the canonical spec)* |
+| `Spec_Operational_Discipline_v1_29.md` | **v1.29 — canonical HEAD** (delta-only chain; this row's prior `v1.4` was the Phase-6.5 authoring-era pin, pre-dating the Phase-7 v1.5→v1.29 deltas — latest delta = R-PM-1 cascade PR #4 NEW C-OD-34 per-persona-tier prompt-governance posture; prior delta v1.28 = R-CL-P4 OD tail-keep bounded-buffer §9.3 implementer-discretion closure. Per delta-only convention each version is canonical-at-authoring for its scope; the chain head is the current contract authority) | Contract authority — 34 contracts C-OD-01 through C-OD-34 *(C-OD-25..33 added at v1.8; C-OD-34 added at v1.29 — see the canonical spec for the full enumeration)* |
 | `Implementation_Plan_Operational_Discipline_v2_27.md` | **v2.27 — canonical HEAD** (delta-only chain; this row's prior `v2.11` was the authoring-era pin) | Execution authority — 35 atomic units across 8 clusters (+ U-OD-00 pre-cluster) and 10 topological levels (L0–L9) *(authoring-era figures; see the canonical plan)* |
 
 ### 1.3 Scope inclusion
