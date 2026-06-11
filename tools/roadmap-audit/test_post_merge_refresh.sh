@@ -35,6 +35,15 @@ C2=$(git -C "$REPO" rev-parse HEAD | head -c 8)
 printf '# dash\n' > "$REPO/.harness/roadmap_status.md"; git -C "$REPO" add -A; git -C "$REPO" commit -qm "ops: roadmap status refresh post-#101 (#102)"
 C3=$(git -C "$REPO" rev-parse HEAD | head -c 8)
 
+# commit 3b — a GENUINE terminating refresh that ALSO regenerates the derived HTML
+#             (§12.2.1 permits tools/dashboard/roadmap.html in the set) → must STILL be
+#             treated as dashboard-only, else the hook emits "refresh owed" for a refresh
+#             → the §12.2.1 recursion the fixed point exists to stop.
+printf '# dash2\n' > "$REPO/.harness/roadmap_status.md"
+mkdir -p "$REPO/tools/dashboard"; printf '<html>\n' > "$REPO/tools/dashboard/roadmap.html"
+git -C "$REPO" add -A; git -C "$REPO" commit -qm "ops: roadmap status refresh post-#105 (#106)"
+C3_HTML=$(git -C "$REPO" rev-parse HEAD | head -c 8)
+
 # commit 4 — a MIS-TITLED refresh: §12.2.1 prefix BUT touches a non-dashboard file
 #            (P2-a: must NOT be suppressed — a substantive PR wearing the prefix)
 echo d >> "$REPO/.harness/seed"; git -C "$REPO" add -A; git -C "$REPO" commit -qm "ops: roadmap status refresh post-#102 (#104) [also code]"
@@ -76,6 +85,12 @@ OUT=$(run "$MERGE_CMD" "$C1")
 # 3) merge command, tip IS a genuine (dashboard-only) refresh → silent
 OUT=$(run "$MERGE_CMD" "$C3")
 [ -z "$OUT" ] && ok "dashboard-only refresh-tip stays silent" || bad "refresh-tip emitted: $OUT"
+
+# 3b) merge command, tip is a refresh that ALSO regenerated roadmap.html → still silent.
+#     §12.2.1 permits the regenerated HTML; the prior single-file check wrongly emitted
+#     "refresh owed" here, spawning a refresh-of-a-refresh (the recursion guard).
+OUT=$(run "$MERGE_CMD" "$C3_HTML")
+[ -z "$OUT" ] && ok "status+HTML refresh-tip stays silent (recursion guard)" || bad "HTML-regenerating refresh-tip emitted: $OUT"
 
 # 4) merge command, advanced to a substantive (non-refresh) commit → EMIT
 OUT=$(run "$MERGE_CMD" "$C2")

@@ -16,6 +16,21 @@ WANT=$(printf '%s|%s|%s|%s' a b c d | shasum -a 256 | head -c 12)
 eq "hook_state_hash matches recipe" "$(hook_state_hash a b c d)" "$WANT"
 [ "$(hook_state_hash a b c d | wc -c | tr -d ' ')" = "12" ] && ok "hash is 12 chars" || bad "hash not 12 chars"
 
+# hook_is_dashboard_only_set — §12.2.1 closed-set: EXACTLY {roadmap_status.md} OR
+# EXACTLY {roadmap_status.md, roadmap.html}. Inputs mirror the callers' `sort -u`
+# output ('.harness/…' sorts before 'tools/…' / 'other…'). The two-file case is the
+# regression this fix targets (HTML-regenerating refresh wrongly read as substantive).
+_STATUS=".harness/roadmap_status.md"
+_HTML="tools/dashboard/roadmap.html"
+is_set()  { hook_is_dashboard_only_set "$1" && ok "dashboard-only: $2" || bad "expected dashboard-only ($2): '$1'"; }
+not_set() { hook_is_dashboard_only_set "$1" && bad "expected NOT dashboard-only ($2): '$1'" || ok "not dashboard-only: $2"; }
+is_set  "$_STATUS"                              "status-only refresh"
+is_set  "$(printf '%s\n%s' "$_STATUS" "$_HTML")" "status + regenerated HTML (the fix)"
+not_set "$(printf '%s\n%s' "$_STATUS" "other.txt")" "status + a foreign file (mis-titled substantive)"
+not_set "$_HTML"                               "HTML alone (status absent)"
+not_set ""                                     "empty set"
+not_set "$(printf '%s\n%s\n%s' "$_STATUS" "$_HTML" "src/x.py")" "status + HTML + extra → closed-set rejects"
+
 # hook_json — extracts a path; empty default on miss.
 eq "hook_json extracts command" "$(hook_json '{"tool_input":{"command":"echo hi"}}' '.tool_input.command')" "echo hi"
 eq "hook_json empty on miss"    "$(hook_json '{"a":1}' '.tool_input.command')" ""

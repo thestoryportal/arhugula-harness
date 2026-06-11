@@ -81,18 +81,20 @@ if [ "$COMPUTED" = "$DASHBOARD_HASH" ]; then
 fi
 
 # Hash mismatch — check §12.2.1 fixed-point carve-out. A terminating refresh requires
-# BOTH (a) the reserved commit-title prefix "ops: roadmap status refresh " AND (b) the
-# ONLY changed file is the dashboard. The title is format-agnostic on the post-NNN
-# suffix — refreshes have been titled `post-PR-NNN` (early) and `post-#NNN` /
-# `post-#NNN/#NNN` / `post-#NNN (...)` (later) — so we match the prefix, not a specific
-# NNN format, keeping the lag-expected fixed point robust to either convention. The
-# dashboard-only conjunct is load-bearing: keying on the title alone would let a
-# substantive commit mis-titled with the reserved prefix suppress a genuine drift
-# halt (the false negative post-merge-refresh.sh + prompt-context.sh also guard).
+# BOTH (a) the reserved commit-title prefix "ops: roadmap status refresh " AND (b) a
+# dashboard-only changed-file set (roadmap_status.md + optionally the regenerated
+# tools/dashboard/roadmap.html — see hook_is_dashboard_only_set for the §12.2.1 set).
+# The title is format-agnostic on the post-NNN suffix — refreshes have been titled
+# `post-PR-NNN` (early) and `post-#NNN` / `post-#NNN/#NNN` / `post-#NNN (...)` (later) —
+# so we match the prefix, not a specific NNN format, keeping the lag-expected fixed
+# point robust to either convention. The dashboard-only conjunct is load-bearing:
+# keying on the title alone would let a substantive commit mis-titled with the reserved
+# prefix suppress a genuine drift halt (the false negative post-merge-refresh.sh +
+# prompt-context.sh also guard).
 LAST_TITLE=$(git log -1 --format=%s 2>/dev/null)
 if echo "$LAST_TITLE" | grep -qE '^ops: roadmap status refresh '; then
   CHANGED_FILES=$(git show --name-only --pretty=format: HEAD 2>/dev/null | grep -v '^$' | sort -u)
-  if [ "$CHANGED_FILES" = ".harness/roadmap_status.md" ]; then
+  if hook_is_dashboard_only_set "$CHANGED_FILES"; then
     emit "[ROADMAP] hash=lag-expected next=${NEXT:-?} (post-refresh fixed-point §12.2.1)"
   fi
 fi

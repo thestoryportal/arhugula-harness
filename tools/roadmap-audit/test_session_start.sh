@@ -64,6 +64,19 @@ git -C "$REPO" commit -qm "ops: roadmap status refresh post-#1 (#2)"
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "lag-expected" && ok "lag-expected on dashboard-only refresh ($OUT)" || bad "expected lag-expected, got: $OUT"
 
+# 3b) lag-expected — refresh that ALSO regenerates the derived dashboard HTML
+#     (tools/dashboard/roadmap.html). §12.2.1 explicitly permits the regenerated HTML
+#     in a terminating refresh, so this must STILL be lag-expected — not the false
+#     DRIFT the prior single-file check produced for every HTML-regenerating refresh.
+# distinct wrong-hash (still != EXP_HASH) so roadmap_status.md actually changes vs the
+# test-3 commit — otherwise the commit would carry roadmap.html alone.
+write_dashboard "111111111111"
+mkdir -p "$REPO/tools/dashboard"; echo "<html>" > "$REPO/tools/dashboard/roadmap.html"
+git -C "$REPO" add .harness/roadmap_status.md tools/dashboard/roadmap.html
+git -C "$REPO" commit -qm "ops: roadmap status refresh post-#5 (#6)"
+OUT=$(run)
+printf '%s' "$OUT" | grep -q "lag-expected" && ok "lag-expected on status+HTML refresh ($OUT)" || bad "expected lag-expected on HTML-regenerating refresh, got: $OUT"
+
 # 4) DRIFT despite refresh title — last commit carries the reserved prefix but ALSO
 #    changes a non-dashboard file, so it is NOT a terminating refresh under §12.2.1.
 #    Title-only matching would mis-pass this as lag-expected (the false negative).
