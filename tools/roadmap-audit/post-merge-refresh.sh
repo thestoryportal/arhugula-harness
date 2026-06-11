@@ -71,14 +71,18 @@ DASHBOARD_HEAD=$(grep -E '\| *`git_head`' "$DASHBOARD" 2>/dev/null | head -1 | g
 [ "$ORIGIN_HEAD" = "$DASHBOARD_HEAD" ] && exit 0
 
 # The merged tip is itself a terminating refresh → no follow-on owed → stay silent.
-# §12.2.1 defines a terminating refresh as BOTH (a) the title prefix AND (b) the
-# ONLY changed file is the dashboard. Checking the title alone would wrongly
-# suppress the owed reminder for a substantive PR mis-titled with the reserved
-# prefix (or a merge whose tip is a refresh over substantive commits). Require both.
+# §12.2.1 defines a terminating refresh as BOTH (a) the title prefix AND (b) a
+# dashboard-only changed-file set (roadmap_status.md + optionally the regenerated
+# tools/dashboard/roadmap.html — see hook_is_dashboard_only_set). Misclassifying an
+# HTML-regenerating refresh as substantive here is the worst case: it would emit
+# "refresh owed" for a refresh → spawn another refresh → the §12.2.1 recursion the
+# fixed point exists to STOP. Checking the title alone would symmetrically wrongly
+# suppress the owed reminder for a substantive PR mis-titled with the reserved prefix
+# (or a merge whose tip is a refresh over substantive commits). Require both.
 ORIGIN_TITLE=$(git log -1 --format=%s "$COMPARE_REF" 2>/dev/null)
 if printf '%s' "$ORIGIN_TITLE" | grep -qE '^ops: roadmap status refresh '; then
   CHANGED=$(git show --name-only --pretty=format: "$COMPARE_REF" 2>/dev/null | grep -v '^$' | sort -u)
-  if [ "$CHANGED" = ".harness/roadmap_status.md" ]; then
+  if hook_is_dashboard_only_set "$CHANGED"; then
     exit 0   # genuine dashboard-only terminating refresh → no follow-on owed
   fi
 fi

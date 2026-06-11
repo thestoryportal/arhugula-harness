@@ -47,6 +47,17 @@ git -C "$REPO" commit -q -m "ops: roadmap status refresh post-#1 (#2)"
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "drift" && bad "drift flagged despite genuine dashboard-only refresh" || ok "genuine dashboard-only refresh exempt from drift"
 
+# 3b) HEAD mismatch but last commit is a refresh that ALSO regenerated roadmap.html →
+#     still exempt (§12.2.1 permits the regenerated HTML; the prior single-file check
+#     false-flagged every HTML-regenerating refresh as drift). Distinct pin so
+#     roadmap_status.md actually changes vs the test-3 commit.
+dash "feedface"
+mkdir -p "$REPO/tools/dashboard"; echo "<html>" > "$REPO/tools/dashboard/roadmap.html"
+git -C "$REPO" add .harness/roadmap_status.md tools/dashboard/roadmap.html
+git -C "$REPO" commit -q -m "ops: roadmap status refresh post-#5 (#6)"
+OUT=$(run)
+printf '%s' "$OUT" | grep -q "drift" && bad "drift flagged despite status+HTML refresh: $OUT" || ok "status+HTML refresh exempt from drift"
+
 # 4) Refresh-TITLED commit that ALSO touches a non-dashboard file → NOT exempt
 #    (§12.2.1 requires dashboard-only; title-only matching would be a false negative).
 dash "deadbeef"

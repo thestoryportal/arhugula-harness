@@ -37,15 +37,16 @@ LHEAD=$(git rev-parse HEAD 2>/dev/null | head -c 8)
 DFLAG=""
 if [ "$CUR_BRANCH" = "$DEF_BRANCH" ] && [ -n "$DHEAD" ] && [ -n "$LHEAD" ] && [ "$DHEAD" != "$LHEAD" ]; then
   # A terminating refresh commit makes a one-ahead local HEAD expected (§12.2.1) — not
-  # drift. §12.2.1 requires BOTH (a) the reserved title prefix AND (b) the ONLY changed
-  # file is the dashboard. Keying on the title alone (as before) would let a substantive
-  # commit mis-titled with the reserved prefix silently suppress a real drift warning —
-  # the exact false-negative post-merge-refresh.sh guards against. Require both here too.
+  # drift. §12.2.1 requires BOTH (a) the reserved title prefix AND (b) a dashboard-only
+  # changed-file set (roadmap_status.md + optionally the regenerated roadmap.html — see
+  # hook_is_dashboard_only_set). Keying on the title alone (as before) would let a
+  # substantive commit mis-titled with the reserved prefix silently suppress a real
+  # drift warning — the exact false-negative post-merge-refresh.sh guards against.
   LAST=$(git log -1 --format=%s 2>/dev/null)
   EXEMPT=""
   if echo "$LAST" | grep -qE '^ops: roadmap status refresh '; then
     CHANGED_FILES=$(git show --name-only --pretty=format: HEAD 2>/dev/null | grep -v '^$' | sort -u)
-    [ "$CHANGED_FILES" = ".harness/roadmap_status.md" ] && EXEMPT="1"
+    hook_is_dashboard_only_set "$CHANGED_FILES" && EXEMPT="1"
   fi
   [ -z "$EXEMPT" ] \
     && DFLAG=" [possible drift: local HEAD ${LHEAD} != dashboard ${DHEAD}; run the §12.1 audit]"
