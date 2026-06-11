@@ -33,7 +33,19 @@ class PauseResumeProtocolConfig:
     shape is intentionally empty; presence signals opt-in, absence (the
     `RuntimeConfig.pause_resume_protocol_config = None` default) signals
     opt-out.
+
+    `durable` (NEW at runtime spec v1.46, R-CC-1 arc #3 cascade step 2) selects
+    the **harness-owned durable** snapshot-storage substrate: when `True`, the
+    stage-5 factory wraps the CP `PauseResumeProtocol` in a
+    `DurablePauseResumeProtocol` backed by a `JournalWorkflowPauseStore`
+    (co-located under the resolved `STATE_LEDGER` dir), so captured snapshots
+    survive a process restart and `api.resume(..., resume_handle=...)` can read
+    them back. `False` (the default) preserves the v1.21 behavior verbatim
+    (the bare CP protocol; the caller persists the snapshot itself).
     """
+
+    durable: bool = False
+    """`True` → durable harness-owned snapshot persistence (cascade step 2)."""
 
     @classmethod
     def default(cls) -> PauseResumeProtocolConfig:
