@@ -1,8 +1,11 @@
 """Stage 6 CXA_WIRING — terminal manifest import + cross-axis wiring composers.
 
 Per `Spec_Harness_Runtime_v1.md` v1.1 §2 stage 6 post-conditions: all 5
-terminal exporter manifests imported; all 24 phase-2-runtime edges wired
-(test fixture exercises each).
+terminal exporter manifests imported; the phase-2-runtime cross-axis edges
+wired at stage 6 (CXA v2.19 §2.1 canonical count 22; the §2.3.x bucket
+row-tables enumerate 24 R-tagged edges — per-edge disposition, incl. the 3
+deferred U-RT-35 CP→IS edges, at
+`.harness/r-cl-p5-cxa-cost-validator-verification.md`).
 
 Composer call order:
 1. `materialize_cxa_terminal_imports_stage` — realizes the 5 manifest imports

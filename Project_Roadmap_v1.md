@@ -2435,23 +2435,27 @@ R-CL-P4:
 R-CL-P5:
   title: Phase P5 — CXA phase-2 edge verification + cost-model rate tables + validator thresholds
   surface: I-closure
-  status: ACTIVE       # promoted from BLOCKED 2026-06-10: depends_on R-CL-P0 RESOLVED; R-CL-P2 DEFERRED + P3 APPLIED-PENDING-OPERATOR-E2E + P4 blocked-on-forks → P5 is the next ACTIVE frontier. Note: 22 CXA phase-2 edges likely-mostly-0-wireable (verify-emit, CXA-4 precedent) + cost/validator = bind params/default tables. Entry-ground per §1.
+  status: RESOLVED     # verify-emit close 2026-06-10 (advisor-confirmed, 2-pass decorrelation). All three sub-parts grounding-falsified the "build" framing: CXA edges already materialized at stage 6; cost default table + chain already wired through bootstrap; validator sub-part = mis-cited already-built surfaces. Record: `.harness/r-cl-p5-cxa-cost-validator-verification.md`.
   depends_on: [R-CL-P0]
   blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
   posture: phase-7
-  scope: { files: [harness-runtime/src/.../stage_6_cxa_wiring.py, harness-od/src (cost), harness-as/src (validator)], contracts: [CXA v2.19 §2.3.x, C-OD-17, ADR-D2 §1.9], cross_axis: yes }
+  scope: { files: [harness-runtime/src/.../stage_6_cxa_wiring.py, harness-runtime/src/.../cp_is_wiring.py, harness-od/src (cost), harness-cp/src (validator)], contracts: [CXA v2.19 §2.3.x, C-OD-14 (cost — NOT C-OD-17, which is eval primitives), ADR-D2 §2.3/§332(d) + D5 §1.5 (validator↔tier — NOT §1.9, which is sandbox-pool warm-up)], cross_axis: yes }
   skills: { primary: phase-7-implementation, secondary: [phase-7-cross-axis-composition] }
   advisor_required: no
   council_required: no
   verification: { shape: e2e, must_pass: ["each GENUINE phase-2 edge has an executed producer-emit proof (0-wireable ones recorded honestly, NOT padded); cost attribution produces correct non-zero figures on a real dispatch; a validator fires at its tier threshold; stage_6_cxa_wiring.py:4 doc-drift 24→22 fixed"] }
-  close_shape: { type: PR-merge, artifact: "cxa-verify+cost+validator PR", cascade: [R-IF-roadmap-refresh] }
-  next_pointer: null
-  notes: P0 found the 22 CXA phase-2 edges are runtime-behavior (composers wired at stage-6), NOT compile-time wiring — mostly verify-emit, not build (CXA-4 0-wireable precedent). Cost/validator = bind params + default tables.
+  close_shape: { type: PR-merge, artifact: "R-CL-P5 cxa-verify+cost+validator verify-emit PR + verification record", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: R-CL-P6
+  notes: |
+    VERIFY-EMIT close (not a build). Per-edge disposition + decorrelation record at `.harness/r-cl-p5-cxa-cost-validator-verification.md`.
+    - CXA (must_pass #1+#4): 24 §2.3.x R-tagged edges = 14 producer-emit + 7 convention/0-wireable/runtime-delegated + 3 DEFERRED (U-CP-12 + U-CP-52, X-AL-3 per U-RT-35 — NOT rescued). U-CP-34→U-IS-08/09 are runtime-delegated inside the IS append (the genuine U-IS-11 sibling seam is separate). U-CP-74..79 back-flow landed (cp_is_wiring docstring was stale; reconciled). stage_6_cxa_wiring.py:4 24→22 fixed (canonical CXA v2.19 §2.1; the §2.3-rows-24-vs-§2.1-aggregate-22 gap = Class 3 residual routed to a future CXA fidelity-pass).
+    - COST (must_pass #2): RATE_TABLE_V1 (U-OD-47 default) already wired through bootstrap (stage_4_od + stage_5_loop_init) into tool/validator/LLM dispatch; non-zero proven against RATE_TABLE_V1 at `test_lifecycle_cost_attribution_llm_dispatch.py` (LLM path — tool_rates ship empty); fires-through-bootstrap at `test_r100_real_workflow_e2e.py` AC#4. `RunResult.cost_attribution=()` aggregate-surfacing stays U-RT-49-bounded.
+    - VALIDATOR (must_pass #3): roadmap mis-cited ADR-D2 §1.9 (=warm-up). Already-built surfaces: validator fires post-step (`validator_framework.py`); `sandbox_tier` is the 5th gate-level floor (ADR-D2 §332(d)); sandbox-violation→escalation staircase (§2.3/§1.8 + D5 §1.5). Verify-emit; NO row-11 built (X-AL-3); no design fork owed.
 
 R-CL-P6:
   title: Phase P6 — spec-prose ↔ impl hygiene (reconcile stale spec footers to landed reality)
   surface: VII
-  status: BLOCKED
+  status: ACTIVE       # promoted from BLOCKED 2026-06-10: depends_on R-CL-P0 RESOLVED + R-CL-P5 RESOLVED → P6 is the next frontier (R-CL-P5 next_pointer). Design-phase posture (AS spec C-AS-14 §14.5/§14.6 footer refresh to landed R-810/R-820 reality). R-CL-P4 stays BLOCKED-on-forks.
   depends_on: [R-CL-P0]
   blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
   posture: design-phase
