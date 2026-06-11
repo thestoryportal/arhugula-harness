@@ -2341,7 +2341,7 @@ R-CXA-4-od-multi-seam:
 R-CL-P0:
   title: Phase 0 — ground + scope-lock + file design-gated forks
   surface: I-closure
-  status: ACTIVE       # being closed by the scope-lock PR
+  status: RESOLVED     # closed #477 (scope-lock merged + operator-ratified merge-and-proceed)
   depends_on: []
   blocks: [R-CL-P1, R-CL-P2, R-CL-P3, R-CL-P4, R-CL-P5, R-CL-P6]
   posture: mode-agnostic
@@ -2358,7 +2358,7 @@ R-CL-P0:
 R-CL-P1:
   title: Phase P1 — routing intelligence (EMBEDDING + LLM_AS_ROUTER layers + capability-shortfall fallback)
   surface: IV
-  status: BLOCKED
+  status: PARTIAL      # #479: capability-shortfall landed; EMBEDDING + LLM_AS_ROUTER deferred (substrate-blocked)
   depends_on: [R-CL-P0]
   blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
   posture: phase-7
@@ -2368,13 +2368,17 @@ R-CL-P1:
   council_required: conditional:nameable-tension   # cost ⊥ reliability ⊥ capability-preservation (dyadic)
   verification: { shape: e2e, must_pass: ["a capability-requiring step routes to a capable provider before failing; an EMBEDDING/LLM_AS_ROUTER escalation fires on an ambiguous route; per-layer LayerBudget bounds each layer; no LCD capability flattening"] }
   close_shape: { type: PR-merge, artifact: "routing-intelligence PR(s)", cascade: [R-IF-roadmap-refresh] }
-  next_pointer: null
-  notes: PURE PHASE-7 IMPL (P0 verified C-CP-02 §2.1 shape spec'd at Spec_CP_v1_2.md:286-327; params impl-discretion per :327 + ADR-F1). Only RoutingLayer.DECLARATIVE-echo bound today (llm_dispatch.py:489).
+  next_pointer: R-CL-P2
+  notes: |
+    PARTIAL (#479). Council SKIPPED — grounding falsified the ⚖️ flag (policy spec-pinned at C-CP-02 §2.1/§2.2 + C-CP-03 §3.2/§3.3; operator chose build-direct).
+    LANDED: C-CP-03 §3.3 capability-shortfall fallback (pre-dispatch check in RetryBreakerFallbackDispatcher; the capability-preservation axis) + Codex-caught reflect_provider_capabilities real-model-ID fix (P1) + exhaustion-cause telemetry (P2).
+    DEFERRED (X-AL-3-documented, re-open triggers at .harness/r-cl-p1-routing-intelligence-plan.md): EMBEDDING (no trained corpus/embedding model; §2.2 fall-through correct until a corpus exists) + LLM_AS_ROUTER (faithful async router-call would widen cleared sync U-CP-03/U-CP-05 — not silently absorbable).
+    FOLLOW-UPS: params['thinking']=={"type":"disabled"} would false-positive the THINKING derivation (latent — no current emitter found; 2-line guard); capability-shortfall is unit-verified only (mock inner + hand-built chain) — e2e/production-config reachability → R-CL-Q3.
 
 R-CL-P2:
   title: Phase P2 — engine-recovery activation + sandbox driver→dispatch wiring + external-engine seam
   surface: V
-  status: BLOCKED
+  status: ACTIVE       # next frontier (P0 RESOLVED; PR #475 JournalEnginePauseResumeSubstrate merged as the input)
   depends_on: [R-CL-P0]
   blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
   posture: phase-7
