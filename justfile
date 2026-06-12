@@ -185,6 +185,17 @@ mvp-r300-cross-family: _require-anthropic _require-openai
 mvp-r300-ollama:
     uv run pytest harness-runtime/tests/integration/test_r300_cross_family_fallback_e2e.py::test_r300_live_ollama_provider_fallback_exercise -v
 
+# R-CL-P3 live multi-tier e2e: a full `api.run` workflow (echo-MCP TOOL_STEP +
+# live-Ollama INFERENCE_STEP) exercised under each of the three bridging-arc
+# persona tiers (SOLO / TEAM_BINDING / MULTI_TENANT). Proves the workflow
+# completes against a real provider under every tier AND that config.persona_tier
+# threads through the bootstrap to the bound §10.3 sampler base-rate (1.0/0.1/0.2),
+# observed on the live run path. FREE — zero-token, zero-secret (local ollama
+# daemon at 127.0.0.1:11434; llama3.2:3b). Skips cleanly if the daemon is
+# unreachable. Closes capability-completion inventory item #8 (P3 live multi-tier).
+mvp-r-cl-p3-multi-tier:
+    uv run pytest harness-runtime/tests/integration/test_r_cl_p3_live_multi_tier_e2e.py -v
+
 # ─── mechanism γ — multi-process orchestration (currently deferred) ────────
 #
 # AC #5 (SIGINT drain) + AC #6 (daemon-concurrent two clients) are marked
