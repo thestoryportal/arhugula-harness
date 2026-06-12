@@ -196,6 +196,18 @@ mvp-r300-ollama:
 mvp-r-cl-p3-multi-tier:
     uv run pytest harness-runtime/tests/integration/test_r_cl_p3_live_multi_tier_e2e.py -v
 
+# R-CL-P3 redaction collector-boundary e2e: MULTI_TENANT pre-collector content
+# redaction proven through the live R-420 collector → Tempo round-trip — a span
+# carrying content sentinels is stripped by the production-materialized
+# RedactionSpanProcessor before the BatchSpanProcessor exports, so content never
+# reaches Tempo, while a structure attribute survives (selective redaction).
+# DOCKER-gated — requires the R-420 stack up (just r420-self-hosted-stack-up); no
+# provider inference, no secrets, no paid calls. Skips cleanly if the collector +
+# Tempo ports are unreachable. Closes capability-completion inventory item #9
+# (P3 redaction collector-boundary proof).
+mvp-r-cl-p3-redaction-collector:
+    uv run pytest harness-runtime/tests/integration/test_r_cl_p3_redaction_collector_live_e2e.py -v -m e2e
+
 # ─── mechanism γ — multi-process orchestration (currently deferred) ────────
 #
 # AC #5 (SIGINT drain) + AC #6 (daemon-concurrent two clients) are marked
