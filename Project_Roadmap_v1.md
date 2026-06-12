@@ -2487,8 +2487,8 @@ R-CL-P6:
 R-CL-Q1:
   title: Phase Q1 — DevEx + whole-codebase code-review & simplification sweep
   surface: VII
-  status: BLOCKED     # RE-SEQUENCED 2026-06-11 (operator strategic directive): capability-complete-BEFORE-quality. Running the DevEx/review/simplification sweep on incomplete code means re-running it later (double token cost the operator declined). Q1 now runs LAST, once, on the fully-developed harness. Gated on the R-CC-1 capability-completion program (§5.17) + R-PM-1. [was: ACTIVE/live-frontier post-#496.]
-  depends_on: [R-CL-P1, R-CL-P2, R-CL-P3, R-CL-P4, R-CL-P5, R-CL-P6, R-CC-1, R-PM-1]
+  status: ACTIVE     # UNBLOCKED 2026-06-12 — the R-CC-1 capability-completion program RESOLVED (frontier complete through arc #8) + R-PM-1 RESOLVED. The R-CL-P1/P2/P3 open items were folded into + dispositioned by R-CC-1 (PARTIAL/DEFERRED with documented re-open triggers); Q1 runs once on the now-capability-complete harness. This is the live frontier. [was: BLOCKED 2026-06-11, RE-SEQUENCED capability-before-quality; was ACTIVE/live-frontier post-#496.]
+  depends_on: [R-CL-P4, R-CL-P5, R-CL-P6, R-CC-1, R-PM-1]   # 2026-06-12: P1/P2/P3 DROPPED as R-CC-1-subsumed — their open items (P1 embedding+llm-router; P2 engine-recovery; P3 redaction+live-e2e+cost) were folded into and dispositioned by the R-CC-1 capability program (inventory items #3/#6/#7 + #8/#9/#10), which already carries blocks:[R-CL-Q1] and is now RESOLVED. P1/P2/P3 stay DEFERRED/APPLIED-PENDING with documented re-open triggers; the remaining deps are all RESOLVED so §4 step-2 admits Q1. (Q2/Q3 still list the raw P1/P2/P3 deps — the same R-CC-1-subsumption is owed when they open; pre-existing modeling, deferred-not-dropped per §10.5.)
   blocks: [R-CL-Q4]
   posture: phase-7
   scope: { files: [harness-*/src, justfile, harness.toml, tools/], contracts: [], cross_axis: yes }
@@ -2645,7 +2645,7 @@ R-PM-1:
 R-CC-1:
   title: Capability-completion program — land all open capability units (inventory spine) before R-CL-Q1
   surface: I-capability
-  status: ACTIVE     # the new live frontier (operator-directed 2026-06-11). Drives the inventory sequence; R-CL-Q1 is gated on it.
+  status: RESOLVED     # CAPABILITY FRONTIER COMPLETE 2026-06-12 (arc #8 dispositioned the last item #5 — P5 CXA edges U-CP-12/U-CP-52: 1 close + 1 confirm-defer, no fork, no build owed; `.harness/r-cc-1-arc-8-p5-cxa-edges-disposition.md`). All inventory units landed-or-dispositioned: #1/#2/#4/#5/#6/#8/#9 landed; #3/#7 deferred-by-design; #10/#11 ratified-bounded. R-CL-Q1 unblocks. [was: ACTIVE/live-frontier operator-directed 2026-06-11.]
   depends_on: [R-CL-P0]
   blocks: [R-CL-Q1, R-PM-1]
   posture: design-phase   # design-forks first (X-AL-3), then phase-7 impl as bundled-absorption arcs per fork
@@ -2655,7 +2655,7 @@ R-CC-1:
   council_required: conditional:nameable-tension   # several arcs carry forks (tier→driver C10⊥C11; prompts selection IS⊥CP + injection blast-radius; api.run C9⊥C11)
   verification: { shape: e2e, must_pass: ["every inventory unit is landed (built+tested) OR dispositioned as a documented bounded-residual with a re-open trigger", "the 2 operator-gate residuals recorded (Gate A=hand-roll engine-recovery → BUILT; Gate B=embedding → DEFERRED-documented)", "only THEN does R-CL-Q1 open on the complete harness"] }
   close_shape: { type: program, artifact: "per-arc PRs (design forks + impl) tracked in the inventory", cascade: [R-IF-roadmap-refresh] }
-  next_pointer: R-CC-1-arc-4-api-run-provider-ping-fork   # arc #3 workflow-layer durable-resume CASCADE COMPLETE: step 1 (api.resume + C-RT-30, runtime v1.45) LANDED #513; step 2 (harness-owned JournalWorkflowPauseStore + api.resume resume_handle, runtime v1.46) LANDED #514; anchor-validation U-CP-22 deferred. Program now on arc #4 (api.run provider-ping fork).
+  next_pointer: R-CL-Q1   # PROGRAM COMPLETE through arc #8. arc #1 tier→driver #503 · #2 R-PM-1 prompts #506-511 · #3 durable-resume #513/#514 · #4 inference-conditional bootstrap #515 · #5 live multi-tier e2e #516 · #6 LLM_AS_ROUTER confirm-defer #517 · #7 redaction e2e #519 · #8 P5 CXA edges DISPOSITIONED (this arc). Frontier complete → R-CL-Q1 opens.
   notes: |
     OPERATOR STRATEGIC DIRECTIVE 2026-06-11 — capability-complete-BEFORE-quality. Rationale: running the
     DevEx/review/simplification sweep (R-CL-Q1) on incomplete code means re-running it once capabilities land =
