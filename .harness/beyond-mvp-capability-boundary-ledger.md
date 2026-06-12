@@ -1,0 +1,89 @@
+# Beyond-MVP Capability-Boundary Ledger
+
+**Authored:** 2026-06-12 · **Posture:** mode-agnostic (process-substrate; grounds `harness-*/src` + canonical specs + roadmap at HEAD `3d805d2` by direct read; authors only this `.harness/` file). **Trigger:** operator directive — the harness is being built **BEYOND MVP**, so any feature still *bounded to MVP scope* is an OPEN item that must be **built out** OR **explicitly re-ratified as a permanent bounded-residual** before harness development can be definitively closed.
+
+**Method:** three read-only Explore sweeps (code / specs / roadmap) → every material claim re-grounded by direct read (Explore is presence-not-correctness). The re-grounding caught and discarded several **stale docstrings** that read as boundaries but were superseded (Bucket C) — listing those as "open" would have overstated the work.
+
+**The discriminator (per `.harness/capability-completion-inventory-v1.md` + `[[grounding-reveals-claude-closeable-slice-close-honestly]]`):** ratified-DEFER → *confirm, don't rescue*. So this ledger does **not** re-litigate items the operator already dispositioned (Bucket A); the actionable payload is **Bucket B** — boundaries that are genuinely *not* tracked as build arcs.
+
+---
+
+> ## ⚑ STANDING DIRECTIVE — FULL SPEC, NOTHING DEFERRED (operator 2026-06-12, will-NOT-drift)
+>
+> *"Nothing is deferred and the full spec will be built beyond MVP, no exceptions or excuses. This is the objective and it will not drift moving forward. If a producer, wiring, surface, etc must be researched, designed, speced and planned to unblock code implementation then it will happen...period."*
+>
+> **This directive REWRITES the buckets below.** "ratified-DEFER → confirm-don't-rescue" is **superseded**: **Bucket A is RE-OPENED — every deferred capability is now a BUILD item, on equal footing with Bucket B.** The only retained discriminators are: **Bucket C** (genuinely stale docstrings → doc-hygiene, nothing to build) and the **paid-call / secret / vendor decision boundary** (design/spec/plan to the point of decision, then surface the one external input — corpus, embedding-model, router-model — never auto-fire it). See `[[feedback-full-spec-beyond-mvp-nothing-deferred]]`.
+>
+> **WHAT vs HOW (the line a future session must not blur):** the directive sets WHAT (full spec, nothing deferred); the committed ADRs/invariants still govern HOW — **I-6** (hand-roll the durable engines + topology orchestration; NO vendored framework/LiteLLM), **ADR-F1** (per-provider SDKs, capability-aware). "No exceptions" is about scope, NOT about overriding the invariants the spec was designed under.
+>
+> **Scope = two levels (both driven to zero):**
+> 1. **MVP-marker boundaries** (reduced-but-present features) — Bucket A (re-opened) + Bucket B below.
+> 2. **Contract-level completeness** (specced `C-*` with no/partial carrier) — the deterministic overlay audit (`just overlay-query --orphans` → `contract w/o code cite`). At HEAD: **8 candidates** — `C-CP-30, C-CP-37, C-CP-43, C-CP-49, C-CP-50, C-IS-11, C-OD-3, C-RT-28` (advisory — cite-absence ≠ non-implementation; each verified per-contract in the scoping arc). This is the *other half* of "full spec" an MVP-string sweep misses.
+>
+> **Vehicle:** a single ACTIVE umbrella program **`R-FS-1`** (full-spec build) with the capabilities as ordered child arcs (the proven R-CC-1 shape); the old DEFERRED roadmap entries point AT it rather than each going independently ACTIVE (avoids the §4 `all(deps RESOLVED)` trap). **Consequence the operator owns: this pushes R-CL-Q1→C1 (the entire quality/close track) behind the full-spec build program.**
+
+---
+
+## Bucket B — Newly-surfaced MVP capability boundaries (NOT tracked as build arcs) — THE PAYLOAD
+
+These are reduced/stubbed/single-case at MVP, the full behavior is a known larger thing, and a roadmap grep confirms **none is on the §5 catalog as a build arc** (the closest, topology, appears only as a RESOLVED *test-fixture* entry that explicitly defers the orchestration to "CP-axis Class-1 back-flow, out of fences"). Each needs an explicit operator call: **BUILD** or **permanently RATIFY as residual**.
+
+| # | Boundary (MVP state) | Evidence (HEAD `3d805d2`) | What "beyond MVP" requires | Load-bearing | Rec |
+|---|---|---|---|---|---|
+| **B1** | **Workflow topology: 1 of 6 patterns.** Only `SINGLE_THREADED_LINEAR` has real orchestration; the other 5 (`PARALLELIZATION`, `ORCHESTRATOR_WORKERS`, `DECENTRALIZED_HANDOFF`, `HIERARCHICAL_DELEGATION`, `EVALUATOR_OPTIMIZER`) are admissible + emit telemetry but are a **stateless passthrough — no orchestration semantics**. | `workflow_driver_errors.py:29` ("only SINGLE_THREADED_LINEAR is materialized; other 5 deferred per X-AL-3"); `api.py:244` ("no parallel branching at runtime"); roadmap §5 line 873 ("NOT distinct orchestration semantics (unbuilt; CP-axis Class-1 back-flow)"). | True fan-out (parallel), generator/handoff (decentralized), multi-level dynamic delegation, evaluator-optimizer loop — i.e. **multi-agent parallel + cross-agent communication**. CP-axis contract (C-CP-25) design + build. | **HIGHEST** — this is the single biggest beyond-MVP gap; it *is* the "multi-LLM parallel / cross-comm" capability. | **BUILD** (large CP-axis design+impl program; design-fork-first per X-AL-3) |
+| **B2** | **Multi-server MCP client: single-server only.** The harness connects to exactly one MCP tool server per bootstrap; the v1.15 config field type is **singular** (`mcp_client_host: MCPClientHost`, not a mapping). | `mcp_client_host_factory.py:11` ("v1.15 MVP supports [one server]"); `:21` (">1 server deferred; field type is singular; future-arc schema extension"); `:169` ("one host per first configured client"). | A mapping of named MCP servers + per-server discovery/routing/trust-tier (the `:194` trust mapping is also MVP-conservative). | **HIGH** — a real agent typically needs several tool servers concurrently. | **BUILD** (AS/runtime schema extension + factory) |
+| **B3** | **HITL gate decision intelligence: always-on + full-palette, placeholder placement matrix.** The gate fires + writes ledgers (proven, arc #8), but its *decision* logic is MVP-stubbed: `_hitl_required` is **always True on a matching placement** (no conditional predicate), the response palette is **`DEFAULT_FULL_PALETTE` unconditionally** (no per-cell narrowing/escalation), and `HandoffContext`/placement composition is a placeholder. | `hitl_gate_composer.py:56-81` ("v1.11 MVP… the gate always fires… palette: DEFAULT_FULL… placement composition deferred to workflow-grammar arc"); `:181-185`. | §14.8.2 step-4c conditional gating + step-4d palette narrowing + the placement matrix + HandoffContext binding. Pairs with the **OQ-6 auto-timeout-degradation** producer (Bucket A). | **HIGH** — "smart HITL" is core to the OD/HITL value proposition. | **BUILD** (runtime + CP workflow-grammar arc) |
+| **B4** | **Per-role / per-step dispatch: not runtime-indexed.** Both routing (`RoutingManifest.per_role_bindings`) and prompt selection (`PromptSelectionManifest.per_role_bindings`) carry a per-role binding **structurally**, but the role dimension is **discarded at dispatch** — MVP uses a single default role. | `prompt_selection_manifest.py` (per-role "runtime-deferred at the consumer site"); routing's own `per_role_bindings` has no runtime indexer (role discarded at `llm_dispatch.py:489` until R-300, per PR #509 record). | Thread `AgentRole` (and per-step override) through dispatch so per-role model + per-role prompt actually take effect. | **MEDIUM-HIGH** — gates per-agent specialization in multi-agent topologies (composes with B1). | **BUILD** (runtime dispatch indexing; small once B1 motivates it) |
+| **B5** | **Memory backend: per-deployment-surface selection stubbed.** The backends exist + are live (R-830: SQLite/S3/Neon), but `resolve_backend(deployment_surface)` **ignores its argument** and returns the single pre-resolved backend. | `memory_tool_registry.py:5` ("MVP: resolve_backend(deployment_surface) ignores its argument"); `:28` ("factory landing owed at U-RT-80; v2.15 MVP stores a single pre-resolved backend"). | Surface-aware backend routing (the `U-RT-80` factory). | **MEDIUM** — backends work; only automatic surface→backend selection is stubbed. | **BUILD** (small — U-RT-80 factory) |
+| **B6** | **Per-tool sandbox-tier driver selection + STDIO transport-floor.** Arc #1 (#503) landed per-*server-uniform* tier→driver selection; the §14.9.8 flat resolver still bypasses the full `sandbox_tier_floor` composition incl. the ADR-D2 §1.3 STDIO tier-3 transport-floor. | Runtime spec §14.9.8/§14.9.9 (Scope discipline — per-tool is future); CXA v2.20 §0.4 (STDIO tier-3 floor not enforced by the per-server-uniform resolver). | Per-tool tier resolution + STDIO transport-floor enforcement. | **MEDIUM** — security-posture refinement (drivers + per-server selection already live). | **BUILD** (bounded runtime arc) — *carried forward by arc #1's own scope note* |
+| **B7** | **OD sampler: §9.2 conditional-row over-sampling.** The sampler always-samples *all* `files.operation` / `memory.operation` / `validator.fail.*` / `subagent.span` spans, not only the mutation/permanent/root variants the spec mandates. Conservative (samples more, never less). | `composite_sampler.py:21-37`. **(Per-tier base-rate 1.0/0.1/0.2 IS live — proven arc #5 at the bootstrap; this row is only the conditional-row refinement.)** | Per-attribute (`kind`/`permanence`/root) conditional sampling. | **LOW** — Class-3; cardinality reduction only. | **RATIFY-or-fold-into-Q1** (over-sampling is safe) |
+
+**Bucket-B minor field-level scopes** (roll up under whichever arc touches them; individually low): `workflow_driver_types.py` `parent_entry_hash` empty-string sentinel + `parent_gate_level` AUTO-default (per-step gate-level not operator-surfaced); `skills.py` cost estimate = description-length proxy (not token-counting, §14.17.7); `pause_resume` `StateSummary`/`PauseContextReader` capture is MVP-minimal (§14.14.7) + anchor-validation `U-CP-22` deferred.
+
+---
+
+## Bucket A — Previously ratified-deferred → **RE-OPENED AS BUILD** (per the 2026-06-12 directive)
+
+**These are no longer "legitimate bounded-residuals."** The standing directive re-opens every one as a build arc, on equal footing with Bucket B. Each carries a documented disposition history (kept below for context) + the external decision its build will reach (corpus / embedding-model / router-model — surfaced at the vendor boundary, not auto-fired). The "confirm-don't-rescue" framing in the original column is **superseded**.
+
+| Item | Disposition | Tracked at |
+|---|---|---|
+| **Engine classes: 2 of 5** (`event-sourced-replay` / `reconciler-loop` / `WAL-segment` deferred) — the durable/recoverable execution engines | **Ratified-bounded.** = the engine-layer recovery residual. Operator **Gate A chose hand-roll** (I-6: no vendored engine) and **re-aimed to the workflow-layer** durable-resume (arc #3, #513/#514, BUILT). Engine-layer stays the `line-181`/CXA-2 residual. | `R-CL-P2`; `R-CXA-2-cp-is-seam` (§5 line 2225); `class_1_tension_u_rt_35…` line 181 |
+| **LLM_AS_ROUTER** (Layer-3 routing intelligence) | Confirm-deferred (operator Option C, arc #6). Declarative routing covers the reach. | `R-CL-P1`; `class_2_fork_llm_as_router_layer3…` |
+| **EMBEDDING** (Layer-2 similarity routing) | Deferred (operator Gate B) — needs a trained corpus + embedding model; correct fall-through today. | `R-CL-P1`; `r-cl-p1-routing-intelligence-plan.md` |
+| **Cost `RunResult.cost_attribution`** aggregate | Ratified-bounded (R-CL-P5 / arc #6). Per-dispatch cost is in the audit ledger; only the run-result rollup is empty. | `U-RT-49`; `fork_u_rt_49…` |
+| **HITL OQ-6 timeout-degradation** producer | Confirm-deferred (producer-gated, arc #6) — the policy is built+pure; the wall-clock-wait orchestrator that fires it has zero production callers. *(Composes with B3 — the smart-HITL build would supply its producer.)* | arc #6 fork; capability inventory #11 |
+| Memory-tool backend (live-proof) / OTLP local-ingestion residuals | `CP-16` / `OD-6` bounded-residuals (deployment-surface-gated). | post-Phase-8 register Tier B |
+
+---
+
+## Bucket C — Stale docstrings, NOT live boundaries (Q1 doc-hygiene, not build work)
+
+Re-grounding found these read as MVP boundaries but are **superseded** — they are doc-rot, not open capability. Fold into the R-CL-Q1 doc-hygiene pass; do **not** list as open work.
+
+| Stale comment | Reality at HEAD |
+|---|---|
+| `mutable_context.py:282` "v1.6 MVP binds 1 entry (SUB_AGENT_DISPATCH); INFERENCE_STEP [struck]" | **INFERENCE_STEP is live** — R-300 wired `infer()`; arc #5 ran live-Ollama INFERENCE_STEP across tiers; arc #4 made it inference-conditional (v1.47). |
+| `composite_sampler.py:37` "MVP hardcodes base_rate=1.0; persona_tier not plumbed at the sampler binding site" | **Per-tier base-rate 1.0/0.1/0.2 proven live at the bootstrap** (arc #5, spied at `materialize_tracer_provider_stage`). *(2-min Q1 check: is the `composite_sampler.py` internal default a separate dormant layer, or simply a stale docstring? Either way per-tier sampling works.)* |
+| `workflow_driver_types.py:193` "tenant_id… None = single-tenant (v1.6 MVP default)" | **Multi-tenant works** — the v1.6 hardcode was *lifted*; operator-supplied non-None tenant_ids flow through the 4-substep audit composition (R-500 + arc #5 ran MULTI_TENANT). `None` is just the single-tenant default. |
+| roadmap §5 line 1078 "sandbox execution is metadata-only — no container/microVM/VM" | **Stale (2026-06-01 note)** — superseded by R-410 Docker / R-411 gVisor / R-412 E2B drivers + arc #1 tier→driver selection. (Residual is only B6 per-tool selection.) |
+
+---
+
+## Confidence notes
+
+- **Code-side coverage: HIGH.** 47 code files referenced "MVP"; the load-bearing ones were re-grounded by direct read.
+- **Spec-side coverage: MEDIUM.** The Explore spec sweep read the canonical *heads* (CP v1.31, OD v1.29 — which are delta files), not every full delta-chain body. A fuller spec pass could surface additional spec-declared MVP scopes; the code-side sweep is the stronger signal for *what is actually reduced at runtime*.
+- **B1/B2/B3 are HIGH confidence** (direct code reads + roadmap-absence confirmed). B5/B6/B7 HIGH. B4 MEDIUM-HIGH.
+
+---
+
+## Program (under the 2026-06-12 directive — build-vs-ratify is SETTLED: build everything)
+
+1. **Everything in Bucket A (re-opened) + Bucket B + the contract-completeness candidates is a build arc.** The vehicle is one ACTIVE umbrella **`R-FS-1`** with ordered child arcs (R-CC-1 shape); the old DEFERRED entries point at it, not each independently ACTIVE (keeps §4 clean). **R-CL-Q1→C1 move behind `R-FS-1`.**
+2. **First arc = make scope provably complete (the scoping pass).** Resolve the 8 `contract-w/o-cite` candidates per-contract (implemented-but-uncited vs genuinely-unbuilt) + run the fuller spec-body pass (delta-chain bodies, not just heads) → a complete, authoritative build inventory. "Full spec, definitively closed" is undefined without the complete contract-level scope; the overlay makes it cheap. Output: the ordered `R-FS-1` child-arc list.
+3. **Recommended build sequence** (capability-unlock first; design-fork-first per X-AL-3 where a spec extension is owed): **B1 topology orchestration** (the multi-agent / parallel / cross-comm payload + the biggest) → **B3 smart-HITL** (supplies the OQ-6 producer) → engine classes (hand-roll, I-6) → **B2 multi-server MCP** → LLM_AS_ROUTER + EMBEDDING (router-model / corpus surfaced at the vendor boundary) → **B4 per-role dispatch** → cost-aggregate → **B5/B6/B7** + minor field-level scopes. Each large item is research→design→spec→plan→implement.
+4. **Bucket C** (stale docstrings) sweeps into R-CL-Q1 doc-hygiene — nothing to build there.
+5. **Retained gates (not deferral — the directive's own "if a vendor must be sourced"):** EMBEDDING corpus + embedding-model; LLM_AS_ROUTER router-model. Design/spec/plan to the decision point, surface the one external input, do not auto-fire (`[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`).
+
+**Open operator input (sequencing only, not whether-to-build):** confirm or re-order the §3 sequence. Default if silent: proceed as listed, starting with the §2 scoping pass.
