@@ -213,7 +213,51 @@ def next_action(roadmap, workspace_state, session_posture):
 
 ## 5. R-NNN action catalog
 
-**Populated entries: 27.** Decomposition-owed markers per §9 for §IV–§VI + §VIII–§X.
+**Populated entries: 28.** Decomposition-owed markers per §9 for §IV–§VI + §VIII–§X.
+
+### ⚑ 5.0 STANDING DIRECTIVE — FULL SPEC, NOTHING DEFERRED (operator 2026-06-12, will-NOT-drift)
+
+> *"Nothing is deferred and the full spec will be built beyond MVP, no exceptions or excuses. This is the objective and it will not drift moving forward. If a producer, wiring, surface, etc must be researched, designed, speced and planned to unblock code implementation then it will happen...period."*
+
+**Effect on this catalog + §4 derivation:**
+- **"confirm-defer" / "ratified-bounded" / "DEFERRED-by-design" are no longer valid closes for an unbuilt capability.** Every such entry is RE-OPENED as a build arc under the single umbrella program **`R-FS-1`** below.
+- The previously-DEFERRED capability entries (`R-CL-P1` routing intelligence, `R-CL-P2` engine-recovery, the arc-#6 confirm-defers, EMBEDDING/LLM_AS_ROUTER residuals, `R-CXA-2` durable-recovery, `CP-16`/`OD-6` register residuals) **fold under `R-FS-1` as child arcs** — they KEEP their DEFERRED status-field (so §4 step-2's `all(depends_on RESOLVED)` filter does NOT activate them in parallel — the trap hit one arc ago, ten-fold here), and `R-FS-1` is the single ACTIVE program that sequences them.
+- **`R-CL-Q1..C1` (the entire quality/close track) move BEHIND `R-FS-1`** — quality runs ONCE on the full-spec harness. `R-CL-Q1` → BLOCKED (`depends_on += R-FS-1`).
+- Committed invariants stay the HOW (I-6 hand-roll; ADR-F1 per-provider SDKs); the directive is about scope, NOT overriding ADRs.
+
+Spine: `.harness/beyond-mvp-capability-boundary-ledger.md` (the build inventory) + `[[feedback-full-spec-beyond-mvp-nothing-deferred]]`.
+
+```yaml
+R-FS-1:
+  title: Full-spec build program — build every MVP-bounded / deferred capability to full spec (nothing deferred)
+  surface: I-fullspec
+  status: ACTIVE     # operator directive 2026-06-12 — THE frontier. Single ACTIVE umbrella; capabilities are ordered child arcs (R-CC-1 shape). Supersedes all confirm-defer/bounded-residual dispositions.
+  depends_on: []
+  blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3, R-CL-Q4, R-CL-D1, R-CL-C1]
+  posture: design-phase   # most arcs are design-fork-first (X-AL-3): research→design→spec→plan→implement
+  scope: { files: [.harness/beyond-mvp-capability-boundary-ledger.md (spine), design-substrate/** (spec/plan/ADR amendments), harness-*/src/**], contracts: [C-CP-25 topology, C-CP-07 engine-classes, C-RT-17/18 HITL, C-RT-15 dispatch, C-CP-02/03 routing, + contract-completeness candidates], cross_axis: yes }
+  skills: { primary: systems-architect, secondary: [spec-writer, implementation-planner, phase-7-implementation, harness-adversarial-reviewer, council-orchestrator] }
+  advisor_required: yes
+  council_required: conditional:nameable-tension
+  verification: { shape: e2e, must_pass: ["the build inventory (ledger Bucket A re-opened + Bucket B + the contract-w/o-cite candidates + the fuller spec-body pass) is COMPLETE and every item BUILT (research/design/spec/plan/impl) — no item closed as deferred/bounded-residual", "the overlay `contract w/o code cite` driven to zero (or each remaining one proven implemented-but-uncited)", "ONLY THEN do R-CL-Q1..C1 open on the full-spec harness"] }
+  close_shape: { type: program, artifact: "per-arc PRs tracked in the ledger", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: R-FS-1-arc-1-scoping   # arc #1 = make scope provably complete: resolve the 8 contract-w/o-cite candidates + the fuller spec-body pass → the ordered child-arc list. THEN B1 topology orchestration.
+  notes: |
+    OPERATOR STANDING DIRECTIVE 2026-06-12 (verbatim above; will-NOT-drift). Retires the MVP+bounded-residual posture.
+    SPINE: `.harness/beyond-mvp-capability-boundary-ledger.md` (grounded inventory: Bucket B = topology / engine-classes /
+    smart-HITL / multi-server-MCP / per-role-dispatch / memory-per-surface / per-tool-sandbox; Bucket A re-opened =
+    LLM_AS_ROUTER / EMBEDDING / cost-aggregate / HITL-OQ-6 / engine-recovery; Bucket C = stale-docstring doc-hygiene → Q1).
+    SCOPE = TWO LEVELS: (1) MVP-marker boundaries (reduced-but-present); (2) contract-level completeness (specced C-* with
+    no/partial carrier — `just overlay-query --orphans`, 8 candidates at HEAD: C-CP-30/37/43/49/50, C-IS-11, C-OD-3, C-RT-28).
+    Arc #1 closes the scope (resolve the 8 + fuller spec-body pass) before sequencing builds.
+    SEQUENCE (capability-unlock first; design-fork-first per X-AL-3): arc-1 scoping → B1 topology orchestration (multi-agent /
+    parallel / cross-comm; the biggest) → B3 smart-HITL (supplies OQ-6 producer) → engine classes (hand-roll, I-6) →
+    B2 multi-server MCP → LLM_AS_ROUTER + EMBEDDING (router-model / corpus surfaced at the vendor boundary) → B4 per-role
+    dispatch → cost-aggregate → B5/B6/B7 + minor field-level. Each large item: research→design→spec→plan→implement.
+    HOW-INVARIANTS PRESERVED: I-6 (hand-roll engines/orchestration, no vendored framework/LiteLLM); ADR-F1 (per-provider SDKs).
+    RETAINED EXTERNAL GATES (not deferral): EMBEDDING corpus+model; LLM_AS_ROUTER router-model — design to the decision
+    point, surface the one input at the vendor boundary, never auto-fire (`[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`).
+```
 
 ### 5.1 Mode-agnostic infrastructure (R-IF-NNN)
 
@@ -2487,8 +2531,8 @@ R-CL-P6:
 R-CL-Q1:
   title: Phase Q1 — DevEx + whole-codebase code-review & simplification sweep
   surface: VII
-  status: ACTIVE     # UNBLOCKED 2026-06-12 — the R-CC-1 capability-completion program RESOLVED (frontier complete through arc #8) + R-PM-1 RESOLVED. The R-CL-P1/P2/P3 open items were folded into + dispositioned by R-CC-1 (PARTIAL/DEFERRED with documented re-open triggers); Q1 runs once on the now-capability-complete harness. This is the live frontier. [was: BLOCKED 2026-06-11, RE-SEQUENCED capability-before-quality; was ACTIVE/live-frontier post-#496.]
-  depends_on: [R-CL-P4, R-CL-P5, R-CL-P6, R-CC-1, R-PM-1]   # 2026-06-12: P1/P2/P3 DROPPED as R-CC-1-subsumed — their open items (P1 embedding+llm-router; P2 engine-recovery; P3 redaction+live-e2e+cost) were folded into and dispositioned by the R-CC-1 capability program (inventory items #3/#6/#7 + #8/#9/#10), which already carries blocks:[R-CL-Q1] and is now RESOLVED. P1/P2/P3 stay DEFERRED/APPLIED-PENDING with documented re-open triggers; the remaining deps are all RESOLVED so §4 step-2 admits Q1. (Q2/Q3 still list the raw P1/P2/P3 deps — the same R-CC-1-subsumption is owed when they open; pre-existing modeling, deferred-not-dropped per §10.5.)
+  status: BLOCKED     # RE-BLOCKED 2026-06-12 behind R-FS-1 (FULL-SPEC directive §5.0 — quality runs ONCE on the full-spec harness, not the MVP+bounded-residual one). [was: ACTIVE 2026-06-12 post-R-CC-1 (capability-complete-before-quality, when the bar was the ~11-item inventory); the directive raised the bar to the entire spec → Q1 moves behind R-FS-1.]
+  depends_on: [R-CL-P4, R-CL-P5, R-CL-P6, R-CC-1, R-PM-1, R-FS-1]   # +R-FS-1 (full-spec build program) per §5.0. P1/P2/P3 stay dropped as R-CC-1-subsumed (their open items now re-open AS BUILD under R-FS-1, not as Q1 deps). R-FS-1 is the single ACTIVE program; Q1 admits only when the full spec is built.
   blocks: [R-CL-Q4]
   posture: phase-7
   scope: { files: [harness-*/src, justfile, harness.toml, tools/], contracts: [], cross_axis: yes }
