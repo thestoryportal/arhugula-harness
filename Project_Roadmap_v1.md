@@ -241,7 +241,7 @@ R-FS-1:
   council_required: conditional:nameable-tension
   verification: { shape: e2e, must_pass: ["the build inventory (ledger Bucket A re-opened + Bucket B + the contract-w/o-cite candidates + the fuller spec-body pass) is COMPLETE and every item BUILT (research/design/spec/plan/impl) — no item closed as deferred/bounded-residual", "the overlay `contract w/o code cite` driven to zero (or each remaining one proven implemented-but-uncited)", "ONLY THEN do R-CL-Q1..C1 open on the full-spec harness"] }
   close_shape: { type: program, artifact: "per-arc PRs tracked in the ledger", cascade: [R-IF-roadmap-refresh] }
-  next_pointer: R-FS-1-arc-1-scoping   # arc #1 = make scope provably complete: resolve the 8 contract-w/o-cite candidates + the fuller spec-body pass → the ordered child-arc list. THEN B1 topology orchestration.
+  next_pointer: R-FS-1-arc-2-B1-topology-orchestration   # arc #1 scoping DONE (`.harness/r-fs-1-arc-1-scoping-v1.md`): 8 contract-w/o-cite candidates resolved (5 Q1-hygiene + 3 build→clusters: C-CP-49/50→engines, C-RT-28→managed-cloud) + spec-body pass (no net-new major arc; 2 minor field-level). Ordered child-arc list FROZEN: B1→B3→E(engines)→B2→R(router/embedding)→B4→CA(cost)→B5→B6→B7→M(managed-cloud). NEXT = B1 topology orchestration (largest; design-fork-first).
   notes: |
     OPERATOR STANDING DIRECTIVE 2026-06-12 (verbatim above; will-NOT-drift). Retires the MVP+bounded-residual posture.
     SPINE: `.harness/beyond-mvp-capability-boundary-ledger.md` (grounded inventory: Bucket B = topology / engine-classes /
