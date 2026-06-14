@@ -612,6 +612,50 @@ def test_orchestrator_workers_cascade_cancel_terminal_status_discriminating() ->
         assert resume_should_redispatch(status) is False
 
 
+def test_orchestrator_workers_cascade_cancel_cancelled_only_workers_do_not_inflate_step_count() -> (
+    None
+):
+    """[P2-b] regression — a CASCADE_CANCEL worker cancelled BEFORE dispatch
+    buffers ONLY a `cancelled` terminal entry (no STEP entry); it did NOT run a
+    step, so it must NOT inflate `workflow.step_count` or emit a `STEP_BOUNDARY`.
+
+    Both workers use the poison TOOL_STEP kind whose `lookup` raises
+    synchronously — so NEITHER runs a step regardless of fan-out timing (a
+    deterministic all-cancelled-only cell). Only the orchestrator ran a step ⟹
+    exactly ONE `STEP_BOUNDARY`. Pre-fix (`entry_count > 0` counting the
+    terminal-only buffers as "ran") this would have emitted THREE."""
+    steps = [
+        _orchestrator_step(),
+        WorkflowStep(
+            step_id=StepID("worker-poison-0"), step_kind=StepKind.TOOL_STEP, step_payload={}
+        ),
+        WorkflowStep(
+            step_id=StepID("worker-poison-1"), step_kind=StepKind.TOOL_STEP, step_payload={}
+        ),
+    ]
+    ledger = _RecordingLedger()
+    emitter = _Emitter()
+    dispatcher = _OWDispatcher()
+    result = _run(
+        steps=steps,
+        dispatcher=dispatcher,
+        ledger=ledger,
+        emitter=emitter,
+        persona_tier=_CASCADE_CANCEL_TIER,
+        registry=cast(StepDispatcherRegistry, _LookupFailFirstRegistry(dispatcher)),
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class == "orchestrator-workers-cascade-cancel"
+    # Both worker branches buffered ONLY a `cancelled` terminal — NO step entry.
+    branch_entries = _branch_entries(ledger)
+    assert all(e.branch_metadata.terminal_status == "cancelled" for e in branch_entries)
+    assert not any(e.branch_metadata.terminal_status is None for e in branch_entries)
+    # The [P2-b] proof: only the orchestrator ran a step → exactly ONE
+    # STEP_BOUNDARY (NOT 1 + 2 cancelled-only workers = 3).
+    assert emitter.emits.count(WorkflowEventClass.STEP_BOUNDARY) == 1
+
+
 # ---------------------------------------------------------------------------
 # Edge cases + lifecycle
 # ---------------------------------------------------------------------------

@@ -469,34 +469,23 @@ class RuntimeLLMDispatcher:
 
         payload = _coerce_payload(step.step_payload)
 
-        # --- U-RT-114 (C-RT-15 §14.5.3): branch AgentRole dispatch-read ---
-        # Read the branch's `agent_role` (the CP-composed child
-        # StepExecutionContext, CP plan v2.32 U-CP-81) and index the per-role
-        # MODEL binding (RoutingManifest.per_role_bindings — C-CP-01 §1.3) so a
-        # worker/delegation/handoff branch routes to its role's model. MODEL
-        # BINDING ONLY — the per-role PROMPT is resolved once at stage 0 with the
-        # default role before branch contexts exist (deferred to B4, §14.5.3).
-        #
-        # The `"default"` role NEVER consults the catalog: it falls through to the
-        # CP-resolved `binding.model_binding` (already carrying per-step overrides)
-        # — byte-identical to v1.47 for the SINGLE_THREADED_LINEAR path (no branch
-        # child context ⟹ `agent_role is None` ⟹ default) and for any absent /
-        # empty-catalog case. Only a NON-default branch role indexes the catalog;
-        # a role with no catalog entry also falls through (non-breaking default).
-        # Precedence: the per-role binding OVERRIDES `binding.model_binding` for a
-        # branch worker (B1 role specialization); equal for the default path.
+        # --- U-RT-114 (C-RT-15 §14.5.3): branch AgentRole carry ----------
+        # The branch role (the CP-composed child StepExecutionContext, CP plan
+        # v2.32 U-CP-81) is carried for the `InferenceRequest` envelope's
+        # `agent_role` attribution below. Per-role MODEL selection is resolved
+        # ONE LAYER OUT, at the C-RT-16 `RetryBreakerFallbackDispatcher` (the
+        # dispatch-composition surface that owns candidate selection): the
+        # per-role model is that wrapper's PRIMARY fallback candidate, so per-role
+        # specialization composes with fallback — ONE source of truth for model
+        # selection (the wrapper's chain). Here the inner faithfully dispatches
+        # `binding.model_binding` (the wrapper's rebound candidate). §14.5.3
+        # mechanism + all 3 invariants preserved; indexing the per-role model at
+        # the inner too would create TWO authorities (wrapper candidate vs inner
+        # override) and silently defeat fallback for role-routed branches (the
+        # C-RT-16 composition gap). MODEL BINDING ONLY — the per-role PROMPT is
+        # resolved once at stage 0 with the default role (deferred to B4, §14.5.3).
         _role = step_context.agent_role or _MVP_DEFAULT_AGENT_ROLE
-        if _role == _MVP_DEFAULT_AGENT_ROLE:
-            _effective_model_binding = binding.model_binding
-        else:
-            _role_binding = (
-                self.routing_manifest or _EMPTY_ROUTING_MANIFEST
-            ).per_role_bindings.get(_role)
-            _effective_model_binding = (
-                _role_binding.preferred_model_binding
-                if _role_binding is not None
-                else binding.model_binding
-            )
+        _effective_model_binding = binding.model_binding
 
         # --- R-300: layered routing-selection via infer() ----------------
         # The DECLARATIVE layer decision echoes the effective binding (the per-role

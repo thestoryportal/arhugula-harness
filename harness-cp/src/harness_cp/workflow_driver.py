@@ -2234,6 +2234,24 @@ def _aggregate_parallelization(
     }
 
 
+def _writer_ran_a_step(writer: BufferingLedgerWriter) -> bool:
+    """True iff the branch buffered ≥1 **STEP** entry (an `EntryPayload` whose
+    `branch_metadata.terminal_status is None`) — i.e. its dispatch actually ran.
+
+    A branch with ONLY a terminal entry (e.g. a CASCADE_CANCEL `cancelled`
+    disposition written by the post-barrier empty-buffer scan for a
+    not-yet-dispatched worker) did NOT run a step; counting it as a ran-step
+    would inflate `workflow.step_count` + emit a spurious `STEP_BOUNDARY`
+    ([P2-b]). The step/terminal discriminator is the same
+    `branch_metadata.terminal_status` `resume_should_redispatch` reads (§25.15.2
+    obl. 7). Defensive `getattr` for any future non-branch payload (none today —
+    both branch append helpers set `branch_metadata`)."""
+    return any(
+        getattr(getattr(payload, "branch_metadata", None), "terminal_status", None) is None
+        for payload, _write_key in writer.buffered_entries
+    )
+
+
 def _drain_and_emit_step_boundaries(
     ctx: DriverContext,
     branch_writers: Sequence[BufferingLedgerWriter],
@@ -2252,12 +2270,19 @@ def _drain_and_emit_step_boundaries(
     single-threaded analogue (impl-discretion, §25.18).
 
     Returns the count of branches that ran a step (the `workflow.step_count`
-    carrier, C-OD-25). A fully-run branch buffered a step entry + a terminal
-    entry (so its `entry_count` is 2); a branch whose dispatch raised before
-    buffering contributed nothing (`entry_count` 0). The count is therefore the
-    number of branches with a non-empty buffer, NOT the raw drained-entry count.
+    carrier, C-OD-25) — counted by branches that buffered ≥1 **STEP** entry
+    (`branch_metadata.terminal_status is None`), NOT by `entry_count > 0`. A
+    fully-run branch buffered a step entry + a terminal entry (so its
+    `entry_count` is 2; counted once); a branch whose dispatch raised before
+    buffering contributed nothing (`entry_count` 0; not counted). The
+    [P2-a/P2-b] distinction: a CASCADE_CANCEL worker cancelled BEFORE dispatch
+    buffers ONLY a terminal `cancelled` entry (`entry_count` 1, NO step entry) —
+    it did NOT run a step, so it must NOT inflate `workflow.step_count` or emit a
+    `STEP_BOUNDARY`. (`entry_count > 0` would mis-count it; the non-cascade
+    strategies — PARALLELIZATION / EVALUATOR_OPTIMIZER — never buffer a
+    terminal-only branch, so the predicate is a no-op for them.)
     """
-    ran = sum(1 for writer in branch_writers if writer.entry_count > 0)
+    ran = sum(1 for writer in branch_writers if _writer_ran_a_step(writer))
     drain_branch_buffers(ctx.ledger_writer, branch_writers)
     for _ in range(ran):
         ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)

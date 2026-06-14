@@ -1305,16 +1305,21 @@ async def test_routing_selection_is_behavior_preserving_at_mvp_echo() -> None:
 
 
 # ---------------------------------------------------------------------------
-# U-RT-114 — branch AgentRole dispatch-read (model binding) — C-RT-15 §14.5.3
+# U-RT-114 — branch AgentRole carry; MODEL selection is ROLE-AGNOSTIC at the
+# inner C-RT-15 dispatcher — C-RT-15 §14.5.3 ([P2-a] placement)
 # ---------------------------------------------------------------------------
 #
-# The runtime composer reads `step_context.agent_role` (the CP-composed branch
-# child context, CP plan v2.32 U-CP-81) and indexes the per-role MODEL binding
-# (`RoutingManifest.per_role_bindings`), so worker/delegation/handoff branches
-# route per-role models. The `"default"` role / absent role / empty catalog all
-# fall through to the CP-resolved `binding.model_binding` (byte-identical to
-# v1.47). Per-role PROMPT is OUT of scope (B4). The fake adapter records the
-# dispatched `model` (`last_kwargs["model"]`) so each case is asserted directly.
+# The inner dispatcher ALWAYS dispatches `binding.model_binding` (the candidate
+# it is handed) and carries `step_context.agent_role` into the InferenceRequest
+# envelope for attribution only. The per-role MODEL dispatch-read (§14.5.3)
+# lives ONE LAYER OUT, at the C-RT-16 `RetryBreakerFallbackDispatcher`, where the
+# per-role model is promoted to the PRIMARY fallback candidate so it composes
+# with fallback (ONE source of truth for model selection — the wrapper's chain).
+# See `test_lifecycle_retry_breaker_fallback.py` for the per-role routing +
+# [P2-a] fallback-preservation tests. The tests below prove the inner is
+# role-AGNOSTIC: even a populated `per_role_bindings` catalog does NOT perturb
+# the inner's dispatched model. The fake adapter records the dispatched `model`
+# (`last_kwargs["model"]`).
 
 
 def _routing_manifest_with_roles(role_models: dict[str, str]) -> RoutingManifest:
@@ -1390,10 +1395,14 @@ async def test_u_rt_114_explicit_default_role_falls_through() -> None:
 
 
 @pytest.mark.asyncio
-async def test_u_rt_114_branch_role_routes_to_per_role_model() -> None:
-    """A NON-default branch role PRESENT in the catalog → the per-role model
-    binding is dispatched (the role seam takes effect — OVERRIDES the CP-resolved
-    binding for the worker)."""
+async def test_u_rt_114_inner_model_selection_is_role_agnostic() -> None:
+    """A NON-default branch role PRESENT in the catalog → the inner STILL
+    dispatches `binding.model_binding` (NOT the per-role model). This is the
+    [P2-a] placement guarantee: per-role MODEL selection moved OUT of the inner
+    to the C-RT-16 wrapper, so the inner faithfully dispatches the rebound
+    candidate and never overrides it — overriding here would silently defeat
+    fallback for role-routed branches (two authorities for one decision).
+    Per-role routing itself is asserted at the wrapper test module."""
     adapter = _AnthropicFakeAdapter(_AnthropicClient())
     tp, _ = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(
@@ -1409,7 +1418,8 @@ async def test_u_rt_114_branch_role_routes_to_per_role_model() -> None:
     )
 
     assert adapter.client.messages.last_kwargs is not None
-    assert adapter.client.messages.last_kwargs["model"] == "role-model-a"
+    # The per-role catalog is IGNORED by the inner — binding.model_binding wins.
+    assert adapter.client.messages.last_kwargs["model"] == "binding-default-model"
 
 
 @pytest.mark.asyncio
@@ -1457,11 +1467,11 @@ async def test_u_rt_114_empty_catalog_falls_through() -> None:
 
 
 @pytest.mark.asyncio
-async def test_u_rt_114_distinct_workers_route_to_distinct_models() -> None:
-    """The non-hollow proof: two workers under DISTINCT branch roles dispatch
-    against DISTINCT per-role models through the SAME dispatcher (the
-    ORCHESTRATOR_WORKERS per-role specialization the U-RT-114 read makes
-    effective). Deterministic — recorded via the fake adapter, no live provider."""
+async def test_u_rt_114_inner_linear_none_role_dispatches_binding_model() -> None:
+    """`agent_role is None` (the SINGLE_THREADED_LINEAR / no-branch path) → the
+    inner dispatches `binding.model_binding` (byte-identical to v1.47). The
+    per-role distinct-worker routing + live-ollama + [P2-a] fallback regression
+    moved to `test_lifecycle_retry_breaker_fallback.py` (the wrapper layer)."""
     adapter = _AnthropicFakeAdapter(_AnthropicClient())
     tp, _ = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(
@@ -1473,118 +1483,10 @@ async def test_u_rt_114_distinct_workers_route_to_distinct_models() -> None:
     )
 
     await dispatcher.dispatch(
-        _binding("anthropic"), _step(), step_context=_step_context_with_role("worker-a")
-    )
-    model_a = adapter.client.messages.calls[-1]["model"]
-    await dispatcher.dispatch(
-        _binding("anthropic"), _step(), step_context=_step_context_with_role("worker-b")
-    )
-    model_b = adapter.client.messages.calls[-1]["model"]
-
-    assert model_a == "role-model-a"
-    assert model_b == "role-model-b"
-    assert model_a != model_b
-
-
-# ---------------------------------------------------------------------------
-# U-RT-114 — live e2e: per-role models dispatched to a REAL local Ollama daemon
-# ---------------------------------------------------------------------------
-#
-# The integration AC (runtime plan v2.43 U-RT-114): under per-role model
-# bindings, distinct workers dispatch against distinct models — proven here
-# against a REAL Ollama daemon (free, local, credential-less; CI without a daemon
-# skips cleanly). Ollama echoes the served `model` in its ChatResponse, so the
-# per-role routing is asserted on the real provider's own response, not a fake.
-
-
-def _ollama_reachable() -> bool:
-    """True iff a local ollama daemon answers on 127.0.0.1:11434 (free, no creds)."""
-    import socket
-
-    try:
-        with socket.create_connection(("127.0.0.1", 11434), timeout=1.0):
-            return True
-    except OSError:
-        return False
-
-
-@pytest.mark.e2e
-@pytest.mark.skipif(
-    not _ollama_reachable(),
-    reason="U-RT-114 per-role live e2e requires a local ollama daemon on 127.0.0.1:11434",
-)
-@pytest.mark.asyncio
-async def test_u_rt_114_per_role_models_live_ollama_e2e() -> None:
-    """Two workers under DISTINCT branch roles dispatch against DISTINCT Ollama
-    models through the REAL `RuntimeLLMDispatcher` → real ollama daemon. The
-    served `model` in each response confirms the per-role binding actually took
-    effect on the live provider (the U-RT-114 integration AC, non-hollow)."""
-    from harness_runtime.lifecycle.providers import OllamaAdapter
-    from ollama import AsyncClient as AsyncOllamaClient
-
-    model_fast, model_slow = "llama3.2:1b", "llama3.2:3b"
-
-    async def _noop_ping() -> None:
-        return None
-
-    adapter = OllamaAdapter(
-        client=AsyncOllamaClient(host="http://127.0.0.1:11434"), ping=_noop_ping
-    )
-    tp, _ = _tracer_provider_with_exporter()
-    # Per-role bindings on the OLLAMA provider (the live daemon is the only
-    # constructed provider) — distinct models per role.
-    ollama_role_manifest = RoutingManifest(
-        manifest_version=1,
-        per_role_bindings={
-            AgentRole("worker-fast"): RoleRoutingBinding(
-                preferred_model_binding=ModelBinding(provider="ollama", model=model_fast),
-                layer_budget_overrides={},
-            ),
-            AgentRole("worker-slow"): RoleRoutingBinding(
-                preferred_model_binding=ModelBinding(provider="ollama", model=model_slow),
-                layer_budget_overrides={},
-            ),
-        },
-        per_workload_overrides={},
-        fallback_chains=(),
-        retry_policies={},
-    )
-    dispatcher = RuntimeLLMDispatcher(
-        providers={"ollama": adapter},
-        tracer_provider=tp,
-        routing_manifest=ollama_role_manifest,
+        _binding("anthropic", "binding-default-model"),
+        _step(),
+        step_context=_step_context_with_role(None),
     )
 
-    def _tiny_step() -> WorkflowStep:
-        return WorkflowStep(
-            step_id=StepID("worker"),
-            step_kind=StepKind.INFERENCE_STEP,
-            step_payload={
-                "messages": [{"role": "user", "content": "Reply with OK."}],
-                "tools": None,
-                "params": {"options": {"num_predict": 1}},
-            },
-        )
-
-    try:
-        # The CP-resolved default binding is an OLLAMA binding so a fall-through
-        # (default role) would still reach ollama — but the branch roles override
-        # it to their per-role models (the U-RT-114 read).
-        result_fast = await dispatcher.dispatch(
-            _binding("ollama", model_fast),
-            _tiny_step(),
-            step_context=_step_context_with_role("worker-fast"),
-        )
-        result_slow = await dispatcher.dispatch(
-            _binding("ollama", "llama3.2:latest"),  # NOT the per-role model
-            _tiny_step(),
-            step_context=_step_context_with_role("worker-slow"),
-        )
-    finally:
-        await adapter.aclose()
-
-    # Ollama echoes the served model — the per-role binding took effect, and the
-    # `worker-slow` binding (llama3.2:latest) was OVERRIDDEN by its per-role model.
-    assert result_fast["model"] == model_fast
-    assert result_slow["model"] == model_slow
-    assert result_fast["model"] != result_slow["model"]
+    assert adapter.client.messages.last_kwargs is not None
+    assert adapter.client.messages.last_kwargs["model"] == "binding-default-model"
