@@ -106,8 +106,9 @@ class _DriverStrategyStatus(Enum):
     §25.3 iteration loop); the remaining non-linear patterns are
     `NOT_YET_MATERIALIZED` and raise `TopologyPatternNotYetMaterializedError`
     until each strategy unit (U-CP-86..U-CP-90) lands. `PARALLELIZATION`
-    (`PARALLELIZATION`, the fan-out-barrier-aggregate strategy) lands first at
-    U-CP-86.
+    (the fan-out-barrier-aggregate strategy) landed first at U-CP-86;
+    `EVALUATOR_OPTIMIZER` (the sequential generate→evaluate→regenerate loop)
+    landed second at U-CP-87.
 
     **`DriverStrategy` shape (O-CP-1(d) resolution, decided at U-CP-86 — the
     first strategy unit).** The dispatch is a flat enum-keyed branch in
@@ -123,6 +124,7 @@ class _DriverStrategyStatus(Enum):
 
     LINEAR_INLINE = "linear-inline"
     PARALLELIZATION = "parallelization"
+    EVALUATOR_OPTIMIZER = "evaluator-optimizer"
     NOT_YET_MATERIALIZED = "not-yet-materialized"
 
 
@@ -137,7 +139,7 @@ _DRIVER_STRATEGY_DISPATCH: Mapping[TopologyPattern, _DriverStrategyStatus] = {
     TopologyPattern.ORCHESTRATOR_WORKERS: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
     TopologyPattern.HIERARCHICAL_DELEGATION: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
     TopologyPattern.DECENTRALIZED_HANDOFF: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
-    TopologyPattern.EVALUATOR_OPTIMIZER: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
+    TopologyPattern.EVALUATOR_OPTIMIZER: _DriverStrategyStatus.EVALUATOR_OPTIMIZER,
 }
 
 
@@ -1293,18 +1295,30 @@ def _execute_workflow_body(
     if manifest_entry.engine_class not in _IN_SCOPE_ENGINE_CLASSES:
         raise EngineClassNotYetMaterializedError(manifest_entry.engine_class)
 
-    # § 25.10/25.11 — non-linear strategy dispatch (U-CP-86+). `PARALLELIZATION`
-    # routes to its fan-out-barrier-aggregate strategy and returns here; the
-    # `SINGLE_THREADED_LINEAR` inline loop below stays BYTE-UNCHANGED (§25.10
-    # Invariant 1 — regression-safety). The linear-only paths the early return
-    # skips (prefix-replay/resume detection, mid-loop drain checks,
-    # pause-trigger detection, the per-step validator hook) compose at later
-    # strategy units (U-CP-85 cascade_policy / U-CP-88 ORCHESTRATOR_WORKERS) —
-    # PARALLELIZATION at U-CP-86 is the happy-path fan-out + deterministic
-    # aggregation. The four remaining non-linear patterns still raise
-    # `TopologyPatternNotYetMaterializedError` at `resolve_driver_strategy`.
+    # § 25.10/25.11 — non-linear strategy dispatch (U-CP-86+). A materialized
+    # non-linear pattern routes to its dedicated `_execute_<strategy>` and
+    # returns here; the `SINGLE_THREADED_LINEAR` inline loop below stays
+    # BYTE-UNCHANGED (§25.10 Invariant 1 — regression-safety). The linear-only
+    # paths the early return skips (prefix-replay/resume detection, mid-loop
+    # drain checks, pause-trigger detection, the per-step validator hook)
+    # compose at later strategy units (U-CP-85 cascade_policy / U-CP-88
+    # ORCHESTRATOR_WORKERS). `PARALLELIZATION` (U-CP-86) is the happy-path
+    # fan-out + deterministic aggregation; `EVALUATOR_OPTIMIZER` (U-CP-87) is
+    # the sequential generate→evaluate→regenerate loop. The three remaining
+    # non-linear patterns still raise `TopologyPatternNotYetMaterializedError`
+    # at `resolve_driver_strategy`.
     if strategy is _DriverStrategyStatus.PARALLELIZATION:
         return _execute_parallelization(
+            manifest_entry=manifest_entry,
+            steps=steps,
+            run_id=run_id,
+            ctx=ctx,
+            default_model_binding=default_model_binding,
+            step_dispatchers=step_dispatchers,
+            run_idempotency_key=run_idempotency_key,
+        )
+    if strategy is _DriverStrategyStatus.EVALUATOR_OPTIMIZER:
+        return _execute_evaluator_optimizer(
             manifest_entry=manifest_entry,
             steps=steps,
             run_id=run_id,
@@ -2496,6 +2510,336 @@ def _execute_parallelization(
         final_state=final_state,
         fail_class=None,
     ), steps_executed
+
+
+# ---------------------------------------------------------------------------
+# U-CP-87 — EVALUATOR_OPTIMIZER driver strategy (C-CP-25 §25.11)
+# ---------------------------------------------------------------------------
+#
+# The SECOND non-linear topology strategy — a sequential generate→evaluate→
+# (accept | regenerate) loop, bounded by a max-iteration cap (§25.11
+# EVALUATOR_OPTIMIZER row: "Loop: generate-step → evaluate-step → (accept |
+# regenerate-with-feedback), bounded by a max-iteration cap. Sequential;
+# terminal on evaluator accept or cap.").
+#
+# Per the §25.11 common substrate, `steps` is the loop body: `steps[0]` is the
+# GENERATE step (the optimizer) and `steps[1]` is the EVALUATE step (the
+# evaluator); the two are distinguished by their per-step prompt (R-PM-1 §29,
+# already landed) — non-hollow at B1 WITHOUT the B4 per-role binding catalog,
+# because generate ≠ evaluate by `step_id` (and hence by selected prompt). The
+# CP-unit proof is distinct-step dispatch (a different `step_id` resolves a
+# different binding); live R-PM-1 §29 prompt selection is composed at runtime
+# stage-0, not in the CP driver (presence-vs-correctness honesty).
+#
+# Deps are [U-CP-80 (dispatch), U-CP-82 (buffered-append substrate)] — NOT
+# U-CP-81 (no branch child-contexts; sequential single-owner, NO fan-out) and
+# NOT U-CP-85 (no cascade_policy). So:
+#   - NO branch_metadata: entries carry the carrier default (`None`) — the AC's
+#     "Sequential; no fan-out branch_metadata required". (Hence a dedicated
+#     `_append_buffered_sequential_entry`, NOT the U-CP-84 branch helpers, which
+#     always compose branch_metadata + require a branch child-context.)
+#   - The buffered/deferred-append path (§25.11/§25.12) is STILL used (the
+#     common-substrate mandate for all 5 non-linear strategies + the plan AC):
+#     one `BufferingLedgerWriter`; the orchestrator drains it through the single
+#     real writer at the end. Sequential execution is already naturally ordered,
+#     so the drain is order-preserving by construction (the determinism subtlety
+#     is the fan-out concern, not this one).
+#
+# Idempotency (the load-bearing decision). The loop re-dispatches the SAME two
+# declared steps each iteration, so TWO distinct indices are kept apart:
+#   - the MONOTONIC `entry_index` (0,1,2,3,… across the whole loop) scopes the
+#     unique ledger action_id + idempotency key. Re-using the declared step
+#     ordinal (0/1) as the ledger key would collide iteration-2's generate with
+#     iteration-1's on the IS writer's `idempotency_key`-only dedup (C-IS-07
+#     §7.5) → a silently-dropped entry. The monotonic key makes every dispatched
+#     step persist a distinct entry (the live e2e asserts the full
+#     `iterations × 2` persisted count + chain VALID).
+#   - the DECLARED step ordinal (0=generate, 1=evaluate) is what
+#     `StepExecutionContext.step_index` carries (Codex [P2]): downstream
+#     dispatchers read that field for per-step policy / override selection +
+#     audit context, so it MUST keep matching the declared step across iterations
+#     rather than drifting to the ledger row number. The ledger `action_id`s
+#     (incl. `parent_action_id`) keep the unique `entry_index`.
+#
+# Scope (scoped-not-forgotten): the linear-only prefix-replay / explicit-pause
+# resume detection, mid-loop drain checks, per-step pause-trigger detection, and
+# the per-step validator hook are NOT composed here (their units are not EO
+# deps) — they compose at later strategy units. "regenerate-with-feedback": the
+# loop re-dispatching the generate step IS the regenerate. Inter-step DATA flow
+# (the generate draft → the evaluator's input; the evaluator's feedback → the
+# next generate's input) is NOT threaded at the driver level — exactly as the
+# `SINGLE_THREADED_LINEAR` path does not thread its `accumulated` step outputs
+# into subsequent `dispatch(...)` calls (the dispatcher signature carries only
+# `binding, step, step_context`, never prior outputs; the driver never
+# introspects or mutates the frozen `step_payload`, §25.3.3.4). Inter-step data
+# flow is therefore a runtime/dispatcher concern (a shared run context the
+# dispatcher reads, or B4 per-step prompt composition), the SAME for every
+# topology — not a B1 EO driver concern. EO at the driver level is the loop
+# CONTROL FLOW (generate→evaluate→accept/regenerate, bounded cap, accept-signal
+# read from the evaluator's structured output).
+
+_EVALUATOR_OPTIMIZER_ACCEPT_KEY = "accepted"
+"""The reserved key the EVALUATE step's output sets truthy to signal acceptance
+(C-CP-25 §25.11 EVALUATOR_OPTIMIZER terminal-on-accept; §25.18 impl-discretion).
+
+The evaluator/optimizer roles are distinguished by per-step prompt (R-PM-1 §29);
+the accept SIGNAL the driver reads from the evaluator's structured output is this
+boolean key. A missing/false key ⟹ regenerate (continue the loop). The signal
+SHAPE is impl-discretion (§25.18 — the contract specifies observable behavior,
+not the signal encoding); no other accept/terminal convention exists in step
+outputs (grep-clean at authoring)."""
+
+_DEFAULT_EVALUATOR_OPTIMIZER_MAX_ITERATIONS = 3
+"""The max-iteration cap on the generate→evaluate loop (C-CP-25 §25.11 "bounded
+by a max-iteration cap"; §25.18 impl-discretion). The loop terminates on the
+first evaluator-accept OR when this many iterations have run without accept (a
+best-effort SUCCESS, `accepted=False`; §25.17 lists no cap-failure mode — cap is
+a normal bounded termination, NOT a failure). A manifest-surfaced per-workflow
+cap is a forward field (not surfaced at v1.32)."""
+
+
+def _evaluator_optimizer_accepted(evaluation: Mapping[str, Any]) -> bool:
+    """`True` when the evaluator's output signals acceptance (terminal-on-accept).
+
+    Reads the `_EVALUATOR_OPTIMIZER_ACCEPT_KEY` reserved key (truthy ⟹ accept;
+    absent/false ⟹ regenerate). Pure; no side effects.
+    """
+    return bool(evaluation.get(_EVALUATOR_OPTIMIZER_ACCEPT_KEY, False))
+
+
+def _append_buffered_sequential_entry(
+    *,
+    writer: BufferingLedgerWriter,
+    workflow_id: str,
+    entry_index: int,
+    idempotency_key: str,
+    timestamp: datetime,
+    procedural_tier_snapshot_ref: Identifier | None = None,
+) -> None:
+    """Buffer a sequential strategy's per-step ledger entry — NO branch_metadata
+    (C-CP-25 §25.11/§25.12 buffered path; the EVALUATOR_OPTIMIZER sequential
+    analogue of the U-CP-84 branch helpers).
+
+    Composes the flat `workflow:{wf}:step:{entry_index}` action_id (the
+    caller-supplied `idempotency_key` is the matching
+    `_compute_step_idempotency_key(run_idempotency_key, entry_index)` value,
+    reused from the `StepExecutionContext` composition to avoid recomputing it)
+    and buffers it through the strategy's single `BufferingLedgerWriter` (the
+    write is deferred to the drain; dispatch + telemetry already fired inline, so
+    the pre-dispatch gate is never deferred — §25.15.2 obl. 2). The
+    `branch_metadata` carrier stays the default `None` — this strategy is
+    sequential single-owner with NO fan-out causality (the AC's "no fan-out
+    branch_metadata required"); it is therefore a dedicated helper, NOT the
+    U-CP-84 branch-cadence helpers (which always compose branch_metadata).
+
+    `entry_index` is MONOTONIC across the whole loop (NOT the declared step
+    ordinal) so iteration-N's re-dispatch of the same declared step never collides
+    with iteration-(N-1)'s on the IS writer's idempotency_key-only dedup (C-IS-07
+    §7.5). The linear `_append_step_ledger_entry` is left byte-unchanged (§25.10
+    Invariant 1).
+    """
+    from harness_is.state_ledger_entry_schema import Identifier as _Identifier
+    from harness_is.state_ledger_write import EntryPayload, WriteKey
+
+    action_id = ActionID(f"workflow:{workflow_id}:step:{entry_index}")
+    payload = EntryPayload(
+        action_id=_Identifier(str(action_id)),
+        idempotency_key=_Identifier(idempotency_key),
+        actor=writer.actor,
+        timestamp=timestamp,
+        procedural_tier_snapshot_ref=procedural_tier_snapshot_ref,
+    )
+    write_key = WriteKey(
+        thread_id=_Identifier(workflow_id),
+        step_id=_Identifier(str(entry_index)),
+        idempotency_key=_Identifier(idempotency_key),
+    )
+    writer.append(payload, write_key)
+
+
+def _execute_evaluator_optimizer(
+    *,
+    manifest_entry: WorkflowManifestEntry,
+    steps: Sequence[WorkflowStep],
+    run_id: str,
+    ctx: DriverContext,
+    default_model_binding: ModelBinding,
+    step_dispatchers: StepDispatcherRegistry,
+    run_idempotency_key: str,
+) -> tuple[RunResult, int]:
+    """Execute the `EVALUATOR_OPTIMIZER` generate→evaluate→regenerate loop (U-CP-87).
+
+    `steps[0]` is the GENERATE step, `steps[1]` is the EVALUATE step. The loop
+    dispatches generate then evaluate, terminating on the first evaluator-accept
+    (`_evaluator_optimizer_accepted`) or when
+    `_DEFAULT_EVALUATOR_OPTIMIZER_MAX_ITERATIONS` iterations have run. Each
+    dispatched step buffers a plain (no-branch_metadata) ledger entry keyed by a
+    MONOTONIC `entry_index`; the buffer drains through the single real writer at
+    the end (§25.11/§25.12 buffered path). Returns `(RunResult, steps_executed)`
+    for the `_execute_workflow_body` caller (matching the linear path's tuple).
+
+    Terminal: evaluator-accept OR cap → SUCCESS (`final_state.accepted`
+    discriminates accept-terminal from cap-terminal; §25.17 lists no cap-failure
+    mode); a step dispatch raising → FAILED (the prior buffered entries STILL
+    drain — no silent loss). Sequential single-owner; NO fan-out, NO
+    cascade_policy (U-CP-85 non-dep), NO branch_metadata (AC).
+    """
+    workflow_id = manifest_entry.workflow_id
+
+    # Empty step sequence → trivially SUCCESS (mirrors the linear empty-loop + the
+    # PARALLELIZATION empty-steps SUCCESS).
+    if not steps:
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.SUCCESS,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state={"accepted": False, "iterations": 0, "output": {}, "evaluation": {}},
+            fail_class=None,
+        ), 0
+
+    # EVALUATOR_OPTIMIZER is exactly generate→evaluate (§25.11) — 2 declared
+    # steps. A non-empty manifest declaring any other count is malformed for this
+    # pattern (a multi-step generate phase would be a spec extension, not a driver
+    # generalization — X-AL-3). FAILED with a clear fail_class (no silent reshape).
+    if len(steps) != 2:
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state=None,
+            fail_class=(
+                "evaluator-optimizer-malformed: expected exactly 2 steps "
+                f"(generate, evaluate); got {len(steps)}"
+            ),
+        ), 0
+
+    generate_step, evaluate_step = steps[0], steps[1]
+
+    # R-003 active-workflow-context sidecar (resolved once; the same resolver the
+    # linear `_append_step_ledger_entry` reads). None when no resolver is bound.
+    _resolver = getattr(ctx, "procedural_tier_snapshot_resolver", None)
+    snapshot_ref = _resolver() if _resolver is not None else None
+
+    # A single shared timestamp for every buffered entry. All-equal ⟹ trivially
+    # monotonic under the zero-tolerance IS writer; the sequential buffer drains
+    # in execution (= entry_index) order, which is already non-decreasing.
+    loop_timestamp = datetime.now(UTC)
+
+    writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=0)
+
+    # § 25.3.2 — Emit workflow.start (single-threaded on the driver thread).
+    ctx.lifecycle_emitter.emit(WorkflowEventClass.WORKFLOW_START)
+
+    def _dispatch_and_buffer(
+        step: WorkflowStep, *, declared_step_index: int, entry_index: int
+    ) -> Mapping[str, Any]:
+        # Dispatch one declared step on the driver thread (sequential — no
+        # to_thread / barrier), buffer its plain ledger entry under the monotonic
+        # entry_index, and emit one STEP_BOUNDARY. The pre-dispatch gate fires
+        # inline inside the dispatcher; only the ledger WRITE is buffered
+        # (§25.15.2 obl. 2). A dispatch exception propagates to the caller's
+        # FAILED handler (the entry is NOT buffered + no boundary emitted for the
+        # failed step, so entry_index stays the completed-step count).
+        #
+        # TWO distinct indices (Codex [P2]). `declared_step_index` is the step's
+        # DECLARED ordinal (0=generate, 1=evaluate) — it is what
+        # `StepExecutionContext.step_index` carries, because downstream dispatchers
+        # read that field for per-step policy / override selection + audit context
+        # (it must keep matching the declared step across loop iterations, NOT
+        # drift to the ledger row number). `entry_index` is the MONOTONIC ledger
+        # row index (0,1,2,3,…) — it scopes the unique ledger action_id +
+        # idempotency key so re-dispatching the same declared step across
+        # iterations never collapses on the IS writer's idempotency_key-only dedup
+        # (C-IS-07 §7.5). The two coincide only on iteration 0.
+        binding = resolve_step_binding(
+            manifest_entry,
+            str(step.step_id),
+            default_model_binding=default_model_binding,
+            persona_tier=manifest_entry.persona_tier,
+        )
+        entry_idempotency_key = _compute_step_idempotency_key(run_idempotency_key, entry_index)
+        step_context = StepExecutionContext(
+            workflow_id=workflow_id,
+            parent_action_id=f"workflow:{workflow_id}:step:{entry_index}",
+            parent_gate_level=resolve_parent_gate_level(manifest_entry),
+            parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+            parent_actor=ctx.ledger_writer.actor,
+            parent_entry_hash="",
+            parent_idempotency_key=entry_idempotency_key,
+            tenant_id=ctx.tenant_id,
+            step_index=declared_step_index,
+        )
+        step_output = step_dispatchers.lookup(step.step_kind).dispatch(
+            binding, step, step_context=step_context
+        )
+        _append_buffered_sequential_entry(
+            writer=writer,
+            workflow_id=workflow_id,
+            entry_index=entry_index,
+            idempotency_key=entry_idempotency_key,
+            timestamp=loop_timestamp,
+            procedural_tier_snapshot_ref=snapshot_ref,
+        )
+        ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
+        return step_output
+
+    entry_index = 0
+    accepted = False
+    iterations = 0
+    last_generate_output: Mapping[str, Any] = {}
+    last_evaluation: Mapping[str, Any] = {}
+    try:
+        for _iteration in range(_DEFAULT_EVALUATOR_OPTIMIZER_MAX_ITERATIONS):
+            iterations += 1
+            last_generate_output = _dispatch_and_buffer(
+                generate_step, declared_step_index=0, entry_index=entry_index
+            )
+            entry_index += 1
+            last_evaluation = _dispatch_and_buffer(
+                evaluate_step, declared_step_index=1, entry_index=entry_index
+            )
+            entry_index += 1
+            if _evaluator_optimizer_accepted(last_evaluation):
+                accepted = True
+                break
+    except Exception as exc:
+        # A generate/evaluate dispatch raised. EVALUATOR_OPTIMIZER has no
+        # cascade_policy differentiation (U-CP-85 non-dep) → FAILED. Drain
+        # whatever was buffered so the completed steps' entries persist (no
+        # silent failure — audit-honoring at this scope).
+        drain_branch_buffers(ctx.ledger_writer, [writer])
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state=None,
+            fail_class=f"evaluator-optimizer-step-failure: {type(exc).__name__}: {exc}",
+        ), entry_index
+
+    # Clean termination (accept or cap) — drain the buffer through the single real
+    # writer in execution order, then return SUCCESS. `accepted` discriminates
+    # accept-terminal from cap-terminal (§25.17 lists no cap-failure mode).
+    drain_branch_buffers(ctx.ledger_writer, [writer])
+    return RunResult(
+        workflow_id=workflow_id,
+        run_id=run_id,
+        status=RunStatus.SUCCESS,
+        terminal_step_index=None,
+        partial_state=None,
+        final_state={
+            "accepted": accepted,
+            "iterations": iterations,
+            "output": dict(last_generate_output),
+            "evaluation": dict(last_evaluation),
+        },
+        fail_class=None,
+    ), entry_index
 
 
 __all__ = [
