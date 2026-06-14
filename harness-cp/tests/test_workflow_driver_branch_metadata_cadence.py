@@ -46,7 +46,7 @@ from harness_cp.workflow_driver_types import (
 )
 from harness_is.chain_verification import VerificationStatus, verify_chain
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
-from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from harness_is.state_ledger_write import (
     NonMonotonicTimestampError,
     WriteResult,
@@ -275,6 +275,47 @@ def test_append_branch_terminal_buffers_disposition_entry() -> None:
     assert payload.action_id == f"{_PARENT_ACTION_ID}:branch:2:terminal"
     assert payload.branch_metadata is not None
     assert payload.branch_metadata.terminal_status == "timed_out"
+
+
+def test_append_helpers_thread_procedural_tier_snapshot_ref() -> None:
+    """R-003 forward-completeness: the active-workflow-context
+    `procedural_tier_snapshot_ref` sidecar (IS §5.1) is caller-injectable on both
+    helpers so the U-CP-86 strategy (which holds the DriverContext resolver) can
+    honor the population invariant; omitting it defaults None (resolver-less paths)."""
+    child = _branch(0)
+    buffer = BufferingLedgerWriter(actor=_ACTOR, branch_index=0)
+    snapshot = Identifier("ptsr-deadbeef")
+    append_branch_step_ledger_entry(
+        branch_writer=buffer,
+        branch_context=child,
+        run_idempotency_key="rik",
+        local_step_index=0,
+        timestamp=_FAN_OUT_TS,
+        procedural_tier_snapshot_ref=snapshot,
+    )
+    append_branch_terminal_ledger_entry(
+        branch_writer=buffer,
+        branch_context=child,
+        run_idempotency_key="rik",
+        terminal_status="completed",
+        timestamp=_FAN_OUT_TS,
+        procedural_tier_snapshot_ref=snapshot,
+    )
+    step_payload, _ = buffer.buffered_entries[0]
+    terminal_payload, _ = buffer.buffered_entries[1]
+    assert step_payload.procedural_tier_snapshot_ref == snapshot
+    assert terminal_payload.procedural_tier_snapshot_ref == snapshot
+    # The default (omitted) path stays None — backward-compatible with the §5.1
+    # omit-when-None canonicalization.
+    bare = BufferingLedgerWriter(actor=_ACTOR, branch_index=1)
+    append_branch_step_ledger_entry(
+        branch_writer=bare,
+        branch_context=_branch(1),
+        run_idempotency_key="rik",
+        local_step_index=0,
+        timestamp=_FAN_OUT_TS,
+    )
+    assert bare.buffered_entries[0][0].procedural_tier_snapshot_ref is None
 
 
 # ---------------------------------------------------------------------------

@@ -47,6 +47,8 @@ from harness_is.state_ledger_entry_schema import Actor
 from opentelemetry.trace import Status, StatusCode, TracerProvider
 
 if TYPE_CHECKING:
+    from harness_is.state_ledger_entry_schema import Identifier
+
     from harness_cp.validator_framework import SyncValidatorFrameworkFacade
     from harness_cp.validator_framework_types import ValidatorEvaluation
 
@@ -1616,9 +1618,12 @@ def _append_step_ledger_entry(
 # timestamps non-decreasing in branch-index drain order. The natural policy a
 # strategy (U-CP-86) uses is a single shared fan-out timestamp for every branch
 # entry (all equal ⟹ trivially monotonic ⟹ all APPEND; branch-index append order
-# preserved). `procedural_tier_snapshot_ref` is intentionally NOT populated here
-# (it is R-003's active-workflow-context invariant; U-CP-86, which holds the
-# DriverContext + resolver, is the natural wiring site — see the linear helper).
+# preserved). The R-003 active-workflow-context invariant (IS §5.1
+# `procedural_tier_snapshot_ref` populated at every producer site) is honored via
+# a caller-supplied injection param (defaulting `None`) on both helpers — the
+# strategy (U-CP-86), which holds the `DriverContext` resolver the linear
+# `_append_step_ledger_entry` reads, resolves + passes it, keeping these helpers
+# pure (no `DriverContext` coupling) and the public API forward-complete.
 
 
 def append_branch_step_ledger_entry(
@@ -1628,6 +1633,7 @@ def append_branch_step_ledger_entry(
     run_idempotency_key: str,
     local_step_index: int,
     timestamp: datetime,
+    procedural_tier_snapshot_ref: Identifier | None = None,
 ) -> None:
     """Buffer a branch's per-step ledger entry carrying causality-only
     `branch_metadata` (`terminal_status=None`) — C-CP-25 §25.13 / runtime §2.2(c).
@@ -1641,6 +1647,15 @@ def append_branch_step_ledger_entry(
     §25.15.2 obl. 2). `branch_context` must be a branch child context (the
     composers raise on a linear context). See the module-level timestamp
     discipline for the caller's monotonicity obligation.
+
+    `procedural_tier_snapshot_ref` is the **caller-supplied** R-003 sidecar (IS
+    spec v1.3 §5.1): a branch step entry is written inside an active-workflow
+    context, so the strategy (U-CP-86) — which holds the `DriverContext` resolver
+    the linear `_append_step_ledger_entry` reads — resolves and passes it here to
+    honor the active-workflow-context population invariant. Defaulting `None` keeps
+    this helper pure (no `DriverContext` coupling) and matches the §5.1
+    omit-when-`None` canonicalization for the resolver-less paths (tests, an
+    operator with no resolver bound).
     """
     from harness_is.state_ledger_entry_schema import Identifier
     from harness_is.state_ledger_write import EntryPayload, WriteKey
@@ -1657,6 +1672,7 @@ def append_branch_step_ledger_entry(
         idempotency_key=Identifier(idempotency_key),
         actor=branch_writer.actor,
         timestamp=timestamp,
+        procedural_tier_snapshot_ref=procedural_tier_snapshot_ref,
         branch_metadata=branch_metadata,
     )
     write_key = WriteKey(
@@ -1674,6 +1690,7 @@ def append_branch_terminal_ledger_entry(
     run_idempotency_key: str,
     terminal_status: Literal["cancelled", "completed", "timed_out"],
     timestamp: datetime,
+    procedural_tier_snapshot_ref: Identifier | None = None,
 ) -> None:
     """Buffer a branch's **fresh terminal entry** carrying the dispatch-boundary
     disposition — C-CP-25 §25.13 / IS §5.4 append-only invariant / runtime §2.2(c).
@@ -1689,7 +1706,10 @@ def append_branch_terminal_ledger_entry(
     `terminal_status` is the caller-decided disposition (U-CP-85's cascade logic);
     U-CP-84 persists the value it is handed. The carrier's closed set forecloses
     `failed` — a ran-and-errored branch is `completed` (dispatch-boundary, not
-    step-outcome). `branch_context` must be a branch child context.
+    step-outcome). `procedural_tier_snapshot_ref` is the caller-supplied R-003
+    sidecar — see `append_branch_step_ledger_entry` (the terminal entry is written
+    at the barrier drain, still inside the active-workflow context). `branch_context`
+    must be a branch child context.
     """
     from harness_is.state_ledger_entry_schema import Identifier
     from harness_is.state_ledger_write import EntryPayload, WriteKey
@@ -1706,6 +1726,7 @@ def append_branch_terminal_ledger_entry(
         idempotency_key=Identifier(idempotency_key),
         actor=branch_writer.actor,
         timestamp=timestamp,
+        procedural_tier_snapshot_ref=procedural_tier_snapshot_ref,
         branch_metadata=branch_metadata,
     )
     write_key = WriteKey(
