@@ -376,7 +376,9 @@ def test_engine_class_not_yet_materialized_raised_at_out_of_scope_engine_class()
 
 
 def test_validation_failure_emits_no_workflow_start() -> None:
-    manifest = _manifest(topology_pattern=TopologyPattern.PARALLELIZATION)
+    # ORCHESTRATOR_WORKERS is still NOT_YET_MATERIALIZED after U-CP-86 landed
+    # PARALLELIZATION — it still raises at the topology-materialization gate.
+    manifest = _manifest(topology_pattern=TopologyPattern.ORCHESTRATOR_WORKERS)
     ctx, _, emitter = _ctx()
     with pytest.raises(TopologyPatternNotYetMaterializedError):
         execute_workflow(

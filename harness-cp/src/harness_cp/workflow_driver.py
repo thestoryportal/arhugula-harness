@@ -36,7 +36,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import json
 from collections.abc import Awaitable, Coroutine, Iterable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from enum import Enum
@@ -54,7 +56,7 @@ if TYPE_CHECKING:
     from harness_cp.validator_framework import SyncValidatorFrameworkFacade
     from harness_cp.validator_framework_types import ValidatorEvaluation
 
-from harness_cp.cp_shared_types import ActorIdentity, ModelBinding
+from harness_cp.cp_shared_types import ActorIdentity, AgentRole, ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.pause_resume_protocol import (
@@ -79,6 +81,7 @@ from harness_cp.workflow_driver_types import (
     StepExecutionContext,
     StepKind,
     WorkflowStep,
+    compose_branch_child_context,
     compose_branch_metadata,
     compose_branch_path,
     compose_branch_step_action_id,
@@ -100,14 +103,26 @@ class _DriverStrategyStatus(Enum):
     `TopologyPattern` values; a pattern lands by flipping its table entry, so
     the dispatch site never needs re-plumbing. At B1-impl-2 only
     `SINGLE_THREADED_LINEAR` is materialized (`LINEAR_INLINE` — the existing
-    §25.3 iteration loop); the five non-linear patterns are
+    §25.3 iteration loop); the remaining non-linear patterns are
     `NOT_YET_MATERIALIZED` and raise `TopologyPatternNotYetMaterializedError`
-    until each strategy unit (U-CP-86..U-CP-90) lands. The concrete
-    `DriverStrategy` shape (callable vs class) is deferred to the first
-    strategy unit per CP plan v2.32 §6 O-CP-1(d).
+    until each strategy unit (U-CP-86..U-CP-90) lands. `PARALLELIZATION`
+    (`PARALLELIZATION`, the fan-out-barrier-aggregate strategy) lands first at
+    U-CP-86.
+
+    **`DriverStrategy` shape (O-CP-1(d) resolution, decided at U-CP-86 — the
+    first strategy unit).** The dispatch is a flat enum-keyed branch in
+    `_execute_workflow_body`, NOT a callable/class registry. The enum value
+    discriminates which materialized strategy runs; the body routes
+    `LINEAR_INLINE` → the existing §25.3 inline loop and each non-linear value
+    → its dedicated `_execute_<strategy>(...)` function returning
+    `(RunResult, steps_executed)`. A heavier callable/class `DriverStrategy`
+    abstraction is intentionally NOT introduced (simplicity-first — five
+    strategies routed by a closed enum need no indirection layer; the dispatch
+    table already enumerates the closed-at-6 `TopologyPattern`).
     """
 
     LINEAR_INLINE = "linear-inline"
+    PARALLELIZATION = "parallelization"
     NOT_YET_MATERIALIZED = "not-yet-materialized"
 
 
@@ -118,7 +133,7 @@ class _DriverStrategyStatus(Enum):
 # KeyError).
 _DRIVER_STRATEGY_DISPATCH: Mapping[TopologyPattern, _DriverStrategyStatus] = {
     TopologyPattern.SINGLE_THREADED_LINEAR: _DriverStrategyStatus.LINEAR_INLINE,
-    TopologyPattern.PARALLELIZATION: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
+    TopologyPattern.PARALLELIZATION: _DriverStrategyStatus.PARALLELIZATION,
     TopologyPattern.ORCHESTRATOR_WORKERS: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
     TopologyPattern.HIERARCHICAL_DELEGATION: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
     TopologyPattern.DECENTRALIZED_HANDOFF: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
@@ -130,8 +145,9 @@ def resolve_driver_strategy(topology_pattern: TopologyPattern) -> _DriverStrateg
     """Resolve a topology pattern to its driver strategy (C-CP-25 §25.10).
 
     Replaces the §25.3.1 `_IN_SCOPE_TOPOLOGY` materialization gate. A pattern
-    whose strategy has not yet landed (the five non-linear patterns at
-    B1-impl-2) raises `TopologyPatternNotYetMaterializedError`. Admissibility
+    whose strategy has not yet landed (the four non-linear patterns still
+    `NOT_YET_MATERIALIZED` after U-CP-86 lands `PARALLELIZATION`) raises
+    `TopologyPatternNotYetMaterializedError`. Admissibility
     (C-CP-10 §10.3 / C-CP-11 §11.1) is unchanged — it is rejected at
     workflow-binding time; §25.10 lifts only the *materialization* gate, not
     admissibility (Invariant 2). The typed error is preserved for any future
@@ -1273,9 +1289,30 @@ def _execute_workflow_body(
     # the drain-at-entry check (§25.4, above) still precedes topology
     # validation (U-CP-57 AC #1 / C-OD-25 §25.1 ordering). The engine-class
     # gate is unchanged.
-    resolve_driver_strategy(manifest_entry.topology_pattern)
+    strategy = resolve_driver_strategy(manifest_entry.topology_pattern)
     if manifest_entry.engine_class not in _IN_SCOPE_ENGINE_CLASSES:
         raise EngineClassNotYetMaterializedError(manifest_entry.engine_class)
+
+    # § 25.10/25.11 — non-linear strategy dispatch (U-CP-86+). `PARALLELIZATION`
+    # routes to its fan-out-barrier-aggregate strategy and returns here; the
+    # `SINGLE_THREADED_LINEAR` inline loop below stays BYTE-UNCHANGED (§25.10
+    # Invariant 1 — regression-safety). The linear-only paths the early return
+    # skips (prefix-replay/resume detection, mid-loop drain checks,
+    # pause-trigger detection, the per-step validator hook) compose at later
+    # strategy units (U-CP-85 cascade_policy / U-CP-88 ORCHESTRATOR_WORKERS) —
+    # PARALLELIZATION at U-CP-86 is the happy-path fan-out + deterministic
+    # aggregation. The four remaining non-linear patterns still raise
+    # `TopologyPatternNotYetMaterializedError` at `resolve_driver_strategy`.
+    if strategy is _DriverStrategyStatus.PARALLELIZATION:
+        return _execute_parallelization(
+            manifest_entry=manifest_entry,
+            steps=steps,
+            run_id=run_id,
+            ctx=ctx,
+            default_model_binding=default_model_binding,
+            step_dispatchers=step_dispatchers,
+            run_idempotency_key=run_idempotency_key,
+        )
 
     # Selective per-run replay-resumption via N-lookup over the existing
     # IS `read_by_idempotency_key` primitive (CP plan v2.12 §0.1 +
@@ -2064,6 +2101,401 @@ def append_branch_terminal_ledger_entry(
         idempotency_key=Identifier(idempotency_key),
     )
     branch_writer.append(payload, write_key)
+
+
+# ---------------------------------------------------------------------------
+# U-CP-86 — PARALLELIZATION driver strategy (C-CP-25 §25.11)
+# ---------------------------------------------------------------------------
+#
+# The FIRST non-linear topology strategy — fan-out-barrier-aggregate. Per
+# §25.11 "strategies differ only in *control flow over steps*", the SAME
+# `steps` sequence the `SINGLE_THREADED_LINEAR` loop runs sequentially is here
+# run CONCURRENTLY: each declared `WorkflowStep` is one branch (branch_index =
+# its ordinal) over its varied `step_payload` (§25.11 PARALLELIZATION row + the
+# B1 design "variation is in *inputs*, not agent specialization"). This reuses
+# the existing `execute_workflow(manifest, steps, ...)` input with ZERO schema
+# extension (a branch-spec payload schema would be an X-AL-3 spec extension).
+#
+# Composes the U-CP-80..84 substrate:
+#   - branch child contexts            (compose_branch_child_context, U-CP-81)
+#   - the buffered/deferred-append path (BufferingLedgerWriter + the
+#     branch-index-ordered drain, U-CP-82) — NEVER the linear inline append
+#   - branch_metadata causality + a `completed` terminal entry per branch
+#     (append_branch_step/terminal_ledger_entry, U-CP-84)
+#   - the policy-NEUTRAL bounded barrier (bounded_barrier, U-CP-82).
+#
+# U-CP-86 does NOT depend on U-CP-85 (cascade), so it uses NO cascade-cancel:
+# the barrier is `bounded_barrier` (policy-neutral, leak-free); a branch failure
+# maps to `RunStatus.FAILED`. The richer `cascade_policy` proceed/pause/
+# cascade-cancel differentiation (→ PARTIAL/PAUSED/FAILED) is U-CP-85's machinery,
+# first consumed by U-CP-88 (ORCHESTRATOR_WORKERS).
+#
+# Determinism (§25.12): both the persisted append order AND the aggregate are
+# pure functions of the ORDERED (branch-index) result set — never completion
+# order. `drain_branch_buffers` sorts by branch_index; `_aggregate_parallelization`
+# votes with a lowest-branch-index tiebreak.
+
+_DEFAULT_PARALLELIZATION_AGENT_ROLE = AgentRole("parallelization-worker")
+"""The single per-worker role for PARALLELIZATION branches (C-CP-25 §25.11).
+
+PARALLELIZATION varies *inputs*, NOT agent specialization — one role for all
+branches (the B1 design "non-degenerate with one role"). The runtime role-read
+(U-RT-114) therefore routes every branch to the same model. Per-role worker
+specialization is the ORCHESTRATOR_WORKERS family (U-CP-88+)."""
+
+_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS = 300.0
+"""Wall-clock deadline on the fan-out barrier (C-CP-25 §25.11 bounded barriers;
+O-CP-1(c) impl-discretion). Bounds the PARENT's return: a branch stuck past this
+cap does not strand the workflow — the barrier raises and the run returns
+`RunStatus.FAILED` (the fan-out is driven so a wedged SYNC branch thread cannot
+re-defeat the cap at executor shutdown; see `_run_fanout_to_completion`). The
+HARD in-flight EFFECT cut-off (cancelling a running dispatch) is §25.15 cascade
+scope (U-CP-85), deliberately excluded from U-CP-86 per its dependency set.
+Generous default sized for INFERENCE_STEP branches; a manifest-surfaced
+per-workflow deadline is a forward field (not surfaced at v1.32)."""
+
+
+def _parallelization_fanout_action_id(workflow_id: str) -> str:
+    """The shared fan-out parent `action_id` every branch descends from.
+
+    All PARALLELIZATION branches fan out from the workflow root, so they share
+    one fan-out point. `(parent_action_id, branch_index)` is the branch
+    causality key (IS spec v1.8 §5.4); a single fan-out `action_id` + the
+    per-branch index yields a globally-unique key per branch (no `branch_path`
+    at the causality key — Route Y).
+    """
+    return f"workflow:{workflow_id}:fanout"
+
+
+def _aggregate_parallelization(
+    branch_outputs: list[tuple[int, str, Mapping[str, Any]]],
+) -> dict[str, Any]:
+    """Fold the branch outputs into one result — voting, deterministic tiebreak
+    = lowest branch-index (C-CP-25 §25.11 aggregator + §25.12 determinism).
+
+    `branch_outputs` is `[(branch_index, step_id, output), ...]`. The fold is a
+    PURE function of the ORDERED (branch-index) set — never completion order
+    (the §25.12 determinism boundary; "first to finish wins" is forbidden):
+
+    - **`branch_outputs`** (all preserved, no discard): every branch's output
+      keyed by its `step_id` — parity with the linear path, which keys every
+      step output by `step_id` (a single-winner fold that *dropped* the other
+      N-1 branch results would silently lose them).
+    - **`aggregate`** (the single synthesized result): a voting fold — branches
+      "vote" with their canonical-JSON-serialized output; the winner is the
+      most-voted output; ties break to the LOWEST branch-index. With
+      all-distinct outputs every vote is 1 → tie → branch 0 wins (the
+      deterministic floor; pinned by an explicit all-distinct test as
+      *intended*, not accidental).
+    """
+    sorted_outputs = sorted(branch_outputs, key=lambda t: t[0])
+    # Tally votes by canonical-JSON of each output, inserting in branch-index
+    # order so a count tie resolves to the FIRST-inserted (lowest branch-index)
+    # key — `max` is stable on first-seen among equal keys, and dicts preserve
+    # insertion order.
+    vote_counts: dict[str, int] = {}
+    representative: dict[str, Mapping[str, Any]] = {}
+    for _branch_index, _step_id, output in sorted_outputs:
+        canon = json.dumps(output, sort_keys=True, default=str)
+        if canon not in vote_counts:
+            vote_counts[canon] = 0
+            representative[canon] = output
+        vote_counts[canon] += 1
+    winning_canon = max(vote_counts, key=lambda k: vote_counts[k])
+    return {
+        "branch_outputs": {step_id: dict(output) for _bi, step_id, output in sorted_outputs},
+        "aggregate": dict(representative[winning_canon]),
+    }
+
+
+def _drain_and_emit_step_boundaries(
+    ctx: DriverContext,
+    branch_writers: Sequence[BufferingLedgerWriter],
+) -> int:
+    """Drain all branch buffers (branch-index order) through the single real
+    writer, then emit one `STEP_BOUNDARY` per branch that ran a step.
+
+    Single-threaded at the drain BY CONSTRUCTION: all emitter access (this
+    drain + the one `WORKFLOW_START`) runs on the driver thread, after the
+    barrier (`asyncio.run` over the fan-out has returned) — never concurrently.
+    `STEP_BOUNDARY` is therefore NEVER emitted from the `to_thread` branch
+    workers (which would also race the non-thread-safe emitter). The per-step
+    boundary→append ordering of the linear path
+    (§25.3.3.5 then §25.3.3.7) does not apply to a fan-out — the barrier-drain
+    is one persist event; emitting the boundaries after the drain is the
+    single-threaded analogue (impl-discretion, §25.18).
+
+    Returns the count of branches that ran a step (the `workflow.step_count`
+    carrier, C-OD-25). A fully-run branch buffered a step entry + a terminal
+    entry (so its `entry_count` is 2); a branch whose dispatch raised before
+    buffering contributed nothing (`entry_count` 0). The count is therefore the
+    number of branches with a non-empty buffer, NOT the raw drained-entry count.
+    """
+    ran = sum(1 for writer in branch_writers if writer.entry_count > 0)
+    drain_branch_buffers(ctx.ledger_writer, branch_writers)
+    for _ in range(ran):
+        ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
+    return ran
+
+
+def _run_fanout_to_completion[T](fanout: Coroutine[Any, Any, T], *, max_workers: int) -> T:
+    """Drive the async fan-out from the sync driver thread — WITHOUT `asyncio.run`.
+
+    `asyncio.run` JOINS its default `ThreadPoolExecutor` at shutdown
+    (`loop.shutdown_default_executor()` waits for every worker). A branch's SYNC
+    dispatch runs off-loop via `asyncio.to_thread`, and CPython cannot kill a
+    running thread — so a genuinely-wedged branch would block the parent's return
+    at executor shutdown EVEN AFTER `bounded_barrier` raised the §25.11 wall-clock
+    deadline, re-defeating the cap (the parent hangs instead of returning
+    `parallelization-barrier-deadline-exceeded`).
+
+    This drives the fan-out on a dedicated loop + a dedicated executor (sized to
+    the fan-out so all branches run concurrently). On a CLEAN return every branch
+    thread is idle/done → `shutdown(wait=True)` reclaims them (no thread leak). On
+    ANY exception — the barrier deadline OR a branch failure — the executor is
+    abandoned (`shutdown(wait=False)`) so a wedged branch thread NEVER blocks the
+    parent's return; the orphaned thread runs to completion in the background.
+
+    Honest residual (a CPython limit the spec routes to §25.15, NOT a U-CP-86
+    defect): the orphaned thread is unkillable, so the HARD in-flight EFFECT
+    cut-off (cancelling a running dispatch, classifying it `timed_out`) is §25.15
+    cascade scope — U-CP-85's `cascade_cancel_barrier` `_deadline_cutoff`
+    watchdog — deliberately excluded from U-CP-86 per its dependency set. In
+    practice provider SDK per-call timeouts bound a real dispatch well under the
+    fan-out backstop.
+    """
+    loop = asyncio.new_event_loop()
+    executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="cp-fanout")
+    loop.set_default_executor(executor)
+    try:
+        result = loop.run_until_complete(fanout)
+    except BaseException:
+        # Abandon (never join) on BOTH exit reasons — the barrier deadline AND an
+        # ordinary branch failure — because either can leave a wedged sibling
+        # thread, and joining one would re-defeat U-CP-86's OWN §25.11 obligation
+        # ("a stuck branch cannot strand its parent indefinitely"): a branch that
+        # fails fast (e.g. t=1s) has already exited `bounded_barrier`'s
+        # `asyncio.timeout` window, so a `wait=True` join of a wedged sibling
+        # would block PAST the deadline, forever. Parent-bounding is the
+        # obligation U-CP-86 owns — honored by always returning. The orphaned
+        # sibling's effect DISPOSITION (cancel / record / discriminate
+        # terminal_status) is the §25.15.1 cascade_policy semantic — U-CP-85's
+        # `cascade_cancel_barrier` + the proceed/pause/cascade-cancel table —
+        # deliberately EXCLUDED from U-CP-86 by its dependency set. No
+        # silent-uncompensated-effect results: PARALLELIZATION is §10.3-admissible
+        # only for RESEARCH / CONTENT_CREATION (non-effectful breadth-search / A-B
+        # cells; `topology_pattern.py:73-86`, and not a §11.1 primary), and an
+        # effectful step gates BEFORE dispatch inside the dispatcher
+        # (C-AS-02 → C-CP-19 → C-CP-16; only the ledger WRITE is buffered, never
+        # the gate), so an orphaned sibling either never dispatched (no effect) or
+        # already passed its operator gate.
+        executor.shutdown(wait=False)
+        raise
+    else:
+        # Clean fan-out: every branch thread is idle/done → reclaim them.
+        executor.shutdown(wait=True)
+        return result
+    finally:
+        loop.close()
+
+
+def _execute_parallelization(
+    *,
+    manifest_entry: WorkflowManifestEntry,
+    steps: Sequence[WorkflowStep],
+    run_id: str,
+    ctx: DriverContext,
+    default_model_binding: ModelBinding,
+    step_dispatchers: StepDispatcherRegistry,
+    run_idempotency_key: str,
+) -> tuple[RunResult, int]:
+    """Execute the `PARALLELIZATION` fan-out-barrier-aggregate strategy (U-CP-86).
+
+    Each declared `WorkflowStep` is fanned out as one branch (branch_index = its
+    ordinal); all branches run concurrently; the barrier holds until every
+    branch finishes; the structured outputs fold into one deterministic result.
+    Returns `(RunResult, steps_executed)` for the `_execute_workflow_body`
+    caller (matching the linear path's tuple).
+
+    Bypassed linear-only paths (documented scoped-not-forgotten): prefix-replay
+    / explicit-pause resume detection, mid-loop drain checks, per-step
+    pause-trigger detection, and the per-step validator hook are NOT composed
+    here — they compose at later strategy units (U-CP-85 cascade_policy /
+    U-CP-88 ORCHESTRATOR_WORKERS). U-CP-86 is the happy-path fan-out + the
+    deterministic aggregation.
+    """
+    workflow_id = manifest_entry.workflow_id
+
+    # Empty step sequence → trivially SUCCESS with an empty aggregate (no
+    # fan-out; mirrors the linear path's empty-loop SUCCESS).
+    if not steps:
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.SUCCESS,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state={"branch_outputs": {}, "aggregate": {}},
+            fail_class=None,
+        ), 0
+
+    # One fan-out parent context (the fan-out point); each branch descends a
+    # child via compose_branch_child_context (U-CP-81). The MVP-default seed
+    # fields mirror the linear per-step composition site.
+    fanout_parent = StepExecutionContext(
+        workflow_id=workflow_id,
+        parent_action_id=_parallelization_fanout_action_id(workflow_id),
+        parent_gate_level=resolve_parent_gate_level(manifest_entry),
+        parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        parent_actor=ctx.ledger_writer.actor,
+        parent_entry_hash="",
+        parent_idempotency_key=_compute_step_idempotency_key(run_idempotency_key, 0),
+        tenant_id=ctx.tenant_id,
+        step_index=0,
+    )
+
+    # R-003 active-workflow-context sidecar (resolved once per fan-out; the same
+    # resolver the linear `_append_step_ledger_entry` reads). None when no
+    # resolver is bound (operator opt-out / test ctx).
+    _resolver = getattr(ctx, "procedural_tier_snapshot_resolver", None)
+    snapshot_ref = _resolver() if _resolver is not None else None
+
+    # A single shared fan-out timestamp for every branch entry. All-equal ⟹
+    # trivially monotonic under the zero-tolerance IS writer regardless of
+    # branch-index drain order (see the module timestamp-discipline note above
+    # `append_branch_step_ledger_entry`). The IS writer checks the first drained
+    # entry against whatever preceded the fan-out; `now()` is >= any prior entry.
+    fanout_timestamp = datetime.now(UTC)
+
+    # Per-branch plan: (branch_index, step, child context, buffering writer,
+    # resolved binding). The fan-out cardinality cap (C-CP-10 §10.3 cells) is an
+    # ADMISSIBILITY property rejected at workflow-binding (§25.10 Invariant 2) —
+    # NOT re-truncated here (silently dropping declared steps beyond a cap would
+    # be silent branch loss); the strategy fans out every declared branch.
+    branch_plan: list[
+        tuple[int, WorkflowStep, StepExecutionContext, BufferingLedgerWriter, StepEffectiveBinding]
+    ] = []
+    for branch_index, step in enumerate(steps):
+        child = compose_branch_child_context(
+            fanout_parent,
+            branch_index=branch_index,
+            agent_role=_DEFAULT_PARALLELIZATION_AGENT_ROLE,
+        )
+        writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=branch_index)
+        binding = resolve_step_binding(
+            manifest_entry,
+            str(step.step_id),
+            default_model_binding=default_model_binding,
+            persona_tier=manifest_entry.persona_tier,
+        )
+        branch_plan.append((branch_index, step, child, writer, binding))
+    branch_writers = [plan[3] for plan in branch_plan]
+
+    # § 25.3.2 — Emit workflow.start (the fan-out begins). Single-threaded on the
+    # driver thread, BEFORE the concurrent branches spawn.
+    ctx.lifecycle_emitter.emit(WorkflowEventClass.WORKFLOW_START)
+
+    async def _run_branch(
+        branch_index: int,
+        step: WorkflowStep,
+        child: StepExecutionContext,
+        writer: BufferingLedgerWriter,
+        binding: StepEffectiveBinding,
+    ) -> tuple[int, str, Mapping[str, Any]]:
+        # Concurrency: the existing SYNC dispatcher is run off-loop in a thread
+        # so N branches genuinely run concurrently (the dispatch IS the blocking
+        # model/tool call). The pre-dispatch gate is NOT deferred — dispatch
+        # fires inline in the branch; only the ledger WRITE is buffered
+        # (§25.15.2 obl. 2). No `asyncio.shield` here: U-CP-86 has no
+        # cascade-cancel (U-CP-85 non-dep), so an in-flight effect never needs
+        # the shield-and-drive of `dispatch_branch_step_shielded` (U-CP-88).
+        dispatcher = step_dispatchers.lookup(step.step_kind)
+        step_output: Mapping[str, Any] = await asyncio.to_thread(
+            dispatcher.dispatch, binding, step, step_context=child
+        )
+        # Buffer the branch's per-step entry (causality-only branch_metadata) +
+        # a fresh `completed` terminal entry (dispatch-boundary disposition — a
+        # ran branch is `completed`). Both buffer through the branch's OWN
+        # writer on the loop thread (after the awaited dispatch returns); the
+        # single barrier drain serializes them in branch-index order (U-CP-82/84).
+        append_branch_step_ledger_entry(
+            branch_writer=writer,
+            branch_context=child,
+            run_idempotency_key=run_idempotency_key,
+            local_step_index=0,
+            timestamp=fanout_timestamp,
+            procedural_tier_snapshot_ref=snapshot_ref,
+        )
+        append_branch_terminal_ledger_entry(
+            branch_writer=writer,
+            branch_context=child,
+            run_idempotency_key=run_idempotency_key,
+            terminal_status="completed",
+            timestamp=fanout_timestamp,
+            procedural_tier_snapshot_ref=snapshot_ref,
+        )
+        return (branch_index, str(step.step_id), step_output)
+
+    async def _fanout() -> list[tuple[int, str, Mapping[str, Any]]]:
+        return await bounded_barrier(
+            [_run_branch(*plan) for plan in branch_plan],
+            deadline_seconds=_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS,
+        )
+
+    # Sync bridge — drive the fan-out on a dedicated loop (NOT `asyncio.run`,
+    # which would join the executor at shutdown and let a wedged SYNC branch
+    # re-defeat the §25.11 deadline; see `_run_fanout_to_completion`). The
+    # executor is sized to the fan-out so every branch runs concurrently.
+    try:
+        branch_results = _run_fanout_to_completion(_fanout(), max_workers=max(1, len(branch_plan)))
+    except BranchBarrierDeadlineExceededError as exc:
+        # A stuck branch hit the wall-clock deadline. Drain whatever the
+        # completed branches buffered (no silent failure) then FAILED. The
+        # bounded_barrier `finally` already cancelled + awaited pending tasks
+        # (leak-free). The discriminating `timed_out` per-branch terminal_status
+        # is U-CP-85's cascade machinery (non-dep) — at U-CP-86 a fan-out
+        # deadline is a barrier-level FAILED.
+        steps_executed = _drain_and_emit_step_boundaries(ctx, branch_writers)
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state=None,
+            fail_class=f"parallelization-barrier-deadline-exceeded: {exc}",
+        ), steps_executed
+    except Exception as exc:
+        # A branch raised. U-CP-86 has no cascade_policy differentiation
+        # (U-CP-85 non-dep) → FAILED. Drain whatever each branch buffered so
+        # the completed branches' entries persist (no silent failure — the
+        # audit-honoring at U-CP-86's scope). The richer harvest-partial-results
+        # `proceed`→PARTIAL flow + the discriminating cancelled/timed_out
+        # terminal_status are U-CP-85.
+        steps_executed = _drain_and_emit_step_boundaries(ctx, branch_writers)
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state=None,
+            fail_class=f"parallelization-branch-failure: {type(exc).__name__}: {exc}",
+        ), steps_executed
+
+    # Clean barrier — drain (branch-index order) + emit STEP_BOUNDARYs, then
+    # fold the structured outputs into one deterministic result.
+    steps_executed = _drain_and_emit_step_boundaries(ctx, branch_writers)
+    final_state = _aggregate_parallelization(branch_results)
+    return RunResult(
+        workflow_id=workflow_id,
+        run_id=run_id,
+        status=RunStatus.SUCCESS,
+        terminal_step_index=None,
+        partial_state=None,
+        final_state=final_state,
+        fail_class=None,
+    ), steps_executed
 
 
 __all__ = [
