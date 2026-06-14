@@ -34,8 +34,10 @@ Authority:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 from collections.abc import Awaitable, Coroutine, Iterable, Mapping, Sequence
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
@@ -65,7 +67,7 @@ from harness_cp.pause_resume_protocol_types import (
     WorkflowPauseReason,
 )
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding, resolve_step_binding
-from harness_cp.topology_pattern import TopologyPattern
+from harness_cp.topology_pattern import CascadePolicy, TopologyPattern
 from harness_cp.workflow_driver_errors import (
     BranchBarrierDeadlineExceededError,
     EngineClassNotYetMaterializedError,
@@ -638,6 +640,330 @@ async def bounded_barrier[T](
                 task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+
+# ---------------------------------------------------------------------------
+# U-CP-85 — `cascade_policy` consumption + cascade-cancel reach (C-CP-25 §25.15)
+# ---------------------------------------------------------------------------
+#
+# `CascadePolicy` (`pause` / `proceed` / `cascade-cancel`, C-CP-10 §10.2) is
+# declared-but-unconsumed at HEAD; under fan-out it becomes load-bearing. This
+# block consumes it per the §25.15.2 eight cascade-cancel obligations (the
+# council-resolved Fork A — `.harness/council/r-fs-1-b1-cascade-cancel/`):
+#
+#   - `cascade_policy_run_status`     — the §25.15.1 on-branch-failure run-level
+#                                       status mapping (obl. 6).
+#   - `resume_should_redispatch`      — resume-idempotency-terminality (obl. 7).
+#   - `cascade_cancel_barrier`        — `asyncio.TaskGroup` structured
+#                                       cancellation of not-yet-dispatched
+#                                       siblings (obl. 1 + 8); the cascade-cancel
+#                                       counterpart to the policy-neutral
+#                                       `bounded_barrier`.
+#   - `dispatch_branch_step_shielded` — an in-flight effectful dispatch runs to
+#                                       completion / deadline-timeout under a
+#                                       cascade-cancel (obl. 1 + 3 + 4).
+#
+# Obligations 2 (no-gate-bypass-by-buffering) and 5 (high-blast-radius
+# pre-dispatch gating via the committed C-AS-02 → C-CP-19 → C-CP-16 chain) are
+# discharged by a branch dispatching its pre-dispatch gate BEFORE the shielded
+# effectful dispatch — the gate is a not-yet-dispatched boundary where a
+# cascade-cancel is clean. This block provides the cancellation machinery; the
+# concrete branch control flow (gate → shielded dispatch → classify → record) is
+# the consuming strategy's (U-CP-88, the first cascade-policy consumer). The
+# machinery is unit-proven here against SYNTHETIC branch coroutines; the
+# real-strategy + `RunResult.status` e2e lands at U-CP-88.
+
+
+#: The C-CP-25 §25.15.1 run-level `RunStatus` a fan-out reaches when ≥1 branch
+#: FAILS under the given policy (obl. 6). Existing `RunStatus` members only — no
+#: new value. `PARTIAL` belongs to `proceed`, NEVER `cascade-cancel`
+#: (advisor-caught at the council). The §25.15.1 "`degraded=true`" is SRE
+#: graceful-degradation PROSE, not a contracted field — `RunStatus.PARTIAL` is
+#: the sole degradation signal (the 8-field `RunResult` carries no `degraded`).
+_CASCADE_POLICY_RUN_STATUS: dict[CascadePolicy, RunStatus] = {
+    CascadePolicy.CASCADE_CANCEL: RunStatus.FAILED,
+    CascadePolicy.PROCEED: RunStatus.PARTIAL,
+    CascadePolicy.PAUSE: RunStatus.PAUSED,
+}
+
+
+def cascade_policy_run_status(policy: CascadePolicy) -> RunStatus:
+    """Map a `cascade_policy` to its run-level `RunStatus` on a branch failure
+    (C-CP-25 §25.15.1 table + §25.15.2 obligation 6).
+
+    The **on-branch-failure** reaction mapping — the run-level status a fan-out
+    reaches when ≥1 branch fails under the given policy:
+
+    - ``CASCADE_CANCEL`` → ``RunStatus.FAILED``: the fan-out fails;
+      not-yet-dispatched siblings were cancelled (`cascade_cancel_barrier`),
+      in-flight steps ran to completion / deadline-timeout.
+    - ``PROCEED`` → ``RunStatus.PARTIAL``: siblings ran to completion; the
+      aggregator (the strategy's deterministic fold, U-CP-86) sees a partial
+      result set carried in the existing ``RunResult.partial_state``. **No
+      ``degraded`` boolean is minted** — ``RunStatus.PARTIAL`` is the sole
+      degradation signal (the §25.15.1 "``degraded=true``" is SRE prose, not a
+      contracted ``RunResult`` field).
+    - ``PAUSE`` → ``RunStatus.PAUSED``: the fan-out halts at the HITL/pause
+      boundary; composes with the existing PauseResumeProtocol + ``api.resume``
+      (C-RT-30) — this mapping does NOT re-build pause-snapshot capture.
+
+    A clean fan-out (no branch failure) is the strategy's normal ``SUCCESS`` path
+    and does not consult this function.
+    """
+    return _CASCADE_POLICY_RUN_STATUS[policy]
+
+
+def resume_should_redispatch(
+    terminal_status: Literal["cancelled", "completed", "timed_out"] | None,
+) -> bool:
+    """Decide whether `api.resume` may re-dispatch a branch given its persisted
+    `branch_metadata.terminal_status` (C-CP-25 §25.15.2 obligation 7 —
+    resume-idempotency-terminality).
+
+    A branch that reached ANY dispatch-boundary terminal disposition
+    (``cancelled`` / ``completed`` / ``timed_out``) MUST NOT be re-dispatched on
+    resume — its terminal entry is persisted (U-CP-84), so re-running it would
+    double-dispatch its effects. Only a branch with **no** persisted terminal
+    entry (``None`` — it never reached a dispatch boundary, e.g. a fan-out
+    interrupted before this branch ran) is re-dispatch-eligible.
+
+    ``api.resume`` (C-RT-30) reads each branch's persisted ``terminal_status``
+    via the branch-scoped idempotency key (U-CP-83) and consults this predicate
+    before re-dispatching: ``True`` ⟹ eligible; ``False`` ⟹ already-terminal,
+    skip.
+    """
+    return terminal_status is None
+
+
+#: The barrier↔shield coordination channel for the deadline cut-off (obl. 1).
+#: Each enclosing `cascade_cancel_barrier` contributes ITS OWN registry set to a
+#: **CHAIN** (outermost-first); a branch's in-flight effectful dispatch
+#: (`dispatch_branch_step_shielded`) registers itself in **EVERY** set in the
+#: chain, so the deadline watchdog of ANY enclosing barrier can cancel it DIRECTLY
+#: — `asyncio.shield` protects an in-flight dispatch from the branch's own
+#: cancellation (a sibling failure → the effect runs to completion, obl. 1) but
+#: NOT from a direct cancel, so a watchdog's direct `inflight.cancel()` is exactly
+#: the "...or barrier-deadline timeout" cut-off. **The chain (not a single set) is
+#: load-bearing for NESTED fan-out (e.g. HIERARCHICAL_DELEGATION, U-CP-89): a
+#: nested barrier's in-flight dispatch must remain visible to the OUTER deadline
+#: watchdog, or the outer deadline would only cancel the outer branch task while
+#: the shielded inner dispatch outlives it — the outer deadline would stop being a
+#: hard cap.** A nested barrier `.set`s `(*parent_chain, my_set)`; the tightest
+#: enclosing deadline that fires first cuts the dispatch. A ContextVar (not an
+#: argument) so a deeply-nested branch dispatch reaches the chain without threading
+#: it through the strategy's control flow; `None` when the helper is used outside
+#: any `cascade_cancel_barrier` (then there is no deadline cut-off — only the
+#: shield-drive).
+_BRANCH_INFLIGHT_DISPATCHES: ContextVar[tuple[set[asyncio.Future[Any]], ...] | None] = ContextVar(
+    "branch_inflight_dispatches", default=None
+)
+
+
+async def cascade_cancel_barrier[T](
+    branch_coros: Iterable[Coroutine[Any, Any, T]],
+    *,
+    deadline_seconds: float,
+) -> list[T]:
+    """Await all branches under `asyncio.TaskGroup` structured cancellation,
+    bounded by a wall-clock deadline (C-CP-25 §25.15.2 obligations 1 + 8 — the
+    `cascade-cancel` counterpart to the policy-NEUTRAL `bounded_barrier`).
+
+    The `cascade-cancel` policy form: on the FIRST branch raising, the
+    ``TaskGroup`` deterministically cancels every not-yet-finished sibling
+    (obligation 8: structured cancellation, no orphan leak — the foreclosed
+    ``gather``-leaks-orphans anti-pattern). A sibling whose effectful step is in
+    flight runs that step to completion (`dispatch_branch_step_shielded`,
+    obligation 1) before the cancellation lands at its next dispatch boundary; a
+    sibling at a not-yet-dispatched boundary unwinds cleanly. This barrier is
+    used ONLY by `cascade-cancel` (the policy that needs
+    cancel-siblings-on-first-failure).
+
+    **`proceed` and `pause` use a DIFFERENT barrier — NOT this one and NOT
+    `bounded_barrier` as-is.** `bounded_barrier` (gather, policy-NEUTRAL)
+    re-raises a branch exception UNCHANGED and is the bounded-wait used where no
+    cascade-cancel semantic is needed — but on a branch failure its ``finally``
+    CANCELS the still-pending siblings, so it does NOT implement `proceed`
+    either. `proceed` requires siblings to **run to completion** (a
+    ``return_exceptions``-collecting barrier → a partial result set →
+    `RunStatus.PARTIAL`); `pause` halts the fan-out at the HITL/pause boundary →
+    `RunStatus.PAUSED`. Those two FLOWS — and the real high-blast-radius
+    pre-dispatch gate (obligation 5: C-AS-02 → C-CP-19 → C-CP-16) — are owed at
+    the consuming strategy (U-CP-88), composing with the pure
+    `cascade_policy_run_status` mapping. U-CP-85 supplies the cascade-cancel
+    barrier + that mapping; it does NOT itself wire the `proceed`/`pause` flows
+    or the real gate.
+
+    **The wall-clock deadline is a HARD cap on a stuck branch (§25.11).** Two
+    composed mechanisms enforce it so it bounds a branch stuck ANYWHERE:
+
+    - A **deadline watchdog** fires at ``deadline_seconds`` and cancels every
+      registered in-flight effectful dispatch (`_BRANCH_INFLIGHT_DISPATCHES`)
+      DIRECTLY — ``asyncio.shield`` keeps an in-flight dispatch alive against the
+      branch's own cancellation (obligation 1 "...runs to its own completion"),
+      so without this direct cut-off a stuck in-flight step would defeat the
+      deadline ("...OR barrier-deadline timeout"). A branch whose in-flight step
+      is cut this way records ``timed_out``.
+    - ``asyncio.timeout(deadline_seconds)`` around the ``TaskGroup`` cancels the
+      branch TASKS, bounding a branch stuck at a not-yet-dispatched boundary
+      (e.g. a blocking HITL gate) that has no in-flight dispatch for the watchdog
+      to cut. Such a branch records ``cancelled`` (no effect dispatched).
+
+    On a branch failure the ``TaskGroup`` raises a ``BaseExceptionGroup``; it
+    propagates UNCHANGED for the calling strategy (U-CP-88) to map to
+    ``cascade_policy_run_status(CASCADE_CANCEL) == RunStatus.FAILED`` (obligation
+    6). On the wall-clock deadline (no branch failure), raises
+    ``BranchBarrierDeadlineExceededError`` (§25.11 parity with `bounded_barrier`).
+    Results are returned in the input (branch) order of ``branch_coros``; the
+    deterministic PERSISTED order is enforced separately at `drain_branch_buffers`
+    (the §25.12 boundary).
+
+    `branch_coros` are coroutines (the ``TaskGroup`` owns task creation — unlike
+    `bounded_barrier`, which accepts already-scheduled awaitables); each is
+    created exactly once, so a non-clean exit cannot leave an un-awaited coroutine.
+    """
+    inflight_dispatches: set[asyncio.Future[Any]] = set()
+    # Compose with any enclosing barrier's chain (nested fan-out): this barrier's
+    # set is appended so an inner dispatch registers in BOTH this set and every
+    # ancestor set — the outer deadline watchdog stays a hard cap over inner work.
+    parent_chain = _BRANCH_INFLIGHT_DISPATCHES.get() or ()
+    registry_token = _BRANCH_INFLIGHT_DISPATCHES.set((*parent_chain, inflight_dispatches))
+
+    async def _deadline_cutoff() -> None:
+        # At the deadline, cancel each in-flight effectful dispatch DIRECTLY.
+        # This — NOT timer ordering — is what makes the deadline a hard cap:
+        # `asyncio.shield` keeps an in-flight dispatch alive against the BRANCH's
+        # own cancellation (obl. 1 "...runs to its own completion") but NOT
+        # against a direct `inflight.cancel()`, so cancelling `inflight` here
+        # unblocks the branch's shielded drive REGARDLESS of whether this watchdog
+        # or the `asyncio.timeout` below fires first (both orderings converge —
+        # empirically verified). Do not "optimize away" this watchdog believing
+        # the `asyncio.timeout` alone bounds the in-flight drive — it does not.
+        # The `asyncio.timeout` below then unwinds any gate-stuck (no-in-flight)
+        # branch the watchdog has nothing to cut.
+        await asyncio.sleep(deadline_seconds)
+        for inflight in list(inflight_dispatches):
+            if not inflight.done():
+                inflight.cancel()
+
+    cutoff_task = asyncio.ensure_future(_deadline_cutoff())
+    tasks: list[asyncio.Task[T]] = []
+    try:
+        async with asyncio.timeout(deadline_seconds):
+            async with asyncio.TaskGroup() as task_group:
+                tasks = [task_group.create_task(coro) for coro in branch_coros]
+        return [task.result() for task in tasks]
+    except TimeoutError as exc:
+        # The barrier deadline fired with no branch failure: `asyncio.timeout`
+        # cancelled the TaskGroup body and converted the resulting CancelledError
+        # to TimeoutError. (A branch failure instead surfaces as a
+        # BaseExceptionGroup, which is NOT a TimeoutError → it propagates
+        # unchanged for the strategy to map to FAILED.)
+        raise BranchBarrierDeadlineExceededError(deadline_seconds) from exc
+    finally:
+        # Reap the watchdog (a no-op if it already fired) so it never outlives
+        # the barrier, then restore the registry ContextVar.
+        cutoff_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await cutoff_task
+        _BRANCH_INFLIGHT_DISPATCHES.reset(registry_token)
+
+
+async def dispatch_branch_step_shielded[T](inflight: asyncio.Future[T]) -> T:
+    """Await an in-flight effectful step dispatch with `asyncio.shield` so a
+    cascade-cancel of this branch does NOT abandon the in-flight effect
+    (C-CP-25 §25.15.2 obligation 1).
+
+    The caller schedules the dispatch (``inflight = asyncio.ensure_future(...)``)
+    and passes the resulting future so it can classify the branch's terminal
+    disposition afterwards (obligation 4). The dispatch is registered in the
+    `cascade_cancel_barrier` deadline-cut-off channel (`_BRANCH_INFLIGHT_DISPATCHES`)
+    for its lifetime, so the barrier's watchdog can cut it off at the deadline.
+    Behavior:
+
+    - **Clean path** (no cancellation): returns the dispatch result.
+    - **Cancelled while in flight** (a sibling's cascade-cancel cancels THIS
+      branch): the shielded ``inflight`` is driven to completion so the effect
+      lands (obligations 1 + 3), then ``CancelledError`` is **re-raised** so the
+      cancellation is honored (swallowing it would desync the ``TaskGroup`` and
+      keep this branch running work that should stop). The caller classifies
+      ``completed`` (the in-flight step ran) and records its step + terminal entry.
+    - **The in-flight dispatch ERRORS during the drive** (the model/tool call
+      raised, not a cancellation): the dispatch RAN, so its error does NOT
+      override the cancellation — it is swallowed here and ``CancelledError`` is
+      re-raised; the branch's terminal disposition is ``completed`` (a
+      ran-and-errored branch is ``completed``, dispatch-boundary not step-outcome,
+      per `append_branch_terminal_ledger_entry`'s closed-set contract; the step's
+      failure lives at the step's own entry per obligation 3). Letting the error
+      escape would spuriously mark a cancelled branch FAILED and drop its terminal
+      record (the silent-audit-gap obligations 3/4 foreclose).
+    - **Barrier deadline cuts off the in-flight dispatch** (a watchdog of THIS or
+      any enclosing barrier cancels ``inflight`` DIRECTLY): ``asyncio.shield``
+      surfaces ``inflight``'s cancellation; ``inflight`` is done+cancelled → the
+      caller classifies ``timed_out`` (obligation 1 "...or barrier-deadline
+      timeout"). The dispatch registers in EVERY enclosing barrier's registry
+      (the `_BRANCH_INFLIGHT_DISPATCHES` chain), so an OUTER deadline is a hard
+      cap over inner in-flight work (nested fan-out, U-CP-89).
+
+    A cascade-cancel landing at a not-yet-dispatched boundary (the pre-dispatch
+    gate, BEFORE this helper is called) never reaches here — the branch's gate
+    ``await`` raises ``CancelledError`` cleanly → ``cancelled`` (obligation 4).
+
+    The caller's classify-then-record-then-reraise idiom (the shape U-CP-88
+    follows; `cascade_cancel_barrier` cancels a stuck branch's task at the
+    deadline, so a branch reaching this ``except`` was itself cancelled → always
+    re-raise to honor it)::
+
+        inflight = asyncio.ensure_future(dispatcher.dispatch(step))
+        try:
+            await dispatch_branch_step_shielded(inflight)
+        except asyncio.CancelledError:
+            # The step was DISPATCHED → record its step entry (obligation 3:
+            # every dispatched effectful step gets its own step ledger entry,
+            # REGARDLESS of terminal disposition — the effect may have landed) on
+            # BOTH terminal paths. `completed` = the in-flight step ran to
+            # completion; `timed_out` = the barrier deadline cut it off (it ran
+            # but did not return). A `cancelled` branch (not-yet-dispatched, no
+            # effect) records NO step entry — it is handled at the gate boundary,
+            # not here.
+            record_step(local)  # obligation 3 — keyed by step index, not result
+            terminal = "timed_out" if (inflight.cancelled() or not inflight.done()) else "completed"
+            record_terminal(terminal)  # U-CP-84 fresh terminal entry
+            raise  # honor the cancellation (the barrier cancelled this branch)
+        record_step(local)  # clean: record + continue
+    """
+    # Register in EVERY enclosing barrier's registry (the chain) so an OUTER
+    # deadline watchdog stays a hard cap over this (possibly nested) dispatch.
+    chain = _BRANCH_INFLIGHT_DISPATCHES.get()
+    if chain:
+        for registry in chain:
+            registry.add(inflight)
+    try:
+        return await asyncio.shield(inflight)
+    except asyncio.CancelledError:
+        if not inflight.done():
+            try:
+                # Drive the shielded in-flight dispatch to completion (obl. 1) so
+                # the landed effect is recordable — do NOT abandon it mid-send.
+                # (A deadline watchdog cancels `inflight` DIRECTLY, which surfaces
+                # above as `inflight` already done+cancelled, so this drive is
+                # bounded by the tightest enclosing deadline, never unbounded.)
+                await asyncio.shield(inflight)
+            except asyncio.CancelledError:
+                # A SECOND cancellation while draining → cut it off (no leak).
+                inflight.cancel()
+            except Exception:
+                # The dispatch ERRORED during the drive. The step RAN (errored)
+                # → its disposition is `completed`
+                # (dispatch-boundary, not step-outcome); honor the cancellation by
+                # re-raising below. Swallowing the dispatch error here (not letting
+                # it escape) is what keeps a cancelled-and-errored branch from
+                # being spuriously marked FAILED with no terminal record (F2-01).
+                pass
+        raise
+    finally:
+        if chain:
+            for registry in chain:
+                registry.discard(inflight)
 
 
 def resolve_parent_gate_level(manifest_entry: WorkflowManifestEntry) -> GateLevel:
@@ -1749,6 +2075,10 @@ __all__ = [
     "append_branch_step_ledger_entry",
     "append_branch_terminal_ledger_entry",
     "bounded_barrier",
+    "cascade_cancel_barrier",
+    "cascade_policy_run_status",
+    "dispatch_branch_step_shielded",
     "drain_branch_buffers",
     "execute_workflow",
+    "resume_should_redispatch",
 ]
