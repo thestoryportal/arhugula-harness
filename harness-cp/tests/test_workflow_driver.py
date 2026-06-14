@@ -344,9 +344,10 @@ def test_typed_errors_subclass_workflow_driver_error() -> None:
 
 
 def test_topology_pattern_not_yet_materialized_raised_at_non_single_threaded_linear() -> None:
-    # HIERARCHICAL_DELEGATION is still NOT_YET_MATERIALIZED after U-CP-88 landed
-    # ORCHESTRATOR_WORKERS — it still raises at the topology-materialization gate.
-    manifest = _manifest(topology_pattern=TopologyPattern.HIERARCHICAL_DELEGATION)
+    # DECENTRALIZED_HANDOFF is still NOT_YET_MATERIALIZED after U-CP-89 landed
+    # HIERARCHICAL_DELEGATION — it still raises at the topology-materialization gate
+    # (the last unmaterialized non-linear pattern until U-CP-90).
+    manifest = _manifest(topology_pattern=TopologyPattern.DECENTRALIZED_HANDOFF)
     ctx, ledger, emitter = _ctx()
     with pytest.raises(TopologyPatternNotYetMaterializedError):
         execute_workflow(
@@ -378,9 +379,10 @@ def test_engine_class_not_yet_materialized_raised_at_out_of_scope_engine_class()
 
 
 def test_validation_failure_emits_no_workflow_start() -> None:
-    # HIERARCHICAL_DELEGATION is still NOT_YET_MATERIALIZED after U-CP-88 landed
-    # ORCHESTRATOR_WORKERS — it still raises at the topology-materialization gate.
-    manifest = _manifest(topology_pattern=TopologyPattern.HIERARCHICAL_DELEGATION)
+    # DECENTRALIZED_HANDOFF is still NOT_YET_MATERIALIZED after U-CP-89 landed
+    # HIERARCHICAL_DELEGATION — it still raises at the topology-materialization gate
+    # (the last unmaterialized non-linear pattern until U-CP-90).
+    manifest = _manifest(topology_pattern=TopologyPattern.DECENTRALIZED_HANDOFF)
     ctx, _, emitter = _ctx()
     with pytest.raises(TopologyPatternNotYetMaterializedError):
         execute_workflow(

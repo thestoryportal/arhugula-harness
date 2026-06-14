@@ -32,10 +32,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import threading
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 from harness_as.sandbox_tier import SandboxTier
+from harness_cp import workflow_driver
 from harness_cp.cp_shared_types import AgentRole
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.workflow_driver import (
@@ -52,7 +55,14 @@ from harness_cp.workflow_driver_types import (
     compose_branch_path,
     compose_branch_step_action_id,
 )
-from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
+from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
+from harness_is.state_ledger_write import (
+    EntryPayload,
+    WriteKey,
+    append_ledger_entry,
+    read_ledger,
+)
 
 _ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="test-buffered-append")
 
@@ -129,7 +139,17 @@ async def _run_branch(
         # collapse under the real IS writer's idempotency_key-only dedup
         # (C-IS-07 §7.5). branch_path keeps sibling branches distinct.
         idempotency_key = _compute_step_idempotency_key(run_idempotency_key, local, branch_path)
-        buffer.append(action_id, idempotency_key)  # buffered/deferred append (D1.b)
+        # Buffer a real `EntryPayload` (D1.b deferred append) so the drain's
+        # drain-time re-stamp (`payload.model_copy(update={"timestamp": ...})`)
+        # exercises the production payload shape. The `timestamp` here is a
+        # buffer-time placeholder the drain overrides.
+        payload = EntryPayload(
+            action_id=Identifier(action_id),
+            idempotency_key=Identifier(idempotency_key),
+            actor=parent.parent_actor,
+            timestamp=datetime.now(UTC),
+        )
+        buffer.append(payload, idempotency_key)
     return buffer
 
 
@@ -295,7 +315,7 @@ async def test_branches_join_at_bounded_barrier_then_drain_in_branch_index_order
     )
     drained = drain_branch_buffers(real, buffers)
     assert drained == 6
-    persisted = [payload for payload, _key in real.appended]
+    persisted = [str(payload.action_id) for payload, _key in real.appended]
     assert persisted == _expected_branch_index_order((0, 1, 2), n_steps=2)
 
 
@@ -321,7 +341,7 @@ async def test_drain_order_is_invariant_under_completion_order() -> None:
     ):
         real = _RecordingWriter(actor=_ACTOR)
         drain_branch_buffers(real, ordering)
-        assert [payload for payload, _key in real.appended] == expected
+        assert [str(payload.action_id) for payload, _key in real.appended] == expected
 
 
 # ---------------------------------------------------------------------------
@@ -403,3 +423,162 @@ async def test_bounded_barrier_preserves_branch_local_timeout_error() -> None:
     # The raw branch TimeoutError — NOT the barrier-deadline error subclass.
     assert not isinstance(exc_info.value, BranchBarrierDeadlineExceededError)
     assert "provider client timeout" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# CONCURRENT-sibling-drain timestamp gap (xfail — the runtime concurrency fork)
+# ---------------------------------------------------------------------------
+#
+# `drain_branch_buffers` re-stamps each buffered entry to a `drain_timestamp`
+# captured ONCE at drain entry — OUTSIDE the IS writer's `_WRITE_LOCK`. For a
+# SINGLE drain (the only path reachable today) physical-append-order ==
+# timestamp-order. But two CONCURRENT sibling drains (two `SUB_AGENT_DISPATCH`
+# children on separate fan-out threads, each draining into the ONE shared real
+# writer) each capture their OWN `drain_timestamp` outside the lock; the lock can
+# then serialize their physical appends in capture-OPPOSITE order, so a drain that
+# captured the EARLIER timestamp physically appends AFTER one that captured a
+# later timestamp → the zero-tolerance writer rejects it (`NonMonotonicTimestamp
+# Error`). Found independently by BOTH decorrelated reviewers (codex P1 +
+# adversarial F1-01). Unreachable today (the runtime sync/async-bridge deadlock
+# blocks concurrent sub-agent recursion end-to-end) and EQUALLY broken under the
+# prior fan-out-start-timestamp policy (NOT a U-CP-89 regression). The clean fix
+# is timestamp-authority INSIDE `_WRITE_LOCK` (an IS write-path change, contract-
+# touching) belonging to the same arc as the deadlock; see
+# `.harness/runtime_defect_sub_agent_inference_child_loop_bridge_deadlock.md` §8.
+
+
+class _SequencedClock:
+    """Substitute for `workflow_driver.datetime`: `.now(tz)` returns strictly-
+    increasing real UTC datetimes, one per call (call N → base + N seconds), so
+    the FIRST drain to capture its `drain_timestamp` gets a strictly-EARLIER value
+    than the SECOND — removing the wall-clock race so the inversion is
+    deterministic, not timing-dependent."""
+
+    _base = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def __init__(self) -> None:
+        self._n = 0
+        self._lock = threading.Lock()
+
+    def now(self, tz: object = None) -> datetime:
+        with self._lock:
+            ts = self._base + timedelta(seconds=self._n)
+            self._n += 1
+            return ts
+
+
+class _InterleavingRealWriter:
+    """Wraps the REAL `append_ledger_entry` (real dedup + zero-tolerance
+    monotonicity check + hash-chain + JSONL persistence) and deterministically
+    interleaves two concurrent sibling drains: the FIRST drain to reach `append`
+    is PARKED until the SECOND has physically appended, so the first-capturing
+    drain (earlier `drain_timestamp`) physically appends SECOND. This is the
+    capture-opposite-order serialization the real `_WRITE_LOCK` permits because
+    `drain_branch_buffers` captures `drain_timestamp` OUTSIDE that lock. When the
+    IS-write-path fix lands (timestamp-authority inside `_WRITE_LOCK`), the wrapped
+    real `append_ledger_entry` assigns the timestamp in physical-append order →
+    no inversion → this test flips to XPASS (the strict-xfail signal)."""
+
+    def __init__(self, *, handle: JsonlLedgerHandle) -> None:
+        self._handle = handle
+        self._arrivals = 0
+        self._arrival_lock = threading.Lock()
+        self.first_parked = threading.Event()
+        self.second_appended = threading.Event()
+
+    def append(self, payload: Any, write_key: Any) -> None:
+        with self._arrival_lock:
+            self._arrivals += 1
+            mine = self._arrivals
+        if mine == 1:
+            # Drain A: announce arrival (it has already captured its EARLIER
+            # drain_timestamp), park until B physically appends, THEN append 2nd.
+            self.first_parked.set()
+            assert self.second_appended.wait(timeout=5.0), "sibling B never appended"
+            append_ledger_entry(self._handle, payload, write_key)
+        else:
+            # Drain B: append 1st (LATER timestamp), then release A.
+            append_ledger_entry(self._handle, payload, write_key)
+            self.second_appended.set()
+
+
+def _one_entry_buffer(
+    parent: StepExecutionContext, *, branch_index: int, run_idempotency_key: str = "rik"
+) -> BufferingLedgerWriter:
+    """A branch buffer holding one real `EntryPayload` (the drain re-stamps its
+    buffer-time placeholder timestamp). Sibling branches compose DISTINCT
+    action_ids + idempotency keys (no IDEMPOTENT_NOOP collapse)."""
+    child = compose_branch_child_context(
+        parent, branch_index=branch_index, agent_role=AgentRole("w")
+    )
+    branch_path = compose_branch_path(child)
+    buffer = BufferingLedgerWriter(actor=parent.parent_actor, branch_index=branch_index)
+    idempotency_key = _compute_step_idempotency_key(run_idempotency_key, 0, branch_path)
+    payload = EntryPayload(
+        action_id=Identifier(compose_branch_step_action_id(child, 0)),
+        idempotency_key=Identifier(idempotency_key),
+        actor=parent.parent_actor,
+        timestamp=datetime.now(UTC),  # buffer-time placeholder; the drain overrides
+    )
+    # A real WriteKey (as production's append_branch_step_ledger_entry composes) so
+    # the wrapped real append_ledger_entry exercises its true write contract.
+    write_key = WriteKey(
+        thread_id=Identifier(child.workflow_id),
+        step_id=Identifier(f"{branch_index}:0"),
+        idempotency_key=Identifier(idempotency_key),
+    )
+    buffer.append(payload, write_key)
+    return buffer
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "concurrent-sibling-drain timestamp inversion: drain_branch_buffers "
+        "captures drain_timestamp OUTSIDE the IS writer's _WRITE_LOCK, so two "
+        "concurrent sibling drains can serialize their physical appends in "
+        "capture-opposite order → NonMonotonicTimestampError. Found by BOTH "
+        "decorrelated reviewers (codex P1 + adversarial F1-01). Unreachable today "
+        "behind the runtime sync/async-bridge deadlock; clean fix is timestamp-"
+        "authority inside _WRITE_LOCK (IS write-path change, same arc as the "
+        "deadlock fork). Flips to XPASS when that fix lands — see "
+        ".harness/runtime_defect_sub_agent_inference_child_loop_bridge_deadlock.md §8."
+    ),
+)
+def test_concurrent_sibling_drains_invert_timestamp(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two concurrent sibling drains into the ONE shared REAL writer must keep the
+    ledger non-decreasing (the CORRECT behavior this asserts). They currently do
+    NOT: the first-capturing drain (earlier drain_timestamp) is forced to append
+    SECOND, tripping the zero-tolerance monotonicity check — the gap both
+    reviewers flagged. Deterministic via `_SequencedClock` (ordered captures) +
+    `_InterleavingRealWriter` (capture-opposite physical-append order)."""
+    monkeypatch.setattr(workflow_driver, "datetime", _SequencedClock())
+    handle = JsonlLedgerHandle(
+        canonical_path=tmp_path / "ledger.jsonl", exists=False, entry_count=0
+    )
+    writer = _InterleavingRealWriter(handle=handle)
+    parent = _linear_ctx(parent_action_id="workflow:wf-1:step:3", step_index=3)
+    buffer_a = _one_entry_buffer(parent, branch_index=0)
+    buffer_b = _one_entry_buffer(parent, branch_index=1)
+
+    errors: list[BaseException] = []
+
+    def _drain(buf: BufferingLedgerWriter) -> None:
+        try:
+            drain_branch_buffers(writer, [buf])
+        except BaseException as exc:  # record any drain failure for the assert
+            errors.append(exc)
+
+    thread_a = threading.Thread(target=_drain, args=(buffer_a,))
+    thread_b = threading.Thread(target=_drain, args=(buffer_b,))
+    thread_a.start()
+    assert writer.first_parked.wait(timeout=5.0), "drain A never reached its append"
+    thread_b.start()  # B captures its LATER drain_timestamp now (after A parked)
+    thread_b.join(timeout=5.0)
+    thread_a.join(timeout=5.0)
+
+    # CORRECT behavior (the xfail target): no monotonicity error, both persisted.
+    assert errors == []
+    assert len(read_ledger(handle)) == 2
