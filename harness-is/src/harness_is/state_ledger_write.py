@@ -48,6 +48,7 @@ from harness_is.state_ledger_entry_schema import (
     ALL_ZEROS_SENTINEL,
     Actor,
     ActorClass,
+    BranchMetadata,
     Identifier,
     StateLedgerEntry,
     Timestamp,
@@ -78,6 +79,10 @@ class EntryPayload(BaseModel):
     # Optional default preserves backward compat at existing callers; non-None
     # value propagates to StateLedgerEntry + canonicalize + persisted JSONL line.
     procedural_tier_snapshot_ref: Identifier | None = None
+    # v1.8 NEW D-derivative sidecar (C-IS-05 §5.4; U-IS-19). Producer-supplied
+    # by the CP WorkflowDriver. Optional default preserves backward compat;
+    # non-None value propagates to StateLedgerEntry + canonicalize + JSONL line.
+    branch_metadata: BranchMetadata | None = None
 
 
 class WriteKey(BaseModel):
@@ -112,6 +117,10 @@ def _serialize_entry(entry: StateLedgerEntry) -> str:
     ``procedural_tier_snapshot_ref`` is non-``None``, persisted JSONL line
     includes the field as a 7th key; when ``None``, the key is omitted to
     preserve compact bytes at bootstrap entries.
+
+    v1.8 sidecar discipline (U-IS-19, C-IS-05 §5.4): when ``branch_metadata``
+    is non-``None``, the persisted JSONL line includes it as a nested record
+    (mirroring the nested ``actor`` shape); when ``None``, the key is omitted.
     """
     payload: dict[str, object] = {
         "action_id": entry.action_id,
@@ -126,6 +135,13 @@ def _serialize_entry(entry: StateLedgerEntry) -> str:
     }
     if entry.procedural_tier_snapshot_ref is not None:
         payload["procedural_tier_snapshot_ref"] = entry.procedural_tier_snapshot_ref
+    if entry.branch_metadata is not None:
+        bm = entry.branch_metadata
+        payload["branch_metadata"] = {
+            "parent_action_id": bm.parent_action_id,
+            "branch_index": bm.branch_index,
+            "terminal_status": bm.terminal_status,
+        }
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -135,9 +151,14 @@ def _deserialize_entry(line: str) -> StateLedgerEntry:
     v1.3 sidecar discipline: ``procedural_tier_snapshot_ref`` MAY be absent
     on legacy entries written before v1.3; default ``None`` reproduces the
     schema's optional shape.
+
+    v1.8 sidecar discipline (U-IS-19): ``branch_metadata`` MAY be absent on
+    entries written outside a fan-out branch (every pre-v1.8 entry); absent →
+    ``None`` reproduces the schema's optional shape.
     """
     raw = json.loads(line)
     snapshot_ref_raw = raw.get("procedural_tier_snapshot_ref")
+    branch_metadata_raw = raw.get("branch_metadata")
     return StateLedgerEntry(
         action_id=Identifier(raw["action_id"]),
         idempotency_key=Identifier(raw["idempotency_key"]),
@@ -150,6 +171,15 @@ def _deserialize_entry(line: str) -> StateLedgerEntry:
         prior_event_hash=bytes.fromhex(raw["prior_event_hash"]),
         procedural_tier_snapshot_ref=(
             Identifier(snapshot_ref_raw) if snapshot_ref_raw is not None else None
+        ),
+        branch_metadata=(
+            BranchMetadata(
+                parent_action_id=Identifier(branch_metadata_raw["parent_action_id"]),
+                branch_index=branch_metadata_raw["branch_index"],
+                terminal_status=branch_metadata_raw["terminal_status"],
+            )
+            if branch_metadata_raw is not None
+            else None
         ),
     )
 
@@ -206,6 +236,10 @@ def append_ledger_entry(
             # through from EntryPayload; canonicalize() includes it in the
             # hash recipe when non-None per AC #13.
             procedural_tier_snapshot_ref=entry_payload.procedural_tier_snapshot_ref,
+            # v1.8 NEW sidecar (U-IS-19, C-IS-05 §5.4). Threaded through from
+            # EntryPayload; canonicalize() includes the nested record in the
+            # hash recipe when non-None.
+            branch_metadata=entry_payload.branch_metadata,
         )
         entry = draft.model_copy(update={"response_hash": compute_response_hash(draft)})
         with ledger_handle.canonical_path.open("a") as fh:

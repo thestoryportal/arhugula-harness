@@ -26,14 +26,16 @@ _F_LAYER_FIELDS = {
     "prior_event_hash",
 }
 
-# v1.3 NEW D-derivative sidecar (C-IS-05 §5.1) — additive at the
-# extensibility layer authorized by §5 "Field-shape extensibility commitment."
-# The F-layer six-field shape PRESERVED VERBATIM; the sidecar lives at the
-# D-derivative layer.
+# NEW D-derivative sidecars — additive at the extensibility layer authorized
+# by §5 "Field-shape extensibility commitment." The F-layer six-field shape is
+# PRESERVED VERBATIM; the sidecars live at the D-derivative layer.
+#   - `procedural_tier_snapshot_ref` (C-IS-05 §5.1, v1.3)
+#   - `branch_metadata` (C-IS-05 §5.4, v1.8 — U-IS-19 branch-causality carrier)
 _D_DERIVATIVE_FIELDS = {
     "procedural_tier_snapshot_ref",
+    "branch_metadata",
 }
-_V1_3_FIELDS = _F_LAYER_FIELDS | _D_DERIVATIVE_FIELDS
+_CURRENT_FIELDS = _F_LAYER_FIELDS | _D_DERIVATIVE_FIELDS
 
 
 def _entry(action_id: str = "00000000-0000-4000-8000-000000000000") -> StateLedgerEntry:
@@ -49,12 +51,13 @@ def _entry(action_id: str = "00000000-0000-4000-8000-000000000000") -> StateLedg
 
 def test_state_ledger_entry_schema_completeness() -> None:
     """Acceptance #1 — StateLedgerEntry declares the 6 F-layer fields per §5
-    plus the D-derivative sidecar field per §5.1 (NEW at v1.3).
+    plus the D-derivative sidecar fields (§5.1 `procedural_tier_snapshot_ref`
+    at v1.3; §5.4 `branch_metadata` at v1.8).
 
-    The F-layer six-field shape is preserved verbatim; the D-derivative
-    sidecar is additive at the extensibility layer authorized by §5.
+    The F-layer six-field shape is preserved verbatim; the sidecars are
+    additive at the extensibility layer authorized by §5.
     """
-    assert set(StateLedgerEntry.model_fields) == _V1_3_FIELDS
+    assert set(StateLedgerEntry.model_fields) == _CURRENT_FIELDS
     # F-layer subset invariant — the 6 §5 fields remain unchanged.
     assert _F_LAYER_FIELDS.issubset(set(StateLedgerEntry.model_fields))
 
