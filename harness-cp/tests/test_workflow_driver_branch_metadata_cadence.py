@@ -236,6 +236,52 @@ def test_terminal_idempotency_key_distinct_from_all_step_keys() -> None:
     assert terminal_key not in step_keys
 
 
+def _nested_branch() -> StepExecutionContext:
+    """A LEVEL-2 branch whose spawning context's action_id is itself a level-1
+    branch-step action_id — i.e. a fan-out spawned from inside another branch
+    (HIERARCHICAL_DELEGATION recursion, U-CP-89)."""
+    level1 = _branch(0)  # parent_action_id = workflow:wf-1:step:3
+    inner_spawn = compose_branch_step_action_id(level1, 7)  # ...:branch:0:step:7
+    inner_ctx = level1.model_copy(
+        update={"parent_action_id": inner_spawn, "branch_index": None, "agent_role": None}
+    )
+    return compose_branch_child_context(inner_ctx, branch_index=2, agent_role=AgentRole("w2"))
+
+
+def test_nested_fan_out_action_ids_and_keys_unique_at_every_depth() -> None:
+    """Regression insurance for the composers' explicit recursive-uniqueness claim
+    (IS §5.4: action_id globally unique at every nesting depth) + the integration
+    AC's branch-*tree* reconstruction. A level-2 branch's action_ids + idempotency
+    keys carry both nesting segments and are distinct from the level-1 ones."""
+    level1, level2 = _branch(0), _nested_branch()
+    rik = "rik-nested"
+    # Level-2 step action_id carries BOTH branch segments (recursively composed).
+    l2_step = compose_branch_step_action_id(level2, 0)
+    assert l2_step == f"{_PARENT_ACTION_ID}:branch:0:step:7:branch:2:step:0"
+    l2_terminal = compose_branch_terminal_action_id(level2)
+    assert l2_terminal == f"{_PARENT_ACTION_ID}:branch:0:step:7:branch:2:terminal"
+    # Distinct from every level-1 action_id (steps + terminal).
+    l1_ids = {compose_branch_step_action_id(level1, n) for n in range(20)}
+    l1_ids.add(compose_branch_terminal_action_id(level1))
+    assert l2_step not in l1_ids
+    assert l2_terminal not in l1_ids
+    # Idempotency keys are likewise cross-level distinct (the branch_path carries
+    # the globally-unique nested parent_action_id).
+    l1_keys = {
+        _compute_step_idempotency_key(rik, n, compose_branch_path(level1)) for n in range(20)
+    }
+    l1_keys.add(
+        _compute_step_idempotency_key(rik, level1.step_index, compose_branch_terminal_path(level1))
+    )
+    l2_step_key = _compute_step_idempotency_key(rik, 0, compose_branch_path(level2))
+    l2_terminal_key = _compute_step_idempotency_key(
+        rik, level2.step_index, compose_branch_terminal_path(level2)
+    )
+    assert l2_step_key not in l1_keys
+    assert l2_terminal_key not in l1_keys
+    assert l2_step_key != l2_terminal_key
+
+
 # ---------------------------------------------------------------------------
 # append helpers — buffer-level cadence (causality-only step / disposition terminal).
 # ---------------------------------------------------------------------------

@@ -1615,10 +1615,13 @@ def _append_step_ledger_entry(
 # *values*; the canonical reading — consistent with the linear path — is that the
 # timestamp records the ledger-*append* event, and a fan-out is one barrier-drain
 # persist event): the caller therefore supplies the `timestamp`, and MUST supply
-# timestamps non-decreasing in branch-index drain order. The natural policy a
-# strategy (U-CP-86) uses is a single shared fan-out timestamp for every branch
-# entry (all equal ⟹ trivially monotonic ⟹ all APPEND; branch-index append order
-# preserved). The R-003 active-workflow-context invariant (IS §5.1
+# timestamps non-decreasing in branch-index drain order AND `>=` the last
+# pre-fan-out (linear) entry's timestamp — the first drained branch entry is
+# checked by the zero-tolerance writer against whatever preceded the fan-out. The
+# natural policy a strategy (U-CP-86) uses is a single shared fan-out timestamp
+# (`>=` the pre-fan-out entry) for every branch entry (all equal ⟹ trivially
+# monotonic ⟹ all APPEND; branch-index append order preserved). The R-003
+# active-workflow-context invariant (IS §5.1
 # `procedural_tier_snapshot_ref` populated at every producer site) is honored via
 # a caller-supplied injection param (defaulting `None`) on both helpers — the
 # strategy (U-CP-86), which holds the `DriverContext` resolver the linear

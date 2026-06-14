@@ -84,3 +84,15 @@ Three Class-1 items: **F1-01** (the `procedural_tier_snapshot_ref` omission — 
 - **F1-03 — OUT OF SCOPE (noted).** `harness-cp/CLAUDE.md §1.2` plan-pointer stale at v2.31 (canonical is v2.32) is a pre-existing per-axis-CLAUDE.md-pointer-drift item, not introduced by this PR and not owed by a Phase-7-posture impl PR (a CLAUDE.md edit is mode-agnostic). Left for a future mode-agnostic refresh.
 
 **Post-resolution verification:** harness-cp 879 + pyright strict 0/0/0 (full package) + ruff + overlay 312 nodes/31-31 seams all green (18 arc tests).
+
+### Forward-obligations relocated to U-CP-86 (named, not dropped)
+
+The F1-01 injection seam makes R-003 *possible*, not *enforced* — the obligation relocated rather than vanished. When U-CP-86 (PARALLELIZATION, the first strategy) lands, it MUST:
+1. **Resolve + pass `procedural_tier_snapshot_ref`** to both branch-append helpers from the `DriverContext` resolver (the R-003 active-workflow-context invariant the linear `_append_step_ledger_entry` already honors). The seam exists; the wiring is U-CP-86's.
+2. **Supply branch-entry timestamps `>=` the last pre-fan-out (linear) entry's timestamp** (in addition to non-decreasing-in-branch-index-order) — the first drained branch entry is checked by the zero-tolerance IS writer against whatever preceded the fan-out. The shared-fan-out-timestamp policy must be seeded `>=` that prior entry. Fail-loud (`NonMonotonicTimestampError`) if violated, so it cannot silently corrupt — but U-CP-86 should seed correctly.
+
+These are captured in the roadmap `next_action` for the U-CP-86 arc (post-merge refresh).
+
+### Post-advisor addition
+
+A **nested-fan-out regression test** (`test_nested_fan_out_action_ids_and_keys_unique_at_every_depth`) was added pinning the composers' explicit recursive-uniqueness claim (a level-2 branch spawned from inside a level-1 branch — the U-CP-89 HIERARCHICAL_DELEGATION recursion + the integration AC's branch-*tree*). The adversarial reviewer had verified nesting by manual recomputation (R-9); the test now pins it. harness-cp 880 + pyright strict 0/0/0 + ruff + overlay all green (19 arc tests).
