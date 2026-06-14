@@ -641,18 +641,20 @@ def test_envelope_step_count_zero_when_no_steps_complete_before_drain(
 def test_envelope_records_exception_on_validation_failure(
     exporter_and_provider: tuple[InMemorySpanExporter, TracerProvider],
 ) -> None:
-    """AC #1 — Exception inside envelope (here: out-of-scope topology raises
-    TopologyPatternNotYetMaterializedError) records the exception event and
-    sets span status to ERROR. OTel auto-discipline + the C-RT-17 validation
-    error class combined."""
+    """AC #1 — Exception inside envelope (here: out-of-scope ENGINE class raises
+    EngineClassNotYetMaterializedError) records the exception event and sets span
+    status to ERROR. OTel auto-discipline + the C-RT-17 validation error class
+    combined. (Was the topology gate via DECENTRALIZED_HANDOFF; all six topology
+    patterns are materialized post-U-CP-90, so the engine-class gate is the live
+    pre-dispatch-raise vehicle.)"""
     exporter, provider = exporter_and_provider
     ctx = _FakeCtx(tracer_provider=provider)
     manifest = WorkflowManifestEntry(
         workflow_id="wf-exc",
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
         persona_tier=PersonaTier.TEAM_BINDING,
-        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
-        topology_pattern=TopologyPattern.DECENTRALIZED_HANDOFF,  # still not materialized (until U-CP-90)
+        engine_class=EngineClass.EVENT_SOURCED_REPLAY,  # still not materialized → raises
+        topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
         layer_budgets=(),
         fallback_chain=_CHAIN,
         hitl_placements=(),
@@ -675,8 +677,8 @@ def test_envelope_records_exception_on_validation_failure(
     assert len(exc_events) == 1
     attrs = dict(exc_events[0].attributes or {})
     assert attrs.get("exception.type") in {
-        "TopologyPatternNotYetMaterializedError",
-        "harness_cp.workflow_driver_errors.TopologyPatternNotYetMaterializedError",
+        "EngineClassNotYetMaterializedError",
+        "harness_cp.workflow_driver_errors.EngineClassNotYetMaterializedError",
     }
 
 

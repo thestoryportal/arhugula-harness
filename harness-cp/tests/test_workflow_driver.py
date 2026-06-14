@@ -343,23 +343,26 @@ def test_typed_errors_subclass_workflow_driver_error() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_topology_pattern_not_yet_materialized_raised_at_non_single_threaded_linear() -> None:
-    # DECENTRALIZED_HANDOFF is still NOT_YET_MATERIALIZED after U-CP-89 landed
-    # HIERARCHICAL_DELEGATION — it still raises at the topology-materialization gate
-    # (the last unmaterialized non-linear pattern until U-CP-90).
+def test_decentralized_handoff_materialized_runs_through_execute_workflow() -> None:
+    # U-CP-90 landed DECENTRALIZED_HANDOFF (single-owner sequential handoff) — the
+    # LAST non-linear pattern. ALL SIX TopologyPattern values are now materialized,
+    # so the pattern runs through execute_workflow (NO NOT_YET_MATERIALIZED raise),
+    # emits WORKFLOW_START, and persists its stage entry. (The retained
+    # NOT_YET_MATERIALIZED sentinel mechanism is exercised via monkeypatch at
+    # test_workflow_driver_branch_substrate.py::test_not_yet_materialized_sentinel_still_raises.)
     manifest = _manifest(topology_pattern=TopologyPattern.DECENTRALIZED_HANDOFF)
     ctx, ledger, emitter = _ctx()
-    with pytest.raises(TopologyPatternNotYetMaterializedError):
-        execute_workflow(
-            manifest_entry=manifest,
-            steps=[_step(0)],
-            run_id="run-1",
-            ctx=cast(DriverContext, ctx),
-            default_model_binding=_DEFAULT_BINDING,
-            step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
-        )
-    assert emitter.emits == []
-    assert ledger.appends == []
+    result = execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert WorkflowEventClass.WORKFLOW_START in emitter.emits
+    assert ledger.appends  # the stage persisted (no silent no-op)
 
 
 def test_engine_class_not_yet_materialized_raised_at_out_of_scope_engine_class() -> None:
@@ -379,12 +382,14 @@ def test_engine_class_not_yet_materialized_raised_at_out_of_scope_engine_class()
 
 
 def test_validation_failure_emits_no_workflow_start() -> None:
-    # DECENTRALIZED_HANDOFF is still NOT_YET_MATERIALIZED after U-CP-89 landed
-    # HIERARCHICAL_DELEGATION — it still raises at the topology-materialization gate
-    # (the last unmaterialized non-linear pattern until U-CP-90).
-    manifest = _manifest(topology_pattern=TopologyPattern.DECENTRALIZED_HANDOFF)
+    # A pre-dispatch materialization-gate raise must fire BEFORE WORKFLOW_START, so
+    # no lifecycle event is emitted. Vehicle: the ENGINE-class gate
+    # (EVENT_SOURCED_REPLAY is still NOT_YET_MATERIALIZED). Was DECENTRALIZED_HANDOFF
+    # via the topology gate, but all six topology patterns are materialized
+    # post-U-CP-90; the engine-class gate is the live pre-dispatch-raise vehicle.
+    manifest = _manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY)
     ctx, _, emitter = _ctx()
-    with pytest.raises(TopologyPatternNotYetMaterializedError):
+    with pytest.raises(EngineClassNotYetMaterializedError):
         execute_workflow(
             manifest_entry=manifest,
             steps=[_step(0)],
