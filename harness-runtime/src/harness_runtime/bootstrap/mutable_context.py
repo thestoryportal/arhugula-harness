@@ -407,6 +407,25 @@ class _MutableHarnessContext:
     cxa_stages: dict[str, Any] = field(default_factory=dict)  # pyright: ignore[reportUnknownVariableType]
     frozen: HarnessContext | None = None
 
+    @property
+    def tenant_id(self) -> str | None:
+        """Mirror `HarnessContext.tenant_id` (computed from `RuntimeConfig.tenant_id`)
+        so this pre-freeze builder structurally satisfies the CP `DriverContext`
+        Protocol when the child-workflow runner runs a `SUB_AGENT_DISPATCH` child
+        against it.
+
+        `stage_5_loop_init.compose_child_workflow_runner(cast(HarnessContext, ctx))`
+        binds the runner to THIS mutable builder (the cast is type-only; the runner
+        closes over the live builder, not the eventual frozen ctx). A child running
+        a fan-out strategy reads `ctx.tenant_id` at `StepExecutionContext`
+        composition (`workflow_driver.py` per C-CP-25 §25.2.1) exactly as the
+        top-level run does against the frozen `HarnessContext` — which exposes the
+        same computed property. Without this, a recursive fan-out child raised
+        `AttributeError: '_MutableHarnessContext' object has no attribute 'tenant_id'`
+        (the only `HarnessContext` member that is a computed property, not a stored
+        field; every other `DriverContext` member is a stored field here)."""
+        return self.config.tenant_id if self.config is not None else None
+
     def freeze(self) -> HarnessContext:
         """Materialize the frozen `HarnessContext`. Raises if any required field None."""
         missing = tuple(name for name in _REQUIRED_FIELDS if getattr(self, name) is None)

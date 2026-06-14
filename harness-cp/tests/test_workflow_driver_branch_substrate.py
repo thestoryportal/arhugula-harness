@@ -38,17 +38,18 @@ _ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="test-branch-substrate")
 
 # The non-linear patterns still NOT_YET_MATERIALIZED after U-CP-86 landed
 # PARALLELIZATION (the fan-out-barrier-aggregate strategy), U-CP-87 landed
-# EVALUATOR_OPTIMIZER (the sequential generate→evaluate→regenerate loop), and
-# U-CP-88 landed ORCHESTRATOR_WORKERS (the orchestrator-dispatch-collect fan-out).
-# All three are excluded — each resolves to its own `_DriverStrategyStatus`
-# member and no longer raises (the per-strategy `no-longer-raises` AC); their e2e
-# behavior lives at `test_workflow_driver_parallelization.py` +
+# EVALUATOR_OPTIMIZER (the sequential generate→evaluate→regenerate loop),
+# U-CP-88 landed ORCHESTRATOR_WORKERS (the orchestrator-dispatch-collect fan-out),
+# and U-CP-89 landed HIERARCHICAL_DELEGATION (recursive bounded-fan-out reusing
+# ORCHESTRATOR_WORKERS). All four are excluded — each resolves to its own
+# `_DriverStrategyStatus` member and no longer raises (the per-strategy
+# `no-longer-raises` AC); their e2e behavior lives at
+# `test_workflow_driver_parallelization.py` +
 # `test_workflow_driver_evaluator_optimizer.py` +
-# `test_workflow_driver_orchestrator_workers.py`.
-_NOT_YET_MATERIALIZED_PATTERNS = (
-    TopologyPattern.HIERARCHICAL_DELEGATION,
-    TopologyPattern.DECENTRALIZED_HANDOFF,
-)
+# `test_workflow_driver_orchestrator_workers.py` +
+# `test_workflow_driver_hierarchical_delegation.py`. DECENTRALIZED_HANDOFF is the
+# last unmaterialized non-linear pattern (until U-CP-90).
+_NOT_YET_MATERIALIZED_PATTERNS = (TopologyPattern.DECENTRALIZED_HANDOFF,)
 
 
 def _linear_step_context(
@@ -94,10 +95,11 @@ def test_single_threaded_linear_resolves_to_linear_inline() -> None:
 
 @pytest.mark.parametrize("pattern", _NOT_YET_MATERIALIZED_PATTERNS)
 def test_non_linear_patterns_raise_not_yet_materialized(pattern: TopologyPattern) -> None:
-    """The three still-unlanded non-linear strategies resolve to
-    NOT_YET_MATERIALIZED and raise the typed error (the `no-longer-raises` AC is
-    satisfied per-strategy as each unit lands; PARALLELIZATION landed at U-CP-86
-    and EVALUATOR_OPTIMIZER at U-CP-87 — both excluded)."""
+    """The still-unlanded non-linear strategy (DECENTRALIZED_HANDOFF, until
+    U-CP-90) resolves to NOT_YET_MATERIALIZED and raises the typed error (the
+    `no-longer-raises` AC is satisfied per-strategy as each unit lands:
+    PARALLELIZATION at U-CP-86, EVALUATOR_OPTIMIZER at U-CP-87, ORCHESTRATOR_WORKERS
+    at U-CP-88, HIERARCHICAL_DELEGATION at U-CP-89 — all excluded)."""
     assert _DRIVER_STRATEGY_DISPATCH[pattern] is _DriverStrategyStatus.NOT_YET_MATERIALIZED
     with pytest.raises(TopologyPatternNotYetMaterializedError):
         resolve_driver_strategy(pattern)
@@ -128,6 +130,34 @@ def test_evaluator_optimizer_resolves_to_its_materialized_strategy() -> None:
     assert (
         resolve_driver_strategy(TopologyPattern.EVALUATOR_OPTIMIZER)
         is _DriverStrategyStatus.EVALUATOR_OPTIMIZER
+    )
+
+
+def test_orchestrator_workers_resolves_to_its_materialized_strategy() -> None:
+    """U-CP-88 — ORCHESTRATOR_WORKERS is materialized: its dispatch entry is the
+    ORCHESTRATOR_WORKERS strategy status and `resolve_driver_strategy` no longer
+    raises (the `no-longer-raises` AC for this pattern)."""
+    assert (
+        _DRIVER_STRATEGY_DISPATCH[TopologyPattern.ORCHESTRATOR_WORKERS]
+        is _DriverStrategyStatus.ORCHESTRATOR_WORKERS
+    )
+    assert (
+        resolve_driver_strategy(TopologyPattern.ORCHESTRATOR_WORKERS)
+        is _DriverStrategyStatus.ORCHESTRATOR_WORKERS
+    )
+
+
+def test_hierarchical_delegation_resolves_to_its_materialized_strategy() -> None:
+    """U-CP-89 — HIERARCHICAL_DELEGATION is materialized: its dispatch entry is the
+    HIERARCHICAL_DELEGATION strategy status and `resolve_driver_strategy` no longer
+    raises (the `no-longer-raises` AC for this pattern)."""
+    assert (
+        _DRIVER_STRATEGY_DISPATCH[TopologyPattern.HIERARCHICAL_DELEGATION]
+        is _DriverStrategyStatus.HIERARCHICAL_DELEGATION
+    )
+    assert (
+        resolve_driver_strategy(TopologyPattern.HIERARCHICAL_DELEGATION)
+        is _DriverStrategyStatus.HIERARCHICAL_DELEGATION
     )
 
 

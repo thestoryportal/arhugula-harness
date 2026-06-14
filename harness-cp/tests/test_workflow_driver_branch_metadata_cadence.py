@@ -48,7 +48,9 @@ from harness_is.chain_verification import VerificationStatus, verify_chain
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from harness_is.state_ledger_write import (
+    EntryPayload,
     NonMonotonicTimestampError,
+    WriteKey,
     WriteResult,
     append_ledger_entry,
     read_ledger,
@@ -139,7 +141,8 @@ async def _run_branch(
     """Stand-in for a U-CP-86+ strategy's per-branch control flow: execute
     `n_steps` (buffering each step's causality-only entry) then write the fresh
     terminal entry. `per_step_delay` scrambles completion order across branches;
-    `fan_out_ts` is the single shared fan-out timestamp (the monotonic policy)."""
+    `fan_out_ts` is the buffer-time placeholder the drain overrides (monotonicity
+    is realized at `drain_branch_buffers`'s re-stamp, not by this value)."""
     child = _branch(branch_index)
     buffer = BufferingLedgerWriter(actor=_ACTOR, branch_index=branch_index)
     for local in range(n_steps):
@@ -373,7 +376,7 @@ async def test_branch_entries_round_trip_real_writer(tmp_path: Path) -> None:
     """Functional AC: each branch step entry persists with terminal_status==None;
     each branch's fresh terminal entry persists with the disposition; the §6.3
     chain re-verifies. Two branches, scrambled completion, branch-index drain,
-    shared fan-out timestamp, REAL writer."""
+    drain-time re-stamp, REAL writer."""
     real = _RealLedgerWriter(handle=_handle(tmp_path), actor=_ACTOR)
     buffers = await bounded_barrier(
         [
@@ -444,7 +447,7 @@ async def test_ran_and_errored_branch_terminal_is_completed(tmp_path: Path) -> N
 
 async def test_scrambled_completion_persists_branch_index_order(tmp_path: Path) -> None:
     """The §25.12 determinism boundary AND the IS zero-tolerance monotonicity
-    invariant hold together: with a shared fan-out timestamp, scrambled-completion
+    invariant hold together: with drain-time re-stamping, scrambled-completion
     concurrent branches drain in branch-index order (steps then terminal per
     branch) and EVERY entry APPENDs (none rejected as non-monotonic) — independent
     of which branch's 'model call' returned first."""
@@ -463,18 +466,24 @@ async def test_scrambled_completion_persists_branch_index_order(tmp_path: Path) 
     assert verify_chain(entries).status == VerificationStatus.VALID
 
 
-def test_branch_index_non_monotonic_timestamps_rejected_by_real_writer(tmp_path: Path) -> None:
-    """The timestamp policy is load-bearing, not papered over: if the caller stamps
-    branch entries with EXECUTION-time wall-clocks (a lower-branch-index entry
-    stamped later than a higher one), the branch-index-ordered drain through the
-    REAL writer raises NonMonotonicTimestampError (zero clock-skew tolerance). The
-    shared-fan-out-timestamp policy is what avoids this."""
+def test_branch_index_drain_sanitizes_buffer_time_timestamps(tmp_path: Path) -> None:
+    """Drain-time stamping is the IS-monotonicity realization (monotonic BY
+    CONSTRUCTION), superseding the earlier caller-supplied shared-fan-out-timestamp
+    policy. Even when a branch buffers an EXECUTION-time wall-clock that would
+    invert branch-index order (branch 0 — drained FIRST — stamped LATER than branch
+    1), `drain_branch_buffers` re-stamps every entry to ONE drain-moment value at
+    its actual append point, so the REAL zero-tolerance writer APPENDs all of them
+    (no `NonMonotonicTimestampError`) and the persisted timestamps are
+    non-decreasing. (Previously: the caller owned the timestamp and the writer
+    rejected the inversion; the safety-net for the DIRECT append paths is preserved
+    by `test_direct_decreasing_timestamp_still_rejected_by_real_writer`.)"""
     real = _RealLedgerWriter(handle=_handle(tmp_path), actor=_ACTOR)
     late = datetime(2026, 6, 13, 12, 0, 5, tzinfo=UTC)
     early = datetime(2026, 6, 13, 12, 0, 0, tzinfo=UTC)
     b0 = BufferingLedgerWriter(actor=_ACTOR, branch_index=0)
     b1 = BufferingLedgerWriter(actor=_ACTOR, branch_index=1)
-    # Branch 0 (drained FIRST) stamped LATER than branch 1 (drained second).
+    # Branch 0 (drained FIRST) buffered LATER than branch 1 (drained second) — the
+    # inversion the OLD caller-owns policy relied on the writer to reject.
     append_branch_step_ledger_entry(
         branch_writer=b0,
         branch_context=_branch(0),
@@ -489,5 +498,42 @@ def test_branch_index_non_monotonic_timestamps_rejected_by_real_writer(tmp_path:
         local_step_index=0,
         timestamp=early,
     )
+    drain_branch_buffers(real, [b0, b1])
+    assert all(r is WriteResult.APPENDED for r in real.results)
+    persisted = [e.timestamp for e in read_ledger(real._handle)]
+    # The drain collapsed the inverted buffer-time stamps to one drain-moment
+    # value — neither the buffered `late`/`early` survived.
+    assert persisted == sorted(persisted)
+    assert len(set(persisted)) == 1
+    assert late not in persisted and early not in persisted
+
+
+def test_direct_decreasing_timestamp_still_rejected_by_real_writer(tmp_path: Path) -> None:
+    """The zero-tolerance writer's safety net is intact for the DIRECT (non-drain)
+    append paths — the linear inline `_append_step_ledger_entry` and the runtime
+    audit / cost writers, which stamp at their own append moment. A direct append
+    whose timestamp precedes the prior entry's is still rejected. Drain-time
+    re-stamping sanitizes ONLY the buffered fan-out drain; it does not weaken the
+    writer (the inverse guarantee to the sibling above)."""
+    real = _RealLedgerWriter(handle=_handle(tmp_path), actor=_ACTOR)
+    late = datetime(2026, 6, 13, 12, 0, 5, tzinfo=UTC)
+    early = datetime(2026, 6, 13, 12, 0, 0, tzinfo=UTC)
+
+    def _direct(ts: datetime, n: int) -> tuple[EntryPayload, WriteKey]:
+        return (
+            EntryPayload(
+                action_id=Identifier(f"workflow:wf:step:{n}"),
+                idempotency_key=Identifier(f"idem-{n}"),
+                actor=_ACTOR,
+                timestamp=ts,
+            ),
+            WriteKey(
+                thread_id=Identifier("wf"),
+                step_id=Identifier(str(n)),
+                idempotency_key=Identifier(f"idem-{n}"),
+            ),
+        )
+
+    real.append(*_direct(late, 0))
     with pytest.raises(NonMonotonicTimestampError):
-        drain_branch_buffers(real, [b0, b1])
+        real.append(*_direct(early, 1))

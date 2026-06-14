@@ -109,7 +109,11 @@ class _DriverStrategyStatus(Enum):
     until each strategy unit (U-CP-86..U-CP-90) lands. `PARALLELIZATION`
     (the fan-out-barrier-aggregate strategy) landed first at U-CP-86;
     `EVALUATOR_OPTIMIZER` (the sequential generate→evaluate→regenerate loop)
-    landed second at U-CP-87.
+    landed second at U-CP-87; `ORCHESTRATOR_WORKERS` (orchestrator-dispatch-
+    collect fan-out) landed third at U-CP-88; `HIERARCHICAL_DELEGATION`
+    (recursive bounded-fan-out — cap-3 per parent reusing `ORCHESTRATOR_WORKERS`
+    at each level) landed fourth at U-CP-89. `DECENTRALIZED_HANDOFF` remains
+    `NOT_YET_MATERIALIZED` until U-CP-90.
 
     **`DriverStrategy` shape (O-CP-1(d) resolution, decided at U-CP-86 — the
     first strategy unit).** The dispatch is a flat enum-keyed branch in
@@ -127,6 +131,7 @@ class _DriverStrategyStatus(Enum):
     PARALLELIZATION = "parallelization"
     EVALUATOR_OPTIMIZER = "evaluator-optimizer"
     ORCHESTRATOR_WORKERS = "orchestrator-workers"
+    HIERARCHICAL_DELEGATION = "hierarchical-delegation"
     NOT_YET_MATERIALIZED = "not-yet-materialized"
 
 
@@ -139,7 +144,7 @@ _DRIVER_STRATEGY_DISPATCH: Mapping[TopologyPattern, _DriverStrategyStatus] = {
     TopologyPattern.SINGLE_THREADED_LINEAR: _DriverStrategyStatus.LINEAR_INLINE,
     TopologyPattern.PARALLELIZATION: _DriverStrategyStatus.PARALLELIZATION,
     TopologyPattern.ORCHESTRATOR_WORKERS: _DriverStrategyStatus.ORCHESTRATOR_WORKERS,
-    TopologyPattern.HIERARCHICAL_DELEGATION: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
+    TopologyPattern.HIERARCHICAL_DELEGATION: _DriverStrategyStatus.HIERARCHICAL_DELEGATION,
     TopologyPattern.DECENTRALIZED_HANDOFF: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
     TopologyPattern.EVALUATOR_OPTIMIZER: _DriverStrategyStatus.EVALUATOR_OPTIMIZER,
 }
@@ -595,11 +600,48 @@ def drain_branch_buffers(
     which branch's model call returned first (the §25.12 determinism boundary;
     "lowest branch-index on tie"). Within a branch, entries drain in their
     buffered step order. Returns the count of entries drained.
+
+    **Drain-time timestamp — the IS-monotonicity realization of the module's own
+    "timestamp records the ledger-*append* event" semantic.** Every buffered
+    payload is re-stamped to a single drain-moment timestamp at this — its actual
+    append — point, NOT the buffer-time value the strategy supplied. A fan-out is
+    one barrier-drain persist event, so one drain = one timestamp. This keeps the
+    shared ZERO-tolerance IS ledger (`_CLOCK_SKEW_TOLERANCE = timedelta(0)`)
+    strictly non-decreasing for **CAUSALLY-ORDERED** drains: the within-level
+    scrambled-completion drain (buffer-time wall-clocks can invert branch-index
+    order, but the single barrier drain runs on one thread, so `now()` here is
+    `>=` whatever preceded the fan-out), AND the single-path cross-level recursion
+    inversion (one `SUB_AGENT_DISPATCH` child drains its entries DURING the
+    parent's barrier — causally *before* this post-barrier parent drain — so the
+    child's `now()` `<=` the parent's). The buffer-time `timestamp=` the append
+    helpers carry is a placeholder this drain overrides; the zero-tolerance writer
+    remains the live safety net for the DIRECT (linear / runtime) append paths.
+
+    **NOT covered (a known gap; the runtime concurrency fork).** `drain_timestamp`
+    is captured here, OUTSIDE the IS writer's serialization point (the module-level
+    `_WRITE_LOCK` inside `append_ledger_entry`). So this is monotonic-by-
+    construction ONLY for causally-ordered drains, NOT for **concurrent** appends
+    to the shared writer that this drain cannot order: (a) two `SUB_AGENT_DISPATCH`
+    SIBLING children draining on separate fan-out threads (each captures its own
+    `now()` outside `_WRITE_LOCK`; the lock can serialize their physical appends in
+    the opposite order → `NonMonotonicTimestampError`), and (b) a runtime audit /
+    cost write interleaving between this drain's capture and its appends. Both are
+    unreachable today — the runtime sync/async-bridge deadlock blocks concurrent
+    sub-agent recursion end-to-end — and were equally broken under the prior
+    fan-out-start-timestamp policy (NOT a regression). The clean fix is
+    timestamp-authority INSIDE `_WRITE_LOCK` (an IS write-path change, contract-
+    touching) and belongs to the same arc as the deadlock; see
+    `.harness/runtime_defect_sub_agent_inference_child_loop_bridge_deadlock.md`
+    §8 + `test_concurrent_sibling_drains_invert_timestamp` (xfail, strict). The
+    §25.12 determinism boundary is untouched regardless (it constrains append
+    *order* — still a pure function of branch_index — never timestamp *values*;
+    the chain is not byte-stable across replay).
     """
+    drain_timestamp = datetime.now(UTC)
     drained = 0
     for buffer in sorted(branch_buffers, key=lambda b: b.branch_index):
         for payload, write_key in buffer.buffered_entries:
-            real_writer.append(payload, write_key)
+            real_writer.append(payload.model_copy(update={"timestamp": drain_timestamp}), write_key)
             drained += 1
     return drained
 
@@ -1306,9 +1348,16 @@ def _execute_workflow_body(
     # compose at later strategy units (U-CP-85 cascade_policy / U-CP-88
     # ORCHESTRATOR_WORKERS). `PARALLELIZATION` (U-CP-86) is the happy-path
     # fan-out + deterministic aggregation; `EVALUATOR_OPTIMIZER` (U-CP-87) is
-    # the sequential generate→evaluate→regenerate loop. The three remaining
-    # non-linear patterns still raise `TopologyPatternNotYetMaterializedError`
-    # at `resolve_driver_strategy`.
+    # the sequential generate→evaluate→regenerate loop. `ORCHESTRATOR_WORKERS`
+    # (U-CP-88) dispatches a dynamic worker fan-out under one orchestrator;
+    # `HIERARCHICAL_DELEGATION` (U-CP-89) is recursive `ORCHESTRATOR_WORKERS` (one
+    # re-entrant level per `SUB_AGENT_DISPATCH` worker, fan-out cap 3 per parent).
+    # `DECENTRALIZED_HANDOFF` still raises `TopologyPatternNotYetMaterializedError`
+    # at `resolve_driver_strategy`. Cross-level / scrambled-completion timestamp
+    # monotonicity on the shared zero-tolerance IS ledger is realized at the drain
+    # (`drain_branch_buffers` re-stamps every entry to its append moment); no
+    # strategy coordinates a shared timestamp, and a `SUB_AGENT_DISPATCH` child
+    # reuses the same recursion seam transparently.
     if strategy is _DriverStrategyStatus.PARALLELIZATION:
         return _execute_parallelization(
             manifest_entry=manifest_entry,
@@ -1331,6 +1380,16 @@ def _execute_workflow_body(
         )
     if strategy is _DriverStrategyStatus.ORCHESTRATOR_WORKERS:
         return _execute_orchestrator_workers(
+            manifest_entry=manifest_entry,
+            steps=steps,
+            run_id=run_id,
+            ctx=ctx,
+            default_model_binding=default_model_binding,
+            step_dispatchers=step_dispatchers,
+            run_idempotency_key=run_idempotency_key,
+        )
+    if strategy is _DriverStrategyStatus.HIERARCHICAL_DELEGATION:
+        return _execute_hierarchical_delegation(
             manifest_entry=manifest_entry,
             steps=steps,
             run_id=run_id,
@@ -1999,17 +2058,32 @@ def _append_step_ledger_entry(
 # while the drain persists in branch-index order independent of which branch's
 # model call returned first (§25.12). Wall-clock stamps captured at branch
 # *execution* time would therefore trip `NonMonotonicTimestampError` once a
-# lower-branch-index entry happens to be stamped later than a higher one. This is
-# NOT a spec contradiction (§25.12 constrains append *order*, not timestamp
-# *values*; the canonical reading — consistent with the linear path — is that the
-# timestamp records the ledger-*append* event, and a fan-out is one barrier-drain
-# persist event): the caller therefore supplies the `timestamp`, and MUST supply
-# timestamps non-decreasing in branch-index drain order AND `>=` the last
-# pre-fan-out (linear) entry's timestamp — the first drained branch entry is
-# checked by the zero-tolerance writer against whatever preceded the fan-out. The
-# natural policy a strategy (U-CP-86) uses is a single shared fan-out timestamp
-# (`>=` the pre-fan-out entry) for every branch entry (all equal ⟹ trivially
-# monotonic ⟹ all APPEND; branch-index append order preserved). The R-003
+# lower-branch-index entry happens to be stamped later than a higher one — and,
+# under recursion, a `SUB_AGENT_DISPATCH` child sharing the writer drains its
+# entries DURING the parent's barrier (before the parent's LATE post-barrier
+# drain), a cross-level inversion the within-level shared-timestamp policy can't
+# reach. This is NOT a spec contradiction (§25.12 constrains append *order*, not
+# timestamp *values*; the canonical reading — consistent with the linear path —
+# is that the timestamp records the ledger-*append* event, and a fan-out is one
+# barrier-drain persist event). The realization: `drain_branch_buffers` re-stamps
+# every entry to a single drain-moment timestamp at its actual append point, so
+# physical-append-order == timestamp-order for **causally-ordered** drains —
+# every level reached through the single-threaded recursion seam, plus the
+# interleaved DIRECT linear-inline writer, are serialized in causal order and stay
+# non-decreasing. This is NOT "by construction" for **concurrent** appends the
+# drain cannot order: `drain_timestamp` is captured OUTSIDE the IS writer's
+# `_WRITE_LOCK`, so two sibling `SUB_AGENT_DISPATCH` children draining on separate
+# fan-out threads (or a runtime audit / cost write interleaving the lock between
+# this capture and its appends) can still invert → `NonMonotonicTimestampError`.
+# That is a known gap — unreachable today behind the runtime sync/async-bridge
+# deadlock, and equally broken under the prior fan-out-start-timestamp policy (NOT
+# a regression); the clean fix is timestamp-authority INSIDE `_WRITE_LOCK` (an IS
+# write-path change, contract-touching) belonging to the same arc as the deadlock.
+# See `.harness/runtime_defect_sub_agent_inference_child_loop_bridge_deadlock.md`
+# §8 + `drain_branch_buffers` + `test_concurrent_sibling_drains_invert_timestamp`
+# (xfail, strict). The `timestamp=` these helpers
+# carry is a buffer-time placeholder the drain overrides (it never reaches the
+# ledger; see `drain_branch_buffers`). The R-003
 # active-workflow-context invariant (IS §5.1
 # `procedural_tier_snapshot_ref` populated at every producer site) is honored via
 # a caller-supplied injection param (defaulting `None`) on both helpers — the
@@ -2037,8 +2111,9 @@ def append_branch_step_ledger_entry(
     `BufferingLedgerWriter` (the write is deferred to the barrier drain; dispatch
     + telemetry already fired inline, so the pre-dispatch gate is never deferred,
     §25.15.2 obl. 2). `branch_context` must be a branch child context (the
-    composers raise on a linear context). See the module-level timestamp
-    discipline for the caller's monotonicity obligation.
+    composers raise on a linear context). `timestamp` is a buffer-time
+    placeholder the barrier drain overrides (`drain_branch_buffers` re-stamps to
+    the append moment); see the module-level timestamp discipline.
 
     `procedural_tier_snapshot_ref` is the **caller-supplied** R-003 sidecar (IS
     spec v1.3 §5.1): a branch step entry is written inside an active-workflow
@@ -2179,6 +2254,20 @@ HARD in-flight EFFECT cut-off (cancelling a running dispatch) is §25.15 cascade
 scope (U-CP-85), deliberately excluded from U-CP-86 per its dependency set.
 Generous default sized for INFERENCE_STEP branches; a manifest-surfaced
 per-workflow deadline is a forward field (not surfaced at v1.32)."""
+
+_HIERARCHICAL_DELEGATION_FANOUT_CAP = 3
+"""Fan-out cap per parent for `HIERARCHICAL_DELEGATION` (C-CP-25 §25.11 row —
+"recursive bounded-fan-out … fan-out cap 3 per parent (C-CP-10 §10.3)";
+`topology_pattern.py:76` "scope-bounded recursion; fan-out cap 3 per parent").
+
+Spec-PINNED at 3 for HIERARCHICAL_DELEGATION (distinct from the §25.18
+impl-discretion that governs OTHER patterns' per-cell caps). Counts a level's
+DIRECT children = the worker steps `steps[1:]` under the level's orchestrator
+(`steps[0]`). A level whose worker count exceeds the cap is rejected
+`detect-then-refuse` (`RunStatus.FAILED`), NEVER silently truncated. The cap
+auto-applies at EVERY recursion level whose child manifest declares
+`HIERARCHICAL_DELEGATION` (a child declaring `ORCHESTRATOR_WORKERS` re-enters
+the uncapped strategy — by design: the cap is a property of this topology)."""
 
 
 def _parallelization_fanout_action_id(workflow_id: str) -> str:
@@ -2411,11 +2500,10 @@ def _execute_parallelization(
     _resolver = getattr(ctx, "procedural_tier_snapshot_resolver", None)
     snapshot_ref = _resolver() if _resolver is not None else None
 
-    # A single shared fan-out timestamp for every branch entry. All-equal ⟹
-    # trivially monotonic under the zero-tolerance IS writer regardless of
-    # branch-index drain order (see the module timestamp-discipline note above
-    # `append_branch_step_ledger_entry`). The IS writer checks the first drained
-    # entry against whatever preceded the fan-out; `now()` is >= any prior entry.
+    # Buffer-time placeholder timestamp for every branch entry; the authoritative
+    # append timestamp is assigned at the drain (`drain_branch_buffers` re-stamps
+    # to one drain-moment value — the IS-monotonicity realization, see the module
+    # timestamp-discipline note above `append_branch_step_ledger_entry`).
     fanout_timestamp = datetime.now(UTC)
 
     # Per-branch plan: (branch_index, step, child context, buffering writer,
@@ -2761,9 +2849,10 @@ def _execute_evaluator_optimizer(
     _resolver = getattr(ctx, "procedural_tier_snapshot_resolver", None)
     snapshot_ref = _resolver() if _resolver is not None else None
 
-    # A single shared timestamp for every buffered entry. All-equal ⟹ trivially
-    # monotonic under the zero-tolerance IS writer; the sequential buffer drains
-    # in execution (= entry_index) order, which is already non-decreasing.
+    # Buffer-time placeholder timestamp for every buffered entry; the
+    # authoritative append timestamp is assigned at the drain
+    # (`drain_branch_buffers` re-stamps to one drain-moment value — the
+    # IS-monotonicity realization, see the module timestamp-discipline note).
     loop_timestamp = datetime.now(UTC)
 
     writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=0)
@@ -3051,9 +3140,10 @@ def _execute_orchestrator_workers(
     _resolver = getattr(ctx, "procedural_tier_snapshot_resolver", None)
     snapshot_ref = _resolver() if _resolver is not None else None
 
-    # A single shared timestamp for every entry (orchestrator + workers). All-equal
-    # ⟹ trivially monotonic under the zero-tolerance IS writer regardless of the
-    # branch-index drain order (the module timestamp-discipline note above
+    # Buffer-time placeholder timestamp for every entry (orchestrator + workers);
+    # the authoritative append timestamp is assigned at the drain
+    # (`drain_branch_buffers` re-stamps to one drain-moment value — the
+    # IS-monotonicity realization, see the module timestamp-discipline note above
     # `append_branch_step_ledger_entry`).
     fanout_timestamp = datetime.now(UTC)
 
@@ -3456,6 +3546,101 @@ def _execute_orchestrator_workers(
             salvage=True,
         )
     return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
+
+
+def _execute_hierarchical_delegation(
+    *,
+    manifest_entry: WorkflowManifestEntry,
+    steps: Sequence[WorkflowStep],
+    run_id: str,
+    ctx: DriverContext,
+    default_model_binding: ModelBinding,
+    step_dispatchers: StepDispatcherRegistry,
+    run_idempotency_key: str,
+) -> tuple[RunResult, int]:
+    """Execute the `HIERARCHICAL_DELEGATION` recursive bounded-fan-out strategy (U-CP-89).
+
+    HIERARCHICAL_DELEGATION is **recursive `ORCHESTRATOR_WORKERS` with depth**
+    (C-CP-25 §25.11 row): at each level `steps[0]` is the orchestrator/parent and
+    `steps[1:]` are its direct children (workers); a worker of kind
+    `SUB_AGENT_DISPATCH` recurses — its dispatcher re-enters `execute_workflow`
+    with the child's own manifest + step sequence (the existing C-RT-17 §14.7.4
+    `ChildWorkflowRunner` seam), and when that child manifest declares
+    `HIERARCHICAL_DELEGATION` the recursion re-enters HERE, so the cap-3 +
+    gate-level descent + bottom-up barrier composition hold at EVERY level.
+
+    This strategy adds exactly two things over `ORCHESTRATOR_WORKERS` (U-CP-88),
+    which it **REUSES at each level (NOT a parallel re-implementation — the AC):**
+
+    1. **Materialization** — a manifest may declare `HIERARCHICAL_DELEGATION`, so
+       a recursive child re-enters this strategy (vs the uncapped
+       `ORCHESTRATOR_WORKERS`).
+    2. **The fan-out cap 3 per parent** (`_HIERARCHICAL_DELEGATION_FANOUT_CAP`;
+       C-CP-10 §10.3 / §25.11 "recursive *bounded*-fan-out"): a level with more
+       than 3 direct children is rejected `detect-then-refuse` (`RunStatus.FAILED`,
+       no `workflow.start` emit / no ledger append — parity with the
+       topology/engine-class entry gate), NEVER silently truncated.
+
+    Everything else is the `ORCHESTRATOR_WORKERS` strategy verbatim: the
+    orchestrator parents the fan-out (`steps[0].action_id`); workers fan out
+    concurrently under per-role child contexts whose gate-level descends per
+    C-CP-12 §12.2 (`compose_branch_child_context`, monotonic — equality default);
+    each parent barriers on its children and composes the deterministic
+    branch-index fold (bottom-up); `cascade_policy` governs the on-failure
+    reaction (§25.15). The nested barrier deadline composes — `cascade_cancel_barrier`
+    extends (not replaces) the `_BRANCH_INFLIGHT_DISPATCHES` chain, so an OUTER
+    level's deadline stays a hard cap over an inner-level in-flight dispatch.
+    Returns `(RunResult, steps_executed)` for the `_execute_workflow_body` caller.
+
+    **Gate-level descent across the recursion boundary (honest scope).** The
+    sub-agent gate-level descent (C-CP-12 §12.2) is COMPUTED + RECORDED at the
+    `SUB_AGENT_DISPATCH` dispatch boundary (the runtime
+    `RuntimeHandoffRegistry.dispatch` → `dispatch_sub_agent`), but the child's
+    EXECUTED gate-level re-seeds from its own manifest — the harness-computed
+    descent is recorded-not-applied at the child run (pre-existing v1.6 MVP
+    child-context sharing, `child_workflow_runner.py` module docstring). Strict
+    cross-level *executed* descent is a v1.7+/B4-adjacent arc
+    (`.harness/class_3_hierarchical_delegation_descent_recorded_not_applied.md`);
+    §12.2 itself is monotonic-≤ with equality as the valid default, so the
+    within-level worker descent (`compose_branch_child_context`) + the recorded
+    boundary descent satisfy the monotonic invariant.
+    """
+    workflow_id = manifest_entry.workflow_id
+
+    # Fan-out cap 3 per parent (C-CP-10 §10.3 / §25.11 "recursive bounded-fan-out").
+    # steps[0] = this level's orchestrator (parent); steps[1:] = its direct children.
+    # detect-then-refuse: a level exceeding the cap FAILS loud with no side effects
+    # (no workflow.start emit, no ledger append) — never a silent truncation. The cap
+    # re-checks at every recursion level whose child manifest declares
+    # HIERARCHICAL_DELEGATION (the recursion re-enters this function).
+    worker_count = max(0, len(steps) - 1)
+    if worker_count > _HIERARCHICAL_DELEGATION_FANOUT_CAP:
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state=None,
+            fail_class=(
+                f"hierarchical-delegation-fanout-cap-exceeded: {worker_count} children "
+                f"> cap {_HIERARCHICAL_DELEGATION_FANOUT_CAP} (C-CP-10 §10.3)"
+            ),
+        ), 0
+
+    # Reuse ORCHESTRATOR_WORKERS at this level (U-CP-88; the AC: "reuses
+    # ORCHESTRATOR_WORKERS at each level — NOT a parallel re-implementation").
+    # Recursion-with-depth emerges through SUB_AGENT_DISPATCH workers re-entering
+    # the driver per the child manifest's topology.
+    return _execute_orchestrator_workers(
+        manifest_entry=manifest_entry,
+        steps=steps,
+        run_id=run_id,
+        ctx=ctx,
+        default_model_binding=default_model_binding,
+        step_dispatchers=step_dispatchers,
+        run_idempotency_key=run_idempotency_key,
+    )
 
 
 __all__ = [
