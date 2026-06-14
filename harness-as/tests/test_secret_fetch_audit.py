@@ -38,10 +38,11 @@ def _event(*, name: str = "ANTHROPIC_API_KEY") -> SecretFetchEvent:
 
 
 def test_compose_audit_entry_six_field_shape() -> None:
-    """Acceptance #1 — composed entry inherits F2 shape; v1.3 5th D-derivative sidecar admissible.
+    """Acceptance #1 — composed entry inherits F2 shape; the D-derivative sidecars are admissible.
 
-    Per IS spec v1.3 §5.1 (LANDED PR #89 2026-05-30): `StateLedgerEntry` gains a
-    D-derivative sidecar `procedural_tier_snapshot_ref: Identifier | None = None`
+    Per IS spec v1.3 §5.1 (LANDED PR #89): `StateLedgerEntry` gains the
+    `procedural_tier_snapshot_ref` D-derivative sidecar; per IS spec v1.8 §5.4
+    (U-IS-19): it gains the `branch_metadata` D-derivative sidecar — both
     additive to the F-layer 6-field shape.
     """
     entry = compose_secret_fetch_audit_entry(_event(), None)
@@ -54,6 +55,7 @@ def test_compose_audit_entry_six_field_shape() -> None:
         "timestamp",
         "prior_event_hash",
         "procedural_tier_snapshot_ref",
+        "branch_metadata",
     }
 
 
