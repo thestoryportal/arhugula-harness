@@ -59,7 +59,31 @@ class EngineClassNotYetMaterializedError(WorkflowDriverError):
         self.engine_class = engine_class
 
 
+class BranchBarrierDeadlineExceededError(WorkflowDriverError):
+    """A non-linear-topology branch barrier exceeded its wall-clock deadline.
+
+    C-CP-25 §25.11 (bounded barriers — U-CP-82): every barrier (`TaskGroup` /
+    `gather` join over branches) is wrapped in a wall-clock deadline so a stuck
+    branch cannot strand its parent indefinitely. `bounded_barrier` raises this
+    on deadline-exceeded. The deadline value is §25.18 impl-discretion supplied
+    by the calling strategy (U-CP-86..U-CP-90), not minted as a driver config
+    field here.
+
+    Raising this enforces only the *bound*; the cascade-policy *reaction* to a
+    deadline (cancel not-yet-dispatched siblings / proceed-degraded / pause)
+    composes at U-CP-85 (§25.15) — out of U-CP-82's scope.
+    """
+
+    def __init__(self, deadline_seconds: float) -> None:
+        super().__init__(
+            f"branch barrier exceeded its {deadline_seconds}s wall-clock "
+            f"deadline (C-CP-25 §25.11 bounded barriers)"
+        )
+        self.deadline_seconds = deadline_seconds
+
+
 __all__ = [
+    "BranchBarrierDeadlineExceededError",
     "EngineClassNotYetMaterializedError",
     "TopologyPatternNotYetMaterializedError",
     "WorkflowDriverError",

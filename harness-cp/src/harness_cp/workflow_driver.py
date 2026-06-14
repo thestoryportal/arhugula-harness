@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from collections.abc import Coroutine, Mapping, Sequence
+from collections.abc import Awaitable, Coroutine, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
@@ -65,6 +65,7 @@ from harness_cp.pause_resume_protocol_types import (
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding, resolve_step_binding
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver_errors import (
+    BranchBarrierDeadlineExceededError,
     EngineClassNotYetMaterializedError,
     TopologyPatternNotYetMaterializedError,
 )
@@ -448,15 +449,188 @@ def _compute_run_idempotency_key(
     return h.hexdigest()
 
 
-def _compute_step_idempotency_key(run_idempotency_key: str, step_index: int) -> str:
-    """Per-step `idempotency_key = sha256(run_idempotency_key, step.index)`
-    per C-CP-25 §25.3.3.7 + §25.6.
+def _compute_step_idempotency_key(
+    run_idempotency_key: str,
+    step_index: int,
+    branch_path: str | None = None,
+) -> str:
+    """Per-step `idempotency_key = sha256(run_idempotency_key, step_index[, branch_path])`
+    per C-CP-25 §25.3.3.7 + §25.6 + §25.16 (branch-scoped extension).
+
+    `branch_path` (U-CP-83 / §25.16) enters the composition under fan-out so N
+    parallel branches at the *same declared `step_index`* do not collapse to one
+    ledger entry under the IS writer's `idempotency_key`-only dedup
+    (C-IS-07 §7.5). It derives from the branch identity via
+    `workflow_driver_types.compose_branch_path`. The `SINGLE_THREADED_LINEAR`
+    path passes `branch_path=None` and composes the existing
+    `sha256(run_idempotency_key, step_index)` key **byte-identically**
+    (regression-safe — no extra separator is hashed when `branch_path is None`).
+    This is a CP-side driver write-key composition change only — no six-field /
+    hash-chain / ADR change (§25.16).
     """
     h = hashlib.sha256()
     h.update(run_idempotency_key.encode("utf-8"))
     h.update(b"\x00")
     h.update(str(step_index).encode("utf-8"))
+    if branch_path is not None:
+        h.update(b"\x00")
+        h.update(branch_path.encode("utf-8"))
     return h.hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Branch buffered/deferred-append substrate (C-CP-25 §25.11/§25.12 — U-CP-82)
+# ---------------------------------------------------------------------------
+#
+# The shared substrate every non-linear topology strategy (U-CP-86..U-CP-90)
+# reuses: the buffered-append discipline (D1.b), the deterministic
+# branch-index-ordered drain (D1), and the bounded barrier (§25.11). Strategies
+# differ in *control flow over steps*; they all defer the ledger *write* through
+# this substrate. The `SINGLE_THREADED_LINEAR` strategy is unaffected — it keeps
+# the inline per-step append of `_execute_workflow_body` verbatim (§25.12).
+
+
+class BufferingLedgerWriter:
+    """A `LedgerWriterLike` that BUFFERS appends instead of writing through.
+
+    C-CP-25 §25.12 D1.b (the load-bearing buffered/deferred-append mechanism): a
+    branch executes its step bodies + emits telemetry but **buffers its pending
+    ledger entries** here; the orchestrator **drains the buffers through the
+    single real `LedgerWriterLike` in branch-index order at the barrier**
+    (`drain_branch_buffers`). Only the ledger WRITE is deferred — step dispatch
+    and telemetry still fire inline (so the pre-dispatch gate is never deferred,
+    §25.15.2 obligation 2). The inline per-step append of `_execute_workflow_body`
+    (which persists in *completion* order under `gather`/`TaskGroup`) is the
+    foreclosed anti-pattern for the non-linear strategies.
+
+    Structurally satisfies the same `LedgerWriterLike` Protocol the driver
+    consumes, so a branch's `ctx.ledger_writer` is swapped to this instance with
+    no change to the per-step entry-*payload* shape. The swap is **necessary but
+    not sufficient**: a strategy (U-CP-86+) executing branch steps must ALSO
+    compose branch-unique `action_id`s via `compose_branch_step_action_id` and
+    branch-scoped idempotency keys via `compose_branch_path` (§25.16) — reusing
+    the linear `_append_step_ledger_entry`'s flat `workflow:{wf}:step:{N}`
+    `action_id` inside a branch would collide across siblings (the U-CP-81
+    forward obligation). `branch_index` is carried so `drain_branch_buffers` can
+    order the drain deterministically by branch_index (NOT completion order —
+    the §25.12 determinism boundary).
+    """
+
+    def __init__(self, *, actor: Actor, branch_index: int) -> None:
+        self.actor = actor
+        self.branch_index = branch_index
+        self._buffer: list[tuple[Any, Any]] = []
+
+    def append(self, payload: Any, write_key: Any) -> None:
+        """Buffer the `(payload, write_key)` instead of writing through (§25.12 D1.b)."""
+        self._buffer.append((payload, write_key))
+
+    @property
+    def is_genesis(self) -> bool:
+        """Protocol-completeness only — NOT consulted on the branch-append path.
+
+        A branch only appends; chain position / genesis detection is the single
+        real writer's concern (a branch never reads `prior_event_hash`). Reports
+        the buffer's own emptiness so the field is well-defined if read.
+        """
+        return len(self._buffer) == 0
+
+    @property
+    def entry_count(self) -> int:
+        """Count of buffered (not-yet-drained) entries."""
+        return len(self._buffer)
+
+    @property
+    def buffered_entries(self) -> list[tuple[Any, Any]]:
+        """The ordered pending-entry list (step order within this branch)."""
+        return list(self._buffer)
+
+
+def drain_branch_buffers(
+    real_writer: LedgerWriterLike,
+    branch_buffers: Iterable[BufferingLedgerWriter],
+) -> int:
+    """Drain buffered branch entries through the single real writer in
+    **branch-index order** at the barrier (C-CP-25 §25.12 D1 / D1.b).
+
+    Realizes ADR-F2 v1.2 §Consequences's single-threaded-write boundary: branch
+    *execution* is concurrent, but the resulting ledger *appends* are serialized
+    through the one real `LedgerWriterLike` in deterministic branch-index order.
+    The hash chain stays **single-parent linear** — no second `prior_event_hash`,
+    no DAG entry; this helper only feeds the real writer's existing serialized
+    append deterministically.
+
+    `branch_buffers` MAY be collected in branch completion order (whichever
+    branch's barrier task finished first); the drain **sorts by `branch_index`**
+    so the persisted order is a pure function of `branch_index`, independent of
+    which branch's model call returned first (the §25.12 determinism boundary;
+    "lowest branch-index on tie"). Within a branch, entries drain in their
+    buffered step order. Returns the count of entries drained.
+    """
+    drained = 0
+    for buffer in sorted(branch_buffers, key=lambda b: b.branch_index):
+        for payload, write_key in buffer.buffered_entries:
+            real_writer.append(payload, write_key)
+            drained += 1
+    return drained
+
+
+async def bounded_barrier[T](
+    branch_tasks: Iterable[Awaitable[T]],
+    *,
+    deadline_seconds: float,
+) -> list[T]:
+    """Await all branch tasks at a barrier, bounded by a wall-clock deadline.
+
+    C-CP-25 §25.11 (bounded barriers): every barrier (`TaskGroup` / `gather`
+    join over branches) is wrapped in a wall-clock deadline so a stuck branch
+    cannot strand its parent indefinitely. On deadline-exceeded, raises
+    `BranchBarrierDeadlineExceededError`.
+
+    **Leak-freedom (a property of the bound, not of cascade-policy).** No branch
+    task ever outlives the barrier: on ANY non-clean exit — deadline-exceeded OR
+    a branch raising before the deadline — the still-pending sibling tasks are
+    cancelled and awaited before control returns, so no orphaned branch keeps
+    dispatching effects in the background (the foreclosed `gather`-leaks-orphans
+    anti-pattern, §25.15.2 obligation 8). This bounds the primitive's own tasks;
+    it does NOT decide the run-level cascade-policy *reaction* (`FAILED` /
+    `PARTIAL` / `PAUSED`) — a branch exception is re-raised UNCHANGED for the
+    strategy / U-CP-85 to map (§25.15).
+
+    `gather` (not `TaskGroup`) is used deliberately: it is policy-neutral
+    (re-raises the original branch exception verbatim), and §25.11 permits it
+    "where no cascade-cancel semantic is needed" — U-CP-82's scope. The
+    cascade_policy-AWARE structured-cancellation form (TaskGroup, which bakes in
+    cancel-siblings-on-failure and would foreclose the `proceed` policy that
+    lets siblings run to completion) lands at U-CP-85 (§25.15.2 obligation 8).
+
+    Results are returned in the input (branch) order of `branch_tasks`; the
+    deterministic *persisted* order is enforced separately at
+    `drain_branch_buffers`.
+    """
+    tasks = [asyncio.ensure_future(task) for task in branch_tasks]
+    timeout_cm = asyncio.timeout(deadline_seconds)
+    try:
+        async with timeout_cm:
+            return await asyncio.gather(*tasks)
+    except TimeoutError as exc:
+        # Disambiguate the BARRIER deadline from a branch-LOCAL TimeoutError
+        # (e.g. a provider client timeout raised INSIDE a branch). Only the
+        # former — for which the timeout context actually expired — is the
+        # barrier deadline; a branch's own TimeoutError is re-raised UNCHANGED
+        # per the policy-neutral contract above (`gather` propagates it verbatim).
+        if timeout_cm.expired():
+            raise BranchBarrierDeadlineExceededError(deadline_seconds) from exc
+        raise
+    finally:
+        # Leak-freedom: cancel + await any branch task still pending after a
+        # non-clean exit (deadline OR a sibling raising) so none outlives the
+        # barrier. On the clean path every task is already done → no-op.
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def resolve_parent_gate_level(manifest_entry: WorkflowManifestEntry) -> GateLevel:
@@ -1411,9 +1585,12 @@ def _append_step_ledger_entry(
 
 
 __all__ = [
+    "BufferingLedgerWriter",
     "DriverContext",
     "LedgerWriterLike",
     "LifecycleEventEmitterLike",
     "StepDispatcher",
+    "bounded_barrier",
+    "drain_branch_buffers",
     "execute_workflow",
 ]
