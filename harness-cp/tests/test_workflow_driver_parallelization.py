@@ -262,6 +262,42 @@ class _ReverseCompletionDispatcher:
         return {"branch": idx}
 
 
+class _FailAfterSiblingsCompleteDispatcher:
+    """The `fail_index` branch raises ONLY after every other branch's dispatch has
+    completed (their events set) — making "a sibling fails, the completed branches
+    still persist" DETERMINISTIC, not timing-flaky.
+
+    Why this is race-free (it mirrors `_ReverseCompletionDispatcher`'s event-sync
+    philosophy): the strategy buffers a branch's entries on the loop thread
+    immediately AFTER its `await asyncio.to_thread(dispatch)` returns, with NO
+    further await (so a resumed branch coroutine buffers atomically and cannot be
+    cancelled mid-buffer). Because the failing branch waits for all siblings, its
+    `to_thread` future resolves STRICTLY AFTER theirs, so the loop's FIFO ready-
+    queue resumes + buffers the completed siblings BEFORE the failure propagates
+    and `bounded_barrier`'s leak-free `finally` cancels pending tasks. No
+    `time.sleep`; the events are a hard sync point. (The executor is sized to the
+    fan-out, so the failing branch blocking its thread cannot starve the others.)"""
+
+    def __init__(self, *, n: int, fail_index: int) -> None:
+        self._fail_index = fail_index
+        self._sibling_events = {i: threading.Event() for i in range(n) if i != fail_index}
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        idx = int(step.step_payload["index"])
+        if idx == self._fail_index:
+            for sibling, event in self._sibling_events.items():
+                assert event.wait(timeout=10.0), f"sibling branch {sibling} never completed"
+            raise RuntimeError(f"simulated branch failure at index {idx}")
+        self._sibling_events[idx].set()
+        return {"branch": idx}
+
+
 def _run(
     *,
     steps: list[WorkflowStep],
@@ -442,9 +478,13 @@ def test_parallelization_branch_failure_returns_failed_and_persists_completed() 
     that is U-CP-85). The completed branches' buffered entries STILL persist
     (no silent failure — the audit-honoring at this scope)."""
     ledger = _RecordingLedger()
+    # Deterministic: branch 1 raises only AFTER branches 0 + 2 have completed (so
+    # they have buffered) — not the timing-flaky plain `_VariedDispatcher(fail_index=1)`,
+    # whose unsynchronized failure could cancel a still-pending sibling before it
+    # buffered (the race that surfaced as a CI flake on slower schedulers).
     result = _run(
         steps=[_branch_step(i) for i in range(3)],
-        dispatcher=_VariedDispatcher(fail_index=1),
+        dispatcher=_FailAfterSiblingsCompleteDispatcher(n=3, fail_index=1),
         ledger=ledger,
     )
     assert result.status is RunStatus.FAILED
