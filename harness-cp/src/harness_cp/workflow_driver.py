@@ -38,7 +38,7 @@ import hashlib
 from collections.abc import Awaitable, Coroutine, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 
 from harness_as.sandbox_tier import SandboxTier
 from harness_core.identity import ActionID
@@ -75,6 +75,11 @@ from harness_cp.workflow_driver_types import (
     StepExecutionContext,
     StepKind,
     WorkflowStep,
+    compose_branch_metadata,
+    compose_branch_path,
+    compose_branch_step_action_id,
+    compose_branch_terminal_action_id,
+    compose_branch_terminal_path,
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 
@@ -1584,12 +1589,141 @@ def _append_step_ledger_entry(
     # both outcomes leave the ledger correctly composed per C-IS-07 §7.1.
 
 
+# ---------------------------------------------------------------------------
+# Branch ledger write-cadence (C-CP-25 §25.13 + IS §5.4 + runtime §2.2(c) — U-CP-84)
+# ---------------------------------------------------------------------------
+#
+# The producer-cadence by which the CP WorkflowDriver populates the IS
+# `branch_metadata` sidecar under a non-linear topology strategy (U-CP-86+). Two
+# helpers, both buffering into the branch's own `BufferingLedgerWriter` (U-CP-82)
+# so the single barrier drain (`drain_branch_buffers`) serializes them in
+# branch-index order with the existing single-writer discipline — NO change to
+# `drain_branch_buffers`, NO second `prior_event_hash` (D1). The linear
+# `_append_step_ledger_entry` is unaffected (its `branch_metadata` stays the
+# carrier default `None`).
+#
+# Timestamp discipline (the determinism-boundary ⟂ IS-monotonicity interaction).
+# The IS writer enforces a ZERO-tolerance non-decreasing-timestamp invariant
+# (`state_ledger_write.append_ledger_entry`, `_CLOCK_SKEW_TOLERANCE = timedelta(0)`),
+# while the drain persists in branch-index order independent of which branch's
+# model call returned first (§25.12). Wall-clock stamps captured at branch
+# *execution* time would therefore trip `NonMonotonicTimestampError` once a
+# lower-branch-index entry happens to be stamped later than a higher one. This is
+# NOT a spec contradiction (§25.12 constrains append *order*, not timestamp
+# *values*; the canonical reading — consistent with the linear path — is that the
+# timestamp records the ledger-*append* event, and a fan-out is one barrier-drain
+# persist event): the caller therefore supplies the `timestamp`, and MUST supply
+# timestamps non-decreasing in branch-index drain order. The natural policy a
+# strategy (U-CP-86) uses is a single shared fan-out timestamp for every branch
+# entry (all equal ⟹ trivially monotonic ⟹ all APPEND; branch-index append order
+# preserved). `procedural_tier_snapshot_ref` is intentionally NOT populated here
+# (it is R-003's active-workflow-context invariant; U-CP-86, which holds the
+# DriverContext + resolver, is the natural wiring site — see the linear helper).
+
+
+def append_branch_step_ledger_entry(
+    *,
+    branch_writer: BufferingLedgerWriter,
+    branch_context: StepExecutionContext,
+    run_idempotency_key: str,
+    local_step_index: int,
+    timestamp: datetime,
+) -> None:
+    """Buffer a branch's per-step ledger entry carrying causality-only
+    `branch_metadata` (`terminal_status=None`) — C-CP-25 §25.13 / runtime §2.2(c).
+
+    Composes the branch-unique `action_id` (`compose_branch_step_action_id`) + the
+    branch-scoped idempotency key (`compose_branch_path` → `_compute_step_idempotency_key`,
+    U-CP-83) + the `branch_metadata` causality carrier (`compose_branch_metadata`,
+    `terminal_status=None`) and buffers it through the branch's
+    `BufferingLedgerWriter` (the write is deferred to the barrier drain; dispatch
+    + telemetry already fired inline, so the pre-dispatch gate is never deferred,
+    §25.15.2 obl. 2). `branch_context` must be a branch child context (the
+    composers raise on a linear context). See the module-level timestamp
+    discipline for the caller's monotonicity obligation.
+    """
+    from harness_is.state_ledger_entry_schema import Identifier
+    from harness_is.state_ledger_write import EntryPayload, WriteKey
+
+    branch_metadata = compose_branch_metadata(branch_context, terminal_status=None)
+    action_id = compose_branch_step_action_id(branch_context, local_step_index)
+    idempotency_key = _compute_step_idempotency_key(
+        run_idempotency_key,
+        local_step_index,
+        compose_branch_path(branch_context),
+    )
+    payload = EntryPayload(
+        action_id=Identifier(action_id),
+        idempotency_key=Identifier(idempotency_key),
+        actor=branch_writer.actor,
+        timestamp=timestamp,
+        branch_metadata=branch_metadata,
+    )
+    write_key = WriteKey(
+        thread_id=Identifier(branch_context.workflow_id),
+        step_id=Identifier(f"{branch_metadata.branch_index}:{local_step_index}"),
+        idempotency_key=Identifier(idempotency_key),
+    )
+    branch_writer.append(payload, write_key)
+
+
+def append_branch_terminal_ledger_entry(
+    *,
+    branch_writer: BufferingLedgerWriter,
+    branch_context: StepExecutionContext,
+    run_idempotency_key: str,
+    terminal_status: Literal["cancelled", "completed", "timed_out"],
+    timestamp: datetime,
+) -> None:
+    """Buffer a branch's **fresh terminal entry** carrying the dispatch-boundary
+    disposition — C-CP-25 §25.13 / IS §5.4 append-only invariant / runtime §2.2(c).
+
+    A branch's terminal disposition is recorded at a fresh terminal entry (its own
+    `compose_branch_terminal_action_id` marker + the distinct
+    `compose_branch_terminal_path` idempotency key, so the IS dedup never drops it)
+    — **never** by mutating an already-buffered step entry. Buffered as the
+    branch's last entry, so the existing `drain_branch_buffers` appends it after
+    the branch's step entries in branch-index order; the §6.3 chain re-verifies
+    because every entry (including this one) is a fresh append.
+
+    `terminal_status` is the caller-decided disposition (U-CP-85's cascade logic);
+    U-CP-84 persists the value it is handed. The carrier's closed set forecloses
+    `failed` — a ran-and-errored branch is `completed` (dispatch-boundary, not
+    step-outcome). `branch_context` must be a branch child context.
+    """
+    from harness_is.state_ledger_entry_schema import Identifier
+    from harness_is.state_ledger_write import EntryPayload, WriteKey
+
+    branch_metadata = compose_branch_metadata(branch_context, terminal_status=terminal_status)
+    action_id = compose_branch_terminal_action_id(branch_context)
+    idempotency_key = _compute_step_idempotency_key(
+        run_idempotency_key,
+        branch_context.step_index,
+        compose_branch_terminal_path(branch_context),
+    )
+    payload = EntryPayload(
+        action_id=Identifier(action_id),
+        idempotency_key=Identifier(idempotency_key),
+        actor=branch_writer.actor,
+        timestamp=timestamp,
+        branch_metadata=branch_metadata,
+    )
+    write_key = WriteKey(
+        thread_id=Identifier(branch_context.workflow_id),
+        step_id=Identifier(f"{branch_metadata.branch_index}:terminal"),
+        idempotency_key=Identifier(idempotency_key),
+    )
+    branch_writer.append(payload, write_key)
+
+
 __all__ = [
     "BufferingLedgerWriter",
     "DriverContext",
     "LedgerWriterLike",
     "LifecycleEventEmitterLike",
     "StepDispatcher",
+    "append_branch_step_ledger_entry",
+    "append_branch_terminal_ledger_entry",
     "bounded_barrier",
     "drain_branch_buffers",
     "execute_workflow",
