@@ -36,8 +36,12 @@ from harness_is.state_ledger_entry_schema import Actor, ActorClass
 
 _ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="test-branch-substrate")
 
-_NON_LINEAR_PATTERNS = (
-    TopologyPattern.PARALLELIZATION,
+# The non-linear patterns still NOT_YET_MATERIALIZED after U-CP-86 lands
+# PARALLELIZATION (the fan-out-barrier-aggregate strategy). PARALLELIZATION is
+# excluded — its strategy resolves to `_DriverStrategyStatus.PARALLELIZATION`
+# and no longer raises (the U-CP-86 `no-longer-raises` AC); its e2e behavior
+# lives at `test_workflow_driver_parallelization.py`.
+_NOT_YET_MATERIALIZED_PATTERNS = (
     TopologyPattern.ORCHESTRATOR_WORKERS,
     TopologyPattern.HIERARCHICAL_DELEGATION,
     TopologyPattern.DECENTRALIZED_HANDOFF,
@@ -86,14 +90,29 @@ def test_single_threaded_linear_resolves_to_linear_inline() -> None:
     )
 
 
-@pytest.mark.parametrize("pattern", _NON_LINEAR_PATTERNS)
+@pytest.mark.parametrize("pattern", _NOT_YET_MATERIALIZED_PATTERNS)
 def test_non_linear_patterns_raise_not_yet_materialized(pattern: TopologyPattern) -> None:
-    """At B1-impl-2 the five non-linear strategies have not landed — each
-    resolves to NOT_YET_MATERIALIZED and raises the typed error (the
-    `no-longer-raises` AC is satisfied per-strategy as each unit lands)."""
+    """The four still-unlanded non-linear strategies resolve to
+    NOT_YET_MATERIALIZED and raise the typed error (the `no-longer-raises` AC is
+    satisfied per-strategy as each unit lands; PARALLELIZATION landed at
+    U-CP-86 and is excluded)."""
     assert _DRIVER_STRATEGY_DISPATCH[pattern] is _DriverStrategyStatus.NOT_YET_MATERIALIZED
     with pytest.raises(TopologyPatternNotYetMaterializedError):
         resolve_driver_strategy(pattern)
+
+
+def test_parallelization_resolves_to_its_materialized_strategy() -> None:
+    """U-CP-86 — PARALLELIZATION is materialized: its dispatch entry is the
+    PARALLELIZATION strategy status and `resolve_driver_strategy` no longer
+    raises (the `no-longer-raises` AC for this pattern)."""
+    assert (
+        _DRIVER_STRATEGY_DISPATCH[TopologyPattern.PARALLELIZATION]
+        is _DriverStrategyStatus.PARALLELIZATION
+    )
+    assert (
+        resolve_driver_strategy(TopologyPattern.PARALLELIZATION)
+        is _DriverStrategyStatus.PARALLELIZATION
+    )
 
 
 # ---------------------------------------------------------------------------
