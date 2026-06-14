@@ -36,16 +36,17 @@ from harness_is.state_ledger_entry_schema import Actor, ActorClass
 
 _ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="test-branch-substrate")
 
-# The non-linear patterns still NOT_YET_MATERIALIZED after U-CP-86 lands
-# PARALLELIZATION (the fan-out-barrier-aggregate strategy). PARALLELIZATION is
-# excluded — its strategy resolves to `_DriverStrategyStatus.PARALLELIZATION`
-# and no longer raises (the U-CP-86 `no-longer-raises` AC); its e2e behavior
-# lives at `test_workflow_driver_parallelization.py`.
+# The non-linear patterns still NOT_YET_MATERIALIZED after U-CP-86 landed
+# PARALLELIZATION (the fan-out-barrier-aggregate strategy) and U-CP-87 landed
+# EVALUATOR_OPTIMIZER (the sequential generate→evaluate→regenerate loop). Both
+# are excluded — each resolves to its own `_DriverStrategyStatus` member and no
+# longer raises (the per-strategy `no-longer-raises` AC); their e2e behavior
+# lives at `test_workflow_driver_parallelization.py` +
+# `test_workflow_driver_evaluator_optimizer.py`.
 _NOT_YET_MATERIALIZED_PATTERNS = (
     TopologyPattern.ORCHESTRATOR_WORKERS,
     TopologyPattern.HIERARCHICAL_DELEGATION,
     TopologyPattern.DECENTRALIZED_HANDOFF,
-    TopologyPattern.EVALUATOR_OPTIMIZER,
 )
 
 
@@ -92,10 +93,10 @@ def test_single_threaded_linear_resolves_to_linear_inline() -> None:
 
 @pytest.mark.parametrize("pattern", _NOT_YET_MATERIALIZED_PATTERNS)
 def test_non_linear_patterns_raise_not_yet_materialized(pattern: TopologyPattern) -> None:
-    """The four still-unlanded non-linear strategies resolve to
+    """The three still-unlanded non-linear strategies resolve to
     NOT_YET_MATERIALIZED and raise the typed error (the `no-longer-raises` AC is
-    satisfied per-strategy as each unit lands; PARALLELIZATION landed at
-    U-CP-86 and is excluded)."""
+    satisfied per-strategy as each unit lands; PARALLELIZATION landed at U-CP-86
+    and EVALUATOR_OPTIMIZER at U-CP-87 — both excluded)."""
     assert _DRIVER_STRATEGY_DISPATCH[pattern] is _DriverStrategyStatus.NOT_YET_MATERIALIZED
     with pytest.raises(TopologyPatternNotYetMaterializedError):
         resolve_driver_strategy(pattern)
@@ -112,6 +113,20 @@ def test_parallelization_resolves_to_its_materialized_strategy() -> None:
     assert (
         resolve_driver_strategy(TopologyPattern.PARALLELIZATION)
         is _DriverStrategyStatus.PARALLELIZATION
+    )
+
+
+def test_evaluator_optimizer_resolves_to_its_materialized_strategy() -> None:
+    """U-CP-87 — EVALUATOR_OPTIMIZER is materialized: its dispatch entry is the
+    EVALUATOR_OPTIMIZER strategy status and `resolve_driver_strategy` no longer
+    raises (the `no-longer-raises` AC for this pattern)."""
+    assert (
+        _DRIVER_STRATEGY_DISPATCH[TopologyPattern.EVALUATOR_OPTIMIZER]
+        is _DriverStrategyStatus.EVALUATOR_OPTIMIZER
+    )
+    assert (
+        resolve_driver_strategy(TopologyPattern.EVALUATOR_OPTIMIZER)
+        is _DriverStrategyStatus.EVALUATOR_OPTIMIZER
     )
 
 
