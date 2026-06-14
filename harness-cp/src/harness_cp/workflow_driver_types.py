@@ -29,11 +29,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from harness_as.sandbox_tier import SandboxTier
 from harness_core.identity import StepID
-from harness_is.state_ledger_entry_schema import Actor
+from harness_is.state_ledger_entry_schema import Actor, BranchMetadata, Identifier
 from pydantic import BaseModel, ConfigDict
 
 from harness_cp.cp_shared_types import AgentRole
@@ -389,6 +389,95 @@ def compose_branch_path(branch_context: StepExecutionContext) -> str:
     return f"{branch_context.parent_action_id}:{branch_index}"
 
 
+def compose_branch_metadata(
+    branch_context: StepExecutionContext,
+    *,
+    terminal_status: Literal["cancelled", "completed", "timed_out"] | None = None,
+) -> BranchMetadata:
+    """Compose the `branch_metadata` IS sidecar carrier for a branch entry (U-CP-84).
+
+    C-CP-25 §25.13 (the Route-Y producer obligation — the CP `WorkflowDriver` is
+    the producer that composes `branch_metadata` at branch-spawn + termination) +
+    IS spec v1.8 §5.4 (the carrier shape U-IS-19 authored). The branch causality
+    is read **verbatim** from the branch child context's identity:
+
+    - ``parent_action_id`` = ``branch_context.parent_action_id`` (the spawning
+      step's globally-unique ``action_id``, set verbatim by
+      ``compose_branch_child_context``).
+    - ``branch_index`` = the branch's 0-based fan-out ordinal.
+
+    ``(parent_action_id, branch_index)`` uniquely identifies a branch even under
+    nested fan-out (IS §5.4: ``action_id`` is globally unique per IS §5) — no
+    ``branch_path`` at the causality carrier.
+
+    ``terminal_status`` is the branch's **dispatch-boundary terminal disposition**
+    and is **supplied by the caller**, not decided here: per-step entries pass the
+    default ``None`` (causality only); a branch's terminal entry passes one of
+    ``{cancelled, completed, timed_out}`` (U-CP-85's cascade logic decides *which*;
+    U-CP-84 only persists the value it is handed). The carrier's ``Literal`` type
+    forecloses ``failed`` — a ran-and-errored branch's terminal entry is
+    ``completed`` (dispatch-boundary, not step-outcome; its step failure lives at
+    that step's own ordinary entry per CP §25.15.2 obl. 3).
+
+    Raises ``ValueError`` on a linear (``SINGLE_THREADED_LINEAR``) context — the
+    linear path composes no ``branch_metadata`` (it stays the carrier default
+    ``None``; ``_append_step_ledger_entry`` is byte-identical).
+    """
+    branch_index = _require_branch(branch_context)
+    return BranchMetadata(
+        parent_action_id=Identifier(branch_context.parent_action_id),
+        branch_index=branch_index,
+        terminal_status=terminal_status,
+    )
+
+
+def compose_branch_terminal_action_id(branch_context: StepExecutionContext) -> str:
+    """Compose the globally-unique ``action_id`` for a branch's **fresh terminal entry** (U-CP-84).
+
+    Runtime spec v1.48 §2.2(c) + IS spec v1.8 §5.4 append-only invariant: a
+    branch's terminal disposition is written at a **fresh terminal entry**
+    appended at the barrier drain — **never** by mutating an already-written step
+    entry (mutation would re-hash a persisted entry and break the IS §6.3 chain).
+    That terminal marker needs its own globally-unique ``action_id``, distinct
+    from every per-step branch ``action_id`` (``:step:{n}``):
+
+        ``{parent_action_id}:branch:{branch_index}:terminal``
+
+    e.g. the terminal marker for branch 0 of the fan-out at
+    ``workflow:wf-1:step:3`` → ``workflow:wf-1:step:3:branch:0:terminal``. Global
+    uniqueness rests on ``parent_action_id`` being the spawning step's
+    globally-unique ``action_id`` (IS §5.4); ``:terminal`` cannot collide with any
+    ``:step:{int}`` suffix. Raises ``ValueError`` on a linear context.
+    """
+    branch_index = _require_branch(branch_context)
+    return f"{branch_context.parent_action_id}:branch:{branch_index}:terminal"
+
+
+def compose_branch_terminal_path(branch_context: StepExecutionContext) -> str:
+    """Compose the ``branch_path`` for a branch's **terminal-entry** idempotency key (U-CP-84).
+
+    The terminal marker's ``idempotency_key`` must be distinct from every
+    per-step ``idempotency_key`` of the same branch, or the IS writer's
+    ``idempotency_key``-only dedup (C-IS-07 §7.5) would drop the terminal entry as
+    an idempotent no-op and the persisted disposition would silently vanish (the
+    arc-9 dedup-collision defect class). The step keys derive from the plain
+    ``compose_branch_path`` (``{parent_action_id}:{branch_index}``); the terminal
+    key derives from a ``:terminal``-suffixed distinct path:
+
+        ``{parent_action_id}:{branch_index}:terminal``
+
+    Because the path string differs from every step's ``branch_path``, the
+    composed ``sha256(run_idempotency_key, step_index, branch_path)`` differs
+    regardless of ``step_index`` — the terminal key cannot collide with a step
+    key. This is the distinct *idempotency-key* composition — NOT the causality
+    key and NOT the ``action_id``. Deterministic + branch-scoped so resume-
+    terminality (U-CP-85 obl. 7) can reconstruct it. Raises ``ValueError`` on a
+    linear context.
+    """
+    branch_index = _require_branch(branch_context)
+    return f"{branch_context.parent_action_id}:{branch_index}:terminal"
+
+
 __all__ = [
     "RunResult",
     "RunStatus",
@@ -396,6 +485,9 @@ __all__ = [
     "StepKind",
     "WorkflowStep",
     "compose_branch_child_context",
+    "compose_branch_metadata",
     "compose_branch_path",
     "compose_branch_step_action_id",
+    "compose_branch_terminal_action_id",
+    "compose_branch_terminal_path",
 ]
