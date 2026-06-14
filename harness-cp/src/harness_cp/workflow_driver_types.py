@@ -317,6 +317,78 @@ def compose_branch_child_context(
     )
 
 
+def _require_branch(branch_context: StepExecutionContext) -> int:
+    """Return the branch ``branch_index``, rejecting a linear (non-branch) context.
+
+    ``compose_branch_step_action_id`` and ``compose_branch_path`` are
+    branch-only composers — a ``SINGLE_THREADED_LINEAR`` per-step context
+    (``branch_index is None``) uses the flat ``action_id`` + the plain
+    ``sha256(run_idempotency_key, step_index)`` idempotency key instead. Passing
+    a linear context here is a caller error, not a silent fall-through.
+    """
+    if branch_context.branch_index is None:
+        msg = (
+            "branch composer requires a branch child context "
+            "(branch_index set); got a linear (SINGLE_THREADED_LINEAR) context"
+        )
+        raise ValueError(msg)
+    return branch_context.branch_index
+
+
+def compose_branch_step_action_id(
+    branch_context: StepExecutionContext,
+    local_step_index: int,
+) -> str:
+    """Compose a globally-unique ``action_id`` for a step running inside a branch.
+
+    C-CP-25 §25.12 + the U-CP-81 forward obligation: a step inside a branch must
+    NOT reuse the flat ``workflow:{wf}:step:{N}`` ``action_id`` shape — N
+    sibling branches at the same declared ``step_index`` would collide,
+    breaking the IS §5 global-``action_id``-uniqueness invariant. The branch
+    identity ``(parent_action_id, branch_index)`` is globally unique (IS spec
+    v1.8 §5.4: ``parent_action_id`` is the spawning step's globally-unique
+    ``action_id`` set verbatim), so embedding it yields a globally-unique
+    branch-step ``action_id``:
+
+        ``{parent_action_id}:branch:{branch_index}:step:{local_step_index}``
+
+    e.g. branch 0's step 7 under the fan-out at ``workflow:wf-1:step:3`` →
+    ``workflow:wf-1:step:3:branch:0:step:7``. The shape composes recursively
+    under nested fan-out (the inner spawning step's ``action_id`` is itself a
+    branch-step ``action_id``), so global uniqueness holds at every depth.
+
+    This is the distinct ``action_id`` composition — separate from both the
+    causality key ``(parent_action_id, branch_index)`` (no path) and the
+    §25.16 idempotency ``branch_path`` (``compose_branch_path``). Raises
+    ``ValueError`` on a linear context (use the flat shape there instead).
+    """
+    branch_index = _require_branch(branch_context)
+    return f"{branch_context.parent_action_id}:branch:{branch_index}:step:{local_step_index}"
+
+
+def compose_branch_path(branch_context: StepExecutionContext) -> str:
+    """Compose the §25.16 ``branch_path`` for the branch-scoped idempotency key.
+
+    C-CP-25 §25.16: under fan-out, N branches at the same declared
+    ``step_index`` would collapse to one ledger entry under the IS writer's
+    ``idempotency_key``-only dedup (C-IS-07 §7.5) unless ``branch_path`` enters
+    the idempotency-key composition. ``branch_path`` derives from the branch
+    identity ``(parent_action_id, branch_index)``:
+
+        ``{parent_action_id}:{branch_index}``
+
+    ``parent_action_id`` is globally unique per IS §5.4, so ``branch_path`` is
+    unique under nested fan-out. This is the distinct *idempotency-key*
+    composition — NOT the causality key (no path) and NOT the ``action_id``
+    (``compose_branch_step_action_id``, which additionally carries the
+    per-branch step ordinal). Raises ``ValueError`` on a linear context (the
+    linear path composes ``sha256(run_idempotency_key, step_index)`` with no
+    ``branch_path``).
+    """
+    branch_index = _require_branch(branch_context)
+    return f"{branch_context.parent_action_id}:{branch_index}"
+
+
 __all__ = [
     "RunResult",
     "RunStatus",
@@ -324,4 +396,6 @@ __all__ = [
     "StepKind",
     "WorkflowStep",
     "compose_branch_child_context",
+    "compose_branch_path",
+    "compose_branch_step_action_id",
 ]
