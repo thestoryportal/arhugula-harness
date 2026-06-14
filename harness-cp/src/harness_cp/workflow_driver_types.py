@@ -36,6 +36,7 @@ from harness_core.identity import StepID
 from harness_is.state_ledger_entry_schema import Actor
 from pydantic import BaseModel, ConfigDict
 
+from harness_cp.cp_shared_types import AgentRole
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.pause_resume_protocol_types import PauseSnapshot
 
@@ -211,6 +212,27 @@ class StepExecutionContext(BaseModel):
     (``workflow_id``, ``parent_action_id``, ``parent_actor``,
     ``parent_idempotency_key``, ``step_index``) follow the existing
     deterministic patterns.
+
+    Branch-context extension (NEW at v1.32 §25.11/§25.12/§25.14, U-CP-81):
+
+    - ``branch_index`` (Optional, default ``None``): the 0-based fan-out
+      ordinal of a branch under a non-linear topology strategy. ``None`` on
+      the ``SINGLE_THREADED_LINEAR`` path — the linear strategy composes no
+      branch child context (regression-safe; no branch field is set on the
+      linear path). Composed at branch-spawn by
+      ``compose_branch_child_context``.
+    - ``agent_role`` (Optional, default ``None``): the branch ``AgentRole``
+      (the CP-half of the §25.14 role seam). ``None`` on the linear path.
+      The runtime dispatch read (U-RT-114) makes per-role model routing
+      effective; the per-role *prompt* is the distinct B4 child-arc.
+
+    Branch identity is ``(parent_action_id, branch_index)`` where
+    ``parent_action_id`` is the spawning step's ``action_id`` set verbatim by
+    ``compose_branch_child_context``. Per IS spec v1.8 §5.4, ``action_id`` is
+    globally unique (IS §5), so that pair uniquely identifies a branch even
+    under nested fan-out with NO ``branch_path`` at the causality key
+    (``branch_path`` is the distinct CP §25.16 idempotency-key composition,
+    U-CP-83).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -224,6 +246,75 @@ class StepExecutionContext(BaseModel):
     parent_idempotency_key: str
     tenant_id: str | None
     step_index: int
+    branch_index: int | None = None
+    agent_role: AgentRole | None = None
+
+
+def compose_branch_child_context(
+    parent_context: StepExecutionContext,
+    *,
+    branch_index: int,
+    agent_role: AgentRole,
+) -> StepExecutionContext:
+    """Compose a branch child ``StepExecutionContext`` at branch-spawn.
+
+    C-CP-25 §25.11 (a branch = a sub-sequence dispatched under a child
+    context) + §25.12 (the causality fields the buffered drain + write-cadence
+    consume) + §25.14 (the ``AgentRole`` carry, CP-half of the role seam).
+    Runtime spec v1.48 §2.2(d) (branch ``StepExecutionContext`` composition
+    deliverable — discharged CP-side here). The ``SINGLE_THREADED_LINEAR`` path
+    composes no branch child context — it uses the existing per-step context
+    verbatim (``branch_index``/``agent_role`` stay ``None``).
+
+    The child carries:
+
+    - ``parent_action_id``: the spawning step's ``action_id`` set **VERBATIM**
+      (``parent_context.parent_action_id``, the spawning context's identity).
+      Branch causality is ``(parent_action_id, branch_index)``; per IS spec
+      v1.8 §5.4 the persisted carrier's ``parent_action_id`` "resolves to a
+      prior persisted entry's ``action_id``" and ``action_id`` is globally
+      unique per IS §5, so ``(parent_action_id, branch_index)`` uniquely
+      identifies a branch **even under NESTED fan-out** with **no
+      ``branch_path``** at this causality key. (``branch_path`` is the distinct
+      CP-side §25.16 *idempotency-key* composition — U-CP-83 — NOT the
+      causality key; and Route X — encoding causality into ``action_id`` — was
+      rejected at the B1 branch-causality fork.) Nested-uniqueness therefore
+      rests on the spawning step's ``action_id`` being globally unique, which
+      the branch-step ``action_id`` composition (U-CP-82+) must honor — this
+      composer does not synthesize identity, it passes the spawning
+      ``action_id`` through.
+    - ``branch_index``: the 0-based fan-out ordinal (the local drain order
+      key, U-CP-82; unique per ``parent_action_id`` per IS §5.4). Must be
+      ``>= 0`` per IS spec v1.8 §5.4.
+    - ``agent_role``: the per-worker role (the runtime read U-RT-114 makes
+      per-role model routing effective).
+    - ``parent_gate_level``: descended per C-CP-12 §12.2 — the child gate-level
+      descends monotonically (``<= parent``). Equality is the valid §12.2
+      default (mirrors ``dispatch_sub_agent``'s no-override default); the
+      gate-level seed for the branch's own sub-agents is therefore the
+      spawning context's gate level, never an ascent.
+
+    All other fields are inherited from ``parent_context`` (``workflow_id``,
+    ``parent_sandbox_tier``, ``parent_actor``, ``parent_entry_hash``,
+    ``parent_idempotency_key``, ``tenant_id``, ``step_index``); the
+    branch-scoped idempotency key is composed downstream (U-CP-83).
+    """
+    if branch_index < 0:
+        msg = f"branch_index must be >= 0 (IS spec v1.8 §5.4); got {branch_index}"
+        raise ValueError(msg)
+    return parent_context.model_copy(
+        update={
+            # IS spec v1.8 §5.4: the spawning step's action_id VERBATIM (no
+            # branch_path — action_id global uniqueness per IS §5 makes
+            # (parent_action_id, branch_index) unique under nested fan-out).
+            "parent_action_id": parent_context.parent_action_id,
+            "branch_index": branch_index,
+            "agent_role": agent_role,
+            # C-CP-12 §12.2 monotonic descent — child <= parent; equality is
+            # the valid default (dispatch_sub_agent's no-override default).
+            "parent_gate_level": parent_context.parent_gate_level,
+        }
+    )
 
 
 __all__ = [
@@ -232,4 +323,5 @@ __all__ = [
     "StepExecutionContext",
     "StepKind",
     "WorkflowStep",
+    "compose_branch_child_context",
 ]

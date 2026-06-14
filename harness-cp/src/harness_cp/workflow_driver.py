@@ -37,6 +37,7 @@ import asyncio
 import hashlib
 from collections.abc import Coroutine, Mapping, Sequence
 from datetime import UTC, datetime
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from harness_as.sandbox_tier import SandboxTier
@@ -80,7 +81,57 @@ from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 # v1.4 in-scope sets (per C-CP-25 §25.1 + Implementation Plan §0.2)
 # ---------------------------------------------------------------------------
 
-_IN_SCOPE_TOPOLOGY: frozenset[TopologyPattern] = frozenset({TopologyPattern.SINGLE_THREADED_LINEAR})
+
+class _DriverStrategyStatus(Enum):
+    """Materialization status of a topology's driver strategy (C-CP-25 §25.10).
+
+    The §25.10 driver-strategy dispatch table replaces the §25.1
+    `_IN_SCOPE_TOPOLOGY` materialization gate. It enumerates ALL SIX
+    `TopologyPattern` values; a pattern lands by flipping its table entry, so
+    the dispatch site never needs re-plumbing. At B1-impl-2 only
+    `SINGLE_THREADED_LINEAR` is materialized (`LINEAR_INLINE` — the existing
+    §25.3 iteration loop); the five non-linear patterns are
+    `NOT_YET_MATERIALIZED` and raise `TopologyPatternNotYetMaterializedError`
+    until each strategy unit (U-CP-86..U-CP-90) lands. The concrete
+    `DriverStrategy` shape (callable vs class) is deferred to the first
+    strategy unit per CP plan v2.32 §6 O-CP-1(d).
+    """
+
+    LINEAR_INLINE = "linear-inline"
+    NOT_YET_MATERIALIZED = "not-yet-materialized"
+
+
+# § 25.10.1 — driver-strategy dispatch table (lifts the §25.1
+# `_IN_SCOPE_TOPOLOGY` gate). Keyed on the C-CP-10 §10.1 `TopologyPattern`
+# enum; enumerates all six members (the closed-at-6 enum — an exhaustiveness
+# test asserts no member is missing, so resolution never falls through to a
+# KeyError).
+_DRIVER_STRATEGY_DISPATCH: Mapping[TopologyPattern, _DriverStrategyStatus] = {
+    TopologyPattern.SINGLE_THREADED_LINEAR: _DriverStrategyStatus.LINEAR_INLINE,
+    TopologyPattern.PARALLELIZATION: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
+    TopologyPattern.ORCHESTRATOR_WORKERS: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
+    TopologyPattern.HIERARCHICAL_DELEGATION: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
+    TopologyPattern.DECENTRALIZED_HANDOFF: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
+    TopologyPattern.EVALUATOR_OPTIMIZER: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
+}
+
+
+def resolve_driver_strategy(topology_pattern: TopologyPattern) -> _DriverStrategyStatus:
+    """Resolve a topology pattern to its driver strategy (C-CP-25 §25.10).
+
+    Replaces the §25.3.1 `_IN_SCOPE_TOPOLOGY` materialization gate. A pattern
+    whose strategy has not yet landed (the five non-linear patterns at
+    B1-impl-2) raises `TopologyPatternNotYetMaterializedError`. Admissibility
+    (C-CP-10 §10.3 / C-CP-11 §11.1) is unchanged — it is rejected at
+    workflow-binding time; §25.10 lifts only the *materialization* gate, not
+    admissibility (Invariant 2). The typed error is preserved for any future
+    non-enumerated topology.
+    """
+    status = _DRIVER_STRATEGY_DISPATCH[topology_pattern]
+    if status is _DriverStrategyStatus.NOT_YET_MATERIALIZED:
+        raise TopologyPatternNotYetMaterializedError(topology_pattern)
+    return status
+
 
 _IN_SCOPE_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
     {EngineClass.PURE_PATTERN_NO_ENGINE, EngineClass.SAVE_POINT_CHECKPOINT}
@@ -707,9 +758,15 @@ def _execute_workflow_body(
     the run-scope key identical between envelope-attribute set and the
     resumption N-lookup.
     """
-    # § 25.3.1 — Validate topology + engine class.
-    if manifest_entry.topology_pattern not in _IN_SCOPE_TOPOLOGY:
-        raise TopologyPatternNotYetMaterializedError(manifest_entry.topology_pattern)
+    # § 25.10 — driver-strategy dispatch (replaces the §25.3.1
+    # `_IN_SCOPE_TOPOLOGY` materialization gate). `SINGLE_THREADED_LINEAR`
+    # resolves to the existing §25.3 inline loop below; the five non-linear
+    # patterns raise `TopologyPatternNotYetMaterializedError` until their
+    # strategy units (U-CP-86..U-CP-90) land. Resolution stays at this site so
+    # the drain-at-entry check (§25.4, above) still precedes topology
+    # validation (U-CP-57 AC #1 / C-OD-25 §25.1 ordering). The engine-class
+    # gate is unchanged.
+    resolve_driver_strategy(manifest_entry.topology_pattern)
     if manifest_entry.engine_class not in _IN_SCOPE_ENGINE_CLASSES:
         raise EngineClassNotYetMaterializedError(manifest_entry.engine_class)
 

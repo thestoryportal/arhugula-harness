@@ -877,6 +877,46 @@ def test_tenant_id_empty_string_propagates_verbatim() -> None:
     assert _run_and_capture_tenant_id(tenant_id="") == ""
 
 
+class _BranchFieldsProbeDispatcher:
+    """Records `step_context.branch_index` + `.agent_role` at each dispatch
+    (U-CP-81 regression: the SINGLE_THREADED_LINEAR path composes no branch
+    fields)."""
+
+    def __init__(self) -> None:
+        self.observed: list[tuple[Any, Any]] = []
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        self.observed.append(
+            (
+                getattr(step_context, "branch_index", "<missing>"),
+                getattr(step_context, "agent_role", "<missing>"),
+            )
+        )
+        return {"step_id": str(step.step_id), "echoed_payload": dict(step.step_payload)}
+
+
+def test_linear_path_composes_no_branch_fields() -> None:
+    """U-CP-81 — the SINGLE_THREADED_LINEAR strategy composes the existing
+    per-step context verbatim; no branch field is set on the linear path."""
+    ctx, _, _ = _ctx()
+    probe = _BranchFieldsProbeDispatcher()
+    execute_workflow(
+        manifest_entry=_manifest(),
+        steps=[_step(0), _step(1)],
+        run_id="run-branch-fields",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, probe)),
+    )
+    assert probe.observed == [(None, None), (None, None)]
+
+
 def test_driver_context_protocol_declares_tenant_id() -> None:
     """DriverContext Protocol must declare tenant_id (structural typing check).
 
