@@ -47,9 +47,13 @@ _ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="test-branch-substrate")
 # `test_workflow_driver_parallelization.py` +
 # `test_workflow_driver_evaluator_optimizer.py` +
 # `test_workflow_driver_orchestrator_workers.py` +
-# `test_workflow_driver_hierarchical_delegation.py`. DECENTRALIZED_HANDOFF is the
-# last unmaterialized non-linear pattern (until U-CP-90).
-_NOT_YET_MATERIALIZED_PATTERNS = (TopologyPattern.DECENTRALIZED_HANDOFF,)
+# `test_workflow_driver_hierarchical_delegation.py`. U-CP-90 landed
+# DECENTRALIZED_HANDOFF (single-owner sequential handoff) — the FIFTH + LAST
+# non-linear pattern; its e2e lives at
+# `test_workflow_driver_decentralized_handoff.py`. ALL SIX TopologyPattern values
+# are now materialized; NO pattern remains NOT_YET_MATERIALIZED (the sentinel
+# status + `TopologyPatternNotYetMaterializedError` are retained for any FUTURE
+# pattern — exercised via monkeypatch below).
 
 
 def _linear_step_context(
@@ -93,16 +97,31 @@ def test_single_threaded_linear_resolves_to_linear_inline() -> None:
     )
 
 
-@pytest.mark.parametrize("pattern", _NOT_YET_MATERIALIZED_PATTERNS)
-def test_non_linear_patterns_raise_not_yet_materialized(pattern: TopologyPattern) -> None:
-    """The still-unlanded non-linear strategy (DECENTRALIZED_HANDOFF, until
-    U-CP-90) resolves to NOT_YET_MATERIALIZED and raises the typed error (the
-    `no-longer-raises` AC is satisfied per-strategy as each unit lands:
-    PARALLELIZATION at U-CP-86, EVALUATOR_OPTIMIZER at U-CP-87, ORCHESTRATOR_WORKERS
-    at U-CP-88, HIERARCHICAL_DELEGATION at U-CP-89 — all excluded)."""
-    assert _DRIVER_STRATEGY_DISPATCH[pattern] is _DriverStrategyStatus.NOT_YET_MATERIALIZED
+def test_no_topology_pattern_remains_not_yet_materialized() -> None:
+    """U-CP-90 landed the LAST strategy (DECENTRALIZED_HANDOFF) — all six
+    `TopologyPattern` values are materialized, so NO dispatch entry is
+    `NOT_YET_MATERIALIZED` and `resolve_driver_strategy` never raises for a real
+    pattern (the `no-longer-raises` AC, now complete across all six)."""
+    assert all(
+        _DRIVER_STRATEGY_DISPATCH[p] is not _DriverStrategyStatus.NOT_YET_MATERIALIZED
+        for p in TopologyPattern
+    )
+    for p in TopologyPattern:
+        resolve_driver_strategy(p)  # no raise for any real pattern
+
+
+def test_not_yet_materialized_sentinel_still_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The retained sentinel mechanism: a pattern mapped to `NOT_YET_MATERIALIZED`
+    (synthesized via monkeypatch — none is, post-U-CP-90) STILL raises the typed
+    error at `resolve_driver_strategy`. Guards against a future pattern landing in
+    the table un-materialized and silently running instead of raising."""
+    monkeypatch.setitem(
+        _DRIVER_STRATEGY_DISPATCH,
+        TopologyPattern.DECENTRALIZED_HANDOFF,
+        _DriverStrategyStatus.NOT_YET_MATERIALIZED,
+    )
     with pytest.raises(TopologyPatternNotYetMaterializedError):
-        resolve_driver_strategy(pattern)
+        resolve_driver_strategy(TopologyPattern.DECENTRALIZED_HANDOFF)
 
 
 def test_parallelization_resolves_to_its_materialized_strategy() -> None:
@@ -158,6 +177,21 @@ def test_hierarchical_delegation_resolves_to_its_materialized_strategy() -> None
     assert (
         resolve_driver_strategy(TopologyPattern.HIERARCHICAL_DELEGATION)
         is _DriverStrategyStatus.HIERARCHICAL_DELEGATION
+    )
+
+
+def test_decentralized_handoff_resolves_to_its_materialized_strategy() -> None:
+    """U-CP-90 — DECENTRALIZED_HANDOFF is materialized (the LAST pattern): its
+    dispatch entry is the DECENTRALIZED_HANDOFF strategy status and
+    `resolve_driver_strategy` no longer raises (the `no-longer-raises` AC for the
+    final pattern)."""
+    assert (
+        _DRIVER_STRATEGY_DISPATCH[TopologyPattern.DECENTRALIZED_HANDOFF]
+        is _DriverStrategyStatus.DECENTRALIZED_HANDOFF
+    )
+    assert (
+        resolve_driver_strategy(TopologyPattern.DECENTRALIZED_HANDOFF)
+        is _DriverStrategyStatus.DECENTRALIZED_HANDOFF
     )
 
 

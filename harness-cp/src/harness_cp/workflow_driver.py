@@ -59,6 +59,14 @@ if TYPE_CHECKING:
 from harness_cp.cp_shared_types import ActorIdentity, AgentRole, ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
+from harness_cp.handoff_context import (
+    ActionKind,
+    HandoffContext,
+    LedgerEntryRef,
+    ProposedAction,
+    RetryHistory,
+    StateSummary,
+)
 from harness_cp.pause_resume_protocol import (
     PauseResumeProtocol,
     PauseResumeProtocolEventKind,
@@ -112,8 +120,11 @@ class _DriverStrategyStatus(Enum):
     landed second at U-CP-87; `ORCHESTRATOR_WORKERS` (orchestrator-dispatch-
     collect fan-out) landed third at U-CP-88; `HIERARCHICAL_DELEGATION`
     (recursive bounded-fan-out — cap-3 per parent reusing `ORCHESTRATOR_WORKERS`
-    at each level) landed fourth at U-CP-89. `DECENTRALIZED_HANDOFF` remains
-    `NOT_YET_MATERIALIZED` until U-CP-90.
+    at each level) landed fourth at U-CP-89; `DECENTRALIZED_HANDOFF` (single-owner
+    sequential handoff via `HandoffContext`) landed fifth (last) at U-CP-90. **All
+    six `TopologyPattern` values are now materialized** — no member is
+    `NOT_YET_MATERIALIZED` (the status is retained as the dispatch-table sentinel
+    type for any future pattern).
 
     **`DriverStrategy` shape (O-CP-1(d) resolution, decided at U-CP-86 — the
     first strategy unit).** The dispatch is a flat enum-keyed branch in
@@ -132,6 +143,7 @@ class _DriverStrategyStatus(Enum):
     EVALUATOR_OPTIMIZER = "evaluator-optimizer"
     ORCHESTRATOR_WORKERS = "orchestrator-workers"
     HIERARCHICAL_DELEGATION = "hierarchical-delegation"
+    DECENTRALIZED_HANDOFF = "decentralized-handoff"
     NOT_YET_MATERIALIZED = "not-yet-materialized"
 
 
@@ -145,7 +157,7 @@ _DRIVER_STRATEGY_DISPATCH: Mapping[TopologyPattern, _DriverStrategyStatus] = {
     TopologyPattern.PARALLELIZATION: _DriverStrategyStatus.PARALLELIZATION,
     TopologyPattern.ORCHESTRATOR_WORKERS: _DriverStrategyStatus.ORCHESTRATOR_WORKERS,
     TopologyPattern.HIERARCHICAL_DELEGATION: _DriverStrategyStatus.HIERARCHICAL_DELEGATION,
-    TopologyPattern.DECENTRALIZED_HANDOFF: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
+    TopologyPattern.DECENTRALIZED_HANDOFF: _DriverStrategyStatus.DECENTRALIZED_HANDOFF,
     TopologyPattern.EVALUATOR_OPTIMIZER: _DriverStrategyStatus.EVALUATOR_OPTIMIZER,
 }
 
@@ -1352,8 +1364,10 @@ def _execute_workflow_body(
     # (U-CP-88) dispatches a dynamic worker fan-out under one orchestrator;
     # `HIERARCHICAL_DELEGATION` (U-CP-89) is recursive `ORCHESTRATOR_WORKERS` (one
     # re-entrant level per `SUB_AGENT_DISPATCH` worker, fan-out cap 3 per parent).
-    # `DECENTRALIZED_HANDOFF` still raises `TopologyPatternNotYetMaterializedError`
-    # at `resolve_driver_strategy`. Cross-level / scrambled-completion timestamp
+    # `DECENTRALIZED_HANDOFF` (U-CP-90) is the single-owner sequential handoff (each
+    # per-role stage chains ownership to the next via a `HandoffContext` record; no
+    # fan-out, no `SUB_AGENT_DISPATCH`). ALL SIX patterns are now materialized.
+    # Cross-level / scrambled-completion timestamp
     # monotonicity on the shared zero-tolerance IS ledger is realized at the drain
     # (`drain_branch_buffers` re-stamps every entry to its append moment); no
     # strategy coordinates a shared timestamp, and a `SUB_AGENT_DISPATCH` child
@@ -1390,6 +1404,16 @@ def _execute_workflow_body(
         )
     if strategy is _DriverStrategyStatus.HIERARCHICAL_DELEGATION:
         return _execute_hierarchical_delegation(
+            manifest_entry=manifest_entry,
+            steps=steps,
+            run_id=run_id,
+            ctx=ctx,
+            default_model_binding=default_model_binding,
+            step_dispatchers=step_dispatchers,
+            run_idempotency_key=run_idempotency_key,
+        )
+    if strategy is _DriverStrategyStatus.DECENTRALIZED_HANDOFF:
+        return _execute_decentralized_handoff(
             manifest_entry=manifest_entry,
             steps=steps,
             run_id=run_id,
@@ -3641,6 +3665,281 @@ def _execute_hierarchical_delegation(
         step_dispatchers=step_dispatchers,
         run_idempotency_key=run_idempotency_key,
     )
+
+
+def _compose_handoff_to_next(
+    *,
+    completed_action_id: str,
+    completed_context: StepExecutionContext,
+    next_step: WorkflowStep,
+    next_role: AgentRole,
+    actor_identity: ActorIdentity,
+) -> HandoffContext:
+    """Compose the C-CP-13 `HandoffContext` recording the ownership transfer from a
+    just-completed stage to the next stage-expert (C-CP-25 §25.11 DECENTRALIZED_HANDOFF).
+
+    A RECORD, not a dispatch (the next stage runs through the ordinary
+    `StepDispatcher`, never `SUB_AGENT_DISPATCH`). The MVP composition mirrors the
+    runtime `sub_agent_dispatch` precedent exactly: `audit_trail_link` /
+    `state_summary.relevant_entries` anchor the handing-off stage's ledger entry
+    (`entry_hash` = the stage context's `parent_entry_hash` — `""` on the buffered
+    path, the same value the existing composer passes); `summary_hash = sha256(b"")`
+    (the v1.6 MVP default); the deliberation fields (`failed_attempts` /
+    `alternatives_considered` / `retry_history` / `external_references`) are empty.
+    `proposed_action` names the next stage-expert — `SUB_AGENT_DISPATCH` is the
+    C-CP-17 §17.1 sub-agent-boundary placement a handoff *is* — and its payload
+    carries only the next stage's *identity* (step_id + role): control-flow
+    metadata, NOT the prior stage's output (the harness threads NO inter-step data
+    for any topology, B-INTERSTEP)."""
+    from harness_is.state_ledger_entry_schema import Identifier as _Identifier
+
+    entry_ref = LedgerEntryRef(
+        action_id=ActionID(completed_action_id),
+        entry_hash=completed_context.parent_entry_hash,
+        actor=actor_identity,
+    )
+    return HandoffContext(
+        proposed_action=ProposedAction(
+            action_kind=ActionKind.SUB_AGENT_DISPATCH,
+            payload={"next_stage": str(next_step.step_id), "next_role": str(next_role)},
+            brief=None,
+        ),
+        agent_confidence=None,
+        failed_attempts=(),
+        alternatives_considered=(),
+        state_summary=StateSummary(
+            relevant_entries=(entry_ref,),
+            summary_text="",
+            summary_hash=hashlib.sha256(b"").hexdigest(),
+            idempotency_key=_Identifier(completed_context.parent_idempotency_key),
+            external_references=(),
+        ),
+        audit_trail_link=entry_ref,
+        retry_history=RetryHistory(attempts=(), retry_count=0),
+    )
+
+
+def _handoff_record(handoff: HandoffContext) -> dict[str, Any]:
+    """Serialize a `HandoffContext` into the deterministic `final_state` surface —
+    the observable ownership-transfer chain the AC asserts ("hands ownership
+    stage-to-stage via HandoffContext")."""
+    return {
+        "from_action_id": str(handoff.audit_trail_link.action_id),
+        "to_stage": handoff.proposed_action.payload["next_stage"],
+        "to_role": handoff.proposed_action.payload["next_role"],
+        "action_kind": handoff.proposed_action.action_kind.value,
+    }
+
+
+def _execute_decentralized_handoff(
+    *,
+    manifest_entry: WorkflowManifestEntry,
+    steps: Sequence[WorkflowStep],
+    run_id: str,
+    ctx: DriverContext,
+    default_model_binding: ModelBinding,
+    step_dispatchers: StepDispatcherRegistry,
+    run_idempotency_key: str,
+) -> tuple[RunResult, int]:
+    """Execute the `DECENTRALIZED_HANDOFF` single-owner sequential handoff strategy (U-CP-90).
+
+    Each declared step is a stage-expert that OWNS the workflow in turn, then hands
+    ownership to the next via a `HandoffContext` (C-CP-13). Single-owner-at-a-time:
+    stages run strictly sequentially on the driver thread (NO fan-out, NO
+    `TaskGroup` — there is never more than one owner). Two consequences fall out of
+    "sequential": there are no concurrent drains (it sidesteps the arc-15 F1-01
+    sibling-drain timestamp gap), and each stage dispatches through the ordinary
+    `StepDispatcher` (NEVER `SUB_AGENT_DISPATCH`), so a real multi-stage e2e
+    genuinely SUCCEEDS — no sync/async-bridge recursion (the `HandoffContext` is a
+    RECORD, not a dispatch).
+
+    Non-hollow by ledger construction (the persisted distinction):
+    - vs `EVALUATOR_OPTIMIZER` (no `branch_metadata` at all) — every stage persists
+      `branch_metadata` (it is a per-role branch entry).
+    - vs `ORCHESTRATOR_WORKERS` (a STAR — every worker's
+      `branch_metadata.parent_action_id` is the ONE orchestrator) — here it CHAINS:
+      stage *i*'s `branch_metadata.parent_action_id` is stage *(i-1)*'s `action_id`
+      (the durable "who handed to whom" record); `branch_index` stays 0 (single
+      owner — no siblings; the ordering rides the chain, not the fan-out ordinal).
+      Stage 0 anchors at the workflow origin `workflow:{wf}:step:0`.
+    Each stage is a per-role expert (`AgentRole(str(step.step_id))` → distinct binding
+    via U-RT-114; the per-role catalog is B4); ownership transfers via a composed
+    `HandoffContext` surfaced in `final_state["handoffs"]`.
+
+    Terminal when no further handoff — structural: the declared step list IS the
+    handoff sequence, terminal = after the last stage (no continue-signal read from
+    step output, B-INTERSTEP). On a stage failure the chain stops (`cascade_policy`
+    is degenerate for single-owner — no concurrent in-flight sibling to cancel):
+    `cascade-cancel` → FAILED, `proceed` → PARTIAL (completed stages salvaged),
+    `pause` → FAILED + pause-resume-not-yet-materialized (the resumable handoff-pause
+    is a forward BUILD, B-FANOUT-PAUSE, parallel to ORCHESTRATOR_WORKERS). Returns
+    `(RunResult, steps_executed)` for the `_execute_workflow_body` caller.
+    """
+    workflow_id = manifest_entry.workflow_id
+
+    # Empty step sequence → trivially SUCCESS (mirrors the other strategies).
+    if not steps:
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.SUCCESS,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state={"stages": {}, "handoffs": []},
+            fail_class=None,
+        ), 0
+
+    # The on-stage-failure cascade reaction (§25.15.1) — resolved from the manifest's
+    # (workload_class, engine_class, persona_tier) via the §11.4 D4 tunable, the same
+    # source ORCHESTRATOR_WORKERS reads (SOLO→proceed / TEAM→pause / MTC→cascade-cancel;
+    # the §25.11 DECENTRALIZED_HANDOFF row notes cascade-cancel is the typical
+    # single-owner case).
+    cascade_policy = d4_tunable(
+        lookup_cell(manifest_entry.workload_class, manifest_entry.engine_class),
+        manifest_entry.persona_tier,
+    ).cascade_policy
+
+    _resolver = getattr(ctx, "procedural_tier_snapshot_resolver", None)
+    snapshot_ref = _resolver() if _resolver is not None else None
+
+    # Buffer-time placeholder; the drain re-stamps to one drain-moment value. The
+    # sequential chain is causally ordered, so this is monotonic by construction (no
+    # concurrent drain — the F1-01 gap is structurally unreachable here).
+    handoff_timestamp = datetime.now(UTC)
+    actor_identity = ActorIdentity(ctx.ledger_writer.actor.actor_id)
+
+    # § 25.3.2 — workflow.start (single-threaded on the driver thread).
+    ctx.lifecycle_emitter.emit(WorkflowEventClass.WORKFLOW_START)
+
+    stage_writers: list[BufferingLedgerWriter] = []
+    stage_outputs: dict[str, Mapping[str, Any]] = {}
+    handoffs: list[HandoffContext] = []
+    # Stage 0 anchors at the workflow origin; each later stage chains off its
+    # predecessor's action_id (the persisted handoff chain — the non-hollow signal).
+    prev_action_id = f"workflow:{workflow_id}:step:0"
+
+    def _finish(
+        status: RunStatus, *, fail_class: str | None, salvage: bool
+    ) -> tuple[RunResult, int]:
+        # Drain the COMPLETED-stage writers in stage order (writer.branch_index =
+        # stage ordinal) + emit one STEP_BOUNDARY per stage that ran.
+        steps_executed = _drain_and_emit_step_boundaries(ctx, stage_writers)
+        aggregate = {
+            "stages": {sid: dict(out) for sid, out in stage_outputs.items()},
+            "handoffs": [_handoff_record(h) for h in handoffs],
+        }
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=status,
+            terminal_step_index=None,
+            partial_state=aggregate if salvage else None,
+            final_state=aggregate if status is RunStatus.SUCCESS else None,
+            fail_class=fail_class,
+        ), steps_executed
+
+    for stage_index, step in enumerate(steps):
+        role = AgentRole(str(step.step_id))
+        # The spawning context the next stage descends from: its parent_action_id is
+        # the prior stage's action_id (the chain; the workflow origin anchors stage 0).
+        spawning = StepExecutionContext(
+            workflow_id=workflow_id,
+            parent_action_id=prev_action_id,
+            parent_gate_level=resolve_parent_gate_level(manifest_entry),
+            parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+            parent_actor=ctx.ledger_writer.actor,
+            parent_entry_hash="",
+            parent_idempotency_key=_compute_step_idempotency_key(run_idempotency_key, stage_index),
+            tenant_id=ctx.tenant_id,
+            step_index=stage_index,
+        )
+        # Single owner → branch_index 0 (no siblings; causality rides the chained
+        # parent_action_id, NOT the fan-out ordinal). step_index = the declared stage
+        # ordinal (the dispatcher reads it for per-step policy / audit / skill hook).
+        stage_ctx = compose_branch_child_context(
+            spawning, branch_index=0, agent_role=role
+        ).model_copy(update={"step_index": stage_index})
+        this_action_id = compose_branch_step_action_id(stage_ctx, 0)
+        # writer.branch_index = the stage ordinal — the DRAIN-order key (distinct
+        # from the entry's branch_metadata.branch_index=0; different layers). One
+        # writer per stage → one STEP_BOUNDARY per stage via _drain_and_emit_*.
+        writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=stage_index)
+        try:
+            binding = resolve_step_binding(
+                manifest_entry,
+                str(step.step_id),
+                default_model_binding=default_model_binding,
+                persona_tier=manifest_entry.persona_tier,
+            )
+            output = step_dispatchers.lookup(step.step_kind).dispatch(
+                binding, step, step_context=stage_ctx
+            )
+        except Exception as exc:
+            # A stage owner failed → the chain stops (single-owner: no in-flight
+            # sibling to cancel; the failed stage buffered nothing). cascade_policy
+            # governs the disposition over the COMPLETED-stage prefix.
+            if cascade_policy is CascadePolicy.PROCEED:
+                return _finish(
+                    RunStatus.PARTIAL,
+                    fail_class=(
+                        f"decentralized-handoff-stage-failure: {type(exc).__name__}: {exc}"
+                    ),
+                    salvage=True,
+                )
+            if cascade_policy is CascadePolicy.PAUSE:
+                return _finish(
+                    RunStatus.FAILED,
+                    fail_class=(
+                        "decentralized-handoff-pause-resume-not-yet-materialized: "
+                        f"stage {stage_index} failed under cascade_policy=pause; the "
+                        "resumable single-owner handoff-pause is a forward BUILD "
+                        f"(B-FANOUT-PAUSE), not yet materialized — underlying: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                    salvage=False,
+                )
+            return _finish(
+                RunStatus.FAILED,
+                fail_class=f"decentralized-handoff-stage-failure: {type(exc).__name__}: {exc}",
+                salvage=False,
+            )
+        # Persist the stage as a per-role branch entry whose branch_metadata chains
+        # off the prior stage (causality) + a fresh `completed` terminal entry (U-CP-84).
+        append_branch_step_ledger_entry(
+            branch_writer=writer,
+            branch_context=stage_ctx,
+            run_idempotency_key=run_idempotency_key,
+            local_step_index=0,
+            timestamp=handoff_timestamp,
+            procedural_tier_snapshot_ref=snapshot_ref,
+        )
+        append_branch_terminal_ledger_entry(
+            branch_writer=writer,
+            branch_context=stage_ctx,
+            run_idempotency_key=run_idempotency_key,
+            terminal_status="completed",
+            timestamp=handoff_timestamp,
+            procedural_tier_snapshot_ref=snapshot_ref,
+        )
+        stage_writers.append(writer)
+        stage_outputs[str(step.step_id)] = output
+        # Compose the ownership transfer to the next stage-expert (a RECORD; surfaced
+        # in final_state). Terminal stage → no further handoff (structural).
+        if stage_index < len(steps) - 1:
+            next_step = steps[stage_index + 1]
+            handoffs.append(
+                _compose_handoff_to_next(
+                    completed_action_id=this_action_id,
+                    completed_context=stage_ctx,
+                    next_step=next_step,
+                    next_role=AgentRole(str(next_step.step_id)),
+                    actor_identity=actor_identity,
+                )
+            )
+        prev_action_id = this_action_id
+
+    # Terminal: the last stage completed, no further handoff → SUCCESS.
+    return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
 
 
 __all__ = [
