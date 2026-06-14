@@ -344,7 +344,9 @@ def test_typed_errors_subclass_workflow_driver_error() -> None:
 
 
 def test_topology_pattern_not_yet_materialized_raised_at_non_single_threaded_linear() -> None:
-    manifest = _manifest(topology_pattern=TopologyPattern.ORCHESTRATOR_WORKERS)
+    # HIERARCHICAL_DELEGATION is still NOT_YET_MATERIALIZED after U-CP-88 landed
+    # ORCHESTRATOR_WORKERS — it still raises at the topology-materialization gate.
+    manifest = _manifest(topology_pattern=TopologyPattern.HIERARCHICAL_DELEGATION)
     ctx, ledger, emitter = _ctx()
     with pytest.raises(TopologyPatternNotYetMaterializedError):
         execute_workflow(
@@ -376,9 +378,9 @@ def test_engine_class_not_yet_materialized_raised_at_out_of_scope_engine_class()
 
 
 def test_validation_failure_emits_no_workflow_start() -> None:
-    # ORCHESTRATOR_WORKERS is still NOT_YET_MATERIALIZED after U-CP-86 landed
-    # PARALLELIZATION — it still raises at the topology-materialization gate.
-    manifest = _manifest(topology_pattern=TopologyPattern.ORCHESTRATOR_WORKERS)
+    # HIERARCHICAL_DELEGATION is still NOT_YET_MATERIALIZED after U-CP-88 landed
+    # ORCHESTRATOR_WORKERS — it still raises at the topology-materialization gate.
+    manifest = _manifest(topology_pattern=TopologyPattern.HIERARCHICAL_DELEGATION)
     ctx, _, emitter = _ctx()
     with pytest.raises(TopologyPatternNotYetMaterializedError):
         execute_workflow(

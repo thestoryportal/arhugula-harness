@@ -37,14 +37,15 @@ from harness_is.state_ledger_entry_schema import Actor, ActorClass
 _ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="test-branch-substrate")
 
 # The non-linear patterns still NOT_YET_MATERIALIZED after U-CP-86 landed
-# PARALLELIZATION (the fan-out-barrier-aggregate strategy) and U-CP-87 landed
-# EVALUATOR_OPTIMIZER (the sequential generate→evaluate→regenerate loop). Both
-# are excluded — each resolves to its own `_DriverStrategyStatus` member and no
-# longer raises (the per-strategy `no-longer-raises` AC); their e2e behavior
-# lives at `test_workflow_driver_parallelization.py` +
-# `test_workflow_driver_evaluator_optimizer.py`.
+# PARALLELIZATION (the fan-out-barrier-aggregate strategy), U-CP-87 landed
+# EVALUATOR_OPTIMIZER (the sequential generate→evaluate→regenerate loop), and
+# U-CP-88 landed ORCHESTRATOR_WORKERS (the orchestrator-dispatch-collect fan-out).
+# All three are excluded — each resolves to its own `_DriverStrategyStatus`
+# member and no longer raises (the per-strategy `no-longer-raises` AC); their e2e
+# behavior lives at `test_workflow_driver_parallelization.py` +
+# `test_workflow_driver_evaluator_optimizer.py` +
+# `test_workflow_driver_orchestrator_workers.py`.
 _NOT_YET_MATERIALIZED_PATTERNS = (
-    TopologyPattern.ORCHESTRATOR_WORKERS,
     TopologyPattern.HIERARCHICAL_DELEGATION,
     TopologyPattern.DECENTRALIZED_HANDOFF,
 )
