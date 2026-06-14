@@ -415,6 +415,10 @@ _ALLOWLISTED_CROSS_AXIS_SYMBOLS: frozenset[tuple[str, str]] = frozenset(
         ("harness_is.state_ledger_entry_schema", "Actor"),
         ("harness_is.state_ledger_entry_schema", "ActorClass"),
         ("harness_is.state_ledger_entry_schema", "Timestamp"),  # U-AS-26 secondary
+        # U-CP-84 producer consumes the U-IS-19 `BranchMetadata` sidecar carrier
+        # (a StateLedgerEntry neighbor on the §10.1 entry-shape export) to compose
+        # the branch_metadata write-cadence — same CP→IS U-CP-34 → U-IS-07 seam.
+        ("harness_is.state_ledger_entry_schema", "BranchMetadata"),
         ("harness_is.state_ledger_write", "EntryPayload"),
         ("harness_is.state_ledger_write", "WriteKey"),
         ("harness_is.state_ledger_write", "WriteResult"),
