@@ -202,13 +202,15 @@ def test_run_result_all_required_fields_per_c_rt_09() -> None:
 
 
 def test_run_result_status_literal_values() -> None:
-    """`status: Literal['completed', 'drained', 'failed', 'paused']` per C-RT-09
-    (v1.45 added 'paused' for C-RT-30 resume). The `pause_snapshot is not None
-    iff status=='paused'` invariant is documented, not model-enforced — same
-    posture as the `status=='failed' -> failure_cause` sibling invariant."""
+    """`status: Literal['completed', 'drained', 'failed', 'paused', 'partial']`
+    per C-RT-09 (v1.45 added 'paused' for C-RT-30 resume; U-RT-113 added
+    'partial' for R-FS-1 B1 proceed-cascade graceful degradation). The
+    `pause_snapshot is not None iff status=='paused'` invariant is documented,
+    not model-enforced — same posture as the `status=='failed' -> failure_cause`
+    sibling invariant."""
     field = RunResult.model_fields["status"]
     # Pydantic v2 stores Literal in field annotation; round-trip every literal.
-    for value in ("completed", "drained", "failed", "paused"):
+    for value in ("completed", "drained", "failed", "paused", "partial"):
         result = RunResult(
             status=value,  # type: ignore[arg-type]
             workflow_id=WorkflowID("wf-1"),
@@ -258,6 +260,44 @@ def test_failure_cause_mirrors_c_rt_14() -> None:
     )
     assert cause.runtime_fail_class == "RT-FAIL-BOOTSTRAP"
     assert cause.validator_fail_class is None
+
+
+def test_build_run_result_projects_partial() -> None:
+    """U-RT-113: `_build_run_result` maps a CP `RunStatus.PARTIAL` → runtime
+    `RunResult(status='partial')` (proceed-cascade graceful degradation).
+
+    `failure_cause` stays None (a degraded run did not fail — the
+    `elif status == 'failed'` branch does not fire); `terminal_state` carries
+    the partial aggregate (`partial_state`). Guards the `_CP_TO_RT_STATUS`
+    PARTIAL → 'partial' flip (was the v1.4 defensive 'failed' placeholder).
+    C-RT-09 §9 / CP spec v1.32 §25.15.1.
+
+    NOTE — the *integration* AC (a real `proceed`-cascade fan-out returning
+    PARTIAL end-to-end) is DEFERRED to a later B1-impl-N PR: no driver strategy
+    returns PARTIAL until U-CP-85 (cascade_policy) + a fan-out strategy land.
+    This is the functional projection unit."""
+    from harness_cp.workflow_driver_types import RunResult as _CpRunResult
+    from harness_cp.workflow_driver_types import RunStatus as _CpRunStatus
+    from harness_runtime.api import _build_run_result
+
+    cp_result = _CpRunResult(
+        workflow_id="wf-partial",
+        run_id="run-partial-unit",
+        status=_CpRunStatus.PARTIAL,
+        terminal_step_index=None,
+        partial_state={"branch_0": "ok"},
+        final_state=None,
+        fail_class=None,
+    )
+
+    class _ShutdownReport:
+        audit_ledger_head_hash = "deadbeef"
+
+    result = _build_run_result(cp_result, _ShutdownReport())
+    assert isinstance(result, RunResult)
+    assert result.status == "partial"
+    assert result.failure_cause is None
+    assert result.terminal_state == {"branch_0": "ok"}
 
 
 # ---------------------------------------------------------------------------

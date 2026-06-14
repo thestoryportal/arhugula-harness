@@ -21,9 +21,12 @@ D-ADR on canonicalization library]`; that D-ADR has not landed, and
 framework where the existing stack suffices. The scheme here is hand-rolled on
 the stdlib: NFC Unicode normalization of every string value + `json.dumps`
 with sorted keys and no whitespace. For the `StateLedgerEntry` data shape
-(strings, a `StrEnum`, a `datetime`, byte digests — **no float fields**) this
-is RFC 8785 JCS-conformant: the one RFC 8785 property the stdlib `json` does
-not guarantee is ECMAScript number serialization, which is vacuous here. The
+(strings, a `StrEnum`, a `datetime`, byte digests, and — since v1.8 §5.4 — one
+**integer**, `branch_metadata.branch_index`; **no float fields**) this is
+RFC 8785 JCS-conformant: the one RFC 8785 property the stdlib `json` does not
+guarantee is ECMAScript number serialization, which is a **float**-specific
+ambiguity (`1.0` vs `1`). Integers serialize deterministically under stdlib
+`json`, and the entry shape carries no float field — so the property holds. The
 scheme is encapsulated behind the single `canonicalize` boundary (acceptance
 #5 — one swappable binding site).
 
@@ -60,6 +63,16 @@ def canonicalize(entry: StateLedgerEntry) -> bytes:
     when non-``None``; omitted when ``None``. Legacy entries with no sidecar
     field (pre-v1.3) hash identically to v1.3 entries with sidecar ``None`` —
     ZERO breaking change at the hash level for the existing chain.
+
+    v1.8 NEW D-derivative sidecar contribution (U-IS-19, C-IS-05 §5.4):
+    ``branch_metadata`` is included as a nested record when non-``None``;
+    omitted when ``None`` (the same omit-when-``None`` discipline). The nested
+    record follows the ``actor`` nested-record precedent (§5.4) — built by hand
+    with NFC normalization on every string sub-field; ``branch_index`` is an
+    int; ``terminal_status`` renders its value (NFC) when set and JSON ``null``
+    when ``None`` (include-as-null — the record's fields are rendered whenever
+    the record is present, mirroring ``actor``). Every pre-v1.8 entry carries
+    ``branch_metadata = None`` ⟹ byte-identical canonicalization.
     """
     payload: dict[str, object] = {
         "action_id": _nfc(entry.action_id),
@@ -75,6 +88,15 @@ def canonicalize(entry: StateLedgerEntry) -> bytes:
         payload["procedural_tier_snapshot_ref"] = _nfc(
             entry.procedural_tier_snapshot_ref,
         )
+    if entry.branch_metadata is not None:
+        bm = entry.branch_metadata
+        payload["branch_metadata"] = {
+            "parent_action_id": _nfc(bm.parent_action_id),
+            "branch_index": bm.branch_index,
+            "terminal_status": (
+                _nfc(bm.terminal_status) if bm.terminal_status is not None else None
+            ),
+        }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
         "utf-8"
     )

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, NewType
+from typing import Annotated, Literal, NewType
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -59,6 +59,39 @@ class Actor(BaseModel):
     actor_id: str
 
 
+class BranchMetadata(BaseModel):
+    """Fan-out branch causality + per-branch terminal disposition (C-IS-05 §5.4).
+
+    The v1.8 D-derivative sidecar record the CP non-linear-topology
+    `WorkflowDriver` composes (Route Y) and the IS state ledger persists. A
+    three-field record carrying which fan-out branch an entry belongs to
+    (`parent_action_id` + `branch_index`, which jointly identify a branch even
+    under nested fan-out per §5.4) and the branch's **dispatch-boundary**
+    terminal disposition (`terminal_status`).
+
+    `terminal_status` is dispatch-boundary disposition, **not** step-outcome
+    (§5.4): a branch whose in-flight step ran-and-errored is `completed` — its
+    step failure is recorded at that step's own ordinary entry. The value set
+    therefore carries no `failed`. `None` on a branch's non-terminal step
+    entries; exactly one of the three values at the branch's terminal entry
+    (the value-set + per-value semantics are CP-producer-owned per CP spec
+    v1.32 §25.15.2 obligation 4).
+
+    **Carrier home.** Co-located here with `StateLedgerEntry` (the `harness-is`
+    reading of the §5.4 `harness-core`-vs-`harness-is` impl-discretion): it
+    reuses the same `Identifier` and travels the §10.1 entry-shape export with
+    no new cross-package dependency. The §5.4 hard constraint — NOT
+    `harness-cp` (IS 0-outbound) — is honored: CP consumes this from IS via the
+    established CP→IS direction.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    parent_action_id: Identifier
+    branch_index: Annotated[int, Field(ge=0)]
+    terminal_status: Literal["cancelled", "completed", "timed_out"] | None = None
+
+
 class StateLedgerEntry(BaseModel):
     """The F2 six-field state-ledger entry shape (C-IS-05 §5).
 
@@ -75,6 +108,14 @@ class StateLedgerEntry(BaseModel):
     The F-layer six-field shape PRESERVED VERBATIM above; sidecar is additive
     at the D-derivative extension layer authorized by §5 "Field-shape
     extensibility commitment."
+
+    v1.8 NEW D-derivative sidecar field — `branch_metadata` per C-IS-05 §5.4
+    (NEW). Carries fan-out branch causality + per-branch terminal disposition
+    the CP non-linear-topology `WorkflowDriver` composes (Route Y). Optional;
+    `None` at every entry written outside a fan-out branch (the
+    `SINGLE_THREADED_LINEAR` path, bootstrap-stage entries, non-branch steps —
+    every pre-v1.8 entry). Additive at the same D-derivative extension layer as
+    the §5.1 sidecar; the six-field shape stays inviolate.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -87,3 +128,5 @@ class StateLedgerEntry(BaseModel):
     prior_event_hash: Bytes32
     # v1.3 NEW D-derivative sidecar (C-IS-05 §5.1).
     procedural_tier_snapshot_ref: Identifier | None = None
+    # v1.8 NEW D-derivative sidecar (C-IS-05 §5.4).
+    branch_metadata: BranchMetadata | None = None

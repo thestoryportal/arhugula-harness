@@ -300,13 +300,20 @@ class RunResult(BaseModel):
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
-    status: Literal["completed", "drained", "failed", "paused"]
+    status: Literal["completed", "drained", "failed", "paused", "partial"]
     """Terminal status of the workflow execution.
 
     `'paused'` (C-RT-30, R-CC-1 arc #3) is a non-terminal outcome: a
     workflow-layer pause (DURABLE_ASYNC HITL gate / EXPLICIT_OPERATOR) was
     captured; `pause_snapshot` is populated for `harness_runtime.resume(...)`.
-    Type-widen of the existing Literal — minor bump per C-RT-09 §9."""
+    Type-widen of the existing Literal — minor bump per C-RT-09 §9.
+
+    `'partial'` (U-RT-113, R-FS-1 B1 §9) is the graceful-degradation outcome:
+    a `proceed`-cascade fan-out run (CP `RunStatus.PARTIAL`) where ≥1 branch
+    failed but the run aggregated a partial result. `failure_cause` stays
+    `None` (a degraded run did not fail — `status=='partial'` is the single
+    source of truth; no `degraded` field). Minor type-widen mirroring
+    `'paused'` per C-RT-09 §9."""
 
     workflow_id: WorkflowID
     """Identity of the executed workflow."""
@@ -859,17 +866,23 @@ async def resume(
 # ---------------------------------------------------------------------------
 
 
-_CP_TO_RT_STATUS: dict[_CpRunStatus, Literal["completed", "drained", "failed", "paused"]] = {
+_CP_TO_RT_STATUS: dict[
+    _CpRunStatus, Literal["completed", "drained", "failed", "paused", "partial"]
+] = {
     _CpRunStatus.SUCCESS: "completed",
     _CpRunStatus.DRAINED: "drained",
     _CpRunStatus.FAILED: "failed",
     # PAUSED (C-RT-30, R-CC-1 arc #3) — a workflow-layer pause was captured;
     # `pause_snapshot` is carried through `_build_run_result` for `resume()`.
     _CpRunStatus.PAUSED: "paused",
-    # PARTIAL is reserved at C-CP-25 §25.2 for future multi-step error modes;
-    # at v1.4 the driver never returns PARTIAL. Map to "failed" defensively
-    # so the runtime-side Literal type narrows cleanly.
-    _CpRunStatus.PARTIAL: "failed",
+    # PARTIAL (U-RT-113, R-FS-1 B1 §9) — a `proceed`-cascade fan-out run
+    # gracefully degraded (≥1 branch failed; a partial result aggregated). The
+    # v1.4 defensive `PARTIAL → "failed"` placeholder is flipped to "partial"
+    # now that the non-linear strategies (CP §25.10–§25.18) can return it.
+    # `failure_cause` stays None for "partial" (the `elif status == "failed"`
+    # branch in `_build_run_result` does not fire) — a degraded run did not
+    # fail. Exit code already maps "partial" → 1 (CLI `_CP_STATUS_TO_EXIT_CODE`).
+    _CpRunStatus.PARTIAL: "partial",
 }
 
 
