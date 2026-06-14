@@ -652,7 +652,7 @@ def test_envelope_records_exception_on_validation_failure(
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
         persona_tier=PersonaTier.TEAM_BINDING,
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
-        topology_pattern=TopologyPattern.ORCHESTRATOR_WORKERS,  # out-of-scope
+        topology_pattern=TopologyPattern.HIERARCHICAL_DELEGATION,  # still not materialized
         layer_budgets=(),
         fallback_chain=_CHAIN,
         hitl_placements=(),

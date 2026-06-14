@@ -89,6 +89,7 @@ from harness_cp.workflow_driver_types import (
     compose_branch_terminal_path,
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+from harness_cp.workload_engine_class_matrix import d4_tunable, lookup_cell
 
 # ---------------------------------------------------------------------------
 # v1.4 in-scope sets (per C-CP-25 §25.1 + Implementation Plan §0.2)
@@ -125,6 +126,7 @@ class _DriverStrategyStatus(Enum):
     LINEAR_INLINE = "linear-inline"
     PARALLELIZATION = "parallelization"
     EVALUATOR_OPTIMIZER = "evaluator-optimizer"
+    ORCHESTRATOR_WORKERS = "orchestrator-workers"
     NOT_YET_MATERIALIZED = "not-yet-materialized"
 
 
@@ -136,7 +138,7 @@ class _DriverStrategyStatus(Enum):
 _DRIVER_STRATEGY_DISPATCH: Mapping[TopologyPattern, _DriverStrategyStatus] = {
     TopologyPattern.SINGLE_THREADED_LINEAR: _DriverStrategyStatus.LINEAR_INLINE,
     TopologyPattern.PARALLELIZATION: _DriverStrategyStatus.PARALLELIZATION,
-    TopologyPattern.ORCHESTRATOR_WORKERS: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
+    TopologyPattern.ORCHESTRATOR_WORKERS: _DriverStrategyStatus.ORCHESTRATOR_WORKERS,
     TopologyPattern.HIERARCHICAL_DELEGATION: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
     TopologyPattern.DECENTRALIZED_HANDOFF: _DriverStrategyStatus.NOT_YET_MATERIALIZED,
     TopologyPattern.EVALUATOR_OPTIMIZER: _DriverStrategyStatus.EVALUATOR_OPTIMIZER,
@@ -1327,6 +1329,16 @@ def _execute_workflow_body(
             step_dispatchers=step_dispatchers,
             run_idempotency_key=run_idempotency_key,
         )
+    if strategy is _DriverStrategyStatus.ORCHESTRATOR_WORKERS:
+        return _execute_orchestrator_workers(
+            manifest_entry=manifest_entry,
+            steps=steps,
+            run_id=run_id,
+            ctx=ctx,
+            default_model_binding=default_model_binding,
+            step_dispatchers=step_dispatchers,
+            run_idempotency_key=run_idempotency_key,
+        )
 
     # Selective per-run replay-resumption via N-lookup over the existing
     # IS `read_by_idempotency_key` primitive (CP plan v2.12 §0.1 +
@@ -2222,6 +2234,24 @@ def _aggregate_parallelization(
     }
 
 
+def _writer_ran_a_step(writer: BufferingLedgerWriter) -> bool:
+    """True iff the branch buffered ≥1 **STEP** entry (an `EntryPayload` whose
+    `branch_metadata.terminal_status is None`) — i.e. its dispatch actually ran.
+
+    A branch with ONLY a terminal entry (e.g. a CASCADE_CANCEL `cancelled`
+    disposition written by the post-barrier empty-buffer scan for a
+    not-yet-dispatched worker) did NOT run a step; counting it as a ran-step
+    would inflate `workflow.step_count` + emit a spurious `STEP_BOUNDARY`
+    ([P2-b]). The step/terminal discriminator is the same
+    `branch_metadata.terminal_status` `resume_should_redispatch` reads (§25.15.2
+    obl. 7). Defensive `getattr` for any future non-branch payload (none today —
+    both branch append helpers set `branch_metadata`)."""
+    return any(
+        getattr(getattr(payload, "branch_metadata", None), "terminal_status", None) is None
+        for payload, _write_key in writer.buffered_entries
+    )
+
+
 def _drain_and_emit_step_boundaries(
     ctx: DriverContext,
     branch_writers: Sequence[BufferingLedgerWriter],
@@ -2240,12 +2270,19 @@ def _drain_and_emit_step_boundaries(
     single-threaded analogue (impl-discretion, §25.18).
 
     Returns the count of branches that ran a step (the `workflow.step_count`
-    carrier, C-OD-25). A fully-run branch buffered a step entry + a terminal
-    entry (so its `entry_count` is 2); a branch whose dispatch raised before
-    buffering contributed nothing (`entry_count` 0). The count is therefore the
-    number of branches with a non-empty buffer, NOT the raw drained-entry count.
+    carrier, C-OD-25) — counted by branches that buffered ≥1 **STEP** entry
+    (`branch_metadata.terminal_status is None`), NOT by `entry_count > 0`. A
+    fully-run branch buffered a step entry + a terminal entry (so its
+    `entry_count` is 2; counted once); a branch whose dispatch raised before
+    buffering contributed nothing (`entry_count` 0; not counted). The
+    [P2-a/P2-b] distinction: a CASCADE_CANCEL worker cancelled BEFORE dispatch
+    buffers ONLY a terminal `cancelled` entry (`entry_count` 1, NO step entry) —
+    it did NOT run a step, so it must NOT inflate `workflow.step_count` or emit a
+    `STEP_BOUNDARY`. (`entry_count > 0` would mis-count it; the non-cascade
+    strategies — PARALLELIZATION / EVALUATOR_OPTIMIZER — never buffer a
+    terminal-only branch, so the predicate is a no-op for them.)
     """
-    ran = sum(1 for writer in branch_writers if writer.entry_count > 0)
+    ran = sum(1 for writer in branch_writers if _writer_ran_a_step(writer))
     drain_branch_buffers(ctx.ledger_writer, branch_writers)
     for _ in range(ran):
         ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
@@ -2840,6 +2877,585 @@ def _execute_evaluator_optimizer(
         },
         fail_class=None,
     ), entry_index
+
+
+# ---------------------------------------------------------------------------
+# U-CP-88 — ORCHESTRATOR_WORKERS driver strategy (C-CP-25 §25.11/§25.14/§25.15)
+# ---------------------------------------------------------------------------
+#
+# The THIRD non-linear topology strategy — orchestrator-dispatch-collect fan-out
+# with per-role workers (§25.11 ORCHESTRATOR_WORKERS row: "An orchestrator step
+# computes a dynamic worker set, dispatches workers concurrently (per-role
+# specialization via §25.14), collects. Barrier at collection; orchestrator
+# composes the final result."). It is the FIRST `cascade_policy` consumer (the
+# U-CP-85 machinery) AND the FIRST role-seam consumer (the U-CP-81 `agent_role`
+# field + the runtime read U-RT-114).
+#
+# Structure (the B1 design §6 reading — `.harness/r-fs-1-b1-topology-...md`):
+#   - `steps[0]` is the ORCHESTRATOR step. It is dispatched FIRST, sequentially
+#     on the driver thread; its `action_id` (`workflow:{wf}:step:0`) is the
+#     fan-out parent every worker branch descends from ("worker steps serialize
+#     under the orchestrator's parent_action_id" — design §6). At B1 the
+#     orchestrator's OUTPUT does NOT drive worker selection — there is NO
+#     inter-step DATA flow (B-INTERSTEP), exactly as the linear path /
+#     EVALUATOR_OPTIMIZER never thread a step's output into the next step's
+#     input. The "dynamic worker set" is the declared `steps[1:]` (structural,
+#     not data-driven); richer orchestrator-output-driven worker spawning is the
+#     same runtime/dispatcher concern deferred at B-INTERSTEP for every topology.
+#   - `steps[1:]` are the WORKERS, fanned out CONCURRENTLY, each under a per-role
+#     child `StepExecutionContext` (U-CP-81 `agent_role`). The role is derived
+#     from the worker's `step_id` (`AgentRole(str(step.step_id))`) — distinct per
+#     worker, so with a `RoutingManifest.per_role_bindings` catalog the runtime
+#     read (U-RT-114) routes each worker to its role's model (non-hollow by
+#     per-role model specialization). The per-role binding CATALOG + per-step
+#     override surface remains R-FS-1 child-arc B4; B1 pins the seam MECHANISM.
+#   - The barrier COLLECTS; the orchestrator "composes the final result" = a
+#     deterministic fold over the orchestrator output + the branch-index-ordered
+#     worker outputs (§25.12 determinism — a pure function of the ORDERED set,
+#     never completion order). NO second "compose" dispatch (that would need the
+#     deferred inter-step data).
+#
+# Composes the U-CP-80..85 substrate: the dispatch table (U-CP-80); branch child
+# contexts (U-CP-81); the buffered/deferred-append path + branch-index drain
+# (U-CP-82); the branch_metadata causality + fresh terminal entry (U-CP-84); and
+# — the new consumer — the `cascade_policy` machinery (U-CP-85): the per-policy
+# run-status mapping (`cascade_policy_run_status`), the cascade-cancel
+# TaskGroup barrier (`cascade_cancel_barrier`), and the in-flight-effect shield
+# (`dispatch_branch_step_shielded`).
+#
+# `cascade_policy` (resolved from the manifest's (workload_class, engine_class,
+# persona_tier) via the §11.4 D4 multiplicative tunable — NOT a manifest field)
+# governs the on-WORKER-FAILURE reaction at the barrier (§25.15.1):
+#   - `proceed`        → siblings RUN TO COMPLETION; the aggregator sees a
+#                        partial result set → `RunStatus.PARTIAL` (degraded). A
+#                        `return_exceptions`-collecting barrier (NOT
+#                        `bounded_barrier`, whose finally cancels pending
+#                        siblings on a failure).
+#   - `cascade-cancel` → `cascade_cancel_barrier` (TaskGroup structured
+#                        cancellation) cancels not-yet-dispatched siblings;
+#                        in-flight effects run to completion (shielded);
+#                        → `RunStatus.FAILED`.
+#   - `pause`          → resumable FAN-OUT pause is NOT YET MATERIALIZED at B1
+#                        (see the pause branch below): a `RunStatus.PAUSED` would
+#                        advertise a resumability the position-only C-CP-26
+#                        `PauseSnapshot` + the resume-blind strategy cannot honor
+#                        (§25.15.2 obl. 7 resume reconstructs N-branch state from
+#                        the LEDGER, and completed-branch OUTPUTS are not persisted
+#                        for the aggregate merge). A worker failure under `pause`
+#                        therefore fails HONESTLY → `RunStatus.FAILED` +
+#                        `not-yet-materialized` fail_class (no false-`PAUSED`); the
+#                        resumable-fan-out-pause build is a focused follow-on arc.
+#
+# The eight §25.15.2 cascade-cancel obligations are discharged: (1) dispatch-
+# boundary-bounded + (8) structured cancellation by `cascade_cancel_barrier`;
+# (2) no-gate-bypass + (5) high-blast-radius pre-dispatch gating by the gate
+# living INSIDE `dispatcher.dispatch` (the buffered path defers only the ledger
+# WRITE, never the gate — the SAME committed C-AS-02→C-CP-19→C-CP-16 gate the
+# linear path uses; cascade-cancel COMPOSES it, never re-invents — §25.15.2 obl.
+# 5 + §25.18 (d) "no dry_run/preview primitive"); (3) audit-completeness — every
+# dispatched (in-flight) worker records its OWN step ledger entry regardless of
+# terminal disposition; (4) discriminating `terminal_status` — `cancelled` =
+# not-yet-dispatched (empty buffer, no effect), `completed` = the in-flight step
+# ran (ran-and-errored is still `completed` — dispatch-boundary, not step-
+# outcome), `timed_out` = the barrier deadline cut an in-flight step; (6) the
+# run-level status mapping (`cascade_policy_run_status`); (7) resume-idempotency-
+# terminality via the branch-scoped idempotency keys (U-CP-83) + the persisted
+# discriminating `terminal_status` (`resume_should_redispatch`).
+#
+# Scope (scoped-not-forgotten): the linear-only prefix-replay / explicit-pause
+# resume detection, mid-loop drain checks, and the per-step validator hook are
+# NOT composed here (their units are not U-CP-88 deps). HIERARCHICAL_DELEGATION
+# (U-CP-89) reuses THIS strategy recursively; DECENTRALIZED_HANDOFF (U-CP-90) is
+# the single-owner sequential sibling.
+
+
+def _aggregate_orchestrator_workers(
+    orchestrator_output: Mapping[str, Any],
+    collected: Mapping[int, tuple[str, Mapping[str, Any]]],
+) -> dict[str, Any]:
+    """Compose the ORCHESTRATOR_WORKERS final result — the orchestrator output +
+    the branch-index-ordered worker outputs (C-CP-25 §25.11 "orchestrator
+    composes the final result" + §25.12 determinism).
+
+    The fold is a PURE function of the ORDERED (branch-index) collected set —
+    never completion order ("first to finish wins" is forbidden, §25.12). At B1
+    there is NO second "compose" dispatch (that would need the deferred
+    inter-step DATA flow, B-INTERSTEP); the orchestrator's composition is this
+    deterministic fold:
+
+    - **`orchestrator`** — the orchestrator step's output (the fan-out parent).
+    - **`worker_outputs`** — every COMPLETED worker's output keyed by its
+      `step_id`, in branch-index order (cancelled / timed-out / stuck workers
+      contribute nothing — their disposition lives in the persisted ledger
+      `terminal_status`, not the in-memory aggregate).
+    """
+    sorted_items = sorted(collected.items(), key=lambda kv: kv[0])
+    return {
+        "orchestrator": dict(orchestrator_output),
+        "worker_outputs": {step_id: dict(output) for _bi, (step_id, output) in sorted_items},
+    }
+
+
+def _execute_orchestrator_workers(
+    *,
+    manifest_entry: WorkflowManifestEntry,
+    steps: Sequence[WorkflowStep],
+    run_id: str,
+    ctx: DriverContext,
+    default_model_binding: ModelBinding,
+    step_dispatchers: StepDispatcherRegistry,
+    run_idempotency_key: str,
+) -> tuple[RunResult, int]:
+    """Execute the `ORCHESTRATOR_WORKERS` orchestrator-dispatch-collect strategy (U-CP-88).
+
+    `steps[0]` is the orchestrator (dispatched first, sequentially; its
+    `action_id` parents the worker fan-out); `steps[1:]` are workers fanned out
+    concurrently under per-role child contexts. The barrier collects per the
+    resolved `cascade_policy` (proceed → PARTIAL / cascade-cancel → FAILED /
+    pause → PAUSED on a worker failure; SUCCESS when every worker completes);
+    the orchestrator composes a deterministic fold. Returns
+    `(RunResult, steps_executed)` for the `_execute_workflow_body` caller
+    (matching the linear path's tuple). See the module block above for the full
+    §25.11/§25.14/§25.15 obligation discharge.
+    """
+    workflow_id = manifest_entry.workflow_id
+
+    # Empty step sequence → trivially SUCCESS (mirrors the linear empty-loop +
+    # the PARALLELIZATION / EVALUATOR_OPTIMIZER empty-steps SUCCESS).
+    if not steps:
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.SUCCESS,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state={"orchestrator": {}, "worker_outputs": {}},
+            fail_class=None,
+        ), 0
+
+    orchestrator_step = steps[0]
+    worker_steps = list(steps[1:])
+
+    # The on-worker-failure cascade reaction (§25.15.1) — resolved from the
+    # manifest's (workload_class, engine_class, persona_tier) via the §11.4 D4
+    # multiplicative tunable (`cascade_policy` is NOT a WorkflowManifestEntry
+    # field; it is the D4-layer tunable default — SOLO→proceed / TEAM→pause /
+    # MTC→cascade-cancel).
+    cascade_policy = d4_tunable(
+        lookup_cell(manifest_entry.workload_class, manifest_entry.engine_class),
+        manifest_entry.persona_tier,
+    ).cascade_policy
+
+    # R-003 active-workflow-context sidecar (resolved once; the same resolver the
+    # linear `_append_step_ledger_entry` reads). None when no resolver is bound.
+    _resolver = getattr(ctx, "procedural_tier_snapshot_resolver", None)
+    snapshot_ref = _resolver() if _resolver is not None else None
+
+    # A single shared timestamp for every entry (orchestrator + workers). All-equal
+    # ⟹ trivially monotonic under the zero-tolerance IS writer regardless of the
+    # branch-index drain order (the module timestamp-discipline note above
+    # `append_branch_step_ledger_entry`).
+    fanout_timestamp = datetime.now(UTC)
+
+    # § 25.3.2 — Emit workflow.start (single-threaded on the driver thread, BEFORE
+    # any dispatch).
+    ctx.lifecycle_emitter.emit(WorkflowEventClass.WORKFLOW_START)
+
+    # --- 1) the orchestrator step (sequential; its action_id parents the fan-out) ---
+    # `workflow:{wf}:step:0` is the orchestrator's action_id AND the fan-out
+    # parent every worker descends from (compose_branch_child_context carries it
+    # verbatim). A plain sequential entry (NO branch_metadata — the orchestrator
+    # is the parent, not itself a branch).
+    orchestrator_action_id = f"workflow:{workflow_id}:step:0"
+    orchestrator_idempotency_key = _compute_step_idempotency_key(run_idempotency_key, 0)
+    orchestrator_writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=0)
+    orchestrator_context = StepExecutionContext(
+        workflow_id=workflow_id,
+        parent_action_id=orchestrator_action_id,
+        parent_gate_level=resolve_parent_gate_level(manifest_entry),
+        parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+        parent_actor=ctx.ledger_writer.actor,
+        parent_entry_hash="",
+        parent_idempotency_key=orchestrator_idempotency_key,
+        tenant_id=ctx.tenant_id,
+        step_index=0,
+    )
+    try:
+        orchestrator_binding = resolve_step_binding(
+            manifest_entry,
+            str(orchestrator_step.step_id),
+            default_model_binding=default_model_binding,
+            persona_tier=manifest_entry.persona_tier,
+        )
+        orchestrator_output: Mapping[str, Any] = step_dispatchers.lookup(
+            orchestrator_step.step_kind
+        ).dispatch(orchestrator_binding, orchestrator_step, step_context=orchestrator_context)
+    except Exception as exc:
+        # The orchestrator failed before any worker fan-out → FAILED (nothing
+        # buffered yet; no silent loss). cascade_policy governs WORKER failure,
+        # not the orchestrator's own dispatch.
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state=None,
+            fail_class=f"orchestrator-workers-orchestrator-failure: {type(exc).__name__}: {exc}",
+        ), 0
+    _append_buffered_sequential_entry(
+        writer=orchestrator_writer,
+        workflow_id=workflow_id,
+        entry_index=0,
+        idempotency_key=orchestrator_idempotency_key,
+        timestamp=fanout_timestamp,
+        procedural_tier_snapshot_ref=snapshot_ref,
+    )
+
+    # --- 2) the worker fan-out plan (per-role child contexts under the orchestrator) ---
+    fanout_parent = orchestrator_context.model_copy(
+        update={"parent_idempotency_key": orchestrator_idempotency_key}
+    )
+    branch_plan: list[
+        tuple[int, WorkflowStep, StepExecutionContext, BufferingLedgerWriter, StepEffectiveBinding]
+    ] = []
+    for branch_index, step in enumerate(worker_steps):
+        # Per-worker role (B1: step_id-derived — distinct per worker, bindable via
+        # RoutingManifest.per_role_bindings; the binding catalog is B4).
+        role = AgentRole(str(step.step_id))
+        # The worker's DECLARED step ordinal is its position in the original
+        # `steps` (orchestrator=0, workers=1,2,…), i.e. `branch_index + 1`.
+        # `compose_branch_child_context` inherits `step_index` from the fan-out
+        # parent (the orchestrator, step 0), so set it to the declared ordinal
+        # here — downstream consumers key per-step policy / audit / the runtime
+        # skill-activation hook on `step_context.step_index`, so every worker must
+        # carry its own ordinal (the declared-ordinal discipline U-CP-87 set), not
+        # all report as step 0. (Branch identity stays `(parent_action_id,
+        # branch_index)`; the ledger keys stay branch-scoped — this only fixes the
+        # transient driver-side `step_index` the dispatcher reads.)
+        child = compose_branch_child_context(
+            fanout_parent, branch_index=branch_index, agent_role=role
+        ).model_copy(update={"step_index": branch_index + 1})
+        writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=branch_index)
+        binding = resolve_step_binding(
+            manifest_entry,
+            str(step.step_id),
+            default_model_binding=default_model_binding,
+            persona_tier=manifest_entry.persona_tier,
+        )
+        branch_plan.append((branch_index, step, child, writer, binding))
+    branch_writers = [plan[3] for plan in branch_plan]
+
+    # Worker outputs collected as each branch CLEANLY completes (branch-index
+    # keyed). Populated on the fan-out loop thread after the awaited dispatch
+    # returns; read on the driver thread AFTER the barrier (single-threaded) for
+    # the deterministic fold.
+    collected: dict[int, tuple[str, Mapping[str, Any]]] = {}
+
+    def _record_clean(
+        branch_index: int,
+        step: WorkflowStep,
+        child: StepExecutionContext,
+        writer: BufferingLedgerWriter,
+        output: Mapping[str, Any],
+    ) -> None:
+        # A cleanly-completed worker: its per-step entry (causality-only
+        # branch_metadata) + a fresh `completed` terminal entry (U-CP-84) +
+        # collect the output for the aggregate.
+        append_branch_step_ledger_entry(
+            branch_writer=writer,
+            branch_context=child,
+            run_idempotency_key=run_idempotency_key,
+            local_step_index=0,
+            timestamp=fanout_timestamp,
+            procedural_tier_snapshot_ref=snapshot_ref,
+        )
+        append_branch_terminal_ledger_entry(
+            branch_writer=writer,
+            branch_context=child,
+            run_idempotency_key=run_idempotency_key,
+            terminal_status="completed",
+            timestamp=fanout_timestamp,
+            procedural_tier_snapshot_ref=snapshot_ref,
+        )
+        collected[branch_index] = (str(step.step_id), output)
+
+    # Orchestrator-only (no workers) → SUCCESS with an empty worker set.
+    if not worker_steps:
+        drain_branch_buffers(ctx.ledger_writer, [orchestrator_writer])
+        ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.SUCCESS,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state=_aggregate_orchestrator_workers(orchestrator_output, {}),
+            fail_class=None,
+        ), 1
+
+    def _finish(
+        status: RunStatus, *, fail_class: str | None, salvage: bool
+    ) -> tuple[RunResult, int]:
+        # Drain the orchestrator entry FIRST (the fan-out parent persists before
+        # its workers), then the worker buffers (branch-index order), emitting one
+        # STEP_BOUNDARY per persisted-step writer. steps_executed = orchestrator +
+        # workers that ran a step.
+        drain_branch_buffers(ctx.ledger_writer, [orchestrator_writer])
+        ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
+        steps_executed = 1 + _drain_and_emit_step_boundaries(ctx, branch_writers)
+        aggregate = _aggregate_orchestrator_workers(orchestrator_output, collected)
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=status,
+            terminal_step_index=None,
+            partial_state=aggregate if salvage else None,
+            final_state=aggregate if status is RunStatus.SUCCESS else None,
+            fail_class=fail_class,
+        ), steps_executed
+
+    deadline = _DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS
+
+    # === proceed: siblings run to completion → SUCCESS | PARTIAL (degraded) ===
+    if cascade_policy is CascadePolicy.PROCEED:
+
+        async def _proceed_worker(
+            branch_index: int,
+            step: WorkflowStep,
+            child: StepExecutionContext,
+            writer: BufferingLedgerWriter,
+            binding: StepEffectiveBinding,
+        ) -> None:
+            dispatcher = step_dispatchers.lookup(step.step_kind)
+            try:
+                output = await asyncio.to_thread(
+                    dispatcher.dispatch, binding, step, step_context=child
+                )
+            except asyncio.CancelledError:
+                # The §25.11 wall-clock deadline (`_proceed_fanout`'s
+                # `asyncio.timeout`) cancelled this in-flight worker. Its dispatch
+                # was scheduled (the effect may have landed on the abandoned
+                # thread) → record the step entry (obl. 3 — no silent obl-3 gap) +
+                # a `timed_out` terminal, then re-raise to honor the cancellation.
+                # WITHOUT this branch a deadline-cancelled worker would buffer
+                # nothing and its dispatched effect would be an unrecorded silent
+                # gap (decorrelated-review [P2]).
+                append_branch_step_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    local_step_index=0,
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                append_branch_terminal_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    terminal_status="timed_out",
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                raise
+            except Exception:
+                # Ran-and-errored → record the step entry (obl. 3) + a `completed`
+                # terminal (dispatch-boundary, not step-outcome; the failure lives
+                # at the step entry). Contributes nothing to the aggregate; re-raise
+                # so the return_exceptions gather marks this branch failed (→ the
+                # partial result set → PARTIAL). proceed does NOT cancel siblings.
+                append_branch_step_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    local_step_index=0,
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                append_branch_terminal_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    terminal_status="completed",
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                raise
+            _record_clean(branch_index, step, child, writer, output)
+
+        async def _proceed_fanout() -> list[Any]:
+            # `return_exceptions=True`: a failing worker does NOT cancel siblings
+            # (the proceed semantic). Bounded by the §25.11 wall-clock deadline.
+            async with asyncio.timeout(deadline):
+                return await asyncio.gather(
+                    *(_proceed_worker(*plan) for plan in branch_plan),
+                    return_exceptions=True,
+                )
+
+        try:
+            results = _run_fanout_to_completion(
+                _proceed_fanout(), max_workers=max(1, len(branch_plan))
+            )
+        except BranchBarrierDeadlineExceededError:
+            # A stuck worker hit the deadline; the completed workers buffered their
+            # entries → PARTIAL (degraded). (proceed does not cancel; the stuck
+            # worker is abandoned per `_run_fanout_to_completion`.)
+            return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
+        except TimeoutError:
+            return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
+        any_failed = any(isinstance(r, BaseException) for r in results)
+        if any_failed:
+            return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
+        return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
+
+    # === cascade-cancel | pause: cancel-on-failure (TaskGroup structured cancel) ===
+    # Both halt the fan-out on the first worker failure with in-flight effects run
+    # to completion (shielded). They differ only in the run-level outcome on a
+    # worker failure: cascade-cancel → FAILED (+ the empty-buffer not-yet-dispatched
+    # scan records `cancelled`); pause → FAILED + `not-yet-materialized` fail_class
+    # (resumable fan-out pause is a follow-on arc; see the pause branch below — a
+    # false-`PAUSED` is foreclosed). The CLEAN (no-failure) path is SUCCESS for both.
+    async def _cancel_worker(
+        branch_index: int,
+        step: WorkflowStep,
+        child: StepExecutionContext,
+        writer: BufferingLedgerWriter,
+        binding: StepEffectiveBinding,
+    ) -> None:
+        dispatcher = step_dispatchers.lookup(step.step_kind)
+        # Schedule the (sync) dispatch off-loop; `dispatch_branch_step_shielded`
+        # keeps it alive against THIS branch's cancellation so an in-flight effect
+        # runs to its own completion (obl. 1), and registers it for the barrier's
+        # deadline watchdog (the hard "...or barrier-deadline timeout" cut-off).
+        inflight: asyncio.Future[Mapping[str, Any]] = asyncio.ensure_future(
+            asyncio.to_thread(dispatcher.dispatch, binding, step, step_context=child)
+        )
+        try:
+            output = await dispatch_branch_step_shielded(inflight)
+        except asyncio.CancelledError:
+            # In-flight at cancel-time: the effect ran (shielded to completion) or
+            # the deadline cut it. Record the step entry (obl. 3) + the
+            # discriminating terminal (obl. 4): `completed` = ran (ran-and-errored
+            # is still completed — dispatch-boundary), `timed_out` = the deadline
+            # cut the in-flight step. A not-yet-dispatched worker NEVER reaches here
+            # (it has no inflight) — its `cancelled`/re-dispatchable disposition is
+            # handled post-barrier by the empty-buffer scan.
+            append_branch_step_ledger_entry(
+                branch_writer=writer,
+                branch_context=child,
+                run_idempotency_key=run_idempotency_key,
+                local_step_index=0,
+                timestamp=fanout_timestamp,
+                procedural_tier_snapshot_ref=snapshot_ref,
+            )
+            terminal: Literal["completed", "timed_out"] = (
+                "timed_out" if (inflight.cancelled() or not inflight.done()) else "completed"
+            )
+            append_branch_terminal_ledger_entry(
+                branch_writer=writer,
+                branch_context=child,
+                run_idempotency_key=run_idempotency_key,
+                terminal_status=terminal,
+                timestamp=fanout_timestamp,
+                procedural_tier_snapshot_ref=snapshot_ref,
+            )
+            raise  # honor the cancellation (the barrier cancelled this branch)
+        except Exception:
+            # THIS worker's own dispatch ERRORED — the failure that triggers the
+            # cascade. The effect ran-and-errored → record the step entry (obl. 3 —
+            # every dispatched effectful step gets its own entry REGARDLESS of
+            # disposition; the step failure lives at this entry) + a `completed`
+            # terminal (dispatch-boundary, not step-outcome — the carrier forecloses
+            # `failed`). Re-raise so the TaskGroup cascade-cancels the siblings.
+            append_branch_step_ledger_entry(
+                branch_writer=writer,
+                branch_context=child,
+                run_idempotency_key=run_idempotency_key,
+                local_step_index=0,
+                timestamp=fanout_timestamp,
+                procedural_tier_snapshot_ref=snapshot_ref,
+            )
+            append_branch_terminal_ledger_entry(
+                branch_writer=writer,
+                branch_context=child,
+                run_idempotency_key=run_idempotency_key,
+                terminal_status="completed",
+                timestamp=fanout_timestamp,
+                procedural_tier_snapshot_ref=snapshot_ref,
+            )
+            raise
+        _record_clean(branch_index, step, child, writer, output)
+
+    async def _cancel_fanout() -> list[None]:
+        return await cascade_cancel_barrier(
+            (_cancel_worker(*plan) for plan in branch_plan), deadline_seconds=deadline
+        )
+
+    worker_failed = False
+    deadline_struck = False
+    try:
+        _run_fanout_to_completion(_cancel_fanout(), max_workers=max(1, len(branch_plan)))
+    except BranchBarrierDeadlineExceededError:
+        # The wall-clock deadline fired with no worker raising (a stuck fan-out) —
+        # the §25.11 hard cap. A bare strand is FAILED (parity with PARALLELIZATION);
+        # the in-flight workers recorded `timed_out` in their except blocks.
+        deadline_struck = True
+    except BaseExceptionGroup:
+        # A worker raised → the TaskGroup cancelled not-yet-finished siblings.
+        # In-flight siblings ran to completion (shielded) + recorded their terminal;
+        # the failing worker's exception group is consumed here (the durable record
+        # is the drained ledger). cascade_policy maps the run-level status.
+        worker_failed = True
+
+    if cascade_policy is CascadePolicy.CASCADE_CANCEL:
+        # obl. 4: a not-yet-dispatched worker (empty buffer — its task was cancelled
+        # before scheduling its dispatch) records a `cancelled` terminal so
+        # `resume_should_redispatch` is False (no double-dispatch on resume).
+        for _bi, _step, child, writer, _binding in branch_plan:
+            if writer.entry_count == 0:
+                append_branch_terminal_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    terminal_status="cancelled",
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+        if worker_failed or deadline_struck:
+            return _finish(
+                RunStatus.FAILED,
+                fail_class="orchestrator-workers-cascade-cancel",
+                salvage=False,
+            )
+        return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
+
+    # pause: resumable FAN-OUT pause is NOT YET MATERIALIZED at B1. Returning a
+    # `RunStatus.PAUSED` here would advertise a resumability the harness cannot
+    # honor: the linear pause path captures a position-only C-CP-26 `PauseSnapshot`
+    # (single `step_index`) for `api.resume` (C-RT-30), but a fan-out's resume must
+    # (per §25.15.2 obl. 7) reconstruct N-branch state from the LEDGER — skip each
+    # branch whose persisted `terminal_status` is set, re-dispatch the rest — AND
+    # recover the COMPLETED branches' OUTPUTS for the aggregate (which the ledger
+    # entries do not carry). That resume-re-entry path (the strategy is
+    # resume-blind by design — §25.3 prefix-replay is bypassed above) + the
+    # completed-branch output persistence is a focused follow-on R-FS-1 arc, NOT a
+    # silent defer. A false-`PAUSED` is the silent-degradation failure mode
+    # (decorrelated-review [P1]/F1-01 — two reviewers converged). So a worker
+    # failure under `pause` policy fails HONESTLY → `RunStatus.FAILED` with an
+    # explicit `not-yet-materialized` fail_class; the completed/in-flight workers'
+    # ledger entries + the salvaged partial result set STILL persist (no silent
+    # loss). The CLEAN (no-failure) path is unaffected → SUCCESS.
+    if deadline_struck:
+        return _finish(
+            RunStatus.FAILED, fail_class="orchestrator-workers-barrier-deadline", salvage=False
+        )
+    if worker_failed:
+        return _finish(
+            RunStatus.FAILED,
+            fail_class="orchestrator-workers-pause-resume-not-yet-materialized",
+            salvage=True,
+        )
+    return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
 
 
 __all__ = [

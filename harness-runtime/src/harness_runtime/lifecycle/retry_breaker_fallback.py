@@ -64,8 +64,12 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-from harness_cp.cp_shared_types import ModelBinding
-from harness_cp.cross_family_fallback_chain import FallbackChain, ProviderCandidate
+from harness_cp.cp_shared_types import AgentRole, ModelBinding
+from harness_cp.cross_family_fallback_chain import (
+    FallbackChain,
+    ProviderCandidate,
+    ProviderFamily,
+)
 from harness_cp.engine_namespace import REPLAY_DISPOSITION_MAPPING
 from harness_cp.fall_through_procedure import FallThroughCause
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
@@ -74,7 +78,7 @@ from harness_cp.provider_capabilities import (
     provider_supports,
     reflect_provider_capabilities,
 )
-from harness_cp.routing_manifest_residence import RetryPolicy
+from harness_cp.routing_manifest_residence import RetryPolicy, RoutingManifest
 from harness_cp.validator_fail_taxonomy import ValidatorRetryExitClass
 from harness_cp.validator_fail_transient_staircase import StaircaseStage
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
@@ -155,6 +159,45 @@ def _rebind_to_candidate(
     return binding.model_copy(
         update={"model_binding": ModelBinding(provider=candidate.provider, model=candidate.model)}
     )
+
+
+#: Mirrors ``llm_dispatch._MVP_DEFAULT_AGENT_ROLE`` (same local-mirror pattern
+#: as ``prompt_selection``) — the MVP default branch role. A ``None`` / default
+#: ``agent_role`` reads the stage-bound chain unchanged (§14.5.3 non-breaking
+#: default); only a NON-default role consults ``per_role_bindings``.
+_MVP_DEFAULT_AGENT_ROLE = AgentRole("default")
+
+
+#: Provider key → ``ProviderFamily`` for synthesizing a per-role
+#: ``ProviderCandidate`` (U-RT-114). Operator-authored chain candidates carry
+#: ``family`` directly; a per-role ``ModelBinding`` (C-CP-01 §1.3) carries only
+#: ``(provider, model)``, so the augmented-chain primary needs the family
+#: derived. The three constructed providers (C-RT-05 ``providers.py``) map here;
+#: ``ProviderFamily`` is value-equal to the hosted-provider keys.
+_PROVIDER_FAMILY_BY_PROVIDER: dict[str, ProviderFamily] = {
+    "anthropic": ProviderFamily.ANTHROPIC,
+    "openai": ProviderFamily.OPENAI,
+    "ollama": ProviderFamily.LOCAL_OPEN_WEIGHT,
+}
+
+
+def _provider_family(provider: str) -> ProviderFamily:
+    """Map a provider key to its ``ProviderFamily`` for the synthesized per-role
+    ``ProviderCandidate`` (U-RT-114 augmented chain).
+
+    The family affects ONLY the C-CP-04 §4.3 cross-family attribution flags
+    (``cross_family_triggered`` / ``cache_state_lost``), never WHICH model is
+    dispatched. Known providers map directly; any other family-named provider
+    resolves via ``ProviderFamily(provider)``; an unknown provider falls back to
+    ``LOCAL_OPEN_WEIGHT`` (conservative — attribution only).
+    """
+    family = _PROVIDER_FAMILY_BY_PROVIDER.get(provider)
+    if family is not None:
+        return family
+    try:
+        return ProviderFamily(provider)
+    except ValueError:
+        return ProviderFamily.LOCAL_OPEN_WEIGHT
 
 
 def _required_capabilities(step: WorkflowStep) -> frozenset[ProviderCapability]:
@@ -248,6 +291,14 @@ class RetryBreakerFallbackDispatcher:
         Awaitable sleep function for full-jitter backoff between retry
         attempts. Defaults to ``asyncio.sleep``; tests inject a recording
         no-op to keep async tests fast and deterministic.
+    routing_manifest :
+        The stage-3a-bound ``RoutingManifest`` (``ctx.routing_manifest``).
+        Read at dispatch for the U-RT-114 (§14.5.3) per-role MODEL binding:
+        a non-default branch ``agent_role`` with a ``per_role_bindings`` entry
+        promotes its ``preferred_model_binding`` to the PRIMARY fallback
+        candidate (so per-role model specialization composes with C-RT-16
+        fallback). ``None`` / default role / empty catalog ⟹ the stage-bound
+        ``fallback_chain`` is used unchanged (the §14.5.3 non-breaking default).
     """
 
     inner: LLMDispatcher
@@ -255,6 +306,7 @@ class RetryBreakerFallbackDispatcher:
     fallback_chain: FallbackChain
     tracer_provider: Any
     sleep_fn: Callable[[float], Awaitable[None]] = field(default_factory=lambda: asyncio.sleep)
+    routing_manifest: RoutingManifest | None = None
 
     async def dispatch(
         self,
@@ -285,9 +337,17 @@ class RetryBreakerFallbackDispatcher:
         tracer = self.tracer_provider.get_tracer("harness.runtime.retry_breaker_fallback")
 
         with tracer.start_as_current_span("harness.runtime.retry_breaker_fallback") as outer_span:
-            candidate: ProviderCandidate = self.fallback_chain.primary
+            # U-RT-114 (§14.5.3): resolve the per-dispatch chain for the branch
+            # role. Default / absent / empty-catalog role ⟹ the stage-bound
+            # `self.fallback_chain` unchanged; a non-default role with a
+            # `per_role_bindings` entry ⟹ an augmented chain whose PRIMARY is the
+            # per-role model (fallback applies on its failure). One source of
+            # truth for model selection — the chain — so the inner C-RT-15
+            # dispatcher faithfully dispatches each rebound candidate.
+            chain = self._effective_chain(step_context.agent_role)
+            candidate: ProviderCandidate = chain.primary
             last_failure_class: str | None = None
-            chain_length = _chain_length(self.fallback_chain)
+            chain_length = _chain_length(chain)
             outer_span.set_attribute("fallback.chain_length", chain_length)
             # C-CP-03 §3.3 ``capability_required`` — constant across the chain
             # traversal (it is a property of the call-site payload, not the
@@ -331,6 +391,7 @@ class RetryBreakerFallbackDispatcher:
                         outer_span,
                         last_failure_class,
                         chain_length,
+                        chain=chain,
                         exhaustion_cause="capability-shortfall",
                     )
                     continue
@@ -358,7 +419,7 @@ class RetryBreakerFallbackDispatcher:
                     )
                     last_failure_class = "breaker-open"
                     candidate = self._advance_or_exhaust(
-                        candidate, outer_span, last_failure_class, chain_length
+                        candidate, outer_span, last_failure_class, chain_length, chain=chain
                     )
                     continue
 
@@ -381,8 +442,64 @@ class RetryBreakerFallbackDispatcher:
                 # Candidate abandoned; advance to next.
                 last_failure_class = attempt_terminal.last_failure_class
                 candidate = self._advance_or_exhaust(
-                    candidate, outer_span, last_failure_class, chain_length
+                    candidate, outer_span, last_failure_class, chain_length, chain=chain
                 )
+
+    def _effective_chain(self, agent_role: AgentRole | None) -> FallbackChain:
+        """Resolve the per-dispatch fallback chain for a branch role (U-RT-114
+        §14.5.3 — the per-role MODEL dispatch-read, placed at the dispatch-
+        composition surface so it composes with C-RT-16 fallback).
+
+        - Default / absent / ``None`` role, OR no ``routing_manifest``, OR no
+          ``per_role_bindings`` entry ⟹ the stage-bound ``self.fallback_chain``
+          UNCHANGED. Byte-identical to v1.47 (the §14.5.3 non-breaking-default +
+          linear-path-untouched invariants; empty catalog ⟹ zero behaviour
+          change).
+        - A NON-default branch role with a ``per_role_bindings`` entry ⟹ an
+          AUGMENTED chain whose PRIMARY is the role's ``preferred_model_binding``
+          and whose tail is the original chain's full §4.2 traversal (deduped by
+          ``(provider, model)``). The per-role model is tried first; the
+          operator-configured chain applies on its failure — so per-role MODEL
+          specialization (B1) is non-hollow AND fallback is preserved. ONE source
+          of truth: the chain (the inner C-RT-15 dispatcher dispatches each
+          rebound candidate faithfully). MODEL BINDING ONLY — the role's own
+          ``fallback_chain_ref`` is out of scope at B1; the per-role PROMPT is B4.
+        """
+        role = agent_role or _MVP_DEFAULT_AGENT_ROLE
+        if role == _MVP_DEFAULT_AGENT_ROLE or self.routing_manifest is None:
+            return self.fallback_chain
+        role_binding = self.routing_manifest.per_role_bindings.get(role)
+        if role_binding is None:
+            return self.fallback_chain
+        mb = role_binding.preferred_model_binding
+        per_role_candidate = ProviderCandidate(
+            provider=mb.provider, model=mb.model, family=_provider_family(mb.provider)
+        )
+        base = self.fallback_chain
+        original_ordered = (
+            base.primary,
+            *base.same_family,
+            *base.cross_family,
+            *((base.terminal,) if base.terminal is not None else ()),
+        )
+        # Dedup by (provider, model): if the per-role model already appears in the
+        # chain, don't re-list it as its own fallback (avoid a same-model
+        # double-dispatch on advance).
+        tail = tuple(
+            c
+            for c in original_ordered
+            if (c.provider, c.model) != (per_role_candidate.provider, per_role_candidate.model)
+        )
+        if not tail:
+            # The per-role model IS the entire chain — no augmentation needed
+            # (the original chain's primary is the same model).
+            return base
+        return FallbackChain(
+            primary=per_role_candidate,
+            same_family=(),
+            cross_family=tail,
+            terminal=None,
+        )
 
     def _advance_or_exhaust(
         self,
@@ -391,6 +508,7 @@ class RetryBreakerFallbackDispatcher:
         last_failure_class: str | None,
         chain_length: int,
         *,
+        chain: FallbackChain,
         exhaustion_cause: str = "per-candidate-retry-exhaustion",
     ) -> ProviderCandidate:
         """Advance to the next candidate or raise on exhaustion (Step 5).
@@ -401,9 +519,16 @@ class RetryBreakerFallbackDispatcher:
         the C-CP-03 §3.3 capability-shortfall pre-check passes
         ``"capability-shortfall"`` so an all-candidates-incapable chain is not
         mis-classified as retry exhaustion (no provider attempt ran in that case).
+
+        ``chain`` is the per-dispatch effective chain (U-RT-114 §14.5.3) — the
+        stage-bound ``self.fallback_chain`` for the default path, or the
+        role-augmented chain for a per-role branch — so ``advance_or_raise``
+        traverses the SAME chain the dispatch started from (``failed`` is a
+        member of it; using ``self.fallback_chain`` here would raise spuriously
+        on the augmented primary).
         """
         try:
-            next_candidate, _result = advance_or_raise(self.fallback_chain, failed)
+            next_candidate, _result = advance_or_raise(chain, failed)
         except FallbackChainExhaustedError as exc:
             outer_span.add_event(
                 "fallback.exhausted",
@@ -625,6 +750,7 @@ def materialize_retry_breaker_fallback_dispatcher_stage(
     fallback_chain: FallbackChain,
     tracer_provider: Any,
     sleep_fn: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    routing_manifest: RoutingManifest | None = None,
 ) -> RetryBreakerFallbackDispatcher:
     """Stage 5 LOOP_INIT factory for the retry/breaker/fallback wrapper
     (U-RT-58, C-RT-16).
@@ -637,7 +763,9 @@ def materialize_retry_breaker_fallback_dispatcher_stage(
     The wrapper consumes ``ctx.retry_breaker`` (U-RT-24) +
     ``ctx.fallback_chain`` (stage 3b) + ``ctx.tracer_provider`` (C-RT-06)
     + the inner dispatcher (private). ``StepDispatcher`` Protocol shape
-    preserved per spec §14.6.
+    preserved per spec §14.6. ``routing_manifest`` (``ctx.routing_manifest``,
+    stage 3a) is passed for the U-RT-114 §14.5.3 per-role MODEL dispatch-read;
+    ``None`` ⟹ no per-role routing (the §14.5.3 non-breaking default).
     """
     return RetryBreakerFallbackDispatcher(
         inner=inner,
@@ -645,4 +773,5 @@ def materialize_retry_breaker_fallback_dispatcher_stage(
         fallback_chain=fallback_chain,
         tracer_provider=tracer_provider,
         sleep_fn=sleep_fn,
+        routing_manifest=routing_manifest,
     )

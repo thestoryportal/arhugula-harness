@@ -32,7 +32,7 @@ import pytest
 from harness_as.sandbox_tier import SandboxTier
 from harness_core import PersonaTier
 from harness_core.identity import StepID
-from harness_cp.cp_shared_types import ModelBinding
+from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
     ProviderCandidate,
@@ -45,6 +45,7 @@ from harness_cp.provider_capabilities import ProviderCapability
 from harness_cp.routing_manifest_residence import (
     ReservedToolNameError,
     RetryPolicy,
+    RoleRoutingBinding,
     RoutingManifest,
     validate_routing_manifest,
 )
@@ -709,22 +710,35 @@ def test_valid_manifest_passes_with_non_reserved_tool_names() -> None:
 
 def test_materialize_factory_wraps_inner_dispatcher() -> None:
     """The factory returns a wrapper whose ``.inner`` is the bare
-    ``RuntimeLLMDispatcher``."""
+    ``RuntimeLLMDispatcher`` and which carries the supplied ``routing_manifest``
+    (the U-RT-114 §14.5.3 per-role MODEL read substrate — stage 5 passes
+    ``ctx.routing_manifest``; absent ⟹ ``None`` ⟹ no per-role routing)."""
     tp, _ = _tracer_provider_with_exporter()
     providers: dict[str, Any] = {"anthropic": object()}
     bare = RuntimeLLMDispatcher(providers=providers, tracer_provider=tp)
 
     breaker = _retry_breaker_with_llm_policy()
     chain = _chain(_candidate("anthropic", "claude-test-1"))
+    manifest = _routing_manifest_with_roles({"worker-a": "role-model-a"})
     wrapper = materialize_retry_breaker_fallback_dispatcher_stage(
         inner=bare,
         retry_breaker=breaker,
         fallback_chain=chain,
         tracer_provider=tp,
+        routing_manifest=manifest,
     )
     assert isinstance(wrapper, RetryBreakerFallbackDispatcher)
     assert isinstance(wrapper, StepDispatcher)
     assert wrapper.inner is bare
+    # The factory threads routing_manifest to the wrapper (the U-RT-114 read
+    # substrate); default omitted ⟹ None (the §14.5.3 non-breaking default).
+    assert wrapper.routing_manifest is manifest
+    assert (
+        materialize_retry_breaker_fallback_dispatcher_stage(
+            inner=bare, retry_breaker=breaker, fallback_chain=chain, tracer_provider=tp
+        ).routing_manifest
+        is None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -936,3 +950,306 @@ async def test_no_capability_requirement_is_behavior_neutral() -> None:
     spans = exporter.get_finished_spans()
     outer = next(s for s in spans if s.name == "harness.runtime.retry_breaker_fallback")
     assert "fallback.triggered" not in [e.name for e in outer.events]
+
+
+# ---------------------------------------------------------------------------
+# U-RT-114 — per-role MODEL dispatch-read at the C-RT-16 wrapper (§14.5.3)
+# ---------------------------------------------------------------------------
+#
+# §14.5.3 places the per-role MODEL binding read at the dispatch-composition
+# surface (the [P2-a] placement) so it COMPOSES with C-RT-16 fallback: a
+# non-default branch `agent_role` with a `per_role_bindings` entry promotes its
+# `preferred_model_binding` to the PRIMARY fallback candidate, and the
+# operator-configured chain becomes the fallback tail. Default / absent role /
+# `None`-manifest / role-absent-from-catalog ⟹ the stage-bound chain UNCHANGED
+# (the §14.5.3 non-breaking-default + linear-path-untouched invariants). The
+# inner C-RT-15 dispatcher is role-AGNOSTIC for MODEL selection — see
+# `test_lifecycle_llm_dispatch.py`. `_MockInnerDispatcher` records each rebound
+# `binding.model_binding`, so the dispatched candidate per call is asserted
+# directly.
+
+
+def _routing_manifest_with_roles(
+    role_models: dict[str, str], *, provider: str = "anthropic"
+) -> RoutingManifest:
+    """A `RoutingManifest` whose `per_role_bindings` map each role to a
+    ModelBinding at the named `(provider, model)` — the only field U-RT-114
+    reads (the role's own `fallback_chain_ref` is out of scope at B1)."""
+    return RoutingManifest(
+        manifest_version=1,
+        per_role_bindings={
+            AgentRole(role): RoleRoutingBinding(
+                preferred_model_binding=ModelBinding(provider=provider, model=model),
+                layer_budget_overrides={},
+            )
+            for role, model in role_models.items()
+        },
+        per_workload_overrides={},
+        fallback_chains=(),
+        retry_policies={},
+    )
+
+
+def _step_context_with_role(role: str | None) -> StepExecutionContext:
+    """A step_context with the branch `agent_role` set (or `None` = linear /
+    default path)."""
+    return _step_context().model_copy(
+        update={"agent_role": AgentRole(role) if role is not None else None}
+    )
+
+
+@pytest.mark.asyncio
+async def test_u_rt_114_wrapper_default_none_role_uses_stage_chain() -> None:
+    """`agent_role is None` ⟹ the stage-bound chain's primary is dispatched
+    UNCHANGED, even with a populated catalog (the §14.5.3 non-breaking-default /
+    linear-path-untouched invariant)."""
+    inner = _MockInnerDispatcher(outcomes=[{"ok": 1}])
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_manifest=_routing_manifest_with_roles({"worker-a": "role-model-a"}),
+    )
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context_with_role(None))
+    assert inner.calls[-1][0].model_binding.model == "stage-primary"
+
+
+@pytest.mark.asyncio
+async def test_u_rt_114_wrapper_non_default_role_promotes_per_role_model() -> None:
+    """A NON-default branch role with a catalog entry ⟹ the per-role model is the
+    PRIMARY candidate dispatched (the §14.5.3 per-role MODEL specialization,
+    placed at the wrapper so it composes with fallback)."""
+    inner = _MockInnerDispatcher(outcomes=[{"ok": 1}])
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_manifest=_routing_manifest_with_roles({"worker-a": "role-model-a"}),
+    )
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context_with_role("worker-a"))
+    assert inner.calls[-1][0].model_binding.model == "role-model-a"
+
+
+@pytest.mark.asyncio
+async def test_u_rt_114_wrapper_role_absent_from_catalog_uses_stage_chain() -> None:
+    """A non-default role NOT in the catalog ⟹ the stage chain unchanged
+    (non-breaking default)."""
+    inner = _MockInnerDispatcher(outcomes=[{"ok": 1}])
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_manifest=_routing_manifest_with_roles({"worker-a": "role-model-a"}),
+    )
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context_with_role("worker-z"))
+    assert inner.calls[-1][0].model_binding.model == "stage-primary"
+
+
+@pytest.mark.asyncio
+async def test_u_rt_114_wrapper_none_manifest_uses_stage_chain() -> None:
+    """No `routing_manifest` (the default) ⟹ the stage chain unchanged for any
+    role (empty-catalog ⟹ zero behaviour change)."""
+    inner = _MockInnerDispatcher(outcomes=[{"ok": 1}])
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        # routing_manifest omitted -> None
+    )
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context_with_role("worker-a"))
+    assert inner.calls[-1][0].model_binding.model == "stage-primary"
+
+
+@pytest.mark.asyncio
+async def test_u_rt_114_wrapper_per_role_primary_fails_then_fallback_candidate_dispatched() -> None:
+    """[P2-a] regression — the KEY proof that per-role routing COMPOSES with
+    fallback. A non-default role promotes its model to PRIMARY; the original
+    chain becomes the fallback tail. When the per-role model fails, the NEXT
+    chain candidate (the original stage primary) is actually dispatched — NOT the
+    per-role model retried. Pre-fix (per-role override at the inner) EVERY
+    candidate dispatched the same per-role model and fallback was silently
+    defeated; this test distinguishes the fix from the bug."""
+    # Original chain: stage-primary (anthropic) -> gpt-fallback (openai, cross).
+    chain = _chain(
+        _candidate("anthropic", "stage-primary"),
+        cross_family=(_candidate("openai", "gpt-fallback"),),
+    )
+    # Augmented chain for "worker-a": [role-model-a, stage-primary, gpt-fallback].
+    # max_attempts=1; per-role primary FAILS transient -> advance.
+    inner = _MockInnerDispatcher(
+        outcomes=[
+            RuntimeError("per-role model unreachable"),  # candidate 0 = role-model-a
+            {"ok": "fell-back-to-stage-primary"},  # candidate 1 = stage-primary
+        ]
+    )
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_manifest=_routing_manifest_with_roles({"worker-a": "role-model-a"}),
+    )
+    result = await wrapper.dispatch(
+        _binding(), _step(), step_context=_step_context_with_role("worker-a")
+    )
+    dispatched = [c[0].model_binding.model for c in inner.calls]
+    # Per-role model first, then the REAL next chain candidate — fallback preserved.
+    assert dispatched == ["role-model-a", "stage-primary"]
+    assert result == {"ok": "fell-back-to-stage-primary"}
+
+
+@pytest.mark.asyncio
+async def test_u_rt_114_wrapper_distinct_workers_route_to_distinct_models() -> None:
+    """Two workers under DISTINCT roles dispatch DISTINCT per-role models through
+    the SAME wrapper (the non-hollow ORCHESTRATOR_WORKERS specialization the
+    U-RT-114 read makes effective)."""
+    inner = _MockInnerDispatcher(outcomes=[{"a": 1}, {"b": 1}])
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_manifest=_routing_manifest_with_roles(
+            {"worker-a": "role-model-a", "worker-b": "role-model-b"}
+        ),
+    )
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context_with_role("worker-a"))
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context_with_role("worker-b"))
+    assert inner.calls[0][0].model_binding.model == "role-model-a"
+    assert inner.calls[1][0].model_binding.model == "role-model-b"
+    assert inner.calls[0][0].model_binding.model != inner.calls[1][0].model_binding.model
+
+
+@pytest.mark.asyncio
+async def test_u_rt_114_wrapper_per_role_equals_primary_dedups_no_double_dispatch() -> None:
+    """Dedup edge: per-role model == the chain's only candidate ⟹ the augmented
+    chain is NOT built with a same-model duplicate; the single candidate is
+    attempted exactly once (no same-model double-dispatch on advance)."""
+    inner = _MockInnerDispatcher(outcomes=[RuntimeError("fail")])
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_manifest=_routing_manifest_with_roles({"worker-a": "stage-primary"}),
+    )
+    with pytest.raises(RetryBreakerFallbackExhaustedError):
+        await wrapper.dispatch(
+            _binding(), _step(), step_context=_step_context_with_role("worker-a")
+        )
+    assert len(inner.calls) == 1  # NOT 2 — dedup avoided the duplicate.
+    assert inner.calls[0][0].model_binding.model == "stage-primary"
+
+
+# ---------------------------------------------------------------------------
+# U-RT-114 — live e2e: per-role models to a REAL local Ollama daemon (wrapper)
+# ---------------------------------------------------------------------------
+#
+# The integration AC (runtime plan v2.43 U-RT-114): under per-role model
+# bindings, distinct workers dispatch against distinct models — proven here
+# against a REAL Ollama daemon (free, local, credential-less; CI without a daemon
+# skips cleanly) through the C-RT-16 wrapper (the [P2-a] placement) end-to-end.
+# Ollama echoes the served `model` in its ChatResponse, so the per-role routing
+# is asserted on the real provider's own response, not a fake.
+
+
+def _ollama_reachable() -> bool:
+    """True iff a local ollama daemon answers on 127.0.0.1:11434 (free, no creds)."""
+    import socket
+
+    try:
+        with socket.create_connection(("127.0.0.1", 11434), timeout=1.0):
+            return True
+    except OSError:
+        return False
+
+
+@pytest.mark.e2e
+@pytest.mark.skipif(
+    not _ollama_reachable(),
+    reason="U-RT-114 per-role live e2e requires a local ollama daemon on 127.0.0.1:11434",
+)
+@pytest.mark.asyncio
+async def test_u_rt_114_per_role_models_live_ollama_e2e_through_wrapper() -> None:
+    """Two workers under DISTINCT branch roles dispatch DISTINCT Ollama models
+    through the REAL wrapper → `RuntimeLLMDispatcher` → real ollama daemon. The
+    served `model` confirms the per-role binding took effect on the live provider
+    (the U-RT-114 integration AC, non-hollow), exercised at the [P2-a] placement
+    (the C-RT-16 wrapper) end-to-end. The CP-resolved binding is `llama3.2:latest`
+    (NOT the per-role model), so a passing assertion proves the wrapper's per-role
+    read OVERRODE the binding via the augmented-chain primary."""
+    from harness_runtime.lifecycle.providers import OllamaAdapter
+    from ollama import AsyncClient as AsyncOllamaClient
+
+    model_fast, model_slow = "llama3.2:1b", "llama3.2:3b"
+
+    async def _noop_ping() -> None:
+        return None
+
+    adapter = OllamaAdapter(
+        client=AsyncOllamaClient(host="http://127.0.0.1:11434"), ping=_noop_ping
+    )
+    tp, _ = _tracer_provider_with_exporter()
+    ollama_role_manifest = _routing_manifest_with_roles(
+        {"worker-fast": model_fast, "worker-slow": model_slow}, provider="ollama"
+    )
+    inner = RuntimeLLMDispatcher(
+        providers={"ollama": adapter},
+        tracer_provider=tp,
+        routing_manifest=ollama_role_manifest,
+    )
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("ollama", "llama3.2:latest")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_manifest=ollama_role_manifest,
+    )
+
+    def _tiny_step() -> WorkflowStep:
+        return WorkflowStep(
+            step_id=StepID("worker"),
+            step_kind=StepKind.INFERENCE_STEP,
+            step_payload={
+                "messages": [{"role": "user", "content": "Reply with OK."}],
+                "tools": None,
+                "params": {"options": {"num_predict": 1}},
+            },
+        )
+
+    try:
+        result_fast = await wrapper.dispatch(
+            _binding("ollama", "llama3.2:latest"),
+            _tiny_step(),
+            step_context=_step_context_with_role("worker-fast"),
+        )
+        result_slow = await wrapper.dispatch(
+            _binding("ollama", "llama3.2:latest"),
+            _tiny_step(),
+            step_context=_step_context_with_role("worker-slow"),
+        )
+    finally:
+        await adapter.aclose()
+
+    assert result_fast["model"] == model_fast
+    assert result_slow["model"] == model_slow
+    assert result_fast["model"] != result_slow["model"]

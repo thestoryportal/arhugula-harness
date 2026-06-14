@@ -29,10 +29,11 @@ import pytest
 from harness_as.sandbox_tier import SandboxTier
 from harness_core import PersonaTier
 from harness_core.identity import StepID
-from harness_cp.cp_shared_types import ModelBinding
+from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+from harness_cp.routing_manifest_residence import RoleRoutingBinding, RoutingManifest
 from harness_cp.workflow_driver import StepDispatcher
 from harness_cp.workflow_driver_types import (
     StepExecutionContext,
@@ -1301,3 +1302,191 @@ async def test_routing_selection_is_behavior_preserving_at_mvp_echo() -> None:
     assert adapter.client.messages.last_kwargs is not None
     # The routed model == the binding model (echo), not perturbed by routing.
     assert adapter.client.messages.last_kwargs["model"] == "claude-opus-4-8"
+
+
+# ---------------------------------------------------------------------------
+# U-RT-114 — branch AgentRole carry; MODEL selection is ROLE-AGNOSTIC at the
+# inner C-RT-15 dispatcher — C-RT-15 §14.5.3 ([P2-a] placement)
+# ---------------------------------------------------------------------------
+#
+# The inner dispatcher ALWAYS dispatches `binding.model_binding` (the candidate
+# it is handed) and carries `step_context.agent_role` into the InferenceRequest
+# envelope for attribution only. The per-role MODEL dispatch-read (§14.5.3)
+# lives ONE LAYER OUT, at the C-RT-16 `RetryBreakerFallbackDispatcher`, where the
+# per-role model is promoted to the PRIMARY fallback candidate so it composes
+# with fallback (ONE source of truth for model selection — the wrapper's chain).
+# See `test_lifecycle_retry_breaker_fallback.py` for the per-role routing +
+# [P2-a] fallback-preservation tests. The tests below prove the inner is
+# role-AGNOSTIC: even a populated `per_role_bindings` catalog does NOT perturb
+# the inner's dispatched model. The fake adapter records the dispatched `model`
+# (`last_kwargs["model"]`).
+
+
+def _routing_manifest_with_roles(role_models: dict[str, str]) -> RoutingManifest:
+    """A `RoutingManifest` whose `per_role_bindings` maps each role to an
+    anthropic ModelBinding at the named model (the only field U-RT-114 reads)."""
+    return RoutingManifest(
+        manifest_version=1,
+        per_role_bindings={
+            AgentRole(role): RoleRoutingBinding(
+                preferred_model_binding=ModelBinding(provider="anthropic", model=model),
+                layer_budget_overrides={},
+            )
+            for role, model in role_models.items()
+        },
+        per_workload_overrides={},
+        fallback_chains=(),
+        retry_policies={},
+    )
+
+
+def _step_context_with_role(role: str | None) -> StepExecutionContext:
+    """A step_context with the branch `agent_role` set (or `None` = the linear /
+    default path). `branch_index` is irrelevant to the U-RT-114 dispatch-read."""
+    return _step_context().model_copy(
+        update={"agent_role": AgentRole(role) if role is not None else None}
+    )
+
+
+@pytest.mark.asyncio
+async def test_u_rt_114_absent_role_falls_through_to_binding() -> None:
+    """`agent_role is None` (the SINGLE_THREADED_LINEAR / no-branch path) → the
+    CP-resolved `binding.model_binding` is dispatched (byte-identical to v1.47),
+    even when the catalog has entries for OTHER roles."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        routing_manifest=_routing_manifest_with_roles({"worker-a": "role-model-a"}),
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic", "binding-default-model"),
+        _step(),
+        step_context=_step_context_with_role(None),
+    )
+
+    assert adapter.client.messages.last_kwargs is not None
+    assert adapter.client.messages.last_kwargs["model"] == "binding-default-model"
+
+
+@pytest.mark.asyncio
+async def test_u_rt_114_explicit_default_role_falls_through() -> None:
+    """The literal `"default"` role NEVER consults the catalog (even if it holds a
+    `"default"` entry) → the CP-resolved binding is dispatched (the AC's
+    `"default"` role byte-identical-to-v1.47 case)."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        routing_manifest=_routing_manifest_with_roles({"default": "catalog-default-model"}),
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic", "binding-default-model"),
+        _step(),
+        step_context=_step_context_with_role("default"),
+    )
+
+    assert adapter.client.messages.last_kwargs is not None
+    assert adapter.client.messages.last_kwargs["model"] == "binding-default-model"
+
+
+@pytest.mark.asyncio
+async def test_u_rt_114_inner_model_selection_is_role_agnostic() -> None:
+    """A NON-default branch role PRESENT in the catalog → the inner STILL
+    dispatches `binding.model_binding` (NOT the per-role model). This is the
+    [P2-a] placement guarantee: per-role MODEL selection moved OUT of the inner
+    to the C-RT-16 wrapper, so the inner faithfully dispatches the rebound
+    candidate and never overrides it — overriding here would silently defeat
+    fallback for role-routed branches (two authorities for one decision).
+    Per-role routing itself is asserted at the wrapper test module."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        routing_manifest=_routing_manifest_with_roles({"worker-a": "role-model-a"}),
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic", "binding-default-model"),
+        _step(),
+        step_context=_step_context_with_role("worker-a"),
+    )
+
+    assert adapter.client.messages.last_kwargs is not None
+    # The per-role catalog is IGNORED by the inner — binding.model_binding wins.
+    assert adapter.client.messages.last_kwargs["model"] == "binding-default-model"
+
+
+@pytest.mark.asyncio
+async def test_u_rt_114_role_absent_from_catalog_falls_through() -> None:
+    """A non-default role NOT present in the catalog → fall through to the
+    CP-resolved binding (non-breaking default)."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        routing_manifest=_routing_manifest_with_roles({"worker-a": "role-model-a"}),
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic", "binding-default-model"),
+        _step(),
+        step_context=_step_context_with_role("worker-z"),  # not in catalog
+    )
+
+    assert adapter.client.messages.last_kwargs is not None
+    assert adapter.client.messages.last_kwargs["model"] == "binding-default-model"
+
+
+@pytest.mark.asyncio
+async def test_u_rt_114_empty_catalog_falls_through() -> None:
+    """An empty `per_role_bindings` catalog → every dispatch falls through to the
+    CP-resolved binding (byte-identical to v1.47), regardless of the role."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        routing_manifest=_routing_manifest_with_roles({}),
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic", "binding-default-model"),
+        _step(),
+        step_context=_step_context_with_role("worker-a"),
+    )
+
+    assert adapter.client.messages.last_kwargs is not None
+    assert adapter.client.messages.last_kwargs["model"] == "binding-default-model"
+
+
+@pytest.mark.asyncio
+async def test_u_rt_114_inner_linear_none_role_dispatches_binding_model() -> None:
+    """`agent_role is None` (the SINGLE_THREADED_LINEAR / no-branch path) → the
+    inner dispatches `binding.model_binding` (byte-identical to v1.47). The
+    per-role distinct-worker routing + live-ollama + [P2-a] fallback regression
+    moved to `test_lifecycle_retry_breaker_fallback.py` (the wrapper layer)."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        routing_manifest=_routing_manifest_with_roles(
+            {"worker-a": "role-model-a", "worker-b": "role-model-b"}
+        ),
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic", "binding-default-model"),
+        _step(),
+        step_context=_step_context_with_role(None),
+    )
+
+    assert adapter.client.messages.last_kwargs is not None
+    assert adapter.client.messages.last_kwargs["model"] == "binding-default-model"

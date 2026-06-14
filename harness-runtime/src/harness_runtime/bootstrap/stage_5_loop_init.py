@@ -346,6 +346,10 @@ async def execute(
         retry_breaker=retry_breaker,
         fallback_chain=fallback_chain,
         tracer_provider=cast(Any, tracer_provider),
+        # U-RT-114 (§14.5.3): the wrapper reads `step_context.agent_role` to
+        # promote a per-role model to the PRIMARY fallback candidate (per-role
+        # MODEL specialization composing with C-RT-16 fallback).
+        routing_manifest=ctx.routing_manifest,
     )
 
     # ---------------------------------------------------------------------
