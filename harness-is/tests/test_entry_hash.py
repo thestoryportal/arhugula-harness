@@ -78,15 +78,43 @@ def test_canonicalize_unicode_normalization() -> None:
 
 
 def test_canonicalize_number_representation() -> None:
-    """Acceptance #2 — the RFC 8785 number-canonicalization property is vacuous
-    for `StateLedgerEntry`: every payload field serializes as a JSON string, so
-    no `1.0`-vs-`1` divergence is reachable through `canonicalize`."""
+    """Acceptance #2 — the RFC 8785 number-canonicalization concern is
+    float-specific (`1.0` vs `1`); `StateLedgerEntry` carries no float field, so
+    no such divergence is reachable through `canonicalize`. The six F-layer
+    fields all serialize as JSON strings; the v1.8 §5.4 `branch_metadata`
+    sidecar introduces one integer (`branch_index`), which serializes
+    deterministically — not a float."""
     parsed = json.loads(canonicalize(_entry()))
     for key, value in parsed.items():
         if key == "actor":
             assert all(isinstance(v, str) for v in value.values())
         else:
             assert isinstance(value, str)
+
+    # With a §5.4 branch_metadata sidecar, the only non-string scalar in the
+    # canonical payload is the integer branch_index; assert no float is
+    # reachable anywhere (the RFC 8785 ambiguity is float-only).
+    from harness_is.state_ledger_entry_schema import BranchMetadata
+
+    entry_bm = _entry().model_copy(
+        update={
+            "branch_metadata": BranchMetadata(
+                parent_action_id=Identifier("act-parent"),
+                branch_index=3,
+                terminal_status="completed",
+            )
+        }
+    )
+    bm = json.loads(canonicalize(entry_bm))["branch_metadata"]
+    assert isinstance(bm["branch_index"], int) and not isinstance(bm["branch_index"], bool)
+
+    def _assert_no_float(obj: object) -> None:
+        assert not isinstance(obj, float)
+        if isinstance(obj, dict):
+            for v in obj.values():
+                _assert_no_float(v)
+
+    _assert_no_float(json.loads(canonicalize(entry_bm)))
 
 
 def test_compute_response_hash_length() -> None:

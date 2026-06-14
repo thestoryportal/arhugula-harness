@@ -21,9 +21,12 @@ D-ADR on canonicalization library]`; that D-ADR has not landed, and
 framework where the existing stack suffices. The scheme here is hand-rolled on
 the stdlib: NFC Unicode normalization of every string value + `json.dumps`
 with sorted keys and no whitespace. For the `StateLedgerEntry` data shape
-(strings, a `StrEnum`, a `datetime`, byte digests — **no float fields**) this
-is RFC 8785 JCS-conformant: the one RFC 8785 property the stdlib `json` does
-not guarantee is ECMAScript number serialization, which is vacuous here. The
+(strings, a `StrEnum`, a `datetime`, byte digests, and — since v1.8 §5.4 — one
+**integer**, `branch_metadata.branch_index`; **no float fields**) this is
+RFC 8785 JCS-conformant: the one RFC 8785 property the stdlib `json` does not
+guarantee is ECMAScript number serialization, which is a **float**-specific
+ambiguity (`1.0` vs `1`). Integers serialize deterministically under stdlib
+`json`, and the entry shape carries no float field — so the property holds. The
 scheme is encapsulated behind the single `canonicalize` boundary (acceptance
 #5 — one swappable binding site).
 
