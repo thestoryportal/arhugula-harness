@@ -851,10 +851,25 @@ async def test_approve_response_delegates_to_inner(
 
 
 @pytest.mark.asyncio
-async def test_edit_response_records_edited_proposal_hash_in_audit(
+async def test_edit_str_carrier_drift_raises_no_silent_dispatch(
     tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
 ) -> None:
-    """AC #10 EDIT: composer records edited_proposal_hash at 8a-HITL; inner called."""
+    """AC #10 EDIT (U-RT-120, B3-impl-3, D-edit.B): the wired `str` ask-surface
+    carrier cannot be applied verbatim to the `Mapping[str, Any]` step_payload —
+    composer raises HITLGateEditCarrierDriftError surfacing the str↔Mapping drift.
+
+    Contrasting baseline: the prior silent-drop (`pass`-then-dispatch with the
+    step unchanged, which dropped the operator's edit in violation of NOTE 6-ii
+    "consumers MUST treat edited_proposal as authoritative replacement") is GONE
+    — the inner dispatcher is NOT reached. The operator's edit is still
+    faithfully recorded at step 4h BEFORE the raise (edited_proposal_hash over
+    the operator `str`), symmetric to the REJECT path's rejection-audit
+    preservation.
+    """
+    from harness_runtime.lifecycle.hitl_gate_composer import (
+        HITLGateEditCarrierDriftError,
+    )
+
     provider, _ = tracer_provider
     inner = _MockInnerDispatcher()
     surface = _MockAskUserQuestionSurface(
@@ -883,11 +898,15 @@ async def test_edit_response_records_edited_proposal_hash_in_audit(
     step = _make_step(placements=(placement,))
     ctx = _make_step_context()
 
-    await composer.dispatch(cast(Any, object()), step, step_context=ctx)
+    with pytest.raises(HITLGateEditCarrierDriftError, match="carrier drift"):
+        await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
-    # Inner still called (EDIT proceeds to step 5)
-    assert len(inner.calls) == 1
-    # Audit entry carries audit.cp.edited_proposal_hash per converter
+    # Contrasting baseline: the prior silent-drop (pass → dispatch unchanged
+    # step) is GONE — the inner dispatcher is NOT reached.
+    assert inner.calls == []
+    # The operator's edit is still faithfully recorded at step 4h BEFORE the
+    # raise (edited_proposal_hash over the operator `str`) — symmetric to the
+    # REJECT path's rejection-audit preservation.
     _, od_entry = audit.appends[0]
     assert "audit.cp.edited_proposal_hash" in od_entry.payload.audit_namespace_attrs
 

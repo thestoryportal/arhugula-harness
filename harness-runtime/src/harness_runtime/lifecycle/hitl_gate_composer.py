@@ -100,6 +100,10 @@ Audit-compose failure uses OTel `Span.set_status(StatusCode.ERROR)` +
 - `HITLGateTimeoutError`              → `RT-FAIL-HITL-GATE-TIMEOUT`
 - `HITLGateRejectedError`             → `RT-FAIL-HITL-GATE-REJECTED`
 - `HITLGateAuditComposeError`         → `RT-FAIL-HITL-GATE-AUDIT-COMPOSE`
+- `HITLGateEditCarrierDriftError`     → (fork-pending fail class; not in §14.8
+                                        taxonomy — surfaces as RuntimeError to
+                                        driver per U-RT-120 D-edit.B; carrier-
+                                        healing fork owns RT-FAIL-* registration)
 
 Audit-compose failure: composer annotates `hitl.gate.evaluated` via
 `Span.set_status(Status(StatusCode.ERROR, "audit-compose-failed"))` +
@@ -180,6 +184,7 @@ __all__ = [
     "DEFAULT_FULL_PALETTE",
     "HITLCellExcludedError",
     "HITLGateAuditComposeError",
+    "HITLGateEditCarrierDriftError",
     "HITLGateRejectedError",
     "HITLGateTimeoutError",
     "HITLPauseRequestedSignal",
@@ -257,6 +262,49 @@ class HITLGateAuditComposeError(Exception):
     per semconv-canonical error discipline. Driver maps to
     `RT-FAIL-HITL-GATE-AUDIT-COMPOSE`. **Suppressed on REJECT path** —
     `HITLGateRejectedError` is the primary fault.
+    """
+
+
+class HITLGateEditCarrierDriftError(Exception):
+    """Operator selected `EDIT`, but replace-not-merge cannot be honored at the
+    runtime carrier (str ↔ Mapping drift). U-RT-120 / B3-impl-3, D-edit.B.
+
+    §14.8.2 step 4i + NOTE 6-ii mandate replace-not-merge: the operator's
+    `edited_proposal` becomes the new `step.step_payload` **verbatim**, and
+    consumers MUST treat it as the authoritative replacement. The CP-canonical
+    carrier the mandate presumes is structured —
+    `harness_cp.hitl_placement.HITLGateResult.edited_proposal: Mapping[str, Any]`
+    (hitl_placement.py:197) — and `WorkflowStep.step_payload` is itself
+    `Mapping[str, Any]` (opaque per C-CP-25 §25.3.3.4). But the wired runtime
+    ask-surface returns `AskUserQuestionResult.edited_proposal: str | None`
+    (ask_user_question_surface.py:86), and MCP elicitation is flat-schema
+    (primitives only — it CANNOT deliver a nested Mapping per the
+    `AskUserQuestionElicitationSchema` discipline at
+    mcp_backed_ask_user_question_surface.py:171-199). So the operator-supplied
+    `str` cannot be applied *verbatim* to the `Mapping` step_payload without
+    minting decode / mutation semantics the cleared spec explicitly DEFERS
+    (NOTE 6-ii: "richer mutation — field-level patches, type-aware merging …
+    deferred to a future workflow-mutation-discipline arc").
+
+    Per `[[halt-route-split-ac-pattern]]` this honest typed raise surfaces the
+    drift rather than (a) silently dropping the operator's edit — the prior
+    `pass`-then-dispatch bug, which violated "consumers MUST treat
+    `edited_proposal` as authoritative replacement" — or (b) silently inventing
+    a `str → Mapping` conversion (e.g. the IMPL-discretion `json.loads` shape
+    landed for the *tool-args* surface at
+    `r_cxa_2_producer_loop_factory._parse_edited_arguments`, which has NO
+    cleared-spec backing for the step-payload surface; minting it here = X-AL-3).
+
+    The carrier-healing / structured-edit mutation-discipline **BUILD arc** is
+    filed at `.harness/class_1_fork_hitl_edit_carrier_drift_str_vs_mapping.md`
+    (the pre-authorized design back-flow per the FULL-SPEC directive — this raise
+    is the interim landing; functional EDIT arrives via that arc). Disposition
+    rationale: `.harness/r-fs-1-b3-smart-hitl-design-v1.md` §5 (D-edit.B).
+
+    Driver maps to a fork-pending new fail class (NOT yet in the §14.8 taxonomy;
+    surfaces as RuntimeError-shape error to the driver — matching the
+    `HITLCellExcludedError` precedent. The carrier-healing fork owns the eventual
+    `RT-FAIL-*` taxonomy registration when functional EDIT lands).
     """
 
 
@@ -1392,15 +1440,37 @@ class RuntimeHITLGateComposer:
                     if gate_result.response == HITLResponse.APPROVE:
                         pass  # proceed to step 5 with step unchanged
                     elif gate_result.response == HITLResponse.EDIT:
-                        # v1.11 MVP: replace step.step_payload via the edited
-                        # proposal. The WorkflowStep is frozen Pydantic; the
-                        # composer would need to construct a replacement step.
-                        # v1.11 MVP defers replacement mechanics to the inner
-                        # dispatcher's read of step (the test-layer expectation
-                        # is that gate_result.edited_proposal is observable;
-                        # full replacement-semantics arc deferred per NOTE
-                        # 6-ii).
-                        pass
+                        # U-RT-120 (G3; B3-impl-3, D-edit.B): §14.8.2 step 4i +
+                        # NOTE 6-ii mandate replace-not-merge — the edited
+                        # proposal becomes the new step.step_payload VERBATIM,
+                        # and consumers MUST treat it as authoritative
+                        # replacement. The mandate presumes the CP-canonical
+                        # STRUCTURED carrier (HITLGateResult.edited_proposal:
+                        # Mapping[str, Any]); the wired runtime ask-surface
+                        # returns a `str` (MCP elicitation is flat-schema —
+                        # cannot deliver a nested Mapping). So the `str` cannot
+                        # be applied verbatim to the `Mapping[str, Any]`
+                        # step_payload without minting the decode / mutation
+                        # semantics NOTE 6-ii explicitly DEFERS. The audit at
+                        # step 4h already recorded the operator's edit faithfully
+                        # (edited_proposal_hash over the operator `str`); we now
+                        # SURFACE the carrier-drift application gap rather than
+                        # silently dropping the edit (the prior `pass`-then-
+                        # dispatch bug) or silently inventing a str→Mapping
+                        # conversion (X-AL-3). Routed to the carrier-healing
+                        # BUILD arc per `[[halt-route-split-ac-pattern]]` —
+                        # `.harness/class_1_fork_hitl_edit_carrier_drift_str_vs_mapping.md`.
+                        raise HITLGateEditCarrierDriftError(
+                            f"operator EDIT at placement="
+                            f"{placement.position.value!r} cannot be applied "
+                            f"verbatim: the runtime ask-surface carrier is "
+                            f"`str` but step.step_payload is `Mapping[str, Any]` "
+                            f"(str↔Mapping carrier drift; replace-not-merge "
+                            f"mutation discipline deferred per §14.8.2 NOTE 6-ii "
+                            f"to the workflow-mutation-discipline arc — see "
+                            f".harness/class_1_fork_hitl_edit_carrier_drift_"
+                            f"str_vs_mapping.md)"
+                        )
                     elif gate_result.response == HITLResponse.REJECT:
                         raise HITLGateRejectedError(
                             f"operator rejected HITL gate at placement="
