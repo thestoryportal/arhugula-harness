@@ -365,12 +365,22 @@ def test_decentralized_handoff_materialized_runs_through_execute_workflow() -> N
     assert ledger.appends  # the stage persisted (no silent no-op)
 
 
-def test_engine_class_not_yet_materialized_raised_at_out_of_scope_engine_class() -> None:
-    # RECONCILER_LOOP is the sole remaining out-of-scope engine class after
-    # U-CP-94 (E-impl-2) added WAL_SEGMENT to _IN_SCOPE (EVENT_SOURCED_REPLAY
-    # went in-scope at U-CP-93/E-impl-1; WAL_SEGMENT at U-CP-94/E-impl-2);
-    # RECONCILER_LOOP is the live still-raises vehicle (its narrow §7.4 fork is
-    # the separate E-spec-3 → E-impl-3 arc).
+def test_engine_class_not_yet_materialized_raised_at_out_of_scope_engine_class(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # U-CP-96 (E-impl-3a) materialized RECONCILER_LOOP — the LAST engine class —
+    # so at HEAD _IN_SCOPE_ENGINE_CLASSES == the full closed EngineClass set and NO
+    # valid engine class triggers the gate; it is preserved-but-unreachable for
+    # forward-safety (exactly as the topology gate after all 6 patterns materialized
+    # at U-CP-90). This test exercises the PRESERVED defensive gate by patching
+    # _IN_SCOPE to a subset that excludes RECONCILER_LOOP (a hypothetical
+    # not-yet-materialized class) and asserts it still raises before any
+    # emit/append. The closing milestone (all 5 materialized) is asserted in
+    # test_all_engine_classes_materialized_at_head.
+    monkeypatch.setattr(
+        "harness_cp.workflow_driver._IN_SCOPE_ENGINE_CLASSES",
+        frozenset(EngineClass) - {EngineClass.RECONCILER_LOOP},
+    )
     manifest = _manifest(engine_class=EngineClass.RECONCILER_LOOP)
     ctx, ledger, emitter = _ctx()
     with pytest.raises(EngineClassNotYetMaterializedError):
@@ -386,14 +396,31 @@ def test_engine_class_not_yet_materialized_raised_at_out_of_scope_engine_class()
     assert ledger.appends == []
 
 
-def test_validation_failure_emits_no_workflow_start() -> None:
+def test_all_engine_classes_materialized_at_head() -> None:
+    # U-CP-96 (E-impl-3a) — RECONCILER_LOOP is the LAST engine class; with it in
+    # _IN_SCOPE, every member of the closed 5-class EngineClass enum is materialized
+    # and the EngineClassNotYetMaterializedError gate is preserved-but-unreachable
+    # for any valid manifest (the E sub-program's gate-level closing).
+    from harness_cp.workflow_driver import _IN_SCOPE_ENGINE_CLASSES
+
+    assert _IN_SCOPE_ENGINE_CLASSES == frozenset(EngineClass)
+
+
+def test_validation_failure_emits_no_workflow_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # A pre-dispatch materialization-gate raise must fire BEFORE WORKFLOW_START, so
-    # no lifecycle event is emitted. Vehicle: the ENGINE-class gate
-    # (RECONCILER_LOOP is the sole NOT_YET_MATERIALIZED engine class —
-    # EVENT_SOURCED_REPLAY went in-scope at U-CP-93/E-impl-1, WAL_SEGMENT at
-    # U-CP-94/E-impl-2, so RECONCILER_LOOP is now the live pre-dispatch-raise
-    # vehicle). Was DECENTRALIZED_HANDOFF via the topology gate, but all six
-    # topology patterns are materialized post-U-CP-90.
+    # no lifecycle event is emitted. Both materialization gates are now closed for
+    # valid input (all 6 topology patterns at U-CP-90; all 5 engine classes at
+    # U-CP-96/E-impl-3a — RECONCILER_LOOP was the last). The behavioral invariant
+    # (gate raise ⟹ no WORKFLOW_START) is exercised against the PRESERVED engine
+    # gate by patching _IN_SCOPE to exclude RECONCILER_LOOP (a hypothetical
+    # not-yet-materialized class). Was DECENTRALIZED_HANDOFF via the topology gate,
+    # then RECONCILER_LOOP via the engine gate; now both are preserved-unreachable.
+    monkeypatch.setattr(
+        "harness_cp.workflow_driver._IN_SCOPE_ENGINE_CLASSES",
+        frozenset(EngineClass) - {EngineClass.RECONCILER_LOOP},
+    )
     manifest = _manifest(engine_class=EngineClass.RECONCILER_LOOP)
     ctx, _, emitter = _ctx()
     with pytest.raises(EngineClassNotYetMaterializedError):
@@ -916,6 +943,106 @@ def test_wal_segment_observable_lifecycle_events_emit() -> None:
     workflow lifecycle events (WORKFLOW_START + per-step STEP_BOUNDARY) per
     C-CP-05 §5.1, identical to the other in-scope engine classes."""
     manifest = _manifest(engine_class=EngineClass.WAL_SEGMENT)
+    ctx, _, emitter = _ctx()
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0), _step(1)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+    )
+    assert WorkflowEventClass.WORKFLOW_START in emitter.emits
+    assert emitter.emits.count(WorkflowEventClass.STEP_BOUNDARY) == 2
+
+
+# ---------------------------------------------------------------------------
+# U-CP-96 (R-FS-1 E-impl-3a) — RECONCILER_LOOP convergence resumption (CP/IS-only)
+#
+# RECONCILER_LOOP is materialized as level-triggered read/diff/converge resumption
+# impl against the cleared C-CP-07/08 contracts + the v1_33 §7.4 substrate-deferral
+# (hand-rolled etcd-style per I-6), following the U-CP-93/94 precedent. These tests
+# assert the CP-clear surface: convergence-prefix resume_at (the F2 idempotency-key
+# join, §8.2 row 4 "reconciler reads ledger to detect prior actions") + RESUMPTION
+# emission + the materialized prefix not being re-dispatched. RECONCILER_LOOP is the
+# EVENT_SOURCED_REPLAY shape at this unit — it does NOT fire the engine recovery loop
+# (that is U-CP-97, E-impl-3b). The genuine distinguishing capabilities (the durable
+# CAS-lease etcd-style substrate U-RT-123 + the recovery-loop firing U-CP-97) are
+# E-impl-3b. The §8.1 *cached-output replay* refinement is degenerate at HEAD
+# (B-ENGINE-OUTPUT-REPLAY arc), as for ESR/WAL. RECONCILER_LOOP is the LAST engine
+# class — these tests close the per-class materialization coverage.
+# ---------------------------------------------------------------------------
+
+
+def test_reconciler_loop_resumes_across_restart_without_refire() -> None:
+    """U-CP-96 keystone — a fresh driver instance over the same persisted F2
+    convergence prefix (simulated process restart, F3 floor (i) durable-reconverge-
+    across-restart) advances resume_at over the contiguous materialized prefix, emits
+    RESUMPTION before WORKFLOW_START, and does NOT re-dispatch the prefix.
+
+    The dispatcher's `.dispatched` list is the side-effect counter: the materialized
+    prefix steps are absent (the F2 idempotency-key join is the convergence dedup,
+    §8.2 row 4 + F3 floor (ii) idempotency-keyed exactly-once). This proves
+    no-re-execution of already-converged steps; it does NOT prove the engine-owned
+    CRD_RECONCILER_LEDGER / CAS-lease substrate (U-RT-123, E-impl-3b) nor the
+    recovery-loop firing (U-CP-97) — this is the (A) resumption-semantics half.
+    """
+    manifest = _manifest(engine_class=EngineClass.RECONCILER_LOOP)
+    # Materialize ledger entries for steps 0 and 1 of run-1 (the persisted
+    # convergence prefix from a prior, now-crashed run instance).
+    materialized = {
+        _expected_step_key("run-1", "wf-1", 1, 0): 1,
+        _expected_step_key("run-1", "wf-1", 1, 1): 1,
+    }
+    # Fresh ctx/emitter/dispatcher = a fresh driver instance (process restart).
+    ledger = _FakeLedger(prior_entries=2)
+    emitter = _FakeEmitter()
+    ctx = _FakeCtx(ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader(materialized))
+    dispatcher = _EchoDispatcher()
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+    )
+    # RESUMPTION emitted before WORKFLOW_START.
+    assert WorkflowEventClass.RESUMPTION in emitter.emits
+    assert emitter.emits.index(WorkflowEventClass.RESUMPTION) < emitter.emits.index(
+        WorkflowEventClass.WORKFLOW_START
+    )
+    # Only step 2 dispatched — the converged prefix (steps 0 + 1) is NOT re-fired.
+    assert len(dispatcher.dispatched) == 1
+    assert str(dispatcher.dispatched[0][1].step_id) == "step-2"
+
+
+def test_reconciler_loop_no_resumption_for_genesis_run() -> None:
+    """U-CP-96 — a genesis RECONCILER_LOOP run (no prior convergence prefix) emits
+    no RESUMPTION and dispatches every step, byte-identically to the fresh-linear
+    happy path (the new branch perturbs nothing for resume_at==0)."""
+    manifest = _manifest(engine_class=EngineClass.RECONCILER_LOOP)
+    ledger = _FakeLedger(prior_entries=0)
+    emitter = _FakeEmitter()
+    ctx = _FakeCtx(ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader({}))
+    dispatcher = _EchoDispatcher()
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0), _step(1)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+    )
+    assert WorkflowEventClass.RESUMPTION not in emitter.emits
+    assert len(dispatcher.dispatched) == 2
+
+
+def test_reconciler_loop_observable_lifecycle_events_emit() -> None:
+    """U-CP-96 F3 floor (iv) observable-lifecycle — a RECONCILER_LOOP run emits the
+    workflow lifecycle events (WORKFLOW_START + per-step STEP_BOUNDARY) per
+    C-CP-05 §5.1, identical to the other in-scope engine classes."""
+    manifest = _manifest(engine_class=EngineClass.RECONCILER_LOOP)
     ctx, _, emitter = _ctx()
     execute_workflow(
         manifest_entry=manifest,

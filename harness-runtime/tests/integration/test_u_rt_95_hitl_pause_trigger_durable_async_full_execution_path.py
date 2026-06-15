@@ -157,9 +157,13 @@ def _manifest(
     Default (SOLO_DEVELOPER + PURE_PATTERN_NO_ENGINE) maps to SYNC_BLOCKING
     per CP §18.1. WAL_SEGMENT (the canonical DURABLE_ASYNC cell per CP §18.1)
     is materialized at runtime as of R-FS-1 E-impl-2 (U-CP-94) — path (i)
-    drives it through the engine-layer recovery loop. RECONCILER_LOOP remains
-    NOT materialized (`EngineClassNotYetMaterializedError`; its narrow §7.4 fork
-    is the separate E-spec-3 → E-impl-3 arc).
+    drives it through the engine-layer recovery loop. RECONCILER_LOOP's
+    resumption semantics are materialized at the CP gate as of R-FS-1 E-impl-3a
+    (U-CP-96 — added to `_IN_SCOPE_ENGINE_CLASSES`, so the gate no longer raises),
+    but its engine-layer recovery-loop firing + the hand-rolled etcd-style
+    CAS-lease substrate are E-impl-3b (U-CP-97 + U-RT-123/124) and this WAL-only
+    path (i) e2e does NOT exercise RECONCILER_LOOP (the other §18.1 DURABLE_ASYNC
+    cell gets its own non-live recovery e2e at U-RT-124).
     """
     return WorkflowManifestEntry(
         workflow_id=workflow_id,
