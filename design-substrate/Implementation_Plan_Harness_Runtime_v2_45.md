@@ -335,7 +335,7 @@ All other C-RT-* rows PRESERVED VERBATIM from v2.43 §4. The CP-package surfaces
 
 | Spec contract / design surface | Atomic unit |
 |---|---|
-| C-CP-07 §7.1 row 5 + §7.4 (WAL-segment substrate; "specific WAL implementation" deferred) + C-CP-08 §8.1 `segment_replay` + §8.2 row 5 | **U-RT-121** (NEW; hand-rolled segment-log substrate; consumes U-CP-94 cross-axis) |
+| C-CP-07 §7.1 row 5 + §7.4 (WAL-segment substrate; "specific WAL implementation" deferred) + C-CP-08 §8.1 `segment_replay` + §8.2 row 5 | **U-RT-121** (NEW; hand-rolled segment-log substrate — foundational `(none)`, implements the existing `EnginePauseResumeSubstrate` Protocol; composes downstream with the U-CP-94-materialized class but does NOT depend on it) |
 | C-CP-49/50 (§16.5.2 composers) + R-CXA-2 CP→IS engine-layer seam go-live + CP §16.5.9 invariant 5 + Path-(i) `test_u_rt_95` materialization (relocated from U-CP-94) | **U-RT-122** (NEW; factory bind + go-live e2e **= the `test_u_rt_95` real durable-async e2e + un-skip + Path-(i) fork flip**; consumes U-CP-95 cross-axis) |
 | design §6.2 PathClass placement (closed 4-class enum; IS-AL-1) | AC-level conditional in U-RT-121 (recommend `STATE_LEDGER` = existing member; F-E-IS sub-fork only if no honest mapping — resolves OQ-3) |
 
