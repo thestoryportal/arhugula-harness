@@ -366,7 +366,10 @@ def test_decentralized_handoff_materialized_runs_through_execute_workflow() -> N
 
 
 def test_engine_class_not_yet_materialized_raised_at_out_of_scope_engine_class() -> None:
-    manifest = _manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY)
+    # WAL_SEGMENT remains out of _IN_SCOPE_ENGINE_CLASSES after U-CP-93
+    # (EVENT_SOURCED_REPLAY went in-scope at E-impl-1); WAL_SEGMENT is the live
+    # still-raises vehicle (RECONCILER_LOOP is also still out of scope).
+    manifest = _manifest(engine_class=EngineClass.WAL_SEGMENT)
     ctx, ledger, emitter = _ctx()
     with pytest.raises(EngineClassNotYetMaterializedError):
         execute_workflow(
@@ -384,10 +387,11 @@ def test_engine_class_not_yet_materialized_raised_at_out_of_scope_engine_class()
 def test_validation_failure_emits_no_workflow_start() -> None:
     # A pre-dispatch materialization-gate raise must fire BEFORE WORKFLOW_START, so
     # no lifecycle event is emitted. Vehicle: the ENGINE-class gate
-    # (EVENT_SOURCED_REPLAY is still NOT_YET_MATERIALIZED). Was DECENTRALIZED_HANDOFF
-    # via the topology gate, but all six topology patterns are materialized
-    # post-U-CP-90; the engine-class gate is the live pre-dispatch-raise vehicle.
-    manifest = _manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY)
+    # (WAL_SEGMENT is still NOT_YET_MATERIALIZED — EVENT_SOURCED_REPLAY went
+    # in-scope at U-CP-93/E-impl-1, so WAL_SEGMENT is now the live pre-dispatch-
+    # raise vehicle). Was DECENTRALIZED_HANDOFF via the topology gate, but all
+    # six topology patterns are materialized post-U-CP-90.
+    manifest = _manifest(engine_class=EngineClass.WAL_SEGMENT)
     ctx, _, emitter = _ctx()
     with pytest.raises(EngineClassNotYetMaterializedError):
         execute_workflow(
@@ -728,6 +732,106 @@ def test_no_resumption_emission_under_pure_pattern_no_engine() -> None:
         step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
     )
     assert WorkflowEventClass.RESUMPTION not in emitter.emits
+
+
+# ---------------------------------------------------------------------------
+# AC #6 (E-impl-1 / U-CP-93) — EVENT_SOURCED_REPLAY resumption-routing
+#
+# EVENT_SOURCED_REPLAY is materialized as resumption-routing impl against the
+# cleared C-CP-07/08 contracts, following the U-CP-56 SAVE_POINT_CHECKPOINT
+# precedent (added to _IN_SCOPE as impl). The §8.1 *cached-output replay*
+# refinement (replaying prior activity outputs into downstream-visible state)
+# is degenerate at HEAD — the F2 EntryPayload carries no activity output and
+# the driver threads no inter-step data flow (B-INTERSTEP) — and is a
+# registered build arc, not exercised here. These tests assert what is
+# observable: RESUMPTION emission + the materialized prefix not being
+# re-dispatched ("no re-execution of activities", §8.1).
+# See `.harness/r-fs-1-e-impl-1-finding.md`.
+# ---------------------------------------------------------------------------
+
+
+def test_event_sourced_replay_resumes_across_restart_without_refire() -> None:
+    """U-CP-93 keystone — a fresh driver instance over the same persisted event
+    history (simulated process restart, F3 floor (i) durable-replay-across-
+    restart) advances resume_at over the contiguous materialized prefix, emits
+    RESUMPTION before WORKFLOW_START, and does NOT re-dispatch the prefix.
+
+    The dispatcher's `.dispatched` list is the side-effect counter: the
+    materialized prefix steps are absent from it (§8.1 "no re-execution of
+    activities" + F3 floor (ii) idempotency-keyed exactly-once — no double-
+    apply). This proves no-re-execution; it does NOT prove cached-output
+    replay (the deferred refinement — see the module finding above).
+    """
+    manifest = _manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY)
+    # Materialize ledger entries for steps 0 and 1 of run-1 (the persisted
+    # event-history prefix from a prior, now-crashed run instance).
+    materialized = {
+        _expected_step_key("run-1", "wf-1", 1, 0): 1,
+        _expected_step_key("run-1", "wf-1", 1, 1): 1,
+    }
+    # Fresh ctx/emitter/dispatcher = a fresh driver instance (process restart).
+    ledger = _FakeLedger(prior_entries=2)
+    emitter = _FakeEmitter()
+    ctx = _FakeCtx(ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader(materialized))
+    dispatcher = _EchoDispatcher()
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+    )
+    # RESUMPTION emitted before WORKFLOW_START.
+    assert WorkflowEventClass.RESUMPTION in emitter.emits
+    assert emitter.emits.index(WorkflowEventClass.RESUMPTION) < emitter.emits.index(
+        WorkflowEventClass.WORKFLOW_START
+    )
+    # Only step 2 dispatched — the materialized prefix (steps 0 + 1) is NOT
+    # re-fired (no re-execution of activities).
+    assert len(dispatcher.dispatched) == 1
+    assert str(dispatcher.dispatched[0][1].step_id) == "step-2"
+
+
+def test_event_sourced_replay_no_resumption_for_genesis_run() -> None:
+    """U-CP-93 — a genesis EVENT_SOURCED_REPLAY run (no prior event history)
+    emits no RESUMPTION and dispatches every step, byte-identically to the
+    fresh-linear happy path (the new branch perturbs nothing for resume_at==0).
+    """
+    manifest = _manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY)
+    ledger = _FakeLedger(prior_entries=0)
+    emitter = _FakeEmitter()
+    ctx = _FakeCtx(ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader({}))
+    dispatcher = _EchoDispatcher()
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0), _step(1)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+    )
+    assert WorkflowEventClass.RESUMPTION not in emitter.emits
+    assert len(dispatcher.dispatched) == 2
+
+
+def test_event_sourced_replay_observable_lifecycle_events_emit() -> None:
+    """U-CP-93 F3 floor (iv) observable-lifecycle — an EVENT_SOURCED_REPLAY run
+    emits the workflow lifecycle events (WORKFLOW_START + per-step STEP_BOUNDARY)
+    per C-CP-05 §5.1, identical to the other in-scope engine classes.
+    """
+    manifest = _manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY)
+    ctx, _, emitter = _ctx()
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0), _step(1)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+    )
+    assert WorkflowEventClass.WORKFLOW_START in emitter.emits
+    assert emitter.emits.count(WorkflowEventClass.STEP_BOUNDARY) == 2
 
 
 # ---------------------------------------------------------------------------
