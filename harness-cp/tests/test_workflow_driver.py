@@ -366,10 +366,12 @@ def test_decentralized_handoff_materialized_runs_through_execute_workflow() -> N
 
 
 def test_engine_class_not_yet_materialized_raised_at_out_of_scope_engine_class() -> None:
-    # WAL_SEGMENT remains out of _IN_SCOPE_ENGINE_CLASSES after U-CP-93
-    # (EVENT_SOURCED_REPLAY went in-scope at E-impl-1); WAL_SEGMENT is the live
-    # still-raises vehicle (RECONCILER_LOOP is also still out of scope).
-    manifest = _manifest(engine_class=EngineClass.WAL_SEGMENT)
+    # RECONCILER_LOOP is the sole remaining out-of-scope engine class after
+    # U-CP-94 (E-impl-2) added WAL_SEGMENT to _IN_SCOPE (EVENT_SOURCED_REPLAY
+    # went in-scope at U-CP-93/E-impl-1; WAL_SEGMENT at U-CP-94/E-impl-2);
+    # RECONCILER_LOOP is the live still-raises vehicle (its narrow §7.4 fork is
+    # the separate E-spec-3 → E-impl-3 arc).
+    manifest = _manifest(engine_class=EngineClass.RECONCILER_LOOP)
     ctx, ledger, emitter = _ctx()
     with pytest.raises(EngineClassNotYetMaterializedError):
         execute_workflow(
@@ -387,11 +389,12 @@ def test_engine_class_not_yet_materialized_raised_at_out_of_scope_engine_class()
 def test_validation_failure_emits_no_workflow_start() -> None:
     # A pre-dispatch materialization-gate raise must fire BEFORE WORKFLOW_START, so
     # no lifecycle event is emitted. Vehicle: the ENGINE-class gate
-    # (WAL_SEGMENT is still NOT_YET_MATERIALIZED — EVENT_SOURCED_REPLAY went
-    # in-scope at U-CP-93/E-impl-1, so WAL_SEGMENT is now the live pre-dispatch-
-    # raise vehicle). Was DECENTRALIZED_HANDOFF via the topology gate, but all
-    # six topology patterns are materialized post-U-CP-90.
-    manifest = _manifest(engine_class=EngineClass.WAL_SEGMENT)
+    # (RECONCILER_LOOP is the sole NOT_YET_MATERIALIZED engine class —
+    # EVENT_SOURCED_REPLAY went in-scope at U-CP-93/E-impl-1, WAL_SEGMENT at
+    # U-CP-94/E-impl-2, so RECONCILER_LOOP is now the live pre-dispatch-raise
+    # vehicle). Was DECENTRALIZED_HANDOFF via the topology gate, but all six
+    # topology patterns are materialized post-U-CP-90.
+    manifest = _manifest(engine_class=EngineClass.RECONCILER_LOOP)
     ctx, _, emitter = _ctx()
     with pytest.raises(EngineClassNotYetMaterializedError):
         execute_workflow(
@@ -821,6 +824,98 @@ def test_event_sourced_replay_observable_lifecycle_events_emit() -> None:
     per C-CP-05 §5.1, identical to the other in-scope engine classes.
     """
     manifest = _manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY)
+    ctx, _, emitter = _ctx()
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0), _step(1)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+    )
+    assert WorkflowEventClass.WORKFLOW_START in emitter.emits
+    assert emitter.emits.count(WorkflowEventClass.STEP_BOUNDARY) == 2
+
+
+# ---------------------------------------------------------------------------
+# U-CP-94 (R-FS-1 E-impl-2) — WAL_SEGMENT segment-replay resumption (CP/IS-only)
+#
+# WAL_SEGMENT is materialized as segment-replay resumption impl against the
+# cleared C-CP-07/08 contracts, following the U-CP-56 / U-CP-93 precedent. These
+# tests assert the CP-clear surface: segment-prefix resume_at (the F2
+# idempotency-key join, §8.2 row 5) + RESUMPTION emission + the materialized
+# segment prefix not being re-dispatched. The engine-layer recovery-loop firing
+# (U-CP-95 capture_pause/attempt_resume → cp.pause-captured/cp.resume-attempted)
+# requires a bound `ctx.engine_recovery_loop` (the durable U-RT-121 substrate
+# via the U-RT-122 factory bind) and is exercised by execution at the runtime
+# go-live e2e (test_u_rt_95...). As with EVENT_SOURCED_REPLAY the CP/IS-level
+# resume_at is degenerate vs save-point (same accepted bar); see
+# `.harness/r-fs-1-e-impl-2-finding.md`.
+# ---------------------------------------------------------------------------
+
+
+def test_wal_segment_resumes_across_restart_without_refire() -> None:
+    """U-CP-94 keystone — a fresh driver instance over the same persisted segment
+    prefix (simulated process restart, F3 floor (i)) advances resume_at over the
+    contiguous materialized segment prefix, emits RESUMPTION before
+    WORKFLOW_START, and does NOT re-dispatch the prefix (§8.1 `segment_replay`
+    "per-segment dedup" — the F2 idempotency-key join is the dedup, F3 floor
+    (ii)). Mirrors the U-CP-93 EVENT_SOURCED_REPLAY keystone; proves
+    no-re-execution, not cached-output replay (the deferred B-ENGINE-OUTPUT-REPLAY
+    refinement)."""
+    manifest = _manifest(engine_class=EngineClass.WAL_SEGMENT)
+    materialized = {
+        _expected_step_key("run-1", "wf-1", 1, 0): 1,
+        _expected_step_key("run-1", "wf-1", 1, 1): 1,
+    }
+    ledger = _FakeLedger(prior_entries=2)
+    emitter = _FakeEmitter()
+    ctx = _FakeCtx(ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader(materialized))
+    dispatcher = _EchoDispatcher()
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+    )
+    assert WorkflowEventClass.RESUMPTION in emitter.emits
+    assert emitter.emits.index(WorkflowEventClass.RESUMPTION) < emitter.emits.index(
+        WorkflowEventClass.WORKFLOW_START
+    )
+    # Only step 2 dispatched — the materialized segment prefix (0 + 1) is NOT
+    # re-fired (no re-execution).
+    assert len(dispatcher.dispatched) == 1
+    assert str(dispatcher.dispatched[0][1].step_id) == "step-2"
+
+
+def test_wal_segment_no_resumption_for_genesis_run() -> None:
+    """U-CP-94 — a genesis WAL_SEGMENT run (no prior segments) emits no RESUMPTION
+    and dispatches every step, byte-identically to the fresh-linear happy path
+    (the new branch perturbs nothing for resume_at==0)."""
+    manifest = _manifest(engine_class=EngineClass.WAL_SEGMENT)
+    ledger = _FakeLedger(prior_entries=0)
+    emitter = _FakeEmitter()
+    ctx = _FakeCtx(ledger=ledger, emitter=emitter, ledger_reader=_FakeLedgerReader({}))
+    dispatcher = _EchoDispatcher()
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0), _step(1)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+    )
+    assert WorkflowEventClass.RESUMPTION not in emitter.emits
+    assert len(dispatcher.dispatched) == 2
+
+
+def test_wal_segment_observable_lifecycle_events_emit() -> None:
+    """U-CP-94 F3 floor (iv) observable-lifecycle — a WAL_SEGMENT run emits the
+    workflow lifecycle events (WORKFLOW_START + per-step STEP_BOUNDARY) per
+    C-CP-05 §5.1, identical to the other in-scope engine classes."""
+    manifest = _manifest(engine_class=EngineClass.WAL_SEGMENT)
     ctx, _, emitter = _ctx()
     execute_workflow(
         manifest_entry=manifest,

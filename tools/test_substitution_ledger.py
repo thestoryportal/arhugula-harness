@@ -35,10 +35,12 @@ def test_canonical_integers(data):
 
 def test_bucket_breakdown(data):
     d = sl.derive(data)
+    # CXA-2 bounded-residual discharged at batch-57 (R-FS-1 E-impl-2): BOUNDED_RESIDUAL
+    # 3→2, SUBSTANTIVE_RETIRED 43→44. Count-neutral — both buckets count as RETIRED.
     assert d["by_disposition"] == {
-        "SUBSTANTIVE_RETIRED": 43,
+        "SUBSTANTIVE_RETIRED": 44,
         "AUTHORING_ONLY": 8,
-        "BOUNDED_RESIDUAL": 3,
+        "BOUNDED_RESIDUAL": 2,
     }
 
 
@@ -77,13 +79,13 @@ def test_retired_as_label_does_not_retally(data):
 
 
 def test_bounded_residual_rows_are_counted(data):
-    # The tell from the R-700 close: OD-6 carries a terminal disposition AND is counted in
-    # RETIRED — proving bounded-residual rows are terminal count-members.
+    # The tell from the R-700 close: OD-6 carries a terminal BOUNDED_RESIDUAL disposition AND
+    # is counted in RETIRED — proving bounded-residual rows are terminal count-members.
+    # (CXA-2 was the other example until batch-57 discharged its residual →
+    # SUBSTANTIVE_RETIRED; OD-6 remains the canonical bounded-residual exemplar.)
     rows = {r["id"]: r for r in data["substitutions"]}
     assert rows["H_T-OD-6"]["disposition"] == "BOUNDED_RESIDUAL"  # counted
-    od6_counted = rows["H_T-OD-6"]["disposition"] in sl.RETIRED_DISPOSITIONS
-    cxa2_counted = rows["H_T-CXA-2"]["disposition"] in sl.RETIRED_DISPOSITIONS
-    assert od6_counted and cxa2_counted
+    assert rows["H_T-OD-6"]["disposition"] in sl.RETIRED_DISPOSITIONS
 
 
 def test_batch_52_backflow_rows_are_retired(data):
@@ -109,10 +111,14 @@ def test_batch_54_backflow_rows_are_retired(data):
     assert "sign_off_label" not in rows["H_T-CXA-3"]
 
 
-def test_batch_55_backflow_rows_are_retired(data):
+def test_batch_57_cxa_2_residual_discharged(data):
+    # batch-55 closed CXA-2 as a COUNTED bounded-residual (engine recovery loop dormant);
+    # batch-57 (R-FS-1 E-impl-2) discharged that residual — the WAL_SEGMENT recovery loop
+    # is live in production — so the row upgrades BOUNDED_RESIDUAL→SUBSTANTIVE_RETIRED
+    # (count-neutral: both count as RETIRED).
     rows = {r["id"]: r for r in data["substitutions"]}
-    assert rows["H_T-CXA-2"]["disposition"] == "BOUNDED_RESIDUAL"
-    assert rows["H_T-CXA-2"]["batch"] == "batch-55"
+    assert rows["H_T-CXA-2"]["disposition"] == "SUBSTANTIVE_RETIRED"
+    assert rows["H_T-CXA-2"]["batch"] == "batch-57"
     assert "sign_off_label" not in rows["H_T-CXA-2"]
 
 

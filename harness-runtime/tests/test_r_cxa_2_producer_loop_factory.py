@@ -200,6 +200,7 @@ def test_bound_engine_loop_emits_pause_and_resume_entries(tmp_path: Path) -> Non
     pause = asyncio.run(
         stage.engine_recovery_loop.capture_pause(
             workflow_id="wf-1",
+            run_id="run-1",
             step_id="step-1",
             pause_reason=PauseReason.OPERATOR_INITIATED_PAUSE,
         )
@@ -207,6 +208,7 @@ def test_bound_engine_loop_emits_pause_and_resume_entries(tmp_path: Path) -> Non
     resume = asyncio.run(
         stage.engine_recovery_loop.attempt_resume(
             workflow_id="missing-workflow",
+            run_id="run-1",
             step_id="step-1",
             resume_event_id="resume-evt-1",
             resume_attempt_count=1,

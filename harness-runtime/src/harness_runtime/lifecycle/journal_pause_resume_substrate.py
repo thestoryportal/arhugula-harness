@@ -80,7 +80,7 @@ from harness_cp.pause_resume_protocol import (
 )
 from pydantic import ValidationError
 
-__all__ = ["JournalEnginePauseResumeSubstrate"]
+__all__ = ["JournalEnginePauseResumeSubstrate", "json_default", "json_object_hook"]
 
 #: Per-entry record separator for the default ``pause_audit_entry_id`` digest
 #: (mirrors ``DeterministicEnginePauseResumeSubstrate``).
@@ -98,14 +98,14 @@ def _engine_revalidation_succeeds(_attempt: ResumeAttempt, _diff: tuple[Material
     return True
 
 
-def _json_default(value: object) -> object:
+def json_default(value: object) -> object:
     """JSON-encode ``bytes`` (e.g. a snapshot anchor) as a base64 sentinel object."""
     if isinstance(value, bytes):
         return {_BYTES_TAG: base64.b64encode(value).decode("ascii")}
     raise TypeError(f"unserializable journal value of type {type(value)!r}")
 
 
-def _json_object_hook(obj: dict[str, object]) -> object:
+def json_object_hook(obj: dict[str, object]) -> object:
     """Reconstruct ``bytes`` from a base64 sentinel object on read.
 
     ``validate=True`` makes malformed base64 raise ``binascii.Error`` (a
@@ -208,6 +208,20 @@ class JournalEnginePauseResumeSubstrate:
             resume_audit_entry_id=resume_audit_entry_id,
         )
 
+    def has_pause_record(self, workflow_id: WorkflowID) -> bool:
+        """Report whether a pause record EXISTS for ``workflow_id`` (presence, not validity).
+
+        A pure, non-emitting peek: ``True`` iff the workflow's journal file exists
+        and is non-empty. This is deliberately a **presence** check, NOT a validity
+        check — a torn/corrupt latest record still returns ``True`` here so the
+        driver fires ``attempt_resume`` (which then classifies it
+        ``ABORT_SNAPSHOT_CORRUPTED`` and fails closed). Conflating presence with
+        validity would silently skip the resume attempt for a corrupt snapshot and
+        lose the abort record — the failure mode this method exists to prevent.
+        """
+        path = self._journal_file(workflow_id)
+        return path.exists() and path.stat().st_size > 0
+
     # -- durable journal I/O ------------------------------------------------
 
     def _journal_file(self, workflow_id: WorkflowID) -> Path:
@@ -228,7 +242,7 @@ class JournalEnginePauseResumeSubstrate:
             "workflow_id": str(workflow_id),
             "pause_event": event.model_dump(mode="python"),
         }
-        line = json.dumps(record, default=_json_default, sort_keys=True)
+        line = json.dumps(record, default=json_default, sort_keys=True)
         path = self._journal_file(workflow_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         is_new_file = not path.exists()
@@ -292,7 +306,7 @@ class JournalEnginePauseResumeSubstrate:
         but a mismatched record is treated as corruption — fail closed).
         """
         try:
-            loaded = json.loads(line, object_hook=_json_object_hook)
+            loaded = json.loads(line, object_hook=json_object_hook)
             if not isinstance(loaded, dict):
                 return None
             record = cast("dict[str, object]", loaded)
