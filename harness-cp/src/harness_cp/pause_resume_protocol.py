@@ -248,6 +248,18 @@ class DeterministicEnginePauseResumeSubstrate:
             resume_audit_entry_id=resume_audit_entry_id,
         )
 
+    def has_pause_record(self, workflow_id: WorkflowID) -> bool:
+        """Report whether a pause record EXISTS for ``workflow_id`` (presence, not validity).
+
+        Mirrors the durable ``JournalEnginePauseResumeSubstrate`` presence
+        contract: ``True`` iff a pause event has been captured and not consumed.
+        Presence, NOT validity — the driver gates the resume firing on presence,
+        then ``attempt_resume`` classifies validity (a corrupt/aborting snapshot
+        still returns ``True`` here so the abort is recorded, not silently
+        skipped). Non-emitting pure read.
+        """
+        return str(workflow_id) in self._pause_events
+
 
 def capture_pause_snapshot(workflow_id: WorkflowID, pause_reason: PauseReason) -> PauseEvent:
     """Capture a pause snapshot for a workflow (C-CP-22 §22.1).

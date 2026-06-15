@@ -68,8 +68,12 @@ from harness_cp.handoff_context import (
     StateSummary,
 )
 from harness_cp.pause_resume_protocol import (
+    CP_FAIL_PAUSE_SNAPSHOT_CORRUPTION,
+    CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED,
+    PauseReason,
     PauseResumeProtocol,
     PauseResumeProtocolEventKind,
+    ResumeOutcomeKind,
 )
 from harness_cp.pause_resume_protocol_types import (
     MaterialDiffPolicy,
@@ -196,8 +200,35 @@ _IN_SCOPE_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
         # already has; non-linear/fan-out resume is the registered B-FANOUT-PAUSE
         # arc (`.harness/beyond-mvp-capability-boundary-ledger.md`), not this unit.
         EngineClass.EVENT_SOURCED_REPLAY,
+        # U-CP-94 (R-FS-1 E-impl-2) — WAL_SEGMENT materialized as segment-replay
+        # resumption impl against cleared C-CP-07/08, following the U-CP-56 /
+        # U-CP-93 precedent. The `:1469`-region dispatch branch computes resume_at
+        # via the F2 per-segment prefix join (`_determine_segment_replay_resume_at`,
+        # C-CP-08 §8.2 row 5) — a CP→IS read, no CP→runtime import. The durable
+        # WAL segment-log substrate (U-RT-121) + the engine-layer recovery-loop
+        # firing (U-CP-95 capture_pause/attempt_resume → C-CP-49/50, R-CXA-2
+        # go-live) are the genuine distinguishing capability over save-point.
+        # Resume-blind on the 5 non-linear strategies, exactly as save-point /
+        # EVENT_SOURCED_REPLAY (B-FANOUT-PAUSE arc, not this unit).
+        EngineClass.WAL_SEGMENT,
     }
 )
+
+
+# U-CP-95 (R-FS-1 E-impl-2) — engine-layer resume-abort → fail-class mapping.
+# The C-CP-22 §22.1 `ResumeOutcomeKind` ABORT_* members that must FAIL the run
+# CLOSED on engine-layer recovery, each mapped to its semantically-matching
+# existing CP fail-class marker (no new fail-class invented — X-AL-3-clean;
+# reuses the C-CP-26 §26.5 constants). The two RESUME_* members are absent by
+# construction: a present pause whose resume succeeds proceeds normally. A
+# corrupt snapshot → ABORT_SNAPSHOT_CORRUPTED; a revalidation failure →
+# ABORT_REVALIDATION_FAILED (unreachable under the default WAL substrate wiring,
+# which injects an empty diff-provider + always-succeeds revalidation, but
+# handled for correctness if a deployment binds a real diff-provider).
+_ENGINE_RESUME_ABORT_FAIL_CLASS: dict[ResumeOutcomeKind, str] = {
+    ResumeOutcomeKind.ABORT_SNAPSHOT_CORRUPTED: CP_FAIL_PAUSE_SNAPSHOT_CORRUPTION,
+    ResumeOutcomeKind.ABORT_REVALIDATION_FAILED: CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -1487,6 +1518,97 @@ def _execute_workflow_body(
         )
         if resume_at > 0:
             ctx.lifecycle_emitter.emit(WorkflowEventClass.RESUMPTION)
+    elif manifest_entry.engine_class is EngineClass.WAL_SEGMENT:
+        # U-CP-94 (R-FS-1 E-impl-2) — WAL_SEGMENT segment-replay resumption.
+        # "Replay from WAL segments; per-segment dedup" (C-CP-08 §8.1
+        # `segment_replay`): advance resume_at over the contiguous materialized
+        # segment prefix. Under §8.2 row 5 the per-segment ledger entries join
+        # the F2 state-ledger on `idempotency_key`, so the segment prefix is the
+        # same F2-prefix computation save-point / event-replay use
+        # (`_determine_segment_replay_resume_at` delegates) — a CP→IS read, never
+        # a read of the U-RT-121 runtime segment-log substrate (no CP→runtime
+        # import; resolves the only reading that avoids a CP↔RT cycle, U-CP-94
+        # AC). As with EVENT_SOURCED_REPLAY this resume_at semantic is degenerate
+        # vs save-point at the CP/IS level (same accepted bar); the genuine
+        # distinguishing WAL_SEGMENT capability is the durable segment-log
+        # substrate (U-RT-121) + the engine-layer recovery-loop firing below
+        # (U-CP-95) — NOT cached-output replay (B-ENGINE-OUTPUT-REPLAY arc).
+        resume_at = _determine_segment_replay_resume_at(
+            ctx=ctx,
+            run_idempotency_key=run_idempotency_key,
+            step_count=len(steps),
+            workload_class=manifest_entry.workload_class,
+        )
+        # U-CP-95 (R-FS-1 E-impl-2) — engine-layer recovery-loop RESUME firing.
+        # Fire `ctx.engine_recovery_loop.attempt_resume` → `cp.resume-attempted`
+        # (C-CP-50) through the CP→IS wiring (R-CXA-2 engine-layer seam),
+        # consumed duck-typed (`Any` on the runtime ctx, exactly as `cp_is_wiring`
+        # / `pause_resume_protocol`) — no `harness_cp` → `harness_runtime` import.
+        #
+        # GATED on the PRESENCE of a pause record (`has_pause_record`, a pure
+        # non-emitting substrate read) — presence, NOT validity, and NOT
+        # `resume_at`:
+        #   - resume_at > 0 alone is the ORDINARY step-prefix crash recovery, which
+        #     can occur with NO engine pause captured — firing there would emit a
+        #     spurious `cp.resume-attempted = ABORT_SNAPSHOT_CORRUPTED` for a clean
+        #     recovery, polluting the ledger (Codex [P2.a]); and
+        #   - a WAL_SEGMENT engine pause can be captured BEFORE step 0 (resume_at
+        #     == 0 yet a real pause record exists) — gating the firing on
+        #     resume_at > 0 would silently never resume it (Codex [P2.b]); and
+        #   - a present-but-CORRUPT record must still FIRE the resume (which then
+        #     classifies it ABORT_* and the driver fails closed below) — the prior
+        #     `has_captured_pause` conflated presence with validity, so a corrupt
+        #     snapshot was misread as "absent" and silently skipped, losing the
+        #     abort record AND resuming past unrecoverable state (Codex [P1-r3-a]).
+        # So the presence check is the sole gate. NB: the engine `resume_at` arg is
+        # the ResumeAttempt ISO-8601 timestamp — NOT the int step-index (distinct).
+        # `run_id` run-scopes the engine pause record (matching the F2 prefix's
+        # run_idempotency_key scope) so a fresh run of the same workflow_id never
+        # picks up an earlier run's lingering record (Codex [P2]). The capture
+        # branch below passes the SAME run_id — identical key composition.
+        _engine_recovery_loop = getattr(ctx, "engine_recovery_loop", None)
+        _resume_engine_pause = _engine_recovery_loop is not None and (
+            _engine_recovery_loop.has_pause_record(
+                workflow_id=manifest_entry.workflow_id, run_id=run_id
+            )
+        )
+        # RESUMPTION fires when resuming a committed step prefix OR a present
+        # engine pause (a step-0 engine pause is a resumption even at resume_at==0).
+        if resume_at > 0 or _resume_engine_pause:
+            ctx.lifecycle_emitter.emit(WorkflowEventClass.RESUMPTION)
+        if _resume_engine_pause and _engine_recovery_loop is not None:
+            _engine_resume = _run_protocol_method_sync(
+                _engine_recovery_loop.attempt_resume(
+                    workflow_id=manifest_entry.workflow_id,
+                    run_id=run_id,
+                    step_id=str(resume_at),
+                    resume_event_id=f"resume:{run_id}:{resume_at}",
+                    resume_attempt_count=1,
+                    resume_at=datetime.now(UTC).isoformat(),
+                )
+            )
+            # FAIL CLOSED on an aborting resume outcome (C-CP-22 §22.1
+            # ABORT_SNAPSHOT_CORRUPTED / ABORT_REVALIDATION_FAILED). A present
+            # pause whose resume aborts must HALT the run — never proceed past
+            # unrecoverable engine state (Codex [P1-r3-b]). Mirrors the
+            # workflow-layer precedent (`if not resume_result.resumed: return
+            # FAILED` at the C-CP-26 resume branch above). Plain FAILED with the
+            # matching CP fail-class marker; operator escalation is a future arc,
+            # not silently absorbed here. The `cp.resume-attempted` entry the fire
+            # above emitted is the durable audit record of the abort.
+            _abort_fail_class = _ENGINE_RESUME_ABORT_FAIL_CLASS.get(
+                _engine_resume.resume_outcome.outcome_kind
+            )
+            if _abort_fail_class is not None:
+                return RunResult(
+                    workflow_id=manifest_entry.workflow_id,
+                    run_id=run_id,
+                    status=RunStatus.FAILED,
+                    terminal_step_index=None,
+                    partial_state=None,
+                    final_state=None,
+                    fail_class=_abort_fail_class,
+                ), 0
     # Under pure-pattern-no-engine: no resumption-specific emission per CP spec
     # §25.5 v1.4 scope carve-out (`workflow.resumption` CONDITIONAL row: "At v1.4
     # scope: emit on re-entry if manifest_entry.engine_class ==
@@ -1520,6 +1642,45 @@ def _execute_workflow_body(
                 workflow_id=manifest_entry.workflow_id,
                 run_id=run_id,
                 status=RunStatus.DRAINED,
+                terminal_step_index=step_index - 1 if step_index > 0 else None,
+                partial_state=dict(accumulated),
+                final_state=None,
+                fail_class=None,
+            ), steps_executed
+
+        # U-CP-95 (R-FS-1 E-impl-2) — WAL_SEGMENT engine-layer recovery-loop
+        # PAUSE firing. The engine-native pause analogue of the workflow-layer
+        # `ctx.pause_resume_protocol` fire below (a SEPARATE architectural
+        # surface — C-CP-22 engine-layer vs C-CP-26 workflow-layer). Gated on
+        # `engine_class == WAL_SEGMENT` + a bound (duck-typed) recovery loop +
+        # the pause flag; checked BEFORE the workflow-layer branch so a
+        # WAL_SEGMENT engine pause takes precedence and every non-WAL_SEGMENT
+        # path stays BYTE-UNCHANGED (CP §25.10 Invariant 1). Fires
+        # `capture_pause` → `cp.pause-captured` (C-CP-49) through the CP→IS
+        # wiring, activating the R-CXA-2 engine-layer seam in production (the
+        # first production caller of `RuntimeEngineRecoveryLoop` —
+        # `[[built-but-vacuous-reground-ledger-asis]]`). Consumed duck-typed
+        # (`Any` on the runtime ctx, no `harness_cp` → `harness_runtime` import).
+        # The engine layer's durable state lives in the U-RT-121 segment log, so
+        # the RunResult carries no workflow-layer PauseSnapshot (default None).
+        _engine_recovery_loop = getattr(ctx, "engine_recovery_loop", None)
+        if (
+            manifest_entry.engine_class is EngineClass.WAL_SEGMENT
+            and _engine_recovery_loop is not None
+            and ctx.pause_requested_flag.is_set()
+        ):
+            _run_protocol_method_sync(
+                _engine_recovery_loop.capture_pause(
+                    workflow_id=manifest_entry.workflow_id,
+                    run_id=run_id,
+                    step_id=str(step_index),
+                    pause_reason=PauseReason.ENGINE_NATIVE_PAUSE,
+                )
+            )
+            return RunResult(
+                workflow_id=manifest_entry.workflow_id,
+                run_id=run_id,
+                status=RunStatus.PAUSED,
                 terminal_step_index=step_index - 1 if step_index > 0 else None,
                 partial_state=dict(accumulated),
                 final_state=None,
@@ -2081,6 +2242,44 @@ def _determine_event_replay_resume_at(
     build arc, not a silent defer. See `.harness/r-fs-1-e-impl-1-finding.md`.
     This helper is the extension point where that refinement lands once the
     output-carrying event-history substrate + inter-step data flow exist.
+    """
+    return _determine_resume_at(
+        ctx=ctx,
+        run_idempotency_key=run_idempotency_key,
+        step_count=step_count,
+        workload_class=workload_class,
+    )
+
+
+def _determine_segment_replay_resume_at(
+    *,
+    ctx: DriverContext,
+    run_idempotency_key: str,
+    step_count: int,
+    workload_class: Any,
+) -> int:
+    """Determine resume-at for WAL_SEGMENT (C-CP-08 §8.1 `segment_replay`).
+
+    Named seam for WAL-segment replay resumption (U-CP-94). At HEAD it delegates
+    to `_determine_resume_at`: under C-CP-08 §8.2 row 5 the per-segment ledger
+    entries join the F2 state-ledger on `idempotency_key`, so the resume-at index
+    — the count of the contiguous already-materialized segment prefix — is the
+    identical F2-prefix computation save-point / event-replay use. WAL_SEGMENT's
+    §8.1 distinction ("replay from WAL segments; per-segment dedup") manifests in
+    the driver as the materialized segment prefix not being re-dispatched (the
+    loop begins at `resume_at`), and the F2 idempotency-key join is the
+    per-segment dedup (a re-materialized segment's key already resolves to an
+    entry → it is not re-applied).
+
+    This is the CP→IS reading the U-CP-94 AC names as the only one that avoids a
+    CP↔RT cycle (the CP driver cannot import `harness_runtime`, so it cannot read
+    the U-RT-121 segment-log substrate directly). The durable segment-log
+    substrate (U-RT-121) is what `ctx.engine_recovery_loop` fires against for the
+    engine-layer pause/resume entries (U-CP-95) — it is NOT the `resume_at`
+    source. As with EVENT_SOURCED_REPLAY (`.harness/r-fs-1-e-impl-1-finding.md`)
+    this CP/IS-level resume_at is degenerate vs save-point; the genuine
+    distinguishing WAL_SEGMENT capability is the durable substrate + recovery
+    loop firing, not a richer prefix computation here.
     """
     return _determine_resume_at(
         ctx=ctx,

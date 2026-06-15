@@ -286,7 +286,7 @@ def test_drain_at_entry_no_validation_error() -> None:
         workflow_id="wf-drain",
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
         persona_tier=PersonaTier.TEAM_BINDING,
-        engine_class=EngineClass.WAL_SEGMENT,  # still out-of-scope (EVENT_SOURCED_REPLAY went in-scope at U-CP-93)
+        engine_class=EngineClass.RECONCILER_LOOP,  # sole out-of-scope class (WAL_SEGMENT went in-scope at U-CP-94/E-impl-2)
         topology_pattern=TopologyPattern.PARALLELIZATION,  # out-of-scope at v1.4
         layer_budgets=(),
         fallback_chain=_CHAIN,

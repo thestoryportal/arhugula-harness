@@ -11,6 +11,9 @@
 .harness/*.db-journal
 .harness/*.db-wal
 .harness/*.db-shm
+# R-FS-1 E-impl-2 (U-RT-122): durable WAL segment-log engine pause/resume state,
+# written at runtime under repository_root by WALSegmentEnginePauseResumeSubstrate.
+.harness/engine-recovery-segments/
 routing_manifest/
 
 # Python build artifacts

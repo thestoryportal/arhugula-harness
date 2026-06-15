@@ -18,7 +18,6 @@ from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel, GateLevelInput
 from harness_cp.handoff_context import StateSummary
 from harness_cp.hitl_response_palette import HITLResponse
-from harness_cp.pause_resume_protocol import DeterministicEnginePauseResumeSubstrate
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.workflow_driver_types import StepExecutionContext, StepKind, WorkflowStep
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
@@ -33,6 +32,9 @@ from harness_runtime.lifecycle.hitl_tool_loop import (
     HITLToolLoopContext,
     ModelToolCall,
     RuntimeHITLToolLoop,
+)
+from harness_runtime.lifecycle.wal_segment_pause_resume_substrate import (
+    WALSegmentEnginePauseResumeSubstrate,
 )
 from harness_runtime.types import RuntimeConfig
 
@@ -205,9 +207,23 @@ def materialize_r_cxa_2_producer_loop_stage(
             tenant_id=config.tenant_id,
         ),
     )
+    # U-RT-122 (R-FS-1 E-impl-2) — R-CXA-2 engine-layer activation. The engine
+    # recovery loop now fires against the DURABLE U-RT-121 WAL segment-log
+    # substrate (replacing the in-memory `DeterministicEnginePauseResumeSubstrate`
+    # placeholder), so `ctx.engine_recovery_loop.capture_pause`/`.attempt_resume`
+    # (the U-CP-95 WAL_SEGMENT driver firing) persist `cp.pause-captured` /
+    # `cp.resume-attempted` against a crash-survivable store — bringing the
+    # R-CXA-2 CP→IS engine-layer seam LIVE in production (its first real driver).
+    # The segment log lives under the operator's repository_root (no new
+    # RuntimeConfig field; §7.4 substrate-location impl-discretion); the substrate
+    # creates the directory lazily on first capture. Non-WAL_SEGMENT workflows
+    # never fire the loop (U-CP-95 gates on engine_class), so no segment files are
+    # written for them — the durable bind is strictly-better-than-Deterministic
+    # at zero cost off the WAL_SEGMENT path.
     engine_recovery_loop = RuntimeEngineRecoveryLoop(
         wiring=wiring,
-        substrate=DeterministicEnginePauseResumeSubstrate(
+        substrate=WALSegmentEnginePauseResumeSubstrate(
+            journal_dir=config.repository_root / ".harness" / "engine-recovery-segments",
             state_summary_provider=_default_engine_state_summary,
         ),
         actor=actor,

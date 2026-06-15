@@ -122,6 +122,7 @@ def test_engine_recovery_loop_emits_pause_captured(tmp_path: Path) -> None:
     result = asyncio.run(
         loop.capture_pause(
             workflow_id="wf-1",
+            run_id="run-1",
             step_id="step-1",
             pause_reason=PauseReason.OPERATOR_INITIATED_PAUSE,
         )
@@ -134,11 +135,43 @@ def test_engine_recovery_loop_emits_pause_captured(tmp_path: Path) -> None:
     assert verify_chain(entries).status is VerificationStatus.VALID
 
 
+def test_has_pause_record_is_a_nonemitting_presence_peek(tmp_path: Path) -> None:
+    """[P1-r3-a] (Codex) `has_pause_record` reports PRESENCE — not validity —
+    WITHOUT emitting a `cp.resume-attempted` entry, so a driver can gate the
+    resume firing and avoid a spurious ABORT entry for an ordinary step-prefix
+    crash recovery (no engine pause captured). Presence-not-validity is the fix
+    for the prior `has_captured_pause`, which used the resume outcome (validity)
+    as a presence proxy and so misread a present-but-corrupt snapshot as absent —
+    silently skipping the resume + losing the abort record."""
+    loop = _loop(tmp_path)
+    asyncio.run(
+        loop.capture_pause(
+            workflow_id="wf-1",
+            run_id="run-1",
+            step_id="step-1",
+            pause_reason=PauseReason.OPERATOR_INITIATED_PAUSE,
+        )
+    )
+    baseline = [entry.action_id for entry in read_ledger(loop.wiring.ledger_writer.handle)]
+    assert baseline == ["cp.pause-captured"]
+
+    # The captured pause is reported present (True) for its OWN run; a workflow
+    # without one is absent (False); and — Codex [P2] run-scoping — the SAME
+    # workflow_id under a DIFFERENT run_id is also absent (a fresh execution must
+    # not see an earlier run's record). NEITHER peek writes a ledger entry.
+    assert loop.has_pause_record(workflow_id="wf-1", run_id="run-1") is True
+    assert loop.has_pause_record(workflow_id="wf-1", run_id="run-2") is False
+    assert loop.has_pause_record(workflow_id="wf-absent", run_id="run-1") is False
+    after = [entry.action_id for entry in read_ledger(loop.wiring.ledger_writer.handle)]
+    assert after == baseline
+
+
 def test_engine_recovery_loop_emits_resume_attempted_on_abort(tmp_path: Path) -> None:
     loop = _loop(tmp_path)
     result = asyncio.run(
         loop.attempt_resume(
             workflow_id="missing-workflow",
+            run_id="run-1",
             step_id="step-1",
             resume_event_id="resume-evt-1",
             resume_attempt_count=1,
