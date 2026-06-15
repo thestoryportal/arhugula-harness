@@ -1554,17 +1554,89 @@ def _execute_workflow_body(
         # and this CP/IS resume_at is DELIBERATELY degenerate vs save-point (the same
         # accepted bar U-CP-93/94 take). The genuine distinguishing RECONCILER_LOOP
         # capabilities — the hand-rolled etcd-style CAS-lease substrate (U-RT-123) +
-        # the engine-layer recovery-loop firing (U-CP-97) — are E-impl-3b; this unit
-        # is the (A) resumption-semantics half and does NOT fire the recovery loop
-        # (the EVENT_SOURCED_REPLAY shape, not the WAL_SEGMENT one).
+        # the engine-layer recovery-loop firing (U-CP-97, appended below) — give this
+        # DURABLE_ASYNC class the EVENT_SOURCED_REPLAY resume_at shape PLUS the
+        # WAL_SEGMENT-style engine-layer firing; the resume_at here is the (A)
+        # resumption-semantics half, the (B) recovery-loop firing follows.
         resume_at = _determine_reconciler_converge_resume_at(
             ctx=ctx,
             run_idempotency_key=run_idempotency_key,
             step_count=len(steps),
             workload_class=manifest_entry.workload_class,
         )
-        if resume_at > 0:
+        # U-CP-97 (R-FS-1 E-impl-3c) — RECONCILER_LOOP engine-layer recovery-loop
+        # RESUME firing. The engine-native reconverge analogue of the workflow-layer
+        # resume, mirroring the U-CP-95 WAL_SEGMENT RESUME firing (below) — duck-typed
+        # `ctx.engine_recovery_loop` (no `harness_cp` → `harness_runtime` import), gated
+        # by this RECONCILER_LOOP branch so the WAL firing + every non-reconciler path
+        # stays behavior-unchanged. Fires `attempt_resume` → `cp.resume-attempted`
+        # (C-CP-50) against the U-RT-123 reconciler substrate (U-RT-124 binds it
+        # engine-class-aware so the reconverge reads the reconciler store, never the WAL
+        # segment-log).
+        #
+        # GATED on (a) the PRESENCE of a pause record (presence, NOT validity — a
+        # present-but-corrupt record still FIRES → ABORT_* → fail closed below; an
+        # ordinary step-prefix recovery with no engine pause does not fire; `run_id`
+        # run-scopes the record, identical key composition to the capture branch; the
+        # WAL precedent's Codex [P1]/[P2] discipline) AND (b) `resume_at < len(steps)` —
+        # the run is NOT already complete. (b) is the one RECONCILER-SPECIFIC divergence
+        # from the WAL branch and is load-bearing: the reconciler substrate's CAS lease
+        # makes a SECOND `attempt_resume` of an already-claimed revision ABORT (the
+        # genuine new lease-coordination capability; U-RT-123). So once a run has fully
+        # completed (every step committed → `resume_at == len(steps)`), an at-least-once
+        # re-drive of the SAME run_id has NOTHING to reconverge, and firing would
+        # claim-again → ABORT → spuriously FAIL a finished run. Skipping the fire when
+        # complete lets the empty step loop return idempotent SUCCESS — satisfying
+        # C-CP-07 §7.4 floor (ii) "idempotency-keyed exactly-once via the F2 ledger". The
+        # WAL branch (below) carries NO such guard: its re-resumable substrate returns
+        # RESUME_CLEAN (not ABORT) on a completed-run re-drive, so it does NOT fail-close
+        # — the fail-closed regression this guard fixes is reconciler-only (a milder
+        # PRE-EXISTING WAL exactly-once duplicate-emit on the same path is out of scope
+        # here and tracked at `.harness/r-fs-1-e-impl-3c-f1-01-wal-exactly-once.md`). (b)
+        # is an UPPER bound ONLY — a step-0 engine pause (resume_at == 0) still fires
+        # (Codex [P2.b]); it is the incomplete-vs-complete discriminator, NOT a
+        # `resume_at > 0` gate.
+        _engine_recovery_loop = getattr(ctx, "engine_recovery_loop", None)
+        _resume_engine_pause = (
+            _engine_recovery_loop is not None
+            and resume_at < len(steps)
+            and _engine_recovery_loop.has_pause_record(
+                engine_class=manifest_entry.engine_class,
+                workflow_id=manifest_entry.workflow_id,
+                run_id=run_id,
+            )
+        )
+        if resume_at > 0 or _resume_engine_pause:
             ctx.lifecycle_emitter.emit(WorkflowEventClass.RESUMPTION)
+        if _resume_engine_pause and _engine_recovery_loop is not None:
+            _engine_resume = _run_protocol_method_sync(
+                _engine_recovery_loop.attempt_resume(
+                    engine_class=manifest_entry.engine_class,
+                    workflow_id=manifest_entry.workflow_id,
+                    run_id=run_id,
+                    step_id=str(resume_at),
+                    resume_event_id=f"resume:{run_id}:{resume_at}",
+                    resume_attempt_count=1,
+                    resume_at=datetime.now(UTC).isoformat(),
+                )
+            )
+            # FAIL CLOSED on an aborting reconverge outcome (C-CP-22 §22.1 ABORT_*),
+            # mirroring the WAL RESUME firing: a present pause whose reconverge aborts
+            # must HALT the run — never proceed past unrecoverable engine state. The
+            # `cp.resume-attempted` entry the fire emitted is the durable audit record.
+            _abort_fail_class = _ENGINE_RESUME_ABORT_FAIL_CLASS.get(
+                _engine_resume.resume_outcome.outcome_kind
+            )
+            if _abort_fail_class is not None:
+                return RunResult(
+                    workflow_id=manifest_entry.workflow_id,
+                    run_id=run_id,
+                    status=RunStatus.FAILED,
+                    terminal_step_index=None,
+                    partial_state=None,
+                    final_state=None,
+                    fail_class=_abort_fail_class,
+                ), 0
     elif manifest_entry.engine_class is EngineClass.WAL_SEGMENT:
         # U-CP-94 (R-FS-1 E-impl-2) — WAL_SEGMENT segment-replay resumption.
         # "Replay from WAL segments; per-segment dedup" (C-CP-08 §8.1
@@ -1616,7 +1688,9 @@ def _execute_workflow_body(
         _engine_recovery_loop = getattr(ctx, "engine_recovery_loop", None)
         _resume_engine_pause = _engine_recovery_loop is not None and (
             _engine_recovery_loop.has_pause_record(
-                workflow_id=manifest_entry.workflow_id, run_id=run_id
+                engine_class=manifest_entry.engine_class,
+                workflow_id=manifest_entry.workflow_id,
+                run_id=run_id,
             )
         )
         # RESUMPTION fires when resuming a committed step prefix OR a present
@@ -1626,6 +1700,7 @@ def _execute_workflow_body(
         if _resume_engine_pause and _engine_recovery_loop is not None:
             _engine_resume = _run_protocol_method_sync(
                 _engine_recovery_loop.attempt_resume(
+                    engine_class=manifest_entry.engine_class,
                     workflow_id=manifest_entry.workflow_id,
                     run_id=run_id,
                     step_id=str(resume_at),
@@ -1718,6 +1793,41 @@ def _execute_workflow_body(
         ):
             _run_protocol_method_sync(
                 _engine_recovery_loop.capture_pause(
+                    engine_class=manifest_entry.engine_class,
+                    workflow_id=manifest_entry.workflow_id,
+                    run_id=run_id,
+                    step_id=str(step_index),
+                    pause_reason=PauseReason.ENGINE_NATIVE_PAUSE,
+                )
+            )
+            return RunResult(
+                workflow_id=manifest_entry.workflow_id,
+                run_id=run_id,
+                status=RunStatus.PAUSED,
+                terminal_step_index=step_index - 1 if step_index > 0 else None,
+                partial_state=dict(accumulated),
+                final_state=None,
+                fail_class=None,
+            ), steps_executed
+
+        # U-CP-97 (R-FS-1 E-impl-3c) — RECONCILER_LOOP engine-layer recovery-loop
+        # PAUSE firing. Sibling to the WAL_SEGMENT PAUSE firing above, gated on
+        # `engine_class == RECONCILER_LOOP` (mutually exclusive with the WAL gate —
+        # a workflow has exactly one engine class), reusing the already-fetched
+        # duck-typed `_engine_recovery_loop`. Fires `capture_pause` →
+        # `cp.pause-captured` (C-CP-49) against the U-RT-123 reconciler substrate
+        # (U-RT-124 binds it engine-class-aware so the convergence state lands in the
+        # reconciler store, never the WAL segment-log — the no-cross-contamination
+        # invariant). The reconciler's durable state lives in the U-RT-123 store, so
+        # the RunResult carries no workflow-layer PauseSnapshot (default None).
+        if (
+            manifest_entry.engine_class is EngineClass.RECONCILER_LOOP
+            and _engine_recovery_loop is not None
+            and ctx.pause_requested_flag.is_set()
+        ):
+            _run_protocol_method_sync(
+                _engine_recovery_loop.capture_pause(
+                    engine_class=manifest_entry.engine_class,
                     workflow_id=manifest_entry.workflow_id,
                     run_id=run_id,
                     step_id=str(step_index),

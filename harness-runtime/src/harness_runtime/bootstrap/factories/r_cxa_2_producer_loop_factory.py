@@ -33,6 +33,9 @@ from harness_runtime.lifecycle.hitl_tool_loop import (
     ModelToolCall,
     RuntimeHITLToolLoop,
 )
+from harness_runtime.lifecycle.reconciler_pause_resume_substrate import (
+    ReconcilerEnginePauseResumeSubstrate,
+)
 from harness_runtime.lifecycle.wal_segment_pause_resume_substrate import (
     WALSegmentEnginePauseResumeSubstrate,
 )
@@ -207,25 +210,35 @@ def materialize_r_cxa_2_producer_loop_stage(
             tenant_id=config.tenant_id,
         ),
     )
-    # U-RT-122 (R-FS-1 E-impl-2) — R-CXA-2 engine-layer activation. The engine
-    # recovery loop now fires against the DURABLE U-RT-121 WAL segment-log
-    # substrate (replacing the in-memory `DeterministicEnginePauseResumeSubstrate`
-    # placeholder), so `ctx.engine_recovery_loop.capture_pause`/`.attempt_resume`
-    # (the U-CP-95 WAL_SEGMENT driver firing) persist `cp.pause-captured` /
-    # `cp.resume-attempted` against a crash-survivable store — bringing the
-    # R-CXA-2 CP→IS engine-layer seam LIVE in production (its first real driver).
-    # The segment log lives under the operator's repository_root (no new
-    # RuntimeConfig field; §7.4 substrate-location impl-discretion); the substrate
-    # creates the directory lazily on first capture. Non-WAL_SEGMENT workflows
-    # never fire the loop (U-CP-95 gates on engine_class), so no segment files are
-    # written for them — the durable bind is strictly-better-than-Deterministic
-    # at zero cost off the WAL_SEGMENT path.
+    # U-RT-124 (R-FS-1 E-impl-3c) — R-CXA-2 engine-layer activation, engine-class-aware.
+    # The engine recovery loop binds ONE durable substrate per engine class that
+    # fires it (O-RT-4): WAL_SEGMENT → the U-RT-121 WAL segment-log substrate
+    # (U-RT-122, E-impl-2); RECONCILER_LOOP → the U-RT-123 etcd-style reconciler
+    # substrate (E-impl-3b). Each firing call passes the workflow's `engine_class`
+    # (the U-CP-95 WAL + U-CP-97 reconciler driver branches are already gated on
+    # it), so `ctx.engine_recovery_loop.capture_pause`/`.attempt_resume` persist
+    # `cp.pause-captured` / `cp.resume-attempted` against the engine class's OWN
+    # crash-survivable store — bringing the R-CXA-2 CP→IS engine-layer seam LIVE in
+    # production for BOTH durable engine classes. The per-engine-class map is the
+    # single source of routing truth: DISTINCT journal directories mean a reconciler
+    # pause can never land in the WAL segment-log, nor a WAL pause in the reconciler
+    # store (the U-RT-124 no-cross-contamination AC, enforced by construction). Each
+    # store lives under the operator's repository_root (no new RuntimeConfig field;
+    # §7.4 substrate-location impl-discretion) and is created lazily on first capture.
+    # Non-firing engine classes (the 3 non-DURABLE_ASYNC classes) never invoke the
+    # loop (the driver gates on engine_class), so no files are written for them.
     engine_recovery_loop = RuntimeEngineRecoveryLoop(
         wiring=wiring,
-        substrate=WALSegmentEnginePauseResumeSubstrate(
-            journal_dir=config.repository_root / ".harness" / "engine-recovery-segments",
-            state_summary_provider=_default_engine_state_summary,
-        ),
+        substrate_by_engine_class={
+            EngineClass.WAL_SEGMENT: WALSegmentEnginePauseResumeSubstrate(
+                journal_dir=config.repository_root / ".harness" / "engine-recovery-segments",
+                state_summary_provider=_default_engine_state_summary,
+            ),
+            EngineClass.RECONCILER_LOOP: ReconcilerEnginePauseResumeSubstrate(
+                journal_dir=config.repository_root / ".harness" / "engine-recovery-reconciler",
+                state_summary_provider=_default_engine_state_summary,
+            ),
+        },
         actor=actor,
     )
     ctx.hitl_tool_loop = hitl_tool_loop

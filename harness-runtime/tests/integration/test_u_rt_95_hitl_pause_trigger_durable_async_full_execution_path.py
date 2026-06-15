@@ -452,7 +452,10 @@ async def test_path_i_wal_segment_engine_recovery_pause_resume_cycle(
     # U-RT-122 — the recovery loop is bound against the DURABLE WAL substrate
     # (not the in-memory Deterministic placeholder).
     assert ctx.engine_recovery_loop is not None
-    assert isinstance(ctx.engine_recovery_loop.substrate, WALSegmentEnginePauseResumeSubstrate)
+    assert isinstance(
+        ctx.engine_recovery_loop.substrate_by_engine_class[EngineClass.WAL_SEGMENT],
+        WALSegmentEnginePauseResumeSubstrate,
+    )
 
     manifest = _manifest("wf-wal", engine_class=EngineClass.WAL_SEGMENT)
     steps = _two_inference_steps()
@@ -729,9 +732,9 @@ async def test_path_i_present_but_corrupt_pause_fails_closed(
     # Presence-not-validity: the record is still PRESENT at its run-scoped key
     # despite being corrupt (the substrate file is keyed workflow_id + run_id).
     assert (
-        ctx.engine_recovery_loop.substrate.has_pause_record(
-            run_scoped_substrate_key("wf-corrupt", "run-corrupt")
-        )
+        ctx.engine_recovery_loop.substrate_by_engine_class[
+            EngineClass.WAL_SEGMENT
+        ].has_pause_record(run_scoped_substrate_key("wf-corrupt", "run-corrupt"))
         is True
     )
 
