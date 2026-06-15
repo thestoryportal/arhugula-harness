@@ -67,6 +67,7 @@ from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
 from harness_runtime.lifecycle.retry_breaker_fallback import (
     materialize_retry_breaker_fallback_dispatcher_stage,
 )
+from harness_runtime.lifecycle.step_blast_radius import make_step_blast_radius_resolver
 from harness_runtime.lifecycle.step_dispatchers import StepKindDispatcherRegistry
 from harness_runtime.lifecycle.sub_agent_dispatch import RuntimeSubAgentDispatcher
 from harness_runtime.lifecycle.sync_dispatcher_facade import (
@@ -326,6 +327,13 @@ async def execute(
     ctx.webhook_delivery_composer = await materialize_webhook_delivery_composer_stage(config, ctx)
     ctx.resume_context_holder = ResumeContextHolder()
 
+    # U-RT-115 (G1-blast): per-step blast-radius resolver closure capturing ctx
+    # (the `make_procedural_tier_snapshot_resolver(ctx)` precedent). Shared by
+    # both composer instances (PRE_ACTION + SUB_AGENT_BOUNDARY). U-RT-116 (G1-skip):
+    # the §3.8 operator policy from config, held as composer instance state.
+    blast_radius_resolver = make_step_blast_radius_resolver(cast(HarnessContext, ctx))
+    hitl_auto_approve_policy = config.hitl_auto_approve_policy
+
     hitl_inference = RuntimeHITLGateComposer(
         inner=bare_dispatcher,
         applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
@@ -340,6 +348,8 @@ async def execute(
         pause_requested_flag=ctx.pause_requested_flag,
         webhook_delivery_composer=ctx.webhook_delivery_composer,
         resume_context_holder=ctx.resume_context_holder,
+        blast_radius_resolver=blast_radius_resolver,
+        hitl_auto_approve_policy=hitl_auto_approve_policy,
     )
     ctx.llm_dispatcher = materialize_retry_breaker_fallback_dispatcher_stage(
         inner=cast(Any, hitl_inference),
@@ -432,6 +442,8 @@ async def execute(
         pause_requested_flag=ctx.pause_requested_flag,
         webhook_delivery_composer=ctx.webhook_delivery_composer,
         resume_context_holder=ctx.resume_context_holder,
+        blast_radius_resolver=blast_radius_resolver,
+        hitl_auto_approve_policy=hitl_auto_approve_policy,
     )
     ctx.sub_agent_dispatcher = hitl_sub_agent
 

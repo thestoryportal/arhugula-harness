@@ -1292,3 +1292,387 @@ def test_composer_source_imports_canonical_carrier_constants() -> None:
             f"must not appear in composer source (carrier-canonical "
             f"discipline per spec §14.8.5 v1.11)"
         )
+
+
+# ---------------------------------------------------------------------------
+# U-RT-116 (G1-skip; §3.8 / F-B3-1) — HITLAutoApprovePolicy in-`max()` floor
+# override + the smart-HITL conditional skip + AC-1 audit-on-skip + AC-2
+# EXTERNAL_* not-representable.
+# ---------------------------------------------------------------------------
+
+
+def _binding(persona_tier: PersonaTier, engine_class: Any = None) -> Any:
+    from harness_cp.cp_shared_types import ModelBinding
+    from harness_cp.engine_class import EngineClass
+    from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+
+    # `pure-pattern-no-engine` is non-excluded at SOLO but C-CP-07 §7.2 EXCLUDED at
+    # team / multi; `save-point-checkpoint` is non-excluded at all three tiers
+    # (used for the non-solo composer-level tests).
+    return StepEffectiveBinding(
+        step_id="step-b3",
+        model_binding=ModelBinding(provider="anthropic", model="claude-test-1"),
+        engine_class=(
+            engine_class if engine_class is not None else EngineClass.PURE_PATTERN_NO_ENGINE
+        ),
+        override_applied=False,
+        persona_tier=persona_tier,
+    )
+
+
+def _smart_composer(
+    *,
+    tracer_provider: TracerProvider,
+    blast: Any,
+    policy: Any,
+    surface: _MockAskUserQuestionSurface | None = None,
+    inner: _MockInnerDispatcher | None = None,
+    ledger: _MockLedgerWriter | None = None,
+    audit: _MockAuditWriter | None = None,
+) -> RuntimeHITLGateComposer:
+    """Build a composer with a bound `blast_radius_resolver` + `hitl_auto_approve_policy`.
+
+    The resolver returns a fixed `blast` (decoupling the test from step-kind),
+    matching the production stage-5 binding. The policy is the §3.8 sub-model.
+    """
+    return RuntimeHITLGateComposer(
+        inner=cast(Any, inner if inner is not None else _MockInnerDispatcher()),
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(
+            AskUserQuestionSurface,
+            surface if surface is not None else _MockAskUserQuestionSurface([]),
+        ),
+        ledger_writer=cast(Any, ledger if ledger is not None else _MockLedgerWriter()),
+        audit_writer=cast(Any, audit if audit is not None else _MockAuditWriter()),
+        tracer_provider=tracer_provider,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
+        blast_radius_resolver=lambda _step: blast,
+        hitl_auto_approve_policy=policy,
+    )
+
+
+def _pre_action_step() -> WorkflowStep:
+    return _make_step(placements=(HITLPlacement(position=HITLPlacementKind.PRE_ACTION),))
+
+
+# --- _policy_floor_overrides pure-function (the in-`max()` named-cell logic) -
+
+
+def test_policy_floor_overrides_solo_read_only_default_lowers_persona_only() -> None:
+    from harness_as import BlastRadiusTier
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+    from harness_runtime.lifecycle.hitl_gate_composer import _policy_floor_overrides
+
+    persona_ovr, blast_ovr = _policy_floor_overrides(
+        HITLAutoApprovePolicy(), PersonaTier.SOLO_DEVELOPER, BlastRadiusTier.READ_ONLY
+    )
+    # Default: persona knob ON → AUTO; LOCAL_MUTATION knob OFF + READ_ONLY step
+    # → no blast override (READ_ONLY blast floor is already AUTO).
+    assert persona_ovr is GateLevel.AUTO
+    assert blast_ovr is None
+
+
+def test_policy_floor_overrides_solo_local_mutation_opt_in_lowers_blast() -> None:
+    from harness_as import BlastRadiusTier
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+    from harness_runtime.lifecycle.hitl_gate_composer import _policy_floor_overrides
+
+    policy = HITLAutoApprovePolicy(solo_local_mutation_floor_auto=True)
+    persona_ovr, blast_ovr = _policy_floor_overrides(
+        policy, PersonaTier.SOLO_DEVELOPER, BlastRadiusTier.LOCAL_MUTATION
+    )
+    assert persona_ovr is GateLevel.AUTO
+    assert blast_ovr is GateLevel.AUTO
+
+
+def test_policy_floor_overrides_external_reversible_blast_never_lowered() -> None:
+    # AC-2: EXTERNAL_REVERSIBLE is NOT representable — even with BOTH knobs ON, the
+    # blast override stays None for an EXTERNAL_REVERSIBLE step (the named cell is
+    # LOCAL_MUTATION only). The hard-stop floor (ASK) is preserved structurally.
+    from harness_as import BlastRadiusTier
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+    from harness_runtime.lifecycle.hitl_gate_composer import _policy_floor_overrides
+
+    policy = HITLAutoApprovePolicy(
+        solo_persona_floor_auto=True, solo_local_mutation_floor_auto=True
+    )
+    _persona_ovr, blast_ovr = _policy_floor_overrides(
+        policy, PersonaTier.SOLO_DEVELOPER, BlastRadiusTier.EXTERNAL_REVERSIBLE
+    )
+    assert blast_ovr is None
+
+
+@pytest.mark.parametrize("tier", [PersonaTier.TEAM_BINDING, PersonaTier.MULTI_TENANT_COMPLIANCE])
+def test_policy_floor_overrides_non_solo_no_override(tier: PersonaTier) -> None:
+    # Solo-scoped: at team / multi the knobs do NOT apply (multi structurally
+    # foreclosed, team a registered follow-on). Both overrides None.
+    from harness_as import BlastRadiusTier
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+    from harness_runtime.lifecycle.hitl_gate_composer import _policy_floor_overrides
+
+    persona_ovr, blast_ovr = _policy_floor_overrides(
+        HITLAutoApprovePolicy(), tier, BlastRadiusTier.READ_ONLY
+    )
+    assert persona_ovr is None
+    assert blast_ovr is None
+
+
+# --- composer end-to-end: the conditional skip (§3.8 arithmetic table) -------
+
+
+@pytest.mark.asyncio
+async def test_solo_read_only_default_policy_skips_gate(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """§3.8 row 1: solo READ_ONLY + default policy → AUTO → skip (the headline)."""
+    from harness_as import BlastRadiusTier
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface([])  # empty: a prompt would raise
+    composer = _smart_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.READ_ONLY,
+        policy=HITLAutoApprovePolicy(),
+        surface=surface,
+        inner=inner,
+    )
+    result = await composer.dispatch(
+        _binding(PersonaTier.SOLO_DEVELOPER), _pre_action_step(), step_context=_make_step_context()
+    )
+    # Gate skipped: inner dispatched, operator NEVER prompted.
+    assert result == {"inner_dispatched": True}
+    assert len(inner.calls) == 1
+    assert surface.calls == [], "READ_ONLY solo skip MUST NOT prompt the operator"
+
+
+@pytest.mark.asyncio
+async def test_solo_local_mutation_default_policy_gates(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """§3.8 row 2: solo LOCAL_MUTATION + default (opt-in OFF) → ASK → gate."""
+    from harness_as import BlastRadiusTier
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)]
+    )
+    composer = _smart_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.LOCAL_MUTATION,
+        policy=HITLAutoApprovePolicy(),  # opt-in OFF
+        surface=surface,
+    )
+    await composer.dispatch(
+        _binding(PersonaTier.SOLO_DEVELOPER), _pre_action_step(), step_context=_make_step_context()
+    )
+    assert len(surface.calls) == 1, "LOCAL_MUTATION with opt-in OFF MUST gate (prompt)"
+
+
+@pytest.mark.asyncio
+async def test_solo_local_mutation_opt_in_skips_gate(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """§3.8 row 2 (opt-in ON): solo LOCAL_MUTATION + knob2 ON → AUTO → skip."""
+    from harness_as import BlastRadiusTier
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    surface = _MockAskUserQuestionSurface([])
+    composer = _smart_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.LOCAL_MUTATION,
+        policy=HITLAutoApprovePolicy(solo_local_mutation_floor_auto=True),
+        surface=surface,
+    )
+    await composer.dispatch(
+        _binding(PersonaTier.SOLO_DEVELOPER), _pre_action_step(), step_context=_make_step_context()
+    )
+    assert surface.calls == [], "LOCAL_MUTATION opt-in ON MUST skip (no prompt)"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "blast_name",
+    ["EXTERNAL_REVERSIBLE", "EXTERNAL_IRREVERSIBLE"],
+)
+async def test_solo_external_always_gates_even_with_both_knobs(
+    blast_name: str,
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """§3.8 rows 3/4 (AC-2): solo EXTERNAL_* gates even with BOTH knobs ON — the
+    hard-stop is structural (the policy cannot express an EXTERNAL_* override)."""
+    from harness_as import BlastRadiusTier
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)]
+    )
+    composer = _smart_composer(
+        tracer_provider=provider,
+        blast=getattr(BlastRadiusTier, blast_name),
+        policy=HITLAutoApprovePolicy(
+            solo_persona_floor_auto=True, solo_local_mutation_floor_auto=True
+        ),
+        surface=surface,
+    )
+    await composer.dispatch(
+        _binding(PersonaTier.SOLO_DEVELOPER), _pre_action_step(), step_context=_make_step_context()
+    )
+    assert len(surface.calls) == 1, f"{blast_name} MUST gate (hard-stop) regardless of policy"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier", [PersonaTier.TEAM_BINDING, PersonaTier.MULTI_TENANT_COMPLIANCE])
+async def test_non_solo_read_only_still_gates(
+    tier: PersonaTier,
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """Solo-scoped: at team / multi the policy does NOT apply — READ_ONLY still gates."""
+    from harness_as import BlastRadiusTier
+    from harness_cp.engine_class import EngineClass
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=1.0)]
+    )
+    composer = _smart_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.READ_ONLY,
+        policy=HITLAutoApprovePolicy(),
+        surface=surface,
+    )
+    # `save-point-checkpoint` is non-excluded at team / multi (pure-pattern is
+    # C-CP-07 §7.2 excluded there — the matrix-cell exclusion is orthogonal).
+    await composer.dispatch(
+        _binding(tier, EngineClass.SAVE_POINT_CHECKPOINT),
+        _pre_action_step(),
+        step_context=_make_step_context(),
+    )
+    assert len(surface.calls) == 1, f"{tier.value} READ_ONLY MUST gate (policy is solo-scoped)"
+
+
+# --- AC-1 (C10 audit-wiring guard) — non-vacuous §20.1 audit on the skip -----
+
+
+@pytest.mark.asyncio
+async def test_policy_skip_emits_non_vacuous_audit_by_execution(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """AC-1: each policy-caused skip emits a NON-VACUOUS §20.1 audit-ledger entry,
+    verified BY EXECUTION (the actual skip path → capturing writers)."""
+    from harness_as import BlastRadiusTier
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    ledger = _MockLedgerWriter()
+    audit = _MockAuditWriter()
+    composer = _smart_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.READ_ONLY,
+        policy=HITLAutoApprovePolicy(),
+        ledger=ledger,
+        audit=audit,
+    )
+    await composer.dispatch(
+        _binding(PersonaTier.SOLO_DEVELOPER), _pre_action_step(), step_context=_make_step_context()
+    )
+    # The full 4-substep audit-write ran on the skip path (NOT a no-op): one F2
+    # (8b-HITL) ledger write + one OD (8d-HITL) audit append.
+    assert len(ledger.appends) == 1, "policy skip MUST F2-write the auto-approval (8b-HITL)"
+    assert len(audit.appends) == 1, "policy skip MUST emit the §20.1 audit entry (8d-HITL)"
+    payload, _key = ledger.appends[0]
+    assert str(payload.action_id).startswith("hitl:"), "auto-approve action_id carries hitl: prefix"
+
+
+def test_auto_approve_audit_entry_is_non_vacuous_approve_not_timeout(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """AC-1 shape: the auto-approve audit entry is `response="approve"` + `gate_level=AUTO`
+    — NOT the timeout partial `response=""` (which would be vacuous)."""
+    from harness_as import BlastRadiusTier
+    from harness_cp.gate_level_rule import GateLevel as CPGateLevel
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    composer = _smart_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.READ_ONLY,
+        policy=HITLAutoApprovePolicy(),
+    )
+    cp_entry, _write = composer._compose_and_persist_audit(
+        parent_action_id=cast(Any, "workflow:test:step:0"),
+        placement=HITLPlacement(position=HITLPlacementKind.PRE_ACTION),
+        cell=cast(Any, None),
+        gate_result=None,
+        step_context=_make_step_context(),
+        raise_on_failure=True,
+        auto_approved=True,
+    )
+    assert cp_entry.response == HITLResponse.APPROVE.value
+    assert cp_entry.response != "", "auto-approve entry MUST NOT be the vacuous timeout shape"
+    assert cp_entry.gate_level == CPGateLevel.AUTO
+
+
+# ---------------------------------------------------------------------------
+# U-RT-117 (G2; D-palette) — compute gate_level ONCE + thread the real value
+# into the step-4d palette (replacing the hardcoded ASK + double-computation).
+# ---------------------------------------------------------------------------
+
+
+def test_compute_gate_decision_returns_none_for_partial_binding() -> None:
+    """U-RT-117 fallback: no persona_tier / no blast → None (caller uses
+    requires_hitl + DEFAULT_FULL_PALETTE per the Reading-B v1.22 tolerance)."""
+    from types import SimpleNamespace
+
+    from harness_runtime.lifecycle.hitl_gate_composer import _compute_gate_decision
+
+    assert _compute_gate_decision(binding=SimpleNamespace(), resolved_blast_radius=None) is None
+
+
+def test_effective_palette_ask_and_auto_are_full_palette() -> None:
+    """U-RT-117 regression-safety: ASK/AUTO → full palette (== prior hardcoded-ASK
+    behavior); only DENY narrows."""
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_runtime.lifecycle.hitl_gate_composer import (
+        DEFAULT_FULL_PALETTE,
+        _effective_palette_for,
+    )
+
+    assert _effective_palette_for(GateLevel.ASK) == DEFAULT_FULL_PALETTE
+    assert _effective_palette_for(GateLevel.AUTO) == DEFAULT_FULL_PALETTE
+
+
+def test_compute_once_deny_tier_tool_threads_deny_row_narrowing() -> None:
+    """U-RT-117 AC: a synthetic `per_tool_gate_level=DENY` reaches `gate_level=DENY`
+    and the threaded palette is the §19.4 deny-row `{REJECT, RESPOND}` (the G2
+    payoff — reachable via the per-tool axis; inert-but-harmless in production
+    until the G2c producer / O-CP-3 lands)."""
+    from types import SimpleNamespace
+
+    from harness_as import BlastRadiusTier
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_runtime.lifecycle.hitl_gate_composer import (
+        _compute_gate_decision,
+        _effective_palette_for,
+    )
+
+    binding = SimpleNamespace(
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+        per_tool_gate_level=GateLevel.DENY,
+    )
+    decision = _compute_gate_decision(
+        binding=binding, resolved_blast_radius=BlastRadiusTier.READ_ONLY
+    )
+    assert decision is not None
+    assert decision.computed_gate_level is GateLevel.DENY
+    palette = _effective_palette_for(decision.computed_gate_level)
+    assert palette == frozenset({HITLResponse.REJECT, HITLResponse.RESPOND})
