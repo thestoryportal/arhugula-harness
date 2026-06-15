@@ -4,6 +4,7 @@
 **Workspace HEAD at filing**: `bd50cd6` (post-Reading A path 1 arc close; `main` = `origin/main`)
 **Routing class**: Class 1 (halt-execution; design-phase back-flow required per X-AL-3)
 **Status:** CLOSED-DEFERRED 2026-05-25 — operator routed to §4 option (E) "Defer indefinitely + fix §3(a) doc-drift"; §3(a) doc-drift patched at skip-reason text this arc; un-skip gates on future DURABLE_ASYNC engine class materialization via full design-phase back-flow
+> **STATUS UPDATE 2026-06-15 (R-FS-1 arc #24, E-DESIGN):** the §9 un-skip trigger is now **ACTIVE** under the full-spec directive (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`). The directive IS the new routing decision (build §4 options **(A) + (B) + (C)** — all 3 unbuilt engine classes, hand-rolled per I-6; **NOT (D)/(E)**). Re-classified CLOSED-DEFERRED → **PROPOSING (build)**. The design re-open record + per-slice forks (F-E-1/2/3) are at `.harness/r-fs-1-e-engine-classes-design-v1.md`. Path-(i) `test_u_rt_95` un-skips at the **WAL_SEGMENT (E-2)** slice (per the `:129-130` DURABLE_ASYNC cell mapping). This fork flips PROPOSING → CLOSED-BUILT when E-2 lands.
 
 ---
 
