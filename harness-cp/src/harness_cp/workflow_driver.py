@@ -211,6 +211,25 @@ _IN_SCOPE_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
         # Resume-blind on the 5 non-linear strategies, exactly as save-point /
         # EVENT_SOURCED_REPLAY (B-FANOUT-PAUSE arc, not this unit).
         EngineClass.WAL_SEGMENT,
+        # U-CP-96 (R-FS-1 E-impl-3a) — RECONCILER_LOOP materialized as
+        # level-triggered read/diff/converge resumption (C-CP-08 §8.1
+        # `reconciler_converge`) impl against cleared C-CP-07/08 + the v1_33 §7.4
+        # substrate-deferral (hand-rolled etcd-style per I-6), following the
+        # U-CP-93/94 precedent (added to _IN_SCOPE as impl, "no spec bump"). The
+        # `reconciler-converge` dispatch branch (below, after EVENT_SOURCED_REPLAY)
+        # computes resume_at via the F2 prefix join
+        # (`_determine_reconciler_converge_resume_at`, a CP→IS read; the engine-owned
+        # CRD_RECONCILER_LEDGER substrate is U-RT-123, not read here — no CP→runtime
+        # import). This is the CP/IS-only resumption-semantics half; the engine-layer
+        # recovery-loop firing (U-CP-97) + the durable etcd-style substrate (U-RT-123)
+        # + activation (U-RT-124) are E-impl-3b. **RECONCILER_LOOP is the LAST engine
+        # class — with it in _IN_SCOPE, _IN_SCOPE == the full closed EngineClass set
+        # and the EngineClassNotYetMaterializedError gate (the `not in
+        # _IN_SCOPE_ENGINE_CLASSES` raise above) becomes preserved-but-unreachable
+        # (the E sub-program closes at the gate level).**
+        # Resume-blind on the 5 non-linear strategies, exactly as save-point /
+        # EVENT_SOURCED_REPLAY / WAL_SEGMENT (B-FANOUT-PAUSE arc, not this unit).
+        EngineClass.RECONCILER_LOOP,
     }
 )
 
@@ -1518,6 +1537,34 @@ def _execute_workflow_body(
         )
         if resume_at > 0:
             ctx.lifecycle_emitter.emit(WorkflowEventClass.RESUMPTION)
+    elif manifest_entry.engine_class is EngineClass.RECONCILER_LOOP:
+        # U-CP-96 (R-FS-1 E-impl-3a) — RECONCILER_LOOP convergence resumption.
+        # "Re-derive state from declarative CRDs; reconciler-loop converges through
+        # compare-and-swap" (C-CP-08 §8.1 `reconciler_converge`): advance resume_at
+        # over the contiguous materialized prefix so already-converged steps are not
+        # re-dispatched. Under §8.2 row 4 the reconciler reads the F2 state-ledger
+        # (joined on `idempotency_key`) to detect prior actions, so the CP-level
+        # resume_at is the same F2-prefix computation save-point / event-replay /
+        # segment-replay use (`_determine_reconciler_converge_resume_at` delegates) —
+        # a CP→IS read, never a read of the engine-owned CRD_RECONCILER_LEDGER /
+        # U-RT-123 substrate (no `harness_cp` → `harness_runtime` import; avoids a
+        # CP↔RT cycle). reconciler-loop is an ENGINE-OWNS-SUBSTRATE class
+        # (`f2_substrate_join_discipline.py:9-12`, grouped with event-sourced-replay),
+        # so the AUTHORITATIVE durable reconciler state lives in U-RT-123 (E-impl-3b)
+        # and this CP/IS resume_at is DELIBERATELY degenerate vs save-point (the same
+        # accepted bar U-CP-93/94 take). The genuine distinguishing RECONCILER_LOOP
+        # capabilities — the hand-rolled etcd-style CAS-lease substrate (U-RT-123) +
+        # the engine-layer recovery-loop firing (U-CP-97) — are E-impl-3b; this unit
+        # is the (A) resumption-semantics half and does NOT fire the recovery loop
+        # (the EVENT_SOURCED_REPLAY shape, not the WAL_SEGMENT one).
+        resume_at = _determine_reconciler_converge_resume_at(
+            ctx=ctx,
+            run_idempotency_key=run_idempotency_key,
+            step_count=len(steps),
+            workload_class=manifest_entry.workload_class,
+        )
+        if resume_at > 0:
+            ctx.lifecycle_emitter.emit(WorkflowEventClass.RESUMPTION)
     elif manifest_entry.engine_class is EngineClass.WAL_SEGMENT:
         # U-CP-94 (R-FS-1 E-impl-2) — WAL_SEGMENT segment-replay resumption.
         # "Replay from WAL segments; per-segment dedup" (C-CP-08 §8.1
@@ -2280,6 +2327,51 @@ def _determine_segment_replay_resume_at(
     this CP/IS-level resume_at is degenerate vs save-point; the genuine
     distinguishing WAL_SEGMENT capability is the durable substrate + recovery
     loop firing, not a richer prefix computation here.
+    """
+    return _determine_resume_at(
+        ctx=ctx,
+        run_idempotency_key=run_idempotency_key,
+        step_count=step_count,
+        workload_class=workload_class,
+    )
+
+
+def _determine_reconciler_converge_resume_at(
+    *,
+    ctx: DriverContext,
+    run_idempotency_key: str,
+    step_count: int,
+    workload_class: Any,
+) -> int:
+    """Determine resume-at for RECONCILER_LOOP (C-CP-08 §8.1 `reconciler_converge`).
+
+    Named seam for reconciler-loop convergence resumption (U-CP-96). At HEAD it
+    delegates to `_determine_resume_at`: under C-CP-08 §8.2 row 4 the reconciler
+    reads the F2 state-ledger (joined on `idempotency_key`) to detect prior
+    actions, so the resume-at index — the count of the contiguous already-converged
+    prefix — is the identical F2-prefix computation save-point / event-replay /
+    segment-replay use. RECONCILER_LOOP's §8.1 distinction ("re-derive state from
+    declarative CRDs; reconciler-loop converges through compare-and-swap")
+    manifests in the driver as the materialized prefix not being re-dispatched
+    (the loop begins at `resume_at`), and the F2 idempotency-key join is the
+    convergence dedup (an already-converged step's key resolves to an entry → it
+    is not re-applied).
+
+    reconciler-loop is an ENGINE-OWNS-SUBSTRATE class
+    (`f2_substrate_join_discipline.py:9-12`, grouped with event-sourced-replay; F2
+    join `CRD_RECONCILER_LEDGER`): the AUTHORITATIVE durable reconciler state lives
+    in the engine-owned, hand-rolled etcd-style store (U-RT-123, E-impl-3b), NOT
+    this CP→IS F2-overlay read. The CP driver cannot import `harness_runtime`, so
+    it cannot read that store directly — the only reading that avoids a CP↔RT cycle
+    (U-CP-96 AC). As with EVENT_SOURCED_REPLAY (`.harness/r-fs-1-e-impl-1-finding.md`)
+    and WAL_SEGMENT (`.harness/r-fs-1-e-impl-2-finding.md`) this CP/IS-level resume_at is
+    DELIBERATELY degenerate vs save-point — a sharper engine-owns-vs-overlay split
+    than WAL had, which makes the "if a genuinely engine-owned resume_at is needed
+    it folds into the runtime layer (U-RT-124), never a new CP→RT edge" contingency
+    MORE warranted for reconciler, not less (mirrors the U-CP-94 hedge, a fortiori).
+    The genuine distinguishing RECONCILER_LOOP capabilities are the durable
+    CAS-lease substrate (U-RT-123) + the engine-layer recovery-loop firing
+    (U-CP-97), not a richer prefix computation here.
     """
     return _determine_resume_at(
         ctx=ctx,

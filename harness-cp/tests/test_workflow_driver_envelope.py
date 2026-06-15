@@ -640,20 +640,27 @@ def test_envelope_step_count_zero_when_no_steps_complete_before_drain(
 
 def test_envelope_records_exception_on_validation_failure(
     exporter_and_provider: tuple[InMemorySpanExporter, TracerProvider],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC #1 — Exception inside envelope (here: out-of-scope ENGINE class raises
-    EngineClassNotYetMaterializedError) records the exception event and sets span
-    status to ERROR. OTel auto-discipline + the C-RT-17 validation error class
-    combined. (Was the topology gate via DECENTRALIZED_HANDOFF; all six topology
-    patterns are materialized post-U-CP-90, so the engine-class gate is the live
-    pre-dispatch-raise vehicle.)"""
+    """AC #1 — Exception inside envelope (here: a not-yet-materialized ENGINE class
+    raises EngineClassNotYetMaterializedError) records the exception event and sets
+    span status to ERROR. OTel auto-discipline + the C-RT-17 validation error class
+    combined. All 5 engine classes are materialized at HEAD (RECONCILER_LOOP was the
+    last, U-CP-96/E-impl-3a), so the gate is preserved-but-unreachable for valid
+    input; this test patches _IN_SCOPE to exclude RECONCILER_LOOP to exercise the
+    preserved gate (was DECENTRALIZED_HANDOFF via the topology gate, then the engine
+    gate; both materialization gates are now closed for valid input)."""
     exporter, provider = exporter_and_provider
+    monkeypatch.setattr(
+        "harness_cp.workflow_driver._IN_SCOPE_ENGINE_CLASSES",
+        frozenset(EngineClass) - {EngineClass.RECONCILER_LOOP},
+    )
     ctx = _FakeCtx(tracer_provider=provider)
     manifest = WorkflowManifestEntry(
         workflow_id="wf-exc",
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
         persona_tier=PersonaTier.TEAM_BINDING,
-        engine_class=EngineClass.RECONCILER_LOOP,  # sole not-materialized class → raises (WAL_SEGMENT went in-scope at U-CP-94/E-impl-2)
+        engine_class=EngineClass.RECONCILER_LOOP,  # patched out of _IN_SCOPE → raises the preserved gate
         topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
         layer_budgets=(),
         fallback_chain=_CHAIN,
