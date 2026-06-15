@@ -16,8 +16,8 @@ merge_commit: (pending)
 reviewer_chain:
   - implementation-planner discipline (main-agent, grounded at HEAD d7102a6) — produced the 2 NEW runtime units (U-RT-121 hand-rolled WAL segment-log `EnginePauseResumeSubstrate` extending #475; U-RT-122 R-CXA-2 engine-layer activation — durable factory bind + go-live e2e) + §3.1b DAG delta + §4.1b coverage; coverage-complete; acyclic; delta-only-preservation verified (U-RT-115..120 bodies byte-identical).
   - advisor() pre-substantive + the gating empirical probe — confirmed the durable-substrate (U-RT-121) and the R-CXA-2 activation (U-RT-122) are the separable Unit-B halves; the U-RT-122 go-live AC is by-execution (cp.pause-captured/cp.resume-attempted land against the DURABLE substrate, not "bound"); R-CXA-2 owns at E-2 (the probe resolved the recovery-loop snapshot surface composes with WAL_SEGMENT's append-then-resume, not EVENT_SOURCED's pure event-replay).
-  - harness-adversarial-reviewer Phase-6 pre-merge review — (pending this PR's review pass; report at .harness/adversarial-review-r-fs-1-e-plan.md)
-  - out-of-family Codex review (`just codex-review`) — (pending this PR's review pass)
+  - harness-adversarial-reviewer Phase-6 pre-merge review (dedicated agent, 37 tool-uses; full report .harness/adversarial-review-r-fs-1-e-plan.md) — VERDICT **APPROVE-WITH-CHANGES** (0 blocking / 1 substantive / 2 doc-hygiene; all findings on the CP sibling + companion, applied). Runtime-side: U-RT-121/122 verified — the U-RT-122 go-live AC is by-execution against the durable substrate (not "bound"); no CP→RT import; delta-only U-RT-01..120 byte-preserved. No runtime-specific finding.
+  - out-of-family Codex review (`just codex-review`) — 1 [P2] applied at the CP sibling (the `test_u_rt_95` un-skip false-green; see the CP v2.34 marker). No runtime-side finding; the U-RT-122 go-live AC was already by-execution against the durable substrate.
 supersedes: design-substrate/Implementation_Plan_Harness_Runtime_v2_44.md
 superseded_by:
 ---
