@@ -10,6 +10,7 @@ from harness_core import PersonaTier
 from harness_core.deployment_surface import DeploymentSurface
 from harness_core.workload_class import WorkloadClass
 from harness_cp.cp_shared_types import ActorIdentity
+from harness_cp.engine_class import EngineClass
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.pause_resume_protocol import PauseReason, ResumeOutcomeKind
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass
@@ -199,6 +200,7 @@ def test_bound_engine_loop_emits_pause_and_resume_entries(tmp_path: Path) -> Non
 
     pause = asyncio.run(
         stage.engine_recovery_loop.capture_pause(
+            engine_class=EngineClass.WAL_SEGMENT,
             workflow_id="wf-1",
             run_id="run-1",
             step_id="step-1",
@@ -207,6 +209,7 @@ def test_bound_engine_loop_emits_pause_and_resume_entries(tmp_path: Path) -> Non
     )
     resume = asyncio.run(
         stage.engine_recovery_loop.attempt_resume(
+            engine_class=EngineClass.WAL_SEGMENT,
             workflow_id="missing-workflow",
             run_id="run-1",
             step_id="step-1",
