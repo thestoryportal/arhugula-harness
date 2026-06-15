@@ -1342,3 +1342,61 @@ async def test_bootstrap_inference_with_no_providers_fails(
 
     with pytest.raises(BootstrapFailure):
         await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD, requires_inference=True)
+
+
+# ---------------------------------------------------------------------------
+# U-RT-116 (G1-skip; §3.8 / F-B3-1) AC-1 wiring — the smart-HITL skip's
+# production binding chain (config → stage-5 → composer instance state) is
+# verified THROUGH THE REAL run_bootstrap path, not just grep'd from the diff.
+# Closes the stage-factory→composer link AC-1 names ("MUST NOT go live before
+# verified wired") — composes with the by-execution skip+audit composer test
+# at test_lifecycle_hitl_gate_composer.py. [[verification-shape-sharpened-grep-vs-e2e]]
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_threads_hitl_auto_approve_policy_onto_both_composers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The operator's `config.hitl_auto_approve_policy` reaches BOTH stage-5 HITL
+    composers as instance state, and the per-step blast-radius resolver is bound
+    to the real ctx (resolves through the closure) — the production wiring that
+    makes the §3.8 skip go live."""
+    from harness_as import BlastRadiusTier
+    from harness_cp.workflow_driver_types import StepKind, WorkflowStep
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    # Non-default policy → proves the config VALUE threads (not just the default).
+    policy = HITLAutoApprovePolicy(solo_local_mutation_floor_auto=True)
+    populated = _config(tmp_path).model_copy(update={"hitl_auto_approve_policy": policy})
+    ctx = await run_bootstrap(populated, workload_class=_WORKLOAD)
+
+    # Wrap chain: ctx.llm_dispatcher (C-RT-16 retry) → .inner (PRE_ACTION HITL
+    # composer). ctx.sub_agent_dispatcher IS the SUB_AGENT_BOUNDARY HITL composer.
+    pre_action = ctx.llm_dispatcher.inner  # type: ignore[attr-defined]
+    sub_agent = ctx.sub_agent_dispatcher
+
+    inference_step = WorkflowStep(
+        step_id="bootstrap-wiring-probe",
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={},
+    )
+    for composer in (pre_action, sub_agent):
+        # (a) the config-supplied policy is held as composer instance state.
+        assert composer.hitl_auto_approve_policy == policy  # type: ignore[attr-defined]
+        # (b) the blast-radius resolver is bound + resolves through the real ctx
+        # closure (not None / not a dead closure).
+        resolver = composer.blast_radius_resolver  # type: ignore[attr-defined]
+        assert resolver is not None
+        assert resolver(inference_step) is BlastRadiusTier.READ_ONLY
+
+    # Default config → default policy threads (READ_ONLY auto-ON / LOCAL_MUTATION
+    # opt-in OFF) — the no-override baseline.
+    ctx_default = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
+    default_policy = ctx_default.llm_dispatcher.inner.hitl_auto_approve_policy  # type: ignore[attr-defined]
+    assert default_policy.solo_persona_floor_auto is True
+    assert default_policy.solo_local_mutation_floor_auto is False

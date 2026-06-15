@@ -110,6 +110,27 @@ class GateLevelInput(BaseModel):
     follow-on spec-extension arc. The field type is the landed U-CP-00c
     `MCPTrustTier` enum."""
 
+    persona_floor_override: GateLevel | None = None
+    """U-CP-91 (F-B3-1 §19.5 in-`max()` floor-override; runtime spec §3.8). When
+    non-`None`, REPLACES the `PERSONA_TIER_GATE_LEVEL_FLOOR` table lookup for the
+    `persona_tier` axis in this single evaluation. The runtime HITL gate composer
+    (U-RT-116) sets it to `AUTO` when the operator's `hitl_auto_approve_policy`
+    lowers `persona_tier_floor[SOLO_DEVELOPER]` — the composer owns the
+    solo-scoping + the per-tier gating + the only-`AUTO`/only-blessed-cell
+    discipline (§19.5: solo permitted, team restricted, multi prohibited). Default
+    `None` = the canonical table floor (existing callers byte-unaffected). This is
+    the F-B3-1 §3.2 plan-carrier shape (NOT a C-CP-19 spec change); the override is
+    applied as a floor cell WITHIN the existing `max()` (Reading C, in-`max()`)."""
+
+    blast_floor_override: GateLevel | None = None
+    """U-CP-91 (F-B3-1 §19.5). When non-`None`, REPLACES the
+    `BLAST_RADIUS_GATE_LEVEL_FLOOR` table lookup for the `blast_radius_tier` axis.
+    The composer (U-RT-116) sets it to `AUTO` when the policy lowers
+    `blast_radius_floor[LOCAL_MUTATION]` at solo (operator opt-in). Default `None`
+    = the canonical table floor. **Only the persona + blast floors are
+    override-able** — `per_tool_gate_level` + `mcp_trust_tier` are NEVER overridden
+    (a `deny`-tier tool / untrusted MCP server still composes its floor verbatim)."""
+
 
 class GateLevelComputation(BaseModel):
     """The result of a gate-level computation (C-CP-19 §19.1).
@@ -174,8 +195,22 @@ def gate_level(input: GateLevelInput) -> GateLevelComputation:
     until follow-on spec-extension arc.
     """
     per_tool_floor = input.per_tool_gate_level  # degenerate — IS the value
-    blast_floor = BLAST_RADIUS_GATE_LEVEL_FLOOR[input.blast_radius_tier]
-    persona_floor = PERSONA_TIER_GATE_LEVEL_FLOOR[input.persona_tier]
+    # U-CP-91 (F-B3-1 §19.5): the composer-supplied floor-override REPLACES the
+    # table lookup for the persona/blast cells when present (the in-`max()`
+    # operator-policy override). Default None → the canonical §19.1 table floor
+    # (byte-identical to the pre-U-CP-91 path). per_tool + mcp_trust are never
+    # override-able (no override field). The composer (U-RT-116) is the sole
+    # producer and sets only `AUTO`, only at the §19.1-annotated solo cells.
+    blast_floor = (
+        input.blast_floor_override
+        if input.blast_floor_override is not None
+        else BLAST_RADIUS_GATE_LEVEL_FLOOR[input.blast_radius_tier]
+    )
+    persona_floor = (
+        input.persona_floor_override
+        if input.persona_floor_override is not None
+        else PERSONA_TIER_GATE_LEVEL_FLOOR[input.persona_tier]
+    )
     per_axis_floors: dict[Axis, GateLevel] = {
         Axis.PER_TOOL_GATE_LEVEL: per_tool_floor,
         Axis.BLAST_RADIUS: blast_floor,

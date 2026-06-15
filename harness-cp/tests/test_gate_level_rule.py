@@ -112,12 +112,87 @@ def test_gate_level_input_no_deployment_surface_field() -> None:
     """
     assert "deployment_surface" not in GateLevelInput.model_fields
     assert "per_tool_gate_level" in GateLevelInput.model_fields
+    # U-CP-91 (F-B3-1 §19.5) ADDED the two optional floor-override fields
+    # (persona_floor_override / blast_floor_override, default None) — the
+    # in-`max()` operator-policy override carrier-shape. The 4 canonical axes
+    # are unchanged; the overrides are optional + default-None (byte-identical
+    # no-override path).
     assert set(GateLevelInput.model_fields) == {
         "per_tool_gate_level",
         "persona_tier",
         "blast_radius_tier",
         "mcp_trust_tier",
+        "persona_floor_override",
+        "blast_floor_override",
     }
+
+
+def _base_input(**overrides: object) -> GateLevelInput:
+    """A READ_ONLY/solo/auto-tool baseline GateLevelInput, with field overrides."""
+    kwargs: dict[str, object] = {
+        "per_tool_gate_level": GateLevel.AUTO,
+        "persona_tier": PersonaTier.SOLO_DEVELOPER,
+        "blast_radius_tier": BlastRadiusTier.READ_ONLY,
+        "mcp_trust_tier": MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
+    }
+    kwargs.update(overrides)
+    return GateLevelInput(**kwargs)  # type: ignore[arg-type]
+
+
+def test_u_cp_91_no_override_path_byte_identical() -> None:
+    """U-CP-91 — default (no override) composes the canonical §19.1 table `max()`.
+
+    The persona floor is all-ASK, so a default solo READ_ONLY gate is ASK →
+    hitl_required True (the pre-U-CP-91 behavior, verbatim).
+    """
+    comp = gate_level(_base_input())
+    assert comp.computed_gate_level is GateLevel.ASK
+    assert hitl_required(_base_input()) is True
+
+
+def test_u_cp_91_persona_floor_override_solo_read_only_skips() -> None:
+    """U-CP-91 AC — a lowered `persona_tier_floor[SOLO]=AUTO` composes through
+    `max()` to yield AUTO for a solo READ_ONLY action → `hitl_required` False
+    (the smart-HITL conditional-skip; F-B3-1 default policy)."""
+    inp = _base_input(persona_floor_override=GateLevel.AUTO)
+    comp = gate_level(inp)
+    assert comp.computed_gate_level is GateLevel.AUTO
+    assert hitl_required(inp) is False
+
+
+def test_u_cp_91_persona_override_does_not_lower_local_mutation() -> None:
+    """U-CP-91 — overriding ONLY the persona floor leaves the blast floor at its
+    table value: a LOCAL_MUTATION action still gates (ASK) under the persona-only
+    override (the F-B3-1 default — LOCAL_MUTATION is opt-in via the blast override)."""
+    inp = _base_input(
+        blast_radius_tier=BlastRadiusTier.LOCAL_MUTATION,
+        persona_floor_override=GateLevel.AUTO,
+    )
+    assert gate_level(inp).computed_gate_level is GateLevel.ASK
+
+
+def test_u_cp_91_blast_floor_override_local_mutation_skips() -> None:
+    """U-CP-91 — with BOTH the persona override AND the blast[LOCAL_MUTATION]
+    override (the F-B3-1 LOCAL_MUTATION opt-in), a solo LOCAL_MUTATION action
+    composes AUTO → skips."""
+    inp = _base_input(
+        blast_radius_tier=BlastRadiusTier.LOCAL_MUTATION,
+        persona_floor_override=GateLevel.AUTO,
+        blast_floor_override=GateLevel.AUTO,
+    )
+    assert gate_level(inp).computed_gate_level is GateLevel.AUTO
+
+
+def test_u_cp_91_override_never_lowers_per_tool_deny() -> None:
+    """U-CP-91 — the override only touches persona/blast; a `deny`-tier tool still
+    composes DENY regardless of the persona/blast overrides (per_tool not
+    override-able — the AC's never-lower-a-non-targeted-axis invariant)."""
+    inp = _base_input(
+        per_tool_gate_level=GateLevel.DENY,
+        persona_floor_override=GateLevel.AUTO,
+        blast_floor_override=GateLevel.AUTO,
+    )
+    assert gate_level(inp).computed_gate_level is GateLevel.DENY
 
 
 def test_blast_radius_floor_match_spec_19_1() -> None:

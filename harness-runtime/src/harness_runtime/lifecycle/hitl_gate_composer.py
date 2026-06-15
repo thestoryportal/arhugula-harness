@@ -77,8 +77,12 @@ Audit-compose failure uses OTel `Span.set_status(StatusCode.ERROR)` +
        v1.11 MVP — HITL placement composition deferred to workflow-grammar
        arc when HandoffContext-at-PRE_ACTION binding lands)
    4b. Resolve matrix cell + raise on `is_excluded`
-   4c. Evaluate `_hitl_required` (v1.11 MVP: always True on matching placement)
-   4d. Determine palette (v1.11 MVP: DEFAULT_FULL_PALETTE)
+   4c. Compute `gate_level()` ONCE (U-RT-115/116/117): resolve the per-step
+       blast radius (G1-blast), apply the §3.8 operator-policy in-`max()` floor
+       overrides (G1-skip, solo-scoped), then derive `_hitl_required` (§19.4).
+       A policy-caused skip emits a non-vacuous §20.1 auto-approve audit (AC-1).
+   4d. Determine palette from the SAME `gate_level` (G2): ASK/AUTO → full
+       palette; DENY → §19.4 deny-row narrowing (inert until G2c/O-CP-3).
    4e. Open `hitl.gate.evaluated` span + set canonical 3 attrs
    4f-bis. Open `hitl.invocation.opened` span + set canonical 4 attrs
    4f. Invoke `await surface.ask(...)`; on timeout, open `hitl.invocation.timed_out`
@@ -113,13 +117,16 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from harness_as import GateLevel
+from harness_as import BlastRadiusTier, GateLevel
+from harness_core import PersonaTier
 from harness_core.identity import ActionID
 from harness_cp.audit_hitl_span_namespace import (
     AUDIT_NAMESPACE_SCHEMA,
     HITL_SPAN_NAMESPACE_SCHEMA,
 )
 from harness_cp.cp_shared_types import ActorIdentity
+from harness_cp.gate_level_rule import GateLevel as CPGateLevel
+from harness_cp.gate_level_rule import GateLevelComputation
 from harness_cp.handoff_context import (
     ActionKind,
     HandoffContext,
@@ -152,6 +159,7 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
     AskUserQuestionSurface,
     AskUserQuestionTimeoutError,
 )
+from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
 from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
 from harness_runtime.lifecycle.webhook_delivery_composer import (
     WebhookDeliveryComposer,
@@ -307,46 +315,104 @@ def compose_hitl_action_id(
     return ActionID(f"hitl:{parent_action_id}:{placement_position.value}")
 
 
-def _evaluate_hitl_required_tolerant(*, binding: object, placement: object) -> bool:
-    """Reading B v1.22 §14.8.2 step 4c — binding-tolerant 4-axis consumption.
+def _policy_floor_overrides(
+    policy: HITLAutoApprovePolicy,
+    persona_tier: object,
+    resolved_blast_radius: BlastRadiusTier | None,
+) -> tuple[CPGateLevel | None, CPGateLevel | None]:
+    """U-RT-116 (G1-skip; §3.8) — compute the in-`max()` floor overrides.
 
-    When ``binding`` exposes both ``persona_tier`` and ``blast_radius_tier``,
-    consume the spec-canonical 4-axis ``evaluate_hitl_required`` via CP-axis
-    ``GateLevelInput`` per CP spec v1.15 §19.1.1 (v2.20 conformance —
-    ``per_tool_gate_level`` from binding when available else sentinel default
-    ``GateLevel.AUTO``; sentinel default for ``mcp_trust_tier`` per CP plan
-    v2.20 §0.8 row 2 PARTIAL-ADVANCE unconsumed axis). Otherwise (test-fixture
-    partial-binding case), fall back to the v1.11 MVP
-    ``placement.requires_hitl`` getattr-tolerant default (True when absent).
+    Returns `(persona_floor_override, blast_floor_override)` — the two §19.1 floor
+    cells the operator's `HITLAutoApprovePolicy` lowers to `AUTO` at step-4c
+    (Reading C, in-`max()`). Both `None` ⇒ no override (the canonical table floor).
+
+    **Solo-scoped (C10 safety is structural).** The knobs apply ONLY at
+    `SOLO_DEVELOPER`: multi-tenant-compliance is structurally foreclosed (no
+    override attempt to refuse) and team-binding is a registered follow-on
+    (F-B3-1 §6). At non-solo tiers both overrides are `None`.
+
+    **Named-cell foreclosure (AC-2).** The LOCAL_MUTATION knob lowers the blast
+    floor ONLY when the step's resolved `blast_radius_tier == LOCAL_MUTATION` —
+    NEVER for EXTERNAL_REVERSIBLE / EXTERNAL_IRREVERSIBLE (their blast floor stays
+    `ASK` → hard-stop; the asymmetry is resolved structurally, not widened). The
+    persona override is unconditional-on-blast (solo + knob): that is safe because
+    the blast floor independently holds the EXTERNAL_* hard-stop in `max()` (a
+    READ_ONLY step's blast floor is already `AUTO`, so lowering only the persona
+    cell yields `max()=AUTO`; an EXTERNAL_* step's blast floor stays `ASK`, so the
+    `max()` stays `ASK` regardless of the persona override).
     """
-    from harness_as import BlastRadiusTier  # local import to avoid cycle
-    from harness_cp.cp_shared_types import MCPTrustTier
-    from harness_cp.gate_level_rule import GateLevel, GateLevelInput
-
-    from harness_runtime.lifecycle.hitl_required_consumption import (
-        evaluate_hitl_required,
+    if persona_tier is not PersonaTier.SOLO_DEVELOPER:
+        return None, None
+    persona_override = CPGateLevel.AUTO if policy.solo_persona_floor_auto else None
+    blast_override = (
+        CPGateLevel.AUTO
+        if (
+            policy.solo_local_mutation_floor_auto
+            and resolved_blast_radius is BlastRadiusTier.LOCAL_MUTATION
+        )
+        else None
     )
+    return persona_override, blast_override
+
+
+def _compute_gate_decision(
+    *,
+    binding: object,
+    resolved_blast_radius: BlastRadiusTier | None = None,
+    persona_floor_override: CPGateLevel | None = None,
+    blast_floor_override: CPGateLevel | None = None,
+) -> GateLevelComputation | None:
+    """U-RT-117 (G2; D-palette) — compute the `GateLevelComputation` ONCE at step-4c.
+
+    The single `gate_level()` result is threaded to BOTH the `hitl_required` bool
+    (§19.4) AND the step-4d `compute_effective_palette` (§14.8.2 step-4d) —
+    replacing the prior double-computation (the bool computed `gate_level` then
+    DISCARDED it; the palette re-hardcoded `ASK`). Reading B v1.22 §14.8.2 step-4c
+    4-axis consumption per CP spec v1.15 §19.1.1 (`per_tool_gate_level` from binding
+    else sentinel `AUTO`; sentinel `mcp_trust_tier` per CP plan v2.20 §0.8 row 2
+    PARTIAL-ADVANCE unconsumed axis).
+
+    Returns `None` for the **test-fixture / partial-binding** case (`persona_tier`
+    or `blast_radius_tier` unavailable) — the caller then falls back to
+    `placement.requires_hitl` (bool) + `DEFAULT_FULL_PALETTE` (palette) per the
+    Reading-B v1.22 tolerance (preserved).
+
+    U-RT-115 (G1-blast): `resolved_blast_radius` is the per-step blast radius
+    resolved by the composer's `blast_radius_resolver` (design §3.2) — the REAL
+    producer for the §19.1 `blast_radius_floor` axis, preferred over
+    `getattr(binding, "blast_radius_tier")` (which is `None` in production — no
+    per-step carrier). U-RT-116 (G1-skip; §3.8): the `*_floor_override` args are the
+    operator-policy in-`max()` floor overrides (Reading C) — default `None` → the
+    canonical §19.1 table floor (`per_tool` / `mcp_trust` never override-able).
+    """
+    from harness_cp.cp_shared_types import MCPTrustTier
+    from harness_cp.gate_level_rule import GateLevel, GateLevelInput, gate_level
 
     persona_tier = getattr(binding, "persona_tier", None)
-    blast_radius_tier = getattr(binding, "blast_radius_tier", None)
-    if persona_tier is None or blast_radius_tier is None:
-        # Test-fixture / partial-binding fallback — preserve v1.11 MVP behavior.
-        return bool(getattr(placement, "requires_hitl", True))
-
-    if not isinstance(blast_radius_tier, BlastRadiusTier):
-        return bool(getattr(placement, "requires_hitl", True))
+    blast_radius_tier: BlastRadiusTier | None = (
+        resolved_blast_radius
+        if resolved_blast_radius is not None
+        else getattr(binding, "blast_radius_tier", None)
+    )
+    if persona_tier is None or not isinstance(blast_radius_tier, BlastRadiusTier):
+        # Test-fixture / partial-binding fallback — caller uses requires_hitl +
+        # DEFAULT_FULL_PALETTE (preserve v1.11 MVP behavior).
+        return None
 
     per_tool = getattr(binding, "per_tool_gate_level", GateLevel.AUTO)
     if not isinstance(per_tool, GateLevel):
         per_tool = GateLevel.AUTO
 
-    input_ = GateLevelInput(
-        per_tool_gate_level=per_tool,
-        persona_tier=persona_tier,
-        blast_radius_tier=blast_radius_tier,
-        mcp_trust_tier=MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
+    return gate_level(
+        GateLevelInput(
+            per_tool_gate_level=per_tool,
+            persona_tier=persona_tier,
+            blast_radius_tier=blast_radius_tier,
+            mcp_trust_tier=MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
+            persona_floor_override=persona_floor_override,
+            blast_floor_override=blast_floor_override,
+        )
     )
-    return evaluate_hitl_required(input_)
 
 
 def _evaluate_cell_synchrony(
@@ -383,15 +449,18 @@ def _evaluate_cell_synchrony(
 _evaluate_cell_synchrony_tolerant = _evaluate_cell_synchrony
 
 
-def _compute_effective_palette_tolerant(*, binding: object) -> frozenset[HITLResponse]:
-    """Reading B v1.22 §14.8.2 step 4d — binding-tolerant UNION-intersection.
+def _effective_palette_for(gate_level: CPGateLevel) -> frozenset[HITLResponse]:
+    """U-RT-117 (G2; D-palette) §14.8.2 step 4d — palette from the REAL `gate_level`.
 
-    Wrap-time path passes ``validator_escalation_brief=None``. When binding-
-    derived ``gate_level`` is available, consume ``compute_effective_palette``
-    with ``cross_trust_state=NONE`` (wrap-time path has no cross-trust context).
-    Otherwise fall back to ``DEFAULT_FULL_PALETTE`` (v1.11 MVP behavior).
+    Threads the step-4c `computed_gate_level` (NOT the prior hardcoded `ASK`
+    sentinel) into `compute_effective_palette` with `cross_trust_state=NONE`
+    (wrap-time path has no cross-trust context — §14.15 mid-step re-entry only)
+    and `validator_escalation_brief=None`. For `ASK`/`AUTO` this is the full
+    palette (unchanged wrap-time behavior); for `DENY` it is the §19.4 deny-row
+    narrowing `{REJECT, RESPOND}` — behaviorally inert-but-harmless in production
+    until the `per_tool_gate_level` producer (G2c / O-CP-3) lands, since
+    `gate_level` never reaches `DENY` in production at HEAD.
     """
-    from harness_cp.gate_level_rule import GateLevel
     from harness_cp.validator_fail_transient_staircase import (
         CrossTrustBoundaryState,
     )
@@ -400,10 +469,6 @@ def _compute_effective_palette_tolerant(*, binding: object) -> frozenset[HITLRes
         compute_effective_palette,
     )
 
-    # Wrap-time path: no per-step gate_level computed; v1.22 baseline uses
-    # ASK as the sentinel (gate fires when wrap-time composer reaches step 4d,
-    # which presupposes hitl_required=True per step 4c).
-    gate_level = GateLevel.ASK
     return compute_effective_palette(
         gate_level=gate_level,
         cross_trust_state=CrossTrustBoundaryState.NONE,
@@ -644,6 +709,29 @@ class RuntimeHITLGateComposer:
     Consumed at §14.8.8.5 resume-side gate-evaluation via
     `consume_and_clear()` atomic one-shot read-and-clear."""
 
+    blast_radius_resolver: Callable[[WorkflowStep], BlastRadiusTier] | None = None
+    """U-RT-115 (G1-blast) — per-step blast-radius resolver closure.
+
+    Bound at bootstrap stage-5 LOOP_INIT via `make_step_blast_radius_resolver(ctx)`
+    (the `procedural_tier_snapshot_resolver` closure precedent). At step-4c the
+    composer invokes it to compute a REAL `blast_radius_tier` for the §19.1
+    `gate_level()` `max()` (design §3.2 per-step-kind table) — instead of the
+    `getattr(binding, "blast_radius_tier", None) → None` fall-back. `None`
+    (default) → test-fixture / direct-construction path: fall back to the
+    binding getattr per the Reading-B v1.22 tolerance (preserved)."""
+
+    hitl_auto_approve_policy: HITLAutoApprovePolicy = field(
+        default_factory=lambda: HITLAutoApprovePolicy()
+    )
+    """U-RT-116 (G1-skip; §3.8 / F-B3-1) — the operator's CP §19.5 floor-override
+    policy, read from `config.hitl_auto_approve_policy` at stage-5 construction and
+    held as composer instance state (no C-RT-04 `HarnessContext` field — the
+    composer does not read `ctx.<field>` at dispatch, per F-B3-1 §3.1). At step-4c,
+    when `binding.persona_tier == SOLO_DEVELOPER`, the matching §19.1 floor cell is
+    lowered to `AUTO` per the policy BEFORE `gate_level()` composes the `max()`
+    (Reading C, in-`max()`). Default `HITLAutoApprovePolicy()` = READ_ONLY auto-ON
+    / LOCAL_MUTATION opt-in / EXTERNAL_* hard-stop at solo-developer."""
+
     # Carrier-canonical attribute name constants (per spec §14.8.5 producer-
     # side carrier import discipline). Frozen at construction so a typo in
     # the spec carrier surfaces at dataclass instantiation, not first dispatch.
@@ -692,6 +780,7 @@ class RuntimeHITLGateComposer:
         gate_result: AskUserQuestionResult | None,
         step_context: StepExecutionContext,
         raise_on_failure: bool,
+        auto_approved: bool = False,
     ) -> tuple[CPAuditLedgerEntry, Any | None]:
         """4-substep audit-write per spec §14.8.2 step 4h (HITL-flavor).
 
@@ -722,7 +811,18 @@ class RuntimeHITLGateComposer:
         # fix (was `""` placeholder pre-v1.28). ISO-8601 per C-CP-16 §16.2
         # `timestamp: str` field docstring.
         timestamp = datetime.now(UTC).isoformat()
-        if gate_result is None:
+        if auto_approved:
+            # U-RT-116 (AC-1): policy-caused auto-approval skip. NON-VACUOUS
+            # entry — `response="approve"` (the canonical C-CP-16 §16.1 APPROVE
+            # value, consistent with sub-agent dispatch's `response="approve"`
+            # convention) + `gate_level=AUTO` records that no human was needed.
+            # Explicitly NOT the timeout `response=""` partial shape (which would
+            # read as a vacuous/null entry, failing AC-1's spirit).
+            response_value = HITLResponse.APPROVE.value
+            edited_hash = None
+            response_text_hash = None
+            rejection_hash = None
+        elif gate_result is None:
             # Timeout path partial entry — response=None semantic surfaced
             # as empty-string placeholder (the CPAuditLedgerEntry.response
             # field is typed `str`; partial-audit shape per spec §14.8 fail
@@ -906,25 +1006,51 @@ class RuntimeHITLGateComposer:
                 # gate_level for span emission.
                 cell = cast(HITLMatrixCell, _SentinelMatrixCell())
 
-            # --- 4c: _hitl_required predicate (Reading B v1.22 consumption) -
-            # Spec v1.22 §14.8.2 step 4c: full 4-axis _hitl_required evaluation
-            # per C-CP-19 §19.1. Reading B replaces v1.9 MVP `placement.
-            # requires_hitl` shortcut with `evaluate_hitl_required` consumption.
-            # Binding-tolerant fallback: when binding-derived axes are NOT
-            # available (test-fixture partial-binding case), retain getattr
-            # default-True for backward-compatible test behavior; production
-            # paths consume the full 4-axis composition per CP-axis surface.
-            hitl_required = _evaluate_hitl_required_tolerant(binding=binding, placement=placement)
+            # --- 4c: compute the gate-level ONCE (U-RT-117 G2; D-palette) ---
+            # Spec v1.22 §14.8.2 step 4c: full 4-axis evaluation per C-CP-19 §19.1.
+            # U-RT-115 (G1-blast): resolve the per-step blast radius (design §3.2)
+            # via the stage-5-bound resolver; None for direct-construction /
+            # test-fixture composers (the decision helper then falls back to the
+            # binding getattr).
+            resolved_blast_radius = (
+                self.blast_radius_resolver(step) if self.blast_radius_resolver is not None else None
+            )
+            # U-RT-116 (G1-skip; §3.8): apply the operator-policy in-`max()` floor
+            # overrides (Reading C) — solo-scoped, named-cell. `policy_applied`
+            # records whether a floor was actually lowered (drives the AC-1
+            # audit on the policy-caused skip path below).
+            persona_floor_override, blast_floor_override = _policy_floor_overrides(
+                self.hitl_auto_approve_policy, persona_tier, resolved_blast_radius
+            )
+            policy_applied = persona_floor_override is not None or blast_floor_override is not None
+            # U-RT-117 (G2; D-palette): compute the GateLevelComputation ONCE and
+            # thread `computed_gate_level` to BOTH the hitl_required bool (§19.4)
+            # AND the step-4d palette (replacing the prior hardcoded ASK + the
+            # redundant double-computation). `None` → test-fixture partial-binding
+            # fallback: requires_hitl (bool) + DEFAULT_FULL_PALETTE (palette).
+            gate_decision = _compute_gate_decision(
+                binding=binding,
+                resolved_blast_radius=resolved_blast_radius,
+                persona_floor_override=persona_floor_override,
+                blast_floor_override=blast_floor_override,
+            )
+            if gate_decision is not None:
+                hitl_required = gate_decision.computed_gate_level in (
+                    CPGateLevel.ASK,
+                    CPGateLevel.DENY,
+                )
+            else:
+                hitl_required = bool(getattr(placement, "requires_hitl", True))
 
-            # --- 4d: Determine effective palette (Reading B v1.22 consumption)
-            # Spec v1.22 §14.8.2 step 4d: UNION-intersection of C-CP-19 §19.4
-            # deny-row + C-CP-21 §21.3 cross-trust-boundary via
-            # `compute_effective_palette`. Wrap-time composer passes
-            # validator_escalation_brief=None (validator context not in scope
-            # at wrap-time path — fires at §14.15 mid-step re-entry only).
-            # Binding-tolerant fallback: when binding-derived gate_level is
-            # NOT available, retain DEFAULT_FULL_PALETTE.
-            palette = _compute_effective_palette_tolerant(binding=binding)
+            # --- 4d: effective palette from the SAME gate_level (U-RT-117 G2) ---
+            # Spec v1.22 §14.8.2 step 4d. For ASK/AUTO → full palette (unchanged);
+            # for DENY → §19.4 deny-row narrowing (inert-but-harmless until G2c).
+            # Test-fixture partial-binding fallback → DEFAULT_FULL_PALETTE.
+            palette = (
+                _effective_palette_for(gate_decision.computed_gate_level)
+                if gate_decision is not None
+                else DEFAULT_FULL_PALETTE
+            )
 
             # --- 4e: Open hitl.gate.evaluated span + canonical 3 attrs -----
             with tracer.start_as_current_span("hitl.gate.evaluated") as gate_span:
@@ -945,6 +1071,30 @@ class RuntimeHITLGateComposer:
                 gate_span.set_attribute("hitl.gate.required", bool(hitl_required))
 
                 if not hitl_required:
+                    # U-RT-116 (AC-1 C10 audit-wiring guard): when the operator
+                    # policy lowered a floor and that caused the gate to skip,
+                    # CP §19.5 line 1698 mandates *"each override emits audit-
+                    # ledger entry per C-CP-20 §20.1."* Emit a NON-VACUOUS §20.1
+                    # entry recording the auto-approval (response="approve",
+                    # gate_level=AUTO) BEFORE the skip — NOT the timeout partial
+                    # shape (response=""). The skip MUST NOT go live un-audited;
+                    # `raise_on_failure=True` mirrors the gate-fired APPROVE
+                    # discipline (a non-REJECT audit failure is a fault).
+                    # `gate_decision is not None` ensures the skip was genuinely
+                    # policy-caused (a real `gate_level()` AUTO) — not the
+                    # test-fixture `requires_hitl=False` fallback (which would
+                    # mis-attribute an auto-approve audit; benign over-audit
+                    # foreclosed per adversarial F2-01 / advisor pre-done #3).
+                    if gate_decision is not None and policy_applied:
+                        self._compose_and_persist_audit(
+                            parent_action_id=parent_action_id,
+                            placement=placement,
+                            cell=cell,
+                            gate_result=None,
+                            step_context=step_context,
+                            raise_on_failure=True,
+                            auto_approved=True,
+                        )
                     # Step 4j skip-gate: no further spans for this placement.
                     continue
 

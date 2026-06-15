@@ -109,6 +109,10 @@ from harness_od.per_cell_collector_placement_matrix import CollectorPlacement
 from harness_od.sampling_mode import SamplingMode
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
+# U-RT-116 — HITL auto-approve policy carrier import (per spec v1.49 §3 C-RT-03
+# field-table extension + §3.8 sub-model). HITLAutoApprovePolicy declared at U-RT-116.
+from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
 # U-RT-79 — Memory tool backend config carrier import (per spec v1.17 §3 C-RT-02
 # field-table extension). MemoryToolBackendConfig declared at U-RT-76.
 from harness_runtime.lifecycle.memory_tool_types import MemoryToolBackendConfig
@@ -1354,6 +1358,26 @@ class RuntimeConfig(BaseModel):
     §7 (filed 2026-05-20; CLOSED 2026-05-28 at v1.31 / v2.27). Added at
     v1.31 per `.harness/class_1_fork_step_dispatch_timeout_seconds_field_
     extension.md` Reading A ratification (Q1=A, Q2=30.0s)."""
+
+    hitl_auto_approve_policy: HITLAutoApprovePolicy = Field(
+        default_factory=lambda: HITLAutoApprovePolicy(),
+    )
+    """Operator-supply surface for the CP §19.5 operator-policy override of a
+    `max()` floor (C-RT-03 v1.49 §3 field + §3.8 sub-model).
+
+    Reading C (tunable floor; design §3.3): a two-bool **named-cell** override of
+    the two §19.1-annotated floor cells only — `persona_tier_floor[SOLO_DEVELOPER]
+    → AUTO` (§19.1 line 1639) + `blast_radius_floor[LOCAL_MUTATION] → AUTO` (§19.1
+    line 1634) — applied **in-`max()`** at §14.8.2 step-4c by `RuntimeHITLGateComposer`
+    (read at stage-5 construction, held as composer instance state — no C-RT-04
+    field, per F-B3-1 §3.1). Solo-scoped: the composer applies the knobs only when
+    `binding.persona_tier == SOLO_DEVELOPER`, so multi-tenant-compliance is
+    structurally foreclosed and team-binding override is a registered follow-on
+    (F-B3-1 §6). Default `HITLAutoApprovePolicy()` = `{solo_persona_floor_auto: True,
+    solo_local_mutation_floor_auto: False}` → READ_ONLY auto-ON / LOCAL_MUTATION
+    opt-in / EXTERNAL_* hard-stop at solo-developer. Full sub-model + arithmetic +
+    ACs at §3.8. Added at v1.49 per `.harness/class_1_fork_b3_1_hitl_auto_approve_
+    policy_field.md` (F-B3-1; R-FS-1 B3-spec-1)."""
 
     pidfile_path: Path | None = None
     """Override for the pidfile location (spec §13 deferred-to-discretion).
