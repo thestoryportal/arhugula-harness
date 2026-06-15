@@ -181,7 +181,22 @@ def resolve_driver_strategy(topology_pattern: TopologyPattern) -> _DriverStrateg
 
 
 _IN_SCOPE_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
-    {EngineClass.PURE_PATTERN_NO_ENGINE, EngineClass.SAVE_POINT_CHECKPOINT}
+    {
+        EngineClass.PURE_PATTERN_NO_ENGINE,
+        EngineClass.SAVE_POINT_CHECKPOINT,
+        # U-CP-93 (R-FS-1 E-impl-1) — EVENT_SOURCED_REPLAY materialized as
+        # resumption-routing impl against cleared C-CP-07/08, following the
+        # U-CP-56 SAVE_POINT_CHECKPOINT precedent (added to _IN_SCOPE as impl,
+        # "no spec bump"). See the `:1445`-region dispatch branch below.
+        # Resumption (resume_at/RESUMPTION) is computed only on the
+        # SINGLE_THREADED_LINEAR path; the 5 non-linear strategies are
+        # resume-blind for EVERY in-scope engine class (incl. save-point) — they
+        # return before the resume-path block. So EVENT_SOURCED_REPLAY + a
+        # non-linear topology inherits the same resume-blind behavior save-point
+        # already has; non-linear/fan-out resume is the registered B-FANOUT-PAUSE
+        # arc (`.harness/beyond-mvp-capability-boundary-ledger.md`), not this unit.
+        EngineClass.EVENT_SOURCED_REPLAY,
+    }
 )
 
 
@@ -1451,6 +1466,27 @@ def _execute_workflow_body(
         )
         if resume_at > 0:
             ctx.lifecycle_emitter.emit(WorkflowEventClass.RESUMPTION)
+    elif manifest_entry.engine_class is EngineClass.EVENT_SOURCED_REPLAY:
+        # U-CP-93 (R-FS-1 E-impl-1) — EVENT_SOURCED_REPLAY resumption-routing.
+        # Replay from event history = advance resume_at over the contiguous
+        # materialized prefix (C-CP-08 §8.1 `engine_replay`: "no re-execution
+        # of activities" — the prefix is not re-dispatched). Under the §8.2
+        # row 1 reading the event history joins the F2 state-ledger on
+        # `idempotency_key`, so resume_at is computed by the same F2-prefix
+        # mechanism as save-point (`_determine_event_replay_resume_at`
+        # delegates). The §8.1 *cached-output replay* refinement (replay prior
+        # outputs into downstream-visible state) is degenerate at HEAD — the F2
+        # ledger carries no activity output and the driver threads no
+        # inter-step data flow (B-INTERSTEP) — so it is a registered build arc,
+        # not this unit's burden. See `.harness/r-fs-1-e-impl-1-finding.md`.
+        resume_at = _determine_event_replay_resume_at(
+            ctx=ctx,
+            run_idempotency_key=run_idempotency_key,
+            step_count=len(steps),
+            workload_class=manifest_entry.workload_class,
+        )
+        if resume_at > 0:
+            ctx.lifecycle_emitter.emit(WorkflowEventClass.RESUMPTION)
     # Under pure-pattern-no-engine: no resumption-specific emission per CP spec
     # §25.5 v1.4 scope carve-out (`workflow.resumption` CONDITIONAL row: "At v1.4
     # scope: emit on re-entry if manifest_entry.engine_class ==
@@ -2017,6 +2053,41 @@ def _determine_resume_at(
         if not result.entries:
             return i
     return step_count
+
+
+def _determine_event_replay_resume_at(
+    *,
+    ctx: DriverContext,
+    run_idempotency_key: str,
+    step_count: int,
+    workload_class: Any,
+) -> int:
+    """Determine resume-at for EVENT_SOURCED_REPLAY (C-CP-08 §8.1 `engine_replay`).
+
+    Named seam for engine-event-history replay resumption (U-CP-93). At HEAD it
+    delegates to `_determine_resume_at`: under C-CP-08 §8.2 row 1 the engine
+    event history joins the F2 state-ledger on `idempotency_key`, so the
+    resume-at index — the count of contiguous already-materialized steps — is
+    the identical F2-prefix computation save-point uses. EVENT_SOURCED_REPLAY's
+    §8.1 distinction ("no re-execution of activities") manifests in the driver
+    as the materialized prefix not being re-dispatched (the loop begins at
+    `resume_at`), exactly as for save-point.
+
+    The §8.1 *cached-output replay* refinement — replaying prior activity
+    outputs into downstream-visible state so post-resume steps observe them
+    deterministically — is **degenerate at HEAD and out of this unit's scope**:
+    the F2 `EntryPayload` carries no activity output (only `response_hash`), and
+    the driver threads no inter-step data flow (B-INTERSTEP). It is a registered
+    build arc, not a silent defer. See `.harness/r-fs-1-e-impl-1-finding.md`.
+    This helper is the extension point where that refinement lands once the
+    output-carrying event-history substrate + inter-step data flow exist.
+    """
+    return _determine_resume_at(
+        ctx=ctx,
+        run_idempotency_key=run_idempotency_key,
+        step_count=step_count,
+        workload_class=workload_class,
+    )
 
 
 def _append_step_ledger_entry(

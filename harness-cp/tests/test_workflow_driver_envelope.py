@@ -653,7 +653,7 @@ def test_envelope_records_exception_on_validation_failure(
         workflow_id="wf-exc",
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
         persona_tier=PersonaTier.TEAM_BINDING,
-        engine_class=EngineClass.EVENT_SOURCED_REPLAY,  # still not materialized → raises
+        engine_class=EngineClass.WAL_SEGMENT,  # still not materialized → raises (EVENT_SOURCED_REPLAY went in-scope at U-CP-93)
         topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
         layer_budgets=(),
         fallback_chain=_CHAIN,
