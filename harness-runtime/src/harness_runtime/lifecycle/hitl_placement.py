@@ -9,7 +9,7 @@ binds CP's HITL primitives into a single reference-time registry surface:
   table, `PER_RESPONSE_AUDIT_ENTRY_SHAPES` (C-CP-16 §16.1).
 - `harness_cp.hitl_placement` — `HITLPlacementKind` 3-value closed enum,
   `HITL_PLACEMENT_TRIGGERS` 3-row trigger table (C-CP-17 §17.1).
-- `harness_cp.hitl_timeout_degradation.on_hitl_timeout` — the C-CP-21 §21.6
+- `harness_cp.hitl_timeout_degradation.on_hitl_timeout` — the C-CP-21 §21.8
   per-persona-tier timeout-degradation decision; `TIMEOUT_DEGRADATION_TABLE`
   3-row policy table.
 - `harness_cp.hitl_as_tool_call_rewriting` — `select_variant(synchrony)` +
@@ -126,7 +126,7 @@ class RuntimeHITLPlacementRegistry:
     - `per_response_audit_shapes` → `PER_RESPONSE_AUDIT_ENTRY_SHAPES`
       (per-response audit-entry shapes).
     - `timeout_policies` → `TIMEOUT_DEGRADATION_TABLE` (3 per-persona-tier
-      rows, C-CP-21 §21.6).
+      rows, C-CP-21 §21.8).
     """
 
     @property
@@ -151,7 +151,7 @@ class RuntimeHITLPlacementRegistry:
 
     @property
     def timeout_policies(self) -> tuple[TimeoutDegradationPolicy, ...]:
-        """The 3-row per-persona-tier timeout-degradation table (C-CP-21 §21.6)."""
+        """The 3-row per-persona-tier timeout-degradation table (C-CP-21 §21.8)."""
         return TIMEOUT_DEGRADATION_TABLE
 
     def on_timeout(
@@ -164,11 +164,12 @@ class RuntimeHITLPlacementRegistry:
         AC #2 surface (timeout degradation emits typed event after configured
         wait). The L8 LOOP_INIT orchestrator waits for `invocation.timeout`
         milliseconds; when the wait elapses, it invokes this method and gets
-        the typed `TimeoutDegradationKind` per the C-CP-21 §21.6 per-persona-tier
+        the typed `TimeoutDegradationKind` per the C-CP-21 §21.8 per-persona-tier
         table. Pure composition of `harness_cp.hitl_timeout_degradation.on_hitl_timeout`.
 
-        SOLO_DEVELOPER → CONTINUE_AS_REJECT; TEAM_BINDING → ESCALATE_TO_REVIEW_BOARD;
-        MULTI_TENANT_COMPLIANCE → ABORT_WORKFLOW (terminal; override prohibited).
+        SOLO_DEVELOPER → FAIL_CLOSED; TEAM_BINDING → ESCALATE_SECONDARY_CHANNEL;
+        MULTI_TENANT_COMPLIANCE → FAIL_CLOSED (override prohibited; `fail-open`
+        structurally prohibited per Persona §10.4). Vocab-A per U-CP-92.
         """
         return on_hitl_timeout(invocation, persona_tier)
 
@@ -251,7 +252,7 @@ def materialize_hitl_placement_stage(config: RuntimeConfig) -> HITLPlacementStag
     a single `RuntimeHITLPlacementRegistry` and wraps it. `config` is read
     for API consistency with the U-RT-21..U-RT-24 composers; no field is
     consumed at HEAD (the manifest does not carry per-persona-tier HITL
-    overrides; C-CP-21 §21.6's `override_permitted` is enforced at L8 when
+    overrides; C-CP-21 §21.8's `override_permitted` is enforced at L8 when
     operator-supplied policies surface).
     """
     _ = config

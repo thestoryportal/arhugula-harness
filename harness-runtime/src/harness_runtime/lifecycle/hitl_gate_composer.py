@@ -115,7 +115,7 @@ import inspect
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from harness_as import BlastRadiusTier, GateLevel
 from harness_core import PersonaTier
@@ -137,6 +137,10 @@ from harness_cp.handoff_context import (
 )
 from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.hitl_response_palette import HITLResponse
+from harness_cp.hitl_timeout_degradation import (
+    TimeoutDegradationKind,
+    on_hitl_timeout,
+)
 from harness_cp.per_step_override_evaluator import (
     CPAuditLedgerEntry,
     StepEffectiveBinding,
@@ -163,7 +167,6 @@ from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePo
 from harness_runtime.lifecycle.resume_context_holder import ResumeContextHolder
 from harness_runtime.lifecycle.webhook_delivery_composer import (
     WebhookDeliveryComposer,
-    WebhookDeliveryExhaustedError,
     WebhookDeliveryResult,
 )
 
@@ -771,6 +774,57 @@ class RuntimeHITLGateComposer:
             result = await result
         return cast(Mapping[str, Any], result)
 
+    async def _escalate_to_secondary_channel(
+        self,
+        *,
+        parent_action_id: ActionID,
+        step: WorkflowStep,
+        placement: HITLPlacement,
+        palette: frozenset[HITLResponse],
+        escalation_reason: str,
+    ) -> NoReturn:
+        """Deliver the gate to the secondary channel (webhook) + set the pause
+        flag + raise `HITLPauseRequestedSignal` — the shared §14.8.8.1
+        durable-async sequence.
+
+        Factored (U-RT-119) so BOTH the §14.8.2 step-4-bis durable-async-cell
+        branch AND the §14.8.9 `escalate-secondary-channel` timeout dispatch
+        route through one body (no duplication, per F-B3-2 §2.5 + advisor).
+        The caller MUST have verified the joint binding
+        (`webhook_delivery_composer` + `pause_resume_protocol`) is present;
+        `WebhookDeliveryExhaustedError` propagates to the caller (a fault per
+        §14.8.8.1 step 4). Always raises (`NoReturn`).
+        """
+        # §14.8.8.1 step 1: compose HITLEscalationBrief. fail_class /
+        # fail_detail_hash None — not a validator failure at this site (CP spec
+        # v1.18 §25.2.X + v1.19 §25.2.Y Optional widening).
+        durable_brief = HITLEscalationBrief(
+            parent_step_id=str(step.step_id),
+            parent_action_id=str(parent_action_id),
+            fail_class=None,
+            fail_detail_hash=None,
+            escalation_reason=escalation_reason,
+            proposed_response_palette=frozenset(sorted(palette)),
+        )
+        # §14.8.8.1 step 2: idempotency_key per compose_hitl_action_id shape.
+        idempotency_key = str(compose_hitl_action_id(parent_action_id, placement.position))
+        # §14.8.8.1 step 3+4: deliver via the spec-canonical brief surface (runtime
+        # spec v1.34 §14.10.1 Reading (H) — projects to WebhookPayload via the
+        # brief adapter + invokes the raw 3-arg deliver_webhook). On exhausted,
+        # WebhookDeliveryExhaustedError propagates to the caller (driver-side fault).
+        composer = self.webhook_delivery_composer
+        assert composer is not None  # caller verified joint binding present
+        delivery_result = await composer.deliver_webhook_for_brief(durable_brief, idempotency_key)
+        # §14.8.8.1 step 5: set the caller-signal pause flag (observed by
+        # workflow_driver per-step pre-entry detection per C-RT-24 §14.14.3).
+        self.pause_requested_flag.set()
+        # §14.8.8.1 step 6: raise the typed control-flow signal (§14.8.8.2 —
+        # BaseException subclass; only an explicit catch consumes it).
+        raise HITLPauseRequestedSignal(
+            brief=durable_brief,
+            delivery_result=delivery_result,
+        )
+
     def _compose_and_persist_audit(
         self,
         *,
@@ -1120,60 +1174,19 @@ class RuntimeHITLGateComposer:
                     and self.webhook_delivery_composer is not None
                 )
                 if joint_binding_present and _synchrony_attr is SynchronyClass.DURABLE_ASYNC:
-                    # §14.8.8.1 step 1: compose HITLEscalationBrief.
-                    # fail_class=None per CP spec v1.18 §25.2.X Optional
-                    # widening + fail_detail_hash=None per CP spec v1.19
-                    # §25.2.Y Optional widening (pause-trigger construction
-                    # site is not a validator failure — no validator outcome
-                    # at this site).
-                    durable_brief = HITLEscalationBrief(
-                        parent_step_id=str(step.step_id),
-                        parent_action_id=str(parent_action_id),
-                        fail_class=None,
-                        fail_detail_hash=None,
+                    # §14.8.8.1 steps 1-6: deliver to the secondary channel
+                    # (webhook) + set the pause flag + raise the typed pause
+                    # signal — the shared sequence factored at
+                    # `_escalate_to_secondary_channel` (U-RT-119; reused verbatim
+                    # by the §14.8.9 escalate-secondary-channel timeout dispatch).
+                    # `WebhookDeliveryExhaustedError` propagates as a fault per
+                    # step 4. Always raises (NoReturn).
+                    await self._escalate_to_secondary_channel(
+                        parent_action_id=parent_action_id,
+                        step=step,
+                        placement=placement,
+                        palette=palette,
                         escalation_reason="durable_async_cell_synchrony",
-                        proposed_response_palette=frozenset(sorted(palette)),
-                    )
-                    # §14.8.8.1 step 2: compose idempotency_key per
-                    # `compose_hitl_action_id` shape (mirrors §14.7.2 step 8b
-                    # convention; hitl: prefix is the source discriminator).
-                    idempotency_key = str(
-                        compose_hitl_action_id(parent_action_id, placement.position)
-                    )
-                    # §14.8.8.1 step 3 + step 4: deliver_webhook_for_brief; on
-                    # exhausted the typed exception propagates (driver-side
-                    # handler OR caller-side handler decides). Uses the
-                    # spec-canonical brief surface per runtime spec v1.34
-                    # §14.10.1 Reading (H) absorption + fork doc §0.1 at
-                    # `.harness/class_1_fork_webhook_composer_per_workflow_context_threading.md`
-                    # (operator-ratified 2026-05-28). The brief surface
-                    # projects to WebhookPayload via webhook_brief_adapter +
-                    # invokes the underlying raw 3-arg deliver_webhook.
-                    # Local capture — `joint_binding_present` (line 968) already
-                    # verified non-None, but pyright cannot narrow an instance
-                    # attribute across the captured bool + await boundary.
-                    composer = self.webhook_delivery_composer
-                    assert composer is not None
-                    try:
-                        delivery_result = await composer.deliver_webhook_for_brief(
-                            durable_brief, idempotency_key
-                        )
-                    except WebhookDeliveryExhaustedError:
-                        # Step 4: webhook delivery exhausted. NO flag-set;
-                        # NO signal raise. Per spec §14.8.8.1 step 4 the
-                        # composer surfaces the failure as a fault — re-raise
-                        # for the driver-side error path.
-                        raise
-                    # §14.8.8.1 step 5: set pause_requested_flag (caller-signal
-                    # observed by workflow_driver per-step pre-entry detection
-                    # per C-RT-24 §14.14.3).
-                    self.pause_requested_flag.set()
-                    # §14.8.8.1 step 6: raise HITLPauseRequestedSignal (typed
-                    # control-flow exception per §14.8.8.2 — BaseException
-                    # subclass; only explicit catch consumes it).
-                    raise HITLPauseRequestedSignal(
-                        brief=durable_brief,
-                        delivery_result=delivery_result,
                     )
                 # End of step 4-bis. Fall through to step 4f sync-blocking.
 
@@ -1202,8 +1215,26 @@ class RuntimeHITLGateComposer:
                             timeout=timeout_seconds,
                         )
                     except AskUserQuestionTimeoutError as timeout_exc:
-                        # Timeout path: open canonical hitl.invocation.timed_out
-                        # span; emit partial audit entry; raise typed error.
+                        # --- G4a (U-RT-118) + G4b (U-RT-119; §14.8.9) ---------
+                        # Resolve the per-persona-tier degradation MODE (vocab-A
+                        # post-U-CP-92). persona_tier-None (test-fixture partial
+                        # binding) → no resolvable policy → residual hard-timeout
+                        # (keep RT-FAIL-HITL-GATE-TIMEOUT). `on_hitl_timeout` is
+                        # persona_tier-only (the `None` invocation arg is the
+                        # U-CP-92 nullable-widening).
+                        timeout_mode = (
+                            on_hitl_timeout(None, persona_tier)
+                            if persona_tier is not None
+                            else None
+                        )
+                        degradation_mode_applied = (
+                            timeout_mode.value if timeout_mode is not None else "default"
+                        )
+                        # Open canonical hitl.invocation.timed_out span; set the
+                        # G4a degradation_mode_applied attribute from the consult
+                        # (the §14.8.2 step-4f / §14.8.5 canonical surface — also
+                        # the semantic home of the v1.10 `audit.policy.*` derivation
+                        # reference per §14.8.2 step-4f); emit the partial audit.
                         with tracer.start_as_current_span(
                             "hitl.invocation.timed_out"
                         ) as timeout_span:
@@ -1211,18 +1242,16 @@ class RuntimeHITLGateComposer:
                                 "hitl.timeout.duration_ms",
                                 placement.timeout if placement.timeout is not None else 0,
                             )
-                            # Degradation mode at v1.11 MVP — operator-tunable
-                            # per harness_cp.hitl_timeout_degradation consult;
-                            # placeholder string at composer site (the
-                            # canonical attribute is present per carrier;
-                            # value derivation is impl-discretion).
+                            # U-RT-118 (G4a): the resolved degradation mode, NOT
+                            # the literal "default".
                             timeout_span.set_attribute(
                                 "hitl.timeout.degradation_mode_applied",
-                                "default",
+                                degradation_mode_applied,
                             )
                             # Partial audit entry (audit composition is best-
                             # effort; failure swallowed per timeout-path
-                            # semantics).
+                            # semantics). The fail-class (below) + the
+                            # degradation_mode_applied attr carry the disposition.
                             self._compose_and_persist_audit(
                                 parent_action_id=parent_action_id,
                                 placement=placement,
@@ -1231,10 +1260,47 @@ class RuntimeHITLGateComposer:
                                 step_context=step_context,
                                 raise_on_failure=False,
                             )
-                        raise HITLGateTimeoutError(
+                        # U-RT-119 (G4b; §14.8.9): dispatch on the resolved mode,
+                        # replacing the v1.9 unconditional raise. Each GRANTED
+                        # mode routes through a disposition surface that already
+                        # exists at step 4i.
+                        if timeout_mode is None:
+                            # Residual hard-timeout — no resolvable policy.
+                            raise HITLGateTimeoutError(
+                                f"HITL gate timed out at placement="
+                                f"{placement.position.value!r} after "
+                                f"{placement.timeout}ms (no resolvable degradation "
+                                f"policy — persona_tier absent)"
+                            ) from timeout_exc
+                        if timeout_mode is TimeoutDegradationKind.ESCALATE_SECONDARY_CHANNEL:
+                            # escalate-secondary-channel: deliver out-of-band
+                            # (webhook) + pause/await via the already-built
+                            # §14.8.8 surface (factored helper; NoReturn). When
+                            # the webhook/pause surfaces are unbound, degrade to
+                            # fail-closed (the §14.8.9 safe fallback — fall
+                            # through to the REJECT below).
+                            if joint_binding_present:
+                                await self._escalate_to_secondary_channel(
+                                    parent_action_id=parent_action_id,
+                                    step=step,
+                                    placement=placement,
+                                    palette=palette,
+                                    escalation_reason=("hitl_timeout_escalate_secondary_channel"),
+                                )
+                            # unbound → fall through to fail-closed REJECT.
+                        # fail-closed (solo default; team configurable; multi
+                        # default) AND escalate-degraded-when-unbound: treat the
+                        # timeout as a REJECT (deny the step; fail-safe) → the
+                        # step-4i REJECT disposition → RT-FAIL-HITL-GATE-REJECTED.
+                        # fail-open is UNREACHABLE — refused at config/bootstrap
+                        # (U-CP-92 validate_no_fail_open / §14.8.9 AC-1); the
+                        # dispatch never reaches a fail-open branch (defensively
+                        # the REJECT here is the C10 fail-safe even if it did).
+                        raise HITLGateRejectedError(
                             f"HITL gate timed out at placement="
                             f"{placement.position.value!r} after "
-                            f"{placement.timeout}ms"
+                            f"{placement.timeout}ms → degradation mode "
+                            f"{timeout_mode.value!r} (fail-closed disposition)"
                         ) from timeout_exc
 
                     # --- 4g: Open hitl.invocation.responded span -----------

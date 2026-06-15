@@ -190,7 +190,7 @@ def test_per_response_audit_shapes_surface_canonical_table(tmp_path: Path) -> No
 
 
 def test_timeout_policies_surface_canonical_table(tmp_path: Path) -> None:
-    """`timeout_policies` exposes the 3-row C-CP-21 §21.6 table verbatim."""
+    """`timeout_policies` exposes the 3-row C-CP-21 §21.8 table verbatim."""
     registry = _registry(tmp_path)
     assert registry.timeout_policies is TIMEOUT_DEGRADATION_TABLE
     assert len(registry.timeout_policies) == 3
@@ -203,26 +203,27 @@ def test_timeout_policies_surface_canonical_table(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_on_timeout_solo_developer_continues_as_reject(tmp_path: Path) -> None:
-    """SOLO_DEVELOPER persona tier degrades a timed-out HITL to CONTINUE_AS_REJECT."""
+def test_on_timeout_solo_developer_fail_closed(tmp_path: Path) -> None:
+    """SOLO_DEVELOPER persona tier degrades a timed-out HITL to FAIL_CLOSED (vocab-A)."""
     registry = _registry(tmp_path)
     kind = registry.on_timeout(_invocation(), PersonaTier.SOLO_DEVELOPER)
-    assert kind is TimeoutDegradationKind.CONTINUE_AS_REJECT
+    assert kind is TimeoutDegradationKind.FAIL_CLOSED
 
 
-def test_on_timeout_team_binding_escalates_to_review_board(tmp_path: Path) -> None:
-    """TEAM_BINDING persona tier degrades a timed-out HITL to ESCALATE_TO_REVIEW_BOARD."""
+def test_on_timeout_team_binding_escalates_secondary_channel(tmp_path: Path) -> None:
+    """TEAM_BINDING persona tier degrades a timed-out HITL to ESCALATE_SECONDARY_CHANNEL."""
     registry = _registry(tmp_path)
     kind = registry.on_timeout(_invocation(), PersonaTier.TEAM_BINDING)
-    assert kind is TimeoutDegradationKind.ESCALATE_TO_REVIEW_BOARD
+    assert kind is TimeoutDegradationKind.ESCALATE_SECONDARY_CHANNEL
 
 
-def test_on_timeout_multi_tenant_compliance_aborts_workflow(tmp_path: Path) -> None:
-    """MULTI_TENANT_COMPLIANCE persona tier degrades a timed-out HITL to ABORT_WORKFLOW
-    (terminal; override prohibited per C-CP-21 §21.6)."""
+def test_on_timeout_multi_tenant_compliance_fail_closed(tmp_path: Path) -> None:
+    """MULTI_TENANT_COMPLIANCE persona tier degrades a timed-out HITL to FAIL_CLOSED
+    (vocab-A; override prohibited per C-CP-21 §21.8 — NOT the drifted vocab-B
+    `abort-workflow` terminal stop, per U-CP-92)."""
     registry = _registry(tmp_path)
     kind = registry.on_timeout(_invocation(), PersonaTier.MULTI_TENANT_COMPLIANCE)
-    assert kind is TimeoutDegradationKind.ABORT_WORKFLOW
+    assert kind is TimeoutDegradationKind.FAIL_CLOSED
 
 
 def test_on_timeout_honors_invocation_with_configured_timeout(tmp_path: Path) -> None:
@@ -234,7 +235,7 @@ def test_on_timeout_honors_invocation_with_configured_timeout(tmp_path: Path) ->
     assert invocation.timeout == 250
     # After the configured 250 ms wait elapses (at L8), this decision fires.
     kind = registry.on_timeout(invocation, PersonaTier.SOLO_DEVELOPER)
-    assert kind is TimeoutDegradationKind.CONTINUE_AS_REJECT
+    assert kind is TimeoutDegradationKind.FAIL_CLOSED
 
 
 # ---------------------------------------------------------------------------

@@ -1676,3 +1676,262 @@ def test_compute_once_deny_tier_tool_threads_deny_row_narrowing() -> None:
     assert decision.computed_gate_level is GateLevel.DENY
     palette = _effective_palette_for(decision.computed_gate_level)
     assert palette == frozenset({HITLResponse.REJECT, HITLResponse.RESPOND})
+
+
+# ---------------------------------------------------------------------------
+# U-RT-118 (G4a) + U-RT-119 (G4b / §14.8.9) — timeout-degradation dispatch-on-
+# mode. The ask-surface always times out; the composer consults the per-persona-
+# tier vocab-A mode (U-CP-92) and dispatches: fail-closed → REJECT;
+# escalate-secondary-channel → webhook + pause (degrade to fail-closed when
+# unbound); fail-open unreachable; persona_tier-None → residual hard-timeout.
+# ---------------------------------------------------------------------------
+
+
+class _TimeoutAskSurface:
+    """`AskUserQuestionSurface` whose `ask(...)` always times out."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, list[HITLResponse], float | None]] = []
+
+    async def ask(
+        self,
+        prompt: str,
+        options: Sequence[HITLResponse],
+        timeout: float | None,
+    ) -> AskUserQuestionResult:
+        from harness_runtime.lifecycle.ask_user_question_surface import (
+            AskUserQuestionTimeoutError,
+        )
+
+        self.calls.append((prompt, list(options), timeout))
+        raise AskUserQuestionTimeoutError("mock timeout")
+
+
+class _MockWebhookComposer:
+    """Minimal `WebhookDeliveryComposer` stub — records the brief-delivery call
+    and returns a delivered `WebhookDeliveryResult`."""
+
+    def __init__(self) -> None:
+        self.delivered: list[tuple[Any, str]] = []
+
+    async def deliver_webhook_for_brief(self, brief: Any, idempotency_key: str) -> Any:
+        from harness_runtime.lifecycle.webhook_delivery_composer import WebhookDeliveryResult
+
+        self.delivered.append((brief, idempotency_key))
+        return WebhookDeliveryResult(
+            delivered=True,
+            status_code=200,
+            response_idempotency_key=idempotency_key,
+            delivery_attempts=1,
+            final_attempt_at=0,
+        )
+
+
+def _timeout_composer(
+    *,
+    tracer_provider: TracerProvider,
+    blast: Any,
+    policy: Any,
+    webhook: Any = None,
+    pause: Any = None,
+) -> RuntimeHITLGateComposer:
+    """Composer whose ask-surface always times out (U-RT-118/119 tests).
+
+    Optionally binds the webhook + pause-resume joint surface (the
+    escalate-secondary-channel disposition). `blast=LOCAL_MUTATION` makes the
+    gate FIRE at every tier (blast ASK-floor dominates the `max()` regardless of
+    the solo policy), so the ask is invoked and times out.
+    """
+    return RuntimeHITLGateComposer(
+        inner=cast(Any, _MockInnerDispatcher()),
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, _TimeoutAskSurface()),
+        ledger_writer=cast(Any, _MockLedgerWriter()),
+        audit_writer=cast(Any, _MockAuditWriter()),
+        tracer_provider=tracer_provider,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
+        blast_radius_resolver=lambda _step: blast,
+        hitl_auto_approve_policy=policy,
+        webhook_delivery_composer=cast(Any, webhook),
+        pause_resume_protocol=cast(Any, pause),
+    )
+
+
+def _timeout_degradation_span_mode(exporter: InMemorySpanExporter) -> str | None:
+    """Extract `hitl.timeout.degradation_mode_applied` from the timed_out span."""
+    for span in exporter.get_finished_spans():
+        if span.name == "hitl.invocation.timed_out":
+            attrs = span.attributes or {}
+            value = attrs.get("hitl.timeout.degradation_mode_applied")
+            return None if value is None else str(value)
+    return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tier", "engine", "expected_mode"),
+    [
+        (PersonaTier.SOLO_DEVELOPER, "SAVE_POINT_CHECKPOINT", "fail-closed"),
+        (PersonaTier.TEAM_BINDING, "SAVE_POINT_CHECKPOINT", "escalate-secondary-channel"),
+        (PersonaTier.MULTI_TENANT_COMPLIANCE, "SAVE_POINT_CHECKPOINT", "fail-closed"),
+    ],
+)
+async def test_timeout_degradation_mode_applied_from_consult(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+    tier: PersonaTier,
+    engine: str,
+    expected_mode: str,
+) -> None:
+    """U-RT-118 (G4a) — the `hitl.timeout.degradation_mode_applied` span attribute
+    carries the per-persona-tier `on_hitl_timeout` consult value (vocab-A;
+    U-CP-92), NOT the literal `"default"`. solo/multi → fail-closed; team →
+    escalate-secondary-channel. By execution (span inspection)."""
+    from harness_as import BlastRadiusTier
+    from harness_cp.engine_class import EngineClass
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLGateRejectedError
+
+    provider, exporter = tracer_provider
+    composer = _timeout_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.LOCAL_MUTATION,
+        policy=HITLAutoApprovePolicy(),
+    )
+    # No webhook bound → every tier's disposition resolves to REJECT here
+    # (team's escalate-secondary-channel degrades to fail-closed when unbound);
+    # the G4a span attribute still reflects the RESOLVED mode (set before the
+    # dispatch), which is what this test asserts.
+    with pytest.raises(HITLGateRejectedError):
+        await composer.dispatch(
+            _binding(tier, getattr(EngineClass, engine)),
+            _pre_action_step(),
+            step_context=_make_step_context(),
+        )
+    assert _timeout_degradation_span_mode(exporter) == expected_mode
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tier",
+    [PersonaTier.SOLO_DEVELOPER, PersonaTier.MULTI_TENANT_COMPLIANCE],
+)
+async def test_timeout_fail_closed_routes_to_reject(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+    tier: PersonaTier,
+) -> None:
+    """U-RT-119 (G4b; AC-3) — a fail-closed timeout (solo + multi defaults)
+    routes through the step-4i REJECT disposition (`HITLGateRejectedError` →
+    RT-FAIL-HITL-GATE-REJECTED), NOT the v1.9 unconditional
+    `HITLGateTimeoutError`. By execution."""
+    from harness_as import BlastRadiusTier
+    from harness_cp.engine_class import EngineClass
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLGateRejectedError
+
+    provider, _ = tracer_provider
+    composer = _timeout_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.LOCAL_MUTATION,
+        policy=HITLAutoApprovePolicy(),
+    )
+    # The `pytest.raises(HITLGateRejectedError)` IS the contrasting-baseline: if
+    # the v1.9 unconditional `HITLGateTimeoutError` were still raised, this would
+    # fail to match and the test would error.
+    with pytest.raises(HITLGateRejectedError):
+        await composer.dispatch(
+            _binding(tier, EngineClass.SAVE_POINT_CHECKPOINT),
+            _pre_action_step(),
+            step_context=_make_step_context(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_timeout_escalate_secondary_channel_delivers_webhook_and_pauses(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """U-RT-119 (G4b; AC-3) — a team-binding timeout (escalate-secondary-channel)
+    with the webhook + pause joint surface bound delivers the gate out-of-band
+    (webhook) + sets the pause flag + raises `HITLPauseRequestedSignal` (the
+    workflow pauses; the gate is NOT failed). team SAVE_POINT_CHECKPOINT is
+    BOTH_BY_TIER (≠ DURABLE_ASYNC) so the 4-bis branch does not pre-empt and the
+    ask fires + times out. By execution."""
+    from harness_as import BlastRadiusTier
+    from harness_cp.engine_class import EngineClass
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLPauseRequestedSignal
+
+    provider, _ = tracer_provider
+    webhook = _MockWebhookComposer()
+    composer = _timeout_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.LOCAL_MUTATION,
+        policy=HITLAutoApprovePolicy(),
+        webhook=webhook,
+        pause=object(),  # any non-None — the helper only reads webhook + flag
+    )
+    with pytest.raises(HITLPauseRequestedSignal):
+        await composer.dispatch(
+            _binding(PersonaTier.TEAM_BINDING, EngineClass.SAVE_POINT_CHECKPOINT),
+            _pre_action_step(),
+            step_context=_make_step_context(),
+        )
+    assert webhook.delivered, "escalate-secondary-channel MUST deliver the webhook"
+    assert composer.pause_requested_flag.is_set(), "the pause flag MUST be set"
+
+
+@pytest.mark.asyncio
+async def test_timeout_escalate_degrades_to_fail_closed_when_unbound(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """U-RT-119 (G4b; AC-3 safe fallback) — a team-binding timeout
+    (escalate-secondary-channel) with the webhook/pause surfaces UNBOUND degrades
+    to fail-closed (REJECT), never silently continuing. By execution."""
+    from harness_as import BlastRadiusTier
+    from harness_cp.engine_class import EngineClass
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLGateRejectedError
+
+    provider, exporter = tracer_provider
+    composer = _timeout_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.LOCAL_MUTATION,
+        policy=HITLAutoApprovePolicy(),
+        # no webhook / no pause → joint binding absent → degrade
+    )
+    with pytest.raises(HITLGateRejectedError):
+        await composer.dispatch(
+            _binding(PersonaTier.TEAM_BINDING, EngineClass.SAVE_POINT_CHECKPOINT),
+            _pre_action_step(),
+            step_context=_make_step_context(),
+        )
+    # The mode resolved (attribute) is still escalate-secondary-channel; the
+    # disposition degraded to fail-closed (the safe fallback).
+    assert _timeout_degradation_span_mode(exporter) == "escalate-secondary-channel"
+
+
+@pytest.mark.asyncio
+async def test_timeout_persona_tier_none_residual_hard_timeout(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """U-RT-119 (regression-safe) — a partial binding with no persona_tier has no
+    resolvable degradation policy → the residual hard-timeout
+    `HITLGateTimeoutError` is preserved (the v1.9 disposition for the
+    unresolvable case). By execution."""
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLGateTimeoutError
+
+    provider, _ = tracer_provider
+    # A bare-object binding (no persona_tier) → gate fires via placement
+    # requires_hitl default True; persona_tier None → residual timeout.
+    composer = _make_composer(
+        inner=_MockInnerDispatcher(),
+        surface=cast(_MockAskUserQuestionSurface, _TimeoutAskSurface()),
+        tracer_provider=provider,
+    )
+    with pytest.raises(HITLGateTimeoutError):
+        await composer.dispatch(
+            cast(Any, object()),
+            _pre_action_step(),
+            step_context=_make_step_context(),
+        )
