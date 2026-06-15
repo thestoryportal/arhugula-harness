@@ -1734,20 +1734,23 @@ def _timeout_composer(
     policy: Any,
     webhook: Any = None,
     pause: Any = None,
+    ledger: _MockLedgerWriter | None = None,
+    audit: _MockAuditWriter | None = None,
 ) -> RuntimeHITLGateComposer:
     """Composer whose ask-surface always times out (U-RT-118/119 tests).
 
     Optionally binds the webhook + pause-resume joint surface (the
-    escalate-secondary-channel disposition). `blast=LOCAL_MUTATION` makes the
-    gate FIRE at every tier (blast ASK-floor dominates the `max()` regardless of
-    the solo policy), so the ask is invoked and times out.
+    escalate-secondary-channel disposition) and/or the ledger/audit writers (so
+    a test can inspect the persisted audit entry). `blast=LOCAL_MUTATION` makes
+    the gate FIRE at every tier (blast ASK-floor dominates the `max()` regardless
+    of the solo policy), so the ask is invoked and times out.
     """
     return RuntimeHITLGateComposer(
         inner=cast(Any, _MockInnerDispatcher()),
         applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
         ask_user_question_surface=cast(AskUserQuestionSurface, _TimeoutAskSurface()),
-        ledger_writer=cast(Any, _MockLedgerWriter()),
-        audit_writer=cast(Any, _MockAuditWriter()),
+        ledger_writer=cast(Any, ledger if ledger is not None else _MockLedgerWriter()),
+        audit_writer=cast(Any, audit if audit is not None else _MockAuditWriter()),
         tracer_provider=tracer_provider,
         audit_signing_key_id="harness-runtime-test",
         audit_signing_algorithm=SignatureAlgorithm.ED25519,
@@ -1831,10 +1834,12 @@ async def test_timeout_fail_closed_routes_to_reject(
     from harness_runtime.lifecycle.hitl_gate_composer import HITLGateRejectedError
 
     provider, _ = tracer_provider
+    audit = _MockAuditWriter()
     composer = _timeout_composer(
         tracer_provider=provider,
         blast=BlastRadiusTier.LOCAL_MUTATION,
         policy=HITLAutoApprovePolicy(),
+        audit=audit,
     )
     # The `pytest.raises(HITLGateRejectedError)` IS the contrasting-baseline: if
     # the v1.9 unconditional `HITLGateTimeoutError` were still raised, this would
@@ -1845,6 +1850,17 @@ async def test_timeout_fail_closed_routes_to_reject(
             _pre_action_step(),
             step_context=_make_step_context(),
         )
+    # F2-01: the persisted entry MUST be REJECT-shaped (agreeing with
+    # RT-FAIL-HITL-GATE-REJECTED) — NOT the vacuous response="" partial. The OD
+    # entry projects the CP response + rejection_reason_hash into
+    # `audit_namespace_attrs` under the "audit.cp" prefix (§14.8.9 fail-closed
+    # "emit the rejection audit entry").
+    assert len(audit.appends) == 1, "exactly one (rejection) audit entry written"
+    od_attrs = audit.appends[0][1].payload.audit_namespace_attrs
+    assert od_attrs["audit.cp.response"] == HITLResponse.REJECT.value
+    assert od_attrs.get("audit.cp.rejection_reason_hash"), (
+        "the system rejection_reason_hash MUST be populated"
+    )
 
 
 @pytest.mark.asyncio
@@ -1864,12 +1880,16 @@ async def test_timeout_escalate_secondary_channel_delivers_webhook_and_pauses(
 
     provider, _ = tracer_provider
     webhook = _MockWebhookComposer()
+    audit = _MockAuditWriter()
+    ledger = _MockLedgerWriter()
     composer = _timeout_composer(
         tracer_provider=provider,
         blast=BlastRadiusTier.LOCAL_MUTATION,
         policy=HITLAutoApprovePolicy(),
         webhook=webhook,
         pause=object(),  # any non-None — the helper only reads webhook + flag
+        audit=audit,
+        ledger=ledger,
     )
     with pytest.raises(HITLPauseRequestedSignal):
         await composer.dispatch(
@@ -1879,6 +1899,11 @@ async def test_timeout_escalate_secondary_channel_delivers_webhook_and_pauses(
         )
     assert webhook.delivered, "escalate-secondary-channel MUST deliver the webhook"
     assert composer.pause_requested_flag.is_set(), "the pause flag MUST be set"
+    # F2-02 sub-case 2 / §14.8.8.6: the pre-pause path composes NO audit entry —
+    # the operator response is not yet available; the entry materializes at
+    # resume-time (matching the §14.8.8.1 durable-async 4-bis path).
+    assert audit.appends == [], "the pre-pause path MUST NOT compose an audit entry"
+    assert ledger.appends == [], "the pre-pause path MUST NOT write an F2 ledger entry"
 
 
 @pytest.mark.asyncio
@@ -1935,3 +1960,66 @@ async def test_timeout_persona_tier_none_residual_hard_timeout(
             _pre_action_step(),
             step_context=_make_step_context(),
         )
+
+
+# --- U-RT-119 / F2-01: the persisted audit-entry SHAPE (not just the dispatch) -
+
+
+def test_timeout_reject_audit_entry_is_reject_shaped(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """F2-01 / §14.8.9 fail-closed — a REJECT-terminating timeout composes a
+    REJECT-shaped step-4h entry (`response="reject"` + a populated
+    `rejection_reason_hash` over a SYSTEM reason), NOT the vacuous `response=""`
+    partial. This is the entry that must AGREE with RT-FAIL-HITL-GATE-REJECTED.
+    Mirrors `test_auto_approve_audit_entry_is_non_vacuous_approve_not_timeout`."""
+    from harness_as import BlastRadiusTier
+    from harness_cp.gate_level_rule import GateLevel as CPGateLevel
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    composer = _smart_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.READ_ONLY,
+        policy=HITLAutoApprovePolicy(),
+    )
+    cp_entry, _write = composer._compose_and_persist_audit(
+        parent_action_id=cast(Any, "workflow:test:step:0"),
+        placement=HITLPlacement(position=HITLPlacementKind.PRE_ACTION),
+        cell=cast(Any, None),
+        gate_result=None,
+        step_context=_make_step_context(),
+        raise_on_failure=False,
+        system_reject_reason="timeout-fail-closed",
+    )
+    assert cp_entry.response == HITLResponse.REJECT.value
+    assert cp_entry.response != "", "REJECT-terminating timeout MUST NOT be the vacuous partial"
+    assert cp_entry.rejection_reason_hash is not None
+    assert cp_entry.gate_level == CPGateLevel.AUTO
+
+
+def test_residual_timeout_audit_entry_keeps_partial_shape(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """F2-01 (contrasting baseline) — the residual hard-timeout (no
+    `system_reject_reason`) keeps the `response=""` partial entry, consistent
+    with RT-FAIL-HITL-GATE-TIMEOUT (the pre-existing v1.9 disposition)."""
+    from harness_as import BlastRadiusTier
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    composer = _smart_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.READ_ONLY,
+        policy=HITLAutoApprovePolicy(),
+    )
+    cp_entry, _write = composer._compose_and_persist_audit(
+        parent_action_id=cast(Any, "workflow:test:step:0"),
+        placement=HITLPlacement(position=HITLPlacementKind.PRE_ACTION),
+        cell=cast(Any, None),
+        gate_result=None,
+        step_context=_make_step_context(),
+        raise_on_failure=False,
+    )
+    assert cp_entry.response == ""
+    assert cp_entry.rejection_reason_hash is None

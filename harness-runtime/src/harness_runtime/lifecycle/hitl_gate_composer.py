@@ -835,6 +835,7 @@ class RuntimeHITLGateComposer:
         step_context: StepExecutionContext,
         raise_on_failure: bool,
         auto_approved: bool = False,
+        system_reject_reason: str | None = None,
     ) -> tuple[CPAuditLedgerEntry, Any | None]:
         """4-substep audit-write per spec §14.8.2 step 4h (HITL-flavor).
 
@@ -876,6 +877,22 @@ class RuntimeHITLGateComposer:
             edited_hash = None
             response_text_hash = None
             rejection_hash = None
+        elif system_reject_reason is not None:
+            # U-RT-119 (§14.8.9 fail-closed) — a timeout that dispatches to the
+            # REJECT disposition (fail-closed default, or escalate-secondary-
+            # channel degraded when the webhook/pause surfaces are unbound).
+            # §14.8.9's fail-closed row mandates "emit the rejection audit entry
+            # (step 4h)", so the persisted entry is REJECT-shaped (response=
+            # "reject" + a populated rejection_reason_hash) and AGREES with the
+            # RT-FAIL-HITL-GATE-REJECTED fail-class — NOT the vacuous response=""
+            # partial (which is reserved for the residual hard-timeout that maps
+            # to RT-FAIL-HITL-GATE-TIMEOUT). The hash is over a SYSTEM reason
+            # (e.g. "timeout-fail-closed"), distinguishing it from an operator
+            # REJECT's `rejection_reason`.
+            response_value = HITLResponse.REJECT.value
+            edited_hash = None
+            response_text_hash = None
+            rejection_hash = hashlib.sha256(system_reject_reason.encode("utf-8")).hexdigest()
         elif gate_result is None:
             # Timeout path partial entry — response=None semantic surfaced
             # as empty-string placeholder (the CPAuditLedgerEntry.response
@@ -1230,11 +1247,24 @@ class RuntimeHITLGateComposer:
                         degradation_mode_applied = (
                             timeout_mode.value if timeout_mode is not None else "default"
                         )
+                        # Terminal disposition (G4b) — drives BOTH the audit shape
+                        # (§14.8.9 + §14.8.8.6) AND the dispatch below:
+                        #  • escalate-secondary-channel + joint binding bound →
+                        #    ESCALATE-PAUSE (webhook + pause; the §14.8.8 surface);
+                        #  • persona_tier absent → RESIDUAL hard-timeout;
+                        #  • else (fail-closed default, OR escalate degraded when
+                        #    the webhook/pause surfaces are unbound, OR — defensive
+                        #    — fail-open which is guard-refused) → REJECT.
+                        escalate_pause = (
+                            timeout_mode is TimeoutDegradationKind.ESCALATE_SECONDARY_CHANNEL
+                            and joint_binding_present
+                        )
                         # Open canonical hitl.invocation.timed_out span; set the
                         # G4a degradation_mode_applied attribute from the consult
                         # (the §14.8.2 step-4f / §14.8.5 canonical surface — also
                         # the semantic home of the v1.10 `audit.policy.*` derivation
-                        # reference per §14.8.2 step-4f); emit the partial audit.
+                        # reference). The audit entry is composed DISPOSITION-
+                        # CONDITIONALLY (NOT a blanket partial — F2-01/F2-02):
                         with tracer.start_as_current_span(
                             "hitl.invocation.timed_out"
                         ) as timeout_span:
@@ -1248,22 +1278,44 @@ class RuntimeHITLGateComposer:
                                 "hitl.timeout.degradation_mode_applied",
                                 degradation_mode_applied,
                             )
-                            # Partial audit entry (audit composition is best-
-                            # effort; failure swallowed per timeout-path
-                            # semantics). The fail-class (below) + the
-                            # degradation_mode_applied attr carry the disposition.
-                            self._compose_and_persist_audit(
-                                parent_action_id=parent_action_id,
-                                placement=placement,
-                                cell=cell,
-                                gate_result=None,
-                                step_context=step_context,
-                                raise_on_failure=False,
-                            )
-                        # U-RT-119 (G4b; §14.8.9): dispatch on the resolved mode,
-                        # replacing the v1.9 unconditional raise. Each GRANTED
-                        # mode routes through a disposition surface that already
-                        # exists at step 4i.
+                            if escalate_pause:
+                                # §14.8.8.6: the pre-pause path composes NO audit
+                                # entry — the operator response is not yet
+                                # available; the entry materializes at resume-time.
+                                # (Matches the §14.8.8.1 durable-async 4-bis path,
+                                # which likewise composes none before pausing.)
+                                pass
+                            elif timeout_mode is None:
+                                # Residual hard-timeout — the partial entry
+                                # (response="") consistent with the pre-existing
+                                # v1.9 RT-FAIL-HITL-GATE-TIMEOUT disposition.
+                                self._compose_and_persist_audit(
+                                    parent_action_id=parent_action_id,
+                                    placement=placement,
+                                    cell=cell,
+                                    gate_result=None,
+                                    step_context=step_context,
+                                    raise_on_failure=False,
+                                )
+                            else:
+                                # fail-closed / escalate-degraded-when-unbound →
+                                # REJECT disposition. §14.8.9's fail-closed row
+                                # mandates "emit the rejection audit entry (step
+                                # 4h)" — a REJECT-shaped entry (response="reject" +
+                                # populated rejection_reason_hash over a SYSTEM
+                                # reason) that AGREES with RT-FAIL-HITL-GATE-REJECTED
+                                # (NOT the vacuous response="" partial).
+                                self._compose_and_persist_audit(
+                                    parent_action_id=parent_action_id,
+                                    placement=placement,
+                                    cell=cell,
+                                    gate_result=None,
+                                    step_context=step_context,
+                                    raise_on_failure=False,
+                                    system_reject_reason="timeout-fail-closed",
+                                )
+                        # U-RT-119 (G4b; §14.8.9): dispatch on the resolved
+                        # disposition, replacing the v1.9 unconditional raise.
                         if timeout_mode is None:
                             # Residual hard-timeout — no resolvable policy.
                             raise HITLGateTimeoutError(
@@ -1272,30 +1324,26 @@ class RuntimeHITLGateComposer:
                                 f"{placement.timeout}ms (no resolvable degradation "
                                 f"policy — persona_tier absent)"
                             ) from timeout_exc
-                        if timeout_mode is TimeoutDegradationKind.ESCALATE_SECONDARY_CHANNEL:
+                        if escalate_pause:
                             # escalate-secondary-channel: deliver out-of-band
-                            # (webhook) + pause/await via the already-built
-                            # §14.8.8 surface (factored helper; NoReturn). When
-                            # the webhook/pause surfaces are unbound, degrade to
-                            # fail-closed (the §14.8.9 safe fallback — fall
-                            # through to the REJECT below).
-                            if joint_binding_present:
-                                await self._escalate_to_secondary_channel(
-                                    parent_action_id=parent_action_id,
-                                    step=step,
-                                    placement=placement,
-                                    palette=palette,
-                                    escalation_reason=("hitl_timeout_escalate_secondary_channel"),
-                                )
-                            # unbound → fall through to fail-closed REJECT.
+                            # (webhook) + pause/await via the already-built §14.8.8
+                            # surface (factored helper; NoReturn → raises
+                            # HITLPauseRequestedSignal).
+                            await self._escalate_to_secondary_channel(
+                                parent_action_id=parent_action_id,
+                                step=step,
+                                placement=placement,
+                                palette=palette,
+                                escalation_reason="hitl_timeout_escalate_secondary_channel",
+                            )
                         # fail-closed (solo default; team configurable; multi
-                        # default) AND escalate-degraded-when-unbound: treat the
-                        # timeout as a REJECT (deny the step; fail-safe) → the
-                        # step-4i REJECT disposition → RT-FAIL-HITL-GATE-REJECTED.
-                        # fail-open is UNREACHABLE — refused at config/bootstrap
-                        # (U-CP-92 validate_no_fail_open / §14.8.9 AC-1); the
-                        # dispatch never reaches a fail-open branch (defensively
-                        # the REJECT here is the C10 fail-safe even if it did).
+                        # default) AND escalate-degraded-when-unbound (the §14.8.9
+                        # safe fallback): treat the timeout as a REJECT (deny the
+                        # step; fail-safe) → the step-4i REJECT disposition →
+                        # RT-FAIL-HITL-GATE-REJECTED. fail-open is UNREACHABLE —
+                        # refused at config/bootstrap (U-CP-92 validate_no_fail_open
+                        # / §14.8.9 AC-1); the dispatch never reaches a fail-open
+                        # branch (defensively the REJECT here is the C10 fail-safe).
                         raise HITLGateRejectedError(
                             f"HITL gate timed out at placement="
                             f"{placement.position.value!r} after "
