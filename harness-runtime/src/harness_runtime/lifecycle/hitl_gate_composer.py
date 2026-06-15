@@ -1080,7 +1080,12 @@ class RuntimeHITLGateComposer:
                     # shape (response=""). The skip MUST NOT go live un-audited;
                     # `raise_on_failure=True` mirrors the gate-fired APPROVE
                     # discipline (a non-REJECT audit failure is a fault).
-                    if policy_applied:
+                    # `gate_decision is not None` ensures the skip was genuinely
+                    # policy-caused (a real `gate_level()` AUTO) — not the
+                    # test-fixture `requires_hitl=False` fallback (which would
+                    # mis-attribute an auto-approve audit; benign over-audit
+                    # foreclosed per adversarial F2-01 / advisor pre-done #3).
+                    if gate_decision is not None and policy_applied:
                         self._compose_and_persist_audit(
                             parent_action_id=parent_action_id,
                             placement=placement,

@@ -21,9 +21,11 @@ from harness_runtime.lifecycle.step_blast_radius import (
 )
 
 
-def _tool(blast: BlastRadiusTier) -> ToolContract:
+def _tool(blast: BlastRadiusTier, name: str = "t") -> ToolContract:
+    # The real ToolRegistry indexes by `contract.name`; the resolver looks up by
+    # the step payload's `tool_id`, so name MUST match the registry key.
     return ToolContract(
-        name="t",
+        name=name,
         description="t",
         input_schema={},
         output_schema={},
@@ -36,20 +38,19 @@ def _step(kind: StepKind, payload: dict | None = None) -> WorkflowStep:
     return WorkflowStep(step_id="step-1", step_kind=kind, step_payload=payload or {})
 
 
-class _Registry:
-    """Minimal dict-backed `tool_registry` exposing `.get`."""
-
-    def __init__(self, contracts: dict[str, ToolContract]) -> None:
-        self._contracts = contracts
-
-    def get(self, tool_id: str) -> ToolContract | None:
-        return self._contracts.get(tool_id)
-
-
 def _ctx_with_registry(contracts: dict[str, ToolContract]) -> SimpleNamespace:
-    """Stub `ctx` exposing `mcp_client_host.tool_registry` (runtime authority)."""
+    """Stub `ctx` exposing `mcp_client_host.tool_registry` — the REAL `ToolRegistry`
+    (whose `.get()` RAISES `ToolNameNotRegisteredError` on a miss, NOT returns
+    None; the resolver must handle that, per Codex out-of-family review)."""
+    from harness_runtime.lifecycle.tool_registry import ToolRegistry
+
+    registry = ToolRegistry()
+    for tool_id, contract in contracts.items():
+        # Register under the lookup key (the step's tool_id) — the registry's
+        # canonical index is `contract.name`, so re-key the contract to match.
+        registry.register(contract.model_copy(update={"name": tool_id}))
     return SimpleNamespace(
-        mcp_client_host=SimpleNamespace(tool_registry=_Registry(contracts)),
+        mcp_client_host=SimpleNamespace(tool_registry=registry),
         tool_contracts=None,
     )
 

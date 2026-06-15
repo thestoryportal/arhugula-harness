@@ -75,11 +75,24 @@ def _lookup_tool_blast_radius(ctx: HarnessContext, tool_id: str) -> BlastRadiusT
     Tries the runtime authority (`ctx.mcp_client_host.tool_registry`, the source
     of truth the `RuntimeToolDispatcher` consumes at TOOL_STEP dispatch) first,
     then the stage-2 registered `ctx.tool_contracts`. Raises if neither resolves.
+
+    The real `ToolRegistry.get(name)` **raises** `ToolNameNotRegisteredError`
+    (a `KeyError` subclass) on a miss — it does NOT return `None` (the
+    `RuntimeToolDispatcher` wraps it in try/except for exactly this reason). So a
+    registry miss is caught and falls through to the `ctx.tool_contracts` fallback
+    + the fail-safe raise below — NOT leaked as a `KeyError` (the documented error
+    taxonomy). `dict`-shaped registries / `tool_contracts` return `None` on miss
+    (no raise); both miss-shapes are handled.
     """
     host = getattr(ctx, "mcp_client_host", None)
     registry = getattr(host, "tool_registry", None) if host is not None else None
     if registry is not None:
-        contract = registry.get(tool_id)
+        try:
+            contract = registry.get(tool_id)
+        except KeyError:
+            # Real ToolRegistry raises ToolNameNotRegisteredError (KeyError) on a
+            # miss — fall through to the tool_contracts fallback, do not leak it.
+            contract = None
         if contract is not None:
             return contract.blast_radius_tier
     contracts = getattr(ctx, "tool_contracts", None)
