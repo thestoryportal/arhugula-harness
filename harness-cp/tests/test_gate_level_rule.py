@@ -13,8 +13,11 @@ Acceptance-criterion coverage (v2.20 amendment per CP spec v1.15 §19.1.1):
   #9 (v2.20 NEW) GateLevelInput field-set -> test_gate_level_input_no_deployment_surface_field
   #10 composition_winner attribution      -> test_composition_winner_attribution
 
-Acc #5 (MCP_TRUST floor) preserved §0.8 row 2 PARTIAL-ADVANCE — per-tier mapping
-spec-silent at both CP §19.1 + AS §10.3; owed at follow-on spec-extension arc.
+Acc #5 (MCP_TRUST floor) MATERIALIZED at U-CP-98 / CP spec v1.35 §19.1.2 (the 4th,
+last §19.1 axis; resolves the prior §0.8 row 2 PARTIAL-ADVANCE) -> the
+test_u_cp_98_* block below (Table A per-tier floors + max() composition +
+non-vacuous tier-distinctness + composition_winner + the load-bearing
+override-cannot-bypass-an-untrusted-L0-server security test).
 Acc #6 (DEPLOYMENT_SURFACE floor) RETIRED at v2.20 per CP spec v1.15 §19.1.1 (v)
 non-axis statement. New per_tool_gate_level tests authored at v2.20 (NEW acc #6).
 """
@@ -27,6 +30,7 @@ from harness_core import PersonaTier
 from harness_cp.cp_shared_types import Axis, MCPTrustTier
 from harness_cp.gate_level_rule import (
     BLAST_RADIUS_GATE_LEVEL_FLOOR,
+    MCP_TRUST_GATE_LEVEL_FLOOR,
     PERSONA_TIER_GATE_LEVEL_FLOOR,
     GateLevel,
     GateLevelInput,
@@ -44,8 +48,12 @@ def _input(
     return GateLevelInput(
         per_tool_gate_level=per_tool,
         persona_tier=persona,
+        # U-CP-98: MCP_TRUST is now a composed axis. These tests isolate the
+        # per_tool/blast/persona axes, so the helper feeds the L3 no-floor
+        # default (→ AUTO, contributes nothing to max()) — the dedicated
+        # MCP_TRUST tests below exercise the other tiers.
         blast_radius_tier=blast,
-        mcp_trust_tier=MCPTrustTier.LEVEL_1_SIGNED_PINNED,
+        mcp_trust_tier=MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT,
     )
 
 
@@ -75,6 +83,7 @@ def test_gate_level_max_composition_over_materialized_floors() -> None:
         Axis.PER_TOOL_GATE_LEVEL,
         Axis.BLAST_RADIUS,
         Axis.PERSONA_TIER,
+        Axis.MCP_TRUST,
     }
 
 
@@ -133,7 +142,10 @@ def _base_input(**overrides: object) -> GateLevelInput:
         "per_tool_gate_level": GateLevel.AUTO,
         "persona_tier": PersonaTier.SOLO_DEVELOPER,
         "blast_radius_tier": BlastRadiusTier.READ_ONLY,
-        "mcp_trust_tier": MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
+        # U-CP-98: the L3 no-floor default isolates the U-CP-91 override mechanism
+        # under test (persona/blast). The dedicated security test below
+        # (test_u_cp_98_override_cannot_bypass_untrusted_l0_server) exercises L0.
+        "mcp_trust_tier": MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT,
     }
     kwargs.update(overrides)
     return GateLevelInput(**kwargs)  # type: ignore[arg-type]
@@ -251,3 +263,85 @@ def test_gate_level_monotonic_ordering() -> None:
     comp = gate_level(_input(PersonaTier.SOLO_DEVELOPER, BlastRadiusTier.READ_ONLY))
     assert comp.computed_gate_level is GateLevel.ASK
     assert comp.per_axis_floors[Axis.BLAST_RADIUS] is GateLevel.AUTO
+
+
+# ---------------------------------------------------------------------------
+# U-CP-98 — MCP_TRUST 4th-axis composition (CP spec v1.35 §19.1.2, Table A).
+# ---------------------------------------------------------------------------
+
+
+def test_u_cp_98_mcp_trust_floor_table_matches_spec_19_1_2() -> None:
+    """§19.1.2 — MCP_TRUST_GATE_LEVEL_FLOOR is the operator-ratified Table A verbatim."""
+    assert MCP_TRUST_GATE_LEVEL_FLOOR == {
+        MCPTrustTier.LEVEL_0_REFUSE_REMOTE: GateLevel.DENY,
+        MCPTrustTier.LEVEL_1_SIGNED_PINNED: GateLevel.ASK,
+        MCPTrustTier.LEVEL_2_SANDBOX_ALL: GateLevel.ASK,
+        MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT: GateLevel.AUTO,
+    }
+
+
+def test_u_cp_98_each_tier_composes_its_table_a_floor() -> None:
+    """§19.1.2 — every MCPTrustTier composes its Table A floor at `gate_level()`.
+
+    The composed `per_axis_floors[Axis.MCP_TRUST]` equals `Table A[tier]` for all
+    four tiers (read through the real `max()` composition, not just the table).
+    """
+    for tier, expected_floor in MCP_TRUST_GATE_LEVEL_FLOOR.items():
+        comp = gate_level(_base_input(mcp_trust_tier=tier))
+        assert comp.per_axis_floors[Axis.MCP_TRUST] is expected_floor
+
+
+def test_u_cp_98_mcp_trust_axis_in_max_composition() -> None:
+    """§19.1.2 — an untrusted (L0→DENY) server is the strict `max()` winner.
+
+    With per_tool AUTO + blast READ_ONLY (AUTO) + persona ASK, an L0 server's DENY
+    floor is the sole DENY → `computed_gate_level` is DENY and `composition_winner`
+    names `Axis.MCP_TRUST`.
+    """
+    comp = gate_level(_base_input(mcp_trust_tier=MCPTrustTier.LEVEL_0_REFUSE_REMOTE))
+    assert comp.computed_gate_level is GateLevel.DENY
+    assert comp.composition_winner is Axis.MCP_TRUST
+
+
+def test_u_cp_98_mcp_trust_non_vacuous_tier_distinctness() -> None:
+    """§19.1.2 — the axis carries real signal (mirror #481 TEAM≠neighbours).
+
+    SAME blast/persona/per_tool inputs compose a DIFFERENT gate at `mcp_trust=L0`
+    (DENY) vs `=L3` (the persona-decided ASK) — proving MCP_TRUST is not a uniform
+    pass-through table.
+    """
+    untrusted = gate_level(_base_input(mcp_trust_tier=MCPTrustTier.LEVEL_0_REFUSE_REMOTE))
+    trusted = gate_level(_base_input(mcp_trust_tier=MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT))
+    assert untrusted.computed_gate_level is GateLevel.DENY
+    assert trusted.computed_gate_level is GateLevel.ASK
+    assert untrusted.computed_gate_level is not trusted.computed_gate_level
+
+
+def test_u_cp_98_l3_trusted_server_adds_no_floor() -> None:
+    """§19.1.2 invariant 3 — an L3 (allow-with-audit) server maps to AUTO (rank 0),
+    contributing nothing to `max()`; the gate is the persona-decided ASK (identical
+    to the pre-U-CP-98 3-axis path). This is the host-less-gate no-floor default."""
+    comp = gate_level(_base_input(mcp_trust_tier=MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT))
+    assert comp.per_axis_floors[Axis.MCP_TRUST] is GateLevel.AUTO
+    assert comp.computed_gate_level is GateLevel.ASK
+    assert comp.composition_winner is Axis.PERSONA_TIER
+
+
+def test_u_cp_98_override_cannot_bypass_untrusted_l0_server() -> None:
+    """§19.1.2 regression (the LOAD-BEARING security property) — the U-CP-91
+    operator-policy override lowers persona+blast to AUTO at solo, but CANNOT
+    bypass an untrusted (L0) MCP server: `mcp_trust` is never floor-override-able,
+    so its DENY composes verbatim → the gate is DENY (winner MCP_TRUST).
+
+    Sibling of `test_u_cp_91_override_never_lowers_per_tool_deny` — the untrusted
+    server is the MCP-trust analog of the `deny`-tier tool.
+    """
+    inp = _base_input(
+        mcp_trust_tier=MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
+        persona_floor_override=GateLevel.AUTO,
+        blast_floor_override=GateLevel.AUTO,
+    )
+    comp = gate_level(inp)
+    assert comp.computed_gate_level is GateLevel.DENY
+    assert comp.composition_winner is Axis.MCP_TRUST
+    assert hitl_required(inp) is True

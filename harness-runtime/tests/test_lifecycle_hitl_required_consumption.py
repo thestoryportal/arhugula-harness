@@ -1,9 +1,9 @@
 """U-RT-90 unit tests — `_hitl_required` 4-axis consumption per Reading B.
 
 Covers runtime spec v1.22 §14.8.2 step 4c — thin wrapper around CP-axis
-`harness_cp.gate_level_rule.hitl_required` (v2.20 spec-canonical conformance
-per CP spec v1.15 §19.1.1 — 3-axis materialized {per_tool_gate_level,
-blast_radius, persona_tier}; MCP_TRUST 4th axis §0.8 row 2 PARTIAL-ADVANCE).
+`harness_cp.gate_level_rule.hitl_required` (4-axis materialized {per_tool_gate_level,
+blast_radius, persona_tier, mcp_trust} per CP spec v1.35 §19.1.2 / U-CP-98 — these
+tests isolate the blast/persona axes via the L3 no-floor mcp default).
 """
 
 from __future__ import annotations
@@ -25,14 +25,16 @@ def _input(
     """Construct a GateLevelInput conformed to v2.20 spec-canonical 4-axis.
 
     Per CP spec v1.15 §19.1.1.1 — fields: per_tool_gate_level (degenerate
-    direct value), persona_tier, blast_radius_tier, mcp_trust_tier (§0.8
-    row 2 PARTIAL-ADVANCE — mapping spec-silent so any value works as sentinel).
+    direct value), persona_tier, blast_radius_tier, mcp_trust_tier. These tests
+    isolate the blast/persona consumption, so the helper feeds the L3 no-floor
+    default (CP spec v1.35 §19.1.2 / U-CP-98 — AUTO contributes nothing to max();
+    MCP_TRUST is now a composed axis, exercised in the CP gate_level_rule tests).
     """
     return GateLevelInput(
         per_tool_gate_level=per_tool,
         persona_tier=persona,
         blast_radius_tier=blast_radius,
-        mcp_trust_tier=MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
+        mcp_trust_tier=MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT,
     )
 
 
