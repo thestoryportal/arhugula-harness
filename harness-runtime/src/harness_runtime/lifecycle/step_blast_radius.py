@@ -84,17 +84,22 @@ def _lookup_tool_blast_radius(ctx: HarnessContext, tool_id: str) -> BlastRadiusT
     taxonomy). `dict`-shaped registries / `tool_contracts` return `None` on miss
     (no raise); both miss-shapes are handled.
     """
-    # B2-impl-2a: single host today — read the sole host's registry (U-RT-128
-    # reshapes this to the routed/owning host's registry at B2-impl-2b).
+    # U-RT-128: search ALL hosts' registries for `tool_id`. Blast-radius
+    # resolution takes `ctx`, not the dispatcher, so the dispatcher-held routing
+    # index is not reachable here — but the RT-FAIL-MCP-TOOL-NAME-COLLISION
+    # bootstrap guarantee (a tool advertised by ≥2 hosts aborts startup) makes
+    # the tool resolve in AT MOST one host, so the first match is unambiguous.
+    # Still one-source-of-truth: the per-host registries are the authority.
     hosts: dict[ServerName, Any] = getattr(ctx, "mcp_client_hosts", None) or {}
-    host = next(iter(hosts.values()), None)
-    registry = getattr(host, "tool_registry", None) if host is not None else None
-    if registry is not None:
+    for host in hosts.values():
+        registry = getattr(host, "tool_registry", None)
+        if registry is None:
+            continue
         try:
             contract = registry.get(tool_id)
         except KeyError:
             # Real ToolRegistry raises ToolNameNotRegisteredError (KeyError) on a
-            # miss — fall through to the tool_contracts fallback, do not leak it.
+            # miss — try the next host, then fall through to tool_contracts.
             contract = None
         if contract is not None:
             return contract.blast_radius_tier

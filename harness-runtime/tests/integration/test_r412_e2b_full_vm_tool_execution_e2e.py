@@ -181,7 +181,7 @@ async def test_r412_tier4_tool_step_executes_in_e2b_managed_full_vm() -> None:
         sandbox_timeout_seconds=60,
         allow_internet_access=False,
     )
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_emitter(),

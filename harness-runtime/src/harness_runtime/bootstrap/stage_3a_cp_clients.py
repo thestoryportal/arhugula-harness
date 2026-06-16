@@ -14,6 +14,8 @@ purely the orchestrator binding.
 
 from __future__ import annotations
 
+from typing import Any
+
 from harness_core.workload_class import WorkloadClass
 
 from harness_runtime.bootstrap.factories.mcp_client_host_factory import (
@@ -68,8 +70,24 @@ async def execute(
     # server: the empty-sentinel host (0 servers) is intentionally never started.
     # `start()` failure raises MCPHostStartupError (RT-FAIL-MCP-HOST-STARTUP) →
     # propagates to the bootstrap orchestrator → fail-closed abort per ADR-F4
-    # v1.1 §Consequences (c). (B2-impl-2a: single host today; multi-host
-    # materialization is U-RT-126-full / B2-impl-2b.)
+    # v1.1 §Consequences (c).
+    #
+    # Multi-server (U-RT-126): hosts start sequentially. If a LATER host's
+    # start() fails, CP_CLIENTS never completes, so the orchestrator never runs
+    # `_rollback_cp_clients` — the hosts already started in this loop would leak.
+    # Drain them locally before propagating (fail-closed teardown; the spec's
+    # "partial-start recovery out of scope" forecloses *continuing*, not
+    # *leaking*). Best-effort per-host, then re-raise the original failure.
     if config.mcp_clients:
-        for host in ctx.mcp_client_hosts.values():
-            await host.start()
+        started: list[Any] = []
+        try:
+            for host in ctx.mcp_client_hosts.values():
+                await host.start()
+                started.append(host)
+        except Exception:
+            for already in started:
+                try:
+                    await already.shutdown()
+                except Exception:
+                    pass
+            raise

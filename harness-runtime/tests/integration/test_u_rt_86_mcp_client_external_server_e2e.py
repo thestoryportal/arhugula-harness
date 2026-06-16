@@ -296,7 +296,7 @@ async def test_mcp_client_external_server_e2e_tool_call_path(
 
         # Production RuntimeToolDispatcher around the real host. Real
         # PerServerTrustEvaluator + MCPClientNamespaceEmitter + TrustPolicy.
-        dispatcher = RuntimeToolDispatcher(
+        dispatcher = RuntimeToolDispatcher.for_single_host(
             mcp_client_host=host,
             per_server_trust_evaluator=PerServerTrustEvaluator(),
             mcp_namespace_emitter=_make_emitter(),

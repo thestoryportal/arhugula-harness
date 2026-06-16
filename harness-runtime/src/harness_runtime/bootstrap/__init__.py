@@ -137,6 +137,18 @@ async def _rollback_as(ctx: _MutableHarnessContext) -> None:
 
 
 async def _rollback_cp_clients(ctx: _MutableHarnessContext) -> None:
+    # Drain each STARTED MCP client host stage 3a started (U-RT-126:
+    # `mcp_client_hosts`). A post-stage-3a failure — e.g. a stage-5
+    # RT-FAIL-MCP-TOOL-NAME-COLLISION abort — must not leak their
+    # subprocesses/sessions (the symmetric teardown to stage_3a's per-host
+    # start loop; mirrors `shutdown()` step 4). Best-effort, per-resource isolation.
+    if ctx.mcp_client_hosts is not None:
+        for host in ctx.mcp_client_hosts.values():
+            if getattr(host, "started", False):
+                try:
+                    await host.shutdown()
+                except Exception:
+                    pass
     # Close each provider that exposes an awaitable `aclose()` per C-RT-05.
     if ctx.providers is None:
         return

@@ -227,7 +227,7 @@ async def test_r411_tier3_tool_step_executes_under_gvisor_runsc() -> None:
         docker_command=_docker_command(),
         timeout_seconds=30,
     )
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_emitter(),
