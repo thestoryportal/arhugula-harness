@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `1ccdd00e6830` |
-| `last_refreshed` | 2026-06-16T08:51:06+00:00 |
-| `git_head` | `97821005` (main; records **#592 — impl(R-FS-1 B2-impl-2b): multi-server MCP routing/dispatch/collision/per-host-sandbox (runtime v1.51 §14.9.10 D1/D2/D4)**. The capability half of the B2 multi-server reshape (2a landed the carrier shape #590; 2b lands routing/dispatch on top). 4 co-landed security-coupled units: **U-RT-126-full** materializes ALL `config.mcp_clients` keyed by `server_name` (empty→`{}`, duplicate fails loud); **U-RT-127** `build_tool_routing_index` + NEW 10th fail-class `RT-FAIL-MCP-TOOL-NAME-COLLISION`; **U-RT-128** dispatcher holds `routing_index` + `for_single_host` classmethod, resolves `tool_id → server_name → host/resolver/driver`; **U-RT-130** per-host sandbox resolver/driver from each `MCPClientConfig.default_sandbox_*`. Codex caught 3 resource-lifecycle bugs (duplicate-drop, collision-abort host-leak, partial-start leak) — all fixed+tested. ruff 0 / pyright strict 0 / provider-free suite 4216 passed. → **B2-impl-3** the U-CP-98 ⊕ U-RT-131 co-land gate arc, per FROZEN order B1✅→B3✅→E✅→**B2**(plan✅ impl-1✅ impl-2a✅ impl-2b✅)→R→B4→CA→B5→B6→B7→M.) |
+| `workspace_state_hash` | `a2e2a652d4fc` |
+| `last_refreshed` | 2026-06-16T09:30:03+00:00 |
+| `git_head` | `f6c2e934` (main; records **#594 — impl(R-FS-1 B2-impl-3): MCP_TRUST gate-axis co-land — U-CP-98 ⊕ U-RT-131 (CP v1.35 §19.1.2)**. The final B2 leg — materialize the 4th + last §19.1 HITL-gate axis. Two security-coupled units: **U-CP-98** commits `MCP_TRUST_GATE_LEVEL_FLOOR` (Table A L0→DENY/L1→ASK/L2→ASK/L3→AUTO) + composes `Axis.MCP_TRUST` into `gate_level()` (max() over 4 axes); **U-RT-131** replaces the harmful `:462` L0 constant with the L3 no-floor default at the host-less gate sites (co-land pin: U-CP-98-alone = universal DENY). Real per-server feed = forward `B-TOOL-GATE` arc. Advisor-surfaced production-site audit (3 sites, all safe). **B2 sub-program COMPLETE** (8 units: U-RT-125/126/127/128/129/130/131 + U-CP-98 across impl-1/2a/2b/3). ruff 0 / pyright 0 / suite 4223 passed / overlay 31/31. → **NEXT = R** (router/embedding sub-program: LLM_AS_ROUTER Layer 3 + EMBEDDING Layer 2 — the two previously-deferred routing layers, now full-spec BUILD arcs; start R-DESIGN), per FROZEN order B1✅→B3✅→E✅→**B2✅**→R→B4→CA→B5→B6→B7→M.) |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 62 |
 
@@ -72,7 +72,7 @@
 
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
-| *(none)* | — | — | No open PRs at refresh time. R-FS-1 **B2-impl-2b ✅ merged (#592)** — multi-server MCP routing/dispatch/collision/per-host-sandbox (U-RT-126-full + U-RT-127 routing/collision + U-RT-128 dispatch-resolution + U-RT-130 per-host-sandbox). NEXT = **B2-impl-3** (U-CP-98 ⊕ U-RT-131 co-land gate arc — the last B2 leg before R), per FROZEN order …→**B2**(plan✅ impl-1✅ impl-2a✅ impl-2b✅)→R→B4→CA→B5→B6→B7→M. |
+| *(none)* | — | — | No open PRs at refresh time. R-FS-1 **B2-impl-3 ✅ merged (#594)** — MCP_TRUST gate-axis co-land (U-CP-98 `gate_level()` 4th-axis composition ⊕ U-RT-131 composer host-less L3 no-floor default). **B2 sub-program COMPLETE.** NEXT = **R** (router/embedding: LLM_AS_ROUTER Layer 3 + EMBEDDING Layer 2 routing — the two deferred routing layers, now full-spec BUILD arcs; start with R-DESIGN per the B1/B2/B3-DESIGN precedent), per FROZEN order …→**B2✅**→R→B4→CA→B5→B6→B7→M. |
 
 ---
 
@@ -80,6 +80,7 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #594 | 2026-06-16 | **R-FS-1 — B2-impl-3: MCP_TRUST gate-axis co-land (U-CP-98 ⊕ U-RT-131; CP v1.35 §19.1.2).** The final B2 leg — 4th/last §19.1 HITL-gate axis. U-CP-98 commits `MCP_TRUST_GATE_LEVEL_FLOOR` (Table A) + composes `Axis.MCP_TRUST` into `gate_level()`; U-RT-131 swaps the harmful `:462` L0 constant for the L3 no-floor default at the host-less gate sites (co-land pin: U-CP-98-alone over-gates every gate to DENY). 6 U-CP-98 ACs (incl. the load-bearing override-cannot-bypass-untrusted-L0 security test) + 1 U-RT-131 non-regression. Advisor production-site audit + Codex clean. **B2 sub-program COMPLETE.** 4223 passed. |
 | PR #592 | 2026-06-16 | **R-FS-1 — B2-impl-2b: multi-server MCP routing/dispatch/collision/per-host-sandbox (runtime v1.51 §14.9.10 D1/D2/D4).** Capability half of the B2 reshape (2a #590 = carrier shape). U-RT-126-full materializes ALL hosts keyed by `server_name`; U-RT-127 routing index + NEW `RT-FAIL-MCP-TOOL-NAME-COLLISION` 10th fail-class; U-RT-128 dispatcher `routing_index` + `for_single_host`; U-RT-130 per-host sandbox. Codex caught 3 lifecycle bugs (all fixed). 4216 passed. |
 | PR #590 | 2026-06-16 | **R-FS-1 — B2-impl-2a: U-RT-125 `mcp_client_hosts` dict carrier reshape (runtime v1.51 §14.9.10 D1).** Singular→mapping carrier (`HarnessContext.mcp_client_host` → `mcp_client_hosts: dict[ServerName, MCPClientHost]`, keyed on `server_name`) + the shape half of U-RT-126 (factory returns a dict). Shape-vs-capability split (advisor-blessed): honestly single-host (still `[0]`); transitional sole-host reads at dispatcher-factory/blast_radius. ruff+pyright clean; 4210 passed (incl. CXA-P1 34/34); Codex clean. **U-RT-126 is one atomic plan node — 2a landed U-RT-125 + U-RT-126-shape; the materialize-all loop + U-RT-127/128/130 are B2-impl-2b.** |
 | PR #588 | 2026-06-16 | **R-FS-1 — B2-impl-1: U-RT-129 identity-by-ordinal MCP trust-telemetry projection.** Retired the D3 constant-collapse stub (`_trust_tier_from_level` → identity `L_k→LEVEL_k`, realizing CP §27.8); TELEMETRY-ONLY (mcp.server.trust_tier span attr, not the dispatch gate); 2 stale "and gate…" docstrings fixed; 6 by-execution tests; full runtime suite 1755 passed; Codex clean. Impl-sequence: U-RT-129 ALONE (reshape units 125/126/127/128/130 co-land as B2-impl-2). **Next = B2-impl-2.** |
