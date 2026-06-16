@@ -77,6 +77,14 @@ class _GateLevelHITLRequiredEvaluator:
 
     per_tool_gate_level: GateLevel = GateLevel.AUTO
     blast_radius_tier: BlastRadiusTier = BlastRadiusTier.READ_ONLY
+    # Post-U-CP-98 (CP spec v1.35 §19.1.2) this `mcp_trust_tier` is now a COMPOSED
+    # gate axis (`L0→DENY`). It is deliberately the conservative `LEVEL_0` —
+    # a model-emitted tool call with no resolved server trust defaults to untrusted
+    # → HITL-required. The change is behavior-preserving: the persona floor is ASK
+    # for all three tiers, so this evaluator already returned True for every input;
+    # the L0 floor (DENY) only re-grounds that True in MCP-trust. (Distinct from the
+    # composer's HOST-LESS gate sites, which feed the L3 no-floor default per
+    # U-RT-131 — those have no owning host; a model tool call references a server.)
     mcp_trust_tier: MCPTrustTier = MCPTrustTier.LEVEL_0_REFUSE_REMOTE
 
     def __call__(self, call: ModelToolCall, context: HITLToolLoopContext) -> bool:

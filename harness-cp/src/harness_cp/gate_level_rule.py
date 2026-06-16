@@ -3,14 +3,15 @@
 Implements C-CP-19 §19.1 (the multiplicative gate-level `max()` rule), §19.2
 (cross-persona-tier monotonicity), and §19.4 (the `_hitl_required` predicate).
 
-**Partial land — halt-route-split-AC.** CP plan v2.20 §0.8 row 2 PARTIAL-ADVANCE
-preserves one spec-silence finding:
-
-  - `MCP_TRUST_GATE_LEVEL_FLOOR` — AS spec C-AS-10 §10.3 4-level enumeration is
-    canonical at AS-side (per CP spec v1.14 narrative reconciliation), but the
-    per-tier → gate-level mapping (`MCPTrustTier` → `GateLevel`) remains
-    spec-silent at both CP §19.1 and AS §10.3. Mapping owed at separate
-    follow-on spec-extension arc.
+**4-of-4 axes materialized (U-CP-98 / R-FS-1 B2-impl-3).** The
+`MCP_TRUST_GATE_LEVEL_FLOOR` per-tier → gate-level mapping — the CP plan v2.20 §0.8
+row 2 PARTIAL-ADVANCE spec-silence — is now RESOLVED at CP spec **v1.35 §19.1.2**
+(operator-ratified Table A: `level-0`→`DENY` / `level-1`→`ASK` / `level-2`→`ASK` /
+`level-3`→`AUTO`; floor-only/monotone). `gate_level()` composes all four §19.1 axes.
+The real per-server trust feed (resolved owning MCP host → `mcp_trust_tier`) targets
+a tool-step gate site that does not yet exist — the forward `B-TOOL-GATE` arc; the
+only gate sites at HEAD are host-less (inference + sub-agent), which feed the L3
+no-floor default (runtime U-RT-131).
 
 Per the v2.20 (B2) plan-follows-spec disposition (operator AskUserQuestion
 2026-05-24 + CP spec v1.15 §19.1.1 publication), the v2.4-era `deployment_surface`
@@ -21,10 +22,10 @@ MCP server manifest (degenerate axis: no per-tier mapping; consumed directly).
 
 The materializable surface AS LANDED: the §19.1/§16.2-conformed `GateLevel`
 3-value enum, the `BLAST_RADIUS` + `PERSONA_TIER` §19.1-verbatim floors, the
-`per_tool_gate_level` direct-input axis (v2.20), the `gate_level` multiplicative
-`max()` rule over those three axes, cross-persona-tier monotonicity (§19.2),
-and the `_hitl_required` predicate (§19.4). MCP_TRUST 4th axis remains
-unmaterialized per §0.8 row 2 PARTIAL-ADVANCE.
+`per_tool_gate_level` direct-input axis (v2.20), the `MCP_TRUST` floor (v1.35
+§19.1.2 / U-CP-98), the `gate_level` multiplicative `max()` rule over all four
+axes, cross-persona-tier monotonicity (§19.2), and the `_hitl_required`
+predicate (§19.4).
 
 Authority: Implementation_Plan_Control_Plane_v2_20.md §1 U-CP-43 canonical-reading
 amendment (v2.20 — `GateLevelInput` field-set conformed to spec-canonical
@@ -102,13 +103,13 @@ class GateLevelInput(BaseModel):
     blast_radius_tier: BlastRadiusTier
 
     mcp_trust_tier: MCPTrustTier
-    """Spec-canonical axis. [§0.8 row 2 PARTIAL-ADVANCE] AS spec C-AS-10 §10.3
-    4-level enumeration is canonical at AS-side (cardinality narrative
-    reconciled at CP spec v1.14); per-tier → gate-level mapping
-    (`MCP_TRUST_GATE_LEVEL_FLOOR`) is spec-silent at both CP §19.1 and AS §10.3
-    so this field is unconsumed by `gate_level()` until the mapping lands at
-    follow-on spec-extension arc. The field type is the landed U-CP-00c
-    `MCPTrustTier` enum."""
+    """Spec-canonical axis (the 4th §19.1 axis). CONSUMED by `gate_level()` via
+    `MCP_TRUST_GATE_LEVEL_FLOOR` (CP spec v1.35 §19.1.2 / U-CP-98 — resolves the
+    prior §0.8 row 2 PARTIAL-ADVANCE spec-silence). AS spec C-AS-10 §10.3 4-level
+    enumeration is canonical at AS-side (cardinality narrative reconciled at CP
+    spec v1.14); the per-tier → gate-level mapping is now the operator-ratified
+    Table A (floor-only/monotone). Never floor-override-able. The field type is
+    the landed U-CP-00c `MCPTrustTier` enum."""
 
     persona_floor_override: GateLevel | None = None
     """U-CP-91 (F-B3-1 §19.5 in-`max()` floor-override; runtime spec §3.8). When
@@ -135,10 +136,10 @@ class GateLevelInput(BaseModel):
 class GateLevelComputation(BaseModel):
     """The result of a gate-level computation (C-CP-19 §19.1).
 
-    `per_axis_floors` carries the three materialized axes (`PER_TOOL_GATE_LEVEL`,
-    `BLAST_RADIUS`, `PERSONA_TIER`) at v2.20; the `MCP_TRUST` 4th axis remains
-    §0.8 row 2 PARTIAL-ADVANCE (per-tier mapping spec-silent at both CP §19.1
-    and AS §10.3 — owed at follow-on spec-extension arc). `composition_winner`
+    `per_axis_floors` carries all four materialized axes (`PER_TOOL_GATE_LEVEL`,
+    `BLAST_RADIUS`, `PERSONA_TIER`, `MCP_TRUST`) — the `MCP_TRUST` floor landed at
+    U-CP-98 per CP spec v1.35 §19.1.2 (operator-ratified Table A; resolves the
+    prior §0.8 row 2 PARTIAL-ADVANCE). `composition_winner`
     identifies which axis set the winning floor — retained as an internal field
     with no downstream audit sink at v2.4 (the `audit.gate.*` namespace was
     dissolved at v2.4 U-CP-46).
@@ -182,17 +183,39 @@ dual-control on external-irreversible). The v2.1/v2.3 acc #3 divergent ladder
 (`GATE_NONE` / `GATE_NOTIFY` / `GATE_APPROVE`) was conformed away at v2.4.
 """
 
+MCP_TRUST_GATE_LEVEL_FLOOR: dict[MCPTrustTier, GateLevel] = {
+    MCPTrustTier.LEVEL_0_REFUSE_REMOTE: GateLevel.DENY,
+    MCPTrustTier.LEVEL_1_SIGNED_PINNED: GateLevel.ASK,
+    MCPTrustTier.LEVEL_2_SANDBOX_ALL: GateLevel.ASK,
+    MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT: GateLevel.AUTO,
+}
+"""C-CP-19 §19.1.2 `MCP_TRUST_GATE_LEVEL_FLOOR` table — operator-ratified Table A
+(R-FS-1 B2-spec-2; resolves the v1.15 §19.1.1.1 row-3 spec-silence — the 4th and
+last §19.1 HITL-gate axis).
+
+`level-0-refuse-remote` → `DENY`; `level-1-signed-pinned` → `ASK`;
+`level-2-sandbox-all` → `ASK`; `level-3-allow-with-audit` → `AUTO`. **Floor-only /
+monotone** (§19.1.2 invariant 3): the gate is `max()` over escalation rank, so a
+floor can only RAISE the gate; the `level-3` cell (`AUTO`, rank 0) contributes
+nothing — it is the no-floor value a host-less gate site legitimately composes (the
+analog of `per_tool_gate_level=AUTO`). The `mcp_trust` axis is NEVER
+floor-override-able (the U-CP-91 below "never overridden" commitment is honored;
+an untrusted `level-0` server composes `DENY` verbatim regardless of any
+persona/blast override).
+"""
+
 
 def gate_level(input: GateLevelInput) -> GateLevelComputation:
     """Compute the gate level — `max()` over the materialized per-axis floors.
 
     C-CP-19 §19.1 composition rule: `max()` over the per-axis floors.
-    Deterministic given inputs. **v2.20 — 3-axis materialized:** the
-    `max()` ranges over the three materialized §19.1-conformed inputs
-    (`PER_TOOL_GATE_LEVEL` direct, `BLAST_RADIUS` floor, `PERSONA_TIER` floor)
-    per CP spec v1.15 §19.1.1.1. The `MCP_TRUST` 4th axis remains
-    §0.8 row 2 PARTIAL-ADVANCE — per-tier → gate-level mapping spec-silent
-    until follow-on spec-extension arc.
+    Deterministic given inputs. **v1.35 §19.1.2 — 4-axis materialized (U-CP-98):**
+    the `max()` ranges over all four §19.1 axes (`PER_TOOL_GATE_LEVEL` direct,
+    `BLAST_RADIUS` floor, `PERSONA_TIER` floor, `MCP_TRUST` floor via
+    `MCP_TRUST_GATE_LEVEL_FLOOR`). `mcp_trust` is never floor-override-able; at the
+    host-less gate sites the runtime composer evaluates it feeds the L3 no-floor
+    default (U-RT-131), so it adds no floor there (the real per-server `L0→DENY`
+    arrives at the forward `B-TOOL-GATE` tool-step gate site).
     """
     per_tool_floor = input.per_tool_gate_level  # degenerate — IS the value
     # U-CP-91 (F-B3-1 §19.5): the composer-supplied floor-override REPLACES the
@@ -215,6 +238,12 @@ def gate_level(input: GateLevelInput) -> GateLevelComputation:
         Axis.PER_TOOL_GATE_LEVEL: per_tool_floor,
         Axis.BLAST_RADIUS: blast_floor,
         Axis.PERSONA_TIER: persona_floor,
+        # §19.1.2 (U-CP-98): the 4th, last §19.1 axis. Floor-only; never
+        # override-able (per_tool + mcp_trust carry no `*_floor_override`). The
+        # host-less gate sites the runtime composer evaluates feed the L3 no-floor
+        # default (U-RT-131) → AUTO contributes nothing; the real per-server
+        # `L0→DENY` arrives at the forward `B-TOOL-GATE` tool-step gate site.
+        Axis.MCP_TRUST: MCP_TRUST_GATE_LEVEL_FLOOR[input.mcp_trust_tier],
     }
     # max() over the materialized floors by escalation rank.
     winner_axis = max(per_axis_floors.items(), key=lambda kv: _RANK[kv[1]])[0]

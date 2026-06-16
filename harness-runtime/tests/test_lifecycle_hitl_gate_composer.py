@@ -2042,3 +2042,44 @@ def test_residual_timeout_audit_entry_keeps_partial_shape(
     )
     assert cp_entry.response == ""
     assert cp_entry.rejection_reason_hash is None
+
+
+def test_u_rt_131_host_less_gate_no_floor_default_matches_3_axis_path() -> None:
+    """U-RT-131 co-land (the non-regression proof) — the composer feeds the L3
+    no-floor MCP-trust default at the host-less gate sites (inference / sub-agent
+    have no owning MCP host), so composing the U-CP-98 4th axis adds NO floor: the
+    gate is IDENTICAL to the 3-axis-equivalent path for the same persona/blast/
+    per_tool, and is the persona-decided ASK — NOT the universal DENY the retired
+    `LEVEL_0_REFUSE_REMOTE` constant would have forced once `Axis.MCP_TRUST`
+    composes. (A regression of `:462` back to L0 fails this test.)
+    """
+    from types import SimpleNamespace
+
+    from harness_as import BlastRadiusTier
+    from harness_cp.cp_shared_types import Axis, MCPTrustTier
+    from harness_cp.gate_level_rule import GateLevel, GateLevelInput, gate_level
+    from harness_runtime.lifecycle.hitl_gate_composer import _compute_gate_decision
+
+    binding = SimpleNamespace(
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+        blast_radius_tier=BlastRadiusTier.READ_ONLY,
+        per_tool_gate_level=GateLevel.AUTO,
+    )
+    composed = _compute_gate_decision(binding=binding)
+    assert composed is not None
+    # The 4th axis contributes the no-floor AUTO at a host-less site.
+    assert composed.per_axis_floors[Axis.MCP_TRUST] is GateLevel.AUTO
+    # Identical to the explicit 3-axis-equivalent path (mcp = the L3 no-floor default).
+    expected = gate_level(
+        GateLevelInput(
+            per_tool_gate_level=GateLevel.AUTO,
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+            blast_radius_tier=BlastRadiusTier.READ_ONLY,
+            mcp_trust_tier=MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT,
+        )
+    ).computed_gate_level
+    assert composed.computed_gate_level is expected
+    # The harmful L0→DENY-on-every-gate constant is gone: a solo read-only host-less
+    # gate composes ASK (persona floor), NOT DENY.
+    assert composed.computed_gate_level is GateLevel.ASK
+    assert composed.composition_winner is Axis.PERSONA_TIER

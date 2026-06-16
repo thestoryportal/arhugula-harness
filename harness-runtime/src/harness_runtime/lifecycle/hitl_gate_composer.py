@@ -128,7 +128,7 @@ from harness_cp.audit_hitl_span_namespace import (
     AUDIT_NAMESPACE_SCHEMA,
     HITL_SPAN_NAMESPACE_SCHEMA,
 )
-from harness_cp.cp_shared_types import ActorIdentity
+from harness_cp.cp_shared_types import ActorIdentity, MCPTrustTier
 from harness_cp.gate_level_rule import GateLevel as CPGateLevel
 from harness_cp.gate_level_rule import GateLevelComputation
 from harness_cp.handoff_context import (
@@ -202,6 +202,27 @@ DEFAULT_FULL_PALETTE: frozenset[HITLResponse] = frozenset(HITLResponse)
 
 Cross-trust-boundary palette restriction per NOTE 6-iv deferred to
 validator-composer + MCP-trust-framework arcs."""
+
+
+_NO_OWNING_MCP_HOST_TRUST_FLOOR: MCPTrustTier = MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT
+"""U-RT-131 — the no-floor MCP-trust default for the host-less gate sites.
+
+The runtime HITL gate composer is constructed for exactly two placements —
+`PRE_ACTION` (inference steps) + `SUB_AGENT_BOUNDARY` (sub-agent steps) — NEITHER
+of which has an owning MCP host (`TOOL_STEP`s dispatch through the tool dispatcher,
+which composes no HITL gate). So the §19.1.2 Producer ¶ "resolved owning MCP host's
+trust" has no gate site to populate at HEAD; every gate the composer evaluates is
+host-less and must contribute no MCP-trust floor.
+
+`level-3-allow-with-audit` maps to `GateLevel.AUTO` (rank 0) in
+`MCP_TRUST_GATE_LEVEL_FLOOR`, so per §19.1.2 invariant 3 ("AUTO contributes nothing
+to `max()`") it adds no floor — exactly as the sibling `per_tool_gate_level` defaults
+to `GateLevel.AUTO` at these sites (`:453`). This replaces the **harmful**
+`LEVEL_0_REFUSE_REMOTE` constant, which — once U-CP-98 composes `Axis.MCP_TRUST` —
+would map `L0→DENY` into the `max()` on every host-less gate (universal over-gating).
+The real per-server feed (resolve the owning host via the routing index → its
+D3-projected `MCPTrustTier`) targets a tool-step gate site that does not exist at
+HEAD: the forward `B-TOOL-GATE` arc (runtime plan v2.47 §6 O-RT-7 item 2)."""
 
 
 # ---------------------------------------------------------------------------
@@ -420,8 +441,10 @@ def _compute_gate_decision(
     replacing the prior double-computation (the bool computed `gate_level` then
     DISCARDED it; the palette re-hardcoded `ASK`). Reading B v1.22 §14.8.2 step-4c
     4-axis consumption per CP spec v1.15 §19.1.1 (`per_tool_gate_level` from binding
-    else sentinel `AUTO`; sentinel `mcp_trust_tier` per CP plan v2.20 §0.8 row 2
-    PARTIAL-ADVANCE unconsumed axis).
+    else sentinel `AUTO`; `mcp_trust_tier` = the `_NO_OWNING_MCP_HOST_TRUST_FLOOR`
+    L3 no-floor default per U-RT-131 — these gate sites are host-less, so the
+    §19.1.2 4th axis contributes no floor here; the real per-server feed is the
+    forward `B-TOOL-GATE` arc).
 
     Returns `None` for the **test-fixture / partial-binding** case (`persona_tier`
     or `blast_radius_tier` unavailable) — the caller then falls back to
@@ -436,7 +459,6 @@ def _compute_gate_decision(
     operator-policy in-`max()` floor overrides (Reading C) — default `None` → the
     canonical §19.1 table floor (`per_tool` / `mcp_trust` never override-able).
     """
-    from harness_cp.cp_shared_types import MCPTrustTier
     from harness_cp.gate_level_rule import GateLevel, GateLevelInput, gate_level
 
     persona_tier = getattr(binding, "persona_tier", None)
@@ -459,7 +481,7 @@ def _compute_gate_decision(
             per_tool_gate_level=per_tool,
             persona_tier=persona_tier,
             blast_radius_tier=blast_radius_tier,
-            mcp_trust_tier=MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
+            mcp_trust_tier=_NO_OWNING_MCP_HOST_TRUST_FLOOR,
             persona_floor_override=persona_floor_override,
             blast_floor_override=blast_floor_override,
         )
