@@ -328,7 +328,7 @@ async def test_secret_fetch_producer_fires_at_workflow_step() -> None:
     )
     audit = _CapturingSecretAuditEmitter()
     host = await _build_started_secret_host(required)
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -383,7 +383,7 @@ async def test_secret_fetch_event_fields_non_hollow() -> None:
         )
     )
     host = await _build_started_secret_host(required)
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -430,7 +430,7 @@ async def test_secret_fetch_replay_idempotent_noop() -> None:
     )
     audit = _DedupSecretAuditEmitter()
     host = await _build_started_secret_host(required)
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -475,7 +475,7 @@ async def test_secret_fetch_span_co_emitted() -> None:
     audit = _CapturingSecretAuditEmitter()
     exporter, provider = _otel_setup()
     host = await _build_started_secret_host(required)
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -513,7 +513,7 @@ async def test_failed_fetch_emits_fail_class() -> None:
     required = SecretAllowlistEntry(name="api-token", scope=scope)
     exporter, provider = _otel_setup()
     host = await _build_started_secret_host(required)
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -548,7 +548,7 @@ async def test_failed_fetch_emits_fail_class() -> None:
 @pytest.mark.asyncio
 async def test_dispatch_unknown_tool_id_raises_contract_unknown() -> None:
     host = await _build_started_host()
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -569,7 +569,7 @@ async def test_dispatch_unknown_tool_id_raises_contract_unknown() -> None:
 @pytest.mark.asyncio
 async def test_dispatch_missing_tool_id_in_payload_raises() -> None:
     host = await _build_started_host()
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -594,7 +594,7 @@ async def test_dispatch_missing_tool_id_in_payload_raises() -> None:
 @pytest.mark.asyncio
 async def test_dispatch_trust_violation_raises() -> None:
     host = await _build_started_host()
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -622,7 +622,7 @@ async def test_dispatch_emits_sandbox_and_mcp_spans() -> None:
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -702,7 +702,7 @@ async def test_dispatch_schema_violation_raises() -> None:
         session_context_factory=_build_session_factory(server),
     )
     await host.start()
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -747,7 +747,7 @@ async def test_dispatch_tier_floor_violation_raises() -> None:
         session_context_factory=_build_session_factory(server),
     )
     await host.start()
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -774,7 +774,7 @@ async def test_dispatch_tier_floor_violation_raises() -> None:
 @pytest.mark.asyncio
 async def test_dispatch_happy_path_returns_step_output() -> None:
     host = await _build_started_host()
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -808,7 +808,7 @@ async def test_dispatch_uses_injected_tool_execution_driver() -> None:
     to the configured driver instead of being hard-wired to MCPClientHost."""
     host = await _build_started_host()
     driver: ToolExecutionDriver = _InjectedExecutionDriver()
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -844,7 +844,7 @@ async def test_dispatch_uses_injected_tool_execution_driver() -> None:
 @pytest.mark.asyncio
 async def test_default_sandbox_resolver_raises() -> None:
     host = await _build_started_host()
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -888,7 +888,7 @@ async def _dispatch_with_failing_call_tool(
     host.call_tool = _failing_call_tool  # type: ignore[method-assign]
 
     exporter, provider = _otel_setup()
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -1002,7 +1002,7 @@ async def test_dispatch_schema_violation_emits_sandbox_violation_dual_attrs() ->
     )
     await host.start()
     exporter, provider = _otel_setup()
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -1035,7 +1035,7 @@ async def test_dispatch_happy_path_emits_no_sandbox_violation() -> None:
     """
     host = await _build_started_host()
     exporter, provider = _otel_setup()
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -1074,7 +1074,7 @@ async def test_dispatch_sandbox_violation_idempotency_key_matches_parent_dispatc
 
     host.call_tool = _capturing_failing_call_tool  # type: ignore[method-assign]
     exporter, provider = _otel_setup()
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),

@@ -68,25 +68,22 @@ async def test_returns_mcp_client_host_when_mcp_clients_populated() -> None:
 
 
 @pytest.mark.asyncio
-async def test_returns_empty_sentinel_when_mcp_clients_empty() -> None:
-    # AC #2 — empty mcp_clients → 1-entry dict holding the empty-sentinel
-    # MCPClientHost (does NOT raise).
+async def test_returns_empty_dict_when_mcp_clients_empty() -> None:
+    # AC #2 / §14.9.10 D1 — empty mcp_clients → empty dict `{}` (no sentinel
+    # host; a TOOL_STEP then raises RT-FAIL-TOOL-CONTRACT-UNKNOWN at dispatch).
     cfg = _config([])
     hosts = await materialize_mcp_client_host_stage(cfg)
-    assert set(hosts) == {ServerName("<empty-sentinel>")}
-    host = hosts[ServerName("<empty-sentinel>")]
-    assert isinstance(host, MCPClientHost)
-    assert host.server_name == "<empty-sentinel>"
+    assert hosts == {}
 
 
 @pytest.mark.asyncio
 async def test_factory_returns_unstarted_host() -> None:
-    """Factory returns an unstarted host; stage 3a body invokes `.start()`
-    if the host is non-sentinel. Tested by reading the private `_started`
-    flag through Python's introspection (no public predicate at U-RT-63 MVP)."""
-    cfg = _config([])
+    """Factory returns unstarted host(s); the stage 3a body invokes `.start()`
+    per host. Tested by reading the private `_started` flag through Python's
+    introspection (no public predicate at U-RT-63 MVP)."""
+    cfg = _config([_stdio_client()])
     hosts = await materialize_mcp_client_host_stage(cfg)
-    host = next(iter(hosts.values()))
+    host = hosts[ServerName("test-stdio")]
     assert getattr(host, "_started", True) is False
 
 
@@ -125,25 +122,33 @@ async def test_stage_3a_body_binds_factory_return_to_ctx() -> None:
     finally:
         stage_3a_module.materialize_provider_clients_stage = original  # type: ignore[assignment]
 
-    assert builder.mcp_client_hosts is not None
-    assert set(builder.mcp_client_hosts) == {ServerName("<empty-sentinel>")}
-    host = builder.mcp_client_hosts[ServerName("<empty-sentinel>")]
-    assert isinstance(host, MCPClientHost)
-    assert host.server_name == "<empty-sentinel>"
+    # Empty config → stage 3a binds an empty dict (§14.9.10 D1).
+    assert builder.mcp_client_hosts == {}
 
 
 @pytest.mark.asyncio
-async def test_per_server_transport_heterogeneity_first_entry_wins_at_mvp() -> None:
-    """AC #5 — multi-server config (v1.15 MVP uses first; multi-server
-    deferred to future-arc schema extension per factory module docstring)."""
+async def test_materializes_all_configured_hosts_keyed_by_server_name() -> None:
+    """U-RT-126-full / §14.9.10 D1 — a multi-server config materializes ONE host
+    per entry (retires the single-server `[0]`), keyed by `server_name`."""
     cfg = _config(
         [
             _stdio_client("first-server"),
             _stdio_client("second-server"),
         ]
     )
-    host = next(iter((await materialize_mcp_client_host_stage(cfg)).values()))
-    assert host.server_name == "first-server"
+    hosts = await materialize_mcp_client_host_stage(cfg)
+    assert set(hosts) == {ServerName("first-server"), ServerName("second-server")}
+    assert hosts[ServerName("first-server")].server_name == "first-server"
+    assert hosts[ServerName("second-server")].server_name == "second-server"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_server_name_fails_loud() -> None:
+    """§14.9.10 D1 — two entries sharing a client_name (→ same server_name) fail
+    loud at materialize (detect-then-refuse; no silent host drop)."""
+    cfg = _config([_stdio_client("dup"), _stdio_client("dup")])
+    with pytest.raises(ValueError, match="duplicate MCP server_name"):
+        await materialize_mcp_client_host_stage(cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -237,14 +242,3 @@ async def test_default_policy_field_defaults_defer_to_surface_policy() -> None:
     assert entry.default_minimum_tier is None
     assert entry.default_sandbox_tier is None
     assert entry.default_blast_radius is BlastRadiusTier.READ_ONLY
-
-
-@pytest.mark.asyncio
-async def test_empty_sentinel_host_keeps_raise_on_call_converter() -> None:
-    """v1.40 — the 0-server empty-sentinel host wires no converter (no tools
-    to convert); its default stub still raises on invocation."""
-    cfg = _config([])
-    host = next(iter((await materialize_mcp_client_host_stage(cfg)).values()))
-    converter = host._tool_contract_converter  # type: ignore[attr-defined]
-    with pytest.raises(LookupError):
-        converter(_FakeTool("x", "x", {"type": "object"}))

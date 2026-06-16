@@ -224,7 +224,7 @@ async def test_dispatch_happy_path_invokes_cost_attribution(tracer_setup) -> Non
     )
     cost_chain = RuntimeCostAttributionChain()
     audit_writer = _RecordingAuditWriter()
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -286,7 +286,7 @@ async def test_dispatch_schema_violation_invokes_cost_attribution(tracer_setup) 
     )
     cost_chain = RuntimeCostAttributionChain()
     audit_writer = _RecordingAuditWriter()
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -343,7 +343,7 @@ async def test_three_cost_kind_formulas_at_production_binding(tracer_setup) -> N
             }
         )
         audit_writer = _RecordingAuditWriter()
-        dispatcher = RuntimeToolDispatcher(
+        dispatcher = RuntimeToolDispatcher.for_single_host(
             mcp_client_host=host,
             per_server_trust_evaluator=PerServerTrustEvaluator(),
             mcp_namespace_emitter=_make_emitter(),
@@ -383,7 +383,7 @@ async def test_dispatcher_without_cost_substrate_silently_skips_cost_attribution
     don't pass cost-attribution substrate."""
     tracer_provider, exporter = tracer_setup
     host = await _build_started_host()
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),
@@ -425,7 +425,7 @@ async def test_unknown_tool_id_in_rate_table_swallowed_at_dispatch(tracer_setup)
     # rate_table does NOT register "echo"
     rate_table = _make_rate_table({})
     audit_writer = _RecordingAuditWriter()
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_make_emitter(),

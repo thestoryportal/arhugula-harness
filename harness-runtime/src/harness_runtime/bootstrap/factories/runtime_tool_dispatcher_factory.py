@@ -8,12 +8,12 @@ Per `Spec_Harness_Runtime_v1.md` v1.16 §14.9.3 stage-5 factory contract +
 
   1. Construct `PerServerTrustEvaluator` (consumes `config.trust_policy`,
      or a runtime-supplied conservative default if `None`).
-  2. Construct `MCPClientNamespaceEmitter` (consumes the sole MCP host from
-     `ctx.mcp_client_hosts` downstream at `emit_mcp_call_span` time; the emitter
-     is constructed with a default info-lookup at MVP — operator override is
-     future arc).
-  3. Construct the bare `RuntimeToolDispatcher` (C-RT-19) with refs to the sole
-     host from `ctx.mcp_client_hosts` + the new evaluator + the new emitter + the
+  2. Construct `MCPClientNamespaceEmitter` (consumes a multi-host info-lookup
+     over `ctx.mcp_client_hosts`, resolving the RESOLVED host's info by
+     `server_name` downstream at `emit_mcp_call_span` time — U-RT-127/128).
+  3. Construct the bare `RuntimeToolDispatcher` (C-RT-19) with `ctx.mcp_client_hosts`
+     + the U-RT-127 `routing_index` (collision → fail-loud) + per-host sandbox
+     resolvers/drivers (U-RT-130) + the new evaluator + the new emitter + the
      trust policy + `config.sandbox_decision_policy` (or
      `SandboxDecisionPolicy.default()` if `None`).
   4. Construct the `RetryBreakerToolDispatcher` (C-RT-21 §14.11)
@@ -31,7 +31,7 @@ The bare `RuntimeToolDispatcher` is private to the wrapper per spec
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from harness_as.sandbox_tier import SandboxTier
 from harness_as.tool_contract import ToolContract
@@ -66,13 +66,20 @@ from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
 from harness_runtime.lifecycle.retry_breaker_tool import RetryBreakerToolDispatcher
 from harness_runtime.lifecycle.runtime_tool_dispatcher import (
     MCPHostToolExecutionDriver,
+    MCPToolNameCollisionError,
     RuntimeToolDispatcher,
     SandboxDecisionResolver,
     SandboxDispatchDecision,
     SandboxDriverUnavailableError,
     ToolExecutionDriver,
 )
-from harness_runtime.types import RuntimeConfig, SandboxDriverConfig
+from harness_runtime.types import (
+    MCPClientConfig,
+    RuntimeConfig,
+    SandboxDriverConfig,
+    ServerName,
+    ToolName,
+)
 
 __all__ = [
     "DEFAULT_TRUST_POLICY",
@@ -166,18 +173,19 @@ def _select_tool_execution_driver(
     )
 
 
-def _build_host_info_lookup(host: MCPClientHost) -> MCPServerInfoLookup:
-    """Build a sync `MCPServerInfoLookup` from a started `MCPClientHost`
-    (spec v1.41 §14.9.8 arc, Gap E).
+def _build_hosts_info_lookup(
+    hosts: dict[ServerName, MCPClientHost],
+) -> MCPServerInfoLookup:
+    """Build a sync `MCPServerInfoLookup` over ALL started hosts (U-RT-127/128;
+    spec §14.9.10 D2 — re-reads the v1.41 §14.9.8 Gap-E single-host lookup).
 
-    The emitter's `info_lookup` is sync and fires per dispatch (step 7); it
-    reads the host's already-resolved fields (no async `health_check`). All
-    four `MCPServerInfo` fields are host-derivable. The lookup ignores its
-    `server_name` argument at the v1 single-server MVP (one host per bootstrap
-    per §14.9.6 inv 1).
+    The emitter's `info_lookup` is sync and fires per dispatch (step 7) with the
+    RESOLVED host's `server_name`; it returns THAT host's already-resolved fields
+    (no async `health_check`). All four `MCPServerInfo` fields are host-derivable.
     """
 
-    def lookup(_server_name: str) -> MCPServerInfo:
+    def lookup(server_name: str) -> MCPServerInfo:
+        host = hosts[cast(ServerName, server_name)]
         return MCPServerInfo(
             transport=host.transport,
             protocol_version=host.protocol_version,
@@ -186,6 +194,35 @@ def _build_host_info_lookup(host: MCPClientHost) -> MCPServerInfoLookup:
         )
 
     return lookup
+
+
+def build_tool_routing_index(
+    hosts: dict[ServerName, MCPClientHost],
+) -> dict[ToolName, ServerName]:
+    """U-RT-127 — the derived tool→server routing index (spec §14.9.10 D2).
+
+    Walks each host's `list_tools`-populated `tool_registry` and maps each tool
+    to its owning host's `server_name`. The per-host registries remain the
+    authority for each tool's `ToolContract` (one-source-of-truth — this index is
+    a synchronized derived lookup, never a 2nd authority).
+
+    Collision policy — fail-loud at bootstrap: a `tool_id` advertised by ≥2 hosts
+    raises `RT-FAIL-MCP-TOOL-NAME-COLLISION` (permanent; bootstrap aborts) per the
+    §14.9.9 FR-2 detect-then-refuse posture, so routing stays deterministic.
+    """
+    index: dict[ToolName, ServerName] = {}
+    for server_name, host in hosts.items():
+        for tool_name in host.tool_registry.names():
+            existing = index.get(tool_name)
+            if existing is not None:
+                raise MCPToolNameCollisionError(
+                    f"RT-FAIL-MCP-TOOL-NAME-COLLISION: tool {tool_name!r} "
+                    f"advertised by ≥2 MCP hosts ({existing!r} and "
+                    f"{server_name!r}) — bootstrap aborts (server-qualified "
+                    f"addressing is a registered forward item)"
+                )
+            index[tool_name] = server_name
+    return index
 
 
 DEFAULT_TRUST_POLICY = TrustPolicy(
@@ -226,13 +263,11 @@ async def materialize_runtime_tool_dispatcher_stage(
         "stage 1 IS must populate ctx.ledger_writer before stage 5 TOOL_STEP dispatch"
     )
 
-    # B2-impl-2a: the bare dispatcher + namespace emitter remain single-host;
-    # resolve the sole materialized host from the reshaped mapping. The mapping
-    # always holds ≥1 entry post-stage-3a (the real host, or the
-    # `<empty-sentinel>` when no server is configured). Cross-host routing
-    # (per-tool → owning host via the routing index) is U-RT-127/128 (B2-impl-2b);
-    # this transitional extraction is retired there.
-    sole_mcp_host: Any = next(iter(ctx.mcp_client_hosts.values()))
+    # U-RT-127: build the cross-host tool→server routing index. A `tool_id`
+    # advertised by ≥2 hosts fails loud here (RT-FAIL-MCP-TOOL-NAME-COLLISION,
+    # bootstrap aborts). Empty config → empty index → every TOOL_STEP raises
+    # RT-FAIL-TOOL-CONTRACT-UNKNOWN at dispatch.
+    routing_index = build_tool_routing_index(ctx.mcp_client_hosts)
 
     trust_policy = config.trust_policy if config.trust_policy is not None else DEFAULT_TRUST_POLICY
     sandbox_decision_policy = (
@@ -252,46 +287,42 @@ async def materialize_runtime_tool_dispatcher_stage(
     per_server_trust_evaluator = PerServerTrustEvaluator()
     ctx.per_server_trust_evaluator = per_server_trust_evaluator
 
-    # --- Step 2: MCP namespace emitter (Gap E — info_lookup from host) -------
-    # spec v1.41 §14.9.8 arc: the emitter's per-dispatch step-7 info_lookup is
-    # wired from the sole MCP host so it does not raise on the operator
-    # api.run path. Bare `MCPClientNamespaceEmitter()` (default-raise lookup)
-    # is preserved only when no host is configured (empty-sentinel; dispatch
-    # never reaches step 7 because step 1 raises TOOL-CONTRACT-UNKNOWN first).
+    # --- Step 2: MCP namespace emitter (Gap E — info_lookup over ALL hosts) ---
+    # spec §14.9.10 D2: the emitter's per-dispatch step-7 info_lookup spans ALL
+    # hosts, resolving the RESOLVED host's info by `server_name` at dispatch.
+    # Bare `MCPClientNamespaceEmitter()` (default-raise lookup) is preserved only
+    # when no host is configured (empty `{}`; dispatch never reaches step 7
+    # because step 0 raises TOOL-CONTRACT-UNKNOWN on the empty routing index).
     info_lookup: MCPServerInfoLookup | None = (
-        _build_host_info_lookup(sole_mcp_host) if config.mcp_clients else None
+        _build_hosts_info_lookup(ctx.mcp_client_hosts) if ctx.mcp_client_hosts else None
     )
     mcp_namespace_emitter = MCPClientNamespaceEmitter(info_lookup=info_lookup)
     ctx.mcp_namespace_emitter = mcp_namespace_emitter
 
-    # --- Step 2b: surface-aware sandbox defaults + resolver + driver (v1.43 §14.9.9) ---
-    # Resolve the per-server sandbox defaults through the deployment-surface-aware
-    # policy (Reading A+: local-development → honest TIER_1_PROCESS; production
-    # surfaces → fail-safe-high TIER_2_CONTAINER), build the per-server-uniform
-    # resolver from the reconciled tier/tech/provider (spec §14.9.8), and select the
-    # execution driver delivering that tier (FR-1) — fail-loud
-    # RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE if a > TIER_1_PROCESS tier has no driver
-    # configured (FR-2(i); never a silent in-process fall-through). None for both
-    # when no server is configured (the empty registry raises TOOL-CONTRACT-UNKNOWN
-    # at dispatch step 1 before either is reached).
-    effective_sandbox: EffectiveSandboxDefaults | None = (
-        resolve_effective_sandbox_defaults(config.mcp_clients[0], config.deployment_surface)
-        if config.mcp_clients
-        else None
-    )
-    sandbox_decision_resolver: SandboxDecisionResolver | None = (
-        _build_default_policy_sandbox_resolver(effective_sandbox)
-        if effective_sandbox is not None
-        else None
-    )
-    tool_execution_driver: ToolExecutionDriver | None = (
-        _select_tool_execution_driver(
-            tier=effective_sandbox.sandbox_tier,
-            driver_config=config.mcp_clients[0].sandbox_driver,
+    # --- Step 2b: PER-HOST surface-aware sandbox resolver/driver (U-RT-130) ----
+    # Each host's resolver/driver is built from its OWN `MCPClientConfig`
+    # default_sandbox_* / sandbox_driver (replacing the single-server `[0]`),
+    # keyed by `server_name`. The §14.9.8 deployment-surface-aware policy
+    # (Reading A+: local-development → honest TIER_1_PROCESS; production →
+    # fail-safe-high TIER_2_CONTAINER) + the §14.9.9 FR-1 (delivered-tier ≥
+    # resolved-tier) + FR-2 (fail-loud RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE, never
+    # silent in-process) all apply PER host, independently. Empty config → empty
+    # maps (every TOOL_STEP raises TOOL-CONTRACT-UNKNOWN before either is reached).
+    cfg_by_server: dict[ServerName, MCPClientConfig] = {
+        ServerName(entry.client_name): entry for entry in config.mcp_clients
+    }
+    sandbox_decision_resolvers: dict[ServerName, SandboxDecisionResolver] = {}
+    tool_execution_drivers: dict[ServerName, ToolExecutionDriver] = {}
+    for server_name in ctx.mcp_client_hosts:
+        entry = cfg_by_server[server_name]
+        effective_sandbox = resolve_effective_sandbox_defaults(entry, config.deployment_surface)
+        sandbox_decision_resolvers[server_name] = _build_default_policy_sandbox_resolver(
+            effective_sandbox
         )
-        if effective_sandbox is not None
-        else None
-    )
+        tool_execution_drivers[server_name] = _select_tool_execution_driver(
+            tier=effective_sandbox.sandbox_tier,
+            driver_config=entry.sandbox_driver,
+        )
 
     # --- Step 3: bare RuntimeToolDispatcher (C-RT-19) ------------------------
     # U-OD-39: thread cost-attribution substrate (cost_chain + audit_writer
@@ -299,12 +330,13 @@ async def materialize_runtime_tool_dispatcher_stage(
     # stage_5_loop_init.py). All 3 None-safe at unit-test path; production
     # bootstrap binds all 3 per `_attribute_tool_cost_best_effort` semantics.
     bare_dispatcher = RuntimeToolDispatcher(
-        mcp_client_host=sole_mcp_host,
+        mcp_client_hosts=ctx.mcp_client_hosts,
+        routing_index=routing_index,
         per_server_trust_evaluator=per_server_trust_evaluator,
         mcp_namespace_emitter=mcp_namespace_emitter,
         trust_policy=trust_policy,
-        sandbox_decision_resolver=sandbox_decision_resolver,
-        tool_execution_driver=tool_execution_driver,
+        sandbox_decision_resolvers=sandbox_decision_resolvers,
+        tool_execution_drivers=tool_execution_drivers,
         tracer_provider=ctx.tracer_provider,
         cost_chain=ctx.cost_chain,
         audit_writer=ctx.audit_writer,

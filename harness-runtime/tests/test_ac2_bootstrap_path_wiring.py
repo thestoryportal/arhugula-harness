@@ -158,6 +158,57 @@ async def test_stage_3a_does_not_start_empty_sentinel_host(
     assert host.started is False
 
 
+@pytest.mark.asyncio
+async def test_stage_3a_drains_started_hosts_when_a_later_start_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multi-server (U-RT-126): if a LATER host's start() fails mid-loop, the
+    hosts already started are drained — CP_CLIENTS never completes, so
+    `_rollback_cp_clients` never fires for them and they would otherwise leak.
+    Fail-closed teardown of the partial-start prefix."""
+    import harness_runtime.bootstrap.stage_3a_cp_clients as stage_3a
+    from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+
+    class _Host:
+        def __init__(self, *, server_name: str, fail_start: bool = False) -> None:
+            self.server_name = server_name
+            self._fail_start = fail_start
+            self.started = False
+            self.shutdown_calls = 0
+
+        async def start(self) -> None:
+            if self._fail_start:
+                raise RuntimeError(f"start boom: {self.server_name}")
+            self.started = True
+
+        async def shutdown(self) -> None:
+            self.shutdown_calls += 1
+
+    host_a = _Host(server_name="a")
+    host_b = _Host(server_name="b", fail_start=True)
+
+    class _StubStage:
+        providers: dict[str, Any] = {}
+
+    async def _stub_providers(*_a: Any, **_k: Any) -> _StubStage:
+        return _StubStage()
+
+    async def _stub_hosts(*_a: Any, **_k: Any) -> dict[str, _Host]:
+        return {"a": host_a, "b": host_b}
+
+    monkeypatch.setattr(stage_3a, "materialize_provider_clients_stage", _stub_providers)
+    monkeypatch.setattr(stage_3a, "materialize_mcp_client_host_stage", _stub_hosts)
+    builder = _MutableHarnessContext()
+    builder.keyring_resolver = object()  # type: ignore[assignment]
+    with pytest.raises(RuntimeError, match="start boom"):
+        await stage_3a.execute(
+            builder, _config([_client(), _client()]), WorkloadClass.SOFTWARE_ENGINEERING
+        )
+    assert host_a.started is True
+    assert host_a.shutdown_calls == 1  # already-started host drained on the abort
+    assert host_b.shutdown_calls == 0  # never fully started → not drained
+
+
 # ---------------------------------------------------------------------------
 # Gap F — shutdown() drains a started host.
 # ---------------------------------------------------------------------------

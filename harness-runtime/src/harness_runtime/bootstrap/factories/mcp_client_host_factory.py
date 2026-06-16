@@ -10,21 +10,20 @@ to `ctx.mcp_client_hosts` (C-RT-04 v1.51+ field) by the stage 3a body.
 
 The field is now a mapping (§4 C-RT-04 v1.51 / U-RT-125). The factory handles:
 
-- 0 servers: returns a 1-entry dict holding an empty-tool-registry
-  `MCPClientHost` (`.started=False`) under the `<empty-sentinel>` key.
-  Tool-dispatch attempts at U-RT-67 raise `RT-FAIL-TOOL-CONTRACT-UNKNOWN`
-  per spec §14.9.5 since the registry is empty.
-- 1 server: returns a 1-entry dict whose `MCPClientHost` is constructed from
-  the single `MCPClientConfig` entry's per-server transport_config; subprocess
-  spawn + protocol handshake + `list_tools` registry population happen at
-  `start()`, which the stage 3a body invokes per-host after factory return.
+- 0 servers: returns an empty dict `{}` (§14.9.10 D1 "empty dict permitted
+  when 0 servers configured" — no sentinel host). Tool-dispatch attempts then
+  raise `RT-FAIL-TOOL-CONTRACT-UNKNOWN` (empty routing index) at dispatch.
+- N servers: returns an N-entry dict, one `MCPClientHost` per `MCPClientConfig`
+  entry keyed on its `server_name` (U-RT-126-full — retires the single-server
+  `[0]`); subprocess spawn + protocol handshake + `list_tools` registry
+  population happen at `start()`, which the stage 3a body invokes per-host
+  after factory return.
 
-**B2-impl-2a scope (carrier reshape).** This factory returns the mapping SHAPE
-but still materializes a SINGLE host from `config.mcp_clients[0]` — honestly
-single-host (no reachable multi-host path until the ≥2-server e2e fixture
-lands). The materialize-ALL loop (U-RT-126-full), the cross-host routing index
-+ collision fail-class (U-RT-127), and the per-host sandbox (U-RT-130) are
-B2-impl-2b. The §14.9.6 inv-1 per-host lifecycle reword lands with them.
+The cross-host routing index + collision fail-class (U-RT-127) + the dispatch
+tool→server resolution (U-RT-128) + the per-host sandbox (U-RT-130) live at the
+stage-5 `runtime_tool_dispatcher_factory` (a SEPARATE factory per reshape-fork
+F1-03). The §14.9.6 inv-1 per-host lifecycle reword ("each configured host
+started exactly once") is realized by the stage-3a body's per-host start loop.
 
 Per `Plan_Executability_Audit_v1.md` framework-pull discipline: no
 framework adoption.
@@ -54,8 +53,6 @@ _MCPTransportLiteral = Literal["stdio", "streamable_http", "sse"]
 
 __all__ = ["materialize_mcp_client_host_stage"]
 
-
-_EMPTY_TRANSPORT_CONFIG: dict[str, Any] = {}
 
 _STDIO_URL_PREFIX = "stdio://"
 
@@ -143,55 +140,63 @@ def _build_default_policy_converter(
     return convert
 
 
+def _build_host(entry: MCPClientConfig, deployment_surface: DeploymentSurface) -> MCPClientHost:
+    """Construct one `MCPClientHost` from a single `MCPClientConfig` entry.
+
+    `entry.transport` is an `harness_as.discriminators.MCPTransport` StrEnum;
+    its `.value` is one of the literal strings the host accepts. The
+    `server_name` is set from `entry.client_name` (the `ServerName`/`ClientName`
+    same-value-today property per spec §14.9.10).
+    """
+    transport_value: _MCPTransportLiteral = cast(_MCPTransportLiteral, entry.transport.value)
+    return MCPClientHost(
+        transport=transport_value,
+        server_name=entry.client_name,
+        trust_tier=_trust_tier_from_level(entry.trust_level),
+        transport_config=_build_transport_config(transport_value, entry.connection_url),
+        tool_contract_converter=_build_default_policy_converter(entry, deployment_surface),
+    )
+
+
 async def materialize_mcp_client_host_stage(
     config: RuntimeConfig,
 ) -> dict[ServerName, MCPClientHost]:
     """Construct the stage 3a `MCPClientHost` mapping from operator-supplied config.
 
-    Per spec §14.9.3 stage-3a factory contract (v1.51 §14.9.10 D1 reshape) +
-    AC #1/AC #2/AC #5 at U-RT-73/126.
+    Per spec §14.9.3 stage-3a factory contract + **§14.9.10 D1** (v1.51
+    multi-server reshape) + AC #1/AC #2/AC #5 at U-RT-73/126.
+
+    Materializes ONE `MCPClientHost` per `config.mcp_clients` entry
+    (U-RT-126-full — retires the single-server `[0]`), keyed on each host's
+    `server_name`. The stage 3a body starts each host afterward (subprocess
+    spawn / HTTP connect / SSE stream + `list_tools` registry population per
+    transport). An empty config yields an empty dict `{}` (§14.9.10 D1 "empty
+    dict permitted when 0 servers configured") — no sentinel host; a TOOL_STEP
+    then raises `RT-FAIL-TOOL-CONTRACT-UNKNOWN` (empty routing index) at dispatch.
 
     Returns
     -------
     dict[ServerName, MCPClientHost]
-        A 1-entry mapping of unstarted host(s), keyed on `server_name`. The
-        stage 3a body is responsible for calling `.start()` per-host afterward
-        if `config.mcp_clients` is non-empty; the empty-list sentinel host is
-        intentionally left in `.started=False` state (no subprocess to spawn,
-        no registry to populate) under the `<empty-sentinel>` key.
-
-    B2-impl-2a returns the mapping SHAPE while materializing a single host
-    (`config.mcp_clients[0]`); the materialize-ALL loop is U-RT-126-full
-    (B2-impl-2b).
+        An N-entry mapping of unstarted hosts keyed on `server_name`
+        (`{}` when 0 servers configured).
     """
-    if not config.mcp_clients:
-        # Empty-sentinel branch. stdio + empty transport_config — the host
-        # is constructible but `.start()` would fail per the per-transport
-        # branches; the empty branch never calls `.start()`.
-        sentinel = MCPClientHost(
-            transport="stdio",
-            server_name="<empty-sentinel>",
-            trust_tier=MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
-            transport_config=_EMPTY_TRANSPORT_CONFIG,
-        )
-        return {ServerName(sentinel.server_name): sentinel}
-
-    # B2-impl-2a: one host from the first configured client, returned as a
-    # 1-entry mapping keyed on its `server_name`. Multi-server materialization
-    # (loop over all `config.mcp_clients`) is U-RT-126-full / B2-impl-2b (see
-    # module docstring). `entry.transport` is an
-    # `harness_as.discriminators.MCPTransport` StrEnum; its `.value` is one of
-    # the literal strings the host accepts.
-    entry = config.mcp_clients[0]
-    transport_value: _MCPTransportLiteral = cast(_MCPTransportLiteral, entry.transport.value)
-    host = MCPClientHost(
-        transport=transport_value,
-        server_name=entry.client_name,
-        trust_tier=_trust_tier_from_level(entry.trust_level),
-        transport_config=_build_transport_config(transport_value, entry.connection_url),
-        tool_contract_converter=_build_default_policy_converter(entry, config.deployment_surface),
-    )
-    return {ServerName(host.server_name): host}
+    hosts: dict[ServerName, MCPClientHost] = {}
+    for entry in config.mcp_clients:
+        host = _build_host(entry, config.deployment_surface)
+        server_name = ServerName(host.server_name)
+        if server_name in hosts:
+            # Fail-loud detect-then-refuse: a duplicate `server_name` (i.e. two
+            # entries sharing a `client_name`) cannot satisfy §14.9.10 D1's "one
+            # host per entry, keyed by server_name" — the dict would silently drop
+            # the earlier host (so stage 3a would start only the last). Caught
+            # here at materialize (pre-start) → no started-host leak.
+            raise ValueError(
+                f"duplicate MCP server_name {server_name!r} in config.mcp_clients "
+                f"— each configured server must have a unique client_name "
+                f"(spec §14.9.10 D1: one MCPClientHost per entry, keyed by server_name)"
+            )
+        hosts[server_name] = host
+    return hosts
 
 
 _TRUST_LEVEL_TO_TIER: Final[dict[MCPServerTrustLevel, MCPTrustTier]] = {

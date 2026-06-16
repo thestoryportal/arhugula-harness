@@ -34,7 +34,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import jsonschema
 from harness_as.sandbox_fail_class import (
@@ -66,8 +66,16 @@ from harness_runtime.config.provider_secrets import (
 )
 from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
 
+if TYPE_CHECKING:
+    # Type-only: the multi-server routing carriers (U-RT-127/128). Imported
+    # under TYPE_CHECKING + used via `cast("ServerName", …)` string forward-refs
+    # at runtime to avoid the `lifecycle.runtime_tool_dispatcher → types →
+    # lifecycle.*` runtime import cycle (the C-RT-04 `Any`-narrowing pattern).
+    from harness_runtime.types import ServerName, ToolName
+
 __all__ = [
     "MCPHostUnreachableError",
+    "MCPToolNameCollisionError",
     "RuntimeToolDispatcher",
     "SandboxDecisionResolver",
     "SandboxDispatchDecision",
@@ -173,9 +181,22 @@ class MCPHostToolExecutionDriver:
 class ToolContractUnknownError(LookupError):
     """`RT-FAIL-TOOL-CONTRACT-UNKNOWN` typed carrier per spec §14.9.5.
 
-    Raised when `step.step_payload["tool_id"]` is not registered in the
-    `MCPClientHost.tool_registry`. Permanent — the driver maps to
+    Raised when `step.step_payload["tool_id"]` is not registered in any
+    configured host's `tool_registry` (absent from the routing index).
+    Permanent — the driver maps to
     `step-failure: RT-FAIL-TOOL-CONTRACT-UNKNOWN: ...`.
+    """
+
+
+class MCPToolNameCollisionError(RuntimeError):
+    """`RT-FAIL-MCP-TOOL-NAME-COLLISION` typed carrier per spec §14.9.10 D2
+    (the 10th fail class — the §14.9.5 "8 new" + §14.9.9 "9th" counts preserved).
+
+    Raised at the stage-5 routing-index build when a `tool_id` is advertised by
+    ≥2 configured MCP hosts. Permanent — bootstrap aborts (detect-then-refuse;
+    routing must stay deterministic + unambiguous). Server-qualified addressing
+    (`server_name/tool_id`) to permit deliberate same-name tools is a registered
+    forward item (reshape fork §6), not silently foreclosed.
     """
 
 
@@ -285,27 +306,40 @@ class RuntimeToolDispatcher:
     def __init__(
         self,
         *,
-        mcp_client_host: MCPClientHost,
+        mcp_client_hosts: dict[ServerName, MCPClientHost],
+        routing_index: dict[ToolName, ServerName],
         per_server_trust_evaluator: PerServerTrustEvaluator,
         mcp_namespace_emitter: MCPClientNamespaceEmitter,
         trust_policy: TrustPolicy,
-        sandbox_decision_resolver: SandboxDecisionResolver | None = None,
+        sandbox_decision_resolvers: dict[ServerName, SandboxDecisionResolver] | None = None,
         tracer_provider: Any = None,
         cost_chain: Any = None,
         audit_writer: Any = None,
         rate_table: Any = None,
-        tool_execution_driver: ToolExecutionDriver | None = None,
+        tool_execution_drivers: dict[ServerName, ToolExecutionDriver] | None = None,
         provider_secret_resolver: Any = None,
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
         secret_fetch_backend: str = "provider-secret-resolver",
     ) -> None:
-        """Construct dispatcher with the cross-axis dependencies.
+        """Construct dispatcher with the cross-axis dependencies (multi-server).
+
+        Per spec §14.9.10 D2 (multi-server reshape): the dispatcher holds N hosts
+        keyed by `server_name` + a derived tool→server `routing_index`, and
+        resolves each `TOOL_STEP`'s `tool_id` to its owning host (`tool_registry`,
+        trust gate, sandbox resolver/driver, `call_tool`) per dispatch. For the
+        single-host case (most unit tests) use `RuntimeToolDispatcher.for_single_host`.
 
         Parameters
         ----------
-        mcp_client_host:
-            U-RT-63/64/65/66 client. The dispatcher reads `tool_registry`
-            for contract resolution + invokes `call_tool` for execution.
+        mcp_client_hosts:
+            U-RT-63/64/65/66 clients keyed by `server_name` (U-RT-125/126). The
+            dispatcher resolves the owning host per `tool_id` via `routing_index`,
+            then reads its `tool_registry` + invokes `call_tool`.
+        routing_index:
+            U-RT-127 derived tool→server lookup (`dict[ToolName, ServerName]`).
+            A `tool_id` in no host's registry is absent here → dispatch raises
+            `RT-FAIL-TOOL-CONTRACT-UNKNOWN`. The per-host registries stay the
+            authority; this index is a synchronized lookup, never a 2nd authority.
         per_server_trust_evaluator:
             U-CP-68 evaluator. Invoked pre-call per spec §14.9.2 inv 2.
         mcp_namespace_emitter:
@@ -315,9 +349,16 @@ class RuntimeToolDispatcher:
             Immutable `TrustPolicy` loaded at bootstrap; passed to every
             `evaluate()` call (caching is FORBIDDEN per spec §14.9.2 inv 2
             since operators may revoke between dispatches).
-        sandbox_decision_resolver:
-            Operator-supplied resolver (default raises on production
-            misconfig). Returns the `SandboxDispatchDecision` per dispatch.
+        sandbox_decision_resolvers:
+            Per-host operator-supplied resolvers keyed by `server_name`
+            (U-RT-130). The resolved host's resolver returns the
+            `SandboxDispatchDecision` per dispatch; a host absent from this map
+            falls through to the default resolver, which RAISES on production
+            misconfig (fail-loud, never silent in-process — FR-2).
+        tool_execution_drivers:
+            Per-host operator-supplied execution drivers keyed by `server_name`
+            (U-RT-130 / R-410). A host absent from this map falls through to the
+            default `MCPHostToolExecutionDriver` (the pre-R-410 host-call path).
         tracer_provider:
             OTel `TracerProvider`-shaped object (typed `Any` to avoid SDK
             coupling per C-RT-04 pattern). Used to open `tool.dispatch` +
@@ -338,12 +379,18 @@ class RuntimeToolDispatcher:
             U-OD-39 PRICE_TABLE_REF (`RATE_TABLE_V1` at v1) materialized at
             stage 4 OD. Same None-default discipline as `cost_chain`.
         """
-        self._mcp_client_host = mcp_client_host
+        self._mcp_client_hosts = mcp_client_hosts
+        self._routing_index = routing_index
         self._trust_evaluator = per_server_trust_evaluator
         self._mcp_emitter = mcp_namespace_emitter
         self._trust_policy = trust_policy
-        self._sandbox_resolver: SandboxDecisionResolver = (
-            sandbox_decision_resolver or _default_sandbox_decision_resolver
+        # Per-host sandbox resolvers/drivers (U-RT-130), resolved by the owning
+        # `server_name` at dispatch. A host missing a resolver falls through to
+        # `_default_sandbox_decision_resolver` (RAISES — fail-loud, never silent
+        # under-sandbox); a host missing a driver falls through to the default
+        # host-call driver.
+        self._sandbox_resolvers: dict[ServerName, SandboxDecisionResolver] = (
+            sandbox_decision_resolvers or {}
         )
         self._tracer_provider = tracer_provider
         # U-OD-39 cost-attribution substrate (per OD spec §C-OD-26.2 row
@@ -353,10 +400,71 @@ class RuntimeToolDispatcher:
         self._cost_chain = cost_chain
         self._audit_writer = audit_writer
         self._rate_table = rate_table
-        self._tool_execution_driver = tool_execution_driver or MCPHostToolExecutionDriver()
+        self._tool_execution_drivers: dict[ServerName, ToolExecutionDriver] = (
+            tool_execution_drivers or {}
+        )
+        self._default_tool_execution_driver = MCPHostToolExecutionDriver()
         self._provider_secret_resolver = provider_secret_resolver
         self._secret_fetch_audit_emitter = secret_fetch_audit_emitter
         self._secret_fetch_backend = secret_fetch_backend
+
+    @classmethod
+    def for_single_host(
+        cls,
+        *,
+        mcp_client_host: MCPClientHost,
+        per_server_trust_evaluator: PerServerTrustEvaluator,
+        mcp_namespace_emitter: MCPClientNamespaceEmitter,
+        trust_policy: TrustPolicy,
+        sandbox_decision_resolver: SandboxDecisionResolver | None = None,
+        tracer_provider: Any = None,
+        cost_chain: Any = None,
+        audit_writer: Any = None,
+        rate_table: Any = None,
+        tool_execution_driver: ToolExecutionDriver | None = None,
+        provider_secret_resolver: Any = None,
+        secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
+        secret_fetch_backend: str = "provider-secret-resolver",
+    ) -> RuntimeToolDispatcher:
+        """Single-host convenience constructor — the degenerate 1-host case.
+
+        Wraps `mcp_client_host` into the multi-server shape: a 1-entry
+        `mcp_client_hosts` keyed on the host's `server_name`, a `routing_index`
+        auto-built from that host's `tool_registry.names()` (every tool routes to
+        the sole host), and 1-entry per-host resolver/driver maps when supplied.
+        Used by the dispatch unit tests + any single-server caller; the
+        production stage-5 factory uses the multi-server `__init__` directly.
+
+        The host's registry MUST be populated (started) before this call — the
+        index snapshots `tool_registry.names()` (the established test pattern is
+        `host = await _build_started_*(...)` before construction).
+        """
+        server_name = cast("ServerName", mcp_client_host.server_name)
+        routing_index: dict[ToolName, ServerName] = {
+            name: server_name for name in mcp_client_host.tool_registry.names()
+        }
+        return cls(
+            mcp_client_hosts={server_name: mcp_client_host},
+            routing_index=routing_index,
+            per_server_trust_evaluator=per_server_trust_evaluator,
+            mcp_namespace_emitter=mcp_namespace_emitter,
+            trust_policy=trust_policy,
+            sandbox_decision_resolvers=(
+                {server_name: sandbox_decision_resolver}
+                if sandbox_decision_resolver is not None
+                else None
+            ),
+            tracer_provider=tracer_provider,
+            cost_chain=cost_chain,
+            audit_writer=audit_writer,
+            rate_table=rate_table,
+            tool_execution_drivers=(
+                {server_name: tool_execution_driver} if tool_execution_driver is not None else None
+            ),
+            provider_secret_resolver=provider_secret_resolver,
+            secret_fetch_audit_emitter=secret_fetch_audit_emitter,
+            secret_fetch_backend=secret_fetch_backend,
+        )
 
     def _attribute_tool_cost_best_effort(
         self,
@@ -612,21 +720,40 @@ class RuntimeToolDispatcher:
                 f"TOOL_STEP 'tool_args' must be a mapping (got {type(tool_args_raw).__name__})"
             )
 
-        # --- Step 1: resolve ToolContract from registry ---------------------
+        # --- Step 0: resolve the owning host via the routing index (U-RT-128) -
+        # The §14.9.10 D2 routing index maps each tool to its owning host's
+        # `server_name`; a tool_id in no host's registry is absent from the index
+        # → RT-FAIL-TOOL-CONTRACT-UNKNOWN. The resolved host's per-server
+        # registry / trust / sandbox resolver / driver are then read below.
+        server_name = self._routing_index.get(cast("ToolName", tool_id))
+        if server_name is None:
+            raise ToolContractUnknownError(
+                f"RT-FAIL-TOOL-CONTRACT-UNKNOWN: tool_id={tool_id!r} in no "
+                f"configured MCP host's registry (not in the routing index)"
+            )
+        host = self._mcp_client_hosts[server_name]
+        sandbox_resolver = self._sandbox_resolvers.get(
+            server_name, _default_sandbox_decision_resolver
+        )
+        tool_execution_driver = self._tool_execution_drivers.get(
+            server_name, self._default_tool_execution_driver
+        )
+
+        # --- Step 1: resolve ToolContract from the resolved host's registry ---
         try:
-            contract: ToolContract = self._mcp_client_host.tool_registry.get(
+            contract: ToolContract = host.tool_registry.get(
                 tool_id  # type: ignore[arg-type]
             )
         except Exception as exc:
             raise ToolContractUnknownError(
                 f"RT-FAIL-TOOL-CONTRACT-UNKNOWN: tool_id={tool_id!r} not "
                 f"registered at MCPClientHost(server="
-                f"{self._mcp_client_host.server_name!r})"
+                f"{host.server_name!r})"
             ) from exc
 
         # --- Step 2: per-server-trust gate (no caching per inv 2) -----------
         trust_eval = await self._trust_evaluator.evaluate(
-            self._mcp_client_host.server_name,
+            host.server_name,
             MCPPrimitive.TOOL,
             contract,
             self._trust_policy,
@@ -634,7 +761,7 @@ class RuntimeToolDispatcher:
         if not trust_eval.permitted:
             raise ToolInvocationTrustViolationError(
                 f"RT-FAIL-TOOL-INVOCATION-TRUST-VIOLATION: server="
-                f"{self._mcp_client_host.server_name!r} tool={tool_id!r} "
+                f"{host.server_name!r} tool={tool_id!r} "
                 f"decision_reason={trust_eval.decision_reason.value}"
             )
 
@@ -644,7 +771,7 @@ class RuntimeToolDispatcher:
             if self._tracer_provider is not None
             else None
         )
-        sandbox_decision = self._sandbox_resolver(contract, step)
+        sandbox_decision = sandbox_resolver(contract, step)
         # Tier-floor enforcement per spec §14.9.6 inv 2.
         if _SANDBOX_TIER_RANK[sandbox_decision.tier] < _SANDBOX_TIER_RANK[contract.minimum_tier]:
             raise SandboxTierFloorViolationError(
@@ -715,12 +842,12 @@ class RuntimeToolDispatcher:
                     if mcp_call_span is not None:
                         self._mcp_emitter.emit_mcp_call_span(
                             mcp_call_span,
-                            self._mcp_client_host.server_name,
+                            host.server_name,
                             MCPPrimitive.TOOL,
                             signature_hash,
                         )
-                    response = await self._tool_execution_driver.call_tool(
-                        mcp_client_host=self._mcp_client_host,
+                    response = await tool_execution_driver.call_tool(
+                        mcp_client_host=host,
                         sandbox_decision=sandbox_decision,
                         tool_id=tool_id,
                         tool_args=tool_args,

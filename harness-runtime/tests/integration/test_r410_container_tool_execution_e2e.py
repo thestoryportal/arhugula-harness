@@ -217,7 +217,7 @@ async def test_r410_tier2_tool_step_executes_inside_local_docker_container() -> 
         command=("python", "-c", _RUNNER),
         timeout_seconds=20,
     )
-    dispatcher = RuntimeToolDispatcher(
+    dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
         mcp_namespace_emitter=_emitter(),

@@ -816,6 +816,34 @@ async def test_failure_at_stage_3a_closes_already_constructed_providers(
 
 
 @pytest.mark.asyncio
+async def test_rollback_cp_clients_drains_started_mcp_hosts() -> None:
+    """U-RT-126/127 — a post-stage-3a abort (e.g. a stage-5
+    RT-FAIL-MCP-TOOL-NAME-COLLISION) drains the MCP hosts stage 3a started, not
+    just providers — no leaked subprocess/session. Unstarted hosts are skipped."""
+    from types import SimpleNamespace
+
+    from harness_runtime.bootstrap import _rollback_cp_clients
+
+    class _FakeHost:
+        def __init__(self, *, started: bool) -> None:
+            self.started = started
+            self.shutdown_calls = 0
+
+        async def shutdown(self) -> None:
+            self.shutdown_calls += 1
+
+    started = _FakeHost(started=True)
+    unstarted = _FakeHost(started=False)
+    ctx = SimpleNamespace(
+        mcp_client_hosts={"started-server": started, "unstarted-server": unstarted},
+        providers=None,
+    )
+    await _rollback_cp_clients(ctx)  # type: ignore[arg-type]
+    assert started.shutdown_calls == 1  # started host drained
+    assert unstarted.shutdown_calls == 0  # unstarted host skipped
+
+
+@pytest.mark.asyncio
 async def test_failure_at_stage_5_stops_collector_daemon(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -35,12 +35,14 @@ from harness_runtime.lifecycle.retry_breaker_tool import (
     RESERVED_TOOL_DISPATCH_KEY,
     RetryBreakerToolDispatcher,
 )
+from harness_runtime.lifecycle.tool_registry import ToolRegistry
 from harness_runtime.types import (
     CollectorConfig,
     OTelConfig,
     PathBindingConfig,
     ProviderSecretsConfig,
     RuntimeConfig,
+    ServerName,
 )
 from opentelemetry.sdk.trace import TracerProvider
 
@@ -71,7 +73,15 @@ async def _post_stage_3a_builder(cfg: RuntimeConfig) -> _MutableHarnessContext:
     """Construct a builder with the minimum stage-3a + stage-3b state the
     stage-5 factory consumes."""
     builder = _MutableHarnessContext()
-    builder.mcp_client_hosts = await materialize_mcp_client_host_stage(cfg)
+    # The stage-5 factory builds the routing index from each host's STARTED
+    # registry (production: stage-3a starts the hosts before stage-5). These unit
+    # tests can't spawn a real MCP subprocess (`stdio:///bin/echo` is not an MCP
+    # server), so each materialized host is mocked started with an empty registry.
+    hosts = await materialize_mcp_client_host_stage(cfg)
+    for host in hosts.values():
+        host._started = True  # type: ignore[attr-defined]
+        host._tool_registry = ToolRegistry()  # type: ignore[attr-defined]
+    builder.mcp_client_hosts = hosts
     builder.retry_breaker = RuntimeRetryBreaker(
         retry_policies={
             RESERVED_TOOL_DISPATCH_KEY: RetryPolicy(
@@ -268,7 +278,8 @@ async def test_factory_wires_per_server_default_policy_resolver() -> None:
     wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
 
     contract, step = _tool_contract_and_step(SandboxTier.TIER_1_PROCESS)
-    decision = wrapper.inner._sandbox_resolver(contract, step)  # type: ignore[attr-defined]
+    resolver = wrapper.inner._sandbox_resolvers[ServerName("echo-server")]  # type: ignore[attr-defined]
+    decision = resolver(contract, step)
     assert decision.tier is SandboxTier.TIER_1_PROCESS
     assert decision.tech == "host-process"
     assert decision.provider == "host"
@@ -286,7 +297,8 @@ async def test_resolver_tier_floor_consistency_passes_when_equal() -> None:
     builder = await _post_stage_3a_builder(cfg)
     wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
     contract, step = _tool_contract_and_step(SandboxTier.TIER_1_PROCESS)
-    decision = wrapper.inner._sandbox_resolver(contract, step)  # type: ignore[attr-defined]
+    resolver = wrapper.inner._sandbox_resolvers[ServerName("echo-server")]  # type: ignore[attr-defined]
+    decision = resolver(contract, step)
     # Floor passes: resolved tier is NOT below the tool's minimum.
     assert _SANDBOX_TIER_RANK[decision.tier] >= _SANDBOX_TIER_RANK[contract.minimum_tier]
 
@@ -304,18 +316,17 @@ async def test_factory_wires_emitter_info_lookup_for_configured_server() -> None
 
 
 @pytest.mark.asyncio
-async def test_empty_server_set_leaves_resolver_and_info_lookup_default() -> None:
-    """v1.41 — with NO configured server, the resolver + info_lookup stay the
-    raise-on-call defaults (unreachable: dispatch step 1 raises first on the
-    empty registry)."""
-    from harness_as.sandbox_tier import SandboxTier
-
+async def test_empty_server_set_leaves_no_per_host_resolver_or_driver() -> None:
+    """§14.9.10 D1/D2 — with NO configured server, the per-host resolver/driver
+    maps + the routing index are empty, and the emitter's info_lookup stays the
+    raise-on-call default (a TOOL_STEP raises RT-FAIL-TOOL-CONTRACT-UNKNOWN at
+    dispatch step 0 on the empty routing index)."""
     cfg = _config()  # empty mcp_clients
     builder = await _post_stage_3a_builder(cfg)
     wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
-    contract, step = _tool_contract_and_step(SandboxTier.TIER_1_PROCESS)
-    with pytest.raises(LookupError):
-        wrapper.inner._sandbox_resolver(contract, step)  # type: ignore[attr-defined]
+    assert wrapper.inner._sandbox_resolvers == {}  # type: ignore[attr-defined]
+    assert wrapper.inner._tool_execution_drivers == {}  # type: ignore[attr-defined]
+    assert wrapper.inner._routing_index == {}  # type: ignore[attr-defined]
     with pytest.raises(LookupError):
         builder.mcp_namespace_emitter._info_lookup("nope")  # type: ignore[attr-defined]
 
@@ -368,7 +379,7 @@ async def test_bare_local_dev_server_wires_in_process_driver() -> None:
     builder = await _post_stage_3a_builder(cfg)
     wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
     assert isinstance(
-        wrapper.inner._tool_execution_driver,  # type: ignore[attr-defined]
+        wrapper.inner._tool_execution_drivers[ServerName("echo-server")],  # type: ignore[attr-defined]
         MCPHostToolExecutionDriver,
     )
 
@@ -404,6 +415,6 @@ async def test_managed_cloud_server_with_container_driver_wires_docker() -> None
     builder = await _post_stage_3a_builder(cfg)
     wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
     assert isinstance(
-        wrapper.inner._tool_execution_driver,  # type: ignore[attr-defined]
+        wrapper.inner._tool_execution_drivers[ServerName("echo-server")],  # type: ignore[attr-defined]
         DockerToolRunnerExecutionDriver,
     )
