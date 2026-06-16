@@ -60,6 +60,7 @@ from harness_runtime.types import (
     RuntimeConfig,
     SandboxDispatchTable,
     SemanticCache,
+    ServerName,
     ShadowGitSupervisor,
     Skill,
     ToolName,
@@ -123,7 +124,7 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "tool_contracts",
     "mcp_host",
     "mcp_clients",
-    "mcp_client_host",
+    "mcp_client_hosts",
     "sandbox_dispatch",
     "providers",
     "routing_manifest",
@@ -209,11 +210,12 @@ class _MutableHarnessContext:
 
     # Stage 3a CP_CLIENTS.
     providers: dict[str, ProviderClient] | None = None
-    mcp_client_host: Any = None
-    """U-RT-72 — H_T-as-MCP-client host (concrete:
-    `harness_runtime.lifecycle.mcp_client_host.MCPClientHost`). Populated
-    at stage 3a by `materialize_mcp_client_host_stage` (U-RT-73). Required
-    on the frozen HarnessContext per spec v1.16 §4 C-RT-04."""
+    mcp_client_hosts: dict[ServerName, Any] | None = None
+    """U-RT-72/125 — H_T-as-MCP-client hosts keyed by `server_name` (each value
+    concrete: `harness_runtime.lifecycle.mcp_client_host.MCPClientHost`).
+    Populated at stage 3a by `materialize_mcp_client_host_stage` (U-RT-73/126).
+    Reshaped singular→mapping at U-RT-125 per spec v1.51 §14.9.10 D1, mirroring
+    `mcp_clients`. Required on the frozen HarnessContext per spec §4 C-RT-04."""
 
     # Stage 3b CP_ROUTING.
     routing_manifest: RoutingManifest | None = None
@@ -315,9 +317,9 @@ class _MutableHarnessContext:
 
     mcp_namespace_emitter: Any = None
     """U-RT-72; U-CP-69 MCPClientNamespaceEmitter. Bound at stage 5 within
-    ``materialize_runtime_tool_dispatcher_stage`` (U-RT-75) step 2 from
-    ``ctx.mcp_client_host.tool_registry``. Required on the frozen
-    HarnessContext per spec v1.16 §4 C-RT-04."""
+    ``materialize_runtime_tool_dispatcher_stage`` (U-RT-75) step 2 from the
+    resolved MCP host's ``tool_registry`` (``ctx.mcp_client_hosts``). Required
+    on the frozen HarnessContext per spec v1.16 §4 C-RT-04."""
 
     memory_tool_registry: Any = None
     """U-RT-79 — Memory tool storage-backend registry (U-RT-78
@@ -449,7 +451,7 @@ class _MutableHarnessContext:
             mcp_host=self.mcp_host,
             mcp_clients=_bound(self.mcp_clients),
             mcp_server=self.mcp_server,
-            mcp_client_host=self.mcp_client_host,
+            mcp_client_hosts=_bound(self.mcp_client_hosts),
             sandbox_dispatch=self.sandbox_dispatch,
             providers=_bound(self.providers),
             routing_manifest=_bound(self.routing_manifest),

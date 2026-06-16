@@ -268,7 +268,10 @@ async def test_mcp_client_external_server_e2e_tool_call_path(
     # parallel host with the same transport_config + the operator-
     # supplied converter to exercise the production dispatch path.
     config = _runtime_config()
-    factory_host = await materialize_mcp_client_host_stage(config)
+    # U-RT-126 reshape: the factory returns `dict[ServerName, MCPClientHost]`;
+    # exercise the sole materialized host (single-server config).
+    factory_hosts = await materialize_mcp_client_host_stage(config)
+    factory_host = next(iter(factory_hosts.values()))
     assert factory_host.server_name == _SERVER_NAME, (
         f"factory produced host with wrong server_name: {factory_host.server_name!r}"
     )

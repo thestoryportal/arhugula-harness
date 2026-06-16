@@ -35,7 +35,7 @@ unclassifiable action — a C10 blast-radius safety violation).
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from harness_as import BlastRadiusTier
 from harness_cp.default_downgrade_rule import (
@@ -45,7 +45,7 @@ from harness_cp.default_downgrade_rule import (
 from harness_cp.workflow_driver_types import StepKind, WorkflowStep
 
 if TYPE_CHECKING:  # pragma: no cover — type-only import (avoid runtime cycle)
-    from harness_runtime.types import HarnessContext
+    from harness_runtime.types import HarnessContext, ServerName
 
 __all__ = [
     "StepBlastRadiusResolutionError",
@@ -58,7 +58,7 @@ class StepBlastRadiusResolutionError(LookupError):
     """A TOOL_STEP's blast radius cannot be resolved (fail-safe, per AC).
 
     Raised when `step.step_payload["tool_id"]` is missing / non-str / empty, or
-    is not registered in `ctx.mcp_client_host.tool_registry` / `ctx.tool_contracts`.
+    is not registered in `ctx.mcp_client_hosts[*].tool_registry` / `ctx.tool_contracts`.
     The resolver does NOT silently default to `READ_ONLY` — an unclassifiable
     action must gate, never auto-approve (C10 blast-radius safety; design §3.2).
     """
@@ -72,7 +72,7 @@ _READ_ONLY_KINDS = frozenset(
 def _lookup_tool_blast_radius(ctx: HarnessContext, tool_id: str) -> BlastRadiusTier:
     """Resolve `ToolContract.blast_radius_tier` for `tool_id` from `ctx`.
 
-    Tries the runtime authority (`ctx.mcp_client_host.tool_registry`, the source
+    Tries the runtime authority (the MCP host's `tool_registry`, the source
     of truth the `RuntimeToolDispatcher` consumes at TOOL_STEP dispatch) first,
     then the stage-2 registered `ctx.tool_contracts`. Raises if neither resolves.
 
@@ -84,7 +84,10 @@ def _lookup_tool_blast_radius(ctx: HarnessContext, tool_id: str) -> BlastRadiusT
     taxonomy). `dict`-shaped registries / `tool_contracts` return `None` on miss
     (no raise); both miss-shapes are handled.
     """
-    host = getattr(ctx, "mcp_client_host", None)
+    # B2-impl-2a: single host today — read the sole host's registry (U-RT-128
+    # reshapes this to the routed/owning host's registry at B2-impl-2b).
+    hosts: dict[ServerName, Any] = getattr(ctx, "mcp_client_hosts", None) or {}
+    host = next(iter(hosts.values()), None)
     registry = getattr(host, "tool_registry", None) if host is not None else None
     if registry is not None:
         try:
@@ -102,7 +105,7 @@ def _lookup_tool_blast_radius(ctx: HarnessContext, tool_id: str) -> BlastRadiusT
             return contract.blast_radius_tier
     raise StepBlastRadiusResolutionError(
         f"TOOL_STEP tool_id={tool_id!r} not registered in "
-        f"ctx.mcp_client_host.tool_registry or ctx.tool_contracts — cannot "
+        f"ctx.mcp_client_hosts[*].tool_registry or ctx.tool_contracts — cannot "
         f"resolve blast radius (fail-safe: an unclassifiable action gates, "
         f"never auto-approves)"
     )

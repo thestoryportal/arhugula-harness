@@ -248,7 +248,7 @@ def _fully_populated_builder(
     builder.tool_contracts = {}
     builder.mcp_host = sentinel
     builder.mcp_clients = {}
-    builder.mcp_client_host = sentinel
+    builder.mcp_client_hosts = sentinel
     builder.sandbox_dispatch = sentinel
     builder.providers = {}
     builder.routing_manifest = sentinel

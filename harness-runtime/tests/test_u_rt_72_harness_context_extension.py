@@ -36,7 +36,7 @@ def _sentinel(label: str) -> Any:
 def test_harness_context_declares_four_new_fields() -> None:
     # AC #1 — schema declares the 4 new required fields.
     fields = set(HarnessContext.model_fields)
-    assert "mcp_client_host" in fields
+    assert "mcp_client_hosts" in fields
     assert "tool_dispatcher" in fields
     assert "per_server_trust_evaluator" in fields
     assert "mcp_namespace_emitter" in fields
@@ -45,12 +45,12 @@ def test_harness_context_declares_four_new_fields() -> None:
 def test_mutable_builder_accepts_setter_for_four_new_fields() -> None:
     # AC #2 — builder accepts setter calls for the 4 new fields.
     builder = _MutableHarnessContext()
-    builder.mcp_client_host = _sentinel("mcp_client_host")
+    builder.mcp_client_hosts = _sentinel("mcp_client_hosts")
     builder.tool_dispatcher = _sentinel("tool_dispatcher")
     builder.per_server_trust_evaluator = _sentinel("per_server_trust_evaluator")
     builder.mcp_namespace_emitter = _sentinel("mcp_namespace_emitter")
     # No exception — assignment is the assertion.
-    assert builder.mcp_client_host is not None
+    assert builder.mcp_client_hosts is not None
     assert builder.tool_dispatcher is not None
     assert builder.per_server_trust_evaluator is not None
     assert builder.mcp_namespace_emitter is not None
@@ -66,25 +66,25 @@ def test_freeze_raises_when_any_of_four_new_fields_is_none() -> None:
         _MutableHarnessContext().freeze()
     missing = excinfo.value.missing_fields
     # The 4 new fields are in the missing-fields report.
-    assert "mcp_client_host" in missing
+    assert "mcp_client_hosts" in missing
     assert "tool_dispatcher" in missing
     assert "per_server_trust_evaluator" in missing
     assert "mcp_namespace_emitter" in missing
 
 
-def test_distinct_primitive_invariant_mcp_host_vs_mcp_client_host() -> None:
+def test_distinct_primitive_invariant_mcp_host_vs_mcp_client_hosts() -> None:
     # AC #4 — ctx.mcp_host (server-side) is NOT the same object as
-    # ctx.mcp_client_host (client-side). Verified at the type/builder layer
+    # ctx.mcp_client_hosts (client-side). Verified at the type/builder layer
     # by setting two distinct sentinels and asserting identity inequality.
     builder = _MutableHarnessContext()
     server_side = _sentinel("server-side-mcp-host")
-    client_side = _sentinel("client-side-mcp-client-host")
+    client_side = _sentinel("client-side-mcp-client-hosts")
     builder.mcp_host = server_side
-    builder.mcp_client_host = client_side
-    assert builder.mcp_host is not builder.mcp_client_host
+    builder.mcp_client_hosts = client_side
+    assert builder.mcp_host is not builder.mcp_client_hosts
     # And they hold the assigned sentinels.
     assert builder.mcp_host is server_side
-    assert builder.mcp_client_host is client_side
+    assert builder.mcp_client_hosts is client_side
 
 
 def test_required_fields_count_includes_four_new() -> None:
@@ -99,7 +99,7 @@ def test_required_fields_count_includes_four_new() -> None:
 
     assert len(_REQUIRED_FIELDS) == 41
     for new_field in (
-        "mcp_client_host",
+        "mcp_client_hosts",
         "tool_dispatcher",
         "per_server_trust_evaluator",
         "mcp_namespace_emitter",
@@ -111,7 +111,7 @@ def test_harness_context_importable_from_runtime_types() -> None:
     # AC #5 — importable; field schema reachable.
     from harness_runtime.types import HarnessContext as HC
 
-    assert "mcp_client_host" in HC.model_fields
+    assert "mcp_client_hosts" in HC.model_fields
 
 
 @pytest.mark.asyncio

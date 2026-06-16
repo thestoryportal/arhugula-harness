@@ -925,8 +925,9 @@ def test_freeze_raises_incomplete_when_required_field_none() -> None:
     # All 41 required fields are missing (U-RT-52 +1 for `llm_dispatcher`;
     # U-RT-59 +2 for `sub_agent_dispatcher` + `step_dispatchers`;
     # U-RT-60 +1 for `ask_user_question_surface`; U-RT-72 +4 for
-    # `mcp_client_host` + `tool_dispatcher` + `per_server_trust_evaluator`
-    # + `mcp_namespace_emitter` per spec v1.16 §4 C-RT-04 extension;
+    # `mcp_client_hosts` + `tool_dispatcher` + `per_server_trust_evaluator`
+    # + `mcp_namespace_emitter` per spec v1.16 §4 C-RT-04 extension
+    # (mcp_client_host reshaped singular→dict at U-RT-125 / spec v1.51);
     # U-RT-80 +1 for `memory_tool_registry` per spec v1.17 §4 C-RT-04 +
     # §14.12 C-RT-22 extension).
     assert "config" in excinfo.value.missing_fields
@@ -936,7 +937,7 @@ def test_freeze_raises_incomplete_when_required_field_none() -> None:
     assert "sub_agent_dispatcher" in excinfo.value.missing_fields
     assert "step_dispatchers" in excinfo.value.missing_fields
     assert "ask_user_question_surface" in excinfo.value.missing_fields
-    assert "mcp_client_host" in excinfo.value.missing_fields
+    assert "mcp_client_hosts" in excinfo.value.missing_fields
     assert "tool_dispatcher" in excinfo.value.missing_fields
     assert "hitl_tool_loop" in excinfo.value.missing_fields
     assert "engine_recovery_loop" in excinfo.value.missing_fields

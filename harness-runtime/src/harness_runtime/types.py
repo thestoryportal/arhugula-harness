@@ -197,6 +197,7 @@ __all__ = [
     "RuntimeConfig",
     "SandboxDispatchTable",
     "SemanticCache",
+    "ServerName",
     "ShadowGitSupervisor",
     "Skill",
     "SkillID",
@@ -280,8 +281,18 @@ class StageLifecycleHook(Protocol):
 # rewriting` already carries `type ToolName = str` with documented "future
 # cross-axis decision" rationale; promoting here would force a concurrent CP
 # refactor + a cross-axis naming-convention pass. Deferred to that pass.
+#
+# `ServerName` stays local for the same reason: the cross-host MCP routing
+# index + the `HarnessContext.mcp_client_hosts` carrier (U-RT-125 / runtime
+# spec v1.51 §14.9.10 D1) are runtime-side. It aliases the per-deployment
+# `MCPClientHost.server_name` registry ID — DISTINCT from the config-side
+# `ClientName` (the two hold the same value today; `server_name=client_name`
+# at the factory), preserving the config-key/runtime-identity split as a
+# forward property. Promote to `harness_core` only if a cross-axis consumer
+# surfaces (mirrors the `ClientName` promotion).
 # ----------------------------------------------------------------------------
 ToolName = NewType("ToolName", str)
+ServerName = NewType("ServerName", str)
 
 
 # ----------------------------------------------------------------------------
@@ -1833,18 +1844,30 @@ class HarnessContext(BaseModel):
     Typed `Any` per the C-RT-04 Protocol-vs-concrete-narrowing pattern
     (mirrors `sub_agent_dispatcher` + `tracer_provider`)."""
 
-    # Stage 3a CP_CLIENTS (extended at U-RT-72 per spec v1.16 §4 C-RT-04).
-    mcp_client_host: Any
-    """H_T-as-MCP-client host (U-RT-63/64/65/66 — concretized by
+    # Stage 3a CP_CLIENTS (extended at U-RT-72 per spec v1.16 §4 C-RT-04;
+    # reshaped singular→mapping at U-RT-125 per spec v1.51 §14.9.10 D1).
+    mcp_client_hosts: dict[ServerName, Any]
+    """H_T-as-MCP-client hosts, keyed by `server_name` (U-RT-63/64/65/66 — each
+    value concretized by
     `harness_runtime.lifecycle.mcp_client_host.MCPClientHost`).
 
-    Materialized at stage 3a by `materialize_mcp_client_host_stage` (U-RT-73).
+    Materialized at stage 3a by `materialize_mcp_client_host_stage` (U-RT-73 /
+    U-RT-126). Reshaped from the singular `mcp_client_host: MCPClientHost` to
+    this `dict[ServerName, MCPClientHost]` mapping at U-RT-125 (runtime spec
+    v1.51 §14.9.10 D1), sibling-mirroring `mcp_clients: dict[ClientName,
+    MCPClient]` (`:1650`). The key is `server_name` (the per-deployment registry
+    ID the dispatcher / trust gate / spans already read), NOT `client_name`.
+
     Distinct primitive from `ctx.mcp_host` (the H_T-as-MCP-server stage-2
     surface per U-RT-15) — `mcp_host` hosts H_T's tools for external MCP
-    clients; `mcp_client_host` consumes external MCP servers' tools at H_T's
-    `TOOL_STEP` dispatch site. Spec §14.9.2 inv 4: ctx.mcp_host ≠ ctx.mcp_client_host.
+    clients; `mcp_client_hosts` consume external MCP servers' tools at H_T's
+    `TOOL_STEP` dispatch site. Spec §14.9.2 inv 4: ctx.mcp_host ≠ ctx.mcp_client_hosts.
 
-    Typed `Any` per the C-RT-04 Protocol-vs-concrete-narrowing pattern to
+    Carrier-shape reshape (U-RT-125/126, B2-impl-2a): a single-configured-host
+    bootstrap yields a 1-entry dict; the dispatcher still resolves a single host
+    (cross-host routing + per-host sandbox are U-RT-127/128/130, B2-impl-2b).
+
+    Value typed `Any` per the C-RT-04 Protocol-vs-concrete-narrowing pattern to
     avoid the `lifecycle.mcp_client_host → types` import cycle (matches
     existing `sub_agent_dispatcher` precedent at v1.11).
     """
@@ -1916,7 +1939,7 @@ class HarnessContext(BaseModel):
     Added at U-RT-79 per `Spec_Harness_Runtime_v1.md` v1.17 §4 C-RT-04
     field-table extension. Typed `Any` per the C-RT-04 Protocol-vs-
     concrete-narrowing pattern (mirrors `tool_dispatcher` +
-    `mcp_client_host`) to avoid the `lifecycle.memory_tool_registry →
+    `mcp_client_hosts`) to avoid the `lifecycle.memory_tool_registry →
     types` import cycle.
     """
 
@@ -1926,7 +1949,8 @@ class HarnessContext(BaseModel):
 
     Materialized at stage 5 within
     `materialize_runtime_tool_dispatcher_stage` (U-RT-75) step 2 from
-    `ctx.mcp_client_host.tool_registry`. Consumed by the bare
+    the resolved MCP host's `tool_registry` (`ctx.mcp_client_hosts`; the sole
+    host at B2-impl-2a, the routed host at U-RT-128). Consumed by the bare
     `RuntimeToolDispatcher` mid-dispatch to emit the canonical 7-attribute
     `mcp.*` namespace on the `mcp.tool.call` span per C-AS-14 §14.3.
 

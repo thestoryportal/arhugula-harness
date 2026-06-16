@@ -1,29 +1,30 @@
 """Stage 3a factory — `materialize_mcp_client_host_stage(config) → MCPClientHost`.
 
-Per `Spec_Harness_Runtime_v1.md` v1.16 §14.9.3 stage-3a factory contract
-(added at v1.15 per U-RT-68 fork Q2=B2 ratification). Ingests
+Per `Spec_Harness_Runtime_v1.md` §14.9.3 stage-3a factory contract (added at
+v1.15 per U-RT-68 fork Q2=B2 ratification; reshaped singular→mapping at v1.51
+§14.9.10 D1 per the B2 multi-server reshape). Ingests
 `config.mcp_clients: list[MCPClientConfig]` (per-server transport_config) and
-constructs an `MCPClientHost` instance. The factory return value is bound to
-`ctx.mcp_client_host` (C-RT-04 v1.15+ field) by the stage 3a body.
+constructs `MCPClientHost` instances. The factory return value — a
+`dict[ServerName, MCPClientHost]` keyed on each host's `server_name` — is bound
+to `ctx.mcp_client_hosts` (C-RT-04 v1.51+ field) by the stage 3a body.
 
-Per spec §14.9.6 invariant 1 ("one instance per MCP server; one transport
-per instance") + the singular field-type commitment at §4 C-RT-04
-(`mcp_client_host: MCPClientHost`, not a mapping), the v1.15 MVP supports
-0 or 1 MCP server entries in `config.mcp_clients`:
+The field is now a mapping (§4 C-RT-04 v1.51 / U-RT-125). The factory handles:
 
-- 0 servers: returns an empty-tool-registry `MCPClientHost` (`.started=False`).
+- 0 servers: returns a 1-entry dict holding an empty-tool-registry
+  `MCPClientHost` (`.started=False`) under the `<empty-sentinel>` key.
   Tool-dispatch attempts at U-RT-67 raise `RT-FAIL-TOOL-CONTRACT-UNKNOWN`
   per spec §14.9.5 since the registry is empty.
-- 1 server: constructs an `MCPClientHost` from the single `MCPClientConfig`
-  entry's per-server transport_config; subprocess spawn + protocol
-  handshake + `list_tools` registry population happen at `start()`,
-  which the stage 3a body invokes after factory return.
-- >1 server (deferred): the v1.15 field type is singular; multi-server
-  support is a future-arc extension that will route to a §4 + factory
-  signature amendment via planner revision-pass. Until then the factory
-  uses the first entry and raises a typed warning via the logger when
-  more than one is configured (per the "Deferred to implementation
-  discretion" §14.9.3 clause).
+- 1 server: returns a 1-entry dict whose `MCPClientHost` is constructed from
+  the single `MCPClientConfig` entry's per-server transport_config; subprocess
+  spawn + protocol handshake + `list_tools` registry population happen at
+  `start()`, which the stage 3a body invokes per-host after factory return.
+
+**B2-impl-2a scope (carrier reshape).** This factory returns the mapping SHAPE
+but still materializes a SINGLE host from `config.mcp_clients[0]` — honestly
+single-host (no reachable multi-host path until the ≥2-server e2e fixture
+lands). The materialize-ALL loop (U-RT-126-full), the cross-host routing index
++ collision fail-class (U-RT-127), and the per-host sandbox (U-RT-130) are
+B2-impl-2b. The §14.9.6 inv-1 per-host lifecycle reword lands with them.
 
 Per `Plan_Executability_Audit_v1.md` framework-pull discipline: no
 framework adoption.
@@ -45,7 +46,7 @@ from harness_runtime.lifecycle.mcp_client_host import (
     MCPClientHost,
     MCPToolContractConverter,
 )
-from harness_runtime.types import MCPClientConfig, RuntimeConfig
+from harness_runtime.types import MCPClientConfig, RuntimeConfig, ServerName
 
 # Re-declare the Literal type so this module is self-contained for the
 # transport cast (the same Literal is declared at lifecycle.mcp_client_host).
@@ -142,44 +143,55 @@ def _build_default_policy_converter(
     return convert
 
 
-async def materialize_mcp_client_host_stage(config: RuntimeConfig) -> MCPClientHost:
-    """Construct the stage 3a `MCPClientHost` from operator-supplied config.
+async def materialize_mcp_client_host_stage(
+    config: RuntimeConfig,
+) -> dict[ServerName, MCPClientHost]:
+    """Construct the stage 3a `MCPClientHost` mapping from operator-supplied config.
 
-    Per spec v1.16 §14.9.3 stage-3a factory contract + AC #1/AC #2/AC #5 at
-    U-RT-73 (Implementation_Plan_Harness_Runtime_v2_13.md).
+    Per spec §14.9.3 stage-3a factory contract (v1.51 §14.9.10 D1 reshape) +
+    AC #1/AC #2/AC #5 at U-RT-73/126.
 
     Returns
     -------
-    MCPClientHost
-        An unstarted host. The stage 3a body is responsible for calling
-        `.start()` afterward if `config.mcp_clients` is non-empty; the
-        empty-list sentinel host is intentionally left in `.started=False`
-        state (no subprocess to spawn, no registry to populate).
+    dict[ServerName, MCPClientHost]
+        A 1-entry mapping of unstarted host(s), keyed on `server_name`. The
+        stage 3a body is responsible for calling `.start()` per-host afterward
+        if `config.mcp_clients` is non-empty; the empty-list sentinel host is
+        intentionally left in `.started=False` state (no subprocess to spawn,
+        no registry to populate) under the `<empty-sentinel>` key.
+
+    B2-impl-2a returns the mapping SHAPE while materializing a single host
+    (`config.mcp_clients[0]`); the materialize-ALL loop is U-RT-126-full
+    (B2-impl-2b).
     """
     if not config.mcp_clients:
         # Empty-sentinel branch. stdio + empty transport_config — the host
         # is constructible but `.start()` would fail per the per-transport
         # branches; the empty branch never calls `.start()`.
-        return MCPClientHost(
+        sentinel = MCPClientHost(
             transport="stdio",
             server_name="<empty-sentinel>",
             trust_tier=MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
             transport_config=_EMPTY_TRANSPORT_CONFIG,
         )
+        return {ServerName(sentinel.server_name): sentinel}
 
-    # MVP: one host per first configured client. Multi-server deferred to
-    # a future-arc schema extension (see module docstring). `entry.transport`
-    # is an `harness_as.discriminators.MCPTransport` StrEnum; its `.value`
-    # is one of the literal strings the host accepts.
+    # B2-impl-2a: one host from the first configured client, returned as a
+    # 1-entry mapping keyed on its `server_name`. Multi-server materialization
+    # (loop over all `config.mcp_clients`) is U-RT-126-full / B2-impl-2b (see
+    # module docstring). `entry.transport` is an
+    # `harness_as.discriminators.MCPTransport` StrEnum; its `.value` is one of
+    # the literal strings the host accepts.
     entry = config.mcp_clients[0]
     transport_value: _MCPTransportLiteral = cast(_MCPTransportLiteral, entry.transport.value)
-    return MCPClientHost(
+    host = MCPClientHost(
         transport=transport_value,
         server_name=entry.client_name,
         trust_tier=_trust_tier_from_level(entry.trust_level),
         transport_config=_build_transport_config(transport_value, entry.connection_url),
         tool_contract_converter=_build_default_policy_converter(entry, config.deployment_surface),
     )
+    return {ServerName(host.server_name): host}
 
 
 _TRUST_LEVEL_TO_TIER: Final[dict[MCPServerTrustLevel, MCPTrustTier]] = {

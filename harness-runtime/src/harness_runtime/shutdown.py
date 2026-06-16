@@ -63,13 +63,13 @@ import time
 import weakref
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakValueDictionary
 
 from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
-    from harness_runtime.types import HarnessContext
+    from harness_runtime.types import HarnessContext, ServerName
 
 __all__ = [
     "AlreadyShutDown",
@@ -475,18 +475,21 @@ async def shutdown(
         except Exception:
             failures.append(f"provider:{name}")
 
-    # Step 4 — MCP client host (spec v1.41 §14.9.8 arc, Gap F): drain the
+    # Step 4 — MCP client hosts (spec v1.41 §14.9.8 arc, Gap F): drain each
     # per-server subprocess / connection per §14.9.6 inv 1 ("stage 7 SHUTDOWN
-    # drains"). Runs in the same task as run_bootstrap (api.py) so the host's
+    # drains"). Runs in the same task as run_bootstrap (api.py) so each host's
     # anyio cancel scope closes in its owning task (the success-path teardown
     # crash without this). Guarded on a started host — the empty-sentinel /
     # unstarted host has nothing to drain. Per-resource exception isolation.
-    host = getattr(ctx, "mcp_client_host", None)
-    if host is not None and getattr(host, "started", False):
-        try:
-            await host.shutdown()
-        except Exception:
-            failures.append("mcp_client_host")
+    # (U-RT-125 reshape: `mcp_client_hosts` is a `dict[ServerName, MCPClientHost]`;
+    # a single host today, ≥1 at B2-impl-2b.)
+    hosts: dict[ServerName, Any] = getattr(ctx, "mcp_client_hosts", None) or {}
+    for host in hosts.values():
+        if getattr(host, "started", False):
+            try:
+                await host.shutdown()
+            except Exception:
+                failures.append("mcp_client_host")
     # Step 5 — ledger/index/cache/worktree: covered by step 2 / no close surface.
 
     if time.monotonic() > deadline:

@@ -71,7 +71,7 @@ async def _post_stage_3a_builder(cfg: RuntimeConfig) -> _MutableHarnessContext:
     """Construct a builder with the minimum stage-3a + stage-3b state the
     stage-5 factory consumes."""
     builder = _MutableHarnessContext()
-    builder.mcp_client_host = await materialize_mcp_client_host_stage(cfg)
+    builder.mcp_client_hosts = await materialize_mcp_client_host_stage(cfg)
     builder.retry_breaker = RuntimeRetryBreaker(
         retry_policies={
             RESERVED_TOOL_DISPATCH_KEY: RetryPolicy(
