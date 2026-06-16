@@ -39,9 +39,12 @@ def _step(kind: StepKind, payload: dict | None = None) -> WorkflowStep:
 
 
 def _ctx_with_registry(contracts: dict[str, ToolContract]) -> SimpleNamespace:
-    """Stub `ctx` exposing `mcp_client_host.tool_registry` — the REAL `ToolRegistry`
+    """Stub `ctx` exposing `mcp_client_hosts[*].tool_registry` — the REAL `ToolRegistry`
     (whose `.get()` RAISES `ToolNameNotRegisteredError` on a miss, NOT returns
-    None; the resolver must handle that, per Codex out-of-family review)."""
+    None; the resolver must handle that, per Codex out-of-family review).
+
+    U-RT-125 reshape: `mcp_client_hosts` is a `dict[ServerName, MCPClientHost]`;
+    the resolver reads the sole host's registry (B2-impl-2a)."""
     from harness_runtime.lifecycle.tool_registry import ToolRegistry
 
     registry = ToolRegistry()
@@ -50,14 +53,14 @@ def _ctx_with_registry(contracts: dict[str, ToolContract]) -> SimpleNamespace:
         # canonical index is `contract.name`, so re-key the contract to match.
         registry.register(contract.model_copy(update={"name": tool_id}))
     return SimpleNamespace(
-        mcp_client_host=SimpleNamespace(tool_registry=registry),
+        mcp_client_hosts={"stub-server": SimpleNamespace(tool_registry=registry)},
         tool_contracts=None,
     )
 
 
 def _ctx_with_contracts(contracts: dict[str, ToolContract]) -> SimpleNamespace:
     """Stub `ctx` exposing only `tool_contracts` (stage-2 registry fallback)."""
-    return SimpleNamespace(mcp_client_host=None, tool_contracts=contracts)
+    return SimpleNamespace(mcp_client_hosts={}, tool_contracts=contracts)
 
 
 _EMPTY_CTX = _ctx_with_registry({})
@@ -102,7 +105,7 @@ def test_tool_step_resolves_external_irreversible_tool() -> None:
 
 
 def test_tool_step_resolves_via_tool_contracts_fallback() -> None:
-    # When mcp_client_host is absent, fall back to ctx.tool_contracts (the
+    # When mcp_client_hosts is empty, fall back to ctx.tool_contracts (the
     # stage-2 registered contracts).
     ctx = _ctx_with_contracts({"reader": _tool(BlastRadiusTier.READ_ONLY)})
     step = _step(StepKind.TOOL_STEP, {"tool_id": "reader"})

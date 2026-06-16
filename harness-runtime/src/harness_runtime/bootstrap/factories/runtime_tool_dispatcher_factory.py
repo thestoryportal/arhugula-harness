@@ -8,11 +8,12 @@ Per `Spec_Harness_Runtime_v1.md` v1.16 §14.9.3 stage-5 factory contract +
 
   1. Construct `PerServerTrustEvaluator` (consumes `config.trust_policy`,
      or a runtime-supplied conservative default if `None`).
-  2. Construct `MCPClientNamespaceEmitter` (consumes `ctx.mcp_client_host`
-     downstream at `emit_mcp_call_span` time; the emitter is constructed
-     with a default info-lookup at MVP — operator override is future arc).
-  3. Construct the bare `RuntimeToolDispatcher` (C-RT-19) with refs to
-     `ctx.mcp_client_host` + the new evaluator + the new emitter + the
+  2. Construct `MCPClientNamespaceEmitter` (consumes the sole MCP host from
+     `ctx.mcp_client_hosts` downstream at `emit_mcp_call_span` time; the emitter
+     is constructed with a default info-lookup at MVP — operator override is
+     future arc).
+  3. Construct the bare `RuntimeToolDispatcher` (C-RT-19) with refs to the sole
+     host from `ctx.mcp_client_hosts` + the new evaluator + the new emitter + the
      trust policy + `config.sandbox_decision_policy` (or
      `SandboxDecisionPolicy.default()` if `None`).
   4. Construct the `RetryBreakerToolDispatcher` (C-RT-21 §14.11)
@@ -215,8 +216,8 @@ async def materialize_runtime_tool_dispatcher_stage(
     Per spec v1.16 §14.9.3 stage-5 factory contract + U-RT-75 AC
     (Implementation_Plan_Harness_Runtime_v2_13.md).
     """
-    assert ctx.mcp_client_host is not None, (
-        "stage 3a (U-RT-73) must populate ctx.mcp_client_host before stage 5"
+    assert ctx.mcp_client_hosts is not None, (
+        "stage 3a (U-RT-73/126) must populate ctx.mcp_client_hosts before stage 5"
     )
     assert ctx.retry_breaker is not None, (
         "stage 3b (U-RT-24) must populate ctx.retry_breaker before stage 5"
@@ -224,6 +225,14 @@ async def materialize_runtime_tool_dispatcher_stage(
     assert ctx.ledger_writer is not None, (
         "stage 1 IS must populate ctx.ledger_writer before stage 5 TOOL_STEP dispatch"
     )
+
+    # B2-impl-2a: the bare dispatcher + namespace emitter remain single-host;
+    # resolve the sole materialized host from the reshaped mapping. The mapping
+    # always holds ≥1 entry post-stage-3a (the real host, or the
+    # `<empty-sentinel>` when no server is configured). Cross-host routing
+    # (per-tool → owning host via the routing index) is U-RT-127/128 (B2-impl-2b);
+    # this transitional extraction is retired there.
+    sole_mcp_host: Any = next(iter(ctx.mcp_client_hosts.values()))
 
     trust_policy = config.trust_policy if config.trust_policy is not None else DEFAULT_TRUST_POLICY
     sandbox_decision_policy = (
@@ -245,12 +254,12 @@ async def materialize_runtime_tool_dispatcher_stage(
 
     # --- Step 2: MCP namespace emitter (Gap E — info_lookup from host) -------
     # spec v1.41 §14.9.8 arc: the emitter's per-dispatch step-7 info_lookup is
-    # wired from ctx.mcp_client_host so it does not raise on the operator
+    # wired from the sole MCP host so it does not raise on the operator
     # api.run path. Bare `MCPClientNamespaceEmitter()` (default-raise lookup)
     # is preserved only when no host is configured (empty-sentinel; dispatch
     # never reaches step 7 because step 1 raises TOOL-CONTRACT-UNKNOWN first).
     info_lookup: MCPServerInfoLookup | None = (
-        _build_host_info_lookup(ctx.mcp_client_host) if config.mcp_clients else None
+        _build_host_info_lookup(sole_mcp_host) if config.mcp_clients else None
     )
     mcp_namespace_emitter = MCPClientNamespaceEmitter(info_lookup=info_lookup)
     ctx.mcp_namespace_emitter = mcp_namespace_emitter
@@ -290,7 +299,7 @@ async def materialize_runtime_tool_dispatcher_stage(
     # stage_5_loop_init.py). All 3 None-safe at unit-test path; production
     # bootstrap binds all 3 per `_attribute_tool_cost_best_effort` semantics.
     bare_dispatcher = RuntimeToolDispatcher(
-        mcp_client_host=ctx.mcp_client_host,
+        mcp_client_host=sole_mcp_host,
         per_server_trust_evaluator=per_server_trust_evaluator,
         mcp_namespace_emitter=mcp_namespace_emitter,
         trust_policy=trust_policy,

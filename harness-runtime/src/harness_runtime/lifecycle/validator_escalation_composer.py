@@ -117,7 +117,7 @@ async def compose_validator_escalation_gate(
     cross_trust_state
         Current cross-trust-boundary state per C-CP-21 §21.3 4-class enum.
         Derivation source is implementation discretion per spec §14.15.8;
-        recommended: closure-over-ctx (read ``ctx.mcp_client_host`` current
+        recommended: closure-over-ctx (read ``ctx.mcp_client_hosts`` current
         server trust state + binding-derived cross-family flag).
     gate_level
         The computed gate level per C-CP-19 §19.1. v1.22 MVP may pass

@@ -81,7 +81,8 @@ async def test_factory_projects_trust_level_identity_by_ordinal(
     This is the U-RT-129 AC: each of the 4 tiers projects faithfully through
     the production factory — no longer collapsed to the constant `LEVEL_0`.
     """
-    host = await materialize_mcp_client_host_stage(_config_with_trust(level))
+    hosts = await materialize_mcp_client_host_stage(_config_with_trust(level))
+    host = next(iter(hosts.values()))
     assert host.trust_tier is expected_tier
 
 
@@ -91,9 +92,10 @@ async def test_l3_server_no_longer_reports_the_l0_constant() -> None:
     server reports `LEVEL_3_ALLOW_WITH_AUDIT`, NOT the prior constant
     `LEVEL_0_REFUSE_REMOTE` the collapse-stub returned for every server.
     """
-    host = await materialize_mcp_client_host_stage(
+    hosts = await materialize_mcp_client_host_stage(
         _config_with_trust(MCPServerTrustLevel.L3_ALLOW_WITH_AUDIT)
     )
+    host = next(iter(hosts.values()))
     assert host.trust_tier is MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT
     assert host.trust_tier is not MCPTrustTier.LEVEL_0_REFUSE_REMOTE
 
@@ -104,11 +106,23 @@ async def test_trust_tier_distinct_across_tiers_non_vacuous() -> None:
     DIFFERENT `trust_tier` telemetry from the SAME factory path (proving the
     projection carries real per-server signal, not a uniform constant table).
     """
-    l0_host = await materialize_mcp_client_host_stage(
-        _config_with_trust(MCPServerTrustLevel.L0_REFUSE_REMOTE)
+    l0_host = next(
+        iter(
+            (
+                await materialize_mcp_client_host_stage(
+                    _config_with_trust(MCPServerTrustLevel.L0_REFUSE_REMOTE)
+                )
+            ).values()
+        )
     )
-    l3_host = await materialize_mcp_client_host_stage(
-        _config_with_trust(MCPServerTrustLevel.L3_ALLOW_WITH_AUDIT)
+    l3_host = next(
+        iter(
+            (
+                await materialize_mcp_client_host_stage(
+                    _config_with_trust(MCPServerTrustLevel.L3_ALLOW_WITH_AUDIT)
+                )
+            ).values()
+        )
     )
     assert l0_host.trust_tier is not l3_host.trust_tier
     assert l0_host.trust_tier is MCPTrustTier.LEVEL_0_REFUSE_REMOTE

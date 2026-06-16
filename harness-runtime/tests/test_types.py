@@ -144,7 +144,7 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         "sandbox_dispatch",
         # Stage 3a CP_CLIENTS.
         "providers",
-        "mcp_client_host",  # U-RT-72 — C-RT-04 §4 v1.16 H_T-as-MCP-client host (U-RT-73 populates)
+        "mcp_client_hosts",  # U-RT-72/125 — C-RT-04 §4 v1.51 H_T-as-MCP-client hosts dict (U-RT-73/126 populates)
         # Stage 3b CP_ROUTING.
         "routing_manifest",
         "engine_selector",

@@ -28,6 +28,7 @@ from harness_runtime.types import (
     PathBindingConfig,
     ProviderSecretsConfig,
     RuntimeConfig,
+    ServerName,
 )
 
 
@@ -56,18 +57,24 @@ def _stdio_client(name: str = "test-stdio") -> MCPClientConfig:
 
 @pytest.mark.asyncio
 async def test_returns_mcp_client_host_when_mcp_clients_populated() -> None:
-    # AC #1 — non-empty mcp_clients → MCPClientHost instance.
+    # AC #1 (U-RT-73) + U-RT-125/126 carrier-shape AC — non-empty mcp_clients →
+    # a 1-entry `dict[ServerName, MCPClientHost]` keyed on the host's server_name.
     cfg = _config([_stdio_client()])
-    host = await materialize_mcp_client_host_stage(cfg)
+    hosts = await materialize_mcp_client_host_stage(cfg)
+    assert set(hosts) == {ServerName("test-stdio")}
+    host = hosts[ServerName("test-stdio")]
     assert isinstance(host, MCPClientHost)
     assert host.server_name == "test-stdio"
 
 
 @pytest.mark.asyncio
 async def test_returns_empty_sentinel_when_mcp_clients_empty() -> None:
-    # AC #2 — empty mcp_clients → empty-sentinel MCPClientHost (does NOT raise).
+    # AC #2 — empty mcp_clients → 1-entry dict holding the empty-sentinel
+    # MCPClientHost (does NOT raise).
     cfg = _config([])
-    host = await materialize_mcp_client_host_stage(cfg)
+    hosts = await materialize_mcp_client_host_stage(cfg)
+    assert set(hosts) == {ServerName("<empty-sentinel>")}
+    host = hosts[ServerName("<empty-sentinel>")]
     assert isinstance(host, MCPClientHost)
     assert host.server_name == "<empty-sentinel>"
 
@@ -78,14 +85,15 @@ async def test_factory_returns_unstarted_host() -> None:
     if the host is non-sentinel. Tested by reading the private `_started`
     flag through Python's introspection (no public predicate at U-RT-63 MVP)."""
     cfg = _config([])
-    host = await materialize_mcp_client_host_stage(cfg)
+    hosts = await materialize_mcp_client_host_stage(cfg)
+    host = next(iter(hosts.values()))
     assert getattr(host, "_started", True) is False
 
 
 @pytest.mark.asyncio
 async def test_stage_3a_body_binds_factory_return_to_ctx() -> None:
     """AC #3 — stage 3a body invokes factory exactly once and binds the
-    return value to `ctx.mcp_client_host`. Tested via direct import of
+    return value to `ctx.mcp_client_hosts`. Tested via direct import of
     the stage shim and an isolated config."""
     from harness_core.workload_class import WorkloadClass
     from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
@@ -95,7 +103,7 @@ async def test_stage_3a_body_binds_factory_return_to_ctx() -> None:
 
     # Stub keyring_resolver — stage 0 normally populates this. We bypass by
     # patching the providers factory to avoid network calls; the
-    # mcp_client_host path is what we're verifying.
+    # mcp_client_hosts path is what we're verifying.
     builder.keyring_resolver = object()
 
     cfg = _config([])
@@ -117,8 +125,11 @@ async def test_stage_3a_body_binds_factory_return_to_ctx() -> None:
     finally:
         stage_3a_module.materialize_provider_clients_stage = original  # type: ignore[assignment]
 
-    assert isinstance(builder.mcp_client_host, MCPClientHost)
-    assert builder.mcp_client_host.server_name == "<empty-sentinel>"
+    assert builder.mcp_client_hosts is not None
+    assert set(builder.mcp_client_hosts) == {ServerName("<empty-sentinel>")}
+    host = builder.mcp_client_hosts[ServerName("<empty-sentinel>")]
+    assert isinstance(host, MCPClientHost)
+    assert host.server_name == "<empty-sentinel>"
 
 
 @pytest.mark.asyncio
@@ -131,7 +142,7 @@ async def test_per_server_transport_heterogeneity_first_entry_wins_at_mvp() -> N
             _stdio_client("second-server"),
         ]
     )
-    host = await materialize_mcp_client_host_stage(cfg)
+    host = next(iter((await materialize_mcp_client_host_stage(cfg)).values()))
     assert host.server_name == "first-server"
 
 
@@ -177,7 +188,7 @@ async def test_factory_wires_non_default_converter() -> None:
     """v1.40 — a configured server's host carries a real converter, NOT the
     raise-on-every-call default stub."""
     cfg = _config([_policy_client()])
-    host = await materialize_mcp_client_host_stage(cfg)
+    host = next(iter((await materialize_mcp_client_host_stage(cfg)).values()))
     converter = host._tool_contract_converter  # type: ignore[attr-defined]
     contract = converter(_FakeTool("echo", "echo a string", {"type": "object"}))
     assert contract.name == "echo"
@@ -195,7 +206,7 @@ async def test_converter_stamps_per_server_default_policy() -> None:
             )
         ]
     )
-    host = await materialize_mcp_client_host_stage(cfg)
+    host = next(iter((await materialize_mcp_client_host_stage(cfg)).values()))
     converter = host._tool_contract_converter  # type: ignore[attr-defined]
     contract = converter(_FakeTool("write_file", "writes a file", {"type": "object"}))
     assert contract.minimum_tier is SandboxTier.TIER_1_PROCESS
@@ -208,7 +219,7 @@ async def test_converter_tolerates_none_description_and_schema() -> None:
     """v1.40 — `mcp.types.Tool.description` may be None and `inputSchema` may
     be absent; the converter substitutes safe defaults."""
     cfg = _config([_policy_client()])
-    host = await materialize_mcp_client_host_stage(cfg)
+    host = next(iter((await materialize_mcp_client_host_stage(cfg)).values()))
     converter = host._tool_contract_converter  # type: ignore[attr-defined]
     contract = converter(_FakeTool("noisy", None, None))
     assert contract.description == ""
@@ -233,7 +244,7 @@ async def test_empty_sentinel_host_keeps_raise_on_call_converter() -> None:
     """v1.40 — the 0-server empty-sentinel host wires no converter (no tools
     to convert); its default stub still raises on invocation."""
     cfg = _config([])
-    host = await materialize_mcp_client_host_stage(cfg)
+    host = next(iter((await materialize_mcp_client_host_stage(cfg)).values()))
     converter = host._tool_contract_converter  # type: ignore[attr-defined]
     with pytest.raises(LookupError):
         converter(_FakeTool("x", "x", {"type": "object"}))

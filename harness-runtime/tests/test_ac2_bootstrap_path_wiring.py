@@ -5,8 +5,8 @@ exercises but cannot prove in CI (it needs a live provider per Gap D):
 
   - Gap B: stage-3a calls `host.start()` when `mcp_clients` is non-empty
     (and does NOT for the empty-sentinel host).
-  - Gap F: `shutdown()` drains a started `mcp_client_host` (and skips an
-    unstarted / absent one).
+  - Gap F: `shutdown()` drains a started host in `mcp_client_hosts` (and skips
+    an unstarted / absent one).
   - MCPClientConfig per-server sandbox-policy fields (defaults + custom).
 """
 
@@ -124,8 +124,10 @@ async def _run_stage_3a(
     async def _stub_providers(*_a: Any, **_k: Any) -> _StubStage:
         return _StubStage()
 
-    async def _stub_host(*_a: Any, **_k: Any) -> _FakeHost:
-        return host
+    async def _stub_host(*_a: Any, **_k: Any) -> dict[str, _FakeHost]:
+        # U-RT-126 reshape: the factory returns `dict[ServerName, MCPClientHost]`
+        # keyed on server_name; stage_3a starts each host.
+        return {host.server_name: host}
 
     from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 
@@ -186,7 +188,9 @@ def _shutdown_ctx(tmp_path: Path, host: object | None) -> Any:
     ctx.providers = {}  # type: ignore[attr-defined]
     ctx.audit_writer = SimpleNamespace(read_all=lambda: [])  # type: ignore[attr-defined]
     if host is not None:
-        ctx.mcp_client_host = host  # type: ignore[attr-defined]
+        # U-RT-125 reshape: ctx carries `mcp_client_hosts` as a dict keyed on
+        # server_name; shutdown drains each host's connection.
+        ctx.mcp_client_hosts = {"mcp-stub-server": host}  # type: ignore[attr-defined]
     return ctx
 
 
