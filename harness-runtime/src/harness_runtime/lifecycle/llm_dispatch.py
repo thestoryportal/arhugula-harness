@@ -67,11 +67,13 @@ from harness_cp.cp_shared_types import (
     TraceContext,
 )
 from harness_cp.layer_budget import DEFAULT_LAYER_BUDGETS
+from harness_cp.layered_routing_strategy import LayerDecisionFn
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass
 from harness_cp.routing_core_surface import (
     InferenceRequest,
     ProviderDispatchResult,
+    RouterResolutionFn,
     infer,
 )
 from harness_cp.routing_layer import RoutingLayer
@@ -389,6 +391,20 @@ class RuntimeLLMDispatcher:
     # translate fns (`system=` kwarg for anthropic; leading `role:"system"`
     # message for openai/ollama); `ProviderAgnosticPayload` stays frozen.
     active_system_prompt: str | None = None
+    # C-CP-02 §2.5 (R-impl-1) — the injected Layer-3 router-resolution callable.
+    # Production binds None: the Layer-3 surface stays inert (DECLARATIVE
+    # resolves all production traffic; no router is injected until R-impl-2
+    # binds a real router model). A test fixture injects a mock RouterResolutionFn
+    # (+ `layer_decisions_override` below to force the L3 sentinel) to exercise
+    # the spec-§2.5.5 runtime fall-through->router e2e.
+    router: RouterResolutionFn | None = None
+    # Test-only seam (C-CP-02 §2.5.5 runtime e2e): override the layer-decision
+    # map threaded into `infer`. None -> the production
+    # `{RoutingLayer.DECLARATIVE: _declarative_echo}` (byte-identical). A test
+    # injects e.g. `{RoutingLayer.DECLARATIVE: lambda *_: None}` to force the
+    # `route()` L3 sentinel so the injected `router` is reached. NOT a production
+    # override; production never sets it (the factory leaves it None).
+    layer_decisions_override: Mapping[RoutingLayer, LayerDecisionFn] | None = None
 
     async def dispatch(
         self,
@@ -523,7 +539,15 @@ class RuntimeLLMDispatcher:
             model: str,
             inner_payload: ProviderAgnosticPayload,
             routing_trace: RoutingDecisionTrace,
+            *,
+            binding_rationale: str | None = None,
         ) -> ProviderDispatchResult:
+            # C-CP-02 §2.5.4 — `binding_rationale` is the optional carrier
+            # `infer()` threads ONLY on the Layer-3 router path (None on the
+            # non-router path, so the span emitter keeps deriving
+            # `f"{layer}:{candidate}"`). Matches the §2.5.4 Protocol-ized
+            # `ProviderDispatchFn` seam (the defaulted kwarg keeps this closure
+            # assignable + every non-router call byte-identical).
             response = await self._invoke_provider(
                 provider,
                 model,
@@ -531,6 +555,7 @@ class RuntimeLLMDispatcher:
                 step_context,
                 step_id=str(step.step_id),
                 routing_trace=routing_trace,
+                binding_rationale=binding_rationale,
             )
             raw_response["value"] = response
             # ProviderDispatchResult is structurally required by `infer()` but
@@ -548,8 +573,18 @@ class RuntimeLLMDispatcher:
             envelope,
             dispatch=_provider_dispatch,
             manifest=self.routing_manifest or _EMPTY_ROUTING_MANIFEST,
-            layer_decisions={RoutingLayer.DECLARATIVE: _declarative_echo},
+            # `layer_decisions_override` is the test-only seam (C-CP-02 §2.5.5):
+            # None -> the production DECLARATIVE-echo (byte-identical). A test
+            # injects a sentinel-forcing map to reach the injected `router`.
+            layer_decisions=(
+                self.layer_decisions_override
+                if self.layer_decisions_override is not None
+                else {RoutingLayer.DECLARATIVE: _declarative_echo}
+            ),
             budgets=DEFAULT_LAYER_BUDGETS,
+            # C-CP-02 §2.5 — production binds None (Layer-3 inert); a test
+            # fixture injects a mock RouterResolutionFn.
+            router=self.router,
         )
         return raw_response["value"]
 
@@ -562,6 +597,7 @@ class RuntimeLLMDispatcher:
         *,
         step_id: str,
         routing_trace: RoutingDecisionTrace,
+        binding_rationale: str | None = None,
     ) -> Mapping[str, Any]:
         """Provider-SDK dispatch boundary — the injected dispatch callable for
         `infer()` (R-300). Opens the `llm.inference` span (gen_ai.* + routing.*
@@ -644,14 +680,20 @@ class RuntimeLLMDispatcher:
             # (the canonical routing-visibility surface) — `infer()`'s
             # InferenceResponse is discarded at the dispatch boundary, so the
             # span is where routing visibility lives. `routing.binding_rationale`
-            # is the §1.4 optional token; at the MVP DECLARATIVE echo it records
-            # the layer + selected candidate.
+            # is the §1.4 optional token. C-CP-02 §2.5.4: when `infer()` resolves
+            # via a Layer-3 router it threads the router's free-text rationale
+            # through the dispatch seam (`binding_rationale`); the emitter uses
+            # it WHEN PRESENT. On every other path `binding_rationale is None`
+            # and the emitter keeps deriving the layer+candidate token
+            # (byte-identical to pre-§2.5 — the non-router path is unchanged).
             span.set_attribute("routing.provider", provider_name)
             span.set_attribute("routing.model", model)
             span.set_attribute("routing.layer", routing_trace.layer)
             span.set_attribute(
                 "routing.binding_rationale",
-                f"{routing_trace.layer}:{routing_trace.candidate}",
+                binding_rationale
+                if binding_rationale is not None
+                else f"{routing_trace.layer}:{routing_trace.candidate}",
             )
 
             # --- Step 3: per-provider dispatch --------------------------

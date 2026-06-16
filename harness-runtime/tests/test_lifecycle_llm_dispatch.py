@@ -29,10 +29,12 @@ import pytest
 from harness_as.sandbox_tier import SandboxTier
 from harness_core import PersonaTier
 from harness_core.identity import StepID
-from harness_cp.cp_shared_types import AgentRole, ModelBinding
+from harness_cp.cp_shared_types import AgentRole, ModelBinding, RouterResolution
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+from harness_cp.routing_core_surface import RoutingCandidateUnresolvedError
+from harness_cp.routing_layer import RoutingLayer
 from harness_cp.routing_manifest_residence import RoleRoutingBinding, RoutingManifest
 from harness_cp.workflow_driver import StepDispatcher
 from harness_cp.workflow_driver_types import (
@@ -1284,6 +1286,80 @@ async def test_routing_attributes_emitted_with_manifest_layer() -> None:
     assert attrs["routing.provider"] == "anthropic"
     assert attrs["routing.model"] == "claude-opus-4-8"
     assert str(attrs["routing.binding_rationale"]).startswith("manifest:")
+
+
+# ---------------------------------------------------------------------------
+# R-FS-1 R-impl-1 — U-RT-133 + U-RT-132 (Layer-3 LLM_AS_ROUTER runtime e2e).
+#
+# The spec-§2.5.5 runtime mock-router proof. The binding site hardcodes
+# `_declarative_echo` (always resolves), so the test-only `layer_decisions`
+# seam (default = production) is needed to force the route() L3 sentinel and
+# reach the injected `router`. NO paid call (in-process fake provider + mock
+# router). Non-test production reachability additionally needs DECLARATIVE made
+# conditional (R-300-second-provider) — out of R scope (runtime v2.48 §6 O-RT-8).
+# ---------------------------------------------------------------------------
+
+
+def _force_fallthrough(_payload: object, _manifest: object) -> str | None:
+    """A DECLARATIVE LayerDecisionFn that returns no candidate -> route()
+    falls through to the LLM_AS_ROUTER sentinel (the test-only seam)."""
+    return None
+
+
+@pytest.mark.asyncio
+async def test_layer3_router_e2e_emits_router_supplied_rationale() -> None:
+    """U-RT-133 + U-RT-132 / CP spec v1.36 §2.5.5 (a)/(b) — via the test-only
+    `layer_decisions` seam, a sentinel-forcing DECLARATIVE + an injected mock
+    router resolve Layer 3 through `RuntimeLLMDispatcher`; the `llm.inference`
+    span carries routing.layer=='llm_as_router' + the router-supplied
+    routing.binding_rationale (NOT the f'{layer}:{candidate}' fallback). Proves
+    the runtime binding CAN carry a router. NO paid call."""
+
+    async def _router(_request: object, _summary: str) -> RouterResolution:
+        return RouterResolution(candidate="anthropic:claude-haiku-4-5", rationale="cost-tier match")
+
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        router=_router,
+        layer_decisions_override={RoutingLayer.DECLARATIVE: _force_fallthrough},
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic", "claude-opus-4-8"), _step(), step_context=_step_context()
+    )
+
+    # `[0]` is the sole finished span ONLY because the mock `_router` emits no
+    # span of its own. R-impl-2's vendor-gated real router will open a child
+    # `llm.inference` span for the router-model call, after which `[0]` becomes
+    # ambiguous — that arc MUST select the workload span explicitly (e.g. by
+    # span name) rather than relying on ordinal `[0]`.
+    attrs = (exporter.get_finished_spans()[0].attributes) or {}
+    assert attrs["routing.layer"] == RoutingLayer.LLM_AS_ROUTER.value
+    assert attrs["routing.provider"] == "anthropic"
+    assert attrs["routing.model"] == "claude-haiku-4-5"
+    # §2.5.4 — the router-supplied rationale, NOT the layer:candidate fallback.
+    assert attrs["routing.binding_rationale"] == "cost-tier match"
+
+
+@pytest.mark.asyncio
+async def test_layer3_no_router_through_dispatch_preserves_raise() -> None:
+    """U-RT-133 no-regress — the seam forces the L3 sentinel but `router`
+    defaults None (production) -> the preserved RoutingCandidateUnresolvedError
+    propagates through `dispatch` unmodified (no silent swallow)."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        layer_decisions_override={RoutingLayer.DECLARATIVE: _force_fallthrough},
+        # `router` defaults None -> the Layer-3 surface is inert (production).
+    )
+
+    with pytest.raises(RoutingCandidateUnresolvedError):
+        await dispatcher.dispatch(_binding("anthropic", "x"), _step(), step_context=_step_context())
 
 
 @pytest.mark.asyncio
