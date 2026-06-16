@@ -32,9 +32,10 @@ framework adoption.
 from __future__ import annotations
 
 import shlex
-from typing import Any, Literal, cast
+from typing import Any, Final, Literal, cast
 
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
+from harness_as.sandbox_tier_floor import MCPServerTrustLevel
 from harness_as.tool_contract import ToolContract
 from harness_core.deployment_surface import DeploymentSurface
 from harness_cp.cp_shared_types import MCPTrustTier
@@ -181,17 +182,37 @@ async def materialize_mcp_client_host_stage(config: RuntimeConfig) -> MCPClientH
     )
 
 
-def _trust_tier_from_level(level: Any) -> MCPTrustTier:
-    """Project the per-MCPClientConfig `trust_level` (AS-side enum) onto
-    the per-MCPClientHost `trust_tier` (CP-side enum).
+_TRUST_LEVEL_TO_TIER: Final[dict[MCPServerTrustLevel, MCPTrustTier]] = {
+    MCPServerTrustLevel.L0_REFUSE_REMOTE: MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
+    MCPServerTrustLevel.L1_SIGNED_PINNED: MCPTrustTier.LEVEL_1_SIGNED_PINNED,
+    MCPServerTrustLevel.L2_SANDBOX_ALL: MCPTrustTier.LEVEL_2_SANDBOX_ALL,
+    MCPServerTrustLevel.L3_ALLOW_WITH_AUDIT: MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT,
+}
+"""Identity-by-ordinal projection table (CP spec v1.34 §27.8 / U-RT-129).
 
-    The two enums differ in shape per the AS / CP axis-separation
-    discipline (`MCPServerTrustLevel` is the AS-side per-server trust
-    framework class; `MCPTrustTier` is the CP-side tier the per-server
-    trust evaluator gates on). MVP mapping is conservative — every
-    AS-side level maps to the most-restrictive CP-side tier
-    (`LEVEL_0_REFUSE_REMOTE`); production deployments will surface a
-    spec-committed mapping at a future arc per Q1a=(i) follow-on.
+The AS-side `MCPServerTrustLevel` and CP-side `MCPTrustTier` are the SAME
+closed 4-value set — `MCPTrustTier` is a "byte-exact factor-out of the
+AS-owned value set" (C-AS-10 §10.3 / CP §27.8), so identity (`L_k → LEVEL_k`)
+is the unique faithful realization. Total over the closed enum.
+"""
+
+
+def _trust_tier_from_level(level: MCPServerTrustLevel) -> MCPTrustTier:
+    """Project the per-`MCPClientConfig` `trust_level` (AS-side enum) onto
+    the per-`MCPClientHost` `trust_tier` (CP-side enum), identity-by-ordinal.
+
+    Per CP spec **v1.34 §27.8** (U-RT-129): the projection is a faithful
+    `L_k → LEVEL_k` identity over the shared closed 4-value set (the prior
+    constant-collapse stub returned `LEVEL_0_REFUSE_REMOTE` regardless,
+    flattening every server's trust telemetry to the most-restrictive tier).
+
+    **TELEMETRY-ONLY.** The result populates `MCPHostHealth.trust_tier` → the
+    `mcp.server.trust_tier` span attribute (`mcp_client_namespace_emitter`).
+    It does NOT feed the dispatch trust gate — that keys on `server_name` via
+    the per-server `TrustPolicy`/`per_server_trust_evaluator.evaluate`, a path
+    byte-unchanged by this projection. No transport-aware clamp here: transport
+    severity is owned by the per-transport sandbox floor (a clamp would be a
+    one-source-of-truth violation; the narrow `level`-only signature is the
+    positive evidence transport belongs to the floor, not the projection).
     """
-    _ = level  # MVP conservative — see docstring
-    return MCPTrustTier.LEVEL_0_REFUSE_REMOTE
+    return _TRUST_LEVEL_TO_TIER[level]
