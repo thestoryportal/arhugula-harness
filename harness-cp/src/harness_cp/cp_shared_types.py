@@ -131,6 +131,27 @@ class RoutingDecisionTrace(BaseModel):
     """Whether the layer budget was exhausted at decision time."""
 
 
+class RouterResolution(BaseModel):
+    """The Layer-3 router's resolution result — C-CP-02 §2.5.1.
+
+    Returned by an injected ``RouterResolutionFn`` when the deterministic
+    routing layers fall through and Layer 3 LLM_AS_ROUTER resolves at the
+    already-async ``infer`` call surface (Reading B). The ``rationale`` is
+    returned SEPARATELY from the ``candidate`` because the frozen four-field
+    ``RoutingDecisionTrace`` cannot carry it (§2.5.4) — the trace is NOT
+    widened; the rationale rides the additive optional ``binding_rationale``
+    channel on the span-owning dispatch seam to the C-CP-01 §1.4
+    ``routing.binding_rationale`` span attribute. Exactly two fields."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    candidate: str
+    """The selected ``"provider:model"`` tuple (well-formed)."""
+
+    rationale: str
+    """Short rationale token(s); the §2.1 ``router_rationale_summary``."""
+
+
 # --- Observability ----------------------------------------------------------
 
 

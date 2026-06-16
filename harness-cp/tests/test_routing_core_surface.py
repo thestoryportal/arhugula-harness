@@ -16,6 +16,7 @@ callable. Activation must_pass coverage:
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 
 import pytest
@@ -23,6 +24,7 @@ from harness_core import PersonaTier, WorkloadClass
 from harness_cp.cp_shared_types import (
     AgentRole,
     ProviderAgnosticPayload,
+    RouterResolution,
     RoutingDecisionTrace,
     TraceContext,
 )
@@ -32,11 +34,13 @@ from harness_cp.routing_core_surface import (
     InferenceResponse,
     ProviderDispatchFn,
     ProviderDispatchResult,
+    RouterResolutionFn,
     RoutingCandidateUnresolvedError,
     infer,
 )
 from harness_cp.routing_layer import RoutingLayer
 from harness_cp.routing_manifest_residence import RoutingManifest
+from pydantic import ValidationError
 
 
 def _request() -> InferenceRequest:
@@ -71,16 +75,22 @@ def _result() -> ProviderDispatchResult:
     )
 
 
-def _recording_dispatch() -> tuple[ProviderDispatchFn, list[tuple[str, str, RoutingDecisionTrace]]]:
-    calls: list[tuple[str, str, RoutingDecisionTrace]] = []
+def _recording_dispatch() -> tuple[
+    ProviderDispatchFn, list[tuple[str, str, RoutingDecisionTrace, str | None]]
+]:
+    calls: list[tuple[str, str, RoutingDecisionTrace, str | None]] = []
 
     async def _dispatch(
         provider: str,
         model: str,
         _payload: ProviderAgnosticPayload,
         trace: RoutingDecisionTrace,
+        *,
+        binding_rationale: str | None = None,
     ) -> ProviderDispatchResult:
-        calls.append((provider, model, trace))
+        # C-CP-02 §2.5.4 — the dispatch seam additively accepts the optional
+        # `binding_rationale` carrier (the Protocol-ization type-ripple fix).
+        calls.append((provider, model, trace, binding_rationale))
         return _result()
 
     return _dispatch, calls
@@ -258,5 +268,179 @@ async def test_infer_raises_on_malformed_candidate() -> None:
             dispatch=dispatch,
             manifest=_manifest(),
             layer_decisions={RoutingLayer.DECLARATIVE: decl},
+        )
+    assert dispatch_calls == []
+
+
+# --- R-FS-1 R-impl-1 — U-CP-99 + U-CP-100 (Layer-3 LLM_AS_ROUTER) ------------
+
+
+def _router(
+    candidate: str, rationale: str
+) -> tuple[RouterResolutionFn, list[tuple[InferenceRequest, str]]]:
+    """A mock RouterResolutionFn (NO paid call) recording its args."""
+    seen: list[tuple[InferenceRequest, str]] = []
+
+    async def _resolve(request: InferenceRequest, candidate_set_summary: str) -> RouterResolution:
+        seen.append((request, candidate_set_summary))
+        return RouterResolution(candidate=candidate, rationale=rationale)
+
+    return _resolve, seen
+
+
+def test_router_resolution_two_frozen_fields() -> None:
+    """U-CP-99 / §2.5.1 — RouterResolution is a frozen two-field model
+    (candidate, rationale); extra rejected; the trace is NOT widened (§2.5.4)."""
+    r = RouterResolution(candidate="anthropic:claude-haiku-4-5", rationale="cost match")
+    assert (r.candidate, r.rationale) == ("anthropic:claude-haiku-4-5", "cost match")
+    assert set(RouterResolution.model_fields) == {"candidate", "rationale"}
+    with pytest.raises(ValidationError):
+        RouterResolution(candidate="a:b", rationale="x", extra="nope")  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        r.candidate = "x:y"  # type: ignore[misc]
+    # §2.5.4 anti-widening invariant — RoutingDecisionTrace stays four fields.
+    assert set(RoutingDecisionTrace.model_fields) == {
+        "layer",
+        "candidate",
+        "decision_ms",
+        "budget_exhausted",
+    }
+
+
+def test_provider_dispatch_fn_accepts_optional_binding_rationale() -> None:
+    """U-CP-99 / §2.5.4 — the Protocol-ized ProviderDispatchFn exposes the
+    additive optional kw-only `binding_rationale` (the type-ripple shape: a
+    closure WITH the defaulted param is the assignable seam)."""
+    dispatch, _ = _recording_dispatch()
+    # `_recording_dispatch` is annotated `-> ProviderDispatchFn` (pyright-checked
+    # assignability is the type-ripple proof); the runtime shape is the optional
+    # kw-only `binding_rationale` param. (ProviderDispatchFn is a structural
+    # Protocol, not @runtime_checkable — no isinstance check.)
+    sig = inspect.signature(dispatch)
+    assert sig.parameters["binding_rationale"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert sig.parameters["binding_rationale"].default is None
+    # `infer` exposes the optional `router` kw-only param (U-CP-100).
+    rp = inspect.signature(infer).parameters["router"]
+    assert rp.kind is inspect.Parameter.KEYWORD_ONLY and rp.default is None
+
+
+async def test_infer_layer3_router_resolves_sentinel() -> None:
+    """U-CP-100 / §2.5.2 — empty layer_decisions -> the route() L3 sentinel; an
+    injected router resolves it; the rebuilt trace carries layer=='llm_as_router'
+    + the router candidate; the rationale is threaded to dispatch (§2.5.4)."""
+    router, seen = _router("openai:gpt-x", "latency-floor")
+    dispatch, dispatch_calls = _recording_dispatch()
+
+    response = await infer(
+        _request(),
+        dispatch=dispatch,
+        manifest=_manifest(),
+        layer_decisions={},  # deterministic layers fall through -> L3 sentinel
+        router=router,
+    )
+
+    assert response.routing_decision.layer == RoutingLayer.LLM_AS_ROUTER.value
+    assert response.routing_decision.candidate == "openai:gpt-x"
+    assert (response.provider_used, response.model_used) == ("openai", "gpt-x")
+    # The router was consulted with the request + a (str) candidate_set_summary.
+    assert len(seen) == 1 and isinstance(seen[0][1], str)
+    # §2.5.4 — the router rationale was threaded to dispatch on the router path.
+    assert dispatch_calls[0][3] == "latency-floor"
+
+
+async def test_infer_non_router_path_threads_no_rationale() -> None:
+    """U-CP-100 / §2.5.4 — a DECLARATIVE hit calls dispatch with
+    binding_rationale=None even when a router is present-but-not-reached
+    (the carrier is passed ONLY on the router path; byte-identical to HEAD)."""
+
+    def decl(_p: ProviderAgnosticPayload, _m: RoutingManifest) -> str | None:
+        return "anthropic:claude-opus-4-8"
+
+    router, seen = _router("x:y", "z")
+    dispatch, dispatch_calls = _recording_dispatch()
+    await infer(
+        _request(),
+        dispatch=dispatch,
+        manifest=_manifest(),
+        layer_decisions={RoutingLayer.DECLARATIVE: decl},
+        router=router,  # present, but DECLARATIVE resolves -> router NOT reached
+    )
+    assert seen == []  # router not consulted
+    assert dispatch_calls[0][3] is None  # no rationale on the non-router path
+
+
+async def test_infer_no_router_preserves_raise() -> None:
+    """U-CP-100 / §2.5.2 no-regress (a) — L3 sentinel + no router -> the
+    preserved RoutingCandidateUnresolvedError; dispatch never invoked."""
+    dispatch, dispatch_calls = _recording_dispatch()
+    with pytest.raises(RoutingCandidateUnresolvedError):
+        await infer(
+            _request(),
+            dispatch=dispatch,
+            manifest=_manifest(),
+            layer_decisions={},
+            router=None,
+        )
+    assert dispatch_calls == []
+
+
+async def test_infer_l3_budget_exhausted_preserves_raise() -> None:
+    """U-CP-100 / §2.5.3 no-regress (b) — L3 sentinel + router injected but
+    LLM_AS_ROUTER pre-exhausted -> preserved raise; router NOT invoked (L3
+    terminal)."""
+    router, seen = _router("openai:gpt-x", "r")
+    dispatch, dispatch_calls = _recording_dispatch()
+    with pytest.raises(RoutingCandidateUnresolvedError):
+        await infer(
+            _request(),
+            dispatch=dispatch,
+            manifest=_manifest(),
+            layer_decisions={},
+            router=router,
+            budget_exhausted=frozenset({RoutingLayer.LLM_AS_ROUTER}),
+        )
+    assert seen == []
+    assert dispatch_calls == []
+
+
+async def test_infer_router_timeout_preserves_raise() -> None:
+    """U-CP-100 / §2.5.3 no-regress (c) — a router exceeding the L3 budget is
+    interrupted at the budget and converted to L3 exhaustion -> preserved raise
+    (timeout ENFORCEMENT, not assertion)."""
+
+    async def _slow(_request: InferenceRequest, _summary: str) -> RouterResolution:
+        await asyncio.sleep(0.05)
+        return RouterResolution(candidate="openai:gpt-x", rationale="r")
+
+    budgets = (
+        LayerBudget(layer=RoutingLayer.DECLARATIVE, time_budget_ms=5),
+        LayerBudget(layer=RoutingLayer.EMBEDDING, time_budget_ms=50),
+        LayerBudget(layer=RoutingLayer.LLM_AS_ROUTER, time_budget_ms=1),
+    )
+    dispatch, dispatch_calls = _recording_dispatch()
+    with pytest.raises(RoutingCandidateUnresolvedError):
+        await infer(
+            _request(),
+            dispatch=dispatch,
+            manifest=_manifest(),
+            layer_decisions={},
+            router=_slow,
+            budgets=budgets,
+        )
+    assert dispatch_calls == []
+
+
+async def test_infer_router_malformed_candidate_raises() -> None:
+    """U-CP-100 / §2.5.2 no-regress (d) — a router returning a malformed
+    candidate re-raises via the reused well-formedness guard."""
+    router, _ = _router("no-separator", "r")
+    dispatch, dispatch_calls = _recording_dispatch()
+    with pytest.raises(RoutingCandidateUnresolvedError):
+        await infer(
+            _request(),
+            dispatch=dispatch,
+            manifest=_manifest(),
+            layer_decisions={},
+            router=router,
         )
     assert dispatch_calls == []
