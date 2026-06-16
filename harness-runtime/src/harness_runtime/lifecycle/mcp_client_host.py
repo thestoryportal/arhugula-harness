@@ -128,7 +128,9 @@ class MCPHostHealth:
     `trust_tier` is the `MCPTrustTier` from CP plan v2.8 U-CP-00c carrier —
     cross-axis read (CP→runtime via `harness_cp.cp_shared_types`). Used by
     the dispatcher (U-RT-67) to populate the `mcp.server.trust_tier` span
-    attribute and gate the per-server-trust evaluation step.
+    attribute — **telemetry-only** (U-RT-129 / CP §27.8). The per-server-trust
+    gate keys on `server_name` via the per-server `TrustPolicy` evaluator, NOT
+    on this field.
     """
 
     alive: bool
