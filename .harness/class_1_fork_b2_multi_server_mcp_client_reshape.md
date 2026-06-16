@@ -88,6 +88,8 @@ Do NOT fold the idempotent-restart minor (start refuses re-start per §14.9.6 in
 
 ## §5 — Carved out to B2-spec-2 (the gate-axis leg)
 
+**✅ LANDED 2026-06-16** at `.harness/class_1_fork_b2_spec_2_gate_axis_materialization.md` + CP spec v1.35 NEW §19.1.2. **As-built corrections to the carve-out framing below:** (a) the `Axis` enum member is `Axis.MCP_TRUST` (already present), not `Axis.MCP_TRUST_TIER`; (b) the composition is **3-of-4 → 4-of-4 §19.1 D5-layer axes** (the "3-of-5"/"4-of-5" count below conflated in the orthogonal §19.3 `SANDBOX_TIER` D2-layer axis); (c) the genuine dyadic council was **NOT convened** — T-B2-2 was **probe-resolved** to floor-only/monotone (the `max()`-over-escalation-rank foreclosure + the landed U-CP-91 `mcp_trust`-never-overridden commitment make loosening a reverse-on-main, so a council would collapse to single-voice per §10.9; C10⊥C11 named inline instead). Operator-ratified **Table A** (L0→DENY/L1→ASK/L2→ASK/L3→AUTO). SPEC-ONLY; impl at B2-impl.
+
 The B2-spec-2 leg owes (separate PR, its own Class 1 fork, a genuine T-B2-2 dyadic council → AUQ):
 
 1. **F2-02 gate-axis materialization** (the site that actually un-flattens the locked T-perm-1 `per_mcp_server_trust_tier` gate axis): define `MCP_TRUST_GATE_LEVEL_FLOOR: dict[MCPTrustTier, GateLevel]` (spec-silent today at both CP §19.1 and AS §10.3 — `gate_level_rule.py:9-11/108`), add `Axis.MCP_TRUST_TIER` to the `gate_level()` `max()` composition (today composes only **3 of 5** axes — `per_tool_gate_level` + `blast_radius` + `persona_tier`; `gate_level_rule.py`), and wire the resolved per-server declared trust (the D3 projection of `MCPClientConfig.trust_level`) into `GateLevelInput.mcp_trust_tier`, replacing the inert constant at `hitl_gate_composer.py:462`. **Completeness honesty:** this moves the gate composition 3-of-5 → **4-of-5** (`per_tool_gate_level` stays inert — its own producer is the registered O-CP-3 follow-on).
@@ -101,7 +103,7 @@ The B2-spec-2 leg owes (separate PR, its own Class 1 fork, a genuine T-B2-2 dyad
 
 1. **B2-restart** — idempotent MCP-host restart/recovery (D5); sibling to the §14.9.6 inv 1 "operator-driven restart arc."
 2. **server-qualified tool addressing** — `server_name/tool_id` to permit deliberate same-name tools across servers (D2 future extension); re-open trigger = a deployment that legitimately needs same-named tools.
-3. **B2-spec-2** — the gate-axis materialization (F2-02) + T-B2-2 council (§5).
+3. **B2-spec-2** — the gate-axis materialization (F2-02) + T-B2-2 (§5). **✅ LANDED 2026-06-16** (CP spec v1.35 §19.1.2; T-B2-2 probe-resolved floor-only + operator-ratified Table A; `.harness/class_1_fork_b2_spec_2_gate_axis_materialization.md`). Forward residuals (B2-impl): the `gate_level()` 4th-axis composition + the composer `:462` resolved-host wiring + (item 5) the docstring fix.
 4. **B6** — per-tool sandbox granularity (D4 inner map), in the SHARED-RUNTIMECONFIG serial cluster after B2.
 5. **B2-impl docstring fix** (decorrelated-review finding, adversarial F1-03): the `mcp_client_host.py:128-130` docstring carries a STALE trailing clause "…and gate the per-server-trust evaluation step" — the gate keys on `server_name` (via `TrustPolicy`), NOT on `host.trust_tier` (telemetry-only). Correct the docstring to telemetry-only when B2-impl reshapes this file (it already edits the `:197` stub). Naturally co-located with the D3 stub-retirement at B2-impl.
 
