@@ -55,7 +55,7 @@ Foundational authority remains ADR-F1..F5 plus ADR-D1..D6, then `Architectural_D
 
 ### 2.3 Per-Axis Specs (Phase 5 Contract Authority)
 
-Canonical spec heads are IS `Spec_Information_Substrate_v1.md`, AS `Spec_Action_Surface_v1.md`, CP `Spec_Control_Plane_v1_33.md`, OD `Spec_Operational_Discipline_v1_28.md`, and Runtime `Spec_Harness_Runtime_v1.md`. Full per-spec lineage is indexed at `claude-artifact-pointers.md` §2.3 in `.harness`.
+Canonical spec heads are IS `Spec_Information_Substrate_v1.md`, AS `Spec_Action_Surface_v1.md` (v1.10), CP `Spec_Control_Plane_v1_34.md`, OD `Spec_Operational_Discipline_v1_28.md`, and Runtime `Spec_Harness_Runtime_v1.md` (v1.51). Full per-spec lineage is indexed at `claude-artifact-pointers.md` §2.3 in `.harness`.
 
 ### 2.4 Per-Axis Plans + CXA (Phase 6 Execution Authority)
 

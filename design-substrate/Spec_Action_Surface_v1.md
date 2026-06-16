@@ -1,6 +1,14 @@
-# Spec — Action Surface v1.9
+# Spec — Action Surface v1.10
 
-## Change-note (v1.8 → v1.9)
+## Change-note (v1.9 → v1.10)
+
+**Scope of revision.** A single **reciprocal Class-3 cross-ref** at **C-AS-10 §10.3** (MCP server trust-tier framework) — the R-FS-1 B2-spec-1 (multi-server-MCP reshape) leg's AS-side companion. The AS-owned `MCPServerTrustLevel` value-set (the L0–L3 four-level framework at §10.3) is projected CP-side to `MCPTrustTier` by **identity-by-ordinal** at the newly-committed `Spec_Control_Plane_v1_34.md` C-CP-27 §27.8 (the per-server trust **telemetry** projection, consumed by the runtime spec v1.51 multi-server reshape for the `mcp.server.trust_tier` span attribute). **NO substantive AS change** — the per-transport sandbox floor (§10.1) + the trust-tier framework (§10.3) + the `sandbox_tier_floor` 5-arg composition (§2.2/§2.3) are all UNCHANGED; B2 consumes them per N servers. The reciprocal note records the bidirectional AS↔CP link the workspace cross-spec-drift discipline values (`[[cross-spec-enum-overlap-carrier-segregation]]`). No field-set change, no attribute-list change, no AS-AL rule added, no signature change.
+
+**Amendment site.** §10.3 — an informational reciprocal-cross-ref paragraph appended (after the existing audit-ledger sentence, before the "Deferred to implementation discretion" block) recording that §10.3's `MCPServerTrustLevel` projects identity-by-ordinal to CP `MCPTrustTier` per CP §27.8 (telemetry), and that the per-MCP-server-trust-tier *gate* axis materialization (the HITL `max()` composition) is the separate B2-spec-2 leg. The §10.3 four-level table + the per-MCP-server-trust-tier_floor `max()` reference + the "Deferred" block are PRESERVED VERBATIM.
+
+**Preserved verbatim.** All v1.9 + prior content — the §14.5/§14.6 footers, §14.3 `mcp.*` schema, §2.2/§2.3 `sandbox_tier_floor`, §10.1/§10.2, and all frozen historical change-note blocks — PRESERVED VERBATIM. v1.10 adds ONLY the §10.3 reciprocal-cross-ref paragraph (additive; no existing line edited).
+
+
 
 **Scope of revision.** Spec-prose ↔ impl hygiene pass per roadmap `R-CL-P6` (post-MVP full-closure track per `Project_Roadmap_v1.md` §5.15; `design-phase` posture; `spec-writer` discipline). Reconciles two now-stale "deferred indefinitely" dispositions to landed reality: **R-810** (Files API) and **R-820** (Managed Agents) shipped real Anthropic adapters with live managed-cloud producer-sites + Cloud Trace proof, and the substitution ledger (`.harness/substitutions.yaml`) records `H_T-AS-8e` / `H_T-AS-8f` / `H_T-CP-17` as `SUBSTANTIVE_RETIRED` at batch-52. The AS spec prose lagged (the `[[spec-prose-plan-body-drift-pattern]]` class). No field-set change, no attribute-list change, no AS-AL rule added.
 
@@ -886,6 +894,8 @@ Level 3 — allow-with-audit     (audit-ledger entry per fetch / call)
 ```
 
 The per-MCP-server-trust-tier_floor enters the gate-level `max()` composition at C-AS-12 §12.1 (the 5-axis multiplicative tunable). The MCP server trust level is operator-declared at MCP server registration; trust-level assignment is recorded in the audit ledger per C-AS-08 composition.
+
+**Reciprocal cross-ref (v1.10 — R-FS-1 B2).** This AS-owned `MCPServerTrustLevel` value-set is the canonical declaration; CP `MCPTrustTier` is a byte-exact factor-out of it. The AS→CP projection `MCPServerTrustLevel → MCPTrustTier` is committed as **identity-by-ordinal** (`L0→LEVEL_0` … `L3→LEVEL_3`) at `Spec_Control_Plane_v1_34.md` C-CP-27 §27.8 — the per-server trust **telemetry** projection (populating the runtime `mcp.server.trust_tier` span attribute per runtime spec §14.9.1, consumed per N servers by the v1.51 multi-server reshape). Transport severity is NOT re-priced in that projection — it stays owned here by the §10.1 per-transport floor (one-source-of-truth). The per-MCP-server-trust-tier **gate** axis's materialization into the HITL `max()` composition (`MCP_TRUST_GATE_LEVEL_FLOOR`; spec-silent today) is the separate **B2-spec-2** leg, not this telemetry projection — see `.harness/class_1_fork_b2_multi_server_mcp_client_reshape.md` §5.
 
 **Deferred to implementation discretion.** Specific MCP server registration mechanism (manifest declaration vs runtime discovery); specific signature verification implementation at Level 1 (PKI registry / signed-pinned certificates / etc.); specific egress allow-list authoring schema at Level 2; specific per-call audit cadence at Level 3.
 
