@@ -69,6 +69,10 @@ from harness_runtime.lifecycle.llm_dispatch import (
     RuntimeLLMDispatcher,
     materialize_llm_dispatcher_stage,
 )
+from harness_runtime.lifecycle.prompt_selection import (
+    PromptSelectionUnauthoredError,
+    PromptVersionUnapprovedError,
+)
 from harness_runtime.lifecycle.retry_breaker import (
     DEFAULT_RETRY_POLICY,
     RuntimeRetryBreaker,
@@ -1920,3 +1924,187 @@ async def test_b4_slice2_distinct_workers_distinct_models_and_prompts_e2e() -> N
     # prompts — the catalog is non-vacuous across both dimensions at once.
     assert researcher_call["model"] != writer_call["model"]
     assert researcher_call["system"] != writer_call["system"]
+
+
+# ---------------------------------------------------------------------------
+# B4 Slice 3 (CP spec v1.37 §6.1) — per-step PROMPT override at dispatch. A
+# resolved binding's `prompt_version_sha` overrides BOTH per-role and the
+# run-level default for THAT step (precedence per-step > per-role > default),
+# resolved from the stage-5 `prompt_versions_by_sha` store map; fail-loud on an
+# unauthored sha + binding-tier governance parity. Verified by the recorded
+# provider `system=` kwarg through the real `dispatch(...)` path.
+# ---------------------------------------------------------------------------
+
+_STEP_SHA = "c" * 64
+_STEP_SYS = "STEP-per-step-prompt"
+
+
+def _binding_with_prompt(
+    prompt_version_sha: str | None,
+    *,
+    persona_tier: PersonaTier = PersonaTier.SOLO_DEVELOPER,
+) -> StepEffectiveBinding:
+    return StepEffectiveBinding(
+        step_id="step-001",
+        model_binding=ModelBinding(provider="anthropic", model="test-model-1"),
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        override_applied=True,
+        persona_tier=persona_tier,
+        prompt_version_sha=prompt_version_sha,
+    )
+
+
+@pytest.mark.asyncio
+async def test_b4_slice3_per_step_prompt_beats_per_role_and_default() -> None:
+    """THE precedence e2e: ONE dispatcher carrying a default prompt, a per-role
+    prompt, AND a per-step store. A binding with `prompt_version_sha` injects the
+    per-step content over BOTH per-role (researcher) and default (writer); a
+    binding WITHOUT a per-step sha falls through to per-role / then default."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        active_system_prompt=_DEFAULT_SYS,
+        per_role_system_prompts={AgentRole("researcher"): _RESEARCHER_SYS},
+        prompt_versions_by_sha={_STEP_SHA: _STEP_SYS},
+    )
+
+    # per-step beats per-role (researcher would otherwise inject _RESEARCHER_SYS).
+    await dispatcher.dispatch(
+        _binding_with_prompt(_STEP_SHA), _step(), step_context=_step_context_with_role("researcher")
+    )
+    assert adapter.client.messages.last_kwargs is not None
+    assert adapter.client.messages.last_kwargs["system"] == _STEP_SYS
+
+    # per-step beats default (writer is unbound per-role).
+    await dispatcher.dispatch(
+        _binding_with_prompt(_STEP_SHA), _step(), step_context=_step_context_with_role("writer")
+    )
+    assert adapter.client.messages.last_kwargs["system"] == _STEP_SYS
+
+    # no per-step sha → falls through to per-role.
+    await dispatcher.dispatch(
+        _binding_with_prompt(None), _step(), step_context=_step_context_with_role("researcher")
+    )
+    assert adapter.client.messages.last_kwargs["system"] == _RESEARCHER_SYS
+
+    # no per-step sha + unbound role → falls through to default.
+    await dispatcher.dispatch(
+        _binding_with_prompt(None), _step(), step_context=_step_context_with_role("writer")
+    )
+    assert adapter.client.messages.last_kwargs["system"] == _DEFAULT_SYS
+
+
+@pytest.mark.asyncio
+async def test_b4_slice3_per_step_prompt_unauthored_sha_fails_loud() -> None:
+    """A per-step `prompt_version_sha` that is not an authored store member
+    (`prompt_versions_by_sha`) fails loud (`RT-FAIL-PROMPT-SELECTION-UNAUTHORED`),
+    mirroring the per-role bootstrap guard — never silently falls through."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        active_system_prompt=_DEFAULT_SYS,
+        prompt_versions_by_sha={_STEP_SHA: _STEP_SYS},
+    )
+    with pytest.raises(PromptSelectionUnauthoredError):
+        await dispatcher.dispatch(
+            _binding_with_prompt("d" * 64), _step(), step_context=_step_context_with_role("writer")
+        )
+
+
+@pytest.mark.asyncio
+async def test_b4_slice3_per_step_prompt_governance_parity_at_binding_tier() -> None:
+    """Binding-tier governance parity (OD C-OD-34): a per-step prompt at a binding
+    DEPLOYMENT tier (team-binding) must be operator-approved, else fail loud
+    (`RT-FAIL-PROMPT-VERSION-UNAPPROVED`) — closing the gap where a per-step
+    override could bypass the approval the per-role/default paths enforce.
+    Governance keys on the DEPLOYMENT tier (the dispatcher's `persona_tier`,
+    threaded from `config.persona_tier`), not the per-workflow binding tier."""
+    tp, _ = _tracer_provider_with_exporter()
+
+    # team-binding DEPLOYMENT + sha NOT approved → fail loud.
+    unapproved = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(_AnthropicClient())},
+        tracer_provider=tp,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        active_system_prompt=_DEFAULT_SYS,
+        prompt_versions_by_sha={_STEP_SHA: _STEP_SYS},
+        approved_prompt_version_shas=frozenset(),
+    )
+    with pytest.raises(PromptVersionUnapprovedError):
+        await unapproved.dispatch(
+            _binding_with_prompt(_STEP_SHA),
+            _step(),
+            step_context=_step_context_with_role("writer"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_b4_slice3_per_step_governance_keys_on_deployment_not_workflow_tier() -> None:
+    """Codex P1 regression: a workflow whose binding declares SOLO_DEVELOPER must
+    NOT bypass approval on a binding-tier DEPLOYMENT. Governance keys on the
+    dispatcher's deployment persona tier, never the per-workflow binding tier —
+    else a SOLO-manifest workflow downgrades the deployment's governance posture."""
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(_AnthropicClient())},
+        tracer_provider=tp,
+        persona_tier=PersonaTier.TEAM_BINDING,  # binding-tier DEPLOYMENT
+        active_system_prompt=_DEFAULT_SYS,
+        prompt_versions_by_sha={_STEP_SHA: _STEP_SYS},
+        approved_prompt_version_shas=frozenset(),  # unapproved
+    )
+    # The binding declares SOLO — but the DEPLOYMENT is team-binding, so the gate fires.
+    with pytest.raises(PromptVersionUnapprovedError):
+        await dispatcher.dispatch(
+            _binding_with_prompt(_STEP_SHA, persona_tier=PersonaTier.SOLO_DEVELOPER),
+            _step(),
+            step_context=_step_context_with_role("writer"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_b4_slice3_per_step_prompt_governance_inert_at_solo_and_when_approved() -> None:
+    """The governance gate is inert at the solo-developer DEPLOYMENT tier (no
+    approval required) and passes at a binding DEPLOYMENT once the sha is approved
+    — in both cases the per-step content injects."""
+    tp, _ = _tracer_provider_with_exporter()
+
+    # solo DEPLOYMENT tier: unapproved sha is INERT → injects.
+    solo_adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    solo = RuntimeLLMDispatcher(
+        providers={"anthropic": solo_adapter},
+        tracer_provider=tp,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+        active_system_prompt=_DEFAULT_SYS,
+        prompt_versions_by_sha={_STEP_SHA: _STEP_SYS},
+        approved_prompt_version_shas=frozenset(),
+    )
+    await solo.dispatch(
+        _binding_with_prompt(_STEP_SHA),
+        _step(),
+        step_context=_step_context_with_role("writer"),
+    )
+    assert solo_adapter.client.messages.last_kwargs is not None
+    assert solo_adapter.client.messages.last_kwargs["system"] == _STEP_SYS
+
+    # team-binding DEPLOYMENT + sha APPROVED → injects.
+    approved_adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    approved = RuntimeLLMDispatcher(
+        providers={"anthropic": approved_adapter},
+        tracer_provider=tp,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        active_system_prompt=_DEFAULT_SYS,
+        prompt_versions_by_sha={_STEP_SHA: _STEP_SYS},
+        approved_prompt_version_shas=frozenset({_STEP_SHA}),
+    )
+    await approved.dispatch(
+        _binding_with_prompt(_STEP_SHA),
+        _step(),
+        step_context=_step_context_with_role("writer"),
+    )
+    assert approved_adapter.client.messages.last_kwargs is not None
+    assert approved_adapter.client.messages.last_kwargs["system"] == _STEP_SYS

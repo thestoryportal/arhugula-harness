@@ -64,6 +64,34 @@ class StepOverride(BaseModel):
     engine_class: EngineClass | None = None
     hitl_placement: HITLPlacement | None = None
 
+    prompt_version_sha: str | None = None
+    """v1.37 addition (CP spec v1.37 §6.1 NEW field per the v1.27 §2(d)
+    X-AL-3 explicit-extension discipline; R-FS-1 arc B4 Slice 3 per-step
+    PROMPT override).
+
+    When not ``None``, a content-addressed reference into the IS
+    ``PromptManifest.versions`` store (IS spec v1.7 §5.3): the ``version_sha``
+    of the prompt version whose ``content`` is injected as the provider system
+    prompt for *this step*, overriding the per-role (B4 Slice 1) and run-level
+    default prompts. ``None`` (the default) preserves v1.6 MVP behavior verbatim
+    — the step inherits the per-role (if its branch role binds one) or
+    run-level-default prompt.
+
+    Symmetric with the per-step ``model_binding`` (a per-step selection of a
+    resource the run otherwise resolves at a coarser scope). The store-membership
+    resolution + content injection are the runtime consumer's responsibility (the
+    §14.5.2 dispatch seam, precedence per-step > per-role > default), keeping CP
+    IS-pure — ``resolve_step_binding`` passes the sha through. Per-step *role*
+    override is OUT of scope (the §14.5.3 single-role-source invariant forecloses
+    a second per-step role carrier; that is the distinct Slice-4 gate).
+
+    Per-step prompt-override provenance is the per-step override state-ledger
+    entry (CP spec v1.37 §6.6): a flip changes ``StepEffectiveBinding.model_dump``
+    → the override entry's idempotency_key → a distinct hash-chained entry. NOT
+    the run-level C-IS-05 §5.2 procedural-tier hash (which stays run-level — the
+    per-step MODEL override precedent).
+    """
+
 
 class WorkflowManifestEntry(BaseModel):
     """The workflow-manifest-entry shape — canonical per-workflow customization.

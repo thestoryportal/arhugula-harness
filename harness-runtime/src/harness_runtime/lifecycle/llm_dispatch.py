@@ -403,6 +403,28 @@ class RuntimeLLMDispatcher:
     per_role_system_prompts: Mapping[AgentRole, str] = field(
         default_factory=lambda: dict[AgentRole, str](),
     )
+    # R-FS-1 arc B4 Slice 3 (CP spec v1.37 §6.1) — per-step PROMPT override
+    # support. The IS `PromptManifest.versions` content-addressed store projected
+    # to `{version_sha: content}`, built at bootstrap stage 5 from
+    # `ctx.prompt_manifest.versions`. A per-step binding's `prompt_version_sha`
+    # (`StepEffectiveBinding`, set by CP `resolve_step_binding`) is resolved
+    # against this map at dispatch with precedence **per-step > per-role >
+    # run-level default**; fail-loud (`RT-FAIL-PROMPT-SELECTION-UNAUTHORED`) if
+    # the sha is not an authored store member. Empty (`{}`) when no store /
+    # no per-step overrides — every dispatch falls through unchanged (pre-Slice-3
+    # behavior verbatim). Keyed by content-addressed sha (not stashed per-call;
+    # the per-step value flows via the binding param, not on self).
+    prompt_versions_by_sha: Mapping[str, str] = field(
+        default_factory=lambda: dict[str, str](),
+    )
+    # Binding-tier prompt governance parity (OD spec C-OD-34): a per-step prompt
+    # activated at a binding tier (team-binding / multi-tenant) must be
+    # operator-approved, else fail-loud (`RT-FAIL-PROMPT-VERSION-UNAPPROVED`) —
+    # closing the gap where a per-step override could otherwise bypass the
+    # approval the per-role/default paths enforce at bootstrap. Threaded from
+    # `RuntimeConfig.approved_prompt_version_shas` at stage 5; the gate is inert
+    # at the solo-developer tier (no approval required) per `resolve_prompt_governance`.
+    approved_prompt_version_shas: frozenset[str] = frozenset()
     # C-CP-02 §2.5 (R-impl-1) — the injected Layer-3 router-resolution callable.
     # Production binds None: the Layer-3 surface stays inert (DECLARATIVE
     # resolves all production traffic; no router is injected until R-impl-2
@@ -428,6 +450,61 @@ class RuntimeLLMDispatcher:
     # EMBEDDING). A test reaches it via `layer_decisions_override` (binding the
     # classifier at EMBEDDING + omitting DECLARATIVE).
     embedding_classifier: LayerDecisionFn | None = None
+
+    def _resolve_per_step_system_prompt(self, prompt_version_sha: str) -> str:
+        """Resolve a per-step ``prompt_version_sha`` → injected content (B4 Slice 3).
+
+        The per-step override (CP ``StepOverride.prompt_version_sha``, applied by
+        ``resolve_step_binding``) names a content-addressed member of the IS
+        ``PromptManifest.versions`` store. This resolves it to content via the
+        stage-5 ``prompt_versions_by_sha`` map, running the SAME fail-loud guards
+        the per-role bootstrap path runs — but at this per-dispatch site (the
+        per-step binding is only known here, not at bootstrap):
+
+        * unauthored sha → :class:`PromptSelectionUnauthoredError`
+          (``RT-FAIL-PROMPT-SELECTION-UNAUTHORED``) — a selected version must be
+          an authored store member;
+        * binding-tier governance parity → :class:`PromptVersionUnapprovedError`
+          (``RT-FAIL-PROMPT-VERSION-UNAPPROVED``) — at a tier requiring approval
+          (OD C-OD-34), the version's sha must be a member of
+          ``approved_prompt_version_shas``.
+
+        Governance keys on the **deployment** persona tier (``self.persona_tier``,
+        threaded from ``config.persona_tier`` at stage 5) — NOT the per-workflow
+        ``binding.persona_tier`` — exactly as the default/per-role approval gate
+        does at bootstrap. Keying on the per-workflow tier would let a workflow
+        whose manifest declares ``SOLO_DEVELOPER`` bypass the approval a
+        binding-tier *deployment* requires (Codex P1). ``self.persona_tier`` is
+        ``None`` only in the unit-test-ergonomics path (production stage 5 always
+        binds ``config.persona_tier``); a ``None`` deployment tier is treated as
+        no-governance-context (inert), never a binding tier.
+
+        Both surface as a STEP failure here (per-dispatch — propagates to the CP
+        driver try/except), unlike the per-role path's BootstrapFailure. Reuses the
+        canonical fail-class exceptions so the audit fail-class catalog stays
+        single-sourced. Lazy imports mirror the existing ``SkillActivationMode``
+        lazy-import pattern in ``dispatch`` (keeps the module-load edge minimal).
+        """
+        from harness_od.prompt_governance_gradient import resolve_prompt_governance
+
+        from harness_runtime.lifecycle.prompt_selection import (
+            PromptSelectionUnauthoredError,
+            PromptVersionUnapprovedError,
+        )
+
+        content = self.prompt_versions_by_sha.get(prompt_version_sha)
+        if content is None:
+            raise PromptSelectionUnauthoredError(prompt_version_sha)
+        deployment_tier = self.persona_tier
+        if (
+            deployment_tier is not None
+            and resolve_prompt_governance(deployment_tier).approval_required
+            and prompt_version_sha not in self.approved_prompt_version_shas
+        ):
+            raise PromptVersionUnapprovedError(
+                persona_tier=deployment_tier, version_sha=prompt_version_sha
+            )
+        return content
 
     async def dispatch(
         self,
@@ -536,11 +613,26 @@ class RuntimeLLMDispatcher:
         # §14.5.3 suggested fall-through-to-default lookup-miss policy). Per-call
         # LOCAL (never on self): the dispatcher is shared across concurrent
         # fan-out branches, so a per-role value MUST flow as a dispatch parameter.
-        _effective_system_prompt = (
-            self.per_role_system_prompts[_role]
-            if _role in self.per_role_system_prompts
-            else self.active_system_prompt
-        )
+        # --- B4 Slice 3 (CP spec v1.37 §6.1): per-step PROMPT override ---------
+        # A per-step `prompt_version_sha` on the resolved binding (CP
+        # `resolve_step_binding` applied a `StepOverride.prompt_version_sha`)
+        # overrides BOTH the per-role and run-level-default prompts for THIS step.
+        # Precedence: per-step > per-role > run-level default. The per-step sha is
+        # resolved to content + governed HERE (the per-dispatch site) — not at
+        # bootstrap like per-role — because the per-step binding is only known at
+        # dispatch (it is a per-workflow `WorkflowManifestEntry.per_step_overrides`
+        # entry, resolved CP-driver-side, not run-level config). Fail-loud on an
+        # unauthored sha / unapproved binding-tier version surfaces as a STEP
+        # failure (propagates to the driver try/except, like
+        # RT-FAIL-PROMPT-INJECTION-CONFLICT), not a BootstrapFailure.
+        if binding.prompt_version_sha is not None:
+            _effective_system_prompt = self._resolve_per_step_system_prompt(
+                binding.prompt_version_sha
+            )
+        elif _role in self.per_role_system_prompts:
+            _effective_system_prompt = self.per_role_system_prompts[_role]
+        else:
+            _effective_system_prompt = self.active_system_prompt
 
         # --- R-300: layered routing-selection via infer() ----------------
         # The DECLARATIVE layer decision echoes the effective binding (the per-role
@@ -1621,6 +1713,8 @@ def materialize_llm_dispatcher_stage(
     persona_tier: PersonaTier | None = None,
     active_system_prompt: str | None = None,
     per_role_system_prompts: Mapping[AgentRole, str] | None = None,
+    prompt_versions_by_sha: Mapping[str, str] | None = None,
+    approved_prompt_version_shas: frozenset[str] = frozenset(),
 ) -> RuntimeLLMDispatcher:
     """Stage 5 LOOP_INIT composer factory for the LLM dispatcher (U-RT-52).
 
@@ -1659,6 +1753,8 @@ def materialize_llm_dispatcher_stage(
         persona_tier=persona_tier,
         active_system_prompt=active_system_prompt,
         per_role_system_prompts=per_role_system_prompts or {},
+        prompt_versions_by_sha=prompt_versions_by_sha or {},
+        approved_prompt_version_shas=approved_prompt_version_shas,
     )
 
 

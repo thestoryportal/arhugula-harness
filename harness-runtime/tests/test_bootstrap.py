@@ -416,6 +416,48 @@ async def test_bootstrap_threads_per_role_prompt_map_onto_llm_dispatcher(
 
 
 @pytest.mark.asyncio
+async def test_bootstrap_threads_per_step_prompt_store_onto_llm_dispatcher(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-FS-1 arc B4 Slice 3 — bootstrap reachability (the NEW this-arc wiring): the
+    IS `PromptManifest.versions` store projects to
+    `RuntimeLLMDispatcher.prompt_versions_by_sha` and
+    `config.approved_prompt_version_shas` reaches the dispatcher's
+    `approved_prompt_version_shas` through the REAL stage-5 thread. Asserting the
+    bare dispatcher's fields — not the projection in isolation — proves the per-step
+    prompt-override resolution + governance path is reachable in production (the
+    green-unit-but-unreachable mode #496/§14.5.2 acceptance guards)."""
+    from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
+
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    store = PromptManifest.from_contents(
+        manifest_version=1,
+        contents=["step-A prompt", "step-B prompt", "default inline"],
+        active="default inline",
+    )
+    approved = frozenset({prompt_version_sha("step-A prompt")})
+    populated = _config(tmp_path).model_copy(
+        update={"prompt_manifest": store, "approved_prompt_version_shas": approved},
+    )
+    ctx = await run_bootstrap(populated, workload_class=_WORKLOAD)
+
+    bare = ctx.llm_dispatcher.inner.inner  # type: ignore[attr-defined]
+    assert isinstance(bare, RuntimeLLMDispatcher)
+    # The whole versions store reached the dispatcher as {sha: content} so a per-step
+    # `prompt_version_sha` can resolve to content at dispatch (else fail-loud).
+    assert bare.prompt_versions_by_sha == {
+        prompt_version_sha("step-A prompt"): "step-A prompt",
+        prompt_version_sha("step-B prompt"): "step-B prompt",
+        prompt_version_sha("default inline"): "default inline",
+    }
+    # The operator-approved sha set reached the dispatcher (binding-tier governance).
+    assert bare.approved_prompt_version_shas == approved
+
+
+@pytest.mark.asyncio
 async def test_bootstrap_selection_no_match_falls_through_to_inline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
