@@ -53,7 +53,7 @@ rule (X-AL-3) forbids treating un-decomposed work as if it were already specifie
 ## 2. Build order + dependency model
 
 **Frozen order** (decided once, not re-litigated): **B1 → B3 → E → B2 → R → B4 → CA → B5 → B6 →
-B7 → M.** DONE: **B1 ✅ B3 ✅ E ✅ B2 ✅ R ✅ B4 ✅ CA ✅ B5 ✅** (8 of 11). NEXT: **B6**. Then B7 → M.
+B7 → M.** DONE: **B1 ✅ B3 ✅ E ✅ B2 ✅ R ✅ B4 ✅ CA ✅ B5 ✅ B7 ✅** (9 of 11; B7 landed out-of-order — independent, parallel-safe). NEXT: **M** (autonomous contract+wiring slice) + **B6 Slice 2** (operator-gated; Slice 1 ✅).
 
 **Two kinds of "dependency."** The frozen order is a chosen *sequence*; it is **not** the same as
 a hard *blocker*. Most remaining arcs' real prerequisites have already landed, so they are
@@ -247,13 +247,20 @@ grounding sweep (`.harness/r-fs-1-remaining-arcs-grounding-sweep-v1.md`), re-gro
 
 ### R-FS-1·B7 — Sampler conditional over-sampling refinement
 
-- **Status:** ⏳ queued (build position 10 of 11) · **Cluster:** independent (parallel-safe) · **Units:** anticipated · **Type:** thin impl, no fork
-- **Depends-on:** none hard (stdlib + OTel already in stack) — **unblocked**
+- **Status:** ✅ DONE (build position 10 of 11; PR #632 — OD SSOT predicate + head-sampler wiring) · **Cluster:** independent (parallel-safe) · **Units:** as-built #632 (`sampling_mode` predicate + `composite_sampler` wiring; no new plan-unit) · **Type:** thin impl, no fork (impl-to-cleared-spec §9.2/§10.1)
+- **Depends-on:** none hard (stdlib + OTel already in stack) — was **unblocked**
 - **Parallel-safe with:** everything
 - **What it gives the harness.** Refines the **telemetry sampler** so it only force-captures the
   spans that truly matter — data **mutations**, **permanent failures**, and **root** spans —
   instead of force-capturing *everything* in those categories. It's safe today (it over-captures,
   never under), so this is a precision/cost refinement, not a correctness fix.
+- **As-built (#632) + honest boundary.** Built the §9.2 attribute-conditional resolution as the OD
+  SSOT (`is_always_sampled(name, attributes)`: files/memory mutation-`kind`, `validator.fail.*`
+  permanence; conservative-absent) + wired it into `should_sample`. The head sampler governs only
+  **root** spans (ParentBased) and the live files/memory producers emit non-root spans + set
+  `*.kind` post-creation, so full non-root / production-tail enforcement is the forward arc
+  **`B-TAIL-CONDITIONAL-SAMPLING`** (tail-keep span processor; gated on R-420/R-421). `subagent.span`
+  root-ness is delivered by ParentBased (no change). No fork, no operator gate.
 
 | Anticipated slice | What it does (plain language) | Fork / impl |
 |---|---|---|
@@ -327,7 +334,7 @@ meaningful — i.e., once a second production provider is configured. Captured a
 | CA | Report total run cost, broken down | ✅ done | 7 | independent | 3 slices as-built (#625) |
 | B5 | Pick the memory backend per deployment | ✅ | 8 | independent | as-built #628 |
 | B6 | Per-tool security sandbox level + STDIO floor | ▶ next | 9 | serial | at arc-open |
-| B7 | Sample only the telemetry that matters | ⏳ | 10 | independent | at arc-open |
+| B7 | Sample only the telemetry that matters | ✅ | 10 | independent | as-built #632 |
 | M | Formal contract + wiring for managed agents | ⏳ | 11 | maybe serial | at arc-open |
 
 *Counts: as-built unit totals are grouped by arc from `git log` (B1=14, B3=8, E=9, B2=8, R=4 core
