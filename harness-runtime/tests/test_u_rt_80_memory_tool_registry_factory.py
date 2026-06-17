@@ -492,3 +492,119 @@ async def test_filesystem_backend_rooted_at_repository_subpath(tmp_path: Path) -
     expected_root = (tmp_path / MEMORY_TOOL_FILESYSTEM_ROOT_SUBPATH).resolve()
     # LocalFilesystemMemoryToolBackend keeps the resolved root at `_root`.
     assert backend._root == expected_root  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# R-FS-1 arc B5 — per-deployment-surface backend selection (built-but-vacuous
+# fix). resolve_backend no longer ignores its argument: the default-config
+# registry resolves each surface independently. Anti-vacuity proof at the
+# factory layer is constructs-vs-raises (the single global override config
+# cannot populate two distinct constructed types without collapsing the map).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_b5_default_registry_discriminates_by_surface(tmp_path: Path) -> None:
+    """ANTI-VACUITY: a default-config registry resolves FILESYSTEM for surfaces
+    that admit it and RAISES for MANAGED_CLOUD (which admits only {s3, database},
+    both needing operator params) — the argument is genuinely read."""
+    cfg = _config(repository_root=tmp_path, deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT)
+    ctx = _MutableHarnessContext()
+
+    registry = await materialize_memory_tool_registry_stage(cfg, ctx)
+
+    # FILESYSTEM-admitting surfaces resolve to a filesystem backend.
+    assert isinstance(
+        registry.resolve_backend(DeploymentSurface.LOCAL_DEVELOPMENT),
+        LocalFilesystemMemoryToolBackend,
+    )
+    assert isinstance(
+        registry.resolve_backend(DeploymentSurface.SELF_HOSTED_SERVER),
+        LocalFilesystemMemoryToolBackend,
+    )
+    # MANAGED_CLOUD admits only {s3, database} → no config-free backend → RAISE.
+    with pytest.raises(MemoryBackendResolutionError) as excinfo:
+        registry.resolve_backend(DeploymentSurface.MANAGED_CLOUD)
+    msg = str(excinfo.value)
+    assert "RT-FAIL-MEMORY-BACKEND-RESOLUTION" in msg
+    assert "managed-cloud" in msg
+    assert "s3" in msg and "database" in msg
+    assert "memory_tool_backend_config" in msg
+    assert "§14.D" in msg
+
+
+@pytest.mark.asyncio
+async def test_b5_default_shares_one_filesystem_instance_per_distinct_backend(
+    tmp_path: Path,
+) -> None:
+    """§14.12.5 invariant 1 (resolved exactly once): the two FILESYSTEM-admitting
+    surfaces share ONE constructed backend instance, not two."""
+    cfg = _config(repository_root=tmp_path, deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT)
+    ctx = _MutableHarnessContext()
+
+    registry = await materialize_memory_tool_registry_stage(cfg, ctx)
+
+    assert registry.resolve_backend(DeploymentSurface.LOCAL_DEVELOPMENT) is (
+        registry.resolve_backend(DeploymentSurface.SELF_HOSTED_SERVER)
+    )
+
+
+@pytest.mark.asyncio
+async def test_b5_active_managed_cloud_no_override_aborts_bootstrap_fail_closed(
+    tmp_path: Path,
+) -> None:
+    """PRESERVED FAIL-CLOSED LOCK: an active MANAGED_CLOUD surface with no
+    operator override aborts bootstrap (the pre-B5 behavior B5 preserves — a
+    future edit must not silently degrade it to an ephemeral local backend)."""
+    cfg = _config(repository_root=tmp_path, deployment_surface=DeploymentSurface.MANAGED_CLOUD)
+    ctx = _MutableHarnessContext()
+
+    with pytest.raises(MemoryBackendResolutionError) as excinfo:
+        await materialize_memory_tool_registry_stage(cfg, ctx)
+
+    msg = str(excinfo.value)
+    assert "RT-FAIL-MEMORY-BACKEND-RESOLUTION" in msg
+    assert "managed-cloud" in msg
+    assert "§14.D" in msg
+    assert ctx.memory_tool_registry is None  # never bound on resolution failure
+
+
+@pytest.mark.asyncio
+async def test_b5_default_self_hosted_active_resolves_filesystem(tmp_path: Path) -> None:
+    """An active SELF_HOSTED_SERVER surface (admits FILESYSTEM) resolves the
+    filesystem backend at the active surface (the production-path query)."""
+    cfg = _config(repository_root=tmp_path, deployment_surface=DeploymentSurface.SELF_HOSTED_SERVER)
+    ctx = _MutableHarnessContext()
+
+    registry = await materialize_memory_tool_registry_stage(cfg, ctx)
+
+    assert registry.configured_backend is MemoryToolStorageBackend.FILESYSTEM
+    assert isinstance(
+        registry.resolve_backend(cfg.deployment_surface),
+        LocalFilesystemMemoryToolBackend,
+    )
+
+
+@pytest.mark.asyncio
+async def test_b5_operator_override_collapses_map_to_one_backend_all_surfaces(
+    tmp_path: Path,
+) -> None:
+    """Operator override forces ONE backend for EVERY surface (§14.12.1) — the
+    map collapses; resolve_backend is surface-independent under override."""
+    cfg = _config(
+        memory_tool_backend_config=MemoryToolBackendConfig(
+            backend=MemoryToolStorageBackend.FILESYSTEM,
+        ),
+        repository_root=tmp_path,
+        deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
+    )
+    ctx = _MutableHarnessContext()
+
+    registry = await materialize_memory_tool_registry_stage(cfg, ctx)
+
+    local = registry.resolve_backend(DeploymentSurface.LOCAL_DEVELOPMENT)
+    self_hosted = registry.resolve_backend(DeploymentSurface.SELF_HOSTED_SERVER)
+    managed = registry.resolve_backend(DeploymentSurface.MANAGED_CLOUD)
+    # Same instance for every surface — the override is surface-independent.
+    assert local is self_hosted is managed
+    assert isinstance(local, LocalFilesystemMemoryToolBackend)

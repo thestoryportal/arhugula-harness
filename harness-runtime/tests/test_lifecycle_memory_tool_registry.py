@@ -17,6 +17,7 @@ import pytest
 from harness_core.deployment_surface import DeploymentSurface
 from harness_runtime.lifecycle.memory_tool_registry import MemoryToolRegistry
 from harness_runtime.lifecycle.memory_tool_types import (
+    MemoryBackendResolutionError,
     MemoryToolStorageBackend,
     MemoryToolStorageBackendProtocol,
 )
@@ -97,6 +98,75 @@ def test_configured_backend_round_trips_each_enum_value() -> None:
     for enum_value in MemoryToolStorageBackend:
         registry = MemoryToolRegistry(backend=fake, configured_backend=enum_value)
         assert registry.configured_backend == enum_value
+
+
+# ---------------------------------------------------------------------------
+# R-FS-1 arc B5 — `from_surface_map` surface-discriminating registry.
+# The pure-carrier proof that resolve_backend genuinely depends on its surface
+# argument (the anti-vacuity guard at the registry layer): a registry CAN hold
+# distinct backends per surface + replay a frozen resolution error for an
+# unconfigured surface. (The factory layer's config model can't populate two
+# distinct *constructed* types without an override that collapses the map, so
+# its anti-vacuity proof is constructs-vs-raises — see the factory tests.)
+# ---------------------------------------------------------------------------
+
+
+def test_from_surface_map_discriminates_backend_by_surface() -> None:
+    """resolve_backend returns the per-surface backend — NOT one frozen backend
+    for every surface (the pre-B5 vacuous collapse)."""
+    fake_local = _FakeBackend()
+    fake_self_hosted = _FakeBackend()
+    assert fake_local is not fake_self_hosted
+
+    registry = MemoryToolRegistry.from_surface_map(
+        backends={
+            DeploymentSurface.LOCAL_DEVELOPMENT: fake_local,
+            DeploymentSurface.SELF_HOSTED_SERVER: fake_self_hosted,
+        },
+        resolution_errors={},
+        configured_backend=MemoryToolStorageBackend.FILESYSTEM,
+    )
+
+    assert registry.resolve_backend(DeploymentSurface.LOCAL_DEVELOPMENT) is fake_local
+    assert registry.resolve_backend(DeploymentSurface.SELF_HOSTED_SERVER) is fake_self_hosted
+    # The argument is read: two surfaces → two distinct backend instances.
+    assert registry.resolve_backend(DeploymentSurface.LOCAL_DEVELOPMENT) is not (
+        registry.resolve_backend(DeploymentSurface.SELF_HOSTED_SERVER)
+    )
+    assert registry.configured_backend is MemoryToolStorageBackend.FILESYSTEM
+
+
+def test_from_surface_map_replays_frozen_resolution_error() -> None:
+    """A surface mapped to a resolution error replays it verbatim (raised only
+    when that surface is queried; the outcome was decided at bootstrap)."""
+    fake = _FakeBackend()
+    frozen_error = (
+        "RT-FAIL-MEMORY-BACKEND-RESOLUTION: deployment surface 'managed-cloud' needs config"
+    )
+
+    registry = MemoryToolRegistry.from_surface_map(
+        backends={DeploymentSurface.LOCAL_DEVELOPMENT: fake},
+        resolution_errors={DeploymentSurface.MANAGED_CLOUD: frozen_error},
+        configured_backend=MemoryToolStorageBackend.FILESYSTEM,
+    )
+
+    assert registry.resolve_backend(DeploymentSurface.LOCAL_DEVELOPMENT) is fake
+    with pytest.raises(MemoryBackendResolutionError) as excinfo:
+        registry.resolve_backend(DeploymentSurface.MANAGED_CLOUD)
+    assert str(excinfo.value) == frozen_error
+
+
+def test_from_surface_map_unmapped_surface_raises() -> None:
+    """A surface neither resolved nor errored at bootstrap raises a fail-closed
+    RT-FAIL (defensive — the factory always covers all 3 surfaces)."""
+    fake = _FakeBackend()
+    registry = MemoryToolRegistry.from_surface_map(
+        backends={DeploymentSurface.LOCAL_DEVELOPMENT: fake},
+        resolution_errors={},
+        configured_backend=MemoryToolStorageBackend.FILESYSTEM,
+    )
+    with pytest.raises(MemoryBackendResolutionError, match="not resolved at bootstrap"):
+        registry.resolve_backend(DeploymentSurface.MANAGED_CLOUD)
 
 
 # AC #3 — module importable (verified via test-file imports + this assertion).
