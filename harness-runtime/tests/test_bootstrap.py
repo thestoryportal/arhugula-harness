@@ -26,6 +26,7 @@ import pytest
 from harness_core.deployment_surface import DeploymentSurface
 from harness_core.persona_tier import PersonaTier
 from harness_core.workload_class import WorkloadClass
+from harness_cp.cp_shared_types import AgentRole
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
     ProviderCandidate,
@@ -354,6 +355,63 @@ async def test_bootstrap_workload_selection_drives_active_prompt_and_hash(
         workload_class=_WORKLOAD,
     )
     assert ctx_inline.prompt_manifest.active_prompt_version.content == "default inline"
+    assert resolve_procedural_tier_snapshot(ctx) != resolve_procedural_tier_snapshot(ctx_inline)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_threads_per_role_prompt_map_onto_llm_dispatcher(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-FS-1 arc B4 — bootstrap reachability (the NEW this-arc wiring): an
+    operator-supplied `per_role_bindings` prompt-selection manifest resolves,
+    through the REAL stage-0 → stage-5 thread, onto the bare
+    `RuntimeLLMDispatcher.per_role_system_prompts`. Asserting the bare
+    dispatcher's field — not just the builder in isolation — proves the
+    stage-0 `resolve_per_role_system_prompts` call + the stage-5 factory
+    pass-through are wired (the green-unit-but-unreachable mode this guards)."""
+    from harness_runtime.lifecycle.llm_dispatch import RuntimeLLMDispatcher
+
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+
+    store = PromptManifest.from_contents(
+        manifest_version=1,
+        contents=["researcher prompt", "default inline"],
+        active="default inline",
+    )
+    # Per-role binding ONLY (no workload override, no default-role binding) →
+    # the default-role active prompt is untouched; only the per-role map populates.
+    selection = PromptSelectionManifest(
+        manifest_version=1,
+        per_role_bindings={
+            AgentRole("researcher"): PromptBinding(
+                version_sha=prompt_version_sha("researcher prompt")
+            ),
+        },
+    )
+    populated = _config(tmp_path).model_copy(
+        update={"prompt_manifest": store, "prompt_selection_manifest": selection},
+    )
+    ctx = await run_bootstrap(populated, workload_class=_WORKLOAD)
+
+    bare = ctx.llm_dispatcher.inner.inner  # type: ignore[attr-defined]
+    assert isinstance(bare, RuntimeLLMDispatcher)
+    # The per-role map reached the dispatcher through the real bootstrap thread.
+    assert bare.per_role_system_prompts == {AgentRole("researcher"): "researcher prompt"}
+    # Default-role active prompt untouched by a per-role-only selection.
+    assert bare.active_system_prompt == "default inline"
+
+    # The §5.2 procedural-tier hash is sensitive to the per-role selection manifest
+    # (it reads config.prompt_selection_manifest) — a per-role-only binding, which
+    # does NOT move active_prompt_version, still changes the snapshot vs no-selection.
+    ctx_inline = await run_bootstrap(
+        _config(tmp_path).model_copy(update={"prompt_manifest": store}),
+        workload_class=_WORKLOAD,
+    )
+    bare_inline = ctx_inline.llm_dispatcher.inner.inner  # type: ignore[attr-defined]
+    assert bare_inline.per_role_system_prompts == {}
+    assert bare_inline.active_system_prompt == "default inline"
     assert resolve_procedural_tier_snapshot(ctx) != resolve_procedural_tier_snapshot(ctx_inline)
 
 

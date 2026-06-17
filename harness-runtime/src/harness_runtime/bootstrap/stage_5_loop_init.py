@@ -264,6 +264,11 @@ async def execute(
             # bootstrap seam: the dispatcher injects the active prompt as a system
             # prompt at translate-time per runtime spec v1.44 §14.5.
             active_system_prompt=ctx.prompt_manifest.active_prompt_version.content or None,
+            # R-FS-1 arc B4 (§14.5.3) — the per-role PROMPT injection map resolved
+            # at stage 0 (fail-loud there). The dispatcher indexes it per-branch on
+            # `step_context.agent_role`; an unbound role falls through to
+            # `active_system_prompt`. Empty (no per-role bindings) → byte-identical.
+            per_role_system_prompts=ctx.per_role_system_prompts,
         )
 
     # U-RT-58 (C-RT-16 §14.6 D6): rebind ``ctx.llm_dispatcher`` from the

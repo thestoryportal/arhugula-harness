@@ -24,6 +24,7 @@ from harness_runtime.config.provider_secrets import make_provider_secret_resolve
 from harness_runtime.lifecycle.prompt_selection import (
     enforce_prompt_version_approval,
     reconcile_active_prompt_via_selection,
+    resolve_per_role_system_prompts,
 )
 from harness_runtime.types import RuntimeConfig
 
@@ -82,4 +83,21 @@ async def execute(
         selection_manifest=config.prompt_selection_manifest,
         approved_prompt_version_shas=config.approved_prompt_version_shas,
         workload_class=workload_class,
+    )
+    # R-FS-1 arc B4 — per-role PROMPT threading (runtime spec §14.5.3). Pre-resolve
+    # each per-role-bound AgentRole's system-prompt content into
+    # `ctx.per_role_system_prompts` — HERE at stage 0 so the same fail-loud
+    # store-membership + binding-tier governance checks the default-role path runs
+    # apply per role (BootstrapFailure before the dispatcher is constructed). The
+    # stage-5 LLM-dispatcher factory binds the map; the dispatcher indexes it
+    # per-branch at dispatch. Empty / no per-role bindings → `{}` → byte-identical
+    # to pre-B4 dispatch. (The selection manifest's own hash visibility for the
+    # procedural-tier snapshot is handled in the resolver, which reads
+    # `config.prompt_selection_manifest` directly — IS spec §5.2 v1.9.)
+    ctx.per_role_system_prompts = resolve_per_role_system_prompts(
+        ctx.prompt_manifest,
+        config.prompt_selection_manifest,
+        workload_class=workload_class,
+        persona_tier=config.persona_tier,
+        approved_prompt_version_shas=config.approved_prompt_version_shas,
     )

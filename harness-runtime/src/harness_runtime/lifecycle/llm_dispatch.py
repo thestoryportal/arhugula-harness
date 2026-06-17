@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol, cast, runtime_checkable
 
 from harness_core import PersonaTier, WorkloadClass
@@ -391,6 +391,18 @@ class RuntimeLLMDispatcher:
     # translate fns (`system=` kwarg for anthropic; leading `role:"system"`
     # message for openai/ollama); `ProviderAgnosticPayload` stays frozen.
     active_system_prompt: str | None = None
+    # R-FS-1 arc B4 (§14.5.3) — per-role PROMPT map: branch `AgentRole` → its
+    # resolved system-prompt content, pre-resolved at bootstrap stage 0 (where the
+    # fail-loud store-membership + binding-tier governance checks fire — before
+    # this dispatcher is constructed) and bound here. The DEFAULT role is
+    # deliberately EXCLUDED (it IS `active_system_prompt`), so an empty/no-per-role
+    # catalog leaves this `{}` and every dispatch falls through to
+    # `active_system_prompt` (byte-identical to pre-B4). Indexed per-call at
+    # `dispatch()` via the branch role (NOT stashed on self — the dispatcher is
+    # shared across concurrent fan-out branches).
+    per_role_system_prompts: Mapping[AgentRole, str] = field(
+        default_factory=lambda: dict[AgentRole, str](),
+    )
     # C-CP-02 §2.5 (R-impl-1) — the injected Layer-3 router-resolution callable.
     # Production binds None: the Layer-3 surface stays inert (DECLARATIVE
     # resolves all production traffic; no router is injected until R-impl-2
@@ -514,6 +526,22 @@ class RuntimeLLMDispatcher:
         _role = step_context.agent_role or _MVP_DEFAULT_AGENT_ROLE
         _effective_model_binding = binding.model_binding
 
+        # --- B4 (C-RT-15 §14.5.3): per-role PROMPT dispatch-read --------------
+        # Index the branch role into the pre-resolved per-role system-prompt map
+        # (built at bootstrap stage 0). EXPLICIT membership check (not `or`): a
+        # bound role uses its resolved content even when "" (→ no injection per
+        # §14.5.2), keeping "bound-but-empty" distinct from "unbound". An unbound
+        # role — including the default/linear path, never in the map — falls
+        # through to the stage-0 default-role `active_system_prompt` (the
+        # §14.5.3 suggested fall-through-to-default lookup-miss policy). Per-call
+        # LOCAL (never on self): the dispatcher is shared across concurrent
+        # fan-out branches, so a per-role value MUST flow as a dispatch parameter.
+        _effective_system_prompt = (
+            self.per_role_system_prompts[_role]
+            if _role in self.per_role_system_prompts
+            else self.active_system_prompt
+        )
+
         # --- R-300: layered routing-selection via infer() ----------------
         # The DECLARATIVE layer decision echoes the effective binding (the per-role
         # model binding, U-RT-114, else the CP-resolved manifest role binding with
@@ -567,6 +595,7 @@ class RuntimeLLMDispatcher:
                 step_id=str(step.step_id),
                 routing_trace=routing_trace,
                 binding_rationale=binding_rationale,
+                effective_system_prompt=_effective_system_prompt,
             )
             raw_response["value"] = response
             # ProviderDispatchResult is structurally required by `infer()` but
@@ -622,6 +651,7 @@ class RuntimeLLMDispatcher:
         step_id: str,
         routing_trace: RoutingDecisionTrace,
         binding_rationale: str | None = None,
+        effective_system_prompt: str | None = None,
     ) -> Mapping[str, Any]:
         """Provider-SDK dispatch boundary — the injected dispatch callable for
         `infer()` (R-300). Opens the `llm.inference` span (gen_ai.* + routing.*
@@ -631,6 +661,12 @@ class RuntimeLLMDispatcher:
         ``provider_name`` + ``model`` are the routing-selected candidate (per
         `route()` per U-CP-05); ``routing_trace`` carries the routing decision
         for `routing.*` span attribution per C-CP-01 §1.4.
+
+        ``effective_system_prompt`` is the per-call system prompt the §14.5.2
+        translate seam injects — the per-role prompt for a role-bound fan-out
+        branch (B4 §14.5.3), else `self.active_system_prompt` (the stage-0
+        default-role prompt). Passed as a parameter (not read from `self`)
+        because the dispatcher is shared across concurrent branches.
 
         Raises
         ------
@@ -750,7 +786,7 @@ class RuntimeLLMDispatcher:
                         registry=self.memory_tool_registry,
                         deployment_surface=self.deployment_surface,
                         tracer=tracer,
-                        system=self.active_system_prompt,
+                        system=effective_system_prompt,
                     )
                 elif (
                     self.hitl_tool_loop is not None
@@ -770,7 +806,7 @@ class RuntimeLLMDispatcher:
                         step_context=step_context,
                         step_id=step_id,
                         persona_tier=self.persona_tier or PersonaTier.SOLO_DEVELOPER,
-                        system=self.active_system_prompt,
+                        system=effective_system_prompt,
                     )
                 else:
                     (
@@ -779,17 +815,17 @@ class RuntimeLLMDispatcher:
                         cache_attrs,
                         request_attrs,
                     ) = await _dispatch_anthropic(
-                        adapter, model, payload, system=self.active_system_prompt
+                        adapter, model, payload, system=effective_system_prompt
                     )
             elif provider_name == "openai":
                 response, usage_attrs = await _dispatch_openai(
-                    adapter, model, payload, system=self.active_system_prompt
+                    adapter, model, payload, system=effective_system_prompt
                 )
                 cache_attrs = None
                 request_attrs = None
             else:  # provider_name == "ollama" (only remaining branch)
                 response, usage_attrs = await _dispatch_ollama(
-                    adapter, model, payload, system=self.active_system_prompt
+                    adapter, model, payload, system=effective_system_prompt
                 )
                 cache_attrs = None
                 request_attrs = None
@@ -1584,6 +1620,7 @@ def materialize_llm_dispatcher_stage(
     workload_class: WorkloadClass | None = None,
     persona_tier: PersonaTier | None = None,
     active_system_prompt: str | None = None,
+    per_role_system_prompts: Mapping[AgentRole, str] | None = None,
 ) -> RuntimeLLMDispatcher:
     """Stage 5 LOOP_INIT composer factory for the LLM dispatcher (U-RT-52).
 
@@ -1621,6 +1658,7 @@ def materialize_llm_dispatcher_stage(
         workload_class=workload_class,
         persona_tier=persona_tier,
         active_system_prompt=active_system_prompt,
+        per_role_system_prompts=per_role_system_prompts or {},
     )
 
 

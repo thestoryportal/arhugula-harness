@@ -27,6 +27,7 @@ from typing import Any
 
 from harness_as.tool_contract import ToolContract
 from harness_core import ClientName, SkillID
+from harness_cp.cp_shared_types import AgentRole
 from harness_cp.cross_family_fallback_chain import FallbackChain
 from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_is.path_resolver import PathResolver
@@ -238,6 +239,16 @@ class _MutableHarnessContext:
             manifest_version=1,
             active_prompt_version=PromptVersion(version_sha=""),
         ),
+    )
+    # R-FS-1 arc B4 (per-role prompt threading). The per-role injection map
+    # resolved at stage 0 (fail-loud there) and passed to the stage-5
+    # LLM-dispatcher factory; transient builder-only (the dispatcher holds the
+    # bound copy), so NOT a frozen `HarnessContext` field. (The selection
+    # manifest itself is read from `config.prompt_selection_manifest` — its
+    # spec'd home — by both the stage-0 builder and the procedural-tier resolver,
+    # so it needs no dedicated ctx carrier / C-RT-04 row.)
+    per_role_system_prompts: dict[AgentRole, str] = field(
+        default_factory=lambda: dict[AgentRole, str](),
     )
 
     # Stage 4 OD.
