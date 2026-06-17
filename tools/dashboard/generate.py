@@ -164,6 +164,16 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
     rf = dashboard.get("remaining_forward", {})
     remaining = rf.get("child_arcs", [])
     standalone = rf.get("standalone", [])
+    done = rf.get("done", [])
+    # R-FS-1 full-spec build progress = completed arcs / (completed + remaining child arcs).
+    # This is the real "is the build progressing?" headline — NOT the substitution metric.
+    rfs1 = {
+        "done": done,
+        "done_count": len(done),
+        "remaining_count": len(remaining),
+        "total": len(done) + len(remaining),
+        "standalone_count": len(standalone),
+    }
     # waffle-grid breakdown (ui-ux-pro-max chart rec: fraction-of-whole filled).
     # `retired` + the non-retired split by state → total 54 (derived above; R-600).
     return {
@@ -190,6 +200,7 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
         },
         "remaining": remaining,
         "standalone": standalone,
+        "rfs1": rfs1,
     }
 
 
@@ -415,7 +426,14 @@ def parse_remaining_forward(md: str) -> dict:
             re.MULTILINE,
         )
     ]
-    return {"child_arcs": child_arcs, "standalone": standalone}
+    # completed child arcs from the "DONE: B1✅ B3✅ ..." marker line — drives the
+    # R-FS-1 build-progress headline (done / total arcs), replacing the misleading
+    # "build closure 100%" substitution ticker.
+    done: list[str] = []
+    for tag in re.findall(r"([A-Z0-9]+)✅", section):
+        if tag not in done:
+            done.append(tag)
+    return {"child_arcs": child_arcs, "standalone": standalone, "done": done}
 
 
 def assert_remaining_nonempty(actions: list[dict], dashboard: dict) -> None:
@@ -860,6 +878,13 @@ HTML_TEMPLATE = """<!doctype html>
     text-align:right;max-width:560px;}}
   .readout .lab{{color:var(--bone-faint);}}
   .readout .v{{color:var(--amber);}}
+  .arcstrip{{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px;align-items:center;}}
+  .arc{{font-family:var(--mono);font-size:12px;padding:3px 9px;border-radius:3px;
+    border:1px solid var(--bone-faint);color:var(--bone-faint);white-space:nowrap;}}
+  .arc.done{{background:#221d16;border-color:#3a342a;color:#7d745f;}}
+  .arc.next{{background:var(--amber);border-color:var(--amber-glow);color:#15120d;font-weight:700;}}
+  .arc.todo{{color:var(--bone-soft);border-color:var(--bone-faint);}}
+  .arcsep{{color:var(--bone-faint);}}
   .top .ticks{{display:flex;gap:0;margin-top:16px;border-top:1px solid var(--hair-soft);
     border-bottom:1px solid var(--hair-soft);}}
   .tick{{flex:1;padding:9px 0;font-family:var(--mono);font-size:13.5px;letter-spacing:1.5px;
@@ -1068,8 +1093,8 @@ HTML_TEMPLATE = """<!doctype html>
       </div>
     </div>
     <div class="ticks">
-      <div class="tick sig">build closure <b id="tk-build"></b></div>
-      <div class="tick">retired <b id="tk-retired"></b></div>
+      <div class="tick sig">R-FS-1 build <b id="tk-build"></b></div>
+      <div class="tick">substitutions <b id="tk-retired"></b></div>
       <div class="tick ember">unretired <b id="tk-unret"></b></div>
       <div class="tick">activation <b id="tk-activation"></b></div>
       <div class="tick">drift events <b id="tk-drift"></b></div>
@@ -1080,7 +1105,7 @@ HTML_TEMPLATE = """<!doctype html>
 <div class="wrap">
   <main>
     <section id="closure-card">
-      <div class="shead"><span class="num">01</span><span class="htxt">Development closure</span><span class="rule"></span></div>
+      <div class="shead"><span class="num">01</span><span class="htxt">Build progress</span><span class="rule"></span></div>
       <div id="closure"></div>
     </section>
 
@@ -1174,8 +1199,9 @@ const d = DATA.dashboard || {{}};
   set("ro-hash", esc(live.hash || d.hash));
   set("ro-when", esc(d.last_refreshed));
   set("ro-forks", esc(live.fork_count || d.fork_count));
-  set("tk-build", `${{b.pct_lo}}%`);
-  set("tk-retired", `${{w.retired||0}} / ${{w.total||b.total||0}}`);
+  const rf1 = cl.rfs1 || {{}};
+  set("tk-build", `${{rf1.done_count||0}} / ${{rf1.total||0}} arcs`);
+  set("tk-retired", `${{w.retired||0}} / ${{w.total||b.total||0}} retired`);
   set("tk-unret", `${{(b.nonretired||[]).length}} rows`);
   set("tk-activation", `${{ac.exercised_pct||0}}% exercised`);
   set("tk-drift", `${{d.drift_log_count ?? 0}}`);
@@ -1187,6 +1213,7 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
 // ---- closure hero ----
 (function() {{
   const cl = DATA.closure || {{}}, b = cl.build || {{}}, ac = cl.activation || {{}}, w = b.waffle || {{}};
+  const rf1 = cl.rfs1 || {{}};
   const stateClass = {{ "PARTIAL":"partial", "STILL-BOUNDED":"bounded", "STILL-BOUNDED-INDEFINITELY":"indef" }};
   const pad2 = (n) => String(n).padStart(2, "0");
   const nonretiredCount = (b.nonretired||[]).length;
@@ -1226,6 +1253,16 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
     </div></div>`).join("");
 
   document.getElementById("closure").innerHTML = `
+    <div class="panel lit" style="margin-bottom:20px">
+      <div class="k">R-FS-1 full-spec build — the live frontier</div>
+      <div class="big">${{rf1.done_count||0}}<span class="u"> / ${{rf1.total||0}} arcs done · +${{rf1.standalone_count||0}} standalone</span></div>
+      <div class="sub"><strong>${{rf1.remaining_count||0}}</strong> child arcs remain in the frozen build order; <strong>${{rf1.standalone_count||0}}</strong> standalone design-fork-first arcs remain (see "Remaining to complete" below). The substitution-retirement closure below is a <em>separate, historical Phase-8 metric</em> — not full-spec completion.</div>
+      <div class="arcstrip">
+        ${{(rf1.done||[]).map(t=>`<span class="arc done">${{esc(t)}} ✓</span>`).join("")}}
+        <span class="arcsep">→</span>
+        ${{(cl.remaining||[]).map((r,i)=>{{ const tag=(r.id.split("·")[1]||r.id); return `<span class="arc ${{i===0?'next':'todo'}}">${{esc(tag)}}${{i===0?' • next':''}}</span>`; }}).join("")}}
+      </div>
+    </div>
     <div class="gridHero">
       <div class="panel lit meter">
         <div class="k">Substitution-retirement closure</div>
@@ -1248,7 +1285,7 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
         ${{nonret}}
       </div>
       <div class="panel">
-        <div class="label" style="margin-bottom:14px">Remaining to complete / ordered by logical flow</div>
+        <div class="label" style="margin-bottom:14px">R-FS-1 build arcs remaining (frozen order) — ${{(cl.remaining||[]).map(r=>esc(r.id.split("·")[1]||r.id)).join(" → ")}}</div>
         ${{rem}}
       </div>
     </div>
@@ -1317,11 +1354,12 @@ function renderGroupedBoard(targetId, groups, visibleStatuses, names) {{
   document.getElementById(targetId).innerHTML = html || '<div class="filter-empty">no items match the selected statuses</div>';
 }}
 
-// status board grouped by surface
+// status board grouped by surface (roadmap §9 taxonomy — legend so the roman numerals aren't opaque)
+const SURFACE_NAMES = {{ "I-fullspec":"R-FS-1 full-spec build", I:"Phase-7 axis-clean (I)", II:"MVP-operator (II)", III:"CI substrate (III)", IV:"Multi-LLM (IV)", V:"Multi-deployment (V)", VI:"Multi-tenant (VI)", VII:"Process discipline (VII)", VIII:"Phase-8 retirement (VIII)", IX:"External integrations (IX)", X:"Research (X)", XI:"Operator tooling (XI)" }};
 const bySurface = {{}};
 for (const a of (DATA.actions||[])) {{ (bySurface[a.surface || "?"] ||= []).push(a); }}
 const statusFilter = initStatusFilter("status-board-filters", statusLabelsFor(bySurface));
-function renderStatusBoard() {{ renderGroupedBoard("status-board", bySurface, statusFilter.visible); }}
+function renderStatusBoard() {{ renderGroupedBoard("status-board", bySurface, statusFilter.visible, SURFACE_NAMES); }}
 statusFilter.rerender(renderStatusBoard);
 renderStatusBoard();
 
@@ -1329,7 +1367,7 @@ renderStatusBoard();
 const pp8 = DATA.post_phase_8 || {{}}, pp8g = pp8.groups || {{}};
 const PP8_NAMES = {{ IV:"Multi-LLM (IV)", V:"Multi-deployment (V)", VI:"Multi-tenant (VI)", IX:"External integrations (IX)", X:"Research (X)", CXA:"Cross-axis seams" }};
 document.getElementById("pp8-summary").innerHTML =
-  `<strong>${{pp8.count||0}} forward items</strong> across ${{Object.keys(pp8g).length}} groups, full detail at <code>${{esc(pp8.register||"")}}</code>. Phase 8 closed the substitution accounting; these are the activation / deployment / integration axis, tracked under the same R-NNN discipline.`;
+  `<strong>${{pp8.open||0}} open</strong> of ${{pp8.count||0}} cumulative (${{pp8.resolved||0}} resolved). This is the <em>deployment / integration / CXA</em> axis — <strong>separate from the R-FS-1 full-spec build</strong> above; the leading number is a cumulative total (resolved + open), not all-remaining. Open now: ${{(pp8.open_items||[]).map(x=>esc(x.id)+" ("+esc((x.status||"").toLowerCase())+")").join(", ")||"none"}}. Resolved items are hidden by default — toggle the status filter below to see all. Full detail: <code>${{esc(pp8.register||"")}}</code>.`;
 const pp8Filter = initStatusFilter("pp8-board-filters", statusLabelsFor(pp8g));
 function renderPp8Board() {{ renderGroupedBoard("pp8-board", pp8g, pp8Filter.visible, PP8_NAMES); }}
 pp8Filter.rerender(renderPp8Board);
@@ -1520,9 +1558,13 @@ def post_phase_8(actions: list[dict]) -> dict:
     for a in items:
         label = "CXA" if a["id"].startswith("R-CXA") else (a.get("surface") or "?")
         groups.setdefault(label, []).append(a)
+    open_items = [a for a in items if a["status"] not in ("RESOLVED", "CANCELLED")]
     return {
         "register": ".harness/post-phase-8-forward-register.md",
         "count": len(items),
+        "open": len(open_items),
+        "resolved": len(items) - len(open_items),
+        "open_items": [{"id": a["id"], "status": a["status"]} for a in open_items],
         "groups": groups,
     }
 
