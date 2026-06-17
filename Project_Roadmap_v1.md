@@ -2402,7 +2402,7 @@ R-CL-P0:
 R-CL-P1:
   title: Phase P1 — routing intelligence (EMBEDDING + LLM_AS_ROUTER layers + capability-shortfall fallback)
   surface: IV
-  status: DEFERRED     # PARTIAL is not in STATUS_ORDER (would mis-bucket). #479 capability-shortfall LANDED (the substantive routing-intelligence advance); EMBEDDING + LLM_AS_ROUTER remainder deferred-bounded-residual (see notes + re-open triggers)
+  status: RESOLVED     # 2026-06-16 — superseded by R-FS-1 (FULL-SPEC directive re-opened the bounded-residual; the re-open trigger fired): capability-shortfall fallback LANDED #479; LLM_AS_ROUTER L3 BUILT at arc R (#602 mock / #604 real Ollama); EMBEDDING L2 BUILT at arc R (#606, Option B fastembed). Production-activation residual = the UNOWNED routing-activation gate, tracked forward at roadmap_status.md "## Remaining forward work" + B-L2-EMBEDDING-ACTIVATION.
   depends_on: [R-CL-P0]
   blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
   posture: phase-7
@@ -2414,6 +2414,7 @@ R-CL-P1:
   close_shape: { type: PR-merge, artifact: "routing-intelligence PR(s)", cascade: [R-IF-roadmap-refresh] }
   next_pointer: R-CL-P2
   notes: |
+    RESOLVED 2026-06-16 — superseded by R-FS-1 arc R (see status). Deferral history retained below as record.
     PARTIAL (#479). Council SKIPPED — grounding falsified the ⚖️ flag (policy spec-pinned at C-CP-02 §2.1/§2.2 + C-CP-03 §3.2/§3.3; operator chose build-direct).
     LANDED: C-CP-03 §3.3 capability-shortfall fallback (pre-dispatch check in RetryBreakerFallbackDispatcher; the capability-preservation axis) + Codex-caught reflect_provider_capabilities real-model-ID fix (P1) + exhaustion-cause telemetry (P2).
     DEFERRED (X-AL-3-documented, re-open triggers at .harness/r-cl-p1-routing-intelligence-plan.md): EMBEDDING (no trained corpus/embedding model; §2.2 fall-through correct until a corpus exists) + LLM_AS_ROUTER (faithful async router-call would widen cleared sync U-CP-03/U-CP-05 — not silently absorbable).
@@ -2422,7 +2423,7 @@ R-CL-P1:
 R-CL-P2:
   title: Phase P2 — engine-recovery activation + external-engine seam (sandbox C-1 unbundled → R-410-family)
   surface: V
-  status: DEFERRED     # entry-grounding (.harness/r-cl-p2-engine-recovery-grounding.md) found the buildable Phase-7 slice empty: engine-recovery driver = ratified batch-55 bounded-residual (register line 181, "do not fake"); SAVE_POINT speculative (zero consumers); HITL OQ-5/7 hollow, OQ-6 thin-latent. Mis-bundled sandbox C-1 unbundled (design-adjacent, file-don't-build). Not a build candidate; re-open per the batch-55 DP-2 trigger.
+  status: RESOLVED     # 2026-06-16 — superseded by R-FS-1 (FULL-SPEC directive re-opened the bounded-residual; DP-2 trigger fired): engine-recovery / durable engine classes BUILT at arc E (#562–#576, incl. RECONCILER_LOOP engine-layer go-live #576); tier→driver sandbox execution BUILT via R-410-family + #503. Residuals tracked forward at roadmap_status.md "## Remaining forward work" (B6 per-tool sandbox / B-TOOL-GATE / B-EFFECT-FENCE / B-ENGINE-OUTPUT-REPLAY).
   depends_on: [R-CL-P0]
   blocks: [R-CL-Q1, R-CL-Q2, R-CL-Q3]
   posture: phase-7
@@ -2434,6 +2435,7 @@ R-CL-P2:
   close_shape: { type: re-open-on-DP-2-trigger, artifact: "n/a (DEFERRED)", cascade: [R-IF-roadmap-refresh] }
   next_pointer: R-CL-P3
   notes: |
+    RESOLVED 2026-06-16 — superseded by R-FS-1 arc E (see status). Deferral history retained below as record.
     DEFERRED at entry-grounding 2026-06-10 (`.harness/r-cl-p2-engine-recovery-grounding.md`; advisor-confirmed). The buildable, non-hollow Phase-7 slice is empty:
     - Engine-recovery DRIVER: producer-discovery-empty by RATIFIED disposition — forward-register line 181 (CXA-2 = RETIRED-AS-BOUNDED-RESIDUAL, batch-55): "do not wire workflow_driver.py as a fake engine recovery loop; re-open only when a real event-sourced-replay / reconciler-loop / WAL-segment / engine-native-pause loop lands." Engine-layer loop has NO production caller (only tests); the engines that would emit engine-layer pauses are I-6 no-vendor. Building = fake-producer anti-pattern + X-AL-3. Do NOT bind #475 Journal substrate into the factory (cosmetic — nothing calls ctx.engine_recovery_loop; would force PathClass enum extension = IS-AL-1 violation, for zero production benefit).
     - SAVE_POINT reference adapter: speculative (its only consumer is the dormant recovery loop → zero consumers); live-proof deployment-gated per D-2.
