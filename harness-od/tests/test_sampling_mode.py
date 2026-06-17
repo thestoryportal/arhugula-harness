@@ -6,13 +6,17 @@ Test set per the U-OD-11 §3.4.1 (v2.5) `Tests:` field — covers acceptance
 
 from __future__ import annotations
 
+import pytest
 from harness_core import DeploymentSurface, PersonaTier
 from harness_od.observability_matrix import ACTIVE_CELLS, CellID
 from harness_od.sampling_mode import (
     ALWAYS_SAMPLED_EVENT_CLASSES,
+    FILES_OPERATION_KIND_ATTR,
+    MEMORY_OPERATION_KIND_ATTR,
     PER_DEPLOYMENT_SURFACE_SAMPLING,
     SamplingDecision,
     SamplingMode,
+    is_always_sampled,
     sampling_decision,
 )
 
@@ -157,3 +161,68 @@ def test_audit_glob_in_always_sampled_set() -> None:
 def test_breaker_tripped_in_always_sampled_set() -> None:
     """`breaker.tripped` is in the always-sampled set per §9.2."""
     assert "breaker.tripped" in ALWAYS_SAMPLED_EVENT_CLASSES
+
+
+# --- B7 §9.2 conditional-by-attribute rows (over-sampling refinement) -------
+#
+# `is_always_sampled(name, attributes)` honors the §9.2 conditional qualifiers:
+# files.operation/memory.operation always-sample only at mutation `kind`;
+# validator.fail.* only at `permanence=permanent`. The non-mutation / transient
+# complements fall to the §10.1 base-rate regime (return False here).
+
+_VALIDATOR_FAIL_NAME = "validator.fail.semantic_inconsistency"
+# §9.2/§10.2 attribute name + value, pinned literally to the spec contract.
+_PERMANENCE_ATTR = "validator.fail.permanence"
+
+
+@pytest.mark.parametrize(
+    ("name", "attrs", "expected"),
+    [
+        # files.operation — §9.2 mutation always-sample; §10.1 complement base-rate.
+        ("files.operation", {FILES_OPERATION_KIND_ATTR: "upload"}, True),
+        ("files.operation", {FILES_OPERATION_KIND_ATTR: "delete"}, True),
+        ("files.operation", {FILES_OPERATION_KIND_ATTR: "list"}, False),
+        ("files.operation", {FILES_OPERATION_KIND_ATTR: "metadata"}, False),
+        ("files.operation", {FILES_OPERATION_KIND_ATTR: "reference"}, False),
+        # memory.operation — §9.2 mutation always-sample; §10.1 complement base-rate.
+        ("memory.operation", {MEMORY_OPERATION_KIND_ATTR: "write"}, True),
+        ("memory.operation", {MEMORY_OPERATION_KIND_ATTR: "update"}, True),
+        ("memory.operation", {MEMORY_OPERATION_KIND_ATTR: "delete"}, True),
+        ("memory.operation", {MEMORY_OPERATION_KIND_ATTR: "read"}, False),
+        ("memory.operation", {MEMORY_OPERATION_KIND_ATTR: "list"}, False),
+        # validator.fail.* — permanent always-sample; transient base-rate.
+        (_VALIDATOR_FAIL_NAME, {_PERMANENCE_ATTR: "permanent"}, True),
+        (_VALIDATOR_FAIL_NAME, {_PERMANENCE_ATTR: "transient"}, False),
+    ],
+)
+def test_is_always_sampled_conditional_rows_honor_attributes(
+    name: str, attrs: dict[str, str], expected: bool
+) -> None:
+    """The three §9.2 attribute-conditional rows resolve by their span
+    attribute: mutation/permanent → always-sample; non-mutation/transient →
+    fall to §10.1 base-rate (False)."""
+    assert is_always_sampled(name, attrs) is expected
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["files.operation", "memory.operation", _VALIDATOR_FAIL_NAME],
+)
+def test_is_always_sampled_conditional_rows_conservative_when_attr_absent(name: str) -> None:
+    """Conservative-absent: a missing discriminating attribute → always-sample
+    (never under-sample the §9.3 inviolable floor). This is the byte-identical
+    pre-B7 behavior for name-only callers (`attributes=None`)."""
+    assert is_always_sampled(name) is True
+    assert is_always_sampled(name, {}) is True
+    assert is_always_sampled(name, {"unrelated.attr": "x"}) is True
+
+
+def test_is_always_sampled_unconditional_rows_unaffected_by_attributes() -> None:
+    """`subagent.span` stays an unconditional literal (root-ness delivered by
+    the ParentBased composition, not an attribute); other set members + base-
+    rate members are unaffected by attributes."""
+    assert is_always_sampled("subagent.span") is True
+    assert is_always_sampled("subagent.span", {"depth": "3"}) is True
+    assert is_always_sampled("sandbox.violation", {FILES_OPERATION_KIND_ATTR: "list"}) is True
+    # A base-rate-set member never always-samples, even with a mutation-kind attr.
+    assert is_always_sampled("chat", {FILES_OPERATION_KIND_ATTR: "upload"}) is False

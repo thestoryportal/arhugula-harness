@@ -11,6 +11,16 @@ Implements C-OD-09 §9.1 (per-deployment-surface sampling mode), §9.2
 `SAMPLE_ALWAYS` for any event in the always-sampled set, `SAMPLE_AT_BASE_RATE`
 otherwise.
 
+`is_always_sampled(event_name, attributes=None)` honors the four §9.2
+*conditional* rows (B7 over-sampling refinement): `files.operation` /
+`memory.operation` always-sample only at mutation `kind`, `validator.fail.*`
+only at `permanence=permanent` (the non-mutation / transient complements fall
+to the §10.1 base-rate regime); `subagent.span` is root-conditional, delivered
+by the `ParentBased` composition (see `composite_sampler`). The decision is
+conservative-absent (a missing discriminating attribute always-samples — never
+under-sample the §9.3 floor); `attributes` defaults to `None`, so the name-only
+callers (`sampling_decision`) are byte-identical to the pre-B7 behavior.
+
 Authority: Implementation_Plan_Operational_Discipline_v2_5.md §3.4.1 U-OD-11
 (v2.5 conformance revision — `ALWAYS_SAMPLED_EVENT_CLASSES` member set + acc #3
 conformed to OD spec §9.2; all other surfaces preserved verbatim from v2.1
@@ -35,12 +45,19 @@ from __future__ import annotations
 from enum import StrEnum
 
 from harness_core import DeploymentSurface
+from opentelemetry.util.types import Attributes
 from pydantic import BaseModel, ConfigDict
 
 from harness_od.observability_matrix import CellID
+from harness_od.tail_keep_classification import (
+    VALIDATOR_FAIL_PERMANENCE_ATTR,
+    VALIDATOR_FAIL_PERMANENCE_PERMANENT_VALUE,
+)
 
 __all__ = [
     "ALWAYS_SAMPLED_EVENT_CLASSES",
+    "FILES_OPERATION_KIND_ATTR",
+    "MEMORY_OPERATION_KIND_ATTR",
     "PER_DEPLOYMENT_SURFACE_SAMPLING",
     "PerDeploymentSurfaceSamplingMode",
     "SamplingDecision",
@@ -149,13 +166,98 @@ _ALWAYS_SAMPLED_PREFIXES: tuple[str, ...] = tuple(
 )
 
 
-def is_always_sampled(event_name: str) -> bool:
+# --- §9.2 conditional-by-attribute rows (B7 over-sampling refinement) -------
+#
+# Four §9.2 rows are conditional, not name-only:
+#   - `files.operation`   always-sampled only at kind ∈ {upload, delete}
+#   - `memory.operation`  always-sampled only at kind ∈ {write, update, delete}
+#   - `validator.fail.*`  always-sampled only at permanence=permanent
+#   - `subagent.span`     always-sampled only at the root
+#
+# The first three resolve by a span attribute (resolved here); the fourth
+# resolves by trace structure (root-ness) and is delivered by the canonical
+# `ParentBased(root=HarnessCompositeSampler)` composition — the inner sampler is
+# consulted ONLY for root spans, so a `subagent.span` reaching it is root by
+# construction. `subagent.span` therefore stays an unconditional literal in
+# `ALWAYS_SAMPLED_EVENT_CLASSES`; only the three attribute-conditional rows are
+# resolved by `_conditional_always_sampled`.
+#
+# The non-mutation / transient complements fall to the C-OD-10 §10.1 base-rate
+# regime (`files.operation` at {list, metadata, reference}; `memory.operation`
+# at {read, list}). The OD mutation kind-sets are declared here against the
+# §9.2 / §10.1 spec rows — OD is consumer-most-downstream and does NOT import
+# the runtime producer enums `FilesOperationKind` (`files_api.py`) /
+# `_HEAD_SAMPLED_KINDS` (`memory_tool_dispatch.py`); those are the emission-side
+# mirrors of these spec-fixed sets.
+#
+# CONSERVATIVE-ABSENT: when the discriminating attribute is absent the decision
+# is always-sample — never under-sample the §9.3 inviolable floor. The runtime
+# producers set `files.operation.kind` / `memory.operation.kind` AFTER span
+# creation, so a HEAD sampler reading `attributes` at span-creation time sees
+# None and conservatively samples (see the `composite_sampler` enforcement-
+# boundary note: head-sampler §9.2-conditional refinement is bounded to root
+# spans carrying the attribute at creation; full non-root / production-tail
+# enforcement is the tail-keep concern gated on R-420/R-421).
+
+#: §9.2 / §10.1 span attribute carrying the Files API operation kind.
+FILES_OPERATION_KIND_ATTR: str = "files.operation.kind"
+#: §9.2 / §10.1 span attribute carrying the Memory tool operation kind.
+MEMORY_OPERATION_KIND_ATTR: str = "memory.operation.kind"
+
+#: §9.2 — `files.operation` always-sampled at these kinds (§10.1 base-rate at
+#: the {list, metadata, reference} complement).
+_FILES_MUTATION_KINDS: frozenset[str] = frozenset({"upload", "delete"})
+#: §9.2 — `memory.operation` always-sampled at these kinds (§10.1 base-rate at
+#: the {read, list} complement).
+_MEMORY_MUTATION_KINDS: frozenset[str] = frozenset({"write", "update", "delete"})
+
+#: §9.2 — `validator.fail.*` dot-anchored span-name prefix (mirrors the
+#: `validator.fail.*` entry's derived prefix in `_ALWAYS_SAMPLED_PREFIXES`).
+_VALIDATOR_FAIL_PREFIX: str = "validator.fail."
+
+
+def _conditional_always_sampled(event_name: str, attributes: Attributes) -> bool | None:
+    """Resolve the §9.2 conditional-by-attribute decision for the three
+    attribute-conditional rows, or `None` if `event_name` is not one of them
+    (the caller then falls through to the name-only literal / prefix match).
+
+    Conservative-absent: a missing discriminating attribute returns `True`
+    (always-sample) — never under-sample the §9.3 inviolable floor.
+    """
+    if event_name == "files.operation":
+        kind = attributes.get(FILES_OPERATION_KIND_ATTR) if attributes else None
+        return kind is None or kind in _FILES_MUTATION_KINDS
+    if event_name == "memory.operation":
+        kind = attributes.get(MEMORY_OPERATION_KIND_ATTR) if attributes else None
+        return kind is None or kind in _MEMORY_MUTATION_KINDS
+    if event_name.startswith(_VALIDATOR_FAIL_PREFIX):
+        permanence = attributes.get(VALIDATOR_FAIL_PERMANENCE_ATTR) if attributes else None
+        return permanence is None or permanence == VALIDATOR_FAIL_PERMANENCE_PERMANENT_VALUE
+    return None
+
+
+def is_always_sampled(event_name: str, attributes: Attributes = None) -> bool:
     """Return True iff `event_name` matches §9.2 always-sampled discipline.
 
-    Resolves both literal entries (e.g. `sandbox.violation`) and dot-anchored
-    prefix entries (e.g. `audit.*` matches `audit.signature.write` AND
-    `audit.cp.dispatch`; `audit` alone does NOT match).
+    Resolves three regimes, in order:
+
+      1. The three §9.2 *conditional-by-attribute* rows (`files.operation` /
+         `memory.operation` / `validator.fail.*`) via `attributes` — mutation
+         kind / `permanence=permanent` always-sample; the non-mutation /
+         transient complements fall to the §10.1 base-rate regime;
+         conservative-absent (missing attribute → always-sample).
+      2. Literal entries (e.g. `sandbox.violation`, `subagent.span`).
+      3. Dot-anchored prefix entries (e.g. `audit.*` matches
+         `audit.signature.write` AND `audit.cp.dispatch`; `audit` alone does
+         NOT match).
+
+    `attributes` defaults to `None` (backward-compatible): callers that do not
+    supply attributes get the conservative always-sample decision for the
+    conditional rows, byte-identical to the pre-B7 name-only behavior.
     """
+    conditional = _conditional_always_sampled(event_name, attributes)
+    if conditional is not None:
+        return conditional
     if event_name in _ALWAYS_SAMPLED_LITERALS:
         return True
     return any(event_name.startswith(prefix) for prefix in _ALWAYS_SAMPLED_PREFIXES)
@@ -173,6 +275,12 @@ def sampling_decision(
     returns `SAMPLE_AT_BASE_RATE` otherwise. The always-sampled set is
     independent of base-rate sampling (acc #4): events in the set sample at
     head=1.0 at every cell.
+
+    This function resolves the cell-uniform decision *without* span attributes,
+    so the §9.2 conditional-by-attribute rows (B7) resolve conservatively
+    (always-sample). The attribute-aware decision is `is_always_sampled(
+    event_class, attributes)`; the live SDK-boundary consumer is
+    `composite_sampler.HarnessCompositeSampler.should_sample`.
 
     `cell_id` and `base_rate` are accepted per the U-OD-11 signature; the
     always-sampled decision is uniform across all cells (§9.3 per-cell
