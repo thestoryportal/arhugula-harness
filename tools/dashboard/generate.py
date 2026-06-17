@@ -394,46 +394,126 @@ def _section(md: str, header: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-def parse_remaining_forward(md: str) -> dict:
-    """Parse the '## Remaining forward work' section -- the single authoritative home for
-    the dashboard's remaining-work view (R-FS-1 roadmap-hygiene reorg; no hardcoded copy).
+def _parse_units_table(body: str, units_status: str) -> list[dict]:
+    """Extract the first markdown table in an arc section body into normalized units.
 
-    child_arcs (ordered, the frozen R-FS-1 build sequence):
-        `| <n> | <id> | <label> | <track> | <gate> |`
-    standalone (unsequenced, design-fork-first):
-        `| B-<ID> | <axis> | <shape> |`
-    """
-    section = _section(md, "Remaining forward work")
+    The map's done-arc tables are `| Unit(s) | Leg/PR | What |` and remaining-arc tables
+    are `| Slice | What | Fork/impl |` — the plain-language 'what' sits in a different
+    column. Normalize both to {unit, what, meta} so the render is uniform."""
+    rows = re.findall(r"^\|(?!\s*-)(.+)\|\s*$", body, re.MULTILINE)
+    units: list[dict] = []
+    for raw in rows:
+        cols = [c.strip() for c in raw.split("|")]
+        if len(cols) < 3:
+            continue
+        c0, c1, c2 = cols[0], cols[1], cols[2]
+        # skip the header row (column titles, not data)
+        if c0.lower() in ("unit(s)", "unit / slice", "anticipated slice", "unit"):
+            continue
+        if units_status == "as-built":
+            units.append({"unit": c0, "what": c2, "meta": c1})  # unit | leg | what
+        else:
+            units.append({"unit": c0, "what": c1, "meta": c2})  # slice | what | type
+    return units
+
+
+def parse_arc_unit_map(md: str) -> dict:
+    """Parse `.harness/r-fs-1-arc-and-unit-map.md` — the SINGLE arc→unit source.
+
+    Returns {arcs: [...], standalone: [...]}. Each arc carries its plain-language
+    capability, status (done|next|queued), build position, cluster class, dependency
+    text, and units (real as-built for done arcs; anticipated slices for remaining).
+    The dashboard's remaining-work view + arc strip derive from this (see
+    `derive_remaining_forward`); there is no second parseable copy."""
+    arcs: list[dict] = []
+    for m in re.finditer(
+        r"^### R-FS-1·(\S+) — (.+?)\n(.*?)(?=\n### |\n## |\Z)", md, re.MULTILINE | re.DOTALL
+    ):
+        tag, name, body = m.group(1).strip(), m.group(2).strip(), m.group(3)
+        status_seg = (re.search(r"\*\*Status:\*\*\s*(.+)", body) or [None, ""])[1]
+        sl = status_seg.lower()
+        status = "done" if "done" in sl else ("next" if "next" in sl else "queued")
+        pos_m = re.search(r"position\s+(\d+)\s+of\s+11", status_seg)
+        units_status = (
+            "as-built" if re.search(r"\*\*Units:\*\*\s*as-built", body) else "anticipated"
+        )
+        cluster_seg = (re.search(r"\*\*Cluster:\*\*\s*([^·\n]+)", body) or [None, ""])[1].strip()
+        cl_low = cluster_seg.lower()
+        cluster = (
+            "independent"
+            if "independent" in cl_low
+            # "maybe"/"possibly"/"possible serial" all mean uncertain cluster membership
+            else ("maybe-serial" if ("maybe" in cl_low or "possibl" in cl_low) else "serial")
+        )
+        type_seg = (re.search(r"\*\*Type:\*\*\s*([^·\n]+)", body) or [None, ""])[1].strip()
+        depends = (re.search(r"\*\*Depends-on:\*\*\s*(.+)", body) or [None, ""])[1].strip()
+        par_m = re.search(r"\*\*(?:Parallel-safe with|Serial with):\*\*\s*(.+)", body)
+        parallel = par_m.group(1).strip() if par_m else ""
+        gives_m = re.search(
+            r"\*\*What it gives the harness\.\*\*\s*(.+?)(?=\n\n|\n\|)", body, re.DOTALL
+        )
+        gives = re.sub(r"\s+", " ", gives_m.group(1)).strip() if gives_m else ""
+        units = _parse_units_table(body, units_status)
+        # distinct atomic-unit IDs across the (leg-grouped) rows — reconciles the card's
+        # count with the map's §7 at-a-glance ("B1 = 14 units"), since one leg row can
+        # carry several U-* ids. Remaining arcs have no ids yet (units at arc-open) → 0.
+        unit_id_count = len(set(re.findall(r"U-[A-Z]{2}-\d+", " ".join(u["unit"] for u in units))))
+        arcs.append(
+            {
+                "tag": tag,
+                "id": f"R-FS-1·{tag}",
+                "name": name,
+                "status": status,
+                "position": int(pos_m.group(1)) if pos_m else 0,
+                "cluster": cluster,
+                "cluster_text": cluster_seg,
+                "units_status": units_status,
+                "type": type_seg,
+                "depends": depends,
+                "parallel": parallel,
+                "gives": gives,
+                "units": units,
+                "unit_id_count": unit_id_count,
+            }
+        )
+    arcs.sort(key=lambda a: a["position"])
+    # standalone B-* rows live only in the §5 table; the `B-<ID>` shape is unique in the
+    # doc (the at-a-glance table uses bare tags like `B1`), so match across the whole file.
+    standalone = [
+        {"id": s.group(1).strip(), "axis": s.group(2).strip(), "shape": s.group(3).strip()}
+        for s in re.finditer(
+            r"^\|\s*(B-[A-Z0-9-]+)\s*\|\s*([^|]+?)\s*\|\s*(.+?)\s*\|\s*$",
+            md,
+            re.MULTILINE,
+        )
+    ]
+    return {"arcs": arcs, "standalone": standalone}
+
+
+def derive_remaining_forward(arc_map: dict) -> dict:
+    """Project the arc map onto the {child_arcs, standalone, done} shape `compute_closure`
+    and the arc strip already consume — so the map is the single source and the existing
+    closure/strip render is unchanged."""
+    arcs = arc_map.get("arcs", [])
+    remaining = [a for a in arcs if a["status"] in ("next", "queued")]
     child_arcs = [
         {
-            "n": int(m.group(1)),
-            "id": m.group(2).strip(),
-            "label": m.group(3).strip(),
-            "layer": m.group(4).strip(),
-            "gate": m.group(5).strip(),
+            "n": i + 1,
+            "id": a["id"],
+            "label": a["name"],
+            "layer": "build",
+            "gate": ("NEXT — " if a["status"] == "next" else "") + (a["type"] or a["cluster_text"]),
         }
-        for m in re.finditer(
-            r"^\|\s*(\d+)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*(build|activation)\s*\|\s*(.+?)\s*\|\s*$",
-            section,
-            re.MULTILINE,
-        )
+        for i, a in enumerate(remaining)
     ]
-    standalone = [
-        {"id": m.group(1).strip(), "axis": m.group(2).strip(), "shape": m.group(3).strip()}
-        for m in re.finditer(
-            r"^\|\s*(B-[A-Z0-9-]+)\s*\|\s*([^|]+?)\s*\|\s*(.+?)\s*\|\s*$",
-            section,
-            re.MULTILINE,
-        )
-    ]
-    # completed child arcs from the "DONE: B1✅ B3✅ ..." marker line — drives the
-    # R-FS-1 build-progress headline (done / total arcs), replacing the misleading
-    # "build closure 100%" substitution ticker.
-    done: list[str] = []
-    for tag in re.findall(r"([A-Z0-9]+)✅", section):
-        if tag not in done:
-            done.append(tag)
-    return {"child_arcs": child_arcs, "standalone": standalone, "done": done}
+    done = [a["tag"] for a in arcs if a["status"] == "done"]
+    return {"child_arcs": child_arcs, "standalone": arc_map.get("standalone", []), "done": done}
+
+
+def parse_remaining_forward(map_md: str) -> dict:
+    """Back-compat shim: derive the remaining-work view from the arc-and-unit map
+    (the single source). Kept so callers/tests have a one-call entry point."""
+    return derive_remaining_forward(parse_arc_unit_map(map_md))
 
 
 def assert_remaining_nonempty(actions: list[dict], dashboard: dict) -> None:
@@ -506,8 +586,9 @@ def parse_dashboard(md: str) -> dict:
     dl = _section(md, "Drift detection log")
     out["drift_log_count"] = len(re.findall(r"^\|\s*\d{4}-\d{2}-\d{2}\s*\|", dl, re.MULTILINE))
 
-    # remaining forward work -- the single authoritative itemization (R-FS-1 reorg)
-    out["remaining_forward"] = parse_remaining_forward(md)
+    # remaining_forward + arc_map are populated in build() from the arc-and-unit map
+    # (`.harness/r-fs-1-arc-and-unit-map.md`) — the single arc→unit source. roadmap_status.md
+    # "Remaining forward work" is now a pointer to the map, not a second parseable copy.
     return out
 
 
@@ -966,6 +1047,54 @@ HTML_TEMPLATE = """<!doctype html>
   .chip.proposed{{background:transparent;color:var(--bone-soft);border-color:var(--hair);}}
   .chip.deferred{{background:transparent;color:var(--bone-faint);border-style:dashed;border-color:var(--bone-faint);}}
   .chip.blocked{{background:rgba(216,84,47,.14);color:#f5805a;border-color:var(--ember);}}
+  .chip.done{{background:#221d16;color:#9c9277;border-color:#3a342a;}}
+  .chip.next{{background:var(--amber);color:var(--ground);border-color:var(--amber-glow);}}
+  .chip.queued{{background:transparent;color:var(--bone-soft);border-color:var(--bone-faint);}}
+  /* unretired-substitution detail: 2-up so the full-width panel isn't one tall column */
+  .unretgrid{{display:grid;grid-template-columns:1fr 1fr;gap:12px;}}
+  @media (max-width:900px){{ .unretgrid{{grid-template-columns:1fr;}} }}
+  /* ---- arc & unit map ---- */
+  .ahead{{margin-bottom:14px;}}
+  .ahint{{font-size:14px;color:var(--bone-soft);margin-top:7px;line-height:1.5;}}
+  .ahint .chip{{font-size:11px;padding:1px 6px;vertical-align:middle;}}
+  .arccards{{display:flex;flex-direction:column;gap:9px;}}
+  .arccard{{background:var(--panel);border:1px solid var(--hair);border-left:3px solid var(--bone-faint);border-radius:var(--radius);overflow:hidden;}}
+  .arccard.done{{border-left-color:#3a342a;}}
+  .arccard.next{{border-left-color:var(--amber);background:var(--panel-hi);}}
+  .arccard.queued{{border-left-color:var(--bone-faint);}}
+  .arccard > summary{{list-style:none;cursor:pointer;display:flex;align-items:center;gap:11px;
+    padding:14px 18px;user-select:none;}}
+  .arccard > summary::-webkit-details-marker{{display:none;}}
+  .arccard > summary:hover{{background:var(--panel-hi);}}
+  .arccard[open] > summary{{border-bottom:1px solid var(--hair-soft);}}
+  .apos{{font-family:var(--mono);font-size:13px;color:var(--bone-faint);}}
+  .atag{{font-family:var(--mono);font-weight:700;font-size:14px;color:var(--amber);min-width:34px;}}
+  .aname{{font-family:var(--disp);font-size:17px;color:var(--bone);flex:1;}}
+  .aclu{{font-family:var(--mono);font-size:11.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--bone-faint);}}
+  .abody{{padding:14px 18px 18px;}}
+  .agives{{font-size:15px;line-height:1.6;color:var(--bone-soft);margin-bottom:13px;}}
+  .agives strong{{color:var(--bone);}}
+  .deps{{display:flex;flex-direction:column;gap:5px;margin-bottom:14px;font-size:13.5px;
+    color:var(--bone-soft);line-height:1.5;padding:10px 13px;background:var(--panel-hi);
+    border-radius:var(--radius);border:1px solid var(--hair-soft);}}
+  .deps strong{{color:var(--bone);}}
+  .dk{{font-family:var(--mono);font-size:11px;letter-spacing:.5px;text-transform:uppercase;
+    color:var(--amber);margin-right:6px;}}
+  .ulabel{{font-family:var(--mono);font-size:12px;letter-spacing:1.5px;text-transform:uppercase;
+    color:var(--bone-faint);margin-bottom:9px;}}
+  .units{{display:flex;flex-direction:column;gap:7px;}}
+  .unit{{display:grid;grid-template-columns:minmax(150px,200px) 1fr;gap:14px;align-items:baseline;
+    padding:8px 0;border-top:1px solid var(--hair-soft);}}
+  .unit:first-child{{border-top:none;}}
+  .ucol{{display:flex;flex-direction:column;gap:2px;}}
+  .uid{{font-family:var(--mono);font-size:13px;color:var(--bone);}}
+  .umeta{{font-family:var(--mono);font-size:11px;color:var(--bone-faint);}}
+  .uwhat{{font-size:14px;line-height:1.55;color:var(--bone-soft);}}
+  .uwhat strong{{color:var(--bone);}}
+  @media (max-width:760px){{ .unit{{grid-template-columns:1fr;gap:3px;}} }}
+  .standrow{{display:flex;align-items:baseline;gap:12px;padding:9px 0;border-top:1px solid var(--hair-soft);}}
+  .standrow:first-child{{border-top:none;}}
+  .sshape{{font-size:13.5px;color:var(--bone-soft);line-height:1.5;}}
   .chip.other{{background:transparent;color:var(--bone-soft);border-color:var(--hair);}}
   .chip.state{{background:transparent;color:var(--bone-soft);border-color:var(--bone-faint);}}
 
@@ -1107,6 +1236,7 @@ HTML_TEMPLATE = """<!doctype html>
     <section id="closure-card">
       <div class="shead"><span class="num">01</span><span class="htxt">Build progress</span><span class="rule"></span></div>
       <div id="closure"></div>
+      <div id="arc-map" style="margin-top:26px"></div>
     </section>
 
     <section>
@@ -1239,24 +1369,11 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
       <div class="lret"><b>retire?</b>${{esc(r.retire)}}</div>
     </div>`).join("");
 
-  const rem = (cl.remaining||[]).map(r => `
-    <div class="rem"><span class="rn">${{pad2(r.n)}}</span><div class="rbody">
-      <div class="rt"><span class="rlabel">${{esc(r.label)}}</span> <span class="chip ${{r.layer==='build'?'build':'activation'}}">${{esc(r.layer)}}</span></div>
-      <div class="rgate">${{esc(r.gate)}}</div>
-      <div class="rmeta">${{esc(r.id)}}</div>
-    </div></div>`).join("");
-
-  const standalone = (cl.standalone||[]).map(s => `
-    <div class="rem"><span class="rn">◆</span><div class="rbody">
-      <div class="rt"><span class="rlabel">${{esc(s.id)}}</span> <span class="chip activation">${{esc(s.axis)}}</span></div>
-      <div class="rgate">${{esc(s.shape)}}</div>
-    </div></div>`).join("");
-
   document.getElementById("closure").innerHTML = `
     <div class="panel lit" style="margin-bottom:20px">
       <div class="k">R-FS-1 full-spec build — the live frontier</div>
       <div class="big">${{rf1.done_count||0}}<span class="u"> / ${{rf1.total||0}} arcs done · +${{rf1.standalone_count||0}} standalone</span></div>
-      <div class="sub"><strong>${{rf1.remaining_count||0}}</strong> child arcs remain in the frozen build order; <strong>${{rf1.standalone_count||0}}</strong> standalone design-fork-first arcs remain (see "Remaining to complete" below). The substitution-retirement closure below is a <em>separate, historical Phase-8 metric</em> — not full-spec completion.</div>
+      <div class="sub"><strong>${{rf1.remaining_count||0}}</strong> child arcs remain in the frozen build order; <strong>${{rf1.standalone_count||0}}</strong> standalone design-fork-first arcs remain. See the <strong>arc &amp; unit map</strong> below for what every arc and atomic unit does, in plain language. The substitution-retirement closure below is a <em>separate, historical Phase-8 metric</em> — not full-spec completion.</div>
       <div class="arcstrip">
         ${{(rf1.done||[]).map(t=>`<span class="arc done">${{esc(t)}} ✓</span>`).join("")}}
         <span class="arcsep">→</span>
@@ -1267,7 +1384,7 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
       <div class="panel lit meter">
         <div class="k">Substitution-retirement closure</div>
         <div class="big">${{b.pct_lo}}<span class="u">%</span></div>
-        <div class="sub"><strong>${{b.lo}} of ${{b.total}}</strong> H_E→H_T substitutions retired — the canonical R-600 ledger metric, ratified at <strong>Phase-8 graduation (R-700)</strong>. <em>This measures substitution retirement, not full-spec completion</em> — the live build axis is <strong>R-FS-1</strong> (full spec, beyond MVP); see “Remaining to complete” below. The <strong>${{nonretiredCount}}</strong> rows below carry terminal sign-off ${{signoffNoun}}.</div>
+        <div class="sub"><strong>${{b.lo}} of ${{b.total}}</strong> H_E→H_T substitutions retired — the canonical R-600 ledger metric, ratified at <strong>Phase-8 graduation (R-700)</strong>. <em>This measures substitution retirement, not full-spec completion</em> — the live build axis is <strong>R-FS-1</strong> (full spec, beyond MVP); see the arc &amp; unit map below. The <strong>${{nonretiredCount}}</strong> rows below carry terminal sign-off ${{signoffNoun}}.</div>
         <div class="gaugebar"><span style="width:${{b.pct_lo}}%"></span></div>
         <div class="waffle" role="img" aria-label="${{w.total}} substitution cells: ${{w.retired}} retired, ${{w.partial}} partial, ${{w.still_bounded}} still-bounded, ${{w.sb_indef}} indefinite">${{cells}}</div>
         <div class="legend">${{legend}}</div>
@@ -1279,19 +1396,69 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
         <div class="quote">"Substitutions retired — this axis switches on at a real deployment; the full-spec build runs at R-FS-1."</div>
       </div>
     </div>
-    <div class="grid2" style="margin-top:20px">
-      <div class="panel">
-        <div class="label" style="margin-bottom:14px">Unretired substitutions (${{(b.nonretired||[]).length}}) / state, why, can we retire?</div>
-        ${{nonret}}
-      </div>
-      <div class="panel">
-        <div class="label" style="margin-bottom:14px">R-FS-1 build arcs remaining (frozen order) — ${{(cl.remaining||[]).map(r=>esc(r.id.split("·")[1]||r.id)).join(" → ")}}</div>
-        ${{rem}}
-      </div>
-    </div>
     <div class="panel" style="margin-top:20px">
-      <div class="label" style="margin-bottom:14px">Standalone forward arcs (${{(cl.standalone||[]).length}}) / design-fork-first, unsequenced — surfaced during impl</div>
-      ${{standalone}}
+      <div class="label" style="margin-bottom:14px">Unretired substitutions (${{(b.nonretired||[]).length}}) / state, why, can we retire?</div>
+      <div class="unretgrid">${{nonret}}</div>
+    </div>`;
+}})();
+
+// ---- arc & unit map (every arc + its atomic units, plain language) ----
+(function() {{
+  const am = (DATA.dashboard || {{}}).arc_map || {{}};
+  const arcs = am.arcs || [];
+  const standalone = am.standalone || [];
+  if (!arcs.length) return;
+  // bold well-formed **x**, drop *italic* markers to plain, strip any stray * (handles
+  // nested emphasis like **a *b* c** cleanly so no literal asterisks leak into the render).
+  const bold = (s) => esc(s)
+    .replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>')
+    .replace(/\\*([^*]+)\\*/g, '$1')
+    .replace(/\\*/g, '');
+  const STAGE = {{ done: ["done","✓ done"], next: ["next","▶ next"], queued: ["queued","queued"] }};
+  const CLU = {{ serial:"serial cluster", independent:"parallel-safe", "maybe-serial":"maybe serial" }};
+  const card = (a) => {{
+    const [cls, lbl] = STAGE[a.status] || ["queued", a.status];
+    const usNote = a.units_status === "as-built"
+      ? `${{a.unit_id_count}} atomic units across ${{a.units.length}} build legs`
+      : `${{a.units.length}} slices · units formally decomposed at arc-open`;
+    const units = (a.units||[]).map(u => `
+      <div class="unit">
+        <div class="ucol"><span class="uid">${{bold(u.unit)}}</span><span class="umeta">${{esc(u.meta)}}</span></div>
+        <div class="uwhat">${{bold(u.what)}}</div>
+      </div>`).join("");
+    const deps = `
+      <div class="deps">
+        ${{a.depends ? `<div><span class="dk">Before / depends on</span> ${{bold(a.depends)}}</div>` : ""}}
+        ${{a.parallel ? `<div><span class="dk">In parallel</span> ${{bold(a.parallel)}}</div>` : ""}}
+      </div>`;
+    return `
+      <details class="arccard ${{cls}}" ${{a.status==='next'?'open':''}}>
+        <summary>
+          <span class="apos">${{String(a.position).padStart(2,"0")}}</span>
+          <span class="atag">${{esc(a.tag)}}</span>
+          <span class="aname">${{esc(a.name)}}</span>
+          <span class="chip ${{cls}}">${{lbl}}</span>
+          <span class="aclu">${{CLU[a.cluster]||a.cluster}}</span>
+        </summary>
+        <div class="abody">
+          <div class="agives">${{bold(a.gives)}}</div>
+          ${{deps}}
+          <div class="ulabel">${{a.units_status === "as-built" ? "Atomic units (as-built)" : "Anticipated build slices"}} <span class="muted">· ${{usNote}}</span></div>
+          <div class="units">${{units}}</div>
+        </div>
+      </details>`;
+  }};
+  const standaloneCards = standalone.map(s => `
+    <div class="standrow"><span class="atag">${{esc(s.id)}}</span><span class="aclu">${{esc(s.axis)}}</span><span class="sshape">${{bold(s.shape)}}</span></div>`).join("");
+  document.getElementById("arc-map").innerHTML = `
+    <div class="ahead">
+      <div class="label">Arc &amp; unit map — what every arc and atomic unit does for the harness</div>
+      <div class="ahint">Click an arc to expand. <span class="chip done">done</span> arcs list their real, as-built units; <span class="chip queued">queued</span> arcs list anticipated slices (units are formally decomposed when that arc opens). Order = the frozen build sequence.</div>
+    </div>
+    <div class="arccards">${{arcs.map(card).join("")}}</div>
+    <div class="panel" style="margin-top:18px">
+      <div class="label" style="margin-bottom:10px">Standalone forward arcs (${{standalone.length}}) — design-fork-first, surfaced during impl, sequenced as follow-on child arcs</div>
+      ${{standaloneCards}}
     </div>`;
 }})();
 
@@ -1580,6 +1747,12 @@ def build(root: Path) -> dict:
         a["rword"] = disp["word"]
         a["why"] = ANNOTATIONS.get(a["id"], "")
     dashboard = parse_dashboard(dash_md)
+    # The arc-and-unit map is the single arc→unit source (R-FS-1). It feeds both the
+    # detailed per-arc render (arc_map) and the existing closure/strip view (remaining_forward).
+    arc_map_md = (root / ".harness" / "r-fs-1-arc-and-unit-map.md").read_text(encoding="utf-8")
+    arc_map = parse_arc_unit_map(arc_map_md)
+    dashboard["arc_map"] = arc_map
+    dashboard["remaining_forward"] = derive_remaining_forward(arc_map)
     assert_remaining_nonempty(actions, dashboard)
     open_prs = parse_open_prs(root)
     live_anchor = build_live_anchor(root, open_prs)

@@ -43,18 +43,55 @@ substitutions: []
     assert trend[-1]["retired"] == 46
 
 
-def _real_status_md() -> str:
-    return (Path(__file__).parents[1] / ".harness" / "roadmap_status.md").read_text(
+def _real_arc_map_md() -> str:
+    # The arc-and-unit map is the single arc→unit source (replaces the parseable
+    # "## Remaining forward work" section, now a pointer).
+    return (Path(__file__).parents[1] / ".harness" / "r-fs-1-arc-and-unit-map.md").read_text(
         encoding="utf-8"
     )
 
 
-def test_remaining_forward_parses_frozen_child_arcs_in_order():
-    # The remaining-work itemization has ONE authoritative home: the
-    # "## Remaining forward work" section of .harness/roadmap_status.md. The parser
-    # must yield the frozen R-FS-1 build order B4 -> CA -> B5 -> B6 -> B7 -> M.
+def test_arc_unit_map_parses_all_11_arcs_in_build_order():
+    # The single arc→unit source must yield all 11 arcs in the frozen build order,
+    # with the 5 done arcs first and the 6 remaining following.
     generate = _load_generate_module()
-    rf = generate.parse_remaining_forward(_real_status_md())
+    am = generate.parse_arc_unit_map(_real_arc_map_md())
+    tags = [a["tag"] for a in am["arcs"]]
+    assert tags == ["B1", "B3", "E", "B2", "R", "B4", "CA", "B5", "B6", "B7", "M"]
+    assert [a["position"] for a in am["arcs"]] == list(range(1, 12))
+    assert [a["status"] for a in am["arcs"][:5]] == ["done"] * 5
+    assert am["arcs"][5]["status"] == "next"  # B4
+    assert all(a["status"] == "queued" for a in am["arcs"][6:])  # CA..M
+    by_tag = {a["tag"]: a for a in am["arcs"]}
+    # cluster classification: independent vs serial vs maybe-serial. M's source text says
+    # "possibly serial" — it must NOT collapse to a definite "serial" (codex [P3]).
+    assert by_tag["CA"]["cluster"] == "independent"
+    assert by_tag["B4"]["cluster"] == "serial"
+    assert by_tag["M"]["cluster"] == "maybe-serial"
+
+
+def test_done_arcs_carry_real_units_remaining_arcs_anticipated():
+    generate = _load_generate_module()
+    am = generate.parse_arc_unit_map(_real_arc_map_md())
+    by_tag = {a["tag"]: a for a in am["arcs"]}
+    # done arcs carry as-built units with real U-* ids
+    assert by_tag["B1"]["units_status"] == "as-built"
+    assert by_tag["B1"]["units"], "B1 must list as-built units"
+    assert any("U-CP-86" in u["unit"] for u in by_tag["B1"]["units"])  # PARALLELIZATION
+    assert all(u["what"] for u in by_tag["B1"]["units"])  # every unit has a plain-language line
+    # remaining arcs are anticipated (units decomposed at arc-open — not fabricated)
+    assert by_tag["B4"]["units_status"] == "anticipated"
+    assert by_tag["B4"]["units"], "B4 must list anticipated slices"
+    # dependency text is carried for the next arc
+    assert by_tag["B4"]["depends"] and by_tag["B4"]["parallel"]
+
+
+def test_remaining_forward_derives_frozen_child_arcs_in_order():
+    # parse_remaining_forward now DERIVES the remaining-work view from the arc map
+    # (the single source), preserving the {child_arcs, standalone, done} shape that
+    # compute_closure + the arc strip consume.
+    generate = _load_generate_module()
+    rf = generate.parse_remaining_forward(_real_arc_map_md())
 
     ids = [arc["id"] for arc in rf["child_arcs"]]
     assert ids == [
@@ -68,11 +105,12 @@ def test_remaining_forward_parses_frozen_child_arcs_in_order():
     assert [arc["n"] for arc in rf["child_arcs"]] == [1, 2, 3, 4, 5, 6]
     assert rf["child_arcs"][0]["gate"].startswith("NEXT")
     assert all(arc["layer"] == "build" for arc in rf["child_arcs"])
+    assert rf["done"] == ["B1", "B3", "E", "B2", "R"]
 
 
-def test_remaining_forward_parses_standalone_arcs():
+def test_remaining_forward_derives_standalone_arcs():
     generate = _load_generate_module()
-    rf = generate.parse_remaining_forward(_real_status_md())
+    rf = generate.parse_remaining_forward(_real_arc_map_md())
 
     ids = {arc["id"] for arc in rf["standalone"]}
     # the 8 design-fork-first standalone arcs surfaced during impl
@@ -83,7 +121,7 @@ def test_remaining_forward_parses_standalone_arcs():
 def test_remaining_excludes_closed_and_done_arcs():
     # Closed/done items must never resurface in the curated remaining list.
     generate = _load_generate_module()
-    rf = generate.parse_remaining_forward(_real_status_md())
+    rf = generate.parse_remaining_forward(_real_arc_map_md())
 
     blob = " ".join(arc["id"] + arc["label"] for arc in rf["child_arcs"])
     for closed in ("R-411", "R-412", "R-901", "R-CXA-1", "R-300"):

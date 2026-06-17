@@ -34,39 +34,11 @@
 
 ## Remaining forward work
 
-**The full-spec build (R-FS-1).** All remaining forward build work is child arcs of the single ACTIVE umbrella **R-FS-1** (operator FULL-SPEC directive 2026-06-12 — nothing deferred; every capability built beyond MVP). Authoritative per-arc detail (re-ground at arc-open — these are LEADS, presence-not-correctness): `.harness/r-fs-1-remaining-arcs-grounding-sweep-v1.md`. The spine ledger (every surfaced boundary + standalone arc): `.harness/beyond-mvp-capability-boundary-ledger.md`.
+**The full-spec build (R-FS-1).** All remaining forward build work is child arcs of the single ACTIVE umbrella **R-FS-1** (operator FULL-SPEC directive 2026-06-12 — nothing deferred; every capability built beyond MVP).
 
-### R-FS-1 child arcs — FROZEN order (B1→B3→E→B2→R→B4→CA→B5→B6→B7→M)
+**Single arc→unit source.** The full itemization — all 11 arcs in plain language, with status, build position, before/parallel dependencies, and every atomic unit (real as-built for the 5 done arcs; anticipated slices for the 6 remaining) — lives in **`.harness/r-fs-1-arc-and-unit-map.md`**. The dashboard's Build-progress section parses that file; this section is a pointer, not a second parseable copy (no duplicate to drift). Per-arc grounding leads: `.harness/r-fs-1-remaining-arcs-grounding-sweep-v1.md` (re-ground at arc-open, presence-not-correctness). Spine ledger (every surfaced boundary + standalone arc): `.harness/beyond-mvp-capability-boundary-ledger.md`.
 
-DONE: **B1✅ B3✅ E✅ B2✅ R✅** (R incl. L3 LLM_AS_ROUTER #604 + L2 EMBEDDING #606). Remaining, in build order:
-
-| # | id | Item | Track | Gate / shape |
-|---|---|---|---|---|
-| 1 | R-FS-1·B4 | Per-role / per-step dispatch indexing | build | NEXT — thread `AgentRole` + per-step override through dispatch so per-role model+prompt take effect (partially-built; mixed fork/impl; thin-to-medium) |
-| 2 | R-FS-1·CA | Cost aggregate — `RunResult.cost_attribution` rollup | build | Thin-to-medium; small pre-auth C-RT-09 spec fork (Slice 0) + owns the R router-call cost-bucket sub-item |
-| 3 | R-FS-1·B5 | Memory per-deployment-surface backend selection (U-RT-80 factory) | build | Thin impl-discretion; surface→backend dispatch (backends already live via R-830; built-but-vacuous) |
-| 4 | R-FS-1·B6 | Per-tool sandbox-tier resolution + STDIO transport-floor | build | Medium fork+impl; per-tool resolver runtime-spec amendment (fork-owed) |
-| 5 | R-FS-1·B7 | OD composite sampler §9.2 conditional-row over-sampling | build | Small impl-discretion; predicate refinement (over-sampling is safe today; built-but-vacuous) |
-| 6 | R-FS-1·M | managed_agents C-RT-28 contract + production wiring | build | Thin contract+wiring; capability live-proven (R-820), contract unauthored + zero prod callers |
-
-### Standalone forward arcs — design-fork-first, unsequenced (surfaced during impl; not in the frozen order)
-
-Each is a committed BUILD (FULL-SPEC directive), sequenced as a follow-on R-FS-1 child arc when its turn comes. Full disposition in the spine ledger.
-
-| id | Owner-axis | Shape |
-|---|---|---|
-| B-INTERSTEP | runtime | Inter-step DATA-flow channel (driver threads control-flow only today); composes B1+B4 |
-| B-FANOUT-PAUSE | CP+runtime | Resumable fan-out `pause` cascade (honest-FAILED interim landed; resume-re-entry + output-persistence owed) |
-| B-ENGINE-OUTPUT-REPLAY | CP+runtime/IS | Output-carrying event-history substrate + cached-output replay (event-sourced/WAL replay = skip-prefix today) |
-| B-EFFECT-FENCE | runtime+AS | At-most-once EXECUTION of non-idempotent step side-effects (sink-fencing; durable engines are at-most-once-claim only) |
-| B-EDIT-CARRIER | runtime+CP | HITL `EDIT` carrier-healing (str↔Mapping); EDIT raises until built |
-| B-LAYER-BUDGET-OVERRIDE | CP | Per-layer wall-clock budget enforcement honoring per-workload/persona overrides + dispatcher budget-threading + realistic L3 budget |
-| B-TOOL-GATE | runtime | Tool-step HITL gate site = the real per-server MCP-trust producer (gate sites are host-less today → AUTO) |
-| B-L2-EMBEDDING-ACTIVATION | runtime+CP | L2 EMBEDDING + L3 router production activation: the routing-activation gate (below) + factory-wire `embedding_classifier=`/`router=` + promote fastembed required |
-
-### Routing-activation gate — visibility-only, currently UNOWNED
-
-The shared production-activation gate for **both** L2 EMBEDDING and L3 LLM_AS_ROUTER: make the DECLARATIVE layer **conditional** so `route()` reaches the EMBEDDING / LLM_AS_ROUTER layers (today `_declarative_echo` always resolves → `route()` short-circuits before them; both routing layers are BUILT + PROVEN but production-inert). **Both R-300 items are RESOLVED without doing this work** — routing-activation (#213) kept DECLARATIVE behavior-preserving by design; second-provider (#281/#283) added credentials + cross-family fallback only. So this gate has **no open owner**; it is captured (with a now-stale `Owner = R-300-second-provider` pointer) at `B-L2-EMBEDDING-ACTIVATION` in the spine ledger. Visibility-only — NOT a derivation-eligible R-NNN (minting one would split §4's single-next-action invariant); it is a real forward unit that needs an owner once routing-among-candidates becomes meaningful (a second production provider configured).
+**Frozen order** (B1→B3→E→B2→R→B4→CA→B5→B6→B7→M). DONE: **B1✅ B3✅ E✅ B2✅ R✅** (R incl. L3 LLM_AS_ROUTER #604 + L2 EMBEDDING #606). NEXT: **B4** → then CA → B5 → B6 → B7 → M. Plus **8 standalone design-fork-first `B-*` arcs** and the visibility-only **routing-activation gate** (UNOWNED until a second production provider is configured) — both detailed in the arc-and-unit map.
 
 ---
 
