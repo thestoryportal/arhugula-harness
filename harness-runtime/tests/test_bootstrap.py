@@ -57,6 +57,7 @@ from harness_runtime.lifecycle.providers import ProviderClientsStage
 from harness_runtime.types import (
     BootstrapStage,
     CollectorConfig,
+    CostRecordAccumulator,
     HarnessContext,
     OTelConfig,
     PathBindingConfig,
@@ -225,6 +226,33 @@ async def test_bootstrap_returns_frozen_harness_context(
     assert ctx.cp_as_wiring is not None
     assert ctx.hitl_tool_loop is not None
     assert ctx.engine_recovery_loop is not None
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_cost_accumulator_survives_freeze_by_reference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-FS-1 arc CA regression — `cost_record_accumulator` must survive `freeze()`
+    BY REFERENCE so the per-dispatch cost wrappers' captured `.records` list IS the
+    list `_build_run_result` reads. Pydantic v2 COPIES a typed `list[...]` field at
+    construction (`M(xs=lst).xs is not lst`), which would sever the dispatchers'
+    sink from the run-result read → `cost_attribution` always `()`. The
+    `CostRecordAccumulator` holder (an arbitrary type, like `asyncio.Event`) is
+    stored opaquely, so it is the SAME object across freeze. This guards the exact
+    seam every other CA test bypasses — none traverse `freeze()`."""
+    _patch_providers(monkeypatch)
+    _patch_collector(monkeypatch)
+    ctx = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
+
+    # Survives freeze as the holder (NOT a Pydantic-copied list).
+    assert isinstance(ctx.cost_record_accumulator, CostRecordAccumulator)
+
+    # The seam: the stage-5 tool-dispatcher factory captured
+    # `ctx.cost_record_accumulator.records` BEFORE freeze; the holder surviving
+    # by-reference means the bare dispatcher's sink IS the frozen ctx's list.
+    bare_tool = ctx.tool_dispatcher.inner  # RetryBreakerToolDispatcher.inner
+    assert bare_tool._cost_record_sink is ctx.cost_record_accumulator.records
 
 
 @pytest.mark.asyncio
@@ -1286,7 +1314,8 @@ async def test_api_run_passes_workload_class_into_bootstrap(
                 server=object(),
                 _state={},
                 workflow_registry={},
-            )
+            ),
+            cost_record_accumulator=CostRecordAccumulator(),
         )
 
     monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _wrapped_fake_bootstrap)

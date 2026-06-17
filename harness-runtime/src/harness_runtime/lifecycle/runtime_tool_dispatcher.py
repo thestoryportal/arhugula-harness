@@ -59,6 +59,7 @@ from harness_cp.workflow_driver_types import (
     WorkflowStep,
 )
 from harness_is.state_ledger_entry_schema import Identifier
+from harness_od.idempotency_join_dedup import SpanCostRecord
 
 from harness_runtime.config.provider_secrets import (
     SecretAllowlistDeniedError,
@@ -316,6 +317,7 @@ class RuntimeToolDispatcher:
         cost_chain: Any = None,
         audit_writer: Any = None,
         rate_table: Any = None,
+        cost_record_sink: list[SpanCostRecord] | None = None,
         tool_execution_drivers: dict[ServerName, ToolExecutionDriver] | None = None,
         provider_secret_resolver: Any = None,
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
@@ -400,6 +402,11 @@ class RuntimeToolDispatcher:
         self._cost_chain = cost_chain
         self._audit_writer = audit_writer
         self._rate_table = rate_table
+        # R-FS-1 arc CA — run-scoped cost-record sink (same list as
+        # `ctx.cost_record_accumulator`, threaded by the stage-5 factory).
+        # `_attribute_tool_cost_best_effort` appends each dispatch's returned
+        # SpanCostRecord for `RunResult.cost_attribution` rollup (runtime v1.53 §9).
+        self._cost_record_sink = cost_record_sink
         self._tool_execution_drivers: dict[ServerName, ToolExecutionDriver] = (
             tool_execution_drivers or {}
         )
@@ -421,6 +428,7 @@ class RuntimeToolDispatcher:
         cost_chain: Any = None,
         audit_writer: Any = None,
         rate_table: Any = None,
+        cost_record_sink: list[SpanCostRecord] | None = None,
         tool_execution_driver: ToolExecutionDriver | None = None,
         provider_secret_resolver: Any = None,
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
@@ -458,6 +466,7 @@ class RuntimeToolDispatcher:
             cost_chain=cost_chain,
             audit_writer=audit_writer,
             rate_table=rate_table,
+            cost_record_sink=cost_record_sink,
             tool_execution_drivers=(
                 {server_name: tool_execution_driver} if tool_execution_driver is not None else None
             ),
@@ -538,6 +547,11 @@ class RuntimeToolDispatcher:
             COST_ATTRIBUTED_DECIMAL_ATTR,
             serialize_decimal_for_otel(Decimal(str(attached.total_cost))),
         )
+
+        # R-FS-1 arc CA — record into the run-scoped accumulator for the
+        # `RunResult.cost_attribution` rollup (runtime spec v1.53 §9 C-RT-09).
+        if self._cost_record_sink is not None:
+            self._cost_record_sink.append(attached)
 
     def _emit_sandbox_violation(
         self,

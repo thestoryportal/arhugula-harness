@@ -269,10 +269,16 @@ class CostAttributingValidatorHook:
         rate_table: RateTable,
         cost_chain: CostAttributionChain,
         audit_writer: AuditLedgerWriter,
+        cost_record_sink: list[SpanCostRecord] | None = None,
     ) -> None:
         self._rate_table = rate_table
         self._cost_chain = cost_chain
         self._audit_writer = audit_writer
+        # R-FS-1 arc CA — run-scoped cost-record sink (same list as
+        # `ctx.cost_record_accumulator`, threaded by the stage-4 validator
+        # factory). The returned SpanCostRecord is appended for the
+        # `RunResult.cost_attribution` rollup (runtime spec v1.53 §9 C-RT-09).
+        self._cost_record_sink = cost_record_sink
 
     async def on_post_evaluate(
         self,
@@ -301,7 +307,7 @@ class CostAttributingValidatorHook:
         span_id = f"validator-evaluate-{step_context.workflow_id}-{step.step_id}"
         idempotency_key = f"validator:{step_context.workflow_id}:{step.step_id}"
 
-        attribute_validator_dispatch_cost(
+        attached = attribute_validator_dispatch_cost(
             rate_table=self._rate_table,
             cost_chain=self._cost_chain,
             audit_writer=self._audit_writer,
@@ -314,6 +320,13 @@ class CostAttributingValidatorHook:
             parent_action_id=step_context.parent_action_id,
             tenant_id=step_context.tenant_id,
         )
+
+        # R-FS-1 arc CA — record into the run-scoped accumulator for the
+        # `RunResult.cost_attribution` rollup (runtime spec v1.53 §9 C-RT-09).
+        # Reached only on success — a helper exception propagates past this to
+        # the framework firing site's swallow boundary (§28.10.4 invariant 2).
+        if self._cost_record_sink is not None:
+            self._cost_record_sink.append(attached)
 
 
 __all__ = [

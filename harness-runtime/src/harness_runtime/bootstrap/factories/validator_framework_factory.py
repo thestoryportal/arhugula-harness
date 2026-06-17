@@ -29,6 +29,7 @@ from harness_cp.validator_framework_types import (
     ValidatorFramework,
     ValidatorPostEvaluateHook,
 )
+from harness_od.idempotency_join_dedup import SpanCostRecord
 from harness_od.rate_table_types import RateTable
 
 from harness_runtime.lifecycle.cost_attribution_validator_dispatch import (
@@ -54,6 +55,7 @@ async def materialize_validator_framework_stage(
     rate_table: RateTable | None = None,
     cost_chain: CostAttributionChain | None = None,
     audit_writer: AuditLedgerWriter | None = None,
+    cost_record_sink: list[SpanCostRecord] | None = None,
 ) -> ValidatorFramework | None:
     """Construct the stage-4 `ValidatorFramework` instance from operator-supplied
     config, or return `None` when the operator has not opted in.
@@ -111,6 +113,7 @@ async def materialize_validator_framework_stage(
             rate_table=rate_table,
             cost_chain=cost_chain,
             audit_writer=audit_writer,
+            cost_record_sink=cost_record_sink,
         )
 
     framework: ValidatorFramework = ConcreteValidatorFramework(

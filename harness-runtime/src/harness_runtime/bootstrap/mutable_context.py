@@ -44,6 +44,7 @@ from harness_runtime.types import (
     CollectorDaemonHandle,
     ContentAddressedIndex,
     CostAttributionChain,
+    CostRecordAccumulator,
     EngineSelector,
     HandoffRegistry,
     HarnessContext,
@@ -187,6 +188,16 @@ class _MutableHarnessContext:
     fail-loud sentinels for the LLM/sub-agent dispatchers + omits their
     `{StepKind → StepDispatcher}` registry rows. Defaults `True`
     (behavior-preserving for any caller that does not derive the predicate)."""
+    cost_record_accumulator: CostRecordAccumulator = field(default_factory=CostRecordAccumulator)
+    """R-FS-1 arc CA — run-scoped cost-record accumulator (frozen `HarnessContext`
+    field, not in `_REQUIRED_FIELDS` — defaulted, never None). A fresh holder per
+    builder (per run); the stage-4/5 dispatcher/hook materializations read its
+    `.records` list off the mutable ctx and thread that reference into their
+    best-effort cost wrappers, which append the returned `SpanCostRecord`.
+    `freeze()` threads the SAME holder onto the frozen ctx (stored by reference —
+    a `CostRecordAccumulator`, not a Pydantic-copied `list`) so
+    `_build_run_result`'s post-join read of `.records` sees every appended record
+    (runtime spec v1.53 §9 C-RT-09)."""
 
     # Stage 1 IS.
     path_resolver: PathResolver | None = None
@@ -449,6 +460,7 @@ class _MutableHarnessContext:
             config=_bound(self.config),
             drained_flag=_bound(self.drained_flag),
             pause_requested_flag=_bound(self.pause_requested_flag),
+            cost_record_accumulator=self.cost_record_accumulator,
             pause_resume_protocol=self.pause_resume_protocol,
             path_resolver=_bound(self.path_resolver),
             worktree_manager=_bound(self.worktree_manager),

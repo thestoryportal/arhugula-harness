@@ -112,4 +112,12 @@ async def materialize_webhook_delivery_composer_stage(
     # §14.16.1 + change-note adjacent defect (i); richer construction lands at
     # a follow-on arc per FM-2.
     tracer_provider = ctx.tracer_provider
-    return WebhookDeliveryComposer(tracer_provider=tracer_provider)
+    # R-FS-1 arc CA — thread the run-scoped cost accumulator so webhook
+    # SpanCostRecords feed `RunResult.cost_attribution` (runtime v1.53 §9). The
+    # v1.26 empty-marker factory binds no cost substrates yet (pre-existing), so
+    # the composer's cost wrapper early-returns in production — the sink is
+    # forward-ready, dormant until the FM-2 webhook config arc binds substrates.
+    return WebhookDeliveryComposer(
+        tracer_provider=tracer_provider,
+        cost_record_sink=ctx.cost_record_accumulator.records,
+    )

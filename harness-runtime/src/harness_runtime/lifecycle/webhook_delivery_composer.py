@@ -29,6 +29,7 @@ from harness_cp.hitl_timeout_degradation import (
     WebhookPayload,
 )
 from harness_cp.validator_framework_types import HITLEscalationBrief
+from harness_od.idempotency_join_dedup import SpanCostRecord
 
 __all__ = [
     "WebhookDeliveryComposer",
@@ -112,6 +113,7 @@ class WebhookDeliveryComposer:
         rate_table: Any = None,
         cost_chain: Any = None,
         audit_writer: Any = None,
+        cost_record_sink: list[SpanCostRecord] | None = None,
         workflow_id: str | None = None,
         parent_action_id: str | None = None,
         parent_idempotency_key: str | None = None,
@@ -157,6 +159,13 @@ class WebhookDeliveryComposer:
         self._rate_table = rate_table
         self._cost_chain = cost_chain
         self._audit_writer = audit_writer
+        # R-FS-1 arc CA — run-scoped cost-record sink for the
+        # `RunResult.cost_attribution` rollup (runtime spec v1.53 §9 C-RT-09).
+        # Forward-ready: webhook cost-attribution substrates are not bound by the
+        # v1.26 empty-marker factory (pre-existing — the early-return guard in
+        # `_attribute_webhook_cost_best_effort` fires), so this sink is dormant in
+        # production until the FM-2 webhook config arc binds the substrates.
+        self._cost_record_sink = cost_record_sink
         self._workflow_id = workflow_id
         self._parent_action_id = parent_action_id
         self._parent_idempotency_key = parent_idempotency_key
@@ -325,7 +334,7 @@ class WebhookDeliveryComposer:
             )
 
             bytes_sent = len(json.dumps(request_body, separators=(",", ":")).encode("utf-8"))
-            attribute_webhook_dispatch_cost(
+            attached = attribute_webhook_dispatch_cost(
                 rate_table=self._rate_table,
                 cost_chain=self._cost_chain,
                 audit_writer=self._audit_writer,
@@ -338,6 +347,10 @@ class WebhookDeliveryComposer:
                 parent_action_id=self._parent_action_id,
                 tenant_id=self._tenant_id,
             )
+            # R-FS-1 arc CA — record into the run-scoped accumulator for the
+            # `RunResult.cost_attribution` rollup (runtime spec v1.53 §9 C-RT-09).
+            if self._cost_record_sink is not None:
+                self._cost_record_sink.append(attached)
         except Exception:
             pass  # observability-only; MUST NOT fail dispatch
 

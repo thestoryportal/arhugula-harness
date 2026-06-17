@@ -39,6 +39,7 @@ from harness_cp.workflow_driver_types import (
 )
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_od.cost_record_otel_serializer import COST_ATTRIBUTED_DECIMAL_ATTR
+from harness_od.idempotency_join_dedup import SpanCostRecord
 from harness_od.rate_table_types import RateTable, ToolRate, WebhookRate
 from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
 from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
@@ -224,6 +225,10 @@ async def test_dispatch_happy_path_invokes_cost_attribution(tracer_setup) -> Non
     )
     cost_chain = RuntimeCostAttributionChain()
     audit_writer = _RecordingAuditWriter()
+    # R-FS-1 arc CA — run-scoped cost-record sink threaded into the dispatcher;
+    # the tool cost wrapper must append the returned SpanCostRecord (the same list
+    # _build_run_result rolls up into RunResult.cost_attribution, runtime v1.53 §9).
+    cost_record_sink: list[SpanCostRecord] = []
     dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
@@ -234,6 +239,7 @@ async def test_dispatch_happy_path_invokes_cost_attribution(tracer_setup) -> Non
         cost_chain=cost_chain,
         audit_writer=audit_writer,
         rate_table=rate_table,
+        cost_record_sink=cost_record_sink,
     )
     try:
         result = await dispatcher.dispatch(
@@ -242,6 +248,9 @@ async def test_dispatch_happy_path_invokes_cost_attribution(tracer_setup) -> Non
             step_context=_make_step_context(),
         )
         assert result["tool_id"] == "echo"
+        # R-FS-1 arc CA — the tool cost wrapper appended exactly one record.
+        assert len(cost_record_sink) == 1
+        assert cost_record_sink[0].provider_discriminator == "tool"
         # 1 cost-record + 1 audit-ledger entry (AC #4 + #5)
         assert len(audit_writer.appended) == 1
         _, audit_entry = audit_writer.appended[0]
