@@ -47,6 +47,12 @@ Runtime spec v1.52 §14.5.3 relaxes:
 
 `[[hooks-codex-pilots-decorrelation-validated]]`.
 
+## §3.1 Verification status + the one pre-merge item
+
+**Done by-execution:** CP unit (resolve applies/none/provenance) + linear-path by-execution (role folded onto `step_context.agent_role` through the real `execute_workflow`) + fan-out override-replaces-derived by-execution. harness-cp 1045 / 1 xfailed; runtime non-integration 1593; integration 210 / 17 skipped; pyright 0/0/0; ruff; overlay-check 31/31; Codex re-review clean.
+
+**One pre-merge item (advisor-flagged; does NOT block the operator gate).** No single test yet drives the new behavior through **driver-fold → real wrapper+inner → recording provider** — the CP driver-fold tests use a fake dispatcher (record `step_context` + stop); the Slice-2 dispatch e2e builds `step_context` by hand. The transitivity (CP-fold-test ∘ Slice-2-e2e) is *mostly* sound — `step_context` passes verbatim driver→dispatcher, no transformation at the seam — but the genuinely-new composition (a per-step role override → driver fold → wrapper `_effective_chain` model + inner per-role prompt → provider) is unexercised together. Per `[[test-bypass-as-runtime-truth-pattern]]` + `[[verification-shape-sharpened-grep-vs-e2e]]` + the Slice-2 consumer-e2e done-bar: **before merge**, add ONE full-stack test — linear path, a per-step `StepOverride.agent_role` override run through `execute_workflow` against the real `RetryBreakerFallbackDispatcher(inner=RuntimeLLMDispatcher(...))` + `_AnthropicFakeAdapter`; the discriminating assertion is the recording provider receives **both** the override role's `model=` (proves the wrapper picked up the fold) **and** its `system=` (proves the inner did). The operator-gate decision (the §14.5.3 relaxation) is independent of this coverage.
+
 ## §4 Spine registration
 
 Registered at `.harness/beyond-mvp-capability-boundary-ledger.md` (B4 Slice-4 leg) per `[[spine-ledger-forward-arc-registration]]`. This closes the B4 tail (Slice 1 prompt-threading ✅ #616 → Slice 2 catalog ✅ #618 → Slice 3 per-step prompt ✅ #619 → **Slice 4 per-step role + linear-path indexing**, this arc). On ratification + merge, clearance markers filed for CP v1.38 + runtime v1.52.
