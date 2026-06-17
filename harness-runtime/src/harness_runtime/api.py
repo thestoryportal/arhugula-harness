@@ -37,9 +37,11 @@ C-RT-09 names the `cost_attribution` field type as `CostAttribution
 — aggregated cost rollup along one `RollupAxis`). This landing types
 the field as `tuple[CrossFamilyCostRollup, ...]` — the natural
 materialized shape of the spec's "aggregated 5-step cost-attribution
-rollup". Same shape as the U-RT-34 Class 3 spec-prose-plan-body
-drift; non-blocking; logged inline for future runtime-spec revision
-pass.
+rollup". **RESOLVED at runtime spec v1.53 §9 C-RT-09 (R-FS-1 arc CA):**
+the spec Type cell is reconciled to `tuple[CrossFamilyCostRollup, ...]`
+and the run-result rollup axis is named `PER_PROVIDER_AND_MODEL` (the
+field is now populated at `_build_run_result`, no longer the v1.4 empty
+tuple).
 
 **Workflow execution landed at Lane 6 (2026-05-20).** `run()` now
 delegates workflow body execution to `harness_cp.workflow_driver.
@@ -88,7 +90,12 @@ from harness_cp.workflow_driver_types import (
 )
 from harness_cp.workflow_driver_types import StepKind, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
-from harness_od.cross_family_rollup import CrossFamilyCostRollup
+from harness_od.cross_family_rollup import (
+    CrossFamilyCostRollup,
+    RollupAxis,
+    rollup_costs_by_axis,
+)
+from harness_od.idempotency_join_dedup import SpanCostRecord
 from pydantic import BaseModel, ConfigDict
 
 from harness_runtime.types import RuntimeConfig
@@ -330,13 +337,17 @@ class RunResult(BaseModel):
     """Root span trace IDs emitted by the workflow execution."""
 
     cost_attribution: tuple[CrossFamilyCostRollup, ...]
-    """Aggregated 5-step cost-attribution rollup (C-OD-15 §15.1).
+    """Per-run cost rollup along `RollupAxis.PER_PROVIDER_AND_MODEL` (C-OD-15
+    §15.1), computed at `_build_run_result` from the run-scoped accumulated
+    `SpanCostRecord`s via `rollup_costs_by_axis`. `()` when no cost-bearing
+    dispatch occurred; single axis ⟹ `sum(e.total_cost)` is the total run cost.
 
-    Spec C-RT-09 names this `CostAttribution (OD type)`; OD exports no
-    type literally named `CostAttribution`. `CrossFamilyCostRollup` is
-    the C-OD-15 §15.1 aggregated cost-rollup primitive — the natural
-    materialized shape of the spec's "Aggregated 5-step cost-attribution
-    rollup". Class 3 spec-prose-vs-OD-type drift; non-blocking.
+    Runtime spec v1.53 §9 C-RT-09 (R-FS-1 arc CA) reconciled the spec Type cell
+    from the phantom `CostAttribution (OD type)` (OD exports no type literally
+    named `CostAttribution`) to this materialized `tuple[CrossFamilyCostRollup,
+    ...]`, and named the axis. `PER_PROVIDER_DISCRIMINATOR` is inadmissible (the
+    production dispatch-type `provider_discriminator` tags are not `CrossFamilyTag`
+    members → `CrossFamilyRollupError`; see `B-COST-DISCRIMINATOR-TAXONOMY`).
     """
 
     failure_cause: FailureCause | None = None
@@ -606,7 +617,12 @@ async def run(
             # → shutdown lifecycle. Shutdown after execute, regardless of CP
             # status. ShutdownReport carries the audit-ledger head hash.
             shutdown_report = await _shutdown(ctx)
-        return _build_run_result(cp_result, shutdown_report, timed_out=timed_out)
+        return _build_run_result(
+            cp_result,
+            shutdown_report,
+            timed_out=timed_out,
+            cost_records=ctx.cost_record_accumulator,
+        )
 
 
 def _read_durable_pause_snapshot(
@@ -858,7 +874,12 @@ async def resume(
             )
         finally:
             shutdown_report = await _shutdown(ctx)
-        return _build_run_result(cp_result, shutdown_report, timed_out=timed_out)
+        return _build_run_result(
+            cp_result,
+            shutdown_report,
+            timed_out=timed_out,
+            cost_records=ctx.cost_record_accumulator,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -886,8 +907,30 @@ _CP_TO_RT_STATUS: dict[
 }
 
 
+def _rollup_cost_attribution(
+    cost_records: list[SpanCostRecord] | None,
+) -> tuple[CrossFamilyCostRollup, ...]:
+    """Roll run-scoped cost records up to `RunResult.cost_attribution` (C-RT-09 §9, v1.53).
+
+    Single axis `RollupAxis.PER_PROVIDER_AND_MODEL` — the operator-meaningful axis
+    that is safe for the production dispatch-type `provider_discriminator` tagging
+    (`PER_PROVIDER_DISCRIMINATOR` would raise `CrossFamilyRollupError` because the
+    production tags `"llm"`/`"tool"`/`"validator"`/`"webhook"` are not `CrossFamilyTag`
+    members — see `B-COST-DISCRIMINATOR-TAXONOMY`). A single axis preserves the
+    sum-invariant: `sum(e.total_cost for e in result)` == total run cost. Empty / None
+    records → `()` (the trivial-/no-cost-workflow shape).
+    """
+    if not cost_records:
+        return ()
+    return tuple(rollup_costs_by_axis(cost_records, RollupAxis.PER_PROVIDER_AND_MODEL))
+
+
 def _build_run_result(
-    cp_result: _CpRunResult, shutdown_report: Any, *, timed_out: bool = False
+    cp_result: _CpRunResult,
+    shutdown_report: Any,
+    *,
+    timed_out: bool = False,
+    cost_records: list[SpanCostRecord] | None = None,
 ) -> RunResult:
     """Project a CP driver `RunResult` + runtime `ShutdownReport` into the
     runtime-facing `RunResult` per C-RT-09.
@@ -908,10 +951,16 @@ def _build_run_result(
     - `trace_ids`: empty tuple at v1.4 (driver does not surface root span trace
       IDs through `RunResult`; spec §25 deferred-to-discretion). Class 3
       informational gap; queued for a future runtime + driver coherence pass.
-    - `cost_attribution`: empty tuple — `U-OD-21` (`SpanCostRecord` rollup keys)
-      is HALTED Class 1 per `.harness/class_1_tension_u_od_21_span_cost_record_
-      missing_rollup_keys.md`. Cost attribution AC of U-RT-49 stays STRUCK; the
-      empty tuple is the carry-forward shape.
+    - `cost_attribution`: (v1.53, R-FS-1 arc CA) per-run rollup along
+      `RollupAxis.PER_PROVIDER_AND_MODEL` computed from `cost_records` — the
+      run-scoped `ctx.cost_record_accumulator`, appended by the LLM / tool /
+      validator / webhook per-dispatch cost wrappers — via `rollup_costs_by_axis`
+      (C-OD-15 §15.1). `()` when no cost-bearing dispatch occurred. **Supersedes
+      the v1.4 empty-tuple carry-forward**: the `U-OD-21` HALTED Class-1 tension is
+      CLOSED (`rollup_costs_by_axis` + the 12-field `SpanCostRecord` carrier
+      landed). `PER_PROVIDER_DISCRIMINATOR` is inadmissible here (production
+      dispatch-type `provider_discriminator` tags are not `CrossFamilyTag` members
+      → `CrossFamilyRollupError`); reconciliation is `B-COST-DISCRIMINATOR-TAXONOMY`.
     - `failure_cause`: populated when status is "failed"; tags through
       `cp_result.fail_class`.
     """
@@ -959,7 +1008,7 @@ def _build_run_result(
         terminal_state=terminal_state,
         audit_ledger_head_hash=head_hash,
         trace_ids=(),
-        cost_attribution=(),
+        cost_attribution=_rollup_cost_attribution(cost_records),
         failure_cause=failure_cause,
         # C-RT-30 (R-CC-1 arc #3) — surface the captured PauseSnapshot on a
         # 'paused' outcome so the caller can persist it + resume(). None on

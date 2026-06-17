@@ -245,6 +245,10 @@ async def execute(
             cost_chain=cast(Any, ctx.cost_chain),
             audit_writer=cast(Any, ctx.audit_writer),
             rate_table=RATE_TABLE_V1,
+            # R-FS-1 arc CA — thread the run-scoped cost-record accumulator (the
+            # SAME list `_build_run_result` reads post-join) so per-LLM-dispatch
+            # SpanCostRecords feed `RunResult.cost_attribution` (runtime v1.53 §9).
+            cost_record_sink=ctx.cost_record_accumulator,
             memory_tool_registry=ctx.memory_tool_registry,
             deployment_surface=config.deployment_surface,
             hitl_tool_loop=ctx.hitl_tool_loop,

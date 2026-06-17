@@ -106,4 +106,7 @@ async def execute(
         rate_table=RATE_TABLE_V1,
         cost_chain=ctx.cost_chain,
         audit_writer=ctx.audit_writer,
+        # R-FS-1 arc CA — thread the run-scoped cost accumulator so per-validator
+        # SpanCostRecords feed `RunResult.cost_attribution` (runtime v1.53 §9).
+        cost_record_sink=ctx.cost_record_accumulator,
     )

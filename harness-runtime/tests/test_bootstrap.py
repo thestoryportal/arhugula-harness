@@ -1286,7 +1286,8 @@ async def test_api_run_passes_workload_class_into_bootstrap(
                 server=object(),
                 _state={},
                 workflow_registry={},
-            )
+            ),
+            cost_record_accumulator=[],
         )
 
     monkeypatch.setattr("harness_runtime.bootstrap.run_bootstrap", _wrapped_fake_bootstrap)

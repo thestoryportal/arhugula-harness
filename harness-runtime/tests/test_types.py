@@ -127,6 +127,10 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         # Stage 0.
         "config",
         "drained_flag",
+        # R-FS-1 arc CA — run-scoped cost-record accumulator (Stage 0 PREAMBLE;
+        # defaulted list, threaded into the stage-4/5 cost wrappers; read by
+        # _build_run_result for the RunResult.cost_attribution rollup, v1.53 §9).
+        "cost_record_accumulator",
         # Stage 1 IS.
         "path_resolver",
         "worktree_manager",

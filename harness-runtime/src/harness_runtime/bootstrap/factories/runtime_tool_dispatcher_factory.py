@@ -341,6 +341,10 @@ async def materialize_runtime_tool_dispatcher_stage(
         cost_chain=ctx.cost_chain,
         audit_writer=ctx.audit_writer,
         rate_table=rate_table,
+        # R-FS-1 arc CA — thread the run-scoped cost accumulator (same list as
+        # `ctx.cost_record_accumulator`) so per-tool-dispatch SpanCostRecords feed
+        # `RunResult.cost_attribution` (runtime spec v1.53 §9 C-RT-09).
+        cost_record_sink=ctx.cost_record_accumulator,
         provider_secret_resolver=ctx.keyring_resolver,
         secret_fetch_audit_emitter=RuntimeAsIsWiring(
             ctx.ledger_writer,

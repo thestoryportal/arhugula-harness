@@ -208,3 +208,84 @@ async def test_one_validator_plus_one_webhook_produces_two_cost_records() -> Non
     assert any("hitl:" in a for a in action_ids), (
         f"webhook audit entry expected with hitl: parent_action_id; got action_ids={action_ids}"
     )
+
+
+@pytest.mark.asyncio
+async def test_validator_and_webhook_append_to_run_scoped_cost_sink() -> None:
+    """R-FS-1 arc CA — the validator hook + webhook composer each append their
+    returned `SpanCostRecord` into the shared run-scoped `cost_record_sink` (the
+    same list `_build_run_result` rolls up into `RunResult.cost_attribution`,
+    runtime spec v1.53 §9 C-RT-09). Wiring-by-execution for two of the four
+    per-dispatch cost wrappers (LLM in test_ca_cost_aggregate.py; tool in the
+    tool-dispatcher cost test)."""
+    rate_table = _make_rate_table()
+    cost_chain = RuntimeCostAttributionChain()
+    audit_writer = _RecordingAuditWriter()
+    # The single run-scoped accumulator threaded into BOTH surfaces.
+    sink: list[Any] = []
+
+    # --- Validator surface (sink threaded in) ---
+    step = _make_step()
+    ctx = _make_step_context()
+    validator = _FixedValidator(
+        ValidatorResult(outcome=ValidatorOutcome.PASS, fail_class=None, fail_detail_hash=None)
+    )
+    hook = CostAttributingValidatorHook(
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        cost_record_sink=sink,
+    )
+    fw = ConcreteValidatorFramework(
+        validator_registry={step.step_id: validator},
+        post_evaluate_hook=hook,
+    )
+    await fw.evaluate(step, {}, step_context=ctx)
+
+    assert len(sink) == 1, "validator dispatch must append exactly one cost record"
+
+    # --- Webhook surface (same sink threaded in) ---
+    class _MockResponse:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+
+    class _MockAsyncClient:
+        async def __aenter__(self) -> _MockAsyncClient:
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def post(self, url: str, **kwargs: Any) -> _MockResponse:
+            return _MockResponse(200)
+
+    composer = WebhookDeliveryComposer(
+        retry_max_attempts=1,
+        http_client_factory=lambda: _MockAsyncClient(),  # type: ignore[arg-type]
+        sleep_fn=lambda _s: asyncio.sleep(0),
+        rate_table=rate_table,
+        cost_chain=cost_chain,
+        audit_writer=audit_writer,
+        cost_record_sink=sink,
+        workflow_id="wf-integration",
+        parent_action_id="hitl:wf-integration:gate:0",
+        parent_idempotency_key="parent-idem-1",
+    )
+    webhook_config = WebhookConfig(
+        webhook_id="test-webhook",
+        endpoint_url="https://ops.example.com/hitl",
+        timeout=30.0,
+        degradation_mode="proceed",
+    )
+    webhook_payload = WebhookPayload(
+        approval_id="approval-1",
+        idempotency_key="webhook-1",
+        gate_evaluation_ref="gate-eval-1",
+        payload_body={"summary": "approval needed"},
+    )
+    await composer.deliver_webhook(webhook_config, webhook_payload, idempotency_key="webhook-1")
+
+    # Both surfaces appended into the one shared run-scoped accumulator.
+    assert len(sink) == 2, "validator + webhook each append one record to the shared sink"
+    provider_discriminators = sorted(r.provider_discriminator for r in sink)
+    assert provider_discriminators == ["validator", "webhook"]

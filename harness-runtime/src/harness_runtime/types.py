@@ -98,6 +98,7 @@ from harness_od.harness_breaker_schema import BreakerScope
 from harness_od.idempotency_join_dedup import (
     DedupOutcome,
     F2StateLedgerEntry,
+    SpanCostRecord,
     SpanIngestionView,
 )
 from harness_od.local_first_otlp_collector import (
@@ -1644,6 +1645,23 @@ class HarnessContext(BaseModel):
     # None`: driver behavior unchanged from pre-v1.21 (silently no-op).
     # Initialized at `_MutableHarnessContext` builder during stage 0 PREAMBLE.
     pause_requested_flag: asyncio.Event
+
+    # R-FS-1 arc CA — run-scoped in-memory cost-record accumulator. Per-dispatch
+    # cost helpers (LLM/tool/validator/webhook) append their returned
+    # `SpanCostRecord` here via their best-effort wrappers; `_build_run_result`
+    # reads it and rolls up `RunResult.cost_attribution` along
+    # `RollupAxis.PER_PROVIDER_AND_MODEL` (runtime spec v1.53 §9 C-RT-09). A
+    # mutable `list` on a frozen model — `frozen=True` forbids field reassignment,
+    # not mutation of the contained list (the `drained_flag` mutable-primitive
+    # precedent). The SAME list object is threaded into the stage-4/5 dispatcher
+    # /hook materializations (pass the reference, never copy) so appends during
+    # execute are visible to the post-join read at `_build_run_result`.
+    # `list.append` is atomic under the GIL; the only read is post-join (after the
+    # `asyncio.to_thread` driver returns) so no lock is needed. Initialized via the
+    # `_MutableHarnessContext` builder's `default_factory=list` (stage 0 PREAMBLE
+    # region) and threaded same-reference at `freeze()`; defaults to an empty list
+    # for direct (test) constructions that bypass the builder.
+    cost_record_accumulator: list[SpanCostRecord] = Field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
 
     # Stage 1 IS.
     path_resolver: PathResolver

@@ -385,7 +385,7 @@ async def test_valid_run_executes_via_driver_and_returns_run_result(
         _state={},
         workflow_registry={},
     )
-    fake_ctx = SimpleNamespace(mcp_server=fake_mcp_server)
+    fake_ctx = SimpleNamespace(mcp_server=fake_mcp_server, cost_record_accumulator=[])
 
     async def _fake_bootstrap(config, *, workload_class, requires_inference=True):  # type: ignore[no-untyped-def]
         _ = config
@@ -452,7 +452,8 @@ async def test_run_releases_lock_after_completion(monkeypatch: pytest.MonkeyPatc
                 server=object(),
                 _state={},
                 workflow_registry={},
-            )
+            ),
+            cost_record_accumulator=[],
         )
 
     async def _fake_bootstrap(config, *, workload_class, requires_inference=True):  # type: ignore[no-untyped-def]

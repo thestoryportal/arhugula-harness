@@ -80,6 +80,7 @@ from harness_cp.routing_layer import RoutingLayer
 from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_cp.validator_fail_transient_staircase import CrossTrustBoundaryState
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
+from harness_od.idempotency_join_dedup import SpanCostRecord
 from harness_od.otel_genai_base import HIERARCHY_CORRELATION_KEY, GenAiOperation
 
 from harness_runtime.lifecycle.hitl_tool_loop import (
@@ -345,6 +346,13 @@ class RuntimeLLMDispatcher:
     cost_chain: Any = None
     audit_writer: Any = None
     rate_table: Any = None
+    # R-FS-1 arc CA — run-scoped cost-record sink (the SAME list as
+    # `ctx.cost_record_accumulator`, threaded by `materialize_llm_dispatcher_stage`
+    # from the mutable bootstrap ctx). `_attribute_cost_best_effort` appends each
+    # dispatch's returned `SpanCostRecord` so `_build_run_result` can roll up
+    # `RunResult.cost_attribution` (runtime spec v1.53 §9 C-RT-09). None at unit-test
+    # construction → the wrapper skips the append (no-op).
+    cost_record_sink: list[SpanCostRecord] | None = None
     # U-RT-81 (C-RT-15 §14.5.1) — Memory tool storage-backend registry +
     # deployment_surface for `resolve_backend` call. When `step.step_payload.
     # tools` contains the Anthropic Memory tool definition + both fields are
@@ -983,6 +991,7 @@ class RuntimeLLMDispatcher:
                 cost_chain=self.cost_chain,
                 audit_writer=self.audit_writer,
                 rate_table=self.rate_table,
+                cost_record_sink=self.cost_record_sink,
                 provider_name=provider_name,
                 model=model,
                 parent_idempotency_key=step_context.parent_idempotency_key,
@@ -1619,6 +1628,7 @@ def _attribute_cost_best_effort(
     cost_chain: Any,
     audit_writer: Any,
     rate_table: Any,
+    cost_record_sink: list[SpanCostRecord] | None = None,
     provider_name: str,
     model: str,
     parent_idempotency_key: str,
@@ -1694,6 +1704,12 @@ def _attribute_cost_best_effort(
         serialize_decimal_for_otel(Decimal(str(attached.total_cost))),
     )
 
+    # R-FS-1 arc CA — record the per-dispatch SpanCostRecord into the run-scoped
+    # accumulator so `_build_run_result` can roll up `RunResult.cost_attribution`
+    # (runtime spec v1.53 §9 C-RT-09). `list.append` is atomic under the GIL.
+    if cost_record_sink is not None:
+        cost_record_sink.append(attached)
+
 
 def materialize_llm_dispatcher_stage(
     providers: _ProvidersLike,
@@ -1702,6 +1718,7 @@ def materialize_llm_dispatcher_stage(
     cost_chain: Any = None,
     audit_writer: Any = None,
     rate_table: Any = None,
+    cost_record_sink: list[SpanCostRecord] | None = None,
     memory_tool_registry: Any = None,
     deployment_surface: Any = None,
     hitl_tool_loop: RuntimeHITLToolLoop | None = None,
@@ -1742,6 +1759,7 @@ def materialize_llm_dispatcher_stage(
         cost_chain=cost_chain,
         audit_writer=audit_writer,
         rate_table=rate_table,
+        cost_record_sink=cost_record_sink,
         memory_tool_registry=memory_tool_registry,
         deployment_surface=deployment_surface,
         hitl_tool_loop=hitl_tool_loop,
