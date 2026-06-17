@@ -3766,6 +3766,13 @@ def _execute_orchestrator_workers(
         # override here keeps `StepExecutionContext.agent_role` the SINGLE role
         # source the runtime dispatch reads (§14.5.3 composition-time relaxation,
         # runtime spec v1.52 — no two-authority-at-dispatch).
+        # Truthiness (not `is not None`) is DELIBERATE + dispatch-consistent: an
+        # empty `AgentRole("")` is not a usable routing key (the dispatch read
+        # `_role = step_context.agent_role or _MVP_DEFAULT_AGENT_ROLE` drops it;
+        # no `per_role_bindings` catalog keys on ""), so an accidental empty
+        # override falls through to the worker's derived role rather than
+        # suppressing it to the bare default. Applies to every `... or derive/
+        # default` fold site below. (Out-of-family review [P3].)
         role = binding.agent_role or derive_agent_role(step.step_id)
         # The worker's DECLARED step ordinal is its position in the original
         # `steps` (orchestrator=0, workers=1,2,…), i.e. `branch_index + 1`.
