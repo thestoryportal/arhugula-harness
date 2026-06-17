@@ -52,13 +52,14 @@ from typing import Any, cast
 import pytest
 from harness_core import PersonaTier, StepID, WorkloadClass
 from harness_core.workflow_event_class import WorkflowEventClass
-from harness_cp.cp_shared_types import AgentRole, ModelBinding
+from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
     ProviderCandidate,
     ProviderFamily,
 )
 from harness_cp.engine_class import EngineClass
+from harness_cp.per_role_catalog import derive_agent_role
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
@@ -362,7 +363,14 @@ def test_orchestrator_workers_per_role_child_contexts() -> None:
 
     for i in range(3):
         ctx = dispatcher.contexts[f"worker-{i}"]
-        assert ctx.agent_role == AgentRole(f"worker-{i}")
+        # The role the REAL fan-out driver composes on each worker's branch context
+        # is exactly the shared B1↔B4 contract `derive_agent_role(step_id)` — the
+        # SAME function an operator keys their per_role_bindings catalog on (B4
+        # Slice 2). Asserting against the contract (not a re-inlined literal) means a
+        # divergence between the driver's derivation and the operator's catalog key
+        # would fail HERE, through the real driver — the observed producer↔catalog
+        # bridge for "distinct workers get their own per-role binding".
+        assert ctx.agent_role == derive_agent_role(StepID(f"worker-{i}"))
         assert ctx.branch_index == i
         assert ctx.parent_action_id == "workflow:wf-ow:step:0"
         # Each worker carries its DECLARED step ordinal (orchestrator=0, workers
