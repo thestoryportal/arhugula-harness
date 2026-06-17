@@ -62,6 +62,12 @@ def test_arc_unit_map_parses_all_11_arcs_in_build_order():
     assert [a["status"] for a in am["arcs"][:5]] == ["done"] * 5
     assert am["arcs"][5]["status"] == "next"  # B4
     assert all(a["status"] == "queued" for a in am["arcs"][6:])  # CA..M
+    by_tag = {a["tag"]: a for a in am["arcs"]}
+    # cluster classification: independent vs serial vs maybe-serial. M's source text says
+    # "possibly serial" — it must NOT collapse to a definite "serial" (codex [P3]).
+    assert by_tag["CA"]["cluster"] == "independent"
+    assert by_tag["B4"]["cluster"] == "serial"
+    assert by_tag["M"]["cluster"] == "maybe-serial"
 
 
 def test_done_arcs_carry_real_units_remaining_arcs_anticipated():

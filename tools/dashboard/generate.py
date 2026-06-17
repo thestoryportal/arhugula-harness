@@ -442,7 +442,8 @@ def parse_arc_unit_map(md: str) -> dict:
         cluster = (
             "independent"
             if "independent" in cl_low
-            else ("maybe-serial" if "maybe" in cl_low else "serial")
+            # "maybe"/"possibly"/"possible serial" all mean uncertain cluster membership
+            else ("maybe-serial" if ("maybe" in cl_low or "possibl" in cl_low) else "serial")
         )
         type_seg = (re.search(r"\*\*Type:\*\*\s*([^·\n]+)", body) or [None, ""])[1].strip()
         depends = (re.search(r"\*\*Depends-on:\*\*\s*(.+)", body) or [None, ""])[1].strip()
