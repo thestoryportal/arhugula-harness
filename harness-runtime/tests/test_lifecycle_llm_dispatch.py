@@ -20,15 +20,18 @@ synchronous flushing under test.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, cast
 
 import pytest
 from harness_as.sandbox_tier import SandboxTier
 from harness_core import PersonaTier
 from harness_core.identity import StepID
+from harness_core.workload_class import WorkloadClass
 from harness_cp.cp_shared_types import AgentRole, ModelBinding, RouterResolution
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
@@ -52,12 +55,15 @@ from harness_cp.routing_manifest_residence import (
     RoleRoutingBinding,
     RoutingManifest,
 )
-from harness_cp.workflow_driver import StepDispatcher
+from harness_cp.topology_pattern import TopologyPattern
+from harness_cp.workflow_driver import StepDispatcher, execute_workflow
 from harness_cp.workflow_driver_types import (
+    RunStatus,
     StepExecutionContext,
     StepKind,
     WorkflowStep,
 )
+from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEntry
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_runtime.lifecycle import llm_dispatch as llm_dispatch_module
 from harness_runtime.lifecycle.hitl_tool_loop import HITLToolLoopContext, ModelToolCall
@@ -81,6 +87,7 @@ from harness_runtime.lifecycle.retry_breaker_fallback import (
     RESERVED_LLM_DISPATCH_KEY,
     RetryBreakerFallbackDispatcher,
 )
+from harness_runtime.lifecycle.sync_dispatcher_facade import SyncDispatcherFacade
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -2108,3 +2115,166 @@ async def test_b4_slice3_per_step_prompt_governance_inert_at_solo_and_when_appro
     )
     assert approved_adapter.client.messages.last_kwargs is not None
     assert approved_adapter.client.messages.last_kwargs["system"] == _STEP_SYS
+
+
+# ---------------------------------------------------------------------------
+# B4 Slice 4 — FULL-STACK consumer e2e: a per-step ROLE override drives, through
+# the REAL driver-fold → wrapper(inner(recording provider)) stack, BOTH the
+# override role's model (wrapper `_effective_chain`) AND its prompt (inner
+# per-role map). Closes the transitivity seam the CP driver-fold tests (fake
+# dispatcher) + the Slice-2 dispatch e2e (hand-built step_context) leave
+# unexercised together — the genuinely-new composition for Slice 4.
+# ---------------------------------------------------------------------------
+
+_FS_ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="b4-slice4-fullstack")
+
+
+class _FSLedger:
+    """Minimal `LedgerWriterLike` for execute_workflow (mirror of harness-cp _FakeLedger)."""
+
+    def __init__(self) -> None:
+        self.actor = _FS_ACTOR
+        self.appends: list[tuple[Any, Any]] = []
+
+    def append(self, payload: Any, write_key: Any) -> Any:
+        self.appends.append((payload, write_key))
+        return "appended"
+
+    @property
+    def is_genesis(self) -> bool:
+        return len(self.appends) == 0
+
+    @property
+    def entry_count(self) -> int:
+        return len(self.appends)
+
+
+class _FSEmitter:
+    def __init__(self) -> None:
+        self.emits: list[Any] = []
+
+    def emit(self, event_class: Any) -> None:
+        self.emits.append(event_class)
+
+
+class _FSLedgerReader:
+    def read_by_idempotency_key(self, idempotency_key: Any, bounded_window: Any) -> Any:
+        _ = (idempotency_key, bounded_window)
+
+        class _R:
+            entries: tuple[object, ...] = ()
+            truncated = False
+            next_position = None
+
+        return _R()
+
+
+class _FSCtx:
+    """Minimal `DriverContext` for a single linear INFERENCE_STEP execute_workflow run."""
+
+    def __init__(self) -> None:
+        from opentelemetry.trace import NoOpTracerProvider
+
+        self.ledger_writer = _FSLedger()
+        self.lifecycle_emitter = _FSEmitter()
+        self.drained_flag = asyncio.Event()
+        self.pause_resume_protocol = None
+        self.pause_requested_flag = asyncio.Event()
+        self.ledger_reader = _FSLedgerReader()
+        self.tracer_provider = NoOpTracerProvider()
+        self.validator_framework = None
+        self.tenant_id = None
+
+
+class _SingleKindFacadeRegistry:
+    def __init__(self, dispatcher: Any) -> None:
+        self._d = dispatcher
+
+    def lookup(self, step_kind: Any) -> Any:
+        _ = step_kind
+        return self._d
+
+
+@pytest.mark.asyncio
+async def test_b4_slice4_per_step_role_override_full_stack_e2e() -> None:
+    """THE B4-Slice-4 full-stack proof. A per-step `StepOverride.agent_role` on a
+    SINGLE_THREADED_LINEAR step flows through the REAL CP `execute_workflow`
+    driver-fold → `SyncDispatcherFacade` → `RetryBreakerFallbackDispatcher`
+    (model, via `_effective_chain(step_context.agent_role)`) → `RuntimeLLMDispatcher`
+    (prompt, via the per-role map) → recording provider. The discriminating
+    assertion is at the provider boundary: `messages.create` receives BOTH the
+    override role's `model=` (proves the wrapper picked up the driver fold) AND
+    its `system=` (proves the inner did). This closes the seam the CP driver-fold
+    tests (fake dispatcher) + the Slice-2 dispatch e2e (hand-built step_context)
+    cover only by transitivity (`[[test-bypass-as-runtime-truth-pattern]]`)."""
+    override_role = "audit-specialist"
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    inner = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        active_system_prompt="PROMPT-default-role",
+        per_role_system_prompts={AgentRole(override_role): "PROMPT-audit-specialist"},
+    )
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_manifest=_routing_manifest_with_roles(
+            {override_role: "model-for-audit-specialist"}
+        ),
+    )
+    facade = SyncDispatcherFacade(
+        inner=wrapper,
+        loop=asyncio.get_running_loop(),
+        result_timeout_seconds=10.0,
+    )
+    registry = cast(Any, _SingleKindFacadeRegistry(facade))
+
+    manifest = WorkflowManifestEntry(
+        workflow_id="wf-b4-slice4-fullstack",
+        workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+        layer_budgets=(),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        hitl_placements=(),
+        per_step_overrides={
+            StepID("step-0"): StepOverride(
+                step_id=StepID("step-0"), agent_role=AgentRole(override_role)
+            )
+        },
+    )
+    step = WorkflowStep(
+        step_id=StepID("step-0"),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": None,
+            "params": {"max_tokens": 8},
+        },
+    )
+    ctx = _FSCtx()
+
+    result = await asyncio.to_thread(
+        partial(
+            execute_workflow,
+            manifest_entry=manifest,
+            steps=[step],
+            run_id="run-b4-slice4-fullstack",
+            ctx=cast(Any, ctx),
+            default_model_binding=ModelBinding(provider="anthropic", model="default-model"),
+            step_dispatchers=registry,
+        )
+    )
+
+    assert result.status is RunStatus.SUCCESS, result.fail_class
+    call = adapter.client.messages.last_kwargs
+    assert call is not None
+    # Wrapper picked up the per-step role fold for MODEL selection.
+    assert call["model"] == "model-for-audit-specialist"
+    # Inner picked up the per-step role fold for PROMPT injection.
+    assert call["system"] == "PROMPT-audit-specialist"
