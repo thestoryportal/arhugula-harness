@@ -451,9 +451,7 @@ class RuntimeLLMDispatcher:
     # classifier at EMBEDDING + omitting DECLARATIVE).
     embedding_classifier: LayerDecisionFn | None = None
 
-    def _resolve_per_step_system_prompt(
-        self, prompt_version_sha: str, persona_tier: PersonaTier
-    ) -> str:
+    def _resolve_per_step_system_prompt(self, prompt_version_sha: str) -> str:
         """Resolve a per-step ``prompt_version_sha`` → injected content (B4 Slice 3).
 
         The per-step override (CP ``StepOverride.prompt_version_sha``, applied by
@@ -471,6 +469,16 @@ class RuntimeLLMDispatcher:
           (OD C-OD-34), the version's sha must be a member of
           ``approved_prompt_version_shas``.
 
+        Governance keys on the **deployment** persona tier (``self.persona_tier``,
+        threaded from ``config.persona_tier`` at stage 5) — NOT the per-workflow
+        ``binding.persona_tier`` — exactly as the default/per-role approval gate
+        does at bootstrap. Keying on the per-workflow tier would let a workflow
+        whose manifest declares ``SOLO_DEVELOPER`` bypass the approval a
+        binding-tier *deployment* requires (Codex P1). ``self.persona_tier`` is
+        ``None`` only in the unit-test-ergonomics path (production stage 5 always
+        binds ``config.persona_tier``); a ``None`` deployment tier is treated as
+        no-governance-context (inert), never a binding tier.
+
         Both surface as a STEP failure here (per-dispatch — propagates to the CP
         driver try/except), unlike the per-role path's BootstrapFailure. Reuses the
         canonical fail-class exceptions so the audit fail-class catalog stays
@@ -487,12 +495,14 @@ class RuntimeLLMDispatcher:
         content = self.prompt_versions_by_sha.get(prompt_version_sha)
         if content is None:
             raise PromptSelectionUnauthoredError(prompt_version_sha)
+        deployment_tier = self.persona_tier
         if (
-            resolve_prompt_governance(persona_tier).approval_required
+            deployment_tier is not None
+            and resolve_prompt_governance(deployment_tier).approval_required
             and prompt_version_sha not in self.approved_prompt_version_shas
         ):
             raise PromptVersionUnapprovedError(
-                persona_tier=persona_tier, version_sha=prompt_version_sha
+                persona_tier=deployment_tier, version_sha=prompt_version_sha
             )
         return content
 
@@ -617,7 +627,7 @@ class RuntimeLLMDispatcher:
         # RT-FAIL-PROMPT-INJECTION-CONFLICT), not a BootstrapFailure.
         if binding.prompt_version_sha is not None:
             _effective_system_prompt = self._resolve_per_step_system_prompt(
-                binding.prompt_version_sha, binding.persona_tier
+                binding.prompt_version_sha
             )
         elif _role in self.per_role_system_prompts:
             _effective_system_prompt = self.per_role_system_prompts[_role]

@@ -2018,22 +2018,49 @@ async def test_b4_slice3_per_step_prompt_unauthored_sha_fails_loud() -> None:
 @pytest.mark.asyncio
 async def test_b4_slice3_per_step_prompt_governance_parity_at_binding_tier() -> None:
     """Binding-tier governance parity (OD C-OD-34): a per-step prompt at a binding
-    tier (team-binding) must be operator-approved, else fail loud
+    DEPLOYMENT tier (team-binding) must be operator-approved, else fail loud
     (`RT-FAIL-PROMPT-VERSION-UNAPPROVED`) — closing the gap where a per-step
-    override could bypass the approval the per-role/default paths enforce."""
+    override could bypass the approval the per-role/default paths enforce.
+    Governance keys on the DEPLOYMENT tier (the dispatcher's `persona_tier`,
+    threaded from `config.persona_tier`), not the per-workflow binding tier."""
     tp, _ = _tracer_provider_with_exporter()
 
-    # team-binding + sha NOT approved → fail loud.
+    # team-binding DEPLOYMENT + sha NOT approved → fail loud.
     unapproved = RuntimeLLMDispatcher(
         providers={"anthropic": _AnthropicFakeAdapter(_AnthropicClient())},
         tracer_provider=tp,
+        persona_tier=PersonaTier.TEAM_BINDING,
         active_system_prompt=_DEFAULT_SYS,
         prompt_versions_by_sha={_STEP_SHA: _STEP_SYS},
         approved_prompt_version_shas=frozenset(),
     )
     with pytest.raises(PromptVersionUnapprovedError):
         await unapproved.dispatch(
-            _binding_with_prompt(_STEP_SHA, persona_tier=PersonaTier.TEAM_BINDING),
+            _binding_with_prompt(_STEP_SHA),
+            _step(),
+            step_context=_step_context_with_role("writer"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_b4_slice3_per_step_governance_keys_on_deployment_not_workflow_tier() -> None:
+    """Codex P1 regression: a workflow whose binding declares SOLO_DEVELOPER must
+    NOT bypass approval on a binding-tier DEPLOYMENT. Governance keys on the
+    dispatcher's deployment persona tier, never the per-workflow binding tier —
+    else a SOLO-manifest workflow downgrades the deployment's governance posture."""
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": _AnthropicFakeAdapter(_AnthropicClient())},
+        tracer_provider=tp,
+        persona_tier=PersonaTier.TEAM_BINDING,  # binding-tier DEPLOYMENT
+        active_system_prompt=_DEFAULT_SYS,
+        prompt_versions_by_sha={_STEP_SHA: _STEP_SYS},
+        approved_prompt_version_shas=frozenset(),  # unapproved
+    )
+    # The binding declares SOLO — but the DEPLOYMENT is team-binding, so the gate fires.
+    with pytest.raises(PromptVersionUnapprovedError):
+        await dispatcher.dispatch(
+            _binding_with_prompt(_STEP_SHA, persona_tier=PersonaTier.SOLO_DEVELOPER),
             _step(),
             step_context=_step_context_with_role("writer"),
         )
@@ -2041,39 +2068,41 @@ async def test_b4_slice3_per_step_prompt_governance_parity_at_binding_tier() -> 
 
 @pytest.mark.asyncio
 async def test_b4_slice3_per_step_prompt_governance_inert_at_solo_and_when_approved() -> None:
-    """The governance gate is inert at the solo-developer tier (no approval
-    required) and passes at a binding tier once the sha is approved — in both
-    cases the per-step content injects."""
+    """The governance gate is inert at the solo-developer DEPLOYMENT tier (no
+    approval required) and passes at a binding DEPLOYMENT once the sha is approved
+    — in both cases the per-step content injects."""
     tp, _ = _tracer_provider_with_exporter()
 
-    # solo tier: unapproved sha is INERT → injects.
+    # solo DEPLOYMENT tier: unapproved sha is INERT → injects.
     solo_adapter = _AnthropicFakeAdapter(_AnthropicClient())
     solo = RuntimeLLMDispatcher(
         providers={"anthropic": solo_adapter},
         tracer_provider=tp,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
         active_system_prompt=_DEFAULT_SYS,
         prompt_versions_by_sha={_STEP_SHA: _STEP_SYS},
         approved_prompt_version_shas=frozenset(),
     )
     await solo.dispatch(
-        _binding_with_prompt(_STEP_SHA, persona_tier=PersonaTier.SOLO_DEVELOPER),
+        _binding_with_prompt(_STEP_SHA),
         _step(),
         step_context=_step_context_with_role("writer"),
     )
     assert solo_adapter.client.messages.last_kwargs is not None
     assert solo_adapter.client.messages.last_kwargs["system"] == _STEP_SYS
 
-    # team-binding + sha APPROVED → injects.
+    # team-binding DEPLOYMENT + sha APPROVED → injects.
     approved_adapter = _AnthropicFakeAdapter(_AnthropicClient())
     approved = RuntimeLLMDispatcher(
         providers={"anthropic": approved_adapter},
         tracer_provider=tp,
+        persona_tier=PersonaTier.TEAM_BINDING,
         active_system_prompt=_DEFAULT_SYS,
         prompt_versions_by_sha={_STEP_SHA: _STEP_SYS},
         approved_prompt_version_shas=frozenset({_STEP_SHA}),
     )
     await approved.dispatch(
-        _binding_with_prompt(_STEP_SHA, persona_tier=PersonaTier.TEAM_BINDING),
+        _binding_with_prompt(_STEP_SHA),
         _step(),
         step_context=_step_context_with_role("writer"),
     )
