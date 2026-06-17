@@ -3,12 +3,23 @@
     "harness-7a-scaffold": {
       "type": "stdio",
       "command": "uv",
-      "args": ["run", "python", "scaffolding/mcp/server.py"]
+      "args": [
+        "run",
+        "python",
+        "scaffolding/mcp/server.py"
+      ]
     },
     "notebooklm": {
       "type": "stdio",
       "command": "notebooklm-mcp",
-      "args": ["--transport", "stdio"]
+      "args": [
+        "--transport",
+        "stdio"
+      ]
+    },
+    "dribbble": {
+      "type": "stdio",
+      "command": "dribbble-mcp"
     }
   }
 }
