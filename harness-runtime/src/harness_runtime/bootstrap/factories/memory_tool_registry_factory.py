@@ -43,6 +43,7 @@ from harness_as.anthropic_graceful_degradation import (
     MemoryToolStorageBackend,
     memory_tool_storage_backend,
 )
+from harness_core.deployment_surface import DeploymentSurface
 
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.lifecycle.memory_tool_filesystem import (
@@ -225,63 +226,53 @@ PROTOCOL_REQUIRED_METHODS: tuple[str, ...] = (
 post-isinstance method-presence sweep at step 3 below."""
 
 
-async def materialize_memory_tool_registry_stage(
+def _construct_backend(
+    configured: MemoryToolStorageBackend,
     config: RuntimeConfig,
-    ctx: _MutableHarnessContext,
-) -> MemoryToolRegistry:
-    """Compose the Memory tool storage-backend registry and bind to ctx.
+) -> MemoryToolStorageBackendProtocol:
+    """Construct the storage-backend implementation for a resolved enum value.
 
-    Mutates `ctx` in-place: binds `ctx.memory_tool_registry` to the
-    constructed registry. Returns the registry for the stage-5 callsite to
-    inspect.
-
-    Per spec v1.17 §14.12.3 + plan v2.15 §1 U-RT-80 ACs.
+    Per spec §14.12.3 step 2. FILESYSTEM / DATABASE (SQLite or managed-DB) / S3
+    are landed (R-830); ENCRYPTED_FILESYSTEM / OPERATOR_DEFINED raise
+    `RT-FAIL-MEMORY-BACKEND-RESOLUTION` with the §14.D fork-doc pointer. Missing
+    `backend_params` (S3 bucket, managed-DB connection string) raise from the
+    per-backend constructors.
     """
-    # --- Step 1: resolve enum value -----------------------------------------
-    if config.memory_tool_backend_config is not None:
-        configured = config.memory_tool_backend_config.backend
-    else:
-        admissible = memory_tool_storage_backend(config.deployment_surface)
-        if MemoryToolStorageBackend.FILESYSTEM not in admissible:
-            raise MemoryBackendResolutionError(
-                f"RT-FAIL-MEMORY-BACKEND-RESOLUTION: deployment surface "
-                f"{config.deployment_surface.value!r} admits backends "
-                f"{sorted(b.value for b in admissible)!r}; v2.15 implements only "
-                f"{MemoryToolStorageBackend.FILESYSTEM.value!r} per fork-doc §14.D "
-                f"(non-FILESYSTEM backends deferred to follow-on retirement-batch arc)"
-            )
-        configured = MemoryToolStorageBackend.FILESYSTEM
-
-    # --- Step 2: construct backend implementation ---------------------------
     if configured is MemoryToolStorageBackend.FILESYSTEM:
-        backend: MemoryToolStorageBackendProtocol = LocalFilesystemMemoryToolBackend(
+        return LocalFilesystemMemoryToolBackend(
             root=config.repository_root / MEMORY_TOOL_FILESYSTEM_ROOT_SUBPATH,
         )
-    elif configured is MemoryToolStorageBackend.DATABASE:
+    if configured is MemoryToolStorageBackend.DATABASE:
         # R-830 DATABASE backend. Plain/local connection strings route to the
         # existing SQLite implementation; postgres:// and postgresql:// route
         # to the optional managed-DB implementation.
-        backend = _construct_database_backend(config)
-    elif configured is MemoryToolStorageBackend.S3:
+        return _construct_database_backend(config)
+    if configured is MemoryToolStorageBackend.S3:
         # R-830 MANAGED_CLOUD cloud-vault backend. Provider-free construction
         # reaches this path through a monkeypatched client factory; live use
         # requires boto3 + operator-provided credentials and bucket params.
-        backend = _construct_s3_backend(config)
-    else:
-        raise MemoryBackendResolutionError(
-            f"RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend "
-            f"{configured.value!r} has no implementation landed "
-            f"(FILESYSTEM + DATABASE + S3 landed; ENCRYPTED_FILESYSTEM / "
-            f"OPERATOR_DEFINED deferred to operator-discretion follow-on arcs "
-            f"per spec §14.D + §16 §6.C v2 C.vii)"
-        )
+        return _construct_s3_backend(config)
+    raise MemoryBackendResolutionError(
+        f"RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend "
+        f"{configured.value!r} has no implementation landed "
+        f"(FILESYSTEM + DATABASE + S3 landed; ENCRYPTED_FILESYSTEM / "
+        f"OPERATOR_DEFINED deferred to operator-discretion follow-on arcs "
+        f"per spec §14.D + §16 §6.C v2 C.vii)"
+    )
 
-    # --- Step 3: Protocol-conformance enforcement per §14.12.5 invariant 2 --
-    # Two-layer check: (a) attribute-present + callable sweep over the 5
-    # CRUD methods catches both missing methods AND non-callable shadowing
-    # (the latter is admitted by `@runtime_checkable` isinstance per PEP 544
-    # caveat); (b) final `@runtime_checkable` isinstance as the canonical
-    # Protocol assertion.
+
+def _enforce_protocol_conformance(
+    backend: MemoryToolStorageBackendProtocol,
+    configured: MemoryToolStorageBackend,
+) -> None:
+    """Enforce `MemoryToolStorageBackendProtocol` per §14.12.5 invariant 2.
+
+    Two-layer check: (a) attribute-present + callable sweep over the 5 CRUD
+    methods catches both missing methods AND non-callable shadowing (the latter
+    is admitted by `@runtime_checkable` isinstance per the PEP 544 caveat);
+    (b) final `@runtime_checkable` isinstance as the canonical Protocol
+    assertion. Raises `RT-FAIL-MEMORY-BACKEND-RESOLUTION` on any failure.
+    """
     missing = tuple(name for name in PROTOCOL_REQUIRED_METHODS if not hasattr(backend, name))
     if missing:
         raise MemoryBackendResolutionError(
@@ -299,11 +290,11 @@ async def materialize_memory_tool_registry_stage(
             f"{configured.value!r} has non-callable Protocol method(s): "
             f"{non_callable!r}"
         )
-    # pyright sees `backend` as always `LocalFilesystemMemoryToolBackend`
-    # at this branch (the only constructor reached), but the isinstance is
-    # the spec §14.12.5 invariant 2 canonical Protocol assertion — kept
-    # intentionally as defense-in-depth for tests that inject incomplete
-    # backends via constructor monkey-patching (AC #7).
+    # pyright sees `backend` as a concrete subtype at the override callsite
+    # (the only constructor reached), but the isinstance is the spec §14.12.5
+    # invariant 2 canonical Protocol assertion — kept intentionally as
+    # defense-in-depth for tests that inject incomplete backends via
+    # constructor monkey-patching (AC #7).
     if not isinstance(backend, MemoryToolStorageBackendProtocol):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise MemoryBackendResolutionError(
             f"RT-FAIL-MEMORY-BACKEND-RESOLUTION: constructed backend for "
@@ -311,10 +302,85 @@ async def materialize_memory_tool_registry_stage(
             f"MemoryToolStorageBackendProtocol isinstance check"
         )
 
-    # --- Step 4: construct registry + bind to ctx ---------------------------
-    registry = MemoryToolRegistry(
-        backend=backend,
-        configured_backend=configured,
+
+async def materialize_memory_tool_registry_stage(
+    config: RuntimeConfig,
+    ctx: _MutableHarnessContext,
+) -> MemoryToolRegistry:
+    """Compose the Memory tool storage-backend registry and bind to ctx.
+
+    Mutates `ctx` in-place: binds `ctx.memory_tool_registry` to the
+    constructed registry. Returns the registry for the stage-5 callsite to
+    inspect.
+
+    Resolution (R-FS-1 arc B5 — realizes the §14.12.1 surface-parametric
+    reading; all resolution at bootstrap per §14.12.5 invariant 1):
+
+    - **Operator override** (`memory_tool_backend_config` present): the named
+      backend is forced for EVERY deployment surface per §14.12.1; construct it
+      once and bind via the single-backend constructor. A construction failure
+      (e.g. S3 without a bucket param) aborts bootstrap fail-closed.
+    - **Default** (no override): resolve each `DeploymentSurface` independently.
+      A surface admitting the config-free `FILESYSTEM` backend resolves to it
+      (one shared instance per distinct enum); a surface that does NOT (e.g.
+      `MANAGED_CLOUD`, which admits `{s3, database}` — both requiring operator
+      `backend_params`) resolves to a frozen deferred
+      `RT-FAIL-MEMORY-BACKEND-RESOLUTION`. The ACTIVE
+      `config.deployment_surface` MUST resolve, else bootstrap aborts
+      fail-closed (preserving the pre-B5 active-surface behavior).
+
+    Per spec v1.17 §14.12.3 + plan v2.15 §1 U-RT-80 ACs.
+    """
+    if config.memory_tool_backend_config is not None:
+        # --- Operator override: one backend, EVERY surface (§14.12.1) --------
+        configured = config.memory_tool_backend_config.backend
+        override_backend = _construct_backend(configured, config)
+        _enforce_protocol_conformance(override_backend, configured)
+        registry = MemoryToolRegistry(backend=override_backend, configured_backend=configured)
+        ctx.memory_tool_registry = registry
+        return registry
+
+    # --- Default path: per-surface config-free resolution (R-FS-1 B5) --------
+    backends: dict[DeploymentSurface, MemoryToolStorageBackendProtocol] = {}
+    resolution_errors: dict[DeploymentSurface, str] = {}
+    enum_by_surface: dict[DeploymentSurface, MemoryToolStorageBackend] = {}
+    backend_by_enum: dict[MemoryToolStorageBackend, MemoryToolStorageBackendProtocol] = {}
+    for surface in DeploymentSurface:
+        admissible = memory_tool_storage_backend(surface)
+        if MemoryToolStorageBackend.FILESYSTEM not in admissible:
+            # No config-free backend for this surface — its admissible backends
+            # (S3 / DATABASE) all require operator-supplied backend_params, so a
+            # no-override config cannot provision them. Freeze a fail-closed
+            # deferred raise (realizes §14.12.1 "backend not available for the
+            # surface"); raised only if this surface is queried.
+            resolution_errors[surface] = (
+                f"RT-FAIL-MEMORY-BACKEND-RESOLUTION: deployment surface "
+                f"{surface.value!r} admits backends "
+                f"{sorted(b.value for b in admissible)!r}, none of which the "
+                f"no-config default resolver provisions (it provisions only the "
+                f"config-free {MemoryToolStorageBackend.FILESYSTEM.value!r} backend); "
+                f"supply memory_tool_backend_config to select an admissible backend "
+                f"for this surface (spec §14.12.1 + fork-doc §14.D)"
+            )
+            continue
+        picked = MemoryToolStorageBackend.FILESYSTEM
+        if picked not in backend_by_enum:
+            constructed = _construct_backend(picked, config)
+            _enforce_protocol_conformance(constructed, picked)
+            backend_by_enum[picked] = constructed
+        backends[surface] = backend_by_enum[picked]
+        enum_by_surface[surface] = picked
+
+    # The ACTIVE surface must resolve, else bootstrap aborts fail-closed
+    # (preserves the pre-B5 active-MANAGED_CLOUD-no-override behavior).
+    active = config.deployment_surface
+    if active not in backends:
+        raise MemoryBackendResolutionError(resolution_errors[active])
+
+    registry = MemoryToolRegistry.from_surface_map(
+        backends=backends,
+        resolution_errors=resolution_errors,
+        configured_backend=enum_by_surface[active],
     )
     ctx.memory_tool_registry = registry
     return registry

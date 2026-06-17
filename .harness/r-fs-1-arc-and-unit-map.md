@@ -53,7 +53,7 @@ rule (X-AL-3) forbids treating un-decomposed work as if it were already specifie
 ## 2. Build order + dependency model
 
 **Frozen order** (decided once, not re-litigated): **B1 → B3 → E → B2 → R → B4 → CA → B5 → B6 →
-B7 → M.** DONE: **B1 ✅ B3 ✅ E ✅ B2 ✅ R ✅ B4 ✅ CA ✅** (7 of 11). NEXT: **B5**. Then B6 → B7 → M.
+B7 → M.** DONE: **B1 ✅ B3 ✅ E ✅ B2 ✅ R ✅ B4 ✅ CA ✅ B5 ✅** (8 of 11). NEXT: **B6**. Then B7 → M.
 
 **Two kinds of "dependency."** The frozen order is a chosen *sequence*; it is **not** the same as
 a hard *blocker*. Most remaining arcs' real prerequisites have already landed, so they are
@@ -62,14 +62,14 @@ sequenced — not blocked — by the order.
 - **Serial cluster — "SHARED-RUNTIMECONFIG".** Arcs that all edit the same two surfaces (the
   `RuntimeConfig` object + the workflow-driver dispatch path) are kept **serial** so they don't
   collide: **B3 ✅, B2 ✅, E ✅, B4 ✅, B6** (and possibly M). These should land one at a time.
-- **Genuinely independent (parallel-safe).** **CA ✅, B5, B7** touch none of the cluster's shared
+- **Genuinely independent (parallel-safe).** **CA ✅, B5 ✅, B7** touch none of the cluster's shared
   surfaces — they can be built in parallel with the serial cluster and with each other.
-- **Standalone arcs (`B-*`).** Eight smaller capabilities that surfaced *during* implementation
+- **Standalone arcs (`B-*`).** Nine smaller capabilities that surfaced *during* implementation
   (not in the frozen order). Each is a committed build, sequenced as a follow-on when its turn
   comes (see §5).
 
-**What's actually unblocked today:** B5, B7 have their real prerequisites landed
-(R-830 done; CA ✅ #625). They are sequenced by the frozen order, not blocked. B6 is best done
+**What's actually unblocked today:** B7 has its real prerequisites landed
+(CA ✅ #625; B5 ✅ #628). It is sequenced by the frozen order, not blocked. B6 (NEXT) is best done
 within the serial cluster (after B4 ✅, to avoid `RuntimeConfig` contention). M is last.
 
 ---
@@ -212,23 +212,25 @@ grounding sweep (`.harness/r-fs-1-remaining-arcs-grounding-sweep-v1.md`), re-gro
 
 ### R-FS-1·B5 — Memory backend per deployment surface
 
-- **Status:** ▶ NEXT (build position 8 of 11) · **Cluster:** independent (parallel-safe) · **Units:** anticipated · **Type:** thin impl, no fork
+- **Status:** ✅ DONE (build position 8 of 11) · **Cluster:** independent (parallel-safe) · **Units:** as-built (PR #628) · **Type:** thin impl, no fork
 - **Depends-on:** R-830 ✅ (the filesystem / SQLite / S3 / managed-DB backends already exist) — **unblocked**
 - **Parallel-safe with:** the serial cluster, CA ✅, B7
 - **What it gives the harness.** Lets the agent's **memory store pick the right backend for where
   it's deployed** — a local file for local dev, a cloud database or S3 in the cloud. The backends
-  all exist; today the selector **ignores the deployment surface and always returns one backend**.
-  B5 makes that selection real (a surface→backend map resolved once at startup).
+  all exist; the selector previously **ignored the deployment surface and always returned one
+  backend**. B5 makes that selection real (a surface→backend map resolved once at startup).
 
-| Anticipated slice | What it does (plain language) | Fork / impl |
+| As-built slice (PR #628) | What it did | Fork / impl |
 |---|---|---|
-| Registry holds a surface→backend map | Replace the single frozen backend with a map keyed by deployment surface. | impl |
-| Factory populates the map | At startup, build one backend per usable surface from the existing backends. | impl |
-| Anti-vacuity test | Prove two different surfaces return two different backends. | impl |
+| Registry surface→backend map | `MemoryToolRegistry` keeps the single-backend constructor (override / one-backend-for-any-surface) + adds `from_surface_map`; `resolve_backend` is a pure lookup over the bootstrap-frozen map that replays a frozen `RT-FAIL` for an unconfigured surface. | impl |
+| Factory populates the map | Default path resolves each surface independently (config-free `FILESYSTEM`, built once per distinct enum) + freezes a deferred `RT-FAIL` for surfaces with no config-free backend (`MANAGED_CLOUD`); the **active surface must resolve or bootstrap aborts fail-closed** (preserves pre-B5 active-`MANAGED_CLOUD`-no-override). Override forces one backend for every surface. | impl |
+| Anti-vacuity + fail-closed lock | `resolve_backend(LOCAL)`→filesystem vs `resolve_backend(MANAGED)`→`RT-FAIL` (constructs-vs-raises proves the arg is read) + a regression test locking the active-`MANAGED`-no-override bootstrap-abort. | impl |
+
+*Active-surface dispatch is byte-identical (production threads the single active surface); the multi-surface map is contract-shape, not a runtime multiplex feature. The two spec'd-but-unimplemented backends (`ENCRYPTED_FILESYSTEM`, `OPERATOR_DEFINED`) registered as the forward arc `B-MEMORY-SURFACE-BACKEND-IMPLS` (§5).*
 
 ### R-FS-1·B6 — Per-tool sandbox tier + STDIO transport floor
 
-- **Status:** ⏳ queued (build position 9 of 11) · **Cluster:** SHARED-RUNTIMECONFIG (serial) · **Units:** anticipated · **Type:** medium fork + impl
+- **Status:** ▶ NEXT (build position 9 of 11) · **Cluster:** SHARED-RUNTIMECONFIG (serial) · **Units:** anticipated · **Type:** medium fork + impl
 - **Depends-on:** the per-server sandbox resolver (#503 ✅); couples with B2 ✅ (multi-server)
 - **Serial with:** B4 (avoid `RuntimeConfig` / dispatch-path contention)
 - **What it gives the harness.** Lets the harness apply a **different security sandbox level per
@@ -292,6 +294,7 @@ spine ledger (`.harness/beyond-mvp-capability-boundary-ledger.md`).
 | B-LAYER-BUDGET-OVERRIDE | CP | Enforce **per-layer time budgets** honoring per-workload/persona overrides. |
 | B-TOOL-GATE | runtime | Wire the **real per-server MCP-trust source** at the tool-step human-approval gate (today gate sites auto-approve). |
 | B-L2-EMBEDDING-ACTIVATION | runtime + CP | **Switch on L2/L3 routing in production** (the routing-activation gate below + wire the classifier/router + promote `fastembed`). |
+| B-MEMORY-SURFACE-BACKEND-IMPLS | runtime | Build the two remaining spec'd memory backends — **`ENCRYPTED_FILESYSTEM`** (filesystem + per-path encryption) and **`OPERATOR_DEFINED`** (operator-supplied class resolved by introspection) — that B5's surface→backend routing will then dispatch to (today the factory raises for both). |
 
 ---
 
@@ -322,8 +325,8 @@ meaningful — i.e., once a second production provider is configured. Captured a
 | R | Intelligently pick which model handles a request | ✅ done | 5 | serial | 4 as-built (+L2/L3 impl) |
 | B4 | Per-role & per-step model + prompt | ✅ done | 6 | serial | 4 slices as-built (#616/#618/#619/#621) |
 | CA | Report total run cost, broken down | ✅ done | 7 | independent | 3 slices as-built (#625) |
-| B5 | Pick the memory backend per deployment | ▶ next | 8 | independent | at arc-open |
-| B6 | Per-tool security sandbox level + STDIO floor | ⏳ | 9 | serial | at arc-open |
+| B5 | Pick the memory backend per deployment | ✅ | 8 | independent | as-built #628 |
+| B6 | Per-tool security sandbox level + STDIO floor | ▶ next | 9 | serial | at arc-open |
 | B7 | Sample only the telemetry that matters | ⏳ | 10 | independent | at arc-open |
 | M | Formal contract + wiring for managed agents | ⏳ | 11 | maybe serial | at arc-open |
 
