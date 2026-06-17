@@ -52,6 +52,7 @@ from harness_cp.workflow_driver_types import WorkflowStep
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.config.sandbox_defaults import (
     EffectiveSandboxDefaults,
+    compose_transport_floor,
     resolve_effective_sandbox_defaults,
 )
 from harness_runtime.lifecycle.as_is_wiring import RuntimeAsIsWiring
@@ -104,7 +105,9 @@ def _build_default_policy_sandbox_resolver(
             tier=effective.sandbox_tier,
             tech=effective.sandbox_tech,
             provider=effective.sandbox_provider,
-            assigned_tier_reason="per-server-default-sandbox-policy",
+            # B6 Slice 1: floor-aware — `compose_transport_floor` sets a transport-floor
+            # reason when the ADR-D2 §1.3 floor raised the tier (else the per-server default).
+            assigned_tier_reason=effective.assigned_tier_reason,
             cost_tier_overhead_ms=0,
         )
 
@@ -315,7 +318,15 @@ async def materialize_runtime_tool_dispatcher_stage(
     tool_execution_drivers: dict[ServerName, ToolExecutionDriver] = {}
     for server_name in ctx.mcp_client_hosts:
         entry = cfg_by_server[server_name]
-        effective_sandbox = resolve_effective_sandbox_defaults(entry, config.deployment_surface)
+        # R-FS-1 B6 Slice 1 (runtime spec v1.54 §14.9.8): compose the ADR-D2 §1.3
+        # per-MCP-transport floor into the surface-aware default tier (STDIO → ≥ TIER_3;
+        # L2-remote → TIER_4) — still per-server-uniform (one blast input per host). The
+        # §14.9.9 FR-1/FR-2 driver selection below then delivers the raised tier or
+        # fail-closes (RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE). Per-tool granularity = B6
+        # Slice 2 (B-PER-TOOL-SANDBOX-TIER).
+        effective_sandbox = compose_transport_floor(
+            resolve_effective_sandbox_defaults(entry, config.deployment_surface), entry
+        )
         sandbox_decision_resolvers[server_name] = _build_default_policy_sandbox_resolver(
             effective_sandbox
         )
