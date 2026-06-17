@@ -43,23 +43,89 @@ substitutions: []
     assert trend[-1]["retired"] == 46
 
 
-def test_resolved_actions_are_omitted_from_remaining_order(monkeypatch):
-    generate = _load_generate_module()
-    monkeypatch.setattr(generate, "_SUB_DERIVATION", None)
-
-    closure = generate.compute_closure(
-        [
-            {
-                "id": "R-300-multi-llm-second-provider",
-                "surface": "IV",
-                "status": "RESOLVED",
-            },
-        ],
-        {"retirement": {}},
+def _real_status_md() -> str:
+    return (Path(__file__).parents[1] / ".harness" / "roadmap_status.md").read_text(
+        encoding="utf-8"
     )
 
-    remaining_ids = {item["id"] for item in closure["remaining"]}
-    assert "R-300-multi-llm-second-provider" not in remaining_ids
+
+def test_remaining_forward_parses_frozen_child_arcs_in_order():
+    # The remaining-work itemization has ONE authoritative home: the
+    # "## Remaining forward work" section of .harness/roadmap_status.md. The parser
+    # must yield the frozen R-FS-1 build order B4 -> CA -> B5 -> B6 -> B7 -> M.
+    generate = _load_generate_module()
+    rf = generate.parse_remaining_forward(_real_status_md())
+
+    ids = [arc["id"] for arc in rf["child_arcs"]]
+    assert ids == [
+        "R-FS-1·B4",
+        "R-FS-1·CA",
+        "R-FS-1·B5",
+        "R-FS-1·B6",
+        "R-FS-1·B7",
+        "R-FS-1·M",
+    ]
+    assert [arc["n"] for arc in rf["child_arcs"]] == [1, 2, 3, 4, 5, 6]
+    assert rf["child_arcs"][0]["gate"].startswith("NEXT")
+    assert all(arc["layer"] == "build" for arc in rf["child_arcs"])
+
+
+def test_remaining_forward_parses_standalone_arcs():
+    generate = _load_generate_module()
+    rf = generate.parse_remaining_forward(_real_status_md())
+
+    ids = {arc["id"] for arc in rf["standalone"]}
+    # the 8 design-fork-first standalone arcs surfaced during impl
+    assert {"B-INTERSTEP", "B-L2-EMBEDDING-ACTIVATION", "B-TOOL-GATE", "B-EFFECT-FENCE"} <= ids
+    assert len(rf["standalone"]) == 8
+
+
+def test_remaining_excludes_closed_and_done_arcs():
+    # Closed/done items must never resurface in the curated remaining list.
+    generate = _load_generate_module()
+    rf = generate.parse_remaining_forward(_real_status_md())
+
+    blob = " ".join(arc["id"] + arc["label"] for arc in rf["child_arcs"])
+    for closed in ("R-411", "R-412", "R-901", "R-CXA-1", "R-300"):
+        assert closed not in blob
+    # done child arcs (B1/E/B2) are not in the remaining itemization
+    ids = {arc["id"] for arc in rf["child_arcs"]}
+    assert "R-FS-1·B1" not in ids
+    assert "R-FS-1·E" not in ids
+
+
+def test_assert_remaining_nonempty_raises_on_silent_empty():
+    # The fail-loud guard: R-FS-1 ACTIVE + zero parsed child arcs (a drifted source)
+    # must raise, not silently render an empty panel.
+    generate = _load_generate_module()
+    actions = [{"id": "R-FS-1", "status": "ACTIVE"}]
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="Remaining forward work"):
+        generate.assert_remaining_nonempty(actions, {"remaining_forward": {"child_arcs": []}})
+
+    # populated -> no raise
+    generate.assert_remaining_nonempty(
+        actions, {"remaining_forward": {"child_arcs": [{"id": "R-FS-1·B4"}]}}
+    )
+
+
+def test_compute_closure_sources_remaining_from_dashboard():
+    generate = _load_generate_module()
+    dashboard = {
+        "retirement": {},
+        "remaining_forward": {
+            "child_arcs": [
+                {"n": 1, "id": "R-FS-1·B4", "label": "x", "layer": "build", "gate": "g"}
+            ],
+            "standalone": [{"id": "B-INTERSTEP", "axis": "runtime", "shape": "s"}],
+        },
+    }
+    closure = generate.compute_closure([], dashboard)
+
+    assert [r["id"] for r in closure["remaining"]] == ["R-FS-1·B4"]
+    assert [s["id"] for s in closure["standalone"]] == ["B-INTERSTEP"]
 
 
 def test_dashboard_status_filters_default_closed_off():
@@ -94,8 +160,10 @@ def test_activation_open_count_matches_current_forward_catalog():
 
     closure = generate.compute_closure(actions, {"retirement": {}})
 
-    assert closure["activation"]["open"] == 0
-    assert closure["activation"]["total"] == 21
+    # Point-in-time forward-catalog check (update when the catalog changes): the
+    # activation axis = open forward-surface + R-CXA items. 4 open / 25 total at HEAD.
+    assert closure["activation"]["open"] == 4
+    assert closure["activation"]["total"] == 25
 
 
 def test_closed_xi_and_r901_items_do_not_appear_in_remaining_cards():

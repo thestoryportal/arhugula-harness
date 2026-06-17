@@ -121,47 +121,10 @@ try:
 except Exception:  # defensive — never crash the dashboard on a ledger read/import issue
     _SUB_DERIVATION = None
 
-# Ordered "remaining to complete", graph-derived from depends_on/blocks then layered.
-# layer ∈ {build, activation}. `gate` = what unblocks it / why it's where it is.
-REMAINING_ORDERED = [
-    # --- Build layer: close the substitution ledger ---
-    {
-        "n": 1,
-        "layer": "build",
-        "id": "R-700-phase-8-substitution-accounting",
-        "label": "Ratify the final retirement count",
-        "gate": "RESOLVED — Phase 8 declared CLOSED at 46/54; batch-56 back-flow now reports 54/54 retired.",
-    },
-    {
-        "n": 3,
-        "layer": "build",
-        "id": "R-CXA-1-as-is-seam",
-        "label": "Account/close the AS→IS seam",
-        "gate": "RESOLVED — batch-56 retires CXA-1 after the production producer, sidecar wiring, and edge-scope audit.",
-    },
-    {
-        "n": 4,
-        "layer": "build",
-        "id": "R-CXA-3-cp-as-seam",
-        "label": "CP→AS seam — build or narrow",
-        "gate": "Needs a real CP→AS runtime composer or a scope-narrowing decision.",
-    },
-    # --- Activation layer: operator-gated (creds + infra), deployment-ordered ---
-    {
-        "n": 8,
-        "layer": "activation",
-        "id": "R-100-mvp-config-discovery",
-        "label": "Config auto-discovery decision",
-        "gate": "Small spec decision — independent.",
-    },
-    {
-        "n": 10,
-        "layer": "activation",
-        "id": "R-300-multi-llm-second-provider",
-        "label": "Second LLM provider",
-        "gate": "Needs OpenAI/Ollama credentials + a mixed-provider test.",
-    },
-]
+# `REMAINING_ORDERED` was removed (R-FS-1 roadmap-hygiene reorg): the remaining-work
+# itemization now has ONE authoritative home -- the `## Remaining forward work` section
+# of `.harness/roadmap_status.md`, parsed by `parse_remaining_forward()` below. A
+# hardcoded copy here is what silently drifted to empty; do not reintroduce one.
 
 
 def compute_closure(actions: list[dict], dashboard: dict) -> dict:
@@ -196,8 +159,11 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
         if (a.get("surface") in {"IV", "V", "VI", "IX", "X"} or a["id"].startswith("R-CXA"))
     ]
     fwd_open = [a for a in fwd if a["status"] not in ("RESOLVED", "CANCELLED")]
-    closed_action_ids = {a["id"] for a in actions if a["status"] in ("RESOLVED", "CANCELLED")}
-    remaining = [item for item in REMAINING_ORDERED if item["id"] not in closed_action_ids]
+    # remaining-work itemization is parsed from the roadmap_status.md
+    # "## Remaining forward work" section (single authoritative home; R-FS-1 reorg).
+    rf = dashboard.get("remaining_forward", {})
+    remaining = rf.get("child_arcs", [])
+    standalone = rf.get("standalone", [])
     # waffle-grid breakdown (ui-ux-pro-max chart rec: fraction-of-whole filled).
     # `retired` + the non-retired split by state → total 54 (derived above; R-600).
     return {
@@ -223,6 +189,7 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
             "exercised_pct": 0,
         },
         "remaining": remaining,
+        "standalone": standalone,
     }
 
 
@@ -416,6 +383,57 @@ def _section(md: str, header: str) -> str:
     return m.group(1).strip() if m else ""
 
 
+def parse_remaining_forward(md: str) -> dict:
+    """Parse the '## Remaining forward work' section -- the single authoritative home for
+    the dashboard's remaining-work view (R-FS-1 roadmap-hygiene reorg; no hardcoded copy).
+
+    child_arcs (ordered, the frozen R-FS-1 build sequence):
+        `| <n> | <id> | <label> | <track> | <gate> |`
+    standalone (unsequenced, design-fork-first):
+        `| B-<ID> | <axis> | <shape> |`
+    """
+    section = _section(md, "Remaining forward work")
+    child_arcs = [
+        {
+            "n": int(m.group(1)),
+            "id": m.group(2).strip(),
+            "label": m.group(3).strip(),
+            "layer": m.group(4).strip(),
+            "gate": m.group(5).strip(),
+        }
+        for m in re.finditer(
+            r"^\|\s*(\d+)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*(build|activation)\s*\|\s*(.+?)\s*\|\s*$",
+            section,
+            re.MULTILINE,
+        )
+    ]
+    standalone = [
+        {"id": m.group(1).strip(), "axis": m.group(2).strip(), "shape": m.group(3).strip()}
+        for m in re.finditer(
+            r"^\|\s*(B-[A-Z0-9-]+)\s*\|\s*([^|]+?)\s*\|\s*(.+?)\s*\|\s*$",
+            section,
+            re.MULTILINE,
+        )
+    ]
+    return {"child_arcs": child_arcs, "standalone": standalone}
+
+
+def assert_remaining_nonempty(actions: list[dict], dashboard: dict) -> None:
+    """Fail loud if R-FS-1 is ACTIVE but '## Remaining forward work' parsed zero child arcs.
+
+    Guards the silent-empty failure mode this reorg fixed: a drifted/mistyped section header
+    or table format would otherwise render an empty 'Remaining to complete' panel while the
+    full-spec build is still in flight (CLAUDE.md section 6 no-silent-failure)."""
+    rfs1_active = any(a.get("id") == "R-FS-1" and a.get("status") == "ACTIVE" for a in actions)
+    child_arcs = dashboard.get("remaining_forward", {}).get("child_arcs", [])
+    if rfs1_active and not child_arcs:
+        raise RuntimeError(
+            "FATAL: R-FS-1 is ACTIVE but '## Remaining forward work' parsed zero child arcs in "
+            ".harness/roadmap_status.md -- the remaining-work source has drifted (check the "
+            "section header + table format). Refusing to render an empty remaining-work panel."
+        )
+
+
 def parse_dashboard(md: str) -> dict:
     out: dict = {
         "hash": "",
@@ -469,6 +487,9 @@ def parse_dashboard(md: str) -> dict:
     # drift log — count table rows in the section
     dl = _section(md, "Drift detection log")
     out["drift_log_count"] = len(re.findall(r"^\|\s*\d{4}-\d{2}-\d{2}\s*\|", dl, re.MULTILINE))
+
+    # remaining forward work -- the single authoritative itemization (R-FS-1 reorg)
+    out["remaining_forward"] = parse_remaining_forward(md)
     return out
 
 
@@ -1198,12 +1219,18 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
       <div class="rmeta">${{esc(r.id)}}</div>
     </div></div>`).join("");
 
+  const standalone = (cl.standalone||[]).map(s => `
+    <div class="rem"><span class="rn">◆</span><div class="rbody">
+      <div class="rt"><span class="rlabel">${{esc(s.id)}}</span> <span class="chip activation">${{esc(s.axis)}}</span></div>
+      <div class="rgate">${{esc(s.shape)}}</div>
+    </div></div>`).join("");
+
   document.getElementById("closure").innerHTML = `
     <div class="gridHero">
       <div class="panel lit meter">
-        <div class="k">Build closure / is the harness built?</div>
+        <div class="k">Substitution-retirement closure</div>
         <div class="big">${{b.pct_lo}}<span class="u">%</span></div>
-        <div class="sub"><strong>${{b.lo}} of ${{b.total}}</strong> substitutions retired — the canonical count, derived from the substitution ledger and ratified at the <strong>Phase-8 graduation (R-700)</strong>. The <strong>${{nonretiredCount}}</strong> rows below carry terminal sign-off ${{signoffNoun}}.</div>
+        <div class="sub"><strong>${{b.lo}} of ${{b.total}}</strong> H_E→H_T substitutions retired — the canonical R-600 ledger metric, ratified at <strong>Phase-8 graduation (R-700)</strong>. <em>This measures substitution retirement, not full-spec completion</em> — the live build axis is <strong>R-FS-1</strong> (full spec, beyond MVP); see “Remaining to complete” below. The <strong>${{nonretiredCount}}</strong> rows below carry terminal sign-off ${{signoffNoun}}.</div>
         <div class="gaugebar"><span style="width:${{b.pct_lo}}%"></span></div>
         <div class="waffle" role="img" aria-label="${{w.total}} substitution cells: ${{w.retired}} retired, ${{w.partial}} partial, ${{w.still_bounded}} still-bounded, ${{w.sb_indef}} indefinite">${{cells}}</div>
         <div class="legend">${{legend}}</div>
@@ -1212,7 +1239,7 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
         <div class="k">Activation / deployment closure</div>
         <div class="sub">Forward-axis items include deployment, integration, research, and CXA seams. The <strong>${{ac.open}} of ${{ac.total}}</strong> open forward items are producer-gated residuals; do not wire placeholders just to move counts.</div>
         <div class="big">${{ac.exercised_pct||0}}<span class="u">% exercised</span></div>
-        <div class="quote">"The harness is built; this axis switches on at a real deployment."</div>
+        <div class="quote">"Substitutions retired — this axis switches on at a real deployment; the full-spec build runs at R-FS-1."</div>
       </div>
     </div>
     <div class="grid2" style="margin-top:20px">
@@ -1224,6 +1251,10 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
         <div class="label" style="margin-bottom:14px">Remaining to complete / ordered by logical flow</div>
         ${{rem}}
       </div>
+    </div>
+    <div class="panel" style="margin-top:20px">
+      <div class="label" style="margin-bottom:14px">Standalone forward arcs (${{(cl.standalone||[]).length}}) / design-fork-first, unsequenced — surfaced during impl</div>
+      ${{standalone}}
     </div>`;
 }})();
 
@@ -1507,6 +1538,7 @@ def build(root: Path) -> dict:
         a["rword"] = disp["word"]
         a["why"] = ANNOTATIONS.get(a["id"], "")
     dashboard = parse_dashboard(dash_md)
+    assert_remaining_nonempty(actions, dashboard)
     open_prs = parse_open_prs(root)
     live_anchor = build_live_anchor(root, open_prs)
     return {
