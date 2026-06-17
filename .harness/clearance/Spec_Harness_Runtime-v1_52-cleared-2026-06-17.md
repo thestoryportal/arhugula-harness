@@ -2,7 +2,7 @@
 artifact: design-substrate/Spec_Harness_Runtime_v1.md
 version: v1.52
 cleared_at: 2026-06-17T00:00:00+00:00
-clearance_type: Phase-7-absorbed-via-fork-doc (OPERATOR-GATED — committed-invariant relaxation; effective ON operator ratification)
+clearance_type: Phase-7-absorbed-via-fork-doc (OPERATOR-RATIFIED 2026-06-17 — committed-invariant relaxation; AskUserQuestion "Ratify full")
 back_reference:
   - .harness/class_1_fork_b4_per_step_role_override_stepoverride_extension.md
   - .harness/beyond-mvp-capability-boundary-ledger.md (B4 Slice 4 spine registration)
@@ -24,7 +24,7 @@ v1.52 **relaxes two committed §14.5.3 invariants** to admit the **R-FS-1 arc B4
 - **Invariant 3 "Linear path untouched"** → conditional: the linear (+ evaluator-optimizer) path carries a role **only** when a per-step override is present.
 - **Invariant 1 "Non-breaking default"** → PRESERVED VERBATIM (absent override ⟹ byte-identical to v1.51).
 
-**This is a committed-invariant relaxation → it carries a genuine operator ratification gate** (`CLAUDE.md` `[[feedback-gate-only-on-meaningful-architecture-change]]`). FULL-SPEC pre-authorizes the build + back-flow, NOT silently relaxing a committed invariant — the roadmap reconciled this (build it, ratify the relaxation). **This marker is effective ONLY on operator ratification of the relaxation (the AUQ gate) + merge.** The PR does not merge without ratification; this marker, the v1.52 amendment, CP v1.38, and the impl land together or not at all.
+**This is a committed-invariant relaxation → it carried a genuine operator ratification gate** (`CLAUDE.md` `[[feedback-gate-only-on-meaningful-architecture-change]]`). FULL-SPEC pre-authorizes the build + back-flow, NOT silently relaxing a committed invariant — the roadmap reconciled this (build it, ratify the relaxation). **OPERATOR RATIFIED 2026-06-17** (AskUserQuestion "Ratify full" — relax invariant-2 + invariant-3, per-step role on all topologies incl. linear-path indexing). The v1.52 amendment, CP v1.38, and the impl land together; `merge_commit` pinned at the post-merge refresh.
 
 The **runtime dispatch path is UNCHANGED** (Option B) — the entire per-step-role mechanism is the CP driver fold (CP v1.38 §6.2). No new C-RT-NN, no new fail class, no IS-spec change, no ADR change. Reviewed during clearance: Option B over Option A (composition-time fold preserves the single dispatch-read source); the probe-resolves framing error (advisor-reversed: the relaxation is genuine, not a clarification); the verification (CP by-execution tests + the existing Slice-2 dispatch e2e proving `step_context.agent_role → distinct model+prompt`, the unchanged seam the fold feeds).
 
