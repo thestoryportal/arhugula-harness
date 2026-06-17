@@ -405,6 +405,17 @@ class RuntimeLLMDispatcher:
     # `route()` L3 sentinel so the injected `router` is reached. NOT a production
     # override; production never sets it (the factory leaves it None).
     layer_decisions_override: Mapping[RoutingLayer, LayerDecisionFn] | None = None
+    # C-CP-02 §2.1/§2.4 (R-FS-1 L2 — Option B) — the injected Layer-2 EMBEDDING
+    # decision fn (a sync k-NN embedding classifier; built by
+    # `embedding_resolution.make_embedding_classifier` over an injected light
+    # in-process `EmbeddingFn` + a trained corpus). When set, it is bound at the
+    # EMBEDDING layer of the production `layer_decisions` map below. Production
+    # leaves it None: like the Layer-3 `router`, the Layer-2 surface stays
+    # production-inert until R-300-second-provider makes DECLARATIVE conditional
+    # (DECLARATIVE always echoes today, so `route()` short-circuits before
+    # EMBEDDING). A test reaches it via `layer_decisions_override` (binding the
+    # classifier at EMBEDDING + omitting DECLARATIVE).
+    embedding_classifier: LayerDecisionFn | None = None
 
     async def dispatch(
         self,
@@ -569,17 +580,30 @@ class RuntimeLLMDispatcher:
                 cached_tokens_in=0,
             )
 
+        # C-CP-02 §2.1 production layer-decision map: DECLARATIVE always; the
+        # Layer-2 EMBEDDING classifier additionally when injected (R-FS-1 L2 —
+        # Option B). EMBEDDING is production-inert today (DECLARATIVE always
+        # echoes → `route()` short-circuits before EMBEDDING) until R-300 makes
+        # DECLARATIVE conditional; absent an injected classifier this is
+        # byte-identical to the pre-L2 `{DECLARATIVE: _declarative_echo}`.
+        production_layer_decisions: dict[RoutingLayer, LayerDecisionFn] = {
+            RoutingLayer.DECLARATIVE: _declarative_echo
+        }
+        if self.embedding_classifier is not None:
+            production_layer_decisions[RoutingLayer.EMBEDDING] = self.embedding_classifier
+
         await infer(
             envelope,
             dispatch=_provider_dispatch,
             manifest=self.routing_manifest or _EMPTY_ROUTING_MANIFEST,
             # `layer_decisions_override` is the test-only seam (C-CP-02 §2.5.5):
-            # None -> the production DECLARATIVE-echo (byte-identical). A test
-            # injects a sentinel-forcing map to reach the injected `router`.
+            # None -> the production map (DECLARATIVE-echo [+ EMBEDDING when a
+            # classifier is injected]). A test injects a sentinel-forcing map to
+            # reach the injected `router`, or an EMBEDDING-only map to reach L2.
             layer_decisions=(
                 self.layer_decisions_override
                 if self.layer_decisions_override is not None
-                else {RoutingLayer.DECLARATIVE: _declarative_echo}
+                else production_layer_decisions
             ),
             budgets=DEFAULT_LAYER_BUDGETS,
             # C-CP-02 §2.5 — production binds None (Layer-3 inert); a test
