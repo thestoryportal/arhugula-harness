@@ -52,7 +52,7 @@ from typing import Any, cast
 import pytest
 from harness_core import PersonaTier, StepID, WorkloadClass
 from harness_core.workflow_event_class import WorkflowEventClass
-from harness_cp.cp_shared_types import ModelBinding
+from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
     ProviderCandidate,
@@ -76,7 +76,7 @@ from harness_cp.workflow_driver_types import (
     StepKind,
     WorkflowStep,
 )
-from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEntry
 from harness_is.chain_verification import VerificationStatus, verify_chain
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
@@ -386,6 +386,44 @@ def test_orchestrator_workers_per_role_child_contexts() -> None:
     # All worker step_indexes are distinct (no two workers report as the same step).
     worker_indices = [dispatcher.contexts[f"worker-{i}"].step_index for i in range(3)]
     assert len(set(worker_indices)) == 3
+
+
+def test_per_step_role_override_replaces_derived_worker_role() -> None:
+    """CP spec v1.38 §6.1 (B4 Slice 4) — a per-step `StepOverride.agent_role` on a
+    worker REPLACES the B1 fan-out-derived role at the right granularity
+    (precedence per-step > derived). By-execution through the real fan-out driver:
+    worker-1 carries the operator-assigned role; its non-overridden siblings still
+    carry `derive_agent_role(step_id)` (the override is per-step-scoped, not
+    leaked across the fan-out). The role is folded onto the single
+    `step_context.agent_role` source the runtime read consumes — no second
+    dispatch-read authority (§14.5.3 composition-time relaxation)."""
+    override_role = AgentRole("audit-specialist")
+    manifest = _manifest().model_copy(
+        update={
+            "per_step_overrides": {
+                StepID("worker-1"): StepOverride(
+                    step_id=StepID("worker-1"), agent_role=override_role
+                )
+            }
+        }
+    )
+    ledger = _RecordingLedger()
+    dispatcher = _OWDispatcher()
+    execute_workflow(
+        manifest,
+        _steps(3),
+        run_id="run-role-fanout",
+        ctx=cast(DriverContext, _Ctx(ledger=ledger, emitter=_Emitter())),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(dispatcher),
+    )
+    # worker-1 → the operator override; worker-0/worker-2 → the derived role.
+    assert dispatcher.contexts["worker-1"].agent_role == override_role
+    assert dispatcher.contexts["worker-0"].agent_role == derive_agent_role(StepID("worker-0"))
+    assert dispatcher.contexts["worker-2"].agent_role == derive_agent_role(StepID("worker-2"))
+    # The override did NOT collapse the binding's other dimensions: worker-1 still
+    # resolves the manifest-default model (override carried role only).
+    assert dispatcher.contexts["worker-1"].branch_index == 1
 
 
 def test_orchestrator_workers_orchestrator_action_id_parents_workers() -> None:

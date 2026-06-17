@@ -41,7 +41,7 @@ from typing import Any, cast
 import pytest
 from harness_core import PersonaTier, StepID, WorkloadClass
 from harness_core.workflow_event_class import WorkflowEventClass
-from harness_cp.cp_shared_types import ModelBinding
+from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
     ProviderCandidate,
@@ -1360,3 +1360,39 @@ def test_per_step_prompt_override_threads_through_driver_to_dispatch() -> None:
     assert by_step["step-0"].override_applied is True
     assert by_step["step-1"].prompt_version_sha is None
     assert by_step["step-1"].override_applied is False
+
+
+# ---------------------------------------------------------------------------
+# R-FS-1 B4 Slice 4 — per-step ROLE override folded onto step_context.agent_role
+# ---------------------------------------------------------------------------
+
+
+def test_per_step_role_override_threads_onto_linear_step_context() -> None:
+    """CP spec v1.38 §6.1 (B4 Slice 4) — a `StepOverride.agent_role` on a
+    SINGLE_THREADED_LINEAR step is folded by the driver onto the SINGLE
+    `step_context.agent_role` source (the §14.5.3 invariant-3 "linear path
+    untouched" composition-time relaxation). By-execution proof through the real
+    `execute_workflow` loop: the dispatch-observed `step_context.agent_role` IS
+    the override on step-0; step-1 (no override) stays None (byte-identical to
+    v1.37 — invariant-1 non-breaking default holds per-step)."""
+    role = AgentRole("specialist-reviewer")
+    manifest = _manifest().model_copy(
+        update={
+            "per_step_overrides": {
+                StepID("step-0"): StepOverride(step_id=StepID("step-0"), agent_role=role)
+            }
+        }
+    )
+    ctx, _, _ = _ctx()
+    probe = _BranchFieldsProbeDispatcher()
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0), _step(1)],
+        run_id="run-role",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, probe)),
+    )
+    # (branch_index, agent_role) per dispatched step: linear → branch_index None
+    # throughout; agent_role is the override on step-0, None on step-1.
+    assert probe.observed == [(None, role), (None, None)]

@@ -1962,6 +1962,15 @@ def _execute_workflow_body(
         # at workflow_driver_types.py:189-192). None preserves single-tenant
         # default; operator-supplied values flow through the 4-substep audit
         # composition unchanged.
+        # R-FS-1 B4 Slice 4 (CP spec v1.38 §6.1) — per-step ROLE override folded
+        # into the single `StepExecutionContext.agent_role` source. On the linear
+        # path there is no fan-out-derived role, so the per-step override is the
+        # sole role source: `binding.agent_role` (None when no override → the
+        # field stays None → byte-identical to v1.37, §14.5.3 invariant-1 holds;
+        # an override THREADS the role on the linear path, relaxing the §14.5.3
+        # invariant-3 "linear path untouched" at composition-time per the runtime
+        # spec v1.52 operator-ratified relaxation). The runtime dispatch reads
+        # this single source unchanged — no two-authority-at-dispatch.
         step_context = StepExecutionContext(
             workflow_id=manifest_entry.workflow_id,
             parent_action_id=(f"workflow:{manifest_entry.workflow_id}:step:{step_index}"),
@@ -1972,6 +1981,7 @@ def _execute_workflow_body(
             parent_idempotency_key=step_idempotency_key_pre,
             tenant_id=ctx.tenant_id,
             step_index=step_index,
+            agent_role=binding.agent_role,
         )
         # v1.6 routing-layer refactor per C-RT-17 §14.7.7: dispatch via
         # registry.lookup(step.kind).dispatch(...) instead of single
@@ -2741,6 +2751,24 @@ branches (the B1 design "non-degenerate with one role"). The runtime role-read
 (U-RT-114) therefore routes every branch to the same model. Per-role worker
 specialization is the ORCHESTRATOR_WORKERS family (U-CP-88+)."""
 
+
+def _per_step_role_override(
+    manifest_entry: WorkflowManifestEntry, step_id: object
+) -> AgentRole | None:
+    """The per-step `StepOverride.agent_role` for `step_id`, else `None` (B4 Slice 4).
+
+    A lightweight read of the per-step ROLE override (CP spec v1.38 §6.1) for the
+    composition sites that do NOT already resolve a full `StepEffectiveBinding`
+    (the orchestrator's own context; the decentralized handoff-record `next_role`
+    preview of the next stage). Where a `binding` is already in hand, read
+    `binding.agent_role` directly — `resolve_step_binding` sets it to the same
+    override value, so the two are equivalent. `None` ⟹ no override ⟹ the call
+    site's existing role source (derived / default / unset) is unchanged.
+    """
+    override = manifest_entry.per_step_overrides.get(step_id)  # type: ignore[arg-type]
+    return override.agent_role if override is not None else None
+
+
 _DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS = 300.0
 """Wall-clock deadline on the fan-out barrier (C-CP-25 §25.11 bounded barriers;
 O-CP-1(c) impl-discretion). Bounds the PARENT's return: a branch stuck past this
@@ -3012,18 +3040,21 @@ def _execute_parallelization(
         tuple[int, WorkflowStep, StepExecutionContext, BufferingLedgerWriter, StepEffectiveBinding]
     ] = []
     for branch_index, step in enumerate(steps):
-        child = compose_branch_child_context(
-            fanout_parent,
-            branch_index=branch_index,
-            agent_role=_DEFAULT_PARALLELIZATION_AGENT_ROLE,
-        )
-        writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=branch_index)
+        # Resolve the per-step binding FIRST so a per-step ROLE override (CP spec
+        # v1.38 §6.1, B4 Slice 4) can take precedence over the parallelization
+        # default role when composing the child (precedence per-step > default).
         binding = resolve_step_binding(
             manifest_entry,
             str(step.step_id),
             default_model_binding=default_model_binding,
             persona_tier=manifest_entry.persona_tier,
         )
+        child = compose_branch_child_context(
+            fanout_parent,
+            branch_index=branch_index,
+            agent_role=binding.agent_role or _DEFAULT_PARALLELIZATION_AGENT_ROLE,
+        )
+        writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=branch_index)
         branch_plan.append((branch_index, step, child, writer, binding))
     branch_writers = [plan[3] for plan in branch_plan]
 
@@ -3395,6 +3426,11 @@ def _execute_evaluator_optimizer(
             parent_idempotency_key=entry_idempotency_key,
             tenant_id=ctx.tenant_id,
             step_index=declared_step_index,
+            # B4 Slice 4 (CP spec v1.38 §6.1) — per-step ROLE override folded into
+            # the single role source (evaluator-optimizer generate/evaluate steps
+            # carry no derived role, so the override is the sole source — linear
+            # precedent). None → byte-identical to v1.37 (§14.5.3 invariant-1).
+            agent_role=binding.agent_role,
         )
         step_output = step_dispatchers.lookup(step.step_kind).dispatch(
             binding, step, step_context=step_context
@@ -3666,6 +3702,12 @@ def _execute_orchestrator_workers(
         parent_idempotency_key=orchestrator_idempotency_key,
         tenant_id=ctx.tenant_id,
         step_index=0,
+        # B4 Slice 4 — a per-step ROLE override on the orchestrator step itself
+        # (it carries no derived role — coordinator default). Folded here so the
+        # override applies to the orchestrator's OWN dispatch; workers re-set
+        # their own role via compose_branch_child_context, so this does not leak
+        # to the fan-out children (CP spec v1.38 §6.1).
+        agent_role=_per_step_role_override(manifest_entry, orchestrator_step.step_id),
     )
     try:
         orchestrator_binding = resolve_step_binding(
@@ -3707,11 +3749,31 @@ def _execute_orchestrator_workers(
         tuple[int, WorkflowStep, StepExecutionContext, BufferingLedgerWriter, StepEffectiveBinding]
     ] = []
     for branch_index, step in enumerate(worker_steps):
-        # Per-worker role (B1: step_id-derived — distinct per worker, bindable via
-        # RoutingManifest.per_role_bindings; the binding catalog is B4). The
-        # derivation is the single shared B1↔B4 contract (B4 Slice 2) an operator
-        # keys their catalog on — see `derive_agent_role` (per_role_catalog.py).
-        role = derive_agent_role(step.step_id)
+        # Resolve the per-step binding FIRST so a per-step ROLE override (CP spec
+        # v1.38 §6.1, B4 Slice 4) can take precedence over the fan-out-derived
+        # role when composing the child context (precedence per-step > derived).
+        binding = resolve_step_binding(
+            manifest_entry,
+            str(step.step_id),
+            default_model_binding=default_model_binding,
+            persona_tier=manifest_entry.persona_tier,
+        )
+        # Per-worker role: a per-step `StepOverride.agent_role` override (B4
+        # Slice 4) wins; else the B1 step_id-derived role (distinct per worker,
+        # bindable via RoutingManifest.per_role_bindings; the catalog is B4
+        # Slice 2). `derive_agent_role` is the single shared B1↔B4 contract an
+        # operator keys their catalog on (per_role_catalog.py). Folding the
+        # override here keeps `StepExecutionContext.agent_role` the SINGLE role
+        # source the runtime dispatch reads (§14.5.3 composition-time relaxation,
+        # runtime spec v1.52 — no two-authority-at-dispatch).
+        # Truthiness (not `is not None`) is DELIBERATE + dispatch-consistent: an
+        # empty `AgentRole("")` is not a usable routing key (the dispatch read
+        # `_role = step_context.agent_role or _MVP_DEFAULT_AGENT_ROLE` drops it;
+        # no `per_role_bindings` catalog keys on ""), so an accidental empty
+        # override falls through to the worker's derived role rather than
+        # suppressing it to the bare default. Applies to every `... or derive/
+        # default` fold site below. (Out-of-family review [P3].)
+        role = binding.agent_role or derive_agent_role(step.step_id)
         # The worker's DECLARED step ordinal is its position in the original
         # `steps` (orchestrator=0, workers=1,2,…), i.e. `branch_index + 1`.
         # `compose_branch_child_context` inherits `step_index` from the fan-out
@@ -3726,12 +3788,6 @@ def _execute_orchestrator_workers(
             fanout_parent, branch_index=branch_index, agent_role=role
         ).model_copy(update={"step_index": branch_index + 1})
         writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=branch_index)
-        binding = resolve_step_binding(
-            manifest_entry,
-            str(step.step_id),
-            default_model_binding=default_model_binding,
-            persona_tier=manifest_entry.persona_tier,
-        )
         branch_plan.append((branch_index, step, child, writer, binding))
     branch_writers = [plan[3] for plan in branch_plan]
 
@@ -4314,7 +4370,17 @@ def _execute_decentralized_handoff(
         ), steps_executed
 
     for stage_index, step in enumerate(steps):
-        role = derive_agent_role(step.step_id)
+        # Resolve the per-step binding FIRST (deterministic, pure — matches the
+        # linear/orchestrator sites that call it outside the dispatch try) so a
+        # per-step ROLE override (CP spec v1.38 §6.1, B4 Slice 4) can take
+        # precedence over the stage's derived role (precedence per-step > derived).
+        binding = resolve_step_binding(
+            manifest_entry,
+            str(step.step_id),
+            default_model_binding=default_model_binding,
+            persona_tier=manifest_entry.persona_tier,
+        )
+        role = binding.agent_role or derive_agent_role(step.step_id)
         # The spawning context the next stage descends from: its parent_action_id is
         # the prior stage's action_id (the chain; the workflow origin anchors stage 0).
         spawning = StepExecutionContext(
@@ -4340,12 +4406,6 @@ def _execute_decentralized_handoff(
         # writer per stage → one STEP_BOUNDARY per stage via _drain_and_emit_*.
         writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=stage_index)
         try:
-            binding = resolve_step_binding(
-                manifest_entry,
-                str(step.step_id),
-                default_model_binding=default_model_binding,
-                persona_tier=manifest_entry.persona_tier,
-            )
             output = step_dispatchers.lookup(step.step_kind).dispatch(
                 binding, step, step_context=stage_ctx
             )
@@ -4407,7 +4467,14 @@ def _execute_decentralized_handoff(
                     completed_action_id=this_action_id,
                     completed_context=stage_ctx,
                     next_step=next_step,
-                    next_role=derive_agent_role(next_step.step_id),
+                    # B4 Slice 4 — the handoff-record preview of the next stage's
+                    # role must reflect a per-step override so the audit record
+                    # matches the role the next stage's loop iteration will fold
+                    # in (precedence per-step > derived); CP spec v1.38 §6.1.
+                    next_role=(
+                        _per_step_role_override(manifest_entry, next_step.step_id)
+                        or derive_agent_role(next_step.step_id)
+                    ),
                     actor_identity=actor_identity,
                 )
             )

@@ -46,7 +46,7 @@ from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 from harness_is.state_ledger_write import EntryPayload, WriteResult
 from pydantic import BaseModel, ConfigDict
 
-from harness_cp.cp_shared_types import ActorIdentity, ModelBinding
+from harness_cp.cp_shared_types import ActorIdentity, AgentRole, ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.handoff_context import LedgerEntryRef
 from harness_cp.hitl_placement import HITLPlacement
@@ -168,6 +168,27 @@ class StepEffectiveBinding(BaseModel):
     per-step prompt override live step-level provenance (CP spec v1.37 §6.6).
     """
 
+    agent_role: AgentRole | None = None
+    """v1.38 addition (CP spec v1.38 §6.2; R-FS-1 arc B4 Slice 4 per-step ROLE
+    override). The resolved per-step `AgentRole` — the override value when a
+    `StepOverride` for this step carries one, else `None`.
+
+    Like `prompt_version_sha`, this is `None`-or-override (no manifest-entry-level
+    role default at the CP layer; the fan-out-derived role + linear-path default
+    resolve downstream at CP-driver composition). `None` means "no per-step role
+    override" → the driver composes `StepExecutionContext.agent_role` from the
+    fan-out-derived role (non-linear) or leaves it unset (linear → runtime
+    `_MVP_DEFAULT_AGENT_ROLE`).
+
+    The CP driver folds this into the SINGLE `StepExecutionContext.agent_role`
+    source at composition (precedence per-step > fan-out-derived > default), so
+    the runtime dispatch reads one role source — the composition-time relaxation
+    of the §14.5.3 invariant-2/3 (runtime spec v1.52). Rides
+    `binding.model_dump(...)` into the per-step override state-ledger entry's
+    outcome-hash for step-level provenance (CP spec v1.38 §6.6), like
+    `prompt_version_sha`.
+    """
+
 
 def resolve_step_binding(
     manifest_entry: WorkflowManifestEntry,
@@ -225,6 +246,12 @@ def resolve_step_binding(
         # §14.5.2 dispatch resolves the sha → content with precedence
         # per-step > per-role > run-level default.
         prompt_version_sha=override.prompt_version_sha,
+        # CP spec v1.38 §6.2 — per-step ROLE override (B4 Slice 4). `None`-or-
+        # override; the CP driver folds it into the single
+        # `StepExecutionContext.agent_role` source at composition (precedence
+        # per-step > fan-out-derived > default), relaxing the §14.5.3 invariant-2/3
+        # at composition-time only (single dispatch-read role source preserved).
+        agent_role=override.agent_role,
     )
 
 

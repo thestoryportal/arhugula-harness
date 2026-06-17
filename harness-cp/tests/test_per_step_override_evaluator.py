@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from harness_as import GateLevel
 from harness_core import PersonaTier, StepID, WorkloadClass
-from harness_cp.cp_shared_types import ModelBinding
+from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
     ProviderCandidate,
@@ -148,6 +148,78 @@ def test_prompt_version_sha_rides_binding_model_dump_for_provenance() -> None:
     d1, d2 = _dump(sha1), _dump(sha2)
     assert d1["prompt_version_sha"] == sha1
     assert d2["prompt_version_sha"] == sha2
+
+
+def test_resolve_step_binding_applies_agent_role() -> None:
+    """B4 Slice 4 (CP spec v1.38 §6.2): resolve_step_binding carries a per-step
+    StepOverride.agent_role onto the StepEffectiveBinding. An override carrying
+    ONLY a role still applies (so the override state-ledger entry fires) while
+    model/engine inherit the manifest defaults."""
+    role = AgentRole("specialist-reviewer")
+    manifest = _manifest(
+        per_step_overrides={StepID("s1"): StepOverride(step_id=StepID("s1"), agent_role=role)}
+    )
+    binding = resolve_step_binding(
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    assert binding.agent_role == role
+    assert binding.override_applied is True
+    assert binding.model_binding == _DEFAULT_BINDING
+    assert binding.engine_class is EngineClass.PURE_PATTERN_NO_ENGINE
+
+
+def test_resolve_step_binding_agent_role_none_without_role_override() -> None:
+    """No per-step role dimension → agent_role is None (the CP driver folds the
+    fan-out-derived role / linear-path default instead): both for an override that
+    omits the role field and for a step with no override at all."""
+    manifest = _manifest(
+        per_step_overrides={
+            StepID("s1"): StepOverride(step_id=StepID("s1"), model_binding=_OVERRIDE_BINDING)
+        }
+    )
+    overridden = resolve_step_binding(
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    assert overridden.agent_role is None  # override present, no role dimension
+    no_override = resolve_step_binding(
+        manifest,
+        "s2",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    assert no_override.agent_role is None
+
+
+def test_agent_role_rides_binding_model_dump_for_provenance() -> None:
+    """B4 Slice 4 provenance (CP spec v1.38 §6.6): binding.model_dump — which IS
+    post_override_step_config at the WIRED per-step override state-ledger entry
+    (workflow_driver.py) — carries agent_role, so a per-step role flip is captured
+    in that entry's outcome-hash (live step-level provenance, NOT the run-level
+    §5.2 procedural-tier hash)."""
+
+    def _dump(role: str) -> dict[str, object]:
+        manifest = _manifest(
+            per_step_overrides={
+                StepID("s1"): StepOverride(step_id=StepID("s1"), agent_role=AgentRole(role))
+            }
+        )
+        binding = resolve_step_binding(
+            manifest,
+            "s1",
+            default_model_binding=_DEFAULT_BINDING,
+            persona_tier=PersonaTier.TEAM_BINDING,
+        )
+        return binding.model_dump(mode="json")
+
+    d1, d2 = _dump("role-a"), _dump("role-b")
+    assert d1["agent_role"] == "role-a"
+    assert d2["agent_role"] == "role-b"
 
 
 def test_audit_ref_populated_on_override() -> None:
