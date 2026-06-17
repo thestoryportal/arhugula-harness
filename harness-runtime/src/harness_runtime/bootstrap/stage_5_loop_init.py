@@ -536,9 +536,16 @@ async def execute(
     if managed_agents_dispatcher is not None:
         assert config.managed_agents_config is not None  # narrowed by the factory's non-None return
         ctx.managed_agents_client = config.managed_agents_config.client
+        # §14.20.3: the managed-agents facade uses its OWN result-timeout
+        # (`managed_agents_config.step_timeout_seconds`, 600s default), NOT the
+        # shared 30s `step_dispatch_timeout_seconds`. A vendor session runs
+        # minutes; the shared bound would fire RT-FAIL-STEP-DISPATCH-TIMEOUT
+        # prematurely while the vendor session keeps running, billable, never
+        # cancelled (the abandoned coroutine never reaches its cancel-on-give-up
+        # path). The timeout must exceed the per-step poll budget.
         dispatchers[StepKind.MANAGED_AGENTS] = materialize_sync_dispatcher_facade(
             cast(Any, managed_agents_dispatcher),
-            result_timeout_seconds=config.step_dispatch_timeout_seconds,
+            result_timeout_seconds=config.managed_agents_config.step_timeout_seconds,
         )
     ctx.step_dispatchers = StepKindDispatcherRegistry(dispatchers=dispatchers)
 

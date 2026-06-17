@@ -194,6 +194,11 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         # contract (Reading B operator-opt-in MVP absorption of fork
         # class_1_fork_as_8d_skill_activation_surface_absence.md).
         "skill_activation_emitter",
+        # R-FS-1 arc M (runtime spec v1.55 §4 C-RT-04 + §14.20 C-RT-28) —
+        # ManagedAgentsClientProtocol carrier; bound at stage 5 when opted-in on
+        # DeploymentSurface.MANAGED_CLOUD. Operator-opt-in MVP mirroring
+        # skill_activation_emitter; default None preserves pre-v1.55 behavior.
+        "managed_agents_client",
         # U-RT-111 (v2.36 Phase 1 plumbing) — RuntimeCpIsWiring binding
         # surface per runtime plan v2.36 §1.2 ACs #3 + #11. Operator-opt-in
         # MVP; default None preserves pre-v2.36 production behavior. Typed

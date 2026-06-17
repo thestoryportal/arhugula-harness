@@ -78,10 +78,23 @@ class ManagedAgentsConfig:
     runtime_checkable Protocol is duck-typed at dispatch, not validated at the
     dataclass layer) — the same pattern as ``SkillActivationHookConfig.hook``.
 
-    Per runtime spec v1.55 §14.20.1.
+    ``step_timeout_seconds`` is the ``SyncDispatcherFacade``
+    ``result_timeout_seconds`` bound used **only** for the
+    ``StepKind.MANAGED_AGENTS`` facade binding — intentionally DECOUPLED from
+    the shared ``RuntimeConfig.step_dispatch_timeout_seconds`` (30s default).
+    A vendor-run managed-agents session runs **minutes**, not seconds; binding
+    the facade to the shared 30s bound would fire ``RT-FAIL-STEP-DISPATCH-
+    TIMEOUT`` at 30s (wrong fail class) while the vendor session keeps running,
+    billable, never cancelled (the abandoned coroutine's poll loop never
+    reaches its cancel-on-give-up path). The default 600s must exceed the
+    per-step poll budget (``max_poll_attempts × poll_interval_seconds`` +
+    create/send/retrieve latency headroom); the operator sizes both together.
+
+    Per runtime spec v1.55 §14.20.1 / §14.20.3.
     """
 
     client: Any = None
+    step_timeout_seconds: float = 600.0
 
 
 class ManagedAgentsStageMaterializeError(Exception):
@@ -188,10 +201,25 @@ class ManagedAgentsStepDispatcher:
             pass
 
         if not reached_terminal:
+            # §14.20.2 step 4 — the session is still running server-side and
+            # billable; the harness has given up waiting. Best-effort cancel to
+            # avoid orphaning a billable vendor session before raising. A cancel
+            # failure must NOT mask the primary (budget-exhausted) error — it is
+            # the load-bearing signal — so swallow only the cancel exception.
+            try:
+                await self.client.cancel_session(session_id=session.session_id)
+            except Exception as cancel_exc:  # best-effort cleanup on give-up
+                raise ManagedAgentsSessionError(
+                    f"managed-agents session {session.session_id} did not reach a "
+                    f"terminal status within {max_poll_attempts} polls "
+                    f"(last status={session.status.value}); the best-effort cancel "
+                    f"also failed ({cancel_exc!r}) — the session may be orphaned"
+                ) from cancel_exc
             raise ManagedAgentsSessionError(
                 f"managed-agents session {session.session_id} did not reach a "
                 f"terminal status within {max_poll_attempts} polls "
-                f"(last status={session.status.value})"
+                f"(last status={session.status.value}); cancelled to avoid "
+                f"orphaning a billable session"
             )
         if session.status not in _SUCCESS_STATUSES:
             raise ManagedAgentsSessionError(

@@ -516,6 +516,7 @@ class _MutableHarnessContext:
             resume_context_holder=self.resume_context_holder,
             webhook_delivery_composer=self.webhook_delivery_composer,
             skill_activation_emitter=self.skill_activation_emitter,
+            managed_agents_client=self.managed_agents_client,
             cp_is_wiring=(
                 self.cxa_stages["cp_is_wiring"].wiring
                 if "cp_is_wiring" in self.cxa_stages
