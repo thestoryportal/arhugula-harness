@@ -53,7 +53,7 @@ rule (X-AL-3) forbids treating un-decomposed work as if it were already specifie
 ## 2. Build order + dependency model
 
 **Frozen order** (decided once, not re-litigated): **B1 → B3 → E → B2 → R → B4 → CA → B5 → B6 →
-B7 → M.** DONE: **B1 ✅ B3 ✅ E ✅ B2 ✅ R ✅ B4 ✅** (6 of 11). NEXT: **CA**. Then B5 → B6 → B7 → M.
+B7 → M.** DONE: **B1 ✅ B3 ✅ E ✅ B2 ✅ R ✅ B4 ✅ CA ✅** (7 of 11). NEXT: **B5**. Then B6 → B7 → M.
 
 **Two kinds of "dependency."** The frozen order is a chosen *sequence*; it is **not** the same as
 a hard *blocker*. Most remaining arcs' real prerequisites have already landed, so they are
@@ -62,14 +62,14 @@ sequenced — not blocked — by the order.
 - **Serial cluster — "SHARED-RUNTIMECONFIG".** Arcs that all edit the same two surfaces (the
   `RuntimeConfig` object + the workflow-driver dispatch path) are kept **serial** so they don't
   collide: **B3 ✅, B2 ✅, E ✅, B4 ✅, B6** (and possibly M). These should land one at a time.
-- **Genuinely independent (parallel-safe).** **CA, B5, B7** touch none of the cluster's shared
+- **Genuinely independent (parallel-safe).** **CA ✅, B5, B7** touch none of the cluster's shared
   surfaces — they can be built in parallel with the serial cluster and with each other.
 - **Standalone arcs (`B-*`).** Eight smaller capabilities that surfaced *during* implementation
   (not in the frozen order). Each is a committed build, sequenced as a follow-on when its turn
   comes (see §5).
 
-**What's actually unblocked today:** CA, B5, B7 all have their real prerequisites landed
-(B1/B2/R/B4 done; R-830 done). They are sequenced by the frozen order, not blocked. B6 is best done
+**What's actually unblocked today:** B5, B7 have their real prerequisites landed
+(R-830 done; CA ✅ #625). They are sequenced by the frozen order, not blocked. B6 is best done
 within the serial cluster (after B4 ✅, to avoid `RuntimeConfig` contention). M is last.
 
 ---
@@ -196,25 +196,25 @@ grounding sweep (`.harness/r-fs-1-remaining-arcs-grounding-sweep-v1.md`), re-gro
 
 ### R-FS-1·CA — Cost aggregate rollup
 
-- **Status:** ▶ NEXT (build position 7 of 11) · **Cluster:** independent (parallel-safe) · **Units:** anticipated · **Type:** small spec fork + bounded impl
-- **Depends-on:** B1 ✅ (so multi-branch runs produce real per-call costs to roll up) — **unblocked**
+- **Status:** ✅ DONE (build position 7 of 11; PR #625, runtime spec v1.53 §9 C-RT-09) · **Cluster:** independent (parallel-safe) · **Type:** small spec fork + bounded impl
+- **Depends-on:** B1 ✅ (so multi-branch runs produce real per-call costs to roll up) — **was unblocked**
 - **Parallel-safe with:** the serial cluster, B5, B7
-- **What it gives the harness.** Makes the harness **report the total cost of a run, broken down**
-  (by provider, model, etc.). Per-call cost tracking already works and fires on every dispatch; CA
-  **rolls those per-call costs up into the final run result** (today the run result hard-codes an
-  empty cost field).
+- **What it gave the harness.** The harness now **reports the total cost of a run, broken down by
+  provider+model** (`RunResult.cost_attribution`, was hard-coded `()`). Per-call cost records
+  (LLM/tool/validator/webhook) accumulate over the run and roll up at `_build_run_result` along
+  `RollupAxis.PER_PROVIDER_AND_MODEL` (single axis ⟹ `sum(total_cost)` = true run cost).
 
-| Anticipated slice | What it does (plain language) | Fork / impl |
+| As-built slice (PR #625) | What it did | Fork / impl |
 |---|---|---|
-| Aggregate-shape contract | Decide exactly which breakdown the run-result cost field carries (small spec amendment). | small fork (pre-authorized) |
-| Run-scoped accumulator | Collect each call's cost record over the run. | impl |
-| Wire the rollup | Populate the run result with the rolled-up cost instead of an empty value. | impl |
+| Aggregate-shape contract | Named the axis `PER_PROVIDER_AND_MODEL` + reconciled the phantom `CostAttribution` type-name (runtime spec v1.52→v1.53 §9). `PER_PROVIDER_DISCRIMINATOR` inadmissible (production dispatch-type tags ∉ `CrossFamilyTag` → registered as `B-COST-DISCRIMINATOR-TAXONOMY`). | fork (pre-authorized, no operator gate) |
+| Run-scoped accumulator | `CostRecordAccumulator` holder on `HarnessContext` (by-reference — a typed `list` would be Pydantic-copied at `freeze()`; advisor-caught). | impl |
+| Wire the rollup | 4 per-dispatch cost wrappers append; `_build_run_result` rolls up + sets the field. Freeze-by-reference regression test added. | impl |
 
 ### R-FS-1·B5 — Memory backend per deployment surface
 
-- **Status:** ⏳ queued (build position 8 of 11) · **Cluster:** independent (parallel-safe) · **Units:** anticipated · **Type:** thin impl, no fork
+- **Status:** ▶ NEXT (build position 8 of 11) · **Cluster:** independent (parallel-safe) · **Units:** anticipated · **Type:** thin impl, no fork
 - **Depends-on:** R-830 ✅ (the filesystem / SQLite / S3 / managed-DB backends already exist) — **unblocked**
-- **Parallel-safe with:** the serial cluster, CA, B7
+- **Parallel-safe with:** the serial cluster, CA ✅, B7
 - **What it gives the harness.** Lets the agent's **memory store pick the right backend for where
   it's deployed** — a local file for local dev, a cloud database or S3 in the cloud. The backends
   all exist; today the selector **ignores the deployment surface and always returns one backend**.
@@ -321,16 +321,16 @@ meaningful — i.e., once a second production provider is configured. Captured a
 | B2 | Connect to many tool servers at once | ✅ done | 4 | serial | 8 as-built |
 | R | Intelligently pick which model handles a request | ✅ done | 5 | serial | 4 as-built (+L2/L3 impl) |
 | B4 | Per-role & per-step model + prompt | ✅ done | 6 | serial | 4 slices as-built (#616/#618/#619/#621) |
-| CA | Report total run cost, broken down | ▶ next | 7 | independent | at arc-open |
-| B5 | Pick the memory backend per deployment | ⏳ | 8 | independent | at arc-open |
+| CA | Report total run cost, broken down | ✅ done | 7 | independent | 3 slices as-built (#625) |
+| B5 | Pick the memory backend per deployment | ▶ next | 8 | independent | at arc-open |
 | B6 | Per-tool security sandbox level + STDIO floor | ⏳ | 9 | serial | at arc-open |
 | B7 | Sample only the telemetry that matters | ⏳ | 10 | independent | at arc-open |
 | M | Formal contract + wiring for managed agents | ⏳ | 11 | maybe serial | at arc-open |
 
 *Counts: as-built unit totals are grouped by arc from `git log` (B1=14, B3=8, E=9, B2=8, R=4 core
 units + the L2/L3 impl-discretion legs; B4=4 slices #616/#618/#619/#621, which extended existing
-contracts C-CP-06 / C-RT-15 / C-IS-05 rather than minting new plan-units). Remaining arcs decompose
-at arc-open.*
+contracts C-CP-06 / C-RT-15 / C-IS-05 rather than minting new plan-units; CA=3 slices #625, which
+extended C-RT-09 rather than minting new plan-units). Remaining arcs decompose at arc-open.*
 
 ---
 
