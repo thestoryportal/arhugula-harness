@@ -1,0 +1,48 @@
+# Class 1 Fork — B4 per-step ROLE override ⊥ §14.5.3 single-role-source invariant (StepOverride extension)
+
+**Filed:** 2026-06-17 · R-FS-1 arc B4 Slice 4 (per-step role override + linear-path role indexing), bundled-absorption posture (CP spec v1.38 §6.1/§6.2/§6.6 + runtime spec v1.52 §14.5.3 relaxation + `harness-cp/src`). Class 1 (CP spec contract extension on a cleared schema + a **committed-invariant relaxation** of runtime §14.5.3). **Mechanism RESOLVED + impl built + green; OPERATOR-GATED on the §14.5.3 invariant-2/3 relaxation** (the committed-invariant sacrifice — `[[feedback-gate-only-on-meaningful-architecture-change]]`). Design back-flow FULL-SPEC-pre-authorized (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`), but the *invariant relaxation* is the operator's ratified call, not silently absorbed.
+
+**Status:** ⏸️ MECHANISM-RESOLVED + IMPL-GREEN, GATE-PENDING → `StepOverride.agent_role` (CP spec v1.38 §6.1, additive optional) + `StepEffectiveBinding.agent_role` (§6.2) + `resolve_step_binding` field-by-field application; the CP driver **folds** the override onto the single `StepExecutionContext.agent_role` source at composition (**Option B**; precedence per-step > fan-out-derived > default) across all 6 topology paths. **Runtime dispatch read UNCHANGED** (Option B → zero `harness-runtime` impl edit). Provenance = the WIRED per-step override state-ledger entry (CP v1.38 §6.6), no IS-spec change. **Merge blocked on operator ratification of the §14.5.3 relaxation.**
+
+## §1 The fork
+
+B4 Slice 4 makes a **per-step role** take effect: an operator annotates a specific workflow step with an `AgentRole`, and that step dispatches under that role — selecting its per-role MODEL (C-RT-16 wrapper) AND per-role PROMPT (C-RT-15 inner). Per-step **model** (v1.6) + **prompt** (v1.37, Slice 3) overrides already exist; per-step **role** is the Slice-4 increment — the one Slice 3 explicitly foreclosed: *"a per-step role carrier would be 'a second per-step role carrier' the runtime §14.5.3 'Single role source' invariant forecloses … the Slice-4 gate."*
+
+**The committed-invariant collision.** Runtime spec **§14.5.3** (the B1↔B4 role seam, cleared at v1.48) declares three invariants. Per-step role collides with two:
+
+- **Invariant 2 — "Single role source":** *"The branch role flows **only** via `step_context.agent_role` (the CP-composed child context), never a second per-step role carrier — one source of truth (the `StepExecutionContext`)."* `StepOverride.agent_role` is **literally a second per-step role carrier**.
+- **Invariant 3 — "Linear path untouched":** *"`SINGLE_THREADED_LINEAR` composes no branch child context, so its dispatch reads the existing default-role path verbatim."* Linear-path role indexing touches exactly this path.
+
+Two questions at arc-open grounding (HEAD `eb85641`): **(Q1)** the consumption mechanism — read a second role source at dispatch, or fold at composition? **(Q2)** is this a genuine operator gate, or probe-resolvable like the `default_gate_level` precedent?
+
+## §2 Resolution
+
+### §2.1 Q1 — mechanism: Option B (composition-time fold), not Option A (second dispatch-read)
+
+| Option | Mechanism | Assessment |
+|---|---|---|
+| **A — read `binding.agent_role` at dispatch** | The runtime LLM-dispatch read becomes `binding.agent_role or step_context.agent_role or default`; the wrapper's `_effective_chain` likewise grows a second role source. | **Rejected.** Two role authorities at dispatch. The wrapper (`retry_breaker_fallback.py:347`) owns model-candidate selection by reading `step_context.agent_role`; a second inner role-read (`llm_dispatch.py:603`) would create the exact **two-authorities** anti-pattern §14.5.3's model-only comment already warns against ("indexing the per-role model at the inner too would create TWO authorities … silently defeat fallback for role-routed branches"). It would require BOTH the wrapper (model) and inner (prompt) to grow a second role-read. |
+| **B — fold `binding.agent_role` onto `step_context.agent_role` at CP-driver composition** | `resolve_step_binding` carries the override onto `StepEffectiveBinding.agent_role`; the CP driver sets `step_context.agent_role = binding.agent_role or <derived> or <default>` at branch/step composition. Dispatch read **unchanged**. | **CHOSEN.** The single dispatch-read role source of truth (`step_context.agent_role`) is **preserved** — the wrapper (model) + inner (prompt/attribution) both pick up the per-step role from one read, no two-authority. **Zero runtime dispatch code change.** Structurally identical to `default_gate_level → StepExecutionContext.parent_gate_level` (§6.1.Y, v1.20, `resolve_parent_gate_level`). The relaxation is **composition-time only**: invariant 2's narrower "no second *carrier*" clause is relaxed; its "single dispatch source" intent is preserved. (advisor-confirmed.) |
+
+Precedence under Option B: **per-step `binding.agent_role` > fan-out-derived `derive_agent_role(step_id)` > default** (None on the linear/evaluator paths → runtime `_MVP_DEFAULT_AGENT_ROLE`). Folded at all 6 topology composition sites (linear, evaluator-optimizer, orchestrator-workers, parallelization, hierarchical/decentralized stages, the orchestrator's own context + the decentralized handoff-record `next_role` preview).
+
+### §2.2 Q2 — this IS a genuine operator gate (the probe did NOT dissolve it)
+
+A probe-resolves reading was attempted: *Option B preserves the dispatch-single-source intent → soften to a clarification → skip the gate*, citing the `default_gate_level` composition precedent. **advisor caught this as a framing error.** The decisive asymmetry: **`default_gate_level` carried NO invariant forbidding it; role carries the explicit, role-specific §14.5.3 invariant 2 the team itself authored** (and Slice 3 re-affirmed in the `StepOverride.prompt_version_sha` docstring as "the distinct Slice-4 gate"). Option B changes *where the carrier is consumed* (composition; single dispatch-read preserved), not *whether a second carrier exists* — and a second carrier is exactly what invariant 2 forecloses. Two on-main authorities (the roadmap next-action + the Slice-3 docstring) independently name this "the genuine operator gate." FULL-SPEC pre-authorizes the **build** + the **back-flow**, NOT silently relaxing a committed invariant; the roadmap already reconciled the two (**build it, ratify the relaxation**). → **Genuine operator gate.** What is gated: the §14.5.3 invariant-2/3 relaxation (runtime spec v1.52). What is NOT gated (additive, bundled-absorbed like v1.37): the `StepOverride.agent_role` carrier field (CP v1.38).
+
+### §2.3 The relaxation (what the operator ratifies)
+
+Runtime spec v1.52 §14.5.3 relaxes:
+- **Invariant 2** → "single *dispatch-read* role source" (composition-time carrier admitted; dispatch read unchanged).
+- **Invariant 3** → conditional ("linear path untouched **unless** a per-step role override is present").
+- **Invariant 1** (non-breaking default) → PRESERVED VERBATIM (absent override ⟹ byte-identical).
+
+## §3 Decorrelated review
+
+**advisor** (pre-substantive, full transcript) — confirmed Option B as the correct + faithful mechanism; **caught the probe-resolves framing error** (do not let Option B's cleanness dissolve the gate; the `default_gate_level` analogy works for the mechanism but fails as a gate-dissolver because role has an explicit committed invariant default_gate_level never had); confirmed the provenance scope = Slice 3 (per-step override ledger entry, not §5.2 hash), the fan-out granularity (override replaces derived at step-id granularity), and council-not-warranted (single-domain CP/type-design, no nameable cross-voice tension). `[[advisor-before-substantive-work-for-cross-axis-blockers]]` + `[[red-team-operator-decision-without-backdooring]]` (inverted — advisor red-teamed *my* drift).
+
+**Codex** (out-of-family, decorrelated diff review) — at PR (pending). `[[hooks-codex-pilots-decorrelation-validated]]`.
+
+## §4 Spine registration
+
+Registered at `.harness/beyond-mvp-capability-boundary-ledger.md` (B4 Slice-4 leg) per `[[spine-ledger-forward-arc-registration]]`. This closes the B4 tail (Slice 1 prompt-threading ✅ #616 → Slice 2 catalog ✅ #618 → Slice 3 per-step prompt ✅ #619 → **Slice 4 per-step role + linear-path indexing**, this arc). On ratification + merge, clearance markers filed for CP v1.38 + runtime v1.52.

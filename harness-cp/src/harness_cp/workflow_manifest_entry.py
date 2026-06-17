@@ -38,7 +38,7 @@ from __future__ import annotations
 from harness_core import PersonaTier, StepID, WorkloadClass
 from pydantic import BaseModel, ConfigDict
 
-from harness_cp.cp_shared_types import ModelBinding
+from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.cross_family_fallback_chain import FallbackChain
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
@@ -90,6 +90,41 @@ class StepOverride(BaseModel):
     → the override entry's idempotency_key → a distinct hash-chained entry. NOT
     the run-level C-IS-05 §5.2 procedural-tier hash (which stays run-level — the
     per-step MODEL override precedent).
+    """
+
+    agent_role: AgentRole | None = None
+    """v1.38 addition (CP spec v1.38 §6.1 NEW field per the v1.27 §2(d) X-AL-3
+    explicit-extension discipline; R-FS-1 arc B4 Slice 4 per-step ROLE override).
+
+    When not ``None``, the operator-assigned ``AgentRole`` for *this step*,
+    overriding the role the runtime would otherwise carry — the fan-out-derived
+    role (``derive_agent_role(step_id)`` per B4 Slice 2) on a non-linear branch,
+    or *no role at all* on the ``SINGLE_THREADED_LINEAR`` path (where the step
+    would otherwise carry the ``_MVP_DEFAULT_AGENT_ROLE``). ``None`` (the default)
+    preserves v1.6 MVP behavior verbatim — the step inherits the fan-out-derived
+    role or the linear-path default.
+
+    **Committed-invariant relaxation (runtime spec v1.52 §14.5.3 — operator-
+    ratified).** Adding a per-step role *carrier* relaxes two B1-era §14.5.3
+    invariants: invariant 2 ("single role source — never a second per-step role
+    carrier") and invariant 3 ("linear path untouched"). The relaxation is
+    **composition-time, not dispatch-time**: ``resolve_step_binding`` carries the
+    override onto ``StepEffectiveBinding.agent_role``; the CP driver *folds* it
+    into the single ``StepExecutionContext.agent_role`` source at branch/step
+    composition (precedence **per-step > fan-out-derived > default**), so the
+    runtime dispatch still reads ONE role source (``step_context.agent_role``) —
+    no MODEL-style two-authority-at-dispatch (C-RT-15 §14.5.3). Invariant 1
+    (non-breaking default) is preserved: an absent override leaves the composed
+    role unchanged, byte-identical to v1.37.
+
+    Symmetric with ``prompt_version_sha``/``model_binding`` (a per-step selection
+    of a resource the run otherwise resolves at a coarser scope). Provenance is
+    the per-step override state-ledger entry (CP spec v1.38 §6.6, extended): the
+    role rides ``StepEffectiveBinding.model_dump`` into the override entry's
+    outcome-hash — NOT the run-level C-IS-05 §5.2 procedural-tier hash (which
+    hashes the run-level ``PromptSelectionManifest``/``RoutingManifest`` per-role
+    catalogs, not per-workflow per-step overrides — the per-step MODEL/PROMPT
+    override precedent).
     """
 
 
