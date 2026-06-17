@@ -2082,6 +2082,22 @@ def _execute_workflow_body(
                     final_state=None,
                     fail_class=(f"step-failure: RT-FAIL-STEP-DISPATCH-TIMEOUT: {exc}"),
                 ), steps_executed
+            # R-FS-1 arc M (C-RT-28 §14.20.4) — managed-agents session did not
+            # reach a success terminal status. Discriminated from generic
+            # Exception so the fail-class canonicalizes to
+            # RT-FAIL-MANAGED-AGENTS-SESSION. Name-match per the
+            # StepDispatchTimeoutError pattern above (harness-cp cannot import
+            # from harness-runtime per workspace dependency graph).
+            if type(exc).__name__ == "ManagedAgentsSessionError":
+                return RunResult(
+                    workflow_id=manifest_entry.workflow_id,
+                    run_id=run_id,
+                    status=RunStatus.FAILED,
+                    terminal_step_index=step_index,
+                    partial_state=dict(accumulated),
+                    final_state=None,
+                    fail_class=(f"step-failure: RT-FAIL-MANAGED-AGENTS-SESSION: {exc}"),
+                ), steps_executed
             return RunResult(
                 workflow_id=manifest_entry.workflow_id,
                 run_id=run_id,

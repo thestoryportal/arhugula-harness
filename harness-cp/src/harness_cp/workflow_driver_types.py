@@ -62,14 +62,19 @@ class RunStatus(StrEnum):
 
 
 class StepKind(StrEnum):
-    """The 5 step kinds (CP spec v1.4 §5.2 verbatim; materialized at §25.2
-    per in-session amendment §E 2026-05-20).
+    """The 6 step kinds (CP spec §5.2; materialized at §25.2 per in-session
+    amendment §E 2026-05-20; extended to 6 at CP spec v1.39).
 
     Member string values match §5.2's verbatim listing:
-    `declarative-step / inference-step / tool-step / HITL-step / sub-agent-dispatch`.
+    `declarative-step / inference-step / tool-step / HITL-step /
+    sub-agent-dispatch / managed-agents`.
 
-    Closed at cardinality 5 — extension is a Workflow §4.1.2 Class-2 revision
-    of §5.2.
+    Closed at cardinality 6 — extension is a Workflow §4.1.2 Class-2 revision
+    of §5.2. The `managed-agents` member is the operator-ratified (2026-06-17,
+    Option B) R-FS-1 arc-M extension (CP spec v1.39); it is dispatched by the
+    runtime `ManagedAgentsStepDispatcher` (C-RT-28 §14.20) to a vendor-run
+    Managed Agents session — distinct from `sub-agent-dispatch`, whose
+    dispatcher orchestrates a harness-run child loop.
     """
 
     DECLARATIVE_STEP = "declarative-step"
@@ -77,6 +82,7 @@ class StepKind(StrEnum):
     TOOL_STEP = "tool-step"
     HITL_STEP = "HITL-step"
     SUB_AGENT_DISPATCH = "sub-agent-dispatch"
+    MANAGED_AGENTS = "managed-agents"
 
 
 class WorkflowStep(BaseModel):

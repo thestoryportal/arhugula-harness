@@ -316,7 +316,9 @@ def test_run_status_five_members() -> None:
     assert members == {"SUCCESS", "DRAINED", "FAILED", "PARTIAL", "PAUSED"}
 
 
-def test_step_kind_five_members() -> None:
+def test_step_kind_six_members() -> None:
+    """6-member StepKind per CP spec §5.2 + v1.39 additive `managed-agents`
+    value (R-FS-1 arc M; operator-ratified 2026-06-17, Option B)."""
     members = {m.value for m in StepKind}
     assert members == {
         "declarative-step",
@@ -324,6 +326,7 @@ def test_step_kind_five_members() -> None:
         "tool-step",
         "HITL-step",
         "sub-agent-dispatch",
+        "managed-agents",
     }
 
 
@@ -473,6 +476,116 @@ def test_step_iteration_declaration_order() -> None:
     assert result.status is RunStatus.SUCCESS
     dispatched_step_ids = [str(s.step_id) for _, s in dispatcher.dispatched]
     assert dispatched_step_ids == ["step-0", "step-1", "step-2"]
+
+
+# ---------------------------------------------------------------------------
+# R-FS-1 arc M (C-RT-28 §14.20) — MANAGED_AGENTS step routing (CP spec v1.39)
+# ---------------------------------------------------------------------------
+
+
+class _ManagedAgentsEchoDispatcher:
+    """Stand-in managed-agents dispatcher returning a session-outcome mapping.
+
+    Exercises the CP driver's registry dispatch of the NEW
+    `StepKind.MANAGED_AGENTS` (not the runtime `ManagedAgentsStepDispatcher`,
+    which harness-cp cannot import). Mirrors that dispatcher's return shape.
+    """
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        _ = (binding, step_context)
+        return {
+            "session_id": "session_test",
+            "agent_id": str(step.step_payload.get("agent_id", "")),
+            "status": "idle",
+            "runtime_ms": 1250,
+            "billable_seconds": 1.25,
+        }
+
+
+class ManagedAgentsSessionError(Exception):
+    """Test-local class named to match the driver's `type(exc).__name__` check.
+
+    The runtime `ManagedAgentsSessionError` lives in harness-runtime (which
+    harness-cp cannot import per the workspace dependency graph); the driver
+    name-matches by class name, so a same-named local class exercises the
+    `RT-FAIL-MANAGED-AGENTS-SESSION` mapping (the `StepDispatchTimeoutError`
+    name-match precedent).
+    """
+
+
+class _RaisingManagedAgentsDispatcher:
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        _ = (binding, step, step_context)
+        raise ManagedAgentsSessionError("simulated managed-agents session failure")
+
+
+def _managed_agents_step() -> WorkflowStep:
+    return WorkflowStep(
+        step_id=StepID("step-0"),
+        step_kind=StepKind.MANAGED_AGENTS,
+        step_payload={"agent_id": "agent_test", "environment_id": "env_test"},
+    )
+
+
+def test_managed_agents_step_routes_through_registry() -> None:
+    """The NEW StepKind.MANAGED_AGENTS routes through the driver registry to its
+    bound dispatcher; the outcome accumulates into final_state (CP spec v1.39 +
+    runtime C-RT-28 §14.20)."""
+    ctx, _, _ = _ctx()
+    result = execute_workflow(
+        manifest_entry=_manifest(),
+        steps=[_managed_agents_step()],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(
+            StepDispatcherRegistry,
+            _SingleKindRegistry(
+                StepKind.MANAGED_AGENTS,
+                cast(StepDispatcher, _ManagedAgentsEchoDispatcher()),
+            ),
+        ),
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert result.final_state["step-0"]["session_id"] == "session_test"
+    assert result.final_state["step-0"]["status"] == "idle"
+
+
+def test_managed_agents_session_error_maps_to_fail_class() -> None:
+    """A ManagedAgentsSessionError from the managed-agents dispatcher maps to
+    `step-failure: RT-FAIL-MANAGED-AGENTS-SESSION` (driver name-match per the
+    StepDispatchTimeoutError precedent; runtime C-RT-28 §14.20.4)."""
+    ctx, _, _ = _ctx()
+    result = execute_workflow(
+        manifest_entry=_manifest(),
+        steps=[_managed_agents_step()],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(
+            StepDispatcherRegistry,
+            _SingleKindRegistry(
+                StepKind.MANAGED_AGENTS,
+                cast(StepDispatcher, _RaisingManagedAgentsDispatcher()),
+            ),
+        ),
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert "RT-FAIL-MANAGED-AGENTS-SESSION" in result.fail_class
 
 
 def test_per_step_step_boundary_emitted() -> None:
