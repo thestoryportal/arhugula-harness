@@ -110,7 +110,7 @@ within the serial cluster (after/with B4 to avoid `RuntimeConfig` contention). M
 
 | Unit(s) | Leg / PR | What it does (plain language) |
 |---|---|---|
-| U-CP-91 + U-RT-115/116/117/118 | impl-1 (#554) | Conditional skip — decide when an approval checkpoint can be safely bypassed. |
+| U-CP-91 + U-RT-115 + U-RT-116 + U-RT-117 + U-RT-118 | impl-1 (#554) | Conditional skip — decide when an approval checkpoint can be safely bypassed. |
 | U-CP-92 + U-RT-119 | impl-2 (#584) | Timeout-degradation — what to do (per run mode) when a human doesn't answer in time. |
 | U-RT-120 | impl-3 (#584) | EDIT = replace-not-merge — a human-edited action cleanly replaces the pending one. |
 
@@ -145,7 +145,7 @@ within the serial cluster (after/with B4 to avoid `RuntimeConfig` contention). M
 |---|---|---|
 | U-RT-129 | impl-1 (#588) | Per-server trust telemetry keyed by a stable server identity. |
 | U-RT-125 | impl-2a (#590) | Reshape the single `mcp_client_host` into a `dict` of many hosts. |
-| U-RT-126/127/128/130 | impl-2b (#592) | Multi-server routing, dispatch, same-tool-name collision policy, and per-host handling. |
+| U-RT-126 + U-RT-127 + U-RT-128 + U-RT-130 | impl-2b (#592) | Multi-server routing, dispatch, same-tool-name collision policy, and per-host handling. |
 | U-CP-98 + U-RT-131 | impl-3 (#594) | The MCP-trust gate axis — enforce each server's trust tier at dispatch time. |
 
 ### R-FS-1·R — Routing intelligence (LLM-as-router + embedding)
