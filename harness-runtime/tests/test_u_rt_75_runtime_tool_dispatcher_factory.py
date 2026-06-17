@@ -219,7 +219,7 @@ def _config_with_server(
     from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
     from harness_as.sandbox_tier_floor import MCPServerTrustLevel
     from harness_core import ClientName
-    from harness_runtime.types import MCPClientConfig
+    from harness_runtime.types import MCPClientConfig, SandboxDriverConfig
 
     tier = sandbox_tier if sandbox_tier is not None else SandboxTier.TIER_1_PROCESS
     return RuntimeConfig(
@@ -238,9 +238,13 @@ def _config_with_server(
                 blast_radius=BlastRadiusTier.READ_ONLY,
                 connection_url="stdio:///bin/echo",
                 default_minimum_tier=tier,  # type: ignore[arg-type]
-                default_sandbox_tier=tier,  # type: ignore[arg-type]
-                default_sandbox_tech="host-process",
-                default_sandbox_provider="host",
+                # R-FS-1 B6 Slice 1: a STDIO server floors to TIER_3 (ADR-D2 §1.3 /
+                # runtime spec v1.54 §14.9.8), so it needs a tier-3-capable driver to
+                # bootstrap. `default_sandbox_tier`/`tech`/`provider` are left unset so
+                # the surface default + the transport floor compose (→ TIER_3, gvisor).
+                sandbox_driver=SandboxDriverConfig(
+                    command=("python", "-c", "pass"), image="echo:latest"
+                ),
             )
         ],
     )
@@ -270,7 +274,12 @@ def _tool_contract_and_step(minimum_tier: object) -> tuple[object, object]:
 @pytest.mark.asyncio
 async def test_factory_wires_per_server_default_policy_resolver() -> None:
     """v1.41 Gap C — a configured server's bootstrap dispatcher carries a
-    NON-raising sandbox_decision_resolver returning the per-server default."""
+    NON-raising sandbox_decision_resolver returning the per-server default.
+
+    R-FS-1 B6 Slice 1 (runtime spec v1.54 §14.9.8): the per-server resolved tier
+    composes the per-MCP-transport floor, so a STDIO server resolves to TIER_3
+    (ADR-D2 §1.3) with the auto-derived gvisor/runsc labels — NOT the bare
+    surface-default TIER_1/host-process."""
     from harness_as.sandbox_tier import SandboxTier
 
     cfg = _config_with_server(sandbox_tier=SandboxTier.TIER_1_PROCESS)
@@ -280,10 +289,16 @@ async def test_factory_wires_per_server_default_policy_resolver() -> None:
     contract, step = _tool_contract_and_step(SandboxTier.TIER_1_PROCESS)
     resolver = wrapper.inner._sandbox_resolvers[ServerName("echo-server")]  # type: ignore[attr-defined]
     decision = resolver(contract, step)
-    assert decision.tier is SandboxTier.TIER_1_PROCESS
-    assert decision.tech == "host-process"
-    assert decision.provider == "host"
-    assert decision.assigned_tier_reason == "per-server-default-sandbox-policy"
+    # B6 Slice 1: STDIO transport floors the per-server tier to TIER_3 (ADR-D2 §1.3),
+    # and the reason records that the transport floor — not the per-server default —
+    # drove the raised tier (security telemetry honesty).
+    assert decision.tier is SandboxTier.TIER_3_MICROVM
+    assert decision.tech == "gvisor"
+    assert decision.provider == "runsc"
+    assert (
+        decision.assigned_tier_reason
+        == "per-mcp-transport-floor: stdio → tier-3-microvm (ADR-D2 §1.3)"
+    )
 
 
 @pytest.mark.asyncio
@@ -339,8 +354,14 @@ async def test_empty_server_set_leaves_no_per_host_resolver_or_driver() -> None:
 def _bare_server_config(
     surface: DeploymentSurface, *, sandbox_driver: object = None
 ) -> RuntimeConfig:
-    """A configured-server RuntimeConfig that leaves the per-server sandbox tier
-    UNSET (None) so the deployment-surface-aware default policy applies."""
+    """A configured STDIO-server RuntimeConfig that leaves the per-server sandbox
+    tier UNSET (None) so the deployment-surface-aware default policy applies.
+
+    R-FS-1 B6 Slice 1: a STDIO server floors to TIER_3 (ADR-D2 §1.3) regardless of
+    surface, so a bare config here (no `sandbox_driver`) fails loud at bootstrap. The
+    pure tier→driver registry (TIER_1 in-process / TIER_2 Docker / etc.) is covered
+    directly in `test_sandbox_tier_driver_selection.py`; this file exercises the
+    floored path through the real stage-5 factory."""
     from harness_as.discriminators import MCPTransport
     from harness_as.sandbox_tier import BlastRadiusTier
     from harness_as.sandbox_tier_floor import MCPServerTrustLevel
@@ -369,27 +390,27 @@ def _bare_server_config(
 
 
 @pytest.mark.asyncio
-async def test_bare_local_dev_server_wires_in_process_driver() -> None:
-    """v1.43 §14.9.9 — a bare local-development server resolves to honest
-    TIER_1_PROCESS and the real factory wires the in-process host driver
-    (no fail-loud, runs out-of-box)."""
-    from harness_runtime.lifecycle.runtime_tool_dispatcher import MCPHostToolExecutionDriver
+async def test_bare_local_dev_stdio_server_floored_to_tier3_fails_loud() -> None:
+    """R-FS-1 B6 Slice 1 (runtime spec v1.54 §14.9.8) — THE behavioral change:
+    a bare local-development STDIO server no longer resolves to silent TIER_1
+    in-process. The STDIO transport floor (ADR-D2 §1.3) raises it to TIER_3, so a
+    bare config (no `sandbox_driver`) RAISES `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE`
+    (FR-2(i)) rather than silently under-sandboxing at Tier 1."""
+    from harness_runtime.lifecycle.runtime_tool_dispatcher import SandboxDriverUnavailableError
 
     cfg = _bare_server_config(DeploymentSurface.LOCAL_DEVELOPMENT)
     builder = await _post_stage_3a_builder(cfg)
-    wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
-    assert isinstance(
-        wrapper.inner._tool_execution_drivers[ServerName("echo-server")],  # type: ignore[attr-defined]
-        MCPHostToolExecutionDriver,
-    )
+    with pytest.raises(SandboxDriverUnavailableError):
+        await materialize_runtime_tool_dispatcher_stage(builder, cfg)
 
 
 @pytest.mark.asyncio
 async def test_bare_managed_cloud_server_fails_loud_not_in_process() -> None:
     """v1.43 §14.9.9 FR-2(i) — THE security fix, end-to-end through the real
-    bootstrap factory: a bare managed-cloud server resolves fail-safe-high
-    TIER_2_CONTAINER and, with no driver configured, the factory RAISES
-    `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE` rather than silently executing in-process."""
+    bootstrap factory: a bare managed-cloud STDIO server (B6-Slice-1-floored to
+    TIER_3 by the STDIO transport floor) with no driver configured RAISES
+    `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE` rather than silently executing
+    in-process."""
     from harness_runtime.lifecycle.runtime_tool_dispatcher import SandboxDriverUnavailableError
 
     cfg = _bare_server_config(DeploymentSurface.MANAGED_CLOUD)
@@ -399,12 +420,14 @@ async def test_bare_managed_cloud_server_fails_loud_not_in_process() -> None:
 
 
 @pytest.mark.asyncio
-async def test_managed_cloud_server_with_container_driver_wires_docker() -> None:
-    """v1.43 §14.9.9 FR-1 — a managed-cloud server with a configured container
-    driver wires the Docker driver through the real factory (delivers the
-    fail-safe-high TIER_2_CONTAINER it claims)."""
+async def test_stdio_server_with_driver_wires_gvisor_at_floored_tier3() -> None:
+    """R-FS-1 B6 Slice 1 + v1.43 §14.9.9 FR-1 — a STDIO server with a configured
+    container driver wires the gVisor (TIER_3 microVM) driver through the real
+    factory, delivering the TIER_3 the STDIO transport floor (ADR-D2 §1.3) raised
+    it to (NOT the TIER_2 Docker the bare surface default would have selected)."""
+    from harness_as.sandbox_tier import SandboxTier
     from harness_runtime.lifecycle.docker_tool_execution_driver import (
-        DockerToolRunnerExecutionDriver,
+        GVisorRunscToolRunnerExecutionDriver,
     )
     from harness_runtime.types import SandboxDriverConfig
 
@@ -414,7 +437,6 @@ async def test_managed_cloud_server_with_container_driver_wires_docker() -> None
     )
     builder = await _post_stage_3a_builder(cfg)
     wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
-    assert isinstance(
-        wrapper.inner._tool_execution_drivers[ServerName("echo-server")],  # type: ignore[attr-defined]
-        DockerToolRunnerExecutionDriver,
-    )
+    driver = wrapper.inner._tool_execution_drivers[ServerName("echo-server")]  # type: ignore[attr-defined]
+    assert isinstance(driver, GVisorRunscToolRunnerExecutionDriver)
+    assert driver.required_tier is SandboxTier.TIER_3_MICROVM

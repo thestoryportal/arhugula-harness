@@ -27,7 +27,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from harness_as.sandbox_tier import SandboxTier
+from harness_as.mcp_transport_floor import mcp_transport_floor
+from harness_as.sandbox_tier import SandboxTier, is_tier_at_or_above
+from harness_as.sandbox_tier_floor import SandboxTierFloorOutcome
 from harness_core.deployment_surface import DeploymentSurface
 
 if TYPE_CHECKING:
@@ -35,6 +37,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "EffectiveSandboxDefaults",
+    "compose_transport_floor",
     "resolve_effective_sandbox_defaults",
     "surface_default_sandbox_tier",
 ]
@@ -56,6 +59,11 @@ _TIER_TECH_PROVIDER: dict[SandboxTier, tuple[str, str]] = {
 }
 
 
+#: Default `assigned_tier_reason` when the surface-aware per-server policy (not a
+#: transport floor) determines the tier.
+_PER_SERVER_DEFAULT_REASON = "per-server-default-sandbox-policy"
+
+
 @dataclass(frozen=True)
 class EffectiveSandboxDefaults:
     """The reconciled per-server sandbox defaults after applying the
@@ -65,6 +73,12 @@ class EffectiveSandboxDefaults:
     sandbox_tier: SandboxTier
     sandbox_tech: str
     sandbox_provider: str
+    assigned_tier_reason: str = _PER_SERVER_DEFAULT_REASON
+    """Human-readable cause of the resolved `sandbox_tier` — emitted on the
+    `sandbox.enter` span (C-AS-15 §15). The surface-aware default policy sets the
+    per-server-default reason; `compose_transport_floor` overrides it with a
+    floor-aware reason when the per-MCP-transport floor raises the tier (B6 Slice 1
+    — security telemetry honesty: the span says WHY the isolation was applied)."""
 
 
 def surface_default_sandbox_tier(deployment_surface: DeploymentSurface) -> SandboxTier:
@@ -115,4 +129,78 @@ def resolve_effective_sandbox_defaults(
         sandbox_tier=sandbox_tier,
         sandbox_tech=sandbox_tech,
         sandbox_provider=sandbox_provider,
+    )
+
+
+def compose_transport_floor(
+    effective: EffectiveSandboxDefaults, entry: MCPClientConfig
+) -> EffectiveSandboxDefaults:
+    """Compose the ADR-D2 §1.3 per-MCP-transport sandbox-tier floor into the resolved
+    `sandbox_tier` — R-FS-1 B6 Slice 1, runtime spec v1.54 §14.9.8 "Per-MCP-transport
+    floor composition".
+
+    Raises the resolved `sandbox_tier` to `max(effective.sandbox_tier,
+    mcp_transport_floor(transport, trust_level, blast_radius).tier)` (U-AS-13 / C-AS-10
+    §10.1): STDIO → `max(TIER_3_MICROVM, blast_radius_floor)`; remote L2 →
+    `max(TIER_4_FULL_VM, blast_radius_floor)`; remote L1/L3 + non-remote →
+    `blast_radius_floor`. When the floor raises the tier, `sandbox_tech` / `sandbox_provider`
+    are re-derived for the raised tier (operator-supplied overrides still win); they are
+    the `sandbox.enter` span labels, kept coherent with the delivered tier.
+
+    **Per-server-uniform PRESERVED** — `mcp_transport_floor` is fed the per-host
+    `MCPClientConfig.blast_radius` (one blast input per host ⇒ one tier per host). The
+    per-TOOL `sandbox_tier_floor` per-cell composition (rows 1-2 forcing + rows 7-10
+    per-tool blast) is the distinct future arc B6 Slice 2 (`B-PER-TOOL-SANDBOX-TIER`).
+
+    `minimum_tier` is UNCHANGED — the transport floor raises what the deployment
+    *delivers* (`sandbox_tier`), not what the tool *requires* (`minimum_tier`); the
+    §14.9.4 tier-floor check (`resolved.tier >= contract.minimum_tier`) stays satisfied
+    by the raised tier.
+
+    A floor `REFUSE` (remote L0) is **unreachable** here — L0-remote is refused at
+    registration (`materialize_mcp_stage`, §14.9.10 D1) before the stage-5 resolver loop
+    that is this function's only caller — so it is a defensive fail-closed raise, never a
+    silent tier substitution (`SandboxDispatchDecision.tier` is non-optional).
+    """
+    floor = mcp_transport_floor(entry.transport, entry.trust_level, entry.blast_radius)
+    if floor.outcome is SandboxTierFloorOutcome.REFUSE:
+        raise RuntimeError(
+            f"RT-FAIL-SANDBOX-TRANSPORT-FLOOR-REFUSE: MCP server "
+            f"{entry.client_name!r} (transport={entry.transport.value}, "
+            f"trust_level={entry.trust_level.value}) resolves to a transport-floor "
+            f"REFUSE at the stage-5 sandbox resolver — an L0-remote server must be "
+            f"refused at registration (materialize_mcp_stage); reaching this site is a "
+            f"bootstrap-ordering invariant violation"
+        )
+    assert floor.tier is not None, "RESOLVED SandboxTierFloorResult always carries a tier"
+
+    # Only a STRICT raise is floor-attributed. When the floor equals (or sits below) the
+    # surface-aware default, the default decision stands UNCHANGED — including its
+    # `assigned_tier_reason` (no raise happened, so the floor is not the cause). Using a
+    # reflexive `>=` here would mis-attribute an equal-tier default to the floor.
+    raised = (
+        is_tier_at_or_above(floor.tier, effective.sandbox_tier)
+        and floor.tier is not effective.sandbox_tier
+    )
+    if not raised:
+        return effective
+
+    default_tech, default_provider = _TIER_TECH_PROVIDER[floor.tier]
+    return EffectiveSandboxDefaults(
+        minimum_tier=effective.minimum_tier,
+        sandbox_tier=floor.tier,
+        sandbox_tech=(
+            entry.default_sandbox_tech if entry.default_sandbox_tech is not None else default_tech
+        ),
+        sandbox_provider=(
+            entry.default_sandbox_provider
+            if entry.default_sandbox_provider is not None
+            else default_provider
+        ),
+        # Security telemetry honesty: the `sandbox.enter` span records that the
+        # per-MCP-transport floor (ADR-D2 §1.3) — not the per-server default — drove
+        # the (raised) tier.
+        assigned_tier_reason=(
+            f"per-mcp-transport-floor: {entry.transport.value} → {floor.tier.value} (ADR-D2 §1.3)"
+        ),
     )

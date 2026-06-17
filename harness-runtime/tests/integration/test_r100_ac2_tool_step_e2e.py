@@ -46,6 +46,18 @@ def _read_ledger(state_ledger_root: Path) -> list[dict[str, Any]]:
     return entries
 
 
+@pytest.mark.skip(
+    reason="R-FS-1 B6 Slice 1 (runtime spec v1.54 §14.9.8): the STDIO transport floor "
+    "(ADR-D2 §1.3) raises this server to TIER_3, so this in-process STDIO config now "
+    "fail-closes at bootstrap (RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE) — in-process STDIO "
+    "dispatch is ADR-forbidden. The B6 floor + fail-close are proven at factory level "
+    "(test_u_rt_75_runtime_tool_dispatcher_factory) + unit level "
+    "(test_sandbox_tier_driver_selection::compose_transport_floor); tool-completion at "
+    "the ADR-mandated tier is proven by test_r410_container_tool_execution_e2e (Docker). "
+    "Restoring a provider-free DEFAULT-LANE api.run tool-completion e2e needs the "
+    "host-factory remote-transport gap (B-MCP-HOST-REMOTE-TRANSPORT) fixed so a remote "
+    "L1 READ_ONLY tool can complete at TIER_1 — registered forward."
+)
 @pytest.mark.asyncio
 async def test_r100_ac2_tool_step_via_api_run(
     tmp_path: Path,

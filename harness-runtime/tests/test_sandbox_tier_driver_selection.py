@@ -23,7 +23,10 @@ from harness_core.deployment_surface import DeploymentSurface
 from harness_runtime.bootstrap.factories.runtime_tool_dispatcher_factory import (
     _select_tool_execution_driver,
 )
-from harness_runtime.config.sandbox_defaults import resolve_effective_sandbox_defaults
+from harness_runtime.config.sandbox_defaults import (
+    compose_transport_floor,
+    resolve_effective_sandbox_defaults,
+)
 from harness_runtime.lifecycle.docker_tool_execution_driver import (
     DockerToolRunnerExecutionDriver,
     GVisorRunscToolRunnerExecutionDriver,
@@ -157,3 +160,107 @@ def test_container_tiers_without_image_fail_loud(tier: SandboxTier) -> None:
     cfg = SandboxDriverConfig(command=("python", "runner.py"))  # no image
     with pytest.raises(SandboxDriverUnavailableError):
         _select_tool_execution_driver(tier=tier, driver_config=cfg)
+
+
+# ---------------------------------------------------------------------------
+# compose_transport_floor — R-FS-1 B6 Slice 1 (runtime spec v1.54 §14.9.8):
+# the per-MCP-transport floor (ADR-D2 §1.3) composed into the resolved tier,
+# still per-server-uniform. STDIO → ≥ TIER_3; remote L2 → TIER_4; remote L1/L3
+# + non-floor cases → unchanged; minimum_tier never raised; REFUSE (L0) → raise.
+# ---------------------------------------------------------------------------
+
+
+def _composed(client: MCPClientConfig, surface: DeploymentSurface) -> object:
+    return compose_transport_floor(resolve_effective_sandbox_defaults(client, surface), client)
+
+
+def test_stdio_floors_local_dev_tier1_to_tier3() -> None:
+    """The B6 behavioral change: a STDIO server at local-development (surface
+    default TIER_1) floors to TIER_3 (ADR-D2 §1.3), with tech/provider re-derived."""
+    eff = _composed(_client(transport=MCPTransport.STDIO), DeploymentSurface.LOCAL_DEVELOPMENT)
+    assert eff.sandbox_tier is SandboxTier.TIER_3_MICROVM  # type: ignore[attr-defined]
+    assert eff.sandbox_tech == "gvisor"  # type: ignore[attr-defined]
+    assert eff.sandbox_provider == "runsc"  # type: ignore[attr-defined]
+    # Security telemetry honesty: the reason records the transport floor, not the default.
+    assert "per-mcp-transport-floor" in eff.assigned_tier_reason  # type: ignore[attr-defined]
+    assert "ADR-D2 §1.3" in eff.assigned_tier_reason  # type: ignore[attr-defined]
+
+
+def test_stdio_floor_leaves_minimum_tier_unchanged() -> None:
+    """The transport floor raises the DELIVERED tier (`sandbox_tier`), NOT the
+    tool's REQUIRED floor (`minimum_tier`) — `resolved.tier >= minimum_tier` stays
+    satisfied by the raised tier; the converter's minimum_tier is untouched."""
+    base = resolve_effective_sandbox_defaults(
+        _client(transport=MCPTransport.STDIO), DeploymentSurface.LOCAL_DEVELOPMENT
+    )
+    composed = compose_transport_floor(base, _client(transport=MCPTransport.STDIO))
+    assert base.minimum_tier is SandboxTier.TIER_1_PROCESS
+    assert composed.minimum_tier is SandboxTier.TIER_1_PROCESS  # UNCHANGED
+    assert composed.sandbox_tier is SandboxTier.TIER_3_MICROVM  # delivered raised
+
+
+def test_stdio_floors_self_hosted_tier2_to_tier3() -> None:
+    """STDIO floor (TIER_3) composes by max() with the self-hosted surface default
+    (TIER_2) → TIER_3."""
+    eff = _composed(_client(transport=MCPTransport.STDIO), DeploymentSurface.SELF_HOSTED_SERVER)
+    assert eff.sandbox_tier is SandboxTier.TIER_3_MICROVM  # type: ignore[attr-defined]
+
+
+def test_remote_l2_floors_to_tier4() -> None:
+    """A remote L2 (sandbox-all) server floors to TIER_4 (ADR-D2 §1.3 / C-AS-10
+    §10.1 — `max(TIER_4, blast_radius_floor)`)."""
+    eff = _composed(
+        _client(
+            transport=MCPTransport.STREAMABLE_HTTP_L2_SANDBOX,
+            trust_level=MCPServerTrustLevel.L2_SANDBOX_ALL,
+        ),
+        DeploymentSurface.LOCAL_DEVELOPMENT,
+    )
+    assert eff.sandbox_tier is SandboxTier.TIER_4_FULL_VM  # type: ignore[attr-defined]
+    assert eff.sandbox_tech == "firecracker"  # type: ignore[attr-defined]
+
+
+def test_remote_l1_readonly_floor_does_not_raise_tier() -> None:
+    """A remote L1 READ_ONLY server floors to `blast_radius_floor(READ_ONLY)` =
+    TIER_1, which does NOT exceed the local-dev surface default (TIER_1) — the
+    composed tier is unchanged (no spurious raise for non-STDIO low-blast servers)."""
+    eff = _composed(
+        _client(
+            transport=MCPTransport.STREAMABLE_HTTP_L1_PINNED,
+            trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
+        ),
+        DeploymentSurface.LOCAL_DEVELOPMENT,
+    )
+    assert eff.sandbox_tier is SandboxTier.TIER_1_PROCESS  # type: ignore[attr-defined]
+    assert eff.sandbox_tech == "host-process"  # type: ignore[attr-defined]
+    # No floor raise → the per-server-default reason is retained (not floor-attributed).
+    assert eff.assigned_tier_reason == "per-server-default-sandbox-policy"  # type: ignore[attr-defined]
+
+
+def test_operator_tech_override_survives_floor_raise() -> None:
+    """When the floor raises the tier, an explicit operator-supplied tech/provider
+    still wins over the auto-derived per-tier label (the operator's label is theirs)."""
+    eff = _composed(
+        _client(
+            transport=MCPTransport.STDIO,
+            default_sandbox_tech="custom-tech",
+            default_sandbox_provider="custom-provider",
+        ),
+        DeploymentSurface.LOCAL_DEVELOPMENT,
+    )
+    assert eff.sandbox_tier is SandboxTier.TIER_3_MICROVM  # type: ignore[attr-defined]  # floor still raises
+    assert eff.sandbox_tech == "custom-tech"  # type: ignore[attr-defined]  # operator override survives
+    assert eff.sandbox_provider == "custom-provider"  # type: ignore[attr-defined]
+
+
+def test_remote_l0_floor_refuse_raises_defensively() -> None:
+    """A remote L0 (refuse) server's floor is REFUSE (not a tier). It is unreachable
+    in production (L0 is refused at registration), so `compose_transport_floor` raises
+    a defensive fail-closed error rather than returning a tier-less decision."""
+    client = _client(
+        transport=MCPTransport.STREAMABLE_HTTP_L0_REFUSE,
+        trust_level=MCPServerTrustLevel.L0_REFUSE_REMOTE,
+    )
+    base = resolve_effective_sandbox_defaults(client, DeploymentSurface.LOCAL_DEVELOPMENT)
+    with pytest.raises(RuntimeError, match="TRANSPORT-FLOOR-REFUSE"):
+        compose_transport_floor(base, client)

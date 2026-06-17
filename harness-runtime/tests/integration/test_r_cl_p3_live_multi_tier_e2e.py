@@ -101,6 +101,16 @@ def _extract_base_rate(provider: Any) -> float:
 
 
 @pytest.mark.e2e
+@pytest.mark.skip(
+    reason="R-FS-1 B6 Slice 1 (runtime spec v1.54 §14.9.8): this multi-tier e2e's "
+    "echo-MCP TOOL_STEP uses an in-process STDIO server, which the STDIO transport floor "
+    "(ADR-D2 §1.3) now raises to TIER_3 → bootstrap fail-closes. Preserved intact (not "
+    "rewritten) pending the B6 e2e-migration arc: restoring it needs either a "
+    "containerized tool step (Docker-gated, like test_r410_*) or an inference-only "
+    "variant. The per-tier sampler base-rate binding it asserts is independently covered "
+    "by the stage-4 OD sampler unit tests. Registered forward "
+    "(B-MCP-HOST-REMOTE-TRANSPORT + the B6 e2e-migration item)."
+)
 @pytest.mark.skipif(
     not _ollama_reachable(),
     reason="live multi-tier api.run e2e requires a local ollama daemon on 127.0.0.1:11434",
