@@ -13,14 +13,16 @@ cross-axis membership check.
 from __future__ import annotations
 
 import pytest
-from harness_core import WorkloadClass
+from harness_core import PersonaTier, WorkloadClass
 from harness_cp.cp_shared_types import AgentRole
 from harness_cp.prompt_selection_manifest import PromptBinding, PromptSelectionManifest
 from harness_is.prompt_manifest import PromptManifest, prompt_version_sha
 from harness_runtime.lifecycle.prompt_selection import (
     InvalidPromptSelectionManifestError,
     PromptSelectionUnauthoredError,
+    PromptVersionUnapprovedError,
     reconcile_active_prompt_via_selection,
+    resolve_per_role_system_prompts,
 )
 
 _SE = WorkloadClass.SOFTWARE_ENGINEERING
@@ -143,3 +145,82 @@ def test_reconcile_empty_store_with_selection_fails_loud() -> None:
     )
     with pytest.raises(PromptSelectionUnauthoredError):
         reconcile_active_prompt_via_selection(pm, selection, workload_class=_SE)
+
+
+# ---------------------------------------------------------------------------
+# R-FS-1 arc B4 — resolve_per_role_system_prompts (the stage-0 builder of the
+# per-role injection map the LLM dispatcher indexes at dispatch, §14.5.3).
+# ---------------------------------------------------------------------------
+
+_A_SHA = prompt_version_sha("A body")
+
+
+def test_resolve_per_role_none_selection_returns_empty() -> None:
+    """No selection manifest → empty map → every dispatch falls through to the
+    default-role active_system_prompt (byte-identical to pre-B4)."""
+    assert (
+        resolve_per_role_system_prompts(
+            _store_manifest(),
+            None,
+            workload_class=_SE,
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+            approved_prompt_version_shas=frozenset(),
+        )
+        == {}
+    )
+
+
+def test_resolve_per_role_resolves_content_and_excludes_default() -> None:
+    """Each NON-default per-role binding resolves to its authored content; the
+    `"default"` role is EXCLUDED (it IS active_system_prompt — keeps the linear
+    path falling through unchanged)."""
+    selection = PromptSelectionManifest(
+        manifest_version=1,
+        per_role_bindings={
+            AgentRole("researcher"): PromptBinding(version_sha=_A_SHA),
+            AgentRole("default"): PromptBinding(version_sha=_A_SHA),
+        },
+    )
+    result = resolve_per_role_system_prompts(
+        _store_manifest(),
+        selection,
+        workload_class=_SE,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+        approved_prompt_version_shas=frozenset(),
+    )
+    assert result == {AgentRole("researcher"): "A body"}
+    assert AgentRole("default") not in result
+
+
+def test_resolve_per_role_fail_loud_unauthored_sha() -> None:
+    """A per-role binding to a sha not in the store fails loud at stage 0
+    (surfaces as BootstrapFailure) — never silently dropped."""
+    selection = PromptSelectionManifest(
+        manifest_version=1,
+        per_role_bindings={AgentRole("researcher"): PromptBinding(version_sha="deadbeef" * 8)},
+    )
+    with pytest.raises(PromptSelectionUnauthoredError):
+        resolve_per_role_system_prompts(
+            _store_manifest(),
+            selection,
+            workload_class=_SE,
+            persona_tier=PersonaTier.SOLO_DEVELOPER,
+            approved_prompt_version_shas=frozenset(),
+        )
+
+
+def test_resolve_per_role_fail_loud_unapproved_at_binding_tier() -> None:
+    """A per-role binding driving an authored-but-UNapproved version at a binding
+    persona tier fails loud (per-role governance parity with the default-role gate)."""
+    selection = PromptSelectionManifest(
+        manifest_version=1,
+        per_role_bindings={AgentRole("researcher"): PromptBinding(version_sha=_A_SHA)},
+    )
+    with pytest.raises(PromptVersionUnapprovedError):
+        resolve_per_role_system_prompts(
+            _store_manifest(),
+            selection,
+            workload_class=_SE,
+            persona_tier=PersonaTier.TEAM_BINDING,
+            approved_prompt_version_shas=frozenset(),  # _A_SHA NOT approved
+        )

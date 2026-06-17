@@ -1691,3 +1691,84 @@ async def test_l2_absent_classifier_is_byte_identical(
     await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
 
     assert set(captured["layer_decisions"].keys()) == {RoutingLayer.DECLARATIVE}
+
+
+# ---------------------------------------------------------------------------
+# B4 (C-RT-15 §14.5.3) — per-role PROMPT dispatch-read. The dispatcher indexes
+# `step_context.agent_role` into `per_role_system_prompts`; a bound role injects
+# its own system prompt, an unbound role (incl. default/linear) falls through to
+# `active_system_prompt`. Verified by the recorded provider-client `system=`
+# kwarg through the real `dispatch(...)` path (the §14.5.2 acceptance shape).
+# ---------------------------------------------------------------------------
+
+_DEFAULT_SYS = "DEFAULT-default-role-prompt"
+_RESEARCHER_SYS = "RESEARCHER-per-role-prompt"
+
+
+@pytest.mark.asyncio
+async def test_b4_per_role_prompt_bound_vs_unbound_differ_in_same_run() -> None:
+    """THE non-vacuous B4 e2e: in ONE dispatcher, a fan-out branch bound to a
+    per-role prompt (`"researcher"`) injects its OWN `system=`, while an UNBOUND
+    role (`"writer"`) falls through to the default-role `active_system_prompt`.
+    The bound key matches the role the driver composes on the branch context."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        active_system_prompt=_DEFAULT_SYS,
+        per_role_system_prompts={AgentRole("researcher"): _RESEARCHER_SYS},
+    )
+
+    # Bound role → its per-role prompt.
+    await dispatcher.dispatch(
+        _binding("anthropic"), _step(), step_context=_step_context_with_role("researcher")
+    )
+    assert adapter.client.messages.last_kwargs is not None
+    assert adapter.client.messages.last_kwargs["system"] == _RESEARCHER_SYS
+
+    # Unbound role, SAME dispatcher → fall-through to the default-role prompt.
+    await dispatcher.dispatch(
+        _binding("anthropic"), _step(), step_context=_step_context_with_role("writer")
+    )
+    assert adapter.client.messages.last_kwargs["system"] == _DEFAULT_SYS
+
+
+@pytest.mark.asyncio
+async def test_b4_per_role_prompt_linear_path_untouched() -> None:
+    """§14.5.3 invariant: the linear / no-branch path (`agent_role is None`) — and
+    the literal `"default"` role — never consult the per-role map, so they inject
+    the default-role `active_system_prompt` verbatim, even with a populated map."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        active_system_prompt=_DEFAULT_SYS,
+        per_role_system_prompts={AgentRole("researcher"): _RESEARCHER_SYS},
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic"), _step(), step_context=_step_context_with_role(None)
+    )
+    assert adapter.client.messages.last_kwargs is not None
+    assert adapter.client.messages.last_kwargs["system"] == _DEFAULT_SYS
+
+
+@pytest.mark.asyncio
+async def test_b4_empty_per_role_map_is_byte_identical_to_default() -> None:
+    """Empty `per_role_system_prompts` (no per-role bindings — the default) → every
+    role falls through to `active_system_prompt` (byte-identical to pre-B4)."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        active_system_prompt=_DEFAULT_SYS,
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic"), _step(), step_context=_step_context_with_role("researcher")
+    )
+    assert adapter.client.messages.last_kwargs is not None
+    assert adapter.client.messages.last_kwargs["system"] == _DEFAULT_SYS

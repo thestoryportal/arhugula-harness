@@ -17,6 +17,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from harness_core import SkillID
+from harness_cp.cp_shared_types import AgentRole
+from harness_cp.prompt_selection_manifest import PromptBinding, PromptSelectionManifest
 from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_is.prompt_manifest import PromptManifest, PromptVersion
 from harness_runtime.lifecycle.procedural_tier_snapshot import (
@@ -67,14 +69,18 @@ def _ctx(
     skills: dict[SkillID, Skill] | None = None,
     routing_manifest: RoutingManifest | None = None,
     prompt_manifest: PromptManifest | None = None,
+    prompt_selection_manifest: PromptSelectionManifest | None = None,
 ) -> SimpleNamespace:
     """Build a minimal duck-typed HarnessContext-shape exposing just the
     fields the resolver reads (``skills`` + ``routing_manifest`` +
-    ``prompt_manifest``)."""
+    ``prompt_manifest`` + ``config.prompt_selection_manifest`` — the NEW v1.9
+    4th recipe component, read from config (its spec'd home), default ``None``
+    → ``""`` sentinel)."""
     return SimpleNamespace(
         skills=skills if skills is not None else {},
         routing_manifest=routing_manifest if routing_manifest is not None else _routing_manifest(),
         prompt_manifest=prompt_manifest if prompt_manifest is not None else _prompt_manifest(),
+        config=SimpleNamespace(prompt_selection_manifest=prompt_selection_manifest),
     )
 
 
@@ -96,17 +102,20 @@ def test_resolve_returns_64_char_lowercase_hex() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_canonical_payload_alphabetical_keys_3_components_at_v1_5() -> None:
-    """AC #3: Canonical payload has 3 keys alphabetically ordered (v1.5)."""
+def test_resolve_canonical_payload_alphabetical_keys_4_components_at_v1_9() -> None:
+    """AC #3: Canonical payload has 4 keys alphabetically ordered (v1.9 —
+    ``prompt_selection_manifest_sha`` NEW, R-FS-1 arc B4 per-role coherence)."""
     payload_bytes = _canonicalize_procedural_tier_payload(
         active_prompt_version="p" * 64,
         active_skills_versions=["a"],
+        prompt_selection_manifest_sha="c" * 64,
         routing_manifest_sha="b" * 64,
     )
     payload = json.loads(payload_bytes.decode("utf-8"))
     assert list(payload.keys()) == [
         "active_prompt_version",
         "active_skills_versions",
+        "prompt_selection_manifest_sha",
         "routing_manifest_sha",
     ]
 
@@ -135,6 +144,7 @@ def test_resolve_skills_versions_sorted_ascending() -> None:
         _canonicalize_procedural_tier_payload(
             active_prompt_version="",
             active_skills_versions=expected_versions,
+            prompt_selection_manifest_sha="",
             routing_manifest_sha=routing_sha,
         ),
     ).hexdigest()
@@ -269,19 +279,22 @@ def test_resolve_empty_skills_set_handled() -> None:
 
 
 def test_resolve_canonical_payload_includes_prompts_key_at_v1_5() -> None:
-    """AC #11 (v1.5): canonical payload contains exactly 3 keys; prompts bound."""
+    """AC #11: canonical payload contains exactly 4 keys (v1.9); prompts bound +
+    prompt_selection_manifest_sha present (R-FS-1 arc B4)."""
     payload_bytes = _canonicalize_procedural_tier_payload(
         active_prompt_version="",
         active_skills_versions=[],
+        prompt_selection_manifest_sha="",
         routing_manifest_sha="0" * 64,
     )
     payload = json.loads(payload_bytes.decode("utf-8"))
     assert set(payload.keys()) == {
         "active_prompt_version",
         "active_skills_versions",
+        "prompt_selection_manifest_sha",
         "routing_manifest_sha",
     }
-    assert len(payload) == 3
+    assert len(payload) == 4
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +322,7 @@ def test_resolve_routing_manifest_sha_derivation_byte_exact() -> None:
     expected_payload = _canonicalize_procedural_tier_payload(
         active_prompt_version="",
         active_skills_versions=[],
+        prompt_selection_manifest_sha="",
         routing_manifest_sha=expected_routing_sha,
     )
     expected_hash = hashlib.sha256(expected_payload).hexdigest()
@@ -329,7 +343,7 @@ def test_resolve_routing_manifest_sha_invariant_under_dict_insertion_order() -> 
     ``model_dump_json`` preserves dict insertion order; post-fix the
     ``sort_keys=True`` canonicalization closes the gap.
     """
-    from harness_cp.cp_shared_types import AgentRole, ModelBinding
+    from harness_cp.cp_shared_types import ModelBinding
     from harness_cp.routing_manifest_residence import RoleRoutingBinding
 
     mb_a = ModelBinding(provider="anthropic", model="claude-opus-4-7")
@@ -388,3 +402,52 @@ def test_make_resolver_factory_returns_callable_capturing_ctx() -> None:
     assert closure() == direct
     # Closure is idempotent across calls (re-compute from captured ctx).
     assert closure() == closure()
+
+
+# ---------------------------------------------------------------------------
+# v1.9 (R-FS-1 arc B4) — prompt_selection_manifest_sha 4th component: per-role
+# prompt-selection bindings are now hash-visible, closing the §14.5.2 coherence
+# gap that per-role prompt injection would otherwise reintroduce.
+# ---------------------------------------------------------------------------
+
+
+def _selection_manifest(role: str, version_sha: str) -> PromptSelectionManifest:
+    """Minimal PromptSelectionManifest with a single per-role binding."""
+    return PromptSelectionManifest(
+        manifest_version=1,
+        per_role_bindings={AgentRole(role): PromptBinding(version_sha=version_sha)},
+    )
+
+
+def test_resolve_selection_manifest_present_differs_from_none() -> None:
+    """v1.9: a configured prompt-selection manifest changes the procedural-tier
+    hash vs no selection manifest — per-role bindings are now hash-visible
+    (mirroring how the routing manifest's per-role bindings already were)."""
+    none_ctx = _ctx(prompt_selection_manifest=None)
+    sel_ctx = _ctx(prompt_selection_manifest=_selection_manifest("researcher", "a" * 64))
+    assert resolve_procedural_tier_snapshot(none_ctx) != resolve_procedural_tier_snapshot(  # type: ignore[arg-type]
+        sel_ctx  # type: ignore[arg-type]
+    )
+
+
+def test_resolve_per_role_binding_flip_changes_hash() -> None:
+    """v1.9 — THE load-bearing coherence property: flipping a per_role_bindings
+    entry's version_sha (which changes that branch's injected per-role prompt
+    content at dispatch, B4 §14.5.3) MUST change the procedural-tier hash. This is
+    exactly the §14.5.2 invariant the v1.8 3-component recipe violated for the
+    per-role dimension (the gap this arc closes)."""
+    ctx_a = _ctx(prompt_selection_manifest=_selection_manifest("researcher", "a" * 64))
+    ctx_b = _ctx(prompt_selection_manifest=_selection_manifest("researcher", "b" * 64))
+    assert resolve_procedural_tier_snapshot(ctx_a) != resolve_procedural_tier_snapshot(  # type: ignore[arg-type]
+        ctx_b  # type: ignore[arg-type]
+    )
+
+
+def test_resolve_same_selection_manifest_same_hash() -> None:
+    """v1.9: two logically-identical selection manifests → identical hash
+    (determinism, mirroring the active_prompt_version / routing components)."""
+    ctx_a = _ctx(prompt_selection_manifest=_selection_manifest("writer", "c" * 64))
+    ctx_b = _ctx(prompt_selection_manifest=_selection_manifest("writer", "c" * 64))
+    assert resolve_procedural_tier_snapshot(ctx_a) == resolve_procedural_tier_snapshot(  # type: ignore[arg-type]
+        ctx_b  # type: ignore[arg-type]
+    )

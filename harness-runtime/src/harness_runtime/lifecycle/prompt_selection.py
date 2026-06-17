@@ -62,6 +62,7 @@ __all__ = [
     "PromptVersionUnapprovedError",
     "enforce_prompt_version_approval",
     "reconcile_active_prompt_via_selection",
+    "resolve_per_role_system_prompts",
 ]
 
 # Mirrors ``llm_dispatch._MVP_DEFAULT_AGENT_ROLE`` — the runtime has no per-step
@@ -239,3 +240,59 @@ def enforce_prompt_version_approval(
         return
     if selected_sha not in approved_prompt_version_shas:
         raise PromptVersionUnapprovedError(persona_tier=persona_tier, version_sha=selected_sha)
+
+
+def resolve_per_role_system_prompts(
+    prompt_manifest: PromptManifest,
+    selection_manifest: PromptSelectionManifest | None,
+    *,
+    workload_class: WorkloadClass,
+    persona_tier: PersonaTier,
+    approved_prompt_version_shas: frozenset[str],
+) -> dict[AgentRole, str]:
+    """Resolve each per-role-bound ``AgentRole`` → its effective system-prompt
+    content for ``workload_class`` (R-FS-1 arc B4 — per-role prompt threading,
+    runtime spec §14.5.3).
+
+    Returns the per-role injection map the LLM dispatcher indexes at dispatch on
+    the branch ``step_context.agent_role`` (the §14.5.2 translate seam injects the
+    looked-up content; an unbound role falls through to the stage-0 default-role
+    ``active_system_prompt``). Built at bootstrap stage 0 — *before* the dispatcher
+    is constructed — so the SAME fail-loud checks the default-role path runs apply
+    per role: :func:`reconcile_active_prompt_via_selection` raises
+    :class:`PromptSelectionUnauthoredError` / :class:`InvalidPromptSelectionManifestError`,
+    and :func:`enforce_prompt_version_approval` raises
+    :class:`PromptVersionUnapprovedError` at a binding persona tier — all surfacing
+    as a ``BootstrapFailure``.
+
+    The DEFAULT role (``_MVP_DEFAULT_AGENT_ROLE``) is EXCLUDED — it is already the
+    stage-0-resolved ``active_prompt_version`` (the dispatcher's
+    ``active_system_prompt``), and excluding it keeps the ``SINGLE_THREADED_LINEAR``
+    / unbound-branch dispatch path falling through unchanged (§14.5.3 invariant:
+    linear path untouched). ``selection_manifest is None`` / no per-role bindings →
+    ``{}`` → every dispatch falls through (byte-identical to pre-B4).
+    """
+    if selection_manifest is None:
+        return {}
+    result: dict[AgentRole, str] = {}
+    for role in selection_manifest.per_role_bindings:
+        if role == _MVP_DEFAULT_AGENT_ROLE:
+            continue
+        # Reuse the SAME fail-loud store-membership + structural-validation
+        # machinery as the default-role path; raises surface as BootstrapFailure.
+        reconciled = reconcile_active_prompt_via_selection(
+            prompt_manifest,
+            selection_manifest,
+            workload_class=workload_class,
+            role=role,
+        )
+        # Per-role binding-tier governance (parity with the default-role gate).
+        enforce_prompt_version_approval(
+            persona_tier=persona_tier,
+            selection_manifest=selection_manifest,
+            approved_prompt_version_shas=approved_prompt_version_shas,
+            workload_class=workload_class,
+            role=role,
+        )
+        result[role] = reconciled.active_prompt_version.content
+    return result

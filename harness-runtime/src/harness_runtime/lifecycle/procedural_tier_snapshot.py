@@ -7,10 +7,16 @@ contract). Plan-unit ownership at ``Implementation_Plan_Harness_Runtime_v2_42.md
 §11.4). Supersedes IS plan v2.4 U-IS-18 residence-deferred placeholder; IS plan
 v2.5 retires U-IS-18 (RELOCATED-TO-U-RT-112).
 
-The resolver implements the spec §5.2 content-hash recipe over the three
+The resolver implements the spec §5.2 content-hash recipe over the four
 procedural-tier components (`active_prompt_version` + `active_skills_versions`
-+ `routing_manifest_sha`). The prompts component (`active_prompt_version`) was
-deferred at v1.3 per spec §5.2 Deferral footer and is bound at **v1.5**
++ `prompt_selection_manifest_sha` + `routing_manifest_sha`). The
+`prompt_selection_manifest_sha` component is NEW at **v1.9** (R-FS-1 arc B4 —
+per-role prompt coherence): a SHA-256 over the whole `PromptSelectionManifest`
+canonical-JSON bytes (`""` when `None`), mirroring `routing_manifest_sha`, so a
+fan-out branch's per-role prompt selection is hash-visible (forward-only rebase;
+`None`/empty selection is byte-identical to the v1.8 3-component hash). The
+prompts component (`active_prompt_version`) was deferred at v1.3 per spec §5.2
+Deferral footer and is bound at **v1.5**
 (post-MVP closure R-CL-P4; fork
 `.harness/class_1_fork_prompts_management_surface_active_prompt_version.md`,
 operator-ratified 2026-06-11): the runtime ``HarnessContext.prompt_manifest:
@@ -21,12 +27,17 @@ expected per spec §5.2 (any recipe-component change yields different output ove
 identical procedural state; snapshot-ref equality is scoped within a single
 recipe-version generation; forward-only — no migration of historical entries).
 
-Recipe (v1.5 — 3-component scope):
+Recipe (v1.9 — 4-component scope):
 
     sha256(canonical_json({
         "active_prompt_version": ctx.prompt_manifest.active_prompt_version.version_sha,
         "active_skills_versions": sorted(
             set(skill.manifest.version_sha for skill in ctx.skills.values())
+        ),
+        "prompt_selection_manifest_sha": (
+            "" if ctx.config.prompt_selection_manifest is None else sha256(
+                canonical_json(ctx.config.prompt_selection_manifest).encode("utf-8")
+            ).hexdigest()
         ),
         "routing_manifest_sha": sha256(
             ctx.routing_manifest.model_dump_json(by_alias=False).encode("utf-8")
@@ -68,6 +79,7 @@ __all__ = [
 def _canonicalize_procedural_tier_payload(
     active_prompt_version: str,
     active_skills_versions: list[str],
+    prompt_selection_manifest_sha: str,
     routing_manifest_sha: str,
 ) -> bytes:
     """Canonicalize the procedural-tier payload to bytes for hashing.
@@ -75,15 +87,17 @@ def _canonicalize_procedural_tier_payload(
     Internal helper exposed for testing per U-RT-112 AC #3 (alphabetical key
     ordering) + AC #4 (skills-versions list canonicalization).
 
-    The payload dict is built with the three v1.5 components ordered
-    alphabetically by key (``active_prompt_version`` NEW at IS spec v1.5 §5.2);
-    ``json.dumps`` is invoked with ``sort_keys=True`` + ``separators=(",", ":")``
-    to produce a deterministic canonical byte form independent of Python dict
-    insertion order.
+    The payload dict is built with the four v1.9 components ordered
+    alphabetically by key (``active_prompt_version`` NEW at IS spec v1.5 §5.2;
+    ``prompt_selection_manifest_sha`` NEW at IS spec v1.9 §5.2 — R-FS-1 arc B4
+    per-role prompt coherence); ``json.dumps`` is invoked with ``sort_keys=True``
+    + ``separators=(",", ":")`` to produce a deterministic canonical byte form
+    independent of Python dict insertion order.
     """
     payload = {
         "active_prompt_version": active_prompt_version,
         "active_skills_versions": active_skills_versions,
+        "prompt_selection_manifest_sha": prompt_selection_manifest_sha,
         "routing_manifest_sha": routing_manifest_sha,
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
@@ -101,10 +115,13 @@ def resolve_procedural_tier_snapshot(
     ``harness_context`` mutation per AC #9.
 
     Returns a lowercase 64-character hex SHA-256 digest per AC #2 (content-hash
-    recipe byte-exact). Three-component scope at v1.5: the prompts component
+    recipe byte-exact). Four-component scope at v1.9: the prompts component
     (``active_prompt_version``) was deferred at v1.3 per spec §5.2 Deferral
-    footer and is bound at v1.5 (post-MVP closure R-CL-P4) — read from
-    ``harness_context.prompt_manifest.active_prompt_version.version_sha``.
+    footer, bound at v1.5 (post-MVP closure R-CL-P4) — read from
+    ``harness_context.prompt_manifest.active_prompt_version.version_sha`` — and the
+    ``prompt_selection_manifest_sha`` component is bound at v1.9 (R-FS-1 arc B4),
+    read from ``harness_context.config.prompt_selection_manifest`` (``""`` when
+    ``None`` — no dedicated carrier; the config field is its spec'd home).
     """
     # 0. Extract the active prompt version (NEW v1.5 third component) from the
     #    PromptManifest carrier on harness_context. Empty-defaultable
@@ -139,11 +156,38 @@ def resolve_procedural_tier_snapshot(
     ).encode("utf-8")
     routing_manifest_sha = hashlib.sha256(routing_manifest_bytes).hexdigest()
 
+    # 3b. Derive prompt_selection_manifest_sha (NEW v1.9 — IS spec §5.2 4th
+    #     component; R-FS-1 arc B4 per-role prompt coherence). Mirrors
+    #     routing_manifest_sha exactly: SHA-256 over the WHOLE
+    #     PromptSelectionManifest canonical-JSON bytes (model_dump(mode="json")
+    #     + sort_keys for cross-instance determinism, per the routing rationale
+    #     above). This makes per-role prompt-selection bindings hash-visible — a
+    #     `per_role_bindings` flip changes a branch's injected content (B4
+    #     §14.5.3) AND this hash, closing the §14.5.2 invariant for the per-role
+    #     dimension. Read from the operator-supplied RuntimeConfig (the selection
+    #     manifest's spec'd home — `RuntimeConfig.prompt_selection_manifest`, NOT
+    #     stage-enriched, so no dedicated HarnessContext carrier / C-RT-04 row is
+    #     owed, unlike the reconciled `prompt_manifest`/`routing_manifest`).
+    #     `None` (no selection manifest) → "" sentinel. The v1.9 widening rebases
+    #     the hash forward for ALL runs (the documented forward-only rebase); a
+    #     None-selection run is byte-identical to any other None-selection run.
+    selection_manifest = harness_context.config.prompt_selection_manifest
+    if selection_manifest is None:
+        prompt_selection_manifest_sha = ""
+    else:
+        prompt_selection_manifest_bytes = json.dumps(
+            selection_manifest.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        prompt_selection_manifest_sha = hashlib.sha256(prompt_selection_manifest_bytes).hexdigest()
+
     # 4 + 5. Build canonical payload + serialize via helper (alphabetical key
     #        ordering + sort_keys + compact separators per AC #2 + #3).
     canonical_bytes = _canonicalize_procedural_tier_payload(
         active_prompt_version=active_prompt_version,
         active_skills_versions=active_skills_versions,
+        prompt_selection_manifest_sha=prompt_selection_manifest_sha,
         routing_manifest_sha=routing_manifest_sha,
     )
 
