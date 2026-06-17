@@ -75,6 +75,81 @@ def test_resolve_step_binding_field_by_field_override() -> None:
     assert binding.persona_tier is PersonaTier.TEAM_BINDING
 
 
+def test_resolve_step_binding_applies_prompt_version_sha() -> None:
+    """B4 Slice 3 (CP spec v1.37 §6.2): resolve_step_binding carries a per-step
+    StepOverride.prompt_version_sha onto the StepEffectiveBinding. An override
+    carrying ONLY a prompt sha still applies (so the override state-ledger entry
+    fires) while model/engine inherit the manifest defaults."""
+    sha = "a" * 64
+    manifest = _manifest(
+        per_step_overrides={
+            StepID("s1"): StepOverride(step_id=StepID("s1"), prompt_version_sha=sha)
+        }
+    )
+    binding = resolve_step_binding(
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    assert binding.prompt_version_sha == sha
+    assert binding.override_applied is True
+    assert binding.model_binding == _DEFAULT_BINDING
+    assert binding.engine_class is EngineClass.PURE_PATTERN_NO_ENGINE
+
+
+def test_resolve_step_binding_prompt_version_sha_none_without_prompt_override() -> None:
+    """No per-step prompt dimension → prompt_version_sha is None (the runtime
+    dispatch falls through to per-role / default): both for an override that omits
+    the prompt field and for a step with no override at all."""
+    manifest = _manifest(
+        per_step_overrides={
+            StepID("s1"): StepOverride(step_id=StepID("s1"), model_binding=_OVERRIDE_BINDING)
+        }
+    )
+    overridden = resolve_step_binding(
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    assert overridden.prompt_version_sha is None  # override present, no prompt dimension
+    no_override = resolve_step_binding(
+        manifest,
+        "s2",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    assert no_override.prompt_version_sha is None
+
+
+def test_prompt_version_sha_rides_binding_model_dump_for_provenance() -> None:
+    """B4 Slice 3 provenance (CP spec v1.37 §6.6): binding.model_dump — which IS
+    post_override_step_config at the WIRED per-step override state-ledger entry
+    (workflow_driver.py) — carries prompt_version_sha, so a per-step prompt flip
+    is captured in that entry's outcome-hash (live step-level provenance, NOT the
+    run-level §5.2 procedural-tier hash)."""
+    sha1, sha2 = "a" * 64, "b" * 64
+
+    def _dump(sha: str) -> dict[str, object]:
+        manifest = _manifest(
+            per_step_overrides={
+                StepID("s1"): StepOverride(step_id=StepID("s1"), prompt_version_sha=sha)
+            }
+        )
+        binding = resolve_step_binding(
+            manifest,
+            "s1",
+            default_model_binding=_DEFAULT_BINDING,
+            persona_tier=PersonaTier.TEAM_BINDING,
+        )
+        return binding.model_dump(mode="json")
+
+    d1, d2 = _dump(sha1), _dump(sha2)
+    assert d1["prompt_version_sha"] == sha1
+    assert d2["prompt_version_sha"] == sha2
+
+
 def test_audit_ref_populated_on_override() -> None:
     manifest = _manifest(
         per_step_overrides={

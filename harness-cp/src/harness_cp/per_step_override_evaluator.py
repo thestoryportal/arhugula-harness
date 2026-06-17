@@ -150,6 +150,24 @@ class StepEffectiveBinding(BaseModel):
     at routing-manifest tier resolution per C-CP-01 §1.3).
     """
 
+    prompt_version_sha: str | None = None
+    """v1.37 addition (CP spec v1.37 §6.2; R-FS-1 arc B4 Slice 3 per-step
+    PROMPT override). The resolved per-step prompt `version_sha` — the override
+    value when a `StepOverride` for this step carries one, else `None`.
+
+    Unlike `model_binding`/`engine_class` (which resolve override-or-manifest-
+    default to a concrete value), this is `None`-or-override: there is no
+    manifest-entry-level prompt default at the CP layer (the run-level default +
+    per-role prompts resolve downstream at the runtime §14.5.2 dispatch). `None`
+    here means "no per-step prompt override" → the runtime dispatch falls through
+    to per-role, then the run-level default.
+
+    Because this is a `StepEffectiveBinding` field, it rides
+    `binding.model_dump(...)` into the per-step override state-ledger entry's
+    outcome-hash (the wired `emit_override_state_ledger_entry` site), giving the
+    per-step prompt override live step-level provenance (CP spec v1.37 §6.6).
+    """
+
 
 def resolve_step_binding(
     manifest_entry: WorkflowManifestEntry,
@@ -202,6 +220,11 @@ def resolve_step_binding(
             actor=ActorIdentity("control-plane"),
         ),
         persona_tier=persona_tier,
+        # CP spec v1.37 §6.2 — per-step PROMPT override (B4 Slice 3). `None`-or-
+        # override (no manifest-entry prompt default at the CP layer); the runtime
+        # §14.5.2 dispatch resolves the sha → content with precedence
+        # per-step > per-role > run-level default.
+        prompt_version_sha=override.prompt_version_sha,
     )
 
 

@@ -269,6 +269,17 @@ async def execute(
             # `step_context.agent_role`; an unbound role falls through to
             # `active_system_prompt`. Empty (no per-role bindings) → byte-identical.
             per_role_system_prompts=ctx.per_role_system_prompts,
+            # R-FS-1 arc B4 Slice 3 (CP spec v1.37 §6.1) — per-step PROMPT
+            # override support. Project the IS `PromptManifest.versions` store to
+            # `{version_sha: content}` so the dispatcher resolves a per-step
+            # binding's `prompt_version_sha` → content (precedence per-step >
+            # per-role > default; fail-loud `RT-FAIL-PROMPT-SELECTION-UNAUTHORED`
+            # if unauthored). Empty store → `{}` → no-override runs byte-identical
+            # to pre-Slice-3; a per-step override naming an unauthored sha fails
+            # loud. `approved_prompt_version_shas` carries the binding-tier
+            # governance parity (OD C-OD-34; inert at the solo-developer tier).
+            prompt_versions_by_sha={v.version_sha: v.content for v in ctx.prompt_manifest.versions},
+            approved_prompt_version_shas=config.approved_prompt_version_shas,
         )
 
     # U-RT-58 (C-RT-16 §14.6 D6): rebind ``ctx.llm_dispatcher`` from the
