@@ -16,6 +16,8 @@ from harness_od.composite_sampler import (
 )
 from harness_od.sampling_mode import (
     ALWAYS_SAMPLED_EVENT_CLASSES,
+    FILES_OPERATION_KIND_ATTR,
+    MEMORY_OPERATION_KIND_ATTR,
     is_always_sampled,
 )
 from opentelemetry import trace as ot_trace
@@ -217,3 +219,100 @@ def test_parent_based_inherits_unsampled_parent_decision() -> None:
         kind=SpanKind.INTERNAL,
     )
     assert not _result_records(result.decision)
+
+
+# ---------------------------------------------------------------------------
+# B7 §9.2 conditional rows — attribute-aware decision at the root sampler.
+# ---------------------------------------------------------------------------
+#
+# Exercised at a ROOT span (parent_context=None) with base_rate=0.0 so the
+# §10.1 base-rate branch DROPS — a span samples here iff §9.2 always-samples
+# it. Attributes are supplied explicitly (as a producer passing them at span
+# creation would); the production enforcement boundary (head sampler is
+# consulted only for root spans; producers set *.kind post-creation) is
+# documented in the `composite_sampler` module docstring.
+
+
+@pytest.mark.parametrize(
+    ("name", "attributes", "should_record"),
+    [
+        # files.operation — §9.2 mutation always-samples; §10.1 complement drops.
+        ("files.operation", {FILES_OPERATION_KIND_ATTR: "upload"}, True),
+        ("files.operation", {FILES_OPERATION_KIND_ATTR: "delete"}, True),
+        ("files.operation", {FILES_OPERATION_KIND_ATTR: "list"}, False),
+        ("files.operation", {FILES_OPERATION_KIND_ATTR: "reference"}, False),
+        ("files.operation", None, True),  # conservative-absent → always-sample
+        # memory.operation — §9.2 mutation always-samples; §10.1 complement drops.
+        ("memory.operation", {MEMORY_OPERATION_KIND_ATTR: "write"}, True),
+        ("memory.operation", {MEMORY_OPERATION_KIND_ATTR: "delete"}, True),
+        ("memory.operation", {MEMORY_OPERATION_KIND_ATTR: "read"}, False),
+        ("memory.operation", None, True),  # conservative-absent → always-sample
+        # validator.fail.* — permanent always-samples; transient drops.
+        ("validator.fail.semantic_inconsistency", {"validator.fail.permanence": "permanent"}, True),
+        (
+            "validator.fail.semantic_inconsistency",
+            {"validator.fail.permanence": "transient"},
+            False,
+        ),
+    ],
+)
+def test_should_sample_conditional_rows_at_root_base_rate_zero(
+    name: str, attributes: dict[str, str] | None, should_record: bool
+) -> None:
+    """At a root span with base_rate=0.0, the §9.2 conditional rows sample iff
+    their discriminating attribute mandates always-sampling; non-mutation /
+    transient variants fall through to the dropped base-rate branch."""
+    sampler = HarnessCompositeSampler(base_rate=0.0)
+    result = sampler.should_sample(
+        parent_context=None,
+        trace_id=0x12345678901234567890123456789012,
+        name=name,
+        attributes=attributes,
+    )
+    assert _result_records(result.decision) is should_record
+
+
+def test_conditional_row_non_root_inherits_parent_not_kind() -> None:
+    """Enforcement-boundary lock: through `ParentBased`, a NON-root
+    `files.operation` span inherits the parent's sampling decision and never
+    reaches the inner sampler's §9.2-conditional logic — so its `kind` is NOT
+    consulted. A non-mutation `kind=list` under a SAMPLED parent still samples
+    (parent wins, not the §10.1 base-rate the kind would imply at root); the
+    same span under an UNSAMPLED parent drops even at `base_rate=1.0`. This
+    documents why the head-sampler refinement is a production no-op for the
+    non-root files/memory producers (see `composite_sampler` module docstring +
+    the `B-TAIL-CONDITIONAL-SAMPLING` forward arc)."""
+    sampler = build_default_sampler(base_rate=1.0)
+    non_mutation = {FILES_OPERATION_KIND_ATTR: "list"}
+
+    sampled_parent = SpanContext(
+        trace_id=0x12345678901234567890123456789012,
+        span_id=0x1234567890123456,
+        is_remote=False,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+    )
+    sampled_ctx = ot_trace.set_span_in_context(NonRecordingSpan(sampled_parent))
+    result_sampled = sampler.should_sample(
+        parent_context=sampled_ctx,
+        trace_id=sampled_parent.trace_id,
+        name="files.operation",
+        kind=SpanKind.INTERNAL,
+        attributes=non_mutation,
+    )
+    assert _result_records(result_sampled.decision)  # parent wins, not kind=list
+
+    unsampled_parent = SpanContext(
+        trace_id=0x12345678901234567890123456789012,
+        span_id=0x1234567890123456,
+        is_remote=False,
+        trace_flags=TraceFlags(TraceFlags.DEFAULT),
+    )
+    unsampled_ctx = ot_trace.set_span_in_context(NonRecordingSpan(unsampled_parent))
+    result_unsampled = sampler.should_sample(
+        parent_context=unsampled_ctx,
+        trace_id=unsampled_parent.trace_id,
+        name="files.operation",
+        kind=SpanKind.INTERNAL,
+        attributes={FILES_OPERATION_KIND_ATTR: "upload"},  # mutation, yet parent wins
+    )
+    assert not _result_records(result_unsampled.decision)  # parent wins, not kind=upload
