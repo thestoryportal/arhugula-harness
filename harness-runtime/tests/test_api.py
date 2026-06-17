@@ -53,7 +53,7 @@ from harness_runtime.api import (
     WorkflowObject,
     run,
 )
-from harness_runtime.types import RuntimeConfig
+from harness_runtime.types import CostRecordAccumulator, RuntimeConfig
 
 # ---------------------------------------------------------------------------
 # Helpers.
@@ -385,7 +385,9 @@ async def test_valid_run_executes_via_driver_and_returns_run_result(
         _state={},
         workflow_registry={},
     )
-    fake_ctx = SimpleNamespace(mcp_server=fake_mcp_server, cost_record_accumulator=[])
+    fake_ctx = SimpleNamespace(
+        mcp_server=fake_mcp_server, cost_record_accumulator=CostRecordAccumulator()
+    )
 
     async def _fake_bootstrap(config, *, workload_class, requires_inference=True):  # type: ignore[no-untyped-def]
         _ = config
@@ -453,7 +455,7 @@ async def test_run_releases_lock_after_completion(monkeypatch: pytest.MonkeyPatc
                 _state={},
                 workflow_registry={},
             ),
-            cost_record_accumulator=[],
+            cost_record_accumulator=CostRecordAccumulator(),
         )
 
     async def _fake_bootstrap(config, *, workload_class, requires_inference=True):  # type: ignore[no-untyped-def]

@@ -119,5 +119,5 @@ async def materialize_webhook_delivery_composer_stage(
     # forward-ready, dormant until the FM-2 webhook config arc binds substrates.
     return WebhookDeliveryComposer(
         tracer_provider=tracer_provider,
-        cost_record_sink=ctx.cost_record_accumulator,
+        cost_record_sink=ctx.cost_record_accumulator.records,
     )

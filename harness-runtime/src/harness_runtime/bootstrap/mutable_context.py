@@ -33,7 +33,6 @@ from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_is.path_resolver import PathResolver
 from harness_is.prompt_manifest import PromptManifest, PromptVersion
 from harness_is.worktree_isolation import WorktreeIsolationManager
-from harness_od.idempotency_join_dedup import SpanCostRecord
 from pydantic import BaseModel, ConfigDict
 
 from harness_runtime.lifecycle.llm_dispatch import (
@@ -45,6 +44,7 @@ from harness_runtime.types import (
     CollectorDaemonHandle,
     ContentAddressedIndex,
     CostAttributionChain,
+    CostRecordAccumulator,
     EngineSelector,
     HandoffRegistry,
     HarnessContext,
@@ -188,14 +188,16 @@ class _MutableHarnessContext:
     fail-loud sentinels for the LLM/sub-agent dispatchers + omits their
     `{StepKind → StepDispatcher}` registry rows. Defaults `True`
     (behavior-preserving for any caller that does not derive the predicate)."""
-    cost_record_accumulator: list[SpanCostRecord] = field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
+    cost_record_accumulator: CostRecordAccumulator = field(default_factory=CostRecordAccumulator)
     """R-FS-1 arc CA — run-scoped cost-record accumulator (frozen `HarnessContext`
-    field, not in `_REQUIRED_FIELDS` — defaulted, never None). A fresh list per
-    builder (per run); the stage-4/5 dispatcher/hook materializations read this
-    SAME list off the mutable ctx and thread the reference into their best-effort
-    cost wrappers, which append the returned `SpanCostRecord`. `freeze()` threads
-    the same list onto the frozen ctx so `_build_run_result`'s post-join read sees
-    every appended record (runtime spec v1.53 §9 C-RT-09)."""
+    field, not in `_REQUIRED_FIELDS` — defaulted, never None). A fresh holder per
+    builder (per run); the stage-4/5 dispatcher/hook materializations read its
+    `.records` list off the mutable ctx and thread that reference into their
+    best-effort cost wrappers, which append the returned `SpanCostRecord`.
+    `freeze()` threads the SAME holder onto the frozen ctx (stored by reference —
+    a `CostRecordAccumulator`, not a Pydantic-copied `list`) so
+    `_build_run_result`'s post-join read of `.records` sees every appended record
+    (runtime spec v1.53 §9 C-RT-09)."""
 
     # Stage 1 IS.
     path_resolver: PathResolver | None = None

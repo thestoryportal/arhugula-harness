@@ -621,7 +621,7 @@ async def run(
             cp_result,
             shutdown_report,
             timed_out=timed_out,
-            cost_records=ctx.cost_record_accumulator,
+            cost_records=ctx.cost_record_accumulator.records,
         )
 
 
@@ -878,7 +878,7 @@ async def resume(
             cp_result,
             shutdown_report,
             timed_out=timed_out,
-            cost_records=ctx.cost_record_accumulator,
+            cost_records=ctx.cost_record_accumulator.records,
         )
 
 

@@ -1614,6 +1614,33 @@ class RuntimeConfig(BaseModel):
     """
 
 
+class CostRecordAccumulator:
+    """R-FS-1 arc CA — run-scoped, by-reference cost-record sink.
+
+    A plain (NON-Pydantic) holder so `HarnessContext` stores it **by reference**
+    under `arbitrary_types_allowed` — exactly like `asyncio.Event` /
+    `tracer_provider`. A typed `list[SpanCostRecord]` field would be **copied** by
+    Pydantic v2 at `freeze()` (Pydantic validates/rebuilds known containers),
+    silently disconnecting the per-dispatch wrappers (which captured the mutable
+    builder's list pre-freeze) from `_build_run_result` (which reads the frozen
+    ctx) → `cost_attribution` always `()`. Arbitrary types are stored opaquely, so
+    the holder — and its `records` list — survive `freeze()` as the same object.
+
+    The per-dispatch cost wrappers receive `accumulator.records` (a stable list
+    created once at construction) and `.append` to it; `_build_run_result` reads
+    `ctx.cost_record_accumulator.records` (the same list) and rolls it up along
+    `RollupAxis.PER_PROVIDER_AND_MODEL` (runtime spec v1.53 §9 C-RT-09).
+    """
+
+    __slots__ = ("records",)
+
+    def __init__(self) -> None:
+        self.records: list[SpanCostRecord] = []
+
+    def append(self, record: SpanCostRecord) -> None:
+        self.records.append(record)
+
+
 # ----------------------------------------------------------------------------
 # `HarnessContext` — C-RT-04 v1.1 schema.
 # Frozen post-bootstrap. The `_MutableHarnessContext` builder used during the
@@ -1646,22 +1673,21 @@ class HarnessContext(BaseModel):
     # Initialized at `_MutableHarnessContext` builder during stage 0 PREAMBLE.
     pause_requested_flag: asyncio.Event
 
-    # R-FS-1 arc CA — run-scoped in-memory cost-record accumulator. Per-dispatch
-    # cost helpers (LLM/tool/validator/webhook) append their returned
-    # `SpanCostRecord` here via their best-effort wrappers; `_build_run_result`
-    # reads it and rolls up `RunResult.cost_attribution` along
-    # `RollupAxis.PER_PROVIDER_AND_MODEL` (runtime spec v1.53 §9 C-RT-09). A
-    # mutable `list` on a frozen model — `frozen=True` forbids field reassignment,
-    # not mutation of the contained list (the `drained_flag` mutable-primitive
-    # precedent). The SAME list object is threaded into the stage-4/5 dispatcher
-    # /hook materializations (pass the reference, never copy) so appends during
-    # execute are visible to the post-join read at `_build_run_result`.
-    # `list.append` is atomic under the GIL; the only read is post-join (after the
-    # `asyncio.to_thread` driver returns) so no lock is needed. Initialized via the
-    # `_MutableHarnessContext` builder's `default_factory=list` (stage 0 PREAMBLE
-    # region) and threaded same-reference at `freeze()`; defaults to an empty list
-    # for direct (test) constructions that bypass the builder.
-    cost_record_accumulator: list[SpanCostRecord] = Field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
+    # R-FS-1 arc CA — run-scoped cost-record accumulator. Per-dispatch cost helpers
+    # (LLM/tool/validator/webhook) append their returned `SpanCostRecord` into
+    # `accumulator.records` via their best-effort wrappers; `_build_run_result`
+    # reads `accumulator.records` and rolls up `RunResult.cost_attribution` along
+    # `RollupAxis.PER_PROVIDER_AND_MODEL` (runtime spec v1.53 §9 C-RT-09). It is a
+    # `CostRecordAccumulator` holder (NOT a bare `list`) precisely so Pydantic
+    # stores it BY REFERENCE under `arbitrary_types_allowed` — like `drained_flag`
+    # /`tracer_provider` — surviving `freeze()` as the same object (a typed
+    # `list[...]` field would be copied, disconnecting the dispatchers' captured
+    # list from this read). `list.append` is atomic under the GIL; the only read is
+    # post-join (after the `asyncio.to_thread` driver returns), no lock needed.
+    # The `_MutableHarnessContext` builder's `default_factory` makes a fresh holder
+    # per run; `freeze()` threads the SAME holder onto this frozen ctx; direct
+    # (test) constructions default to a fresh empty holder.
+    cost_record_accumulator: CostRecordAccumulator = Field(default_factory=CostRecordAccumulator)
 
     # Stage 1 IS.
     path_resolver: PathResolver
