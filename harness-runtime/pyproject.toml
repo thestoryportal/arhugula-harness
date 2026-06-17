@@ -53,6 +53,26 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.optional-dependencies]
+# R-FS-1 L2 — the light in-process embedding realization (Option B,
+# 2026-06-16): fastembed (Qdrant's ONNX-backed embedder; torch-free,
+# x86-macOS-stable). Lazy-imported in `lifecycle/embedding_resolution.py` and
+# OPTIONAL: the base install stays light + the provider-free lanes never pull
+# onnxruntime, because Layer-2 EMBEDDING is production-inert until R-300 makes
+# DECLARATIVE conditional. Promote to a required dependency at that activation
+# (forward note: `.harness/beyond-mvp-capability-boundary-ledger.md`
+# B-L2-EMBEDDING-ACTIVATION). NOT torch / sentence-transformers (would undercut
+# the portability Option B was chosen for).
+#
+# onnxruntime<1.24: fastembed's ONNX backend. onnxruntime 1.24+ DROPPED the
+# x86-64 macOS wheel (the operator's current dev machine — Intel Mac; the last
+# x86-mac cp312 wheel is 1.23.2). The cap is CONTAINED to this optional extra
+# (onnxruntime is pulled only by fastembed; the base install has neither) and is
+# trivially revisitable — when the operator moves to Apple Silicon (late
+# 2026/early 2027), bump/drop the cap so arm64 uses newer wheels. See
+# `[[operator-dev-machine-and-dep-preference]]` (x86-macOS-longevity).
+embedding = ["fastembed>=0.4", "onnxruntime<1.24"]
+
 [project.scripts]
 # Track A: admin-only stubs. Operator-facing `run` is Track B.
 # Wired by U-RT-47 (inspect) and U-RT-48 (shutdown-cli).

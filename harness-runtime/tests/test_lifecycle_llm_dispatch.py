@@ -30,8 +30,10 @@ from harness_as.sandbox_tier import SandboxTier
 from harness_core import PersonaTier
 from harness_core.identity import StepID
 from harness_cp.cp_shared_types import AgentRole, ModelBinding, RouterResolution
+from harness_cp.embedding_routing import EmbeddingRoutingCorpus, make_embedding_classifier
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
+from harness_cp.layered_routing_strategy import LayerDecisionFn
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.routing_core_surface import RoutingCandidateUnresolvedError
 from harness_cp.routing_layer import RoutingLayer
@@ -43,6 +45,7 @@ from harness_cp.workflow_driver_types import (
     WorkflowStep,
 )
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_runtime.lifecycle import llm_dispatch as llm_dispatch_module
 from harness_runtime.lifecycle.hitl_tool_loop import HITLToolLoopContext, ModelToolCall
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchBindError,
@@ -1566,3 +1569,125 @@ async def test_u_rt_114_inner_linear_none_role_dispatches_binding_model() -> Non
 
     assert adapter.client.messages.last_kwargs is not None
     assert adapter.client.messages.last_kwargs["model"] == "binding-default-model"
+
+
+# ---------------------------------------------------------------------------
+# R-FS-1 L2 — EMBEDDING layer (Option B: in-process sync embedding classifier).
+#
+# The classifier is a sync LayerDecisionFn bound at the EMBEDDING layer. Two
+# complementary proofs: (1) an embedding decision drives the dispatched
+# provider:model end-to-end through `dispatch` (in-process, NO embedding lib —
+# a stub embed); (2) the production `embedding_classifier` field, when set,
+# actually lands RoutingLayer.EMBEDDING in the `layer_decisions` map `infer()`
+# consumes (the #496-class seam-reachability guard — assert membership, not just
+# behavior). Production reachability additionally needs DECLARATIVE made
+# conditional (R-300) — same inertness as the L3 router (runtime v2.48 §6 O-RT-8).
+# ---------------------------------------------------------------------------
+
+_L2_VOCAB = ("code", "python", "function", "creative", "poem", "story")
+
+
+def _l2_stub_embed(text: str) -> tuple[float, ...]:
+    low = text.lower()
+    return tuple(1.0 if w in low else 0.0 for w in _L2_VOCAB)
+
+
+def _l2_classifier(k: int = 1) -> LayerDecisionFn:
+    corpus = EmbeddingRoutingCorpus.from_pairs(
+        [
+            ("python code function", "anthropic:claude-opus-4-8", "software-engineering"),
+            ("creative poem story", "anthropic:claude-haiku-4-5", "content-creation"),
+        ]
+    )
+    return make_embedding_classifier(embed=_l2_stub_embed, corpus=corpus, k=k)
+
+
+@pytest.mark.asyncio
+async def test_l2_embedding_decision_drives_dispatch() -> None:
+    """The EMBEDDING classifier (bound via the layer_decisions seam, DECLARATIVE
+    omitted so EMBEDDING is reached) selects the candidate the call-site text is
+    semantically nearest — the dispatched provider:model is the classifier's
+    pick, NOT the step binding's model. routing.layer=='embedding'. NO dep."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        layer_decisions_override={RoutingLayer.EMBEDDING: _l2_classifier()},
+    )
+
+    # The call-site text matches the content-creation exemplar -> the classifier
+    # selects claude-haiku-4-5 (NOT the binding's claude-opus-4-8).
+    await dispatcher.dispatch(
+        _binding("anthropic", "claude-opus-4-8"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "write a creative poem"}],
+                "tools": None,
+                "params": {"max_tokens": 10},
+            }
+        ),
+        step_context=_step_context(),
+    )
+    attrs = (exporter.get_finished_spans()[0].attributes) or {}
+    assert attrs["routing.layer"] == RoutingLayer.EMBEDDING.value  # "embedding"
+    assert attrs["routing.provider"] == "anthropic"
+    assert attrs["routing.model"] == "claude-haiku-4-5"
+
+
+@pytest.mark.asyncio
+async def test_l2_embedding_classifier_field_binds_embedding_layer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Seam-reachability guard (#496 class): the production `embedding_classifier`
+    field, when set, actually binds RoutingLayer.EMBEDDING into the
+    `layer_decisions` map `infer()` consumes (override left None -> the
+    production path). Spy-WRAP `infer` (don't replace) so dispatch behavior is
+    preserved while the map is captured."""
+    classifier = _l2_classifier()
+    captured: dict[str, Any] = {}
+    real_infer = llm_dispatch_module.infer
+
+    async def _spy_infer(*args: Any, **kwargs: Any) -> Any:
+        captured["layer_decisions"] = kwargs["layer_decisions"]
+        return await real_infer(*args, **kwargs)
+
+    monkeypatch.setattr(llm_dispatch_module, "infer", _spy_infer)
+
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        embedding_classifier=classifier,  # the production field; override stays None
+    )
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    layer_decisions = captured["layer_decisions"]
+    assert RoutingLayer.DECLARATIVE in layer_decisions
+    assert RoutingLayer.EMBEDDING in layer_decisions
+    assert layer_decisions[RoutingLayer.EMBEDDING] is classifier
+
+
+@pytest.mark.asyncio
+async def test_l2_absent_classifier_is_byte_identical(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No regression: with embedding_classifier=None (the production default),
+    the production layer_decisions map is exactly {DECLARATIVE: echo} — no
+    EMBEDDING entry (byte-identical to pre-L2)."""
+    captured: dict[str, Any] = {}
+    real_infer = llm_dispatch_module.infer
+
+    async def _spy_infer(*args: Any, **kwargs: Any) -> Any:
+        captured["layer_decisions"] = kwargs["layer_decisions"]
+        return await real_infer(*args, **kwargs)
+
+    monkeypatch.setattr(llm_dispatch_module, "infer", _spy_infer)
+
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(providers={"anthropic": adapter}, tracer_provider=tp)
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    assert set(captured["layer_decisions"].keys()) == {RoutingLayer.DECLARATIVE}
