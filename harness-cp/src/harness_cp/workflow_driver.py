@@ -80,6 +80,7 @@ from harness_cp.pause_resume_protocol_types import (
     PauseSnapshot,
     WorkflowPauseReason,
 )
+from harness_cp.per_role_catalog import derive_agent_role
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding, resolve_step_binding
 from harness_cp.topology_pattern import CascadePolicy, TopologyPattern
 from harness_cp.workflow_driver_errors import (
@@ -3707,8 +3708,10 @@ def _execute_orchestrator_workers(
     ] = []
     for branch_index, step in enumerate(worker_steps):
         # Per-worker role (B1: step_id-derived — distinct per worker, bindable via
-        # RoutingManifest.per_role_bindings; the binding catalog is B4).
-        role = AgentRole(str(step.step_id))
+        # RoutingManifest.per_role_bindings; the binding catalog is B4). The
+        # derivation is the single shared B1↔B4 contract (B4 Slice 2) an operator
+        # keys their catalog on — see `derive_agent_role` (per_role_catalog.py).
+        role = derive_agent_role(step.step_id)
         # The worker's DECLARED step ordinal is its position in the original
         # `steps` (orchestrator=0, workers=1,2,…), i.e. `branch_index + 1`.
         # `compose_branch_child_context` inherits `step_index` from the fan-out
@@ -4311,7 +4314,7 @@ def _execute_decentralized_handoff(
         ), steps_executed
 
     for stage_index, step in enumerate(steps):
-        role = AgentRole(str(step.step_id))
+        role = derive_agent_role(step.step_id)
         # The spawning context the next stage descends from: its parent_action_id is
         # the prior stage's action_id (the chain; the workflow origin anchors stage 0).
         spawning = StepExecutionContext(
@@ -4404,7 +4407,7 @@ def _execute_decentralized_handoff(
                     completed_action_id=this_action_id,
                     completed_context=stage_ctx,
                     next_step=next_step,
-                    next_role=AgentRole(str(next_step.step_id)),
+                    next_role=derive_agent_role(next_step.step_id),
                     actor_identity=actor_identity,
                 )
             )

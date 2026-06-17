@@ -30,14 +30,28 @@ from harness_as.sandbox_tier import SandboxTier
 from harness_core import PersonaTier
 from harness_core.identity import StepID
 from harness_cp.cp_shared_types import AgentRole, ModelBinding, RouterResolution
+from harness_cp.cross_family_fallback_chain import (
+    FallbackChain,
+    ProviderCandidate,
+    ProviderFamily,
+)
 from harness_cp.embedding_routing import EmbeddingRoutingCorpus, make_embedding_classifier
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.layered_routing_strategy import LayerDecisionFn
+from harness_cp.per_role_catalog import (
+    derive_agent_role,
+    derive_fanout_roles,
+    validate_per_role_catalog,
+)
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.routing_core_surface import RoutingCandidateUnresolvedError
 from harness_cp.routing_layer import RoutingLayer
-from harness_cp.routing_manifest_residence import RoleRoutingBinding, RoutingManifest
+from harness_cp.routing_manifest_residence import (
+    RetryPolicy,
+    RoleRoutingBinding,
+    RoutingManifest,
+)
 from harness_cp.workflow_driver import StepDispatcher
 from harness_cp.workflow_driver_types import (
     StepExecutionContext,
@@ -54,6 +68,14 @@ from harness_runtime.lifecycle.llm_dispatch import (
     PromptInjectionConflictError,
     RuntimeLLMDispatcher,
     materialize_llm_dispatcher_stage,
+)
+from harness_runtime.lifecycle.retry_breaker import (
+    DEFAULT_RETRY_POLICY,
+    RuntimeRetryBreaker,
+)
+from harness_runtime.lifecycle.retry_breaker_fallback import (
+    RESERVED_LLM_DISPATCH_KEY,
+    RetryBreakerFallbackDispatcher,
 )
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -1772,3 +1794,129 @@ async def test_b4_empty_per_role_map_is_byte_identical_to_default() -> None:
     )
     assert adapter.client.messages.last_kwargs is not None
     assert adapter.client.messages.last_kwargs["system"] == _DEFAULT_SYS
+
+
+# ---------------------------------------------------------------------------
+# B4 Slice 2 — the catalog CONJUNCTION e2e. Slice 1 + B1 proved per-role PROMPT
+# (inner) and per-role MODEL (wrapper) each in isolation. This proves the
+# *catalog* claim the dossier states verbatim: a populated catalog routes
+# DISTINCT workers to distinct models AND prompts, through the SAME real
+# dispatch stack the bootstrap composes (RetryBreakerFallbackDispatcher[model
+# layer] over RuntimeLLMDispatcher[prompt layer]). The two worker roles are
+# derived via the single-source-of-truth `derive_agent_role` contract — the same
+# function the fan-out driver composes on — so the operator catalog and the
+# driver agree by construction.
+# ---------------------------------------------------------------------------
+
+
+def _candidate(provider: str, model: str) -> ProviderCandidate:
+    family_map = {
+        "anthropic": ProviderFamily.ANTHROPIC,
+        "openai": ProviderFamily.OPENAI,
+        "ollama": ProviderFamily.LOCAL_OPEN_WEIGHT,
+    }
+    return ProviderCandidate(provider=provider, model=model, family=family_map[provider])
+
+
+def _chain(primary: ProviderCandidate) -> FallbackChain:
+    return FallbackChain(primary=primary, same_family=(), cross_family=(), terminal=None)
+
+
+def _retry_breaker_with_llm_policy() -> RuntimeRetryBreaker:
+    """Mirror of `materialize_retry_breaker_stage` — the reserved LLM-dispatch
+    policy pre-bound, fast/deterministic delays for tests."""
+    return RuntimeRetryBreaker(
+        retry_policies={
+            RESERVED_LLM_DISPATCH_KEY: RetryPolicy(
+                max_attempts=1, backoff="full_jitter", jitter="full_jitter"
+            )
+        },
+        default_policy=DEFAULT_RETRY_POLICY,
+        base_delay_seconds=0.0,
+        delay_cap_seconds=0.01,
+    )
+
+
+async def _noop_sleep(_seconds: float) -> None:
+    return None
+
+
+@pytest.mark.asyncio
+async def test_b4_slice2_distinct_workers_distinct_models_and_prompts_e2e() -> None:
+    """THE B4-Slice-2 conjunction proof. Two fan-out workers whose roles are
+    DERIVED from their `step_id`s via the B1↔B4 contract get, through one real
+    dispatch stack, BOTH their own model (per-role routing, wrapper layer) AND
+    their own system prompt (per-role prompt, inner layer) — from operator
+    catalogs keyed on the same derivation. Verified at the provider boundary
+    (`messages.create(model=..., system=...)`), the load-bearing surface."""
+    # The two worker roles the fan-out driver would compose (AgentRole(str(step_id))).
+    researcher = derive_agent_role(StepID("researcher"))
+    writer = derive_agent_role(StepID("writer"))
+    assert researcher != writer
+
+    # Operator authors the per-role MODEL catalog (RoutingManifest.per_role_bindings)…
+    routing = _routing_manifest_with_roles(
+        {str(researcher): "model-for-researcher", str(writer): "model-for-writer"}
+    )
+    # …and the per-role PROMPT catalog (PromptSelectionManifest → the stage-0/5
+    # resolved per-role system-prompt map the inner indexes).
+    per_role_prompts = {
+        researcher: "PROMPT-researcher",
+        writer: "PROMPT-writer",
+    }
+
+    # The validator confirms the catalog binds EXACTLY the derivable worker roles:
+    # both live, no dead bindings (the operator authored coherent keys).
+    derivable = derive_fanout_roles([StepID("researcher"), StepID("writer")])
+    coherence = validate_per_role_catalog(
+        derivable_roles=derivable, bound_roles=routing.per_role_bindings.keys()
+    )
+    assert coherence.live_roles == frozenset({researcher, writer})
+    assert coherence.unbound_roles == frozenset()
+    assert coherence.has_dead_bindings is False
+
+    # The REAL composed stack: model layer (wrapper) over prompt layer (inner) over
+    # a recording provider — exactly the stage-5 composition shape.
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    inner = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        active_system_prompt="PROMPT-default-role",
+        per_role_system_prompts=per_role_prompts,
+    )
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_manifest=routing,
+    )
+
+    # Worker 1 — researcher.
+    await wrapper.dispatch(
+        _binding("anthropic", "stage-primary"),
+        _step(),
+        step_context=_step_context_with_role(str(researcher)),
+    )
+    researcher_call = adapter.client.messages.last_kwargs
+    assert researcher_call is not None
+    assert researcher_call["model"] == "model-for-researcher"
+    assert researcher_call["system"] == "PROMPT-researcher"
+
+    # Worker 2 — writer, through the SAME stack, distinct role.
+    await wrapper.dispatch(
+        _binding("anthropic", "stage-primary"),
+        _step(),
+        step_context=_step_context_with_role(str(writer)),
+    )
+    writer_call = adapter.client.messages.last_kwargs
+    assert writer_call is not None
+    assert writer_call["model"] == "model-for-writer"
+    assert writer_call["system"] == "PROMPT-writer"
+
+    # THE CONJUNCTION: distinct workers got BOTH distinct models AND distinct
+    # prompts — the catalog is non-vacuous across both dimensions at once.
+    assert researcher_call["model"] != writer_call["model"]
+    assert researcher_call["system"] != writer_call["system"]
