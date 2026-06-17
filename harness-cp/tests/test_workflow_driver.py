@@ -69,7 +69,7 @@ from harness_cp.workflow_driver_types import (
     StepKind,
     WorkflowStep,
 )
-from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
+from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEntry
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
 
 # ---------------------------------------------------------------------------
@@ -1312,3 +1312,51 @@ def test_append_step_ledger_entry_none_when_resolver_absent() -> None:
     )
     [(payload, _key)] = ledger.appends
     assert payload.procedural_tier_snapshot_ref is None
+
+
+# ---------------------------------------------------------------------------
+# R-FS-1 B4 Slice 3 — per-step PROMPT override binding-flow seam (driver→dispatch)
+# ---------------------------------------------------------------------------
+
+
+def test_per_step_prompt_override_threads_through_driver_to_dispatch() -> None:
+    """CP spec v1.37 §6.1/§6.2 — a `StepOverride.prompt_version_sha` annotated on
+    a manifest step is resolved by the driver's `resolve_step_binding` call and
+    threaded on the SAME `StepEffectiveBinding` object to the dispatcher, exactly
+    as `model_binding` already flows. This proves the driver→dispatch binding-flow
+    seam end-to-end through the real `execute_workflow` loop (the runtime dispatch
+    consumes `binding.prompt_version_sha` — covered at
+    test_lifecycle_llm_dispatch.py — but the CP driver must actually deliver it).
+    """
+    sha = "d" * 64
+    manifest = WorkflowManifestEntry(
+        workflow_id="wf-1",
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+        persona_tier=PersonaTier.TEAM_BINDING,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+        layer_budgets=(),
+        fallback_chain=_CHAIN,
+        hitl_placements=(),
+        per_step_overrides={
+            StepID("step-0"): StepOverride(step_id=StepID("step-0"), prompt_version_sha=sha)
+        },
+    )
+    ctx, _, _ = _ctx()
+    dispatcher = _EchoDispatcher()
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0), _step(1)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+    )
+    # step-0 carries the per-step prompt override on its dispatched binding;
+    # step-1 (no override) is None — proving the field is per-step-scoped, not
+    # leaked run-wide.
+    by_step = {str(s.step_id): b for b, s in dispatcher.dispatched}
+    assert by_step["step-0"].prompt_version_sha == sha
+    assert by_step["step-0"].override_applied is True
+    assert by_step["step-1"].prompt_version_sha is None
+    assert by_step["step-1"].override_applied is False
