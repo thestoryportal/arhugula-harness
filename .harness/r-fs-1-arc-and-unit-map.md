@@ -53,7 +53,7 @@ rule (X-AL-3) forbids treating un-decomposed work as if it were already specifie
 ## 2. Build order + dependency model
 
 **Frozen order** (decided once, not re-litigated): **B1 → B3 → E → B2 → R → B4 → CA → B5 → B6 →
-B7 → M.** DONE: **B1 ✅ B3 ✅ E ✅ B2 ✅ R ✅** (5 of 11). NEXT: **B4**. Then CA → B5 → B6 → B7 → M.
+B7 → M.** DONE: **B1 ✅ B3 ✅ E ✅ B2 ✅ R ✅ B4 ✅** (6 of 11). NEXT: **CA**. Then B5 → B6 → B7 → M.
 
 **Two kinds of "dependency."** The frozen order is a chosen *sequence*; it is **not** the same as
 a hard *blocker*. Most remaining arcs' real prerequisites have already landed, so they are
@@ -61,16 +61,16 @@ sequenced — not blocked — by the order.
 
 - **Serial cluster — "SHARED-RUNTIMECONFIG".** Arcs that all edit the same two surfaces (the
   `RuntimeConfig` object + the workflow-driver dispatch path) are kept **serial** so they don't
-  collide: **B3 ✅, B2 ✅, E ✅, B4, B6** (and possibly M). These should land one at a time.
+  collide: **B3 ✅, B2 ✅, E ✅, B4 ✅, B6** (and possibly M). These should land one at a time.
 - **Genuinely independent (parallel-safe).** **CA, B5, B7** touch none of the cluster's shared
   surfaces — they can be built in parallel with the serial cluster and with each other.
 - **Standalone arcs (`B-*`).** Eight smaller capabilities that surfaced *during* implementation
   (not in the frozen order). Each is a committed build, sequenced as a follow-on when its turn
   comes (see §5).
 
-**What's actually unblocked today:** B4, CA, B5, B7 all have their real prerequisites landed
-(B1/B2/R done; R-830 done). They are sequenced by the frozen order, not blocked. B6 is best done
-within the serial cluster (after/with B4 to avoid `RuntimeConfig` contention). M is last.
+**What's actually unblocked today:** CA, B5, B7 all have their real prerequisites landed
+(B1/B2/R/B4 done; R-830 done). They are sequenced by the frozen order, not blocked. B6 is best done
+within the serial cluster (after B4 ✅, to avoid `RuntimeConfig` contention). M is last.
 
 ---
 
@@ -167,33 +167,36 @@ within the serial cluster (after/with B4 to avoid `RuntimeConfig` contention). M
 
 ---
 
+### R-FS-1·B4 — Per-role / per-step dispatch indexing
+
+- **Status:** ✅ done (build position 6 of 11) · **Cluster:** SHARED-RUNTIMECONFIG · **Units:** as-built
+- **Depends-on:** B1 ✅ (per-role *model* seam), R ✅, B2 ✅
+- **What it gives the harness.** Makes the per-role **model and prompt actually take effect**, with
+  individual steps able to override either — so a "researcher" and a "writer" worker in the same
+  workflow each get their own model *and* system prompt, and any step (branch *or* straight-line)
+  can be pinned to a specific role. The per-role *model* half landed in B1; **B4 finished the
+  per-role *prompt*, the binding catalog, per-step prompt + role overrides, and linear-path role
+  indexing.** (The 4 slices extended existing contracts — C-CP-06 `StepOverride` / C-RT-15 dispatch
+  / C-IS-05 §5.2 — rather than minting new plan-units, so they are keyed by slice + PR.)
+
+| Unit(s) | Leg / PR | What it does (plain language) |
+|---|---|---|
+| *(impl + IS spec v1.9)* | Slice 1 (#616) | Per-role PROMPT threading — a fan-out branch's role selects + injects its own system prompt at dispatch; the IS C-IS-05 §5.2 procedural-tier hash widened (`prompt_selection_manifest_sha`) so per-role bindings are audit-hash-visible. |
+| `harness_cp.per_role_catalog` | Slice 2 (#618) | The per-role binding **catalog** surface (`derive_agent_role` + `validate_per_role_catalog`) — the single `step_id→AgentRole` derivation operators key their role→model/prompt tables on. |
+| `StepOverride.prompt_version_sha` (CP spec v1.37) | Slice 3 (#619) | Per-step **PROMPT** override — a step injects a chosen prompt version; precedence per-step > per-role > default, with deployment-tier governance parity. |
+| `StepOverride.agent_role` (CP v1.38 + runtime v1.52) | Slice 4 (#621) | Per-step **ROLE** override + linear-path role indexing — any step is pinned to a role (Option-B composition-time fold; operator-ratified §14.5.3 invariant-2/3 relaxation). |
+
+---
+
 ## 4. Remaining arcs (anticipated scope — units decomposed at arc-open)
 
 These are committed builds (the full-spec directive defers nothing). The atomic units are **not
 yet decomposed** — that happens in each arc's own plan leg. The slices below are *leads* from the
 grounding sweep (`.harness/r-fs-1-remaining-arcs-grounding-sweep-v1.md`), re-grounded at arc-open.
 
-### R-FS-1·B4 — Per-role / per-step dispatch indexing
-
-- **Status:** ▶ NEXT (build position 6 of 11) · **Cluster:** SHARED-RUNTIMECONFIG (serial) · **Units:** anticipated · **Type:** mostly impl, one likely small fork
-- **Depends-on:** B1 ✅ (per-role *model* seam already landed), R ✅, B2 ✅ — **prerequisites met; unblocked**
-- **Parallel-safe with:** CA, B5, B7
-- **What it gives the harness.** Makes the per-role **model and prompt actually take effect** — so
-  a "researcher" agent and a "writer" agent in the same workflow can each get their own model *and*
-  their own system prompt, with individual steps able to override either. The per-role *model* half
-  already landed inside B1; **B4 finishes the per-role *prompt*, the binding catalog, and per-step
-  overrides.**
-
-| Anticipated slice | What it does (plain language) | Fork / impl |
-|---|---|---|
-| Per-role prompt threading | Make a fan-out branch's role pick its own system prompt (today everything uses the default role's prompt). | impl |
-| Per-role binding catalog | Let operators author the role→model and role→prompt tables that drive the above, with validation. | impl |
-| Per-step override | Let a single step override its prompt/role (today only model/engine/HITL can be overridden). | likely small fork (schema field) |
-| Linear-path role indexing | Optionally thread roles on the straight-line path too (scope decision at arc-open). | impl-discretion |
-
 ### R-FS-1·CA — Cost aggregate rollup
 
-- **Status:** ⏳ queued (build position 7 of 11) · **Cluster:** independent (parallel-safe) · **Units:** anticipated · **Type:** small spec fork + bounded impl
+- **Status:** ▶ NEXT (build position 7 of 11) · **Cluster:** independent (parallel-safe) · **Units:** anticipated · **Type:** small spec fork + bounded impl
 - **Depends-on:** B1 ✅ (so multi-branch runs produce real per-call costs to roll up) — **unblocked**
 - **Parallel-safe with:** the serial cluster, B5, B7
 - **What it gives the harness.** Makes the harness **report the total cost of a run, broken down**
@@ -317,15 +320,17 @@ meaningful — i.e., once a second production provider is configured. Captured a
 | E | Survive crashes & resume (durable engines) | ✅ done | 3 | serial | 9 as-built |
 | B2 | Connect to many tool servers at once | ✅ done | 4 | serial | 8 as-built |
 | R | Intelligently pick which model handles a request | ✅ done | 5 | serial | 4 as-built (+L2/L3 impl) |
-| B4 | Per-role & per-step model + prompt | ▶ next | 6 | serial | at arc-open |
-| CA | Report total run cost, broken down | ⏳ | 7 | independent | at arc-open |
+| B4 | Per-role & per-step model + prompt | ✅ done | 6 | serial | 4 slices as-built (#616/#618/#619/#621) |
+| CA | Report total run cost, broken down | ▶ next | 7 | independent | at arc-open |
 | B5 | Pick the memory backend per deployment | ⏳ | 8 | independent | at arc-open |
 | B6 | Per-tool security sandbox level + STDIO floor | ⏳ | 9 | serial | at arc-open |
 | B7 | Sample only the telemetry that matters | ⏳ | 10 | independent | at arc-open |
 | M | Formal contract + wiring for managed agents | ⏳ | 11 | maybe serial | at arc-open |
 
 *Counts: as-built unit totals are grouped by arc from `git log` (B1=14, B3=8, E=9, B2=8, R=4 core
-units + the L2/L3 impl-discretion legs). Remaining arcs decompose at arc-open.*
+units + the L2/L3 impl-discretion legs; B4=4 slices #616/#618/#619/#621, which extended existing
+contracts C-CP-06 / C-RT-15 / C-IS-05 rather than minting new plan-units). Remaining arcs decompose
+at arc-open.*
 
 ---
 

@@ -1419,7 +1419,9 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
   const card = (a) => {{
     const [cls, lbl] = STAGE[a.status] || ["queued", a.status];
     const usNote = a.units_status === "as-built"
-      ? `${{a.unit_id_count}} atomic units across ${{a.units.length}} build legs`
+      ? (a.unit_id_count > 0
+          ? `${{a.unit_id_count}} atomic units across ${{a.units.length}} build legs`
+          : `${{a.units.length}} build legs (slices) · extended existing contracts, no new plan-units`)
       : `${{a.units.length}} slices · units formally decomposed at arc-open`;
     const units = (a.units||[]).map(u => `
       <div class="unit">
