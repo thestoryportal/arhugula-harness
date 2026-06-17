@@ -114,6 +114,13 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validat
 # field-table extension + §3.8 sub-model). HITLAutoApprovePolicy declared at U-RT-116.
 from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
 
+# C-RT-28 §14.20 (R-FS-1 arc M) — ManagedAgents executable-consumer carriers.
+# `ManagedAgentsConfig` is the RuntimeConfig opt-in sub-model (§14.20.1);
+# `ManagedAgentsClientProtocol` is the HarnessContext client field type.
+# Operator-ratified 2026-06-17 (Option B; new StepKind.MANAGED_AGENTS).
+from harness_runtime.lifecycle.managed_agents import ManagedAgentsClientProtocol
+from harness_runtime.lifecycle.managed_agents_dispatch import ManagedAgentsConfig
+
 # U-RT-79 — Memory tool backend config carrier import (per spec v1.17 §3 C-RT-02
 # field-table extension). MemoryToolBackendConfig declared at U-RT-76.
 from harness_runtime.lifecycle.memory_tool_types import MemoryToolBackendConfig
@@ -1613,6 +1620,24 @@ class RuntimeConfig(BaseModel):
     §14.17.3.
     """
 
+    managed_agents_config: ManagedAgentsConfig | None = None
+    """Operator opt-in marker + supplied client for managed-agents dispatch.
+
+    Added at C-RT-28 per runtime spec v1.55 §14.20.1 (R-FS-1 arc M;
+    operator-ratified 2026-06-17, Option B). `None` (the default) → operator
+    opt-out → the stage-5 `materialize_managed_agents_dispatcher_stage` factory
+    returns `None` → `StepKind.MANAGED_AGENTS` is NOT bound in the
+    `StepKindDispatcherRegistry` → a managed-agents step fails closed with
+    `StepKindDispatcherNotBoundError` → `RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND`
+    (no silent under-execution). Non-`None` AND
+    `deployment_surface == DeploymentSurface.MANAGED_CLOUD` → opt-in → the
+    factory constructs a `ManagedAgentsStepDispatcher` (over
+    `managed_agents_config.client`) bound to `StepKind.MANAGED_AGENTS`. On any
+    non-managed-cloud surface the opt-in is silently not bound (the H_T-AS-8f
+    local-development exclusion remains TRUE). No credentials embedded — the
+    SDK client is operator-constructed.
+    """
+
 
 class CostRecordAccumulator:
     """R-FS-1 arc CA — run-scoped, by-reference cost-record sink.
@@ -1797,6 +1822,15 @@ class HarnessContext(BaseModel):
     # `None` when `RuntimeConfig.skill_activation_hook_config is None`
     # (operator opt-out — production-default state). See spec §14.17.1.
     skill_activation_emitter: SkillActivationSpanEmitter | None = None
+
+    # C-RT-28 §14.20 (R-FS-1 arc M) — ManagedAgentsClientProtocol carrier.
+    # Bound at stage-5 LOOP_INIT factory `materialize_managed_agents_dispatcher_stage`
+    # when opted-in on `DeploymentSurface.MANAGED_CLOUD` (the operator-supplied
+    # `RuntimeConfig.managed_agents_config.client`); `None` otherwise (opt-out /
+    # non-managed-cloud — the StepKind.MANAGED_AGENTS dispatcher is then unbound,
+    # so a managed-agents step fails closed). Operator-ratified 2026-06-17
+    # (Option B). See spec §14.20.1.
+    managed_agents_client: ManagedAgentsClientProtocol | None = None
 
     # U-RT-111 (v2.36) — `RuntimeCpIsWiring` carrier per runtime plan v2.36 §1.2.
     # Exposes the stage-6 CXA wiring (already materialized at

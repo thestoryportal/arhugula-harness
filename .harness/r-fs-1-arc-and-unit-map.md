@@ -53,7 +53,7 @@ rule (X-AL-3) forbids treating un-decomposed work as if it were already specifie
 ## 2. Build order + dependency model
 
 **Frozen order** (decided once, not re-litigated): **B1 → B3 → E → B2 → R → B4 → CA → B5 → B6 →
-B7 → M.** DONE: **B1 ✅ B3 ✅ E ✅ B2 ✅ R ✅ B4 ✅ CA ✅ B5 ✅ B7 ✅** (9 of 11; B7 landed out-of-order — independent, parallel-safe). NEXT: **M** (autonomous contract+wiring slice) + **B6 Slice 2** (operator-gated; Slice 1 ✅).
+B7 → M.** DONE: **B1 ✅ B3 ✅ E ✅ B2 ✅ R ✅ B4 ✅ CA ✅ B5 ✅ B7 ✅ M ✅** (10 of 11; B7 + M landed out-of-order — independent, parallel-safe). NEXT: **B6 Slice 2** (operator-gated; Slice 1 ✅) — the only remaining FROZEN child arc.
 
 **Two kinds of "dependency."** The frozen order is a chosen *sequence*; it is **not** the same as
 a hard *blocker*. Most remaining arcs' real prerequisites have already landed, so they are
@@ -61,16 +61,17 @@ sequenced — not blocked — by the order.
 
 - **Serial cluster — "SHARED-RUNTIMECONFIG".** Arcs that all edit the same two surfaces (the
   `RuntimeConfig` object + the workflow-driver dispatch path) are kept **serial** so they don't
-  collide: **B3 ✅, B2 ✅, E ✅, B4 ✅, B6** (and possibly M). These should land one at a time.
-- **Genuinely independent (parallel-safe).** **CA ✅, B5 ✅, B7** touch none of the cluster's shared
+  collide: **B3 ✅, B2 ✅, E ✅, B4 ✅, B6**. (M ✅ landed as a standalone `MANAGED_AGENTS` StepKind + a surface-gated stage-5 binding — it did NOT contend the shared dispatch path.) These should land one at a time.
+- **Genuinely independent (parallel-safe).** **CA ✅, B5 ✅, B7 ✅, M ✅** touch none of the cluster's shared
   surfaces — they can be built in parallel with the serial cluster and with each other.
 - **Standalone arcs (`B-*`).** Nine smaller capabilities that surfaced *during* implementation
   (not in the frozen order). Each is a committed build, sequenced as a follow-on when its turn
   comes (see §5).
 
 **What's actually unblocked today:** B7 has its real prerequisites landed
-(CA ✅ #625; B5 ✅ #628). It is sequenced by the frozen order, not blocked. B6 (NEXT) is best done
-within the serial cluster (after B4 ✅, to avoid `RuntimeConfig` contention). M is last.
+(CA ✅ #625; B5 ✅ #628). It is sequenced by the frozen order, not blocked. B6 Slice 2 (NEXT) is best
+done within the serial cluster (after B4 ✅, to avoid `RuntimeConfig` contention) — the only remaining
+FROZEN child arc now that M ✅ landed (#635).
 
 ---
 
@@ -270,18 +271,18 @@ grounding sweep (`.harness/r-fs-1-remaining-arcs-grounding-sweep-v1.md`), re-gro
 
 ### R-FS-1·M — Managed-agents contract + production wiring
 
-- **Status:** ⏳ queued (build position 11 of 11) · **Cluster:** possibly serial (if it adds a `RuntimeConfig` field) · **Units:** anticipated · **Type:** thin contract + wiring; one branch can widen it cross-axis
+- **Status:** ✅ DONE (build position 11 of 11; PR #635 — C-RT-28 §14.20 + CP v1.39 `StepKind.MANAGED_AGENTS`) · **Cluster:** independent (parallel-safe — a new StepKind + a surface-gated stage-5 binding, NOT shared-dispatch contention) · **Units:** as-built · **Type:** spec delta + impl + the operator-gated closed-at-5 StepKind extension
 - **Depends-on:** the managed-agents adapter (built + live-proven via R-820 ✅)
-- **What it gives the harness.** Formalizes and **production-wires the integration with Anthropic's
-  Managed Agents service.** The capability is already built and was live-proven against the real
-  vendor; M **authors the formal contract** for it and **wires it into a production workflow step**
-  (today nothing in the production run loop reaches it).
+- **What it gives the harness.** Formalized and **production-wired the integration with Anthropic's
+  Managed Agents service** (vendor-runs-the-loop). M **authored the formal contract** (C-RT-28) and
+  **wired a `StepKind.MANAGED_AGENTS` step through the run loop** — previously nothing in the
+  production run loop reached the R-820 carrier.
 
-| Anticipated slice | What it does (plain language) | Fork / impl |
+| As-built slice | What it does (plain language) | Fork / impl |
 |---|---|---|
-| Contract authoring | Author the formal managed-agents consumer contract (a runtime-spec delta). | fork (pre-authorized) |
-| Production wiring | Route a managed-agents step through the run loop (rides an existing step kind if possible — the key scope decision). | impl or cross-axis fork |
-| Live run | A real managed-cloud run (touches paid + cloud credentials — surfaced at the boundary, never auto-fired). | vendor-gate |
+| Contract authoring | Authored C-RT-28 §14.20 (runtime v1.55) + the paired CP v1.39 `StepKind.MANAGED_AGENTS`. | fork (operator-ratified — Option B) |
+| Production wiring | `ManagedAgentsStepDispatcher` bound (via `SyncDispatcherFacade`) on a NEW `StepKind.MANAGED_AGENTS`, surface-gated to `MANAGED_CLOUD` + opt-in. Option A (riding `SUB_AGENT_DISPATCH`) probe-foreclosed. | impl |
+| Live run | A real managed-cloud run (`@pytest.mark.e2e` + skipif-gated; touches paid + cloud credentials) — surfaced at the boundary, **never auto-fired**. H_T-AS-8f already SUBSTANTIVE_RETIRED (R-820), so it is NOT a retirement prerequisite. | vendor-gate |
 
 ---
 
@@ -335,7 +336,7 @@ meaningful — i.e., once a second production provider is configured. Captured a
 | B5 | Pick the memory backend per deployment | ✅ | 8 | independent | as-built #628 |
 | B6 | Per-tool security sandbox level + STDIO floor | ▶ next | 9 | serial | at arc-open |
 | B7 | Sample only the telemetry that matters | ✅ | 10 | independent | as-built #632 |
-| M | Formal contract + wiring for managed agents | ⏳ | 11 | maybe serial | at arc-open |
+| M | Formal contract + wiring for managed agents | ✅ | 11 | independent | as-built #635 |
 
 *Counts: as-built unit totals are grouped by arc from `git log` (B1=14, B3=8, E=9, B2=8, R=4 core
 units + the L2/L3 impl-discretion legs; B4=4 slices #616/#618/#619/#621, which extended existing

@@ -113,8 +113,10 @@ RE_CONTRACT = re.compile(r"\bC-(?:IS|AS|CP|OD|RT|CORE)-\d+", re.ASCII)
 RE_UNIT = re.compile(r"\bU-(?:IS|AS|CP|OD|RT|CORE|HK)-\d+", re.ASCII)
 # ADRs: ADR-F2, ADR-D5 ...
 RE_ADR = re.compile(r"\bADR-[FD]\d+", re.ASCII)
-# Substitutions: H_T-IS-1, H_T-CP-19 ...
-RE_SUBST = re.compile(r"\bH_T-(?:IS|AS|CP|OD|RT|CXA)-\d+", re.ASCII)
+# Substitutions: H_T-IS-1, H_T-CP-19, H_T-AS-8f (the trailing [a-z] suffix
+# disambiguates split rows like AS-8d / AS-8e / AS-8f — without it the suffix
+# is dropped and all three collapse to the phantom "H_T-AS-8").
+RE_SUBST = re.compile(r"\bH_T-(?:IS|AS|CP|OD|RT|CXA)-\d+[a-z]?", re.ASCII)
 # Sections: §5, §5.2, §16.5.12 (noisy — kept as a secondary signal, deduped)
 RE_SECTION = re.compile(r"§\d+(?:\.\d+)*", re.ASCII)
 

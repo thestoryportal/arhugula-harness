@@ -30,6 +30,9 @@ from harness_cp.hitl_placement import HITLPlacementKind
 from harness_cp.workflow_driver_types import StepKind
 from harness_od.audit_ledger_types import SignatureAlgorithm
 
+from harness_runtime.bootstrap.factories.managed_agents_dispatcher_factory import (
+    materialize_managed_agents_dispatcher_stage,
+)
 from harness_runtime.bootstrap.factories.memory_tool_registry_factory import (
     materialize_memory_tool_registry_stage,
 )
@@ -520,6 +523,30 @@ async def execute(
     if ctx.requires_inference:
         dispatchers[StepKind.INFERENCE_STEP] = inference_step_dispatcher
         dispatchers[StepKind.SUB_AGENT_DISPATCH] = sub_agent_step_dispatcher
+
+    # R-FS-1 arc M (C-RT-28 §14.20): surface-gated MANAGED_AGENTS binding. The
+    # factory returns a dispatcher only when opted-in
+    # (`config.managed_agents_config` non-None) AND on `MANAGED_CLOUD` (the
+    # H_T-AS-8f local-dev exclusion); else None → the row is omitted → a
+    # managed-agents step fails closed (StepKindDispatcherNotBoundError). The
+    # async dispatcher binds through `SyncDispatcherFacade` like the others.
+    # Independent of `requires_inference` — managed-agents is a separate
+    # execution model (the vendor owns the loop; no INFERENCE/topology deps).
+    managed_agents_dispatcher = await materialize_managed_agents_dispatcher_stage(config, ctx)
+    if managed_agents_dispatcher is not None:
+        assert config.managed_agents_config is not None  # narrowed by the factory's non-None return
+        ctx.managed_agents_client = config.managed_agents_config.client
+        # §14.20.3: the managed-agents facade uses its OWN result-timeout
+        # (`managed_agents_config.step_timeout_seconds`, 600s default), NOT the
+        # shared 30s `step_dispatch_timeout_seconds`. A vendor session runs
+        # minutes; the shared bound would fire RT-FAIL-STEP-DISPATCH-TIMEOUT
+        # prematurely while the vendor session keeps running, billable, never
+        # cancelled (the abandoned coroutine never reaches its cancel-on-give-up
+        # path). The timeout must exceed the per-step poll budget.
+        dispatchers[StepKind.MANAGED_AGENTS] = materialize_sync_dispatcher_facade(
+            cast(Any, managed_agents_dispatcher),
+            result_timeout_seconds=config.managed_agents_config.step_timeout_seconds,
+        )
     ctx.step_dispatchers = StepKindDispatcherRegistry(dispatchers=dispatchers)
 
     # U-RT-88 (C-RT-24 §14.14) + U-RT-97 (C-RT-26 §14.16) + U-RT-94 (v1.25

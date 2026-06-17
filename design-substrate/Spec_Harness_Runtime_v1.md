@@ -1,4 +1,14 @@
-# Specification — Harness Runtime v1.54
+# Specification — Harness Runtime v1.55
+
+## Change-note (v1.54 → v1.55)
+
+**Scope of revision (PROPOSED 2026-06-17).** NEW **§14.20 C-RT-28 `ManagedAgents` executable-consumer contract** — R-FS-1 arc **M** (managed-agents contract + production wiring). C-RT-28 formalizes the already-built, R-820-live-proven carrier `harness-runtime/.../lifecycle/managed_agents.py` (`ManagedAgentsClientProtocol` + `AnthropicManagedAgentsClient` SDK adapter + `ManagedAgentSession`/`ManagedAgentEvent`/`ManagedAgentSessionStatus` records + `managed_agents_runtime_span` + `ANTHROPIC_MANAGED_AGENTS_BETA`) and introduces the missing **production-wiring** surface: a `ManagedAgentsStepDispatcher` (satisfying the CP `StepDispatcher` Protocol) bound to the NEW **`StepKind.MANAGED_AGENTS`** (paired **CP spec v1.39** §5.2/§25.2 6th-member extension) in the `StepKindDispatcherRegistry`, plus a `RuntimeConfig.managed_agents_config` opt-in (§3 — carries the operator client + a decoupled `step_timeout_seconds`), a `HarnessContext.managed_agents_client` field (§4), a stage-5 `materialize_managed_agents_dispatcher_stage` factory (gated on `DeploymentSurface.MANAGED_CLOUD` + the opt-in), and `RT-FAIL-MANAGED-AGENTS-*` fail classes (§11). Mirrors the §14.17 C-RT-27 (`SkillActivationSpanEmitter`) operator-opt-in stage-5-factory precedent. **Decorrelated-review hardening (same arc, advisor + Codex):** the `StepKind.MANAGED_AGENTS` facade timeout is DECOUPLED from the shared 30s `step_dispatch_timeout_seconds` (a vendor session runs minutes — §14.20.5 invariant 7); the dispatcher cancels-on-give-up to avoid orphaning a billable session (§14.20.2 step 4); `freeze()` preserves the `managed_agents_client` carrier (Codex). §14.20.1/.3 reconciled to the as-built (config carries `client` + `step_timeout_seconds`; the factory returns the dispatcher + the stage-5 caller binds). Design authority: `.harness/class_1_fork_m_managed_agents_stepkind_c_rt_28.md` (filed + operator-ratified this arc). Contract-id: honors the reserved-but-skipped **C-RT-28** (the §-headers had jumped 27→29→30, leaving 28 reserved; the arc name + as_8f fork + the line-703 negative prose all reference it). §14.20 is the next free slot (§14.18=C-RT-29, §14.19=C-RT-30 occupied since v1.35); the stale line-703 "no §14.18 C-RT-28 sibling" prose is refreshed below.
+
+**This delta's operator gate lives in the paired CP v1.39 (LIKE v1.52, UNLIKE v1.54).** The C-RT-28 contract itself is additive design back-flow — a new contract over a built carrier + a new dispatcher/factory/config/ctx-field, all opt-in + surface-gated + backward-compatible (default-config workflows bind nothing, emit nothing). Under FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`) that back-flow is pre-authorized. The **gated** decision is the closed-at-5 `StepKind` extension that makes a managed-agents step *dispatchable* — the paired **CP spec v1.39** §5.2/§25.2 Class-2-revision, **operator-ratified 2026-06-17 (AskUserQuestion → Option B: new `MANAGED_AGENTS` kind, not overload `SUB_AGENT_DISPATCH`)**. C-RT-28 is authored against that ratification; it is canonical on merge alongside CP v1.39 + the impl. The Option-A foreclosure (riding `SUB_AGENT_DISPATCH` would sacrifice that dispatcher's committed harness-orchestration semantic — topology-admissibility gate + child-manifest recursion a vendor session cannot honor) is probe-resolved + advisor-affirmed per the fork doc §2.1.
+
+**Vendor/credential boundary (never auto-fired).** A live managed-cloud run re-touches `ANTHROPIC_API_KEY` (paid) + GCP IAM/Cloud-Run identity-token + Cloud-Trace. The contract surface embeds NO credentials — the SDK client is operator-supplied at the bootstrap site (parallel to C-RT-27's hook-supply); the live run is surfaced at the dispatch boundary, never auto-fired (`[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`). The H_T-AS-8f local-development exclusion remains TRUE — the dispatcher binds only on `DeploymentSurface.MANAGED_CLOUD` + opt-in.
+
+**Source of fix.** Arc-M fork doc §2 (Option B, probe-resolved + advisor-affirmed) + HEAD body-grounding of `managed_agents.py` (the carrier, read in full), `workflow_driver.py` (StepKind-agnostic dispatch, 6 sites) + `workflow_driver_types.py` (StepKind closed-at-5) + `sub_agent_dispatch.py` (the hard topology-admissibility gate that forecloses Option A) + §14.17 C-RT-27 (the mirror precedent) + advisor (full-transcript) review.
 
 ## Change-note (v1.53 → v1.54)
 
@@ -700,7 +710,7 @@ Operator re-routed via NEW AskUserQuestion 2026-05-28: Reading (H) hybrid-with-a
 
 ## Change-note (v1.32 → v1.33)
 
-**Scope of revision.** Indefinite-defer ratification record per `.harness/class_1_fork_as_8f_managed_agents_namespace_production_only_exclusion.md` Q1=(C) operator-ratification 2026-05-28. The fork surfaced that `managed_agents.*` producer-site absence at H_T runtime is a faithful materialization of the AS spec C-AS-13 §13.2 adoption-depth matrix design declaration (`surface_qualifier = LOCAL_DEVELOPMENT` + `"X at local-development"` exclusion across all four workload classes) + ADR-D3 §1.8.1 span-scope declaration (`managed_agents.runtime (Managed Agents only; v1.1 — F2-04 namespace unified)`) + harness-as enforcement test `test_managed_agents_excluded_at_local_development`. Q1=(C) DEFER INDEFINITELY ratification mirror of H_T-AS-8e files.* per v1.17 §14.C precedent — no managed_agents executable consumer contract authored at v1.33; no §14.18 C-RT-28 sibling to v1.32 §14.17 C-RT-27. AS-8f STILL-BOUNDED → STILL-BOUNDED-INDEFINITELY at workspace ledger v2 batch-26.
+**Scope of revision.** Indefinite-defer ratification record per `.harness/class_1_fork_as_8f_managed_agents_namespace_production_only_exclusion.md` Q1=(C) operator-ratification 2026-05-28. The fork surfaced that `managed_agents.*` producer-site absence at H_T runtime is a faithful materialization of the AS spec C-AS-13 §13.2 adoption-depth matrix design declaration (`surface_qualifier = LOCAL_DEVELOPMENT` + `"X at local-development"` exclusion across all four workload classes) + ADR-D3 §1.8.1 span-scope declaration (`managed_agents.runtime (Managed Agents only; v1.1 — F2-04 namespace unified)`) + harness-as enforcement test `test_managed_agents_excluded_at_local_development`. Q1=(C) DEFER INDEFINITELY ratification mirror of H_T-AS-8e files.* per v1.17 §14.C precedent — no managed_agents executable consumer contract authored at v1.33; no §14.18 C-RT-28 sibling to v1.32 §14.17 C-RT-27. AS-8f STILL-BOUNDED → STILL-BOUNDED-INDEFINITELY at workspace ledger v2 batch-26. *[SUPERSEDED at v1.55 (R-FS-1 arc M): the managed_agents executable-consumer contract IS now authored — **C-RT-28 at §14.20** (NOT §14.18, which became C-RT-29 `HarnessRunCLI` at v1.35; §14.19=C-RT-30). H_T-AS-8f is SUBSTANTIVE_RETIRED (R-820); arc M added the production wiring (the `MANAGED_AGENTS` StepKind + dispatcher). See the v1.54→v1.55 change-note + §14.20.]*
 
 **Source of fix.** `.harness/class_1_fork_as_8f_managed_agents_namespace_production_only_exclusion.md` Q1=(C) operator-ratified 2026-05-28. Reading B (operator-opt-in mirror AS-8d) dropped pre-ratification as category error per advisor pre-substantive consultation — cannot opt into a deployment-surface-excluded namespace at local-dev without either (i) dead code (violates Q1=B "MET-when-bound" semantic) or (ii) force-emit at spec-excluded surface (violates X-AL-3). Reading C is the plain reading honoring the design declaration.
 
@@ -5148,6 +5158,131 @@ Full RETIRED transition (RETIRE-READY → RETIRED) gates on the follow-on retire
 - **`HarnessContext.activate_skill(...)` workflow_id source.** Three options: (a) operator passes explicitly via a 2nd parameter; (b) `ctx` carries a `current_workflow_id: str | None` field updated at workflow entry; (c) the method scans `ctx`'s recent state for an active workflow_id. v1.32 contract does not mandate; landing arc selects (b) recommended for symmetry with hook 1 + 2.
 - **Per-hook activation budget.** No max-activations-per-workflow constraint at v1.32 contract; future arc may add a `RuntimeConfig.skill_activation_max_per_workflow: int` field if production observability surfaces unbounded cardinality (sampling discipline mitigates per AS §14.8 base-rate at production).
 - **`SkillActivationEmitterUnboundError` vs silent-skip at Hook 3.** Per §14.17.2 Hook 3 step 2: behavior at `ctx.skill_activation_emitter is None` is implementation discretion. Recommended: silent-skip per parallel with Hook 1 + 2 (silently no-op when operator opts out).
+
+---
+
+## §14.20 C-RT-28 — `ManagedAgentsStepDispatcher` + `ManagedAgents` executable-consumer contract (new at v1.55)
+
+**Contract surface.** A production `StepDispatcher` for `StepKind.MANAGED_AGENTS` (CP spec v1.39 §5.2/§25.2) that executes a workflow step's body via a **vendor-run Managed Agents session** (Anthropic `beta.sessions.*`) rather than a harness-orchestrated loop. Consumed at the single CP driver dispatch seam (`step_dispatchers.lookup(StepKind.MANAGED_AGENTS).dispatch(...)`); bound at bootstrap stage 5 gated on `DeploymentSurface.MANAGED_CLOUD` + an operator config opt-in. Formalizes the already-built, R-820-live-proven carrier `harness-runtime/src/harness_runtime/lifecycle/managed_agents.py` and authors the missing production-wiring surface. Mirrors C-RT-27 (skill activation) + C-RT-24 (pause/resume) + C-RT-22 (memory tool) operator-opt-in stage-5-factory precedent.
+
+**PRD enablement.** Completes the managed-cloud deployment surface (ADR-D1/D2 3-tier: local-development / self-hosted-server / managed-cloud). The `managed_agents.*` namespace producer-side surface is already built (AS spec §14.5 `managed_agents.*` 3-attribute schema + the `managed_agents.runtime` span helper) + live-proven (R-820, PR #380 → H_T-AS-8f SUBSTANTIVE_RETIRED in `.harness/substitutions.yaml`); C-RT-28 closes the missing piece — a production dispatch path that reaches the carrier from `execute_workflow`. Before C-RT-28 the only importers of `lifecycle.managed_agents` were the R-820 proof script + its unit test; no step kind routed to it.
+
+**ADR commitment(s) honored.** ADR-D1 v1.2 (engine + replay; managed-cloud admits engine class 1) + ADR-D2 v1.2 §Decision (3 deployment surfaces incl. managed-cloud, Anthropic/AWS/GCP candidates) + ADR-D6 v1.2 (OTel `managed_agents.*` namespace ingestion at OD).
+
+**Fork-resolution provenance.** `.harness/class_1_fork_m_managed_agents_stepkind_c_rt_28.md` — Class 1, operator-ratified 2026-06-17 (this arc, same-session-as-filing). Option B (new `MANAGED_AGENTS` StepKind, not overload `SUB_AGENT_DISPATCH`); §14.20 slot; contract-id C-RT-28 (honor reserved); surface-gated `MANAGED_CLOUD` + opt-in. The closed-at-5 `StepKind` extension is the operator-gated half (paired CP v1.39); C-RT-28 is the additive runtime back-flow authored against that ratification.
+
+### §14.20.1 Architectural surfaces introduced
+
+**Formalized (built carriers at `lifecycle/managed_agents.py` — contract-bound here, no code change):**
+
+- `ManagedAgentsClientProtocol` — minimal async port. `create_session(*, agent_id: str, environment_id: str, title: str | None = None, metadata: Mapping[str, str] | None = None) -> ManagedAgentSession`; `send_event(*, session_id: str, event: ManagedAgentEvent) -> ManagedAgentEvent`; `retrieve_session(*, session_id: str) -> ManagedAgentSession`; `cancel_session(*, session_id: str) -> ManagedAgentSession`.
+- `AnthropicManagedAgentsClient` — SDK adapter satisfying the Protocol (wraps `client.beta.sessions.*` in `asyncio.to_thread`; tags `betas=[ANTHROPIC_MANAGED_AGENTS_BETA]`; `cancel_session` interrupts + archives, returns `status=CANCELED`).
+- `ManagedAgentSession` (frozen, slots): `session_id` / `agent_id` / `environment_id` / `status: ManagedAgentSessionStatus` / `runtime_ms: int` / `billable_seconds: float`. `ManagedAgentEvent` (frozen): `event_type: str` / `payload: Mapping[str, Any]`. `ManagedAgentSessionStatus` (9-state StrEnum: `CREATED`/`IDLE`/`RUNNING`/`RESCHEDULING`/`PAUSED`/`COMPLETED`/`FAILED`/`CANCELED`/`TERMINATED`).
+- `managed_agents_runtime_span(*, tracer, session=None, session_id=None, runtime_ms=None, billable_seconds=None)` — async-ctx emitting the `managed_agents.runtime` span with the AS §14.5 namespace (`managed_agents.runtime_ms` / `managed_agents.session_id` / `managed_agents.billable_seconds`).
+- `ANTHROPIC_MANAGED_AGENTS_BETA = "managed-agents-2026-04-01"`.
+
+**NEW (the production-wiring surface):**
+
+`ManagedAgentsStepDispatcher` — satisfies the CP `StepDispatcher` Protocol (C-CP-25 §25.3.3.4). The dispatch is **async** (the client is async) per the C-RT-15 inner / C-RT-17 sub-agent precedent; bound via `SyncDispatcherFacade` at the `StepKindDispatcherRegistry` (the driver per-step seam is sync, the facade bridges per the U-RT-59 Path-B INFERENCE_STEP pattern):
+
+```python
+class ManagedAgentsStepDispatcher:
+    """Dispatches a StepKind.MANAGED_AGENTS step to a vendor-run Managed
+    Agents session. Constructed at bootstrap stage 5 by
+    materialize_managed_agents_dispatcher_stage per §14.20.3. Holds a
+    ManagedAgentsClientProtocol + the ctx.tracer_provider. The harness does
+    NOT orchestrate the agent loop — the vendor does (no topology-admissibility,
+    no subagent.* spans; cf. C-RT-17 SUB_AGENT_DISPATCH).
+    """
+    async def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
+    ) -> Mapping[str, Any]:
+        ...  # §14.20.2
+```
+
+`ManagedAgentsConfig` (RuntimeConfig sub-model §3 — presence + `DeploymentSurface.MANAGED_CLOUD` signals operator opt-in; parallel to `SkillActivationHookConfig` / `ValidatorFrameworkConfig` / `PauseResumeProtocolConfig`). It carries the operator-supplied client object + the decoupled managed-agents facade timeout (no credentials embedded — the SDK client is operator-constructed):
+
+```python
+@dataclass(frozen=True)
+class ManagedAgentsConfig:
+    """Opt-in sub-model — presence + DeploymentSurface.MANAGED_CLOUD signals
+    operator opt-in to managed-agents step dispatch.
+
+    `client` is the concrete ManagedAgentsClientProtocol (e.g.
+    AnthropicManagedAgentsClient over a live SDK client), supplied at the
+    operator-controlled bootstrap site. Typed `Any` (not the structural
+    Protocol) so Pydantic v2 schema-generation at RuntimeConfig introspection
+    succeeds — the runtime_checkable Protocol is duck-typed at dispatch, not
+    validated at the dataclass layer (same pattern as
+    SkillActivationHookConfig.hook). No credentials embedded.
+
+    `step_timeout_seconds` is the SyncDispatcherFacade `result_timeout_seconds`
+    used ONLY for the StepKind.MANAGED_AGENTS facade — DECOUPLED from the
+    shared RuntimeConfig.step_dispatch_timeout_seconds (30s) per §14.20.3.
+    """
+    client: Any = None
+    step_timeout_seconds: float = 600.0
+```
+
+`HarnessContext.managed_agents_client: ManagedAgentsClientProtocol | None` (NEW field §4; `None` when not opted-in or surface ≠ managed-cloud).
+
+### §14.20.2 Dispatch discipline
+
+A `MANAGED_AGENTS` step dispatches as (the dispatcher reads its inputs from `step.step_payload`, opaque to the driver per §25.3.3.4):
+
+1. **Read `step_payload`** (the managed-agents dispatch inputs): `agent_id: str`, `environment_id: str`, and the initial event (`event_type: str` + `payload: Mapping[str, Any]`); optional `title` / `metadata`. The exact key schema + the step-body→event mapping are implementation discretion (§14.20.7).
+2. **Create session** — `session = await client.create_session(agent_id=..., environment_id=..., title=..., metadata=...)`.
+3. **Send the step event** — `await client.send_event(session_id=session.session_id, event=ManagedAgentEvent(event_type=..., payload=...))`.
+4. **Poll to terminal** — `await client.retrieve_session(session_id=...)` on a bounded poll loop until a terminal status (`IDLE` / `COMPLETED` / `FAILED` / `CANCELED` / `TERMINATED`) or the poll budget is exhausted (budget mechanism §14.20.7). The R-820 proof drove to `IDLE`. **On poll-budget exhaustion** the session is still running server-side and billable; the dispatcher MUST best-effort `await client.cancel_session(session_id=...)` before raising (§14.20.5 invariant 7), so a given-up session is not orphaned. A cancel that itself fails MUST NOT mask the primary budget-exhausted error (the load-bearing signal).
+5. **Emit telemetry** — open `managed_agents_runtime_span(tracer=<from ctx.tracer_provider>, session=<final session>)` so the `managed_agents.runtime` span carries `session_id` / `runtime_ms` / `billable_seconds`.
+6. **Return** a `Mapping[str, Any]` outcome the driver accumulates into `final_state` — at minimum `{session_id, status, runtime_ms, billable_seconds}` + any returned event payload.
+7. **Error mapping** — a terminal `FAILED` / `TERMINATED` status (or poll-budget exhaustion, or an SDK error) → raise a typed error the driver maps to `RT-FAIL-MANAGED-AGENTS-SESSION` per the §11 §25.3.3.4 try/except discipline (the step fails; the workflow's failure-mode handling per C-CP-25 §25.7 applies). `CANCELED` (operator interrupt) maps to the same dispatch-failure class unless the caller treats cancellation as success (implementation discretion).
+
+### §14.20.3 Lifecycle stage placement
+
+**Stage 5 (LOOP_INIT):** NEW factory `materialize_managed_agents_dispatcher_stage(config: RuntimeConfig, ctx: _MutableHarnessContext) -> ManagedAgentsStepDispatcher | None`. The factory returns the dispatcher (or `None`); the stage-5 caller does the binding + facade-wrapping (so the `StepKindDispatcherRegistry` is constructed once with all dispatchers, the established stage-5 pattern). Factory body:
+
+1. **If `config.managed_agents_config is None` OR `config.deployment_surface != DeploymentSurface.MANAGED_CLOUD`:** return `None`. (Opt-out / non-managed-cloud path — `ctx.managed_agents_client` stays `None`, no `StepKind.MANAGED_AGENTS` row is added → a `MANAGED_AGENTS` step then fails closed at `registry.lookup` with `StepKindDispatcherNotBoundError` → `RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND`, no silent under-execution.)
+2. **Else (opted-in on managed-cloud):** if `ctx.tracer_provider` is unbound OR `config.managed_agents_config.client` is absent → raise `ManagedAgentsStageMaterializeError` (`RT-FAIL-MANAGED-AGENTS-STAGE-MATERIALIZE`, bootstrap-fatal §14.20.4). Else construct + return `ManagedAgentsStepDispatcher(client=config.managed_agents_config.client, tracer_provider=ctx.tracer_provider)`.
+
+**Stage-5 caller (`stage_5_loop_init`).** When the factory returns a dispatcher: bind `ctx.managed_agents_client = config.managed_agents_config.client`; add `StepKind.MANAGED_AGENTS → SyncDispatcherFacade(dispatcher, result_timeout_seconds=config.managed_agents_config.step_timeout_seconds)` to the dispatcher map. The facade timeout reads `managed_agents_config.step_timeout_seconds` (600s default) — **NOT** the shared `step_dispatch_timeout_seconds` (30s) the INFERENCE / SUB_AGENT / TOOL facades use. A vendor-run managed-agents session runs minutes; binding to the shared 30s bound would fire `RT-FAIL-STEP-DISPATCH-TIMEOUT` prematurely while the vendor session keeps running, billable, never cancelled (the abandoned coroutine never reaches its §14.20.2-step-4 cancel-on-give-up path). See §14.20.5 invariant 7.
+
+**Stage 5 ordering.** Sibling-of `materialize_skill_activation_emitter_stage` / `materialize_validator_framework_stage` / `materialize_pause_resume_protocol_stage` at the stage-5 LOOP_INIT bucket; intra-stage ordering arbitrary (the factory's only dependency is the stage-4 `ctx.tracer_provider` + the registry being constructed before binding).
+
+### §14.20.4 Failure-mode taxonomy
+
+2 new fail classes added to §11 runtime-local fail-class taxonomy:
+
+| Fail class | Trigger | Permanent? |
+|---|---|---|
+| `RT-FAIL-MANAGED-AGENTS-STAGE-MATERIALIZE` | `materialize_managed_agents_dispatcher_stage` cannot construct the client/dispatcher when opted-in on `MANAGED_CLOUD` (e.g. the operator-supplied client is absent/invalid; tracer provider unbound at stage-5 entry; dispatcher construction raises) | YES (bootstrap aborts; fail-closed per ADR-F4 v1.1) |
+| `RT-FAIL-MANAGED-AGENTS-SESSION` | A managed-agents dispatch does not reach a success terminal status — terminal `FAILED` / `TERMINATED` (/ `CANCELED` unless caller-treated-as-success), poll-budget exhaustion, or an SDK/transport error | NO (step-failure; the workflow's C-CP-25 §25.7 failure handling applies) |
+
+### §14.20.5 Invariants
+
+1. **Dispatcher bound at most once per bootstrap; surface-gated.** Stage 5 binds `StepKind.MANAGED_AGENTS` only on `DeploymentSurface.MANAGED_CLOUD` + `managed_agents_config` non-None. No re-binding at dispatch-time.
+2. **Fail-closed on non-managed-cloud / opt-out.** When unbound, a `MANAGED_AGENTS` step raises `StepKindDispatcherNotBoundError` → `RT-FAIL-STEP-KIND-DISPATCHER-NOT-BOUND` at `registry.lookup`; never silently skipped or downgraded.
+3. **`managed_agents.runtime` span at every dispatch.** Each managed-agents dispatch emits the span carrying the AS §14.5 `managed_agents.*` namespace (session_id / runtime_ms / billable_seconds). Sampling per OD `sampling_mode` (the `managed_agents.runtime` always-sampled floor).
+4. **Backward-compatible.** Default-config workflows (no `managed_agents_config`) bind no dispatcher + emit no `managed_agents.*` spans. Byte-identical to pre-v1.55.
+5. **Vendor owns the loop — the architectural distinction from `SUB_AGENT_DISPATCH`.** The dispatcher performs NO topology-admissibility check + emits NO `subagent.*`/`topology.*` spans; the vendor session runs the agent loop server-side. (This is exactly why Option A — riding `SUB_AGENT_DISPATCH` — was foreclosed: its dispatcher hard-requires those harness-orchestration semantics. Fork doc §2.1.)
+6. **No embedded credentials; live run never auto-fired.** The contract surface holds no API key / cloud identity; the SDK client is operator-supplied at the bootstrap site. A live managed-cloud run is surfaced at the dispatch boundary for authorization, never auto-fired (`[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`).
+7. **Decoupled facade timeout + cancel-on-give-up — no orphaned billable session.** The `StepKind.MANAGED_AGENTS` facade binds to `managed_agents_config.step_timeout_seconds` (600s default), NOT the shared 30s `step_dispatch_timeout_seconds`. On poll-budget exhaustion the dispatcher best-effort cancels the still-running session before raising (§14.20.2 step 4). **Operator-sizing contract (documented, not enforced across the per-step/per-config boundary):** `step_timeout_seconds` MUST exceed the per-step poll budget (`max_poll_attempts × poll_interval_seconds`) + create/send/retrieve latency headroom. With sane defaults (30s budget ≪ 600s) this holds; an operator who bloats `max_poll_attempts` past the facade timeout re-opens the orphan window (the facade abandons the coroutine before the internal cancel runs). The harness does not enforce the relationship — it is an operator-sizing invariant.
+
+### §14.20.6 X-AL-2 retirement implications (v1.55 → retirement event prerequisites)
+
+H_T-AS-8f is already **SUBSTANTIVE_RETIRED** (R-820 live proof; `.harness/substitutions.yaml`). C-RT-28 closes the two owed M-arc gaps: (a) the formal contract (this §14.20), and (b) the production wiring (the `MANAGED_AGENTS` StepKind + the stage-5 dispatcher binding) — turning the dormant-driver-only carrier into a production-reachable consumer. The overlay's `carrier_files: []` for H_T-AS-8f is closed by the Slice-5 cite-bind (tag `managed_agents.py` + the new dispatcher/factory to C-RT-28 / H_T-AS-8f). The live managed-cloud production run (the credential/vendor gate) is surfaced, never auto-fired — it is NOT a retirement prerequisite (H_T-AS-8f already retired on the R-820 proof); it is the Slice-6 surfaced vendor-gate.
+
+### §14.20.7 Deferred to implementation discretion
+
+- **`step_payload` key schema + step-body→event mapping.** v1.55 names the required inputs (agent_id / environment_id / event_type / payload + optional title/metadata); the exact key names + how a declarative step body maps to the initial `ManagedAgentEvent` are implementation discretion at the landing arc.
+- **Poll-budget mechanism + interval.** The bounded poll loop to a terminal status (a `RuntimeConfig` field, a per-step `step_payload` value, or a fixed default) + the poll interval/backoff are implementation discretion. The value MUST bound the loop (no unbounded poll). As-built: per-step `step_payload` keys `max_poll_attempts` (default 30) + `poll_interval_seconds` (default 1.0). The poll budget MUST be sized below the facade `step_timeout_seconds` (§14.20.5 invariant 7) so the internal cancel-on-give-up runs before the facade abandons the coroutine.
+- **`ManagedAgentsClientProtocol` supply mechanism.** v1.55 keeps the empty-marker `ManagedAgentsConfig`; the concrete client (e.g. `AnthropicManagedAgentsClient` over a live SDK client) is supplied at the operator-controlled bootstrap site (a `run_bootstrap(...)` parameter; a singleton accessor; etc.) — parallel to C-RT-27's hook supply. Mechanism is operator-discretion at the landing arc.
+- **`CANCELED`-as-success vs failure.** §14.20.2 step 7 maps `CANCELED` to dispatch-failure by default; a caller that treats operator-interrupt cancellation as a graceful outcome may override at the landing arc.
+- **Engine-class interaction.** Whether a `MANAGED_AGENTS` step participates in the engine-class candidate set (managed-cloud admits event-sourced-replay / save-point / reconciler / WAL) or is engine-orthogonal is implementation discretion; v1.55 treats the managed-agents dispatch as a single step body (the vendor owns intra-session durability).
 
 ---
 

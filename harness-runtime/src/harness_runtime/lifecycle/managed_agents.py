@@ -6,6 +6,12 @@ This module supplies:
 - a protocol plus an Anthropic SDK adapter for Managed Agents sessions, and
 - a `managed_agents.runtime` span helper carrying the AS `managed_agents.*`
   namespace.
+
+Cite-bind: this is the carrier formalized by **C-RT-28** (`Spec_Harness_Runtime_v1.md`
+§14.20; R-FS-1 arc M) and the substitution **H_T-AS-8f** (`managed_agents.*`
+namespace; SUBSTANTIVE_RETIRED at R-820). The production-wiring surface (the
+`ManagedAgentsStepDispatcher` + stage-5 factory) lives at
+`managed_agents_dispatch.py`.
 """
 
 from __future__ import annotations
@@ -15,7 +21,7 @@ from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, cast, runtime_checkable
 
 __all__ = [
     "ANTHROPIC_MANAGED_AGENTS_BETA",
@@ -66,8 +72,14 @@ class ManagedAgentEvent:
     payload: Mapping[str, Any]
 
 
+@runtime_checkable
 class ManagedAgentsClientProtocol(Protocol):
-    """Minimal async port for a provider-backed Managed Agents adapter."""
+    """Minimal async port for a provider-backed Managed Agents adapter.
+
+    `@runtime_checkable` (method-only Protocol) so it can serve as the
+    `HarnessContext.managed_agents_client` Pydantic field type (C-RT-28 §14.20.1)
+    — mirrors the `ValidatorFramework` runtime_checkable-Protocol field pattern.
+    """
 
     async def create_session(
         self,
