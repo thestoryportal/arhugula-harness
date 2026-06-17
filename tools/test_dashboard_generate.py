@@ -53,15 +53,15 @@ def _real_arc_map_md() -> str:
 
 def test_arc_unit_map_parses_all_11_arcs_in_build_order():
     # The single arc→unit source must yield all 11 arcs in the frozen build order,
-    # with the 5 done arcs first and the 6 remaining following.
+    # with the 6 done arcs first and the 5 remaining following.
     generate = _load_generate_module()
     am = generate.parse_arc_unit_map(_real_arc_map_md())
     tags = [a["tag"] for a in am["arcs"]]
     assert tags == ["B1", "B3", "E", "B2", "R", "B4", "CA", "B5", "B6", "B7", "M"]
     assert [a["position"] for a in am["arcs"]] == list(range(1, 12))
-    assert [a["status"] for a in am["arcs"][:5]] == ["done"] * 5
-    assert am["arcs"][5]["status"] == "next"  # B4
-    assert all(a["status"] == "queued" for a in am["arcs"][6:])  # CA..M
+    assert [a["status"] for a in am["arcs"][:6]] == ["done"] * 6  # B1..B4 done
+    assert am["arcs"][6]["status"] == "next"  # CA
+    assert all(a["status"] == "queued" for a in am["arcs"][7:])  # B5..M
     by_tag = {a["tag"]: a for a in am["arcs"]}
     # cluster classification: independent vs serial vs maybe-serial. M's source text says
     # "possibly serial" — it must NOT collapse to a definite "serial" (codex [P3]).
@@ -79,11 +79,14 @@ def test_done_arcs_carry_real_units_remaining_arcs_anticipated():
     assert by_tag["B1"]["units"], "B1 must list as-built units"
     assert any("U-CP-86" in u["unit"] for u in by_tag["B1"]["units"])  # PARALLELIZATION
     assert all(u["what"] for u in by_tag["B1"]["units"])  # every unit has a plain-language line
+    # B4 is now done — as-built (its 4 slices extended existing contracts → 0 new U-* ids)
+    assert by_tag["B4"]["units_status"] == "as-built"
+    assert by_tag["B4"]["units"], "B4 must list as-built slices"
     # remaining arcs are anticipated (units decomposed at arc-open — not fabricated)
-    assert by_tag["B4"]["units_status"] == "anticipated"
-    assert by_tag["B4"]["units"], "B4 must list anticipated slices"
+    assert by_tag["CA"]["units_status"] == "anticipated"
+    assert by_tag["CA"]["units"], "CA must list anticipated slices"
     # dependency text is carried for the next arc
-    assert by_tag["B4"]["depends"] and by_tag["B4"]["parallel"]
+    assert by_tag["CA"]["depends"] and by_tag["CA"]["parallel"]
 
 
 def test_remaining_forward_derives_frozen_child_arcs_in_order():
@@ -95,17 +98,16 @@ def test_remaining_forward_derives_frozen_child_arcs_in_order():
 
     ids = [arc["id"] for arc in rf["child_arcs"]]
     assert ids == [
-        "R-FS-1·B4",
         "R-FS-1·CA",
         "R-FS-1·B5",
         "R-FS-1·B6",
         "R-FS-1·B7",
         "R-FS-1·M",
     ]
-    assert [arc["n"] for arc in rf["child_arcs"]] == [1, 2, 3, 4, 5, 6]
+    assert [arc["n"] for arc in rf["child_arcs"]] == [1, 2, 3, 4, 5]
     assert rf["child_arcs"][0]["gate"].startswith("NEXT")
     assert all(arc["layer"] == "build" for arc in rf["child_arcs"])
-    assert rf["done"] == ["B1", "B3", "E", "B2", "R"]
+    assert rf["done"] == ["B1", "B3", "E", "B2", "R", "B4"]
 
 
 def test_remaining_forward_derives_standalone_arcs():
