@@ -216,6 +216,34 @@ def _coerce_payload(payload: Mapping[str, Any]) -> ProviderAgnosticPayload:
         ) from exc
 
 
+_UPSTREAM_CONTEXT_PREFIX = "Upstream step output:\n"
+"""Label prefixing the B-INTERSTEP upstream-output context message (runtime spec
+§14.21 C-RT-29). Lets a model (and a test) distinguish the injected prior-step
+output from the step's own messages."""
+
+
+def _inject_upstream_output(
+    payload: ProviderAgnosticPayload, upstream: Mapping[str, Any]
+) -> ProviderAgnosticPayload:
+    """Prepend the immediately-prior step's output as an upstream-context message.
+
+    B-INTERSTEP (runtime spec §14.21 C-RT-29). The upstream output (an opaque
+    step-output `Mapping` the driver recorded) is serialized provider-neutrally
+    into a single leading ``user`` message so the dispatched model SEES the prior
+    step's output (the EVALUATOR_OPTIMIZER draft→evaluate / feedback→regenerate
+    data flow). The dispatcher does NOT introspect the step body — it carries the
+    driver-recorded output opaquely (`workflow_driver` §25.3.3.4 preserved).
+    ``default=str`` keeps a non-JSON-native value serializable; ``sort_keys``
+    keeps the injected content deterministic.
+    """
+    context_message: dict[str, Any] = {
+        "role": "user",
+        "content": _UPSTREAM_CONTEXT_PREFIX
+        + json.dumps(dict(upstream), sort_keys=True, default=str),
+    }
+    return payload.model_copy(update={"messages": (context_message, *payload.messages)})
+
+
 def _set_if_present(span: Any, key: str, value: Any) -> None:
     """Set a span attribute only when the value is not ``None``.
 
@@ -353,6 +381,15 @@ class RuntimeLLMDispatcher:
     # `RunResult.cost_attribution` (runtime spec v1.53 §9 C-RT-09). None at unit-test
     # construction → the wrapper skips the append (no-op).
     cost_record_sink: list[SpanCostRecord] | None = None
+    # B-INTERSTEP (runtime spec §14.21 C-RT-29) — run-scoped inter-step output
+    # channel (the SAME `InterStepOutputChannel` instance the CP driver records
+    # into, threaded by `materialize_llm_dispatcher_stage` from the mutable
+    # bootstrap ctx). When bound + non-empty, `dispatch` injects the
+    # immediately-prior step's output (`most_recent_output()`) into the dispatched
+    # payload as a prepended upstream-context message. None (opt-out / unit-test
+    # construction) → no injection (byte-identical to pre-v1.59). Typed `Any` so
+    # the dataclass field carries no import dependency on the concrete holder.
+    inter_step_channel: Any = None
     # U-RT-81 (C-RT-15 §14.5.1) — Memory tool storage-backend registry +
     # deployment_surface for `resolve_backend` call. When `step.step_payload.
     # tools` contains the Anthropic Memory tool definition + both fields are
@@ -592,6 +629,17 @@ class RuntimeLLMDispatcher:
                     )
 
         payload = _coerce_payload(step.step_payload)
+
+        # --- B-INTERSTEP (runtime spec §14.21 C-RT-29): upstream-output inject ---
+        # When the inter-step channel is bound (opt-in) AND a prior step has
+        # completed, prepend that step's output as an upstream-context message so
+        # THIS dispatch sees it (EVALUATOR_OPTIMIZER evaluate sees the generate
+        # draft; regenerate sees the evaluator feedback). None / empty channel →
+        # payload unchanged (byte-identical to pre-v1.59 — the opt-out default).
+        if self.inter_step_channel is not None:
+            _upstream = self.inter_step_channel.most_recent_output()
+            if _upstream is not None:
+                payload = _inject_upstream_output(payload, _upstream)
 
         # --- U-RT-114 (C-RT-15 §14.5.3): branch AgentRole carry ----------
         # The branch role (the CP-composed child StepExecutionContext, CP plan
@@ -1727,6 +1775,7 @@ def materialize_llm_dispatcher_stage(
     audit_writer: Any = None,
     rate_table: Any = None,
     cost_record_sink: list[SpanCostRecord] | None = None,
+    inter_step_channel: Any = None,
     memory_tool_registry: Any = None,
     deployment_surface: Any = None,
     hitl_tool_loop: RuntimeHITLToolLoop | None = None,
@@ -1768,6 +1817,7 @@ def materialize_llm_dispatcher_stage(
         audit_writer=audit_writer,
         rate_table=rate_table,
         cost_record_sink=cost_record_sink,
+        inter_step_channel=inter_step_channel,
         memory_tool_registry=memory_tool_registry,
         deployment_surface=deployment_surface,
         hitl_tool_loop=hitl_tool_loop,

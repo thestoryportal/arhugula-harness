@@ -67,6 +67,7 @@ from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEnt
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_runtime.lifecycle import llm_dispatch as llm_dispatch_module
 from harness_runtime.lifecycle.hitl_tool_loop import HITLToolLoopContext, ModelToolCall
+from harness_runtime.lifecycle.inter_step_output_channel import InterStepOutputChannel
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchBindError,
     LLMDispatchPayloadShapeError,
@@ -2278,3 +2279,76 @@ async def test_b4_slice4_per_step_role_override_full_stack_e2e() -> None:
     assert call["model"] == "model-for-audit-specialist"
     # Inner picked up the per-step role fold for PROMPT injection.
     assert call["system"] == "PROMPT-audit-specialist"
+
+
+# ---------------------------------------------------------------------------
+# B-INTERSTEP (runtime spec §14.21 C-RT-29) — inter-step output injection.
+#
+# Genuine non-vacuity: the REAL `RuntimeLLMDispatcher.dispatch` path injects the
+# immediately-prior step's output into the ACTUAL provider call's `messages` when
+# the run-scoped channel is bound. NOT a stub consumer — the assertion reads what
+# the fake provider boundary received, proving the prior output reaches the model.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_inter_step_channel_injects_prior_output_into_provider_call() -> None:
+    """A bound, non-empty channel → the dispatched provider call SEES the prior
+    step's output as a prepended upstream-context message (the EVALUATOR_OPTIMIZER
+    evaluate-sees-the-draft data flow, exercised through the real dispatch path)."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    channel = InterStepOutputChannel()
+    channel.record("generate", {"draft": "the-models-first-draft"})
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        inter_step_channel=channel,
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    call = adapter.client.messages.last_kwargs
+    assert call is not None
+    messages = call["messages"]
+    # The injected upstream-context message is prepended, labeled, and carries the
+    # prior step's serialized output — the model genuinely receives it.
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"].startswith("Upstream step output:")
+    assert "the-models-first-draft" in messages[0]["content"]
+    # The step's own message is preserved AFTER the injected upstream context.
+    assert {"role": "user", "content": "hi"} in messages
+    assert len(messages) == 2
+
+
+@pytest.mark.asyncio
+async def test_inter_step_channel_none_no_injection_byte_identical() -> None:
+    """No channel (opt-out default) → the provider call's messages are byte-identical
+    to pre-v1.59 (no upstream injection)."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(providers={"anthropic": adapter}, tracer_provider=tp)
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    call = adapter.client.messages.last_kwargs
+    assert call is not None
+    assert call["messages"] == [{"role": "user", "content": "hi"}]
+
+
+@pytest.mark.asyncio
+async def test_inter_step_channel_empty_no_injection() -> None:
+    """A bound but EMPTY channel (first step — no prior output) → no injection."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        inter_step_channel=InterStepOutputChannel(),
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    call = adapter.client.messages.last_kwargs
+    assert call is not None
+    assert call["messages"] == [{"role": "user", "content": "hi"}]

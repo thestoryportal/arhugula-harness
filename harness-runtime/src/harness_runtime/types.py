@@ -114,6 +114,10 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validat
 # field-table extension + §3.8 sub-model). HITLAutoApprovePolicy declared at U-RT-116.
 from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
 
+# B-INTERSTEP — InterStepOutputChannel by-reference holder (runtime spec §14.21
+# C-RT-29, new at v1.59). No harness imports in that module → no import cycle.
+from harness_runtime.lifecycle.inter_step_output_channel import InterStepOutputChannel
+
 # C-RT-28 §14.20 (R-FS-1 arc M) — ManagedAgents executable-consumer carriers.
 # `ManagedAgentsConfig` is the RuntimeConfig opt-in sub-model (§14.20.1);
 # `ManagedAgentsClientProtocol` is the HarnessContext client field type.
@@ -1326,6 +1330,19 @@ class RuntimeConfig(BaseModel):
     operator-ratified 2026-05-28 (E-prod-3). Symmetric extension of the
     `ollama_optional` precedent."""
 
+    inter_step_data_flow: bool = False
+    """B-INTERSTEP (R-FS-1 standalone arc; runtime spec §14.21 C-RT-29, new at
+    v1.59) — opt-in to the inter-step output channel (the shared run-context a
+    dispatcher reads). When `True`, stage 5 LOOP_INIT constructs + binds a fresh
+    `InterStepOutputChannel` on `ctx.inter_step_output_channel`, the workflow
+    driver records each completed step's output, and the LLM dispatcher injects
+    the immediately-prior step's output into the dispatched payload (making
+    EVALUATOR_OPTIMIZER's draft→evaluate / feedback→regenerate data flow real).
+    Default `False` → `ctx.inter_step_output_channel is None` → byte-identical to
+    pre-v1.59 (no recording, no injection). The injection *changes* the dispatched
+    payload, so it MUST be opt-in (unlike `cost_record_accumulator`, which is
+    always-on additive observability)."""
+
     tenant_id: str | None = None
     """Multi-tenant separation key per OD audit-ledger. `None` = single-tenant."""
 
@@ -1882,6 +1899,17 @@ class HarnessContext(BaseModel):
     # Typed `object | None` mirroring `cp_is_wiring` (arbitrary_types_allowed;
     # consumers call dynamically); `None` = operator opt-out → sidecar `None`.
     procedural_tier_snapshot_resolver: object | None = None
+
+    # B-INTERSTEP (R-FS-1 standalone arc; spec §14.21 C-RT-29, new at v1.59) —
+    # run-scoped inter-step output channel (the shared run-context the dispatcher
+    # reads). Bound at stage 5 LOOP_INIT to a fresh `InterStepOutputChannel` ONLY
+    # when `RuntimeConfig.inter_step_data_flow` is True; `None` (default) = opt-out
+    # → the driver records nothing + the LLM dispatcher injects nothing
+    # (byte-identical to pre-v1.59). A plain by-reference holder (the
+    # `CostRecordAccumulator` CA #625 pattern) stored under
+    # `arbitrary_types_allowed`; a typed container field would be Pydantic-copied
+    # at `freeze()`, disconnecting the driver's records from the dispatcher's read.
+    inter_step_output_channel: InterStepOutputChannel | None = None
 
     # U-RT-94 — Runtime-internal sidecar carrier for one-shot ResumeContext
     # delivery across the pause-resume cycle. Bound at stage 5 LOOP_INIT to

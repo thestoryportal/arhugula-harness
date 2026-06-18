@@ -188,7 +188,9 @@ class _Ctx:
     `execute_workflow`. The strategy reads `procedural_tier_snapshot_resolver`
     via `getattr(..., None)` — absent here → the R-003 sidecar stays `None`."""
 
-    def __init__(self, *, ledger: Any, emitter: _Emitter) -> None:
+    def __init__(
+        self, *, ledger: Any, emitter: _Emitter, inter_step_output_channel: Any = None
+    ) -> None:
         from opentelemetry.trace import NoOpTracerProvider
 
         self.ledger_writer = ledger
@@ -200,6 +202,10 @@ class _Ctx:
         self.tracer_provider = NoOpTracerProvider()
         self.validator_framework = None
         self.tenant_id = None
+        # B-INTERSTEP (runtime spec §14.21 C-RT-29) — None (default) → the driver's
+        # `getattr(..., None)` read records nothing; a bound channel exercises the
+        # producer half (the driver records each step's output during the EO run).
+        self.inter_step_output_channel = inter_step_output_channel
 
 
 class _MultiKindRegistry:
@@ -291,9 +297,13 @@ def _run(
     ledger: Any,
     emitter: _Emitter | None = None,
     workflow_id: str = "wf-eo",
+    inter_step_output_channel: Any = None,
 ) -> Any:
     emitter = emitter if emitter is not None else _Emitter()
-    ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=emitter))
+    ctx = cast(
+        DriverContext,
+        _Ctx(ledger=ledger, emitter=emitter, inter_step_output_channel=inter_step_output_channel),
+    )
     return execute_workflow(
         _manifest(workflow_id=workflow_id),
         steps,
@@ -567,3 +577,112 @@ def test_evaluator_optimizer_live_e2e_real_ledger_chain_valid(
     assert verify_chain(entries).status is VerificationStatus.VALID
     # Sequential strategy: every entry carries no fan-out branch_metadata.
     assert all(e.branch_metadata is None for e in entries)
+
+
+# ---------------------------------------------------------------------------
+# B-INTERSTEP (runtime spec §14.21 C-RT-29) — inter-step DATA flow (producer).
+#
+# The CP driver records each completed step's output to a run-scoped channel so a
+# subsequent dispatch can read it. harness-cp must NOT depend on harness-runtime,
+# so these CP-side tests use an interface-faithful fake channel (the driver only
+# `getattr`s the bound object and calls `.record(...)`). The real
+# `InterStepOutputChannel` semantics are unit-tested in harness-runtime; the
+# GENUINE LLM-dispatcher consumer (prior output → the actual provider call) is
+# proven in `test_lifecycle_llm_dispatch.py::test_inter_step_channel_injects_*`.
+# ---------------------------------------------------------------------------
+
+
+class _FakeInterStepChannel:
+    """Interface-faithful stand-in for the runtime `InterStepOutputChannel`."""
+
+    def __init__(self) -> None:
+        self.records: list[tuple[str, dict[str, Any]]] = []
+
+    def record(self, step_id: str, output: Any) -> None:
+        self.records.append((step_id, dict(output)))
+
+    def most_recent_output(self) -> Any:
+        return self.records[-1][1] if self.records else None
+
+
+class _UpstreamObservingDispatcher:
+    """Holds the SAME channel the driver records into (mirroring how the real
+    `RuntimeLLMDispatcher` is threaded the channel at stage 5). On each dispatch it
+    captures `most_recent_output()` — proving the driver has ALREADY recorded the
+    PRIOR step's output by the time THIS step dispatches."""
+
+    def __init__(self, *, channel: _FakeInterStepChannel) -> None:
+        self._channel = channel
+        self._gen = 0
+        self._eval = 0
+        self.upstream_seen_by_step: list[tuple[str, Any]] = []
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        sid = str(step.step_id)
+        self.upstream_seen_by_step.append((sid, self._channel.most_recent_output()))
+        if sid == _GENERATE:
+            self._gen += 1
+            return {"draft": self._gen}
+        self._eval += 1
+        return {"accepted": self._eval >= 2, "feedback": f"rev-{self._eval}"}
+
+
+def test_evaluator_optimizer_records_outputs_to_inter_step_channel() -> None:
+    """Producer half: a bound channel → the driver records each EO step's output in
+    execution order (gen→eval per iteration), defensively copied."""
+    ledger = _RecordingLedger()
+    channel = _FakeInterStepChannel()
+    dispatcher = _EvalOptDispatcher(accept_on_iteration=2)
+    result = _run(
+        steps=_loop_steps(),
+        dispatcher=cast(StepDispatcher, dispatcher),
+        ledger=ledger,
+        inter_step_output_channel=channel,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert [sid for sid, _ in channel.records] == [_GENERATE, _EVALUATE, _GENERATE, _EVALUATE]
+    assert channel.records[0][1] == {"draft": 1}
+    assert channel.records[1][1] == {"accepted": False, "feedback": "rev-1"}
+    assert channel.records[2][1] == {"draft": 2}
+    assert channel.records[3][1] == {"accepted": True, "feedback": "rev-2"}
+
+
+def test_evaluator_optimizer_dispatch_observes_prior_step_output() -> None:
+    """Full chain: a dispatch SEES the prior step's output through the channel — the
+    evaluate dispatch observes the generate draft; the regenerate (iteration-2
+    generate) observes the iteration-1 evaluator feedback; iteration-2 evaluate
+    observes the regenerated draft. This is the EVALUATOR_OPTIMIZER data flow the
+    §25.11 comment said was control-flow-only before B-INTERSTEP."""
+    ledger = _RecordingLedger()
+    channel = _FakeInterStepChannel()
+    dispatcher = _UpstreamObservingDispatcher(channel=channel)
+    result = _run(
+        steps=_loop_steps(),
+        dispatcher=cast(StepDispatcher, dispatcher),
+        ledger=ledger,
+        inter_step_output_channel=channel,
+    )
+    assert result.status is RunStatus.SUCCESS
+    seen = dispatcher.upstream_seen_by_step
+    assert seen[0] == (_GENERATE, None)
+    assert seen[1] == (_EVALUATE, {"draft": 1})
+    assert seen[2] == (_GENERATE, {"accepted": False, "feedback": "rev-1"})
+    assert seen[3] == (_EVALUATE, {"draft": 2})
+
+
+def test_evaluator_optimizer_no_channel_records_nothing_byte_identical() -> None:
+    """Opt-out (default): no channel bound → the driver records nothing and the EO
+    result is unchanged (byte-identical to pre-v1.59)."""
+    ledger = _RecordingLedger()
+    dispatcher = _EvalOptDispatcher(accept_on_iteration=1)
+    result = _run(steps=_loop_steps(), dispatcher=cast(StepDispatcher, dispatcher), ledger=ledger)
+    assert result.status is RunStatus.SUCCESS
+    assert result.final_state is not None
+    assert result.final_state["output"] == {"draft": 1}
+    assert len(ledger.appends) == 2

@@ -422,6 +422,19 @@ class _MutableHarnessContext:
     ``HarnessContext.managed_agents_client`` field carries the narrowed
     ``ManagedAgentsClientProtocol | None`` surface."""
 
+    inter_step_output_channel: Any = None
+    """B-INTERSTEP (R-FS-1 standalone arc; runtime spec §14.21 C-RT-29, new at
+    v1.59) — run-scoped inter-step output channel (the shared run-context the
+    dispatcher reads). Constructed + bound at stage 5 LOOP_INIT ONLY when
+    ``RuntimeConfig.inter_step_data_flow`` is True; ``None`` (default) = opt-out,
+    byte-identical to pre-v1.59 (driver records nothing, LLM dispatcher injects
+    nothing). NOT in ``_REQUIRED_FIELDS``. Typed ``Any`` on the mutable builder
+    per the same arbitrary-by-reference pattern as ``cost_record_accumulator`` (a
+    plain non-Pydantic holder — a typed container would be Pydantic-copied at
+    ``freeze()``, disconnecting the driver's records from the dispatcher's read);
+    the frozen ``HarnessContext.inter_step_output_channel`` field carries the
+    narrowed ``InterStepOutputChannel | None`` surface."""
+
     procedural_tier_snapshot_resolver: Any = None
     """R-003 — zero-arg procedural-tier resolver closure (IS spec v1.3
     §C-IS-05 §5.1). Bound at stage 5 LOOP_INIT before workflow-context
@@ -528,6 +541,7 @@ class _MutableHarnessContext:
                 else None
             ),
             procedural_tier_snapshot_resolver=self.procedural_tier_snapshot_resolver,
+            inter_step_output_channel=self.inter_step_output_channel,
         )
         self.frozen = ctx
         return ctx

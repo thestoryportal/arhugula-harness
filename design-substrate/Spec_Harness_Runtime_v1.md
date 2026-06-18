@@ -1,4 +1,28 @@
-# Specification — Harness Runtime v1.58
+# Specification — Harness Runtime v1.59
+
+## Change-note (v1.58 → v1.59)
+
+**Status posture (PROPOSED 2026-06-18).** v1.59 adds a **NEW contract §14.21 C-RT-29 `InterStepOutputChannel`** — a run-scoped, operator-opt-in **inter-step data-flow channel** (the *"shared run context the dispatcher reads"* that `harness_cp.workflow_driver` §25.11 named). The workflow driver records each completed step's output to it; the C-RT-15 LLM dispatcher injects the immediately-prior step's output into the dispatched provider payload. R-FS-1 standalone `B-*` arc **B-INTERSTEP** (`.harness/class_1_fork_b_interstep_data_flow.md`; spine ledger line 43, `design-fork-first per X-AL-3`). This closes the gap where the driver threads only **control flow** between steps for every topology — most visibly `EVALUATOR_OPTIMIZER`, where the evaluator could not *see* the generate draft nor the regenerate the evaluator's feedback.
+
+**Additive + operator-opt-in, no committed invariant sacrificed.** Gated on a NEW `RuntimeConfig.inter_step_data_flow: bool = False`; default `False` → `ctx.inter_step_output_channel is None` → the driver records nothing + the dispatcher injects nothing → **byte-identical to pre-v1.59**. The `StepDispatcher.dispatch(binding, step, *, step_context)` signature is **UNCHANGED** (the channel is read off the dispatcher's frozen construction reference, never a per-call parameter — the §25.11 "never prior outputs" property) and the C-CP-25 §25.3.3.4 *step-body-opaque-to-driver* invariant is **PRESERVED** (the driver records the dispatcher's already-produced opaque output Mapping). **No operator gate** — additive + opt-in; the mechanism is the one §25.11 itself named, resolved by landed precedent (the `CostRecordAccumulator` by-ref holder + the `cost_record_sink` dispatcher-threading + the `cp_is_wiring` `object | None` opt-in). No nameable cross-domain tension → advisor, not council (§10.9). FULL-SPEC (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`) pre-authorizes the build + the back-flow.
+
+**Genuine consumer (non-vacuity is the deliverable — advisor).** v1.59 ships the real LLM-dispatcher consumer — the prior step's output reaches the **actual provider call** (`client.messages.create(messages=...)`), proven by-execution against the provider boundary, NOT a test stub (`[[test-bypass-as-runtime-truth]]` avoided). A written-but-no-consumer channel would be a hollow carrier (cf. the deliberately-unwired `FallbackChainCostComposition`).
+
+**Genuinely-complete scope for the sequential-write topologies; remaining surfaces registered (not silent-deferred).** v1.59 covers `SINGLE_THREADED_LINEAR` (record at the `accumulated` site) + `EVALUATOR_OPTIMIZER` (the load-bearing case) genuinely + completely. Two follow-ons are explicitly registered (§14.21.7 + the spine ledger + the §25.11 driver comment): **concurrent-fan-out recording** (the 4 remaining non-linear strategies via the #648 buffered-branch drain — ADR-F2; `B-INTERSTEP-NONLINEAR`) + **cross-step resume rehydration** (composes with `B-ENGINE-OUTPUT-REPLAY` — the F2 `EntryPayload` carries only a `response_hash` digest, not the activity output; EVALUATOR_OPTIMIZER's within-loop data flow is resume-safe, cross-step *linear* data flow is resume-correct only once that arc lands).
+
+**No §5.2-hash / IS-spec / OD-spec / CP-spec contract / ADR change.** The channel is an ephemeral run-scoped carrier (the `cost_record_accumulator` precedent — not persisted, not in the C-IS-05 §5.2 hash nor any audit projection); the CP `StepExecutionContext`/`StepDispatcher` contracts are byte-unchanged (the §25.11 driver comment is refreshed in the impl source per `[[stale-carry-text-disposition]]`). No new fail class (best-effort run-scoped carrier).
+
+**Source of fix.** B-INTERSTEP fork doc + HEAD body-grounding of `workflow_driver.py` (the §25.11 EO comment + the `accumulated` site + the dispatch sites), `llm_dispatch.py` (the `_coerce_payload` payload site + the `cost_record_sink` threading precedent), `mutable_context.py` / `types.py` (the `cost_record_accumulator` / `resume_context_holder` by-ref precedents) + advisor (full-transcript) review (non-vacuity-is-the-deliverable; the resume-correctness + scope decisions).
+
+**Amendments.**
+
+| Site | Amendment shape | Substrate source |
+|---|---|---|
+| **§14.21 C-RT-29 (NEW contract)** | `InterStepOutputChannel` run-scoped opt-in inter-step data-flow channel: the carrier + `RuntimeConfig.inter_step_data_flow` flag + `HarnessContext`/`DriverContext` fields + the LLM-dispatcher injection consumer. | Fork §1/§2 |
+| **§14.21.5 invariants (NEW)** | Opt-out byte-identical; dispatch signature unchanged; §25.3.3.4 preserved; ADR-F2 single-threaded-write for the wired scope; no §5.2-hash change; genuine-consumer non-vacuity. | Fork §2/§4 |
+| **§14.21.7 (registered follow-ons)** | Concurrent-fan-out recording (`B-INTERSTEP-NONLINEAR`); cross-step resume rehydration (`B-ENGINE-OUTPUT-REPLAY`). | Fork §3 |
+
+**Scope discipline.** v1.59 adds ONLY §14.21 (the new contract); all of §9 / §14.x / §14.20 + the existing `RunResult` fields are **PRESERVED VERBATIM**. v1.58 + earlier lineage preserved verbatim per the delta-only-spec-file convention.
 
 ## Change-note (v1.57 → v1.58)
 
@@ -5372,6 +5396,66 @@ H_T-AS-8f is already **SUBSTANTIVE_RETIRED** (R-820 live proof; `.harness/substi
 - **`ManagedAgentsClientProtocol` supply mechanism.** v1.55 keeps the empty-marker `ManagedAgentsConfig`; the concrete client (e.g. `AnthropicManagedAgentsClient` over a live SDK client) is supplied at the operator-controlled bootstrap site (a `run_bootstrap(...)` parameter; a singleton accessor; etc.) — parallel to C-RT-27's hook supply. Mechanism is operator-discretion at the landing arc.
 - **`CANCELED`-as-success vs failure.** §14.20.2 step 7 maps `CANCELED` to dispatch-failure by default; a caller that treats operator-interrupt cancellation as a graceful outcome may override at the landing arc.
 - **Engine-class interaction.** Whether a `MANAGED_AGENTS` step participates in the engine-class candidate set (managed-cloud admits event-sourced-replay / save-point / reconciler / WAL) or is engine-orthogonal is implementation discretion; v1.55 treats the managed-agents dispatch as a single step body (the vendor owns intra-session durability).
+
+---
+
+## §14.21 C-RT-29 — `InterStepOutputChannel` inter-step data-flow contract (new at v1.59)
+
+**Contract surface.** A run-scoped, operator-opt-in **inter-step output channel** — the *"shared run context the dispatcher reads"* that `harness_cp.workflow_driver` §25.11 named as the home for inter-step DATA flow. The workflow driver records each completed step's output to the channel; a dispatcher that needs upstream context reads the immediately-prior step's output from it. This closes the gap where the driver threads only **control flow** between steps for every topology — most visibly in `EVALUATOR_OPTIMIZER`, where before v1.59 the evaluator never *saw* the generate draft and the regenerate never *saw* the evaluator's feedback (the §25.11 "regenerate-with-feedback" content flow was, at the driver, control-flow only). Constructed + bound at bootstrap stage 5 gated on a `RuntimeConfig` opt-in; the genuine consumer is the C-RT-15 LLM dispatcher, which injects the upstream output into the dispatched provider payload.
+
+**PRD enablement.** Makes the multi-LLM agent loop's intra-workflow data flow real: an evaluator-optimizer / pipeline step can condition on a prior step's output (the basis for genuinely effective EVALUATOR_OPTIMIZER + ORCHESTRATOR_WORKERS with real model dispatchers — composes with B1 topology + B4 per-role selection).
+
+**ADR commitment(s) honored.** ADR-F2 v1.2 (single-threaded-write — the wired scope records on the driver thread) + ADR-F1 v1.2 (provider-neutral dispatch — the injected upstream context is a provider-neutral message, not a per-provider shape).
+
+**Fork-resolution provenance.** `.harness/class_1_fork_b_interstep_data_flow.md` — Class 1, R-FS-1 standalone arc **B-INTERSTEP** (spine ledger `.harness/beyond-mvp-capability-boundary-ledger.md` line 43, `design-fork-first per X-AL-3`). **NO operator gate** — additive + operator-opt-in (default off → byte-identical); the `StepDispatcher.dispatch` signature is UNCHANGED and §25.3.3.4 *step-body-opaque-to-driver* is PRESERVED; no committed invariant sacrificed. FULL-SPEC-pre-authorized (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`).
+
+### §14.21.1 Architectural surfaces introduced
+
+**NEW carriers:**
+
+- `InterStepOutputChannel` (`harness_runtime/lifecycle/inter_step_output_channel.py`) — a plain (`__slots__`, NON-Pydantic) by-reference holder of `(step_id, output)` pairs in **append order**:
+  - `record(step_id: str, output: Mapping[str, Any]) -> None` — append a completed step's output (copied defensively).
+  - `most_recent_output() -> Mapping[str, Any] | None` — the most-recently-recorded step output (the upstream output for the next dispatch), or `None` if no step has completed.
+  - `outputs_by_step_id() -> Mapping[str, Mapping[str, Any]]` — a last-wins, insertion-ordered read-only view keyed by `step_id`.
+  - Append order — NOT a `step_id`→output dict — is load-bearing: an `EVALUATOR_OPTIMIZER` loop re-dispatches the same generate `step_id` across iterations, so a step_id-keyed dict would make `most_recent_output()` return the wrong (overwritten-in-place) value on regenerate.
+- `RuntimeConfig.inter_step_data_flow: bool = False` (§3) — the opt-in flag. Default `False` → no channel constructed → byte-identical to pre-v1.59.
+- `HarnessContext.inter_step_output_channel: InterStepOutputChannel | None = None` (§4 NEW field) — bound at stage 5 LOOP_INIT to a fresh channel when opted-in; `None` otherwise. A plain by-reference holder under `arbitrary_types_allowed` (a typed container field would be Pydantic-copied at `freeze()`, disconnecting the driver's records from the dispatcher's read — the `CostRecordAccumulator` CA #625 precedent).
+- `DriverContext.inter_step_output_channel: object | None` (CP-side Protocol field) — the driver consumes it via `getattr(ctx, ..., None)` dynamic dispatch (the `cp_is_wiring` idiom; harness-cp does NOT import the runtime holder).
+
+**NEW dispatcher read (the genuine consumer):** `RuntimeLLMDispatcher` (C-RT-15) gains an `inter_step_channel` reference, threaded at stage 5 from the SAME `ctx.inter_step_output_channel` instance (the `cost_record_sink` threading precedent). When bound + non-empty, `dispatch` prepends `most_recent_output()` to the dispatched payload's `messages` as a single provider-neutral `user` "Upstream step output:" context message. The dispatch Protocol signature is UNCHANGED — the channel is read off the dispatcher's frozen construction reference, never a per-call parameter.
+
+### §14.21.2 Recording + read discipline
+
+1. **Record (producer — the CP driver).** After a step body completes (output produced + step.boundary emitted), the driver calls `inter_step_output_channel.record(str(step.step_id), step_output)` — at the `SINGLE_THREADED_LINEAR` `accumulated` site and in the `EVALUATOR_OPTIMIZER` loop BEFORE the next dispatch. The driver records the dispatcher's already-produced **opaque output Mapping**; it never introspects or mutates the frozen `step_payload` (§25.3.3.4 preserved). When `ctx.inter_step_output_channel is None` (opt-out), the record is a no-op.
+2. **Read + inject (consumer — the LLM dispatcher).** At the payload-construction step of `RuntimeLLMDispatcher.dispatch`, when `inter_step_channel` is bound AND `most_recent_output()` is non-`None`, the dispatcher prepends the upstream output as a `user` message via `payload.model_copy(...)`. The model genuinely receives the prior step's output. When the channel is `None` (opt-out) or empty (first step), the payload is unchanged.
+3. **EVALUATOR_OPTIMIZER data flow (the load-bearing case).** generate → record(gen) → evaluate dispatch reads `most_recent_output()` = gen draft → record(eval) → regenerate reads `most_recent_output()` = eval feedback → … . The append-ordered `most_recent_output()` yields the correct upstream output across the generate-step re-dispatch.
+
+### §14.21.3 Lifecycle stage placement
+
+**Stage 5 (LOOP_INIT).** When `config.inter_step_data_flow` is `True` and `ctx.inter_step_output_channel is None`, the stage constructs `InterStepOutputChannel()`, binds it on the mutable ctx (threaded by-reference onto the frozen `HarnessContext` at `freeze()`), and threads the SAME instance into `materialize_llm_dispatcher_stage(inter_step_channel=...)`. Sibling-of the other stage-5 LOOP_INIT opt-in surfaces; the only ordering constraint is that the channel is constructed before the LLM-dispatcher factory call that threads it.
+
+### §14.21.4 Failure-mode taxonomy
+
+**No new fail class.** The channel is a best-effort run-scoped carrier — recording + reading are infallible mapping operations. A malformed upstream output is serialized with `json.dumps(..., default=str)` (no raise). The opt-out default path adds no behavior.
+
+### §14.21.5 Invariants
+
+1. **Opt-out default is byte-identical.** `inter_step_data_flow=False` → `ctx.inter_step_output_channel is None` → the driver records nothing AND the LLM dispatcher injects nothing. Pre-v1.59 behavior is preserved verbatim.
+2. **Dispatch Protocol signature UNCHANGED.** `StepDispatcher.dispatch(binding, step, *, step_context)` is byte-unchanged; the channel is a run-scoped surface read off the dispatcher's construction reference, never a per-call parameter (the §25.11 "never prior outputs" property).
+3. **Step body opaque to the driver (§25.3.3.4 preserved).** The driver records the dispatcher's already-produced output Mapping; it does not introspect or mutate the frozen `step_payload`.
+4. **Single-threaded-write (ADR-F2) for the wired scope.** `SINGLE_THREADED_LINEAR` + `EVALUATOR_OPTIMIZER` record on the driver thread (sequential) — no concurrent writes to the shared holder. Concurrent-sibling-fan-out recording is a registered follow-on (§14.21.7) precisely because it requires the buffered-branch drain path.
+5. **No §5.2-hash / IS-spec change.** The channel is an ephemeral run-scoped carrier (the `cost_record_accumulator` precedent), NOT persisted state — it is not in the C-IS-05 §5.2 entry hash nor any audit projection.
+6. **Genuine consumer, not a hollow carrier.** v1.59 ships the real LLM-dispatcher consumer (the prior output reaches the actual provider call), proven by-execution against the provider boundary — the channel is non-vacuous on landing (`[[r-cxa-seam-wiring-is-producer-discovery]]` / advisor's *non-vacuity-is-the-deliverable*).
+
+### §14.21.6 X-AL-2 retirement implications
+
+No substitution row is retired by C-RT-29 — inter-step data flow is a new H_T capability, not an H_E substitution surface. It composes with future arcs (`B-ENGINE-OUTPUT-REPLAY` for resume-correct cross-step data flow; `B-INTERSTEP-NONLINEAR` for the concurrent-fan-out topologies) per §14.21.7.
+
+### §14.21.7 Deferred to implementation discretion / registered follow-ons
+
+- **Message shape of the injected upstream context.** v1.59 prepends a single `user` "Upstream step output:" message carrying the JSON-serialized prior output. A richer / per-provider role mapping, or a per-step manifest-declared data-dependency selecting *which* prior outputs feed *which* step (vs. the v1.59 "immediately-prior output" semantic), is implementation discretion at a follow-on arc.
+- **Concurrent-fan-out recording (registered follow-on `B-INTERSTEP-NONLINEAR`).** The 4 remaining non-linear strategies (PARALLELIZATION siblings, ORCHESTRATOR_WORKERS, DECENTRALIZED_HANDOFF, HIERARCHICAL_DELEGATION) record via the #648 buffered-branch drain path (ADR-F2 — concurrent sibling writes cannot share the holder directly). The genuine inter-step *reads* in these topologies are sequential (orchestrator synthesis post-join), so the channel composes once recording lands.
+- **Cross-step resume rehydration (composes with `B-ENGINE-OUTPUT-REPLAY`).** On a skip-prefix resume the replayed prefix is NOT re-dispatched, so a downstream cross-step consumer reads an empty channel (fresh-run ≠ resumed-run). Closing it needs the output-carrying event-history substrate (the F2 `EntryPayload` carries only a `response_hash` digest today) = the `B-ENGINE-OUTPUT-REPLAY` arc. EVALUATOR_OPTIMIZER's data flow lives *inside* one driver invocation's loop (atomic — no resume boundary crossed), so the wired consumer is resume-safe; cross-step *linear* data flow is resume-correct only once `B-ENGINE-OUTPUT-REPLAY` lands.
 
 ---
 
