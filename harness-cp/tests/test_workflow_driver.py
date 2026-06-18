@@ -48,6 +48,7 @@ from harness_cp.cross_family_fallback_chain import (
     ProviderFamily,
 )
 from harness_cp.engine_class import EngineClass
+from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
@@ -66,6 +67,7 @@ from harness_cp.workflow_driver_errors import (
 from harness_cp.workflow_driver_types import (
     RunResult,
     RunStatus,
+    StepExecutionContext,
     StepKind,
     WorkflowStep,
 )
@@ -1596,3 +1598,95 @@ def test_per_step_role_override_threads_onto_linear_step_context() -> None:
     # (branch_index, agent_role) per dispatched step: linear → branch_index None
     # throughout; agent_role is the override on step-0, None on step-1.
     assert probe.observed == [(None, role), (None, None)]
+
+
+# ---------------------------------------------------------------------------
+# R-FS-1 B-HITL-PLACEMENT-PER-STEP-PRODUCER — the driver composes
+# `StepExecutionContext.hitl_placements` from `manifest_entry.hitl_placements`
+# at the per-step dispatch site so the runtime wrap-time HITL gate composer
+# (runtime §14.8.2 step 1) fires per-step in production. Tested on both
+# construction mechanisms: SINGLE_THREADED_LINEAR (direct construction) and
+# DECENTRALIZED_HANDOFF (stage context inherits via compose_branch_child_context's
+# model_copy — the mechanism shared by every branch-based topology).
+# ---------------------------------------------------------------------------
+
+
+class _StepContextCapturingDispatcher:
+    """Records the `step_context` each dispatched step receives."""
+
+    def __init__(self) -> None:
+        self.contexts: list[StepExecutionContext] = []
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
+    ) -> dict[str, Any]:
+        self.contexts.append(step_context)
+        return {"step_id": str(step.step_id), "echoed_payload": dict(step.step_payload)}
+
+
+def _manifest_with_placements(
+    placements: tuple[HITLPlacement, ...],
+    *,
+    topology_pattern: TopologyPattern = TopologyPattern.SINGLE_THREADED_LINEAR,
+) -> WorkflowManifestEntry:
+    return _manifest(topology_pattern=topology_pattern).model_copy(
+        update={"hitl_placements": placements}
+    )
+
+
+@pytest.mark.parametrize(
+    "topology_pattern",
+    [TopologyPattern.SINGLE_THREADED_LINEAR, TopologyPattern.DECENTRALIZED_HANDOFF],
+)
+def test_driver_surfaces_manifest_placements_onto_step_context(
+    topology_pattern: TopologyPattern,
+) -> None:
+    """The dispatched step's `step_context.hitl_placements` carries the manifest's
+    declared placements — on the linear path (direct construction) AND the
+    decentralized-handoff path (inherited via compose_branch_child_context)."""
+    placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    manifest = _manifest_with_placements((placement,), topology_pattern=topology_pattern)
+    ctx, _ledger, _emitter = _ctx()
+    dispatcher = _StepContextCapturingDispatcher()
+    result = execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert dispatcher.contexts, "the step was dispatched"
+    for sc in dispatcher.contexts:
+        assert sc.hitl_placements == (placement,)
+
+
+@pytest.mark.parametrize(
+    "topology_pattern",
+    [TopologyPattern.SINGLE_THREADED_LINEAR, TopologyPattern.DECENTRALIZED_HANDOFF],
+)
+def test_driver_empty_manifest_placements_yields_empty_step_context(
+    topology_pattern: TopologyPattern,
+) -> None:
+    """Negative control: a manifest with NO placements → `step_context` carries
+    the `()` default → the composer short-circuits (byte-identical to pre-arc)."""
+    manifest = _manifest_with_placements((), topology_pattern=topology_pattern)
+    ctx, _ledger, _emitter = _ctx()
+    dispatcher = _StepContextCapturingDispatcher()
+    result = execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert dispatcher.contexts
+    for sc in dispatcher.contexts:
+        assert sc.hitl_placements == ()

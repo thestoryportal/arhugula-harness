@@ -34,7 +34,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from harness_core.identity import EntryID
 from pydantic import BaseModel, ConfigDict
@@ -42,7 +42,14 @@ from pydantic import BaseModel, ConfigDict
 from harness_cp.handoff_context import ProposedAction
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.topology_pattern import CascadePolicy
-from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
+
+if TYPE_CHECKING:
+    # Annotation-only (the `hitl_gate` signature). Kept under TYPE_CHECKING so
+    # `workflow_driver_types` can import `HITLPlacement` from here at runtime for
+    # the `StepExecutionContext.hitl_placements` field (R-FS-1
+    # `B-HITL-PLACEMENT-PER-STEP-PRODUCER`) without an import cycle — these names
+    # are never evaluated at runtime (`from __future__ import annotations`).
+    from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 
 
 class HITLPlacementKind(StrEnum):

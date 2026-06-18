@@ -38,6 +38,7 @@ from pydantic import BaseModel, ConfigDict
 
 from harness_cp.cp_shared_types import AgentRole
 from harness_cp.gate_level_rule import GateLevel
+from harness_cp.hitl_placement import HITLPlacement
 from harness_cp.pause_resume_protocol_types import PauseSnapshot
 
 
@@ -254,6 +255,26 @@ class StepExecutionContext(BaseModel):
     step_index: int
     branch_index: int | None = None
     agent_role: AgentRole | None = None
+    hitl_placements: tuple[HITLPlacement, ...] = ()
+    """The workflow's declared HITL placements (C-CP-17 §17.3
+    `WorkflowManifestEntry.hitl_placements`), surfaced onto the per-step
+    execution context at workflow-binding time so the runtime wrap-time HITL
+    gate composer (runtime §14.8.2 step 1) can read them per-step.
+
+    R-FS-1 `B-HITL-PLACEMENT-PER-STEP-PRODUCER` addition. The driver composes
+    this from `manifest_entry.hitl_placements` at every per-step
+    `StepExecutionContext` construction (linear + the 5 non-linear strategies;
+    branch children inherit it via `compose_branch_child_context`'s
+    `model_copy`). Default `()` → no placement declared → the composer
+    short-circuits to the inner dispatcher (byte-identical to pre-arc; a gate
+    fires only when the operator declares a placement in the manifest).
+
+    Workflow-scoped (identical for every step of a workflow), NOT a per-step
+    override — placements are workflow config per C-CP-25 §25.2, so this rides
+    `StepExecutionContext` (the per-step execution metadata), NOT
+    `StepEffectiveBinding` (whose `model_dump` feeds the per-step override
+    outcome-hash). The per-step `StepOverride.hitl_placement` override fold is
+    the separate follow-on arc `B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD`."""
 
 
 def compose_branch_child_context(

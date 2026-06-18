@@ -1132,8 +1132,17 @@ class RuntimeHITLGateComposer:
         if resume_state is not None and resume_state.hitl_response is not None:
             return await self._dispatch_inner(binding, step, step_context=step_context)
 
-        # --- Step 1: Read placement triggers from step ---------------------
-        placements: tuple[HITLPlacement, ...] = getattr(step, "hitl_placements", ())
+        # --- Step 1: Read placement triggers (runtime spec §14.8.2 step 1) -----
+        # Canonical surface is `step_context.hitl_placements` — the workflow's
+        # declared C-CP-17 §17.3 placements surfaced onto the per-step
+        # `StepExecutionContext` at workflow-binding time by the CP driver
+        # (R-FS-1 `B-HITL-PLACEMENT-PER-STEP-PRODUCER`). `step` (frozen 3-field
+        # `WorkflowStep`) carries workflow *body*, not config, so it cannot hold
+        # placements; the `getattr(step, ...)` fallback preserves the existing
+        # `_StepWithPlacements` test proxies (it is never populated in production).
+        placements: tuple[HITLPlacement, ...] = getattr(
+            step_context, "hitl_placements", ()
+        ) or getattr(step, "hitl_placements", ())
         if not placements:
             return await self._dispatch_inner(binding, step, step_context=step_context)
 

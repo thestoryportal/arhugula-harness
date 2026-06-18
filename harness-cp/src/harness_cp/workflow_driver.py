@@ -2011,6 +2011,10 @@ def _execute_workflow_body(
             workflow_id=manifest_entry.workflow_id,
             parent_action_id=(f"workflow:{manifest_entry.workflow_id}:step:{step_index}"),
             parent_gate_level=resolve_parent_gate_level(manifest_entry),
+            # B-HITL-PLACEMENT-PER-STEP-PRODUCER — surface the workflow's declared
+            # placements onto the per-step context so the wrap-time HITL composer
+            # (runtime §14.8.2 step 1) fires per-step. Default () → no gate.
+            hitl_placements=manifest_entry.hitl_placements,
             parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
             parent_actor=ctx.ledger_writer.actor,
             parent_entry_hash="",
@@ -3189,6 +3193,9 @@ def _execute_parallelization(
         workflow_id=workflow_id,
         parent_action_id=_parallelization_fanout_action_id(workflow_id),
         parent_gate_level=resolve_parent_gate_level(manifest_entry),
+        # B-HITL-PLACEMENT-PER-STEP-PRODUCER — branch children inherit this via
+        # compose_branch_child_context's model_copy (covers fan-out workers).
+        hitl_placements=manifest_entry.hitl_placements,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
         parent_actor=ctx.ledger_writer.actor,
         parent_entry_hash="",
@@ -3622,6 +3629,8 @@ def _execute_evaluator_optimizer(
             workflow_id=workflow_id,
             parent_action_id=f"workflow:{workflow_id}:step:{entry_index}",
             parent_gate_level=resolve_parent_gate_level(manifest_entry),
+            # B-HITL-PLACEMENT-PER-STEP-PRODUCER — EVALUATOR_OPTIMIZER per-step.
+            hitl_placements=manifest_entry.hitl_placements,
             parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
             parent_actor=ctx.ledger_writer.actor,
             parent_entry_hash="",
@@ -3919,6 +3928,9 @@ def _execute_orchestrator_workers(
         workflow_id=workflow_id,
         parent_action_id=orchestrator_action_id,
         parent_gate_level=resolve_parent_gate_level(manifest_entry),
+        # B-HITL-PLACEMENT-PER-STEP-PRODUCER — orchestrator step + workers
+        # (workers inherit via compose_branch_child_context's model_copy).
+        hitl_placements=manifest_entry.hitl_placements,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
         parent_actor=ctx.ledger_writer.actor,
         parent_entry_hash="",
@@ -4644,6 +4656,9 @@ def _execute_decentralized_handoff(
             workflow_id=workflow_id,
             parent_action_id=prev_action_id,
             parent_gate_level=resolve_parent_gate_level(manifest_entry),
+            # B-HITL-PLACEMENT-PER-STEP-PRODUCER — hierarchical/handoff stage ctx
+            # (stage_ctx inherits via compose_branch_child_context's model_copy).
+            hitl_placements=manifest_entry.hitl_placements,
             parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
             parent_actor=ctx.ledger_writer.actor,
             parent_entry_hash="",
