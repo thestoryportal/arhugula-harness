@@ -399,6 +399,43 @@ async def test_dispatch_empty_step_context_placements_delegates_to_inner(
     assert audit.appends == []
 
 
+@pytest.mark.asyncio
+async def test_dispatch_declared_placement_on_excluded_cell_raises_sanely(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """A declared placement on an EXCLUDED `(persona_tier, engine_class)` cell
+    raises the typed `HITLCellExcludedError` (NOT a crash) — the spec-mandated
+    C-CP-18 §18.1 exclusion, which the driver surfaces as a FAILED RunResult.
+
+    This production path becomes REACHABLE only with the producer (before the
+    producer no wrap-time gate fired, so `matrix_cell_for` was never reached on
+    the real path). `(TEAM_BINDING, PURE_PATTERN_NO_ENGINE)` is EXCLUDED per
+    C-CP-07 §7.2 / C-CP-18 §18.1. The "byte-identical" claim holds for EMPTY
+    placements; a DECLARED placement activates real gate behavior — incl. this
+    raise — which this test confirms is sane (typed, not a crash)."""
+    from harness_cp.cp_shared_types import ModelBinding
+    from harness_cp.engine_class import EngineClass
+    from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLCellExcludedError
+
+    provider, _ = tracer_provider
+    composer = _make_composer(
+        inner=_MockInnerDispatcher(),
+        surface=_MockAskUserQuestionSurface([]),  # never reached — raise precedes 4f
+        tracer_provider=provider,
+    )
+    excluded_binding = StepEffectiveBinding(
+        step_id="step-excluded",
+        model_binding=ModelBinding(provider="anthropic", model="claude-test-1"),
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        override_applied=False,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    ctx = _make_step_context(placements=(HITLPlacement(position=HITLPlacementKind.PRE_ACTION),))
+    with pytest.raises(HITLCellExcludedError):
+        await composer.dispatch(cast(Any, excluded_binding), _make_plain_step(), step_context=ctx)
+
+
 # ---------------------------------------------------------------------------
 # AC #4 — VALIDATOR_ESCALATION support at Reading B v1.22
 # ---------------------------------------------------------------------------

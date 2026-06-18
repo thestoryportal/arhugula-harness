@@ -297,6 +297,73 @@ def _build_workflow_with_hitl_placement(
     return _Workflow()
 
 
+def _build_workflow_via_manifest_placement(
+    step_dispatchers_override: Any,
+) -> Any:
+    """R-FS-1 B-HITL-PLACEMENT-PER-STEP-PRODUCER — the full-chain witness builder.
+
+    Unlike `_build_workflow_with_hitl_placement` (which attaches placements to the
+    STEP via the `_StepWithPlacements` proxy), this declares the placement at the
+    **WORKFLOW manifest** (`hitl_placements=(PRE_ACTION,)`) and dispatches a
+    **PLAIN `WorkflowStep`** (no proxy). The gate therefore fires ONLY if the CP
+    driver surfaces `manifest_entry.hitl_placements` onto `step_context` AND the
+    composer reads it — i.e. it witnesses producer → step_context → real composer
+    → gate in ONE real `execute_workflow` run (the chain the producer arc exists
+    to close; the proxy builder would pass even if the producer were broken).
+
+    `(SOLO_DEVELOPER, PURE_PATTERN_NO_ENGINE)` is a NON-excluded cell per CP §18.1,
+    so the gate composes cleanly (not the HITLCellExcludedError path).
+    """
+    plain_step = WorkflowStep(
+        step_id=StepID("step-0"),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={"index": 0},
+    )
+
+    class _Workflow:
+        @property
+        def workflow_id(self) -> str:
+            return "wf-b-hitl-placement-producer-e2e"
+
+        @property
+        def workload_class(self) -> WorkloadClass:
+            return _WORKLOAD
+
+        @property
+        def manifest_entry(self) -> WorkflowManifestEntry:
+            return WorkflowManifestEntry(
+                workflow_id="wf-b-hitl-placement-producer-e2e",
+                workload_class=_WORKLOAD,
+                persona_tier=PersonaTier.SOLO_DEVELOPER,
+                engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+                topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+                layer_budgets=(),
+                fallback_chain=_CHAIN,
+                # The producer's source — declared at the WORKFLOW manifest, NOT
+                # attached to the step. The driver surfaces it onto step_context.
+                hitl_placements=(HITLPlacement(position=HITLPlacementKind.PRE_ACTION),),
+                per_step_overrides={},
+            )
+
+        @property
+        def steps(self) -> Sequence[WorkflowStep]:
+            return (plain_step,)
+
+        @property
+        def step_dispatcher(self) -> _CpStepDispatcher:
+            return cast(_CpStepDispatcher, step_dispatchers_override)
+
+        @property
+        def step_dispatchers(self) -> Any:
+            return step_dispatchers_override
+
+        @property
+        def default_model_binding(self) -> ModelBinding:
+            return ModelBinding(provider="anthropic", model="claude-haiku-4-5")
+
+    return _Workflow()
+
+
 def _make_test_step_dispatchers_override(
     ctx: HarnessContext,
     elicit_observer: list[int],
@@ -478,6 +545,97 @@ async def test_e2e_run_workflow_elicit_round_trip(
             f"expected ≥1 audit-ledger entry from composer step 4h "
             f"4-substep audit-write on PRE_ACTION matching placement; "
             f"saw {len(audit_entries)}"
+        )
+    finally:
+        ctx.mcp_server._state.pop("_harness_ctx", None)
+        ctx.mcp_server.workflow_registry.pop(workflow.workflow_id, None)
+        await shutdown(ctx, timeout=5.0)
+
+
+@pytest.mark.asyncio
+async def test_e2e_manifest_placement_fires_gate_via_producer(
+    tmp_path: Path,
+    _patched_runtime: dict[str, Any],
+) -> None:
+    """R-FS-1 B-HITL-PLACEMENT-PER-STEP-PRODUCER — the FULL-CHAIN witness.
+
+    The headline claim ("the wrap-time HITL gates fire in production") requires
+    ONE run where a manifest-declared placement flows through the real
+    `execute_workflow` → real `RuntimeHITLGateComposer` → a fired gate. The
+    producer test (driver → step_context, capturing dispatcher) and the composer
+    test (hand-built step_context, bare binding) each prove a half; this test
+    composes them: a PLAIN `WorkflowStep` + a WORKFLOW-manifest `hitl_placements`
+    → the gate fires (`ctx.elicit` invoked) ONLY because the CP driver surfaced
+    the manifest placement onto `step_context` and the composer read it. (The
+    proxy-based `test_e2e_run_workflow_elicit_round_trip` would pass even if the
+    producer were broken — it bypasses the producer via the step proxy.)
+    """
+    config = _config(tmp_path)
+    ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
+    assert ctx.mcp_server is not None
+
+    elicit_call_count: list[int] = [0]
+    received_messages: list[str] = []
+
+    async def _canned_elicitation_callback(
+        request_context: Any,
+        params: Any,
+    ) -> ElicitResult:
+        _ = request_context
+        elicit_call_count[0] += 1
+        received_messages.append(params.message)
+        return ElicitResult(
+            action="accept",
+            content={
+                "response": HITLResponse.APPROVE.value,
+                "edited_proposal": None,
+                "response_text": None,
+                "rejection_reason": None,
+            },
+        )
+
+    # NOTE: the workflow declares the placement at the MANIFEST + dispatches a
+    # PLAIN WorkflowStep — no `_StepWithPlacements` proxy. The gate fires only via
+    # the producer (driver → step_context) + composer read.
+    workflow = _build_workflow_via_manifest_placement(
+        _make_test_step_dispatchers_override(ctx, elicit_call_count)
+    )
+    ctx.mcp_server._state["_harness_ctx"] = ctx
+    ctx.mcp_server.workflow_registry[workflow.workflow_id] = workflow
+
+    try:
+        async with create_connected_server_and_client_session(
+            ctx.mcp_server.server,
+            elicitation_callback=_canned_elicitation_callback,
+            raise_exceptions=True,
+        ) as session:
+            tool_result = await session.call_tool(
+                "run_workflow", {"workflow_id": workflow.workflow_id}
+            )
+
+        assert tool_result.isError is False, f"run_workflow tool error: {tool_result.content!r}"
+        # The load-bearing assertion: the gate FIRED via the manifest→driver→
+        # step_context→composer producer chain (NOT a step proxy).
+        assert elicit_call_count[0] == 1, (
+            f"expected exactly 1 elicit call from the manifest-declared "
+            f"PRE_ACTION placement surfaced via the producer; saw "
+            f"{elicit_call_count[0]} — the producer chain did not fire the gate"
+        )
+        assert len(received_messages) == 1
+        assert "HITL gate at pre-action" in received_messages[0]
+
+        import json
+
+        payload_text = tool_result.content[0].text  # type: ignore[union-attr]
+        cp_result_dict = json.loads(payload_text)
+        assert cp_result_dict["status"] == "success"
+        assert cp_result_dict["workflow_id"] == workflow.workflow_id
+
+        # The canonical HITL spans emitted (gate genuinely composed, not a stub).
+        span_exporter = _patched_runtime["span_exporter"]
+        hitl_span_names = {s.name for s in span_exporter.get_finished_spans() if "hitl" in s.name}
+        assert any("gate.evaluated" in n for n in hitl_span_names), (
+            f"missing hitl.gate.evaluated span; got {hitl_span_names}"
         )
     finally:
         ctx.mcp_server._state.pop("_harness_ctx", None)
