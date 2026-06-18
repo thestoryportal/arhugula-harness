@@ -167,12 +167,26 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
     done = rf.get("done", [])
     # R-FS-1 full-spec build progress = completed arcs / (completed + remaining child arcs).
     # This is the real "is the build progressing?" headline — NOT the substitution metric.
+    # Standalone B-* arcs carry their own 4-way status (§5 of the arc-and-unit map): `closed`
+    # (built + merged), `remaining` (build-ready), `gated` (blocked on a dependency), `resolved`
+    # (built inside the frozen order — NOT a separate post-frozen arc, so excluded from the
+    # closed/remaining tallies to avoid double-counting the frozen B6 Slice 2).
+    sa_closed = sum(1 for s in standalone if s.get("status") == "closed")
+    sa_remaining = sum(1 for s in standalone if s.get("status") == "remaining")
+    sa_gated = sum(1 for s in standalone if s.get("status") == "gated")
+    sa_resolved = sum(1 for s in standalone if s.get("status") == "resolved")
     rfs1 = {
         "done": done,
         "done_count": len(done),
         "remaining_count": len(remaining),
         "total": len(done) + len(remaining),
         "standalone_count": len(standalone),
+        "standalone_closed": sa_closed,
+        "standalone_remaining": sa_remaining,
+        "standalone_gated": sa_gated,
+        "standalone_resolved": sa_resolved,
+        # build-ready denominator = closed + remaining (excludes gated + frozen-resolved).
+        "standalone_buildable": sa_closed + sa_remaining,
     }
     # waffle-grid breakdown (ui-ux-pro-max chart rec: fraction-of-whole filled).
     # `retired` + the non-retired split by state → total 54 (derived above; R-600).
@@ -479,14 +493,27 @@ def parse_arc_unit_map(md: str) -> dict:
     arcs.sort(key=lambda a: a["position"])
     # standalone B-* rows live only in the §5 table; the `B-<ID>` shape is unique in the
     # doc (the at-a-glance table uses bare tags like `B1`), so match across the whole file.
-    standalone = [
-        {"id": s.group(1).strip(), "axis": s.group(2).strip(), "shape": s.group(3).strip()}
-        for s in re.finditer(
-            r"^\|\s*(B-[A-Z0-9-]+)\s*\|\s*([^|]+?)\s*\|\s*(.+?)\s*\|\s*$",
-            md,
-            re.MULTILINE,
+    # §5 carries a 4-column row: | id | Status | Owner-axis | What |. The Status cell's leading
+    # keyword (closed / remaining / gated / resolved) is the machine-readable status; the full
+    # cell text (e.g. "closed · #640") is the human-facing chip label.
+    standalone = []
+    for s in re.finditer(
+        r"^\|\s*(B-[A-Z0-9-]+)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*(.+?)\s*\|\s*$",
+        md,
+        re.MULTILINE,
+    ):
+        status_detail = s.group(2).strip()
+        keyword = re.sub(r"[^a-z]", "", status_detail.lower().split()[0]) if status_detail else ""
+        status = keyword if keyword in {"closed", "remaining", "gated", "resolved"} else "remaining"
+        standalone.append(
+            {
+                "id": s.group(1).strip(),
+                "status": status,
+                "status_detail": status_detail,
+                "axis": s.group(3).strip(),
+                "shape": s.group(4).strip(),
+            }
         )
-    ]
     return {"arcs": arcs, "standalone": standalone}
 
 
@@ -525,17 +552,20 @@ def assert_remaining_nonempty(actions: list[dict], dashboard: dict) -> None:
 
     Once the FROZEN order completes (all 11 child arcs ✅), R-FS-1 stays ACTIVE while the
     standalone `B-*` build arcs remain (full-spec, nothing-deferred) — so remaining work is
-    non-empty via `standalone` even when `child_arcs` is zero. Only an empty BOTH is drift."""
+    non-empty via the OPEN (remaining/gated) standalone arcs even when `child_arcs` is zero.
+    `closed`/`resolved` standalone arcs do NOT count as remaining work — guarding on a merely
+    non-empty `standalone` list would mask drift once every standalone arc is built."""
     rfs1_active = any(a.get("id") == "R-FS-1" and a.get("status") == "ACTIVE" for a in actions)
     remaining = dashboard.get("remaining_forward", {})
     child_arcs = remaining.get("child_arcs", [])
     standalone = remaining.get("standalone", [])
-    if rfs1_active and not child_arcs and not standalone:
+    open_standalone = [s for s in standalone if s.get("status") in ("remaining", "gated")]
+    if rfs1_active and not child_arcs and not open_standalone:
         raise RuntimeError(
-            "FATAL: R-FS-1 is ACTIVE but '## Remaining forward work' parsed zero child arcs AND "
-            "zero standalone arcs in .harness/r-fs-1-arc-and-unit-map.md -- the remaining-work "
-            "source has drifted (check the section header + table format). Refusing to render an "
-            "empty remaining-work panel."
+            "FATAL: R-FS-1 is ACTIVE but the arc-and-unit map parsed zero remaining frozen child "
+            "arcs AND zero OPEN (remaining/gated) standalone arcs in "
+            ".harness/r-fs-1-arc-and-unit-map.md -- the remaining-work source has drifted (check "
+            "the §5 table format + Status column). Refusing to render an empty remaining-work panel."
         )
 
 
@@ -1379,8 +1409,8 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
   document.getElementById("closure").innerHTML = `
     <div class="panel lit" style="margin-bottom:20px">
       <div class="k">R-FS-1 full-spec build — the live frontier</div>
-      <div class="big">${{rf1.done_count||0}}<span class="u"> / ${{rf1.total||0}} arcs done · +${{rf1.standalone_count||0}} standalone</span></div>
-      <div class="sub"><strong>${{rf1.remaining_count||0}}</strong> child arcs remain in the frozen build order; <strong>${{rf1.standalone_count||0}}</strong> standalone design-fork-first arcs remain. See the <strong>arc &amp; unit map</strong> below for what every arc and atomic unit does, in plain language. The substitution-retirement closure below is a <em>separate, historical Phase-8 metric</em> — not full-spec completion.</div>
+      <div class="big">${{rf1.done_count||0}}<span class="u"> / ${{rf1.total||0}} frozen arcs done · ${{rf1.standalone_closed||0}}/${{rf1.standalone_buildable||0}} standalone built</span></div>
+      <div class="sub">The frozen build order is complete (<strong>${{rf1.done_count||0}}/${{rf1.total||0}}</strong>). Standalone design-fork-first arcs: <strong>${{rf1.standalone_closed||0}} closed</strong> · <strong>${{rf1.standalone_remaining||0}} remaining</strong> · <strong>${{rf1.standalone_gated||0}} gated</strong>. See the <strong>arc &amp; unit map</strong> below for what every arc and atomic unit does, in plain language — §5 lists each standalone arc with its status. The substitution-retirement closure below is a <em>separate, historical Phase-8 metric</em> — not full-spec completion.</div>
       <div class="arcstrip">
         ${{(rf1.done||[]).map(t=>`<span class="arc done">${{esc(t)}} ✓</span>`).join("")}}
         <span class="arcsep">→</span>
@@ -1457,8 +1487,11 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
         </div>
       </details>`;
   }};
+  // standalone status → chip class (reuse the existing chip palette).
+  const SCHIP = {{ closed:"closed", remaining:"queued", gated:"blocked", resolved:"done" }};
+  const sCount = (st) => standalone.filter(s => s.status === st).length;
   const standaloneCards = standalone.map(s => `
-    <div class="standrow"><span class="atag">${{esc(s.id)}}</span><span class="aclu">${{esc(s.axis)}}</span><span class="sshape">${{bold(s.shape)}}</span></div>`).join("");
+    <div class="standrow"><span class="atag">${{esc(s.id)}}</span><span class="chip ${{SCHIP[s.status]||'queued'}}">${{esc(s.status_detail||s.status)}}</span><span class="aclu">${{esc(s.axis)}}</span><span class="sshape">${{bold(s.shape)}}</span></div>`).join("");
   document.getElementById("arc-map").innerHTML = `
     <div class="ahead">
       <div class="label">Arc &amp; unit map — what every arc and atomic unit does for the harness</div>
@@ -1466,7 +1499,7 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
     </div>
     <div class="arccards">${{arcs.map(card).join("")}}</div>
     <div class="panel" style="margin-top:18px">
-      <div class="label" style="margin-bottom:10px">Standalone forward arcs (${{standalone.length}}) — design-fork-first, surfaced during impl, sequenced as follow-on child arcs</div>
+      <div class="label" style="margin-bottom:10px">Standalone forward arcs — <strong>${{sCount('closed')}} closed</strong> · <strong>${{sCount('remaining')}} remaining</strong> · <strong>${{sCount('gated')}} gated</strong> · <strong>${{sCount('resolved')}} resolved</strong> · design-fork-first, surfaced during impl</div>
       ${{standaloneCards}}
     </div>`;
 }})();

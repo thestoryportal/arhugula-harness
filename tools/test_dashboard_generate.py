@@ -107,10 +107,61 @@ def test_remaining_forward_derives_standalone_arcs():
     generate = _load_generate_module()
     rf = generate.parse_remaining_forward(_real_arc_map_md())
 
-    ids = {arc["id"] for arc in rf["standalone"]}
-    # the design-fork-first standalone arcs surfaced during impl (R-FS-1's continuing work)
-    assert {"B-INTERSTEP", "B-L2-EMBEDDING-ACTIVATION", "B-TOOL-GATE", "B-EFFECT-FENCE"} <= ids
-    assert len(rf["standalone"]) == 9
+    sa = rf["standalone"]
+    by_id = {arc["id"]: arc for arc in sa}
+    # §5 is the COMPLETE standalone enumeration (both families) with 4-way status.
+    assert len(sa) == 16
+    # design-fork-first "remaining" arcs surfaced during impl (R-FS-1's continuing work)
+    family1 = {"B-INTERSTEP", "B-L2-EMBEDDING-ACTIVATION", "B-TOOL-GATE", "B-EFFECT-FENCE"}
+    assert family1 <= set(by_id)
+    assert by_id["B-INTERSTEP"]["status"] == "remaining"
+    # closed standalone arcs (built + merged, each its own PR) carry status="closed" + the PR #.
+    for cid in (
+        "B-MCP-HOST-REMOTE-TRANSPORT",
+        "B-MEMORY-SURFACE-BACKEND-IMPLS",
+        "B-COST-DISCRIMINATOR-TAXONOMY",
+    ):
+        assert by_id[cid]["status"] == "closed", cid
+    assert "#640" in by_id["B-MCP-HOST-REMOTE-TRANSPORT"]["status_detail"]
+    # B-TAIL is build-authorized but GATED on the R-420/R-421 collector arc.
+    assert by_id["B-TAIL-CONDITIONAL-SAMPLING"]["status"] == "gated"
+    # Both `resolved` arcs were settled INSIDE the frozen order -> NOT separate post-frozen
+    # standalones (excluded from the closed/remaining tallies, never double-counted): B-PER-TOOL
+    # built as B6 Slice 2 (#637); B-PER-DISPATCH-DRIVER-PRECISION foreclosed N/A by B6 Option A.
+    assert by_id["B-PER-TOOL-SANDBOX-TIER"]["status"] == "resolved"
+    assert by_id["B-PER-DISPATCH-DRIVER-PRECISION"]["status"] == "resolved"
+    # 4-way bucket counts: 3 closed / 10 remaining / 1 gated / 2 resolved.
+    statuses = [arc["status"] for arc in sa]
+    assert statuses.count("closed") == 3
+    assert statuses.count("remaining") == 10
+    assert statuses.count("gated") == 1
+    assert statuses.count("resolved") == 2
+
+
+def test_compute_closure_counts_standalone_by_status():
+    # The rfs1 headline carries the standalone status breakdown the masthead renders:
+    # closed/remaining/gated/resolved, with `standalone_buildable` = closed + remaining
+    # (excludes gated + frozen-resolved so the frozen B6 Slice 2 isn't double-counted).
+    generate = _load_generate_module()
+    dashboard = {
+        "retirement": {},
+        "remaining_forward": {
+            "child_arcs": [],
+            "standalone": [
+                {"id": "B-A", "status": "closed"},
+                {"id": "B-B", "status": "closed"},
+                {"id": "B-C", "status": "remaining"},
+                {"id": "B-D", "status": "gated"},
+                {"id": "B-E", "status": "resolved"},
+            ],
+        },
+    }
+    rfs1 = generate.compute_closure([], dashboard)["rfs1"]
+    assert rfs1["standalone_closed"] == 2
+    assert rfs1["standalone_remaining"] == 1
+    assert rfs1["standalone_gated"] == 1
+    assert rfs1["standalone_resolved"] == 1
+    assert rfs1["standalone_buildable"] == 3
 
 
 def test_remaining_excludes_closed_and_done_arcs():
@@ -135,10 +186,32 @@ def test_assert_remaining_nonempty_raises_on_silent_empty():
 
     import pytest
 
-    with pytest.raises(RuntimeError, match="Remaining forward work"):
+    with pytest.raises(RuntimeError, match="remaining-work source has drifted"):
         generate.assert_remaining_nonempty(actions, {"remaining_forward": {"child_arcs": []}})
 
-    # populated -> no raise
+    # standalone arcs that are all closed/resolved are NOT remaining work -> still raises
+    # (guarding on a merely non-empty list would mask drift once everything is built).
+    with pytest.raises(RuntimeError, match="remaining-work source has drifted"):
+        generate.assert_remaining_nonempty(
+            actions,
+            {
+                "remaining_forward": {
+                    "child_arcs": [],
+                    "standalone": [
+                        {"id": "B-X", "status": "closed"},
+                        {"id": "B-Y", "status": "resolved"},
+                    ],
+                }
+            },
+        )
+
+    # an OPEN (remaining/gated) standalone arc keeps the panel non-empty -> no raise
+    generate.assert_remaining_nonempty(
+        actions,
+        {"remaining_forward": {"child_arcs": [], "standalone": [{"id": "B-Z", "status": "gated"}]}},
+    )
+
+    # populated child arcs -> no raise
     generate.assert_remaining_nonempty(
         actions, {"remaining_forward": {"child_arcs": [{"id": "R-FS-1·B4"}]}}
     )
