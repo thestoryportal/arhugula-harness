@@ -59,15 +59,14 @@ def test_arc_unit_map_parses_all_11_arcs_in_build_order():
     tags = [a["tag"] for a in am["arcs"]]
     assert tags == ["B1", "B3", "E", "B2", "R", "B4", "CA", "B5", "B6", "B7", "M"]
     assert [a["position"] for a in am["arcs"]] == list(range(1, 12))
-    assert [a["status"] for a in am["arcs"][:6]] == ["done"] * 6  # B1..B4 done
-    assert am["arcs"][6]["status"] == "next"  # CA
-    assert all(a["status"] == "queued" for a in am["arcs"][7:])  # B5..M
+    # FROZEN order COMPLETE — all 11 child arcs ✅ done (#637 closed B6, the last).
+    assert [a["status"] for a in am["arcs"]] == ["done"] * 11
     by_tag = {a["tag"]: a for a in am["arcs"]}
-    # cluster classification: independent vs serial vs maybe-serial. M's source text says
-    # "possibly serial" — it must NOT collapse to a definite "serial" (codex [P3]).
+    # cluster classification: independent vs serial vs maybe-serial.
     assert by_tag["CA"]["cluster"] == "independent"
     assert by_tag["B4"]["cluster"] == "serial"
-    assert by_tag["M"]["cluster"] == "maybe-serial"
+    # M's card was finalized to "independent (parallel-safe)" when it landed (#635).
+    assert by_tag["M"]["cluster"] == "independent"
 
 
 def test_done_arcs_carry_real_units_remaining_arcs_anticipated():
@@ -82,10 +81,12 @@ def test_done_arcs_carry_real_units_remaining_arcs_anticipated():
     # B4 is now done — as-built (its 4 slices extended existing contracts → 0 new U-* ids)
     assert by_tag["B4"]["units_status"] == "as-built"
     assert by_tag["B4"]["units"], "B4 must list as-built slices"
-    # remaining arcs are anticipated (units decomposed at arc-open — not fabricated)
+    # CA's card carries anticipated units (its card was not back-filled with as-built U-* ids
+    # when it landed — pre-existing arc-map card drift; the arc *status* is done, see the
+    # parse-order test). Asserting the actual parsed shape.
     assert by_tag["CA"]["units_status"] == "anticipated"
-    assert by_tag["CA"]["units"], "CA must list anticipated slices"
-    # dependency text is carried for the next arc
+    assert by_tag["CA"]["units"], "CA must list units"
+    # dependency text is carried per arc
     assert by_tag["CA"]["depends"] and by_tag["CA"]["parallel"]
 
 
@@ -96,18 +97,10 @@ def test_remaining_forward_derives_frozen_child_arcs_in_order():
     generate = _load_generate_module()
     rf = generate.parse_remaining_forward(_real_arc_map_md())
 
-    ids = [arc["id"] for arc in rf["child_arcs"]]
-    assert ids == [
-        "R-FS-1·CA",
-        "R-FS-1·B5",
-        "R-FS-1·B6",
-        "R-FS-1·B7",
-        "R-FS-1·M",
-    ]
-    assert [arc["n"] for arc in rf["child_arcs"]] == [1, 2, 3, 4, 5]
-    assert rf["child_arcs"][0]["gate"].startswith("NEXT")
-    assert all(arc["layer"] == "build" for arc in rf["child_arcs"])
-    assert rf["done"] == ["B1", "B3", "E", "B2", "R", "B4"]
+    # FROZEN order COMPLETE — no remaining frozen child arcs; all 11 done in build order.
+    # (R-FS-1 stays ACTIVE via the standalone B-* arcs; see test below.)
+    assert [arc["id"] for arc in rf["child_arcs"]] == []
+    assert rf["done"] == ["B1", "B3", "E", "B2", "R", "B4", "CA", "B5", "B6", "B7", "M"]
 
 
 def test_remaining_forward_derives_standalone_arcs():
@@ -115,9 +108,9 @@ def test_remaining_forward_derives_standalone_arcs():
     rf = generate.parse_remaining_forward(_real_arc_map_md())
 
     ids = {arc["id"] for arc in rf["standalone"]}
-    # the 8 design-fork-first standalone arcs surfaced during impl
+    # the design-fork-first standalone arcs surfaced during impl (R-FS-1's continuing work)
     assert {"B-INTERSTEP", "B-L2-EMBEDDING-ACTIVATION", "B-TOOL-GATE", "B-EFFECT-FENCE"} <= ids
-    assert len(rf["standalone"]) == 8
+    assert len(rf["standalone"]) == 9
 
 
 def test_remaining_excludes_closed_and_done_arcs():

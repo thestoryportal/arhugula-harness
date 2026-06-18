@@ -53,7 +53,7 @@ rule (X-AL-3) forbids treating un-decomposed work as if it were already specifie
 ## 2. Build order + dependency model
 
 **Frozen order** (decided once, not re-litigated): **B1 → B3 → E → B2 → R → B4 → CA → B5 → B6 →
-B7 → M.** DONE: **B1 ✅ B3 ✅ E ✅ B2 ✅ R ✅ B4 ✅ CA ✅ B5 ✅ B7 ✅ M ✅** (10 of 11; B7 + M landed out-of-order — independent, parallel-safe). NEXT: **B6 Slice 2** (operator-gated; Slice 1 ✅) — the only remaining FROZEN child arc.
+B7 → M.** DONE: **B1 ✅ B3 ✅ E ✅ B2 ✅ R ✅ B4 ✅ CA ✅ B5 ✅ B6 ✅ B7 ✅ M ✅** (**11 of 11 — 🎉 R-FS-1 FROZEN order COMPLETE**; B6 = Slice 1 ✅ #630 + Slice 2 ✅ #637 operator-ratified Option A). R-FS-1 stays ACTIVE — NEXT: the autonomous standalone `B-*` build arcs (R-FS-1's continuing work); the `R-CL-Q1` quality track stays gated until those land.
 
 **Two kinds of "dependency."** The frozen order is a chosen *sequence*; it is **not** the same as
 a hard *blocker*. Most remaining arcs' real prerequisites have already landed, so they are
@@ -231,7 +231,7 @@ grounding sweep (`.harness/r-fs-1-remaining-arcs-grounding-sweep-v1.md`), re-gro
 
 ### R-FS-1·B6 — Per-tool sandbox tier + STDIO transport floor
 
-- **Status:** ▶ NEXT (build position 9 of 11) · **Cluster:** SHARED-RUNTIMECONFIG (serial) · **Units:** anticipated · **Type:** medium fork + impl
+- **Status:** ✅ DONE (build position 9 of 11; **Slice 1 ✅ #630** STDIO transport-floor [runtime v1.54 §14.9.8] + **Slice 2 ✅ #637** per-tool tier + per-dispatch driver [runtime v1.56 §14.9.11 / AS v1.11 §3.1; `B-PER-TOOL-SANDBOX-TIER`, operator-ratified Option A]) · **Cluster:** SHARED-RUNTIMECONFIG (serial) · **Units:** as-built #630/#637 (no new plan-unit — extends §14.9.8→.11 + C-AS-03) · **Type:** Slice 1 impl-to-cleared-ADR; Slice 2 medium fork + impl (committed-invariant inv-3 relaxation)
 - **Depends-on:** the per-server sandbox resolver (#503 ✅); couples with B2 ✅ (multi-server)
 - **Serial with:** B4 (avoid `RuntimeConfig` / dispatch-path contention)
 - **What it gives the harness.** Lets the harness apply a **different security sandbox level per
@@ -334,7 +334,7 @@ meaningful — i.e., once a second production provider is configured. Captured a
 | B4 | Per-role & per-step model + prompt | ✅ done | 6 | serial | 4 slices as-built (#616/#618/#619/#621) |
 | CA | Report total run cost, broken down | ✅ done | 7 | independent | 3 slices as-built (#625) |
 | B5 | Pick the memory backend per deployment | ✅ | 8 | independent | as-built #628 |
-| B6 | Per-tool security sandbox level + STDIO floor | ▶ next | 9 | serial | at arc-open |
+| B6 | Per-tool security sandbox level + STDIO floor | ✅ done | 9 | serial | #630 (Slice 1) + #637 (Slice 2) |
 | B7 | Sample only the telemetry that matters | ✅ | 10 | independent | as-built #632 |
 | M | Formal contract + wiring for managed agents | ✅ | 11 | independent | as-built #635 |
 
