@@ -537,6 +537,21 @@ class DriverContext(Protocol):
     # workflow / test ctx), the sidecar stays `None`.
     procedural_tier_snapshot_resolver: object | None
 
+    # B-INTERSTEP (runtime spec §14.21 C-RT-29) — run-scoped inter-step output
+    # channel (the shared run-context a dispatcher reads). The driver records each
+    # completed step's output here; the runtime LLM dispatcher reads
+    # `most_recent_output()` and injects the prior step's output into the
+    # dispatched payload (making EVALUATOR_OPTIMIZER's draft→evaluate /
+    # feedback→regenerate data flow real). Typed `object | None` to avoid pulling
+    # `harness_runtime.lifecycle.inter_step_output_channel` into the CP Protocol
+    # surface (harness-cp does NOT depend on harness-runtime). When `None`
+    # (operator opt-out / test ctx; `RuntimeConfig.inter_step_data_flow=False`
+    # default), the driver records nothing (byte-identical to pre-v1.59). When
+    # bound (frozen `HarnessContext` field set at stage 5 LOOP_INIT), the driver
+    # calls `.record(step_id, step_output)` after each completed step (consumed
+    # via `getattr` dynamic dispatch, the `cp_is_wiring` idiom).
+    inter_step_output_channel: object | None
+
 
 # ---------------------------------------------------------------------------
 # Driver core
@@ -592,6 +607,23 @@ def _compute_step_idempotency_key(
         h.update(b"\x00")
         h.update(branch_path.encode("utf-8"))
     return h.hexdigest()
+
+
+def _record_inter_step_output(
+    ctx: DriverContext, step_id: str, step_output: Mapping[str, Any]
+) -> None:
+    """B-INTERSTEP (runtime spec §14.21 C-RT-29) — record a completed step's output
+    to the run-scoped inter-step channel so a subsequent dispatch can read it.
+
+    Operator-opt-in: `ctx.inter_step_output_channel` is `None` by default
+    (`RuntimeConfig.inter_step_data_flow=False`) → no-op, byte-identical to
+    pre-v1.59. Consumed via `getattr` dynamic dispatch (the `cp_is_wiring` idiom —
+    harness-cp does not import the runtime `InterStepOutputChannel` holder). The
+    driver does NOT introspect the step body — it records the dispatcher's already-
+    produced opaque output Mapping (`workflow_driver` §25.3.3.4 preserved)."""
+    _channel = getattr(ctx, "inter_step_output_channel", None)
+    if _channel is not None:
+        _channel.record(step_id, step_output)
 
 
 # ---------------------------------------------------------------------------
@@ -2321,6 +2353,10 @@ def _execute_workflow_body(
 
         # Accumulate step output under its step id for terminal state.
         accumulated[str(step.step_id)] = dict(step_output)
+        # B-INTERSTEP (runtime spec §14.21 C-RT-29) — also record to the run-scoped
+        # inter-step channel (opt-in; no-op when unbound) so a subsequent step's
+        # dispatch can read this step's output as upstream context.
+        _record_inter_step_output(ctx, str(step.step_id), step_output)
         # Step is fully complete (body + step.boundary + ledger append all
         # succeeded). Increment the workflow.step_count carrier per §C-OD-25
         # (U-OD-36).
@@ -3378,16 +3414,24 @@ def _execute_parallelization(
 # deps) — they compose at later strategy units. "regenerate-with-feedback": the
 # loop re-dispatching the generate step IS the regenerate. Inter-step DATA flow
 # (the generate draft → the evaluator's input; the evaluator's feedback → the
-# next generate's input) is NOT threaded at the driver level — exactly as the
-# `SINGLE_THREADED_LINEAR` path does not thread its `accumulated` step outputs
-# into subsequent `dispatch(...)` calls (the dispatcher signature carries only
-# `binding, step, step_context`, never prior outputs; the driver never
-# introspects or mutates the frozen `step_payload`, §25.3.3.4). Inter-step data
-# flow is therefore a runtime/dispatcher concern (a shared run context the
-# dispatcher reads, or B4 per-step prompt composition), the SAME for every
-# topology — not a B1 EO driver concern. EO at the driver level is the loop
-# CONTROL FLOW (generate→evaluate→accept/regenerate, bounded cap, accept-signal
-# read from the evaluator's structured output).
+# next generate's input) is realized by **B-INTERSTEP** (runtime spec §14.21
+# C-RT-29, new at v1.59) — the runtime/dispatcher concern this comment originally
+# named ("a shared run context the dispatcher reads"). The driver records each
+# step's opaque output to `ctx.inter_step_output_channel` (the
+# `_record_inter_step_output` call in `_dispatch_and_buffer` above; opt-in via
+# `RuntimeConfig.inter_step_data_flow`, no-op when unbound) and the runtime LLM
+# dispatcher injects `most_recent_output()` into the next dispatch's payload. The
+# dispatcher Protocol signature is UNCHANGED (`binding, step, step_context`, never
+# a prior-output parameter) and the driver still never introspects or mutates the
+# frozen `step_payload` (§25.3.3.4 preserved) — it records the dispatcher's
+# already-produced output. The channel is the SAME shared run-context for every
+# topology; the `SINGLE_THREADED_LINEAR` path records at its `accumulated` site.
+# EO at the driver level remains the loop CONTROL FLOW (generate→evaluate→accept/
+# regenerate, bounded cap, accept-signal read from the evaluator's structured
+# output). Scope at v1.59: SINGLE_THREADED_LINEAR + EVALUATOR_OPTIMIZER record;
+# the 4 remaining non-linear strategies' recording (concurrent-sibling writes via
+# the #648 buffered-branch drain) + cross-step resume rehydration (the
+# B-ENGINE-OUTPUT-REPLAY output-carrying substrate) are registered follow-ons.
 
 _EVALUATOR_OPTIMIZER_ACCEPT_KEY = "accepted"
 """The reserved key the EVALUATE step's output sets truthy to signal acceptance
@@ -3606,6 +3650,14 @@ def _execute_evaluator_optimizer(
         step_output = step_dispatchers.lookup(step.step_kind).dispatch(
             binding, step, step_context=step_context
         )
+        # B-INTERSTEP (runtime spec §14.21 C-RT-29) — record this step's output to
+        # the run-scoped inter-step channel BEFORE the next dispatch so the EO data
+        # flow is real: the evaluate dispatch reads the generate draft, and the
+        # next iteration's regenerate reads the evaluator feedback (append-ordered
+        # `most_recent_output()`). Opt-in; no-op when unbound. The EO loop runs
+        # within one driver invocation (no resume boundary crossed), so this
+        # within-loop data flow is resume-safe.
+        _record_inter_step_output(ctx, str(step.step_id), step_output)
         _append_buffered_sequential_entry(
             writer=writer,
             workflow_id=workflow_id,

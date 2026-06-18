@@ -67,6 +67,7 @@ from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEnt
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_runtime.lifecycle import llm_dispatch as llm_dispatch_module
 from harness_runtime.lifecycle.hitl_tool_loop import HITLToolLoopContext, ModelToolCall
+from harness_runtime.lifecycle.inter_step_output_channel import InterStepOutputChannel
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchBindError,
     LLMDispatchPayloadShapeError,
@@ -2278,3 +2279,228 @@ async def test_b4_slice4_per_step_role_override_full_stack_e2e() -> None:
     assert call["model"] == "model-for-audit-specialist"
     # Inner picked up the per-step role fold for PROMPT injection.
     assert call["system"] == "PROMPT-audit-specialist"
+
+
+# ---------------------------------------------------------------------------
+# B-INTERSTEP (runtime spec §14.21 C-RT-29) — inter-step output injection.
+#
+# Genuine non-vacuity: the REAL `RuntimeLLMDispatcher.dispatch` path injects the
+# immediately-prior step's output into the ACTUAL provider call's `messages` when
+# the run-scoped channel is bound. NOT a stub consumer — the assertion reads what
+# the fake provider boundary received, proving the prior output reaches the model.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_inter_step_channel_injects_prior_output_into_provider_call() -> None:
+    """A bound, non-empty channel → the dispatched provider call SEES the prior
+    step's output as a prepended upstream-context message (the EVALUATOR_OPTIMIZER
+    evaluate-sees-the-draft data flow, exercised through the real dispatch path)."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    channel = InterStepOutputChannel()
+    channel.record("generate", {"draft": "the-models-first-draft"})
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        inter_step_channel=channel,
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    call = adapter.client.messages.last_kwargs
+    assert call is not None
+    messages = call["messages"]
+    # The injected upstream-context message is prepended, labeled, and carries the
+    # prior step's serialized output — the model genuinely receives it.
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"].startswith("Upstream step output:")
+    assert "the-models-first-draft" in messages[0]["content"]
+    # The step's own message is preserved AFTER the injected upstream context.
+    assert {"role": "user", "content": "hi"} in messages
+    assert len(messages) == 2
+
+
+@pytest.mark.asyncio
+async def test_inter_step_channel_none_no_injection_byte_identical() -> None:
+    """No channel (opt-out default) → the provider call's messages are byte-identical
+    to pre-v1.59 (no upstream injection)."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(providers={"anthropic": adapter}, tracer_provider=tp)
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    call = adapter.client.messages.last_kwargs
+    assert call is not None
+    assert call["messages"] == [{"role": "user", "content": "hi"}]
+
+
+@pytest.mark.asyncio
+async def test_inter_step_channel_empty_no_injection() -> None:
+    """A bound but EMPTY channel (first step — no prior output) → no injection."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        inter_step_channel=InterStepOutputChannel(),
+    )
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    call = adapter.client.messages.last_kwargs
+    assert call is not None
+    assert call["messages"] == [{"role": "user", "content": "hi"}]
+
+
+@pytest.mark.asyncio
+async def test_inter_step_channel_survives_params_messages_override() -> None:
+    """Codex regression — a payload using the `params["messages"]` escape hatch
+    must STILL receive the upstream context. The injection runs on the FINAL
+    post-`params`-merge kwargs, so `kwargs.update(payload.params)` cannot drop it
+    (early `payload.messages` injection silently would have)."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    channel = InterStepOutputChannel()
+    channel.record("generate", {"draft": "DRAFT-via-params"})
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter}, tracer_provider=tp, inter_step_channel=channel
+    )
+    payload = {
+        "messages": [{"role": "user", "content": "top-level"}],
+        "tools": None,
+        "params": {"max_tokens": 100, "messages": [{"role": "user", "content": "from-params"}]},
+    }
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(payload), step_context=_step_context())
+
+    messages = adapter.client.messages.last_kwargs["messages"]
+    # params["messages"] replaced the top-level messages, yet the upstream injection
+    # (post-`params`) still leads — the data flow reaches the provider.
+    assert messages[0]["content"].startswith("Upstream step output:")
+    assert "DRAFT-via-params" in messages[0]["content"]
+    assert {"role": "user", "content": "from-params"} in messages
+
+
+@pytest.mark.asyncio
+async def test_inter_step_channel_openai_injects_after_active_system_message() -> None:
+    """Codex regression — with an active system prompt, the upstream-context `user`
+    message lands AFTER the leading `system` message (does not displace it)."""
+    adapter = _OpenAIFakeAdapter(_OpenAIClient())
+    tp, _ = _tracer_provider_with_exporter()
+    channel = InterStepOutputChannel()
+    channel.record("generate", {"draft": "DRAFT-openai"})
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": adapter},
+        tracer_provider=tp,
+        inter_step_channel=channel,
+        active_system_prompt=_SYS,
+    )
+
+    await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    messages = adapter.client.chat.completions.last_kwargs["messages"]
+    assert messages[0] == {"role": "system", "content": _SYS}
+    assert messages[1]["content"].startswith("Upstream step output:")
+    assert "DRAFT-openai" in messages[1]["content"]
+    assert {"role": "user", "content": "hi"} in messages
+
+
+@pytest.mark.asyncio
+async def test_inter_step_channel_does_not_mask_system_conflict() -> None:
+    """Codex regression — prepending the upstream `user` message must NOT hide a
+    payload-leading `role:"system"` message from the competing-system-source
+    conflict check. With an active prompt + a step-owned system message + the
+    channel bound, the dispatch STILL fails loud (the check runs before the
+    upstream injection)."""
+    adapter = _OpenAIFakeAdapter(_OpenAIClient())
+    tp, _ = _tracer_provider_with_exporter()
+    channel = InterStepOutputChannel()
+    channel.record("generate", {"draft": "DRAFT"})
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": adapter},
+        tracer_provider=tp,
+        inter_step_channel=channel,
+        active_system_prompt=_SYS,
+    )
+
+    with pytest.raises(PromptInjectionConflictError):
+        await dispatcher.dispatch(
+            _binding("openai"),
+            _step(
+                {
+                    "messages": [
+                        {"role": "system", "content": "step-owned system"},
+                        {"role": "user", "content": "hi"},
+                    ],
+                    "tools": None,
+                    "params": {"max_tokens": 100},
+                }
+            ),
+            step_context=_step_context(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_inter_step_channel_reaches_anthropic_hitl_tool_loop() -> None:
+    """Codex review round 2 — the Anthropic HITL tool-loop path must ALSO carry the
+    upstream context. The loop seeds its per-turn mutable messages from the
+    TRANSLATED `kwargs["messages"]` (params merge + upstream injection), not raw
+    `payload.messages`, so tool-using model calls keep the inter-step context."""
+    client = _AnthropicClient()
+    client.messages.responses = [
+        _AnthropicToolTurnResponse(
+            id="msg_tool",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "toolu_001",
+                    "name": "search_docs",
+                    "input": {"query": "q"},
+                }
+            ],
+            stop_reason="tool_use",
+            usage=_Usage(input_tokens=11, output_tokens=6),
+        ),
+        _AnthropicToolTurnResponse(
+            id="msg_final",
+            content=[{"type": "text", "text": "done"}],
+            stop_reason="end_turn",
+            usage=_Usage(input_tokens=12, output_tokens=4),
+        ),
+    ]
+    adapter = _AnthropicFakeAdapter(client)
+    hitl_loop = _FakeHITLToolLoop({"toolu_001": {"ok": True}})
+    tp, _ = _tracer_provider_with_exporter()
+    channel = InterStepOutputChannel()
+    channel.record("generate", {"draft": "DRAFT-hitl"})
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        hitl_tool_loop=cast(Any, hitl_loop),
+        inter_step_channel=channel,
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic", model="claude-test"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "search"}],
+                "tools": [
+                    {
+                        "name": "search_docs",
+                        "server": "docs-mcp",
+                        "input_schema": {"type": "object"},
+                    }
+                ],
+                "params": {"max_tokens": 100},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    # The FIRST model call in the tool loop carries the upstream context.
+    first_messages = client.messages.calls[0]["messages"]
+    assert first_messages[0]["content"].startswith("Upstream step output:")
+    assert "DRAFT-hitl" in first_messages[0]["content"]

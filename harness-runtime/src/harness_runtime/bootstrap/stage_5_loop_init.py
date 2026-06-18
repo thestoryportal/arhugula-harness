@@ -54,6 +54,7 @@ from harness_runtime.bootstrap.factories.webhook_delivery_composer_factory impor
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
 from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
+from harness_runtime.lifecycle.inter_step_output_channel import InterStepOutputChannel
 from harness_runtime.lifecycle.lifecycle_emitter import materialize_lifecycle_emitter_stage
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchBindError,
@@ -230,6 +231,16 @@ async def execute(
     )
     materialize_r_cxa_2_producer_loop_stage(ctx, config)
 
+    # B-INTERSTEP (runtime spec §14.21 C-RT-29, new at v1.59) — construct + bind
+    # the run-scoped inter-step output channel when opted-in. The SAME instance is
+    # threaded into the LLM dispatcher (the consumer) below + read by the CP driver
+    # (the producer) via `DriverContext.inter_step_output_channel`. Default opt-out
+    # (`config.inter_step_data_flow is False`) leaves `ctx.inter_step_output_channel`
+    # None → the driver records nothing + the dispatcher injects nothing
+    # (byte-identical to pre-v1.59).
+    if config.inter_step_data_flow and ctx.inter_step_output_channel is None:
+        ctx.inter_step_output_channel = InterStepOutputChannel()
+
     # Runtime spec v1.47 §2.1 — inference-conditional LLM-dispatch core. A
     # non-inference (tool-only) workflow bootstraps provider-free (`providers`
     # may be empty), so the provider-backed `materialize_llm_dispatcher_stage`
@@ -254,6 +265,11 @@ async def execute(
             # `freeze()`) so per-LLM-dispatch SpanCostRecords feed
             # `RunResult.cost_attribution` (runtime v1.53 §9).
             cost_record_sink=ctx.cost_record_accumulator.records,
+            # B-INTERSTEP (runtime spec §14.21 C-RT-29) — thread the SAME channel
+            # instance the CP driver records into; the dispatcher reads
+            # `most_recent_output()` and injects it into the dispatched payload.
+            # None (opt-out) → no injection (byte-identical to pre-v1.59).
+            inter_step_channel=ctx.inter_step_output_channel,
             memory_tool_registry=ctx.memory_tool_registry,
             deployment_surface=config.deployment_surface,
             hitl_tool_loop=ctx.hitl_tool_loop,

@@ -300,7 +300,7 @@ live status:
   choice; listed here for completeness, **not** a separate post-frozen arc (excluded from the
   closed/remaining tallies so it isn't double-counted).
 
-Headline (HEAD): **5 closed · 8 remaining · 1 gated** (the 13 build-ready standalone arcs) **+ 2
+Headline (HEAD): **6 closed · 7 remaining · 1 gated** (the 13 build-ready standalone arcs) **+ 2
 resolved** (`B-PER-TOOL-SANDBOX-TIER` built inside the frozen order as B6 Slice 2;
 `B-PER-DISPATCH-DRIVER-PRECISION` foreclosed N/A by the B6 Option-A choice). Full per-arc
 disposition: the spine ledger (`.harness/beyond-mvp-capability-boundary-ledger.md`).
@@ -310,7 +310,7 @@ disposition: the spine ledger (`.harness/beyond-mvp-capability-boundary-ledger.m
 | B-MCP-HOST-REMOTE-TRANSPORT | closed · #640 | runtime | Connect to **remote (HTTP) MCP tool servers**, not just local ones — and restore the default-lane tool-completion test. |
 | B-MEMORY-SURFACE-BACKEND-IMPLS | closed · #642 | runtime | Add the **encrypted-filesystem & operator-defined** memory backends. |
 | B-COST-DISCRIMINATOR-TAXONOMY | closed · #644 | OD + runtime | Break down run cost **by dispatch kind** (llm / tool / validator / webhook). |
-| B-INTERSTEP | remaining | runtime | Pass **data** from one workflow step to the next (today steps share control-flow only, not each other's outputs). |
+| B-INTERSTEP | closed · #651 | runtime | Pass **data** from one workflow step to the next (today steps share control-flow only, not each other's outputs) — opt-in inter-step output channel; EVALUATOR_OPTIMIZER evaluate now sees the generate draft. |
 | B-FANOUT-PAUSE | remaining | CP + runtime | **Resume a paused parallel fan-out** from where it stopped (today it fails honestly instead of resuming). |
 | B-ENGINE-OUTPUT-REPLAY | remaining | CP + runtime/IS | **Replay cached step outputs** from event history (today a resume skips finished steps but can't reproduce their outputs). |
 | B-EFFECT-FENCE | remaining | runtime + AS | Guarantee a side-effecting step **runs at most once** across retries/resumes. |
