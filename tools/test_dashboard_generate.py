@@ -120,6 +120,7 @@ def test_remaining_forward_derives_standalone_arcs():
         "B-MCP-HOST-REMOTE-TRANSPORT",
         "B-MEMORY-SURFACE-BACKEND-IMPLS",
         "B-COST-DISCRIMINATOR-TAXONOMY",
+        "B-NONLINEAR-OVERRIDE-PROVENANCE",
     ):
         assert by_id[cid]["status"] == "closed", cid
     assert "#640" in by_id["B-MCP-HOST-REMOTE-TRANSPORT"]["status_detail"]
@@ -130,10 +131,10 @@ def test_remaining_forward_derives_standalone_arcs():
     # built as B6 Slice 2 (#637); B-PER-DISPATCH-DRIVER-PRECISION foreclosed N/A by B6 Option A.
     assert by_id["B-PER-TOOL-SANDBOX-TIER"]["status"] == "resolved"
     assert by_id["B-PER-DISPATCH-DRIVER-PRECISION"]["status"] == "resolved"
-    # 4-way bucket counts: 3 closed / 10 remaining / 1 gated / 2 resolved.
+    # 4-way bucket counts: 4 closed / 9 remaining / 1 gated / 2 resolved.
     statuses = [arc["status"] for arc in sa]
-    assert statuses.count("closed") == 3
-    assert statuses.count("remaining") == 10
+    assert statuses.count("closed") == 4
+    assert statuses.count("remaining") == 9
     assert statuses.count("gated") == 1
     assert statuses.count("resolved") == 2
 
