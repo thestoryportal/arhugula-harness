@@ -272,3 +272,65 @@ async def test_default_policy_field_defaults_defer_to_surface_policy() -> None:
     assert entry.default_minimum_tier is None
     assert entry.default_sandbox_tier is None
     assert entry.default_blast_radius is BlastRadiusTier.READ_ONLY
+
+
+# ---------------------------------------------------------------------------
+# B-MCP-HOST-REMOTE-TRANSPORT — the granular `MCPTransport` config enum is
+# projected onto the host's coarse connection-mechanism selector (runtime spec
+# §14.9.6 inv 5 "STDIO + HTTP + SSE all supported at v1"). Before this fix, the
+# factory passed `entry.transport.value` through a `cast`, so every remote
+# `streamable_http_l*` value reached `MCPClientHost.__init__` (whose
+# `_VALID_TRANSPORTS = {"stdio", "streamable_http", "sse"}` rejects the granular
+# string) → `ValueError: unknown MCP transport`. No remote MCP host could
+# materialize through the factory.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("granular", "expected_coarse"),
+    [
+        (MCPTransport.STDIO, "stdio"),
+        (MCPTransport.STREAMABLE_HTTP_L0_REFUSE, "streamable_http"),
+        (MCPTransport.STREAMABLE_HTTP_L1_PINNED, "streamable_http"),
+        (MCPTransport.STREAMABLE_HTTP_L2_SANDBOX, "streamable_http"),
+        (MCPTransport.STREAMABLE_HTTP_L3_AUDIT, "streamable_http"),
+    ],
+)
+def test_coarse_transport_projects_granular_to_mechanism(
+    granular: MCPTransport, expected_coarse: str
+) -> None:
+    """`_coarse_transport` collapses the granular trust-bearing `MCPTransport`
+    onto the coarse connection mechanism the host consumes: `stdio → stdio`;
+    all four `streamable_http_l*` (the L-level is a trust dimension, not a
+    mechanism) → `streamable_http`. Total over the closed 5-value enum."""
+    from harness_runtime.bootstrap.factories.mcp_client_host_factory import _coarse_transport
+
+    assert _coarse_transport(granular) == expected_coarse
+
+
+@pytest.mark.asyncio
+async def test_factory_materializes_remote_streamable_http_host() -> None:
+    """B-MCP-HOST-REMOTE-TRANSPORT — a remote `streamable_http_l1` MCP server
+    materializes through the stage-3a factory (previously raised
+    `ValueError: unknown MCP transport 'streamable_http_l1'`). The host carries
+    the coarse `streamable_http` mechanism; its connection URL is the remote
+    HTTP endpoint (not a stdio command line)."""
+    cfg = _config(
+        [
+            MCPClientConfig(
+                client_name=ClientName("remote-echo"),
+                transport=MCPTransport.STREAMABLE_HTTP_L1_PINNED,
+                trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
+                blast_radius=BlastRadiusTier.READ_ONLY,
+                connection_url="http://127.0.0.1:9999/mcp",
+                default_minimum_tier=SandboxTier.TIER_1_PROCESS,
+                default_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+            )
+        ]
+    )
+    hosts = await materialize_mcp_client_host_stage(cfg)
+    host = hosts[ServerName("remote-echo")]
+    assert isinstance(host, MCPClientHost)
+    assert host.transport == "streamable_http"
+    # the HTTP transport_config carries the remote URL (not a stdio command).
+    assert host._transport_config == {"url": "http://127.0.0.1:9999/mcp"}  # type: ignore[attr-defined]

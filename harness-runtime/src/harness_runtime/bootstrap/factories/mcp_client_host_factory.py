@@ -32,8 +32,9 @@ framework adoption.
 from __future__ import annotations
 
 import shlex
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, Literal
 
+from harness_as.discriminators import MCPTransport
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
 from harness_as.sandbox_tier_floor import MCPServerTrustLevel
 from harness_as.tool_contract import ToolContract
@@ -48,13 +49,49 @@ from harness_runtime.lifecycle.mcp_client_host import (
 from harness_runtime.types import MCPClientConfig, RuntimeConfig, ServerName
 
 # Re-declare the Literal type so this module is self-contained for the
-# transport cast (the same Literal is declared at lifecycle.mcp_client_host).
+# granular→coarse transport projection (the same Literal is declared at
+# lifecycle.mcp_client_host as the host's connection-mechanism selector).
 _MCPTransportLiteral = Literal["stdio", "streamable_http", "sse"]
 
 __all__ = ["materialize_mcp_client_host_stage"]
 
 
 _STDIO_URL_PREFIX = "stdio://"
+
+
+def _coarse_transport(granular: MCPTransport) -> _MCPTransportLiteral:
+    """Project the granular per-server `MCPTransport` onto the coarse
+    connection-mechanism the host's transport selector consumes.
+
+    `MCPClientConfig.transport` carries the granular `harness_as.discriminators.MCPTransport`
+    (C-AS-10 §10.1: `stdio` + `streamable_http_l0..l3`), which encodes BOTH the
+    connection mechanism AND the remote trust level. `MCPClientHost` keys only on
+    the *mechanism* — how to open the connection (stdio subprocess vs streamable-HTTP
+    client pool) — per its `_VALID_TRANSPORTS = {"stdio", "streamable_http", "sse"}`
+    coarse selector (runtime spec §14.9.6 inv 5: "STDIO + HTTP + SSE all supported at
+    v1"). The L-level is a *trust* dimension consumed elsewhere: the per-MCP-transport
+    sandbox floor reads it via `MCPClientConfig.trust_level` (§14.9.8), and the dispatch
+    trust gate keys on `server_name`. So all four `streamable_http_l*` values collapse to
+    the single coarse `streamable_http` mechanism; `stdio` maps to `stdio`.
+
+    Earlier landed code at the construction site passed `entry.transport.value` straight
+    through a `cast` — correct for `stdio` (whose `.value` is the coarse `"stdio"`) but a
+    latent defect for every remote value (`"streamable_http_l1"` ∉ `_VALID_TRANSPORTS` →
+    `MCPClientHost.__init__` raised `ValueError: unknown MCP transport`). The gap was never
+    exercised because no remote MCP host had been materialized through the factory
+    (`B-MCP-HOST-REMOTE-TRANSPORT`). This projection restores the intended §14.9.6-inv-5
+    behavior; no spec change, no host change, no contract widening.
+
+    REFUSE (remote l0) is NOT guarded here — `mcp_transport_floor` owns REFUSE (one source
+    of truth) and stage-2 `materialize_mcp_stage` raises `MCPServerRefusedError` on an l0
+    config, aborting the bootstrap BEFORE this stage-3a factory runs (runtime spec §14.9.8
+    + §14.9.10 D1). An l0 transport therefore never reaches here.
+    """
+    if granular is MCPTransport.STDIO:
+        return "stdio"
+    # All four streamable_http_l0..l3 share the streamable-HTTP connection mechanism;
+    # the L-level (trust) is read by the sandbox floor + trust gate, not the host.
+    return "streamable_http"
 
 
 def _build_transport_config(transport: _MCPTransportLiteral, connection_url: str) -> dict[str, Any]:
@@ -151,12 +188,13 @@ def _build_default_policy_converter(
 def _build_host(entry: MCPClientConfig, deployment_surface: DeploymentSurface) -> MCPClientHost:
     """Construct one `MCPClientHost` from a single `MCPClientConfig` entry.
 
-    `entry.transport` is an `harness_as.discriminators.MCPTransport` StrEnum;
-    its `.value` is one of the literal strings the host accepts. The
-    `server_name` is set from `entry.client_name` (the `ServerName`/`ClientName`
-    same-value-today property per spec §14.9.10).
+    `entry.transport` is an `harness_as.discriminators.MCPTransport` StrEnum
+    (granular: `stdio` + `streamable_http_l0..l3`); `_coarse_transport` projects
+    it onto the coarse connection-mechanism the host consumes (`stdio` /
+    `streamable_http`). The `server_name` is set from `entry.client_name` (the
+    `ServerName`/`ClientName` same-value-today property per spec §14.9.10).
     """
-    transport_value: _MCPTransportLiteral = cast(_MCPTransportLiteral, entry.transport.value)
+    transport_value: _MCPTransportLiteral = _coarse_transport(entry.transport)
     return MCPClientHost(
         transport=transport_value,
         server_name=entry.client_name,

@@ -17,11 +17,14 @@ resolvers (that would be a hollow proof). It proves two things the in-process
 test cannot:
 
 1. **The full ``api.run`` workflow completes against a live provider under each
-   tier.** An echo-MCP ``TOOL_STEP`` (real stdio subprocess) followed by an
-   ``INFERENCE_STEP`` answered by a live local Ollama model — the "echo-MCP
-   multi-tier" shape named in inventory #8 / the dashboard / plan §P3 — runs
-   green for SOLO, TEAM, and MTC. Setting ``persona_tier`` does not break the
-   real run path.
+   tier.** An echo-MCP ``TOOL_STEP`` (real **remote streamable-HTTP** MCP server)
+   followed by an ``INFERENCE_STEP`` answered by a live local Ollama model — the
+   "echo-MCP multi-tier" shape named in inventory #8 / the dashboard / plan §P3 —
+   runs green for SOLO, TEAM, and MTC. Setting ``persona_tier`` does not break the
+   real run path. (Migrated from the in-process STDIO server, which the ADR-D2 §1.3
+   STDIO transport floor raised to TIER_3 → fail-close; a remote L1 READ_ONLY server
+   resolves to TIER_1 with the explicit ``default_sandbox_tier`` override, so the
+   tool step completes host-process with no Docker — B-MCP-HOST-REMOTE-TRANSPORT.)
 2. **``config.persona_tier`` actually threads through the bootstrap to the bound
    OD sampler, observed *during* the run.** Rather than monkeypatching in a
    provider we built (circular), we **spy** the production
@@ -52,14 +55,13 @@ from __future__ import annotations
 
 import re
 import socket
-import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-_ECHO_FIXTURE = (Path(__file__).parent / "fixtures" / "mcp_echo_server.py").resolve()
+from .fixtures.streamable_http_echo import streamable_http_echo_server
 
 _OLLAMA_HOST = "127.0.0.1"
 _OLLAMA_PORT = 11434
@@ -101,16 +103,6 @@ def _extract_base_rate(provider: Any) -> float:
 
 
 @pytest.mark.e2e
-@pytest.mark.skip(
-    reason="R-FS-1 B6 Slice 1 (runtime spec v1.54 §14.9.8): this multi-tier e2e's "
-    "echo-MCP TOOL_STEP uses an in-process STDIO server, which the STDIO transport floor "
-    "(ADR-D2 §1.3) now raises to TIER_3 → bootstrap fail-closes. Preserved intact (not "
-    "rewritten) pending the B6 e2e-migration arc: restoring it needs either a "
-    "containerized tool step (Docker-gated, like test_r410_*) or an inference-only "
-    "variant. The per-tier sampler base-rate binding it asserts is independently covered "
-    "by the stage-4 OD sampler unit tests. Registered forward "
-    "(B-MCP-HOST-REMOTE-TRANSPORT + the B6 e2e-migration item)."
-)
 @pytest.mark.skipif(
     not _ollama_reachable(),
     reason="live multi-tier api.run e2e requires a local ollama daemon on 127.0.0.1:11434",
@@ -233,98 +225,106 @@ async def test_r_cl_p3_live_multi_tier_api_run(
         _stage_4_od_mod, "materialize_ring_buffer_stage", lambda cfg, _d, **_kw: None
     )
 
-    config = RuntimeConfig(
-        deployment_surface=surface,
-        persona_tier=persona_tier,
-        repository_root=tmp_path,
-        path_bindings=path_bindings,
-        provider_secrets=ProviderSecretsConfig(),
-        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
-        collector=CollectorConfig(),
-        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
-        mcp_clients=[
-            MCPClientConfig(
-                client_name=ClientName("echo-server"),
-                transport=MCPTransport.STDIO,
-                trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
-                blast_radius=BlastRadiusTier.READ_ONLY,
-                connection_url=f"stdio://{sys.executable} {_ECHO_FIXTURE}",
-                # tier-floor consistency: resolver tier == converter minimum tier
-                # == TIER_1_PROCESS → in-process driver (no Docker), surface-agnostic.
-                default_minimum_tier=SandboxTier.TIER_1_PROCESS,
-                default_sandbox_tier=SandboxTier.TIER_1_PROCESS,
-                default_sandbox_tech="host-process",
-                default_sandbox_provider="host",
-            )
-        ],
-        anthropic_optional=True,
-        openai_optional=True,
-        ollama_optional=False,  # ollama is the constructed, required provider
-        routing_manifest=RoutingManifest(
-            manifest_version=1,
-            per_role_bindings={},
-            per_workload_overrides={},
-            fallback_chains=(chain,),
-            retry_policies={},
-        ),
-    )
-    monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
-
     echo_value = f"hello-p3-{persona_tier_name.lower()}"
 
-    class _Workflow:
-        @property
-        def workflow_id(self) -> str:
-            return "wf-r-cl-p3-multi-tier"
+    # The remote streamable-HTTP echo MCP server runs on a localhost port for the
+    # duration of the bootstrap + dispatch (host.start() connects to it).
+    with streamable_http_echo_server() as mcp_url:
+        config = RuntimeConfig(
+            deployment_surface=surface,
+            persona_tier=persona_tier,
+            repository_root=tmp_path,
+            path_bindings=path_bindings,
+            provider_secrets=ProviderSecretsConfig(),
+            otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+            collector=CollectorConfig(),
+            default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+            mcp_clients=[
+                MCPClientConfig(
+                    client_name=ClientName("echo-server"),
+                    # Remote streamable-HTTP L1 (B-MCP-HOST-REMOTE-TRANSPORT): the
+                    # stage-3a factory projects this onto the host's coarse
+                    # "streamable_http" mechanism; host.start() connects to `mcp_url`.
+                    transport=MCPTransport.STREAMABLE_HTTP_L1_PINNED,
+                    trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
+                    blast_radius=BlastRadiusTier.READ_ONLY,
+                    connection_url=mcp_url,
+                    # remote L1 READ_ONLY → mcp_transport_floor = TIER_1_PROCESS; the
+                    # explicit default_sandbox_tier override keeps resolved == TIER_1 on
+                    # SELF_HOSTED_SERVER (no Docker). tier-floor consistency: resolver
+                    # tier == converter minimum tier == TIER_1_PROCESS.
+                    default_minimum_tier=SandboxTier.TIER_1_PROCESS,
+                    default_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+                    default_sandbox_tech="host-process",
+                    default_sandbox_provider="host",
+                )
+            ],
+            anthropic_optional=True,
+            openai_optional=True,
+            ollama_optional=False,  # ollama is the constructed, required provider
+            routing_manifest=RoutingManifest(
+                manifest_version=1,
+                per_role_bindings={},
+                per_workload_overrides={},
+                fallback_chains=(chain,),
+                retry_policies={},
+            ),
+        )
+        monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
 
-        @property
-        def workload_class(self) -> WorkloadClass:
-            return workload
+        class _Workflow:
+            @property
+            def workflow_id(self) -> str:
+                return "wf-r-cl-p3-multi-tier"
 
-        @property
-        def manifest_entry(self) -> WorkflowManifestEntry:
-            return WorkflowManifestEntry(
-                workflow_id="wf-r-cl-p3-multi-tier",
-                workload_class=workload,
-                persona_tier=persona_tier,
-                engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
-                topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
-                layer_budgets=(),
-                fallback_chain=chain,
-                hitl_placements=(),
-                per_step_overrides={},
-            )
+            @property
+            def workload_class(self) -> WorkloadClass:
+                return workload
 
-        @property
-        def steps(self) -> Sequence[WorkflowStep]:
-            return (
-                WorkflowStep(
-                    step_id=StepID("step-0"),
-                    step_kind=StepKind.TOOL_STEP,
-                    step_payload={"tool_id": "echo", "tool_args": {"value": echo_value}},
-                ),
-                WorkflowStep(
-                    step_id=StepID("step-1"),
-                    step_kind=StepKind.INFERENCE_STEP,
-                    step_payload={
-                        "messages": [{"role": "user", "content": "Say 'a'"}],
-                        "tools": [],
-                        # ollama params shape: options={"num_predict": ...}.
-                        "params": {"options": {"num_predict": 4}},
-                    },
-                ),
-            )
+            @property
+            def manifest_entry(self) -> WorkflowManifestEntry:
+                return WorkflowManifestEntry(
+                    workflow_id="wf-r-cl-p3-multi-tier",
+                    workload_class=workload,
+                    persona_tier=persona_tier,
+                    engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+                    topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+                    layer_budgets=(),
+                    fallback_chain=chain,
+                    hitl_placements=(),
+                    per_step_overrides={},
+                )
 
-        @property
-        def step_dispatchers(self) -> Any:
-            return None
+            @property
+            def steps(self) -> Sequence[WorkflowStep]:
+                return (
+                    WorkflowStep(
+                        step_id=StepID("step-0"),
+                        step_kind=StepKind.TOOL_STEP,
+                        step_payload={"tool_id": "echo", "tool_args": {"value": echo_value}},
+                    ),
+                    WorkflowStep(
+                        step_id=StepID("step-1"),
+                        step_kind=StepKind.INFERENCE_STEP,
+                        step_payload={
+                            "messages": [{"role": "user", "content": "Say 'a'"}],
+                            "tools": [],
+                            # ollama params shape: options={"num_predict": ...}.
+                            "params": {"options": {"num_predict": 4}},
+                        },
+                    ),
+                )
 
-        @property
-        def default_model_binding(self) -> ModelBinding:
-            return ModelBinding(provider="ollama", model=_OLLAMA_MODEL)
+            @property
+            def step_dispatchers(self) -> Any:
+                return None
 
-    # --- exercise: the operator api.run path under this persona tier. ---
-    result = await _run(_Workflow(), config=config)
+            @property
+            def default_model_binding(self) -> ModelBinding:
+                return ModelBinding(provider="ollama", model=_OLLAMA_MODEL)
+
+        # --- exercise: the operator api.run path under this persona tier. ---
+        result = await _run(_Workflow(), config=config)
 
     # (1) the full workflow completed against the live provider under this tier.
     assert isinstance(result, RunResult), f"got {type(result).__name__}"
