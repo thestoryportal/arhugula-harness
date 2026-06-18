@@ -819,6 +819,93 @@ def test_resume_at_advances_over_contiguous_prefix_only() -> None:
     assert dispatched_ids == ["step-1", "step-2"]
 
 
+class _KeyRecordingDispatcher:
+    """Records the per-step idempotency key each dispatch receives (B-EFFECT-FENCE).
+
+    OBSERVES `step_context.parent_idempotency_key` only — it does NOT fake the
+    fence suppression (the fence is proven at the real tool sink in
+    `harness-runtime/tests/test_effect_fence.py`). This test proves the one
+    remaining chain link: the driver hands the sink a byte-identical key on a
+    resume re-dispatch, so the fence keys on the SAME value across the crash.
+    """
+
+    def __init__(self) -> None:
+        self.keys_by_step: dict[str, str] = {}
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: Any = None,
+    ) -> dict[str, Any]:
+        self.keys_by_step[str(step.step_id)] = step_context.parent_idempotency_key
+        return {"step_id": str(step.step_id)}
+
+
+def test_resume_redispatch_hands_byte_identical_idempotency_key_to_tool_sink() -> None:
+    """B-EFFECT-FENCE chain link — the driver hands the TOOL sink a byte-identical
+    per-step idempotency key on a resume re-dispatch of an uncommitted step.
+
+    The effect at `workflow_driver.py:2031` (dispatch) precedes the per-step
+    ledger commit at `:2336`, so a crash in between leaves the step uncommitted →
+    `_determine_resume_at` re-dispatches it. This test proves the re-dispatch
+    carries the SAME `step_context.parent_idempotency_key` the genesis run used;
+    composed with the sink-side at-most-once proof in
+    `harness-runtime/tests/test_effect_fence.py`, the effect fence resolves the
+    re-dispatched effect to the SAME claim → fail-closed, never re-fired.
+    """
+    manifest = _manifest(engine_class=EngineClass.SAVE_POINT_CHECKPOINT)
+    steps = [_step(0, kind=StepKind.TOOL_STEP), _step(1, kind=StepKind.TOOL_STEP)]
+
+    # Genesis run — both tool steps dispatch.
+    fresh = _KeyRecordingDispatcher()
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=steps,
+        run_id="run-1",
+        ctx=cast(
+            DriverContext,
+            _FakeCtx(
+                ledger=_FakeLedger(prior_entries=0),
+                emitter=_FakeEmitter(),
+                ledger_reader=_FakeLedgerReader({}),
+            ),
+        ),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(
+            StepDispatcherRegistry,
+            _SingleKindRegistry(StepKind.TOOL_STEP, cast(StepDispatcher, fresh)),
+        ),
+    )
+
+    # Resume — step 0 materialized (committed) → resume_at=1 → only step 1 re-runs.
+    resumed = _KeyRecordingDispatcher()
+    materialized = {_expected_step_key("run-1", "wf-1", 1, 0): 1}
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=steps,
+        run_id="run-1",
+        ctx=cast(
+            DriverContext,
+            _FakeCtx(
+                ledger=_FakeLedger(prior_entries=1),
+                emitter=_FakeEmitter(),
+                ledger_reader=_FakeLedgerReader(materialized),
+            ),
+        ),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=cast(
+            StepDispatcherRegistry,
+            _SingleKindRegistry(StepKind.TOOL_STEP, cast(StepDispatcher, resumed)),
+        ),
+    )
+
+    # Only step 1 re-dispatched, with the byte-identical key the genesis run used.
+    assert list(resumed.keys_by_step) == ["step-1"]
+    assert resumed.keys_by_step["step-1"] == fresh.keys_by_step["step-1"]
+
+
 def test_entry_version_changes_idempotency_key_basis() -> None:
     """v2.12 — bumping entry_version invalidates prior-run resumption substrate.
 

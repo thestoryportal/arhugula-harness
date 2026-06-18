@@ -154,6 +154,32 @@ def test_env_supplies_ollama_fields() -> None:
     assert cfg.ollama_optional is True
 
 
+def test_env_supplies_effect_fencing() -> None:
+    """`HARNESS_EFFECT_FENCING` reaches RuntimeConfig (B-EFFECT-FENCE §14.22).
+
+    Pinned because the flag gates a CORRECTNESS property (at-most-once execution):
+    an operator who sets the env var must NOT be silently left without the fence
+    (the no-silent-failure discipline; out-of-family Codex + advisor caught the
+    original env-loader omission).
+    """
+    base = {
+        f"{ENV_PREFIX}REPOSITORY_ROOT": "/tmp",
+        f"{ENV_PREFIX}DEPLOYMENT_SURFACE": "local-development",
+        f"{ENV_PREFIX}DEFAULT_TOPOLOGY": "single-threaded-linear",
+    }
+    sub = dict(
+        path_bindings=PathBindingConfig(),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+        collector=CollectorConfig(),
+    )
+    on = materialize_runtime_config(env={**base, f"{ENV_PREFIX}EFFECT_FENCING": "true"}, **sub)
+    assert on.effect_fencing is True
+    # Absent env var → the opt-out default (byte-identical to pre-v1.60).
+    off = materialize_runtime_config(env=base, **sub)
+    assert off.effect_fencing is False
+
+
 def test_ollama_optional_bool_parsing() -> None:
     """`_parse_bool` accepts the common truthy spellings; everything else is False."""
     # The Python `bool("False") == True` trap necessitates explicit parsing.

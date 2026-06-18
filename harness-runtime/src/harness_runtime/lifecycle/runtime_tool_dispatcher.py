@@ -65,6 +65,10 @@ from harness_runtime.config.provider_secrets import (
     SecretAllowlistDeniedError,
     SecretResolutionError,
 )
+from harness_runtime.lifecycle.effect_fence import (
+    EffectFenceProtocol,
+    EffectFenceReservedUncommittedError,
+)
 from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
 
 if TYPE_CHECKING:
@@ -322,6 +326,7 @@ class RuntimeToolDispatcher:
         provider_secret_resolver: Any = None,
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
         secret_fetch_backend: str = "provider-secret-resolver",
+        effect_fence: EffectFenceProtocol | None = None,
     ) -> None:
         """Construct dispatcher with the cross-axis dependencies (multi-server).
 
@@ -414,6 +419,11 @@ class RuntimeToolDispatcher:
         self._provider_secret_resolver = provider_secret_resolver
         self._secret_fetch_audit_emitter = secret_fetch_audit_emitter
         self._secret_fetch_backend = secret_fetch_backend
+        # B-EFFECT-FENCE (runtime spec §14.22 C-RT-31) — at-most-once execution
+        # of non-idempotent effects. None (default, opt-out) → no reserve, no
+        # claim files, byte-identical to pre-v1.60. Bound by the stage-5 factory
+        # only when `RuntimeConfig.effect_fencing=True`.
+        self._effect_fence = effect_fence
 
     @classmethod
     def for_single_host(
@@ -433,6 +443,7 @@ class RuntimeToolDispatcher:
         provider_secret_resolver: Any = None,
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
         secret_fetch_backend: str = "provider-secret-resolver",
+        effect_fence: EffectFenceProtocol | None = None,
     ) -> RuntimeToolDispatcher:
         """Single-host convenience constructor — the degenerate 1-host case.
 
@@ -473,6 +484,7 @@ class RuntimeToolDispatcher:
             provider_secret_resolver=provider_secret_resolver,
             secret_fetch_audit_emitter=secret_fetch_audit_emitter,
             secret_fetch_backend=secret_fetch_backend,
+            effect_fence=effect_fence,
         )
 
     def _attribute_tool_cost_best_effort(
@@ -835,6 +847,20 @@ class RuntimeToolDispatcher:
             idempotency_key = _compose_idempotency_key(
                 step_context.parent_idempotency_key, step.step_id, tool_id
             )
+
+            # --- Step 6b: effect fence (B-EFFECT-FENCE, §14.22 C-RT-31) ------
+            # At-most-once EXECUTION: crash-atomically claim this effect's
+            # idempotency_key BEFORE `call_tool` fires. The FIRST dispatch wins
+            # (fires); any re-dispatch of the SAME effect — a crash-then-resume
+            # re-run of an effected-but-uncommitted step (the
+            # `_determine_resume_at` prefix-skip protects only COMMITTED steps),
+            # or an in-process `RetryBreakerToolDispatcher` retry — LOSES and
+            # fail-closes to §22.1 HITL rather than re-fire the non-idempotent
+            # effect. None (opt-out) → no claim → byte-identical to pre-v1.60.
+            if self._effect_fence is not None and not self._effect_fence.try_reserve(
+                idempotency_key
+            ):
+                raise EffectFenceReservedUncommittedError(idempotency_key=idempotency_key)
 
             # --- Step 7: invoke + mcp.tool.call span emission ---------------
             # Per AS spec v1.6 §15.9 dual-attribute emission: any MCP-protocol

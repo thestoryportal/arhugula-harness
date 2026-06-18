@@ -66,6 +66,7 @@ from harness_runtime.lifecycle.docker_tool_execution_driver import (
 from harness_runtime.lifecycle.e2b_tool_execution_driver import (
     E2BManagedFullVMToolRunnerExecutionDriver,
 )
+from harness_runtime.lifecycle.effect_fence import RuntimeEffectFence
 from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
 from harness_runtime.lifecycle.retry_breaker_tool import RetryBreakerToolDispatcher
 from harness_runtime.lifecycle.runtime_tool_dispatcher import (
@@ -408,6 +409,19 @@ async def materialize_runtime_tool_dispatcher_stage(
             server_name=server_name,
         )
 
+    # B-EFFECT-FENCE (runtime spec §14.22 C-RT-31) — construct the durable
+    # at-most-once effect fence when opted-in (`config.effect_fencing=True`). The
+    # claim files live under `repository_root/.harness/effect-fence` (the §14.21
+    # `repository_root` basis for `.harness/`). Default opt-out → None → the
+    # dispatcher reserves nothing (byte-identical to pre-v1.60). Meaningful only
+    # under a durable engine class; the fence is harmless (unconsulted) overhead
+    # for a non-durable run that never resumes.
+    effect_fence = (
+        RuntimeEffectFence(fence_dir=config.repository_root / ".harness" / "effect-fence")
+        if config.effect_fencing
+        else None
+    )
+
     # --- Step 3: bare RuntimeToolDispatcher (C-RT-19) ------------------------
     # U-OD-39: thread cost-attribution substrate (cost_chain + audit_writer
     # from ctx; rate_table from caller kwarg sourced from RATE_TABLE_V1 at
@@ -436,6 +450,7 @@ async def materialize_runtime_tool_dispatcher_stage(
             procedural_tier_snapshot_resolver=ctx.procedural_tier_snapshot_resolver,
         ).emit_secret_fetch_audit_entry,
         secret_fetch_backend=config.provider_secrets.backend.value,
+        effect_fence=effect_fence,
     )
 
     # --- Step 4: RetryBreakerToolDispatcher (C-RT-21 §14.11) -----------------

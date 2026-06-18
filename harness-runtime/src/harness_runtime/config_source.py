@@ -147,6 +147,11 @@ class _RuntimeEnvSettings(BaseSettings):
     tenant_id: str | None = None
     ollama_host: str | None = None
     ollama_optional: bool | None = None
+    # B-EFFECT-FENCE (§14.22 C-RT-31) — env-keyed: it gates a CORRECTNESS property
+    # (at-most-once execution), so HARNESS_EFFECT_FENCING must not be silently
+    # dropped. (The recent `inter_step_data_flow` / `*_optional` flags remain
+    # file/CLI-only — a known env gap, separate config-hygiene item.)
+    effect_fencing: bool | None = None
 
 
 class RuntimeConfigSource:
