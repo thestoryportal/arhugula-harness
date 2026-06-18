@@ -81,7 +81,11 @@ from harness_cp.pause_resume_protocol_types import (
     WorkflowPauseReason,
 )
 from harness_cp.per_role_catalog import derive_agent_role
-from harness_cp.per_step_override_evaluator import StepEffectiveBinding, resolve_step_binding
+from harness_cp.per_step_override_evaluator import (
+    StepEffectiveBinding,
+    compose_override_entry_payload,
+    resolve_step_binding,
+)
 from harness_cp.topology_pattern import CascadePolicy, TopologyPattern
 from harness_cp.workflow_driver_errors import (
     BranchBarrierDeadlineExceededError,
@@ -2727,6 +2731,100 @@ def append_branch_terminal_ledger_entry(
     branch_writer.append(payload, write_key)
 
 
+def append_branch_override_ledger_entry(
+    *,
+    branch_writer: BufferingLedgerWriter,
+    workflow_id: str,
+    step_id: str,
+    post_override_step_config: Mapping[str, Any],
+    actor: ActorIdentity,
+    timestamp: datetime,
+    procedural_tier_snapshot_ref: Identifier | None = None,
+) -> None:
+    """Buffer a branch's per-step **override-application** ledger entry — the
+    non-linear counterpart of the `SINGLE_THREADED_LINEAR` site at
+    `_execute_workflow_body` (`emit_override_state_ledger_entry`, gated on
+    `binding.override_applied`) — R-FS-1 `B-NONLINEAR-OVERRIDE-PROVENANCE`.
+
+    Closes the CP spec v1.40 §6.6 topology-scope gap: at HEAD only the linear
+    path emitted the `cp.per-step-override-application` entry, so a per-step
+    override on any of the 5 non-linear strategies (model / prompt / role) was
+    applied at dispatch but left **no dedicated override-ledger entry**. This
+    helper emits it **through the buffered-branch path** (C-CP-25 §25.12 D1.b):
+    the entry is buffered into the branch's `BufferingLedgerWriter`, so the
+    single barrier drain (`drain_branch_buffers`) serializes it through the one
+    real writer on the driver thread in branch-index order — realizing ADR-F2
+    v1.2's single-threaded-write boundary without a synchronous per-worker write.
+
+    The entry is composed via `compose_override_entry_payload` (the shared shape
+    authority), so the persisted entry is **byte-shape-identical** to the linear
+    path — same `action_id` + the same §16.5.4 `(workflow_id, step_id,
+    outcome_hash)` idempotency key. The key is per-`(step, outcome)` (NOT
+    branch-scoped — unlike the step/terminal entries above, whose
+    `compose_branch_path`/`compose_branch_terminal_path` scoping prevents the IS
+    dedup from dropping a legitimately-repeated step *execution*): an override is
+    a static property of the resolved binding, so a `(step, outcome)` repeated
+    across iterations / recursion levels idempotently dedups at the IS writer to
+    one entry (the spec's designed §16.5.4 semantic).
+
+    `timestamp` is a buffer-time placeholder the barrier drain overrides
+    (`drain_branch_buffers` re-stamps to the append moment; see the module-level
+    timestamp discipline). `procedural_tier_snapshot_ref` is the caller-supplied
+    R-003 sidecar (IS spec v1.3 §5.1) — the strategy resolves + passes it, the
+    same way the step/terminal helpers do; `None` for a resolver-less ctx.
+    """
+    from harness_is.state_ledger_entry_schema import Identifier
+    from harness_is.state_ledger_write import WriteKey
+
+    payload = compose_override_entry_payload(
+        workflow_id=workflow_id,
+        step_id=step_id,
+        post_override_step_config=post_override_step_config,
+        actor=actor,
+        procedural_tier_snapshot_ref=procedural_tier_snapshot_ref,
+        timestamp=timestamp,
+    )
+    write_key = WriteKey(
+        thread_id=Identifier(workflow_id),
+        step_id=Identifier(step_id),
+        idempotency_key=payload.idempotency_key,
+    )
+    branch_writer.append(payload, write_key)
+
+
+def _buffer_branch_override_if_applied(
+    *,
+    branch_writer: BufferingLedgerWriter,
+    workflow_id: str,
+    step: WorkflowStep,
+    binding: StepEffectiveBinding,
+    timestamp: datetime,
+    snapshot_ref: Identifier | None,
+) -> None:
+    """Buffer the per-step override-application entry IFF the override was applied
+    (`binding.override_applied`) — the non-linear sibling of the
+    `_execute_workflow_body` linear guard (`emit_override_state_ledger_entry`,
+    gated on `binding.override_applied`). R-FS-1 `B-NONLINEAR-OVERRIDE-PROVENANCE`.
+
+    The shared guard + plumbing every non-linear strategy calls (at branch-plan
+    construction / sequential dispatch) so the firing condition + the
+    `binding.model_dump(mode="json")` outcome-bytes projection + the actor
+    derivation stay single-source. A no-op when no override applied (byte-
+    identical pre-arc behavior).
+    """
+    if not binding.override_applied:
+        return
+    append_branch_override_ledger_entry(
+        branch_writer=branch_writer,
+        workflow_id=workflow_id,
+        step_id=str(step.step_id),
+        post_override_step_config=binding.model_dump(mode="json"),
+        actor=ActorIdentity(branch_writer.actor.actor_id),
+        timestamp=timestamp,
+        procedural_tier_snapshot_ref=snapshot_ref,
+    )
+
+
 # ---------------------------------------------------------------------------
 # U-CP-86 — PARALLELIZATION driver strategy (C-CP-25 §25.11)
 # ---------------------------------------------------------------------------
@@ -2874,10 +2972,38 @@ def _writer_ran_a_step(writer: BufferingLedgerWriter) -> bool:
     would inflate `workflow.step_count` + emit a spurious `STEP_BOUNDARY`
     ([P2-b]). The step/terminal discriminator is the same
     `branch_metadata.terminal_status` `resume_should_redispatch` reads (§25.15.2
-    obl. 7). Defensive `getattr` for any future non-branch payload (none today —
-    both branch append helpers set `branch_metadata`)."""
+    obl. 7).
+
+    A **per-step override-application** entry (`append_branch_override_ledger_entry`,
+    B-NONLINEAR-OVERRIDE-PROVENANCE) carries `branch_metadata=None` — it is NOT a
+    step entry. A branch whose dispatch raised/was-cancelled BEFORE buffering a
+    step entry can hold ONLY its override entry (buffered at branch-plan time,
+    before dispatch); that branch did NOT run a step, so the predicate must
+    require a present `branch_metadata` (a step/terminal entry), not merely
+    `terminal_status is None` (which a `None` branch_metadata reads as, via the
+    old defensive getattr — the bug that would mis-count an override-only writer).
+    """
     return any(
-        getattr(getattr(payload, "branch_metadata", None), "terminal_status", None) is None
+        (bm := getattr(payload, "branch_metadata", None)) is not None and bm.terminal_status is None
+        for payload, _write_key in writer.buffered_entries
+    )
+
+
+def _writer_has_branch_disposition(writer: BufferingLedgerWriter) -> bool:
+    """True iff the branch buffered a **step OR terminal** entry (any entry
+    carrying a `branch_metadata`) — i.e. it dispatched, or was classified at a
+    dispatch boundary.
+
+    A per-step **override-application** entry (`append_branch_override_ledger_entry`,
+    B-NONLINEAR-OVERRIDE-PROVENANCE) carries `branch_metadata=None` and does NOT
+    count: a CASCADE_CANCEL worker cancelled BEFORE scheduling its dispatch that
+    nonetheless carries its pre-fan-out override entry is still **not-yet-dispatched**
+    and MUST receive its `cancelled` terminal (§25.15.2 obl. 4 /
+    `resume_should_redispatch`). The pre-arc `entry_count == 0` predicate would now
+    miss it (the override makes `entry_count == 1`), so the not-yet-dispatched scan
+    keys on the absence of a step/terminal disposition, not on an empty buffer."""
+    return any(
+        getattr(payload, "branch_metadata", None) is not None
         for payload, _write_key in writer.buffered_entries
     )
 
@@ -3071,6 +3197,22 @@ def _execute_parallelization(
             agent_role=binding.agent_role or _DEFAULT_PARALLELIZATION_AGENT_ROLE,
         )
         writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=branch_index)
+        # B-NONLINEAR-OVERRIDE-PROVENANCE — buffer the per-step override-application
+        # entry through the branch's writer (the linear `_execute_workflow_body`
+        # site's non-linear counterpart). Buffered HERE on the driver thread (the
+        # writer's first op, before the fan-out spawns → no concurrent access; the
+        # branch's step entry is buffered later on the loop thread, so the drain
+        # serializes override-then-step in branch-index order). Buffering at
+        # resolution time mirrors the linear path emitting the override BEFORE
+        # dispatch (override is a resolution-time binding fact).
+        _buffer_branch_override_if_applied(
+            branch_writer=writer,
+            workflow_id=workflow_id,
+            step=step,
+            binding=binding,
+            timestamp=fanout_timestamp,
+            snapshot_ref=snapshot_ref,
+        )
         branch_plan.append((branch_index, step, child, writer, binding))
     branch_writers = [plan[3] for plan in branch_plan]
 
@@ -3448,6 +3590,19 @@ def _execute_evaluator_optimizer(
             # precedent). None → byte-identical to v1.37 (§14.5.3 invariant-1).
             agent_role=binding.agent_role,
         )
+        # B-NONLINEAR-OVERRIDE-PROVENANCE — buffer the per-step override entry
+        # BEFORE dispatch (mirrors the linear path's pre-dispatch emission). A
+        # re-dispatched step (generate across iterations) buffers the same
+        # (step, outcome) key each time → the IS writer idempotently dedups to
+        # one persisted override entry (the §16.5.4 designed semantic).
+        _buffer_branch_override_if_applied(
+            branch_writer=writer,
+            workflow_id=workflow_id,
+            step=step,
+            binding=binding,
+            timestamp=loop_timestamp,
+            snapshot_ref=snapshot_ref,
+        )
         step_output = step_dispatchers.lookup(step.step_kind).dispatch(
             binding, step, step_context=step_context
         )
@@ -3725,20 +3880,37 @@ def _execute_orchestrator_workers(
         # to the fan-out children (CP spec v1.38 §6.1).
         agent_role=_per_step_role_override(manifest_entry, orchestrator_step.step_id),
     )
+    # Resolve the binding (pure) + buffer the orchestrator step's own per-step
+    # override entry BEFORE dispatch — uniform with the parallelization / worker /
+    # evaluator-optimizer sites + the linear path (the override is a
+    # resolution-time binding fact, recorded before dispatch, gated on
+    # binding.override_applied). B-NONLINEAR-OVERRIDE-PROVENANCE.
+    orchestrator_binding = resolve_step_binding(
+        manifest_entry,
+        str(orchestrator_step.step_id),
+        default_model_binding=default_model_binding,
+        persona_tier=manifest_entry.persona_tier,
+    )
+    _buffer_branch_override_if_applied(
+        branch_writer=orchestrator_writer,
+        workflow_id=workflow_id,
+        step=orchestrator_step,
+        binding=orchestrator_binding,
+        timestamp=fanout_timestamp,
+        snapshot_ref=snapshot_ref,
+    )
     try:
-        orchestrator_binding = resolve_step_binding(
-            manifest_entry,
-            str(orchestrator_step.step_id),
-            default_model_binding=default_model_binding,
-            persona_tier=manifest_entry.persona_tier,
-        )
         orchestrator_output: Mapping[str, Any] = step_dispatchers.lookup(
             orchestrator_step.step_kind
         ).dispatch(orchestrator_binding, orchestrator_step, step_context=orchestrator_context)
     except Exception as exc:
-        # The orchestrator failed before any worker fan-out → FAILED (nothing
-        # buffered yet; no silent loss). cascade_policy governs WORKER failure,
-        # not the orchestrator's own dispatch.
+        # The orchestrator failed before any worker fan-out → FAILED. Drain the
+        # orchestrator_writer so a buffered per-step override entry persists (the
+        # override WAS applied; recorded on a failed dispatch, as the linear path
+        # does) — its `_writer_ran_a_step` is False (override-only, no step entry),
+        # so no spurious STEP_BOUNDARY + step_count stays 0. cascade_policy governs
+        # WORKER failure, not the orchestrator's own dispatch.
+        drain_branch_buffers(ctx.ledger_writer, [orchestrator_writer])
         return RunResult(
             workflow_id=workflow_id,
             run_id=run_id,
@@ -3804,6 +3976,19 @@ def _execute_orchestrator_workers(
             fanout_parent, branch_index=branch_index, agent_role=role
         ).model_copy(update={"step_index": branch_index + 1})
         writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=branch_index)
+        # B-NONLINEAR-OVERRIDE-PROVENANCE — buffer the worker's per-step override
+        # entry through its writer (driver thread, before the fan-out spawns; see
+        # the parallelization site). Drains in branch-index order with the
+        # worker's step entry. HIERARCHICAL_DELEGATION inherits this — its
+        # recursion re-enters `_execute_orchestrator_workers`.
+        _buffer_branch_override_if_applied(
+            branch_writer=writer,
+            workflow_id=workflow_id,
+            step=step,
+            binding=binding,
+            timestamp=fanout_timestamp,
+            snapshot_ref=snapshot_ref,
+        )
         branch_plan.append((branch_index, step, child, writer, binding))
     branch_writers = [plan[3] for plan in branch_plan]
 
@@ -4069,11 +4254,15 @@ def _execute_orchestrator_workers(
         worker_failed = True
 
     if cascade_policy is CascadePolicy.CASCADE_CANCEL:
-        # obl. 4: a not-yet-dispatched worker (empty buffer — its task was cancelled
-        # before scheduling its dispatch) records a `cancelled` terminal so
-        # `resume_should_redispatch` is False (no double-dispatch on resume).
+        # obl. 4: a not-yet-dispatched worker (no step/terminal disposition — its
+        # task was cancelled before scheduling its dispatch) records a `cancelled`
+        # terminal so `resume_should_redispatch` is False (no double-dispatch on
+        # resume). Keyed on the ABSENCE of a step/terminal disposition, NOT an empty
+        # buffer: an overridden worker carries its pre-fan-out override entry
+        # (`branch_metadata=None`, B-NONLINEAR-OVERRIDE-PROVENANCE), so an
+        # `entry_count == 0` test would skip its required `cancelled` terminal.
         for _bi, _step, child, writer, _binding in branch_plan:
-            if writer.entry_count == 0:
+            if not _writer_has_branch_disposition(writer):
                 append_branch_terminal_ledger_entry(
                     branch_writer=writer,
                     branch_context=child,
@@ -4421,6 +4610,23 @@ def _execute_decentralized_handoff(
         # from the entry's branch_metadata.branch_index=0; different layers). One
         # writer per stage → one STEP_BOUNDARY per stage via _drain_and_emit_*.
         writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=stage_index)
+        # B-NONLINEAR-OVERRIDE-PROVENANCE — register the stage writer + buffer its
+        # per-step override entry BEFORE dispatch (uniform with the parallelization
+        # / worker / orchestrator / evaluator-optimizer sites + the linear path: the
+        # override is a resolution-time binding fact, recorded before dispatch). The
+        # writer is added to stage_writers HERE so every failure path (`_finish`
+        # drains stage_writers) persists the override even on a failed stage; its
+        # `_writer_ran_a_step` is False (override-only, no step entry) so a failed
+        # stage adds no STEP_BOUNDARY / step-count.
+        stage_writers.append(writer)
+        _buffer_branch_override_if_applied(
+            branch_writer=writer,
+            workflow_id=workflow_id,
+            step=step,
+            binding=binding,
+            timestamp=handoff_timestamp,
+            snapshot_ref=snapshot_ref,
+        )
         try:
             output = step_dispatchers.lookup(step.step_kind).dispatch(
                 binding, step, step_context=stage_ctx
@@ -4472,7 +4678,6 @@ def _execute_decentralized_handoff(
             timestamp=handoff_timestamp,
             procedural_tier_snapshot_ref=snapshot_ref,
         )
-        stage_writers.append(writer)
         stage_outputs[str(step.step_id)] = output
         # Compose the ownership transfer to the next stage-expert (a RECORD; surfaced
         # in final_state). Terminal stage → no further handoff (structural).
@@ -4506,6 +4711,7 @@ __all__ = [
     "LedgerWriterLike",
     "LifecycleEventEmitterLike",
     "StepDispatcher",
+    "append_branch_override_ledger_entry",
     "append_branch_step_ledger_entry",
     "append_branch_terminal_ledger_entry",
     "bounded_barrier",
