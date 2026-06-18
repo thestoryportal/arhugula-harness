@@ -50,8 +50,10 @@ bridge is preserved (verified empirically at
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import uuid
+import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -110,6 +112,39 @@ __all__ = [
 _CURRENT_TOOL_CTX: contextvars.ContextVar[Context[Any, Any] | None] = contextvars.ContextVar(
     "harness.current_tool_ctx", default=None
 )
+
+# B-INTERSTEP (runtime spec §14.21 C-RT-29 invariant 7) — single-flight guard
+# for inter-step runs. When the inter-step output channel is bound (opt-in
+# `RuntimeConfig.inter_step_data_flow=True`), concurrent `run_workflow`
+# invocations SHARE the one channel on the reused bootstrap-scoped
+# `HarnessContext` (daemon-client mode, U-RT-108 — one ctx serves many
+# invocations): run B's per-run `reset()` + records would corrupt run A's
+# in-flight upstream reads. Until the registered per-run-isolation follow-on
+# (a ContextVar-scoped channel, which also covers `cost_record_accumulator` —
+# the IDENTICAL shared-holder exposure, CA #625), inter-step runs are
+# serialized: `[reset + execute]` runs under this lock, so each inter-step run
+# sees only its own outputs. The DEFAULT path (channel unbound) never touches
+# the lock → full concurrency unchanged, byte-identical to pre-v1.59.
+#
+# Keyed per running loop: a single module-level `asyncio.Lock` binds to the
+# first loop that awaits it and raises "bound to a different event loop" under
+# a second loop (the multi-`asyncio.run` test pattern). The concurrency being
+# guarded is always WITHIN one loop (concurrent asyncio tasks), so a per-loop
+# lock is both correct and loop-safe; a `WeakKeyDictionary` lets a finished
+# loop's lock be collected.
+_INTER_STEP_RUN_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _inter_step_run_lock() -> asyncio.Lock:
+    """The single-flight lock for the current running loop (lazily created)."""
+    loop = asyncio.get_running_loop()
+    lock = _INTER_STEP_RUN_LOCKS.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _INTER_STEP_RUN_LOCKS[loop] = lock
+    return lock
 
 
 @dataclass(frozen=True)
@@ -342,17 +377,25 @@ def materialize_mcp_server_stage(
             _holder = getattr(harness_ctx, "resume_context_holder", None)
             if _holder is not None:
                 _holder.set(_resume_context)
-        # B-INTERSTEP (runtime spec §14.21 C-RT-29) — reset the run-scoped
-        # inter-step output channel at the per-run boundary so a REUSED
-        # `HarnessContext` (daemon-client mode, U-RT-108 — one bootstrapped ctx
-        # serves many `run_workflow` invocations) does NOT leak a prior run's step
-        # outputs into THIS run's first dispatch (Codex review). No-op when the
-        # channel is unbound (opt-out default). NOT reset on a resume: a resume
-        # continues the SAME run, so prior in-run outputs stay valid.
-        if _resume_snapshot is None:
-            _inter_step_channel = getattr(harness_ctx, "inter_step_output_channel", None)
-            if _inter_step_channel is not None:
-                _inter_step_channel.reset()
+        # B-INTERSTEP (runtime spec §14.21 C-RT-29) — per-run reset + invariant-7
+        # single-flight. Resetting the run-scoped inter-step output channel at the
+        # per-run boundary stops a REUSED `HarnessContext` (daemon-client mode,
+        # U-RT-108 — one bootstrapped ctx serves many `run_workflow` invocations)
+        # leaking a prior run's step outputs into THIS run's first dispatch. When
+        # the channel is bound, concurrent invocations SHARE it, so `[reset +
+        # execute]` runs under the per-loop inter-step lock (`_inter_step_guard`)
+        # — inter-step runs are single-flight (Codex review r4) until the
+        # registered per-run-isolation follow-on. NOT reset on a resume: a resume
+        # continues the SAME run, so prior in-run outputs stay valid. Channel
+        # unbound (opt-out default) → `nullcontext`, zero concurrency cost.
+        _inter_step_channel = (
+            getattr(harness_ctx, "inter_step_output_channel", None)
+            if _resume_snapshot is None
+            else None
+        )
+        _inter_step_guard: contextlib.AbstractAsyncContextManager[Any] = (
+            _inter_step_run_lock() if _inter_step_channel is not None else contextlib.nullcontext()
+        )
         # Bind the in-flight tool ctx for the duration of the workflow
         # execution per spec v1.36 §14.18 chapeau per-session ctx isolation.
         # `ServerCtxElicitCallback` (per AC #4) reads via the module-level
@@ -370,22 +413,30 @@ def materialize_mcp_server_stage(
         )
 
         try:
-            # Same composition pattern as the v1.11 `api.run()` baseline
-            # (asyncio.to_thread for the sync CP driver; asyncio.wait_for
-            # to enforce `RT-FAIL-DRAIN-TIMEOUT` per C-RT-14 + U-RT-44 AC #2).
-            cp_result = await asyncio.wait_for(
-                asyncio.to_thread(
-                    _execute_workflow,
-                    workflow.manifest_entry,
-                    workflow.steps,
-                    run_id,
-                    harness_ctx,
-                    default_model_binding=workflow.default_model_binding,
-                    step_dispatchers=cast(Any, effective_step_dispatchers),
-                    pause_snapshot_input=_resume_snapshot,
-                ),
-                timeout=drain_timeout_seconds,
-            )
+            # `[reset + execute]` is atomic under `_inter_step_guard` (the
+            # per-loop lock when the inter-step channel is bound; `nullcontext`
+            # otherwise — default path keeps full concurrency). Resetting inside
+            # the lock means a concurrent inter-step run cannot wipe this run's
+            # channel mid-flight (Codex review r4, spec §14.21 C-RT-29 invariant 7).
+            async with _inter_step_guard:
+                if _inter_step_channel is not None:
+                    _inter_step_channel.reset()
+                # Same composition pattern as the v1.11 `api.run()` baseline
+                # (asyncio.to_thread for the sync CP driver; asyncio.wait_for
+                # to enforce `RT-FAIL-DRAIN-TIMEOUT` per C-RT-14 + U-RT-44 AC #2).
+                cp_result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        _execute_workflow,
+                        workflow.manifest_entry,
+                        workflow.steps,
+                        run_id,
+                        harness_ctx,
+                        default_model_binding=workflow.default_model_binding,
+                        step_dispatchers=cast(Any, effective_step_dispatchers),
+                        pause_snapshot_input=_resume_snapshot,
+                    ),
+                    timeout=drain_timeout_seconds,
+                )
             return cp_result.model_dump(mode="json")
         except TimeoutError:
             # `RT-FAIL-DRAIN-TIMEOUT` projection per U-RT-44 AC #2;
