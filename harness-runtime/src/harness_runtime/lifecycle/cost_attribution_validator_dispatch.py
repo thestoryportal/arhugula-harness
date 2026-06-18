@@ -61,7 +61,7 @@ from harness_od.audit_ledger_types import AuditLedgerEntry
 from harness_od.cost_record_audit_writer import (
     _project_cost_record_to_audit_payload,
 )
-from harness_od.idempotency_join_dedup import SpanCostRecord
+from harness_od.idempotency_join_dedup import DispatchKind, SpanCostRecord
 from harness_od.rate_table_types import RateTable
 
 from harness_runtime.types import AuditLedgerWriter, CostAttributionChain
@@ -81,9 +81,10 @@ _DEFAULT_SIGNING_KEY_ID = "harness-cost-attribution-v1"
 #: context (PURE_PATTERN_NO_ENGINE engine class default per ADR-D1 v1.2 §1.1.1).
 _DEFAULT_REPLAY_DISPOSITION = ReplayDisposition.NO_REPLAY
 
-#: Family tag for validator-dispatch cost records per C-OD-05 §5.1 row 15
-#: provider_discriminator family taxonomy. Distinct from "llm" + "tool" tags.
-_VALIDATOR_FAMILY_TAG = "validator"
+#: Dispatch kind for validator-dispatch cost records (C-OD-15 §15.1.1) — the
+#: typed key for `RollupAxis.PER_DISPATCH_KIND`. The cross-family
+#: `provider_discriminator` tag (§15.3) is `None` at this per-dispatch site.
+_VALIDATOR_DISPATCH_KIND = DispatchKind.VALIDATOR
 
 
 def _compute_validator_cost(rate_table: RateTable, execution_time_ms: float) -> Decimal:
@@ -132,7 +133,8 @@ def attribute_validator_dispatch_cost(
       - Cost compute: `_compute_validator_cost` (CPU-meter formula
         `cpu_rate_per_ms × execution_time_ms`) instead of the 3-branch
         tool `cost_kind` formula.
-      - provider_discriminator: `"validator"` instead of `"tool"`.
+      - dispatch_kind: `DispatchKind.VALIDATOR` instead of `DispatchKind.TOOL`;
+        provider_discriminator: `None` (no chain-level family tag per-dispatch).
       - gen_ai_provider_name: `f"validator:{validator_id}"` (repurposed
         carrier field; SpanCostRecord schema's `gen_ai_provider_name` is
         `str`-typed and permits non-LLM tags by C-OD-05 §5.1 row-15 family
@@ -209,7 +211,8 @@ def attribute_validator_dispatch_cost(
         retry_attempt_number=None,
         retry_cause_attribution=None,
         is_replay_derived=False,
-        provider_discriminator=_VALIDATOR_FAMILY_TAG,
+        provider_discriminator=None,
+        dispatch_kind=_VALIDATOR_DISPATCH_KIND,
         gen_ai_provider_name=f"validator:{validator_id}",
         gen_ai_request_model="",
     )

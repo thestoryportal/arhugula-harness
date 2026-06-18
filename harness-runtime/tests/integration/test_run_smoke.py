@@ -738,7 +738,7 @@ async def test_e2e_run_step_body_fires_cost_attribution_chain(
         PriceRateKey,
         SpanCostInputs,
     )
-    from harness_od.idempotency_join_dedup import SpanCostRecord
+    from harness_od.idempotency_join_dedup import DispatchKind, SpanCostRecord
     from harness_runtime.api import run as _run
 
     config = _config(tmp_path)
@@ -808,7 +808,7 @@ async def test_e2e_run_step_body_fires_cost_attribution_chain(
                 sandbox_overhead=None,
             )
 
-            # Step 3: compose the 12-field SpanCostRecord (the carrier
+            # Step 3: compose the 13-field SpanCostRecord (the carrier
             # consumed by U-OD-21 rollup_costs_by_axis + the audit
             # ledger join site per §14.4).
             cost_record = SpanCostRecord(
@@ -822,6 +822,7 @@ async def test_e2e_run_step_body_fires_cost_attribution_chain(
                 retry_cause_attribution=None,
                 is_replay_derived=False,
                 provider_discriminator="anthropic",
+                dispatch_kind=DispatchKind.LLM,
                 gen_ai_provider_name="anthropic",
                 gen_ai_request_model="claude-haiku-4-5",
             )
@@ -893,15 +894,16 @@ async def test_e2e_run_step_body_fires_cost_attribution_chain(
         "least once per CP spec v1.5 §25.9"
     )
 
-    # AC shape verification: the produced entry is a full 12-field
-    # SpanCostRecord with the U-OD-20 v2.8 D-5 rollup keys materialized.
+    # AC shape verification: the produced entry is a full 13-field
+    # SpanCostRecord with the U-OD-20 v2.8 D-5 + v1.30 rollup keys materialized.
     record = cost_records[0]
     assert isinstance(record, SpanCostRecord)
     assert record.total_cost > 0  # non-trivial cost value emitted
     assert record.total_latency_ms == 10
     # idempotency_key was updated by §14.4 join — no longer the placeholder.
     assert record.idempotency_key == "run-id::step::step-0"
-    # v2.8 D-5 rollup keys are populated.
+    # v2.8 D-5 + v1.30 rollup keys are populated.
     assert record.provider_discriminator == "anthropic"
+    assert record.dispatch_kind is DispatchKind.LLM
     assert record.gen_ai_provider_name == "anthropic"
     assert record.gen_ai_request_model == "claude-haiku-4-5"

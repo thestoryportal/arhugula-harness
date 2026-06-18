@@ -98,7 +98,8 @@ def test_attribute_llm_dispatch_cost_returns_attached_record_for_anthropic(
     assert attached.idempotency_key == "parent-idem-1"  # AC #3
     assert attached.gen_ai_provider_name == "anthropic"
     assert attached.gen_ai_request_model == "claude-haiku-4-5"
-    assert attached.provider_discriminator == "llm"
+    assert attached.provider_discriminator is None  # v1.30 — no chain-level family tag
+    assert attached.dispatch_kind == "llm"  # v1.30 — the PER_DISPATCH_KIND key
     # AC #2 — cost uses usage attrs; per claude-haiku-4-5 override $1/MTok in + $5/MTok out:
     # cost = 1000 * (1.00 / 1e6) + 500 * (5.00 / 1e6) = 0.001 + 0.0025 = 0.0035
     assert attached.total_cost == pytest.approx(0.0035, rel=1e-6)

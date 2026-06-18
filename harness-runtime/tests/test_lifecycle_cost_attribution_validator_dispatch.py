@@ -134,7 +134,8 @@ def test_attribute_validator_dispatch_cost_returns_attached_record(
     )
     assert attached.span_id == "abcdef0123456789"
     assert attached.idempotency_key == "parent-idem-1"  # joins to parent
-    assert attached.provider_discriminator == "validator"
+    assert attached.provider_discriminator is None  # v1.30 — no chain-level family tag
+    assert attached.dispatch_kind == "validator"  # v1.30 — the PER_DISPATCH_KIND key
     assert attached.gen_ai_provider_name == "validator:schema-validator"
     assert attached.gen_ai_request_model == ""
     assert attached.total_cost == pytest.approx(0.1, rel=1e-9)  # 10 ms × 0.01

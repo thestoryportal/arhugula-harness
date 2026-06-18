@@ -52,6 +52,7 @@ from harness_od.cost_formula import (
 )
 from harness_od.idempotency_join_dedup import (
     DedupOutcome,
+    DispatchKind,
     F2StateLedgerEntry,
     SpanCostRecord,
     SpanIngestionView,
@@ -144,6 +145,7 @@ def _cost_record(
         retry_cause_attribution=None,
         is_replay_derived=False,
         provider_discriminator="anthropic-family",
+        dispatch_kind=DispatchKind.LLM,
         gen_ai_provider_name="anthropic",
         gen_ai_request_model="claude-opus-4-7",
     )

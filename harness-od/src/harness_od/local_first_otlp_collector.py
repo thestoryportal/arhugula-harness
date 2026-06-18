@@ -333,15 +333,15 @@ class TuiTraceBrowserSurface(BaseModel):
 
 #: Acc #8 scoped-query categories — `(category, query_count, source_unit)`.
 #: U-OD-23 (5 operator-burden eval primitives) is landed and wired below. The
-#: U-OD-21 (3 cost-attribution rollup axes) and U-OD-25 (4 alignment-floor
+#: U-OD-21 (4 cost-attribution rollup axes — PER_DISPATCH_KIND added at OD spec
+#: v1.30, B-COST-DISCRIMINATOR-TAXONOMY) and U-OD-25 (4 alignment-floor
 #: drift-event primitives) contributions are recorded here as documented
-#: integration-time additions — U-OD-21 is HALTED Class 1 and U-OD-25 (L8) is
-#: not yet landed; neither is in U-OD-27's `Depends on` cone. The (b) + (c)
-#: query rows are populated at sub-phase 7c / when those units land. See module
-#: docstring (Class 3 informational).
+#: integration-time additions — U-OD-25 (L8) is not yet landed; not in U-OD-27's
+#: `Depends on` cone. The (b) + (c) query rows are populated at sub-phase 7c /
+#: when those units land. See module docstring (Class 3 informational).
 SCOPED_QUERY_CATEGORIES: tuple[tuple[str, int, str], ...] = (
     ("operator_burden_eval_primitive", 5, "U-OD-23"),
-    ("cost_attribution_rollup_axis", 3, "U-OD-21"),
+    ("cost_attribution_rollup_axis", 4, "U-OD-21"),
     ("alignment_floor_drift_event", 4, "U-OD-25"),
 )
 

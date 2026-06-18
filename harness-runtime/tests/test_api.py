@@ -195,6 +195,8 @@ def test_run_result_all_required_fields_per_c_rt_09() -> None:
         "audit_ledger_head_hash",
         "trace_ids",
         "cost_attribution",
+        # NEW v1.57 (B-COST-DISCRIMINATOR-TAXONOMY) — optional dispatch-type rollup.
+        "cost_attribution_by_dispatch_kind",
         "failure_cause",
         # NEW v1.45 (C-RT-30, R-CC-1 arc #3) — optional pause-snapshot surface.
         "pause_snapshot",

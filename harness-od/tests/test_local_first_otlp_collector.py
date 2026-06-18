@@ -151,13 +151,17 @@ def test_tui_scoped_queries_cover_all_primitives() -> None:
 
 
 def test_scoped_query_categories_catalog() -> None:
-    """`SCOPED_QUERY_CATEGORIES` records the 5+3+4 acc #8 query categories."""
+    """`SCOPED_QUERY_CATEGORIES` records the 5+4+4 acc #8 query categories.
+
+    cost_attribution_rollup_axis grew 3→4 at OD spec v1.30 (PER_DISPATCH_KIND,
+    B-COST-DISCRIMINATOR-TAXONOMY).
+    """
     counts = {cat: (n, src) for cat, n, src in SCOPED_QUERY_CATEGORIES}
     assert counts["operator_burden_eval_primitive"] == (5, "U-OD-23")
-    assert counts["cost_attribution_rollup_axis"] == (3, "U-OD-21")
+    assert counts["cost_attribution_rollup_axis"] == (4, "U-OD-21")
     assert counts["alignment_floor_drift_event"] == (4, "U-OD-25")
-    # Total acc #8 query count is 12.
-    assert sum(n for _, n, _ in SCOPED_QUERY_CATEGORIES) == 12
+    # Total acc #8 query count is 13.
+    assert sum(n for _, n, _ in SCOPED_QUERY_CATEGORIES) == 13
 
 
 # --- acc #9 ----------------------------------------------------------------

@@ -287,5 +287,8 @@ async def test_validator_and_webhook_append_to_run_scoped_cost_sink() -> None:
 
     # Both surfaces appended into the one shared run-scoped accumulator.
     assert len(sink) == 2, "validator + webhook each append one record to the shared sink"
-    provider_discriminators = sorted(r.provider_discriminator for r in sink)
-    assert provider_discriminators == ["validator", "webhook"]
+    # v1.30 — the dispatch type now lives in `dispatch_kind` (provider_discriminator
+    # is None per-dispatch). StrEnum sorts/compares by value.
+    dispatch_kinds = sorted(r.dispatch_kind.value for r in sink)
+    assert dispatch_kinds == ["validator", "webhook"]
+    assert all(r.provider_discriminator is None for r in sink)

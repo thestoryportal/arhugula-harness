@@ -20,7 +20,7 @@ from harness_od.cross_family_rollup import (
     TokenizerVersionAnchor,
     rollup_costs_by_axis,
 )
-from harness_od.idempotency_join_dedup import SpanCostRecord
+from harness_od.idempotency_join_dedup import DispatchKind, SpanCostRecord
 
 
 def _cost_record(
@@ -28,11 +28,12 @@ def _cost_record(
     span_id: str = "span-1",
     total_cost: float = 1.0,
     attempt: int | None = None,
-    provider_discriminator: str = "frontier_managed",
+    provider_discriminator: str | None = "frontier_managed",
+    dispatch_kind: DispatchKind = DispatchKind.LLM,
     gen_ai_provider_name: str = "anthropic",
     gen_ai_request_model: str = "claude-opus-4-7",
 ) -> SpanCostRecord:
-    """A `SpanCostRecord` — the grown U-OD-20 12-field carrier (v2.8 D-5)."""
+    """A `SpanCostRecord` — the U-OD-20 carrier (13 fields at v1.30)."""
     return SpanCostRecord(
         span_id=span_id,
         idempotency_key="idem-1",
@@ -44,6 +45,7 @@ def _cost_record(
         retry_cause_attribution=None,
         is_replay_derived=False,
         provider_discriminator=provider_discriminator,
+        dispatch_kind=dispatch_kind,
         gen_ai_provider_name=gen_ai_provider_name,
         gen_ai_request_model=gen_ai_request_model,
     )
@@ -61,9 +63,10 @@ def test_cross_family_tag_bounded_enum() -> None:
 
 
 # --- acc #2 ----------------------------------------------------------------
-def test_rollup_axis_cardinality_three() -> None:
-    """`RollupAxis` enumerates exactly 3 values per §15.1."""
-    assert len(RollupAxis) == 3
+def test_rollup_axis_cardinality_four() -> None:
+    """`RollupAxis` enumerates exactly 4 values per §15.1 (PER_DISPATCH_KIND v1.30)."""
+    assert len(RollupAxis) == 4
+    assert RollupAxis.PER_DISPATCH_KIND in RollupAxis
 
 
 # --- acc #3 — rollup aggregation per axis ----------------------------------
@@ -138,6 +141,61 @@ def test_provider_discriminator_validated_against_cross_family_tag() -> None:
     bad = _cost_record(provider_discriminator="not_a_known_family")
     with pytest.raises(CrossFamilyRollupError):
         rollup_costs_by_axis([bad], RollupAxis.PER_PROVIDER_DISCRIMINATOR)
+
+
+# --- v1.30 B-COST-DISCRIMINATOR-TAXONOMY -----------------------------------
+def test_rollup_per_dispatch_kind() -> None:
+    """`PER_DISPATCH_KIND` keys on the typed `dispatch_kind` enum (§15.1, v1.30).
+
+    The operator-meaningful dispatch-type breakdown — and crucially it does NOT
+    raise on the production tagging that `PER_PROVIDER_DISCRIMINATOR` rejects
+    (production records carry `provider_discriminator=None`).
+    """
+    records = [
+        _cost_record(dispatch_kind=DispatchKind.LLM, provider_discriminator=None, total_cost=2.0),
+        _cost_record(dispatch_kind=DispatchKind.LLM, provider_discriminator=None, total_cost=3.0),
+        _cost_record(dispatch_kind=DispatchKind.TOOL, provider_discriminator=None, total_cost=0.5),
+        _cost_record(
+            dispatch_kind=DispatchKind.VALIDATOR, provider_discriminator=None, total_cost=0.25
+        ),
+        _cost_record(
+            dispatch_kind=DispatchKind.WEBHOOK, provider_discriminator=None, total_cost=0.1
+        ),
+    ]
+    rollups = rollup_costs_by_axis(records, RollupAxis.PER_DISPATCH_KIND)
+    by_key = {r.group_key: r for r in rollups}
+    assert by_key["llm"].total_cost == 5.0
+    assert by_key["llm"].span_count == 2
+    assert by_key["tool"].total_cost == 0.5
+    assert by_key["validator"].total_cost == 0.25
+    assert by_key["webhook"].total_cost == 0.1
+    # sum-invariant: the dispatch-kind partition recovers the full run total.
+    assert sum(r.total_cost for r in rollups) == 5.85
+
+
+def test_per_provider_discriminator_skips_none_records() -> None:
+    """A `provider_discriminator=None` record is skipped, not raised (§15.1.2, v1.30).
+
+    Production per-dispatch records carry `None` (no chain-level family tag);
+    `PER_PROVIDER_DISCRIMINATOR` skips them rather than raising — so a mix of
+    tagged (synthetic / §15.3) + untagged (production) records rolls up the
+    tagged ones only.
+    """
+    records = [
+        _cost_record(provider_discriminator=None, total_cost=9.0),
+        _cost_record(provider_discriminator="frontier_managed", total_cost=2.0),
+    ]
+    rollups = rollup_costs_by_axis(records, RollupAxis.PER_PROVIDER_DISCRIMINATOR)
+    by_key = {r.group_key: r for r in rollups}
+    assert set(by_key) == {"frontier_managed"}
+    assert by_key["frontier_managed"].total_cost == 2.0
+    # all-None production records → empty rollup, no raise.
+    assert (
+        rollup_costs_by_axis(
+            [_cost_record(provider_discriminator=None)], RollupAxis.PER_PROVIDER_DISCRIMINATOR
+        )
+        == []
+    )
 
 
 # --- acc #4 ----------------------------------------------------------------

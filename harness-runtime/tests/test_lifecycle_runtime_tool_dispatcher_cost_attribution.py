@@ -250,7 +250,8 @@ async def test_dispatch_happy_path_invokes_cost_attribution(tracer_setup) -> Non
         assert result["tool_id"] == "echo"
         # R-FS-1 arc CA — the tool cost wrapper appended exactly one record.
         assert len(cost_record_sink) == 1
-        assert cost_record_sink[0].provider_discriminator == "tool"
+        assert cost_record_sink[0].provider_discriminator is None  # v1.30
+        assert cost_record_sink[0].dispatch_kind == "tool"  # v1.30 PER_DISPATCH_KIND key
         # 1 cost-record + 1 audit-ledger entry (AC #4 + #5)
         assert len(audit_writer.appended) == 1
         _, audit_entry = audit_writer.appended[0]
