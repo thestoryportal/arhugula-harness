@@ -67,7 +67,7 @@ from harness_od.cost_formula import PriceRateKey, SpanCostInputs
 from harness_od.cost_record_audit_writer import (
     _project_cost_record_to_audit_payload,
 )
-from harness_od.idempotency_join_dedup import SpanCostRecord
+from harness_od.idempotency_join_dedup import DispatchKind, SpanCostRecord
 from harness_od.rate_table_bridge import provider_rates_to_price_rate_entry
 from harness_od.rate_table_resolver import resolve_for
 from harness_od.rate_table_types import RateTable
@@ -85,11 +85,10 @@ _DEFAULT_SIGNING_KEY_ID = "harness-cost-attribution-v1"
 #: disposition — the dominant case for at-the-edge LLM calls.
 _DEFAULT_REPLAY_DISPOSITION = ReplayDisposition.NO_REPLAY
 
-#: Family tag for LLM-dispatch cost records per C-OD-05 §5.1 row 15
-#: provider_discriminator family taxonomy. Matches the
-#: SpanCostRecord.provider_discriminator carrier (str-typed to avoid
-#: U-OD-20 → U-OD-21 cycle per the field's docstring).
-_LLM_FAMILY_TAG = "llm"
+#: Dispatch kind for LLM-dispatch cost records (C-OD-15 §15.1.1) — the typed
+#: key for `RollupAxis.PER_DISPATCH_KIND`. The cross-family `provider_discriminator`
+#: tag (a §15.3 chain-composition concept) is `None` at this per-dispatch site.
+_LLM_DISPATCH_KIND = DispatchKind.LLM
 
 
 def attribute_llm_dispatch_cost(
@@ -213,7 +212,8 @@ def attribute_llm_dispatch_cost(
         retry_attempt_number=None,
         retry_cause_attribution=None,
         is_replay_derived=False,
-        provider_discriminator=_LLM_FAMILY_TAG,
+        provider_discriminator=None,
+        dispatch_kind=_LLM_DISPATCH_KIND,
         gen_ai_provider_name=provider_name,
         gen_ai_request_model=model,
     )

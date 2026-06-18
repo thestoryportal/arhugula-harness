@@ -20,9 +20,14 @@ from harness_cp.engine_namespace import ReplayDisposition
 from harness_cp.workflow_driver_types import RunResult as _CpRunResult
 from harness_cp.workflow_driver_types import RunStatus as _CpRunStatus
 from harness_od.cross_family_rollup import CrossFamilyCostRollup, RollupAxis
-from harness_od.idempotency_join_dedup import SpanCostRecord
+from harness_od.idempotency_join_dedup import DispatchKind, SpanCostRecord
 from harness_od.rate_table_v1 import RATE_TABLE_V1
-from harness_runtime.api import RunResult, _build_run_result, _rollup_cost_attribution
+from harness_runtime.api import (
+    RunResult,
+    _build_run_result,
+    _rollup_cost_attribution,
+    _rollup_cost_attribution_by_dispatch_kind,
+)
 from harness_runtime.lifecycle.cost_attribution import RuntimeCostAttributionChain
 from harness_runtime.lifecycle.llm_dispatch import _attribute_cost_best_effort
 
@@ -36,10 +41,17 @@ class _RecordingAuditWriter:
         return "appended"
 
 
-def _record(*, provider: str, model: str, cost: float, span_id: str = "s") -> SpanCostRecord:
+def _record(
+    *,
+    provider: str,
+    model: str,
+    cost: float,
+    span_id: str = "s",
+    dispatch_kind: DispatchKind = DispatchKind.LLM,
+) -> SpanCostRecord:
     """A synthetic `SpanCostRecord` carrying production-shaped discriminators
-    (`provider_discriminator="llm"`) — the rollup math is independent of how the
-    record was produced."""
+    (v1.30: `provider_discriminator=None` + a typed `dispatch_kind`) — the rollup
+    math is independent of how the record was produced."""
     return SpanCostRecord(
         span_id=span_id,
         idempotency_key="idem",
@@ -50,7 +62,8 @@ def _record(*, provider: str, model: str, cost: float, span_id: str = "s") -> Sp
         retry_attempt_number=None,
         retry_cause_attribution=None,
         is_replay_derived=False,
-        provider_discriminator="llm",
+        provider_discriminator=None,
+        dispatch_kind=dispatch_kind,
         gen_ai_provider_name=provider,
         gen_ai_request_model=model,
     )
@@ -133,6 +146,68 @@ def test_build_run_result_no_records_yields_empty_cost_attribution() -> None:
     assert _build_run_result(_success_cp_result(), _ShutdownReport()).cost_attribution == ()
     assert (
         _build_run_result(_success_cp_result(), _ShutdownReport(), cost_records=[]).cost_attribution
+        == ()
+    )
+
+
+# ---------------------------------------------------------------------------
+# _rollup_cost_attribution_by_dispatch_kind — the PER_DISPATCH_KIND rollup
+# (v1.57 / B-COST-DISCRIMINATOR-TAXONOMY)
+# ---------------------------------------------------------------------------
+
+
+def test_rollup_by_dispatch_kind_empty_and_none_yield_empty_tuple() -> None:
+    assert _rollup_cost_attribution_by_dispatch_kind([]) == ()
+    assert _rollup_cost_attribution_by_dispatch_kind(None) == ()
+
+
+def test_rollup_by_dispatch_kind_groups_with_sum_invariant() -> None:
+    records = [
+        _record(
+            provider="anthropic", model="claude-opus", cost=1.0, dispatch_kind=DispatchKind.LLM
+        ),
+        _record(
+            provider="anthropic", model="claude-opus", cost=2.0, dispatch_kind=DispatchKind.LLM
+        ),
+        _record(provider="tool:echo", model="", cost=0.5, dispatch_kind=DispatchKind.TOOL),
+        _record(provider="webhook:x", model="", cost=0.25, dispatch_kind=DispatchKind.WEBHOOK),
+    ]
+    rollups = _rollup_cost_attribution_by_dispatch_kind(records)
+    by_key = {r.group_key: r for r in rollups}
+    assert by_key["llm"].total_cost == pytest.approx(3.0)
+    assert by_key["llm"].span_count == 2
+    assert by_key["tool"].total_cost == pytest.approx(0.5)
+    assert by_key["webhook"].total_cost == pytest.approx(0.25)
+    assert all(r.rollup_axis is RollupAxis.PER_DISPATCH_KIND for r in rollups)
+    # Single-axis sum-invariant: dispatch-kind partition recovers the run total.
+    assert sum(r.total_cost for r in rollups) == pytest.approx(sum(r.total_cost for r in records))
+
+
+def test_build_run_result_populates_both_cost_fields_orthogonally() -> None:
+    # Same records, two orthogonal partitions: each field independently sums to
+    # the run total (runtime spec v1.57 §9 C-RT-09).
+    records = [
+        _record(
+            provider="anthropic", model="claude-opus", cost=3.0, dispatch_kind=DispatchKind.LLM
+        ),
+        _record(provider="tool:echo", model="", cost=1.0, dispatch_kind=DispatchKind.TOOL),
+    ]
+    result = _build_run_result(_success_cp_result(), _ShutdownReport(), cost_records=records)
+
+    assert result.cost_attribution_by_dispatch_kind == _rollup_cost_attribution_by_dispatch_kind(
+        records
+    )
+    by_kind = {r.group_key: r.total_cost for r in result.cost_attribution_by_dispatch_kind}
+    assert by_kind == {"llm": pytest.approx(3.0), "tool": pytest.approx(1.0)}
+    # Both fields partition the same $4.0 total, independently.
+    assert sum(r.total_cost for r in result.cost_attribution) == pytest.approx(4.0)
+    assert sum(r.total_cost for r in result.cost_attribution_by_dispatch_kind) == pytest.approx(4.0)
+
+
+def test_build_run_result_no_records_yields_empty_dispatch_kind_field() -> None:
+    # The new field defaults to () (minor bump — the v1.45 pause_snapshot precedent).
+    assert (
+        _build_run_result(_success_cp_result(), _ShutdownReport()).cost_attribution_by_dispatch_kind
         == ()
     )
 

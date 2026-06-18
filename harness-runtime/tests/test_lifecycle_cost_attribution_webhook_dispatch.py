@@ -154,7 +154,8 @@ def test_attribute_webhook_dispatch_cost_returns_attached_record(
     )
     assert attached.span_id == "abcdef0123456789"
     assert attached.idempotency_key == "parent-idem-1"
-    assert attached.provider_discriminator == "webhook"
+    assert attached.provider_discriminator is None  # v1.30 — no chain-level family tag
+    assert attached.dispatch_kind == "webhook"  # v1.30 — the PER_DISPATCH_KIND key
     assert attached.gen_ai_provider_name == "webhook:https://ops.example.com/hitl"
     assert attached.gen_ai_request_model == ""
     assert attached.total_cost == pytest.approx(0.01, rel=1e-9)

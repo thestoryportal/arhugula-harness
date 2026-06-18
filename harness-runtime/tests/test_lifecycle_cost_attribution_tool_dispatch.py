@@ -186,7 +186,8 @@ def test_attribute_tool_dispatch_cost_returns_attached_record(
     )
     assert attached.span_id == "abcdef0123456789"
     assert attached.idempotency_key == "parent-idem-1"  # joins to parent
-    assert attached.provider_discriminator == "tool"
+    assert attached.provider_discriminator is None  # v1.30 — no chain-level family tag
+    assert attached.dispatch_kind == "tool"  # v1.30 — the PER_DISPATCH_KIND key
     assert attached.gen_ai_provider_name == "tool:echo"
     assert attached.gen_ai_request_model == ""
     assert attached.total_cost == pytest.approx(0.005, rel=1e-9)
@@ -261,9 +262,10 @@ def test_three_cost_kind_branches_produce_three_distinct_audit_writes(
     assert r_output.total_cost == pytest.approx(0.01 * 7, rel=1e-9)
     # 3 audit entries appended
     assert len(audit_writer.appended) == 3
-    # Each provider_discriminator is "tool"
+    # Each dispatch_kind is "tool" (v1.30 — provider_discriminator is None per-dispatch)
     for r in (r_flat, r_input, r_output):
-        assert r.provider_discriminator == "tool"
+        assert r.provider_discriminator is None
+        assert r.dispatch_kind == "tool"
 
 
 # ---------------------------------------------------------------------------

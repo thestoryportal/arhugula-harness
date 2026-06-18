@@ -12,6 +12,7 @@ from harness_od.idempotency_join_dedup import (
     F2_12_NOTATION,
     ClosureStatus,
     DedupOutcome,
+    DispatchKind,
     F2_12_DeferredSurface,
     F2StateLedgerEntry,
     FilingStatus,
@@ -39,7 +40,8 @@ def _cost_record(
     attempt: int | None = None,
     total_cost: float = 1.0,
     is_replay_derived: bool = False,
-    provider_discriminator: str = "frontier_managed",
+    provider_discriminator: str | None = "frontier_managed",
+    dispatch_kind: DispatchKind = DispatchKind.LLM,
     gen_ai_provider_name: str = "anthropic",
     gen_ai_request_model: str = "claude-opus-4-7",
 ) -> SpanCostRecord:
@@ -54,6 +56,7 @@ def _cost_record(
         retry_cause_attribution=None,
         is_replay_derived=is_replay_derived,
         provider_discriminator=provider_discriminator,
+        dispatch_kind=dispatch_kind,
         gen_ai_provider_name=gen_ai_provider_name,
         gen_ai_request_model=gen_ai_request_model,
     )
@@ -89,14 +92,27 @@ def _ledger(cause: str | None = "rate_limit") -> F2StateLedgerEntry:
 # --- §14.4 idempotency-key join ---------------------------------------------
 
 
-def test_span_cost_record_twelve_fields() -> None:
-    """Acceptance #1 (v2.8 D-5) — `SpanCostRecord` declares exactly 12 fields."""
-    assert len(SpanCostRecord.model_fields) == 12
+def test_span_cost_record_thirteen_fields() -> None:
+    """Acceptance #1 (v1.30) — `SpanCostRecord` declares exactly 13 fields.
+
+    12 at v2.8 (D-5) + `dispatch_kind` at v1.30 (B-COST-DISCRIMINATOR-TAXONOMY).
+    """
+    assert len(SpanCostRecord.model_fields) == 13
 
 
 def test_span_cost_record_provider_discriminator_field() -> None:
     """Acceptance #1 (v2.8 D-5) — `provider_discriminator` rollup-key field present."""
     assert "provider_discriminator" in SpanCostRecord.model_fields
+
+
+def test_span_cost_record_dispatch_kind_field() -> None:
+    """Acceptance #1 (v1.30) — `dispatch_kind` is a typed `DispatchKind` field.
+
+    The PER_DISPATCH_KIND rollup key. Enum-typed directly (carrier-homed, no
+    cycle) — unlike the `str`-typed `provider_discriminator`.
+    """
+    assert "dispatch_kind" in SpanCostRecord.model_fields
+    assert SpanCostRecord.model_fields["dispatch_kind"].annotation is DispatchKind
 
 
 def test_span_cost_record_gen_ai_provider_name_field() -> None:
@@ -110,17 +126,16 @@ def test_span_cost_record_gen_ai_request_model_field() -> None:
 
 
 def test_span_cost_record_new_fields_string_typed_no_cross_unit_dependency() -> None:
-    """Acceptance #1 (v2.8 D-5 / §0.3) — the three rollup-key fields are `str`-typed.
+    """Acceptance #1 (v2.8 D-5 / §0.3 / v1.30) — the family-tag rollup-key fields are `str`.
 
     String typing is deliberate: typing `provider_discriminator` as U-OD-21's
     `CrossFamilyTag` enum would create a U-OD-20 → U-OD-21 carrier cycle.
+    `gen_ai_*` stay required `str`; `provider_discriminator` is `str | None` at
+    v1.30 (per-dispatch-optional — `None` until §15.3 chain composition).
     """
-    for field in (
-        "provider_discriminator",
-        "gen_ai_provider_name",
-        "gen_ai_request_model",
-    ):
+    for field in ("gen_ai_provider_name", "gen_ai_request_model"):
         assert SpanCostRecord.model_fields[field].annotation is str
+    assert SpanCostRecord.model_fields["provider_discriminator"].annotation == (str | None)
 
 
 def test_span_cost_record_replay_orthogonality_fields_present() -> None:

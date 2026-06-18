@@ -47,6 +47,7 @@ __all__ = [
     "F2_12_NOTATION",
     "ClosureStatus",
     "DedupOutcome",
+    "DispatchKind",
     "F2StateLedgerEntry",
     "F2_12_AffectedContractNotation",
     "F2_12_DeferredSurface",
@@ -128,11 +129,35 @@ class SpanIngestionView(BaseModel):
     retry_cause_attribution: str | None
 
 
+# --- dispatch-type cost taxonomy (C-OD-15 §15.1.1, v1.30 — B-COST-DISCRIMINATOR-TAXONOMY) ---
+
+
+class DispatchKind(StrEnum):
+    """The bounded dispatch-type vocabulary for per-dispatch cost rollup (C-OD-15 §15.1.1).
+
+    The `RollupAxis.PER_DISPATCH_KIND` cost breakdown keys on this — the
+    operator-meaningful llm-vs-tool-vs-validator-vs-webhook split of run cost.
+
+    Homed in this U-OD-20 carrier module (NOT in the U-OD-21 consumer like
+    `CrossFamilyTag`) because it is the cost record's **own** attribute — the
+    kind of dispatch that produced it. So `SpanCostRecord.dispatch_kind` types
+    it *directly* as a typed enum (illegal states unrepresentable, CLAUDE.md §4),
+    rather than the `str`+validate discipline `provider_discriminator` uses to
+    avoid a U-OD-20 → U-OD-21 cycle. The four members map 1:1 to the four
+    production `cost_attribution_*_dispatch.py` cost helpers.
+    """
+
+    LLM = "llm"
+    TOOL = "tool"
+    VALIDATOR = "validator"
+    WEBHOOK = "webhook"
+
+
 # --- per-span cost record (C-OD-14 §14.4 + §14.5.2 + §14.5.3) ---------------
 
 
 class SpanCostRecord(BaseModel):
-    """The per-span cost record — 12 fields at v2.8 (C-OD-14 §14.4 + §14.5.2/.3).
+    """The per-span cost record — 13 fields at v1.30 (C-OD-14 §14.4 + §14.5.2/.3).
 
     Carries the parent's `idempotency_key` per C-IS-05 (the §14.4 join key),
     `total_cost` / `total_latency_ms` from the U-OD-19 `SpanTotalCost`, the
@@ -143,12 +168,21 @@ class SpanCostRecord(BaseModel):
 
     v2.8 (D-5): three rollup-key fields appended so the U-OD-21 cross-family
     rollup (`rollup_costs_by_axis`, C-OD-15 §15.1) is materializable —
-    `provider_discriminator` (the C-OD-05 §5.1 row-15 family tag),
-    `gen_ai_provider_name` and `gen_ai_request_model` (C-OD-04 §4.3 base-layer
-    attributes). All three are `str`-typed deliberately: typing the family tag
-    as U-OD-21's `CrossFamilyTag` enum would create a U-OD-20 → U-OD-21 carrier
-    cycle. The cost record carries the provider identity of the span whose cost
-    it records — a faithful operationalization of §15.1.
+    `provider_discriminator`, `gen_ai_provider_name` and `gen_ai_request_model`
+    (C-OD-04 §4.3 base-layer attributes). `gen_ai_*` are `str`-typed; the cost
+    record carries the provider identity of the span whose cost it records.
+
+    v1.30 (B-COST-DISCRIMINATOR-TAXONOMY): a fourth rollup-key field
+    `dispatch_kind` (the typed `DispatchKind` enum) carries the dispatch-type
+    dimension for the new `RollupAxis.PER_DISPATCH_KIND`. The pre-existing
+    `provider_discriminator` is the cross-family fallback-chain family tag per
+    C-OD-15 §15.1 — a *chain-composition* concept (§15.3) a per-dispatch helper
+    has no context for, so it is now `str | None` (`None` at the per-dispatch
+    site; populated by the §15.3 fallback-chain composition). It stays
+    `str`-typed (not `CrossFamilyTag`) to avoid a U-OD-20 → U-OD-21 cycle; the
+    production helpers no longer write dispatch-type strings into it (that was
+    the latent contract-vs-production defect this arc fixes — the dispatch type
+    now lives in `dispatch_kind`).
 
     Frozen → `Eq`; this is the carrier U-OD-21 `rollup_costs_by_axis` consumes
     (acceptance #1).
@@ -174,10 +208,18 @@ class SpanCostRecord(BaseModel):
     retry_cause_attribution: str | None
     #: set by the dedup algorithm — `True` for replay-derived spans (§14.5.1).
     is_replay_derived: bool
-    #: v2.8 — cross-family family tag (C-OD-05 §5.1 row 15); `str`-typed to
-    #: avoid a U-OD-20 → U-OD-21 cycle. U-OD-21's `CrossFamilyTag` is the
-    #: bounded vocabulary `rollup_costs_by_axis` validates this string against.
-    provider_discriminator: str
+    #: v2.8 — cross-family fallback-chain family tag (C-OD-15 §15.1); `str`-typed
+    #: to avoid a U-OD-20 → U-OD-21 cycle (`CrossFamilyTag` is U-OD-21's bounded
+    #: vocabulary `rollup_costs_by_axis` validates non-`None` values against).
+    #: v1.30 — `None` at the per-dispatch site (the family tag is a §15.3
+    #: chain-composition concept a per-dispatch helper has no context for);
+    #: populated by the §15.3 fallback-chain composition. The dispatch type now
+    #: lives in `dispatch_kind`, NOT here (the fixed contract-vs-production defect).
+    provider_discriminator: str | None = None
+    #: v1.30 — the dispatch type (B-COST-DISCRIMINATOR-TAXONOMY); the typed key
+    #: for `RollupAxis.PER_DISPATCH_KIND`. Enum-typed directly (carrier-homed,
+    #: no cycle — unlike `provider_discriminator`).
+    dispatch_kind: DispatchKind
     #: v2.8 — the span's `gen_ai.provider.name` (C-OD-04 §4.3).
     gen_ai_provider_name: str
     #: v2.8 — the span's `gen_ai.request.model` (C-OD-04 §4.3).

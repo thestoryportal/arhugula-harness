@@ -5,9 +5,11 @@ Implements C-OD-15 §15.1 (cross-family `provider_discriminator` cost rollup),
 composition reference).
 
 `CrossFamilyTag` is the bounded family-tag vocabulary. `RollupAxis` enumerates
-the three §15.1 rollup axes. `rollup_costs_by_axis` aggregates a list of
-`SpanCostRecord` (the grown U-OD-20 12-field carrier) into per-axis
-`CrossFamilyCostRollup` records. `TokenizerVersionAnchor` /
+the four §15.1 rollup axes (the dispatch-type `PER_DISPATCH_KIND` added at v1.30
+per B-COST-DISCRIMINATOR-TAXONOMY; `DispatchKind` is its bounded vocabulary,
+homed in the U-OD-20 carrier). `rollup_costs_by_axis` aggregates a list of
+`SpanCostRecord` (the U-OD-20 carrier) into per-axis `CrossFamilyCostRollup`
+records. `TokenizerVersionAnchor` /
 `TOKENIZER_VERSION_ANCHOR_REQUIREMENT` carry the §15.2 anchor.
 `FallbackChainCostComposition` carries the §15.3 chain-advancement seam.
 
@@ -76,16 +78,21 @@ class CrossFamilyTag(StrEnum):
 
 
 class RollupAxis(StrEnum):
-    """The 3 cross-family cost-rollup axes (C-OD-15 §15.1).
+    """The 4 cross-cost-rollup axes (C-OD-15 §15.1; PER_DISPATCH_KIND added v1.30).
 
-    `PER_PROVIDER_DISCRIMINATOR` — per-family cost; `PER_PROVIDER_AND_MODEL` —
+    `PER_PROVIDER_DISCRIMINATOR` — per-cross-family-tag cost (skips records with
+    no chain-level family tag, §15.1.2); `PER_PROVIDER_AND_MODEL` —
     per-(provider, model) cost; `PER_FALLBACK_EVENT` — per-retry-attempt cost
-    with family-tag rollup.
+    with family-tag rollup; `PER_DISPATCH_KIND` (v1.30,
+    B-COST-DISCRIMINATOR-TAXONOMY) — per-dispatch-type cost (the operator-meaningful
+    llm-vs-tool-vs-validator-vs-webhook split), keyed on the typed
+    `SpanCostRecord.dispatch_kind`.
     """
 
     PER_PROVIDER_DISCRIMINATOR = "PER_PROVIDER_DISCRIMINATOR"
     PER_PROVIDER_AND_MODEL = "PER_PROVIDER_AND_MODEL"
     PER_FALLBACK_EVENT = "PER_FALLBACK_EVENT"
+    PER_DISPATCH_KIND = "PER_DISPATCH_KIND"
 
 
 class CrossFamilyCostRollup(BaseModel):
@@ -174,12 +181,15 @@ def rollup_costs_by_axis(
 ) -> list[CrossFamilyCostRollup]:
     """Aggregate per-span costs into per-`axis` rollups (C-OD-15 §15.1, acc #3).
 
-    `PER_PROVIDER_DISCRIMINATOR` keys on the family tag — each record's
-    `provider_discriminator` is validated against `CrossFamilyTag` (acc #9).
-    `PER_PROVIDER_AND_MODEL` keys on the `(gen_ai_provider_name,
-    gen_ai_request_model)` tuple. `PER_FALLBACK_EVENT` preserves per-attempt
-    provider identity — keyed on `gen_ai_provider_name` discriminated by
-    `retry_attempt_number` (the per-retry-attempt cost with family-tag rollup).
+    `PER_PROVIDER_DISCRIMINATOR` keys on the family tag — each non-`None`
+    `provider_discriminator` is validated against `CrossFamilyTag` (acc #9);
+    records with `provider_discriminator is None` (a per-dispatch record with no
+    chain-level family tag, §15.1.2) are skipped. `PER_PROVIDER_AND_MODEL` keys
+    on the `(gen_ai_provider_name, gen_ai_request_model)` tuple.
+    `PER_FALLBACK_EVENT` preserves per-attempt provider identity — keyed on
+    `gen_ai_provider_name` discriminated by `retry_attempt_number`.
+    `PER_DISPATCH_KIND` (v1.30) keys on the typed `dispatch_kind` enum — the
+    operator-meaningful dispatch-type (llm/tool/validator/webhook) cost split.
 
     The three rollup keys project from the U-OD-20 `SpanCostRecord` 12-field
     carrier (`provider_discriminator` / `gen_ai_provider_name` /
@@ -190,9 +200,13 @@ def rollup_costs_by_axis(
 
     for record in span_records:
         if axis is RollupAxis.PER_PROVIDER_DISCRIMINATOR:
+            if record.provider_discriminator is None:
+                continue  # no chain-level family tag at the per-dispatch site (§15.1.2)
             group_key = _validate_family_tag(record.provider_discriminator).value
         elif axis is RollupAxis.PER_PROVIDER_AND_MODEL:
             group_key = f"{record.gen_ai_provider_name}::{record.gen_ai_request_model}"
+        elif axis is RollupAxis.PER_DISPATCH_KIND:
+            group_key = record.dispatch_kind.value
         else:  # RollupAxis.PER_FALLBACK_EVENT
             attempt = record.retry_attempt_number if record.retry_attempt_number else 1
             group_key = f"{record.gen_ai_provider_name}::attempt-{attempt}"

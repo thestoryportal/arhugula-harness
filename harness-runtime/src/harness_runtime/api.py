@@ -345,9 +345,24 @@ class RunResult(BaseModel):
     Runtime spec v1.53 §9 C-RT-09 (R-FS-1 arc CA) reconciled the spec Type cell
     from the phantom `CostAttribution (OD type)` (OD exports no type literally
     named `CostAttribution`) to this materialized `tuple[CrossFamilyCostRollup,
-    ...]`, and named the axis. `PER_PROVIDER_DISCRIMINATOR` is inadmissible (the
-    production dispatch-type `provider_discriminator` tags are not `CrossFamilyTag`
-    members → `CrossFamilyRollupError`; see `B-COST-DISCRIMINATOR-TAXONOMY`).
+    ...]`, and named the axis. The orthogonal dispatch-type breakdown lives in
+    `cost_attribution_by_dispatch_kind` (runtime spec v1.57,
+    `B-COST-DISCRIMINATOR-TAXONOMY`).
+    """
+
+    cost_attribution_by_dispatch_kind: tuple[CrossFamilyCostRollup, ...] = ()
+    """Per-run cost rollup along `RollupAxis.PER_DISPATCH_KIND` (OD spec v1.30
+    §15.1) — the operator-meaningful dispatch-type breakdown (llm/tool/validator/
+    webhook), computed at `_build_run_result` via `rollup_costs_by_axis`. `()`
+    when no cost-bearing dispatch occurred.
+
+    Runtime spec v1.57 §9 C-RT-09 (R-FS-1 `B-COST-DISCRIMINATOR-TAXONOMY`).
+    Orthogonal to `cost_attribution` (per-(provider, model)): each record has
+    exactly one `dispatch_kind`, so this is a separate single-axis partition of
+    the same total ⟹ `sum(e.total_cost)` independently equals the total run cost
+    (no double-count — kept in a separate field, not concatenated). Optional with
+    default `()` (minor bump per the §9 version-evolution invariant — the v1.45
+    `pause_snapshot` precedent).
     """
 
     failure_cause: FailureCause | None = None
@@ -912,17 +927,32 @@ def _rollup_cost_attribution(
 ) -> tuple[CrossFamilyCostRollup, ...]:
     """Roll run-scoped cost records up to `RunResult.cost_attribution` (C-RT-09 §9, v1.53).
 
-    Single axis `RollupAxis.PER_PROVIDER_AND_MODEL` — the operator-meaningful axis
-    that is safe for the production dispatch-type `provider_discriminator` tagging
-    (`PER_PROVIDER_DISCRIMINATOR` would raise `CrossFamilyRollupError` because the
-    production tags `"llm"`/`"tool"`/`"validator"`/`"webhook"` are not `CrossFamilyTag`
-    members — see `B-COST-DISCRIMINATOR-TAXONOMY`). A single axis preserves the
-    sum-invariant: `sum(e.total_cost for e in result)` == total run cost. Empty / None
-    records → `()` (the trivial-/no-cost-workflow shape).
+    Single axis `RollupAxis.PER_PROVIDER_AND_MODEL` — the per-(provider, model)
+    breakdown. A single axis preserves the sum-invariant:
+    `sum(e.total_cost for e in result)` == total run cost. Empty / None records →
+    `()` (the trivial-/no-cost-workflow shape). The orthogonal dispatch-type
+    breakdown is `_rollup_cost_attribution_by_dispatch_kind` (v1.57).
     """
     if not cost_records:
         return ()
     return tuple(rollup_costs_by_axis(cost_records, RollupAxis.PER_PROVIDER_AND_MODEL))
+
+
+def _rollup_cost_attribution_by_dispatch_kind(
+    cost_records: list[SpanCostRecord] | None,
+) -> tuple[CrossFamilyCostRollup, ...]:
+    """Roll cost records up to `RunResult.cost_attribution_by_dispatch_kind` (C-RT-09 §9, v1.57).
+
+    Single axis `RollupAxis.PER_DISPATCH_KIND` — the operator-meaningful
+    dispatch-type (llm/tool/validator/webhook) breakdown (OD spec v1.30 §15.1,
+    `B-COST-DISCRIMINATOR-TAXONOMY`). Keyed on the typed `SpanCostRecord.dispatch_kind`
+    (no `CrossFamilyTag` validation). Orthogonal single-axis partition of the same
+    total as `_rollup_cost_attribution` ⟹ `sum(e.total_cost)` == total run cost.
+    Empty / None records → `()`.
+    """
+    if not cost_records:
+        return ()
+    return tuple(rollup_costs_by_axis(cost_records, RollupAxis.PER_DISPATCH_KIND))
 
 
 def _build_run_result(
@@ -957,10 +987,13 @@ def _build_run_result(
       validator / webhook per-dispatch cost wrappers — via `rollup_costs_by_axis`
       (C-OD-15 §15.1). `()` when no cost-bearing dispatch occurred. **Supersedes
       the v1.4 empty-tuple carry-forward**: the `U-OD-21` HALTED Class-1 tension is
-      CLOSED (`rollup_costs_by_axis` + the 12-field `SpanCostRecord` carrier
-      landed). `PER_PROVIDER_DISCRIMINATOR` is inadmissible here (production
-      dispatch-type `provider_discriminator` tags are not `CrossFamilyTag` members
-      → `CrossFamilyRollupError`); reconciliation is `B-COST-DISCRIMINATOR-TAXONOMY`.
+      CLOSED.
+    - `cost_attribution_by_dispatch_kind`: (v1.57, `B-COST-DISCRIMINATOR-TAXONOMY`)
+      the orthogonal per-`RollupAxis.PER_DISPATCH_KIND` breakdown from the same
+      `cost_records` — the operator-meaningful llm/tool/validator/webhook split.
+      A separate single-axis field (each record carries one `dispatch_kind`), so
+      it independently satisfies the sum-invariant. `()` when no cost-bearing
+      dispatch occurred.
     - `failure_cause`: populated when status is "failed"; tags through
       `cp_result.fail_class`.
     """
@@ -1009,6 +1042,7 @@ def _build_run_result(
         audit_ledger_head_hash=head_hash,
         trace_ids=(),
         cost_attribution=_rollup_cost_attribution(cost_records),
+        cost_attribution_by_dispatch_kind=_rollup_cost_attribution_by_dispatch_kind(cost_records),
         failure_cause=failure_cause,
         # C-RT-30 (R-CC-1 arc #3) — surface the captured PauseSnapshot on a
         # 'paused' outcome so the caller can persist it + resume(). None on

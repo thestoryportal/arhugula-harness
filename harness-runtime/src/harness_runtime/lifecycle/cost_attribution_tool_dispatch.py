@@ -70,7 +70,7 @@ from harness_od.audit_ledger_types import AuditLedgerEntry
 from harness_od.cost_record_audit_writer import (
     _project_cost_record_to_audit_payload,
 )
-from harness_od.idempotency_join_dedup import SpanCostRecord
+from harness_od.idempotency_join_dedup import DispatchKind, SpanCostRecord
 from harness_od.rate_table_types import RateTable, ToolRate
 
 from harness_runtime.types import AuditLedgerWriter, CostAttributionChain
@@ -86,10 +86,10 @@ _DEFAULT_SIGNING_KEY_ID = "harness-cost-attribution-v1"
 #: disposition — the dominant case for at-the-edge tool invocations.
 _DEFAULT_REPLAY_DISPOSITION = ReplayDisposition.NO_REPLAY
 
-#: Family tag for tool-dispatch cost records per C-OD-05 §5.1 row 15
-#: provider_discriminator family taxonomy. Distinct from the "llm" tag at
-#: `cost_attribution_llm_dispatch.py:_LLM_FAMILY_TAG`.
-_TOOL_FAMILY_TAG = "tool"
+#: Dispatch kind for tool-dispatch cost records (C-OD-15 §15.1.1) — the typed
+#: key for `RollupAxis.PER_DISPATCH_KIND`. The cross-family `provider_discriminator`
+#: tag (a §15.3 chain-composition concept) is `None` at this per-dispatch site.
+_TOOL_DISPATCH_KIND = DispatchKind.TOOL
 
 
 class ToolRateMissingError(LookupError):
@@ -189,7 +189,8 @@ def attribute_tool_dispatch_cost(
       - Cost compute: `_compute_tool_cost` (3-branch cost_kind formula)
         instead of `cost_chain.compute_per_attempt_cost(SpanCostInputs,
         PriceRateEntry)` (LLM-specific token-weighted path).
-      - provider_discriminator: `"tool"` instead of `"llm"`.
+      - dispatch_kind: `DispatchKind.TOOL` instead of `DispatchKind.LLM`;
+        provider_discriminator: `None` (no chain-level family tag per-dispatch).
       - gen_ai_provider_name: `f"tool:{tool_id}"` (repurposed carrier field;
         SpanCostRecord schema's `gen_ai_provider_name` is `str`-typed and
         permits non-LLM tags by C-OD-05 §5.1 row-15 family taxonomy).
@@ -258,7 +259,8 @@ def attribute_tool_dispatch_cost(
     # Substep 4 — build SpanCostRecord; attach idempotency key joining to the
     # IS state-ledger parent entry per C-IS-05 / C-OD-14 §14.4.
     # SpanCostRecord schema repurposing for tool dispatch:
-    #   - provider_discriminator = "tool" (vs "llm" at LLM precedent)
+    #   - dispatch_kind = DispatchKind.TOOL (the PER_DISPATCH_KIND key)
+    #   - provider_discriminator = None (no chain-level family tag per-dispatch)
     #   - gen_ai_provider_name = "tool:<tool_id>" (carrier-namespace repurpose)
     #   - gen_ai_request_model = "" (no model concept; str-typed required field)
     cost_record = SpanCostRecord(
@@ -271,7 +273,8 @@ def attribute_tool_dispatch_cost(
         retry_attempt_number=None,
         retry_cause_attribution=None,
         is_replay_derived=False,
-        provider_discriminator=_TOOL_FAMILY_TAG,
+        provider_discriminator=None,
+        dispatch_kind=_TOOL_DISPATCH_KIND,
         gen_ai_provider_name=f"tool:{tool_id}",
         gen_ai_request_model="",
     )

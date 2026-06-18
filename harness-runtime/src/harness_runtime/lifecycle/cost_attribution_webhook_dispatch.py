@@ -53,7 +53,7 @@ from harness_od.audit_ledger_types import AuditLedgerEntry
 from harness_od.cost_record_audit_writer import (
     _project_cost_record_to_audit_payload,
 )
-from harness_od.idempotency_join_dedup import SpanCostRecord
+from harness_od.idempotency_join_dedup import DispatchKind, SpanCostRecord
 from harness_od.rate_table_types import RateTable
 
 from harness_runtime.types import AuditLedgerWriter, CostAttributionChain
@@ -61,9 +61,10 @@ from harness_runtime.types import AuditLedgerWriter, CostAttributionChain
 _DEFAULT_SIGNING_KEY_ID = "harness-cost-attribution-v1"
 _DEFAULT_REPLAY_DISPOSITION = ReplayDisposition.NO_REPLAY
 
-#: Family tag for webhook-dispatch cost records per C-OD-05 §5.1 row 15
-#: provider_discriminator family taxonomy. Distinct from "llm"/"tool"/"validator".
-_WEBHOOK_FAMILY_TAG = "webhook"
+#: Dispatch kind for webhook-dispatch cost records (C-OD-15 §15.1.1) — the typed
+#: key for `RollupAxis.PER_DISPATCH_KIND`. The cross-family `provider_discriminator`
+#: tag (§15.3) is `None` at this per-dispatch site.
+_WEBHOOK_DISPATCH_KIND = DispatchKind.WEBHOOK
 
 
 def _compute_webhook_cost(rate_table: RateTable, bytes_sent: int) -> Decimal:
@@ -111,7 +112,8 @@ def attribute_webhook_dispatch_cost(
     exactly except:
       - Cost compute: `_compute_webhook_cost` (flat + optional egress)
         instead of tool cost_kind formulas / validator CPU-meter.
-      - provider_discriminator: `"webhook"` instead of `"tool"`/`"validator"`.
+      - dispatch_kind: `DispatchKind.WEBHOOK` (vs `TOOL`/`VALIDATOR`);
+        provider_discriminator: `None` (no chain-level family tag per-dispatch).
       - gen_ai_provider_name: `f"webhook:{webhook_target}"` (repurposed
         carrier-namespace; SpanCostRecord schema permits non-LLM tags by
         C-OD-05 §5.1 row-15 family taxonomy).
@@ -171,7 +173,8 @@ def attribute_webhook_dispatch_cost(
         retry_attempt_number=None,
         retry_cause_attribution=None,
         is_replay_derived=False,
-        provider_discriminator=_WEBHOOK_FAMILY_TAG,
+        provider_discriminator=None,
+        dispatch_kind=_WEBHOOK_DISPATCH_KIND,
         gen_ai_provider_name=f"webhook:{webhook_target}",
         gen_ai_request_model="",
     )
