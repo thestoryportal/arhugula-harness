@@ -64,9 +64,9 @@ sequenced — not blocked — by the order.
   collide: **B3 ✅, B2 ✅, E ✅, B4 ✅, B6**. (M ✅ landed as a standalone `MANAGED_AGENTS` StepKind + a surface-gated stage-5 binding — it did NOT contend the shared dispatch path.) These should land one at a time.
 - **Genuinely independent (parallel-safe).** **CA ✅, B5 ✅, B7 ✅, M ✅** touch none of the cluster's shared
   surfaces — they can be built in parallel with the serial cluster and with each other.
-- **Standalone arcs (`B-*`).** Nine smaller capabilities that surfaced *during* implementation
-  (not in the frozen order). Each is a committed build, sequenced as a follow-on when its turn
-  comes (see §5).
+- **Standalone arcs (`B-*`).** Smaller capabilities that surfaced *during* implementation, tracked
+  as follow-on R-FS-1 child arcs outside the frozen order. Each is a committed build (full-spec);
+  §5 lists every one with its live status (closed / remaining / gated).
 
 **What's actually unblocked today:** B7 has its real prerequisites landed
 (CA ✅ #625; B5 ✅ #628). It is sequenced by the frozen order, not blocked. B6 Slice 2 (NEXT) is best
@@ -286,22 +286,43 @@ grounding sweep (`.harness/r-fs-1-remaining-arcs-grounding-sweep-v1.md`), re-gro
 
 ---
 
-## 5. Standalone forward arcs (`B-*`) — design-fork-first, unsequenced
+## 5. Standalone forward arcs (`B-*`) — design-fork-first, surfaced during impl
 
-Smaller capabilities that surfaced *during* implementation. Each is a committed build (full-spec
-directive), sequenced as a follow-on R-FS-1 child arc when its turn comes. Full disposition: the
-spine ledger (`.harness/beyond-mvp-capability-boundary-ledger.md`).
+Capabilities that surfaced *during* implementation, tracked as follow-on R-FS-1 child arcs mostly
+**outside the frozen build order** (§7; the 2 `resolved` arcs are the exception — see below). Each
+is a committed build (full-spec directive). This is the **complete** standalone enumeration with
+live status:
 
-| id | Owner-axis | What it gives the harness (plain language) |
-|---|---|---|
-| B-INTERSTEP | runtime | Pass **data** from one workflow step to the next (today steps share control-flow only, not each other's outputs). |
-| B-FANOUT-PAUSE | CP + runtime | **Resume a paused parallel fan-out** from where it stopped (today it fails honestly instead of resuming). |
-| B-ENGINE-OUTPUT-REPLAY | CP + runtime/IS | **Replay cached step outputs** from event history (today a resume skips finished steps but can't reproduce their outputs). |
-| B-EFFECT-FENCE | runtime + AS | Guarantee a side-effecting step **runs at most once** across retries/resumes. |
-| B-EDIT-CARRIER | runtime + CP | Let a human **EDIT** a pending action even when its data shape differs (today EDIT raises for some shapes). |
-| B-LAYER-BUDGET-OVERRIDE | CP | Enforce **per-layer time budgets** honoring per-workload/persona overrides. |
-| B-TOOL-GATE | runtime | Wire the **real per-server MCP-trust source** at the tool-step human-approval gate (today gate sites auto-approve). |
-| B-L2-EMBEDDING-ACTIVATION | runtime + CP | **Switch on L2/L3 routing in production** (the routing-activation gate below + wire the classifier/router + promote `fastembed`). |
+- **closed** — built + merged (its own PR);
+- **remaining** — a committed build, build-ready, not yet opened;
+- **gated** — build-authorized but blocked on a dependency;
+- **resolved** — built *inside* the frozen order, or foreclosed N/A by a frozen-order design
+  choice; listed here for completeness, **not** a separate post-frozen arc (excluded from the
+  closed/remaining tallies so it isn't double-counted).
+
+Headline (HEAD): **3 closed · 10 remaining · 1 gated** (the 13 build-ready standalone arcs) **+ 2
+resolved** (`B-PER-TOOL-SANDBOX-TIER` built inside the frozen order as B6 Slice 2;
+`B-PER-DISPATCH-DRIVER-PRECISION` foreclosed N/A by the B6 Option-A choice). Full per-arc
+disposition: the spine ledger (`.harness/beyond-mvp-capability-boundary-ledger.md`).
+
+| id | Status | Owner-axis | What it gives the harness (plain language) |
+|---|---|---|---|
+| B-MCP-HOST-REMOTE-TRANSPORT | closed · #640 | runtime | Connect to **remote (HTTP) MCP tool servers**, not just local ones — and restore the default-lane tool-completion test. |
+| B-MEMORY-SURFACE-BACKEND-IMPLS | closed · #642 | runtime | Add the **encrypted-filesystem & operator-defined** memory backends. |
+| B-COST-DISCRIMINATOR-TAXONOMY | closed · #644 | OD + runtime | Break down run cost **by dispatch kind** (llm / tool / validator / webhook). |
+| B-INTERSTEP | remaining | runtime | Pass **data** from one workflow step to the next (today steps share control-flow only, not each other's outputs). |
+| B-FANOUT-PAUSE | remaining | CP + runtime | **Resume a paused parallel fan-out** from where it stopped (today it fails honestly instead of resuming). |
+| B-ENGINE-OUTPUT-REPLAY | remaining | CP + runtime/IS | **Replay cached step outputs** from event history (today a resume skips finished steps but can't reproduce their outputs). |
+| B-EFFECT-FENCE | remaining | runtime + AS | Guarantee a side-effecting step **runs at most once** across retries/resumes. |
+| B-EDIT-CARRIER | remaining | runtime + CP | Let a human **EDIT** a pending action even when its data shape differs (today EDIT raises for some shapes). |
+| B-LAYER-BUDGET-OVERRIDE | remaining | CP | Enforce **per-layer time budgets** honoring per-workload/persona overrides. |
+| B-TOOL-GATE | remaining | runtime | Wire the **real per-server MCP-trust source** at the tool-step human-approval gate (today gate sites auto-approve). |
+| B-L2-EMBEDDING-ACTIVATION | remaining | runtime + CP | **Switch on L2/L3 routing in production** (the routing-activation gate below + wire the classifier/router + promote `fastembed`). |
+| B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION | remaining | CP + OD | Tag cost by **provider-family at the fallback chain** so the cross-family cost rollup isn't empty in production. |
+| B-NONLINEAR-OVERRIDE-PROVENANCE | remaining | CP | Record the **per-step override audit entry on parallel / non-linear** topologies (today linear runs only). |
+| B-TAIL-CONDITIONAL-SAMPLING | gated · R-420/R-421 | OD + runtime | Sample **non-root & end-of-trace spans** by the §9.2 conditional rules (needs the in-process telemetry collector). |
+| B-PER-TOOL-SANDBOX-TIER | resolved · frozen B6 Slice 2 (#637) | runtime | **Per-tool** sandbox security tier + per-dispatch driver — built inside the frozen order, not a separate post-frozen arc. |
+| B-PER-DISPATCH-DRIVER-PRECISION | resolved · N/A (B6 Option A foreclosed) | runtime | Make the dispatched sandbox driver's tier exactly match the resolved per-tool tier (no over-sandboxing) — **foreclosed N/A**: B6 Slice 2's Option-A driver composite already delivers tier == resolved, so no separate arc is needed. |
 
 ---
 
