@@ -365,6 +365,24 @@ class RunResult(BaseModel):
     `pause_snapshot` precedent).
     """
 
+    cost_attribution_by_provider_discriminator: tuple[CrossFamilyCostRollup, ...] = ()
+    """Per-run cost rollup along `RollupAxis.PER_PROVIDER_DISCRIMINATOR` (OD spec
+    v1.2 §15.1 / §15.3) — the cross-family family-tag breakdown (`frontier_managed`
+    / `frontier_managed_alt` / `local_ollama`), giving per-family cost visibility
+    under fallback. Computed at `_build_run_result` via `rollup_costs_by_axis`.
+
+    Runtime spec v1.58 §9 C-RT-09 (R-FS-1 `B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION`).
+    Populated by the LLM-dispatch cost path tagging each record's
+    `provider_discriminator` with the dispatched provider's family
+    (`cross_family_tag_for_provider`). **Unlike `cost_attribution` /
+    `cost_attribution_by_dispatch_kind` (full-run partitions), this axis
+    partitions only the LLM subtotal** — tool / validator / webhook records carry
+    `provider_discriminator = None` and are skipped, so `sum(e.total_cost)` equals
+    the LLM-dispatch cost, not the total run cost. `()` when no LLM dispatch
+    occurred. Optional with default `()` (minor bump — the v1.45 `pause_snapshot`
+    precedent).
+    """
+
     failure_cause: FailureCause | None = None
     """`None` unless `status == 'failed'` (C-RT-09 invariant)."""
 
@@ -955,6 +973,32 @@ def _rollup_cost_attribution_by_dispatch_kind(
     return tuple(rollup_costs_by_axis(cost_records, RollupAxis.PER_DISPATCH_KIND))
 
 
+def _rollup_cost_attribution_by_provider_discriminator(
+    cost_records: list[SpanCostRecord] | None,
+) -> tuple[CrossFamilyCostRollup, ...]:
+    """Roll cost records up to `RunResult.cost_attribution_by_provider_discriminator`
+    (C-RT-09 §9, v1.58).
+
+    Single axis `RollupAxis.PER_PROVIDER_DISCRIMINATOR` — the cross-family
+    family-tag (`frontier_managed` / `frontier_managed_alt` / `local_ollama`)
+    breakdown (OD spec v1.2 §15.1 / §15.3, populated by R-FS-1
+    `B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION`). Keys on
+    `SpanCostRecord.provider_discriminator`; **skips `None`-tag records** (a
+    per-dispatch record with no chain-level family context, §15.1.2) and
+    validates the rest against `CrossFamilyTag`.
+
+    Unlike `cost_attribution` / `cost_attribution_by_dispatch_kind` (which
+    partition the *full* run total), this axis partitions only the **LLM
+    subtotal**: tool / validator / webhook records carry `provider_discriminator
+    = None` (no provider family) and are correctly skipped, so
+    `sum(e.total_cost)` here equals the sum of LLM-dispatch records' cost, not
+    the total run cost. Empty / None records (or an all-non-LLM run) → `()`.
+    """
+    if not cost_records:
+        return ()
+    return tuple(rollup_costs_by_axis(cost_records, RollupAxis.PER_PROVIDER_DISCRIMINATOR))
+
+
 def _build_run_result(
     cp_result: _CpRunResult,
     shutdown_report: Any,
@@ -994,6 +1038,13 @@ def _build_run_result(
       A separate single-axis field (each record carries one `dispatch_kind`), so
       it independently satisfies the sum-invariant. `()` when no cost-bearing
       dispatch occurred.
+    - `cost_attribution_by_provider_discriminator`: (v1.58,
+      `B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION`) the per-`RollupAxis.PER_PROVIDER_DISCRIMINATOR`
+      cross-family family-tag breakdown — per-family cost visibility under
+      fallback. Partitions only the **LLM subtotal** (non-LLM records carry
+      `provider_discriminator = None` and are skipped), so its `Σ total_cost` is
+      the LLM-dispatch cost, NOT the full run total. `()` when no LLM dispatch
+      occurred.
     - `failure_cause`: populated when status is "failed"; tags through
       `cp_result.fail_class`.
     """
@@ -1043,6 +1094,9 @@ def _build_run_result(
         trace_ids=(),
         cost_attribution=_rollup_cost_attribution(cost_records),
         cost_attribution_by_dispatch_kind=_rollup_cost_attribution_by_dispatch_kind(cost_records),
+        cost_attribution_by_provider_discriminator=(
+            _rollup_cost_attribution_by_provider_discriminator(cost_records)
+        ),
         failure_cause=failure_cause,
         # C-RT-30 (R-CC-1 arc #3) — surface the captured PauseSnapshot on a
         # 'paused' outcome so the caller can persist it + resume(). None on

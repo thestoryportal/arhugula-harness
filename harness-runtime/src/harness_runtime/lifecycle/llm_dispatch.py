@@ -1664,6 +1664,9 @@ def _attribute_cost_best_effort(
     from harness_runtime.lifecycle.cost_attribution_llm_dispatch import (
         attribute_llm_dispatch_cost,
     )
+    from harness_runtime.lifecycle.cross_family_cost_tag import (
+        cross_family_tag_for_provider,
+    )
 
     if cost_chain is None or audit_writer is None or rate_table is None:
         # Cost-attribution substrate not bound — unit-test path (production
@@ -1692,6 +1695,11 @@ def _attribute_cost_best_effort(
             cache_creation=int(cache_creation) if cache_creation is not None else 0,
             cache_read=int(cache_read) if cache_read is not None else 0,
             tenant_id=tenant_id,
+            # R-FS-1 B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION — populate the
+            # §15.3 cross-family family tag from the dispatched provider so the
+            # PER_PROVIDER_DISCRIMINATOR rollup is non-vacuous in production.
+            # An LLM dispatch always has a provider ⟹ always a family tag.
+            provider_discriminator=cross_family_tag_for_provider(provider_name),
         )
     except Exception:
         # Cost-attribution is observability, not contract. Swallow.

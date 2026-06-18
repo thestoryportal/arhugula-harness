@@ -68,7 +68,6 @@ from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
     ProviderCandidate,
-    ProviderFamily,
 )
 from harness_cp.engine_namespace import REPLAY_DISPOSITION_MAPPING
 from harness_cp.fall_through_procedure import FallThroughCause
@@ -84,6 +83,7 @@ from harness_cp.validator_fail_transient_staircase import StaircaseStage
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
 from harness_od.harness_breaker_schema import BreakerScope
 
+from harness_runtime.lifecycle.cross_family_cost_tag import provider_family_for_provider
 from harness_runtime.lifecycle.fallback_chain import (
     FallbackChainExhaustedError,
     advance_or_raise,
@@ -172,32 +172,14 @@ _MVP_DEFAULT_AGENT_ROLE = AgentRole("default")
 #: ``ProviderCandidate`` (U-RT-114). Operator-authored chain candidates carry
 #: ``family`` directly; a per-role ``ModelBinding`` (C-CP-01 §1.3) carries only
 #: ``(provider, model)``, so the augmented-chain primary needs the family
-#: derived. The three constructed providers (C-RT-05 ``providers.py``) map here;
-#: ``ProviderFamily`` is value-equal to the hosted-provider keys.
-_PROVIDER_FAMILY_BY_PROVIDER: dict[str, ProviderFamily] = {
-    "anthropic": ProviderFamily.ANTHROPIC,
-    "openai": ProviderFamily.OPENAI,
-    "ollama": ProviderFamily.LOCAL_OPEN_WEIGHT,
-}
-
-
-def _provider_family(provider: str) -> ProviderFamily:
-    """Map a provider key to its ``ProviderFamily`` for the synthesized per-role
-    ``ProviderCandidate`` (U-RT-114 augmented chain).
-
-    The family affects ONLY the C-CP-04 §4.3 cross-family attribution flags
-    (``cross_family_triggered`` / ``cache_state_lost``), never WHICH model is
-    dispatched. Known providers map directly; any other family-named provider
-    resolves via ``ProviderFamily(provider)``; an unknown provider falls back to
-    ``LOCAL_OPEN_WEIGHT`` (conservative — attribution only).
-    """
-    family = _PROVIDER_FAMILY_BY_PROVIDER.get(provider)
-    if family is not None:
-        return family
-    try:
-        return ProviderFamily(provider)
-    except ValueError:
-        return ProviderFamily.LOCAL_OPEN_WEIGHT
+#: derived. The canonical provider→family map lives at
+#: ``cross_family_cost_tag.provider_family_for_provider`` (one source of truth —
+#: shared with the B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION tag map); this
+#: module re-binds it under the prior private name to keep the call site stable.
+#: The family affects ONLY the C-CP-04 §4.3 cross-family attribution flags
+#: (``cross_family_triggered`` / ``cache_state_lost``), never WHICH model is
+#: dispatched.
+_provider_family = provider_family_for_provider
 
 
 def _required_capabilities(step: WorkflowStep) -> frozenset[ProviderCapability]:

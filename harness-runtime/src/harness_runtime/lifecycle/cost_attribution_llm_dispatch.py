@@ -87,7 +87,9 @@ _DEFAULT_REPLAY_DISPOSITION = ReplayDisposition.NO_REPLAY
 
 #: Dispatch kind for LLM-dispatch cost records (C-OD-15 §15.1.1) — the typed
 #: key for `RollupAxis.PER_DISPATCH_KIND`. The cross-family `provider_discriminator`
-#: tag (a §15.3 chain-composition concept) is `None` at this per-dispatch site.
+#: tag (a §15.3 chain-composition concept) defaults to `None` at the bare-edge
+#: call; the runtime fallback-chain cost path supplies it per the dispatched
+#: provider's family (R-FS-1 `B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION`).
 _LLM_DISPATCH_KIND = DispatchKind.LLM
 
 
@@ -108,6 +110,7 @@ def attribute_llm_dispatch_cost(
     cache_read: int = 0,
     tokenizer_version: str | None = None,
     tenant_id: str | None = None,
+    provider_discriminator: str | None = None,
 ) -> SpanCostRecord:
     """Run the §C-OD-26.1 v1.10 canonical cost-attribution chain for one LLM dispatch.
 
@@ -157,6 +160,16 @@ def attribute_llm_dispatch_cost(
         (openai / ollama don't carry this attribute at v1).
     tenant_id
         Tenant scope for audit-ledger append (None → single-tenant).
+    provider_discriminator
+        The cross-family fallback-chain family tag (C-OD-15 §15.1 / §15.3 —
+        a `CrossFamilyTag` value string, e.g. `"frontier_managed_alt"`) for the
+        dispatched provider's family. `None` at the bare-edge call (a record
+        with no chain-level family context per §15.1.2); the runtime
+        fallback-chain cost path (`_attribute_cost_best_effort`) supplies it via
+        `cross_family_tag_for_provider`, making `RollupAxis.PER_PROVIDER_DISCRIMINATOR`
+        non-vacuous in production (R-FS-1 `B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION`).
+        Carried `str`-typed (not `CrossFamilyTag`) to preserve the U-OD-20 no-cycle
+        property; validated against `CrossFamilyTag` at the rollup.
 
     Returns
     -------
@@ -212,7 +225,7 @@ def attribute_llm_dispatch_cost(
         retry_attempt_number=None,
         retry_cause_attribution=None,
         is_replay_derived=False,
-        provider_discriminator=None,
+        provider_discriminator=provider_discriminator,
         dispatch_kind=_LLM_DISPATCH_KIND,
         gen_ai_provider_name=provider_name,
         gen_ai_request_model=model,
