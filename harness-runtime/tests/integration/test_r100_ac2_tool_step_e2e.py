@@ -2,10 +2,20 @@
 
 The canonical end-to-end proof that the full bootstrap TOOL_STEP path is wired
 (spec v1.41 §14.9.8 Reading B + Gaps B/C/D/E/F): one echo-MCP-via-`api.run`
-workflow that dispatches a real `TOOL_STEP` against a real stdio MCP subprocess
-and completes. Proves the chain BY EXECUTION:
+workflow that dispatches a real `TOOL_STEP` against a real **remote streamable-HTTP**
+MCP server and completes. Proves the chain BY EXECUTION:
     host.start() → list_tools → converter → registry → trust → resolver →
     floor → call_tool → result.
+
+**Remote streamable-HTTP transport (B-MCP-HOST-REMOTE-TRANSPORT).** The MCP server is a
+remote `streamable_http_l1` (trust L1_SIGNED_PINNED, READ_ONLY) echo fixture served over
+HTTP on a localhost port. A remote L1 READ_ONLY server resolves to `TIER_1_PROCESS` via
+`mcp_transport_floor` (`blast_radius_floor(READ_ONLY)`), so the §14.9.8 B6 Slice-1
+transport floor leaves it at the host-process tier — no Docker/microVM driver needed,
+keeping this a provider-free DEFAULT-LANE e2e. The earlier in-process STDIO variant was
+floored to TIER_3 by ADR-D2 §1.3 (B6 Slice 1) and fail-closed at bootstrap; this remote
+variant is the registered restoration. The stage-3a factory's granular→coarse transport
+projection (the B-MCP-HOST-REMOTE-TRANSPORT fix) is what lets the remote host materialize.
 
 **Provider-free + unconditional (runtime spec v1.47 §2.1 — R-CC-1 arc #4).**
 Gap D (the bootstrap pinged ≥1 provider regardless of step kind, so this e2e was
@@ -24,14 +34,13 @@ Tier-floor consistency (spec v1.41 §14.9.8): the echo server declares both
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-_ECHO_FIXTURE = (Path(__file__).parent / "fixtures" / "mcp_echo_server.py").resolve()
+from .fixtures.streamable_http_echo import streamable_http_echo_server
 
 
 def _read_ledger(state_ledger_root: Path) -> list[dict[str, Any]]:
@@ -46,18 +55,6 @@ def _read_ledger(state_ledger_root: Path) -> list[dict[str, Any]]:
     return entries
 
 
-@pytest.mark.skip(
-    reason="R-FS-1 B6 Slice 1 (runtime spec v1.54 §14.9.8): the STDIO transport floor "
-    "(ADR-D2 §1.3) raises this server to TIER_3, so this in-process STDIO config now "
-    "fail-closes at bootstrap (RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE) — in-process STDIO "
-    "dispatch is ADR-forbidden. The B6 floor + fail-close are proven at factory level "
-    "(test_u_rt_75_runtime_tool_dispatcher_factory) + unit level "
-    "(test_sandbox_tier_driver_selection::compose_transport_floor); tool-completion at "
-    "the ADR-mandated tier is proven by test_r410_container_tool_execution_e2e (Docker). "
-    "Restoring a provider-free DEFAULT-LANE api.run tool-completion e2e needs the "
-    "host-factory remote-transport gap (B-MCP-HOST-REMOTE-TRANSPORT) fixed so a remote "
-    "L1 READ_ONLY tool can complete at TIER_1 — registered forward."
-)
 @pytest.mark.asyncio
 async def test_r100_ac2_tool_step_via_api_run(
     tmp_path: Path,
@@ -168,82 +165,92 @@ async def test_r100_ac2_tool_step_via_api_run(
     monkeypatch.setattr(_stage_4_od_mod, "materialize_tracer_provider_stage", _fake_tracer_stage)
     monkeypatch.setattr(_stage_4_od_mod, "materialize_span_processor_stage", _fake_span_processor)
 
-    config = RuntimeConfig(
-        deployment_surface=surface,
-        repository_root=tmp_path,
-        path_bindings=path_bindings,
-        provider_secrets=ProviderSecretsConfig(),
-        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
-        collector=CollectorConfig(),
-        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
-        mcp_clients=[
-            MCPClientConfig(
-                client_name=ClientName("echo-server"),
-                transport=MCPTransport.STDIO,
-                trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
-                blast_radius=BlastRadiusTier.READ_ONLY,
-                connection_url=f"stdio://{sys.executable} {_ECHO_FIXTURE}",
-                # tier-floor consistency: resolver tier == converter minimum tier.
-                default_minimum_tier=SandboxTier.TIER_1_PROCESS,
-                default_sandbox_tier=SandboxTier.TIER_1_PROCESS,
-                default_sandbox_tech="host-process",
-                default_sandbox_provider="host",
-            )
-        ],
-        routing_manifest=RoutingManifest(
-            manifest_version=1,
-            per_role_bindings={},
-            per_workload_overrides={},
-            fallback_chains=(chain,),
-            retry_policies={},
-        ),
-        **provider_flags,
-    )
-    monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
+    # The remote streamable-HTTP echo MCP server runs on a localhost port for the
+    # duration of the bootstrap + dispatch (host.start() connects to it).
+    with streamable_http_echo_server() as mcp_url:
+        config = RuntimeConfig(
+            deployment_surface=surface,
+            repository_root=tmp_path,
+            path_bindings=path_bindings,
+            provider_secrets=ProviderSecretsConfig(),
+            otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+            collector=CollectorConfig(),
+            default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+            mcp_clients=[
+                MCPClientConfig(
+                    client_name=ClientName("echo-server"),
+                    # Remote streamable-HTTP L1 (B-MCP-HOST-REMOTE-TRANSPORT): the
+                    # stage-3a factory projects this granular value onto the host's
+                    # coarse "streamable_http" mechanism; host.start() connects via
+                    # streamable_http_client to `mcp_url`.
+                    transport=MCPTransport.STREAMABLE_HTTP_L1_PINNED,
+                    trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
+                    blast_radius=BlastRadiusTier.READ_ONLY,
+                    connection_url=mcp_url,
+                    # remote L1 READ_ONLY → mcp_transport_floor = blast_radius_floor(
+                    # READ_ONLY) = TIER_1_PROCESS (no Docker/microVM driver — the
+                    # provider-free default-lane property). tier-floor consistency:
+                    # resolver tier == converter minimum tier.
+                    default_minimum_tier=SandboxTier.TIER_1_PROCESS,
+                    default_sandbox_tier=SandboxTier.TIER_1_PROCESS,
+                    default_sandbox_tech="host-process",
+                    default_sandbox_provider="host",
+                )
+            ],
+            routing_manifest=RoutingManifest(
+                manifest_version=1,
+                per_role_bindings={},
+                per_workload_overrides={},
+                fallback_chains=(chain,),
+                retry_policies={},
+            ),
+            **provider_flags,
+        )
+        monkeypatch.setattr("harness_runtime.api._default_config", lambda: config)
 
-    class _Workflow:
-        @property
-        def workflow_id(self) -> str:
-            return "wf-r100-ac2-tool"
+        class _Workflow:
+            @property
+            def workflow_id(self) -> str:
+                return "wf-r100-ac2-tool"
 
-        @property
-        def workload_class(self) -> WorkloadClass:
-            return workload
+            @property
+            def workload_class(self) -> WorkloadClass:
+                return workload
 
-        @property
-        def manifest_entry(self) -> WorkflowManifestEntry:
-            return WorkflowManifestEntry(
-                workflow_id="wf-r100-ac2-tool",
-                workload_class=workload,
-                persona_tier=PersonaTier.TEAM_BINDING,
-                engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
-                topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
-                layer_budgets=(),
-                fallback_chain=chain,
-                hitl_placements=(),
-                per_step_overrides={},
-            )
+            @property
+            def manifest_entry(self) -> WorkflowManifestEntry:
+                return WorkflowManifestEntry(
+                    workflow_id="wf-r100-ac2-tool",
+                    workload_class=workload,
+                    persona_tier=PersonaTier.TEAM_BINDING,
+                    engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+                    topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+                    layer_budgets=(),
+                    fallback_chain=chain,
+                    hitl_placements=(),
+                    per_step_overrides={},
+                )
 
-        @property
-        def steps(self) -> Sequence[WorkflowStep]:
-            return (
-                WorkflowStep(
-                    step_id=StepID("step-0"),
-                    step_kind=StepKind.TOOL_STEP,
-                    step_payload={"tool_id": "echo", "tool_args": {"value": "hello-ac2"}},
-                ),
-            )
+            @property
+            def steps(self) -> Sequence[WorkflowStep]:
+                return (
+                    WorkflowStep(
+                        step_id=StepID("step-0"),
+                        step_kind=StepKind.TOOL_STEP,
+                        step_payload={"tool_id": "echo", "tool_args": {"value": "hello-ac2"}},
+                    ),
+                )
 
-        @property
-        def step_dispatchers(self) -> Any:
-            return None
+            @property
+            def step_dispatchers(self) -> Any:
+                return None
 
-        @property
-        def default_model_binding(self) -> ModelBinding:
-            return binding
+            @property
+            def default_model_binding(self) -> ModelBinding:
+                return binding
 
-    # --- exercise: the operator api.run path with a TOOL_STEP. ---
-    result = await _run(_Workflow(), config=config)
+        # --- exercise: the operator api.run path with a TOOL_STEP. ---
+        result = await _run(_Workflow(), config=config)
 
     # AC #2 — the TOOL_STEP dispatched through the full bootstrap and completed.
     assert isinstance(result, RunResult), f"got {type(result).__name__}"
