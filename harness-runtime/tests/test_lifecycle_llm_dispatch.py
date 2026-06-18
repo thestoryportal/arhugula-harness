@@ -2453,7 +2453,12 @@ async def test_inter_step_channel_reaches_anthropic_hitl_tool_loop() -> None:
         _AnthropicToolTurnResponse(
             id="msg_tool",
             content=[
-                {"type": "tool_use", "id": "toolu_001", "name": "search_docs", "input": {"query": "q"}}
+                {
+                    "type": "tool_use",
+                    "id": "toolu_001",
+                    "name": "search_docs",
+                    "input": {"query": "q"},
+                }
             ],
             stop_reason="tool_use",
             usage=_Usage(input_tokens=11, output_tokens=6),
@@ -2483,7 +2488,11 @@ async def test_inter_step_channel_reaches_anthropic_hitl_tool_loop() -> None:
             {
                 "messages": [{"role": "user", "content": "search"}],
                 "tools": [
-                    {"name": "search_docs", "server": "docs-mcp", "input_schema": {"type": "object"}}
+                    {
+                        "name": "search_docs",
+                        "server": "docs-mcp",
+                        "input_schema": {"type": "object"},
+                    }
                 ],
                 "params": {"max_tokens": 100},
             }
