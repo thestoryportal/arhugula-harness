@@ -26,6 +26,7 @@ from harness_runtime.bootstrap.factories.runtime_tool_dispatcher_factory import 
 from harness_runtime.config.sandbox_defaults import (
     compose_transport_floor,
     resolve_effective_sandbox_defaults,
+    resolve_per_tool_sandbox_defaults,
 )
 from harness_runtime.lifecycle.docker_tool_execution_driver import (
     DockerToolRunnerExecutionDriver,
@@ -54,6 +55,68 @@ def _client(**overrides: object) -> MCPClientConfig:
 
 
 _DRIVER_CFG = SandboxDriverConfig(command=("python", "runner.py"), image="echo:latest")
+
+
+def _contract(**overrides: object) -> object:
+    from harness_as.tool_contract import ToolContract
+
+    base: dict[str, object] = dict(
+        name="t",
+        description="d",
+        input_schema={"type": "object"},
+        output_schema={"type": "object"},
+        minimum_tier=SandboxTier.TIER_1_PROCESS,
+        blast_radius_tier=BlastRadiusTier.READ_ONLY,
+    )
+    base.update(overrides)
+    return ToolContract(**base)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# resolve_per_tool_sandbox_defaults — B6 Slice 2 per-tool resolution (§14.9.11).
+# ---------------------------------------------------------------------------
+
+
+def test_per_tool_read_only_stdio_floors_to_tier3() -> None:
+    """A READ_ONLY tool on a STDIO host resolves to TIER_3 (sandbox_tier_floor row 3),
+    subsuming B6 Slice 1's transport floor per-tool; the reason names the per-tool cause."""
+    client = _client()  # STDIO, L1, READ_ONLY
+    surface = resolve_effective_sandbox_defaults(client, DeploymentSurface.LOCAL_DEVELOPMENT)
+    eff = resolve_per_tool_sandbox_defaults(
+        _contract(), client, DeploymentSurface.LOCAL_DEVELOPMENT, surface
+    )
+    assert eff.sandbox_tier is SandboxTier.TIER_3_MICROVM
+    assert eff.assigned_tier_reason == "per-tool-sandbox-floor: t → tier-3-microvm (C-AS-02 §2.3)"
+
+
+def test_per_tool_forcing_computer_use_resolves_tier4() -> None:
+    """A `forces_computer_use` tool resolves to TIER_4 (sandbox_tier_floor row 1) regardless
+    of its low blast radius — the per-tool forcing row now reachable (was unreachable pre-B6-S2)."""
+    client = _client()
+    surface = resolve_effective_sandbox_defaults(client, DeploymentSurface.LOCAL_DEVELOPMENT)
+    eff = resolve_per_tool_sandbox_defaults(
+        _contract(forces_computer_use=True),
+        client,
+        DeploymentSurface.LOCAL_DEVELOPMENT,
+        surface,
+    )
+    assert eff.sandbox_tier is SandboxTier.TIER_4_FULL_VM
+
+
+def test_per_tool_surface_default_floors_low_per_tool_tier_in_production() -> None:
+    """The §14.9.8 deployment-surface default is preserved as a floor: a READ_ONLY tool on a
+    REMOTE L1 host (per-tool floor TIER_1, no STDIO row) in managed-cloud is held at the
+    surface default TIER_2 — production never drops below its fail-safe-high default."""
+    client = _client(
+        transport=MCPTransport.STREAMABLE_HTTP_L1_PINNED,
+        trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
+    )
+    surface = resolve_effective_sandbox_defaults(client, DeploymentSurface.MANAGED_CLOUD)
+    assert surface.sandbox_tier is SandboxTier.TIER_2_CONTAINER
+    eff = resolve_per_tool_sandbox_defaults(
+        _contract(), client, DeploymentSurface.MANAGED_CLOUD, surface
+    )
+    assert eff.sandbox_tier is SandboxTier.TIER_2_CONTAINER
 
 
 # ---------------------------------------------------------------------------

@@ -640,6 +640,27 @@ class MCPClientConfig(BaseModel):
     `blast_radius` field above; consolidation owed at a future hygiene arc
     (requires operator ratification per X-AL-3)."""
 
+    default_forces_computer_use: bool = False
+    """Operator-declared per-server default for the §2.2 `ToolMetadata.forces_computer_use`
+    discriminator (B6 Slice 2, runtime spec v1.56 §14.9.11). The stage-3a converter stamps
+    every discovered tool's `ToolContract.forces_computer_use` with this value — MCP
+    advertisements do not carry the H_T forcing semantics, so a per-server default is the
+    Reading-B policy source (sibling to `default_blast_radius`). An operator declaring a
+    computer-use MCP server raises ALL its tools to TIER_4 (C-AS-02 §2.3 row 1) at the
+    per-tool resolver. Conservative default `False`; a heterogeneous server supplies a
+    custom `MCPToolContractConverter` for per-tool granularity."""
+
+    default_forces_code_execution: bool = False
+    """Operator-declared per-server default for `ToolMetadata.forces_code_execution`
+    (→ TIER_4, C-AS-02 §2.3 row 2), stamped by the stage-3a converter (B6 Slice 2).
+    Conservative default `False`."""
+
+    default_is_deterministic_inhouse: bool = False
+    """Operator-declared per-server default for `ToolMetadata.is_deterministic_inhouse`
+    (C-AS-02 §2.3 row 7 — read-only deterministic in-house → TIER_1, bounded below by the
+    surface default + blast floor), stamped by the stage-3a converter (B6 Slice 2).
+    Conservative default `False`."""
+
     default_sandbox_tier: SandboxTier | None = None
     """Operator-declared per-server default *resolved* sandbox tier (Reading B,
     spec v1.41 §14.9.8). The stage-5 factory builds a per-server default-policy

@@ -31,11 +31,14 @@ The bare `RuntimeToolDispatcher` is private to the wrapper per spec
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, cast
 
 from harness_as.sandbox_tier import SandboxTier
 from harness_as.tool_contract import ToolContract
 from harness_core import SandboxDecisionPolicy
+from harness_core.deployment_surface import DeploymentSurface
 from harness_cp.cp_shared_types import MCPTrustTier
 from harness_cp.mcp_client_namespace_emitter import (
     MCPClientNamespaceEmitter,
@@ -52,8 +55,8 @@ from harness_cp.workflow_driver_types import WorkflowStep
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.config.sandbox_defaults import (
     EffectiveSandboxDefaults,
-    compose_transport_floor,
     resolve_effective_sandbox_defaults,
+    resolve_per_tool_sandbox_defaults,
 )
 from harness_runtime.lifecycle.as_is_wiring import RuntimeAsIsWiring
 from harness_runtime.lifecycle.docker_tool_execution_driver import (
@@ -88,30 +91,83 @@ __all__ = [
 ]
 
 
-def _build_default_policy_sandbox_resolver(
-    effective: EffectiveSandboxDefaults,
+def _build_per_tool_sandbox_resolver(
+    entry: MCPClientConfig,
+    deployment_surface: DeploymentSurface,
+    surface_default: EffectiveSandboxDefaults,
 ) -> SandboxDecisionResolver:
-    """Build a per-server default-policy `SandboxDecisionResolver` (spec §14.9.8)
-    from the surface-aware reconciled defaults (spec v1.43 §14.9.9 + fork §7.1).
+    """Build a PER-TOOL `SandboxDecisionResolver` (runtime spec v1.56 §14.9.11 — B6
+    Slice 2, `B-PER-TOOL-SANDBOX-TIER`).
 
-    Returns the same decision for EVERY `(contract, step)` on this server
-    (per-server-uniform per §14.9.8). The resolved `tier` is compared against
-    `contract.minimum_tier` at the §14.9.4 tier-floor check; the helper keeps the
-    two coherent so a bare config never spuriously violates the floor.
+    Each `(contract, step)` resolves via `resolve_per_tool_sandbox_defaults` —
+    `max(surface_default.sandbox_tier, sandbox_tier_floor(per-tool ...))` — so the
+    C-AS-02 §2.3 per-tool forcing rows (1-2) + per-tool blast rows (7-10) become
+    reachable per tool, while rows 3-6 subsume B6 Slice 1's per-host transport floor
+    per-tool (STDIO→TIER_3 preserved). The `step` is unused (the resolved tier is a
+    function of `(contract, host, surface)`); the `SandboxDecisionResolver` signature
+    is unchanged. The resolved `tier` is compared against `contract.minimum_tier` at
+    the §14.9.4 tier-floor check (a per-tool tier ≥ the surface default never spuriously
+    violates a bare config's floor).
     """
 
-    def resolve(_contract: ToolContract, _step: WorkflowStep) -> SandboxDispatchDecision:
+    def resolve(contract: ToolContract, _step: WorkflowStep) -> SandboxDispatchDecision:
+        eff = resolve_per_tool_sandbox_defaults(
+            contract, entry, deployment_surface, surface_default
+        )
         return SandboxDispatchDecision(
-            tier=effective.sandbox_tier,
-            tech=effective.sandbox_tech,
-            provider=effective.sandbox_provider,
-            # B6 Slice 1: floor-aware — `compose_transport_floor` sets a transport-floor
-            # reason when the ADR-D2 §1.3 floor raised the tier (else the per-server default).
-            assigned_tier_reason=effective.assigned_tier_reason,
+            tier=eff.sandbox_tier,
+            tech=eff.sandbox_tech,
+            provider=eff.sandbox_provider,
+            assigned_tier_reason=eff.assigned_tier_reason,
             cost_tier_overhead_ms=0,
         )
 
     return resolve
+
+
+@dataclass(frozen=True)
+class PerTierToolExecutionDriver:
+    """Per-host per-tier driver registry — selects the `ToolExecutionDriver` matching the
+    per-tool resolved `SandboxDispatchDecision.tier` at dispatch (runtime spec v1.56
+    §14.9.11 — B6 Slice 2, Option A; the §14.9.9/§14.9.10 inv-3 per-server-uniform→per-dispatch
+    relaxation).
+
+    Implements the `ToolExecutionDriver` protocol so the bare `RuntimeToolDispatcher`'s
+    `dict[ServerName, ToolExecutionDriver]` field + dispatch body are byte-unchanged — the
+    per-dispatch driver selection lives here, inside `call_tool`. The registry holds exactly
+    the tiers reachable by this host's tools (built once at the stage-5 factory;
+    `tool_registry` is immutable after `start()`, §14.9.1). A resolved tier with no
+    registered driver is a defensive `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE` (the factory
+    builds every reachable tier's driver, so this is unreachable by construction).
+    """
+
+    drivers: Mapping[SandboxTier, ToolExecutionDriver]
+    server_name: str
+
+    async def call_tool(
+        self,
+        *,
+        mcp_client_host: MCPClientHost,
+        sandbox_decision: SandboxDispatchDecision,
+        tool_id: str,
+        tool_args: Mapping[str, Any],
+        idempotency_key: str,
+    ) -> Mapping[str, Any]:
+        driver = self.drivers.get(sandbox_decision.tier)
+        if driver is None:
+            raise SandboxDriverUnavailableError(
+                f"RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE: server={self.server_name!r} "
+                f"tool={tool_id!r} resolved tier {sandbox_decision.tier.value!r} has no "
+                f"registered driver — the per-tier registry built only the tiers reachable "
+                f"by this host's tools at stage 5 (runtime spec §14.9.11)"
+            )
+        return await driver.call_tool(
+            mcp_client_host=mcp_client_host,
+            sandbox_decision=sandbox_decision,
+            tool_id=tool_id,
+            tool_args=tool_args,
+            idempotency_key=idempotency_key,
+        )
 
 
 def _select_tool_execution_driver(
@@ -318,21 +374,38 @@ async def materialize_runtime_tool_dispatcher_stage(
     tool_execution_drivers: dict[ServerName, ToolExecutionDriver] = {}
     for server_name in ctx.mcp_client_hosts:
         entry = cfg_by_server[server_name]
-        # R-FS-1 B6 Slice 1 (runtime spec v1.54 §14.9.8): compose the ADR-D2 §1.3
-        # per-MCP-transport floor into the surface-aware default tier (STDIO → ≥ TIER_3;
-        # L2-remote → TIER_4) — still per-server-uniform (one blast input per host). The
-        # §14.9.9 FR-1/FR-2 driver selection below then delivers the raised tier or
-        # fail-closes (RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE). Per-tool granularity = B6
-        # Slice 2 (B-PER-TOOL-SANDBOX-TIER).
-        effective_sandbox = compose_transport_floor(
-            resolve_effective_sandbox_defaults(entry, config.deployment_surface), entry
+        host = ctx.mcp_client_hosts[server_name]
+        # R-FS-1 B6 Slice 2 (runtime spec v1.56 §14.9.11): PER-TOOL sandbox resolution.
+        # The surface-aware default (`resolve_effective_sandbox_defaults`) is the floor;
+        # the full per-tool `sandbox_tier_floor` (rows 1-2 forcing + 3-6 transport/trust —
+        # subsuming B6 Slice 1's per-host `compose_transport_floor` per-tool — + 7-10
+        # per-tool blast) drives the rest. The per-host loop no longer composes
+        # `compose_transport_floor` (its host-blast transport floor is subsumed per-tool;
+        # using it would bake the host's coarse blast into every tool, defeating per-tool).
+        surface_default = resolve_effective_sandbox_defaults(entry, config.deployment_surface)
+        sandbox_decision_resolvers[server_name] = _build_per_tool_sandbox_resolver(
+            entry, config.deployment_surface, surface_default
         )
-        sandbox_decision_resolvers[server_name] = _build_default_policy_sandbox_resolver(
-            effective_sandbox
-        )
-        tool_execution_drivers[server_name] = _select_tool_execution_driver(
-            tier=effective_sandbox.sandbox_tier,
-            driver_config=entry.sandbox_driver,
+        # Per-host per-tier driver registry (Option A) — one driver per tier reachable by
+        # this host's tools (computable: `tool_registry` is immutable after start()). A
+        # reachable tier with no registrable driver fail-closes (RT-FAIL-SANDBOX-DRIVER-
+        # UNAVAILABLE, §14.9.9 FR-2(i)), now raised per-tier. The composite selects the
+        # delivering driver per dispatch by the per-tool resolved tier (delivered == resolved).
+        reachable_tiers = {
+            resolve_per_tool_sandbox_defaults(
+                host.tool_registry.get(cast("ToolName", tool_name)),
+                entry,
+                config.deployment_surface,
+                surface_default,
+            ).sandbox_tier
+            for tool_name in host.tool_registry.names()
+        }
+        tool_execution_drivers[server_name] = PerTierToolExecutionDriver(
+            drivers={
+                tier: _select_tool_execution_driver(tier=tier, driver_config=entry.sandbox_driver)
+                for tier in reachable_tiers
+            },
+            server_name=server_name,
         )
 
     # --- Step 3: bare RuntimeToolDispatcher (C-RT-19) ------------------------
