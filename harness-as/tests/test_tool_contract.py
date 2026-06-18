@@ -89,6 +89,10 @@ def test_raw_contract_input_declared() -> None:
         "minimum_tier",
         "blast_radius_tier",
         "required_secrets",
+        # B6 Slice 2 (AS spec v1.11 §3.1) — ToolMetadata forcing discriminators.
+        "forces_computer_use",
+        "forces_code_execution",
+        "is_deterministic_inhouse",
     }
     assert set(RawContractInput.model_fields) == expected
 

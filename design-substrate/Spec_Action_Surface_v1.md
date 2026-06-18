@@ -1,4 +1,14 @@
-# Spec — Action Surface v1.10
+# Spec — Action Surface v1.11
+
+## Change-note (v1.10 → v1.11)
+
+**Scope of revision.** R-FS-1 **B6 Slice 2** (`B-PER-TOOL-SANDBOX-TIER`) AS-side companion — the cross-axis cascade of `.harness/class_1_fork_b6_slice_2_per_tool_sandbox_tier.md` (Option A operator-ratified 2026-06-17). The runtime per-tool sandbox resolver (runtime spec v1.56 §14.9.11) calls the full `sandbox_tier_floor(tool, …)` per tool, but its `tool` argument — the `ToolMetadata` forcing discriminators (`forces_computer_use` / `forces_code_execution` / `is_deterministic_inhouse`, declared at §2.2 `ToolMetadata`) that key the §2.3 **rows 1-2** (computer-use / code-execution → `tier-4-full-vm`) + **row 7** (`is_deterministic_inhouse` read-only → `tier-1-process`) — is **not carriable on `ToolContract`** today (§3.1 carries only `minimum_tier` + `blast_radius_tier` + `required_secrets`). v1.11 extends the C-AS-03 §3.1 `ToolContract` field signature with the three `ToolMetadata` discriminators so the runtime resolver can reach those rows per tool.
+
+**Additive + non-breaking (adopt-and-note, no operator gate at the AS leg).** The three fields are **optional with safe non-forcing defaults** (`forces_computer_use=false`, `forces_code_execution=false`, `is_deterministic_inhouse=false`): every existing `ToolContract` resolves **byte-identically** (`sandbox_tier_floor` rows 1-2 are skipped at `false`, and row 7's `tier-1-process` is bounded below by the deployment-surface default + the per-tool `blast_radius_tier` floor); only a NEW declaration opts into the forcing rows. No `minimum_tier` / `blast_radius_tier` / `required_secrets` change; no `sandbox_tier_floor` signature change (§2.2/§2.3 PRESERVED VERBATIM — `ToolMetadata` already exists; v1.11 only lets `ToolContract` carry it); no C-AS-02 composition change; no AS-AL rule added. The §3.2 declaration discipline + §3.3 default-tier policy are PRESERVED VERBATIM.
+
+**Amendment site.** §3.1 — the `ToolContract { … }` field block gains three optional `ToolMetadata`-discriminator fields (after `required_secrets`, before the `...` extensibility marker), each annotated as feeding the C-AS-02 §2.3 rows 1-2/7 at the runtime per-tool resolver. The AS↔runtime registration seam (`RawContractInput` + the v1.40 stage-3a `MCPToolContractConverter`) threads them at impl per the runtime spec v1.56 §14.9.11 cascade. A reciprocal cross-ref to runtime §14.9.11 records the bidirectional link.
+
+**Preserved verbatim.** All v1.10 + prior content — §2.2/§2.3 `sandbox_tier_floor` + `ToolMetadata`, §10.1/§10.3, §14.x footers, and all frozen historical change-note blocks — PRESERVED VERBATIM. v1.11 adds ONLY the three §3.1 fields + the reciprocal cross-ref (additive; no existing field edited).
 
 ## Change-note (v1.9 → v1.10)
 
@@ -491,9 +501,14 @@ ToolContract {
     minimum_tier: SandboxTier,                  # REQUIRED — drives F4 capability-introspection-floor at C-AS-02
     blast_radius_tier: BlastRadiusTier,          # REQUIRED — drives C-AS-02 default sandbox_tier_floor
     required_secrets: List[SecretAllowlistEntry], # OPTIONAL — per C-AS-06; empty list permitted
+    forces_computer_use: bool,                   # OPTIONAL (default false) — §2.2 ToolMetadata discriminator; keys C-AS-02 §2.3 row 1 (→ tier-4-full-vm) at the runtime per-tool resolver (runtime v1.56 §14.9.11)
+    forces_code_execution: bool,                 # OPTIONAL (default false) — §2.2 ToolMetadata discriminator; keys C-AS-02 §2.3 row 2 (→ tier-4-full-vm) at the runtime per-tool resolver
+    is_deterministic_inhouse: bool,              # OPTIONAL (default false) — §2.2 ToolMetadata discriminator; keys C-AS-02 §2.3 row 7 (read-only deterministic in-house → tier-1-process) at the runtime per-tool resolver
     ...
 }
 ```
+
+**`ToolMetadata` discriminators (added at v1.11 — B6 Slice 2).** The three `forces_*` / `is_deterministic_inhouse` fields carry the §2.2 `ToolMetadata` discriminators so the runtime per-tool sandbox resolver (runtime spec v1.56 §14.9.11) can key the C-AS-02 §2.3 forcing rows 1-2 + row 7 **per tool**. They are OPTIONAL with safe non-forcing defaults (`false`): an existing contract omitting them resolves byte-identically (rows 1-2 skipped; row 7's `tier-1-process` is bounded below by the deployment-surface default + `blast_radius_tier` floor). A contract MAY carry a `ToolMetadata` sub-model or three flat fields (impl-discretion); the runtime resolver reads the same three discriminators either way. This is the AS-side leg of the runtime §14.9.11 cascade (reciprocal cross-ref).
 
 ### §3.2 Declaration discipline
 

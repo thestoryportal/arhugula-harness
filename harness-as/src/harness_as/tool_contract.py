@@ -83,6 +83,21 @@ class ToolContract(BaseModel):
     required_secrets: tuple[SecretAllowlistEntry, ...] = ()
     """OPTIONAL per C-AS-06; empty tuple permitted."""
 
+    forces_computer_use: bool = False
+    """OPTIONAL §2.2 `ToolMetadata` discriminator (C-AS-03 §3.1, v1.11 — B6 Slice 2).
+    Keys the C-AS-02 §2.3 row-1 forcing condition (→ TIER_4_FULL_VM) at the runtime
+    per-tool sandbox resolver (runtime spec v1.56 §14.9.11). Default `False` — an
+    existing contract resolves byte-identically."""
+
+    forces_code_execution: bool = False
+    """OPTIONAL §2.2 `ToolMetadata` discriminator — keys the C-AS-02 §2.3 row-2
+    forcing condition (→ TIER_4_FULL_VM). Default `False`."""
+
+    is_deterministic_inhouse: bool = False
+    """OPTIONAL §2.2 `ToolMetadata` discriminator — keys the C-AS-02 §2.3 row-7
+    read-only-deterministic-in-house lookup (→ TIER_1_PROCESS, bounded below by the
+    deployment-surface default + blast-radius floor). Default `False`."""
+
 
 class RawContractInput(BaseModel):
     """Pre-validation tool-contract serialization shape (resolution ②).
@@ -103,6 +118,9 @@ class RawContractInput(BaseModel):
     minimum_tier: SandboxTier | None = None
     blast_radius_tier: BlastRadiusTier | None = None
     required_secrets: tuple[SecretAllowlistEntry, ...] | None = None
+    forces_computer_use: bool = False
+    forces_code_execution: bool = False
+    is_deterministic_inhouse: bool = False
 
 
 class ContractValidationOutcome(StrEnum):
@@ -156,5 +174,8 @@ def validate_tool_contract_at_registration(
         minimum_tier=raw_contract.minimum_tier,
         blast_radius_tier=raw_contract.blast_radius_tier,
         required_secrets=raw_contract.required_secrets or (),
+        forces_computer_use=raw_contract.forces_computer_use,
+        forces_code_execution=raw_contract.forces_code_execution,
+        is_deterministic_inhouse=raw_contract.is_deterministic_inhouse,
     )
     return ContractValidationResult(outcome=ContractValidationOutcome.VALID, contract=contract)

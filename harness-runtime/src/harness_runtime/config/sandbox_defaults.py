@@ -29,7 +29,13 @@ from typing import TYPE_CHECKING
 
 from harness_as.mcp_transport_floor import mcp_transport_floor
 from harness_as.sandbox_tier import SandboxTier, is_tier_at_or_above
-from harness_as.sandbox_tier_floor import SandboxTierFloorOutcome
+from harness_as.sandbox_tier_floor import (
+    MCPServer,
+    SandboxTierFloorOutcome,
+    ToolMetadata,
+    sandbox_tier_floor,
+)
+from harness_as.tool_contract import ToolContract
 from harness_core.deployment_surface import DeploymentSurface
 
 if TYPE_CHECKING:
@@ -39,6 +45,7 @@ __all__ = [
     "EffectiveSandboxDefaults",
     "compose_transport_floor",
     "resolve_effective_sandbox_defaults",
+    "resolve_per_tool_sandbox_defaults",
     "surface_default_sandbox_tier",
 ]
 
@@ -202,5 +209,79 @@ def compose_transport_floor(
         # the (raised) tier.
         assigned_tier_reason=(
             f"per-mcp-transport-floor: {entry.transport.value} → {floor.tier.value} (ADR-D2 §1.3)"
+        ),
+    )
+
+
+def resolve_per_tool_sandbox_defaults(
+    contract: ToolContract,
+    entry: MCPClientConfig,
+    deployment_surface: DeploymentSurface,
+    surface_default: EffectiveSandboxDefaults,
+) -> EffectiveSandboxDefaults:
+    """Resolve the PER-TOOL sandbox decision — R-FS-1 B6 Slice 2, runtime spec v1.56
+    §14.9.11 (the per-server-uniform→per-tool lift; `B-PER-TOOL-SANDBOX-TIER`).
+
+    Computes `max(surface_default.sandbox_tier, sandbox_tier_floor(...).tier)` per
+    `(contract, host)`: the §14.9.8 deployment-surface default (`surface_default`) is the
+    floor; the full 10-row `sandbox_tier_floor` (C-AS-02 §2.3) supplies the per-tool
+    forcing rows (1-2 — `forces_computer_use`/`forces_code_execution` → TIER_4), the
+    transport/trust rows (3-6 — **subsuming** B6 Slice 1's per-host `compose_transport_floor`
+    per-tool, STDIO→TIER_3), and the per-tool blast rows (7-10 — keyed on the tool's own
+    `blast_radius_tier`, not the host's). This is why the per-tool path consumes
+    `resolve_effective_sandbox_defaults` (the surface default) and NOT `compose_transport_floor`
+    (whose host-blast transport floor `sandbox_tier_floor` rows 3-6 already subsume per-tool).
+
+    `minimum_tier` is UNCHANGED — the per-tool floor raises what the dispatch *delivers*
+    (`sandbox_tier`), not what the tool *requires* (`minimum_tier`); the §14.9.4 tier-floor
+    check (`resolved.tier >= contract.minimum_tier`) reads `minimum_tier` separately.
+
+    A floor `REFUSE` (remote L0) is **unreachable** — L0-remote is refused at registration
+    (`materialize_mcp_stage`, §14.9.10 D1) before the stage-5 resolver loop — so it is a
+    defensive fail-closed raise, never a silent tier substitution.
+    """
+    floor = sandbox_tier_floor(
+        ToolMetadata(
+            is_deterministic_inhouse=contract.is_deterministic_inhouse,
+            forces_computer_use=contract.forces_computer_use,
+            forces_code_execution=contract.forces_code_execution,
+        ),
+        deployment_surface,
+        contract.blast_radius_tier,
+        entry.transport,
+        MCPServer(server_id=entry.client_name, trust_level=entry.trust_level),
+    )
+    if floor.outcome is SandboxTierFloorOutcome.REFUSE:
+        raise RuntimeError(
+            f"RT-FAIL-SANDBOX-PER-TOOL-FLOOR-REFUSE: tool {contract.name!r} on MCP server "
+            f"{entry.client_name!r} resolves to a per-tool sandbox_tier_floor REFUSE — an "
+            f"L0-remote server must be refused at registration before the stage-5 resolver; "
+            f"reaching this site is a bootstrap-ordering invariant violation (runtime §14.9.11)"
+        )
+    assert floor.tier is not None, "RESOLVED SandboxTierFloorResult always carries a tier"
+
+    # max(surface default, per-tool floor). When the surface default is STRICTLY higher it
+    # stands UNCHANGED (incl. its tech/provider/reason); otherwise the per-tool floor drives
+    # the tier and the span labels/reason reflect the per-tool cause (security telemetry honesty).
+    if (
+        is_tier_at_or_above(surface_default.sandbox_tier, floor.tier)
+        and surface_default.sandbox_tier is not floor.tier
+    ):
+        return surface_default
+
+    default_tech, default_provider = _TIER_TECH_PROVIDER[floor.tier]
+    return EffectiveSandboxDefaults(
+        minimum_tier=surface_default.minimum_tier,
+        sandbox_tier=floor.tier,
+        sandbox_tech=(
+            entry.default_sandbox_tech if entry.default_sandbox_tech is not None else default_tech
+        ),
+        sandbox_provider=(
+            entry.default_sandbox_provider
+            if entry.default_sandbox_provider is not None
+            else default_provider
+        ),
+        assigned_tier_reason=(
+            f"per-tool-sandbox-floor: {contract.name} → {floor.tier.value} (C-AS-02 §2.3)"
         ),
     )

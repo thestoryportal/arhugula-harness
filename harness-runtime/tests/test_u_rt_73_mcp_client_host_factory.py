@@ -220,6 +220,36 @@ async def test_converter_stamps_per_server_default_policy() -> None:
 
 
 @pytest.mark.asyncio
+async def test_converter_stamps_per_server_forcing_discriminators() -> None:
+    """B6 Slice 2 (runtime spec v1.56 §14.9.11) — the stage-3a converter stamps the
+    entry's per-server `ToolMetadata` forcing discriminators onto every MCP-discovered
+    tool's `ToolContract`. Without this, MCP-advertised tools would always carry the
+    safe `False` defaults, leaving the C-AS-02 §2.3 forcing rows (1-2) + row 7 reachable
+    ONLY for manually-built contracts (the production-path gap). With it, an operator
+    declaring a computer-use MCP server raises ALL its discovered tools to the per-tool
+    TIER_4 forcing path at the resolver."""
+    cfg = _config(
+        [
+            MCPClientConfig(
+                client_name=ClientName("computer-use-server"),
+                transport=MCPTransport.STDIO,
+                trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
+                blast_radius=BlastRadiusTier.READ_ONLY,
+                connection_url="stdio:///bin/echo",
+                default_forces_computer_use=True,
+                default_is_deterministic_inhouse=True,
+            )
+        ]
+    )
+    host = next(iter((await materialize_mcp_client_host_stage(cfg)).values()))
+    converter = host._tool_contract_converter  # type: ignore[attr-defined]
+    contract = converter(_FakeTool("browse", "drive a browser", {"type": "object"}))
+    assert contract.forces_computer_use is True
+    assert contract.is_deterministic_inhouse is True
+    assert contract.forces_code_execution is False  # left at the conservative default
+
+
+@pytest.mark.asyncio
 async def test_converter_tolerates_none_description_and_schema() -> None:
     """v1.40 — `mcp.types.Tool.description` may be None and `inputSchema` may
     be absent; the converter substitutes safe defaults."""

@@ -23,6 +23,7 @@ from harness_runtime.bootstrap.factories.mcp_client_host_factory import (
 )
 from harness_runtime.bootstrap.factories.runtime_tool_dispatcher_factory import (
     DEFAULT_TRUST_POLICY,
+    PerTierToolExecutionDriver,
     materialize_runtime_tool_dispatcher_stage,
 )
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
@@ -69,18 +70,29 @@ def _config() -> RuntimeConfig:
     )
 
 
-async def _post_stage_3a_builder(cfg: RuntimeConfig) -> _MutableHarnessContext:
+async def _post_stage_3a_builder(
+    cfg: RuntimeConfig, *, tools: list[Any] | None = None
+) -> _MutableHarnessContext:
     """Construct a builder with the minimum stage-3a + stage-3b state the
-    stage-5 factory consumes."""
+    stage-5 factory consumes.
+
+    `tools` (B6 Slice 2): ToolContracts registered into EACH host's started
+    registry, so the stage-5 factory's per-tool reachable-tier scan (runtime spec
+    v1.56 §14.9.11) has tools to resolve. Default `None` → empty registry (the
+    pre-B6-Slice-2 behavior; a host with no tools needs no driver)."""
     builder = _MutableHarnessContext()
-    # The stage-5 factory builds the routing index from each host's STARTED
-    # registry (production: stage-3a starts the hosts before stage-5). These unit
-    # tests can't spawn a real MCP subprocess (`stdio:///bin/echo` is not an MCP
-    # server), so each materialized host is mocked started with an empty registry.
+    # The stage-5 factory builds the routing index + per-tool driver registry from
+    # each host's STARTED registry (production: stage-3a starts the hosts before
+    # stage-5). These unit tests can't spawn a real MCP subprocess
+    # (`stdio:///bin/echo` is not an MCP server), so each materialized host is mocked
+    # started with a registry populated from `tools`.
     hosts = await materialize_mcp_client_host_stage(cfg)
     for host in hosts.values():
         host._started = True  # type: ignore[attr-defined]
-        host._tool_registry = ToolRegistry()  # type: ignore[attr-defined]
+        registry = ToolRegistry()
+        for contract in tools or []:
+            registry.register(contract)
+        host._tool_registry = registry  # type: ignore[attr-defined]
     builder.mcp_client_hosts = hosts
     builder.retry_breaker = RuntimeRetryBreaker(
         retry_policies={
@@ -271,15 +283,48 @@ def _tool_contract_and_step(minimum_tier: object) -> tuple[object, object]:
     return contract, step
 
 
-@pytest.mark.asyncio
-async def test_factory_wires_per_server_default_policy_resolver() -> None:
-    """v1.41 Gap C — a configured server's bootstrap dispatcher carries a
-    NON-raising sandbox_decision_resolver returning the per-server default.
+def _read_only_tool(name: str = "echo") -> Any:
+    """A READ_ONLY ToolContract — on a STDIO host it resolves to TIER_3 (sandbox_tier_floor
+    row 3: max(TIER_3, blast_floor(READ_ONLY))). B6 Slice 2 per-tool fixture."""
+    from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
+    from harness_as.tool_contract import ToolContract
 
-    R-FS-1 B6 Slice 1 (runtime spec v1.54 §14.9.8): the per-server resolved tier
-    composes the per-MCP-transport floor, so a STDIO server resolves to TIER_3
-    (ADR-D2 §1.3) with the auto-derived gvisor/runsc labels — NOT the bare
-    surface-default TIER_1/host-process."""
+    return ToolContract(
+        name=name,
+        description="read-only",
+        input_schema={"type": "object"},
+        output_schema={"type": "object"},
+        minimum_tier=SandboxTier.TIER_1_PROCESS,
+        blast_radius_tier=BlastRadiusTier.READ_ONLY,
+    )
+
+
+def _forcing_tool(name: str = "browse") -> Any:
+    """A `forces_computer_use` ToolContract — resolves to TIER_4 regardless of transport/blast
+    (sandbox_tier_floor row 1). B6 Slice 2 per-tool fixture."""
+    from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
+    from harness_as.tool_contract import ToolContract
+
+    return ToolContract(
+        name=name,
+        description="computer-use",
+        input_schema={"type": "object"},
+        output_schema={"type": "object"},
+        minimum_tier=SandboxTier.TIER_1_PROCESS,
+        blast_radius_tier=BlastRadiusTier.READ_ONLY,
+        forces_computer_use=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_factory_wires_per_tool_sandbox_resolver() -> None:
+    """v1.41 Gap C → R-FS-1 B6 Slice 2 (runtime spec v1.56 §14.9.11): a configured
+    server's bootstrap dispatcher carries a NON-raising PER-TOOL sandbox resolver.
+
+    For a READ_ONLY tool on a STDIO server the per-tool `sandbox_tier_floor` row 3
+    (STDIO → max(TIER_3, blast_floor)) drives the tier to TIER_3 with the gvisor/runsc
+    labels, and the reason records the per-tool cause (C-AS-02 §2.3) — subsuming B6
+    Slice 1's per-host transport floor per-tool."""
     from harness_as.sandbox_tier import SandboxTier
 
     cfg = _config_with_server(sandbox_tier=SandboxTier.TIER_1_PROCESS)
@@ -289,15 +334,14 @@ async def test_factory_wires_per_server_default_policy_resolver() -> None:
     contract, step = _tool_contract_and_step(SandboxTier.TIER_1_PROCESS)
     resolver = wrapper.inner._sandbox_resolvers[ServerName("echo-server")]  # type: ignore[attr-defined]
     decision = resolver(contract, step)
-    # B6 Slice 1: STDIO transport floors the per-server tier to TIER_3 (ADR-D2 §1.3),
-    # and the reason records that the transport floor — not the per-server default —
-    # drove the raised tier (security telemetry honesty).
+    # B6 Slice 2: the per-tool floor (STDIO row 3) raises the READ_ONLY echo tool to
+    # TIER_3; the reason records the per-tool cause (security telemetry honesty).
     assert decision.tier is SandboxTier.TIER_3_MICROVM
     assert decision.tech == "gvisor"
     assert decision.provider == "runsc"
     assert (
         decision.assigned_tier_reason
-        == "per-mcp-transport-floor: stdio → tier-3-microvm (ADR-D2 §1.3)"
+        == "per-tool-sandbox-floor: echo → tier-3-microvm (C-AS-02 §2.3)"
     )
 
 
@@ -390,41 +434,54 @@ def _bare_server_config(
 
 
 @pytest.mark.asyncio
-async def test_bare_local_dev_stdio_server_floored_to_tier3_fails_loud() -> None:
-    """R-FS-1 B6 Slice 1 (runtime spec v1.54 §14.9.8) — THE behavioral change:
-    a bare local-development STDIO server no longer resolves to silent TIER_1
-    in-process. The STDIO transport floor (ADR-D2 §1.3) raises it to TIER_3, so a
-    bare config (no `sandbox_driver`) RAISES `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE`
-    (FR-2(i)) rather than silently under-sandboxing at Tier 1."""
+async def test_bare_local_dev_stdio_server_with_tool_floored_to_tier3_fails_loud() -> None:
+    """R-FS-1 B6 Slice 2 (runtime spec v1.56 §14.9.11) — the per-tool behavioral change:
+    a bare local-development STDIO server with a READ_ONLY tool floors that tool to
+    TIER_3 (sandbox_tier_floor row 3, ADR-D2 §1.3) per-tool, so the per-tier driver
+    registry needs a TIER_3 driver — absent (bare config) → RAISES
+    `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE` (FR-2(i)) rather than silently under-sandboxing."""
     from harness_runtime.lifecycle.runtime_tool_dispatcher import SandboxDriverUnavailableError
 
     cfg = _bare_server_config(DeploymentSurface.LOCAL_DEVELOPMENT)
-    builder = await _post_stage_3a_builder(cfg)
+    builder = await _post_stage_3a_builder(cfg, tools=[_read_only_tool()])
     with pytest.raises(SandboxDriverUnavailableError):
         await materialize_runtime_tool_dispatcher_stage(builder, cfg)
 
 
 @pytest.mark.asyncio
-async def test_bare_managed_cloud_server_fails_loud_not_in_process() -> None:
-    """v1.43 §14.9.9 FR-2(i) — THE security fix, end-to-end through the real
-    bootstrap factory: a bare managed-cloud STDIO server (B6-Slice-1-floored to
-    TIER_3 by the STDIO transport floor) with no driver configured RAISES
-    `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE` rather than silently executing
-    in-process."""
+async def test_bare_managed_cloud_server_with_tool_fails_loud_not_in_process() -> None:
+    """v1.43 §14.9.9 FR-2(i) + B6 Slice 2 — the security fix end-to-end through the real
+    bootstrap factory: a bare managed-cloud STDIO server with a READ_ONLY tool (per-tool
+    floored to TIER_3) and no driver configured RAISES `RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE`
+    rather than silently executing in-process."""
     from harness_runtime.lifecycle.runtime_tool_dispatcher import SandboxDriverUnavailableError
 
     cfg = _bare_server_config(DeploymentSurface.MANAGED_CLOUD)
-    builder = await _post_stage_3a_builder(cfg)
+    builder = await _post_stage_3a_builder(cfg, tools=[_read_only_tool()])
     with pytest.raises(SandboxDriverUnavailableError):
         await materialize_runtime_tool_dispatcher_stage(builder, cfg)
+
+
+@pytest.mark.asyncio
+async def test_toolless_stdio_server_needs_no_driver() -> None:
+    """R-FS-1 B6 Slice 2 — per-tool refinement of B6 Slice 1: a STDIO server with NO tools
+    exposes no dispatch surface, so its per-tier driver registry is EMPTY and a bare config
+    (no `sandbox_driver`) does NOT fail-close (nothing to sandbox). The fail-close fires
+    per-tool, where a tool actually reaches a driver-requiring tier."""
+    cfg = _bare_server_config(DeploymentSurface.LOCAL_DEVELOPMENT)
+    builder = await _post_stage_3a_builder(cfg)  # no tools
+    wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
+    driver = wrapper.inner._tool_execution_drivers[ServerName("echo-server")]  # type: ignore[attr-defined]
+    assert isinstance(driver, PerTierToolExecutionDriver)
+    assert dict(driver.drivers) == {}
 
 
 @pytest.mark.asyncio
 async def test_stdio_server_with_driver_wires_gvisor_at_floored_tier3() -> None:
-    """R-FS-1 B6 Slice 1 + v1.43 §14.9.9 FR-1 — a STDIO server with a configured
-    container driver wires the gVisor (TIER_3 microVM) driver through the real
-    factory, delivering the TIER_3 the STDIO transport floor (ADR-D2 §1.3) raised
-    it to (NOT the TIER_2 Docker the bare surface default would have selected)."""
+    """R-FS-1 B6 Slice 2 + v1.43 §14.9.9 FR-1 — a STDIO server with a READ_ONLY tool and a
+    configured container driver wires a `PerTierToolExecutionDriver` whose TIER_3 entry is
+    the gVisor (microVM) driver — delivering the TIER_3 the per-tool STDIO floor (row 3)
+    raised the tool to (NOT the TIER_2 Docker the bare surface default would select)."""
     from harness_as.sandbox_tier import SandboxTier
     from harness_runtime.lifecycle.docker_tool_execution_driver import (
         GVisorRunscToolRunnerExecutionDriver,
@@ -435,8 +492,94 @@ async def test_stdio_server_with_driver_wires_gvisor_at_floored_tier3() -> None:
         DeploymentSurface.MANAGED_CLOUD,
         sandbox_driver=SandboxDriverConfig(command=("python", "runner.py"), image="echo:latest"),
     )
-    builder = await _post_stage_3a_builder(cfg)
+    builder = await _post_stage_3a_builder(cfg, tools=[_read_only_tool()])
     wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
     driver = wrapper.inner._tool_execution_drivers[ServerName("echo-server")]  # type: ignore[attr-defined]
-    assert isinstance(driver, GVisorRunscToolRunnerExecutionDriver)
-    assert driver.required_tier is SandboxTier.TIER_3_MICROVM
+    assert isinstance(driver, PerTierToolExecutionDriver)
+    inner = driver.drivers[SandboxTier.TIER_3_MICROVM]
+    assert isinstance(inner, GVisorRunscToolRunnerExecutionDriver)
+    assert inner.required_tier is SandboxTier.TIER_3_MICROVM
+
+
+@pytest.mark.asyncio
+async def test_mixed_tier_host_builds_per_tier_driver_registry() -> None:
+    """R-FS-1 B6 Slice 2 — a host with a READ_ONLY tool (per-tool TIER_3 on STDIO) AND a
+    `forces_computer_use` tool (per-tool TIER_4) builds a per-tier registry with BOTH
+    drivers (gVisor@TIER_3 + E2B@TIER_4) — each tool delivers exactly its resolved tier."""
+    from harness_as.sandbox_tier import SandboxTier
+    from harness_runtime.lifecycle.docker_tool_execution_driver import (
+        GVisorRunscToolRunnerExecutionDriver,
+    )
+    from harness_runtime.lifecycle.e2b_tool_execution_driver import (
+        E2BManagedFullVMToolRunnerExecutionDriver,
+    )
+    from harness_runtime.types import SandboxDriverConfig
+
+    cfg = _bare_server_config(
+        DeploymentSurface.MANAGED_CLOUD,
+        sandbox_driver=SandboxDriverConfig(command=("python", "runner.py"), image="echo:latest"),
+    )
+    builder = await _post_stage_3a_builder(
+        cfg, tools=[_read_only_tool("ro"), _forcing_tool("browse")]
+    )
+    wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
+    driver = wrapper.inner._tool_execution_drivers[ServerName("echo-server")]  # type: ignore[attr-defined]
+    assert isinstance(driver, PerTierToolExecutionDriver)
+    assert set(driver.drivers) == {SandboxTier.TIER_3_MICROVM, SandboxTier.TIER_4_FULL_VM}
+    assert isinstance(
+        driver.drivers[SandboxTier.TIER_3_MICROVM], GVisorRunscToolRunnerExecutionDriver
+    )
+    assert isinstance(
+        driver.drivers[SandboxTier.TIER_4_FULL_VM], E2BManagedFullVMToolRunnerExecutionDriver
+    )
+
+
+@pytest.mark.asyncio
+async def test_per_tier_driver_selects_by_resolved_tier_and_fails_loud_on_missing() -> None:
+    """R-FS-1 B6 Slice 2 — `PerTierToolExecutionDriver` selects the driver matching the
+    per-tool resolved `SandboxDispatchDecision.tier` (delivered == resolved); a resolved
+    tier with no registered driver raises RT-FAIL-SANDBOX-DRIVER-UNAVAILABLE."""
+    from harness_as.sandbox_tier import SandboxTier
+    from harness_runtime.lifecycle.runtime_tool_dispatcher import (
+        SandboxDispatchDecision,
+        SandboxDriverUnavailableError,
+    )
+
+    calls: list[SandboxTier] = []
+
+    class _Fake:
+        def __init__(self, tier: SandboxTier) -> None:
+            self.tier = tier
+
+        async def call_tool(self, *, mcp_client_host: Any, sandbox_decision: Any, **_: Any) -> Any:
+            calls.append(self.tier)
+            return {"ok": sandbox_decision.tier.value}
+
+    composite = PerTierToolExecutionDriver(
+        drivers={SandboxTier.TIER_3_MICROVM: _Fake(SandboxTier.TIER_3_MICROVM)},  # type: ignore[dict-item]
+        server_name="srv",
+    )
+
+    def _decision(tier: SandboxTier) -> Any:
+        return SandboxDispatchDecision(
+            tier=tier, tech="t", provider="p", assigned_tier_reason="x", cost_tier_overhead_ms=0
+        )
+
+    out = await composite.call_tool(
+        mcp_client_host=object(),  # type: ignore[arg-type]
+        sandbox_decision=_decision(SandboxTier.TIER_3_MICROVM),
+        tool_id="t",
+        tool_args={},
+        idempotency_key="k",
+    )
+    assert out == {"ok": "tier-3-microvm"}
+    assert calls == [SandboxTier.TIER_3_MICROVM]
+
+    with pytest.raises(SandboxDriverUnavailableError):
+        await composite.call_tool(
+            mcp_client_host=object(),  # type: ignore[arg-type]
+            sandbox_decision=_decision(SandboxTier.TIER_4_FULL_VM),
+            tool_id="t",
+            tool_args={},
+            idempotency_key="k",
+        )
