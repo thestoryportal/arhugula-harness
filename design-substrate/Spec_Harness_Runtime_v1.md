@@ -5434,6 +5434,8 @@ H_T-AS-8f is already **SUBSTANTIVE_RETIRED** (R-820 live proof; `.harness/substi
 
 **Stage 5 (LOOP_INIT).** When `config.inter_step_data_flow` is `True` and `ctx.inter_step_output_channel is None`, the stage constructs `InterStepOutputChannel()`, binds it on the mutable ctx (threaded by-reference onto the frozen `HarnessContext` at `freeze()`), and threads the SAME instance into `materialize_llm_dispatcher_stage(inter_step_channel=...)`. Sibling-of the other stage-5 LOOP_INIT opt-in surfaces; the only ordering constraint is that the channel is constructed before the LLM-dispatcher factory call that threads it.
 
+**Per-run boundary (`run_workflow` tool handler).** Because the channel is allocated at bootstrap but is run-scoped state, the `run_workflow` tool handler `reset()`s `ctx.inter_step_output_channel` at the start of each (non-resume) invocation — the run boundary a reused (daemon-client mode) `HarnessContext` re-enters — before dispatching `execute_workflow` (§14.21.5 invariant 7). No-op when the channel is unbound.
+
 ### §14.21.4 Failure-mode taxonomy
 
 **No new fail class.** The channel is a best-effort run-scoped carrier — recording + reading are infallible mapping operations. A malformed upstream output is serialized with `json.dumps(..., default=str)` (no raise). The opt-out default path adds no behavior.
@@ -5446,6 +5448,7 @@ H_T-AS-8f is already **SUBSTANTIVE_RETIRED** (R-820 live proof; `.harness/substi
 4. **Single-threaded-write (ADR-F2) for the wired scope.** `SINGLE_THREADED_LINEAR` + `EVALUATOR_OPTIMIZER` record on the driver thread (sequential) — no concurrent writes to the shared holder. Concurrent-sibling-fan-out recording is a registered follow-on (§14.21.7) precisely because it requires the buffered-branch drain path.
 5. **No §5.2-hash / IS-spec change.** The channel is an ephemeral run-scoped carrier (the `cost_record_accumulator` precedent), NOT persisted state — it is not in the C-IS-05 §5.2 entry hash nor any audit projection.
 6. **Genuine consumer, not a hollow carrier.** v1.59 ships the real LLM-dispatcher consumer (the prior output reaches the actual provider call), proven by-execution against the provider boundary — the channel is non-vacuous on landing (`[[r-cxa-seam-wiring-is-producer-discovery]]` / advisor's *non-vacuity-is-the-deliverable*).
+7. **Run-scoped, not bootstrap-scoped — no cross-run leak.** Although the channel is *allocated* at bootstrap (stage 5), its contents are run-scoped. The `run_workflow` tool handler `reset()`s the channel at the per-run boundary (on a non-resume invocation; a resume continues the same run) so a REUSED `HarnessContext` — the daemon-client mode where one bootstrapped ctx serves many `run_workflow` invocations (U-RT-108) — does NOT leak a prior run's step outputs into a later run's first dispatch (out-of-family Codex review). A resume is NOT reset (it continues the same run's in-flight outputs).
 
 ### §14.21.6 X-AL-2 retirement implications
 

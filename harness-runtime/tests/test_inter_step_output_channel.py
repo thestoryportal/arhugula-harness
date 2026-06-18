@@ -70,3 +70,31 @@ def test_outputs_by_step_id_returns_a_copy() -> None:
     view = dict(channel.outputs_by_step_id())
     view["generate"] = {"draft": "tampered"}
     assert channel.outputs_by_step_id() == {"generate": {"draft": "v1"}}
+
+
+def test_reset_clears_all_records() -> None:
+    channel = InterStepOutputChannel()
+    channel.record("generate", {"draft": "v1"})
+    channel.record("evaluate", {"feedback": "fix"})
+    assert len(channel) == 2
+    channel.reset()
+    assert len(channel) == 0
+    assert channel.most_recent_output() is None
+    assert channel.outputs_by_step_id() == {}
+
+
+def test_reset_at_per_run_boundary_prevents_cross_run_leak() -> None:
+    """The per-run boundary contract the `run_workflow` tool handler relies on
+    (daemon-client mode, U-RT-108): resetting between runs on a REUSED channel
+    means a later run's first read sees NONE of the prior run's outputs — no
+    stale cross-run context leaks into a later model prompt."""
+    channel = InterStepOutputChannel()
+    # Run 1 records outputs.
+    channel.record("generate", {"draft": "run1-secret"})
+    channel.record("evaluate", {"feedback": "run1"})
+    # Per-run boundary (the tool handler resets on a non-resume invocation).
+    channel.reset()
+    # Run 2's first dispatch reads an empty channel — no run-1 leak.
+    assert channel.most_recent_output() is None
+    channel.record("generate", {"draft": "run2"})
+    assert channel.most_recent_output() == {"draft": "run2"}

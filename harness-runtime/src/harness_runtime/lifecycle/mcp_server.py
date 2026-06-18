@@ -342,6 +342,17 @@ def materialize_mcp_server_stage(
             _holder = getattr(harness_ctx, "resume_context_holder", None)
             if _holder is not None:
                 _holder.set(_resume_context)
+        # B-INTERSTEP (runtime spec §14.21 C-RT-29) — reset the run-scoped
+        # inter-step output channel at the per-run boundary so a REUSED
+        # `HarnessContext` (daemon-client mode, U-RT-108 — one bootstrapped ctx
+        # serves many `run_workflow` invocations) does NOT leak a prior run's step
+        # outputs into THIS run's first dispatch (Codex review). No-op when the
+        # channel is unbound (opt-out default). NOT reset on a resume: a resume
+        # continues the SAME run, so prior in-run outputs stay valid.
+        if _resume_snapshot is None:
+            _inter_step_channel = getattr(harness_ctx, "inter_step_output_channel", None)
+            if _inter_step_channel is not None:
+                _inter_step_channel.reset()
         # Bind the in-flight tool ctx for the duration of the workflow
         # execution per spec v1.36 §14.18 chapeau per-session ctx isolation.
         # `ServerCtxElicitCallback` (per AC #4) reads via the module-level

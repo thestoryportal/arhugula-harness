@@ -101,6 +101,16 @@ class InterStepOutputChannel:
         """Append a completed step's output (copied defensively)."""
         self._records.append((str(step_id), dict(output)))
 
+    def reset(self) -> None:
+        """Clear all recorded outputs — called at the per-run boundary (the
+        `run_workflow` tool handler) so a REUSED `HarnessContext` (daemon-client
+        mode, U-RT-108, where one bootstrapped ctx serves many `run_workflow`
+        invocations) does NOT leak a prior run's step outputs into a later run's
+        first dispatch. The channel is run-scoped state on a bootstrap-scoped
+        carrier, so the run boundary — not the bootstrap boundary — owns its
+        lifecycle (Codex review)."""
+        self._records.clear()
+
     def most_recent_output(self) -> Mapping[str, Any] | None:
         """The most-recently-recorded step output (the upstream output for the
         next dispatch), or `None` if no step has completed yet."""
