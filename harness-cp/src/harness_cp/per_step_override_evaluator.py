@@ -335,6 +335,54 @@ def _override_idempotency_key(
     return hashlib.sha256(_RECORD_SEPARATOR.join(segments)).hexdigest()
 
 
+def compose_override_entry_payload(
+    *,
+    workflow_id: str,
+    step_id: str,
+    post_override_step_config: Mapping[str, Any],
+    actor: ActorIdentity,
+    procedural_tier_snapshot_ref: Identifier | None,
+    timestamp: datetime,
+) -> EntryPayload:
+    """Compose the §16.5 U-CP-14 override-application `EntryPayload` (NO write).
+
+    The single source of truth for the override-entry SHAPE — `action_id`
+    (`cp.per-step-override-application`), the §16.5.4 idempotency-key 3-tuple
+    `(workflow_id, step_id, sha256(outcome_canonical_bytes))`, and the IS HEAD
+    5-field payload `(action_id, idempotency_key, actor, timestamp,
+    procedural_tier_snapshot_ref)`. `response_hash` / `prior_event_hash` are
+    IS-internal (C-IS-06 §6.2 + C-IS-13 §13.5).
+
+    Both write paths compose through here so the persisted override entry is
+    byte-shape-identical across all topologies:
+
+    - the async `emit_override_state_ledger_entry` composer below (the
+      `SINGLE_THREADED_LINEAR` driver-thread site + the runtime cp_is_wiring
+      binding), passing `timestamp=datetime.now(UTC)` + the resolver's value; and
+    - the CP-driver buffered-branch path (`append_branch_override_ledger_entry`
+      at `workflow_driver.py`, R-FS-1 `B-NONLINEAR-OVERRIDE-PROVENANCE`), passing
+      a buffer-time placeholder `timestamp` the barrier drain re-stamps + the
+      branch's caller-supplied `procedural_tier_snapshot_ref`.
+
+    Because the key is the §16.5.4 per-`(step, outcome)` 3-tuple (NOT
+    branch-scoped — branch-scoping would change the cleared §16.5.4 formula), a
+    repeated `(step_id, outcome)` across non-linear iterations / recursion levels
+    idempotently dedups at the IS writer to one entry — the override is a static
+    binding property, not a per-execution event (the spec's designed key
+    semantic).
+    """
+    outcome_canonical_bytes = _canonicalize_outcome_bytes(post_override_step_config)
+    outcome_hash_hex = hashlib.sha256(outcome_canonical_bytes).hexdigest()
+    idempotency_key = _override_idempotency_key(workflow_id, step_id, outcome_hash_hex)
+    return EntryPayload(
+        action_id=Identifier(_OVERRIDE_ACTION_ID),
+        idempotency_key=Identifier(idempotency_key),
+        actor=Actor(actor_class=ActorClass.AGENT, actor_id=str(actor)),
+        timestamp=timestamp,
+        procedural_tier_snapshot_ref=procedural_tier_snapshot_ref,
+    )
+
+
 async def emit_override_state_ledger_entry(
     *,
     workflow_id: str,
@@ -348,13 +396,8 @@ async def emit_override_state_ledger_entry(
 
     Per CP spec v1.26 §16.5.3 + v1.29 §16.5.12 + v1.30 §1.2 canonical reading:
     produces `EntryPayload` per IS HEAD 5-field shape `(action_id,
-    idempotency_key, actor, timestamp, procedural_tier_snapshot_ref)`.
-    `response_hash` and `prior_event_hash` are IS-internal — composer does NOT
-    control them (C-IS-06 §6.2 + C-IS-13 §13.5). The outcome-bytes semantic at
-    §16.5.5 (post-override step-config canonical JSON bytes) is carried at the
-    `idempotency_key` discriminator per CP spec v1.27 §16.5.4 (Reading A:
-    3-tuple `(workflow_id, step_id, outcome_hash)` per the per-step-override
-    uniqueness invariant at `workflow_manifest_entry.py:109`).
+    idempotency_key, actor, timestamp, procedural_tier_snapshot_ref)` via
+    `compose_override_entry_payload` (the shared shape authority).
 
     The `procedural_tier_snapshot_resolver` kw-only param is invoked at emission
     per v1.30 §1.2 + §1.3 uniform-resolver-closure recipe; failure HALTs per
@@ -363,14 +406,12 @@ async def emit_override_state_ledger_entry(
     Composer awaits `ledger_writer(payload)` return per §16.5.9 invariant 4;
     does NOT condition on `WriteResult` variant.
     """
-    outcome_canonical_bytes = _canonicalize_outcome_bytes(post_override_step_config)
-    outcome_hash_hex = hashlib.sha256(outcome_canonical_bytes).hexdigest()
-    idempotency_key = _override_idempotency_key(workflow_id, step_id, outcome_hash_hex)
-    payload = EntryPayload(
-        action_id=Identifier(_OVERRIDE_ACTION_ID),
-        idempotency_key=Identifier(idempotency_key),
-        actor=Actor(actor_class=ActorClass.AGENT, actor_id=str(actor)),
-        timestamp=datetime.now(UTC),
+    payload = compose_override_entry_payload(
+        workflow_id=workflow_id,
+        step_id=step_id,
+        post_override_step_config=post_override_step_config,
+        actor=actor,
         procedural_tier_snapshot_ref=procedural_tier_snapshot_resolver(),
+        timestamp=datetime.now(UTC),
     )
     return await ledger_writer(payload)
