@@ -11,9 +11,11 @@ resolver (``harness_as.anthropic_graceful_degradation._MEMORY_BACKENDS``).
 ``DATABASE`` backend: a local SQLite file, the SQL sibling of
 ``LocalFilesystemMemoryToolBackend``. MANAGED_CLOUD ``DATABASE`` is implemented
 separately by ``ManagedSqlMemoryToolBackend`` for PostgreSQL-compatible managed
-databases, and S3 covers the cloud-vault path. The factory still raises for
-``ENCRYPTED_FILESYSTEM`` / ``OPERATOR_DEFINED``, and MANAGED_CLOUD without an
-explicit ``memory_tool_backend_config`` override still raises.
+databases, and S3 covers the cloud-vault path. ``ENCRYPTED_FILESYSTEM`` (Fernet
+content codec on the filesystem backend) and ``OPERATOR_DEFINED`` (importlib
+class resolution) are implemented at ``B-MEMORY-SURFACE-BACKEND-IMPLS``; the
+factory now raises only on missing/invalid ``backend_params`` (and MANAGED_CLOUD
+without an explicit ``memory_tool_backend_config`` override).
 
 **Semantics byte-mirror ``LocalFilesystemMemoryToolBackend``** per the shared
 ``MemoryToolStorageBackendProtocol`` contract:

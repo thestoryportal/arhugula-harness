@@ -300,3 +300,110 @@ async def test_no_asyncio_sleep_in_backend_body() -> None:
         "backend module source contains `asyncio.sleep` — possible "
         "in-band retry-with-backoff pattern violating §14.12.2 invariant 4"
     )
+
+
+# ---------------------------------------------------------------------------
+# B-MEMORY-SURFACE-BACKEND-IMPLS — content-codec injection.
+#
+# The codec seam is how ENCRYPTED_FILESYSTEM is realized (Fernet codec). These
+# tests use a deterministic invertible XOR codec to verify, codec-agnostically,
+# that: (a) the identity default is byte-preserving (FILESYSTEM unchanged);
+# (b) at-rest bytes are transformed; (c) view round-trips through decode;
+# (d) str_replace/insert read-modify-write through the codec INSIDE the per-path
+# lock (so encryption composes with atomicity — the justification for codec
+# injection over an external wrapper).
+# ---------------------------------------------------------------------------
+
+
+class _XorCodec:
+    """Deterministic invertible codec (XOR each byte with a constant)."""
+
+    def __init__(self, key_byte: int = 0x5A) -> None:
+        self._key = key_byte
+
+    def _xor(self, data: bytes) -> bytes:
+        return bytes(b ^ self._key for b in data)
+
+    def encode(self, plaintext: bytes) -> bytes:
+        return self._xor(plaintext)
+
+    def decode(self, stored: bytes) -> bytes:
+        return self._xor(stored)
+
+
+def test_default_codec_is_identity_byte_preserving(tmp_path: Path) -> None:
+    """Default (no codec) → at-rest bytes == plaintext (FILESYSTEM unchanged)."""
+    backend = LocalFilesystemMemoryToolBackend(root=tmp_path)
+    assert backend._codec.encode(b"x") == b"x"  # type: ignore[attr-defined]
+    assert backend._codec.decode(b"x") == b"x"  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_identity_default_unicode_round_trip_via_str_replace(tmp_path: Path) -> None:
+    """The utf-8 byte↔str path (str_replace/insert) round-trips non-ASCII text
+    under the identity default (proves the read_bytes+decode('utf-8') switch is
+    byte-faithful for the FILESYSTEM backend)."""
+    backend = LocalFilesystemMemoryToolBackend(root=tmp_path)
+    await backend.create("/memories/u.txt", "café — naïve ✓".encode())
+    await backend.str_replace("/memories/u.txt", "naïve", "naive")
+    assert await backend.view("/memories/u.txt") == "café — naive ✓".encode()
+
+
+@pytest.mark.asyncio
+async def test_injected_codec_transforms_at_rest_and_round_trips(tmp_path: Path) -> None:
+    """With a codec: view returns plaintext, but the on-disk file is encoded."""
+    backend = LocalFilesystemMemoryToolBackend(root=tmp_path, codec=_XorCodec())
+    await backend.create("/memories/secret.txt", b"hello world")
+
+    # view decodes back to plaintext.
+    assert await backend.view("/memories/secret.txt") == b"hello world"
+
+    # The raw on-disk bytes are the XOR-encoded form, NOT the plaintext.
+    on_disk = (tmp_path / "secret.txt").read_bytes()
+    assert on_disk != b"hello world"
+    assert on_disk == _XorCodec().encode(b"hello world")
+    assert b"hello world" not in on_disk
+
+
+@pytest.mark.asyncio
+async def test_injected_codec_str_replace_and_insert_through_codec(tmp_path: Path) -> None:
+    """str_replace + insert read-modify-write through the codec; result decodes
+    correctly and stays encoded at rest."""
+    backend = LocalFilesystemMemoryToolBackend(root=tmp_path, codec=_XorCodec())
+    await backend.create("/memories/doc.txt", b"line A\nline B\n")
+
+    await backend.str_replace("/memories/doc.txt", "line B", "line Z")
+    assert await backend.view("/memories/doc.txt") == b"line A\nline Z\n"
+
+    await backend.insert("/memories/doc.txt", 1, "HEADER\n")
+    assert await backend.view("/memories/doc.txt") == b"HEADER\nline A\nline Z\n"
+
+    # Still ciphertext at rest after the read-modify-write callbacks.
+    on_disk = (tmp_path / "doc.txt").read_bytes()
+    assert b"HEADER" not in on_disk
+    assert on_disk == _XorCodec().encode(b"HEADER\nline A\nline Z\n")
+
+
+@pytest.mark.asyncio
+async def test_injected_codec_str_replace_atomic_under_concurrency(tmp_path: Path) -> None:
+    """100 concurrent str_replace through a codec serialize via the per-path lock
+    — the codec's decode/encode run INSIDE the lock, so the read-modify-write is
+    atomic (no torn ciphertext / lost update). This is the property that an
+    external encrypt-wrapper could only match by duplicating the lock."""
+    backend = LocalFilesystemMemoryToolBackend(root=tmp_path, codec=_XorCodec())
+    await backend.create("/memories/shared.txt", b"original")
+
+    async def _replace(i: int) -> None:
+        try:
+            await backend.str_replace("/memories/shared.txt", "original", f"r{i}")
+        except MemoryCallbackIOError:
+            pass  # After the first success, "original" is absent for the rest.
+
+    await asyncio.gather(*[_replace(i) for i in range(100)])
+
+    # Exactly one replace stuck; the final content decodes to a valid value and
+    # the file is well-formed ciphertext (decodes without error).
+    final = await backend.view("/memories/shared.txt")
+    assert final.startswith(b"r")
+    on_disk = (tmp_path / "shared.txt").read_bytes()
+    assert _XorCodec().decode(on_disk) == final

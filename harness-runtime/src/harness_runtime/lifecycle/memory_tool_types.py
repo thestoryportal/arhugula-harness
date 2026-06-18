@@ -144,10 +144,12 @@ class MemoryBackendResolutionError(Exception):
     aborts fail-closed per ADR-F4 v1.1 §Consequences (c)) per runtime spec
     v1.17 §14.12.4 fail-class taxonomy. Raised at U-RT-80 factory body when:
 
-    - Operator-supplied `MemoryToolStorageBackend` enum value has no
-      implementation. `FILESYSTEM`, embedded SQLite `DATABASE`, S3, and
-      PostgreSQL-compatible managed `DATABASE` are implemented; remaining
-      values such as `ENCRYPTED_FILESYSTEM` / `OPERATOR_DEFINED` are deferred.
+    - Required `backend_params` are missing or invalid for the configured
+      backend (S3 bucket; managed-DB connection string; ENCRYPTED_FILESYSTEM
+      key reference / malformed key; OPERATOR_DEFINED class-qualified-name /
+      import / non-class). All 5 `MemoryToolStorageBackend` members are
+      implemented (FILESYSTEM, S3, DATABASE, ENCRYPTED_FILESYSTEM,
+      OPERATOR_DEFINED) per `B-MEMORY-SURFACE-BACKEND-IMPLS`.
     - Default-path resolver returns a frozenset whose intersection with the
       v2.15 implemented set is empty.
     - Constructed backend object fails `MemoryToolStorageBackendProtocol`

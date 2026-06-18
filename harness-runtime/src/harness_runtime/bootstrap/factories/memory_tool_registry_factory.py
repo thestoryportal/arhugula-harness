@@ -18,8 +18,14 @@ Per `Spec_Harness_Runtime_v1.md` v1.17 §14.12.3 stage-5 factory contract +
      - `FILESYSTEM` → `LocalFilesystemMemoryToolBackend` rooted at
        `config.repository_root / ".harness/memories"` (root path resolution
        per §14.12.7 implementation discretion; PathClass extension deferred).
-     - Other enum values → raise `MemoryBackendResolutionError` naming the
-       unimplemented backend and carrying the fork-doc §14.D pointer.
+     - `ENCRYPTED_FILESYSTEM` → the same backend rooted at
+       `.harness/memories-encrypted` with a `FernetContentCodec` injected so
+       at-rest content is ciphertext (`B-MEMORY-SURFACE-BACKEND-IMPLS`).
+     - `OPERATOR_DEFINED` → the operator class resolved from
+       `backend_params['class_qualified_name']` via importlib introspection
+       (`B-MEMORY-SURFACE-BACKEND-IMPLS`).
+     - All 5 enum members handled (`assert_never` tail); construction failures
+       (missing/invalid `backend_params`) raise `MemoryBackendResolutionError`.
   3. Verify the constructed backend satisfies
      `MemoryToolStorageBackendProtocol` via `@runtime_checkable` isinstance
      introspection (§14.12.5 invariant 2). Defense-in-depth: also verify
@@ -36,8 +42,10 @@ registry construction has no shared dependency with the tool dispatcher).
 from __future__ import annotations
 
 import importlib
+import inspect
+import os
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, assert_never, cast
 
 from harness_as.anthropic_graceful_degradation import (
     MemoryToolStorageBackend,
@@ -46,6 +54,7 @@ from harness_as.anthropic_graceful_degradation import (
 from harness_core.deployment_surface import DeploymentSurface
 
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+from harness_runtime.lifecycle.memory_tool_encrypted import FernetContentCodec, FernetLike
 from harness_runtime.lifecycle.memory_tool_filesystem import (
     LocalFilesystemMemoryToolBackend,
 )
@@ -65,6 +74,7 @@ from harness_runtime.types import RuntimeConfig
 
 __all__ = [
     "MEMORY_TOOL_DATABASE_SUBPATH",
+    "MEMORY_TOOL_ENCRYPTED_FILESYSTEM_ROOT_SUBPATH",
     "MEMORY_TOOL_FILESYSTEM_ROOT_SUBPATH",
     "PROTOCOL_REQUIRED_METHODS",
     "materialize_memory_tool_registry_stage",
@@ -85,6 +95,17 @@ MEMORY_TOOL_DATABASE_SUBPATH = ".harness/memories.db"
 SQLite file, used when `backend_params['connection_string']` is absent (R-830;
 spec §14.12.3 DATABASE step). Sibling of the FILESYSTEM `.harness/memories`
 root."""
+
+
+MEMORY_TOOL_ENCRYPTED_FILESYSTEM_ROOT_SUBPATH = ".harness/memories-encrypted"
+"""Sub-path under `config.repository_root` for the ENCRYPTED_FILESYSTEM backend
+root (`B-MEMORY-SURFACE-BACKEND-IMPLS`; spec §14.12.3 ENCRYPTED_FILESYSTEM step).
+
+A DISTINCT root from the plaintext FILESYSTEM `.harness/memories` so the two
+backends never co-mingle plaintext and ciphertext files at one path (an operator
+who switches backends would otherwise have the plaintext backend read ciphertext
+as plaintext). ENCRYPTED_FILESYSTEM is override-only, so the two roots never both
+populate in one process."""
 
 
 def _resolve_database_connection_path(config: RuntimeConfig) -> Path:
@@ -214,6 +235,180 @@ def _construct_database_backend(config: RuntimeConfig) -> MemoryToolStorageBacke
     return SqliteMemoryToolBackend(db_path=_resolve_database_connection_path(config))
 
 
+def _resolve_memory_encryption_key(params: dict[str, str]) -> bytes:
+    """Resolve the ENCRYPTED_FILESYSTEM Fernet key from an operator key reference.
+
+    Reference scheme (`B-MEMORY-SURFACE-BACKEND-IMPLS`, impl-discretion per spec
+    §14.12.7): `backend_params['key_env_var']` names the ENVIRONMENT VARIABLE
+    holding the urlsafe-base64 Fernet key. Per structure-not-content discipline
+    (spec §14.12.1 + `MemoryToolBackendConfig`), the harness config carries the
+    REFERENCE (an env-var name), never the key material. Env-var is the
+    deliberately chosen scheme — it composes with the workspace's existing
+    `.env`/just dotenv secret posture; python-keyring (Target Stack nominal) is
+    not wired here (one working reference scheme satisfies full-spec;
+    additional schemes would be speculative).
+
+    Monkeypatchable for provider-free tests. Error messages name the env-var
+    REFERENCE only — never the resolved key value (spec §14.12.5 invariant 4).
+    """
+    env_var = params.get("key_env_var")
+    if not env_var:
+        raise MemoryBackendResolutionError(
+            "RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend 'encrypted_filesystem' "
+            "requires backend_params['key_env_var'] naming the environment "
+            "variable that holds the encryption key (key reference, not key "
+            "material — structure-not-content discipline)"
+        )
+    key = os.environ.get(env_var)
+    if not key:
+        raise MemoryBackendResolutionError(
+            f"RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend 'encrypted_filesystem' "
+            f"key reference env var {env_var!r} is unset or empty"
+        )
+    return key.encode("utf-8")
+
+
+def _create_fernet_from_key(key: bytes) -> FernetLike:
+    """Lazily construct a `cryptography` Fernet from the resolved key.
+
+    `cryptography` is intentionally optional behind RT-FAIL (mirrors the boto3 /
+    psycopg lazy-import pattern); provider-free tests may monkeypatch
+    `_create_fernet_from_key`. A malformed key raises RT-FAIL WITHOUT echoing the
+    key material (spec §14.12.5 invariant 4).
+    """
+    try:
+        fernet_module = importlib.import_module("cryptography.fernet")
+    except ImportError as exc:
+        raise MemoryBackendResolutionError(
+            "RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend 'encrypted_filesystem' "
+            "requires optional dependency cryptography for Fernet construction; "
+            "provider-free tests may monkeypatch _create_fernet_from_key"
+        ) from exc
+    fernet_cls = cast(Any, fernet_module).Fernet
+    try:
+        fernet = fernet_cls(key)
+    except (ValueError, TypeError) as exc:
+        raise MemoryBackendResolutionError(
+            "RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend 'encrypted_filesystem' "
+            "encryption key is malformed (expected a urlsafe-base64-encoded "
+            "32-byte Fernet key)"
+        ) from exc
+    return cast(FernetLike, fernet)
+
+
+def _construct_encrypted_filesystem_backend(
+    config: RuntimeConfig,
+) -> LocalFilesystemMemoryToolBackend:
+    """Construct the ENCRYPTED_FILESYSTEM backend (`B-MEMORY-SURFACE-BACKEND-IMPLS`).
+
+    The same `LocalFilesystemMemoryToolBackend` rooted at a distinct
+    `.harness/memories-encrypted` path, with a `FernetContentCodec` injected so
+    at-rest content is ciphertext (spec §14.12.3 ENCRYPTED_FILESYSTEM step).
+    """
+    params = _require_backend_params(
+        config.memory_tool_backend_config,
+        backend=MemoryToolStorageBackend.ENCRYPTED_FILESYSTEM,
+    )
+    key = _resolve_memory_encryption_key(params)
+    fernet = _create_fernet_from_key(key)
+    return LocalFilesystemMemoryToolBackend(
+        root=config.repository_root / MEMORY_TOOL_ENCRYPTED_FILESYSTEM_ROOT_SUBPATH,
+        codec=FernetContentCodec(fernet),
+    )
+
+
+def _resolve_class_qualified_name(qualified_name: str) -> type[Any]:
+    """Resolve a class-qualified name to a class via importlib introspection.
+
+    Accepts `module.path:ClassName` (entry-point style) and
+    `module.path.ClassName` (dotted, last segment = class). This ESTABLISHES the
+    canonical class-qualified-name introspection convention that the validator
+    framework resolution follows per spec §14.12.7 + §14.13.1 ("validator
+    class-qualified-name resolution must use the same introspection-based
+    discipline as MemoryToolStorageBackend.OPERATOR_DEFINED").
+
+    Importing an operator-supplied module IS by design — OPERATOR_DEFINED is
+    operator-TRUSTED config (spec §14.12.3), not an arbitrary-exec surface.
+    Raises `MemoryBackendResolutionError` on malformed reference / import /
+    attribute / non-class resolution.
+    """
+    if ":" in qualified_name:
+        module_name, _, attr = qualified_name.partition(":")
+    else:
+        module_name, _, attr = qualified_name.rpartition(".")
+    if not module_name or not attr:
+        raise MemoryBackendResolutionError(
+            f"RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend 'operator_defined' "
+            f"class_qualified_name {qualified_name!r} is not a valid "
+            f"'module:Class' or 'module.Class' reference"
+        )
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise MemoryBackendResolutionError(
+            f"RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend 'operator_defined' "
+            f"module {module_name!r} (from {qualified_name!r}) failed to import: {exc}"
+        ) from exc
+    candidate = getattr(module, attr, None)
+    if candidate is None:
+        raise MemoryBackendResolutionError(
+            f"RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend 'operator_defined' "
+            f"attribute {attr!r} not found in module {module_name!r} "
+            f"(from {qualified_name!r})"
+        )
+    if not isinstance(candidate, type):
+        raise MemoryBackendResolutionError(
+            f"RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend 'operator_defined' "
+            f"reference {qualified_name!r} resolved to a non-class object of "
+            f"type {type(candidate).__name__!r}"
+        )
+    return candidate
+
+
+def _construct_operator_defined_backend(config: RuntimeConfig) -> MemoryToolStorageBackendProtocol:
+    """Construct the OPERATOR_DEFINED backend (`B-MEMORY-SURFACE-BACKEND-IMPLS`).
+
+    Resolves `backend_params['class_qualified_name']` to a class, then
+    instantiates it with the full `backend_params` Mapping as a single
+    positional argument (the operator backend's `__init__(self, backend_params)`
+    pulls whatever keys it needs). Protocol conformance is enforced by the
+    caller's `_enforce_protocol_conformance` (spec §14.12.5 invariant 2), so a
+    non-conformant operator class is rejected there. Spec §14.12.3 OPERATOR_DEFINED
+    step; introspection mechanism per §14.12.7 impl-discretion.
+
+    Path discipline (§14.12.5 invariant 3 — `/memories/` scope validated BEFORE
+    I/O) is the OPERATOR class's responsibility: unlike the built-in backends,
+    the harness cannot enforce it for an arbitrary operator implementation (the
+    conformance gate checks the Protocol surface, not the scope-validation body).
+    """
+    params = _require_backend_params(
+        config.memory_tool_backend_config,
+        backend=MemoryToolStorageBackend.OPERATOR_DEFINED,
+    )
+    qualified_name = params.get("class_qualified_name")
+    if not qualified_name:
+        raise MemoryBackendResolutionError(
+            "RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend 'operator_defined' "
+            "requires backend_params['class_qualified_name'] (e.g. "
+            "'my_pkg.my_module:MyBackend' or 'my_pkg.my_module.MyBackend')"
+        )
+    backend_cls = _resolve_class_qualified_name(qualified_name)
+    try:
+        instance = backend_cls(params)
+    except Exception as exc:
+        # Do NOT interpolate `{exc}` — operator backend_params may carry secrets
+        # and the operator's __init__ exception text could echo them (Codex
+        # review; mirrors the encrypted-path no-key-echo discipline + §14.12.5
+        # invariant 4 structure-not-content). Surface the exception TYPE only;
+        # the underlying exception stays chained for traceback debugging.
+        raise MemoryBackendResolutionError(
+            f"RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend 'operator_defined' "
+            f"class {qualified_name!r} raised {type(exc).__name__} during "
+            f"construction (backend_params values are not echoed)"
+        ) from exc
+    return cast(MemoryToolStorageBackendProtocol, instance)
+
+
 PROTOCOL_REQUIRED_METHODS: tuple[str, ...] = (
     "view",
     "create",
@@ -232,33 +427,40 @@ def _construct_backend(
 ) -> MemoryToolStorageBackendProtocol:
     """Construct the storage-backend implementation for a resolved enum value.
 
-    Per spec §14.12.3 step 2. FILESYSTEM / DATABASE (SQLite or managed-DB) / S3
-    are landed (R-830); ENCRYPTED_FILESYSTEM / OPERATOR_DEFINED raise
-    `RT-FAIL-MEMORY-BACKEND-RESOLUTION` with the §14.D fork-doc pointer. Missing
-    `backend_params` (S3 bucket, managed-DB connection string) raise from the
-    per-backend constructors.
+    Per spec §14.12.3 step 2 — all 5 `MemoryToolStorageBackend` members are
+    handled (FILESYSTEM / DATABASE (SQLite or managed-DB) / S3 at R-830;
+    ENCRYPTED_FILESYSTEM / OPERATOR_DEFINED at `B-MEMORY-SURFACE-BACKEND-IMPLS`).
+    The `assert_never` tail makes the match exhaustive (a future enum member
+    without a branch is a type-check error). Missing/invalid `backend_params`
+    (S3 bucket, managed-DB connection string, encryption key reference,
+    operator class-qualified-name) raise `RT-FAIL-MEMORY-BACKEND-RESOLUTION`
+    from the per-backend constructors.
     """
     if configured is MemoryToolStorageBackend.FILESYSTEM:
         return LocalFilesystemMemoryToolBackend(
             root=config.repository_root / MEMORY_TOOL_FILESYSTEM_ROOT_SUBPATH,
         )
-    if configured is MemoryToolStorageBackend.DATABASE:
-        # R-830 DATABASE backend. Plain/local connection strings route to the
-        # existing SQLite implementation; postgres:// and postgresql:// route
-        # to the optional managed-DB implementation.
-        return _construct_database_backend(config)
+    if configured is MemoryToolStorageBackend.ENCRYPTED_FILESYSTEM:
+        # B-MEMORY-SURFACE-BACKEND-IMPLS: filesystem backend + injected Fernet
+        # content codec (ciphertext at rest). Provider-free construction may
+        # monkeypatch _create_fernet_from_key; live use reads the key reference
+        # from the operator-named environment variable.
+        return _construct_encrypted_filesystem_backend(config)
     if configured is MemoryToolStorageBackend.S3:
         # R-830 MANAGED_CLOUD cloud-vault backend. Provider-free construction
         # reaches this path through a monkeypatched client factory; live use
         # requires boto3 + operator-provided credentials and bucket params.
         return _construct_s3_backend(config)
-    raise MemoryBackendResolutionError(
-        f"RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend "
-        f"{configured.value!r} has no implementation landed "
-        f"(FILESYSTEM + DATABASE + S3 landed; ENCRYPTED_FILESYSTEM / "
-        f"OPERATOR_DEFINED deferred to operator-discretion follow-on arcs "
-        f"per spec §14.D + §16 §6.C v2 C.vii)"
-    )
+    if configured is MemoryToolStorageBackend.DATABASE:
+        # R-830 DATABASE backend. Plain/local connection strings route to the
+        # existing SQLite implementation; postgres:// and postgresql:// route
+        # to the optional managed-DB implementation.
+        return _construct_database_backend(config)
+    if configured is MemoryToolStorageBackend.OPERATOR_DEFINED:
+        # B-MEMORY-SURFACE-BACKEND-IMPLS: operator class resolved from
+        # backend_params['class_qualified_name'] via importlib introspection.
+        return _construct_operator_defined_backend(config)
+    assert_never(configured)
 
 
 def _enforce_protocol_conformance(
@@ -267,11 +469,14 @@ def _enforce_protocol_conformance(
 ) -> None:
     """Enforce `MemoryToolStorageBackendProtocol` per §14.12.5 invariant 2.
 
-    Two-layer check: (a) attribute-present + callable sweep over the 5 CRUD
-    methods catches both missing methods AND non-callable shadowing (the latter
-    is admitted by `@runtime_checkable` isinstance per the PEP 544 caveat);
-    (b) final `@runtime_checkable` isinstance as the canonical Protocol
-    assertion. Raises `RT-FAIL-MEMORY-BACKEND-RESOLUTION` on any failure.
+    Three-layer check, all of which `@runtime_checkable` isinstance admits (PEP
+    544 only verifies attribute PRESENCE): (a) attribute-present sweep over the 5
+    CRUD methods; (b) callable sweep (catches non-callable shadowing); (c)
+    coroutine-function sweep — the Protocol callbacks are `async def` and the
+    dispatcher `await`s them, so a sync `def` method must fail CLOSED at bootstrap
+    (ADR-F4) rather than `TypeError` at first dispatch (matters for the arbitrary
+    OPERATOR_DEFINED class; Codex review). Then the canonical `@runtime_checkable`
+    isinstance. Raises `RT-FAIL-MEMORY-BACKEND-RESOLUTION` on any failure.
     """
     missing = tuple(name for name in PROTOCOL_REQUIRED_METHODS if not hasattr(backend, name))
     if missing:
@@ -289,6 +494,19 @@ def _enforce_protocol_conformance(
             f"RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend for "
             f"{configured.value!r} has non-callable Protocol method(s): "
             f"{non_callable!r}"
+        )
+    non_async = tuple(
+        name
+        for name in PROTOCOL_REQUIRED_METHODS
+        if not inspect.iscoroutinefunction(getattr(backend, name))
+    )
+    if non_async:
+        raise MemoryBackendResolutionError(
+            f"RT-FAIL-MEMORY-BACKEND-RESOLUTION: backend for "
+            f"{configured.value!r} has non-async Protocol method(s): "
+            f"{non_async!r} (the MemoryToolStorageBackendProtocol callbacks are "
+            f"async; the dispatcher awaits them — a sync def fails closed here "
+            f"rather than raising TypeError at dispatch)"
         )
     # pyright sees `backend` as a concrete subtype at the override callsite
     # (the only constructor reached), but the isinstance is the spec §14.12.5
