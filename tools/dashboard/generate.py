@@ -517,18 +517,25 @@ def parse_remaining_forward(map_md: str) -> dict:
 
 
 def assert_remaining_nonempty(actions: list[dict], dashboard: dict) -> None:
-    """Fail loud if R-FS-1 is ACTIVE but '## Remaining forward work' parsed zero child arcs.
+    """Fail loud if R-FS-1 is ACTIVE but '## Remaining forward work' parsed zero remaining arcs.
 
     Guards the silent-empty failure mode this reorg fixed: a drifted/mistyped section header
     or table format would otherwise render an empty 'Remaining to complete' panel while the
-    full-spec build is still in flight (CLAUDE.md section 6 no-silent-failure)."""
+    full-spec build is still in flight (CLAUDE.md section 6 no-silent-failure).
+
+    Once the FROZEN order completes (all 11 child arcs ✅), R-FS-1 stays ACTIVE while the
+    standalone `B-*` build arcs remain (full-spec, nothing-deferred) — so remaining work is
+    non-empty via `standalone` even when `child_arcs` is zero. Only an empty BOTH is drift."""
     rfs1_active = any(a.get("id") == "R-FS-1" and a.get("status") == "ACTIVE" for a in actions)
-    child_arcs = dashboard.get("remaining_forward", {}).get("child_arcs", [])
-    if rfs1_active and not child_arcs:
+    remaining = dashboard.get("remaining_forward", {})
+    child_arcs = remaining.get("child_arcs", [])
+    standalone = remaining.get("standalone", [])
+    if rfs1_active and not child_arcs and not standalone:
         raise RuntimeError(
-            "FATAL: R-FS-1 is ACTIVE but '## Remaining forward work' parsed zero child arcs in "
-            ".harness/roadmap_status.md -- the remaining-work source has drifted (check the "
-            "section header + table format). Refusing to render an empty remaining-work panel."
+            "FATAL: R-FS-1 is ACTIVE but '## Remaining forward work' parsed zero child arcs AND "
+            "zero standalone arcs in .harness/r-fs-1-arc-and-unit-map.md -- the remaining-work "
+            "source has drifted (check the section header + table format). Refusing to render an "
+            "empty remaining-work panel."
         )
 
 
