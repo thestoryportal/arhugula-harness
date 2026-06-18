@@ -300,7 +300,7 @@ live status:
   choice; listed here for completeness, **not** a separate post-frozen arc (excluded from the
   closed/remaining tallies so it isn't double-counted).
 
-Headline (HEAD): **4 closed · 9 remaining · 1 gated** (the 13 build-ready standalone arcs) **+ 2
+Headline (HEAD): **5 closed · 8 remaining · 1 gated** (the 13 build-ready standalone arcs) **+ 2
 resolved** (`B-PER-TOOL-SANDBOX-TIER` built inside the frozen order as B6 Slice 2;
 `B-PER-DISPATCH-DRIVER-PRECISION` foreclosed N/A by the B6 Option-A choice). Full per-arc
 disposition: the spine ledger (`.harness/beyond-mvp-capability-boundary-ledger.md`).
@@ -318,7 +318,7 @@ disposition: the spine ledger (`.harness/beyond-mvp-capability-boundary-ledger.m
 | B-LAYER-BUDGET-OVERRIDE | remaining | CP | Enforce **per-layer time budgets** honoring per-workload/persona overrides. |
 | B-TOOL-GATE | remaining | runtime | Wire the **real per-server MCP-trust source** at the tool-step human-approval gate (today gate sites auto-approve). |
 | B-L2-EMBEDDING-ACTIVATION | remaining | runtime + CP | **Switch on L2/L3 routing in production** (the routing-activation gate below + wire the classifier/router + promote `fastembed`). |
-| B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION | remaining | CP + OD | Tag cost by **provider-family at the fallback chain** so the cross-family cost rollup isn't empty in production. |
+| B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION | closed · #649 | runtime (OD-reserved field) | Tag cost by **provider-family at the fallback chain** so the cross-family cost rollup isn't empty in production. |
 | B-NONLINEAR-OVERRIDE-PROVENANCE | closed · #648 | CP | Record the **per-step override audit entry on parallel / non-linear** topologies (today linear runs only). |
 | B-TAIL-CONDITIONAL-SAMPLING | gated · R-420/R-421 | OD + runtime | Sample **non-root & end-of-trace spans** by the §9.2 conditional rules (needs the in-process telemetry collector). |
 | B-PER-TOOL-SANDBOX-TIER | resolved · frozen B6 Slice 2 (#637) | runtime | **Per-tool** sandbox security tier + per-dispatch driver — built inside the frozen order, not a separate post-frozen arc. |

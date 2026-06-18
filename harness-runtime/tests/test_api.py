@@ -197,6 +197,9 @@ def test_run_result_all_required_fields_per_c_rt_09() -> None:
         "cost_attribution",
         # NEW v1.57 (B-COST-DISCRIMINATOR-TAXONOMY) — optional dispatch-type rollup.
         "cost_attribution_by_dispatch_kind",
+        # NEW v1.58 (B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION) — optional
+        # cross-family family-tag rollup (LLM-subtotal partition).
+        "cost_attribution_by_provider_discriminator",
         "failure_cause",
         # NEW v1.45 (C-RT-30, R-CC-1 arc #3) — optional pause-snapshot surface.
         "pause_snapshot",
