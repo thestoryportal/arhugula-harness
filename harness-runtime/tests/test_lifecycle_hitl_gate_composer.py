@@ -167,7 +167,7 @@ def _make_step(
     return cast(WorkflowStep, _StepWithPlacements(step, placements))
 
 
-def _make_step_context() -> StepExecutionContext:
+def _make_step_context(*, placements: tuple[HITLPlacement, ...] = ()) -> StepExecutionContext:
     from harness_as.sandbox_tier import SandboxTier
     from harness_core import ActionID
     from harness_cp.gate_level_rule import GateLevel
@@ -183,6 +183,24 @@ def _make_step_context() -> StepExecutionContext:
         parent_idempotency_key=Identifier("test-idempotency-key"),
         tenant_id=None,
         step_index=0,
+        # R-FS-1 B-HITL-PLACEMENT-PER-STEP-PRODUCER — the CP driver surfaces the
+        # workflow's declared placements here at workflow-binding time.
+        hitl_placements=placements,
+    )
+
+
+def _make_plain_step(step_id: str = "step-0") -> WorkflowStep:
+    """A bare `WorkflowStep` — NO `hitl_placements` attribute (frozen 3-field).
+
+    Distinct from `_make_step`, which attaches `hitl_placements` to the STEP via
+    the `_StepWithPlacements` proxy. A plain step forces the composer to read the
+    placements off `step_context` (the production producer surface) — if it fell
+    back to the step the gate would not fire.
+    """
+    return WorkflowStep(
+        step_id=StepID(step_id),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={},
     )
 
 
@@ -312,6 +330,110 @@ async def test_dispatch_with_non_matching_placements_delegates_to_inner(
     assert result == {"inner_dispatched": True}
     assert len(inner.calls) == 1
     assert exporter.get_finished_spans() == ()
+
+
+# ---------------------------------------------------------------------------
+# R-FS-1 B-HITL-PLACEMENT-PER-STEP-PRODUCER — composer reads placements off the
+# `step_context` producer surface (runtime §14.8.2 step 1: step → step_context).
+# These use a PLAIN `WorkflowStep` (no `hitl_placements` proxy) so the gate fires
+# ONLY if the composer reads `step_context.hitl_placements`.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dispatch_reads_placements_from_step_context_gate_fires(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """A PLAIN step (no placements) + a step_context carrying a PRE_ACTION
+    placement → the gate fires (surface.ask invoked, then inner dispatched on
+    APPROVE). Proves the composer reads `step_context.hitl_placements` (the CP
+    driver producer surface), not just the legacy `step` proxy."""
+    provider, exporter = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.APPROVE, latency_ms=5.0)]
+    )
+    composer = _make_composer(inner=inner, surface=surface, tracer_provider=provider)
+    plain_step = _make_plain_step()
+    assert not getattr(plain_step, "hitl_placements", ())  # no step-side placements
+    ctx = _make_step_context(placements=(HITLPlacement(position=HITLPlacementKind.PRE_ACTION),))
+
+    result = await composer.dispatch(cast(Any, object()), plain_step, step_context=ctx)
+
+    assert len(surface.calls) == 1  # the gate fired off step_context placements
+    assert result == {"inner_dispatched": True}
+    assert len(inner.calls) == 1
+    assert exporter.get_finished_spans()  # HITL spans emitted
+
+
+@pytest.mark.asyncio
+async def test_dispatch_empty_step_context_placements_delegates_to_inner(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """Negative control: a PLAIN step + a step_context with EMPTY placements →
+    the composer short-circuits to the inner dispatcher — no surface call, no
+    HITL spans, no ledger entry (byte-identical to pre-arc when no placement is
+    declared)."""
+    provider, exporter = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface([])
+    ledger = _MockLedgerWriter()
+    audit = _MockAuditWriter()
+    composer = _make_composer(
+        inner=inner,
+        surface=surface,
+        tracer_provider=provider,
+        ledger_writer=ledger,
+        audit_writer=audit,
+    )
+    plain_step = _make_plain_step()
+    ctx = _make_step_context(placements=())
+
+    result = await composer.dispatch(cast(Any, object()), plain_step, step_context=ctx)
+
+    assert result == {"inner_dispatched": True}
+    assert len(inner.calls) == 1
+    assert surface.calls == []  # gate never fired
+    assert exporter.get_finished_spans() == ()  # no HITL spans
+    assert ledger.appends == []  # no audit/ledger write
+    assert audit.appends == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_declared_placement_on_excluded_cell_raises_sanely(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """A declared placement on an EXCLUDED `(persona_tier, engine_class)` cell
+    raises the typed `HITLCellExcludedError` (NOT a crash) — the spec-mandated
+    C-CP-18 §18.1 exclusion, which the driver surfaces as a FAILED RunResult.
+
+    This production path becomes REACHABLE only with the producer (before the
+    producer no wrap-time gate fired, so `matrix_cell_for` was never reached on
+    the real path). `(TEAM_BINDING, PURE_PATTERN_NO_ENGINE)` is EXCLUDED per
+    C-CP-07 §7.2 / C-CP-18 §18.1. The "byte-identical" claim holds for EMPTY
+    placements; a DECLARED placement activates real gate behavior — incl. this
+    raise — which this test confirms is sane (typed, not a crash)."""
+    from harness_cp.cp_shared_types import ModelBinding
+    from harness_cp.engine_class import EngineClass
+    from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLCellExcludedError
+
+    provider, _ = tracer_provider
+    composer = _make_composer(
+        inner=_MockInnerDispatcher(),
+        surface=_MockAskUserQuestionSurface([]),  # never reached — raise precedes 4f
+        tracer_provider=provider,
+    )
+    excluded_binding = StepEffectiveBinding(
+        step_id="step-excluded",
+        model_binding=ModelBinding(provider="anthropic", model="claude-test-1"),
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        override_applied=False,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    ctx = _make_step_context(placements=(HITLPlacement(position=HITLPlacementKind.PRE_ACTION),))
+    with pytest.raises(HITLCellExcludedError):
+        await composer.dispatch(cast(Any, excluded_binding), _make_plain_step(), step_context=ctx)
 
 
 # ---------------------------------------------------------------------------
