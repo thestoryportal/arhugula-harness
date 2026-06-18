@@ -2440,3 +2440,58 @@ async def test_inter_step_channel_does_not_mask_system_conflict() -> None:
             ),
             step_context=_step_context(),
         )
+
+
+@pytest.mark.asyncio
+async def test_inter_step_channel_reaches_anthropic_hitl_tool_loop() -> None:
+    """Codex review round 2 — the Anthropic HITL tool-loop path must ALSO carry the
+    upstream context. The loop seeds its per-turn mutable messages from the
+    TRANSLATED `kwargs["messages"]` (params merge + upstream injection), not raw
+    `payload.messages`, so tool-using model calls keep the inter-step context."""
+    client = _AnthropicClient()
+    client.messages.responses = [
+        _AnthropicToolTurnResponse(
+            id="msg_tool",
+            content=[
+                {"type": "tool_use", "id": "toolu_001", "name": "search_docs", "input": {"query": "q"}}
+            ],
+            stop_reason="tool_use",
+            usage=_Usage(input_tokens=11, output_tokens=6),
+        ),
+        _AnthropicToolTurnResponse(
+            id="msg_final",
+            content=[{"type": "text", "text": "done"}],
+            stop_reason="end_turn",
+            usage=_Usage(input_tokens=12, output_tokens=4),
+        ),
+    ]
+    adapter = _AnthropicFakeAdapter(client)
+    hitl_loop = _FakeHITLToolLoop({"toolu_001": {"ok": True}})
+    tp, _ = _tracer_provider_with_exporter()
+    channel = InterStepOutputChannel()
+    channel.record("generate", {"draft": "DRAFT-hitl"})
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        hitl_tool_loop=cast(Any, hitl_loop),
+        inter_step_channel=channel,
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic", model="claude-test"),
+        _step(
+            {
+                "messages": [{"role": "user", "content": "search"}],
+                "tools": [
+                    {"name": "search_docs", "server": "docs-mcp", "input_schema": {"type": "object"}}
+                ],
+                "params": {"max_tokens": 100},
+            }
+        ),
+        step_context=_step_context(),
+    )
+
+    # The FIRST model call in the tool loop carries the upstream context.
+    first_messages = client.messages.calls[0]["messages"]
+    assert first_messages[0]["content"].startswith("Upstream step output:")
+    assert "DRAFT-hitl" in first_messages[0]["content"]

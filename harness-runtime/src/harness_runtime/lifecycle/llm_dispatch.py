@@ -1544,7 +1544,12 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
     kwarg).
     """
     kwargs = _payload_to_anthropic_kwargs(payload, system, upstream)
-    messages = list(payload.messages)
+    # Seed the per-turn mutable loop list from the TRANSLATED `kwargs["messages"]`
+    # (NOT `payload.messages`) so it carries the `params["messages"]` merge result
+    # AND the B-INTERSTEP upstream-context injection — otherwise the tool-loop's
+    # model calls silently lose the inter-step context while the non-HITL Anthropic
+    # path keeps it (Codex review). The loop then appends tool_result turns to it.
+    messages = list(kwargs["messages"])
     kwargs["messages"] = messages
     context = _hitl_loop_context_from_step(
         step_context,
