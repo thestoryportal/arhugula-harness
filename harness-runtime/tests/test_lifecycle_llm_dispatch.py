@@ -2352,3 +2352,91 @@ async def test_inter_step_channel_empty_no_injection() -> None:
     call = adapter.client.messages.last_kwargs
     assert call is not None
     assert call["messages"] == [{"role": "user", "content": "hi"}]
+
+
+@pytest.mark.asyncio
+async def test_inter_step_channel_survives_params_messages_override() -> None:
+    """Codex regression — a payload using the `params["messages"]` escape hatch
+    must STILL receive the upstream context. The injection runs on the FINAL
+    post-`params`-merge kwargs, so `kwargs.update(payload.params)` cannot drop it
+    (early `payload.messages` injection silently would have)."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    channel = InterStepOutputChannel()
+    channel.record("generate", {"draft": "DRAFT-via-params"})
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter}, tracer_provider=tp, inter_step_channel=channel
+    )
+    payload = {
+        "messages": [{"role": "user", "content": "top-level"}],
+        "tools": None,
+        "params": {"max_tokens": 100, "messages": [{"role": "user", "content": "from-params"}]},
+    }
+
+    await dispatcher.dispatch(_binding("anthropic"), _step(payload), step_context=_step_context())
+
+    messages = adapter.client.messages.last_kwargs["messages"]
+    # params["messages"] replaced the top-level messages, yet the upstream injection
+    # (post-`params`) still leads — the data flow reaches the provider.
+    assert messages[0]["content"].startswith("Upstream step output:")
+    assert "DRAFT-via-params" in messages[0]["content"]
+    assert {"role": "user", "content": "from-params"} in messages
+
+
+@pytest.mark.asyncio
+async def test_inter_step_channel_openai_injects_after_active_system_message() -> None:
+    """Codex regression — with an active system prompt, the upstream-context `user`
+    message lands AFTER the leading `system` message (does not displace it)."""
+    adapter = _OpenAIFakeAdapter(_OpenAIClient())
+    tp, _ = _tracer_provider_with_exporter()
+    channel = InterStepOutputChannel()
+    channel.record("generate", {"draft": "DRAFT-openai"})
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": adapter},
+        tracer_provider=tp,
+        inter_step_channel=channel,
+        active_system_prompt=_SYS,
+    )
+
+    await dispatcher.dispatch(_binding("openai"), _step(), step_context=_step_context())
+
+    messages = adapter.client.chat.completions.last_kwargs["messages"]
+    assert messages[0] == {"role": "system", "content": _SYS}
+    assert messages[1]["content"].startswith("Upstream step output:")
+    assert "DRAFT-openai" in messages[1]["content"]
+    assert {"role": "user", "content": "hi"} in messages
+
+
+@pytest.mark.asyncio
+async def test_inter_step_channel_does_not_mask_system_conflict() -> None:
+    """Codex regression — prepending the upstream `user` message must NOT hide a
+    payload-leading `role:"system"` message from the competing-system-source
+    conflict check. With an active prompt + a step-owned system message + the
+    channel bound, the dispatch STILL fails loud (the check runs before the
+    upstream injection)."""
+    adapter = _OpenAIFakeAdapter(_OpenAIClient())
+    tp, _ = _tracer_provider_with_exporter()
+    channel = InterStepOutputChannel()
+    channel.record("generate", {"draft": "DRAFT"})
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"openai": adapter},
+        tracer_provider=tp,
+        inter_step_channel=channel,
+        active_system_prompt=_SYS,
+    )
+
+    with pytest.raises(PromptInjectionConflictError):
+        await dispatcher.dispatch(
+            _binding("openai"),
+            _step(
+                {
+                    "messages": [
+                        {"role": "system", "content": "step-owned system"},
+                        {"role": "user", "content": "hi"},
+                    ],
+                    "tools": None,
+                    "params": {"max_tokens": 100},
+                }
+            ),
+            step_context=_step_context(),
+        )

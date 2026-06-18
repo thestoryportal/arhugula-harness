@@ -222,26 +222,35 @@ _UPSTREAM_CONTEXT_PREFIX = "Upstream step output:\n"
 output from the step's own messages."""
 
 
-def _inject_upstream_output(
-    payload: ProviderAgnosticPayload, upstream: Mapping[str, Any]
-) -> ProviderAgnosticPayload:
-    """Prepend the immediately-prior step's output as an upstream-context message.
+def _inject_upstream_context_message(
+    kwargs: dict[str, Any], upstream: Mapping[str, Any] | None
+) -> None:
+    """Insert the immediately-prior step's output as an upstream-context ``user``
+    message into the FINAL provider ``kwargs["messages"]``, AFTER any leading
+    ``role:"system"`` message.
 
-    B-INTERSTEP (runtime spec §14.21 C-RT-29). The upstream output (an opaque
-    step-output `Mapping` the driver recorded) is serialized provider-neutrally
-    into a single leading ``user`` message so the dispatched model SEES the prior
-    step's output (the EVALUATOR_OPTIMIZER draft→evaluate / feedback→regenerate
-    data flow). The dispatcher does NOT introspect the step body — it carries the
-    driver-recorded output opaquely (`workflow_driver` §25.3.3.4 preserved).
-    ``default=str`` keeps a non-JSON-native value serializable; ``sort_keys``
-    keeps the injected content deterministic.
+    B-INTERSTEP (runtime spec §14.21 C-RT-29). Operating on the final kwargs (NOT
+    ``payload.messages``) is load-bearing, and mirrors the R-PM-1 system-prompt
+    post-`params` injection: it runs AFTER ``kwargs.update(payload.params)`` so a
+    ``params["messages"]`` escape-hatch override cannot silently drop it, and AFTER
+    ``_inject_leading_system_message`` so the upstream ``user`` message does not
+    push a conflicting payload-leading ``system`` message off index 0 and mask the
+    competing-system-source conflict check (Codex review). The dispatcher does NOT
+    introspect the step body — it carries the driver-recorded output opaquely
+    (`workflow_driver` §25.3.3.4 preserved); ``default=str`` keeps a non-JSON-native
+    value serializable + ``sort_keys`` keeps the injected content deterministic.
+    ``None`` (opt-out / empty channel) → no-op (byte-identical to pre-v1.59).
     """
+    if upstream is None:
+        return
+    messages: list[Mapping[str, Any]] = list(kwargs.get("messages", ()))
     context_message: dict[str, Any] = {
         "role": "user",
         "content": _UPSTREAM_CONTEXT_PREFIX
         + json.dumps(dict(upstream), sort_keys=True, default=str),
     }
-    return payload.model_copy(update={"messages": (context_message, *payload.messages)})
+    insert_at = 1 if messages and messages[0].get("role") == "system" else 0
+    kwargs["messages"] = [*messages[:insert_at], context_message, *messages[insert_at:]]
 
 
 def _set_if_present(span: Any, key: str, value: Any) -> None:
@@ -630,16 +639,20 @@ class RuntimeLLMDispatcher:
 
         payload = _coerce_payload(step.step_payload)
 
-        # --- B-INTERSTEP (runtime spec §14.21 C-RT-29): upstream-output inject ---
-        # When the inter-step channel is bound (opt-in) AND a prior step has
-        # completed, prepend that step's output as an upstream-context message so
-        # THIS dispatch sees it (EVALUATOR_OPTIMIZER evaluate sees the generate
-        # draft; regenerate sees the evaluator feedback). None / empty channel →
-        # payload unchanged (byte-identical to pre-v1.59 — the opt-out default).
-        if self.inter_step_channel is not None:
-            _upstream = self.inter_step_channel.most_recent_output()
-            if _upstream is not None:
-                payload = _inject_upstream_output(payload, _upstream)
+        # --- B-INTERSTEP (runtime spec §14.21 C-RT-29): upstream-output read ---
+        # The immediately-prior step's output (the opt-in inter-step channel's
+        # most-recent record). It is injected into the FINAL provider kwargs at the
+        # translator layer (`_inject_upstream_context_message`), NOT into
+        # `payload.messages` here, so (1) a `params["messages"]` escape-hatch
+        # override cannot silently drop it and (2) it runs AFTER the system-prompt
+        # injection so it cannot mask the competing-system-source conflict check
+        # (Codex review; mirrors the R-PM-1 post-`params` system-prompt injection).
+        # None (opt-out) / empty channel → no injection (byte-identical to pre-v1.59).
+        _upstream_output: Mapping[str, Any] | None = (
+            self.inter_step_channel.most_recent_output()
+            if self.inter_step_channel is not None
+            else None
+        )
 
         # --- U-RT-114 (C-RT-15 §14.5.3): branch AgentRole carry ----------
         # The branch role (the CP-composed child StepExecutionContext, CP plan
@@ -744,6 +757,7 @@ class RuntimeLLMDispatcher:
                 routing_trace=routing_trace,
                 binding_rationale=binding_rationale,
                 effective_system_prompt=_effective_system_prompt,
+                upstream_output=_upstream_output,
             )
             raw_response["value"] = response
             # ProviderDispatchResult is structurally required by `infer()` but
@@ -800,6 +814,7 @@ class RuntimeLLMDispatcher:
         routing_trace: RoutingDecisionTrace,
         binding_rationale: str | None = None,
         effective_system_prompt: str | None = None,
+        upstream_output: Mapping[str, Any] | None = None,
     ) -> Mapping[str, Any]:
         """Provider-SDK dispatch boundary — the injected dispatch callable for
         `infer()` (R-300). Opens the `llm.inference` span (gen_ai.* + routing.*
@@ -935,6 +950,7 @@ class RuntimeLLMDispatcher:
                         deployment_surface=self.deployment_surface,
                         tracer=tracer,
                         system=effective_system_prompt,
+                        upstream=upstream_output,
                     )
                 elif (
                     self.hitl_tool_loop is not None
@@ -955,6 +971,7 @@ class RuntimeLLMDispatcher:
                         step_id=step_id,
                         persona_tier=self.persona_tier or PersonaTier.SOLO_DEVELOPER,
                         system=effective_system_prompt,
+                        upstream=upstream_output,
                     )
                 else:
                     (
@@ -963,17 +980,29 @@ class RuntimeLLMDispatcher:
                         cache_attrs,
                         request_attrs,
                     ) = await _dispatch_anthropic(
-                        adapter, model, payload, system=effective_system_prompt
+                        adapter,
+                        model,
+                        payload,
+                        system=effective_system_prompt,
+                        upstream=upstream_output,
                     )
             elif provider_name == "openai":
                 response, usage_attrs = await _dispatch_openai(
-                    adapter, model, payload, system=effective_system_prompt
+                    adapter,
+                    model,
+                    payload,
+                    system=effective_system_prompt,
+                    upstream=upstream_output,
                 )
                 cache_attrs = None
                 request_attrs = None
             else:  # provider_name == "ollama" (only remaining branch)
                 response, usage_attrs = await _dispatch_ollama(
-                    adapter, model, payload, system=effective_system_prompt
+                    adapter,
+                    model,
+                    payload,
+                    system=effective_system_prompt,
+                    upstream=upstream_output,
                 )
                 cache_attrs = None
                 request_attrs = None
@@ -1236,7 +1265,9 @@ def _extract_anthropic_request_attrs(
 
 
 def _payload_to_anthropic_kwargs(
-    payload: ProviderAgnosticPayload, system: str | None = None
+    payload: ProviderAgnosticPayload,
+    system: str | None = None,
+    upstream: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Translate `ProviderAgnosticPayload` → ``messages.create`` kwargs.
 
@@ -1262,6 +1293,9 @@ def _payload_to_anthropic_kwargs(
         if "system" in kwargs:
             raise PromptInjectionConflictError("anthropic", 'params["system"]')
         kwargs["system"] = system
+    # B-INTERSTEP — Anthropic carries `system` as a top-level kwarg (not a message),
+    # so the upstream context goes at messages index 0 (post-`params`-merge).
+    _inject_upstream_context_message(kwargs, upstream)
     return kwargs
 
 
@@ -1285,38 +1319,48 @@ def _inject_leading_system_message(
 
 
 def _payload_to_openai_kwargs(
-    payload: ProviderAgnosticPayload, system: str | None = None
+    payload: ProviderAgnosticPayload,
+    system: str | None = None,
+    upstream: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Translate `ProviderAgnosticPayload` → ``chat.completions.create`` kwargs.
 
     R-PM-1 PR #1 — ``system`` (active prompt content) injects as a leading
     ``{"role":"system","content":...}`` message (the OpenAI base-prompt route),
     **after** the ``params`` merge so a ``params["messages"]`` override cannot
-    silently drop it.
+    silently drop it. B-INTERSTEP — the upstream-context ``user`` message injects
+    AFTER the system injection (so it lands after any leading system message and
+    does not mask its conflict check).
     """
     kwargs: dict[str, Any] = {"messages": list(payload.messages)}
     if payload.tools is not None:
         kwargs["tools"] = list(payload.tools)
     kwargs.update(payload.params)
     _inject_leading_system_message(kwargs, system, "openai")
+    _inject_upstream_context_message(kwargs, upstream)
     return kwargs
 
 
 def _payload_to_ollama_kwargs(
-    payload: ProviderAgnosticPayload, system: str | None = None
+    payload: ProviderAgnosticPayload,
+    system: str | None = None,
+    upstream: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Translate `ProviderAgnosticPayload` → ``ollama.chat`` kwargs.
 
     R-PM-1 PR #1 — ``system`` (active prompt content) injects as a leading
     ``{"role":"system","content":...}`` message (the Ollama base-prompt route),
     **after** the ``params`` merge so a ``params["messages"]`` override cannot
-    silently drop it.
+    silently drop it. B-INTERSTEP — the upstream-context ``user`` message injects
+    AFTER the system injection (so it lands after any leading system message and
+    does not mask its conflict check).
     """
     kwargs: dict[str, Any] = {"messages": list(payload.messages)}
     if payload.tools is not None:
         kwargs["tools"] = list(payload.tools)
     kwargs.update(payload.params)
     _inject_leading_system_message(kwargs, system, "ollama")
+    _inject_upstream_context_message(kwargs, upstream)
     return kwargs
 
 
@@ -1486,6 +1530,7 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
     step_id: str,
     persona_tier: PersonaTier,
     system: str | None = None,
+    upstream: Mapping[str, Any] | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch with generic R-CXA-2 HITL tool continuation.
 
@@ -1498,7 +1543,7 @@ async def _dispatch_anthropic_with_hitl_tool_loop(
     mutable ``messages`` list is rebuilt per turn, but ``system`` is a separate
     kwarg).
     """
-    kwargs = _payload_to_anthropic_kwargs(payload, system)
+    kwargs = _payload_to_anthropic_kwargs(payload, system, upstream)
     messages = list(payload.messages)
     kwargs["messages"] = messages
     context = _hitl_loop_context_from_step(
@@ -1562,6 +1607,7 @@ async def _dispatch_anthropic_with_memory(
     deployment_surface: Any,
     tracer: Any,
     system: str | None = None,
+    upstream: Mapping[str, Any] | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch with Memory tool inner loop (U-RT-81).
 
@@ -1578,7 +1624,7 @@ async def _dispatch_anthropic_with_memory(
     backend = registry.resolve_backend(deployment_surface)
     configured_backend = registry.configured_backend
     context_editing_active = derive_context_editing_active(payload.params)
-    kwargs = _payload_to_anthropic_kwargs(payload, system)
+    kwargs = _payload_to_anthropic_kwargs(payload, system, upstream)
 
     response = await execute_with_memory_callbacks(
         adapter=adapter,
@@ -1599,9 +1645,10 @@ async def _dispatch_anthropic(
     payload: ProviderAgnosticPayload,
     *,
     system: str | None = None,
+    upstream: Mapping[str, Any] | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs, _AnthropicCacheAttrs, _AnthropicRequestAttrs]:
     """Anthropic provider branch — ``client.messages.create(...)``."""
-    kwargs = _payload_to_anthropic_kwargs(payload, system)
+    kwargs = _payload_to_anthropic_kwargs(payload, system, upstream)
     response = await adapter.client.messages.create(model=model, **kwargs)
 
     return _anthropic_response_bundle(response, payload, model)
@@ -1613,9 +1660,10 @@ async def _dispatch_openai(
     payload: ProviderAgnosticPayload,
     *,
     system: str | None = None,
+    upstream: Mapping[str, Any] | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs]:
     """OpenAI provider branch — ``client.chat.completions.create(...)``."""
-    kwargs = _payload_to_openai_kwargs(payload, system)
+    kwargs = _payload_to_openai_kwargs(payload, system, upstream)
     response = await adapter.client.chat.completions.create(model=model, **kwargs)
 
     usage = getattr(response, "usage", None)
@@ -1633,13 +1681,14 @@ async def _dispatch_ollama(
     payload: ProviderAgnosticPayload,
     *,
     system: str | None = None,
+    upstream: Mapping[str, Any] | None = None,
 ) -> tuple[Mapping[str, Any], _UsageAttrs]:
     """Ollama provider branch — ``client.chat(...)``.
 
     Ollama's ``ChatResponse`` exposes ``prompt_eval_count`` / ``eval_count``
     instead of a nested ``usage`` object; no ``response_id``.
     """
-    kwargs = _payload_to_ollama_kwargs(payload, system)
+    kwargs = _payload_to_ollama_kwargs(payload, system, upstream)
     response = await adapter.client.chat(model=model, **kwargs)
 
     usage_attrs = _UsageAttrs(
