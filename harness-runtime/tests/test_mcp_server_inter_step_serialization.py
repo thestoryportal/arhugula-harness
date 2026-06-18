@@ -15,6 +15,14 @@ These tests exercise the REAL `_inter_step_run_lock()` + the REAL
 (`guard = lock if channel else nullcontext; async with guard: reset(); …read`).
 A negative control proves the lock is load-bearing — the SAME overlap WITHOUT
 the lock corrupts, so the guard is not vacuous.
+
+Scope: these cover the NORMAL-completion concurrent case (spec §14.21.5
+invariant 7b). They do NOT cover the `drain_timeout_seconds` timeout-zombie
+(invariant 7c) — a timed-out run's non-cancellable `asyncio.to_thread` worker
+keeps recording after the lock releases, which a lock cannot fence; that
+SYSTEMIC reused-ctx residual (shared by every bootstrap-ctx holder, e.g.
+`cost_record_accumulator`) is the registered `B-INTERSTEP-PERRUN-ISOLATION`
+follow-on, NOT asserted closed here.
 """
 
 from __future__ import annotations
