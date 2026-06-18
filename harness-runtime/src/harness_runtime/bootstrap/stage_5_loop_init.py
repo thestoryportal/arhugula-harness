@@ -73,6 +73,7 @@ from harness_runtime.lifecycle.retry_breaker_fallback import (
 )
 from harness_runtime.lifecycle.step_blast_radius import make_step_blast_radius_resolver
 from harness_runtime.lifecycle.step_dispatchers import StepKindDispatcherRegistry
+from harness_runtime.lifecycle.step_mcp_trust_tier import make_step_mcp_trust_tier_resolver
 from harness_runtime.lifecycle.sub_agent_dispatch import RuntimeSubAgentDispatcher
 from harness_runtime.lifecycle.sync_dispatcher_facade import (
     materialize_sync_dispatcher_facade,
@@ -524,8 +525,52 @@ async def execute(
     # validated non-None above (U-OD-38 enforcement at the LLM-dispatch
     # bind block); the same substrate flows through.
     assert ctx.tool_dispatcher is not None
+    # ---------------------------------------------------------------------
+    # R-FS-1 `B-TOOL-GATE` (CP spec v1.35 §19.1.2 Producer ¶ + runtime §14.8.2
+    # step-4c) — the TOOL_STEP HITL gate site: the third RuntimeHITLGateComposer,
+    # wrapping the tool dispatcher with `applicable_placements={PRE_ACTION}` and an
+    # `mcp_trust_tier_resolver` that resolves a step's owning MCP host's trust tier
+    # (the resolved-owning-host feed the §19.1.2 Producer ¶ describes — making the
+    # MCP-trust gate axis non-vacuous AT THE TOOL GATE when it fires: an L0 server's
+    # tool floors its gate to DENY, an L3 to AUTO). Same dep set as the inference /
+    # sub-agent composers (so the tool gate's HITL flow is identical), plus the resolver.
+    #
+    # SCOPE: the wrap-time gate is placement-driven — it fires only when
+    # `step.hitl_placements` is non-empty. At HEAD no producer binds the WORKFLOW-level
+    # `WorkflowManifestEntry.hitl_placements` onto the per-step `WorkflowStep` the driver
+    # dispatches, so NO wrap-time gate (inference / sub-agent / tool) fires through the
+    # real manifest→driver path. That per-step placement producer is a PRE-EXISTING gap
+    # shared by all three gate sites (registered as a forward arc), NOT introduced here;
+    # this arc lands the tool-gate-site + MCP-trust feed at parity with the others.
+    #
+    # **Wrap the registry path, NOT `ctx.tool_dispatcher` itself.** `ctx.tool_dispatcher`
+    # is also read by the R-CXA-2 producer loop (`materialize_r_cxa_2_producer_loop_stage`)
+    # + the provider-turn tool loop (`hitl_tool_loop`); reassigning it would HITL-gate
+    # provider-initiated tool calls too (scope creep + double-gate vs `hitl_tool_loop`).
+    # The composer wraps the wrapper as `inner`; HITL is OUTER of the C-RT-16 retry
+    # (the gate fires once before dispatch — retries do not re-prompt the operator —
+    # a deliberate asymmetry vs the LLM path's HITL-inner-of-retry).
+    mcp_trust_tier_resolver = make_step_mcp_trust_tier_resolver(cast(HarnessContext, ctx))
+    hitl_tool = RuntimeHITLGateComposer(
+        inner=ctx.tool_dispatcher,
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(Any, ask_surface),
+        ledger_writer=cast(Any, ctx.ledger_writer),
+        audit_writer=cast(Any, ctx.audit_writer),
+        tracer_provider=cast(Any, tracer_provider),
+        audit_signing_key_id="harness-runtime-dev",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=procedural_tier_snapshot_resolver,
+        pause_resume_protocol=ctx.pause_resume_protocol,
+        pause_requested_flag=ctx.pause_requested_flag,
+        webhook_delivery_composer=ctx.webhook_delivery_composer,
+        resume_context_holder=ctx.resume_context_holder,
+        blast_radius_resolver=blast_radius_resolver,
+        hitl_auto_approve_policy=hitl_auto_approve_policy,
+        mcp_trust_tier_resolver=mcp_trust_tier_resolver,
+    )
     tool_step_dispatcher = materialize_sync_dispatcher_facade(
-        ctx.tool_dispatcher,
+        cast(Any, hitl_tool),
         result_timeout_seconds=config.step_dispatch_timeout_seconds,
     )
 

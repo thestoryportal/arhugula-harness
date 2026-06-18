@@ -827,9 +827,20 @@ async def test_bootstrap_stage_5_binds_inference_and_sub_agent_dispatchers(
     # TOOL_STEP bound at U-RT-68 cluster-close per spec v1.16 §14.9.3 +
     # §14.11 C-RT-21 RetryBreakerToolDispatcher wrap. HITL / DECLARATIVE
     # remain unbound (follow-on composer arcs).
+    #
+    # R-FS-1 `B-TOOL-GATE` (CP spec v1.35 §19.1.2 Producer ¶) — the TOOL_STEP
+    # registry path now wraps the tool dispatcher in a third RuntimeHITLGateComposer
+    # (the tool-step MCP-trust gate site): `facade → hitl_tool composer → ctx.tool_dispatcher`.
+    # The composer carries the `mcp_trust_tier_resolver` (the resolved-owning-host
+    # feed) and gates on PRE_ACTION, so an L0-trust server's tool floors its gate to
+    # DENY. `ctx.tool_dispatcher` itself is NOT mutated (the R-CXA-2 producer loop +
+    # the provider-turn tool loop still read the un-gated dispatcher).
     tool_step = ctx.step_dispatchers.lookup(StepKind.TOOL_STEP)
     assert isinstance(tool_step, SyncDispatcherFacade)
-    assert tool_step.inner is ctx.tool_dispatcher
+    assert isinstance(tool_step.inner, RuntimeHITLGateComposer)
+    assert tool_step.inner.inner is ctx.tool_dispatcher
+    assert tool_step.inner.applicable_placements == frozenset({HITLPlacementKind.PRE_ACTION})
+    assert tool_step.inner.mcp_trust_tier_resolver is not None
     assert isinstance(ctx.hitl_tool_loop, RuntimeHITLToolLoop)
     assert isinstance(ctx.engine_recovery_loop, RuntimeEngineRecoveryLoop)
     for unbound in (StepKind.HITL_STEP, StepKind.DECLARATIVE_STEP):
