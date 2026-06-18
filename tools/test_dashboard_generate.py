@@ -110,11 +110,18 @@ def test_remaining_forward_derives_standalone_arcs():
     sa = rf["standalone"]
     by_id = {arc["id"]: arc for arc in sa}
     # §5 is the COMPLETE standalone enumeration (both families) with 4-way status.
-    assert len(sa) == 16
-    # design-fork-first "remaining" arcs surfaced during impl (R-FS-1's continuing work)
-    family1 = {"B-FANOUT-PAUSE", "B-L2-EMBEDDING-ACTIVATION", "B-TOOL-GATE", "B-EFFECT-FENCE"}
+    assert len(sa) == 17
+    # design-fork-first "remaining" arcs surfaced during impl (R-FS-1's continuing work).
+    # B-HITL-PLACEMENT-PER-STEP-PRODUCER was registered by B-TOOL-GATE (#653, Codex [P1]).
+    family1 = {
+        "B-FANOUT-PAUSE",
+        "B-L2-EMBEDDING-ACTIVATION",
+        "B-HITL-PLACEMENT-PER-STEP-PRODUCER",
+        "B-EFFECT-FENCE",
+    }
     assert family1 <= set(by_id)
     assert by_id["B-FANOUT-PAUSE"]["status"] == "remaining"
+    assert by_id["B-HITL-PLACEMENT-PER-STEP-PRODUCER"]["status"] == "remaining"
     # closed standalone arcs (built + merged, each its own PR) carry status="closed" + the PR #.
     for cid in (
         "B-MCP-HOST-REMOTE-TRANSPORT",
@@ -123,9 +130,11 @@ def test_remaining_forward_derives_standalone_arcs():
         "B-NONLINEAR-OVERRIDE-PROVENANCE",
         "B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION",
         "B-INTERSTEP",
+        "B-TOOL-GATE",
     ):
         assert by_id[cid]["status"] == "closed", cid
     assert "#640" in by_id["B-MCP-HOST-REMOTE-TRANSPORT"]["status_detail"]
+    assert "#653" in by_id["B-TOOL-GATE"]["status_detail"]
     # B-TAIL is build-authorized but GATED on the R-420/R-421 collector arc.
     assert by_id["B-TAIL-CONDITIONAL-SAMPLING"]["status"] == "gated"
     # Both `resolved` arcs were settled INSIDE the frozen order -> NOT separate post-frozen
@@ -133,9 +142,9 @@ def test_remaining_forward_derives_standalone_arcs():
     # built as B6 Slice 2 (#637); B-PER-DISPATCH-DRIVER-PRECISION foreclosed N/A by B6 Option A.
     assert by_id["B-PER-TOOL-SANDBOX-TIER"]["status"] == "resolved"
     assert by_id["B-PER-DISPATCH-DRIVER-PRECISION"]["status"] == "resolved"
-    # 4-way bucket counts: 6 closed / 7 remaining / 1 gated / 2 resolved.
+    # 4-way bucket counts: 7 closed / 7 remaining / 1 gated / 2 resolved.
     statuses = [arc["status"] for arc in sa]
-    assert statuses.count("closed") == 6
+    assert statuses.count("closed") == 7
     assert statuses.count("remaining") == 7
     assert statuses.count("gated") == 1
     assert statuses.count("resolved") == 2

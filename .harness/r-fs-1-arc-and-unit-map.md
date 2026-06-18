@@ -300,7 +300,7 @@ live status:
   choice; listed here for completeness, **not** a separate post-frozen arc (excluded from the
   closed/remaining tallies so it isn't double-counted).
 
-Headline (HEAD): **6 closed · 7 remaining · 1 gated** (the 13 build-ready standalone arcs) **+ 2
+Headline (HEAD): **7 closed · 7 remaining · 1 gated** (the 14 build-ready standalone arcs) **+ 2
 resolved** (`B-PER-TOOL-SANDBOX-TIER` built inside the frozen order as B6 Slice 2;
 `B-PER-DISPATCH-DRIVER-PRECISION` foreclosed N/A by the B6 Option-A choice). Full per-arc
 disposition: the spine ledger (`.harness/beyond-mvp-capability-boundary-ledger.md`).
@@ -316,7 +316,8 @@ disposition: the spine ledger (`.harness/beyond-mvp-capability-boundary-ledger.m
 | B-EFFECT-FENCE | remaining | runtime + AS | Guarantee a side-effecting step **runs at most once** across retries/resumes. |
 | B-EDIT-CARRIER | remaining | runtime + CP | Let a human **EDIT** a pending action even when its data shape differs (today EDIT raises for some shapes). |
 | B-LAYER-BUDGET-OVERRIDE | remaining | CP | Enforce **per-layer time budgets** honoring per-workload/persona overrides. |
-| B-TOOL-GATE | remaining | runtime | Wire the **real per-server MCP-trust source** at the tool-step human-approval gate (today gate sites auto-approve). |
+| B-TOOL-GATE | closed · #653 | runtime | Wire the **real per-server MCP-trust source** at the tool-step human-approval gate — an L0-trust server's tool floors its gate to DENY (built: the tool-gate-site + MCP-trust feed, at parity with the inference/sub-agent gates). Production gate-*firing* awaits `B-HITL-PLACEMENT-PER-STEP-PRODUCER` (the shared per-step-placement gap). |
+| B-HITL-PLACEMENT-PER-STEP-PRODUCER | remaining | CP + runtime | Bind workflow-level `hitl_placements` onto **per-step** steps so the wrap-time human-approval gates (inference / sub-agent / tool) actually **fire in production** (today they're wired but never trigger on the real manifest→driver path — a shared gap surfaced by B-TOOL-GATE; the B3 placement-composition residual). |
 | B-L2-EMBEDDING-ACTIVATION | remaining | runtime + CP | **Switch on L2/L3 routing in production** (the routing-activation gate below + wire the classifier/router + promote `fastembed`). |
 | B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION | closed · #649 | runtime (OD-reserved field) | Tag cost by **provider-family at the fallback chain** so the cross-family cost rollup isn't empty in production. |
 | B-NONLINEAR-OVERRIDE-PROVENANCE | closed · #648 | CP | Record the **per-step override audit entry on parallel / non-linear** topologies (today linear runs only). |

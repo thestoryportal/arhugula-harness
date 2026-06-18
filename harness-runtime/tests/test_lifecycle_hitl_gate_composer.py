@@ -2083,3 +2083,290 @@ def test_u_rt_131_host_less_gate_no_floor_default_matches_3_axis_path() -> None:
     # gate composes ASK (persona floor), NOT DENY.
     assert composed.computed_gate_level is GateLevel.ASK
     assert composed.composition_winner is Axis.PERSONA_TIER
+
+
+# ---------------------------------------------------------------------------
+# R-FS-1 `B-TOOL-GATE` — the tool-step MCP-trust gate site (CP spec v1.35
+# §19.1.2 Producer ¶ + runtime §14.8.2 step-4c). The composer now accepts a
+# per-step `mcp_trust_tier_resolver`; at the tool-step gate it feeds the resolved
+# owning-host trust into `gate_level()`'s `Axis.MCP_TRUST` floor, making the axis
+# non-vacuous AT THE TOOL GATE **when the gate fires** (an L0 server's tool floors
+# its gate to DENY). These tests attach `hitl_placements` via the `_StepWithPlacements`
+# proxy (same as the existing inference/sub-agent gate tests) — they prove the axis
+# COMPOSES when the gate fires, NOT that the gate fires through the real manifest→driver
+# path (no per-step placement producer exists at HEAD — a pre-existing shared gap).
+# ---------------------------------------------------------------------------
+
+
+def _make_tool_step(
+    *,
+    tool_id: str = "danger_tool",
+    placements: tuple[HITLPlacement, ...] = (),
+) -> WorkflowStep:
+    """A `TOOL_STEP` carrying `tool_id` in the payload + optional `hitl_placements`."""
+    inner_step = WorkflowStep(
+        step_id=StepID("tool-step-0"),
+        step_kind=StepKind.TOOL_STEP,
+        step_payload={"tool_id": tool_id},
+    )
+
+    class _StepWithPlacements:
+        def __init__(self, inner: WorkflowStep, placements: tuple[HITLPlacement, ...]) -> None:
+            self._inner = inner
+            self.hitl_placements = placements
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
+
+    return cast(WorkflowStep, _StepWithPlacements(inner_step, placements))
+
+
+def _tool_gate_composer(
+    *,
+    tracer_provider: TracerProvider,
+    mcp_trust_tier_resolver: Any,
+    surface: _MockAskUserQuestionSurface | None = None,
+    inner: _MockInnerDispatcher | None = None,
+) -> RuntimeHITLGateComposer:
+    """Build a tool-step gate composer the way stage 5 does — with a bound
+    `mcp_trust_tier_resolver` + a READ_ONLY blast resolver + the default policy.
+
+    READ_ONLY blast + SOLO + default policy ⇒ blast/persona/per_tool all compose
+    AUTO, so `Axis.MCP_TRUST` is the ONLY axis that can escalate the gate — which
+    isolates the B-TOOL-GATE axis under test.
+    """
+    from harness_as import BlastRadiusTier
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    return RuntimeHITLGateComposer(
+        inner=cast(Any, inner if inner is not None else _MockInnerDispatcher()),
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(
+            AskUserQuestionSurface,
+            surface if surface is not None else _MockAskUserQuestionSurface([]),
+        ),
+        ledger_writer=cast(Any, _MockLedgerWriter()),
+        audit_writer=cast(Any, _MockAuditWriter()),
+        tracer_provider=tracer_provider,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
+        blast_radius_resolver=lambda _step: BlastRadiusTier.READ_ONLY,
+        hitl_auto_approve_policy=HITLAutoApprovePolicy(),
+        mcp_trust_tier_resolver=mcp_trust_tier_resolver,
+    )
+
+
+def test_compute_gate_decision_l0_mcp_trust_forces_deny() -> None:
+    """The resolved L0 owning-host tier composes `Axis.MCP_TRUST → DENY` and WINS
+    the `max()` (the §19.1.2 axis non-vacuous): DENY even over a solo read-only step."""
+    from types import SimpleNamespace
+
+    from harness_as import BlastRadiusTier
+    from harness_cp.cp_shared_types import Axis, MCPTrustTier
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_runtime.lifecycle.hitl_gate_composer import _compute_gate_decision
+
+    decision = _compute_gate_decision(
+        binding=SimpleNamespace(persona_tier=PersonaTier.SOLO_DEVELOPER),
+        resolved_blast_radius=BlastRadiusTier.READ_ONLY,
+        mcp_trust_tier=MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
+    )
+    assert decision is not None
+    assert decision.per_axis_floors[Axis.MCP_TRUST] is GateLevel.DENY
+    assert decision.computed_gate_level is GateLevel.DENY
+    assert decision.composition_winner is Axis.MCP_TRUST
+
+
+def test_compute_gate_decision_l3_mcp_trust_contributes_no_floor() -> None:
+    """The resolved L3 owning-host tier composes `Axis.MCP_TRUST → AUTO` (rank 0) —
+    contributes no floor; the gate is decided by the other axes (persona ASK)."""
+    from types import SimpleNamespace
+
+    from harness_as import BlastRadiusTier
+    from harness_cp.cp_shared_types import Axis, MCPTrustTier
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_runtime.lifecycle.hitl_gate_composer import _compute_gate_decision
+
+    decision = _compute_gate_decision(
+        binding=SimpleNamespace(persona_tier=PersonaTier.SOLO_DEVELOPER),
+        resolved_blast_radius=BlastRadiusTier.READ_ONLY,
+        mcp_trust_tier=MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT,
+    )
+    assert decision is not None
+    assert decision.per_axis_floors[Axis.MCP_TRUST] is GateLevel.AUTO
+    # mcp adds no floor → persona ASK decides (not DENY).
+    assert decision.computed_gate_level is GateLevel.ASK
+
+
+@pytest.mark.asyncio
+async def test_tool_gate_l0_server_floors_to_deny_and_rejects(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """The load-bearing DENY consequence, end-to-end through the REAL composer:
+    a PRE_ACTION-placed tool step whose owning host is L0-trust → gate composes
+    DENY → palette narrows to {REJECT, RESPOND} → the ask surface is invoked with
+    exactly that narrowed palette → operator REJECT → `HITLGateRejectedError`; the
+    inner tool dispatcher is NOT reached."""
+    from harness_cp.cp_shared_types import MCPTrustTier
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLGateRejectedError
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.REJECT, latency_ms=3.0, rejection_reason="no")]
+    )
+    composer = _tool_gate_composer(
+        tracer_provider=provider,
+        mcp_trust_tier_resolver=lambda _step: MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
+        surface=surface,
+        inner=inner,
+    )
+    step = _make_tool_step(placements=(HITLPlacement(position=HITLPlacementKind.PRE_ACTION),))
+
+    with pytest.raises(HITLGateRejectedError):
+        await composer.dispatch(
+            _binding(PersonaTier.SOLO_DEVELOPER), step, step_context=_make_step_context()
+        )
+
+    # The DENY-narrowed palette {REJECT, RESPOND} reached the ask surface (proves
+    # the real per-server DENY floor composed, not the L3 no-floor default).
+    assert len(surface.calls) == 1
+    assert set(surface.calls[0][1]) == {HITLResponse.REJECT, HITLResponse.RESPOND}
+    # Tool dispatch refused — the gate fired before delegation.
+    assert inner.calls == []
+
+
+@pytest.mark.asyncio
+async def test_tool_gate_l3_server_no_floor_delegates_to_inner(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """The contrasting baseline: an L3-trust owning host contributes no MCP-trust
+    floor → solo read-only step composes AUTO → the gate skips → the tool dispatch
+    delegates to inner, and the ask surface is NOT invoked."""
+    from harness_cp.cp_shared_types import MCPTrustTier
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface([])
+    composer = _tool_gate_composer(
+        tracer_provider=provider,
+        mcp_trust_tier_resolver=lambda _step: MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT,
+        surface=surface,
+        inner=inner,
+    )
+    step = _make_tool_step(placements=(HITLPlacement(position=HITLPlacementKind.PRE_ACTION),))
+
+    result = await composer.dispatch(
+        _binding(PersonaTier.SOLO_DEVELOPER), step, step_context=_make_step_context()
+    )
+
+    assert result == {"inner_dispatched": True}
+    assert len(inner.calls) == 1
+    assert surface.calls == []
+
+
+@pytest.mark.asyncio
+async def test_tool_gate_real_resolver_over_real_hosts_l0_denies_l3_delegates(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """The genuine producer↔consumer bridge: the REAL `make_step_mcp_trust_tier_resolver`
+    over a ctx with an L0 + an L3 host, feeding the REAL composer. A tool routed to
+    the L0 host floors to DENY (REJECT raises); a tool routed to the L3 host delegates
+    to inner. Proves the resolver the gate scores agrees with the owning host."""
+    from types import SimpleNamespace
+
+    from harness_cp.cp_shared_types import MCPTrustTier
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLGateRejectedError
+    from harness_runtime.lifecycle.step_mcp_trust_tier import make_step_mcp_trust_tier_resolver
+
+    class _Registry:
+        def __init__(self, names: tuple[str, ...]) -> None:
+            self._names = set(names)
+
+        def get(self, name: str) -> object:
+            if name in self._names:
+                return object()
+            raise KeyError(name)
+
+    ctx = SimpleNamespace(
+        mcp_client_hosts={
+            "untrusted": SimpleNamespace(
+                tool_registry=_Registry(("danger_tool",)),
+                trust_tier=MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
+            ),
+            "trusted": SimpleNamespace(
+                tool_registry=_Registry(("safe_tool",)),
+                trust_tier=MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT,
+            ),
+        }
+    )
+    resolver = make_step_mcp_trust_tier_resolver(cast(Any, ctx))
+    provider, _ = tracer_provider
+    placement = (HITLPlacement(position=HITLPlacementKind.PRE_ACTION),)
+
+    # L0-host tool → DENY → REJECT raises.
+    deny_surface = _MockAskUserQuestionSurface(
+        [AskUserQuestionResult(response=HITLResponse.REJECT, latency_ms=1.0, rejection_reason="x")]
+    )
+    deny_inner = _MockInnerDispatcher()
+    deny_composer = _tool_gate_composer(
+        tracer_provider=provider,
+        mcp_trust_tier_resolver=resolver,
+        surface=deny_surface,
+        inner=deny_inner,
+    )
+    with pytest.raises(HITLGateRejectedError):
+        await deny_composer.dispatch(
+            _binding(PersonaTier.SOLO_DEVELOPER),
+            _make_tool_step(tool_id="danger_tool", placements=placement),
+            step_context=_make_step_context(),
+        )
+    assert set(deny_surface.calls[0][1]) == {HITLResponse.REJECT, HITLResponse.RESPOND}
+    assert deny_inner.calls == []
+
+    # L3-host tool → AUTO → delegates to inner (no ask).
+    allow_surface = _MockAskUserQuestionSurface([])
+    allow_inner = _MockInnerDispatcher()
+    allow_composer = _tool_gate_composer(
+        tracer_provider=provider,
+        mcp_trust_tier_resolver=resolver,
+        surface=allow_surface,
+        inner=allow_inner,
+    )
+    result = await allow_composer.dispatch(
+        _binding(PersonaTier.SOLO_DEVELOPER),
+        _make_tool_step(tool_id="safe_tool", placements=placement),
+        step_context=_make_step_context(),
+    )
+    assert result == {"inner_dispatched": True}
+    assert allow_surface.calls == []
+
+
+@pytest.mark.asyncio
+async def test_tool_gate_without_placement_passes_through_byte_identical(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """Passthrough invariant: a tool step with NO PRE_ACTION placement routes
+    through the composer byte-identically to the un-gated dispatcher — even when
+    the resolver would have scored L0 (the gate only composes on a placement)."""
+    from harness_cp.cp_shared_types import MCPTrustTier
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface([])
+    composer = _tool_gate_composer(
+        tracer_provider=provider,
+        mcp_trust_tier_resolver=lambda _step: MCPTrustTier.LEVEL_0_REFUSE_REMOTE,
+        surface=surface,
+        inner=inner,
+    )
+    step = _make_tool_step(placements=())  # no HITL placement
+
+    result = await composer.dispatch(
+        _binding(PersonaTier.SOLO_DEVELOPER), step, step_context=_make_step_context()
+    )
+
+    assert result == {"inner_dispatched": True}
+    assert len(inner.calls) == 1
+    assert surface.calls == []

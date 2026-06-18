@@ -205,24 +205,30 @@ validator-composer + MCP-trust-framework arcs."""
 
 
 _NO_OWNING_MCP_HOST_TRUST_FLOOR: MCPTrustTier = MCPTrustTier.LEVEL_3_ALLOW_WITH_AUDIT
-"""U-RT-131 — the no-floor MCP-trust default for the host-less gate sites.
+"""U-RT-131 — the no-floor MCP-trust default for the **host-less** gate sites.
 
-The runtime HITL gate composer is constructed for exactly two placements —
-`PRE_ACTION` (inference steps) + `SUB_AGENT_BOUNDARY` (sub-agent steps) — NEITHER
-of which has an owning MCP host (`TOOL_STEP`s dispatch through the tool dispatcher,
-which composes no HITL gate). So the §19.1.2 Producer ¶ "resolved owning MCP host's
-trust" has no gate site to populate at HEAD; every gate the composer evaluates is
-host-less and must contribute no MCP-trust floor.
+The runtime HITL gate composer is constructed for three placements: `PRE_ACTION`
+(inference steps) + `SUB_AGENT_BOUNDARY` (sub-agent steps) — both host-less — plus,
+since R-FS-1 `B-TOOL-GATE`, a third **tool-step** composer (`applicable_placements=
+{PRE_ACTION}`, wrapping the tool dispatcher) that DOES have an owning MCP host.
+The host-less composers pass NO `mcp_trust_tier_resolver`, so their
+`_compute_gate_decision` receives `mcp_trust_tier=None` and falls back to this L3
+no-floor default — they legitimately contribute no MCP-trust floor. The tool-step
+composer passes `make_step_mcp_trust_tier_resolver(ctx)`, which resolves the step's
+`tool_id` → owning host → `MCPTrustTier` (§19.1.2 Producer ¶), making the axis
+non-vacuous at that gate **when it fires** (an L0 server floors the gate to `DENY`).
+(The wrap-time gate is placement-driven; production gate-firing for ALL wrap-time
+gates awaits the shared per-step `hitl_placements` producer — a pre-existing gap,
+see `step_mcp_trust_tier.py`.)
 
 `level-3-allow-with-audit` maps to `GateLevel.AUTO` (rank 0) in
 `MCP_TRUST_GATE_LEVEL_FLOOR`, so per §19.1.2 invariant 3 ("AUTO contributes nothing
 to `max()`") it adds no floor — exactly as the sibling `per_tool_gate_level` defaults
-to `GateLevel.AUTO` at these sites (`:453`). This replaces the **harmful**
+to `GateLevel.AUTO` at these sites. This replaces the **harmful**
 `LEVEL_0_REFUSE_REMOTE` constant, which — once U-CP-98 composes `Axis.MCP_TRUST` —
 would map `L0→DENY` into the `max()` on every host-less gate (universal over-gating).
-The real per-server feed (resolve the owning host via the routing index → its
-D3-projected `MCPTrustTier`) targets a tool-step gate site that does not exist at
-HEAD: the forward `B-TOOL-GATE` arc (runtime plan v2.47 §6 O-RT-7 item 2)."""
+The real per-server feed is now realized at the `B-TOOL-GATE` tool-step gate site
+(runtime plan v2.48 §6 O-RT-7 item 2; `step_mcp_trust_tier.py`)."""
 
 
 # ---------------------------------------------------------------------------
@@ -433,6 +439,7 @@ def _compute_gate_decision(
     resolved_blast_radius: BlastRadiusTier | None = None,
     persona_floor_override: CPGateLevel | None = None,
     blast_floor_override: CPGateLevel | None = None,
+    mcp_trust_tier: MCPTrustTier | None = None,
 ) -> GateLevelComputation | None:
     """U-RT-117 (G2; D-palette) — compute the `GateLevelComputation` ONCE at step-4c.
 
@@ -441,10 +448,12 @@ def _compute_gate_decision(
     replacing the prior double-computation (the bool computed `gate_level` then
     DISCARDED it; the palette re-hardcoded `ASK`). Reading B v1.22 §14.8.2 step-4c
     4-axis consumption per CP spec v1.15 §19.1.1 (`per_tool_gate_level` from binding
-    else sentinel `AUTO`; `mcp_trust_tier` = the `_NO_OWNING_MCP_HOST_TRUST_FLOOR`
-    L3 no-floor default per U-RT-131 — these gate sites are host-less, so the
-    §19.1.2 4th axis contributes no floor here; the real per-server feed is the
-    forward `B-TOOL-GATE` arc).
+    else sentinel `AUTO`; `mcp_trust_tier` is the caller-resolved owning-MCP-host
+    trust tier — the R-FS-1 `B-TOOL-GATE` tool-step composer passes its
+    `mcp_trust_tier_resolver(step)` result here (§19.1.2 Producer ¶), so the 4th
+    §19.1 axis is non-vacuous at the tool gate; the host-less inference / sub-agent
+    composers pass `None` → the `_NO_OWNING_MCP_HOST_TRUST_FLOOR` L3 no-floor
+    default per U-RT-131, contributing no floor there).
 
     Returns `None` for the **test-fixture / partial-binding** case (`persona_tier`
     or `blast_radius_tier` unavailable) — the caller then falls back to
@@ -481,7 +490,15 @@ def _compute_gate_decision(
             per_tool_gate_level=per_tool,
             persona_tier=persona_tier,
             blast_radius_tier=blast_radius_tier,
-            mcp_trust_tier=_NO_OWNING_MCP_HOST_TRUST_FLOOR,
+            # R-FS-1 `B-TOOL-GATE` — the per-step resolved owning-MCP-host trust
+            # tier (§19.1.2 Producer ¶), threaded by the tool-step composer's
+            # `mcp_trust_tier_resolver`. `None` (the host-less inference /
+            # sub-agent composers, which pass no resolver) → the L3
+            # `_NO_OWNING_MCP_HOST_TRUST_FLOOR` no-floor default (U-RT-131) →
+            # contributes nothing to the `max()` (§19.1.2 invariant 3).
+            mcp_trust_tier=(
+                mcp_trust_tier if mcp_trust_tier is not None else _NO_OWNING_MCP_HOST_TRUST_FLOOR
+            ),
             persona_floor_override=persona_floor_override,
             blast_floor_override=blast_floor_override,
         )
@@ -804,6 +821,26 @@ class RuntimeHITLGateComposer:
     lowered to `AUTO` per the policy BEFORE `gate_level()` composes the `max()`
     (Reading C, in-`max()`). Default `HITLAutoApprovePolicy()` = READ_ONLY auto-ON
     / LOCAL_MUTATION opt-in / EXTERNAL_* hard-stop at solo-developer."""
+
+    mcp_trust_tier_resolver: Callable[[WorkflowStep], MCPTrustTier | None] | None = None
+    """R-FS-1 `B-TOOL-GATE` — per-step owning-MCP-host trust-tier resolver closure
+    (CP spec v1.35 §19.1.2 Producer ¶ + runtime §14.8.2 step-4c `mcp_server_trust_tier`).
+
+    Bound at bootstrap stage-5 LOOP_INIT via `make_step_mcp_trust_tier_resolver(ctx)`
+    (the `blast_radius_resolver` sibling precedent) for the **tool-step** composer
+    that wraps the tool dispatcher — and ONLY that one. At step-4c the composer
+    invokes it to resolve the step's `tool_id` → owning host → `MCPTrustTier`, which
+    is threaded into `gate_level()`'s `Axis.MCP_TRUST` floor — so when the tool gate
+    fires, an L0-trust server's tool floors its gate to `DENY`, an L3 to `AUTO` (the
+    §19.1.2 axis non-vacuous at the tool gate, at parity with the inference/sub-agent
+    gates; production gate-firing for all wrap-time gates awaits the shared per-step
+    `hitl_placements` producer — a pre-existing gap, see `step_mcp_trust_tier.py`).
+    `None` (default) → the **host-less** inference (`PRE_ACTION`) +
+    sub-agent (`SUB_AGENT_BOUNDARY`) composers, which legitimately have no owning MCP
+    host → `_compute_gate_decision` feeds the L3 `_NO_OWNING_MCP_HOST_TRUST_FLOOR`
+    no-floor default (U-RT-131; byte-identical to pre-`B-TOOL-GATE`). A resolver
+    returning `None` for a given step (unresolvable `tool_id`) likewise feeds the
+    no-floor default — see `step_mcp_trust_tier.py` for the fail-soft rationale."""
 
     # Carrier-canonical attribute name constants (per spec §14.8.5 producer-
     # side carrier import discipline). Frozen at construction so a typo in
@@ -1156,6 +1193,17 @@ class RuntimeHITLGateComposer:
             resolved_blast_radius = (
                 self.blast_radius_resolver(step) if self.blast_radius_resolver is not None else None
             )
+            # R-FS-1 `B-TOOL-GATE` (§19.1.2 Producer ¶): resolve the per-step
+            # owning-MCP-host trust tier via the stage-5-bound resolver — non-None
+            # ONLY at the tool-step composer (host-less inference / sub-agent
+            # composers pass no resolver). `None` → `_compute_gate_decision` feeds
+            # the L3 no-floor default (U-RT-131); a non-None tier feeds the real
+            # `Axis.MCP_TRUST` floor so an L0 server floors the gate to `DENY`.
+            resolved_mcp_trust_tier = (
+                self.mcp_trust_tier_resolver(step)
+                if self.mcp_trust_tier_resolver is not None
+                else None
+            )
             # U-RT-116 (G1-skip; §3.8): apply the operator-policy in-`max()` floor
             # overrides (Reading C) — solo-scoped, named-cell. `policy_applied`
             # records whether a floor was actually lowered (drives the AC-1
@@ -1174,6 +1222,7 @@ class RuntimeHITLGateComposer:
                 resolved_blast_radius=resolved_blast_radius,
                 persona_floor_override=persona_floor_override,
                 blast_floor_override=blast_floor_override,
+                mcp_trust_tier=resolved_mcp_trust_tier,
             )
             if gate_decision is not None:
                 hitl_required = gate_decision.computed_gate_level in (
