@@ -1343,6 +1343,23 @@ class RuntimeConfig(BaseModel):
     payload, so it MUST be opt-in (unlike `cost_record_accumulator`, which is
     always-on additive observability)."""
 
+    effect_fencing: bool = False
+    """B-EFFECT-FENCE (R-FS-1 standalone arc; runtime spec §14.22 C-RT-31, new at
+    v1.60) — opt-in to at-most-once EXECUTION of non-idempotent tool-step effects
+    across durable-engine retries/resumes. When `True`, the tool-dispatcher factory
+    constructs a durable `RuntimeEffectFence` (under `repository_root/.harness/
+    effect-fence`) and the `RuntimeToolDispatcher` `try_reserve`s the per-(run,
+    step, tool) `idempotency_key` BEFORE `call_tool`: the first dispatch wins (the
+    effect fires), and any re-dispatch of the same effect (a crash-then-resume
+    re-run of an effected-but-uncommitted step, or an in-process retry) loses →
+    `EffectFenceReservedUncommittedError` (fail-closed to §22.1 HITL, never a
+    double-fire). Default `False` → no fence constructed → byte-identical (no
+    reserve, no claim files). Meaningful only under a durable engine class (where a
+    resume re-dispatches uncommitted steps); auto-activation under durable engines
+    is the registered `B-EFFECT-FENCE-DURABLE-AUTO` follow-on. Cf. the reconciler
+    (U-RT-123): single-host, fail-closed residual, COMMIT = the existing per-step
+    ledger entry."""
+
     tenant_id: str | None = None
     """Multi-tenant separation key per OD audit-ledger. `None` = single-tenant."""
 

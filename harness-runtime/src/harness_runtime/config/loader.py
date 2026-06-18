@@ -72,6 +72,13 @@ _ENV_SCALAR_FIELDS: dict[str, tuple[str, Any]] = {
     "tenant_id": (f"{ENV_PREFIX}TENANT_ID", str),
     "ollama_host": (f"{ENV_PREFIX}OLLAMA_HOST", str),
     "ollama_optional": (f"{ENV_PREFIX}OLLAMA_OPTIONAL", _parse_bool),
+    # B-EFFECT-FENCE (§14.22 C-RT-31) — env-keyed because it gates a CORRECTNESS
+    # property (at-most-once execution): an operator who sets HARNESS_EFFECT_FENCING
+    # must NOT be silently left without the fence (the no-silent-failure discipline).
+    # NOTE: the recent opt-in flags `inter_step_data_flow` / `anthropic_optional` /
+    # `openai_optional` are NOT env-keyed here (file/CLI only) — a known env gap, a
+    # separate config-hygiene item, intentionally not folded into this arc.
+    "effect_fencing": (f"{ENV_PREFIX}EFFECT_FENCING", _parse_bool),
 }
 
 

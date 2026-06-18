@@ -300,7 +300,7 @@ live status:
   choice; listed here for completeness, **not** a separate post-frozen arc (excluded from the
   closed/remaining tallies so it isn't double-counted).
 
-Headline (HEAD): **7 closed · 7 remaining · 1 gated** (the 14 build-ready standalone arcs) **+ 2
+Headline (HEAD): **8 closed · 6 remaining · 1 gated** (the 14 build-ready standalone arcs) **+ 2
 resolved** (`B-PER-TOOL-SANDBOX-TIER` built inside the frozen order as B6 Slice 2;
 `B-PER-DISPATCH-DRIVER-PRECISION` foreclosed N/A by the B6 Option-A choice). Full per-arc
 disposition: the spine ledger (`.harness/beyond-mvp-capability-boundary-ledger.md`).
@@ -313,7 +313,7 @@ disposition: the spine ledger (`.harness/beyond-mvp-capability-boundary-ledger.m
 | B-INTERSTEP | closed · #651 | runtime | Pass **data** from one workflow step to the next (today steps share control-flow only, not each other's outputs) — opt-in inter-step output channel; EVALUATOR_OPTIMIZER evaluate now sees the generate draft. |
 | B-FANOUT-PAUSE | remaining | CP + runtime | **Resume a paused parallel fan-out** from where it stopped (today it fails honestly instead of resuming). |
 | B-ENGINE-OUTPUT-REPLAY | remaining | CP + runtime/IS | **Replay cached step outputs** from event history (today a resume skips finished steps but can't reproduce their outputs). |
-| B-EFFECT-FENCE | remaining | runtime + AS | Guarantee a side-effecting step **runs at most once** across retries/resumes. |
+| B-EFFECT-FENCE | closed · #655 | runtime | Guarantee a side-effecting step **runs at most once** across retries/resumes — a durable crash-atomic fence at the tool sink (opt-in `effect_fencing`); a crash-then-resume re-run of an effected-but-uncommitted step (or an in-process retry) fail-closes instead of re-firing. Single-host; the §22.1 HITL pause + per-tool classification + durable-auto are spine-registered follow-ons. |
 | B-EDIT-CARRIER | remaining | runtime + CP | Let a human **EDIT** a pending action even when its data shape differs (today EDIT raises for some shapes). |
 | B-LAYER-BUDGET-OVERRIDE | remaining | CP | Enforce **per-layer time budgets** honoring per-workload/persona overrides. |
 | B-TOOL-GATE | closed · #653 | runtime | Wire the **real per-server MCP-trust source** at the tool-step human-approval gate — an L0-trust server's tool floors its gate to DENY (built: the tool-gate-site + MCP-trust feed, at parity with the inference/sub-agent gates). Production gate-*firing* awaits `B-HITL-PLACEMENT-PER-STEP-PRODUCER` (the shared per-step-placement gap). |

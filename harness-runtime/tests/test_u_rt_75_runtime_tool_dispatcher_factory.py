@@ -155,6 +155,30 @@ async def test_step4_wrapper_inner_is_bare_runtime_tool_dispatcher() -> None:
 
 
 @pytest.mark.asyncio
+async def test_factory_default_binds_no_effect_fence() -> None:
+    # B-EFFECT-FENCE (§14.22 C-RT-31) — default `effect_fencing=False` → the bare
+    # dispatcher gets no fence (byte-identical to pre-v1.60).
+    cfg = _config()
+    assert cfg.effect_fencing is False
+    builder = await _post_stage_3a_builder(cfg)
+    wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
+    assert wrapper.inner._effect_fence is None
+
+
+@pytest.mark.asyncio
+async def test_factory_binds_effect_fence_when_opted_in() -> None:
+    # B-EFFECT-FENCE — `effect_fencing=True` → the factory constructs + threads a
+    # RuntimeEffectFence to the bare dispatcher (the wiring link the dispatcher
+    # unit tests assume; closes the factory side).
+    from harness_runtime.lifecycle.effect_fence import RuntimeEffectFence
+
+    cfg = _config().model_copy(update={"effect_fencing": True})
+    builder = await _post_stage_3a_builder(cfg)
+    wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
+    assert isinstance(wrapper.inner._effect_fence, RuntimeEffectFence)
+
+
+@pytest.mark.asyncio
 async def test_factory_uses_runtime_default_trust_policy_when_config_omits() -> None:
     # AC #2 (extended) — config.trust_policy=None → factory uses DEFAULT_TRUST_POLICY.
     cfg = _config()

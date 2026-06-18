@@ -78,6 +78,21 @@ def test_env_var_supplies_tenant_id(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.tenant_id == "acme"
 
 
+# B-EFFECT-FENCE (§14.22 C-RT-31) — HARNESS_EFFECT_FENCING → config.effect_fencing.
+# The flag gates a CORRECTNESS property (at-most-once execution), so the env path
+# must reach it (out-of-family Codex + advisor caught the original omission).
+def test_env_var_supplies_effect_fencing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_EFFECT_FENCING", "true")
+    cfg = RuntimeConfigSource.load(cli_overrides=_minimum_required_overrides())
+    assert cfg.effect_fencing is True
+    # Absent → the opt-out default (byte-identical to pre-v1.60).
+    monkeypatch.delenv("HARNESS_EFFECT_FENCING", raising=False)
+    assert (
+        RuntimeConfigSource.load(cli_overrides=_minimum_required_overrides()).effect_fencing
+        is False
+    )
+
+
 # AC #3 — config-file [runtime] table supplies tenant_id.
 def test_config_file_runtime_table_supplies_tenant_id(tmp_path: Path) -> None:
     config_file = tmp_path / "harness.toml"

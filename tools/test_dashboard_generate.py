@@ -142,10 +142,11 @@ def test_remaining_forward_derives_standalone_arcs():
     # built as B6 Slice 2 (#637); B-PER-DISPATCH-DRIVER-PRECISION foreclosed N/A by B6 Option A.
     assert by_id["B-PER-TOOL-SANDBOX-TIER"]["status"] == "resolved"
     assert by_id["B-PER-DISPATCH-DRIVER-PRECISION"]["status"] == "resolved"
-    # 4-way bucket counts: 7 closed / 7 remaining / 1 gated / 2 resolved.
+    # 4-way bucket counts: 8 closed / 6 remaining / 1 gated / 2 resolved
+    # (B-EFFECT-FENCE closed at the 8th standalone B-* arc).
     statuses = [arc["status"] for arc in sa]
-    assert statuses.count("closed") == 7
-    assert statuses.count("remaining") == 7
+    assert statuses.count("closed") == 8
+    assert statuses.count("remaining") == 6
     assert statuses.count("gated") == 1
     assert statuses.count("resolved") == 2
 
