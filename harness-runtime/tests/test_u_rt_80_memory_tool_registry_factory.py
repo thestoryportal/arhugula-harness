@@ -12,14 +12,18 @@ the actual enum value is ``DeploymentSurface.LOCAL_DEVELOPMENT`` per
 
 from __future__ import annotations
 
+import importlib
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
+from cryptography.fernet import Fernet
 from harness_as.anthropic_graceful_degradation import MemoryToolStorageBackend
 from harness_core.deployment_surface import DeploymentSurface
 from harness_cp.topology_pattern import TopologyPattern
 from harness_runtime.bootstrap.factories.memory_tool_registry_factory import (
     MEMORY_TOOL_DATABASE_SUBPATH,
+    MEMORY_TOOL_ENCRYPTED_FILESYSTEM_ROOT_SUBPATH,
     MEMORY_TOOL_FILESYSTEM_ROOT_SUBPATH,
     materialize_memory_tool_registry_stage,
 )
@@ -63,6 +67,86 @@ class _ManagedDbConnection:
 
     def close(self) -> None:
         return None
+
+
+# ---------------------------------------------------------------------------
+# B-MEMORY-SURFACE-BACKEND-IMPLS — OPERATOR_DEFINED test fixtures.
+# Module-level so `importlib.import_module(__name__)` + getattr resolves them
+# (the introspection path the factory exercises).
+# ---------------------------------------------------------------------------
+
+
+class _OperatorBackend:
+    """Minimal conformant operator-defined backend (in-memory store)."""
+
+    def __init__(self, backend_params: Mapping[str, str]) -> None:
+        self.backend_params = dict(backend_params)
+        self._store: dict[str, bytes] = {}
+
+    async def view(self, path: str) -> bytes:
+        return self._store[path]
+
+    async def create(self, path: str, content: bytes) -> None:
+        self._store[path] = content
+
+    async def delete(self, path: str) -> None:
+        self._store.pop(path, None)
+
+    async def str_replace(self, path: str, old: str, new: str) -> None:
+        self._store[path] = self._store[path].replace(old.encode(), new.encode())
+
+    async def insert(self, path: str, line: int, content: str) -> None:
+        self._store[path] = self._store.get(path, b"") + content.encode()
+
+
+class _NonConformantOperatorBackend:
+    """Missing create/delete/str_replace/insert — rejected by conformance."""
+
+    def __init__(self, backend_params: Mapping[str, str]) -> None:
+        self._params = dict(backend_params)
+
+    async def view(self, path: str) -> bytes:
+        return b""
+
+
+class _SyncOperatorBackend:
+    """All 5 methods present + callable but SYNC `def` (not `async def`). The
+    @runtime_checkable Protocol admits it (presence only); the factory must
+    reject it at bootstrap so the dispatcher's `await` never TypeErrors."""
+
+    def __init__(self, backend_params: Mapping[str, str]) -> None:
+        self._store: dict[str, bytes] = {}
+
+    def view(self, path: str) -> bytes:
+        return self._store.get(path, b"")
+
+    def create(self, path: str, content: bytes) -> None:
+        self._store[path] = content
+
+    def delete(self, path: str) -> None:
+        self._store.pop(path, None)
+
+    def str_replace(self, path: str, old: str, new: str) -> None:
+        return None
+
+    def insert(self, path: str, line: int, content: str) -> None:
+        return None
+
+
+class _RaisingOperatorBackend:
+    """Operator backend whose constructor raises an exception that echoes a
+    backend_params value — used to prove the factory does NOT leak it."""
+
+    def __init__(self, backend_params: Mapping[str, str]) -> None:
+        raise ValueError(f"operator __init__ boom: token={backend_params.get('api_token')}")
+
+
+_NOT_A_CLASS = "i am a module-level string, not a class"
+
+
+def _operator_ref(attr: str) -> str:
+    """`module:attr` class-qualified-name pointing into THIS test module."""
+    return f"{__name__}:{attr}"
 
 
 def _config(
@@ -123,41 +207,260 @@ async def test_operator_override_filesystem_honored(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC #3 — operator override: still-unimplemented backends
-# (ENCRYPTED_FILESYSTEM / OPERATOR_DEFINED) raise with
-# RT-FAIL-MEMORY-BACKEND-RESOLUTION + §14.D pointer. DATABASE moved to the
-# acceptance path at R-830 (SELF_HOSTED SQLite); S3 moves to the mockable
-# cloud-vault acceptance path in this R-830 slice.
+# AC #3 (B-MEMORY-SURFACE-BACKEND-IMPLS) — ENCRYPTED_FILESYSTEM + OPERATOR_DEFINED
+# are now IMPLEMENTED (they no longer raise as "unimplemented"). The factory
+# raises only on missing/invalid backend_params. All 5 enum members handled.
 # ---------------------------------------------------------------------------
 
 
+def _encrypted_cfg(
+    *,
+    repository_root: Path,
+    key_env_var: str | None = "HARNESS_TEST_MEM_KEY",
+) -> RuntimeConfig:
+    params: dict[str, str] = {}
+    if key_env_var is not None:
+        params["key_env_var"] = key_env_var
+    return _config(
+        memory_tool_backend_config=MemoryToolBackendConfig(
+            backend=MemoryToolStorageBackend.ENCRYPTED_FILESYSTEM,
+            backend_params=params,
+        ),
+        repository_root=repository_root,
+    )
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "unimplemented_backend",
-    [
-        MemoryToolStorageBackend.ENCRYPTED_FILESYSTEM,
-        MemoryToolStorageBackend.OPERATOR_DEFINED,
-    ],
-)
-async def test_unimplemented_backend_raises_with_fork_doc_pointer(
-    unimplemented_backend: MemoryToolStorageBackend,
+async def test_encrypted_filesystem_round_trips_and_is_ciphertext_at_rest(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Real-Fernet round-trip via the env-var key reference; on-disk bytes are
+    ciphertext (the load-bearing ENCRYPTED_FILESYSTEM property)."""
+    monkeypatch.setenv("HARNESS_TEST_MEM_KEY", Fernet.generate_key().decode("ascii"))
+    cfg = _encrypted_cfg(repository_root=tmp_path)
+    ctx = _MutableHarnessContext()
+
+    registry = await materialize_memory_tool_registry_stage(cfg, ctx)
+
+    assert registry.configured_backend is MemoryToolStorageBackend.ENCRYPTED_FILESYSTEM
+    backend = registry.resolve_backend(cfg.deployment_surface)
+    assert isinstance(backend, LocalFilesystemMemoryToolBackend)
+
+    await backend.create("/memories/secret.txt", b"top secret note")
+    assert await backend.view("/memories/secret.txt") == b"top secret note"
+
+    on_disk = (tmp_path / MEMORY_TOOL_ENCRYPTED_FILESYSTEM_ROOT_SUBPATH / "secret.txt").read_bytes()
+    assert b"top secret note" not in on_disk
+
+
+@pytest.mark.asyncio
+async def test_encrypted_filesystem_requires_key_env_var_param(tmp_path: Path) -> None:
+    cfg = _encrypted_cfg(repository_root=tmp_path, key_env_var=None)
+    ctx = _MutableHarnessContext()
+
+    with pytest.raises(MemoryBackendResolutionError, match="key_env_var"):
+        await materialize_memory_tool_registry_stage(cfg, ctx)
+    assert ctx.memory_tool_registry is None
+
+
+@pytest.mark.asyncio
+async def test_encrypted_filesystem_unset_env_var_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("HARNESS_TEST_MEM_KEY", raising=False)
+    cfg = _encrypted_cfg(repository_root=tmp_path)
+    ctx = _MutableHarnessContext()
+
+    with pytest.raises(MemoryBackendResolutionError, match="unset or empty"):
+        await materialize_memory_tool_registry_stage(cfg, ctx)
+    assert ctx.memory_tool_registry is None
+
+
+@pytest.mark.asyncio
+async def test_encrypted_filesystem_malformed_key_raises_without_echoing_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """inv 4 — a malformed key raises 'malformed' WITHOUT echoing the key value."""
+    bad_key = "this-is-not-a-valid-fernet-key"
+    monkeypatch.setenv("HARNESS_TEST_MEM_KEY", bad_key)
+    cfg = _encrypted_cfg(repository_root=tmp_path)
+    ctx = _MutableHarnessContext()
+
+    with pytest.raises(MemoryBackendResolutionError) as excinfo:
+        await materialize_memory_tool_registry_stage(cfg, ctx)
+    msg = str(excinfo.value)
+    assert "malformed" in msg
+    assert bad_key not in msg  # the key material is never echoed
+    assert ctx.memory_tool_registry is None
+
+
+@pytest.mark.asyncio
+async def test_encrypted_filesystem_missing_cryptography_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The lazy-import-behind-RT-FAIL branch: cryptography absent → RT-FAIL."""
+    monkeypatch.setenv("HARNESS_TEST_MEM_KEY", Fernet.generate_key().decode("ascii"))
+    real_import = importlib.import_module
+
+    def _fake_import(name: str, *args: object, **kwargs: object) -> object:
+        if name == "cryptography.fernet":
+            raise ImportError("simulated: cryptography not installed")
+        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        "harness_runtime.bootstrap.factories.memory_tool_registry_factory.importlib.import_module",
+        _fake_import,
+    )
+    cfg = _encrypted_cfg(repository_root=tmp_path)
+    ctx = _MutableHarnessContext()
+
+    with pytest.raises(MemoryBackendResolutionError, match="cryptography"):
+        await materialize_memory_tool_registry_stage(cfg, ctx)
+    assert ctx.memory_tool_registry is None
+
+
+# --- OPERATOR_DEFINED ------------------------------------------------------
+
+
+def _operator_cfg(repository_root: Path, class_qualified_name: str | None) -> RuntimeConfig:
+    params: dict[str, str] = {}
+    if class_qualified_name is not None:
+        params["class_qualified_name"] = class_qualified_name
+    return _config(
+        memory_tool_backend_config=MemoryToolBackendConfig(
+            backend=MemoryToolStorageBackend.OPERATOR_DEFINED,
+            backend_params=params,
+        ),
+        repository_root=repository_root,
+    )
+
+
+@pytest.mark.asyncio
+async def test_operator_defined_constructs_operator_class_with_params(tmp_path: Path) -> None:
+    """class_qualified_name resolves the operator class; the full backend_params
+    Mapping is passed to its constructor."""
+    cfg = _operator_cfg(tmp_path, _operator_ref("_OperatorBackend"))
+    ctx = _MutableHarnessContext()
+
+    registry = await materialize_memory_tool_registry_stage(cfg, ctx)
+
+    assert registry.configured_backend is MemoryToolStorageBackend.OPERATOR_DEFINED
+    backend = registry.resolve_backend(cfg.deployment_surface)
+    assert isinstance(backend, _OperatorBackend)
+    # The full backend_params Mapping (incl. the routing key) reached __init__.
+    assert backend.backend_params["class_qualified_name"] == _operator_ref("_OperatorBackend")
+    # And it actually works as a Protocol backend.
+    await backend.create("/memories/x", b"v")
+    assert await backend.view("/memories/x") == b"v"
+
+
+@pytest.mark.asyncio
+async def test_operator_defined_accepts_dotted_reference(tmp_path: Path) -> None:
+    """`module.Class` dotted form resolves identically to `module:Class`."""
+    cfg = _operator_cfg(tmp_path, f"{__name__}._OperatorBackend")
+    ctx = _MutableHarnessContext()
+
+    registry = await materialize_memory_tool_registry_stage(cfg, ctx)
+    assert isinstance(registry.resolve_backend(cfg.deployment_surface), _OperatorBackend)
+
+
+@pytest.mark.asyncio
+async def test_operator_defined_requires_class_qualified_name(tmp_path: Path) -> None:
+    cfg = _operator_cfg(tmp_path, None)
+    ctx = _MutableHarnessContext()
+
+    with pytest.raises(MemoryBackendResolutionError, match="class_qualified_name"):
+        await materialize_memory_tool_registry_stage(cfg, ctx)
+    assert ctx.memory_tool_registry is None
+
+
+@pytest.mark.asyncio
+async def test_operator_defined_bad_module_raises(tmp_path: Path) -> None:
+    cfg = _operator_cfg(tmp_path, "totally.nonexistent.module:Backend")
+    ctx = _MutableHarnessContext()
+
+    with pytest.raises(MemoryBackendResolutionError, match="failed to import"):
+        await materialize_memory_tool_registry_stage(cfg, ctx)
+    assert ctx.memory_tool_registry is None
+
+
+@pytest.mark.asyncio
+async def test_operator_defined_missing_class_raises(tmp_path: Path) -> None:
+    cfg = _operator_cfg(tmp_path, _operator_ref("DoesNotExistBackend"))
+    ctx = _MutableHarnessContext()
+
+    with pytest.raises(MemoryBackendResolutionError, match="not found"):
+        await materialize_memory_tool_registry_stage(cfg, ctx)
+    assert ctx.memory_tool_registry is None
+
+
+@pytest.mark.asyncio
+async def test_operator_defined_non_class_reference_raises(tmp_path: Path) -> None:
+    cfg = _operator_cfg(tmp_path, _operator_ref("_NOT_A_CLASS"))
+    ctx = _MutableHarnessContext()
+
+    with pytest.raises(MemoryBackendResolutionError, match="non-class"):
+        await materialize_memory_tool_registry_stage(cfg, ctx)
+    assert ctx.memory_tool_registry is None
+
+
+@pytest.mark.asyncio
+async def test_operator_defined_instantiation_failure_does_not_echo_params(tmp_path: Path) -> None:
+    """A constructor failure surfaces the exception TYPE but never echoes a
+    backend_params value (symmetric with the encrypted-path no-key-echo
+    discipline; §14.12.5 invariant 4). Codex-review-driven."""
+    secret = "super-secret-api-token-xyz"
     cfg = _config(
-        memory_tool_backend_config=MemoryToolBackendConfig(backend=unimplemented_backend),
+        memory_tool_backend_config=MemoryToolBackendConfig(
+            backend=MemoryToolStorageBackend.OPERATOR_DEFINED,
+            backend_params={
+                "class_qualified_name": _operator_ref(_RaisingOperatorBackend.__name__),
+                "api_token": secret,
+            },
+        ),
         repository_root=tmp_path,
     )
     ctx = _MutableHarnessContext()
 
     with pytest.raises(MemoryBackendResolutionError) as excinfo:
         await materialize_memory_tool_registry_stage(cfg, ctx)
+    msg = str(excinfo.value)
+    assert "ValueError" in msg  # the exception TYPE is surfaced for debugging
+    assert secret not in msg  # ... but the secret param value is NOT echoed
+    assert ctx.memory_tool_registry is None
 
+
+@pytest.mark.asyncio
+async def test_operator_defined_non_conformant_class_raises(tmp_path: Path) -> None:
+    """A constructed operator class missing Protocol methods is rejected by the
+    existing _enforce_protocol_conformance step (§14.12.5 invariant 2)."""
+    cfg = _operator_cfg(tmp_path, _operator_ref(_NonConformantOperatorBackend.__name__))
+    ctx = _MutableHarnessContext()
+
+    with pytest.raises(MemoryBackendResolutionError) as excinfo:
+        await materialize_memory_tool_registry_stage(cfg, ctx)
     msg = str(excinfo.value)
     assert "RT-FAIL-MEMORY-BACKEND-RESOLUTION" in msg
-    assert unimplemented_backend.value in msg
-    # Fork-doc pointer per `[[halt-route-split-AC-pattern]]` carry-forward.
-    assert "§14.D" in msg
-    assert ctx.memory_tool_registry is None  # never bound on resolution failure
+    assert any(name in msg for name in ("create", "delete", "str_replace", "insert"))
+    assert ctx.memory_tool_registry is None
+
+
+@pytest.mark.asyncio
+async def test_operator_defined_sync_methods_rejected_at_bootstrap(tmp_path: Path) -> None:
+    """A sync-`def` operator backend (Protocol-present but not async) fails CLOSED
+    at bootstrap (ADR-F4), not with a TypeError at first dispatch. Codex-review-
+    driven — @runtime_checkable isinstance does NOT catch sync-vs-async."""
+    cfg = _operator_cfg(tmp_path, _operator_ref(_SyncOperatorBackend.__name__))
+    ctx = _MutableHarnessContext()
+
+    with pytest.raises(MemoryBackendResolutionError, match="non-async") as excinfo:
+        await materialize_memory_tool_registry_stage(cfg, ctx)
+    assert "RT-FAIL-MEMORY-BACKEND-RESOLUTION" in str(excinfo.value)
+    assert ctx.memory_tool_registry is None
 
 
 # ---------------------------------------------------------------------------

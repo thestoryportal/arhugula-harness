@@ -227,7 +227,7 @@ grounding sweep (`.harness/r-fs-1-remaining-arcs-grounding-sweep-v1.md`), re-gro
 | Factory populates the map | Default path resolves each surface independently (config-free `FILESYSTEM`, built once per distinct enum) + freezes a deferred `RT-FAIL` for surfaces with no config-free backend (`MANAGED_CLOUD`); the **active surface must resolve or bootstrap aborts fail-closed** (preserves pre-B5 active-`MANAGED_CLOUD`-no-override). Override forces one backend for every surface. | impl |
 | Anti-vacuity + fail-closed lock | `resolve_backend(LOCAL)`→filesystem vs `resolve_backend(MANAGED)`→`RT-FAIL` (constructs-vs-raises proves the arg is read) + a regression test locking the active-`MANAGED`-no-override bootstrap-abort. | impl |
 
-*Active-surface dispatch is byte-identical (production threads the single active surface); the multi-surface map is contract-shape, not a runtime multiplex feature. The two spec'd-but-unimplemented backends (`ENCRYPTED_FILESYSTEM`, `OPERATOR_DEFINED`) registered as the forward arc `B-MEMORY-SURFACE-BACKEND-IMPLS` (§5).*
+*Active-surface dispatch is byte-identical (production threads the single active surface); the multi-surface map is contract-shape, not a runtime multiplex feature. The two backends B5 routes to (`ENCRYPTED_FILESYSTEM`, `OPERATOR_DEFINED`) are now **✅ BUILT** by the standalone arc `B-MEMORY-SURFACE-BACKEND-IMPLS` (2026-06-17 — Fernet content-codec injection + class-qualified-name introspection; see the beyond-MVP ledger).*
 
 ### R-FS-1·B6 — Per-tool sandbox tier + STDIO transport floor
 
@@ -302,7 +302,6 @@ spine ledger (`.harness/beyond-mvp-capability-boundary-ledger.md`).
 | B-LAYER-BUDGET-OVERRIDE | CP | Enforce **per-layer time budgets** honoring per-workload/persona overrides. |
 | B-TOOL-GATE | runtime | Wire the **real per-server MCP-trust source** at the tool-step human-approval gate (today gate sites auto-approve). |
 | B-L2-EMBEDDING-ACTIVATION | runtime + CP | **Switch on L2/L3 routing in production** (the routing-activation gate below + wire the classifier/router + promote `fastembed`). |
-| B-MEMORY-SURFACE-BACKEND-IMPLS | runtime | Build the two remaining spec'd memory backends — **`ENCRYPTED_FILESYSTEM`** (filesystem + per-path encryption) and **`OPERATOR_DEFINED`** (operator-supplied class resolved by introspection) — that B5's surface→backend routing will then dispatch to (today the factory raises for both). |
 
 ---
 
