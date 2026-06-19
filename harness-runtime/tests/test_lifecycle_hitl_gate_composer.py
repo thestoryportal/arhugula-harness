@@ -973,24 +973,104 @@ async def test_approve_response_delegates_to_inner(
 
 
 @pytest.mark.asyncio
-async def test_edit_str_carrier_drift_raises_no_silent_dispatch(
+async def test_edit_valid_json_applies_replacement_full_chain(
     tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
 ) -> None:
-    """AC #10 EDIT (U-RT-120, B3-impl-3, D-edit.B): the wired `str` ask-surface
-    carrier cannot be applied verbatim to the `Mapping[str, Any]` step_payload —
-    composer raises HITLGateEditCarrierDriftError surfacing the str↔Mapping drift.
+    """AC #10 EDIT (B-EDIT-CARRIER): functional replace-not-merge — FULL-CHAIN
+    WITNESS through the real composer (no Mapping-returning mock).
+
+    The wired ask-surface returns the operator's edit as a flat `str`
+    (`AskUserQuestionResult.edited_proposal: str | None` — MCP elicitation is
+    flat-schema). The composer JSON-decodes that `str` → a Mapping and REPLACES
+    `step.step_payload` verbatim (§14.8.2 step 4i + NOTE 6-ii). The witness
+    proves the str↔Mapping transit end-to-end: the inner dispatcher (step 5)
+    receives the DECODED Mapping as the new step_payload. Mocking the surface to
+    return a Mapping directly would bypass the exact drift this arc fixes
+    (`[[test-bypass-as-runtime-truth-pattern]]` / `[[full-chain-witness-not-half-proofs]]`).
+
+    Also asserts NOTE 6-ii's POST-mutation `edited_proposal_hash`: the audit hash
+    is over the decoded Mapping (canonical JSON), NOT the raw operator `str` (the
+    F3-03 pre-mutation residual the interim raise left).
+    """
+    import hashlib
+    import json as _json
+
+    from harness_runtime.lifecycle.hitl_gate_composer import _post_mutation_payload_hash
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    replacement_payload = {"messages": [{"role": "user", "content": "edited by operator"}]}
+    edited_str = _json.dumps(replacement_payload)
+    surface = _MockAskUserQuestionSurface(
+        [
+            AskUserQuestionResult(
+                response=HITLResponse.EDIT,
+                latency_ms=12.0,
+                edited_proposal=edited_str,
+            )
+        ]
+    )
+    ledger = _MockLedgerWriter()
+    audit = _MockAuditWriter()
+    composer = RuntimeHITLGateComposer(
+        inner=inner,
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, surface),
+        ledger_writer=cast(Any, ledger),
+        audit_writer=cast(Any, audit),
+        tracer_provider=provider,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
+    )
+    placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    # REAL WorkflowStep (not the `_StepWithPlacements` proxy) with placements on
+    # the step_context producer surface (#657) — the production path. Original
+    # payload is DISTINCT from the replacement (proves replacement, not a
+    # coincidental match) and `model_copy` runs on the real frozen model.
+    step = WorkflowStep(
+        step_id=StepID("step-edit"),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload={"messages": [], "_original": True},
+    )
+    ctx = _make_step_context(placements=(placement,))
+
+    result = await composer.dispatch(cast(Any, object()), step, step_context=ctx)
+
+    # Full-chain witness: the inner dispatcher (step 5) was reached with the
+    # DECODED Mapping as the new step_payload (authoritative replacement).
+    assert result == {"inner_dispatched": True}
+    assert len(inner.calls) == 1
+    delivered_step = inner.calls[0][1]
+    assert delivered_step.step_payload == replacement_payload
+    assert "_original" not in delivered_step.step_payload  # replace-not-merge
+
+    # NOTE 6-ii: edited_proposal_hash is over the POST-mutation payload (the
+    # decoded Mapping), NOT the raw operator `str`.
+    _, od_entry = audit.appends[0]
+    audit_hash = od_entry.payload.audit_namespace_attrs["audit.cp.edited_proposal_hash"]
+    assert audit_hash == _post_mutation_payload_hash(replacement_payload)
+    assert audit_hash != hashlib.sha256(edited_str.encode("utf-8")).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_edit_invalid_json_raises_decode_error_no_silent_dispatch(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """AC #10 EDIT (B-EDIT-CARRIER) NEGATIVE CONTROL: a non-JSON-object `str`
+    proposal cannot replace the `Mapping[str, Any]` step_payload → typed
+    `HITLGateEditDecodeError` (driver maps to RT-FAIL-HITL-GATE-EDIT-DECODE).
 
     Contrasting baseline: the prior silent-drop (`pass`-then-dispatch with the
-    step unchanged, which dropped the operator's edit in violation of NOTE 6-ii
-    "consumers MUST treat edited_proposal as authoritative replacement") is GONE
-    — the inner dispatcher is NOT reached. The operator's edit is still
-    faithfully recorded at step 4h BEFORE the raise (edited_proposal_hash over
-    the operator `str`), symmetric to the REJECT path's rejection-audit
-    preservation.
+    step unchanged, which dropped the operator's edit in violation of NOTE 6-ii)
+    is GONE — the inner dispatcher is NOT reached. The operator's attempt is
+    still faithfully recorded at step 4h BEFORE the raise (edited_proposal_hash
+    over the raw operator `str`), symmetric to the REJECT path's rejection-audit
+    preservation. (`"REPLACEMENT_PAYLOAD"` is not valid JSON — it is the exact
+    input the interim U-RT-120 raise rejected; now it routes through the typed
+    decode-failure path.)
     """
-    from harness_runtime.lifecycle.hitl_gate_composer import (
-        HITLGateEditCarrierDriftError,
-    )
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLGateEditDecodeError
 
     provider, _ = tracer_provider
     inner = _MockInnerDispatcher()
@@ -1017,20 +1097,74 @@ async def test_edit_str_carrier_drift_raises_no_silent_dispatch(
         procedural_tier_snapshot_resolver=lambda: _Identifier("b" * 64),
     )
     placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
-    step = _make_step(placements=(placement,))
-    ctx = _make_step_context()
+    step = _make_plain_step()
+    ctx = _make_step_context(placements=(placement,))
 
-    with pytest.raises(HITLGateEditCarrierDriftError, match="carrier drift"):
+    with pytest.raises(HITLGateEditDecodeError, match="not valid JSON"):
         await composer.dispatch(cast(Any, object()), step, step_context=ctx)
 
-    # Contrasting baseline: the prior silent-drop (pass → dispatch unchanged
-    # step) is GONE — the inner dispatcher is NOT reached.
+    # The prior silent-drop (pass → dispatch unchanged step) is GONE — the inner
+    # dispatcher is NOT reached.
     assert inner.calls == []
-    # The operator's edit is still faithfully recorded at step 4h BEFORE the
-    # raise (edited_proposal_hash over the operator `str`) — symmetric to the
-    # REJECT path's rejection-audit preservation.
+    # The operator's attempt is still faithfully recorded at step 4h BEFORE the
+    # raise — symmetric to the REJECT path's rejection-audit preservation.
     _, od_entry = audit.appends[0]
     assert "audit.cp.edited_proposal_hash" in od_entry.payload.audit_namespace_attrs
+
+
+@pytest.mark.parametrize(
+    "bad_proposal",
+    [
+        "42",  # valid JSON, but a scalar — not a JSON object (Mapping guard)
+        "[1, 2, 3]",  # valid JSON array — not a JSON object
+        "null",  # JSON null → Python None — not a Mapping
+        '"a bare string"',  # JSON string — not a Mapping
+        None,  # EDIT response with no proposal at all
+    ],
+)
+def test_decode_edit_proposal_rejects_non_object(bad_proposal: str | None) -> None:
+    """B-EDIT-CARRIER: `_decode_edit_proposal` rejects every non-object proposal
+    (the Mapping-guard + None branches the invalid-JSON negative control does not
+    exercise) with the typed `HITLGateEditDecodeError` (→ RT-FAIL-HITL-GATE-EDIT-DECODE).
+    """
+    from harness_runtime.lifecycle.hitl_gate_composer import (
+        HITLGateEditDecodeError,
+        _decode_edit_proposal,
+    )
+
+    with pytest.raises(HITLGateEditDecodeError):
+        _decode_edit_proposal(bad_proposal)
+
+
+def test_decode_edit_proposal_accepts_json_object() -> None:
+    """The positive branch: a JSON object decodes to the equal Mapping."""
+    from harness_runtime.lifecycle.hitl_gate_composer import _decode_edit_proposal
+
+    assert _decode_edit_proposal('{"messages": [], "k": 1}') == {"messages": [], "k": 1}
+
+
+@pytest.mark.parametrize(
+    "nonfinite",
+    [
+        "NaN",  # bare non-finite scalar
+        "-Infinity",
+        '{"params": {"temperature": NaN}}',  # object carrying a non-finite (Codex [P3])
+        '{"x": Infinity}',
+    ],
+)
+def test_decode_edit_proposal_rejects_nonfinite_constants(nonfinite: str) -> None:
+    """B-EDIT-CARRIER (Codex [P3]): strict RFC-8259 — `NaN`/`Infinity`/`-Infinity`
+    (which Python's default `json.loads` accepts) are rejected, even inside an
+    otherwise-valid JSON object, so they never reach the canonical-JSON hash or
+    provider serialization.
+    """
+    from harness_runtime.lifecycle.hitl_gate_composer import (
+        HITLGateEditDecodeError,
+        _decode_edit_proposal,
+    )
+
+    with pytest.raises(HITLGateEditDecodeError):
+        _decode_edit_proposal(nonfinite)
 
 
 @pytest.mark.asyncio
