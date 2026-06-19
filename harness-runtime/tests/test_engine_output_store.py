@@ -98,5 +98,17 @@ def test_corrupt_line_skipped_committed_records_survive(tmp_path: Path) -> None:
     assert 1 not in outputs
 
 
+def test_journal_exists_discriminates_absent_from_recorded(tmp_path: Path) -> None:
+    """`journal_exists` is the rehydrate discriminator: False before any record (a
+    config flip → degrade), True after (a recorded run; if read then yields nothing
+    → unreadable → fail-closed)."""
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    assert store.journal_exists(_RUN_KEY) is False
+    store.record(_RUN_KEY, 0, "step-0", {"v": 0})
+    assert store.journal_exists(_RUN_KEY) is True
+    # A FRESH store over the same dir (a restart) also sees the existing journal.
+    assert EngineOutputStore(journal_dir=tmp_path / "eo").journal_exists(_RUN_KEY) is True
+
+
 def test_engine_output_dir_for_co_locates_under_state_ledger(tmp_path: Path) -> None:
     assert engine_output_dir_for(tmp_path) == tmp_path / "engine-output"

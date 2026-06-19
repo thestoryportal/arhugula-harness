@@ -1079,20 +1079,34 @@ def test_event_sourced_replay_observable_lifecycle_events_emit() -> None:
 
 
 class _FakeOutputStore:
-    """Duck-typed `EngineOutputStore.read_outputs` for CP-level rehydrate tests."""
+    """Duck-typed `EngineOutputStore` for CP-level rehydrate tests. `journal_present`
+    models whether a journal FILE exists (the discriminator the rehydrate uses when
+    `read_outputs` is empty: absent → config-flip degrade; present → unreadable
+    fail-close)."""
 
-    def __init__(self, outputs: dict[int, tuple[str, dict[str, Any]]]) -> None:
+    def __init__(
+        self,
+        outputs: dict[int, tuple[str, dict[str, Any]]],
+        *,
+        journal_present: bool = True,
+    ) -> None:
         self._outputs = outputs
+        self._journal_present = journal_present
 
     def read_outputs(self, run_key: str) -> dict[int, tuple[str, dict[str, Any]]]:
         _ = run_key
         return dict(self._outputs)
+
+    def journal_exists(self, run_key: str) -> bool:
+        _ = run_key
+        return self._journal_present
 
     def record(self, run_key: str, step_index: int, step_id: str, output: Any) -> None:
         # The producer fires on each re-dispatched step; accept it (the witness reads
         # the rehydrated prefix, not the post-run store).
         _ = run_key
         self._outputs[step_index] = (step_id, dict(output))
+        self._journal_present = True
 
 
 class _FakeOutputChannel:
@@ -1233,6 +1247,54 @@ def test_event_sourced_replay_stored_identity_mismatch_fails_closed() -> None:
     assert result.status is RunStatus.FAILED
     assert result.fail_class is not None
     assert "engine-output-replay-identity-mismatch" in result.fail_class
+
+
+def test_event_sourced_replay_no_journal_degrades_not_fails() -> None:
+    """DEGRADE-ON-ABSENT (advisor [P2]) — a resume where the output store is bound but
+    has NO journal file (a config flip: the original run had `engine_output_replay=
+    False`, so nothing was recorded) DEGRADES to the empty-channel path (the resumed
+    step reads None upstream) rather than fail-closing a previously-working resume.
+    NOT corruption — distinct from the partial-prefix skew (fail-closed) below."""
+    ctx = _esr_resume_ctx(2)
+    channel = _FakeOutputChannel()
+    ctx.inter_step_output_channel = channel
+    # Store bound, but EMPTY and NO journal file (config flip / fresh).
+    ctx.engine_output_store = _FakeOutputStore({}, journal_present=False)
+    dispatcher = _ChannelReadingDispatcher(channel)
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+    )
+    # NOT FAILED — the resume completes degraded; the re-dispatched step sees None.
+    assert result.status is not RunStatus.FAILED
+    assert dispatcher.seen_upstream == [None]
+
+
+def test_event_sourced_replay_unreadable_store_fails_closed() -> None:
+    """FAIL-CLOSED on unreadable store (Codex [P2]) — a journal FILE exists but yields
+    no readable records (an unreadable / corrupt store; `read_outputs` returns empty
+    on a read error) → fail closed rather than silently dropping cached outputs and
+    resuming with wrong upstream context. Distinguished from the config-flip degrade
+    above by FILE EXISTENCE."""
+    ctx = _esr_resume_ctx(2)
+    ctx.inter_step_output_channel = _FakeOutputChannel()
+    # A journal file EXISTS but read yields nothing (unreadable / corrupt).
+    ctx.engine_output_store = _FakeOutputStore({}, journal_present=True)
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert "engine-output-replay-unreadable-store" in result.fail_class
 
 
 # ---------------------------------------------------------------------------

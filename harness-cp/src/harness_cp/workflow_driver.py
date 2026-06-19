@@ -686,6 +686,38 @@ def _rehydrate_inter_step_channel_on_replay(
     if _store is None or _channel is None or resume_at <= 0:
         return None
     stored = _store.read_outputs(run_idempotency_key)
+    if not stored:
+        # `read_outputs` returns empty for BOTH "no journal file" AND "file present
+        # but unreadable / undecodable" — these are NOT the same (decorrelated review:
+        # advisor caught the config-flip false-failure; Codex caught that a read
+        # failure must not be silently degraded). Discriminate on FILE EXISTENCE:
+        if getattr(_store, "journal_exists", None) is not None and _store.journal_exists(
+            run_idempotency_key
+        ):
+            # A journal EXISTS but yields no readable records → unreadable / corrupt
+            # store → FAIL CLOSED (never silently drop cached outputs → wrong upstream).
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=0,
+                partial_state=None,
+                final_state=None,
+                fail_class=(
+                    f"engine-output-replay-unreadable-store: a journal exists for the "
+                    f"run but yields no readable records (resume_at={resume_at}) — "
+                    f"unreadable / corrupt output store"
+                ),
+            )
+        # No journal file at all → a config flip (the original run had
+        # `engine_output_replay=False`, so nothing was recorded) or a fresh store →
+        # NOT corruption: degrade to the documented empty-channel path (the resumed
+        # step reads None upstream) rather than fail-closing a previously-working
+        # resume (advisor pre-merge catch). RESERVE-before-COMMIT makes the partial
+        # case below EXACT: a committed step's store-write is fsync'd BEFORE its
+        # ledger-append, so "store has SOME records but is missing a committed prefix
+        # step" IS genuine store↔ledger skew → fail-closed.
+        return None
     for i in range(resume_at):
         if i not in stored:
             return RunResult(
@@ -2463,10 +2495,14 @@ def _execute_workflow_body(
         # ledger's materialized prefix). Opt-in; no-op when unbound. The store-write
         # precedes the ledger materialization `resume_at` counts, so an
         # EVENT_SOURCED_REPLAY resume never finds a materialized step with a missing
-        # stored output (the rehydration fail-closes on that, were it possible).
-        _record_durable_step_output(
-            ctx, run_idempotency_key, step_index, str(step.step_id), step_output
-        )
+        # stored output. GATED on EVENT_SOURCED_REPLAY (the only engine class whose
+        # resume rehydrates the store) so a SAVE_POINT_CHECKPOINT / non-replay run with
+        # the flag on does not write a never-rehydrated journal (advisor pre-merge
+        # catch); WAL_SEGMENT, which shares the store, extends this gate at its arc.
+        if manifest_entry.engine_class is EngineClass.EVENT_SOURCED_REPLAY:
+            _record_durable_step_output(
+                ctx, run_idempotency_key, step_index, str(step.step_id), step_output
+            )
 
         # § 25.3.3.7 — State-ledger append via U-IS-11 composition.
         # Reuse pre-dispatch step_idempotency_key composed at the

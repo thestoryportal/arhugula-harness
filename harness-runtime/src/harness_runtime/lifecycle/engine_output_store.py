@@ -143,6 +143,18 @@ class EngineOutputStore:
                 outputs[step_index] = (step_id, output)
         return outputs
 
+    def journal_exists(self, run_key: str) -> bool:
+        """Whether a journal FILE exists for the run (regardless of readability).
+
+        The resume rehydration uses this to discriminate, when `read_outputs`
+        returns empty, between "no journal at all" (a config flip — the original run
+        had `engine_output_replay=False`, so nothing was ever recorded → degrade to
+        the empty-channel path) and "a journal exists but yields no readable records"
+        (an unreadable / corrupt store → fail closed, never silently drop cached
+        outputs). Per-decorrelated-review: advisor caught the config-flip degrade,
+        Codex caught that a read-failure must NOT be collapsed into it."""
+        return self._journal_file(run_key).exists()
+
     # -- durable journal I/O (mirrors JournalWorkflowPauseStore) --------------
 
     def _journal_file(self, run_key: str) -> Path:
