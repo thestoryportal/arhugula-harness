@@ -300,7 +300,7 @@ live status:
   choice; listed here for completeness, **not** a separate post-frozen arc (excluded from the
   closed/remaining tallies so it isn't double-counted).
 
-Headline (HEAD): **11 closed · 3 remaining · 1 gated** (the build-ready standalone arcs) **+ 2
+Headline (HEAD): **12 closed · 2 remaining · 1 gated** (the build-ready standalone arcs) **+ 2
 resolved** (`B-PER-TOOL-SANDBOX-TIER` built inside the frozen order as B6 Slice 2;
 `B-PER-DISPATCH-DRIVER-PRECISION` foreclosed N/A by the B6 Option-A choice) **+ 4 newly-registered
 forward arcs** (the non-`ORCHESTRATOR_WORKERS` fan-out/handoff pause-resume strategies, from
@@ -315,7 +315,7 @@ B-FANOUT-PAUSE: `B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER` / `-PARALLELIZATION` / `B-H
 | B-COST-DISCRIMINATOR-TAXONOMY | closed · #644 | OD + runtime | Break down run cost **by dispatch kind** (llm / tool / validator / webhook). |
 | B-INTERSTEP | closed · #651 | runtime | Pass **data** from one workflow step to the next (today steps share control-flow only, not each other's outputs) — opt-in inter-step output channel; EVALUATOR_OPTIMIZER evaluate now sees the generate draft. |
 | B-FANOUT-PAUSE | closed · 2026-06-19 | CP + runtime | **Resume a paused parallel fan-out** from where it stopped (built for `ORCHESTRATOR_WORKERS`: a worker failure under `cascade_policy=pause` now returns genuine resumable PAUSED carrying a `FanOutResumeState`-bearing snapshot — recovered orchestrator + completed-branch outputs + the terminal set; `api.resume` skips terminal branches and re-dispatches the rest, obl. 7; CP spec v1.42 C-CP-26 §26.2). The four other non-linear strategies are registered forward arcs `B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER` / `-PARALLELIZATION` / `B-HANDOFF-PAUSE` / `B-HIERARCHICAL-PAUSE`. |
-| B-ENGINE-OUTPUT-REPLAY | remaining | CP + runtime/IS | **Replay cached step outputs** from event history (today a resume skips finished steps but can't reproduce their outputs). |
+| B-ENGINE-OUTPUT-REPLAY | closed · 2026-06-19 | CP + runtime | **Replay cached step outputs** from event history (built for LINEAR EVENT_SOURCED_REPLAY: a durable per-run `EngineOutputStore` records each step output before the ledger-append (RESERVE-before-COMMIT); on resume the driver rehydrates the inter-step channel from the stored prefix so the first re-dispatched step reads its recovered predecessor — proven end-to-end through the real LLM dispatcher → real provider; runtime spec v1.63 C-RT-32). WAL_SEGMENT + non-linear are registered forward arcs. |
 | B-EFFECT-FENCE | closed · #655 | runtime | Guarantee a side-effecting step **runs at most once** across retries/resumes — a durable crash-atomic fence at the tool sink (opt-in `effect_fencing`); a crash-then-resume re-run of an effected-but-uncommitted step (or an in-process retry) fail-closes instead of re-firing. Single-host; the §22.1 HITL pause + per-tool classification + durable-auto are spine-registered follow-ons. |
 | B-EDIT-CARRIER | closed · #659 | runtime | Let a human **EDIT** a pending action: the operator's flat-`str` proposal is JSON-decoded to the Mapping step_payload and replaces it verbatim (replace-not-merge); a non-object proposal raises the new `RT-FAIL-HITL-GATE-EDIT-DECODE` (built: runtime v1.62 §14.8.2 step 4i + NOTE 6-ii; interim `HITLGateEditCarrierDriftError` retired; `edited_proposal_hash` now post-mutation). |
 | B-LAYER-BUDGET-OVERRIDE | remaining | CP | Enforce **per-layer time budgets** honoring per-workload/persona overrides. |
