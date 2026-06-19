@@ -76,6 +76,8 @@ from harness_cp.pause_resume_protocol import (
     ResumeOutcomeKind,
 )
 from harness_cp.pause_resume_protocol_types import (
+    FanOutBranchResumeState,
+    FanOutResumeState,
     MaterialDiffPolicy,
     PauseSnapshot,
     WorkflowPauseReason,
@@ -1393,6 +1395,13 @@ def execute_workflow(
             span=span,
             run_idempotency_key=run_idempotency_key,
             resume_at_step_index_override=resume_at_step_index,
+            # B-FANOUT-PAUSE — the validated snapshot threads to the non-linear
+            # strategy so a `cascade_policy=pause` fan-out resume can skip terminal
+            # branches + recover their outputs (`fan_out_resume`). Linear resume
+            # ignores it (it uses resume_at_step_index_override); a non-resume run
+            # passes None. Gated on `resume_at_step_index is not None` so only a
+            # `attempt_resume`-validated snapshot reaches the strategy.
+            resume_snapshot=(pause_snapshot_input if resume_at_step_index is not None else None),
         )
 
         # C-OD-25 §25.1 close-time attributes (4 of 12). Outcome enum serializes
@@ -1426,6 +1435,7 @@ def _execute_workflow_body(
     span: Any,
     run_idempotency_key: str,
     resume_at_step_index_override: int | None = None,
+    resume_snapshot: PauseSnapshot | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the workflow body within the workflow.envelope OTel span.
 
@@ -1503,6 +1513,14 @@ def _execute_workflow_body(
             default_model_binding=default_model_binding,
             step_dispatchers=step_dispatchers,
             run_idempotency_key=run_idempotency_key,
+            # B-FANOUT-PAUSE — fan-out resume re-entry (only ORCHESTRATOR_WORKERS
+            # materialized this arc; the other non-linear strategies' fan-out/
+            # handoff pause-resume are registered forward arcs). `pause_resumable`
+            # gates the PAUSED return to this top-level strategy — HIERARCHICAL,
+            # which reuses `_execute_orchestrator_workers`, calls it False so its
+            # (not-yet-wired) resume cannot advertise a false-resumable PAUSED.
+            resume_snapshot=resume_snapshot,
+            pause_resumable=True,
         )
     if strategy is _DriverStrategyStatus.HIERARCHICAL_DELEGATION:
         return _execute_hierarchical_delegation(
@@ -3859,6 +3877,8 @@ def _execute_orchestrator_workers(
     default_model_binding: ModelBinding,
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
+    resume_snapshot: PauseSnapshot | None = None,
+    pause_resumable: bool = False,
 ) -> tuple[RunResult, int]:
     """Execute the `ORCHESTRATOR_WORKERS` orchestrator-dispatch-collect strategy (U-CP-88).
 
@@ -3871,8 +3891,35 @@ def _execute_orchestrator_workers(
     `(RunResult, steps_executed)` for the `_execute_workflow_body` caller
     (matching the linear path's tuple). See the module block above for the full
     §25.11/§25.14/§25.15 obligation discharge.
+
+    **B-FANOUT-PAUSE (R-FS-1) — resumable `cascade_policy=pause` fan-out.** When
+    `resume_snapshot` carries a `fan_out_resume` (an `api.resume` of a prior
+    `pause` halt), this re-enters in RESUME mode: the orchestrator is NOT
+    re-dispatched (its output is recovered from the snapshot — it ran originally,
+    effect may have landed), terminal worker branches are SKIPPED (§25.15.2
+    obligation 7 — their outputs recovered into the aggregate), and only the
+    not-yet-dispatched (left-re-dispatchable) workers fan out again under the
+    same `cascade_policy`. A worker failing AGAIN under `pause` re-pauses with a
+    fresh snapshot whose `branches` union the recovered + newly-terminal set.
+
+    `pause_resumable` (default False) gates the resumable `pause → PAUSED` return
+    to the TOP-LEVEL `ORCHESTRATOR_WORKERS` strategy ONLY. `HIERARCHICAL_DELEGATION`
+    REUSES this helper at each recursion level but its resume is NOT wired (the
+    `_execute_workflow_body` HIERARCHICAL dispatch threads no `resume_snapshot`),
+    so it calls with `pause_resumable=False` → a `pause` worker failure fails
+    HONESTLY (`...-not-yet-materialized`), never a false-resumable PAUSED the
+    `B-HIERARCHICAL-PAUSE` forward arc has not yet materialized.
     """
     workflow_id = manifest_entry.workflow_id
+
+    # B-FANOUT-PAUSE — resume reconstruction state (None on a normal first run).
+    _fan_out_resume = resume_snapshot.fan_out_resume if resume_snapshot is not None else None
+    _is_resume = _fan_out_resume is not None
+    # branch_index -> recovered terminal disposition (carried forward across
+    # repeated resumes so a re-pause snapshot unions prior + this-round terminals).
+    _recovered_terminal: dict[int, FanOutBranchResumeState] = (
+        {b.branch_index: b for b in _fan_out_resume.branches} if _fan_out_resume is not None else {}
+    )
 
     # Empty step sequence → trivially SUCCESS (mirrors the linear empty-loop +
     # the PARALLELIZATION / EVALUATOR_OPTIMIZER empty-steps SUCCESS).
@@ -3889,6 +3936,60 @@ def _execute_orchestrator_workers(
 
     orchestrator_step = steps[0]
     worker_steps = list(steps[1:])
+
+    # B-FANOUT-PAUSE — material-diff guard on resume: the re-supplied workflow's
+    # worker count MUST match the count captured at pause, else the recovered
+    # branch ordinals no longer map to these steps (a changed body) → fail closed
+    # rather than re-dispatch a mismatched set.
+    if _fan_out_resume is not None:
+
+        def _resume_body_mismatch() -> str | None:
+            # orchestrator identity (its output is recovered + dispatch skipped —
+            # Codex [P2]: a renamed/reordered steps[0] would apply stale output) ...
+            if str(orchestrator_step.step_id) != _fan_out_resume.orchestrator_step_id:
+                return (
+                    f"orchestrator-identity-mismatch: snapshot step_id="
+                    f"{_fan_out_resume.orchestrator_step_id!r}, resume step_id="
+                    f"{str(orchestrator_step.step_id)!r}"
+                )
+            # worker_count (the gross shape) ...
+            if len(worker_steps) != _fan_out_resume.worker_count:
+                return (
+                    f"worker-count-mismatch: snapshot captured "
+                    f"{_fan_out_resume.worker_count} workers, resume supplied "
+                    f"{len(worker_steps)}"
+                )
+            # ... then per-recovered-branch BOUNDS + IDENTITY + no-duplicates
+            # (Codex [P1]: a same-count reorder / rename would otherwise attribute
+            # a recovered output to the wrong step → silent stale output). Full
+            # anchor-reachability is the deferred U-CP-22 arc; this is the cheap
+            # positional-identity guard, fail-closed on any drift.
+            seen: set[int] = set()
+            for b in _fan_out_resume.branches:
+                if not (0 <= b.branch_index < len(worker_steps)):
+                    return f"branch-index-out-of-range: {b.branch_index} ∉ [0, {len(worker_steps)})"
+                if b.branch_index in seen:
+                    return f"duplicate-branch-index: {b.branch_index}"
+                seen.add(b.branch_index)
+                if str(worker_steps[b.branch_index].step_id) != b.step_id:
+                    return (
+                        f"branch-identity-mismatch at {b.branch_index}: snapshot "
+                        f"step_id={b.step_id!r}, resume step_id="
+                        f"{str(worker_steps[b.branch_index].step_id)!r}"
+                    )
+            return None
+
+        _mismatch = _resume_body_mismatch()
+        if _mismatch is not None:
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=None,
+                partial_state=None,
+                final_state=None,
+                fail_class=f"orchestrator-workers-resume-{_mismatch}",
+            ), 0
 
     # The on-worker-failure cascade reaction (§25.15.1) — resolved from the
     # manifest's (workload_class, engine_class, persona_tier) via the §11.4 D4
@@ -3913,8 +4014,12 @@ def _execute_orchestrator_workers(
     fanout_timestamp = datetime.now(UTC)
 
     # § 25.3.2 — Emit workflow.start (single-threaded on the driver thread, BEFORE
-    # any dispatch).
-    ctx.lifecycle_emitter.emit(WorkflowEventClass.WORKFLOW_START)
+    # any dispatch). B-FANOUT-PAUSE: a fan-out RESUME emits RESUMPTION instead
+    # (mirrors the linear resume-path RESUMPTION emit) — the orchestrator + the
+    # terminal workers already ran in the original envelope.
+    ctx.lifecycle_emitter.emit(
+        WorkflowEventClass.RESUMPTION if _is_resume else WorkflowEventClass.WORKFLOW_START
+    )
 
     # --- 1) the orchestrator step (sequential; its action_id parents the fan-out) ---
     # `workflow:{wf}:step:0` is the orchestrator's action_id AND the fan-out
@@ -3923,7 +4028,9 @@ def _execute_orchestrator_workers(
     # is the parent, not itself a branch).
     orchestrator_action_id = f"workflow:{workflow_id}:step:0"
     orchestrator_idempotency_key = _compute_step_idempotency_key(run_idempotency_key, 0)
-    orchestrator_writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=0)
+    # B-FANOUT-PAUSE — None on resume (the orchestrator already ran; no writer /
+    # no re-appended entry). The real writer is created in the first-run branch.
+    orchestrator_writer: BufferingLedgerWriter | None = None
     orchestrator_context = StepExecutionContext(
         workflow_id=workflow_id,
         parent_action_id=orchestrator_action_id,
@@ -3944,54 +4051,66 @@ def _execute_orchestrator_workers(
         # to the fan-out children (CP spec v1.38 §6.1).
         agent_role=_per_step_role_override(manifest_entry, orchestrator_step.step_id),
     )
-    # Resolve the binding (pure) + buffer the orchestrator step's own per-step
-    # override entry BEFORE dispatch — uniform with the parallelization / worker /
-    # evaluator-optimizer sites + the linear path (the override is a
-    # resolution-time binding fact, recorded before dispatch, gated on
-    # binding.override_applied). B-NONLINEAR-OVERRIDE-PROVENANCE.
-    orchestrator_binding = resolve_step_binding(
-        manifest_entry,
-        str(orchestrator_step.step_id),
-        default_model_binding=default_model_binding,
-        persona_tier=manifest_entry.persona_tier,
-    )
-    _buffer_branch_override_if_applied(
-        branch_writer=orchestrator_writer,
-        workflow_id=workflow_id,
-        step=orchestrator_step,
-        binding=orchestrator_binding,
-        timestamp=fanout_timestamp,
-        snapshot_ref=snapshot_ref,
-    )
-    try:
-        orchestrator_output: Mapping[str, Any] = step_dispatchers.lookup(
-            orchestrator_step.step_kind
-        ).dispatch(orchestrator_binding, orchestrator_step, step_context=orchestrator_context)
-    except Exception as exc:
-        # The orchestrator failed before any worker fan-out → FAILED. Drain the
-        # orchestrator_writer so a buffered per-step override entry persists (the
-        # override WAS applied; recorded on a failed dispatch, as the linear path
-        # does) — its `_writer_ran_a_step` is False (override-only, no step entry),
-        # so no spurious STEP_BOUNDARY + step_count stays 0. cascade_policy governs
-        # WORKER failure, not the orchestrator's own dispatch.
-        drain_branch_buffers(ctx.ledger_writer, [orchestrator_writer])
-        return RunResult(
+    if _is_resume:
+        # B-FANOUT-PAUSE — the orchestrator already ran in the ORIGINAL envelope
+        # (effect may have landed); recover its output, do NOT re-dispatch and do
+        # NOT re-append its ledger entry (this fresh-bootstrap resume ledger is a
+        # continuation — the linear position-only resume model, R-CC-1 design §1.1,
+        # now extended to carry the fan-out's already-run outputs in the snapshot).
+        assert _fan_out_resume is not None  # guarded by `_is_resume`
+        orchestrator_output: Mapping[str, Any] = dict(_fan_out_resume.orchestrator_output)
+    else:
+        orchestrator_writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=0)
+        # Resolve the binding (pure) + buffer the orchestrator step's own per-step
+        # override entry BEFORE dispatch — uniform with the parallelization / worker /
+        # evaluator-optimizer sites + the linear path (the override is a
+        # resolution-time binding fact, recorded before dispatch, gated on
+        # binding.override_applied). B-NONLINEAR-OVERRIDE-PROVENANCE.
+        orchestrator_binding = resolve_step_binding(
+            manifest_entry,
+            str(orchestrator_step.step_id),
+            default_model_binding=default_model_binding,
+            persona_tier=manifest_entry.persona_tier,
+        )
+        _buffer_branch_override_if_applied(
+            branch_writer=orchestrator_writer,
             workflow_id=workflow_id,
-            run_id=run_id,
-            status=RunStatus.FAILED,
-            terminal_step_index=None,
-            partial_state=None,
-            final_state=None,
-            fail_class=f"orchestrator-workers-orchestrator-failure: {type(exc).__name__}: {exc}",
-        ), 0
-    _append_buffered_sequential_entry(
-        writer=orchestrator_writer,
-        workflow_id=workflow_id,
-        entry_index=0,
-        idempotency_key=orchestrator_idempotency_key,
-        timestamp=fanout_timestamp,
-        procedural_tier_snapshot_ref=snapshot_ref,
-    )
+            step=orchestrator_step,
+            binding=orchestrator_binding,
+            timestamp=fanout_timestamp,
+            snapshot_ref=snapshot_ref,
+        )
+        try:
+            orchestrator_output = step_dispatchers.lookup(orchestrator_step.step_kind).dispatch(
+                orchestrator_binding, orchestrator_step, step_context=orchestrator_context
+            )
+        except Exception as exc:
+            # The orchestrator failed before any worker fan-out → FAILED. Drain the
+            # orchestrator_writer so a buffered per-step override entry persists (the
+            # override WAS applied; recorded on a failed dispatch, as the linear path
+            # does) — its `_writer_ran_a_step` is False (override-only, no step entry),
+            # so no spurious STEP_BOUNDARY + step_count stays 0. cascade_policy governs
+            # WORKER failure, not the orchestrator's own dispatch.
+            drain_branch_buffers(ctx.ledger_writer, [orchestrator_writer])
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=None,
+                partial_state=None,
+                final_state=None,
+                fail_class=(
+                    f"orchestrator-workers-orchestrator-failure: {type(exc).__name__}: {exc}"
+                ),
+            ), 0
+        _append_buffered_sequential_entry(
+            writer=orchestrator_writer,
+            workflow_id=workflow_id,
+            entry_index=0,
+            idempotency_key=orchestrator_idempotency_key,
+            timestamp=fanout_timestamp,
+            procedural_tier_snapshot_ref=snapshot_ref,
+        )
 
     # --- 2) the worker fan-out plan (per-role child contexts under the orchestrator) ---
     fanout_parent = orchestrator_context.model_copy(
@@ -4001,6 +4120,14 @@ def _execute_orchestrator_workers(
         tuple[int, WorkflowStep, StepExecutionContext, BufferingLedgerWriter, StepEffectiveBinding]
     ] = []
     for branch_index, step in enumerate(worker_steps):
+        # B-FANOUT-PAUSE — on resume, a branch that reached a terminal disposition
+        # before the prior `pause` halt is SKIPPED (§25.15.2 obligation 7: a
+        # `completed`/`timed_out`/`cancelled` branch MUST NOT be re-dispatched —
+        # its effect may have landed). Its recovered output is folded into the
+        # aggregate below. Only the not-yet-dispatched (left-re-dispatchable)
+        # workers fan out again.
+        if branch_index in _recovered_terminal:
+            continue
         # Resolve the per-step binding FIRST so a per-step ROLE override (CP spec
         # v1.38 §6.1, B4 Slice 4) can take precedence over the fan-out-derived
         # role when composing the child context (precedence per-step > derived).
@@ -4061,6 +4188,22 @@ def _execute_orchestrator_workers(
     # returns; read on the driver thread AFTER the barrier (single-threaded) for
     # the deterministic fold.
     collected: dict[int, tuple[str, Mapping[str, Any]]] = {}
+    # B-FANOUT-PAUSE — branch_index -> terminal disposition ("completed" / "timed_out")
+    # for every branch that reached a terminal boundary. Written from the same
+    # post-await loop-thread sites as `collected` (single-threaded → safe). Read
+    # AFTER the barrier to build a `pause` snapshot's `FanOutResumeState.branches`.
+    terminal_dispositions: dict[int, str] = {}
+
+    # B-FANOUT-PAUSE — seed the recovered terminal branches (from the resume
+    # snapshot) into `collected` + `terminal_dispositions` so (a) their outputs
+    # fold into the resumed aggregate and (b) a RE-pause snapshot unions the
+    # already-terminal set with this round's newly-terminal branches. `step_id`
+    # is re-derived from the re-supplied `worker_steps` (it was not carried in the
+    # snapshot — the workflow object carries the steps).
+    for _bi, _branch in _recovered_terminal.items():
+        terminal_dispositions[_bi] = _branch.terminal_status
+        if _branch.output is not None:
+            collected[_bi] = (str(worker_steps[_bi].step_id), _branch.output)
 
     def _record_clean(
         branch_index: int,
@@ -4089,40 +4232,66 @@ def _execute_orchestrator_workers(
             procedural_tier_snapshot_ref=snapshot_ref,
         )
         collected[branch_index] = (str(step.step_id), output)
+        terminal_dispositions[branch_index] = "completed"  # B-FANOUT-PAUSE
 
-    # Orchestrator-only (no workers) → SUCCESS with an empty worker set.
-    if not worker_steps:
-        drain_branch_buffers(ctx.ledger_writer, [orchestrator_writer])
-        ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
+    # No worker fan-out to run → SUCCESS with the recovered/empty worker set.
+    # Non-resume: orchestrator-only (no workers) — `not branch_plan` ⟺ `not
+    # worker_steps` (one plan entry per worker, no skips). Resume: every worker
+    # already reached a terminal disposition before the pause (nothing left to
+    # re-dispatch) → the recovered outputs ARE the aggregate. B-FANOUT-PAUSE.
+    if not branch_plan:
+        _orch_writers = [orchestrator_writer] if orchestrator_writer is not None else []
+        drain_branch_buffers(ctx.ledger_writer, _orch_writers)
+        if orchestrator_writer is not None:
+            ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
+        _aggregate = _aggregate_orchestrator_workers(orchestrator_output, collected)
+        # B-FANOUT-PAUSE (advisor [P1]) — a resume where EVERY worker was already
+        # terminal: if a recovered branch FAILED (terminal but no collected output)
+        # the run is degraded → PARTIAL, not a bare silent SUCCESS dropping the
+        # failure. Non-resume orchestrator-only → empty terminal set → SUCCESS.
+        _degraded = any(_bi not in collected for _bi in terminal_dispositions)
         return RunResult(
             workflow_id=workflow_id,
             run_id=run_id,
-            status=RunStatus.SUCCESS,
+            status=RunStatus.PARTIAL if _degraded else RunStatus.SUCCESS,
             terminal_step_index=None,
-            partial_state=None,
-            final_state=_aggregate_orchestrator_workers(orchestrator_output, {}),
+            partial_state=_aggregate if _degraded else None,
+            final_state=None if _degraded else _aggregate,
             fail_class=None,
-        ), 1
+        ), (1 if orchestrator_writer is not None else 0)
 
     def _finish(
-        status: RunStatus, *, fail_class: str | None, salvage: bool
+        status: RunStatus,
+        *,
+        fail_class: str | None,
+        salvage: bool,
+        pause_snapshot: PauseSnapshot | None = None,
     ) -> tuple[RunResult, int]:
         # Drain the orchestrator entry FIRST (the fan-out parent persists before
         # its workers), then the worker buffers (branch-index order), emitting one
         # STEP_BOUNDARY per persisted-step writer. steps_executed = orchestrator +
-        # workers that ran a step.
-        drain_branch_buffers(ctx.ledger_writer, [orchestrator_writer])
-        ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
-        steps_executed = 1 + _drain_and_emit_step_boundaries(ctx, branch_writers)
+        # workers that ran a step. B-FANOUT-PAUSE: on resume `orchestrator_writer`
+        # is None (the orchestrator ran in the original envelope, not re-appended)
+        # → no orchestrator drain / STEP_BOUNDARY, steps_executed excludes it.
+        _orch_writers = [orchestrator_writer] if orchestrator_writer is not None else []
+        drain_branch_buffers(ctx.ledger_writer, _orch_writers)
+        if orchestrator_writer is not None:
+            ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
+        steps_executed = (1 if orchestrator_writer is not None else 0) + (
+            _drain_and_emit_step_boundaries(ctx, branch_writers)
+        )
         aggregate = _aggregate_orchestrator_workers(orchestrator_output, collected)
         return RunResult(
             workflow_id=workflow_id,
             run_id=run_id,
             status=status,
             terminal_step_index=None,
-            partial_state=aggregate if salvage else None,
+            # B-FANOUT-PAUSE — PAUSED carries the salvaged aggregate as
+            # partial_state (the completed branches) + the resumable snapshot.
+            partial_state=aggregate if (salvage and status is not RunStatus.SUCCESS) else None,
             final_state=aggregate if status is RunStatus.SUCCESS else None,
             fail_class=fail_class,
+            pause_snapshot=pause_snapshot,
         ), steps_executed
 
     deadline = _DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS
@@ -4269,6 +4438,16 @@ def _execute_orchestrator_workers(
                 timestamp=fanout_timestamp,
                 procedural_tier_snapshot_ref=snapshot_ref,
             )
+            terminal_dispositions[branch_index] = terminal  # B-FANOUT-PAUSE
+            # B-FANOUT-PAUSE (Codex [P1]) — a sibling that was IN-FLIGHT when the
+            # barrier cancelled this branch ran to completion under the shield
+            # (`terminal == "completed"` ⟹ `inflight.done()` and not cancelled). Its
+            # successful OUTPUT must be collected so a `pause` snapshot recovers it
+            # (else it stores `output=None` → resume skips a successfully-completed
+            # branch + drops its output, corrupting the resumed aggregate). A
+            # ran-and-errored in-flight (`exception() is not None`) has no output.
+            if terminal == "completed" and inflight.exception() is None:
+                collected[branch_index] = (str(step.step_id), inflight.result())
             raise  # honor the cancellation (the barrier cancelled this branch)
         except Exception:
             # THIS worker's own dispatch ERRORED — the failure that triggers the
@@ -4293,6 +4472,7 @@ def _execute_orchestrator_workers(
                 timestamp=fanout_timestamp,
                 procedural_tier_snapshot_ref=snapshot_ref,
             )
+            terminal_dispositions[branch_index] = "completed"  # B-FANOUT-PAUSE
             raise
         _record_clean(branch_index, step, child, writer, output)
 
@@ -4343,32 +4523,87 @@ def _execute_orchestrator_workers(
             )
         return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
 
-    # pause: resumable FAN-OUT pause is NOT YET MATERIALIZED at B1. Returning a
-    # `RunStatus.PAUSED` here would advertise a resumability the harness cannot
-    # honor: the linear pause path captures a position-only C-CP-26 `PauseSnapshot`
-    # (single `step_index`) for `api.resume` (C-RT-30), but a fan-out's resume must
-    # (per §25.15.2 obl. 7) reconstruct N-branch state from the LEDGER — skip each
-    # branch whose persisted `terminal_status` is set, re-dispatch the rest — AND
-    # recover the COMPLETED branches' OUTPUTS for the aggregate (which the ledger
-    # entries do not carry). That resume-re-entry path (the strategy is
-    # resume-blind by design — §25.3 prefix-replay is bypassed above) + the
-    # completed-branch output persistence is a focused follow-on R-FS-1 arc, NOT a
-    # silent defer. A false-`PAUSED` is the silent-degradation failure mode
-    # (decorrelated-review [P1]/F1-01 — two reviewers converged). So a worker
-    # failure under `pause` policy fails HONESTLY → `RunStatus.FAILED` with an
-    # explicit `not-yet-materialized` fail_class; the completed/in-flight workers'
-    # ledger entries + the salvaged partial result set STILL persist (no silent
-    # loss). The CLEAN (no-failure) path is unaffected → SUCCESS.
+    # pause (§25.15.1 `pause → PAUSED`) — resumable FAN-OUT pause (B-FANOUT-PAUSE,
+    # R-FS-1). On a worker failure: in-flight siblings finished (shielded, recorded
+    # their terminal); not-yet-dispatched siblings were TaskGroup-cancelled and are
+    # LEFT RE-DISPATCHABLE — the cascade-cancel obl.4 `cancelled`-terminal scan above
+    # is DELIBERATELY NOT run here (the §25.15.1 pause semantic is "in-flight finish;
+    # not-yet-dispatched left re-dispatchable", adversarial-review-r-fs-1-arc-14
+    # line 55). We capture the per-branch terminal dispositions + the completed
+    # branches' OUTPUTS (which the ledger does NOT carry — the R-CC-1 design §1.1
+    # data-stateless re-open trigger, materialized for the fan-out case) into a
+    # `FanOutResumeState`-bearing, hash-integrity-checked `PauseSnapshot`, return
+    # PAUSED, and `api.resume` re-enters this strategy to skip terminal branches +
+    # re-dispatch the rest (obl. 7). The deadline-strike case (a STUCK fan-out, no
+    # worker raised) stays FAILED — there is no clean pause boundary to resume from.
     if deadline_struck:
         return _finish(
             RunStatus.FAILED, fail_class="orchestrator-workers-barrier-deadline", salvage=False
         )
     if worker_failed:
-        return _finish(
-            RunStatus.FAILED,
-            fail_class="orchestrator-workers-pause-resume-not-yet-materialized",
-            salvage=True,
+        protocol = getattr(ctx, "pause_resume_protocol", None)
+        if not pause_resumable:
+            # Codex [P1] — HIERARCHICAL_DELEGATION reuses this helper but its
+            # resume is NOT wired (`_execute_workflow_body` threads no
+            # `resume_snapshot` into the hierarchical dispatch). Returning PAUSED
+            # here would advertise a resumability `api.resume` cannot honor (it
+            # would re-run the orchestrator + all workers). Fail HONESTLY — the
+            # interim `not-yet-materialized`, the `B-HIERARCHICAL-PAUSE` forward arc.
+            return _finish(
+                RunStatus.FAILED,
+                fail_class="orchestrator-workers-pause-resume-not-yet-materialized",
+                salvage=True,
+            )
+        if protocol is None:
+            # No pause/resume opt-in bound → the snapshot cannot be captured, so a
+            # PAUSED would advertise a resumability the harness cannot honor (the
+            # FALSE-`PAUSED` silent-degradation mode). Fail HONESTLY — detect-then-
+            # refuse, mirroring `api.resume`'s ResumeProtocolNotBoundError. Completed
+            # / in-flight ledger entries + the salvaged partial set still persist.
+            return _finish(
+                RunStatus.FAILED,
+                fail_class="orchestrator-workers-pause-resume-protocol-not-bound",
+                salvage=True,
+            )
+        # Build the resume state from the post-barrier terminal dispositions +
+        # collected outputs — both already MERGED with any recovered-from-a-prior-
+        # resume terminals (the seed loop above), so a RE-pause snapshot unions the
+        # prior + this-round terminal sets. Absent worker ordinals (the cancelled
+        # not-yet-dispatched ones) are left re-dispatchable by omission. `step_id`
+        # is captured per branch so resume validates body identity (Codex [P1]).
+        fan_out_resume = FanOutResumeState(
+            orchestrator_output=dict(orchestrator_output),
+            orchestrator_step_id=str(orchestrator_step.step_id),
+            branches=tuple(
+                FanOutBranchResumeState(
+                    branch_index=_bi,
+                    step_id=str(worker_steps[_bi].step_id),
+                    terminal_status=_status,
+                    output=(collected[_bi][1] if _bi in collected else None),
+                )
+                for _bi, _status in sorted(terminal_dispositions.items())
+            ),
+            worker_count=len(worker_steps),
         )
+        snapshot = _run_protocol_method_sync(
+            cast(PauseResumeProtocol, protocol).capture_pause_snapshot(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                step_index=0,
+                pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+                fan_out_resume=fan_out_resume,
+            )
+        )
+        return _finish(RunStatus.PAUSED, fail_class=None, salvage=True, pause_snapshot=snapshot)
+    # No worker failed THIS round. But a RECOVERED terminal branch may have failed
+    # in the original run (a resume tail) — a terminal branch with no collected
+    # output is a failed/timed-out branch (`_record_clean` always populates
+    # `collected` for a clean worker). Returning a bare SUCCESS there would SILENTLY
+    # drop that failure (the silent-degradation class this arc forecloses) — instead
+    # mirror `proceed`: degraded → PARTIAL + salvage (advisor [P1]). Non-resume
+    # clean runs have no failed terminal → not degraded → SUCCESS (no regression).
+    if any(_bi not in collected for _bi in terminal_dispositions):
+        return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
     return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
 
 

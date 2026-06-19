@@ -31,7 +31,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from harness_cp.pause_resume_protocol import PauseContextReader, PauseResumeProtocol
-from harness_cp.pause_resume_protocol_types import PauseSnapshot, WorkflowPauseReason
+from harness_cp.pause_resume_protocol_types import (
+    FanOutResumeState,
+    PauseSnapshot,
+    WorkflowPauseReason,
+)
 
 if TYPE_CHECKING:
     from harness_runtime.lifecycle.journal_workflow_pause_store import (
@@ -72,15 +76,21 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
         run_id: str,
         step_index: int,
         pause_reason: WorkflowPauseReason,
+        *,
+        fan_out_resume: FanOutResumeState | None = None,
     ) -> PauseSnapshot:
         """Compose the snapshot via the parent, then durably persist it.
 
         The snapshot is journaled BEFORE it is returned to the driver, so a crash
         after capture (but before the caller serializes the ``RunResult``) still
         leaves a resumable record on disk for ``api.resume(resume_handle=...)``.
+
+        ``fan_out_resume`` (B-FANOUT-PAUSE) is forwarded to the parent so a durable
+        `cascade_policy=pause` fan-out snapshot carries (and journals) its resume
+        state — without forwarding, the durable resume path would silently drop it.
         """
         snapshot = await super().capture_pause_snapshot(
-            workflow_id, run_id, step_index, pause_reason
+            workflow_id, run_id, step_index, pause_reason, fan_out_resume=fan_out_resume
         )
         self._store.capture(snapshot)
         return snapshot
