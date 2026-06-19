@@ -162,6 +162,13 @@ class FanOutResumeState(BaseModel):
     already-run orchestrator is NOT re-dispatched (it is a completed step; effect
     may have landed)."""
 
+    orchestrator_step_id: str
+    """The orchestrator step's (`steps[0]`) `step_id` AT CAPTURE TIME. Resume
+    validates the re-supplied `steps[0].step_id` against this — the orchestrator
+    output is recovered + its dispatch skipped, so a same-count body change that
+    renames/reorders `steps[0]` would otherwise apply stale orchestrator output to
+    a different body (Codex [P2]). Fail-closed on mismatch."""
+
     branches: tuple[FanOutBranchResumeState, ...]
     """The terminal branches (completed / timed_out) at pause time. A worker
     branch ordinal absent from this tuple is left re-dispatchable."""

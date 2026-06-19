@@ -309,6 +309,7 @@ def test_pause_emits_resumption_not_workflow_start_on_resume() -> None:
     snapshot = _captured_snapshot(
         fan_out_resume=FanOutResumeState(
             orchestrator_output={"role": "orchestrator"},
+            orchestrator_step_id="orchestrator",
             branches=(
                 FanOutBranchResumeState(
                     branch_index=0,
@@ -362,6 +363,7 @@ def test_resume_skips_terminal_recovers_outputs_and_redispatches_rest() -> None:
     snapshot = _captured_snapshot(
         fan_out_resume=FanOutResumeState(
             orchestrator_output={"role": "orchestrator", "recovered": True},
+            orchestrator_step_id="orchestrator",
             branches=(
                 FanOutBranchResumeState(
                     branch_index=0,
@@ -440,6 +442,7 @@ def test_snapshot_hash_covers_fan_out_resume_tamper_rejected() -> None:
     good = _captured_snapshot(
         fan_out_resume=FanOutResumeState(
             orchestrator_output={"role": "orchestrator"},
+            orchestrator_step_id="orchestrator",
             branches=(
                 FanOutBranchResumeState(
                     branch_index=0,
@@ -484,6 +487,7 @@ def test_negative_control_empty_branches_loses_recovery() -> None:
     snapshot = _captured_snapshot(
         fan_out_resume=FanOutResumeState(
             orchestrator_output={"role": "orchestrator", "recovered": True},
+            orchestrator_step_id="orchestrator",
             branches=(),  # nothing recovered → both workers re-dispatchable
             worker_count=2,
         )
@@ -510,6 +514,7 @@ def test_resume_worker_count_mismatch_fails_closed() -> None:
     snapshot = _captured_snapshot(
         fan_out_resume=FanOutResumeState(
             orchestrator_output={"role": "orchestrator"},
+            orchestrator_step_id="orchestrator",
             branches=(),
             worker_count=3,
         )
@@ -545,6 +550,7 @@ def test_fan_out_snapshot_survives_json_roundtrip() -> None:
     snapshot = _captured_snapshot(
         fan_out_resume=FanOutResumeState(
             orchestrator_output={"role": "orchestrator"},
+            orchestrator_step_id="orchestrator",
             branches=(
                 FanOutBranchResumeState(
                     branch_index=0,
@@ -585,6 +591,7 @@ def test_resume_redispatch_failing_worker_re_pauses_with_unioned_branches() -> N
     snapshot = _captured_snapshot(
         fan_out_resume=FanOutResumeState(
             orchestrator_output={"role": "orchestrator", "recovered": True},
+            orchestrator_step_id="orchestrator",
             branches=(
                 FanOutBranchResumeState(
                     branch_index=0,
@@ -643,6 +650,7 @@ def test_resume_body_identity_mismatch_fails_closed() -> None:
     snapshot = _captured_snapshot(
         fan_out_resume=FanOutResumeState(
             orchestrator_output={"role": "orchestrator"},
+            orchestrator_step_id="orchestrator",
             branches=(
                 FanOutBranchResumeState(
                     branch_index=0,
@@ -661,3 +669,63 @@ def test_resume_body_identity_mismatch_fails_closed() -> None:
     assert result.status is RunStatus.FAILED
     assert result.fail_class is not None
     assert "branch-identity-mismatch" in result.fail_class
+
+
+def test_pause_captures_in_flight_sibling_completed_output() -> None:
+    """Codex [P1] — a sibling IN-FLIGHT when the barrier cancels it (because
+    another worker failed) runs to completion under the shield; its successful
+    OUTPUT must be captured into the snapshot (else resume skips it as terminal +
+    drops the output). worker-0 is mid-dispatch (a brief sleep) when worker-1
+    fails → worker-0 completes under the shield → its output is recovered."""
+    import time
+
+    class _InFlightCompletesDispatcher:
+        def __init__(self) -> None:
+            self._started = threading.Event()
+
+        def dispatch(
+            self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+        ) -> dict[str, Any]:
+            sid = str(step.step_id)
+            if sid == "orchestrator":
+                return {"role": "orchestrator"}
+            if sid == "worker-0":
+                self._started.set()
+                time.sleep(0.05)  # in-flight when worker-1 fails; completes under the shield
+                return {"role": "worker-0", "in_flight_completed": True}
+            assert self._started.wait(timeout=10.0), "worker-0 never started"
+            raise RuntimeError("worker-1 fails while worker-0 is in-flight")
+
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(steps=_steps(2), dispatcher=_InFlightCompletesDispatcher(), ctx=ctx)
+
+    assert result.status is RunStatus.PAUSED
+    snap = result.pause_snapshot
+    assert snap is not None and snap.fan_out_resume is not None
+    by_index = {b.branch_index: b for b in snap.fan_out_resume.branches}
+    # worker-0 was cancelled-but-completed → terminal `completed` WITH its output
+    # captured (the fix); without it `output` would be None and resume would drop it.
+    assert by_index[0].terminal_status == "completed"
+    assert by_index[0].output == {"role": "worker-0", "in_flight_completed": True}
+
+
+def test_resume_orchestrator_identity_mismatch_fails_closed() -> None:
+    """Codex [P2] — the orchestrator's output is recovered + its dispatch skipped,
+    so a snapshot whose `orchestrator_step_id` does NOT match the re-supplied
+    `steps[0]` (a renamed/reordered orchestrator, same worker shape) fails CLOSED
+    rather than applying stale orchestrator output to a different body."""
+    snapshot = _captured_snapshot(
+        fan_out_resume=FanOutResumeState(
+            orchestrator_output={"role": "orchestrator", "stale": True},
+            orchestrator_step_id="renamed-orchestrator",  # body has "orchestrator"
+            branches=(),
+            worker_count=2,
+        )
+    )
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = _run(
+        steps=_steps(2), dispatcher=_CountingDispatcher(), ctx=ctx, pause_snapshot_input=snapshot
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert "orchestrator-identity-mismatch" in result.fail_class

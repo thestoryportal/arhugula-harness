@@ -292,6 +292,7 @@ async def test_api_resume_fan_out_pause_restart_proof_round_trip(
         pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
         fan_out_resume=FanOutResumeState(
             orchestrator_output={"role": "orchestrator", "recovered": True},
+            orchestrator_step_id="orchestrator",
             branches=(
                 FanOutBranchResumeState(
                     branch_index=0,

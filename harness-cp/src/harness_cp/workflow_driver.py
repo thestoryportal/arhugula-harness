@@ -3944,6 +3944,14 @@ def _execute_orchestrator_workers(
     if _fan_out_resume is not None:
 
         def _resume_body_mismatch() -> str | None:
+            # orchestrator identity (its output is recovered + dispatch skipped —
+            # Codex [P2]: a renamed/reordered steps[0] would apply stale output) ...
+            if str(orchestrator_step.step_id) != _fan_out_resume.orchestrator_step_id:
+                return (
+                    f"orchestrator-identity-mismatch: snapshot step_id="
+                    f"{_fan_out_resume.orchestrator_step_id!r}, resume step_id="
+                    f"{str(orchestrator_step.step_id)!r}"
+                )
             # worker_count (the gross shape) ...
             if len(worker_steps) != _fan_out_resume.worker_count:
                 return (
@@ -4431,6 +4439,15 @@ def _execute_orchestrator_workers(
                 procedural_tier_snapshot_ref=snapshot_ref,
             )
             terminal_dispositions[branch_index] = terminal  # B-FANOUT-PAUSE
+            # B-FANOUT-PAUSE (Codex [P1]) — a sibling that was IN-FLIGHT when the
+            # barrier cancelled this branch ran to completion under the shield
+            # (`terminal == "completed"` ⟹ `inflight.done()` and not cancelled). Its
+            # successful OUTPUT must be collected so a `pause` snapshot recovers it
+            # (else it stores `output=None` → resume skips a successfully-completed
+            # branch + drops its output, corrupting the resumed aggregate). A
+            # ran-and-errored in-flight (`exception() is not None`) has no output.
+            if terminal == "completed" and inflight.exception() is None:
+                collected[branch_index] = (str(step.step_id), inflight.result())
             raise  # honor the cancellation (the barrier cancelled this branch)
         except Exception:
             # THIS worker's own dispatch ERRORED — the failure that triggers the
@@ -4556,6 +4573,7 @@ def _execute_orchestrator_workers(
         # is captured per branch so resume validates body identity (Codex [P1]).
         fan_out_resume = FanOutResumeState(
             orchestrator_output=dict(orchestrator_output),
+            orchestrator_step_id=str(orchestrator_step.step_id),
             branches=tuple(
                 FanOutBranchResumeState(
                     branch_index=_bi,
