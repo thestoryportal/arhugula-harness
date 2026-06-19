@@ -100,10 +100,11 @@ Audit-compose failure uses OTel `Span.set_status(StatusCode.ERROR)` +
 - `HITLGateTimeoutError`              → `RT-FAIL-HITL-GATE-TIMEOUT`
 - `HITLGateRejectedError`             → `RT-FAIL-HITL-GATE-REJECTED`
 - `HITLGateAuditComposeError`         → `RT-FAIL-HITL-GATE-AUDIT-COMPOSE`
-- `HITLGateEditCarrierDriftError`     → (fork-pending fail class; not in §14.8
-                                        taxonomy — surfaces as RuntimeError to
-                                        driver per U-RT-120 D-edit.B; carrier-
-                                        healing fork owns RT-FAIL-* registration)
+- `HITLGateEditDecodeError`           → `RT-FAIL-HITL-GATE-EDIT-DECODE`
+                                        (B-EDIT-CARRIER: the operator's flat
+                                        `str` EDIT proposal could not be decoded
+                                        to a Mapping step_payload — retires the
+                                        interim U-RT-120 carrier-drift raise)
 
 Audit-compose failure: composer annotates `hitl.gate.evaluated` via
 `Span.set_status(Status(StatusCode.ERROR, "audit-compose-failed"))` +
@@ -116,6 +117,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import inspect
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -184,7 +186,7 @@ __all__ = [
     "DEFAULT_FULL_PALETTE",
     "HITLCellExcludedError",
     "HITLGateAuditComposeError",
-    "HITLGateEditCarrierDriftError",
+    "HITLGateEditDecodeError",
     "HITLGateRejectedError",
     "HITLGateTimeoutError",
     "HITLPauseRequestedSignal",
@@ -292,46 +294,38 @@ class HITLGateAuditComposeError(Exception):
     """
 
 
-class HITLGateEditCarrierDriftError(Exception):
-    """Operator selected `EDIT`, but replace-not-merge cannot be honored at the
-    runtime carrier (str ↔ Mapping drift). U-RT-120 / B3-impl-3, D-edit.B.
+class HITLGateEditDecodeError(Exception):
+    """Operator selected `EDIT` but the proposal cannot be decoded to a
+    `Mapping` step_payload. B-EDIT-CARRIER (retires the interim U-RT-120
+    `HITLGateEditCarrierDriftError`); driver maps to
+    `RT-FAIL-HITL-GATE-EDIT-DECODE`.
 
-    §14.8.2 step 4i + NOTE 6-ii mandate replace-not-merge: the operator's
-    `edited_proposal` becomes the new `step.step_payload` **verbatim**, and
-    consumers MUST treat it as the authoritative replacement. The CP-canonical
-    carrier the mandate presumes is structured —
+    Functional EDIT honors the cleared replace-not-merge mandate (§14.8.2 step
+    4i + NOTE 6-ii): the operator's edited proposal becomes the new
+    `step.step_payload` verbatim. The CP-canonical carrier is structured —
     `harness_cp.hitl_placement.HITLGateResult.edited_proposal: Mapping[str, Any]`
-    (hitl_placement.py:197) — and `WorkflowStep.step_payload` is itself
-    `Mapping[str, Any]` (opaque per C-CP-25 §25.3.3.4). But the wired runtime
-    ask-surface returns `AskUserQuestionResult.edited_proposal: str | None`
-    (ask_user_question_surface.py:86), and MCP elicitation is flat-schema
-    (primitives only — it CANNOT deliver a nested Mapping per the
-    `AskUserQuestionElicitationSchema` discipline at
-    mcp_backed_ask_user_question_surface.py:171-199). So the operator-supplied
-    `str` cannot be applied *verbatim* to the `Mapping` step_payload without
-    minting decode / mutation semantics the cleared spec explicitly DEFERS
-    (NOTE 6-ii: "richer mutation — field-level patches, type-aware merging …
-    deferred to a future workflow-mutation-discipline arc").
+    — and `WorkflowStep.step_payload` is itself `Mapping[str, Any]` (opaque per
+    C-CP-25 §25.3.3.4). But the wired runtime ask-surface returns a flat `str`
+    (`AskUserQuestionResult.edited_proposal: str | None`) because MCP
+    elicitation is flat-schema (primitives only — it cannot deliver a nested
+    Mapping per the `AskUserQuestionElicitationSchema` discipline at
+    `mcp_backed_ask_user_question_surface.py`). The flat-`str` carrier + the
+    committed replace-not-merge mandate + the arbitrary-nested target foreclose
+    the mutation discipline to JSON-decode-then-replace (`_decode_edit_proposal`;
+    mirrors the tool-args precedent
+    `r_cxa_2_producer_loop_factory._parse_edited_arguments`), which **preserves**
+    replace-not-merge rather than overriding it.
 
-    Per `[[halt-route-split-ac-pattern]]` this honest typed raise surfaces the
-    drift rather than (a) silently dropping the operator's edit — the prior
-    `pass`-then-dispatch bug, which violated "consumers MUST treat
-    `edited_proposal` as authoritative replacement" — or (b) silently inventing
-    a `str → Mapping` conversion (e.g. the IMPL-discretion `json.loads` shape
-    landed for the *tool-args* surface at
-    `r_cxa_2_producer_loop_factory._parse_edited_arguments`, which has NO
-    cleared-spec backing for the step-payload surface; minting it here = X-AL-3).
+    This typed error is raised at §14.8.2 step 4i when the operator's `str` is
+    NOT a JSON object (invalid JSON, a non-object JSON value, or an absent
+    proposal) and therefore cannot replace the `Mapping[str, Any]` step_payload.
+    The step-4h audit still records the operator's attempt
+    (`edited_proposal_hash` over the raw `str`) BEFORE the raise — symmetric to
+    the REJECT path's rejection-audit preservation.
 
-    The carrier-healing / structured-edit mutation-discipline **BUILD arc** is
-    filed at `.harness/class_1_fork_hitl_edit_carrier_drift_str_vs_mapping.md`
-    (the pre-authorized design back-flow per the FULL-SPEC directive — this raise
-    is the interim landing; functional EDIT arrives via that arc). Disposition
-    rationale: `.harness/r-fs-1-b3-smart-hitl-design-v1.md` §5 (D-edit.B).
-
-    Driver maps to a fork-pending new fail class (NOT yet in the §14.8 taxonomy;
-    surfaces as RuntimeError-shape error to the driver — matching the
-    `HITLCellExcludedError` precedent. The carrier-healing fork owns the eventual
-    `RT-FAIL-*` taxonomy registration when functional EDIT lands).
+    Resolution arc: `.harness/class_1_fork_hitl_edit_carrier_drift_str_vs_mapping.md`
+    (the pre-authorized design back-flow per the FULL-SPEC directive — RESOLVED
+    by B-EDIT-CARRIER; the interim raise is retired and functional EDIT applies).
     """
 
 
@@ -571,17 +565,91 @@ def _empty_summary_hash() -> str:
     return hashlib.sha256(b"").hexdigest()
 
 
-def _compute_response_summary_hash(result: AskUserQuestionResult) -> str:
+def _post_mutation_payload_hash(payload: Mapping[str, Any]) -> str:
+    """`sha256` over the canonical JSON of a post-mutation step_payload (hex-64).
+
+    Canonical form matches the workspace convention
+    (`json.dumps(..., sort_keys=True, separators=(",", ":"))` per
+    `cost_attribution_tool_dispatch._canonical_json_byte_length` +
+    `procedural_tier_snapshot`). B-EDIT-CARRIER uses this for the EDIT
+    `edited_proposal_hash` (NOTE 6-ii: "post-mutation payload hash") and the
+    matching `hitl.response.summary_hash`.
+    """
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _reject_nonfinite_json_constant(constant: str) -> NoReturn:
+    """`json.loads` `parse_constant` hook — reject `NaN` / `Infinity` / `-Infinity`.
+
+    Default `json.loads` accepts these JS-isms; a non-finite value in the decoded
+    step_payload would (a) break the canonical-JSON post-mutation hash
+    (`json.dumps` emits the non-RFC `NaN` token) and (b) be rejected by / corrupt
+    provider serialization. Strict RFC-8259: reject them so an EDIT proposal like
+    `{"params": {"temperature": NaN}}` routes through `HITLGateEditDecodeError`
+    instead of silently mutating the payload (Codex [P3]).
+    """
+    raise ValueError(f"non-finite JSON constant {constant!r} not allowed in EDIT proposal")
+
+
+def _decode_edit_proposal(edited_proposal: str | None) -> Mapping[str, Any]:
+    """Decode the operator's flat `str` EDIT proposal → a `Mapping` step_payload.
+
+    Functional EDIT (B-EDIT-CARRIER) per §14.8.2 step 4i + NOTE 6-ii: MCP
+    elicitation is flat-schema, so the operator supplies a `str`. The only
+    spec-consistent discipline that PRESERVES the committed replace-not-merge
+    mandate AND carries an arbitrary-nested step_payload is JSON-decode-then-
+    replace (mirrors the tool-args precedent
+    `r_cxa_2_producer_loop_factory._parse_edited_arguments`). A non-JSON, a
+    non-object, or an absent proposal cannot replace the `Mapping[str, Any]`
+    step_payload → typed `HITLGateEditDecodeError` (driver maps to
+    `RT-FAIL-HITL-GATE-EDIT-DECODE`).
+    """
+    if edited_proposal is None:
+        raise HITLGateEditDecodeError(
+            "operator selected EDIT but carried no edited_proposal to apply"
+        )
+    try:
+        # Strict RFC-8259: reject NaN/Infinity/-Infinity (Codex [P3]) — they
+        # break the canonical-JSON post-mutation hash + provider serialization.
+        parsed = json.loads(edited_proposal, parse_constant=_reject_nonfinite_json_constant)
+    except ValueError as exc:
+        # json.JSONDecodeError is a ValueError subclass; the parse_constant hook
+        # also raises ValueError for non-finite constants.
+        raise HITLGateEditDecodeError(
+            f"operator EDIT proposal is not valid JSON and cannot replace the "
+            f"Mapping[str, Any] step_payload (strict RFC-8259, NaN/Infinity "
+            f"rejected; replace-not-merge per §14.8.2 NOTE 6-ii): {exc}"
+        ) from exc
+    if not isinstance(parsed, Mapping):
+        raise HITLGateEditDecodeError(
+            "operator EDIT proposal must be a JSON object — the step_payload is "
+            "Mapping[str, Any] (replace-not-merge per §14.8.2 NOTE 6-ii)"
+        )
+    return cast("Mapping[str, Any]", parsed)
+
+
+def _compute_response_summary_hash(
+    result: AskUserQuestionResult,
+    *,
+    edited_payload: Mapping[str, Any] | None = None,
+) -> str:
     """Compose `hitl.response.summary_hash` per spec v1.11 deferred-list.
 
     Shape: sha256 of the per-response content field:
-    - EDIT → sha256(edited_proposal)
+    - EDIT → sha256(post-mutation step_payload) when the proposal decoded
+      (consistent with the step-4h `edited_proposal_hash` per the spec v1.11
+      suggested shape); else sha256(raw operator `str`) — the recorded attempt
+      on a decode failure
     - RESPOND → sha256(response_text)
     - REJECT → sha256(rejection_reason)
     - APPROVE → sha256(b"")  (no content)
 
     Returns hex-64.
     """
+    if result.response == HITLResponse.EDIT and edited_payload is not None:
+        return _post_mutation_payload_hash(edited_payload)
     payload: bytes
     if result.response == HITLResponse.EDIT and result.edited_proposal is not None:
         payload = result.edited_proposal.encode("utf-8")
@@ -943,6 +1011,7 @@ class RuntimeHITLGateComposer:
         raise_on_failure: bool,
         auto_approved: bool = False,
         system_reject_reason: str | None = None,
+        edited_payload: Mapping[str, Any] | None = None,
     ) -> tuple[CPAuditLedgerEntry, Any | None]:
         """4-substep audit-write per spec §14.8.2 step 4h (HITL-flavor).
 
@@ -1011,11 +1080,20 @@ class RuntimeHITLGateComposer:
             rejection_hash = None
         else:
             response_value = gate_result.response.value
+            # B-EDIT-CARRIER: NOTE 6-ii mandates the POST-mutation payload hash.
+            # When the operator's `str` proposal decoded to a Mapping, hash the
+            # canonical serialization of that (the new step_payload). On a decode
+            # failure (edited_payload is None) fall back to the raw operator
+            # `str` so the attempt is still recorded before the step-4i raise.
             edited_hash = (
-                hashlib.sha256(gate_result.edited_proposal.encode("utf-8")).hexdigest()
-                if gate_result.response == HITLResponse.EDIT
-                and gate_result.edited_proposal is not None
-                else None
+                _post_mutation_payload_hash(edited_payload)
+                if gate_result.response == HITLResponse.EDIT and edited_payload is not None
+                else (
+                    hashlib.sha256(gate_result.edited_proposal.encode("utf-8")).hexdigest()
+                    if gate_result.response == HITLResponse.EDIT
+                    and gate_result.edited_proposal is not None
+                    else None
+                )
             )
             response_text_hash = (
                 hashlib.sha256(gate_result.response_text.encode("utf-8")).hexdigest()
@@ -1479,13 +1557,37 @@ class RuntimeHITLGateComposer:
                             f"{timeout_mode.value!r} (fail-closed disposition)"
                         ) from timeout_exc
 
+                    # --- 4h-pre: decode the operator EDIT proposal (B-EDIT-
+                    # CARRIER). Functional EDIT per §14.8.2 step 4i + NOTE 6-ii
+                    # (replace-not-merge): MCP elicitation is flat-schema, so the
+                    # operator's edited_proposal arrives as a `str`; decode it to
+                    # the Mapping[str, Any] step_payload (the discipline
+                    # foreclosed by the flat-`str` carrier + the committed
+                    # replace-not-merge mandate + the arbitrary-nested
+                    # step_payload target). The decoded payload is the
+                    # POST-mutation step_payload — fed to BOTH the 4g summary_hash
+                    # and the 4h edited_proposal_hash (NOTE 6-ii: "post-mutation
+                    # payload hash"). A decode failure is DEFERRED past the 4h
+                    # audit (so the operator's attempt is still recorded, hash
+                    # over the raw `str` — symmetric to REJECT) then raised at
+                    # step 4i → RT-FAIL-HITL-GATE-EDIT-DECODE.
+                    edited_payload: Mapping[str, Any] | None = None
+                    edit_decode_error: HITLGateEditDecodeError | None = None
+                    if gate_result.response == HITLResponse.EDIT:
+                        try:
+                            edited_payload = _decode_edit_proposal(gate_result.edited_proposal)
+                        except HITLGateEditDecodeError as exc:
+                            edit_decode_error = exc
+
                     # --- 4g: Open hitl.invocation.responded span -----------
                     with tracer.start_as_current_span("hitl.invocation.responded") as resp_span:
                         resp_span.set_attribute("hitl.response.class", gate_result.response.value)
                         resp_span.set_attribute("hitl.response.latency_ms", gate_result.latency_ms)
                         resp_span.set_attribute(
                             "hitl.response.summary_hash",
-                            _compute_response_summary_hash(gate_result),
+                            _compute_response_summary_hash(
+                                gate_result, edited_payload=edited_payload
+                            ),
                         )
 
                     # --- 4h: 4-substep audit-write (HITL-flavor) -----------
@@ -1501,6 +1603,7 @@ class RuntimeHITLGateComposer:
                             gate_result=gate_result,
                             step_context=step_context,
                             raise_on_failure=raise_on_audit_failure,
+                            edited_payload=edited_payload,
                         )
                         # Set audit_ledger_entry_id attribute now that it's known.
                         if write_result is not None:
@@ -1520,37 +1623,20 @@ class RuntimeHITLGateComposer:
                     if gate_result.response == HITLResponse.APPROVE:
                         pass  # proceed to step 5 with step unchanged
                     elif gate_result.response == HITLResponse.EDIT:
-                        # U-RT-120 (G3; B3-impl-3, D-edit.B): §14.8.2 step 4i +
-                        # NOTE 6-ii mandate replace-not-merge — the edited
-                        # proposal becomes the new step.step_payload VERBATIM,
-                        # and consumers MUST treat it as authoritative
-                        # replacement. The mandate presumes the CP-canonical
-                        # STRUCTURED carrier (HITLGateResult.edited_proposal:
-                        # Mapping[str, Any]); the wired runtime ask-surface
-                        # returns a `str` (MCP elicitation is flat-schema —
-                        # cannot deliver a nested Mapping). So the `str` cannot
-                        # be applied verbatim to the `Mapping[str, Any]`
-                        # step_payload without minting the decode / mutation
-                        # semantics NOTE 6-ii explicitly DEFERS. The audit at
-                        # step 4h already recorded the operator's edit faithfully
-                        # (edited_proposal_hash over the operator `str`); we now
-                        # SURFACE the carrier-drift application gap rather than
-                        # silently dropping the edit (the prior `pass`-then-
-                        # dispatch bug) or silently inventing a str→Mapping
-                        # conversion (X-AL-3). Routed to the carrier-healing
-                        # BUILD arc per `[[halt-route-split-ac-pattern]]` —
-                        # `.harness/class_1_fork_hitl_edit_carrier_drift_str_vs_mapping.md`.
-                        raise HITLGateEditCarrierDriftError(
-                            f"operator EDIT at placement="
-                            f"{placement.position.value!r} cannot be applied "
-                            f"verbatim: the runtime ask-surface carrier is "
-                            f"`str` but step.step_payload is `Mapping[str, Any]` "
-                            f"(str↔Mapping carrier drift; replace-not-merge "
-                            f"mutation discipline deferred per §14.8.2 NOTE 6-ii "
-                            f"to the workflow-mutation-discipline arc — see "
-                            f".harness/class_1_fork_hitl_edit_carrier_drift_"
-                            f"str_vs_mapping.md)"
-                        )
+                        # B-EDIT-CARRIER (retires the U-RT-120 interim raise):
+                        # §14.8.2 step 4i + NOTE 6-ii replace-not-merge —
+                        # functional EDIT. The decode happened at step 4h-pre
+                        # (the operator's flat `str` → a Mapping step_payload);
+                        # a decode failure was deferred PAST the 4h audit (so the
+                        # attempt is recorded — symmetric to REJECT) and is raised
+                        # here → RT-FAIL-HITL-GATE-EDIT-DECODE. On success the
+                        # decoded payload REPLACES step.step_payload verbatim
+                        # (authoritative replacement) and the mutated step
+                        # proceeds to step 5 (the inner dispatcher).
+                        if edit_decode_error is not None:
+                            raise edit_decode_error
+                        assert edited_payload is not None  # decode succeeded
+                        step = step.model_copy(update={"step_payload": edited_payload})
                     elif gate_result.response == HITLResponse.REJECT:
                         raise HITLGateRejectedError(
                             f"operator rejected HITL gate at placement="

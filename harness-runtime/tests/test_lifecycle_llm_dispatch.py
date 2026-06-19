@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -41,6 +42,8 @@ from harness_cp.cross_family_fallback_chain import (
 from harness_cp.embedding_routing import EmbeddingRoutingCorpus, make_embedding_classifier
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
+from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
+from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.layered_routing_strategy import LayerDecisionFn
 from harness_cp.per_role_catalog import (
     derive_agent_role,
@@ -64,8 +67,14 @@ from harness_cp.workflow_driver_types import (
     WorkflowStep,
 )
 from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEntry
-from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
+from harness_od.audit_ledger_types import SignatureAlgorithm
 from harness_runtime.lifecycle import llm_dispatch as llm_dispatch_module
+from harness_runtime.lifecycle.ask_user_question_surface import (
+    AskUserQuestionResult,
+    AskUserQuestionSurface,
+)
+from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
 from harness_runtime.lifecycle.hitl_tool_loop import HITLToolLoopContext, ModelToolCall
 from harness_runtime.lifecycle.inter_step_output_channel import InterStepOutputChannel
 from harness_runtime.lifecycle.llm_dispatch import (
@@ -353,6 +362,74 @@ async def test_dispatch_anthropic_round_trip() -> None:
     assert adapter.client.messages.last_kwargs["messages"] == [{"role": "user", "content": "hi"}]
     assert adapter.client.messages.last_kwargs["max_tokens"] == 100
     assert result["id"] == "msg_test_001"
+
+
+@pytest.mark.asyncio
+async def test_edit_decoded_payload_reaches_real_llm_dispatcher() -> None:
+    """B-EDIT-CARRIER real-consumer witness: an operator EDIT (flat `str`)
+    decoded by the wrap-time HITL composer becomes the payload the REAL
+    `RuntimeLLMDispatcher` dispatches to the provider.
+
+    Closes the half-proof gap (advisor pre-merge): the composer-unit witness in
+    `test_lifecycle_hitl_gate_composer.py` asserts the mutated step reaches a
+    MOCK inner. This drives the composer's inner = the REAL `RuntimeLLMDispatcher`
+    over a recording provider adapter, proving the decoded Mapping is what
+    `_coerce_payload(step.step_payload)` consumes and the provider actually
+    receives — NOT the original step_payload, and NOT a value sourced elsewhere
+    (the inter-step channel is opt-in/None here). `[[full-chain-witness-not-half-proofs]]`.
+    """
+    edited_messages = [{"role": "user", "content": "EDITED BY OPERATOR"}]
+    edited_str = json.dumps(
+        {"messages": edited_messages, "tools": None, "params": {"max_tokens": 100}}
+    )
+
+    class _AskEdit:
+        async def ask(
+            self, prompt: str, options: Sequence[HITLResponse], timeout: float | None
+        ) -> AskUserQuestionResult:
+            _ = prompt, options, timeout
+            return AskUserQuestionResult(
+                response=HITLResponse.EDIT, latency_ms=4.0, edited_proposal=edited_str
+            )
+
+    class _Ledger:
+        def append(self, payload: Any, key: Any) -> Any:
+            return ("h", payload, key)
+
+    class _Audit:
+        def append(self, *, tenant_id: Any, audit_entry: Any) -> Any:
+            _ = tenant_id
+            return ("w", audit_entry)
+
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(providers={"anthropic": adapter}, tracer_provider=tp)
+    composer = RuntimeHITLGateComposer(
+        inner=dispatcher,
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(AskUserQuestionSurface, _AskEdit()),
+        ledger_writer=cast(Any, _Ledger()),
+        audit_writer=cast(Any, _Audit()),
+        tracer_provider=tp,
+        audit_signing_key_id="harness-runtime-test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: Identifier("b" * 64),
+    )
+    # Original payload is DISTINCT from the operator's edit (proves replacement).
+    original = {
+        "messages": [{"role": "user", "content": "ORIGINAL"}],
+        "tools": None,
+        "params": {"max_tokens": 100},
+    }
+    placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    ctx = _step_context().model_copy(update={"hitl_placements": (placement,)})
+
+    await composer.dispatch(_binding("anthropic"), _step(original), step_context=ctx)
+
+    # The REAL dispatcher consumed the DECODED payload (not the original) — the
+    # str→Mapping→step_payload→_coerce_payload→provider chain end-to-end.
+    assert adapter.client.messages.last_kwargs is not None
+    assert adapter.client.messages.last_kwargs["messages"] == edited_messages
 
 
 @pytest.mark.asyncio
