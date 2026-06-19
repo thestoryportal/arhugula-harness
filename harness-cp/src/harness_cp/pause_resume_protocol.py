@@ -38,6 +38,7 @@ from harness_cp.cp_shared_types import ActorIdentity
 from harness_cp.handoff_context import ExternalReference, StateSummary
 from harness_cp.material_diff_detection import MaterialDiff
 from harness_cp.pause_resume_protocol_types import (
+    FanOutResumeState,
     MaterialDiffPolicy,
     PauseSnapshot,
     ResumeContext,
@@ -408,6 +409,8 @@ class PauseResumeProtocol:
         run_id: str,
         step_index: int,
         pause_reason: WorkflowPauseReason,
+        *,
+        fan_out_resume: FanOutResumeState | None = None,
     ) -> PauseSnapshot:
         """Capture a workflow-layer pause snapshot per CP spec v1.11 §26.1.
 
@@ -416,6 +419,13 @@ class PauseResumeProtocol:
         2. Resume must validate snapshot_hash (U-CP-64 responsibility).
         3. State-ledger anchor populated from current entry_hash; material
            diff defined as state_ledger_anchor divergence at resume time.
+
+        ``fan_out_resume`` (B-FANOUT-PAUSE, R-FS-1; default None) carries the
+        fan-out resume reconstruction state for a `cascade_policy=pause` halt;
+        it is COVERED by `snapshot_hash` so a tampered recovered-output fails
+        the resume-time recompute. Linear / single-step callers pass nothing →
+        the snapshot + its hash are byte-identical to the pre-B-FANOUT-PAUSE
+        baseline.
         """
         state_summary, state_ledger_anchor = self._pause_context_reader()
         snapshot_hash = _compute_snapshot_hash(
@@ -423,6 +433,7 @@ class PauseResumeProtocol:
             run_id=run_id,
             step_index=step_index,
             state_summary=state_summary,
+            fan_out_resume=fan_out_resume,
         )
         return PauseSnapshot(
             workflow_id=workflow_id,
@@ -433,6 +444,7 @@ class PauseResumeProtocol:
             snapshot_hash=snapshot_hash,
             created_at=_now_epoch_ms(),
             state_ledger_anchor=state_ledger_anchor,
+            fan_out_resume=fan_out_resume,
         )
 
     async def attempt_resume(
@@ -478,11 +490,14 @@ class PauseResumeProtocol:
                similar to U-CP-61 validator-escalation→HITL link via span_id).
         """
         # AC #1 — validate snapshot_hash by recomputing canonical hash
+        # (B-FANOUT-PAUSE: pass fan_out_resume so a tampered recovered-output is
+        # caught here as CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION; None for linear).
         expected_hash = _compute_snapshot_hash(
             workflow_id=snapshot.workflow_id,
             run_id=snapshot.run_id,
             step_index=snapshot.step_index,
             state_summary=snapshot.state_summary,
+            fan_out_resume=snapshot.fan_out_resume,
         )
         if expected_hash != snapshot.snapshot_hash:
             return ResumeResult(
@@ -544,19 +559,29 @@ def _compute_snapshot_hash(
     run_id: str,
     step_index: int,
     state_summary: StateSummary,
+    fan_out_resume: FanOutResumeState | None = None,
 ) -> str:
     """sha256 hex over canonical JSON of (workflow_id, run_id, step_index, state_summary).
 
     Mirrors the `canonicalize_brief` / `compute_brief_summary_hash` pattern at
     `harness_cp.sub_agent_brief` — sorted-key JSON, compact separators,
     UTF-8 encoded. Deterministic.
-    """
-    canonical = {
+
+    B-FANOUT-PAUSE: `fan_out_resume` (the recovered completed-branch outputs a
+    resumed aggregate trusts) is COVERED when present so a tampered branch output
+    fails `attempt_resume`'s recompute (CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION). The
+    key is added to the canonical dict ONLY when `fan_out_resume is not None`, so
+    every pre-existing (linear / single-step) snapshot hashes byte-identically to
+    before — old durable snapshots still validate (`[[new-surface-audit-hash-and-
+    config-not-carrier]]`)."""
+    canonical: dict[str, object] = {
         "workflow_id": workflow_id,
         "run_id": run_id,
         "step_index": step_index,
         "state_summary": state_summary.model_dump(mode="json"),
     }
+    if fan_out_resume is not None:
+        canonical["fan_out_resume"] = fan_out_resume.model_dump(mode="json")
     payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
 

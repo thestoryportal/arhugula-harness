@@ -1,0 +1,51 @@
+# Class 2 (in-execution, FULL-SPEC-pre-authorized) — `B-FANOUT-PAUSE`: resumable `cascade_policy=pause` fan-out (ORCHESTRATOR_WORKERS)
+
+**Status:** ✅ BUILT (2026-06-19) — bundled-absorption arc co-landing CP spec v1.41 → **v1.42** (C-CP-26 §26.2 `FanOutResumeState`/`FanOutBranchResumeState` + `PauseSnapshot.fan_out_resume`) + clearance marker + harness-cp impl + harness-runtime e2e + by-execution tests. Closes the interim `class_3_fanout_pause_resume_not_yet_materialized.md` deviation for `ORCHESTRATOR_WORKERS`.
+**Filed at:** R-FS-1 standalone arc `B-FANOUT-PAUSE` (the 11th standalone `B-*` arc since the FROZEN order completed)
+**Locus:** `harness-cp/src/harness_cp/workflow_driver.py` `_execute_orchestrator_workers` (capture + resume re-entry) + `pause_resume_protocol_types.py` / `pause_resume_protocol.py` (the carrier + hash) vs cleared `Spec_Control_Plane_v1_32.md` §25.15.1 (`pause → PAUSED`) + §25.15.2 obligation 7
+**Classification:** Class 2 (in-execution; FULL-SPEC directive 2026-06-12 pre-authorizes the build + design back-flow). **NO operator gate** (see below).
+**Routing:** Bundled-absorption per workspace `CLAUDE.md` §11.4 (design-substrate spec amendment co-lands with impl + back-flow doc + clearance marker).
+
+## What was built
+
+The cleared §25.15.1 row maps `pause → PAUSED` "composing with C-CP-26 PauseResumeProtocol + C-RT-30 `api.resume`", and §25.15.2 obligation 7 commits ledger-based resume reconstruction (skip terminal branches, re-dispatch the rest). For a fan-out this was **not materializable** (the interim Class-3 deviation): (1) a fan-out paused at the worker barrier has no single `step_index` capturing which branches completed vs. need re-dispatch (the non-linear strategies are resume-blind — they return before the linear `resume_at_step_index` prefix-replay); (2) completed-branch **outputs** do not survive in the ledger (causality + `terminal_status` only).
+
+The build supplies both:
+
+1. **Carrier** — `FanOutResumeState` (orchestrator output + the terminal branches' dispositions + outputs + `worker_count`), carried in `PauseSnapshot.fan_out_resume` (additive, default `None`) and **COVERED by `snapshot_hash`** when present (the resumed aggregate trusts the recovered outputs → a tamper fails `attempt_resume` → `CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION`; key added to the canonical hash dict ONLY when non-`None` → existing snapshots byte-identical).
+2. **Capture** — on a worker failure under `cascade_policy=pause` with a bound `pause_resume_protocol`: the driver builds the `FanOutResumeState` from the post-barrier terminal dispositions + collected outputs, captures a snapshot, returns `RunStatus.PAUSED` + the snapshot. Without a bound protocol → FAILED + `orchestrator-workers-pause-resume-protocol-not-bound` (honest detect-then-refuse; no false-PAUSED).
+3. **Resume re-entry** — the validated snapshot threads `execute_workflow(pause_snapshot_input=) → _execute_workflow_body(resume_snapshot=) → _execute_orchestrator_workers(resume_snapshot=)`; the strategy recovers the orchestrator + terminal outputs, re-dispatches only the absent (re-dispatchable) ordinals, and composes the fused aggregate. A re-dispatched worker failing again under `pause` re-pauses with a snapshot that unions the prior + this-round terminal sets.
+
+The **pause semantic** (§25.15.1 "in-flight finish; not-yet-dispatched left re-dispatchable", `adversarial-review-r-fs-1-arc-14` line 55): in-flight siblings finish (terminal); the not-yet-dispatched ones are LEFT re-dispatchable (the cascade-cancel obligation-4 `cancelled`-terminal scan is deliberately NOT run on `pause`); a failed worker → `completed` terminal (dispatch-boundary, effect may have landed) → NOT re-dispatched (obligation 7 + at-most-once).
+
+## Why NO operator gate (the design-fork-first surface, resolved)
+
+The genuine design-fork-first surface (advisor-identified) is piece (1)/(2)'s **completed-branch output recovery**, which breaks the R-CC-1 arc-3 design §1.1 *position-only / data-stateless* resume model. Applying the workspace gate discriminator (`[[feedback-gate-only-on-meaningful-architecture-change]]` + the B4-Slice-4 precedent): a gate is owed only when a finding sacrifices an **explicit invariant forbidding** the change. Reading R-CC-1 design §1.1 at source: it is a *descriptive MVP scoping note with an explicit §6 re-open trigger* — "if a future execution model adds inter-step working-state data-dependencies … position-only resume becomes insufficient and durable-resume would need a state-restoration story + a durable store carrying more than the [position-only] `PauseSnapshot`." This arc IS that designed re-open firing for the fan-out-pause case. §1.1 does not *forbid* rehydration; it *anticipates* it. So: adopt-and-note + clearance under the FULL-SPEC directive, NOT an operator gate (`[[grounding-reveals-claude-closeable-slice-close-honestly]]` spec'd→build; `[[probe-resolves-fork-prescribed-council]]`).
+
+The carrier-shape decision (`FanOutResumeState` in `PauseSnapshot`, hash-covered) has a clear correct answer (hash-coverage mandatory for the trusted-data integrity; `StateSummary`'s `summary_text: str` is a poor fit for branch-output mappings → a dedicated typed carrier; additive default-`None` → backward-compat) → decided + noted + decorrelated-reviewed (advisor + Codex), not gated. `[[new-surface-audit-hash-and-config-not-carrier]]`.
+
+The now-false "no working-state rehydration is required" prose in the runtime `api.resume` docstring is refreshed to note the fan-out exception (`[[stale-carry-text-disposition]]`); the LINEAR / single-step resume stays position-only.
+
+## Scope + registered forward arcs
+
+`ORCHESTRATOR_WORKERS` only — the interim Class-3 deviation is filed only for `_execute_orchestrator_workers`, so closing it closes the deviation. The four other non-linear strategies each carry their own `*-pause-resume-not-yet-materialized` FAILED branch (grounded by direct read, `[[subagent-landscape-reports-need-regrounding]]`) → registered as forward arcs in the spine ledger:
+- `B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER` — EVALUATOR_OPTIMIZER fan-out pause (sibling fan-out-barrier shape).
+- `B-FANOUT-PAUSE-PARALLELIZATION` — PARALLELIZATION fan-out pause (sibling fan-out-barrier shape).
+- `B-HANDOFF-PAUSE` — DECENTRALIZED_HANDOFF single-owner sequential handoff-pause (a different, non-fan-out shape).
+- `B-HIERARCHICAL-PAUSE` — HIERARCHICAL_DELEGATION (reuses ORCHESTRATOR_WORKERS execution, but its *resume* crosses the child-bootstrap recursion boundary → genuinely separate).
+
+## Decorrelated review (pre-merge) — 3 real correctness holes the green tests masked
+
+advisor (full-transcript) + out-of-family Codex (the diff), run pre-merge per `CLAUDE.md` §13.1; the strongest signal was their DISAGREEMENT-free coverage of three distinct silent-degradation/false-resumable holes the first-pass green tests hid (one had a test *codifying* the bug). All three fixed before merge:
+
+1. **advisor [P1] — resume tail returned bare SUCCESS while silently dropping a failed worker.** A resume where a recovered branch had FAILED returned `SUCCESS` + `fail_class=None` with the failed worker gone from `worker_outputs` — the exact silent-degradation class this arc forecloses. Fixed: the resumed-terminal status mirrors `proceed` — `any(bi not in collected for bi in terminal_dispositions)` (a terminal branch with no collected output = failed/timed-out) → `PARTIAL` + salvage, not SUCCESS (both the `if not branch_plan` all-terminal early return AND the trailing clean return). The test that codified the bug (`...all_terminal_completes_without_redispatch`, asserting SUCCESS) was FLIPPED to assert PARTIAL.
+2. **Codex [P1] — HIERARCHICAL_DELEGATION reached the new PAUSED but its resume isn't wired.** `_execute_hierarchical_delegation` REUSES `_execute_orchestrator_workers`, so a HIERARCHICAL + TEAM/pause + bound-protocol worker failure returned a false-resumable PAUSED (`api.resume` threads no snapshot into the hierarchical dispatch → it would re-run the orchestrator + all workers). Fixed: a `pause_resumable: bool = False` param gates the PAUSED return to the TOP-LEVEL ORCHESTRATOR_WORKERS dispatch only; HIERARCHICAL → honest FAILED `...-not-yet-materialized` (the `B-HIERARCHICAL-PAUSE` forward arc).
+3. **Codex [P1] — recovered branches validated by `worker_count` only, not identity.** A same-count body change (worker rename / reorder) would attribute a recovered output to the wrong step (silent stale output) + accepted out-of-range / duplicate branch indices. Fixed: `FanOutBranchResumeState` carries the capture-time `step_id`; resume validates each recovered branch's bounds + no-duplicates + `worker_steps[branch_index].step_id == step_id` (fail-closed `orchestrator-workers-resume-branch-identity-mismatch`). The full anchor-reachability material-diff stays the deferred U-CP-22 arc; this is the cheap positional-identity guard.
+
+Three hardening tests added: `...redispatch_failing_worker_re_pauses_with_unioned_branches` (the re-pause-union claim advisor flagged as untested), `...hierarchical_delegation_pause_fails_honestly_not_false_paused`, `...resume_body_identity_mismatch_fails_closed`.
+
+## Verification
+
+- harness-cp: `test_workflow_driver_fanout_pause.py` (12 tests) — the real-entry-point resume witness (`execute_workflow(pause_snapshot_input=)`, the path `api.resume` drives: terminal-skip + re-dispatch + fused aggregate), the GatedFail real-pause→real-resume round-trip, a hash-tamper negative control (corruption rejected), an empty-branches negative control (persistence load-bearing), the `worker_count` material-diff guard, the backward-compat byte-identical hash, the JSON round-trip; + the flipped interim test (`...pause_without_protocol_fails_honestly_not_false_paused`).
+- harness-runtime: `test_b_fanout_pause_resume_e2e.py` — the gold-standard full-runtime `api.resume` e2e (capture via bootstrapped protocol → JSON round-trip → `api.resume` → SUCCESS; only worker-1 re-dispatched, orchestrator + worker-0 recovered).
+- Gates: pyright 0/0/0 · ruff clean · harness-cp 1079 passed + 1 xfailed · harness-runtime 1957 passed / 21 skipped / 1 xfailed · decorrelated review advisor + out-of-family Codex (pre-merge).

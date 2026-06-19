@@ -705,9 +705,14 @@ async def resume(
     arc #3). `run()` surfaces `RunResult(status='paused', pause_snapshot=...)`
     when a workflow-layer pause fires (DURABLE_ASYNC HITL gate / explicit
     operator pause). Resume continues the workflow from the paused step.
-    Resume position is restored from the snapshot's `step_index`; the MVP
-    execution model is data-stateless between steps, so no working-state
-    rehydration is required (R-CC-1 design §1.1).
+    Resume position is restored from the snapshot's `step_index`; for the linear
+    / single-step execution model resume is position-only — data-stateless between
+    steps, so no working-state rehydration is required (R-CC-1 design §1.1). The
+    ONE exception is a `cascade_policy=pause` fan-out resume (B-FANOUT-PAUSE): the
+    snapshot's `fan_out_resume` carries the completed-branch outputs (the §1.1 §6
+    re-open trigger materialized for the fan-out case — the ledger carries
+    causality + terminal_status, not the dispatch output), threaded OPAQUELY by
+    this surface to the CP ORCHESTRATOR_WORKERS strategy via `pause_snapshot_input`.
 
     Two snapshot sources (supply EXACTLY ONE):
 

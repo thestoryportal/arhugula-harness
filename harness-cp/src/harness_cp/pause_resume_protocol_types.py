@@ -33,8 +33,9 @@ identifier rename absorbed); plan unit U-CP-62 (CP plan v2.17 §1).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -89,6 +90,89 @@ class MaterialDiffPolicy(StrEnum):
     """Any diff escalates to HITL for operator arbitration."""
 
 
+class FanOutBranchResumeState(BaseModel):
+    """Per-branch terminal disposition + recovered output for a paused fan-out.
+
+    B-FANOUT-PAUSE (R-FS-1) — one row per fan-out worker branch that reached a
+    terminal disposition before the `cascade_policy=pause` halt. A branch absent
+    from `FanOutResumeState.branches` is **left re-dispatchable** (the §25.15.1
+    pause semantic: "in-flight finish; not-yet-dispatched left re-dispatchable")
+    — `api.resume` re-dispatches it. A branch present here MUST NOT be
+    re-dispatched (§25.15.2 obligation 7: a `completed`/`timed_out`/`cancelled`
+    branch is terminal); its `output` is recovered into the resumed aggregate.
+
+    The terminal_status mirrors the persisted Route-Y `branch_metadata.terminal_status`
+    (§25.13): `completed` = the branch's dispatch ran (effect may have landed —
+    incl. a ran-and-errored worker, dispatch-boundary semantic per obligation 4);
+    `timed_out` = the barrier deadline cut an in-flight branch.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    branch_index: int
+    """The fan-out branch ordinal (0-based; worker `steps[1:]` position)."""
+
+    step_id: str
+    """The branch's `WorkflowStep.step_id` AT CAPTURE TIME. Resume validates the
+    re-supplied `worker_steps[branch_index].step_id` against this (identity, not
+    just `worker_count`) so a same-count body change (a worker rename / reorder)
+    fails closed rather than silently attributing recovered output to the wrong
+    step. (Full anchor-reachability material-diff is the deferred U-CP-22 arc;
+    this is the cheap positional-identity guard.)"""
+
+    terminal_status: str
+    """The persisted branch disposition: `completed` | `timed_out` (the
+    discriminating Route-Y `terminal_status`, §25.15.2 obligation 4)."""
+
+    output: Mapping[str, Any] | None = None
+    """The completed branch's dispatch output, recovered into the resumed
+    aggregate. `None` for a branch that ran-and-errored or timed out (it
+    contributed nothing to the original aggregate — preserved as terminal so
+    obligation 7 does not re-dispatch its possibly-landed effect)."""
+
+
+class FanOutResumeState(BaseModel):
+    """Fan-out resume reconstruction state carried by a paused-fan-out PauseSnapshot.
+
+    B-FANOUT-PAUSE (R-FS-1) — the self-contained, hash-integrity-checked resume
+    source for a `cascade_policy=pause` fan-out halt. Materializes the §25.15.1
+    `pause → PAUSED` row's "composes with C-CP-26 PauseResumeProtocol + C-RT-30
+    `api.resume`" promise for the fan-out case, which position-only resume cannot
+    represent (a fan-out paused at the worker barrier has no single `step_index`
+    capturing which branches completed vs. need re-dispatch — `adversarial-review-
+    r-fs-1-arc-14` F1-01).
+
+    This is the materialization of the R-CC-1 design §1.1 re-open trigger ("a
+    future execution model … would need a state-restoration story + a durable
+    store carrying more than the [position-only] PauseSnapshot"): the completed
+    branches' OUTPUTS do not survive in the ledger (it carries causality +
+    `terminal_status`, not the dispatch output mapping), so they are carried here
+    and `_compute_snapshot_hash` COVERS this field — a resumed aggregate trusts
+    these recovered outputs, so they are integrity-checked, not a silent-tamper gap.
+
+    Satisfies §25.15.2 obligation 7 ("`api.resume` reads each branch's persisted
+    `terminal_status` and MUST NOT re-dispatch a `cancelled`/`completed`/`timed_out`
+    branch"): `branches` IS that persisted per-branch terminal disposition.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    orchestrator_output: Mapping[str, Any]
+    """The orchestrator step's (`steps[0]`) output, recovered on resume so the
+    already-run orchestrator is NOT re-dispatched (it is a completed step; effect
+    may have landed)."""
+
+    branches: tuple[FanOutBranchResumeState, ...]
+    """The terminal branches (completed / timed_out) at pause time. A worker
+    branch ordinal absent from this tuple is left re-dispatchable."""
+
+    worker_count: int
+    """The total declared worker count (`len(steps[1:])`) at pause time — bounds
+    the re-dispatchable set (any ordinal in `range(worker_count)` not present in
+    `branches` is re-dispatched). A material-diff guard at resume: a different
+    `worker_count` means the workflow body changed."""
+
+
 class PauseSnapshot(BaseModel):
     """8-field pause-snapshot envelope (CP spec v1.11 §26.2).
 
@@ -129,6 +213,18 @@ class PauseSnapshot(BaseModel):
     state_ledger_anchor: str
     """C-IS-05 §5 `entry_hash` at pause point. Material-diff detection at
     U-CP-64 checks reachability from current entry chain."""
+
+    fan_out_resume: FanOutResumeState | None = None
+    """B-FANOUT-PAUSE (R-FS-1) — fan-out resume reconstruction state, present
+    ONLY when this snapshot captures a `cascade_policy=pause` fan-out halt
+    (`None` for every linear / single-step pause — additive, default-None, so
+    existing 8-field snapshots are byte-unchanged and still validate).
+
+    When present, `_compute_snapshot_hash` COVERS it (the resumed aggregate
+    trusts the recovered completed-branch outputs → integrity-checked, no
+    silent-tamper gap), and `api.resume` re-enters the fan-out strategy with it:
+    terminal branches are skipped (outputs recovered), absent branch ordinals
+    re-dispatched (§25.15.2 obligation 7)."""
 
 
 class ResumeResult(BaseModel):

@@ -551,13 +551,17 @@ def test_orchestrator_workers_proceed_records_timed_out_worker_on_deadline(
     assert any(e.branch_metadata.branch_index == 0 for e in timed_out)
 
 
-def test_orchestrator_workers_pause_fails_honestly_not_false_paused() -> None:
-    """TEAM persona → pause: a worker fails → resumable FAN-OUT pause is not yet
-    materialized at B1, so the run fails HONESTLY (FAILED + an explicit
-    `not-yet-materialized` fail_class) rather than advertising a non-resumable
-    `PAUSED` (decorrelated-review [P1]/F1-01 — the silent-degradation failure
-    mode foreclosed). The completed workers' entries STILL persist (no silent
-    loss), and the salvaged partial result set is carried in partial_state."""
+def test_orchestrator_workers_pause_without_protocol_fails_honestly_not_false_paused() -> None:
+    """TEAM persona → pause, but NO pause/resume protocol bound: a worker fails →
+    the run fails HONESTLY (FAILED + `pause-resume-protocol-not-bound`) rather
+    than advertising a non-resumable `PAUSED` (decorrelated-review [P1]/F1-01 —
+    the silent-degradation failure mode stays foreclosed).
+
+    B-FANOUT-PAUSE materializes the resumable `pause → PAUSED` ONLY when a
+    `pause_resume_protocol` is bound (so a snapshot CAN be captured); without the
+    opt-in there is nothing to resume from, so the honest detect-then-refuse is a
+    loud FAILED (mirrors `api.resume`'s ResumeProtocolNotBoundError). The completed
+    workers' entries STILL persist (no silent loss) + the salvage is carried."""
     ledger = _RecordingLedger()
     result = _run(
         steps=_steps(3),
@@ -567,7 +571,7 @@ def test_orchestrator_workers_pause_fails_honestly_not_false_paused() -> None:
     )
 
     assert result.status is RunStatus.FAILED
-    assert result.fail_class == "orchestrator-workers-pause-resume-not-yet-materialized"
+    assert result.fail_class == "orchestrator-workers-pause-resume-protocol-not-bound"
     # No false-PAUSED is ever returned by the fan-out strategy.
     assert result.status is not RunStatus.PAUSED
     # Audit-honoring: the orchestrator + the dispatched workers' entries persisted.
