@@ -354,6 +354,34 @@ R-IF-112:
     without LLM calls; `overlay.py check` is CI-gated for hard CXA/stale-artifact drift; advisory orphan
     reporting covers code without cite, contract without code cite, and substitution without direct carrier.
 
+R-IF-114:
+  title: dashboard-generate test rot — `tools/test_dashboard_generate.py` ungated brittle arc-map snapshot
+  surface: VII
+  status: ACTIVE
+  depends_on: []
+  blocks: []
+  posture: mode-agnostic
+  scope: { files: [tools/test_dashboard_generate.py, .github/workflows/ci.yml], contracts: [], cross_axis: no }
+  skills: { primary: null, secondary: [] }
+  advisor_required: no
+  council_required: no
+  verification: { shape: none, must_pass: ["tools/test_dashboard_generate.py green against the current arc-map", "chosen disposition (robust+gated OR drop-live-assertions) recorded"] }
+  close_shape: { type: PR-merge, artifact: "tools/test_dashboard_generate.py disposition", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: null
+  notes: >
+    Surfaced 2026-06-19 at the post-#661 (B-FANOUT-PAUSE) refresh. `tools/test_dashboard_generate.py`
+    asserts HARDCODED per-arc statuses + bucket counts against the LIVE arc-map (`_real_arc_map_md()`),
+    so it goes red every time §5 changes. It rotted UNDETECTED across #655→#661 (asserts
+    `B-HITL-PLACEMENT-PER-STEP-PRODUCER == "remaining"` + "8 closed" — pre-#657 state) because the
+    `tools/` test module is DELIBERATELY OUTSIDE CI (ci.yml:236 — only the 7 testpaths packages run; the
+    substitution-ledger test got its OWN dedicated CI job at ci.yml:255/259 — the precedent IF this test is
+    gate-worthy). Operator-surfaceable disposition (NOT to be wired unilaterally): (a) make the test ROBUST
+    (assert structural invariants — status ∈ {closed,remaining,gated,resolved}, every closed arc has a PR# in
+    `status_detail`, bucket counts sum) + gate it like the substitution-ledger job, OR (b) drop the live-data
+    assertions / accept it as a manual snapshot. Re-snapshotting to current numbers only resets the timer
+    (brittle). Known-red LOCALLY until resolved (not blocking; not in CI). Decorrelated review (advisor) at
+    the post-#661 refresh confirmed register-don't-bury + don't-silently-wire-CI.
+
 R-IF-roadmap-refresh:
   title: Refresh roadmap status dashboard after PR merge
   surface: VII
