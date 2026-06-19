@@ -628,6 +628,98 @@ def _record_inter_step_output(
         _channel.record(step_id, step_output)
 
 
+def _record_durable_step_output(
+    ctx: DriverContext,
+    run_idempotency_key: str,
+    step_index: int,
+    step_id: str,
+    step_output: Mapping[str, Any],
+) -> None:
+    """B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — durably persist a completed
+    step's output to the output-carrying event-history store.
+
+    Called BEFORE `_append_step_ledger_entry` (the F2 materialization point
+    `resume_at` counts) — the RESERVE-before-COMMIT skew discipline: the store
+    always holds ≥ the ledger's materialized prefix, so an EVENT_SOURCED_REPLAY
+    resume never finds a materialized step with a missing output (a crash AFTER
+    the store-write but BEFORE the ledger-append leaves an extra uncommitted store
+    record, which `resume_at`-driven rehydration ignores). Keyed by
+    `run_idempotency_key` (stable across the EVENT_SOURCED_REPLAY restart — the
+    same id the resume join uses). Operator-opt-in: `ctx.engine_output_store` is
+    `None` by default → no-op. Consumed via `getattr` (the `cp_is_wiring` idiom —
+    harness-cp does not import the runtime store)."""
+    _store = getattr(ctx, "engine_output_store", None)
+    if _store is not None:
+        _store.record(run_idempotency_key, step_index, step_id, step_output)
+
+
+def _rehydrate_inter_step_channel_on_replay(
+    ctx: DriverContext,
+    *,
+    run_idempotency_key: str,
+    resume_at: int,
+    steps: Sequence[WorkflowStep],
+    workflow_id: str,
+    run_id: str,
+) -> RunResult | None:
+    """B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — on an EVENT_SOURCED_REPLAY
+    resume, replay the durably-stored prefix outputs (steps `0..resume_at-1`) into
+    the run-scoped inter-step output channel so the FIRST re-dispatched step
+    (`resume_at`) reads its recovered predecessor's output — materializing the
+    C-CP-08 §8.1 "activity outputs cached and replayed" clause (degenerate without
+    this: a skip-prefix resume leaves the fresh channel empty, so a downstream
+    consumer reads `None` where a fresh run would read the upstream output).
+
+    No-op unless BOTH the output store + the inter-step channel are bound (the
+    genuine replay path needs the consumer; the store alone records but is not
+    observed). Rehydration is driven by `resume_at` (the ledger authority), NOT
+    "load whatever's in the store" — the store may hold one extra uncommitted step
+    (a crash AFTER the store-write but BEFORE the ledger-append), which is ignored.
+
+    FAILS CLOSED (returns a FAILED `RunResult`) if a step the ledger says is
+    materialized is missing from the store OR its stored `step_id` does not match
+    the re-supplied body — the store↔ledger skew / body-change corruption gate
+    (the symmetric of B-FANOUT-PAUSE's identity fail-close). Returns `None` on
+    success (rehydrated, or not applicable)."""
+    _store = getattr(ctx, "engine_output_store", None)
+    _channel = getattr(ctx, "inter_step_output_channel", None)
+    if _store is None or _channel is None or resume_at <= 0:
+        return None
+    stored = _store.read_outputs(run_idempotency_key)
+    for i in range(resume_at):
+        if i not in stored:
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=i,
+                partial_state=None,
+                final_state=None,
+                fail_class=(
+                    f"engine-output-replay-missing-output: step_index={i} is "
+                    f"materialized in the ledger (resume_at={resume_at}) but absent "
+                    f"from the output store — store↔ledger skew corruption"
+                ),
+            )
+        stored_step_id, stored_output = stored[i]
+        if stored_step_id != str(steps[i].step_id):
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=i,
+                partial_state=None,
+                final_state=None,
+                fail_class=(
+                    f"engine-output-replay-identity-mismatch: step_index={i} stored "
+                    f"step_id={stored_step_id!r} != resumed body step_id="
+                    f"{str(steps[i].step_id)!r} — the workflow body changed"
+                ),
+            )
+        _channel.record(stored_step_id, stored_output)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Branch buffered/deferred-append substrate (C-CP-25 §25.11/§25.12 — U-CP-82)
 # ---------------------------------------------------------------------------
@@ -1592,6 +1684,21 @@ def _execute_workflow_body(
         )
         if resume_at > 0:
             ctx.lifecycle_emitter.emit(WorkflowEventClass.RESUMPTION)
+            # B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — the §8.1 "cached
+            # outputs replayed" half: replay the durably-stored prefix outputs into
+            # the inter-step channel so the first re-dispatched step reads its
+            # recovered predecessor (no-op unless store + channel are bound;
+            # fail-closed on a store↔ledger skew gap / body-change identity mismatch).
+            _replay_fail = _rehydrate_inter_step_channel_on_replay(
+                ctx,
+                run_idempotency_key=run_idempotency_key,
+                resume_at=resume_at,
+                steps=steps,
+                workflow_id=manifest_entry.workflow_id,
+                run_id=run_id,
+            )
+            if _replay_fail is not None:
+                return _replay_fail, 0
     elif manifest_entry.engine_class is EngineClass.RECONCILER_LOOP:
         # U-CP-96 (R-FS-1 E-impl-3a) — RECONCILER_LOOP convergence resumption.
         # "Re-derive state from declarative CRDs; reconciler-loop converges through
@@ -2349,6 +2456,17 @@ def _execute_workflow_body(
                         # CP composer arc per scoping doc adjacent obs (d));
                         # workflow proceeds with original validator outcome.
                         _ = hitl_response
+
+        # B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — durably persist this
+        # step's output to the output-carrying event-history store BEFORE the
+        # ledger-append below (RESERVE-before-COMMIT: the store always holds ≥ the
+        # ledger's materialized prefix). Opt-in; no-op when unbound. The store-write
+        # precedes the ledger materialization `resume_at` counts, so an
+        # EVENT_SOURCED_REPLAY resume never finds a materialized step with a missing
+        # stored output (the rehydration fail-closes on that, were it possible).
+        _record_durable_step_output(
+            ctx, run_idempotency_key, step_index, str(step.step_id), step_output
+        )
 
         # § 25.3.3.7 — State-ledger append via U-IS-11 composition.
         # Reuse pre-dispatch step_idempotency_key composed at the
