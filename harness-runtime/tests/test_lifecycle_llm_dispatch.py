@@ -26,6 +26,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -59,7 +60,11 @@ from harness_cp.routing_manifest_residence import (
     RoutingManifest,
 )
 from harness_cp.topology_pattern import TopologyPattern
-from harness_cp.workflow_driver import StepDispatcher, execute_workflow
+from harness_cp.workflow_driver import (
+    StepDispatcher,
+    _rehydrate_inter_step_channel_on_replay,
+    execute_workflow,
+)
 from harness_cp.workflow_driver_types import (
     RunStatus,
     StepExecutionContext,
@@ -74,6 +79,7 @@ from harness_runtime.lifecycle.ask_user_question_surface import (
     AskUserQuestionResult,
     AskUserQuestionSurface,
 )
+from harness_runtime.lifecycle.engine_output_store import EngineOutputStore
 from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
 from harness_runtime.lifecycle.hitl_tool_loop import HITLToolLoopContext, ModelToolCall
 from harness_runtime.lifecycle.inter_step_output_channel import InterStepOutputChannel
@@ -2396,6 +2402,66 @@ async def test_inter_step_channel_injects_prior_output_into_provider_call() -> N
     # The step's own message is preserved AFTER the injected upstream context.
     assert {"role": "user", "content": "hi"} in messages
     assert len(messages) == 2
+
+
+@pytest.mark.asyncio
+async def test_b_engine_output_replay_rehydrated_output_reaches_real_provider_call(
+    tmp_path: Path,
+) -> None:
+    """B-ENGINE-OUTPUT-REPLAY full-chain witness — a prior run's step output, durably
+    stored ON DISK, is REHYDRATED into a FRESH inter-step channel (the post-restart
+    resume) and the REAL `RuntimeLLMDispatcher` then INJECTS it into the actual
+    provider call: the model GENUINELY receives the recovered upstream output on
+    resume (the C-CP-08 §8.1 "outputs cached and replayed" clause, end-to-end through
+    the real dispatcher → real provider — NOT a channel-unit proxy). Composes the
+    durable store + the CP rehydrate + the real dispatcher + the recording provider
+    in one path; the store's disk-survival across a restart is the store unit tests."""
+    # A prior (now-crashed) run durably stored step-0's output (RESERVE-before-COMMIT).
+    store = EngineOutputStore(journal_dir=tmp_path / "eo")
+    store.record("run-key", 0, "step-0", {"draft": "recovered-prior-draft"})
+
+    # A FRESH channel (the restart) + the CP rehydrate over `resume_at=1` (step-0
+    # materialized) → the fresh channel is repopulated from the durable store.
+    channel = InterStepOutputChannel()
+
+    class _ReplayCtx:
+        engine_output_store = store
+        inter_step_output_channel = channel
+
+    fail = _rehydrate_inter_step_channel_on_replay(
+        cast(Any, _ReplayCtx()),
+        run_idempotency_key="run-key",
+        resume_at=1,
+        steps=[
+            WorkflowStep(
+                step_id=StepID("step-0"), step_kind=StepKind.INFERENCE_STEP, step_payload={}
+            ),
+            WorkflowStep(
+                step_id=StepID("step-1"), step_kind=StepKind.INFERENCE_STEP, step_payload={}
+            ),
+        ],
+        workflow_id="wf",
+        run_id="r",
+    )
+    assert fail is None  # rehydrate succeeded (no skew / identity mismatch)
+    assert channel.most_recent_output() == {"draft": "recovered-prior-draft"}
+
+    # The REAL dispatcher dispatches the resumed step → injects the recovered step-0
+    # output into the ACTUAL provider call.
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter}, tracer_provider=tp, inter_step_channel=channel
+    )
+    await dispatcher.dispatch(_binding("anthropic"), _step(), step_context=_step_context())
+
+    call = adapter.client.messages.last_kwargs
+    assert call is not None
+    messages = call["messages"]
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"].startswith("Upstream step output:")
+    # The provider GENUINELY receives the prior run's RECOVERED output on resume.
+    assert "recovered-prior-draft" in messages[0]["content"]
 
 
 @pytest.mark.asyncio

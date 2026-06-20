@@ -110,6 +110,10 @@ from harness_od.per_cell_collector_placement_matrix import CollectorPlacement
 from harness_od.sampling_mode import SamplingMode
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
+# B-ENGINE-OUTPUT-REPLAY — durable output store (runtime spec C-RT-32). No harness
+# imports in that module → no import cycle.
+from harness_runtime.lifecycle.engine_output_store import EngineOutputStore
+
 # U-RT-116 — HITL auto-approve policy carrier import (per spec v1.49 §3 C-RT-03
 # field-table extension + §3.8 sub-model). HITLAutoApprovePolicy declared at U-RT-116.
 from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
@@ -1343,6 +1347,22 @@ class RuntimeConfig(BaseModel):
     payload, so it MUST be opt-in (unlike `cost_record_accumulator`, which is
     always-on additive observability)."""
 
+    engine_output_replay: bool = False
+    """B-ENGINE-OUTPUT-REPLAY (R-FS-1 standalone arc; runtime spec C-RT-32, new) —
+    opt-in to the durable output-carrying event-history store. When `True`, stage 5
+    LOOP_INIT constructs + binds a fresh `EngineOutputStore` on
+    `ctx.engine_output_store` (co-located under the resolved STATE_LEDGER dir); the
+    workflow driver durably records each completed step's output BEFORE the F2
+    ledger-append (RESERVE-before-COMMIT), and on an EVENT_SOURCED_REPLAY resume the
+    driver rehydrates the inter-step output channel from the stored prefix outputs —
+    materializing the C-CP-08 §8.1 "activity outputs cached and replayed" clause
+    (degenerate today: on a skip-prefix resume the prefix is NOT re-dispatched, so a
+    downstream consumer reads an empty channel — fresh-run ≠ resumed-run). The
+    distinguishing replay effect is observable ONLY when composed with
+    `inter_step_data_flow=True` (the consumer channel) + an EVENT_SOURCED_REPLAY
+    workflow; default `False` → `ctx.engine_output_store is None` → no recording, no
+    rehydration (byte-identical)."""
+
     effect_fencing: bool = False
     """B-EFFECT-FENCE (R-FS-1 standalone arc; runtime spec §14.22 C-RT-31, new at
     v1.60) — opt-in to at-most-once EXECUTION of non-idempotent tool-step effects
@@ -1927,6 +1947,15 @@ class HarnessContext(BaseModel):
     # `arbitrary_types_allowed`; a typed container field would be Pydantic-copied
     # at `freeze()`, disconnecting the driver's records from the dispatcher's read.
     inter_step_output_channel: InterStepOutputChannel | None = None
+
+    engine_output_store: EngineOutputStore | None = None
+    """B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — the durable per-run
+    output-carrying event-history store, bound at stage 5 LOOP_INIT when
+    `RuntimeConfig.engine_output_replay` is True (else `None` → no recording /
+    rehydration). The CP driver records each completed step output here BEFORE the
+    F2 ledger-append (RESERVE-before-COMMIT) and rehydrates the inter-step channel
+    from it on an EVENT_SOURCED_REPLAY resume. Read by the driver via the
+    `cp_is_wiring` getattr idiom (harness-cp does not import the holder)."""
 
     # U-RT-94 — Runtime-internal sidecar carrier for one-shot ResumeContext
     # delivery across the pause-resume cycle. Bound at stage 5 LOOP_INIT to

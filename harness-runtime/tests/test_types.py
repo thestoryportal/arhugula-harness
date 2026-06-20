@@ -220,6 +220,11 @@ def test_harness_context_declares_all_c_rt_04_fields() -> None:
         # byte-identical. A plain by-reference holder (the CostRecordAccumulator
         # CA #625 precedent), typed `InterStepOutputChannel | None`.
         "inter_step_output_channel",
+        # B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — the durable output-carrying
+        # event-history store, bound at stage 5 only when
+        # RuntimeConfig.engine_output_replay is True; None (default) → byte-identical.
+        # A by-reference holder typed `EngineOutputStore | None`.
+        "engine_output_store",
         # R-CL-P4 (runtime spec v1.x §4 C-RT-04 NEW field row) — prompts-
         # management carrier read by resolve_procedural_tier_snapshot as the
         # third procedural-tier hash component (IS spec v1.5 §C-IS-05 §5.2;

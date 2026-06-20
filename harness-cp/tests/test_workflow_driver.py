@@ -1067,6 +1067,237 @@ def test_event_sourced_replay_observable_lifecycle_events_emit() -> None:
 
 
 # ---------------------------------------------------------------------------
+# B-ENGINE-OUTPUT-REPLAY — the §8.1 "activity outputs cached and replayed" clause:
+# on an EVENT_SOURCED_REPLAY resume, the durably-stored prefix outputs are replayed
+# into the inter-step channel so the first re-dispatched step reads its recovered
+# predecessor (degenerate without the store: the fresh channel reads empty). The CP
+# driver reads the store + channel via `getattr` (the cp_is_wiring idiom — harness-cp
+# does not import the runtime holders), so these tests bind DUCK-TYPED fakes; the
+# real store/channel + the real LLM dispatcher consuming the rehydrated channel are
+# the runtime e2e (`test_b_engine_output_replay_*`).
+# ---------------------------------------------------------------------------
+
+
+class _FakeOutputStore:
+    """Duck-typed `EngineOutputStore` for CP-level rehydrate tests. `journal_present`
+    models whether a journal FILE exists (the discriminator the rehydrate uses when
+    `read_outputs` is empty: absent → config-flip degrade; present → unreadable
+    fail-close)."""
+
+    def __init__(
+        self,
+        outputs: dict[int, tuple[str, dict[str, Any]]],
+        *,
+        journal_present: bool = True,
+    ) -> None:
+        self._outputs = outputs
+        self._journal_present = journal_present
+
+    def read_outputs(self, run_key: str) -> dict[int, tuple[str, dict[str, Any]]]:
+        _ = run_key
+        return dict(self._outputs)
+
+    def journal_exists(self, run_key: str) -> bool:
+        _ = run_key
+        return self._journal_present
+
+    def record(self, run_key: str, step_index: int, step_id: str, output: Any) -> None:
+        # The producer fires on each re-dispatched step; accept it (the witness reads
+        # the rehydrated prefix, not the post-run store).
+        _ = run_key
+        self._outputs[step_index] = (step_id, dict(output))
+        self._journal_present = True
+
+
+class _FakeOutputChannel:
+    """Duck-typed `InterStepOutputChannel` (record + most_recent_output)."""
+
+    def __init__(self) -> None:
+        self.records: list[tuple[str, dict[str, Any]]] = []
+
+    def record(self, step_id: str, output: Any) -> None:
+        self.records.append((step_id, dict(output)))
+
+    def most_recent_output(self) -> Any:
+        return self.records[-1][1] if self.records else None
+
+
+def _esr_resume_ctx(materialized_count: int) -> _FakeCtx:
+    """An EVENT_SOURCED_REPLAY resume ctx with `materialized_count` ledger-
+    materialized steps (so `resume_at == materialized_count`)."""
+    materialized = {_expected_step_key("run-1", "wf-1", 1, i): 1 for i in range(materialized_count)}
+    return _FakeCtx(
+        ledger=_FakeLedger(prior_entries=materialized_count),
+        emitter=_FakeEmitter(),
+        ledger_reader=_FakeLedgerReader(materialized),
+    )
+
+
+class _ChannelReadingDispatcher:
+    """Records, at EACH dispatch, what the inter-step channel's `most_recent_output()`
+    is — a CP-level stand-in for the runtime LLM dispatcher's consumer read, so the
+    witness observes what the FIRST re-dispatched step actually sees as upstream
+    context (the load-bearing replay effect), not the post-run channel state (which
+    the producer also appends this step's own output to)."""
+
+    def __init__(self, channel: _FakeOutputChannel) -> None:
+        self._channel = channel
+        self.seen_upstream: list[Any] = []
+        self.dispatched: list[tuple[Any, WorkflowStep]] = []
+
+    def dispatch(
+        self, binding: Any, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        _ = step_context
+        self.seen_upstream.append(self._channel.most_recent_output())
+        self.dispatched.append((binding, step))
+        return {"echo": str(step.step_id)}
+
+
+def test_event_sourced_replay_rehydrates_channel_from_store_on_resume() -> None:
+    """B-ENGINE-OUTPUT-REPLAY witness — a resume with a bound output store + channel
+    REHYDRATES the channel from the stored prefix outputs (steps 0,1) BEFORE the loop,
+    so the first re-dispatched step (step-2) SEES the recovered step-1 output as its
+    upstream context (the §8.1 'outputs cached and replayed' clause; the empty-channel
+    degeneracy without the store). The prefix is not re-dispatched."""
+    ctx = _esr_resume_ctx(2)
+    channel = _FakeOutputChannel()
+    ctx.inter_step_output_channel = channel
+    ctx.engine_output_store = _FakeOutputStore(
+        {0: ("step-0", {"draft": "v0"}), 1: ("step-1", {"feedback": "v1"})}
+    )
+    dispatcher = _ChannelReadingDispatcher(channel)
+    execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+    )
+    # Only step-2 re-dispatched (prefix not re-fired) AND it saw step-1's RECOVERED
+    # output as upstream context (vs None without the store — the negative control).
+    assert len(dispatcher.dispatched) == 1
+    assert str(dispatcher.dispatched[0][1].step_id) == "step-2"
+    assert dispatcher.seen_upstream == [{"feedback": "v1"}]
+    # The channel was rehydrated with the prefix in order before the loop.
+    assert [r[0] for r in channel.records[:2]] == ["step-0", "step-1"]
+
+
+def test_event_sourced_replay_no_store_leaves_channel_empty_on_resume() -> None:
+    """NEGATIVE CONTROL — the same resume WITHOUT a bound output store: the first
+    re-dispatched step (step-2) sees `None` upstream (the fresh channel was never
+    rehydrated — the documented degeneracy: a downstream consumer reads None where a
+    fresh run would read the upstream output). Proves the store rehydration is the
+    ONLY source of a recovered prefix output."""
+    ctx = _esr_resume_ctx(2)
+    channel = _FakeOutputChannel()
+    ctx.inter_step_output_channel = channel  # but NO engine_output_store bound
+    dispatcher = _ChannelReadingDispatcher(channel)
+    execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+    )
+    assert dispatcher.seen_upstream == [None]
+
+
+def test_event_sourced_replay_missing_stored_output_fails_closed() -> None:
+    """FAIL-CLOSED (store↔ledger skew) — the ledger says 2 steps materialized but the
+    store is missing step 1 → the resume fails closed (FAILED + missing-output)
+    rather than rehydrating a partial prefix (the symmetric of B-FANOUT-PAUSE's
+    fail-close). The store-write-before-ledger-append discipline makes this state
+    unreachable in practice; the guard is the conservative corruption gate."""
+    ctx = _esr_resume_ctx(2)
+    ctx.inter_step_output_channel = _FakeOutputChannel()
+    ctx.engine_output_store = _FakeOutputStore({0: ("step-0", {"draft": "v0"})})  # step 1 absent
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert "engine-output-replay-missing-output" in result.fail_class
+
+
+def test_event_sourced_replay_stored_identity_mismatch_fails_closed() -> None:
+    """FAIL-CLOSED (body change) — a stored prefix output whose step_id does NOT match
+    the re-supplied body fails closed (FAILED + identity-mismatch) rather than applying
+    stale output under the wrong step."""
+    ctx = _esr_resume_ctx(2)
+    ctx.inter_step_output_channel = _FakeOutputChannel()
+    ctx.engine_output_store = _FakeOutputStore(
+        {0: ("step-0", {"v": 0}), 1: ("renamed-step", {"v": 1})}  # body has step-1 at index 1
+    )
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert "engine-output-replay-identity-mismatch" in result.fail_class
+
+
+def test_event_sourced_replay_no_journal_degrades_not_fails() -> None:
+    """DEGRADE-ON-ABSENT (advisor [P2]) — a resume where the output store is bound but
+    has NO journal file (a config flip: the original run had `engine_output_replay=
+    False`, so nothing was recorded) DEGRADES to the empty-channel path (the resumed
+    step reads None upstream) rather than fail-closing a previously-working resume.
+    NOT corruption — distinct from the partial-prefix skew (fail-closed) below."""
+    ctx = _esr_resume_ctx(2)
+    channel = _FakeOutputChannel()
+    ctx.inter_step_output_channel = channel
+    # Store bound, but EMPTY and NO journal file (config flip / fresh).
+    ctx.engine_output_store = _FakeOutputStore({}, journal_present=False)
+    dispatcher = _ChannelReadingDispatcher(channel)
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+    )
+    # NOT FAILED — the resume completes degraded; the re-dispatched step sees None.
+    assert result.status is not RunStatus.FAILED
+    assert dispatcher.seen_upstream == [None]
+
+
+def test_event_sourced_replay_unreadable_store_fails_closed() -> None:
+    """FAIL-CLOSED on unreadable store (Codex [P2]) — a journal FILE exists but yields
+    no readable records (an unreadable / corrupt store; `read_outputs` returns empty
+    on a read error) → fail closed rather than silently dropping cached outputs and
+    resuming with wrong upstream context. Distinguished from the config-flip degrade
+    above by FILE EXISTENCE."""
+    ctx = _esr_resume_ctx(2)
+    ctx.inter_step_output_channel = _FakeOutputChannel()
+    # A journal file EXISTS but read yields nothing (unreadable / corrupt).
+    ctx.engine_output_store = _FakeOutputStore({}, journal_present=True)
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.EVENT_SOURCED_REPLAY),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert "engine-output-replay-unreadable-store" in result.fail_class
+
+
+# ---------------------------------------------------------------------------
 # U-CP-94 (R-FS-1 E-impl-2) — WAL_SEGMENT segment-replay resumption (CP/IS-only)
 #
 # WAL_SEGMENT is materialized as segment-replay resumption impl against the

@@ -435,6 +435,15 @@ class _MutableHarnessContext:
     the frozen ``HarnessContext.inter_step_output_channel`` field carries the
     narrowed ``InterStepOutputChannel | None`` surface."""
 
+    engine_output_store: Any = None
+    """B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — the durable per-run
+    output-carrying event-history store. Constructed + bound at stage 5 LOOP_INIT
+    ONLY when ``RuntimeConfig.engine_output_replay`` is True; ``None`` (default) =
+    opt-out (no recording / rehydration, byte-identical). NOT in
+    ``_REQUIRED_FIELDS``. Typed ``Any`` on the builder (arbitrary-by-reference, like
+    ``cost_record_accumulator``); the frozen ``HarnessContext.engine_output_store``
+    field carries the narrowed ``EngineOutputStore | None`` surface."""
+
     procedural_tier_snapshot_resolver: Any = None
     """R-003 — zero-arg procedural-tier resolver closure (IS spec v1.3
     §C-IS-05 §5.1). Bound at stage 5 LOOP_INIT before workflow-context
@@ -542,6 +551,7 @@ class _MutableHarnessContext:
             ),
             procedural_tier_snapshot_resolver=self.procedural_tier_snapshot_resolver,
             inter_step_output_channel=self.inter_step_output_channel,
+            engine_output_store=self.engine_output_store,
         )
         self.frozen = ctx
         return ctx

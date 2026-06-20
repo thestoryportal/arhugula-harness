@@ -53,6 +53,10 @@ from harness_runtime.bootstrap.factories.webhook_delivery_composer_factory impor
 )
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
+from harness_runtime.lifecycle.engine_output_store import (
+    EngineOutputStore,
+    engine_output_dir_for,
+)
 from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
 from harness_runtime.lifecycle.inter_step_output_channel import InterStepOutputChannel
 from harness_runtime.lifecycle.lifecycle_emitter import materialize_lifecycle_emitter_stage
@@ -241,6 +245,25 @@ async def execute(
     # (byte-identical to pre-v1.59).
     if config.inter_step_data_flow and ctx.inter_step_output_channel is None:
         ctx.inter_step_output_channel = InterStepOutputChannel()
+
+    # B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — the durable output-carrying
+    # event-history store, co-located under the resolved STATE_LEDGER dir (the
+    # `<state_ledger_dir>/engine-output` sibling of the pause-journal). The CP
+    # driver records each completed step output here BEFORE the F2 ledger-append
+    # (RESERVE-before-COMMIT) + rehydrates the inter-step channel from it on an
+    # EVENT_SOURCED_REPLAY resume. `state_ledger_dir` is
+    # `ctx.ledger_writer.handle.canonical_path.parent` (the pause-store derivation).
+    # Default opt-out leaves `ctx.engine_output_store` None → no recording /
+    # rehydration (byte-identical).
+    if (
+        config.engine_output_replay
+        and ctx.engine_output_store is None
+        and ctx.ledger_writer is not None
+    ):
+        _state_ledger_dir = ctx.ledger_writer.handle.canonical_path.parent
+        ctx.engine_output_store = EngineOutputStore(
+            journal_dir=engine_output_dir_for(_state_ledger_dir)
+        )
 
     # Runtime spec v1.47 §2.1 — inference-conditional LLM-dispatch core. A
     # non-inference (tool-only) workflow bootstraps provider-free (`providers`
