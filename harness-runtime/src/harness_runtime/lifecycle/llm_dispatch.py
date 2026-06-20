@@ -66,7 +66,7 @@ from harness_cp.cp_shared_types import (
     RoutingDecisionTrace,
     TraceContext,
 )
-from harness_cp.layer_budget import DEFAULT_LAYER_BUDGETS
+from harness_cp.layer_budget import DEFAULT_LAYER_BUDGETS, LayerBudget
 from harness_cp.layered_routing_strategy import LayerDecisionFn
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.persona_engine_hitl_matrix import SynchronyClass
@@ -399,6 +399,18 @@ class RuntimeLLMDispatcher:
     # construction) → no injection (byte-identical to pre-v1.59). Typed `Any` so
     # the dataclass field carries no import dependency on the concrete holder.
     inter_step_channel: Any = None
+    # B-LAYER-BUDGET-OVERRIDE (CP spec v1.43 §2.5.3 / §3.1) — the per-layer
+    # time budgets threaded to `infer()`. The L3 router timeout honors the §3.1
+    # per-workload-class / per-persona-tier override carried on these budgets
+    # (resolved against the request's `workload_class` + `persona_tier`). This
+    # is the DORMANT threading seam: production stage-5 leaves it at the
+    # `DEFAULT_LAYER_BUDGETS` default (no override surface is wired today, and
+    # production never reaches L3 — `router=None` + DECLARATIVE always resolves),
+    # so the override path is capability-built + production-dormant behind the
+    # (UNOWNED) routing-activation gate. A test / future operator-config binding
+    # supplies an override-bearing tuple. Default is the module-global immutable
+    # tuple → byte-identical to the prior hardcoded `infer(budgets=...)`.
+    budgets: tuple[LayerBudget, ...] = DEFAULT_LAYER_BUDGETS
     # U-RT-81 (C-RT-15 §14.5.1) — Memory tool storage-backend registry +
     # deployment_surface for `resolve_backend` call. When `step.step_payload.
     # tools` contains the Anthropic Memory tool definition + both fields are
@@ -796,7 +808,10 @@ class RuntimeLLMDispatcher:
                 if self.layer_decisions_override is not None
                 else production_layer_decisions
             ),
-            budgets=DEFAULT_LAYER_BUDGETS,
+            # B-LAYER-BUDGET-OVERRIDE — the threaded budgets (DORMANT seam:
+            # `DEFAULT_LAYER_BUDGETS` at production stage-5; an override-bearing
+            # tuple resolves the §3.1 L3 per-persona/per-workload override).
+            budgets=self.budgets,
             # C-CP-02 §2.5 — production binds None (Layer-3 inert); a test
             # fixture injects a mock RouterResolutionFn.
             router=self.router,
