@@ -59,6 +59,7 @@ from harness_cp.routing_manifest_residence import (
     RetryPolicy,
     RoleRoutingBinding,
     RoutingManifest,
+    WorkloadRoutingOverride,
 )
 from harness_cp.topology_pattern import TopologyPattern
 from harness_cp.workflow_driver import (
@@ -1656,6 +1657,103 @@ def test_factory_threads_routing_activation_and_injected_classifier() -> None:
     off = materialize_llm_dispatcher_stage({"anthropic": adapter}, cast(Any, tp))
     assert off.routing_activation is False
     assert off.embedding_classifier is None
+
+
+@pytest.mark.asyncio
+async def test_routing_activation_per_step_override_pins_declarative_not_embedding() -> None:
+    """Codex [P2] regression: routing_activation on + an explicit per-step override
+    (`override_applied=True`) + a manifest-MISS → DECLARATIVE is PINNED (honors the
+    operator's deterministic per-step choice), NOT routed to EMBEDDING. An explicitly
+    customized step is never classifier-hijacked (the coarse `override_applied`
+    proxy errs safe)."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        routing_activation=True,
+        routing_manifest=_routing_manifest_with_roles({}),  # manifest-miss
+        embedding_classifier=_stub_embedding_classifier,
+    )
+    overridden = _binding("anthropic", "claude-opus-4-8").model_copy(
+        update={"override_applied": True}
+    )
+    await dispatcher.dispatch(overridden, _step(), step_context=_step_context())
+
+    assert adapter.client.messages.last_kwargs is not None
+    # override_applied → DECLARATIVE pinned → the per-step model (opus), NOT haiku.
+    assert adapter.client.messages.last_kwargs["model"] == "claude-opus-4-8"
+
+
+@pytest.mark.asyncio
+async def test_routing_activation_non_model_workload_override_does_not_block_embedding() -> None:
+    """Codex [P2] regression: routing_activation on + a per_workload_overrides entry
+    that binds NO model (engine/sandbox only) + a role-miss → DECLARATIVE still
+    declines (a non-model workload override must NOT count as a deterministic model
+    binding) → EMBEDDING routes to the classifier pick (haiku)."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    manifest = RoutingManifest(
+        manifest_version=1,
+        per_role_bindings={},  # role-miss
+        per_workload_overrides={
+            WorkloadClass.SOFTWARE_ENGINEERING: WorkloadRoutingOverride()  # no model
+        },
+        fallback_chains=(),
+        retry_policies={},
+    )
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        routing_activation=True,
+        workload_class=WorkloadClass.SOFTWARE_ENGINEERING,  # matches the override key
+        routing_manifest=manifest,
+        embedding_classifier=_stub_embedding_classifier,
+    )
+    await dispatcher.dispatch(
+        _binding("anthropic", "claude-opus-4-8"), _step(), step_context=_step_context()
+    )
+
+    assert adapter.client.messages.last_kwargs is not None
+    # The non-model workload override does NOT count → DECLARATIVE declines → EMBEDDING.
+    assert adapter.client.messages.last_kwargs["model"] == "claude-haiku-4-5"
+
+
+@pytest.mark.asyncio
+async def test_routing_activation_model_bearing_workload_override_hits_declarative() -> None:
+    """A model-BEARING per_workload_overrides entry counts as a DECLARATIVE hit (so
+    EMBEDDING cannot hijack a pinned workload). The dispatched model is the default
+    binding (opus) — status-quo: the override's model is unconsumed everywhere today
+    (flag-off too → no regression); FOLDING it is `B-ROUTING-MANIFEST-MODEL-FOLD`."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    manifest = RoutingManifest(
+        manifest_version=1,
+        per_role_bindings={},
+        per_workload_overrides={
+            WorkloadClass.SOFTWARE_ENGINEERING: WorkloadRoutingOverride(
+                model_binding_override=ModelBinding(provider="openai", model="gpt-5.5")
+            )
+        },
+        fallback_chains=(),
+        retry_policies={},
+    )
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        routing_activation=True,
+        workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
+        routing_manifest=manifest,
+        embedding_classifier=_stub_embedding_classifier,
+    )
+    await dispatcher.dispatch(
+        _binding("anthropic", "claude-opus-4-8"), _step(), step_context=_step_context()
+    )
+
+    assert adapter.client.messages.last_kwargs is not None
+    # Model-bearing workload override → DECLARATIVE hit (NOT EMBEDDING/haiku), echoing
+    # the default (opus) per the registered-fold status-quo.
+    assert adapter.client.messages.last_kwargs["model"] == "claude-opus-4-8"
 
 
 # ---------------------------------------------------------------------------

@@ -738,20 +738,39 @@ class RuntimeLLMDispatcher:
         # not selection-driving until R-300-second-provider.
         # B-L2-EMBEDDING-ACTIVATION (C-CP-02 §2.2 — the routing-activation gate):
         # when `routing_activation` is on, DECLARATIVE is §2.2-FAITHFUL — it resolves
-        # ONLY when the manifest binds the request's tuple ("the manifest binds the
-        # (agent_role, workflow_class, step) tuple"); a manifest-miss DECLINES (None)
-        # so `route()` falls through to the EMBEDDING classifier (then LLM_AS_ROUTER).
+        # ("the manifest binds the (agent_role, workflow_class, step) tuple") ONLY
+        # when the request has a DETERMINISTIC binding; a pure-default MISS DECLINES
+        # (None) so `route()` falls through to the EMBEDDING classifier (then L3).
         # Off (default) → the #213 always-echo → byte-identical, zero blast radius.
+        #
+        # The hit-invariant (Codex [P2] ×2 — advisor-reconciled): on a hit the
+        # dispatched model is the one that MADE it a hit. DECLARATIVE declines ONLY
+        # for a pure-default step — i.e. NO per-step override (`override_applied`,
+        # the coarse proxy: any per-step override pins DECLARATIVE so an explicitly
+        # customized step is never EMBEDDING-routed — safe, arguably correct) AND no
+        # per-role manifest binding AND no MODEL-BEARING per-workload override (a
+        # non-model workload override — engine/sandbox only — must NOT block
+        # EMBEDDING). On a model-bearing workload-override hit the dispatched model is
+        # still `_effective_model_binding` (the default) — status-quo: that override
+        # model is unconsumed everywhere today (flag-off too → NO regression); FOLDING
+        # the per-workload / per-role manifest models (which needs a binding-source
+        # discriminator on `StepEffectiveBinding`, a type-smell this layer lacks) is
+        # the registered follow-on `B-ROUTING-MANIFEST-MODEL-FOLD`.
         def _declarative_echo(
             _payload: ProviderAgnosticPayload, _manifest: RoutingManifest
         ) -> str | None:
             if self.routing_activation:
                 _workload = self.workload_class or _MVP_DEFAULT_WORKLOAD_CLASS
-                _manifest_binds_tuple = (
-                    _role in _manifest.per_role_bindings
-                    or _workload in _manifest.per_workload_overrides
+                _workload_override = _manifest.per_workload_overrides.get(_workload)
+                _has_deterministic_binding = (
+                    binding.override_applied
+                    or _role in _manifest.per_role_bindings
+                    or (
+                        _workload_override is not None
+                        and _workload_override.model_binding_override is not None
+                    )
                 )
-                if not _manifest_binds_tuple:
+                if not _has_deterministic_binding:
                     return None
             return f"{_effective_model_binding.provider}:{_effective_model_binding.model}"
 
