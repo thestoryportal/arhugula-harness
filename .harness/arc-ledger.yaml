@@ -1,0 +1,560 @@
+# Arc ledger — single structured source of truth for R-FS-1 arc + unit status.
+#
+# Authored for the roadmap-dashboard overhaul (full forward-arc + unit visibility,
+# dynamic, pruned). Mirrors the proven `.harness/substitutions.yaml` →
+# `tools/substitution_ledger.py` → dashboard + blocking CI gate pattern (R-600).
+#
+# WHY THIS EXISTS: arc status used to live in hand-maintained markdown
+# (`.harness/r-fs-1-arc-and-unit-map.md` §5) that the dashboard PARSED — and it
+# drifted (the §5 table lagged #671; `test_dashboard_generate.py` hardcoded counts
+# that went stale = R-IF-114). The ~15 registered-forward arcs were invisible
+# entirely (they lived only in spine-ledger prose). This file is the ONE
+# structured source: `tools/arc_ledger.py` derives every count + view from it,
+# `generate.py` renders the dashboard from that derivation, and
+# `tools/arc_ledger.py --check` is a blocking CI gate so an impossible/stale tally
+# is a CI failure, never a months-later discovery.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# ONE SCHEMA, THREE UNIT SHAPES:
+#   kind: frozen      → the 11-arc build order (B1..M); each carries its REAL
+#                       as-built `units` (id/what/pr/leg; id:null for
+#                       contract-extender slices like B4/CA that minted no U-*).
+#                       position 1..11; status: closed.
+#   kind: standalone  → arcs that surfaced DURING implementation. status one of:
+#     closed     — built + merged (own PR). Contract-extenders: `pr` + `spec_delta`
+#                  ARE the deliverable; `units: []` (no U-* minted).
+#     gated      — build-authorized, blocked on `depends_on`.
+#     resolved   — built inside the frozen order OR foreclosed N/A; `resolution:`.
+#     registered — forward; NOT yet built. REQUIRES `decompose_at_open: true` +
+#                  `parent_arc` + `anticipated_scope`; `units: []` and ZERO U-* ids
+#                  (real units are decomposed only when the arc opens + grounds —
+#                  the presence-not-correctness discipline; do NOT fabricate units).
+#
+# PROSE HOME: rich rationale stays in `.harness/beyond-mvp-capability-boundary-ledger.md`
+# (the spine ledger). Each standalone row carries a one-line `gives`/`anticipated_scope`
+# + a `ledger_ref` back-link — no prose is duplicated into this file.
+#
+# FORWARD-ONLY: a real transit (arc closes/resolves, or a new arc/unit surfaces)
+# edits the row AND bumps the `snapshot:` block in the SAME commit. The snapshot
+# pin is the guard against a silent status flip that every structural check passes.
+#
+# BASE: this ledger is canonical against `origin/main`. B-L2-FALLBACK-COMPOSITION
+# is `registered` here (built on an unmerged branch `f931003`); flip it to `closed`
+# + add its follow-on B-L2-ROUTING-SPAN-LAYER-ATTRIBUTION when that arc merges.
+# ─────────────────────────────────────────────────────────────────────────────
+
+snapshot:
+  frozen_total: 11
+  frozen_done: 11
+  standalone_closed: 15
+  standalone_gated: 1
+  standalone_resolved: 2
+  standalone_registered: 14
+  source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+arcs:
+  # ─── FROZEN build order (B1 → … → M), all closed, real as-built units ───
+  - id: B1
+    title: "Non-linear topology orchestration"
+    kind: frozen
+    status: closed
+    position: 1
+    cluster: serial
+    units_status: as-built
+    gives: "Run agents in team shapes beyond a single straight line — the 6 collaboration patterns (parallel, orchestrator-workers, evaluator-optimizer, hierarchical delegation, decentralized handoff)."
+    units:
+      - { id: U-IS-19,  what: "Foundational carriers — records which branch of a multi-agent run produced what.", pr: "#537", leg: "impl-1" }
+      - { id: U-RT-113, what: "Foundational carriers (runtime side).", pr: "#537", leg: "impl-1" }
+      - { id: U-CP-80,  what: "Driver substrate — the engine that executes a non-linear topology.", pr: "#538", leg: "impl-2" }
+      - { id: U-CP-81,  what: "Driver substrate (cont.).", pr: "#538", leg: "impl-2" }
+      - { id: U-CP-82,  what: "Buffered-append substrate — records each branch's results without races.", pr: "#539", leg: "impl-3" }
+      - { id: U-CP-83,  what: "Buffered-append substrate (cont.).", pr: "#539", leg: "impl-3" }
+      - { id: U-CP-84,  what: "Writes each branch's terminal status at the right cadence.", pr: "#540", leg: "impl-4" }
+      - { id: U-CP-85,  what: "Cascade policy — how a branch failure propagates (or doesn't) to siblings.", pr: "#542", leg: "impl-5" }
+      - { id: U-CP-86,  what: "PARALLELIZATION — run independent agent steps at the same time.", pr: "#544", leg: "impl-6" }
+      - { id: U-CP-87,  what: "EVALUATOR_OPTIMIZER — one agent proposes, another critiques, loop to improve.", pr: "#545", leg: "impl-7" }
+      - { id: U-CP-88,  what: "ORCHESTRATOR_WORKERS — a lead farms sub-tasks to workers.", pr: "#546", leg: "impl-8" }
+      - { id: U-RT-114, what: "Per-role model-selection seam (each role can get its own model).", pr: "#546", leg: "impl-8" }
+      - { id: U-CP-89,  what: "HIERARCHICAL_DELEGATION — multi-level delegation down a tree of agents.", pr: "#547", leg: "impl-9" }
+      - { id: U-CP-90,  what: "DECENTRALIZED_HANDOFF — peers pass control directly to one another.", pr: "#548", leg: "impl-10" }
+
+  - id: B3
+    title: "Smart human-in-the-loop (HITL) decision intelligence"
+    kind: frozen
+    status: closed
+    position: 2
+    cluster: serial
+    units_status: as-built
+    gives: "Conditionally skip an approval that isn't needed, degrade gracefully on human timeout (per run mode), and let a human EDIT a pending action (not just approve/reject)."
+    units:
+      - { id: U-CP-91,  what: "Conditional skip — decide when an approval checkpoint can be bypassed.", pr: "#554", leg: "impl-1" }
+      - { id: U-RT-115, what: "Conditional skip (runtime).", pr: "#554", leg: "impl-1" }
+      - { id: U-RT-116, what: "Conditional skip (runtime).", pr: "#554", leg: "impl-1" }
+      - { id: U-RT-117, what: "Conditional skip (runtime).", pr: "#554", leg: "impl-1" }
+      - { id: U-RT-118, what: "Conditional skip (runtime).", pr: "#554", leg: "impl-1" }
+      - { id: U-CP-92,  what: "Timeout-degradation — what to do (per run mode) when a human doesn't answer.", pr: "#584", leg: "impl-2" }
+      - { id: U-RT-119, what: "Timeout-degradation (runtime).", pr: "#584", leg: "impl-2" }
+      - { id: U-RT-120, what: "EDIT = replace-not-merge — a human-edited action cleanly replaces the pending one.", pr: "#584", leg: "impl-3" }
+
+  - id: E
+    title: "Durable execution engines"
+    kind: frozen
+    status: closed
+    position: 3
+    cluster: serial
+    units_status: as-built
+    gives: "A long-running workflow survives a crash/restart and resumes where it left off — three hand-rolled engine styles: replay-from-event-history, write-ahead-log segments, reconciler loop."
+    units:
+      - { id: U-CP-93,  what: "EVENT_SOURCED_REPLAY — rebuild state by replaying recorded event history.", pr: "#562", leg: "impl-1" }
+      - { id: U-CP-94,  what: "WAL_SEGMENT — append-only write-ahead log with per-segment resume.", pr: "#564", leg: "impl-2" }
+      - { id: U-CP-95,  what: "WAL_SEGMENT (cont.).", pr: "#564", leg: "impl-2" }
+      - { id: U-RT-121, what: "WAL_SEGMENT (runtime).", pr: "#564", leg: "impl-2" }
+      - { id: U-RT-122, what: "WAL_SEGMENT (runtime).", pr: "#564", leg: "impl-2" }
+      - { id: U-CP-96,  what: "RECONCILER_LOOP — materialize the control-loop engine class.", pr: "#570", leg: "impl-3a" }
+      - { id: U-RT-123, what: "Revision-CAS reconciler substrate — safe compare-and-set so a resumed loop doesn't double-execute.", pr: "#574", leg: "impl-3b" }
+      - { id: U-CP-97,  what: "Engine-layer pause/resume seam (brings the CP→IS durable-recovery composition live).", pr: "#576", leg: "impl-3c" }
+      - { id: U-RT-124, what: "Engine-layer pause/resume seam (runtime).", pr: "#576", leg: "impl-3c" }
+
+  - id: B2
+    title: "Multi-server MCP client"
+    kind: frozen
+    status: closed
+    position: 4
+    cluster: serial
+    units_status: as-built
+    gives: "Connect to many tool servers at once, route each call to the right server, handle same-tool-name collisions, and apply per-server trust rules."
+    units:
+      - { id: U-RT-129, what: "Per-server trust telemetry keyed by a stable server identity.", pr: "#588", leg: "impl-1" }
+      - { id: U-RT-125, what: "Reshape the single mcp_client_host into a dict of many hosts.", pr: "#590", leg: "impl-2a" }
+      - { id: U-RT-126, what: "Multi-server routing / dispatch / collision policy / per-host handling.", pr: "#592", leg: "impl-2b" }
+      - { id: U-RT-127, what: "Multi-server routing (cont.).", pr: "#592", leg: "impl-2b" }
+      - { id: U-RT-128, what: "Multi-server routing (cont.).", pr: "#592", leg: "impl-2b" }
+      - { id: U-RT-130, what: "Multi-server routing (cont.).", pr: "#592", leg: "impl-2b" }
+      - { id: U-CP-98,  what: "MCP-trust gate axis — enforce each server's trust tier at dispatch.", pr: "#594", leg: "impl-3" }
+      - { id: U-RT-131, what: "MCP-trust gate axis (runtime).", pr: "#594", leg: "impl-3" }
+
+  - id: R
+    title: "Routing intelligence (LLM-as-router + embedding)"
+    kind: frozen
+    status: closed
+    position: 5
+    cluster: serial
+    units_status: as-built
+    gives: "Intelligently pick which model handles a request — Layer 3 (LLM_AS_ROUTER) + Layer 2 (EMBEDDING). Built + proven, production-inert until a 2nd provider + the routing-activation gate."
+    units:
+      - { id: U-CP-99,  what: "LLM_AS_ROUTER L3 — router-resolution contract + run-loop branch (mock router).", pr: "#602", leg: "impl-1" }
+      - { id: U-CP-100, what: "LLM_AS_ROUTER L3 (cont.).", pr: "#602", leg: "impl-1" }
+      - { id: U-RT-132, what: "LLM_AS_ROUTER L3 (runtime).", pr: "#602", leg: "impl-1" }
+      - { id: U-RT-133, what: "LLM_AS_ROUTER L3 (runtime).", pr: "#602", leg: "impl-1" }
+      - { id: null,     what: "Real Ollama router behind L3 + a gated live e2e (free local model).", pr: "#604", leg: "impl-2 (impl-discretion)" }
+      - { id: null,     what: "EMBEDDING L2 — in-process fastembed k-NN classifier behind an injected embedding fn.", pr: "#606", leg: "R/L2 (no spec change)" }
+
+  - id: B4
+    title: "Per-role / per-step dispatch indexing"
+    kind: frozen
+    status: closed
+    position: 6
+    cluster: serial
+    units_status: as-built
+    gives: "Per-role model AND prompt actually take effect, with per-step overrides — a researcher and a writer in the same workflow each get their own model + system prompt; any step can be pinned to a role. (4 slices extended existing contracts — no new U-* minted.)"
+    units:
+      - { id: null, what: "Per-role PROMPT threading — a branch's role injects its own system prompt; IS C-IS-05 §5.2 procedural-tier hash widened (prompt_selection_manifest_sha).", pr: "#616", leg: "Slice 1" }
+      - { id: null, what: "harness_cp.per_role_catalog — the per-role binding catalog (derive_agent_role + validate_per_role_catalog).", pr: "#618", leg: "Slice 2" }
+      - { id: null, what: "StepOverride.prompt_version_sha (CP v1.37) — per-step PROMPT override; precedence per-step > per-role > default.", pr: "#619", leg: "Slice 3" }
+      - { id: null, what: "StepOverride.agent_role (CP v1.38 + runtime v1.52) — per-step ROLE override + linear-path role indexing.", pr: "#621", leg: "Slice 4" }
+
+  - id: CA
+    title: "Cost aggregate rollup"
+    kind: frozen
+    status: closed
+    position: 7
+    cluster: independent
+    units_status: as-built
+    gives: "Reports the total cost of a run, broken down by provider+model (RunResult.cost_attribution, was hard-coded ()); per-call records roll up at _build_run_result along PER_PROVIDER_AND_MODEL."
+    units:
+      - { id: null, what: "Aggregate-shape contract — named the axis PER_PROVIDER_AND_MODEL + reconciled the phantom CostAttribution type (runtime v1.52→v1.53 §9).", pr: "#625", leg: "Slice 1 (fork, no gate)" }
+      - { id: null, what: "Run-scoped CostRecordAccumulator holder on HarnessContext (by-reference; a typed list would be Pydantic-copied at freeze()).", pr: "#625", leg: "Slice 2" }
+      - { id: null, what: "Wire the rollup — 4 per-dispatch cost wrappers append; _build_run_result rolls up + sets the field (+ freeze-by-reference regression test).", pr: "#625", leg: "Slice 3" }
+
+  - id: B5
+    title: "Memory backend per deployment surface"
+    kind: frozen
+    status: closed
+    position: 8
+    cluster: independent
+    units_status: as-built
+    gives: "The memory store picks the right backend for where it's deployed (a surface→backend map resolved once at startup); the selector previously ignored the deployment surface."
+    units:
+      - { id: null, what: "Registry surface→backend map — MemoryToolRegistry.from_surface_map + resolve_backend pure lookup over the bootstrap-frozen map.", pr: "#628", leg: "impl" }
+      - { id: null, what: "Factory populates the map; active surface must resolve or bootstrap aborts fail-closed.", pr: "#628", leg: "impl" }
+      - { id: null, what: "Anti-vacuity + fail-closed lock — resolve_backend(LOCAL)→filesystem vs (MANAGED)→RT-FAIL.", pr: "#628", leg: "impl" }
+
+  - id: B6
+    title: "Per-tool sandbox tier + STDIO transport floor"
+    kind: frozen
+    status: closed
+    position: 9
+    cluster: serial
+    units_status: as-built
+    gives: "Apply a different security sandbox level per individual tool (not one per server) + a minimum container level for local-pipe (STDIO) tools; wires the existing per-tool tier table into per-tool dispatch."
+    units:
+      - { id: null, what: "Slice 1 — STDIO transport-floor (runtime v1.54 §14.9.8).", pr: "#630", leg: "Slice 1" }
+      - { id: null, what: "Slice 2 — per-tool tier + per-dispatch driver (runtime v1.56 §14.9.11 / AS v1.11; operator-ratified Option A; the resolved B-PER-TOOL-SANDBOX-TIER).", pr: "#637", leg: "Slice 2" }
+
+  - id: B7
+    title: "Sampler conditional over-sampling refinement"
+    kind: frozen
+    status: closed
+    position: 10
+    cluster: independent
+    units_status: as-built
+    gives: "The telemetry sampler force-captures only the spans that matter (mutations, permanent failures, roots) instead of everything in those categories — a precision/cost refinement (safe today; over-captures, never under)."
+    units:
+      - { id: null, what: "§9.2 attribute-conditional predicate as the OD SSOT (is_always_sampled) + wired into should_sample. Full non-root/tail enforcement is the forward arc B-TAIL-CONDITIONAL-SAMPLING.", pr: "#632", leg: "impl" }
+
+  - id: M
+    title: "Managed-agents contract + production wiring"
+    kind: frozen
+    status: closed
+    position: 11
+    cluster: independent
+    units_status: as-built
+    gives: "Formalized + production-wired the integration with Anthropic's Managed Agents service — authored C-RT-28 and wired a StepKind.MANAGED_AGENTS step through the run loop (nothing in production reached the R-820 carrier before)."
+    units:
+      - { id: null, what: "Contract authoring — C-RT-28 §14.20 (runtime v1.55) + paired CP v1.39 StepKind.MANAGED_AGENTS.", pr: "#635", leg: "Slice 1 (fork, operator-ratified)" }
+      - { id: null, what: "Production wiring — ManagedAgentsStepDispatcher bound on the new StepKind, surface-gated to MANAGED_CLOUD + opt-in.", pr: "#635", leg: "Slice 2" }
+
+  # ─── STANDALONE — closed (built + merged; contract-extenders) ───
+  - id: B-MCP-HOST-REMOTE-TRANSPORT
+    title: "Remote (HTTP) MCP tool servers"
+    kind: standalone
+    status: closed
+    owner_axis: runtime
+    pr: "#640"
+    spec_delta: "runtime §14.9.6 inv 5 (impl-to-cleared-spec)"
+    gives: "Connect to remote (HTTP) MCP tool servers, not just local ones — and restore the default-lane tool-completion e2e."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-MEMORY-SURFACE-BACKEND-IMPLS
+    title: "Encrypted-filesystem & operator-defined memory backends"
+    kind: standalone
+    status: closed
+    owner_axis: runtime
+    pr: "#642"
+    spec_delta: "impl-to-cleared-spec §14.12.3 (B5 follow-on)"
+    gives: "Build the two spec'd-but-unbuilt memory backends (ENCRYPTED_FILESYSTEM + OPERATOR_DEFINED)."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-COST-DISCRIMINATOR-TAXONOMY
+    title: "Per-dispatch-kind cost breakdown"
+    kind: standalone
+    status: closed
+    owner_axis: "OD + runtime"
+    pr: "#644"
+    spec_delta: "OD v1.30 §15.1 + runtime v1.57 §9 (new DispatchKind + RollupAxis.PER_DISPATCH_KIND)"
+    gives: "Break down run cost by dispatch kind (llm / tool / validator / webhook); fixes the latent contract-vs-production discriminator defect."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-NONLINEAR-OVERRIDE-PROVENANCE
+    title: "Per-step override audit on all topologies"
+    kind: standalone
+    status: closed
+    owner_axis: CP
+    pr: "#648"
+    spec_delta: "CP v1.40 §6.6 (buffered-branch path)"
+    gives: "Record the per-step override audit entry on parallel/non-linear topologies (today linear runs only) — all 6 topologies."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION
+    title: "Provider-family cost tagging at the fallback chain"
+    kind: standalone
+    status: closed
+    owner_axis: "runtime (OD-reserved field)"
+    pr: "#649"
+    spec_delta: "runtime v1.58 §9"
+    gives: "Tag cost by provider-family at the fallback chain so the cross-family cost rollup isn't empty in production."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-INTERSTEP
+    title: "Inter-step data-flow channel"
+    kind: standalone
+    status: closed
+    owner_axis: "runtime + CP"
+    pr: "#651"
+    spec_delta: "runtime v1.59 §14.21 C-RT-29 (opt-in channel)"
+    gives: "Pass data from one workflow step to the next (steps shared control-flow only); EVALUATOR_OPTIMIZER's evaluate now sees the generate draft."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-TOOL-GATE
+    title: "MCP-trust source at the tool-step HITL gate"
+    kind: standalone
+    status: closed
+    owner_axis: runtime
+    pr: "#653"
+    spec_delta: "CP v1.35 §19.1.2 / runtime §14.8.2 step-4c"
+    gives: "Wire the real per-server MCP-trust source at the tool-step approval gate (an L0-trust server's tool floors its gate to DENY)."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-EFFECT-FENCE
+    title: "At-most-once side-effect execution"
+    kind: standalone
+    status: closed
+    owner_axis: runtime
+    pr: "#655"
+    spec_delta: "runtime v1.60 §14.22 C-RT-31 (opt-in, durable)"
+    gives: "A side-effecting step runs at most once across retries/resumes — a durable crash-atomic fence at the tool sink."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-HITL-PLACEMENT-PER-STEP-PRODUCER
+    title: "Workflow placements → per-step gates fire in production"
+    kind: standalone
+    status: closed
+    owner_axis: "CP + runtime"
+    pr: "#657"
+    spec_delta: "runtime v1.61 §14.8.2 + CP v1.41 §25.3"
+    gives: "Bind workflow-level hitl_placements onto per-step steps so the wrap-time approval gates (inference / sub-agent / tool) actually fire in production; closes the B3 placement-composition residual."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-EDIT-CARRIER
+    title: "Functional operator EDIT at the wrap-time gate"
+    kind: standalone
+    status: closed
+    owner_axis: runtime
+    pr: "#659"
+    spec_delta: "runtime v1.62 §14.8.2 step 4i / NOTE 6-ii"
+    gives: "A human EDITs a pending action — the flat-str proposal is JSON-decoded to the Mapping step_payload and replaces it verbatim (replace-not-merge)."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-PAUSE
+    title: "Resumable cascade_policy=pause fan-out (ORCHESTRATOR_WORKERS)"
+    kind: standalone
+    status: closed
+    owner_axis: "CP + runtime"
+    pr: "#661"
+    spec_delta: "CP v1.42 C-CP-26 §26.2 (FanOutResumeState)"
+    gives: "Resume a paused parallel fan-out from where it stopped (ORCHESTRATOR_WORKERS): a worker failure under pause returns genuine resumable PAUSED; api.resume skips terminal branches + re-dispatches the rest."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-ENGINE-OUTPUT-REPLAY
+    title: "Output-carrying event-history (LINEAR EVENT_SOURCED_REPLAY)"
+    kind: standalone
+    status: closed
+    owner_axis: "CP + runtime"
+    pr: "#665"
+    spec_delta: "runtime v1.63 §14.23 C-RT-32 (EngineOutputStore)"
+    gives: "Replay cached step outputs from event history: a durable per-run store records each output before the ledger-append (RESERVE-before-COMMIT); on resume the inter-step channel is rehydrated from the stored prefix."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-LAYER-BUDGET-OVERRIDE
+    title: "Per-layer time budgets honor overrides"
+    kind: standalone
+    status: closed
+    owner_axis: "CP + runtime"
+    pr: "#667"
+    spec_delta: "CP v1.43 §2.5.3 amendment (NO operator gate)"
+    gives: "The L3 router timeout uses the §3.1 OVERRIDE-RESOLVED effective budget (keyed on workload_class/persona_tier), not the flat field. Capability-built + production-dormant."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-L2-EMBEDDING-ACTIVATION
+    title: "§2.2 routing-activation gate"
+    kind: standalone
+    status: closed
+    owner_axis: runtime
+    pr: "#669"
+    spec_delta: "impl-to-cleared-spec C-CP-02 §2.2 (no spec bump)"
+    gives: "Switch on §2.2 layered routing behind an opt-in routing_activation flag (default-off): DECLARATIVE declines on a manifest-miss → EMBEDDING classifier → L3. Production-dormant behind the 2nd-provider gate."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-INTERSTEP-PERRUN-ISOLATION
+    title: "Per-run ContextVar isolation of run-scoped holders"
+    kind: standalone
+    status: closed
+    owner_axis: runtime
+    pr: "#671"
+    spec_delta: "runtime v1.64 §14.21.5 inv 7 CLOSED + §14.21.7"
+    gives: "Per-run ContextVar isolation of the inter-step channel + cost accumulator on the daemon-reused HarnessContext singleton; removes B-INTERSTEP's single-flight lock + closes the timeout-zombie residual."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  # ─── STANDALONE — gated (build-authorized, blocked) ───
+  - id: B-TAIL-CONDITIONAL-SAMPLING
+    title: "Non-root / end-of-trace conditional sampling"
+    kind: standalone
+    status: gated
+    owner_axis: "OD + runtime"
+    depends_on: "R-420/R-421 (in-process telemetry collector / deployment gates)"
+    gives: "Sample non-root & end-of-trace spans by the §9.2 conditional rules (a tail-keep span processor). B7 delivered the root-span half; this is the non-root/tail enforcement."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  # ─── STANDALONE — resolved (built inside the frozen order / foreclosed N/A) ───
+  - id: B-PER-TOOL-SANDBOX-TIER
+    title: "Per-tool sandbox tier + per-dispatch driver"
+    kind: standalone
+    status: resolved
+    owner_axis: runtime
+    resolution: "Built inside the frozen order as B6 Slice 2 (#637) — not a separate post-frozen arc."
+    gives: "Per-tool sandbox security tier + per-dispatch driver."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-PER-DISPATCH-DRIVER-PRECISION
+    title: "Driver tier == resolved per-tool tier (no over-sandboxing)"
+    kind: standalone
+    status: resolved
+    owner_axis: runtime
+    resolution: "Foreclosed N/A — B6 Slice 2's Option-A driver composite already delivers tier == resolved, so no separate arc is needed."
+    gives: "Make the dispatched sandbox driver's tier exactly match the resolved per-tool tier (no over-sandboxing)."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  # ─── STANDALONE — registered (forward; decompose-at-open; NO fabricated units) ───
+  - id: B-INTERSTEP-NONLINEAR
+    title: "Concurrent-fan-out inter-step output recording"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: runtime
+    parent_arc: B-INTERSTEP
+    anticipated_scope: "Inter-step output recording for the 4 non-linear strategies via the #648 buffered-branch drain (ADR-F2). B-INTERSTEP shipped sequential-write scope only."
+    why: "Concurrent sibling writes to a shared holder violate ADR-F2 single-threaded-write; need the buffered-branch drain path."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT
+    title: "WAL_SEGMENT shares the EngineOutputStore"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    parent_arc: B-ENGINE-OUTPUT-REPLAY
+    anticipated_scope: "Extend the output-carrying replay to WAL_SEGMENT (shares the EngineOutputStore, E-impl-2); plus the non-linear resume-blind strategies."
+    why: "B-ENGINE-OUTPUT-REPLAY landed for LINEAR EVENT_SOURCED_REPLAY only."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER
+    title: "Resumable pause for EVALUATOR_OPTIMIZER fan-out"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    parent_arc: B-FANOUT-PAUSE
+    anticipated_scope: "Apply the fan-out-barrier pause-resume shape to EVALUATOR_OPTIMIZER (B-FANOUT-PAUSE built ORCHESTRATOR_WORKERS only)."
+    why: "EO + PARALLELIZATION reuse the fan-out-barrier shape; each needs its own capture wiring + aggregate-merge + tests."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-FANOUT-PAUSE-PARALLELIZATION
+    title: "Resumable pause for PARALLELIZATION fan-out"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    parent_arc: B-FANOUT-PAUSE
+    anticipated_scope: "Apply the fan-out-barrier pause-resume shape to PARALLELIZATION siblings."
+    why: "Sibling fan-out-barrier topology's pause-resume."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-HANDOFF-PAUSE
+    title: "Resumable pause for DECENTRALIZED_HANDOFF"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    parent_arc: B-FANOUT-PAUSE
+    anticipated_scope: "Single-owner sequential handoff-pause (a stage cursor, not a branch set) — a distinct, non-fan-out resume shape."
+    why: "DECENTRALIZED_HANDOFF is a different resume shape than the fan-out barrier."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-HIERARCHICAL-PAUSE
+    title: "Resumable pause for HIERARCHICAL_DELEGATION"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    parent_arc: B-FANOUT-PAUSE
+    anticipated_scope: "Resume across the child-bootstrap recursion boundary (the ChildWorkflowRunner seam)."
+    why: "HIERARCHICAL_DELEGATION reuses ORCHESTRATOR_WORKERS for execution but its resume crosses the child-bootstrap boundary."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-EFFECT-FENCE-HITL-ROUTE
+    title: "Effect-fence §22.1 operator-resolvable PAUSE"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: runtime
+    parent_arc: B-EFFECT-FENCE
+    anticipated_scope: "Turn the interim fail-closed raise into a genuine §22.1 operator-resolvable PAUSE + suppress-and-continue (composes with B-ENGINE-OUTPUT-REPLAY)."
+    why: "B-EFFECT-FENCE ships an interim fail-closed FAILED; the operator-resolvable route is the durable behavior."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-EFFECT-FENCE-PER-TOOL
+    title: "ToolContract idempotency classification for the fence"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "AS + runtime"
+    parent_arc: B-EFFECT-FENCE
+    anticipated_scope: "A ToolContract idempotency classification so only declared-non-idempotent tools are fenced — a cross-axis AS surface (design-fork-first)."
+    why: "B-EFFECT-FENCE fences by opt-in flag; per-tool classification is the precise control."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-EFFECT-FENCE-DURABLE-AUTO
+    title: "Auto-activate the fence under durable engines"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: runtime
+    parent_arc: B-EFFECT-FENCE
+    anticipated_scope: "Auto-activate the fence under a durable engine_class, removing the opt-in flag."
+    why: "Durable engines re-execute steps on resume, so the fence should be on by default there."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD
+    title: "Per-step StepOverride.hitl_placement override fold"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    parent_arc: B-HITL-PLACEMENT-PER-STEP-PRODUCER
+    anticipated_scope: "Fold the per-step StepOverride.hitl_placement override with the workflow-level tuple (silent at C-CP-06 §6.2; design-fork-first per X-AL-3)."
+    why: "B-HITL-PLACEMENT-PER-STEP-PRODUCER closed the workflow-level tuple; the per-step override fold semantics are unspecified."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-EDIT-CARRIER-DURABLE-ASYNC-RESUME
+    title: "Functional EDIT on the durable-async resume path"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: runtime
+    parent_arc: B-EDIT-CARRIER
+    anticipated_scope: "The durable-async resume path dispatches the resumed step UNCHANGED for all response types (v2.24 AC #7 / FM-2) — a pre-existing silent-drop the wrap-time EDIT doesn't cover."
+    why: "B-EDIT-CARRIER landed the wrap-time SYNC path only."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-HITL-WRAP-FAIL-CLASS-SURFACING
+    title: "Surface wrap-time HITL RT-FAIL classes precisely"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    parent_arc: B-EDIT-CARRIER
+    anticipated_scope: "The registered RT-FAIL code surfaces via the CP driver's generic step-failure path (CP can't import runtime exception types) — give it a precise surface."
+    why: "Codex [P2] from B-EDIT-CARRIER; the same generic surfacing as the pre-existing wrap-time REJECT."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-ROUTING-MANIFEST-MODEL-FOLD
+    title: "Per-step model-override fold under routing-activation"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    parent_arc: B-L2-EMBEDDING-ACTIVATION
+    anticipated_scope: "Smart-fold a per-step model override with routing_activation (the conservative-decline rule is the interim; Codex [P2])."
+    why: "B-L2-EMBEDDING-ACTIVATION's conservative decline avoids hijacking an explicit model override; the smart fold is the refinement."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-L2-FALLBACK-COMPOSITION
+    title: "Layered routing composes with the fallback chain"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: "CP + runtime"
+    parent_arc: B-L2-EMBEDDING-ACTIVATION
+    anticipated_scope: "Make routing_activation compose with the C-RT-16 fallback chain (route-once-then-fallback, not re-route per attempt). With a 2nd provider, this is what makes routing_activation production-reachable. NOTE: built on the unmerged branch f931003 (runtime v1.65 §14.6.1) — flip to closed on its merge."
+    why: "B-L2-EMBEDDING-ACTIVATION's routing_activation defeats the fallback chain (the inner re-routes per attempt; Codex [P2])."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
