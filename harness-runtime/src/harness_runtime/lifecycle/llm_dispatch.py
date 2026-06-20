@@ -1929,6 +1929,23 @@ def materialize_llm_dispatcher_stage(
             "No providers registered at stage 3a — cannot bind LLM dispatcher at stage 5"
         )
 
+    # B-L2-EMBEDDING-ACTIVATION — routing-activation does NOT yet compose with the
+    # C-RT-16 fallback chain (Codex [P2]): the wrapper re-binds `binding.model_binding`
+    # per fallback candidate + re-invokes the inner, but the §2.2 DECLARATIVE decline
+    # re-routes EMBEDDING on every invocation → the wrapper would re-dispatch the same
+    # embedding candidate instead of advancing to the next fallback candidate (a SILENT
+    # fallback-defeat). Detect-then-refuse (no-silent-failure) until the composition
+    # arc `B-ROUTING-MANIFEST-MODEL-FOLD`'s sibling `B-L2-FALLBACK-COMPOSITION` lands:
+    # a deployment that enables routing_activation MUST NOT also declare fallback
+    # chains. (route-once-then-fallback-the-chain is the architectural fix — routing
+    # composing with the wrapper's candidate chain, the U-RT-114 precedent.)
+    if routing_activation and routing_manifest is not None and routing_manifest.fallback_chains:
+        raise LLMDispatchBindError(
+            "routing_activation=True does not yet compose with RoutingManifest "
+            "fallback_chains (the L2/L3 routing decision re-runs per fallback attempt, "
+            "defeating the chain) — disable one until B-L2-FALLBACK-COMPOSITION lands"
+        )
+
     # B-L2-EMBEDDING-ACTIVATION (C-CP-02 §2.2): when routing_activation is on and no
     # classifier is injected, build the default L2 EMBEDDING classifier (the light
     # in-process fastembed realization over the default per-workload corpus) so the

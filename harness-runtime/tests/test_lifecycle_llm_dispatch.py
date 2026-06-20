@@ -1756,6 +1756,35 @@ async def test_routing_activation_model_bearing_workload_override_hits_declarati
     assert adapter.client.messages.last_kwargs["model"] == "claude-opus-4-8"
 
 
+def test_factory_refuses_routing_activation_with_fallback_chains() -> None:
+    """Codex [P2] regression: routing_activation does NOT yet compose with the C-RT-16
+    fallback chain (the L2/L3 decision re-runs per fallback attempt, defeating the
+    chain) → the factory detect-then-refuses (no-silent-failure) a manifest that
+    declares fallback chains WHILE routing_activation is on. The composition is the
+    registered follow-on `B-L2-FALLBACK-COMPOSITION`."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    manifest = RoutingManifest(
+        manifest_version=1,
+        per_role_bindings={},
+        per_workload_overrides={},
+        fallback_chains=(_chain(_candidate("anthropic", "claude-haiku-4-5")),),
+        retry_policies={},
+    )
+    with pytest.raises(LLMDispatchBindError, match="fallback_chains"):
+        materialize_llm_dispatcher_stage(
+            {"anthropic": adapter},
+            cast(Any, tp),
+            routing_activation=True,
+            routing_manifest=manifest,
+        )
+    # The same manifest is fine when routing_activation is off (fallback works as-is).
+    ok = materialize_llm_dispatcher_stage(
+        {"anthropic": adapter}, cast(Any, tp), routing_manifest=manifest
+    )
+    assert ok.routing_activation is False
+
+
 # ---------------------------------------------------------------------------
 # U-RT-114 — branch AgentRole carry; MODEL selection is ROLE-AGNOSTIC at the
 # inner C-RT-15 dispatcher — C-RT-15 §14.5.3 ([P2-a] placement)
