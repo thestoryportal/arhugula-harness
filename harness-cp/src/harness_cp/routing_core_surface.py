@@ -44,7 +44,11 @@ from harness_cp.cp_shared_types import (
     RoutingDecisionTrace,
     TraceContext,
 )
-from harness_cp.layer_budget import DEFAULT_LAYER_BUDGETS, LayerBudget
+from harness_cp.layer_budget import (
+    DEFAULT_LAYER_BUDGETS,
+    LayerBudget,
+    effective_layer_budget_ms,
+)
 from harness_cp.layered_routing_strategy import LayerDecisionFn, route
 from harness_cp.routing_layer import RoutingLayer
 from harness_cp.routing_manifest_residence import RoutingManifest
@@ -160,18 +164,6 @@ class RoutingCandidateUnresolvedError(RuntimeError):
     string. Surfaced by `infer` after `route` per U-CP-05."""
 
 
-def _layer_time_budget_ms(budgets: tuple[LayerBudget, ...], layer: RoutingLayer) -> int:
-    """The effective per-layer time budget in ms (C-CP-03 §3.1), falling back
-    to `DEFAULT_LAYER_BUDGETS` then the 200 ms LLM_AS_ROUTER reservation."""
-    for b in budgets:
-        if b.layer == layer:
-            return b.time_budget_ms
-    for b in DEFAULT_LAYER_BUDGETS:
-        if b.layer == layer:
-            return b.time_budget_ms
-    return 200
-
-
 def _candidate_set_summary(manifest: RoutingManifest) -> str:
     """A summary of the eligible ``"provider:model"`` candidate universe for
     the Layer-3 router (C-CP-02 §2.5.1's `candidate_set_summary`). Derived from
@@ -262,17 +254,26 @@ async def infer(
                 f"routing produced no well-formed 'provider:model' candidate "
                 f"(layer={trace.layer!r}, candidate={trace.candidate!r})"
             )
-        # ENFORCE the L3 LayerBudget (C-CP-03 §3.1): a slow/hanging router is
-        # interrupted at the budget and converted to L3 exhaustion (§2.5.3) ->
-        # the SAME preserved raise (timeout = exhaustion, L3 terminal).
-        # Uses the FLAT `time_budget_ms` per spec v1.36 §2.5.3 (pseudocode `:71`
-        # = LayerBudget(LLM_AS_ROUTER).time_budget_ms / 1000; §3/C-CP-03 PRESERVED
-        # VERBATIM). The C-CP-03 §3.1 per-workload/per-persona overrides
-        # (`LayerBudget.per_workload_override` / `effective_budget()`) are NOT
-        # honored here — honoring them would change the §2.5.3 flat-budget
-        # contract (X-AL-3) and is a registered forward arc (B-LAYER-BUDGET-
-        # OVERRIDE, `.harness/beyond-mvp-capability-boundary-ledger.md`).
-        l3_budget_seconds = _layer_time_budget_ms(budgets, RoutingLayer.LLM_AS_ROUTER) / 1000
+        # ENFORCE the effective L3 LayerBudget (C-CP-03 §3.1 / §2.5.3): a
+        # slow/hanging router is interrupted at the budget and converted to L3
+        # exhaustion -> the SAME preserved raise (timeout = exhaustion, L3
+        # terminal). B-LAYER-BUDGET-OVERRIDE (CP spec v1.43 §2.5.3): the budget
+        # is the §3.1 OVERRIDE-RESOLVED value keyed on the request's
+        # `workload_class` + `persona_tier`, NOT the flat `time_budget_ms`.
+        # §3.1 commits the per-persona tuning surface explicitly ON this layer
+        # ("the higher-tier persona caps budget tighter on `llm_as_router`"), so
+        # honoring the override here MATERIALIZES that cleared (built-but-vacuous)
+        # surface — impl-to-cleared-spec, not a design extension. The flat 200 ms
+        # is the default when no override applies (the negative-control path).
+        l3_budget_seconds = (
+            effective_layer_budget_ms(
+                budgets,
+                RoutingLayer.LLM_AS_ROUTER,
+                request.workload_class,
+                request.persona_tier,
+            )
+            / 1000
+        )
         start = time.monotonic()
         try:
             resolution = await asyncio.wait_for(

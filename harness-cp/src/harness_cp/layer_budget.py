@@ -102,3 +102,55 @@ def _budget_for_layer(layer: RoutingLayer) -> LayerBudget:
             return budget
     msg = f"no LayerBudget declared for routing layer {layer!r}"
     raise KeyError(msg)
+
+
+def _resolve_layer_budget(
+    budgets: tuple[LayerBudget, ...], layer: RoutingLayer
+) -> LayerBudget | None:
+    """Resolve a layer's `LayerBudget` from the PASSED `budgets` tuple first,
+    then `DEFAULT_LAYER_BUDGETS` — the passed-tuple-then-DEFAULT fall-through
+    shape `routing_core_surface._layer_time_budget_ms` used (now superseded by
+    `effective_layer_budget_ms`). `None` when neither declares the layer."""
+    for budget in budgets:
+        if budget.layer is layer:
+            return budget
+    for budget in DEFAULT_LAYER_BUDGETS:
+        if budget.layer is layer:
+            return budget
+    return None
+
+
+def effective_layer_budget_ms(
+    budgets: tuple[LayerBudget, ...],
+    layer: RoutingLayer,
+    workload_class: WorkloadClass,
+    persona_tier: PersonaTier,
+) -> int:
+    """Return the effective per-layer `time_budget_ms` after §3.1 overrides,
+    resolved against the PASSED `budgets` tuple (the operator-bound budgets the
+    routing core threads), not the module-global `DEFAULT_LAYER_BUDGETS`.
+
+    This is the `budgets`-tuple-aware sibling of `effective_budget`: the L3
+    timeout site (`routing_core_surface.infer`) receives the operator-bound
+    `budgets` tuple, so the per-workload-class / per-persona-tier override maps
+    that materialize the C-CP-03 §3.1 tuning surface — which §3.1 commits
+    explicitly **on `llm_as_router`** ("the higher-tier persona caps budget
+    tighter on `llm_as_router`") — must be resolved against THAT tuple.
+    `effective_budget` (above) reads `DEFAULT_LAYER_BUDGETS` and so physically
+    cannot serve that site.
+
+    Override-resolution precedence per U-CP-06 acceptance #3: per-workload
+    override first, then per-persona override, then the layer's flat
+    `time_budget_ms` (the §2.5.3 default — 200 ms for `LLM_AS_ROUTER` — when no
+    override applies). The layer entry falls back passed-tuple → DEFAULT → the
+    200 ms reservation when the passed tuple omits it (mirroring the former
+    `_layer_time_budget_ms`).
+    """
+    budget = _resolve_layer_budget(budgets, layer)
+    if budget is None:
+        return 200
+    if budget.per_workload_override is not None and workload_class in budget.per_workload_override:
+        return budget.per_workload_override[workload_class]
+    if budget.per_persona_override is not None and persona_tier in budget.per_persona_override:
+        return budget.per_persona_override[persona_tier]
+    return budget.time_budget_ms

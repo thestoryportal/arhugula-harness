@@ -20,6 +20,7 @@ from harness_cp.layer_budget import (
     DEFAULT_LAYER_BUDGETS,
     LayerBudget,
     effective_budget,
+    effective_layer_budget_ms,
 )
 from harness_cp.routing_layer import RoutingLayer
 
@@ -99,3 +100,76 @@ def test_routing_layer_cardinality_three() -> None:
         "embedding",
         "llm_as_router",
     }
+
+
+# --- B-LAYER-BUDGET-OVERRIDE: effective_layer_budget_ms (the budgets-tuple-aware
+# override resolver the L3 timeout site uses; effective_budget reads the module
+# global and so cannot serve that site). ---
+
+_L3 = RoutingLayer.LLM_AS_ROUTER
+
+
+def _l3_budget(**overrides: object) -> tuple[LayerBudget, ...]:
+    return (
+        LayerBudget(layer=RoutingLayer.DECLARATIVE, time_budget_ms=5),
+        LayerBudget(layer=RoutingLayer.EMBEDDING, time_budget_ms=50),
+        LayerBudget(layer=_L3, time_budget_ms=200, **overrides),  # type: ignore[arg-type]
+    )
+
+
+def test_effective_layer_budget_ms_flat_default_when_no_override() -> None:
+    """No override -> the passed tuple's flat `time_budget_ms`."""
+    budgets = _l3_budget()
+    assert (
+        effective_layer_budget_ms(
+            budgets, _L3, WorkloadClass.SOFTWARE_ENGINEERING, PersonaTier.SOLO_DEVELOPER
+        )
+        == 200
+    )
+
+
+def test_effective_layer_budget_ms_per_persona_override_resolves() -> None:
+    """A per-persona override on the PASSED tuple resolves for that tier."""
+    budgets = _l3_budget(per_persona_override={PersonaTier.SOLO_DEVELOPER: 7})
+    assert (
+        effective_layer_budget_ms(
+            budgets, _L3, WorkloadClass.SOFTWARE_ENGINEERING, PersonaTier.SOLO_DEVELOPER
+        )
+        == 7
+    )
+    # A non-matching tier falls back to the flat default.
+    assert (
+        effective_layer_budget_ms(
+            budgets, _L3, WorkloadClass.SOFTWARE_ENGINEERING, PersonaTier.TEAM_BINDING
+        )
+        == 200
+    )
+
+
+def test_effective_layer_budget_ms_per_workload_precedes_per_persona() -> None:
+    """Per-workload override takes precedence over per-persona (U-CP-06 #3)."""
+    budgets = _l3_budget(
+        per_workload_override={WorkloadClass.SOFTWARE_ENGINEERING: 3},
+        per_persona_override={PersonaTier.SOLO_DEVELOPER: 7},
+    )
+    assert (
+        effective_layer_budget_ms(
+            budgets, _L3, WorkloadClass.SOFTWARE_ENGINEERING, PersonaTier.SOLO_DEVELOPER
+        )
+        == 3
+    )
+
+
+def test_effective_layer_budget_ms_falls_back_to_default_tuple() -> None:
+    """When the PASSED tuple omits the layer, resolution falls back to
+    `DEFAULT_LAYER_BUDGETS` (then the 200 ms reservation) — the
+    passed-tuple-then-DEFAULT shape, mirroring the former _layer_time_budget_ms."""
+    # Passed tuple has only DECLARATIVE; L3 resolves from DEFAULT_LAYER_BUDGETS.
+    partial = (LayerBudget(layer=RoutingLayer.DECLARATIVE, time_budget_ms=5),)
+    default_l3 = next(b for b in DEFAULT_LAYER_BUDGETS if b.layer is _L3).time_budget_ms
+    assert (
+        effective_layer_budget_ms(
+            partial, _L3, WorkloadClass.SOFTWARE_ENGINEERING, PersonaTier.SOLO_DEVELOPER
+        )
+        == default_l3
+    )

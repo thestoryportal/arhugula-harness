@@ -444,3 +444,95 @@ async def test_infer_router_malformed_candidate_raises() -> None:
             router=router,
         )
     assert dispatch_calls == []
+
+
+async def _slow_router_30ms(_request: InferenceRequest, _summary: str) -> RouterResolution:
+    """A router slow enough (30 ms) to exceed a 1 ms override budget but fast
+    enough to resolve within a 5 s flat default — the discriminating delay."""
+    await asyncio.sleep(0.03)
+    return RouterResolution(candidate="openai:gpt-x", rationale="r")
+
+
+async def test_infer_l3_honors_per_persona_budget_override() -> None:
+    """B-LAYER-BUDGET-OVERRIDE (CP spec v1.43 §2.5.3 / §3.1) — the L3 router
+    timeout honors the §3.1 per-persona-tier override (keyed on the request's
+    `persona_tier`), NOT the flat `time_budget_ms`. §3.1 commits the per-persona
+    tuning surface explicitly ON `llm_as_router`, so this materializes the
+    cleared (built-but-vacuous) surface.
+
+    Discriminating witness: with the SAME 30 ms router, a tiny 1 ms per-persona
+    override governs -> raises; the flat default is set HUGE (5 s) so it alone
+    could NEVER time the router out (a non-honoring impl would NOT raise here ->
+    the test fails, not hangs). Negative control: no override -> the flat 5 s
+    default governs -> the router resolves within budget -> success."""
+    # `_request()` carries persona_tier=SOLO_DEVELOPER; the override targets it.
+    override_budgets = (
+        LayerBudget(layer=RoutingLayer.DECLARATIVE, time_budget_ms=5),
+        LayerBudget(layer=RoutingLayer.EMBEDDING, time_budget_ms=50),
+        LayerBudget(
+            layer=RoutingLayer.LLM_AS_ROUTER,
+            time_budget_ms=5000,
+            per_persona_override={PersonaTier.SOLO_DEVELOPER: 1},
+        ),
+    )
+    dispatch, dispatch_calls = _recording_dispatch()
+    # Override present -> the 1 ms persona budget governs -> the 30 ms router
+    # times out -> L3 exhaustion -> the preserved raise. (If the override were
+    # NOT honored, the 5 s flat default would let the router resolve -> no raise.)
+    with pytest.raises(RoutingCandidateUnresolvedError):
+        await infer(
+            _request(),
+            dispatch=dispatch,
+            manifest=_manifest(),
+            layer_decisions={},
+            router=_slow_router_30ms,
+            budgets=override_budgets,
+        )
+    assert dispatch_calls == []
+
+    # Negative control: SAME router, NO override -> the flat 5 s default governs
+    # -> the 30 ms router resolves within budget -> success (no raise, dispatched).
+    flat_budgets = (
+        LayerBudget(layer=RoutingLayer.DECLARATIVE, time_budget_ms=5),
+        LayerBudget(layer=RoutingLayer.EMBEDDING, time_budget_ms=50),
+        LayerBudget(layer=RoutingLayer.LLM_AS_ROUTER, time_budget_ms=5000),
+    )
+    response = await infer(
+        _request(),
+        dispatch=dispatch,
+        manifest=_manifest(),
+        layer_decisions={},
+        router=_slow_router_30ms,
+        budgets=flat_budgets,
+    )
+    assert response.routing_decision.layer == RoutingLayer.LLM_AS_ROUTER.value
+    assert response.routing_decision.candidate == "openai:gpt-x"
+    assert len(dispatch_calls) == 1  # the negative-control path dispatched
+
+
+async def test_infer_l3_honors_per_workload_budget_override() -> None:
+    """B-LAYER-BUDGET-OVERRIDE — the L3 timeout also honors the §3.1
+    per-workload-class override (keyed on the request's `workload_class`), which
+    takes precedence over per-persona. `_request()` carries
+    workload_class=SOFTWARE_ENGINEERING; a 1 ms override on it governs over the
+    huge flat default -> the 30 ms router times out -> raise."""
+    override_budgets = (
+        LayerBudget(layer=RoutingLayer.DECLARATIVE, time_budget_ms=5),
+        LayerBudget(layer=RoutingLayer.EMBEDDING, time_budget_ms=50),
+        LayerBudget(
+            layer=RoutingLayer.LLM_AS_ROUTER,
+            time_budget_ms=5000,
+            per_workload_override={WorkloadClass.SOFTWARE_ENGINEERING: 1},
+        ),
+    )
+    dispatch, dispatch_calls = _recording_dispatch()
+    with pytest.raises(RoutingCandidateUnresolvedError):
+        await infer(
+            _request(),
+            dispatch=dispatch,
+            manifest=_manifest(),
+            layer_decisions={},
+            router=_slow_router_30ms,
+            budgets=override_budgets,
+        )
+    assert dispatch_calls == []

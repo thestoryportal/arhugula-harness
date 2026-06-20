@@ -45,6 +45,7 @@ from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.hitl_response_palette import HITLResponse
+from harness_cp.layer_budget import DEFAULT_LAYER_BUDGETS, LayerBudget
 from harness_cp.layered_routing_strategy import LayerDecisionFn
 from harness_cp.per_role_catalog import (
     derive_agent_role,
@@ -1476,6 +1477,57 @@ async def test_layer3_no_router_through_dispatch_preserves_raise() -> None:
         tracer_provider=tp,
         layer_decisions_override={RoutingLayer.DECLARATIVE: _force_fallthrough},
         # `router` defaults None -> the Layer-3 surface is inert (production).
+    )
+
+    with pytest.raises(RoutingCandidateUnresolvedError):
+        await dispatcher.dispatch(_binding("anthropic", "x"), _step(), step_context=_step_context())
+
+
+def test_dispatcher_budgets_field_defaults_to_module_default() -> None:
+    """B-LAYER-BUDGET-OVERRIDE — the `budgets` construction seam defaults to the
+    module-global `DEFAULT_LAYER_BUDGETS` (byte-identical to the prior hardcoded
+    `infer(budgets=DEFAULT_LAYER_BUDGETS)`). Production stage-5 leaves it default
+    (no override surface wired); the seam is dormant."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(providers={"anthropic": adapter}, tracer_provider=tp)
+    assert dispatcher.budgets is DEFAULT_LAYER_BUDGETS
+
+
+@pytest.mark.asyncio
+async def test_layer3_budget_override_threads_through_dispatcher_seam() -> None:
+    """B-LAYER-BUDGET-OVERRIDE — the DORMANT `budgets`-threading seam:
+    `RuntimeLLMDispatcher(budgets=...)` reaches the `infer()` L3 timeout, where
+    the §3.1 per-persona override (keyed on the envelope's persona_tier, which
+    defaults to SOLO_DEVELOPER) governs. Through the test-only `layer_decisions`
+    seam + an injected slow router this proves `self.budgets` threads end-to-end
+    and the override resolves through the real dispatcher path. NOT a production
+    claim: production binds `router=None` + the DEFAULT budgets, so L3 is inert
+    and no override surface is wired (the routing-activation gate is UNOWNED)."""
+
+    async def _slow_router(_request: object, _summary: str) -> RouterResolution:
+        await asyncio.sleep(0.03)
+        return RouterResolution(candidate="anthropic:claude-haiku-4-5", rationale="r")
+
+    # Flat L3 default HUGE (5 s) so ONLY the 1 ms persona override can time the
+    # 30 ms router out -> proves the threaded override (not the flat) governs.
+    override_budgets = (
+        LayerBudget(layer=RoutingLayer.DECLARATIVE, time_budget_ms=5),
+        LayerBudget(layer=RoutingLayer.EMBEDDING, time_budget_ms=50),
+        LayerBudget(
+            layer=RoutingLayer.LLM_AS_ROUTER,
+            time_budget_ms=5000,
+            per_persona_override={PersonaTier.SOLO_DEVELOPER: 1},
+        ),
+    )
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        router=_slow_router,
+        layer_decisions_override={RoutingLayer.DECLARATIVE: _force_fallthrough},
+        budgets=override_budgets,
     )
 
     with pytest.raises(RoutingCandidateUnresolvedError):
