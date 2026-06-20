@@ -516,6 +516,21 @@ class RuntimeLLMDispatcher:
     # EMBEDDING). A test reaches it via `layer_decisions_override` (binding the
     # classifier at EMBEDDING + omitting DECLARATIVE).
     embedding_classifier: LayerDecisionFn | None = None
+    # B-L2-EMBEDDING-ACTIVATION (C-CP-02 §2.2 — the routing-activation gate) — when
+    # True, the DECLARATIVE layer is §2.2-FAITHFUL: it resolves the effective binding
+    # ONLY when the routing manifest binds the request's tuple (`agent_role ∈
+    # per_role_bindings` OR `workload_class ∈ per_workload_overrides`); otherwise it
+    # DECLINES (returns None) so `route()` falls through to the EMBEDDING classifier
+    # (then LLM_AS_ROUTER) — the cheapest-deterministic-first §2.2 contract. False
+    # (default) → the #213 MVP behavior-preserving echo (DECLARATIVE always resolves)
+    # → byte-identical, ZERO blast radius. Threaded from `RuntimeConfig.routing_
+    # activation` at stage 5. HIGHEST-blast-radius opt-in (changes which model serves
+    # a workload); flag-on assumes a bound `embedding_classifier` as the fall-through
+    # target — the production factory (`materialize_llm_dispatcher_stage`) builds one
+    # (or fail-louds on a missing `[embedding]` extra), so production is safe; a
+    # DIRECT construction with flag-on but no classifier would let a manifest-miss
+    # fall through EMBEDDING (empty) → L3 (`router=None`) → a dispatch raise.
+    routing_activation: bool = False
 
     def _resolve_per_step_system_prompt(self, prompt_version_sha: str) -> str:
         """Resolve a per-step ``prompt_version_sha`` → injected content (B4 Slice 3).
@@ -721,9 +736,23 @@ class RuntimeLLMDispatcher:
         # per-step overrides applied) — selection is behavior-preserving at MVP.
         # `route()`'s `manifest` arg + the envelope discriminators are carried but
         # not selection-driving until R-300-second-provider.
+        # B-L2-EMBEDDING-ACTIVATION (C-CP-02 §2.2 — the routing-activation gate):
+        # when `routing_activation` is on, DECLARATIVE is §2.2-FAITHFUL — it resolves
+        # ONLY when the manifest binds the request's tuple ("the manifest binds the
+        # (agent_role, workflow_class, step) tuple"); a manifest-miss DECLINES (None)
+        # so `route()` falls through to the EMBEDDING classifier (then LLM_AS_ROUTER).
+        # Off (default) → the #213 always-echo → byte-identical, zero blast radius.
         def _declarative_echo(
             _payload: ProviderAgnosticPayload, _manifest: RoutingManifest
         ) -> str | None:
+            if self.routing_activation:
+                _workload = self.workload_class or _MVP_DEFAULT_WORKLOAD_CLASS
+                _manifest_binds_tuple = (
+                    _role in _manifest.per_role_bindings
+                    or _workload in _manifest.per_workload_overrides
+                )
+                if not _manifest_binds_tuple:
+                    return None
             return f"{_effective_model_binding.provider}:{_effective_model_binding.model}"
 
         # `infer()` requires an InferenceRequest envelope. Its discriminator
@@ -1858,6 +1887,8 @@ def materialize_llm_dispatcher_stage(
     per_role_system_prompts: Mapping[AgentRole, str] | None = None,
     prompt_versions_by_sha: Mapping[str, str] | None = None,
     approved_prompt_version_shas: frozenset[str] = frozenset(),
+    routing_activation: bool = False,
+    embedding_classifier: LayerDecisionFn | None = None,
 ) -> RuntimeLLMDispatcher:
     """Stage 5 LOOP_INIT composer factory for the LLM dispatcher (U-RT-52).
 
@@ -1877,6 +1908,28 @@ def materialize_llm_dispatcher_stage(
     if len(providers) == 0:
         raise LLMDispatchBindError(
             "No providers registered at stage 3a — cannot bind LLM dispatcher at stage 5"
+        )
+
+    # B-L2-EMBEDDING-ACTIVATION (C-CP-02 §2.2): when routing_activation is on and no
+    # classifier is injected, build the default L2 EMBEDDING classifier (the light
+    # in-process fastembed realization over the default per-workload corpus) so the
+    # §2.2-conditional DECLARATIVE decline has a real fall-through target. Local
+    # imports keep the module-load light + touch fastembed ONLY when flag-on;
+    # `make_fastembed_embedding` fail-louds with the install hint when the optional
+    # `[embedding]` extra is absent (the dep stays optional — promoting it to a
+    # required dependency is the deferred deployment step). Default-off ⇒ this block
+    # is skipped, fastembed is never imported, byte-identical.
+    if routing_activation and embedding_classifier is None:
+        from harness_cp.embedding_routing import make_embedding_classifier
+
+        from harness_runtime.lifecycle.embedding_resolution import (
+            default_routing_corpus,
+            make_fastembed_embedding,
+        )
+
+        embedding_classifier = make_embedding_classifier(
+            embed=make_fastembed_embedding(),
+            corpus=default_routing_corpus(),
         )
 
     return RuntimeLLMDispatcher(
@@ -1900,6 +1953,8 @@ def materialize_llm_dispatcher_stage(
         per_role_system_prompts=per_role_system_prompts or {},
         prompt_versions_by_sha=prompt_versions_by_sha or {},
         approved_prompt_version_shas=approved_prompt_version_shas,
+        routing_activation=routing_activation,
+        embedding_classifier=embedding_classifier,
     )
 
 

@@ -329,6 +329,12 @@ async def execute(
             # governance parity (OD C-OD-34; inert at the solo-developer tier).
             prompt_versions_by_sha={v.version_sha: v.content for v in ctx.prompt_manifest.versions},
             approved_prompt_version_shas=config.approved_prompt_version_shas,
+            # B-L2-EMBEDDING-ACTIVATION (C-CP-02 §2.2 — the routing-activation gate).
+            # When True, the DECLARATIVE layer is §2.2-faithful (declines on a
+            # manifest-miss → EMBEDDING → L3) and the factory builds the default L2
+            # classifier (fail-loud if the `[embedding]` extra is absent). Default
+            # False → the #213 always-echo, byte-identical / zero blast radius.
+            routing_activation=config.routing_activation,
         )
 
     # U-RT-58 (C-RT-16 §14.6 D6): rebind ``ctx.llm_dispatcher`` from the

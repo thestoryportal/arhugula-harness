@@ -1553,6 +1553,112 @@ async def test_routing_selection_is_behavior_preserving_at_mvp_echo() -> None:
 
 
 # ---------------------------------------------------------------------------
+# B-L2-EMBEDDING-ACTIVATION (C-CP-02 §2.2 — the routing-activation gate)
+# ---------------------------------------------------------------------------
+def _stub_embedding_classifier(_payload: object, _manifest: object) -> str | None:
+    """A deterministic stub Layer-2 classifier (NO fastembed) that always selects a
+    non-default candidate — the EMBEDDING route the §2.2-conditional DECLARATIVE
+    decline must reach. Substitutes for the real k-NN classifier in the witness."""
+    return "anthropic:claude-haiku-4-5"
+
+
+@pytest.mark.asyncio
+async def test_routing_activation_declines_declarative_on_manifest_miss_routes_embedding() -> None:
+    """The NON-DORMANT witness: routing_activation on + a manifest that does NOT bind
+    the request's tuple + a bound EMBEDDING classifier → DECLARATIVE declines →
+    `route()` falls through to EMBEDDING → the dispatched model is the EMBEDDING pick
+    (haiku), NOT the default binding echo (opus). Proves the §2.2 decline reaches
+    EMBEDDING through the PRODUCTION `_declarative_echo` path (no layer override)."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        routing_activation=True,
+        routing_manifest=_routing_manifest_with_roles({}),  # binds nothing → miss
+        embedding_classifier=_stub_embedding_classifier,
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic", "claude-opus-4-8"), _step(), step_context=_step_context()
+    )
+
+    assert adapter.client.messages.last_kwargs is not None
+    # DECLARATIVE declined (manifest-miss) → EMBEDDING picked haiku, NOT the opus echo.
+    assert adapter.client.messages.last_kwargs["model"] == "claude-haiku-4-5"
+
+
+@pytest.mark.asyncio
+async def test_routing_activation_off_declarative_echoes_default_zero_blast_radius() -> None:
+    """The NEGATIVE CONTROL: routing_activation OFF (default) → DECLARATIVE always
+    echoes the default binding even with a manifest-miss + a bound classifier → the
+    dispatched model is the default (opus), EMBEDDING is NEVER reached. Proves
+    default-off is byte-identical / zero blast radius."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        # routing_activation defaults False
+        routing_manifest=_routing_manifest_with_roles({}),
+        embedding_classifier=_stub_embedding_classifier,  # bound but unreached
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic", "claude-opus-4-8"), _step(), step_context=_step_context()
+    )
+
+    assert adapter.client.messages.last_kwargs is not None
+    assert adapter.client.messages.last_kwargs["model"] == "claude-opus-4-8"
+
+
+@pytest.mark.asyncio
+async def test_routing_activation_manifest_binds_keeps_declarative() -> None:
+    """The §2.2 "manifest binds → DECLARATIVE" half: routing_activation on + a
+    manifest that DOES bind the request's role tuple → DECLARATIVE resolves (does NOT
+    decline) → the default binding echo (opus), EMBEDDING is NOT reached. The decline
+    is driven by manifest-membership, not blanket fall-through."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        routing_activation=True,
+        # binds the resolved default role ("default") → DECLARATIVE resolves.
+        routing_manifest=_routing_manifest_with_roles({"default": "claude-opus-4-8"}),
+        embedding_classifier=_stub_embedding_classifier,
+    )
+
+    await dispatcher.dispatch(
+        _binding("anthropic", "claude-opus-4-8"), _step(), step_context=_step_context()
+    )
+
+    assert adapter.client.messages.last_kwargs is not None
+    assert adapter.client.messages.last_kwargs["model"] == "claude-opus-4-8"
+
+
+def test_factory_threads_routing_activation_and_injected_classifier() -> None:
+    """The factory threads routing_activation + an injected classifier to the
+    dispatcher (the injected seam lets tests + an operator corpus override bypass the
+    default fastembed build, so no `[embedding]` extra is touched). Default-off leaves
+    both at their inert defaults."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    on = materialize_llm_dispatcher_stage(
+        {"anthropic": adapter},
+        cast(Any, tp),
+        routing_activation=True,
+        embedding_classifier=_stub_embedding_classifier,
+    )
+    assert on.routing_activation is True
+    assert on.embedding_classifier is _stub_embedding_classifier
+    # Default-off: flag off + no classifier (byte-identical, no fastembed touch).
+    off = materialize_llm_dispatcher_stage({"anthropic": adapter}, cast(Any, tp))
+    assert off.routing_activation is False
+    assert off.embedding_classifier is None
+
+
+# ---------------------------------------------------------------------------
 # U-RT-114 — branch AgentRole carry; MODEL selection is ROLE-AGNOSTIC at the
 # inner C-RT-15 dispatcher — C-RT-15 §14.5.3 ([P2-a] placement)
 # ---------------------------------------------------------------------------

@@ -21,6 +21,8 @@ vendor deferral); operator decision 2026-06-16 (Option B);
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 from harness_cp.cp_shared_types import ProviderAgnosticPayload
 from harness_cp.embedding_routing import make_embedding_classifier
@@ -99,3 +101,37 @@ def test_l2_real_embedding_is_deterministic() -> None:
     first = clf(query, manifest)
     assert first == _CODE
     assert all(clf(query, manifest) == first for _ in range(3))
+
+
+def test_l2_factory_builds_real_classifier_when_routing_activation_on() -> None:
+    """B-L2-EMBEDDING-ACTIVATION — the PRODUCTION factory path the non-e2e unit
+    witnesses don't cover: `materialize_llm_dispatcher_stage(routing_activation=True)`
+    with NO injected classifier builds the REAL fastembed classifier (the 3-call
+    `make_embedding_classifier(embed=make_fastembed_embedding(), corpus=
+    default_routing_corpus())` composition) — proving it composes end-to-end (not
+    just by-types, which pyright already shows) and the built `LayerDecisionFn`
+    routes a real call site. The unit tests inject a stub; this is the fastembed
+    factory build."""
+    try:
+        make_fastembed_embedding()  # skip cleanly if the extra / model is unavailable
+    except ImportError as exc:
+        pytest.skip(f"fastembed not installed (optional [embedding] extra): {exc}")
+    except Exception as exc:  # model fetch failure (offline) → skip, not fail
+        pytest.skip(f"fastembed model unavailable (offline?): {exc}")
+
+    from harness_runtime.lifecycle.llm_dispatch import materialize_llm_dispatcher_stage
+
+    # The factory uses providers/tracer only at dispatch, not construction — a
+    # non-empty placeholder map passes the `len(providers) == 0` guard.
+    dispatcher = materialize_llm_dispatcher_stage(
+        cast("Any", {"anthropic": object()}),
+        cast("Any", object()),
+        routing_activation=True,  # no embedding_classifier → factory builds the real one
+    )
+    assert dispatcher.routing_activation is True
+    assert dispatcher.embedding_classifier is not None
+    # The factory-built (real, not stub) classifier routes a real call site.
+    candidate = dispatcher.embedding_classifier(
+        _payload("help me fix a bug in my python script"), _empty_manifest()
+    )
+    assert candidate == _CODE
