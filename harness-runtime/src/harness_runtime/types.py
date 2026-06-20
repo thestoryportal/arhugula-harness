@@ -1380,6 +1380,22 @@ class RuntimeConfig(BaseModel):
     (U-RT-123): single-host, fail-closed residual, COMMIT = the existing per-step
     ledger entry."""
 
+    routing_activation: bool = False
+    """B-L2-EMBEDDING-ACTIVATION (R-FS-1 standalone arc; C-CP-02 §2.2 — the
+    routing-activation gate) — opt-in to §2.2-faithful cheapest-deterministic-first
+    layered routing. When `True`, the LLM dispatcher's DECLARATIVE layer DECLINES
+    (falls through to the EMBEDDING classifier, then LLM_AS_ROUTER) when the routing
+    manifest does NOT bind the request's tuple — i.e. `agent_role ∉
+    per_role_bindings` AND `workload_class ∉ per_workload_overrides` (the §2.2 "When
+    it resolves: the manifest binds the (agent_role, workflow_class, step) tuple"
+    contract). Default `False` → DECLARATIVE always resolves the effective binding
+    (the #213 MVP behavior-preserving echo) → byte-identical, ZERO blast radius on
+    existing deployments. This is the HIGHEST-blast-radius opt-in (it changes WHICH
+    model serves a workload), so default-off is load-bearing; flag-on additionally
+    requires the operator to wire an embedding classifier (+ install the optional
+    `[embedding]` extra) and a partial manifest, and the LIVE multi-provider exercise
+    needs a second configured provider (a deployment gate, not a build gate)."""
+
     tenant_id: str | None = None
     """Multi-tenant separation key per OD audit-ledger. `None` = single-tenant."""
 

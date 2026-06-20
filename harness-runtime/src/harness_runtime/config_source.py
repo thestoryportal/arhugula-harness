@@ -152,6 +152,10 @@ class _RuntimeEnvSettings(BaseSettings):
     # dropped. (The recent `inter_step_data_flow` / `*_optional` flags remain
     # file/CLI-only — a known env gap, separate config-hygiene item.)
     effect_fencing: bool | None = None
+    # B-L2-EMBEDDING-ACTIVATION (C-CP-02 §2.2) — env-keyed for the SAME reason: it
+    # gates a behavior-changing property (which model serves a workload), so
+    # HARNESS_ROUTING_ACTIVATION must not be silently dropped.
+    routing_activation: bool | None = None
 
 
 class RuntimeConfigSource:
