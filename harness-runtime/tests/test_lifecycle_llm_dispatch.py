@@ -1783,6 +1783,26 @@ def test_factory_refuses_routing_activation_with_fallback_chains() -> None:
         {"anthropic": adapter}, cast(Any, tp), routing_manifest=manifest
     )
     assert ok.routing_activation is False
+    # The guard fires ONLY on a NON-EMPTY fallback_chains. routing_activation + an
+    # EMPTY-fallback manifest (the RuntimeConfig default + the normal/minimal
+    # bootstrap path — e.g. test_r_impl_2_ollama_router_live_e2e runs with
+    # `fallback_chains=()`) is admitted → the flag IS usable through real bootstrap
+    # (refutes the "fallback_chains are mandatory" premise).
+    empty_fallback = RoutingManifest(
+        manifest_version=1,
+        per_role_bindings={},
+        per_workload_overrides={},
+        fallback_chains=(),
+        retry_policies={},
+    )
+    usable = materialize_llm_dispatcher_stage(
+        {"anthropic": adapter},
+        cast(Any, tp),
+        routing_activation=True,
+        embedding_classifier=_stub_embedding_classifier,
+        routing_manifest=empty_fallback,
+    )
+    assert usable.routing_activation is True
 
 
 # ---------------------------------------------------------------------------
