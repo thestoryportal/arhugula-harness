@@ -50,16 +50,19 @@ bridge is preserved (verified empirically at
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import contextvars
 import uuid
-import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+
+from harness_runtime.lifecycle.inter_step_output_channel import (
+    INTER_STEP_CHANNEL_VAR,
+    InterStepOutputChannel,
+)
 
 _MANIFEST_PATH_SUFFIXES: frozenset[str] = frozenset({".yaml", ".yml", ".toml"})
 _HARNESS_MCP_ALLOWED_HOSTS: tuple[str, ...] = (
@@ -113,38 +116,20 @@ _CURRENT_TOOL_CTX: contextvars.ContextVar[Context[Any, Any] | None] = contextvar
     "harness.current_tool_ctx", default=None
 )
 
-# B-INTERSTEP (runtime spec §14.21 C-RT-29 invariant 7) — single-flight guard
-# for inter-step runs. When the inter-step output channel is bound (opt-in
-# `RuntimeConfig.inter_step_data_flow=True`), concurrent `run_workflow`
-# invocations SHARE the one channel on the reused bootstrap-scoped
-# `HarnessContext` (daemon-client mode, U-RT-108 — one ctx serves many
-# invocations): run B's per-run `reset()` + records would corrupt run A's
-# in-flight upstream reads. Until the registered per-run-isolation follow-on
-# (a ContextVar-scoped channel, which also covers `cost_record_accumulator` —
-# the IDENTICAL shared-holder exposure, CA #625), inter-step runs are
-# serialized: `[reset + execute]` runs under this lock, so each inter-step run
-# sees only its own outputs. The DEFAULT path (channel unbound) never touches
-# the lock → full concurrency unchanged, byte-identical to pre-v1.59.
-#
-# Keyed per running loop: a single module-level `asyncio.Lock` binds to the
-# first loop that awaits it and raises "bound to a different event loop" under
-# a second loop (the multi-`asyncio.run` test pattern). The concurrency being
-# guarded is always WITHIN one loop (concurrent asyncio tasks), so a per-loop
-# lock is both correct and loop-safe; a `WeakKeyDictionary` lets a finished
-# loop's lock be collected.
-_INTER_STEP_RUN_LOCKS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
-    weakref.WeakKeyDictionary()
-)
-
-
-def _inter_step_run_lock() -> asyncio.Lock:
-    """The single-flight lock for the current running loop (lazily created)."""
-    loop = asyncio.get_running_loop()
-    lock = _INTER_STEP_RUN_LOCKS.get(loop)
-    if lock is None:
-        lock = asyncio.Lock()
-        _INTER_STEP_RUN_LOCKS[loop] = lock
-    return lock
+# B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-29 invariant 7;
+# B-INTERSTEP fork §3/§5) — SUPERSEDES B-INTERSTEP's per-loop single-flight
+# lock. The run-scoped inter-step channel + cost accumulator are now ISOLATED
+# per run via ContextVars (`INTER_STEP_CHANNEL_VAR` / `COST_ACCUM_VAR`, set in
+# the `run_workflow` handler below). Two concurrent `run_workflow` invocations
+# on the ONE reused bootstrap `HarnessContext` (daemon-client mode, U-RT-108 —
+# one ctx serves many invocations) each run in their own asyncio task → own
+# `contextvars` copy → own holders, so they cannot interleave WITHOUT
+# serialization, and a run that exceeds `drain_timeout_seconds` leaves a
+# non-cancellable `to_thread` zombie that writes only the holder captured in
+# ITS context copy — never a following run's. The (7b) single-flight lock AND
+# the (7c) timeout-zombie residual are both closed; the ctx-bound proxies
+# (`RunScopedInterStepOutputChannel` / `RunScopedCostRecordAccumulator`)
+# transparently resolve each run's holder for the dispatcher + driver readers.
 
 
 @dataclass(frozen=True)
@@ -377,25 +362,43 @@ def materialize_mcp_server_stage(
             _holder = getattr(harness_ctx, "resume_context_holder", None)
             if _holder is not None:
                 _holder.set(_resume_context)
-        # B-INTERSTEP (runtime spec §14.21 C-RT-29) — per-run reset + invariant-7
-        # single-flight. Resetting the run-scoped inter-step output channel at the
-        # per-run boundary stops a REUSED `HarnessContext` (daemon-client mode,
-        # U-RT-108 — one bootstrapped ctx serves many `run_workflow` invocations)
-        # leaking a prior run's step outputs into THIS run's first dispatch. When
-        # the channel is bound, concurrent invocations SHARE it, so `[reset +
-        # execute]` runs under the per-loop inter-step lock (`_inter_step_guard`)
-        # — inter-step runs are single-flight (Codex review r4) until the
-        # registered per-run-isolation follow-on. NOT reset on a resume: a resume
-        # continues the SAME run, so prior in-run outputs stay valid. Channel
-        # unbound (opt-out default) → `nullcontext`, zero concurrency cost.
-        _inter_step_channel = (
-            getattr(harness_ctx, "inter_step_output_channel", None)
-            if _resume_snapshot is None
-            else None
-        )
-        _inter_step_guard: contextlib.AbstractAsyncContextManager[Any] = (
-            _inter_step_run_lock() if _inter_step_channel is not None else contextlib.nullcontext()
-        )
+        # B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-29 invariant 7;
+        # B-INTERSTEP fork §3/§5) — establish THIS run's isolated holders in their
+        # ContextVars before dispatch. The set propagates into the
+        # `asyncio.to_thread(execute_workflow)` worker via `contextvars.copy_
+        # context()` (the CP driver + LLM dispatcher read the ctx-bound proxies,
+        # which resolve these vars), so two concurrent `run_workflow` invocations
+        # on the ONE reused bootstrap `HarnessContext` (daemon-client mode) each
+        # see their own holders WITHOUT serialization, and a timed-out
+        # non-cancellable `to_thread` zombie writes only the holder captured in ITS
+        # context copy — closing the (7b) lock-serialization AND the (7c)
+        # timeout-zombie. The handler runs per-invocation in its own asyncio task,
+        # so the var binding is task-local + discarded when the task ends (no
+        # explicit reset needed; cf. the `_CURRENT_TOOL_CTX` token below, which
+        # IS reset because `ServerCtxElicitCallback` reads it on the SAME task).
+        #
+        # Channel (opt-in): a fresh isolated channel per invocation when the proxy
+        # is bound. A resume starts fresh (empty) — cross-step resume rehydration
+        # is the registered B-ENGINE-OUTPUT-REPLAY arc (the replayed prefix is not
+        # re-dispatched); the resumed run's intra-invocation EO data flow is
+        # unaffected. Opt-out default (proxy None) → no set, byte-identical.
+        _channel_token: contextvars.Token[InterStepOutputChannel | None] | None = None
+        if getattr(harness_ctx, "inter_step_output_channel", None) is not None:
+            _channel_token = INTER_STEP_CHANNEL_VAR.set(InterStepOutputChannel())
+        # Cost accumulator (always-on): a fresh one per run ONLY when no caller has
+        # already established one. `api.run`/`resume` set it around `[invoke +
+        # read]` so their post-run `ctx.cost_record_accumulator.records` read
+        # resolves to the SAME accumulator the wrappers append to (caller-set
+        # propagates DOWN to this handler + the worker; a handler-set value would
+        # NOT propagate back UP to that caller). The daemon path has no such caller
+        # → this handler establishes the per-run accumulator so concurrent daemon
+        # runs do not share one. Direct/child paths (no run boundary) leave the var
+        # unset → the proxy falls back to its bootstrap default (byte-identical).
+        from harness_runtime.types import COST_ACCUM_VAR, CostRecordAccumulator
+
+        _cost_token: contextvars.Token[CostRecordAccumulator | None] | None = None
+        if COST_ACCUM_VAR.get() is None:
+            _cost_token = COST_ACCUM_VAR.set(CostRecordAccumulator())
         # Bind the in-flight tool ctx for the duration of the workflow
         # execution per spec v1.36 §14.18 chapeau per-session ctx isolation.
         # `ServerCtxElicitCallback` (per AC #4) reads via the module-level
@@ -413,30 +416,25 @@ def materialize_mcp_server_stage(
         )
 
         try:
-            # `[reset + execute]` is atomic under `_inter_step_guard` (the
-            # per-loop lock when the inter-step channel is bound; `nullcontext`
-            # otherwise — default path keeps full concurrency). Resetting inside
-            # the lock means a concurrent inter-step run cannot wipe this run's
-            # channel mid-flight (Codex review r4, spec §14.21 C-RT-29 invariant 7).
-            async with _inter_step_guard:
-                if _inter_step_channel is not None:
-                    _inter_step_channel.reset()
-                # Same composition pattern as the v1.11 `api.run()` baseline
-                # (asyncio.to_thread for the sync CP driver; asyncio.wait_for
-                # to enforce `RT-FAIL-DRAIN-TIMEOUT` per C-RT-14 + U-RT-44 AC #2).
-                cp_result = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        _execute_workflow,
-                        workflow.manifest_entry,
-                        workflow.steps,
-                        run_id,
-                        harness_ctx,
-                        default_model_binding=workflow.default_model_binding,
-                        step_dispatchers=cast(Any, effective_step_dispatchers),
-                        pause_snapshot_input=_resume_snapshot,
-                    ),
-                    timeout=drain_timeout_seconds,
-                )
+            # The per-run inter-step channel + cost accumulator were isolated in
+            # their ContextVars above; the `asyncio.to_thread` worker inherits them
+            # via `copy_context()` (no lock needed — B-INTERSTEP-PERRUN-ISOLATION).
+            # Same composition pattern as the v1.11 `api.run()` baseline
+            # (asyncio.to_thread for the sync CP driver; asyncio.wait_for to enforce
+            # `RT-FAIL-DRAIN-TIMEOUT` per C-RT-14 + U-RT-44 AC #2).
+            cp_result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _execute_workflow,
+                    workflow.manifest_entry,
+                    workflow.steps,
+                    run_id,
+                    harness_ctx,
+                    default_model_binding=workflow.default_model_binding,
+                    step_dispatchers=cast(Any, effective_step_dispatchers),
+                    pause_snapshot_input=_resume_snapshot,
+                ),
+                timeout=drain_timeout_seconds,
+            )
             return cp_result.model_dump(mode="json")
         except TimeoutError:
             # `RT-FAIL-DRAIN-TIMEOUT` projection per U-RT-44 AC #2;
@@ -461,6 +459,17 @@ def materialize_mcp_server_stage(
             return drained.model_dump(mode="json")
         finally:
             _CURRENT_TOOL_CTX.reset(ctx_token)
+            # Reset the per-run holder vars THIS handler set (Codex pre-merge
+            # [P2]): if the same asyncio task serves a later `run_workflow`
+            # invocation, a surviving binding would make that call skip its fresh
+            # allocation (the cost var's `if None` guard) and share a sink across
+            # runs. Mirrors the `ctx_token` discipline. A CALLER-set cost var
+            # (api.run/resume) is reset by that caller — this handler captured no
+            # token for it (the `if None` guard was False), so it is left intact.
+            if _channel_token is not None:
+                INTER_STEP_CHANNEL_VAR.reset(_channel_token)
+            if _cost_token is not None:
+                COST_ACCUM_VAR.reset(_cost_token)
 
     return HarnessMCPServer(
         server=fastmcp,

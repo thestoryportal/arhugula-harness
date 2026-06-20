@@ -64,6 +64,7 @@ from harness_od.cost_record_audit_writer import (
 from harness_od.idempotency_join_dedup import DispatchKind, SpanCostRecord
 from harness_od.rate_table_types import RateTable
 
+from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.types import AuditLedgerWriter, CostAttributionChain
 
 if TYPE_CHECKING:
@@ -272,7 +273,7 @@ class CostAttributingValidatorHook:
         rate_table: RateTable,
         cost_chain: CostAttributionChain,
         audit_writer: AuditLedgerWriter,
-        cost_record_sink: list[SpanCostRecord] | None = None,
+        cost_record_sink: SupportsCostRecordAppend | None = None,
     ) -> None:
         self._rate_table = rate_table
         self._cost_chain = cost_chain
