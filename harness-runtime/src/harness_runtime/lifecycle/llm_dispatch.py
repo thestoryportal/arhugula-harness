@@ -62,6 +62,7 @@ from harness_core import PersonaTier, WorkloadClass
 from harness_cp.cp_shared_types import (
     ActorIdentity,
     AgentRole,
+    ModelBinding,
     ProviderAgnosticPayload,
     RoutingDecisionTrace,
     TraceContext,
@@ -75,6 +76,7 @@ from harness_cp.routing_core_surface import (
     ProviderDispatchResult,
     RouterResolutionFn,
     infer,
+    resolve_routing_trace,
 )
 from harness_cp.routing_layer import RoutingLayer
 from harness_cp.routing_manifest_residence import RoutingManifest
@@ -334,6 +336,20 @@ _EMPTY_ROUTING_MANIFEST = RoutingManifest(
 )
 
 
+def _declarative_decline(
+    _payload: ProviderAgnosticPayload, _manifest: RoutingManifest
+) -> str | None:
+    """A DECLARATIVE layer-decision that always DECLINES (returns ``None``).
+
+    Used by `RuntimeLLMDispatcher.resolve_routed_binding`
+    (B-L2-FALLBACK-COMPOSITION) AFTER its deterministic-binding check has
+    established the request has NO deterministic binding — so DECLARATIVE must
+    fall through to the EMBEDDING classifier (then the L3 router) per C-CP-02
+    §2.2. A typed module-level function (not a lambda) keeps it pyright-clean
+    against the ``LayerDecisionFn`` signature."""
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeLLMDispatcher:
     """Per-step LLM-dispatch composer satisfying `harness_cp.workflow_driver.
@@ -587,6 +603,108 @@ class RuntimeLLMDispatcher:
             )
         return content
 
+    async def resolve_routed_binding(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
+    ) -> ModelBinding | None:
+        """Resolve the layered-routing PRIMARY candidate ONCE for the C-RT-16
+        wrapper (B-L2-FALLBACK-COMPOSITION, `Spec_Harness_Runtime_v1.md` §14.6).
+
+        The SELECTION half of `dispatch` — runs the layered routing strategy
+        (DECLARATIVE-decline → EMBEDDING classifier → L3 router per C-CP-02 §2.2)
+        and returns the routed ``ModelBinding`` WITHOUT dispatching. The C-RT-16
+        ``RetryBreakerFallbackDispatcher`` calls this ONCE per step (via a direct
+        handle the stage-5 factory hands it — NOT through its HITL/inner chain)
+        and SEEDS the routed model as its PRIMARY fallback candidate, so the
+        layered routing decision composes with the fallback chain. The inner
+        ``dispatch`` stays FAITHFUL — it dispatches the wrapper's rebound
+        candidate exactly once per attempt (§14.6). This is the U-RT-114 §14.5.3
+        pattern applied to layered routing: model-candidate selection lives at
+        the wrapper as the chain PRIMARY, never re-run per fallback attempt (the
+        §14.5.3 "no two-authority-at-dispatch" invariant the inner-routing
+        re-evaluation otherwise breaks).
+
+        Returns ``None`` — "no routing augmentation; the wrapper's existing
+        per-role / stage chain governs" — when:
+
+        - ``routing_activation`` is off (the default → byte-identical to the
+          pre-B-L2 always-echo dispatch); OR
+        - the request has a DETERMINISTIC binding (a per-step override
+          ``override_applied``, a per-role ``per_role_bindings`` entry, or a
+          MODEL-BEARING per-workload override). DECLARATIVE would RESOLVE (echo
+          ``binding.model_binding``), which IS the wrapper's existing chain
+          primary — so no augmentation is needed, and a per-role binding's own
+          U-RT-114 primary augmentation takes PRECEDENCE (routing fills only the
+          no-deterministic-binding gap — the mutual-exclusivity §2.2's
+          ``_has_deterministic_binding`` check encodes); OR
+        - no EMBEDDING classifier AND no L3 router is configured (nothing to
+          route to → faithful; defensively, the factory builds the default
+          EMBEDDING classifier when ``routing_activation`` is on).
+
+        Raises
+        ------
+        RoutingCandidateUnresolvedError
+            DECLARATIVE declined and EMBEDDING + L3 produced no well-formed
+            candidate (§2.5.2/§2.5.3). The wrapper's ``dispatch`` surfaces it as
+            a step failure, exactly as the inner dispatch surfaces it on the
+            non-routing path.
+        """
+        if not self.routing_activation:
+            return None
+        _role = step_context.agent_role or _MVP_DEFAULT_AGENT_ROLE
+        manifest = self.routing_manifest or _EMPTY_ROUTING_MANIFEST
+        _workload = self.workload_class or _MVP_DEFAULT_WORKLOAD_CLASS
+        _workload_override = manifest.per_workload_overrides.get(_workload)
+        _has_deterministic_binding = (
+            binding.override_applied
+            or _role in manifest.per_role_bindings
+            or (
+                _workload_override is not None
+                and _workload_override.model_binding_override is not None
+            )
+        )
+        if _has_deterministic_binding:
+            # DECLARATIVE resolves (echoes `binding.model_binding`) → that model IS
+            # the wrapper's existing chain primary; no routing augmentation (the
+            # U-RT-114 per-role / per-step-override path owns the primary — the
+            # precedence the §2.2 hit-invariant encodes).
+            return None
+        if self.embedding_classifier is None and self.router is None:
+            # Nothing to route to (no L2 classifier + no L3 router) → faithful.
+            # Defensive: `materialize_llm_dispatcher_stage` builds the default
+            # EMBEDDING classifier when `routing_activation` is on.
+            return None
+        payload = _coerce_payload(step.step_payload)
+        envelope = InferenceRequest(
+            agent_role=_role,
+            workload_class=_workload,
+            persona_tier=self.persona_tier or PersonaTier.SOLO_DEVELOPER,
+            context_tokens=len(payload.messages),
+            request_payload=payload,
+            trace_context=_MVP_PLACEHOLDER_TRACE_CONTEXT,
+        )
+        # Past the deterministic check → DECLARATIVE DECLINES so `route()` falls
+        # through to the injected EMBEDDING classifier (then the L3 router). ONE
+        # source of truth for the routing layers — the same EMBEDDING/L3 surface
+        # the inner held, now consulted ONCE here for the wrapper's primary.
+        routing_layer_decisions: dict[RoutingLayer, LayerDecisionFn] = {
+            RoutingLayer.DECLARATIVE: _declarative_decline
+        }
+        if self.embedding_classifier is not None:
+            routing_layer_decisions[RoutingLayer.EMBEDDING] = self.embedding_classifier
+        trace, _binding_rationale = await resolve_routing_trace(
+            envelope,
+            manifest=manifest,
+            layer_decisions=routing_layer_decisions,
+            budgets=self.budgets,
+            router=self.router,
+        )
+        provider, _sep, model = trace.candidate.partition(":")
+        return ModelBinding(provider=provider, model=model)
+
     async def dispatch(
         self,
         binding: StepEffectiveBinding,
@@ -730,48 +848,26 @@ class RuntimeLLMDispatcher:
         else:
             _effective_system_prompt = self.active_system_prompt
 
-        # --- R-300: layered routing-selection via infer() ----------------
-        # The DECLARATIVE layer decision echoes the effective binding (the per-role
-        # model binding, U-RT-114, else the CP-resolved manifest role binding with
-        # per-step overrides applied) — selection is behavior-preserving at MVP.
-        # `route()`'s `manifest` arg + the envelope discriminators are carried but
-        # not selection-driving until R-300-second-provider.
-        # B-L2-EMBEDDING-ACTIVATION (C-CP-02 §2.2 — the routing-activation gate):
-        # when `routing_activation` is on, DECLARATIVE is §2.2-FAITHFUL — it resolves
-        # ("the manifest binds the (agent_role, workflow_class, step) tuple") ONLY
-        # when the request has a DETERMINISTIC binding; a pure-default MISS DECLINES
-        # (None) so `route()` falls through to the EMBEDDING classifier (then L3).
-        # Off (default) → the #213 always-echo → byte-identical, zero blast radius.
-        #
-        # The hit-invariant (Codex [P2] ×2 — advisor-reconciled): on a hit the
-        # dispatched model is the one that MADE it a hit. DECLARATIVE declines ONLY
-        # for a pure-default step — i.e. NO per-step override (`override_applied`,
-        # the coarse proxy: any per-step override pins DECLARATIVE so an explicitly
-        # customized step is never EMBEDDING-routed — safe, arguably correct) AND no
-        # per-role manifest binding AND no MODEL-BEARING per-workload override (a
-        # non-model workload override — engine/sandbox only — must NOT block
-        # EMBEDDING). On a model-bearing workload-override hit the dispatched model is
-        # still `_effective_model_binding` (the default) — status-quo: that override
-        # model is unconsumed everywhere today (flag-off too → NO regression); FOLDING
-        # the per-workload / per-role manifest models (which needs a binding-source
-        # discriminator on `StepEffectiveBinding`, a type-smell this layer lacks) is
-        # the registered follow-on `B-ROUTING-MANIFEST-MODEL-FOLD`.
+        # --- R-300 / B-L2-FALLBACK-COMPOSITION: faithful dispatch-read ----------
+        # The DECLARATIVE layer decision ECHOES the effective binding
+        # (`binding.model_binding` — the C-RT-16 wrapper's rebound candidate: the
+        # stage-chain primary, the U-RT-114 per-role model, or the routing_activation
+        # routed primary). The inner C-RT-15 dispatch is FAITHFUL — it dispatches
+        # whatever the wrapper rebinds, exactly once per attempt (§14.6 "the wrapper
+        # invokes the inner dispatcher exactly once per attempt with a rebound
+        # binding"). Layered-routing ACTIVATION (routing_activation → DECLARATIVE-
+        # decline → EMBEDDING/L3 picking a DIFFERENT model) is NOT performed here: at
+        # the inner it re-runs per fallback attempt and silently defeats the wrapper's
+        # candidate chain (the §14.5.3 "no two-authority-at-dispatch" anti-pattern).
+        # The routing decision is made ONCE, ONE LAYER OUT, at the C-RT-16 wrapper via
+        # `resolve_routed_binding` (below), which seeds the routed model as the
+        # wrapper's PRIMARY fallback candidate — so layered routing composes with the
+        # fallback chain (B-L2-FALLBACK-COMPOSITION, runtime §14.6). `route()`'s
+        # `manifest` arg + the envelope discriminators are carried for `routing.*`
+        # span attribution.
         def _declarative_echo(
             _payload: ProviderAgnosticPayload, _manifest: RoutingManifest
         ) -> str | None:
-            if self.routing_activation:
-                _workload = self.workload_class or _MVP_DEFAULT_WORKLOAD_CLASS
-                _workload_override = _manifest.per_workload_overrides.get(_workload)
-                _has_deterministic_binding = (
-                    binding.override_applied
-                    or _role in _manifest.per_role_bindings
-                    or (
-                        _workload_override is not None
-                        and _workload_override.model_binding_override is not None
-                    )
-                )
-                if not _has_deterministic_binding:
-                    return None
             return f"{_effective_model_binding.provider}:{_effective_model_binding.model}"
 
         # `infer()` requires an InferenceRequest envelope. Its discriminator
@@ -831,17 +927,17 @@ class RuntimeLLMDispatcher:
                 cached_tokens_in=0,
             )
 
-        # C-CP-02 §2.1 production layer-decision map: DECLARATIVE always; the
-        # Layer-2 EMBEDDING classifier additionally when injected (R-FS-1 L2 —
-        # Option B). EMBEDDING is production-inert today (DECLARATIVE always
-        # echoes → `route()` short-circuits before EMBEDDING) until R-300 makes
-        # DECLARATIVE conditional; absent an injected classifier this is
-        # byte-identical to the pre-L2 `{DECLARATIVE: _declarative_echo}`.
+        # C-CP-02 §2.1 production layer-decision map for the FAITHFUL inner
+        # dispatch: DECLARATIVE-echo only. The DECLARATIVE echo always resolves
+        # `binding.model_binding` (the wrapper's rebound candidate), so `route()`
+        # short-circuits at DECLARATIVE and the inner faithfully dispatches it
+        # (§14.6). Layered-routing ACTIVATION (the EMBEDDING classifier + the L3
+        # router) is consulted ONCE at the C-RT-16 wrapper via
+        # `resolve_routed_binding`, NOT here — so routing composes with fallback
+        # instead of re-routing per attempt (B-L2-FALLBACK-COMPOSITION, §14.6).
         production_layer_decisions: dict[RoutingLayer, LayerDecisionFn] = {
             RoutingLayer.DECLARATIVE: _declarative_echo
         }
-        if self.embedding_classifier is not None:
-            production_layer_decisions[RoutingLayer.EMBEDDING] = self.embedding_classifier
 
         await infer(
             envelope,
@@ -1929,22 +2025,16 @@ def materialize_llm_dispatcher_stage(
             "No providers registered at stage 3a — cannot bind LLM dispatcher at stage 5"
         )
 
-    # B-L2-EMBEDDING-ACTIVATION — routing-activation does NOT yet compose with the
-    # C-RT-16 fallback chain (Codex [P2]): the wrapper re-binds `binding.model_binding`
-    # per fallback candidate + re-invokes the inner, but the §2.2 DECLARATIVE decline
-    # re-routes EMBEDDING on every invocation → the wrapper would re-dispatch the same
-    # embedding candidate instead of advancing to the next fallback candidate (a SILENT
-    # fallback-defeat). Detect-then-refuse (no-silent-failure) until the composition
-    # arc `B-ROUTING-MANIFEST-MODEL-FOLD`'s sibling `B-L2-FALLBACK-COMPOSITION` lands:
-    # a deployment that enables routing_activation MUST NOT also declare fallback
-    # chains. (route-once-then-fallback-the-chain is the architectural fix — routing
-    # composing with the wrapper's candidate chain, the U-RT-114 precedent.)
-    if routing_activation and routing_manifest is not None and routing_manifest.fallback_chains:
-        raise LLMDispatchBindError(
-            "routing_activation=True does not yet compose with RoutingManifest "
-            "fallback_chains (the L2/L3 routing decision re-runs per fallback attempt, "
-            "defeating the chain) — disable one until B-L2-FALLBACK-COMPOSITION lands"
-        )
+    # B-L2-FALLBACK-COMPOSITION (runtime §14.6) — routing_activation NOW composes
+    # with the C-RT-16 fallback chain: the routing decision is made ONCE at the
+    # C-RT-16 wrapper (via `RuntimeLLMDispatcher.resolve_routed_binding`, which the
+    # stage-5 factory hands the wrapper as a direct handle) and SEEDS the routed
+    # model as the wrapper's PRIMARY fallback candidate; the inner `dispatch` stays
+    # FAITHFUL. The prior B-L2-EMBEDDING-ACTIVATION detect-then-refuse guard
+    # (routing_activation + non-empty fallback_chains → LLMDispatchBindError) is
+    # RETIRED — the silent-fallback-defeat it prevented is now architecturally
+    # closed (the U-RT-114 §14.5.3 "wrapper owns model-candidate selection",
+    # route-once-then-fallback-the-chain pattern applied to layered routing).
 
     # B-L2-EMBEDDING-ACTIVATION (C-CP-02 §2.2): when routing_activation is on and no
     # classifier is injected, build the default L2 EMBEDDING classifier (the light

@@ -181,6 +181,109 @@ def _candidate_set_summary(manifest: RoutingManifest) -> str:
     )
 
 
+async def resolve_routing_trace(
+    request: InferenceRequest,
+    *,
+    manifest: RoutingManifest,
+    layer_decisions: Mapping[RoutingLayer, LayerDecisionFn],
+    budgets: tuple[LayerBudget, ...] = DEFAULT_LAYER_BUDGETS,
+    budget_exhausted: frozenset[RoutingLayer] = frozenset(),
+    router: RouterResolutionFn | None = None,
+) -> tuple[RoutingDecisionTrace, str | None]:
+    """The route()+L3-resolution SELECTION half of `infer` — NO provider dispatch.
+
+    Runs the layered routing strategy (`route` per U-CP-05) and, when the
+    deterministic layers fall through to the LLM_AS_ROUTER empty-candidate
+    sentinel AND a `router` is injected AND the L3 budget is not exhausted,
+    resolves Layer 3 via one budget-bounded async router call (§2.5.2/§2.5.3).
+    Returns the resolved ``(RoutingDecisionTrace, binding_rationale)`` — the
+    rationale is the optional Layer-3 router rationale (``None`` on every
+    non-router path).
+
+    Factored from `infer` at B-L2-FALLBACK-COMPOSITION (`Spec_Harness_Runtime_v1.md`
+    §14.6) so the C-RT-16 retry/breaker/fallback wrapper can resolve the
+    route-once PRIMARY candidate WITHOUT dispatching — the layered routing
+    decision composes with the fallback chain as the wrapper's primary
+    candidate, instead of re-running per fallback attempt (the silent
+    fallback-defeat the §14.5.3 "wrapper owns model-candidate selection"
+    invariant forecloses). `infer` calls this then dispatches; the runtime's
+    `RuntimeLLMDispatcher.resolve_routed_binding` calls it then seeds the
+    wrapper's primary candidate.
+
+    Raises
+    ------
+    RoutingCandidateUnresolvedError
+        No layer produced a candidate; the candidate is malformed; or the
+        LLM_AS_ROUTER layer fell through with no injected router / an exhausted
+        or over-budget L3 (§2.5.2/§2.5.3 — L3 terminal).
+    """
+    trace = route(
+        request.request_payload,
+        manifest,
+        dict(layer_decisions),
+        budgets,
+        budget_exhausted=budget_exhausted,
+    )
+    # C-CP-02 §2.5.2 — Layer-3 LLM_AS_ROUTER resolution at the async call
+    # surface (Reading B). `route` returns the empty-candidate sentinel when the
+    # deterministic layers fall through; resolve it via the injected async router
+    # ONLY when a router is injected AND the L3 budget is not exhausted. Otherwise
+    # the preserved sentinel raise governs (LLM_AS_ROUTER is terminal — no further
+    # layer to fall through to).
+    binding_rationale: str | None = None
+    if trace.candidate == "" and trace.layer == RoutingLayer.LLM_AS_ROUTER.value:
+        if router is None or RoutingLayer.LLM_AS_ROUTER in budget_exhausted:
+            raise RoutingCandidateUnresolvedError(
+                f"routing produced no well-formed 'provider:model' candidate "
+                f"(layer={trace.layer!r}, candidate={trace.candidate!r})"
+            )
+        # ENFORCE the effective L3 LayerBudget (C-CP-03 §3.1 / §2.5.3): a
+        # slow/hanging router is interrupted at the budget and converted to L3
+        # exhaustion -> the SAME preserved raise (timeout = exhaustion, L3
+        # terminal). The budget is the §3.1 OVERRIDE-RESOLVED value keyed on the
+        # request's `workload_class` + `persona_tier` (B-LAYER-BUDGET-OVERRIDE).
+        l3_budget_seconds = (
+            effective_layer_budget_ms(
+                budgets,
+                RoutingLayer.LLM_AS_ROUTER,
+                request.workload_class,
+                request.persona_tier,
+            )
+            / 1000
+        )
+        start = time.monotonic()
+        try:
+            resolution = await asyncio.wait_for(
+                router(request, _candidate_set_summary(manifest)),
+                timeout=l3_budget_seconds,
+            )
+        except TimeoutError as exc:
+            raise RoutingCandidateUnresolvedError(
+                f"Layer-3 router exceeded the "
+                f"{l3_budget_seconds * 1000:.0f} ms LLM_AS_ROUTER budget "
+                f"(layer={trace.layer!r})"
+            ) from exc
+        # Rebuild the trace with the router-supplied candidate — the four frozen
+        # fields only (§2.5.4: the rationale is NOT carried on the trace; it
+        # rides the dispatch-seam `binding_rationale` channel returned below).
+        trace = RoutingDecisionTrace(
+            layer=RoutingLayer.LLM_AS_ROUTER.value,
+            candidate=resolution.candidate,
+            decision_ms=int((time.monotonic() - start) * 1000),
+            budget_exhausted=trace.budget_exhausted,
+        )
+        binding_rationale = resolution.rationale
+    provider, sep, model = trace.candidate.partition(":")
+    if not sep or not provider or not model:
+        # Reused well-formedness guard — also catches a malformed router return
+        # (§2.5.2): a router candidate that is not "provider:model" re-raises.
+        raise RoutingCandidateUnresolvedError(
+            f"routing produced no well-formed 'provider:model' candidate "
+            f"(layer={trace.layer!r}, candidate={trace.candidate!r})"
+        )
+    return trace, binding_rationale
+
+
 async def infer(
     request: InferenceRequest,
     *,
@@ -233,78 +336,19 @@ async def infer(
         LLM_AS_ROUTER layer fell through with no injected router / an exhausted
         or over-budget L3 (§2.5.2/§2.5.3 — L3 terminal).
     """
-    trace = route(
-        request.request_payload,
-        manifest,
-        dict(layer_decisions),
-        budgets,
+    # The route()+L3 SELECTION is factored to `resolve_routing_trace`
+    # (B-L2-FALLBACK-COMPOSITION) so the C-RT-16 wrapper can route-once without
+    # dispatching; `infer` = resolve + dispatch. The non-router path is
+    # byte-identical to the pre-§2.5 behavior (the carrier is None on it).
+    trace, binding_rationale = await resolve_routing_trace(
+        request,
+        manifest=manifest,
+        layer_decisions=layer_decisions,
+        budgets=budgets,
         budget_exhausted=budget_exhausted,
+        router=router,
     )
-    # C-CP-02 §2.5.2 — Layer-3 LLM_AS_ROUTER resolution at the async call
-    # surface (Reading B). `route` returns the empty-candidate sentinel when
-    # the deterministic layers fall through; resolve it via the injected async
-    # router ONLY when a router is injected AND the L3 budget is not exhausted.
-    # Otherwise the preserved sentinel raise governs (LLM_AS_ROUTER is the
-    # terminal layer — no further layer to fall through to). The non-router
-    # path below is byte-identical to the pre-§2.5 behavior.
-    binding_rationale: str | None = None
-    if trace.candidate == "" and trace.layer == RoutingLayer.LLM_AS_ROUTER.value:
-        if router is None or RoutingLayer.LLM_AS_ROUTER in budget_exhausted:
-            raise RoutingCandidateUnresolvedError(
-                f"routing produced no well-formed 'provider:model' candidate "
-                f"(layer={trace.layer!r}, candidate={trace.candidate!r})"
-            )
-        # ENFORCE the effective L3 LayerBudget (C-CP-03 §3.1 / §2.5.3): a
-        # slow/hanging router is interrupted at the budget and converted to L3
-        # exhaustion -> the SAME preserved raise (timeout = exhaustion, L3
-        # terminal). B-LAYER-BUDGET-OVERRIDE (CP spec v1.43 §2.5.3): the budget
-        # is the §3.1 OVERRIDE-RESOLVED value keyed on the request's
-        # `workload_class` + `persona_tier`, NOT the flat `time_budget_ms`.
-        # §3.1 commits the per-persona tuning surface explicitly ON this layer
-        # ("the higher-tier persona caps budget tighter on `llm_as_router`"), so
-        # honoring the override here MATERIALIZES that cleared (built-but-vacuous)
-        # surface — impl-to-cleared-spec, not a design extension. The flat 200 ms
-        # is the default when no override applies (the negative-control path).
-        l3_budget_seconds = (
-            effective_layer_budget_ms(
-                budgets,
-                RoutingLayer.LLM_AS_ROUTER,
-                request.workload_class,
-                request.persona_tier,
-            )
-            / 1000
-        )
-        start = time.monotonic()
-        try:
-            resolution = await asyncio.wait_for(
-                router(request, _candidate_set_summary(manifest)),
-                timeout=l3_budget_seconds,
-            )
-        except TimeoutError as exc:
-            raise RoutingCandidateUnresolvedError(
-                f"Layer-3 router exceeded the "
-                f"{l3_budget_seconds * 1000:.0f} ms LLM_AS_ROUTER budget "
-                f"(layer={trace.layer!r})"
-            ) from exc
-        # Rebuild the trace with the router-supplied candidate — the four
-        # frozen fields only (§2.5.4: the rationale is NOT carried on the
-        # trace; it rides the dispatch-seam `binding_rationale` channel below).
-        trace = RoutingDecisionTrace(
-            layer=RoutingLayer.LLM_AS_ROUTER.value,
-            candidate=resolution.candidate,
-            decision_ms=int((time.monotonic() - start) * 1000),
-            budget_exhausted=trace.budget_exhausted,
-        )
-        binding_rationale = resolution.rationale
-    provider, sep, model = trace.candidate.partition(":")
-    if not sep or not provider or not model:
-        # Reused well-formedness guard — also catches a malformed router
-        # return (§2.5.2): a router candidate that is not "provider:model"
-        # re-raises the preserved error.
-        raise RoutingCandidateUnresolvedError(
-            f"routing produced no well-formed 'provider:model' candidate "
-            f"(layer={trace.layer!r}, candidate={trace.candidate!r})"
-        )
+    provider, _sep, model = trace.candidate.partition(":")
     # Dispatch-call split (§2.5.2/§2.5.4): the carrier is passed ONLY on the
     # router path. The non-router path calls `dispatch` with exactly the four
     # positional args (no kwarg) -> byte-identical to HEAD, so the span
