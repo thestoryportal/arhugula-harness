@@ -79,6 +79,11 @@ _ENV_SCALAR_FIELDS: dict[str, tuple[str, Any]] = {
     # `openai_optional` are NOT env-keyed here (file/CLI only) — a known env gap, a
     # separate config-hygiene item, intentionally not folded into this arc.
     "effect_fencing": (f"{ENV_PREFIX}EFFECT_FENCING", _parse_bool),
+    # B-L2-EMBEDDING-ACTIVATION: env-keyed for the SAME reason as effect_fencing —
+    # it gates a behavior-changing property (which model serves a workload), so an
+    # operator who sets HARNESS_ROUTING_ACTIVATION must NOT be silently dropped
+    # ([[runtimeconfig-scalar-needs-both-env-loaders]]; mirrored in config_source).
+    "routing_activation": (f"{ENV_PREFIX}ROUTING_ACTIVATION", _parse_bool),
 }
 
 

@@ -180,6 +180,33 @@ def test_env_supplies_effect_fencing() -> None:
     assert off.effect_fencing is False
 
 
+def test_env_supplies_routing_activation() -> None:
+    """`HARNESS_ROUTING_ACTIVATION` reaches RuntimeConfig (B-L2-EMBEDDING-ACTIVATION,
+    C-CP-02 §2.2 routing-activation gate).
+
+    Pinned because the flag gates a BEHAVIOR-changing property (which model serves a
+    workload): an operator who sets the env var must NOT be silently dropped (the
+    no-silent-failure discipline; the same env-loader pairing effect_fencing needed —
+    [[runtimeconfig-scalar-needs-both-env-loaders]]).
+    """
+    base = {
+        f"{ENV_PREFIX}REPOSITORY_ROOT": "/tmp",
+        f"{ENV_PREFIX}DEPLOYMENT_SURFACE": "local-development",
+        f"{ENV_PREFIX}DEFAULT_TOPOLOGY": "single-threaded-linear",
+    }
+    sub = dict(
+        path_bindings=PathBindingConfig(),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+        collector=CollectorConfig(),
+    )
+    on = materialize_runtime_config(env={**base, f"{ENV_PREFIX}ROUTING_ACTIVATION": "true"}, **sub)
+    assert on.routing_activation is True
+    # Absent env var → the opt-out default (byte-identical / zero blast radius).
+    off = materialize_runtime_config(env=base, **sub)
+    assert off.routing_activation is False
+
+
 def test_ollama_optional_bool_parsing() -> None:
     """`_parse_bool` accepts the common truthy spellings; everything else is False."""
     # The Python `bool("False") == True` trap necessitates explicit parsing.

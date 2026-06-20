@@ -93,6 +93,21 @@ def test_env_var_supplies_effect_fencing(monkeypatch: pytest.MonkeyPatch) -> Non
     )
 
 
+# B-L2-EMBEDDING-ACTIVATION (C-CP-02 §2.2) — HARNESS_ROUTING_ACTIVATION →
+# config.routing_activation. The flag gates a behavior-changing property (which model
+# serves a workload), so the env path must reach it (the effect_fencing env-pairing).
+def test_env_var_supplies_routing_activation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_ROUTING_ACTIVATION", "true")
+    cfg = RuntimeConfigSource.load(cli_overrides=_minimum_required_overrides())
+    assert cfg.routing_activation is True
+    # Absent → the opt-out default (byte-identical / zero blast radius).
+    monkeypatch.delenv("HARNESS_ROUTING_ACTIVATION", raising=False)
+    assert (
+        RuntimeConfigSource.load(cli_overrides=_minimum_required_overrides()).routing_activation
+        is False
+    )
+
+
 # AC #3 — config-file [runtime] table supplies tenant_id.
 def test_config_file_runtime_table_supplies_tenant_id(tmp_path: Path) -> None:
     config_file = tmp_path / "harness.toml"
