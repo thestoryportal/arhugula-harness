@@ -98,7 +98,7 @@ from harness_od.cross_family_rollup import (
 from harness_od.idempotency_join_dedup import SpanCostRecord
 from pydantic import BaseModel, ConfigDict
 
-from harness_runtime.types import RuntimeConfig
+from harness_runtime.types import COST_ACCUM_VAR, CostRecordAccumulator, RuntimeConfig
 
 if TYPE_CHECKING:
     from harness_runtime.lifecycle.mcp_server import (
@@ -588,74 +588,87 @@ async def run(
 
     async with _run_lock:
         resolved_config = config if config is not None else _default_config()
-        ctx = await run_bootstrap(
-            resolved_config,
-            workload_class=workflow.workload_class,
-            requires_inference=_workflow_requires_inference(workflow),
-        )
+        # B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-29 invariant 7) —
+        # establish THIS run's isolated cost accumulator in `COST_ACCUM_VAR` for
+        # the whole run. The set propagates into the `run_workflow` tool handler +
+        # its `asyncio.to_thread` worker (so the per-dispatch cost wrappers, which
+        # thread the ctx accumulator PROXY, append HERE), and the post-run cost
+        # read below resolves the SAME accumulator (a handler-set value would NOT
+        # propagate back up to this frame; a caller-set one DOES propagate down).
+        # The `finally` reset prevents the var leaking into a later direct-stage
+        # test on a reused task (where the proxy must fall back to its default).
+        _cost_token = COST_ACCUM_VAR.set(CostRecordAccumulator())
         try:
-            # U-RT-62 AC #5 — thin-wrapper reframe per spec v1.12 §14.8.3
-            # workflow-initiation topology pin (Reading α CC-initiates). The
-            # operator-facing `api.run()` symbol is preserved as carrier-
-            # preservation per Q2 ratification at the C-RT-18 v1.12 fork;
-            # the body now invokes the MCP-tool path via an in-process
-            # `ClientSession` against `ctx.mcp_server.server` (the FastMCP
-            # server materialized at bootstrap stage 2 per AC #2). This
-            # exercises the same H_T-as-MCP-server hosting topology that
-            # production CC→`run_workflow` invocation uses, so the e2e
-            # contract is unified at criterion B verification per spec
-            # v1.12 §14.8.3 v1.12 RETIRE-READY → RETIRED gate (AC #6).
-            #
-            # The tool body internalizes the asyncio.to_thread → wait_for
-            # composition + the workflow.step_dispatchers override fallback;
-            # api.run's role here is bootstrap → workflow registration →
-            # in-process tool call → CP result parse → shutdown.
-            assert ctx.mcp_server is not None, (
-                "ctx.mcp_server is None post-bootstrap — stage 2 AS did not "
-                "materialize the FastMCP server per U-RT-62 AC #2"
+            ctx = await run_bootstrap(
+                resolved_config,
+                workload_class=workflow.workload_class,
+                requires_inference=_workflow_requires_inference(workflow),
             )
-            # `ctx.mcp_server` is typed via the empty `HarnessMCPServer` Protocol
-            # (the concrete is not re-exported to keep Pydantic forward-refs
-            # clean); narrow to the concrete here to reach its `_state` /
-            # `workflow_registry` / `server` surface.
-            mcp_server = cast("_ConcreteHarnessMCPServer", ctx.mcp_server)
-            # Bind the post-bootstrap context on the mutable holder so the
-            # `run_workflow` tool body can reach `ctx.step_dispatchers` etc.
-            mcp_server._state["_harness_ctx"] = ctx  # pyright: ignore[reportPrivateUsage]
-            # Register the workflow keyed by workflow_id so the tool body
-            # can look it up. WorkflowObject is a runtime-local structural
-            # Protocol; not MCP-serializable. The serializable wire is the
-            # `workflow_id` string only.
-            mcp_server.workflow_registry[workflow.workflow_id] = workflow
             try:
-                cp_result = await _invoke_run_workflow_via_in_process_mcp(
-                    mcp_server.server, workflow.workflow_id
+                # U-RT-62 AC #5 — thin-wrapper reframe per spec v1.12 §14.8.3
+                # workflow-initiation topology pin (Reading α CC-initiates). The
+                # operator-facing `api.run()` symbol is preserved as carrier-
+                # preservation per Q2 ratification at the C-RT-18 v1.12 fork;
+                # the body now invokes the MCP-tool path via an in-process
+                # `ClientSession` against `ctx.mcp_server.server` (the FastMCP
+                # server materialized at bootstrap stage 2 per AC #2). This
+                # exercises the same H_T-as-MCP-server hosting topology that
+                # production CC→`run_workflow` invocation uses, so the e2e
+                # contract is unified at criterion B verification per spec
+                # v1.12 §14.8.3 v1.12 RETIRE-READY → RETIRED gate (AC #6).
+                #
+                # The tool body internalizes the asyncio.to_thread → wait_for
+                # composition + the workflow.step_dispatchers override fallback;
+                # api.run's role here is bootstrap → workflow registration →
+                # in-process tool call → CP result parse → shutdown.
+                assert ctx.mcp_server is not None, (
+                    "ctx.mcp_server is None post-bootstrap — stage 2 AS did not "
+                    "materialize the FastMCP server per U-RT-62 AC #2"
+                )
+                # `ctx.mcp_server` is typed via the empty `HarnessMCPServer` Protocol
+                # (the concrete is not re-exported to keep Pydantic forward-refs
+                # clean); narrow to the concrete here to reach its `_state` /
+                # `workflow_registry` / `server` surface.
+                mcp_server = cast("_ConcreteHarnessMCPServer", ctx.mcp_server)
+                # Bind the post-bootstrap context on the mutable holder so the
+                # `run_workflow` tool body can reach `ctx.step_dispatchers` etc.
+                mcp_server._state["_harness_ctx"] = ctx  # pyright: ignore[reportPrivateUsage]
+                # Register the workflow keyed by workflow_id so the tool body
+                # can look it up. WorkflowObject is a runtime-local structural
+                # Protocol; not MCP-serializable. The serializable wire is the
+                # `workflow_id` string only.
+                mcp_server.workflow_registry[workflow.workflow_id] = workflow
+                try:
+                    cp_result = await _invoke_run_workflow_via_in_process_mcp(
+                        mcp_server.server, workflow.workflow_id
+                    )
+                finally:
+                    # Defensive cleanup — `_run_lock` serializes invocations but
+                    # the registry + state holders MUST NOT carry stale entries
+                    # across calls (Track B future cached-context entry point;
+                    # pytest-asyncio loop reuse).
+                    mcp_server.workflow_registry.pop(workflow.workflow_id, None)
+                    mcp_server._state.pop("_harness_ctx", None)  # pyright: ignore[reportPrivateUsage]
+                # Per AC #5 advisor reconcile pin — `timed_out` derived from the
+                # CP result (the tool body absorbed the TimeoutError and emitted
+                # a DRAINED CP result with `RT-FAIL-DRAIN-TIMEOUT` fail_class).
+                timed_out = (
+                    cp_result.status == _CpRunStatus.DRAINED
+                    and cp_result.fail_class == "RT-FAIL-DRAIN-TIMEOUT"
                 )
             finally:
-                # Defensive cleanup — `_run_lock` serializes invocations but
-                # the registry + state holders MUST NOT carry stale entries
-                # across calls (Track B future cached-context entry point;
-                # pytest-asyncio loop reuse).
-                mcp_server.workflow_registry.pop(workflow.workflow_id, None)
-                mcp_server._state.pop("_harness_ctx", None)  # pyright: ignore[reportPrivateUsage]
-            # Per AC #5 advisor reconcile pin — `timed_out` derived from the
-            # CP result (the tool body absorbed the TimeoutError and emitted
-            # a DRAINED CP result with `RT-FAIL-DRAIN-TIMEOUT` fail_class).
-            timed_out = (
-                cp_result.status == _CpRunStatus.DRAINED
-                and cp_result.fail_class == "RT-FAIL-DRAIN-TIMEOUT"
+                # Per C-RT-08 + C-RT-10: run() owns the full bootstrap → execute
+                # → shutdown lifecycle. Shutdown after execute, regardless of CP
+                # status. ShutdownReport carries the audit-ledger head hash.
+                shutdown_report = await _shutdown(ctx)
+            return _build_run_result(
+                cp_result,
+                shutdown_report,
+                timed_out=timed_out,
+                cost_records=ctx.cost_record_accumulator.records,
             )
         finally:
-            # Per C-RT-08 + C-RT-10: run() owns the full bootstrap → execute
-            # → shutdown lifecycle. Shutdown after execute, regardless of CP
-            # status. ShutdownReport carries the audit-ledger head hash.
-            shutdown_report = await _shutdown(ctx)
-        return _build_run_result(
-            cp_result,
-            shutdown_report,
-            timed_out=timed_out,
-            cost_records=ctx.cost_record_accumulator.records,
-        )
+            COST_ACCUM_VAR.reset(_cost_token)
 
 
 def _read_durable_pause_snapshot(
@@ -877,47 +890,55 @@ async def resume(
     from harness_runtime.shutdown import shutdown as _shutdown
 
     async with _run_lock:
-        ctx = await run_bootstrap(
-            resolved_config,
-            workload_class=workflow.workload_class,
-            requires_inference=_workflow_requires_inference(workflow),
-        )
+        # B-INTERSTEP-PERRUN-ISOLATION — isolate this resume's cost accumulator in
+        # `COST_ACCUM_VAR` for the whole run (mirrors `run()`); the post-run cost
+        # read resolves the SAME accumulator the wrappers appended to, and the
+        # `finally` reset prevents var leakage into a later direct-stage test.
+        _cost_token = COST_ACCUM_VAR.set(CostRecordAccumulator())
         try:
-            assert ctx.mcp_server is not None, (
-                "ctx.mcp_server is None post-bootstrap — stage 2 AS did not "
-                "materialize the FastMCP server per U-RT-62 AC #2"
+            ctx = await run_bootstrap(
+                resolved_config,
+                workload_class=workflow.workload_class,
+                requires_inference=_workflow_requires_inference(workflow),
             )
-            mcp_server = cast("_ConcreteHarnessMCPServer", ctx.mcp_server)
-            mcp_server._state["_harness_ctx"] = ctx  # pyright: ignore[reportPrivateUsage]
-            # In-process resume handoff (NOT over the MCP wire) — the
-            # `run_workflow` tool reads these from `_state`, mirroring how
-            # `_harness_ctx` is passed. Presence of `_resume_pause_snapshot`
-            # switches the tool to the resume path (snapshot.run_id continuity
-            # + `pause_snapshot_input=` to the driver). C-RT-30.
-            mcp_server._state["_resume_pause_snapshot"] = snapshot  # pyright: ignore[reportPrivateUsage]
-            mcp_server._state["_resume_context"] = resume_context  # pyright: ignore[reportPrivateUsage]
-            mcp_server.workflow_registry[workflow.workflow_id] = workflow
             try:
-                cp_result = await _invoke_run_workflow_via_in_process_mcp(
-                    mcp_server.server, workflow.workflow_id
+                assert ctx.mcp_server is not None, (
+                    "ctx.mcp_server is None post-bootstrap — stage 2 AS did not "
+                    "materialize the FastMCP server per U-RT-62 AC #2"
+                )
+                mcp_server = cast("_ConcreteHarnessMCPServer", ctx.mcp_server)
+                mcp_server._state["_harness_ctx"] = ctx  # pyright: ignore[reportPrivateUsage]
+                # In-process resume handoff (NOT over the MCP wire) — the
+                # `run_workflow` tool reads these from `_state`, mirroring how
+                # `_harness_ctx` is passed. Presence of `_resume_pause_snapshot`
+                # switches the tool to the resume path (snapshot.run_id continuity
+                # + `pause_snapshot_input=` to the driver). C-RT-30.
+                mcp_server._state["_resume_pause_snapshot"] = snapshot  # pyright: ignore[reportPrivateUsage]
+                mcp_server._state["_resume_context"] = resume_context  # pyright: ignore[reportPrivateUsage]
+                mcp_server.workflow_registry[workflow.workflow_id] = workflow
+                try:
+                    cp_result = await _invoke_run_workflow_via_in_process_mcp(
+                        mcp_server.server, workflow.workflow_id
+                    )
+                finally:
+                    mcp_server.workflow_registry.pop(workflow.workflow_id, None)
+                    mcp_server._state.pop("_harness_ctx", None)  # pyright: ignore[reportPrivateUsage]
+                    mcp_server._state.pop("_resume_pause_snapshot", None)  # pyright: ignore[reportPrivateUsage]
+                    mcp_server._state.pop("_resume_context", None)  # pyright: ignore[reportPrivateUsage]
+                timed_out = (
+                    cp_result.status == _CpRunStatus.DRAINED
+                    and cp_result.fail_class == "RT-FAIL-DRAIN-TIMEOUT"
                 )
             finally:
-                mcp_server.workflow_registry.pop(workflow.workflow_id, None)
-                mcp_server._state.pop("_harness_ctx", None)  # pyright: ignore[reportPrivateUsage]
-                mcp_server._state.pop("_resume_pause_snapshot", None)  # pyright: ignore[reportPrivateUsage]
-                mcp_server._state.pop("_resume_context", None)  # pyright: ignore[reportPrivateUsage]
-            timed_out = (
-                cp_result.status == _CpRunStatus.DRAINED
-                and cp_result.fail_class == "RT-FAIL-DRAIN-TIMEOUT"
+                shutdown_report = await _shutdown(ctx)
+            return _build_run_result(
+                cp_result,
+                shutdown_report,
+                timed_out=timed_out,
+                cost_records=ctx.cost_record_accumulator.records,
             )
         finally:
-            shutdown_report = await _shutdown(ctx)
-        return _build_run_result(
-            cp_result,
-            shutdown_report,
-            timed_out=timed_out,
-            cost_records=ctx.cost_record_accumulator.records,
-        )
+            COST_ACCUM_VAR.reset(_cost_token)
 
 
 # ---------------------------------------------------------------------------

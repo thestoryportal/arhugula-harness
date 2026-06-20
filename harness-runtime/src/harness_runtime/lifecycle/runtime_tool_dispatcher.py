@@ -59,12 +59,12 @@ from harness_cp.workflow_driver_types import (
     WorkflowStep,
 )
 from harness_is.state_ledger_entry_schema import Identifier
-from harness_od.idempotency_join_dedup import SpanCostRecord
 
 from harness_runtime.config.provider_secrets import (
     SecretAllowlistDeniedError,
     SecretResolutionError,
 )
+from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.lifecycle.effect_fence import (
     EffectFenceProtocol,
     EffectFenceReservedUncommittedError,
@@ -321,7 +321,7 @@ class RuntimeToolDispatcher:
         cost_chain: Any = None,
         audit_writer: Any = None,
         rate_table: Any = None,
-        cost_record_sink: list[SpanCostRecord] | None = None,
+        cost_record_sink: SupportsCostRecordAppend | None = None,
         tool_execution_drivers: dict[ServerName, ToolExecutionDriver] | None = None,
         provider_secret_resolver: Any = None,
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
@@ -438,7 +438,7 @@ class RuntimeToolDispatcher:
         cost_chain: Any = None,
         audit_writer: Any = None,
         rate_table: Any = None,
-        cost_record_sink: list[SpanCostRecord] | None = None,
+        cost_record_sink: SupportsCostRecordAppend | None = None,
         tool_execution_driver: ToolExecutionDriver | None = None,
         provider_secret_resolver: Any = None,
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,

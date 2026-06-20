@@ -59,6 +59,7 @@ from harness_runtime.types import (
     PerStepOverrideEvaluator,
     ProviderClient,
     RetryBreakerRegistry,
+    RunScopedCostRecordAccumulator,
     RuntimeConfig,
     SandboxDispatchTable,
     SemanticCache,
@@ -188,16 +189,23 @@ class _MutableHarnessContext:
     fail-loud sentinels for the LLM/sub-agent dispatchers + omits their
     `{StepKind → StepDispatcher}` registry rows. Defaults `True`
     (behavior-preserving for any caller that does not derive the predicate)."""
-    cost_record_accumulator: CostRecordAccumulator = field(default_factory=CostRecordAccumulator)
-    """R-FS-1 arc CA — run-scoped cost-record accumulator (frozen `HarnessContext`
-    field, not in `_REQUIRED_FIELDS` — defaulted, never None). A fresh holder per
-    builder (per run); the stage-4/5 dispatcher/hook materializations read its
-    `.records` list off the mutable ctx and thread that reference into their
-    best-effort cost wrappers, which append the returned `SpanCostRecord`.
-    `freeze()` threads the SAME holder onto the frozen ctx (stored by reference —
-    a `CostRecordAccumulator`, not a Pydantic-copied `list`) so
-    `_build_run_result`'s post-join read of `.records` sees every appended record
-    (runtime spec v1.53 §9 C-RT-09)."""
+    cost_record_accumulator: CostRecordAccumulator = field(
+        default_factory=RunScopedCostRecordAccumulator
+    )
+    """R-FS-1 arc CA + B-INTERSTEP-PERRUN-ISOLATION — the run-scoped cost-record
+    accumulator (frozen `HarnessContext` field, not in `_REQUIRED_FIELDS` —
+    defaulted, never None). A `RunScopedCostRecordAccumulator` PROXY (IS-A
+    `CostRecordAccumulator`): the stage-4/5 dispatcher/hook materializations thread
+    THIS proxy (not its `.records` list) as their `cost_record_sink`, so each
+    appended `SpanCostRecord` routes — at append-time — to the *current run's*
+    accumulator resolved from `COST_ACCUM_VAR` (a fresh one per `run_workflow`,
+    closing the daemon-reuse cross-run accumulation; §82 Class-3). `freeze()`
+    threads the SAME proxy onto the frozen ctx (stored by reference — not a
+    Pydantic-copied `list`) so `_build_run_result`'s post-join `.records` read
+    resolves to the same per-run accumulator the wrappers appended to (runtime
+    spec v1.53 §9 C-RT-09). With no run active (direct-stage tests) the proxy
+    falls back to its bound bootstrap default — byte-identical to the prior
+    single-accumulator behavior."""
 
     # Stage 1 IS.
     path_resolver: PathResolver | None = None

@@ -80,9 +80,9 @@ from harness_cp.routing_layer import RoutingLayer
 from harness_cp.routing_manifest_residence import RoutingManifest
 from harness_cp.validator_fail_transient_staircase import CrossTrustBoundaryState
 from harness_cp.workflow_driver_types import StepExecutionContext, WorkflowStep
-from harness_od.idempotency_join_dedup import SpanCostRecord
 from harness_od.otel_genai_base import HIERARCHY_CORRELATION_KEY, GenAiOperation
 
+from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.lifecycle.hitl_tool_loop import (
     HITLToolLoopContext,
     ModelToolCall,
@@ -389,7 +389,7 @@ class RuntimeLLMDispatcher:
     # dispatch's returned `SpanCostRecord` so `_build_run_result` can roll up
     # `RunResult.cost_attribution` (runtime spec v1.53 §9 C-RT-09). None at unit-test
     # construction → the wrapper skips the append (no-op).
-    cost_record_sink: list[SpanCostRecord] | None = None
+    cost_record_sink: SupportsCostRecordAppend | None = None
     # B-INTERSTEP (runtime spec §14.21 C-RT-29) — run-scoped inter-step output
     # channel (the SAME `InterStepOutputChannel` instance the CP driver records
     # into, threaded by `materialize_llm_dispatcher_stage` from the mutable
@@ -1793,7 +1793,7 @@ def _attribute_cost_best_effort(
     cost_chain: Any,
     audit_writer: Any,
     rate_table: Any,
-    cost_record_sink: list[SpanCostRecord] | None = None,
+    cost_record_sink: SupportsCostRecordAppend | None = None,
     provider_name: str,
     model: str,
     parent_idempotency_key: str,
@@ -1891,7 +1891,7 @@ def materialize_llm_dispatcher_stage(
     cost_chain: Any = None,
     audit_writer: Any = None,
     rate_table: Any = None,
-    cost_record_sink: list[SpanCostRecord] | None = None,
+    cost_record_sink: SupportsCostRecordAppend | None = None,
     inter_step_channel: Any = None,
     memory_tool_registry: Any = None,
     deployment_surface: Any = None,

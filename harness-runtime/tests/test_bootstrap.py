@@ -55,6 +55,7 @@ from harness_runtime.lifecycle.prompt_selection import (
 )
 from harness_runtime.lifecycle.providers import ProviderClientsStage
 from harness_runtime.types import (
+    COST_ACCUM_VAR,
     BootstrapStage,
     CollectorConfig,
     CostRecordAccumulator,
@@ -62,6 +63,7 @@ from harness_runtime.types import (
     OTelConfig,
     PathBindingConfig,
     ProviderSecretsConfig,
+    RunScopedCostRecordAccumulator,
     RuntimeConfig,
 )
 
@@ -233,26 +235,50 @@ async def test_bootstrap_cost_accumulator_survives_freeze_by_reference(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R-FS-1 arc CA regression — `cost_record_accumulator` must survive `freeze()`
-    BY REFERENCE so the per-dispatch cost wrappers' captured `.records` list IS the
-    list `_build_run_result` reads. Pydantic v2 COPIES a typed `list[...]` field at
-    construction (`M(xs=lst).xs is not lst`), which would sever the dispatchers'
-    sink from the run-result read → `cost_attribution` always `()`. The
-    `CostRecordAccumulator` holder (an arbitrary type, like `asyncio.Event`) is
-    stored opaquely, so it is the SAME object across freeze. This guards the exact
-    seam every other CA test bypasses — none traverse `freeze()`."""
+    """R-FS-1 arc CA + B-INTERSTEP-PERRUN-ISOLATION regression —
+    `cost_record_accumulator` must survive `freeze()` BY REFERENCE so the
+    per-dispatch cost wrappers' captured sink IS resolvable to the accumulator
+    `_build_run_result` reads. Pydantic v2 COPIES a typed `list[...]` field at
+    construction, which would sever the dispatchers' sink from the run-result
+    read → `cost_attribution` always `()`. The accumulator holder (an arbitrary
+    type, like `asyncio.Event`) is stored opaquely, so it is the SAME object
+    across freeze.
+
+    Per B-INTERSTEP-PERRUN-ISOLATION the bound holder is a
+    `RunScopedCostRecordAccumulator` PROXY, and the wrappers now capture the
+    PROXY (not a `.records` list captured once at bootstrap) so each appended
+    record routes — at append-time — to the *current run's* accumulator resolved
+    from `COST_ACCUM_VAR`. This guards the exact freeze seam every other CA test
+    bypasses, AND the per-run resolution seam end-to-end."""
     _patch_providers(monkeypatch)
     _patch_collector(monkeypatch)
     ctx = await run_bootstrap(_config(tmp_path), workload_class=_WORKLOAD)
 
-    # Survives freeze as the holder (NOT a Pydantic-copied list).
-    assert isinstance(ctx.cost_record_accumulator, CostRecordAccumulator)
+    # Survives freeze as the run-scoped accumulator PROXY (an arbitrary-type
+    # holder, NOT a Pydantic-copied list).
+    assert isinstance(ctx.cost_record_accumulator, RunScopedCostRecordAccumulator)
 
-    # The seam: the stage-5 tool-dispatcher factory captured
-    # `ctx.cost_record_accumulator.records` BEFORE freeze; the holder surviving
-    # by-reference means the bare dispatcher's sink IS the frozen ctx's list.
+    # The seam: the stage-5 tool-dispatcher factory captured the holder PROXY
+    # (`ctx.cost_record_accumulator`) BEFORE freeze; surviving by-reference means
+    # the bare dispatcher's sink IS the frozen ctx's proxy (the SAME object).
     bare_tool = ctx.tool_dispatcher.inner  # RetryBreakerToolDispatcher.inner
-    assert bare_tool._cost_record_sink is ctx.cost_record_accumulator.records
+    assert bare_tool._cost_record_sink is ctx.cost_record_accumulator
+
+    # End-to-end per-run resolution: with a fresh run-scoped accumulator bound in
+    # the var, a record appended through the wrapper's sink lands in THAT
+    # accumulator, and `_build_run_result`'s read (`ctx.cost_record_accumulator.
+    # records`) resolves to the same list — the captured-list defeat is closed.
+    per_run = CostRecordAccumulator()
+    token = COST_ACCUM_VAR.set(per_run)
+    try:
+        sentinel = object()
+        bare_tool._cost_record_sink.append(sentinel)  # type: ignore[arg-type]
+        assert per_run.records == [sentinel]
+        assert ctx.cost_record_accumulator.records == [sentinel]
+    finally:
+        COST_ACCUM_VAR.reset(token)
+    # Outside the run scope the proxy falls back to its (empty) bootstrap default.
+    assert ctx.cost_record_accumulator.records == []
 
 
 @pytest.mark.asyncio

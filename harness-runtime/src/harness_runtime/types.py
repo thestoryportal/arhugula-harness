@@ -35,6 +35,7 @@ What this module ships at L0:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import re
 from collections.abc import Mapping
 from enum import Enum, StrEnum
@@ -1755,6 +1756,59 @@ class CostRecordAccumulator:
 
     def append(self, record: SpanCostRecord) -> None:
         self.records.append(record)
+
+
+# B-INTERSTEP-PERRUN-ISOLATION (B-INTERSTEP fork §3/§5; §82 Class-3) — the per-run
+# cost-accumulator ContextVar. The IDENTICAL bootstrap-scoped shared-holder
+# exposure the inter-step channel carries: `cost_record_accumulator` is always-on,
+# so on a REUSED bootstrap `HarnessContext` (daemon-client mode) its `.records`
+# would accumulate across `run_workflow` invocations (a wrong cost rollup, both
+# sequentially AND concurrently). Closed by the SAME mechanism as the channel: a
+# stable proxy on the frozen ctx resolving the current run's accumulator from this
+# var. `api.run`/`resume` set a fresh accumulator around `[invoke + read]` (so
+# their post-run `ctx.cost_record_accumulator.records` read resolves to the SAME
+# accumulator the cost wrappers appended to — caller-set propagates into the
+# `to_thread` worker via `copy_context`); the `run_workflow` handler sets a fresh
+# one per run iff still unset (the daemon path, where no `api.run` caller set it).
+# Default `None` → the proxy falls back to its bound bootstrap default
+# (direct-stage / child-workflow paths with no active run boundary).
+COST_ACCUM_VAR: contextvars.ContextVar[CostRecordAccumulator | None] = contextvars.ContextVar(
+    "harness.cost_record_accumulator", default=None
+)
+
+
+class RunScopedCostRecordAccumulator(CostRecordAccumulator):
+    """Stable ctx-bound proxy resolving the per-run `CostRecordAccumulator` from
+    `COST_ACCUM_VAR` (B-INTERSTEP-PERRUN-ISOLATION).
+
+    Bound on `HarnessContext.cost_record_accumulator` (always-on). It IS-A
+    `CostRecordAccumulator` (the field type) but stores no records itself: serves
+    as BOTH the reader (`.records`, read by `_build_run_result`) AND the sink
+    (`.append`, threaded to the per-dispatch cost wrappers) — every access
+    delegates to `_current()` (the run-scoped accumulator in the var, or a bound
+    bootstrap default when no run is active). Threading this proxy (not its
+    `.records` list) is what makes the wrappers append to the *current run's*
+    accumulator at append-time rather than a list captured once at bootstrap.
+    """
+
+    __slots__ = ("_default",)
+
+    def __init__(self) -> None:
+        # Deliberately NOT calling super().__init__() — the inherited `records`
+        # slot is shadowed by the property below and never used. The bootstrap
+        # default is a real accumulator used only when no per-run one is bound.
+        self._default = CostRecordAccumulator()
+
+    def _current(self) -> CostRecordAccumulator:
+        current = COST_ACCUM_VAR.get()
+        return current if current is not None else self._default
+
+    @property
+    def records(self) -> list[SpanCostRecord]:  # pyright: ignore[reportIncompatibleVariableOverride]
+        return self._current().records
+
+    def append(self, record: SpanCostRecord) -> None:
+        self._current().append(record)
 
 
 # ----------------------------------------------------------------------------

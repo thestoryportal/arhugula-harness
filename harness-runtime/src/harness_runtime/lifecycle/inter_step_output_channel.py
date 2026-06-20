@@ -68,10 +68,15 @@ Registered forward scope (NOT built here — honest, not silent defer)
 
 from __future__ import annotations
 
+import contextvars
 from collections.abc import Mapping
 from typing import Any
 
-__all__ = ["InterStepOutputChannel"]
+__all__ = [
+    "INTER_STEP_CHANNEL_VAR",
+    "InterStepOutputChannel",
+    "RunScopedInterStepOutputChannel",
+]
 
 
 class InterStepOutputChannel:
@@ -128,3 +133,65 @@ class InterStepOutputChannel:
 
     def __len__(self) -> int:
         return len(self._records)
+
+
+# B-INTERSTEP-PERRUN-ISOLATION (runtime spec §14.21 C-RT-29 invariant 7;
+# B-INTERSTEP fork §3/§5) — the per-run channel ContextVar. The frozen
+# `HarnessContext` binds a stable `RunScopedInterStepOutputChannel` proxy (opt-in
+# only); the proxy resolves the *current run's* channel from this var. The
+# `run_workflow` tool handler sets a fresh channel per run, which propagates into
+# the `asyncio.to_thread` driver worker via `contextvars.copy_context()` (verified
+# empirically: caller-set → handler → worker). Two concurrent `run_workflow`
+# invocations on the ONE reused bootstrap `HarnessContext` (daemon-client mode,
+# U-RT-108) each run in their own asyncio task → their own context copy → their
+# own channel, so they cannot interleave. A run that exceeds `drain_timeout_
+# seconds` leaves a non-cancellable `to_thread` zombie, but the zombie writes only
+# the channel captured in ITS context copy — never a following run's — so the
+# (7b) single-flight lock is no longer needed and the (7c) timeout-zombie is
+# closed. Default `None` → the proxy falls back to its bound bootstrap default
+# (direct-stage / partial-bootstrap test paths with no active run).
+INTER_STEP_CHANNEL_VAR: contextvars.ContextVar[InterStepOutputChannel | None] = (
+    contextvars.ContextVar("harness.inter_step_output_channel", default=None)
+)
+
+
+class RunScopedInterStepOutputChannel(InterStepOutputChannel):
+    """Stable ctx-bound proxy that resolves the per-run `InterStepOutputChannel`
+    from `INTER_STEP_CHANNEL_VAR` at every call (B-INTERSTEP-PERRUN-ISOLATION).
+
+    Bound on the frozen `HarnessContext.inter_step_output_channel` ONLY when
+    `RuntimeConfig.inter_step_data_flow` is True (so opt-out stays `None` →
+    byte-identical to pre-v1.59). It IS-A `InterStepOutputChannel` (the field type)
+    but stores no records itself: every `record` / `most_recent_output` /
+    `outputs_by_step_id` / `reset` / `len()` delegates to `_current()` — the
+    run-scoped channel in the ContextVar, or a bound bootstrap default when no run
+    is active. The LLM dispatcher + CP driver hold this one stable instance and
+    transparently read/write the current run's channel.
+    """
+
+    __slots__ = ("_default",)
+
+    def __init__(self) -> None:
+        # Deliberately NOT calling super().__init__() — the inherited `_records`
+        # slot is never used (all access delegates). The bootstrap default is a
+        # real channel used only when no per-run channel is bound in the var.
+        self._default = InterStepOutputChannel()
+
+    def _current(self) -> InterStepOutputChannel:
+        current = INTER_STEP_CHANNEL_VAR.get()
+        return current if current is not None else self._default
+
+    def record(self, step_id: str, output: Mapping[str, Any]) -> None:
+        self._current().record(step_id, output)
+
+    def reset(self) -> None:
+        self._current().reset()
+
+    def most_recent_output(self) -> Mapping[str, Any] | None:
+        return self._current().most_recent_output()
+
+    def outputs_by_step_id(self) -> Mapping[str, Mapping[str, Any]]:
+        return self._current().outputs_by_step_id()
+
+    def __len__(self) -> int:
+        return len(self._current())

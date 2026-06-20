@@ -58,7 +58,7 @@ from harness_runtime.lifecycle.engine_output_store import (
     engine_output_dir_for,
 )
 from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
-from harness_runtime.lifecycle.inter_step_output_channel import InterStepOutputChannel
+from harness_runtime.lifecycle.inter_step_output_channel import RunScopedInterStepOutputChannel
 from harness_runtime.lifecycle.lifecycle_emitter import materialize_lifecycle_emitter_stage
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchBindError,
@@ -236,15 +236,17 @@ async def execute(
     )
     materialize_r_cxa_2_producer_loop_stage(ctx, config)
 
-    # B-INTERSTEP (runtime spec §14.21 C-RT-29, new at v1.59) — construct + bind
-    # the run-scoped inter-step output channel when opted-in. The SAME instance is
+    # B-INTERSTEP (runtime spec §14.21 C-RT-29) + B-INTERSTEP-PERRUN-ISOLATION —
+    # bind the stable run-scoped channel PROXY when opted-in. The SAME proxy is
     # threaded into the LLM dispatcher (the consumer) below + read by the CP driver
-    # (the producer) via `DriverContext.inter_step_output_channel`. Default opt-out
-    # (`config.inter_step_data_flow is False`) leaves `ctx.inter_step_output_channel`
-    # None → the driver records nothing + the dispatcher injects nothing
-    # (byte-identical to pre-v1.59).
+    # (the producer) via `DriverContext.inter_step_output_channel`; both
+    # transparently read/write the *current run's* channel resolved from
+    # INTER_STEP_CHANNEL_VAR (set fresh per run at the `run_workflow` boundary).
+    # Default opt-out (`config.inter_step_data_flow is False`) leaves
+    # `ctx.inter_step_output_channel` None → the driver records nothing + the
+    # dispatcher injects nothing (byte-identical to pre-v1.59).
     if config.inter_step_data_flow and ctx.inter_step_output_channel is None:
-        ctx.inter_step_output_channel = InterStepOutputChannel()
+        ctx.inter_step_output_channel = RunScopedInterStepOutputChannel()
 
     # B-ENGINE-OUTPUT-REPLAY (runtime spec C-RT-32) — the durable output-carrying
     # event-history store, co-located under the resolved STATE_LEDGER dir (the
@@ -283,12 +285,13 @@ async def execute(
             cost_chain=cast(Any, ctx.cost_chain),
             audit_writer=cast(Any, ctx.audit_writer),
             rate_table=RATE_TABLE_V1,
-            # R-FS-1 arc CA — thread the accumulator's `.records` list (the SAME
-            # list `_build_run_result` reads post-join; the holder is stored
-            # by-reference on the frozen ctx so `.records` is stable across
-            # `freeze()`) so per-LLM-dispatch SpanCostRecords feed
+            # R-FS-1 arc CA + B-INTERSTEP-PERRUN-ISOLATION — thread the run-scoped
+            # accumulator PROXY (NOT its `.records` list — that capture-at-bootstrap
+            # defeated per-run isolation). Each per-LLM-dispatch SpanCostRecord
+            # `append`s through the proxy → the current run's accumulator (resolved
+            # from COST_ACCUM_VAR), which `_build_run_result` reads post-join →
             # `RunResult.cost_attribution` (runtime v1.53 §9).
-            cost_record_sink=ctx.cost_record_accumulator.records,
+            cost_record_sink=ctx.cost_record_accumulator,
             # B-INTERSTEP (runtime spec §14.21 C-RT-29) — thread the SAME channel
             # instance the CP driver records into; the dispatcher reads
             # `most_recent_output()` and injects it into the dispatched payload.

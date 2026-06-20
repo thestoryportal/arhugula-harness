@@ -119,5 +119,8 @@ async def materialize_webhook_delivery_composer_stage(
     # forward-ready, dormant until the FM-2 webhook config arc binds substrates.
     return WebhookDeliveryComposer(
         tracer_provider=tracer_provider,
-        cost_record_sink=ctx.cost_record_accumulator.records,
+        # B-INTERSTEP-PERRUN-ISOLATION — the run-scoped accumulator PROXY (not its
+        # `.records` list) so any appended SpanCostRecord routes to the current
+        # run's accumulator at append-time.
+        cost_record_sink=ctx.cost_record_accumulator,
     )

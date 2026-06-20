@@ -29,7 +29,8 @@ from harness_cp.hitl_timeout_degradation import (
     WebhookPayload,
 )
 from harness_cp.validator_framework_types import HITLEscalationBrief
-from harness_od.idempotency_join_dedup import SpanCostRecord
+
+from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 
 __all__ = [
     "WebhookDeliveryComposer",
@@ -113,7 +114,7 @@ class WebhookDeliveryComposer:
         rate_table: Any = None,
         cost_chain: Any = None,
         audit_writer: Any = None,
-        cost_record_sink: list[SpanCostRecord] | None = None,
+        cost_record_sink: SupportsCostRecordAppend | None = None,
         workflow_id: str | None = None,
         parent_action_id: str | None = None,
         parent_idempotency_key: str | None = None,

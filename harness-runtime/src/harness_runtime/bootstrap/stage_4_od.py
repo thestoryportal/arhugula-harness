@@ -106,8 +106,9 @@ async def execute(
         rate_table=RATE_TABLE_V1,
         cost_chain=ctx.cost_chain,
         audit_writer=ctx.audit_writer,
-        # R-FS-1 arc CA — thread the accumulator's `.records` list (stable across
-        # `freeze()`) so per-validator SpanCostRecords feed
+        # R-FS-1 arc CA + B-INTERSTEP-PERRUN-ISOLATION — thread the run-scoped
+        # accumulator PROXY (not its `.records` list) so per-validator
+        # SpanCostRecords `append` through to the current run's accumulator →
         # `RunResult.cost_attribution` (runtime v1.53 §9).
-        cost_record_sink=ctx.cost_record_accumulator.records,
+        cost_record_sink=ctx.cost_record_accumulator,
     )
