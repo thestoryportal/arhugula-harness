@@ -141,7 +141,7 @@ from harness_cp.handoff_context import (
     RetryHistory,
     StateSummary,
 )
-from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
+from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind, HITLResult
 from harness_cp.hitl_response_palette import HITLResponse
 from harness_cp.hitl_timeout_degradation import (
     TimeoutDegradationKind,
@@ -1012,6 +1012,7 @@ class RuntimeHITLGateComposer:
         auto_approved: bool = False,
         system_reject_reason: str | None = None,
         edited_payload: Mapping[str, Any] | None = None,
+        resume_response: HITLResult | None = None,
     ) -> tuple[CPAuditLedgerEntry, Any | None]:
         """4-substep audit-write per spec §14.8.2 step 4h (HITL-flavor).
 
@@ -1069,6 +1070,36 @@ class RuntimeHITLGateComposer:
             edited_hash = None
             response_text_hash = None
             rejection_hash = hashlib.sha256(system_reject_reason.encode("utf-8")).hexdigest()
+        elif resume_response is not None:
+            # B-RESUME-RESPONSE-AUDIT-WRITE — §14.8.8.6 step-4h audit at the
+            # RESUMED-step gate-evaluation, where the operator's response is now
+            # available (durable-async: it arrived out-of-band via the inbound
+            # webhook). The resume carrier is a `HITLResult` (not the sync
+            # `AskUserQuestionResult`): it has NO `latency_ms` (no round-trip on a
+            # resume — and latency is not an audit field anyway) and NO plaintext
+            # `rejection_reason` (it carries the pre-computed `response_summary_hash`
+            # = sha256 over the canonicalized response payload). EDIT recomputes the
+            # POST-mutation payload hash from the structured `edited_proposal.payload`
+            # (passed as `edited_payload`) for byte-parity with the sync NOTE 6-ii
+            # hash; RESPOND hashes the plaintext `response_text` (present on the
+            # carrier); REJECT uses the pre-computed `response_summary_hash`.
+            response_value = resume_response.response.value
+            edited_hash = (
+                _post_mutation_payload_hash(edited_payload)
+                if resume_response.response == HITLResponse.EDIT and edited_payload is not None
+                else None
+            )
+            response_text_hash = (
+                hashlib.sha256(resume_response.response_text.encode("utf-8")).hexdigest()
+                if resume_response.response == HITLResponse.RESPOND
+                and resume_response.response_text is not None
+                else None
+            )
+            rejection_hash = (
+                resume_response.response_summary_hash
+                if resume_response.response == HITLResponse.REJECT
+                else None
+            )
         elif gate_result is None:
             # Timeout path partial entry — response=None semantic surfaced
             # as empty-string placeholder (the CPAuditLedgerEntry.response
@@ -1214,23 +1245,60 @@ class RuntimeHITLGateComposer:
         # step 4i response-routing). The prior auto-approve short-circuit
         # mis-read AC #7 — it dropped EDIT (the edited payload was never
         # applied) and dispatched a REJECTED step as if approved (a fail-safe
-        # violation). EDIT applies the edited payload + REJECT raises here; the
-        # step-4h audit-WRITE on resume (which needs step-1..4 placement/cell
-        # resolution the Step-0 short-circuit deliberately skips) remains
-        # deferred to the follow-on arc B-RESUME-RESPONSE-AUDIT-WRITE
-        # (§14.8.8.6, all 4 response types) — so a REJECT on resume raises
-        # WITHOUT an audit entry until that arc lands.
+        # violation).
+        #
+        # B-RESUME-RESPONSE-AUDIT-WRITE: compose the §14.8.8.6 step-4h audit at
+        # the resumed-step gate-evaluation — for ALL 4 response types, fired
+        # BEFORE routing so a REJECT is audited THEN raised (mirrors the sync
+        # 4h→4i ordering). The resume audit needs only the matching placement(s)
+        # (for the `hitl:` action_id) + `parent_action_id` — NOT step-1..4 matrix-
+        # cell resolution (the `cell` arg is vestigial in `_compose_and_persist_
+        # audit`; `gate_level` is the AUTO sentinel) and NOT the gate-FIRE
+        # (4-bis/4f), so the one-shot short-circuit + re-pause-avoidance hold.
         resume_state = self.resume_context_holder.consume_and_clear()
         if resume_state is not None and resume_state.hitl_response is not None:
             resumed_response = resume_state.hitl_response
+            resumed_placements = getattr(step_context, "hitl_placements", ()) or getattr(
+                step, "hitl_placements", ()
+            )
+            resumed_matching = [
+                p
+                for p in resumed_placements
+                if p.position in self.applicable_placements
+                and p.position != HITLPlacementKind.VALIDATOR_ESCALATION
+            ]
+            resumed_parent_action_id = cast(ActionID, step_context.parent_action_id)
+            # EDIT carrier: the resume `ProposedAction.payload` is ALREADY the
+            # `Mapping[str, Any]` step_payload (no `_decode_edit_proposal` — that
+            # decodes only the sync flat-`str` MCP carrier). Fed to the audit for
+            # the POST-mutation hash AND applied verbatim at routing below.
+            resumed_edited_payload = (
+                resumed_response.edited_proposal.payload
+                if resumed_response.response == HITLResponse.EDIT
+                and resumed_response.edited_proposal is not None
+                else None
+            )
+            for placement in resumed_matching:
+                # REJECT suppresses an audit-compose failure (the rejection is the
+                # primary fault); the other 3 raise on audit failure — mirrors the
+                # sync step-4h `raise_on_failure` discipline. An EDIT with a None
+                # proposal is still audited (the attempt is recorded, edited_hash
+                # None) BEFORE the routing raise — the sync record-then-raise shape.
+                self._compose_and_persist_audit(
+                    parent_action_id=resumed_parent_action_id,
+                    placement=placement,
+                    cell=cast(HITLMatrixCell, _SentinelMatrixCell()),
+                    gate_result=None,
+                    step_context=step_context,
+                    raise_on_failure=resumed_response.response != HITLResponse.REJECT,
+                    edited_payload=resumed_edited_payload,
+                    resume_response=resumed_response,
+                )
+            # --- response routing per the §14.8.2 step 4i 4-response palette ---
             if resumed_response.response == HITLResponse.EDIT:
-                # The resume carrier is a STRUCTURED `ProposedAction` whose
-                # `.payload` is ALREADY the `Mapping[str, Any]` step_payload —
-                # applied verbatim (replace-not-merge per §14.8.2 NOTE 6-ii).
-                # NO `_decode_edit_proposal` (that decodes the SYNC path's flat-
-                # `str` MCP-elicitation carrier; the resume carrier needs no
-                # round-trip). None-guard mirrors the sync path's typed error
-                # (never an AttributeError).
+                # None-guard mirrors the sync path's typed error (never an
+                # AttributeError); applied AFTER the audit so the attempt is
+                # recorded (sync record-then-raise).
                 if resumed_response.edited_proposal is None:
                     raise HITLGateEditDecodeError(
                         "operator selected EDIT on durable-async resume but "

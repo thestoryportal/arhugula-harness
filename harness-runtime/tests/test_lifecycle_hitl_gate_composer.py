@@ -2786,3 +2786,140 @@ async def test_resume_approve_and_respond_dispatch_unchanged(
     assert result == {"inner_dispatched": True}
     assert len(inner.calls) == 1
     assert inner.calls[0][1].step_payload == {"orig": 1}  # unchanged
+
+
+# ---------------------------------------------------------------------------
+# B-RESUME-RESPONSE-AUDIT-WRITE — §14.8.8.6 step-4h audit on the durable-async
+# resume path (all 4 response types), fired BEFORE routing so a REJECT is audited
+# THEN raised. Needs only the matching placement(s) + parent_action_id (NOT cell
+# resolution — the matrix `cell` is vestigial in the audit composer — and NOT the
+# gate-FIRE, so the one-shot Step-0 boundary + re-pause-avoidance hold).
+# ---------------------------------------------------------------------------
+
+
+def _make_resume_composer_with_audit(
+    inner: Any,
+    provider: TracerProvider,
+    *,
+    placements: tuple[HITLPlacement, ...],
+) -> tuple[RuntimeHITLGateComposer, _MockAuditWriter, StepExecutionContext]:
+    audit = _MockAuditWriter()
+    composer = _make_composer(
+        inner=inner,
+        surface=_MockAskUserQuestionSurface([]),
+        tracer_provider=provider,
+        ledger_writer=_MockLedgerWriter(),
+        audit_writer=audit,
+    )
+    return composer, audit, _make_step_context(placements=placements)
+
+
+@pytest.mark.asyncio
+async def test_resume_reject_audits_then_raises(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """REJECT on durable-async resume → §14.8.8.6 step-4h audit entry is composed
+    (response="reject"; rejection_reason_hash = the carrier's pre-computed
+    response_summary_hash) BEFORE the HITLGateRejectedError raise, and the step is
+    NOT dispatched. Closes the #683 gap (REJECT on resume previously raised with
+    NO audit entry)."""
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLGateRejectedError
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    composer, audit, ctx = _make_resume_composer_with_audit(
+        inner, provider, placements=(HITLPlacement(position=HITLPlacementKind.PRE_ACTION),)
+    )
+    _set_resume_hitl_response(composer, _make_resume_hitl_result(HITLResponse.REJECT))
+
+    with pytest.raises(HITLGateRejectedError):
+        await composer.dispatch(
+            cast(Any, object()), _resume_step_with_payload({"orig": 1}), step_context=ctx
+        )
+
+    assert inner.calls == []  # step NOT dispatched (fail-safe)
+    assert len(audit.appends) == 1  # audited BEFORE the raise
+    _, od_entry = audit.appends[0]
+    attrs = od_entry.payload.audit_namespace_attrs
+    assert attrs["audit.cp.response"] == HITLResponse.REJECT.value
+    assert attrs["audit.cp.rejection_reason_hash"] == "0" * 64  # the carrier hash flows through
+
+
+@pytest.mark.asyncio
+async def test_resume_edit_audits_post_mutation_hash_and_applies(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """EDIT on durable-async resume → audit records response="edit" with the
+    POST-mutation payload hash (byte-parity with the sync NOTE 6-ii hash, computed
+    from the structured edited_proposal.payload), AND the edit is applied +
+    dispatched."""
+    from harness_cp.handoff_context import ActionKind, ProposedAction
+    from harness_runtime.lifecycle.hitl_gate_composer import _post_mutation_payload_hash
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    composer, audit, ctx = _make_resume_composer_with_audit(
+        inner, provider, placements=(HITLPlacement(position=HITLPlacementKind.PRE_ACTION),)
+    )
+    edited = ProposedAction(action_kind=ActionKind.TOOL_CALL, payload={"edited": 2}, brief=None)
+    _set_resume_hitl_response(
+        composer, _make_resume_hitl_result(HITLResponse.EDIT, edited_proposal=edited)
+    )
+
+    result = await composer.dispatch(
+        cast(Any, object()), _resume_step_with_payload({"orig": 1}), step_context=ctx
+    )
+
+    assert result == {"inner_dispatched": True}
+    assert inner.calls[0][1].step_payload == {"edited": 2}  # applied
+    assert len(audit.appends) == 1
+    attrs = audit.appends[0][1].payload.audit_namespace_attrs
+    assert attrs["audit.cp.response"] == HITLResponse.EDIT.value
+    assert attrs["audit.cp.edited_proposal_hash"] == _post_mutation_payload_hash({"edited": 2})
+
+
+@pytest.mark.asyncio
+async def test_resume_approve_audits_and_dispatches(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """APPROVE on durable-async resume → audit records response="approve" AND the
+    step dispatches unchanged (the §14.8.8.6 audit fires for ALL 4 response types,
+    not just the previously-broken EDIT/REJECT)."""
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    composer, audit, ctx = _make_resume_composer_with_audit(
+        inner, provider, placements=(HITLPlacement(position=HITLPlacementKind.PRE_ACTION),)
+    )
+    _set_resume_hitl_response(composer, _make_resume_hitl_result(HITLResponse.APPROVE))
+
+    result = await composer.dispatch(
+        cast(Any, object()), _resume_step_with_payload({"orig": 1}), step_context=ctx
+    )
+
+    assert result == {"inner_dispatched": True}
+    assert len(inner.calls) == 1
+    assert len(audit.appends) == 1
+    assert audit.appends[0][1].payload.audit_namespace_attrs["audit.cp.response"] == (
+        HITLResponse.APPROVE.value
+    )
+
+
+@pytest.mark.asyncio
+async def test_resume_no_matching_placement_no_audit_but_routes(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """A resume with NO matching placement composes NO audit (nothing to key the
+    `hitl:` action_id on) but still routes — the #683 routing behavior holds."""
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLGateRejectedError
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    composer, audit, ctx = _make_resume_composer_with_audit(inner, provider, placements=())
+    _set_resume_hitl_response(composer, _make_resume_hitl_result(HITLResponse.REJECT))
+
+    with pytest.raises(HITLGateRejectedError):
+        await composer.dispatch(
+            cast(Any, object()), _resume_step_with_payload({"orig": 1}), step_context=ctx
+        )
+    assert audit.appends == []  # no placement → no audit
+    assert inner.calls == []  # still not dispatched (routing holds)

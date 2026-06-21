@@ -46,10 +46,10 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 22
+  standalone_closed: 23
   standalone_gated: 1
   standalone_resolved: 2
-  standalone_registered: 12
+  standalone_registered: 11
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
 arcs:
@@ -560,12 +560,12 @@ arcs:
   - id: B-RESUME-RESPONSE-AUDIT-WRITE
     title: "Step-4h audit-write on the durable-async resume path (all 4 responses)"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
     owner_axis: runtime
     parent_arc: B-EDIT-CARRIER-DURABLE-ASYNC-RESUME
-    anticipated_scope: "Materialize §14.8.8.6 step-4h audit-entry composition at the resumed-step gate-evaluation for ALL 4 response types (the resume Step-0 short-circuit fires BEFORE step-1..4 placement/cell resolution that the 4h audit-write needs). Surfaced at B-EDIT-CARRIER-DURABLE-ASYNC-RESUME: that arc lands resume response-ROUTING (EDIT/REJECT) but a REJECT on resume currently raises WITHOUT an audit entry, and the operator's resume response is unaudited for all 4 types."
-    why: "The Step-0 routing fix needs no placement/cell; the §14.8.8.6 audit-write does → coherent follow-on boundary (advisor). The audit gap is pre-existing + uniform across all 4 resume responses (a wrongly-approved step is also unaudited today); deferring it is a strict safety improvement, not a regression."
+    pr: "#685"
+    spec_delta: "impl-to-cleared-spec (runtime spec §14.8.8.6 — 'the step-4h audit-write sequence fires at the RESUMED-step gate-evaluation'; NO design-substrate edit, NO operator gate)."
+    gives: "The §14.8.8.6 step-4h audit now fires on the durable-async resume path for ALL 4 response types (#683 landed routing but left REJECT-on-resume raising WITHOUT an audit entry + the operator's resume response unaudited). Composed in the Step-0 block BEFORE routing (so a REJECT is audited THEN raised — sync 4h→4i ordering), per matching placement. KEY SIMPLIFICATION (grounding): needs only the matching placement(s) + parent_action_id — NOT step-1..4 matrix-cell resolution (the `cell` arg is VESTIGIAL in `_compose_and_persist_audit`; `gate_level` is the AUTO sentinel) and NOT the gate-FIRE (4-bis/4f), so the one-shot Step-0 boundary + re-pause-avoidance from #683 hold. Carrier (advisor): the resume `HITLResult` lacks `latency_ms` (never an audit field) + plaintext `rejection_reason` (carries the pre-computed `response_summary_hash`); a NEW additive `_compose_and_persist_audit(resume_response=)` 8a branch derives the hashes — EDIT recomputes the POST-mutation payload hash from `edited_proposal.payload` (sync NOTE 6-ii parity), RESPOND hashes the plaintext `response_text`, REJECT uses `response_summary_hash`. Composer-only; NO retry-wrapper / runtime-dispatcher change. Witnesses: 4 by-execution (REJECT audits→raises + not dispatched; EDIT post-mutation-hash + applies; APPROVE audits + dispatches; no-placement→no-audit-but-routes). pyright 0/0/0; harness-runtime non-e2e 1999 passed. advisor (pick + the cell-vestigial / latency-moot close-shape + audit-before-routing ordering)."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-RESUME-CONTEXT-SURVIVES-RETRY
