@@ -91,13 +91,21 @@ _CHAIN = FallbackChain(
 _ACTOR = Actor(actor_class=ActorClass.AGENT, actor_id="test-parallelization")
 
 
-def _manifest(*, workflow_id: str = "wf-par") -> WorkflowManifestEntry:
+def _manifest(
+    *,
+    workflow_id: str = "wf-par",
+    persona_tier: PersonaTier = PersonaTier.TEAM_BINDING,
+) -> WorkflowManifestEntry:
     """A PARALLELIZATION manifest (engine in scope; admissibility is enforced at
-    workflow-binding per §25.10 Invariant 2, NOT re-checked by the driver)."""
+    workflow-binding per §25.10 Invariant 2, NOT re-checked by the driver).
+
+    `persona_tier` selects the §11.4 D4 `cascade_policy` the strategy resolves on
+    a branch failure (B-PARALLELIZATION-CASCADE): SOLO_DEVELOPER→proceed /
+    TEAM_BINDING→pause / MULTI_TENANT_COMPLIANCE→cascade-cancel."""
     return WorkflowManifestEntry(
         workflow_id=workflow_id,
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
-        persona_tier=PersonaTier.TEAM_BINDING,
+        persona_tier=persona_tier,
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         topology_pattern=TopologyPattern.PARALLELIZATION,
         layer_budgets=(),
@@ -305,11 +313,12 @@ def _run(
     ledger: Any,
     emitter: _Emitter | None = None,
     workflow_id: str = "wf-par",
+    persona_tier: PersonaTier = PersonaTier.TEAM_BINDING,
 ) -> Any:
     emitter = emitter if emitter is not None else _Emitter()
     ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=emitter))
     return execute_workflow(
-        _manifest(workflow_id=workflow_id),
+        _manifest(workflow_id=workflow_id, persona_tier=persona_tier),
         steps,
         run_id="run-1",
         ctx=ctx,
@@ -473,10 +482,12 @@ def test_parallelization_preserves_all_branch_outputs() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_parallelization_branch_failure_returns_failed_and_persists_completed() -> None:
-    """A branch failure → FAILED (U-CP-86 has no cascade_policy differentiation;
-    that is U-CP-85). The completed branches' buffered entries STILL persist
-    (no silent failure — the audit-honoring at this scope)."""
+def test_parallelization_pause_branch_failure_fails_honestly_not_yet_materialized() -> None:
+    """B-PARALLELIZATION-CASCADE — under `pause` (TEAM_BINDING) a branch failure
+    fails HONESTLY: FAILED + `parallelization-pause-resume-not-yet-materialized`
+    (a false-resumable PAUSED is foreclosed — the resumable PARALLELIZATION pause
+    is the registered follow-on `B-FANOUT-PAUSE-PARALLELIZATION`). The completed
+    branches' entries STILL persist; the salvaged survivors are `partial_state`."""
     ledger = _RecordingLedger()
     # Deterministic: branch 1 raises only AFTER branches 0 + 2 have completed (so
     # they have buffered) — not the timing-flaky plain `_VariedDispatcher(fail_index=1)`,
@@ -486,15 +497,89 @@ def test_parallelization_branch_failure_returns_failed_and_persists_completed() 
         steps=[_branch_step(i) for i in range(3)],
         dispatcher=_FailAfterSiblingsCompleteDispatcher(n=3, fail_index=1),
         ledger=ledger,
+        persona_tier=PersonaTier.TEAM_BINDING,
     )
     assert result.status is RunStatus.FAILED
     assert result.fail_class is not None
-    assert "parallelization-branch-failure" in result.fail_class
-    # Branch 1 raised → buffered nothing; branches 0 + 2 completed → their
-    # entries persist (no silent loss). Each completed branch = {step, terminal}.
+    assert "parallelization-pause-resume-not-yet-materialized" in result.fail_class
+    # No false-PAUSED leaks (the silent-degradation mode this arc forecloses).
+    assert result.status is not RunStatus.PAUSED
+    # All three branches persist now: branch 1 ran-and-errored → records its step
+    # + a `completed` terminal (obl. 3 — dispatch-boundary, no silent gap); 0 + 2
+    # completed cleanly. Each branch = {step, terminal}.
     persisted = _branch_indices_in_append_order(ledger)
-    assert 1 not in persisted
-    assert sorted(set(persisted)) == [0, 2]
+    assert sorted(set(persisted)) == [0, 1, 2]
+    # The salvaged survivors (the clean branches 0 + 2) are carried as partial_state.
+    assert result.partial_state is not None
+    assert set(result.partial_state["branch_outputs"]) == {"branch-0", "branch-2"}
+
+
+def test_parallelization_proceed_branch_failure_degrades_to_partial() -> None:
+    """B-PARALLELIZATION-CASCADE — under `proceed` (SOLO_DEVELOPER) a branch
+    failure does NOT fail-fast the whole fan-out (the U-CP-86 happy-path-only bug):
+    surviving branches run to completion and the run degrades to PARTIAL with the
+    survivors salvaged — §25.15.1 `proceed → PARTIAL`."""
+    ledger = _RecordingLedger()
+    result = _run(
+        steps=[_branch_step(i) for i in range(3)],
+        dispatcher=_VariedDispatcher(fail_index=1),
+        ledger=ledger,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+    )
+    assert result.status is RunStatus.PARTIAL
+    assert result.fail_class is None
+    # Survivors salvaged; the failed branch contributes nothing to the aggregate.
+    assert result.partial_state is not None
+    assert set(result.partial_state["branch_outputs"]) == {"branch-0", "branch-2"}
+    assert result.final_state is None
+    # All three branches recorded (no silent loss): the failed branch persists its
+    # step + a `completed` terminal too.
+    assert sorted(set(_branch_indices_in_append_order(ledger))) == [0, 1, 2]
+
+
+def test_parallelization_unbound_step_kind_fails_loud_not_silent_partial() -> None:
+    """B-PARALLELIZATION-CASCADE (out-of-family Codex [P2]) — an UNBOUND StepKind
+    is a SETUP/config error, NOT a degradable branch failure: even under `proceed`
+    (SOLO_DEVELOPER) it must FAIL the whole run LOUD, never silently degrade to
+    PARTIAL (which would drop the branch). The pre-flight dispatcher resolution
+    catches it before fan-out, matching the linear path + the old fail-fast."""
+    ledger = _RecordingLedger()
+    # `_MultiKindRegistry` only binds DECLARATIVE_STEP → a TOOL_STEP branch raises
+    # StepKindDispatcherNotBoundError at lookup (the setup error).
+    unbound = WorkflowStep(
+        step_id=StepID("branch-0"), step_kind=StepKind.TOOL_STEP, step_payload={"index": 0}
+    )
+    result = _run(
+        steps=[unbound],
+        dispatcher=_VariedDispatcher(),
+        ledger=ledger,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.status is not RunStatus.PARTIAL
+    assert result.fail_class is not None
+    assert "parallelization-step-kind-not-bound" in result.fail_class
+
+
+def test_parallelization_cascade_cancel_branch_failure_returns_failed() -> None:
+    """B-PARALLELIZATION-CASCADE — under `cascade-cancel` (MULTI_TENANT_COMPLIANCE)
+    a branch failure halts the fan-out → FAILED + `parallelization-cascade-cancel`
+    (§25.15.1 `cascade-cancel → FAILED`); the completed siblings' entries persist
+    (no silent loss)."""
+    ledger = _RecordingLedger()
+    result = _run(
+        steps=[_branch_step(i) for i in range(3)],
+        dispatcher=_FailAfterSiblingsCompleteDispatcher(n=3, fail_index=1),
+        ledger=ledger,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert "parallelization-cascade-cancel" in result.fail_class
+    # cascade-cancel does not salvage survivors into partial_state.
+    assert result.partial_state is None
+    # The completed branches still persist (audit-honoring; no silent failure).
+    assert sorted(set(_branch_indices_in_append_order(ledger))) == [0, 1, 2]
 
 
 def test_parallelization_emits_workflow_start_and_step_boundaries() -> None:
@@ -572,7 +657,10 @@ def test_parallelization_barrier_deadline_does_not_hang(monkeypatch: pytest.Monk
     elapsed = time.monotonic() - started
     assert result.status is RunStatus.FAILED
     assert result.fail_class is not None
-    assert "parallelization-barrier-deadline-exceeded" in result.fail_class
+    # B-PARALLELIZATION-CASCADE — a stuck fan-out (no branch raised) under the
+    # resolved cascade_policy is a barrier-deadline FAILED (TEAM→pause: the
+    # deadline-strike has no clean pause boundary → FAILED, not a false-PAUSED).
+    assert "parallelization-barrier-deadline" in result.fail_class
     # Returned at ~the 0.2s deadline, NOT after the 2.0s block — the parent is
     # not stranded by the wedged sync threads (Codex [P1] regression guard).
     assert elapsed < 1.5

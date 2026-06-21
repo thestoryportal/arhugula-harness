@@ -3336,12 +3336,18 @@ def _execute_parallelization(
     Returns `(RunResult, steps_executed)` for the `_execute_workflow_body`
     caller (matching the linear path's tuple).
 
+    `cascade_policy` consumption (§25.15.1, D4 multiplicative tunable) is
+    materialized here (R-FS-1 `B-PARALLELIZATION-CASCADE`): a branch failure
+    resolves SOLO→proceed (harvest survivors → PARTIAL) / TEAM→pause (FAILED +
+    `...-pause-resume-not-yet-materialized`, the resumable pause is the follow-on
+    `B-FANOUT-PAUSE-PARALLELIZATION`) / MTC→cascade-cancel (cancel siblings →
+    FAILED). The U-CP-86 build was happy-path-only ("U-CP-85 non-dep"); this is
+    impl-to-cleared-spec (§25.15 + §25.18 anticipate it).
+
     Bypassed linear-only paths (documented scoped-not-forgotten): prefix-replay
     / explicit-pause resume detection, mid-loop drain checks, per-step
     pause-trigger detection, and the per-step validator hook are NOT composed
-    here — they compose at later strategy units (U-CP-85 cascade_policy /
-    U-CP-88 ORCHESTRATOR_WORKERS). U-CP-86 is the happy-path fan-out + the
-    deterministic aggregation.
+    here — they compose at later strategy units (U-CP-88 ORCHESTRATOR_WORKERS).
     """
     workflow_id = manifest_entry.workflow_id
 
@@ -3431,33 +3437,72 @@ def _execute_parallelization(
         branch_plan.append((branch_index, step, child, writer, binding))
     branch_writers = [plan[3] for plan in branch_plan]
 
+    # Pre-flight (out-of-family Codex [P2]): resolve every branch's dispatcher up
+    # front, single-threaded on the driver thread, so an UNBOUND `StepKind` — a
+    # SETUP/config error, NOT a branch dispatch failure — fails the whole run LOUD
+    # (FAILED), exactly as the linear path (the `StepKindDispatcherNotBoundError`
+    # → FAILED above) + the OLD bounded_barrier did. Without this, the `proceed`
+    # harvest (`gather(return_exceptions=True)`) would capture the lookup error as
+    # a degradable branch failure → a SILENT `PARTIAL` that drops the branch.
+    try:
+        branch_dispatchers = {
+            bi: step_dispatchers.lookup(step.step_kind)
+            for bi, step, _child, _writer, _binding in branch_plan
+        }
+    except StepKindDispatcherNotBoundError as exc:
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state=None,
+            fail_class=f"parallelization-step-kind-not-bound: {exc}",
+        ), 0
+
     # § 25.3.2 — Emit workflow.start (the fan-out begins). Single-threaded on the
     # driver thread, BEFORE the concurrent branches spawn.
     ctx.lifecycle_emitter.emit(WorkflowEventClass.WORKFLOW_START)
 
-    async def _run_branch(
+    # B-PARALLELIZATION-CASCADE (R-FS-1) — the on-branch-failure cascade reaction
+    # (§25.15.1), resolved from the manifest's (workload_class, engine_class,
+    # persona_tier) via the §11.4 D4 multiplicative tunable (SOLO→proceed /
+    # TEAM→pause / MTC→cascade-cancel). U-CP-86 was built happy-path-only
+    # ("U-CP-85 non-dep") so a SINGLE branch failure fail-fasted the whole
+    # parallel fan-out, even under `proceed` where §25.15.1 mandates PARTIAL with
+    # survivors. This materializes the cleared §25.15 consumption for
+    # PARALLELIZATION (impl-to-cleared-spec; §25.18 line 169 anticipates it,
+    # "implement per strategy ... PARALLELIZATION ... with a cascade-cancel
+    # idempotency test"), mirroring `_execute_orchestrator_workers` (U-CP-88)
+    # PARALLELIZATION-shaped (every declared step is a PEER branch; NO
+    # orchestrator step[0]). The RESUMABLE pause (FanOutResumeState capture +
+    # api.resume re-entry) is the registered follow-on `B-FANOUT-PAUSE-
+    # PARALLELIZATION`; here `pause` fails HONESTLY (`...-not-yet-materialized`),
+    # never a false-resumable PAUSED.
+    cascade_policy = d4_tunable(
+        lookup_cell(manifest_entry.workload_class, manifest_entry.engine_class),
+        manifest_entry.persona_tier,
+    ).cascade_policy
+
+    # branch_index -> (step_id, output) for a cleanly-completed branch — the
+    # aggregate source. (No `terminal_dispositions` map: unlike ORCHESTRATOR_WORKERS
+    # this strategy captures no FanOutResumeState — the resumable-pause follow-on
+    # `B-FANOUT-PAUSE-PARALLELIZATION` adds it; the cascade-cancel not-yet-dispatched
+    # scan reads the writers directly via `_writer_has_branch_disposition`.)
+    collected: dict[int, tuple[str, Mapping[str, Any]]] = {}
+
+    def _record_clean(
         branch_index: int,
         step: WorkflowStep,
         child: StepExecutionContext,
         writer: BufferingLedgerWriter,
-        binding: StepEffectiveBinding,
-    ) -> tuple[int, str, Mapping[str, Any]]:
-        # Concurrency: the existing SYNC dispatcher is run off-loop in a thread
-        # so N branches genuinely run concurrently (the dispatch IS the blocking
-        # model/tool call). The pre-dispatch gate is NOT deferred — dispatch
-        # fires inline in the branch; only the ledger WRITE is buffered
-        # (§25.15.2 obl. 2). No `asyncio.shield` here: U-CP-86 has no
-        # cascade-cancel (U-CP-85 non-dep), so an in-flight effect never needs
-        # the shield-and-drive of `dispatch_branch_step_shielded` (U-CP-88).
-        dispatcher = step_dispatchers.lookup(step.step_kind)
-        step_output: Mapping[str, Any] = await asyncio.to_thread(
-            dispatcher.dispatch, binding, step, step_context=child
-        )
-        # Buffer the branch's per-step entry (causality-only branch_metadata) +
-        # a fresh `completed` terminal entry (dispatch-boundary disposition — a
-        # ran branch is `completed`). Both buffer through the branch's OWN
-        # writer on the loop thread (after the awaited dispatch returns); the
-        # single barrier drain serializes them in branch-index order (U-CP-82/84).
+        output: Mapping[str, Any],
+    ) -> None:
+        # A cleanly-completed branch: its per-step entry (causality-only
+        # branch_metadata) + a fresh `completed` terminal entry (U-CP-84) +
+        # collect the output for the aggregate. Both buffer through the branch's
+        # OWN writer on the loop thread; the single barrier drain serializes them
+        # in branch-index order (U-CP-82/84).
         append_branch_step_ledger_entry(
             branch_writer=writer,
             branch_context=child,
@@ -3474,68 +3519,275 @@ def _execute_parallelization(
             timestamp=fanout_timestamp,
             procedural_tier_snapshot_ref=snapshot_ref,
         )
-        return (branch_index, str(step.step_id), step_output)
+        collected[branch_index] = (str(step.step_id), output)
 
-    async def _fanout() -> list[tuple[int, str, Mapping[str, Any]]]:
-        return await bounded_barrier(
-            [_run_branch(*plan) for plan in branch_plan],
-            deadline_seconds=_DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS,
+    def _finish(
+        status: RunStatus,
+        *,
+        fail_class: str | None,
+        salvage: bool,
+    ) -> tuple[RunResult, int]:
+        # Drain the branch buffers (branch-index order) + emit one STEP_BOUNDARY
+        # per persisted-step writer, then fold the collected outputs into one
+        # deterministic aggregate (lowest-branch-index tiebreak, §25.12). A
+        # salvaged non-SUCCESS run carries the survivors as `partial_state`.
+        steps_executed = _drain_and_emit_step_boundaries(ctx, branch_writers)
+        # No collected output (e.g. an all-timed-out deadline strike) → the empty
+        # aggregate (matching the empty-steps early-return shape); `_aggregate_
+        # parallelization([])` would otherwise `max()` an empty vote tally.
+        aggregate: dict[str, Any] = (
+            _aggregate_parallelization(
+                [(bi, sid, out) for bi, (sid, out) in sorted(collected.items())]
+            )
+            if collected
+            else {"branch_outputs": {}, "aggregate": {}}
+        )
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=status,
+            terminal_step_index=None,
+            partial_state=aggregate if (salvage and status is not RunStatus.SUCCESS) else None,
+            final_state=aggregate if status is RunStatus.SUCCESS else None,
+            fail_class=fail_class,
+        ), steps_executed
+
+    deadline = _DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS
+
+    # === proceed: branches run to completion → SUCCESS | PARTIAL (degraded) ===
+    if cascade_policy is CascadePolicy.PROCEED:
+
+        async def _proceed_branch(
+            branch_index: int,
+            step: WorkflowStep,
+            child: StepExecutionContext,
+            writer: BufferingLedgerWriter,
+            binding: StepEffectiveBinding,
+        ) -> None:
+            dispatcher = branch_dispatchers[branch_index]
+            try:
+                output = await asyncio.to_thread(
+                    dispatcher.dispatch, binding, step, step_context=child
+                )
+            except asyncio.CancelledError:
+                # The §25.11 wall-clock deadline cancelled this in-flight branch.
+                # Its dispatch was scheduled (the effect may have landed) → record
+                # the step entry (obl. 3 — no silent gap) + a `timed_out` terminal,
+                # then re-raise to honor the cancellation.
+                append_branch_step_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    local_step_index=0,
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                append_branch_terminal_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    terminal_status="timed_out",
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                raise
+            except Exception:
+                # Ran-and-errored → record the step entry (obl. 3) + a `completed`
+                # terminal (dispatch-boundary, not step-outcome; the failure lives
+                # at the step entry). Contributes nothing to the aggregate;
+                # re-raise so the return_exceptions gather marks this branch failed
+                # (→ the partial result set → PARTIAL). proceed does NOT cancel
+                # siblings.
+                append_branch_step_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    local_step_index=0,
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                append_branch_terminal_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    terminal_status="completed",
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+                raise
+            _record_clean(branch_index, step, child, writer, output)
+
+        async def _proceed_fanout() -> list[Any]:
+            # `return_exceptions=True`: a failing branch does NOT cancel siblings
+            # (the proceed semantic). Bounded by the §25.11 wall-clock deadline.
+            async with asyncio.timeout(deadline):
+                return await asyncio.gather(
+                    *(_proceed_branch(*plan) for plan in branch_plan),
+                    return_exceptions=True,
+                )
+
+        try:
+            results = _run_fanout_to_completion(
+                _proceed_fanout(), max_workers=max(1, len(branch_plan))
+            )
+        except BranchBarrierDeadlineExceededError:
+            # A stuck branch hit the deadline; the completed branches buffered
+            # their entries → PARTIAL (degraded). proceed does not cancel; the
+            # stuck branch is abandoned per `_run_fanout_to_completion`.
+            return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
+        except TimeoutError:
+            return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
+        any_failed = any(isinstance(r, BaseException) for r in results)
+        if any_failed:
+            return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
+        return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
+
+    # === cascade-cancel | pause: cancel-on-failure (TaskGroup structured cancel) ===
+    # Both halt the fan-out on the first branch failure with in-flight effects run
+    # to completion (shielded). They differ only in the run-level outcome on a
+    # branch failure: cascade-cancel → FAILED (+ the empty-buffer not-yet-dispatched
+    # scan records `cancelled`); pause → FAILED + `parallelization-pause-resume-not-
+    # yet-materialized` (resumable fan-out pause is the follow-on `B-FANOUT-PAUSE-
+    # PARALLELIZATION`; a false-`PAUSED` is foreclosed). The CLEAN (no-failure) path
+    # is SUCCESS for both.
+    async def _cancel_branch(
+        branch_index: int,
+        step: WorkflowStep,
+        child: StepExecutionContext,
+        writer: BufferingLedgerWriter,
+        binding: StepEffectiveBinding,
+    ) -> None:
+        dispatcher = branch_dispatchers[branch_index]
+        # Schedule the (sync) dispatch off-loop; `dispatch_branch_step_shielded`
+        # keeps it alive against THIS branch's cancellation so an in-flight effect
+        # runs to its own completion (obl. 1), and registers it for the barrier's
+        # deadline watchdog (the hard "...or barrier-deadline timeout" cut-off).
+        inflight: asyncio.Future[Mapping[str, Any]] = asyncio.ensure_future(
+            asyncio.to_thread(dispatcher.dispatch, binding, step, step_context=child)
+        )
+        try:
+            output = await dispatch_branch_step_shielded(inflight)
+        except asyncio.CancelledError:
+            # In-flight at cancel-time: the effect ran (shielded to completion) or
+            # the deadline cut it. Record the step entry (obl. 3) + the
+            # discriminating terminal (obl. 4): `completed` = ran (ran-and-errored
+            # is still completed — dispatch-boundary), `timed_out` = the deadline
+            # cut the in-flight step. A not-yet-dispatched branch NEVER reaches here
+            # (no inflight) — its `cancelled` disposition is the post-barrier scan.
+            append_branch_step_ledger_entry(
+                branch_writer=writer,
+                branch_context=child,
+                run_idempotency_key=run_idempotency_key,
+                local_step_index=0,
+                timestamp=fanout_timestamp,
+                procedural_tier_snapshot_ref=snapshot_ref,
+            )
+            terminal: Literal["completed", "timed_out"] = (
+                "timed_out" if (inflight.cancelled() or not inflight.done()) else "completed"
+            )
+            append_branch_terminal_ledger_entry(
+                branch_writer=writer,
+                branch_context=child,
+                run_idempotency_key=run_idempotency_key,
+                terminal_status=terminal,
+                timestamp=fanout_timestamp,
+                procedural_tier_snapshot_ref=snapshot_ref,
+            )
+            # A sibling that was IN-FLIGHT when the barrier cancelled this branch
+            # ran to completion under the shield (`terminal == "completed"` ⟹
+            # `inflight.done()` and not cancelled). Collect its successful OUTPUT
+            # so the salvaged aggregate keeps it (a ran-and-errored in-flight,
+            # `exception() is not None`, has no output).
+            if terminal == "completed" and inflight.exception() is None:
+                collected[branch_index] = (str(step.step_id), inflight.result())
+            raise  # honor the cancellation (the barrier cancelled this branch)
+        except Exception:
+            # THIS branch's own dispatch ERRORED — the failure that triggers the
+            # cascade. The effect ran-and-errored → record the step entry (obl. 3)
+            # + a `completed` terminal (dispatch-boundary, not step-outcome — the
+            # carrier forecloses `failed`). Re-raise so the TaskGroup cascade-
+            # cancels the siblings.
+            append_branch_step_ledger_entry(
+                branch_writer=writer,
+                branch_context=child,
+                run_idempotency_key=run_idempotency_key,
+                local_step_index=0,
+                timestamp=fanout_timestamp,
+                procedural_tier_snapshot_ref=snapshot_ref,
+            )
+            append_branch_terminal_ledger_entry(
+                branch_writer=writer,
+                branch_context=child,
+                run_idempotency_key=run_idempotency_key,
+                terminal_status="completed",
+                timestamp=fanout_timestamp,
+                procedural_tier_snapshot_ref=snapshot_ref,
+            )
+            raise
+        _record_clean(branch_index, step, child, writer, output)
+
+    async def _cancel_fanout() -> list[None]:
+        return await cascade_cancel_barrier(
+            (_cancel_branch(*plan) for plan in branch_plan), deadline_seconds=deadline
         )
 
-    # Sync bridge — drive the fan-out on a dedicated loop (NOT `asyncio.run`,
-    # which would join the executor at shutdown and let a wedged SYNC branch
-    # re-defeat the §25.11 deadline; see `_run_fanout_to_completion`). The
-    # executor is sized to the fan-out so every branch runs concurrently.
+    branch_failed = False
+    deadline_struck = False
     try:
-        branch_results = _run_fanout_to_completion(_fanout(), max_workers=max(1, len(branch_plan)))
-    except BranchBarrierDeadlineExceededError as exc:
-        # A stuck branch hit the wall-clock deadline. Drain whatever the
-        # completed branches buffered (no silent failure) then FAILED. The
-        # bounded_barrier `finally` already cancelled + awaited pending tasks
-        # (leak-free). The discriminating `timed_out` per-branch terminal_status
-        # is U-CP-85's cascade machinery (non-dep) — at U-CP-86 a fan-out
-        # deadline is a barrier-level FAILED.
-        steps_executed = _drain_and_emit_step_boundaries(ctx, branch_writers)
-        return RunResult(
-            workflow_id=workflow_id,
-            run_id=run_id,
-            status=RunStatus.FAILED,
-            terminal_step_index=None,
-            partial_state=None,
-            final_state=None,
-            fail_class=f"parallelization-barrier-deadline-exceeded: {exc}",
-        ), steps_executed
-    except Exception as exc:
-        # A branch raised. U-CP-86 has no cascade_policy differentiation
-        # (U-CP-85 non-dep) → FAILED. Drain whatever each branch buffered so
-        # the completed branches' entries persist (no silent failure — the
-        # audit-honoring at U-CP-86's scope). The richer harvest-partial-results
-        # `proceed`→PARTIAL flow + the discriminating cancelled/timed_out
-        # terminal_status are U-CP-85.
-        steps_executed = _drain_and_emit_step_boundaries(ctx, branch_writers)
-        return RunResult(
-            workflow_id=workflow_id,
-            run_id=run_id,
-            status=RunStatus.FAILED,
-            terminal_step_index=None,
-            partial_state=None,
-            final_state=None,
-            fail_class=f"parallelization-branch-failure: {type(exc).__name__}: {exc}",
-        ), steps_executed
+        _run_fanout_to_completion(_cancel_fanout(), max_workers=max(1, len(branch_plan)))
+    except BranchBarrierDeadlineExceededError:
+        # The wall-clock deadline fired with no branch raising (a stuck fan-out) —
+        # the §25.11 hard cap. The in-flight branches recorded `timed_out`.
+        deadline_struck = True
+    except BaseExceptionGroup:
+        # A branch raised → the TaskGroup cancelled not-yet-finished siblings.
+        # In-flight siblings ran to completion (shielded) + recorded their terminal;
+        # the failing branch's exception group is consumed here (the durable record
+        # is the drained ledger). cascade_policy maps the run-level status.
+        branch_failed = True
 
-    # Clean barrier — drain (branch-index order) + emit STEP_BOUNDARYs, then
-    # fold the structured outputs into one deterministic result.
-    steps_executed = _drain_and_emit_step_boundaries(ctx, branch_writers)
-    final_state = _aggregate_parallelization(branch_results)
-    return RunResult(
-        workflow_id=workflow_id,
-        run_id=run_id,
-        status=RunStatus.SUCCESS,
-        terminal_step_index=None,
-        partial_state=None,
-        final_state=final_state,
-        fail_class=None,
-    ), steps_executed
+    if cascade_policy is CascadePolicy.CASCADE_CANCEL:
+        # obl. 4: a not-yet-dispatched branch (no step/terminal disposition — its
+        # task was cancelled before scheduling its dispatch) records a `cancelled`
+        # terminal so resume does not double-dispatch. Keyed on the ABSENCE of a
+        # step/terminal disposition, NOT an empty buffer (an overridden branch
+        # carries its pre-fan-out override entry, `branch_metadata=None`).
+        for _bi, _step, child, writer, _binding in branch_plan:
+            if not _writer_has_branch_disposition(writer):
+                append_branch_terminal_ledger_entry(
+                    branch_writer=writer,
+                    branch_context=child,
+                    run_idempotency_key=run_idempotency_key,
+                    terminal_status="cancelled",
+                    timestamp=fanout_timestamp,
+                    procedural_tier_snapshot_ref=snapshot_ref,
+                )
+        if branch_failed or deadline_struck:
+            return _finish(
+                RunStatus.FAILED,
+                fail_class="parallelization-cascade-cancel",
+                salvage=False,
+            )
+        return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
+
+    # pause (§25.15.1 `pause → PAUSED`) — resumable PARALLELIZATION pause is the
+    # registered follow-on `B-FANOUT-PAUSE-PARALLELIZATION`. Until it lands, a
+    # branch failure under `pause` fails HONESTLY: returning PAUSED would advertise
+    # a resumability `api.resume` cannot honor for PARALLELIZATION (no
+    # FanOutResumeState capture / re-entry wired) → the false-`PAUSED` silent-
+    # degradation mode. The deadline-strike case (a STUCK fan-out, no branch
+    # raised) is FAILED — no clean pause boundary.
+    if deadline_struck:
+        return _finish(
+            RunStatus.FAILED, fail_class="parallelization-barrier-deadline", salvage=False
+        )
+    if branch_failed:
+        return _finish(
+            RunStatus.FAILED,
+            fail_class="parallelization-pause-resume-not-yet-materialized",
+            salvage=True,
+        )
+    return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
 
 
 # ---------------------------------------------------------------------------
