@@ -421,6 +421,7 @@ arcs:
     status: closed
     owner_axis: "CP + runtime"
     parent_arc: B-INTERSTEP
+    pr: "#677"
     spec_delta: "impl-to-cleared-spec (runtime §14.21 C-RT-29 §14.21.7 handoff slice; NO design-substrate edit) — record each completed stage's output inline on the driver thread (handoff is single-owner sequential, not concurrent)."
     gives: "Inter-step DATA flow for DECENTRALIZED_HANDOFF: each stage-expert's dispatch reads the prior stage's output (most_recent_output) — sequential, recorded inline like the linear/EO sites (no #648 buffered-branch drain). Class-3 note: §14.21.7 imprecisely lumps handoff under the concurrent topologies."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
