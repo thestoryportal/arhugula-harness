@@ -59,6 +59,7 @@ from harness_cp.cross_family_fallback_chain import (
     ProviderFamily,
 )
 from harness_cp.engine_class import EngineClass
+from harness_cp.hitl_placement import HITLPlacement, HITLPlacementKind
 from harness_cp.per_role_catalog import derive_agent_role
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.topology_pattern import TopologyPattern
@@ -424,6 +425,88 @@ def test_per_step_role_override_replaces_derived_worker_role() -> None:
     # The override did NOT collapse the binding's other dimensions: worker-1 still
     # resolves the manifest-default model (override carried role only).
     assert dispatcher.contexts["worker-1"].branch_index == 1
+
+
+# ---------------------------------------------------------------------------
+# R-FS-1 B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD (CP spec v1.49 §6.2) — the
+# per-step `StepOverride.hitl_placement` override folds (union-by-position) onto
+# the worker / orchestrator branch context, keyed from `manifest_entry`
+# (the workflow base) so an override on one cell never leaks to a sibling/parent.
+# ---------------------------------------------------------------------------
+
+
+def test_per_step_placement_override_folds_onto_worker_no_sibling_leak() -> None:
+    """A per-step `StepOverride.hitl_placement` (NEW position) on worker-1 folds
+    onto worker-1's branch context (union); its siblings AND the orchestrator carry
+    only the workflow tuple — proving the worker fold is keyed from
+    `manifest_entry.hitl_placements` (no cross-worker / parent leak)."""
+    workflow_placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    override_placement = HITLPlacement(position=HITLPlacementKind.SUB_AGENT_BOUNDARY)
+    manifest = _manifest().model_copy(
+        update={
+            "hitl_placements": (workflow_placement,),
+            "per_step_overrides": {
+                StepID("worker-1"): StepOverride(
+                    step_id=StepID("worker-1"), hitl_placement=override_placement
+                )
+            },
+        }
+    )
+    ledger = _RecordingLedger()
+    dispatcher = _OWDispatcher()
+    execute_workflow(
+        manifest,
+        _steps(3),
+        run_id="run-placement-fanout",
+        ctx=cast(DriverContext, _Ctx(ledger=ledger, emitter=_Emitter())),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(dispatcher),
+    )
+    # worker-1: workflow placement UNION the per-step override.
+    assert dispatcher.contexts["worker-1"].hitl_placements == (
+        workflow_placement,
+        override_placement,
+    )
+    # siblings + orchestrator: only the workflow tuple (no leak).
+    assert dispatcher.contexts["worker-0"].hitl_placements == (workflow_placement,)
+    assert dispatcher.contexts["worker-2"].hitl_placements == (workflow_placement,)
+    assert dispatcher.contexts["orchestrator"].hitl_placements == (workflow_placement,)
+
+
+def test_per_step_placement_override_on_orchestrator_does_not_leak_to_workers() -> None:
+    """A per-step placement override on the ORCHESTRATOR step folds onto the
+    orchestrator's own context (union) but does NOT leak to the workers — the
+    workers re-fold from `manifest_entry.hitl_placements`, not the inherited
+    orchestrator context."""
+    workflow_placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    override_placement = HITLPlacement(position=HITLPlacementKind.SUB_AGENT_BOUNDARY)
+    manifest = _manifest().model_copy(
+        update={
+            "hitl_placements": (workflow_placement,),
+            "per_step_overrides": {
+                StepID("orchestrator"): StepOverride(
+                    step_id=StepID("orchestrator"), hitl_placement=override_placement
+                )
+            },
+        }
+    )
+    ledger = _RecordingLedger()
+    dispatcher = _OWDispatcher()
+    execute_workflow(
+        manifest,
+        _steps(2),
+        run_id="run-placement-orch",
+        ctx=cast(DriverContext, _Ctx(ledger=ledger, emitter=_Emitter())),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(dispatcher),
+    )
+    # orchestrator: union; workers: only the workflow tuple (no leak from parent).
+    assert dispatcher.contexts["orchestrator"].hitl_placements == (
+        workflow_placement,
+        override_placement,
+    )
+    assert dispatcher.contexts["worker-0"].hitl_placements == (workflow_placement,)
+    assert dispatcher.contexts["worker-1"].hitl_placements == (workflow_placement,)
 
 
 def test_orchestrator_workers_orchestrator_action_id_parents_workers() -> None:
