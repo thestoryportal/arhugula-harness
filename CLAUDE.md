@@ -538,6 +538,7 @@ After any PR merges to main (whether merged by Claude or operator):
    - `recently_completed` → prepend the merged PR (drop oldest if >5 entries)
    - `in_flight` → remove merged PR, add any newly-opened PRs
    - `next_action` → re-derive per `Project_Roadmap_v1.md` §4
+   - **arc-ledger** — if an R-FS-1 arc transited (an arc closed/resolved, or a new arc/unit surfaced), edit the `.harness/arc-ledger.yaml` row **AND** bump its `snapshot:` block in the **same commit** (forward-only; the blocking CI `arc-ledger` job + `tools/arc_ledger.py --check` fail on an impossible/stale tally). The dashboard's **Arc & unit map** derives from this single structured source via `tools/arc_ledger.py` — there is no parseable markdown copy to drift (the old `.harness/r-fs-1-arc-and-unit-map.md` is a retired pointer stub).
    - dashboard volatile display values are NOT hand-copied into HTML; `tools/dashboard/generate.py` derives visible `HEAD` / `LAST` / `HASH` / `OPEN FORKS` plus closure copy counts from current git/filesystem/roadmap inputs.
 3. If any R-NNN entry at `Project_Roadmap_v1.md` §5 closed at this PR, mark it `RESOLVED` and refresh `next_pointer` propagation.
 4. Regenerate the committed dashboard snapshot with `python3 tools/dashboard/generate.py --root .` whenever dashboard status, generator logic, or roadmap inputs changed; never hand-edit `tools/dashboard/roadmap.html`.
