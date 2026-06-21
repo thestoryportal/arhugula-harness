@@ -3484,10 +3484,12 @@ def _execute_parallelization(
         manifest_entry.persona_tier,
     ).cascade_policy
 
-    # branch_index -> (step_id, output) for a cleanly-completed branch (the
-    # aggregate source); branch_index -> terminal_status for a dispatched branch.
+    # branch_index -> (step_id, output) for a cleanly-completed branch — the
+    # aggregate source. (No `terminal_dispositions` map: unlike ORCHESTRATOR_WORKERS
+    # this strategy captures no FanOutResumeState — the resumable-pause follow-on
+    # `B-FANOUT-PAUSE-PARALLELIZATION` adds it; the cascade-cancel not-yet-dispatched
+    # scan reads the writers directly via `_writer_has_branch_disposition`.)
     collected: dict[int, tuple[str, Mapping[str, Any]]] = {}
-    terminal_dispositions: dict[int, str] = {}
 
     def _record_clean(
         branch_index: int,
@@ -3518,7 +3520,6 @@ def _execute_parallelization(
             procedural_tier_snapshot_ref=snapshot_ref,
         )
         collected[branch_index] = (str(step.step_id), output)
-        terminal_dispositions[branch_index] = "completed"
 
     def _finish(
         status: RunStatus,
@@ -3692,7 +3693,6 @@ def _execute_parallelization(
                 timestamp=fanout_timestamp,
                 procedural_tier_snapshot_ref=snapshot_ref,
             )
-            terminal_dispositions[branch_index] = terminal
             # A sibling that was IN-FLIGHT when the barrier cancelled this branch
             # ran to completion under the shield (`terminal == "completed"` ⟹
             # `inflight.done()` and not cancelled). Collect its successful OUTPUT
@@ -3723,7 +3723,6 @@ def _execute_parallelization(
                 timestamp=fanout_timestamp,
                 procedural_tier_snapshot_ref=snapshot_ref,
             )
-            terminal_dispositions[branch_index] = "completed"
             raise
         _record_clean(branch_index, step, child, writer, output)
 
