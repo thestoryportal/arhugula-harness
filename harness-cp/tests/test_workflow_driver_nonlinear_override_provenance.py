@@ -317,11 +317,13 @@ def test_parallelization_override_on_failed_branch_no_spurious_step_boundary(
     tmp_path: Path,
 ) -> None:
     """Failure-path drain with an override present: a single overridden branch
-    whose dispatch RAISES → FAILED. The override entry (`branch_metadata=None`)
-    must NOT be mis-counted as a step on the failure drain path
-    (`_drain_and_emit_step_boundaries`) — no spurious STEP_BOUNDARY for the
-    override-only writer (the branch ran no step). The override entry still
-    persists (emitted before dispatch — linear-consistent), chain valid."""
+    whose dispatch RAISES. Under B-PARALLELIZATION-CASCADE the manifest's persona
+    (SOLO→proceed) degrades the single-branch failure to PARTIAL (the failed
+    branch contributes no survivor). The branch ALSO records a real step entry
+    (obl. 3 — a ran-and-errored dispatch is no longer a silent gap), so it emits
+    exactly ONE STEP_BOUNDARY — the override entry (`branch_metadata=None`) must
+    NOT be additionally mis-counted as a step (that would be 2). The override
+    entry persists (emitted before dispatch — linear-consistent), chain valid."""
     handle = _handle(tmp_path)
     ledger = _RealLedger(handle=handle)
     emitter = _Emitter()
@@ -335,9 +337,10 @@ def test_parallelization_override_on_failed_branch_no_spurious_step_boundary(
         dispatcher=_FailingEchoDispatcher(fail_step_id="branch-0"),
         emitter=emitter,
     )
-    assert result.status is RunStatus.FAILED
-    # The override-only (no step entry) failed branch must emit NO STEP_BOUNDARY.
-    assert emitter.emits.count(WorkflowEventClass.STEP_BOUNDARY) == 0
+    assert result.status is RunStatus.PARTIAL
+    # The failed branch records its real step entry (obl. 3) → exactly ONE
+    # STEP_BOUNDARY; the override entry is NOT mis-counted (else this would be 2).
+    assert emitter.emits.count(WorkflowEventClass.STEP_BOUNDARY) == 1
     # Provenance preserved: the override entry persisted (resolution-time fact,
     # emitted before the dispatch that raised); chain re-verifies.
     assert len(_override_entries(handle)) == 1
