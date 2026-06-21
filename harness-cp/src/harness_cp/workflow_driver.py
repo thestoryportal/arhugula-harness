@@ -76,6 +76,8 @@ from harness_cp.pause_resume_protocol import (
     ResumeOutcomeKind,
 )
 from harness_cp.pause_resume_protocol_types import (
+    EvaluatorOptimizerResumeState,
+    EvaluatorOptimizerStepResumeState,
     FanOutBranchResumeState,
     FanOutResumeState,
     HandoffResumeState,
@@ -1463,12 +1465,27 @@ def execute_workflow(
         # Per-composer kwarg derivation per plan v2.38 §1.2 AC #3.
         _cp_is_wiring = getattr(ctx, "cp_is_wiring", None)
         if _cp_is_wiring is not None:
+            # RESUME audit sequence (the §16.5 idempotency-key discriminator). For most
+            # topologies `step_index` is unique per pause point. For EVALUATOR_OPTIMIZER it
+            # is the failed step's DECLARED ordinal (0/1 — required < len(steps) for the
+            # runtime guard), which REPEATS across same-parity re-pauses (two generate
+            # failures both → 0); the iteration cursor's completed-step COUNT is the unique
+            # per-pause-point discriminator, so the audit sequence derives from it (else the
+            # idempotency key collides + the second resume audit entry is silently dropped as
+            # an idempotent no-op). Non-EO snapshots keep `step_index` (byte-unchanged).
+            # Out-of-family Codex [P2].
+            _eo_resume_for_audit = pause_snapshot_input.evaluator_optimizer_resume
+            _resume_audit_sequence = (
+                len(_eo_resume_for_audit.completed_steps)
+                if _eo_resume_for_audit is not None
+                else pause_snapshot_input.step_index
+            )
             _run_protocol_method_sync(
                 _cp_is_wiring.emit_pause_resume_state_ledger_entry(
                     workflow_id=manifest_entry.workflow_id,
-                    step_id=str(pause_snapshot_input.step_index),
+                    step_id=str(_resume_audit_sequence),
                     protocol_event_kind=(PauseResumeProtocolEventKind.RESUME_ATTEMPTED),
-                    event_sequence_id=(pause_snapshot_input.step_index << 2) | 0,
+                    event_sequence_id=(_resume_audit_sequence << 2) | 0,
                     protocol_state_snapshot=resume_result.model_dump(mode="json"),
                     # Reading A apply (PR #83 sibling-extension): pass
                     # ActorIdentity str-newtype matching composer signature
@@ -1656,6 +1673,10 @@ def _execute_workflow_body(
             default_model_binding=default_model_binding,
             step_dispatchers=step_dispatchers,
             run_idempotency_key=run_idempotency_key,
+            # B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER — iteration-cursor resume re-entry. The
+            # snapshot's `evaluator_optimizer_resume` drives the recover-prefix +
+            # re-dispatch-from-failed-step path; None on a normal first run.
+            resume_snapshot=resume_snapshot,
         )
     if strategy is _DriverStrategyStatus.ORCHESTRATOR_WORKERS:
         return _execute_orchestrator_workers(
@@ -4175,6 +4196,21 @@ def _append_buffered_sequential_entry(
     writer.append(payload, write_key)
 
 
+class _EvaluatorOptimizerStepDispatchError(Exception):
+    """Marks a failure from the EO step DISPATCH itself (pause-eligible).
+
+    Distinguished from a SETUP failure (dispatcher lookup / binding resolution) or a
+    post-dispatch BOOKKEEPING failure (ledger buffer / inter-step record / cursor append):
+    only a genuine `dispatch()` failure may take the `cascade_policy=pause` → resumable
+    PAUSED path. A setup error would loop forever on resume (the cause is still present);
+    a bookkeeping error after a successful dispatch means the step's effect already landed,
+    so a resume would double-fire it — both must FAIL, never PAUSE (out-of-family Codex [P2])."""
+
+    def __init__(self, original: BaseException) -> None:
+        super().__init__(str(original))
+        self.original = original
+
+
 def _execute_evaluator_optimizer(
     *,
     manifest_entry: WorkflowManifestEntry,
@@ -4184,6 +4220,7 @@ def _execute_evaluator_optimizer(
     default_model_binding: ModelBinding,
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
+    resume_snapshot: PauseSnapshot | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `EVALUATOR_OPTIMIZER` generate→evaluate→regenerate loop (U-CP-87).
 
@@ -4194,18 +4231,150 @@ def _execute_evaluator_optimizer(
     dispatched step buffers a plain (no-branch_metadata) ledger entry keyed by a
     MONOTONIC `entry_index`; the buffer drains through the single real writer at
     the end (§25.11/§25.12 buffered path). Returns `(RunResult, steps_executed)`
-    for the `_execute_workflow_body` caller (matching the linear path's tuple).
+    for the `_execute_workflow_body` caller (matching the linear path's tuple;
+    `steps_executed` counts only steps dispatched in THIS envelope — a resume
+    excludes its recovered prefix, mirroring `_execute_decentralized_handoff`).
 
     Terminal: evaluator-accept OR cap → SUCCESS (`final_state.accepted`
     discriminates accept-terminal from cap-terminal; §25.17 lists no cap-failure
     mode); a step dispatch raising → FAILED (the prior buffered entries STILL
-    drain — no silent loss). Sequential single-owner; NO fan-out, NO
-    cascade_policy (U-CP-85 non-dep), NO branch_metadata (AC).
+    drain — no silent loss). Sequential single-owner; NO fan-out, NO branch_metadata (AC).
+
+    `pause → PAUSED` resume (R-FS-1 `B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER`): a
+    TEAM-tier step failure under `cascade_policy=pause` (with a bound
+    `pause_resume_protocol`) captures an `EvaluatorOptimizerResumeState`-bearing
+    `PauseSnapshot` (the completed-step prefix + their recovered outputs) + returns
+    PAUSED; `api.resume` re-enters here with `resume_snapshot`, replays the
+    completed-step prefix recovering its outputs (NOT re-dispatched — effect may
+    have landed), and re-dispatches from the failed step onward, honoring the
+    original max-iteration cap across the resume boundary (the recovered generate
+    count reconstructs the cap — every iteration has exactly one generate). When no
+    protocol is bound, `pause` fails HONESTLY
+    (`evaluator-optimizer-pause-resume-protocol-not-bound`) — never a
+    false-resumable PAUSED. `proceed` / `cascade-cancel` retain EO's existing
+    terminal-FAILED disposition (only `pause` is materialized for EO — surgical
+    additive scope). This materializes the §25.15.1 `pause → PAUSED` row EXTENDED
+    to the sequential single-owner EO loop per §25.18's named impl-order (the
+    §25.15.1 row text is fan-out-barrier-scoped; the extension is impl-discretion,
+    mirroring the #681 `DECENTRALIZED_HANDOFF` extension — not a re-reading of the row).
     """
     workflow_id = manifest_entry.workflow_id
 
+    # B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER (R-FS-1) — iteration-cursor resume reconstruction
+    # state (None on a normal first run). The cursor: a CONTIGUOUS completed-step prefix
+    # (entry_index 0..m-1) recovered on resume + the re-dispatchable failed step (m onward).
+    # Unlike the fan-out carriers (a branch set with re-dispatchable gaps), an EO resume is
+    # a strictly sequential prefix over the loop's generate/evaluate steps.
+    _eo_resume = resume_snapshot.evaluator_optimizer_resume if resume_snapshot is not None else None
+    _resume_completed_count = len(_eo_resume.completed_steps) if _eo_resume is not None else 0
+    if _eo_resume is not None:
+        # Material-diff guard on resume: the re-supplied body MUST be the same 2 declared
+        # steps, the cursor prefix MUST be contiguous 0..m-1 with the right parity
+        # (even⟹generate / odd⟹evaluate), each recovered step's identity MUST still match
+        # the body slot, and no recovered evaluate may signal accept (an accept terminates
+        # the loop SUCCESS, never pauses) — else the recovered output no longer maps to its
+        # step → fail closed. Mirrors the DECENTRALIZED_HANDOFF resume-body-mismatch guard.
+        def _resume_body_mismatch() -> str | None:
+            assert _eo_resume is not None  # narrowed by the enclosing guard
+            assert resume_snapshot is not None  # _eo_resume non-None ⇒ snapshot non-None
+            completed = _eo_resume.completed_steps
+            # Cross-field coherence: `snapshot.step_index` is the failed step's DECLARED
+            # ordinal (0=generate / 1=evaluate) — a valid `steps` position (the runtime
+            # `api.resume` guard requires `0 <= step_index < len(steps)`, which the
+            # entry_index cannot satisfy since the loop re-dispatches the same 2 steps).
+            # The failed step's entry_index == the prefix length, so its declared ordinal
+            # is `len(completed) % 2`; a hash-valid but INCOHERENT snapshot whose
+            # step_index disagrees with the cursor's next-step parity → fail closed.
+            _expected_failed_declared = len(completed) % 2
+            if resume_snapshot.step_index != _expected_failed_declared:
+                return (
+                    f"cursor-step-index-mismatch: snapshot.step_index="
+                    f"{resume_snapshot.step_index} but the {len(completed)}-step prefix "
+                    f"implies the failed step's declared ordinal is {_expected_failed_declared} "
+                    f"(even-length prefix ⟹ a failed generate=0, odd ⟹ a failed evaluate=1)"
+                )
+            # EO is exactly generate→evaluate (2 declared steps). A resumed body of any
+            # other size is a changed body → fail closed (the malformed-count check below
+            # only runs for a non-resume run).
+            if len(steps) != 2:
+                return (
+                    f"step-count-mismatch: EVALUATOR_OPTIMIZER requires exactly 2 declared "
+                    f"steps (generate, evaluate); resume supplied {len(steps)}"
+                )
+            for expected_index, cs in enumerate(completed):
+                if cs.entry_index != expected_index:
+                    return (
+                        f"non-contiguous-prefix at position {expected_index}: "
+                        f"entry_index={cs.entry_index} (a loop prefix must be 0..m-1)"
+                    )
+                # Loop-alternation coherence: even entry ⟹ generate (declared 0), odd ⟹
+                # evaluate (declared 1). Also bounds the `steps[...]` index to {0,1}.
+                if cs.declared_step_index != cs.entry_index % 2:
+                    return (
+                        f"step-parity-mismatch at entry {cs.entry_index}: declared_step_index"
+                        f"={cs.declared_step_index} (even⟹0 generate / odd⟹1 evaluate)"
+                    )
+                if str(steps[cs.declared_step_index].step_id) != cs.step_id:
+                    return (
+                        f"step-identity-mismatch at entry {cs.entry_index}: snapshot "
+                        f"step_id={cs.step_id!r}, resume step_id="
+                        f"{str(steps[cs.declared_step_index].step_id)!r}"
+                    )
+                # An accept in the recovered prefix is incoherent — an accepting evaluate
+                # would have terminated the loop SUCCESS, not paused. Fail closed on a
+                # tampered cursor smuggling an accept into the prefix.
+                if cs.declared_step_index == 1 and _evaluator_optimizer_accepted(cs.output):
+                    return (
+                        f"accepted-step-in-prefix at entry {cs.entry_index}: a recovered "
+                        "evaluation signals accept, but an accept terminates the loop "
+                        "SUCCESS (a paused prefix is all non-accepts)"
+                    )
+            # Resumable-tail + cap-coherence check (mirrors the handoff no-resumable-stage
+            # guard). A legitimate pause leaves a failed step to re-dispatch AND never
+            # exceeds the max-iteration cap. The cap bound differs by cursor parity:
+            # - EVEN cursor (pending generate / a generate-failure pause): the failed
+            #   generate is NOT in the prefix, and the original loop only dispatched it when
+            #   `generates_so_far < MAX`, so a legitimate even cursor has
+            #   `generates_recovered < MAX` (and needs a re-dispatchable generate under cap).
+            # - ODD cursor (pending evaluate / an evaluate-failure pause): the iteration's
+            #   generate IS in the prefix, and the loop only started that iteration when
+            #   `generates_so_far <= MAX`, so a legitimate odd cursor has
+            #   `generates_recovered <= MAX`.
+            # A cursor exceeding its parity's bound is semantically impossible (no real run
+            # could produce it) → fail closed on a tampered/corrupt-but-hash-valid durable
+            # cursor (out-of-family Codex [P2] — the odd over-cap case the even-only check
+            # missed: e.g. 7 records / 4 generates at MAX=3 would otherwise replay past cap).
+            generates_recovered = sum(1 for cs in completed if cs.declared_step_index == 0)
+            pending_evaluate = len(completed) % 2 == 1
+            _cap = _DEFAULT_EVALUATOR_OPTIMIZER_MAX_ITERATIONS
+            if (not pending_evaluate and generates_recovered >= _cap) or (
+                pending_evaluate and generates_recovered > _cap
+            ):
+                return (
+                    f"no-resumable-iteration: {generates_recovered} generates recovered "
+                    f"exceeds the cap {_cap} for a "
+                    f"{'pending-evaluate' if pending_evaluate else 'pending-generate'} cursor "
+                    f"(a real run cannot produce this cursor; pause requires a "
+                    f"re-dispatchable step within the iteration cap)"
+                )
+            return None
+
+        _mismatch = _resume_body_mismatch()
+        if _mismatch is not None:
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=None,
+                partial_state=None,
+                final_state=None,
+                fail_class=f"evaluator-optimizer-resume-body-mismatch: {_mismatch}",
+            ), 0
+
     # Empty step sequence → trivially SUCCESS (mirrors the linear empty-loop + the
-    # PARALLELIZATION empty-steps SUCCESS).
+    # PARALLELIZATION empty-steps SUCCESS). Only reachable on a non-resume run — a resume
+    # always carries a non-empty cursor (a pause is captured on a step FAILURE), so an
+    # empty body + a non-None cursor is caught by the step-count guard above → FAILED.
     if not steps:
         return RunResult(
             workflow_id=workflow_id,
@@ -4242,6 +4411,16 @@ def _execute_evaluator_optimizer(
     _resolver = getattr(ctx, "procedural_tier_snapshot_resolver", None)
     snapshot_ref = _resolver() if _resolver is not None else None
 
+    # The on-step-failure cascade reaction (§25.15.1 EXTENDED to the sequential EO loop per
+    # §25.18's named impl-order) — resolved from the manifest's (workload, engine, persona)
+    # via the §11.4 D4 tunable, the same source ORCHESTRATOR_WORKERS / DECENTRALIZED_HANDOFF
+    # read (SOLO→proceed / TEAM→pause / MTC→cascade-cancel). Only `pause` is materialized
+    # for EO; `proceed` / `cascade-cancel` retain EO's existing terminal-FAILED disposition.
+    cascade_policy = d4_tunable(
+        lookup_cell(manifest_entry.workload_class, manifest_entry.engine_class),
+        manifest_entry.persona_tier,
+    ).cascade_policy
+
     # Buffer-time placeholder timestamp for every buffered entry; the
     # authoritative append timestamp is assigned at the drain
     # (`drain_branch_buffers` re-stamps to one drain-moment value — the
@@ -4250,8 +4429,21 @@ def _execute_evaluator_optimizer(
 
     writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=0)
 
-    # § 25.3.2 — Emit workflow.start (single-threaded on the driver thread).
-    ctx.lifecycle_emitter.emit(WorkflowEventClass.WORKFLOW_START)
+    # § 25.3.2 — Emit workflow.start (single-threaded on the driver thread). An EO RESUME
+    # re-enters the SAME envelope (the completed-step prefix already ran in the original
+    # run), so it emits RESUMPTION — not a second WORKFLOW_START — mirroring the fan-out /
+    # handoff resume emit.
+    ctx.lifecycle_emitter.emit(
+        WorkflowEventClass.RESUMPTION
+        if _eo_resume is not None
+        else WorkflowEventClass.WORKFLOW_START
+    )
+
+    # B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER — the completed-step records (recovered prefix +
+    # this-run completions), captured into an EvaluatorOptimizerResumeState cursor on a
+    # `pause` halt. Pre-populated below on resume with the recovered prefix so a RE-pause
+    # unions it with the newly-completed steps (stays a contiguous prefix across resumes).
+    completed_step_records: list[EvaluatorOptimizerStepResumeState] = []
 
     def _dispatch_and_buffer(
         step: WorkflowStep, *, declared_step_index: int, entry_index: int
@@ -4315,9 +4507,32 @@ def _execute_evaluator_optimizer(
             timestamp=loop_timestamp,
             snapshot_ref=snapshot_ref,
         )
-        step_output = step_dispatchers.lookup(step.step_kind).dispatch(
-            binding, step, step_context=step_context
-        )
+        # Pre-flight the dispatcher lookup OUTSIDE the pause-eligible boundary (mirrors
+        # `_execute_decentralized_handoff`): an UNBOUND StepKind is a SETUP/config error,
+        # NOT a resumable step-dispatch failure — a `pause`→PAUSED here would loop forever
+        # on resume (the dispatcher is still unbound). It raises natively (caught by the
+        # outer `except Exception` → FAILED, never pause). Out-of-family Codex [P2].
+        dispatcher = step_dispatchers.lookup(step.step_kind)
+        # ONLY the `dispatch()` call is pause-eligible — wrap it so the outer cascade
+        # handler distinguishes a genuine step-dispatch failure (resumable) from a setup
+        # (lookup/binding) or post-dispatch BOOKKEEPING failure (the ledger buffer / record
+        # below). A bookkeeping failure AFTER a successful dispatch means the effect already
+        # landed, so a resume would DOUBLE-FIRE the step — those must FAIL, never PAUSE
+        # (out-of-family Codex [P2]).
+        try:
+            step_output = dispatcher.dispatch(binding, step, step_context=step_context)
+        except SubAgentChildPausedError:
+            # An EO step that is a SUB_AGENT_DISPATCH whose recursive child sub-workflow
+            # PAUSED (#680) raises the typed SubAgentChildPausedError. Propagate it TYPED so
+            # the outer handler fails CLOSED — EO does NOT materialize the cross-recursion
+            # child-pause disposition (that is the ORCHESTRATOR_WORKERS / HIERARCHICAL
+            # `paused_child_branches` machinery). Wrapping it as a generic EO dispatch
+            # failure would route it to the EO-level pause path, dropping the child's OWN
+            # cursor (the #680 swallow-bug one level over). Out-of-family Codex [P2],
+            # mirroring `_execute_decentralized_handoff`.
+            raise
+        except Exception as dispatch_exc:
+            raise _EvaluatorOptimizerStepDispatchError(dispatch_exc) from dispatch_exc
         # B-INTERSTEP (runtime spec §14.21 C-RT-29) — record this step's output to
         # the run-scoped inter-step channel BEFORE the next dispatch so the EO data
         # flow is real: the evaluate dispatch reads the generate draft, and the
@@ -4335,6 +4550,18 @@ def _execute_evaluator_optimizer(
             procedural_tier_snapshot_ref=snapshot_ref,
         )
         ctx.lifecycle_emitter.emit(WorkflowEventClass.STEP_BOUNDARY)
+        # B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER — record this completed step for the resume
+        # cursor (a later step's `pause` halt captures this prefix into an
+        # EvaluatorOptimizerResumeState). Appended ONLY on a successful dispatch+buffer; a
+        # failed dispatch raises before this, so the cursor never includes the failed step.
+        completed_step_records.append(
+            EvaluatorOptimizerStepResumeState(
+                entry_index=entry_index,
+                declared_step_index=declared_step_index,
+                step_id=str(step.step_id),
+                output=step_output,
+            )
+        )
         return step_output
 
     entry_index = 0
@@ -4342,8 +4569,45 @@ def _execute_evaluator_optimizer(
     iterations = 0
     last_generate_output: Mapping[str, Any] = {}
     last_evaluation: Mapping[str, Any] = {}
+
+    # B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER (R-FS-1) — RESUME recovery of the completed-step
+    # prefix. On resume, steps 0..m-1 already dispatched + persisted their ledger entries
+    # in the ORIGINAL run; replay them here WITHOUT re-dispatching: recover each output,
+    # re-seed the inter-step channel (so the first re-dispatched step reads its upstream
+    # draft/feedback — the run-scoped channel starts empty on this fresh resume
+    # invocation), reconstruct the loop counters (entry_index / iterations / last_*), and
+    # carry the record forward for a possible RE-pause. DO NOT create a ledger entry (no
+    # double-write; no step-count). `[[full-chain-witness-not-half-proofs]]`: a recovered
+    # step's dispatcher is NEVER invoked across the resume (the discriminating witness).
+    if _eo_resume is not None:
+        for cs in _eo_resume.completed_steps:
+            if cs.declared_step_index == 0:
+                last_generate_output = cs.output
+                iterations += 1  # every generate starts an iteration (the cap counter)
+            else:
+                last_evaluation = cs.output  # non-accept by construction (guarded above)
+            _record_inter_step_output(ctx, cs.step_id, cs.output)
+            completed_step_records.append(cs)
+            entry_index += 1
+    # An ODD cursor ⟹ the original paused on an evaluate (the iteration's generate is
+    # recovered, the evaluate is the failed step to re-dispatch first to finish the
+    # partial iteration); its iteration is ALREADY counted via the replayed generate.
+    resume_pending_evaluate = entry_index % 2 == 1
+
     try:
-        for _iteration in range(_DEFAULT_EVALUATOR_OPTIMIZER_MAX_ITERATIONS):
+        if resume_pending_evaluate:
+            last_evaluation = _dispatch_and_buffer(
+                evaluate_step, declared_step_index=1, entry_index=entry_index
+            )
+            entry_index += 1
+            if _evaluator_optimizer_accepted(last_evaluation):
+                accepted = True
+        # The bounded generate→evaluate loop. `iterations` (generates started) spans the
+        # resume boundary so the original max-iteration cap is honored across pause/resume
+        # (recovered generates already counted toward it). A non-resume run enters with
+        # iterations=0 + resume_pending_evaluate=False → byte-identical to the pre-arc
+        # `for _iteration in range(MAX)` loop.
+        while not accepted and iterations < _DEFAULT_EVALUATOR_OPTIMIZER_MAX_ITERATIONS:
             iterations += 1
             last_generate_output = _dispatch_and_buffer(
                 generate_step, declared_step_index=0, entry_index=entry_index
@@ -4356,11 +4620,104 @@ def _execute_evaluator_optimizer(
             if _evaluator_optimizer_accepted(last_evaluation):
                 accepted = True
                 break
-    except Exception as exc:
-        # A generate/evaluate dispatch raised. EVALUATOR_OPTIMIZER has no
-        # cascade_policy differentiation (U-CP-85 non-dep) → FAILED. Drain
-        # whatever was buffered so the completed steps' entries persist (no
-        # silent failure — audit-honoring at this scope).
+    except SubAgentChildPausedError as child_paused:
+        # An EO SUB_AGENT_DISPATCH step's recursive child sub-workflow PAUSED. EO does NOT
+        # materialize the cross-recursion child-pause disposition (the ORCHESTRATOR_WORKERS
+        # / HIERARCHICAL `paused_child_branches` machinery) — converting it to an EO-level
+        # PAUSE would DROP the child's cursor (the #680 swallow-bug one level over). Fail
+        # CLOSED honestly (never a false-resumable EO PAUSE that loses the child state); the
+        # completed prefix still drains (no silent loss). Out-of-family Codex [P2], mirroring
+        # `_execute_decentralized_handoff`.
+        drain_branch_buffers(ctx.ledger_writer, [writer])
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state=None,
+            fail_class=(
+                "evaluator-optimizer-child-pause-unsupported: an EO sub-agent step's child "
+                f"PAUSED ({child_paused}); the cross-recursion child-pause disposition is "
+                "not materialized for EVALUATOR_OPTIMIZER"
+            ),
+        ), entry_index - _resume_completed_count
+    except _EvaluatorOptimizerStepDispatchError as _dispatch_failure:
+        # A generate/evaluate DISPATCH raised (the ONLY pause-eligible failure — setup +
+        # post-dispatch bookkeeping failures take the `except Exception` path below, NEVER
+        # pause). §25.15.1 (EXTENDED to the sequential EO loop per §25.18's named impl-order)
+        # governs the disposition. Only `pause` (TEAM) is materialized; `proceed` /
+        # `cascade-cancel` retain EO's existing terminal-FAILED behavior. In all cases the
+        # buffered completed-step entries STILL drain (no silent loss).
+        exc = _dispatch_failure.original
+        if cascade_policy is CascadePolicy.PAUSE:
+            # B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER (R-FS-1) — materialize the §25.15.1
+            # `pause → PAUSED` row EXTENDED to the sequential EO loop. The completed-step
+            # prefix is captured into a hash-integrity-checked iteration cursor;
+            # `api.resume` re-enters here, recovers the prefix (NOT re-dispatched), and
+            # re-dispatches from the failed step. The failed step buffered nothing.
+            protocol = getattr(ctx, "pause_resume_protocol", None)
+            if protocol is None:
+                # No pause/resume opt-in bound → the snapshot cannot be captured, so a
+                # PAUSED would advertise a resumability the harness cannot honor (the
+                # FALSE-`PAUSED` silent-degradation mode). Fail HONESTLY
+                # (detect-then-refuse), draining the completed-step buffer.
+                drain_branch_buffers(ctx.ledger_writer, [writer])
+                return RunResult(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    status=RunStatus.FAILED,
+                    terminal_step_index=None,
+                    partial_state=None,
+                    final_state=None,
+                    fail_class=(
+                        "evaluator-optimizer-pause-resume-protocol-not-bound: a step failed "
+                        "under cascade_policy=pause but no pause_resume_protocol is bound "
+                        "(cannot capture a resumable snapshot) — underlying: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                ), entry_index - _resume_completed_count
+            # Drain the completed-step buffer BEFORE returning PAUSED so this-run
+            # completions persist; the cursor captures their outputs for resume recovery.
+            drain_branch_buffers(ctx.ledger_writer, [writer])
+            eo_resume = EvaluatorOptimizerResumeState(
+                completed_steps=tuple(completed_step_records),
+            )
+            snapshot = _run_protocol_method_sync(
+                cast(PauseResumeProtocol, protocol).capture_pause_snapshot(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    # The failed step's DECLARED ordinal (0=generate / 1=evaluate), NOT its
+                    # entry_index: `step_index` must be a valid `steps` position so the
+                    # runtime `api.resume` guard (`0 <= step_index < len(steps)`) admits the
+                    # resume (the loop re-dispatches the same 2 steps, so entry_index grows
+                    # past len(steps)). At the raise `entry_index` is the failed step's
+                    # entry_index (not yet incremented), so `entry_index % 2` is its ordinal.
+                    # The cursor itself (completed_steps) carries the full resume position.
+                    step_index=entry_index % 2,
+                    pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+                    evaluator_optimizer_resume=eo_resume,
+                )
+            )
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.PAUSED,
+                terminal_step_index=None,
+                # PAUSED carries the salvaged loop state as partial_state + the resumable
+                # iteration cursor.
+                partial_state={
+                    "accepted": False,
+                    "iterations": iterations,
+                    "output": dict(last_generate_output),
+                    "evaluation": dict(last_evaluation),
+                },
+                final_state=None,
+                fail_class=None,
+                pause_snapshot=snapshot,
+            ), entry_index - _resume_completed_count
+        # `proceed` / `cascade-cancel` — preserve EO's existing terminal-FAILED behavior
+        # (drain whatever was buffered so the completed steps' entries persist).
         drain_branch_buffers(ctx.ledger_writer, [writer])
         return RunResult(
             workflow_id=workflow_id,
@@ -4370,7 +4727,25 @@ def _execute_evaluator_optimizer(
             partial_state=None,
             final_state=None,
             fail_class=_step_fail_class("evaluator-optimizer-step-failure", exc),
-        ), entry_index
+        ), entry_index - _resume_completed_count
+    except Exception as exc:
+        # A SETUP failure (dispatcher lookup / binding resolution) or a post-dispatch
+        # BOOKKEEPING failure (ledger buffer / inter-step record / cursor append) — NOT a
+        # resumable step-dispatch failure. This is FAILED for ALL cascade policies (never
+        # PAUSED, even under TEAM/`pause`): a setup error would loop forever on resume, and
+        # a bookkeeping error after a successful dispatch means the effect already landed →
+        # a resume would double-fire the step (out-of-family Codex [P2]). Drain whatever was
+        # buffered so the completed steps' entries persist (no silent loss).
+        drain_branch_buffers(ctx.ledger_writer, [writer])
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state=None,
+            fail_class=_step_fail_class("evaluator-optimizer-setup-or-bookkeeping-failure", exc),
+        ), entry_index - _resume_completed_count
 
     # Clean termination (accept or cap) — drain the buffer through the single real
     # writer in execution order, then return SUCCESS. `accepted` discriminates
@@ -4389,7 +4764,7 @@ def _execute_evaluator_optimizer(
             "evaluation": dict(last_evaluation),
         },
         fail_class=None,
-    ), entry_index
+    ), entry_index - _resume_completed_count
 
 
 # ---------------------------------------------------------------------------

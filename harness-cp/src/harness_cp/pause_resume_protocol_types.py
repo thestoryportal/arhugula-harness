@@ -313,6 +313,82 @@ class HandoffResumeState(BaseModel):
     fail-closed rather than recover stale outputs into a changed body."""
 
 
+class EvaluatorOptimizerStepResumeState(BaseModel):
+    """One completed generate-or-evaluate step of an `EVALUATOR_OPTIMIZER` loop paused later.
+
+    B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER (R-FS-1) — `EVALUATOR_OPTIMIZER` is a SEQUENTIAL
+    generate→evaluate→regenerate loop (NO fan-out, NO branches, NO `branch_metadata`),
+    bounded by a max-iteration cap. When a generate/evaluate dispatch fails under
+    `cascade_policy=pause`, the contiguous completed-STEP prefix is captured so resume
+    recovers each step's output WITHOUT re-dispatching it (a completed step's effect may
+    have landed).
+
+    The #681 `HandoffStageResumeState` analogue, but the cursor unit is a LOOP STEP
+    (generate or evaluate) keyed by the MONOTONIC `entry_index` (the ledger row index),
+    not a declared stage ordinal: the EO loop re-dispatches the SAME two declared steps
+    across iterations, so the resume cursor is entry-granular. The iteration semantics
+    (which iteration, the cap) DERIVE from `entry_index` parity (even ⟹ generate, odd ⟹
+    evaluate; iteration = entry_index // 2) — no separate iteration field is stored."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    entry_index: int
+    """The MONOTONIC ledger-row index (0,1,2,3,…) of this completed loop step. The
+    captured prefix is contiguous `0..m-1` for a pause at the failed step `m`. Even ⟹ a
+    generate dispatch, odd ⟹ an evaluate dispatch (the loop alternates strictly)."""
+
+    declared_step_index: int
+    """The DECLARED step ordinal (0=generate, 1=evaluate) this entry dispatched. Resume
+    validates `declared_step_index == entry_index % 2` (loop-alternation coherence) and
+    `steps[declared_step_index].step_id == step_id` (positional-identity guard)."""
+
+    step_id: str
+    """The `WorkflowStep.step_id` AT CAPTURE TIME (`steps[0]`=generate / `steps[1]`=evaluate).
+    Resume validates the re-supplied `steps[declared_step_index].step_id` against this —
+    fail-closed on a body rename so a recovered output is never replayed into a renamed
+    step's slot (the recovered step's dispatch is skipped on resume)."""
+
+    output: Mapping[str, Any]
+    """This completed step's dispatch output, recovered on resume so the step is NOT
+    re-dispatched. Replayed into the inter-step output channel (so the next live step
+    reads its upstream draft/feedback — B-INTERSTEP, runtime §14.21) and into
+    `last_generate_output` / `last_evaluation` for the SUCCESS final_state. COVERED by
+    `_compute_snapshot_hash` (a resumed loop trusts it → integrity-checked)."""
+
+
+class EvaluatorOptimizerResumeState(BaseModel):
+    """Sequential generate→evaluate loop resume reconstruction state (the iteration cursor).
+
+    B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER (R-FS-1) — the `EVALUATOR_OPTIMIZER` analogue of
+    `HandoffResumeState`: a single-owner SEQUENTIAL cursor (no peer-branch set), but over
+    the loop's completed STEPS rather than a stage list. A pause at the failed step `m`
+    has a contiguous completed-step prefix `0..m-1`; resume recovers their outputs and
+    re-dispatches from step `m` onward, honoring the original max-iteration cap across the
+    resume boundary (the cap is reconstructed from the recovered generate count — every
+    iteration has exactly one generate).
+
+    Materializes the §25.15.1 `pause → PAUSED` row EXTENDED to the sequential
+    `EVALUATOR_OPTIMIZER` case (the §25.15.1 row text is fan-out-barrier-scoped; this
+    extension is the §25.18-named `EVALUATOR_OPTIMIZER` impl-discretion materialization,
+    mirroring the #681 `DECENTRALIZED_HANDOFF` extension). Only `cascade_policy=pause`
+    (TEAM tier, with a bound `pause_resume_protocol`) is materialized; `proceed` /
+    `cascade-cancel` retain EO's existing terminal-FAILED disposition.
+
+    Carried by `PauseSnapshot.evaluator_optimizer_resume` (the FOURTH additive, defaulted
+    resume field — never co-set with `fan_out_resume` / `peer_fan_out_resume` /
+    `handoff_resume`; the capturing strategy populates exactly one)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    completed_steps: tuple[EvaluatorOptimizerStepResumeState, ...]
+    """The contiguous completed-step prefix (`entry_index` 0..m-1) at pause time. A step
+    at/after `len(completed_steps)` is re-dispatched on resume. A RE-pause unions the
+    recovered prefix + the newly-completed-on-resume steps, so this stays a contiguous
+    prefix across repeated resumes. The recovered-generate count reconstructs the
+    iteration cap across the resume boundary; recovered evaluations are all non-accepts by
+    construction (an accept would have terminated the loop SUCCESS, not paused)."""
+
+
 class PauseSnapshot(BaseModel):
     """8-field pause-snapshot envelope (CP spec v1.11 §26.2).
 
@@ -388,6 +464,18 @@ class PauseSnapshot(BaseModel):
     `_execute_decentralized_handoff` with it (the completed-stage prefix's outputs
     recovered + their dispatch skipped; stage `k` onward re-dispatched, the handoff chain
     recomputed through the prefix)."""
+
+    evaluator_optimizer_resume: EvaluatorOptimizerResumeState | None = None
+    """B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER (R-FS-1) — the `EVALUATOR_OPTIMIZER`
+    (single-owner sequential generate→evaluate loop) analogue of `fan_out_resume` /
+    `peer_fan_out_resume` / `handoff_resume`, present ONLY when this snapshot captures an
+    `EVALUATOR_OPTIMIZER` `cascade_policy=pause` halt (`None` otherwise — additive,
+    default-None, so every existing snapshot is byte-unchanged). NEVER co-set with the
+    other three resume carriers: the strategy that captured the pause populates exactly
+    one (an EO pause sets this). COVERED by `_compute_snapshot_hash` when present (same
+    integrity contract); `api.resume` re-enters `_execute_evaluator_optimizer` with it
+    (the completed-step prefix's outputs recovered + their dispatch skipped; the loop
+    re-dispatches from the failed step onward, honoring the original iteration cap)."""
 
 
 class PausedChildBranchResumeState(BaseModel):

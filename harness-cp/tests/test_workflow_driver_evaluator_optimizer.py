@@ -102,13 +102,23 @@ _GENERATE = "generate"
 _EVALUATE = "evaluate"
 
 
-def _manifest(*, workflow_id: str = "wf-eo") -> WorkflowManifestEntry:
+def _manifest(
+    *,
+    workflow_id: str = "wf-eo",
+    persona_tier: PersonaTier = PersonaTier.TEAM_BINDING,
+) -> WorkflowManifestEntry:
     """An EVALUATOR_OPTIMIZER manifest (engine in scope; admissibility is enforced
-    at workflow-binding per §25.10 Invariant 2, NOT re-checked by the driver)."""
+    at workflow-binding per §25.10 Invariant 2, NOT re-checked by the driver).
+
+    `persona_tier` selects the §11.4 D4 `cascade_policy` the EO step-failure path reads
+    (SOLO→proceed / TEAM→pause / MTC→cascade-cancel) — default TEAM_BINDING. Pre-arc the
+    driver ignored cascade_policy; B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER materializes the
+    `pause` branch (TEAM → resumable PAUSED), so a generic-FAILED test selects a non-pause
+    tier."""
     return WorkflowManifestEntry(
         workflow_id=workflow_id,
         workload_class=WorkloadClass.PIPELINE_AUTOMATION,
-        persona_tier=PersonaTier.TEAM_BINDING,
+        persona_tier=persona_tier,
         engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         topology_pattern=TopologyPattern.EVALUATOR_OPTIMIZER,
         layer_budgets=(),
@@ -298,6 +308,7 @@ def _run(
     emitter: _Emitter | None = None,
     workflow_id: str = "wf-eo",
     inter_step_output_channel: Any = None,
+    persona_tier: PersonaTier = PersonaTier.TEAM_BINDING,
 ) -> Any:
     emitter = emitter if emitter is not None else _Emitter()
     ctx = cast(
@@ -305,7 +316,7 @@ def _run(
         _Ctx(ledger=ledger, emitter=emitter, inter_step_output_channel=inter_step_output_channel),
     )
     return execute_workflow(
-        _manifest(workflow_id=workflow_id),
+        _manifest(workflow_id=workflow_id, persona_tier=persona_tier),
         steps,
         run_id="run-1",
         ctx=ctx,
@@ -478,19 +489,45 @@ def test_evaluator_optimizer_persisted_in_execution_order(
 
 
 def test_evaluator_optimizer_step_failure_returns_failed_and_persists_prior() -> None:
-    """A dispatch raising → FAILED (EO has no cascade_policy differentiation; that
-    is U-CP-85). The fully-completed prior steps' buffered entries STILL drain
-    (no silent loss). Failing on call 3 (iteration 2's generate) → iteration 1
-    fully persisted (2 entries), iteration 2's failing generate persists nothing."""
+    """A dispatch raising under cascade_policy=proceed (SOLO) → FAILED with the generic
+    `evaluator-optimizer-step-failure` class. B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER
+    materializes ONLY the `pause` branch; `proceed` / `cascade-cancel` retain EO's
+    existing terminal-FAILED disposition (the surgical additive scope — owned in the
+    v1.48 change-note). The fully-completed prior steps' buffered entries STILL drain (no
+    silent loss). Failing on call 3 (iteration 2's generate) → iteration 1 fully persisted
+    (2 entries), iteration 2's failing generate persists nothing."""
     ledger = _RecordingLedger()
     dispatcher = _FailingDispatcher(fail_on_step=3)
-    result = _run(steps=_loop_steps(), dispatcher=cast(StepDispatcher, dispatcher), ledger=ledger)
+    result = _run(
+        steps=_loop_steps(),
+        dispatcher=cast(StepDispatcher, dispatcher),
+        ledger=ledger,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+    )
     assert result.status is RunStatus.FAILED
     assert result.fail_class is not None
     assert "evaluator-optimizer-step-failure" in result.fail_class
     # Iteration 1 (gen+eval) persisted; the failing iteration-2 generate did not.
     assert len(ledger.appends) == 2
     assert _action_ids(ledger) == ["workflow:wf-eo:step:0", "workflow:wf-eo:step:1"]
+
+
+def test_evaluator_optimizer_step_failure_cascade_cancel_tier_returns_failed() -> None:
+    """A dispatch raising under cascade_policy=cascade-cancel (MTC) → FAILED with the
+    generic `evaluator-optimizer-step-failure` class (the preserved disposition — only
+    `pause` is materialized for EO). Contrasting-baseline to the TEAM pause path."""
+    ledger = _RecordingLedger()
+    dispatcher = _FailingDispatcher(fail_on_step=3)
+    result = _run(
+        steps=_loop_steps(),
+        dispatcher=cast(StepDispatcher, dispatcher),
+        ledger=ledger,
+        persona_tier=PersonaTier.MULTI_TENANT_COMPLIANCE,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert "evaluator-optimizer-step-failure" in result.fail_class
+    assert len(ledger.appends) == 2
 
 
 def test_evaluator_optimizer_emits_workflow_start_and_step_boundaries() -> None:
