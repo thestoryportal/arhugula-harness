@@ -537,6 +537,30 @@ def test_parallelization_proceed_branch_failure_degrades_to_partial() -> None:
     assert sorted(set(_branch_indices_in_append_order(ledger))) == [0, 1, 2]
 
 
+def test_parallelization_unbound_step_kind_fails_loud_not_silent_partial() -> None:
+    """B-PARALLELIZATION-CASCADE (out-of-family Codex [P2]) — an UNBOUND StepKind
+    is a SETUP/config error, NOT a degradable branch failure: even under `proceed`
+    (SOLO_DEVELOPER) it must FAIL the whole run LOUD, never silently degrade to
+    PARTIAL (which would drop the branch). The pre-flight dispatcher resolution
+    catches it before fan-out, matching the linear path + the old fail-fast."""
+    ledger = _RecordingLedger()
+    # `_MultiKindRegistry` only binds DECLARATIVE_STEP → a TOOL_STEP branch raises
+    # StepKindDispatcherNotBoundError at lookup (the setup error).
+    unbound = WorkflowStep(
+        step_id=StepID("branch-0"), step_kind=StepKind.TOOL_STEP, step_payload={"index": 0}
+    )
+    result = _run(
+        steps=[unbound],
+        dispatcher=_VariedDispatcher(),
+        ledger=ledger,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.status is not RunStatus.PARTIAL
+    assert result.fail_class is not None
+    assert "parallelization-step-kind-not-bound" in result.fail_class
+
+
 def test_parallelization_cascade_cancel_branch_failure_returns_failed() -> None:
     """B-PARALLELIZATION-CASCADE — under `cascade-cancel` (MULTI_TENANT_COMPLIANCE)
     a branch failure halts the fan-out → FAILED + `parallelization-cascade-cancel`

@@ -3437,6 +3437,29 @@ def _execute_parallelization(
         branch_plan.append((branch_index, step, child, writer, binding))
     branch_writers = [plan[3] for plan in branch_plan]
 
+    # Pre-flight (out-of-family Codex [P2]): resolve every branch's dispatcher up
+    # front, single-threaded on the driver thread, so an UNBOUND `StepKind` — a
+    # SETUP/config error, NOT a branch dispatch failure — fails the whole run LOUD
+    # (FAILED), exactly as the linear path (the `StepKindDispatcherNotBoundError`
+    # → FAILED above) + the OLD bounded_barrier did. Without this, the `proceed`
+    # harvest (`gather(return_exceptions=True)`) would capture the lookup error as
+    # a degradable branch failure → a SILENT `PARTIAL` that drops the branch.
+    try:
+        branch_dispatchers = {
+            bi: step_dispatchers.lookup(step.step_kind)
+            for bi, step, _child, _writer, _binding in branch_plan
+        }
+    except StepKindDispatcherNotBoundError as exc:
+        return RunResult(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            status=RunStatus.FAILED,
+            terminal_step_index=None,
+            partial_state=None,
+            final_state=None,
+            fail_class=f"parallelization-step-kind-not-bound: {exc}",
+        ), 0
+
     # § 25.3.2 — Emit workflow.start (the fan-out begins). Single-threaded on the
     # driver thread, BEFORE the concurrent branches spawn.
     ctx.lifecycle_emitter.emit(WorkflowEventClass.WORKFLOW_START)
@@ -3540,7 +3563,7 @@ def _execute_parallelization(
             writer: BufferingLedgerWriter,
             binding: StepEffectiveBinding,
         ) -> None:
-            dispatcher = step_dispatchers.lookup(step.step_kind)
+            dispatcher = branch_dispatchers[branch_index]
             try:
                 output = await asyncio.to_thread(
                     dispatcher.dispatch, binding, step, step_context=child
@@ -3633,7 +3656,7 @@ def _execute_parallelization(
         writer: BufferingLedgerWriter,
         binding: StepEffectiveBinding,
     ) -> None:
-        dispatcher = step_dispatchers.lookup(step.step_kind)
+        dispatcher = branch_dispatchers[branch_index]
         # Schedule the (sync) dispatch off-loop; `dispatch_branch_step_shielded`
         # keeps it alive against THIS branch's cancellation so an in-flight effect
         # runs to its own completion (obl. 1), and registers it for the barrier's
