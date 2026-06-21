@@ -1298,6 +1298,101 @@ def test_event_sourced_replay_unreadable_store_fails_closed() -> None:
 
 
 # ---------------------------------------------------------------------------
+# B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT — WAL_SEGMENT shares the EngineOutputStore +
+# the C-CP-08 §8.1 cached-output-replay refinement (the EVENT_SOURCED_REPLAY shape
+# applied to the segment-replay class). The producer gate AND the resume-side
+# rehydrate were BOTH extended to WAL_SEGMENT in one arc (never record-only — a
+# never-rehydrated journal is the exact defect the producer gate prevents).
+# ---------------------------------------------------------------------------
+
+
+def test_wal_segment_records_then_rehydrates_full_chain() -> None:
+    """FULL-CHAIN witness (advisor) — a WAL_SEGMENT run RECORDS each step output to
+    the shared store (phase 1, fresh run), then a resume REHYDRATES the stored prefix
+    so the first re-dispatched segment-step SEES its recovered predecessor's output
+    (phase 2). Proves BOTH halves through the real `execute_workflow` (the producer
+    gate now fires for WAL_SEGMENT + the §8.1 cached-output rehydrate) — not
+    gate-membership / store-has-records presence."""
+    store = _FakeOutputStore({}, journal_present=False)
+
+    # Phase 1 — fresh WAL_SEGMENT run (resume_at == 0): all 3 steps dispatch + record.
+    ctx1 = _esr_resume_ctx(0)  # 0 materialized → segment-replay resume_at == 0 (fresh)
+    ctx1.inter_step_output_channel = _FakeOutputChannel()
+    ctx1.engine_output_store = store
+    disp1 = _ChannelReadingDispatcher(ctx1.inter_step_output_channel)
+    execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.WAL_SEGMENT),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx1),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, disp1)),
+    )
+    assert len(disp1.dispatched) == 3  # fresh run, all steps dispatched
+    # The producer gate now fires for WAL_SEGMENT — each step output is durably stored.
+    assert set(store.read_outputs("run-1").keys()) == {0, 1, 2}
+
+    # Phase 2 — resume with 2 materialized (resume_at == 2): rehydrate from the store.
+    ctx2 = _esr_resume_ctx(2)
+    ctx2.inter_step_output_channel = _FakeOutputChannel()
+    ctx2.engine_output_store = store  # SAME store, now carrying the phase-1 records
+    disp2 = _ChannelReadingDispatcher(ctx2.inter_step_output_channel)
+    execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.WAL_SEGMENT),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx2),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, disp2)),
+    )
+    # Only step-2 re-dispatched (prefix not re-fired) AND it saw step-1's RECOVERED
+    # output (the phase-1 record), not None.
+    assert len(disp2.dispatched) == 1
+    assert str(disp2.dispatched[0][1].step_id) == "step-2"
+    assert disp2.seen_upstream == [{"echo": "step-1"}]
+
+
+def test_wal_segment_no_store_leaves_channel_empty_on_resume() -> None:
+    """NEGATIVE CONTROL — the same WAL_SEGMENT resume WITHOUT a bound output store:
+    step-2 sees `None` upstream (the rehydration is the ONLY source of the recovered
+    prefix output; mirrors the EVENT_SOURCED_REPLAY negative control)."""
+    ctx = _esr_resume_ctx(2)
+    channel = _FakeOutputChannel()
+    ctx.inter_step_output_channel = channel  # but NO engine_output_store bound
+    dispatcher = _ChannelReadingDispatcher(channel)
+    execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.WAL_SEGMENT),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+    )
+    assert dispatcher.seen_upstream == [None]
+
+
+def test_wal_segment_missing_stored_output_fails_closed() -> None:
+    """FAIL-CLOSED (store↔ledger skew) — WAL_SEGMENT shares the corruption gate via the
+    same `_rehydrate_inter_step_channel_on_replay` helper: the ledger says 2 steps
+    materialized but the store is missing step 1 → FAILED rather than a partial-prefix
+    rehydrate (free with the shared rehydrate half)."""
+    ctx = _esr_resume_ctx(2)
+    ctx.inter_step_output_channel = _FakeOutputChannel()
+    ctx.engine_output_store = _FakeOutputStore({0: ("step-0", {"draft": "v0"})})  # step 1 absent
+    result = execute_workflow(
+        manifest_entry=_manifest(engine_class=EngineClass.WAL_SEGMENT),
+        steps=[_step(0), _step(1), _step(2)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _EchoDispatcher())),
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert "engine-output-replay-missing-output" in result.fail_class
+
+
+# ---------------------------------------------------------------------------
 # U-CP-94 (R-FS-1 E-impl-2) — WAL_SEGMENT segment-replay resumption (CP/IS-only)
 #
 # WAL_SEGMENT is materialized as segment-replay resumption impl against the
