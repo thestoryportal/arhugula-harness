@@ -70,6 +70,7 @@ from harness_cp.workflow_driver_types import (
     StepExecutionContext,
     StepKind,
     WorkflowStep,
+    fold_step_hitl_placements,
 )
 from harness_cp.workflow_manifest_entry import StepOverride, WorkflowManifestEntry
 from harness_is.state_ledger_entry_schema import Actor, ActorClass, Identifier
@@ -1954,6 +1955,24 @@ class _StepContextCapturingDispatcher:
         return {"step_id": str(step.step_id), "echoed_payload": dict(step.step_payload)}
 
 
+class _StepContextByIdDispatcher:
+    """Records the `step_context` each dispatched step received, keyed by step_id
+    (so a per-step fold can be asserted per step)."""
+
+    def __init__(self) -> None:
+        self.by_id: dict[str, StepExecutionContext] = {}
+
+    def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
+    ) -> dict[str, Any]:
+        self.by_id[str(step.step_id)] = step_context
+        return {"step_id": str(step.step_id), "echoed_payload": dict(step.step_payload)}
+
+
 def _manifest_with_placements(
     placements: tuple[HITLPlacement, ...],
     *,
@@ -2016,6 +2035,134 @@ def test_driver_empty_manifest_placements_yields_empty_step_context(
     assert dispatcher.contexts
     for sc in dispatcher.contexts:
         assert sc.hitl_placements == ()
+
+
+# ---------------------------------------------------------------------------
+# R-FS-1 B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD (CP spec v1.49 §6.2) — the
+# singular per-step `StepOverride.hitl_placement` override folds onto the
+# workflow `hitl_placements` tuple by union-by-`position` (tune-not-remove,
+# monotone). The previously-dead `StepEffectiveBinding.hitl_placement` becomes
+# load-bearing. Helper unit tests + by-execution on the linear path.
+# ---------------------------------------------------------------------------
+
+
+def test_fold_none_override_returns_workflow_tuple_verbatim() -> None:
+    """No per-step override (`None`) → the workflow tuple verbatim (byte-identical
+    to the v1.41 producer-only arc)."""
+    wf = (
+        HITLPlacement(position=HITLPlacementKind.PRE_ACTION),
+        HITLPlacement(position=HITLPlacementKind.SUB_AGENT_BOUNDARY),
+    )
+    assert fold_step_hitl_placements(wf, None) == wf
+    assert fold_step_hitl_placements((), None) == ()
+
+
+def test_fold_new_position_is_appended() -> None:
+    """An override of a `position` ABSENT from the workflow tuple is APPENDED
+    (ADD a gate position at this step)."""
+    wf = (HITLPlacement(position=HITLPlacementKind.PRE_ACTION),)
+    override = HITLPlacement(position=HITLPlacementKind.SUB_AGENT_BOUNDARY)
+    folded = fold_step_hitl_placements(wf, override)
+    assert folded == (*wf, override)
+    # monotone: every workflow position survives + the new one is present.
+    assert {p.position for p in folded} == {
+        HITLPlacementKind.PRE_ACTION,
+        HITLPlacementKind.SUB_AGENT_BOUNDARY,
+    }
+
+
+def test_fold_same_position_workflow_wins_no_loosening() -> None:
+    """ADD-only: an override of a `position` ALREADY PRESENT in the workflow tuple
+    is a NO-OP — the workflow placement wins, unchanged. A replace/tune could
+    LOOSEN the §17.1 floor at the attribute level (e.g. a `tool_filter` narrowing
+    leaves other tools ungated; a weaker `cascade_policy`/`timeout`), so the fold
+    must NOT replace — that is the operator-gated B-HITL-PLACEMENT-PER-STEP-LOOSEN
+    arc. (advisor decorrelated catch: position-level monotonicity does not imply
+    attribute-level monotonicity; replace-on-collision was a silent loosening.)"""
+    wf = (
+        HITLPlacement(position=HITLPlacementKind.PRE_ACTION, timeout=30_000),
+        HITLPlacement(position=HITLPlacementKind.SUB_AGENT_BOUNDARY),
+    )
+    # An override that would NARROW the gate (tool_filter) — must be ignored.
+    override = HITLPlacement(
+        position=HITLPlacementKind.PRE_ACTION, timeout=5, tool_filter=("git_push",)
+    )
+    folded = fold_step_hitl_placements(wf, override)
+    # The workflow placement is preserved VERBATIM (override ignored, no loosening).
+    assert folded == wf
+    assert folded[0].timeout == 30_000
+    assert folded[0].tool_filter is None
+
+
+def test_per_step_placement_override_folds_onto_linear_step_context() -> None:
+    """By-execution through the real `execute_workflow`: a per-step
+    `StepOverride.hitl_placement` of a NEW position on step-0 folds (union) onto
+    the dispatched `step_context.hitl_placements`; step-1 (no override) carries
+    only the workflow tuple — proving the fold is per-step-scoped, not leaked."""
+    workflow_placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION)
+    override_placement = HITLPlacement(position=HITLPlacementKind.SUB_AGENT_BOUNDARY)
+    manifest = _manifest_with_placements((workflow_placement,)).model_copy(
+        update={
+            "per_step_overrides": {
+                StepID("step-0"): StepOverride(
+                    step_id=StepID("step-0"), hitl_placement=override_placement
+                )
+            }
+        }
+    )
+    ctx, _ledger, _emitter = _ctx()
+    dispatcher = _StepContextByIdDispatcher()
+    result = execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0), _step(1)],
+        run_id="run-fold-linear",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+    )
+    assert result.status is RunStatus.SUCCESS
+    # step-0: the workflow placement UNION the per-step override (both positions).
+    assert dispatcher.by_id["step-0"].hitl_placements == (
+        workflow_placement,
+        override_placement,
+    )
+    # step-1: no override → the workflow tuple verbatim (not leaked from step-0).
+    assert dispatcher.by_id["step-1"].hitl_placements == (workflow_placement,)
+
+
+def test_per_step_placement_override_same_position_is_noop_on_linear_path() -> None:
+    """By-execution: a per-step override of a position the workflow ALREADY declares
+    is a NO-OP (ADD-only — the workflow placement wins, no attribute loosening). A
+    tune/replace is the operator-gated B-HITL-PLACEMENT-PER-STEP-LOOSEN arc."""
+    workflow_placement = HITLPlacement(position=HITLPlacementKind.PRE_ACTION, timeout=30_000)
+    # An override that would narrow the gate to one tool — must be ignored.
+    override_placement = HITLPlacement(
+        position=HITLPlacementKind.PRE_ACTION, timeout=5, tool_filter=("git_push",)
+    )
+    manifest = _manifest_with_placements((workflow_placement,)).model_copy(
+        update={
+            "per_step_overrides": {
+                StepID("step-0"): StepOverride(
+                    step_id=StepID("step-0"), hitl_placement=override_placement
+                )
+            }
+        }
+    )
+    ctx, _ledger, _emitter = _ctx()
+    dispatcher = _StepContextByIdDispatcher()
+    execute_workflow(
+        manifest_entry=manifest,
+        steps=[_step(0), _step(1)],
+        run_id="run-fold-noop",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, dispatcher)),
+    )
+    # step-0: the workflow placement preserved verbatim (override did not loosen it).
+    assert dispatcher.by_id["step-0"].hitl_placements == (workflow_placement,)
+    assert dispatcher.by_id["step-0"].hitl_placements[0].timeout == 30_000
+    assert dispatcher.by_id["step-0"].hitl_placements[0].tool_filter is None
+    assert dispatcher.by_id["step-1"].hitl_placements == (workflow_placement,)
 
 
 # ---------------------------------------------------------------------------

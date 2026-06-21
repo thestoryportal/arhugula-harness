@@ -46,7 +46,7 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 28
+  standalone_closed: 29
   standalone_gated: 1
   standalone_resolved: 3
   standalone_registered: 5
@@ -546,12 +546,24 @@ arcs:
   - id: B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD
     title: "Per-step StepOverride.hitl_placement override fold"
     kind: standalone
+    status: closed
+    owner_axis: "CP"
+    parent_arc: B-HITL-PLACEMENT-PER-STEP-PRODUCER
+    pr: "#699"
+    spec_delta: "CP spec v1.48 → v1.49 §6.2 (a behavioral spec of the existing StepOverride.hitl_placement override fold; NO field added; NO operator gate). Resolves the v1.41-registered 'silent at C-CP-06 §6.2, under-specified add-vs-replace' follow-on."
+    gives: "The previously-DEAD StepEffectiveBinding.hitl_placement resolution is now load-bearing: the singular per-step hitl_placement override folds ADD-only onto the workflow hitl_placements tuple on step_context.hitl_placements (the runtime wrap-time HITL composer reads it). BUILD-not-fork (the 'fork-first' label flipped after the gated probe — `[[disposition-label-is-a-claim-verify-against-spec]]`): no committed invariant sacrificed → no operator gate. The advisor's PRE-PUSH decorrelated catch corrected the semantic: the singular type forecloses position-level set-removal BUT NOT attribute-level loosening — REPLACING a same-position placement could loosen the §17.1 floor via HITLPlacement.tool_filter ('limits which tools trigger the gate') / weaker cascade_policy / shorter timeout while the position stays present (the first 'union-by-position, tune-in-place' impl was a SILENT loosening under 'no gate' — X-AL-3 shape). FIX = ADD-only: an override ADDs an absent position; on a same-position collision the WORKFLOW PLACEMENT WINS (no-op) → genuinely monotone (overrides only TIGHTEN; the §19.1 max()/floor-only posture analogue; per_tool/mcp_trust 'NEVER overridden' U-CP-91; v1.35 floor-only). Mechanism: fold_step_hitl_placements helper + _per_step_hitl_placement_override read helper, the v1.38 agent_role composition-time-fold precedent, wired at all 6 topology composition sites keyed from manifest_entry.hitl_placements so an override on one cell never leaks to a sibling/parent. ALL per-step tune/replace OR removal (both reduce coverage) → the operator-gated B-HITL-PLACEMENT-PER-STEP-LOOSEN arc. Witnesses (harness-cp 1162 passed/1 xfailed; pyright 0/0/0): helper unit (ADD-new; same-position-collision-no-op with narrowing override IGNORED; none); linear by-execution (ADD-union + same-position-noop + step-scoped); fan-out anti-leak (worker-override-no-sibling-leak + orchestrator-override-no-worker-leak); runtime HITL composer suite (83) unaffected. advisor (BUILD-vs-gate discriminator + probe-first + the attribute-level-loosening pre-push catch) + out-of-family Codex (reorder [P2] moot after ADD-only; dashboard-lag [P2] = expected §12.2.1)."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-HITL-PLACEMENT-PER-STEP-LOOSEN
+    title: "Per-step removal of a workflow HITL gate position"
+    kind: standalone
     status: registered
     decompose_at_open: true
-    owner_axis: "CP + runtime"
-    parent_arc: B-HITL-PLACEMENT-PER-STEP-PRODUCER
-    anticipated_scope: "Fold the per-step StepOverride.hitl_placement override with the workflow-level tuple (silent at C-CP-06 §6.2; design-fork-first per X-AL-3)."
-    why: "B-HITL-PLACEMENT-PER-STEP-PRODUCER closed the workflow-level tuple; the per-step override fold semantics are unspecified."
+    owner_axis: "CP"
+    parent_arc: B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD
+    anticipated_scope: "Per-step TUNE/REPLACE or REMOVAL of a workflow-level HITL gate position (both reduce coverage — removal drops a position; a tune/replace can loosen attributes like tool_filter / cascade_policy / timeout). Needs BOTH a monotone-HITL-posture relaxation (committed-invariant relax — operator's call) AND a typed-shape change (a tuple-valued, replace/removal-capable per-step placement carrier)."
+    why: "The v1.49 fold is ADD-only / monotone by construction (an override ADDs an absent position; on a same-position collision the workflow placement wins — it can neither remove nor modify an existing one). Loosening (tune/replace/removal) is the rare, deliberately-friction-ful direction — register, do NOT build; surface the ADR/spec relax-request only if a real workflow needs per-step gate tune/narrowing."
+    operator_gated: true
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-EDIT-CARRIER-DURABLE-ASYNC-RESUME

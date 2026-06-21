@@ -67,6 +67,7 @@ from harness_cp.handoff_context import (
     RetryHistory,
     StateSummary,
 )
+from harness_cp.hitl_placement import HITLPlacement
 from harness_cp.pause_resume_protocol import (
     CP_FAIL_PAUSE_SNAPSHOT_CORRUPTION,
     CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED,
@@ -113,6 +114,7 @@ from harness_cp.workflow_driver_types import (
     compose_branch_step_action_id,
     compose_branch_terminal_action_id,
     compose_branch_terminal_path,
+    fold_step_hitl_placements,
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_cp.workload_engine_class_matrix import d4_tunable, lookup_cell
@@ -2260,7 +2262,12 @@ def _execute_workflow_body(
             # B-HITL-PLACEMENT-PER-STEP-PRODUCER — surface the workflow's declared
             # placements onto the per-step context so the wrap-time HITL composer
             # (runtime §14.8.2 step 1) fires per-step. Default () → no gate.
-            hitl_placements=manifest_entry.hitl_placements,
+            # B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD (CP spec v1.49 §6.2) — fold
+            # the per-step `binding.hitl_placement` override onto the workflow
+            # tuple (union-by-position, tune-not-remove, monotone). None → verbatim.
+            hitl_placements=fold_step_hitl_placements(
+                manifest_entry.hitl_placements, binding.hitl_placement
+            ),
             # B-EFFECT-FENCE-DURABLE-AUTO — the RUN engine class (NOT a per-step
             # StepOverride.engine_class) so the tool dispatcher auto-fences durable runs.
             run_engine_class=manifest_entry.engine_class,
@@ -3195,6 +3202,22 @@ def _per_step_role_override(
     return override.agent_role if override is not None else None
 
 
+def _per_step_hitl_placement_override(
+    manifest_entry: WorkflowManifestEntry, step_id: object
+) -> HITLPlacement | None:
+    """The per-step `StepOverride.hitl_placement` for `step_id`, else `None` (v1.49).
+
+    The `_per_step_role_override` analogue for the per-step HITL placement override
+    (CP spec v1.49 §6.2 fold) — a lightweight read for the composition sites that
+    do NOT already resolve a full `StepEffectiveBinding` (the orchestrator's own
+    context). Where a `binding` is in hand, read `binding.hitl_placement` directly
+    (`resolve_step_binding` sets it to the same override value). `None` ⟹ no
+    override ⟹ `fold_step_hitl_placements` returns the workflow tuple verbatim.
+    """
+    override = manifest_entry.per_step_overrides.get(step_id)  # type: ignore[arg-type]
+    return override.hitl_placement if override is not None else None
+
+
 _DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS = 300.0
 """Wall-clock deadline on the fan-out barrier (C-CP-25 §25.11 bounded barriers;
 O-CP-1(c) impl-discretion). Bounds the PARENT's return: a branch stuck past this
@@ -3589,6 +3612,16 @@ def _execute_parallelization(
             fanout_parent,
             branch_index=branch_index,
             agent_role=binding.agent_role or _DEFAULT_PARALLELIZATION_AGENT_ROLE,
+        ).model_copy(
+            # B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD (CP spec v1.49 §6.2) — fold this
+            # worker's per-step `binding.hitl_placement` override onto the workflow
+            # tuple (keyed from manifest_entry, so no sibling/parent leak; the child
+            # inherits manifest_entry.hitl_placements from fanout_parent otherwise).
+            update={
+                "hitl_placements": fold_step_hitl_placements(
+                    manifest_entry.hitl_placements, binding.hitl_placement
+                )
+            }
         )
         writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=branch_index)
         # B-NONLINEAR-OVERRIDE-PROVENANCE — buffer the per-step override-application
@@ -4478,7 +4511,12 @@ def _execute_evaluator_optimizer(
             parent_action_id=f"workflow:{workflow_id}:step:{entry_index}",
             parent_gate_level=resolve_parent_gate_level(manifest_entry),
             # B-HITL-PLACEMENT-PER-STEP-PRODUCER — EVALUATOR_OPTIMIZER per-step.
-            hitl_placements=manifest_entry.hitl_placements,
+            # B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD (CP spec v1.49 §6.2) — fold
+            # the per-step `binding.hitl_placement` override onto the workflow
+            # tuple (union-by-position, tune-not-remove, monotone). None → verbatim.
+            hitl_placements=fold_step_hitl_placements(
+                manifest_entry.hitl_placements, binding.hitl_placement
+            ),
             # B-EFFECT-FENCE-DURABLE-AUTO — the RUN engine class (NOT a per-step
             # StepOverride.engine_class) so the tool dispatcher auto-fences durable runs.
             run_engine_class=manifest_entry.engine_class,
@@ -5096,7 +5134,15 @@ def _execute_orchestrator_workers(
         parent_gate_level=resolve_parent_gate_level(manifest_entry),
         # B-HITL-PLACEMENT-PER-STEP-PRODUCER — orchestrator step + workers
         # (workers inherit via compose_branch_child_context's model_copy).
-        hitl_placements=manifest_entry.hitl_placements,
+        # B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD (CP spec v1.49 §6.2) — fold the
+        # orchestrator step's OWN per-step placement override (binding not yet
+        # resolved here; use the read helper, mirroring agent_role at line below).
+        # Workers re-fold from manifest_entry.hitl_placements, so this orchestrator
+        # override does NOT leak to the fan-out children.
+        hitl_placements=fold_step_hitl_placements(
+            manifest_entry.hitl_placements,
+            _per_step_hitl_placement_override(manifest_entry, orchestrator_step.step_id),
+        ),
         # B-EFFECT-FENCE-DURABLE-AUTO — the RUN engine class (NOT a per-step
         # StepOverride.engine_class) so the tool dispatcher auto-fences durable runs.
         run_engine_class=manifest_entry.engine_class,
@@ -5233,7 +5279,17 @@ def _execute_orchestrator_workers(
         child = compose_branch_child_context(
             fanout_parent, branch_index=branch_index, agent_role=role
         ).model_copy(
-            update={"step_index": branch_index + 1, "child_resume_snapshot": _child_resume}
+            # B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD (CP spec v1.49 §6.2) — fold this
+            # worker's per-step `binding.hitl_placement` override onto the workflow
+            # tuple (keyed from manifest_entry, NOT the inherited fanout_parent — so
+            # the orchestrator's own placement override never leaks to a worker).
+            update={
+                "step_index": branch_index + 1,
+                "child_resume_snapshot": _child_resume,
+                "hitl_placements": fold_step_hitl_placements(
+                    manifest_entry.hitl_placements, binding.hitl_placement
+                ),
+            }
         )
         writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=branch_index)
         # B-NONLINEAR-OVERRIDE-PROVENANCE — buffer the worker's per-step override
@@ -6213,7 +6269,12 @@ def _execute_decentralized_handoff(
             parent_gate_level=resolve_parent_gate_level(manifest_entry),
             # B-HITL-PLACEMENT-PER-STEP-PRODUCER — hierarchical/handoff stage ctx
             # (stage_ctx inherits via compose_branch_child_context's model_copy).
-            hitl_placements=manifest_entry.hitl_placements,
+            # B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD (CP spec v1.49 §6.2) — fold
+            # this stage's per-step `binding.hitl_placement` override onto the
+            # workflow tuple (union-by-position, tune-not-remove, monotone).
+            hitl_placements=fold_step_hitl_placements(
+                manifest_entry.hitl_placements, binding.hitl_placement
+            ),
             # B-EFFECT-FENCE-DURABLE-AUTO — the RUN engine class (NOT a per-step
             # StepOverride.engine_class) so the tool dispatcher auto-fences durable runs.
             run_engine_class=manifest_entry.engine_class,

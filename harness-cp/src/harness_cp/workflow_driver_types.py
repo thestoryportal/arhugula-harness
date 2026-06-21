@@ -412,6 +412,61 @@ def compose_branch_child_context(
     )
 
 
+def fold_step_hitl_placements(
+    workflow_placements: tuple[HITLPlacement, ...],
+    override: HITLPlacement | None,
+) -> tuple[HITLPlacement, ...]:
+    """Fold a per-step ``StepOverride.hitl_placement`` onto the workflow tuple.
+
+    C-CP-06 §6.2 (the per-step ``hitl_placement`` override fold, v1.49). The
+    singular per-step override (``StepEffectiveBinding.hitl_placement``,
+    ``HITLPlacement | None``) composes with the workflow-level
+    ``WorkflowManifestEntry.hitl_placements`` tuple (C-CP-17 §17.3) **ADD-only**:
+
+    - ``None`` ⟹ no per-step override ⟹ the workflow tuple **verbatim**
+      (byte-identical to the v1.41 producer-only arc).
+    - The override's ``position`` is **absent** from the workflow tuple ⟹ the
+      override is **appended** (ADD a gate position at this step — strictly
+      adds gating that did not exist).
+    - The override's ``position`` is **already present** ⟹ the **workflow
+      placement WINS** (the override is a no-op for that position) — the
+      per-step override cannot REPLACE or modify an existing workflow placement.
+
+    **Genuinely monotone — overrides only TIGHTEN, never loosen.** ADD-only is
+    monotone at BOTH levels: it can neither remove a workflow gate position NOR
+    weaken an existing one. This matters because ``HITLPlacement`` carries
+    ``tool_filter`` ("limits which tools trigger the gate"), ``cascade_policy``,
+    and ``timeout`` — so REPLACING a same-position placement could *loosen* the
+    §17.1 "all cells" safety floor at the attribute level (e.g. a
+    ``tool_filter`` narrowing leaves every other tool ungated at that step)
+    while the position stays present. The singular type forecloses *position*
+    removal, but NOT *attribute* loosening on a collision — so a replace/tune
+    semantic is NOT unconditionally monotone and is therefore EXCLUDED here.
+    Per-step tune/replace of an existing position (which can reduce coverage) is
+    the separate operator-gated arc ``B-HITL-PLACEMENT-PER-STEP-LOOSEN`` (a
+    committed-invariant relaxation — the operator's call per the v1.38 precedent).
+    The ADD-only fold is the placement-set analogue of the §19.1
+    ``max()``-over-rank monotone gate-level posture (overrides only TIGHTEN); it
+    never INTRODUCES a duplicate ``position`` (the override never adds a second
+    placement for a position the workflow already declares). It does NOT
+    de-duplicate a workflow that itself declares two same-``position`` placements
+    (a workflow-validation concern, out of scope here).
+
+    Key from ``manifest_entry.hitl_placements`` (the workflow base) at each call
+    site so a per-step override on one cell never leaks to a sibling cell.
+    """
+    if override is None:
+        return workflow_placements
+    if any(p.position == override.position for p in workflow_placements):
+        # Same-position collision: the workflow placement WINS (the override is a
+        # no-op). A replace/tune could loosen attributes (tool_filter / timeout /
+        # cascade_policy), so it is the operator-gated B-HITL-PLACEMENT-PER-STEP-
+        # LOOSEN arc — NOT this monotone ADD-only fold.
+        return workflow_placements
+    # ADD: a new position is appended (strictly adds gating).
+    return (*workflow_placements, override)
+
+
 def _require_branch(branch_context: StepExecutionContext) -> int:
     """Return the branch ``branch_index``, rejecting a linear (non-branch) context.
 
