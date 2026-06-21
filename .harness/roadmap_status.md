@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `808be39d0ef4` |
-| `last_refreshed` | 2026-06-21T01:03:04+00:00 |
-| `git_head` | `18f6e553` — `.mcp.json` dribbble design-reference MCP registered (chore, 73e5562 rebased onto the post-#673 main); the substantive prior tip is #673 schema-backed arc-ledger dashboard overhaul. Recent transits in the Drift detection log below. Lags HEAD by one commit (the §12.2.1 terminating-refresh fixed point). |
+| `workspace_state_hash` | `930732c82a13` |
+| `last_refreshed` | 2026-06-21T01:20:50+00:00 |
+| `git_head` | `580bd390` — #674 `ci: full-clone the Codex context-guard job (fetch-depth: 0)` — refresh-tip pushes to main no longer HARD-fail `ROADMAP_DASHBOARD_DRIFT` (the guard's shallow CI clone made `_lag_expected` list the whole tree instead of a refresh's 2-file diff). Recent transits in the Drift detection log below. Lags HEAD by one commit (the §12.2.1 terminating-refresh fixed point). |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 81 |
 
@@ -54,11 +54,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #674 | 2026-06-20 | **ci: full-clone the Codex context-guard job (fetch-depth: 0).** The guard's CI checkout was shallow (depth-1), so `_lag_expected()`'s `git show --name-only HEAD` listed the entire 1859-file tree instead of a refresh's 2-file diff → every `ops: roadmap status refresh ` push to main HARD-failed `ROADMAP_DASHBOARD_DRIFT` (the §12.2.1 lag the session-start hook already tolerates; confirmed across #672/#673 + follow-on refreshes). Full clone → `git show HEAD` diffs the real parent → the 2-file set → lag recognized → guard passes; real (non-refresh) drift still HARD-fails (title check unchanged). Reproduced locally: full→True / `git clone --depth 1`→False. |
 | PR #673 | 2026-06-20 | **feat(dashboard): schema-backed arc-ledger overhaul (Phase A+A2+B).** The R-FS-1 arc+unit map is now driven by the structured single source `.harness/arc-ledger.yaml` (derived by `tools/arc_ledger.py`; `--check` is a blocking CI tally gate), replacing the hand-maintained markdown the dashboard parsed (which drifted = R-IF-114). `generate.py` renders 11 frozen arcs (with as-built units) + standalone (closed/gated/resolved) + **14 registered-forward arcs as decompose-at-open cards**; a no-PyYAML system-Python-3.9 fallback keeps the Codex dashboard guard's byte-compare green. `.harness/r-fs-1-arc-and-unit-map.md` (376 lines) retired to a pointer stub; `roadmap_status.md` pruned; `CLAUDE.md §12.2` + the dashboard README repointed at the YAML. Dashboard tooling — NOT an R-FS-1 build arc; the forward `B-*` register is unchanged (next = `B-L2-FALLBACK-COMPOSITION`). |
 | PR #671 | 2026-06-20 | **R-FS-1 `B-INTERSTEP-PERRUN-ISOLATION`** (runtime v1.64 §14.21.5 inv 7 CLOSED) — per-run ContextVar isolation of the inter-step channel + cost accumulator on the daemon-reused `HarnessContext` singleton; removes B-INTERSTEP's single-flight lock + closes the timeout-zombie residual. The 15th standalone `B-*`. NO operator gate; advisor + Codex. Narrative: PR body + spine ledger. |
 | PR #669 | 2026-06-19 | **R-FS-1 `B-L2-EMBEDDING-ACTIVATION`** (impl-to-cleared C-CP-02 §2.2) — opt-in `routing_activation`: a manifest-miss DECLARATIVE decline → EMBEDDING → L3; production-dormant behind the 2nd-provider gate. The 14th + last originally-enumerated standalone `B-*`; spawned 2 forward arcs. NO operator gate. |
 | PR #667 | 2026-06-19 | **R-FS-1 `B-LAYER-BUDGET-OVERRIDE`** (CP v1.43 §2.5.3) — the L3 router timeout uses the §3.1 OVERRIDE-RESOLVED effective budget (workload_class/persona_tier), not the flat field. Capability-built + production-dormant. NO operator gate. |
-| PR #665 | 2026-06-19 | **R-FS-1 `B-ENGINE-OUTPUT-REPLAY`** (runtime v1.63 §14.23 C-RT-32) — output-carrying event-history store (RESERVE-before-COMMIT); resume rehydrates the inter-step channel from the stored prefix. LINEAR EVENT_SOURCED_REPLAY only. NO operator gate. |
 ---
 
 ---
