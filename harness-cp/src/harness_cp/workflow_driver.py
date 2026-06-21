@@ -80,6 +80,7 @@ from harness_cp.pause_resume_protocol_types import (
     FanOutResumeState,
     MaterialDiffPolicy,
     PauseSnapshot,
+    PeerFanOutResumeState,
     WorkflowPauseReason,
 )
 from harness_cp.per_role_catalog import derive_agent_role
@@ -1617,6 +1618,10 @@ def _execute_workflow_body(
             default_model_binding=default_model_binding,
             step_dispatchers=step_dispatchers,
             run_idempotency_key=run_idempotency_key,
+            # B-FANOUT-PAUSE-PARALLELIZATION — peer fan-out resume re-entry. The
+            # snapshot's `peer_fan_out_resume` drives the skip-terminal + re-dispatch
+            # path; None on a normal first run.
+            resume_snapshot=resume_snapshot,
         )
     if strategy is _DriverStrategyStatus.EVALUATOR_OPTIMIZER:
         return _execute_evaluator_optimizer(
@@ -3327,6 +3332,7 @@ def _execute_parallelization(
     default_model_binding: ModelBinding,
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
+    resume_snapshot: PauseSnapshot | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `PARALLELIZATION` fan-out-barrier-aggregate strategy (U-CP-86).
 
@@ -3338,11 +3344,20 @@ def _execute_parallelization(
 
     `cascade_policy` consumption (§25.15.1, D4 multiplicative tunable) is
     materialized here (R-FS-1 `B-PARALLELIZATION-CASCADE`): a branch failure
-    resolves SOLO→proceed (harvest survivors → PARTIAL) / TEAM→pause (FAILED +
-    `...-pause-resume-not-yet-materialized`, the resumable pause is the follow-on
-    `B-FANOUT-PAUSE-PARALLELIZATION`) / MTC→cascade-cancel (cancel siblings →
-    FAILED). The U-CP-86 build was happy-path-only ("U-CP-85 non-dep"); this is
-    impl-to-cleared-spec (§25.15 + §25.18 anticipate it).
+    resolves SOLO→proceed (harvest survivors → PARTIAL) / TEAM→pause / MTC→
+    cascade-cancel (cancel siblings → FAILED). The U-CP-86 build was happy-path-only
+    ("U-CP-85 non-dep"); this is impl-to-cleared-spec (§25.15 + §25.18 anticipate it).
+
+    `pause → PAUSED` resume (R-FS-1 `B-FANOUT-PAUSE-PARALLELIZATION`, CP spec v1.44
+    §2): a TEAM-tier branch failure under `pause` (with a bound `pause_resume_protocol`)
+    captures a `PeerFanOutResumeState`-bearing `PauseSnapshot` + returns PAUSED;
+    `api.resume` re-enters here with `resume_snapshot`, skips the terminal branches
+    (recovering their outputs from the snapshot, §25.15.2 obligation 7), and
+    re-dispatches the not-yet-dispatched ones. This is the `_execute_orchestrator_
+    workers` (U-CP-88 / B-FANOUT-PAUSE) shape applied PARALLELIZATION-shaped (NO
+    orchestrator `steps[0]`; every step is a peer branch, indexed over `steps`). When
+    no protocol is bound, `pause` fails HONESTLY (`...-pause-resume-protocol-not-bound`)
+    — never a false-resumable PAUSED.
 
     Bypassed linear-only paths (documented scoped-not-forgotten): prefix-replay
     / explicit-pause resume detection, mid-loop drain checks, per-step
@@ -3350,6 +3365,18 @@ def _execute_parallelization(
     here — they compose at later strategy units (U-CP-88 ORCHESTRATOR_WORKERS).
     """
     workflow_id = manifest_entry.workflow_id
+
+    # B-FANOUT-PAUSE-PARALLELIZATION — peer fan-out resume reconstruction state
+    # (None on a normal first run). Mirrors `_execute_orchestrator_workers` but
+    # PARALLELIZATION-shaped: NO orchestrator `steps[0]`, so the recovered set is
+    # keyed over `steps` ordinals directly (every step is a peer branch).
+    _peer_resume = resume_snapshot.peer_fan_out_resume if resume_snapshot is not None else None
+    _is_resume = _peer_resume is not None
+    # branch_index -> recovered terminal disposition (carried forward across
+    # repeated resumes so a re-pause snapshot unions prior + this-round terminals).
+    _recovered_terminal: dict[int, FanOutBranchResumeState] = (
+        {b.branch_index: b for b in _peer_resume.branches} if _peer_resume is not None else {}
+    )
 
     # Empty step sequence → trivially SUCCESS with an empty aggregate (no
     # fan-out; mirrors the linear path's empty-loop SUCCESS).
@@ -3363,6 +3390,47 @@ def _execute_parallelization(
             final_state={"branch_outputs": {}, "aggregate": {}},
             fail_class=None,
         ), 0
+
+    # B-FANOUT-PAUSE-PARALLELIZATION — material-diff guard on resume: the re-supplied
+    # workflow's branch count MUST match the count captured at pause, and each
+    # recovered branch ordinal MUST still resolve to the same `step_id` (identity,
+    # not just count) — else the recovered outputs no longer map to these steps (a
+    # changed body) → fail closed rather than re-dispatch / mis-attribute a recovered
+    # output. NO orchestrator-identity check (PARALLELIZATION has no `steps[0]`).
+    if _peer_resume is not None:
+
+        def _resume_body_mismatch() -> str | None:
+            if len(steps) != _peer_resume.branch_count:
+                return (
+                    f"branch-count-mismatch: snapshot captured "
+                    f"{_peer_resume.branch_count} branches, resume supplied {len(steps)}"
+                )
+            seen: set[int] = set()
+            for b in _peer_resume.branches:
+                if not (0 <= b.branch_index < len(steps)):
+                    return f"branch-index-out-of-range: {b.branch_index} ∉ [0, {len(steps)})"
+                if b.branch_index in seen:
+                    return f"duplicate-branch-index: {b.branch_index}"
+                seen.add(b.branch_index)
+                if str(steps[b.branch_index].step_id) != b.step_id:
+                    return (
+                        f"branch-identity-mismatch at {b.branch_index}: snapshot "
+                        f"step_id={b.step_id!r}, resume step_id="
+                        f"{str(steps[b.branch_index].step_id)!r}"
+                    )
+            return None
+
+        _mismatch = _resume_body_mismatch()
+        if _mismatch is not None:
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=None,
+                partial_state=None,
+                final_state=None,
+                fail_class=f"parallelization-resume-body-mismatch: {_mismatch}",
+            ), 0
 
     # One fan-out parent context (the fan-out point); each branch descends a
     # child via compose_branch_child_context (U-CP-81). The MVP-default seed
@@ -3403,6 +3471,13 @@ def _execute_parallelization(
         tuple[int, WorkflowStep, StepExecutionContext, BufferingLedgerWriter, StepEffectiveBinding]
     ] = []
     for branch_index, step in enumerate(steps):
+        # B-FANOUT-PAUSE-PARALLELIZATION — on resume, a branch that reached a terminal
+        # disposition before the prior `pause` halt is SKIPPED (§25.15.2 obligation 7:
+        # a terminal branch MUST NOT be re-dispatched — its effect may have landed).
+        # Its recovered output is folded into the aggregate (the seed loop below).
+        # Only the not-yet-dispatched (left-re-dispatchable) branches fan out again.
+        if branch_index in _recovered_terminal:
+            continue
         # Resolve the per-step binding FIRST so a per-step ROLE override (CP spec
         # v1.38 §6.1, B4 Slice 4) can take precedence over the parallelization
         # default role when composing the child (precedence per-step > default).
@@ -3461,8 +3536,13 @@ def _execute_parallelization(
         ), 0
 
     # § 25.3.2 — Emit workflow.start (the fan-out begins). Single-threaded on the
-    # driver thread, BEFORE the concurrent branches spawn.
-    ctx.lifecycle_emitter.emit(WorkflowEventClass.WORKFLOW_START)
+    # driver thread, BEFORE the concurrent branches spawn. B-FANOUT-PAUSE-
+    # PARALLELIZATION — on a resume the terminal branches already ran in the original
+    # envelope, so this re-entry emits RESUMPTION (mirrors `_execute_orchestrator_
+    # workers`), not a second WORKFLOW_START.
+    ctx.lifecycle_emitter.emit(
+        WorkflowEventClass.RESUMPTION if _is_resume else WorkflowEventClass.WORKFLOW_START
+    )
 
     # B-PARALLELIZATION-CASCADE (R-FS-1) — the on-branch-failure cascade reaction
     # (§25.15.1), resolved from the manifest's (workload_class, engine_class,
@@ -3485,11 +3565,26 @@ def _execute_parallelization(
     ).cascade_policy
 
     # branch_index -> (step_id, output) for a cleanly-completed branch — the
-    # aggregate source. (No `terminal_dispositions` map: unlike ORCHESTRATOR_WORKERS
-    # this strategy captures no FanOutResumeState — the resumable-pause follow-on
-    # `B-FANOUT-PAUSE-PARALLELIZATION` adds it; the cascade-cancel not-yet-dispatched
-    # scan reads the writers directly via `_writer_has_branch_disposition`.)
+    # aggregate source. The cascade-cancel not-yet-dispatched scan reads the writers
+    # directly via `_writer_has_branch_disposition`.
     collected: dict[int, tuple[str, Mapping[str, Any]]] = {}
+    # B-FANOUT-PAUSE-PARALLELIZATION — branch_index -> terminal disposition
+    # ("completed" / "timed_out") for every branch that reached a terminal boundary.
+    # Written from the same loop-thread sites as `collected` (single-threaded → safe);
+    # read AFTER the barrier to build a `pause` snapshot's `PeerFanOutResumeState.
+    # branches` + the resumed-terminal degraded check. Only consumed on the `pause`
+    # path (harmlessly populated for proceed / cascade-cancel).
+    terminal_dispositions: dict[int, str] = {}
+
+    # B-FANOUT-PAUSE-PARALLELIZATION — seed the recovered terminal branches (from the
+    # resume snapshot) into `collected` + `terminal_dispositions` so (a) their outputs
+    # fold into the resumed aggregate and (b) a RE-pause snapshot unions the
+    # already-terminal set with this round's newly-terminal branches. `step_id` is
+    # re-derived from the re-supplied `steps` (it was not carried in the snapshot).
+    for _bi, _branch in _recovered_terminal.items():
+        terminal_dispositions[_bi] = _branch.terminal_status
+        if _branch.output is not None:
+            collected[_bi] = (str(steps[_bi].step_id), _branch.output)
 
     def _record_clean(
         branch_index: int,
@@ -3520,12 +3615,14 @@ def _execute_parallelization(
             procedural_tier_snapshot_ref=snapshot_ref,
         )
         collected[branch_index] = (str(step.step_id), output)
+        terminal_dispositions[branch_index] = "completed"  # B-FANOUT-PAUSE-PARALLELIZATION
 
     def _finish(
         status: RunStatus,
         *,
         fail_class: str | None,
         salvage: bool,
+        pause_snapshot: PauseSnapshot | None = None,
     ) -> tuple[RunResult, int]:
         # Drain the branch buffers (branch-index order) + emit one STEP_BOUNDARY
         # per persisted-step writer, then fold the collected outputs into one
@@ -3550,6 +3647,9 @@ def _execute_parallelization(
             partial_state=aggregate if (salvage and status is not RunStatus.SUCCESS) else None,
             final_state=aggregate if status is RunStatus.SUCCESS else None,
             fail_class=fail_class,
+            # B-FANOUT-PAUSE-PARALLELIZATION — PAUSED carries the salvaged aggregate
+            # as partial_state (above) + the resumable snapshot.
+            pause_snapshot=pause_snapshot,
         ), steps_executed
 
     deadline = _DEFAULT_FANOUT_BARRIER_DEADLINE_SECONDS
@@ -3693,6 +3793,7 @@ def _execute_parallelization(
                 timestamp=fanout_timestamp,
                 procedural_tier_snapshot_ref=snapshot_ref,
             )
+            terminal_dispositions[branch_index] = terminal  # B-FANOUT-PAUSE-PARALLELIZATION
             # A sibling that was IN-FLIGHT when the barrier cancelled this branch
             # ran to completion under the shield (`terminal == "completed"` ⟹
             # `inflight.done()` and not cancelled). Collect its successful OUTPUT
@@ -3723,6 +3824,11 @@ def _execute_parallelization(
                 timestamp=fanout_timestamp,
                 procedural_tier_snapshot_ref=snapshot_ref,
             )
+            # B-FANOUT-PAUSE-PARALLELIZATION — this failed branch is terminal
+            # (`completed`, dispatch-boundary, NO collected output) so a `pause`
+            # snapshot records it + obligation 7 does NOT re-dispatch its landed
+            # effect on resume.
+            terminal_dispositions[branch_index] = "completed"
             raise
         _record_clean(branch_index, step, child, writer, output)
 
@@ -3770,23 +3876,72 @@ def _execute_parallelization(
             )
         return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
 
-    # pause (§25.15.1 `pause → PAUSED`) — resumable PARALLELIZATION pause is the
-    # registered follow-on `B-FANOUT-PAUSE-PARALLELIZATION`. Until it lands, a
-    # branch failure under `pause` fails HONESTLY: returning PAUSED would advertise
-    # a resumability `api.resume` cannot honor for PARALLELIZATION (no
-    # FanOutResumeState capture / re-entry wired) → the false-`PAUSED` silent-
-    # degradation mode. The deadline-strike case (a STUCK fan-out, no branch
-    # raised) is FAILED — no clean pause boundary.
+    # pause (§25.15.1 `pause → PAUSED`) — resumable PARALLELIZATION pause
+    # (B-FANOUT-PAUSE-PARALLELIZATION, R-FS-1; CP spec v1.44 §2). On a branch failure:
+    # in-flight siblings finished (shielded, recorded their terminal); not-yet-
+    # dispatched siblings were TaskGroup-cancelled and are LEFT RE-DISPATCHABLE — the
+    # cascade-cancel `cancelled`-terminal scan above is DELIBERATELY NOT run here (the
+    # §25.15.1 pause semantic: "in-flight finish; not-yet-dispatched left
+    # re-dispatchable"). We capture the per-branch terminal dispositions + the
+    # completed branches' OUTPUTS (which the ledger does NOT carry) into a
+    # `PeerFanOutResumeState`-bearing, hash-integrity-checked `PauseSnapshot`, return
+    # PAUSED, and `api.resume` re-enters this strategy to skip terminal branches +
+    # re-dispatch the rest (obligation 7). The deadline-strike case (a STUCK fan-out,
+    # no branch raised) stays FAILED — there is no clean pause boundary to resume from.
     if deadline_struck:
         return _finish(
             RunStatus.FAILED, fail_class="parallelization-barrier-deadline", salvage=False
         )
     if branch_failed:
-        return _finish(
-            RunStatus.FAILED,
-            fail_class="parallelization-pause-resume-not-yet-materialized",
-            salvage=True,
+        protocol = getattr(ctx, "pause_resume_protocol", None)
+        if protocol is None:
+            # No pause/resume opt-in bound → the snapshot cannot be captured, so a
+            # PAUSED would advertise a resumability the harness cannot honor (the
+            # FALSE-`PAUSED` silent-degradation mode). Fail HONESTLY — detect-then-
+            # refuse, mirroring `api.resume`'s ResumeProtocolNotBoundError. Completed
+            # / in-flight ledger entries + the salvaged partial set still persist.
+            return _finish(
+                RunStatus.FAILED,
+                fail_class="parallelization-pause-resume-protocol-not-bound",
+                salvage=True,
+            )
+        # Build the resume state from the post-barrier terminal dispositions +
+        # collected outputs — both already MERGED with any recovered-from-a-prior-
+        # resume terminals (the seed loop above), so a RE-pause snapshot unions the
+        # prior + this-round terminal sets. Absent branch ordinals (the cancelled
+        # not-yet-dispatched ones) are left re-dispatchable by omission. `step_id`
+        # is captured per branch so resume validates body identity.
+        peer_fan_out_resume = PeerFanOutResumeState(
+            branches=tuple(
+                FanOutBranchResumeState(
+                    branch_index=_bi,
+                    step_id=str(steps[_bi].step_id),
+                    terminal_status=_status,
+                    output=(collected[_bi][1] if _bi in collected else None),
+                )
+                for _bi, _status in sorted(terminal_dispositions.items())
+            ),
+            branch_count=len(steps),
         )
+        snapshot = _run_protocol_method_sync(
+            cast(PauseResumeProtocol, protocol).capture_pause_snapshot(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                step_index=0,
+                pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+                peer_fan_out_resume=peer_fan_out_resume,
+            )
+        )
+        return _finish(RunStatus.PAUSED, fail_class=None, salvage=True, pause_snapshot=snapshot)
+    # No branch failed THIS round. But a RECOVERED terminal branch may have failed in
+    # the original run (a resume tail) — a terminal branch with no collected output is
+    # a failed/timed-out branch (`_record_clean` always populates `collected` for a
+    # clean branch). Returning a bare SUCCESS there would SILENTLY drop that failure
+    # (the silent-degradation class this arc forecloses) — instead mirror `proceed`:
+    # degraded → PARTIAL + salvage. Non-resume clean runs have no failed terminal →
+    # not degraded → SUCCESS (no regression).
+    if any(_bi not in collected for _bi in terminal_dispositions):
+        return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
     return _finish(RunStatus.SUCCESS, fail_class=None, salvage=False)
 
 

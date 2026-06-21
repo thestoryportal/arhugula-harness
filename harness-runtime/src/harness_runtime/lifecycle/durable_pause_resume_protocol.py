@@ -34,6 +34,7 @@ from harness_cp.pause_resume_protocol import PauseContextReader, PauseResumeProt
 from harness_cp.pause_resume_protocol_types import (
     FanOutResumeState,
     PauseSnapshot,
+    PeerFanOutResumeState,
     WorkflowPauseReason,
 )
 
@@ -78,6 +79,7 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
         pause_reason: WorkflowPauseReason,
         *,
         fan_out_resume: FanOutResumeState | None = None,
+        peer_fan_out_resume: PeerFanOutResumeState | None = None,
     ) -> PauseSnapshot:
         """Compose the snapshot via the parent, then durably persist it.
 
@@ -85,12 +87,19 @@ class DurablePauseResumeProtocol(PauseResumeProtocol):
         after capture (but before the caller serializes the ``RunResult``) still
         leaves a resumable record on disk for ``api.resume(resume_handle=...)``.
 
-        ``fan_out_resume`` (B-FANOUT-PAUSE) is forwarded to the parent so a durable
-        `cascade_policy=pause` fan-out snapshot carries (and journals) its resume
-        state — without forwarding, the durable resume path would silently drop it.
+        ``fan_out_resume`` (B-FANOUT-PAUSE, ORCHESTRATOR_WORKERS) and
+        ``peer_fan_out_resume`` (B-FANOUT-PAUSE-PARALLELIZATION) are forwarded to the
+        parent so a durable `cascade_policy=pause` fan-out snapshot carries (and
+        journals) its resume state — without forwarding, the durable resume path
+        would silently drop it.
         """
         snapshot = await super().capture_pause_snapshot(
-            workflow_id, run_id, step_index, pause_reason, fan_out_resume=fan_out_resume
+            workflow_id,
+            run_id,
+            step_index,
+            pause_reason,
+            fan_out_resume=fan_out_resume,
+            peer_fan_out_resume=peer_fan_out_resume,
         )
         self._store.capture(snapshot)
         return snapshot

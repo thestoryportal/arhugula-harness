@@ -110,15 +110,20 @@ class FanOutBranchResumeState(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     branch_index: int
-    """The fan-out branch ordinal (0-based; worker `steps[1:]` position)."""
+    """The fan-out branch ordinal (0-based). For `ORCHESTRATOR_WORKERS` this is the
+    worker `steps[1:]` position; for `PARALLELIZATION` (B-FANOUT-PAUSE-PARALLELIZATION,
+    a peer fan-out with NO orchestrator `steps[0]`) it is the `steps` position
+    directly."""
 
     step_id: str
     """The branch's `WorkflowStep.step_id` AT CAPTURE TIME. Resume validates the
-    re-supplied `worker_steps[branch_index].step_id` against this (identity, not
-    just `worker_count`) so a same-count body change (a worker rename / reorder)
+    re-supplied branch step's `step_id` against this (identity, not just the
+    declared branch count) so a same-count body change (a branch rename / reorder)
     fails closed rather than silently attributing recovered output to the wrong
     step. (Full anchor-reachability material-diff is the deferred U-CP-22 arc;
-    this is the cheap positional-identity guard.)"""
+    this is the cheap positional-identity guard.) Strategy-neutral: the orchestrator
+    fan-out re-derives it from `worker_steps[branch_index]`, the peer fan-out from
+    `steps[branch_index]`."""
 
     terminal_status: str
     """The persisted branch disposition: `completed` | `timed_out` (the
@@ -180,6 +185,40 @@ class FanOutResumeState(BaseModel):
     `worker_count` means the workflow body changed."""
 
 
+class PeerFanOutResumeState(BaseModel):
+    """Peer fan-out (PARALLELIZATION) resume reconstruction state.
+
+    B-FANOUT-PAUSE-PARALLELIZATION (R-FS-1) — the `PARALLELIZATION`-shaped sibling
+    of `FanOutResumeState`. PARALLELIZATION is a PEER fan-out: every declared
+    `WorkflowStep` is a branch (`branch_index = steps` ordinal), with NO orchestrator
+    `steps[0]`. So this carrier has NO `orchestrator_output` / `orchestrator_step_id`
+    (the illegal-state-unrepresentable choice: a peer fan-out has no orchestrator,
+    so the orchestrator-bearing `FanOutResumeState` is NOT reused — its required
+    orchestrator fields would be vacuous here, and loosening them to optional would
+    make `orchestrator_output=None` representable for an ORCHESTRATOR_WORKERS snapshot,
+    an illegal state for that strategy). `branches` + `branch_count` are the peer
+    analogues of `FanOutResumeState.branches` + `worker_count`.
+
+    Carried by `PauseSnapshot.peer_fan_out_resume` (the second additive, defaulted
+    field — never co-set with `fan_out_resume`; the strategy that captured the pause
+    selects which is populated). Materializes the §25.15.1 `pause → PAUSED` row for
+    PARALLELIZATION + the §25.15.2 obligation-7 ledger-based resume reconstruction,
+    exactly as `FanOutResumeState` does for ORCHESTRATOR_WORKERS (CP spec v1.44 §1).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    branches: tuple[FanOutBranchResumeState, ...]
+    """The terminal branches (completed / timed_out) at pause time. A branch ordinal
+    absent from this tuple is left re-dispatchable (the §25.15.1 pause semantic)."""
+
+    branch_count: int
+    """The total declared branch count (`len(steps)`) at pause time — bounds the
+    re-dispatchable set (any ordinal in `range(branch_count)` not present in
+    `branches` is re-dispatched). A material-diff guard at resume: a different
+    `branch_count` means the workflow body changed."""
+
+
 class PauseSnapshot(BaseModel):
     """8-field pause-snapshot envelope (CP spec v1.11 §26.2).
 
@@ -232,6 +271,17 @@ class PauseSnapshot(BaseModel):
     silent-tamper gap), and `api.resume` re-enters the fan-out strategy with it:
     terminal branches are skipped (outputs recovered), absent branch ordinals
     re-dispatched (§25.15.2 obligation 7)."""
+
+    peer_fan_out_resume: PeerFanOutResumeState | None = None
+    """B-FANOUT-PAUSE-PARALLELIZATION (R-FS-1) — the `PARALLELIZATION` (peer fan-out)
+    analogue of `fan_out_resume`, present ONLY when this snapshot captures a
+    `PARALLELIZATION` `cascade_policy=pause` halt (`None` otherwise — additive,
+    default-None, so every existing snapshot is byte-unchanged). NEVER co-set with
+    `fan_out_resume`: the strategy that captured the pause populates exactly one (an
+    ORCHESTRATOR_WORKERS pause sets `fan_out_resume`; a PARALLELIZATION pause sets
+    this). COVERED by `_compute_snapshot_hash` when present (same integrity contract
+    as `fan_out_resume`); `api.resume` re-enters `_execute_parallelization` with it
+    (terminal branches skipped, outputs recovered; absent ordinals re-dispatched)."""
 
 
 class ResumeResult(BaseModel):

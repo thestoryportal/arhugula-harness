@@ -482,12 +482,19 @@ def test_parallelization_preserves_all_branch_outputs() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_parallelization_pause_branch_failure_fails_honestly_not_yet_materialized() -> None:
-    """B-PARALLELIZATION-CASCADE — under `pause` (TEAM_BINDING) a branch failure
-    fails HONESTLY: FAILED + `parallelization-pause-resume-not-yet-materialized`
-    (a false-resumable PAUSED is foreclosed — the resumable PARALLELIZATION pause
-    is the registered follow-on `B-FANOUT-PAUSE-PARALLELIZATION`). The completed
-    branches' entries STILL persist; the salvaged survivors are `partial_state`."""
+def test_parallelization_pause_branch_failure_fails_honestly_when_no_protocol_bound() -> None:
+    """B-FANOUT-PAUSE-PARALLELIZATION — under `pause` (TEAM_BINDING) a branch failure
+    with NO `pause_resume_protocol` bound fails HONESTLY: FAILED +
+    `parallelization-pause-resume-protocol-not-bound` (a false-resumable PAUSED is
+    foreclosed — returning PAUSED without a snapshot would advertise a resumability
+    `api.resume` cannot honor). The resumable PAUSED path (protocol bound) is covered
+    in `test_workflow_driver_parallelization_pause.py`. The completed branches'
+    entries STILL persist; the salvaged survivors are `partial_state`.
+
+    Supersedes the interim `...-pause-resume-not-yet-materialized` FAILED: the
+    follow-on `B-FANOUT-PAUSE-PARALLELIZATION` materialized §25.15.1 `pause → PAUSED`,
+    so the only honest-FAILED remaining on the `pause` path is the protocol-not-bound
+    detect-then-refuse (mirrors `_execute_orchestrator_workers`)."""
     ledger = _RecordingLedger()
     # Deterministic: branch 1 raises only AFTER branches 0 + 2 have completed (so
     # they have buffered) — not the timing-flaky plain `_VariedDispatcher(fail_index=1)`,
@@ -501,7 +508,7 @@ def test_parallelization_pause_branch_failure_fails_honestly_not_yet_materialize
     )
     assert result.status is RunStatus.FAILED
     assert result.fail_class is not None
-    assert "parallelization-pause-resume-not-yet-materialized" in result.fail_class
+    assert "parallelization-pause-resume-protocol-not-bound" in result.fail_class
     # No false-PAUSED leaks (the silent-degradation mode this arc forecloses).
     assert result.status is not RunStatus.PAUSED
     # All three branches persist now: branch 1 ran-and-errored → records its step
