@@ -103,6 +103,17 @@ overlay-check:
 overlay-query *ARGS:
     uv run python tools/semantic_overlay/overlay.py query {{ARGS}}
 
+# ─── closure gate (R-IF-115) — the "harness coding fully closed" predicate ──
+# Consolidates R-FS-1 + R-CL-Q1..Q4/D1/C1 must_pass into one report.
+# Spec: .harness/audit/Closure_Gate_v1.md. Delegates to arc_ledger / overlay /
+# substitution_ledger / roadmap — no new source of truth.
+closure-gate:
+    uv run python tools/closure_gate.py
+
+# Exit 1 if any AUTOMATABLE Tier-1 predicate fails (manual ones reported only).
+closure-gate-check:
+    uv run python tools/closure_gate.py --check
+
 # ─── operator-facing CLI smoke ─────────────────────────────────────────────
 
 # One-shot run of a workflow manifest. Example: just run examples/minimal.toml

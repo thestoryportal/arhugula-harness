@@ -1,0 +1,50 @@
+[audit]
+name = "remaining-build-audit"
+goal = "Surface all remaining arcs and units that need to be built"
+phase = "7a"
+mode = "spec-to-implementation-diff"
+
+[scope]
+include = [
+  "CLAUDE.md",
+  "Project_Roadmap_v1.md",
+  "Phase_7_Workspace_Bootstrap_Runbook_v1.md",
+  "Phase_7_Session_1_Entry_Directive_v1.md",
+  "Phase_7_Class_3_Tension_001_Git_Tier_Sub_Role_Count.md",
+  "Sub_Agent_Boundary_Specification_v1.md",
+  "design-substrate/**",
+  ".harness/**",
+  "pyproject.toml",
+  "uv.lock",
+  "harness.toml.example",
+  "harness-core/**",
+  "harness-is/**",
+  "harness-as/**",
+  "harness-cp/**",
+  "harness-od/**",
+  "harness-cxa/**"
+]
+
+exclude = [
+  ".git/**",
+  ".venv/**",
+  "**/__pycache__/**",
+  "**/.mypy_cache/**",
+  "**/.pytest_cache/**"
+]
+
+[checks]
+spec_to_impl = true
+stub_detection = true
+todo_detection = true
+substitution_detection = true
+test_coverage_presence = true
+docs_presence = true
+config_surface_presence = true
+cross_axis_wiring = true
+mcp_boundary_completeness = true
+governance_surface_completeness = true
+
+[deliverables]
+report = ".harness/audit/Remaining_Build_Audit_Report.md"
+register = ".harness/audit/Remaining_Build_Register.csv"

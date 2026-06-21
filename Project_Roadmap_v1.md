@@ -382,6 +382,39 @@ R-IF-114:
     (brittle). Known-red LOCALLY until resolved (not blocking; not in CI). Decorrelated review (advisor) at
     the post-#661 refresh confirmed register-don't-bury + don't-silently-wire-CI.
 
+R-IF-115:
+  title: Remaining-build audit surface + closure gate — fold into the loop
+  surface: VII
+  status: ACTIVE   # authored 2026-06-20 (this arc); landed in working tree, pending commit/merge. NOT the frontier (R-FS-1 is); an infra-integration lane.
+  depends_on: []
+  blocks: []
+  posture: mode-agnostic
+  scope: { files: [.harness/audit/**, tools/semantic_overlay/overlay.py, Project_Roadmap_v1.md], contracts: [], cross_axis: no }
+  skills: { primary: null, secondary: [harness-adversarial-reviewer] }
+  advisor_required: yes
+  council_required: no
+  verification: { shape: none, must_pass: ["audit report + register (48 rows) + Closure_Gate_v1.md authored at .harness/audit/", "overlay contract-orphan head-scoping landed (6 phantoms -> 1) + head-scoped unit_without_code advisory added; overlay-check HARD gate green; 17 overlay tests pass", "findings routed to their R-CL/R-IF homes (notes)", "live sources stay canonical — NO maintained parallel CSV"] }
+  close_shape: { type: PR-merge, artifact: ".harness/audit/* + overlay head-scoping + this entry", cascade: [R-IF-roadmap-refresh] }
+  next_pointer: null
+  notes: >
+    The 2-pass remaining-build audit (.harness/audit/Remaining_Build_Audit_Report.md +
+    Remaining_Build_Register.csv, 48 rows) + the binding .harness/audit/Closure_Gate_v1.md.
+    POINT-IN-TIME snapshot at HEAD 46012d5 — NOT a maintained parallel source (the live
+    authorities are .harness/arc-ledger.yaml + `just overlay`, both CI-gated; re-ground at
+    arc-open — the R-IF-114 drift lesson). Closure gate = Tier-1 build-complete (gates
+    R-FS-1) + Tier-2 quality/close (gates R-CL-C1); the checker `tools/closure_gate.py` is a
+    DEFINED follow-on, NOT yet built (operator to authorize the build).
+    FINDING HOMES (so the loop acts on them, not just the report):
+    RB-DOC-03 overlay head-scoping = DONE this arc (overlay.py canonical_head_md_files;
+    contract_without_code 6->1, the lone C-IS-11 a documented corrected-non-cite).
+    RB-EXP-01 (cp/od/cxa empty __init__ public exports) -> R-CL-Q1/Q4 (public-API policy — operator call).
+    RB-DOC-01 per-package READMEs + RB-CXA-02 (§3.3 layout drift: harness-cxa near-stub) + RB-DOC-05 (unit cites) -> R-CL-D1.
+    RB-DOC-02 (14 code-without-cite) + RB-CXA-03 (31-vs-37 seam-count reconcile) -> R-CL-Q1 hygiene (RB-CXA-03 doc-side touches CXA design-substrate -> X-AL-3 back-flow if pursued).
+    RB-SUB-03 (scaffold-MCP cleanup) -> R-CL-Q4. RB-GOV-07 (R-IF-114 stale-ACTIVE) + RB-GOV-08 (opt-in pre-commit hook) = governance hygiene.
+    RB-RT-07 (stale-OPEN engine-durable-resume fork) -> re-ground + close-or-rescope.
+    The forward FEATURE arcs (RB-RT-*/RB-CP-*/RB-AS-01/RB-OD-01) are ALREADY in arc-ledger.yaml — no re-entry.
+    OPERATOR DECISIONS OWED: build `tools/closure_gate.py` (C); cp/od/cxa export policy (RB-EXP-01); CXA-doc count reconcile (RB-CXA-03).
+
 R-IF-roadmap-refresh:
   title: Refresh roadmap status dashboard after PR merge
   surface: VII

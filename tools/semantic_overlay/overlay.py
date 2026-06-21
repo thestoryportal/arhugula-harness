@@ -206,6 +206,54 @@ def load_spec_contracts(path: Path = DESIGN_SUBSTRATE) -> dict[str, list[str]]:
 
 
 # --------------------------------------------------------------------------- #
+# Canonical-head scoping. The design-substrate is a delta chain that RETAINS
+# every version, so a C-*/U-* that cites ONLY a superseded version file is a
+# phantom, not a real gap ([[wrong-version-read-delta-only-baseline]]). The
+# orphan classes scope to canonical heads — the max-version file per versioned
+# family plus every non-versioned file (living specs, ADRs, ADD, PRD) — so they
+# stop reporting superseded-version phantoms (audit finding RB-DOC-03).
+# --------------------------------------------------------------------------- #
+
+RE_VERSION_STEM = re.compile(r"^(?P<family>.+?)_v(?P<major>\d+)(?:_(?P<minor>\d+))?$")
+
+
+def canonical_head_md_files(path: Path = DESIGN_SUBSTRATE) -> set[str]:
+    """Repo-relative md paths that are canonical heads: the max-version file per
+    versioned family (Spec_Control_Plane_v1_43.md beats _v1_5.md) plus every file
+    with no parseable ``_vN[_M]`` suffix."""
+    if not path.is_dir():
+        return set()
+    best: dict[str, tuple[tuple[int, int], str]] = {}
+    singletons: set[str] = set()
+    for f in sorted(path.rglob("*.md")):
+        m = RE_VERSION_STEM.match(f.stem)
+        if not m:
+            singletons.add(_rel(f))
+            continue
+        key = (int(m.group("major")), int(m.group("minor") or 0))
+        cur = best.get(m.group("family"))
+        if cur is None or key > cur[0]:
+            best[m.group("family")] = (key, _rel(f))
+    return singletons | {v[1] for v in best.values()}
+
+
+def load_spec_units(path: Path = DESIGN_SUBSTRATE) -> dict[str, list[str]]:
+    """The design-substrate U-* unit keyspace with source files. Mirrors
+    load_spec_contracts for the head-scoped unit-without-code orphan class."""
+    units: dict[str, set[str]] = defaultdict(set)
+    if not path.is_dir():
+        return {}
+    for spec_file in sorted(path.rglob("*.md")):
+        try:
+            text = spec_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for unit in RE_UNIT.findall(text):
+            units[unit].add(_rel(spec_file))
+    return {k: sorted(v) for k, v in sorted(units.items())}
+
+
+# --------------------------------------------------------------------------- #
 # Module ↔ file path resolution
 # --------------------------------------------------------------------------- #
 
@@ -423,13 +471,26 @@ def derive() -> dict[str, Any]:
         if s["id"] not in carried
     ]
     # (3) cxa-seam-with-missing-producer-or-consumer-file — RELIABLE (already collected)
-    # (4) contract-keyspace coverage — ADVISORY. A C-* id in design-substrate with no
-    #     source-file cite may be a real implementation gap, an authoring-only contract,
-    #     or an obsolete prose row. The linter flags it but does not fail the build.
+    # (4) contract-keyspace coverage — ADVISORY, canonical-head-scoped (RB-DOC-03).
+    #     A C-* in a head file with no source-file cite may be a real implementation
+    #     gap, an authoring-only contract, or an obsolete prose row. Contracts that
+    #     cite ONLY superseded versions are phantoms and are EXCLUDED. Advisory; the
+    #     linter flags but does not fail the build.
+    head_md = canonical_head_md_files()
+    spec_units = load_spec_units()
     contract_without_code = [
         {"id": contract, "spec_files": files}
         for contract, files in sorted(spec_contracts.items())
-        if contract not in contract_to_files
+        if contract not in contract_to_files and any(sf in head_md for sf in files)
+    ]
+    # (5) unit-keyspace coverage — ADVISORY, canonical-head-scoped. Delta-only plans do
+    #     NOT re-table historical units, so this catches only head-defined U-* with no
+    #     code carrier. Known non-gaps may appear (range-marker IDs; units cited in src
+    #     by their contract instead of the U-* token) — advisory, not a gate.
+    unit_without_code = [
+        {"id": unit, "spec_files": files}
+        for unit, files in sorted(spec_units.items())
+        if unit not in unit_to_files and any(sf in head_md for sf in files)
     ]
 
     # ---- assemble --------------------------------------------------------- #
@@ -455,6 +516,7 @@ def derive() -> dict[str, Any]:
         "orphans": {
             "code_without_cite": sorted(uncited),
             "contract_without_code": contract_without_code,
+            "unit_without_code": unit_without_code,
             "substitution_without_carrier": substitution_no_carrier,
             "cxa_seam_missing_endpoint": seam_orphans,
         },
@@ -462,6 +524,7 @@ def derive() -> dict[str, Any]:
             "source_files": len(nodes),
             "files_with_cite": len(nodes) - len(uncited),
             "spec_contracts_total": len(spec_contracts),
+            "spec_units_total": len(spec_units),
             "distinct_contracts": len(contract_to_files),
             "distinct_units": len(unit_to_files),
             "distinct_adrs": len(adr_to_files),
@@ -565,10 +628,16 @@ def _print_summary(graph: dict[str, Any]) -> None:
         print(f"      · {so['edge_label']} ({so['symbol']})")
     print(
         f"  contract w/o code cite      : {len(o['contract_without_code'])} "
-        "(advisory — source cite absence is not proof of non-implementation)"
+        "(advisory — canonical-head-scoped; cite absence is not proof of non-implementation)"
     )
     for co in o["contract_without_code"]:
         print(f"      · {co['id']} ({', '.join(co['spec_files'])})")
+    print(
+        f"  unit w/o code cite          : {len(o['unit_without_code'])} "
+        "(advisory — canonical-head-scoped; may include range-marker / contract-cited units)"
+    )
+    for uo in o["unit_without_code"]:
+        print(f"      · {uo['id']} ({', '.join(uo['spec_files'])})")
     print(
         f"  substitution w/o carrier file: {len(o['substitution_without_carrier'])} "
         "(advisory — most carriers are named in rationale, not docstrings)"
