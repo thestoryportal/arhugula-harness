@@ -474,6 +474,7 @@ arcs:
     kind: standalone
     status: closed
     owner_axis: "CP + runtime"
+    pr: "#679"
     spec_delta: "CP v1.43 → v1.44 §1 (NEW PeerFanOutResumeState carrier + PauseSnapshot.peer_fan_out_resume) + §2 (§25.15.1 PARALLELIZATION materialization note); NO operator gate"
     gives: "PARALLELIZATION's `pause` branch (was FAILED + `...-not-yet-materialized`) is now a genuine resumable PAUSED — the #661/#678 ORCHESTRATOR_WORKERS shape applied PARALLELIZATION-shaped (NO orchestrator step[0]; a peer-branch `PeerFanOutResumeState` carrier, NOT the orchestrator-bearing FanOutResumeState — illegal-states-unrepresentable, advisor-resolved). A branch failure under `pause` (protocol bound) captures a hash-integrity-checked snapshot (terminal branches + recovered outputs) → PAUSED; `api.resume` skips the terminal branches + re-dispatches the rest. No protocol bound → honest FAILED + `...-protocol-not-bound` (no false-PAUSED). Resumed-terminal-with-a-failed-branch → PARTIAL (no silent SUCCESS). impl-to-cleared-spec on §25.15.1 + §25.15.2 obl. 7; PREREQUISITE B-PARALLELIZATION-CASCADE (closed #678) supplied the cascade harvest. Full-chain witness through the real api.resume (CP + runtime e2e)."
     why: "Sibling fan-out-barrier topology's pause-resume. PREREQUISITE SATISFIED: B-PARALLELIZATION-CASCADE (closed) built the cascade_policy harvest this resume builds on (PARALLELIZATION had NO cascade machinery — the original registration presumed it existed)."
