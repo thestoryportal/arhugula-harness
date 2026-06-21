@@ -46,10 +46,10 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 23
+  standalone_closed: 24
   standalone_gated: 1
   standalone_resolved: 2
-  standalone_registered: 11
+  standalone_registered: 10
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
 arcs:
@@ -450,12 +450,12 @@ arcs:
   - id: B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT
     title: "WAL_SEGMENT shares the EngineOutputStore"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
     owner_axis: "CP + runtime"
     parent_arc: B-ENGINE-OUTPUT-REPLAY
-    anticipated_scope: "Extend the output-carrying replay to WAL_SEGMENT (shares the EngineOutputStore, E-impl-2); plus the non-linear resume-blind strategies."
-    why: "B-ENGINE-OUTPUT-REPLAY landed for LINEAR EVENT_SOURCED_REPLAY only."
+    pr: "#687"
+    spec_delta: "bundled-absorption — runtime spec v1.65 → v1.66 (§14.23.5 producer gate EVENT_SOURCED_REPLAY → {EVENT_SOURCED_REPLAY, WAL_SEGMENT} + §14.23.7 follow-on LANDED) + CP spec v1.46 → v1.47 (C-CP-08 §8.1 segment_replay row gains 'activity outputs cached and replayed'); NO operator gate (additive, §14.23.7 registered the follow-on)."
+    gives: "WAL_SEGMENT now shares the §14.23 C-RT-32 EngineOutputStore cached-output replay (the EVENT_SOURCED_REPLAY shape, #665, extended to the segment-replay class): a WAL_SEGMENT run RECORDS each step output (the producer gate, prev. EVENT_SOURCED_REPLAY-only, extended at the explicit 'WAL_SEGMENT extends this gate at its arc' marker), and a WAL_SEGMENT resume REHYDRATES the durably-stored prefix into the inter-step channel so the first re-dispatched segment-step reads its recovered predecessor's output (prev. left a fresh channel empty → None). TWO call-site gate extensions in workflow_driver.py (producer gate + the WAL_SEGMENT resume-block rehydrate, inserted between the RESUMPTION emit + the engine-pause recovery — no double-emit); the shared helpers + store binding (config.engine_output_replay, engine-class-agnostic) + WAL_SEGMENT resume_at (U-CP-95) all already exist. Cross-spec check (advisor) FLIPPED the framing pure-impl → two-surface bundled-absorption: §8.1 segment_replay did NOT carry the cached-output clause (the event-sourced-replay row did) → the CP §8.1 amendment is required, not optional. record↔rehydrate ship together (never record-only — a never-rehydrated journal is the exact defect the gate prevents; corruption fail-close free via the shared helper). Full-chain witness: a WAL_SEGMENT run records → resume rehydrates → step reads recovered predecessor (test_wal_segment_records_then_rehydrates_full_chain) + negative control + store↔ledger fail-close. pyright 0/0/0; harness-cp 1133 passed. advisor (pick + the record↔rehydrate-coupling anchor + the cross-spec §8.1 catch) + out-of-family Codex."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER

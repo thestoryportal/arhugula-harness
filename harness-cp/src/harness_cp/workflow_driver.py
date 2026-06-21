@@ -1866,7 +1866,10 @@ def _execute_workflow_body(
         # vs save-point at the CP/IS level (same accepted bar); the genuine
         # distinguishing WAL_SEGMENT capability is the durable segment-log
         # substrate (U-RT-121) + the engine-layer recovery-loop firing below
-        # (U-CP-95) — NOT cached-output replay (B-ENGINE-OUTPUT-REPLAY arc).
+        # (U-CP-95). The §8.1 cached-output-replay refinement (replay prior outputs
+        # into downstream-visible state) is now ALSO wired for WAL_SEGMENT
+        # (B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT — the rehydrate block below; shares the
+        # EngineOutputStore with EVENT_SOURCED_REPLAY).
         resume_at = _determine_segment_replay_resume_at(
             ctx=ctx,
             run_idempotency_key=run_idempotency_key,
@@ -1912,6 +1915,30 @@ def _execute_workflow_body(
         # engine pause (a step-0 engine pause is a resumption even at resume_at==0).
         if resume_at > 0 or _resume_engine_pause:
             ctx.lifecycle_emitter.emit(WorkflowEventClass.RESUMPTION)
+        # B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT (runtime spec C-RT-32 §14.23 + the
+        # C-CP-08 §8.1 `segment_replay` cached-output-replay refinement) — the §8.1
+        # "activity outputs cached and replayed" half, the EVENT_SOURCED_REPLAY shape
+        # applied to the SHARED EngineOutputStore: replay the durably-stored prefix
+        # outputs into the inter-step channel so the first re-dispatched segment-step
+        # reads its recovered predecessor's output (degenerate without this — a
+        # skip-prefix resume leaves a fresh channel empty → downstream reads None).
+        # No-op unless store + channel are bound; fail-closed on a store↔ledger skew
+        # gap / body-change identity mismatch (the shared helper). Keyed by
+        # run_idempotency_key (engine-class-independent), so WAL_SEGMENT's resume_at
+        # (the same F2-prefix step-index as event-replay) composes. Fires on the
+        # committed-prefix condition (resume_at > 0), independent of the engine-pause
+        # recovery below (a SEPARATE C-CP-22 engine-layer surface).
+        if resume_at > 0:
+            _replay_fail = _rehydrate_inter_step_channel_on_replay(
+                ctx,
+                run_idempotency_key=run_idempotency_key,
+                resume_at=resume_at,
+                steps=steps,
+                workflow_id=manifest_entry.workflow_id,
+                run_id=run_id,
+            )
+            if _replay_fail is not None:
+                return _replay_fail, 0
         if _resume_engine_pause and _engine_recovery_loop is not None:
             _engine_resume = _run_protocol_method_sync(
                 _engine_recovery_loop.attempt_resume(
@@ -2515,12 +2542,20 @@ def _execute_workflow_body(
         # ledger-append below (RESERVE-before-COMMIT: the store always holds ≥ the
         # ledger's materialized prefix). Opt-in; no-op when unbound. The store-write
         # precedes the ledger materialization `resume_at` counts, so an
-        # EVENT_SOURCED_REPLAY resume never finds a materialized step with a missing
-        # stored output. GATED on EVENT_SOURCED_REPLAY (the only engine class whose
-        # resume rehydrates the store) so a SAVE_POINT_CHECKPOINT / non-replay run with
-        # the flag on does not write a never-rehydrated journal (advisor pre-merge
-        # catch); WAL_SEGMENT, which shares the store, extends this gate at its arc.
-        if manifest_entry.engine_class is EngineClass.EVENT_SOURCED_REPLAY:
+        # EVENT_SOURCED_REPLAY / WAL_SEGMENT resume never finds a materialized step
+        # with a missing stored output. GATED on the cached-output-replay engine
+        # classes (EVENT_SOURCED_REPLAY + WAL_SEGMENT — both SHARE the
+        # EngineOutputStore + the C-CP-08 §8.1 cached-output-replay refinement) so a
+        # SAVE_POINT_CHECKPOINT / non-replay run with the flag on does not write a
+        # never-rehydrated journal (advisor pre-merge catch). The record half is SAFE
+        # only because the rehydrate half fires for the SAME classes: B-ENGINE-OUTPUT-
+        # REPLAY-WAL-SEGMENT added WAL_SEGMENT to BOTH this producer gate AND the
+        # resume-side rehydrate in one arc — never record-only (a never-rehydrated
+        # journal is the exact defect this gate prevents).
+        if manifest_entry.engine_class in (
+            EngineClass.EVENT_SOURCED_REPLAY,
+            EngineClass.WAL_SEGMENT,
+        ):
             _record_durable_step_output(
                 ctx, run_idempotency_key, step_index, str(step.step_id), step_output
             )
