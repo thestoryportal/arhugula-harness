@@ -434,6 +434,18 @@ async def execute(
         # promote a per-role model to the PRIMARY fallback candidate (per-role
         # MODEL specialization composing with C-RT-16 fallback).
         routing_manifest=ctx.routing_manifest,
+        # B-L2-FALLBACK-COMPOSITION (§14.6): hand the wrapper a DIRECT handle to
+        # the BARE C-RT-15 dispatcher's route-once SELECTION (`resolve_routed_binding`)
+        # — NOT through the HITL `inner`, which sits two layers above the
+        # routing-capable dispatcher. The wrapper calls it ONCE per step to seed
+        # the routed PRIMARY candidate, so layered routing (routing_activation)
+        # composes with the fallback chain. Non-inference workflows have no real
+        # dispatcher (the `_NO_INFERENCE_DISPATCHER` sentinel) → None (no routing).
+        # The resolver itself returns None when `routing_activation` is off, so
+        # this is byte-identical for the default-off path.
+        routing_resolver=(
+            bare_dispatcher.resolve_routed_binding if ctx.requires_inference else None
+        ),
     )
 
     # ---------------------------------------------------------------------

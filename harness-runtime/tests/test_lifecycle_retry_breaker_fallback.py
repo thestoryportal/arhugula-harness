@@ -1160,6 +1160,174 @@ async def test_u_rt_114_wrapper_per_role_equals_primary_dedups_no_double_dispatc
 
 
 # ---------------------------------------------------------------------------
+# B-L2-FALLBACK-COMPOSITION (§14.6) — the route-once layered-routing PRIMARY
+# composes with the C-RT-16 fallback chain. The `routing_resolver` (the bare
+# C-RT-15 dispatcher's `resolve_routed_binding`) is resolved ONCE per step and
+# seeds the wrapper's PRIMARY candidate; the inner faithfully dispatches each
+# rebound candidate. The two load-bearing witnesses: (a) the chain ADVANCES under
+# routing (a routed primary that fails falls back through the chain — the exact
+# silent-fallback-defeat the retired interim guard prevented), and (b) routing is
+# resolved ONCE, not re-run per fallback attempt (the §14.5.3 invariant).
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _RecordingResolver:
+    """A `routing_resolver` stub (``RoutedBindingResolver``): returns a fixed
+    routed ModelBinding (or ``None``) and counts invocations — the route-once
+    witness."""
+
+    routed: ModelBinding | None
+    calls: int = 0
+
+    async def __call__(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
+    ) -> ModelBinding | None:
+        self.calls += 1
+        return self.routed
+
+
+@pytest.mark.asyncio
+async def test_b_l2_routed_primary_seeds_chain_primary() -> None:
+    """A routed ModelBinding from the resolver ⟹ it is the chain PRIMARY dispatched
+    first (the layered-routing decision seeded as the wrapper's primary candidate,
+    §14.6). The stage chain becomes the deduped fallback tail."""
+    inner = _MockInnerDispatcher(outcomes=[{"ok": 1}])
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_resolver=_RecordingResolver(
+            routed=ModelBinding(provider="anthropic", model="routed-model")
+        ),
+    )
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert inner.calls[-1][0].model_binding.model == "routed-model"
+
+
+@pytest.mark.asyncio
+async def test_b_l2_routed_primary_fails_then_fallback_advances() -> None:
+    """THE KEY non-vacuity witness — the chain ADVANCES under routing_activation
+    (the exact silent-fallback-defeat the interim guard prevented). The routed
+    PRIMARY fails transient → the wrapper advances to the NEXT chain candidate (the
+    stage primary), which is actually dispatched — NOT the routed model re-routed.
+    Pre-fix (routing re-run per attempt at the inner) EVERY attempt re-picked the
+    routed model and the chain never advanced; this distinguishes the fix from the
+    bug."""
+    # Original chain: stage-primary -> gpt-fallback (cross-family).
+    chain = _chain(
+        _candidate("anthropic", "stage-primary"),
+        cross_family=(_candidate("openai", "gpt-fallback"),),
+    )
+    # Augmented chain: [routed-model, stage-primary, gpt-fallback]. Routed primary
+    # FAILS transient (max_attempts=1) -> advance to the next chain candidate.
+    inner = _MockInnerDispatcher(
+        outcomes=[
+            RuntimeError("routed model unreachable"),  # candidate 0 = routed-model
+            {"ok": "fell-back-to-stage-primary"},  # candidate 1 = stage-primary
+        ]
+    )
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_resolver=_RecordingResolver(
+            routed=ModelBinding(provider="anthropic", model="routed-model")
+        ),
+    )
+    result = await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    dispatched = [c[0].model_binding.model for c in inner.calls]
+    # Routed model first, then the REAL next chain candidate — fallback preserved.
+    assert dispatched == ["routed-model", "stage-primary"]
+    assert result == {"ok": "fell-back-to-stage-primary"}
+
+
+@pytest.mark.asyncio
+async def test_b_l2_routing_resolved_once_not_per_attempt() -> None:
+    """The route-ONCE witness — routing is resolved exactly ONCE per step, NOT
+    re-run per fallback attempt (the §14.5.3 "no two-authority-at-dispatch"
+    invariant the inner-routing re-evaluation broke). Even though the routed primary
+    fails and the wrapper advances through TWO more candidates (3 inner dispatches),
+    the resolver is called exactly once."""
+    chain = _chain(
+        _candidate("anthropic", "stage-primary"),
+        cross_family=(_candidate("openai", "gpt-fallback"),),
+    )
+    inner = _MockInnerDispatcher(
+        outcomes=[
+            RuntimeError("routed fail"),  # routed-model
+            RuntimeError("stage fail"),  # stage-primary
+            {"ok": "third"},  # gpt-fallback
+        ]
+    )
+    tp, _ = _tracer_provider_with_exporter()
+    resolver = _RecordingResolver(routed=ModelBinding(provider="anthropic", model="routed-model"))
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_resolver=resolver,
+    )
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert len(inner.calls) == 3  # routed-model, stage-primary, gpt-fallback
+    assert resolver.calls == 1  # resolved ONCE, not per attempt — the route-once fix.
+
+
+@pytest.mark.asyncio
+async def test_b_l2_resolver_none_falls_back_to_per_role_augmentation() -> None:
+    """Precedence / mutual-exclusivity: when the resolver returns ``None`` (its
+    contract when a DETERMINISTIC binding governs — e.g. a per-role binding is
+    present), the wrapper's existing U-RT-114 per-role augmentation governs; the
+    routed path does NOT override the operator's per-role model. Routing fills ONLY
+    the no-deterministic-binding gap."""
+    inner = _MockInnerDispatcher(outcomes=[{"ok": 1}])
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_manifest=_routing_manifest_with_roles({"worker-a": "role-model-a"}),
+        routing_resolver=_RecordingResolver(routed=None),  # routing declines (deterministic)
+    )
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context_with_role("worker-a"))
+    # Resolver declined (None) → per-role augmentation governs → role-model-a primary.
+    assert inner.calls[-1][0].model_binding.model == "role-model-a"
+
+
+@pytest.mark.asyncio
+async def test_b_l2_no_resolver_byte_identical_stage_chain() -> None:
+    """Zero blast radius: no `routing_resolver` (the default / non-inference path)
+    ⟹ the stage chain primary is dispatched unchanged — byte-identical to the
+    pre-B-L2 wrapper."""
+    inner = _MockInnerDispatcher(outcomes=[{"ok": 1}])
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        # routing_resolver omitted -> None
+    )
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert inner.calls[-1][0].model_binding.model == "stage-primary"
+
+
+# ---------------------------------------------------------------------------
 # U-RT-114 — live e2e: per-role models to a REAL local Ollama daemon (wrapper)
 # ---------------------------------------------------------------------------
 #

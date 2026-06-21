@@ -62,7 +62,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.cross_family_fallback_chain import (
@@ -239,6 +239,27 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
     return ValidatorRetryExitClass.TRANSIENT_RETRY
 
 
+class RoutedBindingResolver(Protocol):
+    """The route-once SELECTION handle the stage-5 factory hands the C-RT-16
+    wrapper (B-L2-FALLBACK-COMPOSITION, §14.6).
+
+    Satisfied by ``RuntimeLLMDispatcher.resolve_routed_binding`` — a DIRECT
+    handle to the bare C-RT-15 dispatcher's routing surface, NOT reached through
+    the wrapper's ``inner`` (which is the HITL composer, two layers above the
+    routing-capable dispatcher). Resolves the layered routing decision ONCE and
+    returns the routed ``ModelBinding`` (the wrapper seeds it as its PRIMARY
+    fallback candidate), or ``None`` when routing_activation is off / a
+    deterministic binding governs / nothing is routable."""
+
+    async def __call__(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
+    ) -> ModelBinding | None: ...
+
+
 @dataclass(slots=True)
 class RetryBreakerFallbackDispatcher:
     """Per-step retry / breaker / fallback composer (C-RT-16).
@@ -281,6 +302,15 @@ class RetryBreakerFallbackDispatcher:
         candidate (so per-role model specialization composes with C-RT-16
         fallback). ``None`` / default role / empty catalog ⟹ the stage-bound
         ``fallback_chain`` is used unchanged (the §14.5.3 non-breaking default).
+    routing_resolver :
+        The route-once SELECTION handle (B-L2-FALLBACK-COMPOSITION §14.6) — the
+        bare C-RT-15 dispatcher's ``resolve_routed_binding`` method, handed by the
+        stage-5 factory. When set AND it returns a routed ``ModelBinding`` (i.e.
+        ``routing_activation`` is on and no deterministic binding governs), that
+        model is promoted to the wrapper's PRIMARY fallback candidate ONCE per
+        step — so the layered routing decision composes with the fallback chain
+        instead of re-routing per attempt. ``None`` ⟹ no routing augmentation
+        (the §14.5.3 per-role / stage-chain path governs, byte-identical).
     """
 
     inner: LLMDispatcher
@@ -289,6 +319,7 @@ class RetryBreakerFallbackDispatcher:
     tracer_provider: Any
     sleep_fn: Callable[[float], Awaitable[None]] = field(default_factory=lambda: asyncio.sleep)
     routing_manifest: RoutingManifest | None = None
+    routing_resolver: RoutedBindingResolver | None = None
 
     async def dispatch(
         self,
@@ -319,14 +350,29 @@ class RetryBreakerFallbackDispatcher:
         tracer = self.tracer_provider.get_tracer("harness.runtime.retry_breaker_fallback")
 
         with tracer.start_as_current_span("harness.runtime.retry_breaker_fallback") as outer_span:
+            # B-L2-FALLBACK-COMPOSITION (§14.6): resolve the layered-routing
+            # PRIMARY candidate ONCE (route-once-then-fallback-the-chain). The
+            # `routing_resolver` (the bare C-RT-15 dispatcher's
+            # `resolve_routed_binding`) returns the routed model when
+            # `routing_activation` is on AND no deterministic binding governs;
+            # `None` ⟹ no augmentation (the §14.5.3 per-role / stage-chain path
+            # governs, byte-identical). Resolved ONCE here — NOT inside the
+            # per-attempt loop — so routing composes with fallback instead of
+            # re-routing per attempt (the §14.5.3 "no two-authority-at-dispatch"
+            # invariant the inner-routing re-evaluation otherwise broke).
+            routed = (
+                await self.routing_resolver(binding, step, step_context=step_context)
+                if self.routing_resolver is not None
+                else None
+            )
             # U-RT-114 (§14.5.3): resolve the per-dispatch chain for the branch
-            # role. Default / absent / empty-catalog role ⟹ the stage-bound
-            # `self.fallback_chain` unchanged; a non-default role with a
-            # `per_role_bindings` entry ⟹ an augmented chain whose PRIMARY is the
-            # per-role model (fallback applies on its failure). One source of
-            # truth for model selection — the chain — so the inner C-RT-15
-            # dispatcher faithfully dispatches each rebound candidate.
-            chain = self._effective_chain(step_context.agent_role)
+            # role. A routed primary (above) takes the chain PRIMARY; else a
+            # non-default role with a `per_role_bindings` entry ⟹ an augmented
+            # chain whose PRIMARY is the per-role model; else the stage-bound
+            # `self.fallback_chain` unchanged. One source of truth for model
+            # selection — the chain — so the inner C-RT-15 dispatcher faithfully
+            # dispatches each rebound candidate.
+            chain = self._effective_chain(step_context.agent_role, routed=routed)
             candidate: ProviderCandidate = chain.primary
             last_failure_class: str | None = None
             chain_length = _chain_length(chain)
@@ -427,26 +473,41 @@ class RetryBreakerFallbackDispatcher:
                     candidate, outer_span, last_failure_class, chain_length, chain=chain
                 )
 
-    def _effective_chain(self, agent_role: AgentRole | None) -> FallbackChain:
-        """Resolve the per-dispatch fallback chain for a branch role (U-RT-114
-        §14.5.3 — the per-role MODEL dispatch-read, placed at the dispatch-
-        composition surface so it composes with C-RT-16 fallback).
+    def _effective_chain(
+        self, agent_role: AgentRole | None, *, routed: ModelBinding | None = None
+    ) -> FallbackChain:
+        """Resolve the per-dispatch fallback chain (U-RT-114 §14.5.3 per-role
+        MODEL dispatch-read + B-L2-FALLBACK-COMPOSITION §14.6 routed primary),
+        placed at the dispatch-composition surface so model-candidate selection
+        composes with C-RT-16 fallback (ONE source of truth — the chain — so the
+        inner C-RT-15 dispatcher dispatches each rebound candidate faithfully).
 
-        - Default / absent / ``None`` role, OR no ``routing_manifest``, OR no
-          ``per_role_bindings`` entry ⟹ the stage-bound ``self.fallback_chain``
-          UNCHANGED. Byte-identical to v1.47 (the §14.5.3 non-breaking-default +
-          linear-path-untouched invariants; empty catalog ⟹ zero behaviour
-          change).
+        Precedence (the §2.2 ``_has_deterministic_binding`` mutual-exclusivity):
+
+        - ``routed`` (B-L2-FALLBACK-COMPOSITION): a routing_activation routed
+          model ⟹ AUGMENTED chain with ``routed`` as PRIMARY. ``routed`` is
+          non-``None`` ONLY when no deterministic binding governs
+          (``resolve_routed_binding`` returns ``None`` otherwise), so it NEVER
+          collides with the per-role augmentation below (a per-role binding IS a
+          deterministic binding) — routing fills only the no-binding gap.
         - A NON-default branch role with a ``per_role_bindings`` entry ⟹ an
           AUGMENTED chain whose PRIMARY is the role's ``preferred_model_binding``
-          and whose tail is the original chain's full §4.2 traversal (deduped by
-          ``(provider, model)``). The per-role model is tried first; the
-          operator-configured chain applies on its failure — so per-role MODEL
-          specialization (B1) is non-hollow AND fallback is preserved. ONE source
-          of truth: the chain (the inner C-RT-15 dispatcher dispatches each
-          rebound candidate faithfully). MODEL BINDING ONLY — the role's own
-          ``fallback_chain_ref`` is out of scope at B1; the per-role PROMPT is B4.
+          (per-role MODEL specialization, B1; the per-role PROMPT is B4; the
+          role's own ``fallback_chain_ref`` is out of scope at B1).
+        - Default / absent / ``None`` role, OR no ``routing_manifest``, OR no
+          ``per_role_bindings`` entry, AND no ``routed`` ⟹ the stage-bound
+          ``self.fallback_chain`` UNCHANGED (the §14.5.3 non-breaking-default +
+          linear-path-untouched invariants; empty catalog + routing off ⟹ zero
+          behaviour change).
         """
+        if routed is not None:
+            return self._augment_primary(
+                ProviderCandidate(
+                    provider=routed.provider,
+                    model=routed.model,
+                    family=_provider_family(routed.provider),
+                )
+            )
         role = agent_role or _MVP_DEFAULT_AGENT_ROLE
         if role == _MVP_DEFAULT_AGENT_ROLE or self.routing_manifest is None:
             return self.fallback_chain
@@ -454,9 +515,26 @@ class RetryBreakerFallbackDispatcher:
         if role_binding is None:
             return self.fallback_chain
         mb = role_binding.preferred_model_binding
-        per_role_candidate = ProviderCandidate(
-            provider=mb.provider, model=mb.model, family=_provider_family(mb.provider)
+        return self._augment_primary(
+            ProviderCandidate(
+                provider=mb.provider, model=mb.model, family=_provider_family(mb.provider)
+            )
         )
+
+    def _augment_primary(self, new_primary: ProviderCandidate) -> FallbackChain:
+        """Promote ``new_primary`` to the chain PRIMARY with the stage-bound
+        chain's full §4.2 traversal as the deduped tail.
+
+        The U-RT-114 §14.5.3 chain-augmentation, SHARED by the per-role MODEL
+        binding and the B-L2-FALLBACK-COMPOSITION routed primary: the selected
+        model is tried first; the operator-configured chain applies on its
+        failure — so model specialization is non-hollow AND fallback is preserved.
+
+        Dedup by ``(provider, model)``: if ``new_primary`` already appears in the
+        chain, it is not re-listed as its own fallback (avoid a same-model
+        double-dispatch on advance). When the stage chain IS that single model,
+        the chain is returned UNCHANGED.
+        """
         base = self.fallback_chain
         original_ordered = (
             base.primary,
@@ -464,20 +542,15 @@ class RetryBreakerFallbackDispatcher:
             *base.cross_family,
             *((base.terminal,) if base.terminal is not None else ()),
         )
-        # Dedup by (provider, model): if the per-role model already appears in the
-        # chain, don't re-list it as its own fallback (avoid a same-model
-        # double-dispatch on advance).
         tail = tuple(
             c
             for c in original_ordered
-            if (c.provider, c.model) != (per_role_candidate.provider, per_role_candidate.model)
+            if (c.provider, c.model) != (new_primary.provider, new_primary.model)
         )
         if not tail:
-            # The per-role model IS the entire chain — no augmentation needed
-            # (the original chain's primary is the same model).
             return base
         return FallbackChain(
-            primary=per_role_candidate,
+            primary=new_primary,
             same_family=(),
             cross_family=tail,
             terminal=None,
@@ -733,6 +806,7 @@ def materialize_retry_breaker_fallback_dispatcher_stage(
     tracer_provider: Any,
     sleep_fn: Callable[[float], Awaitable[None]] = asyncio.sleep,
     routing_manifest: RoutingManifest | None = None,
+    routing_resolver: RoutedBindingResolver | None = None,
 ) -> RetryBreakerFallbackDispatcher:
     """Stage 5 LOOP_INIT factory for the retry/breaker/fallback wrapper
     (U-RT-58, C-RT-16).
@@ -748,6 +822,12 @@ def materialize_retry_breaker_fallback_dispatcher_stage(
     preserved per spec §14.6. ``routing_manifest`` (``ctx.routing_manifest``,
     stage 3a) is passed for the U-RT-114 §14.5.3 per-role MODEL dispatch-read;
     ``None`` ⟹ no per-role routing (the §14.5.3 non-breaking default).
+
+    ``routing_resolver`` (B-L2-FALLBACK-COMPOSITION §14.6) is the bare C-RT-15
+    dispatcher's ``resolve_routed_binding`` handle — passed DIRECTLY (NOT via
+    the HITL ``inner``) so the wrapper resolves the layered-routing PRIMARY
+    candidate ONCE per step. ``None`` ⟹ no routing augmentation (byte-identical
+    to the pre-B-L2 default).
     """
     return RetryBreakerFallbackDispatcher(
         inner=inner,
@@ -756,4 +836,5 @@ def materialize_retry_breaker_fallback_dispatcher_stage(
         tracer_provider=tracer_provider,
         sleep_fn=sleep_fn,
         routing_manifest=routing_manifest,
+        routing_resolver=routing_resolver,
     )

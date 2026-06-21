@@ -198,6 +198,41 @@ def test_dashboard_maintenance_exemption_does_not_cover_other_tools() -> None:
     assert any(f.code == "DESIGN_IMPL_MIX" and f.severity == "hard" for f in findings)
 
 
+def test_clearance_marker_exempts_bundled_absorption() -> None:
+    # CLAUDE.md §11.4 + §4.5: a spec amendment co-landing with impl behind a
+    # clearance marker is a RATIFIED bundled-absorption arc (the R-FS-1 B-* pattern),
+    # not silent absorption — mirror the X-AL-3 (§4.4) back-flow recognition.
+    state = _state(
+        changed_files=[
+            "design-substrate/Spec_Harness_Runtime_v1.md",
+            "harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py",
+            "harness-runtime/tests/test_lifecycle_llm_dispatch.py",
+            ".harness/clearance/Spec_Harness_Runtime-v1_65-cleared-2026-06-20.md",
+        ],
+    )
+
+    findings = cg.validate(state, mode="closeout")
+
+    assert not any(f.code == "DESIGN_IMPL_MIX" for f in findings)
+
+
+def test_design_impl_with_fork_doc_but_no_clearance_marker_still_hard() -> None:
+    # Narrowness guard: a fork doc alone is NOT the bundled-absorption signal — only
+    # a clearance marker (§4.5) is. Design + impl without a clearance marker still
+    # hard-fails (a silent mix is not legitimized by an unratified fork doc).
+    state = _state(
+        changed_files=[
+            "design-substrate/Spec_Harness_Runtime_v1.md",
+            "harness-runtime/src/harness_runtime/lifecycle/llm_dispatch.py",
+            ".harness/class_2_fork_b_l2_fallback_composition.md",
+        ],
+    )
+
+    findings = cg.validate(state, mode="closeout")
+
+    assert any(f.code == "DESIGN_IMPL_MIX" and f.severity == "hard" for f in findings)
+
+
 def test_committed_diff_range_drives_guard_changed_files(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     base = _git(repo, "rev-parse", "HEAD")
