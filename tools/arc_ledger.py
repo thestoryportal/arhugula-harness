@@ -36,7 +36,12 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-import yaml
+# NB: `yaml` is imported lazily inside load() (the ONLY function that needs it) — NOT
+# at module level. This keeps `import arc_ledger` + derive()/validate() pure-python so
+# generate.py can import this module + reuse derive() under the no-PyYAML system Python
+# 3.9 the Codex dashboard guard regenerates the dashboard with (it hand-parses the YAML
+# text itself, then feeds the rows through this module's derive()). See
+# tools/dashboard/generate.py `_arc_ledger_fallback_load`.
 
 # --- The status enums (the ONLY place this mapping lives) --------------------
 
@@ -60,6 +65,8 @@ class LedgerError(ValueError):
 
 
 def load(path: Path = DEFAULT_LEDGER) -> dict[str, Any]:
+    import yaml  # lazy — see module-top note; keeps derive()/validate() no-PyYAML-importable
+
     with path.open(encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
     if not isinstance(data, dict) or "arcs" not in data:

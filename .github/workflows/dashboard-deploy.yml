@@ -15,7 +15,8 @@ on:
     paths:
       - "tools/dashboard/**"
       - ".harness/roadmap_status.md"
-      - ".harness/r-fs-1-arc-and-unit-map.md" # dashboard build-progress + arc-map source
+      - ".harness/arc-ledger.yaml" # dashboard build-progress + arc/unit map (single source)
+      - ".harness/substitutions.yaml" # substitution-retirement closure source
       - "Project_Roadmap_v1.md"
       - "harness-*/CLAUDE.md"
       - ".github/workflows/dashboard-deploy.yml"
