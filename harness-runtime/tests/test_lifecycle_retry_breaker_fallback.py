@@ -32,7 +32,7 @@ import pytest
 from harness_as.sandbox_tier import SandboxTier
 from harness_core import PersonaTier
 from harness_core.identity import StepID
-from harness_cp.cp_shared_types import AgentRole, ModelBinding
+from harness_cp.cp_shared_types import AgentRole, ModelBinding, RoutingDecisionTrace
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
     ProviderCandidate,
@@ -60,6 +60,7 @@ from harness_od.harness_breaker_schema import BreakerScope
 from harness_runtime.lifecycle.llm_dispatch import (
     LLMDispatchPayloadShapeError,
     LLMDispatchProviderUnreachableError,
+    RoutedPrimaryResolution,
     RuntimeLLMDispatcher,
 )
 from harness_runtime.lifecycle.retry_breaker import (
@@ -1173,9 +1174,11 @@ async def test_u_rt_114_wrapper_per_role_equals_primary_dedups_no_double_dispatc
 
 @dataclass
 class _RecordingResolver:
-    """A `routing_resolver` stub (``RoutedBindingResolver``): returns a fixed
-    routed ModelBinding (or ``None``) and counts invocations — the route-once
-    witness."""
+    """A `routing_resolver` stub (``RoutedBindingResolver``): wraps a fixed
+    routed ModelBinding into a ``RoutedPrimaryResolution`` (or returns ``None``)
+    and counts invocations — the route-once witness. The synthesized trace's
+    layer is ``embedding`` so the routed-primary span attribution
+    (B-L2-ROUTING-SPAN-LAYER-ATTRIBUTION) has a non-DECLARATIVE layer to report."""
 
     routed: ModelBinding | None
     calls: int = 0
@@ -1186,9 +1189,20 @@ class _RecordingResolver:
         step: WorkflowStep,
         *,
         step_context: StepExecutionContext,
-    ) -> ModelBinding | None:
+    ) -> RoutedPrimaryResolution | None:
         self.calls += 1
-        return self.routed
+        if self.routed is None:
+            return None
+        return RoutedPrimaryResolution(
+            model_binding=self.routed,
+            routing_trace=RoutingDecisionTrace(
+                layer="embedding",
+                candidate=f"{self.routed.provider}:{self.routed.model}",
+                decision_ms=0,
+                budget_exhausted=False,
+            ),
+            binding_rationale=None,
+        )
 
 
 @pytest.mark.asyncio

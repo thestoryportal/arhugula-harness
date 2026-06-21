@@ -46,10 +46,10 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 26
+  standalone_closed: 27
   standalone_gated: 1
   standalone_resolved: 2
-  standalone_registered: 8
+  standalone_registered: 7
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
 arcs:
@@ -443,8 +443,8 @@ arcs:
     decompose_at_open: true
     owner_axis: runtime
     parent_arc: B-INTERSTEP
-    anticipated_scope: "Inter-step output recording for the 3 CONCURRENT non-linear strategies (ORCHESTRATOR_WORKERS, PARALLELIZATION, HIERARCHICAL_DELEGATION) via the #648 buffered-branch drain (ADR-F2) + the all-siblings post-join read. The sequential DECENTRALIZED_HANDOFF case split out to B-INTERSTEP-HANDOFF (closed)."
-    why: "Concurrent sibling writes to a shared holder violate ADR-F2 single-threaded-write (need the buffered-branch drain); the post-join synthesis consumer wants all siblings, not most_recent_output (the message-shape discriminator)."
+    anticipated_scope: "Inter-step output recording for the 3 CONCURRENT non-linear strategies (ORCHESTRATOR_WORKERS, PARALLELIZATION, HIERARCHICAL_DELEGATION) via the #648 buffered-branch drain (ADR-F2) + the all-siblings post-join read. The sequential DECENTRALIZED_HANDOFF case split out to B-INTERSTEP-HANDOFF (closed). GROUNDING NOTE (2026-06-21, advisor-confirmed at #693 arc-pick): the §14.21.7 'orchestrator synthesis post-join' CONSUMER DOES NOT EXIST — the concurrent executors aggregate via DETERMINISTIC folds (_aggregate_parallelization voting fold; _aggregate_orchestrator_workers deterministic fold over orchestrator+worker outputs), NOT an LLM-dispatched synthesis step, and the fold already gets branch_outputs DIRECTLY (not via the channel). So recording siblings into the inter-step channel would be a HOLLOW CARRIER (the §14.21.5-invariant-6 non-vacuity bar fails). The §14.21.7/§14.21.5 '(orchestrator synthesis post-join)' parenthetical is a spec-prose-vs-impl drift. NON-HOLLOW options at re-open: (A) record the fan-out AGGREGATE as the fan-out step's channel output so a SUBSEQUENT linear LLM step reads it via most_recent_output() (thin, reuses the proven v1.59 consumer; weaker than the registered all-siblings intent), or (B) build a post-join LLM synthesis step — but that CHANGES the ADR-D4 deterministic-fold topology semantics → a Class 1 fork / operator decision, NOT a silent build. Re-open with this disposition + fix the prose drift."
+    why: "Concurrent sibling writes to a shared holder violate ADR-F2 single-threaded-write (need the buffered-branch drain); the registered post-join consumer was assumed to be an LLM synthesis step but is a deterministic fold (see anticipated_scope grounding note) — so the consumer question, not the recording mechanism, is the real fork."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT
@@ -605,10 +605,10 @@ arcs:
   - id: B-L2-ROUTING-SPAN-LAYER-ATTRIBUTION
     title: "Real routing layer on the dispatch span under wrapper-routing"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
     owner_axis: runtime
     parent_arc: B-L2-FALLBACK-COMPOSITION
-    anticipated_scope: "Thread the wrapper's RoutingDecisionTrace to the inner gen_ai span so routing.layer reports the real EMBEDDING/L3 layer (not the DECLARATIVE echo). The StepDispatcher Protocol carries no trace channel — Protocol widening or a per-dispatch trace carrier."
-    why: "B-L2-FALLBACK-COMPOSITION resolves routing ONCE at the wrapper + reverts the inner to a faithful echo, so the inner span's routing.layer is the DECLARATIVE echo, not the layer that PICKED the model (observability fidelity only; production-dormant)."
+    pr: "#693"
+    spec_delta: "impl-to-cleared-spec — runtime spec v1.68 → v1.69 (closes the §14.6.1 scope-boundary that named this exact follow-on); NO operator gate (observability-additive; selection/dispatch byte-unchanged)."
+    gives: "The inner C-RT-15 gen_ai span's routing.layer now reports the REAL EMBEDDING/L3 layer the C-RT-16 wrapper resolved for the routed PRIMARY, instead of the inner's faithful DECLARATIVE echo (RoutingLayer.DECLARATIVE == 'manifest'). Mechanism (the §14.6.1-named 'per-dispatch context', NOT a Protocol widening): `resolve_routed_binding` now returns a `RoutedPrimaryResolution` (the routed ModelBinding it already returned + the resolving RoutingDecisionTrace + binding rationale it previously DISCARDED at the partition() line); the wrapper extracts `.model_binding` for chain composition unchanged AND — for the routed PRIMARY candidate ONLY — publishes `(routing_trace, binding_rationale)` on a module ContextVar `ROUTED_PRIMARY_SPAN_TRACE` around the inner dispatch; `_invoke_provider` reads it for routing.layer/binding_rationale, else the local echo. ContextVar (per-task, fan-out-safe — the B-INTERSTEP-PERRUN-ISOLATION v1.64 precedent), NOT an instance attr (the dispatcher is shared across concurrent branches). Fallback candidates (chain-selected, not routing-selected) keep the faithful echo — the ContextVar is cleared to None for them (scope-boundary held). routing.provider/routing.model still reflect the actually-dispatched candidate. RoutedBindingResolver Protocol + RoutedPrimaryResolution + the ContextVar are ALL harness_runtime-internal → CP spec UNCHANGED, no StepDispatcher Protocol widening, no §5.2-hash change, observability-additive (no selection/dispatch behavior change). Capability is production-dormant until a 2nd provider makes routing-among-candidates meaningful; this is the observability-fidelity fix for that dormant-but-real capability. Witnesses (+3 by-execution through the REAL wrapper + REAL resolver + recording provider): routed-primary span reports 'embedding' + routing-off span reports the 'manifest' echo (negative control) + a failed routed primary → haiku span 'embedding' while opus fallback span 'manifest' (scope-boundary held). 5 existing tests updated for the richer resolver return (own-the-now-false-assertions). pyright 0/0/0; harness-runtime non-e2e 2007 + harness-cp 1136 passed. advisor + out-of-family Codex."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
