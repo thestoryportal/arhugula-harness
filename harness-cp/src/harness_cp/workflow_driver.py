@@ -4957,7 +4957,11 @@ def _execute_decentralized_handoff(
 
     Terminal when no further handoff — structural: the declared step list IS the
     handoff sequence, terminal = after the last stage (no continue-signal read from
-    step output, B-INTERSTEP). On a stage failure the chain stops (`cascade_policy`
+    step output — terminal CONTROL flow stays structural). Inter-step DATA flow,
+    however, IS wired (B-INTERSTEP-NONLINEAR handoff slice, §14.21 C-RT-29): each
+    completed stage's output is recorded so the next stage-expert's dispatch reads
+    it as upstream context (single-owner sequential → recorded inline like the
+    linear/EO sites, no buffered-branch drain). On a stage failure the chain stops (`cascade_policy`
     is degenerate for single-owner — no concurrent in-flight sibling to cancel):
     `cascade-cancel` → FAILED, `proceed` → PARTIAL (completed stages salvaged),
     `pause` → FAILED + pause-resume-not-yet-materialized (the resumable handoff-pause
@@ -5135,6 +5139,19 @@ def _execute_decentralized_handoff(
             procedural_tier_snapshot_ref=snapshot_ref,
         )
         stage_outputs[str(step.step_id)] = output
+        # B-INTERSTEP-NONLINEAR (handoff slice; runtime spec §14.21 C-RT-29) —
+        # record this completed stage's output so the NEXT stage's dispatch reads
+        # it as upstream context (the runtime LLM dispatcher injects
+        # `most_recent_output()`; §14.21.2). Single-owner sequential on the driver
+        # thread (NO fan-out — see this function's docstring) → recorded INLINE,
+        # exactly like the SINGLE_THREADED_LINEAR / EVALUATOR_OPTIMIZER sites, NOT
+        # via the #648 buffered-branch drain (which serializes CONCURRENT sibling
+        # writes — structurally absent here). ADR-F2 single-threaded-write holds.
+        # (§14.21.7 imprecisely lumps handoff with the 3 concurrent topologies under
+        # "buffered-branch drain"; handoff is sequential — a Class-3 spec-imprecision
+        # note, build record `.harness/class_2_fork_b_interstep_nonlinear_handoff.md`.)
+        # Opt-out (`ctx.inter_step_output_channel is None`) → no-op, byte-identical.
+        _record_inter_step_output(ctx, str(step.step_id), output)
         # Compose the ownership transfer to the next stage-expert (a RECORD; surfaced
         # in final_state). Terminal stage → no further handoff (structural).
         if stage_index < len(steps) - 1:

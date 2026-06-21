@@ -2826,6 +2826,154 @@ async def test_b_engine_output_replay_rehydrated_output_reaches_real_provider_ca
     assert "recovered-prior-draft" in messages[0]["content"]
 
 
+class _FullChainHandoffLedger:
+    """In-memory ledger writer double for the handoff full-chain witness (the
+    drained branch entries land here; the witness asserts on provider kwargs, not
+    the ledger, so a recording double is sufficient)."""
+
+    def __init__(self) -> None:
+        self.actor = Actor(actor_class=ActorClass.AGENT, actor_id="fullchain-handoff")
+        self.appends: list[tuple[Any, Any]] = []
+
+    def append(self, payload: Any, write_key: Any) -> Any:
+        self.appends.append((payload, write_key))
+        return "appended"
+
+    @property
+    def is_genesis(self) -> bool:
+        return len(self.appends) == 0
+
+    @property
+    def entry_count(self) -> int:
+        return len(self.appends)
+
+
+class _FullChainHandoffEmitter:
+    def __init__(self) -> None:
+        self.emits: list[Any] = []
+
+    def emit(self, event_class: Any) -> None:
+        self.emits.append(event_class)
+
+
+class _InferenceFacadeRegistry:
+    """Maps INFERENCE_STEP → the sync facade over the real `RuntimeLLMDispatcher`."""
+
+    def __init__(self, facade: SyncDispatcherFacade) -> None:
+        self._facade = facade
+
+    def lookup(self, step_kind: StepKind) -> Any:
+        if step_kind is StepKind.INFERENCE_STEP:
+            return self._facade
+        raise AssertionError(f"unexpected step kind {step_kind!r}")
+
+
+@pytest.mark.asyncio
+async def test_decentralized_handoff_inter_step_output_reaches_real_provider_call() -> None:
+    """B-INTERSTEP-NONLINEAR handoff slice — FULL-CHAIN witness (no proxy). A genuine
+    2-stage DECENTRALIZED_HANDOFF runs through the REAL CP driver (`execute_workflow`
+    → `_execute_decentralized_handoff`) where each stage dispatches through the REAL
+    `RuntimeLLMDispatcher` (via the production `SyncDispatcherFacade` async/sync
+    bridge, the `api.py` `asyncio.to_thread` shape). Stage A's output is recorded by
+    the driver's new inter-step wiring; stage B's ACTUAL provider call then carries
+    stage A's output as the injected upstream-context message — the model GENUINELY
+    receives the prior stage-expert's output (composes the NEW handoff producer + the
+    existing dispatcher consumer through the real path; `[[full-chain-witness-not-half-proofs]]`)."""
+    loop = asyncio.get_running_loop()
+    channel = InterStepOutputChannel()
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    # Seed DISTINCT per-stage responses so the witness is discriminating (not the
+    # shared canned "ok"). The dispatcher returns the response's model_dump → that
+    # is the output recorded to the channel + injected into the next stage's call.
+    adapter.client.messages.responses = [
+        _ProviderResponse(
+            id="msg-a",
+            usage=_Usage(input_tokens=1, output_tokens=1),
+            _dump={"id": "msg-a", "content": [{"text": "STAGE_A_OUTPUT_TOKEN"}]},
+        ),
+        _ProviderResponse(
+            id="msg-b",
+            usage=_Usage(input_tokens=1, output_tokens=1),
+            _dump={"id": "msg-b", "content": [{"text": "STAGE_B_OUTPUT_TOKEN"}]},
+        ),
+    ]
+    tp, _ = _tracer_provider_with_exporter()
+    inner = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter}, tracer_provider=tp, inter_step_channel=channel
+    )
+    facade = SyncDispatcherFacade(inner=inner, loop=loop, result_timeout_seconds=30.0)
+
+    ctx = type("_FullChainHandoffCtx", (), {})()
+    ctx.ledger_writer = _FullChainHandoffLedger()
+    ctx.lifecycle_emitter = _FullChainHandoffEmitter()
+    ctx.drained_flag = asyncio.Event()
+    ctx.pause_requested_flag = asyncio.Event()
+    ctx.pause_resume_protocol = None
+    ctx.ledger_reader = None
+    ctx.tracer_provider = tp
+    ctx.validator_framework = None
+    ctx.tenant_id = None
+    # B-INTERSTEP-NONLINEAR — the SAME channel the dispatcher reads (bootstrap wires
+    # one instance to both; opt-in `RuntimeConfig.inter_step_data_flow`).
+    ctx.inter_step_output_channel = channel
+
+    chain = FallbackChain(
+        primary=ProviderCandidate(
+            provider="anthropic", model="claude-haiku-4-5", family=ProviderFamily.ANTHROPIC
+        ),
+        same_family=(),
+        cross_family=(),
+        terminal=None,
+    )
+    manifest = WorkflowManifestEntry(
+        workflow_id="wf-fullchain-handoff",
+        # DECENTRALIZED_HANDOFF is §10.3-admissible only for PIPELINE_AUTOMATION.
+        workload_class=WorkloadClass.PIPELINE_AUTOMATION,
+        persona_tier=PersonaTier.SOLO_DEVELOPER,
+        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        topology_pattern=TopologyPattern.DECENTRALIZED_HANDOFF,
+        layer_budgets=(),
+        fallback_chain=chain,
+        hitl_placements=(),
+        per_step_overrides={},
+    )
+
+    def _inference(step_id: str, content: str) -> WorkflowStep:
+        return WorkflowStep(
+            step_id=StepID(step_id),
+            step_kind=StepKind.INFERENCE_STEP,
+            step_payload={
+                "messages": [{"role": "user", "content": content}],
+                "tools": None,
+                "params": {"max_tokens": 50},
+            },
+        )
+
+    result = await asyncio.to_thread(
+        execute_workflow,
+        manifest,
+        [_inference("stage-a", "Plan the work"), _inference("stage-b", "Do the work")],
+        run_id="run-fullchain",
+        ctx=cast(Any, ctx),
+        default_model_binding=ModelBinding(provider="anthropic", model="claude-haiku-4-5"),
+        step_dispatchers=cast(Any, _InferenceFacadeRegistry(facade)),
+    )
+
+    assert result.status is RunStatus.SUCCESS
+    calls = adapter.client.messages.calls
+    assert len(calls) == 2  # two stage-expert provider calls, in handoff order
+    # Stage A is the first owner → NO upstream injection (the channel was empty).
+    assert not calls[0]["messages"][0]["content"].startswith("Upstream step output:")
+    # Stage B's ACTUAL provider call carries stage A's output as upstream context —
+    # the model genuinely receives the prior stage-expert's output through the real path.
+    stage_b_msg0 = calls[1]["messages"][0]
+    assert stage_b_msg0["role"] == "user"
+    assert stage_b_msg0["content"].startswith("Upstream step output:")
+    assert "STAGE_A_OUTPUT_TOKEN" in stage_b_msg0["content"]
+    # Stage B's own message is preserved AFTER the injected upstream context.
+    assert {"role": "user", "content": "Do the work"} in calls[1]["messages"]
+
+
 @pytest.mark.asyncio
 async def test_inter_step_channel_none_no_injection_byte_identical() -> None:
     """No channel (opt-out default) → the provider call's messages are byte-identical
