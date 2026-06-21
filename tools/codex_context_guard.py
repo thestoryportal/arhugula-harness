@@ -31,6 +31,7 @@ CITE_RE = re.compile(r"^(harness-[a-z]+/src/|harness-[a-z]+/tests/|tools/semanti
 DASHBOARD_SOURCES = {
     ".harness/roadmap_status.md",
     ".harness/substitutions.yaml",
+    ".harness/arc-ledger.yaml",
     "Project_Roadmap_v1.md",
     "tools/dashboard/generate.py",
     "tools/dashboard/README.md",

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
+from collections import Counter
 from pathlib import Path
 
 
@@ -43,118 +45,122 @@ substitutions: []
     assert trend[-1]["retired"] == 46
 
 
-def _real_arc_map_md() -> str:
-    # The arc-and-unit map is the single arc→unit source (replaces the parseable
-    # "## Remaining forward work" section, now a pointer).
-    return (Path(__file__).parents[1] / ".harness" / "r-fs-1-arc-and-unit-map.md").read_text(
-        encoding="utf-8"
-    )
+def _arc_ledger(generate):
+    # Reuse generate.py's already-imported arc_ledger (it inserts tools/ on sys.path at import
+    # and the ledger path is absolute) — robust to pytest cwd / import-mode.
+    assert generate._arc_ledger is not None, "arc_ledger must be importable for these tests"
+    return generate._arc_ledger
 
 
-def test_arc_unit_map_parses_all_11_arcs_in_build_order():
-    # The single arc→unit source must yield all 11 arcs in the frozen build order,
-    # with the 6 done arcs first and the 5 remaining following.
+def _derived(generate):
+    al = _arc_ledger(generate)
+    return al.derive(al.load())
+
+
+def test_arc_unit_map_projects_frozen_in_build_order():
+    # The arc→unit view now derives from `.harness/arc-ledger.yaml` (the single structured
+    # source). Tags + positions are DERIVED from the ledger's frozen rows, never hardcoded.
     generate = _load_generate_module()
-    am = generate.parse_arc_unit_map(_real_arc_map_md())
-    tags = [a["tag"] for a in am["arcs"]]
-    assert tags == ["B1", "B3", "E", "B2", "R", "B4", "CA", "B5", "B6", "B7", "M"]
-    assert [a["position"] for a in am["arcs"]] == list(range(1, 12))
-    # FROZEN order COMPLETE — all 11 child arcs ✅ done (#637 closed B6, the last).
-    assert [a["status"] for a in am["arcs"]] == ["done"] * 11
+    am = generate.parse_arc_unit_map()
+    d = _derived(generate)
+    expected_tags = [r["id"] for r in d["frozen"]]
+    assert [a["tag"] for a in am["arcs"]] == expected_tags
+    assert [a["position"] for a in am["arcs"]] == [r["position"] for r in d["frozen"]]
+    # frozen arcs are all closed → "done" for the render's STAGE map.
+    assert all(a["status"] == "done" for a in am["arcs"])
+    # cluster normalization passes the ledger value through (point-in-time sanity).
     by_tag = {a["tag"]: a for a in am["arcs"]}
-    # cluster classification: independent vs serial vs maybe-serial.
     assert by_tag["CA"]["cluster"] == "independent"
     assert by_tag["B4"]["cluster"] == "serial"
-    # M's card was finalized to "independent (parallel-safe)" when it landed (#635).
     assert by_tag["M"]["cluster"] == "independent"
 
 
-def test_done_arcs_carry_real_units_remaining_arcs_anticipated():
+def test_frozen_arcs_carry_asbuilt_units_in_render_shape():
     generate = _load_generate_module()
-    am = generate.parse_arc_unit_map(_real_arc_map_md())
+    am = generate.parse_arc_unit_map()
     by_tag = {a["tag"]: a for a in am["arcs"]}
-    # done arcs carry as-built units with real U-* ids
-    assert by_tag["B1"]["units_status"] == "as-built"
-    assert by_tag["B1"]["units"], "B1 must list as-built units"
-    assert any("U-CP-86" in u["unit"] for u in by_tag["B1"]["units"])  # PARALLELIZATION
-    assert all(u["what"] for u in by_tag["B1"]["units"])  # every unit has a plain-language line
-    # B4 is now done — as-built (its 4 slices extended existing contracts → 0 new U-* ids)
-    assert by_tag["B4"]["units_status"] == "as-built"
-    assert by_tag["B4"]["units"], "B4 must list as-built slices"
-    # CA's card carries anticipated units (its card was not back-filled with as-built U-* ids
-    # when it landed — pre-existing arc-map card drift; the arc *status* is done, see the
-    # parse-order test). Asserting the actual parsed shape.
-    assert by_tag["CA"]["units_status"] == "anticipated"
-    assert by_tag["CA"]["units"], "CA must list units"
-    # dependency text is carried per arc
-    assert by_tag["CA"]["depends"] and by_tag["CA"]["parallel"]
+    # B1 carries real as-built U-* ids
+    b1 = by_tag["B1"]
+    assert b1["units_status"] == "as-built"
+    assert b1["unit_id_count"] > 0
+    assert any("U-CP-86" in u["unit"] for u in b1["units"])  # PARALLELIZATION
+    assert all(u["what"] for u in b1["units"])  # every unit has a plain-language line
+    # CA is now as-built (the overhaul fixed the pre-existing anticipated→as-built card drift);
+    # its 4 contract-extender slices minted no new U-* ids → unit_id_count 0.
+    ca = by_tag["CA"]
+    assert ca["units_status"] == "as-built"
+    assert ca["units"], "CA must list its as-built slices"
+    assert ca["unit_id_count"] == 0
+    # every frozen unit normalizes to the {unit, what, meta} render shape.
+    for a in am["arcs"]:
+        for u in a["units"]:
+            assert set(u) == {"unit", "what", "meta"}
 
 
-def test_remaining_forward_derives_frozen_child_arcs_in_order():
-    # parse_remaining_forward now DERIVES the remaining-work view from the arc map
-    # (the single source), preserving the {child_arcs, standalone, done} shape that
-    # compute_closure + the arc strip consume.
+def test_remaining_forward_derives_frozen_done_in_order():
+    # parse_remaining_forward derives the {child_arcs, standalone, done} view from the ledger
+    # (the `md` arg is ignored). FROZEN order COMPLETE → no remaining child arcs; done in order.
     generate = _load_generate_module()
-    rf = generate.parse_remaining_forward(_real_arc_map_md())
-
-    # FROZEN order COMPLETE — no remaining frozen child arcs; all 11 done in build order.
-    # (R-FS-1 stays ACTIVE via the standalone B-* arcs; see test below.)
+    rf = generate.parse_remaining_forward("")
+    d = _derived(generate)
     assert [arc["id"] for arc in rf["child_arcs"]] == []
-    assert rf["done"] == ["B1", "B3", "E", "B2", "R", "B4", "CA", "B5", "B6", "B7", "M"]
+    assert rf["done"] == [r["id"] for r in d["frozen"]]
 
 
-def test_remaining_forward_derives_standalone_arcs():
+def test_standalone_projection_matches_ledger_counts():
+    # The standalone status counts are DERIVED from the ledger — the R-IF-114 fix (the old
+    # hardcoded 17/8/6 went stale; counts now cannot drift without failing arc_ledger --check).
     generate = _load_generate_module()
-    rf = generate.parse_remaining_forward(_real_arc_map_md())
+    am = generate.parse_arc_unit_map()
+    d = _derived(generate)
+    sa = am["standalone"]
+    assert len(sa) == d["standalone_total"]
+    counts = Counter(s["status"] for s in sa)
+    assert counts["closed"] == d["standalone_closed"]
+    assert counts["remaining"] == d["standalone_remaining"]
+    assert counts["gated"] == d["standalone_gated"]
+    assert counts["resolved"] == d["standalone_resolved"]
+    assert counts["registered"] == d["standalone_registered"]
+    # closed standalone arcs carry their PR in the human-facing chip label.
+    closed = [s for s in sa if s["status"] == "closed"]
+    assert closed and all("#" in s["status_detail"] for s in closed)
+    # both built-half forward families are present.
+    assert any(s["status"] == "gated" for s in sa)
+    assert any(s["status"] == "resolved" for s in sa)
 
-    sa = rf["standalone"]
-    by_id = {arc["id"]: arc for arc in sa}
-    # §5 is the COMPLETE standalone enumeration (both families) with 4-way status.
-    assert len(sa) == 17
-    # design-fork-first "remaining" arcs surfaced during impl (R-FS-1's continuing work).
-    # B-HITL-PLACEMENT-PER-STEP-PRODUCER was registered by B-TOOL-GATE (#653, Codex [P1]).
-    family1 = {
-        "B-FANOUT-PAUSE",
-        "B-L2-EMBEDDING-ACTIVATION",
-        "B-HITL-PLACEMENT-PER-STEP-PRODUCER",
-        "B-EFFECT-FENCE",
-    }
-    assert family1 <= set(by_id)
-    assert by_id["B-FANOUT-PAUSE"]["status"] == "remaining"
-    assert by_id["B-HITL-PLACEMENT-PER-STEP-PRODUCER"]["status"] == "remaining"
-    # closed standalone arcs (built + merged, each its own PR) carry status="closed" + the PR #.
-    for cid in (
-        "B-MCP-HOST-REMOTE-TRANSPORT",
-        "B-MEMORY-SURFACE-BACKEND-IMPLS",
-        "B-COST-DISCRIMINATOR-TAXONOMY",
-        "B-NONLINEAR-OVERRIDE-PROVENANCE",
-        "B-FALLBACK-CHAIN-FAMILY-COST-COMPOSITION",
-        "B-INTERSTEP",
-        "B-TOOL-GATE",
-    ):
-        assert by_id[cid]["status"] == "closed", cid
-    assert "#640" in by_id["B-MCP-HOST-REMOTE-TRANSPORT"]["status_detail"]
-    assert "#653" in by_id["B-TOOL-GATE"]["status_detail"]
-    # B-TAIL is build-authorized but GATED on the R-420/R-421 collector arc.
-    assert by_id["B-TAIL-CONDITIONAL-SAMPLING"]["status"] == "gated"
-    # Both `resolved` arcs were settled INSIDE the frozen order -> NOT separate post-frozen
-    # standalones (excluded from the closed/remaining tallies, never double-counted): B-PER-TOOL
-    # built as B6 Slice 2 (#637); B-PER-DISPATCH-DRIVER-PRECISION foreclosed N/A by B6 Option A.
-    assert by_id["B-PER-TOOL-SANDBOX-TIER"]["status"] == "resolved"
-    assert by_id["B-PER-DISPATCH-DRIVER-PRECISION"]["status"] == "resolved"
-    # 4-way bucket counts: 8 closed / 6 remaining / 1 gated / 2 resolved
-    # (B-EFFECT-FENCE closed at the 8th standalone B-* arc).
-    statuses = [arc["status"] for arc in sa]
-    assert statuses.count("closed") == 8
-    assert statuses.count("remaining") == 6
-    assert statuses.count("gated") == 1
-    assert statuses.count("resolved") == 2
+
+def test_registered_forward_arcs_carry_parent_and_zero_units():
+    # The "do not fabricate units for unbuilt arcs" discipline, asserted at the render boundary:
+    # registered (forward) arcs carry a parent_arc + anticipated scope + the decompose marker,
+    # name NO concrete U-* unit, and the render uses the scope as the shape line.
+    generate = _load_generate_module()
+    am = generate.parse_arc_unit_map()
+    reg = [s for s in am["standalone"] if s["status"] == "registered"]
+    assert reg, "the ledger registers forward arcs"
+    for s in reg:
+        assert s["parent_arc"], f"{s['id']} must name a parent_arc"
+        assert s["anticipated_scope"], f"{s['id']} must carry an anticipated_scope"
+        assert s["decompose_at_open"] is True
+        assert s["shape"] == s["anticipated_scope"]
+        assert not re.search(r"U-[A-Z]{2}-\d+", s["anticipated_scope"]), s["id"]
+
+
+def test_no_yaml_fallback_projection_matches_pyyaml():
+    # The Codex dashboard guard regenerates generate.py under system Python 3.9 (no PyYAML).
+    # The no-yaml hand-parser MUST project identically to yaml.safe_load (else the guard's
+    # byte-compare false-fires). Projection-level equality over the real ledger pins the parser.
+    generate = _load_generate_module()
+    al = generate._arc_ledger
+    path = al.DEFAULT_LEDGER
+    yaml_proj = generate._project_arc_ledger(al.derive(al.load(path)))
+    hand_proj = generate._project_arc_ledger(al.derive(generate._arc_ledger_fallback_load(path)))
+    assert hand_proj == yaml_proj
 
 
 def test_compute_closure_counts_standalone_by_status():
     # The rfs1 headline carries the standalone status breakdown the masthead renders:
-    # closed/remaining/gated/resolved, with `standalone_buildable` = closed + remaining
-    # (excludes gated + frozen-resolved so the frozen B6 Slice 2 isn't double-counted).
+    # closed/remaining/gated/resolved/registered, with `standalone_buildable` = closed + remaining
+    # (excludes gated/resolved + registered so the frozen B6 Slice 2 isn't double-counted).
     generate = _load_generate_module()
     dashboard = {
         "retirement": {},
@@ -166,6 +172,8 @@ def test_compute_closure_counts_standalone_by_status():
                 {"id": "B-C", "status": "remaining"},
                 {"id": "B-D", "status": "gated"},
                 {"id": "B-E", "status": "resolved"},
+                {"id": "B-F", "status": "registered"},
+                {"id": "B-G", "status": "registered"},
             ],
         },
     }
@@ -174,13 +182,15 @@ def test_compute_closure_counts_standalone_by_status():
     assert rfs1["standalone_remaining"] == 1
     assert rfs1["standalone_gated"] == 1
     assert rfs1["standalone_resolved"] == 1
+    assert rfs1["standalone_registered"] == 2
+    # registered (forward) arcs are NOT build-ready → excluded from the buildable denominator.
     assert rfs1["standalone_buildable"] == 3
 
 
 def test_remaining_excludes_closed_and_done_arcs():
     # Closed/done items must never resurface in the curated remaining list.
     generate = _load_generate_module()
-    rf = generate.parse_remaining_forward(_real_arc_map_md())
+    rf = generate.parse_remaining_forward("")
 
     blob = " ".join(arc["id"] + arc["label"] for arc in rf["child_arcs"])
     for closed in ("R-411", "R-412", "R-901", "R-CXA-1", "R-300"):
@@ -222,6 +232,22 @@ def test_assert_remaining_nonempty_raises_on_silent_empty():
     generate.assert_remaining_nonempty(
         actions,
         {"remaining_forward": {"child_arcs": [], "standalone": [{"id": "B-Z", "status": "gated"}]}},
+    )
+
+    # a `registered` (forward, decompose-at-open) arc IS open work -> no raise. This is the
+    # critical invariant: without `registered` in the OPEN set this FATAL guard would
+    # false-fire the moment every originally-enumerated remaining/gated arc closes.
+    generate.assert_remaining_nonempty(
+        actions,
+        {
+            "remaining_forward": {
+                "child_arcs": [],
+                "standalone": [
+                    {"id": "B-X", "status": "closed"},
+                    {"id": "B-W", "status": "registered"},
+                ],
+            }
+        },
     )
 
     # populated child arcs -> no raise

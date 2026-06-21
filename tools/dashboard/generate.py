@@ -121,6 +121,30 @@ try:
 except Exception:  # defensive — never crash the dashboard on a ledger read/import issue
     _SUB_DERIVATION = None
 
+# Arc-ledger derivation (roadmap-dashboard overhaul). The R-FS-1 arc + unit status (the
+# frozen 11-arc build order + the standalone forward arcs) is DERIVED from
+# `.harness/arc-ledger.yaml` via `tools/arc_ledger.py` — replacing the parsed-markdown arc
+# map that drifted (the §5 table lagged #671; hardcoded test counts went stale = R-IF-114).
+# `derive()` is pure-python; only `load()` needs PyYAML. Under the no-PyYAML system Python
+# 3.9 the Codex dashboard guard regenerates with, `load()` raises → we hand-parse the YAML
+# text (`_arc_ledger_fallback_load`) and feed the rows through the SAME reused `derive()`,
+# so the no-yaml render is byte-identical to the PyYAML render (the guard byte-compare passes).
+_arc_ledger = None
+try:
+    import sys as _sys2
+
+    _sys2.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import arc_ledger as _arc_ledger
+except Exception:  # arc_ledger itself unimportable — the arc map degrades to empty
+    _arc_ledger = None
+
+_ARC_DERIVATION: dict | None = None
+if _arc_ledger is not None:
+    try:
+        _ARC_DERIVATION = _arc_ledger.derive(_arc_ledger.load())
+    except Exception:  # no PyYAML (system-Python guard regen) → hand-parse fallback below
+        _ARC_DERIVATION = None
+
 # `REMAINING_ORDERED` was removed (R-FS-1 roadmap-hygiene reorg): the remaining-work
 # itemization now has ONE authoritative home -- the `## Remaining forward work` section
 # of `.harness/roadmap_status.md`, parsed by `parse_remaining_forward()` below. A
@@ -175,6 +199,8 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
     sa_remaining = sum(1 for s in standalone if s.get("status") == "remaining")
     sa_gated = sum(1 for s in standalone if s.get("status") == "gated")
     sa_resolved = sum(1 for s in standalone if s.get("status") == "resolved")
+    # registered = forward, decompose-at-open arcs (committed but not yet built; NO units).
+    sa_registered = sum(1 for s in standalone if s.get("status") == "registered")
     rfs1 = {
         "done": done,
         "done_count": len(done),
@@ -185,7 +211,8 @@ def compute_closure(actions: list[dict], dashboard: dict) -> dict:
         "standalone_remaining": sa_remaining,
         "standalone_gated": sa_gated,
         "standalone_resolved": sa_resolved,
-        # build-ready denominator = closed + remaining (excludes gated + frozen-resolved).
+        "standalone_registered": sa_registered,
+        # build-ready denominator = closed + remaining (excludes gated/resolved + registered).
         "standalone_buildable": sa_closed + sa_remaining,
     }
     # waffle-grid breakdown (ui-ux-pro-max chart rec: fraction-of-whole filled).
@@ -408,113 +435,198 @@ def _section(md: str, header: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-def _parse_units_table(body: str, units_status: str) -> list[dict]:
-    """Extract the first markdown table in an arc section body into normalized units.
+def _norm_cluster(cluster: str) -> str:
+    """Normalize a ledger `cluster` value to the render enum (serial/independent/maybe-serial)."""
+    cl = (cluster or "").lower()
+    if "independent" in cl:
+        return "independent"
+    if "maybe" in cl or "possibl" in cl:
+        return "maybe-serial"
+    return "serial"
 
-    The map's done-arc tables are `| Unit(s) | Leg/PR | What |` and remaining-arc tables
-    are `| Slice | What | Fork/impl |` — the plain-language 'what' sits in a different
-    column. Normalize both to {unit, what, meta} so the render is uniform."""
-    rows = re.findall(r"^\|(?!\s*-)(.+)\|\s*$", body, re.MULTILINE)
+
+def _standalone_status_detail(row: dict) -> str:
+    """Human chip label for a standalone arc (e.g. 'closed · #640', 'registered · decompose at
+    open'). The leading keyword stays machine-readable in `status`; this is display-only."""
+    status = row.get("status", "")
+    if status == "closed":
+        pr = row.get("pr")
+        return f"closed · {pr}" if pr else "closed"
+    if status == "registered":
+        return "registered · decompose at open"
+    return status
+
+
+def _project_frozen_units(row: dict) -> tuple:
+    """Map a frozen arc's ledger units (`{id, what, pr, leg}`) to the render shape
+    (`{unit, what, meta}`) + the distinct (unit-id, leg) counts. `id: null` slice rows
+    (contract-extenders like B4/CA, which minted no U-*) render under their leg label."""
     units: list[dict] = []
-    for raw in rows:
-        cols = [c.strip() for c in raw.split("|")]
-        if len(cols) < 3:
-            continue
-        c0, c1, c2 = cols[0], cols[1], cols[2]
-        # skip the header row (column titles, not data)
-        if c0.lower() in ("unit(s)", "unit / slice", "anticipated slice", "unit"):
-            continue
-        if units_status == "as-built":
-            units.append({"unit": c0, "what": c2, "meta": c1})  # unit | leg | what
-        else:
-            units.append({"unit": c0, "what": c1, "meta": c2})  # slice | what | type
-    return units
+    for u in row.get("units") or []:
+        uid = u.get("id")
+        leg = u.get("leg") or ""
+        pr = u.get("pr") or ""
+        unit_label = uid if uid else leg
+        # meta = pr + leg, dropping a leg that already IS the unit label (the null-id case).
+        meta = " · ".join(p for p in (pr, leg) if p and p != unit_label)
+        units.append({"unit": unit_label, "what": u.get("what") or "", "meta": meta})
+    unit_id_count = len({u.get("id") for u in (row.get("units") or []) if u.get("id")})
+    leg_count = len({u.get("leg") for u in (row.get("units") or []) if u.get("leg")})
+    return units, unit_id_count, leg_count
 
 
-def parse_arc_unit_map(md: str) -> dict:
-    """Parse `.harness/r-fs-1-arc-and-unit-map.md` — the SINGLE arc→unit source.
-
-    Returns {arcs: [...], standalone: [...]}. Each arc carries its plain-language
-    capability, status (done|next|queued), build position, cluster class, dependency
-    text, and units (real as-built for done arcs; anticipated slices for remaining).
-    The dashboard's remaining-work view + arc strip derive from this (see
-    `derive_remaining_forward`); there is no second parseable copy."""
+def _project_arc_ledger(derived: dict) -> dict:
+    """Project `arc_ledger.derive()` output onto the {arcs, standalone} shape the dashboard
+    render + `derive_remaining_forward` consume — the EXACT shape the retired markdown parser
+    returned, so downstream (closure, arc strip, render) is unchanged. Builds fresh dicts so
+    the emitted JSON key order is parser-independent (yaml vs no-yaml fallback are identical)."""
     arcs: list[dict] = []
-    for m in re.finditer(
-        r"^### R-FS-1·(\S+) — (.+?)\n(.*?)(?=\n### |\n## |\Z)", md, re.MULTILINE | re.DOTALL
-    ):
-        tag, name, body = m.group(1).strip(), m.group(2).strip(), m.group(3)
-        status_seg = (re.search(r"\*\*Status:\*\*\s*(.+)", body) or [None, ""])[1]
-        sl = status_seg.lower()
-        status = "done" if "done" in sl else ("next" if "next" in sl else "queued")
-        pos_m = re.search(r"position\s+(\d+)\s+of\s+11", status_seg)
-        units_status = (
-            "as-built" if re.search(r"\*\*Units:\*\*\s*as-built", body) else "anticipated"
-        )
-        cluster_seg = (re.search(r"\*\*Cluster:\*\*\s*([^·\n]+)", body) or [None, ""])[1].strip()
-        cl_low = cluster_seg.lower()
-        cluster = (
-            "independent"
-            if "independent" in cl_low
-            # "maybe"/"possibly"/"possible serial" all mean uncertain cluster membership
-            else ("maybe-serial" if ("maybe" in cl_low or "possibl" in cl_low) else "serial")
-        )
-        type_seg = (re.search(r"\*\*Type:\*\*\s*([^·\n]+)", body) or [None, ""])[1].strip()
-        depends = (re.search(r"\*\*Depends-on:\*\*\s*(.+)", body) or [None, ""])[1].strip()
-        par_m = re.search(r"\*\*(?:Parallel-safe with|Serial with):\*\*\s*(.+)", body)
-        parallel = par_m.group(1).strip() if par_m else ""
-        gives_m = re.search(
-            r"\*\*What it gives the harness\.\*\*\s*(.+?)(?=\n\n|\n\|)", body, re.DOTALL
-        )
-        gives = re.sub(r"\s+", " ", gives_m.group(1)).strip() if gives_m else ""
-        units = _parse_units_table(body, units_status)
-        # distinct atomic-unit IDs across the (leg-grouped) rows — reconciles the card's
-        # count with the map's §7 at-a-glance ("B1 = 14 units"), since one leg row can
-        # carry several U-* ids. Remaining arcs have no ids yet (units at arc-open) → 0.
-        unit_id_count = len(set(re.findall(r"U-[A-Z]{2}-\d+", " ".join(u["unit"] for u in units))))
+    for r in derived["frozen"]:  # already position-sorted by derive()
+        units, unit_id_count, leg_count = _project_frozen_units(r)
         arcs.append(
             {
-                "tag": tag,
-                "id": f"R-FS-1·{tag}",
-                "name": name,
-                "status": status,
-                "position": int(pos_m.group(1)) if pos_m else 0,
-                "cluster": cluster,
-                "cluster_text": cluster_seg,
-                "units_status": units_status,
-                "type": type_seg,
-                "depends": depends,
-                "parallel": parallel,
-                "gives": gives,
+                "tag": r.get("id") or "",
+                "id": f"R-FS-1·{r.get('id') or ''}",
+                "name": r.get("title") or "",
+                # frozen arcs are all closed → "done" for the JS STAGE map (done/next/queued).
+                "status": "done",
+                "position": r.get("position") or 0,
+                "cluster": _norm_cluster(r.get("cluster") or ""),
+                "cluster_text": r.get("cluster") or "",
+                "units_status": r.get("units_status") or "as-built",
+                "type": "",
+                "depends": "",
+                "parallel": "",
+                "gives": r.get("gives") or "",
                 "units": units,
                 "unit_id_count": unit_id_count,
+                "leg_count": leg_count,
             }
         )
-    arcs.sort(key=lambda a: a["position"])
-    # standalone B-* rows live only in the §5 table; the `B-<ID>` shape is unique in the
-    # doc (the at-a-glance table uses bare tags like `B1`), so match across the whole file.
-    # §5 carries a 4-column row: | id | Status | Owner-axis | What |. The Status cell's leading
-    # keyword (closed / remaining / gated / resolved) is the machine-readable status; the full
-    # cell text (e.g. "closed · #640") is the human-facing chip label.
-    standalone = []
-    for s in re.finditer(
-        r"^\|\s*(B-[A-Z0-9-]+)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*(.+?)\s*\|\s*$",
-        md,
-        re.MULTILINE,
-    ):
-        status_detail = s.group(2).strip()
-        keyword = re.sub(r"[^a-z]", "", status_detail.lower().split()[0]) if status_detail else ""
-        status = keyword if keyword in {"closed", "remaining", "gated", "resolved"} else "remaining"
+    standalone: list[dict] = []
+    for r in derived["standalone"]:  # file order (matches the retired §5 enumeration order)
+        # registered (forward) rows carry `anticipated_scope` not `gives`; everything else `gives`.
+        shape = r.get("gives") or r.get("anticipated_scope") or ""
         standalone.append(
             {
-                "id": s.group(1).strip(),
-                "status": status,
-                "status_detail": status_detail,
-                "axis": s.group(3).strip(),
-                "shape": s.group(4).strip(),
+                "id": r.get("id") or "",
+                "status": r.get("status") or "",
+                "status_detail": _standalone_status_detail(r),
+                "axis": r.get("owner_axis") or "",
+                "shape": shape,
+                # forward-render fields (registered cards): parent_arc + scope + decompose marker.
+                "pr": r.get("pr") or "",
+                "depends_on": r.get("depends_on") or "",
+                "resolution": r.get("resolution") or "",
+                "parent_arc": r.get("parent_arc") or "",
+                "anticipated_scope": r.get("anticipated_scope") or "",
+                "decompose_at_open": bool(r.get("decompose_at_open")),
             }
         )
     return {"arcs": arcs, "standalone": standalone}
+
+
+# --------------------------------------------------------------------------- #
+# No-PyYAML fallback — hand-parse `.harness/arc-ledger.yaml` so the dashboard regenerates
+# byte-identically under the system Python 3.9 (no PyYAML) the Codex guard uses. The parser
+# only needs the `arcs:` list (derive() ignores `snapshot`; generate never calls validate()),
+# and only the render-relevant fields — it feeds rows through the SAME reused `derive()`.
+# 3.9-clean (no match/| unions at runtime). A projection-equality test pins it to yaml.safe_load.
+# --------------------------------------------------------------------------- #
+def _coerce_scalar(val: str):
+    """Coerce a bare/quoted YAML scalar to str/int/bool/None (the subset this ledger uses)."""
+    val = val.strip()
+    if not val:
+        return None
+    if val[0] in ('"', "'"):
+        quote = val[0]
+        end = val.find(quote, 1)
+        return val[1:end] if end != -1 else val[1:]
+    val = re.split(r"\s+#", val, maxsplit=1)[0].strip()  # strip trailing inline comment (bare only)
+    if val in ("null", "~", ""):
+        return None
+    if val == "true":
+        return True
+    if val == "false":
+        return False
+    if re.fullmatch(r"-?\d+", val):
+        return int(val)
+    return val
+
+
+def _parse_flow_mapping(inner: str) -> dict:
+    """Parse a single-line YAML flow mapping body (`id: U-IS-19, what: "..", pr: "#5", leg: "x"`).
+    Quote-aware: a quoted value is taken whole, so commas inside `what:"a, b, c"` don't split it."""
+    out: dict = {}
+    for km in re.finditer(r'([A-Za-z_]+):\s*("(?:[^"\\]|\\.)*"|[^,}]*)', inner):
+        out[km.group(1)] = _coerce_scalar(km.group(2))
+    return out
+
+
+def _parse_arc_block(block: str) -> dict | None:
+    """Parse one `- id: …` arc block (scalar fields + an optional `units:` flow-mapping list)."""
+    row: dict = {}
+    units: list[dict] = []
+    in_units = False
+    for line in block.split("\n"):
+        if not line.strip() or re.match(r"^\s*#", line):
+            continue
+        if re.match(r"^\s{4}units:\s*$", line):
+            in_units = True
+            continue
+        if in_units:
+            um = re.match(r"^\s*-\s*\{(.*)\}\s*,?\s*$", line)
+            if um:
+                units.append(_parse_flow_mapping(um.group(1)))
+                continue
+            in_units = False  # a non-unit line closes the units block → fall through
+        sm = re.match(r"^\s*-?\s*([A-Za-z_]+):\s*(.*)$", line)
+        if sm and sm.group(1) not in row:  # first occurrence wins (the arc's own `id`)
+            row[sm.group(1)] = _coerce_scalar(sm.group(2))
+    if units:
+        row["units"] = units
+    return row if "id" in row else None
+
+
+def _arc_ledger_fallback_load(path: Path) -> dict:
+    """Hand-parse the ledger's `arcs:` list without PyYAML → the same {arcs:[row dicts]} shape
+    `arc_ledger.load()` returns (snapshot omitted; derive() doesn't read it)."""
+    text = path.read_text(encoding="utf-8")
+    marker = re.search(r"^arcs:\s*$", text, re.MULTILINE)
+    if not marker:
+        return {"arcs": []}
+    body = text[marker.end() :]
+    arcs: list[dict] = []
+    for block in re.split(r"\n(?=  - id:)", body):
+        if "- id:" not in block:
+            continue
+        row = _parse_arc_block(block)
+        if row is not None:
+            arcs.append(row)
+    return {"arcs": arcs}
+
+
+def _arc_derivation_or_fallback() -> dict | None:
+    """The PyYAML derivation when available, else the no-yaml hand-parse fed through the same
+    reused `derive()`. None only if arc_ledger is wholly unimportable (arc map degrades empty)."""
+    if _ARC_DERIVATION is not None:
+        return _ARC_DERIVATION
+    if _arc_ledger is None:
+        return None
+    data = _arc_ledger_fallback_load(_arc_ledger.DEFAULT_LEDGER)
+    return _arc_ledger.derive(data)
+
+
+def parse_arc_unit_map(md: str = "") -> dict:
+    """Return the {arcs, standalone} view from `.harness/arc-ledger.yaml` — the single
+    structured source (R-FS-1 dashboard overhaul). Each frozen arc carries its plain-language
+    capability + as-built units; each standalone arc its status + forward-render fields. The
+    `md` arg is ignored (kept so back-compat callers like `parse_remaining_forward` still work).
+    `derive()` is reused for both the PyYAML and no-yaml paths so they project identically."""
+    derived = _arc_derivation_or_fallback()
+    if derived is None:
+        return {"arcs": [], "standalone": []}
+    return _project_arc_ledger(derived)
 
 
 def derive_remaining_forward(arc_map: dict) -> dict:
@@ -552,20 +664,24 @@ def assert_remaining_nonempty(actions: list[dict], dashboard: dict) -> None:
 
     Once the FROZEN order completes (all 11 child arcs ✅), R-FS-1 stays ACTIVE while the
     standalone `B-*` build arcs remain (full-spec, nothing-deferred) — so remaining work is
-    non-empty via the OPEN (remaining/gated) standalone arcs even when `child_arcs` is zero.
-    `closed`/`resolved` standalone arcs do NOT count as remaining work — guarding on a merely
-    non-empty `standalone` list would mask drift once every standalone arc is built."""
+    non-empty via the OPEN (remaining/gated/registered) standalone arcs even when `child_arcs`
+    is zero. `closed`/`resolved` standalone arcs do NOT count as remaining work — guarding on a
+    merely non-empty `standalone` list would mask drift once every standalone arc is built.
+    `registered` (forward, decompose-at-open) arcs ARE open work — omitting them would make
+    this FATAL guard false-fire the moment the originally-enumerated open arcs all close."""
     rfs1_active = any(a.get("id") == "R-FS-1" and a.get("status") == "ACTIVE" for a in actions)
     remaining = dashboard.get("remaining_forward", {})
     child_arcs = remaining.get("child_arcs", [])
     standalone = remaining.get("standalone", [])
-    open_standalone = [s for s in standalone if s.get("status") in ("remaining", "gated")]
+    open_standalone = [
+        s for s in standalone if s.get("status") in ("remaining", "gated", "registered")
+    ]
     if rfs1_active and not child_arcs and not open_standalone:
         raise RuntimeError(
-            "FATAL: R-FS-1 is ACTIVE but the arc-and-unit map parsed zero remaining frozen child "
-            "arcs AND zero OPEN (remaining/gated) standalone arcs in "
-            ".harness/r-fs-1-arc-and-unit-map.md -- the remaining-work source has drifted (check "
-            "the §5 table format + Status column). Refusing to render an empty remaining-work panel."
+            "FATAL: R-FS-1 is ACTIVE but the arc ledger derived zero remaining frozen child "
+            "arcs AND zero OPEN (remaining/gated/registered) standalone arcs from "
+            ".harness/arc-ledger.yaml -- the remaining-work source has drifted (run "
+            "`python tools/arc_ledger.py --check`). Refusing to render an empty remaining-work panel."
         )
 
 
@@ -1410,7 +1526,7 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
     <div class="panel lit" style="margin-bottom:20px">
       <div class="k">R-FS-1 full-spec build — the live frontier</div>
       <div class="big">${{rf1.done_count||0}}<span class="u"> / ${{rf1.total||0}} frozen arcs done · ${{rf1.standalone_closed||0}}/${{rf1.standalone_buildable||0}} standalone built</span></div>
-      <div class="sub">The frozen build order is complete (<strong>${{rf1.done_count||0}}/${{rf1.total||0}}</strong>). Standalone design-fork-first arcs: <strong>${{rf1.standalone_closed||0}} closed</strong> · <strong>${{rf1.standalone_remaining||0}} remaining</strong> · <strong>${{rf1.standalone_gated||0}} gated</strong>. See the <strong>arc &amp; unit map</strong> below for what every arc and atomic unit does, in plain language — §5 lists each standalone arc with its status. The substitution-retirement closure below is a <em>separate, historical Phase-8 metric</em> — not full-spec completion.</div>
+      <div class="sub">The frozen build order is complete (<strong>${{rf1.done_count||0}}/${{rf1.total||0}}</strong>). Standalone design-fork-first arcs: <strong>${{rf1.standalone_closed||0}} closed</strong> · <strong>${{rf1.standalone_remaining||0}} remaining</strong> · <strong>${{rf1.standalone_gated||0}} gated</strong> · <strong>${{rf1.standalone_registered||0}} registered (forward)</strong>. See the <strong>arc &amp; unit map</strong> below for what every arc and atomic unit does, in plain language. The substitution-retirement closure below is a <em>separate, historical Phase-8 metric</em> — not full-spec completion.</div>
       <div class="arcstrip">
         ${{(rf1.done||[]).map(t=>`<span class="arc done">${{esc(t)}} ✓</span>`).join("")}}
         <span class="arcsep">→</span>
@@ -1455,10 +1571,11 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
   const CLU = {{ serial:"serial cluster", independent:"parallel-safe", "maybe-serial":"maybe serial" }};
   const card = (a) => {{
     const [cls, lbl] = STAGE[a.status] || ["queued", a.status];
+    const legN = a.leg_count || a.units.length;
     const usNote = a.units_status === "as-built"
       ? (a.unit_id_count > 0
-          ? `${{a.unit_id_count}} atomic units across ${{a.units.length}} build legs`
-          : `${{a.units.length}} build legs (slices) · extended existing contracts, no new plan-units`)
+          ? `${{a.unit_id_count}} atomic units across ${{legN}} build legs`
+          : `${{legN}} build legs (slices) · extended existing contracts, no new plan-units`)
       : `${{a.units.length}} slices · units formally decomposed at arc-open`;
     const units = (a.units||[]).map(u => `
       <div class="unit">
@@ -1488,19 +1605,38 @@ document.getElementById("next-action").innerHTML = mdLite(d.next_action);
       </details>`;
   }};
   // standalone status → chip class (reuse the existing chip palette).
-  const SCHIP = {{ closed:"closed", remaining:"queued", gated:"blocked", resolved:"done" }};
+  const SCHIP = {{ closed:"closed", remaining:"queued", gated:"blocked", resolved:"done", registered:"queued" }};
   const sCount = (st) => standalone.filter(s => s.status === st).length;
-  const standaloneCards = standalone.map(s => `
-    <div class="standrow"><span class="atag">${{esc(s.id)}}</span><span class="chip ${{SCHIP[s.status]||'queued'}}">${{esc(s.status_detail||s.status)}}</span><span class="aclu">${{esc(s.axis)}}</span><span class="sshape">${{bold(s.shape)}}</span></div>`).join("");
+  // built/build-ready/gated arcs render as compact rows; registered (forward, decompose-at-open)
+  // arcs render as cards with their anticipated scope + parent arc — and carry NO units.
+  const builtRows = standalone.filter(s => s.status !== "registered");
+  const forwardRows = standalone.filter(s => s.status === "registered");
+  const standrow = (s) => `
+    <div class="standrow"><span class="atag">${{esc(s.id)}}</span><span class="chip ${{SCHIP[s.status]||'queued'}}">${{esc(s.status_detail||s.status)}}</span><span class="aclu">${{esc(s.axis)}}</span><span class="sshape">${{bold(s.shape)}}</span></div>`;
+  const forwardCard = (s) => `
+    <div class="standrow" style="flex-direction:column;align-items:stretch;gap:6px">
+      <div style="display:flex;align-items:baseline;gap:11px;flex-wrap:wrap">
+        <span class="atag">${{esc(s.id)}}</span>
+        <span class="chip queued">${{esc(s.status_detail||'registered · decompose at open')}}</span>
+        <span class="aclu">${{esc(s.axis)}}</span>
+      </div>
+      <div class="sshape">${{bold(s.shape)}}</div>
+      ${{s.parent_arc ? `<div class="deps"><div><span class="dk">Parent arc</span> ${{esc(s.parent_arc)}}</div></div>` : ""}}
+    </div>`;
+  const builtCards = builtRows.map(standrow).join("");
+  const forwardCards = forwardRows.map(forwardCard).join("");
   document.getElementById("arc-map").innerHTML = `
     <div class="ahead">
       <div class="label">Arc &amp; unit map — what every arc and atomic unit does for the harness</div>
-      <div class="ahint">Click an arc to expand. <span class="chip done">done</span> arcs list their real, as-built units; <span class="chip queued">queued</span> arcs list anticipated slices (units are formally decomposed when that arc opens). Order = the frozen build sequence.</div>
+      <div class="ahint">Click an arc to expand. <span class="chip done">done</span> arcs list their real, as-built units. The frozen build order ran first; standalone arcs surfaced during impl. <span class="chip queued">registered</span> forward arcs carry an anticipated scope and are decomposed into units only when they open.</div>
     </div>
     <div class="arccards">${{arcs.map(card).join("")}}</div>
     <div class="panel" style="margin-top:18px">
-      <div class="label" style="margin-bottom:10px">Standalone forward arcs — <strong>${{sCount('closed')}} closed</strong> · <strong>${{sCount('remaining')}} remaining</strong> · <strong>${{sCount('gated')}} gated</strong> · <strong>${{sCount('resolved')}} resolved</strong> · design-fork-first, surfaced during impl</div>
-      ${{standaloneCards}}
+      <div class="label" style="margin-bottom:10px">Standalone arcs — <strong>${{sCount('closed')}} closed</strong> · <strong>${{sCount('remaining')}} remaining</strong> · <strong>${{sCount('gated')}} gated</strong> · <strong>${{sCount('resolved')}} resolved</strong> · design-fork-first, surfaced during impl</div>
+      ${{builtCards}}
+      ${{forwardRows.length ? `
+      <div class="label" style="margin:18px 0 10px">Registered forward arcs — <strong>${{forwardRows.length}}</strong> · decompose at open (units minted only when the arc grounds; no fabricated units)</div>
+      ${{forwardCards}}` : ""}}
     </div>`;
 }})();
 
@@ -1789,10 +1925,11 @@ def build(root: Path) -> dict:
         a["rword"] = disp["word"]
         a["why"] = ANNOTATIONS.get(a["id"], "")
     dashboard = parse_dashboard(dash_md)
-    # The arc-and-unit map is the single arc→unit source (R-FS-1). It feeds both the
-    # detailed per-arc render (arc_map) and the existing closure/strip view (remaining_forward).
-    arc_map_md = (root / ".harness" / "r-fs-1-arc-and-unit-map.md").read_text(encoding="utf-8")
-    arc_map = parse_arc_unit_map(arc_map_md)
+    # `.harness/arc-ledger.yaml` is the single structured arc→unit source (R-FS-1 overhaul;
+    # derived via tools/arc_ledger.py). It feeds both the detailed per-arc render (arc_map) and
+    # the existing closure/strip view (remaining_forward). The path is resolved inside
+    # parse_arc_unit_map via arc_ledger.DEFAULT_LEDGER — no markdown is read here anymore.
+    arc_map = parse_arc_unit_map()
     dashboard["arc_map"] = arc_map
     dashboard["remaining_forward"] = derive_remaining_forward(arc_map)
     assert_remaining_nonempty(actions, dashboard)
