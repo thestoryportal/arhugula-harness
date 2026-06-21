@@ -53,7 +53,8 @@ from harness_cp.cross_family_fallback_chain import (
 )
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
-from harness_cp.handoff_context import ActionKind
+from harness_cp.handoff_context import ActionKind, StateSummary
+from harness_cp.pause_resume_protocol_types import PauseSnapshot, WorkflowPauseReason
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
 from harness_cp.sub_agent_brief import (
     ClearTaskBoundaries,
@@ -73,6 +74,7 @@ from harness_cp.workflow_driver_types import (
     RunStatus,
     StepExecutionContext,
     StepKind,
+    SubAgentChildPausedError,
     WorkflowStep,
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
@@ -234,6 +236,7 @@ class _MockChildWorkflowRunner:
         handoff_context: Any,
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
+        pause_snapshot_input: Any = None,
     ) -> RunResult:
         self.calls.append(
             {
@@ -243,6 +246,9 @@ class _MockChildWorkflowRunner:
                 "handoff_context": handoff_context,
                 "descent": descent,
                 "default_model_binding": default_model_binding,
+                # B-HIERARCHICAL-PAUSE — the child resume snapshot threaded on resume
+                # (None on a first dispatch).
+                "pause_snapshot_input": pause_snapshot_input,
             }
         )
         return self.next_result
@@ -622,6 +628,125 @@ def test_failed_raises_sub_agent_child_failed_error_with_span_attrs(tmp_path: Pa
     span = next(s for s in exporter.get_finished_spans() if s.name == "subagent.span")
     attrs = dict(span.attributes or {})
     assert attrs["subagent.result_status"] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# B-HIERARCHICAL-PAUSE (R-FS-1) — child PAUSE surfacing + resume-snapshot forwarding.
+# The CP-side capture + resume re-entry is witnessed end-to-end in
+# `harness-cp/tests/test_workflow_driver_fanout_pause.py`; these unit-prove the
+# runtime dispatcher seam that test's faithful double stands in for.
+# ---------------------------------------------------------------------------
+
+
+def _paused_result(snapshot: PauseSnapshot) -> RunResult:
+    return RunResult(
+        workflow_id="child-wf",
+        run_id="child-run-1",
+        status=RunStatus.PAUSED,
+        terminal_step_index=None,
+        partial_state=None,
+        final_state=None,
+        fail_class=None,
+        pause_snapshot=snapshot,
+    )
+
+
+def _child_snapshot() -> PauseSnapshot:
+    return PauseSnapshot(
+        workflow_id="child-wf",
+        run_id="child-run-1",
+        step_index=1,
+        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+        state_summary=StateSummary(
+            relevant_entries=(),
+            summary_text="",
+            summary_hash="0" * 64,
+            idempotency_key=_Identifier(""),
+            external_references=(),
+        ),
+        snapshot_hash="a" * 64,
+        created_at=1,
+        state_ledger_anchor="anchor",
+    )
+
+
+def test_paused_child_raises_sub_agent_child_paused_error(tmp_path: Path) -> None:
+    """B-HIERARCHICAL-PAUSE — a child sub-workflow returning PAUSED is SURFACED as a
+    typed `SubAgentChildPausedError` carrying the child's snapshot (NOT swallowed as
+    success-equivalent), so the parent fan-out captures the cursor + pauses honestly."""
+    snap = _child_snapshot()
+    dispatcher, _, exporter = _dispatcher(tmp_path, child_result=_paused_result(snap))
+    with pytest.raises(SubAgentChildPausedError) as exc_info:
+        dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    assert exc_info.value.child_snapshot is snap
+    assert exc_info.value.child_workflow_id == "child-wf"
+    span = next(s for s in exporter.get_finished_spans() if s.name == "subagent.span")
+    attrs = dict(span.attributes or {})
+    assert attrs["subagent.result_status"] == "paused"
+    # The canonical 7-attr schema: the paused branch raises before the common
+    # close-time token block, so it must set the token attrs itself (Codex [P2]).
+    assert attrs["subagent.tokens_in"] == 0
+    assert attrs["subagent.tokens_out"] == 0
+    assert attrs["subagent.cached_tokens_in"] == 0
+
+
+def test_paused_child_without_snapshot_fails_honestly(tmp_path: Path) -> None:
+    """A PAUSED RunResult MUST carry its pause_snapshot (the §25.2 contract). A PAUSED
+    with no snapshot cannot be resumed → fail as a child failure (never a
+    false-resumable / silent-success)."""
+    bad = RunResult(
+        workflow_id="child-wf",
+        run_id="child-run-1",
+        status=RunStatus.PAUSED,
+        terminal_step_index=None,
+        partial_state=None,
+        final_state=None,
+        fail_class=None,
+        pause_snapshot=None,
+    )
+    dispatcher, _, _ = _dispatcher(tmp_path, child_result=bad)
+    with pytest.raises(SubAgentChildFailedError):
+        dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+
+
+def test_child_resume_snapshot_forwarded_to_runner(tmp_path: Path) -> None:
+    """B-HIERARCHICAL-PAUSE — on resume, `step_context.child_resume_snapshot` is
+    forwarded to the child runner as `pause_snapshot_input` so the child re-enters at
+    its cursor. `None` on a normal (first) dispatch."""
+    snap = _child_snapshot()
+    dispatcher, runner, _ = _dispatcher(tmp_path)
+
+    # Normal dispatch → runner receives pause_snapshot_input=None.
+    dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    assert runner.calls[-1]["pause_snapshot_input"] is None
+
+    # Resume dispatch → the step context carries the child snapshot → forwarded.
+    resume_ctx = _step_context().model_copy(update={"child_resume_snapshot": snap})
+    dispatcher.dispatch(_binding(), _step(), step_context=resume_ctx)
+    assert runner.calls[-1]["pause_snapshot_input"] is snap
+
+
+def test_child_runner_resume_workflow_id_mismatch_fails_closed() -> None:
+    """B-HIERARCHICAL-PAUSE (Codex [P2]) — the real `ChildWorkflowRunner` FAILS CLOSED
+    when a resume snapshot's `workflow_id` does not match the child being invoked (a
+    parent edited between pause + resume so the same SUB_AGENT_DISPATCH step_id points
+    to a different child). The guard fires before `execute_workflow` / `ctx` is used."""
+    from types import SimpleNamespace
+
+    from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
+
+    snap = _child_snapshot()  # workflow_id="child-wf"
+    runner = compose_child_workflow_runner(cast(Any, SimpleNamespace(step_dispatchers=None)))
+    with pytest.raises(ValueError, match="child resume workflow-id mismatch"):
+        runner(
+            workflow_id="a-different-child-wf",
+            manifest_entry=cast(Any, None),
+            steps=(),
+            handoff_context=cast(Any, None),
+            descent=cast(Any, None),
+            default_model_binding=cast(Any, None),
+            pause_snapshot_input=snap,
+        )
 
 
 # ---------------------------------------------------------------------------

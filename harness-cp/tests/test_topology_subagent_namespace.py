@@ -72,11 +72,13 @@ def test_subagent_attributes_match_spec_verbatim() -> None:
         assert a.emitted_on
 
 
-def test_sub_agent_result_status_cardinality_three() -> None:
-    """Acceptance #3 — `SubAgentResultStatus` declares exactly 3 values."""
-    assert len(SubAgentResultStatus) == 3
+def test_sub_agent_result_status_cardinality_four() -> None:
+    """`SubAgentResultStatus` declares exactly 4 values (B-HIERARCHICAL-PAUSE added
+    `paused` for the child-pause span path — runtime spec §14.7.2 step 7)."""
+    assert len(SubAgentResultStatus) == 4
     assert {s.value for s in SubAgentResultStatus} == {
         "completed",
         "failed",
         "cascade-cancelled",
+        "paused",
     }

@@ -79,6 +79,7 @@ from harness_cp.pause_resume_protocol_types import (
     FanOutBranchResumeState,
     FanOutResumeState,
     MaterialDiffPolicy,
+    PausedChildBranchResumeState,
     PauseSnapshot,
     PeerFanOutResumeState,
     WorkflowPauseReason,
@@ -100,6 +101,7 @@ from harness_cp.workflow_driver_types import (
     RunStatus,
     StepExecutionContext,
     StepKind,
+    SubAgentChildPausedError,
     WorkflowStep,
     compose_branch_child_context,
     compose_branch_metadata,
@@ -1652,6 +1654,11 @@ def _execute_workflow_body(
             pause_resumable=True,
         )
     if strategy is _DriverStrategyStatus.HIERARCHICAL_DELEGATION:
+        # B-HIERARCHICAL-PAUSE (R-FS-1) — HIERARCHICAL now threads the resume
+        # snapshot + opts into resumable pause (it reuses _execute_orchestrator_workers
+        # at each level, so a level-local worker pause materializes via FanOutResumeState
+        # AND a recursive child PAUSE is captured into paused_child_branches + re-entered
+        # at the child's cursor on resume — the cross-bootstrap-boundary resume).
         return _execute_hierarchical_delegation(
             manifest_entry=manifest_entry,
             steps=steps,
@@ -1660,6 +1667,8 @@ def _execute_workflow_body(
             default_model_binding=default_model_binding,
             step_dispatchers=step_dispatchers,
             run_idempotency_key=run_idempotency_key,
+            resume_snapshot=resume_snapshot,
+            pause_resumable=True,
         )
     if strategy is _DriverStrategyStatus.DECENTRALIZED_HANDOFF:
         return _execute_decentralized_handoff(
@@ -4463,13 +4472,25 @@ def _execute_orchestrator_workers(
     same `cascade_policy`. A worker failing AGAIN under `pause` re-pauses with a
     fresh snapshot whose `branches` union the recovered + newly-terminal set.
 
-    `pause_resumable` (default False) gates the resumable `pause → PAUSED` return
-    to the TOP-LEVEL `ORCHESTRATOR_WORKERS` strategy ONLY. `HIERARCHICAL_DELEGATION`
-    REUSES this helper at each recursion level but its resume is NOT wired (the
-    `_execute_workflow_body` HIERARCHICAL dispatch threads no `resume_snapshot`),
-    so it calls with `pause_resumable=False` → a `pause` worker failure fails
-    HONESTLY (`...-not-yet-materialized`), never a false-resumable PAUSED the
-    `B-HIERARCHICAL-PAUSE` forward arc has not yet materialized.
+    `pause_resumable` (default False) gates the resumable `pause → PAUSED` return.
+    Both the TOP-LEVEL `ORCHESTRATOR_WORKERS` strategy AND `HIERARCHICAL_DELEGATION`
+    (which REUSES this helper at each recursion level) now thread `pause_resumable=True`
+    + the `resume_snapshot` (B-HIERARCHICAL-PAUSE, R-FS-1), so a level-local worker
+    pause materializes via `FanOutResumeState`. The default `False` is retained for any
+    UNWIRED caller — it fails HONESTLY (`...-not-yet-materialized`) rather than advertise
+    a false-resumable PAUSED.
+
+    **B-HIERARCHICAL-PAUSE — recursive child PAUSE.** A `SUB_AGENT_DISPATCH` worker
+    whose child sub-workflow itself PAUSED (a grandchild failing under `cascade_policy=
+    pause`) raises `SubAgentChildPausedError`; that worker is captured into the snapshot's
+    `paused_child_branches` (NOT `branches` — it is re-dispatchable, not terminal),
+    carrying the child's nested `PauseSnapshot`. On resume the worker is re-dispatched
+    WITH the child snapshot threaded on its `StepExecutionContext.child_resume_snapshot`,
+    so the child re-enters at its own cursor (the grandchild's completed steps are
+    recovered, NOT re-executed) — the THIRD branch disposition (skip-terminal /
+    re-dispatch-fresh / re-enter-child-at-cursor). A child PAUSE under `proceed` /
+    `cascade-cancel` (no resumable boundary) FAILS honestly, never silently dropping the
+    suspended child.
     """
     workflow_id = manifest_entry.workflow_id
 
@@ -4480,6 +4501,18 @@ def _execute_orchestrator_workers(
     # repeated resumes so a re-pause snapshot unions prior + this-round terminals).
     _recovered_terminal: dict[int, FanOutBranchResumeState] = (
         {b.branch_index: b for b in _fan_out_resume.branches} if _fan_out_resume is not None else {}
+    )
+    # B-HIERARCHICAL-PAUSE — branch_index -> the child sub-workflow's PauseSnapshot for
+    # each worker whose recursive child PAUSED. These are NOT skipped on resume (unlike
+    # terminal branches): the worker is RE-DISPATCHED with its child's snapshot threaded
+    # so the child re-enters at its cursor (the THIRD branch disposition). Each is
+    # re-dispatched THIS round → it either completes (→ terminal), fails, or pauses again
+    # (→ recaptured into this round's paused_child set), so the set is rebuilt fresh per
+    # round (no carry-seed — re-dispatch IS the carry).
+    _recovered_paused_child: dict[int, PauseSnapshot] = (
+        {b.branch_index: b.child_snapshot for b in _fan_out_resume.paused_child_branches}
+        if _fan_out_resume is not None
+        else {}
     )
 
     # Empty step sequence → trivially SUCCESS (mirrors the linear empty-loop +
@@ -4537,6 +4570,25 @@ def _execute_orchestrator_workers(
                         f"branch-identity-mismatch at {b.branch_index}: snapshot "
                         f"step_id={b.step_id!r}, resume step_id="
                         f"{str(worker_steps[b.branch_index].step_id)!r}"
+                    )
+            # B-HIERARCHICAL-PAUSE — paused-child branches: same BOUNDS + IDENTITY guard,
+            # PLUS no-overlap with the terminal `branches` (`seen`) — a paused-child
+            # ordinal is the disjoint THIRD disposition, so a snapshot listing the same
+            # ordinal as both terminal AND paused-child is corrupt (fail closed).
+            for pc in _fan_out_resume.paused_child_branches:
+                if not (0 <= pc.branch_index < len(worker_steps)):
+                    return (
+                        f"paused-child-index-out-of-range: {pc.branch_index} "
+                        f"∉ [0, {len(worker_steps)})"
+                    )
+                if pc.branch_index in seen:
+                    return f"paused-child-overlaps-terminal-or-duplicate: {pc.branch_index}"
+                seen.add(pc.branch_index)
+                if str(worker_steps[pc.branch_index].step_id) != pc.step_id:
+                    return (
+                        f"paused-child-identity-mismatch at {pc.branch_index}: snapshot "
+                        f"step_id={pc.step_id!r}, resume step_id="
+                        f"{str(worker_steps[pc.branch_index].step_id)!r}"
                     )
             return None
 
@@ -4724,9 +4776,18 @@ def _execute_orchestrator_workers(
         # all report as step 0. (Branch identity stays `(parent_action_id,
         # branch_index)`; the ledger keys stay branch-scoped — this only fixes the
         # transient driver-side `step_index` the dispatcher reads.)
+        # B-HIERARCHICAL-PAUSE — on resume, a worker whose recursive child PAUSED is
+        # re-dispatched WITH the child's snapshot threaded on its (hash-inert)
+        # StepExecutionContext, so the runtime sub-agent dispatcher re-enters the child
+        # via `execute_workflow(pause_snapshot_input=...)` at the child's cursor (the
+        # grandchild's completed steps are recovered, NOT re-executed). `None` for every
+        # non-paused-child worker → byte-identical to the pre-arc context.
+        _child_resume = _recovered_paused_child.get(branch_index)
         child = compose_branch_child_context(
             fanout_parent, branch_index=branch_index, agent_role=role
-        ).model_copy(update={"step_index": branch_index + 1})
+        ).model_copy(
+            update={"step_index": branch_index + 1, "child_resume_snapshot": _child_resume}
+        )
         writer = BufferingLedgerWriter(actor=ctx.ledger_writer.actor, branch_index=branch_index)
         # B-NONLINEAR-OVERRIDE-PROVENANCE — buffer the worker's per-step override
         # entry through its writer (driver thread, before the fan-out spawns; see
@@ -4754,6 +4815,13 @@ def _execute_orchestrator_workers(
     # post-await loop-thread sites as `collected` (single-threaded → safe). Read
     # AFTER the barrier to build a `pause` snapshot's `FanOutResumeState.branches`.
     terminal_dispositions: dict[int, str] = {}
+    # B-HIERARCHICAL-PAUSE — branch_index -> the child sub-workflow's PauseSnapshot for
+    # each worker whose recursive child PAUSED THIS round (raised SubAgentChildPausedError).
+    # Written from the same single-threaded post-await loop sites as `terminal_dispositions`;
+    # read AFTER the barrier to build `FanOutResumeState.paused_child_branches`. A paused
+    # child is NOT a terminal disposition (it is re-dispatched-via-child-resume on resume),
+    # so its ordinal NEVER enters `terminal_dispositions` (the two sets are disjoint).
+    paused_child_dispositions: dict[int, PauseSnapshot] = {}
 
     # B-FANOUT-PAUSE — seed the recovered terminal branches (from the resume
     # snapshot) into `collected` + `terminal_dispositions` so (a) their outputs
@@ -4898,6 +4966,16 @@ def _execute_orchestrator_workers(
                     procedural_tier_snapshot_ref=snapshot_ref,
                 )
                 raise
+            except SubAgentChildPausedError as _paused:
+                # B-HIERARCHICAL-PAUSE — this worker's recursive child PAUSED. Under
+                # `proceed` (SOLO) there is no resumable-pause boundary to honor it (the
+                # fan-out is configured to degrade-on-failure, not pause), and silently
+                # treating the suspended child as success/degraded would DROP its state.
+                # Stash it (no terminal — not a terminal branch) + re-raise so the
+                # gather marks the branch; the post-barrier guard FAILS the run HONESTLY
+                # (a paused child cannot be carried under proceed). No silent loss.
+                paused_child_dispositions[branch_index] = _paused.child_snapshot
+                raise
             except Exception:
                 # Ran-and-errored → record the step entry (obl. 3) + a `completed`
                 # terminal (dispatch-boundary, not step-outcome; the failure lives
@@ -4943,6 +5021,16 @@ def _execute_orchestrator_workers(
             return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
         except TimeoutError:
             return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
+        if paused_child_dispositions:
+            # B-HIERARCHICAL-PAUSE — a recursive child PAUSED under `proceed`. There is
+            # no resumable-pause boundary here (proceed degrades, it does not pause), so
+            # the suspended child cannot be carried for resume — FAIL HONESTLY rather than
+            # a SUCCESS/PARTIAL that silently dropped a suspended sub-workflow.
+            return _finish(
+                RunStatus.FAILED,
+                fail_class="orchestrator-workers-child-paused-not-resumable-under-proceed",
+                salvage=True,
+            )
         any_failed = any(isinstance(r, BaseException) for r in results)
         if any_failed:
             return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
@@ -4973,6 +5061,21 @@ def _execute_orchestrator_workers(
         try:
             output = await dispatch_branch_step_shielded(inflight)
         except asyncio.CancelledError:
+            # B-HIERARCHICAL-PAUSE (Codex [P1]) — this branch was cancelled because a
+            # SIBLING raised first, but its OWN in-flight child sub-workflow may have
+            # PAUSED: `dispatch_branch_step_shielded` suppresses the in-flight exception
+            # while draining a cancelled dispatch + re-raises `CancelledError`, so a
+            # `SubAgentChildPausedError` lands in `inflight.exception()` rather than
+            # reaching the typed handler below. Capture it as a paused-child (NOT a
+            # terminal `completed` branch — else the snapshot records it terminal,
+            # resume skips it, and the child's PauseSnapshot is DROPPED), matching the
+            # direct-pause path: stash + re-raise, no step/terminal entry recorded.
+            _inflight_exc = (
+                inflight.exception() if (inflight.done() and not inflight.cancelled()) else None
+            )
+            if isinstance(_inflight_exc, SubAgentChildPausedError):
+                paused_child_dispositions[branch_index] = _inflight_exc.child_snapshot
+                raise
             # In-flight at cancel-time: the effect ran (shielded to completion) or
             # the deadline cut it. Record the step entry (obl. 3) + the
             # discriminating terminal (obl. 4): `completed` = ran (ran-and-errored
@@ -5010,6 +5113,18 @@ def _execute_orchestrator_workers(
             if terminal == "completed" and inflight.exception() is None:
                 collected[branch_index] = (str(step.step_id), inflight.result())
             raise  # honor the cancellation (the barrier cancelled this branch)
+        except SubAgentChildPausedError as _paused:
+            # B-HIERARCHICAL-PAUSE — this worker's recursive child sub-workflow PAUSED
+            # (a grandchild failed under cascade_policy=pause). NOT a terminal branch
+            # (it is re-dispatched-via-child-resume on resume) and NOT a failure: stash
+            # the child's snapshot keyed by branch ordinal, record NO terminal entry
+            # (its ordinal stays out of `terminal_dispositions`, so it lands in
+            # `paused_child_branches`, never `branches`; any pre-dispatch override entry
+            # already buffered stays). Re-raise so the TaskGroup halts the fan-out at the
+            # pause boundary (siblings: in-flight finish / not-yet-dispatched left
+            # re-dispatchable — the §25.15.1 pause semantic), driving the pause branch.
+            paused_child_dispositions[branch_index] = _paused.child_snapshot
+            raise
         except Exception:
             # THIS worker's own dispatch ERRORED — the failure that triggers the
             # cascade. The effect ran-and-errored → record the step entry (obl. 3 —
@@ -5067,15 +5182,24 @@ def _execute_orchestrator_workers(
         # (`branch_metadata=None`, B-NONLINEAR-OVERRIDE-PROVENANCE), so an
         # `entry_count == 0` test would skip its required `cancelled` terminal.
         for _bi, _step, child, writer, _binding in branch_plan:
-            if not _writer_has_branch_disposition(writer):
-                append_branch_terminal_ledger_entry(
-                    branch_writer=writer,
-                    branch_context=child,
-                    run_idempotency_key=run_idempotency_key,
-                    terminal_status="cancelled",
-                    timestamp=fanout_timestamp,
-                    procedural_tier_snapshot_ref=snapshot_ref,
-                )
+            if _writer_has_branch_disposition(writer):
+                continue
+            # B-HIERARCHICAL-PAUSE (Codex [P2]) — a paused-child branch (its recursive
+            # child returned PAUSED) DID dispatch but recorded no terminal (it is the
+            # third disposition, captured into `paused_child_dispositions`). Under
+            # cascade-cancel it is NOT resumed (the run FAILs + the child snapshot is
+            # discarded), but it MUST NOT be mislabeled `cancelled` (= not-yet-dispatched)
+            # — it dispatched + its child paused. Record `completed` (dispatch-boundary,
+            # like a ran-and-errored worker) so the branch ledger reflects the dispatch.
+            _disposition = "completed" if _bi in paused_child_dispositions else "cancelled"
+            append_branch_terminal_ledger_entry(
+                branch_writer=writer,
+                branch_context=child,
+                run_idempotency_key=run_idempotency_key,
+                terminal_status=_disposition,
+                timestamp=fanout_timestamp,
+                procedural_tier_snapshot_ref=snapshot_ref,
+            )
         if worker_failed or deadline_struck:
             return _finish(
                 RunStatus.FAILED,
@@ -5104,12 +5228,13 @@ def _execute_orchestrator_workers(
     if worker_failed:
         protocol = getattr(ctx, "pause_resume_protocol", None)
         if not pause_resumable:
-            # Codex [P1] — HIERARCHICAL_DELEGATION reuses this helper but its
-            # resume is NOT wired (`_execute_workflow_body` threads no
-            # `resume_snapshot` into the hierarchical dispatch). Returning PAUSED
-            # here would advertise a resumability `api.resume` cannot honor (it
-            # would re-run the orchestrator + all workers). Fail HONESTLY — the
-            # interim `not-yet-materialized`, the `B-HIERARCHICAL-PAUSE` forward arc.
+            # An UNWIRED caller (one that does not thread `resume_snapshot`) opts out
+            # of resumable pause. Returning PAUSED would advertise a resumability
+            # `api.resume` cannot honor (it would re-run the orchestrator + all
+            # workers). Fail HONESTLY — `not-yet-materialized`. Post-B-HIERARCHICAL-PAUSE
+            # BOTH top-level ORCHESTRATOR_WORKERS and HIERARCHICAL_DELEGATION pass
+            # `pause_resumable=True`, so this guard now only protects a future unwired
+            # reuse site (defence-in-depth, no live caller hits it).
             return _finish(
                 RunStatus.FAILED,
                 fail_class="orchestrator-workers-pause-resume-not-yet-materialized",
@@ -5145,6 +5270,21 @@ def _execute_orchestrator_workers(
                 for _bi, _status in sorted(terminal_dispositions.items())
             ),
             worker_count=len(worker_steps),
+            # B-HIERARCHICAL-PAUSE — workers whose recursive child PAUSED this round.
+            # DISJOINT from `branches` (a paused-child ordinal never entered
+            # `terminal_dispositions`). Each carries the child's nested PauseSnapshot so
+            # `api.resume` re-enters the child at its cursor. COVERED by the snapshot hash
+            # (transitively via `fan_out_resume.model_dump`).
+            paused_child_branches=tuple(
+                PausedChildBranchResumeState(
+                    branch_index=_bi,
+                    step_id=str(worker_steps[_bi].step_id),
+                    child_snapshot=_child_snap,
+                )
+                for _bi, _child_snap in sorted(
+                    paused_child_dispositions.items(), key=lambda kv: kv[0]
+                )
+            ),
         )
         snapshot = _run_protocol_method_sync(
             cast(PauseResumeProtocol, protocol).capture_pause_snapshot(
@@ -5177,6 +5317,8 @@ def _execute_hierarchical_delegation(
     default_model_binding: ModelBinding,
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
+    resume_snapshot: PauseSnapshot | None = None,
+    pause_resumable: bool = False,
 ) -> tuple[RunResult, int]:
     """Execute the `HIERARCHICAL_DELEGATION` recursive bounded-fan-out strategy (U-CP-89).
 
@@ -5252,6 +5394,14 @@ def _execute_hierarchical_delegation(
     # ORCHESTRATOR_WORKERS at each level — NOT a parallel re-implementation").
     # Recursion-with-depth emerges through SUB_AGENT_DISPATCH workers re-entering
     # the driver per the child manifest's topology.
+    #
+    # B-HIERARCHICAL-PAUSE (R-FS-1) — thread the resume snapshot + `pause_resumable`
+    # so a `cascade_policy=pause` worker failure AT THIS LEVEL materializes a genuine
+    # resumable PAUSED (was the honest `...-not-yet-materialized` FAILED), AND a
+    # recursive child that PAUSED (a grandchild) is captured + re-entered at its
+    # cursor on resume — the orchestrator-workers helper does both; this site just
+    # opts HIERARCHICAL in (the same way the top-level ORCHESTRATOR_WORKERS dispatch
+    # does), so the materialization is now wired for the recursion-heavy topology.
     return _execute_orchestrator_workers(
         manifest_entry=manifest_entry,
         steps=steps,
@@ -5260,6 +5410,8 @@ def _execute_hierarchical_delegation(
         default_model_binding=default_model_binding,
         step_dispatchers=step_dispatchers,
         run_idempotency_key=run_idempotency_key,
+        resume_snapshot=resume_snapshot,
+        pause_resumable=pause_resumable,
     )
 
 
