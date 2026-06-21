@@ -125,6 +125,7 @@ from harness_cp.topology_subagent_namespace import (
 from harness_cp.workflow_driver_types import (
     RunStatus,
     StepExecutionContext,
+    SubAgentChildPausedError,
     WorkflowStep,
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
@@ -619,6 +620,12 @@ class RuntimeSubAgentDispatcher:
             )
 
             # --- Step 6: invoke child runner (AC #7) -----------------------
+            # B-HIERARCHICAL-PAUSE — when the parent fan-out is RESUMING a
+            # previously-paused child, the CP driver set `child_resume_snapshot` on
+            # this worker's StepExecutionContext (the hash-inert per-step carrier).
+            # Forward it so the child re-enters at its cursor rather than re-running
+            # from scratch (the grandchild's completed steps are recovered, NOT
+            # re-executed). `None` on a first dispatch → byte-identical to pre-arc.
             try:
                 child_result = self.child_workflow_runner(
                     workflow_id=payload.child_workflow_id,
@@ -627,6 +634,7 @@ class RuntimeSubAgentDispatcher:
                     handoff_context=handoff_context,
                     descent=descent,
                     default_model_binding=binding.model_binding,
+                    pause_snapshot_input=step_context.child_resume_snapshot,
                 )
             except Exception:
                 # Typed errors from child execution: annotate span +
@@ -683,6 +691,48 @@ class RuntimeSubAgentDispatcher:
                     f"child sub-workflow {payload.child_workflow_id!r} "
                     f"terminated with RunStatus.FAILED; fail_class="
                     f"{child_result.fail_class!r}"
+                )
+            elif child_result.status == RunStatus.PAUSED:
+                # B-HIERARCHICAL-PAUSE (R-FS-1) — the recursive child sub-workflow
+                # itself PAUSED (a grandchild branch failed under cascade_policy=pause).
+                # Previously this fell into the `else` below and was swallowed as
+                # success-equivalent — silently discarding the child's suspended state.
+                # Surface it as a TYPED exception carrying the child's PauseSnapshot so
+                # the parent fan-out barrier captures the child's cursor + pauses
+                # honestly (resume re-enters the child at that cursor, NOT re-dispatched
+                # fresh). A PAUSED RunResult MUST carry its pause_snapshot (the §25.2
+                # contract); if it does not, the child cannot be resumed → fail honestly
+                # as a child failure (never a false-resumable / silent-success).
+                span.set_attribute("subagent.result_status", "paused")
+                span.set_attribute("subagent.request_blocked_by_budget", False)
+                # The canonical subagent schema requires all 7 attributes; this branch
+                # raises before the common close-time token block, so set the 3 token
+                # attrs here (0 at v1.6 MVP — child does not surface a cost rollup
+                # through RunResult), as the FAILED path does before its raise (Codex [P2]).
+                span.set_attribute("subagent.tokens_in", 0)
+                span.set_attribute("subagent.tokens_out", 0)
+                span.set_attribute("subagent.cached_tokens_in", 0)
+                # Best-effort audit BEFORE raising (Codex [P2]) — mirror the FAILED path
+                # so a paused sub-agent dispatch leaves a CP/OD audit entry like every
+                # other disposition (SUCCESS/DRAINED/FAILED). Downstream 8b/8c/8d failures
+                # are swallowed (raise_on_failure=False) so the pause remains the surfaced
+                # outcome.
+                _ = self._compose_and_persist_audit(
+                    parent_action_id=parent_action_id,
+                    descent=descent,
+                    payload=payload,
+                    step_context=step_context,
+                    raise_on_failure=False,
+                )
+                if child_result.pause_snapshot is None:
+                    raise SubAgentChildFailedError(
+                        f"child sub-workflow {payload.child_workflow_id!r} returned "
+                        f"RunStatus.PAUSED with no pause_snapshot (cannot resume; "
+                        f"§25.2 contract violation)"
+                    )
+                raise SubAgentChildPausedError(
+                    child_workflow_id=payload.child_workflow_id,
+                    child_snapshot=child_result.pause_snapshot,
                 )
             else:
                 # PARTIAL — reserved per C-CP-25 §25.2. v1.6 MVP treats as

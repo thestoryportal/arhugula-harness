@@ -46,10 +46,10 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 19
+  standalone_closed: 20
   standalone_gated: 1
   standalone_resolved: 2
-  standalone_registered: 13
+  standalone_registered: 12
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
 arcs:
@@ -459,14 +459,14 @@ arcs:
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER
-    title: "Resumable pause for EVALUATOR_OPTIMIZER fan-out"
+    title: "Resumable pause for EVALUATOR_OPTIMIZER (sequential iteration cursor)"
     kind: standalone
     status: registered
     decompose_at_open: true
     owner_axis: "CP + runtime"
     parent_arc: B-FANOUT-PAUSE
-    anticipated_scope: "Apply the fan-out-barrier pause-resume shape to EVALUATOR_OPTIMIZER (B-FANOUT-PAUSE built ORCHESTRATOR_WORKERS only)."
-    why: "EO + PARALLELIZATION reuse the fan-out-barrier shape; each needs its own capture wiring + aggregate-merge + tests."
+    anticipated_scope: "MISLABEL CORRECTED (grounded at B-HIERARCHICAL-PAUSE open, advisor-confirmed): EVALUATOR_OPTIMIZER is a SEQUENTIAL generate→evaluate→regenerate loop (per the _execute_evaluator_optimizer executor docstring: 'Sequential single-owner; NO fan-out, NO cascade_policy, NO branch_metadata'), NOT a fan-out barrier. The §25.15.1 cascade `pause` trigger (a branch failure halting a fan-out) DOES NOT APPLY — EO has no branches + no cascade_policy. Its pause shape is a distinct ITERATION CURSOR (which generate/evaluate iteration + accumulated state), triggered by an explicit HITL/timeout pause boundary, NOT a cascade. Fork-first: define the sequential-loop pause trigger + the iteration-cursor carrier (pair with B-HANDOFF-PAUSE — both sequential single-owner, NOT the fan-out-barrier shape)."
+    why: "EO is sequential (NOT a fan-out barrier like PARALLELIZATION/ORCHESTRATOR_WORKERS); the original 'reuse the fan-out-barrier shape' registration was wrong. The pause trigger + carrier are unspecified → design-fork-first."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-FANOUT-PAUSE-PARALLELIZATION
@@ -494,12 +494,12 @@ arcs:
   - id: B-HIERARCHICAL-PAUSE
     title: "Resumable pause for HIERARCHICAL_DELEGATION"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
     owner_axis: "CP + runtime"
-    parent_arc: B-FANOUT-PAUSE
-    anticipated_scope: "Resume across the child-bootstrap recursion boundary (the ChildWorkflowRunner seam)."
-    why: "HIERARCHICAL_DELEGATION reuses ORCHESTRATOR_WORKERS for execution but its resume crosses the child-bootstrap boundary."
+    pr: "#680"
+    spec_delta: "CP v1.44 → v1.45 §1 (NEW PausedChildBranchResumeState carrier + FanOutResumeState.paused_child_branches + hash-inert StepExecutionContext.child_resume_snapshot) + §2 (§25.15.1 + §25.18 HIERARCHICAL materialization note); NO operator gate"
+    gives: "HIERARCHICAL_DELEGATION's `pause` branch (was FAILED + `orchestrator-workers-pause-resume-not-yet-materialized`) is now a genuine resumable PAUSED, in TWO halves. (a) LEVEL-LOCAL: HIERARCHICAL threads `pause_resumable=True` + the resume snapshot (it reuses _execute_orchestrator_workers at each level), so a worker pause at a level materializes via the v1.42 FanOutResumeState. (b) CROSS-RECURSION-BOUNDARY (the registered hard scope): a SUB_AGENT_DISPATCH worker whose recursive child PAUSED (a grandchild failing under cascade_policy=pause) was SWALLOWED as success-equivalent at sub_agent_dispatch.py:687 (silent drop of the child's suspended state). The runtime dispatcher now RAISES the typed SubAgentChildPausedError (carrying the child PauseSnapshot); the parent captures the child cursor into paused_child_branches (DISJOINT from `branches` — the THIRD branch disposition, re-dispatch-via-child-resume, NOT skip-terminal/re-dispatch-fresh) + PAUSES; api.resume re-enters the child at its cursor via the threaded StepExecutionContext.child_resume_snapshot, so the grandchild's completed steps are recovered, NOT re-executed. A child PAUSE under proceed/cascade-cancel (no resumable boundary) FAILS honestly (`orchestrator-workers-child-paused-not-resumable-under-proceed`), never a silent success. Carrier choice (advisor): a NEW field on FanOutResumeState (HIERARCHICAL IS ORCHESTRATOR_WORKERS at each level), additive default-empty + DROPPED-from-hash-when-empty (byte-compat preserved); the carrier SELF-NESTS (a child snapshot may carry its own paused_child_branches; recursive Pydantic via one model_rebuild). impl-to-cleared-spec on §25.15.1 + §25.18 (the recursion cascade is named impl-discretion). The discriminating full-chain witness asserts a grandchild completed-before-pause runs exactly once across pause+resume (CP test_workflow_driver_fanout_pause.py; the runtime dispatcher raise+forward unit-proven in test_lifecycle_sub_agent_dispatch.py). The INFERENCE-child real-provider e2e is blocked by a pre-existing runtime sync/async deadlock (runtime_defect_sub_agent_inference_child_loop_bridge_deadlock.md) → declarative-only witness."
+    why: "HIERARCHICAL_DELEGATION reuses ORCHESTRATOR_WORKERS for execution but its resume crosses the child-bootstrap boundary. The advisor refused a Half-A-only slice (not separable — the level-local plumbing is the opening of the cross-boundary resume, parking-dressed-as-decomposition); built as one PR. Advisor disqualified the mislabeled B-FANOUT-PAUSE-EVALUATOR-OPTIMIZER (EO is sequential, not a fan-out barrier) + the fork-first B-ROUTING-MANIFEST-MODEL-FOLD in favor of this clean impl-to-cleared-spec close."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-EFFECT-FENCE-HITL-ROUTE

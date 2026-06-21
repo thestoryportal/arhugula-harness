@@ -118,7 +118,11 @@ class _MockChildWorkflowRunner:
         handoff_context: Any,
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
+        pause_snapshot_input: Any = None,
     ) -> RunResult:
+        # B-HIERARCHICAL-PAUSE — accept the additive resume-snapshot kwarg (None on a
+        # first dispatch); the widened ChildWorkflowRunner Protocol forwards it.
+        _ = pause_snapshot_input
         self.calls.append({"workflow_id": workflow_id, "manifest_entry": manifest_entry})
         return RunResult(
             workflow_id=workflow_id,

@@ -184,6 +184,27 @@ class FanOutResumeState(BaseModel):
     `branches` is re-dispatched). A material-diff guard at resume: a different
     `worker_count` means the workflow body changed."""
 
+    paused_child_branches: tuple[PausedChildBranchResumeState, ...] = ()
+    """B-HIERARCHICAL-PAUSE (R-FS-1) — worker branches whose recursive child
+    sub-workflow itself returned `RunStatus.PAUSED` (a grandchild paused under
+    `cascade_policy=pause`; HIERARCHICAL_DELEGATION reuses ORCHESTRATOR_WORKERS at
+    each level, so a `SUB_AGENT_DISPATCH` worker can recurse + pause). DISTINCT
+    from `branches` (terminal — MUST NOT re-dispatch) and from absent ordinals
+    (re-dispatch FRESH): a paused-child branch is the THIRD disposition — re-entered
+    on resume via the child's OWN `api.resume(child_snapshot)` so the grandchild's
+    already-completed steps are NOT re-executed (re-dispatching it fresh would lose
+    that work — `[[full-chain-witness-not-half-proofs]]`). Each row's
+    `child_snapshot` (a full nested `PauseSnapshot`) is COVERED by
+    `_compute_snapshot_hash` transitively: it lives inside `fan_out_resume`, whose
+    `model_dump(mode="json")` the hash already serializes recursively, so a tampered
+    grandchild cursor fails the parent resume recompute. Additive, default-empty:
+    `_compute_snapshot_hash` DROPS this field from the canonical serialization when
+    empty, so every pre-existing ORCHESTRATOR_WORKERS / pre-B-HIERARCHICAL-PAUSE
+    snapshot hashes byte-identically (an old durable snapshot's dict, lacking this
+    key, deserializes via the default + re-hashes unchanged). A worker ordinal here
+    MUST NOT also appear in `branches` (the resume material-diff guard enforces no
+    overlap — terminal vs paused-child are disjoint dispositions)."""
+
 
 class PeerFanOutResumeState(BaseModel):
     """Peer fan-out (PARALLELIZATION) resume reconstruction state.
@@ -284,6 +305,48 @@ class PauseSnapshot(BaseModel):
     (terminal branches skipped, outputs recovered; absent ordinals re-dispatched)."""
 
 
+class PausedChildBranchResumeState(BaseModel):
+    """A worker branch whose recursive child sub-workflow returned `RunStatus.PAUSED`.
+
+    B-HIERARCHICAL-PAUSE (R-FS-1) — HIERARCHICAL_DELEGATION reuses ORCHESTRATOR_WORKERS
+    at each recursion level (`workflow_driver._execute_hierarchical_delegation`), so a
+    `SUB_AGENT_DISPATCH` worker can re-enter the driver for a child sub-workflow that
+    itself pauses (a grandchild branch failing under `cascade_policy=pause`). That
+    child PAUSE — previously swallowed as success-equivalent at the sub-agent dispatch
+    boundary — is now surfaced + captured here so the parent fan-out pauses honestly
+    and `api.resume` re-enters the child at its own cursor.
+
+    Carried by `FanOutResumeState.paused_child_branches` (NOT `branches`: a terminal
+    branch MUST NOT be re-dispatched, but a paused-child branch MUST be — via the
+    child's own resume, not a fresh dispatch — the illegal-states-unrepresentable
+    split that keeps the two dispositions type-distinct, mirroring the
+    `FanOutResumeState` vs `PeerFanOutResumeState` choice at #679).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    branch_index: int
+    """The fan-out worker ordinal (0-based, the `steps[1:]` position) whose child
+    sub-workflow paused. On resume this ordinal is re-dispatched THROUGH the child's
+    own resume (NOT skipped like a terminal branch, NOT fresh like an absent one)."""
+
+    step_id: str
+    """The worker `WorkflowStep.step_id` AT CAPTURE TIME. Resume validates the
+    re-supplied worker step's `step_id` against this (positional-identity guard,
+    fail-closed on a same-count rename/reorder — the same cheap guard
+    `FanOutBranchResumeState` applies to terminal branches)."""
+
+    child_snapshot: PauseSnapshot
+    """The child sub-workflow's OWN terminal `PauseSnapshot` (`RunResult.pause_snapshot`
+    at the child's PAUSED return). On resume, the worker re-dispatch threads this as
+    the child's `execute_workflow(pause_snapshot_input=...)` so the child re-enters at
+    its cursor — the grandchild's already-completed steps are recovered, NOT
+    re-executed. Nested recursively: this child snapshot may itself carry a
+    `fan_out_resume` with its own `paused_child_branches` (a grandchild that paused on
+    a great-grandchild). COVERED by `_compute_snapshot_hash` transitively via the
+    enclosing `fan_out_resume.model_dump(mode="json")`."""
+
+
 class ResumeResult(BaseModel):
     """5-field resume-attempt outcome envelope (CP spec v1.11 §26.2).
 
@@ -343,3 +406,12 @@ class ResumeContext(BaseModel):
     operator has delivered a response via the inbound webhook endpoint.
     HITLResult shape canonical at C-CP-17 §17.1.1 (`harness_cp.hitl_placement`).
     """
+
+
+# B-HIERARCHICAL-PAUSE (R-FS-1) — `FanOutResumeState.paused_child_branches` forward-refs
+# `PausedChildBranchResumeState` (defined after `PauseSnapshot`, which it nests), so the
+# annotation cannot resolve at `FanOutResumeState` class-build time (it is the FIRST
+# forward reference in this module — `PauseSnapshot.fan_out_resume` resolves backward).
+# Rebuild once now that every referenced model exists. `PausedChildBranchResumeState`
+# itself needs no rebuild (its `PauseSnapshot` ref is backward).
+FanOutResumeState.model_rebuild()

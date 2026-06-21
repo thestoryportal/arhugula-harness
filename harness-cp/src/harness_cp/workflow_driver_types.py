@@ -141,6 +141,34 @@ class RunResult(BaseModel):
     """
 
 
+class SubAgentChildPausedError(Exception):
+    """A recursive child sub-workflow returned `RunStatus.PAUSED` (B-HIERARCHICAL-PAUSE).
+
+    Raised by the runtime sub-agent dispatcher (`RuntimeSubAgentDispatcher`) when a
+    `SUB_AGENT_DISPATCH` worker's child sub-workflow pauses (a grandchild branch
+    failing under `cascade_policy=pause`). Previously the child PAUSE was swallowed
+    as success-equivalent at the dispatch boundary — silently losing the child's
+    suspended state. This typed exception surfaces it so the parent fan-out can
+    capture the child's cursor + pause honestly.
+
+    Defined HERE (harness-cp, imported by harness-runtime — the dependency runs
+    runtime → cp) so the CP driver's worker barrier can catch it TYPED + read
+    `child_snapshot` without importing a runtime exception type (axis isolation).
+    Mirrors the sibling runtime `SubAgentChildFailedError`, but that one CP catches
+    only via the generic `except Exception` (a FAILED child is a branch failure); a
+    PAUSED child is the distinct THIRD disposition the driver must capture, so it
+    needs a CP-importable type.
+    """
+
+    def __init__(self, *, child_workflow_id: str, child_snapshot: PauseSnapshot) -> None:
+        self.child_workflow_id = child_workflow_id
+        self.child_snapshot = child_snapshot
+        super().__init__(
+            f"child sub-workflow {child_workflow_id!r} returned RunStatus.PAUSED "
+            f"(step_index={child_snapshot.step_index}); captured for resume re-entry"
+        )
+
+
 class StepExecutionContext(BaseModel):
     """Per-step parent context surface composed by the driver and passed to
     the `StepDispatcher` Protocol (NEW at C-CP-25 v1.6 Path A — resolves the
@@ -275,6 +303,25 @@ class StepExecutionContext(BaseModel):
     `StepEffectiveBinding` (whose `model_dump` feeds the per-step override
     outcome-hash). The per-step `StepOverride.hitl_placement` override fold is
     the separate follow-on arc `B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD`."""
+
+    child_resume_snapshot: PauseSnapshot | None = None
+    """B-HIERARCHICAL-PAUSE (R-FS-1) — on RESUME, the `PauseSnapshot` a recursive
+    child sub-workflow paused at, threaded to its `SUB_AGENT_DISPATCH` worker so the
+    runtime dispatcher re-enters the child via `execute_workflow(pause_snapshot_input=
+    child_resume_snapshot)` — the child resumes at its cursor (the grandchild's
+    completed steps are NOT re-executed), the THIRD branch disposition distinct from
+    skip-terminal and re-dispatch-fresh. Set by the CP driver ONLY on the specific
+    paused-child worker's context when re-dispatching it on resume (sourced from the
+    snapshot's `FanOutResumeState.paused_child_branches`); `None` for every other
+    step / dispatch (default → byte-identical to pre-arc; only the SUB_AGENT_DISPATCH
+    dispatcher reads it, all other dispatchers ignore it).
+
+    Rides `StepExecutionContext` (per-step, driver-transient, NOT persisted + NOT in
+    any §5.2 / per-step-override outcome-hash — the hash-inert carrier per the
+    new-surface-audit hash-config-not-carrier discipline), NOT `StepEffectiveBinding`
+    (which IS hashed) and NOT a run-scoped ContextVar channel (this value travels
+    with the dispatch call itself, so no separate channel + no daemon-isolation
+    concern; it is resume-transient, never accumulated across a run)."""
 
 
 def compose_branch_child_context(

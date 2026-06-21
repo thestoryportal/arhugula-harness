@@ -44,6 +44,7 @@ from typing import Any, Protocol, cast, runtime_checkable
 
 from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.handoff_context import HandoffContext
+from harness_cp.pause_resume_protocol_types import PauseSnapshot
 from harness_cp.sub_agent_gate_level_descent import SubAgentGateLevelDescent
 from harness_cp.workflow_driver import DriverContext as _CpDriverContext
 from harness_cp.workflow_driver import execute_workflow
@@ -81,8 +82,17 @@ class ChildWorkflowRunner(Protocol):
         handoff_context: HandoffContext,
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
+        pause_snapshot_input: PauseSnapshot | None = None,
     ) -> RunResult:
-        """Run the child sub-workflow and return its terminal `RunResult`."""
+        """Run the child sub-workflow and return its terminal `RunResult`.
+
+        B-HIERARCHICAL-PAUSE (R-FS-1): `pause_snapshot_input` (additive, default
+        `None`) — when the parent fan-out is RESUMING a previously-paused child, the
+        child's own `PauseSnapshot` is threaded here so the child re-enters at its
+        cursor (`execute_workflow(pause_snapshot_input=...)`) rather than re-running
+        from scratch. `None` on a first (non-resume) child dispatch → byte-identical
+        to the pre-arc behavior.
+        """
         ...
 
 
@@ -120,12 +130,36 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
         handoff_context: HandoffContext,
         descent: SubAgentGateLevelDescent,
         default_model_binding: ModelBinding,
+        pause_snapshot_input: PauseSnapshot | None = None,
     ) -> RunResult:
-        child_run_id = uuid.uuid4().hex
+        # B-HIERARCHICAL-PAUSE — on a RESUME (pause_snapshot_input non-None), FAIL CLOSED
+        # if the snapshot's workflow_id does not match the child being invoked (Codex
+        # [P2], mirroring the root `api.resume` workflow-id guard): if the parent is
+        # edited between pause + resume so the same SUB_AGENT_DISPATCH step_id points to
+        # a DIFFERENT child workflow, the parent resume guard still passes, and applying
+        # the old child's cursor/run_id to the new child would silently corrupt lineage.
+        if pause_snapshot_input is not None and pause_snapshot_input.workflow_id != workflow_id:
+            raise ValueError(
+                "child resume workflow-id mismatch: snapshot.workflow_id="
+                f"{pause_snapshot_input.workflow_id!r}, resume child workflow_id="
+                f"{workflow_id!r} (the paused child's snapshot cannot resume a different "
+                "child workflow)"
+            )
+        # Reuse the paused child's ORIGINAL run_id (not a fresh uuid) so the resumed
+        # child's run/step idempotency keys + ledger/audit lineage stay coherent with
+        # the original run — the same discipline the root resume path follows
+        # (it threads `snapshot.run_id`). A fresh id on resume would re-key the child's
+        # per-step idempotency + sever its run lineage (Codex [P2]).
+        child_run_id = (
+            pause_snapshot_input.run_id if pause_snapshot_input is not None else uuid.uuid4().hex
+        )
         # The CP driver consumes `ctx` via its structural `DriverContext`
         # Protocol (subset of HarnessContext). Cast for the type layer; the
         # runtime objects satisfy both Protocols — same pattern as
         # `harness_runtime.api.run` per the existing api.py:386 invocation.
+        #
+        # B-HIERARCHICAL-PAUSE — forward the child's resume snapshot (None on a
+        # first dispatch) so a resumed child re-enters at its own cursor.
         return execute_workflow(
             manifest_entry,
             steps,
@@ -133,6 +167,7 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
             cast(_CpDriverContext, ctx),
             default_model_binding=default_model_binding,
             step_dispatchers=cast(Any, ctx.step_dispatchers),
+            pause_snapshot_input=pause_snapshot_input,
         )
 
     return _runner

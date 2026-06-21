@@ -591,7 +591,19 @@ def _compute_snapshot_hash(
         "state_summary": state_summary.model_dump(mode="json"),
     }
     if fan_out_resume is not None:
-        canonical["fan_out_resume"] = fan_out_resume.model_dump(mode="json")
+        # B-HIERARCHICAL-PAUSE: `paused_child_branches` is a NEW field on
+        # FanOutResumeState. `model_dump` ALWAYS emits it (as `[]` when empty),
+        # which would change the hash of every pre-B-HIERARCHICAL-PAUSE
+        # ORCHESTRATOR_WORKERS snapshot — breaking the #679 byte-compat invariant
+        # ("old durable snapshots still validate"). Drop it from the canonical
+        # serialization when empty so those snapshots hash byte-identically;
+        # include it (covering the nested child cursors recursively) only when a
+        # paused-child branch is actually present (the new-surface-audit
+        # hash-config-not-carrier discipline).
+        _for = fan_out_resume.model_dump(mode="json")
+        if not _for.get("paused_child_branches"):
+            _for.pop("paused_child_branches", None)
+        canonical["fan_out_resume"] = _for
     if peer_fan_out_resume is not None:
         canonical["peer_fan_out_resume"] = peer_fan_out_resume.model_dump(mode="json")
     payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()

@@ -57,6 +57,7 @@ from harness_cp.workflow_driver import (
 from harness_cp.workflow_driver_types import (
     RunStatus,
     StepKind,
+    SubAgentChildPausedError,
     WorkflowStep,
 )
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
@@ -622,23 +623,48 @@ def test_resume_redispatch_failing_worker_re_pauses_with_unioned_branches() -> N
     assert "worker-1" in dispatcher.dispatched
 
 
-def test_hierarchical_delegation_pause_fails_honestly_not_false_paused() -> None:
-    """Codex [P1] — HIERARCHICAL_DELEGATION REUSES `_execute_orchestrator_workers`
-    but its resume is NOT wired. A TEAM/pause worker failure with a bound protocol
-    must NOT return a false-resumable PAUSED (api.resume would re-run everything);
-    it fails HONESTLY → FAILED + `...-not-yet-materialized` (the `B-HIERARCHICAL-
-    PAUSE` forward arc)."""
+def test_hierarchical_delegation_pause_materializes_resumable_paused() -> None:
+    """B-HIERARCHICAL-PAUSE (R-FS-1) — HIERARCHICAL_DELEGATION REUSES
+    `_execute_orchestrator_workers` and now threads `pause_resumable=True` + the
+    resume snapshot. A TEAM/pause level-local worker failure materializes a GENUINE
+    resumable PAUSED (the interim `...-not-yet-materialized` FAILED is RETIRED) — the
+    same `FanOutResumeState` mechanism ORCHESTRATOR_WORKERS uses, now wired for the
+    recursion-heavy topology. A resume round-trip completes (worker-0's terminal is
+    skipped, the re-dispatchable worker re-runs)."""
     ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
     result = _run(
         steps=_steps(2),
-        dispatcher=_CountingDispatcher(fail_step_ids={"worker-0"}),
+        dispatcher=_GatedFailDispatcher(),
         ctx=ctx,
         topology=TopologyPattern.HIERARCHICAL_DELEGATION,
     )
-    assert result.status is RunStatus.FAILED
-    assert result.status is not RunStatus.PAUSED
-    assert result.fail_class == "orchestrator-workers-pause-resume-not-yet-materialized"
-    assert result.pause_snapshot is None
+    assert result.status is RunStatus.PAUSED
+    assert result.fail_class is None
+    snap = result.pause_snapshot
+    assert snap is not None
+    assert snap.fan_out_resume is not None
+    assert snap.fan_out_resume.worker_count == 2
+    # No recursive child paused here (level-local worker pause) → empty.
+    assert snap.fan_out_resume.paused_child_branches == ()
+    # Hash-valid (covers fan_out_resume).
+    assert snap.snapshot_hash == _compute_snapshot_hash(
+        workflow_id=snap.workflow_id,
+        run_id=snap.run_id,
+        step_index=snap.step_index,
+        state_summary=snap.state_summary,
+        fan_out_resume=snap.fan_out_resume,
+    )
+    # Resume round-trip: HIERARCHICAL re-enters with the snapshot + a clean dispatcher.
+    ctx2 = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = _run(
+        steps=_steps(2),
+        dispatcher=_CountingDispatcher(),
+        ctx=ctx2,
+        topology=TopologyPattern.HIERARCHICAL_DELEGATION,
+        pause_snapshot_input=snap,
+    )
+    assert resumed.status is not RunStatus.PAUSED
+    assert resumed.status in (RunStatus.SUCCESS, RunStatus.PARTIAL)
 
 
 def test_resume_body_identity_mismatch_fails_closed() -> None:
@@ -729,3 +755,317 @@ def test_resume_orchestrator_identity_mismatch_fails_closed() -> None:
     assert result.status is RunStatus.FAILED
     assert result.fail_class is not None
     assert "orchestrator-identity-mismatch" in result.fail_class
+
+
+# ---------------------------------------------------------------------------
+# B-HIERARCHICAL-PAUSE (R-FS-1) — recursive child PAUSE: capture + resume re-entry.
+#
+# The discriminating full-chain witness (`[[full-chain-witness-not-half-proofs]]`):
+# a grandchild step that COMPLETED before the child paused is NOT re-executed when
+# the parent resumes — the child re-enters at ITS cursor (counter == 1), NOT a fresh
+# re-dispatch (which would make counter == 2). The child is a REAL recursive
+# `execute_workflow` fan-out; only the SUB_AGENT_DISPATCH dispatcher is a faithful
+# double of `RuntimeSubAgentDispatcher` (raise SubAgentChildPausedError on a child
+# PAUSED + forward `step_context.child_resume_snapshot` as the child's
+# `pause_snapshot_input`) — that runtime seam is unit-proven in
+# `harness-runtime/tests/test_lifecycle_sub_agent_dispatch.py`. The INFERENCE-child
+# real-provider e2e is blocked by a pre-existing runtime sync/async deadlock
+# (`.harness/runtime_defect_sub_agent_inference_child_loop_bridge_deadlock.md`), so
+# this declarative-only witness is the non-deadlocking proof of the recursion.
+# ---------------------------------------------------------------------------
+
+# Mutable holder (a list, not an ALL_CAPS module constant — pyright would flag a
+# reassigned ALL_CAPS name as reportConstantRedefinition; Codex [P1]).
+_grandchild0_dispatches = [0]
+
+
+class _GrandchildDispatcher:
+    """Child fan-out grandchild dispatcher: grandchild-0 completes (incrementing a
+    module counter + setting a gate); grandchild-1 waits then FAILS → the child fan-out
+    PAUSES with grandchild-0 terminal+recovered. Deterministic (the _GatedFailDispatcher
+    shape)."""
+
+    def __init__(self) -> None:
+        self._gate = threading.Event()
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        sid = str(step.step_id)
+        if sid == "child-orch":
+            return {"role": "child-orch"}
+        if sid == "grandchild-0":
+            _grandchild0_dispatches[0] += 1
+            self._gate.set()
+            return {"role": "grandchild-0", "done": True}
+        assert self._gate.wait(timeout=10.0), "grandchild-0 never completed"
+        raise RuntimeError("grandchild-1 fails (after grandchild-0 completed) → child pauses")
+
+
+def _child_steps() -> list[WorkflowStep]:
+    return [
+        WorkflowStep(
+            step_id=StepID("child-orch"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"role": "child-orch"},
+        ),
+        WorkflowStep(
+            step_id=StepID("grandchild-0"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 0},
+        ),
+        WorkflowStep(
+            step_id=StepID("grandchild-1"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"index": 1},
+        ),
+    ]
+
+
+class _FaithfulSubAgentDispatcher:
+    """A faithful double of `RuntimeSubAgentDispatcher` for the B-HIERARCHICAL-PAUSE
+    seam: dispatches a REAL child `execute_workflow`, reading
+    `step_context.child_resume_snapshot` to thread the child's resume snapshot (so a
+    resumed child re-enters at its cursor), and RAISING `SubAgentChildPausedError`
+    (carrying the child's PauseSnapshot) when the child returns PAUSED — exactly what
+    the runtime dispatcher does at `sub_agent_dispatch.py`."""
+
+    def __init__(self, *, child_dispatcher: _GrandchildDispatcher) -> None:
+        self._child_dispatcher = child_dispatcher
+        self.child_calls = 0
+        self.received_resume: list[Any] = []
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        self.child_calls += 1
+        child_resume = getattr(step_context, "child_resume_snapshot", None)
+        self.received_resume.append(child_resume)
+        child_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+        child_result = execute_workflow(
+            _manifest("wf-child", TopologyPattern.ORCHESTRATOR_WORKERS),
+            _child_steps(),
+            run_id="child-run",
+            ctx=child_ctx,
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=_registry(self._child_dispatcher),
+            pause_snapshot_input=child_resume,
+        )
+        if child_result.status is RunStatus.PAUSED:
+            assert child_result.pause_snapshot is not None
+            raise SubAgentChildPausedError(
+                child_workflow_id="wf-child", child_snapshot=child_result.pause_snapshot
+            )
+        # SUCCESS / PARTIAL / DRAINED → success-equivalent (mirrors the dispatcher's
+        # non-FAILED, non-PAUSED handling): return the child's state as the worker output.
+        return dict(child_result.final_state or child_result.partial_state or {})
+
+
+class _ParentRegistry:
+    """Routes DECLARATIVE_STEP (the parent orchestrator) to a simple echo and
+    SUB_AGENT_DISPATCH (the recursive worker) to the faithful sub-agent double."""
+
+    def __init__(self, *, sub_agent: _FaithfulSubAgentDispatcher) -> None:
+        self._sub_agent = sub_agent
+        self._echo = _CountingDispatcher()
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self._sub_agent)
+        if step_kind is StepKind.DECLARATIVE_STEP:
+            return cast(StepDispatcher, self._echo)
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+
+def _parent_steps() -> list[WorkflowStep]:
+    return [
+        WorkflowStep(
+            step_id=StepID("parent-orch"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"role": "parent-orch"},
+        ),
+        WorkflowStep(
+            step_id=StepID("sub-worker"),
+            step_kind=StepKind.SUB_AGENT_DISPATCH,
+            step_payload={"child_workflow_id": "wf-child"},
+        ),
+    ]
+
+
+def test_hierarchical_child_pause_resume_does_not_reexecute_grandchild() -> None:
+    """THE discriminating witness — a grandchild completed INSIDE the child before the
+    pause is NOT re-executed on resume (the child re-enters at its cursor, not fresh).
+
+    First run: parent HIERARCHICAL → SUB_AGENT worker → REAL child fan-out; grandchild-0
+    completes (counter → 1), grandchild-1 fails → child PAUSES → the worker raises
+    SubAgentChildPausedError → the parent captures the child's snapshot into
+    `paused_child_branches` + PAUSES. Resume: the parent re-dispatches the worker WITH
+    the child snapshot → the child re-enters at its cursor → grandchild-0 is
+    terminal-skipped (counter STAYS 1), proving non-re-execution. A broken re-entry
+    (re-dispatch fresh) would make counter == 2."""
+    _grandchild0_dispatches[0] = 0
+    child_dispatcher = _GrandchildDispatcher()
+    sub_agent = _FaithfulSubAgentDispatcher(child_dispatcher=child_dispatcher)
+    parent_registry = cast(StepDispatcherRegistry, _ParentRegistry(sub_agent=sub_agent))
+
+    # ---- First run: parent pauses on the recursive child PAUSE.
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    paused = execute_workflow(
+        _manifest("wf-parent", TopologyPattern.HIERARCHICAL_DELEGATION),
+        _parent_steps(),
+        run_id="parent-run",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=parent_registry,
+    )
+    assert paused.status is RunStatus.PAUSED, f"parent must pause; got {paused.status}"
+    assert _grandchild0_dispatches[0] == 1, "grandchild-0 ran exactly once on the first pass"
+    snap = paused.pause_snapshot
+    assert snap is not None and snap.fan_out_resume is not None
+    pcb = snap.fan_out_resume.paused_child_branches
+    assert len(pcb) == 1, "the SUB_AGENT worker's child paused → exactly one paused-child branch"
+    assert pcb[0].step_id == "sub-worker"
+    # The captured child_snapshot is the child fan-out's own resumable snapshot.
+    assert pcb[0].child_snapshot.fan_out_resume is not None
+    # Hash covers the nested child cursor (a tampered child snapshot fails parent resume).
+    assert snap.snapshot_hash == _compute_snapshot_hash(
+        workflow_id=snap.workflow_id,
+        run_id=snap.run_id,
+        step_index=snap.step_index,
+        state_summary=snap.state_summary,
+        fan_out_resume=snap.fan_out_resume,
+    )
+
+    # ---- Resume: the child re-enters at its cursor — grandchild-0 is NOT re-executed.
+    ctx2 = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    resumed = execute_workflow(
+        _manifest("wf-parent", TopologyPattern.HIERARCHICAL_DELEGATION),
+        _parent_steps(),
+        run_id="parent-run",
+        ctx=ctx2,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=parent_registry,
+        pause_snapshot_input=snap,
+    )
+    assert resumed.status is not RunStatus.PAUSED
+    # THE load-bearing assertion: the child re-entered at its cursor (terminal-skipped
+    # grandchild-0), so it was NOT re-executed. Fresh re-dispatch would give 2.
+    assert _grandchild0_dispatches[0] == 1, (
+        f"grandchild-0 was RE-EXECUTED on resume (count={_grandchild0_dispatches[0]}) — the child "
+        f"was re-dispatched FRESH instead of re-entering at its cursor (broken resume re-entry)"
+    )
+    # The worker WAS re-dispatched on resume (re-entry IS a dispatch, just at the cursor).
+    assert sub_agent.child_calls == 2
+    # Discriminating: the FIRST child dispatch got no resume snapshot (fresh); the SECOND
+    # (resume) received the child's snapshot threaded via child_resume_snapshot — so the
+    # non-re-execution is genuine re-entry, not a coincidental skip.
+    assert sub_agent.received_resume[0] is None
+    assert sub_agent.received_resume[1] is not None
+    assert sub_agent.received_resume[1].fan_out_resume is not None
+
+
+class _PausingChildDispatcher:
+    """A child fan-out grandchild dispatcher whose grandchild-1 always fails → the child
+    fan-out PAUSES (grandchild-0 completes terminal+output). Distinct gates per child so
+    the parent's two SUB_AGENT workers pause in a controlled order."""
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        sid = str(step.step_id)
+        if sid == "child-orch" or sid == "grandchild-0":
+            return {"role": sid}
+        raise RuntimeError("grandchild-1 fails → child pauses")
+
+
+class _OrderedPausingSubAgentDispatcher:
+    """Two SUB_AGENT workers, each dispatching a REAL child fan-out that PAUSES. worker
+    `sub-0` raises its SubAgentChildPausedError FIRST (sets a gate); `sub-1` waits the
+    gate then raises — so worker-0's raise cancels worker-1 while worker-1's own child
+    pause is draining in-flight, exercising the CANCELLATION path (Codex [P1]). Both
+    paused children MUST survive into `paused_child_branches` (without the fix the
+    cancelled worker-1 is recorded terminal `completed` + its snapshot DROPPED)."""
+
+    def __init__(self) -> None:
+        self._gate = threading.Event()
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        sid = str(step.step_id)
+        child_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+        child_result = execute_workflow(
+            _manifest(f"wf-child-{sid}", TopologyPattern.ORCHESTRATOR_WORKERS),
+            _child_steps(),
+            run_id=f"child-run-{sid}",
+            ctx=child_ctx,
+            default_model_binding=_DEFAULT_BINDING,
+            step_dispatchers=_registry(_PausingChildDispatcher()),
+        )
+        assert child_result.status is RunStatus.PAUSED and child_result.pause_snapshot is not None
+        if sid == "sub-0":
+            self._gate.set()  # let worker-1 proceed AFTER worker-0 has its pause ready
+        else:
+            # worker-1: wait until worker-0 raised (→ cancels this branch) so this
+            # branch's pause drains in-flight under the shield → CancelledError path.
+            assert self._gate.wait(timeout=10.0)
+        raise SubAgentChildPausedError(
+            child_workflow_id=f"wf-child-{sid}", child_snapshot=child_result.pause_snapshot
+        )
+
+
+class _TwoSubAgentRegistry:
+    def __init__(self, *, sub_agent: _OrderedPausingSubAgentDispatcher) -> None:
+        self._sub_agent = sub_agent
+        self._echo = _CountingDispatcher()
+
+    def lookup(self, step_kind: StepKind) -> StepDispatcher:
+        if step_kind is StepKind.SUB_AGENT_DISPATCH:
+            return cast(StepDispatcher, self._sub_agent)
+        if step_kind is StepKind.DECLARATIVE_STEP:
+            return cast(StepDispatcher, self._echo)
+        raise StepKindDispatcherNotBoundError(step_kind)
+
+
+def test_cancellation_race_captures_paused_child_among_failing_siblings() -> None:
+    """B-HIERARCHICAL-PAUSE (Codex [P1]) — when one paused-child worker raises and the
+    TaskGroup cancels a SIBLING whose own child also paused in-flight, the cancelled
+    sibling's child PAUSE lands in `inflight.exception()` (the shielded drain suppresses
+    it + re-raises CancelledError). Both paused children MUST survive into
+    `paused_child_branches` — the cancelled one is NOT recorded as a terminal `completed`
+    branch (which would drop its snapshot on resume)."""
+    sub_agent = _OrderedPausingSubAgentDispatcher()
+    registry = cast(StepDispatcherRegistry, _TwoSubAgentRegistry(sub_agent=sub_agent))
+    parent_steps = [
+        WorkflowStep(
+            step_id=StepID("parent-orch"),
+            step_kind=StepKind.DECLARATIVE_STEP,
+            step_payload={"role": "parent-orch"},
+        ),
+        WorkflowStep(
+            step_id=StepID("sub-0"), step_kind=StepKind.SUB_AGENT_DISPATCH, step_payload={}
+        ),
+        WorkflowStep(
+            step_id=StepID("sub-1"), step_kind=StepKind.SUB_AGENT_DISPATCH, step_payload={}
+        ),
+    ]
+    ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
+    result = execute_workflow(
+        _manifest("wf-parent-2", TopologyPattern.HIERARCHICAL_DELEGATION),
+        parent_steps,
+        run_id="parent-run-2",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+    )
+    assert result.status is RunStatus.PAUSED
+    snap = result.pause_snapshot
+    assert snap is not None and snap.fan_out_resume is not None
+    pcb_indices = {p.branch_index for p in snap.fan_out_resume.paused_child_branches}
+    terminal_indices = {b.branch_index for b in snap.fan_out_resume.branches}
+    # BOTH paused children captured — neither lost to a terminal `completed` branch.
+    assert pcb_indices == {0, 1}, (
+        f"a paused child was DROPPED in the cancellation race: paused={pcb_indices}, "
+        f"terminal={terminal_indices}"
+    )
+    assert terminal_indices.isdisjoint(pcb_indices)

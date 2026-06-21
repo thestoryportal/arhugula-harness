@@ -32,15 +32,20 @@ from harness_cp.schema_attribute_enums import AttributeValueType, Cardinality
 
 
 class SubAgentResultStatus(StrEnum):
-    """The 3 terminal sub-agent result statuses (C-CP-14 §14.2).
+    """The 4 terminal sub-agent result statuses (C-CP-14 §14.2).
 
-    Closed at cardinality 3 per §14.2 — the `subagent.result_status` attribute
-    domain.
+    Cardinality 4 — the `subagent.result_status` attribute domain. `PAUSED` was
+    added at B-HIERARCHICAL-PAUSE (R-FS-1, runtime spec §14.7.2 step 7 child-PAUSED
+    mapping): a recursive child sub-workflow returning `RunStatus.PAUSED` is surfaced
+    (not swallowed) so the parent fan-out captures its cursor + pauses; the
+    `subagent.span` records `paused` for that distinct fourth outcome (child-pause was
+    not anticipated by the v1 cardinality-3 schema — the same gap the arc closes).
     """
 
     COMPLETED = "completed"
     FAILED = "failed"
     CASCADE_CANCELLED = "cascade-cancelled"
+    PAUSED = "paused"
 
 
 class TopologyAttributeSchema(BaseModel):
