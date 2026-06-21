@@ -78,6 +78,8 @@ from harness_cp.pause_resume_protocol import (
 from harness_cp.pause_resume_protocol_types import (
     FanOutBranchResumeState,
     FanOutResumeState,
+    HandoffResumeState,
+    HandoffStageResumeState,
     MaterialDiffPolicy,
     PausedChildBranchResumeState,
     PauseSnapshot,
@@ -1679,6 +1681,11 @@ def _execute_workflow_body(
             default_model_binding=default_model_binding,
             step_dispatchers=step_dispatchers,
             run_idempotency_key=run_idempotency_key,
+            # B-HANDOFF-PAUSE (R-FS-1) — single-owner sequential handoff resume
+            # re-entry. The snapshot's `handoff_resume` stage cursor drives the
+            # recover-completed-prefix + re-dispatch-from-the-cursor path; None on a
+            # normal first run.
+            resume_snapshot=resume_snapshot,
         )
 
     # Selective per-run replay-resumption via N-lookup over the existing
@@ -5488,6 +5495,7 @@ def _execute_decentralized_handoff(
     default_model_binding: ModelBinding,
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
+    resume_snapshot: PauseSnapshot | None = None,
 ) -> tuple[RunResult, int]:
     """Execute the `DECENTRALIZED_HANDOFF` single-owner sequential handoff strategy (U-CP-90).
 
@@ -5522,14 +5530,108 @@ def _execute_decentralized_handoff(
     it as upstream context (single-owner sequential → recorded inline like the
     linear/EO sites, no buffered-branch drain). On a stage failure the chain stops (`cascade_policy`
     is degenerate for single-owner — no concurrent in-flight sibling to cancel):
-    `cascade-cancel` → FAILED, `proceed` → PARTIAL (completed stages salvaged),
-    `pause` → FAILED + pause-resume-not-yet-materialized (the resumable handoff-pause
-    is a forward BUILD, B-FANOUT-PAUSE, parallel to ORCHESTRATOR_WORKERS). Returns
-    `(RunResult, steps_executed)` for the `_execute_workflow_body` caller.
+    `cascade-cancel` → FAILED, `proceed` → PARTIAL (completed stages salvaged).
+
+    `pause → PAUSED` resume (R-FS-1 `B-HANDOFF-PAUSE`, CP spec v1.46 §2): a TEAM-tier
+    stage failure under `pause` (with a bound `pause_resume_protocol`) captures a
+    `HandoffResumeState`-bearing `PauseSnapshot` (the completed-stage prefix + their
+    recovered outputs + the declared stage count) + returns PAUSED; `api.resume`
+    re-enters here with `resume_snapshot`, RE-WALKS the body recovering the completed
+    prefix's outputs (NOT re-dispatched — effect may have landed), and re-dispatches
+    from the cursor stage onward. The recompute is deterministic, so the resumed stage's
+    `parent_action_id` chains off the last completed stage's `action_id` (the handoff
+    causality is INHERENT, not a carried string). When no protocol is bound, `pause`
+    fails HONESTLY (`decentralized-handoff-pause-resume-protocol-not-bound`) — never a
+    false-resumable PAUSED. This materializes the §25.15.1 `pause → PAUSED` row EXTENDED
+    to single-owner sequential per §25.18's named `DECENTRALIZED_HANDOFF` impl-order (the
+    §25.15.1 row text is fan-out-barrier-scoped; the extension is impl-discretion, not a
+    re-reading of the row). Returns `(RunResult, steps_executed)` for the
+    `_execute_workflow_body` caller.
     """
     workflow_id = manifest_entry.workflow_id
 
-    # Empty step sequence → trivially SUCCESS (mirrors the other strategies).
+    # B-HANDOFF-PAUSE (R-FS-1) — single-owner sequential handoff resume reconstruction
+    # state (None on a normal first run). The stage cursor: a CONTIGUOUS completed
+    # prefix (stage_index 0..k-1) recovered on resume + the re-dispatchable tail (k..n).
+    # Unlike the fan-out carriers (a branch set with re-dispatchable gaps), a handoff
+    # resume is a strictly sequential prefix — there is no orchestrator step[0] and no
+    # absent-ordinal gap (the pause is a single failed stage k after a contiguous run).
+    _handoff_resume = resume_snapshot.handoff_resume if resume_snapshot is not None else None
+    if _handoff_resume is not None:
+        # Material-diff guard on resume: the re-supplied body's stage count MUST match
+        # the count captured at pause, the recovered prefix MUST be contiguous 0..k-1,
+        # and each recovered stage ordinal MUST still resolve to the same `step_id`
+        # (identity, not just count) — else the recovered output no longer maps to that
+        # stage (a changed body) → fail closed rather than replay a stale output into a
+        # different stage. Mirrors the PARALLELIZATION resume-body-mismatch guard.
+        def _resume_body_mismatch() -> str | None:
+            assert _handoff_resume is not None  # narrowed by the enclosing guard
+            assert resume_snapshot is not None  # _handoff_resume non-None ⇒ snapshot non-None
+            # Cross-field coherence (out-of-family Codex [P2]): the cursor length MUST
+            # equal the snapshot's advertised pause `step_index`. At capture both are the
+            # failed stage k (`step_index=k`, `len(completed_stages)=k`); a caller-supplied
+            # or durably-read snapshot that is internally hash-valid but INCOHERENT
+            # (`step_index` ≠ prefix length) would otherwise resume from the cursor-derived
+            # position, silently re-dispatching stages the pause step says already
+            # completed (an at-most-once violation). Fail closed on disagreement.
+            if len(_handoff_resume.completed_stages) != resume_snapshot.step_index:
+                return (
+                    f"cursor-step-index-mismatch: {len(_handoff_resume.completed_stages)} "
+                    f"completed stages but snapshot.step_index={resume_snapshot.step_index} "
+                    f"(the prefix length must equal the paused stage index)"
+                )
+            if len(steps) != _handoff_resume.stage_count:
+                return (
+                    f"stage-count-mismatch: snapshot captured "
+                    f"{_handoff_resume.stage_count} stages, resume supplied {len(steps)}"
+                )
+            for expected_index, cs in enumerate(_handoff_resume.completed_stages):
+                if cs.stage_index != expected_index:
+                    return (
+                        f"non-contiguous-prefix at position {expected_index}: "
+                        f"stage_index={cs.stage_index} (a handoff prefix must be 0..k-1)"
+                    )
+                # Bounds-check BEFORE indexing `steps` (out-of-family Codex [P2]; mirrors
+                # the PARALLELIZATION branch-index-out-of-range guard): a contiguous
+                # prefix LONGER than the body (with a matching stage_count, an incoherent
+                # snapshot) would otherwise IndexError on `steps[cs.stage_index]` below
+                # rather than fail closed cleanly.
+                if not (0 <= cs.stage_index < len(steps)):
+                    return f"stage-index-out-of-range: {cs.stage_index} ∉ [0, {len(steps)})"
+                if str(steps[cs.stage_index].step_id) != cs.step_id:
+                    return (
+                        f"stage-identity-mismatch at {cs.stage_index}: snapshot "
+                        f"step_id={cs.step_id!r}, resume step_id="
+                        f"{str(steps[cs.stage_index].step_id)!r}"
+                    )
+            if len(_handoff_resume.completed_stages) >= len(steps):
+                # The whole body completed → there is no failed tail stage to resume
+                # from (a pause is captured ONLY on a stage FAILURE, so the cursor is
+                # always a STRICT prefix). A full prefix is an incoherent/tampered cursor.
+                return (
+                    f"no-resumable-stage: {len(_handoff_resume.completed_stages)} completed "
+                    f"stages but only {len(steps)} declared (pause requires a failed tail stage)"
+                )
+            return None
+
+        _mismatch = _resume_body_mismatch()
+        if _mismatch is not None:
+            return RunResult(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                status=RunStatus.FAILED,
+                terminal_step_index=None,
+                partial_state=None,
+                final_state=None,
+                fail_class=f"decentralized-handoff-resume-body-mismatch: {_mismatch}",
+            ), 0
+
+    # Empty step sequence → trivially SUCCESS (mirrors the other strategies). Placed
+    # AFTER the resume guard (out-of-family Codex [P2]): a resume always carries
+    # `stage_count >= 1` (a pause is captured on a stage FAILURE), so an empty/short
+    # body + a non-empty cursor is caught by the stage-count guard above → FAILED, never
+    # a silent SUCCESS that drops the recovered prefix. A genuine non-resume empty
+    # workflow (`_handoff_resume is None`) skips the guard + lands here.
     if not steps:
         return RunResult(
             workflow_id=workflow_id,
@@ -5540,6 +5642,17 @@ def _execute_decentralized_handoff(
             final_state={"stages": {}, "handoffs": []},
             fail_class=None,
         ), 0
+
+    # stage_index -> recovered output for the completed prefix (replayed, NOT
+    # re-dispatched); empty on a normal first run.
+    _recovered_outputs: dict[int, Mapping[str, Any]] = (
+        {cs.stage_index: cs.output for cs in _handoff_resume.completed_stages}
+        if _handoff_resume is not None
+        else {}
+    )
+    _resume_completed_count = (
+        len(_handoff_resume.completed_stages) if _handoff_resume is not None else 0
+    )
 
     # The on-stage-failure cascade reaction (§25.15.1) — resolved from the manifest's
     # (workload_class, engine_class, persona_tier) via the §11.4 D4 tunable, the same
@@ -5560,21 +5673,39 @@ def _execute_decentralized_handoff(
     handoff_timestamp = datetime.now(UTC)
     actor_identity = ActorIdentity(ctx.ledger_writer.actor.actor_id)
 
-    # § 25.3.2 — workflow.start (single-threaded on the driver thread).
-    ctx.lifecycle_emitter.emit(WorkflowEventClass.WORKFLOW_START)
+    # § 25.3.2 — workflow.start (single-threaded on the driver thread). A handoff
+    # RESUME re-enters the SAME envelope (the completed prefix already ran in the
+    # original run), so it emits RESUMPTION — not a second WORKFLOW_START — mirroring
+    # `_execute_parallelization` / `_execute_orchestrator_workers`.
+    ctx.lifecycle_emitter.emit(
+        WorkflowEventClass.RESUMPTION
+        if _handoff_resume is not None
+        else WorkflowEventClass.WORKFLOW_START
+    )
 
     stage_writers: list[BufferingLedgerWriter] = []
     stage_outputs: dict[str, Mapping[str, Any]] = {}
     handoffs: list[HandoffContext] = []
+    # B-HANDOFF-PAUSE — the completed-stage records (recovered prefix + this-run
+    # completions), captured into a `HandoffResumeState` cursor on a `pause` halt. A
+    # RE-pause unions the recovered prefix + the newly-completed stages, so this stays
+    # a contiguous prefix across repeated resumes.
+    completed_stage_records: list[HandoffStageResumeState] = []
     # Stage 0 anchors at the workflow origin; each later stage chains off its
     # predecessor's action_id (the persisted handoff chain — the non-hollow signal).
     prev_action_id = f"workflow:{workflow_id}:step:0"
 
     def _finish(
-        status: RunStatus, *, fail_class: str | None, salvage: bool
+        status: RunStatus,
+        *,
+        fail_class: str | None,
+        salvage: bool,
+        pause_snapshot: PauseSnapshot | None = None,
     ) -> tuple[RunResult, int]:
         # Drain the COMPLETED-stage writers in stage order (writer.branch_index =
-        # stage ordinal) + emit one STEP_BOUNDARY per stage that ran.
+        # stage ordinal) + emit one STEP_BOUNDARY per stage that ran. On resume, the
+        # recovered prefix added NO writers (its ledger entries persisted in the
+        # original run), so steps_executed counts only the newly-dispatched stages.
         steps_executed = _drain_and_emit_step_boundaries(ctx, stage_writers)
         aggregate = {
             "stages": {sid: dict(out) for sid, out in stage_outputs.items()},
@@ -5588,7 +5719,39 @@ def _execute_decentralized_handoff(
             partial_state=aggregate if salvage else None,
             final_state=aggregate if status is RunStatus.SUCCESS else None,
             fail_class=fail_class,
+            # B-HANDOFF-PAUSE — PAUSED carries the salvaged aggregate as partial_state
+            # (above) + the resumable stage-cursor snapshot.
+            pause_snapshot=pause_snapshot,
         ), steps_executed
+
+    def _append_handoff_if_not_terminal(
+        stage_index: int,
+        completed_action_id: str,
+        completed_context: StepExecutionContext,
+    ) -> None:
+        # Compose the ownership transfer to the next stage-expert (a RECORD; surfaced
+        # in final_state). Terminal stage → no further handoff (structural). Shared by
+        # the live-dispatch path + the B-HANDOFF-PAUSE resume-recovery path so a
+        # resumed run reconstructs the SAME handoff chain (the recovered prefix's
+        # handoff records are rebuilt deterministically, not carried in the snapshot).
+        if stage_index < len(steps) - 1:
+            next_step = steps[stage_index + 1]
+            handoffs.append(
+                _compose_handoff_to_next(
+                    completed_action_id=completed_action_id,
+                    completed_context=completed_context,
+                    next_step=next_step,
+                    # B4 Slice 4 — the handoff-record preview of the next stage's
+                    # role must reflect a per-step override so the audit record
+                    # matches the role the next stage's loop iteration will fold
+                    # in (precedence per-step > derived); CP spec v1.38 §6.1.
+                    next_role=(
+                        _per_step_role_override(manifest_entry, next_step.step_id)
+                        or derive_agent_role(next_step.step_id)
+                    ),
+                    actor_identity=actor_identity,
+                )
+            )
 
     for stage_index, step in enumerate(steps):
         # Resolve the per-step binding FIRST (deterministic, pure — matches the
@@ -5625,6 +5788,34 @@ def _execute_decentralized_handoff(
             spawning, branch_index=0, agent_role=role
         ).model_copy(update={"step_index": stage_index})
         this_action_id = compose_branch_step_action_id(stage_ctx, 0)
+        # B-HANDOFF-PAUSE (R-FS-1) — RESUME recovery of the completed prefix. On resume,
+        # stages 0..k-1 already dispatched + persisted their ledger entries in the
+        # ORIGINAL run; re-walk them here WITHOUT re-dispatching: recover the output from
+        # the cursor, replay it into the aggregate + the inter-step channel, rebuild the
+        # handoff record, and DO NOT create a writer / append a ledger entry (no
+        # double-write; no step-count). The binding/ctx/action_id were just recomputed
+        # deterministically, so `prev_action_id` chains through the prefix EXACTLY as the
+        # original run did — the resumed stage k's parent_action_id is the last completed
+        # stage's action_id (the handoff causality is INHERENT in the recompute, not a
+        # carried string the snapshot could drift on). `[[full-chain-witness-not-half-
+        # proofs]]`: a recovered stage's dispatcher is NEVER invoked across the resume.
+        if stage_index < _resume_completed_count:
+            recovered_output = _recovered_outputs[stage_index]
+            stage_outputs[str(step.step_id)] = recovered_output
+            # Re-seed the inter-step channel so the FIRST re-dispatched stage (k) reads
+            # stage (k-1)'s recovered output as its upstream context (B-INTERSTEP-HANDOFF;
+            # the run-scoped channel starts empty on this fresh resume invocation).
+            _record_inter_step_output(ctx, str(step.step_id), recovered_output)
+            completed_stage_records.append(
+                HandoffStageResumeState(
+                    stage_index=stage_index,
+                    step_id=str(step.step_id),
+                    output=recovered_output,
+                )
+            )
+            _append_handoff_if_not_terminal(stage_index, this_action_id, stage_ctx)
+            prev_action_id = this_action_id
+            continue
         # writer.branch_index = the stage ordinal — the DRAIN-order key (distinct
         # from the entry's branch_metadata.branch_index=0; different layers). One
         # writer per stage → one STEP_BOUNDARY per stage via _drain_and_emit_*.
@@ -5646,9 +5837,42 @@ def _execute_decentralized_handoff(
             timestamp=handoff_timestamp,
             snapshot_ref=snapshot_ref,
         )
+        # Pre-flight the dispatcher resolution (out-of-family Codex [P2]; mirrors
+        # `_execute_parallelization`): an UNBOUND `StepKind` is a SETUP/config error,
+        # NOT a stage dispatch failure — it must fail the run LOUD (FAILED), never be
+        # swallowed into the cascade `pause`→PAUSED / `proceed`→PARTIAL conversion below
+        # (a resumable PAUSED for a config error would just loop on resume, and a PARTIAL
+        # would silently degrade a setup bug). Resolved OUTSIDE the stage-failure `try`.
         try:
-            output = step_dispatchers.lookup(step.step_kind).dispatch(
-                binding, step, step_context=stage_ctx
+            dispatcher = step_dispatchers.lookup(step.step_kind)
+        except StepKindDispatcherNotBoundError as exc:
+            return _finish(
+                RunStatus.FAILED,
+                fail_class=f"decentralized-handoff-step-kind-not-bound: {exc}",
+                salvage=False,
+            )
+        try:
+            output = dispatcher.dispatch(binding, step, step_context=stage_ctx)
+        except SubAgentChildPausedError as child_paused:
+            # A SUB_AGENT_DISPATCH stage whose recursive child sub-workflow PAUSED raises
+            # the typed SubAgentChildPausedError (#680). DECENTRALIZED_HANDOFF does NOT
+            # materialize the cross-recursion child-pause disposition (that is the
+            # ORCHESTRATOR_WORKERS `paused_child_branches` machinery; handoff is
+            # single-owner sequential + the §25.11 row dispatches stages through the
+            # ordinary StepDispatcher, NOT SUB_AGENT_DISPATCH). Catching it via the
+            # generic `except Exception` below + converting it into a handoff-level PAUSE
+            # would DROP the child's OWN cursor (the #680 swallow-bug, one level over) —
+            # a false-resumable handoff-PAUSE that silently loses the child's suspended
+            # state. Fail CLOSED honestly (out-of-family Codex [P2]); the completed prefix
+            # still salvages.
+            return _finish(
+                RunStatus.FAILED,
+                fail_class=(
+                    f"decentralized-handoff-child-pause-unsupported: stage {stage_index} "
+                    f"sub-agent child PAUSED ({child_paused}); the cross-recursion "
+                    "child-pause disposition is not materialized for DECENTRALIZED_HANDOFF"
+                ),
+                salvage=True,
             )
         except Exception as exc:
             # A stage owner failed → the chain stops (single-owner: no in-flight
@@ -5663,16 +5887,47 @@ def _execute_decentralized_handoff(
                     salvage=True,
                 )
             if cascade_policy is CascadePolicy.PAUSE:
+                # B-HANDOFF-PAUSE (R-FS-1; CP spec v1.46 §2) — materialize the §25.15.1
+                # `pause → PAUSED` row EXTENDED to single-owner sequential (per §25.18's
+                # named DECENTRALIZED_HANDOFF impl-order). The completed-stage prefix
+                # (0..k-1) is captured into a hash-integrity-checked HandoffResumeState
+                # stage cursor; `api.resume` re-enters here, recovers the prefix (NOT
+                # re-dispatched), and re-dispatches from stage k. The failed stage k
+                # buffered nothing (single-owner: no in-flight sibling to cancel).
+                protocol = getattr(ctx, "pause_resume_protocol", None)
+                if protocol is None:
+                    # No pause/resume opt-in bound → the snapshot cannot be captured, so
+                    # a PAUSED would advertise a resumability the harness cannot honor
+                    # (the FALSE-`PAUSED` silent-degradation mode). Fail HONESTLY —
+                    # detect-then-refuse, mirroring _execute_parallelization's
+                    # FAILED + salvage (NOT proceed's PARTIAL — a pause that cannot be
+                    # honored is a failure, not a graceful degradation). The
+                    # completed-stage prefix still salvages as partial_state.
+                    return _finish(
+                        RunStatus.FAILED,
+                        fail_class=(
+                            "decentralized-handoff-pause-resume-protocol-not-bound: "
+                            f"stage {stage_index} failed under cascade_policy=pause but no "
+                            "pause_resume_protocol is bound (cannot capture a resumable "
+                            f"snapshot) — underlying: {type(exc).__name__}: {exc}"
+                        ),
+                        salvage=True,
+                    )
+                handoff_resume = HandoffResumeState(
+                    completed_stages=tuple(completed_stage_records),
+                    stage_count=len(steps),
+                )
+                snapshot = _run_protocol_method_sync(
+                    cast(PauseResumeProtocol, protocol).capture_pause_snapshot(
+                        workflow_id=workflow_id,
+                        run_id=run_id,
+                        step_index=stage_index,
+                        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+                        handoff_resume=handoff_resume,
+                    )
+                )
                 return _finish(
-                    RunStatus.FAILED,
-                    fail_class=(
-                        "decentralized-handoff-pause-resume-not-yet-materialized: "
-                        f"stage {stage_index} failed under cascade_policy=pause; the "
-                        "resumable single-owner handoff-pause is a forward BUILD "
-                        f"(B-FANOUT-PAUSE), not yet materialized — underlying: "
-                        f"{type(exc).__name__}: {exc}"
-                    ),
-                    salvage=False,
+                    RunStatus.PAUSED, fail_class=None, salvage=True, pause_snapshot=snapshot
                 )
             return _finish(
                 RunStatus.FAILED,
@@ -5712,26 +5967,16 @@ def _execute_decentralized_handoff(
         # B-INTERSTEP-HANDOFF.)
         # Opt-out (`ctx.inter_step_output_channel is None`) → no-op, byte-identical.
         _record_inter_step_output(ctx, str(step.step_id), output)
-        # Compose the ownership transfer to the next stage-expert (a RECORD; surfaced
-        # in final_state). Terminal stage → no further handoff (structural).
-        if stage_index < len(steps) - 1:
-            next_step = steps[stage_index + 1]
-            handoffs.append(
-                _compose_handoff_to_next(
-                    completed_action_id=this_action_id,
-                    completed_context=stage_ctx,
-                    next_step=next_step,
-                    # B4 Slice 4 — the handoff-record preview of the next stage's
-                    # role must reflect a per-step override so the audit record
-                    # matches the role the next stage's loop iteration will fold
-                    # in (precedence per-step > derived); CP spec v1.38 §6.1.
-                    next_role=(
-                        _per_step_role_override(manifest_entry, next_step.step_id)
-                        or derive_agent_role(next_step.step_id)
-                    ),
-                    actor_identity=actor_identity,
-                )
+        # B-HANDOFF-PAUSE — record the completed stage for the resume cursor (a later
+        # stage's `pause` halt captures this prefix into a HandoffResumeState).
+        completed_stage_records.append(
+            HandoffStageResumeState(
+                stage_index=stage_index,
+                step_id=str(step.step_id),
+                output=output,
             )
+        )
+        _append_handoff_if_not_terminal(stage_index, this_action_id, stage_ctx)
         prev_action_id = this_action_id
 
     # Terminal: the last stage completed, no further handoff → SUCCESS.

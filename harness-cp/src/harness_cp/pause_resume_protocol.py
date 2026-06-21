@@ -39,6 +39,7 @@ from harness_cp.handoff_context import ExternalReference, StateSummary
 from harness_cp.material_diff_detection import MaterialDiff
 from harness_cp.pause_resume_protocol_types import (
     FanOutResumeState,
+    HandoffResumeState,
     MaterialDiffPolicy,
     PauseSnapshot,
     PeerFanOutResumeState,
@@ -413,6 +414,7 @@ class PauseResumeProtocol:
         *,
         fan_out_resume: FanOutResumeState | None = None,
         peer_fan_out_resume: PeerFanOutResumeState | None = None,
+        handoff_resume: HandoffResumeState | None = None,
     ) -> PauseSnapshot:
         """Capture a workflow-layer pause snapshot per CP spec v1.11 §26.1.
 
@@ -426,11 +428,12 @@ class PauseResumeProtocol:
         ORCHESTRATOR_WORKERS fan-out resume reconstruction state for a
         `cascade_policy=pause` halt; ``peer_fan_out_resume`` (B-FANOUT-PAUSE-
         PARALLELIZATION, R-FS-1; default None) carries the PARALLELIZATION
-        (peer fan-out) analogue. At most one is ever non-None (the capturing
-        strategy selects which). Both are COVERED by `snapshot_hash` so a tampered
-        recovered-output fails the resume-time recompute. Linear / single-step
-        callers pass neither → the snapshot + its hash are byte-identical to the
-        pre-B-FANOUT-PAUSE baseline.
+        (peer fan-out) analogue; ``handoff_resume`` (B-HANDOFF-PAUSE, R-FS-1; default
+        None) carries the DECENTRALIZED_HANDOFF single-owner stage cursor. At most one
+        is ever non-None (the capturing strategy selects which). All are COVERED by
+        `snapshot_hash` so a tampered recovered-output fails the resume-time recompute.
+        Linear / single-step callers pass none → the snapshot + its hash are
+        byte-identical to the pre-B-FANOUT-PAUSE baseline.
         """
         state_summary, state_ledger_anchor = self._pause_context_reader()
         snapshot_hash = _compute_snapshot_hash(
@@ -440,6 +443,7 @@ class PauseResumeProtocol:
             state_summary=state_summary,
             fan_out_resume=fan_out_resume,
             peer_fan_out_resume=peer_fan_out_resume,
+            handoff_resume=handoff_resume,
         )
         return PauseSnapshot(
             workflow_id=workflow_id,
@@ -452,6 +456,7 @@ class PauseResumeProtocol:
             state_ledger_anchor=state_ledger_anchor,
             fan_out_resume=fan_out_resume,
             peer_fan_out_resume=peer_fan_out_resume,
+            handoff_resume=handoff_resume,
         )
 
     async def attempt_resume(
@@ -506,6 +511,7 @@ class PauseResumeProtocol:
             state_summary=snapshot.state_summary,
             fan_out_resume=snapshot.fan_out_resume,
             peer_fan_out_resume=snapshot.peer_fan_out_resume,
+            handoff_resume=snapshot.handoff_resume,
         )
         if expected_hash != snapshot.snapshot_hash:
             return ResumeResult(
@@ -569,6 +575,7 @@ def _compute_snapshot_hash(
     state_summary: StateSummary,
     fan_out_resume: FanOutResumeState | None = None,
     peer_fan_out_resume: PeerFanOutResumeState | None = None,
+    handoff_resume: HandoffResumeState | None = None,
 ) -> str:
     """sha256 hex over canonical JSON of (workflow_id, run_id, step_index, state_summary).
 
@@ -606,6 +613,12 @@ def _compute_snapshot_hash(
         canonical["fan_out_resume"] = _for
     if peer_fan_out_resume is not None:
         canonical["peer_fan_out_resume"] = peer_fan_out_resume.model_dump(mode="json")
+    if handoff_resume is not None:
+        # B-HANDOFF-PAUSE: the DECENTRALIZED_HANDOFF stage cursor (recovered
+        # completed-stage outputs). Added to the canonical dict ONLY when present
+        # (at most one of the three resume carriers ever is), so every pre-existing
+        # snapshot hashes byte-identically — mirrors the `peer_fan_out_resume` drop.
+        canonical["handoff_resume"] = handoff_resume.model_dump(mode="json")
     payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
 

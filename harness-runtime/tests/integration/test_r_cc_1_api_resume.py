@@ -45,6 +45,8 @@ from harness_cp.cross_family_fallback_chain import (
 )
 from harness_cp.engine_class import EngineClass
 from harness_cp.pause_resume_protocol_types import (
+    HandoffResumeState,
+    HandoffStageResumeState,
     PauseSnapshot,
     WorkflowPauseReason,
 )
@@ -630,6 +632,54 @@ async def test_durable_wrapper_persists_on_capture(tmp_path: Path) -> None:
     assert (
         JournalWorkflowPauseStore(journal_dir=tmp_path / "pj").read_latest(_WORKFLOW_ID) == returned
     )
+
+
+@pytest.mark.asyncio
+async def test_durable_wrapper_forwards_handoff_resume(tmp_path: Path) -> None:
+    """B-HANDOFF-PAUSE regression (Codex-caught [P1]): the durable wrapper's
+    `capture_pause_snapshot` override MUST accept + forward the `handoff_resume`
+    carrier. Under durable pause/resume config a `DECENTRALIZED_HANDOFF` pause calls
+    `capture_pause_snapshot(handoff_resume=...)`; a wrapper that only accepted the
+    fan-out carriers would raise `TypeError` before returning PAUSED (and silently
+    drop the cursor from the journal). Assert the carrier survives the durable
+    capture + the cross-instance journal read-back."""
+    from harness_runtime.lifecycle.durable_pause_resume_protocol import (
+        DurablePauseResumeProtocol,
+    )
+    from harness_runtime.lifecycle.journal_workflow_pause_store import (
+        JournalWorkflowPauseStore,
+    )
+
+    store = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj")
+    protocol = DurablePauseResumeProtocol(
+        state_ledger_writer=object(),
+        state_ledger_reader=object(),
+        pause_context_reader=lambda: (_minimal_state_summary(), "0" * 64),
+        store=store,
+    )
+    handoff_resume = HandoffResumeState(
+        completed_stages=(
+            HandoffStageResumeState(stage_index=0, step_id="s0", output={"role": "s0"}),
+        ),
+        stage_count=2,
+    )
+
+    returned = await protocol.capture_pause_snapshot(
+        _WORKFLOW_ID,
+        "run-handoff",
+        1,
+        WorkflowPauseReason.EXPLICIT_OPERATOR,
+        handoff_resume=handoff_resume,
+    )
+    # The carrier survived the durable capture (forwarded to the parent, not dropped).
+    assert returned.handoff_resume == handoff_resume
+    assert returned.fan_out_resume is None
+    assert returned.peer_fan_out_resume is None
+    # And it round-trips through the journal a fresh store (the cross-restart path).
+    read_back = JournalWorkflowPauseStore(journal_dir=tmp_path / "pj").read_latest(_WORKFLOW_ID)
+    assert read_back == returned
+    assert read_back is not None
+    assert read_back.handoff_resume == handoff_resume
 
 
 # ---- Restart-proof e2e via the harness-owned store (resume_handle) ----------
