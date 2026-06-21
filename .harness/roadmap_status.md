@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `e9cc83fbf870` |
-| `last_refreshed` | 2026-06-20T14:00:00+00:00 |
-| `git_head` | `7998914f` — #671 `B-INTERSTEP-PERRUN-ISOLATION` (the 15th standalone `B-*` arc; runtime v1.64 §14.21.5 inv 7 CLOSED — per-run ContextVar isolation of the inter-step channel + cost accumulator on the daemon-reused `HarnessContext`). Per-arc narrative lives in the PR body + `.harness/beyond-mvp-capability-boundary-ledger.md`; recent transits in the Drift detection log below. Lags HEAD by one commit (the §12.2.1 terminating-refresh fixed point). |
+| `workspace_state_hash` | `ec935513e553` |
+| `last_refreshed` | 2026-06-21T00:46:31+00:00 |
+| `git_head` | `6005df0c` — #673 schema-backed arc-ledger dashboard overhaul (Phase A+A2+B): `.harness/arc-ledger.yaml` single source + `tools/arc_ledger.py` derive/validate + a blocking CI tally gate; the dashboard renders every frozen arc + its units and the 14 registered forward arcs; the parsed arc-map markdown is retired to a stub. Dashboard tooling, not an R-FS-1 arc. Recent transits in the Drift detection log below. Lags HEAD by one commit (the §12.2.1 terminating-refresh fixed point). |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 81 |
 
@@ -54,12 +54,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #673 | 2026-06-20 | **feat(dashboard): schema-backed arc-ledger overhaul (Phase A+A2+B).** The R-FS-1 arc+unit map is now driven by the structured single source `.harness/arc-ledger.yaml` (derived by `tools/arc_ledger.py`; `--check` is a blocking CI tally gate), replacing the hand-maintained markdown the dashboard parsed (which drifted = R-IF-114). `generate.py` renders 11 frozen arcs (with as-built units) + standalone (closed/gated/resolved) + **14 registered-forward arcs as decompose-at-open cards**; a no-PyYAML system-Python-3.9 fallback keeps the Codex dashboard guard's byte-compare green. `.harness/r-fs-1-arc-and-unit-map.md` (376 lines) retired to a pointer stub; `roadmap_status.md` pruned; `CLAUDE.md §12.2` + the dashboard README repointed at the YAML. Dashboard tooling — NOT an R-FS-1 build arc; the forward `B-*` register is unchanged (next = `B-L2-FALLBACK-COMPOSITION`). |
 | PR #671 | 2026-06-20 | **R-FS-1 `B-INTERSTEP-PERRUN-ISOLATION`** (runtime v1.64 §14.21.5 inv 7 CLOSED) — per-run ContextVar isolation of the inter-step channel + cost accumulator on the daemon-reused `HarnessContext` singleton; removes B-INTERSTEP's single-flight lock + closes the timeout-zombie residual. The 15th standalone `B-*`. NO operator gate; advisor + Codex. Narrative: PR body + spine ledger. |
 | PR #669 | 2026-06-19 | **R-FS-1 `B-L2-EMBEDDING-ACTIVATION`** (impl-to-cleared C-CP-02 §2.2) — opt-in `routing_activation`: a manifest-miss DECLARATIVE decline → EMBEDDING → L3; production-dormant behind the 2nd-provider gate. The 14th + last originally-enumerated standalone `B-*`; spawned 2 forward arcs. NO operator gate. |
 | PR #667 | 2026-06-19 | **R-FS-1 `B-LAYER-BUDGET-OVERRIDE`** (CP v1.43 §2.5.3) — the L3 router timeout uses the §3.1 OVERRIDE-RESOLVED effective budget (workload_class/persona_tier), not the flat field. Capability-built + production-dormant. NO operator gate. |
 | PR #665 | 2026-06-19 | **R-FS-1 `B-ENGINE-OUTPUT-REPLAY`** (runtime v1.63 §14.23 C-RT-32) — output-carrying event-history store (RESERVE-before-COMMIT); resume rehydrates the inter-step channel from the stored prefix. LINEAR EVENT_SOURCED_REPLAY only. NO operator gate. |
-| PR #659 | 2026-06-19 | **R-FS-1 `B-EDIT-CARRIER`** (runtime v1.62 §14.8.2 step 4i) — functional operator EDIT at the wrap-time gate (JSON-decode flat-str → replace-not-merge). Wrap-time SYNC path only; 2 follow-ons registered. NO operator gate. |
-| PR #657 | 2026-06-18 | **R-FS-1 `B-HITL-PLACEMENT-PER-STEP-PRODUCER`** (runtime v1.61 §14.8.2 + CP v1.41 §25.3) — binds workflow `hitl_placements` onto per-step gates so the wrap-time approvals (inference/sub-agent/tool) fire in production; closes the B3 placement-composition residual. NO operator gate. |
 ---
 
 ---
