@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `ec935513e553` |
-| `last_refreshed` | 2026-06-21T00:46:31+00:00 |
-| `git_head` | `6005df0c` — #673 schema-backed arc-ledger dashboard overhaul (Phase A+A2+B): `.harness/arc-ledger.yaml` single source + `tools/arc_ledger.py` derive/validate + a blocking CI tally gate; the dashboard renders every frozen arc + its units and the 14 registered forward arcs; the parsed arc-map markdown is retired to a stub. Dashboard tooling, not an R-FS-1 arc. Recent transits in the Drift detection log below. Lags HEAD by one commit (the §12.2.1 terminating-refresh fixed point). |
+| `workspace_state_hash` | `808be39d0ef4` |
+| `last_refreshed` | 2026-06-21T01:03:04+00:00 |
+| `git_head` | `18f6e553` — `.mcp.json` dribbble design-reference MCP registered (chore, 73e5562 rebased onto the post-#673 main); the substantive prior tip is #673 schema-backed arc-ledger dashboard overhaul. Recent transits in the Drift detection log below. Lags HEAD by one commit (the §12.2.1 terminating-refresh fixed point). |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 81 |
 
