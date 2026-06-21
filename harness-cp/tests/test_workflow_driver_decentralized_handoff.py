@@ -428,10 +428,12 @@ def test_decentralized_handoff_proceed_on_stage_failure_partial() -> None:
     assert set(result.partial_state["stages"]) == {"s0", "s1"}  # completed prefix salvaged
 
 
-def test_decentralized_handoff_pause_on_stage_failure_not_yet_materialized() -> None:
-    """TEAM tier → pause: the resumable single-owner handoff-pause is a forward
-    BUILD (B-FANOUT-PAUSE) — honest FAILED + a not-yet-materialized fail_class,
-    NEVER a false PAUSED."""
+def test_decentralized_handoff_pause_no_protocol_bound_fails_honestly() -> None:
+    """TEAM tier → pause with NO pause_resume_protocol bound: the snapshot cannot be
+    captured, so a PAUSED would advertise an un-honorable resumability. Fail HONESTLY
+    (FAILED + `...-protocol-not-bound`, salvaging the completed prefix), NEVER a false
+    PAUSED — the B-HANDOFF-PAUSE materialization's honest-degradation guard (the `_run`
+    helper binds no protocol)."""
     ledger = _RecordingLedger()
     result, _disp, _emitter = _run(
         steps=[_stage("s0"), _stage("s1")],
@@ -441,7 +443,10 @@ def test_decentralized_handoff_pause_on_stage_failure_not_yet_materialized() -> 
     )
     assert result.status is RunStatus.FAILED
     assert result.fail_class is not None
-    assert "decentralized-handoff-pause-resume-not-yet-materialized" in result.fail_class
+    assert "decentralized-handoff-pause-resume-protocol-not-bound" in result.fail_class
+    # Completed prefix (s0) still salvaged — no silent loss.
+    assert result.partial_state is not None
+    assert set(result.partial_state["stages"]) == {"s0"}
 
 
 # ---------------------------------------------------------------------------

@@ -46,10 +46,10 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 20
+  standalone_closed: 21
   standalone_gated: 1
   standalone_resolved: 2
-  standalone_registered: 12
+  standalone_registered: 11
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
 arcs:
@@ -483,12 +483,12 @@ arcs:
   - id: B-HANDOFF-PAUSE
     title: "Resumable pause for DECENTRALIZED_HANDOFF"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
     owner_axis: "CP + runtime"
     parent_arc: B-FANOUT-PAUSE
-    anticipated_scope: "Single-owner sequential handoff-pause (a stage cursor, not a branch set) — a distinct, non-fan-out resume shape."
-    why: "DECENTRALIZED_HANDOFF is a different resume shape than the fan-out barrier."
+    pr: "#681"
+    spec_delta: "CP v1.45 → v1.46 §1 (NEW HandoffResumeState + HandoffStageResumeState stage-cursor carriers + PauseSnapshot.handoff_resume) + §2 (§25.15.1 pause→PAUSED EXTENDED to single-owner sequential per §25.18's named DECENTRALIZED_HANDOFF impl-order); NO operator gate"
+    gives: "DECENTRALIZED_HANDOFF's `pause` branch (was FAILED + `...-not-yet-materialized`) is now a genuine resumable PAUSED — the single-owner sequential analogue of the fan-out pause shape, but a CONTIGUOUS stage CURSOR (completed prefix 0..k-1 + recovered outputs + stage_count), NOT a branch set (own carrier per `[[fanout-pause-per-strategy-carrier]]`; no orchestrator output, no peer-branch set). A stage failure under `pause` (protocol bound) captures a hash-integrity-checked HandoffResumeState snapshot → PAUSED; `api.resume` RE-WALKS the body recovering the completed prefix (replayed, NOT re-dispatched) with the handoff chain recomputed DETERMINISTICALLY (the resumed stage's parent_action_id chains off the last completed stage's action_id — the load-bearing causality, NOT re-anchored to the origin), then re-dispatches from stage k. No protocol → honest FAILED + `...-protocol-not-bound` (no false-PAUSED). impl-to-cleared-spec EXTENDING §25.15.1 per §25.18; the §25.15.1 fan-out-barrier-scoped framing owned (advisor-sharpened, not verbatim coverage). CP-only impl — handoff dispatches through the ordinary StepDispatcher (never SUB_AGENT_DISPATCH), so NO runtime dispatcher change (unlike #680 HIERARCHICAL). Completes the pause family across all 5 non-linear strategies (only the sequential EVALUATOR_OPTIMIZER iteration-cursor fork-first arc remains). Full-chain witness: CP discriminating at-most-once + parent_action_id-chain tests + runtime `test_b_handoff_pause_resume_e2e.py` real api.resume + JSON round-trip."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-HIERARCHICAL-PAUSE

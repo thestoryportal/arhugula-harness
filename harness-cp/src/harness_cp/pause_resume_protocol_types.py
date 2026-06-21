@@ -240,6 +240,79 @@ class PeerFanOutResumeState(BaseModel):
     `branch_count` means the workflow body changed."""
 
 
+class HandoffStageResumeState(BaseModel):
+    """One completed stage of a `DECENTRALIZED_HANDOFF` paused at a later stage.
+
+    B-HANDOFF-PAUSE (R-FS-1) — `DECENTRALIZED_HANDOFF` is single-owner SEQUENTIAL
+    (one stage-expert owns the workflow at a time, then hands off to the next via a
+    `HandoffContext` record). When a stage fails under `cascade_policy=pause`, the
+    completed-stage PREFIX is captured so resume recovers their outputs (the ledger
+    carries causality, not the dispatch output mapping) WITHOUT re-executing them.
+
+    Distinct from the fan-out carriers' `FanOutBranchResumeState`: handoff stages are
+    a CONTIGUOUS sequential prefix (`stage_index` 0..k-1 for a pause at stage k), not a
+    set of terminal branches with re-dispatchable gaps. There is no `terminal_status`
+    (a handoff stage either completed — recovered here — or is the failed/not-yet-run
+    stage at/after the cursor, re-dispatched on resume)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    stage_index: int
+    """The declared stage ordinal (0-based `steps` position) that completed. The
+    captured prefix is contiguous `0..k-1` for a pause at stage `k`."""
+
+    step_id: str
+    """The stage `WorkflowStep.step_id` AT CAPTURE TIME. Resume validates the
+    re-supplied `steps[stage_index].step_id` against this (positional-identity guard,
+    fail-closed on a same-count rename/reorder — the recovered output is replayed into
+    this stage's slot + its dispatch skipped, so a renamed body would mis-attribute)."""
+
+    output: Mapping[str, Any]
+    """The completed stage's dispatch output, recovered on resume so the stage is NOT
+    re-dispatched (it is a completed step; effect may have landed) — replayed into the
+    aggregate `stages` map + re-seeded into the inter-step output channel so the next
+    stage reads its upstream context (B-INTERSTEP-HANDOFF, runtime §14.21). COVERED by
+    `_compute_snapshot_hash` (a resumed aggregate trusts it → integrity-checked)."""
+
+
+class HandoffResumeState(BaseModel):
+    """Single-owner sequential handoff resume reconstruction state (the stage cursor).
+
+    B-HANDOFF-PAUSE (R-FS-1) — the `DECENTRALIZED_HANDOFF` analogue of
+    `FanOutResumeState` / `PeerFanOutResumeState`, but a STAGE CURSOR rather than a
+    branch set: handoff is single-owner sequential, so a pause at stage `k` has a
+    contiguous completed prefix `0..k-1` and re-dispatches from stage `k` onward.
+
+    Materializes the §25.15.1 `pause → PAUSED` row EXTENDED to the single-owner
+    sequential case (the §25.15.1 row text is fan-out-barrier-scoped; this extension
+    is the §25.18-named `DECENTRALIZED_HANDOFF` impl-discretion materialization — the
+    last/hardest strategy in the §25.18 simplest→hardest order). No new orchestrator
+    fields (no `steps[0]` orchestrator; no peer-branch set): just the completed-stage
+    prefix + the declared stage count.
+
+    Carried by `PauseSnapshot.handoff_resume` (the THIRD additive, defaulted resume
+    field — never co-set with `fan_out_resume` / `peer_fan_out_resume`; the capturing
+    strategy populates exactly one). On resume, `_execute_decentralized_handoff`
+    re-walks the body: the recovered prefix's outputs are replayed (NOT re-dispatched),
+    the handoff-chain `parent_action_id` is recomputed deterministically through the
+    prefix (so the resumed stage chains off the last completed stage's `action_id`, NOT
+    re-anchored to the workflow origin — the load-bearing handoff causality), and stage
+    `k` onward is dispatched fresh."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    completed_stages: tuple[HandoffStageResumeState, ...]
+    """The contiguous completed-stage prefix (`stage_index` 0..k-1) at pause time. A
+    stage ordinal at/after `len(completed_stages)` is re-dispatched on resume. A RE-pause
+    (pause→resume→pause) unions the recovered prefix + the newly-completed-on-resume
+    stages, so this stays a contiguous prefix across repeated resumes."""
+
+    stage_count: int
+    """The total declared stage count (`len(steps)`) at pause time. A material-diff
+    guard at resume: a different `stage_count` means the workflow body changed →
+    fail-closed rather than recover stale outputs into a changed body."""
+
+
 class PauseSnapshot(BaseModel):
     """8-field pause-snapshot envelope (CP spec v1.11 §26.2).
 
@@ -303,6 +376,18 @@ class PauseSnapshot(BaseModel):
     this). COVERED by `_compute_snapshot_hash` when present (same integrity contract
     as `fan_out_resume`); `api.resume` re-enters `_execute_parallelization` with it
     (terminal branches skipped, outputs recovered; absent ordinals re-dispatched)."""
+
+    handoff_resume: HandoffResumeState | None = None
+    """B-HANDOFF-PAUSE (R-FS-1) — the `DECENTRALIZED_HANDOFF` (single-owner sequential)
+    analogue of `fan_out_resume` / `peer_fan_out_resume`, present ONLY when this snapshot
+    captures a `DECENTRALIZED_HANDOFF` `cascade_policy=pause` halt (`None` otherwise —
+    additive, default-None, so every existing snapshot is byte-unchanged). NEVER co-set
+    with `fan_out_resume` / `peer_fan_out_resume`: the strategy that captured the pause
+    populates exactly one (a handoff pause sets this). COVERED by `_compute_snapshot_hash`
+    when present (same integrity contract); `api.resume` re-enters
+    `_execute_decentralized_handoff` with it (the completed-stage prefix's outputs
+    recovered + their dispatch skipped; stage `k` onward re-dispatched, the handoff chain
+    recomputed through the prefix)."""
 
 
 class PausedChildBranchResumeState(BaseModel):
