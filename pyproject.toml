@@ -295,7 +295,7 @@ target-version = "py312"
 # `_bmad` + the installed `bmad-*` skill scripts are vendored third-party tooling
 # (BMAD-METHOD, MIT, kept verbatim for clean upstream re-pulls); excluded from our
 # lint/format profile like `.harness` and `design-substrate`.
-extend-exclude = [".harness", ".venv", "design-substrate", "_bmad", ".claude/skills/bmad-*"]
+extend-exclude = [".harness", ".venv", "design-substrate", "_bmad", ".claude/skills/bmad-*", ".agents/skills/bmad-*"]
 # Honor the excludes even when a tool passes explicit file paths (the Stop-gate /
 # pre-commit / CI lint hooks enumerate changed files), so vendored `bmad-*` skill
 # scripts are skipped however ruff is invoked.
