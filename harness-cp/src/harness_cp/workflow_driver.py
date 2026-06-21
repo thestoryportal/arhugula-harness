@@ -5149,7 +5149,8 @@ def _execute_decentralized_handoff(
         # writes — structurally absent here). ADR-F2 single-threaded-write holds.
         # (§14.21.7 imprecisely lumps handoff with the 3 concurrent topologies under
         # "buffered-branch drain"; handoff is sequential — a Class-3 spec-imprecision
-        # note, build record `.harness/class_2_fork_b_interstep_nonlinear_handoff.md`.)
+        # note, spine ledger `.harness/beyond-mvp-capability-boundary-ledger.md`
+        # B-INTERSTEP-HANDOFF.)
         # Opt-out (`ctx.inter_step_output_channel is None`) → no-op, byte-identical.
         _record_inter_step_output(ctx, str(step.step_id), output)
         # Compose the ownership transfer to the next stage-expert (a RECORD; surfaced
