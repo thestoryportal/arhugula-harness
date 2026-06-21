@@ -42,6 +42,15 @@ The deliverable is non-vacuity, and the two properties are witnessed SEPARATELY 
 
 `B-L2-ROUTING-SPAN-LAYER-ATTRIBUTION` — under wrapper-routing the inner's `gen_ai` span carries the DECLARATIVE-echo `routing.layer`, not the real EMBEDDING/L3 layer the wrapper used (a minor observability fidelity gap; production-dormant until a second provider; the routed model itself is faithfully dispatched). `routing_activation` remains production-dormant behind the operator-creds second-provider deployment gate.
 
+## Decorrelated review at landing (Codex, post-rebase)
+
+Built + reviewed (advisor ×2 + Codex) on the unmerged branch `f931003`; landed onto current main via cherry-pick (the superseded `r-fs-1-arc-and-unit-map.md` + `roadmap.html` edits dropped — #673 made the map a retired stub + the dashboard `arc-ledger.yaml`-driven). The landing also carries a `tools/codex_context_guard.py` fix (below). Re-review of the landed branch surfaced two [P2]s, both dispositioned (not looped — Codex lacks the X-AL-3 transcript context; convergence is asymptotic per `[[hooks-codex-pilots-decorrelation-validated]]`):
+
+- **L3 rationale not carried through the route-once wrapper** → this IS the already-registered `B-L2-ROUTING-SPAN-LAYER-ATTRIBUTION` (above). Confirmed a CLEAN deferral, not a masked regression: the build's test diff deleted/weakened NO `binding_rationale` / `routing.layer` / §2.5.4 assertion (15 rationale assertions remain in `test_lifecycle_llm_dispatch.py`).
+- **codex-guard `DESIGN_IMPL_MIX` clearance exemption is presence-based** → INTENTIONAL + held (advisor-reconciled). "Legitimate bundled-absorption" is DEFINED by X-AL-3 (§4.4/§4.5), which is itself presence-based; artifact-tying would make this guard stricter than X-AL-3 (same PR passes one, fails the other) and is brittle. The unrelated-marker residual matches X-AL-3's accepted tolerance; tightening is a deliberate both-guards policy change. Full rationale in the guard's code comment.
+
+**Why a guard fix rides this arc:** #674's full-clone of the codex-context-guard CI job (intended for dashboard-drift) inadvertently activated `DESIGN_IMPL_MIX` for the first time (shallow-blind before — base-ref absent → empty changed_files → never fired), so it now hard-fails the §11.4 bundled-absorption pattern EVERY spec-leg `B-*` arc uses. The fix exempts a clearance-marker-carrying bundle (mirroring X-AL-3); `main` is unprotected so the check was red-but-non-blocking, fixed rather than merged-past so the anti-rot signal stays meaningful for the remaining `B-*` arcs.
+
 ## Gates
 
 whole-workspace pyright 0/0/0 · ruff (incl. format) · harness-cp 1093 passed + 1 xfailed · harness-runtime 1980 passed / 13 skipped (non-e2e) · harness-cxa 28 · harness-core 26 · semantic overlay 31/31 · CI blocking green (to confirm on PR) · X-AL-3 green (clearance marker present).
