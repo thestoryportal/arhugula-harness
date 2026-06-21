@@ -41,6 +41,7 @@ from harness_cp.pause_resume_protocol_types import (
     FanOutResumeState,
     MaterialDiffPolicy,
     PauseSnapshot,
+    PeerFanOutResumeState,
     ResumeContext,
     ResumeResult,
     WorkflowPauseReason,
@@ -411,6 +412,7 @@ class PauseResumeProtocol:
         pause_reason: WorkflowPauseReason,
         *,
         fan_out_resume: FanOutResumeState | None = None,
+        peer_fan_out_resume: PeerFanOutResumeState | None = None,
     ) -> PauseSnapshot:
         """Capture a workflow-layer pause snapshot per CP spec v1.11 §26.1.
 
@@ -421,11 +423,14 @@ class PauseResumeProtocol:
            diff defined as state_ledger_anchor divergence at resume time.
 
         ``fan_out_resume`` (B-FANOUT-PAUSE, R-FS-1; default None) carries the
-        fan-out resume reconstruction state for a `cascade_policy=pause` halt;
-        it is COVERED by `snapshot_hash` so a tampered recovered-output fails
-        the resume-time recompute. Linear / single-step callers pass nothing →
-        the snapshot + its hash are byte-identical to the pre-B-FANOUT-PAUSE
-        baseline.
+        ORCHESTRATOR_WORKERS fan-out resume reconstruction state for a
+        `cascade_policy=pause` halt; ``peer_fan_out_resume`` (B-FANOUT-PAUSE-
+        PARALLELIZATION, R-FS-1; default None) carries the PARALLELIZATION
+        (peer fan-out) analogue. At most one is ever non-None (the capturing
+        strategy selects which). Both are COVERED by `snapshot_hash` so a tampered
+        recovered-output fails the resume-time recompute. Linear / single-step
+        callers pass neither → the snapshot + its hash are byte-identical to the
+        pre-B-FANOUT-PAUSE baseline.
         """
         state_summary, state_ledger_anchor = self._pause_context_reader()
         snapshot_hash = _compute_snapshot_hash(
@@ -434,6 +439,7 @@ class PauseResumeProtocol:
             step_index=step_index,
             state_summary=state_summary,
             fan_out_resume=fan_out_resume,
+            peer_fan_out_resume=peer_fan_out_resume,
         )
         return PauseSnapshot(
             workflow_id=workflow_id,
@@ -445,6 +451,7 @@ class PauseResumeProtocol:
             created_at=_now_epoch_ms(),
             state_ledger_anchor=state_ledger_anchor,
             fan_out_resume=fan_out_resume,
+            peer_fan_out_resume=peer_fan_out_resume,
         )
 
     async def attempt_resume(
@@ -498,6 +505,7 @@ class PauseResumeProtocol:
             step_index=snapshot.step_index,
             state_summary=snapshot.state_summary,
             fan_out_resume=snapshot.fan_out_resume,
+            peer_fan_out_resume=snapshot.peer_fan_out_resume,
         )
         if expected_hash != snapshot.snapshot_hash:
             return ResumeResult(
@@ -560,6 +568,7 @@ def _compute_snapshot_hash(
     step_index: int,
     state_summary: StateSummary,
     fan_out_resume: FanOutResumeState | None = None,
+    peer_fan_out_resume: PeerFanOutResumeState | None = None,
 ) -> str:
     """sha256 hex over canonical JSON of (workflow_id, run_id, step_index, state_summary).
 
@@ -567,13 +576,14 @@ def _compute_snapshot_hash(
     `harness_cp.sub_agent_brief` — sorted-key JSON, compact separators,
     UTF-8 encoded. Deterministic.
 
-    B-FANOUT-PAUSE: `fan_out_resume` (the recovered completed-branch outputs a
-    resumed aggregate trusts) is COVERED when present so a tampered branch output
-    fails `attempt_resume`'s recompute (CP-FAIL-PAUSE-SNAPSHOT-CORRUPTION). The
-    key is added to the canonical dict ONLY when `fan_out_resume is not None`, so
-    every pre-existing (linear / single-step) snapshot hashes byte-identically to
-    before — old durable snapshots still validate (`[[new-surface-audit-hash-and-
-    config-not-carrier]]`)."""
+    B-FANOUT-PAUSE / B-FANOUT-PAUSE-PARALLELIZATION: the recovered completed-branch
+    outputs a resumed aggregate trusts (`fan_out_resume` for ORCHESTRATOR_WORKERS,
+    `peer_fan_out_resume` for PARALLELIZATION) are COVERED when present so a tampered
+    branch output fails `attempt_resume`'s recompute (CP-FAIL-PAUSE-SNAPSHOT-
+    CORRUPTION). Each key is added to the canonical dict ONLY when its value is not
+    None (at most one ever is), so every pre-existing (linear / single-step) snapshot
+    hashes byte-identically to before — old durable snapshots still validate
+    (`[[new-surface-audit-hash-and-config-not-carrier]]`)."""
     canonical: dict[str, object] = {
         "workflow_id": workflow_id,
         "run_id": run_id,
@@ -582,6 +592,8 @@ def _compute_snapshot_hash(
     }
     if fan_out_resume is not None:
         canonical["fan_out_resume"] = fan_out_resume.model_dump(mode="json")
+    if peer_fan_out_resume is not None:
+        canonical["peer_fan_out_resume"] = peer_fan_out_resume.model_dump(mode="json")
     payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
 
