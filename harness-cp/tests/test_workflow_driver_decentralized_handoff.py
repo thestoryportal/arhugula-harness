@@ -472,3 +472,94 @@ def test_decentralized_handoff_live_real_ledger_chain_valid(tmp_path: Path) -> N
     ]
     parents = [str(e.branch_metadata.parent_action_id) for e in step_entries]
     assert len(set(parents)) == 3  # chained, not a star
+
+
+# ---------------------------------------------------------------------------
+# B-INTERSTEP-NONLINEAR — handoff-slice inter-step data flow (runtime spec
+# §14.21 C-RT-29). Single-owner sequential ⟹ recorded INLINE on the driver
+# thread (like the SINGLE_THREADED_LINEAR / EVALUATOR_OPTIMIZER sites), NOT via
+# the #648 buffered-branch drain (the 3 genuinely-concurrent topologies need
+# that — registered follow-ons). The CP-level witness proves the PRODUCER wiring
+# (record fires in stage order; the next stage's dispatch reads most_recent_output);
+# the runtime full-chain test proves the REAL provider injection through the path.
+# ---------------------------------------------------------------------------
+
+
+class _FakeOutputChannel:
+    """Duck-typed `InterStepOutputChannel` (record + most_recent_output) — the
+    cp_is_wiring idiom (the driver consumes via `getattr`, no harness_runtime import)."""
+
+    def __init__(self) -> None:
+        self.records: list[tuple[str, dict[str, Any]]] = []
+
+    def record(self, step_id: str, output: Any) -> None:
+        self.records.append((str(step_id), dict(output)))
+
+    def most_recent_output(self) -> Any:
+        return self.records[-1][1] if self.records else None
+
+
+class _ChannelReadingHandoffDispatcher:
+    """A handoff stage dispatcher that records, at EACH dispatch, what the inter-step
+    channel's `most_recent_output()` is — a CP-level stand-in for the runtime LLM
+    dispatcher's consumer read — so the witness observes what each stage-expert sees
+    as upstream context. Returns a per-stage output keyed by step_id."""
+
+    def __init__(self, channel: _FakeOutputChannel) -> None:
+        self._channel = channel
+        self.seen_upstream: list[Any] = []
+
+    def dispatch(
+        self, binding: Any, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        _ = (binding, step_context)
+        self.seen_upstream.append(self._channel.most_recent_output())
+        return {"out": str(step.step_id)}
+
+
+def test_decentralized_handoff_records_inter_step_output_for_next_stage() -> None:
+    """B-INTERSTEP-NONLINEAR handoff slice (producer witness) — each completed stage's
+    output is recorded so the NEXT stage-expert's dispatch reads it as upstream context
+    (agent B sees agent A's output). Stage 0 sees nothing; each later stage sees its
+    immediate predecessor (`most_recent_output()` — sequential, single-owner)."""
+    ledger = _RecordingLedger()
+    channel = _FakeOutputChannel()
+    ctx = _Ctx(ledger=ledger, emitter=_Emitter())
+    ctx.inter_step_output_channel = channel  # opt-in (RuntimeConfig.inter_step_data_flow)
+    disp = _ChannelReadingHandoffDispatcher(channel)
+    result = execute_workflow(
+        _manifest(),
+        [_stage("s0"), _stage("s1"), _stage("s2")],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_Registry(cast(StepDispatcher, disp)),
+    )
+    assert result.status is RunStatus.SUCCESS
+    # The load-bearing inter-step flow: each stage sees its predecessor's output.
+    assert disp.seen_upstream == [None, {"out": "s0"}, {"out": "s1"}]
+    # Every completed stage recorded, in handoff (declaration) order.
+    assert [sid for sid, _ in channel.records] == ["s0", "s1", "s2"]
+
+
+def test_decentralized_handoff_opt_out_records_nothing() -> None:
+    """NEGATIVE CONTROL — opt-out (`ctx.inter_step_output_channel` unbound) → the
+    driver records NOTHING, so every stage sees `None` upstream (byte-identical to
+    pre-arc). Proves the record() wiring is gated on the ctx binding: the dispatcher's
+    own channel ref stays empty because the driver never records to it."""
+    ledger = _RecordingLedger()
+    channel = _FakeOutputChannel()  # handed to the dispatcher, but NOT bound on ctx
+    ctx = _Ctx(ledger=ledger, emitter=_Emitter())
+    # ctx.inter_step_output_channel intentionally absent → getattr(..., None) → no-op.
+    disp = _ChannelReadingHandoffDispatcher(channel)
+    result = execute_workflow(
+        _manifest(),
+        [_stage("s0"), _stage("s1"), _stage("s2")],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_Registry(cast(StepDispatcher, disp)),
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert disp.seen_upstream == [None, None, None]
+    assert channel.records == []  # opt-out: the driver recorded nothing
