@@ -46,10 +46,10 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 25
+  standalone_closed: 26
   standalone_gated: 1
   standalone_resolved: 2
-  standalone_registered: 9
+  standalone_registered: 8
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
 arcs:
@@ -582,12 +582,13 @@ arcs:
   - id: B-HITL-WRAP-FAIL-CLASS-SURFACING
     title: "Surface wrap-time HITL RT-FAIL classes precisely"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
     owner_axis: "CP + runtime"
     parent_arc: B-EDIT-CARRIER
-    anticipated_scope: "The registered RT-FAIL code surfaces via the CP driver's generic step-failure path (CP can't import runtime exception types) — give it a precise surface."
-    why: "Codex [P2] from B-EDIT-CARRIER; the same generic surfacing as the pre-existing wrap-time REJECT."
+    pr: "#691"
+    spec_delta: "impl-to-cleared-spec — runtime spec v1.67 → v1.68 (B-HITL-WRAP-FAIL-CLASS-SURFACING LANDED + refresh the §14.8 RT-FAIL-HITL-GATE-EDIT-DECODE row's surfacing clause); NO operator gate (the §14.8 codes + the docstrings' 'Driver maps to RT-FAIL-X' promise already exist — closes a prose-vs-code drift)."
+    gives: "The wrap-time HITL gate's terminal exceptions now surface their canonical RT-FAIL-HITL-* code in the driver fail_class (instead of the bare Python class name). FORK probe-resolved to the registered shared-marker mechanism (NOT operator-gated): harness-cp can't import the harness-runtime HITL exception TYPES (axis dependency graph), so each of the 4 wrap-time HITL terminal exceptions (HITLGateRejectedError/EditDecodeError/TimeoutError/AuditComposeError) carries an `rt_fail_class` class attribute naming its §14.8 code, and the CP driver composes fail_class via a NEW `_step_fail_class(prefix, exc)` helper reading `getattr(exc, 'rt_fail_class', None) or type(exc).__name__` — import-free, applied at ALL 5 per-topology step-dispatch failure sites (linear/EO/orchestrator/handoff×2). A non-marker exception falls back to the class name (byte-identical to pre-arc); generalizes to any runtime exception that opts in. HITLCellExcludedError intentionally NOT marked (no §14.8 code). The robust generalization of the pre-existing per-name canonicalization (e.g. the ManagedAgentsSessionError name-match). Witnesses (+4): the 4 exceptions carry the markers (harness-runtime) + `_step_fail_class` reads marker-else-type-name (cp unit) + a marker-carrying dispatch → fail_class carries RT-FAIL-HITL-GATE-REJECTED not the class name (cp integration) + a non-marker negative control. pyright 0/0/0; harness-cp 1136 + harness-runtime non-e2e 2004 passed. Bundled-absorption: runtime spec v1.67→v1.68 + clearance marker. advisor + out-of-family Codex."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-ROUTING-MANIFEST-MODEL-FOLD
