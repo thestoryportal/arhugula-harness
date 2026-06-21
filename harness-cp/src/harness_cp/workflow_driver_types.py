@@ -37,6 +37,7 @@ from harness_is.state_ledger_entry_schema import Actor, BranchMetadata, Identifi
 from pydantic import BaseModel, ConfigDict
 
 from harness_cp.cp_shared_types import AgentRole
+from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.hitl_placement import HITLPlacement
 from harness_cp.pause_resume_protocol_types import PauseSnapshot
@@ -322,6 +323,26 @@ class StepExecutionContext(BaseModel):
     (which IS hashed) and NOT a run-scoped ContextVar channel (this value travels
     with the dispatch call itself, so no separate channel + no daemon-isolation
     concern; it is resume-transient, never accumulated across a run)."""
+
+    run_engine_class: EngineClass | None = None
+    """B-EFFECT-FENCE-DURABLE-AUTO (R-FS-1, runtime spec §14.22.7) — the WORKFLOW/RUN
+    engine class (`manifest_entry.engine_class`), surfaced so the tool dispatcher can
+    AUTO-activate the §14.22 effect fence for durable-execution runs without the
+    operator `effect_fencing` opt-in.
+
+    DELIBERATELY the run engine class, NOT `StepEffectiveBinding.engine_class`: the
+    latter resolves a per-step `StepOverride.engine_class` (`resolve_step_binding`:
+    `override.engine_class or manifest_entry.engine_class`), so a per-step override to
+    a non-durable class on a DURABLE workflow would wrongly disable the fence for that
+    step even though the RUN still resumes + re-dispatches it (a crash-after-effect /
+    before-ledger-commit double-fire window — out-of-family Codex [P2]). What governs
+    resume/re-dispatch is the run engine class, so the fence gate keys on THIS field.
+
+    Set by the CP driver at every `StepExecutionContext` composition site from
+    `manifest_entry.engine_class` (the `hitl_placements` producer precedent). Rides
+    `StepExecutionContext` — per-step-transient, NOT persisted, NOT in any §5.2 /
+    per-step-override outcome-hash (the hash-inert carrier); `None` default →
+    byte-identical to pre-arc (only the tool dispatcher's fence gate reads it)."""
 
 
 def compose_branch_child_context(

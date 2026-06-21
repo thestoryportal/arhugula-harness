@@ -2220,6 +2220,9 @@ def _execute_workflow_body(
             # placements onto the per-step context so the wrap-time HITL composer
             # (runtime §14.8.2 step 1) fires per-step. Default () → no gate.
             hitl_placements=manifest_entry.hitl_placements,
+            # B-EFFECT-FENCE-DURABLE-AUTO — the RUN engine class (NOT a per-step
+            # StepOverride.engine_class) so the tool dispatcher auto-fences durable runs.
+            run_engine_class=manifest_entry.engine_class,
             parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
             parent_actor=ctx.ledger_writer.actor,
             parent_entry_hash="",
@@ -3493,6 +3496,9 @@ def _execute_parallelization(
         # B-HITL-PLACEMENT-PER-STEP-PRODUCER — branch children inherit this via
         # compose_branch_child_context's model_copy (covers fan-out workers).
         hitl_placements=manifest_entry.hitl_placements,
+        # B-EFFECT-FENCE-DURABLE-AUTO — the RUN engine class (NOT a per-step
+        # StepOverride.engine_class) so the tool dispatcher auto-fences durable runs.
+        run_engine_class=manifest_entry.engine_class,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
         parent_actor=ctx.ledger_writer.actor,
         parent_entry_hash="",
@@ -4261,6 +4267,9 @@ def _execute_evaluator_optimizer(
             parent_gate_level=resolve_parent_gate_level(manifest_entry),
             # B-HITL-PLACEMENT-PER-STEP-PRODUCER — EVALUATOR_OPTIMIZER per-step.
             hitl_placements=manifest_entry.hitl_placements,
+            # B-EFFECT-FENCE-DURABLE-AUTO — the RUN engine class (NOT a per-step
+            # StepOverride.engine_class) so the tool dispatcher auto-fences durable runs.
+            run_engine_class=manifest_entry.engine_class,
             parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
             parent_actor=ctx.ledger_writer.actor,
             parent_entry_hash="",
@@ -4693,6 +4702,9 @@ def _execute_orchestrator_workers(
         # B-HITL-PLACEMENT-PER-STEP-PRODUCER — orchestrator step + workers
         # (workers inherit via compose_branch_child_context's model_copy).
         hitl_placements=manifest_entry.hitl_placements,
+        # B-EFFECT-FENCE-DURABLE-AUTO — the RUN engine class (NOT a per-step
+        # StepOverride.engine_class) so the tool dispatcher auto-fences durable runs.
+        run_engine_class=manifest_entry.engine_class,
         parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
         parent_actor=ctx.ledger_writer.actor,
         parent_entry_hash="",
@@ -5809,6 +5821,9 @@ def _execute_decentralized_handoff(
             # B-HITL-PLACEMENT-PER-STEP-PRODUCER — hierarchical/handoff stage ctx
             # (stage_ctx inherits via compose_branch_child_context's model_copy).
             hitl_placements=manifest_entry.hitl_placements,
+            # B-EFFECT-FENCE-DURABLE-AUTO — the RUN engine class (NOT a per-step
+            # StepOverride.engine_class) so the tool dispatcher auto-fences durable runs.
+            run_engine_class=manifest_entry.engine_class,
             parent_sandbox_tier=SandboxTier.TIER_1_PROCESS,
             parent_actor=ctx.ledger_writer.actor,
             parent_entry_hash="",

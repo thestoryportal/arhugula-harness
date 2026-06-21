@@ -177,6 +177,13 @@ def _dispatcher(host: MCPClientHost, fence: RuntimeEffectFence | None) -> Runtim
         trust_policy=_trust_policy(),
         sandbox_decision_resolver=_sandbox_resolver,
         effect_fence=fence,
+        # B-EFFECT-FENCE-DURABLE-AUTO — these original #655 tests assert the fence
+        # fires when SUPPLIED (the pre-arc "fence present → reserve" semantic). Post-
+        # arc the per-run gate also requires explicit-opt-in OR a durable run engine
+        # class; supplying a fence here maps to the explicit opt-in (fence every step),
+        # preserving the original intent. (The durable-AUTO path is covered by the new
+        # dispatcher witnesses in test_lifecycle_runtime_tool_dispatcher.py.)
+        effect_fencing_explicit=fence is not None,
     )
 
 
