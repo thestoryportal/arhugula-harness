@@ -431,6 +431,7 @@ arcs:
     kind: standalone
     status: closed
     owner_axis: "CP + runtime"
+    pr: "#678"
     spec_delta: "impl-to-cleared-spec (CP §25.15.1 cascade_policy semantics + §25.18 line-169 impl-order anticipate it; NO design-substrate edit, NO operator gate)."
     gives: "Materializes §25.15.1 cascade_policy for the PARALLELIZATION fan-out (U-CP-86 was happy-path-only — a single branch failure fail-fasted the whole fan-out even under proceed). proceed→harvest-survivors-PARTIAL (the robustness fix) / cascade-cancel→FAILED+cancelled-terminals / pause→honest `...-not-yet-materialized` FAILED. A pre-flight dispatcher resolution fails an unbound StepKind loud (Codex [P2]). Mirrors _execute_orchestrator_workers (U-CP-88) PARALLELIZATION-shaped (no orchestrator step[0]). Also closes the CP v1.42 line-23 spec-prose-vs-code drift (the spec claimed a not-yet-materialized branch that did not exist). Unblocks the resumable-pause follow-on B-FANOUT-PAUSE-PARALLELIZATION (the U-CP-88→#661 shape)."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
