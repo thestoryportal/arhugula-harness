@@ -155,14 +155,21 @@ async def test_step4_wrapper_inner_is_bare_runtime_tool_dispatcher() -> None:
 
 
 @pytest.mark.asyncio
-async def test_factory_default_binds_no_effect_fence() -> None:
-    # B-EFFECT-FENCE (§14.22 C-RT-31) — default `effect_fencing=False` → the bare
-    # dispatcher gets no fence (byte-identical to pre-v1.60).
+async def test_factory_default_constructs_fence_but_explicit_flag_off() -> None:
+    # B-EFFECT-FENCE-DURABLE-AUTO (§14.22.7) — the factory now constructs the fence
+    # UNCONDITIONALLY (lazy claim dir → no footprint until a reserve fires), and
+    # carries `effect_fencing_explicit=False` for the default config. So the fence
+    # is PRESENT (the auto-activation substrate for durable runs) but the operator's
+    # blanket opt-in is OFF — a non-durable default run stays fence-free via the
+    # per-run gate (the durable-engine reserve test covers the auto path).
+    from harness_runtime.lifecycle.effect_fence import RuntimeEffectFence
+
     cfg = _config()
     assert cfg.effect_fencing is False
     builder = await _post_stage_3a_builder(cfg)
     wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
-    assert wrapper.inner._effect_fence is None
+    assert isinstance(wrapper.inner._effect_fence, RuntimeEffectFence)
+    assert wrapper.inner._effect_fencing_explicit is False
 
 
 @pytest.mark.asyncio
@@ -176,6 +183,9 @@ async def test_factory_binds_effect_fence_when_opted_in() -> None:
     builder = await _post_stage_3a_builder(cfg)
     wrapper = await materialize_runtime_tool_dispatcher_stage(builder, cfg)
     assert isinstance(wrapper.inner._effect_fence, RuntimeEffectFence)
+    # B-EFFECT-FENCE-DURABLE-AUTO — explicit opt-in flag threads through → fence
+    # EVERY tool step (the pre-v1.60 blanket semantic), regardless of engine class.
+    assert wrapper.inner._effect_fencing_explicit is True
 
 
 @pytest.mark.asyncio

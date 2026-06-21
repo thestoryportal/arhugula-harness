@@ -409,17 +409,19 @@ async def materialize_runtime_tool_dispatcher_stage(
             server_name=server_name,
         )
 
-    # B-EFFECT-FENCE (runtime spec §14.22 C-RT-31) — construct the durable
-    # at-most-once effect fence when opted-in (`config.effect_fencing=True`). The
-    # claim files live under `repository_root/.harness/effect-fence` (the §14.21
-    # `repository_root` basis for `.harness/`). Default opt-out → None → the
-    # dispatcher reserves nothing (byte-identical to pre-v1.60). Meaningful only
-    # under a durable engine class; the fence is harmless (unconsulted) overhead
-    # for a non-durable run that never resumes.
-    effect_fence = (
-        RuntimeEffectFence(fence_dir=config.repository_root / ".harness" / "effect-fence")
-        if config.effect_fencing
-        else None
+    # B-EFFECT-FENCE (§14.22 C-RT-31) + B-EFFECT-FENCE-DURABLE-AUTO (§14.22.7) —
+    # construct the durable at-most-once effect fence UNCONDITIONALLY. Its claim
+    # files live under `repository_root/.harness/effect-fence` (the §14.21
+    # `repository_root` basis for `.harness/`) and the claim DIR is created LAZILY
+    # on first reserve, so a run that never reserves leaves no directory (the
+    # pre-v1.60 byte-identical footprint). The dispatcher's per-run gate decides
+    # whether a reserve fires: `effect_fencing_explicit` (the operator opt-in,
+    # fence every step) OR an AUTO-activation when the run's `binding.engine_class`
+    # is durable (§14.22.7). Constructing always is what lets a durable run
+    # auto-fence WITHOUT the operator flag (the daemon-reused dispatcher cannot
+    # know the per-run engine class at bootstrap, so the gate is per-dispatch).
+    effect_fence = RuntimeEffectFence(
+        fence_dir=config.repository_root / ".harness" / "effect-fence"
     )
 
     # --- Step 3: bare RuntimeToolDispatcher (C-RT-19) ------------------------
@@ -452,6 +454,7 @@ async def materialize_runtime_tool_dispatcher_stage(
         ).emit_secret_fetch_audit_entry,
         secret_fetch_backend=config.provider_secrets.backend.value,
         effect_fence=effect_fence,
+        effect_fencing_explicit=config.effect_fencing,
     )
 
     # --- Step 4: RetryBreakerToolDispatcher (C-RT-21 §14.11) -----------------

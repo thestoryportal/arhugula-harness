@@ -45,6 +45,7 @@ from harness_as.sandbox_tier import SandboxTier
 from harness_as.secret_fail_class import SecretFailClass
 from harness_as.secret_fetch_audit import SecretFetchEvent
 from harness_as.tool_contract import SecretAllowlistEntry, ToolContract
+from harness_cp.engine_class import EngineClass
 from harness_cp.mcp_client_namespace_emitter import (
     MCPClientNamespaceEmitter,
 )
@@ -93,6 +94,27 @@ __all__ = [
     "ToolInvocationTimeoutError",
     "ToolInvocationTrustViolationError",
 ]
+
+
+# B-EFFECT-FENCE-DURABLE-AUTO (runtime spec §14.22.7) — the durable-execution
+# engine classes whose resume RE-DISPATCHES uncommitted steps, so a crash-then-
+# resume can re-fire a non-idempotent effect. Under these the effect fence
+# auto-activates (no operator `effect_fencing=True` opt-in needed). PURE_PATTERN_
+# NO_ENGINE is EXCLUDED — it is the "no-engine" pipeline-automation baseline (the
+# spec's "non-durable run" carve-out, kept fence-free by default; an operator may
+# still opt in explicitly via `RuntimeConfig.effect_fencing`). Excluding it is a
+# strict improvement over the pre-arc all-opt-in default (no regression: the 4
+# real durable engines move opt-in → auto-on; pure-pattern is unchanged). The
+# spec defines "durable" as "resume re-dispatches uncommitted steps" + names
+# this as impl-discretion; this is that reading.
+_DURABLE_AUTO_FENCE_ENGINE_CLASSES: frozenset[EngineClass] = frozenset(
+    {
+        EngineClass.SAVE_POINT_CHECKPOINT,
+        EngineClass.EVENT_SOURCED_REPLAY,
+        EngineClass.WAL_SEGMENT,
+        EngineClass.RECONCILER_LOOP,
+    }
+)
 
 
 # --- Sandbox decision carrier + resolver -----------------------------------
@@ -327,6 +349,7 @@ class RuntimeToolDispatcher:
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
         secret_fetch_backend: str = "provider-secret-resolver",
         effect_fence: EffectFenceProtocol | None = None,
+        effect_fencing_explicit: bool = False,
     ) -> None:
         """Construct dispatcher with the cross-axis dependencies (multi-server).
 
@@ -420,10 +443,19 @@ class RuntimeToolDispatcher:
         self._secret_fetch_audit_emitter = secret_fetch_audit_emitter
         self._secret_fetch_backend = secret_fetch_backend
         # B-EFFECT-FENCE (runtime spec §14.22 C-RT-31) — at-most-once execution
-        # of non-idempotent effects. None (default, opt-out) → no reserve, no
-        # claim files, byte-identical to pre-v1.60. Bound by the stage-5 factory
-        # only when `RuntimeConfig.effect_fencing=True`.
+        # of non-idempotent effects. `effect_fence` None → no reserve, no claim
+        # files, byte-identical to pre-v1.60.
         self._effect_fence = effect_fence
+        # B-EFFECT-FENCE-DURABLE-AUTO (runtime spec §14.22.7) — `effect_fencing_explicit`
+        # is the operator's `RuntimeConfig.effect_fencing` opt-in: True → fence EVERY
+        # tool step (the pre-v1.60 semantic); False → AUTO-fence only when the RUN
+        # engine class (`step_context.run_engine_class` = `manifest_entry.engine_class`)
+        # is a durable-execution engine (§14.22.7 "per-run reserve gate keyed on the
+        # engine class"), keeping non-durable runs fence-free.
+        # The stage-5 factory now constructs the fence UNCONDITIONALLY (its claim dir
+        # is created lazily on first reserve, so a never-reserving run is dir-free),
+        # so the per-run gate — not fence presence — decides whether a reserve fires.
+        self._effect_fencing_explicit = effect_fencing_explicit
 
     @classmethod
     def for_single_host(
@@ -444,6 +476,7 @@ class RuntimeToolDispatcher:
         secret_fetch_audit_emitter: Callable[[SecretFetchEvent], Any] | None = None,
         secret_fetch_backend: str = "provider-secret-resolver",
         effect_fence: EffectFenceProtocol | None = None,
+        effect_fencing_explicit: bool = False,
     ) -> RuntimeToolDispatcher:
         """Single-host convenience constructor — the degenerate 1-host case.
 
@@ -485,6 +518,7 @@ class RuntimeToolDispatcher:
             secret_fetch_audit_emitter=secret_fetch_audit_emitter,
             secret_fetch_backend=secret_fetch_backend,
             effect_fence=effect_fence,
+            effect_fencing_explicit=effect_fencing_explicit,
         )
 
     def _attribute_tool_cost_best_effort(
@@ -720,12 +754,15 @@ class RuntimeToolDispatcher:
         per-step parent context; this dispatcher consumes
         `parent_idempotency_key` for idempotency-key composition (step 6).
         `binding` is reserved for future per-step override surfaces (e.g.,
-        per-step trust-tier overrides at C-CP-19); not consumed at MVP.
+        per-step trust-tier overrides at C-CP-19); the effect-fence gate (step 6b,
+        B-EFFECT-FENCE-DURABLE-AUTO) keys on `step_context.run_engine_class` (the
+        RUN engine class), NOT `binding.engine_class` (which carries a per-step
+        override) — see the step-6b comment.
 
         :returns: `Mapping[str, Any]` (step body output) per
             `AsyncStepDispatcher` Protocol contract.
         """
-        _ = binding  # reserved for v1.14+ per-step override surfaces
+        _ = binding  # reserved for future per-step override surfaces
 
         payload = step.step_payload
         tool_id_raw = payload.get("tool_id")
@@ -856,9 +893,30 @@ class RuntimeToolDispatcher:
             # `_determine_resume_at` prefix-skip protects only COMMITTED steps),
             # or an in-process `RetryBreakerToolDispatcher` retry — LOSES and
             # fail-closes to §22.1 HITL rather than re-fire the non-idempotent
-            # effect. None (opt-out) → no claim → byte-identical to pre-v1.60.
-            if self._effect_fence is not None and not self._effect_fence.try_reserve(
-                idempotency_key
+            # effect.
+            #
+            # B-EFFECT-FENCE-DURABLE-AUTO (§14.22.7) — the fence is now constructed
+            # unconditionally (lazy claim dir), so a PER-RUN gate decides whether a
+            # reserve fires: the operator's explicit `effect_fencing=True` (fence
+            # every step) OR an AUTO-activation when this RUN's engine class is a
+            # durable-execution engine (a crash-resume re-dispatches uncommitted
+            # steps there). Non-durable runs without the opt-in skip the reserve →
+            # no claim file → byte-identical to pre-v1.60.
+            #
+            # Keys on `step_context.run_engine_class` (the WORKFLOW/RUN engine class,
+            # `manifest_entry.engine_class`), NOT `binding.engine_class`: the latter
+            # resolves a per-step `StepOverride.engine_class`, so a per-step override
+            # to a non-durable class on a DURABLE workflow would wrongly skip the fence
+            # for a step the RUN still resumes + re-dispatches (Codex [P2]). What
+            # governs resume is the run engine class. `None` (unset / non-driver path)
+            # → not in the durable set → gate closed (safe default).
+            _fence_gate_open = self._effect_fencing_explicit or (
+                step_context.run_engine_class in _DURABLE_AUTO_FENCE_ENGINE_CLASSES
+            )
+            if (
+                self._effect_fence is not None
+                and _fence_gate_open
+                and not self._effect_fence.try_reserve(idempotency_key)
             ):
                 raise EffectFenceReservedUncommittedError(idempotency_key=idempotency_key)
 

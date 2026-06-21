@@ -46,10 +46,10 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 24
+  standalone_closed: 25
   standalone_gated: 1
   standalone_resolved: 2
-  standalone_registered: 10
+  standalone_registered: 9
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
 arcs:
@@ -527,12 +527,12 @@ arcs:
   - id: B-EFFECT-FENCE-DURABLE-AUTO
     title: "Auto-activate the fence under durable engines"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
     owner_axis: runtime
     parent_arc: B-EFFECT-FENCE
-    anticipated_scope: "Auto-activate the fence under a durable engine_class, removing the opt-in flag."
-    why: "Durable engines re-execute steps on resume, so the fence should be on by default there."
+    pr: "#689"
+    spec_delta: "impl-to-cleared-spec — runtime spec v1.66 → v1.67 (§14.22.7 B-EFFECT-FENCE-DURABLE-AUTO LANDED + the durable-set impl-discretion reading); NO operator gate (§14.22.7 anticipated it + named the mechanism)."
+    gives: "The §14.22 C-RT-31 RuntimeEffectFence now AUTO-activates per-run for durable-execution engine classes — removing the operator effect_fencing=True opt-in for the common durable case (a crash-resume re-dispatches uncommitted steps → double-effect risk). Mechanism = the §14.22.7-named PER-RUN RESERVE GATE (advisor steered away from factory-threading: the dispatcher is a daemon-reused singleton across runs with different engine_classes, so caching the engine class would leak cross-run). The stage-5 factory now constructs the fence UNCONDITIONALLY (lazy claim dir → no footprint until a reserve fires); the dispatcher carries a NEW effect_fencing_explicit flag (the opt-in) + gates the per-dispatch reserve on `effect_fencing_explicit OR step_context.run_engine_class ∈ durable-set`. The per-run engine class arrives on a NEW hash-inert StepExecutionContext.run_engine_class field (the CP driver sets it from manifest_entry.engine_class at all 5 step-context composition sites — the hitl_placements precedent). **Out-of-family Codex [P2] (decorrelated catch):** the first impl gated on the per-step binding.engine_class — but resolve_step_binding resolves override.engine_class or manifest, so a per-step StepOverride.engine_class=PURE_PATTERN on a DURABLE workflow would wrongly disable the fence for a step the RUN still resumes → re-keyed onto step_context.run_engine_class (the run engine class that governs resume). Durable-set (impl-discretion, the spec defines 'durable' = 'resume re-dispatches uncommitted steps' without enumerating): {SAVE_POINT_CHECKPOINT, EVENT_SOURCED_REPLAY, WAL_SEGMENT, RECONCILER_LOOP}, EXCLUDING PURE_PATTERN_NO_ENGINE (the 'no-engine' baseline = the spec's 'non-durable run' carve-out; strict improvement — no regression since pure-pattern was already opt-in). Witnesses (+4 by-execution through the real dispatcher): durable RUN auto-fences without opt-in + non-durable RUN stays fence-free + explicit opt-in fences all + a durable RUN with a per-step non-durable override STILL fences (the Codex [P2] regression). pyright 0/0/0; harness-cp 1133 + harness-runtime non-e2e 2003 passed. advisor (clean-first pick + the per-run-gate-not-factory-threading steer + the meta 'stop bringing the pick to me') + out-of-family Codex [P2]."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD

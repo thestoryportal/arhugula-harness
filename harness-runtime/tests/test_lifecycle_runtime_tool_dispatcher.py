@@ -148,7 +148,9 @@ async def _build_started_secret_host(*required_secrets: SecretAllowlistEntry) ->
     return host
 
 
-def _make_step_context() -> StepExecutionContext:
+def _make_step_context(
+    run_engine_class: EngineClass | None = None,
+) -> StepExecutionContext:
     return StepExecutionContext(
         workflow_id="wf-1",
         parent_action_id="workflow:wf-1:step:0",
@@ -159,6 +161,7 @@ def _make_step_context() -> StepExecutionContext:
         parent_idempotency_key="run-idem-key-abc",
         tenant_id=None,
         step_index=0,
+        run_engine_class=run_engine_class,
     )
 
 
@@ -170,11 +173,13 @@ def _make_step(tool_id: str, tool_args: dict | None = None) -> WorkflowStep:
     )
 
 
-def _make_binding() -> StepEffectiveBinding:
+def _make_binding(
+    engine_class: EngineClass = EngineClass.PURE_PATTERN_NO_ENGINE,
+) -> StepEffectiveBinding:
     return StepEffectiveBinding(
         step_id="step-1",
         model_binding=ModelBinding(provider="anthropic", model="claude-opus-4-7"),
-        engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        engine_class=engine_class,
         override_applied=False,
         persona_tier=PersonaTier.SOLO_DEVELOPER,
     )
@@ -1094,3 +1099,122 @@ async def test_dispatch_sandbox_violation_idempotency_key_matches_parent_dispatc
     assert len(captured) == 1
     attrs = _violation_attrs(exporter)
     assert attrs["idempotency_key"] == captured[0]
+
+
+# ---------------------------------------------------------------------------
+# B-EFFECT-FENCE-DURABLE-AUTO (§14.22.7) — the effect fence auto-activates for a
+# durable-execution engine class WITHOUT the operator `effect_fencing` opt-in,
+# while a non-durable run stays fence-free. Witness by execution: dispatch the
+# SAME step twice (same idempotency key) — a second reserve LOSES iff the fence
+# is active (the at-most-once claim), so the 2nd dispatch raises iff the gate is
+# open. (`tmp_path` gives the lazy claim dir.)
+# ---------------------------------------------------------------------------
+
+
+async def _dispatch_echo_twice_with_fence(
+    *,
+    run_engine_class: EngineClass | None,
+    effect_fencing_explicit: bool,
+    fence_dir: Any,
+    binding_engine_class: EngineClass = EngineClass.PURE_PATTERN_NO_ENGINE,
+) -> tuple[Mapping[str, Any], BaseException | None]:
+    """Dispatch the same echo TOOL_STEP twice through a real fence; return the first
+    result + whatever the second raised (None if it succeeded). The gate keys on
+    `step_context.run_engine_class` (the RUN engine class); `binding_engine_class` is
+    the INDEPENDENT per-step effective binding (the override channel) — they differ in
+    the Codex [P2] regression witness."""
+    from harness_runtime.lifecycle.effect_fence import (
+        EffectFenceReservedUncommittedError,
+        RuntimeEffectFence,
+    )
+
+    host = await _build_started_host()
+    dispatcher = RuntimeToolDispatcher.for_single_host(
+        mcp_client_host=host,
+        per_server_trust_evaluator=PerServerTrustEvaluator(),
+        mcp_namespace_emitter=_make_emitter(),
+        trust_policy=_make_trust_policy(),
+        sandbox_decision_resolver=_good_sandbox_resolver,
+        effect_fence=RuntimeEffectFence(fence_dir=fence_dir / "effect-fence"),
+        effect_fencing_explicit=effect_fencing_explicit,
+    )
+    binding = _make_binding(engine_class=binding_engine_class)
+    ctx = _make_step_context(run_engine_class=run_engine_class)
+    try:
+        first = await dispatcher.dispatch(
+            binding, _make_step("echo", {"message": "x"}), step_context=ctx
+        )
+        second_error: BaseException | None = None
+        try:
+            await dispatcher.dispatch(
+                binding, _make_step("echo", {"message": "x"}), step_context=ctx
+            )
+        except EffectFenceReservedUncommittedError as exc:
+            second_error = exc
+    finally:
+        await host.shutdown()
+    return first, second_error
+
+
+@pytest.mark.asyncio
+async def test_effect_fence_auto_activates_for_durable_run_without_optin(tmp_path: Any) -> None:
+    """A durable RUN engine class (EVENT_SOURCED_REPLAY) + `effect_fencing_explicit=
+    False` → the fence AUTO-activates: the re-dispatch of the same effect LOSES the
+    claim and fail-closes (`EffectFenceReservedUncommittedError`)."""
+    from harness_runtime.lifecycle.effect_fence import EffectFenceReservedUncommittedError
+
+    first, second_error = await _dispatch_echo_twice_with_fence(
+        run_engine_class=EngineClass.EVENT_SOURCED_REPLAY,
+        effect_fencing_explicit=False,
+        fence_dir=tmp_path,
+    )
+    assert first["tool_id"] == "echo"
+    assert isinstance(second_error, EffectFenceReservedUncommittedError)
+
+
+@pytest.mark.asyncio
+async def test_effect_fence_skips_non_durable_run_without_optin(tmp_path: Any) -> None:
+    """A non-durable RUN engine class (PURE_PATTERN_NO_ENGINE) + `effect_fencing_
+    explicit=False` → NO auto-fence: both dispatches succeed (the gate stays closed,
+    no claim — the spec's 'non-durable runs fence-free' carve-out)."""
+    first, second_error = await _dispatch_echo_twice_with_fence(
+        run_engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        effect_fencing_explicit=False,
+        fence_dir=tmp_path,
+    )
+    assert first["tool_id"] == "echo"
+    assert second_error is None  # fence-free → no at-most-once claim
+
+
+@pytest.mark.asyncio
+async def test_effect_fence_explicit_optin_fences_non_durable_run(tmp_path: Any) -> None:
+    """The operator's explicit `effect_fencing=True` fences EVERY tool step (the
+    pre-v1.60 blanket semantic), even a non-durable run — the re-dispatch fail-closes."""
+    from harness_runtime.lifecycle.effect_fence import EffectFenceReservedUncommittedError
+
+    first, second_error = await _dispatch_echo_twice_with_fence(
+        run_engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
+        effect_fencing_explicit=True,
+        fence_dir=tmp_path,
+    )
+    assert first["tool_id"] == "echo"
+    assert isinstance(second_error, EffectFenceReservedUncommittedError)
+
+
+@pytest.mark.asyncio
+async def test_effect_fence_gates_on_run_not_per_step_override(tmp_path: Any) -> None:
+    """Codex [P2] regression — a DURABLE run (run_engine_class=WAL_SEGMENT) with a
+    per-step `StepOverride.engine_class=PURE_PATTERN_NO_ENGINE` (the binding's
+    effective class) STILL fences: the gate keys on the RUN engine class (which
+    governs resume/re-dispatch), NOT the per-step effective binding. Without the fix
+    the per-step override would wrongly skip the fence → a double-fire window."""
+    from harness_runtime.lifecycle.effect_fence import EffectFenceReservedUncommittedError
+
+    first, second_error = await _dispatch_echo_twice_with_fence(
+        run_engine_class=EngineClass.WAL_SEGMENT,  # the RUN is durable
+        binding_engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,  # a per-step override
+        effect_fencing_explicit=False,
+        fence_dir=tmp_path,
+    )
+    assert first["tool_id"] == "echo"
+    assert isinstance(second_error, EffectFenceReservedUncommittedError)
