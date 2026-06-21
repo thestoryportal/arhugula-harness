@@ -28,6 +28,12 @@ IMPL_RE = re.compile(
     r"justfile$)"
 )
 CITE_RE = re.compile(r"^(harness-[a-z]+/src/|harness-[a-z]+/tests/|tools/semantic_overlay/)")
+# A clearance marker (CLAUDE.md §4.5) records a design-substrate version operationally
+# accepted for Phase-7 consumption — the signal that a design+impl PR is a RATIFIED
+# bundled-absorption arc (§11.4), not silent absorption. Its presence is what the
+# X-AL-3 guard (§4.4) treats as legitimate back-flow; mirror that here so DESIGN_IMPL_MIX
+# stops flagging the bundled-absorption pattern the R-FS-1 build program runs on.
+CLEARANCE_MARKER_RE = re.compile(r"^\.harness/clearance/.+-cleared-.*\.md$")
 DASHBOARD_SOURCES = {
     ".harness/roadmap_status.md",
     ".harness/substitutions.yaml",
@@ -446,6 +452,13 @@ def derive(
 
 
 def _has_design_impl_mix(files: list[str]) -> bool:
+    # Legitimate bundled-absorption (CLAUDE.md §11.4): a design-substrate amendment
+    # co-lands with its impl in one PR when a clearance marker (§4.5) records the
+    # operationally-accepted consumption — the same back-flow signal the X-AL-3 guard
+    # (§4.4) recognizes. Present → ratified bundle, not a silent mix. A silent mix
+    # (design + impl, NO clearance marker) still hard-fails.
+    if any(CLEARANCE_MARKER_RE.search(f) for f in files):
+        return False
     impl_files = [f for f in files if f not in DASHBOARD_MIX_EXEMPT_IMPL]
     return any(DESIGN_RE.search(f) for f in files) and any(IMPL_RE.search(f) for f in impl_files)
 
