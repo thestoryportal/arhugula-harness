@@ -334,6 +334,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # FULL history (not the default shallow depth-1). The guard's `--base-ref`
+          # diff AND `_lag_expected()` (which runs `git show --name-only HEAD` to confirm
+          # a refresh-tip changed ONLY the dashboard-only pair) both need HEAD's PARENT
+          # present. On a depth-1 clone the shallow boundary makes `git show HEAD` list the
+          # ENTIRE tree (parentless root-commit diff), so `_lag_expected` is always False
+          # and EVERY `ops: roadmap status refresh ` push to main HARD-failed
+          # ROADMAP_DASHBOARD_DRIFT (the §12.2.1 lag the session-start hook correctly
+          # tolerates). Mirrors the `lint` job's fetch-depth: 0.
+          fetch-depth: 0
 
       - name: Install uv + Python 3.12
         uses: astral-sh/setup-uv@v5
