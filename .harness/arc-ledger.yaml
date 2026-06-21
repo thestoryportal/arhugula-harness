@@ -46,10 +46,10 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 21
+  standalone_closed: 22
   standalone_gated: 1
   standalone_resolved: 2
-  standalone_registered: 11
+  standalone_registered: 12
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
 arcs:
@@ -547,14 +547,36 @@ arcs:
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-EDIT-CARRIER-DURABLE-ASYNC-RESUME
-    title: "Functional EDIT on the durable-async resume path"
+    title: "Resume-side EDIT + REJECT response routing (durable-async)"
+    kind: standalone
+    status: closed
+    owner_axis: runtime
+    parent_arc: B-EDIT-CARRIER
+    pr: "#683"
+    spec_delta: "impl-to-cleared-spec AND impl-to-cleared-plan (runtime spec §14.8.8.5 'proceed to step 4i response-routing' + plan U-RT-94 AC #7 `gate_result = hitl_response` → step-4i palette; NO design-substrate edit). The §14.8.8.5 code's auto-approve short-circuit MIS-READ AC #7 (which never sanctioned auto-approve)."
+    gives: "The durable-async resume Step-0 consume (§14.8.8.5) previously dispatched the resumed step UNCHANGED for ALL 4 response types (the 'auto-approve MVP shape' — grounding revealed the gap is BROADER than the ledger's EDIT-only line). Two were silently wrong: EDIT dropped the operator's edited payload, and REJECT dispatched a REJECTED step as if approved (a fail-safe violation, the highest-value fix). Now Step-0 routes per the §14.8.2 step-4i 4-response palette: EDIT applies the structured `HITLResult.edited_proposal.payload` VERBATIM (replace-not-merge §14.8.2 NOTE 6-ii; the resume carrier is already a Mapping — NO `_decode_edit_proposal`, which decodes only the sync flat-`str` MCP carrier; None-guard → typed HITLGateEditDecodeError, not AttributeError); REJECT raises the SAME HITLGateRejectedError as sync → RT-FAIL-HITL-GATE-REJECTED (no divergent classification) AND the step is NOT dispatched; APPROVE/RESPOND dispatch unchanged (already correct). The Step-0 short-circuit is a ONE-SHOT boundary kept deliberately — flowing to step 4f would re-enter §14.8.8.1 deliver-then-pause and RE-PAUSE instead of resume (advisor). Step-4h audit-WRITE on resume (needs step-1..4 placement/cell resolution Step-0 skips) is the registered follow-on B-RESUME-RESPONSE-AUDIT-WRITE — so a REJECT on resume raises WITHOUT an audit entry until that lands (owned, not silently absorbed). Witnesses (CP+runtime test_lifecycle_hitl_gate_composer.py): EDIT→dispatched step_payload IS the edit (orig key gone, proving replace); REJECT→raises + step NOT dispatched; EDIT-None→typed error; APPROVE/RESPOND→unchanged. advisor (pick + close-shape three-way discriminator + A-vs-B re-pause hazard + EDIT+REJECT scope)."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-RESUME-RESPONSE-AUDIT-WRITE
+    title: "Step-4h audit-write on the durable-async resume path (all 4 responses)"
     kind: standalone
     status: registered
     decompose_at_open: true
     owner_axis: runtime
-    parent_arc: B-EDIT-CARRIER
-    anticipated_scope: "The durable-async resume path dispatches the resumed step UNCHANGED for all response types (v2.24 AC #7 / FM-2) — a pre-existing silent-drop the wrap-time EDIT doesn't cover."
-    why: "B-EDIT-CARRIER landed the wrap-time SYNC path only."
+    parent_arc: B-EDIT-CARRIER-DURABLE-ASYNC-RESUME
+    anticipated_scope: "Materialize §14.8.8.6 step-4h audit-entry composition at the resumed-step gate-evaluation for ALL 4 response types (the resume Step-0 short-circuit fires BEFORE step-1..4 placement/cell resolution that the 4h audit-write needs). Surfaced at B-EDIT-CARRIER-DURABLE-ASYNC-RESUME: that arc lands resume response-ROUTING (EDIT/REJECT) but a REJECT on resume currently raises WITHOUT an audit entry, and the operator's resume response is unaudited for all 4 types."
+    why: "The Step-0 routing fix needs no placement/cell; the §14.8.8.6 audit-write does → coherent follow-on boundary (advisor). The audit gap is pre-existing + uniform across all 4 resume responses (a wrongly-approved step is also unaudited today); deferring it is a strict safety improvement, not a regression."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-RESUME-CONTEXT-SURVIVES-RETRY
+    title: "One-shot resume holder survives a post-consume retry of the same step"
+    kind: standalone
+    status: registered
+    decompose_at_open: true
+    owner_axis: runtime
+    parent_arc: B-EDIT-CARRIER-DURABLE-ASYNC-RESUME
+    anticipated_scope: "The §14.8.8.9.3 `consume_and_clear()` one-shot empties `resume_context_holder` on the FIRST resumed-step gate-evaluation. For an APPROVE / EDIT-success / RESPOND resume, the composer then dispatches the inner LLM — if THAT dispatch raises a TRANSIENT provider error, the retry/fallback wrapper retries the step, the composer re-enters with an EMPTY holder, falls through to the normal gate path, and (for a durable-async cell) RE-PAUSES instead of re-applying the operator's already-consumed response. Make the one-shot resume context survive an in-flight retry of the SAME resumed step (e.g. cache-until-step-terminal, or re-seed on retry)."
+    why: "Pre-existing one-shot-context-survival-across-retry gap, surfaced (advisor) while grounding B-EDIT-CARRIER-DURABLE-ASYNC-RESUME. ORTHOGONAL to the resume routing fix — that fix makes REJECT/EDIT-decode propagate terminally (no retry), but an APPROVE/EDIT-SUCCESS resume whose post-consume LLM dispatch hits a transient error still re-enters an emptied holder. Registered so the resume-handling claim is not over-stated as fully correct."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-HITL-WRAP-FAIL-CLASS-SURFACING

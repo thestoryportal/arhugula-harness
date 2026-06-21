@@ -1188,7 +1188,11 @@ class RuntimeHITLGateComposer:
         HITLGateTimeoutError
             `placement.timeout` elapsed without operator response.
         HITLGateRejectedError
-            Operator selected REJECT.
+            Operator selected REJECT (sync step 4i OR durable-async resume).
+        HITLGateEditDecodeError
+            Operator selected EDIT but carried no applicable proposal (sync
+            flat-`str` decode failure OR durable-async resume `edited_proposal
+            is None`).
         HITLGateAuditComposeError
             Audit-write substep failed on APPROVE / EDIT / RESPOND path.
         """
@@ -1198,16 +1202,54 @@ class RuntimeHITLGateComposer:
         # entry-point populated `ctx.resume_context_holder` via
         # `holder.set(resume_context)`. The composer at the resumed-step
         # gate-evaluation reads `consume_and_clear()` (atomic one-shot
-        # read-and-clear enforcing §14.8.8.7 invariant 3). When the holder
-        # carries a hitl_response, the operator has already responded — the
-        # gate is logically resolved; skip the gate composition body and
-        # proceed to the inner dispatcher per the auto-approve semantic of
-        # the resumed gate (MVP integration shape per v2.24 AC #7; the
-        # detailed audit-write integration of the resumed response into the
-        # 4h substep flow is implementer-discretion deferred to a follow-on
-        # arc per FM-2).
+        # read-and-clear enforcing §14.8.8.7 invariant 3). The Step-0
+        # short-circuit is a ONE-SHOT boundary, NOT an optimization — it MUST
+        # skip the §14.8.8.1 gate-FIRE (step 4f) so resume does not re-deliver
+        # the webhook + re-raise HITLPauseRequestedSignal (which would re-pause
+        # instead of resume).
+        #
+        # B-EDIT-CARRIER-DURABLE-ASYNC-RESUME: route the resumed operator
+        # response per the §14.8.2 step 4i 4-response palette (impl-to-cleared-
+        # spec §14.8.8.5 + plan U-RT-94 AC #7: `gate_result = hitl_response` →
+        # step 4i response-routing). The prior auto-approve short-circuit
+        # mis-read AC #7 — it dropped EDIT (the edited payload was never
+        # applied) and dispatched a REJECTED step as if approved (a fail-safe
+        # violation). EDIT applies the edited payload + REJECT raises here; the
+        # step-4h audit-WRITE on resume (which needs step-1..4 placement/cell
+        # resolution the Step-0 short-circuit deliberately skips) remains
+        # deferred to the follow-on arc B-RESUME-RESPONSE-AUDIT-WRITE
+        # (§14.8.8.6, all 4 response types) — so a REJECT on resume raises
+        # WITHOUT an audit entry until that arc lands.
         resume_state = self.resume_context_holder.consume_and_clear()
         if resume_state is not None and resume_state.hitl_response is not None:
+            resumed_response = resume_state.hitl_response
+            if resumed_response.response == HITLResponse.EDIT:
+                # The resume carrier is a STRUCTURED `ProposedAction` whose
+                # `.payload` is ALREADY the `Mapping[str, Any]` step_payload —
+                # applied verbatim (replace-not-merge per §14.8.2 NOTE 6-ii).
+                # NO `_decode_edit_proposal` (that decodes the SYNC path's flat-
+                # `str` MCP-elicitation carrier; the resume carrier needs no
+                # round-trip). None-guard mirrors the sync path's typed error
+                # (never an AttributeError).
+                if resumed_response.edited_proposal is None:
+                    raise HITLGateEditDecodeError(
+                        "operator selected EDIT on durable-async resume but "
+                        "carried no edited_proposal to apply"
+                    )
+                step = step.model_copy(
+                    update={"step_payload": resumed_response.edited_proposal.payload}
+                )
+            elif resumed_response.response == HITLResponse.REJECT:
+                # Same `HITLGateRejectedError` type as the sync step-4i REJECT →
+                # the driver maps BOTH to RT-FAIL-HITL-GATE-REJECTED (no
+                # divergent classification). `HITLResult` carries no plaintext
+                # rejection_reason (only `response_summary_hash`).
+                raise HITLGateRejectedError(
+                    "operator rejected HITL gate on durable-async resume "
+                    f"(response_summary_hash={resumed_response.response_summary_hash})"
+                )
+            # APPROVE / RESPOND: dispatch unchanged (matches step 4i
+            # APPROVE/RESPOND `pass`).
             return await self._dispatch_inner(binding, step, step_context=step_context)
 
         # --- Step 1: Read placement triggers (runtime spec §14.8.2 step 1) -----

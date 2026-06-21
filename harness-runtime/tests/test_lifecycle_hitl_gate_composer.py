@@ -2626,3 +2626,163 @@ async def test_tool_gate_without_placement_passes_through_byte_identical(
     assert result == {"inner_dispatched": True}
     assert len(inner.calls) == 1
     assert surface.calls == []
+
+
+# ---------------------------------------------------------------------------
+# B-EDIT-CARRIER-DURABLE-ASYNC-RESUME — resume-side response routing
+#
+# The durable-async resume Step-0 consume (§14.8.8.5) previously dispatched the
+# resumed step UNCHANGED for ALL response types (the auto-approve MVP short-
+# circuit, mis-reading plan U-RT-94 AC #7). impl-to-cleared-spec §14.8.8.5 +
+# AC #7: route the resumed response per the §14.8.2 step-4i 4-response palette.
+# EDIT applies the structured edited payload (replace-not-merge); REJECT raises
+# the SAME HITLGateRejectedError as the sync path → RT-FAIL-HITL-GATE-REJECTED;
+# APPROVE/RESPOND dispatch unchanged. Step-4h audit-write on resume (needs
+# step-1..4 placement/cell resolution the Step-0 short-circuit skips) is the
+# registered follow-on B-RESUME-RESPONSE-AUDIT-WRITE — so a REJECT on resume
+# raises WITHOUT an audit entry here (witnessed by inner NOT dispatched).
+# ---------------------------------------------------------------------------
+
+
+def _resume_step_with_payload(payload: Mapping[str, Any]) -> WorkflowStep:
+    return WorkflowStep(
+        step_id=StepID("resume-step"),
+        step_kind=StepKind.INFERENCE_STEP,
+        step_payload=payload,
+    )
+
+
+def _set_resume_hitl_response(composer: RuntimeHITLGateComposer, hitl: Any) -> None:
+    from harness_cp.pause_resume_protocol_types import ResumeContext
+
+    composer.resume_context_holder.set(ResumeContext(hitl_response=hitl))
+
+
+def _make_resume_hitl_result(
+    response: HITLResponse,
+    *,
+    edited_proposal: Any = None,
+    response_text: str | None = None,
+) -> Any:
+    from harness_core.identity import EntryID
+    from harness_cp.hitl_placement import HITLResult
+
+    return HITLResult(
+        response=response,
+        edited_proposal=edited_proposal,
+        response_text=response_text,
+        timestamp="2026-06-21T00:00:00Z",
+        audit_ledger_entry_id=EntryID("e-resume-1"),
+        response_summary_hash="0" * 64,
+    )
+
+
+@pytest.mark.asyncio
+async def test_resume_edit_applies_structured_payload_replace_not_merge(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """EDIT on durable-async resume → dispatched step_payload IS the edit.
+
+    Load-bearing surface witness (not control-flow): the step the inner
+    dispatcher receives carries the operator's edited payload VERBATIM — the
+    original key is GONE, proving REPLACE not merge (§14.8.2 NOTE 6-ii). The
+    resume carrier is a structured ProposedAction whose `.payload` is already a
+    Mapping (NO `_decode_edit_proposal` round-trip).
+    """
+    from harness_cp.handoff_context import ActionKind, ProposedAction
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    composer = _make_composer(
+        inner=inner, surface=_MockAskUserQuestionSurface([]), tracer_provider=provider
+    )
+    edited = ProposedAction(action_kind=ActionKind.TOOL_CALL, payload={"edited": 2}, brief=None)
+    _set_resume_hitl_response(
+        composer, _make_resume_hitl_result(HITLResponse.EDIT, edited_proposal=edited)
+    )
+
+    step = _resume_step_with_payload({"orig": 1})
+    result = await composer.dispatch(cast(Any, object()), step, step_context=_make_step_context())
+
+    assert result == {"inner_dispatched": True}
+    assert len(inner.calls) == 1
+    dispatched_step = inner.calls[0][1]
+    assert dispatched_step.step_payload == {"edited": 2}  # replace, not merge
+    assert "orig" not in dispatched_step.step_payload
+
+
+@pytest.mark.asyncio
+async def test_resume_edit_with_none_proposal_raises_typed_error_not_attributeerror(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """EDIT on resume with `edited_proposal is None` → typed HITLGateEditDecodeError.
+
+    Mirrors the sync path's None-guard — NEVER an AttributeError. The step is
+    NOT dispatched.
+    """
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLGateEditDecodeError
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    composer = _make_composer(
+        inner=inner, surface=_MockAskUserQuestionSurface([]), tracer_provider=provider
+    )
+    _set_resume_hitl_response(
+        composer, _make_resume_hitl_result(HITLResponse.EDIT, edited_proposal=None)
+    )
+
+    step = _resume_step_with_payload({"orig": 1})
+    with pytest.raises(HITLGateEditDecodeError):
+        await composer.dispatch(cast(Any, object()), step, step_context=_make_step_context())
+    assert inner.calls == []  # step NOT dispatched
+
+
+@pytest.mark.asyncio
+async def test_resume_reject_raises_rejected_error_and_does_not_dispatch(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """REJECT on durable-async resume → raises the SAME HITLGateRejectedError as
+    the sync step-4i REJECT (→ RT-FAIL-HITL-GATE-REJECTED) AND the step is NOT
+    dispatched (the fail-safe the prior auto-approve short-circuit violated)."""
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLGateRejectedError
+
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    composer = _make_composer(
+        inner=inner, surface=_MockAskUserQuestionSurface([]), tracer_provider=provider
+    )
+    _set_resume_hitl_response(composer, _make_resume_hitl_result(HITLResponse.REJECT))
+
+    step = _resume_step_with_payload({"orig": 1})
+    with pytest.raises(HITLGateRejectedError):
+        await composer.dispatch(cast(Any, object()), step, step_context=_make_step_context())
+    assert inner.calls == []  # rejected step NOT dispatched (fail-safe restored)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response", [HITLResponse.APPROVE, HITLResponse.RESPOND])
+async def test_resume_approve_and_respond_dispatch_unchanged(
+    response: HITLResponse,
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    """APPROVE / RESPOND on resume → dispatch the step UNCHANGED (matches the
+    step-4i APPROVE/RESPOND `pass`; the prior auto-approve behavior was already
+    correct for these two and is preserved)."""
+    provider, _ = tracer_provider
+    inner = _MockInnerDispatcher()
+    composer = _make_composer(
+        inner=inner, surface=_MockAskUserQuestionSurface([]), tracer_provider=provider
+    )
+    _set_resume_hitl_response(
+        composer,
+        _make_resume_hitl_result(
+            response, response_text="ack" if response == HITLResponse.RESPOND else None
+        ),
+    )
+
+    step = _resume_step_with_payload({"orig": 1})
+    result = await composer.dispatch(cast(Any, object()), step, step_context=_make_step_context())
+
+    assert result == {"inner_dispatched": True}
+    assert len(inner.calls) == 1
+    assert inner.calls[0][1].step_payload == {"orig": 1}  # unchanged

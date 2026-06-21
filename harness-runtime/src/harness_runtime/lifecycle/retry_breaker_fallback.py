@@ -239,6 +239,46 @@ def _classify_provider_exception(exc: BaseException) -> ValidatorRetryExitClass 
     return ValidatorRetryExitClass.TRANSIENT_RETRY
 
 
+def _is_hitl_terminal_control_flow(exc: BaseException) -> bool:
+    """True for HITL gate TERMINAL control-flow exceptions that must PROPAGATE
+    through the retry/fallback wrapper untouched — never retried, never
+    candidate-advanced.
+
+    Per spec §14.6 D2, HITL gate outcomes are operator/gate control-flow, NOT
+    provider results. The wrapper's `inner` is the HITL gate composer (stage 5:
+    `retry(HITL(bare_dispatcher))`), so these exceptions surface from
+    `self.inner.dispatch`. Classifying them as provider failures is wrong on
+    every branch: `TRANSIENT_RETRY` re-fires the gate; a fail-fast candidate-
+    advance re-fires it with a fallback model; and for a durable-async RESUME a
+    re-fire hits an already-emptied resume holder and RE-PAUSES instead of
+    surfacing the operator's terminal decision (Codex out-of-family [P1]). They
+    propagate like `asyncio.CancelledError` so the workflow driver maps each to
+    its terminal `RT-FAIL-*` (e.g. `RT-FAIL-HITL-GATE-REJECTED`).
+
+    Imported lazily: `hitl_gate_composer` imports this module, so a module-level
+    import here would cycle (B-RESUME-RESPONSE-ROUTING; a marker base class is the
+    drift-proof follow-on, registered not built).
+    """
+    from harness_runtime.lifecycle.hitl_gate_composer import (
+        HITLCellExcludedError,
+        HITLGateAuditComposeError,
+        HITLGateEditDecodeError,
+        HITLGateRejectedError,
+        HITLGateTimeoutError,
+    )
+
+    return isinstance(
+        exc,
+        (
+            HITLGateRejectedError,
+            HITLGateEditDecodeError,
+            HITLCellExcludedError,
+            HITLGateTimeoutError,
+            HITLGateAuditComposeError,
+        ),
+    )
+
+
 class RoutedBindingResolver(Protocol):
     """The route-once SELECTION handle the stage-5 factory hands the C-RT-16
     wrapper (B-L2-FALLBACK-COMPOSITION, §14.6).
@@ -649,6 +689,14 @@ class RetryBreakerFallbackDispatcher:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
+                    if _is_hitl_terminal_control_flow(exc):
+                        # Terminal HITL gate decision (REJECT / EDIT-decode /
+                        # cell-excluded / timeout / placement-foreclosed / audit-
+                        # compose) — NOT a transient provider failure. Propagate
+                        # untouched so it is neither retried nor candidate-advanced
+                        # (both re-fire the gate; a durable-async resume re-fire
+                        # re-PAUSES). The driver maps it to its terminal RT-FAIL-*.
+                        raise
                     cause = _classify_provider_exception(exc)
                     if cause is None:
                         # Fail-fast: AUTH / payload-shape. Per CP §3.5 canonical
