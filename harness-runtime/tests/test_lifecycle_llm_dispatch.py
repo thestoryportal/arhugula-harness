@@ -1587,7 +1587,11 @@ async def test_routing_activation_declines_declarative_on_manifest_miss_routes_e
     )
 
     # DECLARATIVE declined (manifest-miss) → EMBEDDING picked haiku, NOT the opus echo.
-    assert routed == ModelBinding(provider="anthropic", model="claude-haiku-4-5")
+    # B-L2-ROUTING-SPAN-LAYER-ATTRIBUTION: the resolver now returns a
+    # RoutedPrimaryResolution carrying the routed model + the resolving trace.
+    assert routed is not None
+    assert routed.model_binding == ModelBinding(provider="anthropic", model="claude-haiku-4-5")
+    assert routed.routing_trace.layer == "embedding"
 
 
 @pytest.mark.asyncio
@@ -1724,7 +1728,8 @@ async def test_routing_activation_non_model_workload_override_does_not_block_emb
 
     # The non-model workload override does NOT count → DECLARATIVE declines → EMBEDDING
     # picks haiku → the wrapper's routed PRIMARY candidate.
-    assert routed == ModelBinding(provider="anthropic", model="claude-haiku-4-5")
+    assert routed is not None
+    assert routed.model_binding == ModelBinding(provider="anthropic", model="claude-haiku-4-5")
 
 
 @pytest.mark.asyncio
@@ -2377,6 +2382,120 @@ async def test_b_l2_full_chain_routed_primary_reaches_provider_and_chain_advance
     # the REAL provider boundary.
     assert seen == ["claude-haiku-4-5", "claude-opus-4-8"]
     assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# B-L2-ROUTING-SPAN-LAYER-ATTRIBUTION (§14.6.1 scope-boundary closure) — the
+# inner `gen_ai` span's `routing.layer` reports the REAL EMBEDDING/L3 layer the
+# wrapper used for the routed PRIMARY (not the inner's faithful DECLARATIVE echo,
+# RoutingLayer.DECLARATIVE == "manifest"); fallback candidates keep faithful echo
+# reporting; routing-off is byte-identical to pre-arc. ContextVar-threaded
+# (concurrency-safe across fan-out branches; the B-INTERSTEP-PERRUN-ISOLATION
+# precedent). Witnessed through the REAL wrapper + REAL resolver (no mock).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_b_l2_routed_primary_span_reports_real_embedding_layer() -> None:
+    """THE FIX: a routed-primary dispatch (EMBEDDING picked haiku) → the
+    `chat claude-haiku-4-5` gen_ai span carries `routing.layer == "embedding"`,
+    NOT the DECLARATIVE echo `"manifest"` the inner would otherwise report."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    inner = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        routing_activation=True,
+        routing_manifest=_routing_manifest_with_roles({}),  # MISS → DECLARATIVE declines
+        embedding_classifier=_stub_embedding_classifier,  # → anthropic:claude-haiku-4-5
+    )
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(),
+        fallback_chain=_chain(_candidate("anthropic", "claude-opus-4-8")),  # stage primary
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_resolver=inner.resolve_routed_binding,  # the REAL route-once handle
+    )
+
+    await wrapper.dispatch(
+        _binding("anthropic", "claude-opus-4-8"), _step(), step_context=_step_context()
+    )
+
+    haiku_span = next(s for s in exporter.get_finished_spans() if s.name == "chat claude-haiku-4-5")
+    attrs = haiku_span.attributes or {}
+    # The real EMBEDDING layer the wrapper resolved — NOT the inner's echo.
+    assert attrs["routing.layer"] == "embedding"
+    assert attrs["routing.layer"] != "manifest"
+    # The dispatched candidate is still faithfully the routed model.
+    assert attrs["routing.model"] == "claude-haiku-4-5"
+
+
+@pytest.mark.asyncio
+async def test_b_l2_routing_off_span_reports_declarative_echo_byte_identical() -> None:
+    """NEGATIVE CONTROL: routing OFF (default) → no routed primary published →
+    the span carries the DECLARATIVE-echo `routing.layer == "manifest"`
+    (byte-identical to pre-arc; the ContextVar is never set)."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, exporter = _tracer_provider_with_exporter()
+    # Bare dispatcher, no wrapper, no routing_activation → pure echo path.
+    dispatcher = RuntimeLLMDispatcher(providers={"anthropic": adapter}, tracer_provider=tp)
+
+    await dispatcher.dispatch(
+        _binding("anthropic", "claude-opus-4-8"), _step(), step_context=_step_context()
+    )
+
+    span = next(s for s in exporter.get_finished_spans() if s.name == "chat claude-opus-4-8")
+    attrs = span.attributes or {}
+    assert attrs["routing.layer"] == "manifest"  # RoutingLayer.DECLARATIVE echo
+
+
+@pytest.mark.asyncio
+async def test_b_l2_fallback_candidate_span_keeps_faithful_echo() -> None:
+    """THE BOUNDARY: the routed primary (haiku, EMBEDDING) FAILS → fallback
+    advances to the stage primary (opus). The opus span — a CHAIN-selected
+    fallback candidate, not routing-selected — keeps the faithful DECLARATIVE
+    echo (`"manifest"`), while the haiku (routed primary) span reports the real
+    `"embedding"` layer. Proves the ContextVar is scoped to the routed primary
+    ONLY (cleared for fallback candidates)."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    seen: list[str] = []
+    real_create = adapter.client.messages.create
+
+    async def _failing_first_create(**kwargs: Any) -> Any:
+        seen.append(kwargs["model"])
+        if len(seen) == 1:
+            raise RuntimeError("routed model (haiku) transient-unreachable")
+        return await real_create(**kwargs)
+
+    adapter.client.messages.create = _failing_first_create  # type: ignore[method-assign]
+
+    tp, exporter = _tracer_provider_with_exporter()
+    inner = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        routing_activation=True,
+        routing_manifest=_routing_manifest_with_roles({}),  # MISS → DECLARATIVE declines
+        embedding_classifier=_stub_embedding_classifier,  # → anthropic:claude-haiku-4-5
+    )
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(),
+        fallback_chain=_chain(_candidate("anthropic", "claude-opus-4-8")),  # stage primary
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_resolver=inner.resolve_routed_binding,
+    )
+
+    await wrapper.dispatch(
+        _binding("anthropic", "claude-opus-4-8"), _step(), step_context=_step_context()
+    )
+
+    spans = {s.name: (s.attributes or {}) for s in exporter.get_finished_spans()}
+    # Routed primary (haiku): the real EMBEDDING layer.
+    assert spans["chat claude-haiku-4-5"]["routing.layer"] == "embedding"
+    # Fallback candidate (opus): faithful DECLARATIVE echo — NOT overridden.
+    assert spans["chat claude-opus-4-8"]["routing.layer"] == "manifest"
 
 
 # ---------------------------------------------------------------------------

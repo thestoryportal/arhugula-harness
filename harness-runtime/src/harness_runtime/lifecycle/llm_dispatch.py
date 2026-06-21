@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast, runtime_checkable
 
@@ -94,6 +95,43 @@ from harness_runtime.lifecycle.memory_tool_dispatch import (
     derive_context_editing_active,
     execute_with_memory_callbacks,
     step_has_memory_tool,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RoutedPrimaryResolution:
+    """The B-L2-FALLBACK-COMPOSITION routed-primary resolution (§14.6.1).
+
+    `resolve_routed_binding` returns this when the layered routing
+    (DECLARATIVE-decline → EMBEDDING → L3) picks a model: the routed
+    ``model_binding`` the C-RT-16 wrapper seeds as its chain PRIMARY, PLUS the
+    ``routing_trace`` (the real EMBEDDING/L3 layer + candidate) and
+    ``binding_rationale`` that B-L2-ROUTING-SPAN-LAYER-ATTRIBUTION threads to the
+    inner `gen_ai` span for the routed-primary dispatch (§14.6.1 scope-boundary
+    closure). The wrapper reads ``model_binding`` for chain composition; the
+    trace + rationale ride `ROUTED_PRIMARY_SPAN_TRACE` to the span emitter.
+    """
+
+    model_binding: ModelBinding
+    routing_trace: RoutingDecisionTrace
+    binding_rationale: str | None
+
+
+# B-L2-ROUTING-SPAN-LAYER-ATTRIBUTION (§14.6.1 scope-boundary closure). Under
+# `routing_activation` the C-RT-16 wrapper resolves the layered-routing decision
+# ONCE (route-once-then-fallback) and reverts the inner C-RT-15 dispatcher to a
+# FAITHFUL DECLARATIVE echo — so the inner's `gen_ai` span would carry the echo
+# `routing.layer`, not the real EMBEDDING/L3 layer the wrapper used. The wrapper
+# publishes the real `(routing_trace, binding_rationale)` here for the
+# routed-PRIMARY dispatch ONLY (cleared for fallback candidates, which ARE
+# faithful); `_invoke_provider` reads it for `routing.layer`/`binding_rationale`.
+# A ContextVar (not an instance attribute) because the C-RT-15 dispatcher is
+# shared across concurrent fan-out branches — the per-task isolation mirrors the
+# B-INTERSTEP-PERRUN-ISOLATION (v1.64) precedent. Default/absent (routing off,
+# non-routed, or any direct non-wrapper dispatch) → the local echo trace, so the
+# pre-arc span attribution is byte-identical.
+ROUTED_PRIMARY_SPAN_TRACE: ContextVar[tuple[RoutingDecisionTrace, str | None] | None] = ContextVar(
+    "_routed_primary_span_trace", default=None
 )
 
 
@@ -609,13 +647,16 @@ class RuntimeLLMDispatcher:
         step: WorkflowStep,
         *,
         step_context: StepExecutionContext,
-    ) -> ModelBinding | None:
+    ) -> RoutedPrimaryResolution | None:
         """Resolve the layered-routing PRIMARY candidate ONCE for the C-RT-16
         wrapper (B-L2-FALLBACK-COMPOSITION, `Spec_Harness_Runtime_v1.md` §14.6).
 
         The SELECTION half of `dispatch` — runs the layered routing strategy
         (DECLARATIVE-decline → EMBEDDING classifier → L3 router per C-CP-02 §2.2)
-        and returns the routed ``ModelBinding`` WITHOUT dispatching. The C-RT-16
+        and returns a ``RoutedPrimaryResolution`` (the routed ``ModelBinding`` +
+        the resolving ``RoutingDecisionTrace`` + binding rationale) WITHOUT
+        dispatching — the trace rides to the inner span per
+        B-L2-ROUTING-SPAN-LAYER-ATTRIBUTION (§14.6.1). The C-RT-16
         ``RetryBreakerFallbackDispatcher`` calls this ONCE per step (via a direct
         handle the stage-5 factory hands it — NOT through its HITL/inner chain)
         and SEEDS the routed model as its PRIMARY fallback candidate, so the
@@ -703,7 +744,11 @@ class RuntimeLLMDispatcher:
             router=self.router,
         )
         provider, _sep, model = trace.candidate.partition(":")
-        return ModelBinding(provider=provider, model=model)
+        return RoutedPrimaryResolution(
+            model_binding=ModelBinding(provider=provider, model=model),
+            routing_trace=trace,
+            binding_rationale=_binding_rationale,
+        )
 
     async def dispatch(
         self,
@@ -1068,14 +1113,27 @@ class RuntimeLLMDispatcher:
             # it WHEN PRESENT. On every other path `binding_rationale is None`
             # and the emitter keeps deriving the layer+candidate token
             # (byte-identical to pre-§2.5 — the non-router path is unchanged).
+            # B-L2-ROUTING-SPAN-LAYER-ATTRIBUTION (§14.6.1 scope-boundary
+            # closure): when the C-RT-16 wrapper resolved a routed PRIMARY it
+            # publishes the REAL `(routing_trace, binding_rationale)` for THIS
+            # dispatch — use it so `routing.layer` reports the EMBEDDING/L3 layer
+            # that PICKED the model, not the inner's faithful DECLARATIVE echo.
+            # Absent (routing off / a fallback candidate / any direct non-wrapper
+            # dispatch) → the local echo trace (pre-arc behavior, byte-identical).
+            # `routing.provider`/`routing.model` always reflect the actually
+            # dispatched candidate (correct on every path), so only the layer +
+            # rationale are sourced from the published trace.
+            _routed_span = ROUTED_PRIMARY_SPAN_TRACE.get()
+            _eff_trace = _routed_span[0] if _routed_span is not None else routing_trace
+            _eff_rationale = _routed_span[1] if _routed_span is not None else binding_rationale
             span.set_attribute("routing.provider", provider_name)
             span.set_attribute("routing.model", model)
-            span.set_attribute("routing.layer", routing_trace.layer)
+            span.set_attribute("routing.layer", _eff_trace.layer)
             span.set_attribute(
                 "routing.binding_rationale",
-                binding_rationale
-                if binding_rationale is not None
-                else f"{routing_trace.layer}:{routing_trace.candidate}",
+                _eff_rationale
+                if _eff_rationale is not None
+                else f"{_eff_trace.layer}:{_eff_trace.candidate}",
             )
 
             # --- Step 3: per-provider dispatch --------------------------

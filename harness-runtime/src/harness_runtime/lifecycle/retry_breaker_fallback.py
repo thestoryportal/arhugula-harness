@@ -89,8 +89,10 @@ from harness_runtime.lifecycle.fallback_chain import (
     advance_or_raise,
 )
 from harness_runtime.lifecycle.llm_dispatch import (
+    ROUTED_PRIMARY_SPAN_TRACE,
     LLMDispatchPayloadShapeError,
     LLMDispatchProviderUnreachableError,
+    RoutedPrimaryResolution,
 )
 from harness_runtime.lifecycle.retry_breaker import BreakerStateMachine
 from harness_runtime.types import LLMDispatcher, RetryBreakerRegistry
@@ -287,9 +289,11 @@ class RoutedBindingResolver(Protocol):
     handle to the bare C-RT-15 dispatcher's routing surface, NOT reached through
     the wrapper's ``inner`` (which is the HITL composer, two layers above the
     routing-capable dispatcher). Resolves the layered routing decision ONCE and
-    returns the routed ``ModelBinding`` (the wrapper seeds it as its PRIMARY
-    fallback candidate), or ``None`` when routing_activation is off / a
-    deterministic binding governs / nothing is routable."""
+    returns a ``RoutedPrimaryResolution`` (the routed ``ModelBinding`` the
+    wrapper seeds as its PRIMARY fallback candidate + the resolving
+    ``RoutingDecisionTrace`` for span attribution per
+    B-L2-ROUTING-SPAN-LAYER-ATTRIBUTION), or ``None`` when routing_activation is
+    off / a deterministic binding governs / nothing is routable."""
 
     async def __call__(
         self,
@@ -297,7 +301,7 @@ class RoutedBindingResolver(Protocol):
         step: WorkflowStep,
         *,
         step_context: StepExecutionContext,
-    ) -> ModelBinding | None: ...
+    ) -> RoutedPrimaryResolution | None: ...
 
 
 @dataclass(slots=True)
@@ -400,11 +404,15 @@ class RetryBreakerFallbackDispatcher:
             # per-attempt loop — so routing composes with fallback instead of
             # re-routing per attempt (the §14.5.3 "no two-authority-at-dispatch"
             # invariant the inner-routing re-evaluation otherwise broke).
-            routed = (
+            routed_resolution = (
                 await self.routing_resolver(binding, step, step_context=step_context)
                 if self.routing_resolver is not None
                 else None
             )
+            # The chain composes off the routed MODEL only; the resolving trace
+            # (B-L2-ROUTING-SPAN-LAYER-ATTRIBUTION) rides `ROUTED_PRIMARY_SPAN_TRACE`
+            # to the inner span for the routed-PRIMARY dispatch below.
+            routed = routed_resolution.model_binding if routed_resolution is not None else None
             # U-RT-114 (§14.5.3): resolve the per-dispatch chain for the branch
             # role. A routed primary (above) takes the chain PRIMARY; else a
             # non-default role with a `per_role_bindings` entry ⟹ an augmented
@@ -492,16 +500,36 @@ class RetryBreakerFallbackDispatcher:
                     continue
 
                 # --- Step 4: per-attempt loop -----------------------------
-                attempt_terminal = await self._run_per_candidate_attempts(
-                    binding=binding,
-                    step=step,
-                    candidate=candidate,
-                    policy=policy,
-                    breaker=breaker,
-                    tracer=tracer,
-                    outer_span=outer_span,
-                    step_context=step_context,
+                # B-L2-ROUTING-SPAN-LAYER-ATTRIBUTION (§14.6.1 scope-boundary
+                # closure): publish the real resolving trace to the inner span
+                # ONLY for the routed PRIMARY candidate. `chain.primary` is the
+                # `_augment_primary`-seeded routed model when `routed_resolution`
+                # is non-None; any later (advanced) candidate is a fallback the
+                # CHAIN selected, not routing — so it keeps faithful echo
+                # reporting (the ContextVar is cleared to None for it).
+                _on_routed_primary = (
+                    routed_resolution is not None
+                    and candidate.provider == chain.primary.provider
+                    and candidate.model == chain.primary.model
                 )
+                _span_trace_token = ROUTED_PRIMARY_SPAN_TRACE.set(
+                    (routed_resolution.routing_trace, routed_resolution.binding_rationale)
+                    if _on_routed_primary and routed_resolution is not None
+                    else None
+                )
+                try:
+                    attempt_terminal = await self._run_per_candidate_attempts(
+                        binding=binding,
+                        step=step,
+                        candidate=candidate,
+                        policy=policy,
+                        breaker=breaker,
+                        tracer=tracer,
+                        outer_span=outer_span,
+                        step_context=step_context,
+                    )
+                finally:
+                    ROUTED_PRIMARY_SPAN_TRACE.reset(_span_trace_token)
 
                 if attempt_terminal.result is not None:
                     # Success.
