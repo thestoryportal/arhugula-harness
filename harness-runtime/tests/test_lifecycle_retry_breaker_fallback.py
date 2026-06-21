@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from harness_as.sandbox_tier import SandboxTier
@@ -1421,3 +1421,115 @@ async def test_u_rt_114_per_role_models_live_ollama_e2e_through_wrapper() -> Non
     assert result_fast["model"] == model_fast
     assert result_slow["model"] == model_slow
     assert result_fast["model"] != result_slow["model"]
+
+
+# ---------------------------------------------------------------------------
+# B-EDIT-CARRIER-DURABLE-ASYNC-RESUME / Codex out-of-family [P1] — HITL terminal
+# control-flow exceptions must PROPAGATE through the retry/fallback wrapper, never
+# be retried or candidate-advanced.
+#
+# The production stage-5 stack is retry(HITL(bare_dispatcher)) — the wrapper's
+# `inner` IS the HITL gate composer. A HITL gate REJECT (and an EDIT-decode
+# failure) surfaces from `inner.dispatch` as an ordinary Exception; before the
+# fix `_classify_provider_exception` mapped ALL Exceptions to TRANSIENT_RETRY, so
+# the wrapper retried — and for a durable-async RESUME the retry re-entered an
+# already-emptied resume holder and RE-PAUSED instead of surfacing the operator's
+# terminal decision. These full-chain witnesses drive the REAL retry(HITL(...))
+# stack (`[[full-chain-witness-not-half-proofs]]`): the terminal HITL exception
+# propagates, and the composer's inner LLM dispatcher is invoked ZERO times (no
+# retry, no candidate-advance, no re-pause).
+# ---------------------------------------------------------------------------
+
+
+def _real_hitl_composer_with_resume(inner_llm: Any, resume_response: Any) -> Any:
+    """A REAL RuntimeHITLGateComposer with `resume_context_holder` primed so its
+    Step-0 (§14.8.8.5) consume routes the resumed response. The ask/ledger/audit
+    surfaces are never invoked on the resume short-circuit, so they are stubs."""
+    from harness_cp.hitl_placement import HITLPlacementKind
+    from harness_cp.pause_resume_protocol_types import ResumeContext
+    from harness_od.audit_ledger_types import SignatureAlgorithm
+    from harness_runtime.lifecycle.hitl_gate_composer import RuntimeHITLGateComposer
+
+    tp, _ = _tracer_provider_with_exporter()
+    composer = RuntimeHITLGateComposer(
+        inner=inner_llm,
+        applicable_placements=frozenset({HITLPlacementKind.PRE_ACTION}),
+        ask_user_question_surface=cast(Any, object()),
+        ledger_writer=cast(Any, object()),
+        audit_writer=cast(Any, object()),
+        tracer_provider=tp,
+        audit_signing_key_id="test",
+        audit_signing_algorithm=SignatureAlgorithm.ED25519,
+        procedural_tier_snapshot_resolver=lambda: cast(Any, "b" * 64),
+    )
+    composer.resume_context_holder.set(ResumeContext(hitl_response=resume_response))
+    return composer
+
+
+def _resume_hitl_result(response: Any, *, edited_proposal: Any = None) -> Any:
+    from harness_core.identity import EntryID
+    from harness_cp.hitl_placement import HITLResult
+
+    return HITLResult(
+        response=response,
+        edited_proposal=edited_proposal,
+        timestamp="2026-06-21T00:00:00Z",
+        audit_ledger_entry_id=EntryID("e-resume-fullchain"),
+        response_summary_hash="0" * 64,
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_wrapper_propagates_resume_reject_terminally_no_retry_no_advance() -> None:
+    """Full chain: a durable-async resume REJECT through retry(HITL(...)) raises
+    HITLGateRejectedError terminally; the composer's inner LLM is dispatched ZERO
+    times. The buggy TRANSIENT_RETRY path would retry → empty holder → fall
+    through → dispatch the inner ≥1 time AND return success (no raise)."""
+    from harness_cp.hitl_response_palette import HITLResponse
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLGateRejectedError
+
+    tp, _ = _tracer_provider_with_exporter()
+    inner_llm = _MockInnerDispatcher(outcomes=[{"never": "dispatched"}])
+    composer = _real_hitl_composer_with_resume(inner_llm, _resume_hitl_result(HITLResponse.REJECT))
+    # Multi-candidate chain + max_attempts=3 → proves NEITHER retry NOR advance.
+    chain = _chain(
+        _candidate("anthropic", "claude-test-1"),
+        cross_family=(_candidate("openai", "gpt-test-1"),),
+    )
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=composer,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=3),
+        fallback_chain=chain,
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    with pytest.raises(HITLGateRejectedError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert inner_llm.calls == []  # zero LLM dispatches — no retry, no advance, no re-pause
+
+
+@pytest.mark.asyncio
+async def test_retry_wrapper_propagates_resume_edit_decode_terminally() -> None:
+    """Full chain: a durable-async resume EDIT with a None proposal through
+    retry(HITL(...)) raises HITLGateEditDecodeError terminally; the composer's
+    inner LLM is dispatched ZERO times (not retried as a transient failure)."""
+    from harness_cp.hitl_response_palette import HITLResponse
+    from harness_runtime.lifecycle.hitl_gate_composer import HITLGateEditDecodeError
+
+    tp, _ = _tracer_provider_with_exporter()
+    inner_llm = _MockInnerDispatcher(outcomes=[{"never": "dispatched"}])
+    composer = _real_hitl_composer_with_resume(
+        inner_llm, _resume_hitl_result(HITLResponse.EDIT, edited_proposal=None)
+    )
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=composer,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=3),
+        fallback_chain=_chain(_candidate("anthropic", "claude-test-1")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+
+    with pytest.raises(HITLGateEditDecodeError):
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert inner_llm.calls == []
