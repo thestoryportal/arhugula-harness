@@ -48,8 +48,8 @@ snapshot:
   frozen_done: 11
   standalone_closed: 27
   standalone_gated: 1
-  standalone_resolved: 2
-  standalone_registered: 7
+  standalone_resolved: 3
+  standalone_registered: 6
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
 arcs:
@@ -571,12 +571,10 @@ arcs:
   - id: B-RESUME-CONTEXT-SURVIVES-RETRY
     title: "One-shot resume holder survives a post-consume retry of the same step"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: resolved
     owner_axis: runtime
     parent_arc: B-EDIT-CARRIER-DURABLE-ASYNC-RESUME
-    anticipated_scope: "The §14.8.8.9.3 `consume_and_clear()` one-shot empties `resume_context_holder` on the FIRST resumed-step gate-evaluation. For an APPROVE / EDIT-success / RESPOND resume, the composer then dispatches the inner LLM — if THAT dispatch raises a TRANSIENT provider error, the retry/fallback wrapper retries the step, the composer re-enters with an EMPTY holder, falls through to the normal gate path, and (for a durable-async cell) RE-PAUSES instead of re-applying the operator's already-consumed response. Make the one-shot resume context survive an in-flight retry of the SAME resumed step (e.g. cache-until-step-terminal, or re-seed on retry)."
-    why: "Pre-existing one-shot-context-survival-across-retry gap, surfaced (advisor) while grounding B-EDIT-CARRIER-DURABLE-ASYNC-RESUME. ORTHOGONAL to the resume routing fix — that fix makes REJECT/EDIT-decode propagate terminally (no retry), but an APPROVE/EDIT-SUCCESS resume whose post-consume LLM dispatch hits a transient error still re-enters an emptied holder. Registered so the resume-handling claim is not over-stated as fully correct."
+    resolution: "RESOLVED-AS-PREMISE-INVALID (2026-06-21; advisor + literal-spec + existing-test confirmed). The arc AS FRAMED — 'a transient retry re-entering an emptied holder → re-pause is a BUG; make the resume context survive the retry' — is foreclosed: re-pause/re-ask-the-operator-on-each-retry-attempt is the deeply-committed, ratified, TESTED behavior, NOT a bug. Four cleared authorities mandate it: (1) §14.8.8.7 invariant 3 LITERAL — 'One-shot resume delivery. ResumeContext.hitl_response consumed at most once per resume cycle; subsequent gate-evaluations at the same step RE-FIRE FROM SCRATCH'; (2) §14.8.7 NOTE 6-iii 'operator re-asked on each retry attempt'; (3) plan v2.9 U-RT-60 AC #12 (literal Q2 reading); (4) the EXISTING load-bearing test `test_retry_of_gate_re_evaluates_gate_per_attempt` (harness-runtime) asserts 3 attempts → 3 surface invocations → 3 audit entries. A transient retry's composer re-entry IS a 'subsequent gate-evaluation at the same step' → invariant 3 mandates re-firing; the proposed peek-clear-on-success 'fix' would BREAK that test (re-ask + re-audit per attempt is INTENDED — the advisor's audit-duplication concern is exactly what the test locks in). Stack confirmed RetryBreakerFallback(HITL(bare)), retry OUTER (stage_5_loop_init.py:352). DISTINCT FORWARD OPTION (NOT this arc): if the operator wants the UX of NOT double-approving on a transient retry, that requires RELAXING §14.8.8.7 invariant 3 + §14.8.7 NOTE 6-iii + U-RT-60 AC #12 — a Class-1 ADR/spec-amendment + operator ratification; surfaced to the operator, re-register as a new relax-invariant arc IF chosen. `[[grounding-reveals-claude-closeable-slice-close-honestly]]` ratified-invariant → confirm-don't-rescue; `[[cleared-spec-resolves-it-before-first-principles-fix]]`."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-HITL-WRAP-FAIL-CLASS-SURFACING
