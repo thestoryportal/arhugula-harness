@@ -2016,3 +2016,78 @@ def test_driver_empty_manifest_placements_yields_empty_step_context(
     assert dispatcher.contexts
     for sc in dispatcher.contexts:
         assert sc.hitl_placements == ()
+
+
+# ---------------------------------------------------------------------------
+# B-HITL-WRAP-FAIL-CLASS-SURFACING — the driver surfaces a runtime exception's
+# `rt_fail_class` marker as its canonical RT-FAIL-* code in `fail_class` (the
+# wrap-time HITL gate's terminal exceptions carry it), without harness-cp
+# importing the harness-runtime exception TYPES. A non-marker exception falls
+# back to the Python class name (byte-identical to before).
+# ---------------------------------------------------------------------------
+
+
+class _MarkerError(Exception):
+    """Stand-in for a runtime wrap-time HITL exception (harness-cp cannot import
+    the real `HITLGateRejectedError`); carries the same `rt_fail_class` marker."""
+
+    rt_fail_class = "RT-FAIL-HITL-GATE-REJECTED"
+
+
+class _RaisingDispatcher:
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def dispatch(
+        self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
+    ) -> dict[str, Any]:
+        _ = (binding, step, step_context)
+        raise self._exc
+
+
+def test_step_fail_class_helper_reads_marker_else_type_name() -> None:
+    """Unit: `_step_fail_class` surfaces the `rt_fail_class` marker code when present
+    (the precise RT-FAIL-* code), else the Python class name."""
+    from harness_cp.workflow_driver import _step_fail_class
+
+    assert _step_fail_class("step-failure", _MarkerError("rejected")).startswith(
+        "step-failure: RT-FAIL-HITL-GATE-REJECTED: "
+    )
+    assert _step_fail_class("step-failure", ValueError("boom")).startswith(
+        "step-failure: ValueError: "
+    )
+
+
+def test_marker_exception_surfaces_rt_fail_code_at_dispatch() -> None:
+    """Integration: a dispatcher raising a marker-carrying exception → the
+    RunResult.fail_class carries the canonical RT-FAIL-* code, NOT the class name."""
+    ctx, _, _ = _ctx()
+    result = execute_workflow(
+        manifest_entry=_manifest(),
+        steps=[_step(0)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _RaisingDispatcher(_MarkerError("rej")))),
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert "step-failure: RT-FAIL-HITL-GATE-REJECTED" in result.fail_class
+    assert "_MarkerError" not in result.fail_class  # the code, not the class name
+
+
+def test_non_marker_exception_falls_back_to_type_name_at_dispatch() -> None:
+    """Negative control: a plain (no-marker) exception still surfaces the Python
+    class name — byte-identical to pre-arc behavior."""
+    ctx, _, _ = _ctx()
+    result = execute_workflow(
+        manifest_entry=_manifest(),
+        steps=[_step(0)],
+        run_id="run-1",
+        ctx=cast(DriverContext, ctx),
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=_registry(cast(StepDispatcher, _RaisingDispatcher(ValueError("boom")))),
+    )
+    assert result.status is RunStatus.FAILED
+    assert result.fail_class is not None
+    assert "step-failure: ValueError: boom" in result.fail_class

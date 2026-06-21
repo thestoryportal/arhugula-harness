@@ -2923,3 +2923,25 @@ async def test_resume_no_matching_placement_no_audit_but_routes(
         )
     assert audit.appends == []  # no placement → no audit
     assert inner.calls == []  # still not dispatched (routing holds)
+
+
+def test_hitl_terminal_exceptions_carry_rt_fail_class_marker() -> None:
+    """B-HITL-WRAP-FAIL-CLASS-SURFACING — each wrap-time HITL terminal exception
+    carries its §14.8 taxonomy `rt_fail_class` code, so the CP driver (which cannot
+    import these runtime types) surfaces the canonical RT-FAIL-* code via `getattr`
+    instead of the bare Python class name."""
+    from harness_runtime.lifecycle.hitl_gate_composer import (
+        HITLGateAuditComposeError,
+        HITLGateEditDecodeError,
+        HITLGateRejectedError,
+        HITLGateTimeoutError,
+    )
+
+    assert HITLGateRejectedError.rt_fail_class == "RT-FAIL-HITL-GATE-REJECTED"
+    assert HITLGateEditDecodeError.rt_fail_class == "RT-FAIL-HITL-GATE-EDIT-DECODE"
+    assert HITLGateTimeoutError.rt_fail_class == "RT-FAIL-HITL-GATE-TIMEOUT"
+    assert HITLGateAuditComposeError.rt_fail_class == "RT-FAIL-HITL-GATE-AUDIT-COMPOSE"
+    # instance-accessible (the driver reads it off the caught instance via getattr)
+    assert (
+        getattr(HITLGateRejectedError("x"), "rt_fail_class", None) == "RT-FAIL-HITL-GATE-REJECTED"
+    )

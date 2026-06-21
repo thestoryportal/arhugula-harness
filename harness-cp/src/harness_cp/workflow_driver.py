@@ -658,6 +658,26 @@ def _record_durable_step_output(
         _store.record(run_idempotency_key, step_index, step_id, step_output)
 
 
+def _step_fail_class(prefix: str, exc: BaseException) -> str:
+    """Compose a step-dispatch `fail_class` string, surfacing a canonical
+    `RT-FAIL-*` code when the raised exception self-describes one.
+
+    B-HITL-WRAP-FAIL-CLASS-SURFACING (Codex [P2] from B-EDIT-CARRIER): the wrap-
+    time HITL gate's terminal exceptions (REJECT / EDIT-decode / timeout / audit-
+    compose) carry an `rt_fail_class` attribute naming their §14.8 taxonomy code.
+    `harness-cp` cannot import the `harness-runtime` exception TYPES (the axis
+    dependency graph), so the driver read the generic `type(exc).__name__` — which
+    surfaced e.g. `HITLGateRejectedError` instead of the canonical
+    `RT-FAIL-HITL-GATE-REJECTED` the exception docstrings + §14.8 already promise.
+    Reading the marker via `getattr` keeps CP import-free AND surfaces the precise
+    code for ANY runtime exception that opts in by carrying it; a non-marker
+    exception falls back to the class name (byte-identical to before). This is the
+    robust generalization of the pre-existing per-name canonicalization (e.g. the
+    `ManagedAgentsSessionError` name-match)."""
+    code = getattr(exc, "rt_fail_class", None) or type(exc).__name__
+    return f"{prefix}: {code}: {exc}"
+
+
 def _rehydrate_inter_step_channel_on_replay(
     ctx: DriverContext,
     *,
@@ -2353,7 +2373,7 @@ def _execute_workflow_body(
                 terminal_step_index=step_index,
                 partial_state=dict(accumulated),
                 final_state=None,
-                fail_class=f"step-failure: {type(exc).__name__}: {exc}",
+                fail_class=_step_fail_class("step-failure", exc),
             ), steps_executed
 
         # § 25.3.3.5 — Emit step.boundary.
@@ -4349,7 +4369,7 @@ def _execute_evaluator_optimizer(
             terminal_step_index=None,
             partial_state=None,
             final_state=None,
-            fail_class=f"evaluator-optimizer-step-failure: {type(exc).__name__}: {exc}",
+            fail_class=_step_fail_class("evaluator-optimizer-step-failure", exc),
         ), entry_index
 
     # Clean termination (accept or cap) — drain the buffer through the single real
@@ -4766,9 +4786,7 @@ def _execute_orchestrator_workers(
                 terminal_step_index=None,
                 partial_state=None,
                 final_state=None,
-                fail_class=(
-                    f"orchestrator-workers-orchestrator-failure: {type(exc).__name__}: {exc}"
-                ),
+                fail_class=_step_fail_class("orchestrator-workers-orchestrator-failure", exc),
             ), 0
         _append_buffered_sequential_entry(
             writer=orchestrator_writer,
@@ -5931,9 +5949,7 @@ def _execute_decentralized_handoff(
             if cascade_policy is CascadePolicy.PROCEED:
                 return _finish(
                     RunStatus.PARTIAL,
-                    fail_class=(
-                        f"decentralized-handoff-stage-failure: {type(exc).__name__}: {exc}"
-                    ),
+                    fail_class=_step_fail_class("decentralized-handoff-stage-failure", exc),
                     salvage=True,
                 )
             if cascade_policy is CascadePolicy.PAUSE:
@@ -5981,7 +5997,7 @@ def _execute_decentralized_handoff(
                 )
             return _finish(
                 RunStatus.FAILED,
-                fail_class=f"decentralized-handoff-stage-failure: {type(exc).__name__}: {exc}",
+                fail_class=_step_fail_class("decentralized-handoff-stage-failure", exc),
                 salvage=False,
             )
         # Persist the stage as a per-role branch entry whose branch_metadata chains

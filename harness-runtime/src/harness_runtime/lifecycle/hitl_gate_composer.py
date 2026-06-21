@@ -268,6 +268,8 @@ class HITLGateTimeoutError(Exception):
     this typed error. Driver maps to `RT-FAIL-HITL-GATE-TIMEOUT`.
     """
 
+    rt_fail_class = "RT-FAIL-HITL-GATE-TIMEOUT"
+
 
 class HITLGateRejectedError(Exception):
     """Operator selected `REJECT` at step 4i.
@@ -279,6 +281,8 @@ class HITLGateRejectedError(Exception):
     discipline: any downstream audit-compose failures on this path are
     suppressed; this error is primary fault per spec §14.8 fail-class table.
     """
+
+    rt_fail_class = "RT-FAIL-HITL-GATE-REJECTED"
 
 
 class HITLGateAuditComposeError(Exception):
@@ -292,6 +296,8 @@ class HITLGateAuditComposeError(Exception):
     `RT-FAIL-HITL-GATE-AUDIT-COMPOSE`. **Suppressed on REJECT path** —
     `HITLGateRejectedError` is the primary fault.
     """
+
+    rt_fail_class = "RT-FAIL-HITL-GATE-AUDIT-COMPOSE"
 
 
 class HITLGateEditDecodeError(Exception):
@@ -327,6 +333,8 @@ class HITLGateEditDecodeError(Exception):
     (the pre-authorized design back-flow per the FULL-SPEC directive — RESOLVED
     by B-EDIT-CARRIER; the interim raise is retired and functional EDIT applies).
     """
+
+    rt_fail_class = "RT-FAIL-HITL-GATE-EDIT-DECODE"
 
 
 class HITLPauseRequestedSignal(BaseException):
