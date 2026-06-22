@@ -180,6 +180,11 @@ def _build_default_policy_converter(
             forces_computer_use=entry.default_forces_computer_use,
             forces_code_execution=entry.default_forces_code_execution,
             is_deterministic_inhouse=entry.default_is_deterministic_inhouse,
+            # B-EFFECT-FENCE-PER-TOOL (AS spec C-AS-03 §3.1 v1.12 / runtime §14.22.7):
+            # stamp the per-server idempotency default so the effect fence can exempt
+            # declared-idempotent discovered tools (MCP advertisements carry no
+            # idempotency semantics → the per-server default is the policy source).
+            idempotent=entry.default_idempotent,
         )
 
     return convert

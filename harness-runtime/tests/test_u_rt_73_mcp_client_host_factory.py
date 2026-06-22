@@ -250,6 +250,55 @@ async def test_converter_stamps_per_server_forcing_discriminators() -> None:
 
 
 @pytest.mark.asyncio
+async def test_converter_stamps_per_server_idempotent_default() -> None:
+    """B-EFFECT-FENCE-PER-TOOL (AS spec C-AS-03 §3.1 v1.12 / runtime §14.22.7) — the
+    stage-3a converter stamps the entry's per-server `default_idempotent` onto every
+    MCP-discovered tool's `ToolContract.idempotent` (MCP advertisements carry no
+    idempotency semantics, so the per-server default is the policy source for discovered
+    tools — the production path the runtime effect fence reads to EXEMPT idempotent
+    tools). Without this, discovered tools would always carry `False` (fenced); the
+    over-applying direction (a wrong stamp → wrongly-exempt → fence silently disabled)
+    is the unsafe one, so this pins the stamp. Default (omitted) stays `False`."""
+    cfg = _config(
+        [
+            MCPClientConfig(
+                client_name=ClientName("read-only-data-server"),
+                transport=MCPTransport.STDIO,
+                trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
+                blast_radius=BlastRadiusTier.READ_ONLY,
+                connection_url="stdio:///bin/echo",
+                default_idempotent=True,
+            )
+        ]
+    )
+    host = next(iter((await materialize_mcp_client_host_stage(cfg)).values()))
+    converter = host._tool_contract_converter  # type: ignore[attr-defined]
+    contract = converter(_FakeTool("fetch", "pure read", {"type": "object"}))
+    assert contract.idempotent is True
+
+
+@pytest.mark.asyncio
+async def test_converter_idempotent_defaults_false_when_unset() -> None:
+    """Negative control — an entry that does NOT declare `default_idempotent` stamps
+    `idempotent=False` (the conservative fence-by-default; discovered tools stay fenced)."""
+    cfg = _config(
+        [
+            MCPClientConfig(
+                client_name=ClientName("mutating-server"),
+                transport=MCPTransport.STDIO,
+                trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
+                blast_radius=BlastRadiusTier.READ_ONLY,
+                connection_url="stdio:///bin/echo",
+            )
+        ]
+    )
+    host = next(iter((await materialize_mcp_client_host_stage(cfg)).values()))
+    converter = host._tool_contract_converter  # type: ignore[attr-defined]
+    contract = converter(_FakeTool("append", "appends", {"type": "object"}))
+    assert contract.idempotent is False
+
+
+@pytest.mark.asyncio
 async def test_converter_tolerates_none_description_and_schema() -> None:
     """v1.40 — `mcp.types.Tool.description` may be None and `inputSchema` may
     be absent; the converter substitutes safe defaults."""

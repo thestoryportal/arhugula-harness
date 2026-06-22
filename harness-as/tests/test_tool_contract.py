@@ -93,8 +93,34 @@ def test_raw_contract_input_declared() -> None:
         "forces_computer_use",
         "forces_code_execution",
         "is_deterministic_inhouse",
+        # B-EFFECT-FENCE-PER-TOOL (AS spec v1.12 §3.1) — effect-fence exemption.
+        "idempotent",
     }
     assert set(RawContractInput.model_fields) == expected
+
+
+def test_tool_contract_idempotent_threads_through_converter() -> None:
+    """B-EFFECT-FENCE-PER-TOOL (AS spec v1.12 §3.1) — `idempotent` flows from
+    RawContractInput through the registration converter onto the validated
+    ToolContract; default False (omitted) preserves the conservative fence-by-default."""
+    # Default: omitted → False (fenced).
+    default_result = validate_tool_contract_at_registration(_raw())
+    assert default_result.contract is not None
+    assert default_result.contract.idempotent is False
+    # Declared True → threads through (exempt from the runtime effect fence).
+    raw = RawContractInput(
+        name="read_file",
+        description="pure read",
+        input_schema={"type": "object"},
+        output_schema={"type": "object"},
+        minimum_tier=SandboxTier.TIER_1_PROCESS,
+        blast_radius_tier=BlastRadiusTier.READ_ONLY,
+        idempotent=True,
+    )
+    result = validate_tool_contract_at_registration(raw)
+    assert result.outcome is ContractValidationOutcome.VALID
+    assert result.contract is not None
+    assert result.contract.idempotent is True
 
 
 def test_secret_allowlist_entry_declared_at_u_as_07() -> None:

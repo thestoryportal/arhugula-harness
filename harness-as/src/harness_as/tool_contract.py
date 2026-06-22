@@ -98,6 +98,17 @@ class ToolContract(BaseModel):
     read-only-deterministic-in-house lookup (→ TIER_1_PROCESS, bounded below by the
     deployment-surface default + blast-radius floor). Default `False`."""
 
+    idempotent: bool = False
+    """OPTIONAL (C-AS-03 §3.1, v1.12 — `B-EFFECT-FENCE-PER-TOOL`). Read ONLY by the
+    runtime effect fence (runtime spec §14.22 / §14.22.7): when the fence is active
+    for a run, a tool declaring `idempotent=True` is NOT reserved at the per-(run,
+    step, tool) fence gate — it fires + is safely retryable. STRICT, tool-intrinsic,
+    all-invocations semantic: asserts every invocation re-executes with NO additional
+    external effect for ALL args (a pure read trivially qualifies; PUT-style qualifies;
+    append/send/counter-increment do NOT). Default `False` = treat as non-idempotent →
+    fenced (byte-identical to pre-v1.12). NOT a sandbox discriminator — does NOT enter
+    the C-AS-02 §2.3 `sandbox_tier_floor` composition."""
+
 
 class RawContractInput(BaseModel):
     """Pre-validation tool-contract serialization shape (resolution ②).
@@ -121,6 +132,7 @@ class RawContractInput(BaseModel):
     forces_computer_use: bool = False
     forces_code_execution: bool = False
     is_deterministic_inhouse: bool = False
+    idempotent: bool = False
 
 
 class ContractValidationOutcome(StrEnum):
@@ -177,5 +189,6 @@ def validate_tool_contract_at_registration(
         forces_computer_use=raw_contract.forces_computer_use,
         forces_code_execution=raw_contract.forces_code_execution,
         is_deterministic_inhouse=raw_contract.is_deterministic_inhouse,
+        idempotent=raw_contract.idempotent,
     )
     return ContractValidationResult(outcome=ContractValidationOutcome.VALID, contract=contract)

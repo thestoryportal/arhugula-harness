@@ -16,12 +16,15 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from harness_as.discriminators import MCPTransport
 from harness_as.sandbox_tier import BlastRadiusTier, SandboxTier
+from harness_as.sandbox_tier_floor import MCPServerTrustLevel
 from harness_as.secret_fail_class import SecretFailClass
 from harness_as.secret_fetch import SecretRef, SecretScope
 from harness_as.secret_fetch_audit import SecretFetchEvent, compose_secret_fetch_audit_entry
 from harness_as.tool_contract import SecretAllowlistEntry, ToolContract
-from harness_core import PersonaTier
+from harness_core import ClientName, PersonaTier
+from harness_core.deployment_surface import DeploymentSurface
 from harness_cp.cp_shared_types import MCPTrustTier, ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
@@ -42,6 +45,9 @@ from harness_cp.workflow_driver_types import (
 )
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_is.state_ledger_write import WriteResult
+from harness_runtime.bootstrap.factories.mcp_client_host_factory import (
+    _build_default_policy_converter,
+)
 from harness_runtime.config.provider_secrets import SecretResolutionError
 from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
 from harness_runtime.lifecycle.runtime_tool_dispatcher import (
@@ -56,6 +62,7 @@ from harness_runtime.lifecycle.runtime_tool_dispatcher import (
     ToolInvocationTimeoutError,
     ToolInvocationTrustViolationError,
 )
+from harness_runtime.types import MCPClientConfig
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.memory import create_connected_server_and_client_session
 from opentelemetry.sdk.trace import TracerProvider
@@ -89,7 +96,7 @@ def _build_session_factory(server: FastMCP):
     return factory
 
 
-def _make_tool_converter():
+def _make_tool_converter(*, idempotent: bool = False):
     def convert(tool):
         return ToolContract(
             name=tool.name,
@@ -98,6 +105,7 @@ def _make_tool_converter():
             output_schema={"type": "object"},  # empty → no validation
             minimum_tier=SandboxTier.TIER_1_PROCESS,
             blast_radius_tier=BlastRadiusTier.READ_ONLY,
+            idempotent=idempotent,
         )
 
     return convert
@@ -118,14 +126,26 @@ def _make_secret_tool_converter(*required_secrets: SecretAllowlistEntry):
     return convert
 
 
-async def _build_started_host(register_echo: bool = True) -> MCPClientHost:
+async def _build_started_host(
+    register_echo: bool = True,
+    *,
+    idempotent: bool = False,
+    tool_contract_converter_override: Any = None,
+) -> MCPClientHost:
     server = _build_fastmcp_server(register_echo=register_echo)
     host = MCPClientHost(
         transport="stdio",
         server_name="dispatcher-test-srv",
         trust_tier=MCPTrustTier.LEVEL_2_SANDBOX_ALL,
         transport_config={"command": "unused"},
-        tool_contract_converter=_make_tool_converter(),
+        # `tool_contract_converter_override` lets a test drive the PRODUCTION
+        # converter (`_build_default_policy_converter`) through the real fence —
+        # the full-chain witness for the discovered-tool default_idempotent path.
+        tool_contract_converter=(
+            tool_contract_converter_override
+            if tool_contract_converter_override is not None
+            else _make_tool_converter(idempotent=idempotent)
+        ),
         session_context_factory=_build_session_factory(server),
         auth_present=False,
     )
@@ -1117,18 +1137,25 @@ async def _dispatch_echo_twice_with_fence(
     effect_fencing_explicit: bool,
     fence_dir: Any,
     binding_engine_class: EngineClass = EngineClass.PURE_PATTERN_NO_ENGINE,
+    idempotent: bool = False,
+    tool_contract_converter_override: Any = None,
 ) -> tuple[Mapping[str, Any], BaseException | None]:
     """Dispatch the same echo TOOL_STEP twice through a real fence; return the first
     result + whatever the second raised (None if it succeeded). The gate keys on
     `step_context.run_engine_class` (the RUN engine class); `binding_engine_class` is
     the INDEPENDENT per-step effective binding (the override channel) — they differ in
-    the Codex [P2] regression witness."""
+    the Codex [P2] regression witness. `idempotent` declares the echo tool's contract
+    idempotent (B-EFFECT-FENCE-PER-TOOL) → the fence EXEMPTS it from the reserve.
+    `tool_contract_converter_override` drives the PRODUCTION converter (full-chain)."""
     from harness_runtime.lifecycle.effect_fence import (
         EffectFenceReservedUncommittedError,
         RuntimeEffectFence,
     )
 
-    host = await _build_started_host()
+    host = await _build_started_host(
+        idempotent=idempotent,
+        tool_contract_converter_override=tool_contract_converter_override,
+    )
     dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
         per_server_trust_evaluator=PerServerTrustEvaluator(),
@@ -1218,3 +1245,70 @@ async def test_effect_fence_gates_on_run_not_per_step_override(tmp_path: Any) ->
     )
     assert first["tool_id"] == "echo"
     assert isinstance(second_error, EffectFenceReservedUncommittedError)
+
+
+@pytest.mark.asyncio
+async def test_effect_fence_exempts_idempotent_tool_under_durable_run(tmp_path: Any) -> None:
+    """B-EFFECT-FENCE-PER-TOOL (runtime §14.22.7 / AS C-AS-03 §3.1 v1.12) — a tool whose
+    contract declares `idempotent=True` is NOT reserved even under a durable run that
+    auto-activates the fence: both dispatches of the same effect succeed (no at-most-once
+    claim), so an idempotent tool is safely retryable. Contrast: the default
+    (idempotent=False) durable run fences (test_effect_fence_auto_activates_*)."""
+    first, second_error = await _dispatch_echo_twice_with_fence(
+        run_engine_class=EngineClass.EVENT_SOURCED_REPLAY,  # durable → fence active
+        effect_fencing_explicit=False,
+        fence_dir=tmp_path,
+        idempotent=True,  # but the tool is declared idempotent → exempt
+    )
+    assert first["tool_id"] == "echo"
+    assert second_error is None  # exempt → no fence claim → safely retryable
+
+
+@pytest.mark.asyncio
+async def test_effect_fence_exempts_idempotent_tool_under_explicit_optin(tmp_path: Any) -> None:
+    """The idempotent exemption is fence-active-reason-agnostic: even the operator's
+    explicit `effect_fencing=True` (the pre-v1.60 blanket "fence every step") does NOT
+    fence a declared-idempotent tool — there is no effect to double-fire. The exemption
+    only ever applies to EXPLICITLY-declared-idempotent tools (default False stays fenced,
+    test_effect_fence_explicit_optin_fences_non_durable_run)."""
+    first, second_error = await _dispatch_echo_twice_with_fence(
+        run_engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,  # non-durable
+        effect_fencing_explicit=True,  # operator forces the fence on
+        fence_dir=tmp_path,
+        idempotent=True,  # but idempotent → still exempt
+    )
+    assert first["tool_id"] == "echo"
+    assert second_error is None
+
+
+@pytest.mark.asyncio
+async def test_effect_fence_exempts_idempotent_via_production_converter_full_chain(
+    tmp_path: Any,
+) -> None:
+    """FULL-CHAIN witness (`[[full-chain-witness-not-half-proofs]]`, advisor pre-push
+    catch) — the discovered-tool PRODUCTION path with NO proxy converter: a per-server
+    `MCPClientConfig(default_idempotent=True)` drives the real
+    `_build_default_policy_converter`, whose stamped `ToolContract.idempotent=True`
+    reaches a REAL fence decision under a durable run → the tool is NOT reserved (both
+    dispatches succeed). This closes the seam the unit witnesses leave open: production
+    converter → host registry → fence (the over-applying direction = fence silently
+    disabled = unsafe, so it must be witnessed end-to-end, not just at each half)."""
+    entry = MCPClientConfig(
+        client_name=ClientName("read-only-data-server"),
+        transport=MCPTransport.STDIO,
+        trust_level=MCPServerTrustLevel.L1_SIGNED_PINNED,
+        blast_radius=BlastRadiusTier.READ_ONLY,
+        connection_url="stdio:///bin/echo",
+        default_idempotent=True,
+    )
+    production_converter = _build_default_policy_converter(
+        entry, DeploymentSurface.LOCAL_DEVELOPMENT
+    )
+    first, second_error = await _dispatch_echo_twice_with_fence(
+        run_engine_class=EngineClass.EVENT_SOURCED_REPLAY,  # durable → fence active
+        effect_fencing_explicit=False,
+        fence_dir=tmp_path,
+        tool_contract_converter_override=production_converter,
+    )
+    assert first["tool_id"] == "echo"
+    assert second_error is None  # production-stamped idempotent → exempt end-to-end
