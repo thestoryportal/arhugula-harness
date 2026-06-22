@@ -1,0 +1,35 @@
+---
+artifact: design-substrate/Spec_Harness_Runtime_v1.md
+version: v1.73
+cleared_at: 2026-06-22T00:00:00+00:00
+clearance_type: Phase-7-absorbed-via-spine-ledger (BUILD-not-gate — the runtime half of B-EFFECT-FENCE-PAUSE-RESOLUTION. The resume-side RESOLUTION of the §26.2 EFFECT_FENCE_AMBIGUOUS pause v1.72 [§14.22.8] opened: until v1.73 a naive api.resume re-pauses identically [INERT]; v1.73 wires the resume to RESOLVE it via an operator-supplied EffectFenceResolution [skip-as-fired / re-fire / abort] [new §14.22.9]. NO operator gate — the #702 registration's "operator-gated + safety-sensitive" label flipped at design-vet [advisor-concurred]: the fence pauses to ASK "did the effect fire?"; the three resolutions are the operator ANSWERING with ground-truth the harness lacks, so re-fire COMPLETES the at-most-once decision [a fresh first-and-only fire when the prior provably did not commit] rather than breaching it — the palette composes only committed primitives [clear_claim + re-dispatch + empty-output accumulate + existing FAILED] → §13.4 discriminator (a) → no gate. NEW: RuntimeEffectFence.clear_claim [inverse of try_reserve]; ResumeContextHolder.peek [non-consuming]; the dispatcher three-branch resolution [key-bound]; EffectFenceAbortedError [→ generic FAILED]. No new fail-class taxonomy code, no §5.2-hash change, no StepDispatcher Protocol widening, no new CXA edge.)
+back_reference:
+  - .harness/class_1_fork_effect_fence_pause_resolution.md (the advisor-vetted design proposal — the BUILD-not-gate reframe + the key-bound/consume-once + clear_claim + ABORT-claim witnesses; this runtime v1.73 + CP v1.52 deltas execute it)
+  - .harness/beyond-mvp-capability-boundary-ledger.md (B-EFFECT-FENCE-PAUSE-RESOLUTION spine BUILT note)
+  - design-substrate/Spec_Control_Plane_v1_52.md (the paired CP delta — the EffectFenceResolution enum + EffectFenceResumeState carrier + EffectFenceResolutionDirective + the additive ResumeContext.effect_fence_resolution + PauseSnapshot.effect_fence_resume fields)
+  - design-substrate/Spec_Harness_Runtime_v1.md (§14.22.8 v1.72 the ambiguous-pause CAPTURE this RESOLVES; §14.22 v1.60 the fence carrier)
+merge_commit: <pending — co-published bundled-absorption PR>
+reviewer_chain:
+  - advisor (full-transcript, 2 passes) — pass 1 caught the parking error + supplied the reframe that flipped the disposition to BUILD-not-gate (the fence ASKS a question; the resolution ANSWERS it → in-domain → build, no gate; the #529 cascade-cancel precedent); pass 2 on the completed design added the key-bound + consumed-once guard (correctness-by-construction), the clear_claim-removed-the-real-claim-file witness, and the ABORT-leaves-claim note
+  - out-of-family Codex (decorrelated) — pre-merge on the diff (pending at clearance authoring; co-published PR review)
+  - standing FULL-SPEC operator directive 2026-06-12 (design back-flow pre-authorized; registered → BUILD)
+supersedes:
+superseded_by:
+---
+
+# Clearance — `Spec_Harness_Runtime v1.73`
+
+v1.73 is the runtime half of the R-FS-1 standalone arc **`B-EFFECT-FENCE-PAUSE-RESOLUTION`** — the resume-side RESOLUTION of the §26.2 `EFFECT_FENCE_AMBIGUOUS` pause that v1.72 (§14.22.8) opened, via the NEW **§14.22.9**.
+
+**What changed (the resume-side resolution).** `RuntimeEffectFence.clear_claim(idempotency_key)` (the inverse of `try_reserve` — atomic unlink of the held claim + any output, missing-ok) so RE_FIRE re-dispatches fresh; `ResumeContextHolder.peek()` (non-consuming, so the HITL composer's one-shot `consume_and_clear` is intact); the dispatcher's §14.22 fence gate gains a key-bound three-branch resolution (RE_FIRE → clear + fire fresh; SKIP_AS_FIRED → empty-output return + balancing `sandbox.exit`, never re-fire; ABORT → raise `EffectFenceAbortedError` → driver generic FAILED). The CP driver populates the `PauseSnapshot.effect_fence_resume` carrier from the runtime error's `idempotency_key`, peeks the holder (gated on that carrier), key-binds, and threads an `EffectFenceResolutionDirective` onto the resumed linear step's hash-inert `StepExecutionContext.effect_fence_resolution`.
+
+**Gate posture — BUILD-not-gate.** The #702 registration labeled this "operator-gated + safety-sensitive." Grounded at design-vet (advisor-concurred), the label flipped: the fence raises `EFFECT_FENCE_AMBIGUOUS` *to ask the operator "did the effect fire?"*; the three resolutions are the operator answering with ground-truth the harness genuinely cannot compute. `RE_FIRE` therefore COMPLETES the at-most-once decision (a first-and-only fire when the prior provably did not commit), it does not breach it; a mis-assertion is operator-error responsibility. The palette composes only committed primitives → no net-new primitive, no committed-invariant sacrifice → no operator gate. No council (the §10.9 nameable-tension probes resolved the residuals to the minimal spec'd semantic: skip-as-fired = empty output, no operator-supplied-output over-build).
+
+**Scope.** Otherwise additive/impl: **no** new fail-class taxonomy code (`EffectFenceAbortedError` maps to the existing generic FAILED), **no** §5.2-hash change (the `effect_fence_resume` carrier rides the `PauseSnapshot` `_compute_snapshot_hash`, NOT the IS state-ledger six-field hash; the directive is hash-inert), **no** `StepDispatcher` Protocol widening (the resolution rides the hash-inert `StepExecutionContext` field), **no** new CXA edge (RE_FIRE's fresh success reuses the existing CP→IS success seam).
+
+Reviewed during clearance (verified by execution): dispatcher RE_FIRE-fires-fresh + clear_claim-removed-the-real-claim-file, SKIP_AS_FIRED-empty-output-no-refire, ABORT-raises, key-mismatch-ignored; the clear_claim file-level unit (removes claim+output, missing-ok); driver carrier-population + hash-integrity (the hash covers `effect_fence_resume`), ABORT→FAILED, and the full-chain directive-threading producer (peek-not-consume, key-bound, resumed-step-only). harness-runtime non-e2e 2031+ passed; harness-cp 1171+1xfail; pyright 0/0/0.
+
+## Notes
+
+- Phase 7 consumers may rely on this version as canonical after the bundled harness-runtime + harness-cp impl + tests land together (`merge_commit` pinned at the post-merge refresh).
+- Paired CP clearance: `.harness/clearance/Spec_Control_Plane-v1_52-cleared-2026-06-22.md`.
