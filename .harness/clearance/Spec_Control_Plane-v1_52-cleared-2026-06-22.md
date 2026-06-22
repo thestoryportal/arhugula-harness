@@ -27,7 +27,7 @@ v1.52 is the CP half of the R-FS-1 standalone arc **`B-EFFECT-FENCE-PAUSE-RESOLU
 
 **Scope.** Purely additive to `C-CP-26`. The v1.51 + entire C-CP-01 … C-CP-29 body PRESERVED VERBATIM. No new contract, ADR, fail-class, manifest field, or CXA edge. OD ingests `pause_reason` as a string (unaffected). The `ResumeContext` single-field-shape note (v1.16) is superseded by the deliberately-amended `{hitl_response, effect_fence_resolution}` set (the §26.8.1 change-note anticipated extension — a deliberate amendment, not a silent absorption; the shape-lock test updated accordingly).
 
-Reviewed during clearance (verified by execution): the `ResumeContext` shape-lock test updated for the deliberate amendment; carrier-population + hash-integrity (the driver populates `effect_fence_resume` from the runtime error's key; the `snapshot_hash` covers it); the full-chain directive-threading producer (the driver peeks non-consuming, key-binds, threads to the resumed step only). harness-cp 1171 passed + 1 xfailed; pyright 0/0/0.
+Reviewed during clearance (verified by execution): the `ResumeContext` shape-lock test updated for the deliberate amendment; carrier-population + hash-integrity (the driver populates `effect_fence_resume` from the runtime error's key; the `snapshot_hash` covers it); the directive-threading PRODUCER half (the driver peeks non-consuming, key-binds, threads to the resumed step only — through the REAL `execute_workflow` with a `ResumeContextHolder` stand-in; the `api.resume → holder.set` handoff is read-verified at `mcp_server.py:364`, not a single e2e `api.resume` call). harness-cp 1171 passed + 1 xfailed; pyright 0/0/0 (src + changed tests).
 
 ## Notes
 
