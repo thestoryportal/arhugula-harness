@@ -944,6 +944,7 @@ class RuntimeToolDispatcher:
                 self._effect_fence is not None
                 and _fence_gate_open
                 and _fence_resolution is EffectFenceResolution.RE_FIRE
+                and self._effect_fence.try_consume_refire(idempotency_key)
             ):
                 # RE_FIRE — the operator asserts the prior attempt did NOT fire (it
                 # claimed the reserve, then crashed before firing). Clear the held claim
@@ -951,6 +952,15 @@ class RuntimeToolDispatcher:
                 # only execution, still at-most-once from the true state of the world.
                 # Done before the reserve so the normal step-7 `call_tool` + post-fire
                 # `capture_output` + success-path emission all run unchanged.
+                #
+                # CONSUME-ONCE (Codex [P1]): the clear is gated on `try_consume_refire`,
+                # a durable one-way latch. Only the FIRST RE_FIRE attempt wins it + clears;
+                # a `RetryBreakerToolDispatcher` retry of the re-fire (reusing the same
+                # `step_context`) — or a crash-then-resume after the re-fire began — LOSES
+                # the latch → does NOT clear → `try_reserve` below loses to the re-fire's
+                # own held claim → the normal read_output split (suppress-if-captured /
+                # ambiguous-PAUSE) applies. So a retryable error during the re-fire can
+                # NEVER clear-and-double-fire the non-idempotent effect.
                 self._effect_fence.clear_claim(idempotency_key)
             if (
                 self._effect_fence is not None

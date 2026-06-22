@@ -173,6 +173,15 @@ class EffectFenceProtocol(Protocol):
         path. Missing-ok (idempotent)."""
         ...
 
+    def try_consume_refire(self, idempotency_key: str) -> bool:
+        """Atomically claim the ONE re-fire for this effect. ``True`` = THIS call won
+        the re-fire latch (the FIRST RE_FIRE attempt → clear the stale claim + fire
+        fresh); ``False`` = the latch was already taken (a RETRY of the re-fire, or a
+        crash-then-resume after a re-fire began) → do NOT clear, fall through to the
+        normal fence flow (the re-fire's own claim is held → suppress/ambiguous), so a
+        retryable error during the re-fire can NEVER double-fire the effect."""
+        ...
+
 
 class RuntimeEffectFence:
     """Durable single-host effect fence — crash-atomic ``O_EXCL``/``os.link`` claim.
@@ -213,6 +222,17 @@ class RuntimeEffectFence:
         digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
         return self._fence_dir / f"{digest}.output"
 
+    def _refire_file(self, idempotency_key: str) -> Path:
+        """The atomic re-fire latch for one effect ``idempotency_key``.
+
+        Same per-(run, step, tool) digest keying as ``_claim_file`` (so the latch
+        shares the run-scoped namespace), a distinct ``.refire`` suffix. A one-way
+        latch: once set, RE_FIRE is consumed for this key — a retry / crash-resume of
+        the re-fire can never clear-and-re-fire again (the double-fire Codex [P1]).
+        """
+        digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+        return self._fence_dir / f"{digest}.refire"
+
     def try_reserve(self, idempotency_key: str) -> bool:
         """Crash-atomic claim of the effect ``idempotency_key``.
 
@@ -242,6 +262,41 @@ class RuntimeEffectFence:
                 os.link(tmp, path)
             except FileExistsError:
                 return False  # the effect is already reserved → lose the claim
+            self._fsync_dir(path.parent)
+            return True
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+    def try_consume_refire(self, idempotency_key: str) -> bool:
+        """Atomically claim the ONE re-fire for this effect (the same crash-atomic
+        ``O_EXCL``/``os.link`` primitive as ``try_reserve``, on the ``.refire`` latch).
+
+        Returns ``True`` iff THIS call won the latch (the FIRST RE_FIRE attempt → the
+        caller clears the stale claim + fires fresh); ``False`` iff the latch was
+        already taken (a ``RetryBreakerToolDispatcher`` retry of the re-fire reusing
+        the same ``step_context``, or a crash-then-resume after a re-fire began) → the
+        caller does NOT clear, so ``try_reserve`` loses to the re-fire's own held claim
+        and the normal split (suppress-if-captured / ambiguous-PAUSE) applies. This is
+        the durable consume-once that stops a retryable error during the re-fire from
+        double-firing the non-idempotent effect (Codex [P1]).
+        """
+        path = self._refire_file(idempotency_key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.parent / f"{path.name}.{uuid.uuid4().hex}.tmp"
+        try:
+            fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                os.write(fd, f"{socket.gethostname()}:{os.getpid()}".encode())
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            try:
+                os.link(tmp, path)
+            except FileExistsError:
+                return False  # the re-fire latch is already taken → do NOT re-clear
             self._fsync_dir(path.parent)
             return True
         finally:

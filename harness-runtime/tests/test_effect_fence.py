@@ -516,3 +516,37 @@ async def test_resolution_key_mismatch_is_ignored(tmp_path: Path) -> None:
     finally:
         await host.shutdown()
     assert fired == ["fire"]  # mismatched resolution ignored → ambiguous, never re-fired
+
+
+@pytest.mark.asyncio
+async def test_resolution_re_fire_retry_does_not_double_fire(tmp_path: Path) -> None:
+    """Codex [P1] regression: a RE_FIRE wrapped by `RetryBreakerToolDispatcher` must NOT
+    clear-and-re-fire on EACH retry attempt. The FIRST RE_FIRE attempt wins the durable
+    consume-once latch + clears + fires fresh; a SECOND dispatch with the SAME RE_FIRE
+    `step_context` (modeling a retry after a transient error before capture) LOSES the
+    latch → does NOT re-clear → loses the reserve to the re-fire's own claim → ambiguous
+    (NEVER a third fire). Without the latch, the unconditional clear would re-fire."""
+    fired: list[str] = []
+    fence_dir = tmp_path / "fence"
+    host = await _build_started_counting_host(fired)
+    dispatcher = _dispatcher(host, RuntimeEffectFence(fence_dir=fence_dir))
+    try:
+        key = await _ambiguous_state(dispatcher, fence_dir)  # original fire #1, then output deleted
+        ctx = _step_context(
+            EffectFenceResolutionDirective(
+                resolution=EffectFenceResolution.RE_FIRE, idempotency_key=key
+            )
+        )
+        # Attempt 1 (RE_FIRE): wins the latch → clears the stale claim → fires fresh (#2).
+        await dispatcher.dispatch(_binding(), _step(), step_context=ctx)
+        # Model a retryable error BEFORE capture on the re-fire: delete its output,
+        # leaving the re-fire's claim held + no output.
+        next(iter(fence_dir.glob("*.output"))).unlink()
+        # Attempt 2 (the retry, SAME RE_FIRE ctx): the latch is consumed → no re-clear →
+        # ambiguous, NOT a second re-fire.
+        with pytest.raises(EffectFenceAmbiguousUncommittedError):
+            await dispatcher.dispatch(_binding(), _step(), step_context=ctx)
+    finally:
+        await host.shutdown()
+    # The original fire + exactly ONE re-fire — the retry did NOT double-fire.
+    assert fired == ["fire", "fire"]
