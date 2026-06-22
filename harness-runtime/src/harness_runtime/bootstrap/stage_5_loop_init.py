@@ -446,6 +446,11 @@ async def execute(
         routing_resolver=(
             bare_dispatcher.resolve_routed_binding if ctx.requires_inference else None
         ),
+        # B-MODEL-RESOLUTION-CONSOLIDATION (§14.6): the run workload — the SAME
+        # value handed to the inner dispatcher above (line ~310) — so the wrapper
+        # can honour a per-workload `model_binding_override` at the per-workload
+        # precedence tier (per-step > per-workload > per-role > routed > default).
+        workload_class=workload_class,
     )
 
     # ---------------------------------------------------------------------

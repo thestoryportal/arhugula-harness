@@ -1626,26 +1626,56 @@ async def test_routing_activation_off_declarative_echoes_default_zero_blast_radi
 @pytest.mark.asyncio
 async def test_routing_activation_manifest_binds_keeps_declarative() -> None:
     """The §2.2 "manifest binds → DECLARATIVE" half: routing_activation on + a
-    manifest that DOES bind the request's role tuple → DECLARATIVE resolves (echoes
-    `binding.model_binding`) → `resolve_routed_binding` returns None (the deterministic
-    binding IS the wrapper's existing chain primary, no augmentation; per-role
-    U-RT-114 augmentation takes precedence). Decline is driven by manifest-membership,
-    not blanket fall-through."""
+    manifest that DOES bind the request's NON-default role → DECLARATIVE resolves
+    → `resolve_routed_binding` returns None (the per-role binding IS the wrapper's
+    chain primary, no augmentation; per-role U-RT-114 augmentation takes
+    precedence). Decline is driven by manifest-membership of a NON-default role,
+    and mirrors `_effective_chain`'s per-role branch EXACTLY (B-MODEL-RESOLUTION-
+    CONSOLIDATION §14.6.2 — the default role is dead config per §14.5.3; see the
+    default-role witness below)."""
     adapter = _AnthropicFakeAdapter(_AnthropicClient())
     tp, _ = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(
         providers={"anthropic": adapter},
         tracer_provider=tp,
         routing_activation=True,
-        # binds the resolved default role ("default") → DECLARATIVE resolves.
-        routing_manifest=_routing_manifest_with_roles({"default": "claude-opus-4-8"}),
+        # binds a NON-default role ("reviewer") → DECLARATIVE resolves for it.
+        routing_manifest=_routing_manifest_with_roles({"reviewer": "claude-opus-4-8"}),
         embedding_classifier=_stub_embedding_classifier,
     )
 
     routed = await dispatcher.resolve_routed_binding(
-        _binding("anthropic", "claude-opus-4-8"), _step(), step_context=_step_context()
+        _binding("anthropic", "claude-opus-4-8"),
+        _step(),
+        step_context=_step_context_with_role("reviewer"),
     )
     assert routed is None
+
+
+@pytest.mark.asyncio
+async def test_routing_activation_default_role_binding_does_not_block_embedding() -> None:
+    """B-MODEL-RESOLUTION-CONSOLIDATION §14.6.2 — a `per_role_bindings` entry for the
+    DEFAULT role is dead config (the wrapper's `_effective_chain` early-skips the
+    default role per the §14.5.3 non-breaking-default invariant). So a default-role
+    binding must NOT count as a deterministic model binding at decline either (else
+    the decline would be STRICTER than the authority — routing declines while the
+    authority skips → silent drop to default). DECLARATIVE declines → EMBEDDING
+    routes to the classifier pick (haiku)."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        routing_activation=True,
+        # binds the DEFAULT role → dead config; must NOT decline.
+        routing_manifest=_routing_manifest_with_roles({"default": "claude-opus-4-8"}),
+        embedding_classifier=_stub_embedding_classifier,
+    )
+    routed = await dispatcher.resolve_routed_binding(
+        _binding("anthropic", "claude-opus-4-8"), _step(), step_context=_step_context()
+    )
+    assert routed is not None
+    assert routed.model_binding == ModelBinding(provider="anthropic", model="claude-haiku-4-5")
 
 
 def test_factory_threads_routing_activation_and_injected_classifier() -> None:
@@ -1670,31 +1700,68 @@ def test_factory_threads_routing_activation_and_injected_classifier() -> None:
 
 
 @pytest.mark.asyncio
-async def test_routing_activation_per_step_override_pins_declarative_not_embedding() -> None:
-    """Codex [P2] regression (relocated to the route-once SELECTION): routing_activation
-    on + an explicit per-step override (`override_applied=True`) + a manifest-MISS →
-    `resolve_routed_binding` returns None (DECLARATIVE is PINNED — the operator's
-    deterministic per-step choice is honored, NOT routed to EMBEDDING). An explicitly
-    customized step is never classifier-hijacked (the coarse `override_applied` proxy
-    errs safe)."""
+async def test_routing_activation_per_step_model_override_pins_declarative_not_embedding() -> None:
+    """B-MODEL-RESOLUTION-CONSOLIDATION §14.6.2 (was the Codex [P2] `override_applied`
+    regression): routing_activation on + a per-step MODEL override
+    (`binding.model_binding_override` set) + a manifest-MISS → `resolve_routed_binding`
+    returns None (DECLARATIVE PINNED — the operator's per-step MODEL choice is honored
+    at the HEAD of the precedence, NOT routed to EMBEDDING). The decline now keys on
+    the MODEL-specific signal, mirroring `_effective_chain`'s per-step branch (the
+    coarse `override_applied` proxy over-declined on a non-model override — see the
+    non-model companion below)."""
     adapter = _AnthropicFakeAdapter(_AnthropicClient())
     tp, _ = _tracer_provider_with_exporter()
     dispatcher = RuntimeLLMDispatcher(
         providers={"anthropic": adapter},
         tracer_provider=tp,
-        routing_activation=True,
         routing_manifest=_routing_manifest_with_roles({}),  # manifest-miss
+        routing_activation=True,
         embedding_classifier=_stub_embedding_classifier,
     )
     overridden = _binding("anthropic", "claude-opus-4-8").model_copy(
-        update={"override_applied": True}
+        update={
+            "override_applied": True,
+            "model_binding_override": ModelBinding(provider="anthropic", model="claude-opus-4-8"),
+        }
     )
     routed = await dispatcher.resolve_routed_binding(
         overridden, _step(), step_context=_step_context()
     )
-    # override_applied → DECLARATIVE pinned → no routing augmentation (None), so the
-    # wrapper keeps the per-step model (opus) — never classifier-hijacked to haiku.
+    # per-step MODEL override → DECLARATIVE pinned → no routing augmentation (None);
+    # the wrapper's `_effective_chain` dispatches the per-step opus (full-chain
+    # witness in test_lifecycle_retry_breaker_fallback.py) — never hijacked to haiku.
     assert routed is None
+
+
+@pytest.mark.asyncio
+async def test_routing_activation_non_model_per_step_override_does_not_block_embedding() -> None:
+    """B-MODEL-RESOLUTION-CONSOLIDATION §14.6.2 — routing_activation on + a per-step
+    override with NO model dimension (`override_applied=True` but
+    `model_binding_override` None — e.g. an hitl/engine-only override) + a role-miss →
+    DECLARATIVE STILL declines (a non-model per-step override must NOT count as a
+    deterministic model binding; the prior coarse `override_applied` proxy
+    over-declined here, spuriously suppressing routing) → EMBEDDING routes to the
+    classifier pick (haiku). The per-step analog of the existing non-model-WORKLOAD
+    witness."""
+    adapter = _AnthropicFakeAdapter(_AnthropicClient())
+    tp, _ = _tracer_provider_with_exporter()
+    dispatcher = RuntimeLLMDispatcher(
+        providers={"anthropic": adapter},
+        tracer_provider=tp,
+        routing_manifest=_routing_manifest_with_roles({}),  # role-miss
+        routing_activation=True,
+        embedding_classifier=_stub_embedding_classifier,
+    )
+    overridden = _binding("anthropic", "claude-opus-4-8").model_copy(
+        update={"override_applied": True}  # NO model_binding_override
+    )
+    routed = await dispatcher.resolve_routed_binding(
+        overridden, _step(), step_context=_step_context()
+    )
+    # non-model per-step override does NOT count → DECLARATIVE declines → EMBEDDING
+    # picks haiku → the wrapper's routed PRIMARY candidate.
+    assert routed is not None
+    assert routed.model_binding == ModelBinding(provider="anthropic", model="claude-haiku-4-5")
 
 
 @pytest.mark.asyncio
@@ -1735,9 +1802,12 @@ async def test_routing_activation_non_model_workload_override_does_not_block_emb
 @pytest.mark.asyncio
 async def test_routing_activation_model_bearing_workload_override_hits_declarative() -> None:
     """A model-BEARING per_workload_overrides entry counts as a DECLARATIVE hit (so
-    EMBEDDING cannot hijack a pinned workload). The dispatched model is the default
-    binding (opus) — status-quo: the override's model is unconsumed everywhere today
-    (flag-off too → no regression); FOLDING it is `B-ROUTING-MANIFEST-MODEL-FOLD`."""
+    EMBEDDING cannot hijack a pinned workload) → `resolve_routed_binding` declines
+    (None) because the per-workload model governs at the wrapper. Under
+    B-MODEL-RESOLUTION-CONSOLIDATION the wrapper's `_effective_chain` NOW CONSUMES the
+    override (dispatches gpt-5.5; full-chain witness in
+    test_lifecycle_retry_breaker_fallback.py) — closing the pre-consolidation
+    unconsumed `B-ROUTING-MANIFEST-MODEL-FOLD` status-quo."""
     adapter = _AnthropicFakeAdapter(_AnthropicClient())
     tp, _ = _tracer_provider_with_exporter()
     manifest = RoutingManifest(
@@ -1763,9 +1833,10 @@ async def test_routing_activation_model_bearing_workload_override_hits_declarati
         _binding("anthropic", "claude-opus-4-8"), _step(), step_context=_step_context()
     )
 
-    # Model-bearing workload override → DECLARATIVE hit (NOT EMBEDDING) → no routing
-    # augmentation (None); the wrapper echoes the default (opus) per the registered-fold
-    # status-quo (`B-ROUTING-MANIFEST-MODEL-FOLD`).
+    # Model-bearing workload override → DECLARATIVE hit (NOT EMBEDDING) → routing
+    # declines (None) because the per-workload model governs; the wrapper's
+    # `_effective_chain` now dispatches the override (gpt-5.5) per the consolidation
+    # (full-chain witness in test_lifecycle_retry_breaker_fallback.py).
     assert routed is None
 
 

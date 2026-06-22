@@ -699,19 +699,33 @@ class RuntimeLLMDispatcher:
         manifest = self.routing_manifest or _EMPTY_ROUTING_MANIFEST
         _workload = self.workload_class or _MVP_DEFAULT_WORKLOAD_CLASS
         _workload_override = manifest.per_workload_overrides.get(_workload)
+        # B-MODEL-RESOLUTION-CONSOLIDATION §14.6.2 — the decline predicate MUST
+        # mirror the wrapper's `_effective_chain` deterministic branches EXACTLY
+        # (per-step MODEL / per-workload MODEL / per-role). It is an order-
+        # independent disjunction, so the per-workload/per-role precedence swap does
+        # not affect it. The decline may be more LENIENT than the authority (a wasted
+        # routing call `_effective_chain` ignores) but NEVER stricter: a stricter
+        # decline returns None while the authority also skips the source ⟹ the model
+        # silently drops to default. Each conjunct pairs with a branch:
+        #   - `model_binding_override is not None`  ⟷ per-step branch
+        #     (was `binding.override_applied` — over-declined on a NON-model
+        #     per-step override [hitl/engine-only], suppressing routing spuriously)
+        #   - the per-workload conjunct ⟷ per-workload branch (same
+        #     `self.workload_class or _MVP_DEFAULT_WORKLOAD_CLASS`)
+        #   - `_role != _MVP_DEFAULT_AGENT_ROLE and _role in per_role_bindings`
+        #     ⟷ per-role branch (the default-role exclusion mirrors the authority)
         _has_deterministic_binding = (
-            binding.override_applied
-            or _role in manifest.per_role_bindings
+            binding.model_binding_override is not None
             or (
                 _workload_override is not None
                 and _workload_override.model_binding_override is not None
             )
+            or (_role != _MVP_DEFAULT_AGENT_ROLE and _role in manifest.per_role_bindings)
         )
         if _has_deterministic_binding:
-            # DECLARATIVE resolves (echoes `binding.model_binding`) → that model IS
-            # the wrapper's existing chain primary; no routing augmentation (the
-            # U-RT-114 per-role / per-step-override path owns the primary — the
-            # precedence the §2.2 hit-invariant encodes).
+            # A higher-than-routed MODEL source governs (per-step / per-workload /
+            # per-role) — the wrapper's `_effective_chain` owns the PRIMARY for it;
+            # routing declines so it fills only the no-override gap.
             return None
         if self.embedding_classifier is None and self.router is None:
             # Nothing to route to (no L2 classifier + no L3 router) → faithful.

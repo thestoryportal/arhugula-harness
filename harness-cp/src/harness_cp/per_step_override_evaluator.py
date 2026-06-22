@@ -136,6 +136,26 @@ class StepEffectiveBinding(BaseModel):
     model_binding: ModelBinding
     """Effective binding — override value or manifest default."""
 
+    model_binding_override: ModelBinding | None = None
+    """v1.50 addition (CP spec v1.50 §6.2; B-MODEL-RESOLUTION-CONSOLIDATION). The
+    resolved per-step MODEL override — the override value when a `StepOverride`
+    for this step carries a `model_binding`, else `None`.
+
+    Unlike `model_binding` (which resolves override-or-manifest-default to a
+    concrete value), this is the `None`-or-override SIGNAL — mirroring
+    `prompt_version_sha` / `agent_role`. It exists because `model_binding` is
+    ALWAYS set (`override.model_binding or default`), so nothing downstream could
+    otherwise distinguish a per-step model *override* from the manifest default.
+    The C-RT-16 fallback wrapper reads this to honour the model-resolution
+    precedence per-step > per-workload > per-role > routed > default (runtime
+    spec §14.5.3/§14.6); `None` means "no per-step model override" → the wrapper
+    falls through to the next precedence source.
+
+    Like `prompt_version_sha`/`agent_role`, this rides `binding.model_dump(...)`
+    into the per-step override state-ledger entry's outcome-hash for step-level
+    provenance (CP spec v1.50 §6.6).
+    """
+
     engine_class: EngineClass
     hitl_placement: HITLPlacement | None = None
     override_applied: bool
@@ -252,6 +272,12 @@ def resolve_step_binding(
         # per-step > fan-out-derived > default), relaxing the §14.5.3 invariant-2/3
         # at composition-time only (single dispatch-read role source preserved).
         agent_role=override.agent_role,
+        # CP spec v1.50 §6.2 — per-step MODEL override SIGNAL
+        # (B-MODEL-RESOLUTION-CONSOLIDATION). `None`-or-override (the override's
+        # own `model_binding`, NOT the resolved `model_binding` above which is
+        # always concrete): the C-RT-16 wrapper reads this to honour per-step at
+        # the head of the model-resolution precedence (runtime §14.5.3/§14.6).
+        model_binding_override=override.model_binding,
     )
 
 
