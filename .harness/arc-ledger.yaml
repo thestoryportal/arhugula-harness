@@ -48,9 +48,16 @@ snapshot:
   frozen_done: 11
   standalone_closed: 33
   standalone_gated: 1
-  standalone_resolved: 3
+  standalone_resolved: 4
   standalone_registered: 2
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
+  # FRONTIER NOTE (PR #705): of the 2 registered + 1 gated forward arcs, ZERO are
+  # Claude-buildable now — both registered (B-HITL-PLACEMENT-PER-STEP-LOOSEN,
+  # B-POSTJOIN-LLM-SYNTHESIS) are operator_gated (committed-decision sacrifices:
+  # monotone-HITL / §25.12 determinism); the 1 gated (B-TAIL-CONDITIONAL-SAMPLING)
+  # is dependency-blocked on R-420/R-421. The buildable standalone B-* frontier is
+  # EXHAUSTED — a principled FULL-SPEC stopping point. Next = operator (a/b/c) fork
+  # per roadmap_status.md (authorize a gate, or declare R-FS-1 build-complete + admit R-CL-Q1).
 
 arcs:
   # ─── FROZEN build order (B1 → … → M), all closed, real as-built units ───
@@ -437,14 +444,25 @@ arcs:
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-INTERSTEP-NONLINEAR
-    title: "Concurrent-fan-out inter-step output recording"
+    title: "Concurrent-fan-out inter-step output recording (RESOLVED-AS-HOLLOW)"
+    kind: standalone
+    status: resolved
+    owner_axis: runtime
+    parent_arc: B-INTERSTEP
+    pr: "#705"
+    resolution: "RESOLVED-AS-HOLLOW (PR #705; runtime spec v1.74 §14.21.7/§14.21.5 prose correction; advisor-confirmed body-read). Recording inter-step output for the 3 CONCURRENT non-linear strategies (ORCHESTRATOR_WORKERS, PARALLELIZATION, HIERARCHICAL_DELEGATION) has NO non-vacuous consumer under the cleared C-CP-25 §25.11/§25.12 deterministic-fold semantics: the concurrent executors compose via DETERMINISTIC folds (_aggregate_orchestrator_workers / _aggregate_parallelization) that receive branch_outputs DIRECTLY, not from the channel, and topology is per-workflow so the fold output is the terminal RunResult — there is NO post-join LLM read and NO subsequent linear step to read most_recent_output(). The aggregate fold docstring states it verbatim: 'there is NO second compose dispatch (that would need the deferred inter-step DATA flow, B-INTERSTEP)'. So channel recording would fail the §14.21.5-invariant-6 non-vacuity bar (a HOLLOW carrier, [[r-cxa-seam-wiring-is-producer-discovery]]). The v1.59 '(orchestrator synthesis post-join) … channel composes once recording lands' framing was a spec-prose-vs-impl drift, corrected at v1.74. The DECENTRALIZED_HANDOFF case it once enumerated already closed at B-INTERSTEP-HANDOFF (#677). The GENUINE capability — a post-join LLM synthesis step reading sibling outputs — makes the fan-out output non-deterministic, contradicting §25.12 → a committed-decision sacrifice → an OPERATOR GATE, registered as the new B-POSTJOIN-LLM-SYNTHESIS arc (NOT a silent build; X-AL-3). Two excavated NON-HOLLOW micro-options were rejected as over-excavation: Option A (record the fan-out aggregate for a subsequent linear step) has no consumer under per-workflow topology (the parent-linear SUB_AGENT_DISPATCH case is already covered by the v1.59 linear recording); only Option B (= B-POSTJOIN-LLM-SYNTHESIS) is the real, gated capability."
+    ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
+
+  - id: B-POSTJOIN-LLM-SYNTHESIS
+    title: "Post-join LLM synthesis step for concurrent fan-out (OPERATOR-GATED on §25.12)"
     kind: standalone
     status: registered
     decompose_at_open: true
-    owner_axis: runtime
-    parent_arc: B-INTERSTEP
-    anticipated_scope: "Inter-step output recording for the 3 CONCURRENT non-linear strategies (ORCHESTRATOR_WORKERS, PARALLELIZATION, HIERARCHICAL_DELEGATION) via the #648 buffered-branch drain (ADR-F2) + the all-siblings post-join read. The sequential DECENTRALIZED_HANDOFF case split out to B-INTERSTEP-HANDOFF (closed). GROUNDING NOTE (2026-06-21, advisor-confirmed at #693 arc-pick): the §14.21.7 'orchestrator synthesis post-join' CONSUMER DOES NOT EXIST — the concurrent executors aggregate via DETERMINISTIC folds (_aggregate_parallelization voting fold; _aggregate_orchestrator_workers deterministic fold over orchestrator+worker outputs), NOT an LLM-dispatched synthesis step, and the fold already gets branch_outputs DIRECTLY (not via the channel). So recording siblings into the inter-step channel would be a HOLLOW CARRIER (the §14.21.5-invariant-6 non-vacuity bar fails). The §14.21.7/§14.21.5 '(orchestrator synthesis post-join)' parenthetical is a spec-prose-vs-impl drift. NON-HOLLOW options at re-open: (A) record the fan-out AGGREGATE as the fan-out step's channel output so a SUBSEQUENT linear LLM step reads it via most_recent_output() (thin, reuses the proven v1.59 consumer; weaker than the registered all-siblings intent), or (B) build a post-join LLM synthesis step — but that CHANGES the ADR-D4 deterministic-fold topology semantics → a Class 1 fork / operator decision, NOT a silent build. Re-open with this disposition + fix the prose drift."
-    why: "Concurrent sibling writes to a shared holder violate ADR-F2 single-threaded-write (need the buffered-branch drain); the registered post-join consumer was assumed to be an LLM synthesis step but is a deterministic fold (see anticipated_scope grounding note) — so the consumer question, not the recording mechanism, is the real fork."
+    owner_axis: "CP + runtime"
+    parent_arc: B-INTERSTEP-NONLINEAR
+    operator_gated: true
+    anticipated_scope: "The genuine inter-step capability the now-RESOLVED-AS-HOLLOW B-INTERSTEP-NONLINEAR gestured at: a post-join LLM SYNTHESIS step for the concurrent fan-out topologies (ORCHESTRATOR_WORKERS / PARALLELIZATION / HIERARCHICAL_DELEGATION) — an LLM-dispatched step that, after the fan-out barrier, reads the sibling branch outputs (via the §14.21 inter-step channel, whose recording becomes non-vacuous ONLY once this consumer exists) and composes a synthesized result. Today these topologies compose via a DETERMINISTIC fold (_aggregate_orchestrator_workers / _aggregate_parallelization) that the C-CP-25 §25.12 contract GUARANTEES is deterministic ('first to finish wins is forbidden'). An LLM synthesis compose makes the fan-out output NON-deterministic → it SACRIFICES the §25.12 determinism guarantee (a committed decision)."
+    why: "OPERATOR-GATED: a committed-decision sacrifice (C-CP-25 §25.12 deterministic-fold composition → non-deterministic LLM compose) with no concrete workflow demanding it. Per CLAUDE.md §13.4 / [[feedback-gate-only-on-meaningful-architecture-change]] a committed-decision sacrifice is precisely the gate condition. Register, do NOT build; surface the §25.12-relaxation request only if a real workflow needs LLM post-join synthesis. The fork: authorize the §25.12 sacrifice (Class-1 topology-semantics) before any build."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-ENGINE-OUTPUT-REPLAY-WAL-SEGMENT
