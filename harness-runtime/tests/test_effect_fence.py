@@ -5,19 +5,25 @@ keeps re-hitting — a wired-but-production-dead surface, cf. B-TOOL-GATE #653):
 
   * `RuntimeEffectFence` mechanics — first claim wins, any re-claim loses, and the
     claim is DURABLE across a fresh instance (a restarted process — the genuine
-    crash-then-resume witness).
-  * The real `RuntimeToolDispatcher` sink fail-closes a re-dispatch of the same
-    effect, firing the underlying tool body EXACTLY ONCE across two dispatches
-    with the same per-(run, step, tool) idempotency key (the key the driver
-    recomputes byte-identically on a resume re-dispatch of an uncommitted step).
+    crash-then-resume witness). Output capture/read round-trips + fails closed on
+    absent/corrupt.
+  * B-EFFECT-FENCE-HITL-ROUTE (§14.22 two-case split, v1.72): a re-dispatch of the
+    same effect that lost the reserve SPLITS on the captured output. Output present
+    (the first dispatch fired + captured before commit) → SUPPRESS-AND-CONTINUE:
+    the sink returns the captured result, NEVER re-firing the tool body (EXACTLY
+    ONCE across two dispatches with the same per-(run, step, tool) idempotency key).
+    Output absent/corrupt (a crash in the fire→capture window) →
+    `EffectFenceAmbiguousUncommittedError` (the driver routes it to a §26.2 PAUSE /
+    FAILED — proven at the harness-cp driver layer). NEVER auto-re-fire either way.
   * The NEGATIVE CONTROL: without the fence, the same two dispatches double-fire
     the tool — the window `_determine_resume_at` cannot close on its own (the
-    prefix-skip protects only COMMITTED steps; the effect fires at
-    `workflow_driver.py:2031`, the per-step ledger commit lands at `:2336`, so a
-    crash in between re-dispatches the effected-but-uncommitted step).
+    prefix-skip protects only COMMITTED steps; the effect fires inside the step,
+    the per-step ledger commit lands after dispatch returns, so a crash in between
+    re-dispatches the effected-but-uncommitted step).
   * The fresh-dispatcher-over-the-same-fence-dir test is the genuine no-proxy
     crash-then-resume proof: a SECOND dispatcher instance (a restarted process)
-    re-dispatching the same effect fail-closes against the on-disk claim.
+    re-dispatching the same effect reads the on-disk captured output and
+    suppress-and-continues against the durable claim.
 """
 
 from __future__ import annotations
@@ -46,7 +52,7 @@ from harness_cp.workflow_driver_types import (
 )
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_runtime.lifecycle.effect_fence import (
-    EffectFenceReservedUncommittedError,
+    EffectFenceAmbiguousUncommittedError,
     RuntimeEffectFence,
 )
 from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
@@ -84,6 +90,38 @@ def test_fresh_fence_instance_sees_prior_claim(tmp_path: Path) -> None:
     assert RuntimeEffectFence(fence_dir=fence_dir).try_reserve("k") is True
     # Simulate a process restart: a brand-new instance over the same directory.
     assert RuntimeEffectFence(fence_dir=fence_dir).try_reserve("k") is False
+
+
+# ---------- output capture/read unit tests (B-EFFECT-FENCE-HITL-ROUTE) ------
+
+
+def test_capture_output_then_read_round_trips(tmp_path: Path) -> None:
+    """`capture_output` persists a validated output that `read_output` returns
+    verbatim — and durably across a fresh instance (a restarted process)."""
+    fence_dir = tmp_path / "fence"
+    payload = {"did": "fire", "nested": [1, 2, {"k": "v"}]}
+    RuntimeEffectFence(fence_dir=fence_dir).capture_output("k", payload)
+    # A brand-new instance over the same directory reads the on-disk output.
+    assert RuntimeEffectFence(fence_dir=fence_dir).read_output("k") == payload
+
+
+def test_read_output_absent_returns_none(tmp_path: Path) -> None:
+    """No captured output for the key → None (the ambiguous case the dispatcher
+    maps to a PAUSE/FAILED, never a suppress source)."""
+    fence = RuntimeEffectFence(fence_dir=tmp_path / "fence")
+    fence.try_reserve("k")  # reserve taken, but NO output captured (fire→capture crash)
+    assert fence.read_output("k") is None
+
+
+def test_read_output_corrupt_returns_none(tmp_path: Path) -> None:
+    """A present-but-corrupt output fails closed to None (defensive — a torn write
+    is NEVER a valid suppress source; `[[durable-recovery-presence-validity-scope]]`)."""
+    fence_dir = tmp_path / "fence"
+    fence = RuntimeEffectFence(fence_dir=fence_dir)
+    fence.capture_output("k", {"did": "fire"})
+    output_file = next(iter(fence_dir.glob("*.output")))
+    output_file.write_bytes(b"{not valid json")
+    assert fence.read_output("k") is None
 
 
 # ---------- real-dispatcher sink fixtures ----------------------------------
@@ -226,9 +264,11 @@ def _step() -> WorkflowStep:
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_fences_redispatch_at_most_once(tmp_path: Path) -> None:
-    """With the fence, a re-dispatch of the same effect fail-closes — the tool
-    body fires EXACTLY ONCE across two dispatches with the same idempotency key."""
+async def test_dispatcher_redispatch_suppress_and_continues(tmp_path: Path) -> None:
+    """THE deliverable (B-EFFECT-FENCE-HITL-ROUTE): the first dispatch fires +
+    captures its validated output; a re-dispatch of the same effect loses the
+    reserve, reads the captured output, and SUPPRESS-AND-CONTINUEs — returning the
+    captured result WITHOUT re-firing. The tool body fires EXACTLY ONCE."""
     fired: list[str] = []
     fence = RuntimeEffectFence(fence_dir=tmp_path / "fence")
     host = await _build_started_counting_host(fired)
@@ -236,13 +276,57 @@ async def test_dispatcher_fences_redispatch_at_most_once(tmp_path: Path) -> None
     try:
         result = await dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
         assert result["tool_id"] == "do_effect"  # first dispatch fired
-        # The resume re-dispatch (same key) — the effect MAY already have fired,
-        # so the fence fail-closes rather than risk a double-execution.
-        with pytest.raises(EffectFenceReservedUncommittedError):
-            await dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+        # The resume re-dispatch (same key): the effect already fired + captured,
+        # so the sink returns the captured output rather than re-firing.
+        result2 = await dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
     finally:
         await host.shutdown()
     assert fired == ["fire"]  # at-most-once — the second dispatch never fired
+    assert result2["response"] == result["response"]  # suppress returns the captured output
+    assert result2["tool_id"] == "do_effect"
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_redispatch_ambiguous_when_output_absent(tmp_path: Path) -> None:
+    """The ambiguous case: the reserve was taken but NO output captured (a crash in
+    the fire→capture window). A re-dispatch raises
+    `EffectFenceAmbiguousUncommittedError` (the driver routes it to PAUSE/FAILED) —
+    NEVER re-firing."""
+    fired: list[str] = []
+    fence_dir = tmp_path / "fence"
+    fence = RuntimeEffectFence(fence_dir=fence_dir)
+    host = await _build_started_counting_host(fired)
+    dispatcher = _dispatcher(host, fence)
+    try:
+        await dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+        # Simulate a crash AFTER the effect fired but BEFORE the output fsync'd:
+        # delete the captured output, leaving only the reserve claim.
+        next(iter(fence_dir.glob("*.output"))).unlink()
+        with pytest.raises(EffectFenceAmbiguousUncommittedError):
+            await dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    finally:
+        await host.shutdown()
+    assert fired == ["fire"]  # at-most-once — the ambiguous re-dispatch never re-fired
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_redispatch_ambiguous_when_output_corrupt(tmp_path: Path) -> None:
+    """Defensive negative control: a present-but-corrupt captured output is NOT a
+    valid suppress source — the re-dispatch fails closed to
+    `EffectFenceAmbiguousUncommittedError`, never re-firing."""
+    fired: list[str] = []
+    fence_dir = tmp_path / "fence"
+    fence = RuntimeEffectFence(fence_dir=fence_dir)
+    host = await _build_started_counting_host(fired)
+    dispatcher = _dispatcher(host, fence)
+    try:
+        await dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+        next(iter(fence_dir.glob("*.output"))).write_bytes(b"{torn")
+        with pytest.raises(EffectFenceAmbiguousUncommittedError):
+            await dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    finally:
+        await host.shutdown()
+    assert fired == ["fire"]  # at-most-once — corrupt output never auto-re-fired
 
 
 @pytest.mark.asyncio
@@ -265,14 +349,15 @@ async def test_dispatcher_without_fence_double_fires(tmp_path: Path) -> None:
 async def test_dispatcher_fence_survives_process_restart(tmp_path: Path) -> None:
     """No-proxy crash-then-resume: a SECOND dispatcher instance (a restarted
     process) over the SAME on-disk fence directory re-dispatching the same effect
-    fail-closes against the durable claim — the effect fires once across the crash."""
+    reads the DURABLE captured output and suppress-and-continues — the effect fires
+    once across the crash, and the restarted run proceeds with the captured result."""
     fence_dir = tmp_path / "fence"
     fired: list[str] = []
 
     host1 = await _build_started_counting_host(fired)
     dispatcher1 = _dispatcher(host1, RuntimeEffectFence(fence_dir=fence_dir))
     try:
-        await dispatcher1.dispatch(_binding(), _step(), step_context=_step_context())
+        result1 = await dispatcher1.dispatch(_binding(), _step(), step_context=_step_context())
     finally:
         await host1.shutdown()
 
@@ -280,9 +365,9 @@ async def test_dispatcher_fence_survives_process_restart(tmp_path: Path) -> None
     host2 = await _build_started_counting_host(fired)
     dispatcher2 = _dispatcher(host2, RuntimeEffectFence(fence_dir=fence_dir))
     try:
-        with pytest.raises(EffectFenceReservedUncommittedError):
-            await dispatcher2.dispatch(_binding(), _step(), step_context=_step_context())
+        result2 = await dispatcher2.dispatch(_binding(), _step(), step_context=_step_context())
     finally:
         await host2.shutdown()
 
     assert fired == ["fire"]  # at-most-once across the process restart
+    assert result2["response"] == result1["response"]  # durable captured output suppresses

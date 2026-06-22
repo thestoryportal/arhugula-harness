@@ -4,8 +4,9 @@ U-CP-62 — first unit of cluster 10-CP-B. Declares the type carriers that the
 C-CP-26 PauseResumeProtocol class body (U-CP-63 capture_pause_snapshot + U-CP-64
 attempt_resume) and the pause/resume span emitter (U-CP-65) consume at runtime:
 
-- `WorkflowPauseReason` — 5-class workflow-layer pause taxonomy (CP spec v1.11
-  §26.2; renamed from `PauseReason` at v1.11 per path γ disambiguation)
+- `WorkflowPauseReason` — 6-class workflow-layer pause taxonomy (CP spec §26.2;
+  renamed from `PauseReason` at v1.11 per path γ disambiguation; EFFECT_FENCE_AMBIGUOUS
+  added for B-EFFECT-FENCE-HITL-ROUTE)
 - `MaterialDiffPolicy` — 3-class material-diff resumption policy (STRICT default
   per Decision 2.D7)
 - `PauseSnapshot` — 8-field pause-snapshot envelope with state-ledger-anchored
@@ -46,7 +47,8 @@ if TYPE_CHECKING:
 
 
 class WorkflowPauseReason(StrEnum):
-    """The 5-class workflow-layer pause reason (CP spec v1.11 §26.2).
+    """The 6-class workflow-layer pause reason (CP spec §26.2; the 5 v1.11 members
+    + EFFECT_FENCE_AMBIGUOUS added for B-EFFECT-FENCE-HITL-ROUTE).
 
     Distinct from the engine-layer `PauseReason` at C-CP-22 §22.1 / U-CP-49.
     Per CP spec v1.11 §26 NEW NOTE: C-CP-22 anchors at engine-native pause +
@@ -70,6 +72,15 @@ class WorkflowPauseReason(StrEnum):
     EXTERNAL_DEPENDENCY = "external_dependency"
     """External dependency unavailable (e.g., MCP server, LLM provider);
     system-triggered pause pending dependency recovery."""
+
+    EFFECT_FENCE_AMBIGUOUS = "effect_fence_ambiguous"
+    """Effect fence (runtime spec §14.22 C-RT-31) lost a reserve to a prior
+    uncommitted attempt of a non-idempotent effect AND found no captured output
+    proving completion (the crash fell in the fire→capture window). Whether the
+    effect fired is ambiguous, so the runtime fails to the operator rather than
+    auto-re-fire (at-most-once). System-triggered, driver-routed pause
+    (B-EFFECT-FENCE-HITL-ROUTE; the runtime ``EffectFenceAmbiguousUncommittedError``
+    name-matched at the §26-driver step-dispatch boundary)."""
 
 
 class MaterialDiffPolicy(StrEnum):

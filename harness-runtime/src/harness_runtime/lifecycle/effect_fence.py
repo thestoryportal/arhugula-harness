@@ -28,24 +28,46 @@ composed ``idempotency_key``:
     fire the effect). ANY later caller of the SAME key loses (``False``) — both
     the cross-process RESUME re-dispatch AND an in-process RETRY (the
     ``RetryBreakerToolDispatcher`` re-calls the bare dispatcher) re-reach the sink
-    with the same key. The sink maps a lost claim to ``EffectFenceReservedUncommittedError``.
+    with the same key. The sink SPLITS a lost claim on the captured output (see
+    Semantic below) — suppress-and-continue when present, PAUSE/FAILED when not.
+  * ``capture_output(key, payload)`` persists the tool's validated output AFTER
+    the effect fires but BEFORE the step commits, keyed on the SAME
+    ``idempotency_key`` and using the SAME crash-atomic claim primitive.
   * COMMIT = the EXISTING per-step ledger entry (one source of truth); the fence
-    adds only the RESERVE (pre-fire) marker. No second commit record.
+    adds the RESERVE (pre-fire) marker + the OUTPUT (post-fire) record. No second
+    commit record.
 
-**Semantic = at-most-once, NOT exactly-once.** A reserve written before a crash
-that fired no effect (the fire-then-crash-before-commit window is genuinely
-ambiguous to the harness) fail-closes the re-dispatch to HITL (§22.1) rather than
-risk a double-execution — the honest residual, mirroring the reconciler's
-fail-closed posture. Genuine *suppress-and-continue* (returning the prior
-output so the resumed run proceeds) awaits the output-carrying substrate of the
-registered ``B-ENGINE-OUTPUT-REPLAY`` arc; until then a fenced re-dispatch raises.
+**Semantic = at-most-once, NOT exactly-once.** A re-dispatch of a lost-reserve
+effect (the fire→commit window the prefix-skip does not cover) splits on the
+captured output (B-EFFECT-FENCE-HITL-ROUTE):
 
-**Operationally surprising (documented, not hidden):** because the fence blocks
-*every* re-entry of a key, a transient ``call_tool`` failure of a non-idempotent
-effect fail-closes its retry instead of retrying. That is the *correct*
-conservative behavior for a non-idempotent effect (you cannot safely retry an
-effect that may already have fired); an idempotent tool does not need the fence
-(per-tool fence opt-in is the registered ``B-EFFECT-FENCE-PER-TOOL`` follow-on).
+  * **output present** (``read_output`` returns it) ⟹ the effect demonstrably
+    completed AND its result is in hand ⟹ *suppress-and-continue*: the sink
+    returns the captured output, the resumed step proceeds as if it ran, and the
+    effect is NOT re-fired.
+  * **output absent or corrupt** ⟹ the crash fell in the fire→capture window, so
+    whether the effect fired is genuinely ambiguous ⟹ fail to the operator: the
+    sink raises ``EffectFenceAmbiguousUncommittedError``, which the workflow
+    driver routes to a §26.2 ``WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS`` PAUSE
+    when a ``PauseResumeProtocol`` is bound, else FAILED (the conservative opt-out
+    default). NEVER an auto-re-fire — auto-proceed happens ONLY on
+    proof-of-completion, which IS the at-most-once guarantee.
+
+This mirrors the reconciler's fail-closed posture on the ambiguous window while
+adding the auto-recover path the captured output makes safe. Output capture uses
+the same crash-atomic ``O_EXCL``/``os.link`` primitive as the reserve, so a torn
+write can only leave an orphan temp, never a half-published output (present ⟹
+complete-and-valid); a present-but-corrupt output (defensive — the atomic link
+makes it impossible) fail-closes to PAUSE, never a valid suppress source.
+
+**Operationally surprising (documented, not hidden):** a transient ``call_tool``
+failure of a non-idempotent effect does NOT capture an output (capture is
+post-validation), so its retry re-reaches the sink with the reserve held and no
+output ⟹ PAUSE (or FAILED when unbound) rather than a blind retry. That is the
+*correct* conservative behavior for a non-idempotent effect (you cannot safely
+retry an effect that may already have fired); an idempotent tool does not need
+the fence (per-tool fence opt-in is the ``B-EFFECT-FENCE-PER-TOOL`` follow-on,
+landed at AS spec v1.12).
 
 **Single-host** (the reconciler's bound posture): the default ``LOCAL_SINGLE_HOST``
 flock-free claim is atomic on a local filesystem. Cross-host effect-fencing is
@@ -56,47 +78,71 @@ F-CC multi-host recovery item — exactly as for the reconciler.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import socket
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 __all__ = [
+    "EffectFenceAmbiguousUncommittedError",
     "EffectFenceProtocol",
-    "EffectFenceReservedUncommittedError",
     "RuntimeEffectFence",
 ]
 
 
-class EffectFenceReservedUncommittedError(Exception):
-    """A re-dispatch reached the tool sink for an effect a prior attempt reserved.
+class EffectFenceAmbiguousUncommittedError(Exception):
+    """A re-dispatch lost the reserve AND no captured output proves completion.
 
     The effect's ``idempotency_key`` was already claimed by a prior attempt that
     did NOT commit (else the step would be prefix-skipped on resume and never
-    re-reach the sink). The external effect MAY already have fired, so re-firing
-    it would risk an at-least-once double-execution. The sink raises this
-    (fail-closed to §22.1 HITL) rather than re-fire — the honest at-most-once
-    posture. NOT a transient class: a retry always re-loses the claim, so the
-    ``RetryBreakerToolDispatcher`` must treat it as permanent.
+    re-reach the sink), AND ``read_output`` found no valid captured output. The
+    crash therefore fell in the fire→capture window, so whether the external
+    effect actually fired is genuinely ambiguous: re-firing risks an at-least-once
+    double-execution, and there is no captured result to suppress-and-continue
+    with. The sink raises this to hand the decision to the operator — the workflow
+    driver routes it to a §26.2 ``WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS``
+    PAUSE when a ``PauseResumeProtocol`` is bound, else FAILED (the conservative
+    opt-out default). NEVER an auto-re-fire. NOT a transient class: a retry always
+    re-loses the claim, so the ``RetryBreakerToolDispatcher`` treats it as
+    permanent (re-raised verbatim).
+
+    (Distinct from the auto-recover path: a lost reserve WITH a present captured
+    output suppresses-and-continues at the sink and never raises.)
     """
 
     def __init__(self, *, idempotency_key: str) -> None:
         self.idempotency_key = idempotency_key
         super().__init__(
-            "effect-fence: idempotency_key already reserved by a prior "
-            "uncommitted attempt; re-firing the non-idempotent effect is "
-            f"foreclosed (at-most-once) — fail-closed to HITL (key={idempotency_key!r})"
+            "effect-fence: idempotency_key reserved by a prior uncommitted "
+            "attempt with NO captured output; whether the non-idempotent effect "
+            "fired is ambiguous — fail to operator (PAUSE/FAILED), never "
+            f"auto-re-fire (at-most-once) (key={idempotency_key!r})"
         )
 
 
 @runtime_checkable
 class EffectFenceProtocol(Protocol):
-    """The reserve-before-fire surface the tool dispatcher consults at the sink."""
+    """The reserve-before-fire + capture-after-fire surface the tool dispatcher
+    consults at the sink."""
 
     def try_reserve(self, idempotency_key: str) -> bool:
         """Atomically claim the effect. ``True`` = won (fresh) → fire; ``False`` =
-        already reserved by a prior attempt → the caller fail-closes."""
+        already reserved by a prior attempt → the caller splits on
+        ``read_output``."""
+        ...
+
+    def capture_output(self, idempotency_key: str, payload: Mapping[str, Any]) -> None:
+        """Durably + atomically record the effect's validated output, keyed on the
+        same ``idempotency_key`` as the reserve. Called post-fire / pre-commit so a
+        captured output always denotes a complete, valid success."""
+        ...
+
+    def read_output(self, idempotency_key: str) -> dict[str, Any] | None:
+        """Return the captured output iff a complete, valid capture exists; ``None``
+        iff ABSENT or CORRUPT (both → the ambiguous case, fail-closed)."""
         ...
 
 
@@ -129,6 +175,15 @@ class RuntimeEffectFence:
         """
         digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
         return self._fence_dir / f"{digest}.claim"
+
+    def _output_file(self, idempotency_key: str) -> Path:
+        """The atomic output file for one effect ``idempotency_key``.
+
+        Same per-(run, step, tool) digest keying as ``_claim_file`` (so claim +
+        output share a run-scoped namespace), a distinct ``.output`` suffix.
+        """
+        digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+        return self._fence_dir / f"{digest}.output"
 
     def try_reserve(self, idempotency_key: str) -> bool:
         """Crash-atomic claim of the effect ``idempotency_key``.
@@ -166,6 +221,69 @@ class RuntimeEffectFence:
                 os.unlink(tmp)
             except OSError:
                 pass
+
+    def capture_output(self, idempotency_key: str, payload: Mapping[str, Any]) -> None:
+        """Crash-atomically persist the effect's validated output (post-fire).
+
+        Mirrors ``try_reserve``'s ``O_EXCL``/``os.link`` crash-atomicity: serialize
+        the payload to a uuid-unique temp (``fsync``-ed), then ``os.link`` it into
+        ``<digest>.output``. A torn write can only leave an orphan temp, never a
+        half-published output, so ``read_output``'s "present" ⟹ "complete-and-valid".
+        The dispatcher calls this AFTER the effect fired and its response passed
+        ``output_schema`` validation, so a captured output is always a valid success
+        result — a re-dispatch may safely return it (suppress-and-continue) without
+        re-validating. Capturing twice (defensive — only the single reserve-winner
+        captures) is a no-op: the first published output wins (``os.link`` raises
+        ``FileExistsError``).
+        """
+        path = self._output_file(idempotency_key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        serialized = json.dumps(dict(payload), sort_keys=True).encode("utf-8")
+        tmp = path.parent / f"{path.name}.{uuid.uuid4().hex}.tmp"
+        try:
+            fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                os.write(fd, serialized)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            try:
+                os.link(tmp, path)
+            except FileExistsError:
+                return  # output already published by this winner → first publish wins
+            self._fsync_dir(path.parent)
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+    def read_output(self, idempotency_key: str) -> dict[str, Any] | None:
+        """Read back the captured output for a reserved effect.
+
+        Returns the deserialized output dict iff a complete, valid capture exists;
+        ``None`` iff ABSENT (no output file — the crash fell before the
+        ``capture_output`` fsync) OR CORRUPT (un-parseable / non-object — defensive;
+        the atomic link makes a half-published output impossible). The dispatcher's
+        two-case split treats ``None`` (absent-or-corrupt) as the ambiguous case →
+        §26.2 PAUSE/FAILED, and a non-``None`` as proof-of-completion →
+        suppress-and-continue. Fail-closed on corrupt: a torn/garbage output is
+        NEVER a valid suppress source.
+        """
+        path = self._output_file(idempotency_key)
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError:
+            return None  # absent → ambiguous
+        try:
+            loaded: Any = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            return None  # corrupt → ambiguous (fail-closed)
+        if not isinstance(loaded, dict):
+            return None  # defensive — a non-object payload is not a valid tool response
+        # A JSON object always has string keys; `capture_output` round-trips the
+        # validated tool response, so this is the same `dict[str, Any]` shape.
+        return cast("dict[str, Any]", loaded)
 
     @staticmethod
     def _fsync_dir(directory: Path) -> None:
