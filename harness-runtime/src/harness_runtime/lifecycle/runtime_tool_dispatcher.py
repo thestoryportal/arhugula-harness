@@ -67,8 +67,8 @@ from harness_runtime.config.provider_secrets import (
 )
 from harness_runtime.lifecycle.cost_record_sink import SupportsCostRecordAppend
 from harness_runtime.lifecycle.effect_fence import (
+    EffectFenceAmbiguousUncommittedError,
     EffectFenceProtocol,
-    EffectFenceReservedUncommittedError,
 )
 from harness_runtime.lifecycle.mcp_client_host import MCPClientHost
 
@@ -929,7 +929,40 @@ class RuntimeToolDispatcher:
                 and _fence_gate_open
                 and not self._effect_fence.try_reserve(idempotency_key)
             ):
-                raise EffectFenceReservedUncommittedError(idempotency_key=idempotency_key)
+                # B-EFFECT-FENCE-HITL-ROUTE (§14.22 two-case split) — the reserve was
+                # lost to a prior uncommitted attempt of THIS effect (a crash-then-
+                # resume re-run of an effected-but-uncommitted step, or an in-process
+                # retry). Split on whether that attempt captured a validated output:
+                captured_output = self._effect_fence.read_output(idempotency_key)
+                if captured_output is not None:
+                    # OUTPUT PRESENT + valid → the effect demonstrably completed AND
+                    # its result is in hand → suppress-and-continue: return the
+                    # captured output, NEVER re-fire `call_tool`. The metadata fields
+                    # are recomputed THIS dispatch (trust/sandbox resolved pre-fence),
+                    # so the wrapper shape is byte-identical to a fresh success return.
+                    # Emit `sandbox.exit` (fail_class="") to BALANCE the `sandbox.enter`
+                    # already emitted pre-fence (the success-path step 9-10 emission) —
+                    # a suppress is a successful dispatch, so its sandbox lifecycle must
+                    # close; no `mcp.tool.call` span (no effect was re-fired). [Codex P2]
+                    sandbox_exit_cm = (
+                        tracer.start_as_current_span("sandbox.exit")
+                        if tracer is not None
+                        else _null_span_cm()
+                    )
+                    with sandbox_exit_cm as sandbox_exit_span:
+                        _set(sandbox_exit_span, ATTR_SANDBOX_FAIL_CLASS, "")
+                    return {
+                        "tool_id": tool_id,
+                        "response": captured_output,
+                        "idempotency_key": idempotency_key,
+                        "trust_decision_reason": trust_eval.decision_reason.value,
+                        "sandbox_tier": sandbox_decision.tier.value,
+                    }
+                # OUTPUT ABSENT or CORRUPT → the crash fell in the fire→capture window
+                # → whether the effect fired is genuinely ambiguous → fail to the
+                # operator (the driver routes to a §26.2 EFFECT_FENCE_AMBIGUOUS PAUSE
+                # when a PauseResumeProtocol is bound, else FAILED). NEVER auto-re-fire.
+                raise EffectFenceAmbiguousUncommittedError(idempotency_key=idempotency_key)
 
             # --- Step 7: invoke + mcp.tool.call span emission ---------------
             # Per AS spec v1.6 §15.9 dual-attribute emission: any MCP-protocol
@@ -1050,6 +1083,19 @@ class RuntimeToolDispatcher:
                 idempotency_key=idempotency_key,
                 step_context=step_context,
             )
+
+            # --- Step 10b: effect-fence output capture (B-EFFECT-FENCE-HITL-ROUTE)
+            # Crash-atomically record the validated output keyed on the same
+            # `idempotency_key` as the reserve — post-fire, post-validation,
+            # post-cost-attribution, BEFORE the step commits. Gated on the SAME
+            # `_fence_gate_open` as the reserve (an idempotent / non-durable
+            # un-fenced dispatch captures nothing → byte-identical to pre-v1.72).
+            # Reaching here with the gate open implies THIS dispatch won the reserve
+            # (a lost reserve returned/raised at step 6b), so the capture is the
+            # winner's. "captured ⟹ cost already attributed (above)" → a re-dispatch
+            # that suppress-and-continues skips cost-attribution exactly once.
+            if self._effect_fence is not None and _fence_gate_open:
+                self._effect_fence.capture_output(idempotency_key, response)
 
             # --- Step 11: wrap response + return ----------------------------
             return {

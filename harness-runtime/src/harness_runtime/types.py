@@ -1382,15 +1382,20 @@ class RuntimeConfig(BaseModel):
     constructs a durable `RuntimeEffectFence` (under `repository_root/.harness/
     effect-fence`) and the `RuntimeToolDispatcher` `try_reserve`s the per-(run,
     step, tool) `idempotency_key` BEFORE `call_tool`: the first dispatch wins (the
-    effect fires), and any re-dispatch of the same effect (a crash-then-resume
-    re-run of an effected-but-uncommitted step, or an in-process retry) loses →
-    `EffectFenceReservedUncommittedError` (fail-closed to §22.1 HITL, never a
-    double-fire). Default `False` → no fence constructed → byte-identical (no
-    reserve, no claim files). Meaningful only under a durable engine class (where a
-    resume re-dispatches uncommitted steps); auto-activation under durable engines
-    is the registered `B-EFFECT-FENCE-DURABLE-AUTO` follow-on. Cf. the reconciler
-    (U-RT-123): single-host, fail-closed residual, COMMIT = the existing per-step
-    ledger entry."""
+    effect fires) and `capture_output`s the validated response post-fire/pre-commit.
+    A re-dispatch of the same effect (a crash-then-resume re-run of an
+    effected-but-uncommitted step, or an in-process retry) loses the reserve and
+    SPLITS on the captured output (B-EFFECT-FENCE-HITL-ROUTE, v1.72): output present
+    → suppress-and-continue (return the captured result, never re-fire); output
+    absent/corrupt → `EffectFenceAmbiguousUncommittedError`, which the workflow
+    driver routes to a §26.2 `WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS` PAUSE when
+    a `PauseResumeProtocol` is bound, else FAILED (no auto-re-fire either way).
+    Default `False` → no fence constructed → byte-identical (no reserve, no claim
+    files). Meaningful only under a durable engine class (where a resume
+    re-dispatches uncommitted steps); auto-activation under durable engines is the
+    `B-EFFECT-FENCE-DURABLE-AUTO` follow-on. Cf. the reconciler (U-RT-123):
+    single-host, fail-closed residual, COMMIT = the existing per-step ledger
+    entry."""
 
     routing_activation: bool = False
     """B-L2-EMBEDDING-ACTIVATION (R-FS-1 standalone arc; C-CP-02 §2.2 — the

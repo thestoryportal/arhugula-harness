@@ -2357,6 +2357,56 @@ def _execute_workflow_body(
                 # Defensive — signal fired but pause_resume_protocol absent.
                 # Per §14.8.8.1 step 0 OR-form precondition this is
                 # unreachable; surface as FAILED for visibility.
+            # B-EFFECT-FENCE-HITL-ROUTE (runtime spec §14.22 two-case split) — the
+            # runtime effect fence lost a reserve to a prior uncommitted attempt of
+            # a non-idempotent effect AND found no captured output proving
+            # completion → whether the effect fired is genuinely ambiguous. The
+            # runtime raises `EffectFenceAmbiguousUncommittedError`; name-matched
+            # here (harness-cp cannot import from harness-runtime per the workspace
+            # dependency graph, mirroring HITLPauseRequestedSignal above). Route to
+            # a §26.2 EFFECT_FENCE_AMBIGUOUS PAUSE when a PauseResumeProtocol is
+            # bound (operator opted into resumable pause); else fall through to the
+            # generic FAILED mapping below — behaviorally equivalent to the pre-v1.72
+            # fail-closed (FAILED, no auto-re-fire; only the fail_class string
+            # differs). NEVER an auto-re-fire on either branch.
+            if (
+                type(exc).__name__ == "EffectFenceAmbiguousUncommittedError"
+                and ctx.pause_resume_protocol is not None
+            ):
+                protocol = cast(PauseResumeProtocol, ctx.pause_resume_protocol)
+                pause_snapshot = _run_protocol_method_sync(
+                    protocol.capture_pause_snapshot(
+                        workflow_id=manifest_entry.workflow_id,
+                        run_id=run_id,
+                        step_index=step_index,
+                        pause_reason=WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS,
+                    )
+                )
+                # PAUSE_CAPTURED effect-fence CP→IS emission. event_kind_index=3
+                # disambiguates the effect-fence pause path from the drain-flag
+                # path (=1) and the HITL-signal path (=2) at the same step_index.
+                _cp_is_wiring = getattr(ctx, "cp_is_wiring", None)
+                if _cp_is_wiring is not None:
+                    _run_protocol_method_sync(
+                        _cp_is_wiring.emit_pause_resume_state_ledger_entry(
+                            workflow_id=manifest_entry.workflow_id,
+                            step_id=str(step_index),
+                            protocol_event_kind=(PauseResumeProtocolEventKind.PAUSE_CAPTURED),
+                            event_sequence_id=(step_index << 2) | 3,
+                            protocol_state_snapshot=(pause_snapshot.model_dump(mode="json")),
+                            actor=ActorIdentity(ctx.ledger_writer.actor.actor_id),
+                        )
+                    )
+                return RunResult(
+                    workflow_id=manifest_entry.workflow_id,
+                    run_id=run_id,
+                    status=RunStatus.PAUSED,
+                    terminal_step_index=(step_index - 1 if step_index > 0 else None),
+                    partial_state=dict(accumulated),
+                    final_state=None,
+                    fail_class=None,
+                    pause_snapshot=pause_snapshot,
+                ), steps_executed
             if not isinstance(exc, Exception):
                 # Unknown BaseException (KeyboardInterrupt, SystemExit, etc.) —
                 # re-raise per Python convention; do not consume.

@@ -74,12 +74,14 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 # ---------- fixtures + helpers ---------------------------------------------
 
 
-def _build_fastmcp_server(register_echo: bool = True) -> FastMCP:
+def _build_fastmcp_server(register_echo: bool = True, *, fired: list[str] | None = None) -> FastMCP:
     server = FastMCP(name="dispatcher-test-srv")
     if register_echo:
 
         @server.tool(description="echo")
         def echo(message: str) -> str:
+            if fired is not None:
+                fired.append(message)  # count every REAL fire (at-most-once witness)
             return f"echoed: {message}"
 
     return server
@@ -131,8 +133,9 @@ async def _build_started_host(
     *,
     idempotent: bool = False,
     tool_contract_converter_override: Any = None,
+    fired: list[str] | None = None,
 ) -> MCPClientHost:
-    server = _build_fastmcp_server(register_echo=register_echo)
+    server = _build_fastmcp_server(register_echo=register_echo, fired=fired)
     host = MCPClientHost(
         transport="stdio",
         server_name="dispatcher-test-srv",
@@ -1139,22 +1142,27 @@ async def _dispatch_echo_twice_with_fence(
     binding_engine_class: EngineClass = EngineClass.PURE_PATTERN_NO_ENGINE,
     idempotent: bool = False,
     tool_contract_converter_override: Any = None,
-) -> tuple[Mapping[str, Any], BaseException | None]:
+) -> tuple[Mapping[str, Any], Mapping[str, Any], list[str]]:
     """Dispatch the same echo TOOL_STEP twice through a real fence; return the first
-    result + whatever the second raised (None if it succeeded). The gate keys on
+    result, the second result, and the tool-fire counter. The gate keys on
     `step_context.run_engine_class` (the RUN engine class); `binding_engine_class` is
     the INDEPENDENT per-step effective binding (the override channel) — they differ in
     the Codex [P2] regression witness. `idempotent` declares the echo tool's contract
     idempotent (B-EFFECT-FENCE-PER-TOOL) → the fence EXEMPTS it from the reserve.
-    `tool_contract_converter_override` drives the PRODUCTION converter (full-chain)."""
-    from harness_runtime.lifecycle.effect_fence import (
-        EffectFenceReservedUncommittedError,
-        RuntimeEffectFence,
-    )
+    `tool_contract_converter_override` drives the PRODUCTION converter (full-chain).
 
+    When the gate is ACTIVE, the first dispatch captures its output and the second
+    SUPPRESS-AND-CONTINUEs (returns the captured output, NO re-fire) → `len(fired)==1`.
+    When the gate is INACTIVE, the second dispatch RE-FIRES → `len(fired)==2`. (Neither
+    raises — the first dispatch always captures, so the ambiguous→raise path is the
+    separate absent/corrupt witness in test_effect_fence.py.)"""
+    from harness_runtime.lifecycle.effect_fence import RuntimeEffectFence
+
+    fired: list[str] = []
     host = await _build_started_host(
         idempotent=idempotent,
         tool_contract_converter_override=tool_contract_converter_override,
+        fired=fired,
     )
     dispatcher = RuntimeToolDispatcher.for_single_host(
         mcp_client_host=host,
@@ -1171,61 +1179,56 @@ async def _dispatch_echo_twice_with_fence(
         first = await dispatcher.dispatch(
             binding, _make_step("echo", {"message": "x"}), step_context=ctx
         )
-        second_error: BaseException | None = None
-        try:
-            await dispatcher.dispatch(
-                binding, _make_step("echo", {"message": "x"}), step_context=ctx
-            )
-        except EffectFenceReservedUncommittedError as exc:
-            second_error = exc
+        second = await dispatcher.dispatch(
+            binding, _make_step("echo", {"message": "x"}), step_context=ctx
+        )
     finally:
         await host.shutdown()
-    return first, second_error
+    return first, second, fired
 
 
 @pytest.mark.asyncio
 async def test_effect_fence_auto_activates_for_durable_run_without_optin(tmp_path: Any) -> None:
     """A durable RUN engine class (EVENT_SOURCED_REPLAY) + `effect_fencing_explicit=
     False` → the fence AUTO-activates: the re-dispatch of the same effect LOSES the
-    claim and fail-closes (`EffectFenceReservedUncommittedError`)."""
-    from harness_runtime.lifecycle.effect_fence import EffectFenceReservedUncommittedError
-
-    first, second_error = await _dispatch_echo_twice_with_fence(
+    claim and SUPPRESS-AND-CONTINUEs (returns the captured output, no re-fire) →
+    the tool body fires EXACTLY ONCE."""
+    first, second, fired = await _dispatch_echo_twice_with_fence(
         run_engine_class=EngineClass.EVENT_SOURCED_REPLAY,
         effect_fencing_explicit=False,
         fence_dir=tmp_path,
     )
     assert first["tool_id"] == "echo"
-    assert isinstance(second_error, EffectFenceReservedUncommittedError)
+    assert fired == ["x"]  # at-most-once — the re-dispatch suppressed, never re-fired
+    assert second["response"] == first["response"]  # suppress returned the captured output
 
 
 @pytest.mark.asyncio
 async def test_effect_fence_skips_non_durable_run_without_optin(tmp_path: Any) -> None:
     """A non-durable RUN engine class (PURE_PATTERN_NO_ENGINE) + `effect_fencing_
-    explicit=False` → NO auto-fence: both dispatches succeed (the gate stays closed,
+    explicit=False` → NO auto-fence: both dispatches RE-FIRE (the gate stays closed,
     no claim — the spec's 'non-durable runs fence-free' carve-out)."""
-    first, second_error = await _dispatch_echo_twice_with_fence(
+    first, _second, fired = await _dispatch_echo_twice_with_fence(
         run_engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         effect_fencing_explicit=False,
         fence_dir=tmp_path,
     )
     assert first["tool_id"] == "echo"
-    assert second_error is None  # fence-free → no at-most-once claim
+    assert fired == ["x", "x"]  # fence-free → double-fire (no at-most-once claim)
 
 
 @pytest.mark.asyncio
 async def test_effect_fence_explicit_optin_fences_non_durable_run(tmp_path: Any) -> None:
     """The operator's explicit `effect_fencing=True` fences EVERY tool step (the
-    pre-v1.60 blanket semantic), even a non-durable run — the re-dispatch fail-closes."""
-    from harness_runtime.lifecycle.effect_fence import EffectFenceReservedUncommittedError
-
-    first, second_error = await _dispatch_echo_twice_with_fence(
+    pre-v1.60 blanket semantic), even a non-durable run — the re-dispatch suppresses."""
+    first, second, fired = await _dispatch_echo_twice_with_fence(
         run_engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,
         effect_fencing_explicit=True,
         fence_dir=tmp_path,
     )
     assert first["tool_id"] == "echo"
-    assert isinstance(second_error, EffectFenceReservedUncommittedError)
+    assert fired == ["x"]  # at-most-once — the re-dispatch suppressed
+    assert second["response"] == first["response"]
 
 
 @pytest.mark.asyncio
@@ -1235,33 +1238,31 @@ async def test_effect_fence_gates_on_run_not_per_step_override(tmp_path: Any) ->
     effective class) STILL fences: the gate keys on the RUN engine class (which
     governs resume/re-dispatch), NOT the per-step effective binding. Without the fix
     the per-step override would wrongly skip the fence → a double-fire window."""
-    from harness_runtime.lifecycle.effect_fence import EffectFenceReservedUncommittedError
-
-    first, second_error = await _dispatch_echo_twice_with_fence(
+    first, _second, fired = await _dispatch_echo_twice_with_fence(
         run_engine_class=EngineClass.WAL_SEGMENT,  # the RUN is durable
         binding_engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,  # a per-step override
         effect_fencing_explicit=False,
         fence_dir=tmp_path,
     )
     assert first["tool_id"] == "echo"
-    assert isinstance(second_error, EffectFenceReservedUncommittedError)
+    assert fired == ["x"]  # at-most-once — gate keyed on the RUN class, fence active
 
 
 @pytest.mark.asyncio
 async def test_effect_fence_exempts_idempotent_tool_under_durable_run(tmp_path: Any) -> None:
     """B-EFFECT-FENCE-PER-TOOL (runtime §14.22.7 / AS C-AS-03 §3.1 v1.12) — a tool whose
     contract declares `idempotent=True` is NOT reserved even under a durable run that
-    auto-activates the fence: both dispatches of the same effect succeed (no at-most-once
+    auto-activates the fence: both dispatches of the same effect RE-FIRE (no at-most-once
     claim), so an idempotent tool is safely retryable. Contrast: the default
     (idempotent=False) durable run fences (test_effect_fence_auto_activates_*)."""
-    first, second_error = await _dispatch_echo_twice_with_fence(
+    first, _second, fired = await _dispatch_echo_twice_with_fence(
         run_engine_class=EngineClass.EVENT_SOURCED_REPLAY,  # durable → fence active
         effect_fencing_explicit=False,
         fence_dir=tmp_path,
         idempotent=True,  # but the tool is declared idempotent → exempt
     )
     assert first["tool_id"] == "echo"
-    assert second_error is None  # exempt → no fence claim → safely retryable
+    assert fired == ["x", "x"]  # exempt → no fence claim → safely re-fired
 
 
 @pytest.mark.asyncio
@@ -1271,14 +1272,14 @@ async def test_effect_fence_exempts_idempotent_tool_under_explicit_optin(tmp_pat
     fence a declared-idempotent tool — there is no effect to double-fire. The exemption
     only ever applies to EXPLICITLY-declared-idempotent tools (default False stays fenced,
     test_effect_fence_explicit_optin_fences_non_durable_run)."""
-    first, second_error = await _dispatch_echo_twice_with_fence(
+    first, _second, fired = await _dispatch_echo_twice_with_fence(
         run_engine_class=EngineClass.PURE_PATTERN_NO_ENGINE,  # non-durable
         effect_fencing_explicit=True,  # operator forces the fence on
         fence_dir=tmp_path,
         idempotent=True,  # but idempotent → still exempt
     )
     assert first["tool_id"] == "echo"
-    assert second_error is None
+    assert fired == ["x", "x"]  # exempt → re-fired (no claim)
 
 
 @pytest.mark.asyncio
@@ -1304,11 +1305,50 @@ async def test_effect_fence_exempts_idempotent_via_production_converter_full_cha
     production_converter = _build_default_policy_converter(
         entry, DeploymentSurface.LOCAL_DEVELOPMENT
     )
-    first, second_error = await _dispatch_echo_twice_with_fence(
+    first, _second, fired = await _dispatch_echo_twice_with_fence(
         run_engine_class=EngineClass.EVENT_SOURCED_REPLAY,  # durable → fence active
         effect_fencing_explicit=False,
         fence_dir=tmp_path,
         tool_contract_converter_override=production_converter,
     )
     assert first["tool_id"] == "echo"
-    assert second_error is None  # production-stamped idempotent → exempt end-to-end
+    assert fired == ["x", "x"]  # production-stamped idempotent → exempt → re-fired end-to-end
+
+
+@pytest.mark.asyncio
+async def test_effect_fence_suppress_path_emits_sandbox_exit_no_mcp_call(tmp_path: Any) -> None:
+    """[Codex P2] The suppress-and-continue early return BALANCES its sandbox lifecycle:
+    the second (suppressed) dispatch emits `sandbox.enter` (pre-fence) AND `sandbox.exit`
+    (the new suppress-path emission), but NO `mcp.tool.call` span (no effect re-fired) —
+    so a suppressed dispatch is not recorded as an unmatched sandbox.enter."""
+    from harness_runtime.lifecycle.effect_fence import RuntimeEffectFence
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    host = await _build_started_host()
+    dispatcher = RuntimeToolDispatcher.for_single_host(
+        mcp_client_host=host,
+        per_server_trust_evaluator=PerServerTrustEvaluator(),
+        mcp_namespace_emitter=_make_emitter(),
+        trust_policy=_make_trust_policy(),
+        sandbox_decision_resolver=_good_sandbox_resolver,
+        effect_fence=RuntimeEffectFence(fence_dir=tmp_path / "effect-fence"),
+        effect_fencing_explicit=True,
+        tracer_provider=provider,
+    )
+    binding = _make_binding()
+    ctx = _make_step_context()
+    try:
+        await dispatcher.dispatch(binding, _make_step("echo", {"message": "x"}), step_context=ctx)
+        exporter.clear()  # isolate the SECOND (suppressed) dispatch's spans
+        suppressed = await dispatcher.dispatch(
+            binding, _make_step("echo", {"message": "x"}), step_context=ctx
+        )
+    finally:
+        await host.shutdown()
+    assert suppressed["tool_id"] == "echo"  # suppress returned the captured output
+    names = {span.name for span in exporter.get_finished_spans()}
+    assert "sandbox.enter" in names  # emitted pre-fence
+    assert "sandbox.exit" in names  # the new suppress-path balance emission
+    assert "mcp.tool.call" not in names  # NO effect re-fired

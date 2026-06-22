@@ -47,7 +47,7 @@ from harness_cp.workflow_driver_types import (
     WorkflowStep,
 )
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
-from harness_runtime.lifecycle.effect_fence import EffectFenceReservedUncommittedError
+from harness_runtime.lifecycle.effect_fence import EffectFenceAmbiguousUncommittedError
 from harness_runtime.lifecycle.retry_breaker import (
     DEFAULT_RETRY_POLICY,
     RuntimeRetryBreaker,
@@ -274,17 +274,18 @@ async def test_transient_fail_then_success_emits_two_inner_spans() -> None:
 
 
 @pytest.mark.asyncio
-async def test_effect_fence_reserved_error_is_not_retried() -> None:
-    """`EffectFenceReservedUncommittedError` fail-fasts the breaker (by-execution).
+async def test_effect_fence_ambiguous_error_is_not_retried() -> None:
+    """`EffectFenceAmbiguousUncommittedError` fail-fasts the breaker (by-execution).
 
     The at-most-once guarantee depends on a re-dispatch NOT being retried into a
     second `call_tool`: the fence error is not in `_TRANSIENT_TOOL_DISPATCH_ERRORS`,
     so the breaker propagates it verbatim after exactly ONE inner attempt (proving
     the §14.22.5 invariant-3 "across BOTH resume and retry" claim by execution,
-    not just by reading the transient allow-list — advisor Check B).
+    not just by reading the transient allow-list — advisor Check B). The driver then
+    routes the verbatim error to a §26.2 PAUSE/FAILED (B-EFFECT-FENCE-HITL-ROUTE).
     """
     tp, _ = _tracer_provider_with_exporter()
-    fence_error = EffectFenceReservedUncommittedError(idempotency_key="run-1:step-0:tool")
+    fence_error = EffectFenceAmbiguousUncommittedError(idempotency_key="run-1:step-0:tool")
     inner = _MockInnerToolDispatcher(outcomes=[fence_error])
     wrapper = RetryBreakerToolDispatcher(
         inner=inner,
@@ -293,7 +294,7 @@ async def test_effect_fence_reserved_error_is_not_retried() -> None:
         sleep_fn=_RecordingSleep(),
     )
 
-    with pytest.raises(EffectFenceReservedUncommittedError):
+    with pytest.raises(EffectFenceAmbiguousUncommittedError):
         await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
 
     # Exactly one inner attempt — the fence error was NOT retried (no re-fire path).

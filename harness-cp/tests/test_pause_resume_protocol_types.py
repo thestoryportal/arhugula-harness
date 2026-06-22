@@ -29,31 +29,34 @@ from pydantic import ValidationError
 # --- AC #1 — WorkflowPauseReason 5-class -----------------------------------
 
 
-def test_workflow_pause_reason_has_exactly_five_members() -> None:
-    """AC #1 — WorkflowPauseReason declares exactly five members."""
-    assert len(WorkflowPauseReason) == 5
+def test_workflow_pause_reason_has_exactly_six_members() -> None:
+    """AC #1 — WorkflowPauseReason declares exactly six members (the 5 v1.11
+    members + EFFECT_FENCE_AMBIGUOUS, added for B-EFFECT-FENCE-HITL-ROUTE)."""
+    assert len(WorkflowPauseReason) == 6
 
 
 def test_workflow_pause_reason_member_values_verbatim() -> None:
-    """AC #1 — member string values match CP spec v1.11 §26.2 verbatim."""
+    """AC #1 — member string values match CP spec §26.2 verbatim."""
     assert {r.value for r in WorkflowPauseReason} == {
         "explicit_operator",
         "hitl_pending",
         "validator_escalation",
         "timeout_boundary",
         "external_dependency",
+        "effect_fence_ambiguous",
     }
 
 
 def test_workflow_pause_reason_member_names() -> None:
     """AC #1 — member names EXPLICIT_OPERATOR / HITL_PENDING / VALIDATOR_ESCALATION
-    / TIMEOUT_BOUNDARY / EXTERNAL_DEPENDENCY per spec §26.2."""
+    / TIMEOUT_BOUNDARY / EXTERNAL_DEPENDENCY / EFFECT_FENCE_AMBIGUOUS per spec §26.2."""
     assert {r.name for r in WorkflowPauseReason} == {
         "EXPLICIT_OPERATOR",
         "HITL_PENDING",
         "VALIDATOR_ESCALATION",
         "TIMEOUT_BOUNDARY",
         "EXTERNAL_DEPENDENCY",
+        "EFFECT_FENCE_AMBIGUOUS",
     }
 
 
@@ -227,15 +230,15 @@ def test_pause_snapshot_forbids_extra_fields() -> None:
 def test_workflow_pause_reason_distinct_from_engine_layer_pause_reason() -> None:
     """Regression gate: WorkflowPauseReason (workflow-layer C-CP-26) is distinct
     from PauseReason (engine-layer C-CP-22 / U-CP-49) per path γ disambiguation.
-    The two enums must not share any member values (5-class vs 4-class with
-    fully disjoint member sets per CP spec v1.11 §26 NEW NOTE coexistence).
+    The two enums must not share any member values (6-class vs 4-class with
+    fully disjoint member sets per CP spec §26 NEW NOTE coexistence).
     """
     from harness_cp.pause_resume_protocol import PauseReason as EngineLayerPauseReason
 
     workflow_layer_values = {r.value for r in WorkflowPauseReason}
     engine_layer_values = {r.value for r in EngineLayerPauseReason}
     assert workflow_layer_values.isdisjoint(engine_layer_values)
-    assert len(workflow_layer_values) == 5
+    assert len(workflow_layer_values) == 6
     assert len(engine_layer_values) == 4
 
 
