@@ -46,10 +46,10 @@
 snapshot:
   frozen_total: 11
   frozen_done: 11
-  standalone_closed: 29
+  standalone_closed: 30
   standalone_gated: 1
   standalone_resolved: 3
-  standalone_registered: 5
+  standalone_registered: 4
   source: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
 arcs:
@@ -524,12 +524,12 @@ arcs:
   - id: B-EFFECT-FENCE-PER-TOOL
     title: "ToolContract idempotency classification for the fence"
     kind: standalone
-    status: registered
-    decompose_at_open: true
+    status: closed
     owner_axis: "AS + runtime"
     parent_arc: B-EFFECT-FENCE
-    anticipated_scope: "A ToolContract idempotency classification so only declared-non-idempotent tools are fenced — a cross-axis AS surface (design-fork-first)."
-    why: "B-EFFECT-FENCE fences by opt-in flag; per-tool classification is the precise control."
+    pr: "#700"
+    spec_delta: "AS spec C-AS-03 §3.1 v1.11 → v1.12 (additive ToolContract.idempotent field) + runtime spec v1.69 → v1.70 §14.22.7 (B-EFFECT-FENCE-PER-TOOL BUILT; fence gate gains AND NOT contract.idempotent). NO operator gate."
+    gives: "The §14.22 C-RT-31 effect fence now EXEMPTS a declared-idempotent tool from the per-(run, step, tool) reserve — only declared-non-idempotent tools are fenced (the §14.22 line-142 stated intent the v1.60 interim over-delivered by fencing every tool). An idempotent tool fires + is safely retryable (the interim fail-closed an idempotent tool's transient retry, over-conservatively). BUILD-not-gate (`[[disposition-label-is-a-claim-verify-against-spec]]`): fence-all-when-active is the conservative IMPL of the at-most-once-for-non-idempotent intent, NOT a committed invariant; §14.22.7 NAMED this follow-on (the DURABLE-AUTO named-follow-on-is-BUILD precedent). Advisor's tool-intrinsic-vs-invocation-dependent catch was load-bearing: idempotency for a write is (tool,args)-dependent (why the fence keys per-invocation), so the per-tool flag is sound ONLY as a STRICT all-invocations property; default False = conservative fence-by-default. Mechanism: one conjunct at the existing fence gate (`AND NOT contract.idempotent`; contract already in scope; dispatch signature unchanged) + cross-axis threading mirroring the v1.11 forces_* precedent (ToolContract.idempotent + RawContractInput.idempotent + converter + per-server MCPClientConfig.default_idempotent stamped by the stage-3a MCPToolContractConverter). idempotent does NOT enter the C-AS-02 §2.3 sandbox_tier_floor (fence-only). Witnesses (harness-as 318 + harness-runtime non-e2e passed; pyright 0/0/0): idempotent tool under a durable run NOT fenced (re-dispatch fires twice) + exempt under explicit opt-in too + default-False negative controls unchanged + AS converter threads idempotent + the PRODUCTION per-server `default_idempotent` → host-factory converter stamps `ToolContract.idempotent=True` (+ defaults-False negative) AND a FULL-CHAIN witness through the real `_build_default_policy_converter` → host registry → fence exempts (no proxy converter — `[[full-chain-witness-not-half-proofs]]`, the advisor's pre-push catch: the discovered-tool path's over-applying direction = fence silently disabled = unsafe, so witnessed end-to-end). advisor (BUILD-vs-gate discriminator + tool-intrinsic strict-semantic catch + the production-path full-chain-witness pre-push catch) + out-of-family Codex (only the expected §12.2.1 dashboard-lag [P2]). B-EFFECT-FENCE-HITL-ROUTE is now the sole registered §14.22.7 follow-on."
     ledger_ref: ".harness/beyond-mvp-capability-boundary-ledger.md"
 
   - id: B-EFFECT-FENCE-DURABLE-AUTO

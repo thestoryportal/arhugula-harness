@@ -910,9 +910,20 @@ class RuntimeToolDispatcher:
             # for a step the RUN still resumes + re-dispatches (Codex [P2]). What
             # governs resume is the run engine class. `None` (unset / non-driver path)
             # → not in the durable set → gate closed (safe default).
-            _fence_gate_open = self._effect_fencing_explicit or (
-                step_context.run_engine_class in _DURABLE_AUTO_FENCE_ENGINE_CLASSES
-            )
+            #
+            # B-EFFECT-FENCE-PER-TOOL (AS spec C-AS-03 §3.1 v1.12 / runtime spec
+            # §14.22.7) — a tool whose contract declares `idempotent=True` is EXEMPT
+            # from the reserve even when the gate is open: re-executing it produces no
+            # additional external effect, so it fires + is safely retryable (the
+            # interim fence over-fenced ALL tools + over-conservatively fail-closed an
+            # idempotent tool's transient retry). Default `idempotent=False` → fenced
+            # (byte-identical to pre-v1.12). The strict tool-intrinsic all-invocations
+            # semantic is the contract author's assertion (AS §3.1); the harness keys
+            # the exemption off it, the conservative default protecting undeclared tools.
+            _fence_gate_open = (
+                self._effect_fencing_explicit
+                or (step_context.run_engine_class in _DURABLE_AUTO_FENCE_ENGINE_CLASSES)
+            ) and not contract.idempotent
             if (
                 self._effect_fence is not None
                 and _fence_gate_open

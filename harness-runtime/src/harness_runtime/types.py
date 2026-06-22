@@ -670,6 +670,17 @@ class MCPClientConfig(BaseModel):
     surface default + blast floor), stamped by the stage-3a converter (B6 Slice 2).
     Conservative default `False`."""
 
+    default_idempotent: bool = False
+    """Operator-declared per-server default for `ToolContract.idempotent` (AS spec
+    C-AS-03 §3.1 v1.12 — `B-EFFECT-FENCE-PER-TOOL`), stamped by the stage-3a converter
+    onto every discovered tool. When the runtime effect fence (§14.22 / §14.22.7) is
+    active for a run, a tool with `idempotent=True` is NOT reserved (fires + retryable;
+    re-execution has no additional effect). MCP advertisements carry no idempotency
+    semantics, so this per-server default is the policy source for discovered tools (a
+    read-only data server declares `default_idempotent=True`; a heterogeneous server
+    supplies a custom `MCPToolContractConverter` for per-tool granularity). Conservative
+    default `False` → fenced (byte-identical to pre-v1.12). NOT a sandbox discriminator."""
+
     default_sandbox_tier: SandboxTier | None = None
     """Operator-declared per-server default *resolved* sandbox tier (Reading B,
     spec v1.41 §14.9.8). The stage-5 factory builds a per-server default-policy
