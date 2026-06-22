@@ -101,6 +101,46 @@ class MaterialDiffPolicy(StrEnum):
     """Any diff escalates to HITL for operator arbitration."""
 
 
+class EffectFenceResolution(StrEnum):
+    """The operator's resume-side resolution of a §26.2 `EFFECT_FENCE_AMBIGUOUS` pause.
+
+    B-EFFECT-FENCE-PAUSE-RESOLUTION (R-FS-1) — the §14.22 C-RT-31 effect fence
+    pauses (via `WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS`) when a re-dispatch
+    lost the per-(run, step, tool) reserve AND no captured output proves the
+    non-idempotent effect completed: whether the effect fired is genuinely
+    ambiguous and the harness CANNOT compute the answer (the crash fell in the
+    fire→capture window). The fence pauses *to ask the operator one question — did
+    the effect fire?* These three resolutions are the operator ANSWERING with
+    ground-truth the harness lacks (e.g. checking whether the email was sent / the
+    git push landed). Delivered one-shot via `ResumeContext.effect_fence_resolution`
+    on `api.resume`; key-bound to the paused effect via
+    `PauseSnapshot.effect_fence_resume.idempotency_key`.
+
+    Answering the fence's question is IN-DOMAIN — it COMPLETES the at-most-once
+    decision the harness couldn't compute, it does NOT override the guarantee. A
+    mis-assertion is operator-error responsibility (the C-AS-03 `idempotent` /
+    `blast_radius_tier` mis-declaration posture).
+    """
+
+    SKIP_AS_FIRED = "skip_as_fired"
+    """Operator asserts the effect FIRED (the prior attempt fired, then crashed
+    before capturing its output). Proceed treating the step as complete — but the
+    lost output is genuinely unrecoverable, so the step yields EMPTY output. NEVER
+    re-fires the effect. Downstream consumers that needed the lost output fail
+    honestly (the data is gone)."""
+
+    RE_FIRE = "re_fire"
+    """Operator asserts the effect did NOT fire (the prior attempt claimed the
+    reserve, then crashed before firing). Clear the held claim and re-dispatch the
+    step fresh — a FIRST-and-only execution, still at-most-once from the true state
+    of the world. The operator supplies the ground-truth the fence couldn't compute."""
+
+    ABORT = "abort"
+    """Operator cannot determine whether the effect fired (or chooses not to
+    proceed). Fail the run terminally (the conservative default — never re-fire,
+    never proceed-with-empty)."""
+
+
 class FanOutBranchResumeState(BaseModel):
     """Per-branch terminal disposition + recovered output for a paused fan-out.
 
@@ -400,6 +440,53 @@ class EvaluatorOptimizerResumeState(BaseModel):
     construction (an accept would have terminated the loop SUCCESS, not paused)."""
 
 
+class EffectFenceResumeState(BaseModel):
+    """Effect-fence ambiguous-pause resume reconstruction state (the held claim key).
+
+    B-EFFECT-FENCE-PAUSE-RESOLUTION (R-FS-1) — the linear/TOOL_STEP analogue of the
+    four fan-out resume carriers, present ONLY when this snapshot captures a §14.22
+    C-RT-31 effect-fence `WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS` pause. Unlike
+    the fan-out carriers (which recover completed-branch/step OUTPUTS), the effect
+    fence's pause has NO recoverable output by definition (the ambiguity is precisely
+    that no output was captured); the only state to carry is the per-(run, step, tool)
+    `idempotency_key` of the held reserve, so the resumed dispatch can KEY-BIND the
+    operator's resolution to the exact paused effect (apply it only when the recomputed
+    dispatch key matches). NEVER co-set with `fan_out_resume` / `peer_fan_out_resume` /
+    `handoff_resume` / `evaluator_optimizer_resume` (a fence pause is linear/TOOL_STEP)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    idempotency_key: str
+    """The per-(run, step, tool) `idempotency_key` of the reserve the paused dispatch
+    lost (the §14.22 fence claim key). Carried so `api.resume` key-binds the operator's
+    `EffectFenceResolution` to THIS effect: the resumed dispatch applies the resolution
+    ONLY when its recomputed key matches this value, then consumes it. COVERED by
+    `_compute_snapshot_hash` (a resumed resolution trusts it → integrity-checked)."""
+
+
+class EffectFenceResolutionDirective(BaseModel):
+    """The key-bound resolution the driver threads to the resumed dispatch.
+
+    B-EFFECT-FENCE-PAUSE-RESOLUTION (R-FS-1) — pairs the operator's
+    `EffectFenceResolution` (from `ResumeContext.effect_fence_resolution`) with the
+    `idempotency_key` it is bound to (from `PauseSnapshot.effect_fence_resume`), so the
+    resolution and its target travel together (illegal-state-unrepresentable: a
+    resolution without its key cannot exist). Set by the CP driver on the resumed
+    linear step's `StepExecutionContext.effect_fence_resolution` (hash-inert); read by
+    the runtime tool dispatcher at the §14.22 fence gate, which applies it ONLY when the
+    recomputed dispatch key equals `idempotency_key` (the key-bind), then it is naturally
+    one-shot (set on the resumed step's context only)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    resolution: EffectFenceResolution
+    """The operator's resume-side resolution (skip-as-fired / re-fire / abort)."""
+
+    idempotency_key: str
+    """The per-(run, step, tool) key this resolution is bound to. The dispatcher applies
+    the resolution only when its recomputed key matches this (key-bind)."""
+
+
 class PauseSnapshot(BaseModel):
     """8-field pause-snapshot envelope (CP spec v1.11 §26.2).
 
@@ -487,6 +574,19 @@ class PauseSnapshot(BaseModel):
     integrity contract); `api.resume` re-enters `_execute_evaluator_optimizer` with it
     (the completed-step prefix's outputs recovered + their dispatch skipped; the loop
     re-dispatches from the failed step onward, honoring the original iteration cap)."""
+
+    effect_fence_resume: EffectFenceResumeState | None = None
+    """B-EFFECT-FENCE-PAUSE-RESOLUTION (R-FS-1) — the §14.22 C-RT-31 effect-fence
+    analogue of the four fan-out resume carriers, present ONLY when this snapshot
+    captures a `WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS` pause (`None` otherwise —
+    additive, default-None, so every existing snapshot is byte-unchanged). NEVER co-set
+    with the four fan-out carriers: a fence pause is linear/TOOL_STEP, the fan-out
+    strategies populate exactly one of the others. Carries the held reserve's
+    `idempotency_key` (no recoverable output — that absence IS the ambiguity); COVERED
+    by `_compute_snapshot_hash` when present (same integrity contract). `api.resume`
+    key-binds the operator's `ResumeContext.effect_fence_resolution` to it (skip-as-fired
+    → empty-output proceed / re-fire → clear the claim + fresh dispatch / abort →
+    FAILED)."""
 
 
 class PausedChildBranchResumeState(BaseModel):
@@ -590,6 +690,16 @@ class ResumeContext(BaseModel):
     operator has delivered a response via the inbound webhook endpoint.
     HITLResult shape canonical at C-CP-17 §17.1.1 (`harness_cp.hitl_placement`).
     """
+
+    effect_fence_resolution: EffectFenceResolution | None = None
+    """Operator resolution of a §26.2 `WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS`
+    pause (B-EFFECT-FENCE-PAUSE-RESOLUTION). `None` when the pause was not an
+    effect-fence pause (e.g. a HITL / EXPLICIT_OPERATOR pause — the `hitl_response`
+    field carries those). When set on a resume of an effect-fence pause, the driver
+    key-binds it (via `PauseSnapshot.effect_fence_resume.idempotency_key`) and threads
+    it to the resumed linear step's dispatch: SKIP_AS_FIRED → proceed with empty output
+    (never re-fire); RE_FIRE → clear the held claim + re-dispatch fresh; ABORT → FAILED.
+    Mutually exclusive in practice with `hitl_response` (a pause has one reason)."""
 
 
 # B-HIERARCHICAL-PAUSE (R-FS-1) — `FanOutResumeState.paused_child_branches` forward-refs

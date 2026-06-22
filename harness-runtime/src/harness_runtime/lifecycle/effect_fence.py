@@ -87,6 +87,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast, runtime_checkable
 
 __all__ = [
+    "EffectFenceAbortedError",
     "EffectFenceAmbiguousUncommittedError",
     "EffectFenceProtocol",
     "RuntimeEffectFence",
@@ -123,6 +124,27 @@ class EffectFenceAmbiguousUncommittedError(Exception):
         )
 
 
+class EffectFenceAbortedError(Exception):
+    """The operator resolved an ambiguous effect-fence pause with ABORT.
+
+    B-EFFECT-FENCE-PAUSE-RESOLUTION: on resume of a §26.2 EFFECT_FENCE_AMBIGUOUS
+    pause, the operator chose ABORT (cannot determine whether the effect fired, or
+    declines to proceed). The dispatcher raises this terminal marker; the workflow
+    driver name-matches it at the step-dispatch boundary and maps it to FAILED (the
+    conservative terminal — never re-fire, never proceed-with-empty). Distinct from
+    ``EffectFenceAmbiguousUncommittedError`` (which the driver routes to a resumable
+    PAUSE): ABORT is the operator's terminal decision, so it does NOT re-pause. NOT a
+    transient class — the ``RetryBreakerToolDispatcher`` re-raises it verbatim.
+    """
+
+    def __init__(self, *, idempotency_key: str) -> None:
+        self.idempotency_key = idempotency_key
+        super().__init__(
+            "effect-fence: operator resolved the ambiguous pause with ABORT — "
+            f"fail the run terminally, never re-fire (key={idempotency_key!r})"
+        )
+
+
 @runtime_checkable
 class EffectFenceProtocol(Protocol):
     """The reserve-before-fire + capture-after-fire surface the tool dispatcher
@@ -143,6 +165,21 @@ class EffectFenceProtocol(Protocol):
     def read_output(self, idempotency_key: str) -> dict[str, Any] | None:
         """Return the captured output iff a complete, valid capture exists; ``None``
         iff ABSENT or CORRUPT (both → the ambiguous case, fail-closed)."""
+        ...
+
+    def clear_claim(self, idempotency_key: str) -> None:
+        """Remove the held claim (+ any captured output) so a subsequent
+        ``try_reserve`` wins and the effect re-fires fresh. The RE_FIRE resolution
+        path. Missing-ok (idempotent)."""
+        ...
+
+    def try_consume_refire(self, idempotency_key: str) -> bool:
+        """Atomically claim the ONE re-fire for this effect. ``True`` = THIS call won
+        the re-fire latch (the FIRST RE_FIRE attempt → clear the stale claim + fire
+        fresh); ``False`` = the latch was already taken (a RETRY of the re-fire, or a
+        crash-then-resume after a re-fire began) → do NOT clear, fall through to the
+        normal fence flow (the re-fire's own claim is held → suppress/ambiguous), so a
+        retryable error during the re-fire can NEVER double-fire the effect."""
         ...
 
 
@@ -185,6 +222,17 @@ class RuntimeEffectFence:
         digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
         return self._fence_dir / f"{digest}.output"
 
+    def _refire_file(self, idempotency_key: str) -> Path:
+        """The atomic re-fire latch for one effect ``idempotency_key``.
+
+        Same per-(run, step, tool) digest keying as ``_claim_file`` (so the latch
+        shares the run-scoped namespace), a distinct ``.refire`` suffix. A one-way
+        latch: once set, RE_FIRE is consumed for this key — a retry / crash-resume of
+        the re-fire can never clear-and-re-fire again (the double-fire Codex [P1]).
+        """
+        digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+        return self._fence_dir / f"{digest}.refire"
+
     def try_reserve(self, idempotency_key: str) -> bool:
         """Crash-atomic claim of the effect ``idempotency_key``.
 
@@ -214,6 +262,41 @@ class RuntimeEffectFence:
                 os.link(tmp, path)
             except FileExistsError:
                 return False  # the effect is already reserved → lose the claim
+            self._fsync_dir(path.parent)
+            return True
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+    def try_consume_refire(self, idempotency_key: str) -> bool:
+        """Atomically claim the ONE re-fire for this effect (the same crash-atomic
+        ``O_EXCL``/``os.link`` primitive as ``try_reserve``, on the ``.refire`` latch).
+
+        Returns ``True`` iff THIS call won the latch (the FIRST RE_FIRE attempt → the
+        caller clears the stale claim + fires fresh); ``False`` iff the latch was
+        already taken (a ``RetryBreakerToolDispatcher`` retry of the re-fire reusing
+        the same ``step_context``, or a crash-then-resume after a re-fire began) → the
+        caller does NOT clear, so ``try_reserve`` loses to the re-fire's own held claim
+        and the normal split (suppress-if-captured / ambiguous-PAUSE) applies. This is
+        the durable consume-once that stops a retryable error during the re-fire from
+        double-firing the non-idempotent effect (Codex [P1]).
+        """
+        path = self._refire_file(idempotency_key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.parent / f"{path.name}.{uuid.uuid4().hex}.tmp"
+        try:
+            fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                os.write(fd, f"{socket.gethostname()}:{os.getpid()}".encode())
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            try:
+                os.link(tmp, path)
+            except FileExistsError:
+                return False  # the re-fire latch is already taken → do NOT re-clear
             self._fsync_dir(path.parent)
             return True
         finally:
@@ -284,6 +367,22 @@ class RuntimeEffectFence:
         # A JSON object always has string keys; `capture_output` round-trips the
         # validated tool response, so this is the same `dict[str, Any]` shape.
         return cast("dict[str, Any]", loaded)
+
+    def clear_claim(self, idempotency_key: str) -> None:
+        """Remove the held claim + any captured output for an effect.
+
+        The RE_FIRE resolution path (B-EFFECT-FENCE-PAUSE-RESOLUTION): the operator
+        asserts the effect did NOT fire (the prior attempt claimed the reserve, then
+        crashed before firing), so clearing the held reserve lets the resumed dispatch's
+        ``try_reserve`` WIN and fire the effect as a FIRST-and-only execution (still
+        at-most-once from the true state of the world). The inverse of ``try_reserve``:
+        unlink both the ``<digest>.claim`` and any ``<digest>.output`` (an ambiguous
+        pause has no valid output, but a corrupt one may exist — clear it too so the
+        fresh dispatch's ``capture_output`` is not shadowed). Missing-ok (idempotent):
+        a re-resume that already cleared + re-fired is a no-op here.
+        """
+        self._claim_file(idempotency_key).unlink(missing_ok=True)
+        self._output_file(idempotency_key).unlink(missing_ok=True)
 
     @staticmethod
     def _fsync_dir(directory: Path) -> None:

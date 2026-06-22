@@ -62,6 +62,21 @@ class ResumeContextHolder(BaseModel):
         """
         self._current_context = resume_context
 
+    def peek(self) -> ResumeContext | None:
+        """Return the current resume context WITHOUT clearing it.
+
+        B-EFFECT-FENCE-PAUSE-RESOLUTION: the CP driver peeks (does NOT consume) to
+        extract `effect_fence_resolution` for an effect-fence-ambiguous-pause resume,
+        leaving the holder intact so the runtime HITL composer's one-shot
+        ``consume_and_clear()`` is unaffected (a step that has both a HITL gate and a
+        fenced tool dispatch still delivers its HITL response). For an effect-fence
+        pause the `hitl_response` is None anyway (a pause has one reason), so the two
+        readers never contend for the same field. The driver only peeks when the
+        snapshot carries `effect_fence_resume` (an effect-fence pause), so a HITL-only
+        resume never reaches this path.
+        """
+        return self._current_context
+
     def consume_and_clear(self) -> ResumeContext | None:
         """Atomically return the current resume context AND clear to None.
 

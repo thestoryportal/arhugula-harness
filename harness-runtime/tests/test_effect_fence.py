@@ -42,6 +42,10 @@ from harness_cp.mcp_client_namespace_emitter import (
     MCPClientNamespaceEmitter,
     MCPServerInfo,
 )
+from harness_cp.pause_resume_protocol_types import (
+    EffectFenceResolution,
+    EffectFenceResolutionDirective,
+)
 from harness_cp.per_server_trust_evaluator import PerServerTrustEvaluator
 from harness_cp.per_server_trust_types import TierDerivationRule, TrustPolicy
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
@@ -52,6 +56,7 @@ from harness_cp.workflow_driver_types import (
 )
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_runtime.lifecycle.effect_fence import (
+    EffectFenceAbortedError,
     EffectFenceAmbiguousUncommittedError,
     RuntimeEffectFence,
 )
@@ -225,7 +230,9 @@ def _dispatcher(host: MCPClientHost, fence: RuntimeEffectFence | None) -> Runtim
     )
 
 
-def _step_context() -> StepExecutionContext:
+def _step_context(
+    effect_fence_resolution: EffectFenceResolutionDirective | None = None,
+) -> StepExecutionContext:
     return StepExecutionContext(
         workflow_id="wf-1",
         parent_action_id="workflow:wf-1:step:0",
@@ -239,6 +246,7 @@ def _step_context() -> StepExecutionContext:
         parent_idempotency_key="run-1:step-0",
         tenant_id=None,
         step_index=0,
+        effect_fence_resolution=effect_fence_resolution,
     )
 
 
@@ -371,3 +379,174 @@ async def test_dispatcher_fence_survives_process_restart(tmp_path: Path) -> None
 
     assert fired == ["fire"]  # at-most-once across the process restart
     assert result2["response"] == result1["response"]  # durable captured output suppresses
+
+
+# ---------- clear_claim unit (the RE_FIRE substrate) -----------------------
+
+
+def test_clear_claim_removes_held_claim_then_reserve_wins(tmp_path: Path) -> None:
+    """`clear_claim` removes the REAL held claim file (not a no-op) so a subsequent
+    `try_reserve` WINS — the RE_FIRE substrate (B-EFFECT-FENCE-PAUSE-RESOLUTION).
+    Witnessed at the file level AND behaviorally."""
+    fence_dir = tmp_path / "fence"
+    fence = RuntimeEffectFence(fence_dir=fence_dir)
+    assert fence.try_reserve("k") is True  # claim held
+    assert fence.try_reserve("k") is False  # held → a re-reserve LOSES
+    assert list(fence_dir.glob("*.claim"))  # the claim file EXISTS (held)
+    fence.clear_claim("k")
+    assert not list(fence_dir.glob("*.claim"))  # clear_claim REMOVED the real file
+    assert fence.try_reserve("k") is True  # cleared → a fresh reserve WINS (re-fire fresh)
+
+
+def test_clear_claim_also_removes_captured_output(tmp_path: Path) -> None:
+    """`clear_claim` removes any captured output too, so a re-fire's fresh
+    `capture_output` is not shadowed by a stale/corrupt prior output."""
+    fence = RuntimeEffectFence(fence_dir=tmp_path / "fence")
+    fence.try_reserve("k")
+    fence.capture_output("k", {"did": "fire"})
+    assert fence.read_output("k") == {"did": "fire"}
+    fence.clear_claim("k")
+    assert fence.read_output("k") is None  # output gone with the claim
+
+
+def test_clear_claim_missing_ok(tmp_path: Path) -> None:
+    """`clear_claim` is idempotent — clearing an absent claim is a no-op (a re-resume
+    that already cleared + re-fired)."""
+    fence = RuntimeEffectFence(fence_dir=tmp_path / "fence")
+    fence.clear_claim("never-claimed")  # no raise
+    assert fence.try_reserve("never-claimed") is True
+
+
+# ---------- resume-side resolution witnesses (B-EFFECT-FENCE-PAUSE-RESOLUTION) ----
+
+
+async def _ambiguous_state(dispatcher: RuntimeToolDispatcher, fence_dir: Path) -> str:
+    """Drive the dispatcher to the ambiguous state: the first dispatch fires +
+    captures, then delete the output file → claim held, NO output (the crash-in-
+    fire→capture-window state). Return the held reserve's idempotency_key (off the
+    first dispatch's result wrapper) so a witness can key-bind a resolution to it."""
+    result = await dispatcher.dispatch(_binding(), _step(), step_context=_step_context())
+    next(iter(fence_dir.glob("*.output"))).unlink()
+    return result["idempotency_key"]
+
+
+@pytest.mark.asyncio
+async def test_resolution_re_fire_clears_claim_and_fires_fresh(tmp_path: Path) -> None:
+    """RE_FIRE: the operator asserts the effect did NOT fire → the dispatcher clears
+    the held claim and fires the effect FRESH (a first-and-only execution). The tool
+    body fires AGAIN (vs the ambiguous-raise without a resolution)."""
+    fired: list[str] = []
+    fence_dir = tmp_path / "fence"
+    host = await _build_started_counting_host(fired)
+    dispatcher = _dispatcher(host, RuntimeEffectFence(fence_dir=fence_dir))
+    try:
+        key = await _ambiguous_state(dispatcher, fence_dir)
+        directive = EffectFenceResolutionDirective(
+            resolution=EffectFenceResolution.RE_FIRE, idempotency_key=key
+        )
+        result2 = await dispatcher.dispatch(
+            _binding(), _step(), step_context=_step_context(directive)
+        )
+    finally:
+        await host.shutdown()
+    assert fired == ["fire", "fire"]  # RE_FIRE re-fired fresh (the claim was cleared)
+    assert result2["tool_id"] == "do_effect"
+
+
+@pytest.mark.asyncio
+async def test_resolution_skip_as_fired_empty_output_no_refire(tmp_path: Path) -> None:
+    """SKIP_AS_FIRED: the operator asserts the effect FIRED; its output is
+    unrecoverable → proceed with EMPTY output, NEVER re-fire."""
+    fired: list[str] = []
+    fence_dir = tmp_path / "fence"
+    host = await _build_started_counting_host(fired)
+    dispatcher = _dispatcher(host, RuntimeEffectFence(fence_dir=fence_dir))
+    try:
+        key = await _ambiguous_state(dispatcher, fence_dir)
+        directive = EffectFenceResolutionDirective(
+            resolution=EffectFenceResolution.SKIP_AS_FIRED, idempotency_key=key
+        )
+        result2 = await dispatcher.dispatch(
+            _binding(), _step(), step_context=_step_context(directive)
+        )
+    finally:
+        await host.shutdown()
+    assert fired == ["fire"]  # SKIP_AS_FIRED never re-fired
+    assert result2["response"] == {}  # empty output (the lost output is unrecoverable)
+    assert result2["tool_id"] == "do_effect"
+
+
+@pytest.mark.asyncio
+async def test_resolution_abort_raises_aborted_error_no_refire(tmp_path: Path) -> None:
+    """ABORT: the operator cannot determine whether the effect fired → the dispatcher
+    raises `EffectFenceAbortedError` (the driver maps it to FAILED); never re-fires."""
+    fired: list[str] = []
+    fence_dir = tmp_path / "fence"
+    host = await _build_started_counting_host(fired)
+    dispatcher = _dispatcher(host, RuntimeEffectFence(fence_dir=fence_dir))
+    try:
+        key = await _ambiguous_state(dispatcher, fence_dir)
+        directive = EffectFenceResolutionDirective(
+            resolution=EffectFenceResolution.ABORT, idempotency_key=key
+        )
+        with pytest.raises(EffectFenceAbortedError):
+            await dispatcher.dispatch(_binding(), _step(), step_context=_step_context(directive))
+    finally:
+        await host.shutdown()
+    assert fired == ["fire"]  # ABORT never re-fired
+
+
+@pytest.mark.asyncio
+async def test_resolution_key_mismatch_is_ignored(tmp_path: Path) -> None:
+    """Key-bind correctness: a resolution whose `idempotency_key` does NOT match the
+    dispatch's recomputed key is IGNORED — the fence behaves as if no resolution
+    (ambiguous → raise), so a stale resolution can never mis-apply to a different
+    fenced effect."""
+    fired: list[str] = []
+    fence_dir = tmp_path / "fence"
+    host = await _build_started_counting_host(fired)
+    dispatcher = _dispatcher(host, RuntimeEffectFence(fence_dir=fence_dir))
+    try:
+        await _ambiguous_state(dispatcher, fence_dir)
+        directive = EffectFenceResolutionDirective(
+            resolution=EffectFenceResolution.RE_FIRE, idempotency_key="a-different-effect-key"
+        )
+        with pytest.raises(EffectFenceAmbiguousUncommittedError):
+            await dispatcher.dispatch(_binding(), _step(), step_context=_step_context(directive))
+    finally:
+        await host.shutdown()
+    assert fired == ["fire"]  # mismatched resolution ignored → ambiguous, never re-fired
+
+
+@pytest.mark.asyncio
+async def test_resolution_re_fire_retry_does_not_double_fire(tmp_path: Path) -> None:
+    """Codex [P1] regression: a RE_FIRE wrapped by `RetryBreakerToolDispatcher` must NOT
+    clear-and-re-fire on EACH retry attempt. The FIRST RE_FIRE attempt wins the durable
+    consume-once latch + clears + fires fresh; a SECOND dispatch with the SAME RE_FIRE
+    `step_context` (modeling a retry after a transient error before capture) LOSES the
+    latch → does NOT re-clear → loses the reserve to the re-fire's own claim → ambiguous
+    (NEVER a third fire). Without the latch, the unconditional clear would re-fire."""
+    fired: list[str] = []
+    fence_dir = tmp_path / "fence"
+    host = await _build_started_counting_host(fired)
+    dispatcher = _dispatcher(host, RuntimeEffectFence(fence_dir=fence_dir))
+    try:
+        key = await _ambiguous_state(dispatcher, fence_dir)  # original fire #1, then output deleted
+        ctx = _step_context(
+            EffectFenceResolutionDirective(
+                resolution=EffectFenceResolution.RE_FIRE, idempotency_key=key
+            )
+        )
+        # Attempt 1 (RE_FIRE): wins the latch → clears the stale claim → fires fresh (#2).
+        await dispatcher.dispatch(_binding(), _step(), step_context=ctx)
+        # Model a retryable error BEFORE capture on the re-fire: delete its output,
+        # leaving the re-fire's claim held + no output.
+        next(iter(fence_dir.glob("*.output"))).unlink()
+        # Attempt 2 (the retry, SAME RE_FIRE ctx): the latch is consumed → no re-clear →
+        # ambiguous, NOT a second re-fire.
+        with pytest.raises(EffectFenceAmbiguousUncommittedError):
+            await dispatcher.dispatch(_binding(), _step(), step_context=ctx)
+    finally:
+        await host.shutdown()
+    # The original fire + exactly ONE re-fire — the retry did NOT double-fire.
+    assert fired == ["fire", "fire"]
