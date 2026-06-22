@@ -32,6 +32,7 @@ import pytest
 from harness_as.sandbox_tier import SandboxTier
 from harness_core import PersonaTier
 from harness_core.identity import StepID
+from harness_core.workload_class import WorkloadClass
 from harness_cp.cp_shared_types import AgentRole, ModelBinding, RoutingDecisionTrace
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
@@ -47,6 +48,7 @@ from harness_cp.routing_manifest_residence import (
     RetryPolicy,
     RoleRoutingBinding,
     RoutingManifest,
+    WorkloadRoutingOverride,
     validate_routing_manifest,
 )
 from harness_cp.workflow_driver import StepDispatcher
@@ -1336,6 +1338,256 @@ async def test_b_l2_no_resolver_byte_identical_stage_chain() -> None:
         tracer_provider=tp,
         sleep_fn=_noop_sleep,
         # routing_resolver omitted -> None
+    )
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert inner.calls[-1][0].model_binding.model == "stage-primary"
+
+
+# ---------------------------------------------------------------------------
+# B-MODEL-RESOLUTION-CONSOLIDATION (§14.5.3/§14.6) — full-chain witnesses through
+# the REAL wrapper `_effective_chain` (no proxy): the model-resolution precedence
+# per-step > per-workload > per-role > routed > default. `_MockInnerDispatcher`
+# records each rebound `binding.model_binding`, so the dispatched candidate is
+# asserted DIRECTLY (the inner-decline tests in test_lifecycle_llm_dispatch.py are
+# half-proofs; these prove the wrapper actually CONSUMES each source).
+# ---------------------------------------------------------------------------
+
+
+def _manifest_with_workload_override(
+    model: str,
+    *,
+    provider: str = "anthropic",
+    workload: WorkloadClass = WorkloadClass.SOFTWARE_ENGINEERING,
+    role_models: dict[str, str] | None = None,
+) -> RoutingManifest:
+    """A `RoutingManifest` with a per-workload `model_binding_override` (W-2) at
+    `workload`, optionally plus `per_role_bindings`."""
+    return RoutingManifest(
+        manifest_version=1,
+        per_role_bindings={
+            AgentRole(r): RoleRoutingBinding(
+                preferred_model_binding=ModelBinding(provider=provider, model=m),
+                layer_budget_overrides={},
+            )
+            for r, m in (role_models or {}).items()
+        },
+        per_workload_overrides={
+            workload: WorkloadRoutingOverride(
+                model_binding_override=ModelBinding(provider=provider, model=model)
+            )
+        },
+        fallback_chains=(),
+        retry_policies={},
+    )
+
+
+def _binding_with_model_override(
+    model: str, *, provider: str = "anthropic"
+) -> StepEffectiveBinding:
+    """A `StepEffectiveBinding` carrying a per-step MODEL override SIGNAL (the C-CP-06
+    §6.2 `model_binding_override`), as `resolve_step_binding` produces for a per-step
+    `StepOverride.model_binding`."""
+    return _binding().model_copy(
+        update={
+            "override_applied": True,
+            "model_binding_override": ModelBinding(provider=provider, model=model),
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_consolidation_per_step_model_override_dispatched() -> None:
+    """THE currently-broken case the consolidation fixes: a per-step MODEL override
+    (no role / workload / routed) ⟹ the wrapper dispatches the per-step model — NOT
+    the stage chain primary (pre-fix the wrapper never read the per-step model)."""
+    inner = _MockInnerDispatcher(outcomes=[{"ok": 1}])
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+    )
+    await wrapper.dispatch(
+        _binding_with_model_override("per-step-model"), _step(), step_context=_step_context()
+    )
+    assert inner.calls[-1][0].model_binding.model == "per-step-model"
+
+
+@pytest.mark.asyncio
+async def test_consolidation_per_workload_model_override_dispatched_routing_off() -> None:
+    """The present-tense gap closed: a per-workload MODEL override ⟹ the wrapper
+    dispatches it even ROUTING-OFF (no resolver) — joining per-workload ENGINE/PROMPT
+    which were already consumed routing-off. Pre-fix this model was dropped to the
+    stage chain."""
+    inner = _MockInnerDispatcher(outcomes=[{"ok": 1}])
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_manifest=_manifest_with_workload_override("per-workload-model"),
+        workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
+        # routing_resolver omitted -> None (routing OFF)
+    )
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert inner.calls[-1][0].model_binding.model == "per-workload-model"
+
+
+@pytest.mark.asyncio
+async def test_consolidation_per_workload_override_applies_with_default_workload_class() -> None:
+    """The §14.6.2 workload-None MIRROR (advisor catch): when the wrapper's
+    `workload_class` is None but the manifest binds the MVP-default workload
+    (SOFTWARE_ENGINEERING), `_effective_chain` MUST apply it (`self.workload_class or
+    _MVP_DEFAULT_WORKLOAD_CLASS`) — mirroring the decline expression so the model is
+    not silently dropped to default. Bites hardest in minimal-construction wrappers."""
+    inner = _MockInnerDispatcher(outcomes=[{"ok": 1}])
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_manifest=_manifest_with_workload_override("default-workload-model"),
+        # workload_class omitted -> None ⟹ resolves to _MVP_DEFAULT_WORKLOAD_CLASS (SE)
+    )
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert inner.calls[-1][0].model_binding.model == "default-workload-model"
+
+
+@pytest.mark.asyncio
+async def test_consolidation_per_step_beats_per_role() -> None:
+    """Precedence pair: a per-step MODEL override + a bound branch role ⟹ the per-step
+    model wins (per-step > per-role)."""
+    inner = _MockInnerDispatcher(outcomes=[{"ok": 1}])
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_manifest=_routing_manifest_with_roles({"worker-a": "role-model-a"}),
+    )
+    await wrapper.dispatch(
+        _binding_with_model_override("per-step-model"),
+        _step(),
+        step_context=_step_context_with_role("worker-a"),
+    )
+    assert inner.calls[-1][0].model_binding.model == "per-step-model"
+
+
+@pytest.mark.asyncio
+async def test_consolidation_per_workload_beats_per_role() -> None:
+    """Precedence pair: a per-workload override + a bound branch role (no per-step) ⟹
+    the per-WORKLOAD model wins (per-workload > per-role). MATCHES the cleared
+    cross-subsystem convention — the PROMPT subsystem resolves (role, workload) as
+    per_workload > per_role ("mirrors RoutingManifest workload-override-on-top-of-
+    role"); MODEL follows the same workload-over-role order (operator-confirmed at
+    build-open 2026-06-22)."""
+    inner = _MockInnerDispatcher(outcomes=[{"ok": 1}])
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_manifest=_manifest_with_workload_override(
+            "per-workload-model", role_models={"worker-a": "role-model-a"}
+        ),
+        workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
+    )
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context_with_role("worker-a"))
+    assert inner.calls[-1][0].model_binding.model == "per-workload-model"
+
+
+@pytest.mark.asyncio
+async def test_consolidation_per_workload_beats_default() -> None:
+    """Precedence pair: a per-workload override + no per-step/per-role/routed ⟹ the
+    per-workload model wins over the stage chain default (which becomes the tail)."""
+    inner = _MockInnerDispatcher(outcomes=[{"ok": 1}])
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_manifest=_manifest_with_workload_override("per-workload-model"),
+        workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
+    )
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert inner.calls[-1][0].model_binding.model == "per-workload-model"
+
+
+@pytest.mark.asyncio
+async def test_consolidation_per_step_beats_routed() -> None:
+    """Precedence pair: a per-step MODEL override wins over a routed candidate (the
+    defense-in-depth property — even if a lenient resolver returns a routed binding,
+    `_effective_chain` prefers per-step; per-step > routed)."""
+    inner = _MockInnerDispatcher(outcomes=[{"ok": 1}])
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_resolver=_RecordingResolver(
+            routed=ModelBinding(provider="anthropic", model="routed-model")
+        ),
+    )
+    await wrapper.dispatch(
+        _binding_with_model_override("per-step-model"), _step(), step_context=_step_context()
+    )
+    assert inner.calls[-1][0].model_binding.model == "per-step-model"
+
+
+@pytest.mark.asyncio
+async def test_consolidation_per_workload_beats_routed() -> None:
+    """Precedence pair: a per-workload override wins over a routed candidate
+    (per-workload > routed) — the routed candidate fills only the no-override gap."""
+    inner = _MockInnerDispatcher(outcomes=[{"ok": 1}])
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        routing_manifest=_manifest_with_workload_override("per-workload-model"),
+        workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
+        routing_resolver=_RecordingResolver(
+            routed=ModelBinding(provider="anthropic", model="routed-model")
+        ),
+    )
+    await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert inner.calls[-1][0].model_binding.model == "per-workload-model"
+
+
+@pytest.mark.asyncio
+async def test_consolidation_no_override_negative_control() -> None:
+    """Negative control: a manifest with NO matching per-step / per-role / per-workload
+    model AND no routed ⟹ the stage chain primary is dispatched UNCHANGED (the
+    §14.5.3 non-breaking default holds; zero behaviour change when nothing governs)."""
+    inner = _MockInnerDispatcher(outcomes=[{"ok": 1}])
+    tp, _ = _tracer_provider_with_exporter()
+    wrapper = RetryBreakerFallbackDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_llm_policy(max_attempts=1),
+        fallback_chain=_chain(_candidate("anthropic", "stage-primary")),
+        tracer_provider=tp,
+        sleep_fn=_noop_sleep,
+        # per-workload override at a DIFFERENT workload than the wrapper's class.
+        routing_manifest=_manifest_with_workload_override(
+            "other-workload-model", workload=WorkloadClass.RESEARCH
+        ),
+        workload_class=WorkloadClass.SOFTWARE_ENGINEERING,
     )
     await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
     assert inner.calls[-1][0].model_binding.model == "stage-primary"

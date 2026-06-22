@@ -1,6 +1,12 @@
 # Class 1 (design) — Model-resolution consolidation (B-MODEL-RESOLUTION-CONSOLIDATION)
 
-**Status:** PROPOSED 2026-06-22 — operator chose "Model-resolution consolidation" (AskUserQuestion, this session) over a per-workload sliver. The **precedence is operator-ratified by that choice**; this doc is the design proposal for the fresh-context BUILD to execute + ratify the impl sub-decisions. Supersedes/subsumes the registered `B-ROUTING-MANIFEST-MODEL-FOLD` (per-workload was the sliver; this is the whole-problem fix).
+**Status:** ✅ APPLIED 2026-06-22 (CP spec v1.49 → v1.50 + runtime spec v1.70 → v1.71 + harness-cp + harness-runtime impl + by-execution tests + clearance markers; bundled-absorption PR). Was: PROPOSED 2026-06-22 — operator chose "Model-resolution consolidation" (AskUserQuestion) over a per-workload sliver. The **precedence is operator-ratified by that choice**; this doc was the design proposal for the fresh-context BUILD. Subsumes the registered `B-ROUTING-MANIFEST-MODEL-FOLD` (per-workload was the sliver; this is the whole-problem fix).
+
+**Impl sub-decisions ratified at build (this session):**
+1. **Per-step signal mechanism = option (a)** — additive `StepEffectiveBinding.model_binding_override: ModelBinding | None` (the v1.37/v1.38 `None`-or-override precedent), NOT a bool. `model_binding` stays the concrete resolved value for back-compat.
+2. **Precedence re-confirmed + FLIPPED at build-open** to `per-step > per-workload > per-role > routed > default`, resolved at the SINGLE `_effective_chain` authority. The proposal's §2 draft had per-role > per-workload; the §5-mandated build-open re-confirmation + the decorrelated review found this INVERTS the cleared cross-subsystem convention (the PROMPT subsystem resolves `(role, workload)` as `per_workload_overrides > per_role_bindings` per `resolve_active_prompt_version_sha`, docstring "mirrors RoutingManifest workload-override-on-top-of-role"). Operator re-confirmed 2026-06-22 to flip MODEL to **per-workload > per-role** for cross-subsystem consistency (a workload override governs all roles uniformly).
+3. **Scope** = per-step AND per-workload together (the consolidation), not the sliver.
+4. **§14.6.2 decline-mirror invariant (advisor catch)** — the `resolve_routed_binding` decline predicate ⊆ `_effective_chain` (never STRICTER): all 3 conjuncts aligned (per-step `model_binding_override is not None`; per-role default-role exclusion; per-workload `or _MVP_DEFAULT_WORKLOAD_CLASS` mirror).
 
 **Posture:** design-phase back-flow (a committed-behavior change to the C-RT-16 fallback wrapper's model-selection + a CP `StepEffectiveBinding` contract signal). FULL-SPEC pre-authorizes the back-flow; the **precedence ordering** is the operator's call (ratified) because it reorganizes committed wrapper behavior with real degrees of freedom (not an invariant-preserving impl). Cross-axis: CP spec C-CP-06 §6.2 + runtime spec §14.5.3/§14.6.
 
@@ -26,7 +32,7 @@ The dispatched model is resolvable at FIVE sites; only TWO are consumed today:
 
 ## 2. Proposed design — one precedence, one site
 
-**Ratified precedence (operator choice):** `per-step > per-role > per-workload > routed > default`.
+**Ratified precedence (operator choice):** `per-step > per-workload > per-role > routed > default`.
 
 **Single resolution site:** the wrapper `_effective_chain` (it already composes routed + per-role + chain; it is the ONE place model-candidate selection composes with C-RT-16 fallback — the existing "one source of truth — the chain" invariant). Resolve the PRIMARY by the precedence, then `_augment_primary` (existing) for the deduped fallback tail.
 
@@ -63,7 +69,7 @@ Bundled-absorption: CP spec C-CP-06 §6.2 delta (the per-step-model signal) + ru
 ## 5. Ratification points for the build context
 
 1. **The per-step-model signal mechanism** (§2 sub-decision 1): recommend (a) `model_binding_override: ModelBinding | None`.
-2. **Confirm the precedence** `per-step > per-role > per-workload > routed > default` (ratified by the option choice; re-confirm at build-open).
+2. **Confirm the precedence** `per-step > per-workload > per-role > routed > default` (ratified by the option choice; re-confirm at build-open).
 3. **Scope:** fix per-step AND per-workload together (the consolidation) — NOT a per-workload sliver.
 
 **Authority chain:** operator AskUserQuestion 2026-06-22 (consolidation chosen) + FULL-SPEC directive (`[[feedback-full-spec-beyond-mvp-nothing-deferred]]`) + `[[disposition-label-is-a-claim-verify-against-spec]]` (the depth/seam discipline that surfaced this). Grounding leads in this doc §1 are verified at HEAD `eba7cfa`.

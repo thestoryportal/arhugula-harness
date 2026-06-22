@@ -222,6 +222,83 @@ def test_agent_role_rides_binding_model_dump_for_provenance() -> None:
     assert d2["agent_role"] == "role-b"
 
 
+def test_resolve_step_binding_applies_model_binding_override() -> None:
+    """B-MODEL-RESOLUTION-CONSOLIDATION (CP spec v1.50 §6.2): a per-step
+    StepOverride.model_binding sets BOTH the concrete `model_binding` (override value)
+    AND the `None`-or-override SIGNAL `model_binding_override` (so the C-RT-16 wrapper
+    can distinguish a per-step model override from the manifest default)."""
+    manifest = _manifest(
+        per_step_overrides={
+            StepID("s1"): StepOverride(step_id=StepID("s1"), model_binding=_OVERRIDE_BINDING)
+        }
+    )
+    binding = resolve_step_binding(
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    assert binding.model_binding == _OVERRIDE_BINDING  # concrete resolved value
+    assert binding.model_binding_override == _OVERRIDE_BINDING  # the None-or-override signal
+    assert binding.override_applied is True
+
+
+def test_resolve_step_binding_model_binding_override_none_without_model_override() -> None:
+    """No per-step MODEL dimension → model_binding_override is None (the wrapper falls
+    through to per-role / per-workload / routed / default), while `model_binding` still
+    resolves to the manifest default: both for an override that omits the model field
+    and for a step with no override at all."""
+    manifest = _manifest(
+        per_step_overrides={
+            StepID("s1"): StepOverride(step_id=StepID("s1"), prompt_version_sha="a" * 64)
+        }
+    )
+    overridden = resolve_step_binding(
+        manifest,
+        "s1",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    assert overridden.model_binding_override is None  # override present, no model dimension
+    assert overridden.model_binding == _DEFAULT_BINDING  # concrete value still the default
+    no_override = resolve_step_binding(
+        manifest,
+        "s2",
+        default_model_binding=_DEFAULT_BINDING,
+        persona_tier=PersonaTier.TEAM_BINDING,
+    )
+    assert no_override.model_binding_override is None
+
+
+def test_model_binding_override_rides_binding_model_dump_for_provenance() -> None:
+    """B-MODEL-RESOLUTION-CONSOLIDATION provenance (CP spec v1.50 §6.6): the
+    `model_binding_override` signal rides binding.model_dump — the
+    post_override_step_config at the WIRED per-step override state-ledger entry — so a
+    per-step model flip is captured in that entry's outcome-hash (live step-level
+    provenance, like prompt_version_sha / agent_role)."""
+
+    def _dump(model: str) -> dict[str, object]:
+        manifest = _manifest(
+            per_step_overrides={
+                StepID("s1"): StepOverride(
+                    step_id=StepID("s1"),
+                    model_binding=ModelBinding(provider="anthropic", model=model),
+                )
+            }
+        )
+        binding = resolve_step_binding(
+            manifest,
+            "s1",
+            default_model_binding=_DEFAULT_BINDING,
+            persona_tier=PersonaTier.TEAM_BINDING,
+        )
+        return binding.model_dump(mode="json")
+
+    d1, d2 = _dump("model-x"), _dump("model-y")
+    assert d1["model_binding_override"] == {"provider": "anthropic", "model": "model-x"}
+    assert d2["model_binding_override"] == {"provider": "anthropic", "model": "model-y"}
+
+
 def test_audit_ref_populated_on_override() -> None:
     manifest = _manifest(
         per_step_overrides={

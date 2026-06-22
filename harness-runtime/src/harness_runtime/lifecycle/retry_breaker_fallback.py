@@ -64,6 +64,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
+from harness_core.workload_class import WorkloadClass
 from harness_cp.cp_shared_types import AgentRole, ModelBinding
 from harness_cp.cross_family_fallback_chain import (
     FallbackChain,
@@ -163,11 +164,29 @@ def _rebind_to_candidate(
     )
 
 
+def _candidate_from_binding(mb: ModelBinding) -> ProviderCandidate:
+    """Synthesize a ``ProviderCandidate`` from a resolved ``ModelBinding`` for the
+    §14.5.3/§14.6 model-resolution precedence (per-step / per-role / per-workload /
+    routed all resolve to a ``ModelBinding`` that becomes the augmented PRIMARY)."""
+    return ProviderCandidate(
+        provider=mb.provider, model=mb.model, family=_provider_family(mb.provider)
+    )
+
+
 #: Mirrors ``llm_dispatch._MVP_DEFAULT_AGENT_ROLE`` (same local-mirror pattern
 #: as ``prompt_selection``) — the MVP default branch role. A ``None`` / default
 #: ``agent_role`` reads the stage-bound chain unchanged (§14.5.3 non-breaking
 #: default); only a NON-default role consults ``per_role_bindings``.
 _MVP_DEFAULT_AGENT_ROLE = AgentRole("default")
+
+
+#: Mirrors ``llm_dispatch._MVP_DEFAULT_WORKLOAD_CLASS`` — the MVP default workload
+#: class. The per-workload model-resolution branch (§14.6) reads
+#: ``self.workload_class or _MVP_DEFAULT_WORKLOAD_CLASS`` so the wrapper's
+#: deterministic per-workload check mirrors the ``resolve_routed_binding`` decline
+#: expression EXACTLY (``llm_dispatch.py`` uses the same fallback) — the
+#: decline-predicate ⊆ precedence-authority invariant (§14.6.2).
+_MVP_DEFAULT_WORKLOAD_CLASS = WorkloadClass.SOFTWARE_ENGINEERING
 
 
 #: Provider key → ``ProviderFamily`` for synthesizing a per-role
@@ -355,6 +374,16 @@ class RetryBreakerFallbackDispatcher:
         step — so the layered routing decision composes with the fallback chain
         instead of re-routing per attempt. ``None`` ⟹ no routing augmentation
         (the §14.5.3 per-role / stage-chain path governs, byte-identical).
+    workload_class :
+        The run ``WorkloadClass`` (stage-5-bound — the SAME value the inner
+        ``RuntimeLLMDispatcher`` receives). Read at dispatch for the
+        B-MODEL-RESOLUTION-CONSOLIDATION per-workload MODEL branch (§14.6): a
+        ``per_workload_overrides[workload].model_binding_override`` promotes its
+        ``ModelBinding`` to the PRIMARY fallback candidate when no higher-
+        precedence (per-step / per-role) source governs. ``None`` ⟹ the MVP
+        default workload class (``_MVP_DEFAULT_WORKLOAD_CLASS``), mirroring the
+        ``resolve_routed_binding`` decline expression so the precedence authority
+        (``_effective_chain``) and the routing decline never disagree (§14.6.2).
     """
 
     inner: LLMDispatcher
@@ -364,6 +393,7 @@ class RetryBreakerFallbackDispatcher:
     sleep_fn: Callable[[float], Awaitable[None]] = field(default_factory=lambda: asyncio.sleep)
     routing_manifest: RoutingManifest | None = None
     routing_resolver: RoutedBindingResolver | None = None
+    workload_class: WorkloadClass | None = None
 
     async def dispatch(
         self,
@@ -420,7 +450,7 @@ class RetryBreakerFallbackDispatcher:
             # `self.fallback_chain` unchanged. One source of truth for model
             # selection — the chain — so the inner C-RT-15 dispatcher faithfully
             # dispatches each rebound candidate.
-            chain = self._effective_chain(step_context.agent_role, routed=routed)
+            chain = self._effective_chain(binding, step_context.agent_role, routed=routed)
             candidate: ProviderCandidate = chain.primary
             last_failure_class: str | None = None
             chain_length = _chain_length(chain)
@@ -542,52 +572,85 @@ class RetryBreakerFallbackDispatcher:
                 )
 
     def _effective_chain(
-        self, agent_role: AgentRole | None, *, routed: ModelBinding | None = None
+        self,
+        binding: StepEffectiveBinding,
+        agent_role: AgentRole | None,
+        *,
+        routed: ModelBinding | None = None,
     ) -> FallbackChain:
-        """Resolve the per-dispatch fallback chain (U-RT-114 §14.5.3 per-role
-        MODEL dispatch-read + B-L2-FALLBACK-COMPOSITION §14.6 routed primary),
-        placed at the dispatch-composition surface so model-candidate selection
-        composes with C-RT-16 fallback (ONE source of truth — the chain — so the
-        inner C-RT-15 dispatcher dispatches each rebound candidate faithfully).
+        """Resolve the per-dispatch fallback chain — the SOLE model-resolution
+        precedence authority (B-MODEL-RESOLUTION-CONSOLIDATION §14.6), placed at
+        the dispatch-composition surface so model-candidate selection composes
+        with C-RT-16 fallback (ONE source of truth — the chain — so the inner
+        C-RT-15 dispatcher dispatches each rebound candidate faithfully).
 
-        Precedence (the §2.2 ``_has_deterministic_binding`` mutual-exclusivity):
+        Precedence (operator-ratified): **per-step > per-workload > per-role >
+        routed > default**. The first non-``None`` source becomes the AUGMENTED
+        chain PRIMARY (``_augment_primary``); the stage chain is the deduped tail.
+        per-workload beats per-role to MATCH the cleared cross-subsystem
+        convention — the PROMPT subsystem resolves ``(role, workload)`` as
+        ``per_workload_overrides > per_role_bindings`` (``resolve_active_prompt_version_sha``,
+        "mirrors RoutingManifest workload-override-on-top-of-role"), so MODEL
+        follows the same workload-over-role ordering (operator-confirmed at
+        build-open 2026-06-22).
 
-        - ``routed`` (B-L2-FALLBACK-COMPOSITION): a routing_activation routed
-          model ⟹ AUGMENTED chain with ``routed`` as PRIMARY. ``routed`` is
-          non-``None`` ONLY when no deterministic binding governs
-          (``resolve_routed_binding`` returns ``None`` otherwise), so it NEVER
-          collides with the per-role augmentation below (a per-role binding IS a
-          deterministic binding) — routing fills only the no-binding gap.
-        - A NON-default branch role with a ``per_role_bindings`` entry ⟹ an
-          AUGMENTED chain whose PRIMARY is the role's ``preferred_model_binding``
-          (per-role MODEL specialization, B1; the per-role PROMPT is B4; the
-          role's own ``fallback_chain_ref`` is out of scope at B1).
-        - Default / absent / ``None`` role, OR no ``routing_manifest``, OR no
-          ``per_role_bindings`` entry, AND no ``routed`` ⟹ the stage-bound
-          ``self.fallback_chain`` UNCHANGED (the §14.5.3 non-breaking-default +
-          linear-path-untouched invariants; empty catalog + routing off ⟹ zero
-          behaviour change).
+        - **per-step** ``binding.model_binding_override`` (C-CP-06 §6.2 `None`-or-
+          override SIGNAL — distinct from ``binding.model_binding``, always
+          concrete) ⟹ AUGMENTED chain.
+        - **per-workload** ``per_workload_overrides[workload].model_binding_override``
+          (W-2; the run workload, ``self.workload_class or
+          _MVP_DEFAULT_WORKLOAD_CLASS``) ⟹ AUGMENTED chain. Applies routing-on AND
+          routing-off (the present-tense gap closed: per-workload ENGINE+PROMPT
+          were already consumed routing-off; MODEL now joins them).
+        - **per-role**: a NON-default branch role with a ``per_role_bindings``
+          entry ⟹ AUGMENTED chain whose PRIMARY is ``preferred_model_binding``
+          (U-RT-114 §14.5.3; per-role MODEL specialization).
+        - **routed** (B-L2-FALLBACK-COMPOSITION): a routing_activation routed
+          model ⟹ AUGMENTED chain. ``routed`` is non-``None`` ONLY when no
+          higher-precedence deterministic binding governs (``resolve_routed_binding``
+          declines otherwise) — so it fills only the no-override gap.
+        - **default**: none of the above ⟹ the stage-bound ``self.fallback_chain``
+          UNCHANGED (the §14.5.3 non-breaking-default + linear-path-untouched
+          invariants; empty catalog + routing off ⟹ zero behaviour change).
+
+        §14.6.2 invariant — *the decline predicate ⊆ this authority*: each
+        deterministic branch here (per-step / per-workload / per-role) has a
+        MATCHING conjunct in ``resolve_routed_binding``'s decline expression (the
+        decline is an order-independent disjunction, so the per-workload/per-role
+        swap does not affect it), so the decline is never STRICTER than this
+        resolution. Were it stricter, routing would decline (``routed`` ``None``)
+        while this method also skipped the source, silently dropping to ``default``.
         """
-        if routed is not None:
-            return self._augment_primary(
-                ProviderCandidate(
-                    provider=routed.provider,
-                    model=routed.model,
-                    family=_provider_family(routed.provider),
+        # 1. per-step MODEL override (highest precedence).
+        if binding.model_binding_override is not None:
+            return self._augment_primary(_candidate_from_binding(binding.model_binding_override))
+        # 2. per-workload MODEL override (beats per-role per the cleared
+        #    workload-over-role convention; mirrors the decline's
+        #    `self.workload_class or _MVP_DEFAULT_WORKLOAD_CLASS` EXACTLY).
+        if self.routing_manifest is not None:
+            workload = self.workload_class or _MVP_DEFAULT_WORKLOAD_CLASS
+            workload_override = self.routing_manifest.per_workload_overrides.get(workload)
+            if (
+                workload_override is not None
+                and workload_override.model_binding_override is not None
+            ):
+                return self._augment_primary(
+                    _candidate_from_binding(workload_override.model_binding_override)
                 )
-            )
+        # 3. per-role MODEL binding (NON-default role; mirrors the decline's
+        #    `_role != _MVP_DEFAULT_AGENT_ROLE and _role in per_role_bindings`).
         role = agent_role or _MVP_DEFAULT_AGENT_ROLE
-        if role == _MVP_DEFAULT_AGENT_ROLE or self.routing_manifest is None:
-            return self.fallback_chain
-        role_binding = self.routing_manifest.per_role_bindings.get(role)
-        if role_binding is None:
-            return self.fallback_chain
-        mb = role_binding.preferred_model_binding
-        return self._augment_primary(
-            ProviderCandidate(
-                provider=mb.provider, model=mb.model, family=_provider_family(mb.provider)
-            )
-        )
+        if role != _MVP_DEFAULT_AGENT_ROLE and self.routing_manifest is not None:
+            role_binding = self.routing_manifest.per_role_bindings.get(role)
+            if role_binding is not None:
+                return self._augment_primary(
+                    _candidate_from_binding(role_binding.preferred_model_binding)
+                )
+        # 4. routed (fills only the no-override gap; non-None ⟹ no higher source).
+        if routed is not None:
+            return self._augment_primary(_candidate_from_binding(routed))
+        # 5. default — the stage-bound chain unchanged (§14.5.3 non-breaking).
+        return self.fallback_chain
 
     def _augment_primary(self, new_primary: ProviderCandidate) -> FallbackChain:
         """Promote ``new_primary`` to the chain PRIMARY with the stage-bound
@@ -883,6 +946,7 @@ def materialize_retry_breaker_fallback_dispatcher_stage(
     sleep_fn: Callable[[float], Awaitable[None]] = asyncio.sleep,
     routing_manifest: RoutingManifest | None = None,
     routing_resolver: RoutedBindingResolver | None = None,
+    workload_class: WorkloadClass | None = None,
 ) -> RetryBreakerFallbackDispatcher:
     """Stage 5 LOOP_INIT factory for the retry/breaker/fallback wrapper
     (U-RT-58, C-RT-16).
@@ -904,6 +968,11 @@ def materialize_retry_breaker_fallback_dispatcher_stage(
     the HITL ``inner``) so the wrapper resolves the layered-routing PRIMARY
     candidate ONCE per step. ``None`` ⟹ no routing augmentation (byte-identical
     to the pre-B-L2 default).
+
+    ``workload_class`` (B-MODEL-RESOLUTION-CONSOLIDATION §14.6) is the run
+    workload — the SAME value handed to the inner ``RuntimeLLMDispatcher`` — so
+    the wrapper can honour a ``per_workload_overrides[workload].model_binding_override``
+    at the per-workload precedence tier. ``None`` ⟹ the MVP default workload class.
     """
     return RetryBreakerFallbackDispatcher(
         inner=inner,
@@ -913,4 +982,5 @@ def materialize_retry_breaker_fallback_dispatcher_stage(
         sleep_fn=sleep_fn,
         routing_manifest=routing_manifest,
         routing_resolver=routing_resolver,
+        workload_class=workload_class,
     )
